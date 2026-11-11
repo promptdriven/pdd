@@ -1,6 +1,7 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 140e48d6c542b9fac4cf361b7cd6af46983fc92b8992a62dca8f4fe83cdf94e5).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 7929eac95a531650486d4df9f7f2938c0e328ee166a986e2935960d4e5dd74ef).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
+import { describeCallPreflight } from './lint-call-preflight.mjs';
 import {rememberSecrets} from './secret-redaction.mjs';
 import { bindingPlanLines, bindingRefusals } from './runtime-binding-plan.mjs';
 import { buildCheckPlan, checkPlanResults, checkPlanLines, checkPlanResultLines } from './runtime-check-plan.mjs';
@@ -1623,7 +1624,12 @@ async function runLint(context) {
       for (const path of Array.isArray(doc?.app_maps) ? doc.app_maps : []) if (typeof path === 'string') maps.add(path);
     }
     const named = context.serverFeatures?.includes('lint-tests') ? { tests, app_maps: [...maps].sort() } : {};
-    const request = { requestId: context.ports.randomUUID(), source_sha256: context.capture.sha256, complete: true, ...named };
+    const selectedCap = context.intent === 'lint-only' ? context.lint.selected_cap : null;
+    if (selectedCap != null && !context.serverFeatures?.includes('lint-call-preflight')) return {
+      kind: 'refused', refusal: { code: 'lint-call-preflight-unsupported', message: 'The PDD interpreter does not support selected-cap call preflight. No lint or checks were sent. Update the interpreter before inspecting this cap.' }
+    };
+    const request = { requestId: context.ports.randomUUID(), source_sha256: context.capture.sha256, complete: true, ...named,
+      ...(selectedCap != null ? { max_calls: selectedCap } : {}) };
     context.lint.request_ids.push(request.requestId);
     const verdict = await postJob(context, '/v1/lint', 'lint', request, null, Math.max(1, Math.min(context.ports.postMs, lintEnd - context.ports.now())), lintEnd);
     if (verdict.kind === 'busy') { if (await pause(verdict.wait, verdict.maintenance)) continue; return busy(); }
@@ -1981,7 +1987,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   const identity = signIn(ports.gh, context.store), startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
   const timeoutMin = options['--timeout'] !== undefined ? Number(options['--timeout']) : ports.interactive ? null : AGENT_WAIT_MIN;
   Object.assign(context, { origin, visible: found.visible, capture, identity, batch, startedAt, deadline: timeoutMin ? startedAt + timeoutMin * 60_000 : Infinity, rows, head: null,
-    intent: 'lint-only', agentLimit: options['--timeout'] === undefined && !ports.interactive, secrets: [identity.token], lint: { request_ids: [], state: null }, timeoutMin });
+    intent: 'lint-only', agentLimit: options['--timeout'] === undefined && !ports.interactive, secrets: [identity.token], lint: { request_ids: [], state: null, selected_cap: requestedCalls(options['--max-calls']) ?? null }, timeoutMin });
   context.folder = context.store.folder('batches', batch);
   setRelease(interruptible(context));
   await ownBatch(context, batch);
@@ -2055,6 +2061,11 @@ function lintProblems(context, answer, refusal = null) {
 
 function printLintResult(context, rows, problems, warnings = [], answer = null) {
   const { ports, batch, root } = context;
+  for (const row of rows) {
+    const listed = [answer?.result?.tests, answer?.result?.report?.lint?.tests].find(items => Array.isArray(items) && items.some(item => item?.path === row.test));
+    const matching = (listed ?? []).filter(item => item?.path === row.test);
+    row.call_preflight = matching.length === 1 ? matching[0].call_preflight ?? null : null;
+  }
   rows.forEach(incompleteCriteria);
   rows = [...rows.filter(row=>row.unsent),...rows.filter(row=>!row.unsent)];
   for (const row of rows) for (const problem of row.refusals ?? []) {
@@ -2070,7 +2081,9 @@ function printLintResult(context, rows, problems, warnings = [], answer = null) 
   const reportedCoverage = answer?.result?.capabilities_complete ?? answer?.result?.report?.lint?.capabilities_complete;
   const capabilityCoverage = typeof reportedCoverage === 'boolean' ? reportedCoverage : null;
   const result = { batch, repo: root, exit_code: exitCode, lint_state: resultOverall(rows).state, ...resultOverall(rows), summary_line: summary, capabilities_complete: capabilityCoverage, coverage: context.coverage, problems,
-    rows: rows.map(row => ({ story: row.story, title: row.title, test: row.test, ...(row.native_only?.length ? {native_only:row.native_only,note:row.note} : {}), ...resultOutcome(row), refusals: row.refusals, ...(row.unsent?{unsent:true}:{}), ...(row.not_checked?.length?{not_checked:row.not_checked}:{}), binding_plan: row.binding_plan, ...(row.binding_plan?{binding_diagnostics:bindingRefusals(row.binding_plan,row.compatibility)}:{}), compatibility: row.compatibility, client_advice: row.client_advice })), warnings: [...new Set([...(context.warnings ?? []), ...(context.unmatched ?? [])])] };
+    rows: rows.map(row => ({ story: row.story, title: row.title, test: row.test, ...(row.native_only?.length ? {native_only:row.native_only,note:row.note} : {}), ...resultOutcome(row), refusals: row.refusals, ...(row.unsent?{unsent:true}:{}), ...(row.not_checked?.length?{not_checked:row.not_checked}:{}), call_preflight: row.call_preflight ?? null, binding_plan: row.binding_plan, ...(row.binding_plan?{binding_diagnostics:bindingRefusals(row.binding_plan,row.compatibility)}:{}), compatibility: row.compatibility, client_advice: row.client_advice })), warnings: [...new Set([...(context.warnings ?? []), ...(context.unmatched ?? [])])] };
+  result.call_preflight_context = answer?.result?.call_preflight_context ?? answer?.result?.report?.lint?.call_preflight_context ?? null;
+  result.call_preflight_requested_cap = context.lint?.selected_cap ?? null;
   if (context.folder) context.store.write(join(context.folder, 'summary.json'), result);
   if (context.json) {
     line(ports.stdout, JSON.stringify(result));
@@ -2089,6 +2102,8 @@ function printLintResult(context, rows, problems, warnings = [], answer = null) 
   for (const row of rows.filter(row=>row.binding_plan)) for (const detail of bindingRefusals(row.binding_plan,row.compatibility)) out.push(JSON.stringify(detail));
   for (const row of rows.filter(row => row.compatibility)) out.push(`Compatibility (${cleanText(row.story, context.secrets)} / ${cleanText(row.test, context.secrets)}): ${JSON.stringify(row.compatibility, null, 2)}`,
     `  Client advice: ${JSON.stringify(row.client_advice)}`);
+  for (const row of rows) out.push(describeCallPreflight({ test: row.test, preflight: row.call_preflight ?? null,
+    context: result.call_preflight_context, sourceSha256: context.capture?.sha256, requestedCap: result.call_preflight_requested_cap }).text);
   if (typeof capabilityCoverage === 'boolean') out.push(`Capability inventory complete: ${capabilityCoverage}.`);
   out.push(summary, coverageText(context.coverage), ...warnings);
   ports.stdout.write(`${out.join('\n')}\n`);
@@ -2575,6 +2590,8 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
       if(!words.length)throw new Stop(2,'No root product journeys found.');
       options={...options};delete options['--journeys'];
     }
+    requestedCalls(options['--max-calls']);
+    if (options['--local'] !== undefined && options['--max-calls'] !== undefined) throw new Stop(2, '--local does not accept --max-calls.');
     if (options['--lint'] === true && words.length && (options['--local'] === undefined || options['--local'] === true && !Object.hasOwn(options, '--timeout')) && Object.keys(options).every(key => ['--lint','--local','--json','--timeout'].includes(key))) {
       const {root,found,normalized} = localSetup(cwd,words);
       const selection = selectTests(found,normalized,{native:true});
@@ -2645,9 +2662,8 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
         return problems.length ? 4 : 0;
       } catch (error) { throw new Stop(2, error.message); }
     }
-    requestedCalls(options['--max-calls']);
     const modes = ['--read', '--retry', '--fill-hash', '--files', '--explain-bindings', '--request', '--lint'].filter(name => options[name] !== undefined);
-    const others = Object.keys(options).filter(name => !modes.includes(name) && !(modes[0] === '--fill-hash' && name === '--compact') && !(modes[0] === '--retry' && ['--json', '--details', '--timeout'].includes(name)) && !(name === '--json' && ['--read', '--request', '--lint', '--files', '--explain-bindings'].includes(modes[0])) && !(name === '--timeout' && ['--read', '--lint'].includes(modes[0])) && !(name === '--app-map' && modes[0] === '--files'));
+    const others = Object.keys(options).filter(name => !modes.includes(name) && !(modes[0] === '--fill-hash' && name === '--compact') && !(modes[0] === '--retry' && ['--json', '--details', '--timeout'].includes(name)) && !(name === '--json' && ['--read', '--request', '--lint', '--files', '--explain-bindings'].includes(modes[0])) && !(name === '--timeout' && ['--read', '--lint'].includes(modes[0])) && !(name === '--max-calls' && modes[0] === '--lint') && !(name === '--app-map' && modes[0] === '--files'));
     if (modes.length > 1 || (modes.length && others.length) || (['--fill-hash', '--request', '--retry'].includes(modes[0]) && words.length)
       || (modes[0] === '--read' && words.length > 1) || (!modes.length && options['--app-map'] !== undefined)) throw new Stop(2, 'This mix of options does not work together. Run pdd test --help.');
     if (modes[0] === '--request') { release = interruptible(context); return await runRequest(context, options['--request'], cwd); }

@@ -1,0 +1,227 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/lint-call-preflight.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "The zero-AI call preflight display shows the supplied estimate of 29 calls against cap 25, ordered step costs 13 and 16, source and engine identity, and a warning that leaves the cap unchanged."
+    },
+    {
+      "id": "AC2",
+      "text": "A supplied within-estimate result of 20 calls against cap 25 stays advisory and gives no guarantee of actual calls or completion; resource continuations are not included."
+    },
+    {
+      "id": "AC3",
+      "text": "An incomplete unknown report keeps its total and step cost unknown and makes no cap-fit claim."
+    },
+    {
+      "id": "AC4",
+      "text": "A missing or inconsistent source, engine or selected-cap association shows preflight unavailable and makes no estimate or cap-fit claim."
+    }
+  ],
+  "initial_world": {},
+  "simulation": {},
+  "context": [],
+  "steps": [
+    {
+      "step_id": "warning",
+      "entry_path": "prompts/cli/lint-call-preflight.prompt.md",
+      "operation": "describeCallPreflight",
+      "input": {
+        "test": "tests/example.json",
+        "preflight": {
+          "selected_cap": 25,
+          "estimate_kind": "structural-catalog",
+          "estimated_calls": 29,
+          "status": "warning",
+          "complete": true,
+          "provider_calls": 0,
+          "guarantee": false,
+          "resource_continuations_included": false,
+          "steps": [
+            {
+              "step_id": "first",
+              "entry_path": "prompts/example.prompt.md",
+              "operation": "run",
+              "catalog_calls": 13,
+              "has_external_resources": false,
+              "cumulative_catalog_calls": 13
+            },
+            {
+              "step_id": "second",
+              "entry_path": "prompts/example.prompt.md",
+              "operation": "run",
+              "catalog_calls": 16,
+              "has_external_resources": false,
+              "cumulative_catalog_calls": 29
+            }
+          ]
+        },
+        "context": {
+          "source_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "engine_build": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "selected_cap": 25,
+          "max_cap": 1000
+        },
+        "sourceSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "requestedCap": 25
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "Call preflight (tests/example.json): warning; structural catalog estimate 29 calls; selected cap 25; complete true.\n  Step first (prompts/example.prompt.md :: run): catalog 13; cumulative 13; external resources false.\n  Step second (prompts/example.prompt.md :: run): catalog 16; cumulative 29; external resources false.\n  Source cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc; engine aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; configured maximum 1000.\n  Warning: the structural estimate exceeds the selected cap; the cap is unchanged.\n  Advisory only: no guarantee of actual calls or completion; resource continuations are not included. Lint uses 0 AI calls."
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "within",
+      "entry_path": "prompts/cli/lint-call-preflight.prompt.md",
+      "operation": "describeCallPreflight",
+      "input": {
+        "test": "tests/example.json",
+        "preflight": {
+          "selected_cap": 25,
+          "estimate_kind": "structural-catalog",
+          "estimated_calls": 20,
+          "status": "within-estimate",
+          "complete": true,
+          "provider_calls": 0,
+          "guarantee": false,
+          "resource_continuations_included": false,
+          "steps": [
+            {
+              "step_id": "one",
+              "entry_path": "prompts/example.prompt.md",
+              "operation": "run",
+              "catalog_calls": 20,
+              "has_external_resources": false,
+              "cumulative_catalog_calls": 20
+            }
+          ]
+        },
+        "context": {
+          "source_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "engine_build": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "selected_cap": 25,
+          "max_cap": 1000
+        },
+        "sourceSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "requestedCap": 25
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "Call preflight (tests/example.json): within-estimate; structural catalog estimate 20 calls; selected cap 25; complete true.\n  Step one (prompts/example.prompt.md :: run): catalog 20; cumulative 20; external resources false.\n  Source cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc; engine aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; configured maximum 1000.\n  Advisory only: no guarantee of actual calls or completion; resource continuations are not included. Lint uses 0 AI calls."
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "unknown",
+      "entry_path": "prompts/cli/lint-call-preflight.prompt.md",
+      "operation": "describeCallPreflight",
+      "input": {
+        "test": "tests/example.json",
+        "preflight": {
+          "selected_cap": 25,
+          "estimate_kind": "structural-catalog",
+          "estimated_calls": null,
+          "status": "unknown",
+          "complete": false,
+          "provider_calls": 0,
+          "guarantee": false,
+          "resource_continuations_included": false,
+          "steps": [
+            {
+              "step_id": "one",
+              "entry_path": "prompts/example.prompt.md",
+              "operation": "run",
+              "catalog_calls": null,
+              "has_external_resources": false,
+              "cumulative_catalog_calls": null
+            }
+          ]
+        },
+        "context": {
+          "source_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "engine_build": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "selected_cap": 25,
+          "max_cap": 1000
+        },
+        "sourceSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "requestedCap": 25
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "Call preflight (tests/example.json): unknown; structural catalog estimate unknown calls; selected cap 25; complete false.\n  Step one (prompts/example.prompt.md :: run): catalog unknown; cumulative unknown; external resources false.\n  Source cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc; engine aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; configured maximum 1000.\n  Advisory only: no guarantee of actual calls or completion; resource continuations are not included. Lint uses 0 AI calls."
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "mismatch",
+      "entry_path": "prompts/cli/lint-call-preflight.prompt.md",
+      "operation": "describeCallPreflight",
+      "input": {
+        "test": "tests/example.json",
+        "preflight": {
+          "selected_cap": 25,
+          "estimate_kind": "structural-catalog",
+          "estimated_calls": 29,
+          "status": "warning",
+          "complete": true,
+          "provider_calls": 0,
+          "guarantee": false,
+          "resource_continuations_included": false,
+          "steps": [
+            {
+              "step_id": "first",
+              "entry_path": "prompts/example.prompt.md",
+              "operation": "run",
+              "catalog_calls": 13,
+              "has_external_resources": false,
+              "cumulative_catalog_calls": 13
+            },
+            {
+              "step_id": "second",
+              "entry_path": "prompts/example.prompt.md",
+              "operation": "run",
+              "catalog_calls": 16,
+              "has_external_resources": false,
+              "cumulative_catalog_calls": 29
+            }
+          ]
+        },
+        "context": {
+          "source_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "engine_build": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "selected_cap": 25,
+          "max_cap": 1000
+        },
+        "sourceSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "requestedCap": 25
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "Call preflight (tests/example.json): unavailable; no estimate or cap-fit claim.\n  Source dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd; engine aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; configured maximum 1000.\n  Advisory only: no guarantee of actual calls or completion; resource continuations are not included. Lint uses 0 AI calls."
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

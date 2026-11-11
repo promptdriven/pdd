@@ -314,6 +314,38 @@ Export `checkRuntimeHealth({env}, ports)` for the [Autopilot launcher](autopilot
 
 Modes: `--fill-hash` accepts only optional `--compact`, no STORY and makes no network call. `--files [STORY...] [--app-map PATH]` prints the exact selected upload manifest, each file size and total bytes, with no network or sign-in. For linked entries, display `authored/path -> canonical/target` with the target byte size using the additive target metadata owned by [source-reading policy](runtime-preflight.prompt.md#files); preserve ordinary file lines. Normalize STORY paths as for a check. Use the same selection as Check, lint and Try: the selected tests and their dependency closure, optional includes and the chosen app map, as owned by [source capture](runtime-preflight.prompt.md#source-capture). Check, lint and the default file preview do not use an app map. `--app-map` is accepted on Check only with `--files`, to preview the map used by a Try (including a default Try map named explicitly). Keep original test paths for Try seeds and saved cases. `--lint [STORY...] [--json] [--timeout MIN]` runs local SVG layout advice, then the server's lint, `POST /v1/lint` (0 AI calls), on the captured files, sets `complete: true` in its lint request, and sends no checks. Every lint that can authorize a check or Try requests `complete: true`, so admission has per-test evidence. Before batch creation, holding any row for lint, capture or sign-in, apply only the selected entry/called prompts’ `/limits` admission problems from [runtime preflight](runtime-preflight.prompt.md), keeping its reason code, prompt path, field and fix hint. Use `readPrompt` and `promptSchemaRefusals` from that owner, retaining only `/limits` problems at this existing local gate; other schema checks keep their server route. Inspect the reached interfaces independently of P1–P10 refusal precedence, so an unrelated bad Story/schema/hash does not hide a rejected limit. If any limits are refused, return exit 4 with no authentication lookup or upload; report affected rows as refused and other selected rows as not run, with no batch. Deduplicate problems by code, prompt path and pointer in text and JSON, while retaining every selected row and its own refusal state even when rows reach the same prompt. Text gives the reason/fix, one line per selected test in the server lint format (`refused: <codes>` or `not run`), and says no files were sent; JSON retains the lint response keys with lint_state refused, problems, rows and zero calls. Apart from this limits gate and the SVG advisory, locally it runs only discovery and the privacy and capture checks (secret names, links, size and file limits); all other local-copy engine problems remain server-lint owned. A selected test with a [discovery refusal](runtime-preflight.prompt.md#test-name-rule) (`discoveryRefusal`: a conflict, a file pdd cannot read or parse, a file over the upload limit, or a `story_path` that names another Story) is refused locally with that sentence and is neither sent nor named in the lint request; the other selected tests are linted. A local discovery refusal keeps its state, phase and reason while remote lint waits or cannot run. Every later capture, including a UUID receipt cache refresh, uses the saved set of sent tests. The same holds for Check and `--files`: a test whose discovery gave an `error` is never uploaded (Check keeps this in the saved batch row as `unsent`, so a read, retry or restart recaptures the same files), and `--files` prints `Warning: not sent: <sentence>` for it. When every selected test is refused this way, pdd sends nothing: `Lint refused every selected test before sending. 0 AI calls. No files were sent.`, exit 4. It prints every problem the server reports, all at once (each `refused_prompts` entry: code, path, section, message; and each reached prompt that is not approved or a current draft, with the plain hints), one line per selected test (`passes lint` or `refused: <codes>`), and `Lint: N of M tests pass. 0 AI calls. No checks were sent.`. Exit 0 only when lint finished and passed for every selected test, 4 on lint refusals, 5 for not run, not invited or update required, and 3 while queued/running or unknown. A pending explicit lint retains its batch and prints its GET-only read command; sends no checks or Try. `--json` gives `{batch, repo, exit_code, lint_state, summary_line, problems, rows, warnings}`. Normal `pdd test` keeps its local preflight for now. `--read [BATCH|CALL_ID] [--json] [--timeout MIN]` reads saved batch results (and may dispatch original held checks under saved-lint continuation below) or an owner-scoped call by UUID. Hidden `--request UUID` reads one run with GET only. A wrong mix is exit 2.
 
+### Cap-aware remote lint (draft)
+
+`pdd lint STORY --max-calls N` and the existing hidden `test --lint` alias accept
+one integer cap in 1..1000 before capture, sign-in, state or network effects.
+The only other allowed options are json and timeout. Local lint, files, read,
+retry, hash filling, binding explanations and screen comparison reject this mix.
+Keep the selected cap separately from paid Check rows, so standalone lint cannot
+acquire paid intent. Include numeric `max_calls` in a standalone lint request
+only when explicitly selected and the last capacity answer advertises
+`lint-call-preflight`. Missing feature support returns exit4 with code
+`lint-call-preflight-unsupported`, explaining that the interpreter cannot inspect
+the selected cap and no lint or checks were sent. Never ignore or enlarge it.
+No cap means the ordinary lint request remains compatible with older servers.
+
+For each selected test, copy the server's `call_preflight` object unchanged to
+that lint JSON row, from its unique matching `result.tests` row or, if absent,
+`result.report.lint.tests`. Copy `result.call_preflight_context`, else
+`result.report.lint.call_preflight_context`, unchanged into the lint JSON result.
+Absent or ambiguous facts are null, never an invented fit. JSON also includes
+`call_preflight_requested_cap` (selected integer or null), separate from the
+server facts. Preserve future keys and exact values. The objects are advisory,
+never inputs to lint admission or paid Check dispatch. Warnings leave existing
+lint verdict, exit status, Check admission, guards and ceilings unchanged.
+
+[Call preflight display](lint-call-preflight.prompt.md) owns exact text and the
+server field meanings. Use its pure renderer for each selected lint row,
+including saved standalone lint reads. Save the requested cap in lint metadata
+for those reads, never as a row's paid `max_calls`. Retain the server facts in
+the saved summary and recover them from the saved raw answer. No preflight
+estimate is calculated locally. Lint still sends no Check or Try request and
+uses no provider calls.
+
 ### Hash filling
 
 Use the [preflight hash-fill contract](runtime-preflight.prompt.md#prose-hash) for local classification and updates. Forward `--compact` as `compact: true` to `fillHashes`; without it retain the default hash-only call. For execution with `--compact`, require exactly `--fill-hash` and `--compact`, with no other option or STORY word; reject other execution combinations with exit 2 before file writes, runtime state, authentication, network or AI effects, including direct `runCheck` callers. Preserve the CLI's existing [local help policy](pdd-cli.prompt.md#help-contract): accepted help requests show help before this handler runs. The removed `check` name remains rejected under the [parser contract](argument-parser.prompt.md#removed-names). `--lf` and `--cache-clear` are incompatible with `--compact`, like every other execution option. Print to stdout in this group order: warnings as `Warning: <message>`, filled paths as `Filled prose_sha256: <path>`, refusals as `Refused: <message>`, then stale approved paths with the existing stale hint. Preserve each result array's order within its group. Finish with `Hashes: N filled, N current, N refused, N stale.` Warnings do not enter those counts. Return exit 4 if any refusal or stale result exists, otherwise exit 0, including when only warnings were reported and nothing was filled. Do not require tests, sign-in or a runtime request for hash filling. Only with `--compact`, print `Compacted Runtime interface: <path>` for each `compacted` record after the filled paths and before refusals. Print `Interfaces: N compacted.` immediately before the existing final hash summary. Preserve the hash-only output exactly.
@@ -914,6 +946,7 @@ pointer, but deduplication must retain the original location identity.
 
 - [Product composition](product-composition.prompt.md): required generation/runtime/verification context for product assembly and journey selection under #808.
 
+- [Call preflight display](lint-call-preflight.prompt.md): required generation, verification and testing context for the pure advisory renderer and exact server report fields.
 
 - [Binding plan](runtime-binding-plan.prompt.md): required boundary parsing and local edge diagnostics for generation and verification.
 

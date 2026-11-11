@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: ab8241206afff8c2bcdf8db27265b0a6d034e011645b92e5e5c0bafe45391842).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 1d31c413c5aff4d8fc5f2c7a0089b414695effda0317f55dd00673f5fb38e480).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -135,8 +135,8 @@ const routes = [
       form(`pdd ${test} --screen URL --drawing PATH [--json]`, 'Compare a real page with its drawing at the drawing viewport in installed headless Chrome/Chromium; no AI or interpreter calls.')] },
   // A lint plan always has --lint, so the runtime client runs the same code as for `pdd test --lint`.
   { id: 'lint', prefix: [lint], local: 'runtime-check', removed: ['check', '--lint'], implies: ['--lint'], operands: [{ name: 'story', type: 'text', optional: true, repeat: true }],
-    options: [{ name: '--json', kind: 'flag' }, { name: '--timeout', kind: 'integer', min: 1, max: 120 }, { name: '--local', kind: 'flag' }],
-    forms: [form(`pdd ${lint} [STORY...] [--json] [--timeout MIN]`, 'Print local SVG layout warnings, then the PDD interpreter lint (0 AI calls) on selected Stories and their dependencies; sends no checks.'),
+    options: [{ name: '--json', kind: 'flag' }, { name: '--timeout', kind: 'integer', min: 1, max: 120 }, { name: '--max-calls', kind: 'integer', min: 1, max: 1000 }, { name: '--local', kind: 'flag' }],
+    forms: [form(`pdd ${lint} [STORY...] [--json] [--timeout MIN] [--max-calls N]`, 'Print local SVG layout warnings, then the PDD interpreter lint (0 AI calls) on selected Stories and their dependencies; sends no checks. --max-calls selects 1 to 1000 calls for structural preflight; warnings do not change the cap or guarantee completion.'),
       form(`pdd ${lint} --local [STORY...] [--json]`, 'Check linked SVG layout parts locally with warning diagnostics and 0 AI/network calls.')] },
   { id: 'files', prefix: ['files'], local: 'project-files', operands: [], options: [{ name: '--json', kind: 'flag' }],
     forms: [form('pdd files [--json]', 'List prompts, Runtime interfaces, Stories, tests and refusal reasons; no network calls.')] },
