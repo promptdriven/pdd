@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFileSync, readdirSync, statSync, writeFileSync} from 'node:fs';
+import {readFileSync, readdirSync, statSync, writeFileSync, mkdirSync, unlinkSync} from 'node:fs';
+import {hostname} from 'node:os';
 import {join} from 'node:path';
-import {approveRun, changeRun, cancelRun, openRun, stepDone} from '../src/workflow-runner.mjs';
+import {approveRun, changeRun, cancelRun, openRun, stepDone, acquireRunLock} from '../src/workflow-runner.mjs';
 import {runPdd} from '../src/pdd-cli.mjs';
 import {fixture, packageRoot} from './helpers/workflow-runner-fixture.mjs';
 
@@ -94,4 +95,98 @@ test('an approval whose gate moves during confirmation is refused', async t => {
   const result = await approveRun({ref:'17',cwd:f.source,packageRoot,expectGate:gate},f.ports);
   assert.equal(result.exitCode,3,result.message); assert.match(result.message,/new-gate/);
   assert.equal(f.record().decisions.length,0); assert.equal(f.record().gate.id,'new-gate');
+});
+
+test('changes refuses when its step moves while waiting for journal admission', async t => {
+  const f = await fixture(t); assert.equal((await f.run()).exitCode,0);
+  const run = f.record(), dir = join(run.runDir,'.delivery-journal.lock'), leaf = join(dir,'owner-other.json');
+  mkdirSync(dir,{recursive:true}); writeFileSync(leaf,JSON.stringify({pid:process.pid,hostname:hostname(),token:'other'}));
+  let advanced = false;
+  const result = await changeRun({ref:'17',cwd:f.source,text:'Revise',expectStep:'scope'}, {...f.ports,journalSleep:async () => {
+    if (!advanced) { advanced = true; assert.equal((await stepDone({step:'scope',summary:'Done',cwd:run.root},f.agentPorts())).exitCode,0); unlinkSync(leaf); }
+  }});
+  assert.equal(result.exitCode,3,result.message); assert.match(result.message,/current step: none/i);
+  assert.equal(readdirSync(run.runDir).includes('delivery-journal.json'),false);
+});
+
+test('changes refuses when its gate moves during chat inspection', async t => {
+  const f = await fixture(t); assert.equal((await f.run()).exitCode,0);
+  const run = f.record(); run.gate={id:'g1',area:run.areas[run.area].name,kind:'approve',at:10};
+  writeFileSync(join(run.runDir,'status.json'),JSON.stringify(run));
+  const herdr = f.ports.herdr; let moved=false;
+  const result = await changeRun({ref:'17',cwd:f.source,text:'Revise',expectGate:'g1'}, {...f.ports,herdr:async args => {
+    if (!moved && args[0]==='pane' && args[1]==='read') { moved=true; const current=f.record(); current.gate.id='g2'; writeFileSync(join(run.runDir,'status.json'),JSON.stringify(current)); }
+    return herdr(args);
+  }});
+  assert.equal(result.exitCode,3,result.message); assert.match(result.message,/g2/);
+  assert.equal(f.herdr.calls.some(args=>args[0]==='agent'&&args[1]==='prompt'),false);
+  assert.equal(readdirSync(run.runDir).includes('delivery-journal.json'),false);
+});
+
+test('a stale retry preserves the exact bytes of an existing pending request', async t => {
+  const f=await fixture(t); assert.equal((await f.run()).exitCode,0);
+  const run=f.record(), chat=run.chats.at(-1), path=join(run.runDir,'delivery-journal.json');
+  run.gate={id:'g1',area:run.areas[run.area].name,kind:'approve',at:10};
+  writeFileSync(join(run.runDir,'status.json'),JSON.stringify(run));
+  const bytes=JSON.stringify({requests:[{id:'pending',text:'Revise',kind:'change',area:run.areas[run.area].name,paneId:chat.paneId,state:'pending',at:10},
+    {id:'abandoned',text:'Earlier',kind:'change',area:'other',paneId:'other',state:'pending',at:9,inFlight:true,owner:{pid:process.pid+1000000,hostname:hostname(),token:'dead'}}]});
+  writeFileSync(path,bytes); const herdr=f.ports.herdr; let moved=false;
+  const result=await changeRun({ref:'17',cwd:f.source,text:'Revise',expectGate:'g1'}, {...f.ports,processIdentity:()=>({alive:false}),herdr:async args=>{
+    if (!moved && args[0]==='pane' && args[1]==='read') { moved=true; const current=f.record(); current.gate.id='g2'; writeFileSync(join(run.runDir,'status.json'),JSON.stringify(current)); }
+    return herdr(args);
+  }});
+  assert.equal(result.exitCode,3,result.message); assert.equal(readFileSync(path,'utf8'),bytes);
+});
+
+test('changes checks the expectation at submission under ordinary ownership', async t => {
+  const f=await fixture(t); assert.equal((await f.run()).exitCode,0);
+  const run=f.record(); run.gate={id:'g1',area:run.areas[run.area].name,kind:'approve',at:10};
+  writeFileSync(join(run.runDir,'status.json'),JSON.stringify(run)); f.herdr.calls.length=0;
+  let moved=false;
+  const result=await changeRun({ref:'17',cwd:f.source,text:'Revise',expectGate:'g1'}, {...f.ports,acquireRunOwnership:()=>{
+    if (!moved) { moved=true; const current=f.record(); current.gate.id='g2'; writeFileSync(join(run.runDir,'status.json'),JSON.stringify(current)); }
+    return ()=>{};
+  }});
+  assert.equal(moved,true); assert.equal(result.exitCode,3,result.message); assert.match(result.message,/g2/);
+  assert.equal(f.herdr.calls.some(args=>args[0]==='agent'&&args[1]==='prompt'),false);
+  assert.equal(readdirSync(run.runDir).includes('delivery-journal.json'),false);
+});
+
+test('matching cancellation commits before cleanup can race workflow progress', async t => {
+  const f=await fixture(t); assert.equal((await f.run()).exitCode,0);
+  const run=f.record(); run.gate={id:'g1',area:run.areas[run.area].name,kind:'approve',at:10};
+  writeFileSync(join(run.runDir,'status.json'),JSON.stringify(run));
+  const herdr=f.ports.herdr; let checked=false;
+  const result=await cancelRun({ref:'17',cwd:f.source,expectGate:'g1'}, {...f.ports,herdr:async args=>{
+    if (!checked) {
+      checked=true; assert.equal(f.record().state,'cancelled');
+      const progress=await stepDone({step:'scope',summary:'Done',cwd:run.root},f.agentPorts());
+      assert.notEqual(progress.exitCode,0,progress.message); assert.equal(f.record().state,'cancelled');
+    }
+    return herdr(args);
+  }});
+  assert.equal(result.exitCode,0,result.message); assert.equal(checked,true); assert.equal(f.record().state,'cancelled');
+});
+
+test('cancellation checks the gate again under ordinary ownership', async t => {
+  const f=await fixture(t); assert.equal((await f.run()).exitCode,0);
+  const run=f.record(); run.gate={id:'g1',area:run.areas[run.area].name,kind:'approve',at:10};
+  writeFileSync(join(run.runDir,'status.json'),JSON.stringify(run)); f.herdr.calls.length=0;
+  let changed=false;
+  const result=await cancelRun({ref:'17',cwd:f.source,expectGate:'g1'}, {...f.ports,acquireRunOwnership:()=>{
+    if (!changed) { changed=true; const current=f.record(); current.gate.id='g2'; writeFileSync(join(run.runDir,'status.json'),JSON.stringify(current)); }
+    return ()=>{};
+  }});
+  assert.equal(result.exitCode,3,result.message); assert.match(result.message,/g2/);
+  assert.equal(f.record().gate.id,'g2'); assert.equal(f.record().state,'running'); assert.equal(f.herdr.calls.length,0);
+});
+
+test('automatic cancellation reports a stale gate before a busy lock', async t => {
+  const f=await fixture(t); assert.equal((await f.run()).exitCode,0);
+  const run=f.record(); run.gate={id:'new',area:run.areas[run.area].name,kind:'approve',at:10};
+  run.automaticOrigin={repository:run.repo,coordinatorId:'owner',machine:'machine',claim:{commentId:'11',labelEventId:'12'}};
+  writeFileSync(join(run.runDir,'status.json'),JSON.stringify(run));
+  const release=acquireRunLock(run.runDir); t.after(release);
+  const result=await cancelRun({ref:'17',cwd:f.source,expectGate:'old'},f.ports);
+  assert.equal(result.exitCode,3,result.message); assert.match(result.message,/new/);
 });

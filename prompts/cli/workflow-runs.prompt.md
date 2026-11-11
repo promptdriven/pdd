@@ -55,6 +55,17 @@ finite diagnostic naming the ownership path and available owner details, with on
 journal claim is held must wait less than its 250 ms claim budget, never block the
 main thread there for five seconds. Retain journal-before-ordinary ordering.
 
+For an expected-state changes submission, module function
+`inspectRunAndStart(runDir, action, ports = {})` uses the same ownership and
+failure rules to read the existing version 1 record at `runDir`, validates that
+the saved `runDir` matches, and synchronously calls `action(record)`. It returns
+the callback's value unchanged; callback errors follow the ordinary ownership
+failure rules. The action may start the single validated Herdr prompt and return
+its promise. Release ownership immediately after the action returns, before
+awaiting that promise. This is the submission decision; it performs no run write
+or journal claim acquisition. All other external effects remain outside ordinary
+ownership.
+
 `writeRun(record, ports)` retains its synchronous signature, supplied-object
 mutation and returned record, and its explicit whole-record save capability. Its
 publication participates in the same ownership boundary; it cannot interrupt an

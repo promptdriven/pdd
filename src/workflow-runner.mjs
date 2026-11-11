@@ -25,7 +25,7 @@ import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 import { readWorkflowAreas } from './workflow-areas.mjs';
 import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, reconcileWorkflowPr, readWorkflowPrChecker, readWorkflowPrStatus } from './workflow-github.mjs';
 import { allocateIssueWorktree, releaseIssueClaim } from './workflow-worktree.mjs';
-import { allRuns, currentChat, gitContext, listRuns, readRun, readRunOwnership, resolveRun, runDirFor, runForWorktree, updateRun, updateRunCosts, writeRun } from './workflow-runs.mjs';
+import { allRuns, currentChat, gitContext, listRuns, readRun, readRunOwnership, resolveRun, runDirFor, runForWorktree, updateRun, updateRunCosts, writeRun, inspectRunAndStart } from './workflow-runs.mjs';
 import { armSavedWorkerCompletion } from './workflow-worker-completion.mjs';
 import { startChat, sendToChat, herdrCommand, chatSession, chatHealth, openChat, rebuildClosedChat, assertRestartCaller, restartChat, validSessionId, closeFinishedChats, finishedChats, finishedAt, paneUsage, ensurePaneBudget, countReasons, mergeReasonCounts, reasonWords, expandHome, homeVariable, isFolder, observeLifecycle, applyLifecycle, launchAnchor, sessionEvidenceDue, ownSession, observedSession, START_GRACE_MS, removeStaleLoginFiles } from './workflow-chat.mjs';
 import { samePath } from './workflow-herdr-layout.mjs';
@@ -3941,7 +3941,17 @@ async function deliveryJournal(run, p, action, { recover = true } = {}) {
         (owner.pid === (p.ownerPid ?? process.pid) ? !activeDeliveries.has(owner.token) : ownerAlive(owner.pid, p) === false);
       if (abandoned) { entry.state = 'uncertain'; entry.code = 'acknowledgement_unknown'; delete entry.inFlight; delete entry.owner; }
     }
-    const result = action(journal);
+    const control = {};
+    const result = action(journal, control);
+    if (Object.hasOwn(control, 'restoreBytes')) {
+      if (control.restoreBytes === null) { try { fs.unlinkSync(path); } catch (error) { if (error.code !== 'ENOENT') throw error; } }
+      else {
+        const temporary = `${path}.${(p.deliveryToken ?? randomUUID)()}.tmp`;
+        try { fs.writeFileSync(temporary, control.restoreBytes, { flag: 'wx', mode: 0o600 }); fs.renameSync(temporary, path); }
+        finally { try { fs.unlinkSync(temporary); } catch {} }
+      }
+      return result;
+    }
     if (!recover && JSON.stringify(journal) === before) return result;
     const temporary = `${path}.${(p.deliveryToken ?? randomUUID)()}.tmp`;
     try { fs.writeFileSync(temporary, JSON.stringify(journal, null, 2) + '\n', { flag: 'wx', mode: 0o600 }); fs.renameSync(temporary, path); }
@@ -4002,12 +4012,12 @@ export async function changeRun({ ref, text, cwd, expectGate, expectStep, packag
       if (!run || runIdentity(run) !== runIdentity(found.run) || run.parking?.phase !== 'parked'
         || run.parking.at !== found.run.parking.at) return fail('The parked run changed. Look again before replying.');
       const key = `park-reply:${run.parking.at}:${createHash('sha256').update(oneLine(text)).digest('hex')}`;
-      return deliverRequest(run, text, {...ports, queueOnly: true, requestKey: key});
+      return deliverRequest(run, text, {...ports, queueOnly: true, requestKey: key, expected: {expectGate, expectStep}});
     });
   }
   const current = expectGate !== undefined || expectStep !== undefined ? readRun(found.run.runDir) : found.run;
   const laterStale = expectedState(current, {expectGate, expectStep}); if (laterStale) return laterStale;
-  return deliverRequest(current ?? found.run, text, p);
+  return deliverRequest(current ?? found.run, text, {...p, expected: {expectGate, expectStep}});
 }
 
 // Journal custody and FIFO delivery to the current area chat: the person's answer or change request, or (notice) a pdd
@@ -4041,19 +4051,34 @@ Nothing was sent to the chat.` };
     if (sent.code === 'agent_not_found') return fail(`The ${area.name} chat is not running. ${kept}`);
     return fail(`pdd could not send the text to the ${area.name} chat (${sent.code}). ${kept}`);
   };
-  let accepted;
+  let accepted, admitted = false, staleAtSubmit, admissionBaseline, admissionBytes;
   try {
     accepted = await deliveryJournal(run, p, journal => {
+      const stale = expectedState(latest(), p.expected ?? {});
+      if (stale) throw Object.assign(Error(stale.message), {result: stale});
+      if (p.expected?.expectGate !== undefined || p.expected?.expectStep !== undefined) {
+        admissionBaseline = JSON.stringify(journal);
+        try { admissionBytes = ({...nativeDeliveryFiles, ...p.deliveryFiles}).readFileSync(join(run.runDir, 'delivery-journal.json')); } catch (error) { if (error.code !== 'ENOENT') throw error; admissionBytes = null; }
+      }
       if (notice && !targetCurrent(latest())) throw Error('The run changed before notice delivery');
       let entry = journal.requests.find(item => p.requestKey ? item.key === p.requestKey : matches(item) && item.kind === kind && item.text === request && !['delivered', 'superseded'].includes(item.state));
       if (entry && p.requestKey && entry.state === 'pending' && !entry.inFlight && entry.area === area.name) entry.paneId = chat.paneId;
-      if (!entry) { entry = { ...(p.requestKey ? {key: p.requestKey} : {}), id: (p.deliveryToken ?? randomUUID)(), text: request, kind, area: area.name, paneId: chat.paneId, state: 'pending', at: p.now(), ...(retryRequested ? { personRetry: true } : {}), question: notice ? null : run.question ?? null, gate: notice ? null : run.gate ?? null }; journal.requests.push(entry); }
+      if (!entry) { admitted = true; entry = { ...(p.requestKey ? {key: p.requestKey} : {}), id: (p.deliveryToken ?? randomUUID)(), text: request, kind, area: area.name, paneId: chat.paneId, state: 'pending', at: p.now(), ...(retryRequested ? { personRetry: true } : {}), question: notice ? null : run.question ?? null, gate: notice ? null : run.gate ?? null }; journal.requests.push(entry); }
       return { ...entry };
     });
-  } catch (error) { return fail(error.code === 'delivery_busy' ? `Another command is saving a request. Wait briefly, then retry. ${retry}` : `Could not save ${what}; it was not sent. Check the run folder and retry. ${retry}`); }
+  } catch (error) { if (error.result) return error.result; return fail(error.code === 'delivery_busy' ? `Another command is saving a request. Wait briefly, then retry. ${retry}` : `Could not save ${what}; it was not sent. Check the run folder and retry. ${retry}`); }
   if (p.queueOnly) return done(kept);
   const owner = { pid: p.ownerPid ?? process.pid, hostname: deliveryHost(p), token: (p.deliveryToken ?? randomUUID)() };
   activeDeliveries.add(owner.token);
+  const refuseStale = async stale => {
+    await deliveryJournal(run, p, (journal, control) => {
+      const saved = journal.requests.find(item => item.id === accepted.id);
+      if (saved?.owner?.token === owner.token) { delete saved.inFlight; delete saved.owner; }
+      if (admitted) journal.requests = journal.requests.filter(item => item.id !== accepted.id || item.inFlight || item.state !== 'pending');
+      if (JSON.stringify(journal) === admissionBaseline) control.restoreBytes = admissionBytes;
+    });
+    return stale;
+  };
   try {
     const snapshot = await deliveryJournal(run, p, journal => ({ accepted: { ...journal.requests.find(item => item.id === accepted.id) }, queue: journal.requests.filter(item => matches(item) && !['delivered', 'superseded'].includes(item.state)).map(item => ({ ...item })) }));
     accepted = snapshot.accepted; const queue = snapshot.queue;
@@ -4065,7 +4090,9 @@ Nothing was sent to the chat.` };
     for (const entry of queue) {
       if (entry.state === 'uncertain') continue;
       if (entry.inFlight) return progress(entry);
-      run = latest(); if (!targetCurrent(run)) return failure({ code: 'chat_target_changed' });
+      run = latest();
+      const stale = expectedState(run, p.expected ?? {}); if (stale) return await refuseStale(stale);
+      if (!targetCurrent(run)) return failure({ code: 'chat_target_changed' });
       if (isEnvironmentWake(entry.text) && await environmentWakeAllowed(run, entry.text, p) === false) {
         const observed = await deliveryJournal(run, p, journal => {
           const saved = journal.requests.find(item => item.id === entry.id);
@@ -4087,7 +4114,18 @@ Nothing was sent to the chat.` };
         : validSavedAutomaticOrigin(run) ? `Submitted request: ${entry.text}${retryInstruction} Address it in this chat and record uptake. This request is not an approval. Read the owner handoff and applicable automatic overlay before deciding what follows. Current package CLI: ${pddCommand(p.packageRoot ?? PACKAGE_ROOT)}. Run the repository full suite through ${pddCommand(p.packageRoot ?? PACKAGE_ROOT)} workflow suite --command COMMAND and wait for the queue result. Test-slot waiting is not stuck.\nRequest ${entry.id}. After addressing it, record agent uptake with a short note:\n${uptakeCommand(entry.id, { ...p, pdd: pddCommand(p.packageRoot ?? PACKAGE_ROOT) })}` : `${CHANGE_PREFIX}: ${entry.text} Revise in this chat, run done again for the step you changed, then show the result and ask again.\nRequest ${entry.id}. After addressing it, record agent uptake with a short note:\n${uptakeCommand(entry.id, p)}`;
       let custodyFailed = false, claimed = false;
       const transport = herdrCommand(p), guardedHerdr = async args => {
-        try { return await transport(args); }
+        try {
+          if (args[0] === 'agent' && args[1] === 'prompt' && (p.expected?.expectGate !== undefined || p.expected?.expectStep !== undefined)) {
+            const started = inspectRunAndStart(run.runDir, current => {
+              staleAtSubmit = expectedState(current, p.expected);
+              if (staleAtSubmit || runIdentity(current) !== selectedIdentity) return null;
+              return transport(args);
+            }, p);
+            if (!started) throw Object.assign(Error('The run moved before submission'), {code:'chat_target_changed'});
+            return await started;
+          }
+          return await transport(args);
+        }
         catch (error) {
           if (args[0] === 'agent' && args[1] === 'prompt' && ['agent_not_found', 'agent_blocked'].includes(error.code)) {
             try { await deliveryJournal(run, p, journal => { const saved = journal.requests.find(item => item.id === entry.id); if (saved?.owner?.token === owner.token) { delete saved.inFlight; delete saved.owner; saved.code = error.code; } }); claimed = false; }
@@ -4103,6 +4141,8 @@ Nothing was sent to the chat.` };
         if (p.beforeDeliverySubmit && !await p.beforeDeliverySubmit()) return false;
         try { return await deliveryJournal(run, p, journal => {
           const current = latest();
+          staleAtSubmit = expectedState(current, p.expected ?? {});
+          if (staleAtSubmit) return false;
           if (!targetCurrent(current) || isEnvironmentWake(entry.text) && !currentEnvironmentWake(current, entry.text, p)) return false;
           const saved = journal.requests.find(item => item.id === entry.id);
           if (!saved || saved.state !== 'pending' || saved.inFlight) return false;
@@ -4111,6 +4151,7 @@ Nothing was sent to the chat.` };
           saved.inFlight = true; saved.owner = owner; claimed = true; return true;
         }); } catch { custodyFailed = true; return false; }
       } });
+      if (staleAtSubmit) return await refuseStale(staleAtSubmit);
       if (custodyFailed) return fail(`Could not save submission intent; ${what} was not sent. ${kept}`);
       let observed;
       try {
@@ -4325,6 +4366,8 @@ async function cancelRunCommand({ ref, cwd, expectGate, expectStep }, ports, exp
   if (expectedIdentity && runIdentity(run) !== expectedIdentity) return fail('The selected workflow run changed. Retry cancellation.');
   const automatic = !ports?.claimReleased && validSavedAutomaticOrigin(run);
   const recordCancellation = at => commitRun(run,p,latest=>{
+    const stale = expectedState(latest, {expectGate, expectStep});
+    if (stale) throw Object.assign(Error(stale.message), {code:'workflow_progress_refused', result:stale});
     latest.state='cancelled';
     latest.cancelled=['replaced','handed-over'].includes(latest.cancelled?.state)?latest.cancelled:{state:'cancelled',at};
     latest.gate=null; delete latest.parking; delete latest.blockedOn; delete latest.parkReason;
@@ -4334,12 +4377,13 @@ async function cancelRunCommand({ ref, cwd, expectGate, expectStep }, ports, exp
   });
   // The automatic cancellation lock is held by cancelRun. Persist the terminal
   // blocker before an awaited Herdr cleanup lets a publication continue.
-  if (automatic) recordCancellation(p.now());
+  const recordedEarly = automatic || expectGate !== undefined || expectStep !== undefined;
+  if (recordedEarly) recordCancellation(p.now());
   p.say('Closing the chat tabs in Herdr…');
   const { warnings, kept } = await cleanupRunChats(run, p, {force:true, reason:'cancel'});
   const held = automatic && !kept.length ? await releaseWorkerHeld(readRun(run.runDir) ?? run,p) : null;
   if (!kept.length) removeStaleLoginFiles(run.runDir, { maxAgeMs: 0 });
-  if (!automatic) recordCancellation(p.now());
+  if (!recordedEarly) recordCancellation(p.now());
   const cleanupNotes = [];
   if (automatic) {
     const latest = readRun(run.runDir) ?? run;
@@ -5752,6 +5796,7 @@ export const askPerson=saveGuard(askPersonCommand);
 
 export const cancelRun=saveGuard(async (args, ports = {}) => {
   const p = deps(ports), found = await resolveRun(args.ref, {cwd: args.cwd}, p);
+  const stale = expectedState(found.run, args); if (stale) return stale;
   if (!found.run || found.error || !validSavedAutomaticOrigin(found.run)) return cancelRunCommand(args, ports);
   let release;
   try {

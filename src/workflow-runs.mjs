@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runs.prompt.md (sha256: 15c2ed51f64c3123dc8edcb6e87084beb70f34ffa94ccf74298b0114a67af0ed).
+// Generated from prompts/cli/workflow-runs.prompt.md (sha256: a1d28b96c30184b3885c65dbd4a5d83b05a2e92a73e80e06d89962b3d038899a).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import * as nativeRunFiles from 'node:fs';
@@ -288,6 +288,16 @@ export function updateRun(runDir, update, ports = {}) {
   });
   deliverMetrics(committed,ports);
   return indexed(committed,ports);
+}
+
+// Invoke the guarded submission while ordinary progress is excluded, but never
+// retain ownership while waiting for the transport's asynchronous result.
+export function inspectRunAndStart(runDir, action, ports = {}) {
+  return ownedRun(runDir, ports, fs => {
+    const run = JSON.parse(fs.readFileSync(join(runDir, 'status.json'), 'utf8'));
+    if (!object(run) || run.v !== 1 || run.runDir !== runDir) throw Error('The existing run record is missing, unreadable or invalid');
+    return action(run);
+  });
 }
 
 // Persist observations without making a polling dashboard count as workflow activity.
