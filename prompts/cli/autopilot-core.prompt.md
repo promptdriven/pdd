@@ -866,7 +866,8 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    (`pdd/core-N-…` branch) with no live claim that is no local final-step job) and an
    orphan one (not a core PR). A PR of this machine in the final step is a holder
    too, also when the list does not show its label yet. **One winner on every tick:** the lowest open holder
-   number; every other PR removes its own label (a failed DELETE throws and the next
+   number; every other PR removes its own label (also a PR in the final step whose label
+   the list does not show yet; a failed DELETE throws and the next
    tick tries again) and waits. When another PR holds the lane, or an older green PR
    of this machine (claim order, `started`) waits, the PR waits: `lane {state:
    waiting, holder, since, heldSince}`, and its quiet clock starts again each tick
@@ -875,14 +876,17 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    the PR adds the label and reads the holders again. **Label lag** (#3246): GitHub's
    label list can lag a label write; the PR's own labels (`GET issues/PR`) do not. So
    when the list does not show this PR, read its own labels: when they show the lane,
-   this PR is a holder, and the lane step goes on in the same tick. With the label in
+   this PR is a holder, and the final step starts in the same tick (the merge itself
+   waits for the list: see the race guard). With the label in
    neither read, try again next tick. The holder is in the final step: `lane {state: final, since, waited}`. A
    repair (which also clears a stale waiting state, as a new head does), an END (of
    any kind, before its other steps), a hand-over, a person's stop and an observe
    validation leave the lane (remove the label); a merge closes the PR. **Race
-   guard:** right before `gh pr merge` the PR reads the holders (with the same
-   own-labels rule, so a list that lags never drops its label) and the compare again;
-   it merges only as the lowest open holder with `behind_by` 0.
+   guard:** right before `gh pr merge` the PR reads the holder list and the compare
+   again. It merges only when the list itself shows it as the lowest open holder, with
+   `behind_by` 0. Only the list shows the labels of other machines. When only the PR's
+   own labels show the lane (the list still lags), the PR keeps its label and the
+   final step and does not merge in this tick; it does not drop the label.
    The order (debate B L6, C1, C2): a PR that came back from a conflict update
    (`lanePriority`) goes first, then claim order; a PR whose changed files meet a live
    reservation of another PR (this machine's job files, or the `reserved {files,
