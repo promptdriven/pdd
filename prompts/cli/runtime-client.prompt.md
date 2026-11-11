@@ -312,7 +312,7 @@ Export `checkRuntimeHealth({env}, ports)` for the [Autopilot launcher](autopilot
 
 ## `pdd test`
 
-Modes: `--fill-hash` accepts only optional `--compact`, no STORY and makes no network call. `--files [STORY...] [--app-map PATH]` prints the exact selected upload manifest, each file size and total bytes, with no network or sign-in. For linked entries, display `authored/path -> canonical/target` with the target byte size using the additive target metadata owned by [source-reading policy](runtime-preflight.prompt.md#files); preserve ordinary file lines. Normalize STORY paths as for a check. Use the same selection as Check, lint and Try: the selected tests and their dependency closure, optional includes and the chosen app map, as owned by [source capture](runtime-preflight.prompt.md#source-capture). Check, lint and the default file preview do not use an app map. `--app-map` is accepted on Check only with `--files`, to preview the map used by a Try (including a default Try map named explicitly). Keep original test paths for Try seeds and saved cases. `--lint [STORY...] [--json] [--timeout MIN]` runs local SVG layout advice, then the server's lint, `POST /v1/lint` (0 AI calls), on the captured files, sets `complete: true` in its lint request, and sends no checks. Every lint that can authorize a check or Try requests `complete: true`, so admission has per-test evidence. Before batch creation, holding any row for lint, capture or sign-in, apply only the selected entry/called prompts’ `/limits` admission problems from [runtime preflight](runtime-preflight.prompt.md), keeping its reason code, prompt path, field and fix hint. Use `readPrompt` and `promptSchemaRefusals` from that owner, retaining only `/limits` problems at this existing local gate; other schema checks keep their server route. Inspect the reached interfaces independently of P1–P10 refusal precedence, so an unrelated bad Story/schema/hash does not hide a rejected limit. If any limits are refused, return exit 4 with no authentication lookup or upload; report affected rows as refused and other selected rows as not run, with no batch. Deduplicate problems by code, prompt path and pointer in text and JSON, while retaining every selected row and its own refusal state even when rows reach the same prompt. Text gives the reason/fix, one line per selected test in the server lint format (`refused: <codes>` or `not run`), and says no files were sent; JSON retains the lint response keys with lint_state refused, problems, rows and zero calls. Apart from this limits gate and the SVG advisory, locally it runs only discovery and the privacy and capture checks (secret names, links, size and file limits); all other local-copy engine problems remain server-lint owned. A selected test with a [discovery refusal](runtime-preflight.prompt.md#test-name-rule) (`discoveryRefusal`: a conflict, a file pdd cannot read or parse, a file over the upload limit, or a `story_path` that names another Story) is refused locally with that sentence and is neither sent nor named in the lint request; the other selected tests are linted. A local discovery refusal keeps its state, phase and reason while remote lint waits or cannot run. Every later capture, including a UUID receipt cache refresh, uses the saved set of sent tests. The same holds for Check and `--files`: a test whose discovery gave an `error` is never uploaded (Check keeps this in the saved batch row as `unsent`, so a read, retry or restart recaptures the same files), and `--files` prints `Warning: not sent: <sentence>` for it. When every selected test is refused this way, pdd sends nothing: `Lint refused every selected test before sending. 0 AI calls. No files were sent.`, exit 4. It prints every problem the server reports, all at once (each `refused_prompts` entry: code, path, section, message; and each reached prompt that is not approved or a current draft, with the plain hints), one line per selected test (`passes lint` or `refused: <codes>`), and `Lint: N of M tests pass. 0 AI calls. No checks were sent.`. Exit 0 only when lint finished and passed for every selected test, 4 on lint refusals, 5 for not run, not invited or update required, and 3 while queued/running or unknown. A pending explicit lint retains its batch and prints its GET-only read command; sends no checks or Try. `--json` gives `{batch, repo, exit_code, lint_state, summary_line, problems, rows, warnings}`. Normal `pdd test` keeps its local preflight for now. `--read [BATCH|CALL_ID] [--json] [--timeout MIN]` reads saved batch results (and may dispatch original held checks under saved-lint continuation below) or an owner-scoped call by UUID. Hidden `--request UUID` reads one run with GET only. A wrong mix is exit 2.
+Modes: `--fill-hash` accepts only optional `--compact`, no STORY and makes no network call. `--files [STORY...] [--app-map PATH]` prints the exact selected upload manifest, each file size and total bytes, with no network or sign-in. For linked entries, display `authored/path -> canonical/target` with the target byte size using the additive target metadata owned by [source-reading policy](runtime-preflight.prompt.md#files); preserve ordinary file lines. Normalize STORY paths as for a check. Use the same selection as Check, lint and Try: the selected tests and their dependency closure, optional includes and the chosen app map, as owned by [source capture](runtime-preflight.prompt.md#source-capture). Check, lint and the default file preview do not infer an app map; explicit scenario `app_maps` remain part of the preflight owner's selected source. `--app-map` is accepted on Check only with `--files`, to preview the map used by a Try (including a default Try map named explicitly). Keep original test paths for Try seeds and saved cases. `--lint [STORY...] [--json] [--timeout MIN]` runs local SVG layout advice, then the server's lint, `POST /v1/lint` (0 AI calls), on the captured files, sets `complete: true` in its lint request, and sends no checks. Every lint that can authorize a check or Try requests `complete: true`, so admission has per-test evidence. Before batch creation, holding any row for lint, capture or sign-in, apply only the selected entry/called prompts’ `/limits` admission problems from [runtime preflight](runtime-preflight.prompt.md), keeping its reason code, prompt path, field and fix hint. Use `readPrompt` and `promptSchemaRefusals` from that owner, retaining only `/limits` problems at this existing local gate; other schema checks keep their server route. Inspect the reached interfaces independently of P1–P10 refusal precedence, so an unrelated bad Story/schema/hash does not hide a rejected limit. If any limits are refused, return exit 4 with no authentication lookup or upload; report affected rows as refused and other selected rows as not run, with no batch. Deduplicate problems by code, prompt path and pointer in text and JSON, while retaining every selected row and its own refusal state even when rows reach the same prompt. Text gives the reason/fix, one line per selected test in the server lint format (`refused: <codes>` or `not run`), and says no files were sent; JSON retains the lint response keys with lint_state refused, problems, rows and zero calls. Apart from this limits gate and the SVG advisory, locally it runs only discovery and the privacy and capture checks (secret names, links, size and file limits); all other local-copy engine problems remain server-lint owned. A selected test with a [discovery refusal](runtime-preflight.prompt.md#test-name-rule) (`discoveryRefusal`: a conflict, a file pdd cannot read or parse, a file over the upload limit, or a `story_path` that names another Story) is refused locally with that sentence and is neither sent nor named in the lint request; the other selected tests are linted. A local discovery refusal keeps its state, phase and reason while remote lint waits or cannot run. Every later capture, including a UUID receipt cache refresh, uses the saved set of sent tests. The same holds for Check and `--files`: a test whose discovery gave an `error` is never uploaded (Check keeps this in the saved batch row as `unsent`, so a read, retry or restart recaptures the same files), and `--files` prints `Warning: not sent: <sentence>` for it. When every selected test is refused this way, pdd sends nothing: `Lint refused every selected test before sending. 0 AI calls. No files were sent.`, exit 4. It prints every problem the server reports, all at once (each `refused_prompts` entry: code, path, section, message; and each reached prompt that is not approved or a current draft, with the plain hints), one line per selected test (`passes lint` or `refused: <codes>`), and `Lint: N of M tests pass. 0 AI calls. No checks were sent.`. Exit 0 only when lint finished and passed for every selected test, 4 on lint refusals, 5 for not run, not invited or update required, and 3 while queued/running or unknown. A pending explicit lint retains its batch and prints its GET-only read command; sends no checks or Try. `--json` gives `{batch, repo, exit_code, lint_state, summary_line, problems, rows, warnings}`. Normal `pdd test` keeps its local preflight for now. `--read [BATCH|CALL_ID] [--json] [--timeout MIN]` reads saved batch results (and may dispatch original held checks under saved-lint continuation below) or an owner-scoped call by UUID. Hidden `--request UUID` reads one run with GET only. A wrong mix is exit 2.
 
 ### Cap-aware remote lint (draft)
 
@@ -757,6 +757,9 @@ New reference-backed Try records also retain uploaded effective prompt hashes
 and the corresponding contract provenance. Apply the existing pinned-prompt
 freshness promise to the expanded current prompt bytes before connected reuse,
 doors or owner-tool access, so a contract-only prompt change requires `--new`.
+Use the preflight owner's executable-interface projection for these effective
+hashes, as for uploaded capture bytes; explicit full/partial classification
+metadata must not make unchanged source appear stale.
 Keep raw authored prompt hashes for compatibility. For legacy records, use the
 existing raw-hash rule; if a currently referenced prompt lacks the matching
 expanded snapshot, explain that its reference baseline is unavailable and ask for
@@ -802,10 +805,107 @@ fails without creating a replacement unless the user explicitly supplies --new. 
 budget changes must not be reported as success; an unsupported raise fails before any paused-session reopen; no new dispatch after interruption. The runtime's
 owner API binding for this raise is pending the planner's contract; do not invent a mutation path.
 
-- STORY as for `pdd test`. No STORY and one test: use it. Many tests: list them, exit 2. Then preflight, capture and lint as for `pdd test`, for this one test.
+### Choose how to open the program
+
+`runTry` owns simulation selection; preserve its public signature, session identity, budgets,
+source pins, authentication and saved-case behavior. These rules refine the former default page.
+Run local preflight and bounded source capture for the selected Stories before interaction-kind eligibility. In particular,
+a bounded workspace refusal retains its exit and reason before any mode choice, sign-in or HTTP.
+Read Story entry interfaces through preflight, including shared-schema references. A CLI entry
+has both CLI conventions; an HTTP entry has the declared `HTTP METHOD /path` input title.
+Do not infer kinds from filenames, operation names or test results.
+
+```mermaid
+flowchart TD
+    E{Explicit way?} -->|Yes| F[Use requested way]
+    E -->|No| P{Whole project with app map?}
+    P -->|Yes| B[Simulator page with all mapped screens]
+    P -->|No| C{One distinct CLI program?}
+    C -->|Yes| S[Shell with program ready]
+    C -->|No CLI| H{HTTP routes?}
+    C -->|Several CLI programs| R[Ask for a Story and list eligible names]
+    H -->|Yes| L[Localhost server and example request]
+    H -->|No| M{Mapped screen entry?}
+    M -->|Yes| B
+    M -->|No| T[Simulator Form tab]
+```
+
+For a named Story, apply the CLI/HTTP/page alternatives only to its entries; a project app
+map must not turn an unrelated CLI or typed-operation Story into a screen Story.
+Read the selected entries strictly. Inspect other Stories only for eligible-name
+advice: an unreadable prompt or failed shared-reference expansion in an unselected
+Story cannot block the selected Story or the direct CLI adapter's mismatch advice.
+Do not suppress failures in the selected Story's own source or dependencies.
+Explicit `--cli` prints the
+launcher/PATH and returns; `--cli --shell` opens the shell. `--shell` alone selects the CLI
+shell. `--serve [PORT]` forces the existing localhost adapter, including its Screen support.
+`--page` forces the Simulator page for any Story. Existing `--agent` and `--tab` requests also
+select the page unless a conflicting explicit way is supplied. `--no-open` suppresses browser
+opening only; `--no-wait` retains existing bridge behavior. Conflicting ways refuse with exit 2
+before sign-in, capture or remote effects. Stop and Save retain their existing separate rules.
+
+A typed operation accepts declared fields (for example `resolve_command` with
+`{commands: [...]}` and a structured result), without CLI conventions or an HTTP route.
+For a named typed Story whose entry is not a screen in the selected app map, open the page
+on the **Form** tab (`tab: "call"` in the existing request protocol), even when an unrelated
+project app map exists. Print one plain line: `This Story's operation takes typed input, so
+it opens on the Form tab.` A Story whose entry really is mapped as a screen still opens
+Screen. Explicit `--tab` retains its selected tab; do not mislabel an explicit tab as Form.
+This change does not parse terminal flags into typed inputs or synthesize argv adapters.
+
+For `--cli`, `--cli --shell` or standalone `--shell` on that typed Story, return the existing
+door usage exit code **125**, with the plain non-command-line reason and eligible CLI Story
+list below, followed by `pdd simulate STORY opens its Form tab.` Substitute the authored
+Story name and shell-quote it when needed. If there are no eligible CLI Stories, retain the
+plain no-eligible-Stories message. Never advise adding CLI conventions or an adapter in any
+user-visible refusal or next step, including a direct CLI-adapter invocation. Direct adapters
+must follow this same refusal policy before launcher writes or remote work.
+
+STORY is optional. With no Story, use the complete selected app map, including every screen
+and its dependency closure. Otherwise the one distinct CLI entry across Stories is the main
+program: multiple Stories for that same prompt/operation are not ambiguous. Without CLI,
+include all declared HTTP routes for the whole project. Choose a stable lexicographically
+first eligible test path as the seed only; do not limit captured project capabilities to it.
+Keep seed eligibility independent of the opening flags: prefer the unique CLI
+program's first Story, otherwise the first HTTP Story, otherwise the first selected
+Story. Opening a page instead of a shell or localhost must not change session identity.
+Several distinct CLI programs have no inferred main: refuse with exit 2, list their Story names
+and ask the person to name one. An empty project refuses plainly without authentication.
+A named Story matching several case files keeps the existing exact-test-path ambiguity rule.
+Preflight, capture and lint still apply to the selected source before creating a session.
+
+An incompatible forced CLI/HTTP way refuses with a plain reason and sorted distinct eligible
+Story names, without RUNBOOK/schema/convention jargon. For example: `This Story is not a
+command-line program. These are: one-cli-one-action.` If none qualify, say `No Stories are
+command-line programs.` The HTTP equivalent says `This Story has no HTTP routes or screens.`
+and lists Stories with routes or an app map. Refuse a known local mismatch before sign-in or
+runtime calls; do not create an unusable session. Ambiguous entries within a Story remain a
+refusal. Explicit page mode remains usable for generic call-only Stories.
+
+
+- Preflight, capture and lint apply to every selected Story; whole-project capture includes the complete selected app map and all selected Stories. A saved named session is not a whole-project session: retain the exact selected test paths, app-map path and raw hash as its simulation scope, and refuse incompatible scope reuse with exit 2 and `pdd simulate --new` recovery. Keep all other saved-session identity and recovery rules below.
+  Find an existing whole-project session independently of the current seed choice.
+  A changed or removed first seed cannot bypass that scope check. Reuse the original
+  seed and its saved associations; never reset the world or allowance just to change
+  the opening mode. If several whole-project records exist, refuse plainly and ask
+  the person to stop a named saved Try rather than choosing one. Explicit `--new`
+  stops the identified old session and removes its original key before storing the
+  replacement under the new seed; never overwrite a different saved named Try there.
+  Named recovery and delayed saved-case handoff validate that session's complete
+  saved test/app-map scope against its original source and reference pins. A narrow
+  named invocation or original-seed recapture cannot mislabel an omitted independent
+  Story as changed source. Retain current workspace permission checks, the exact
+  original case target and seed snapshot, and the existing world-continuation guards.
+  Compare the saved app-map raw hash with its permission-checked captured bytes
+  on these continuations too; a map-only edit cannot bypass source freshness by
+  using a named recovery command or a later case handoff.
+  Apply that saved-scope validation before authentication, showing a reused link
+  or reopening a paused session, including page-only/no-wait recovery. On new
+  setup, save the hash of the uploaded map capture; edits during lint/admission
+  cannot relabel that session with later local bytes.
 - If `repos/<key>.json` has a Try for this test and GET says `result.session.state` `running` with a valid link, open that link again. For `paused`, validate the same-origin link, then explicitly send one authenticated JSON `{}` POST to `/v1/try/<id>/reopen`. Keep the same ID and original seed identity. Read that ID until its session is running before showing/opening the link. Restore consumes no AI calls, creates no new Try and keeps the original expiry and remaining allowance. A lost reopen answer is read by the same ID; never automatically repeat the POST. A busy/refused/missing reopen or unconfirmed restore keeps the record and returns nonzero with its reason and retry advice naming the exact authored test path, shell-quoted when needed; never print a paused link as ready. `--new` stops the paused Try and creates a new one through its normal route, without reopening it. Options that apply only to a new Try remain refused before reopening. After interruption, send nothing new. `--new`: stop the old Try first, then make a new one. A plain repeat never replaces any saved setup, including a confirmed ended session; a separate setup requires explicit `--new`. A missing (404), expired (410), unknown setup or unknown session is not proof that its original intent did not execute. Without explicit `--new`, keep its complete saved record and request ID, exit 3, and make no lint, setup, stop or reopen submission. Name the original UUID, the authenticated read-only `GET <origin>/v1/runs/<UUID>` status endpoint, and an exact `pdd simulate <test path> --no-open --no-wait` repeat command (shell-quote the path when needed). Explain that a separate Try requires deliberate `--new` after reconciling the original outcome. Never infer zero AI calls or external effects from a setup receipt. A new setup that ends `unknown`, or first reports a passed job whose session is `unknown`, `stopped` or `stopping`, also keeps its complete original record, exits 3 and gives this same recovery advice. This applies both to a direct setup reply and the first status read; subsequent reads must not silently replace it. A Try that is still starting, or a GET with no answer, remains exit 3 with no new Try unless explicitly replaced through `--new`.
 - After Ctrl-C, pdd sends nothing new: no POST starts after the interrupt.
-- App map: `--app-map PATH`, else `app-map.json` at the repo root, else `app/app-map.json`. An app map is a Git-visible JSON object with `"schema_version": "prompt-runtime.app-map.v1"` and a nonempty `name` (the engine's first checks). A bad `--app-map` is exit 2 with the reason (`not a Git-visible file`, `not JSON`, wrong `schema_version`, no `name`) and `See RUNBOOK.md §13.`; a bad found file is skipped with a note. With an open Try, `--app-map` or `--tab` without `--new` is exit 2: they apply only to a new Try. POST `/v1/try` multipart `{requestId, source_sha256, seed: <test path>, app_map, tab}`: `app_map` only when there is one; `tab` = `--tab`, else `screen` with an app map, else `call`; `max_calls` is the explicit budget or400. Read until `state: passed`, `result.session.state: running` and a valid `result.url`: the origin's scheme and host, path `/s/<token>/`, no user or password. Else refused, not run or unknown, as for a check, with one exception.
+- App map: `--app-map PATH`, else `app-map.json` at the repo root, else `app/app-map.json`. An app map is a Git-visible JSON object with `"schema_version": "prompt-runtime.app-map.v1"` and a nonempty `name` (the engine's first checks). A bad `--app-map` is exit 2 with the reason (`not a Git-visible file`, `not JSON`, wrong `schema_version`, no `name`) and `See RUNBOOK.md §13.`; a bad found file is skipped with a note. With an open Try, `--app-map` or `--tab` without `--new` is exit 2: they apply only to a new Try. POST `/v1/try` multipart `{requestId, source_sha256, seed: <test path>, app_map, tab}`: `app_map` only when there is one; `tab` = explicit `--tab`, else the selected Screen/Form/terminal way above (an unrelated app map does not change a typed Story's Form selection); `max_calls` is the explicit budget or400. Read until `state: passed`, `result.session.state: running` and a valid `result.url`: the origin's scheme and host, path `/s/<token>/`, no user or password. Else refused, not run or unknown, as for a check, with one exception.
 - A Try setup that the server refuses (the POST or the job; runtime team, Oct 27) is not a check: no table and no `pdd test` advice, exit 4. Two plain lines: `The Try could not start: the app map was refused (<code>: <reason>).` and `Fix <app map path> (RUNBOOK §13), then run pdd simulate <story> --new.` It is the app map when one was sent and the code is `ambiguous-handler`, `template-reference-schema` or `app-map-*`, or the section names the app map. Else `the server refused it (…)` and `Fix what it names, then run pdd simulate <story> --new.`, with ` Details: <report link>` when there is one. Many refusals join with `; `; a refusal with a `where` (prompt-runtime #379) adds `; at <where>` after its reason. The reason is the server's `reason` (on each `result.refusals[]` item, or on `result.report.refusal` with the same code), else pdd's plain rule (`ambiguous-handler`: on one screen, all taps of one kind must match by the same key; `template-reference-schema`: a field that gets a value from the screen (`$ref`) must be a plain {"type": "string"}), else the engine message, else the server message unless it is the generic `The runtime refused this job…`. A server `fix` takes the place of pdd's fix words: `<fix> Then run pdd simulate <story> --new.` A Try that is ready but has an invalid link is exit 3 with one line and no table: `Try link refused: it points at <link origin>, not <configured address>. The server's address setting may be wrong; tell the PDD team.` (or `Try link refused: it is not a valid Try link. Tell the PDD team.` when the origin matches). pdd keeps its record so `pdd simulate --stop` can end it, a later `pdd simulate` says the same, and pdd never prints that link.
 - A reused link says `It keeps its original 24-hour expiry; stop it with: pdd simulate --stop <story>`, so reopening never promises a fresh 24 hours.
 - Open a newly created link with `open` (macOS) or `xdg-open` (Linux) and print the end line `Try ready for "<title>": <link> (open in your browser). It ends in 24 hours, or with: pdd simulate --stop <story>`. `--no-open`, or a failed open, prints `Try ready for "<title>": <link>` and then how to open it.
@@ -991,7 +1091,7 @@ The [CLI](pdd-cli.prompt.md) calls `runCheck` and `runTry`.
 
 ## Terminal and HTTP doors
 
-`runTry` also accepts `--cli`, `--shell` (only with --cli), `--serve [PORT]` (default 8080), and `--save-last`.
+`runTry` also accepts the explicit ways declared in [Choose how to open the program](#choose-how-to-open-the-program), plus `--save-last`.
 These modes share the ordinary Story selection, lint, upload, owner authentication and saved Try.
 Reject incompatible modes before any network effect. A door reuses an open Try only at its recorded origin and
 with its recorded GitHub login. --cli selects terminal on new sessions and delegates local launch behavior to

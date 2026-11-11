@@ -126,10 +126,17 @@ Check also catalogs visible flag `--compact`. Its help form `pdd test --fill-has
 
 Check also catalogs `--retry` as a text option with form `pdd test --retry BATCH [--json] [--details] [--timeout MIN]`. Help says it retries only proven unstarted checks for the saved identical source, preserving completed/running results.
 
-Try also catalogs flags --cli, --shell and --save-last and optional-integer --serve (1..65535, default 8080).
+Try also catalogs flags --cli, --shell, --page and --save-last and optional-integer --serve (1..65535, default 8080).
 Help forms: `pdd simulate [STORY] --cli [--shell] [--max-calls N] [--new]`, `pdd simulate [STORY] --serve [PORT] [--max-calls N] [--new]`,
 `pdd simulate --save-last`. Describe real terminal commands, localhost HTTP requests and saving the last command
-into its original test. --shell compatibility and mode conflicts belong to runtime-client.
+into its original test. Add the explicit form `pdd simulate [STORY] --page [--new]`.
+The default help explains automatic choice: command-line program opens a shell, HTTP routes
+start on localhost with an example request, screens open the PDD Simulator page, and typed
+operations open its Form tab. With no Story,
+open the whole project. `--page` forces the page. The standalone form above is required as its own manifest/help
+entry; an optional `[--page]` token in the general form does not replace it. Preserve the optional Story operand and all
+existing explicit forms. Mode conflicts and choice are owned by
+[runtime client](runtime-client.prompt.md#choose-how-to-open-the-program).
 
 `pdd workflow evidence ISSUE --summary FILE` records newer source-verified saved check JSON without rerunning workflow steps or publication; require ISSUE and --summary, no extra operands/options.
 

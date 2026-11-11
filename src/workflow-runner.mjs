@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: f0e236ded3e057a5a7dd7d7d5c75d2263ca976f187d8eb678ddab96d577c221e).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 8b22975c36b13791a9fbd8e25a5f2fe6b34f1d30397187f926cfb444a936bc4c).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -2935,7 +2935,7 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
     lines.push(`pdd recorded ${step}. The ${area.name} area is done; pdd opens ${prLabel(run, area)} after the person approves.`,
       nothingToTry(run, area, contents)
         ? 'Gate: show the person the Prompt tests line of each Story (one per Story: ✓, ✗ or no verdict) with the report link, if there is one. There is nothing to try. Ask them to approve or ask for changes. Stop. Do not approve for them.'
-        : 'Gate: show the person the Prompt tests line of each Story (one per Story: ✓, ✗ or no verdict) with the report link, and the Try link(s). Ask them to try it, then approve or ask for changes. Stop. Do not approve for them.',
+        : 'Gate: show the person the Prompt tests line of each Story (one per Story: ✓, ✗ or no verdict) with the report link, and simulation details (the Try link when it opens a page). Ask them to try it, then approve or ask for changes. Stop. Do not approve for them.',
       ...(prLabel(run, area) === 'PR 1' ? [`Tell the person what PR 1 holds, in these words: "${holdsLine(contents)}"`] : []),
       approvalGuide(run, p.pdd),
       'If they ask for changes, revise in this chat, run done again for the step you changed, and ask again.');
@@ -2945,6 +2945,7 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
     return doneWithRequests(await finishPr(run,area,step,p,lines),run,p);
   }
   lines.push(...await showGate(run, p));
+  if (run.area === storyGateIndex(run)) lines.push('You may offer pdd simulate <story> before the check: it automatically opens a shell for a command-line program, localhost with an example request for HTTP routes, the Simulator page for screens, or Form for typed operations. Use pdd simulate for the whole project.');
   const automatic = automaticHandoff(run, p, packageRoot);
   if (!automatic && normal && area.gate === 'approve' && run.area === storyGateIndex(run)) {
     const changed = await changedFiles(run, p), gateId = run.gate?.id, storySnapshot = storyFingerprint({ root: run.root, changed });

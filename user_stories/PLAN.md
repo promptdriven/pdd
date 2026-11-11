@@ -180,3 +180,7 @@ Restore the authored coffee example and its J1 journey as integration acceptance
 Keep current PDD main APIs, exact JSON behavior, workspace boundaries, uncapped default local scheduling and uncertain-accounting protections. Use the existing upload path; never create a second archive implementation. Completion includes the composed coffee Screen journey and recorded area labels, not only pure module tests. Arbitrary physical phone/relay/machine wiring is outside the available fixture and must not be claimed. Hosted verification of new server presentation code requires deployment or an explicitly scoped local verification; a local fixture is not production acceptance.
 
 Paired Runtime source branch: `feature/808-product-step-labels`. Its proposed API adds source-bound product_parts and advertises product-parts-v1; legacy/non-product sessions preserve their current behavior. PDD product setup requests an upgrade before upload when that service capability is absent. This means the newly composed full feature cannot be claimed accepted on the current hosted service until the paired service/UI changes are deployed through a separately authorized release.
+
+## Open a simulation naturally (#812)
+
+1. [Open my program the way I use it](simulate-program-kind.md) — [native cases](../test/simulate-kind.test.mjs), replay and bounded selection cases, plus the Story-gate case in [workflow runner](../test/workflow-runner.test.mjs).
