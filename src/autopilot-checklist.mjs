@@ -1,14 +1,15 @@
-// Generated from prompts/cli/autopilot-checklist.prompt.md (sha256: c1962120c79b3a99b2f7b198dcaed0de65c4e86041c55af5e1afc67799ab65ba).
+// Generated from prompts/cli/autopilot-checklist.prompt.md (sha256: a8bc7462bfd3c5d507b43624081af855b559f4745650c5131dfb49de9504c802).
 
 const MAX_ITEMS = 30, MAX_CHARS = 300, MAX_QUOTE = 200, PREFIX_WORDS = 8, MIN_QUOTE_WORDS = 3;
 const WORD = /[\p{L}\p{N}]+/gu, HAS_WORD = /[\p{L}\p{N}]/u;
-const LABEL = /^(?:done when|expected|acceptance criteri(?:a|on)|test(?:s|ing)?)(?![\p{L}\p{N}])/iu;
+const LABEL = /^(?:done when|expected|acceptance criteri(?:a|on)|test(?:s|ing)?|wanted|proposed outcomes?)(?![\p{L}\p{N}])/iu;
 // A colon after the label, with at most 3 more words before it ("Expected result:").
 const LABEL_COLON = /^((?:[\s*_`]*[\p{L}\p{N}][\p{L}\p{N}'’-]*){0,3})[\s*_`]*:(.*)$/u;
 const HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/;
 const LIST = /^( *)(?:[-*+]|\d{1,9}[.)])(?:[ \t]+(.*))?$/;
 const PR_LIST = /^( *)(?:[-*+]|\d{1,9}[.):])(?:[ \t]+(.*))?$/;
 const TASK = /^\[[ xX]\][ \t]+(.*)$/;
+const TABLE_ROW = /^\s*\|/;
 const START = /^(?:issue\s+)?checklist\s*(?::.*)?$/i;
 const ID = /^[\s*_[(]*C(\d{1,3})(?![\p{L}\p{N}])[*_\])]*/iu;
 const ID_SEP = /^\s*(?:[,/&+]\s*)?(?:and(?![\p{L}\p{N}])\s*)?/iu;
@@ -23,6 +24,9 @@ const words = text => [...text.matchAll(WORD)];
 const lowerWords = text => words(text).map(match => match[0].toLowerCase());
 const quoteForm = text => text.normalize('NFC').replace(/[“”]/g, '"').replace(/[‘’]/g, "'").replace(/[`*_]/g, '').replace(/\s+/g, ' ').trim();
 const cut = (text, size) => [...text].slice(0, size).join('');
+// A table row's cells: outer pipes go, an escaped pipe (\|) stays in its cell.
+const cells = line => line.trim().replace(/^\|/, '').replace(/(?<!\\)\|$/, '').split(/(?<!\\)\|/).map(cell => cell.trim().replace(/\\\|/g, '|'));
+const delimiter = row => row.length > 0 && row.every(cell => /^:?-+:?$/.test(cell));
 
 // Fenced code blocks and HTML comment blocks are not read.
 function blockStart(line) {
@@ -57,14 +61,17 @@ function labelLine(line) {
 
 export function issueChecklist(text) {
   const found = [];
-  let current = null, heading = null, label = false, blank = true, block = null;
+  let current = null, heading = null, label = false, blank = true, block = null, table = null;
   const close = () => { if (current) found.push(current); current = null; };
   const join = (separator, part) => {
     if (!part.trim()) return;
     current.text = current.text.trim() ? `${current.text}${separator}${part}` : part;
   };
-  for (const line of lines(str(text))) {
+  const all = lines(str(text));
+  for (const [at, line] of all.entries()) {
     if (block) { if (blockEnd(block, line)) { block = null; blank = true; } continue; }
+    const row = TABLE_ROW.test(line) ? cells(line) : null;
+    if (!row) table = null;
     const opened = blockStart(line);
     if (opened) { if (opened.fence && indentOf(line) < 2) close(); if (!opened.closed) block = opened; blank = true; continue; }
     if (!line.trim()) { blank = true; continue; }
@@ -74,6 +81,14 @@ export function issueChecklist(text) {
       const level = head[1].length;
       if (heading !== null && level <= heading) heading = null;
       if (heading === null && afterLabel(head[2] ?? '') !== null) heading = level;
+      continue;
+    }
+    // A table: a header row, a delimiter row, then data rows. In a section each data row is an item.
+    const next = all[at + 1];
+    if (row && (table || (TABLE_ROW.test(next ?? '') && delimiter(cells(next))))) {
+      close(); blank = false;
+      if (table === 'rows' && (heading !== null || label)) found.push({ text: row.filter(Boolean).join(' | ') });
+      table = table === null ? 'header' : 'rows';
       continue;
     }
     const list = LIST.exec(line);

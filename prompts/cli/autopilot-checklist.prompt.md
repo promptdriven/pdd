@@ -35,9 +35,13 @@ The reader reads the issue line by line (a tab counts as 4 spaces of indent).
 - **List lines.** A list line starts, after its indent, with `-`, `*` or `+`, or a number and `.` or
   `)`, then a space. A **task item** is a list line whose text starts with `[ ]`, `[x]` or `[X]` and
   a space; its text is the text after the box.
-- **Labels.** "Done when", "Expected", "Acceptance criteria" (also "criterion") and "Test" (also
-  "Tests" and "Testing"), in any case, as whole words ("Testability" is not a label). Before the
-  label, `*`, `_` and backtick marks and a number such as `2.` are skipped.
+- **Labels.** "Done when", "Expected", "Acceptance criteria" (also "criterion"), "Test" (also
+  "Tests" and "Testing"), "Wanted" and "Proposed outcome" (also "outcomes"), in any case, as whole
+  words ("Testability" is not a label). "Proposal" is not a label: a proposal lists ways to do the
+  work, not what must be true. Before the label, `*`, `_` and backtick marks and a number such as
+  `2.` are skipped. "Wanted" and "Proposed outcome" are labels because the two evidence issues use
+  them: pdd #2892 ("## Wanted") and pdd #3012 ("## Proposed outcome for discussion", with the pilot
+  that the work lacked).
 - **Checklist sections.**
   - A heading (`#` to `######` and a space) whose text starts with a label starts a section. It ends
     at the next heading of the same or a higher level (as many `#` or fewer). A deeper heading stays
@@ -57,8 +61,14 @@ The reader reads the issue line by line (a tab counts as 4 spaces of indent).
     item's lines with no blank line between, or after a blank line when it is indented at least 2
     spaces more than the item. Any other line of other text ends the current item. A heading ends
     it. A list line outside a section that does not join ends it.
-  - A paragraph under a heading is not an item: a section's items are its list lines, and the text of
-    a label line.
+  - A table in a section is a header row, a delimiter row (cells such as `---`, `:--` or `:-:`), then
+    data rows; each row starts with `|` after spaces. Each data row is an item: its text is its
+    cells that are not empty, trimmed, joined by ` | ` (an escaped `\|` stays in its cell). The
+    header and delimiter rows are not items. A table row, in a section or not, ends the current
+    item and takes no continuation. A table ends at the first line that is not a row. A line that starts with `|` and
+    is not in a table is a line of other text.
+  - A paragraph under a heading is not an item: a section's items are its list lines, its table
+    rows and the text of a label line.
 - **Text.** Runs of white space become one space, and leading and trailing space go. A label line's
   item loses its leading `*` and `_` marks and its trailing ones. A text with more than 300
   characters keeps its first 300 characters (whole code points), then trailing space goes. A text
@@ -98,6 +108,7 @@ EVIDENCE is the test (its file and name), the check (its command and result) or 
 - `counts`: `{total, covered, excluded, missing, unsupported}`.
 - `reds`: one text for each `missing` or `unsupported` item, in item order.
 
+`issueText` is the issue's title and body; the caller decides whether trusted comments are added.
 A `prBody` or `issueText` that is not a string counts as empty; `items` that is not an array counts
 as no items.
 

@@ -5,7 +5,8 @@ import { readFileSync } from 'node:fs';
 import { issueChecklist, checklistBrief, checkChecklist, checklistNote, checklistReview } from '../src/autopilot-checklist.mjs';
 
 // Expected results come from issue #3249 (its Test section), the group 3 design (D3) and the module prompt's
-// rules, not from the code. The real issue bodies are copies of promptdriven/pdd #3249, #3246 and #3260.
+// rules, not from the code. The real issue bodies are copies of promptdriven/pdd #3249, #3246, #3260 and the two
+// evidence issues of #3249, #2892 and #3012.
 const real = JSON.parse(readFileSync(new URL('./fixtures/checklist-issue-bodies.json', import.meta.url), 'utf8'));
 const texts = items => items.map(item => item.text);
 const states = check => check.items.map(row => row.state);
@@ -112,6 +113,59 @@ test('real ticket #3260: the three items of its Test section; its numbered Propo
     'The setup workflow has the concurrency group, and a second push cancels the first run.',
   ]);
   assert.deepEqual(items.map(item => item.id), ['C1', 'C2', 'C3']);
+});
+
+test('real ticket #2892 (evidence): the two items of its Wanted section; its audit tables are under another heading, so they are not items', () => {
+  assert.deepEqual(texts(issueChecklist(real[2892].body)), [
+    'The guide describes what pdd does now: Gemini CLI works with any version that has the needed options, and pdd names the option that is missing. It describes only the current state (no "used to" or "no longer").',
+    'No other text in `docs/`, `skills/`, the RUNBOOK or the README names one required Gemini CLI version.',
+  ]);
+});
+
+test('real ticket #3012 (evidence): the seven items of its Proposed outcome section, with the Pocket pilot; its other bullets are not items', () => {
+  const items = texts(issueChecklist(real[3012].body));
+  assert.deepEqual(items, [
+    'During setup or explicit verification setup, inspect the repository for its supported start command, usable-ready signal, existing test driver, data/auth requirements, observable outputs, isolation and cleanup.',
+    'Reuse existing harnesses. Save a small repository-local verification recipe with launch, environment/build check, real user action, evidence capture and cleanup. Reference existing PDD Stories and criteria; do not create a competing requirements system.',
+    'Prove the recipe once end to end on a real mapped feature. A fresh agent must be able to follow it. Preserve evidence after cleanup and state any environment differences still untested.',
+    'Bugs require reproduction on the affected surface and a check that the repaired behavior works there. Use executable old/new regression proof where appropriate. Test real side effects as well as final screen/output.',
+    'Independent verification consumes the actual artifact and evidence. Required behavior that was not exercised remains unproved. Use Runtime when applicable and available; native proof must execute the native behavior it claims to prove.',
+    'Update verification instructions when the app changes without weakening a user journey to hide a product regression. A recurrence records the actual failing case and checks the installed build before another proposed fix.',
+    'Pilot in PDD and Pocket, then a fresh small CRM repository. Include restart and isolated parallel execution so this does not depend on Serhan\'s local setup.',
+  ]);
+});
+
+test('the reader: Wanted and Proposed outcome sections, one item per table data row; Proposal is not a label', () => {
+  const issue = [
+    '## Proposal',
+    '- a proposal bullet is not an item',
+    '',
+    '## Wanted',
+    '| # | Where | Wanted |',
+    '|---|:------|:-----:|',
+    '| 1 | `README.md:20` | Name Gemini CLI as a workflow agent |',
+    '| 2 |  | Keep `a \\| b` in one cell |',
+    'right after the table',
+    '- Wanted bullet after the table',
+    '',
+    '| a pipe line with no table |',
+    '',
+    '## Notes',
+    '| Outside | table |',
+    '|---|---|',
+    '| not | an item |',
+    '',
+    '**Proposed outcome:**',
+    '| Outcome |',
+    '|---|',
+    '| The lane names its holder |',
+  ].join('\n');
+  assert.deepEqual(texts(issueChecklist(issue)), [
+    '1 | `README.md:20` | Name Gemini CLI as a workflow agent',
+    '2 | Keep `a | b` in one cell',
+    'Wanted bullet after the table',
+    'The lane names its holder',
+  ]);
 });
 
 test('the reader: task items anywhere, section list items, label lines, nesting, code and comments', () => {
