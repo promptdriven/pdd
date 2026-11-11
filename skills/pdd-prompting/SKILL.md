@@ -26,6 +26,7 @@ Each code module's `.prompt.md` is the source; code implements it.
 - `guide.md`: the full Prompting guide.
 - `review.md`: how to review drafts and report results.
 - `RUNBOOK.md`: how to write prompts and tests that the PDD interpreter can check (§2–§10), and how to run `pdd test` and `pdd simulate`.
+- `autopilot-job-rules.md`: Autopilot job rules.
 
 ## How to write
 
