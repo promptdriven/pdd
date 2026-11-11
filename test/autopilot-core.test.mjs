@@ -1575,7 +1575,7 @@ test('E1 report owner (Serhan\'s boundary): our input to Runtime (interface, bin
   const scenario = await file({ kind: 'runtime', component: 'pdd lint', code: 'scenario-integer-out-of-range', text: 'a value is not a safe integer' });
   assert.equal(scenario.fingerprint, 'pdd.pdd-lint.scenario-limit.0.1');
   const draft = listReportDrafts({ root }).find(d => d.fingerprint === scenario.fingerprint);
-  assert.deepEqual(draft.labels, ['pdd:autopilot-report']); assert.deepEqual(draft.assignees, []); assert.match(draft.title, /^Autopilot report: PDD /);
+  assert.deepEqual(draft.labels, ['pdd:autopilot-report']); assert.equal(draft.runtimeOwner, undefined, 'no owner is configured'); assert.match(draft.title, /^Autopilot report: PDD /);
   for (const code of ['vector-replay-failed', 'safe-integer-limit', 'runtime-case-invalid']) assert.equal(reportKind({ kind: 'runtime', component: 'pdd test', code }), 'pdd', code);
   assert.deepEqual([...RUNTIME_CODES].sort(), ['interpreter-error', 'no-verdict', 'server-incompatible', 'server-internal']);
   // One spelling per code: the fixed code, then its owner when an agent says kind runtime.
