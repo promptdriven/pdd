@@ -92,12 +92,16 @@ test('stop ends the whole process group after the grace time: a grandchild that 
     input: '', env: { PATH: process.env.PATH } });
   const pid = Number(await until(() => existsSync(mark) && readFileSync(mark, 'utf8')));
   t.after(() => { try { process.kill(pid, 'SIGKILL'); } catch {} });
+  const stoppedAt = Date.now();
   assert.equal(stopAgentJob(job), true);
   const groupAlive = () => { try { process.kill(-job.pid, 0); return true; } catch (error) { return error.code !== 'ESRCH'; } };
-  await until(() => !groupAlive(), 20000);   // the grace is 2 s; a loaded machine needs longer to reap
+  await until(() => !groupAlive(), 20000);   // the grace is 2 s; a loaded machine needs longer to reap (only the test timeout)
   assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' }, 'the grandchild is gone');
   const done = readAgentJob(job);
-  assert.equal(done.state, 'exited'); assert.ok(done.exit.signal || done.exit.code !== 0, JSON.stringify(done.exit));
+  assert.equal(done.state, 'exited'); assert.equal(done.exit.signal, 'SIGTERM', JSON.stringify(done.exit));
+  // Claude round 5 SF: the wrapper writes the exit record just before the group SIGKILL, after the 2 s grace time.
+  const after = done.exit.at - stoppedAt;
+  assert.ok(after >= 1500 && after < 6000, `the SIGKILL came ${after} ms after the stop`);
 });
 
 // Codex delta 7: a failed exit-record write (here a folder at its path) never skips the group SIGKILL.

@@ -1178,15 +1178,19 @@ changes `pdd.json` instead). The machine values win over `pdd.json`, and
 `pdd autopilot status` says where the label and the mode come from.
 `--report file|draft|off` sets where this machine's problem reports go, the same
 way. `--decisions ask|decide` (or `autopilot.decisions` in `pdd.json`) sets
-whether a job may ask a person a question: `ask` asks only for a big decision of the
-repository (the issue does not settle it, it has 2 or more reasonable answers that
-users see, and it is hard to undo or others depend on it: a public contract, behavior
-that users rely on, or a product direction), as one plain question with 2 or 3 options
-and a recommended one, so you can answer with one letter; `decide`, the default for
-now, never asks. In both modes Autopilot decides small things itself (internal names,
-code structure, tests, wording, small defaults) and lists each choice in the PR under
-"Choices Autopilot made", with its reason; with `decide`, big choices are listed there
-too, marked "(big)". `--mode off` saves the mode and stops the timer of this machine. In
+whether a job may ask a person about a choice. Autopilot decides when at least one
+reasonable fix solves the problem and breaks nothing that people use today, and lists
+it in the PR under "Choices Autopilot made", with its reason and "(changes public
+behavior: …)" when users see a change. A bug fix or a small change never asks about a
+choice. With `ask`, a job may ask one plain question with 2 or 3 options and a
+recommended one (you answer with one letter) only when every reasonable fix breaks
+something people use today, or for a product-direction decision of a feature (whether
+a feature should exist, two different designs, removing a feature, a core contract,
+security, privacy, data policy, or cost); `decide`, the default for now, asks no choice
+question and lists big choices marked "(big)". In both modes a blocker asks: missing
+access or a secret, an issue that contradicts itself, work that cannot be done, a
+change against a rule of an approved prompt or an earlier decision that the issue does
+not ask for, and a change of what blocks merges (a required check, a gate, CI policy). `--mode off` saves the mode and stops the timer of this machine. In
 `observe` mode the core does everything except the merge (it also records the
 operator approval of changed prompts, with "in observe mode" in its words; in a
 `strict_approvals` repository it asks no person and lists those prompts in its note): when all checks pass, it
@@ -1378,19 +1382,23 @@ Autopilot files one report. For each PR head, Autopilot writes its own evidence 
 reviewer reads it, the merge comment names it, and the PR body gets a short "Autopilot
 evidence" block from it.
 
-With `--decisions ask`, a build job asks one question instead of choosing when it meets
-a big decision (its brief lists the other open issues by trusted authors, so it can see
-an open decision); it opens no PR then. The fresh review also checks the PR's list of
-choices, and with `ask` it flags a big choice that the job made instead of asking (for
-example one option of an open decision issue that the change touches). Such a finding
+With `--decisions ask`, a feature job asks one question instead of choosing when it
+meets a product-direction decision that the issue does not settle (its brief lists the
+other open issues by trusted authors, so it can see an open decision); it opens no PR
+then. A bug or small-change job never asks about a choice. With `decide`, a choice
+question is never posted: the job runs once more and decides it. The fresh review also
+checks the PR's list of choices, and with `ask` it flags a product-direction choice of a
+feature that the job made instead of asking (for example one option of an open decision
+issue that the change touches). Such a finding
 is not repaired: Autopilot asks the one question instead (in `observe` mode too), and
 the PR waits for the answer. The next build and
 review read the answer, so a settled choice is not asked again.
 
 When a job needs a person's decision, Autopilot posts its one question on the issue,
 adds `pdd:needs-decision` (not `pdd:stuck`) and frees the slot. Answer in a comment
-and remove `pdd:needs-decision`: removing the label is the signal, and it counts only
-when a trusted person removes it. The next job gets Autopilot's own question and the
+(one letter is enough): at its next tick Autopilot reads a trusted person's reply,
+removes `pdd:needs-decision` itself and goes on. A trusted person's removal of the
+label works too. The next job gets Autopilot's own question and the
 comments of trusted people after it.
 
 When a job ends, the issue gets one comment with the cause and the log file name

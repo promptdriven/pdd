@@ -34,7 +34,7 @@ string `core`; any other value, or none, is `full`.
 | `ciStuckMinutes` | positive safe integer, default 360: how long CI may stay pending with no change; at least 3 timer ticks |
 | `maxJobHours` | positive safe integer, default 24: the floor of the backstop (see the process rule); no value turns it off |
 | `report` | `file`, `draft` or `off`, default `draft`: nothing is posted unless the operator chooses `file` |
-| `decisions` | `ask` or `decide`, default `decide` (T10, for the trial on test repositories; the release default comes later): `ask` asks a person ONE question only for a big decision; `decide` never asks, and every choice (big ones too) is listed in the PR |
+| `decisions` | `ask` or `decide`, default `decide` (T10, for the trial on test repositories; the release default comes later): `ask` asks a person ONE question only for a choice that rule 1 allows (a product-direction decision of a feature, or when every reasonable fix breaks something people use today); `decide` asks no choice question, and every choice is listed in the PR. In both, a blocker asks (rule 1, Needs a person) |
 | `runtimeRepo` | `autopilot.reports.runtimeRepo` when it is `OWNER/NAME` (the Runtime report repository), else `null` |
 | `runtimeOwner` | `autopilot.reports.runtimeOwner` when it is a GitHub login (letters, digits and single inner hyphens, at most 39 characters), else `null`: the assignee of a Runtime report in `runtimeRepo` |
 | `repairs` | `autopilot.maxRepairs` (the old key `autopilot.repairs` is an alias): safe integer of at least 0, default 6, the safety cap of repairs for one job |
@@ -531,31 +531,53 @@ build, repair, conflict and review jobs get `pddCheck {version, cli}` (the engin
 version, `ports.version` or the package version, and `ROOT/bin/pdd`): the
 [job runner](agent-job.prompt.md) notes when the agent's shell finds another pdd, and
 status shows that note beside the running process. It files nothing and never ends a
-job.
+job. The briefs use it (#3177): build and repair rule 6 says "Run pdd as "$PDD_CLI" (for
+example "$PDD_CLI" test STORY), never as a bare pdd: your shell can find an older pdd
+first on PATH. $PDD_CLI is the pdd of this Autopilot."; the approval command of rule 9
+is `printf '%s' WORDS | "$PDD_CLI" approve PROMPT --said -`; the conflict and review
+briefs say "When you run pdd, run it as "$PDD_CLI", never as a bare pdd."; and the red
+texts that name a pdd command name `"$PDD_CLI" test` and `"$PDD_CLI" approve`. Every
+agent brief also names the short job rules file of the package (#3227 fix 5,
+`PACKAGE/skills/pdd-prompting/autopilot-job-rules.md`, absolute): build, repair and
+conflict say "Read FILE in full before you write the PR body"; review says "Read FILE in
+full before you check the PR body".
 
 - **Build** (in `worktrees/N`): the issue title, URL and body as data from a trusted
   author, and these rules: choose pdd-small-change, pdd-bug or pdd-feature, but make
   ONE PR with prompt, Story, tests and code; this is not a `pdd workflow run`, so no
   `pdd workflow` command, no Herdr, no person wait and no `steps/autopilot.md`. Rule 1
-  also carries the choice rule (T10, Serhan: a person is asked only for the big
-  decisions of the repository, never for small things). A choice is **big** only when
-  all of these are true: (a) the issue and the person's answers in the brief do not
-  settle it; (b) it has 2 or more reasonable answers with different results that users
-  see; (c) it is hard to undo or others depend on it: a public contract (a command,
-  option, config key, API, output or file format, stored data), a change or removal of
-  behavior that users rely on, or a product direction. An open trusted issue that asks
-  the same question (for example an open decision issue) also makes it big. Every other
-  choice is **small**: internal names, code structure, tests, message wording, docs
-  wording, small defaults that are easy to change. The job decides each small choice
-  itself and lists it in the PR body under `Choices Autopilot made:`, one line each with
-  its reason (`- CHOICE (REASON)`). With `decisions` `ask`, a big choice is ONE question
-  and no PR: the `needs-person` result with `question` (one plain question), `options`
-  (2 or 3 answers) and `recommended` (the letter of the option the job recommends), so a
-  person can answer with one letter; at most one question per issue. With `decisions`
-  `decide` (the default), the job never asks about a choice: it decides big choices
-  too and lists them first under `Choices Autopilot made:`, each marked `(big)`. A vague
-  issue is never a reason to ask about a small choice; a clear issue, or a person's
-  answer in the brief, is built. The brief lists the open issues that the issue names by number and the titles
+  also carries the choice rule (T10; Serhan, Nov 11: a bug fix is not a big decision;
+  big decisions are like adding Autopilot to pdd and how it should work). **Autopilot
+  decides** when at least one reasonable fix solves the problem and breaks nothing that
+  people use today: the job picks that fix and lists it in the PR body under `Choices
+  Autopilot made:`, one line each with its reason (`- CHOICE (REASON)`), with `(changes
+  public behavior: WHAT)` when users see a change. For example, "make remove safer" is
+  decided (ask y/N only in an interactive terminal, `--yes` skips it, scripts
+  unchanged), and nothing is asked. A pdd-bug or pdd-small-change run never asks a
+  choice question: it picks the fix that makes the reported behavior right with the
+  least surprise (for example a bug in "1 KiB" for 1.9 KiB is decided and listed with
+  `(changes public behavior: …)`). A choice may be a question (`needs-person` with
+  `kind` `choice`) only when every reasonable fix breaks something that people use
+  today, or, in a pdd-feature run, for a product-direction decision that the issue and
+  the answers in the brief do not settle: whether a new feature area or capability
+  should exist, how a feature works at the design level when there are two different
+  designs, removing a feature, an on-purpose change to a core contract, security,
+  privacy or data policy, or something that costs money. An open trusted issue that
+  asks the same product question (for example an open decision issue) counts too.
+  Every other choice in a feature is decided and listed (small ones: internal names,
+  code structure, tests, message and docs wording, small defaults). **Two cases always
+  go to a person**, in every run kind and mode (audit, Nov 11): a change that
+  contradicts a rule in an approved prompt or an earlier recorded decision (an answer in
+  the brief, a decision issue) that the issue does not ask for in words, and a change of
+  what blocks merges (a new required check, a gate, a hash pin, CI policy). The job does
+  not make such a change by itself: it writes the `needs-person` result with `kind`
+  `blocker`. A real blocker (missing access or a secret, an issue that contradicts
+  itself, work that cannot be done) is `kind` `blocker` too. A question is ONE plain
+  question, 2 or 3 options and the letter that the job recommends, so a person can
+  answer with one letter. With `decisions` `decide` (the default) the job never asks a
+  choice question and lists every choice; the engine decides a choice question itself
+  (Needs a person, below), so only a blocker reaches a person. A vague issue is never a
+  reason to ask; a clear issue, or a person's answer in the brief, is built. The brief lists the open issues that the issue names by number and the titles
   of up to 20 other open issues (not PRs, not this issue, only by trusted authors:
   `ports.trusted(row)`, read once per login and tick and shared with the ready rule; a
   failed read is not trusted and warns once per login and tick), so the
@@ -668,15 +690,18 @@ job.
   with the surface and the result named; no test that only copies a value from the
   diff); an honest Runtime line and no unrelated or unsafe change; and (6) **the choices
   (T10)**: every choice that the issue did not settle is listed under `Choices Autopilot
-  made:` with its reason; a missing or wrong line is a P2 must-fix (fix the list), never a
-  decision item. A small choice (rule 1) is never a decision item. With `decisions`
-  `ask`, a big choice (rule 1: all of a, b and c, or an open trusted issue that asks the
-  same question) that the job made instead of asking is a P2 must-fix with the word
-  `decision:` after its severity or its place (`P2 decision: …` or `P2 FILE:LINE decision:
-  …`), and the result's `question`, `options` (2 or 3) and `recommended` (a letter) are
-  the one question for a person. With `decisions` `decide`, the brief has no decision
-  item: the reviewer only checks the list (a big choice is listed and marked `(big)`). A person's
-  answer to an earlier question is in the brief (the same answer text as the build), so a
+  made:` with its reason (with `(changes public behavior: …)` when users see a change); a
+  missing or wrong line is a P2 must-fix (fix the list), never a decision item. A change
+  that contradicts a rule in an approved prompt or an earlier recorded decision, which
+  the issue does not ask for in words, or a change of what blocks merges, is a P1
+  must-fix in every mode: undo it, or end with the `needs-person` result `kind`
+  `blocker` (so such a PR never merges by itself). In a pdd-bug or pdd-small-change PR a
+  decision item is never a question: only a repair or a "list it" fix. With `decisions`
+  `ask`, only a product-direction choice of a feature PR (rule 1) that the job made
+  instead of asking is a P2 must-fix with the word `decision:` after its severity or its
+  place (`P2 decision: …` or `P2 FILE:LINE decision: …`), and the result's `question`,
+  `options` (2 or 3) and `recommended` (a letter) are the one question for a person.
+  With `decisions` `decide`, the brief has no decision item. A person's answer to an earlier question is in the brief (the same answer text as the build), so a
   settled choice is not asked again. The brief has the linked open issues: each open
   issue (not a PR, not this issue, only by trusted authors, from the tick's issue list)
   that the issue title, the issue body or the PR body names by number (`#N`, `REPO#N` or
@@ -742,29 +767,51 @@ digits (an optional `#`); it becomes an integer above 0. The head is 40 hex digi
 any case and is saved in lower case. Any other PR value is no result. A `failed`
 result ends with the agent's cause; anything else ends with `no-result`.
 
-**Needs a person.** A result `{"outcome": "needs-person", "question", "options"?,
-"recommended"?}` with a nonblank question counts as a job result (`produced`) and goes
-through the resumable END steps with a question instead of a cause: read the claim again
+**Needs a person.** A result `{"outcome": "needs-person", "kind", "question", "options"?,
+"recommended"?}` with a nonblank question counts as a job result (`produced`). `kind` is
+`blocker` (missing access or a secret, an issue that contradicts itself, work that
+cannot be done, or one of the two cases of rule 1 that always go to a person) or
+`choice`; no `kind` counts as `choice`. **A choice that Autopilot decides is never
+posted** (T10): with `decisions` `decide`, and with `ask` after a person already
+answered a question on this issue (at most one choice question per issue), the engine
+starts the same agent role once more in the same worktree (a build gets its build
+brief, a repair the same reds; `decided {question, role, at}` is saved and ends up in
+the history line) with the question and "Autopilot decides this choice: do not ask.
+Pick the recommended option, or the fix that makes the reported behavior right with
+the least surprise and breaks nothing that people use today; build it, and list it
+first under Choices Autopilot made:, marked (big), with (changes public behavior: …)
+when users see a change." A second decided choice in the same job, or one from another
+role, ends the job (`job` cause `no-decision`). Every other `needs-person` result (a
+blocker, or a choice with `ask` that follows rule 1) goes
+through the resumable END steps with a question instead of a cause; its END history line
+has `ask: KIND`. Read the claim again
 before each write (hand over when another machine owns it); post one issue comment
 `Autopilot needs a decision from a person to go on with this issue:`, the question as
-`> ` quote lines, and "Please answer in a comment, then remove the `pdd:needs-decision`
-label. The next Autopilot job reads this question and your answer.", with the marker
+`> ` quote lines, and "Please answer in a comment (one letter is enough). Autopilot
+reads your answer at its next check, removes the `pdd:needs-decision` label itself and
+goes on.", with the marker
 `<!-- pdd:autopilot-core:question:N:JOB-ID -->` (found again after an uncertain post). The question text
 (T10 format) is the plain question on one line, then, with 2 or 3 nonblank options,
 one line per option `A) OPTION`, `B) …`, `C) …`, the recommended one ending with
-` (recommended)` (`recommended` is a letter, a 1-based number or the option text), and
+` (recommended)` (`recommended` is a letter, a 1-based number or the option text; a
+leading `A:`, `A)` or `A.` that the agent wrote into an option is dropped, so the letter
+shows once), and
 the line `Reply with one letter, for example: X` (X the recommended letter, else A);
 with fewer than 2 or more than 3 options the question goes alone. The same format is
 used for a review decision. Then add `pdd:needs-decision` (never `pdd:stuck`); delete this machine's claim comment and
 remove `pdd:working`; clean up locally with outcome `needs-person`. The slot is free.
-The person answers and removes the label; **the label removal is the signal**, a
-comment alone changes nothing. When the core claims an issue with comments, it reads
+**A trusted reply is the signal** (trial, Nov 11): the ready rule skips an issue with
+`pdd:needs-decision`, but when such an issue's `updated_at` differs from the one saved
+for it in the machine state (`decisionSeen`, so each change is read once), the core
+reads the answer below; with a trusted reply after the question (one that starts with
+an option letter, or any other), it removes `pdd:needs-decision` itself and the issue is
+ready in the same tick. A trusted person's removal of the label still works. When the core claims an issue with comments, it reads
 the latest question comment that this engine posted (author = the engine's own login,
 `GET user`, and a marker that names this issue; a marker comment by anyone else is
 not a question) and the comments after it by trusted people (`ports.trusted`), leaving
-out comments with a `<!-- pdd:` marker and claim comments. Only a removal of
-`pdd:needs-decision` after the question by a trusted person (the timeline
-`unlabeled` event's actor) answers it; otherwise the core puts the label back, undoes
+out comments with a `<!-- pdd:` marker and claim comments. A trusted reply, or a
+removal of `pdd:needs-decision` after the question by a trusted person (the timeline
+`unlabeled` event's actor), answers it; otherwise the core puts the label back, undoes
 its claim (claim comment and `pdd:working`) and starts nothing. The next build prompt
 then has the question and those answers as data, or "no written answer" when there
 is none.
@@ -833,7 +880,11 @@ runs until its end):
    Story has two lines (else red); different Stories may have different verdicts. A
    single line with no Story is accepted only when the change has at most one changed
    Story (else red: one line per changed Story). With Story lines, each changed Story
-   needs its own line, and a PASS line of a Story that the PR does not change is red. The result's `runtime.state` (lower case, spaces as `-`) must be
+   needs its own line, and a PASS line of a Story that the PR does not change is red,
+   unless that Story's own tests reach a changed prompt (their upload, `footprint` of
+   the Story's tests, holds it): such a Story is a changed Story too (rule 6: "or whose
+   test reaches a changed prompt"), so its PASS line needs the cover below like any
+   changed Story (Claude round 5, MF-G1). The result's `runtime.state` (lower case, spaces as `-`) must be
    absent, `pass` or `not-run`, and must agree with the body when all lines have one
    verdict; else red. A body with no
    Runtime line is red when the change has a `*.prompt.md` (Git decides, also when the
@@ -841,7 +892,9 @@ runs until its end):
    result says `"promptChanged": false`. **A Runtime pass must be true (T01):** every
    positive Runtime claim is checked: a "Runtime: PASS" line, an Evidence part
    `runtime=pass` (of the PR body, else of the result) and a result `runtime.state`
-   `pass`. With Story lines, only the Stories of PASS lines need the cover below, and a
+   `pass`. With no positive claim (every line says "not run" and nothing else claims a
+   pass), no cover is needed: only the line form above and the saved-row checks of
+   every line below apply (Claude round 5, MF-G2). With Story lines, only the Stories of PASS lines need the cover below, and a
    changed prompt that no passing check reaches is fine when it is in the upload of the
    tests of a Story with a not-run line (that line says the prompt was not checked). A
    claim counts only when the saved Runtime checks cover the change at the
@@ -1006,7 +1059,7 @@ runs until its end):
    expected …" line: "A missing test is not a reason for "Runtime: not run": write the
    Runtime test for each such Story (in test/runtime/ or tests/runtime/ when the
    repository keeps its own tests in test/ or tests/), one step for each of its criteria,
-   and run pdd test; or, when bound ports cannot fake the effect, mark the owning
+   and run "$PDD_CLI" test; or, when bound ports cannot fake the effect, mark the owning
    prompt's interface native-only with a reason." It is not red when the PR changes at
    least one prompt and every changed prompt's interface is `native-only` (the Story is
    checked natively). A read error adds no red (the T01 read names it). The reader is a

@@ -127,7 +127,7 @@ test('core factory 5: needs a person: one question and pdd:needs-decision; the a
   const f = await factory(t, { label: 'pdd:autopilot' }), { w } = f;
   w.issue(17, { labels: ['pdd:autopilot'] });
   assert.equal((await f.start()).exitCode, 0);
-  w.finish(17, 'build', { result: { outcome: 'needs-person', question: 'Should the total count hyphenated words as one word or two?' } });
+  w.finish(17, 'build', { result: { outcome: 'needs-person', kind: 'blocker', question: 'Should the total count hyphenated words as one word or two?' } });
   await f.tick();
   assert.match(w.comments(17).find(body => body.includes('<!-- pdd:autopilot-core:question:17:')), /> Should the total count hyphenated words as one word or two\?/);
   assert.ok(w.labels(17).includes('pdd:needs-decision')); assert.ok(!w.labels(17).includes('pdd:working'));
