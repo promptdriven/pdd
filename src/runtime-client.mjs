@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 21becfcf6be955bfb6cfcc0631c9fdd2570d964ed84ff0d4b434adb5b9b76261).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 6c171b72588e55ac92021bcfe2df66a35af3c80007afd1b32f358c73550039e7).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
@@ -3673,6 +3673,21 @@ function tryPromptProblem(root, found, test, record, capture) {
 }
 
 
+// Save a confirmed shared-engine run in a Story chosen after execution.
+export async function runSaveLast({ words = [], options = {}, cwd = process.cwd() } = {}, givenPorts = {}) {
+  const ports = withDefaults(givenPorts);
+  try {
+    if (words.length !== 1 || options['--save-last'] !== true || Object.keys(options).length !== 1) throw new Stop(2, 'Use pdd run --save-last STORY.');
+    const { root, found, normalized } = localSetup(cwd, words), test = oneTest(found, normalized, root);
+    ports.captureSource(root, { tests: [test.path] });
+    const store = stateFor(ports.env, root), identity = signIn(ports.gh, store);
+    return await (await import('./try-doors.mjs')).saveLast({ root, store, identity, ports, test });
+  } catch (error) {
+    line(ports.stderr, `pdd run: ${cleanText(error.message || 'The last run could not be saved.')}`);
+    return error.exitCode === 2 ? 2 : 125;
+  }
+}
+
 // pdd simulate. Returns the exit code.
 export async function runTry({ words = [], options = {}, cwd = process.cwd() } = {}, givenPorts = {}) {
   options = { ...options };
@@ -4491,16 +4506,24 @@ export async function runDoorCall(descriptor, input, givenPorts = {}) {
     const problem=tryPromptProblem(root,found,test,saved[1]);
     if (problem) throw new Stop(125,`${problem} Run pdd simulate STORY --new.`);
   }
+  let runSource, runId;
+  if (!descriptor.originalPath) {
+    runId = ports.randomUUID();
+    store.saveRepo(root, { ...store.repo(root), last_run: { state: 'unknown', id: runId } });
+    runSource = ports.captureSource(root, { tests: [prompt] });
+  }
   const runtime = new Runtime({ origin, token: identity.token, ports, signal: ports.signal });
   if (ports.signal?.aborted) throw new Stop(125, 'The local server stopped before the command was sent.');
-  const id = ports.randomUUID(), request = { requestId: id, prompt, operation, input };
+  const id = runId ?? ports.randomUUID(), request = { requestId: id, prompt, operation, input };
+  const runBody = runSource ? JSON.stringify(request) : null;
+  const recordedInput = runSource ? JSON.parse(runBody).input : null;
   const recovery = ` Read the result with: pdd test --read ${id}`;
   store.write(join(store.folder('calls'), `${id}.meta.json`), { id, origin, root, login, user_id: identity.userId, session_id: sessionId });
   store.posted(store.folder('tries'), id);
   let knownOutcome = false;
   try {
     const reply = await runtime.send(`/v1/try/${sessionId}/call`, { method: 'POST',
-      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) }, ports.postMs);
+      headers: { 'Content-Type': 'application/json' }, body: runBody ?? JSON.stringify(request) }, ports.postMs);
     if (reply.status && ![200, 202].includes(reply.status)) {
       knownOutcome = reply.status >= 400 && reply.status < 500 && reply.status != 408;
       throw new Stop(125, cleanText(reply.json?.error?.message || reply.json?.error?.code || `The interpreter refused the command (HTTP ${reply.status}).`, [identity.token]) + recovery);
@@ -4530,7 +4553,12 @@ export async function runDoorCall(descriptor, input, givenPorts = {}) {
               ...(Object.hasOwn(matched, 'world') ? { world: matched.world } : {}) };
           } catch { /* Observation is optional; the confirmed result remains confirmed. */ }
         }
-        return { id, result: answer.result.program_result, usage: tryUsage(answer, { cap: descriptor.callCap }), inputWorld: observation.input_world, world: observation.world };
+        const confirmed = { id, result: answer.result.program_result, usage: tryUsage(answer, { cap: descriptor.callCap }), inputWorld: observation.input_world, world: observation.world };
+        if (runSource && store.repo(root).last_run?.id === id) store.saveRepo(root, { ...store.repo(root), last_run: { state: 'confirmed',
+          descriptor: { root, login, prompt, operation, promptHashes: runSource.raw_prompt_hashes,
+            effectivePromptHashes: Object.fromEntries(runSource.sources.filter(file => file.path.endsWith('.prompt.md')).map(file => [file.path, sha256(executableInterfaceText(file.bytes.toString('utf8')))])) },
+          input: recordedInput, ...confirmed } });
+        return confirmed;
       }
       if (ports.now() >= end) throw new Stop(125, 'The command result is unknown. Do not repeat it automatically.' + recovery);
       await ports.sleep(ports.pollMs, ports.signal);

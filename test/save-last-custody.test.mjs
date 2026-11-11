@@ -57,7 +57,7 @@ for(const mode of ['timeout','cancel']){
     const f=await recorded(t),original=read(f.root,f.second),sibling=read(f.root,f.test);
     const answerPath=join(f.state,'tries',f.ids[0]+'.json'),answerBytes=fs.readFileSync(answerPath,'utf8');
     const peer=await client.acquireCaseWriteOwnership({root:f.root,testPath:f.second,handoff:closed(f.second)},{env:f.env});
-    const controller=new AbortController(),save=f.ports();let stagedBeforeHandoff=[];
+    const controller=new AbortController(),save=f.ports();save.stdin=Object.assign(Readable.from(['y\n']),{isTTY:true});save.stdout.isTTY=true;let stagedBeforeHandoff=[];
     save.signal=controller.signal;save.caseHandoff=async({testPath})=>{stagedBeforeHandoff=receipts(f);if(mode==='cancel')setTimeout(()=>controller.abort(),60);return closed(testPath);};
     try{assert.equal(await client.runTry({cwd:f.root,options:{'--save-last':true}},save),125,save.stderr.text);}finally{peer.release();}
     assert.match(save.stderr.text,mode==='cancel'?/cancelled/:/another saver or editor/);
@@ -94,7 +94,7 @@ test('receipt failure returns a synchronous typed failure and save-last never wa
   const failure=client.saveDoorCaseResult(f.root,f.saved,{env:f.env});
   assert.equal(failure.kind,'failure');assert.deepEqual(Object.keys(failure).sort(),['kind','message']);
   assert.equal(client.saveDoorCase(f.root,f.saved,{env:f.env}),failure.message);
-  const save=f.ports();let handoffs=0;save.caseHandoff=async()=>{handoffs++;return closed(f.second);};
+  const save=f.ports();save.stdin=Object.assign(Readable.from(['y\n']),{isTTY:true});save.stdout.isTTY=true;let handoffs=0;save.caseHandoff=async()=>{handoffs++;return closed(f.second);};
   assert.equal(await client.runTry({cwd:f.root,options:{'--save-last':true}},save),125);
   assert.equal(handoffs,0,'failed durable receipt must stop before editor handoff or ownership waiting');
   assert.doesNotMatch(save.stdout.text,/added to|already saved/);assert.doesNotMatch(save.stderr.text,/keep pending|Case retained|pending [a-f0-9]/);

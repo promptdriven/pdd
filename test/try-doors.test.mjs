@@ -84,16 +84,39 @@ test('doors: save last appends observed case only once in the original test', as
   const { runShim } = await import('../src/try-doors.mjs');
   assert.equal(await runShim(ready.descriptor, ['bad'], ready.makePorts()), 7);
   const file = join(setup.repo, 'tests/place-order.json'), before = readFileSync(file, 'utf8');
-  const save = ready.makePorts({caseHandoff:async({testPath})=>({kind:'closed-editor',testPath})});
+  const save = ready.makePorts({caseHandoff:async({testPath})=>({kind:'closed-editor',testPath}), stdin: Object.assign(Readable.from(['y\n']), {isTTY:true})}); save.stdout.isTTY = true;
   assert.equal(await runTry({ cwd: setup.repo, options: { '--save-last': true } }, save), 0, save.stderr.text);
   const doc = JSON.parse(readFileSync(file, 'utf8'));
   assert.equal(doc.steps.length, 2);
   assert.deepEqual(doc.steps[1].input, { argv: ['bad'], stdin: '' });
   assert.deepEqual(doc.steps[1].checks[0].value, { stdout: 'bad\n', stderr: 'invalid\n', exit_code: 7 });
-  assert.match(save.stdout.text, /added to tests\/place-order.json/);
+  assert.match(save.stdout.text, /Added to tests\/place-order.json/);
   assert.equal(readFileSync(file, 'utf8').slice(0, before.indexOf('"steps"')), before.slice(0, before.indexOf('"steps"')));
   assert.equal(await runTry({ cwd: setup.repo, options: { '--save-last': true } }, ready.makePorts()), 0);
   assert.equal(JSON.parse(readFileSync(file, 'utf8')).steps.length, 2);
+});
+
+test('doors: declining observed output or saving headlessly writes no case', async t => {
+  for (const terminal of [true, false]) {
+    const setup = clip(t), target = join(setup.repo, 'tests/place-order.json');
+    const scenario = JSON.parse(readFileSync(target, 'utf8'));
+    scenario.steps[0].checks.push({criterion_id: 'AC1', target: 'world', path: '', op: 'equals', value: {}});
+    writeFileSync(target, JSON.stringify(scenario, null, 2) + '\n');
+    const ready = await opened(t, setup, {}, (entry, f) => ({status: 200, json: {
+      ...f.job(entry.json.requestId, 'call', 'passed', {program_result: {stdout: 'wrong answer\n', stderr: '', exit_code: 0}, report: {input_world: {}, world: {}}}),
+      session_id: entry.url.split('/')[3],
+    }}));
+    const {runShim} = await import('../src/try-doors.mjs');
+    assert.equal(await runShim(ready.descriptor, ['wrong'], ready.makePorts()), 0);
+    const file = join(setup.repo, 'tests/place-order.json'), before = readFileSync(file, 'utf8');
+    const save = ready.makePorts({stdin: Object.assign(Readable.from(['N\n']), {isTTY: terminal}),
+      caseHandoff: () => assert.fail('unconfirmed answers cannot reach file handoff')});
+    save.stdout.isTTY = terminal;
+    assert.equal(await runTry({cwd: setup.repo, options: {'--save-last': true}}, save), terminal ? 0 : 125);
+    assert.equal(readFileSync(file, 'utf8'), before);
+    assert.equal(readdirSync(setup.state).includes('case-import'), false);
+    assert.match(terminal ? save.stdout.text : save.stderr.text, terminal ? /right expected value by hand/ : /person must answer/);
+  }
 });
 
 test('doors: wrapper failures use 125, never call as another login or follow launcher symlinks', async t => {

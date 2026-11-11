@@ -1161,6 +1161,27 @@ Refusals, unknown outcomes, stopped sessions and invalid replies throw a plain e
 Return normalized usage alongside the confirmed result (usage.calls and result.report.remaining_calls; unknown when absent/invalid). A refusal carries its known usage on the thrown error for wrappers. Never dispatch again to obtain usage. No wrapper progress or report text may enter a program's stdout; the door adapter owns the separate usage line on stderr. Session budgets and saved worlds belong
 to the runtime. Preserve paused-session refusals; never silently create a new world during a command.
 
+Export `runSaveLast({words, options, cwd}, ports={})` for `pdd run --save-last STORY`.
+Require exactly one Story and only `--save-last`; select its existing test through
+normal discovery and workspace permissions, authenticate, then delegate to
+[Try doors](try-doors.prompt.md) with that test. No session creation, interpreter
+request or prompt execution occurs during saving.
+
+For `runDoorCall` without `descriptor.originalPath`, retain the last confirmed run
+privately for the repository, independently of any Story. Before dispatch,
+invalidate the previous last-run eligibility under the new request ID and snapshot the entry's source
+closure with captureSource, including raw and expanded prompt hashes. The last-run
+record has `state` (`unknown` or `confirmed`); confirmed records contain `descriptor`
+(root, login, prompt, operation, promptHashes and effectivePromptHashes), `id`,
+`input`, `result`, and optional `inputWorld`/`world` from confirmed observations.
+Retain the exact dispatched JSON input, even if the caller later mutates its object.
+An older call completing after a newer invocation must not replace the newer
+last-run record or make an unknown newer outcome saveable.
+Only a confirmed owner GET may make this record saveable. Keep an unknown outcome
+unsaveable. This is the shared-engine recording boundary for the standalone run
+command; adding standalone execution itself belongs to its runner, not this save
+route. Saving must not synthesize a run from a Story or rerun the command.
+
 Export `saveDoorCase(root, saved, options={})` as the existing printable-result native entry to [received-case import](#received-case-import). Obtain target authority from the retained original native association; a supplied path alone is not authority. Keep its explicit isolated option under that same owner.
 
 <a id="native-received-case-outcomes"></a>

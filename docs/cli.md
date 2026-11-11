@@ -840,7 +840,20 @@ Serve the Story on localhost (default 8080).
 
 `pdd simulate --save-last`
 
-Append the last command and its observed output to its original Story test file.
+Show the input, data before and output, then ask `Is this answer right? [y/N]`.
+Only y at a terminal appends the command and observed output to its original Story
+test file. Other answers write nothing and explain how to enter the right expected
+value by hand. An agent or pipe cannot answer this question.
+
+`pdd run --save-last STORY`
+
+Save the shared engine's last confirmed run into an existing Story's test file,
+after the same terminal question. The run itself needs no Story. Saving does not
+run the prompt again. The Story must associate one criterion with the run entry,
+and its preceding steps must leave the same data as the recorded data before the
+run. Otherwise keep the case pending and repair the setup by hand. A committed
+save prints the target and actual step, then asks you to review the data and run
+`pdd test STORY`.
 
 Story counts use the newest source-compatible evidence across check, verify and saved evidence records. Unknown results stay unknown. Source changes invalidate old counts. To refresh counts without rerunning workflow steps, save `pdd test --read BATCH --json` outside the repository, then run `pdd workflow evidence ISSUE --summary /path/to/check.json`. The JSON must retain its repository, selected test paths, Story lines and source SHA. This records saved evidence, not new execution or approval.
 
