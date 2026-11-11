@@ -1551,7 +1551,19 @@ Each tick, without AI calls:
    missing or unclear `Runtime:` line is red, unless the job says no prompt
    changed. A non-zero exit of the test command is red; a failure of the suite
    runner itself (it could not start, was killed or timed out) runs the suite again
-   and never uses a repair. Merges go through one **merge lane** per repository
+   and never uses a repair. A CI check that fails runs once more first (one rerun
+   per check and head). A red that also fails on the base branch is not the PR's
+   fault: a CI check that is red on the base tip too, or failing tests that also fail
+   in one run of the same test command at the merge base (one run per base commit on
+   this machine, for all its jobs). Then the PR gets no repair, no END and no
+   `pdd:stuck`. It stays open and waits with no slot, so other issues go on, and
+   Autopilot files one issue "Main is red: NAME" (label `pdd:main-red`, plus `label`
+   when you set one) in your repository, once per failure, so that Autopilot itself
+   fixes the base. When that issue is closed and the base moves, the PR updates onto
+   the base and its checks run again. When only some failing tests are also red on
+   the base, the repair gets only the others and is told which ones are red on the
+   base. `pdd autopilot status` shows such a PR as `main is red (NAME) since TIME; no
+   slot`. Merges go through one **merge lane** per repository
    (the label `pdd:merge-lane` on the PR in its final step, shared by all
    machines): other green PRs wait in claim order with their reviews, and waiting
    never ends a job. In the final step Autopilot checks for an exact conflict with

@@ -52,7 +52,8 @@ restart reads them again. A job file has `issue`, `title`, `url`, `body`,
 `branch`, `worktree`, `claim {commentId, labelEventId, lastSeen}`, `phase`
 (`running`, `pr` or `ending`), `role` (`build`, `repair` or `conflict`), `repairs`, `started`,
 `progress {sig, at, running}`, the started `agent` job, and in phase `pr` also `pr`,
-`head`, `runtime`, `review` and `suite`.
+`head`, `runtime`, `review` and `suite`, and the fields of the [base-red
+owner](autopilot-base-red.prompt.md): `ciRerun`, `baseSuite` and `baseRed`.
 
 **The process rule (debate C, one function `watchProcess`).** It applies to every agent
 process: build, repair, conflict, review and suite. Each tick, for each running process:
@@ -118,7 +119,9 @@ refresh start the clock again.
 Slots come only from these job files, never from workflow allocation or other
 local records. A job holds a slot while its process runs or its outcome is not yet
 handled (phase `running` or `pr`). A job in phase `ending` has its outcome decided
-and only finishes its GitHub writes, so it holds no slot. Each tick advances every
+and only finishes its GitHub writes, so it holds no slot. A job in the base-red state
+(`baseRedWaiting`: phase `pr` with `baseRed`) waits for the base branch, not for its
+own work, so it holds no slot either (#3181). Each tick advances every
 job before intake, so a job whose process died, for example after a restart, is
 ended or moved to the merge check before free slots are counted.
 
@@ -615,7 +618,10 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    GitHub or Git call, else a `job` cause `checks-quiet` ("the PR checks made no
    progress for N minutes"). Closed: end
    `pr-closed`. The PR head SHA, head branch or base differs from the job: end
-   `head-moved`.
+   `head-moved`. A job in the base-red state (`baseRed`) goes to `baseRedWait` of the
+   [base-red owner](autopilot-base-red.prompt.md) and no other check runs: it waits
+   with its quiet clock started again, and goes on when the base moves and the
+   main-red issue is closed.
 2. `Runtime: not run (…)` is allowed, and the PR body is not rewritten. When the
    job's `runtime` has state `not-run` and kind `runtime` (Runtime could not check),
    file or count one report through the [report owner](autopilot-reports.prompt.md)
@@ -730,8 +736,20 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    adopt PDD); R6 no `Path:` line. R5 is only a hint for the reviewer: prompts at the head
    that mention a changed unowned file. Then a
    failed CI check
-   (check runs and commit statuses of the head; neutral and skipped pass); else
-   a review FAIL or a failed suite. With no red finding yet, start the review and
+   (check runs and commit statuses of the head; neutral and skipped pass; `ciState`
+   also gives `failedRuns`, the `{id, name, app}` of each failed check run); else
+   a review FAIL or a failed suite. **Base red (#3181):** a red CI goes to `ciVsBase`
+   of the [base-red owner](autopilot-base-red.prompt.md) before its red line: one
+   rerun per check name and head, then the base tip. Its `pending` waits like pending
+   CI; its `base-red` adds no red line (the review and the suite still run, and the PR
+   cannot merge); its `red` names only the PR's own checks, with its `onBase` text as
+   a second line. Right before the failed-suite red line (after the review FAIL line),
+   `suiteVsBase` gets `{ci, review, suite, vectors, reds}`: `'wait'` ends the merge
+   check for this tick (the base suite runs, or the job just entered the base-red
+   state); else its result is the suite (a `base-red` suite adds no red line). The
+   core gives it `BASE_RED_TOOLS` (`startJob`, `queuedCommand`, `watchProcess`,
+   `readTail`, `removeTree`, `refreshBase`, `leaveLane` and `runnerLine`, the suite
+   runner lines). Stopping a job's checks (`stopChecks`) also runs `stopBaseSuite`. With no red finding yet, start the review and
    the suite for this head when missing; CI may still be pending. A reviewer that
    twice gives no valid verdict for the head ends as `no-result`; no test command
    ends `no-test-command`; a broken suite ends `suite-broken`. The tick posts each verdict once as a PR comment with
@@ -997,7 +1015,7 @@ agent's commits may exist only there.
 files only: the engine line (mode, repository, folder, base, agent), the slot line
 (`B of R slots busy`, no-progress limit, repairs, report mode, opt-in label), the pause
 line (`New jobs paused until TIME (H h): …` or `No pause: N no-result end(s) in a row …`), one line per job (`#N build running 12m (log …)`, `#N PR #P at SHA: review …,
-suite …`, with `; merge lane: final step` or `; merge lane: waiting for PR #P since TIME`, `#N ending: …`), the last 5 results (`#N ended TIME: cause`; strike lines are not results) and the count
+suite …`, with `; merge lane: final step` or `; merge lane: waiting for PR #P since TIME`, and `baseRedStatus` (`; main is red (NAME) since TIME; no slot`), `#N ending: …`), the last 5 results (`#N ended TIME: cause`; strike lines are not results) and the count
 of local report drafts.
 
 ## Text on GitHub
@@ -1044,6 +1062,8 @@ with the native defaults named above.
   winning-claim read (owners port), `refreshClaimHeartbeat` and `takeoverLimited`.
 - [Automatic base](autopilot-base.prompt.md): required for `checkAutopilotBase`.
 - [Report owner](autopilot-reports.prompt.md): required for `fileReport` and drafts.
+- [Base-red owner](autopilot-base-red.prompt.md): required for `ciVsBase`,
+  `suiteVsBase`, `baseRedWait`, `baseRedWaiting`, `baseRedStatus` and `stopBaseSuite`.
 - [Shared full-suite queue](test-suite-queue.prompt.md): required context for the
   `pdd workflow suite` job.
 - [Secret redaction](secret-redaction.prompt.md): required for suite log tails.

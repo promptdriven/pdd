@@ -128,6 +128,8 @@ test('suite red leads to one repair on the same branch, then the merge', async t
   await w.tick();
   w.review(17, 'PASS'); w.suite(17, 1);
   await w.tick();
+  // #3181: first the same test command runs once at the merge base; it passes there, so the red is the PR's own.
+  assert.equal(w.job(17, 'repair'), undefined); w.finish('base', 'suite', { code: 0 }); await w.tick();
   const repair = w.job(17, 'repair');
   assert.ok(repair, 'a repair job starts');
   assert.equal(repair.branch, w.job(17, 'build').branch); assert.equal(repair.cwd, w.job(17, 'build').cwd);
@@ -730,6 +732,7 @@ test('R8 a non-zero test exit is a red suite and gets a repair; only a runner fa
   const w = await coreWorld(t);
   w.issue(17); await w.tick(); w.build(17); await w.tick();
   w.review(17, 'PASS'); w.suite(17, 2); await w.tick();
+  w.finish('base', 'suite', { code: 0 }); await w.tick();   // #3181: the base suite passes, so the red is the PR's own
   assert.ok(w.job(17, 'repair'), 'exit 2 (make, pytest) is a red suite');
   const v = await coreWorld(t, { settings: { report: 'draft' } });
   v.issue(17); await v.tick(); v.build(17); await v.tick();
