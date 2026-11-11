@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -44,7 +45,7 @@ function appMap(root, name) {
   writeFileSync(path, JSON.stringify(map));
   return path;
 }
-async function harness(t, setup) {
+async function harness(t, setup, { onLint } = {}) {
   const events = [];
   const fake = await fakeRuntime(t, (entry, f) => {
     if (entry.url.endsWith('/reopen')) {
@@ -57,7 +58,10 @@ async function harness(t, setup) {
     }
     if (entry.url.endsWith('/model')) return { status: 200, json: { entries: [{ entry_path: 'prompts/z-http.prompt.md', operation: 'main', input_schema: object({}), http: { method: 'GET', path: '/health' } }], calls: { cap: 7, remaining: 6 }, app_map: false } };
     if (entry.method === 'DELETE') return { status: 200, json: f.stopJob(entry.headers['x-request-id'], entry.url.split('/').at(-1)) };
-    if (entry.command === 'lint') return { status: 200, json: f.lint(entry.request.requestId, readdirSync(join(setup.repo, 'prompts')).map(name => ({ path: `prompts/${name}`, state: 'draft', admission_state: 'draft', interface: { calls: [] } }))) };
+    if (entry.command === 'lint') {
+      onLint?.();
+      return { status: 200, json: f.lint(entry.request.requestId, readdirSync(join(setup.repo, 'prompts')).map(name => ({ path: `prompts/${name}`, state: 'draft', admission_state: 'draft', interface: { calls: [] } }))) };
+    }
     if (entry.command === 'try') {
       const answer = f.tryJob(entry.request.requestId);
       Object.assign(answer.result.session, { max_calls: entry.request.max_calls, remaining_calls: entry.request.max_calls });
@@ -118,6 +122,48 @@ test('812 review: named recovery refuses a map-only change against the saved who
   writeFileSync(path, before);
   const restored = await h.run(seed, { '--serve': '0' });
   assert.equal(restored.code, 0, restored.ports.stderr.text);
+});
+
+for (const state of ['running', 'paused']) {
+  test(`812 review: named page recovery validates the map before showing or reopening (${state})`, async t => {
+    const setup = project(t, [['typed', 'typed']]), path = appMap(setup.repo, 'typed');
+    const h = await harness(t, setup), first = await h.run();
+    assert.equal(first.code, 0, first.ports.stderr.text);
+    const [[seed, record]] = Object.entries(saved(setup).tries);
+    h.fake.jobs.get(record.id).result.session.state = state;
+    const originalMap = readFileSync(path, 'utf8'), map = JSON.parse(originalMap), posts = h.fake.posts.length;
+    map.screens[0].id = 'edited-view'; map.initial_screen = 'edited-view'; writeFileSync(path, JSON.stringify(map));
+    const repeat = await h.run(seed, { '--page': true, '--no-open': true, '--no-wait': true });
+    assert.equal(repeat.code, 4, repeat.ports.stderr.text);
+    assert.match(repeat.ports.stderr.text, /app map.*changed.*--new/);
+    assert.doesNotMatch(repeat.ports.stdout.text, /Try ready/);
+    assert.equal(h.fake.posts.length, posts);
+    assert.equal(h.fake.jsonPosts.length, 0, 'changed source cannot authorize paused-session reopen');
+    assert.equal(h.fake.deletes.length, 0);
+    writeFileSync(path, originalMap);
+    const restored = await h.run(seed, { '--page': true, '--no-open': true, '--no-wait': true });
+    assert.equal(restored.code, 0, restored.ports.stderr.text);
+    assert.equal(h.fake.jsonPosts.length, state === 'paused' ? 1 : 0);
+    assert.equal(saved(setup).tries[seed].id, record.id);
+  });
+}
+
+test('812 review: setup pins the uploaded map when local bytes change during lint', async t => {
+  const setup = project(t, [['typed', 'typed']]), path = appMap(setup.repo, 'typed');
+  const originalMap = readFileSync(path), expected = createHash('sha256').update(originalMap).digest('hex');
+  const h = await harness(t, setup, { onLint() {
+    const map = JSON.parse(originalMap); map.name = 'Edited during lint'; writeFileSync(path, JSON.stringify(map));
+  } });
+  const first = await h.run(); assert.equal(first.code, 0, first.ports.stderr.text);
+  const [[seed, record]] = Object.entries(saved(setup).tries);
+  assert.equal(record.simulation_scope.appMapHash, expected, 'the saved pin must describe captured/uploaded bytes');
+  const uploaded = h.fake.posts.find(entry => entry.command === 'try').tar;
+  const map = spawnSync('tar', ['-xOf', '-', 'app-map.json'], { input: uploaded });
+  assert.equal(map.status, 0, map.stderr.toString());
+  assert.equal(createHash('sha256').update(map.stdout).digest('hex'), expected);
+  const stale = await h.run(seed, { '--page': true, '--no-open': true, '--no-wait': true });
+  assert.equal(stale.code, 4);
+  assert.match(stale.ports.stderr.text, /app map.*changed/);
 });
 
 for (const [references, withMap] of [[false, false], [true, false], [false, true]]) {
