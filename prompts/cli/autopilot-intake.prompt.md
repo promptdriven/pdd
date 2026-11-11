@@ -23,8 +23,11 @@ nothing more.
   value. Off is the default.
 - The core's one hook is `intakeTick(ctx, rows)`, after its own start step, inside a
   try/catch. In `shadow` with an issue list it runs one pass (`shadowIntake`). In
-  any other mode it only stops the card jobs that still run (after a switch to off)
-  and removes their job files; it creates no file and makes no GitHub call.
+  any other intake mode it only stops the card jobs that still run
+  (`stopCardJobs`) and removes their job files; it creates no file and makes no
+  GitHub call. A tick that ends before the hook (core mode off, the GitHub reserve)
+  runs no pass; the [launcher](autopilot-launcher.prompt.md) calls `stopCardJobs`
+  for core mode off and for `pdd autopilot stop`.
 - Scope: `intakeRows(rows, label)` keeps the open issues (no pull requests) without
   a report label (`pdd:runtime`, `pdd:autopilot-report`) and, when the core has an
   opt-in label, with that label; oldest first, then the lower number. The scope is
@@ -40,10 +43,16 @@ nothing more.
   issue with a native fact gets no AI card. Text patterns in the issue never count
   as native facts. A native record keeps the last AI card as `previous`.
 - Trust: a card job starts only for an issue whose author passes the core's own
-  trust check (`ports.trusted(row)`, the same check that the core uses before it
-  gives an issue to an agent). An issue that fails it gets the native-style record
-  `untrusted` once per version, so the check does not repeat on every tick. Only
-  comments whose author passes the same check reach the card.
+  trust check (`ports.trusted`, the same check that the core uses before it gives an
+  issue to an agent). An issue that fails it gets the native-style record
+  `untrusted` once per version. Untrusted text never reaches any agent: only
+  comments and other-issue titles whose author passes the same check reach a card.
+  Each lookup of a new login can be one GitHub read, so results are kept in
+  `ROOT/intake/trust.json` for 6 hours and a pass makes at most 40 lookups. An
+  author that is not looked up yet counts as not trusted for that pass (its issue
+  waits, its comment or title is left out). Comments are checked from the newest
+  back, and at most 20 trusted comments are kept. The first passes on a repository
+  with many outside authors spend this limit until the cache holds them.
 - Version (`issueVersion(row)`): the SHA-256 of the title, the body, the sorted
   labels, the sorted assignee logins, the two native summaries and the comment
   count (not `updated_at`). A new version needs a new card; an old card stays until
@@ -51,12 +60,15 @@ nothing more.
 - Card job: for an issue with no native fact, no running card job and no card for
   its version, start one headless job through the
   [headless job runner](agent-job.prompt.md), in the empty folder `ROOT/intake/empty`
-  (never the repository checkout), with the job environment without session keys.
+  (never the repository checkout), with the job environment without session keys
+  and without GitHub tokens (`cardEnvironment`: no `GH_…TOKEN` or `GITHUB_…TOKEN`).
   The agent gets no tools and no write access (`cardCommand`): Codex runs
-  `exec --sandbox read-only --skip-git-repo-check --ephemeral --color never
-  --ignore-rules` with approvals `never`, web search disabled, no MCP servers, its
-  tool features off (hooks, plugins, apps, browser and computer use, multi-agent,
-  shell, unified exec, code mode) and `--output-last-message ANSWER`; Claude runs
+  `exec --ignore-user-config --sandbox read-only --skip-git-repo-check --ephemeral
+  --color never --ignore-rules` (so no MCP server, profile or feature of the
+  person's `config.toml` loads; auth still loads) with approvals `never`, web search
+  disabled, `mcp_servers={}`, reasoning effort `low`, its tool features off (hooks,
+  plugins, apps, browser and computer use, multi-agent, shell, unified exec, code
+  mode) and `--output-last-message ANSWER`; Claude runs
   `-p --safe-mode --tools "" --permission-mode plan --permission-prompts none
   --strict-mcp-config --no-chrome --no-session-persistence --output-format json`.
   The configured model is passed with `--model`. Any other agent gets no card.
@@ -70,7 +82,7 @@ nothing more.
 - Card input (`cardPrompt`): the repository name, the issue number, title, labels,
   creation time, native link counts, the body (at most 20,000 characters) and at
   most the last 20 trusted person comments (each at most 3,000 characters), plus
-  the number and title of up to 200 other issues in scope. Person comments
+  the number and title of up to 200 other issues in scope by trusted authors. Person comments
   (`personComments`) leave out comments with an HTML comment marker, a JSON code
   block, an empty body or a bot author. The only GitHub read is the comment list,
   and only when the row says the issue has comments. The prompt says that the
@@ -123,7 +135,10 @@ nothing more.
   (`fs`, `now`, `root`, `repo`, `state`, `settings`, `budget`, `gh`, `jobs`,
   `ports`, `warn`); `shadowIntake` returns `{cards, started, pick}`.
 - `cardCommand(agent, {model, result})` returns `{command, args}` for Codex or
-  Claude and throws for any other agent.
+  Claude and throws for any other agent; `cardEnvironment(env)` returns the card
+  environment.
+- `stopCardJobs({root, fs, jobs, warn})` stops the running card jobs under `root`
+  and returns how many it stopped.
 - `readIntake({root, now, date}, fs)` returns `{day, cards, running, wouldPick,
   diff}` for one UTC day (today by default); `intakeText(report)` prints it as plain
   lines with control characters removed: one per card with its class, confidence,

@@ -1543,9 +1543,10 @@ this machine gives a native reason and no AI call. An issue whose author the cor
 does not trust gets `untrusted` and no AI call. For every other issue, one headless
 job of this machine's agent (Codex or Claude) writes one card per issue version,
 from the title, the body, the labels, the trusted person comments and the titles of
-the other open issues. The card agent runs in an empty folder with no tools and no
-write access (Codex: a read-only sandbox with its tools off; Claude: no tools, plan
-mode), never with the bypass flags of build jobs. A card says ready,
+the other open issues by trusted authors. The card agent runs in an empty folder
+with no tools, no write access and no GitHub token (Codex: a read-only sandbox, its
+tools off and no MCP server from your Codex config; Claude: no tools, plan mode),
+never with the bypass flags of build jobs. A card says ready,
 improve, person, duplicate, blocked, held, fixed or elsewhere, with a reason and a
 confidence. A new title, body, label, assignee, native link or comment makes a new
 version. At most 2 card jobs start per tick and 2 run at once; a card job that ends
@@ -1555,7 +1556,9 @@ core state; one file a day (UTC) lists the class changes, the "would pick" list
 (ready cards, issues that unblock others first, then the oldest) and the issues
 that the core really started. Shadow cards never write to GitHub and never change
 which issue starts. A failure skips only that issue or that tick. After a switch to
-`--intake off`, the next tick stops card jobs that still run. The cards cover every
+`--intake off`, the next tick stops card jobs that still run; so do a core tick in
+mode off and `pdd autopilot stop`. Trust lookups are cached for 6 hours, with at
+most 40 a tick. The cards cover every
 open issue in scope: unlike the core, they do not skip issues that cool down after a
 no-result or whose blocker is named only in the text. `pdd autopilot intake` prints
 the cards and today's changes; `--json` prints them as JSON.

@@ -1370,7 +1370,9 @@ stays `full`. The full engine below is unchanged; this section only adds a branc
   `state.intake`; the core tick gets `intake` from it (`intakeMode` of the
   [intake cards](autopilot-intake.prompt.md); off when none is saved), so a later
   start without `--intake` keeps it and pdd.json never sets it. Another `--intake`
-  value returns exit code 2 with `Use --intake off or --intake shadow.` With an
+  value returns exit code 2 with `Use --intake off or --intake shadow.` A core tick
+  whose mode is off, and `pdd autopilot stop`, call `stopCardJobs` of the intake
+  cards on the core state folder (with the core's jobs port when one is given). With an
   effective engine that is not core, `--mode`, `--report` or `--intake` is refused
   before any change. A core start whose machine mode
   is `off` saves the state as disabled with mode off, stops the timer and returns exit
