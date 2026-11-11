@@ -1,6 +1,6 @@
-// Generated from prompts/cli/agent-job.prompt.md (sha256: 281bfdfb7e1ac873d904b601ee76ef2f6c7f24d2366b833f3ab024641012dae9).
+// Generated from prompts/cli/agent-job.prompt.md (sha256: aad6a6fb488fa7af71afd8695b5c1a0642abeaa2131abe3fc5526b2ea8ab0cac).
 import { spawn, spawnSync } from 'node:child_process';
-import { closeSync, openSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, fstatSync, openSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -25,12 +25,15 @@ export function jobEnvironment(env = {}) {
   return Object.fromEntries(Object.entries(env).filter(([key, value]) => typeof value === 'string' && !SESSION_KEYS.test(key)));
 }
 
-export function startAgentJob({ id, dir, cwd, command, args = [], input = '', env = {} }, ports = {}) {
+// The hung-command watch settings: after (ms of log silence), every (ms between rounds), cpu (seconds of growth).
+const hungSettings = value => object(value) && [value.after, value.every].every(n => Number.isFinite(n) && n > 0) && Number.isFinite(value.cpu) && value.cpu >= 0
+  ? { after: value.after, every: value.every, cpu: value.cpu } : null;
+export function startAgentJob({ id, dir, cwd, command, args = [], input = '', env = {}, hung = null }, ports = {}) {
   if (!/^[A-Za-z0-9._-]+$/.test(String(id))) throw Error('Invalid job id');
-  const base = join(resolve(dir), id), now = ports.now ?? Date.now;
-  const job = { id, token: `${base}.spec.json`, log: `${base}.log`, exit: `${base}.exit.json`, result: `${base}.result.json`, input: `${base}.input` };
+  const base = join(resolve(dir), id), now = ports.now ?? Date.now, watch = hungSettings(hung);
+  const job = { id, token: `${base}.spec.json`, log: `${base}.log`, exit: `${base}.exit.json`, result: `${base}.result.json`, input: `${base}.input`, hangs: `${base}.hangs.json` };
   writeFileSync(job.input, input, { mode: 0o600 });
-  writeAtomic(job.token, JSON.stringify({ command, args, cwd, input: job.input, log: job.log, exit: job.exit }));
+  writeAtomic(job.token, JSON.stringify({ command, args, cwd, input: job.input, log: job.log, exit: job.exit, hangs: job.hangs, ...(watch ? { hung: watch } : {}) }));
   const child = (ports.spawn ?? spawn)(process.execPath, [self, '--wrapper', job.token], { cwd, env, detached: true, stdio: 'ignore' });
   // A spawn that fails later (a cwd that is gone, EAGAIN, ENOMEM) is an exit with code 127, never an uncaught error.
   child.on?.('error', error => { try { writeAtomic(job.exit, JSON.stringify({ code: 127, signal: null, at: now(), error: String(error.code ?? error.message) })); } catch { /* The job reads as dead. */ } });
@@ -78,10 +81,84 @@ export function agentJobCpu(job, ports = {}) {
   return found;
 }
 
+// The commands that the wrapper's hung-command watch stopped, oldest first.
+export function agentJobHangs(job) {
+  const value = typeof job?.hangs === 'string' ? readJson(job.hangs) : undefined;
+  return Array.isArray(value) ? value.filter(object) : [];
+}
+
 export function stopAgentJob(job, ports = {}) {
   if (!(Number.isSafeInteger(job?.pid) && job.pid > 0 && (ports.alive ?? nativeAlive)(job.pid, job.token))) return false;
   try { (ports.kill ?? process.kill)(-job.pid, 'SIGTERM'); } catch { try { (ports.kill ?? process.kill)(job.pid, 'SIGTERM'); } catch { return false; } }
   return true;
+}
+
+// The hung-command watch (agent jobs only). An agent waits for each command it runs, and its log is silent meanwhile.
+// A command that the agent waits on (it started after the log's last change and is no helper of the agent) whose
+// process tree makes almost no CPU while the log stays silent for `after` ms is stopped alone; the agent sees it fail.
+const etimeSeconds = text => {
+  const [days, clock] = String(text).includes('-') ? String(text).split('-') : ['0', String(text)];
+  return clock.split(':').reduce((sum, part) => sum * 60 + Number(part), 0) + Number(days) * 86400;
+};
+function processTable() {
+  const table = spawnSync('ps', ['-A', '-o', 'pid=,ppid=,time=,etime=,command='], { encoding: 'utf8', timeout: 5000 });
+  if (table.status !== 0) return null;
+  const now = Date.now();
+  return String(table.stdout).split('\n').map(line => /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s?(.*)$/.exec(line)).filter(Boolean)
+    .map(([, pid, ppid, time, etime, command]) => ({ pid: Number(pid), ppid: Number(ppid), cpu: cpuSeconds(time), start: now - etimeSeconds(etime) * 1000, command: command.trim() }))
+    .filter(row => Number.isFinite(row.cpu) && Number.isFinite(row.start));
+}
+function lastLogLine(file) {
+  let fd;
+  try {
+    fd = openSync(file, 'r');
+    const size = fstatSync(fd).size, length = Math.min(64 * 1024, size), buffer = Buffer.alloc(length);
+    readSync(fd, buffer, 0, length, size - length);
+    return buffer.toString('utf8').split(/\r?\n/).map(line => line.trim()).filter(Boolean).at(-1)?.slice(0, 300) ?? '';
+  } catch { return ''; } finally { if (fd !== undefined) try { closeSync(fd); } catch { /* Closed. */ } }
+}
+function watchHung(spec, agentPid, out) {
+  const { after, every, cpu: cpuLimit } = spec.hung, SAME = 3000, FRESH = 10_000;
+  let helpers = null;
+  const refs = new Map(), stopped = new Set();
+  const round = () => {
+    if (!Number.isSafeInteger(agentPid)) return;
+    const log = statSync(spec.log), now = Date.now();
+    if (!log.size) return;
+    const rows = processTable();
+    if (!rows) return;
+    const children = new Map(), byPid = new Map(rows.map(row => [row.pid, row]));
+    for (const row of rows) children.set(row.ppid, [...(children.get(row.ppid) ?? []), row]);
+    const below = pid => { const found = [], queue = [...(children.get(pid) ?? [])]; for (let i = 0; i < queue.length && i < 2000; i++) { found.push(queue[i]); queue.push(...(children.get(queue[i].pid) ?? [])); } return found; };
+    const tree = below(agentPid), inTree = new Set(tree.map(row => row.pid));
+    for (const pid of refs.keys()) if (!inTree.has(pid)) refs.delete(pid);
+    // The helpers: every process under the agent at the first round with log content (its MCP servers and helpers).
+    if (!helpers) { helpers = new Map(tree.map(row => [row.pid, row.start])); return; }
+    const helper = row => helpers.has(row.pid) && Math.abs(helpers.get(row.pid) - row.start) < SAME;
+    const fresh = row => Boolean(row) && row.pid !== agentPid && !helper(row) && row.start >= log.mtimeMs - FRESH && inTree.has(row.pid);
+    for (const row of tree) {
+      if (!fresh(row) || fresh(byPid.get(row.ppid))) continue;
+      const key = `${row.pid}:${Math.round(row.start / SAME)}`;
+      if (stopped.has(key)) continue;
+      const sub = [row, ...below(row.pid)], used = sub.reduce((sum, r) => sum + r.cpu, 0);
+      let ref = refs.get(row.pid);
+      if (!ref || Math.abs(ref.start - row.start) >= SAME) ref = { start: row.start, since: Math.max(log.mtimeMs, row.start), cpu: used };
+      if (used - ref.cpu >= cpuLimit) Object.assign(ref, { since: now, cpu: used });
+      ref.since = Math.max(ref.since, log.mtimeMs);
+      refs.set(row.pid, ref);
+      if (now - ref.since < after) continue;
+      stopped.add(key); refs.delete(row.pid);
+      const last = lastLogLine(spec.log), minutes = Math.round((now - ref.since) / 6000) / 10, command = row.command.slice(0, 500);
+      for (const r of sub) try { process.kill(r.pid, 'SIGTERM'); } catch { /* Gone. */ }
+      setTimeout(() => { for (const r of sub) try { process.kill(r.pid, 'SIGKILL'); } catch { /* Gone. */ } }, GRACE_MS).unref();
+      const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: spec.cwd, encoding: 'utf8', timeout: 5000 });
+      const record = { at: now, pid: row.pid, command, minutes, last, head: head.status === 0 && /^[0-9a-f]{40}$/.test(head.stdout.trim()) ? head.stdout.trim() : null };
+      try { writeFileSync(out, `agent-job: stopped a hung command after ${minutes} min with no output and almost no CPU: ${command} (last output: ${last})\n`); } catch { /* The record below still counts. */ }
+      try { const old = readJson(spec.hangs); writeAtomic(spec.hangs, JSON.stringify([...(Array.isArray(old) ? old : []), record].slice(-50))); } catch { /* The log line stays. */ }
+    }
+  };
+  // A failed round (a process table that cannot be read, a log that is gone) never stops the job.
+  setInterval(() => { try { round(); } catch { /* The next round tries again. */ } }, every).unref();
 }
 
 // The detached wrapper: it owns the agent process and records how it ended.
@@ -111,6 +188,7 @@ function wrap(specFile) {
   try { child = spawn(spec.command, spec.args, { cwd: spec.cwd, env: process.env, stdio: [stdin, out, out] }); }
   catch (error) { writeFileSync(out, `agent-job: ${error.message}\n`); finish(127, null); return; }
   child.on('error', error => { try { writeFileSync(out, `agent-job: ${error.message}\n`); } catch {} finish(127, null); });
+  if (object(spec.hung) && typeof spec.hangs === 'string') watchHung(spec, child.pid, out);
   child.on('exit', (code, signal) => { if (stopping) ended = { code, signal }; else finish(code, signal); });
 }
 

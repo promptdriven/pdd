@@ -1,7 +1,8 @@
 # Autopilot reports
 
 Own `src/autopilot-reports.mjs`. When the [Autopilot core](autopilot-core.prompt.md)
-ends a job because of a Runtime or PDD problem, this module files one deduplicated
+ends a job because of a Runtime or PDD problem, or stops one of its own steps (a
+`pdd`-owned stop: the job waits and tries again), this module files one deduplicated
 issue for the people who own that part, keeps a local draft, or does nothing, as
 the repository chooses. The job never waits for the report or its fix.
 
@@ -22,7 +23,7 @@ comments on a known cause at most once a day.
   interpreter-error, server-internal (a server-side internal error: server-internal,
   internal-server, server-error, a 5NN status as its own word, unavailable or
   bad-gateway), server-incompatible, crash,
-  claim-error, not-run, timeout,
+  claim-error, not-run, base-check, step-quiet, timeout,
   cli-error (matched in this order on the slug), else `other-HASH`: the first 8 hex
   digits of the SHA-256 of `STEP:CODE` (the step and the code slug without digits;
   never the agent's text, paths or numbers). The component becomes one fixed word (`stableComponent`):
@@ -62,7 +63,10 @@ comments on a known cause at most once a day.
   cause with `shipped: true` (Runtime could not check), it shipped its PR with
   "Runtime: not run", or, for a `shipped` cause of the component `autopilot-core` with the code `vector-replay` (the
   core could not run the replay or formal tests of a PR), it went on with that claim
-  marked as not checked, or, for `adopt-pdd`, a fixed request to adopt PDD. Then it has
+  marked as not checked, or, for a cause with `stopped: true` (a core step made no
+  progress), "Autopilot stopped one of its own steps for one job: it made no progress.
+  The issue gets no strike, and Autopilot tries again later.", or,
+  for `adopt-pdd`, a fixed request to adopt PDD. Then it has
   only fixed fields: the kind, component, error code, step, the PDD, Node, platform
   and agent versions, how many times this machine saw the cause (1, or the draft's
   count) and the fingerprint marker. It never holds free-form text: no cause text,
@@ -94,7 +98,7 @@ last 24 hours) and `seen` (fingerprint to last seen-again comment time).
   commented today), `draft` or `off`. Mode `file` sends; mode `draft` only keeps
   the draft; mode `off` does nothing.
 - A draft is `ROOT/drafts/FP.json` with `fingerprint`, `kind`, `component`, `code`,
-  `step`, `versions`, `shipped`, `runtimeRepo`, `runtimeOwner`, `repository`, `title`,
+  `step`, `versions`, `shipped`, `stopped`, `runtimeRepo`, `runtimeOwner`, `repository`, `title`,
   `body` (the public text), `detail` (local only), `labels`, `count`, `firstAt` and
   `lastAt`; a repeat raises the count. A draft written earlier without the fixed
   fields takes kind, component and code from its fingerprint, and `unknown` for the

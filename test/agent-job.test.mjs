@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { agentCommand, jobEnvironment, startAgentJob, readAgentJob, stopAgentJob, agentJobCpu } from '../src/agent-job.mjs';
+import { agentCommand, jobEnvironment, startAgentJob, readAgentJob, stopAgentJob, agentJobCpu, agentJobHangs } from '../src/agent-job.mjs';
 
 const folder = t => { const dir = mkdtempSync(join(tmpdir(), 'pdd-agent-job-')); t.after(() => rmSync(dir, { recursive: true, force: true })); return dir; };
 const until = async (check, ms = 10000) => {
@@ -130,4 +130,74 @@ test('agentJobCpu sums the tree under the wrapper by parent pid, without the wra
   assert.deepEqual(calls, [['ps', '-A', '-o', 'pid=,ppid=,time=']]);
   assert.equal(agentJobCpu({ pid: 100 }, { spawnSync: () => ({ status: 1, stdout: '' }) }), null);
   assert.equal(agentJobCpu({}, { spawnSync: () => { throw Error('not called'); } }), null);
+});
+
+// STOPS-0129 (#3238 A1): the wrapper stops a command that the agent waits on when the log is silent and the command
+// makes almost no CPU; the agent sees the command fail and goes on. A helper that was there at the first output stays.
+const HUNG_AGENT = `
+const { spawn } = require('child_process'), fs = require('fs');
+const helper = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1e6)'], { stdio: 'ignore' });
+fs.writeFileSync(process.env.HELPER_PID, String(helper.pid));
+process.stdout.write('agent started\\n');
+setTimeout(() => {
+  process.stdout.write(JSON.stringify({ type: 'item.started', item: { type: 'command_execution', command: 'npm install' } }) + '\\n');
+  const command = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1e6) /* pdd-hung-npm-install */'], { stdio: ['ignore', 'pipe', 'pipe'] });
+  fs.writeFileSync(process.env.COMMAND_PID, String(command.pid));
+  command.on('exit', (code, signal) => {
+    process.stdout.write('agent saw the command fail: ' + signal + '\\n');
+    if (process.env.RESULT) fs.writeFileSync(process.env.RESULT, JSON.stringify({ outcome: 'pr', pr: 7, head: 'a'.repeat(40) }));
+    process.exit(0);
+  });
+}, 600);`;
+const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
+
+test('the hung-command watch stops only the silent command; the agent goes on and a helper stays (STOPS-0129)', async t => {
+  const dir = folder(t), helperPid = join(dir, 'helper.pid'), commandPid = join(dir, 'command.pid'), result = join(dir, 'r.json');
+  const job = startAgentJob({ id: '30-build-1', dir, cwd: dir, command: process.execPath, args: ['-e', HUNG_AGENT], input: '',
+    env: { PATH: process.env.PATH, HELPER_PID: helperPid, COMMAND_PID: commandPid, RESULT: result }, hung: { after: 1500, every: 150, cpu: 0.5 } });
+  assert.equal(job.hangs, join(dir, '30-build-1.hangs.json'));
+  assert.deepEqual(JSON.parse(readFileSync(job.token, 'utf8')).hung, { after: 1500, every: 150, cpu: 0.5 });
+  const helper = Number(await until(() => existsSync(helperPid) && readFileSync(helperPid, 'utf8')));
+  t.after(() => { try { process.kill(helper, 'SIGKILL'); } catch {} });
+  const command = Number(await until(() => existsSync(commandPid) && readFileSync(commandPid, 'utf8')));
+  t.after(() => { try { process.kill(command, 'SIGKILL'); } catch {} });
+  await new Promise(r => setTimeout(r, 900));
+  assert.ok(alive(command), 'not stopped before the silent time');
+  const done = await until(() => { const s = readAgentJob({ ...job, result }); return s.state === 'exited' && s; }, 15000);
+  assert.equal(done.exit.code, 0, 'the agent went on and ended by itself');
+  assert.deepEqual(done.result, { outcome: 'pr', pr: 7, head: 'a'.repeat(40) });
+  const log = readFileSync(job.log, 'utf8');
+  assert.match(log, /agent-job: stopped a hung command after [\d.]+ min with no output and almost no CPU: .*pdd-hung-npm-install/);
+  assert.match(log, /last output: \{"type":"item\.started"/);
+  assert.match(log, /agent saw the command fail: SIGTERM/);
+  const hangs = agentJobHangs(job);
+  assert.equal(hangs.length, 1, 'one record, the helper is not one');
+  assert.equal(hangs[0].pid, command); assert.match(hangs[0].command, /pdd-hung-npm-install/); assert.equal(hangs[0].head, null, 'not a Git folder');
+  assert.ok(alive(helper), 'the idle helper of the agent is never stopped');
+  assert.ok(hangs[0].minutes >= 0 && Number.isFinite(hangs[0].at));
+});
+
+test('the hung-command watch leaves a busy command, a job without hung and a plain command alone (STOPS-0129)', async t => {
+  const dir = folder(t), mark = join(dir, 'busy.done');
+  // A command with CPU growth runs past the silent time and ends by itself.
+  const busy = `const { spawnSync } = require('child_process');
+process.stdout.write('agent started\\n');
+setTimeout(() => { process.stdout.write('{"type":"item.started"}\\n');
+  const r = spawnSync(process.execPath, ['-e', 'const end = Date.now() + 2500; while (Date.now() < end) {}'], { stdio: 'ignore' });
+  require('fs').writeFileSync(${JSON.stringify(mark)}, String(r.status)); process.exit(0); }, 400);`;
+  const job = startAgentJob({ id: '31-build-1', dir, cwd: dir, command: process.execPath, args: ['-e', busy], input: '', env: { PATH: process.env.PATH }, hung: { after: 1200, every: 150, cpu: 0.3 } });
+  const done = await until(() => { const s = readAgentJob(job); return s.state === 'exited' && s; }, 15000);
+  assert.equal(done.exit.code, 0); assert.equal(readFileSync(mark, 'utf8'), '0', 'the busy command ended by itself');
+  assert.doesNotMatch(readFileSync(job.log, 'utf8'), /stopped a hung command/); assert.deepEqual(agentJobHangs(job), []);
+  // No hung setting: no watch, no record, and the spec has no hung field.
+  const plain = startAgentJob({ id: '32-suite-1', dir, cwd: dir, command: process.execPath, args: ['-e', 'process.exit(0)'], input: '', env: { PATH: process.env.PATH } });
+  assert.equal(JSON.parse(readFileSync(plain.token, 'utf8')).hung, undefined);
+  assert.equal(JSON.parse(readFileSync(startAgentJob({ id: '33-x', dir, cwd: dir, command: process.execPath, args: ['-e', ''], input: '', env: {}, hung: { after: 'x' } }).token, 'utf8')).hung, undefined, 'a broken setting is no watch');
+  await until(() => readAgentJob(plain).state === 'exited');
+  // agentJobHangs reads only a list of objects.
+  writeFileSync(join(dir, 'h.json'), JSON.stringify([{ at: 1 }, 2, null]));
+  assert.deepEqual(agentJobHangs({ hangs: join(dir, 'h.json') }), [{ at: 1 }]);
+  writeFileSync(join(dir, 'h.json'), '{bad');
+  assert.deepEqual(agentJobHangs({ hangs: join(dir, 'h.json') }), []);
+  assert.deepEqual(agentJobHangs({}), []);
 });

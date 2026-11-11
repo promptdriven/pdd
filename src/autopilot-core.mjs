@@ -1,11 +1,11 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 3d71704569d54014b65363e1877e0bcbd00b33c6b11df9fbebf8d66ef202031a).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 17fcb725c0f806fdfc44397fb71ff3a3d0dbb588f9313ed733c32e903ba0ccc1).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, createHash } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import { createDependencyReadPorts, refreshClaimHeartbeat, takeoverLimited } from './issue-dependencies-github.mjs';
-import { jobEnvironment, startAgentJob, readAgentJob, stopAgentJob, agentCommand, agentJobCpu } from './agent-job.mjs';
+import { jobEnvironment, startAgentJob, readAgentJob, stopAgentJob, agentCommand, agentJobCpu, agentJobHangs } from './agent-job.mjs';
 import { fileReport, listReportDrafts, reportKind } from './autopilot-reports.mjs';
 import { checkAutopilotBase } from './autopilot-base.mjs';
 import { redactSecrets } from './secret-redaction.mjs';
@@ -223,7 +223,7 @@ function githubApi(ports) {
 // ---- The tick context -----------------------------------------------------------------------------------
 function context({ state, settings, budget }, ports) {
   const fs = ports.fs ?? nativeFs, now = ports.now ?? Date.now, root = ports.root, dirs = folders(root), repo = state.repo;
-  const gh = githubApi(ports), jobs = ports.jobs ?? { start: startAgentJob, read: readAgentJob, stop: stopAgentJob, cpu: agentJobCpu };
+  const gh = githubApi(ports), jobs = ports.jobs ?? { start: startAgentJob, read: readAgentJob, stop: stopAgentJob, cpu: agentJobCpu, hangs: agentJobHangs };
   const git = async (args, cwd = state.cwd) => { const r = await ports.git(args, { cwd }); if (r.code !== 0) throw Object.assign(Error(`git ${args[0]} failed: ${oneLine(r.stderr, 200)}`), { code: 'git' }); return String(r.stdout ?? '').trim(); };
   const execFile = (file, args, options = {}) => file === 'gh' ? ports.gh(args, options) : ports.git(args, options);
   let reader;
@@ -584,7 +584,7 @@ function noteProgress(ctx, job, sig, running = false) {
   ctx.saveJob(job);
 }
 const quietFor = (ctx, job) => ctx.now() - (job.progress?.at ?? job.prAt ?? job.started ?? ctx.now());
-const isQuiet = (ctx, job) => !job.progress?.running && quietFor(ctx, job) >= ctx.quiet;
+const isQuiet = (ctx, job) => !job.progress?.running && !stepWaiting(ctx, job) && quietFor(ctx, job) >= ctx.quiet;
 const logSig = seen => `${seen?.log?.size ?? '-'}:${seen?.log?.mtime ?? '-'}`;
 
 // ---- The process rule (debate C, one function) ----------------------------------------------------------
@@ -783,7 +783,7 @@ function startJob(ctx, job, role, cwd, prompt, command = null, extraEnv = {}) {
   const result = join(ctx.dirs.logs, `${id}.result.json`);
   const run = command ?? agentCommand(ctx.state.agent);
   return ctx.jobs.start({ id, dir: ctx.dirs.logs, cwd, command: run.command, args: run.args, input: typeof prompt === 'function' ? prompt(result) : prompt,
-    env: { ...pddOnPath(ctx, jobEnvironment(ctx.ports.env ?? process.env)), ...extraEnv }, issue: job.issue, role, branch: job.branch, head: job.head });
+    env: { ...pddOnPath(ctx, jobEnvironment(ctx.ports.env ?? process.env)), ...extraEnv }, issue: job.issue, role, branch: job.branch, head: job.head, ...(command ? {} : { hung: HUNG }) });
 }
 async function checkout(ctx, job, name) {
   const path = join(ctx.dirs.worktrees, `${job.issue}-${name}`);
@@ -925,7 +925,7 @@ async function intake(ctx, rows) {
       continue;
     }
     await closeOtherPrs(ctx, n, branch);
-    const note = await concurrencyNote(ctx, row, others, worktree).catch(() => '');
+    const note = [await concurrencyNote(ctx, row, others, worktree).catch(() => ''), hangNote(ctx, n)].filter(Boolean).join('\n\n');
     const job = { schema: 'pdd.core-job.v1', id: randomUUID(), issue: n, title: oneLine(row.title, 200), url: row.html_url ?? issueKey(ctx.repo, n), body: String(row.body ?? '').slice(0, 20000), ...(note ? { note } : {}),
       branch, worktree, claim, phase: 'running', role: 'build', repairs: 0, started: ctx.now(), progress: { sig: null, at: ctx.now(), running: false }, ...(answer ? { answer } : {}) };
     ctx.saveJob(job);
@@ -1126,6 +1126,9 @@ async function suiteState(ctx, job) {
     const watch = await watchProcess(ctx, job, job.suite.agent, 'suite');
     if (watch.state === 'ceiling') return { state: 'ceiling', cause: watch.cause };
     if (watch.state !== 'quiet') return { state: 'running' };
+    // Stop owners: a suite that hung before at this head, or hangs in a test file that the PR changes, is the issue.
+    const hang = await suiteHang(ctx, job);
+    if (hang) return { state: 'hung', hang };
     const quiets = (job.suite.quiets ?? 0) + 1, restarts = job.suite.restarts ?? 0;
     if (restarts < 2) return start(job.suite.cwd ?? await checkout(ctx, job, 'suite'), restarts + 1, job.suite.deaths ?? 0, quiets);
     return { state: 'broken', dead: true, text: `${quietText(ctx, 'full test suite')} for head ${short(job.head)} (3 tries). Log: ${basename(job.suite.agent.log)} on this machine` };
@@ -1442,15 +1445,11 @@ async function mergeCheck(ctx, job) {
   try { pr = await gh.ok('GET', `repos/${repo}/pulls/${job.pr}`); }
   catch (error) {
     if (!isQuiet(ctx, job)) throw error;
-    stopChecks(ctx, job);
-    return end(ctx, job, cause('pdd', 'merge-check-tool', `the PR checks made no progress for ${settings.quietMinutes} minutes; last error: ${oneLine(error.message)}`));
+    return stepStop(ctx, job, error);
   }
   if (pr.merged) return finishMerge(ctx, job, pr);
-  if (isQuiet(ctx, job)) {
-    stopChecks(ctx, job);
-    const text = `the PR checks made no progress for ${settings.quietMinutes} minutes (nothing ran and nothing changed)${job.lastError ? `; last error: ${job.lastError}` : ''}`;
-    return end(ctx, job, job.lastErrorTool ? cause('pdd', 'merge-check-tool', text) : cause('job', 'checks-quiet', text));
-  }
+  // Quiet: a stop of this engine's own step or of a service, never the issue (Stop owners): a step wait, no END.
+  if (isQuiet(ctx, job)) return stepStop(ctx, job);
   if (pr.state !== 'open') return end(ctx, job, cause('job', 'pr-closed', `PR #${job.pr} was closed without a merge`));
   if (pr.head?.sha !== job.head || pr.head?.ref !== job.branch || pr.base?.ref !== state.baseBranch)
     return end(ctx, job, cause('job', 'head-moved', `PR #${job.pr} is at head ${short(pr.head?.sha)} of ${pr.head?.ref} into ${pr.base?.ref}, not the job head ${short(job.head)} of ${job.branch} into ${state.baseBranch}`));
@@ -1497,6 +1496,7 @@ async function mergeCheck(ctx, job) {
     if (review.state === 'ceiling') { stopChecks(ctx, job); return end(ctx, job, review.cause); }
     suite = await suiteState(ctx, job);
     if (suite.state === 'ceiling') { stopChecks(ctx, job); return end(ctx, job, suite.cause); }
+    if (suite.state === 'hung') return issueStop(ctx, job, suite.hang);
     // T04: the engine's own run of the changed replay and formal files, and the Evidence claims against it.
     vectors = await vectorsState(ctx, job);
     if (vectors.state === 'ceiling') { stopChecks(ctx, job); return end(ctx, job, vectors.cause); }
@@ -1520,7 +1520,7 @@ async function mergeCheck(ctx, job) {
         question: review.decision.question ?? `The review found a choice that issue #${job.issue} did not make: ${oneLine(item, 600)}. Which option do you want?` });
     }
     if (suite.state === 'missing') return end(ctx, job, cause('job', 'no-test-command', 'no full test command: set autopilot.testCommand in pdd.json'));
-    if (suite.state === 'broken') return end(ctx, job, suite.dead ? cause('job', 'no-result', suite.text) : cause('pdd', 'suite-broken', suite.text));
+    if (suite.state === 'broken') return end(ctx, job, suite.dead ? cause('job', 'no-result', suite.text, { owner: 'machine' }) : cause('pdd', 'suite-broken', suite.text));
     if (review.state === 'fail') reds.push(`Review FAIL from a fresh reviewer: ${(review.mustFix ?? []).join('; ') || 'see the review comment on the PR'}`);
     if (suite.state === 'fail') reds.push(suite.text);
   }
@@ -1533,7 +1533,7 @@ async function mergeCheck(ctx, job) {
   if (ci.sig !== job.ci?.sig || job.ci?.head !== job.head) job.ci = { head: job.head, sig: ci.sig, at: ctx.now() };
   if (ci.state === 'pending' && ctx.now() - job.ci.at >= ctx.ciStuck) {
     stopChecks(ctx, job);
-    return end(ctx, job, cause('job', 'checks-stuck', `CI stayed pending with no change for ${Math.round((ctx.now() - job.ci.at) / HOUR)} hours${ci.pending?.length ? ` (${ci.pending.join(', ')})` : ''}`, { noResult: true }));
+    return end(ctx, job, cause('job', 'checks-stuck', `CI stayed pending with no change for ${Math.round((ctx.now() - job.ci.at) / HOUR)} hours${ci.pending?.length ? ` (${ci.pending.join(', ')})` : ''}`, { noResult: true, owner: 'service' }));
   }
   // Something still runs (CI that still changes, a reviewer or a suite process): wait, and the quiet clock restarts.
   noteProgress(ctx, job, [job.head, ci.state, ci.sig, review.state, suite.state, vectors?.state, logSig(job.review?.agent && ctx.jobs.read(job.review.agent))].join('|'),
@@ -1561,13 +1561,13 @@ async function mergeCheck(ctx, job) {
   }
   const base = await (ctx.ports.checkBase ?? (input => checkAutopilotBase(input, { execFile: ctx.execFile })))({ run: { repo, baseBranch: state.baseBranch, root: state.cwd, pr: [{ number: job.pr }] }, pr: job.pr });
   if (base.exitCode !== 0) {
-    if (/could not verify|unavailable|retry/i.test(base.message)) { Object.assign(job, { lastError: safeLine(base.message), lastErrorTool: false }); ctx.saveJob(job); return; }
+    if (/could not verify|unavailable|retry/i.test(base.message)) { Object.assign(job, { lastError: safeLine(base.message), lastErrorTool: false, lastErrorStep: 'base-check' }); ctx.saveJob(job); return; }
     return end(ctx, job, cause('job', 'base-check', oneLine(base.message)));
   }
   // Right before the merge, read the claim again: a machine that lost the claim never merges.
   const claim = await confirmClaim(ctx, job);
   if (ctx.lost(claim, job)) return handOver(ctx, job, 'another machine holds the claim now');
-  if (!ctx.owns(claim, job) || !claim.active) { Object.assign(job, { lastError: 'the claim of this machine is not confirmed', lastErrorTool: false }); ctx.saveJob(job); return; }
+  if (!ctx.owns(claim, job) || !claim.active) { Object.assign(job, { lastError: 'the claim of this machine is not confirmed', lastErrorTool: false, lastErrorStep: 'claim' }); ctx.saveJob(job); return; }
   // Observe mode does everything except the merge: the same note, as "would merge", then a release.
   const observe = ctx.settings.mode === 'observe';
   if (job.mergeNote !== job.head) {
@@ -1585,7 +1585,7 @@ async function mergeCheck(ctx, job) {
   if (observe) return wouldMerge(ctx, job, pr);
   if (!await laneStillMine(ctx, job)) return;
   const merged = await ctx.ports.gh(['pr', 'merge', String(job.pr), '--repo', repo, '--merge', '--match-head-commit', job.head]);
-  if (merged.code !== 0) { Object.assign(job, { lastError: safeLine(`gh pr merge: ${merged.stderr || merged.stdout}`), lastErrorTool: false }); ctx.saveJob(job); return; }
+  if (merged.code !== 0) { Object.assign(job, { lastError: safeLine(`gh pr merge: ${merged.stderr || merged.stdout}`), lastErrorTool: false, lastErrorStep: 'merge' }); ctx.saveJob(job); return; }
   return finishMerge(ctx, job);
 }
 // ---- The merge lane -------------------------------------------------------------------------------------
@@ -2064,12 +2064,160 @@ async function nearChange(ctx, job, cwd, mergeBase, tip, pr) {
 }
 async function finishMerge(ctx, job, read = null) {
   const { gh, repo } = ctx;
-  if (!(read ?? await gh.ok('GET', `repos/${repo}/pulls/${job.pr}`)).merged) { job.lastError = 'the merge is not confirmed'; ctx.saveJob(job); return; }
+  if (!(read ?? await gh.ok('GET', `repos/${repo}/pulls/${job.pr}`)).merged) { Object.assign(job, { lastError: 'the merge is not confirmed', lastErrorStep: 'merge' }); ctx.saveJob(job); return; }
   const issue = await gh.ok('GET', `repos/${repo}/issues/${job.issue}`);
   if (issue.state === 'open') await gh.ok('PATCH', `repos/${repo}/issues/${job.issue}`, { state: 'closed', state_reason: 'completed' });
   if (labelsOf(issue).includes('pdd:working')) await gh.call('DELETE', `repos/${repo}/issues/${job.issue}/labels/${encodeURIComponent('pdd:working')}`);
   ctx.counts.merged++; ctx.produced();
   await finishLocal(ctx, job, 'merged', `merged PR #${job.pr}`);
+}
+
+// ---- Stop owners (A1 of #3238) ------------------------------------------------------------------------------
+// A stop where the time ran out has one owner: pdd (this engine's own step), service (GitHub, CI, the AI provider),
+// machine (the agent process or the machine) or issue (the change hangs). Only an issue stop gives a strike and a note.
+// Agent jobs start with the wrapper's hung-command watch: a command with no output and almost no CPU for 15 minutes
+// is stopped alone, and the agent goes on.
+const HUNG = { after: 15 * MIN, every: 30 * 1000, cpu: 2 };
+// A service error: a GitHub status 429 or 5xx, no reply, a time-out, a network error or a rate limit.
+const SERVICE_ERROR = /\breturned (?:429|5\d\d|no reply)\b|\bHTTP(?:\/\S+)? (?:429|5\d\d)\b|\b(?:429|5\d\d) (?:too many requests|bad gateway|service unavailable|gateway time-?out|internal server error)\b|\bno reply\b|\btimed? ?out\b|\btime-out\b|\bETIMEDOUT\b|\bECONNRESET\b|\bECONNREFUSED\b|\bEAI_AGAIN\b|\bENOTFOUND\b|\bsocket hang up\b|\bnetwork\b|\brate limit/i;
+const STEP_CODES = { 'base-check': 'base-check', claim: 'claim-error', merge: 'merge-check-tool' };
+const utcTime = at => `${new Date(at).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
+const stepWaiting = (ctx, job) => Number.isFinite(job.stepStop?.until) && job.stepStop.until > ctx.now();
+// The command a person typed: the text of Claude's eval '…', or the text after -c of a shell.
+function shownCommand(command) {
+  const text = String(command ?? '');
+  const evaled = /\beval\s+'((?:[^']|'\\'')*)'/.exec(text)?.[1]?.replaceAll(`'\\''`, `'`);
+  const shell = /(?:^|\/)(?:ba|z|da|k)?sh\s+(?:-[a-z]+\s+)*-[a-z]*c\s+(.+)$/i.exec(text)?.[1]?.replace(/^(['"])(.*)\1$/, '$2');
+  return oneLine(evaled ?? shell ?? text, 120).replaceAll('`', "'");
+}
+const testFile = text => [...String(text ?? '').matchAll(/[\w./@-]*(?:test|spec)[\w./@-]*\.(?:mjs|cjs|js|jsx|mts|cts|ts|tsx|py)\b/gi)].at(-1)?.[0] ?? null;
+function hangRecord(row, test = testFile(`${row.command ?? ''}\n${row.last ?? ''}`)) {
+  const command = oneLine(row.command, 500);
+  return { at: row.at, part: row.part ?? null, role: row.role ?? null, command, shown: shownCommand(command), minutes: Number.isFinite(row.minutes) ? row.minutes : null,
+    last: safeLine(row.last ?? '', 300), test, head: /^[0-9a-f]{40}$/.test(String(row.head ?? '')) ? row.head : null };
+}
+// Each tick: the new hang records of a running or ended agent (by their time), with the worktree HEAD when the wrapper
+// could not read one.
+async function readHangs(ctx, job, part, cwd) {
+  let rows = [];
+  try { rows = (ctx.jobs.hangs?.(part) ?? []).filter(row => object(row) && Number.isFinite(row.at)); } catch { return; }
+  const known = new Set((job.hangs ?? []).map(h => `${h.part}:${h.at}`)), fresh = rows.filter(row => !known.has(`${part.id}:${row.at}`));
+  if (!fresh.length) return;
+  const head = cwd ? String(await ctx.git(['rev-parse', 'HEAD'], cwd).catch(() => '')).trim() : null;
+  for (const row of fresh) job.hangs = [...(job.hangs ?? []), hangRecord({ ...row, part: part.id, role: job.role, head: row.head ?? head })].slice(-20);
+  ctx.saveJob(job);
+}
+// The same command hung again at the same head: the change is the cause.
+function repeatedHang(job) {
+  const rows = (job.hangs ?? []).filter(h => h.head);
+  for (let i = rows.length - 1; i > 0; i--)
+    for (let j = i - 1; j >= 0; j--) if (rows[j].head === rows[i].head && normalOutput(rows[j].command) === normalOutput(rows[i].command)) return rows[i];
+  return null;
+}
+const hangWords = hang => `\`${hang.shown}\` hung for ${hang.minutes ?? '?'} minutes${hang.test ? ` in ${hang.test}` : ''}`;
+const hangRed = hang => `The ${hang.role === 'suite' ? 'full test suite' : `${hang.role ?? 'agent'} agent's command`} hung at head ${short(hang.head)}: ${hangWords(hang)} with no output and almost no CPU. Last output: ${hang.last || '(none)'}. Find and fix the hang (for example a test that waits forever, an open handle or a server that never closes), so that the command ends.`;
+// The next build of an issue gets the latest hang of its strike lines after the latest reset.
+function hangNote(ctx, n) {
+  const hang = issueRows(chronological(ctx.fs, ctx.root), n).filter(row => row.strike && object(row.hang)).at(-1)?.hang;
+  return hang ? `An earlier Autopilot job on this issue stopped: ${hangWords(hang)} with no output and almost no CPU, at head ${short(hang.head)}. Last output: ${hang.last || '(none)'}. Find the cause of the hang and fix it, or avoid that command.` : '';
+}
+// The one note on the issue for its issue stops, updated in place.
+async function stopNote(ctx, job, hang, count, until) {
+  const marker = `<!-- pdd:autopilot-core:stop-note:${job.issue} -->`, me = await ctx.login();
+  const body = [`Autopilot stopped a job here: ${hangWords(hang)} on this change (head ${short(hang.head)}). ${until ? `It tries again after ${utcTime(until)} with that detail.` : 'A repair starts now with that detail.'} Nothing to do now.`, '',
+    `Stops caused by this change in the last 7 days: ${count} of ${NO_RESULT_LIMIT} (the 3rd one ends the run with \`pdd:stuck\`).`, '', marker].join('\n');
+  const note = (await ctx.gh.all(`repos/${ctx.repo}/issues/${job.issue}/comments?per_page=100`)).find(c => String(c.body ?? '').includes(marker) && String(c.user?.login ?? '').toLowerCase() === me);
+  if (note) await ctx.gh.ok('PATCH', `repos/${ctx.repo}/issues/comments/${note.id}`, { body: ctx.publicBody(body) });
+  else await ctx.comment(job.issue, body);
+}
+// An issue stop: a strike and one note; a repair with the hang for a job with a PR, else a counted release; the 3rd
+// strike in 7 days is the END.
+async function issueStop(ctx, job, hang) {
+  const strikes = issueRows(chronological(ctx.fs, ctx.root), job.issue).filter(row => row.strike && ctx.now() - row.at < 7 * DAY).length;
+  if (strikes >= NO_RESULT_LIMIT - 1) return end(ctx, job, cause('job', 'hung', `${hangWords(hang)} with no output and almost no CPU at head ${short(hang.head)}, the 3rd stop that this change caused in 7 days`, { owner: 'issue', hang }));
+  const repair = Number.isSafeInteger(job.pr);
+  if (repair && job.repairs >= ctx.settings.repairs) return end(ctx, job, cause('job', 'hung', `${hangWords(hang)} with no output and almost no CPU at head ${short(hang.head)}, and the safety cap of ${ctx.settings.repairs} repair(s) is reached (autopilot.maxRepairs)`, { owner: 'issue', hang }));
+  try { appendHistory(ctx, { at: ctx.now(), issue: job.issue, strike: true, owner: 'issue', hang }); } catch (error) { ctx.warn(`Autopilot core history: ${error.message}`); }
+  await stopNote(ctx, job, hang, strikes + 1, repair ? null : ctx.now() + DAY).catch(error => ctx.warn(`Autopilot core could not write the stop note of #${job.issue}: ${error.message}`));
+  // The strikes decide the END of a hang, not the same-finding rule: the repair compares no findings.
+  if (repair) return repairOrEnd(ctx, job, [hangRed(hang)], []);
+  return end(ctx, job, cause('job', 'no-result', `${hangWords(hang)} with no output and almost no CPU at head ${short(hang.head)} (the same command hung again at this head)`, { owner: 'issue', hang }));
+}
+// A build, repair or conflict agent that T1 stopped, or that ended with no result: service, issue or machine.
+async function agentStop(ctx, job, seen, quiet) {
+  const service = serviceProblem(ctx, job.agent), hang = service ? null : repeatedHang(job);
+  if (hang) return issueStop(ctx, job, hang);
+  const said = service ? `: the AI service said "${service}" (an agent account or service problem, not this issue)` : '';
+  const text = quiet ? `${quietText(ctx, `${job.role} agent`)}${said}`
+    : `the ${job.role} agent ${seen.exit ? `exited with ${seen.exit.code ?? seen.exit.signal}` : 'process ended'} with no result${seen.result === 'invalid' ? ' (the result file is not valid JSON)' : ''}${said}`;
+  return end(ctx, job, cause('job', 'no-result', text, service ? { service, owner: 'service' } : quiet ? { owner: 'machine' } : {}));
+}
+// A quiet suite: a hang record; the change is the cause when the suite hung before at this head, or in a changed test.
+async function suiteHang(ctx, job) {
+  const lines = readTail(ctx.fs, job.suite.agent.log, 64 * 1024).split('\n').map(line => line.trim()).filter(line => line && !/^(?:waiting for a check slot|running the full test suite)\b/.test(line));
+  const test = testFile(lines.slice(-40).join('\n'));
+  const before = (job.hangs ?? []).some(h => h.role === 'suite' && h.head === job.head);
+  const hang = hangRecord({ at: ctx.now(), part: job.suite.agent.id, role: 'suite', command: ctx.settings.testCommand, minutes: ctx.settings.quietMinutes, last: lines.at(-1) ?? '', head: job.head }, test);
+  job.hangs = [...(job.hangs ?? []), hang].slice(-20); ctx.saveJob(job);
+  const changed = test && !before ? await changedFiles(ctx, job).catch(() => []) : [];
+  return before || changed.some(file => test === file || test.endsWith(`/${file}`)) ? hang : null;
+}
+// The machine pause count of one no-result or pdd stop: 3 in a row pause new jobs (1, 2, 4, 8 hours).
+async function countStop(ctx, job, m, why) {
+  m.streak += 1;
+  if (!m.pausedUntil && m.streak >= STRIKES) {
+    Object.assign(m, { pausedUntil: ctx.now() + m.hours * HOUR, pausedHours: m.hours });
+    m.hours = Math.min(MAX_PAUSE_HOURS, m.hours * 2);
+    const until = new Date(m.pausedUntil).toISOString();
+    try { await (ctx.ports.alert ?? (async () => {}))({ issue: job.issue, kind: 'usage-limit', update: true,
+      text: `Autopilot paused new jobs for ${m.pausedHours} h: the agent ended ${m.streak} jobs with no result. Check sign-in and limits.${why.service ? ` The agent said: "${why.service}".` : ''} (machine ${ctx.state.machine}, until ${until})`,
+      tried: `No new job starts until ${until}; then intake goes on as usual. Jobs that already run go on.`, need: 'Check the agent sign-in and usage limits on this machine, for example with pdd autopilot doctor.' }); }
+    catch (error) { ctx.warn(`Autopilot core alert failed: ${error.message}`); }
+  }
+}
+const stopReport = (ctx, job, code, text, step) => report(ctx, job, { kind: 'pdd', component: 'autopilot-core', code, text, stopped: true, detail: job.lastError ?? '' }, step)
+  .then(r => ({ state: r?.state ?? null, ref: r?.ref ?? null }), error => { ctx.warn(`Autopilot core stop report failed: ${error.message}`); return null; });
+// A quiet merge check step (phase pr): the job keeps its PR, claim and slot and tries again after a backoff of 15
+// minutes x 2^(count-1), at most 8 hours. A pdd stop files one report and counts toward the machine pause.
+async function stepStop(ctx, job, error = null) {
+  stopChecks(ctx, job);
+  // A waiting PR does not hold the repository's merge lane; it enters it again after the wait.
+  try { await leaveLane(ctx, job); job.lane = null; } catch (failure) { ctx.warn(`Autopilot core could not leave the merge lane for #${job.issue}: ${failure.message}`); }
+  const last = error ? safeLine(error.message) : job.lastError ?? null, owner = last && SERVICE_ERROR.test(last) ? 'service' : 'pdd';
+  const code = error || job.lastError && job.lastErrorTool ? 'merge-check-tool' : job.lastError ? STEP_CODES[job.lastErrorStep] ?? 'crash' : 'step-quiet';
+  const count = (job.stepStop?.head === job.head ? job.stepStop.count ?? 0 : 0) + 1, until = ctx.now() + Math.min(8 * HOUR, 15 * MIN * 2 ** (count - 1));
+  const text = `the PR checks made no progress for ${ctx.settings.quietMinutes} minutes (nothing ran and nothing changed)${last ? `; last error: ${last}` : ''}`;
+  let filed = job.stepStop?.head === job.head ? job.stepStop.report ?? null : null;
+  if (owner === 'pdd') {
+    filed = await stopReport(ctx, job, code, text, job.lastErrorStep ?? 'merge-check') ?? filed;
+    const m = ctx.machineState(); m.pending = null; await countStop(ctx, job, m, {}); ctx.saveMachine(m);
+  }
+  job.stepStop = { owner, code, text, head: job.head, count, at: ctx.now(), until, report: filed, resumed: false };
+  job.progress = { sig: null, at: until, running: false }; delete job.overdue;
+  ctx.saveJob(job);
+}
+// After the wait, the merge check runs again with a fresh quiet clock (a sleep gap may have moved it).
+function resumeStep(ctx, job) {
+  if (!job.stepStop || job.stepStop.resumed || stepWaiting(ctx, job)) return;
+  job.stepStop.resumed = true; job.progress = { sig: null, at: ctx.now(), running: false }; ctx.saveJob(job);
+}
+// A job that cannot advance on 2 quiet ticks: a step wait with a PR, else a release (pdd files one report).
+async function overdueStop(ctx, job) {
+  if (job.phase === 'pr') return stepStop(ctx, job);
+  const owner = SERVICE_ERROR.test(job.lastError ?? '') ? 'service' : 'pdd', text = `the job could not advance and made no progress for ${ctx.settings.quietMinutes} minutes (last error: ${job.lastError})`;
+  if (owner === 'pdd') await stopReport(ctx, job, 'crash', text, job.role ?? 'advance');
+  return end(ctx, job, cause('job', 'no-result', text, { owner }));
+}
+// Status words: step waits and issues that cool down, from local files.
+function stopLines(jobs, history, now) {
+  const waits = jobs.filter(job => Number.isFinite(job.stepStop?.until) && job.stepStop.until > now).map(job => { const w = job.stepStop;
+    return `#${job.issue} waits: ${w.owner} stop ${w.code}: ${w.text}; next try after ${new Date(w.until).toISOString()} (try ${w.count + 1})${w.report?.ref ? `; report ${w.report.ref}` : ''}`; });
+  const local = new Set(jobs.map(job => job.issue)), rows = history.slice().reverse(), cooling = [];
+  for (const issue of new Set(rows.map(row => row.issue))) {
+    const row = issueRows(rows, issue).filter(r => r.noResult && now - r.at < DAY).at(-1);
+    if (row && !local.has(issue)) cooling.push(`#${issue} cools down until ${new Date(row.at + DAY).toISOString()}${row.owner ? ` (owner ${row.owner})` : ''}: ${row.text}`);
+  }
+  return [...waits, ...cooling];
 }
 
 // ---- END ------------------------------------------------------------------------------------------------
@@ -2145,22 +2293,18 @@ async function end(ctx, job, why) {
     // of its issue only when the next end on this machine is a job result too (it fell between results); when the
     // next end is another no-result, both are the machine. A counted no-result with 2 strikes in 7 days is the END.
     // An AI-service problem (T08) is never counted for its issue; it adds to the streak like every no-result.
-    const m = ctx.machineState(), counted = m.streak === 0 && !why.service;
+    // A stop with an owner (Stop owners) never ENDs here: machine counts only for the cooldown (no pending), service and
+    // pdd never count, and an issue stop wrote its strike already and adds nothing to the streak.
+    const m = ctx.machineState(), owner = why.owner ?? (why.service ? 'service' : job.phase === 'pr' && job.review?.agent?.watch?.stopped === 'quiet' && !job.review?.verdict ? 'machine' : undefined);
+    const counted = owner === 'issue' || m.streak === 0 && !why.service && !['service', 'pdd'].includes(owner);
     const strikes = issueRows(chronological(ctx.fs, ctx.root), job.issue).filter(row => row.strike && ctx.now() - row.at < 7 * DAY).length;
-    why = { ...why, release: !(counted && strikes >= NO_RESULT_LIMIT - 1), counted };
-    m.pending = counted && why.release ? { issue: job.issue, at: ctx.now() } : null;
-    // Machine pause: 3 no-result ends in a row pause new jobs for 1 hour, then 2, 4 and 8 hours at most.
-    m.streak += 1;
-    if (!m.pausedUntil && m.streak >= STRIKES) {
-      Object.assign(m, { pausedUntil: ctx.now() + m.hours * HOUR, pausedHours: m.hours });
-      m.hours = Math.min(MAX_PAUSE_HOURS, m.hours * 2);
-      const until = new Date(m.pausedUntil).toISOString();
-      try { await (ctx.ports.alert ?? (async () => {}))({ issue: job.issue, kind: 'usage-limit', update: true,
-        text: `Autopilot paused new jobs for ${m.pausedHours} h: the agent ended ${m.streak} jobs with no result. Check sign-in and limits.${why.service ? ` The agent said: "${why.service}".` : ''} (machine ${ctx.state.machine}, until ${until})`,
-        tried: `No new job starts until ${until}; then intake goes on as usual. Jobs that already run go on.`, need: 'Check the agent sign-in and usage limits on this machine, for example with pdd autopilot doctor.' }); }
-      catch (error) { ctx.warn(`Autopilot core alert failed: ${error.message}`); }
+    why = { ...why, ...(owner ? { owner } : {}), release: owner ? true : !(counted && strikes >= NO_RESULT_LIMIT - 1), counted };
+    if (owner !== 'issue') {
+      m.pending = counted && why.release && !owner ? { issue: job.issue, at: ctx.now() } : null;
+      // Machine pause: 3 no-result ends in a row pause new jobs for 1 hour, then 2, 4 and 8 hours at most.
+      await countStop(ctx, job, m, why);
+      ctx.saveMachine(m);
     }
-    ctx.saveMachine(m);
   }
   Object.assign(job, { phase: 'ending', end: job.end ?? { cause: why, at: ctx.now() } }); ctx.saveJob(job);
   try { stopChecks(ctx, job); } catch (error) { ctx.warn(`Autopilot core could not stop the processes of #${job.issue}: ${error.message}`); }
@@ -2299,7 +2443,7 @@ async function finishLocal(ctx, job, outcome, text) {
     if (outcome === 'merged') await step('branch', () => ctx.git(['branch', '-D', job.branch]));
     for (const name of list(ctx.dirs.logs).filter(name => !name.endsWith('.log'))) await step('logs', () => ctx.fs.rmSync(join(ctx.dirs.logs, name), { force: true }));
     await step('history', () => appendHistory(ctx, { at: ctx.now(), issue: job.issue, outcome, text: oneLine(text), pr: job.pr ?? null, log: job.agent?.log ?? null, evidence: honestEvidence(job) ?? null,
-      ...(outcome === 'released' && job.end?.cause?.counted ? { noResult: true } : {}), ...(outcome === 'ended' ? { reset: true } : {}) }));
+      ...(outcome === 'released' && job.end?.cause?.counted ? { noResult: true } : {}), ...(outcome === 'ended' ? { reset: true } : {}), ...(job.end?.cause?.owner ? { owner: job.end.cause.owner } : {}) }));
   } finally {
     try { ctx.fs.rmSync(join(ctx.dirs.jobs, `${job.issue}.json`), { force: true }); }
     catch (error) { nativeFs.rmSync(join(ctx.dirs.jobs, `${job.issue}.json`), { force: true }); ctx.warn(`Autopilot core job file of #${job.issue}: ${error.message}`); }
@@ -2343,7 +2487,7 @@ async function advance(ctx, job) {
   // After a tick gap longer than the quiet period (a laptop sleep) nothing could make progress: the quiet clock starts
   // again. A claim that expired in the gap, or an agent that died in it, is the machine's fault: a no-result release
   // with no comment, no pdd:stuck, no count and no streak.
-  const machine = text => end(ctx, job, cause('job', 'no-result', `this machine ran no tick for ${(ctx.gap.hours).toFixed(1)} hours (for example while it slept), and ${text}`, { machine: true }));
+  const machine = text => end(ctx, job, cause('job', 'no-result', `this machine ran no tick for ${(ctx.gap.hours).toFixed(1)} hours (for example while it slept), and ${text}`, { machine: true, owner: 'machine' }));
   if (ctx.gap) {
     job.gaps = [...(job.gaps ?? []).slice(-19), { from: ctx.gap.from, to: ctx.now() }];   // the backstop does not count a sleep
     if (ctx.now() - job.claim.lastSeen >= CLAIM_EXPIRES) return machine('the claim expired in that gap');
@@ -2351,16 +2495,20 @@ async function advance(ctx, job) {
   }
   if (ctx.now() - job.claim.lastSeen >= CLAIM_EXPIRES)
     return end(ctx, job, cause('job', 'claim-expired', `the claim expired: no heartbeat for ${((ctx.now() - job.claim.lastSeen) / HOUR).toFixed(1)} hours (the tick did not run, for example while the machine slept)`));
+  // A step wait (Stop owners): no merge check until its end, then a fresh quiet clock.
+  if (job.phase === 'pr' && stepWaiting(ctx, job)) return;
+  resumeStep(ctx, job);
   if (job.phase === 'pr') return mergeCheck(ctx, job);
   // A job file saved before its agent record (the tick died between the two saves) has nothing to wait for.
   if (!object(job.agent)) return end(ctx, job, cause('job', 'no-result', 'the job has no agent record (the tick stopped while it started the agent)'));
   const seen = ctx.jobs.read(job.agent);
+  await readHangs(ctx, job, job.agent, job.worktree);
   if (seen.state === 'running') {
     // The process rule (debate C): T1 stops a process that makes nothing new; the backstop ends the job.
     const watch = await watchProcess(ctx, job, job.agent, job.role, job.worktree);
     if (watch.state === 'ceiling') return end(ctx, job, watch.cause);
     if (watch.state !== 'quiet') return;
-    if (!object(seen.result)) return end(ctx, job, cause('job', 'no-result', quietText(ctx, `${job.role} agent`)));
+    if (!object(seen.result)) return agentStop(ctx, job, seen, true);
   } else if (ctx.gap && seen.state === 'dead') return machine('the agent process ended in that gap');
   const r = seen.result;
   if (object(r) && ['pr', 'needs-person', 'failed'].includes(r.outcome)) recordSuccess(ctx, job, job.agent, job.role, seen);
@@ -2396,8 +2544,7 @@ async function advance(ctx, job) {
     return end(ctx, job, { kind, component: slug(r.component) || (kind === 'runtime' ? 'pdd-test' : 'agent'), code: slug(r.code) || 'failed',
       text: oneLine(r.cause) || 'the agent reported a failure', detail: String(r.detail ?? '').slice(0, 4000) });
   }
-  const how = seen.exit ? `exited with ${seen.exit.code ?? seen.exit.signal}` : 'process ended', service = serviceProblem(ctx, job.agent);
-  return end(ctx, job, cause('job', 'no-result', `the ${job.role} agent ${how} with no result${r === 'invalid' ? ' (the result file is not valid JSON)' : ''}${service ? `: the AI service said "${service}" (an agent account or service problem, not this issue)` : ''}`, service ? { service } : {}));
+  return agentStop(ctx, job, seen, false);
 }
 
 // ---- The tick -------------------------------------------------------------------------------------------
@@ -2455,12 +2602,11 @@ export async function tickCore(input, ports) {
       const latest = readJson(ctx.fs, join(ctx.dirs.jobs, `${job.issue}.json`));
       ctx.warn(`Autopilot core #${job.issue}: ${error.message}`);
       if (!latest) continue;
-      Object.assign(latest, { lastError: safeLine(error.message), lastErrorTool: ['github', 'git'].includes(error.code) });
+      Object.assign(latest, { lastError: safeLine(error.message), lastErrorTool: ['github', 'git'].includes(error.code), lastErrorStep: null });
       // No job holds a slot or a claim past its quiet period plus 2 ticks, whatever keeps failing.
       if (latest.phase !== 'ending' && quietFor(ctx, latest) >= ctx.quiet) latest.overdue = (latest.overdue ?? 0) + 1;
       ctx.saveJob(latest);
-      if (latest.overdue >= 2) await end(ctx, latest, cause('job', 'no-result', `the job could not advance and made no progress for ${settings.quietMinutes} minutes (last error: ${latest.lastError})`))
-        .catch(failure => ctx.warn(`Autopilot core END of #${job.issue} waits: ${failure.message}`));
+      if (latest.overdue >= 2) await overdueStop(ctx, latest).catch(failure => ctx.warn(`Autopilot core END of #${job.issue} waits: ${failure.message}`));
     }
   }
   const b = ctx.budget;
@@ -2489,8 +2635,9 @@ export function coreStatus({ state, settings, sources = {} }, ports) {
     else if (job.phase === 'ending') lines.push(`#${job.issue} ending: ${job.end?.cause?.text}${job.lastError ? `; retry: ${job.lastError}` : ''}`);
     else lines.push(`#${job.issue} ${job.role} running ${age(job.agent?.started ?? job.started)} (log ${job.agent?.log ?? 'none'})${running(job, job.agent, job.role)}`);
   }
-  const history = readHistory(fs, ports.root, Infinity).filter(row => typeof row.outcome === 'string').slice(0, 5);
-  if (history.length) lines.push('Last results:', ...history.map(row => `#${row.issue} ${row.outcome} ${new Date(row.at).toISOString()}: ${row.text}`));
+  const all = readHistory(fs, ports.root, Infinity), history = all.filter(row => typeof row.outcome === 'string').slice(0, 5);
+  lines.push(...stopLines(jobs, all, now));
+  if (history.length) lines.push('Last results:', ...history.map(row => `#${row.issue} ${row.outcome} ${new Date(row.at).toISOString()}${row.owner ? ` (owner ${row.owner})` : ''}: ${row.text}`));
   const drafts = ports.reportRoot ? listReportDrafts({ root: ports.reportRoot }, { fs }).length : 0;
   if (drafts) lines.push(`Reports: ${drafts} local draft(s); run pdd autopilot report to list or send them.`);
   return lines.join('\n');

@@ -157,8 +157,13 @@ export async function coreWorld(t, { repository = 'acme/widgets', settings = {},
     stop: job => { const was = w.alive.delete(job.pid); if (was) w.stopped.push(job.id); return was; },
     // CPU seconds by child pid, as agentJobCpu gives them; null when the test sets none.
     cpu: job => w.cpu.get(job.pid) ?? null,
+    // The wrapper's hung-command records (agentJobHangs); w.hang adds one.
+    hangs: job => w.hangs.get(job.pid) ?? [],
   };
-  w.cpu = new Map();
+  w.cpu = new Map(); w.hangs = new Map();
+  w.hang = (issue, role, record = {}) => { const job = w.job(issue, role), rows = w.hangs.get(job.pid) ?? [];
+    rows.push({ at: w.now() + rows.length, pid: 4000 + rows.length, command: '/bin/bash -lc npm install', minutes: 15, last: '{"type":"item.started"}', head: null, ...record });
+    w.hangs.set(job.pid, rows); appendFileSync(job.log, `agent-job: stopped a hung command after 15 min with no output and almost no CPU: ${rows.at(-1).command}\n`); return rows.at(-1); };
   w.job = (issue, role) => [...w.started].reverse().find(j => j.issue === issue && (!role || j.role === role));
   // Finish a job: exit record, optional result file.
   w.finish = (issue, role, { code = 0, result } = {}) => {

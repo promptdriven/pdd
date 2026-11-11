@@ -1652,6 +1652,21 @@ message. A job with a result, a review verdict or a merge sets the pause length 
 to 1 hour. `pdd autopilot status` shows the jobs, the busy slots,
 a pause and the time it ends, and the last results from local files.
 
+Each stop where the time ran out has one owner, and only the issue owner blames
+the issue:
+
+| Owner | Example | What Autopilot does |
+|---|---|---|
+| pdd | Autopilot's own merge check step makes no progress (the base check cannot verify the releases, a refused merge) | Files one PDD report, keeps the PR and the claim, and tries the step again after 15 minutes, then 30, 60 and up to 8 hours. It never ends the issue. Repeats count toward the pause |
+| service | GitHub answers 502 for the whole quiet period, CI never starts, the AI account is out of credits | Waits or releases the issue, with no report and no strike |
+| machine | the agent stops answering | Releases the issue with no strike; the pause counts it |
+| issue | the same command hangs again at the same head, or the suite hangs in a test that the PR changes | One strike and one short note on the issue (updated in place), then a repair with the hang details or a later try; the 3rd strike in 7 days ends the issue with `pdd:stuck` |
+
+Agent jobs run with a hung-command watch: a command of the agent that prints
+nothing and uses almost no CPU for 15 minutes (a stalled `npm install`, a test that
+waits forever) is stopped alone, and the agent goes on. `pdd autopilot status`
+shows each wait, its next try and each issue that cools down, with the owner.
+
 When the machine sleeps longer than `quietMinutes`, every job's no-progress clock
 starts again at wake-up. A job whose claim expired or whose agent ended during the
 sleep is only released (no comment, no `pdd:stuck`, and it does not count against
