@@ -784,7 +784,8 @@ In PR 2 the same case has four cells: `Case: 1205 | $12.50 | $12.05 | $12.05`.
 
 A job of the Autopilot core engine (`pdd autopilot start --engine core`) makes one PR with no workflow run. It
 writes the `Runtime:` lines and one `Evidence:` line in the PR body. Autopilot checks each line against its own
-records. A line that the records do not support is red.
+records. A line that the records do not support is red. The same rules, short enough for one read, are in
+`autopilot-job-rules.md` of the pdd-prompting skill; a job reads that file in full.
 
 - **Changed** means changed against the base: `git diff --name-only origin/BASE...HEAD` (BASE is the PR's base
   branch, usually `main`). It never means changed since the previous PR head. A Story or prompt that a merge from the
