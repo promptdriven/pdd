@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: eda9c8d03d871d6de695d5a0ac9a0d3e0a4592aa8431a40b156efc94f3abc57a).
+// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 678988c8226c6ae750e100273560435eb64bb964492a4b366fd55db1956e06e6).
 import { spawnSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -41,14 +41,38 @@ function hostRedaction() {
 }
 
 function seamRedaction(ports = {}) {
-  if (ports.redaction !== undefined) return ports.redaction;
+  if (ports.redaction !== undefined && ports.redaction !== null) return ports.redaction;
   const host = hostRedaction();
-  if (ports.rememberSecrets === undefined && ports.redactSecrets === undefined) return host;
+  if (
+    (ports.rememberSecrets === undefined || ports.rememberSecrets === null) &&
+    (ports.redactSecrets === undefined || ports.redactSecrets === null)
+  ) {
+    return host;
+  }
   return Object.freeze({
     remember: ports.rememberSecrets ?? host.remember,
     redact: ports.redactSecrets ?? host.redact,
     known: host.known,
   });
+}
+
+function withPortDefaults(ports = {}, defaults = {}) {
+  const merged = { ...ports };
+  for (const [key, fallback] of Object.entries(defaults)) {
+    if (merged[key] === undefined || merged[key] === null) {
+      merged[key] = fallback;
+    }
+  }
+  return merged;
+}
+
+function withEligibilityDefault(ports = {}, defaultEligibility) {
+  const chosen = ports.evidenceEligibility ?? ports.readEvidenceEligibility ?? defaultEligibility;
+  return {
+    ...ports,
+    evidenceEligibility: chosen,
+    readEvidenceEligibility: chosen,
+  };
 }
 
 function resolveWorkflowBaseSha(cwd = process.cwd(), env = process.env) {
@@ -67,41 +91,40 @@ function resolveWorkflowBaseSha(cwd = process.cwd(), env = process.env) {
 
 export function buildCheckPlan(input, ports = {}) {
   const { headerPrompts } = req('./file-owner.mjs');
-  return runtimeBuildCheckPlan(input, { headerPrompts, ...ports });
+  return runtimeBuildCheckPlan(input, withPortDefaults(ports, { headerPrompts }));
 }
 
 export function composeProductTry(input, ports = {}) {
   const { parseProductDocuments, parseProductWorldWriters } = req('./product.mjs');
-  return runtimeComposeProductTry(input, { parseProductDocuments, parseProductWorldWriters, ...ports });
+  return runtimeComposeProductTry(input, withPortDefaults(ports, { parseProductDocuments, parseProductWorldWriters }));
 }
 
 export function createTryGuide(options = {}) {
   const givenPorts = options.ports ?? {};
+  const lazyEligibility = (...args) => req('./workflow-runner.mjs').readEvidenceEligibility(...args);
   return runtimeCreateTryGuide({
     ...options,
-    ports: {
-      ...givenPorts,
+    ports: withPortDefaults(withEligibilityDefault(givenPorts, lazyEligibility), {
       redaction: seamRedaction(givenPorts),
-      ...(givenPorts.evidenceEligibility === undefined && givenPorts.readEvidenceEligibility === undefined
-        ? { evidenceEligibility: (...args) => req('./workflow-runner.mjs').readEvidenceEligibility(...args) }
-        : {}),
-    },
+    }),
   });
 }
 
-export async function runContracts(input, ports = {}) {
-  const { readEvidenceEligibility } = await import('./workflow-runner.mjs');
-  return runtimeRunContracts(input, { evidenceEligibility: readEvidenceEligibility, ...ports });
+export function runContracts(input, ports = {}) {
+  const lazyEligibility = (...args) => req('./workflow-runner.mjs').readEvidenceEligibility(...args);
+  return runtimeRunContracts(input, withEligibilityDefault(ports, lazyEligibility));
 }
 
 export async function runJobs(input = {}, ports = {}) {
   const { NAMES } = await import('./command-catalog.mjs');
-  return runtimeRunJobs({ ...input, client: input?.client ?? { commands: { test: NAMES.test, lint: NAMES.lint, simulate: NAMES.simulate } } }, ports);
+  const commands = input?.client?.commands ?? { test: NAMES.test, lint: NAMES.lint, simulate: NAMES.simulate };
+  const client = { ...(input?.client ?? {}), commands };
+  return runtimeRunJobs({ ...input, client }, ports);
 }
 
 export async function checkRuntimeHealth(input, ports = {}) {
   await import('./secret-redaction.mjs');
-  return runtimeCheckHealth(input, { ...ports, redaction: seamRedaction(ports) });
+  return runtimeCheckHealth(input, withPortDefaults(ports, { redaction: seamRedaction(ports) }));
 }
 
 export async function loadRuntimeClient() {
@@ -112,7 +135,8 @@ export async function loadRuntimeClient() {
   return {
     DEFAULT_RUNTIME_URL,
     runtimeOrigin,
-    checkRuntimeHealth: (input, ports = {}) => rawCheckHealth(input, { ...ports, redaction: seamRedaction(ports) }),
+    checkRuntimeHealth: (input, ports = {}) =>
+      rawCheckHealth(input, withPortDefaults(ports, { redaction: seamRedaction(ports) })),
   };
 }
 
@@ -122,31 +146,35 @@ export async function runAutomaticApproval(input = {}, ports = {}) {
     { approvePromptText, promptPath },
     ,
     { headerPrompts },
+    { readEvidenceEligibility },
     { lintSvgLayouts },
   ] = await Promise.all([
     import('./approval-policy.mjs'),
     import('./prompt-approve.mjs'),
     import('./secret-redaction.mjs'),
     import('./file-owner.mjs'),
+    import('./workflow-runner.mjs'),
     import('./svg-layout.mjs'),
   ]);
   const env = ports.env ?? process.env;
-  const client = ports.client ?? input?.client ?? { version: clientVersion() };
+  const client = ports.client ?? (input?.client ? { ...input.client, version: input.client.version ?? clientVersion() } : { version: clientVersion() });
   const workflow = ports.workflow ?? input?.workflow ?? { base_sha: resolveWorkflowBaseSha(input?.root ?? input?.cwd, env) };
-  return runtimeRunAutomaticApproval(input, {
-    approvalActor,
-    readApprovalPolicy,
-    readPromptApprovals,
-    recordPromptApproval,
-    approvePromptText,
-    promptPath,
-    headerPrompts,
-    lintSvgLayouts,
-    client,
-    workflow,
-    ...ports,
-    redaction: seamRedaction(ports),
-  });
+  return runtimeRunAutomaticApproval(
+    input,
+    withPortDefaults(withEligibilityDefault(ports, readEvidenceEligibility), {
+      approvalActor,
+      readApprovalPolicy,
+      readPromptApprovals,
+      recordPromptApproval,
+      approvePromptText,
+      promptPath,
+      headerPrompts,
+      lintSvgLayouts,
+      client,
+      workflow,
+      redaction: seamRedaction(ports),
+    }),
+  );
 }
 
 export async function runCheck(input = {}, ports = {}) {
@@ -172,15 +200,15 @@ export async function runCheck(input = {}, ports = {}) {
   const workflow = input?.workflow !== undefined
     ? input.workflow
     : (needsBatchPlan ? { base_sha: resolveWorkflowBaseSha(input?.cwd, env) } : undefined);
+  const client = input?.client ? { ...input.client, version: input.client.version ?? clientVersion() } : { version: clientVersion() };
   return runtimeRunCheck(
     {
       ...input,
-      client: input?.client ?? { version: clientVersion() },
+      client,
       ...(workflow !== undefined ? { workflow } : {}),
     },
-    {
+    withPortDefaults(withEligibilityDefault(ports, readEvidenceEligibility), {
       headerPrompts,
-      evidenceEligibility: readEvidenceEligibility,
       allRuns,
       assessNativeEvidence,
       usableResult,
@@ -188,9 +216,8 @@ export async function runCheck(input = {}, ports = {}) {
       lintSvgLayouts,
       compareScreen,
       formatScreenComparison,
-      ...ports,
       redaction: seamRedaction(ports),
-    },
+    }),
   );
 }
 
@@ -208,20 +235,23 @@ export async function runTry(input = {}, ports = {}) {
     import('./product.mjs'),
     import('./prompt-approve.mjs'),
   ]);
-  return runtimeRunTry(input, {
-    tryLauncherUrl: TRY_LAUNCHER_URL,
-    loadAgentDefinitions,
-    discoverAgents: async (...args) => (await import('./agent-adapters.mjs')).discoverAgents(...args),
-    askAgent: async (...args) => (await import('./agent-adapters.mjs')).askAgent(...args),
-    evidenceEligibility: readEvidenceEligibility,
-    parseProductDocuments,
-    parseProductWorldWriters,
-    askApproval,
-    lineReader,
-    promptPath,
-    ...ports,
-    redaction: seamRedaction(ports),
-  });
+  const defaultDiscoverAgents = async (...args) => (await import('./agent-adapters.mjs')).discoverAgents(...args);
+  const defaultAskAgent = async (...args) => (await import('./agent-adapters.mjs')).askAgent(...args);
+  return runtimeRunTry(
+    input,
+    withPortDefaults(withEligibilityDefault(ports, readEvidenceEligibility), {
+      tryLauncherUrl: TRY_LAUNCHER_URL,
+      loadAgentDefinitions: ports.loadAgentDefinitions ?? ports.agents?.loadDefinitions ?? loadAgentDefinitions,
+      discoverAgents: ports.discoverAgents ?? ports.agents?.list ?? defaultDiscoverAgents,
+      askAgent: ports.askAgent ?? ports.agents?.ask ?? defaultAskAgent,
+      parseProductDocuments,
+      parseProductWorldWriters,
+      askApproval,
+      lineReader,
+      promptPath,
+      redaction: seamRedaction(ports),
+    }),
+  );
 }
 
 export async function createAgentBridge(context, test, tryId, options, link, seamPorts = {}) {
@@ -236,14 +266,19 @@ export async function createAgentBridge(context, test, tryId, options, link, sea
     import('./agent-adapters.mjs'),
     import('./workflow-runner.mjs'),
   ]);
-  return runtimeCreateAgentBridge(context, test, tryId, options, link, {
-    loadAgentDefinitions,
-    discoverAgents,
-    askAgent,
-    evidenceEligibility: readEvidenceEligibility,
-    ...seamPorts,
-    redaction: seamRedaction(seamPorts),
-  });
+  return runtimeCreateAgentBridge(
+    context,
+    test,
+    tryId,
+    options,
+    link,
+    withPortDefaults(withEligibilityDefault(seamPorts, readEvidenceEligibility), {
+      loadAgentDefinitions: seamPorts.loadAgentDefinitions ?? seamPorts.agents?.loadDefinitions ?? loadAgentDefinitions,
+      discoverAgents: seamPorts.discoverAgents ?? seamPorts.agents?.list ?? discoverAgents,
+      askAgent: seamPorts.askAgent ?? seamPorts.agents?.ask ?? askAgent,
+      redaction: seamRedaction(seamPorts),
+    }),
+  );
 }
 
 export async function runShim(descriptorPath, argv, ports = {}) {
@@ -251,7 +286,7 @@ export async function runShim(descriptorPath, argv, ports = {}) {
     import('./secret-redaction.mjs'),
     import('./prompt-approve.mjs'),
   ]);
-  return runtimeRunShim(descriptorPath, argv, { lineReader, ...ports, redaction: ports.redaction ?? hostRedaction() });
+  return runtimeRunShim(descriptorPath, argv, withPortDefaults(ports, { lineReader, redaction: seamRedaction(ports) }));
 }
 
 export async function readTryOwner(input = {}, ports = {}) {
@@ -264,14 +299,15 @@ export async function readTryOwner(input = {}, ports = {}) {
     import('./workflow-runner.mjs'),
     import('./product.mjs'),
   ]);
-  return runtimeReadTryOwner(input, {
-    tryLauncherUrl: TRY_LAUNCHER_URL,
-    evidenceEligibility: readEvidenceEligibility,
-    parseProductDocuments,
-    parseProductWorldWriters,
-    ...ports,
-    redaction: seamRedaction(ports),
-  });
+  return runtimeReadTryOwner(
+    input,
+    withPortDefaults(withEligibilityDefault(ports, readEvidenceEligibility), {
+      tryLauncherUrl: TRY_LAUNCHER_URL,
+      parseProductDocuments,
+      parseProductWorldWriters,
+      redaction: seamRedaction(ports),
+    }),
+  );
 }
 
 export async function runMcp(input, ports = {}) {
@@ -284,19 +320,20 @@ export async function runMcp(input, ports = {}) {
     import('./workflow-runner.mjs'),
     import('./product.mjs'),
   ]);
-  return runtimeRunMcp(input, {
-    tryLauncherUrl: TRY_LAUNCHER_URL,
-    evidenceEligibility: readEvidenceEligibility,
-    parseProductDocuments,
-    parseProductWorldWriters,
-    ...ports,
-    redaction: seamRedaction(ports),
-  });
+  return runtimeRunMcp(
+    input,
+    withPortDefaults(withEligibilityDefault(ports, readEvidenceEligibility), {
+      tryLauncherUrl: TRY_LAUNCHER_URL,
+      parseProductDocuments,
+      parseProductWorldWriters,
+      redaction: seamRedaction(ports),
+    }),
+  );
 }
 
 export async function migrateRuntimeWorkspace(input, ports = {}) {
   const { readEvidenceEligibility } = await import('./workflow-runner.mjs');
-  return runtimeMigrateWorkspace(input, { evidenceEligibility: readEvidenceEligibility, ...ports });
+  return runtimeMigrateWorkspace(input, withEligibilityDefault(ports, readEvidenceEligibility));
 }
 
 export {

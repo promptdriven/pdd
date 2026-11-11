@@ -44,7 +44,13 @@ function recordedCaseNote({scope,covered,total}){
 }
 
 export function createTryTools({ cwd = process.cwd(), words = [], env } = {}, ports = {}) {
-  const dependencies = { readTryOwner, runDoorCall, saveDoorCase, applyPendingCaseWithHandoff, ...ports };
+  const dependencies = {
+    ...ports,
+    readTryOwner: ports.readTryOwner ?? readTryOwner,
+    runDoorCall: ports.runDoorCall ?? runDoorCall,
+    saveDoorCase: ports.saveDoorCase ?? saveDoorCase,
+    applyPendingCaseWithHandoff: ports.applyPendingCaseWithHandoff ?? applyPendingCaseWithHandoff,
+  };
   const runtimePorts = { ...ports, env: env ?? ports.env ?? process.env, stdout: ports.stderr ?? process.stderr, stderr: ports.stderr ?? process.stderr };
   const sessions = new Map();
   let queue = Promise.resolve();

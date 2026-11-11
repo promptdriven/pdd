@@ -164,7 +164,13 @@ function invalidate(descriptor, path) {
   return last;
 }
 export async function runShim(descriptorPath, argv, givenPorts = {}) {
-  const ports = { env: process.env, stdout: process.stdout, stderr: process.stderr, stdin: process.stdin, ...givenPorts };
+  const ports = {
+    ...givenPorts,
+    env: givenPorts.env ?? process.env,
+    stdout: givenPorts.stdout ?? process.stdout,
+    stderr: givenPorts.stderr ?? process.stderr,
+    stdin: givenPorts.stdin ?? process.stdin,
+  };
   try {
     regular(descriptorPath);
     const d = read(descriptorPath);

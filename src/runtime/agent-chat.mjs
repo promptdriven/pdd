@@ -20,7 +20,9 @@ function scrub(value,secrets){
 export async function createAgentBridge(context,test,tryId,options={},link,seamPorts={}){
  const workspace=loadRuntimeWorkspace({root:context.root});
  if(workspace.configured){captureSource(context.root,{tests:[test.path]});throw Error('Bounded agent connection is unavailable: native controls cannot establish packet-only context.');}
- const ports={...seamPorts,...context.ports,guidePorts:{redaction:context.ports?.redaction??seamPorts.redaction,redactSecrets:context.ports?.redactSecrets??seamPorts.redactSecrets,evidenceEligibility:context.ports?.evidenceEligibility??context.ports?.readEvidenceEligibility??seamPorts.evidenceEligibility??seamPorts.readEvidenceEligibility,...seamPorts.guidePorts,...context.ports?.guidePorts}};
+ const mergeDefined=(base={},override={})=>{const out={...base};for(const [k,v] of Object.entries(override??{}))if(v!==undefined)out[k]=v;return out;};
+ const guideBase=mergeDefined(seamPorts.guidePorts,context.ports?.guidePorts);
+ const ports={...mergeDefined(seamPorts,context.ports),guidePorts:mergeDefined({redaction:context.ports?.redaction??seamPorts.redaction,redactSecrets:context.ports?.redactSecrets??seamPorts.redactSecrets,evidenceEligibility:context.ports?.evidenceEligibility??context.ports?.readEvidenceEligibility??seamPorts.evidenceEligibility??seamPorts.readEvidenceEligibility},guideBase)};
  const loadDefinitions=context.ports?.loadAgentDefinitions??context.ports?.agents?.loadDefinitions??seamPorts.loadAgentDefinitions??seamPorts.agents?.loadDefinitions;
  const definitions=context.agentDefinitions??(loadDefinitions?loadDefinitions({cwd:context.root,env:ports.env}):[]);
  if(!definitions.length)throw Error('No agents are configured. Add an agent or enable defaults in agents.json.');

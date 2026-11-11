@@ -567,3 +567,262 @@ test('SEAM8 (R2-1): host and Runtime share one secret-redaction registry through
   });
   assert.equal(standaloneGuide.wire({ say: `standalone ${markerStandalone}`, fill: null }).say, 'standalone [redacted]');
 });
+
+test('SEAM9 (R2-2): seam preserves legacy port overrides and ignores own undefined port values across added ports', async t => {
+  const { execFileSync } = await import('node:child_process');
+  const { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const hostRedaction = await import('../src/secret-redaction.mjs');
+  const seam = await import('../src/runtime-seam.mjs');
+
+  const tmp = mkdtempSync(join(tmpdir(), 'pdd-r2-2-'));
+  t.after(() => rmSync(tmp, { recursive: true, force: true }));
+
+  // 1. Legacy readEvidenceEligibility override wins on migrateRuntimeWorkspace.
+  const projRoot = join(tmp, 'proj');
+  const dstRoot = join(tmp, 'dst');
+  for (const dir of [projRoot, dstRoot]) {
+    mkdirSync(join(dir, 'prompts'), { recursive: true });
+    mkdirSync(join(dir, 'user_stories'), { recursive: true });
+    mkdirSync(join(dir, 'tests'), { recursive: true });
+    execFileSync('git', ['init', '-q'], { cwd: dir });
+    const iface = {
+      status: 'draft',
+      prose_sha256: '',
+      entries: [{
+        operation: 'main',
+        input_schema: { type: 'object', properties: { argv: { type: 'array', items: { type: 'string' } } }, required: ['argv'], additionalProperties: false },
+        result_schema: { type: 'object', properties: { stdout: { type: 'string' } }, required: ['stdout'], additionalProperties: false },
+        errors: [],
+      }],
+      calls: [],
+      resources: [],
+      limits: { max_steps: 1, max_model_calls: 1 },
+    };
+    const promptBody = () => `# Tool\n\nEcho.\n\n## Dependencies\n\nNone.\n\n<details><summary>Runtime interface</summary>\n\n\`\`\`json\n${JSON.stringify(iface)}\n\`\`\`\n</details>\n`;
+    iface.prose_sha256 = seam.proseSha256(promptBody());
+    writeFileSync(join(dir, 'prompts/tool.prompt.md'), promptBody());
+    writeFileSync(join(dir, 'user_stories/tool.md'), '# Tool\n\nI can echo.\n\n## Acceptance criteria\n\n1. Echo works.\n');
+    writeFileSync(
+      join(dir, 'tests/tool.json'),
+      JSON.stringify({
+        schema_version: 'prompt-runtime.program-scenario.v1',
+        story_path: 'user_stories/tool.md',
+        criteria: [{ id: 'AC1', text: 'Echo works.' }],
+        initial_world: {},
+        steps: [{ step_id: 's1', entry_path: 'prompts/tool.prompt.md', operation: 'main', input: { argv: [] }, checks: [{ criterion_id: 'AC1', target: 'result', path: '/stdout', op: 'equals', value: 'ok' }] }],
+      }, null, 2) + '\n',
+    );
+    execFileSync('git', ['add', '.'], { cwd: dir });
+  }
+  const captured = seam.captureSource(realpathSync(projRoot), { tests: ['tests/tool.json'], appMap: null });
+  let legacyEligibilityCalls = 0;
+  const migrationPreview = await seam.migrateRuntimeWorkspace(
+    {
+      root: dstRoot,
+      projectionRoot: projRoot,
+      mappings: [
+        { from: 'prompts/tool.prompt.md', to: 'prompts/tool.prompt.md' },
+        { from: 'user_stories/tool.md', to: 'user_stories/tool.md' },
+        { from: 'tests/tool.json', to: 'tests/tool.json' },
+      ],
+      write: false,
+    },
+    {
+      evidenceEligibility: undefined,
+      readEvidenceEligibility: () => {
+        legacyEligibilityCalls += 1;
+        return { state: 'eligible', reason: null };
+      },
+      store: {
+        inventory: async () => [{
+          id: 'batch-1',
+          kind: 'batch',
+          raw: '{}',
+          record: { batch: 'batch-1', rows: [{ test: 'tests/tool.json' }], source_sha256: captured.sha256 },
+        }],
+      },
+    },
+  );
+  assert.equal(legacyEligibilityCalls, 1);
+  assert.equal(migrationPreview.state, 'preview');
+  assert.deepEqual(migrationPreview.unresolved, []);
+  assert.equal(migrationPreview.items[0]?.state, 'ready');
+
+  // 2. Legacy readEvidenceEligibility & redactSecrets overrides win on createTryGuide; synchronous runContracts works.
+  let guideLegacyCalls = 0;
+  const customGuide = seam.createTryGuide({
+    root: dstRoot,
+    env: {},
+    model: { entries: [], stories: [] },
+    test: { path: 'tests/tool.json' },
+    features: [],
+    secrets: [],
+    ports: {
+      evidenceEligibility: undefined,
+      readEvidenceEligibility: () => {
+        guideLegacyCalls += 1;
+        return { state: 'eligible', reason: null };
+      },
+      redaction: undefined,
+      redactSecrets: text => String(text).replaceAll('CUSTOM_SECRET_TOKEN', '[custom-redacted]'),
+    },
+  });
+  assert.equal(customGuide.wire({ say: 'hi CUSTOM_SECRET_TOKEN', fill: null }).say, 'hi [custom-redacted]');
+  const syncCode = seam.runContracts(
+    { cwd: dstRoot, words: [], options: {} },
+    {
+      stdout: { write() {} },
+      stderr: { write() {} },
+      evidenceEligibility: undefined,
+      readEvidenceEligibility: () => ({ state: 'eligible', reason: null }),
+    },
+  );
+  assert.equal(typeof syncCode, 'number');
+  assert.equal(syncCode, 0);
+
+  // 3. Own undefined port values never erase seam defaults (SVG --lint --local --json warning + headerPrompts + product + jobs + redaction).
+  const svgRepo = join(tmp, 'svg-repo');
+  mkdirSync(join(svgRepo, 'prompts/views'), { recursive: true });
+  mkdirSync(join(svgRepo, 'user_stories'), { recursive: true });
+  mkdirSync(join(svgRepo, 'tests'), { recursive: true });
+  mkdirSync(join(svgRepo, 'src'), { recursive: true });
+  execFileSync('git', ['init', '-q'], { cwd: svgRepo });
+  writeFileSync(join(svgRepo, 'prompts/views/card.ui.svg'), '<svg viewBox="0 0 100 40"><text>Visible</text></svg>\n');
+  writeFileSync(join(svgRepo, 'prompts/card.prompt.md'), '# Card\n\n![Card](views/card.ui.svg)\n\nRender the card.\n\n## Dependencies\n\nNone.\n');
+  writeFileSync(join(svgRepo, 'src/card.mjs'), '// Generated from prompts/card.prompt.md\nexport const card = 1;\n');
+  writeFileSync(join(svgRepo, 'user_stories/card.md'), '# Card\n\nI can view card.\n\n## Acceptance criteria\n\n1. Card renders.\n');
+  writeFileSync(
+    join(svgRepo, 'tests/card.json'),
+    JSON.stringify({
+      schema_version: 'prompt-runtime.program-scenario.v1',
+      story_path: 'user_stories/card.md',
+      criteria: [{ id: 'AC1', text: 'Card renders.' }],
+      initial_world: {},
+      steps: [{ step_id: 's1', entry_path: 'prompts/card.prompt.md', operation: 'render', input: {}, checks: [{ criterion_id: 'AC1', target: 'result', path: '/ok', op: 'equals', value: true }] }],
+    }, null, 2) + '\n',
+  );
+  execFileSync('git', ['add', '.'], { cwd: svgRepo });
+  execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '-m', 'init'], { cwd: svgRepo });
+  writeFileSync(join(svgRepo, 'src/card.mjs'), '// Generated from prompts/card.prompt.md\nexport const card = 2;\n');
+
+  let outJson = '';
+  let errText = '';
+  const checkCode = await seam.runCheck(
+    { cwd: svgRepo, words: [], options: { '--lint': true, '--local': true, '--json': true }, client: { version: undefined } },
+    {
+      stdout: { write: chunk => { outJson += chunk; } },
+      stderr: { write: chunk => { errText += chunk; } },
+      gh: () => { throw new Error('gh forbidden in --local'); },
+      fetch: async () => { throw new Error('fetch forbidden in --local'); },
+      lintSvgLayouts: undefined,
+      headerPrompts: undefined,
+      evidenceEligibility: undefined,
+      readEvidenceEligibility: undefined,
+      allRuns: undefined,
+      assessNativeEvidence: undefined,
+      usableResult: undefined,
+      resultLines: undefined,
+      compareScreen: undefined,
+      formatScreenComparison: undefined,
+      redaction: undefined,
+      rememberSecrets: undefined,
+      redactSecrets: undefined,
+    },
+  );
+  assert.equal(checkCode, 4, errText);
+  const parsedCheck = JSON.parse(outJson);
+  assert.ok(
+    Array.isArray(parsedCheck.warnings) && parsedCheck.warnings.some(w => w.includes('Visible')),
+    `expected SVG Visible warning with lintSvgLayouts: undefined, got: ${JSON.stringify(parsedCheck.warnings)}`,
+  );
+
+  // buildCheckPlan with { headerPrompts: undefined } still classifies changed code via Generated-from header (not conservative fallback).
+  const foundSvg = seam.findTests({ root: svgRepo });
+  const plan = seam.buildCheckPlan(
+    {
+      root: svgRepo,
+      found: foundSvg,
+      selected: foundSvg.tests,
+      rows: [{ test: 'tests/card.json', state: 'refused', steps: [] }],
+      full: true,
+      base: 'HEAD',
+    },
+    { headerPrompts: undefined },
+  );
+  assert.equal(plan.stories[0]?.role, 'target');
+  assert.deepEqual(plan.stories[0]?.affected_paths, ['src/card.mjs']);
+
+  // runJobs with { client: { commands: undefined } } keeps default command catalog names.
+  let jobsOut = '';
+  const jobsCode = await seam.runJobs(
+    { cwd: svgRepo, words: [], options: {}, client: { commands: undefined } },
+    { env: { HOME: tmp, PDD_STATE_DIR: join(tmp, 'state') }, stdout: { write: c => { jobsOut += c; } }, stderr: { write() {} } },
+  );
+  assert.equal(jobsCode, 0);
+  assert.match(jobsOut, /No local interpreter jobs/);
+
+  // composeProductTry with own undefined product parser ports keeps host product.mjs defaults.
+  assert.throws(
+    () => seam.composeProductTry(
+      { root: svgRepo, found: foundSvg, words: [], options: { '--product': true } },
+      { parseProductDocuments: undefined, parseProductWorldWriters: undefined },
+    ),
+    error => !(error instanceof TypeError),
+  );
+
+  // createAgentBridge honors nested agents.{loadDefinitions,list,ask} alias and ignores undefined seamPorts.
+  let nestedLoadCalled = 0;
+  await assert.rejects(
+    () => seam.createAgentBridge(
+      {
+        root: dstRoot,
+        ports: {
+          env: {},
+          stderr: { write() {} },
+          agents: {
+            loadDefinitions: () => {
+              nestedLoadCalled += 1;
+              return [];
+            },
+          },
+        },
+      },
+      { path: 'tests/tool.json' },
+      'try-1',
+      {},
+      'https://runtime.example.test/s/abc/',
+      {
+        loadAgentDefinitions: undefined,
+        discoverAgents: undefined,
+        askAgent: undefined,
+        evidenceEligibility: undefined,
+        readEvidenceEligibility: undefined,
+        redaction: undefined,
+      },
+    ),
+    /No agents are configured/,
+  );
+  assert.equal(nestedLoadCalled, 1);
+
+  // createTryGuide with own undefined redaction still redacts host-remembered secrets.
+  const undefMarker = 'zzOpaqueUndefPort987654321';
+  hostRedaction.rememberSecrets(undefMarker);
+  const undefGuide = seam.createTryGuide({
+    root: dstRoot,
+    env: {},
+    model: { entries: [], stories: [] },
+    test: {},
+    features: [],
+    secrets: [],
+    ports: {
+      redaction: undefined,
+      redactSecrets: undefined,
+      evidenceEligibility: undefined,
+      readEvidenceEligibility: undefined,
+      readAgentScenarios: () => [],
+      buildProjectCard: () => ({ fingerprint: 'fp', sourceFingerprint: 'fp', text: 'Card', productRules: [] }),
+    },
+  });
+  assert.equal(undefGuide.wire({ say: `v=${undefMarker}`, fill: null }).say, 'v=[redacted]');
+});

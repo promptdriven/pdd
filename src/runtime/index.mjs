@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-entry.prompt.md (sha256: da72903fa15d679b31aee8a3af6f041ac59a718e97072d30c73d165095bbf0fa).
+// Generated from prompts/cli/runtime-entry.prompt.md (sha256: af3e9e579f625e9ad2c80517470538d40d810405dd3de998a2149c62c4aeab6b).
 import { createRequire } from 'node:module';
 
 export {
@@ -97,9 +97,13 @@ export async function runJobs(input, ports) {
   return run(input, ports);
 }
 
-export async function runContracts(input, ports) {
-  const { runContracts: run } = await import('./contracts.mjs');
-  return run(input, ports);
+let contractsModule = null;
+function loadContracts() {
+  return (contractsModule ??= createRequire(import.meta.url)('./contracts.mjs'));
+}
+
+export function runContracts(input, ports) {
+  return loadContracts().runContracts(input, ports);
 }
 
 export async function loadInterfaceDraft() {

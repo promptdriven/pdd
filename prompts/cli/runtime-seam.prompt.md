@@ -9,7 +9,7 @@ The seam keeps stable pdd-owned file paths for anything pdd writes into a user's
 
 ## Request metadata and host ports
 
-Because `src/runtime/` imports nothing outside `src/runtime/`, `src/runtime-seam.mjs` builds caller request metadata and host ports lazily on invocation (preserving explicit caller overrides), including a single shared host `redaction` port (`{ remember, redact, known }`) backed by `src/secret-redaction.mjs` so host and Runtime redaction never diverge:
+Because `src/runtime/` imports nothing outside `src/runtime/`, `src/runtime-seam.mjs` builds caller request metadata and host ports lazily on invocation. Legacy and canonical port spellings (`readEvidenceEligibility` and `evidenceEligibility`; `rememberSecrets` / `redactSecrets` and `redaction`; `agents.{loadDefinitions,list,ask}` and `{loadAgentDefinitions,discoverAgents,askAgent}`) are normalized before installing seam defaults so an explicit caller override under either name wins, and every seam default uses nullish fallback (`??`) so an own `undefined` property never erases a default. A single shared host `redaction` port (`{ remember, redact, known }`) backed by `src/secret-redaction.mjs` keeps host and Runtime redaction on one registry:
 
 - `runJobs(input, ports)`: supplies `client.commands` (`{ test, lint, simulate }`) from `src/command-catalog.mjs` (`NAMES`).
 - `buildCheckPlan(input, ports)`: supplies `ports.headerPrompts` from `src/file-owner.mjs`.
@@ -63,6 +63,6 @@ The seam holds no mutable request state and loads zero additional pdd modules at
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"native-only","status":"draft","prose_sha256": "afcfb0e4cb3c85b11d553ec0f6ae645774e42a61383f57172b8dbc8ae6f1517c","reason":"Re-exports live JavaScript ESM module bindings from src/runtime/index.mjs as pdd's sole import seam, which bound Runtime ports cannot fake."}
+{"kind":"native-only","status":"draft","prose_sha256": "222b86b93218cdfab1174ef6983a77d7bc5aa5e2717014db1c8179c61bf4d662","reason":"Re-exports live JavaScript ESM module bindings from src/runtime/index.mjs as pdd's sole import seam, which bound Runtime ports cannot fake."}
 ```
 </details>
