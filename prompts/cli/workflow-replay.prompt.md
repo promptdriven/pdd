@@ -45,12 +45,10 @@ one of its links is in the changed area. Use no other link: no folder, name, pro
 pdd-bindings.json adds no links.
 
 A header prompt is the prompt that a changed file names in its PDD header, in its base blob or its current file.
-The header is one of the first 10 lines: an optional comment opener (`//`, `#`, `--`, `;`, `/*`, `*`, `<!--`,
-`"""` or `'''`), then `Generated from PATH`, then optionally ` (sha256: HEX)`, then optionally `.` and a closer
-(`*/`, `-->`, `"""` or `'''`). PATH is a canonical repository-relative path that ends in `.prompt.md`. Other
-text, such as `Generated from the canonical m1_policy prompt`, is no header. Skip header lines longer than
-1,100 characters before parsing them. The Stories of a header prompt or a changed prompt file (the
-story_path of each base scenario that links to it) are also in the changed area.
+Read headers only with the shared [header reader](file-owner.prompt.md#generated-from-header) (`headerPrompts`):
+any complete line in the first 4 KiB, with its exact form and line limit. Other text, such as
+`Generated from the canonical m1_policy prompt`, is no header. The Stories of a header prompt or a changed
+prompt file (the story_path of each base scenario that links to it) are also in the changed area.
 
 The base commit's root `pdd.json` selects the base scenarios with `replay.base_scenarios`: `linked` (the rule
 above) or `all` (every base scenario belongs). A missing file, `replay` or `base_scenarios` means `linked`. A
@@ -374,6 +372,7 @@ A present base `pdd.json` must be a regular readable blob within the 10 MiB read
 
 - [Runtime preflight](runtime-preflight.prompt.md): required generation/runtime context for gitFiles(root).
 - [Runtime output](runtime-output.prompt.md): required generation/runtime context for safe diagnostic text.
+- [File owner lookup](file-owner.prompt.md#generated-from-header): required generation context for the header rule.
 
 <details>
 <summary>Runtime interface</summary>
@@ -381,7 +380,7 @@ A present base `pdd.json` must be a regular readable blob within the 10 MiB read
 ```json
 {
   "status": "approved",
-  "prose_sha256": "7e396a88955169b5f1efed25bb5a6a96263640d09db6e105cd34edd0dd0315ac",
+  "prose_sha256": "24b9ef2e0e37eee6537c435ad41bd895073c6ff30ac5b3cbce54424886992048",
   "entries": [
     {
       "operation": "adoptReplayCorpus",

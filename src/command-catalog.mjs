@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 1a0336c40f0f5173e81259827dd85adb927bb8ea2474f2ccb5a770be7fb7a611).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 4bc1b8742843b1b49582cfe76955a1d3a6269c54f041b2f9ae28bb4c1d0242cf).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -140,6 +140,8 @@ const routes = [
       form(`pdd ${lint} --local [STORY...] [--json]`, 'Check linked SVG layout parts locally with warning diagnostics and 0 AI/network calls.')] },
   { id: 'files', prefix: ['files'], local: 'project-files', operands: [], options: [{ name: '--json', kind: 'flag' }],
     forms: [form('pdd files [--json]', 'List prompts, Runtime interfaces, Stories, tests and refusal reasons; no network calls.')] },
+  { id: 'owner', prefix: ['owner'], local: 'file-owner', operands: [{ name: 'path', type: 'text', repeat: true }], options: [{ name: '--json', kind: 'flag' }],
+    forms: [form('pdd owner PATH... [--json]', 'Show which prompt owns each file, from pdd-bindings.json, Generated from headers and prompt opening sentences; reads local files only.')] },
   { id: 'approve', prefix: ['approve'], local: 'prompt-approve', operands: [{ name: 'prompt', type: 'text' }], options: [{name:'--said',kind:'text'},{name:'--automatic',kind:'flag'},{name:'--tests',kind:'text'}],
     forms: [form('pdd approve PROMPT --automatic --tests COMMAND', 'Approve only a complete drafted interface for unchanged committed behavior, after existing native tests and a full current prompt check. Strict mode requires a person.'), form('pdd approve PROMPT [--said WORDS]', "Show one prompt's runtime interface and text changes since its last approval. Approve only that prompt. Easy mode accepts the person's nonblank words without grading them. " + approvalHelp('pdd approve PATH'))] },
   // A quiet word (`sim`) parses like the prefix, with nothing added; help names `sim` once, completion never.

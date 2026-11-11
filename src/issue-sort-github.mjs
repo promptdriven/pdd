@@ -1,4 +1,4 @@
-// Generated from prompts/cli/issue-sort-github.prompt.md (sha256: f9c4d04836f3b48ebb7738f1665abfd0dd70716e8e7ac4ec587ab4c6b7ec2bd5).
+// Generated from prompts/cli/issue-sort-github.prompt.md (sha256: 68b2e9f1a965a093662b229703286d568e8f2b7219938113b735a80e189a7959).
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync, readdirSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';

@@ -174,6 +174,17 @@ test('3114: committed run changes and generated source ownership select targets;
   assert.equal(incomplete.target.state,'not_run');assert.equal(incomplete.target.unresolved.length,2);
 });
 
+// #3200: one header reader for replay and the plan; a file can name more than one prompt, and a mid-line mention is no header.
+test('3200: every strict Generated-from header in the first 4 KiB names an owner',t=>{
+  const setup=harbor(t),base=git(setup.repo,'rev-parse','HEAD');
+  mkdirSync(join(setup.repo,'src'));
+  writeFileSync(join(setup.repo,'src/order.mjs'),`${'// license\n'.repeat(11)}// Generated from prompts/missing.prompt.md.\n// Generated from ${PLACE}.\n`);
+  writeFileSync(join(setup.repo,'src/note.mjs'),`// see Generated from ${PLACE} for details\n`);
+  commit(setup.repo);
+  const found=findTests({root:setup.repo}),plan=buildCheckPlan({root:setup.repo,found,selected:found.tests,rows:[],full:true,base});
+  for(const story of plan.stories){assert.ok(story.affected_paths.includes('src/order.mjs'),story.reason);assert.ok(!story.affected_paths.includes('src/note.mjs'),story.reason);}
+});
+
 test('3114: mixed fresh and reused full-batch rows retain scope on a saved read',async t=>{
   const setup=harbor(t),fake=await fakeRuntime(t,(entry,f)=>f.normal(entry));
   const execute=async(words=[],options={'--json':true})=>{

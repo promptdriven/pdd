@@ -1,3 +1,4 @@
+// Generated from prompts/cli/test-suite-queue.prompt.md.
 // Owned by prompts/cli/test-suite-queue.prompt.md.
 import {StringDecoder} from 'node:string_decoder';
 import {redactSecrets, redactingValues, knownSecretValues} from './secret-redaction.mjs';

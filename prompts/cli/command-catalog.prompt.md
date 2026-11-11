@@ -152,6 +152,16 @@ Runtime interfaces, Stories, tests and refusal reasons, without network calls.
 Include it in root help and completion. The [files view](files.prompt.md) owns
 its output; do not import the Runtime client for this route.
 
+## Owner route
+
+Catalog `owner` (stable id `owner`, local `file-owner`) immediately after `files`.
+Its form is `pdd owner PATH... [--json]`: one or more text operands PATH and only
+the optional Boolean flag `--json`. Help says it shows which prompt owns each
+file, from pdd-bindings.json, Generated from headers and prompt opening
+sentences, and that it reads local files only. Include it in root help and
+completion. The [file owner lookup](file-owner.prompt.md) owns its output; do not
+import the Runtime client for this route.
+
 ## Shared contract routes
 
 Catalog `contracts` (stable id `contracts`, local `contracts`) with form
@@ -215,6 +225,7 @@ The ordered help-form list consists of the lines below in their displayed order,
   pdd lint [STORY...] [--json] [--timeout MIN] [--max-calls N]  Print local SVG layout warnings, then the PDD interpreter lint (0 AI calls) on selected Stories and their dependencies; sends no checks.
   pdd lint --local [STORY...] [--json]  Check linked SVG layout parts locally with warning diagnostics and 0 AI/network calls.
   pdd files [--json]  List prompts, Runtime interfaces, Stories, tests and refusal reasons; no network calls.
+  pdd owner PATH... [--json]  Show which prompt owns each file, from pdd-bindings.json, Generated from headers and prompt opening sentences; reads local files only.
   pdd approve PROMPT [--said WORDS]  Approve one prompt with the person's chat words in easy mode, or show its interface/text changes and ask terminal y/N; strict mode requires a person terminal.
   pdd simulate [STORY] [--max-calls N] [--tab call|screen|terminal|world] [--app-map PATH] [--new] [--no-open] [--no-wait] [--agent NAME]  Open the Story in the PDD Simulator: make a link on the PDD interpreter with your gh login and open it in your browser; it ends in 24 hours. Short form: pdd sim. A new simulation defaults to 400 calls; --max-calls accepts 1 to 1000. With terminal stdout or explicit --agent, it stays running to connect your own agent; otherwise it reads saved cases once and returns. --agent selects a configured name or a default Codex, Claude or Gemini; --no-wait skips the bridge. In a terminal it adds each test saved in the Simulator to the story's test file.
   pdd simulate [STORY] --cli [--shell] [--max-calls N] [--new]  Run your program in your terminal through a Simulator session; prints a PATH line, or opens a shell with --shell.

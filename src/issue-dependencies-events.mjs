@@ -1,3 +1,4 @@
+// Generated from prompts/cli/issue-dependencies-events.prompt.md (sha256: bf88de2d704a5cac15d91cef02a553076281acd94441adce599ec745d6850a9a).
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
 export function dependencyEventStatus({ configured = false, installed = false, verified = false, error = '' } = {}) {

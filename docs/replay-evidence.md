@@ -215,7 +215,7 @@ A base scenario belongs to the run when one of its links names a file in the cha
 
 A changed code file links to scenarios in two ways: through `pdd-bindings.json`, or through its own
 header. pdd reads the header from the file on the base commit and from the file in the run. The header is
-one of the first 10 lines of the file, for example:
+any complete line in the first 4 KiB of the file, for example after a `#!` line, a license or imports:
 
 ```text
 // Generated from prompts/cli/workflow-runner.prompt.md.
@@ -226,9 +226,13 @@ one of the first 10 lines of the file, for example:
 
 The line can start with a comment mark (`//`, `#`, `--`, `;`, `/*`, `*`, `<!--`, `"""` or `'''`). Then it
 has `Generated from` and a repository path that ends in `.prompt.md`. After the path, it can have
-` (sha256: HEX)` with 64 lowercase hex characters, and a `.`. A line without such a path is not a header.
+` (sha256: HEX)` with 64 lowercase hex characters, and a `.`. HEX is the prompt's header hash; `pdd owner`
+shows it ([Find the prompt that owns a file](cli.md#find-the-prompt-that-owns-a-file)). Replay reads only the
+path. A line without such a path is not a header.
 For example, `Generated from the canonical m1_policy prompt` names no file, so it adds no link.
-Lines longer than 1,100 characters are not parsed as headers. Git color settings do not affect selection.
+Lines longer than 1,100 characters are not parsed as headers. A file can have more than one header; each
+one links its prompt. `pdd owner` and `pdd test` read headers with the same rule. Git color settings do not
+affect selection.
 
 pdd uses no other link: no folder, file name or text match. When the repository records no link, pdd adds
 no base file and the PR says why.

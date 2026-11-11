@@ -1,5 +1,5 @@
 import { launchProfile, chatAgentName, validLaunchProfile } from './workflow-launch-profile.mjs';
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: fb3559aa52403c1b2ba8019e2519bb44e4c6e025d446b64a410fd43b1f89123d).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: badc0c8c124e14c6d707736e770146a5533d2a9120f28bd0fe3db84824250c2c).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, lstatSync, readdirSync, writeFileSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
