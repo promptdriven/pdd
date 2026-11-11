@@ -1,9 +1,11 @@
-// Generated from prompts/cli/skills-install.prompt.md (sha256: 439031a55c120366117a94eef39e6a64abcf003c491bfa9b05348433a28babf5).
+// Generated from prompts/cli/skills-install.prompt.md (sha256: 91f679030187c9a265438d59decaa4d68d09a7c6c6f8d3b2d116778ebea730d3).
 import { createHash } from 'node:crypto';
 import { cpSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 
-export const PDD_SKILL_NAMES = Object.freeze(['pdd-prompting', 'pdd-setup', 'pdd-small-change', 'pdd-bug', 'pdd-feature', 'pdd-product', 'pdd-autopilot', 'pdd-check', 'pdd-merge', 'pdd-graph']);
+export const PDD_SKILL_NAMES = Object.freeze(['pdd-prompting', 'pdd-setup', 'pdd-small-change', 'pdd-bug', 'pdd-feature', 'pdd-product', 'pdd-graph']);
+// Skills that the package does not ship. setup removes only their pdd-owned copies in the user folder.
+export const RETIRED_SKILL_NAMES = Object.freeze(['pdd-autopilot', 'pdd-check', 'pdd-merge']);
 const MARKER = '.pdd-skill.json';
 
 const relativeFiles = (dir, prefix = '') => readdirSync(dir, { withFileTypes: true }).flatMap(entry =>
@@ -30,6 +32,14 @@ function copyState(dest, version, sum) {
   try { marker = JSON.parse(text); } catch { return 'update'; }
   const order = compareVersions(marker?.version, version);
   return order < 0 || (order === 0 && marker.digest !== sum) ? 'update' : 'keep';
+}
+
+// True for a real folder (not a symlink or a file) that holds the pdd marker file, with any content.
+function pddOwned(dest) {
+  let info;
+  try { info = lstatSync(dest); } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+  if (!info.isDirectory()) return false;
+  try { return lstatSync(join(dest, MARKER)).isFile(); } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
 }
 
 function copySkill(source, parent, name, version, sum) {
@@ -85,13 +95,17 @@ function findIn(read, skills, version) {
 }
 
 function setupAgent({ agent, read, root }, skills, version) {
-  const result = { agent, root, found: null, stale: null, staleSkills: [], installed: [], updated: [] };
+  const result = { agent, root, found: null, stale: null, staleSkills: [], installed: [], updated: [], removed: [] };
   try {
     for (const { name, source, digest: sum } of skills)
       if (copyState(join(root, name), version, sum) === 'update') result.updated.push(copySkill(source, root, name, version, sum));
     Object.assign(result, findIn(read, skills, version));
     if (!result.found) for (const { name, source, digest: sum } of skills)
       if (copyState(join(root, name), version, sum) === 'missing') result.installed.push(copySkill(source, root, name, version, sum));
+    for (const name of RETIRED_SKILL_NAMES) {
+      const dest = join(root, name);
+      if (pddOwned(dest)) { rmSync(dest, { recursive: true, force: true }); result.removed.push(dest); }
+    }
   } catch (error) { result.error = error; }
   return result;
 }

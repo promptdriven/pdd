@@ -265,7 +265,7 @@ The closing lines are exactly:
 ```text
 Open Codex or Claude as usual and call a PDD skill: $pdd-feature in Codex, /pdd-feature in Claude Code (also pdd-bug, pdd-small-change, pdd-prompting).
 workflow run opens the first area chat in Herdr session pdd and exits. Manual workflows follow RUNBOOK §2 and its person gates; pdd opens a real PR.
-The CLI has no merge command. Auto agents use pdd-merge after repository review and tests, with required human approvals.
+The CLI has no merge command. In auto mode, Autopilot merges its own pull request after CI, a fresh review and the full test suite pass; required human approvals still apply.
 ```
 
 (`run` is the [NAMES](#names) word. Codex calls a skill with `$name`, Claude Code with `/name`.)

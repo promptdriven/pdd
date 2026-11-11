@@ -87,7 +87,7 @@ Check these boundaries in order and continue after failures:
   read-only account port. Limited and unknown are warnings. For Claude,
   unsupported read-only usage evidence is warning with `claude` and /usage advice;
   no generation call to discover allowance, and no credit/reset advice.
-- Setup: require a complete PDD block in AGENTS.md or CLAUDE.md, all ten skill
+- Setup: require a complete PDD block in AGENTS.md or CLAUDE.md, all seven skill
   entrypoints in one selected provider's supported project/user skill root,
   and valid pdd.json autopilot mode/trust. Off warns; native start owns mode admission. Describe observe versus auto
   authority, owner/write-access trust even with [], explicit trusted users and
@@ -162,7 +162,7 @@ Do not use a GitHub ledger that writes reads to disk. Do not mutate arrays retur
 {
   "kind": "partial",
   "status": "approved",
-  "prose_sha256": "8a0b136fc9009bff61d0230e4fbc5892f93304ca78a7250b33c12e841d481e86",
+  "prose_sha256": "49e976db22ee4709dcf0a37edfd6b72f7c5b44ed1699fca409870ad96fccbc07",
   "entries": [
     {
       "operation": "runAutopilotDoctor",

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-doctor.prompt.md (sha256: 7a141e0bf561852efa09fc034963022c4a874ad25d366a721a702d39b7cade9f).
+// Generated from prompts/cli/autopilot-doctor.prompt.md (sha256: 92d4932feb6569033408b4284bcc81507e63c8468e757d021c9b95463f5061d4).
 // Source: prompts/cli/autopilot-doctor.prompt.md.
 import {rememberSecrets, knownSecretValues} from './secret-redaction.mjs';
 import * as nativeFiles from 'node:fs';
@@ -13,7 +13,7 @@ import {runtimeOrigin, checkRuntimeHealth} from './runtime-client.mjs';
 
 const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`;
 const clean = value => String(value).replace(/[\x00-\x1f\x7f-\x9f]/g, ' ');
-const skills = ['pdd-prompting','pdd-setup','pdd-small-change','pdd-bug','pdd-feature','pdd-product','pdd-graph','pdd-autopilot','pdd-check','pdd-merge'];
+const skills = ['pdd-prompting','pdd-setup','pdd-small-change','pdd-bug','pdd-feature','pdd-product','pdd-graph'];
 const ready = value => value?.code === 0;
 
 // Shared with start: definition HOME selects agents.json; invocation HOME selects the account.

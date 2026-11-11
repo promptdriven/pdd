@@ -281,3 +281,13 @@ test('doctor: GitHub settings are unproved for an unreadable GitHub file, and na
   f.paths.set('/project/pdd.json','[]');
   assert.deepEqual(await settingsRow(f),{id:'settings-github',status:'warn',detail:'pdd.json in this checkout is not a JSON object; the GitHub comparison is unproved',fix:'vi pdd.json'});
 });
+
+// Wrong (#3242): doctor warns on a machine that has the seven skills but not the retired coordinator skills, or passes
+// a machine that lacks one of the seven.
+test('doctor: the skill bundle is the seven shipped skills; the retired skills are not required',async()=>{
+  const f=doctorFixture();
+  assert.equal([...f.paths.keys()].some(path=>/pdd-(?:autopilot|check|merge)\//.test(path)),false);
+  check(await invoke(f),'setup-skills','PASS');
+  f.paths.delete(join('/home/fake','.agents','skills','pdd-graph','SKILL.md'));
+  check(await invoke(f),'setup-skills','WARN');
+});
