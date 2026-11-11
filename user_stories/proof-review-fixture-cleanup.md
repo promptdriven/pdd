@@ -4,7 +4,7 @@ As a maintainer, I want the proof review fixtures to clean up every process they
 
 ## Acceptance criteria
 
-1. The interruption and recovery fixtures leave no process they started alive after success or failure, including when the PID record is missing, empty, partial or malformed, or readiness times out.
+1. The interruption and recovery fixtures leave no process they started alive after success or failure, including a setup failure immediately after spawning and when the PID record is missing, empty, partial or malformed, or readiness times out.
 2. Cleanup leaves the test runner and unrelated processes running, and the fixtures retain their interruption and recovery checks.
 
 ## Rules to check

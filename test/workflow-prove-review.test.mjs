@@ -3,7 +3,7 @@ import {spawnOwned} from './helpers/owned-process.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {execFileSync,spawn} from 'node:child_process';
-import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,realpathSync,existsSync,symlinkSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,realpathSync,existsSync,symlinkSync,readdirSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,dirname,resolve} from 'node:path';
 const modulePath=resolve('src/workflow-prove.mjs');
@@ -62,13 +62,49 @@ test('REVIEW-SAFE-VALUES: dynamic proof fields use adaptive code fences and reve
  assert.match(line,/command `` `cmd` @octocat #17 pdd-workflow\\u003afake\\n\\u0080 ``/);assert.match(line,/expected `Closes #17`/);assert.doesNotMatch(line,/pdd-workflow:/);
  for(const outcome of ['output-limit','signalled']){const r={paths:['test/x.test.mjs'],test:'command',expect:'expected',outcome,base:{exitCode:1,observedError:'base cause',signal:'',outputLimited:false},head:{exitCode:1,observedError:'head cause',signal:outcome==='signalled'?'SIGTERM':'',outputLimited:outcome==='output-limit'}};assert.match(formatProof(r),/cause `head cause`/);}
 });
+function ownedProcesses(token){
+ const found=[];for(const name of readdirSync('/proc'))if(/^\d+$/.test(name)){try{const stat=readFileSync(`/proc/${name}/stat`,'utf8');if(!/\) Z /.test(stat)&&readFileSync(`/proc/${name}/environ`,'utf8').split('\0').includes(token))found.push(Number(name))}catch{}}return found;
+}
+async function rescueMarkedProcesses(marker){
+ const scan=()=>{const found=new Map();for(const name of readdirSync('/proc'))if(/^\d+$/.test(name)){try{const pid=Number(name),stat=readFileSync(`/proc/${pid}/stat`,'utf8').split(') ').at(-1).split(' ');if(stat[0]!=='Z'&&readFileSync(`/proc/${pid}/environ`,'utf8').split('\0').includes(marker))found.set(pid,{state:stat[0],start:stat[19]})}catch{}}return found;};
+ const signal=(pid,start,sig)=>{try{const stat=readFileSync(`/proc/${pid}/stat`,'utf8').split(') ').at(-1).split(' ');if(stat[19]===start&&stat[0]!=='Z')process.kill(pid,sig)}catch(error){if(!['ENOENT','ESRCH'].includes(error.code))throw error;}};
+ let stable=0;for(let n=0;n<500&&stable<5;n++){let active=false;for(const [pid,info] of scan())if(!'Tt'.includes(info.state)){signal(pid,info.start,'SIGSTOP');active=true}stable=active?0:stable+1;await wait(10)}
+ const frozen=scan();assert.ok([...frozen.values()].every(info=>'Tt'.includes(info.state)),'marked processes stopped before rescue');
+ for(const [pid,info] of frozen)signal(pid,info.start,'SIGKILL');
+ for(let n=0;n<500;n++){if(scan().size===0)return;await wait(10)}throw Error('marked regression processes survived rescue');
+}
+test('REVIEW-PROVE-RECOVERY-SETUP-FAILURE: failed setup cleans the runner and descendants',{timeout:40000,skip:process.platform!=='linux'},async t=>{
+ const dir=mkdtempSync(join(tmpdir(),'pdd-recovery-failure-')),record=join(dir,'processes.json');t.after(()=>rmSync(dir,{recursive:true,force:true}));
+ const env={...process.env,PDD_RECOVERY_SETUP_FAILURE:record};delete env.NODE_TEST_CONTEXT;
+ const nested=spawn(process.execPath,['--test','--test-name-pattern=^REVIEW-PROVE-RECOVERY:',resolve('test/workflow-prove-review.test.mjs')],{env,stdio:['ignore','pipe','pipe']});let output='';nested.stdout.on('data',s=>output+=s);nested.stderr.on('data',s=>output+=s);
+ const closed=new Promise((resolveResult,reject)=>{nested.on('error',reject);nested.on('close',(code,signal)=>resolveResult({code,signal}))});
+ try{
+  const result=await Promise.race([closed,new Promise(resolveTimeout=>{const timer=setTimeout(()=>resolveTimeout(null),15000);timer.unref()})]);
+  const observed=JSON.parse(readFileSync(record,'utf8'));assert.ok(observed.processes.length>=3,'runner and descendants observed before failure');
+  assert.deepEqual(ownedProcesses(observed.token),[],'runner and every owned descendant stopped');
+  assert.ok(result,'nested fixture exits after cleanup');assert.equal(result.code,1,output);assert.match(output,/invalid-recovery-setup-ref/,'actual Git setup failure retained');
+ }finally{
+  await rescueMarkedProcesses(`PDD_RECOVERY_SETUP_FAILURE=${record}`);
+  await closed;
+ }
+});
 test('REVIEW-PROVE-RECOVERY: next proof recovers only inactive owned snapshots and preserves unrelated registrations', {timeout:20000,skip:process.platform!=='linux'},async t=>{
  const f=fixture(t),{proveRun}=await api();f.put('test/regression.test.mjs',regression);f.commit();const pidFile=join(f.runDir,'recovery.pid');
  const realTemp=join(f.parent,'proof-temp'),aliasTemp=join(f.parent,'proof-temp-alias');mkdirSync(realTemp);symlinkSync(realTemp,aliasTemp,'dir');
  const command=`node -e 'const fs=require("fs");fs.writeFileSync(${JSON.stringify(pidFile+".tmp")},String(process.pid));fs.renameSync(${JSON.stringify(pidFile+".tmp")},${JSON.stringify(pidFile)});setInterval(()=>{},1000)'`;
  const owned=spawnOwned(`import {proveRun} from ${JSON.stringify(modulePath)};await proveRun(${JSON.stringify({ref:'2594',cwd:f.root,test:command,expect:'defect-x'})});`,{env:{...process.env,TMPDIR:aliasTemp}}),{child,ended}=owned;let pid;
- const unrelated=join(f.parent,'pdd-proof-base-unrelated'),missing=join(f.parent,'personal-unmounted');f.git('worktree','add','--detach',unrelated,'HEAD');f.git('worktree','add','--detach',missing,'HEAD');rmSync(missing,{recursive:true,force:true});
- try {for(let n=0;n<200&&!(pid>0);n++){try{pid=Number(readFileSync(pidFile,'utf8'))}catch{}if(!(pid>0))await wait(20)}assert.ok(Number.isInteger(pid)&&pid>0,'child publishes its complete PID');process.kill(child.pid,'SIGKILL');await ended;
+ try {
+ const unrelated=join(f.parent,'pdd-proof-base-unrelated'),missing=join(f.parent,'personal-unmounted');
+ if(process.env.PDD_RECOVERY_SETUP_FAILURE){
+  let token;for(let n=0;n<200&&!token;n++){try{token=readFileSync(`/proc/${child.pid}/environ`,'utf8').split('\0').find(x=>x.startsWith('PDD_PROOF_FIXTURE_OWNER='))}catch{}if(!token)await wait(20)}
+  assert.ok(token,'runner ownership token available');
+  let processes=[];for(let n=0;n<200;n++){processes=ownedProcesses(token);if(processes.length>=3)break;await wait(20)}
+  assert.ok(processes.length>=3,'runner and proof descendants started');
+  writeFileSync(process.env.PDD_RECOVERY_SETUP_FAILURE,JSON.stringify({token,processes}));
+  f.git('worktree','add','--detach',unrelated,'invalid-recovery-setup-ref');
+ }
+ f.git('worktree','add','--detach',unrelated,'HEAD');f.git('worktree','add','--detach',missing,'HEAD');rmSync(missing,{recursive:true,force:true});
+ for(let n=0;n<200&&!(pid>0);n++){try{pid=Number(readFileSync(pidFile,'utf8'))}catch{}if(!(pid>0))await wait(20)}assert.ok(Number.isInteger(pid)&&pid>0,'child publishes its complete PID');process.kill(child.pid,'SIGKILL');await ended;
   const stale=f.git('worktree','list','--porcelain').split('\n').filter(x=>x.startsWith('worktree ')).map(x=>x.slice(9)).filter(x=>![f.root,unrelated,missing].includes(x));assert.equal(stale.length,2);
   await owned.cleanup();
   await proveRun({ref:'2594',cwd:f.root,test:'true',expect:'defect-x'});const registrations=f.git('worktree','list','--porcelain');for(const path of stale){assert.equal(registrations.includes(path),false,'stale ownership recovered');assert.equal(existsSync(path),false)}assert.ok(registrations.includes(unrelated));assert.ok(registrations.includes(missing),'no global prune');assert.ok(existsSync(unrelated));
