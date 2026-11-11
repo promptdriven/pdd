@@ -59,8 +59,9 @@ The block of Harbor Coffee's `place_order` (schemas cut):
  "entries": [{"operation": "place_order", "input_schema": {...}, "result_schema": {...}, "errors": ["unknown-item"]}],
  "calls": [], "resources": [], "limits": {"max_steps": 4, "max_model_calls": 2}, "conventions": []}
 ```
-- `kind` is `full`, `partial` or `native-only`. Without kind, a block means full.
-  Full declares the module's checkable behavior. Partial declares only some operations.
+- Omit `kind` for a full interface. Explicit `kind` is `partial` or `native-only`.
+  A draft with `"kind": "full"` is refused locally at `/kind`; `pdd test --fill-hash` removes it.
+  Approved prompts stay unchanged. Full declares the module's checkable behavior. Partial declares only some operations.
   Native-only requires `reason`: name the native effect that the bound ports in §21 cannot fake.
   It needs status and prose_sha256, but no entries or limits. A checker reviews this reason.
   Approval records it. Checks show `not run: <reason>`; they never count it as passed.
