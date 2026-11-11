@@ -27,8 +27,10 @@ const ALL_SKILLS = ['pdd-prompting', 'pdd-setup', 'pdd-product', 'pdd-graph', ..
 // #2595: the verbatim principle and bounded review repairs need 4 KB only in bug/feature.
 // The six-question independent review brief needs 2.25 KB.
 // #2602 / pdd #2610 needs 1.5 KB for the 1501-byte change.md brief; #3201 (the file-ownership rule) needs 1.6 KB.
-const SKILL_LIMIT = 3072, SKILL_LIMITS = { 'pdd-bug': 4096, 'pdd-feature': 4096 };
-const STEP_LIMIT = 1228, STEP_LIMITS = { 'prompt-story': 1638, review: 2304, change: 1638 };
+// #3248 and #3255 (no Story or prompt for a non-code file; a prompt from the current code first; the pdd-bug evidence
+// for owned code; pdd-bug names pdd-small-change) need 2.1 KB in prompt-story, 2.2 KB in change and 4.25 KB in pdd-bug.
+const SKILL_LIMIT = 3072, SKILL_LIMITS = { 'pdd-bug': 4352, 'pdd-feature': 4096 };
+const STEP_LIMIT = 1228, STEP_LIMITS = { 'prompt-story': 2150, review: 2304, change: 2253 };
 const frontmatter = text => {
   const match = text.match(/^---\n([\s\S]*?)\n---\n/);
   assert.ok(match, 'SKILL.md starts with frontmatter');
