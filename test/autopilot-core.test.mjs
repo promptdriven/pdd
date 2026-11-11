@@ -22,9 +22,9 @@ test('settings: engine switch, defaults and bounded values', () => {
   assert.equal(autopilotEngine({ autopilot: { engine: 'core' } }), 'core');
   assert.equal(autopilotEngine({ autopilot: { engine: 'turbo' } }), 'full');
   assert.deepEqual(coreSettings({ autopilot: { mode: 'auto', engine: 'core' } }), {
-    engine: 'core', mode: 'auto', trust: [], runs: 2, label: null, quietMinutes: 45, ciStuckMinutes: 360, maxJobHours: 24, report: 'draft', runtimeRepo: null, runtimeOwner: null, repairs: 6, testCommand: null });
+    engine: 'core', mode: 'auto', trust: [], runs: 2, label: null, quietMinutes: 45, ciStuckMinutes: 360, maxJobHours: 24, report: 'draft', decisions: 'decide', runtimeRepo: null, runtimeOwner: null, repairs: 6, testCommand: null });
   const custom = coreSettings({ autopilot: { mode: 'auto', engine: 'core', runs: 3, label: 'pdd:autopilot', quietMinutes: 30, report: 'file', repairs: 0, testCommand: 'make check', trust: ['Dana'] } });
-  assert.deepEqual(custom, { engine: 'core', mode: 'auto', trust: ['Dana'], runs: 3, label: 'pdd:autopilot', quietMinutes: 30, ciStuckMinutes: 360, maxJobHours: 24, report: 'file', runtimeRepo: null, runtimeOwner: null, repairs: 0, testCommand: 'make check' });
+  assert.deepEqual(custom, { engine: 'core', mode: 'auto', trust: ['Dana'], runs: 3, label: 'pdd:autopilot', quietMinutes: 30, ciStuckMinutes: 360, maxJobHours: 24, report: 'file', decisions: 'decide', runtimeRepo: null, runtimeOwner: null, repairs: 0, testCommand: 'make check' });
   const invalid = coreSettings({ autopilot: { mode: 'auto', engine: 'core', runs: 0, quietMinutes: -1, report: 'loud', repairs: 1.5, label: '' } });
   assert.deepEqual([invalid.runs, invalid.quietMinutes, invalid.report, invalid.repairs, invalid.label], [2, 45, 'draft', 6, null]);
   assert.equal(coreSettings({ autopilot: { jobTimeoutMinutes: 120 } }).jobTimeoutMinutes, undefined, 'there is no fixed time limit');
@@ -1349,8 +1349,8 @@ test('B1 Runtime could not check: the job ships its PR with "Runtime: not run", 
   w.issue(17); w.issue(18);
   await w.tick();
   const input = w.job(17, 'build').input;
-  assert.match(input, /do not stop and do not invent an interface/); assert.match(input, /a lint refusal/); assert.match(input, /not a safe integer/);
-  assert.match(input, /Only a real Runtime FAIL verdict/); assert.match(input, /"kind":"pdd\|job"/); assert.doesNotMatch(input, /"kind":"runtime\|pdd\|job"/);
+  assert.match(input, /do not stop and do not invent an interface/); assert.match(input, /a refusal that pdd gives no fix for/); assert.match(input, /apply the Number spelling that pdd prints/);
+  assert.doesNotMatch(input, /not a safe integer/, '#3227 fix 5: a fixable refusal is no reason to ship'); assert.match(input, /A FAIL line blocks the merge/); assert.match(input, /"kind":"pdd\|job"/); assert.doesNotMatch(input, /"kind":"runtime\|pdd\|job"/);
   const { pr } = shipNotRun(w, 17); await w.tick();
   w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
   assert.equal(pr.merged, true, 'a not-run Runtime check does not block the merge');
@@ -3320,7 +3320,7 @@ test('Y9 (T04) the engine runs the changed replay files at the head: a failing c
   let { w } = await setup('not-run');
   const run = w.job(17, 'vectors');
   assert.ok(run, 'the engine starts its own replay run');
-  assert.ok(run.args.at(-3).includes(`node --test --test-reporter=tap -- '${run.cwd}/test/workflow-draft-publication.vectors.test.mjs'`), run.args.join(' '));
+  assert.ok(run.args.at(-3).includes(`node --test-reporter=tap -- '${run.cwd}/test/workflow-draft-publication.vectors.test.mjs'`), run.args.join(' '));
   assert.equal(run.env.CI, 'true');
   w.vectorsRun(17, { tests: 36, fail: 1, failed: [{ name: 'N3: merged former draft PR1 retains ordinary saved-base code entry and draft PR2', file: 'test/workflow-draft-publication.vectors.test.mjs' }] }); await w.tick();
   const repair = w.job(17, 'repair');

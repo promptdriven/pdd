@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: e6b19e479f80924e4a5c2966a912212acff345fa0596e7ccbcdc82f91538b42b).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: ff4e6474f46bd641de558918981605c70cd532c0b94165545e16aa7cefd5b17a).
 import {runAutopilotDoctor, resolveAutopilotAgent} from './autopilot-doctor.mjs';
 import {releaseRunClaim, cancelRun, acquireRunLock} from './workflow-runner.mjs';
 import { releaseCheckCapacity } from './test-suite-queue.mjs';
@@ -303,6 +303,8 @@ const machineLabel = state => typeof state?.label === 'string' && state.label.tr
 const machineMode = state => ['auto', 'observe', 'off'].includes(state?.mode) ? state.mode : null;
 // The machine's saved core report mode (pdd autopilot start --report) wins over pdd.json for the core engine.
 const machineReport = state => ['file', 'draft', 'off'].includes(state?.report) ? state.report : null;
+// The machine's saved core decision mode (pdd autopilot start --decisions) wins over pdd.json for the core engine.
+const machineDecisions = state => ['ask', 'decide'].includes(state?.decisions) ? state.decisions : null;
 // The machine's intake mode (pdd autopilot start --intake): shadow writes intake cards; off (the default) writes none.
 const machineIntake = state => intakeMode(state?.intake);
 // A start with no opt-in label (the machine's --label or pdd.json autopilot.label) asks for one and starts nothing.
@@ -327,6 +329,7 @@ async function coreTick(stateFile, state, p, ports) {
   if (machineLabel(state)) core.label = machineLabel(state);
   if (machineMode(state)) core.mode = machineMode(state);
   if (machineReport(state)) core.report = machineReport(state);
+  if (machineDecisions(state)) core.decisions = machineDecisions(state);
   core.intake = machineIntake(state);
   core.labelRequired = true;
   // Card jobs never outlive the core: mode off stops them (a tick that ends here does not reach the core's hook).
@@ -563,6 +566,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
   if (input.mode !== undefined && !['auto', 'observe', 'off'].includes(input.mode)) return { exitCode: 2, message: 'Use --mode auto, --mode observe or --mode off.' };
   if (input.report !== undefined && !['file', 'draft', 'off'].includes(input.report)) return { exitCode: 2, message: 'Use --report file, --report draft or --report off.' };
   if (input.intake !== undefined && !['off', 'shadow'].includes(input.intake)) return { exitCode: 2, message: 'Use --intake off or --intake shadow.' };
+  if (input.decisions !== undefined && !['ask', 'decide'].includes(input.decisions)) return { exitCode: 2, message: 'Use --decisions ask or --decisions decide.' };
   let startSelection, startWarnings = [];
   if (command === 'doctor' || command === 'start') {
     const doctorPorts = typeof ports.doctorPorts === 'function' ? ports.doctorPorts(input,ports) : ports.doctorPorts ?? ports;
@@ -619,7 +623,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
     }
     const previous = read(stateFile);
     state = { ...state, ...previous, cwd: state.cwd, id, stateFile };
-    if (command === 'start') { if (input.label) state.label = input.label.trim(); if (input.mode) state.mode = input.mode; if (input.report) state.report = input.report; if (input.intake) state.intake = input.intake; }
+    if (command === 'start') { if (input.label) state.label = input.label.trim(); if (input.mode) state.mode = input.mode; if (input.report) state.report = input.report; if (input.decisions) state.decisions = input.decisions; if (input.intake) state.intake = input.intake; }
     let initialRevision = previous?.controlRevision ?? null;
     // A new state is a core state: only a state that an older pdd saved can need the move from the full engine.
     if (command === 'start' && !previous) { initialRevision = randomUUID(); state.controlRevision = initialRevision; state.engine = 'core'; state.enabled = false; state.timerInstalled = false; state.nextTick = null; save(stateFile, state); }
@@ -637,8 +641,9 @@ export async function runAutopilotLauncher(input, ports = {}) {
       const label = machineLabel(state) ?? settingsNow.label;
       if (machineMode(state)) settingsNow.mode = machineMode(state);
       if (machineReport(state)) settingsNow.report = machineReport(state);
+      if (machineDecisions(state)) settingsNow.decisions = machineDecisions(state);
       return ok(`Autopilot ${state.enabled ? 'enabled' : 'disabled'}; timer ${timerLine(state, timerActive)}; next tick: ${timerActive && state.nextTick ? new Date(state.nextTick).toISOString() : 'none'}\n`
-        + coreStatus({ state, settings: { ...settingsNow, label }, sources: { label: machineLabel(state) ? 'machine' : label ? 'pdd.json' : null, mode: machineMode(state) ? 'machine' : 'pdd.json', report: machineReport(state) ? 'machine' : 'pdd.json' } },
+        + coreStatus({ state, settings: { ...settingsNow, label }, sources: { label: machineLabel(state) ? 'machine' : label ? 'pdd.json' : null, mode: machineMode(state) ? 'machine' : 'pdd.json', report: machineReport(state) ? 'machine' : 'pdd.json', decisions: machineDecisions(state) ? 'machine' : 'pdd.json' } },
           { root: coreRoot(stateFile), reportRoot: coreReports(ports, p.env), now: p.now })
         + (label ? '' : '\nNo opt-in label: Autopilot takes no issue. Run pdd autopilot start --label pdd:autopilot, then mark issues with pdd autopilot add N.')
         + alertLine(state, p, ports)

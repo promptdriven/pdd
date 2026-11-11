@@ -9,7 +9,7 @@ below, and the one-time [move from the removed full engine](#the-move-from-the-f
 merge, quota-reset or interactive route of its own. Preserve existing setup, workflow and interpreter behavior.
 
 `runAutopilotLauncher` accepts command doctor, start, stop, status, add, release, report or intake, cwd, packageRoot,
-env, issues (argv operands), and optional runs, checks, engine, label, mode, report, intake, all and json. Return
+env, issues (argv operands), and optional runs, checks, engine, label, mode, report, decisions, intake, all and json. Return
 `{exitCode, message}`; the CLI owns streams. Outside programs, timer installation, clock and state I/O are injectable
 ports; native defaults implement them on macOS and Linux. Tests may inject `checkCapacityPorts` for the shared queue.
 
@@ -39,9 +39,12 @@ move. The core state folder is the state file path without `.json` plus `-core`;
 `start --label NAME` saves `state.label`, which replaces the core's `label` setting. `start --mode auto|observe|off`
 saves `state.mode`, which replaces the core's mode in the tick, the start's off check and status (source `this
 machine`); it never writes `pdd.json` (unlike `pdd autopilot observe`). `start --report file|draft|off` saves
-`state.report` the same way. `start --intake off|shadow` saves `state.intake`; the core tick gets `intake` from it
+`state.report` the same way. `start --decisions ask|decide` saves `state.decisions` the same way: it replaces the
+core's `decisions` in the tick and status (`decisions MODE (this machine)`). `start --intake off|shadow` saves
+`state.intake`; the core tick gets `intake` from it
 (`intakeMode` of the [intake cards](autopilot-intake.prompt.md); off when none is saved). A blank label, or another
-value of `--mode`, `--report` or `--intake`, returns exit code 2 with its usage line before any effect. Optional
+value of `--mode`, `--report`, `--decisions` (`Use --decisions ask or --decisions decide.`) or `--intake`, returns exit
+code 2 with its usage line before any effect. Optional
 `--runs` and `--checks` are positive safe integers with no product maximum; save explicit values, and remove them when
 a start omits them.
 

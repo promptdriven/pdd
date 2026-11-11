@@ -31,6 +31,7 @@ string `core`; any other value, or none, is `full`.
 | `ciStuckMinutes` | positive safe integer, default 360: how long CI may stay pending with no change; at least 3 timer ticks |
 | `maxJobHours` | positive safe integer, default 24: the floor of the backstop (see the process rule); no value turns it off |
 | `report` | `file`, `draft` or `off`, default `draft`: nothing is posted unless the operator chooses `file` |
+| `decisions` | `ask` or `decide`, default `decide` (T10, for the trial on test repositories; the release default comes later): `ask` asks a person ONE question only for a big decision; `decide` never asks, and every choice (big ones too) is listed in the PR |
 | `runtimeRepo` | `autopilot.reports.runtimeRepo` when it is `OWNER/NAME` (the Runtime report repository), else `null` |
 | `runtimeOwner` | `autopilot.reports.runtimeOwner` when it is a GitHub login (letters, digits and single inner hyphens, at most 39 characters), else `null`: the assignee of a Runtime report in `runtimeRepo` |
 | `repairs` | `autopilot.maxRepairs` (the old key `autopilot.repairs` is an alias): safe integer of at least 0, default 6, the safety cap of repairs for one job |
@@ -329,8 +330,16 @@ end as `no-result`. Every job kind follows the same rules, in every machine stat
    in", "please run /login" or "please log in", "invalid API key" or
    `authentication_error`, or a status shape for 401, 429 or any 5xx ("API Error: 529",
    "HTTP 501 Not Implemented", "HTTP 520", "status 429", "401 Unauthorized", "503 Service
-   Unavailable"). An
-   ordinary error line (for example "login test failed") keeps its strike. A counted end of an issue with 2 strikes in the last 7 days is a normal
+   Unavailable"). A terminal error event (the Codex error or `turn.failed`, the Claude
+   `result` with `is_error`) also counts with a clear account or service refusal shape:
+   "out of credits", "SERVICE is at capacity" or "SERVICE overloaded" (SERVICE one of
+   service, server, model, provider, API), a message that starts with "sign-in required",
+   "login required" or "authentication required", or "quota exceeded". A message that
+   reads like a test diagnostic (it names a test, an assertion, an expected value, a
+   fixture or a spec) is never a service problem, in any shape. An ordinary error line,
+   plain or in an event (for example "login test failed", "rate limit test failed:
+   expected 3 requests, got 2" or "quota of 3 items exceeded in the fixture"), keeps its
+   strike. A counted end of an issue with 2 strikes in the last 7 days is a normal
    END: one comment and `pdd:stuck`. Nothing else marks an issue stuck for no result.
    Each `ended` line has `reset: true`: the cooldown and the strikes read only the
    issue's lines after its latest reset, so a person's retry starts fresh.
@@ -367,15 +376,29 @@ any other pdd (for example an older global install).
   author, and these rules: choose pdd-small-change, pdd-bug or pdd-feature, but make
   ONE PR with prompt, Story, tests and code; this is not a `pdd workflow run`, so no
   `pdd workflow` command, no Herdr, no person wait and no `steps/autopilot.md`. Rule 1
-  also carries the one-question rule of `steps/autopilot.md` (T10): when the issue does
-  not settle a product, contract or naming choice (options that the issue or a linked
-  open issue leaves open, a change to a documented behavior that the issue does not ask
-  for, a new name or format that the issue does not give), the job asks ONE question
-  (the `needs-person` result, which names the options) and opens no PR; a vague issue
-  is not a choice for the job; a clear issue, or a person's answer in the brief, is
-  built. The brief lists the open issues that the issue names by number and the titles
-  of up to 20 other open issues (not PRs, not this issue), so the job can see an open
-  decision;
+  also carries the choice rule (T10, Serhan: a person is asked only for the big
+  decisions of the repository, never for small things). A choice is **big** only when
+  all of these are true: (a) the issue and the person's answers in the brief do not
+  settle it; (b) it has 2 or more reasonable answers with different results that users
+  see; (c) it is hard to undo or others depend on it: a public contract (a command,
+  option, config key, API, output or file format, stored data), a change or removal of
+  behavior that users rely on, or a product direction. An open trusted issue that asks
+  the same question (for example an open decision issue) also makes it big. Every other
+  choice is **small**: internal names, code structure, tests, message wording, docs
+  wording, small defaults that are easy to change. The job decides each small choice
+  itself and lists it in the PR body under `Choices Autopilot made:`, one line each with
+  its reason (`- CHOICE (REASON)`). With `decisions` `ask`, a big choice is ONE question
+  and no PR: the `needs-person` result with `question` (one plain question), `options`
+  (2 or 3 answers) and `recommended` (the letter of the option the job recommends), so a
+  person can answer with one letter; at most one question per issue. With `decisions`
+  `decide` (the default), the job never asks about a choice: it decides big choices
+  too and lists them first under `Choices Autopilot made:`, each marked `(big)`. A vague
+  issue is never a reason to ask about a small choice; a clear issue, or a person's
+  answer in the brief, is built. The brief lists the open issues that the issue names by number and the titles
+  of up to 20 other open issues (not PRs, not this issue, only by trusted authors:
+  `ports.trusted(row)`, read once per login and tick and shared with the ready rule; a
+  failed read is not trusted and warns once per login and tick), so the
+  job can see an open decision;
   **the path from file ownership** (debate A, the exact text of A-VERDICT section 6.1):
   the brief has the owner table of the job worktree (`ownerTable`, below; up to 400
   owned files), and the rules say: a file is owned when pdd-bindings.json, a
@@ -392,15 +415,28 @@ any other pdd (for example an older global install).
   check; one `Path: <a|b|c|d|e> — <files> — <owner or unowned> — <prompt changed | quote
   file:line | no contract change | new prompt> — Test: <file | done check>` line per
   path in the PR body; prompt and code may share a commit; never rewrite history;
-  focused tests, with the full test command named; when a prompt
-  changed, run `pdd test` for the changed Stories and put exactly one `Runtime: PASS`,
-  `Runtime: FAIL (…)` or `Runtime: not run (…)` line in the PR body. **Only a real
-  Runtime FAIL verdict is a failure** (fix the code until it passes). When Runtime
-  could not check (a lint refusal, no interface or a binding refusal, a scenario limit
-  such as a value that is not a safe integer, no verdict, an interpreter error), the
-  job does not stop and does not invent an interface: it covers the case with native
-  tests, ships the PR with `Runtime: not run (EXACT REASON)` and puts the reason and
-  the tool error in the result's `runtime` with kind `runtime`. One `Evidence:` line
+  focused tests, with the full test command named; the Runtime rule (#3227 fix 5, the
+  words of RUNBOOK §15 "Autopilot core jobs"): changed means against the base
+  (`git diff --name-only origin/BASE...HEAD`, never since the previous PR head; a Story
+  or prompt that a base merge brought in is not changed); commit every change, then run
+  `pdd test` for each changed Story and write one `Runtime:` line for each changed Story,
+  the verdict first and the Story in the parentheses: `Runtime: PASS (STORY, N/N
+  checks)`, `Runtime: FAIL (STORY, N of M checks failed: STEPS)` or `Runtime: not run
+  (STORY: REASON)` (STORY the Story file path as `git diff` shows it); a single line with
+  no Story is valid only when the PR changes one Story or none; two lines for the same
+  Story are red; a PASS of a Story that the PR does not change never counts; a FAIL line
+  blocks the merge, and a failed check is a FAIL also when its batch has no verdict.
+  `not run` is only for a cause that this PR cannot fix: a native-only prompt, a Story
+  with no Runtime test, no verdict with no failed step, or a refusal that pdd gives no
+  fix for; a refusal with a fix from pdd (for example a whole number outside the
+  interpreter's range: apply the Number spelling that pdd prints) is this PR's work. The
+  job does not wait for maintenance: pdd has sent nothing yet, so the job stops pdd and
+  writes `Runtime: not run (STORY: maintenance until HH:MM UTC)` with the end time that
+  pdd printed (the engine sends that check itself when maintenance ends); it never sends
+  a check again itself and never cuts short a check that pdd has sent. When Runtime could
+  not check, the job does not stop and does not invent an interface: it covers the case
+  with native tests, ships the PR with the not-run line and puts the reason and the tool
+  error in the result's `runtime` with kind `runtime`. One `Evidence:` line
   in the PR body and the same text as the result's `evidence` (below). No review
   verdict or review claim (for example "Review: no must-fix") in the PR body or a
   comment: only the core's fresh reviewer gives one. **Approval (auto and observe
@@ -444,7 +480,11 @@ any other pdd (for example an older global install).
   with the PR's Runtime line (PASS or not run).
 - **Repair** (same worktree and branch): the red findings, the job log folder, then
   the build rules; push to the same branch, no new PR, and update the `Runtime:` and
-  `Evidence:` lines when they change.
+  `Evidence:` lines when they change, with "changed" against `origin/BASE...HEAD`. After
+  a merge from the base, the repair and the conflict update check that the fix is still
+  needed (#3227 fix 5): the PR's changed tests run on the new merge base in a throwaway
+  worktree; when they pass there too, the base holds the fix, and the PR keeps only what
+  the base does not hold and says so in its body.
 - **Review** (in `worktrees/N-review`, a detached checkout of the head): a fresh agent
   that did not write the change. It gets the base owner table of the PR's changed files
   and the R5 hints (below), and checks the issue fit; (2) Path and (3) Tests with the
@@ -455,24 +495,35 @@ any other pdd (for example an older global install).
   unowned file of the base, owned code that disagrees with its prompt; never a new
   prompt for an unowned file; never commit order; a missing test is a must-fix only
   with the surface and the result named; no test that only copies a value from the
-  diff); an honest Runtime line and no unrelated or unsafe change; and (6) **no choice
-  that the issue did not make (T10)**: a choice between options that the issue or a
-  linked open issue leaves open, a change to a documented behavior (a prompt, a Story or
-  the docs) that the issue does not ask for, or a new name or format that the issue does
-  not give, is a P2 must-fix that starts with `P2 decision:`, and the result's `question`
-  is the one question for a person (it names the options). The brief has the linked open
-  issues: each open issue (not a PR, not this issue, from the tick's issue list) that the
-  issue title, the issue body or the PR body names by number (`#N`, `REPO#N` or its URL),
-  or whose title or body names a file that the PR changes (the path, or the file name of
-  a changed path), at most 5, each body cut to 2,000 characters; or "(none)". A Runtime FAIL line in the PR body means a FAIL verdict. It writes no files and makes no GitHub write. Its
-  result is `{verdict: PASS|FAIL, head, summary, mustFix[], question?}`. **A decision is a
-  question, not a repair:** when a blocking item of a FAIL starts with `P2 decision:`, the
-  merge check ends the job as **needs a person** (below) with that one question (the
+  diff); an honest Runtime line and no unrelated or unsafe change; and (6) **the choices
+  (T10)**: every choice that the issue did not settle is listed under `Choices Autopilot
+  made:` with its reason; a missing or wrong line is a P2 must-fix (fix the list), never a
+  decision item. A small choice (rule 1) is never a decision item. With `decisions`
+  `ask`, a big choice (rule 1: all of a, b and c, or an open trusted issue that asks the
+  same question) that the job made instead of asking is a P2 must-fix with the word
+  `decision:` after its severity or its place (`P2 decision: …` or `P2 FILE:LINE decision:
+  …`), and the result's `question`, `options` (2 or 3) and `recommended` (a letter) are
+  the one question for a person. With `decisions` `decide`, the brief has no decision
+  item: the reviewer only checks the list (a big choice is listed and marked `(big)`). A person's
+  answer to an earlier question is in the brief (the same answer text as the build), so a
+  settled choice is not asked again. The brief has the linked open issues: each open
+  issue (not a PR, not this issue, only by trusted authors, from the tick's issue list)
+  that the issue title, the issue body or the PR body names by number (`#N`, `REPO#N` or
+  its URL), or whose title or body names a file that the PR changes by its full path, at
+  most 5, each body cut to 2,000 characters; or "(none)". A Runtime FAIL line in the PR body means a FAIL verdict. It writes no files and makes no GitHub write. Its
+  result is `{verdict: PASS|FAIL, head, summary, mustFix[], question?, options?,
+  recommended?}`. **A decision is a question, not a repair (only with `decisions`
+  `ask`):** when a blocking item of a FAIL is a decision item (P1 or P2, then the word
+  `decision:` within its first 200 characters), the merge check ends the job as **needs
+  a person** (below), in auto and in observe mode (a question is not a merge; observe
+  mode only leaves out the merge), with that one question (the
   reviewer's `question`, else "The review found a choice that issue #N did not make: ITEM.
   Which option do you want?"), not a repair round, also when other items exist (the
   answer can change the whole change; the next build reads the answer and the review
   runs again). The open PR gets one note (`<!-- pdd:autopilot-core:needs-decision-pr:P -->`):
-  it waits for the answer and does not merge; the next build closes it as usual. Each must-fix item starts
+  it waits for the answer and does not merge; the next build closes it as usual. With
+  `decisions` `decide`, a decision item is an ordinary must-fix (a repair), never a
+  question. Each must-fix item starts
   with its severity and place: `P1 file:line …` (wrong behavior or unsafe), `P2 file:line …`
   (fix before the merge) or `P3 file:line …` (a follow-up); a PASS lists only P3 items
   (the scoped check is asked the same). **Fail closed:** an item is a follow-up only when
@@ -517,15 +568,20 @@ digits (an optional `#`); it becomes an integer above 0. The head is 40 hex digi
 any case and is saved in lower case. Any other PR value is no result. A `failed`
 result ends with the agent's cause; anything else ends with `no-result`.
 
-**Needs a person.** A result `{"outcome": "needs-person", "question"}` with a nonblank
-question counts as a job result (`produced`) and goes through the resumable END
-steps with a question instead of a cause: read the claim again before each write
-(hand over when another machine owns it); post one issue comment `Autopilot needs a
-decision from a person to go on with this issue:`, the question as a `> ` quote line,
-and "Please answer in a comment, then remove the `pdd:needs-decision` label. The next
-Autopilot job reads this question and your answer.", with the marker
-`<!-- pdd:autopilot-core:question:N:JOB-ID -->` (found again after an uncertain post);
-add `pdd:needs-decision` (never `pdd:stuck`); delete this machine's claim comment and
+**Needs a person.** A result `{"outcome": "needs-person", "question", "options"?,
+"recommended"?}` with a nonblank question counts as a job result (`produced`) and goes
+through the resumable END steps with a question instead of a cause: read the claim again
+before each write (hand over when another machine owns it); post one issue comment
+`Autopilot needs a decision from a person to go on with this issue:`, the question as
+`> ` quote lines, and "Please answer in a comment, then remove the `pdd:needs-decision`
+label. The next Autopilot job reads this question and your answer.", with the marker
+`<!-- pdd:autopilot-core:question:N:JOB-ID -->` (found again after an uncertain post). The question text
+(T10 format) is the plain question on one line, then, with 2 or 3 nonblank options,
+one line per option `A) OPTION`, `B) …`, `C) …`, the recommended one ending with
+` (recommended)` (`recommended` is a letter, a 1-based number or the option text), and
+the line `Reply with one letter, for example: X` (X the recommended letter, else A);
+with fewer than 2 or more than 3 options the question goes alone. The same format is
+used for a review decision. Then add `pdd:needs-decision` (never `pdd:stuck`); delete this machine's claim comment and
 remove `pdd:working`; clean up locally with outcome `needs-person`. The slot is free.
 The person answers and removes the label; **the label removal is the signal**, a
 comment alone changes nothing. When the core claims an issue with comments, it reads
@@ -568,16 +624,26 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
 3. Red findings. The Runtime gate is an allowlist (fail closed). A Runtime line is a
    PR body line that, after heading, list, quote, table, bold and code marks go,
    starts with "Runtime" or holds "Runtime:". Its value, after leading signs such as
-   an emoji, must start with PASS (or PASSED) or "not run", in any case; any other
-   value is red, and the repair prompt quotes the line. Lines that disagree (PASS and
-   not run) are red. The result's `runtime.state` (lower case, spaces as `-`) must be
-   absent, `pass` or `not-run`, and must agree with the body; else red. A body with no
+   an emoji, names its Story in the parentheses after the verdict (`Runtime: PASS (STORY,
+   …)`, the form of the briefs and the RUNBOOK); a Story path first (`Runtime: STORY
+   PASS (…)`) is read too. Then the verdict must start with PASS (or PASSED) or "not run", in any
+   case; any other value is red, and the repair prompt quotes the line. **Per-Story
+   lines (#3227):** with more than one Runtime line, each line names its Story and no
+   Story has two lines (else red); different Stories may have different verdicts. A
+   single line with no Story is accepted only when the change has at most one changed
+   Story (else red: one line per changed Story). With Story lines, each changed Story
+   needs its own line, and a PASS line of a Story that the PR does not change is red. The result's `runtime.state` (lower case, spaces as `-`) must be
+   absent, `pass` or `not-run`, and must agree with the body when all lines have one
+   verdict; else red. A body with no
    Runtime line is red when the change has a `*.prompt.md` (Git decides, also when the
    result says `"promptChanged": false`); with no changed prompt it is red unless the
    result says `"promptChanged": false`. **A Runtime pass must be true (T01):** every
    positive Runtime claim is checked: a "Runtime: PASS" line, an Evidence part
    `runtime=pass` (of the PR body, else of the result) and a result `runtime.state`
-   `pass`. A claim counts only when the saved Runtime checks cover the change at the
+   `pass`. With Story lines, only the Stories of PASS lines need the cover below, and a
+   changed prompt that no passing check reaches is fine when it is in the upload of the
+   tests of a Story with a not-run line (that line says the prompt was not checked). A
+   claim counts only when the saved Runtime checks cover the change at the
    agent's exact head (`agentHead`, the head of the last build, repair or conflict
    result). The read is saved as `coverage` for that head; a new agent result and a
    repair clear it (and `vectors`), because `pdd test` saves its checks outside the
@@ -590,21 +656,25 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    the job worktree (`root`) and compares their source with the clean checkout
    (`comparisonRoot`, with `withTests`, so each row names the tests that its check ran).
    So an uncommitted or untracked file of the job worktree never counts as the head. A
-   Story is changed when its Story file or one of its test files changed. For each Story,
-   the latest check of exactly this source (`current`, the largest `at`) decides: it must
-   pass (every criterion passed). A tie with a check that did not pass, or a newer failed
-   or no-verdict check, is not a pass. Each changed Story needs such a pass, and each
-   changed test of a Story must be one of the tests of that deciding check (a pass of
-   other tests of the Story does not check it). Each changed `*.prompt.md` must be in the
-   upload of a passing deciding check: `captureSource` of exactly that check's tests at
-   the clean checkout (its `files`, what the check sent), never the footprint of other,
-   unchecked tests of the Story; each Story in its own error boundary (changed Stories
+   Story is changed when its Story file or one of its test files changed. Each test of a
+   Story is its own scope: for each test, the latest check of exactly this source that
+   ran it (`current`, the largest `at`) decides; a tie with a check that did not pass, or
+   a newer failed or no-verdict check, is not a pass. So independent checks of different
+   tests of one Story combine (two big tests that cannot go in one upload are checked
+   apart), and no check lends its pass to a test that it did not run. A Story passes when
+   every scope that a current check has passes. Each changed Story needs such a pass, and
+   each changed test must have a passing deciding check of its own; a changed Story file is
+   in the upload of every test of that Story, so each test of a changed Story needs its
+   own passing deciding check too (Claude round 4). Each changed
+   `*.prompt.md` must be in the upload of a passing deciding check: `captureSource` of
+   exactly that check's tests at the clean checkout (its `files`, what the check sent),
+   never the footprint of other, unchecked tests of the Story; each Story in its own error boundary (changed Stories
    first; stop when every changed prompt is reached), so a broken unrelated Story never
    hides a healthy one, and unchecked siblings never make the selection too big. Else red: "CLAIM, but
    the saved pdd test checks at head H do not cover FILES (the saved check of S is for
    another source: a stale Runtime batch, for example an older commit or files that are
-   not committed; the latest check of S at this source did not pass; the latest check of S did not run
-   T; the source of S
+   not committed; the latest check of S at this source did not pass; no check of S at this
+   source ran T; the source of S
    could not be read: CAUSE). A PASS of other Stories does not count. Run pdd test for
    the Stories of these changes at this head, or write "Runtime: not run (REASON)" (and
    runtime=not-run) when they have no Runtime check (for example a native-only prompt or
@@ -673,49 +743,63 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    call). Discovery is in NUL mode (`-z`), so every name stays exact. Only node:test
    files run: a `.js`, `.mjs` or `.cjs` file whose text at the head holds `node:test`, or
    that imports by a relative path (two levels at most, inside the checkout) a file that
-   holds it (pdd's replay helpers), and
-   whose name has no glob character (`* ? [ ] { } ( ) ! \`: node --test reads such a name
-   as a pattern). Each other file is "Not run by Autopilot (REASON)" in the note. It
+   holds it (pdd's replay helpers), and whose absolute path in the checkout has no
+   backslash (Node refuses such a module path). Each other file is "Not run by Autopilot (REASON)" in the note. It
    still counts for its kind: a kind with such a file cannot substantiate a positive
    claim (below), for a mixed set too. More than 400 files, or a command over 100,000 bytes, runs
    nothing: "not run (too many replay and formal files: N; the limit is 400)", never a
    part of the set. The run is one bash command through the machine's suite queue in a
    clean checkout (`worktrees/N-vectors`, the suite's dependency install, `CI=true`),
-   watched by the process rule (role `vectors`, like the suite): `set -o pipefail`, then
-   for each kind that has files, `node --test --test-reporter=tap -- 'ABSOLUTE-FILE' …
-   2>&1 | awk …` and the marker line `# pdd-autopilot: KIND exit CODE` (KIND `vectors` or
-   `formal`), so each kind has its own counts. Each file goes as its absolute path in the
-   checkout (node --test reads a `./-…` operand wrongly; a checkout path with a glob
-   character uses `./FILE`). The awk filter bounds the log: after 4 MB of output it
-   passes the top-level TAP summary, plan and version lines, and TAP result and location
-   lines cut to 300 characters for 1 MB more, and once `# pdd-autopilot: output cut
-   after 4194304 bytes`; so the log stays near 5 MB, and the counts stay true. The engine reads the log in 1 MB
-   parts, line by line (bounded memory), and keeps for each kind the last TAP summary
-   before its marker (`tests`, `pass`, `fail`, `skipped`, `todo`), the exit code, and at
-   most 20 failing tests with their files. A runner line counts only when the line
+   watched by the process rule (role `vectors`, like the suite). **Per-file accounting
+   (Codex round 4):** each file runs alone, directly as a script with the TAP reporter
+   (`node --test-reporter=tap -- 'ABSOLUTE-FILE' 2>&1`; no glob reads the path, so
+   brackets, braces such as `{a,b}`, stars, a leading `-` and such characters in the
+   checkout path all work, checked on Node 22.23.2), then the marker line `# pdd-autopilot-
+   NONCE: KIND I exit CODE` (NONCE a random hex per run, KIND `vectors` or `formal`, I the
+   file's index in its kind). All files of the run go through one awk filter, so the
+   bound is for the whole log: after 4 MB of output it passes the marker lines, TAP
+   result and location lines cut to 300 characters for 1 MB more, and once `# pdd-
+   autopilot: output cut after 4194304 bytes`; it prints no other line, and keeps only
+   the last top-level TAP summary line of each key and the last plan line of the current
+   file, which it prints just before that file's marker. So the log stays near 5 MB, also
+   with many summary-shaped lines, and each file's counts stay true. The engine reads the
+   log in 1 MB parts, line by line (bounded memory), and keeps for each file the last TAP
+   summary before its marker (`tests`, `pass`, `fail`, `skipped`, `todo`), the exit code,
+   and at most 20 failing tests of its kind with their files. A file passes with exit 0,
+   at least one test and 0 failures; it fails with a non-zero exit or a failure (also a
+   non-zero exit with no summary: the file did not load); a file with exit 0 and no test
+   has no result. A kind is the sum of its files; a kind with a failed file fails, and a
+   kind with a file with no result cannot substantiate a positive claim. A positive
+   aggregate never hides a missing file. A runner line counts only when the line
    starts with the phrase (the queue and the install print them so; a failing test's
    TAP text, which quotes such a phrase in an indented YAML line, is a test failure); the
    suite's runner lines follow the same rule. A kind with exit 0 and 0 failures passes; a
    non-zero exit or a failure fails (a `# fail 0` with a non-zero exit fails too). A
-   runner failure (a missing marker or summary, a run that died or was killed or stopped
-   by T1, exit 86 or 127, a queue runner line) starts again in the same checkout, at most
-   twice; then the run is "not run (REASON)". The claims against the run, for each kind:
+   runner failure (a missing file marker, a run that died or was killed or stopped by T1,
+   exit 86 or 127, a queue runner line) starts again in the same checkout, at most twice;
+   then the run is "not run (REASON)", which names the files with no result. The claims against the run, for each kind:
    - A failure is red: "Autopilot ran the KIND tests that this change touches (FILES) at
      head H: F of N failed: TEST (FILE). The Evidence line says KIND=CLAIM."
-   - A pass with no file of the kind left out: a `vectors` claim must be `pass`, with the
-     same counts when it gives counts (and the run skipped no test); a `formal` claim must
-     be `proved` or `bounded`. Else red (the claim is not true), with the true value to
-     write.
-   - Not run, or a file of the kind that the engine does not run: a positive claim
-     (`vectors=pass`, `formal=proved` or `bounded`) is red: "… Autopilot could not check
-     it: REASON. Fix the cause, or write KIND=not-run." A non-positive claim is fine. The
-     engine's runner is not the issue: this red alone never ends a healthy job. It is red
-     at most once per job and kind (`notRunReds`), and never when no repair is left;
-     after that, the claim stays unchecked: the merge note has `- Not checked by
-     Autopilot: the PR's claim KIND=… (REASON)`, and one `pdd` report (`autopilot-core`,
-     code `replay-not-run`, `shipped: true`) goes to the report owner, once per job.
+   - A pass with no file of the kind left out and no skipped or todo test: a `vectors`
+     claim must be `pass`, with the same counts when it gives counts; a `formal` claim
+     must be `proved` or `bounded`. Else red (the claim is not true), with the true value
+     to write.
+   - Not run, a file of the kind that the engine does not run, or a skipped or todo test
+     (a skipped obligation never supports a pass or a proof; an all-skipped formal run is
+     not proved): a positive claim (`vectors=pass`, `formal=proved` or `bounded`) is red:
+     "… Autopilot could not check it: REASON. Fix the cause, or write KIND=not-run." A
+     non-positive claim is fine. The engine's runner is not the issue: this red alone
+     never ends a healthy job. It is red at most once per job and kind (`notRunReds`),
+     and never when no repair is left. After that the engine never repeats the claim: it
+     writes that kind itself as `KIND=not-run (Autopilot could not check: REASON)` in the
+     Evidence line of the merge or would-merge note and in the history line (the job's
+     receipts), so metrics count it as not run, never as pass, and one `pdd` report
+     (`autopilot-core`, code `replay-not-run`, `shipped: true`) goes to the report owner,
+     once per job. A later run that checks the kind clears this (`unchecked`), and so does
+     a later head that has no file of that kind.
    The merge note has one line for each kind with files: `- Replay tests (Autopilot's
-   run at H): STATE (P/N): FILES` and `- Formal tests (…)`, `- Not run by Autopilot
+   run at H): STATE (P/N): FILE STATE (P/N), …` (each file with its own result, at most
+   20, then "and N more") and `- Formal tests (…)`, `- Not run by Autopilot
    (REASON): FILES` for other runners, or `- Replay and formal tests (Autopilot's run):
    none changed`.
 4. Any red finding: stop the other checks. The **repair budget** (option B): repairs go on
@@ -926,14 +1010,16 @@ with the machine id.
 
 ## Machine settings
 
-`state.label` (saved by `start --label`) and `state.mode` (saved by `start --mode`)
-win over `pdd.json` for this repository on this machine. The launcher applies them;
-`coreStatus` takes `sources: {engine, label, mode, report}` (`machine` or `pdd.json`) and
-names the source: `engine core (this machine: pdd autopilot start --engine core)` or
-`engine core (pdd.json autopilot.engine)` when `engine` is given (the launcher gives none, so the line says
-`engine core`), `only issues with LABEL (this machine)`
-or `(pdd.json)`, `mode M (this machine)` and `reports R (this machine)`; mode
-`observe` adds `(every check, no merge)`.
+`state.label` (saved by `start --label`), `state.mode` (saved by `start --mode`) and
+`state.decisions` (saved by `start --decisions`) win over `pdd.json` for this repository
+on this machine. The launcher applies them; `coreStatus` takes `sources: {engine, label,
+mode, report, decisions}` (`machine` or `pdd.json`) and names the source: `engine core
+(this machine: pdd autopilot start --engine core)` or `engine core (pdd.json
+autopilot.engine)` when `engine` is given (the launcher gives none, so the line says
+`engine core`), `only issues with LABEL (this machine)` or `(pdd.json)`, `mode M
+(this machine)`, `reports R (this machine)` and `decisions D (this machine)` (the Jobs
+line has `; decisions D` after the reports); mode `observe` adds `(every check, no
+merge)`.
 
 ## Ports
 
