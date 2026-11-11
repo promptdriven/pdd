@@ -30,5 +30,5 @@ Native cases: [simulation selection](../test/simulate-kind.test.mjs) and the
 `2760` Story-gate case in [workflow runner](../test/workflow-runner.test.mjs).
 These use synthetic repositories and fake transport with injected shell,
 browser and server-observation ports. They make no model or interpreter calls.
-Runtime check: NOT RUN; this task authorizes Node regressions only. Actual
-interactive shell, browser display and live interpreter behavior remain unproved.
+These native cases are separate from hosted smoke checks. A native pass alone
+does not establish interactive shell use, browser rendering or live AI execution.
