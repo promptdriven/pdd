@@ -3409,10 +3409,11 @@ async function saveGateApproval(run, area, record, edits, p, snapshot = run.gate
   try {
     for (const edit of edits) { changed.push(edit); fs.writeFileSync(join(run.root, edit.path), edit.next); }
     await recordPromptApproval({ ...await promptApprovalContext(run, p), evidence }, { ...p, afterApprovalLock: authority?.afterLock,
-      beforeApprovalCommit: () => { p.inspectProgress?.(); authority?.beforeCommit(); } });
+      beforeApprovalCommit: () => { p.guardApprovalCommit?.(); p.inspectProgress?.(); authority?.beforeCommit(); } });
   } catch (error) {
     const left = [];
     for (const edit of changed.reverse()) { try { fs.writeFileSync(join(run.root, edit.path), edit.text); } catch { left.push(edit.path); } }
+    if (!left.length && error?.code === 'workflow_progress_refused') throw error;
     throw Error(`${error.message}${left.length ? ` Rollback failed for: ${left.join(', ')}.` : ''}`);
   }
   if (storyApprovalGate(run,area) && await storyContract(run,p)!==run.gate?.storyContract) throw Error('The Story contract changed before its decision. Show the Story gate again.');
@@ -3451,7 +3452,17 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
   const askCode = area.then === 'ask-code', beforePr = run.gate?.kind === 'approve-pr';
   if (ended(run) && !(askCode && run.gate?.kind === 'ask-code')) return fail(`The run for ${run.repo}#${run.number} is ${run.state}. There is nothing to approve.`);
   if (area.gate === 'pr' && !askCode && !beforePr) return fail(`Nothing to approve for #${run.number}: the ${area.name} area ends with ${prLabel(run, area)}, which pdd opens after its last step.${prOf(run, area.name) ? ` ${prLabel(run, area) === 'the PR' ? 'PR' : prLabel(run, area)}: ${prOf(run, area.name).url}` : ''}`);
-  const approvalRecorded=protectProgress(run,p,{approval:true, expectState: latest => { const stale = expectedState(latest, {expectGate, expectStep}); if (stale) throw Object.assign(Error(stale.message), {code:'workflow_progress_refused', result:stale}); }});
+  const clearApprovalGuard=protectProgress(run,p,{approval:true, expectState: latest => { const stale = expectedState(latest, {expectGate, expectStep}); if (stale) throw Object.assign(Error(stale.message), {code:'workflow_progress_refused', result:stale}); }});
+  let releaseApprovalOwnership;
+  const originalAcquire = p.acquireRunOwnership;
+  const releaseApproval = () => { releaseApprovalOwnership?.(); releaseApprovalOwnership = undefined; p.acquireRunOwnership = originalAcquire; };
+  const approvalRecorded = () => { clearApprovalGuard(); releaseApproval(); };
+  p.guardApprovalCommit = () => {
+    if (!releaseApprovalOwnership) {
+      releaseApprovalOwnership = acquireOrdinaryRunOwnership(run.runDir, {...p, acquireRunOwnership:originalAcquire});
+      p.acquireRunOwnership = directory => directory === run.runDir ? () => {} : acquireOrdinaryRunOwnership(directory, {...p, acquireRunOwnership:originalAcquire});
+    }
+  };
   const invocationAt=p.now();
   const missing = missingHome(run, p.env);
   if (missing) return fail(missing);
@@ -3693,7 +3704,7 @@ ${approvalGuide(run)}`, p, true);
   return done([...cleanup.warnings, ...carried, ...finalNotices, `Approved the ${area.name} area of ${label}.${said}${based}`,
     `Started area ${run.area + 1} of ${run.areas.length}: ${next.name} (${next.steps.join(', ')}) in a new chat: Herdr session pdd, tab "${chat.label}".`,
     `Watch it: pdd workflow open ${run.number}`, ...(agent ? ['This chat\'s work is done. Stop here.'] : [])].join('\n'));
-  } finally { releaseAdmission?.(); }
+  } finally { releaseApproval(); releaseAdmission?.(); }
 }
 
 // A run that waits for the interpreter: no question to a person, its slot can be yielded, and Autopilot wakes it later.

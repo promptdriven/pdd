@@ -1,11 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync, readdirSync, statSync, writeFileSync, mkdirSync, unlinkSync} from 'node:fs';
+import * as fs from 'node:fs';
 import {hostname} from 'node:os';
 import {join} from 'node:path';
 import {approveRun, changeRun, cancelRun, openRun, stepDone, acquireRunLock, runStatus} from '../src/workflow-runner.mjs';
 import {runPdd} from '../src/pdd-cli.mjs';
 import {fixture, packageRoot} from './helpers/workflow-runner-fixture.mjs';
+import {acquireOrdinaryRunOwnership} from '../src/workflow-runs.mjs';
 
 const snapshot = dir => Object.fromEntries(readdirSync(dir, {recursive:true}).filter(path => statSync(join(dir,path)).isFile()).sort().map(path => [path, readFileSync(join(dir,path)).toString('base64')]));
 
@@ -221,6 +223,45 @@ test('approval reports moved gate after reading said words', async t => {
   const result=await approveRun({ref:'17',cwd:f.source,said:'-',expectGate:gate}, {...f.ports,stdin});
   assert.equal(result.exitCode,3,result.message); assert.match(result.message,/current step: change/);
   assert.equal(f.record().decisions.length,1); assert.deepEqual(snapshot(run.runDir),after);
+});
+
+test('approval refuses a gate moved while preparing its journal', async t => {
+  const f=await fixture(t); assert.equal((await f.run()).exitCode,0);
+  const root=f.record().root, prompt=join(root,'sample.prompt.md');
+  const promptBytes=['# Sample', '', 'Return two.', '', '<details><summary>Runtime interface</summary>', '', '```json',
+    JSON.stringify({status:'draft',prose_sha256:'',entries:[],limits:{max_steps:1,max_model_calls:1}}), '```', '</details>', ''].join('\n');
+  writeFileSync(prompt,promptBytes); f.git(root,'add','sample.prompt.md');
+  assert.equal((await stepDone({step:'scope',summary:'Done',cwd:f.record().root},f.agentPorts())).exitCode,0);
+  const run=f.record(), gate=run.gate.id, journal=join(run.commonDir,'pdd','approvals.json');
+  const journalBytes='{ "v": 1, "approvals": [] }\n'; writeFileSync(journal,journalBytes);
+  const filesBefore=snapshot(run.runDir), chatBefore=readFileSync(run.chats.at(-1).messageFile); let moved=false, edited=false;
+  const result=await approveRun({ref:'17',cwd:f.source,said:'Approved',expectGate:gate}, {...f.ports,fs:{...fs,writeFileSync:(path,...args)=>{
+    fs.writeFileSync(path,...args);
+    if (String(path).includes('.approvals.') && String(path).endsWith('.tmp')) {
+      edited=readFileSync(prompt,'utf8')!==promptBytes;
+      moved=true; const current=f.record(); current.gate.id='gate-new'; writeFileSync(join(run.runDir,'status.json'),JSON.stringify(current));
+    }
+  }}});
+  assert.equal(moved,true); assert.equal(edited,true,'selected draft was edited before the competing gate transition');
+  assert.equal(result.exitCode,3,result.message); assert.match(result.message,/gate-new/);
+  assert.equal(f.record().decisions.length,0); assert.equal(readFileSync(prompt,'utf8'),promptBytes); assert.equal(readFileSync(journal,'utf8'),journalBytes);
+  assert.deepEqual(readFileSync(run.chats.at(-1).messageFile),chatBefore);
+  const filesAfter=snapshot(run.runDir); delete filesBefore['status.json']; delete filesAfter['status.json']; assert.deepEqual(filesAfter,filesBefore);
+});
+
+test('approval excludes ordinary progress between journal publication and decision', async t => {
+  const f=await fixture(t); assert.equal((await f.run()).exitCode,0);
+  assert.equal((await stepDone({step:'scope',summary:'Done',cwd:f.record().root},f.agentPorts())).exitCode,0);
+  const run=f.record(), gate=run.gate.id; let checked=false;
+  const result=await approveRun({ref:'17',cwd:f.source,said:'Approved',expectGate:gate}, {...f.ports,fs:{...fs,renameSync:(from,to)=>{
+    fs.renameSync(from,to);
+    if (String(to).endsWith('/approvals.json')) {
+      checked=true; let release;
+      try { release=acquireOrdinaryRunOwnership(run.runDir); } catch {}
+      if (release) { const current=f.record(); current.gate.id='gate-new'; writeFileSync(join(run.runDir,'status.json'),JSON.stringify(current)); release(); }
+    }
+  }}});
+  assert.equal(checked,true); assert.equal(result.exitCode,0,result.message); assert.equal(f.record().decisions.length,1);
 });
 
 test('open replacement refuses progress during inspection before replacement effects', async t => {
