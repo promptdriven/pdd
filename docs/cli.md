@@ -1565,9 +1565,12 @@ Each tick, without AI calls:
    prompt's opening paragraph names it. The job gets this owner table and writes one
    `Path:` line per path in the PR body; Autopilot checks the lines against the table.
    Existing code that no prompt owns changes directly with a regression test, and
-   Autopilot files one report that proposes adopting PDD for it. The job writes one
-   `Runtime:` line and one `Evidence:` line in the PR
-   body. It writes no review verdict: only the fresh reviewer gives one. In `auto` and
+   Autopilot files one report that proposes adopting PDD for it. A config or metadata
+   file (`package.json`, a lock file, CI settings) needs no prompt, and the review never
+   asks for a new prompt for one. The job writes one `Runtime:` line for each changed
+   Story and one `Evidence:` line in the PR body ([RUNBOOK §15, "Autopilot core
+   jobs"](../RUNBOOK.md#autopilot-core-jobs)). It writes no review verdict: only the
+   fresh reviewer gives one. In `auto` and
    `observe` mode your `pdd autopilot start` is the approval of the job's prompt
    changes: the job records it for each changed prompt with `pdd approve PROMPT --said
    -` and the words "Operator action: pdd autopilot start --engine core in MODE mode for
@@ -1578,11 +1581,24 @@ Each tick, without AI calls:
    (`pdd:needs-decision`) and keeps the PR open; in `observe` mode it asks no one and
    lists those prompts in its "would merge" note.
 
-Only a real Runtime FAIL blocks a merge. When Runtime cannot check a change (a lint
-refusal, no interface, a scenario limit, no verdict), the job still ships its PR with
-native tests and `Runtime: not run (reason)`, and Autopilot files or counts one
-report for that cause. The `Evidence:` line has a fixed form, for example
-`Evidence: runtime=pass (11/11); vectors=not-run; formal=bounded; tests=pass (42/42)`.
+Only a real Runtime FAIL blocks a merge. A failed check is a FAIL, also when its check
+has no verdict because another step had no answer. When Runtime cannot check a change
+(a lint refusal, no interface, no verdict with no failed step, a scenario limit that pdd
+gives no fix for), the job still ships its PR with native tests and `Runtime: not run
+(reason)`, and Autopilot files or counts one report for that cause. A value that is not
+a safe integer is no such reason: pdd prints its exact Number spelling, and the job
+applies that fix and checks again. During announced maintenance pdd waits, then sends
+the check; the job does not cut that wait short. A job that cannot wait writes
+`Runtime: not run (maintenance until TIME: REASON)`, and Autopilot sends the check again
+by itself. "Changed" means changed against the base (`git diff origin/BASE...HEAD`),
+never since the previous PR head: a Story that a merge from the base brought in is not
+changed. A job that merges the base into its branch checks that its fix is still
+needed: when the PR's changed tests also pass on the code of the new merge base, the
+base already holds the fix, and the job keeps only what the base does not hold.
+The `Evidence:` line has a fixed form, for example
+`Evidence: runtime=pass (11/11); vectors=pass (36/36); formal=bounded; tests=pass (42/42)`.
+`vectors` counts the replay files that the PR changes or that read a changed scenario
+file, in `node:test` tests (not steps or checks).
 Autopilot keeps only the known parts, saves them in its local history and repeats
 them in the merge comment. The claims must be true. A Runtime pass (`Runtime: PASS`,
 `runtime=pass` or the result's runtime state) counts only when the saved `pdd test`

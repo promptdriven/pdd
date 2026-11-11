@@ -25,11 +25,14 @@ The rules for prompts are in `guide.md`. Use them for this review.
 - A test that you wrote but did not run is a draft, not a pass.
 - A passing test covers only its cases. It does not prove that the prompt says what the person needs.
 - Give the exact commands and their real output. Name each check that you could not run.
+- A Runtime PASS counts only for a Story that the PR changes against its base (`git diff origin/main...HEAD`): its Story file or test file changed, or its test reaches a changed prompt. A PASS of another Story proves nothing for this PR.
+- A failed check is a FAIL, also inside a check with no verdict (RUNBOOK §11). When the checks did not all pass, open the report.
 - For a visible change, give a short Start / Do / Expect list so the person can try it.
 
 ## Prepare a PR
 
 - Read the full diff. Sum up the approved behavior, the tests that ran and the limits that remain.
+- A config or metadata file (`package.json`, a lock file, CI settings) needs no prompt and no Story. Never ask for a new prompt for it. Ask for a test only when the change alters a result that users see.
 - Never invent a PR link or say that a PR merged when it did not.
 
 For full suites/builds, follow the [$pdd-autopilot shared queue rule](../pdd-autopilot/steps/handoff.md).
