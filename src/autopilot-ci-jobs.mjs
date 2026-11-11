@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-ci-jobs.prompt.md (sha256: 4b5e5a5ccaead3975b2e58544fc2154c29ce483bfd5d9a19c5fd253befef6ef9).
+// Generated from prompts/cli/autopilot-ci-jobs.prompt.md (sha256: f79496043fb9c30e82bbeb3f8589a79736b1ad08e1fba2397d49d1e8e619fe7d).
 import * as nativeFs from 'node:fs';
 import { join, isAbsolute } from 'node:path';
 import { redactSecrets } from './secret-redaction.mjs';
@@ -325,28 +325,60 @@ function suiteSpellings(testCommand, scripts) {
   if (command && (NPM_TEST.includes(command) || command === test)) { for (const spelling of NPM_TEST) set.add(spelling); if (test) set.add(test); }
   return set;
 }
-function isSuite(command, suite) {
-  const parts = splitPipes(command);
-  if (parts.slice(1).some(part => words(part)[0] !== 'tee')) return false;
-  const w = words(parts[0]), kept = [];
+// The words of a command without its redirections (`2>&1`, `>FILE`, `> FILE`).
+function withoutRedirects(w) {
+  const kept = [];
   for (let i = 0; i < w.length; i++) {
-    const m = /^(?:\d*|&)>>?(&\d+|.*)$/.exec(w[i]);
+    const m = /^(?:\d*|&)>>?\|?(&\d+|.*)$/.exec(w[i]);
     if (m) { if (!m[1]) i++; continue; }
     kept.push(w[i]);
   }
-  return suite.has(kept.join(' '));
+  return kept;
+}
+function isSuite(command, suite) {
+  const parts = splitPipes(command);
+  if (parts.slice(1).some(part => words(part)[0] !== 'tee')) return false;
+  return suite.has(withoutRedirects(words(parts[0])).join(' '));
+}
+// A command that changes state: a pipe, a command substitution, or an output redirection to a file. A copy of a stream,
+// /dev/null and the step summary (a report) are no state.
+const NO_STATE = new Set(['/dev/null', '$GITHUB_STEP_SUMMARY', '${GITHUB_STEP_SUMMARY}']);
+function changesState(command) {
+  let q = null;
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i];
+    if (q === "'") { if (c === "'") q = null; continue; }
+    if (c === '\\') { i++; continue; }
+    if (c === '`' || (c === '$' && command[i + 1] === '(')) return true;
+    if (q === '"') { if (c === '"') q = null; continue; }
+    if (c === "'" || c === '"') { q = c; continue; }
+    if (c === '|') return true;
+    if (c !== '>') continue;
+    let j = i + 1;
+    if (command[j] === '>' || command[j] === '|') j++;
+    if (command[j] === '&') { j++; if (/[\d-]/.test(command[j] ?? '')) { i = j; continue; } }
+    while (command[j] === ' ' || command[j] === '\t') j++;
+    if (!NO_STATE.has(words(command.slice(j))[0] ?? '')) return true;
+    i = j;
+  }
+  return false;
 }
 const isInstall = v => (v[0] === 'npm' && ['ci', 'install', 'i'].includes(v[1])) || (v[0] === 'pnpm' && ['install', 'i'].includes(v[1]))
   || (v[0] === 'yarn' && (v[1] === 'install' || v.slice(1).every(word => word.startsWith('-'))));
 function classify(command, suite) {
   const w = words(command);
   while (w.length && LEAD.has(w[0])) w.shift();
-  if (!w.length || CONTROL.has(w[0])) return 'control';
-  if (['set', 'exit', 'true', ':'].includes(w[0]) || (w.length === 1 && ASSIGN.test(w[0]))
-    || (['export', 'readonly', 'local'].includes(w[0]) && w.slice(1).every(word => ASSIGN.test(word) || NAME.test(word) || /^-\w+$/.test(word)))) return 'plumbing';
-  if (['echo', 'printf'].includes(w[0])) return 'probe';
-  if (['command', 'which', 'type', 'hash'].includes(w[0]) && w.slice(1).every(word => /^-\w+$/.test(word) || /^[\w.+-]+$/.test(word))) return 'probe';
-  if (w.length === 2 && ['--version', '-v', '-V', 'version'].includes(w[1])) return 'probe';
+  // Control, plumbing and probes change no state; a command that changes state (it writes) always counts.
+  if (!changesState(command)) {
+    if (!w.length || CONTROL.has(w[0])) return 'control';
+    if (['set', 'exit', 'true', ':'].includes(w[0]) || (w.length === 1 && ASSIGN.test(w[0]))
+      || (['export', 'readonly', 'local'].includes(w[0]) && w.slice(1).every(word => ASSIGN.test(word) || NAME.test(word) || /^-\w+$/.test(word)))) return 'plumbing';
+    if (['echo', 'printf'].includes(w[0])) return 'probe';
+    if (['command', 'which', 'type', 'hash'].includes(w[0]) && w.slice(1).every(word => /^-\w+$/.test(word) || /^[\w.+-]+$/.test(word))) return 'probe';
+    const args = withoutRedirects(w);
+    if (args.length === 2 && ['--version', '-v', '-V', 'version'].includes(args[1])) return 'probe';
+  }
+  if (!w.length) return 'real';
   let v = w;
   while (v.length && ASSIGN.test(v[0])) v = v.slice(1);
   const sudo = v[0] === 'sudo';
@@ -363,7 +395,7 @@ function stepKind(script, suite) {
   if (has('system') && has('real')) return { reason: { need: 'system packages', why: 'installs system packages in a step with other commands' } };
   if (has('sudo')) return { reason: { need: 'sudo', why: 'runs a command with sudo' } };
   if (has('real')) return { kind: 'real' };
-  if (has('suite')) return { kind: 'suite', parts: commands.filter((_, i) => kinds[i] === 'suite') };
+  if (has('suite')) return { kind: 'suite', parts: commands.filter((_, i) => kinds[i] === 'suite'), writes: commands.some(changesState) };
   return { kind: 'setup' };
 }
 
@@ -501,7 +533,6 @@ function sortStep(step, job, wf, entry, ctx) {
   const keepGoing = step['continue-on-error'];
   if (keepGoing === true) return { kind: 'skip' };
   if (keepGoing !== undefined && keepGoing !== false) return { reason: { need: 'condition', why: `has a continue-on-error that Autopilot cannot check: ${oneLine(keepGoing, 120)}` } };
-  if (typeof step.if === 'string' && /always\(\)|!cancelled\(\)/.test(step.if) && step.run.includes('GITHUB_STEP_SUMMARY')) return { kind: 'skip' };
   const shell = step.shell ?? runDefaults(job.defaults).shell ?? runDefaults(wf.defaults).shell ?? null;
   if (shell !== null && !['bash', 'sh'].includes(shell)) return { reason: { need: 'shell', why: `uses the shell ${oneLine(shell, 60)}` } };
   // The working directory: only matrix values and github.workspace (the checkout itself) are filled in here.
@@ -528,20 +559,27 @@ function sortStep(step, job, wf, entry, ctx) {
   }
   if (/\bGITHUB_(?:ENV|PATH)\b/.test(step.run)) return { reason: { need: 'GITHUB_ENV', why: 'passes values to later steps through GITHUB_ENV or GITHUB_PATH' } };
   const kind = stepKind(step.run, ctx.suite);
-  if (kind.reason || kind.kind !== 'real') return kind;
+  if (kind.reason || !['real', 'suite'].includes(kind.kind)) return kind;
   const name = typeof step.name === 'string' && step.name.trim() ? oneLine(step.name, 80) : oneLine(step.run.split('\n').find(line => line.trim()) ?? 'run', 80);
-  return { kind: 'real', step: { name, shell, script: step.run, workingDirectory: wd, env } };
+  const local = { name, shell, script: step.run, workingDirectory: wd, env };
+  // The full suite's context: the checkout root, bash, and no environment but CI=true. A suite step in another context
+  // runs another test run: it is a local command in its own context.
+  const same = (wd === null || wd === '.') && (shell === null || shell === 'bash') && Object.entries(env).every(([name, value]) => name === 'CI' && value === 'true');
+  if (kind.kind === 'suite' && same) return { ...kind, step: local };
+  return { kind: 'real', step: local };
 }
 function sortEntry(job, wf, entry, ctx) {
   const runner = runnerReason(job['runs-on'], entry, ctx.family);
   if (runner) return { reason: runner };
-  const steps = [], parts = [];
+  const sorted = [];
   for (const step of job.steps) {
     const s = sortStep(step, job, wf, entry, ctx);
     if (s.reason) return { reason: s.reason };
-    if (s.kind === 'suite') parts.push(...s.parts);
-    if (s.kind === 'real') steps.push(s.step);
+    sorted.push(s);
   }
+  // A suite step that writes files runs locally too when a later step runs locally: the later step may read them.
+  sorted.forEach((s, i) => { if (s.kind === 'suite' && s.writes && sorted.slice(i + 1).some(later => later.kind === 'real')) s.kind = 'real'; });
+  const steps = sorted.filter(s => s.kind === 'real').map(s => s.step), parts = sorted.filter(s => s.kind === 'suite').flatMap(s => s.parts);
   const suite = parts.length > 0;
   if (steps.length) return { kind: 'local', suite, steps, commands: steps.map(step => step.script), why: `runs ${steps.length} command(s) that Autopilot can run on this machine${suite ? ', and the full test command' : ''}` };
   return { kind: 'covered', suite, steps: [], commands: parts, why: suite ? `runs only the full test command (${ctx.testCommand})` : 'runs only setup steps' };

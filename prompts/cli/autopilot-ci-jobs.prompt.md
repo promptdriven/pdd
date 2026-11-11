@@ -176,52 +176,66 @@ Any other step (no `uses` and no `run` string) is CI-only (need `unreadable`). A
 with `run` (a string):
 
 1. **Condition** (`if`): false skips the step; unknown is CI-only (need `condition`).
+   `always()` and `!cancelled()` only say when a step runs, not that its failure does not
+   count: such a step is sorted like any other step.
 2. `continue-on-error: true` skips the step (it cannot fail the job); another value that
    is not `false` is CI-only (need `condition`).
-3. **A report step** is skipped: its `if` has `always()` or `!cancelled()` and its text
-   writes `GITHUB_STEP_SUMMARY`.
-4. **Shell**: the step's `shell`, else `defaults.run.shell` of the job, else of the
+3. **Shell**: the step's `shell`, else `defaults.run.shell` of the job, else of the
    workflow. Only no shell, `bash` and `sh` run locally; another shell is CI-only (need
    `shell`: "uses the shell X").
-5. **Working directory**: the step's `working-directory`, else the job's, else the
+4. **Working directory**: the step's `working-directory`, else the job's, else the
    workflow's `defaults.run`. Only `matrix.KEY` (the entry's value) and `github.workspace`
    (the checkout itself, `.`) are filled in. The result must be a relative path with no
    `..` part and no other expression; else CI-only (need `working directory`).
-6. **Environment**: the workflow's, the job's and the step's `env` mappings, in that
+5. **Environment**: the workflow's, the job's and the step's `env` mappings, in that
    order (a later name wins). Names must be shell names; values are scalars (`null` is
    empty). An `env` that is not such a mapping is CI-only (need `unreadable`).
-7. **Expressions** in the run text and the environment values: the known list is `matrix.KEY` (a key of the entry), `runner.os`, `runner.temp`,
+6. **Expressions** in the run text and the environment values: the known list is `matrix.KEY` (a key of the entry), `runner.os`, `runner.temp`,
    `github.workspace` and `env.NAME` (a name of the environment above whose value has no
    expression). Any other expression, and a `${{` with no `}}`, is CI-only (need
    `expression`: "uses the expression ${{ X }}"). The expressions stay in the text; the
    plan fills them in.
-8. A text that writes `GITHUB_ENV` or `GITHUB_PATH` is CI-only (need `GITHUB_ENV`):
+7. A text that writes `GITHUB_ENV` or `GITHUB_PATH` is CI-only (need `GITHUB_ENV`):
    Autopilot cannot pass values between its steps that way.
-9. **Commands.** Lines joined after a final `\`; the body of a here-document
+8. **Commands.** Lines joined after a final `\`; the body of a here-document
    (`<<WORD`, `<<-WORD`, `<<'WORD'`) belongs to its command line; blank and `#` lines go.
    Each line splits at `;`, `&&` and `||` outside quotes into commands, after leading
-   `if`, `elif`, `then`, `else`, `do`, `while`, `until` and `!` go. Each command is one of:
+   `if`, `elif`, `then`, `else`, `do`, `while`, `until` and `!` go.
+   **A command that changes state** has a pipe (`|`), a command substitution (`$(`, a
+   backtick), or an output redirection to a file (`>`, `>>`, `>|`, `&>`, also into
+   `$GITHUB_OUTPUT`). Not state: a copy of a stream (`2>&1`, `>&2`), `/dev/null`, and
+   `$GITHUB_STEP_SUMMARY` (the step summary is a report). A command that changes state is
+   never control, plumbing or a probe, also when it is an `echo` (#3260 review: `echo
+   strict > mode` writes a file that a later check reads). Each command is one of:
    - control: nothing left, `fi`, `done`, `esac`, `{`, `}`, `(`, `)`, or a `for` or
      `case` head;
    - plumbing: `set …`, `exit …`, `true`, `:`, an assignment alone (`NAME=VALUE`), or
      `export`/`readonly`/`local` with only assignments or names;
    - probe: `echo` or `printf`; `command -v`, `which`, `type` or `hash` with names; or one
-     word with `--version`, `-v`, `-V` or `version`;
+     word with `--version`, `-v`, `-V` or `version` (a redirection is no word);
    - system install: a package manager (`apt-get`, `apt`, `brew`, `yum`, `dnf`, `apk`,
      `choco`, `snap`, `port`, `pacman`, `zypper`), also after assignments, `sudo` and its
      flags;
    - install: `npm ci`, `npm install`, `npm i`, `pnpm install`, `pnpm i`, `yarn install`,
      or `yarn` with only flags;
    - suite: the full test command (below), also with redirections (`2>&1`, `>FILE`,
-     `>>FILE`) and pipes into `tee`;
+     `>>FILE`) and pipes into `tee` (then the suite command changes state);
    - sudo: another command that starts with `sudo`;
    - real: anything else.
-10. The step is: CI-only (need `system packages`) when it has a system install and a real
+9. The step is: CI-only (need `system packages`) when it has a system install and a real
     command; CI-only (need `sudo`) when it has a sudo command; a suite step when it has a
     suite command and no real command; a local command when it has a real command; else
-    a setup step (installs, system installs, probes, plumbing and control only). Autopilot
-    never runs a setup step: a local job that needs a tool that the machine lacks fails
-    locally with a missing tool.
+    a setup step (installs, system installs, and probes, plumbing and control that change
+    no state). Autopilot never runs a setup step: a local job that needs a tool that the
+    machine lacks fails locally with a missing tool.
+10. **A suite step is covered only in the full suite's context**: the working directory
+    is the checkout root (none or `.`), the shell is none or `bash`, and the environment
+    (step 5) is empty or only `CI: true`. Else it is a local command, run in its own
+    context (#3260 review: `npm test` in `working-directory: nested` runs another
+    package's tests).
+11. **A suite step that changes state** (for example `| tee "$RUNNER_TEMP/tests.tap"`) is
+    a local command too when a later step of the job is a local command, so that the
+    later steps see its files. With no later local command, it stays covered.
 
 **The full test command** is `testCommand` (spaces made single). When it is an npm test
 spelling (`npm test`, `npm run test`, `npm t`, `npm run-script test`), or it is exactly
@@ -235,9 +249,9 @@ spelling (`npm test`, `npm run test`, `npm t`, `npm run-script test`), or it is 
 | local | no reason, and at least one local command | the local commands' texts |
 | covered | no reason, no local command | the suite commands (empty when the job has only setup steps) |
 
-A local job that also has a suite step has `suite: true`: its suite part is covered by
-the local full suite, and only its other commands run locally (#3260: "if ... same thing
-is being done by github ci then no point").
+A local job that also has a covered suite step has `suite: true`: its suite part is
+covered by the local full suite, and only its other commands run locally (#3260: "if ...
+same thing is being done by github ci then no point").
 
 **Entries.** A job with no matrix is one entry. In a matrix job, each covered or local
 matrix entry is its own entry, and all CI-only matrix entries of the job are one CI-only
@@ -259,7 +273,7 @@ steps, matrix, dispatch}`:
 | `kind` | `covered`, `local` or `ci-only` |
 | `why` | one line for a person |
 | `need` | for CI-only, the short need (above); else `null` |
-| `suite` | `true` when the job also runs the full test command |
+| `suite` | `true` when the job has a covered suite step |
 | `commands` | see Kinds |
 | `steps` | for local, the steps to run: `{name, shell, script, workingDirectory, env}` (`shell` is `null`, `bash` or `sh`; `env` the merged environment); else `[]` |
 | `matrix` | the entry's matrix values (`{}` with no matrix; `null` for a combined entry) |

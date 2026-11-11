@@ -21,15 +21,17 @@ const byCheck = (result, check) => result.jobs.find(job => job.check === check);
 const temp = t => { const dir = mkdtempSync(join(tmpdir(), 'pdd-ci-jobs-')); t.after(() => rmSync(dir, { recursive: true, force: true })); return dir; };
 const ON_PR = 'on:\n  pull_request:\n  push:\n    branches: [main]\n';
 
-test('sort: pdd\'s own ci.yml has the tests job (full suite covered, two local extras) and install-smoke as local; the dispatch-only router is no PR CI', () => {
+test('sort: pdd\'s own ci.yml has the tests job and install-smoke as local jobs; the dispatch-only router is no PR CI', () => {
   const dir = join(root, '.github/workflows');
   const files = readdirSync(dir).sort().map(name => file(name, readFileSync(join(dir, name), 'utf8')));
   const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
   const result = sortCiJobs({ files, base: 'main', testCommand: 'npm test', scripts: pkg.scripts, machine: LINUX });
-  assert.deepEqual(result.jobs.map(job => [job.workflow, job.job, job.check, job.kind, job.suite]), [['ci.yml', 'public', 'tests', 'local', true], ['ci.yml', 'install-smoke', 'install-smoke', 'local', false]]);
-  // The design: "tests covered + local extras (node bin/pdd.mjs --help, npm pack --dry-run)". The full suite part is
-  // covered by the local full suite; only the extras run as the local job.
-  assert.deepEqual(byCheck(result, 'tests').commands, ['node bin/pdd.mjs --help', 'npm pack --ignore-scripts --dry-run']);
+  assert.deepEqual(result.jobs.map(job => [job.workflow, job.job, job.check, job.kind, job.suite]), [['ci.yml', 'public', 'tests', 'local', false], ['ci.yml', 'install-smoke', 'install-smoke', 'local', false]]);
+  // The design's extras (node bin/pdd.mjs --help, npm pack --dry-run) run locally. Review R1 item 6: the always()
+  // summary step runs too (it is not only a summary write). It reads the file that the test step writes with tee, so
+  // the test step runs in the local job as well (rule 11); the shell check step and npm ci are setup.
+  assert.deepEqual(byCheck(result, 'tests').steps.map(step => step.name), ['Run offline tests', 'Summarize test counts', 'node bin/pdd.mjs --help', 'npm pack --ignore-scripts --dry-run']);
+  assert.deepEqual(byCheck(result, 'tests').commands.slice(2), ['node bin/pdd.mjs --help', 'npm pack --ignore-scripts --dry-run']);
   assert.equal(byCheck(result, 'install-smoke').commands.length, 1);
   assert.match(byCheck(result, 'install-smoke').commands[0], /npm pack --ignore-scripts --json/);
   assert.equal(result.summary, 'CI: 0 covered, 2 local, 0 CI-only');
@@ -213,6 +215,64 @@ test('read: no workflow folder is no CI; a git error and a large file are CI-onl
   r.git('add', '.'); r.git('commit', '-q', '-m', 'big'); r.git('push', '-q', 'origin', 'main');
   const big = await readCiJobs({ base: 'main' }, { git: r.port });
   assert.deepEqual(big.jobs.map(job => [job.workflow, job.why]), [['big.yml', 'Autopilot could not read the workflow file: the file is larger than 256 KiB']]);
+});
+
+// Review round 1 (Codex), items 4 to 6, and their probe (core/g3/r1-probes/ci-probe.test.mjs): expected results from
+// the review and the group lead's rules, not from the code.
+const oneJob = (body, top = '') => sort([file('ci.yml', `${ON_PR}${top}jobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n${body}`)]).jobs[0];
+function runLocal(entry, dir) {
+  const [plan] = localJobPlan({ jobs: [entry], head: HEAD, checkout: dir, temp: join(dir, 'tmp'), machine: LINUX });
+  const r = spawnSync('/bin/bash', ['-c', plan.command], { cwd: dir, encoding: 'utf8', env: { ...process.env, ...plan.env } });
+  return localJobResult(plan, { exit: { code: r.status, signal: r.signal }, log: `${r.stdout}${r.stderr}` });
+}
+
+test('review R1 item 4: the full test command in another directory, shell or environment is no covered job; it runs there', t => {
+  const dir = temp(t);
+  mkdirSync(join(dir, 'nested'));
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ scripts: { test: 'node -e "process.exit(0)"' } }));
+  writeFileSync(join(dir, 'nested/package.json'), JSON.stringify({ scripts: { test: 'node -e "process.exit(1)"' } }));
+  const nested = oneJob('      - run: npm test\n        working-directory: nested\n');
+  assert.deepEqual([nested.kind, nested.suite, nested.commands, nested.steps[0].workingDirectory], ['local', false, ['npm test'], 'nested']);
+  // The nested package's tests fail: the local job is red, as CI would be.
+  assert.deepEqual([runLocal(nested, dir).state, runLocal(nested, dir).step], ['fail', 'npm test']);
+  assert.equal(oneJob('      - run: npm test\n        shell: sh\n').kind, 'local');
+  assert.equal(oneJob('      - run: npm test\n        env:\n          NODE_ENV: production\n').kind, 'local');
+  assert.equal(oneJob('      - run: npm test\n', 'env:\n  SHARD: 2\n').kind, 'local');
+  assert.equal(oneJob('      - run: npm test\n', 'defaults:\n  run:\n    working-directory: nested\n').kind, 'local');
+  // The full suite's own context stays covered.
+  for (const body of ['      - run: npm test\n', '      - run: npm test\n        shell: bash\n        working-directory: .\n', '      - run: npm test\n        env:\n          CI: true\n'])
+    assert.equal(oneJob(body).kind, 'covered', body);
+});
+
+test('review R1 item 5: a step that writes state is kept and run; only a step that changes nothing is setup', t => {
+  const dir = temp(t);
+  writeFileSync(join(dir, 'mode'), 'relaxed\n');
+  // CI writes "strict" and then checks for "relaxed": the workflow fails, so the local job must fail too.
+  const entry = oneJob('      - run: echo strict > mode\n      - run: test "$(cat mode)" = relaxed\n');
+  assert.deepEqual([entry.kind, entry.commands], ['local', ['echo strict > mode', 'test "$(cat mode)" = relaxed']]);
+  assert.deepEqual([runLocal(entry, dir).state, runLocal(entry, dir).step], ['fail', 'test "$(cat mode)" = relaxed']);
+  const kept = ['echo "dir=$(npm config get cache)" >> "$GITHUB_OUTPUT"', "printf '%s' a | tee list.txt", 'echo x >| out.txt', 'X=$(date)', 'command -v jq > where.txt', 'echo `id`'];
+  for (const command of kept) assert.deepEqual(oneJob(`      - run: ${JSON.stringify(command)}\n`).commands, [command], command);
+  const nothing = ['echo hello', 'echo x > /dev/null', 'echo "## Report" >> "$GITHUB_STEP_SUMMARY"', 'node --version 2>&1', 'printf "%s\\n" done >&2', 'export A=1 B'];
+  for (const command of nothing) assert.deepEqual([oneJob(`      - run: ${JSON.stringify(command)}\n`).kind, oneJob(`      - run: ${JSON.stringify(command)}\n`).why], ['covered', 'runs only setup steps'], command);
+});
+
+test('review R1 item 6: an always() step runs like any other step; only a pure summary write is no command', t => {
+  const dir = temp(t);
+  const failing = oneJob('      - run: npm test\n      - if: always()\n        run: |\n          node -e "process.exit(1)"\n          echo summary >> "$GITHUB_STEP_SUMMARY"\n');
+  assert.deepEqual([failing.kind, failing.suite, failing.commands], ['local', true, ['node -e "process.exit(1)"\necho summary >> "$GITHUB_STEP_SUMMARY"\n']]);
+  assert.equal(runLocal(failing, dir).state, 'fail');
+  assert.equal(oneJob('      - run: npm test\n      - if: always()\n        run: echo "### tests passed" >> "$GITHUB_STEP_SUMMARY"\n').kind, 'covered');
+  assert.equal(oneJob('      - run: npm test\n      - if: \'!cancelled()\'\n        run: npm run lint\n').kind, 'local');
+});
+
+test('a suite step that writes a file runs locally when a later step runs locally; with none it stays covered', () => {
+  const tee = '      - run: npm test 2>&1 | tee "$RUNNER_TEMP/tests.tap"\n';
+  const read = oneJob(`${tee}      - run: grep -c "^ok" "$RUNNER_TEMP/tests.tap"\n`);
+  assert.deepEqual([read.kind, read.suite, read.commands], ['local', false, ['npm test 2>&1 | tee "$RUNNER_TEMP/tests.tap"', 'grep -c "^ok" "$RUNNER_TEMP/tests.tap"']]);
+  assert.equal(oneJob(`${tee}      - if: always()\n        run: echo done >> "$GITHUB_STEP_SUMMARY"\n`).kind, 'covered');
+  // A suite step that writes nothing stays covered next to a local command.
+  assert.deepEqual([oneJob('      - run: npm test\n      - run: npm run lint\n').suite, oneJob('      - run: npm test\n      - run: npm run lint\n').commands], [true, ['npm run lint']]);
 });
 
 const lintOnly = sort([file('ci.yml', `${ON_PR}jobs:\n  tests:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm test\n      - run: npm run lint\n  codeql:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: github/codeql-action/analyze@v3\n`)]).jobs;
