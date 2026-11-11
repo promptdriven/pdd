@@ -28,9 +28,11 @@ const ALL_SKILLS = ['pdd-prompting', 'pdd-setup', 'pdd-product', 'pdd-graph', ..
 // The six-question independent review brief needs 2.25 KB.
 // #2602 / pdd #2610 needs 1.5 KB for the 1501-byte change.md brief; #3201 (the file-ownership rule) needs 1.6 KB.
 // #3248 and #3255 (no Story or prompt for a non-code file; a whole-file prompt from the current code first; the pdd-bug
-// evidence for owned code; pdd-bug names pdd-small-change) need 2.2 KB in prompt-story, 2.25 KB in change, 4.25 KB in pdd-bug.
-const SKILL_LIMIT = 3072, SKILL_LIMITS = { 'pdd-bug': 4352, 'pdd-feature': 4096 };
-const STEP_LIMIT = 1228, STEP_LIMITS = { 'prompt-story': 2253, review: 2304, change: 2304 };
+// evidence for owned code; reproduce hands a fix with no product behavior to pdd-small-change) need 2.2 KB in
+// prompt-story, 2.25 KB in change and 1.3 KB in reproduce; the words "in product behavior" in the pdd-bug description
+// need 4109 bytes.
+const SKILL_LIMIT = 3072, SKILL_LIMITS = { 'pdd-bug': 4109, 'pdd-feature': 4096 };
+const STEP_LIMIT = 1228, STEP_LIMITS = { 'prompt-story': 2253, review: 2304, change: 2304, reproduce: 1331 };
 const frontmatter = text => {
   const match = text.match(/^---\n([\s\S]*?)\n---\n/);
   assert.ok(match, 'SKILL.md starts with frontmatter');
