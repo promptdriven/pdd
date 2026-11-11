@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: c7de5cfbb29a54a4122fa71c749511a0df74dd08984e99a0460899e04e394bc9).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 8e5a7b56dea9871c6cf68546c98c4dc2c07b62027d1a0c7f340bcc386b902124).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,6 +10,7 @@ import { checkAutopilotBase } from './autopilot-base.mjs';
 import { redactSecrets } from './secret-redaction.mjs';
 import { interfaceBlocks, readPrompt, promptRefusal, gitFiles } from './runtime-preflight.mjs';
 import { readPromptApprovals } from './approval-policy.mjs';
+import { shadowIntake } from './autopilot-intake.mjs';
 
 const MIN = 60 * 1000, HOUR = 60 * MIN, DAY = 24 * HOUR, CLAIM_EXPIRES = 4 * HOUR, STRIKES = 3, MAX_PAUSE_HOURS = 8, NO_RESULT_LIMIT = 3, CLAIM_TRIES = 3, NO_CI_AFTER = 10 * MIN, END_TRIES = 6;
 const REPORT_LABELS = ['pdd:runtime', 'pdd:autopilot-report'];
@@ -1919,6 +1920,7 @@ export async function tickCore(input, ports) {
   const b = ctx.budget;
   const hold = b?.state === 'low' ? `intake held: the GitHub budget is low (this machine used ${b.used} of ${b.allowed} calls in the last hour, a ${b.share ?? 30}% share for ${b.machines} machine(s) with live claims)`
     : rows ? await intake(ctx, rows) : 'intake skipped: the issue list is unavailable';
+  if (rows && settings.intake === 'shadow') try { await shadowIntake(ctx, rows); } catch (error) { ctx.warn(`Autopilot intake (shadow) skipped this tick: ${error.message}`); }
   if (ctx.peers.size) { const m = ctx.machineState(); ctx.saveMachine({ ...m, peers: { ...m.peers, ...Object.fromEntries(ctx.peers) } }); }
   const busy = readJobs(ctx.fs, ctx.root).filter(holdsSlot).length, c = ctx.counts;
   return { exitCode: 0, message: `Autopilot core${settings.mode === 'observe' ? ' (observe: no merge)' : ''}: ${c.started} started, ${c.merged} merged, ${c.wouldMerge ? `${c.wouldMerge} would merge, ` : ''}${c.ended} ended, ${c.repairs} repair(s); ${busy} of ${settings.runs} slots busy${hold ? `; ${hold}` : ''}.` };

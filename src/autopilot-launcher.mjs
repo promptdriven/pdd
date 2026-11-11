@@ -43,6 +43,7 @@ import { costReport, costStatusLines } from './cost-ledger.mjs';
 import { selectAutopilotBase, checkAutopilotBase } from './autopilot-base.mjs';
 import { autopilotEngine, readCoreSettings, tickCore, coreStatus } from './autopilot-core.mjs';
 import { listReportDrafts, sendReportDraft } from './autopilot-reports.mjs';
+import { intakeMode, readIntake, intakeText } from './autopilot-intake.mjs';
 
 const INTERVAL = 30 * 60 * 1000;
 // The core tick has no AI call and each job phase needs a tick, so the core engine's timer fires every 10 minutes.
@@ -1541,6 +1542,8 @@ const machineLabel = state => typeof state?.label === 'string' && state.label.tr
 const machineMode = state => ['auto', 'observe', 'off'].includes(state?.mode) ? state.mode : null;
 // The machine's saved core report mode (pdd autopilot start --report) wins over pdd.json for the core engine.
 const machineReport = state => ['file', 'draft', 'off'].includes(state?.report) ? state.report : null;
+// The machine's intake mode (pdd autopilot start --intake): shadow writes intake cards; off (the default) writes none.
+const machineIntake = state => intakeMode(state?.intake);
 const coreRoot = stateFile => stateFile.replace(/\.json$/, '-core');
 const coreReports = (ports, env) => join(stateFolder(ports, env), 'core-reports');
 async function coreTick(stateFile, state, p, ports) {
@@ -1548,6 +1551,7 @@ async function coreTick(stateFile, state, p, ports) {
   if (machineLabel(state)) core.label = machineLabel(state);
   if (machineMode(state)) core.mode = machineMode(state);
   if (machineReport(state)) core.report = machineReport(state);
+  core.intake = machineIntake(state);
   if (core.mode === 'off') return ok('Autopilot is off.');
   await automaticBase(state, p);
   let budget = { state: 'normal' };
@@ -2432,6 +2436,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
   if (input.label !== undefined && !(typeof input.label === 'string' && input.label.trim())) return { exitCode: 2, message: 'Use --label with a GitHub label name.' };
   if (input.mode !== undefined && !['auto', 'observe', 'off'].includes(input.mode)) return { exitCode: 2, message: 'Use --mode auto, --mode observe or --mode off.' };
   if (input.report !== undefined && !['file', 'draft', 'off'].includes(input.report)) return { exitCode: 2, message: 'Use --report file, --report draft or --report off.' };
+  if (input.intake !== undefined && !['off', 'shadow'].includes(input.intake)) return { exitCode: 2, message: 'Use --intake off or --intake shadow.' };
   let startSelection, startWarnings = [];
   if (command === 'doctor' || command === 'start') {
     const doctorPorts = typeof ports.doctorPorts === 'function' ? ports.doctorPorts(input,ports) : ports.doctorPorts ?? ports;
@@ -2445,7 +2450,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
       const previous=read(join(stateFolder(ports,env),`${id}.json`));
       const state={...previous,cwd};
       // --mode is a machine setting of the core engine only; it never writes pdd.json.
-      if (command==='start' && (input.mode || input.report) && engineOf({...state,engine:input.engine ?? previous?.engine}).engine!=='core') throw Error(`${input.mode ? '--mode' : '--report'} works with the core engine only; add --engine core.`);
+      if (command==='start' && (input.mode || input.report || input.intake) && engineOf({...state,engine:input.engine ?? previous?.engine}).engine!=='core') throw Error(`${input.mode ? '--mode' : input.report ? '--report' : '--intake'} works with the core engine only; add --engine core.`);
       let profile;
       if (resumeCustody) {
         if (!previous) throw Error('Original coordinator recovery needs saved local state.');
@@ -2519,7 +2524,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
     }
     const previous = read(stateFile);
     state = { ...state, ...previous, cwd: state.cwd, id, stateFile };
-    if (command === 'start') { if (input.engine) state.engine = input.engine; if (input.label) state.label = input.label.trim(); if (input.mode) state.mode = input.mode; if (input.report) state.report = input.report; }
+    if (command === 'start') { if (input.engine) state.engine = input.engine; if (input.label) state.label = input.label.trim(); if (input.mode) state.mode = input.mode; if (input.report) state.report = input.report; if (input.intake) state.intake = input.intake; }
     let initialRevision = previous?.controlRevision ?? null;
     if (command === 'start' && !previous) { initialRevision = randomUUID(); state.controlRevision = initialRevision; state.enabled = false; state.timerInstalled = false; state.nextTick = null; save(stateFile, state); }
     // Explicit undefined values mask unrelated ambient provider directories in portsFor.
@@ -2527,6 +2532,10 @@ export async function runAutopilotLauncher(input, ports = {}) {
       CODEX_HOME:startSelection.env.CODEX_HOME,CLAUDE_CONFIG_DIR:startSelection.env.CLAUDE_CONFIG_DIR,GEMINI_CLI_HOME:startSelection.env.GEMINI_CLI_HOME} : input.env;
     p = portsFor(state, { ...ports, env: invocationEnv });
     if (command === 'start') { releaseAdmission(); releaseAdmission = null; }
+    if (command === 'intake') {
+      const report = readIntake({ root: coreRoot(stateFile), now: p.now() });
+      return ok(input.json ? JSON.stringify({ repository: state.repo ?? null, intake: machineIntake(state), ...report }, null, 2) : `Intake: ${machineIntake(state)} on this machine.\n${intakeText(report)}`);
+    }
     if (command === 'status' && engineOf(state).engine === 'core') {
       const timerActive = Boolean(await timer('status', state, p)), settingsNow = readCoreSettings(state.cwd);
       const label = machineLabel(state) ?? settingsNow.label;
