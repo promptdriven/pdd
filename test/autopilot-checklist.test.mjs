@@ -94,37 +94,33 @@ test('an exclusion whose quote is not in the issue text is red, and so is one wi
 const otherList = (where, n, k = 1) => `The issue's other ${k > 1 ? `${k} lists` : 'list'} ${where} (${n} ${n === 1 ? 'item' : 'items'}): each item done, or left out with a reason`;
 const otherTable = (where, n, k = 1) => `The issue's other ${k > 1 ? `${k} tables` : 'table'} ${where} (${n} ${n === 1 ? 'row' : 'rows'}): each row done, or left out with a reason`;
 
-test('real ticket #3249: the three items of its Test section, then one summary item each for its Evidence and Proposal lists', () => {
+test('real ticket #3249: the three items of its Test section, then only the summary item of its Proposal list (Evidence is context)', () => {
   assert.deepEqual(texts(issueChecklist(real[3249].body)), [
     'A fake issue with 3 checklist items, and a PR that covers 2. Expect a review must-fix that names the third item, and no merge.',
     'The same PR with a quoted exclusion from the issue for the third item. Expect a pass.',
     'An issue with no checklist. Expect no checklist line and no new red.',
-    otherList('under "Evidence (funnel audit, Nov 9 17:00 to Nov 11 17:00 UTC)"', 3),
     otherList('under "Proposal"', 4),
   ]);
 });
 
-test('real ticket #3246: the three items of its Test section, then the summary items of its Problem, Evidence and Proposal lists', () => {
+test('real ticket #3246: its body gives its three Test items plus only the Proposal summary (its Problem and Evidence lists are context)', () => {
   assert.deepEqual(texts(issueChecklist(real[3246].body)), [
     'A fake GitHub whose label list is empty right after the write, while the PR\'s own labels show the lane. Expect the lane step to go on in the same tick.',
     'Two green PRs in the queue. After the first merges, expect the second to enter the lane in the same tick.',
     'Core factory timing: two queued green PRs merge in fewer ticks than today.',
-    otherList('under "Problem"', 3),
-    otherList('under "Evidence"', 3),
     otherList('under "Proposal"', 2),
   ]);
 });
 
-test('real ticket #3260: the three items of its Test section; its 7 numbered Proposal items are one summary item (nested lines do not count)', () => {
+test('real ticket #3260: the three items of its Test section; its 7 numbered Proposal items are one summary item (nested lines do not count); Evidence gives none', () => {
   const items = issueChecklist(real[3260].body);
   assert.deepEqual(texts(items), [
     'A fake GitHub whose CI run stays queued: after 20 minutes the job is held with the service reason, one alert, no strike, and new intake stops. When a run starts, intake resumes.',
     'Rule B with no required check: the PR merges with the CI line in the note. With a required check: it waits.',
     'The setup workflow has the concurrency group, and a second push cancels the first run.',
-    otherList('under "Evidence (Nov 11)"', 3),
     otherList('under "Proposal"', 7),
   ]);
-  assert.deepEqual(items.map(item => item.id), ['C1', 'C2', 'C3', 'C4', 'C5']);
+  assert.deepEqual(items.map(item => item.id), ['C1', 'C2', 'C3', 'C4']);
 });
 
 test('real ticket #2892 (evidence): the two Wanted items, one summary item per audit table with its row count (64 rows R1 to R64), and one for the Limits list', () => {
@@ -183,7 +179,7 @@ test('the reader: Wanted and Proposed outcome sections, one item per table data 
     '',
     '| a pipe line with no table |',
     '',
-    '## Notes',
+    '## Audit',
     '| Outside | table |',
     '|---|---|',
     '| not | an item |',
@@ -199,8 +195,59 @@ test('the reader: Wanted and Proposed outcome sections, one item per table data 
     'Wanted bullet after the table',
     'The lane names its holder',
     otherList('under "Proposal"', 1),
-    otherTable('under "Notes"', 1),
+    otherTable('under "Audit"', 1),
   ]);
+});
+
+test('an Evidence list gives no summary item, nor any list or table under a context heading, its subheadings or a context label line', () => {
+  const issue = [
+    '## Evidence',
+    '- a fact',
+    '- another fact',
+    '',
+    '## Background',
+    '### Details',
+    '- a list under a subheading of a context heading',
+    '',
+    '## What happens today',
+    '- the lane waits',
+    '',
+    '## Proposal',
+    '- do this',
+    '- do that',
+    '',
+    'Sources:',
+    '- a source link',
+    '',
+    'Evidence (funnel audit, Nov 9 17:00 to Nov 11 17:00 UTC):',
+    '- a run',
+    '',
+    'A paragraph after a blank line ends the context part.',
+    '- a list that counts again',
+    '',
+    '## Why',
+    '- a reason list keeps its summary',
+    '',
+    '## Source',
+    '| a | b |',
+    '|---|---|',
+    '| 1 | 2 |',
+    '',
+    '## Problems',
+    '- only "Problem" is on the list',
+    '',
+    '## Test',
+    'Notes:',
+    '- a test item stays an item',
+  ].join('\n');
+  assert.deepEqual(texts(issueChecklist(issue)), [
+    'a test item stays an item',
+    otherList('under "Proposal"', 3, 2),
+    otherList('under "Why"', 1),
+    otherTable('under "Source"', 1),
+    otherList('under "Problems"', 1),
+  ]);
+  assert.deepEqual(issueChecklist('## Evidence\n- a fact\n- another fact\n'), []);
 });
 
 test('the reader: task items anywhere, section list items, label lines, nesting, code and comments', () => {
@@ -261,9 +308,8 @@ test('the reader: task items anywhere, section list items, label lines, nesting,
     'the inline expected result right below the label line.',
     'Done item one',
     'Test item',
-    // The bullets outside the checklist sections: one summary item per heading (two lists under Notes).
+    // The bullets outside the checklist sections: one summary item per heading; Notes is context and gives none.
     otherList('before its first heading', 1),
-    otherList('under "Notes"', 2, 2),
     otherList('under "Testability"', 1),
   ]);
   // A label line needs a colon within 3 words, only marks, or a short bold line: prose that starts with a label is not one.

@@ -1,8 +1,10 @@
-// Generated from prompts/cli/autopilot-checklist.prompt.md (sha256: dc8be89c0b9405a8b43517c190d485f88c0a289716772c069f4c7c893544ec58).
+// Generated from prompts/cli/autopilot-checklist.prompt.md (sha256: ce2f040f30336b338a3774d435cf5ee7154230679e2e1419fee0a6eb67c08138).
 
 const MAX_ITEMS = 30, MAX_CHARS = 300, MAX_QUOTE = 200, PREFIX_WORDS = 8, MIN_QUOTE_WORDS = 3;
 const WORD = /[\p{L}\p{N}]+/gu, HAS_WORD = /[\p{L}\p{N}]/u;
 const LABEL = /^(?:done when|expected|acceptance criteri(?:a|on)|test(?:s|ing)?|wanted|proposed outcomes?)(?![\p{L}\p{N}])/iu;
+// Context words (the release lead's list): their lists and tables describe the issue and give no summary item.
+const CONTEXT = /^(?:problem|evidence|background|context|notes|related|references|sources|what\s+happens)(?![\p{L}\p{N}])/iu;
 // A colon after the label, with at most 3 more words before it ("Expected result:").
 const LABEL_COLON = /^((?:[\s*_`]*[\p{L}\p{N}][\p{L}\p{N}'’-]*){0,3})[\s*_`]*:(.*)$/u;
 const HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/;
@@ -42,10 +44,10 @@ function blockEnd(block, line) {
   return !!close && close[1][0] === block.fence && close[1].length >= block.size;
 }
 
-// The text after a label, or null. Leading marks and a number such as "2." do not count.
-function afterLabel(text) {
+// The text after a label (or a context word), or null. Leading marks and a number such as "2." do not count.
+function afterLabel(text, words = LABEL) {
   const plain = text.trim().replace(/^[*_`\s]+/, '').replace(/^\d{1,3}[.)]\s*/, '').replace(/^[*_`\s]+/, '');
-  const label = LABEL.exec(plain);
+  const label = words.exec(plain);
   return label ? plain.slice(label[0].length) : null;
 }
 // A label line gives its item text ('' when none), or null when the line is not a label line.
@@ -58,6 +60,13 @@ function labelLine(line) {
   const text = line.trim();
   return text.length <= 60 && /^(\*\*|__).*\1$/.test(text) ? '' : null;
 }
+// A descriptive label line: a context word, then a colon (within 3 words or at the end), only marks, or a short bold line.
+function contextLine(line) {
+  const after = afterLabel(line, CONTEXT);
+  if (after === null) return false;
+  const text = line.trim();
+  return LABEL_COLON.test(after) || /^[*_`\s]*$/.test(after) || /:[*_\s]*$/.test(text) || (text.length <= 60 && /^(\*\*|__).*\1$/.test(text));
+}
 
 // A summary item for the lists or tables of one kind under one heading, outside the checklist sections.
 function summaryText({ heading, kind, count, n }) {
@@ -69,9 +78,12 @@ function summaryText({ heading, kind, count, n }) {
 export function issueChecklist(text) {
   const found = [], groups = new Map();
   let current = null, heading = null, label = false, blank = true, block = null, table = null;
-  let title = null, headings = 0, run = null;
+  let title = null, headings = 0, run = null, context = false;
+  const stack = [];
   const close = () => { if (current) found.push(current); current = null; };
   const inSection = () => heading !== null || label;
+  // Under a context heading (or a parent one), or after a descriptive label line: no summary item.
+  const quiet = () => context || stack.some(entry => entry.context);
   const group = kind => {
     const key = `${headings}|${kind}`;
     if (!groups.has(key)) groups.set(key, { heading: title, kind, count: 0, n: 0 });
@@ -91,9 +103,11 @@ export function issueChecklist(text) {
     if (!line.trim()) { blank = true; continue; }
     const head = HEADING.exec(line);
     if (head) {
-      close(); label = false; blank = false; run = null;
+      close(); label = false; blank = false; run = null; context = false;
       headings++; title = cut((head[2] ?? '').replace(/\s+/g, ' ').trim(), 120);
       const level = head[1].length;
+      while (stack.length && stack.at(-1).level >= level) stack.pop();
+      stack.push({ level, context: afterLabel(head[2] ?? '', CONTEXT) !== null });
       if (heading !== null && level <= heading) heading = null;
       if (heading === null && afterLabel(head[2] ?? '') !== null) heading = level;
       continue;
@@ -102,8 +116,8 @@ export function issueChecklist(text) {
     const next = all[at + 1];
     if (row && (table || (TABLE_ROW.test(next ?? '') && delimiter(cells(next))))) {
       close(); blank = false; run = null;
-      if (table === null && !inSection()) group('table').count++;
-      if (table === 'rows') { if (inSection()) found.push({ text: row.filter(Boolean).join(' | ') }); else group('table').n++; }
+      if (table === null && !inSection() && !quiet()) group('table').count++;
+      if (table === 'rows') { if (inSection()) found.push({ text: row.filter(Boolean).join(' | ') }); else if (!quiet()) group('table').n++; }
       table = table === null ? 'header' : 'rows';
       continue;
     }
@@ -116,13 +130,15 @@ export function issueChecklist(text) {
       else {
         close();
         if (inSection()) current = { indent, text: body };
-        else if (run === null || indent <= run) { const g = group('list'); if (run === null) g.count++; g.n++; run = indent; }
+        else if (!quiet() && (run === null || indent <= run)) { const g = group('list'); if (run === null) g.count++; g.n++; run = indent; }
       }
       blank = false; continue;
     }
     const labelText = labelLine(line);
-    if (labelText !== null) { close(); label = true; run = null; current = { indent: indentOf(line), text: labelText, label: true }; blank = false; continue; }
+    if (labelText !== null) { close(); label = true; run = null; context = false; current = { indent: indentOf(line), text: labelText, label: true }; blank = false; continue; }
+    if (contextLine(line)) { close(); label = false; run = null; context = true; blank = false; continue; }
     if (run !== null && blank && indentOf(line) < run + 2) run = null;
+    if (context && blank && indentOf(line) < 2) context = false;
     if (current && (!blank || indentOf(line) >= current.indent + 2)) join(' ', line.trim());
     else { close(); label = false; }
     blank = false;

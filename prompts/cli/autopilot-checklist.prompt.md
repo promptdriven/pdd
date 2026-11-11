@@ -90,6 +90,21 @@ The reader reads the issue line by line (a tab counts as 4 spaces of indent).
     (`other K tables`). One item or row is `(1 item)` or `(1 row)`. With no heading above,
     `under "HEADING"` becomes `before its first heading`. When N is 0 (a table with no data row),
     there is no summary item.
+  - **Descriptive parts give no summary item.** A list or table under a descriptive heading, or
+    under a heading whose parent heading (a higher level heading above it) is descriptive, gives
+    no summary item. A heading is descriptive when its text starts with one of these context
+    words, in any case, as whole words, after the marks and number that labels skip: "Problem",
+    "Evidence", "Background", "Context", "Notes", "Related", "References", "Sources" and "What
+    happens" (the release lead's list, Nov 11). No other word is descriptive: "Proposal", "Test",
+    "Expected", "What is needed", "What I want", "Why", "Source", "Problems" and every other
+    heading keep their summary items. A **descriptive label line** (a line of other text that
+    starts with a context word, and that has a colon after at most 3 more words, ends with a
+    colon, has only marks after the words, or is at most 60 characters and in bold, such as
+    `Evidence (funnel audit, Nov 9 to 11):`) does the same for the lists and tables after it. It
+    ends the current item and a label-line section. Its part ends at the next heading, the next
+    label line, or a line of other text after a blank line that is not indented 2 or more spaces.
+    Why: these parts describe the problem and its history; they ask for no work. Items in
+    checklist sections stay items.
 - **Text.** Runs of white space become one space, and leading and trailing space go. A label line's
   item loses its leading `*` and `_` marks and its trailing ones. A text with more than 300
   characters keeps its first 300 characters (whole code points), then trailing space goes. A text
