@@ -67,8 +67,8 @@ record is simply dead. There is no "uncertain custody" state.
   that a profile prints is never read as an answer. It writes the record `{at, found,
   path, version, engine, cli, line}` to `ID.pdd-check.json` (`pddCheckFile(log)`) and,
   when `line` is set, that one line to the log. `pddCheckLine` gives `line`: null when
-  the shell finds a pdd of the engine's version, else `pdd check: the agent shell finds
-  pdd X at PATH; the engine is Y; using PDD_CLI (CLI)` or `pdd check: the agent shell
+  the shell finds a pdd of the engine's version, else `pdd path check: the agent shell finds
+  pdd X at PATH; the engine is Y; using PDD_CLI (CLI)` or `pdd path check: the agent shell
   finds no pdd on PATH; the engine is Y; using PDD_CLI (CLI)`. A check that fails or
   times out writes nothing. It never changes the job.
 - The wrapper starts `jobCommand(spec)` in `cwd` with the input file as stdin and the

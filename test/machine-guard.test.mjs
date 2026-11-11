@@ -188,10 +188,10 @@ for (const [name, old] of [['an old pdd first in the login shell', true], ['the 
   const log = readFileSync(job.log, 'utf8'), record = JSON.parse(readFileSync(pddCheckFile(job.log), 'utf8'));
   assert.match(log, new RegExp(`agent uses ${join(engine, 'pdd').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`), 'the agent gets PDD_CLI');
   if (old) {
-    assert.equal(record.line, `pdd check: the agent shell finds pdd 0.1.15 at ${join(fake, 'pdd')}; the engine is 0.1.29; using PDD_CLI (${join(engine, 'pdd')})`);
+    assert.equal(record.line, `pdd path check: the agent shell finds pdd 0.1.15 at ${join(fake, 'pdd')}; the engine is 0.1.29; using PDD_CLI (${join(engine, 'pdd')})`);
     assert.ok(log.includes(record.line), 'one line in the job log');
   } else {
-    assert.deepEqual([record.found, record.version, record.line], [true, '0.1.29', null]); assert.doesNotMatch(log, /pdd check/);
+    assert.deepEqual([record.found, record.version, record.line], [true, '0.1.29', null]); assert.doesNotMatch(log, /pdd path check/);
   }
-  assert.equal(pddCheckLine({ found: false, engine: '0.1.29', cli: '/c/pdd' }), 'pdd check: the agent shell finds no pdd on PATH; the engine is 0.1.29; using PDD_CLI (/c/pdd)');
+  assert.equal(pddCheckLine({ found: false, engine: '0.1.29', cli: '/c/pdd' }), 'pdd path check: the agent shell finds no pdd on PATH; the engine is 0.1.29; using PDD_CLI (/c/pdd)');
 });

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 35b10ca9f09e0d4cfa687da945e62a822b52c5837e8863b8ab5af1bfb0cd6d85).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 35b32b61a3a824101bf8b98b9b843668200b22e14eef70b4be524e5433989594).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -2396,7 +2396,7 @@ async function untestedStoryReds(ctx, job) {
       const prompts = changed.filter(file => file.endsWith('.prompt.md')), visible = found?.visible ?? new Set(gitFiles(tree));
       const kind = path => { try { return readPrompt(tree, visible, path).interface?.kind ?? null; } catch { return null; } };
       const native = prompts.length > 0 && prompts.every(path => kind(path) === 'native-only');
-      if (stories.length && !native) reds = [`This PR changes ${someFiles(stories.map(row => row.storyPath))}, with no Runtime test: ${stories.slice(0, 5).map(row => oneLine(row.line, 300)).join(' ')} A missing test is not a reason for "Runtime: not run": write the Runtime test for each such Story (in test/runtime/ or tests/runtime/ when the repository keeps its own tests in test/ or tests/), one step for each of its criteria, and run "$PDD_CLI" test; or, when bound ports cannot fake the effect, mark the owning prompt's interface native-only with a reason.`];
+      if (stories.length && !native) reds = [`This PR changes ${someFiles(stories.map(row => row.storyPath))}, with no Runtime test: ${stories.slice(0, 5).map(row => oneLine(row.line, 300)).join(' ')} A missing test is not a reason for "Runtime: not run": write a Runtime test for each such Story (in test/runtime/ or tests/runtime/ when the repository keeps its own tests in test/ or tests/), one step for each of its criteria, and run "$PDD_CLI" test; or, when bound ports cannot fake the effect, mark the owning prompt's interface native-only with a reason.`];
     }
   } catch (error) { ctx.warn(`Autopilot core could not read the Stories of #${job.issue}: ${error.message}`); reds = []; }
   job.untested = { head, reds }; ctx.saveJob(job);

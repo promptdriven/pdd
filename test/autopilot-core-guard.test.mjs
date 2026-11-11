@@ -145,7 +145,7 @@ test('#3177 every job gets PDD_CLI; agent roles get the pdd check; status shows 
   const build = w.job(17, 'build'), cli = join(w.root, 'bin', 'pdd');
   assert.equal(build.env.PDD_CLI, cli); assert.equal(build.env.PATH.split(':')[0], join(w.root, 'bin'));
   assert.deepEqual(build.pddCheck, { version: '0.1.27', cli });
-  const line = `pdd check: the agent shell finds pdd 0.1.15 at /home/u/.local/bin/pdd; the engine is 0.1.27; using PDD_CLI (${cli})`;
+  const line = `pdd path check: the agent shell finds pdd 0.1.15 at /home/u/.local/bin/pdd; the engine is 0.1.27; using PDD_CLI (${cli})`;
   writeFileSync(build.log.replace(/\.log$/, '.pdd-check.json'), JSON.stringify({ found: true, version: '0.1.15', line }));
   assert.ok(coreStatus({ state: w.state, settings: w.settings }, { root: w.root, now: w.now }).includes(`; ${line}`), 'status names the mismatch beside the build');
   w.build(17); await w.tick();

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-job.prompt.md (sha256: 979fe98e60d0d73b0837fbe7ee4f9e7283a3c509abf6a07cca07e513e5e2d068).
+// Generated from prompts/cli/agent-job.prompt.md (sha256: f7ae3de79ab43a68cd80236049b29ab9247f8a092ca55737f86c9850f7b8fa9a).
 import { execFile, spawn, spawnSync } from 'node:child_process';
 import { accessSync, closeSync, constants, fstatSync, openSync, readFileSync, readSync, renameSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { setPriority } from 'node:os';
@@ -185,7 +185,7 @@ export function jobCommand(spec, platform = process.platform, ports = {}) {
 export const pddCheckFile = log => String(log).replace(/\.log$/, '') + '.pdd-check.json';
 export function pddCheckLine({ found, path, version, engine, cli }) {
   if (found && version === engine) return null;
-  return `pdd check: the agent shell finds ${found ? `pdd ${version ?? '(unknown version)'} at ${path}` : 'no pdd on PATH'}; the engine is ${engine}; using PDD_CLI (${cli})`;
+  return `pdd path check: the agent shell finds ${found ? `pdd ${version ?? '(unknown version)'} at ${path}` : 'no pdd on PATH'}; the engine is ${engine}; using PDD_CLI (${cli})`;
 }
 export function checkShellPdd(spec, out, ports = {}) {
   const shell = process.env.SHELL && process.env.SHELL.startsWith('/') ? process.env.SHELL : '/bin/sh';

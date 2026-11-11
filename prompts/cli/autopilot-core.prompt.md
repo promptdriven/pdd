@@ -1058,7 +1058,7 @@ runs until its end):
    case 1, once per agent head, saved as `untested`):** each Story whose Story file
    changed against the base and that `findTests` at the clean head checkout lists as
    untested (`untested`, fixture projects excluded) is red, with pdd's "has no test:
-   expected …" line: "A missing test is not a reason for "Runtime: not run": write the
+   expected …" line: "A missing test is not a reason for "Runtime: not run": write a
    Runtime test for each such Story (in test/runtime/ or tests/runtime/ when the
    repository keeps its own tests in test/ or tests/), one step for each of its criteria,
    and run "$PDD_CLI" test; or, when bound ports cannot fake the effect, mark the owning
