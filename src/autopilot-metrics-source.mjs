@@ -6,7 +6,7 @@ import {createHash} from 'node:crypto';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {nativeGithubCounter} from './github-calls.mjs';
-import {calculateAutopilotMetrics,normalizeAutopilotMetric} from './autopilot-metrics.mjs';
+import {calculateAutopilotMetrics,normalizeAutopilotMetric,autopilotEvidenceIdentity} from './autopilot-metrics.mjs';
 import {isRecordedAutopilotAudit} from './autopilot-audit.mjs';
 
 const execute = nativeGithubCounter(promisify(execFile),{purpose:'other'});
@@ -43,7 +43,11 @@ export function recordAutopilotMetric({root,...input},ports={}) {
   fs.mkdirSync(root,{recursive:true,mode:0o700});
   const file=join(root,'history.jsonl');
   let prefix='';
-  try { const old=fs.readFileSync(file,'utf8'); if (old && !old.endsWith('\n')) prefix='\n'; }
+  try {
+    const old=fs.readFileSync(file,'utf8'), identity=autopilotEvidenceIdentity(event);
+    if (identity && old.split('\n').some(line=>autopilotEvidenceIdentity(json(line)?.metric) === identity)) return;
+    if (old && !old.endsWith('\n')) prefix='\n';
+  }
   catch(error) { if (error.code !== 'ENOENT') throw error; }
   fs.appendFileSync(file,prefix+JSON.stringify({metric:event})+'\n',{mode:0o600});
   fs.chmodSync(file,0o600);

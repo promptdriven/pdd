@@ -45,6 +45,16 @@ function extend(f, w) {
     const route = endpoint.slice(prefix.length).split('?')[0];
     if (method !== 'GET') f.writes.push([method, route, input]);
     let m;
+    if ((m = /^\/pulls\/(\d+)\/merge$/.exec(route)) && method === 'PUT') {
+      const pr = f.prs.get(Number(m[1]));
+      if (!pr) return ok(404, {message:'Not Found'});
+      if (pr.merged) return ok(200, {merged:true,sha:pr.mergeSha,message:'Pull Request already merged'});
+      if (pr.state !== 'open') return ok(405, {merged:false,message:'Pull Request is not mergeable'});
+      if (input?.sha !== pr.head) return ok(409, {merged:false,message:'head changed'});
+      if (input?.merge_method !== 'merge') return ok(422, {merged:false,message:'merge method'});
+      pr.state = 'closed'; pr.merged = true; pr.mergeSha = 'f'.repeat(40); f.merges.push(pr.number);
+      return ok(200, {merged:true,sha:pr.mergeSha,message:'Pull Request successfully merged'});
+    }
     if ((m = /^\/compare\/([^/]+)\.\.\.([0-9a-f]{40})$/.exec(route))) {
       const count = range => Number(spawnSync('git', ['--git-dir', w.remote, 'rev-list', '--count', range], { encoding: 'utf8' }).stdout.trim());
       const base = decodeURIComponent(m[1]), behind = count(`${m[2]}..refs/heads/${base}`), ahead = count(`refs/heads/${base}..${m[2]}`);

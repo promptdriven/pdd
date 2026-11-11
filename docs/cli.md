@@ -875,8 +875,12 @@ per-head check observations, exact-head validation and explicit merge attributio
 in durable local history before removing job files. Pass evidence uses its first
 local observation time after PR identity checks. Equivalent fixed Evidence lines
 in a PR or an exact-head core merge comment keep that first time; presentation
-edits do not create another check. Public text cannot establish validation or
-merge attribution. Regressions include failing check runs and commit statuses on
+edits do not create another check. History retains that identity across failed job
+saves and restarts, and reports reconcile duplicate facts to their earliest time.
+Public text cannot establish validation or merge attribution. Merge credit needs
+the synchronous merge mutation's explicit success acknowledgement and a matching
+confirmed merge SHA; a successful command exit or queue request alone counts zero.
+Regressions include failing check runs and commit statuses on
 the exact merge commit, matching recorded BAD audits, and standard git-revert
 commits found on the saved base branch. The reader preserves BAD/revert findings
 in local core history; revert discovery uses the current observation time even

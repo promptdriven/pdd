@@ -59,6 +59,13 @@ export function normalizeAutopilotMetric(event) {
   return result;
 }
 
+export function autopilotEvidenceIdentity(input) {
+  const event = normalizeAutopilotMetric(input);
+  if (event?.kind !== 'evidence' || !sha(event.head)) return null;
+  const evidence = canonicalAutopilotEvidence(event.evidence);
+  return evidence ? JSON.stringify([event.repo,event.issue,event.head,evidence]) : null;
+}
+
 const dateShift = (date,days) => new Date(Date.parse(`${date}T12:00:00Z`) + days*86400000).toISOString().slice(0,10);
 function calendar(timezone) {
   let formatter;
@@ -93,7 +100,14 @@ export function calculateAutopilotMetrics({events=[],timezone=Intl.DateTimeForma
   let finishedDays = Math.round((Date.parse(current)-Date.parse(monday))/86400000), label = 'Week avg';
   if (!finishedDays) { monday=dateShift(monday,-7); finishedDays=7; label='Last week'; }
   const weekEnd = dateShift(monday,finishedDays);
-  const clean = events.map(normalizeAutopilotMetric).filter(event=>event && Date.parse(event.at) <= now);
+  const firstEvidence = new Map(), clean = [];
+  for (const event of events.map(normalizeAutopilotMetric).filter(event=>event && Date.parse(event.at) <= now)) {
+    const key = autopilotEvidenceIdentity(event);
+    if (!key) { clean.push(event); continue; }
+    const first = firstEvidence.get(key);
+    if (!first || Date.parse(event.at) < Date.parse(first.at)) firstEvidence.set(key,event);
+  }
+  clean.push(...firstEvidence.values());
   const merges = clean.filter(event=>event.kind === 'merged');
   const daily = startDate => {
     const start=boundary(startDate), end=boundary(dateShift(startDate,1));

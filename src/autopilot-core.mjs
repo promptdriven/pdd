@@ -565,9 +565,13 @@ async function mergeCheck(ctx, job) {
       '- Full test suite: pass', '- Review: PASS from a fresh reviewer', `- ${runtimeLine}`, `- Base: ${oneLine(base.message)}`, '', `<!-- pdd:autopilot-core:merge:${job.head} -->`].join('\n'));
     job.mergeNote = job.head; ctx.saveJob(job);
   }
-  const merged = await ctx.ports.gh(['pr', 'merge', String(job.pr), '--repo', repo, '--merge', '--match-head-commit', job.head]);
-  if (merged.code !== 0) { Object.assign(job, { lastError: safeLine(`gh pr merge: ${merged.stderr || merged.stdout}`), lastErrorTool: false }); ctx.saveJob(job); return; }
-  job.autopilotMerge = { head: job.head, at: ctx.now() }; ctx.saveMetricJob(job);
+  const merged = await gh.call('PUT', `repos/${repo}/pulls/${job.pr}/merge`, { sha: job.head, merge_method: 'merge' });
+  if (merged.status < 200 || merged.status >= 300) { Object.assign(job, { lastError: safeLine(`GitHub merge returned ${merged.status || 'no reply'}`), lastErrorTool: false }); ctx.saveJob(job); return; }
+  // A zero CLI exit can be a no-op or a queued request. Attribute only the
+  // synchronous mutation's explicit acknowledgement, and bind its commit below.
+  if (merged.status === 200 && merged.value?.merged === true && merged.value.message === 'Pull Request successfully merged' && /^[a-f0-9]{40}$/i.test(merged.value.sha ?? '')) {
+    job.autopilotMerge = { head: job.head, mergeCommit: merged.value.sha.toLowerCase(), at: ctx.now() }; ctx.saveMetricJob(job);
+  }
   return finishMerge(ctx, job);
 }
 function repairOrEnd(ctx, job, reds) {
@@ -600,7 +604,7 @@ async function finishMerge(ctx, job, read = null) {
   const pr = read ?? await gh.ok('GET', `repos/${repo}/pulls/${job.pr}`);
   if (!pr.merged) { job.lastError = 'the merge is not confirmed'; ctx.saveJob(job); return; }
   if (pr.head?.sha === job.head && pr.head?.ref === job.branch && pr.base?.ref === ctx.state.baseBranch) await observeEvidence(ctx, job, pr);
-  if (job.autopilotMerge?.head === job.head && pr.head?.sha === job.head) {
+  if (job.autopilotMerge?.head === job.head && pr.head?.sha === job.head && /^[a-f0-9]{40}$/i.test(job.autopilotMerge.mergeCommit ?? '') && job.autopilotMerge.mergeCommit === pr.merge_commit_sha?.toLowerCase()) {
     const mergedAt = Date.parse(pr.merged_at);
     ctx.metric(job, 'merged', { head: job.head, ...(/^[a-f0-9]{40}$/i.test(pr.merge_commit_sha ?? '') ? { mergeCommit: pr.merge_commit_sha } : {}), at: Number.isFinite(mergedAt) ? mergedAt : job.autopilotMerge.at });
   }

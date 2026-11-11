@@ -715,7 +715,7 @@ test('R10 a merge whose finish failed is finished as merged on the next tick, no
   let fail = false; const gh = w.gh;
   w.gh = async (args, o) => {
     if (fail && args.some(x => /\/issues\/17$/.test(String(x)))) return { code: 1, stdout: 'HTTP/2.0 502 Bad Gateway\r\n\r\n{}', stderr: '' };
-    const r = await gh(args, o); if (args[0] === 'pr' && args[1] === 'merge' && r.code === 0) fail = true; return r;
+    const r = await gh(args, o); if (args.includes('PUT') && args.some(x => /\/pulls\/\d+\/merge$/.test(String(x))) && r.code === 0) fail = true; return r;
   };
   await w.tick();
   assert.deepEqual(w.github.merges, [pr.number]);
