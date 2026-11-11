@@ -2,6 +2,8 @@ name: PDD checks
 
 on:
   pull_request:
+    # The jobs skip draft PRs (fewer Actions minutes); marking a PR ready for review runs them.
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main, alpha]
   workflow_dispatch:
@@ -17,6 +19,7 @@ jobs:
   public:
     # main and alpha require this check name; the offline Node suite owns that gate.
     name: tests
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -64,6 +67,7 @@ jobs:
 
   install-smoke:
     name: install-smoke
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
