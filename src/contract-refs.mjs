@@ -436,3 +436,13 @@ export function planSync(sources, matches) {
   }
   return { edits, warnings };
 }
+
+// Public codec shares the exact token representation and bounded serializer above.
+export const parseJsonValue = text => parse(text);
+export const stringifyJsonValue = value => encode(value);
+export const isJsonNumber = value => value instanceof JsonNumber;
+export function jsonNumberIdentity(value) {
+  if (value instanceof JsonNumber) return numericIdentity(value.text);
+  if (typeof value !== 'number' || !Number.isFinite(value)) throw new TypeError('Expected a finite JSON number.');
+  return numericIdentity(JSON.stringify(value));
+}

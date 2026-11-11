@@ -1,0 +1,35 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/product-recover-simulation.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Returning to my paused product keeps the selected parts, journey, saved data and remaining call allowance."
+    },
+    {
+      "id": "AC2",
+      "text": "If setup fails, the instructions name my real source files and keep the product options in the retry command."
+    },
+    {
+      "id": "AC3",
+      "text": "A request with an unknown result is read again using its existing identity and is never automatically sent twice."
+    }
+  ],
+  "cases": [
+    {
+      "id": "paused-owner",
+      "given": "Paused product session with selected phone/server/barista, J1, retained world and 7 calls remaining.",
+      "required_observation": "Owner-tool request reopens same session and selection; no new setup or allowance reset."
+    },
+    {
+      "id": "setup-refusal",
+      "given": "Lint rejects an effective generated app map for an authored phone map setting.",
+      "required_observation": "Hint names authored phone map and includes --product, selected --parts and --journey J1; never asks to edit virtual map."
+    },
+    {
+      "id": "unknown-receipt",
+      "given": "Product request accepted but terminal receipt unavailable.",
+      "required_observation": "Read exact original request/session; no second POST or automatic replacement."
+    }
+  ]
+}

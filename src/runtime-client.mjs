@@ -1,8 +1,10 @@
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: c1405f9b554fca6e5c5f09cf456d82bcddee8cf1ffa1239da585bf0fc48040e8).
+import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
+import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
 import { isRecentLintReceipt } from './runtime-lint-receipt.mjs';
 import {rememberSecrets} from './secret-redaction.mjs';
 import { bindingPlanLines, bindingRefusals } from './runtime-binding-plan.mjs';
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 36f52434532f27f1065cb5e6d35194ce1d1f8545a8c256c623d6d3bd37241a0a).
 import { buildCheckPlan, checkPlanResults, checkPlanLines, checkPlanResultLines } from './runtime-check-plan.mjs';
 import { interfaceFindings } from './interface-draft.mjs';
 import {readEvidenceEligibility} from './workflow-runner.mjs';
@@ -2704,6 +2706,13 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
   const context = { ports, singleAttempt: ports.env.PDD_CHECK_SINGLE_ATTEMPT === '1', cacheEnabled: cache || !!options['--lf'] || !!options['--cache-clear'], json: options['--json'] === true, details: options['--details'] === true, explicitTimeout: options['--timeout'] !== undefined, interrupted: false, warnings: [] };
   let release = () => {};
   try {
+    if(options['--journeys']!==undefined){
+      if(options['--journeys']!==true||words.length>1||['--read','--retry','--fill-hash','--request','--screen','--drawing'].some(key=>options[key]!==undefined))throw new Stop(2,'Use pdd test --journeys [JOURNEY] with normal test options.');
+      const {root,found}=localSetup(cwd,[]);
+      try { words=selectJourneys(found.tests.map(test=>({testPath:test.path,storyPath:test.storyPath})),words[0]); } catch(error) { throw new Stop(2,error.message); }
+      if(!words.length)throw new Stop(2,'No root product journeys found.');
+      options={...options};delete options['--journeys'];
+    }
     requestedCalls(options['--max-calls']);
     if (options['--local'] !== undefined && options['--max-calls'] !== undefined) throw new Stop(2, '--local does not accept --max-calls.');
     if (options['--lint'] === true && words.length && (options['--local'] === undefined || options['--local'] === true && !Object.hasOwn(options, '--timeout')) && Object.keys(options).every(key => ['--lint','--local','--json','--timeout'].includes(key))) {
@@ -3453,6 +3462,41 @@ function oneTest(found, words, root) {
   return selected[0];
 }
 
+function productTest(found, words, journey, root) {
+  if(journey===undefined && words.length)return oneTest(found,words,root);
+  const paths=selectJourneys(found.tests.map(test=>({testPath:test.path,storyPath:test.storyPath})),journey);
+  if(!paths.length && journey===undefined)return oneTest(found,words,root);
+  const requested=words.length?new Set(select(found,words,root).map(test=>test.path)):null;
+  const selected=found.tests.filter(test=>paths.includes(test.path)&&(!requested||requested.has(test.path)));
+  if(selected.length!==1)throw new Stop(2,'Product Simulator needs one explicit Story or journey test.');
+  return selected[0];
+}
+function captureProductTry(root,test,options,ports) {
+  let composition, maxTapCalls;
+  const capture=ports.captureSource(root,{tests:[test.path],appMap:null,prepareSource(snapshot){
+    const adapters={root,statFile:(path,options)=>snapshot.statFile(relative(root,path).split(sep).join('/'),options),
+      readFile:path=>snapshot.readFile(relative(root,path).split(sep).join('/'))};
+    const journey=options['--journey']??(/^user_stories\/journeys\/[^/]+\.md$/.test(test.storyPath)?test.path:undefined);
+    composition=composeProductTry({root,...(options['--parts']!==undefined?{parts:options['--parts'].split(',').map(part=>part.trim())}:{}),
+      ...(journey!==undefined?{journey,testPath:test.path}:{})},adapters);
+    maxTapCalls=productTapCallBound(parseJsonValue(composition.files[0].content),adapters);
+    const output=new Map(composition.files.map(file=>[file.path,file.content]));
+    const files={stat:({path})=>output.has(path)?{exists:true,is_symlink:false,size:Buffer.byteLength(output.get(path))}:snapshot.statFile(path),
+      read:({path})=>({content:output.get(path)??snapshot.readFile(path).toString('utf8')})};
+    const scenario=parseJsonValue(snapshot.readFile(test.path).toString('utf8'));
+    if(options['--journey']!==undefined)selectJourneys([{testPath:test.path,storyPath:scenario.story_path}],options['--journey']);
+    scenario.initial_world={$seed:composition.seedPath};
+    const expanded=expandSource({path:test.path,text:stringifyJsonValue(scenario),format:'scenario'},files);
+    return [...composition.files.map(file=>({path:file.path,bytes:file.content,...(file.path===composition.appMapPath?{role:'app-map'}:{})})),{path:test.path,bytes:expanded.text}];
+  }});
+  return {capture,composition,maxTapCalls};
+}
+const productOptions = setup => setup ? {'--product':true,...(setup.parts?{'--parts':setup.parts.join(',')}:{}),...(setup.journey?{'--journey':setup.journey}:{})} : {};
+function tryCommand(test, setup, suffix='', target=test.story) {
+  const quote=value=>/^[A-Za-z0-9_./-]+$/.test(String(value))?String(value):"'"+String(value).replace(/'/g,"'\"'\"'")+"'";
+  return `pdd simulate ${quote(target)}${setup?' --product'+(setup.parts?' --parts '+quote(setup.parts.join(',')):'')+(setup.journey?' --journey '+quote(setup.journey):''):''}${suffix}`;
+}
+
 // Read the authored interfaces, never scenario output, to choose an interaction.
 function programEntries(root, found, test) {
   const cli = new Set(), http = new Set();
@@ -3548,12 +3592,12 @@ function tryLink(answer, origin) {
 
 function tryRecovery(context, test, id) {
   const target = /^[A-Za-z0-9_./-]+$/.test(test.path) ? test.path : "'" + test.path.replace(/'/g, "'\"'\"'") + "'";
-  return new Stop(3, `The original Try ${id} is not confirmed running. Its saved setup is kept; no replacement was sent.\nRead-only status: GET ${context.origin}/v1/runs/${id} (authenticated).\nRead it again with: pdd simulate ${target} --no-open --no-wait\nUse --new only after reconciling the original outcome to start a separate Try.`);
+  return new Stop(3, `The original Try ${id} is not confirmed running. Its saved setup is kept; no replacement was sent.\nRead-only status: GET ${context.origin}/v1/runs/${id} (authenticated).\nRead it again with: ${tryCommand(test,context.product_setup,' --no-open --no-wait')}\nUse --new only after reconciling the original outcome to start a separate Try.`);
 }
 
 async function reopenTry(context, record, test) {
   const target = /^[A-Za-z0-9_./-]+$/.test(test.path) ? test.path : "'" + test.path.replace(/'/g, "'\"'\"'") + "'";
-  const again = `pdd simulate ${target}`;
+  const again = tryCommand(test,record.product_setup,'',test.path);
   if (context.interrupted) throw new Stop(3, 'Stopped before reopening the Try.');
   line(context.ports.stderr, 'Reopening your Try…');
   const reply = await context.runtime.reopen(record.id);
@@ -3635,6 +3679,9 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
   const ports = withDefaults(givenPorts), context = { ports, interrupted: false, doorMode: false };
   let release = () => {};
   try {
+    const productMode=options['--product']===true;
+    if(options['--product']!==undefined&&!productMode || !productMode&&['--parts','--journey'].some(key=>options[key]!==undefined))throw new Stop(2,'--parts and --journey require --product.');
+    if(productMode&&options['--app-map']!==undefined)throw new Stop(2,'--product builds its map; omit --app-map.');
     const requestedBudget = requestedCalls(options['--max-calls']);
     if (options['--agent'] !== undefined && (typeof options['--agent'] !== 'string' || !options['--agent'].trim() || ['--no-wait','--stop','--save-last','--cli','--shell','--serve'].some(key => options[key] !== undefined))) throw new Stop(2, '--agent chooses a configured agent name for an ordinary connected pdd simulate; omit --no-wait and door modes.');
     const doorModes = [options['--cli'] || options['--shell'], options['--serve'] !== undefined, options['--page'] || options['--tab'] !== undefined || options['--agent'] !== undefined, options['--save-last']].filter(Boolean);
@@ -3647,36 +3694,47 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       const identity = signIn(ports.gh, store);
       return await (await import('./try-doors.mjs')).saveLast({ root, store, identity, ports });
     }
-    if (options['--stop'] && (options['--tab'] || options['--new'] || options['--no-open'] || options['--no-wait'] || options['--app-map'] !== undefined || requestedBudget !== null)) throw new Stop(2, 'pdd simulate --stop takes only a STORY. Run pdd simulate --help.');
+    if (options['--stop'] && (options['--tab'] || options['--new'] || options['--no-open'] || options['--no-wait'] || options['--app-map'] !== undefined || productMode || requestedBudget !== null)) throw new Stop(2, 'pdd simulate --stop takes only a STORY. Run pdd simulate --help.');
     if (words.length > 1) throw new Stop(2, 'pdd simulate takes one STORY.');
     const origin = runtimeOrigin(ports.env);
     if (options['--stop']) return await stopByName(context, cwd, words, origin);
     const { root, found, normalized } = localSetup(cwd, words), store = stateFor(ports.env, root);
-    const localSelected = normalized.length ? [oneTest(found, normalized, root)] : [...found.tests].sort((a, b) => a.path.localeCompare(b.path));
+    const repoState = store.repo(root);
+    if (!productMode && normalized.length && !options['--new']) {
+      const prior = repoState.tries?.[oneTest(found, normalized, root).path];
+      if (prior?.product_setup) options = { ...options, ...productOptions(prior.product_setup) };
+    }
+    const productSetup = options['--product'] ? { parts: options['--parts']?.split(',').map(p => p.trim()) ?? null, journey: options['--journey'] ?? null } : null;
+    const localSelected = productSetup ? [productTest(found, normalized, options['--journey'], root)]
+      : normalized.length ? [oneTest(found, normalized, root)] : [...found.tests].sort((a, b) => a.path.localeCompare(b.path));
     const checked = preflight({ root, found, selected: localSelected }), rows = localRows(checked.rows);
     const refused = rows.find(row => row.state === 'refused');
     if (refused) {
       if (options['--cli'] || options['--shell'] || options['--serve'] !== undefined) throw new Stop(125, refused.refusals?.map(r => r.message || r.code).join('; ') || 'The Story input was refused.');
       line(ports.stdout, renderText({ rows: [refused], exitCode: 4 })); return 4;
     }
-    const appMap = appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
-    if (options['--serve'] !== undefined && normalized.length && !options['--new']) {
-      const priorTest = oneTest(found, normalized, root), prior = store.repo(root).tries?.[priorTest.path];
+    let appMap = productSetup ? null : appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
+    if (!productSetup && options['--serve'] !== undefined && normalized.length && !options['--new']) {
+      const priorTest = oneTest(found, normalized, root), prior = repoState.tries?.[priorTest.path];
       if (prior) {
         const problem = tryPromptProblem(root, found, priorTest, prior);
         if (problem) throw new Stop(125, `${problem} Run pdd simulate STORY --serve --new.`);
       }
     }
-    const boundedCapture = loadRuntimeWorkspace({root}).configured && localSelected.length ? ports.captureSource(root, { tests: localSelected.map(item => item.path), appMap }) : null;
-    let { test, selected, tab, typed } = simulationSelection(root, found, normalized, appMap, options);
-    const repoState = store.repo(root);
-    const wholeRecords = normalized.length ? [] : Object.entries(repoState.tries ?? {}).filter(([, value]) => isObject(value.simulation_scope));
+    const boundedCapture = !productSetup && loadRuntimeWorkspace({root}).configured && localSelected.length ? ports.captureSource(root, { tests: localSelected.map(item => item.path), appMap }) : null;
+    let { test, selected, tab, typed } = productSetup
+      ? { test: localSelected[0], selected: localSelected, tab: options['--tab'] ?? (options['--cli'] || options['--shell'] ? 'terminal' : 'screen'), typed: false }
+      : simulationSelection(root, found, normalized, appMap, options);
+    if (productSetup && options['--shell']) options['--cli'] = true;
+    const wholeRecords = productSetup || normalized.length ? [] : Object.entries(repoState.tries ?? {}).filter(([, value]) => isObject(value.simulation_scope));
     if (wholeRecords.length > 1) throw new Stop(2, 'Several whole-project simulations are saved. Stop a named Try with pdd simulate --stop STORY before opening the whole project.');
     const [recordPath, record] = wholeRecords[0] ?? [test.path, repoState.tries?.[test.path]];
-    const simulationScope = normalized.length ? null : { tests: selected.map(item => item.path), appMap, appMapHash: appMap ? sha256(readFileSync(join(root, appMap))) : null };
+    if (record && !options['--new'] && productSetup && (!record.product_setup || JSON.stringify(productSetup.parts) !== JSON.stringify(record.product_setup.parts) || Boolean(productSetup.journey) !== Boolean(record.product_setup.journey))) throw new Stop(4, 'Product selection changed; use --new explicitly.');
+    const simulationScope = productSetup || normalized.length ? null : { tests: selected.map(item => item.path), appMap, appMapHash: appMap ? sha256(readFileSync(join(root, appMap))) : null };
     if (record && simulationScope && !options['--new'] && !isDeepStrictEqual(record.simulation_scope, simulationScope)) throw new Stop(2, 'This saved simulation does not contain the current whole project. Run pdd simulate --new.');
     if (wholeRecords.length && !options['--new']) test = selected.find(item => item.path === recordPath) ?? test;
     if (record && options['--new'] && recordPath !== test.path && repoState.tries?.[test.path]) throw new Stop(2, `A different saved Try uses ${test.path}. Stop it with pdd simulate --stop ${test.path} before replacing the whole-project simulation.`);
+    context.product_setup = productSetup;
     context.typedForm = typed;
     context.doorMode = !!(options['--cli'] || options['--serve'] !== undefined);
     context.agentConnection = !options['--no-wait'] && !context.doorMode && ports.agentBridge !== false
@@ -3689,9 +3747,13 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     }
     Object.assign(context, { root, store, origin, visible: found.visible, appMap, cwd: realpathSync(cwd), simulationTests: selected, seedTest: { path: test.path, storyPath: test.storyPath } });
     const row = rows.find(row => row.test === test.path) ?? rows[0];
-    const capture = record?.simulation_scope && !options['--new']
+    const prepared = productSetup ? captureProductTry(root, test, options, ports) : null;
+    const capture = prepared?.capture ?? (record?.simulation_scope && !options['--new']
       ? ports.captureSource(root, trySourceSelection(record, recordPath))
-      : boundedCapture ?? ports.captureSource(root, { tests: selected.map(item => item.path), appMap });
+      : boundedCapture ?? ports.captureSource(root, { tests: selected.map(item => item.path), appMap }));
+    if (prepared && record?.product_parts && !options['--new'] && JSON.stringify(prepared.composition.product_parts) !== JSON.stringify(record.product_parts)) throw new Stop(4, 'The product part ownership changed. The original session is kept; use --new explicitly.');
+    if (prepared) appMap = capture.appMap;
+    context.appMap = appMap;
     const note = otherNote(otherFiles(capture.files, found).length);
     for (const warning of capture.warnings ?? []) line(ports.stderr, warning);
     if (record?.simulation_scope && !options['--new']) {
@@ -3751,6 +3813,17 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       delete repoState.tries[recordPath];
       store.saveRepo(root, repoState);
     }
+    if(prepared){
+      const version=await context.runtime.send('/v1/version',{method:'GET',headers:{'X-PDD-Features':'product-parts-v1'}},GET_MS);
+      const blocked=blockingAnswer(version);
+      if(blocked)throw new Stop(5,blocked);
+      if(version.status===401)throw new Stop(5,AUTH_TEXT);
+      if(version.unreachable)throw new Stop(5,version.unreachable);
+      if(version.status!==200)throw new Stop(5,`Product support could not be read (HTTP ${version.status ?? 'unknown'}). Nothing was uploaded.`);
+      if(!Array.isArray(version.json?.features) || !version.json.features.includes('product-parts-v1'))throw new Stop(5,'This interpreter needs an upgrade for whole-product Simulator support (product-parts-v1). Nothing was uploaded.');
+      line(ports.stderr,`Product parts: ${prepared.composition.parts.join(', ')}. One tap: up to ${prepared.maxTapCalls} AI calls.`);
+      line(ports.stderr,`Product screens: ${prepared.composition.labels.map(label=>label.title).join(', ')}. Up to ${prepared.composition.tapOperations} handler/background operations per tap, before drawing.`);
+    }
     await checkLint(context, rows);
     const failedRow = rows.find(item => item.state !== 'ready');
     if (failedRow && failedRow !== row) {
@@ -3766,15 +3839,15 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     const setup = { request_ids: [], reservation: null };
     for (;;) {
       if (!await admission(context, 'try', setup)) throw new Stop(context.interrupted ? 3 : 5, context.interrupted ? 'Stopped before sending.' : 'The interpreter stayed busy until the Try setup wait ended. No new Try was sent.');
-      request = { requestId: ports.randomUUID(), source_sha256: capture.sha256, seed: test.path, max_calls: requestedBudget ?? 400, ...(appMap ? { app_map: appMap } : {}),
+      request = { requestId: ports.randomUUID(), source_sha256: capture.sha256, seed: test.path, max_calls: requestedBudget ?? 400, ...(appMap ? { app_map: appMap } : {}), ...(prepared ? {product_parts:prepared.composition.product_parts} : {}),
         tab };
       setup.request_ids.push(request.requestId);
       const registered = await recordRuntimeRequest(setup.reservation, request.requestId, slotPorts(context));
       if (registered === false) { await finishReservation(context, setup, { state: 'not_run' }); throw new Stop(3, context.interrupted ? 'Stopped before sending.' : 'Stopped before the Try was sent.'); }
       if (context.interrupted || ports.now() >= context.deadline) { await finishReservation(context, setup, { state: 'not_run' }); throw new Stop(3, context.interrupted ? 'Stopped before sending.' : 'Stopped before the Try was sent.'); }
       const uploadedSeed=capture.sources.find(file=>file.path===test.path);
-      store.saveRepo(root, { ...repoState, tries: { ...repoState.tries, [test.path]: { id: request.requestId, ...setup, story: test.story, storyPath: test.storyPath, title: test.title, origin, login: identity.login, ...(!words.length ? { simulation_scope: { tests: selected.map(item => item.path), appMap, appMapHash: appMap ? sha256(capture.sources.find(file => file.path === appMap).bytes) : null } } : {}), seed_scenario: uploadedSeed ? JSON.parse(uploadedSeed.bytes.toString('utf8')) : test.doc, story_sha256: createHash('sha256').update(readFileSync(join(root, test.storyPath))).digest('hex'), prompt_hashes: capture.raw_prompt_hashes,
-        effective_prompt_hashes:Object.fromEntries(capture.sources.filter(file=>file.path.endsWith('.prompt.md')).map(file=>[file.path,sha256(file.bytes)])),contract_references:capture.references } } });
+      store.saveRepo(root, { ...repoState, tries: { ...repoState.tries, [test.path]: { id: request.requestId, ...setup, story: test.story, storyPath: test.storyPath, title: test.title, origin, login: identity.login, ...(!productSetup && !words.length ? { simulation_scope: { tests: selected.map(item => item.path), appMap, appMapHash: appMap ? sha256(capture.sources.find(file => file.path === appMap).bytes) : null } } : {}), seed_scenario: uploadedSeed ? JSON.parse(uploadedSeed.bytes.toString('utf8')) : test.doc, story_sha256: createHash('sha256').update(readFileSync(join(root, test.storyPath))).digest('hex'), prompt_hashes: capture.raw_prompt_hashes,
+        effective_prompt_hashes:Object.fromEntries(capture.sources.filter(file=>file.path.endsWith('.prompt.md')).map(file=>[file.path,sha256(file.bytes)])),contract_references:capture.references, ...(productSetup?{product_setup:productSetup,product_parts:prepared.composition.product_parts}:{}) } } });
       store.posted(context.folder, request.requestId);
       line(ports.stderr, `Starting your Try: sending ${capture.files.length} files, ${formatSize(capture.bytes)}${note ? ` ${note}` : ''}…`);
       reply = await context.runtime.post('/v1/try', request, capture.tar, Math.max(1, Math.min(ports.postMs, context.deadline - ports.now())));
@@ -3828,6 +3901,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     }
     return printTryProblem(context, row);
   } catch (error) {
+    if(options['--product'] && error.code && !error.exitCode){line(ports.stderr,`${error.code}: ${cleanText(error.message)}`);return 4;}
     if (options['--cli'] || options['--serve'] !== undefined || options['--save-last']) {
       line(ports.stderr, `pdd: ${cleanText(error.message || 'The Try could not start.', context.secrets ?? [])}`);
       if (error instanceof Stop && error.formRecovery) line(ports.stderr, cleanText(error.formRecovery, context.secrets ?? []));
@@ -3902,9 +3976,9 @@ function trySetupRefused(context, test, appMap, refusals, reportUrl) {
     fix: text(item.fix), where: text(item.where) || [text(item.file), text(item.at)].filter(Boolean).join(' ') }));
   const mapped = !!appMap && items.some(item => Object.hasOwn(APP_MAP_RULES, item.code) || /^app-map-/.test(item.code) || /app[-_]map/i.test(item.section));
   const why = items.map(item => `${item.reason ? `${item.code}: ${item.reason}` : item.code}${item.where ? `; at ${item.where}` : ''}`).join('; '), fix = items.find(item => item.fix)?.fix;
-  const again = `run pdd simulate ${test.story} --new.`;
+  const again = `run ${tryCommand(test,context.product_setup,' --new')}.`;
   line(context.ports.stdout, `The Try could not start: ${mapped ? 'the app map was refused' : 'the server refused it'} (${why}).`);
-  line(context.ports.stdout, fix ? `${fix} Then ${again}` : mapped ? `Fix ${appMap} (RUNBOOK §13), then ${again}`
+  line(context.ports.stdout, fix ? `${fix} Then ${again}` : mapped ? `Fix ${context.product_setup?'the authored part maps or product/plan.md':appMap} (RUNBOOK §13), then ${again}`
     : `Fix what it names, then ${again}${reportUrl ? ` Details: ${reportUrl}` : ''}`);
   return 4;
 }
@@ -4480,7 +4554,7 @@ export async function readTryOwner({ cwd = process.cwd(), story } = {}, givenPor
   const test = selected[0];
   ports.captureSource(root,{tests:[test.path]});
   async function openTry() {
-    const code = await runTry({ cwd, words: [test.path], options: { '--page': true, '--no-open': true, '--no-wait': true } }, { ...ports, stdout: ports.stderr, interactive: false, agentBridge: false });
+    const code = await runTry({ cwd, words: [test.path], options: { '--page': true, ...productOptions(record?.product_setup), '--no-open': true, '--no-wait': true } }, { ...ports, stdout: ports.stderr, interactive: false, agentBridge: false });
     if (code !== 0) throw new Error('The Try could not open. Read the progress on stderr and fix the reported problem.');
   }
   let record = repo.tries?.[test.path];
