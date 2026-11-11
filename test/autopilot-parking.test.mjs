@@ -697,7 +697,8 @@ test('3091 dependency wakes only for a closed issue with a merged closing PR', a
     const api = `https://api.github.com/repos/${run.repo}/pulls/23`;
     if (file === 'gh' && args[0] === 'api') {
       if (args[1] === `repos/${run.repo}/issues/2897`) return {stdout: JSON.stringify({state: closed ? 'closed' : 'open'})};
-      if (args[1].endsWith('/issues/2897/timeline?per_page=100')) return {stdout: JSON.stringify([[{event: 'cross-referenced', source: {issue: {pull_request: {url: api}}}}]])};
+      // Every page with no --slurp (gh 2.45 has none): one event per line.
+      if (args[1].endsWith('/issues/2897/timeline?per_page=100')) { assert.ok(!args.includes('--slurp') && args.includes('--paginate') && args.includes('--jq')); return {stdout: `${JSON.stringify({event: 'labeled'})}\n${JSON.stringify({event: 'cross-referenced', source: {issue: {pull_request: {url: api}}}})}\n`}; }
       if (args[1] === api) return {stdout: JSON.stringify({merged, body: closing ? 'Fixes #2897' : 'Related to #2897'})};
     }
     return execute(file, args, options);
