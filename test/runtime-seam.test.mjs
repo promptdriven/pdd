@@ -130,7 +130,7 @@ function stringLiterals(source) {
         else j++;
       }
       const rawBody = source.slice(i + 1, j);
-      out.push({ value: decodeJsEscapes(rawBody), raw: source.slice(start, j + 1), line: lineAt(start), isModuleSpecifier });
+      out.push({ value: decodeJsEscapes(rawBody), raw: source.slice(start, j + 1), start, end: j + 1, standalone: true, line: lineAt(start), isModuleSpecifier });
       pushToken('string');
       i = j + 1;
       continue;
@@ -144,7 +144,7 @@ function stringLiterals(source) {
       while (j < source.length && source[j] !== '`') {
         if (source[j] === '\\') { j += 2; continue; }
         if (source[j] === '$' && source[j + 1] === '{') {
-          out.push({ value: decodeJsEscapes(source.slice(chunkStart, j)), raw: source.slice(start, j + 2), line: lineAt(start), isModuleSpecifier });
+          out.push({ value: decodeJsEscapes(source.slice(chunkStart, j)), raw: source.slice(start, j + 2), start, end: j + 2, standalone: false, line: lineAt(start), isModuleSpecifier });
           stack.push({ depth: 1, tickStart: start });
           pushToken('${');
           j += 2;
@@ -154,7 +154,7 @@ function stringLiterals(source) {
         j++;
       }
       if (!interpolated) {
-        out.push({ value: decodeJsEscapes(source.slice(chunkStart, j)), raw: source.slice(start, j + 1), line: lineAt(start), isModuleSpecifier });
+        out.push({ value: decodeJsEscapes(source.slice(chunkStart, j)), raw: source.slice(start, j + 1), start, end: j + 1, standalone: true, line: lineAt(start), isModuleSpecifier });
         pushToken('string');
         i = j + 1;
       } else {
@@ -173,7 +173,7 @@ function stringLiterals(source) {
       while (j < source.length && source[j] !== '`') {
         if (source[j] === '\\') { j += 2; continue; }
         if (source[j] === '$' && source[j + 1] === '{') {
-          out.push({ value: decodeJsEscapes(source.slice(chunkStart, j)), raw: source.slice(resume, j + 2), line: lineAt(resume), isModuleSpecifier: false });
+          out.push({ value: decodeJsEscapes(source.slice(chunkStart, j)), raw: source.slice(resume, j + 2), start: resume, end: j + 2, standalone: false, line: lineAt(resume), isModuleSpecifier: false });
           stack.push({ depth: 1, tickStart: resume });
           pushToken('${');
           j += 2;
@@ -183,7 +183,7 @@ function stringLiterals(source) {
         j++;
       }
       if (!interpolated) {
-        out.push({ value: decodeJsEscapes(source.slice(chunkStart, j)), raw: source.slice(resume, j + 1), line: lineAt(resume), isModuleSpecifier: false });
+        out.push({ value: decodeJsEscapes(source.slice(chunkStart, j)), raw: source.slice(resume, j + 1), start: resume, end: j + 1, standalone: false, line: lineAt(resume), isModuleSpecifier: false });
         pushToken('string');
         i = j + 1;
       } else {
@@ -221,12 +221,150 @@ function stringLiterals(source) {
   return out;
 }
 
+function stripCommentsPreservingLines(text) {
+  let out = '';
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    const next = text[i + 1];
+    if (c === "'" || c === '"' || c === '`') {
+      out += c;
+      i++;
+      while (i < text.length && text[i] !== c) {
+        if (text[i] === '\\') {
+          out += text.slice(i, i + 2);
+          i += 2;
+        } else {
+          out += text[i];
+          i++;
+        }
+      }
+      if (i < text.length) { out += text[i]; i++; }
+      continue;
+    }
+    if (c === '/' && next === '/') {
+      const end = text.indexOf('\n', i + 2);
+      if (end < 0) break;
+      out += '\n';
+      i = end + 1;
+      continue;
+    }
+    if (c === '/' && next === '*') {
+      const end = text.indexOf('*/', i + 2);
+      const body = end < 0 ? text.slice(i + 2) : text.slice(i + 2, end);
+      out += body.replace(/[^\n]/g, ' ');
+      i = end < 0 ? text.length : end + 2;
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+
+function isPlusSeparator(between) {
+  return stripCommentsPreservingLines(between).trim() === '+';
+}
+
+function evalStaticStringExpr(expr) {
+  const trimmed = stripCommentsPreservingLines(expr).trim();
+  if (!trimmed) return null;
+  const tokens = stringLiterals(trimmed);
+  if (!tokens.length || !tokens.every(t => t.standalone)) return null;
+  if (trimmed.slice(0, tokens[0].start).trim() !== '' || trimmed.slice(tokens.at(-1).end).trim() !== '') return null;
+  for (let i = 0; i < tokens.length - 1; i++) {
+    if (trimmed.slice(tokens[i].end, tokens[i + 1].start).trim() !== '+') return null;
+  }
+  return tokens.map(t => t.value).join('');
+}
+
+function inwardPathCallViolations(relPath, codeText, baseLine = null) {
+  const clean = stripCommentsPreservingLines(codeText);
+  const hits = [];
+  const lineAt = index => baseLine ?? clean.slice(0, index).split('\n').length;
+
+  const doubleDirname = /\bdirname\s*\(\s*dirname\s*\([^;]*?\bimport\.meta\b|\bdirname\s*\(\s*import\.meta\.dirname\b/g;
+  let match;
+  while ((match = doubleDirname.exec(clean)) !== null) {
+    hits.push(`${relPath}:${lineAt(match.index)}: ${match[0].trim()}`);
+  }
+
+  const callStart = /\b(?:join|resolve)\s*\(/g;
+  while ((match = callStart.exec(clean)) !== null) {
+    const openIdx = clean.indexOf('(', match.index);
+    let depth = 1;
+    let k = openIdx + 1;
+    const args = [];
+    let argStart = k;
+    while (k < clean.length && depth > 0) {
+      const ch = clean[k];
+      if (ch === "'" || ch === '"' || ch === '`') {
+        k++;
+        while (k < clean.length && clean[k] !== ch) {
+          if (clean[k] === '\\') k += 2;
+          else k++;
+        }
+        k++;
+        continue;
+      }
+      if (ch === '(') depth++;
+      else if (ch === ')') {
+        depth--;
+        if (depth === 0) {
+          args.push(clean.slice(argStart, k));
+          break;
+        }
+      } else if (ch === ',' && depth === 1) {
+        args.push(clean.slice(argStart, k));
+        argStart = k + 1;
+      }
+      k++;
+    }
+    if (depth !== 0) continue;
+    const callRaw = clean.slice(match.index, k + 1).trim();
+    const evaluated = args.map(evalStaticStringExpr);
+    for (let idx = 0; idx < evaluated.length; idx++) {
+      const val = evaluated[idx];
+      if (val === null) continue;
+      const isParent = val === '..' || val === '../' || val.startsWith('../');
+      if (!isParent) continue;
+      const earlierMentionsImportMeta = args.slice(0, idx).some(a => /\bimport\.meta\b/.test(a));
+      if (idx < args.length - 1 || (val.startsWith('../') && val.length > 3) || earlierMentionsImportMeta) {
+        hits.push(`${relPath}:${lineAt(match.index)}: ${callRaw}`);
+        break;
+      }
+    }
+  }
+  return hits;
+}
+
 function scannedCandidates(source) {
   const candidates = [];
-  for (const token of stringLiterals(source)) {
+  const tokens = stringLiterals(source);
+  for (const token of tokens) {
     candidates.push({ value: token.value, raw: token.raw, line: token.line, isModuleSpecifier: token.isModuleSpecifier });
     for (const embedded of embeddedModuleSpecifiers(token.value)) {
       candidates.push({ value: embedded, raw: token.raw, line: token.line, isModuleSpecifier: true });
+    }
+  }
+  for (let i = 0; i < tokens.length; i++) {
+    if (!tokens[i].standalone) continue;
+    let endIdx = i;
+    while (
+      endIdx + 1 < tokens.length
+      && tokens[endIdx + 1].standalone
+      && isPlusSeparator(source.slice(tokens[endIdx].end, tokens[endIdx + 1].start))
+    ) {
+      endIdx++;
+    }
+    if (endIdx > i) {
+      const folded = tokens.slice(i, endIdx + 1).map(t => t.value).join('');
+      const raw = source.slice(tokens[i].start, tokens[endIdx].end);
+      candidates.push({ value: folded, raw, line: tokens[i].line, isModuleSpecifier: tokens[i].isModuleSpecifier });
+      for (const embedded of embeddedModuleSpecifiers(folded)) {
+        candidates.push({ value: embedded, raw, line: tokens[i].line, isModuleSpecifier: true });
+      }
+      i = endIdx;
     }
   }
   return candidates;
@@ -282,11 +420,12 @@ function referencesOutsideRuntime(relPath, candidate, { isModuleSpecifier = fals
 
 export function findInwardViolations(relPath, source) {
   if (!relPath.startsWith('src/runtime/')) return [];
-  const hits = [];
+  const hits = [...inwardPathCallViolations(relPath, source)];
   for (const item of scannedCandidates(source)) {
     if (referencesOutsideRuntime(relPath, item.value, { isModuleSpecifier: item.isModuleSpecifier })) {
       hits.push(`${relPath}:${item.line}: ${item.raw}`);
     }
+    hits.push(...inwardPathCallViolations(relPath, item.value, item.line));
   }
   return [...new Set(hits)];
 }
@@ -363,6 +502,7 @@ test('SEAM3: detector catches static, dynamic, re-export, URL, escaped and child
     ['src/pdd-cli.mjs', "import './\\u0072untime/runtime-client.mjs';\n"],
     ['src/pdd-cli.mjs', "const m = await import(`./\\u{72}untime/runtime-client.mjs`);\n"],
     ['src/pdd-cli.mjs', "execFileSync(process.execPath, ['--input-type=module', '-e', \"import './\\\\x72untime/runtime-client.mjs';\"]);\n"],
+    ['src/pdd-cli.mjs', "const m = await import('./run' + 'time/runtime-client.mjs');\n"],
     ['bin/pdd.mjs', "import '../src/runtime/index.mjs';\n"],
     ['scripts/autopilot-smoke.mjs', "const p = 'src/runtime/runtime-client.mjs';\n"],
     ['scripts/vm-suite.sh', "node src/runtime/runtime-client.mjs\n"],
@@ -512,37 +652,12 @@ registerHooks({
 
   const ALLOWED_BASE_CYCLES = new Set([
     'src/issue-sort-github.mjs <-> src/issue-sort.mjs',
+    'src/issue-mixed.mjs <-> src/issue-sort-github.mjs <-> src/issue-sort.mjs',
     'src/runtime/runtime-client.mjs <-> src/runtime/runtime-slots.mjs',
     'src/toml-string.mjs <-> src/workflow-herdr-layout.mjs',
   ]);
 
-  const analyzeProbeLines = lines => {
-    const out = new Set();
-    const adj = new Map();
-    const toRel = full => {
-      if (!full) return null;
-      const rel = relative(root, full).split(sep).join('/');
-      return rel.startsWith('src/') && rel.endsWith('.mjs') ? rel : null;
-    };
-    for (const line of lines) {
-      const tab = line.indexOf('\t');
-      const parentRel = tab >= 0 ? toRel(line.slice(0, tab)) : null;
-      const targetFull = tab >= 0 ? line.slice(tab + 1) : line;
-      let rel = toRel(targetFull);
-      if (!rel) continue;
-      if (parentRel && parentRel !== rel) {
-        if (!adj.has(parentRel)) adj.set(parentRel, new Set());
-        adj.get(parentRel).add(rel);
-      }
-      if (
-        rel === 'src/runtime-seam.mjs' ||
-        rel === 'src/runtime/index.mjs' ||
-        rel === 'src/runtime/secret-redaction.mjs' ||
-        rel === 'src/secret-redaction.mjs'
-      ) continue;
-      if (rel.startsWith('src/runtime/')) rel = `src/${rel.slice('src/runtime/'.length)}`;
-      out.add(rel);
-    }
+  const findTarjanCycles = adj => {
     let idx = 0;
     const indices = new Map();
     const low = new Map();
@@ -577,11 +692,64 @@ registerHooks({
     for (const v of adj.keys()) {
       if (!indices.has(v)) strong(v);
     }
-    return { loaded: [...out].sort(), cycles: cycles.sort() };
+    return cycles.sort();
+  };
+
+  // 1. Static ESM import/re-export graph across all src/ and src/runtime/ files (including src/runtime-seam.mjs and src/runtime/index.mjs).
+  const staticAdj = new Map();
+  for (const rel of walk('src').filter(f => f.endsWith('.mjs'))) {
+    const clean = stripCommentsPreservingLines(readFileSync(join(root, rel), 'utf8'));
+    const edges = new Set();
+    const staticRe = /\b(?:import|export)\s+(?:[^'"]*?\bfrom\s*)?(['"])([^'"]+)\1/g;
+    let m;
+    while ((m = staticRe.exec(clean)) !== null) {
+      const spec = decodeJsEscapes(m[2]);
+      if (!spec.startsWith('./') && !spec.startsWith('../')) continue;
+      const target = posix.normalize(posix.join(posix.dirname(rel), spec));
+      if (target.startsWith('src/') && target.endsWith('.mjs') && target !== rel) edges.add(target);
+    }
+    staticAdj.set(rel, edges);
+  }
+  const novelStaticCycles = findTarjanCycles(staticAdj).filter(c => !ALLOWED_BASE_CYCLES.has(c));
+  assert.deepEqual(novelStaticCycles, [], `unexpected new static import cycle: ${novelStaticCycles.join('; ')}`);
+
+  const ASYNC_SEAM_BRIDGE_PROBES = new Set([
+    'cli:test', 'cli:lint', 'cli:simulate', 'cli:contracts', 'cli:contracts-sync',
+    'cli:jobs', 'cli:mcp', 'child:try-doors-launcher',
+  ]);
+
+  const analyzeProbeLines = (lines, { ignoreAsyncSeamOutgoing = false } = {}) => {
+    const out = new Set();
+    const adj = new Map();
+    const toRel = full => {
+      if (!full) return null;
+      const rel = relative(root, full).split(sep).join('/');
+      return rel.startsWith('src/') && rel.endsWith('.mjs') ? rel : null;
+    };
+    for (const line of lines) {
+      const tab = line.indexOf('\t');
+      const parentRel = tab >= 0 ? toRel(line.slice(0, tab)) : null;
+      const targetFull = tab >= 0 ? line.slice(tab + 1) : line;
+      let rel = toRel(targetFull);
+      if (!rel) continue;
+      if (parentRel && parentRel !== rel && !(ignoreAsyncSeamOutgoing && parentRel === 'src/runtime-seam.mjs' && !rel.startsWith('src/runtime/'))) {
+        if (!adj.has(parentRel)) adj.set(parentRel, new Set());
+        adj.get(parentRel).add(rel);
+      }
+      if (
+        rel === 'src/runtime-seam.mjs' ||
+        rel === 'src/runtime/index.mjs' ||
+        rel === 'src/runtime/secret-redaction.mjs' ||
+        rel === 'src/secret-redaction.mjs'
+      ) continue;
+      if (rel.startsWith('src/runtime/')) rel = `src/${rel.slice('src/runtime/'.length)}`;
+      out.add(rel);
+    }
+    return { loaded: [...out].sort(), cycles: findTarjanCycles(adj) };
   };
 
   let seq = 0;
-  const runProbe = async (args, cwd) => {
+  const runProbe = async (key, args, cwd) => {
     const outFile = join(scratch, `out-${++seq}.txt`);
     writeFileSync(outFile, '');
     const child = execFileAsync(process.execPath, ['--import', pathToFileURL(preload).href, ...args], {
@@ -598,7 +766,7 @@ registerHooks({
     child.child.stdin?.end();
     try { await child; } catch {}
     const lines = readFileSync(outFile, 'utf8').split('\n').filter(Boolean);
-    return analyzeProbeLines(lines);
+    return analyzeProbeLines(lines, { ignoreAsyncSeamOutgoing: ASYNC_SEAM_BRIDGE_PROBES.has(key) });
   };
 
   // Every route local in PUBLIC_COMMAND_ROUTES must map to a probed switch arm.
@@ -680,7 +848,7 @@ registerHooks({
   ]);
   for (let i = 0; i < probes.length; i += 8) {
     const chunk = probes.slice(i, i + 8);
-    const probeBatch = await Promise.all(chunk.map(([, args, cwd]) => runProbe(args, cwd)));
+    const probeBatch = await Promise.all(chunk.map(([key, args, cwd]) => runProbe(key, args, cwd)));
     chunk.forEach(([key], idx) => {
       const expected = RECORDED_BASE_ENTRIES[key].map(n => BASE_SRC_CATALOG[n]);
       const { loaded, cycles } = probeBatch[idx];
@@ -747,6 +915,11 @@ test('SEAM7: inward detector catches static, dynamic, require, package.json URL,
     ['src/runtime/runtime-client.mjs', "import '\\x2e\\x2e';\n"],
     ['src/runtime/runtime-client.mjs', "const p = 'src/workflow-runner.mjs';\n"],
     ['src/runtime/runtime-client.mjs', "import '..';\n"],
+    ['src/runtime/runtime-client.mjs', "const p = join(dirname(dirname(fileURLToPath(import.meta.url))), 'workflow-runner.mjs');\n"],
+    ['src/runtime/runtime-client.mjs', "const p = join(here, '..', 'x.mjs');\n"],
+    ['src/runtime/runtime-client.mjs', "const p = '.' + './x.mjs';\n"],
+    ['src/runtime/runtime-client.mjs', "const p = '\\x2e./x.mjs';\n"],
+    ['src/runtime/runtime-client.mjs', "const child = \"import {allRuns} from '../workflow-runs.mjs'\";\n"],
   ];
   for (const [file, code] of cases) {
     assert.ok(findInwardViolations(file, code).length > 0, `expected inward violation for ${file}: ${code.trim()}`);
@@ -1463,4 +1636,52 @@ test('SEAM13 (WEAKER DEFAULTS): agent-project has no localEvidenceEligibility fa
     ),
     err => !(err instanceof TypeError) && /Native Story assessment ports.*not bound/.test(err.message),
   );
+});
+
+test('SEAM14 (Should-fix 1 & 5): single shared defaultLineReader in src/runtime and base load order for agent-adapters in Try', async t => {
+  const { spawnSync } = await import('node:child_process');
+  const { pathToFileURL } = await import('node:url');
+  const { Readable } = await import('node:stream');
+  const directClient = await import('../src/runtime/runtime-client.mjs');
+  const tryDoorsSrc = readFileSync(join(root, 'src/runtime/try-doors.mjs'), 'utf8');
+
+  // (1) One shared defaultLineReader in src/runtime/runtime-client.mjs, imported by src/runtime/try-doors.mjs.
+  assert.equal(typeof directClient.defaultLineReader, 'function');
+  assert.ok(!/function\s+defaultLineReader\b/.test(tryDoorsSrc), 'try-doors.mjs must not define a second defaultLineReader');
+  const reader = directClient.defaultLineReader(Readable.from(['yes\n']));
+  assert.equal(await reader.ask(), 'yes');
+  reader.close();
+
+  // (5) createAgentBridge loads src/agent-adapters.mjs before "Connecting your agent..." and GET /model.
+  const loader = "export async function resolve(s, c, n) { const r = await n(s, c); if (r.url.endsWith('/agent-adapters.mjs')) throw new Error('ADAPTERS_LOAD_FAILURE'); return r; }";
+  const reg = `import { register } from 'node:module'; register(${JSON.stringify(`data:text/javascript,${encodeURIComponent(loader)}`)});`;
+  const script = `
+    const seam = await import(${JSON.stringify(pathToFileURL(join(root, 'src/runtime-seam.mjs')).href)});
+    let stderr = '';
+    let modelCalls = 0;
+    const context = {
+      root: process.cwd(),
+      secrets: [],
+      agentDefinitions: [{ id: 'codex', name: 'codex' }],
+      ports: { stderr: { write(s) { stderr += s; } }, randomUUID: () => '00000000-0000-4000-8000-000000000001', env: {} },
+      store: { repo: () => ({}), saveRepo() {} },
+      runtime: { async send() { modelCalls++; return { status: 200, json: { entries: [] } }; } },
+    };
+    try {
+      await seam.createAgentBridge(context, { path: 'tests/a.json' }, 'try-1', {}, 'https://runtime.example/try/1', {});
+      process.exit(2);
+    } catch (err) {
+      process.stdout.write(JSON.stringify({ message: err.message, stderr, modelCalls }));
+    }
+  `;
+  const res = spawnSync(
+    process.execPath,
+    ['--import', `data:text/javascript,${encodeURIComponent(reg)}`, '--input-type=module', '-e', script],
+    { cwd: root, encoding: 'utf8' },
+  );
+  assert.equal(res.status, 0, res.stderr);
+  const parsed = JSON.parse(res.stdout);
+  assert.equal(parsed.message, 'ADAPTERS_LOAD_FAILURE');
+  assert.equal(parsed.stderr, '');
+  assert.equal(parsed.modelCalls, 0);
 });

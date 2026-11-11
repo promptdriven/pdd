@@ -1,22 +1,14 @@
-// Generated from prompts/cli/try-doors.prompt.md (sha256: facb27f9ee40a0877aff15b72616f33386cb465e5336db3db5989f0182c0352e).
+// Generated from prompts/cli/try-doors.prompt.md (sha256: 725417f3720ef4c42b055cf5589094f4b20a970f835fdeaf2fec0d77b02232f2).
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { accessSync, chmodSync, closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createInterface } from 'node:readline';
 import { findTests, gitFiles, readPrompt, captureSource, executableInterfaceText } from './runtime-preflight.mjs';
 import { cleanText, tryUsage, tryUsageLine } from './runtime-output.mjs';
-import { runDoorCall, saveDoorCaseResult, acquireCaseWriteOwnership } from './runtime-client.mjs';
+import { runDoorCall, saveDoorCaseResult, acquireCaseWriteOwnership, defaultLineReader } from './runtime-client.mjs';
 
 const WRAPPER_EXIT = 125;
-function defaultLineReader(stdin) {
-  const reader = createInterface({ input: stdin }), lines = [], waiting = [];
-  let closed = false;
-  reader.on('line', text => { const next = waiting.shift(); if (next) next(text); else lines.push(text); });
-  reader.on('close', () => { closed = true; for (const next of waiting.splice(0)) next(''); });
-  return { ask: () => lines.length ? Promise.resolve(lines.shift()) : closed ? Promise.resolve('') : new Promise(done => waiting.push(done)), close: () => reader.close() };
-}
 const hash = text => createHash('sha256').update(text).digest('hex');
 const quote = word => /^[A-Za-z0-9_./:@%+=,-]+$/.test(word) ? word : `'${word.replaceAll("'", "'\\''")}'`;
 const read = path => JSON.parse(readFileSync(path, 'utf8'));

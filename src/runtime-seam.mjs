@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: c29a9fbce82a1b6a7e1efce242a77ebb4a7c0d3143dbad23153974020ea22fbe).
+// Generated from prompts/cli/runtime-seam.prompt.md (sha256: e9521f17fc55c11a3a5dc1c8d51e9ca3f69aa14e772add31dd31fd8c87e1c3f6).
 import { realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -269,10 +269,21 @@ export async function runTry(input = {}, ports = {}) {
   ]);
   const defaultDiscoverAgents = async (...args) => (await import('./agent-adapters.mjs')).discoverAgents(...args);
   const defaultAskAgent = async (...args) => (await import('./agent-adapters.mjs')).askAgent(...args);
+  const defaultAgentBridge = (context, test, tryId, opts, link) =>
+    createAgentBridge(context, test, tryId, opts, link, {
+      redaction: ports.redaction ?? seamRedaction(ports),
+      redactSecrets: ports.redactSecrets,
+      loadAgentDefinitions: ports.loadAgentDefinitions ?? ports.agents?.loadDefinitions ?? loadAgentDefinitions,
+      discoverAgents: ports.discoverAgents ?? ports.agents?.list,
+      askAgent: ports.askAgent ?? ports.agents?.ask,
+      evidenceEligibility: ports.evidenceEligibility ?? ports.readEvidenceEligibility ?? readEvidenceEligibility,
+      guidePorts: ports.guidePorts,
+    });
   return runtimeRunTry(
     input,
     withPortDefaults(withEligibilityDefault(ports, readEvidenceEligibility), {
       tryLauncherUrl: TRY_LAUNCHER_URL,
+      agentBridge: defaultAgentBridge,
       loadAgentDefinitions: ports.loadAgentDefinitions ?? ports.agents?.loadDefinitions ?? loadAgentDefinitions,
       discoverAgents: ports.discoverAgents ?? ports.agents?.list ?? defaultDiscoverAgents,
       askAgent: ports.askAgent ?? ports.agents?.ask ?? defaultAskAgent,

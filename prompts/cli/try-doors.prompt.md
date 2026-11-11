@@ -31,7 +31,7 @@ whether the program exited successfully. Unknown execution must not leave an old
 
 `saveLast(context)` reads the last confirmed invocation for this repository, verifies the current gh login and
 original session identity, and appends the input/result as one exact recorded case in the original test file
-through saveDoorCase (using `context.ports.lineReader` — defaulting to a readline line reader over `stdin` — for the interactive closed-editor handoff prompt when needed). This records an observation; it does not approve a prompt or validate that the answer is
+through saveDoorCase (using `context.ports.lineReader` — defaulting to the runtime client's shared `defaultLineReader` over `stdin` — for the interactive closed-editor handoff prompt when needed). This records an observation; it does not approve a prompt or validate that the answer is
 correct. Repeated Save for the same action is a no-op. Refuse missing/unknown evidence or a changed Story/test
 identity, and keep earlier checks and all unrelated test bytes. Tie the recording to the original step's criterion.
 Print the target file and new step name. No model call is needed.

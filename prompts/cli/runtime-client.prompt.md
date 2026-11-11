@@ -1153,6 +1153,8 @@ Reject incompatible modes before any network effect. A door reuses an open Try o
 with its recorded GitHub login. --cli selects terminal on new sessions and delegates local launch behavior to
 [Try doors](try-doors.prompt.md); --serve delegates to [HTTP doors](try-http.prompt.md), passing the selected local app-map path and invocation directory for missing-map recovery guidance only; the authenticated pinned model still decides Screen capability. Show no browser link and do not open the browser for these modes.
 
+Export `defaultLineReader(stdin)` as the shared readline line-queue helper (`{ ask(), close() }`) used as the default `lineReader` port across this module and [Try doors](try-doors.prompt.md).
+
 Export `runDoorCall(descriptor, input, ports={})`: descriptor identifies root, session ID, original runtime origin,
 GitHub login, prompt and operation. Sign in again, require the original login, and send exactly one JSON owner call
 with a fresh request ID. Save the ID before sending. A lost POST is recovered only by GET of that same ID;

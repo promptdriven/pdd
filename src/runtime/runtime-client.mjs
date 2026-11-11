@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 16510970e567a5884883311fba9a3b8058001a6dc6dc9d373ca1d24908656479).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 183eac18e5141a45cc686aa4658fc2ac6a0ca3b8da90074e9ad5dc6b9a559465).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
@@ -50,7 +50,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const BATCH = /^\d{8}-\d{6}-[a-z0-9]{4}$/;
 // pdd's local rules match this engine build (checked Oct 27; spec OPEN 9: warn when the runtime runs another one).
 const ENGINE_SHA = 'eae2202a68d00ab762fcbbf1eba0d8607a132a15';
-function defaultLineReader(stdin) {
+export function defaultLineReader(stdin) {
   const reader = createInterface({ input: stdin }), lines = [], waiting = [];
   let closed = false;
   reader.on('line', text => { const next = waiting.shift(); if (next) next(text); else lines.push(text); });
