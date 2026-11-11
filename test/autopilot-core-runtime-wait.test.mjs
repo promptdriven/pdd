@@ -5,7 +5,7 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { appendFileSync, readFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { coreWorld } from './helpers/core-world.mjs';
 import { coreStatus } from '../src/autopilot-core.mjs';
@@ -23,8 +23,11 @@ function window(w, minutes) {
   w.resend = () => ({ stories: [STORY], neverSent: [STORY], noVerdict: [], failed: [], maintenance: true });
   return until;
 }
-const summary = (exitCode, state) => `${JSON.stringify({ batch: '20261111-090000-abcd', exit_code: exitCode, summary_line: `1 of 1 Story ${state}`, rows: [{ story: 'place-order', test: 'tests/place-order.json', state }] })}\n`;
-const answer = (w, n, exitCode, state) => { const job = w.job(n, 'runtime'); appendFileSync(job.log, summary(exitCode, state)); w.finish(n, 'runtime', { code: exitCode }); return job; };
+const summary = (exitCode, state, stories = ['place-order']) => `${JSON.stringify({ batch: '20261111-090000-abcd', exit_code: exitCode, summary_line: `${stories.length} of ${stories.length} Story ${state}`,
+  rows: stories.map(story => ({ story, test: `tests/${story}.json`, state, checks: state === 'not run' ? null : { passed: state === 'passed' ? 3 : 2, total: 3 } })) })}\n`;
+const answer = (w, n, exitCode, state, stories) => { const job = w.job(n, 'runtime'); appendFileSync(job.log, summary(exitCode, state, stories)); w.finish(n, 'runtime', { code: exitCode }); return job; };
+// The PR changes the Story (a PASS of a Story that the PR does not change never counts, #3227).
+const story = (w, n, path = STORY) => { const cwd = w.job(n, 'build').cwd; mkdirSync(join(cwd, 'user_stories'), { recursive: true }); writeFileSync(join(cwd, path), `# ${path}\n`); };
 const status = w => coreStatus({ state: w.state, settings: w.settings }, { root: w.root, now: w.now });
 
 test('maintenance for 30 minutes: the job waits, sends the check after the window, gets PASS, and the PR has no "not run"', async t => {
@@ -32,7 +35,7 @@ test('maintenance for 30 minutes: the job waits, sends the check after the windo
   w.issue(17); w.issue(18);
   await w.tick();
   const until = window(w, 30);
-  const { pr } = w.build(17, { body: notRunBody, runtime: maintenance });
+  story(w, 17); const { pr } = w.build(17, { body: notRunBody, runtime: maintenance });
   await w.tick();
   w.review(17, 'PASS'); w.suite(17, 0);
   await w.tick();
@@ -58,7 +61,7 @@ test('maintenance for 30 minutes: the job waits, sends the check after the windo
 
   answer(w, 17, 0, 'passed');
   await w.tick();
-  assert.match(pr.body, /^Runtime: PASS$/m); assert.match(pr.body, /Evidence: runtime=pass; tests=pass \(3\/3\)/);
+  assert.match(pr.body, /^Runtime: PASS \(user_stories\/place-order\.md, 3\/3 checks\)$/m); assert.match(pr.body, /Evidence: runtime=pass; tests=pass \(3\/3\)/);
   assert.doesNotMatch(pr.body, /not run/);
   await w.tick();
   assert.deepEqual(w.github.merges, [pr.number], 'the PR merges after the PASS');
@@ -72,7 +75,7 @@ test('a long window is no quiet step: 2 hours of waiting never end the job, then
   w.issue(17);
   await w.tick();
   window(w, 120);
-  w.build(17, { body: notRunBody, runtime: maintenance }); await w.tick();
+  story(w, 17); w.build(17, { body: notRunBody, runtime: maintenance }); await w.tick();
   w.review(17, 'PASS'); w.suite(17, 0);
   for (let i = 0; i < 12; i++) { await w.tick(); w.advance(10 * MIN); }
   assert.deepEqual(w.stopped, [], 'no process is stopped');
@@ -86,11 +89,11 @@ test('a real FAIL after the window goes to a repair; no verdict keeps "not run" 
   w.issue(17); w.issue(18);
   await w.tick();
   window(w, 10);
-  const first = w.build(17, { body: notRunBody, runtime: maintenance }); await w.tick();
+  story(w, 17); const first = w.build(17, { body: notRunBody, runtime: maintenance }); await w.tick();
   w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
   w.advance(10 * MIN); await w.tick();
   answer(w, 17, 1, 'failed'); await w.tick();
-  assert.match(first.pr.body, /^Runtime: FAIL \(pdd test sent again by Autopilot: place-order failed\)$/m);
+  assert.match(first.pr.body, /^Runtime: FAIL \(user_stories\/place-order\.md, 1 of 3 checks failed; pdd test sent again by Autopilot\)$/m);
   await w.tick();
   const repair = w.job(17, 'repair');
   assert.ok(repair, 'a real FAIL starts a repair'); assert.match(repair.input, /Runtime: FAIL/);
@@ -101,11 +104,11 @@ test('a real FAIL after the window goes to a repair; no verdict keeps "not run" 
   await w.tick(); w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
   assert.equal(w.github.prs.get(first.pr.number).merged, true, '#17 merges after its repair');
   await w.tick();
-  const second = w.build(18, { body: notRunBody.replace('#17', '#18'), runtime: maintenance }); await w.tick();
+  story(w, 18); const second = w.build(18, { body: notRunBody.replace('#17', '#18'), runtime: maintenance }); await w.tick();
   w.review(18, 'PASS'); w.suite(18, 0); await w.tick();
   answer(w, 18, 5, 'not run');
   await w.tick();
-  assert.match(second.pr.body, /^Runtime: not run \(the check that Autopilot sent again gave no verdict: 1 of 1 Story not run\)$/m);
+  assert.match(second.pr.body, /^Runtime: not run \(user_stories\/place-order\.md: the check that Autopilot sent again gave no verdict\)$/m);
   await w.tick();
   assert.equal(second.pr.merged, true, 'a check with no verdict does not block the merge');
   const drafts = listReportDrafts({ root: w.reportRoot });
@@ -118,13 +121,13 @@ test('maintenance for more than 12 hours: "Runtime: not run (maintenance since H
   w.issue(17);
   await w.tick();
   window(w, 24 * 60);
-  const { pr } = w.build(17, { body: notRunBody, runtime: maintenance }); await w.tick();
+  story(w, 17); const { pr } = w.build(17, { body: notRunBody, runtime: maintenance }); await w.tick();
   w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
   const first = w.now();
   for (let i = 0; i < 72 && !pr.merged; i++) { w.advance(10 * MIN); await w.tick(); }
   assert.equal(w.started.filter(job => job.role === 'runtime').length, 0, 'nothing is sent while the maintenance lasts');
   assert.ok(w.now() - first >= 12 * HOUR && w.now() - first <= 12 * HOUR + 20 * MIN, 'the backstop is 12 hours');
-  assert.match(pr.body, new RegExp(`^Runtime: not run \\(maintenance since ${new Date(first).toISOString().slice(11, 16)} UTC\\)$`, 'm'));
+  assert.match(pr.body, new RegExp(`^Runtime: not run \\(user_stories/place-order\\.md: maintenance since ${new Date(first).toISOString().slice(11, 16)} UTC\\)$`, 'm'));
   assert.match(pr.body, /Evidence: runtime=not-run/);
   assert.equal(pr.merged, true);
   const drafts = listReportDrafts({ root: w.reportRoot });
@@ -136,7 +139,7 @@ test('a not-run line with no unsent check keeps today\'s route: no capacity read
   const w = await coreWorld(t, { settings: { runs: 1 } });
   w.issue(17);
   await w.tick();
-  const { pr } = w.build(17, { body: 'Fixes #17\n\nRuntime: not run (pdd lint refused the case)', runtime: { state: 'not-run', kind: 'runtime', component: 'pdd lint', code: 'lint-refusal', cause: 'pdd lint refused the case' } });
+  story(w, 17); const { pr } = w.build(17, { body: 'Fixes #17\n\nRuntime: not run (pdd lint refused the case)', runtime: { state: 'not-run', kind: 'runtime', component: 'pdd lint', code: 'lint-refusal', cause: 'pdd lint refused the case' } });
   await w.tick(); w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
   assert.equal(pr.merged, true); assert.equal(w.healthReads, undefined, 'no capacity read');
   assert.match(pr.body, /Runtime: not run \(pdd lint refused the case\)/);
@@ -149,18 +152,18 @@ test('B5 a sent check with no verdict and no failed check is sent once more, wit
   await w.tick();
   w.resend = () => ({ stories: [STORY], neverSent: [], noVerdict: [STORY], failed: [], maintenance: false });
   const body = 'Fixes #17\n\nRuntime: not run (graph-provider-failure: no verdict)\nEvidence: runtime=not-run (17/19); tests=pass (3/3)';
-  const { pr } = w.build(17, { body, runtime: { state: 'not-run', kind: 'runtime', component: 'pdd test', code: 'no-verdict', cause: 'graph-provider-failure' } });
+  story(w, 17); const { pr } = w.build(17, { body, runtime: { state: 'not-run', kind: 'runtime', component: 'pdd test', code: 'no-verdict', cause: 'graph-provider-failure' } });
   await w.tick(); w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
   assert.ok(w.job(17, 'runtime'), 'sent at once: the interpreter is healthy');
   assert.equal(w.healthReads.length, 1);
   answer(w, 17, 0, 'passed'); await w.tick();
-  assert.match(pr.body, /^Runtime: PASS$/m); assert.match(pr.body, /Evidence: runtime=pass; tests=pass \(3\/3\)/);
+  assert.match(pr.body, /^Runtime: PASS \(user_stories\/place-order\.md, 3\/3 checks\)$/m); assert.match(pr.body, /Evidence: runtime=pass; tests=pass \(3\/3\)/);
   await w.tick();
   assert.equal(pr.merged, true);
   const history = readFileSync(join(w.root, 'history.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line)).find(row => row.outcome === 'merged');
   assert.deepEqual(history.runtimeOriginal.lines, ['Runtime: not run (graph-provider-failure: no verdict)'], 'the agent\'s line stays for an audit');
   assert.equal(history.runtimeOriginal.evidence, 'Evidence: runtime=not-run (17/19); tests=pass (3/3)');
-  assert.equal(history.runtimeOriginal.engine, 'Runtime: PASS');
+  assert.deepEqual(history.runtimeOriginal.engine, ['Runtime: PASS (user_stories/place-order.md, 3/3 checks)']);
   assert.equal(history.runtimeOriginal.runtime.code, 'no-verdict');
   assert.equal(w.started.filter(job => job.role === 'runtime').length, 1, 'once for the head');
 });
@@ -170,23 +173,55 @@ test('B5 a check with a failed check is never sent again; one Story line each is
   w.issue(17);
   await w.tick();
   w.resend = () => ({ stories: ['user_stories/b.md'], neverSent: [], noVerdict: ['user_stories/b.md'], failed: [STORY], maintenance: false });
-  w.build(17, { body: `Fixes #17\n\nRuntime: not run (${STORY}: no verdict)\nRuntime: not run (user_stories/b.md: no verdict)`, runtime: { state: 'not-run', kind: 'runtime', code: 'no-verdict', cause: 'no verdict' } });
+  story(w, 17); story(w, 17, 'user_stories/b.md'); w.build(17, { body: `Fixes #17\n\nRuntime: not run (${STORY}: no verdict)\nRuntime: not run (user_stories/b.md: no verdict)`, runtime: { state: 'not-run', kind: 'runtime', code: 'no-verdict', cause: 'no verdict' } });
   await w.tick(); w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
   assert.equal(w.started.filter(job => job.role === 'runtime').length, 0, 'no resend when a check failed');
   assert.equal(w.healthReads, undefined, 'and no capacity read');
 });
 
-test('rule B5 maintenance lines, one per Story: the engine waits, sends both Stories once and writes one PASS line', async t => {
+test('rule B5 maintenance lines, one per Story: the engine waits, sends both Stories once and writes one PASS line each', async t => {
   const w = await coreWorld(t, { settings: { runs: 1 } });
   w.issue(17);
   await w.tick();
   window(w, 20);
   w.resend = () => ({ stories: [STORY, 'user_stories/b.md'], neverSent: [STORY, 'user_stories/b.md'], noVerdict: [], failed: [], maintenance: true });
-  const { pr } = w.build(17, { body: `Fixes #17\n\nRuntime: not run (${STORY}: maintenance until 08:52 UTC)\nRuntime: not run (user_stories/b.md: maintenance until 08:52 UTC)`, runtime: maintenance });
+  story(w, 17); story(w, 17, 'user_stories/b.md'); const { pr } = w.build(17, { body: `Fixes #17\n\nRuntime: not run (${STORY}: maintenance until 08:52 UTC)\nRuntime: not run (user_stories/b.md: maintenance until 08:52 UTC)`, runtime: maintenance });
   await w.tick(); w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
   assert.equal(w.started.filter(job => job.role === 'runtime').length, 0, 'it waits');
   w.advance(10 * MIN); await w.tick(); w.advance(10 * MIN); await w.tick();
   assert.deepEqual(w.job(17, 'runtime').args.slice(1), ['test', '--json', STORY, 'user_stories/b.md']);
-  answer(w, 17, 0, 'passed'); await w.tick();
-  assert.equal(pr.body.match(/^Runtime:.*$/gm).join('|'), 'Runtime: PASS');
+  answer(w, 17, 0, 'passed', ['place-order', 'b']); await w.tick();
+  assert.equal(pr.body.match(/^Runtime:.*$/gm).join('|'), 'Runtime: PASS (user_stories/place-order.md, 3/3 checks)|Runtime: PASS (user_stories/b.md, 3/3 checks)');
+  await w.tick();
+  assert.equal(pr.merged, true);
+});
+
+test('a single line with no Story and two resent Stories becomes one line each; a Story with no verdict keeps "not run"', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17);
+  await w.tick();
+  w.resend = () => ({ stories: [STORY, 'user_stories/b.md'], neverSent: [STORY, 'user_stories/b.md'], noVerdict: [], failed: [], maintenance: false });
+  story(w, 17); story(w, 17, 'user_stories/b.md'); const { pr } = w.build(17, { body: 'Fixes #17\n\nRuntime: not run (maintenance until 08:52 UTC)\nEvidence: runtime=not-run; tests=pass (3/3)', runtime: maintenance });
+  await w.tick(); w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
+  const job = w.job(17, 'runtime');
+  appendFileSync(job.log, `${JSON.stringify({ exit_code: 3, summary_line: '1 of 2 Stories pass', rows: [{ story: 'place-order', state: 'passed', checks: { passed: 3, total: 3 } }, { story: 'b', state: 'unknown', checks: null }] })}\n`);
+  w.finish(17, 'runtime', { code: 3 }); await w.tick();
+  assert.equal(pr.body.match(/^Runtime:.*$/gm).join('|'), 'Runtime: PASS (user_stories/place-order.md, 3/3 checks)|Runtime: not run (user_stories/b.md: the check that Autopilot sent again gave no verdict)');
+  assert.match(pr.body, /Evidence: runtime=not-run; tests=pass \(3\/3\)/);
+  await w.tick();
+  assert.equal(pr.merged, true, 'no verdict does not block the merge');
+  assert.match(listReportDrafts({ root: w.reportRoot })[0].fingerprint, /no-verdict/);
+});
+
+test('per-Story lines limit the resend to the Stories that a "not run" line names', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17);
+  await w.tick();
+  w.resend = () => ({ stories: [STORY, 'user_stories/b.md'], neverSent: [STORY, 'user_stories/b.md'], noVerdict: [], failed: [], maintenance: false });
+  story(w, 17); story(w, 17, 'user_stories/b.md');
+  const { pr } = w.build(17, { body: `Fixes #17\n\nRuntime: PASS (${STORY}, 3/3 checks)\nRuntime: not run (user_stories/b.md: maintenance until 08:52 UTC)`, runtime: maintenance });
+  await w.tick(); w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
+  assert.deepEqual(w.job(17, 'runtime').args.slice(1), ['test', '--json', 'user_stories/b.md'], 'only the Story with a not-run line');
+  answer(w, 17, 0, 'passed', ['b']); await w.tick();
+  assert.equal(pr.body.match(/^Runtime:.*$/gm).join('|'), `Runtime: PASS (${STORY}, 3/3 checks)|Runtime: PASS (user_stories/b.md, 3/3 checks)`);
 });

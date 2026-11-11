@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: c114b369b01d88a4c1a20bffdc4ba00497c0ef216623439d7b19e326b0b0928f).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: ffb8a6e952e2359ba938187a7450b9b69cd7f9c4431d5b41487e19f9649024fd).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -47,8 +47,15 @@ function runtimeVerdicts(body) {
   for (const raw of String(body ?? '').split(/\r?\n/)) {
     const line = normalLine(raw), at = /^runtime\b/i.test(line) ? 0 : line.search(/\bruntime\s*:/i);
     if (at < 0) continue;
-    const value = line.slice(at).replace(/^runtime\b\s*[:\-\u2013\u2014]?\s*/i, '').replace(/^[^a-z0-9]+/i, '');
-    found.push({ line: raw.trim().slice(0, 200), verdict: /^pass(?:ed)?\b/i.test(value) ? 'pass' : /^not[\s-]+run\b/i.test(value) ? 'not-run' : 'other' });
+    let value = line.slice(at).replace(/^runtime\b\s*[:\-\u2013\u2014]?\s*/i, '').replace(/^[^a-z0-9]+/i, '');
+    // #3227: a per-Story line names its Story first ("Runtime: STORY PASS (batch ID)"), or in the parentheses after a
+    // verdict first ("Runtime: PASS (STORY, 19/19 checks)").
+    // The Story path is read from the raw line (the marks that normalLine removes, such as "_", are path characters).
+    const rawAt = raw.search(/\bruntime\b/i), rawValue = rawAt < 0 ? '' : raw.slice(rawAt).replace(/^runtime\b\s*[:\-\u2013\u2014]?\s*/i, '').replace(/^[\s`*>|]+/, '');
+    const first = /^`?([^\s()`]+(?<!\.prompt)\.md)`?\s+(.*)$/i.exec(rawValue);
+    if (first) value = normalLine(first[2]).replace(/^[^a-z0-9]+/i, '');
+    const story = first?.[1] ?? /\(\s*`?([^\s(),:`]+(?<!\.prompt)\.md)\b/i.exec(rawValue)?.[1] ?? null;   // a prompt is not a Story
+    found.push({ line: raw.trim().slice(0, 200), story, verdict: /^pass(?:ed)?\b/i.test(value) ? 'pass' : /^not[\s-]+run\b/i.test(value) ? 'not-run' : 'other' });
   }
   return found;
 }
@@ -57,10 +64,13 @@ const normalRuntime = value => object(value) ? { ...value, state: runtimeState(v
 function runtimeReds(body, runtime, promptChanged, prompts = []) {
   const lines = runtimeVerdicts(body), reds = [], bad = lines.filter(l => l.verdict === 'other'), kinds = new Set(lines.map(l => l.verdict).filter(v => v !== 'other'));
   if (bad.length) reds.push(`The PR body has a Runtime line that is not PASS or "not run": ${bad.map(l => `"${l.line}"`).join(', ')}. A Runtime: FAIL or an unclear Runtime line blocks the merge; make the Runtime check pass and write "Runtime: PASS".`);
-  if (kinds.size > 1) reds.push(`The PR body has conflicting Runtime lines: ${lines.map(l => `"${l.line}"`).join(', ')}. Keep exactly one.`);
+  // #3227: more than one line is one line per Story: each names its Story, and no Story has two lines.
+  const unnamed = lines.length > 1 ? lines.filter(l => !l.story) : [], twice = [...new Set(lines.map(l => l.story).filter((story, i, all) => story && all.indexOf(story) !== i))];
+  if (unnamed.length) reds.push(`The PR body has ${lines.length} Runtime lines, and ${unnamed.map(l => `"${l.line}"`).join(', ')} names no Story. Write one line for each changed Story, with the Story in the parentheses: "Runtime: PASS (STORY, N/N checks)", "Runtime: FAIL (STORY, N of M checks failed: STEPS)" or "Runtime: not run (STORY: REASON)".`);
+  if (twice.length) reds.push(`The PR body has two Runtime lines for ${twice.join(', ')}. Keep one line for each Story.`);
   const state = runtime?.state;
   if (state && !['pass', 'not-run'].includes(state)) reds.push(`The job result says Runtime ${state}; only pass or not-run can merge, so make the Runtime check pass.`);
-  else if (state && kinds.size === 1 && !bad.length && !kinds.has(state)) reds.push(`The job result (Runtime ${state}) and the PR body (${[...kinds][0]}) disagree.`);
+  else if (state && kinds.size === 1 && !bad.length && !kinds.has(state) && !lines.some(l => l.story)) reds.push(`The job result (Runtime ${state}) and the PR body (${[...kinds][0]}) disagree.`);
   if (!lines.length && prompts.length) reds.push(`The PR body has no Runtime line, but this PR changes ${prompts.slice(0, 10).join(', ')}. Add exactly one: "Runtime: PASS", "Runtime: FAIL (reason)" or "Runtime: not run (reason)".`);
   else if (!lines.length && promptChanged !== false) reds.push('The PR body has no Runtime line. Add exactly one: "Runtime: PASS", "Runtime: FAIL (reason)" or "Runtime: not run (reason)"; or, when no prompt changed, say so in the result ("promptChanged": false).');
   return reds;
@@ -249,7 +259,8 @@ function context({ state, settings, budget }, ports) {
   const trust = new Map();
   ctx.trust = row => {
     const login = String(row?.user?.login ?? '').toLowerCase();
-    if (!trust.has(login)) trust.set(login, Promise.resolve().then(() => ports.trusted(row)).then(Boolean, () => false));
+    if (!trust.has(login)) trust.set(login, Promise.resolve().then(() => ports.trusted(row)).then(Boolean, error => {
+      ctx.warn(`Autopilot core could not read whether ${login || 'an author'} is trusted, so their issues are skipped this tick: ${oneLine(error?.message, 200)}`); return false; }));
     return trust.get(login);
   };
   // The local user name is the last part of HOME (/home/NAME, /Users/NAME).
@@ -482,8 +493,8 @@ function workRules(ctx, job) {
 3. Tests. When the change alters what a person or program gets through the repo's public surface (a return value, error, output, exit code, written file, export, command or script), add a test through that surface that fails on base. For any other change, add no test: run the issue's done check and record the command and its result.
 4. In the PR body, write one line for each path that you use: \`Path: <a|b|c|d|e> — <files> — <owner or unowned> — <prompt changed | quote file:line | no contract change | new prompt> — Test: <file | done check>\`. The prompt and the code may be in one commit. Never rewrite history to change the commit order.
 5. Run focused tests for the changed behavior. Do not wait for CI and do not run the full test suite. Autopilot runs both after you finish (the full test command of this repository is \`${settings.testCommand ?? 'not set'}\`). When you run tests or builds, pass \`$PDD_CHECK_CPUS\` as the worker count (for example \`node --test --test-concurrency=$PDD_CHECK_CPUS\`, \`pytest -n $PDD_CHECK_CPUS\`, \`cargo test -j $PDD_CHECK_CPUS\`): it is this machine's share for Autopilot.
-6. If a prompt changed, run \`pdd test\` for the changed Stories (pdd: ${process.execPath} ${ctx.pdd}; \`pdd\` on PATH is the same). Put exactly one line in the PR body: "Runtime: PASS", "Runtime: FAIL (short reason)" or "Runtime: not run (exact reason)". Only a real Runtime FAIL verdict (the interpreter checked the Story and said FAIL) is a failure: fix the code until it passes. When Runtime could not check (a lint refusal, no interface or a binding refusal, a scenario limit such as a value that is not a safe integer, no verdict, an interpreter error), do not stop and do not invent an interface: cover the case with native tests, ship the PR with "Runtime: not run (<the exact reason>)", and put that reason and the tool's error in the result's runtime (kind "runtime"). Autopilot files one report for it. When pdd test says that the interpreter is in maintenance, do not wait for it: stop pdd test before it sends (pdd saves the checks as not sent) and write "Runtime: not run (maintenance until HH:MM UTC)", with the UTC end time that pdd printed (with several changed Stories, one line each: "Runtime: not run (STORY: maintenance until HH:MM UTC)"), and the runtime code "maintenance". Never send a check again yourself: Autopilot sends a check that was not sent, or that got no verdict with no failed check, once by itself before the merge.
-7. Put exactly one Evidence line in the PR body and the same text as "evidence" in the result: "Evidence: runtime=<pass|fail|not-run> (<passed>/<total>); vectors=<pass|fail|not-run> (<passed>/<total>); formal=<proved|bounded|failed|not-run|not-applicable>; tests=<pass|fail> (<passed>/<total>)". runtime is pdd test on the changed Stories, vectors the Story vector replay tests, formal the formal tests, tests your focused tests; give the counts you saw, and leave out a count you did not see.
+6. Runtime (RUNBOOK §15 "Autopilot core jobs"). Changed means changed against the base: \`git diff --name-only origin/${state.baseBranch}...HEAD\`, never since the previous PR head. A Story or prompt that a merge from the base brought in is not changed. A changed Story is a Story whose Story file or test file changed, or whose test reaches a changed prompt. Commit every change, then run \`pdd test\` for each changed Story (pdd: ${process.execPath} ${ctx.pdd}; \`pdd\` on PATH is the same). Write one \`Runtime:\` line for each changed Story, the verdict first and the Story in the parentheses: \`Runtime: PASS (STORY, N/N checks)\`, \`Runtime: FAIL (STORY, N of M checks failed: STEPS)\` or \`Runtime: not run (STORY: REASON)\`. STORY is the Story file path, as \`git diff\` shows it. A single line with no Story is valid only when the PR changes one Story or none. Two lines for the same Story are red. A PASS of a Story that the PR does not change never counts. A FAIL line blocks the merge: fix the code until it passes. A failed check is a FAIL, also when its check has no verdict. Find the cause and fix it. Never write a failed check as \`not run\`. \`not run\` is only for a cause that this PR cannot fix: a native-only prompt, a Story with no Runtime test, no verdict with no failed step, or a refusal that pdd gives no fix for. A refusal with a fix from pdd is this PR's work. For example, a whole number outside the interpreter's range: apply the Number spelling that pdd prints and check again. Do not wait for maintenance. When pdd prints that the interpreter is in maintenance, it has sent nothing yet. Stop pdd then. For each changed Story that pdd did not send, write \`Runtime: not run (STORY: maintenance until HH:MM UTC)\` with the end time that pdd printed. Autopilot sends the check itself when maintenance ends and rewrites the line. Never send it again yourself. Never cut short a check that pdd has already sent. When Runtime could not check, do not stop and do not invent an interface: cover the case with native tests, ship the PR with the \`not run\` line, and put that reason and the tool's error in the result's runtime (kind "runtime"). Autopilot files one report for it.
+7. Put exactly one Evidence line in the PR body and the same text as "evidence" in the result: "Evidence: runtime=<pass|fail|not-run> (<passed>/<total>); vectors=<pass|fail|not-run> (<passed>/<total>); formal=<proved|bounded|failed|not-run|not-applicable>; tests=<pass|fail> (<passed>/<total>)". runtime is pdd test on the changed Stories; \`vectors=\` counts the replay files (\`*.vectors.test.*\`) that the PR changes or that read a changed scenario file: count \`node:test\` tests (the \`# tests\` and \`# pass\` lines), not steps or checks, for example \`vectors=pass (36/36)\` (Autopilot runs the same files and compares the counts); formal the changed formal tests; tests your focused tests. Give the counts you saw, and leave out a count you did not see.
 8. Do not write a review verdict or any review claim (for example "Review: no must-fix" or "Independent review: …") in the PR body or a comment. Only Autopilot's fresh reviewer gives a review verdict.
 ${approving(ctx) && !strictRepo(ctx, job) ? `9. Approval: in ${settings.mode} mode the operator's start is the approval of your prompt changes. For each *.prompt.md you changed, after its checks pass, record it with the native command and commit the result in the PR: printf '%s' ${quote(approvalWords(ctx))} | pdd approve PROMPT --said -
 ` : settings.mode === 'observe' ? `9. This repository needs a person's approval for prompt changes (strict_approvals). Do not run pdd approve and do not edit an interface status by hand; Autopilot lists the prompts for a person in its note.
@@ -507,7 +518,7 @@ const repairPrompt = (ctx, job, reds, result) => `You are an Autopilot core repa
 Work only in this folder: ${job.worktree}. The checks of head ${job.head} are red:
 ${reds.map(red => `- ${red}`).join('\n')}
 
-Fix these causes on the same branch and push to it. Do not open a new PR. If the result of \`pdd test\` or of the tests changes, update the "Runtime:" and "Evidence:" lines in the PR body. The logs of this issue's jobs are in ${ctx.dirs.logs}.
+Fix these causes on the same branch and push to it. Do not open a new PR. Changed means changed against the base (\`git diff --name-only origin/${ctx.state.baseBranch}...HEAD\`), never since the previous PR head: when the \`pdd test\` result of a changed Story, or of the tests, changes, update its "Runtime:" line and the "Evidence:" line in the PR body (rules 6 and 7). After a merge from the base, check that the fix is still needed: check out the new merge base (\`git merge-base origin/${ctx.state.baseBranch} HEAD\`) in a throwaway worktree, copy in the PR's changed tests, and run them. When they pass on the base code too, the base already holds the fix. Then keep the base's code, keep only what the base does not hold, and say so in the PR body. The logs of this issue's jobs are in ${ctx.dirs.logs}.
 
 ${issueText(job)}
 ${answerText(job)}
@@ -571,7 +582,7 @@ Work only in this folder: ${job.worktree}. The base origin/${ctx.state.baseBranc
 ${info.reds?.length ? `A mechanical merge of the base gave red checks:\n${info.reds.map(red => `- ${red}`).join('\n')}\n` : ''}The conflict hunks (ours = the PR, base, theirs = the base branch):
 ${info.hunks || '(see git merge)'}
 
-Merge origin/${ctx.state.baseBranch} into ${job.branch} (git fetch origin ${ctx.state.baseBranch} && git merge origin/${ctx.state.baseBranch}), resolve only these conflicts, commit and push to the same branch. Change only lines inside the conflict hunks; add no files; run the focused tests. Do not wait for CI and do not run the full test suite. Autopilot runs both after you finish. For an add/add of one new path, make one file from both; if the two specs disagree, stop and say so with the result {"outcome":"failed","kind":"job","code":"duplicate-design","cause":"<both specs and how they disagree>"}. Do not open a new PR, never force-push, never close the issue.
+Merge origin/${ctx.state.baseBranch} into ${job.branch} (git fetch origin ${ctx.state.baseBranch} && git merge origin/${ctx.state.baseBranch}), resolve only these conflicts, commit and push to the same branch. Change only lines inside the conflict hunks; add no files; run the focused tests. After the merge, check that the fix is still needed: check out the new merge base (git merge-base origin/${ctx.state.baseBranch} HEAD) in a throwaway worktree, copy in the PR's changed tests, and run them; when they pass on the base code too, the base already holds the fix: say so in the PR body (Autopilot then asks for a repair that keeps only what the base does not hold). Do not wait for CI and do not run the full test suite. Autopilot runs both after you finish. For an add/add of one new path, make one file from both; if the two specs disagree, stop and say so with the result {"outcome":"failed","kind":"job","code":"duplicate-design","cause":"<both specs and how they disagree>"}. Do not open a new PR, never force-push, never close the issue.
 
 ${issueText(job)}
 
@@ -1222,11 +1233,11 @@ const upperFirst = text => text.replace(/^./, c => c.toUpperCase());
 // T01: a Runtime pass claim is true only when the saved Runtime checks cover the change at the agent's exact head: each
 // changed Story (its Story file or a test file changed) has a passing latest check of exactly this source that ran each
 // changed test of it, and each changed prompt is in the upload of such a check. Else: "Runtime: not run (REASON)".
-async function runtimeCoverage(ctx, job, claims) {
-  const head = job.agentHead ?? job.head;
-  if (job.coverage?.head === head) return job.coverage;
-  const done = coverage => { job.coverage = { head, ...coverage }; ctx.saveJob(job); return job.coverage; };
-  const claim = upperFirst(claims.join(' and '));
+async function runtimeCoverage(ctx, job, claims, lines = []) {
+  const head = job.agentHead ?? job.head, sig = JSON.stringify([claims, lines.map(l => [l.story, l.verdict])]);
+  if (job.coverage?.head === head && (job.coverage.sig ?? sig) === sig) return job.coverage;
+  const done = coverage => { job.coverage = { head, sig, ...coverage }; ctx.saveJob(job); return job.coverage; };
+  const claim = upperFirst(claims.join(' and ') || "the PR body's Runtime lines");
   const changed = await changedFiles(ctx, job, head), prompts = changed.filter(file => file.endsWith('.prompt.md'));
   let evidence;
   try { const tree = await treeAt(ctx, job, 'agent', head); evidence = await (ctx.ports.runtimeEvidence ?? savedRuntime)({ root: job.worktree, tree, head }, ctx); }
@@ -1235,7 +1246,19 @@ async function runtimeCoverage(ctx, job, claims) {
   }
   const storyFiles = new Set(evidence.storyFiles ?? []);
   const changedTests = (evidence.tests ?? []).filter(test => [test.path, ...(test.files ?? [])].some(file => changed.includes(file)));
-  const stories = [...new Set([...changed.filter(file => storyFiles.has(file)), ...changedTests.flatMap(test => test.stories ?? [])])];
+  const changedStories = [...new Set([...changed.filter(file => storyFiles.has(file)), ...changedTests.flatMap(test => test.stories ?? [])])];
+  // #3227 per-Story lines: each changed Story has its own line; a PASS of a Story that the PR does not change never
+  // counts; a single line with no Story is for a PR with at most one changed Story. Only PASS lines need the cover.
+  const storyLines = lines.filter(l => l.story), perStory = storyLines.length > 0, form = '"Runtime: PASS (STORY, N/N checks)", "Runtime: FAIL (STORY, N of M checks failed: STEPS)" or "Runtime: not run (STORY: REASON)"';
+  const lineReds = [];
+  if (!perStory && lines.length === 1 && changedStories.length > 1) lineReds.push(`This PR changes ${changedStories.length} Stories (${someFiles(changedStories)}), but the PR body has one Runtime line with no Story. Write one line for each changed Story: ${form}.`);
+  const unlined = perStory ? changedStories.filter(story => !storyLines.some(l => l.story === story)) : [];
+  if (unlined.length) lineReds.push(`The PR body has no Runtime line for ${someFiles(unlined)}. Write one line for each changed Story: ${form}.`);
+  const foreign = storyLines.filter(l => l.verdict === 'pass' && !changedStories.includes(l.story)).map(l => l.story);
+  if (foreign.length) lineReds.push(`A PASS of a Story that this PR does not change never counts: ${someFiles(foreign)}. Remove that line; write one line for each changed Story.`);
+  if (lineReds.length) return done({ ok: false, text: lineReds.join(' ') });
+  const stories = perStory ? changedStories.filter(story => storyLines.some(l => l.story === story && l.verdict === 'pass')) : changedStories;
+  const notRunStories = perStory ? storyLines.filter(l => l.verdict === 'not-run').map(l => l.story) : [];
   if (!prompts.length && !stories.length) return done({ ok: true });
   // Each test of a Story is its own scope: the latest check of exactly this source that ran it decides, and a tie with
   // a check that did not pass fails closed. Independent checks of different tests combine; no check lends its pass to
@@ -1254,7 +1277,9 @@ async function runtimeCoverage(ctx, job, claims) {
   const stale = new Set((evidence.stories ?? []).filter(row => row?.pass === true && row.current !== true).map(row => row.story));
   // A changed test needs a passing deciding check of its own.
   const ranBy = (story, test) => { const of = scopes.get(story); return of?.get(test.path) ?? (test.files ?? []).map(file => of?.get(file)).find(Boolean) ?? of?.get('*'); };
-  const unrun = changedTests.flatMap(test => (test.stories ?? []).filter(story => scopes.has(story) && ranBy(story, test)?.pass !== true).map(story => [story, test.path]));
+  // A changed Story file is in the upload of every test of that Story: each of them needs its own passing check.
+  const storyTests = (evidence.tests ?? []).filter(test => (test.stories ?? []).some(story => changed.includes(story)));
+  const unrun = [...new Set([...changedTests, ...storyTests])].flatMap(test => (test.stories ?? []).filter(story => stories.includes(story) && scopes.has(story) && ranBy(story, test)?.pass !== true).map(story => [story, test.path]));
   const latest = scopes;
   // Footprints one Story at a time, the changed Stories first; stop when every changed prompt is reached.
   const reached = new Set(), broken = [], covering = [];
@@ -1266,6 +1291,13 @@ async function runtimeCoverage(ctx, job, claims) {
     const files = Array.isArray(print?.files) ? print.files : [];
     if (files.some(file => prompts.includes(file))) covering.push(story);
     for (const file of files) reached.add(file);
+  }
+  // With Story lines, a changed prompt that no passing check reaches is fine when the tests of a not-run Story reach it.
+  for (const story of notRunStories) {
+    if (prompts.every(prompt => reached.has(prompt))) break;
+    const own = (evidence.tests ?? []).filter(test => (test.stories ?? []).includes(story) && !test.error).map(test => test.path);
+    const print = evidence.footprint ? await evidence.footprint(story, { tests: own }).catch(error => ({ error: oneLine(error.message, 300) })) : { files: evidence.footprints?.[story] ?? [] };
+    for (const file of Array.isArray(print?.files) ? print.files : []) reached.add(file);
   }
   const missing = [...new Set([...stories.filter(story => !passing.includes(story)), ...unrun.map(([, test]) => test), ...prompts.filter(prompt => !reached.has(prompt))])];
   if (!missing.length) return done({ ok: true, stories: [...new Set([...stories, ...covering])] });
@@ -1323,29 +1355,29 @@ function replayPlan(ctx, cwd, files) {
   return { run, skipped };
 }
 const quoteArg = file => `'${String(file).replaceAll("'", `'\\''`)}'`;
-// A bounded log: after REPLAY_OUTPUT bytes the filter prints TAP result and location lines cut to 300 characters for 1 MB
-// more and nothing else; it keeps only the last top-level summary line of each key and the last plan line, and prints
-// them at its end. So many summary-shaped lines never grow the log, and the final counts stay true.
-const REPLAY_FILTER = `{ n += length($0) + 1 } n <= cap { print; fflush(); next } !cut { cut = 1; print "# pdd-autopilot: output cut after " cap " bytes"; fflush() } /^# (tests|suites|pass|fail|cancelled|skipped|todo|duration_ms) [0-9.]+$/ { split($0, f, " "); last[f[2]] = $0; next } /^1\\.\\.[0-9]/ { plan = $0; next } (/^[ \\t]*(not ok|ok) [0-9]/ || /^[ \\t]*location: /) && m < extra { t = substr($0, 1, 300); m += length(t) + 1; print t; fflush(); next } END { if (plan != "") print plan; split("tests suites pass fail cancelled skipped todo duration_ms", k, " "); for (i = 1; i <= 8; i++) if (k[i] in last) print last[k[i]]; fflush() }`;
-// R3-6: each file goes as its absolute path with each glob character written as a class of one character: one form
-// for every file and checkout path (node --test reads every operand as a pattern, and a "./-..." operand wrongly).
-const globSafe = path => path.replace(/[[\]*?{}()]/g, '[$&]');
-function replayCommand(run, cwd) {
-  const parts = ['set -o pipefail', 's=0'], operand = file => quoteArg(globSafe(join(cwd, file)));
-  for (const kind of KINDS) if (run[kind].length)
-    parts.push(`node --test --test-reporter=tap -- ${run[kind].map(operand).join(' ')} 2>&1 | LC_ALL=C awk -v cap=${REPLAY_OUTPUT} -v extra=1048576 '${REPLAY_FILTER}'`,
-      `c=$?`, `echo "# pdd-autopilot: ${kind} exit $c"`, `[ "$c" = 0 ] || s=1`);
-  return [...parts, 'exit $s'].join('; ');
+// Per-file accounting (Codex round 4): each file runs alone, directly as a script with the TAP reporter, so no glob reads
+// its path (brackets, braces such as {a,b}, stars, a leading "-" and such characters in the checkout path all work),
+// then its marker line "# pdd-autopilot-NONCE: KIND I exit CODE". All files go through one filter: a bounded log. After
+// REPLAY_OUTPUT bytes it passes the marker lines, TAP result and location lines cut to 300 characters for 1 MB more, and
+// nothing else; it keeps only the last top-level summary line of each key and the last plan line of the current file and
+// prints them just before that file's marker, so each file's counts stay true.
+const REPLAY_FILTER = `BEGIN { split("tests suites pass fail cancelled skipped todo duration_ms", k, " ") } index($0, mark) == 1 { if (cut) { if (plan != "") print plan; for (i = 1; i <= 8; i++) if (k[i] in last) print last[k[i]] } split("", last); plan = ""; print; fflush(); next } { n += length($0) + 1 } n <= cap { print; fflush(); next } !cut { cut = 1; print "# pdd-autopilot: output cut after " cap " bytes"; fflush() } /^# (tests|suites|pass|fail|cancelled|skipped|todo|duration_ms) [0-9.]+$/ { split($0, f, " "); last[f[2]] = $0; next } /^1\\.\\.[0-9]/ { plan = $0; next } (/^[ \\t]*(not ok|ok) [0-9]/ || /^[ \\t]*location: /) && m < extra { t = substr($0, 1, 300); m += length(t) + 1; print t; fflush(); next }`;
+const replayMark = nonce => `# pdd-autopilot-${nonce}: `;
+function replayCommand(run, cwd, nonce) {
+  const steps = KINDS.flatMap(kind => run[kind].map((file, i) => `node --test-reporter=tap -- ${quoteArg(join(cwd, file))} 2>&1; echo "${replayMark(nonce)}${kind} ${i} exit $?"`));
+  return `{ ${steps.join('; ')}; } | LC_ALL=C awk -v cap=${REPLAY_OUTPUT} -v extra=1048576 -v mark=${quoteArg(replayMark(nonce))} '${REPLAY_FILTER}'`;
 }
-// The log of a replay run, read in 1 MB parts line by line (bounded memory): for each kind its last TAP summary before
-// its marker, the exit code and at most 20 failing tests with their files.
-function replayLog(fs, file) {
-  const found = { kinds: {}, runner: false, cut: false }, decoder = new StringDecoder('utf8');
+// The log of a replay run, read in 1 MB parts line by line (bounded memory): for each file its last TAP summary before its
+// marker and its exit code, and for each kind at most 20 failing tests with their files.
+function replayLog(fs, file, nonce) {
+  const found = { files: { vectors: {}, formal: {} }, failed: { vectors: [], formal: [] }, runner: false, cut: false }, decoder = new StringDecoder('utf8');
+  const marker = new RegExp(`^${escape(replayMark(nonce))}(vectors|formal) (\\d+) exit (\\d+)$`);
   let counts = {}, failed = [], look = 0, carry = '', skipping = false, fd;
   const line = text => {
     let m;
-    if ((m = /^# pdd-autopilot: (vectors|formal) exit (\d+)$/.exec(text))) {
-      found.kinds[m[1]] = { code: Number(m[2]), tests: counts.tests ?? null, pass: counts.pass ?? null, fail: counts.fail ?? null, skipped: (counts.skipped ?? 0) + (counts.todo ?? 0), failed: failed.slice(0, 20) };
+    if ((m = marker.exec(text))) {
+      found.files[m[1]][Number(m[2])] = { code: Number(m[3]), tests: counts.tests ?? null, pass: counts.pass ?? null, fail: counts.fail ?? null, skipped: (counts.skipped ?? 0) + (counts.todo ?? 0) };
+      for (const f of failed) if (found.failed[m[1]].length < 20) found.failed[m[1]].push(f);
       counts = {}; failed = []; look = 0; return;
     }
     if ((m = /^# (tests|pass|fail|skipped|todo) (\d+)$/.exec(text))) { counts[m[1]] = Number(m[2]); return; }
@@ -1368,12 +1400,15 @@ function replayLog(fs, file) {
   } catch { /* No log. */ } finally { if (fd !== undefined) try { fs.closeSync(fd); } catch {} }
   return found;
 }
+// One file's result: pass (exit 0, a test, no failure), fail (a non-zero exit or a failure; a non-zero exit with no
+// summary means the file did not load) or empty (exit 0 and no test: no result).
+const fileState = r => r.code !== 0 || r.fail ? 'fail' : Number.isInteger(r.tests) && r.tests > 0 ? 'pass' : 'empty';
 async function vectorsState(ctx, job) {
-  const save = value => { job.vectors = { ...value, schema: 2 }; ctx.saveJob(job); return job.vectors; };
+  const save = value => { job.vectors = { ...value, schema: 3 }; ctx.saveJob(job); return job.vectors; };
   const start = (vectors, restarts) => save({ ...vectors, state: 'running', restarts,
     agent: startJob(ctx, job, 'vectors', vectors.cwd, '', queuedCommand(ctx, vectors.cwd, vectors.command), { CI: 'true' }) });
   // A new head, or a record of an older build, starts again (an older run that still goes is stopped first).
-  if (!job.vectors || job.vectors.head !== job.head || job.vectors.schema !== 2) {
+  if (!job.vectors || job.vectors.head !== job.head || job.vectors.schema !== 3) {
     if (job.vectors?.state === 'running' && job.vectors.agent) ctx.jobs.stop(job.vectors.agent);
     const files = await evidenceFiles(ctx, job);
     if (!files.vectors.length && !files.formal.length) return save({ head: job.head, files, skipped: [], state: 'none' });
@@ -1382,9 +1417,9 @@ async function vectorsState(ctx, job) {
     if (!count) return save({ ...base, state: 'none' });
     // The whole set or nothing: a part of the set is never shown as the evidence of the change.
     if (count > MAX_REPLAY_FILES) return save({ ...base, state: 'not-run', reason: `too many replay and formal files: ${count}; the limit is ${MAX_REPLAY_FILES}` });
-    const command = replayCommand(run, cwd);
+    const nonce = randomUUID().replaceAll('-', '').slice(0, 16), command = replayCommand(run, cwd, nonce);
     if (command.length > MAX_REPLAY_COMMAND) return save({ ...base, state: 'not-run', reason: `the replay and formal file list is too long (${command.length} bytes; the limit is ${MAX_REPLAY_COMMAND})` });
-    return start({ ...base, command }, 0);
+    return start({ ...base, command, nonce }, 0);
   }
   if (job.vectors.state !== 'running') return job.vectors;
   const seen = ctx.jobs.read(job.vectors.agent);
@@ -1395,17 +1430,24 @@ async function vectorsState(ctx, job) {
     if (watch.state !== 'quiet') return job.vectors;
     stopped = `nothing new for ${ctx.settings.quietMinutes} minutes`;
   }
-  const log = replayLog(ctx.fs, job.vectors.agent.log), kinds = KINDS.filter(kind => job.vectors.files[kind].length);
-  const lost = kinds.find(kind => !log.kinds[kind]), blank = kinds.find(kind => log.kinds[kind] && !(Number.isInteger(log.kinds[kind].tests) && Number.isInteger(log.kinds[kind].fail)));
-  // A runner failure is no test result: it starts again in the same checkout, at most twice, then it is "not run".
+  const log = replayLog(ctx.fs, job.vectors.agent.log, job.vectors.nonce), kinds = KINDS.filter(kind => job.vectors.files[kind].length);
+  // Each file shows its own result; a file with no marker is a runner failure (the run did not reach or finish it).
+  const lost = kinds.flatMap(kind => job.vectors.files[kind].filter((file, i) => !log.files[kind][i]));
   const why = stopped ?? (seen.state === 'dead' ? 'the run died' : seen.exit?.signal ? `killed by ${seen.exit.signal}` : [86, 127].includes(seen.exit?.code) ? `exit ${seen.exit.code}`
-    : log.runner ? 'a runner failure of the suite queue' : lost ? `no result for the ${KIND_WORDS[lost]} tests (exit ${seen.exit?.code ?? 'unknown'})` : blank ? `no TAP summary for the ${KIND_WORDS[blank]} tests (exit ${log.kinds[blank].code})` : null);
+    : log.runner ? 'a runner failure of the suite queue' : lost.length ? `no result for ${someFiles(lost)} (exit ${seen.exit?.code ?? 'unknown'})` : null);
   if (why) {
     if ((job.vectors.restarts ?? 0) < 2) return start(job.vectors, (job.vectors.restarts ?? 0) + 1);
     return save({ ...job.vectors, state: 'not-run', reason: `the run gave no result (${why}, 3 tries); log ${basename(job.vectors.agent.log)} on this machine` });
   }
   recordSuccess(ctx, job, job.vectors.agent, 'vectors', seen);
-  return save({ ...job.vectors, state: 'done', cut: log.cut, result: Object.fromEntries(kinds.map(kind => [kind, { ...log.kinds[kind], state: log.kinds[kind].code === 0 && !log.kinds[kind].fail ? 'pass' : 'fail' }])) });
+  // A kind is the sum of its files: a failed file fails it; a file with no result keeps it from substantiating a claim.
+  const result = Object.fromEntries(kinds.map(kind => {
+    const files = job.vectors.files[kind].map((file, i) => ({ file, ...log.files[kind][i], state: fileState(log.files[kind][i]) }));
+    const sum = key => files.reduce((total, f) => total + (Number(f[key]) || 0), 0);
+    return [kind, { state: files.some(f => f.state === 'fail') ? 'fail' : 'pass', tests: sum('tests'), pass: sum('pass'), fail: sum('fail'), skipped: sum('skipped'),
+      code: files.find(f => f.code !== 0)?.code ?? 0, failed: log.failed[kind], files, empty: files.filter(f => f.state === 'empty').map(f => f.file) }];
+  }));
+  return save({ ...job.vectors, state: 'done', cut: log.cut, result });
 }
 const someFiles = files => `${files.slice(0, 20).map(file => oneLine(file, 200)).join(', ')}${files.length > 20 ? ` and ${files.length - 20} more` : ''}`;
 // The merge note's lines for the engine's own replay and formal run.
@@ -1416,7 +1458,8 @@ function engineEvidenceLines(job) {
   for (const kind of KINDS) {
     const files = v.files?.[kind] ?? [], label = kind === 'vectors' ? 'Replay tests' : 'Formal tests', r = v.result?.[kind];
     if (!files.length || v.state === 'none') continue;
-    lines.push(v.state === 'not-run' || !r ? `- ${label} (Autopilot's run): not run (${v.reason ?? 'no result'}): ${someFiles(files)}` : `- ${label} (Autopilot's run at ${short(v.head)}): ${r.state} (${r.pass}/${r.tests}${r.skipped ? `, ${r.skipped} skipped or todo` : ''}): ${someFiles(files)}`);
+    const each = (r?.files ?? []).map(f => `${oneLine(f.file, 200)} ${f.state === 'empty' ? 'no result' : f.state} (${Number(f.pass) || 0}/${Number(f.tests) || 0})`);
+    lines.push(v.state === 'not-run' || !r ? `- ${label} (Autopilot's run): not run (${v.reason ?? 'no result'}): ${someFiles(files)}` : `- ${label} (Autopilot's run at ${short(v.head)}): ${r.state} (${r.pass}/${r.tests}${r.skipped ? `, ${r.skipped} skipped or todo` : ''}): ${someFiles(each)}`);
   }
   for (const why of [...new Set((v.skipped ?? []).map(row => row.why))]) lines.push(`- Not run by Autopilot (${why}): ${someFiles(v.skipped.filter(row => row.why === why).map(row => row.file))}`);
   return lines.length ? lines : ['- Replay and formal tests (Autopilot\'s run): none changed'];
@@ -1432,17 +1475,18 @@ function engineEvidenceReds(ctx, job) {
   const positive = { vectors: e.vectors?.state === 'pass', formal: ['proved', 'bounded'].includes(e.formal?.state) };
   for (const kind of KINDS) {
     const files = v.files?.[kind] ?? [], skipped = (v.skipped ?? []).filter(row => row.kind === kind), where = someFiles(files), r = v.result?.[kind];
-    if (!files.length && !skipped.length) continue;
+    if (!files.length && !skipped.length) { const { [kind]: gone, ...rest } = uncheckedOf(job); job.unchecked = rest; continue; }
     if (r?.state === 'fail') {
       const names = r.failed.map(f => `${f.name}${f.file ? ` (${basename(f.file)})` : ''}`).join('; ') || 'see the log';
-      reds.push(`Autopilot ran the ${KIND_WORDS[kind]} tests that this change touches (${where}) at head ${short(v.head)}: ${r.fail ? `${r.fail} of ${r.tests} failed: ${names}` : `the run failed (exit ${r.code}) although its summary says 0 of ${r.tests} failed`}.${e[kind]?.state && !['fail', 'failed'].includes(e[kind].state) ? ` The Evidence line says ${claimOf(e, kind)}.` : ''}`);
+      const bad = (r.files ?? []).filter(f => f.state === 'fail'), noLoad = bad.filter(f => !f.fail && !Number.isInteger(f.tests)).map(f => f.file);
+      reds.push(`Autopilot ran the ${KIND_WORDS[kind]} tests that this change touches (${where}) at head ${short(v.head)}: ${r.fail ? `${r.fail} of ${r.tests} failed: ${names}` : noLoad.length ? `${someFiles(noLoad)} did not load (exit ${bad[0].code}, no test result)` : `the run failed (exit ${r.code}) although its summary says 0 of ${r.tests} failed`}.${e[kind]?.state && !['fail', 'failed'].includes(e[kind].state) ? ` The Evidence line says ${claimOf(e, kind)}.` : ''}`);
       continue;
     }
     // A skipped or todo test, or a run with no test, never supports a pass or a proof.
     const why = [files.length && (v.state === 'not-run' || !r) ? `its run of the ${KIND_WORDS[kind]} tests that this change touches (${where}) at head ${short(v.head)} gave no result (${v.reason ?? 'no result'})` : null,
       skipped.length ? `it does not run ${someFiles(skipped.map(row => row.file))} (${[...new Set(skipped.map(row => row.why))].join('; ')})` : null,
       r && r.skipped ? `${r.skipped} of the ${r.tests} ${KIND_WORDS[kind]} tests that this change touches were skipped or todo (a skipped test does not support a pass or a proof)` : null,
-      r && !r.tests ? `the run of the ${KIND_WORDS[kind]} tests that this change touches had no test` : null].filter(Boolean).join(', and ');
+      r && !r.tests ? `the run of the ${KIND_WORDS[kind]} tests that this change touches had no test` : r?.empty?.length ? `${someFiles(r.empty)} gave no test result` : null].filter(Boolean).join(', and ');
     if (!why) { const { [kind]: gone, ...rest } = uncheckedOf(job); job.unchecked = rest; }
     if (why) {
       if (!positive[kind]) continue;
@@ -1496,13 +1540,14 @@ async function mergeCheck(ctx, job) {
   const prompts = (await changedFiles(ctx, job)).filter(file => file.endsWith('.prompt.md'));
   const reds = runtimeReds(pr.body, job.runtime, prompts.length ? true : job.promptChanged, prompts);
   // T01: every positive Runtime claim must be covered by the saved Runtime checks of the change at the agent's head.
-  const claims = runtimeClaims(pr.body, job);
-  if (!reds.length && claims.length) {
-    const coverage = await runtimeCoverage(ctx, job, claims);
+  const claims = runtimeClaims(pr.body, job), lines = runtimeVerdicts(pr.body);
+  if (!reds.length && (claims.length || lines.some(l => l.story))) {
+    const coverage = await runtimeCoverage(ctx, job, claims, lines);
     if (!coverage.ok) reds.push(coverage.text);
   }
   job.evidence = parseEvidence(pr.body) ?? job.evidence ?? null;
-  reds.push(...evidenceReds(job.evidence, runtimeVerdicts(pr.body)[0]?.verdict));
+  const verdicts = new Set(lines.map(l => l.verdict));
+  reds.push(...evidenceReds(job.evidence, verdicts.size === 1 ? [...verdicts][0] : null));
   // In auto and observe mode a changed prompt must carry a recorded approval (the operator's start, with the real mode
   // in its words). A strict repository needs a person: auto mode asks one; observe mode asks no one (a question only
   // makes sense when a merge would follow) and lists the prompts in its would-merge note.
@@ -1606,7 +1651,7 @@ async function mergeCheck(ctx, job) {
   // Observe mode does everything except the merge: the same note, as "would merge", then a release.
   const observe = ctx.settings.mode === 'observe';
   if (job.mergeNote !== job.head) {
-    const runtimeLine = runtimeVerdicts(pr.body)[0]?.line ?? 'Runtime: no line (no prompt changed)';
+    const runtimeLine = runtimeVerdicts(pr.body).map(l => l.line).join('; ') || 'Runtime: no line (no prompt changed)';
     job.evidence = parseEvidence(pr.body) ?? job.evidence ?? null;
     await ctx.comment(job.pr, [observe ? `Autopilot would merge this PR (observe mode): every check passed for head ${job.head}. It stays open and ready for review; Autopilot does not merge it.` : `Autopilot merge check passed for head ${job.head}.`, '',
       `- CI: ${ci.state === 'none' ? `none (no check run or status ${NO_CI_AFTER / MIN} minutes after the PR)` : `green (${ci.count} check(s))`}`,
@@ -1635,20 +1680,24 @@ const utcClock = at => `${new Date(at).toISOString().slice(11, 16)} UTC`;
 const runtimeCurrent = job => job.runtimeWait && job.runtimeWait.head === (job.agentHead ?? job.head);
 const runtimePending = job => runtimeCurrent(job) && ['pending', 'waiting', 'sent'].includes(job.runtimeWait.state);
 const runtimeWaiting = job => job.phase === 'pr' && runtimeCurrent(job) && job.runtimeWait.state === 'waiting';
-// Once for each agent head, when every Runtime line of the PR says "not run" (one line, or one per Story): the Stories
-// of the job worktree whose saved check can be sent again, from the batches since the job started.
+// Once for each agent head, when the PR has a "not run" Runtime line and no FAIL or unclear line: the Stories of the
+// job worktree whose saved check can be sent again, from the batches since the job started.
 async function runtimeResendable(ctx, job, body) {
   const head = job.agentHead ?? job.head;
   if (runtimeCurrent(job)) return job.runtimeWait;
   const lines = runtimeVerdicts(body);
   let found = null;
-  if (lines.length && lines.every(line => line.verdict === 'not-run')) {
+  const notRun = lines.filter(line => line.verdict === 'not-run');
+  if (notRun.length && !lines.some(line => line.verdict === 'other')) {
     try {
       const read = ctx.ports.resendChecks ?? (async input => (await import('./runtime-client.mjs')).resendableStoryChecks(input, { env: ctx.ports.env ?? process.env }));
       found = await read({ root: job.worktree, since: job.started ?? 0 });
     } catch (error) { ctx.warn(`Autopilot core could not read the saved Runtime checks of #${job.issue}: ${error.message}`); }
   }
-  const list = key => (Array.isArray(found?.[key]) ? found[key] : []).filter(named).slice(0, 50);
+  // Per-Story lines (#3227) limit the send to the Stories that a "not run" line names; a "not run" line with no Story
+  // is for all.
+  const lineStories = new Set(notRun.map(line => line.story).filter(Boolean)), ours = story => notRun.some(line => !line.story) || lineStories.has(story);
+  const list = key => (Array.isArray(found?.[key]) ? found[key] : []).filter(named).filter(ours).slice(0, 50);
   const stories = list('stories'), failed = list('failed');
   // A failed check is red, never sent again; then nothing is sent for this head.
   job.runtimeWait = stories.length && !failed.length ? { head, state: 'pending', stories, neverSent: list('neverSent'), noVerdict: list('noVerdict'), failed }
@@ -1656,25 +1705,46 @@ async function runtimeResendable(ctx, job, body) {
   ctx.saveJob(job);
   return job.runtimeWait;
 }
-// The Runtime lines of the PR body become one LINE, and the runtime part of its Evidence line becomes STATE.
-function withRuntimeLine(body, line, state) {
-  let done = false;
-  return String(body ?? '').split('\n').flatMap(raw => {
-    if (runtimeVerdicts(raw).length) { if (done) return []; done = true; return [line]; }
-    return [/^evidence\s*:/i.test(normalLine(raw)) ? raw.replace(/\bruntime\s*=\s*[a-z-]+(?:\s*\(\s*\d+\s*\/\s*\d+\s*\))?/i, `runtime=${state}`) : raw];
-  }).join('\n');
+// The Runtime lines of the resent Stories are rewritten, one line for each Story (#3227: the verdict first, the Story
+// in the parentheses); a single line with no Story stands for all of them. Lines of other Stories stay. The runtime
+// part of the Evidence line follows all lines: pass when every line is PASS, fail with a FAIL, else not-run.
+function withStoryLines(body, stories, lineFor) {
+  const lines = runtimeVerdicts(body), single = lines.length === 1 && !lines[0].story, done = new Set();
+  let last = -1;
+  const out = String(body ?? '').split('\n').flatMap(raw => {
+    const v = runtimeVerdicts(raw)[0];
+    if (!v) return [raw];
+    if (single) { stories.forEach(story => done.add(story)); return stories.map(lineFor); }
+    if (v.story && stories.includes(v.story)) { done.add(v.story); return [lineFor(v.story)]; }
+    return [raw];
+  });
+  for (let k = 0; k < out.length; k++) if (runtimeVerdicts(out[k]).length) last = k;
+  const missing = stories.filter(story => !done.has(story)).map(lineFor);
+  if (missing.length) out.splice(last >= 0 ? last + 1 : out.length, 0, ...missing);
+  const verdicts = runtimeVerdicts(out.join('\n')), state = verdicts.some(v => v.verdict === 'other') ? 'fail' : verdicts.length && verdicts.every(v => v.verdict === 'pass') ? 'pass' : 'not-run';
+  return { state, body: out.map(raw => /^evidence\s*:/i.test(normalLine(raw)) ? raw.replace(/\bruntime\s*=\s*[a-z-]+(?:\s*\(\s*\d+\s*\/\s*\d+\s*\))?/i, `runtime=${state}`) : raw).join('\n') };
 }
 // The agent's own lines stay in the job and its history line (runtimeOriginal), so an audit can compare the two.
-async function setRuntimeLine(ctx, job, pr, line, runtime) {
+async function setRuntimeLines(ctx, job, pr, stories, lineFor, runtimeFor) {
   const head = job.agentHead ?? job.head;
   if (job.runtimeOriginal?.head !== head) job.runtimeOriginal = { head, lines: runtimeVerdicts(pr.body).map(row => row.line),
     evidence: String(pr.body ?? '').split('\n').find(raw => /^evidence\s*:/i.test(normalLine(raw)))?.trim().slice(0, 300) ?? null, runtime: job.runtime ?? null };
-  const body = withRuntimeLine(pr.body, line, runtime.state);
+  const { state, body } = withStoryLines(pr.body, stories, lineFor);
   await ctx.gh.ok('PATCH', `repos/${ctx.repo}/pulls/${job.pr}`, { body: safeBody(body) });
   pr.body = body;
-  const evidence = parseEvidence(body) ?? job.evidence ?? null;
-  Object.assign(job, { runtime, coverage: null, evidence: evidence?.runtime ? { ...evidence, runtime: { state: runtime.state } } : evidence });
-  job.runtimeOriginal.engine = line;
+  const runtime = runtimeFor(state), evidence = parseEvidence(body) ?? job.evidence ?? null;
+  Object.assign(job, { runtime, coverage: null, evidence: evidence?.runtime ? { ...evidence, runtime: { state } } : evidence });
+  job.runtimeOriginal.engine = stories.map(lineFor);
+  return state;
+}
+// The outcome of each resent Story from the pdd test --json rows (a row names its Story by its base name).
+function storyOutcomes(stories, rows) {
+  return new Map(stories.map(story => {
+    const own = rows.filter(row => row?.story_path === story || [story, basename(story, '.md')].includes(row?.story));
+    const sum = key => own.reduce((n, row) => n + (Number.isSafeInteger(row?.checks?.[key]) ? row.checks[key] : 0), 0);
+    const state = !own.length ? 'not-run' : own.some(row => row?.state === 'failed' || row?.failed_checks?.length) ? 'fail' : own.every(row => row?.state === 'passed') ? 'pass' : 'not-run';
+    return [story, { state, passed: sum('passed'), total: sum('total') }];
+  }));
 }
 // The last pdd test --json summary line of the log: {exit_code, rows}, or null.
 function runtimeSummary(fs, file) {
@@ -1695,26 +1765,31 @@ async function runtimeResend(ctx, job, pr) {
   if (w.state === 'none') return result('none', false);
   if (w.state === 'done') return result(w.outcome, false);
   const hold = (state, sig) => { noteProgress(ctx, job, `runtime|${w.state}|${sig}|${now}`, true); delete job.lastError; delete job.lastErrorTool; ctx.saveJob(job); return result(state, true); };
-  const finish = async (outcome, line, runtime) => { await setRuntimeLine(ctx, job, pr, line, runtime); Object.assign(w, { state: 'done', outcome, line }); return hold(outcome, 'done'); };
   if (w.state === 'sent') {
     const seen = ctx.jobs.read(w.agent);
     if (seen.state === 'running') {
       const watch = await watchProcess(ctx, job, w.agent, 'runtime');
       if (watch.state === 'running') return hold('sending', w.agent.id);
     }
-    const summary = runtimeSummary(ctx.fs, w.agent.log), rows = Array.isArray(summary?.rows) ? summary.rows : [];
-    const failed = [...new Set(rows.filter(row => row?.state === 'failed').map(row => oneLine(row.story ?? row.test, 120)))];
-    if (summary?.exit_code === 0 && rows.length) return finish('pass', 'Runtime: PASS', { state: 'pass' });
-    if (summary?.exit_code === 1 && failed.length) return finish('fail', `Runtime: FAIL (pdd test sent again by Autopilot: ${failed.slice(0, 5).join(', ')} failed)`, { state: 'fail', kind: 'runtime', component: 'pdd-test', code: 'fail' });
+    const summary = runtimeSummary(ctx.fs, w.agent.log), rows = Array.isArray(summary?.rows) ? summary.rows : [], outcomes = storyOutcomes(w.stories, rows);
     const why = safeLine(summary?.summary_line ?? (seen.state === 'running' ? 'the run made nothing new and was stopped' : `exit ${seen.exit?.code ?? seen.exit?.signal ?? 'unknown'}, no summary`), 200);
-    return finish('no-verdict', `Runtime: not run (the check that Autopilot sent again gave no verdict: ${why})`,
-      { state: 'not-run', kind: 'runtime', component: 'pdd-test', code: 'no-verdict', cause: `the Runtime check that Autopilot sent again gave no verdict: ${why}`, detail: `Log: ${basename(w.agent.log)} on this machine` });
+    const lineFor = story => { const o = outcomes.get(story); return o.state === 'pass' ? `Runtime: PASS (${story}${o.total ? `, ${o.passed}/${o.total} checks` : ''})`
+      : o.state === 'fail' ? `Runtime: FAIL (${story}${o.total ? `, ${o.total - o.passed} of ${o.total} checks failed` : ''}; pdd test sent again by Autopilot)`
+      : `Runtime: not run (${story}: the check that Autopilot sent again gave no verdict)`; };
+    const noVerdict = [...outcomes.values()].some(o => o.state === 'not-run'), original = job.runtime;
+    const state = await setRuntimeLines(ctx, job, pr, w.stories, lineFor, overall => overall === 'pass' ? { state: 'pass' }
+      : overall === 'fail' ? { state: 'fail', kind: 'runtime', component: 'pdd-test', code: 'fail' }
+      : noVerdict ? { state: 'not-run', kind: 'runtime', component: 'pdd-test', code: 'no-verdict', cause: `the Runtime check that Autopilot sent again gave no verdict: ${why}`, detail: `Log: ${basename(w.agent.log)} on this machine` }
+      : original);
+    const outcome = state === 'pass' ? 'pass' : state === 'fail' ? 'fail' : 'no-verdict';
+    Object.assign(w, { state: 'done', outcome, line: job.runtimeOriginal.engine.join('\n') });
+    return hold(outcome, 'done');
   }
   if (Number.isFinite(w.maintenance) && now - w.maintenance >= RUNTIME_WAIT_LIMIT) {
     const since = `maintenance since ${utcClock(w.maintenance)}`;
-    await setRuntimeLine(ctx, job, pr, `Runtime: not run (${since})`,
-      { state: 'not-run', kind: 'runtime', component: 'pdd-test', code: 'maintenance', cause: `the interpreter stayed in maintenance for ${RUNTIME_WAIT_LIMIT / HOUR} hours (${since}), so the Runtime check was never sent`, detail: `Stories: ${w.stories.join(', ')}` });
-    Object.assign(w, { state: 'done', outcome: 'maintenance', line: `Runtime: not run (${since})` });
+    await setRuntimeLines(ctx, job, pr, w.stories, story => `Runtime: not run (${story}: ${since})`, () =>
+      ({ state: 'not-run', kind: 'runtime', component: 'pdd-test', code: 'maintenance', cause: `the interpreter stayed in maintenance for ${RUNTIME_WAIT_LIMIT / HOUR} hours (${since}), so the Runtime check was never sent`, detail: `Stories: ${w.stories.join(', ')}` }));
+    Object.assign(w, { state: 'done', outcome: 'maintenance', line: job.runtimeOriginal.engine.join('\n') });
     ctx.saveJob(job);
     await runtimeNotRunReport(ctx, job);
     return result('maintenance', false);
@@ -2460,7 +2535,9 @@ const SERVICE_WORDS = new RegExp([
   /\boverloaded_error\b/, /\bnot logged in\b/, /\bplease (?:run \/login|log ?in|sign ?in)\b/, /\binvalid[_ ]api[_ ]key\b/, /\bauthentication_error\b/,
 ].map(re => re.source).join('|'), 'i');
 // In a terminal error event a clear account or service phrase counts too (an ordinary test error keeps its strike).
-const SERVICE_EVENT = /\bout of credits\b|\bat capacity\b|\boverloaded\b|\b(?:sign-?in|log-?in|login|authentication) required\b|\busage limit\b|\brate limit\b|\bquota exceeded\b/i;
+const SERVICE_EVENT = /\bout of credits\b|\b(?:service|server|model|provider|api)(?: is)? (?:at|over) capacity\b|\b(?:service|server|model|provider|api)(?: is)? overloaded\b|^\W*(?:sign-?in|log-?in|login|authentication) required\b|\bquota exceeded\b/i;
+// A message that reads like a test diagnostic is never a service problem, in any shape (Codex round 4).
+const TEST_DIAGNOSTIC = /\b(?:tests?|assert(?:ion)?s?|expected|fixtures?|specs?)\b/i;
 const SERVICE_CODES = /\b(?:api error|http|status(?: code)?)\W{0,3}(?:401|429|5\d\d)\b|\b(?:401 unauthorized|429 too many requests|500 internal server error|502 bad gateway|503 service unavailable|504 gateway timeout|529 overloaded)\b/i;
 function serviceProblem(ctx, part) {
   if (!part?.log) return null;
@@ -2475,7 +2552,7 @@ function serviceProblem(ctx, part) {
     if (named(text)) messages.push({ text, event: terminal });
   }
   messages.push(...lines.slice(-5).filter(line => !line.startsWith('{')).map(text => ({ text, event: false })));
-  const found = messages.reverse().find(({ text, event }) => SERVICE_WORDS.test(text) || SERVICE_CODES.test(text) || event && SERVICE_EVENT.test(text))?.text;
+  const found = messages.reverse().find(({ text, event }) => !TEST_DIAGNOSTIC.test(text) && (SERVICE_WORDS.test(text) || SERVICE_CODES.test(text) || event && SERVICE_EVENT.test(text)))?.text;
   return found ? safeLine(found, 300) : null;
 }
 
