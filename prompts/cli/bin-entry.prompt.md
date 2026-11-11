@@ -10,8 +10,12 @@ Static imports load before any code runs, and newer syntax fails to parse on an 
 
 ## Then run the command
 
-Load the local public `runPdd`, pass process.argv.slice(2), and assign the returned integer to process.exitCode. The entry installs no skills: only `pdd setup` does that.
+Before dispatch, best-effort call [release notice](release-notice.prompt.md) `releaseNotice({version, ci, probe})` once with the version read from this package's `package.json`. Set ci when any of CI, GITHUB_ACTIONS, GITLAB_CI, CIRCLECI, TRAVIS, BUILDKITE, TF_BUILD or JENKINS_URL is nonempty; set probe when PDD_PATH_PROBE is `1`. Write its nonempty message and one newline to stderr. A metadata, import, lookup or notice failure prints nothing and cannot prevent dispatch. This check installs nothing and does not alter stdout or the command exit code.
+
+Then load the local public `runPdd`, pass process.argv.slice(2), and assign the returned integer to process.exitCode. The entry installs no skills: only `pdd setup` does that.
 
 ## Dependencies
+
+- [Release notice](release-notice.prompt.md) supplies the required release-check policy for native entry dispatch.
 
 Read the entire [Prompting guide](../../docs/prompting-guide.md) before authoring prompts or Stories. Follow [public alpha boundary](public-boundary.prompt.md) for scope and the shared local command contract.

@@ -1,0 +1,284 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/release-notice.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "When I run an older pdd after a release, I see one stderr line naming the new version, my installed version and the exact GitHub update command; stdout and the command exit status stay intact."
+    },
+    {
+      "id": "AC2",
+      "text": "Equal or older releases, malformed release data and an unavailable release service do not produce a reminder or prevent my command."
+    },
+    {
+      "id": "AC3",
+      "text": "CI and internal PATH version probes skip the release lookup and reminder."
+    },
+    {
+      "id": "AC4",
+      "text": "A stable release replaces an installed prerelease with the same version numbers; version numbers compare numerically and build metadata does not make an equal release newer."
+    },
+    {
+      "id": "AC5",
+      "text": "pdd never installs an update automatically, including during a workflow or in CI; a release lookup has a one-second deadline and a 65536-byte response limit."
+    }
+  ],
+  "initial_world": {
+    "reads": []
+  },
+  "simulation": {
+    "releases.latest": {
+      "action": "port.write",
+      "world_pointer": "/reads",
+      "result_template": {
+        "tag": "alpha-v0.1.29"
+      }
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "new-release",
+      "entry_path": "prompts/cli/release-notice.prompt.md",
+      "operation": "releaseNotice",
+      "input": {
+        "version": "0.1.28",
+        "ci": false,
+        "probe": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/message",
+          "op": "equals",
+          "value": "pdd 0.1.29 is available (installed 0.1.28). Update: npm install -g github:promptdriven/pdd#alpha-v0.1.29"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/release-notice-releases-latest",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "equal",
+      "entry_path": "prompts/cli/release-notice.prompt.md",
+      "operation": "releaseNotice",
+      "input": {
+        "version": "0.1.29",
+        "ci": false,
+        "probe": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/message",
+          "op": "equals",
+          "value": ""
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/release-notice-releases-latest",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "ahead",
+      "entry_path": "prompts/cli/release-notice.prompt.md",
+      "operation": "releaseNotice",
+      "input": {
+        "version": "0.2.0",
+        "ci": false,
+        "probe": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/message",
+          "op": "equals",
+          "value": ""
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/release-notice-releases-latest",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "ci",
+      "entry_path": "prompts/cli/release-notice.prompt.md",
+      "operation": "releaseNotice",
+      "input": {
+        "version": "0.1.28",
+        "ci": true,
+        "probe": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/message",
+          "op": "equals",
+          "value": ""
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/release-notice-releases-latest",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "probe",
+      "entry_path": "prompts/cli/release-notice.prompt.md",
+      "operation": "releaseNotice",
+      "input": {
+        "version": "0.1.28",
+        "ci": false,
+        "probe": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/message",
+          "op": "equals",
+          "value": ""
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/release-notice-releases-latest",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "numeric",
+      "entry_path": "prompts/cli/release-notice.prompt.md",
+      "operation": "releaseNotice",
+      "input": {
+        "version": "0.1.9",
+        "ci": false,
+        "probe": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/message",
+          "op": "equals",
+          "value": "pdd 0.1.29 is available (installed 0.1.9). Update: npm install -g github:promptdriven/pdd#alpha-v0.1.29"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "calls",
+          "path": "/resources/release-notice-releases-latest",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "prerelease",
+      "entry_path": "prompts/cli/release-notice.prompt.md",
+      "operation": "releaseNotice",
+      "input": {
+        "version": "0.1.29-rc.1",
+        "ci": false,
+        "probe": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/message",
+          "op": "equals",
+          "value": "pdd 0.1.29 is available (installed 0.1.29-rc.1). Update: npm install -g github:promptdriven/pdd#alpha-v0.1.29"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "calls",
+          "path": "/resources/release-notice-releases-latest",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "build",
+      "entry_path": "prompts/cli/release-notice.prompt.md",
+      "operation": "releaseNotice",
+      "input": {
+        "version": "0.1.29+build.7",
+        "ci": false,
+        "probe": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/message",
+          "op": "equals",
+          "value": ""
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "calls",
+          "path": "/resources/release-notice-releases-latest",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "invalid",
+      "entry_path": "prompts/cli/release-notice.prompt.md",
+      "operation": "releaseNotice",
+      "input": {
+        "version": "bad",
+        "ci": false,
+        "probe": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/message",
+          "op": "equals",
+          "value": ""
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/release-notice-releases-latest",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

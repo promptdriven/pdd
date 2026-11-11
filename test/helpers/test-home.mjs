@@ -6,6 +6,8 @@ import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
 
 const home = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-test-home-')));
+// Ordinary native tests and their children must not perform release lookups.
+process.env.GITHUB_ACTIONS = '1';
 process.env.HOME = home;
 process.env.USERPROFILE = home;
 // An inherited override can escape HOME. Leave these absent so tests that replace

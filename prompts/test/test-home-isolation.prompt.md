@@ -5,6 +5,8 @@ Own the native test environment in `test/helpers/test-home.mjs` and its use by
 contract. Preserve production path rules, public commands, fixture fakes and
 existing behavioral expectations.
 
+Mark the native test process and inherited subprocesses with `GITHUB_ACTIONS=1`, so executable release notices do not contact GitHub during ordinary offline tests. A release-notice fixture may explicitly clear CI indicators and inject its transport.
+
 Before a test can use a default home path, give its process a fresh temporary
 HOME. This includes `os.homedir()` fallbacks when an injected environment omits
 HOME, default workflow state, interpreter state, Herdr config and installed
@@ -83,7 +85,7 @@ no interpreter operation and makes no model or live service calls.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"35f830d16449e7f44e261cfad857f187c79cca5d13db236d0b9a58c7f534602e","entries":[],"calls":[],"resources":[],"limits":{"max_steps":1,"max_model_calls":1},"conventions":[]}
+{"status":"draft","prose_sha256":"d58eef4099c5831d75cb01b815346846d5065b09b0b7de672dc1dcb681451d55","entries":[],"calls":[],"resources":[],"limits":{"max_steps":1,"max_model_calls":1},"conventions":[]}
 ```
 
 </details>
