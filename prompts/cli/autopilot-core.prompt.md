@@ -542,6 +542,16 @@ agent brief also names the short job rules file of the package (#3227 fix 5,
 conflict say "Read FILE in full before you write the PR body"; review says "Read FILE in
 full before you check the PR body".
 
+**No input is cut silently (B2, final battle plan).** Each cap ends with a marker that
+says how much is left out and where to read it: the issue text (20,000 characters)
+`[cut: N more characters; read the issue for the rest: URL]`, each answer (4,000
+characters) the same with the comment URL, the owner table (400 owned files) `[cut: N
+more owned files; run pdd owner FILE before you call a file unowned]` (and the table
+then never says that every other file is unowned), and the conflict hunks (12,000
+characters, 4,000 for an add/add file) `[cut: N more characters; read the conflict in
+the files: FILES]`. Each cut is saved in the job (`cuts`) and listed under Not covered in
+the evidence record.
+
 - **Build** (in `worktrees/N`): the issue title, URL and body as data from a trusted
   author, and these rules: choose pdd-small-change, pdd-bug or pdd-feature, but make
   ONE PR with prompt, Story, tests and code; this is not a `pdd workflow run`, so no
@@ -886,7 +896,23 @@ runs until its end):
    unless that Story's own tests reach a changed prompt (their upload, `footprint` of
    the Story's tests, holds it): such a Story is a changed Story too (rule 6: "or whose
    test reaches a changed prompt"), so its PASS line needs the cover below like any
-   changed Story (Claude round 5, MF-G1). The result's `runtime.state` (lower case, spaces as `-`) must be
+   changed Story (Claude round 5, MF-G1). **The consumer closure (B1, final battle
+   plan):** with a changed prompt, the engine lists every Story whose test reaches it,
+   with no AI call: `reach(prompts)` of the reader port (`captureSource` of each test of
+   the head at the clean checkout, one at a time, the transitive call targets included;
+   a test port gives its `footprints` map), read once per head and prompt set (saved as
+   `reach`). A changed Story (Story file, test file or consumer) needs a passing current
+   check or its own Runtime line; a consumer with neither is red: "S reaches the changed
+   prompt P (its tests upload it), but it has no passing pdd test check at this source
+   and no Runtime line. Run "$PDD_CLI" test for S at this head, or write "Runtime: not
+   run (S: REASON)"."; a consumer with a "not run" line, or with no pass, is checked
+   against its saved rows like any changed Story (fix 1: a failed row is red). With more
+   than 10 consumers of the change, a consumer with no pass and no line is no red: the
+   merge note and the record say `Runtime: not run (N Stories reach PROMPT; checked K)`
+   (K the consumers with a passing current check), never a silent pass. The single-line
+   rule (one line with no Story) counts only Story and test file changes. On pdd, a
+   change to `prompts/cli/runtime-client.prompt.md` reads its consumers in one tick in
+   under 60 s (a test checks it). The result's `runtime.state` (lower case, spaces as `-`) must be
    absent, `pass` or `not-run`, and must agree with the body when all lines have one
    verdict; else red. A body with no
    Runtime line is red when the change has a `*.prompt.md` (Git decides, also when the
@@ -1181,7 +1207,13 @@ runs until its end):
    it read (Story, pass, current, time, tests, failed checks, refusal codes, sent; at
    most 50) and the merge base read (commit, passing Stories, error), the replay and formal run with
    each file's result, the full suite (state, exit, log name, failed tests), CI and review
-   states, the PR's Evidence claim and the honest Evidence (above). The agent's lines are
+   states, the PR's Evidence claim and the honest Evidence (above), and **one "Not
+   covered" list (B3)**: what the engine did not check at this head, for example each
+   "not run" Runtime line, the consumers above 10 that no check covered, a reader or
+   merge-base read error, each replay or formal file that it does not run, a kind that it
+   could not check, a control that did not run, a missing suite command, and each cut
+   input (B2). The reviewer's summary has the list (`- Not covered: …`, or `nothing that
+   Autopilot knows of`). The agent's lines are
    claims that the engine checks; the record is the engine's own. The reviewer's brief
    names the record's path and a short summary. The merge and would-merge note take
    their engine lines from it and name it, and the PR body gets one engine block between

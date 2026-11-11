@@ -1485,3 +1485,97 @@ test('E76 (battle plans, Nov 11) the reviewer reads the diff in parts, knows the
   assert.match(review, /"summary":"<one paragraph, then one line: Read: FILE, FILE, \.\.\. \(every changed file that you read in full\)>"/);
   assert.doesNotMatch(review, /Read the change with: git fetch origin main && git diff origin\/main\.\.\.HEAD\./, 'no whole-PR diff in one call');
 });
+
+// ---- Final battle plan B1-B3: every consumer of a changed prompt, no silent cut, one Not covered list ------------
+const B_STORY = 'user_stories/format-percent.md';
+async function consumerWorld(t, line, rows, more = {}) {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  seed(w, { [PROMPT]: '# Package\n\nRead the package name.\n', [STORY]: '# A\n\nOne.\n', [B_STORY]: '# B\n\nTwo.\n' });
+  w.issue(17); await w.tick();
+  writeIn(w.job(17, 'build').cwd, PROMPT, '# Package\n\nRead the package name and its repository.\n');
+  w.runtimeEvidence = async () => ({ stories: rows, storyFiles: [STORY, B_STORY], tests: [], footprints: { [STORY]: [PROMPT, STORY], [B_STORY]: [PROMPT, B_STORY], ...more } });
+  const { pr, head } = w.build(17, { body: `Fixes #17.\n\n${line}\nPath: a — ${PROMPT} — ${PROMPT} — prompt changed — Test: done check` });
+  await w.tick();
+  return { w, pr, head };
+}
+test('E77 (B1) a changed shared prompt checks every Story that reaches it: an unrun or failing consumer is red; its own "not run" line is enough; all passing merges', async t => {
+  const A = { story: STORY, pass: true, current: true, at: 1000 };
+  // 1. A passes, B has no check: B is red although A's check reaches the prompt (the Codex probe).
+  let { w } = await consumerWorld(t, 'Runtime: PASS', [A]);
+  assert.match(w.job(17, 'repair')?.input ?? '', /user_stories\/format-percent\.md reaches a changed prompt \(prompts\/package\.prompt\.md; its tests upload it\), but it has no passing pdd test check at this source and no Runtime line\. Run "\$PDD_CLI" test for user_stories\/format-percent\.md at this head, or write "Runtime: not run \(user_stories\/format-percent\.md: REASON\)"\./);
+  assert.doesNotMatch(w.job(17, 'repair').input, /package-repository\.md reaches/);
+  // 2. B's latest check at this source failed: red, and it says so.
+  ({ w } = await consumerWorld(t, 'Runtime: PASS', [A, { story: B_STORY, pass: false, current: true, at: 1000 }]));
+  assert.match(w.job(17, 'repair')?.input ?? '', /format-percent\.md reaches a changed prompt .* \(the latest check of it at this source did not pass\)/);
+  // 3. Its own "not run" line is enough (a service-only reason; its rows are checked like any changed Story).
+  let pr;
+  ({ w, pr } = await consumerWorld(t, `Runtime: PASS (${STORY}, 3/3 checks)\nRuntime: not run (${B_STORY}: maintenance until 08:52 UTC)`, [A]));
+  assert.equal(w.job(17, 'repair'), undefined, w.job(17, 'repair')?.input);
+  await finishChecks(w); await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number]);
+  // 4. Both pass: the one PASS line merges.
+  ({ w, pr } = await consumerWorld(t, 'Runtime: PASS', [A, { story: B_STORY, pass: true, current: true, at: 1000 }]));
+  assert.equal(w.job(17, 'repair'), undefined, w.job(17, 'repair')?.input);
+  await finishChecks(w); await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number]);
+  // 5. Above 10 consumers: no red for the unchecked ones, but one honest line in the merge note and the record.
+  const many = Object.fromEntries(Array.from({ length: 11 }, (_, i) => [`user_stories/c${i}.md`, [PROMPT]]));
+  let head;
+  ({ w, pr, head } = await consumerWorld(t, 'Runtime: PASS', [A, { story: B_STORY, pass: true, current: true, at: 1000 }], many));
+  assert.equal(w.job(17, 'repair'), undefined, w.job(17, 'repair')?.input);
+  await finishChecks(w); await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number]);
+  assert.match(mergeNote(pr), /- Runtime: not run \(13 Stories reach prompts\/package\.prompt\.md; checked 2\)/);
+  const record = JSON.parse(readFileSync(join(w.root, 'logs', `17-evidence-${head}.json`), 'utf8'));
+  assert.ok(record.notCovered.some(item => /^Runtime: not run \(13 Stories reach .*; checked 2\): user_stories\/c0\.md/.test(item)), JSON.stringify(record.notCovered));
+});
+
+test('E78 (B1) on pdd itself, the consumers of a change to runtime-client.prompt.md are read in under 60 s, transitive call targets included', async t => {
+  const { storyReach } = await import('../src/autopilot-core.mjs');
+  const { findTests } = await import('../src/runtime-preflight.mjs');
+  const root = fileURLToPath(new URL('..', import.meta.url));
+  const started = Date.now();
+  const found = findTests({ root, excludeFixtureProjects: true });
+  const tests = found.tests.map(test => ({ path: test.path, stories: [...new Set([test.storyPath, ...(test.storyPaths ?? [])].filter(Boolean))], error: test.error ?? null }));
+  const reach = await storyReach(root, tests, ['prompts/cli/runtime-client.prompt.md']);
+  const took = Date.now() - started;
+  assert.ok(took < 60_000, `one read took ${took} ms`);
+  assert.ok(reach.stories.length > 10, `${reach.stories.length} consumers`);
+  assert.equal(reach.error, undefined, reach.error);
+});
+
+test('E79 (B2, B3) a cut input ends with a marker and a pointer; the evidence record and the reviewer list what was not covered', async t => {
+  const url = 'https://github.com/acme/widgets/issues/17';
+  // The issue text over 20,000 characters, an answer over 4,000.
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17, { body: `${'x'.repeat(20000)}REQUIREMENT AFTER THE CAP` });
+  await w.tick();
+  assert.match(w.job(17, 'build').input, new RegExp(`x{100}\\n\\[cut: 25 more characters; read the issue for the rest: ${url.replaceAll('/', '\\/').replaceAll('.', '\\.')}\\]\\n>>>`));
+  w.finish(17, 'build', { result: { outcome: 'needs-person', kind: 'blocker', question: 'Which token?' } }); await w.tick();
+  w.github.comment(17, `${'y'.repeat(4000)}CORRECTION AFTER THE CAP`, 'acme'); await w.tick();
+  assert.match(w.job(17, 'build').input, /y{100}\n\[cut: 24 more characters; read the issue for the rest: https:\/\/github\.com\/acme\/widgets\/issues\/17#issuecomment-\d+\]/);
+  const job = JSON.parse(readFileSync(join(w.root, 'jobs', '17.json'), 'utf8'));
+  assert.deepEqual(job.cuts, [{ input: 'issue text', more: 25 }, { input: 'the answer of acme', more: 24 }]);
+  // The record lists the cuts and a not-run line under Not covered; the reviewer sees the list.
+  writeIn(w.job(17, 'build').cwd, 'test/a.vectors.test.mjs', 'export const x = 1;\n');
+  const { head } = w.build(17, { body: 'Fixes #17.\n\nRuntime: not run (no prompt changed)' });
+  await w.tick();
+  const record = JSON.parse(readFileSync(join(w.root, 'logs', `17-evidence-${head}.json`), 'utf8'));
+  assert.ok(record.notCovered.includes('a "not run" line: Runtime: not run (no prompt changed)'), JSON.stringify(record.notCovered));
+  assert.ok(record.notCovered.includes('input cut: issue text (25 more characters)'));
+  assert.ok(record.notCovered.some(item => /^test\/a\.vectors\.test\.mjs: not run by Autopilot \(runner: not a node:test file\)$/.test(item)), JSON.stringify(record.notCovered));
+  assert.match(w.job(17, 'review').input, /- Not covered: a "not run" line: Runtime - not run \(no prompt changed\); input cut: issue text \(25 more characters\)/);
+});
+
+test('E80 (B2) the owner table over 400 owned files is cut with a marker and never calls the rest unowned', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  const files = Object.fromEntries(Array.from({ length: 402 }, (_, i) => [`src/m${String(i).padStart(3, '0')}.js`, `export const m = ${i};\n`]));
+  seed(w, { ...files, 'prompts/m.prompt.md': '# M\n\nThe modules.\n',
+    'pdd-bindings.json': JSON.stringify({ schema_version: 'pdd.bindings.v1', modules: Object.keys(files).map(path => ({ module: path, stories: ['user_stories/s.md'], prompt: 'prompts/m.prompt.md' })) }) });
+  w.issue(17); await w.tick();
+  const brief = w.job(17, 'build').input;
+  assert.match(brief, /the table is cut, so run pdd owner FILE for a file that it does not list\):/);
+  assert.doesNotMatch(brief, /every other file of the base is unowned/);
+  assert.match(brief, /\[cut: 2 more owned files; run pdd owner FILE before you call a file unowned\]/);
+  assert.deepEqual(JSON.parse(readFileSync(join(w.root, 'jobs', '17.json'), 'utf8')).cuts, [{ input: 'owner table', more: 2 }]);
+});
