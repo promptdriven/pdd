@@ -189,13 +189,15 @@ within `[-9007199254740991, 9007199254740991]`, or ±(2^53−1). An out-of-range
 names the bad bound's JSON Pointer (for example `/properties/count/maximum`), the declared bound (`bound_text`)
 and the supported range (`supported_integer_range`).
 
-**Large whole numbers.** Write a whole number as plain JSON digits at any size, in a schema and in a test, for
-example `"seconds": 4250129834582680692326400`. Do not put it in quotes, and do not use a fraction or an exponent:
-`4.25e24` is a floating-point number. `"type": "integer"` means any whole number; there is no special format. pdd
-reads, shows, compares and sends the exact digits. The PDD interpreter accepts whole numbers only within
-±(2^53−1). Outside it, lint refuses the test before execution (`scenario-integer-out-of-range`, 0 AI calls). Do not
-change the input type or the expected value to fit the interpreter: the repository's own vector test (§17) still
-checks the case.
+**Large whole numbers.** Write an exact whole number as plain JSON digits, for example
+`"seconds": 4250129834582680692326400`. pdd reads, shows, compares and sends these exact digits. The PDD interpreter
+accepts plain digits only within ±(2^53−1), so pdd refuses larger ones locally with the interpreter's code
+(`scenario-integer-out-of-range`; nothing is sent, 0 AI calls). For a parameter that takes a Number, write its exact
+Number spelling instead: `String(n)` in JavaScript, for example `4.2501298345826807e+24` for 3600 × 2^70. JavaScript
+and the interpreter read it as exactly that Number, and the interpreter admits it with `"type": "integer"`. A value
+that no Number holds (2^53 + 1, or a BigInt parameter) stays in plain digits; only the repository's own vector test
+(§17) checks it. Do not change the input type or the expected value to fit the interpreter. pdd warns when a token
+with a fraction or an exponent loses digits: `9007199254740993.0` reads as `9007199254740992`.
 
 For an optional input field, leave it out of `required`. Do not use `oneOf` with `null` for it: the Simulator's form shows
 `oneOf` only as a raw JSON box. A correct schema (`read` is optional):
@@ -624,11 +626,12 @@ ticks. Ticks use the existing action/call budget.
    unchanged. The code-only checker route below proves the code fix.
 5. For a prompt bug the check report shows before ✗ → after ✓; for a code-only bug show before ✓ → after ✓. `pdd simulate <story>` opens with the issue's input ready.
 - The failing check of step 2 is the "before" evidence. If the prompt changed after it, register that saved result
-  for the same Story: name a local commit whose files are exactly the checked files (commit an exact reconstruction if
-  that state was never committed), run `pdd workflow evidence-associate N --workspace . --stage before --commit SHA --test TEST`,
-  save `pdd test --read BATCH --json` outside the repository and run `pdd workflow evidence N --summary FILE`. pdd
-  refuses a commit whose selected files do not hash to the batch's source. No new check is sent, and the result never
-  counts as a current pass, check or approval.
+  for the same Story. Name a full local commit id whose files are exactly the checked files (commit an exact
+  reconstruction if that state was never committed). For run 18 and test `tests/count-words.json`:
+  `pdd workflow evidence-associate 18 --workspace . --stage before --commit SHA --test tests/count-words.json`, then
+  save `pdd test --read BATCH --json` to a file outside the repository and run
+  `pdd workflow evidence 18 --summary /tmp/before.json`. pdd refuses a commit whose selected files do not hash to the
+  batch's source. No new check is sent, and the result never counts as a current pass, check or approval.
 - If no prompt owns the behavior, say in reproduce: "No prompt exists yet for this behavior, so the bug can only be
   in the code." The verdict line is "Verdict: no prompt covers this yet; the bug can only be in the code." Write the
   prompt from the issue, and write "before: no prompt" in PR 1.

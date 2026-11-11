@@ -1,4 +1,4 @@
-// Generated from prompts/cli/scenario-json.prompt.md (sha256: 85a3649f0fea30cf987e1ee32d9be9970f6f9f82d8e9e02eb7e0be1d05d66d84).
+// Generated from prompts/cli/scenario-json.prompt.md (sha256: 80fefc699838e7c089f836758490d434534a92498fef604139af902f20cd0bbf).
 // Exact whole numbers in Runtime scenario files: read, write and compare without rounding.
 
 const EXACT_INTEGER = /^-?(?:0|[1-9][0-9]*)$/;
@@ -32,6 +32,29 @@ export function exactValue(value) {
   if (Array.isArray(value)) return value.map(exactValue);
   if (plain(value)) return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, exactValue(item)]));
   return value;
+}
+
+// A number token with a fraction or exponent whose digits change when it is read as a Number.
+class Read { constructor(source, value) { this.source = source; this.value = value; } }
+const normalNumber = text => {
+  const match = /^(-?)([0-9]+)(?:\.([0-9]+))?(?:[eE]([+-]?[0-9]+))?$/.exec(text);
+  if (!match) return text;
+  const digits = (match[2] + (match[3] ?? '')).replace(/^0+/, '');
+  if (!digits) return '0';
+  const zeros = /0*$/.exec(digits)[0].length;
+  return `${match[1]}${digits.slice(0, digits.length - zeros)}e${BigInt(match[4] ?? 0) - BigInt((match[3] ?? '').length) + BigInt(zeros)}`;
+};
+export function roundedNumberTokens(text) {
+  const doc = JSON.parse(text, (_key, value, context) => typeof value === 'number' && typeof context?.source === 'string'
+    && !EXACT_INTEGER.test(context.source) && normalNumber(context.source) !== normalNumber(String(value)) ? new Read(context.source, value) : value);
+  const found = [];
+  const visit = (item, path) => {
+    if (item instanceof Read) found.push({ path, source: item.source, value: item.value });
+    else if (Array.isArray(item)) item.forEach((member, index) => visit(member, [...path, index]));
+    else if (plain(item)) for (const [key, member] of Object.entries(item)) visit(member, [...path, key]);
+  };
+  visit(doc, []);
+  return found;
 }
 
 export function exactIntegerLeaves(value) {

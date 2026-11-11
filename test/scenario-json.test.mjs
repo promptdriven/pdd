@@ -4,7 +4,7 @@ import test from 'node:test';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { parseScenarioJson, stringifyScenarioJson, exactNumber, exactValue, exactIntegerLeaves, withExactIntegers, jsonSafe } from '../src/scenario-json.mjs';
+import { parseScenarioJson, stringifyScenarioJson, exactNumber, exactValue, exactIntegerLeaves, withExactIntegers, jsonSafe, roundedNumberTokens } from '../src/scenario-json.mjs';
 import { formatDuration, formatDurationWithNumberHours } from './fixtures/large-integers/duration.mjs';
 
 const root = resolve(import.meta.dirname, '..');
@@ -97,4 +97,16 @@ test('SJ6: a vector with 3600 x 2^70 seconds replays exactly through the documen
   assert.deepStrictEqual(replay(formatDuration), [true, true, true]);
   // The same vector catches the defect: Number hour arithmetic loses the exact digits.
   assert.deepStrictEqual(replay(formatDurationWithNumberHours), [true, false, false]);
+});
+
+test('SJ7: a fraction or exponent token that loses digits is listed; exact spellings are not', () => {
+  const text = `{"a": 9007199254740993.0, "b": [1E5, 100000.0, 4.2501298345826807e+24, 0.1, -0, 2.5], "c": {"d": 1e400}, "e": ${ABOVE}, "f": 9007199254740992.0}`;
+  assert.deepStrictEqual(roundedNumberTokens(text), [
+    { path: ['a'], source: '9007199254740993.0', value: 9007199254740992 },
+    { path: ['c', 'd'], source: '1e400', value: Infinity }]);
+  // 3600 x 2^70 written as its exact Number spelling reads as exactly that Number.
+  assert.equal(JSON.parse('4.2501298345826807e+24'), 3600 * 2 ** 70);
+  assert.equal(exactNumber(parseScenarioJson('4.2501298345826807e+24')), 3600 * 2 ** 70);
+  assert.deepStrictEqual(exactValue(parseScenarioJson('4.2501298345826807e+24')), parseScenarioJson(LARGE));
+  assert.throws(() => roundedNumberTokens('{'), SyntaxError);
 });

@@ -36,7 +36,9 @@ const scenario = JSON.parse(text, (key, value, context) =>
 At the public boundary, give a parameter that takes a Number `Number(value)` only when `BigInt(Number(value)) ===
 value` (3600 × 2^70 passes; 2^53 + 1 has no exact Number, so the case fails). Give a BigInt parameter the BigInt.
 Compare an integer result as a BigInt (`BigInt(result)` for a whole Number). Never round to make a case pass.
-pdd's own module `src/scenario-json.mjs` implements these rules (`parseScenarioJson`, `exactNumber`, `exactValue`).
+A test for a Number parameter can also hold the exact Number spelling (`4.2501298345826807e+24`); the reviver keeps
+it as that exact Number. pdd's own module `src/scenario-json.mjs` implements these rules (`parseScenarioJson`,
+`exactNumber`, `exactValue`).
 pdd keeps the exact digits in the saved anchor (`exact_integers`), so a change in the last digit is a saved-value
 change.
 

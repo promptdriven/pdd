@@ -6,7 +6,8 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { captureSource, fillHashes, findTests, preflight } from '../src/runtime-preflight.mjs';
+import { captureSource, checkInput, fillHashes, findTests, preflight, readPrompt } from '../src/runtime-preflight.mjs';
+import { parseScenarioJson } from '../src/scenario-json.mjs';
 import { fingerprintChanges, storyCard, storyFingerprint } from '../src/workflow-story-card.mjs';
 import { formatReplayEvidence, pinReplayVectors, readReplayEvidence } from '../src/workflow-replay.mjs';
 
@@ -48,7 +49,7 @@ None.
 </details>
 `;
 
-function repo(t, { scenario = scenarioText(), maximum = LARGE } = {}) {
+function repo(t, { scenario = scenarioText(), maximum = '1e30' } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-large-integers-')));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   for (const dir of ['prompts', 'tests', 'user_stories']) mkdirSync(join(root, dir));
@@ -104,18 +105,50 @@ test('LI3: the saved replay anchor keeps exact digits and reports a last-digit c
   assert.equal(Object.hasOwn(pinReplayVectors(small.root, [TEST]).vectors[0], 'exact_integers'), false);
 });
 
-test('LI4: local input checks compare exact values with exact schema bounds', t => {
-  const rows = root => { fillHashes({ root }); const found = findTests({ root }); return preflight({ root, found, selected: found.tests }).rows; };
-  // A maximum of 2^53 written in digits: 2^53 + 1 is above it, although JSON.parse rounds both to the same Number.
-  let f = repo(t, { maximum: ROUNDED, scenario: scenarioText({ large: ROUNDED }) });
-  let refusals = rows(f.root)[0].refusals;
+test('LI4: local preflight refuses what the interpreter refuses today, with a clear exact message', t => {
+  const rows = root => { fillHashes({ root }); const found = findTests({ root }); return preflight({ root, found, selected: found.tests }); };
+  // Plain digits outside the range: the interpreter's code and section, and the exact Number spelling that works today.
+  let f = repo(t), result = rows(f.root), refusals = result.rows[0].refusals;
   assert.equal(refusals.length, 1, JSON.stringify(refusals));
-  assert.equal(refusals[0].code, 'invalid-input');
-  assert.equal(refusals[0].message, `steps[1] input /seconds is ${ABOVE}. The prompt allows 0 to ${ROUNDED}.`);
-  // Values above 2^53 within an exact bound are integers and pass the local check.
-  f = repo(t, { maximum: '42501298345826806923264000' });
-  refusals = rows(f.root)[0].refusals;
-  assert.deepEqual(refusals, []);
+  assert.deepEqual({ code: refusals[0].code, section: refusals[0].section, step: refusals[0].step },
+    { code: 'scenario-integer-out-of-range', section: 'steps[0].input.seconds', step: 1 });
+  assert.equal(refusals[0].message, `steps[0].input.seconds is ${LARGE}, outside the PDD interpreter's integer range -9007199254740991 through 9007199254740991. `
+    + 'pdd keeps the exact digits, but the interpreter cannot check this test yet (nothing sent, 0 AI calls). '
+    + 'If the parameter takes a Number, write its exact Number spelling 4.2501298345826807e+24; the interpreter accepts it. '
+    + "Check the exact value in the repository's own vector test (RUNBOOK §17); do not change the input type or the expected value to fit the interpreter.");
+  // 2^53 + 1 has no exact Number: no spelling is offered.
+  f = repo(t, { scenario: scenarioText({ large: '4.2501298345826807e+24' }).replace('1180591620717411303424', '1.1805916207174113e+21') });
+  refusals = rows(f.root).rows[0].refusals;
+  assert.equal(refusals[0].section, 'steps[1].input.seconds');
+  assert.ok(refusals[0].message.includes(`is ${ABOVE},`) && refusals[0].message.includes('No JavaScript Number holds this value.'), refusals[0].message);
+  // The exact Number spellings that the interpreter admitted in a real lint pass the local check too.
+  f = repo(t, { scenario: scenarioText({ large: '4.2501298345826807e+24', above: '4.2501298345826807e+24', expected: '1.1805916207174113e+21' }).replace('1180591620717411303424', '1.1805916207174113e+21') });
+  result = rows(f.root);
+  assert.deepEqual(result.rows[0].refusals, []);
+  assert.deepEqual(result.warnings.filter(line => /reads as the Number/.test(line)), []);
+});
+
+test('LI6: a token that loses digits is a warning, and a schema bound outside the range is refused locally', t => {
+  const rows = root => { fillHashes({ root }); const found = findTests({ root }); return preflight({ root, found, selected: found.tests }); };
+  let f = repo(t, { scenario: scenarioText({ large: '7200', above: '9007199254740993.0', expected: '90000' }).replace('1180591620717411303424', '2') });
+  let result = rows(f.root);
+  assert.deepEqual(result.rows[0].refusals, []);
+  assert.ok(result.warnings.includes(`Warning: ${TEST} steps[1].input.seconds is 9007199254740993.0, which reads as the Number 9007199254740992. Write the value you mean: plain digits for an exact whole number, or the exact Number spelling.`), result.warnings.join('\n'));
+  f = repo(t, { maximum: ROUNDED, scenario: scenarioText({ large: '7200', above: '90000', expected: '90000' }).replace('1180591620717411303424', '2') });
+  const refusals = rows(f.root).rows[0].refusals;
+  assert.equal(refusals.length, 1, JSON.stringify(refusals));
+  assert.equal(refusals[0].code, 'graph-schema-invalid');
+  assert.equal(refusals[0].message, `${PROMPT} /entries/0/input_schema/properties/seconds/maximum is ${ROUNDED}, outside the PDD interpreter's integer range -9007199254740991 through 9007199254740991 (bound_text ${ROUNDED}).`);
+});
+
+test('LI7: P9 compares an exact input with an exact schema bound', t => {
+  // A schema read with its own tokens: 2^53 + 1 is above a maximum of 2^53, although JSON.parse rounds both alike.
+  const f = repo(t, { maximum: ROUNDED });
+  const found = findTests({ root: f.root }), prompt = readPrompt(f.root, found.visible, PROMPT), schema = prompt.interface.entries[0].input_schema;
+  const input = parseScenarioJson(`{"seconds": ${ABOVE}}`);
+  assert.deepEqual(checkInput(input, schema, 1).refusals.map(row => row.message), [`steps[1] input /seconds is ${ABOVE}. The prompt allows 0 to ${ROUNDED}.`]);
+  assert.deepEqual(checkInput(parseScenarioJson(`{"seconds": ${ROUNDED}}`), schema, 1).refusals, []);
+  assert.deepEqual(checkInput(parseScenarioJson(`{"seconds": ${LARGE}}`), { ...schema, properties: { seconds: { type: 'integer', minimum: 0 } } }, 0).refusals, []);
 });
 
 test('LI5: an upload rewrite keeps exact digits in the bytes that pdd sends', t => {
