@@ -138,6 +138,25 @@ test('a stale retry preserves the exact bytes of an existing pending request', a
   assert.equal(result.exitCode,3,result.message); assert.equal(readFileSync(path,'utf8'),bytes);
 });
 
+test('matching changes delivers an earlier queued change and the new request in FIFO order', async t => {
+  const f=await fixture(t); assert.equal((await f.run()).exitCode,0);
+  const run=f.record(), chat=run.chats.at(-1);
+  run.gate={id:'g1',area:run.areas[run.area].name,kind:'approve',at:10};
+  writeFileSync(join(run.runDir,'status.json'),JSON.stringify(run));
+  writeFileSync(join(run.runDir,'delivery-journal.json'),JSON.stringify({requests:[{id:'earlier',text:'Earlier change',kind:'change',area:run.areas[run.area].name,paneId:chat.paneId,state:'pending',at:10,gate:run.gate}]}));
+  f.herdr.calls.length=0; const herdr=f.ports.herdr; let checked=false;
+  const result=await changeRun({ref:'17',cwd:f.source,text:'New change',expectGate:'g1'}, {...f.ports,herdr:async args=>{
+    if (!checked && args[0]==='agent' && args[1]==='prompt') {
+      checked=true; const progress=await stepDone({step:'scope',summary:'Done',cwd:run.root},f.agentPorts());
+      assert.notEqual(progress.exitCode,0,progress.message);
+    }
+    return herdr(args);
+  }});
+  assert.equal(checked,true); assert.equal(result.exitCode,0,result.message);
+  assert.deepEqual(f.record().changes.map(change=>change.text),['Earlier change','New change']);
+  assert.equal(f.herdr.calls.filter(args=>args[0]==='agent'&&args[1]==='prompt').length,2);
+});
+
 test('changes checks the expectation at submission under ordinary ownership', async t => {
   const f=await fixture(t); assert.equal((await f.run()).exitCode,0);
   const run=f.record(); run.gate={id:'g1',area:run.areas[run.area].name,kind:'approve',at:10};

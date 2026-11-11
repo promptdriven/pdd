@@ -25,7 +25,7 @@ import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 import { readWorkflowAreas } from './workflow-areas.mjs';
 import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, reconcileWorkflowPr, readWorkflowPrChecker, readWorkflowPrStatus } from './workflow-github.mjs';
 import { allocateIssueWorktree, releaseIssueClaim } from './workflow-worktree.mjs';
-import { allRuns, currentChat, gitContext, listRuns, readRun, readRunOwnership, resolveRun, runDirFor, runForWorktree, updateRun, updateRunCosts, writeRun, inspectRunAndStart, acquireOrdinaryRunOwnership } from './workflow-runs.mjs';
+import { allRuns, currentChat, gitContext, listRuns, readRun, readRunOwnership, resolveRun, runDirFor, runForWorktree, updateRun, updateRunCosts, writeRun, acquireOrdinaryRunOwnership } from './workflow-runs.mjs';
 import { armSavedWorkerCompletion } from './workflow-worker-completion.mjs';
 import { startChat, sendToChat, herdrCommand, chatSession, chatHealth, openChat, rebuildClosedChat, assertRestartCaller, restartChat, validSessionId, closeFinishedChats, finishedChats, finishedAt, paneUsage, ensurePaneBudget, countReasons, mergeReasonCounts, reasonWords, expandHome, homeVariable, isFolder, observeLifecycle, applyLifecycle, launchAnchor, sessionEvidenceDue, ownSession, observedSession, START_GRACE_MS, removeStaleLoginFiles } from './workflow-chat.mjs';
 import { samePath } from './workflow-herdr-layout.mjs';
@@ -4051,7 +4051,8 @@ Nothing was sent to the chat.` };
     if (sent.code === 'agent_not_found') return fail(`The ${area.name} chat is not running. ${kept}`);
     return fail(`pdd could not send the text to the ${area.name} chat (${sent.code}). ${kept}`);
   };
-  let accepted, admitted = false, staleAtSubmit, admissionBaseline, admissionBytes;
+  let accepted, admitted = false, staleAtSubmit, admissionBaseline, admissionBytes, releaseExpected;
+  const originalAcquire = p.acquireRunOwnership;
   try {
     accepted = await deliveryJournal(run, p, journal => {
       const stale = expectedState(latest(), p.expected ?? {});
@@ -4091,7 +4092,7 @@ Nothing was sent to the chat.` };
       if (entry.state === 'uncertain') continue;
       if (entry.inFlight) return progress(entry);
       run = latest();
-      const stale = expectedState(run, p.expected ?? {}); if (stale) return await refuseStale(stale);
+      const stale = !releaseExpected && expectedState(run, p.expected ?? {}); if (stale) return await refuseStale(stale);
       if (!targetCurrent(run)) return failure({ code: 'chat_target_changed' });
       if (isEnvironmentWake(entry.text) && await environmentWakeAllowed(run, entry.text, p) === false) {
         const observed = await deliveryJournal(run, p, journal => {
@@ -4116,13 +4117,14 @@ Nothing was sent to the chat.` };
       const transport = herdrCommand(p), guardedHerdr = async args => {
         try {
           if (args[0] === 'agent' && args[1] === 'prompt' && (p.expected?.expectGate !== undefined || p.expected?.expectStep !== undefined)) {
-            const started = inspectRunAndStart(run.runDir, current => {
+            if (!releaseExpected) {
+              releaseExpected = acquireOrdinaryRunOwnership(run.runDir, p);
+              const current = latest();
               staleAtSubmit = expectedState(current, p.expected);
-              if (staleAtSubmit || runIdentity(current) !== selectedIdentity) return null;
-              return transport(args);
-            }, p);
-            if (!started) throw Object.assign(Error('The run moved before submission'), {code:'chat_target_changed'});
-            return await started;
+              if (staleAtSubmit || runIdentity(current) !== selectedIdentity) throw Object.assign(Error('The run moved before submission'), {code:'chat_target_changed'});
+              p.acquireRunOwnership = directory => directory === run.runDir ? () => {} : acquireOrdinaryRunOwnership(directory, {...p, acquireRunOwnership: originalAcquire});
+            }
+            return await transport(args);
           }
           return await transport(args);
         }
@@ -4141,7 +4143,7 @@ Nothing was sent to the chat.` };
         if (p.beforeDeliverySubmit && !await p.beforeDeliverySubmit()) return false;
         try { return await deliveryJournal(run, p, journal => {
           const current = latest();
-          staleAtSubmit = expectedState(current, p.expected ?? {});
+          staleAtSubmit = !releaseExpected && expectedState(current, p.expected ?? {});
           if (staleAtSubmit) return false;
           if (!targetCurrent(current) || isEnvironmentWake(entry.text) && !currentEnvironmentWake(current, entry.text, p)) return false;
           const saved = journal.requests.find(item => item.id === entry.id);
@@ -4203,7 +4205,7 @@ Nothing was sent to the chat.` };
     return done((answer ? `Sent your answer to the ${area.name} chat of #${run.number}. The agent goes on with the step.`
       : `Sent your change request to the ${area.name} chat of #${run.number}.${run.gate ? ' The gate stays open.' : ''}`) + (!answer ? `\n${uptakeReceipt(accepted, p)}` : '') + (warnings ? `\n${warning}` : ''));
   } catch (error) { return fail(`Could not update the saved request. Wait briefly, then retry; check the original chat (${error.code ?? 'journal unavailable'}).`); }
-  finally { activeDeliveries.delete(owner.token); }
+  finally { releaseExpected?.(); activeDeliveries.delete(owner.token); }
 }
 
 function cleanupLines(run) {
