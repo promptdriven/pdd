@@ -72,16 +72,19 @@ the CI is `base-red` (the hold, below).
    own process rule bounds the wait.
 4. Base `pass` or `broken`: the suite result comes back unchanged (the PR's own red,
    as before the compare).
-5. Base `fail`: the head names come from the job's suite log, the base names from
-   the record (`failingTestNames`, below).
-   - A side with no names, or with more than 50: every failure counts as base-red.
-   - Head names that the base does not have are the PR's own red: `{...suite, text}`
+5. Base `fail`: the head's failing tests come from the job's suite log, the base's
+   from the record (`failingTests`, below). A head test also fails on the base when
+   the base has a test with the same name and the same file, or with no file on one
+   side (`sameTest`).
+   - A side with no failing test, or with more than 50: every failure counts as
+     base-red.
+   - Head tests that do not fail on the base are the PR's own red: `{...suite, text}`
      with two lines after the first line of `suite.text`: "Failing tests from this
-     change: NAMES." and, when some head names also fail on the base, "Also red on
-     the base (SHA7), not from this change: NAMES." So the repair does not chase
-     them.
-   - No new head name: the suite is base-red: `{state: 'base-red'}` with `{what:
-     'suite', sha: BASE COMMIT, names: HEAD NAMES, tail: THE BASE TAIL}`.
+     change: TESTS." and, when some head tests also fail on the base, "Also red on
+     the base (SHA7), not from this change: TESTS." (each test as `NAME (FILE)`, or
+     `NAME` with no file). So the repair does not chase them.
+   - No new head test: the suite is base-red: `{state: 'base-red'}` with `{what:
+     'suite', sha: BASE COMMIT, names, tests: THE HEAD TESTS, tail: THE BASE TAIL}`.
 
 ## The hold (B4)
 
@@ -121,53 +124,66 @@ in ISO form), else the empty string.
 
 ## The main-red issue
 
-`fileMainRed(ctx, job, red)` returns `{number, ref, found}` or null.
+`fileMainRed(ctx, job, red)` returns `{number, ref, found, earlier}` or null.
 
-- **Where** (the open decision, in one place, `mainRedRoute(settings)`): always
-  `file`, in the work repository (`ctx.repo`), in auto and observe mode. It is the
-  repository's own work, not a report to PDD; the [report
-  owner](autopilot-reports.prompt.md) stays for promptdriven/pdd.
+- **Where** (release lead, Nov 11; in one place, `mainRedRoute(settings)`): always
+  `file`, in the work repository (`ctx.repo`), in auto and observe mode and with every
+  `report` setting (also `off`). It is the repository's own work, not a report to
+  PDD; the [report owner](autopilot-reports.prompt.md) stays for promptdriven/pdd.
 - **Fingerprint**: the first 16 hex digits of the SHA-256 of `WHAT` and the sorted
   names, one per line (never the commit), so the same failure on a later base commit
   is the same issue. **Marker**: `<!-- pdd:autopilot-core:base-red:FINGERPRINT -->`.
 - **Dedup**: first read `issues?state=all&labels=pdd:main-red&per_page=100` (at most
-  5 pages) and take an issue (not a PR) whose body has the marker and that is open or
-  closed less than 14 days ago. A match is the result (`found: true`); nothing is
-  posted. So a second job with the same base-red files no second issue.
+  5 pages) and look at the issues (not PRs) whose body has the marker. Only an **open**
+  match is the result (`found: true`); nothing is posted. So a second job with the
+  same base-red files no second issue. A closed match, of any age, means that the
+  same red came back after its issue was closed: a new red event. It files a new
+  issue, and `earlier` is the number of the newest closed match (the highest
+  number). So no job waits on a closed issue while nobody works on the new red.
 - **New issue**: title `Main is red: NAME` (the test or check name, `(and N more)`
   for the others, at most 200 characters, public text). Labels: `pdd:main-red` and,
-  when `settings.label` is set, that label, so Autopilot takes the issue as its own
-  work (Serhan, Nov 10: "Autopilot fixes a failing or flaky test on main itself, as
-  its own issue"). The body (public text through `ctx.publicBody`) has: the base
+  only in auto mode when `settings.label` is set, that label, so Autopilot takes the
+  issue as its own work (Serhan, Nov 10: "Autopilot fixes a failing or flaky test on
+  main itself, as its own issue"). Observe mode builds nothing, so it adds no opt-in
+  label (release lead, Nov 11). The body (public text through `ctx.publicBody`) has: the base
   branch and commit, the check names or the failing tests (at most 20, with "and N
-  more"), the PR and issue where it was seen, what Autopilot does while it is red
+  more"), the PR and issue where it was seen, `Earlier: #N` when a closed issue had
+  the same marker, what Autopilot does while it is red
   (no repair; the PRs wait with no slot, then update onto the base when this issue is
   closed and the base moves), a redacted log tail of the base suite (at most 30
   lines, [secret redaction](secret-redaction.prompt.md)) and the marker as its last
   line.
 
-## Failing test names
+## Failing tests
 
-`failingTestNames(text, {root})` returns `{names, more}`. It is the one parser of
-failing test names; another parser can replace it with the same shape.
+`failingTests(text, limit = 50)` returns `[{name, file}]` (`file` is a string or
+null), in log order, at most `limit` entries. It has the shape of the core's
+`failingTests` of #3227 fix 4, so that one can replace it with one import.
 
-- A name comes from a top-level TAP line `not ok N - NAME` (node:test, as the core's
-  replay log reader reads them). An indented line is a subtest: its parent's line
-  names the failure. A line with a `# TODO` or `# SKIP` directive is not a failure.
-- NAME loses the directive, every `ROOT/` (the checkout root, so the same test in
-  two checkouts has one name), leading and trailing space; it is cut to 200
-  characters. A blank NAME does not count.
-- `names` are unique, in log order, at most 50; `more` is true when more were found.
+- **TAP** (node --test): a line `not ok N - NAME` at any depth (a subtest is
+  indented). The `location: 'FILE:LINE:COL'` line in the next 12 lines gives its
+  file. An `ok N` line ends the look for a location.
+- **Spec reporter**: a line `✖ NAME (DURATION)` at any depth; a `test at
+  FILE:LINE:COL` line right before it (the failure summary) gives its file. The
+  summary header `✖ failing tests:` is not a test. Color codes are removed first.
+- A line with a `# TODO` or `# SKIP` directive is not a failure. NAME is trimmed and
+  cut to 200 characters; a blank NAME does not count.
+- One test is one entry (`sameTest`): the same name with the same file, or with no
+  file on one side (then the entry keeps the file that is known). So the spec
+  reporter's summary repeats no test.
 
-The core's suite log and the base suite log are read in 1 MB parts, whole lines only,
-so a long log never sits in memory at once.
+The engine reads the job's suite log and the base suite log in 1 MB parts, whole lines
+only, so a long log never sits in memory at once. It calls `failingTests` with a limit
+of 51 for each part and joins the parts with the same rule; more than 50 tests sets
+`more`. Every `ROOT/` and `file://ROOT/` (the checkout root) goes from names and
+files, so one test in two checkouts is one test.
 
 ## The base suite record
 
 `ROOT/base-suite/SHA.json` (`ROOT` is `ctx.root`, mode 0600, written atomically):
 `{sha, state, tests, more, tail, text, at, cwd, agent, restarts, deaths, quiets}`.
-`state` is `running`, `pass`, `fail` or `broken`; `tests` and `more` come from
-`failingTestNames`; `tail` is the redacted last 30 lines of its log; `text` says why a
+`state` is `running`, `pass`, `fail` or `broken`; `tests` (`[{name, file}]`, at most
+50) and `more` come from `failingTests`; `tail` is the redacted last 30 lines of its log; `text` says why a
 broken run is broken; `at` is the last change. A record that cannot be read counts as
 missing.
 
@@ -194,7 +210,7 @@ again. It clears `job.baseSuite`. It never throws.
 ## Public contract
 
 Exports: `ciVsBase`, `suiteVsBase`, `baseRedWait`, `baseRedWaiting`,
-`baseRedStatus`, `stopBaseSuite`, `fileMainRed`, `failingTestNames`,
+`baseRedStatus`, `stopBaseSuite`, `fileMainRed`, `failingTests`, `sameTest(a, b)`,
 `baseRedFingerprint(what, names)`, `mainRedRoute(settings)`, `MAIN_RED_LABEL`
 (`pdd:main-red`) and `BASE_RED_MARKER` (`pdd:autopilot-core:base-red`).
 

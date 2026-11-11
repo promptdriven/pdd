@@ -1557,9 +1557,10 @@ Each tick, without AI calls:
    in one run of the same test command at the merge base (one run per base commit on
    this machine, for all its jobs). Then the PR gets no repair, no END and no
    `pdd:stuck`. It stays open and waits with no slot, so other issues go on, and
-   Autopilot files one issue "Main is red: NAME" (label `pdd:main-red`, plus `label`
-   when you set one) in your repository, once per failure, so that Autopilot itself
-   fixes the base. When that issue is closed and the base moves, the PR updates onto
+   Autopilot files one issue "Main is red: NAME" (label `pdd:main-red`, and in `auto`
+   mode also `label` when you set one) in your repository, so that Autopilot itself fixes the base.
+   There is one open issue per failure; when the same failure comes back after its
+   issue was closed, a new issue names the earlier one. When that issue is closed and the base moves, the PR updates onto
    the base and its checks run again. When only some failing tests are also red on
    the base, the repair gets only the others and is told which ones are red on the
    base. `pdd autopilot status` shows such a PR as `main is red (NAME) since TIME; no

@@ -22,6 +22,7 @@ function extend(f, w) {
     const pr = { number: 100 + f.prs.size, branch, head, base, body, title, state: 'open', merged: false, comments: [], labels: [] };
     f.prs.set(pr.number, pr); return pr;
   };
+  f.listCatchUp = () => { for (const pr of f.prs.values()) if (pr.hidden) pr.hidden['pdd:merge-lane'] = 0; };
   f.setChecks = (sha, conclusion = 'success', status = 'completed') => f.checks.set(sha, [{ name: 'ci', status, conclusion: status === 'completed' ? conclusion : null }]);
   // Check runs with an id and an app (#3181): setRun puts the latest run of a name. With f.rerunnable (off by default)
   // the rerun endpoints answer 201 and put a new queued run of that name; off, they answer 404 like an unknown route.
@@ -78,16 +79,17 @@ function extend(f, w) {
     // Labels on PRs (the merge lane) and the open issues-and-PRs list for one label.
     if ((m = /^\/issues\/(\d+)\/labels(?:\/(.+))?$/.exec(route)) && f.prs.has(Number(m[1]))) {
       const pr = f.prs.get(Number(m[1]));
-      if (method === 'POST') { for (const name of input.labels) if (!pr.labels.includes(name)) { pr.labels.push(name); (pr.labeledAt ??= {})[name] = f.now(); } return ok(200, pr.labels.map(name => ({ name }))); }
+      if (method === 'POST') { for (const name of input.labels) if (!pr.labels.includes(name)) { pr.labels.push(name); (pr.hidden ??= {})[name] = f.labelListLag ?? 0; } return ok(200, pr.labels.map(name => ({ name }))); }
       if (method === 'DELETE') { const name = decodeURIComponent(m[2] ?? ''); if (!pr.labels.includes(name)) return ok(404, { message: 'Label does not exist' }); pr.labels = pr.labels.filter(x => x !== name); return ok(200, []); }
     }
     // A PR's own issue read is consistent: it shows a label at once.
     if ((m = /^\/issues\/(\d+)$/.exec(route)) && method === 'GET' && f.prs.has(Number(m[1])) && !f.issues.has(Number(m[1]))) { const pr = f.prs.get(Number(m[1])); return ok(200, { number: pr.number, state: pr.state, labels: pr.labels.map(name => ({ name })), pull_request: {} }); }
-    // With labelListLag (ms, off by default), the label list shows a label that a POST added only that long after the
-    // write, as GitHub's list can lag; in one tick (one fake time) it does not show it at all.
+    // With labelListLag K (off by default), the label list misses a label that a POST added for the next K list reads
+    // (the reads of every machine count), as GitHub's list can lag a write. listCatchUp() ends every lag at once.
     if (route === '/issues' && method === 'GET' && new URLSearchParams(endpoint.split('?')[1] ?? '').get('labels') === 'pdd:merge-lane') {
-      const shown = pr => pr.labels.includes('pdd:merge-lane') && !(f.labelListLag && f.now() - (pr.labeledAt?.['pdd:merge-lane'] ?? -Infinity) < f.labelListLag);
-      return ok(200, [...f.prs.values()].filter(pr => pr.state === 'open' && shown(pr)).map(pr => ({ number: pr.number, state: 'open', labels: pr.labels.map(name => ({ name })), pull_request: {} })));
+      const rows = [...f.prs.values()].filter(pr => pr.state === 'open' && pr.labels.includes('pdd:merge-lane') && !(pr.hidden?.['pdd:merge-lane'] > 0));
+      for (const pr of f.prs.values()) if (pr.hidden?.['pdd:merge-lane'] > 0) pr.hidden['pdd:merge-lane']--;
+      return ok(200, rows.map(pr => ({ number: pr.number, state: 'open', labels: pr.labels.map(name => ({ name })), pull_request: {} })));
     }
     // PR reviews on GitHub (a person's APPROVED review).
     if ((m = /^\/pulls\/(\d+)\/reviews$/.exec(route)) && method === 'GET') return ok(200, f.prs.get(Number(m[1]))?.reviews ?? []);

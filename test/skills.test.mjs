@@ -27,10 +27,10 @@ const ALL_SKILLS = ['pdd-prompting', 'pdd-setup', 'pdd-product', 'pdd-graph', ..
 // #2595: the verbatim principle and bounded review repairs need 4 KB only in bug/feature.
 // The six-question independent review brief needs 2.25 KB.
 // #2602 / pdd #2610 needs 1.5 KB for the 1501-byte change.md brief; #3201 (the file-ownership rule) needs 1.6 KB.
-// #3248 and #3255 (no Story or prompt for a non-code file; a prompt from the current code first; the pdd-bug evidence
-// for owned code; pdd-bug names pdd-small-change) need 2.1 KB in prompt-story, 2.2 KB in change and 4.25 KB in pdd-bug.
+// #3248 and #3255 (no Story or prompt for a non-code file; a whole-file prompt from the current code first; the pdd-bug
+// evidence for owned code; pdd-bug names pdd-small-change) need 2.2 KB in prompt-story, 2.25 KB in change, 4.25 KB in pdd-bug.
 const SKILL_LIMIT = 3072, SKILL_LIMITS = { 'pdd-bug': 4352, 'pdd-feature': 4096 };
-const STEP_LIMIT = 1228, STEP_LIMITS = { 'prompt-story': 2150, review: 2304, change: 2253 };
+const STEP_LIMIT = 1228, STEP_LIMITS = { 'prompt-story': 2253, review: 2304, change: 2304 };
 const frontmatter = text => {
   const match = text.match(/^---\n([\s\S]*?)\n---\n/);
   assert.ok(match, 'SKILL.md starts with frontmatter');
@@ -206,7 +206,9 @@ test('SKILLS11: reproduce says plainly when no prompt exists, and PR 1 holds onl
 });
 
 // Wrong (real-user web FLOW B6-B7): a one-line bug in a repo with no prompts got two full module prompts and 709 lines in PR 1.
-test('SKILLS12: with no prompt yet, prompt-story writes the smallest prompt for the issue only and keeps PR 1 small', () => {
+// #3255: an existing file with no prompt gets a prompt of its whole behavior today, outside the PR 1 size; a new code file
+// gets the smallest prompt for the issue only.
+test('SKILLS12: a new code file gets the smallest prompt for the issue only, and PR 1 stays small', () => {
   for (const name of ['pdd-bug', 'pdd-feature']) {
     const step = read(`${name}/steps/prompt-story.md`);
     // RUNBOOK §2 and §6: a command-line program has one program prompt.
