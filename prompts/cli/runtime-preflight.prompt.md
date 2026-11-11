@@ -36,7 +36,7 @@ Filter names before Story/test/advice content reads. An explicitly excluded sele
 
 All access paths use the authority: selected files, includes, required Markdown/call/context paths, `$contract`/`$seed` ports, app-map prompts/stylesheets, raw/effective preparation reads/stats and returned virtual/replacement paths. `prepareSource` cannot replace or weaken bootstrap policy. Resolve references by their existing authored meaning before permission. Keep the complete boundary cause/chain through wrapped reference errors. Apply the ceiling to every link substitution as well as authored/final paths while retaining existing stricter callers and snapshot rules.
 
-Expose `reads` beside the unchanged upload `files`: sorted unique `{path,roles}` records of actual non-upload authored content reads, with roles `reference`, `preparation`, `footprint`, `discovery` or `guide`. A path can have several roles. This is local read disclosure, not added upload membership. Existing `files`, byte sizes, effective bytes and tar remain the sole upload manifest. `--files` and send use the same stable capture; unchanged unconfigured tar and source identity stay exact.
+Expose `reads` beside the unchanged upload `files`: sorted unique `{path,roles}` records of actual non-upload authored content reads, with roles `reference`, `preparation`, `footprint`, `discovery` or `guide`. A path can have several roles. This is local read disclosure, not added upload membership. Existing `files`, byte sizes, effective bytes and tar remain the sole upload manifest. `--files` and send use the same stable capture; unchanged unconfigured tar and source identity stay exact except for the explicit [interface-kind transport projection](#interface-kind-transport).
 
 Hash filling checks allowed draft targets and required reference inputs before reading/writing. Update authored files directly, retain exact non-hash bytes and approved/stale rules. Excluded prompts are not opened or edited; a required crossing is a refusal. Root source-selection control is read locally under its existing safe-source rules; its includes remain subordinate to the workspace ceiling. Binding metadata never grants content access.
 
@@ -282,8 +282,8 @@ decides when its command requires this capability; that link is navigation-only.
 </details>
 
 Retain original authored paths. Effective upload bytes determine byte limits,
-tar contents and source SHA; no-reference captures keep exactly the prior bytes
-and tar. For reference-only reads, unused contracts and unused records in a
+tar contents and source SHA; no-reference captures without explicit executable
+interface kinds keep exactly the prior bytes and tar. For reference-only reads, unused contracts and unused records in a
 shared file must not affect a selected Story's source or freshness. Expose expansion provenance per consumer
 and a per-Story effective-file footprint for local Check history. For a selected
 Story, include every discovered scenario belonging to it and each scenario's own
@@ -332,7 +332,7 @@ used by an unselected sibling. Capture instability still uses whole-attempt retr
 attempt before selection and dependency discovery. It receives exactly the
 attempt's `{readFile, statFile}` ports; it returns an array of `{path, bytes}`
 files. An empty array adds nothing. Absence of the hook preserves the existing
-invocation and results; without references its tar remains byte for byte exact.
+invocation and results; without references or explicit executable interface kinds its tar remains byte for byte exact.
 There is no second archive builder and no write to authored source.
 
 Both ports take a repository-relative path string and observe the raw repository
@@ -397,6 +397,40 @@ During preflight, a selected test that reaches a valid native-only entry or call
 freshness, and allow the approval owner to review and refill a stale prompt.
 Preflight validates the status and hash of each reachable native declaration
 before omission.
+
+<a id="interface-kind-transport"></a>
+### Interface kind stays local
+
+Export native `executableInterfaceText(text)`, taking already prepared UTF-8
+prompt text as a string and returning its executable upload text as a string.
+It performs only the projection below; it reads, writes, approves and hashes
+nothing. Capture and effective-hash readers share this same operation. Ordinary
+`readPrompt` text remains the local declaration, with its kind intact.
+
+`kind` classifies a PDD declaration; it is not an executable Runtime field.
+Keep explicit `full` and `partial` in authored files and local prompt readers.
+After reference expansion and ordinary closure/boundary selection, remove only
+that top-level member from the single valid Runtime interface block in each
+selected prompt's upload copy. An absent kind already uses Runtime's accepted
+spelling and leaves the bytes unchanged. Do not add operations or claim that
+undeclared operations or unexecuted criteria passed.
+
+Remove the member and only its necessary JSON delimiter. Preserve every other
+token and byte, including prose, wrappers, string escapes, number spellings,
+status, prose hash, schemas, calls, resources, limits and nested `kind` fields.
+Never parse and reserialize the interface to perform this projection. Malformed
+or ambiguous blocks and unknown kinds retain their existing refusal handling;
+never strip arbitrary unknown fields to make admission pass. Native-only keeps
+the existing not-run reason and dispatch exclusion, rather than becoming an
+executable declaration.
+
+Use these exact projected bytes for `sources`, manifest sizes, tar, limits,
+source SHA and effective Story footprints through the existing capture path.
+Files preview, lint, Check, Try, retries and recovery therefore see the same
+payload. Keep exact authored `raw_file_hashes` and `raw_prompt_hashes` separate;
+local freshness and approval checks must not infer full coverage from a kindless
+upload or lose an authored kind edit. Do not rewrite saved batch source identities
+or adopt old receipts when recapture no longer matches their original source.
 
 ## Story runtime boundary (#3135)
 
