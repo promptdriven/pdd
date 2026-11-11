@@ -146,7 +146,8 @@ export async function coreWorld(t, { repository = 'acme/widgets', settings = {},
     start: spec => {
       const job = { ...spec, pid: ++pid, token: `${spec.dir}/${spec.id}.spec.json`, log: join(spec.dir, `${spec.id}.log`), exit: join(spec.dir, `${spec.id}.exit.json`),
         result: join(spec.dir, `${spec.id}.result.json`), started: w.now() };
-      writeFileSync(job.log, `log of ${spec.id}\nError: pdd test returned no verdict\n`);
+      // A suite starts admitted by the machine's suite queue, unless the test queues it (w.suiteQueued, then w.admit).
+      writeFileSync(job.log, spec.role === 'suite' ? (w.suiteQueued ? 'waiting for a check slot (position 1)\n' : 'running the full test suite\n') : `log of ${spec.id}\nError: pdd test returned no verdict\n`);
       w.started.push(job); w.alive.add(job.pid); return job;
     },
     read: job => ({ state: w.alive.has(job.pid) ? 'running' : existsSync(job.exit) ? 'exited' : 'dead',
@@ -174,6 +175,7 @@ export async function coreWorld(t, { repository = 'acme/widgets', settings = {},
   w.line = (role, text) => role === 'suite' ? `${text}\n` : `${JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: text } }] } })}\n`;
   w.step = job => appendFileSync(job.log, w.line(job.role, `ok step ${word(steps++)}`));
   w.progress = (issue, role) => w.step(w.job(issue, role));
+  w.admit = issue => appendFileSync(w.job(issue, 'suite').log, 'running the full test suite\n');
   w.say = (issue, role, text) => appendFileSync(w.job(issue, role).log, text.endsWith('\n') ? text : `${text}\n`);
   w.kill = (issue, role) => { const job = w.job(issue, role); w.alive.delete(job.pid); return job; };
   // The scripted builder: commit on the job branch, push, open a PR, finish with a pr result.

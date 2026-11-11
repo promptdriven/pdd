@@ -1700,7 +1700,7 @@ test('H2 a Runtime report goes to the configured Runtime repository when readabl
   const { fileReport } = await import('../src/autopilot-reports.mjs');
   const { mkdtempSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
-  const cause = { kind: 'runtime', component: 'pdd test', code: 'binding-refused', text: 'refused' };
+  const cause = { kind: 'runtime', component: 'pdd test', code: 'interpreter-error', text: 'the interpreter failed' };
   for (const [readable, repo] of [[true, 'promptdriven/prompt-runtime'], [false, 'promptdriven/pdd']]) {
     const root = mkdtempSync(join(tmpdir(), 'pdd-h2-')); t.after(() => rmSync(root, { recursive: true, force: true }));
     const fake = reportGh({ readable });
@@ -1709,11 +1709,13 @@ test('H2 a Runtime report goes to the configured Runtime repository when readabl
     const issue = fake.issues.get(501);
     assert.equal(issue.repo, repo); assert.deepEqual(issue.labels, ['pdd:runtime']); assert.deepEqual(issue.assignees, ['agarwal-ishaan']);
   }
-  // A PDD cause (also a test vector) always goes to promptdriven/pdd.
-  const root = mkdtempSync(join(tmpdir(), 'pdd-h2-')); t.after(() => rmSync(root, { recursive: true, force: true }));
-  const fake = reportGh();
-  const vector = await fileReport({ cause: { kind: 'runtime', component: 'pdd lint', code: 'scenario-integer-out-of-range', text: 'x' }, mode: 'file', root, machine: 'm', versions: { pdd: '0.1.27' }, runtimeRepo: 'promptdriven/prompt-runtime' }, { gh: fake.gh, now: () => 0 });
-  assert.equal(vector.ref, 'promptdriven/pdd#501'); assert.deepEqual(fake.issues.get(501).labels, ['pdd:autopilot-report']);
+  // A PDD cause (a test vector, or a refusal of our input such as a binding) always goes to promptdriven/pdd.
+  for (const code of ['scenario-integer-out-of-range', 'binding-refused']) {
+    const root = mkdtempSync(join(tmpdir(), 'pdd-h2-')); t.after(() => rmSync(root, { recursive: true, force: true }));
+    const fake = reportGh();
+    const sent = await fileReport({ cause: { kind: 'runtime', component: 'pdd lint', code, text: 'x' }, mode: 'file', root, machine: 'm', versions: { pdd: '0.1.27' }, runtimeRepo: 'promptdriven/prompt-runtime' }, { gh: fake.gh, now: () => 0 });
+    assert.equal(sent.ref, 'promptdriven/pdd#501', code); assert.deepEqual(fake.issues.get(501).labels, ['pdd:autopilot-report']);
+  }
   // The core passes autopilot.reports.runtimeRepo from pdd.json.
   assert.equal(coreSettings({ autopilot: { reports: { runtimeRepo: 'promptdriven/prompt-runtime' } } }).runtimeRepo, 'promptdriven/prompt-runtime');
   assert.equal(coreSettings({ autopilot: { reports: { runtimeRepo: 'not a repo' } } }).runtimeRepo, null);
@@ -2663,17 +2665,36 @@ test('V3 P3 findings never block: a FAIL with only P3 items merges, the PR body 
   assert.ok(pr.comments.some(c => /^Review: PASS/.test(c.body) && /Follow-ups \(P3/.test(c.body)));
 });
 
-test('V4 two rounds in a row that are not smaller or less severe end the job', async t => {
+test('V4 (R11-3a, the #2574 pattern) each repair fixes the last P2 and the reviewer finds a new, different P2: the repairs go on to a PASS or to the cap of 6', async t => {
+  const real = ['[P2] src/approval-evidence.mjs:207: Bound assistant-message selection by observation time, not stage.endedAt.',
+    '[P2] src/workflow-view.mjs:118: Resolve the saved chat account before reading gate text; expand ~ in configDir.',
+    '[P2] docs/cli.md:1402: The view --json example lists a gate field that the code does not write.',
+    '[P2] src/workflow-runner.mjs:88: The resume path skips the saved Story card.',
+    '[P2] test/workflow-view.test.mjs:40: No test covers the expanded configDir.',
+    '[P2] src/approval-policy.mjs:61: The journal read ignores a truncated last line.',
+    '[P2] prompts/cli/workflow-view.prompt.md:12: The prompt does not state the account fallback.'];
+  let w = await coreWorld(t);
+  w.issue(17); await w.tick(); w.build(17); await w.tick();
+  for (const items of real.slice(0, 3)) { await reviewRound(w, 17, [items]); assert.equal(endComments(w, 17).length, 0, items); await repairBuild(w, 17); }
+  await reviewRound(w, 17, []);
+  assert.equal(w.github.merges.length, 1, 'a PASS after 3 repairs merges');
+  w = await coreWorld(t);
+  w.issue(17); await w.tick(); w.build(17); await w.tick();
+  for (const items of real.slice(0, 6)) { await reviewRound(w, 17, [items]); assert.equal(endComments(w, 17).length, 0, items); await repairBuild(w, 17); }
+  await reviewRound(w, 17, [real[6]]);
+  const end = endComments(w, 17);
+  assert.equal(end.length, 1); assert.match(end[0], /the safety cap of 6 repair\(s\) is reached/);
+  assert.equal(w.started.filter(job => job.role === 'repair').length, 6);
+});
+
+test('V6 (R11-3b) two different bugs at nearby lines of one file are different findings (the path words do not count)', async t => {
   const w = await coreWorld(t);
   w.issue(17); await w.tick(); w.build(17); await w.tick();
-  await reviewRound(w, 17, ['P2 src/a.js:10 the parser drops the last line']);
+  await reviewRound(w, 17, ['[P2] src/autopilot-core.mjs:1210: the merge lane does not drop the label when the job ends']);
   await repairBuild(w, 17);
-  await reviewRound(w, 17, ['P2 src/b.js:20 the new flag has no test']);
-  assert.equal(endComments(w, 17).length, 0, 'one stalled round goes on');
-  await repairBuild(w, 17);
-  await reviewRound(w, 17, ['P2 src/c.js:30 the docs table misses the new key']);
-  const end = endComments(w, 17);
-  assert.equal(end.length, 1); assert.match(end[0], /not fewer or less severe for 2 rounds in a row/);
+  await reviewRound(w, 17, ['[P2] src/autopilot-core.mjs:1212: the new label check does not handle a 404 status from the DELETE call']);
+  assert.equal(endComments(w, 17).length, 0);
+  assert.equal(w.started.filter(job => job.role === 'repair').length, 2);
 });
 
 test('V5 the safety cap autopilot.maxRepairs ends a job that still makes progress; repairs is an alias', async t => {
@@ -2869,4 +2890,229 @@ test('W13 the stream parser: Claude tool calls and results, Codex items, prose a
   v.issue(17); await v.tick();
   const words = ['alpha', 'beta', 'gamma', 'delta', 'epsilon', 'zeta', 'eta', 'theta', 'iota', 'kappa'];
   assert.equal(await ticksUntilStop(v, 17, i => v.say(17, 'build', JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', content: [{ type: 'text', text: `found ${words[i]}` }] }] } })), 10), null, 'a new tool result line is new');
+});
+
+// ---- Review 11 ------------------------------------------------------------------------------------------------
+test('X1 (R11-1) fail closed: a FAIL whose list is a string, empty or missing never merges; a PASS that lists a P1 or P2 item is a FAIL', async t => {
+  for (const [label, mustFix] of [['string', 'P1 src/a.js:3 the parser drops the last line'], ['empty', []], ['missing', undefined]]) {
+    const w = await coreWorld(t, { settings: { runs: 1 } });
+    w.issue(17); await w.tick();
+    const { pr } = w.build(17); await w.tick();
+    const review = w.job(17, 'review');
+    w.finish(17, 'review', { result: { verdict: 'FAIL', head: review.head, summary: 'One real bug.', ...(mustFix === undefined ? {} : { mustFix }) } });
+    w.suite(17, 0); await w.tick();
+    assert.equal(w.github.merges.length, 0, label);
+    assert.ok(pr.comments.some(c => /^Review: FAIL/.test(c.body)), label); assert.ok(!pr.comments.some(c => /^Review: PASS/.test(c.body)), label);
+    if (label === 'string') assert.match(w.job(17, 'repair').input, /P1 src\/a\.js:3 the parser drops the last line/, 'a string is one item');
+    else assert.match(w.job(17, 'repair').input, /see the review comment on the PR/);
+  }
+  const v = await coreWorld(t, { settings: { runs: 1 } });
+  v.issue(17); await v.tick(); v.build(17); await v.tick();
+  v.review(17, 'PASS', ['[P2] src/a.js:9 the new flag has no test']); v.suite(17, 0); await v.tick();
+  assert.equal(v.github.merges.length, 0, 'a PASS with a P2 item is a FAIL'); assert.ok(v.job(17, 'repair'));
+});
+
+test('X2 (R11-2) a suite that waits in the machine suite queue is not quiet; T1 counts from its admission; the backstop still counts from the start', async t => {
+  let w = await coreWorld(t, { settings: { runs: 1 } }); w.suiteQueued = true;
+  w.issue(17); await w.tick();
+  const { pr } = w.build(17); await w.tick(); w.review(17, 'PASS');
+  const suite = w.job(17, 'suite');
+  for (let i = 0; i < 12; i++) { w.advance(10 * MIN); await w.tick(); }       // 2 h in the queue: one waiting line, nothing new
+  assert.ok(!w.stopped.includes(suite.id), 'a queued suite is never quiet');
+  w.admit(17); w.advance(10 * MIN); await w.tick();
+  for (let i = 0; i < 4; i++) { w.advance(10 * MIN); await w.tick(); }        // 40 min after the admission, nothing new
+  assert.ok(!w.stopped.includes(suite.id));
+  w.advance(10 * MIN); await w.tick();
+  assert.ok(w.stopped.includes(suite.id), 'T1 counts from the admission');
+  // A queue that never admits: the backstop (here 3 h) ends it with one alert; the job is a no-result.
+  w = await coreWorld(t, { settings: { runs: 1, maxJobHours: 3 } }); w.suiteQueued = true;
+  w.issue(17); await w.tick(); w.build(17); await w.tick(); w.review(17, 'PASS');
+  const alerts = [], queued = w.job(17, 'suite');
+  for (let i = 0; i < 20 && !w.stopped.includes(queued.id); i++) { w.advance(15 * MIN); await w.tick({ alert: async a => alerts.push(a.text) }); }
+  assert.ok(w.stopped.includes(queued.id)); assert.equal(w.now() - queued.started, 3 * HOUR);
+  assert.match(history(w).find(r => r.issue === 17).text, /the full test suite ran 3 h \(its limit/);
+  assert.equal(alerts.filter(text => /ran 3 h/.test(text)).length, 1);
+  void pr;
+});
+
+test('X3 (R11-5) CI counts only when a workflow can run on the PR head: a dispatch-only file merges with "CI: none"; on: pull_request with no run waits', async t => {
+  const { workflowRunsOnPr } = await import('../src/autopilot-core.mjs');
+  const b = 'pdd/core-17-ab12';
+  for (const [text, want] of [
+    ['on:\n  repository_dispatch:\n    types: [pdd-secrets]\n', false], ['on:\n  pull_request:\n  push:\n    branches: [main, alpha]\n', true],
+    ['on:\n  push:\n    branches:\n      - main\n  schedule:\n    - cron: "0 0 * * *"\n', false], ['on: push\n', true], ['on: [push, pull_request]\n', true],
+    ['"on": pull_request\n', true], ['on:\n  push:\n    branches: ["**"]\n', true], ['on:\n  push:\n    branches:\n      - "pdd/**"\n      - "!pdd/core-*"\n', false],
+    ['on:\n  push:\n    branches-ignore: [main]\n', true], ['on:\n  push:\n    tags: ["v*"]\n', false], ['on: {push: {branches: [main]}, workflow_dispatch: {}}\n', false],
+    ['on:\n  pull_request:\n    branches: [release]\n', false], ['on:\n  - pull_request_target\n', true], ['on:\n  schedule:\n    - cron: "5 4 * * *"\n', false],
+  ]) assert.equal(workflowRunsOnPr(text, b, 'main'), want, text);
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.baseCommit('.github/workflows/pdd-secrets-dispatch.yml', 'name: PDD secrets\non:\n  repository_dispatch:\n    types: [pdd-secrets]\njobs:\n  x:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo ${{ github.event.client_payload.pull_request }}\n');
+  w.issue(17); await w.tick();
+  const { pr } = w.build(17, { checks: false }); await w.tick(); w.review(17, 'PASS'); w.suite(17, 0);
+  w.advance(11 * MIN); await w.tick(); await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number]); assert.match(mergeComment(pr), /- CI: none/);
+  const v = await coreWorld(t, { settings: { runs: 1 } });
+  v.baseCommit('.github/workflows/ci.yml', 'on:\n  pull_request:\njobs:\n  test:\n    runs-on: ubuntu-latest\n');
+  v.issue(17); await v.tick();
+  const built = v.build(17, { checks: false }); await v.tick(); v.review(17, 'PASS'); v.suite(17, 0);
+  for (let i = 0; i < 6; i++) { v.advance(10 * MIN); await v.tick(); }
+  assert.deepEqual(v.github.merges, [], 'a repository with PR CI waits for the run');
+  v.github.setChecks(built.head); await v.tick();
+  assert.deepEqual(v.github.merges, [built.pr.number]); assert.match(mergeComment(built.pr), /- CI: green/);
+});
+
+test('X4 (R11-6) a P3 follow-up never closes another issue at the merge', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); w.issue(18); await w.tick();
+  const { pr } = w.build(17); await w.tick();
+  w.review(17, 'FAIL', ['P3 docs/cli.md:12 a later change that fixes #18 and closes acme/widgets#18, see https://github.com/acme/widgets/issues/18']); w.suite(17, 0); await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number]);
+  const section = pr.body.slice(pr.body.indexOf('Follow-ups from the Autopilot review'));
+  assert.doesNotMatch(section, /#18|issues\/18/); assert.match(section, /fixes issue 18 and closes acme\/widgets issue 18/);
+});
+
+test('X5 (R11-4, C5) T1 does not count sleep: a long gap restarts the clock, and the part of a short gap beyond one tick does not count', async t => {
+  let w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); await w.tick();
+  let job = w.job(17, 'build');
+  for (let i = 0; i < 4; i++) { w.advance(10 * MIN); await w.tick(); }       // 40 min with nothing new
+  w.advance(60 * MIN); await w.tick();                                       // a 1 h sleep (a gap longer than the quiet period)
+  assert.ok(!w.stopped.includes(job.id), 'the wake restarts T1');
+  for (let i = 0; i < 4; i++) { w.advance(10 * MIN); await w.tick(); }
+  assert.ok(!w.stopped.includes(job.id));
+  w.advance(10 * MIN); await w.tick();
+  assert.ok(w.stopped.includes(job.id), '45 min after the wake');
+  w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); await w.tick();
+  job = w.job(17, 'build');
+  w.advance(10 * MIN); w.progress(17, 'build'); await w.tick();             // something new at minute 10 (the first look)
+  w.advance(10 * MIN); w.progress(17, 'build'); await w.tick();             // and at minute 20
+  w.advance(10 * MIN); await w.tick();
+  w.advance(30 * MIN); await w.tick();                                       // a 30 min sleep: 20 min beyond one tick
+  assert.ok(!w.stopped.includes(job.id), 'awake and quiet for 10 + 10 min only');
+  w.advance(10 * MIN); await w.tick(); w.advance(10 * MIN); await w.tick();
+  assert.ok(!w.stopped.includes(job.id), '40 awake minutes');
+  w.advance(10 * MIN); await w.tick();
+  assert.ok(w.stopped.includes(job.id), 'then T1 ends it at 50 awake minutes');
+});
+
+test('X6 (C2, C8) a wait call with new arguments is still a wait; a process that T1 stopped never sets L, even with a valid result', async t => {
+  let w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); await w.tick();
+  let n = 0;
+  assert.equal(await ticksUntilStop(w, 17, () => { for (const name of ['wait_agent', 'wait', 'list_agents']) w.say(17, 'build', JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name, input: { timeout_ms: 1000 + n++ } }] } })); }), 50);
+  w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); await w.tick();
+  const job = w.job(17, 'build');
+  w.build(17); w.alive.add(job.pid); rmSync(job.exit);                       // the agent wrote its result and hangs
+  assert.equal(await ticksUntilStop(w, 17, () => {}), 50);
+  assert.equal(jobFile(w, 17).phase, 'pr', 'the result is used');
+  const rows = existsSync(join(w.root, 'durations.jsonl')) ? readFileSync(join(w.root, 'durations.jsonl'), 'utf8').trim() : '';
+  assert.equal(rows, '', 'a stopped process is no success');
+});
+
+// Mutation guards from review 11 (each kills a mutation that survived).
+test('Y1 (L1, L3) two lane holders: the higher PR yields at once (it drops its label and does no lane work), the lowest goes on', async t => {
+  const w = await coreWorld(t, { settings: { runs: 2 } });
+  w.issue(17); w.issue(18); await w.tick();
+  const a = w.build(17), b = w.build(18); await w.tick();
+  w.review(17, 'PASS'); w.suite(17, 0); w.review(18, 'PASS'); w.suite(18, 0);
+  a.pr.labels.push('pdd:merge-lane'); b.pr.labels.push('pdd:merge-lane');     // both POSTs landed (a race)
+  w.baseCommit('person.txt', 'main moved\n');
+  const head = b.pr.head;
+  await w.tick();
+  assert.ok(!laneLabel(b.pr), 'the higher holder drops its label');
+  assert.equal(jobFile(w, 18).lane?.state, 'waiting'); assert.equal(jobFile(w, 18).lane?.holder, a.pr.number);
+  assert.equal(b.pr.head, head, 'the higher holder does no refresh');
+  assert.ok(laneLabel(a.pr), 'the lowest holder keeps the lane');
+});
+
+test('Y2 (L6) a PR re-reads the holders after its POST: a lower PR that took the lane at the same time wins', async t => {
+  const w = await coreWorld(t, { settings: { runs: 2 } });
+  w.issue(17); w.issue(18); await w.tick();
+  const a = w.build(17), b = w.build(18); await w.tick();
+  w.review(18, 'PASS'); w.suite(18, 0);                                       // only #18 is green
+  w.baseCommit('person.txt', 'main moved\n');
+  const head = b.pr.head, own = w.ports();
+  await w.tick({ gh: async (args, options) => { const r = await own.gh(args, options); if (isLanePost(args, options) && args.some(x => String(x).includes(`/issues/${b.pr.number}/labels`))) a.pr.labels.push('pdd:merge-lane'); return r; } });
+  assert.equal(jobFile(w, 18).lane?.state, 'waiting'); assert.equal(jobFile(w, 18).lane?.holder, a.pr.number);
+  assert.ok(!laneLabel(b.pr)); assert.equal(b.pr.head, head, 'no lane work for the loser');
+});
+
+test('Y3 (L8) the last guard compares the base right before the merge: a base push after the base check means no merge in that tick', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); await w.tick();
+  const { pr } = w.build(17); await w.tick(); w.review(17, 'PASS'); w.suite(17, 0);
+  await w.tick({ checkBase: async () => { w.baseCommit('late.txt', 'a person pushed just now\n'); return { exitCode: 0, message: 'Base check ok.' }; } });
+  assert.deepEqual(w.github.merges, [], 'the head no longer contains the base tip');
+  assert.equal(pr.state, 'open');
+});
+
+test('Y4 (M3b) a rename that also changes the interface block is no pure rename: it needs an approval', async t => {
+  const prose = 'Count the words of a text.';
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.baseCommit('prompts/words.prompt.md', approvedText(prose));
+  w.issue(17); await w.tick();
+  const cwd = w.job(17, 'build').cwd;
+  mkdirSync(join(cwd, 'prompts', 'text'), { recursive: true }); w.git(cwd, 'mv', 'prompts/words.prompt.md', 'prompts/text/words.prompt.md');
+  const text = readFileSync(join(cwd, 'prompts', 'text', 'words.prompt.md'), 'utf8');
+  writeFileSync(join(cwd, 'prompts', 'text', 'words.prompt.md'), text.replace('"operations":[]', '"operations":[{"name":"count","input":{"type":"string"},"output":{"type":"integer"}}]'));
+  assert.notEqual(readFileSync(join(cwd, 'prompts', 'text', 'words.prompt.md'), 'utf8'), text);
+  w.build(17); await w.tick();
+  assert.equal(w.job(17, 'review'), undefined, 'red before the review');
+  assert.deepEqual(w.github.merges, [], 'an interface change is a real change');
+  assert.match(w.job(17, 'repair')?.input ?? '', /prompts\/text\/words\.prompt\.md/);
+});
+
+test('Y5 (M4b, M4c, M4d) strict repository: an approval of another head, an approval by an untrusted person, or an agent journal entry never merges', async t => {
+  const strictWorld = async () => {
+    const w = await coreWorld(t, { settings: { runs: 1 } });
+    w.baseCommit('pdd.json', JSON.stringify({ strict_approvals: true }));
+    w.issue(17); await w.tick();
+    writeIn(w.job(17, 'build').cwd, 'prompts/new.prompt.md', approvedText('Count the new words.')); writeIn(w.job(17, 'build').cwd, 'src/new.js', '// Generated from prompts/new.prompt.md\n');
+    return w;
+  };
+  for (const review of [head => ({ state: 'APPROVED', commit_id: 'f'.repeat(40), user: { login: 'acme' } }), () => ({ state: 'APPROVED', commit_id: null, user: { login: 'stranger' } })]) {
+    const w = await strictWorld();
+    const { pr, head } = w.build(17); await w.tick();
+    assert.ok(w.labels(17).includes('pdd:needs-decision'));
+    const r = review(head); pr.reviews = [{ ...r, commit_id: r.commit_id ?? head }];
+    w.github.unlabel(17, 'pdd:needs-decision', 'acme');
+    for (let i = 0; i < 3; i++) { await w.tick(); if (w.job(17, 'review') && w.alive.has(w.job(17, 'review').pid)) w.review(17, 'PASS'); if (w.job(17, 'suite') && w.alive.has(w.job(17, 'suite').pid)) w.suite(17, 0); }
+    assert.deepEqual(w.github.merges, [], JSON.stringify(pr.reviews[0]));
+  }
+  const w = await strictWorld();
+  recordApproval(w, 'prompts/new.prompt.md', approvedText('Count the new words.'));   // an agent journal entry
+  w.build(17); await w.tick();
+  assert.ok(w.labels(17).includes('pdd:needs-decision'), 'strict mode needs a person, not an agent entry');
+  assert.deepEqual(w.github.merges, []);
+});
+
+test('Y6 (M6b) the "other" report cap is per day: a new other cause 2 hours later is still a draft; a day later it files', async t => {
+  const { fileReport } = await import('../src/autopilot-reports.mjs');
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const root = mkdtempSync(join(tmpdir(), 'pdd-y6-')); t.after(() => rmSync(root, { recursive: true, force: true }));
+  const fake = reportGh();
+  const file = (code, at) => fileReport({ cause: { kind: 'pdd', component: 'pdd', code, text: 'x' }, mode: 'file', root, machine: 'm', versions: { pdd: '0.1.27' }, step: 'build' }, { gh: fake.gh, now: () => at });
+  assert.equal((await file('strange', 0)).state, 'filed');
+  assert.equal((await file('weird', 2 * HOUR)).state, 'draft');
+  assert.equal((await file('odd', 25 * HOUR)).state, 'filed');
+});
+
+test('Y7 (R11 should-fix 5) a failed checkout of a kept PR undoes the claim: no orphan pdd:working, no claim comment, no job', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.baseCommit('pdd.json', JSON.stringify({ strict_approvals: true }));
+  w.issue(17); await w.tick();
+  writeIn(w.job(17, 'build').cwd, 'prompts/new.prompt.md', approvedText('Count the new words.')); writeIn(w.job(17, 'build').cwd, 'src/new.js', '// Generated from prompts/new.prompt.md\n');
+  const { pr, head } = w.build(17); await w.tick();
+  pr.reviews = [{ state: 'APPROVED', commit_id: head, user: { login: 'acme' } }];
+  w.github.unlabel(17, 'pdd:needs-decision', 'acme');
+  const own = w.ports();
+  await w.tick({ git: async (args, options) => args[0] === 'worktree' && args[1] === 'add' && args.includes('-B') ? { code: 1, stdout: '', stderr: 'fatal: boom' } : own.git(args, options) });
+  assert.ok(!jobFile(w, 17), 'no job file');
+  assert.ok(!w.labels(17).includes('pdd:working'), 'no orphan claim label');
+  assert.equal(claimComments(w, 17).length, 0, 'no claim comment');
+  await w.tick();
+  assert.equal(jobFile(w, 17)?.pr, pr.number, 'the next tick resumes the same PR');
 });
