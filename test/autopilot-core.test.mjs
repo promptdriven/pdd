@@ -2052,25 +2052,35 @@ const ticksToMerge = async (w, issues, limit = 10) => {
   return Infinity;
 };
 
-test('L5 (#3246) the label list does not show the new lane label yet, the PR\'s own labels do: the PR merges in that tick and keeps its label', async t => {
-  const w = await coreWorld(t, { settings: { runs: 1 } }); w.github.labelListLag = MIN;
-  w.issue(17); await w.tick();
-  const { pr } = await greenPr(w, 17); await w.tick(); w.review(17, 'PASS'); w.suite(17, 0);
-  const seen = [];
-  await w.tick({ gh: laneReads(w, seen) });
-  assert.deepEqual(w.github.merges, [pr.number], 'the lane step goes on in the tick that adds the label');
-  assert.ok(seen.filter(e => e.endsWith(`/issues/${pr.number}`)).length >= 2, 'the own labels are read after the write and right before the merge');
-  assert.ok(!w.github.writes.some(([method, route]) => method === 'DELETE' && route.startsWith(`/issues/${pr.number}/labels/`)), 'a list that lags never drops the label');
-  assert.match(mergeComment(pr), /- Merge lane: final step/);
+test('L5 (#3246) the label list misses the new lane label, the PR\'s own labels show it: the final step starts in that tick, and the merge waits for the list', async t => {
+  const lagWorld = async lag => {
+    const w = await coreWorld(t, { settings: { runs: 1 } }); w.github.labelListLag = lag;
+    w.issue(17); await w.tick();
+    const { pr } = await greenPr(w, 17); await w.tick(); w.review(17, 'PASS'); w.suite(17, 0);
+    return { w, pr };
+  };
+  const drops = ({ w, pr }) => w.github.writes.filter(([method, route]) => method === 'DELETE' && route.startsWith(`/issues/${pr.number}/labels/`));
+  // A short lag: the list misses the label for one read and shows it at the race guard, so the PR merges in that tick.
+  const short = await lagWorld(1), seen = [];
+  await short.w.tick({ gh: laneReads(short.w, seen) });
+  assert.deepEqual(short.w.github.merges, [short.pr.number], 'the merge comes in the tick that adds the label');
+  assert.equal(seen.filter(e => e.endsWith(`/issues/${short.pr.number}`)).length, 1, 'one own-labels read, right after the write');
+  assert.deepEqual(drops(short), []); assert.match(mergeComment(short.pr), /- Merge lane: final step/);
+  // A long lag: the list still misses the label at the race guard. The PR keeps its label and the final step, does not
+  // merge in that tick, and merges in the next one, when the list shows the label.
+  const long = await lagWorld(2);
+  await long.w.tick();
+  assert.deepEqual(long.w.github.merges, [], 'no merge while only the own labels show the lane');
+  assert.ok(laneLabel(long.pr), 'the label stays'); assert.deepEqual(drops(long), [], 'a list that lags never drops the label');
+  assert.equal(jobFile(long.w, 17).lane?.state, 'final', 'the final step stays'); assert.match(mergeComment(long.pr), /- Merge lane: final step/);
+  long.w.advance(10 * MIN); await long.w.tick();
+  assert.deepEqual(long.w.github.merges, [long.pr.number]);
   // With the label in neither read, the PR tries again next tick.
-  const v = await coreWorld(t, { settings: { runs: 1 } }); v.github.labelListLag = MIN;
-  v.issue(17); await v.tick();
-  const { pr: late } = await greenPr(v, 17); await v.tick(); v.review(17, 'PASS'); v.suite(17, 0);
-  const real = v.ports();
-  await v.tick({ gh: async (args, options) => { const r = await real.gh(args, options); return args.some(x => String(x).endsWith(`/issues/${late.number}`)) ? { ...r, stdout: r.stdout.replace(/"labels":\[[^\]]*\]/, '"labels":[]') } : r; } });
-  assert.deepEqual(v.github.merges, [], 'no holder in either read: wait'); assert.ok(laneLabel(late), 'the label stays for the next read');
-  v.advance(10 * MIN); await v.tick();
-  assert.deepEqual(v.github.merges, [late.number]);
+  const none = await lagWorld(2), real = none.w.ports();
+  await none.w.tick({ gh: async (args, options) => { const r = await real.gh(args, options); return args.some(x => String(x).endsWith(`/issues/${none.pr.number}`)) ? { ...r, stdout: r.stdout.replace(/"labels":\[[^\]]*\]/, '"labels":[]') } : r; } });
+  assert.deepEqual(none.w.github.merges, [], 'no holder in either read: wait'); assert.ok(laneLabel(none.pr), 'the label stays for the next read');
+  none.w.advance(10 * MIN); await none.w.tick();
+  assert.deepEqual(none.w.github.merges, [none.pr.number]);
 });
 
 test('L6 (#3246) when the lane frees in a tick, the next green PR takes it in that tick: the lower issue waits for the higher holder, which merges', async t => {
@@ -2089,22 +2099,53 @@ test('L6 (#3246) when the lane frees in a tick, the next green PR takes it in th
   assert.equal(w.started.filter(j => j.role === 'review').length, 2, 'one review each');
 });
 
-test('L7 (#3246) timing with the label list lag of GitHub: two queued green PRs merge in 3 ticks, also when the lower issue waits for the holder', async t => {
-  const queued = await coreWorld(t, { settings: { runs: 2 } }); Object.assign(queued.github, { mergeMovesBase: true, labelListLag: MIN });
-  queued.issue(17); queued.issue(18); await queued.tick();
-  await greenPr(queued, 17); await greenPr(queued, 18); await queued.tick();
-  queued.review(17, 'PASS'); queued.suite(17, 0); queued.review(18, 'PASS'); queued.suite(18, 0);
-  const both = await ticksToMerge(queued, [17, 18]);
-  // The higher issue holds the lane (it refreshed for a base move) when the lower one turns green.
-  const behind = await coreWorld(t, { settings: { runs: 2 } }); Object.assign(behind.github, { mergeMovesBase: true, labelListLag: MIN });
-  behind.issue(17); behind.issue(18); await behind.tick();
-  await greenPr(behind, 17); await greenPr(behind, 18); await behind.tick();
-  behind.review(18, 'PASS'); behind.suite(18, 0); behind.baseCommit('person.txt', 'main moved\n');
-  await behind.tick(); behind.advance(10 * MIN); await behind.tick(); behind.github.setChecks(jobFile(behind, 18).head); behind.suite(18, 0);
-  behind.review(17, 'PASS'); behind.suite(17, 0); behind.advance(10 * MIN);
-  const waiter = await ticksToMerge(behind, [17, 18]);
-  t.diagnostic(`ticks to merge two queued green PRs: ${both}; with the lower issue waiting for the holder: ${waiter}`);
-  assert.ok(both <= 3, `queued: ${both} ticks`); assert.ok(waiter <= 3, `waiter: ${waiter} ticks`);
+test('L7 (#3246) timing: two queued green PRs merge in 3 ticks with a short label lag and in 4 with a long one, also when the lower issue waits for the holder', async t => {
+  const timing = async lag => {
+    const queued = await coreWorld(t, { settings: { runs: 2 } }); Object.assign(queued.github, { mergeMovesBase: true, labelListLag: lag });
+    queued.issue(17); queued.issue(18); await queued.tick();
+    await greenPr(queued, 17); await greenPr(queued, 18); await queued.tick();
+    queued.review(17, 'PASS'); queued.suite(17, 0); queued.review(18, 'PASS'); queued.suite(18, 0);
+    const both = await ticksToMerge(queued, [17, 18]);
+    // The higher issue holds the lane (it refreshed for a base move) when the lower one turns green.
+    const behind = await coreWorld(t, { settings: { runs: 2 } }); Object.assign(behind.github, { mergeMovesBase: true, labelListLag: lag });
+    behind.issue(17); behind.issue(18); await behind.tick();
+    await greenPr(behind, 17); await greenPr(behind, 18); await behind.tick();
+    behind.review(18, 'PASS'); behind.suite(18, 0); behind.baseCommit('person.txt', 'main moved\n');
+    await behind.tick(); behind.advance(10 * MIN); await behind.tick(); behind.github.setChecks(jobFile(behind, 18).head); behind.suite(18, 0);
+    behind.review(17, 'PASS'); behind.suite(17, 0); behind.advance(10 * MIN);
+    return { both, waiter: await ticksToMerge(behind, [17, 18]) };
+  };
+  // Short: the list shows the label at the race guard (1 read). Long: it shows it only from the next tick (2 reads).
+  const short = await timing(1), long = await timing(2);
+  t.diagnostic(`ticks to merge two queued green PRs: short lag ${short.both} (lower issue waits: ${short.waiter}); long lag ${long.both} (lower issue waits: ${long.waiter})`);
+  assert.ok(short.both <= 3 && short.waiter <= 3, JSON.stringify(short)); assert.ok(long.both <= 4 && long.waiter <= 4, JSON.stringify(long));
+});
+
+test('L8 (#3246) two machines add their lane labels within the lag: neither merges before the list shows both; the lower PR merges, the other waits', async t => {
+  const a = await coreWorld(t, { settings: { runs: 1 } }); Object.assign(a.github, { mergeMovesBase: true, labelListLag: 50 });
+  a.issue(17); a.issue(18); await a.tick();
+  const b = await a.peer({ settings: { runs: 1 } }); await b.tick();
+  const pa = a.build(17), pb = b.build(18);
+  await a.tick(); await b.tick();
+  a.review(17, 'PASS'); a.suite(17, 0); b.review(18, 'PASS'); b.suite(18, 0);
+  await a.tick(); await b.tick();                    // both add their label; the list shows neither
+  assert.ok(laneLabel(pa.pr) && laneLabel(pb.pr), 'both labels are on');
+  assert.equal(jobFile(a, 17).lane?.state, 'final'); assert.equal(jobFile(b, 18).lane?.state, 'final');
+  assert.deepEqual(a.github.merges, [], 'no merge while the list shows neither label');
+  a.github.listCatchUp(); a.github.labelListLag = 0; a.advance(10 * MIN);
+  await b.tick();                                    // the list shows both: the higher PR leaves the final step and waits
+  assert.deepEqual(a.github.merges, []); assert.ok(!laneLabel(pb.pr), 'the higher PR drops its label');
+  assert.equal(jobFile(b, 18).lane?.state, 'waiting'); assert.equal(jobFile(b, 18).lane?.holder, pa.pr.number);
+  await a.tick();                                    // the lower PR merges
+  assert.deepEqual(a.github.merges, [pa.pr.number]);
+  // The other PR then takes the lane, refreshes onto the new base and merges only what it tested.
+  for (let i = 0; i < 8 && a.github.merges.length < 2; i++) {
+    a.advance(5 * MIN); await b.tick(); const job = jobFile(b, 18);
+    if (job?.head) b.github.setChecks(job.head);
+    if (b.job(18, 'suite') && b.alive.has(b.job(18, 'suite').pid)) b.suite(18, 0);
+  }
+  assert.deepEqual(a.github.merges, [pa.pr.number, pb.pr.number]);
+  assert.doesNotThrow(() => execFileSync('git', ['--git-dir', a.remote, 'merge-base', '--is-ancestor', pa.pr.mergeSha, pb.pr.head]), 'the second merge contains the first');
 });
 
 // ---- Review 9 regressions (each failed on 5c8b7426c) -----------------------------------------------------------

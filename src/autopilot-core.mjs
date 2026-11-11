@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: e5cc1acfb1ac6adfd0545609e49a72396edebe711b93477e0877b171bc965ad4).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: f595389ff997dc9c86a03c15b823fcc65c51f2fafcc29b032e2f17c85c5be113).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1669,10 +1669,10 @@ async function mergeCheck(ctx, job) {
 // number. A PR that waits restarts its quiet clock each tick: waiting never ends a job.
 // #3246: GitHub's label list can lag a label write by a moment; a PR's own labels do not. With `own`, that PR is a
 // holder also when only its own labels show the lane (read only when the list does not show it).
+const ownLane = async (ctx, pr) => labelsOf(await ctx.gh.ok('GET', `repos/${ctx.repo}/issues/${pr}`)).includes(LANE);
 const laneHolders = async (ctx, own) => {
   const held = (await ctx.gh.all(`repos/${ctx.repo}/issues?state=open&labels=${encodeURIComponent(LANE)}&per_page=100`)).filter(row => row.pull_request).map(row => row.number);
-  if (!own || held.includes(own)) return held;
-  return labelsOf(await ctx.gh.ok('GET', `repos/${ctx.repo}/issues/${own}`)).includes(LANE) ? [...held, own] : held;
+  return !own || held.includes(own) || !await ownLane(ctx, own) ? held : [...held, own];
 };
 // The lane order (debate B L6, C1): a PR that came back from a conflict update goes first, then claim order.
 const laneOrder = (a, b) => Number(Boolean(b.lanePriority)) - Number(Boolean(a.lanePriority)) || a.started - b.started;
@@ -1692,10 +1692,11 @@ async function nativeMergeQueue(ctx) { return null; }
 async function enterLane(ctx, job) {
   const { gh, repo } = ctx, label = encodeURIComponent(LANE);
   if (await nativeMergeQueue(ctx)) return 'final';
-  // A waiting PR never keeps its own label (a loser whose DELETE failed tries again here). A wait that lasts longer
+  // A waiting PR never keeps its own label (a loser whose DELETE failed tries again here; a PR that leaves the final
+  // step drops it also when the list does not show it yet). A wait that lasts longer
   // than the quiet period with the same holder sends one alert; waiting never ends a job.
   const wait = async holder => {
-    if (held.includes(job.pr)) await dropLabel(ctx, job.pr);
+    if (held.includes(job.pr) || job.lane?.state === 'final') await dropLabel(ctx, job.pr);
     const same = job.lane?.state === 'waiting' && job.lane.holder === holder;
     job.lane = { state: 'waiting', holder, since: job.lane?.state === 'waiting' ? job.lane.since : ctx.now(), heldSince: same ? job.lane.heldSince : ctx.now(), alerted: same ? job.lane.alerted : false };
     if (!job.lane.alerted && ctx.now() - job.lane.heldSince >= ctx.quiet) {
@@ -1737,8 +1738,11 @@ async function dropLabel(ctx, number) {
 }
 // The race guard right before the merge: this PR must still be the lowest open holder, and the base tip must still be
 // in its head. Else it does not merge in this tick.
+// A merge needs the list itself: only the list shows the labels of other machines. When only the PR's own labels show
+// the lane (the list still lags, #3246), it keeps the label and the final step and merges on a later tick.
 async function laneStillMine(ctx, job) {
-  const held = await laneHolders(ctx, job.pr);
+  const held = await laneHolders(ctx);
+  if (!held.includes(job.pr) && !held.some(n => n < job.pr) && await ownLane(ctx, job.pr)) return false;
   if (!held.includes(job.pr) || held.some(n => n < job.pr)) { await dropLabel(ctx, job.pr); job.lane = null; ctx.saveJob(job); return false; }
   const compare = await ctx.gh.ok('GET', `repos/${ctx.repo}/compare/${encodeURIComponent(ctx.state.baseBranch)}...${job.head}`);
   return compare?.behind_by === 0;
