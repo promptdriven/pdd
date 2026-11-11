@@ -13,7 +13,7 @@ import {checkRuntimeHealth} from '../src/runtime-client.mjs';
 
 const invoke=async(f,command='doctor')=>{
   let stdout='',stderr='';
-  const code=await runPdd(['autopilot',command],{...f.input,stdout:{write:s=>stdout+=s},stderr:{write:s=>stderr+=s},autopilotLauncherPorts:{doctorPorts:f.ports,run:async()=>f.answer('',1),stateRoot:'/forbidden-state'},autopilotGithubPorts:{github:{repository:()=>assert.fail('No GitHub publication')}}});
+  const code=await runPdd(['autopilot',command,...(command==='start'?['--label','pdd:autopilot']:[])],{...f.input,stdout:{write:s=>stdout+=s},stderr:{write:s=>stderr+=s},autopilotLauncherPorts:{doctorPorts:f.ports,run:async()=>f.answer('',1),stateRoot:'/forbidden-state'},autopilotGithubPorts:{github:{repository:()=>assert.fail('No GitHub publication')}}});
   return {code,text:stdout+stderr};
 };
 const check=(result,id,status)=>assert.match(result.text,new RegExp(`(?:^|\\n)${status} ${id}:`));
@@ -98,7 +98,7 @@ test('start: missing sign-in refuses before creating the local state folder',asy
   t.after(()=>rmSync(folder,{recursive:true,force:true}));
   const f=doctorFixture({cwd:folder,home:join(folder,'home')});f.signedIn=false;
   const stateRoot=join(folder,'state');
-  const r=await runAutopilotLauncher({...f.input,command:'start'},{doctorPorts:f.ports,stateRoot,run:async()=>f.answer(folder)});
+  const r=await runAutopilotLauncher({...f.input,command:'start',label:'pdd:autopilot'},{doctorPorts:f.ports,stateRoot,run:async()=>f.answer(folder)});
   assert.equal(existsSync(stateRoot),false,'failed preflight must not create local state');
   assert.equal(r.exitCode,1);
   assert.match(r.message,/(?:^|\n)FAIL agent:/);

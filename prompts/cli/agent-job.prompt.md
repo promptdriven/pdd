@@ -24,8 +24,7 @@ record is simply dead. There is no "uncertain custody" state.
     (a stream of events, so the log grows while the agent works; the result is the
     result file, not the output)
 
-  Both read the prompt on stdin and have full access, like the post-merge auditor
-  launch in [the audit owner](autopilot-audit.prompt.md). Another kind throws
+  Both read the prompt on stdin and have full access. Another kind throws
   `Error("Autopilot core jobs need codex or claude")`.
 - `jobEnvironment(env)` returns a copy of `env` without keys that would join the
   caller's own agent, Herdr or coordinator session: `CLAUDECODE`, `CLAUDE_CODE_*`,

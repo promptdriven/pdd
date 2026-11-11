@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: fa90f88407a62f928fb6d9ad357eb1f182239076afd165dcb317c2e6908140e0).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 3f12ee4f9a8ee76df4afcba8eedb9174f8501cc40c646c4a2950e7bd5eecfb2e).
 import {runAutopilotDoctor, resolveAutopilotAgent} from './autopilot-doctor.mjs';
 import {releaseRunClaim, cancelRun, acquireRunLock} from './workflow-runner.mjs';
 import { releaseCheckCapacity } from './test-suite-queue.mjs';
@@ -16,7 +16,7 @@ import { runAutopilot } from './autopilot.mjs';
 import { allRuns, updateRunCosts, listRuns } from './workflow-runs.mjs';
 import { releaseIssueClaim } from './workflow-worktree.mjs';
 import { samePath } from './workflow-herdr-layout.mjs';
-import { runAutopilotAlerts } from './autopilot-alerts.mjs';
+import { alertStatusLine, runAutopilotAlerts } from './autopilot-alerts.mjs';
 import { countGithubCalls, githubBudget, githubBudgetSettings, githubEtagCache, githubFullLastPage, githubLedger, githubMachineEntries, githubReply, githubStateRoot, githubUsage } from './github-calls.mjs';
 import { costReport, costStatusLines } from './cost-ledger.mjs';
 import { selectAutopilotBase } from './autopilot-base.mjs';
@@ -314,6 +314,11 @@ function moveStatus(state, now) {
   if (engineBefore(state, engineAt(state.cwd)) !== 'full') return '';
   return `\nThis machine moves from the full engine to the core engine at its next tick${journal?.lastError ? ` (last try: ${line(journal.lastError)})` : journal?.defers ? ` (it waited ${journal.defers} of ${MAX_DEFERS} ticks)` : ''}; no new work starts before that.`;
 }
+// The status line of an alert that was not delivered, from local files only; an error adds nothing.
+function alertLine(state, p, ports) {
+  try { const text = (ports.alertStatusLine ?? alertStatusLine)({ repo: state.repo, env: p.env }, { stateRoot: ports.stateRoot }); return text ? `\n${text}` : ''; }
+  catch { return ''; }
+}
 const coreRoot = stateFile => stateFile.replace(/\.json$/, '-core');
 const coreReports = (ports, env) => join(stateFolder(ports, env), 'core-reports');
 async function coreTick(stateFile, state, p, ports) {
@@ -565,6 +570,10 @@ export async function runAutopilotLauncher(input, ports = {}) {
         (doctorPorts.run??runAgentProcess)(file,args,{cwd:input.cwd,env,timeoutMs:10000,...options})});
       const id=createHash('sha256').update(cwd).digest('hex').slice(0,20);
       const previous=read(join(stateFolder(ports,env),`${id}.json`));
+      // Autopilot takes only the issues that a person marks: with no opt-in label it asks for one and starts nothing.
+      const saved={...previous,...(input.label?{label:input.label.trim()}:{}),...(input.mode?{mode:input.mode}:{})};
+      const repoSettings=readCoreSettings(cwd);
+      if (command==='start' && !(machineLabel(saved) ?? repoSettings.label) && (machineMode(saved) ?? repoSettings.mode)!=='off') throw Error(NO_LABEL);
       const profile=savedProfile(previous,env);
       doctorInput={...input,cwd,env,profile};
     } catch (error) {
@@ -628,6 +637,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
         + coreStatus({ state, settings: { ...settingsNow, label }, sources: { label: machineLabel(state) ? 'machine' : label ? 'pdd.json' : null, mode: machineMode(state) ? 'machine' : 'pdd.json', report: machineReport(state) ? 'machine' : 'pdd.json' } },
           { root: coreRoot(stateFile), reportRoot: coreReports(ports, p.env), now: p.now })
         + (label ? '' : '\nNo opt-in label: Autopilot takes no issue. Run pdd autopilot start --label pdd:autopilot, then mark issues with pdd autopilot add N.')
+        + alertLine(state, p, ports)
         + moveStatus(previous, p.now())
         + (state.core?.message ? `\nLast tick ${new Date(state.core.at).toISOString()}: ${line(state.core.message)}` : ''));
     }
@@ -674,8 +684,6 @@ export async function runAutopilotLauncher(input, ports = {}) {
       return { exitCode: result.exitCode, message: result.message };
     }
     if (command !== 'start') return { exitCode: 2, message: 'Use pdd autopilot start, stop, status, add or release.' };
-    // Autopilot takes only the issues that a person marks: with no opt-in label it asks for one and starts nothing.
-    if (!(machineLabel(state) ?? readCoreSettings(state.cwd).label) && machineMode(state) !== 'off') return bad(NO_LABEL);
     // The no-progress period must be at least 2 ticks of the core timer, or a working job could look quiet.
     const quiet = readCoreSettings(state.cwd).quietMinutes, floor = 2 * CORE_INTERVAL / 60000;
     if (quiet < floor) return bad(`Autopilot did not start: autopilot.quietMinutes is ${quiet}; it must be at least ${floor} (2 times the ${CORE_INTERVAL / 60000}-minute core timer). Nothing was started or claimed.`);

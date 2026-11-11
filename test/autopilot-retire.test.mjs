@@ -3,7 +3,7 @@ import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -322,8 +322,20 @@ test('M11 start: --engine full is refused with one line; a start with no opt-in 
   if (result.exitCode !== 1 || !/opt-in label/.test(result.message)) assert.fail(result.message);
   assert.match(result.message, /pdd autopilot start --label pdd:autopilot.*Nothing was started or claimed\.$/);
   assert.deepEqual(timer, []);
-  const saved = JSON.parse(readFileSync(stateFile, 'utf8'));
-  assert.equal(saved.enabled, false); assert.equal(saved.engine, 'core', 'a new state is a core state');
+  assert.equal(existsSync(stateFile), false, 'no state is saved before the label question');
   assert.equal(writes(), before, 'no GitHub write');
   assert.ok(!w.github.issues.get(17).labels.includes('pdd:working'));
+  // With a label, a new state is a core state and its first tick claims only a labeled issue.
+  mkdirSync(join(w.dir, 'pkg'), { recursive: true }); writeFileSync(join(w.dir, 'pkg', 'package.json'), JSON.stringify({ version: '0.1.29' }));
+  w.issue(18, { labels: ['pdd:autopilot'] });
+  const started = await launcher({ command: 'start', label: 'pdd:autopilot', cwd, packageRoot: join(w.dir, 'pkg'), env: ports.env, issues: [] },
+    { ...ports, selectAgent: async () => ({ id: 'codex', kind: 'codex', command: 'codex' }), doctorPorts: { ...ports, selectAgent: async () => ({ id: 'codex', kind: 'codex', command: 'codex' }) },
+      corePorts: { jobs: w.jobs, checkBase: async () => ({ exitCode: 0, message: 'ok' }), agentReady: async () => true } });
+  assert.equal(started.exitCode, 0, started.message);
+  assert.match(started.message, /Mode auto · issues with pdd:autopilot · agent codex/);
+  assert.doesNotMatch(started.message, /moved this machine/, 'a fresh repository has nothing to move');
+  const fresh = JSON.parse(readFileSync(stateFile, 'utf8'));
+  assert.equal(fresh.engine, 'core'); assert.equal(fresh.label, 'pdd:autopilot'); assert.ok(Number.isFinite(fresh.retiredFull?.done));
+  assert.deepEqual(timer, ['start']);
+  assert.ok(w.job(18, 'build') && !w.job(17), 'only the labeled issue starts');
 });

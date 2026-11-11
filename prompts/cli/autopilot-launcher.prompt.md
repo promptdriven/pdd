@@ -48,7 +48,13 @@ a start omits them.
 ## Doctor and start
 
 Dispatch doctor to [the doctor owner](autopilot-doctor.prompt.md). A start first keeps the Git-folder validation
-above, then reads only the saved state to resolve the saved agent profile (`savedProfile`), and runs that doctor
+above, then reads only the saved state. **It asks for an opt-in label first:** when neither `--label`, the machine
+label nor `autopilot.label` in `pdd.json` names a label and the mode (the machine mode from `--mode` or saved, else
+the core mode of `pdd.json`) is not off, return
+exit 1 with exactly `Autopilot did not start: it works only on the issues that you mark with an opt-in label. Run pdd
+autopilot start --label pdd:autopilot, then mark issues with pdd autopilot add N (or add the label on GitHub). Nothing
+was started or claimed.` No doctor, state write, timer, tick, claim or GitHub call happens. Then it resolves the saved
+agent profile (`savedProfile`), and runs that doctor
 with the selected invocation environment and injected ports, before any start state write, admission lock, timer
 change, claim or GitHub mutation. No directory or lock is created by that resolution. On a required failure return
 the complete doctor report unchanged. After a pass, use that invocation environment for the startup checks, and print
@@ -61,33 +67,29 @@ A start then, in this order:
    message and `Choose observe or auto with pdd autopilot observe or pdd autopilot auto.`
 3. Reads the repository metadata (`gh repo view --json nameWithOwner,defaultBranchRef`) and saves `repo` and
    `defaultBranch`. A different saved repository refuses.
-4. **Asks for an opt-in label.** When neither the machine label nor `autopilot.label` in `pdd.json` names a label and
-   the machine mode is not off, return exit 1 with exactly: `Autopilot did not start: it works only on the issues that
-   you mark with an opt-in label. Run pdd autopilot start --label pdd:autopilot, then mark issues with pdd autopilot
-   add N (or add the label on GitHub). Nothing was started or claimed.` No timer, tick, claim or GitHub write happens.
-5. Refuses an `autopilot.quietMinutes` below 2 times the core timer (20): `Autopilot did not start:
+4. Refuses an `autopilot.quietMinutes` below 2 times the core timer (20): `Autopilot did not start:
    autopilot.quietMinutes is N; it must be at least 20 (2 times the 10-minute core timer). Nothing was started or
    claimed.`
-6. Selects the automatic base, checks `gh auth status`, and selects the agent: the saved profile when one is saved
+5. Selects the automatic base, checks `gh auth status`, and selects the agent: the saved profile when one is saved
    (refuse when it is unavailable), else the doctor's selection. Without a saved profile it saves the agent, its
    definition HOME and the kept environment (`HOME`, `PATH`, the agent config folders, the XDG and D-Bus session
    values and the shared queue variables; never credentials or the whole environment). It saves `launchProfile` from
    the profile binding when none is saved, so a later start verifies the same sign-in; a state saved without one
    selects the agent again. A changed saved profile refuses with `The saved coordinator profile cannot be verified.`
-7. Saves `startedAt` (ISO time; in auto mode it is the operator action that approves the core jobs' prompt changes),
+6. Saves `startedAt` (ISO time; in auto mode it is the operator action that approves the core jobs' prompt changes),
    `activatedAt` (once), `coordinatorId` and `machine` (once), `enabled`, `nextTick` and a new `controlRevision`,
    then rechecks under the admission lock that no other control changed the state while it started.
-8. A machine mode `off` saves the state as disabled with mode off, stops the timer and returns exit 0 with
+7. A machine mode `off` saves the state as disabled with mode off, stops the timer and returns exit 0 with
    `Autopilot core is off on this machine for REPO: mode off is saved and the timer is stopped. To turn it on, run pdd
    autopilot start --mode auto or --mode observe.` (a timer stop failure is named).
-9. Starts the user timer and saves `timerMinutes`. A timer failure on a new state restores the disabled state and
+8. Starts the user timer and saves `timerMinutes`. A timer failure on a new state restores the disabled state and
    returns `Autopilot timer could not start; enable your systemd user session on Linux or launchctl user session on
    macOS, then retry.` On Linux it checks lingering without changing it and warns how `loginctl enable-linger` keeps
    the timer after logout.
-10. Runs the first tick in this process. Its move line (`ports.notice`) goes into the start message. If another tick
+9. Runs the first tick in this process. Its move line (`ports.notice`) goes into the start message. If another tick
     holds the tick lock, arrange one detached follow-up (`--start-scan-wait`) that waits outside every lock, checks
     the same enabled start (folder, repository, coordinator, machine and control revision), then runs one tick.
-11. Returns exit 0 with `Autopilot started for REPO in FOLDER. Base BASE. Mode MODE · issues with LABEL · agent ID ·
+10. Returns exit 0 with `Autopilot started for REPO in FOLDER. Base BASE. Mode MODE · issues with LABEL · agent ID ·
     pdd VERSION · next tick: ISO. See: pdd autopilot status.` plus the warnings (PATH shadowing, linger, a failed first
     tick).
 
@@ -174,8 +176,9 @@ harmless.
 **Status** (in the repository, without `--all` or `--json`) reads local files and the timer only, with no GitHub, Herdr
 or AI call: `Autopilot enabled|disabled; timer ...; next tick: ISO|none`, then `coreStatus` with the label, mode and
 report sources (`machine` or `pdd.json`), then `No opt-in label: Autopilot takes no issue. Run pdd autopilot start
---label pdd:autopilot, then mark issues with pdd autopilot add N.` when no label is set, then the move line, then the
-last tick message.
+--label pdd:autopilot, then mark issues with pdd autopilot add N.` when no label is set, then the line of
+`alertStatusLine` of [Autopilot alerts](autopilot-alerts.prompt.md#status-line) with the saved repository and state root
+(an alert that was not delivered; an error adds nothing), then the move line, then the last tick message.
 
 **Status --all** works from any folder, also outside a Git repository. It prints one line for each saved state on this
 machine: repository, folder, base, mode (the machine mode with `(this machine)`, else the mode of that folder's

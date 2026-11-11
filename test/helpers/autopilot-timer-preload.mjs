@@ -24,10 +24,6 @@ const sources = new Map([
     import {healthyMachine} from ${healthyMachine};
     export const readCodexLimits = healthyMachine.codexLimits;
   `],
-  [new URL('../../src/autopilot-cleanup.mjs', import.meta.url).href, `
-    import {healthyMachine} from ${healthyMachine};
-    export const cleanupWorktrees = healthyMachine.cleanupWorktrees;
-  `],
 ]);
 registerHooks({load(url, context, nextLoad) {
   if (sources.has(url)) return {format:'module',source:sources.get(url),shortCircuit:true};
