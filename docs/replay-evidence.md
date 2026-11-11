@@ -20,6 +20,28 @@ map each assertion to its actual result, error, world or calls target. Record ev
 including failures and blocked/not-replayed work. Record the semantic mutation run and formal outcome.
 Keep the manifest outside Git-visible source. pdd reads it; it never executes the commands in it.
 
+## Exact whole numbers
+
+A scenario writes a whole number as plain JSON digits at any size, for example `4250129834582680692326400`
+(3600 × 2^70). `JSON.parse` gives a Number, and a Number holds whole numbers exactly only within ±(2^53−1):
+`9007199254740993` silently becomes `9007199254740992`. Read the scenario so that a whole number outside that range
+becomes a BigInt with its exact digits. Every other number keeps its `JSON.parse` value:
+
+```js
+const scenario = JSON.parse(text, (key, value, context) =>
+  typeof value === 'number' && /^-?(?:0|[1-9][0-9]*)$/.test(context.source) && !Number.isSafeInteger(value)
+    ? BigInt(context.source) : value);
+```
+
+At the public boundary, give a parameter that takes a Number `Number(value)` only when `BigInt(Number(value)) ===
+value` (3600 × 2^70 passes; 2^53 + 1 has no exact Number, so the case fails). Give a BigInt parameter the BigInt.
+Compare an integer result as a BigInt (`BigInt(result)` for a whole Number). Never round to make a case pass.
+A test for a Number parameter can also hold the exact Number spelling (`4.2501298345826807e+24`); the reviver keeps
+it as that exact Number. pdd's own module `src/scenario-json.mjs` implements these rules (`parseScenarioJson`,
+`exactNumber`, `exactValue`).
+pdd keeps the exact digits in the saved anchor (`exact_integers`), so a change in the last digit is a saved-value
+change.
+
 ## Source identity
 
 Compute the current content identity after all source/test edits with `sourceFingerprint(root)`, exported

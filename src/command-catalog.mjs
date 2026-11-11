@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 5001cc1c83babd3e25fff1942d3c24bc93a5c47d48d1bf9bb56a26d12eda6044).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 757d7f84c38fe9a68679b1694a011527adcfd4c445f9a0b55cb2ba19dcde5e44).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -80,8 +80,8 @@ const routes = [
     operands: [{name:'issue',type:'issue'}], options: [{name:'--summary',kind:'text'}],
     forms: [form('pdd workflow evidence ISSUE --summary FILE', 'Record source-verified saved check JSON without rerunning steps, gates or publication.')] },
   { id: 'workflow.evidence-associate', prefix: ['workflow', 'evidence-associate'], local: 'workflow-evidence-associate',
-    operands: [{name:'issue',type:'issue'}], options: [{name:'--workspace',kind:'text'},{name:'--stage',kind:'value',choices:['current','pr1']},{name:'--test',kind:'text-list'}],
-    forms: [form('pdd workflow evidence-associate ISSUE --workspace PATH --stage current|pr1 --test PATH...', "Register this run's evidence workspace, stage and selected tests; no checks or workflow progress.")] },
+    operands: [{name:'issue',type:'issue'}], options: [{name:'--workspace',kind:'text'},{name:'--stage',kind:'value',choices:['current','pr1','before']},{name:'--commit',kind:'text'},{name:'--test',kind:'text-list'}],
+    forms: [form('pdd workflow evidence-associate ISSUE --workspace PATH --stage current|pr1|before [--commit SHA] --test PATH...', "Register this run's evidence workspace, stage and selected tests; before needs the commit of an earlier checked source; no checks or workflow progress.")] },
   { id: 'workflow.ask', prefix: ['workflow', 'ask'], local: 'workflow-ask',
     operands: [{name:'question',type:'text',repeat:true}], options: [],
     forms: [form('pdd workflow ask QUESTION', 'For the agent in a run worktree: show the person that the chat waits for their answer.')] },

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 98e62975560f19852515a216a8f01c2ba3e6955bdee118ce8742f57a92fa0ac9).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 8f9c9642184f84016b3f7f385173d93b81c22c3fa021d24ecefc0527158f67a9).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -50,7 +50,7 @@ const RUNNER_ROUTES = {
   'workflow-suite': plan => ['runSuite', {command:plan.options['--command'], ...(plan.options['--timeout'] !== undefined ? {timeout:Number(plan.options['--timeout'])} : {})}],
   'workflow-request-uptake': plan => ['acknowledgeRequest', { requestId: plan.operands[0], summary: plan.options['--summary'] }],
   'workflow-run': plan => ['startRun', { name: plan.operands[0], issue: plan.operands[1], ...profileOptions(plan), agent: plan.options['--agent'] ?? 'codex', ...(plan.options['--base'] !== undefined ? { base: plan.options['--base'] } : {}), ...(plan.options['--adopt-corpus'] !== undefined ? { adoptCorpus: plan.options['--adopt-corpus'] } : {}), ...(plan.options['--draft'] !== undefined ? { draft: plan.options['--draft'] } : {}), ...(plan.options['--origin'] !== undefined ? {origin:plan.options['--origin']} : {}), ...(plan.options['--decision-id'] !== undefined ? {decisionId:plan.options['--decision-id']} : {}), ...(plan.options['--outcome'] !== undefined ? {outcome:plan.options['--outcome']} : {}), ...(plan.options['--through'] !== undefined ? {through:plan.options['--through']} : {}) }],
-  'workflow-evidence-associate': plan => ['associateEvidenceWorkspace', { ref: plan.operands[0], workspace: plan.options['--workspace'], stage: plan.options['--stage'], tests: plan.options['--test'] }],
+  'workflow-evidence-associate': plan => ['associateEvidenceWorkspace', { ref: plan.operands[0], workspace: plan.options['--workspace'], stage: plan.options['--stage'], ...(plan.options['--commit'] !== undefined ? { commit: plan.options['--commit'] } : {}), tests: plan.options['--test'] }],
   'workflow-evidence': plan => ['recordEvidence', { ref: plan.operands[0], summaryFile: plan.options['--summary'] }],
   'workflow-park': plan => ['parkAutomaticRun', { reason: plan.options['--reason'], ...(plan.options['--route'] === undefined ? {} : {route: plan.options['--route']}), step: plan.options['--step'], runtime: plan.options['--interpreter'] === true, ...(plan.options['--blocker'] === undefined ? {} : {blocker: plan.options['--blocker']}), ...(plan.options['--until'] === undefined ? {} : {until: plan.options['--until']}) }],
   'workflow-yield': plan => ['yieldAutomaticCapacity', { ref: plan.operands[0] }],
@@ -211,7 +211,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     case 'workflow-tidy': case 'workflow-cancel': case 'workflow-status': case 'workflow-open': case 'workflow-evidence': case 'workflow-evidence-associate': case 'workflow-card': {
       if (plan.local === 'workflow-suite' && !plan.options['--command']?.trim()) { line(stderr, 'Use pdd workflow suite --command COMMAND [--timeout MIN].'); return 2; }
       if (plan.local === 'workflow-evidence-associate' && (!plan.options['--workspace']?.trim() || !plan.options['--stage'] || !plan.options['--test']?.length)) {
-        line(stderr, 'Use pdd workflow evidence-associate ISSUE --workspace PATH --stage current|pr1 --test PATH... .'); return 2;
+        line(stderr, 'Use pdd workflow evidence-associate ISSUE --workspace PATH --stage current|pr1|before [--commit SHA] --test PATH... .'); return 2;
       }
       if (plan.local === 'workflow-evidence' && !plan.options['--summary']) { line(stderr, 'Use pdd workflow evidence ISSUE --summary FILE.'); return 2; }
       if (plan.local === 'workflow-request-uptake' && !plan.options['--summary']?.trim()) {

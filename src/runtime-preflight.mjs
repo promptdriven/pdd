@@ -1,12 +1,13 @@
 import { markdownLinks, markdownDefinitions, markdownSectionText } from './runtime-markdown.mjs';
 import { buildBindingPlan, runtimeBoundary } from './runtime-binding-plan.mjs';
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 593795d5383de3ba190e67df257d1f7f1973f0e36c599efdc6a3f2459525eeb9).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 0cccddf6d4122768b2d8868d93486124efe4a0912fb0c1a04c78e05043bc931d).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
 import { basename, join, posix, isAbsolute } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { expandSource } from './contract-refs.mjs';
+import { exactValue, parseScenarioJson, roundedNumberTokens, stringifyScenarioJson } from './scenario-json.mjs';
 import {loadRuntimeWorkspace as loadWorkspacePolicy,allowsRuntimePath,requireRuntimePath as requireWorkspacePath} from './runtime-workspace.mjs';
 
 function workspaceError(error){if(error?.code?.startsWith('workspace-'))throw Object.assign(new PreflightError(4,error.message),{code:error.code});throw error;}
@@ -295,17 +296,76 @@ export function selectTests(found, words = [], { native = false } = {}) {
 }
 
 const refusal = (code, section, message, extra = {}) => ({ code, section, message, ...extra });
+// The PDD interpreter's whole-number range today: prompt_runtime/program_scenario.py (_validate_scenario_integers)
+// for test values and prompt_runtime/graph_runtime_protocol.py for schema bounds. Change it only with the interpreter.
+const INTERPRETER_INTEGERS = { min: -(2n ** 53n - 1n), max: 2n ** 53n - 1n, text: '-9007199254740991 through 9007199254740991' };
+const outsideInterpreter = value => typeof value === 'bigint' && (value < INTERPRETER_INTEGERS.min || value > INTERPRETER_INTEGERS.max);
+// The interpreter's section of a test value: keys joined by ".", indexes as [N] (steps[10].input.seconds).
+const interpreterSection = path => path.reduce((text, part) => typeof part === 'number' ? `${text}[${part}]` : text ? `${text}.${part}` : String(part), '');
+// Advice only: the interpreter is the one place that refuses; the test is still sent.
+function interpreterIntegerWarning(doc, path) {
+  let found = null;
+  const visit = (value, at) => {
+    if (found) return;
+    if (outsideInterpreter(value)) found = { value, path: at };
+    else if (Array.isArray(value)) value.forEach((item, index) => visit(item, [...at, index]));
+    else if (isObject(value)) for (const [key, item] of Object.entries(value)) visit(item, [...at, key]);
+  };
+  visit(doc, []);
+  if (!found) return null;
+  const section = interpreterSection(found.path), nearest = Number(found.value);
+  const spelling = Number.isFinite(nearest) && BigInt(nearest) === found.value
+    ? `If the parameter takes a Number, write its exact Number spelling ${String(nearest)}; the interpreter accepts it. ` : 'No JavaScript Number holds this value. ';
+  return `Warning: ${path} scenario-integer-out-of-range: ${section} is ${found.value}, outside the PDD interpreter's integer range ${INTERPRETER_INTEGERS.text}, `
+    + 'so the interpreter refuses this test before execution (0 AI calls). ' + spelling
+    + "Check the exact value in the repository's own vector test (RUNBOOK §17); do not change the input type or the expected value to fit the interpreter.";
+}
+// Advice only: integer schema bound tokens that the interpreter refuses (graph-schema-invalid).
+function schemaBoundWarnings(prompt) {
+  const found = [], iface = prompt?.interface;
+  const visit = (schema, pointer) => {
+    if (!isObject(schema)) return;
+    if (schema.type === 'integer' || schema.type === 'number') for (const key of [...BOUND_FIELDS, 'multipleOf']) {
+      const bound = schemaValue(schema, key);
+      if (outsideInterpreter(bound)) found.push(`Warning: ${prompt.path} ${pointer}/${key} is ${bound}, outside the PDD interpreter's integer range ${INTERPRETER_INTEGERS.text}, so the interpreter refuses this bound (graph-schema-invalid, bound_text ${bound}).`);
+    }
+    if (isObject(schema.properties)) for (const [name, child] of Object.entries(schema.properties)) visit(child, `${pointer}/properties/${pointerOf([name]).slice(1)}`);
+    if (isObject(schema.items)) visit(schema.items, `${pointer}/items`);
+    if (isObject(schema.additionalProperties)) visit(schema.additionalProperties, `${pointer}/additionalProperties`);
+    if (Array.isArray(schema.oneOf)) schema.oneOf.forEach((variant, index) => visit(variant, `${pointer}/oneOf/${index}`));
+  };
+  for (const [index, entry] of (Array.isArray(iface?.entries) ? iface.entries : []).entries())
+    for (const key of ['input_schema', 'result_schema']) visit(entry?.[key], `/entries/${index}/${key}`);
+  for (const [index, resource] of (Array.isArray(iface?.resources) ? iface.resources : []).entries())
+    for (const [opIndex, operation] of (Array.isArray(resource?.operations) ? resource.operations : []).entries())
+      for (const key of ['arguments_schema', 'result_schema']) visit(operation?.[key], `/resources/${index}/operations/${opIndex}/${key}`);
+  return found;
+}
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
-const show = value => { const text = JSON.stringify(value) ?? String(value); return text.length > 60 ? `${text.slice(0, 57)}...` : text; };
+const show = value => { const text = stringifyScenarioJson(value) ?? String(value); return text.length > 60 ? `${text.slice(0, 57)}...` : text; };
 const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
 function range(min, max, unit = '') {
   const tail = unit ? ` ${unit}${(max ?? min) === 1 ? '' : 's'}` : '';
   if (min !== undefined && max !== undefined) return `${min} to ${max}${tail}`;
   return min !== undefined ? `at least ${min}${tail}` : `at most ${max}${tail}`;
 }
-const typeName = value => value === null ? 'null' : Array.isArray(value) ? 'array'
+// An exact whole number above 2^53 is a BigInt (scenario-json): it is an integer and a number.
+const typeName = value => value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value === 'bigint' ? 'integer'
   : typeof value === 'number' ? (Number.isInteger(value) ? 'integer' : 'number') : typeof value;
-const typeMatches = (value, type) => type === 'number' ? typeof value === 'number' : type === 'integer' ? Number.isInteger(value) : typeName(value) === type;
+const numeric = value => typeof value === 'number' || typeof value === 'bigint';
+const typeMatches = (value, type) => type === 'number' ? numeric(value) : type === 'integer' ? typeof value === 'bigint' || Number.isInteger(value) : typeName(value) === type;
+// A schema number read with its own JSON token: an exact integer literal above 2^53 keeps its digits.
+const schemaValue = (holder, key) => {
+  const value = holder?.[key], source = numberSources.get(holder)?.get(String(key));
+  return typeof value === 'number' && !Number.isSafeInteger(value) && typeof source === 'string' && /^-?(?:0|[1-9][0-9]*)$/.test(source) ? BigInt(source) : value;
+};
+// const and enum values read with their own tokens at every depth.
+const exactSchemaValue = (holder, key) => {
+  const value = schemaValue(holder, key);
+  return Array.isArray(value) ? value.map((_, index) => exactSchemaValue(value, index))
+    : isObject(value) ? Object.fromEntries(Object.keys(value).map(name => [name, exactSchemaValue(value, name)])) : value;
+};
+const sameValue = (a, b) => isDeepStrictEqual(exactValue(a), exactValue(b));
 const article = type => /^[aeiou]/.test(type) ? `an ${type}` : `a ${type}`;
 
 function unknownKeyword(schema) {
@@ -360,15 +420,23 @@ function schemaProblems(value, schema, tokens, out, warnings, evidence = { miss:
     const types = Array.isArray(schema.type) ? schema.type : [schema.type];
     if (!types.some(type => typeMatches(value, type))) return at(`is ${show(value)}. The prompt wants ${types.map(article).join(' or ')}.`);
   }
-  if (Object.hasOwn(schema, 'const') && !isDeepStrictEqual(value, schema.const)) at(`is ${show(value)}. The prompt wants ${show(schema.const)}.`);
-  if (Array.isArray(schema.enum) && !schema.enum.some(choice => isDeepStrictEqual(choice, value))) at(`is ${show(value)}. The prompt allows ${either(schema.enum.map(show))}.`);
-  if (typeof value === 'number') {
-    if ((schema.minimum !== undefined && value < schema.minimum) || (schema.maximum !== undefined && value > schema.maximum)) at(`is ${show(value)}. The prompt allows ${range(schema.minimum, schema.maximum)}.`);
-    if (typeof schema.exclusiveMinimum === 'number' && value <= schema.exclusiveMinimum) at(`is ${show(value)}. The prompt wants more than ${schema.exclusiveMinimum}.`);
-    if (typeof schema.exclusiveMaximum === 'number' && value >= schema.exclusiveMaximum) at(`is ${show(value)}. The prompt wants less than ${schema.exclusiveMaximum}.`);
-    if (typeof schema.multipleOf === 'number' && schema.multipleOf > 0) {
-      const ratio = value / schema.multipleOf;
-      if (Math.abs(ratio - Math.round(ratio)) > 1e-9) at(`is ${show(value)}. The prompt wants a multiple of ${schema.multipleOf}.`);
+  const wanted = exactSchemaValue(schema, 'const'), choices = Array.isArray(schema.enum) ? schema.enum.map((_, index) => exactSchemaValue(schema.enum, index)) : null;
+  if (Object.hasOwn(schema, 'const') && !sameValue(value, wanted)) at(`is ${show(value)}. The prompt wants ${show(wanted)}.`);
+  if (choices && !choices.some(choice => sameValue(choice, value))) at(`is ${show(value)}. The prompt allows ${either(choices.map(show))}.`);
+  if (numeric(value)) {
+    const [minimum, maximum, exclusiveMinimum, exclusiveMaximum, multipleOf] = ['minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'multipleOf'].map(key => schemaValue(schema, key));
+    if ((minimum !== undefined && value < minimum) || (maximum !== undefined && value > maximum)) at(`is ${show(value)}. The prompt allows ${range(minimum, maximum)}.`);
+    if (numeric(exclusiveMinimum) && value <= exclusiveMinimum) at(`is ${show(value)}. The prompt wants more than ${exclusiveMinimum}.`);
+    if (numeric(exclusiveMaximum) && value >= exclusiveMaximum) at(`is ${show(value)}. The prompt wants less than ${exclusiveMaximum}.`);
+    const whole = item => typeof item === 'bigint' || Number.isInteger(item);
+    if (numeric(multipleOf) && multipleOf > 0) {
+      // Exact remainder for whole numbers; a BigInt with a fractional step cannot be judged for sure here.
+      if (whole(value) && whole(multipleOf) && (typeof value === 'bigint' || typeof multipleOf === 'bigint')) {
+        if (BigInt(value) % BigInt(multipleOf) !== 0n) at(`is ${show(value)}. The prompt wants a multiple of ${multipleOf}.`);
+      } else if (typeof value === 'number' && typeof multipleOf === 'number') {
+        const ratio = value / multipleOf;
+        if (Math.abs(ratio - Math.round(ratio)) > 1e-9) at(`is ${show(value)}. The prompt wants a multiple of ${multipleOf}.`);
+      }
     }
   }
   if (typeof value === 'string') {
@@ -856,7 +924,7 @@ function checkTest(root, found, test, prompts) {
   let doc = test.doc;
   if (!test.error && isObject(doc)) {
     const prepared = preparedText(root,found.visible,test.path,readText(root,test.path),'scenario');
-    try { doc = JSON.parse(prepared.text); } catch { /* Preserve ordinary malformed scenario handling. */ }
+    try { doc = parseScenarioJson(prepared.text); } catch { /* Preserve ordinary malformed scenario handling. */ }
   }
   if (test.error) return discoveryRefusal(test);
   const shape=documentRefusal(doc,test.path);if(shape)return shape;
@@ -965,6 +1033,13 @@ export function preflight({ root, found, selected,workspace=found.workspace??loa
       const prompt = prompts.get(step?.entry_path), entry = prompt?.interface?.entries?.find?.(item => item?.operation === step?.operation);
       for (const text of entry ? checkInput(step.input, entry.input_schema, index).warnings : []) warnings.push(`Warning: ${test.path} ${text}`);
     }
+    // Number advice from the exact test values. It never blocks; the interpreter decides.
+    // A native-only test is never sent to the interpreter, so it gets no number advice.
+    let tokens = [], range = null;
+    if (!row.native_only.length) try { const text = readText(root, test.path); if (text !== null) { tokens = roundedNumberTokens(text); range = interpreterIntegerWarning(parseScenarioJson(text), test.path); } } catch { tokens = []; }
+    if (range) warnings.push(range);
+    if (!row.native_only.length) for (const prompt of prompts.values()) for (const line of schemaBoundWarnings(prompt)) if (!warnings.includes(line)) warnings.push(line);
+    for (const item of tokens) warnings.push(`Warning: ${test.path} ${interpreterSection(item.path)} is ${item.source}, which reads as the Number ${String(item.value)}. Write the value you mean: plain digits for an exact whole number, or the exact Number spelling.`);
     return row;
   });
   return { rows, warnings };
@@ -1426,7 +1501,7 @@ function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadR
     }
     let content = expanded.references.length ? Buffer.from(expanded.text,'utf8') : bytes(file);
     if (format === 'scenario') {
-      let doc; try { doc = JSON.parse(content.toString('utf8')); } catch { /* Keep invalid-source handling. */ }
+      let doc; try { doc = parseScenarioJson(content.toString('utf8')); } catch { /* Keep invalid-source handling. */ }
       const expected = matchTests(names.filter(isStoryPath), names).tests.find(test=>test.path===file.path);
       const authority = doc?.schema_version !== TEST_SCHEMA ? null : isObject(doc) && (typeof doc.story_path !== 'string' || !doc.story_path)
         ? refusal('pdd-no-story', 'story_path', 'The test has no story_path. Name its Story.')
@@ -1436,7 +1511,7 @@ function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadR
       if (typeof doc?.story_path === 'string' && !scenarioShapeRefusal(doc, file.path)) {
         add(doc.story_path, file.path, 'story');
         const plan = capturedCriterionPlan(doc, storyCriteria(bytes(inspect(doc.story_path, file.path)).toString('utf8')), file.path);
-        if (plan?.not_checked.length && plan.checked) content = Buffer.from(JSON.stringify({...doc,criteria:plan.criteria,
+        if (plan?.not_checked.length && plan.checked) content = Buffer.from(stringifyScenarioJson({...doc,criteria:plan.criteria,
           check_exemptions:plan.not_checked.map(item => ({criterion_id:item.criterion_id,reason:'out-of-scope',detail:item.reason}))}), 'utf8');
       }
     }

@@ -1,10 +1,11 @@
-// Generated from prompts/cli/workflow-story-card.prompt.md (sha256: 2e483b8975390b44f3212ee269435d88ca2de6212896cf2644500b4d64a6d8f3).
+// Generated from prompts/cli/workflow-story-card.prompt.md (sha256: e1d964dd121794050a4572ce181cf7c59a55514dfd731f5433e620af4de2d4f7).
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { captureSource, findTests } from './runtime-preflight.mjs';
+import { parseScenarioJson, stringifyScenarioJson } from './scenario-json.mjs';
 
 const SCENARIO = 'prompt-runtime.program-scenario.v1';
 const BATCH = /^\d{8}-\d{6}-[a-z0-9]{4}$/;
@@ -21,7 +22,8 @@ function clip(text, max) {
 const cell = (text, max = 80) => clip(text, max).replaceAll('|', '\\|');
 const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object'
   ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
-const compact = value => { try { return JSON.stringify(value) ?? 'null'; } catch { return 'null'; } };
+// Exact digits for a whole number above 2^53 (scenario-json); otherwise the same text as JSON.stringify.
+const compact = value => { try { return stringifyScenarioJson(value) ?? 'null'; } catch { return 'null'; } };
 
 const segments = path => String(path).split('/');
 const storyFolder = path => segments(path).slice(0, -1).includes('user_stories');
@@ -46,7 +48,7 @@ function readScenario(root, path) {
   const text = readText(root, path);
   if (text === null) return { path, text: null, doc: null };
   try {
-    const doc = JSON.parse(text);
+    const doc = parseScenarioJson(text);
     return { path, text, doc: doc?.schema_version === SCENARIO ? doc : undefined };
   } catch { return { path, text, doc: null }; }
 }
@@ -174,7 +176,7 @@ function expectedCases(doc) {
   return (Array.isArray(doc?.steps) ? doc.steps : []).map((step, index) => ({ case: caseName(step, index),
     error: step?.expected_error ?? null,
     expected: (Array.isArray(step?.checks) ? step.checks : []).map(check => [check?.criterion_id ?? null, check?.target ?? null, check?.op ?? null, check?.value ?? null])
-      .map(row => JSON.stringify(canonical(row))).sort() }));
+      .map(row => stringifyScenarioJson(canonical(row))).sort() }));
 }
 export function storyFingerprint({ root, changed = [] } = {}) {
   const paths = [...new Set(changed)].sort();
@@ -188,8 +190,8 @@ export function storyFingerprint({ root, changed = [] } = {}) {
   const tests = testsInRun.map(test => {
     if (!test.doc) return { path: test.path, sha256: sha256(test.text ?? ''), cases: [] };
     const cases = expectedCases(test.doc), steps = Array.isArray(test.doc.steps) ? test.doc.steps : [];
-    return { path: test.path, sha256: sha256(JSON.stringify(canonical({ criteria: test.doc.criteria ?? null, cases }))),
-      cases: cases.map((item, index) => ({ case: item.case, sha256: sha256(JSON.stringify(item)), text: clip(expectedText(steps[index]), 120) })) };
+    return { path: test.path, sha256: sha256(stringifyScenarioJson(canonical({ criteria: test.doc.criteria ?? null, cases }))),
+      cases: cases.map((item, index) => ({ case: item.case, sha256: sha256(stringifyScenarioJson(item)), text: clip(expectedText(steps[index]), 120) })) };
   });
   return { stories, tests };
 }

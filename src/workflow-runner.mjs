@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 13bd2402793433e98e18074dd74b10e7d7f7ff62d8a3b67de88a475577c14ac7).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 060b428605c4e0dbd543668d3022f647c1458b94a25e38dc4dcb2f002a1c69eb).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -1116,15 +1116,30 @@ function selectedCapture(root,tests,capture=captureSource) {
   if(tests.some(path=>!visible.has(path)))throw Error('A selected authored source is missing or unavailable.');
   return capture(root,{tests,appMap:null});
 }
-function frozenRoot(run,head) { return join(realpathSync(run.runDir),'evidence-pr1',head); }
+const ANCHOR_FOLDER = {pr1:'evidence-pr1',before:'evidence-before'};
+function frozenRoot(run,head,stage='pr1') { return join(realpathSync(run.runDir),ANCHOR_FOLDER[stage],head); }
+// The before stage names its historical source by an explicit full commit id: the caller's reconstruction provenance.
+function beforeHead(a) {
+  if (!commitSha(a.sourceAnchor?.head) || a.sourceAnchor.head !== a.sourceAnchor.head.toLowerCase()) throw Error('The registered before commit is missing or invalid.');
+  return a.sourceAnchor.head;
+}
+// Same Story: every selected test at the historical commit is a current test of the run with the same story_path.
+function sameStoryTests(run,frozen,tests) {
+  const current=new Set(gitFiles(run.root));
+  for (const path of tests) {
+    let then,now;
+    try { then=JSON.parse(readFileSync(join(frozen,path),'utf8')).story_path; now=current.has(path)?JSON.parse(readFileSync(join(run.root,path),'utf8')).story_path:undefined; } catch { then=undefined; }
+    if (typeof then !== 'string' || then !== now) throw Error(`${path} is not a current test of the same Story at that commit.`);
+  }
+}
 function checkedAssociation(run,a,capture=captureSource) {
-  if (a.runId !== run.runId || a.repo !== run.repo || !['current','pr1'].includes(a.stage)
+  if (a.runId !== run.runId || a.repo !== run.repo || !['current','pr1','before'].includes(a.stage)
     || !/^[a-f0-9]{64}$/.test(a.source_sha256 ?? '') || realpathSync(a.workspaceRoot) !== a.workspaceRoot
     || a.registration?.operation !== 'evidence-associate' || !Number.isFinite(a.registration.at)
     || a.registration.cwd !== realpathSync(run.root)) throw Error('The evidence association has a different run, owner, producer or registration.');
   evidenceTests(a.tests);
-  const root = a.stage === 'current' ? realpathSync(run.root) : frozenRoot(run,ownedPr1Head(run));
-  const head = a.stage === 'pr1' ? ownedPr1Head(run) : null;
+  const head = a.stage === 'pr1' ? ownedPr1Head(run) : a.stage === 'before' ? beforeHead(a) : null;
+  const root = a.stage === 'current' ? realpathSync(run.root) : frozenRoot(run,head,a.stage);
   if (a.sourceAnchor?.root !== root || a.sourceAnchor?.head !== head || realpathSync(root) !== root)
     throw Error('The registered stage source anchor is missing, changed or unrelated.');
   if (selectedCapture(root,a.tests,capture).sha256 !== a.source_sha256) throw Error('The registered stage source has changed or is unavailable.');
@@ -1135,6 +1150,8 @@ function checkedAssociation(run,a,capture=captureSource) {
 // One eligibility rule for import, status/Story counts and prepared PR lines.
 function eligibleEvidence(run,record,{stage='current',root=run.root,fingerprint=null,capture=captureSource}={}) {
   try {
+    // Only a registered before association establishes historical before-the-fix evidence.
+    if (stage === 'before' && record.association?.stage !== 'before') return false;
     if (record.association) {
       const saved = record.association;
       const a = (run.evidenceAssociations ?? []).find(a => associationKey(a) === associationKey(saved));
@@ -1155,11 +1172,11 @@ function eligibleEvidence(run,record,{stage='current',root=run.root,fingerprint=
 }
 // Materialize local immutable commit objects inside the run folder, never a ref
 // or checkout in the authored repository. Canonical preflight still owns capture.
-async function retainPr1Source(run,head,p) {
-  const target = frozenRoot(run,head);
+async function retainPr1Source(run,head,p,stage='pr1') {
+  const target = frozenRoot(run,head,stage);
   if (existsSync(target)) return target;
   // A missing previously registered anchor must not be silently reconstructed.
-  if ((run.evidenceAssociations ?? []).some(a => a.stage === 'pr1' && a.sourceAnchor?.root === target)) throw Error('The retained PR 1 source is missing.');
+  if ((run.evidenceAssociations ?? []).some(a => a.stage === stage && a.sourceAnchor?.root === target)) throw Error(`The retained ${stage === 'pr1' ? 'PR 1' : 'before-the-fix'} source is missing.`);
   const parent = dirname(target); mkdirSync(parent,{recursive:true,mode:0o700});
   if(realpathSync(parent)!==parent)throw Error('The retained source folder cannot traverse a symlink.');
   const temporary = mkdtempSync(join(parent,'.source-'));
@@ -1167,7 +1184,7 @@ async function retainPr1Source(run,head,p) {
     const tree = await p.execFile('git',['ls-tree','-r','-z',head],{cwd:run.root,encoding:'buffer'});
     const entries = Buffer.from(tree.stdout).toString('utf8').split('\0').filter(Boolean).map(row => {
       const match = /^(100644|100755|120000|160000) (blob|commit) ([a-f0-9]{40,64})\t(.+)$/.exec(row);
-      if (!match) throw Error('The PR 1 tree contains an unavailable source entry.');
+      if (!match) throw Error(`The ${stage === 'pr1' ? 'PR 1' : 'before-the-fix'} tree contains an unavailable source entry.`);
       evidenceTests([match[4]]);
       return {mode:match[1],oid:match[3],path:match[4]};
     });
@@ -1188,7 +1205,7 @@ async function retainPr1Source(run,head,p) {
     return target;
   } finally {rmSync(temporary,{recursive:true,force:true});}
 }
-async function associateEvidenceWorkspaceCommand({ref,workspace,stage,tests,cwd},ports) {
+async function associateEvidenceWorkspaceCommand({ref,workspace,stage,tests,commit,cwd},ports) {
   const p=deps(ports),found=await resolveRun(ref,{cwd},p);
   if(found.error)return fail(found.error);
   const run=found.run;
@@ -1197,9 +1214,16 @@ async function associateEvidenceWorkspaceCommand({ref,workspace,stage,tests,cwd}
     if(!owned || owned.toplevel!==realpathSync(run.root) || owned.commonDir!==realpathSync(run.commonDir)
       || realpathSync(run.runDir)!==realpathSync(runDirFor(owned.commonDir,run.number))) throw Error('Register evidence only from the selected run owned worktree.');
     if(!producer || realpathSync(resolve(cwd,workspace))!==producer.toplevel) throw Error('Supply the exact existing producer Git root.');
-    if(!['current','pr1'].includes(stage))throw Error('Evidence stage must be current or pr1.');
-    const selection=evidenceTests(tests),head=stage==='pr1'?ownedPr1Head(run):null;
-    const root=stage==='pr1'?await retainPr1Source(run,head,p):owned.toplevel;
+    if(!['current','pr1','before'].includes(stage))throw Error('Evidence stage must be current, pr1 or before.');
+    if(stage==='before'?commit===undefined:commit!==undefined)throw Error('Give --commit with --stage before, and only then.');
+    if(stage==='before'){
+      if(typeof commit!=='string'||!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(commit))throw Error('Give the full lowercase commit id of the checked source.');
+      let resolved='';try{resolved=(await git(p,owned.toplevel,'rev-parse','--verify','--quiet',`${commit}^{commit}`)).trim();}catch{resolved='';}
+      if(resolved!==commit)throw Error('The commit is not a local commit of this repository.');
+    }
+    const selection=evidenceTests(tests),head=stage==='pr1'?ownedPr1Head(run):stage==='before'?commit:null;
+    const root=stage==='current'?owned.toplevel:await retainPr1Source(run,head,p,stage);
+    if(stage==='before'){try{sameStoryTests(run,root,selection);}catch(error){throw Error(`${error.message} Register only an earlier result of the same Story.`);}}
     const captured=selectedCapture(root,selection);
     if(stage==='current' && selectedCapture(producer.toplevel,selection).sha256!==captured.sha256)throw Error('The producer source does not match the current authored selection.');
     const association={runId:run.runId,repo:run.repo,workspaceRoot:producer.toplevel,stage,sourceAnchor:{root,head},tests:selection,
@@ -1209,12 +1233,14 @@ async function associateEvidenceWorkspaceCommand({ref,workspace,stage,tests,cwd}
       checkedAssociation(latest,association);
       latest.evidenceAssociations=[...(latest.evidenceAssociations??[]).filter(a=>associationKey(a)!==associationKey(association)),association];
     });
-    return done(`Registered ${stage === 'pr1'?'PR 1':'current'} evidence workspace for ${run.repo}#${run.number}. No check, approval or workflow progress was recorded.`);
+    return done(`Registered ${stage === 'pr1'?'PR 1':stage === 'before'?`before-the-fix (commit ${commit.slice(0,7)})`:'current'} evidence workspace for ${run.repo}#${run.number}. No check, approval or workflow progress was recorded.`);
   } catch(error) {if(error?.code==='workflow_run_save_failed')throw error;return fail(`Evidence workspace not registered: ${oneLine(error.message)}`);}
 }
+// Historical before-the-fix evidence is its own stage: it never enters current or PR 1 counts.
+const beforeStage = record => record?.association?.stage === 'before';
 export function storyCount(run, ports = {}) {
   const records = [...(run.runtimeHistory ?? []), ...Object.values(run.done ?? {}), ...(run.evidence ?? [])]
-    .filter(record => runtimeLines(record.summary).length).sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
+    .filter(record => runtimeLines(record.summary).length && beforeStage(record) === (ports.stage === 'before')).sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
   if (!records.length) return null;
   const fingerprint = (ports.fingerprint ?? gitFingerprint)(run.root), compatible = records.filter(record => eligibleEvidence(run,record,{stage:ports.stage,root:run.root,fingerprint,capture:ports.capture}));
   const current = latestStories(compatible.flatMap(record => runtimeLines(record.summary)));
@@ -1233,7 +1259,7 @@ export function storyCount(run, ports = {}) {
 export function storyEvidence(run, { comparisonRoot } = {}) {
   // Only pdd's own recorded pdd test batches and checked receipts; Prompt tests lines typed into a summary are not evidence.
   const records = [...ownStoryRecords(run), ...(run.evidence ?? [])]
-    .filter(record => runtimeLines(record.summary).length).sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
+    .filter(record => runtimeLines(record.summary).length && !beforeStage(record)).sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
   const root = comparisonRoot === undefined ? run.root : comparisonRoot;
   const current = new Map(), older = new Map(), fingerprint = root === null ? null : gitFingerprint(root);
   for (const record of records) {
@@ -1254,6 +1280,17 @@ function ownStoryRecords(run) {
     ...(result.association?{association:result.association,receipt:{repo:result.producerRoot}}:{}),
     source: { kind: 'runtime-capture-v1', sha256: result.sourceSha256, tests: result.sourceTests ?? result.tests, ...(Object.hasOwn(result,'excludeFixtureProjects') ? {excludeFixtureProjects:result.excludeFixtureProjects} : {}), ...(result.nativeSource ? {nativeSource:result.nativeSource} : {}) } }));
 }
+// Registered before-the-fix results: the latest valid line per Story, with its commit and original batch.
+export function beforeResults(run, ports = {}) {
+  const rows = new Map();
+  for (const record of (run.evidence ?? []).filter(beforeStage).sort((a, b) => (a.at ?? 0) - (b.at ?? 0))) {
+    if (!eligibleEvidence(run, record, { stage: 'before', capture: ports.capture })) continue;
+    for (const line of runtimeLines(record.summary)) if (line.story) rows.set(line.story, { story: line.story, pass: line.pass, line: line.line,
+      commit: record.association.sourceAnchor.head, batch: /^\d{8}-\d{6}-[a-z0-9]{4}$/.test(record.receipt?.batch ?? '') ? record.receipt.batch : null });
+  }
+  return [...rows.values()];
+}
+const beforeLine = row => `Before the fix (commit ${row.commit.slice(0, 7)}${row.batch ? `, batch ${row.batch}` : ''}): ${row.line}`;
 // null when the run has no check claim at all; { none: true } when it has a check or typed lines but no pdd result.
 export function ownStoryCount(run, ports = {}) {
   const own = [...(run.evidence ?? []), ...ownStoryRecords(run)];
@@ -1817,7 +1854,10 @@ function prBody(run, area, env, drafts = [], tests = true, evidence, readable = 
   const formal = readable?.facts?.records?.formal ?? (label !== 'PR 1' && area.steps.includes('formal') && !replayResult ? readFormalEvidence(run) : null);
   const replay = replayResult ? [formatReplayEvidence(replayResult,{maxCharacters:0,rules}), ''] : formal ? [formatFormalEvidence(formal, rules), ''] : [];
   const prefix = [...failing, ...replay, ...promptReturnLines(run)];
-  const top = [...ownLines(run, evidence), ...(verdict ? [`${AGENT_NOTE}: ${closingInert(verdict)}`] : []), ...(change ? [`${AGENT_NOTE}: ${closingInert(change)}${hasReportLink(change, env) ? ' (report links expire after 7 days)' : ''}`] : []), ...runtime];
+  // A registered before-the-fix result is pdd-checked historical evidence, never an agent note.
+  const historical = beforeResults(run).flatMap(row => [beforeLine(row), ...reportLinks((run.evidence ?? []).filter(beforeStage).map(record => record.summary).join('\n'), env)
+    .filter(link => link.startsWith(`Report (${row.story}):`))]);
+  const top = [...ownLines(run, evidence), ...(verdict ? [`${AGENT_NOTE}: ${closingInert(verdict)}`] : []), ...new Set(historical), ...(change ? [`${AGENT_NOTE}: ${closingInert(change)}${hasReportLink(change, env) ? ' (report links expire after 7 days)' : ''}`] : []), ...runtime];
   if (evidence.lines.some(line => line.includes('pdd-workflow:'))) throw Error('Remove supplied workflow ownership markers from the report; pdd preserves its own marker.');
   const inventory = run.testInventory && label !== 'PR 1' ? [run.testInventory.text.trimEnd(), ...(run.testInventory.saved ? [] : ['warning: The full test inventory report was not saved.']), inventoryCommits(run.testInventory)] : [];
   const slot = evidence.lines.findIndex(line => line.startsWith(`${AGENT_NOTE}:`));
@@ -4583,6 +4623,7 @@ function detail(run, chat = null, facts = {}) {
       ...(stories.unknown?.length ? [`Unknown Stories: ${stories.unknown.join(', ')}`] : []),
       ...(stories.evidence ? [stories.evidence] : [])] : []),
     ...(pr1Stories ? [`PR 1 Stories: ${storyText(pr1Stories)}`] : []),
+    ...beforeResults(run).map(beforeLine),
     `Worktree: ${run.root} (branch ${run.branch})`, `Run folder: ${run.runDir}`, `Review without resuming: pdd workflow view ${run.repo}#${run.number}`, ...(next ? [`Next: ${next}`] : [])].join('\n');
 }
 
@@ -4647,6 +4688,7 @@ function summary(run, timeZone, chat = null, { drafts = [], nothing = false, hea
     launchProfile: launchProfile(run), chat: lastChat(run, area?.name) ? {herdrAgentName: lastChat(run, area?.name).herdrAgentName ?? null, paneId: lastChat(run, area?.name).paneId, ...(namingError ? {namingError} : {})} : null,
     ...(cannotWork ? { chatProblem: { kind: cannotWork.kind, agent: cannotWork.agent, until: cannotWork.until !== null ? new Date(cannotWork.until).toISOString() : null, message: cannotWork.message } } : {}),
     ...((run.evidence??[]).some(e=>e.association?.stage==='pr1')?{pr1Stories:ownStoryCount(run,{stage:'pr1'})}:{}),
+    ...((run.evidence??[]).some(beforeStage)?{before:beforeResults(run)}:{}),
     updatedAt: run.updatedAt ?? null, root: run.root, runDir: run.runDir, viewCommand: `pdd workflow view ${ref}`,
     line: [ref, run.workflow, area?.name ?? '?', words, ...(stories ? [storyText(stories)] : []), ...(prs.length ? [`PR ${prs.map(pr => `#${pr.number}`).join(' ')}`] : []), when].join(' · ') };
 }
@@ -5739,6 +5781,8 @@ export function readEvidenceEligibility({root,producerRoot,tests,source_sha256,r
       if(candidates.length!==1)return{...result,state:'ineligible',reason:'workspace association is ambiguous'};
       const {run,association:a}=candidates[0];
       if(runId!==null&&runId!==run.runId||stage!==null&&stage!==a.stage)return{...result,state:'ineligible',reason:'saved run or stage disagrees with the owned association'};
+      // Before-the-fix evidence is historical: only a caller that names that stage may read it.
+      if(a.stage==='before'&&stage!=='before')return{...result,state:'ineligible',reason:'before-the-fix evidence is historical; it is read only through its registered import'};
       const inspect=ports.inspectRepository??(path=>{const git=spawnSync('git',['rev-parse','--path-format=absolute','--git-common-dir'],{cwd:path,encoding:'utf8'});if(git.status!==0)throw Error('repository ownership unavailable');return canonical(git.stdout.trim());});
       const common=inspect(root);
       if(canonical(run.commonDir)!==common||canonical(run.runDir)!==canonical(runDirFor(common,run.number))||typeof run.repo!=='string'||!run.runId)return{...result,state:'ineligible',reason:'run ownership is missing or contradictory'};

@@ -16,6 +16,9 @@ tracked file [path,"missing"]. Include uncommitted and untracked non-ignored fil
 
 pinReplayVectors receives the prompt area's selected original scenario paths at approved publication. Return
 an anchor containing version pdd.replay-vectors.v1, each raw file SHA256, parsed scenario snapshot and original step/check identity,
+read with the [exact scenario number](scenario-json.prompt.md) rules. The snapshot stays the ordinary JSON value. A vector
+with a whole number above 2^53 adds `exact_integers`: its `{pointer, value}` digit rows, so the saved anchor keeps them exactly;
+a vector without one has no such field,
 or an explicit blocked anchor with a reason. No paths or no checks is not_replayed. Paths must be unique,
 Git-visible, canonical repo-relative regular files with no symlink ancestors or hardlinks; refuse missing,
 empty, unreadable or malformed scenarios. Limit200files,10MiB aggregate vector bytes,2MiB per file and10000
@@ -250,6 +253,8 @@ the formal result for this record".
 Keep the original anchor for comparison; never replace it or approve changed expectations.
 Compare its snapshots to current files, using optional `paths` to include newly discovered scenarios.
 List every changed JSON value with vector path, JSON Pointer, before and after values; distinguish
+exact whole numbers by their digits (restore `exact_integers` on both sides and write values with exact digits, so a change in a
+last digit above 2^53 is a changed value, never "JSON values unchanged"); distinguish
 missing from null, zero, false and empty. Include additions, removals, moved files and byte-only changes.
 For older anchors without snapshots, report old/current hashes and say original values are unavailable.
 Unreadable, empty or malformed vectors get a warning with their path and cause.
@@ -373,14 +378,15 @@ A present base `pdd.json` must be a regular readable blob within the 10 MiB read
 - [Runtime preflight](runtime-preflight.prompt.md): required generation/runtime context for gitFiles(root).
 - [Runtime output](runtime-output.prompt.md): required generation/runtime context for safe diagnostic text.
 - [File owner lookup](file-owner.prompt.md#generated-from-header): required generation context for the header rule.
+- [Exact scenario numbers](scenario-json.prompt.md): required generation context for reading, saving and comparing scenario values.
 
 <details>
 <summary>Runtime interface</summary>
 
 ```json
 {
-  "status": "approved",
-  "prose_sha256": "24b9ef2e0e37eee6537c435ad41bd895073c6ff30ac5b3cbce54424886992048",
+  "status": "draft",
+  "prose_sha256": "5177102bd022915a457a31ad9c1f3665edb83147605edaa2ff8426c2564b1118",
   "entries": [
     {
       "operation": "adoptReplayCorpus",

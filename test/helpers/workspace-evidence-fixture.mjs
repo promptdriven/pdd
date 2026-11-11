@@ -44,7 +44,7 @@ export async function evidenceFixture(t) {
       f.effects.push([file,...args]);assert.equal(file,'git','No network, model, publication or other program');
       assert.ok(['rev-parse','ls-files','ls-tree','cat-file','init','update-index'].includes(args[0]),`Unexpected effect: ${args}`);
       // Only the retained snapshot may receive local Git writes.
-      if(['init','update-index'].includes(args[0]))assert.ok(opts.cwd.startsWith(join(runDir,'evidence-pr1/')));
+      if(['init','update-index'].includes(args[0]))assert.ok(['evidence-pr1/','evidence-before/'].some(dir=>opts.cwd.startsWith(join(runDir,dir))));
       if(opts.input!==undefined)return new Promise((resolve,reject)=>{
         const {input,...options}=opts;
         const child=callbackExec(file,args,{...options,encoding:opts.encoding??'utf8'},(error,stdout,stderr)=>error?reject(error):resolve({stdout,stderr}));
