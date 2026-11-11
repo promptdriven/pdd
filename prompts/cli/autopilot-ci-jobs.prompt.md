@@ -30,9 +30,9 @@ trimmed stdout and throws when git fails). `input.base` is a branch name (letter
 digits, `.`, `_`, `/` and `-`, not starting with `-` and with no `..`); any other value
 throws `TypeError("base must be a branch name")` before any git call.
 
-1. `rev-parse --verify -q origin/BASE^{commit}` gives the tip, then `ls-tree -z TIP --
+1. `rev-parse --verify -q refs/remotes/origin/BASE^{commit}` gives the tip, then `ls-tree -z TIP --
    .github/workflows` gives the folder's tree id. No folder: no CI
-   (`{tree: null, jobs: [], summary: "CI: none"}`).
+   (`{tree: null, jobs: [], summary: "CI: none", dropped: []}`).
 2. **Cache.** `ROOT/ci-jobs.json` (`input.root` is the state folder) keeps
    `{schema: "pdd.ci-jobs.v1", tree, files, summary}`. When its `tree` is the current
    tree id, the files come from the cache with no other git call. Else
@@ -47,7 +47,7 @@ throws `TypeError("base must be a branch name")` before any git call.
 3. A git error in step 1 or 2 is fail safe: one CI-only entry for the folder, and the
    cache is not changed.
 4. Then `sortCiJobs` sorts the files (below) and the result is
-   `{tree, jobs, summary}`.
+   `{tree, jobs, summary, dropped}`.
 
 `cachedCiSummary({root}, {fs})` returns the `summary` of the cache file, or `null` when
 there is none or it cannot be read. Status uses it with no git call.
@@ -87,13 +87,23 @@ over 40.
 
 `sortCiJobs({files, base, branch, changed, testCommand, scripts, machine})` is pure.
 `files` is `[{name, text, error?}]` (text `null`: unreadable). It returns
-`{jobs, summary}`.
+`{jobs, summary, dropped}`; `dropped` lists `{workflow, job, why}` for each job that no
+event of the PR head runs (its condition is false for all of them), so nothing goes away
+without a note.
 
 **Which workflows count.** A file counts only when `workflowRunsOnPr(text, branch, base,
 changed)` of the core is true: it can run on a PR head of `branch` into `base` for the
 changed files (`changed: null` admits every path filter). The core's reader owns the
 `on:` rules; an unreadable file counts (the safe side). `branch` defaults to
 `pdd/core-autopilot` (the form of the core's job branches).
+
+**The events of the PR head.** From the core's `workflowTriggers`: `pull_request` and
+`pull_request_target` when `on:` has them, and `push` when its `push` filter admits
+`branch`. A `push` filter admits a branch by GitHub's rules, the same as the core's
+reader: `branches` (or `branches-ignore`) globs with `*` (no `/`), `**`, `?` and `!` (the
+last matching pattern wins); with neither and no `tags` filter, every branch. With none of
+these events (an `on:` the reader cannot read), the event is `pull_request`. Each job's
+`if` is read for each of these events.
 
 **An unreadable file** (no text, a YAML error, a root that is not a mapping, or `jobs`
 that is not a non-empty mapping) is one CI-only entry with `job: null`, `check: null`,
@@ -110,27 +120,32 @@ family Linux, macOS or Windows) and `machine.node` (`process.versions.node` by d
 | Job | Result |
 |---|---|
 | not a mapping | CI-only, need `unreadable`: "Autopilot could not read the job" |
+| `if` is false for every event of the PR head (the conditions below) | not listed, and in `dropped`: "its condition is false for a PR head (IF)" (#3260 review: a push-only deploy job is no PR CI) |
 | `uses` (a reusable workflow) | CI-only, need `reusable workflow`: "calls the reusable workflow X" |
 | `steps` is not a non-empty list of mappings | CI-only, need `unreadable`: "Autopilot could not read the job" |
-| a `secrets.` or `secrets[` reference or `github.token` anywhere in the job or in the workflow's `env` | CI-only, need `secrets`: "uses a secret" |
+| a secret anywhere in the job or in the workflow's `env`: `secrets.`, `secrets[`, `github.token`, or the word `secrets` in a `${{ }}` expression (`toJSON(secrets)`) | CI-only, need `secrets`: "uses a secret" |
 | `environment` | CI-only, need `environment`: "deploys to the environment NAME" |
 | `services` | CI-only, need `services`: "needs service containers" |
 | `container` | CI-only, need `container`: "runs in a container" |
-| `if` is false for a ready PR (the conditions below) | not listed: the job does not run on a PR |
-| `if` that Autopilot cannot check | CI-only, need `condition`: "has a condition that Autopilot cannot check: IF" |
+| `if` that is true for no event of the PR head and unknown for one | CI-only, need `condition`: "has a condition that Autopilot cannot check: IF" |
+| `if` that is true only for `pull_request_target` | CI-only, need `pull_request_target`: "runs only for pull_request_target (the base's code, with its secrets)" |
 | `strategy` or `strategy.matrix` that is not a mapping, or that the matrix rules refuse | CI-only, need `matrix`: "builds its matrix from an expression" (or its strategy) or the matrix error |
 
 Then each matrix entry (one entry `{}` when there is no matrix) is sorted by the runner,
 the versions and the steps. A job with no `runs-on` is CI-only (need `unreadable`).
 
 **Conditions.** A condition is the `if` text, also inside `${{ }}`, made of terms joined
-by `||` and `&&` (`&&` binds closer; no parentheses). Known terms, for a ready (not
-draft) PR: `github.event_name == 'NAME'` and `!=` (the event is `pull_request`),
+by `||` and `&&` (`&&` binds closer; no parentheses), read for one event. Known terms:
+`github.event_name == 'NAME'` and `!=` (the event's name);
 `github.event.pull_request.draft == false` or `== true`, `!github.event.pull_request.draft`
-and `github.event.pull_request.draft`, `always()`, `success()`, `!cancelled()` (true),
-`failure()`, `cancelled()` (false), `true` and `false`. The YAML booleans `true` and
-`false` are the same. Any other term makes the condition unknown. So the draft filter
-`github.event_name != 'pull_request' || github.event.pull_request.draft == false` is true.
+and `github.event.pull_request.draft` (for `pull_request` and `pull_request_target` the
+PR is ready, so draft is false; for another event they are unknown); `always()`,
+`success()`, `!cancelled()` (true); `failure()`, `cancelled()` (false); `true` and
+`false`. The YAML booleans `true` and `false` are the same. Any other term is unknown. An
+`&&` group is false when one term is false, else unknown when one term is unknown; the
+condition is true when one group is true, else unknown when one group is unknown, else
+false. So the draft filter `github.event_name != 'pull_request' ||
+github.event.pull_request.draft == false` is true for `pull_request` and for `push`.
 
 **Matrix.** Each key of the mapping except `include` and `exclude` is an axis whose value
 must be a non-empty list of scalars. The entries are the product of the axes in key order (the
@@ -211,8 +226,11 @@ with `run` (a string):
      `case` head;
    - plumbing: `set …`, `exit …`, `true`, `:`, an assignment alone (`NAME=VALUE`), or
      `export`/`readonly`/`local` with only assignments or names;
-   - probe: `echo` or `printf`; `command -v`, `which`, `type` or `hash` with names; or one
-     word with `--version`, `-v`, `-V` or `version` (a redirection is no word);
+   - probe: `echo` or `printf`; `command -v`, `which`, `type` or `hash` with names; a
+     program name (no `/`) with only `--version`; or a known version flag alone: `-v` for
+     `node`, `npm`, `npx`, `yarn`, `pnpm`, `bun`, `ruby` and `php`, `-V` for `python`,
+     `python3`, `rustc` and `cargo`, `version` for `go` (a redirection is no word). Another
+     `-v` is real work (#3260 review: `pytest -v`, `./scripts/e2e.sh -v`);
    - system install: a package manager (`apt-get`, `apt`, `brew`, `yum`, `dnf`, `apk`,
      `choco`, `snap`, `port`, `pacman`, `zypper`), also after assignments, `sudo` and its
      flags;
@@ -260,11 +278,12 @@ joined with `, `) and `why` is the first one's (with ", and N more" for more). A
 reason of the whole job (the job rules) gives one entry whose `checks` are the check names
 of all its matrix entries (the job name when the matrix cannot be read).
 
-Each entry is `{workflow, title, job, check, checks, kind, why, need, suite, commands,
-steps, matrix, dispatch}`:
+Each entry is `{key, workflow, title, job, check, checks, kind, why, need, suite,
+commands, steps, matrix, duplicate, onBase, dispatch, rerun}`:
 
 | Field | Meaning |
 |---|---|
+| `key` | unique for the entry: `WORKFLOW#JOB#N` (N the matrix entry's index from 0), `WORKFLOW#JOB#ci` for the one CI-only entry of a matrix job, `WORKFLOW#JOB#all` for a CI-only reason of the whole job, `WORKFLOW#` for a file entry. The plan, the record and the note use it, never the check name (#3260 review: two jobs with one `name:` must not share one result) |
 | `workflow` | the file name, for example `ci.yml` (`null` for the too-many entry) |
 | `title` | the workflow's `name` when it is a string, else the file name |
 | `job` | the job id (`null` for a file entry) |
@@ -277,7 +296,13 @@ steps, matrix, dispatch}`:
 | `commands` | see Kinds |
 | `steps` | for local, the steps to run: `{name, shell, script, workingDirectory, env}` (`shell` is `null`, `bash` or `sh`; `env` the merged environment); else `[]` |
 | `matrix` | the entry's matrix values (`{}` with no matrix; `null` for a combined entry) |
-| `dispatch` | `true` when the workflow has `workflow_dispatch` (the core's `workflowTriggers`) |
+| `duplicate` | `true` when one of its check names is also a check name of another entry (two jobs with one `name:`, or a matrix name that leaves out an axis): GitHub's check runs cannot tell them apart |
+| `onBase` | `true` when a push to `base` runs the job: the workflow's `push` filter admits `base` and the job's `if` is not false for `push` |
+| `dispatch` | `true` when the workflow has `workflow_dispatch`, the job's `if` is not false for `workflow_dispatch`, and no job of the workflow deploys (a dispatch runs the whole workflow) |
+| `rerun` | `true` when Autopilot may ask GitHub to run this job again: the job does not deploy, and it is local or each CI-only need is a test need (a runner or OS, a Node or tool version, CodeQL, services, a container) |
+
+A job **deploys** when it has an `environment`, a secret (the job rules), or a step whose
+`uses` or `run` has the word deploy, publish or release.
 
 The `why` of a local entry is "runs N command(s) that Autopilot can run on this machine"
 (", and the full test command" with `suite`); of a covered entry "runs only the full test
@@ -294,22 +319,26 @@ command (COMMAND)", or "runs only setup steps".
 
 These run only when CI did not start for the head. When CI runs, CI's own result counts.
 
-`localJobPlan({jobs, head, checkout, temp, machine})` plans each local entry for the PR
-head (`head` is 40 hex digits; `checkout` and `temp` are absolute paths; else it throws
-a `TypeError`; `machine.platform` as for the sort). The commands are the base tip's, read by `readCiJobs`, never the head's.
+`localJobPlan({jobs, head, base, checkout, temp, machine})` plans each local entry for
+the PR head (`head` is 40 hex digits; `checkout` and `temp` are absolute paths; else it
+throws a `TypeError`; `base` is the base branch name, optional; `machine.platform` as for
+the sort). The commands are the base tip's, read by `readCiJobs`, never the head's.
 The caller runs each plan entry in a clean checkout of the head, after the same
 dependency install as the full suite. Each plan entry is
-`{key, workflow, job, check, head, cwd, env, command, steps}`:
+`{key, label, workflow, job, check, head, cwd, env, command, steps}`:
 
-- `key` is `WORKFLOW#CHECK`; `cwd` is the checkout.
+- `key` is the entry's unique `key`; `label` is its check name, and for a `duplicate`
+  ` (job JOB)`, or ` (job JOB, KEY VALUE, …)` with its matrix values; `cwd` is the
+  checkout.
 - `env` is the process environment to add: `CI=true`, `GITHUB_WORKSPACE` (the checkout),
-  and `RUNNER_TEMP`, `GITHUB_STEP_SUMMARY` and `GITHUB_OUTPUT` in the entry's own folder
-  `TEMP/job-N` (N from 1, the entry's place among the local entries).
+  `GITHUB_SHA` (the head), `GITHUB_BASE_REF` (the base, when given), and `RUNNER_TEMP`,
+  `GITHUB_STEP_SUMMARY` and `GITHUB_OUTPUT` in the entry's own folder `TEMP/job-N` (N
+  from 1, the entry's place among the local entries).
 - `steps` are `{name, command, args, cwd, env}`: `bash` with `-e -c SCRIPT` for no shell,
   `bash --noprofile --norc -eo pipefail -c SCRIPT` for `bash`, `sh -e -c SCRIPT` for
   `sh` (GitHub's shells); `cwd` is the checkout joined with the working directory; `env`
   is the plan `env` with the step's environment. The step name is its `name`, else the
-  first line of its script (at most 80 characters).
+  first line of its script (at most 80 characters), with its expressions filled in.
 - Expressions are filled in: `matrix.KEY` with the entry's value, `runner.os` with
   `Linux`, `macOS` or `Windows` (this machine), `runner.temp` with `RUNNER_TEMP`,
   `github.workspace` with the checkout, `env.NAME` with that value.
@@ -320,8 +349,8 @@ dependency install as the full suite. Each plan entry is
   step it prints `pdd-ci-local: all M steps passed`. Every value is in single quotes.
 
 `localJobResult(entry, run)` reads one finished run (`run` is `{exit: {code, signal},
-log}` or `null`) into `{key, workflow, job, check, head, state, step, exit, tool, why,
-tail}`:
+log}` or `null`) into `{key, label, workflow, job, check, head, state, step, exit, tool,
+why, tail}`:
 
 | Run | `state` |
 |---|---|
@@ -333,7 +362,7 @@ tail}`:
 Fields that do not apply are `null`. `localJobsRecord({head, plan, runs, at})` is
 `{head, at, jobs}`: the result of each plan entry from `runs[KEY]`.
 
-`localJobReds(record)` gives one red line for the repair for each `fail`: `CI job CHECK
+`localJobReds(record)` gives one red line for the repair for each `fail`: `CI job LABEL
 failed when Autopilot ran it on this machine for head SHA7 (CI did not start): step
 "STEP" exited with CODE.` and, with a tail, a line break, `Last lines:` and the tail. A
 `could-not-run` job is no red: it counts as CI-only.
@@ -347,19 +376,21 @@ did not start. `notStarted` is the core's `ci.notStarted`: the reason is `GitHub
 1. `- CI: did not start (REASON); covered by the local full suite: CHECKS`: the checks of
    the covered entries and of the local entries with `suite`, in order. With none:
    `- CI: did not start (REASON)`.
-2. Then one line for each local or CI-only entry, in order. A local entry: `- CI job
-   CHECK: local pass`, `- CI job CHECK: local fail (step "STEP", exit CODE)`, or `- CI job
-   CHECK: not run yet (CI did not start; WHY)` for `could-not-run` or a missing result (WHY
-   "no local result"). A CI-only entry: `- CI job CHECKS: not run yet (CI did not start)`
-   (its `checks` joined with `, `, or its `check`); a file entry: `- CI workflow FILE: not
-   run yet (CI did not start)`.
+2. Then one line for each local or CI-only entry, in order; the record row of a local
+   entry is the one with its `key`. LABEL is the plan's `label`. A local entry: `- CI job LABEL: local pass`, `- CI job LABEL: local fail
+   (step "STEP", exit CODE)`, or `- CI job LABEL: not run yet (CI did not start; WHY)` for
+   `could-not-run` or a missing result (WHY "no local result"). A CI-only entry: `- CI job
+   CHECKS: not run yet (CI did not start)` (its `checks` joined with `, `, or its `check`,
+   with ` (job JOB)` for a `duplicate`); a file entry: `- CI workflow FILE: not run yet (CI
+   did not start)`.
 
 ## Missed CI on the base
 
 `missedCiJobs({jobs, record})` lists what did not run before the merge: each CI-only
-entry, and each local entry whose result is `could-not-run` or missing, as
-`{workflow, job, checks, dispatch}`. An entry with no workflow file (`workflow: null`) or
-with no check name (an unreadable file) is left out: Autopilot cannot find its run again.
+entry, and each local entry whose result (by `key`) is `could-not-run` or missing, as
+`{key, workflow, job, checks, onBase, dispatch, rerun, duplicate}`. An entry with no
+workflow file (`workflow: null`) or with no check name (an unreadable file) is left out:
+Autopilot cannot find its run again.
 
 `recordMissedCi({root, merge, pr, issue, missed}, {fs, now})` appends one line to the
 machine file `ROOT/ci-missed.jsonl` (mode 0600): `{merge, pr, issue, at, jobs}`, each
@@ -367,54 +398,95 @@ job with `state: "missed"`. An empty `missed` writes nothing and returns `null`;
 returns the record. `readMissedCi({root}, {fs})` returns the valid records (a record has a
 40-hex `merge` and a non-empty `jobs` list), oldest first.
 
+`noteMissedRedIssue({root, merge, key, issue}, {fs})` saves the number of the main-red
+issue that the caller filed for a red job (`red.issue`), and returns `true` when it found
+that red job.
+
 `checkMissedCi({root, repo, base, tip, ciDown}, {gh, fs, now, billing})` runs when the
 core sees that CI works again. With `ciDown` set it makes no call and does not write the
-file: the saved states decide (a red job stays red, the others wait). `gh.call(method, endpoint, body)` returns `{status, value}`;
-`billing(checkRun)` (the core's billing reader) returns the billing message or `null`
-(default: always `null`). For each job of each record that has not passed:
+file: the saved states decide (a red job stays red, the others wait). `gh.call(method,
+endpoint, body)` returns `{status, value}`; `billing(checkRun)` (the core's billing
+reader) returns the billing message or `null` (default: always `null`).
 
-1. **A red job** stays red until the check names pass at the current base tip `tip`:
-   then it passes.
-2. **The state of a name.** The check runs of a commit are read once per call: `GET
-   repos/REPO/commits/SHA/check-runs?per_page=100`. The run with that name and the
-   highest id decides: completed with `success`, `neutral` or `skipped` is a pass;
-   completed with another conclusion is red, unless `billing` gives a message (GitHub did
-   not run it); not completed is running; no run is missing. The merge commit decides when
-   it gives a pass or red. Else the current base tip decides when it gives a pass, red or
-   running: a later commit holds the merged change, so a rerun, a dispatch, a person's own
-   run or a later push counts there.
-3. Any red name: the job is red (`red: {names, sha, at}`, `sha` where it failed). Every
-   name passed: the job passed. Any name running, or a stuck job: wait (a stuck job is
-   read again, never asked again).
-4. Else (missing, or not run by GitHub), ask once:
-   - The newest workflow run of the job's file at the merge commit (`GET
-     repos/REPO/actions/runs?head_sha=MERGE&per_page=50`, `path` is
-     `.github/workflows/FILE`): when it is completed, `POST
-     repos/REPO/actions/runs/ID/rerun`; when it is not completed, wait (no ask).
-   - No such run: when the workflow has `workflow_dispatch`, `POST
-     repos/REPO/actions/workflows/FILE/dispatches` with `{ref: BASE}` (it runs at the base
-     tip). Else the job is stuck.
+**The state of a name at a commit.** The check runs of a commit are read once per call:
+`GET repos/REPO/commits/SHA/check-runs?per_page=100`. The run with that name and the
+highest id decides:
+
+| Run | State |
+|---|---|
+| none | missing |
+| not completed | running |
+| `success` or `neutral` | pass |
+| `skipped` | skipped: it did not run (#3260 review: a PR-only job is skipped on the base; that is no pass) |
+| `cancelled`, `stale` or `action_required` | no result: a later run can still decide (`cancel-in-progress` cancels runs on the base often); never red |
+| another conclusion, with a billing message | no result: GitHub did not run it |
+| another conclusion | red |
+
+**Each job that has not passed**, in this order:
+
+1. `onBase` is false: the job never ran on the base. No call, no ask and no hold (#3260
+   review: a workflow with no `push` to the base cannot run there). Why: "its workflow
+   does not run on a push to BASE".
+2. `duplicate`: stuck, no call ("it shares its check name with another job").
+3. **A red job** holds merges (the caller's `red` list) until one of these:
+   - a saved `red.issue` is closed (`GET repos/REPO/issues/N`; also 404 or 410): the job
+     goes;
+   - every name passes at the current base tip `tip`: the job passed;
+   - a name is red at `tip`: it stays red (`red.sha` is the tip);
+   - else, when the tip moved since the red (`red.tip`), ask once more: with `dispatch`,
+     the workflow runs at the tip (below), and the job waits for that run (`red.again`);
+     with no `dispatch`, or still no result 6 hours after that ask, the job is stuck ("the
+     base moved and Autopilot cannot run it again there"); a stuck job holds nothing.
+4. **Else each name** gets its state at the merge commit when that is pass or red; else
+   at the dispatch commit (`asked.sha` of a dispatch), else at `tip`, when one of them is
+   pass, red or running.
+   - Any red: the job is red (`red: {names, sha, tip, runs, at}`; `runs` the check run ids,
+     `tip` the base tip at that time).
+   - Every name passed: the job passed.
+   - Any running: wait.
+   - Every name that did not pass is skipped at the merge commit: the job never ran ("GitHub
+     skipped it on BASE").
+   - Else (missing, or no result), ask once, and only when the job may run again:
+     - a no-result check run of the name at the merge commit, and `rerun`: `POST
+       repos/REPO/actions/jobs/ID/rerun` for each such run: only that job, never its whole
+       workflow run (#3260 review: an old deploy must never run again);
+     - no check run of a name: when the newest workflow run of the job's file at the merge
+       commit (`GET repos/REPO/actions/runs?head_sha=MERGE&per_page=50`, `path` is
+       `.github/workflows/FILE`) is not completed, wait (no ask); else, with `dispatch`,
+       `POST repos/REPO/actions/workflows/FILE/dispatches` with `{ref: BASE}` (it runs at
+       the base tip, so its result is due at `asked.sha`, the tip);
+     - else the job is stuck ("Autopilot does not run a job again that deploys or uses
+       secrets", or "no run to start").
    - The job saves `asked: {how, sha, at, status}` (`how` is `rerun` or `dispatch`) and the
      file is saved at once, so a later error does not ask twice. An ask with a status of
-     300 or more makes the job stuck.
-5. An asked job that has no result 6 hours after the ask is stuck.
+     300 or more makes the job stuck ("GitHub refused the ask (STATUS)").
+   - An asked job with no result 6 hours after the ask is stuck ("no result 6 hours after
+     the ask").
+5. A stuck job is read again on each call, at the tip only (its old result at the merge
+   commit is known): a pass there passes it, a red there makes it red (a person's own run
+   or a later push counts). It never asks again. A job that never ran is not read again.
+
+The same 6 hours and one ask apply to the ask again of step 3 (`red.again`, `{how, sha,
+at, status}`; its result is due at its `sha`).
 
 A read that does not return status 200 throws an `Error` with `code: "github"`; the file
 keeps what was saved before. At the end the file is written again (a temp file, then a
-rename): passed jobs go, a record with no job left goes, a record older than 14 days goes
-unless it has a red job, and at most 50 records stay (the newest).
+rename): passed and released jobs go, a record with no job left goes, a record older than
+14 days goes unless it has a red job, and at most 50 records stay (the newest).
 
-The result is `{state, red, waiting, stuck, lines}`:
+The result is `{state, red, waiting, stuck, never, lines}`:
 
-- `red`: `[{merge, pr, issue, workflow, names, sha}]`. The caller files the deduplicated
-  main-red issue ([base-red owner](autopilot-base-red.prompt.md) `fileMainRed`, `what:
-  "ci"`) and holds new merges while it is not empty.
-- `waiting` and `stuck`: `[{merge, pr, issue, workflow, checks}]`.
+- `red`: `[{key, merge, pr, issue, workflow, names, sha}]`. The caller files the
+  deduplicated main-red issue ([base-red owner](autopilot-base-red.prompt.md)
+  `fileMainRed`, `what: "ci"`), saves its number (`noteMissedRedIssue`), and holds new
+  merges while `red` is not empty.
+- `waiting`, `stuck` and `never`: `[{key, merge, pr, issue, workflow, checks, why}]`.
 - `state`: `red` with a red job, else `waiting` while records stay, else `clear`.
-- `lines`: one status line for each waiting or stuck job:
-  `missed CI: CI job CHECKS for PR #N (MERGE7) waits to run on BASE` and
+- `lines`: one status line for each waiting, stuck or never-ran job:
+  `missed CI: CI job CHECKS for PR #N (MERGE7) waits to run on BASE`,
   `missed CI: CI job CHECKS for PR #N (MERGE7) did not run on BASE, and Autopilot cannot
-  start it: run the workflow FILE by hand`.
+  start it (WHY): run the workflow FILE by hand`, and
+  `missed CI: CI job CHECKS for PR #N (MERGE7) never ran on BASE (WHY)`.
 
 `missedCiHeldLine(red, base, issue)` is the status line of a red job:
 `merges held: CI job NAMES failed on BASE after a merge without CI (issue #N)`, or with
@@ -424,8 +496,8 @@ The result is `{state, red, waiting, stuck, lines}`:
 
 Exports: `parseWorkflowYaml`, `sortCiJobs`, `ciJobsSummary`, `readCiJobs`,
 `cachedCiSummary`, `localJobPlan`, `localJobResult`, `localJobsRecord`, `localJobReds`,
-`ciMergeNote`, `missedCiJobs`, `recordMissedCi`, `readMissedCi`, `checkMissedCi` and
-`missedCiHeldLine`.
+`ciMergeNote`, `missedCiJobs`, `recordMissedCi`, `readMissedCi`, `noteMissedRedIssue`,
+`checkMissedCi` and `missedCiHeldLine`.
 
 Ports: `git(args)` (trimmed stdout; throws on failure), `fs` (`node:fs` by default),
 `now()` (`Date.now` by default), `gh.call(method, endpoint, body)` and `billing(checkRun)`.

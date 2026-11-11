@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { workflowRunsOnPr } from '../src/autopilot-core.mjs';
 import { parseWorkflowYaml, sortCiJobs, ciJobsSummary, readCiJobs, cachedCiSummary, localJobPlan, localJobResult, localJobsRecord, localJobReds,
-  ciMergeNote, missedCiJobs, recordMissedCi, readMissedCi, checkMissedCi, missedCiHeldLine } from '../src/autopilot-ci-jobs.mjs';
+  ciMergeNote, missedCiJobs, recordMissedCi, readMissedCi, noteMissedRedIssue, checkMissedCi, missedCiHeldLine } from '../src/autopilot-ci-jobs.mjs';
 
 // Expected results come from issue #3260 (Serhan's decision B with CI job sorting, Nov 11) and the group 3 design,
 // section E. The machine is fixed per test (a Linux runner with Node 22, unless a test says other), so the results
@@ -207,7 +207,7 @@ test('read: a PR head that changes a workflow does not change the list (only the
 test('read: no workflow folder is no CI; a git error and a large file are CI-only', async t => {
   const r = gitRepo(t);
   r.write('README.md', 'x\n'); r.git('add', '.'); r.git('commit', '-q', '-m', 'base'); r.git('push', '-q', 'origin', 'main');
-  assert.deepEqual(await readCiJobs({ base: 'main' }, { git: r.port }), { tree: null, jobs: [], summary: 'CI: none' });
+  assert.deepEqual(await readCiJobs({ base: 'main' }, { git: r.port }), { tree: null, jobs: [], summary: 'CI: none', dropped: [] });
   const failed = await readCiJobs({ base: 'main' }, { git: async () => { throw new Error('git rev-parse failed: no such ref'); } });
   assert.deepEqual(failed.jobs.map(job => [job.workflow, job.kind, job.need]), [[null, 'ci-only', 'unreadable']]);
   assert.equal(failed.summary, 'CI: 0 covered, 0 local, 1 CI-only (unreadable)');
@@ -275,6 +275,41 @@ test('a suite step that writes a file runs locally when a later step runs locall
   assert.deepEqual([oneJob('      - run: npm test\n      - run: npm run lint\n').suite, oneJob('      - run: npm test\n      - run: npm run lint\n').commands], [true, ['npm run lint']]);
 });
 
+// Claude review round 1 (the "ci" items) and its probes (scratchpad ci/probe1-6.mjs): expected results from the review
+// and the group lead's rules.
+test('Claude review 4: two jobs with one check name, or a matrix name without an axis, keep their own results', () => {
+  const wf = "on:\n  pull_request:\njobs:\n  t:\n    name: Test (${{ matrix.os }})\n    runs-on: ${{ matrix.os }}\n    strategy:\n      matrix:\n        os: [ubuntu-latest]\n        shard: ['1', '2']\n    steps:\n      - run: npm run e2e -- --shard ${{ matrix.shard }}/2\n"
+    + '  lint:\n    name: check\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm run lint\n  types:\n    name: check\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm run typecheck\n';
+  const { jobs } = sort([file('ci.yml', wf)]);
+  assert.deepEqual(jobs.map(job => [job.key, job.check, job.duplicate]), [['ci.yml#t#0', 'Test (ubuntu-latest)', true], ['ci.yml#t#1', 'Test (ubuntu-latest)', true], ['ci.yml#lint#0', 'check', true], ['ci.yml#types#0', 'check', true]]);
+  const plan = localJobPlan({ jobs, head: HEAD, checkout: '/w/co', temp: '/w/tmp', machine: LINUX });
+  // Shard 1 and lint fail; shard 2 and types pass: two reds, and each note line names one job.
+  const runs = Object.fromEntries(plan.map((entry, i) => [entry.key, { exit: { code: [1, 0, 1, 0][i] }, log: 'pdd-ci-local: step 1 failed with exit 1\n' }]));
+  const record = localJobsRecord({ head: HEAD, plan, runs });
+  assert.equal(localJobReds(record).length, 2);
+  assert.deepEqual(ciMergeNote({ jobs, record, notStarted: { reason: 'queued', since: 0 } }).slice(1), [
+    '- CI job Test (ubuntu-latest) (job t, os ubuntu-latest, shard 1): local fail (step "npm run e2e -- --shard 1/2", exit 1)',
+    '- CI job Test (ubuntu-latest) (job t, os ubuntu-latest, shard 2): local pass', '- CI job check (job lint): local fail (step "npm run lint", exit 1)', '- CI job check (job types): local pass']);
+});
+
+test('Claude review 6: a -v that is not a known version flag is real work; a lone version print stays setup', () => {
+  assert.deepEqual(oneJob('      - run: ./scripts/e2e.sh -v\n').commands, ['./scripts/e2e.sh -v']);
+  assert.deepEqual(sortCiJobs({ files: [file('ci.yml', `${ON_PR}jobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: pytest -v\n`)], testCommand: 'make test', machine: LINUX }).jobs[0].commands, ['pytest -v']);
+  assert.deepEqual(oneJob('      - run: ./scripts/e2e.sh --version\n').commands, ['./scripts/e2e.sh --version']);
+  for (const command of ['node -v', 'python3 -V', 'go version', 'pytest --version']) assert.equal(oneJob(`      - run: ${command}\n`).why, 'runs only setup steps', command);
+});
+
+test('sort: the events of the PR head decide a job condition; pull_request_target and toJSON(secrets) are CI-only; local runs get GITHUB_SHA and GITHUB_BASE_REF', () => {
+  // A push-only workflow runs on the job branch's own pushes: its push-only job is PR CI.
+  const push = sort([file('push.yml', "on:\n  push:\njobs:\n  t:\n    if: github.event_name == 'push'\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm run lint\n")]);
+  assert.deepEqual([push.jobs.map(job => [job.check, job.kind]), push.dropped], [[['t', 'local']], []]);
+  const target = sort([file('t.yml', "on:\n  pull_request_target:\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm run lint\n")]).jobs[0];
+  assert.deepEqual([target.kind, target.need], ['ci-only', 'pull_request_target']);
+  assert.equal(oneJob('      - uses: actions/checkout@v4\n        with:\n          token: ${{ toJSON(secrets) }}\n      - run: npm run lint\n').need, 'secrets');
+  const [plan] = localJobPlan({ jobs: [oneJob('      - run: git diff --exit-code origin/$GITHUB_BASE_REF -- package-lock.json\n')], head: HEAD, base: 'main', checkout: '/w/co', temp: '/w/tmp', machine: LINUX });
+  assert.deepEqual([plan.env.GITHUB_SHA, plan.env.GITHUB_BASE_REF], [HEAD, 'main']);
+});
+
 const lintOnly = sort([file('ci.yml', `${ON_PR}jobs:\n  tests:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm test\n      - run: npm run lint\n  codeql:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: github/codeql-action/analyze@v3\n`)]).jobs;
 
 test('local jobs: the plan runs each step in order with CI=true and the GitHub folders; the record reads pass, fail and a missing tool', t => {
@@ -287,8 +322,8 @@ test('local jobs: the plan runs each step in order with CI=true and the GitHub f
     + job('tool', '      - run: pdd-ci-jobs-no-such-tool --check\n');
   const jobs = sort([file('ci.yml', ci)]).jobs, plan = localJobPlan({ jobs, head: HEAD, checkout, temp: scratch, machine: LINUX });
   assert.deepEqual(plan.map(entry => [entry.key, entry.cwd, entry.env.CI, entry.env.GITHUB_WORKSPACE, entry.env.RUNNER_TEMP]), [
-    ['ci.yml#good', checkout, 'true', checkout, join(scratch, 'job-1', 'runner-temp')], ['ci.yml#bad', checkout, 'true', checkout, join(scratch, 'job-2', 'runner-temp')],
-    ['ci.yml#tool', checkout, 'true', checkout, join(scratch, 'job-3', 'runner-temp')]]);
+    ['ci.yml#good#0', checkout, 'true', checkout, join(scratch, 'job-1', 'runner-temp')], ['ci.yml#bad#0', checkout, 'true', checkout, join(scratch, 'job-2', 'runner-temp')],
+    ['ci.yml#tool#0', checkout, 'true', checkout, join(scratch, 'job-3', 'runner-temp')]]);
   assert.deepEqual(plan[0].steps.map(step => [step.name, step.command, step.args.slice(0, -1), step.cwd]), [['Write', 'bash', ['-e', '-c'], checkout], ['test "$(pwd)" = "$GITHUB_WORKSPACE/sub" && echo ok >> "$GITHUB_STEP_SUMMARY"', 'sh', ['-e', '-c'], join(checkout, 'sub')]]);
   const runs = {};
   for (const entry of plan) {
@@ -297,8 +332,8 @@ test('local jobs: the plan runs each step in order with CI=true and the GitHub f
   }
   assert.equal(readFileSync(join(checkout, 'out.txt'), 'utf8'), "true it's Linux\n");
   assert.equal(readFileSync(plan[0].env.GITHUB_STEP_SUMMARY, 'utf8'), 'ok\n');
-  assert.match(runs['ci.yml#good'].log, /pdd-ci-local: all 2 steps passed/);
-  assert.doesNotMatch(runs['ci.yml#bad'].log, /never/);
+  assert.match(runs['ci.yml#good#0'].log, /pdd-ci-local: all 2 steps passed/);
+  assert.doesNotMatch(runs['ci.yml#bad#0'].log, /never/);
   const record = localJobsRecord({ head: HEAD, plan, runs, at: 5 });
   assert.deepEqual(record.jobs.map(row => [row.check, row.state, row.step, row.exit, row.tool]), [['good', 'pass', null, null, null], ['bad', 'fail', 'Break', 3, null], ['tool', 'could-not-run', 'pdd-ci-jobs-no-such-tool --check', 127, 'pdd-ci-jobs-no-such-tool']]);
   assert.equal(record.jobs[2].why, 'pdd-ci-jobs-no-such-tool is missing on this machine');
@@ -316,10 +351,10 @@ test('local jobs: the plan runs each step in order with CI=true and the GitHub f
 
 test('merge note: CI did not start, the covered jobs, each local result and each CI-only job (the design\'s lines)', () => {
   const plan = localJobPlan({ jobs: lintOnly, head: HEAD, checkout: '/w/co', temp: '/w/tmp', machine: LINUX });
-  const record = localJobsRecord({ head: HEAD, plan, runs: { 'ci.yml#tests': { exit: { code: 0 }, log: '' } } });
+  const record = localJobsRecord({ head: HEAD, plan, runs: { 'ci.yml#tests#0': { exit: { code: 0 }, log: '' } } });
   const covered = sort([file('ci.yml', `${ON_PR}jobs:\n  tests:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm test\n  lint:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm run lint\n  codeql:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: github/codeql-action/analyze@v3\n`)]).jobs;
   const lintPlan = localJobPlan({ jobs: covered, head: HEAD, checkout: '/w/co', temp: '/w/tmp', machine: LINUX });
-  const passed = localJobsRecord({ head: HEAD, plan: lintPlan, runs: { 'ci.yml#lint': { exit: { code: 0 }, log: '' } } });
+  const passed = localJobsRecord({ head: HEAD, plan: lintPlan, runs: { 'ci.yml#lint#0': { exit: { code: 0 }, log: '' } } });
   assert.deepEqual(ciMergeNote({ jobs: covered, record: passed, notStarted: { reason: 'queued', since: Date.UTC(2026, 10, 11, 20, 20) } }), [
     '- CI: did not start (queued since 20:20 UTC); covered by the local full suite: tests', '- CI job lint: local pass', '- CI job codeql: not run yet (CI did not start)']);
   // A local job with the full suite inside is covered and local; a missing result is "not run yet".
@@ -333,9 +368,11 @@ test('merge note: CI did not start, the covered jobs, each local result and each
 test('missed CI: the record holds the CI-only jobs and the local jobs that could not run, never a passed one', t => {
   const state = temp(t);
   const plan = localJobPlan({ jobs: lintOnly, head: HEAD, checkout: '/w/co', temp: '/w/tmp', machine: LINUX });
-  const missed = missedCiJobs({ jobs: lintOnly, record: localJobsRecord({ head: HEAD, plan, runs: { 'ci.yml#tests': { exit: { code: 127 }, log: 'bash: line 1: npm: command not found\n' } } }) });
-  assert.deepEqual(missed, [{ workflow: 'ci.yml', job: 'tests', checks: ['tests'], dispatch: false }, { workflow: 'ci.yml', job: 'codeql', checks: ['codeql'], dispatch: false }]);
-  assert.deepEqual(missedCiJobs({ jobs: lintOnly, record: localJobsRecord({ head: HEAD, plan, runs: { 'ci.yml#tests': { exit: { code: 0 } } } }) }).map(job => job.job), ['codeql']);
+  const missed = missedCiJobs({ jobs: lintOnly, record: localJobsRecord({ head: HEAD, plan, runs: { 'ci.yml#tests#0': { exit: { code: 127 }, log: 'bash: line 1: npm: command not found\n' } } }) });
+  // ON_PR has a push to main and no workflow_dispatch; both jobs are test jobs that do not deploy.
+  assert.deepEqual(missed, [{ key: 'ci.yml#tests#0', workflow: 'ci.yml', job: 'tests', checks: ['tests'], onBase: true, dispatch: false, rerun: true, duplicate: false },
+    { key: 'ci.yml#codeql#ci', workflow: 'ci.yml', job: 'codeql', checks: ['codeql'], onBase: true, dispatch: false, rerun: true, duplicate: false }]);
+  assert.deepEqual(missedCiJobs({ jobs: lintOnly, record: localJobsRecord({ head: HEAD, plan, runs: { 'ci.yml#tests#0': { exit: { code: 0 } } } }) }).map(job => job.job), ['codeql']);
   assert.equal(recordMissedCi({ root: state, merge: MERGE, pr: 4, issue: 3, missed: [] }), null);
   assert.ok(!existsSync(join(state, 'ci-missed.jsonl')));
   writeFileSync(join(state, 'ci-missed.jsonl'), '{"cut":');
@@ -346,20 +383,24 @@ test('missed CI: the record holds the CI-only jobs and the local jobs that could
 
 // A fake GitHub for the missed-CI check: check runs per commit, workflow runs per commit, and the POSTs it got.
 function fakeGitHub() {
-  const g = { checks: new Map(), runs: new Map(), posts: [], reads: 0, status: new Map() };
+  const g = { checks: new Map(), runs: new Map(), issues: new Map(), posts: [], reads: 0, status: new Map() };
   g.call = async (method, endpoint, body) => {
     if (method === 'POST') { g.posts.push({ endpoint, body }); return { status: g.status.get(endpoint) ?? 201, value: {} }; }
     g.reads++;
     let m;
     if ((m = /^repos\/o\/r\/commits\/(\w+)\/check-runs/.exec(endpoint))) return { status: 200, value: { check_runs: g.checks.get(m[1]) ?? [] } };
     if ((m = /^repos\/o\/r\/actions\/runs\?head_sha=(\w+)/.exec(endpoint))) return { status: 200, value: { workflow_runs: g.runs.get(m[1]) ?? [] } };
+    if ((m = /^repos\/o\/r\/issues\/(\d+)$/.exec(endpoint))) return g.issues.has(Number(m[1])) ? { status: 200, value: g.issues.get(Number(m[1])) } : { status: 404 };
     return { status: 404 };
   };
   return g;
 }
-const missedCodeql = [{ workflow: 'codeql.yml', job: 'analyze', checks: ['Analyze (javascript)'], dispatch: true }];
+// A missed CI-only test job (CodeQL) of a workflow with a push to main and workflow_dispatch, as missedCiJobs gives it.
+const missedCodeql = [{ key: 'codeql.yml#analyze#0', workflow: 'codeql.yml', job: 'analyze', checks: ['Analyze (javascript)'], onBase: true, dispatch: true, rerun: true, duplicate: false }];
+const check = (root, tip, ports) => checkMissedCi({ root, repo: 'o/r', base: 'main', tip }, ports);
+const HOUR = 60 * 60 * 1000;
 
-test('missed CI on main: no call while CI is down; then one rerun, a pass drops the record', async t => {
+test('missed CI on main: no call while CI is down; a billing failure gets one rerun of that job only; a pass drops the record', async t => {
   const state = temp(t), gh = fakeGitHub();
   let now = 1000;
   const ports = { gh, now: () => now, billing: async run => /spending limit/.test(run.output?.title ?? '') ? 'the spending limit' : null };
@@ -367,69 +408,149 @@ test('missed CI on main: no call while CI is down; then one rerun, a pass drops 
   const down = await checkMissedCi({ root: state, repo: 'o/r', base: 'main', tip: TIP, ciDown: { since: 1, reason: 'queued' } }, ports);
   assert.equal(gh.reads, 0);
   assert.deepEqual([down.state, down.lines], ['waiting', [`missed CI: CI job Analyze (javascript) for PR #9 (${MERGE.slice(0, 7)}) waits to run on main`]]);
-  // CI works again. The merge commit's run failed on the spending limit: rerun it once.
+  // CI works again. The merge commit's job failed on the spending limit: GitHub did not run it, so it is rerun once.
   gh.checks.set(MERGE, [{ id: 5, name: 'Analyze (javascript)', status: 'completed', conclusion: 'failure', output: { title: 'The job was not started because of the spending limit' } }]);
   gh.runs.set(MERGE, [{ id: 77, path: '.github/workflows/codeql.yml', status: 'completed', conclusion: 'failure' }]);
-  const asked = await checkMissedCi({ root: state, repo: 'o/r', base: 'main', tip: TIP }, ports);
-  assert.deepEqual(gh.posts, [{ endpoint: 'repos/o/r/actions/runs/77/rerun', body: undefined }]);
-  assert.equal(asked.state, 'waiting');
+  assert.equal((await check(state, TIP, ports)).state, 'waiting');
+  // Claude review 9: only the missed job, never the whole workflow run.
+  assert.deepEqual(gh.posts, [{ endpoint: 'repos/o/r/actions/jobs/5/rerun', body: undefined }]);
   now += 60_000;
-  await checkMissedCi({ root: state, repo: 'o/r', base: 'main', tip: TIP }, ports);
+  await check(state, TIP, ports);
   assert.equal(gh.posts.length, 1, 'one rerun only');
   gh.checks.set(MERGE, [...gh.checks.get(MERGE), { id: 6, name: 'Analyze (javascript)', status: 'completed', conclusion: 'success' }]);
-  const passed = await checkMissedCi({ root: state, repo: 'o/r', base: 'main', tip: TIP }, ports);
+  const passed = await check(state, TIP, ports);
   assert.deepEqual([passed.state, passed.red, passed.lines], ['clear', [], []]);
   assert.deepEqual(readMissedCi({ root: state }), []);
 });
 
-test('missed CI on main: a failure is "main is red" for the caller and holds until the check passes at the base tip', async t => {
+test('missed CI on main: a failure is "main is red"; the hold ends when the check passes at the base tip or its main-red issue closes', async t => {
   const state = temp(t), gh = fakeGitHub(), ports = { gh, now: () => 5000 };
   recordMissedCi({ root: state, merge: MERGE, pr: 9, issue: 8, missed: missedCodeql }, ports);
   gh.checks.set(MERGE, [{ id: 5, name: 'Analyze (javascript)', status: 'completed', conclusion: 'failure', output: { title: 'Found 2 alerts' } }]);
-  const red = await checkMissedCi({ root: state, repo: 'o/r', base: 'main', tip: TIP }, ports);
+  const red = await check(state, TIP, ports);
   assert.equal(red.state, 'red');
-  assert.deepEqual(red.red, [{ merge: MERGE, pr: 9, issue: 8, workflow: 'codeql.yml', names: ['Analyze (javascript)'], sha: MERGE }]);
+  assert.deepEqual(red.red, [{ key: 'codeql.yml#analyze#0', merge: MERGE, pr: 9, issue: 8, workflow: 'codeql.yml', names: ['Analyze (javascript)'], sha: MERGE }]);
   assert.equal(gh.posts.length, 0, 'a real failure is not rerun');
   assert.equal(missedCiHeldLine(red.red[0], 'main', 41), 'merges held: CI job Analyze (javascript) failed on main after a merge without CI (issue #41)');
-  // Still red at the base tip: the hold stays.
+  // Still red at the base tip: the hold stays. Then the check passes at a later tip: the record goes.
   gh.checks.set(TIP, [{ id: 9, name: 'Analyze (javascript)', status: 'completed', conclusion: 'failure' }]);
-  assert.equal((await checkMissedCi({ root: state, repo: 'o/r', base: 'main', tip: TIP }, ports)).state, 'red');
+  assert.equal((await check(state, TIP, ports)).state, 'red');
   const fixed = 'd'.repeat(40);
   gh.checks.set(fixed, [{ id: 12, name: 'Analyze (javascript)', status: 'completed', conclusion: 'success' }]);
-  assert.equal((await checkMissedCi({ root: state, repo: 'o/r', base: 'main', tip: fixed }, ports)).state, 'clear');
+  assert.equal((await check(state, fixed, ports)).state, 'clear');
+  // Claude review 8: the caller saves the main-red issue; when a person closes it, the hold ends.
+  const other = temp(t);
+  recordMissedCi({ root: other, merge: MERGE, pr: 9, issue: 8, missed: missedCodeql }, ports);
+  await check(other, TIP, ports);
+  assert.equal(noteMissedRedIssue({ root: other, merge: MERGE, key: 'codeql.yml#analyze#0', issue: 41 }), true);
+  gh.issues.set(41, { state: 'open' });
+  assert.equal((await check(other, TIP, ports)).state, 'red');
+  gh.issues.set(41, { state: 'closed' });
+  assert.equal((await check(other, TIP, ports)).state, 'clear');
 });
 
-test('missed CI on main: no run to rerun starts the workflow on the base once; no way to start it is a stuck line', async t => {
-  const state = temp(t), gh = fakeGitHub();
+test('Claude review 7: a cancelled, stale or action_required run on the merge commit is no result, never "main is red"', async t => {
+  for (const conclusion of ['cancelled', 'stale', 'action_required']) {
+    const state = temp(t), gh = fakeGitHub(), ports = { gh, now: () => 0 };
+    recordMissedCi({ root: state, merge: MERGE, pr: 1, issue: 2, missed: missedCodeql }, ports);
+    gh.checks.set(MERGE, [{ id: 1, name: 'Analyze (javascript)', status: 'completed', conclusion }]);
+    gh.checks.set(TIP, [{ id: 2, name: 'Analyze (javascript)', status: 'in_progress', conclusion: null }]);
+    assert.deepEqual([(await check(state, TIP, ports)).state, gh.posts], ['waiting', []], conclusion);
+    gh.checks.set(TIP, [{ id: 2, name: 'Analyze (javascript)', status: 'completed', conclusion: 'success' }]);
+    assert.equal((await check(state, TIP, ports)).state, 'clear', conclusion);
+  }
+});
+
+test('Claude review 8: a red hold asks once more when the base moved, then stops holding; a job with no dispatch stops at once', async t => {
+  const state = temp(t), gh = fakeGitHub(), T2 = 'd'.repeat(40), T3 = 'e'.repeat(40);
   let now = 0;
   const ports = { gh, now: () => now };
-  recordMissedCi({ root: state, merge: MERGE, pr: 9, issue: 8, missed: [...missedCodeql, { workflow: 'mac.yml', job: 'mac', checks: ['test (macos-latest)'], dispatch: false }] }, ports);
-  const first = await checkMissedCi({ root: state, repo: 'o/r', base: 'main', tip: TIP }, ports);
+  recordMissedCi({ root: state, merge: MERGE, pr: 1, issue: 2, missed: missedCodeql }, ports);
+  gh.checks.set(TIP, [{ id: 3, name: 'Analyze (javascript)', status: 'completed', conclusion: 'failure' }]);
+  assert.equal((await check(state, TIP, ports)).state, 'red');
+  // The base moves; its new tip has no run of that check: one dispatch there, and the job waits for it (still a hold).
+  now += HOUR;
+  assert.equal((await check(state, T2, ports)).state, 'red');
   assert.deepEqual(gh.posts, [{ endpoint: 'repos/o/r/actions/workflows/codeql.yml/dispatches', body: { ref: 'main' } }]);
-  assert.deepEqual(first.stuck.map(row => row.workflow), ['mac.yml']);
-  assert.ok(first.lines.includes(`missed CI: CI job test (macos-latest) for PR #9 (${MERGE.slice(0, 7)}) did not run on main, and Autopilot cannot start it: run the workflow mac.yml by hand`));
-  // The dispatched run is due at the tip; 6 hours with no run of that name make it stuck too, with no second ask.
-  now += 6 * 60 * 60 * 1000;
-  const later = await checkMissedCi({ root: state, repo: 'o/r', base: 'main', tip: TIP }, ports);
+  // No result 6 hours later: stuck, no hold, no second ask.
+  now += 6 * HOUR;
+  const after = await check(state, T3, ports);
+  assert.deepEqual([after.state, after.red, after.stuck.map(row => row.why), gh.posts.length], ['waiting', [], ['the base moved and Autopilot cannot run it again there'], 1]);
+  const other = temp(t);
+  recordMissedCi({ root: other, merge: MERGE, pr: 1, issue: 2, missed: [{ ...missedCodeql[0], dispatch: false }] }, ports);
+  await check(other, TIP, ports);
+  assert.deepEqual([(await check(other, T2, ports)).state, gh.posts.length], ['waiting', 1]);
+});
+
+test('Claude review 8 and I5: a job that a push to main does not run, or that GitHub skipped there, never ran: no ask, no hold', async t => {
+  const wf = "on:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  review:\n    if: github.event_name == 'pull_request'\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/dependency-review-action@v4\n";
+  const noPush = 'on:\n  pull_request:\n  workflow_dispatch:\njobs:\n  lint:\n    runs-on: macos-latest\n    steps:\n      - run: npm run lint\n';
+  const jobs = sort([file('dep.yml', wf), file('lint.yml', noPush)]).jobs;
+  assert.deepEqual(jobs.map(job => [job.check, job.kind, job.onBase]), [['review', 'ci-only', false], ['lint', 'ci-only', false]]);
+  const state = temp(t), gh = fakeGitHub(), ports = { gh, now: () => 0 };
+  recordMissedCi({ root: state, merge: MERGE, pr: 1, issue: 2, missed: missedCiJobs({ jobs }) }, ports);
+  const r = await check(state, TIP, ports);
+  assert.deepEqual([r.state, r.red, r.never.map(row => row.workflow), gh.reads, gh.posts], ['waiting', [], ['dep.yml', 'lint.yml'], 0, []]);
+  assert.ok(r.lines.includes(`missed CI: CI job review for PR #1 (${MERGE.slice(0, 7)}) never ran on main (its workflow does not run on a push to main)`));
+  // A job that can run on main, but GitHub skipped it at the merge commit: never ran, not passed.
+  const other = temp(t);
+  recordMissedCi({ root: other, merge: MERGE, pr: 1, issue: 2, missed: missedCodeql }, ports);
+  gh.checks.set(MERGE, [{ id: 1, name: 'Analyze (javascript)', status: 'completed', conclusion: 'skipped' }]);
+  const skipped = await check(other, TIP, ports);
+  assert.deepEqual([skipped.state, skipped.never.map(row => row.why), gh.posts], ['waiting', ['GitHub skipped it on main'], []]);
+});
+
+test('Claude review 9: a push-only deploy job is no PR CI; a job that deploys or uses secrets is never run again', async t => {
+  const wf = "on:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm test\n"
+    + "  deploy:\n    needs: test\n    if: github.event_name == 'push'\n    environment: production\n    runs-on: ubuntu-latest\n    steps:\n      - run: ./deploy.sh\n"
+    + '  e2e:\n    runs-on: macos-latest\n    steps:\n      - run: npm run e2e\n        env:\n          TOKEN: ${{ secrets.E2E }}\n';
+  const result = sort([file('ci.yml', wf)]);
+  assert.deepEqual(result.jobs.map(job => [job.check, job.kind, job.rerun]), [['test', 'covered', true], ['e2e', 'ci-only', false]]);
+  assert.deepEqual(result.dropped, [{ workflow: 'ci.yml', job: 'deploy', why: "its condition is false for a PR head (github.event_name == 'push')" }]);
+  const state = temp(t), gh = fakeGitHub(), ports = { gh, now: () => 0 };
+  recordMissedCi({ root: state, merge: MERGE, pr: 1, issue: 2, missed: missedCiJobs({ jobs: result.jobs }) }, ports);
+  gh.checks.set(MERGE, [{ id: 4, name: 'e2e', status: 'completed', conclusion: 'cancelled' }]);
+  gh.runs.set(MERGE, [{ id: 9, path: '.github/workflows/ci.yml', status: 'completed' }]);
+  const r = await check(state, TIP, ports);
+  assert.deepEqual([r.state, r.stuck.map(row => row.why), gh.posts], ['waiting', ['Autopilot runs again only a test job that does not deploy'], []]);
+});
+
+test('missed CI on main: a dispatch result counts where it ran; two jobs with one check name are never decided by name', async t => {
+  const state = temp(t), gh = fakeGitHub(), T2 = 'd'.repeat(40);
+  let now = 0;
+  const ports = { gh, now: () => now };
+  recordMissedCi({ root: state, merge: MERGE, pr: 9, issue: 8, missed: [...missedCodeql, { key: 'mac.yml#mac#ci', workflow: 'mac.yml', job: 'mac', checks: ['test (macos-latest)'], onBase: true, dispatch: false, rerun: true, duplicate: false }] }, ports);
+  const first = await check(state, TIP, ports);
+  assert.deepEqual(gh.posts, [{ endpoint: 'repos/o/r/actions/workflows/codeql.yml/dispatches', body: { ref: 'main' } }]);
+  assert.ok(first.lines.includes(`missed CI: CI job test (macos-latest) for PR #9 (${MERGE.slice(0, 7)}) did not run on main, and Autopilot cannot start it (no run to start): run the workflow mac.yml by hand`));
+  // The dispatch ran at TIP and passed there; the base moved to T2 in the meantime (Claude review P3).
+  gh.checks.set(TIP, [{ id: 20, name: 'Analyze (javascript)', status: 'completed', conclusion: 'success' }]);
+  now += HOUR;
+  const later = await check(state, T2, ports);
+  assert.deepEqual([later.waiting, later.stuck.map(row => row.workflow)], [[], ['mac.yml']]);
+  // A person's run of the stuck job at the tip counts: a red there is red.
+  gh.checks.set(T2, [{ id: 21, name: 'test (macos-latest)', status: 'completed', conclusion: 'failure' }]);
+  const byHand = await check(state, T2, ports);
+  assert.deepEqual(byHand.red.map(row => [row.workflow, row.names, row.sha]), [['mac.yml', ['test (macos-latest)'], T2]]);
   assert.equal(gh.posts.length, 1);
-  assert.deepEqual(later.stuck.map(row => row.workflow), ['codeql.yml', 'mac.yml']);
-  // A person runs the workflows by hand (the stuck line asks for it): a failure at the base tip is red there, a pass
-  // at the base tip clears the job. A later commit of the base holds the merged change.
-  gh.checks.set(TIP, [{ id: 20, name: 'Analyze (javascript)', status: 'completed', conclusion: 'success' }, { id: 21, name: 'test (macos-latest)', status: 'completed', conclusion: 'failure' }]);
-  const byHand = await checkMissedCi({ root: state, repo: 'o/r', base: 'main', tip: TIP }, ports);
-  assert.deepEqual([byHand.state, byHand.red.map(row => [row.workflow, row.names, row.sha]), byHand.stuck], ['red', [['mac.yml', ['test (macos-latest)'], TIP]], []]);
-  assert.equal(gh.posts.length, 1);
-  // A refused ask is stuck at once; a queued run waits with no ask; a GitHub read error throws and keeps the file.
+  // Claude review 4: a duplicate check name is stuck at once with no call.
   const other = temp(t), gh2 = fakeGitHub();
-  gh2.status.set('repos/o/r/actions/runs/3/rerun', 403);
-  gh2.runs.set(MERGE, [{ id: 3, path: '.github/workflows/codeql.yml', status: 'completed' }]);
+  recordMissedCi({ root: other, merge: MERGE, pr: 1, issue: 2, missed: [{ ...missedCodeql[0], duplicate: true }] }, ports);
+  const dup = await check(other, TIP, { gh: gh2, now: () => 0 });
+  assert.deepEqual([dup.stuck.map(row => row.why), gh2.reads, gh2.posts], [['it shares its check name with another job'], 0, []]);
+});
+
+test('missed CI on main: a refused ask is stuck; a queued run waits with no ask; a GitHub read error throws and keeps the file', async t => {
+  const other = temp(t), gh2 = fakeGitHub();
+  gh2.status.set('repos/o/r/actions/jobs/3/rerun', 403);
+  gh2.checks.set(MERGE, [{ id: 3, name: 'Analyze (javascript)', status: 'completed', conclusion: 'cancelled' }]);
   recordMissedCi({ root: other, merge: MERGE, pr: 1, issue: 2, missed: missedCodeql }, { now: () => 0 });
-  assert.equal((await checkMissedCi({ root: other, repo: 'o/r', base: 'main', tip: TIP }, { gh: gh2, now: () => 0 })).stuck.length, 1);
+  assert.deepEqual((await check(other, TIP, { gh: gh2, now: () => 0 })).stuck.map(row => row.why), ['GitHub refused the ask (403)']);
   const third = temp(t), gh3 = fakeGitHub();
   gh3.runs.set(MERGE, [{ id: 4, path: '.github/workflows/codeql.yml', status: 'queued' }]);
   recordMissedCi({ root: third, merge: MERGE, pr: 1, issue: 2, missed: missedCodeql }, { now: () => 0 });
-  assert.equal((await checkMissedCi({ root: third, repo: 'o/r', base: 'main', tip: TIP }, { gh: gh3, now: () => 0 })).state, 'waiting');
+  assert.equal((await check(third, TIP, { gh: gh3, now: () => 0 })).state, 'waiting');
   assert.equal(gh3.posts.length, 0);
-  await assert.rejects(checkMissedCi({ root: third, repo: 'o/r', base: 'main', tip: TIP }, { gh: { call: async () => ({ status: 502 }) }, now: () => 0 }), error => error.code === 'github');
+  await assert.rejects(check(third, TIP, { gh: { call: async () => ({ status: 502 }) }, now: () => 0 }), error => error.code === 'github');
   assert.equal(readMissedCi({ root: third }).length, 1);
 });

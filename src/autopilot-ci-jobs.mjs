@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-ci-jobs.prompt.md (sha256: f79496043fb9c30e82bbeb3f8589a79736b1ad08e1fba2397d49d1e8e619fe7d).
+// Generated from prompts/cli/autopilot-ci-jobs.prompt.md (sha256: 95e9b8042ea3e053f6090d08eb0335e75928d08f2f721b5310f02fd2477e9c8d).
 import * as nativeFs from 'node:fs';
 import { join, isAbsolute } from 'node:path';
 import { redactSecrets } from './secret-redaction.mjs';
@@ -10,7 +10,9 @@ const CACHE = 'ci-jobs.json', SCHEMA = 'pdd.ci-jobs.v1', MISSED = 'ci-missed.jso
 const GOOD = ['success', 'neutral', 'skipped'];
 const SHA = /^[0-9a-f]{40}$/;
 const EXPR = /\$\{\{([\s\S]*?)\}\}/g;
-const SECRET = /\bsecrets\s*(?:\.|\[)|\bgithub\.token\b/;
+const SECRET_TEXT = /\bsecrets\s*(?:\.|\[)|\bgithub\.token\b/;
+// A secret: secrets.X, secrets[X], github.token, or the secrets context anywhere in an expression (toJSON(secrets)).
+const usesSecret = value => SECRET_TEXT.test(value) || [...String(value).matchAll(EXPR)].some(m => /\bsecrets\b/.test(m[1]));
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const scalarish = value => value === null || ['string', 'boolean', 'number'].includes(typeof value);
 const text = value => value === null || value === undefined ? '' : String(value);
@@ -313,6 +315,8 @@ function commandLines(script) {
   }
   return out;
 }
+// A known version flag alone is a probe; another -v (pytest -v, ./e2e.sh -v) is real work.
+const VERSION_FLAGS = { node: '-v', npm: '-v', npx: '-v', yarn: '-v', pnpm: '-v', bun: '-v', ruby: '-v', php: '-v', python: '-V', python3: '-V', rustc: '-V', cargo: '-V', go: 'version' };
 const NPM_TEST = ['npm test', 'npm run test', 'npm t', 'npm run-script test'];
 const LEAD = new Set(['if', 'elif', 'then', 'else', 'do', 'while', 'until', '!']);
 const CONTROL = new Set(['fi', 'done', 'esac', '{', '}', '(', ')', 'for', 'case']);
@@ -376,7 +380,7 @@ function classify(command, suite) {
     if (['echo', 'printf'].includes(w[0])) return 'probe';
     if (['command', 'which', 'type', 'hash'].includes(w[0]) && w.slice(1).every(word => /^-\w+$/.test(word) || /^[\w.+-]+$/.test(word))) return 'probe';
     const args = withoutRedirects(w);
-    if (args.length === 2 && ['--version', '-v', '-V', 'version'].includes(args[1])) return 'probe';
+    if (args.length === 2 && ((args[1] === '--version' && !args[0].includes('/')) || VERSION_FLAGS[args[0]] === args[1])) return 'probe';
   }
   if (!w.length) return 'real';
   let v = w;
@@ -401,17 +405,20 @@ function stepKind(script, suite) {
 
 // ---- Conditions, expressions, matrix --------------------------------------------------------------------
 // A condition for a ready (not draft) PR: true, false, or null when Autopilot cannot check it.
-function termValue(t) {
+// A condition for one event of a ready PR head: true, false, or null when Autopilot cannot check it. The draft terms
+// are known only for pull_request and pull_request_target (the PR is ready, so draft is false).
+function termValue(t, event) {
   let m;
-  if ((m = /^github\.event_name\s*(==|!=)\s*'([^']*)'$/.exec(t))) return (m[2] === 'pull_request') === (m[1] === '==');
-  if ((m = /^github\.event\.pull_request\.draft\s*(==|!=)\s*(true|false)$/.exec(t))) return (m[2] === 'false') === (m[1] === '==');
-  if (t === '!github.event.pull_request.draft') return true;
-  if (t === 'github.event.pull_request.draft') return false;
+  const pr = event === 'pull_request' || event === 'pull_request_target';
+  if ((m = /^github\.event_name\s*(==|!=)\s*'([^']*)'$/.exec(t))) return (m[2] === event) === (m[1] === '==');
+  if ((m = /^github\.event\.pull_request\.draft\s*(==|!=)\s*(true|false)$/.exec(t))) return pr ? (m[2] === 'false') === (m[1] === '==') : null;
+  if (t === '!github.event.pull_request.draft') return pr ? true : null;
+  if (t === 'github.event.pull_request.draft') return pr ? false : null;
   if (['always()', 'success()', '!cancelled()', 'true'].includes(t)) return true;
   if (['failure()', 'cancelled()', 'false'].includes(t)) return false;
   return null;
 }
-function condition(value) {
+function condition(value, event = 'pull_request') {
   if (value === undefined || value === null) return true;
   if (typeof value === 'boolean') return value;
   if (typeof value !== 'string') return null;
@@ -419,14 +426,36 @@ function condition(value) {
   const m = /^\$\{\{([\s\S]*)\}\}$/.exec(s);
   if (m) s = m[1].trim();
   if (!s || /[()]/.test(s.replace(/\b(?:always|success|failure|cancelled)\(\)/g, ''))) return null;
-  let any = false;
+  // An && group is false when one term is false, else unknown when one is unknown; || takes the first true group.
+  let result = false;
   for (const or of s.split('||')) {
-    let all = true;
-    for (const term of or.split('&&')) { const t = termValue(term.trim()); if (t === null) return null; all = all && t; }
-    any = any || all;
+    const terms = or.split('&&').map(term => termValue(term.trim(), event));
+    const group = terms.includes(false) ? false : terms.includes(null) ? null : true;
+    if (group === true) return true;
+    if (group === null) result = null;
   }
-  return any;
+  return result;
 }
+// The push filter of a workflow, by GitHub's rules (the same as the core's reader): * is any text but "/", ** any text,
+// ? one character; a "!" pattern excludes; the last matching pattern wins.
+const globMatch = (pattern, name) => new RegExp(`^${pattern.replace(/[.+^${}()|\\]/g, '\\$&').replace(/\*\*/g, '\0').replace(/\*/g, '[^/]*').replace(/\?/g, '.').replace(/\0/g, '.*')}$`).test(name);
+const branchMatch = (patterns, name) => patterns.reduce((hit, p) => p.startsWith('!') ? (globMatch(p.slice(1), name) ? false : hit) : (globMatch(p, name) ? true : hit), false);
+function pushAdmits(push, branch) {
+  if (!push) return false;
+  if (push.branches) return branchMatch(push.branches, branch);
+  if (push['branches-ignore']) return !branchMatch(push['branches-ignore'], branch);
+  return !push.tags && !push['tags-ignore'];
+}
+// The events that run a workflow for the PR head, and whether a push to the base or a dispatch runs it.
+function triggersOf(source, branch, base) {
+  const on = workflowTriggers(source);
+  const events = on ? ['pull_request', 'pull_request_target'].filter(event => on.has(event)) : [];
+  if (on && pushAdmits(on.get('push'), branch)) events.push('push');
+  return { events: events.length ? events : ['pull_request'], pushBase: Boolean(on && pushAdmits(on.get('push'), base)), dispatch: Boolean(on?.has('workflow_dispatch')) };
+}
+const DEPLOY_WORDS = /\b(?:deploy|publish|release)\b/i;
+const deploys = (job, wf) => object(job) && (job.environment !== undefined || usesSecret(JSON.stringify(job)) || usesSecret(JSON.stringify(wf.env ?? null))
+  || (Array.isArray(job.steps) && job.steps.some(step => object(step) && DEPLOY_WORDS.test(`${text(step.uses)}\n${text(step.run)}`))));
 // The inner texts of the ${{ }} expressions of a value; null when a "${{" has no "}}".
 function expressions(value) {
   const s = String(value ?? '');
@@ -486,17 +515,18 @@ function versionMatches(spec, version) {
   if ((m = /^(\d+)\.(\d+)\.(\d+)$/.exec(s))) return m[1] === major && m[2] === minor && m[3] === patch;
   return false;
 }
+// A reason with test: true is a test need: Autopilot may ask GitHub to run such a job again.
 function runnerReason(runsOn, entry, family) {
   if (runsOn === undefined) return { need: 'unreadable', why: 'Autopilot could not read the job: it has no runs-on' };
   const label = Array.isArray(runsOn) && runsOn.length === 1 ? runsOn[0] : runsOn;
   if (typeof label !== 'string') {
     const shown = Array.isArray(runsOn) ? runsOn.map(text).join(', ') : 'a runner group';
-    return { need: `runner ${shown}`, why: `runs on ${shown}` };
+    return { need: `runner ${shown}`, why: `runs on ${shown}`, test: true };
   }
   const filled = fillMatrix(label, entry).trim();
   const own = /^ubuntu-/.test(filled) ? 'Linux' : /^macos-/.test(filled) ? 'macOS' : /^windows-/.test(filled) ? 'Windows' : null;
-  if (!own) return { need: `runner ${filled}`, why: `runs on ${filled}` };
-  return own === family ? null : { need: own, why: `runs on ${filled} (this machine is ${family})` };
+  if (!own) return { need: `runner ${filled}`, why: `runs on ${filled}`, test: true };
+  return own === family ? null : { need: own, why: `runs on ${filled} (this machine is ${family})`, test: true };
 }
 
 // ---- Sort -----------------------------------------------------------------------------------------------
@@ -512,22 +542,22 @@ function sortStep(step, job, wf, entry, ctx) {
         const version = uses['node-version'];
         if (typeof version === 'string' && /\$\{\{\s*matrix\./.test(version)) {
           const shown = fillMatrix(version, entry);
-          if (!versionMatches(shown, ctx.machine.node)) return { reason: { need: `Node ${shown}`, why: `uses Node ${shown} (this machine has Node ${ctx.machine.node})` } };
+          if (!versionMatches(shown, ctx.machine.node)) return { reason: { need: `Node ${shown}`, why: `uses Node ${shown} (this machine has Node ${ctx.machine.node})`, test: true } };
         }
       } else if (ref.startsWith('actions/setup-')) {
         const tool = ref.slice('actions/setup-'.length);
         for (const value of Object.values(uses)) if (typeof value === 'string' && /\$\{\{\s*matrix\./.test(value)) {
           const shown = fillMatrix(value, entry);
-          return { reason: { need: `${tool} ${shown}`, why: `uses ${tool} ${shown} from the matrix (Autopilot cannot know this machine's ${tool} version)` } };
+          return { reason: { need: `${tool} ${shown}`, why: `uses ${tool} ${shown} from the matrix (Autopilot cannot know this machine's ${tool} version)`, test: true } };
         }
       }
       return { kind: 'setup' };
     }
     const need = /^github\/codeql-action(?:\/|$)/.test(ref) ? 'CodeQL' : action.startsWith('./') ? 'local action' : action.startsWith('docker://') ? 'docker image' : owner && repo ? `${owner}/${repo}` : 'action';
-    return { reason: { need, why: `uses ${oneLine(action, 120)}` } };
+    return { reason: { need, why: `uses ${oneLine(action, 120)}`, test: need === 'CodeQL' } };
   }
   if (typeof step.run !== 'string') return { reason: { need: 'unreadable', why: 'Autopilot could not read a step' } };
-  const when = condition(step.if);
+  const when = condition(step.if, ctx.event);
   if (when === null) return { reason: { need: 'condition', why: `has a step condition that Autopilot cannot check: ${oneLine(step.if, 120)}` } };
   if (when === false) return { kind: 'skip' };
   const keepGoing = step['continue-on-error'];
@@ -584,58 +614,73 @@ function sortEntry(job, wf, entry, ctx) {
   if (steps.length) return { kind: 'local', suite, steps, commands: steps.map(step => step.script), why: `runs ${steps.length} command(s) that Autopilot can run on this machine${suite ? ', and the full test command' : ''}` };
   return { kind: 'covered', suite, steps: [], commands: parts, why: suite ? `runs only the full test command (${ctx.testCommand})` : 'runs only setup steps' };
 }
-function sortJob(file, wf, id, job, ctx) {
-  const workflow = file.name, title = typeof wf.name === 'string' && wf.name.trim() ? wf.name.trim() : workflow, dispatch = Boolean(workflowTriggers(file.text)?.has('workflow_dispatch'));
-  const entryOf = fields => ({ workflow, title, job: id, check: null, checks: [], kind: 'ci-only', why: '', need: null, suite: false, commands: [], steps: [], matrix: null, dispatch, ...fields });
+function sortJob(file, wf, id, job, ctx, on) {
+  const workflow = file.name, title = typeof wf.name === 'string' && wf.name.trim() ? wf.name.trim() : workflow;
+  const onBase = on.pushBase && condition(object(job) ? job.if : undefined, 'push') !== false;
+  const dispatch = on.dispatch && !on.deploys && condition(object(job) ? job.if : undefined, 'workflow_dispatch') !== false;
+  const safe = !deploys(job, wf);
+  const entryOf = fields => ({ key: `${workflow}#${id}#all`, workflow, title, job: id, check: null, checks: [], kind: 'ci-only', why: '', need: null, suite: false, commands: [], steps: [], matrix: null,
+    duplicate: false, onBase, dispatch, rerun: false, ...fields });
   const matrix = object(job) ? (job.strategy === undefined || job.strategy === null ? expandMatrix(undefined) : object(job.strategy) ? expandMatrix(job.strategy.matrix) : { error: 'builds its strategy from an expression' }) : { error: 'unreadable' };
   // A CI-only reason of the whole job: one entry for all its matrix entries.
-  const whole = (need, why) => {
+  const whole = (need, why, test = false) => {
     const checks = matrix.entries ? matrix.entries.map(entry => checkName(job, id, entry)) : [jobName(job, id)];
-    return [entryOf({ check: checks.length === 1 ? checks[0] : jobName(job, id), checks, need, why, matrix: matrix.entries?.length === 1 ? matrix.entries[0] : null })];
+    return { entries: [entryOf({ check: checks.length === 1 ? checks[0] : jobName(job, id), checks, need, why, matrix: matrix.entries?.length === 1 ? matrix.entries[0] : null, rerun: test && safe })], dropped: [] };
   };
   if (!object(job)) return whole('unreadable', 'Autopilot could not read the job');
+  // The condition first (#3260 review): a job that no event of the PR head runs is no PR CI, also a deploy job.
+  const runs = on.events.map(event => condition(job.if, event));
+  if (runs.every(r => r === false)) return { entries: [], dropped: [{ workflow, job: id, why: `its condition is false for a PR head (${oneLine(job.if, 120)})` }] };
   if (typeof job.uses === 'string') return whole('reusable workflow', `calls the reusable workflow ${oneLine(job.uses, 120)}`);
   if (!Array.isArray(job.steps) || !job.steps.length || !job.steps.every(object)) return whole('unreadable', 'Autopilot could not read the job');
-  if (SECRET.test(JSON.stringify(job)) || SECRET.test(JSON.stringify(wf.env ?? null))) return whole('secrets', 'uses a secret');
+  if (usesSecret(JSON.stringify(job)) || usesSecret(JSON.stringify(wf.env ?? null))) return whole('secrets', 'uses a secret');
   if (job.environment !== undefined) return whole('environment', `deploys to the environment ${oneLine(object(job.environment) ? job.environment.name : job.environment, 80)}`);
-  if (job.services !== undefined) return whole('services', 'needs service containers');
-  if (job.container !== undefined) return whole('container', 'runs in a container');
-  const runs = condition(job.if);
-  if (runs === false) return [];
-  if (runs === null) return whole('condition', `has a condition that Autopilot cannot check: ${oneLine(job.if, 120)}`);
+  if (job.services !== undefined) return whole('services', 'needs service containers', true);
+  if (job.container !== undefined) return whole('container', 'runs in a container', true);
+  if (!runs.includes(true)) return whole('condition', `has a condition that Autopilot cannot check: ${oneLine(job.if, 120)}`);
+  const event = on.events.find((name, i) => runs[i] === true && name !== 'pull_request_target');
+  if (!event) return whole('pull_request_target', "runs only for pull_request_target (the base's code, with its secrets)");
   if (matrix.error) return whole('matrix', matrix.error);
   const out = [], ciOnly = [];
-  for (const entry of matrix.entries) {
-    const r = sortEntry(job, wf, entry, ctx), check = checkName(job, id, entry);
+  matrix.entries.forEach((entry, index) => {
+    const r = sortEntry(job, wf, entry, { ...ctx, event }), check = checkName(job, id, entry);
     if (r.reason) ciOnly.push({ check, entry, ...r.reason });
-    else out.push(entryOf({ check, checks: [check], kind: r.kind, why: r.why, suite: r.suite, commands: r.commands, steps: r.steps, matrix: entry }));
-  }
+    else out.push(entryOf({ key: `${workflow}#${id}#${index}`, check, checks: [check], kind: r.kind, why: r.why, suite: r.suite, commands: r.commands, steps: r.steps, matrix: entry, rerun: safe }));
+  });
   if (ciOnly.length) {
     const needs = [...new Set(ciOnly.map(c => c.need))];
-    out.push(entryOf({ check: ciOnly.length === 1 ? ciOnly[0].check : jobName(job, id), checks: ciOnly.map(c => c.check), need: needs.slice(0, 3).join(', '),
-      why: `${ciOnly[0].why}${ciOnly.length > 1 ? `, and ${ciOnly.length - 1} more` : ''}`, matrix: ciOnly.length === 1 ? ciOnly[0].entry : null }));
+    out.push(entryOf({ key: `${workflow}#${id}#ci`, check: ciOnly.length === 1 ? ciOnly[0].check : jobName(job, id), checks: ciOnly.map(c => c.check), need: needs.slice(0, 3).join(', '),
+      why: `${ciOnly[0].why}${ciOnly.length > 1 ? `, and ${ciOnly.length - 1} more` : ''}`, matrix: ciOnly.length === 1 ? ciOnly[0].entry : null, rerun: safe && ciOnly.every(c => c.test === true) }));
   }
-  return out;
+  return { entries: out, dropped: [] };
 }
-const fileEntry = (workflow, why, need) => ({ workflow, title: workflow, job: null, check: null, checks: [], kind: 'ci-only', why, need, suite: false, commands: [], steps: [], matrix: null, dispatch: false });
+const fileEntry = (workflow, why, need) => ({ key: `${workflow ?? ''}#`, workflow, title: workflow, job: null, check: null, checks: [], kind: 'ci-only', why, need, suite: false, commands: [], steps: [], matrix: null,
+  duplicate: false, onBase: false, dispatch: false, rerun: false });
 function sortFile(file, base, branch, changed, ctx) {
   const name = text(file?.name) || 'unknown', source = typeof file?.text === 'string' ? file.text : null;
-  if (source !== null && !workflowRunsOnPr(source, branch, base, changed)) return [];
-  const bad = why => [fileEntry(name, `Autopilot could not read the workflow file: ${why}`, 'unreadable')];
+  if (source !== null && !workflowRunsOnPr(source, branch, base, changed)) return { entries: [], dropped: [] };
+  const bad = why => ({ entries: [fileEntry(name, `Autopilot could not read the workflow file: ${why}`, 'unreadable')], dropped: [] });
   if (source === null) return bad(oneLine(file?.error, 200) || 'it could not be read');
   let wf;
   try { wf = parseWorkflowYaml(source); } catch (error) { return bad(error.code === 'yaml' ? error.message : 'it could not be read'); }
   if (!object(wf)) return bad('its top is not a mapping');
   if (!object(wf.jobs) || !Object.keys(wf.jobs).length) return bad('it has no jobs');
-  return Object.entries(wf.jobs).flatMap(([id, job]) => sortJob({ name, text: source }, wf, id, job, ctx));
+  const on = { ...triggersOf(source, branch, base), deploys: Object.values(wf.jobs).some(job => deploys(job, wf)) };
+  const sorted = Object.entries(wf.jobs).map(([id, job]) => sortJob({ name, text: source }, wf, id, job, ctx, on));
+  return { entries: sorted.flatMap(r => r.entries), dropped: sorted.flatMap(r => r.dropped) };
 }
 export function sortCiJobs({ files = [], base = 'main', branch = DEFAULT_BRANCH, changed = null, testCommand = null, scripts = null, machine = {} } = {}) {
   const platform = machine?.platform ?? process.platform, node = text(machine?.node ?? process.versions.node).replace(/^v/, '');
   const ctx = { machine: { platform, node }, family: familyOf(platform), suite: suiteSpellings(testCommand, scripts), testCommand: normal(testCommand) };
   const list = Array.isArray(files) ? files : [];
-  const jobs = list.length > MAX_FILES ? [fileEntry(null, `the base has ${list.length} workflow files (more than ${MAX_FILES})`, 'too many workflows')]
-    : list.flatMap(file => sortFile(file, base, branch, changed, ctx));
-  return { jobs, summary: ciJobsSummary(jobs) };
+  const sorted = list.length > MAX_FILES ? [{ entries: [fileEntry(null, `the base has ${list.length} workflow files (more than ${MAX_FILES})`, 'too many workflows')], dropped: [] }]
+    : list.map(file => sortFile(file, base, branch, changed, ctx));
+  const jobs = sorted.flatMap(r => r.entries), dropped = sorted.flatMap(r => r.dropped);
+  // A check name of two entries: GitHub's check runs cannot tell them apart, so no run stands for one of them.
+  const count = new Map();
+  for (const job of jobs) for (const name of new Set(job.checks)) count.set(name, (count.get(name) ?? 0) + 1);
+  for (const job of jobs) job.duplicate = job.checks.some(name => count.get(name) > 1) || new Set(job.checks).size < job.checks.length;
+  return { jobs, summary: ciJobsSummary(jobs), dropped };
 }
 export function ciJobsSummary(jobs = []) {
   if (!jobs.length) return 'CI: none';
@@ -650,15 +695,15 @@ export async function readCiJobs(input = {}, ports = {}) {
   const { base, root = null } = input;
   if (typeof base !== 'string' || !/^[\w./-]+$/.test(base) || base.startsWith('-') || base.includes('..')) throw new TypeError('base must be a branch name');
   const fs = ports.fs ?? nativeFs, git = ports.git;
-  const failSafe = error => { const jobs = [fileEntry(null, `Autopilot could not read the workflow files of the base: ${oneLine(error?.message, 200)}`, 'unreadable')]; return { tree: null, jobs, summary: ciJobsSummary(jobs) }; };
+  const failSafe = error => { const jobs = [fileEntry(null, `Autopilot could not read the workflow files of the base: ${oneLine(error?.message, 200)}`, 'unreadable')]; return { tree: null, jobs, summary: ciJobsSummary(jobs), dropped: [] }; };
   let tree;
   try {
     // Only the base tip: never HEAD, never the PR head (a PR can change a workflow).
-    const tip = await git(['rev-parse', '--verify', '-q', `origin/${base}^{commit}`]);
+    const tip = await git(['rev-parse', '--verify', '-q', `refs/remotes/origin/${base}^{commit}`]);
     if (!SHA.test(tip)) throw new Error(`no commit for origin/${base}`);
     const row = String(await git(['ls-tree', '-z', tip, '--', '.github/workflows'])).split('\0').filter(Boolean)[0];
     const m = row ? /^\d+ (\w+) ([0-9a-f]+)\t/.exec(row) : null;
-    if (!m || m[1] !== 'tree') return { tree: null, jobs: [], summary: 'CI: none' };
+    if (!m || m[1] !== 'tree') return { tree: null, jobs: [], summary: 'CI: none', dropped: [] };
     tree = m[2];
   } catch (error) { return failSafe(error); }
   const file = root ? join(root, CACHE) : null, cached = file ? readJson(fs, file) : null;
@@ -691,13 +736,17 @@ export function cachedCiSummary({ root } = {}, ports = {}) {
 // ---- Local jobs at the final head -----------------------------------------------------------------------
 const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`;
 const SHELL_ARGS = { bash: ['--noprofile', '--norc', '-eo', 'pipefail'], sh: ['-e'], default: ['-e'] };
-export function localJobPlan({ jobs = [], head, checkout, temp, machine = {} } = {}) {
+// A check name that another entry shares gets the job id and the matrix values, so each line names one job.
+const labelOf = job => !job.duplicate || !job.job ? job.check
+  : `${job.check} (job ${job.job}${object(job.matrix) && Object.keys(job.matrix).length ? `, ${Object.entries(job.matrix).map(([key, value]) => `${key} ${text(value)}`).join(', ')}` : ''})`;
+export function localJobPlan({ jobs = [], head, base = null, checkout, temp, machine = {} } = {}) {
   if (!SHA.test(String(head ?? ''))) throw new TypeError('head must be 40 hex digits');
   if (!isAbsolute(String(checkout ?? '')) || !isAbsolute(String(temp ?? ''))) throw new TypeError('checkout and temp must be absolute paths');
   const os = familyOf(machine?.platform ?? process.platform);
   return jobs.filter(job => job.kind === 'local').map((entry, index) => {
     const folder = join(temp, `job-${index + 1}`), values = object(entry.matrix) ? entry.matrix : {};
-    const env = { CI: 'true', GITHUB_WORKSPACE: checkout, RUNNER_TEMP: join(folder, 'runner-temp'), GITHUB_STEP_SUMMARY: join(folder, 'step-summary.md'), GITHUB_OUTPUT: join(folder, 'output') };
+    const env = { CI: 'true', GITHUB_WORKSPACE: checkout, GITHUB_SHA: head, ...(typeof base === 'string' && base ? { GITHUB_BASE_REF: base } : {}),
+      RUNNER_TEMP: join(folder, 'runner-temp'), GITHUB_STEP_SUMMARY: join(folder, 'step-summary.md'), GITHUB_OUTPUT: join(folder, 'output') };
     const fill = (value, names) => String(value).replace(EXPR, (all, inner) => {
       const t = inner.trim();
       let m;
@@ -711,7 +760,7 @@ export function localJobPlan({ jobs = [], head, checkout, temp, machine = {} } =
     const steps = (entry.steps ?? []).map(step => {
       const raw = object(step.env) ? step.env : {}, own = Object.fromEntries(Object.entries(raw).map(([name, value]) => [name, fill(value, raw)]));
       const command = step.shell === 'sh' ? 'sh' : 'bash';
-      return { name: step.name, command, args: [...SHELL_ARGS[step.shell ?? 'default'], '-c', fill(step.script, own)], cwd: step.workingDirectory && step.workingDirectory !== '.' ? join(checkout, step.workingDirectory) : checkout, env: { ...env, ...own }, own };
+      return { name: fill(step.name, own), command, args: [...SHELL_ARGS[step.shell ?? 'default'], '-c', fill(step.script, own)], cwd: step.workingDirectory && step.workingDirectory !== '.' ? join(checkout, step.workingDirectory) : checkout, env: { ...env, ...own }, own };
     });
     const lines = [`mkdir -p ${quote(env.RUNNER_TEMP)} || exit 1`, `: > ${quote(env.GITHUB_STEP_SUMMARY)}; : > ${quote(env.GITHUB_OUTPUT)}`];
     steps.forEach((step, i) => {
@@ -721,12 +770,12 @@ export function localJobPlan({ jobs = [], head, checkout, temp, machine = {} } =
         `if [ "$code" -ne 0 ]; then echo "pdd-ci-local: step ${i + 1} failed with exit $code"; exit "$code"; fi`);
     });
     lines.push(`echo ${quote(`pdd-ci-local: all ${steps.length} steps passed`)}`);
-    return { key: `${entry.workflow}#${entry.check}`, workflow: entry.workflow, job: entry.job, check: entry.check, head, cwd: checkout, env, command: lines.join('\n'),
+    return { key: entry.key, label: labelOf(entry), workflow: entry.workflow, job: entry.job, check: entry.check, head, cwd: checkout, env, command: lines.join('\n'),
       steps: steps.map(({ own, ...step }) => step) };
   });
 }
 export function localJobResult(entry, run) {
-  const row = { key: entry?.key ?? null, workflow: entry?.workflow ?? null, job: entry?.job ?? null, check: entry?.check ?? null, head: entry?.head ?? null, state: 'pass', step: null, exit: null, tool: null, why: null, tail: null };
+  const row = { key: entry?.key ?? null, label: entry?.label ?? entry?.check ?? null, workflow: entry?.workflow ?? null, job: entry?.job ?? null, check: entry?.check ?? null, head: entry?.head ?? null, state: 'pass', step: null, exit: null, tool: null, why: null, tail: null };
   const code = run?.exit?.code;
   if (code === 0) return row;
   const log = String(run?.log ?? ''), failed = [...log.matchAll(/^pdd-ci-local: step (\d+) failed with exit (\d+)\s*$/gm)].at(-1);
@@ -743,23 +792,26 @@ export function localJobsRecord({ head, plan = [], runs = {}, at = null } = {}) 
   return { head, at, jobs: plan.map(entry => localJobResult(entry, object(runs) && Object.hasOwn(runs, entry.key) ? runs[entry.key] : null)) };
 }
 export function localJobReds(record) {
-  return (record?.jobs ?? []).filter(job => job.state === 'fail').map(job => `CI job ${job.check} failed when Autopilot ran it on this machine for head ${short(record.head)} (CI did not start): step "${job.step ?? 'unknown'}" exited with ${job.exit}.${job.tail ? `\nLast lines:\n${job.tail}` : ''}`);
+  return (record?.jobs ?? []).filter(job => job.state === 'fail').map(job => `CI job ${job.label ?? job.check} failed when Autopilot ran it on this machine for head ${short(record.head)} (CI did not start): step "${job.step ?? 'unknown'}" exited with ${job.exit}.${job.tail ? `\nLast lines:\n${job.tail}` : ''}`);
 }
 
 // ---- The CI lines of the merge note ---------------------------------------------------------------------
-const resultOf = record => { const rows = new Map(); for (const row of record?.jobs ?? []) rows.set(row.key, row); return entry => rows.get(`${entry.workflow}#${entry.check}`) ?? null; };
+// The record row of an entry: by its unique key, never by its check name.
+const resultOf = record => { const rows = new Map(); for (const row of record?.jobs ?? []) rows.set(row.key, row); return entry => rows.get(entry.key) ?? null; };
 export function ciMergeNote({ jobs = [], record = null, notStarted = null } = {}) {
   const reason = notStarted?.reason === 'billing' ? `GitHub said "${oneLine(notStarted.message, 200)}"`
     : notStarted?.reason === 'queued' && Number.isFinite(notStarted.since) ? `queued since ${new Date(notStarted.since).toISOString().slice(11, 16)} UTC` : 'reason unknown';
   const covered = jobs.filter(job => job.kind === 'covered' || (job.kind === 'local' && job.suite)).map(job => job.check);
   const lines = [`- CI: did not start (${reason})${covered.length ? `; covered by the local full suite: ${covered.join(', ')}` : ''}`], result = resultOf(record);
   for (const job of jobs) {
+    const label = labelOf(job);
     if (job.kind === 'local') {
       const r = result(job);
-      lines.push(r?.state === 'pass' ? `- CI job ${job.check}: local pass` : r?.state === 'fail' ? `- CI job ${job.check}: local fail (step "${r.step ?? 'unknown'}", exit ${r.exit})`
-        : `- CI job ${job.check}: not run yet (CI did not start; ${r?.why ?? 'no local result'})`);
+      lines.push(r?.state === 'pass' ? `- CI job ${label}: local pass` : r?.state === 'fail' ? `- CI job ${label}: local fail (step "${r.step ?? 'unknown'}", exit ${r.exit})`
+        : `- CI job ${label}: not run yet (CI did not start; ${r?.why ?? 'no local result'})`);
     } else if (job.kind === 'ci-only') {
-      lines.push(job.job === null ? `- CI workflow ${job.workflow ?? 'files'}: not run yet (CI did not start)` : `- CI job ${job.checks?.length ? job.checks.join(', ') : job.check}: not run yet (CI did not start)`);
+      const names = job.checks?.length ? job.checks.join(', ') : job.check;
+      lines.push(job.job === null ? `- CI workflow ${job.workflow ?? 'files'}: not run yet (CI did not start)` : `- CI job ${names}${job.duplicate ? ` (job ${job.job})` : ''}: not run yet (CI did not start)`);
     }
   }
   return lines;
@@ -769,7 +821,8 @@ export function ciMergeNote({ jobs = [], record = null, notStarted = null } = {}
 export function missedCiJobs({ jobs = [], record = null } = {}) {
   const result = resultOf(record);
   return jobs.filter(job => job.workflow && (job.kind === 'ci-only' || (job.kind === 'local' && !['pass', 'fail'].includes(result(job)?.state))))
-    .map(job => ({ workflow: job.workflow, job: job.job, checks: job.checks?.length ? [...job.checks] : [job.check].filter(Boolean), dispatch: Boolean(job.dispatch) }))
+    .map(job => ({ key: job.key, workflow: job.workflow, job: job.job, checks: job.checks?.length ? [...job.checks] : [job.check].filter(Boolean), onBase: job.onBase !== false,
+      dispatch: Boolean(job.dispatch), rerun: job.rerun === true, duplicate: Boolean(job.duplicate) }))
     .filter(job => job.checks.length);
 }
 const validRecord = record => object(record) && SHA.test(String(record.merge ?? '')) && Array.isArray(record.jobs) && record.jobs.length > 0
@@ -783,7 +836,8 @@ export function recordMissedCi({ root, merge, pr = null, issue = null, missed = 
   if (!Array.isArray(missed) || !missed.length) return null;
   if (!SHA.test(String(merge ?? ''))) throw new TypeError('merge must be 40 hex digits');
   const fs = ports.fs ?? nativeFs, now = ports.now ?? Date.now, file = join(root, MISSED);
-  const record = { merge, pr, issue, at: now(), jobs: missed.map(job => ({ workflow: job.workflow, job: job.job ?? null, checks: [...job.checks], dispatch: Boolean(job.dispatch), state: 'missed' })) };
+  const record = { merge, pr, issue, at: now(), jobs: missed.map(job => ({ key: job.key ?? `${job.workflow}#${job.job ?? ''}`, workflow: job.workflow, job: job.job ?? null, checks: [...job.checks],
+    onBase: job.onBase !== false, dispatch: Boolean(job.dispatch), rerun: job.rerun === true, duplicate: Boolean(job.duplicate), state: 'missed' })) };
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
   // A cut last line (no newline) must not swallow this record.
   let cut = false;
@@ -796,19 +850,31 @@ function writeMissed(fs, root, records) {
   if (!records.length) { fs.rmSync(file, { force: true }); return; }
   save(fs, file, `${records.map(record => JSON.stringify(record)).join('\n')}\n`);
 }
+// The state of a check name at a commit: the run with that name and the highest id decides. A cancelled, stale or
+// action_required run, and a billing failure, is no result: cancel-in-progress cancels runs on the base often.
+const NO_RESULT = ['cancelled', 'stale', 'action_required'];
 async function nameState(runs, name, billing) {
-  const run = runs.filter(r => r?.name === name).sort((a, b) => (b.id ?? 0) - (a.id ?? 0))[0];
-  if (!run) return 'missing';
-  if (run.status !== 'completed') return 'running';
-  if (GOOD.includes(run.conclusion)) return 'pass';
-  return await billing(run) ? 'blocked' : 'red';
+  const run = runs.filter(r => r?.name === name).sort((a, b) => (b.id ?? 0) - (a.id ?? 0))[0] ?? null;
+  if (!run) return { state: 'missing', run };
+  if (run.status !== 'completed') return { state: 'running', run };
+  if (['success', 'neutral'].includes(run.conclusion)) return { state: 'pass', run };
+  if (run.conclusion === 'skipped') return { state: 'skipped', run };
+  return { state: NO_RESULT.includes(run.conclusion) || await billing(run) ? 'none' : 'red', run };
 }
+export function noteMissedRedIssue({ root, merge, key, issue } = {}, ports = {}) {
+  const fs = ports.fs ?? nativeFs, records = readMissedCi({ root }, { fs });
+  let found = false;
+  if (Number.isSafeInteger(issue)) for (const record of records) if (record.merge === merge) for (const job of record.jobs) if (job.key === key && job.state === 'red') { job.red = { ...job.red, issue }; found = true; }
+  if (found) writeMissed(fs, root, records);
+  return found;
+}
+const accepted = status => status >= 200 && status < 300;
 export async function checkMissedCi({ root, repo, base, tip = null, ciDown = null } = {}, ports = {}) {
   const fs = ports.fs ?? nativeFs, now = ports.now ?? Date.now, billing = ports.billing ?? (async () => null), gh = ports.gh;
   const records = readMissedCi({ root }, { fs });
-  const result = { state: 'clear', red: [], waiting: [], stuck: [], lines: [] };
+  const result = { state: 'clear', red: [], waiting: [], stuck: [], never: [], lines: [] };
   if (records.length && !ciDown) {
-    const reads = new Map();
+    const reads = new Map(), tipOk = SHA.test(String(tip ?? ''));
     const checkRuns = async sha => {
       if (!reads.has(sha)) {
         const endpoint = `repos/${repo}/commits/${sha}/check-runs?per_page=100`, r = await gh.call('GET', endpoint);
@@ -817,56 +883,106 @@ export async function checkMissedCi({ root, repo, base, tip = null, ciDown = nul
       }
       return reads.get(sha);
     };
+    const states = async (sha, names) => { const runs = await checkRuns(sha), out = []; for (const name of names) out.push(await nameState(runs, name, billing)); return out; };
     const post = (endpoint, body) => Promise.resolve().then(() => gh.call('POST', endpoint, body)).then(r => r?.status ?? 0, () => 0);
-    const tipOk = SHA.test(String(tip ?? ''));
-    for (const record of records) for (const job of record.jobs) {
-      if (job.state === 'pass') continue;
+    const dispatch = () => post(`repos/${repo}/actions/workflows/${encodeURIComponent(job.workflow)}/dispatches`, { ref: base });
+    const stuck = (job, why) => { job.state = 'stuck'; job.why = why; };
+    const redOf = (job, names, sha, runs) => { job.state = 'red'; job.red = { names, sha, tip: tipOk ? tip : null, runs: runs.filter(Number.isSafeInteger), at: now() }; delete job.why; };
+    let job;
+    for (const record of records) for (job of record.jobs) {
+      if (['pass', 'released', 'never'].includes(job.state)) continue;
+      // A job that a push to the base does not run never runs there: no ask and no hold.
+      if (job.onBase === false) { job.state = 'never'; job.why = `its workflow does not run on a push to ${base}`; continue; }
+      if (job.duplicate) { stuck(job, 'it shares its check name with another job'); continue; }
       if (job.state === 'red') {
-        // A red job holds merges until its names pass at the current base tip.
+        const red = job.red ?? (job.red = { names: job.checks });
+        if (Number.isSafeInteger(red.issue)) {
+          const endpoint = `repos/${repo}/issues/${red.issue}`, r = await gh.call('GET', endpoint);
+          if ([404, 410].includes(r?.status) || (r?.status === 200 && r.value?.state === 'closed')) { job.state = 'released'; continue; }
+          if (r?.status !== 200) throw githubError('GET', endpoint, r?.status);
+        }
         if (!tipOk) continue;
-        const runs = await checkRuns(tip), states = [];
-        for (const name of job.red?.names ?? []) states.push(await nameState(runs, name, billing));
-        if (states.length && states.every(state => state === 'pass')) job.state = 'pass';
+        const names = red.names ?? job.checks, at = await states(tip, names);
+        if (at.every(x => x.state === 'pass')) { job.state = 'pass'; continue; }
+        if (at.some(x => x.state === 'red')) { red.sha = tip; continue; }
+        if (red.again) {
+          const again = await states(red.again.sha, names);
+          if (again.every(x => x.state === 'pass')) job.state = 'pass';
+          else if (again.some(x => x.state === 'red')) red.sha = red.again.sha;
+          else if (!again.some(x => x.state === 'running') && (!accepted(red.again.status) || now() - red.again.at >= ASK_WAIT)) stuck(job, 'the base moved and Autopilot cannot run it again there');
+          continue;
+        }
+        if (at.some(x => x.state === 'running') || tip === red.tip) continue;
+        // The base moved and its tip has no result: ask once more there, or stop holding.
+        if (!job.dispatch) { stuck(job, 'the base moved and Autopilot cannot run it again there'); continue; }
+        red.again = { how: 'dispatch', sha: tip, at: now(), status: await dispatch() };
+        if (!accepted(red.again.status)) stuck(job, 'the base moved and Autopilot cannot run it again there');
+        writeMissed(fs, root, records);
         continue;
       }
-      // Each name: the merge commit decides when it has a result; else the current base tip (a later commit holds the
-      // merged change; a rerun, a dispatch, a person's run or a later push shows there).
-      const states = [];
-      for (const name of job.checks) {
-        let state = await nameState(await checkRuns(record.merge), name, billing), sha = record.merge;
-        if (!['pass', 'red'].includes(state) && tipOk && tip !== record.merge) {
-          const later = await nameState(await checkRuns(tip), name, billing);
-          if (['pass', 'red', 'running'].includes(later)) { state = later; sha = tip; }
-        }
-        states.push({ name, state, sha });
+      if (job.state === 'stuck') {
+        // A stuck job is read again at the tip only (its old result at the merge commit is known); it never asks again.
+        if (!tipOk) continue;
+        const at = await states(tip, job.checks);
+        if (at.every(x => x.state === 'pass')) job.state = 'pass';
+        else if (at.some(x => x.state === 'red')) redOf(job, job.checks.filter((_, i) => at[i].state === 'red'), tip, at.map(x => x.run?.id));
+        continue;
       }
-      const red = states.filter(s => s.state === 'red');
-      if (red.length) { job.state = 'red'; job.red = { names: red.map(s => s.name), sha: red[0].sha, at: now() }; continue; }
-      if (states.every(s => s.state === 'pass')) { job.state = 'pass'; continue; }
-      if (states.some(s => s.state === 'running') || job.state === 'stuck') continue;
-      if (job.asked) { if (!(job.asked.status >= 200 && job.asked.status < 300) || now() - job.asked.at >= ASK_WAIT) job.state = 'stuck'; continue; }
-      // Ask once: rerun the workflow run of the merge commit, or start the workflow on the base.
-      const endpoint = `repos/${repo}/actions/runs?head_sha=${record.merge}&per_page=50`, r = await gh.call('GET', endpoint);
-      if (r?.status !== 200) throw githubError('GET', endpoint, r?.status);
-      const path = `.github/workflows/${job.workflow}`;
-      const run = (Array.isArray(r.value?.workflow_runs) ? r.value.workflow_runs : []).filter(w => String(w?.path ?? '').split('@')[0] === path).sort((a, b) => (b.id ?? 0) - (a.id ?? 0))[0];
-      if (run && run.status !== 'completed') continue;
-      if (run && Number.isSafeInteger(run.id)) job.asked = { how: 'rerun', sha: record.merge, at: now(), status: await post(`repos/${repo}/actions/runs/${run.id}/rerun`) };
-      else if (job.dispatch && tipOk) job.asked = { how: 'dispatch', sha: tip, at: now(), status: await post(`repos/${repo}/actions/workflows/${encodeURIComponent(job.workflow)}/dispatches`, { ref: base }) };
-      else { job.state = 'stuck'; continue; }
-      if (!(job.asked.status >= 200 && job.asked.status < 300)) job.state = 'stuck';
+      // Each name: the merge commit decides when it has a pass or red; else the dispatch commit, else the tip.
+      const later = [...(job.asked?.how === 'dispatch' ? [job.asked.sha] : []), ...(tipOk ? [tip] : [])].filter((sha, i, all) => sha !== record.merge && all.indexOf(sha) === i);
+      const picks = [];
+      for (const name of job.checks) {
+        const [merged] = await states(record.merge, [name]);
+        let pick = { name, ...merged, sha: record.merge, merged };
+        if (!['pass', 'red'].includes(merged.state)) for (const sha of later) {
+          const [x] = await states(sha, [name]);
+          if (['pass', 'red', 'running'].includes(x.state)) { pick = { name, ...x, sha, merged }; break; }
+        }
+        picks.push(pick);
+      }
+      const reds = picks.filter(p => p.state === 'red');
+      if (reds.length) { redOf(job, reds.map(p => p.name), reds[0].sha, reds.map(p => p.run?.id)); continue; }
+      if (picks.every(p => p.state === 'pass')) { job.state = 'pass'; continue; }
+      if (picks.some(p => p.state === 'running')) continue;
+      const open = picks.filter(p => p.state !== 'pass');
+      if (open.every(p => p.merged.state === 'skipped')) { job.state = 'never'; job.why = `GitHub skipped it on ${base}`; continue; }
+      if (job.asked) {
+        if (!accepted(job.asked.status)) stuck(job, `GitHub refused the ask (${job.asked.status || 'no reply'})`);
+        else if (now() - job.asked.at >= ASK_WAIT) stuck(job, 'no result 6 hours after the ask');
+        continue;
+      }
+      // Ask once: rerun only the missed job (never its whole workflow run), and only a test job that does not deploy.
+      const again = open.filter(p => p.merged.state === 'none' && Number.isSafeInteger(p.merged.run?.id));
+      if (again.length) {
+        if (!job.rerun) { stuck(job, 'Autopilot runs again only a test job that does not deploy'); continue; }
+        let status = 201;
+        for (const p of again) { const answer = await post(`repos/${repo}/actions/jobs/${p.merged.run.id}/rerun`); if (!accepted(answer)) status = answer; }
+        job.asked = { how: 'rerun', sha: record.merge, at: now(), status };
+      } else {
+        // No check run: a workflow run that has not finished may still start it; else start the workflow on the base.
+        const endpoint = `repos/${repo}/actions/runs?head_sha=${record.merge}&per_page=50`, r = await gh.call('GET', endpoint);
+        if (r?.status !== 200) throw githubError('GET', endpoint, r?.status);
+        const path = `.github/workflows/${job.workflow}`;
+        const run = (Array.isArray(r.value?.workflow_runs) ? r.value.workflow_runs : []).filter(w => String(w?.path ?? '').split('@')[0] === path).sort((a, b) => (b.id ?? 0) - (a.id ?? 0))[0];
+        if (run && run.status !== 'completed') continue;
+        if (!job.dispatch || !tipOk) { stuck(job, 'no run to start'); continue; }
+        job.asked = { how: 'dispatch', sha: tip, at: now(), status: await dispatch() };
+      }
+      if (!accepted(job.asked.status)) stuck(job, `GitHub refused the ask (${job.asked.status || 'no reply'})`);
       writeMissed(fs, root, records);
     }
   }
   const cutoff = now() - KEEP;
-  const kept = records.map(record => ({ ...record, jobs: record.jobs.filter(job => job.state !== 'pass') }))
+  const kept = records.map(record => ({ ...record, jobs: record.jobs.filter(job => !['pass', 'released'].includes(job.state)) }))
     .filter(record => record.jobs.length && (record.at >= cutoff || record.jobs.some(job => job.state === 'red'))).slice(-KEEP_RECORDS);
   if (records.length && !ciDown) writeMissed(fs, root, kept);
   for (const record of kept) for (const job of record.jobs) {
-    const row = { merge: record.merge, pr: record.pr, issue: record.issue, workflow: job.workflow, checks: job.checks }, names = job.checks.join(', ');
-    if (job.state === 'red') result.red.push({ merge: record.merge, pr: record.pr, issue: record.issue, workflow: job.workflow, names: job.red?.names ?? job.checks, sha: job.red?.sha ?? record.merge });
-    else if (job.state === 'stuck') { result.stuck.push(row); result.lines.push(`missed CI: CI job ${names} for PR #${record.pr} (${short(record.merge)}) did not run on ${base}, and Autopilot cannot start it: run the workflow ${job.workflow} by hand`); }
-    else { result.waiting.push(row); result.lines.push(`missed CI: CI job ${names} for PR #${record.pr} (${short(record.merge)}) waits to run on ${base}`); }
+    const row = { key: job.key, merge: record.merge, pr: record.pr, issue: record.issue, workflow: job.workflow, checks: job.checks, why: job.why ?? null };
+    const names = job.checks.join(', '), at = `CI job ${names} for PR #${record.pr} (${short(record.merge)})`;
+    if (job.state === 'red') result.red.push({ key: job.key, merge: record.merge, pr: record.pr, issue: record.issue, workflow: job.workflow, names: job.red?.names ?? job.checks, sha: job.red?.sha ?? record.merge });
+    else if (job.state === 'stuck') { result.stuck.push(row); result.lines.push(`missed CI: ${at} did not run on ${base}, and Autopilot cannot start it (${job.why ?? 'no run to start'}): run the workflow ${job.workflow} by hand`); }
+    else if (job.state === 'never') { result.never.push(row); result.lines.push(`missed CI: ${at} never ran on ${base} (${job.why ?? 'it does not run there'})`); }
+    else { result.waiting.push(row); result.lines.push(`missed CI: ${at} waits to run on ${base}`); }
   }
   result.state = result.red.length ? 'red' : kept.length ? 'waiting' : 'clear';
   return result;
