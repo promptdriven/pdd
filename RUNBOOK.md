@@ -623,6 +623,12 @@ ticks. Ticks use the existing action/call budget.
 4. ✓ passed: tell the person "Verdict: the prompt is right; the bug is only in the CODE." Keep the correct prompt
    unchanged. The code-only checker route below proves the code fix.
 5. For a prompt bug the check report shows before ✗ → after ✓; for a code-only bug show before ✓ → after ✓. `pdd simulate <story>` opens with the issue's input ready.
+- The failing check of step 2 is the "before" evidence. If the prompt changed after it, register that saved result
+  for the same Story: name a local commit whose files are exactly the checked files (commit an exact reconstruction if
+  that state was never committed), run `pdd workflow evidence-associate N --workspace . --stage before --commit SHA --test TEST`,
+  save `pdd test --read BATCH --json` outside the repository and run `pdd workflow evidence N --summary FILE`. pdd
+  refuses a commit whose selected files do not hash to the batch's source. No new check is sent, and the result never
+  counts as a current pass, check or approval.
 - If no prompt owns the behavior, say in reproduce: "No prompt exists yet for this behavior, so the bug can only be
   in the code." The verdict line is "Verdict: no prompt covers this yet; the bug can only be in the code." Write the
   prompt from the issue, and write "before: no prompt" in PR 1.
