@@ -72,7 +72,11 @@ process: build, repair, conflict, review and suite. Each tick, for each running 
   new. The reviewer and the suite have no P1 and P2; the suite has no P3 (its log lines are
   P4). Each tick reads only the new whole lines after a saved offset (at most 8 MB). The
   first look sets the baseline (the clock keeps the process start); a sleep gap restarts
-  the clock. **End:** nothing new for `quietMinutes` (at least 2 ticks) stops the process.
+  the clock, and the part of a shorter tick gap beyond one timer interval (`ctx.tickGap`)
+  moves the clock forward (a short sleep or a late timer is not quiet time). A suite that
+  waits in the machine's suite queue is never quiet (like a CI wait): T1 starts at the log
+  line "running the full test suite" (the queue admitted it); the note and the backstop
+  still count from the process start. **End:** nothing new for `quietMinutes` (at least 2 ticks) stops the process.
   Build, repair or conflict with no valid result: `no-result` ("the ROLE agent made nothing
   new for N minutes (no new commit, file state, tool call, output line or CPU use)"). A
   reviewer: no verdict (one retry, then `no-result`). A suite: a runner failure, started
@@ -216,7 +220,8 @@ reads up to the free slots plus 4 ready issues and starts first those whose name
 paths (paths in the title and body) meet no other running job (its named paths and its
 changed files); else the oldest. A slot is never left idle for it. S3: the build brief
 lists each other running job of the repository (this machine's job files; for other
-machines the `files` of the claim records of `pdd:working` issues, at most 10) with
+machines the `files` of the claim records of `pdd:working` issues, at most 10, read only
+when an issue is ready) with
 "Other jobs change these files now. Change them only when the issue needs it. Keep such
 edits small and on their own lines.", and the base merges of the last 24 hours that
 touched files that the issue names. P1: at each push (once per head) the job's changed
@@ -404,10 +409,15 @@ any other pdd (for example an older global install).
   result is `{verdict: PASS|FAIL, head, summary, mustFix[]}`. Each must-fix item starts
   with its severity and place: `P1 file:line …` (wrong behavior or unsafe), `P2 file:line …`
   (fix before the merge) or `P3 file:line …` (a follow-up). **P3 items never block**: a FAIL
-  with only P3 items counts as PASS. The tick lists them as follow-ups in the review comment,
+  with at least one item and only P3 items counts as PASS. **Fail closed:** a string
+  `mustFix` is one item; a missing or empty list is none, and a FAIL with no item stays a
+  FAIL (its red line says "see the review comment on the PR"); a verdict that does not
+  parse is no verdict; a PASS that lists a P1 or P2 item is a FAIL. The tick lists them as follow-ups in the review comment,
   in one section at the end of the PR body (a follow-up never reads as a `Runtime:`, `Path:`
   or `Evidence:` line) and in one note on the issue (marker
   `<!-- pdd:autopilot-core:follow-ups:N -->`), each updated in place and with no item twice.
+  A follow-up never closes an issue: an issue reference (`#18`, `owner/repo#18` or an issue
+  URL) becomes `issue 18` (`owner/repo issue 18`).
 - **Suite** (in `worktrees/N-suite`): `node bin/pdd.mjs workflow suite --command
   TEST --timeout 0` through the [shared full-suite queue](test-suite-queue.prompt.md):
   no fixed time limit (the process rule watches it), with `CI=true` in its environment so
@@ -516,7 +526,9 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    Autopilot checks the same PR again, with no new build. To give up on it, close the
    PR.", the PR stays open with one note `<!-- pdd:autopilot-core:needs-approval:P -->`.
    After a trusted removal of the label, intake resumes that PR (phase `pr`, its
-   branch in the job worktree, `resumed: true`) instead of a new build; in other repositories they are red,
+   branch in the job worktree, `resumed: true`) instead of a new build (a failed fetch or
+   checkout of that branch undoes the claim and removes the worktree, as other intake
+   failures do; the next tick tries again); in other repositories they are red,
    with the approval command and words in the finding (one repair, then END as usual).
    Observe mode never approves: it lists the problems in its "would merge" note.
    **Path checks** (debate A section 6.3, no AI, once per head and PR body, saved as
@@ -537,20 +549,27 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
 4. Any red finding: stop the other checks. The **repair budget** (option B): repairs go on
    while they make progress. The findings of a round are each review must-fix (P1 and P2)
    and each other red line. Two findings are the same when they name the same `file:line`
-   (3 lines of tolerance) with a similar cause (at least a quarter of their words in common),
-   or, with no place, when nearly all their words agree; a hex commit name does not count.
-   After a repair, compare the findings with the last round. Stop (END `checks-red`, the END
-   text names the rule and lists the findings) when (a) a finding of the last round is still
-   there, (b) a finding of an earlier round came back, (c) the list was not smaller and not
-   less severe (its worst item) for 2 rounds in a row, or (d) the job has used `repairs`
-   (the safety cap, default 6). Else start one repair job, count it and start its quiet
-   clock. The job saves the last 8 rounds (`rounds`) and the stalled-round count (`stalls`).
+   (3 lines of tolerance) with a similar cause (at least a quarter of their words in common;
+   the words leave out paths, so two bugs at nearby lines of one file differ), or, with no
+   place, when nearly all their words agree; a hex commit name does not count. After a
+   repair, compare the findings with the last round. Stop (END `checks-red`, the END text
+   names the rule and lists the findings) when (a) a finding of the last round is still
+   there, (b) a finding of an earlier round came back, or (c) the job has used `repairs`
+   (the safety cap, default 6). A round that fixes all its findings and gets new, different
+   ones goes on (the #2574 pattern: each repair fixes the last P2 and the reviewer finds a
+   new P2), to a PASS or the cap. Else start one repair job, count it and start its quiet
+   clock. The job saves the last 8 rounds (`rounds`).
 5. Wait while CI, review or suite is not green. CI is green when the head has at
    least one check and none is pending. CI is `none` (the full suite and the fresh
-   review decide alone) only in a repository with no CI at all: no head of this job
-   ever had a check (`ciSeen`), the base has no `.github/workflows/*.yml` and no
-   required status checks (read once per tick; a read error counts as CI), and 10
-   minutes passed since `prAt`. A new head that has no run yet (for example after a
+   review decide alone) only in a repository with no PR CI: no head of this job ever had a
+   check (`ciSeen`), no workflow file of the base tip can run on the PR head
+   (`workflowRunsOnPr`: its `on:` has `pull_request` or `pull_request_target` whose branch
+   filter admits the base, or `push` whose branch filter admits the job branch; GitHub's
+   globs `*`, `**`, `?` and `!`; a workflow with only `repository_dispatch`, a schedule, a
+   release, tags or pushes to other branches, such as the PDD App's dispatch file, is no PR
+   CI), and no required status checks on the base. The workflow files come from `git show
+   origin/BASE:.github/workflows/NAME` after one fetch per tick (no API call); a read error
+   counts as CI. And 10 minutes passed since `prAt`. A new head that has no run yet (for example after a
    refresh) waits for its CI. A pending check still waits, as long as it takes; save `progress`
    first.
 6. **Merge lane** (one final step per repository). A green PR (CI green or none,
@@ -646,8 +665,10 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
 ## END
 
 `END(cause)` takes `{kind, component, code, text, detail}`; kinds are `runtime`
-(no verdict, lint refusal, binding refusal, interpreter error), `pdd` (CLI error,
-crash, claim error, merge-check tool error) and `job` (the agent did not do the
+(as the agent says it; the [report owner](autopilot-reports.prompt.md) keeps only no
+verdict, interpreter error, server incompatibility and a server-side internal error as
+Runtime's, and makes a refusal of our input, such as a lint, interface or binding
+refusal, a PDD report), `pdd` (CLI error, crash, claim error, merge-check tool error) and `job` (the agent did not do the
 task, no progress, red checks). It stops the job's processes and saves phase
 `ending`, then, resumable step by step on later ticks:
 

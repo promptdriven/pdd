@@ -1516,11 +1516,13 @@ Each tick, without AI calls:
    current base tip, and the base check passes. Then
    `gh pr merge --merge --match-head-commit HEAD` merges it, and the issue closes.
    A red check starts one repair job on the same branch while the repairs make
-   progress: each round must fix every finding of the last round, bring back no
-   finding of an earlier round, and within 2 rounds give a smaller or less severe
-   list; `maxRepairs` is the cap. The END comment names the rule that stopped the
-   repairs. Review findings marked P3 never block: they go to a follow-up section in
-   the PR body and one follow-up note on the issue. A
+   progress: each round must fix every finding of the last round and bring back no
+   finding of an earlier round (new, different findings are fine); `maxRepairs` is the
+   cap. The END comment names the rule that stopped the repairs. Review findings marked
+   P3 never block: they go to a follow-up section in the PR body and one follow-up note
+   on the issue. A review FAIL is never a PASS unless all its items are P3, and a PASS
+   that lists a P1 or P2 item is a FAIL. A full suite that waits for a check slot in
+   the machine's suite queue is not quiet. A
    missing or unclear `Runtime:` line is red, unless the job says no prompt
    changed. A non-zero exit of the test command is red; a failure of the suite
    runner itself (it could not start, was killed or timed out) runs the suite again
@@ -1593,7 +1595,10 @@ problem comes back after its report closed, the issue gets `pdd:stuck`. An open 
 of an ended job stays open as a draft, with the cause in a PR comment. A PR whose
 head has no CI check 10 minutes after it was opened merges on the full suite and
 the fresh review alone (its merge comment says `CI: none`) only in a repository with
-no CI at all; a new head of a repository with CI always waits for its CI. To stop a running job, close the issue, assign it or add
+no PR CI: no workflow that runs on `pull_request`, `pull_request_target` or a push to
+the PR branch, and no required status checks. A workflow that runs only on
+`repository_dispatch`, a schedule or pushes to other branches is not PR CI. A new head
+of a repository with PR CI always waits for its CI. To stop a running job, close the issue, assign it or add
 `pdd:stuck`. After three jobs in a row end with no result, Autopilot pauses new
 jobs on this machine for 1 hour and sends one alert ("Autopilot paused new jobs for
 1 h: the agent ended 3 jobs with no result. Check sign-in and limits."). Jobs that
@@ -1612,10 +1617,11 @@ several machines run the core on one repository, each machine's GitHub share is 
 machine over its share starts no new job. A machine that finishes an END or a release
 after a pause writes nothing on an issue that another machine took over.
 
-A Runtime problem (no verdict, interface or binding refusal, interpreter error,
-server compatibility) or a PDD problem (CLI error, crash, claim or merge-check tool
-error, and test vectors: a Runtime case, a scenario value limit such as a value that
-is not a safe integer, a vector replay) also gets one report for its owners: a PDD
+A Runtime problem (inside Runtime after the call: no verdict, an interpreter error,
+server incompatibility, a server-side internal error) or a PDD problem (everything
+that goes into Runtime: a lint, interface or binding refusal of our input, test
+vectors such as a Runtime case, a scenario value limit or a vector replay; and CLI
+errors, crashes, claim or merge-check tool errors) also gets one report for its owners: a PDD
 problem in promptdriven/pdd with label `pdd:autopilot-report`; a Runtime problem in
 `reports.runtimeRepo` when this machine can read it, else in promptdriven/pdd, with
 label `pdd:runtime` (assigned to the Runtime owner). One cause has one report: a
