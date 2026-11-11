@@ -358,7 +358,7 @@ export async function executeSuite(command, { cwd, env, timeoutMs, onChild, onOu
 // The recorder starts no command until its caller has saved its custody.
 async function executeRecordedSuite(command, options, ports) {
   return new Promise((done, reject) => {
-    const child = spawn(process.execPath, [fileURLToPath(new URL('./test-suite-recorder.mjs',import.meta.url))],
+    const child = (ports.spawnRecorder ?? spawn)(process.execPath, [fileURLToPath(new URL('./test-suite-recorder.mjs',import.meta.url))],
       {cwd:options.cwd,env:options.env,detached:true,stdio:['ignore','ignore','ignore','ipc']});
     let terminal = false;
     const cancel = signal => { if (child.connected) child.send({cancel:signal},()=>{}); };
@@ -366,7 +366,8 @@ async function executeRecordedSuite(command, options, ports) {
     process.on('SIGINT',interrupt); process.on('SIGTERM',terminate);
     const cleanup = () => { process.off('SIGINT',interrupt); process.off('SIGTERM',terminate); };
     child.once('error', error => { cleanup(); reject(error); });
-    child.once('exit', () => { cleanup(); if (!terminal) reject(Error('Validation recorder ended without a terminal receipt.')); });
+    // Exit can precede delivery of queued IPC messages; close waits for the channel.
+    child.once('close', () => { cleanup(); if (!terminal) reject(Error('Validation recorder ended without a terminal receipt.')); });
     child.on('message', message => {
       if (message.stream) {
         const output = ports[message.stream] ?? process[message.stream];
