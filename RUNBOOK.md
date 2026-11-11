@@ -189,6 +189,14 @@ within `[-9007199254740991, 9007199254740991]`, or ±(2^53−1). An out-of-range
 names the bad bound's JSON Pointer (for example `/properties/count/maximum`), the declared bound (`bound_text`)
 and the supported range (`supported_integer_range`).
 
+**Large whole numbers.** Write a whole number as plain JSON digits at any size, in a schema and in a test, for
+example `"seconds": 4250129834582680692326400`. Do not put it in quotes, and do not use a fraction or an exponent:
+`4.25e24` is a floating-point number. `"type": "integer"` means any whole number; there is no special format. pdd
+reads, shows, compares and sends the exact digits. The PDD interpreter accepts whole numbers only within
+±(2^53−1). Outside it, lint refuses the test before execution (`scenario-integer-out-of-range`, 0 AI calls). Do not
+change the input type or the expected value to fit the interpreter: the repository's own vector test (§17) still
+checks the case.
+
 For an optional input field, leave it out of `required`. Do not use `oneOf` with `null` for it: the Simulator's form shows
 `oneOf` only as a raw JSON box. A correct schema (`read` is optional):
 ```json
@@ -790,6 +798,10 @@ In verify after the last commit, run one `pdd workflow prove <run> --test "<comm
 - In `build`, write one replay test in the repo's own test runner (for example `test/<story>.vectors.test.mjs`).
   It reads the JSON file when it runs, and for each step it calls the real public boundary named by `operation`
   (function, command or route). Steps run in order and share state, as on the interpreter.
+- Read whole numbers exactly. `JSON.parse` rounds a whole number above 2^53 without a sign; read the file with
+  `JSON.parse(text, (key, value, context) => typeof value === 'number' && /^-?(?:0|[1-9][0-9]*)$/.test(context.source) && !Number.isSafeInteger(value) ? BigInt(context.source) : value)`.
+  Give a Number parameter `Number(value)` only when `BigInt(Number(value)) === value`; otherwise the case fails.
+  Compare an integer result as a BigInt. See [exact whole numbers](docs/replay-evidence.md#exact-whole-numbers).
 - Map each check target: `result` → the returned value at the path; `error` → the error code; `world` → the app's
   store after the step, seeded from `initial_world`; `calls` → a spy count. A target you cannot map is
   "Not replayed", with the reason. It is never a pass. Missing checks and unexecuted operations are not replayed.
