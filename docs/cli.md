@@ -166,7 +166,7 @@ Run Autopilot commands inside the repo folder. Each repo has its own Autopilot o
 | Command | What it does |
 |---|---|
 | `pdd autopilot doctor` | Read-only prerequisite checks, one line and a command per item. No GitHub writes or AI calls. Exit 1 for a required failure, 0 when only warnings remain |
-| `pdd autopilot start [--runs N] [--checks N] [--engine core\|full] [--label NAME] [--mode auto\|observe\|off] [--report file\|draft\|off] [--intake off\|shadow] [--resume-custody FILE]` | Check sign-ins and the running pdd version, open a dedicated interactive Herdr session (not with the [core engine](#core-engine)) and check for work immediately. A user timer checks again every 30 minutes (every 10 minutes with the core engine; `pdd autopilot status` shows the interval). `--runs` overrides the open-run cap. `--checks` overrides heavy-check slots. Omission uses machine capacity. `--engine core` or `--engine full`, `--label NAME`, `--mode auto\|observe\|off` and `--report file\|draft\|off` and `--intake off\|shadow` (core engine only) save this machine's engine, opt-in label, mode, report mode and [intake mode](#intake-cards-shadow) for this repo; they win over `pdd.json`, and a later start without them keeps them. The report mode is `draft` unless you choose `--report file`. `--resume-custody` supplies the verified original-owner projection for explicit recovery |
+| `pdd autopilot start [--runs N] [--checks N] [--engine core\|full] [--label NAME] [--mode auto\|observe\|off] [--report file\|draft\|off] [--decisions ask\|decide] [--intake off\|shadow] [--resume-custody FILE]` | Check sign-ins and the running pdd version, open a dedicated interactive Herdr session (not with the [core engine](#core-engine)) and check for work immediately. A user timer checks again every 30 minutes (every 10 minutes with the core engine; `pdd autopilot status` shows the interval). `--runs` overrides the open-run cap. `--checks` overrides heavy-check slots. Omission uses machine capacity. `--engine core` or `--engine full`, `--label NAME`, `--mode auto\|observe\|off`, `--report file\|draft\|off`, `--decisions ask\|decide` and `--intake off\|shadow` (core engine only) save this machine's engine, opt-in label, mode, report mode, decision mode and [intake mode](#intake-cards-shadow) for this repo; they win over `pdd.json`, and a later start without them keeps them. The report mode is `draft` unless you choose `--report file`. `--resume-custody` supplies the verified original-owner projection for explicit recovery |
 | `pdd autopilot stop` | Disable this repo's timer on this machine and let the current agent step finish |
 | `pdd autopilot audit RUN PR` | Audit a confirmed automatic merge once with a fresh configured agent. Save OK, CONCERN or BAD and the separate revert recommendation with the run. Post the evidence once on the issue. BAD opens a revert PR only when recommended; otherwise it keeps the merge and reopens the issue with the missing parts. One decision alert states the recommendation and choices. Unknown external outcomes require inspection before any retry. |
 | `pdd autopilot check-base RUN PR` | Read the saved run and exact PR target, then check that its base contains the current default branch and newest published release tag, including prereleases. A refusal explains the reason and exits 1. Use this before an automatic merge and after it for the base audit. It makes no GitHub writes |
@@ -1483,7 +1483,16 @@ opt-in label and `--mode auto|observe|off` the mode the same way, on this machin
 only (`pdd autopilot observe` changes `pdd.json` instead). The machine values win over
 `pdd.json`, and `pdd autopilot status` says where the engine, the label and the mode
 come from. `--report file|draft|off` sets where this machine's problem reports go,
-the same way. `--mode off` saves the mode and stops the timer of this machine. In
+the same way. `--decisions ask|decide` (or `autopilot.decisions` in `pdd.json`) sets
+whether a job may ask a person a question: `ask` asks only for a big decision of the
+repository (the issue does not settle it, it has 2 or more reasonable answers that
+users see, and it is hard to undo or others depend on it: a public contract, behavior
+that users rely on, or a product direction), as one plain question with 2 or 3 options
+and a recommended one, so you can answer with one letter; `decide`, the default for
+now, never asks. In both modes Autopilot decides small things itself (internal names,
+code structure, tests, wording, small defaults) and lists each choice in the PR under
+"Choices Autopilot made", with its reason; with `decide`, big choices are listed there
+too, marked "(big)". `--mode off` saves the mode and stops the timer of this machine. In
 `observe` mode the core does everything except the merge (it also records the
 operator approval of changed prompts, with "in observe mode" in its words; in a
 `strict_approvals` repository it asks no person and lists those prompts in its note): when all checks pass, it
@@ -1570,9 +1579,16 @@ Each tick, without AI calls:
    When `pdd-bindings.json` on the base branch cannot be read, the PR is not red: its
    merge waits, and after the quiet period the run ends with one report. Existing code
    that no prompt owns changes directly with a regression test, and when the PR passed
-   every check, Autopilot files one report that proposes adopting PDD for it. The job writes one
-   `Runtime:` line and one `Evidence:` line in the PR
-   body. It writes no review verdict: only the fresh reviewer gives one. In `auto` and
+   every check, Autopilot files one report that proposes adopting PDD for it. A config
+   or metadata file (`package.json`, a lock file, CI settings) needs no prompt, and the
+   review never asks for a new prompt for one. The job writes one `Runtime:` line for each changed
+   Story, the verdict first and the Story file path first in the parentheses
+   (`Runtime: PASS (STORY, N/N checks)`, `Runtime: FAIL (STORY, N of M checks failed:
+   STEPS)` or `Runtime: not run (STORY: REASON)`), and one `Evidence:` line in the PR
+   body ([RUNBOOK §15, "Autopilot core jobs"](../RUNBOOK.md#autopilot-core-jobs)). A
+   single line with no Story is valid only when the PR changes one Story or none. Two
+   lines for the same Story are red. It writes no review verdict: only the
+   fresh reviewer gives one. In `auto` and
    `observe` mode your `pdd autopilot start` is the approval of the job's prompt
    changes: the job records it for each changed prompt with `pdd approve PROMPT --said
    -` and the words "Operator action: pdd autopilot start --engine core in MODE mode for
@@ -1583,18 +1599,33 @@ Each tick, without AI calls:
    (`pdd:needs-decision`) and keeps the PR open; in `observe` mode it asks no one and
    lists those prompts in its "would merge" note.
 
-Only a real Runtime FAIL blocks a merge. When Runtime cannot check a change (a lint
-refusal, no interface, a scenario limit, no verdict), the job still ships its PR with
-native tests and `Runtime: not run (reason)`, and Autopilot files or counts one
-report for that cause. The `Evidence:` line has a fixed form, for example
-`Evidence: runtime=pass (11/11); vectors=not-run; formal=bounded; tests=pass (42/42)`.
+Only a real Runtime FAIL blocks a merge. A failed check is a FAIL, also when its check
+has no verdict because another step had no answer. When Runtime cannot check a change
+(a lint refusal, no interface, no verdict with no failed step, a scenario limit that pdd
+gives no fix for), the job still ships its PR with native tests and `Runtime: not run
+(STORY: REASON)`, and Autopilot files or counts one report for that cause. A value that is not
+a safe integer is no such reason: pdd prints its exact Number spelling, and the job
+applies that fix and checks again. During announced maintenance the job does not wait:
+pdd has sent nothing yet, so the job stops it and writes `Runtime: not run (STORY:
+maintenance until HH:MM UTC)` for each Story that pdd did not send, with the end time
+that pdd printed. Autopilot sends the check itself
+when maintenance ends and rewrites the line. A job never cuts short a check that pdd has
+already sent. "Changed" means changed against the base (`git diff origin/BASE...HEAD`),
+never since the previous PR head: a Story that a merge from the base brought in is not
+changed. A job that merges the base into its branch checks that its fix is still
+needed: when the PR's changed tests also pass on the code of the new merge base, the
+base already holds the fix, and the job keeps only what the base does not hold.
+The `Evidence:` line has a fixed form, for example
+`Evidence: runtime=pass (11/11); vectors=pass (36/36); formal=bounded; tests=pass (42/42)`.
+`vectors` counts the replay files that the PR changes or that read a changed scenario
+file, in `node:test` tests (not steps or checks).
 Autopilot keeps only the known parts, saves them in its local history and repeats
 them in the merge comment. The claims must be true. A Runtime pass (`Runtime: PASS`,
 `runtime=pass` or the result's runtime state) counts only when the saved `pdd test`
 checks cover every changed prompt, Story and Story test at the PR head, compared with a
 clean checkout of that head (files that are not committed never count; the latest check
 of a Story decides; a PASS of other Stories does not count; write `Runtime: not run
-(reason)` for a native-only prompt or a Story with no Runtime test). A repair that only
+(STORY: REASON)` for a native-only prompt or a Story with no Runtime test). A repair that only
 runs `pdd test` again is read again. Autopilot also runs, at the PR head, every changed
 replay (`*.vectors.test.*`) and formal (`*.formal.test.*`) file and every vector file
 that names a changed scenario, if it is a `node:test` JavaScript file (other files are
@@ -1606,12 +1637,13 @@ test) is red once per job; after that Autopilot never repeats it: the merge comm
 the history write that kind as `not-run (Autopilot could not check: reason)`, and
 Autopilot files one report.
 
-A build job asks one question instead of choosing when the issue does not settle a
-product, contract or public naming choice (its brief lists the other open issues by
-trusted authors, so it can see an open decision); it opens no PR then. The fresh review also checks that the
-change makes no such choice (for example one option of an open decision issue that the
-change touches). Such a finding is not repaired: Autopilot asks the one question
-instead (in `observe` mode too), and the PR waits for the answer. The next build and
+With `--decisions ask`, a build job asks one question instead of choosing when it meets
+a big decision (its brief lists the other open issues by trusted authors, so it can see
+an open decision); it opens no PR then. The fresh review also checks the PR's list of
+choices, and with `ask` it flags a big choice that the job made instead of asking (for
+example one option of an open decision issue that the change touches). Such a finding
+is not repaired: Autopilot asks the one question instead (in `observe` mode too), and
+the PR waits for the answer. The next build and
 review read the answer, so a settled choice is not asked again.
 
 When a job needs a person's decision, Autopilot posts its one question on the issue,
