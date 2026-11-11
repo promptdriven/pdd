@@ -27,6 +27,12 @@ lowest `memory.max` or `memory.high` of all levels, and `memoryFree` the lowest 
 0 (each null when no level has a limit). Elsewhere `cgroup` is `{cpus: null,
 memoryMax: null, memoryFree: null}`. Each read is bounded (a 2 s spawn timeout) and a
 failed read is null.
+Export `readAutopilotUse(ports)` for the machine guard: one process table read (`ps -A
+-o pid=,ppid=,rss=,pcpu=,command=`, `ports.spawnSync`, 5 s timeout) and the sum over
+every Autopilot job on this machine, of any repository: each process whose command has
+`agent-job.mjs --wrapper` and all its descendants by parent pid, each counted once. It
+returns `{processes, wrappers, rss, cores}` (rss in bytes from KiB; cores = %CPU ÷ 100,
+two decimals), or null when the table cannot be read.
 When `ports.includeChecks` is true, add `check:{cpuIds,platform,battery,virtualized,taskset}`.
 CPU IDs are the allowed Linux affinity IDs, else available parallelism indices.
 Battery detection uses Linux power-supply types. Virtualization is true only after

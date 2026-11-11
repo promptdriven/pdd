@@ -1,4 +1,4 @@
-// Generated from prompts/cli/machine-resources.prompt.md (sha256: 36738c038c1b9ef2cceb79ca92f57d1438da78f5b6630d919d1e50cea812fd28).
+// Generated from prompts/cli/machine-resources.prompt.md (sha256: 9bd70397290ec4f6da93d360f8ce25237da90c79703e21369cd0debf70bafab0).
 import * as files from 'node:fs';
 import { readFileSync, statfsSync } from 'node:fs';
 import { join, isAbsolute } from 'node:path';
@@ -45,6 +45,25 @@ export async function readMachineResources({ cwd } = {}, ports = {}) {
     ...(guard ? { cgroup: guard.cgroup } : {}) };
 }
 const run = (ports, name, file, args) => String((ports[name] ?? (() => spawnSync(file, args, { encoding: 'utf8', timeout: 2000 }).stdout))() ?? '');
+// The CPU and memory that all Autopilot jobs on this machine use now (#3231, every repository): each job wrapper
+// (agent-job.mjs --wrapper) and its process tree, from one process table read. rss in bytes, cores = %CPU / 100.
+export function readAutopilotUse(ports = {}) {
+  const table = (ports.spawnSync ?? spawnSync)('ps', ['-A', '-o', 'pid=,ppid=,rss=,pcpu=,command='], { encoding: 'utf8', timeout: 5000 });
+  if (table.status !== 0) return null;
+  const rows = String(table.stdout).split('\n').map(line => /^\s*(\d+)\s+(\d+)\s+(\d+)\s+([\d.]+)\s+(.*)$/.exec(line)).filter(Boolean)
+    .map(([, pid, ppid, rss, cpu, command]) => ({ pid: Number(pid), ppid: Number(ppid), rss: Number(rss) * 1024, cpu: Number(cpu) / 100, command }));
+  const children = new Map();
+  for (const row of rows) children.set(row.ppid, [...(children.get(row.ppid) ?? []), row]);
+  const wrappers = rows.filter(row => /agent-job\.mjs\s+--wrapper\s/.test(row.command)), seen = new Set();
+  let rss = 0, cores = 0;
+  for (const queue = [...wrappers]; queue.length && seen.size < 20000;) {
+    const row = queue.shift();
+    if (seen.has(row.pid)) continue;
+    seen.add(row.pid); rss += row.rss; cores += row.cpu;
+    queue.push(...(children.get(row.pid) ?? []));
+  }
+  return { processes: seen.size, wrappers: wrappers.length, rss, cores: Math.round(cores * 100) / 100 };
+}
 function macPressure(ports) {
   const text = (ports.sysctl ? String(ports.sysctl('kern.memorystatus_vm_pressure_level') ?? '') : run(ports, 'sysctl', 'sysctl', ['-n', 'kern.memorystatus_vm_pressure_level'])).trim();
   return /^\d+$/.test(text) ? Number(text) : null;

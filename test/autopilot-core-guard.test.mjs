@@ -100,3 +100,39 @@ test('status shows the guard line from the launcher', async t => {
   assert.match(text, /\nMachine: share 50% \(default\) · … · new work: held \(memory pressure\)\n/);
   assert.doesNotMatch(coreStatus({ state: w.state, settings: w.settings }, { root: w.root, now: w.now }), /Machine:/);
 });
+
+test('the share is for the whole machine: with 2 repositories the jobs of both count, so 2 repositories never get 4 + 4', async t => {
+  for (const [other, started, held] of [[3, 1, null], [4, 0, /intake held: 4 of 4 Autopilot jobs on this machine run \(all repositories, 50% share\)/]]) {
+    const w = await coreWorld(t);
+    writeFileSync(join(w.cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', trust: [], engine: 'core', testCommand: 'npm test' } }));
+    for (const n of [17, 18, 19]) w.issue(n);
+    const cwd = w.git(w.cwd, 'rev-parse', '--show-toplevel'), stateRoot = join(w.dir, 'state');
+    const stateFile = join(stateRoot, `${createHash('sha256').update(cwd).digest('hex').slice(0, 20)}.json`);
+    mkdirSync(stateRoot, { recursive: true });
+    writeFileSync(stateFile, JSON.stringify({ enabled: true, cwd, repo: 'acme/widgets', defaultBranch: 'main', coordinatorId: 'coord-a', machine: 'machine-a',
+      agent: { id: 'codex', kind: 'codex', command: 'codex' }, packageRoot: join(w.dir, 'pkg') }));
+    // A second enabled repository on this machine (the sandbox beside pdd) with OTHER jobs that hold a slot, and a
+    // stopped one whose leftover job file does not count.
+    const sandbox = join(stateRoot, 'sandbox.json'), stopped = join(stateRoot, 'stopped.json');
+    writeFileSync(sandbox, JSON.stringify({ enabled: true, cwd: '/elsewhere', repo: 'acme/sandbox', engine: 'core' }));
+    writeFileSync(stopped, JSON.stringify({ enabled: false, cwd: '/old', repo: 'acme/old', engine: 'core' }));
+    for (const [file, n] of [[sandbox, other], [stopped, 4]]) {
+      const jobs = join(file.replace(/\.json$/, '-core'), 'jobs'); mkdirSync(jobs, { recursive: true });
+      for (let i = 1; i <= n; i++) writeFileSync(join(jobs, `${i}.json`), JSON.stringify({ issue: i, phase: i === 1 ? 'pr' : 'running', role: 'build' }));
+    }
+    const vm = { cpuCount: 64, load: 1, memory: { available: 200 * GiB, total: 251 * GiB }, pressure: { io: 0, memory: 0, level: null }, disk: { available: 500 * GiB, total: 1000 * GiB },
+      cgroup: { cpus: null, memoryMax: null, memoryFree: null }, check: { cpuIds: Array.from({ length: 64 }, (_, i) => i), platform: 'linux', battery: false, virtualized: true, taskset: '/usr/bin/taskset' } };
+    const reads = [];
+    const ports = { stateRoot, now: w.now, env: { HOME: process.env.HOME, PATH: process.env.PATH }, timer: async () => true, warn: () => {},
+      machineGuard: input => { reads.push(input); return readMachineGuard(input, { machineResources: async () => vm, autopilotUse: async () => ({ rss: 2 * GiB, cores: 2 }) }); },
+      run: async (command, args, options = {}) => {
+        if (command === 'gh') return w.gh(args, options);
+        const { spawnSync } = await import('node:child_process'); const r = spawnSync('git', args, { cwd: options.cwd ?? cwd, encoding: 'utf8' }); return { code: r.status, stdout: r.stdout, stderr: r.stderr };
+      },
+      corePorts: { jobs: w.jobs, checkBase: async () => ({ exitCode: 0, message: 'ok' }), agentReady: async () => true } };
+    const result = await tickAutopilot(stateFile, ports);
+    assert.equal(reads[0].jobs, other, 'the jobs of the other enabled repository count; a stopped one does not');
+    assert.equal(w.started.filter(job => job.role === 'build').length, started, `${other} jobs elsewhere: ${started} new here, though this repository has 4 slots of its own`);
+    if (held) assert.match(result.message, held); else assert.match(result.message, /1 started.*1 of 4 slots busy/);
+  }
+});

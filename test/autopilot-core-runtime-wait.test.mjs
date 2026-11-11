@@ -225,3 +225,21 @@ test('per-Story lines limit the resend to the Stories that a "not run" line name
   answer(w, 17, 0, 'passed', ['b']); await w.tick();
   assert.equal(pr.body.match(/^Runtime:.*$/gm).join('|'), `Runtime: PASS (${STORY}, 3/3 checks)|Runtime: PASS (user_stories/b.md, 3/3 checks)`);
 });
+
+// #3241 case 1: a changed Story with no Runtime test is red, unless every changed prompt is native-only.
+for (const [kind, red] of [['port', true], ['native-only', false]]) test(`case 1: a new Story with no Runtime test and a changed ${kind} prompt ${red ? 'is red' : 'is no such red'}`, async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17);
+  await w.tick();
+  const cwd = w.job(17, 'build').cwd;
+  mkdirSync(join(cwd, 'user_stories'), { recursive: true }); mkdirSync(join(cwd, 'prompts'), { recursive: true });
+  writeFileSync(join(cwd, 'user_stories/format-bytes.md'), 'As a person, I want bytes formatted, so that I can read them.\n\n## Acceptance criteria\n\n1. `format 1024` prints "1 KiB".\n');
+  const block = kind === 'native-only' ? { status: 'draft', prose_sha256: '', kind: 'native-only', reason: 'it writes the real terminal' } : { status: 'draft', prose_sha256: '', entries: [], calls: [], resources: [], limits: { max_steps: 1, max_model_calls: 0 }, conventions: [] };
+  writeFileSync(join(cwd, 'prompts/format.prompt.md'), `# Format\n\nFormat bytes.\n\n<details><summary>Runtime interface</summary>\n\n\`\`\`json\n${JSON.stringify(block)}\n\`\`\`\n\n</details>\n`);
+  w.build(17, { body: 'Fixes #17\n\nRuntime: not run (user_stories/format-bytes.md: no Runtime test)', runtime: { state: 'not-run', kind: 'runtime', code: 'no-test', cause: 'no Runtime test' } });
+  await w.tick();
+  const repair = w.job(17, 'repair');
+  assert.ok(repair, 'a repair starts (the draft prompt also needs its approval)');
+  const caseOne = /This PR changes user_stories\/format-bytes\.md, with no Runtime test: user_stories\/format-bytes\.md has no test: expected .*format-bytes\.json.* A missing test is not a reason for "Runtime: not run": write the Runtime test/;
+  if (red) assert.match(repair.input, caseOne); else assert.doesNotMatch(repair.input, /with no Runtime test: /);
+});

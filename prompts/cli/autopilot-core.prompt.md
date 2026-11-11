@@ -289,8 +289,12 @@ Intake is held, and nothing is claimed, when the saved agent is not Codex or
 Claude, when `ports.agentReady()` is false at the first ready issue (for example a
 Codex usage limit), while a machine pause runs (below), or when the machine has no
 room (#3231): `ports.machine.room` (the [machine guard](machine-guard.prompt.md)'s
-`machineRoom` for Autopilot's share, read by the launcher each tick) is not ok. The tick
-message then says `intake held: REASON`, for example `intake held: memory pressure`. Running work goes
+`machineRoom` for Autopilot's share of the whole machine, read by the launcher each tick
+with the jobs of every repository of this machine) is not ok. The tick message then says
+`intake held: REASON`, for example `intake held: 4 of 4 Autopilot jobs on this machine
+run (all repositories, 50% share)`. With room, intake claims at most `room.free` issues,
+the jobs that the machine's share still allows. `busySlots(root, fs)` (exported) is the
+number of slot-holding jobs in one core folder; the launcher sums it. Running work goes
 on; the room check never stops a job and never counts as no progress.
 
 **No result is a machine fault first.** An agent that exited with no result, a start
@@ -696,8 +700,8 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    source ran T; the source of S
    could not be read: CAUSE). A PASS of other Stories does not count. Run pdd test for
    the Stories of these changes at this head, or write "Runtime: not run (REASON)" (and
-   runtime=not-run) when they have no Runtime check (for example a native-only prompt or
-   a Story with no Runtime test)." CLAIM names each claim, for example `The PR body says
+   runtime=not-run) when they have no Runtime check (for example a native-only
+   prompt)." CLAIM names each claim, for example `The PR body says
    "Runtime: PASS"`. A PR that changes no prompt, no Story and no Story test needs no
    coverage. A reader error (for example `findTests` throws, or the clean checkout cannot
    be made) is red with its cause, never a tick error. The reader is a port: `ports.runtimeEvidence({root, tree, head}, ctx)`
@@ -745,7 +749,18 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    of the PR (with an issue that asks to "adopt PDD", any changed file); R4 a file of the
    base with no owner that the head gives a binding or header (unless the issue asks to
    adopt PDD); R6 no `Path:` line. R5 is only a hint for the reviewer: prompts at the head
-   that mention a changed unowned file. Then a
+   that mention a changed unowned file. **A changed Story with no Runtime test (#3241
+   case 1, once per agent head, saved as `untested`):** each Story whose Story file
+   changed against the base and that `findTests` at the clean head checkout lists as
+   untested (`untested`, fixture projects excluded) is red, with pdd's "has no test:
+   expected …" line: "A missing test is not a reason for "Runtime: not run": write the
+   Runtime test for each such Story (in test/runtime/ or tests/runtime/ when the
+   repository keeps its own tests in test/ or tests/), one step for each of its criteria,
+   and run pdd test; or, when bound ports cannot fake the effect, mark the owning
+   prompt's interface native-only with a reason." It is not red when the PR changes at
+   least one prompt and every changed prompt's interface is `native-only` (the Story is
+   checked natively). A read error adds no red (the T01 read names it). The reader is a
+   port, `ports.untestedStories(tree)` → `{untested, visible}`. Then a
    failed CI check
    (check runs and commit statuses of the head; neutral and skipped pass); else
    a review FAIL or a failed suite. With no red finding yet, start the review and
@@ -1103,7 +1118,8 @@ REST calls use `gh api --include --method M ENDPOINT [--input -]`. Also `now()`,
 `fs`, `root`, `reportRoot`, `env`, `version` (the PDD version), `listIssues()`,
 `trusted(row)`, `agentReady()`, `warn(text)`, `alert({issue, kind, text, tried, need, update})`,
 `machine` (`{room, priority(role)}` of the [machine guard](machine-guard.prompt.md); absent: no
-room check and the job runner's default priority), `runtimeHealth()` (default `checkRuntimeHealth({env})`) and `resendChecks({root, since})`
+room check and the job runner's default priority), `untestedStories(tree)` (default
+`findTests` of the preflight), `runtimeHealth()` (default `checkRuntimeHealth({env})`) and `resendChecks({root, since})`
 (default `resendableStoryChecks` with `env`) of the runtime client, and the replaceable `jobs`
 (`start`, `read`, `stop`), `owners(numbers)`, `heartbeat(job)` and `checkBase(input)`
 with the native defaults named above.

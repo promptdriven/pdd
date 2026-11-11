@@ -9,7 +9,7 @@ import { configureCheckCapacity, releaseCheckCapacity, readCheckStatus, readSuit
 import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: d1b3367469931d57174c1a08332c7fd01e9103a44954d6887d2cb1397e8064af).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 88de77b8fb50cd3bda3c53f83c89baff7af4c166a6a8a9dc9643b7f699333bdc).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -41,7 +41,7 @@ import { lookupRepositoryParent, githubOriginRepository } from './workflow-workt
 import { costReport, costStatusLines } from './cost-ledger.mjs';
 
 import { selectAutopilotBase, checkAutopilotBase } from './autopilot-base.mjs';
-import { readCoreSettings, tickCore, coreStatus } from './autopilot-core.mjs';
+import { readCoreSettings, tickCore, coreStatus, busySlots } from './autopilot-core.mjs';
 import { readMachineGuard, timerPriority, validShare } from './machine-guard.mjs';
 import { listReportDrafts, sendReportDraft } from './autopilot-reports.mjs';
 import { intakeMode, readIntake, intakeText, stopCardJobs } from './autopilot-intake.mjs';
@@ -1557,9 +1557,17 @@ const coreRoot = stateFile => stateFile.replace(/\.json$/, '-core');
 const coreReports = (ports, env) => join(stateFolder(ports, env), 'core-reports');
 // #3231: the machine guard reads this machine once: Autopilot's share of it (start --share, default 50%), the slots
 // (this machine's --runs wins), the room for new work and the priority of each job.
-async function coreGuard(state, p, ports) {
+async function coreGuard(state, p, ports, stateFile) {
   const repoRuns = read(join(state.cwd, 'pdd.json'), {})?.autopilot?.runs;
-  return (ports.machineGuard ?? readMachineGuard)({ cwd: state.cwd, runs: state.runs, repoRuns, share: state.share }, { env: p.env });
+  return (ports.machineGuard ?? readMachineGuard)({ cwd: state.cwd, runs: state.runs, repoRuns, share: state.share, jobs: machineJobs(stateFile) }, { env: p.env });
+}
+// The jobs that hold a slot now in every enabled repository of this machine (the core folders beside the state files).
+function machineJobs(stateFile) {
+  const folder = dirname(stateFile);
+  let names = [];
+  try { names = readdirSync(folder); } catch { return 0; }
+  return names.filter(name => name.endsWith('.json') && read(join(folder, name), null)?.enabled === true)
+    .reduce((sum, name) => sum + busySlots(coreRoot(join(folder, name))), 0);
 }
 // pdd autopilot start --share N: the percent of this machine's CPU and memory that Autopilot may use, saved for this
 // repository on this machine; a later start without it keeps it.
@@ -1571,7 +1579,7 @@ function shareOption(command, input, state) {
   return null;
 }
 async function coreTick(stateFile, state, p, ports) {
-  const guard = await coreGuard(state, p, ports);
+  const guard = await coreGuard(state, p, ports, stateFile);
   const core = readCoreSettings(state.cwd, undefined, { auto: guard.auto, runs: state.runs });
   if (machineLabel(state)) core.label = machineLabel(state);
   if (machineMode(state)) core.mode = machineMode(state);
@@ -2575,7 +2583,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
       return ok(input.json ? JSON.stringify({ repository: state.repo ?? null, intake: machineIntake(state), ...report }, null, 2) : `Intake: ${machineIntake(state)} on this machine.\n${intakeText(report)}`);
     }
     if (command === 'status' && engineOf(state).engine === 'core') {
-      const timerActive = Boolean(await timer('status', state, p)), guard = await coreGuard(state, p, ports);
+      const timerActive = Boolean(await timer('status', state, p)), guard = await coreGuard(state, p, ports, stateFile);
       const settingsNow = readCoreSettings(state.cwd, undefined, { auto: guard.auto, runs: state.runs });
       const label = machineLabel(state) ?? settingsNow.label;
       if (machineMode(state)) settingsNow.mode = machineMode(state);

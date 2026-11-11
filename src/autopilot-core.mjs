@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: ffb8a6e952e2359ba938187a7450b9b69cd7f9c4431d5b41487e19f9649024fd).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: a06ec1033c585ab4dc2a5b210cb7f914648046d14f2617c21d5942d02e962980).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -178,6 +178,9 @@ function readJobs(fs, root) {
 // (merge check or END decision) is not yet handled; a job that only finishes its END writes holds none.
 // A job whose Runtime step waits for the interpreter maintenance runs no process: it holds no slot (#3241).
 const holdsSlot = job => job.phase !== 'ending' && !runtimeWaiting(job);
+// The slots that the jobs of one core folder hold now: the machine guard sums them over every repository of this
+// machine (#3231). An unreadable folder holds none.
+export function busySlots(root, fs = nativeFs) { try { return readJobs(fs, root).filter(holdsSlot).length; } catch { return 0; } }
 // One bad line (a cut append after a power loss or a full disk) is skipped; it never hides the other lines.
 function readHistory(fs, root, count = 5) {
   let text = '';
@@ -493,7 +496,7 @@ function workRules(ctx, job) {
 3. Tests. When the change alters what a person or program gets through the repo's public surface (a return value, error, output, exit code, written file, export, command or script), add a test through that surface that fails on base. For any other change, add no test: run the issue's done check and record the command and its result.
 4. In the PR body, write one line for each path that you use: \`Path: <a|b|c|d|e> — <files> — <owner or unowned> — <prompt changed | quote file:line | no contract change | new prompt> — Test: <file | done check>\`. The prompt and the code may be in one commit. Never rewrite history to change the commit order.
 5. Run focused tests for the changed behavior. Do not wait for CI and do not run the full test suite. Autopilot runs both after you finish (the full test command of this repository is \`${settings.testCommand ?? 'not set'}\`). When you run tests or builds, pass \`$PDD_CHECK_CPUS\` as the worker count (for example \`node --test --test-concurrency=$PDD_CHECK_CPUS\`, \`pytest -n $PDD_CHECK_CPUS\`, \`cargo test -j $PDD_CHECK_CPUS\`): it is this machine's share for Autopilot.
-6. Runtime (RUNBOOK §15 "Autopilot core jobs"). Changed means changed against the base: \`git diff --name-only origin/${state.baseBranch}...HEAD\`, never since the previous PR head. A Story or prompt that a merge from the base brought in is not changed. A changed Story is a Story whose Story file or test file changed, or whose test reaches a changed prompt. Commit every change, then run \`pdd test\` for each changed Story (pdd: ${process.execPath} ${ctx.pdd}; \`pdd\` on PATH is the same). Write one \`Runtime:\` line for each changed Story, the verdict first and the Story in the parentheses: \`Runtime: PASS (STORY, N/N checks)\`, \`Runtime: FAIL (STORY, N of M checks failed: STEPS)\` or \`Runtime: not run (STORY: REASON)\`. STORY is the Story file path, as \`git diff\` shows it. A single line with no Story is valid only when the PR changes one Story or none. Two lines for the same Story are red. A PASS of a Story that the PR does not change never counts. A FAIL line blocks the merge: fix the code until it passes. A failed check is a FAIL, also when its check has no verdict. Find the cause and fix it. Never write a failed check as \`not run\`. \`not run\` is only for a cause that this PR cannot fix: a native-only prompt, a Story with no Runtime test, no verdict with no failed step, or a refusal that pdd gives no fix for. A refusal with a fix from pdd is this PR's work. For example, a whole number outside the interpreter's range: apply the Number spelling that pdd prints and check again. Do not wait for maintenance. When pdd prints that the interpreter is in maintenance, it has sent nothing yet. Stop pdd then. For each changed Story that pdd did not send, write \`Runtime: not run (STORY: maintenance until HH:MM UTC)\` with the end time that pdd printed. Autopilot sends the check itself when maintenance ends and rewrites the line. Never send it again yourself. Never cut short a check that pdd has already sent. When Runtime could not check, do not stop and do not invent an interface: cover the case with native tests, ship the PR with the \`not run\` line, and put that reason and the tool's error in the result's runtime (kind "runtime"). Autopilot files one report for it.
+6. Runtime (RUNBOOK §15 "Autopilot core jobs"). Changed means changed against the base: \`git diff --name-only origin/${state.baseBranch}...HEAD\`, never since the previous PR head. A Story or prompt that a merge from the base brought in is not changed. A changed Story is a Story whose Story file or test file changed, or whose test reaches a changed prompt. Commit every change, then run \`pdd test\` for each changed Story (pdd: ${process.execPath} ${ctx.pdd}; \`pdd\` on PATH is the same). Write one \`Runtime:\` line for each changed Story, the verdict first and the Story in the parentheses: \`Runtime: PASS (STORY, N/N checks)\`, \`Runtime: FAIL (STORY, N of M checks failed: STEPS)\` or \`Runtime: not run (STORY: REASON)\`. STORY is the Story file path, as \`git diff\` shows it. A single line with no Story is valid only when the PR changes one Story or none. Two lines for the same Story are red. A PASS of a Story that the PR does not change never counts. A FAIL line blocks the merge: fix the code until it passes. A failed check is a FAIL, also when its check has no verdict. Find the cause and fix it. Never write a failed check as \`not run\`. \`not run\` is only for a cause that this PR cannot fix: a native-only prompt, no verdict with no failed step, or a refusal that pdd gives no fix for. A changed Story with no Runtime test is no such cause: write its Runtime test (one step for each criterion) and run pdd test, or mark the owning prompt's interface native-only with a reason. A refusal with a fix from pdd is this PR's work. For example, a whole number outside the interpreter's range: apply the Number spelling that pdd prints and check again. Do not wait for maintenance. When pdd prints that the interpreter is in maintenance, it has sent nothing yet. Stop pdd then. For each changed Story that pdd did not send, write \`Runtime: not run (STORY: maintenance until HH:MM UTC)\` with the end time that pdd printed. Autopilot sends the check itself when maintenance ends and rewrites the line. Never send it again yourself. Never cut short a check that pdd has already sent. When Runtime could not check, do not stop and do not invent an interface: cover the case with native tests, ship the PR with the \`not run\` line, and put that reason and the tool's error in the result's runtime (kind "runtime"). Autopilot files one report for it.
 7. Put exactly one Evidence line in the PR body and the same text as "evidence" in the result: "Evidence: runtime=<pass|fail|not-run> (<passed>/<total>); vectors=<pass|fail|not-run> (<passed>/<total>); formal=<proved|bounded|failed|not-run|not-applicable>; tests=<pass|fail> (<passed>/<total>)". runtime is pdd test on the changed Stories; \`vectors=\` counts the replay files (\`*.vectors.test.*\`) that the PR changes or that read a changed scenario file: count \`node:test\` tests (the \`# tests\` and \`# pass\` lines), not steps or checks, for example \`vectors=pass (36/36)\` (Autopilot runs the same files and compares the counts); formal the changed formal tests; tests your focused tests. Give the counts you saw, and leave out a count you did not see.
 8. Do not write a review verdict or any review claim (for example "Review: no must-fix" or "Independent review: …") in the PR body or a comment. Only Autopilot's fresh reviewer gives a review verdict.
 ${approving(ctx) && !strictRepo(ctx, job) ? `9. Approval: in ${settings.mode} mode the operator's start is the approval of your prompt changes. For each *.prompt.md you changed, after its checks pass, record it with the native command and commit the result in the PR: printf '%s' ${quote(approvalWords(ctx))} | pdd approve PROMPT --said -
@@ -911,6 +914,8 @@ async function intake(ctx, rows) {
   // #3231: the one room check before new work (memory, disk and load, for Autopilot's share). Running work goes on.
   const room = ctx.ports.machine?.room;
   if (room && !room.ok) return `intake held: ${room.reason}`;
+  // The machine's share is for every repository: claim at most the jobs that it still allows.
+  if (Number.isSafeInteger(room?.free)) free = Math.min(free, room.free);
   let checked = false;
   // S2 (debate B): among the first ready issues, start first one whose named paths meet no running job (its named
   // paths and its changed files); else the oldest. A hint only: it never leaves a slot idle.
@@ -1306,7 +1311,7 @@ async function runtimeCoverage(ctx, job, claims, lines = []) {
     ...unrun.map(([story, test]) => ranBy(story, { path: test }) ? `the latest check of ${test} at this source did not pass` : `no check of ${story} at this source ran ${test}`),
     ...missing.filter(file => !latest.has(file) && stale.has(file)).map(file => `the saved check of ${file} is for another source: a stale Runtime batch, for example an older commit or files that are not committed`),
     ...(missing.some(file => prompts.includes(file)) ? broken.slice(0, 3).map(([story, why]) => `the source of ${story} could not be read: ${why}`) : [])];
-  return done({ ok: false, missing, text: `${claim}, but the saved pdd test checks at head ${short(head)} do not cover ${missing.join(', ')}${notes.length ? ` (${notes.join('; ')})` : ''}. A PASS of other Stories does not count. Commit every change, run pdd test for the Stories of these changes at this head, or write "Runtime: not run (REASON)" (and runtime=not-run in the Evidence line) when they have no Runtime check (for example a native-only prompt or a Story with no Runtime test).` });
+  return done({ ok: false, missing, text: `${claim}, but the saved pdd test checks at head ${short(head)} do not cover ${missing.join(', ')}${notes.length ? ` (${notes.join('; ')})` : ''}. A PASS of other Stories does not count. Commit every change, run pdd test for the Stories of these changes at this head, or write "Runtime: not run (REASON)" (and runtime=not-run in the Evidence line) when they have no Runtime check (for example a native-only prompt).` });
 }
 // T04: the engine runs the replay (vector) and formal test files that the change touches, at the final head: each
 // changed *.vectors.test.* and *.formal.test.* file, and each vector test file that names any changed scenario file.
@@ -1545,6 +1550,8 @@ async function mergeCheck(ctx, job) {
     const coverage = await runtimeCoverage(ctx, job, claims, lines);
     if (!coverage.ok) reds.push(coverage.text);
   }
+  // #3241 case 1: a changed Story with no Runtime test is a missing part, not a Runtime limit.
+  reds.push(...await untestedStoryReds(ctx, job));
   job.evidence = parseEvidence(pr.body) ?? job.evidence ?? null;
   const verdicts = new Set(lines.map(l => l.verdict));
   reds.push(...evidenceReds(job.evidence, verdicts.size === 1 ? [...verdicts][0] : null));
@@ -2070,6 +2077,28 @@ async function writeClaimRecord(ctx, job, fields) {
 }
 
 // A clean checkout of one commit for reading (the PR head or the base tip), made once per commit.
+// #3241 case 1 (once per head, saved as `untested`): each changed Story (its Story file changed against the base) that
+// has no Runtime test at the head is red, unless every changed prompt of the PR is native-only (a Story that bound ports
+// cannot check). A missing test is a part that the job can write. A read error is no red here (the T01 read names it).
+async function untestedStoryReds(ctx, job) {
+  const head = job.agentHead ?? job.head;
+  if (job.untested?.head === head) return job.untested.reds;
+  let reds = [];
+  try {
+    const changed = await changedFiles(ctx, job, head);
+    if (changed.some(file => file.endsWith('.md'))) {
+      const tree = await treeAt(ctx, job, 'agent', head);
+      const found = await (ctx.ports.untestedStories ?? (async root => { const { findTests } = await import('./runtime-preflight.mjs'); const f = findTests({ root, excludeFixtureProjects: true }); return { untested: f.untested, visible: f.visible }; }))(tree);
+      const stories = (found?.untested ?? []).filter(row => changed.includes(row.storyPath));
+      const prompts = changed.filter(file => file.endsWith('.prompt.md')), visible = found?.visible ?? new Set(gitFiles(tree));
+      const kind = path => { try { return readPrompt(tree, visible, path).interface?.kind ?? null; } catch { return null; } };
+      const native = prompts.length > 0 && prompts.every(path => kind(path) === 'native-only');
+      if (stories.length && !native) reds = [`This PR changes ${someFiles(stories.map(row => row.storyPath))}, with no Runtime test: ${stories.slice(0, 5).map(row => oneLine(row.line, 300)).join(' ')} A missing test is not a reason for "Runtime: not run": write the Runtime test for each such Story (in test/runtime/ or tests/runtime/ when the repository keeps its own tests in test/ or tests/), one step for each of its criteria, and run pdd test; or, when bound ports cannot fake the effect, mark the owning prompt's interface native-only with a reason.`];
+    }
+  } catch (error) { ctx.warn(`Autopilot core could not read the Stories of #${job.issue}: ${error.message}`); reds = []; }
+  job.untested = { head, reds }; ctx.saveJob(job);
+  return reds;
+}
 async function treeAt(ctx, job, name, commit) {
   const key = `${name}Tree`;
   if (job[key]?.commit === commit && ctx.fs.existsSync(job[key].path)) return job[key].path;
@@ -2241,7 +2270,7 @@ async function repairOrEnd(ctx, job, reds, findings = reds) {
   if (stop) return end(ctx, job, cause('job', 'checks-red', `the repairs stopped because ${stop}. The PR checks after ${job.repairs} repair(s): ${reds.join(' ')}`));
   // A repair clears every check, so it all runs again also at the same head (pdd test saves its checks outside the
   // repository: a repair that only runs pdd test keeps the head).
-  Object.assign(job, { phase: 'running', role: 'repair', repairs: job.repairs + 1, review: null, suite: null, vectors: null, coverage: null, runtimeWait: null, progress: { sig: null, at: ctx.now(), running: false } });
+  Object.assign(job, { phase: 'running', role: 'repair', repairs: job.repairs + 1, review: null, suite: null, vectors: null, coverage: null, runtimeWait: null, untested: null, progress: { sig: null, at: ctx.now(), running: false } });
   job.agent = startJob(ctx, job, 'repair', job.worktree, result => repairPrompt(ctx, job, reds, result));
   ctx.saveJob(job); ctx.counts.repairs++;
 }

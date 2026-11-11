@@ -1526,31 +1526,38 @@ says to run `pdd autopilot start`.
 | `testCommand` | Full test command that runs on the PR head, in a clean checkout. With `package-lock.json` and listed dependencies, `npm ci --ignore-scripts` runs first | `npm test` when `package.json` has a test script |
 
 **The machine guard.** Autopilot never takes over a person's machine. It may use a
-share of the machine's CPU and memory: 50% by default, or `pdd autopilot start --share
-PERCENT` on this machine. The share counts the real limits: the CPU list and the
-cgroup or container limits on Linux, the cores and the memory of the machine.
+share of the machine's CPU and memory, for all repositories on the machine together:
+50% by default, or `pdd autopilot start --share PERCENT` on this machine. The share
+counts the real limits: the CPU list and the cgroup or container limits on Linux, the
+cores and the memory of the machine.
 
 - Slots: one job counts as 2 cores and 3 GiB (an agent is light, and a full suite
   peaks near 3 GiB). The slots are the share of the cores divided by 2 and the share of
   the memory divided by 3 GiB, the lower one, at least 1 and at most 4. So at 50% an
   8 GB Mac or a 4-core, 8 GB box gets 1 job, a 10-core, 32 GB Mac gets 2, and a 64-core,
-  251 GB server gets 4. `--runs N` on this machine sets the slots; `autopilot.runs` in
-  `pdd.json` can only lower them.
+  251 GB server gets 4. These slots are for the whole machine: two repositories on the
+  64-core server share its 4 jobs. `--runs N` on this machine sets the most jobs of
+  this repository; `autopilot.runs` in `pdd.json` can only lower them.
 - Every Autopilot process runs at the lowest priority: nice 19, on macOS the utility
-  QoS with throttled disk I/O, and in the Linux timer unit `CPUWeight=20` and
-  `MemoryHigh` at the share. On Linux the agents run on the share of the CPUs. Every
-  job gets `PDD_CHECK_CPUS`, the worker count for its tests and builds.
-- Before new work, each tick checks the room: at least 3 GiB of memory free and no
-  memory pressure, at least 10 GiB and 5% of the disk free, and a load that is not
-  above the share of the cores. With no room, no issue is claimed, and the tick and
-  `pdd autopilot status` say why (`intake held: memory pressure`). Running work goes
-  on.
+  QoS with throttled disk I/O, and in the Linux timer unit `CPUWeight=1` (a weight
+  counts only when the CPU is busy, so an idle machine still gives Autopilot all of it;
+  at a share of 100 the normal weight) and `MemoryHigh` at the share. On Linux the
+  agents run on the share of the CPUs. Every job gets `PDD_CHECK_CPUS`, the worker count
+  for its tests and builds.
+- Before new work, each tick checks the room for the whole machine: what all Autopilot
+  jobs on this machine use now (every repository) must leave room in the share for one
+  more job (its jobs, its memory and its CPU), the machine needs at least 3 GiB of
+  memory free and no memory pressure, and at least 10 GiB and 5% of the disk free. With
+  no room, no issue is claimed, and the tick and `pdd autopilot status` say why
+  (`intake held: 4 of 4 Autopilot jobs on this machine run (all repositories, 50%
+  share)`). Running work goes on.
 - Each tick removes worktrees that no job uses, job logs older than 14 days, and the
   oldest logs while the log folder holds more than 500 MiB.
 
-`pdd autopilot status` shows the share, the slot math and the room in one line, for
-example `Machine: share 50% (default) of 10 cores and 16 GiB · slots min(4, 5 cores ÷
-2, 8 GiB ÷ 3 GiB) = 2 → 2 (automatic) · memory 6.1 GiB free, pressure normal · disk
+`pdd autopilot status` shows the share, the slot math, what Autopilot uses now and the
+room in one line, for example `Machine: share 50% (default) of 10 cores and 16 GiB ·
+slots min(4, 5 cores ÷ 2, 8 GiB ÷ 3 GiB) = 2 → 2 (automatic) · Autopilot on this
+machine now: 1 job, 0.4 GiB, 0.3 cores · memory 6.1 GiB free, pressure normal · disk
 210 GiB free · load 3.2 · priority low · new work: ok`.
 
 Each tick, without AI calls:
@@ -1658,7 +1665,8 @@ them in the merge comment. The claims must be true. A Runtime pass (`Runtime: PA
 checks cover every changed prompt, Story and Story test at the PR head, compared with a
 clean checkout of that head (files that are not committed never count; the latest check
 of a Story decides; a PASS of other Stories does not count; write `Runtime: not run
-(STORY: REASON)` for a native-only prompt or a Story with no Runtime test). A repair that only
+(STORY: REASON)` for a native-only prompt; a changed Story with no Runtime test is red
+until the PR adds its test, unless every changed prompt is native-only). A repair that only
 runs `pdd test` again is read again. Autopilot also runs, at the PR head, every changed
 replay (`*.vectors.test.*`) and formal (`*.formal.test.*`) file and every vector file
 that names a changed scenario, if it is a `node:test` JavaScript file (other files are

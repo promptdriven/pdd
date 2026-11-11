@@ -1,9 +1,9 @@
-// Generated from prompts/cli/machine-guard.prompt.md (sha256: 72c88d0eab14f0aa85745d4ed18612b396700bc37acd1d57c9bf99d4b9bacf1a).
+// Generated from prompts/cli/machine-guard.prompt.md (sha256: 9c566009660cf47c58ce3c77e36375eea0f2bc588847a4039368d6a5ea99e8a7).
 // The small resource governor of the Autopilot core (#3231): Autopilot may use a share of this machine's CPU and
-// memory (default 50%, `pdd autopilot start --share N`). The share of the real limits gives the slots and the room for
-// new work; the priority and the cleanup limits are fixed. Only readMachineGuard reads (through the machine
-// observations).
-import { readMachineResources } from './machine-resources.mjs';
+// memory (default 50%, `pdd autopilot start --share N`), for all repositories together. The share of the real limits
+// gives the slots; the room for new work compares what all Autopilot jobs on this machine use now with that share; the
+// priority and the cleanup limits are fixed. Only readMachineGuard reads (through the machine observations).
+import { readMachineResources, readAutopilotUse } from './machine-resources.mjs';
 
 const GiB = 1024 ** 3, MiB = 1024 ** 2;
 // Every number of the guard, in one place.
@@ -13,7 +13,8 @@ export const GUARD = Object.freeze({
   jobCores: 2, jobBytes: 3 * GiB,  // one job: an agent (0.1-0.3 GiB, under 1 core) and its part of one full suite (2.3-2.8 GiB)
   diskBytes: 10 * GiB, diskShare: 0.05,  // a job makes up to 3 checkouts and installs dependencies
   pressurePsi: 10,                 // Linux PSI memory some avg10; macOS: a pressure level above 1 (normal)
-  nice: 19, cpuWeight: 20, qos: 'utility',
+  nice: 19, qos: 'utility',
+  cpuWeight: 1, cpuWeightFull: 100,  // systemd CPUWeight under a share below 100 (weights count only when the CPU is contended), and at 100
   logDays: 14, logBytes: 500 * MiB,
 });
 const count = value => Number.isSafeInteger(value) && value > 0 ? value : null;
@@ -49,17 +50,22 @@ export function slotCount({ auto, runs, repoRuns } = {}) {
   return { slots: automatic, source: 'automatic' };
 }
 const pressured = resources => (finite(resources?.pressure?.level) && resources.pressure.level > 1) || (finite(resources?.pressure?.memory) && resources.pressure.memory >= GUARD.pressurePsi);
-export function machineRoom(resources, share = GUARD.share) {
-  const no = reason => ({ ok: false, reason }), free = freeMemory(resources);
-  if (free === null) return no('memory cannot be read');
-  if (free < GUARD.jobBytes) return no(`only ${gib(free)} GiB of memory free; a job needs ${gib(GUARD.jobBytes)} GiB`);
+// The room for new work, for the whole machine: `use` is what all Autopilot jobs on this machine use now (every
+// repository): {jobs, rss, cores}. free is how many more jobs the machine's share allows.
+export function machineRoom(resources, share = GUARD.share, use = {}) {
+  const s = shareOf(share), math = slotMath(resources, s), jobs = count(use?.jobs) ?? 0, free = Math.max(0, math.slots - jobs);
+  const no = reason => ({ ok: false, reason, free: 0 }), mem = freeMemory(resources), limit = memoryLimit(resources);
+  if (jobs >= math.slots) return no(`${jobs} of ${math.slots} Autopilot jobs on this machine run (all repositories, ${s}% share)`);
+  if (mem === null || limit === null) return no('memory cannot be read');
+  if (mem < GUARD.jobBytes) return no(`only ${gib(mem)} GiB of memory free; a job needs ${gib(GUARD.jobBytes)} GiB`);
+  if (finite(use?.rss) && use.rss + GUARD.jobBytes > limit * s / 100) return no(`Autopilot uses ${gib(use.rss)} GiB on this machine; a new job would pass its ${gib(limit * s / 100)} GiB share (${s}%)`);
   if (pressured(resources)) return no('memory pressure');
   const disk = resources?.disk;
   if (!finite(disk?.available) || !finite(disk?.total) || disk.total <= 0) return no('disk cannot be read');
   if (disk.available < GUARD.diskBytes || disk.available < GUARD.diskShare * disk.total) return no(`only ${gib(disk.available)} GiB of disk free; a job needs ${gib(GUARD.diskBytes)} GiB and ${Math.round(GUARD.diskShare * 100)}%`);
-  const cores = shareCores(resources, share);
-  if (finite(resources?.load) && resources.load > cores) return no(`load ${one(resources.load)} is above ${cores} cores, Autopilot's ${shareOf(share)}% share`);
-  return { ok: true, reason: null };
+  const cores = shareCores(resources, s);
+  if (finite(use?.cores) && use.cores >= cores) return no(`Autopilot uses ${one(use.cores)} cores on this machine, its ${s}% share is ${cores}`);
+  return { ok: true, reason: null, free };
 }
 const cpuList = ids => {
   const parts = [];
@@ -78,25 +84,29 @@ export function jobPriority({ platform, role, resources, share = GUARD.share, ta
 }
 export function timerPriority(platform, share = GUARD.share) {
   return { plist: platform === 'darwin' ? `<key>Nice</key><integer>${GUARD.nice}</integer>` : '',
-    unit: platform === 'linux' ? `Nice=${GUARD.nice}\nCPUWeight=${GUARD.cpuWeight}\nMemoryHigh=${shareOf(share)}%\n` : '' };
+    unit: platform === 'linux' ? `Nice=${GUARD.nice}\nCPUWeight=${shareOf(share) < 100 ? GUARD.cpuWeight : GUARD.cpuWeightFull}\nMemoryHigh=${shareOf(share)}%\n` : '' };
 }
-export function guardLine({ share, shareSource, slots, source, room, resources } = {}) {
+export function guardLine({ share, shareSource, slots, source, room, resources, use } = {}) {
   const m = slotMath(resources, share), free = freeMemory(resources), disk = resources?.disk;
   const pressure = finite(resources?.pressure?.level) ? ({ 1: 'normal', 2: 'warn', 4: 'critical' }[resources.pressure.level] ?? `level ${resources.pressure.level}`)
     : finite(resources?.pressure?.memory) ? `PSI ${one(resources.pressure.memory)}` : 'unknown';
   const math = `min(${GUARD.maxSlots}, ${m.cores === null ? '?' : one(m.cores * m.share / 100)} cores ÷ ${GUARD.jobCores}, ${m.limit === null ? '?' : gib(m.limit * m.share / 100)} GiB ÷ ${gib(GUARD.jobBytes)} GiB) = ${m.slots}`;
   return [`Machine: share ${m.share}% (${shareSource ?? 'default'}) of ${m.cores ?? 'unknown'} cores and ${m.limit === null ? 'unknown' : gib(m.limit)} GiB`,
-    `slots ${math} → ${slots} (${source})`, `memory ${free === null ? 'unknown' : gib(free)} GiB free, pressure ${pressure}`,
+    `slots ${math} → ${slots} (${source})`,
+    `Autopilot on this machine now: ${count(use?.jobs) ?? 0} job${(count(use?.jobs) ?? 0) === 1 ? '' : 's'}, ${finite(use?.rss) ? gib(use.rss) : '?'} GiB, ${finite(use?.cores) ? one(use.cores) : '?'} cores`,
+    `memory ${free === null ? 'unknown' : gib(free)} GiB free, pressure ${pressure}`,
     `disk ${finite(disk?.available) ? gib(disk.available) : 'unknown'} GiB free`, `load ${finite(resources?.load) ? one(resources.load) : 'unknown'}`, 'priority low',
     `new work: ${room?.ok ? 'ok' : `held (${room?.reason ?? 'unknown'})`}`].join(' · ');
 }
-export async function readMachineGuard({ cwd, runs, repoRuns, share } = {}, ports = {}) {
-  let resources = null;
+export async function readMachineGuard({ cwd, runs, repoRuns, share, jobs = 0 } = {}, ports = {}) {
+  let resources = null, measured = null;
   try { resources = await (ports.machineResources ?? (input => readMachineResources(input, { ...ports, includeChecks: true, includeGuard: true })))({ cwd }); } catch { resources = null; }
+  try { measured = await (ports.autopilotUse ?? (() => readAutopilotUse(ports)))(); } catch { measured = null; }
+  const use = { jobs: count(jobs) ?? 0, rss: finite(measured?.rss) ? measured.rss : null, cores: finite(measured?.cores) ? measured.cores : null };
   const platform = resources?.check?.platform ?? ports.platform ?? process.platform, s = shareOf(share);
   const auto = resources ? autoSlots(resources, s) : 1, { slots, source } = slotCount({ auto, runs, repoRuns });
-  const room = resources ? machineRoom(resources, s) : { ok: false, reason: 'machine resources cannot be read' };
-  const guard = { share: s, shareSource: validShare(share) ? 'this machine, --share' : 'default', slots, source, auto, room, resources,
+  const room = resources ? machineRoom(resources, s, use) : { ok: false, reason: 'machine resources cannot be read', free: 0 };
+  const guard = { share: s, shareSource: validShare(share) ? 'this machine, --share' : 'default', slots, source, auto, room, resources, use,
     priority: role => jobPriority({ platform, role, resources, share: s, taskset: resources?.check?.taskset ?? null }) };
   guard.line = guardLine(guard);
   return guard;

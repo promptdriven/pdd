@@ -1410,7 +1410,9 @@ run full):
 through this machine's alert destination with the core's cause, tried and need (and `--update` when the core asks), `ROOT` = the state file path without `.json` plus `-core`,
   and the machine report folder `core-reports` beside the state files. Before the
   core tick, the [machine guard](machine-guard.prompt.md) reads this machine once
-  (`readMachineGuard({cwd, runs: state.runs, repoRuns: pdd.json autopilot.runs, share: state.share})`;
+  (`readMachineGuard({cwd, runs: state.runs, repoRuns: pdd.json autopilot.runs, share: state.share, jobs})`,
+  where `jobs` is the sum of the core's `busySlots` over the core folder of every enabled
+  state file beside this one: the share is for the whole machine, every repository;
   tests replace it with `ports.machineGuard`, #3231). The core settings come from
   `readCoreSettings(cwd, fs, {auto, runs: state.runs})`, so this machine's
   `start --runs N` reaches the core and a machine without it gets its automatic slots;
@@ -1447,7 +1449,8 @@ through this machine's alert destination with the core's cause, tried and need (
   tick message. No Herdr read.
 - Timer priority (#3231): both timer files run Autopilot at the lowest priority, from
   the guard's `timerPriority`: the LaunchAgent has `Nice` 19; the systemd service has
-  `Nice=19`, `CPUWeight=20` and `MemoryHigh=SHARE%` (the saved share, default 50).
+  `Nice=19`, `CPUWeight=1` below a share of 100 and `CPUWeight=100` at 100, and
+  `MemoryHigh=SHARE%` (the saved share, default 50).
 - Report: catalog command `report` lists the machine's local report drafts
   (`FINGERPRINT: title; seen N time(s), last TIME`, or `No local Autopilot report
   drafts.`); `report send FINGERPRINT` sends one through `sendReportDraft` of the
