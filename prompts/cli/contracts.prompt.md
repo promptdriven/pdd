@@ -1,7 +1,7 @@
 # Local shared-contract commands
 
 Own `src/contracts.mjs`. Module function
-`runContracts({words,options,cwd}, {env,stdout,stderr})` returns an exit code.
+`runContracts({words,options,cwd}, ports={})` (reading `{env,stdout,stderr}` from `ports`) returns an exit code.
 `words: []` lists contracts; `words: ['sync']` previews migration;
 `options['--write'] === true` applies it. Syntax belongs to the command catalog.
 These routes read working files and private local Check history. They never
@@ -39,7 +39,7 @@ abort independent listing, preview or selected good work. Report any affected
 record/use or footprint evidence as unavailable rather than complete. Required
 selected source retains preflight's bounded safe-read refusals.
 
-Use `readContractHistory` from the runtime client for the most recent actual
+Use `readContractHistory({root, env}, ports)` from the runtime client (forwarding the command `ports`, including `evidenceEligibility` / `readEvidenceEligibility` and `evidencePorts`) for the most recent actual
 Check baseline for each Story. Compare canonical target snapshots, including
 removed targets, against that Story's current uses. Say `changed since the last
 check` with the affected record identities and `stale: needs a new check` with
