@@ -8,6 +8,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { captureSource, checkInput, fillHashes, findTests, preflight, readPrompt } from '../src/runtime-preflight.mjs';
 import { parseScenarioJson } from '../src/scenario-json.mjs';
+import { runCheck } from '../src/runtime-client.mjs';
+import { interfaceBlocks, proseSha256 } from '../src/runtime-preflight.mjs';
+import { harbor, PLACE, sink } from './runtime-fake.mjs';
 import { fingerprintChanges, storyCard, storyFingerprint } from '../src/workflow-story-card.mjs';
 import { formatReplayEvidence, pinReplayVectors, readReplayEvidence } from '../src/workflow-replay.mjs';
 
@@ -194,4 +197,25 @@ test('LI9: with no local range refusal, a test equal to a nested const above 2^5
   const refused = run(one('12345678901234567891'));
   assert.equal(refused.length, 2);
   assert.ok(refused.every(row => row.code === 'invalid-input' && row.message.includes(BIG) && !row.message.includes('12345678901234567000')), JSON.stringify(refused));
+});
+
+test('LI10: a native-only test with a whole number above 2^53 keeps the state and text it has without one', async t => {
+  // Probe p7: the test is never sent to the interpreter, so no number advice may change what pdd reports.
+  const report = async big => {
+    const setup = harbor(t, repo => {
+      const file = join(repo, PLACE), old = readFileSync(file, 'utf8'), block = interfaceBlocks(old)[0];
+      let text = old.replace(block[0], `<details><summary>Runtime interface</summary>\n\n\`\`\`json\n${JSON.stringify({ status: 'draft', prose_sha256: '', kind: 'native-only', reason: 'Exact BigInt arithmetic is checked by the repository vector test.' })}\n\`\`\`\n</details>`);
+      writeFileSync(file, text.replace('"prose_sha256":""', `"prose_sha256":"${proseSha256(text)}"`));
+      if (big) { const test = join(repo, 'tests/place-order.json'), doc = JSON.parse(readFileSync(test, 'utf8')); doc.initial_world.big = '__BIG__'; writeFileSync(test, JSON.stringify(doc, null, 2).replace('"__BIG__"', LARGE)); }
+    });
+    const out = { stdout: sink(), stderr: sink(), env: { HOME: setup.home, PDD_RUNTIME_STATE_DIR: setup.state }, gh() { throw Error('must not sign in'); } };
+    const exitCode = await runCheck({ cwd: setup.repo, options: { '--json': true } }, out), result = JSON.parse(out.stdout.text);
+    assert.equal(readFileSync(join(setup.repo, 'tests/place-order.json'), 'utf8').includes(LARGE), big);
+    return { exitCode, warnings: result.warnings, rows: result.rows.map(row => ({ test: row.test, state: row.state, reason: row.reason ?? null, refusals: row.refusals ?? null })),
+      summary: result.summary_line, stderr: out.stderr.text };
+  };
+  const plain = await report(false), large = await report(true);
+  assert.equal(large.rows[0].state, 'not run');
+  assert.equal(large.rows[0].reason.code, 'native-only');
+  assert.deepEqual(large, plain);
 });
