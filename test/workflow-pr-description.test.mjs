@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {fixture} from './helpers/workflow-runner-fixture.mjs';
-const {stepDone, approveRun} = await import(process.env.PDD_DESCRIPTION_RUNNER || '../src/workflow-runner.mjs');
+const {stepDone, approveRun, runStatus} = await import(process.env.PDD_DESCRIPTION_RUNNER || '../src/workflow-runner.mjs');
 
 const classic = 'GraphQL: Projects (classic) is being deprecated in favor of the new Projects experience (repository.pullRequest.projectCards)';
 const ok = result => assert.equal(result.exitCode, 0, result.message);
@@ -162,6 +162,33 @@ test('2830: advertised retry restores code approval after the run enters code', 
   const after = f.record();
   assert.equal(after.area,before.area); assert.equal(after.branch,before.branch);
   assert.deepEqual(after.decisions,before.decisions); assert.deepEqual(after.chats,before.chats);
+});
+
+test('2830: status retains a recovered approval above Details', async t => {
+  const {prepared} = await import('./helpers/workflow-prompt-reentry-fixture.mjs');
+  const f = await prepared(t, {code:false, realRemote:true});
+  ok(await approveRun({ref:'17',cwd:f.source,said:'Publish PR 1 and stop.'},f.ports));
+  const baseExec = f.ports.execFile;
+  const exec = async (file,args,options) => {
+    const result = await baseExec(file,args,options);
+    if (file === 'gh' && args[0] === 'pr' && args[1] === 'view' && args.at(-1) === 'body,headRefOid') {
+      const view = JSON.parse(result.stdout); view.headRefOid = f.prs[0].headRefOid;
+      return {...result, stdout:JSON.stringify(view)};
+    }
+    return result;
+  };
+  f.ports.execFile = async (file,args,options) => {
+    if (file === 'gh' && args[0] === 'api' && args.includes('PATCH') && options.input.includes('Make the code PR now'))
+      return {code:1,stderr:'gh: approval update refused',stdout:''};
+    return exec(file,args,options);
+  };
+  ok(await approveRun({ref:'17',cwd:f.source,said:'Make the code PR now.'},f.ports));
+  assert.ok(f.record().pr1DescriptionRecovery);
+  f.ports.execFile = exec;
+  ok(await approveRun({ref:'17',cwd:f.source},f.ports));
+  ok(await runStatus({ref:'17',cwd:f.source},f.ports));
+  const top = f.prs[0].body.split('<details>')[0];
+  assert.match(top,/Make the code PR now/);
 });
 
 test('2830: unavailable approval refresh keeps the gate retryable', async t => {

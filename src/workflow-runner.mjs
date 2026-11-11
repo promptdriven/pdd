@@ -3190,7 +3190,8 @@ async function draftDescription(run, pr1, drafts, p, recoveryView = null) {
     // Only the time of the status line changed: nothing to write.
     if (nextBody === body || sameReadableTop(nextBody, body)) { remember(); return []; }
     if (recoveryView && commitSha(view.headRefOid)) {
-      recovery = { url: pr1.url, body, nextBody, head: view.headRefOid };
+      recovery = { url: pr1.url, body, nextBody, head: view.headRefOid,
+        ...(!run.publicationPending && commitSha(headSha) ? { readable: savedReadable(facts, headSha) } : {}) };
       await requireExistingDraft(run, pr1, p);
       const current = JSON.parse(String((await p.execFile('gh', ['pr', 'view', pr1.url, '--json', 'body,headRefOid'], {cwd:run.root})).stdout ?? ''));
       if (current.body !== body || current.headRefOid !== view.headRefOid) throw Error('PR 1 description or head changed; inspect it before recovery.');
@@ -3419,7 +3420,13 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
       if (view.body !== recovery.body || view.headRefOid !== recovery.head) throw Error('PR 1 description or head changed; inspect it before recovery.');
       p.inspectProgress?.();
       await updatePrDescription(p, pr1.url, recovery.nextBody, run.root);
-      commitRun(run, p, latest => { if (equalFact(latest.pr1DescriptionRecovery, recovery)) delete latest.pr1DescriptionRecovery; });
+      commitRun(run, p, latest => {
+        if (equalFact(latest.pr1DescriptionRecovery, recovery)) {
+          const pr = latest.pr?.find(item => item.url === pr1.url && item.stage === pr1.stage);
+          if (pr && recovery.readable) pr.readable = recovery.readable;
+          delete latest.pr1DescriptionRecovery;
+        }
+      });
       return done('pdd recovered the PR 1 description.');
     } catch (error) {
       if (error?.code === 'workflow_progress_refused') throw error;
