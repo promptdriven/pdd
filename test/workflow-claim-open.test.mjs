@@ -189,3 +189,15 @@ test('handover keeps a caller pane and refuses to attach or dispatch', async t =
   assert.ok(f.record().cleanupKept.some(item => item.reason === 'caller-pane'));
   assert.equal(effects(f.herdr.calls).length, 0);
 });
+
+test('parked open refuses a changed step before waking', async t => {
+  const f=await ready(t,'parked-open'), run=f.record(), step=run.areas[run.area].steps.find(s=>!run.done[s]);
+  const read=f.ports.owners.read; let moved=false;
+  f.ports.owners.read=async (...args)=>{
+    if (!moved) { moved=true; const latest=f.record(); latest.done[step]={at:1,summary:'Done',area:latest.areas[latest.area].name}; writeRun(latest); }
+    return read(...args);
+  };
+  const result=await openRun({ref:'17',cwd:f.source,expectStep:step},f.ports);
+  assert.equal(moved,true); assert.equal(result.exitCode,3,result.message);
+  assert.equal(f.record().parking.phase,'parked');
+});

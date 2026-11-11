@@ -1,5 +1,5 @@
 import { launchProfile, chatAgentName, validLaunchProfile } from './workflow-launch-profile.mjs';
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: badc0c8c124e14c6d707736e770146a5533d2a9120f28bd0fe3db84824250c2c).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: b2b33627293fe8cca914b87af1d5e8cc2aff6d605e35486f7b769e604f13be42).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, lstatSync, readdirSync, writeFileSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
@@ -223,6 +223,7 @@ async function bindAgentName(herdr, paneId, name) {
 }
 // One native launch or resume in a pane with the caller's login; a failed request deletes the login file at once.
 async function launchInPane(herdr, paneId, options, { run, env, ports = {}, beforeLaunch }) {
+  ports.guardOpenEffect?.(() => {});
   removeStaleLoginFiles(run.runDir);
   const launch = chatLaunch({ run, agent: options.agent, configDir: options.configDir, env });
   try {
@@ -252,6 +253,7 @@ function spawnServer(env) {
 async function ensureServer(herdr, ports) {
   if ((await herdr(['status', 'server', '--json'])).running === true) return;
   const env = Object.fromEntries(Object.entries(ports.env ?? process.env).filter(([name]) => !AGENT_MARKER.test(name)));
+  ports.guardOpenEffect?.(() => {});
   const child = await (ports.spawnServer ?? spawnServer)(env);
   let exited = false;
   child?.once?.('exit', () => { exited = true; });
@@ -609,12 +611,13 @@ export async function chatSession(chat, ports = {}) {
       } else if (verified) verified = chat.agent === 'claude' && validSessionId(chat.session?.id) && value === chat.session.id;
       if (verified) {
         try { await bindAgentName(herdrCommand(ports), chat.paneId, chat.herdrAgentName); }
-        catch (error) { namingError = {code: error.code ?? 'herdr_failed'}; }
+        catch (error) { if (error?.code === 'workflow_progress_refused') throw error; namingError = {code: error.code ?? 'herdr_failed'}; }
       } else namingError = {code:'chat_name_unverified'};
     }
     return { alive: Boolean(agent), status: agent?.agent_status ?? null, sessionId: identity && !namingError ? value : null,
       ...(namingError ? {namingError} : {}) };
   } catch (error) {
+    if (error?.code === 'workflow_progress_refused') throw error;
     const missing = { alive: false, status: null, sessionId: null, code: error.code ?? 'herdr_failed', message: error.message };
     if (['agent_not_found', 'pane_not_found'].includes(error.code) && chat.workspaceId) {
       try { if (!(await workspaceInventory(herdrCommand(ports))).some(row => row.workspace_id === chat.workspaceId)) missing.workspaceClosed = true; }
@@ -688,11 +691,11 @@ export async function rebuildClosedChat({ run, chat, message, resumeMessage }, p
       chat.startedAt = now(); delete chat.resumedAt;
       chat.session = agent === 'claude' ? {agent, id: (ports.randomUUID ?? randomUUID)()} : null;
       chat.messageFile = join(run.runDir, `${chat.area}-start.md`);
-      writeFileSync(chat.messageFile, message);
+      (ports.fs?.writeFileSync ?? writeFileSync)(chat.messageFile, message);
     }
     await ports.checkpoint(chat, custody(layout));
     await launchInPane(herdr, chat.paneId, {commonDir: run.commonDir, sourceRoot: run.sourceRoot,
-      agent, cwd: run.root, addDirs: agentDirs(run), configDir, ...launchSettings(run, chat), ...(resumeId ? {resumeId, ...resumeInput(run, chat, resumeMessage)} : {messageFile: chat.messageFile, sessionId: chat.session?.id})}, {run, env, ports, beforeLaunch: ports.beforeLaunch});
+      agent, cwd: run.root, addDirs: agentDirs(run), configDir, ...launchSettings(run, chat), ...(resumeId ? {resumeId, ...resumeInput(run, chat, resumeMessage, ports)} : {messageFile: chat.messageFile, sessionId: chat.session?.id})}, {run, env, ports, beforeLaunch: ports.beforeLaunch});
     delete chat.startUnconfirmed; if (!ports.background) { delete chat.closed; chat.openedAt = now(); }
     await ports.checkpoint(chat, custody(layout));
     return true;
@@ -707,10 +710,10 @@ function attachSession() {
   });
 }
 
-function resumeInput(run, chat, message) {
+function resumeInput(run, chat, message, ports) {
   if (!message) return {};
   const messageFile = join(run.runDir, `${chat.area}-resume.md`);
-  writeFileSync(messageFile, message, {mode: 0o600});
+  (ports.fs?.writeFileSync ?? writeFileSync)(messageFile, message, {mode: 0o600});
   return {messageFile};
 }
 
@@ -782,7 +785,7 @@ export async function openChat({ run, chat, resumeMessage }, ports = {}) {
     savedAgentEntry(run, run.agent, env);
     // Herdr sees the agent only after it starts; the shared grace counts from this resume request.
     chat.resumedAt = now(); applyLifecycle(chat, { state: 'starting' });
-    try { await launchInPane(herdr, chat.paneId, { commonDir: run.commonDir, sourceRoot: run.sourceRoot, agent: run.agent, cwd: run.root, addDirs: agentDirs(run), resumeId: id, configDir, ...launchSettings(run, chat), ...resumeInput(run, chat, resumeMessage) }, { run, env, ports, beforeLaunch: ports.beforeLaunch }); }
+    try { await launchInPane(herdr, chat.paneId, { commonDir: run.commonDir, sourceRoot: run.sourceRoot, agent: run.agent, cwd: run.root, addDirs: agentDirs(run), resumeId: id, configDir, ...launchSettings(run, chat), ...resumeInput(run, chat, resumeMessage, ports) }, { run, env, ports, beforeLaunch: ports.beforeLaunch }); }
     catch (error) { chat.startUnconfirmed = true; throw error; }
     resumed = true;
   }

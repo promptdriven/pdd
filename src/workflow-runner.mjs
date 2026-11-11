@@ -25,7 +25,7 @@ import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 import { readWorkflowAreas } from './workflow-areas.mjs';
 import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, reconcileWorkflowPr, readWorkflowPrChecker, readWorkflowPrStatus } from './workflow-github.mjs';
 import { allocateIssueWorktree, releaseIssueClaim } from './workflow-worktree.mjs';
-import { allRuns, currentChat, gitContext, listRuns, readRun, readRunOwnership, resolveRun, runDirFor, runForWorktree, updateRun, updateRunCosts, writeRun, inspectRunAndStart } from './workflow-runs.mjs';
+import { allRuns, currentChat, gitContext, listRuns, readRun, readRunOwnership, resolveRun, runDirFor, runForWorktree, updateRun, updateRunCosts, writeRun, inspectRunAndStart, acquireOrdinaryRunOwnership } from './workflow-runs.mjs';
 import { armSavedWorkerCompletion } from './workflow-worker-completion.mjs';
 import { startChat, sendToChat, herdrCommand, chatSession, chatHealth, openChat, rebuildClosedChat, assertRestartCaller, restartChat, validSessionId, closeFinishedChats, finishedChats, finishedAt, paneUsage, ensurePaneBudget, countReasons, mergeReasonCounts, reasonWords, expandHome, homeVariable, isFolder, observeLifecycle, applyLifecycle, launchAnchor, sessionEvidenceDue, ownSession, observedSession, START_GRACE_MS, removeStaleLoginFiles } from './workflow-chat.mjs';
 import { samePath } from './workflow-herdr-layout.mjs';
@@ -3458,14 +3458,14 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
   const agent = isAgentSession(p.env), pane = chatPane(run, p.env), viaChat = agent || !p.isTTY || Boolean(pane);
   let policy;
   try { policy = readApprovalPolicy({root: run.sourceRoot}, p); }
-  catch (error) { return fail(error.message); }
+  catch (error) { if (error?.code === 'workflow_progress_refused') throw error; return fail(error.message); }
   if (policy.strictApprovals && (approvalWords !== undefined || viaChat)) return fail(`Only the person can approve in a terminal. Run pdd workflow approve ${run.number} in a normal terminal.`);
   // Normal runs (#2962): the Story approval saves the Story fingerprint and the code-or-stop choice of the card.
   const normal = !policy.strictApprovals && !Object.hasOwn(run, 'automaticOrigin');
   const storyGate = run.gate?.kind === 'approve' && run.area >= 0 && run.area === storyGateIndex(run);
   if (through !== undefined && (!normal || !(storyGate || beforePr && run.gate?.storyChanges?.length))) return fail('--through applies only at the Story gate or the prompt PR gate of a normal run, not in strict mode or an automatic run. Nothing changed.');
   if (approvalWords === undefined && viaChat) return fail(approvalGuide(run, p.pdd));
-  try { if (approvalWords !== undefined) approvalWords = await readSaidWords(approvalWords, p); p.inspectProgress(); } catch (error) { return fail(error.message); }
+  try { if (approvalWords !== undefined) approvalWords = await readSaidWords(approvalWords, p); p.inspectProgress(); } catch (error) { if (error?.code === 'workflow_progress_refused') throw error; return fail(error.message); }
   if (approvalWords !== undefined && (!run.gate || area.steps.some(step => !run.done[step]))) return fail('The gate is not ready. Finish its steps and run done first.');
   if(!beforePr){const adoptedFailure=await adoptionFailure(run,p);if(adoptedFailure)return fail(adoptedFailure);}
   if (askCode && run.gate?.kind === 'ask-code') {
@@ -3475,7 +3475,7 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
     if (!pr1) return fail('PR 1 is unavailable; no approval was recorded.');
     let state;
     try { state = await (p.readPrStatus ?? readWorkflowPrStatus)({cwd:run.root,url:pr1.url}, p.commandPorts); }
-    catch { return fail('PR 1 state is unavailable; no approval was recorded.'); }
+    catch (error) { if (error?.code === 'workflow_progress_refused') throw error; return fail('PR 1 state is unavailable; no approval was recorded.'); }
     if (!['open','merged'].includes(state.state)) {
       const retry = (run.decisions ?? []).some(decision => decision.gateId === run.gate.id && decision.evidence) ? approvalRetry(run, p.pdd) : approvalGuide(run, p.pdd);
       return fail(`PR 1 is ${state.state}, so pdd cannot tell where the code branch should start. No approval was recorded. Check PR 1, then ${retry}`);
@@ -3483,7 +3483,7 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
   }
   if (askCode && run.gate?.kind === 'ask-code' && replayEnabled(run)) {
     try { const dirty = await unpublishedScenarios(run,p); if (dirty.length) return fail(`Unpublished scenario edits remain: ${dirty.join(', ')}. Publish them in prompt space first.`); }
-    catch { return fail('Cannot verify published scenario bytes. Repair the scenario inventory.'); }
+    catch (error) { if (error?.code === 'workflow_progress_refused') throw error; return fail('Cannot verify published scenario bytes. Repair the scenario inventory.'); }
   }
   // A normal run's Story approval covers the card that the gate showed: a later Story or test change shows it again.
   if (normal && run.gate?.storySnapshot && (storyGate || beforePr)) {
@@ -3515,7 +3515,7 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
         commitRun(run,p,latest=>{latest.gate.storyContract=contract;latest.gate.storyPaths=paths;});
       }
     }
-  } catch (error) { return fail(error.message); }
+  } catch (error) { if (error?.code === 'workflow_progress_refused') throw error; return fail(error.message); }
   let carried = [], synchronized = false;
   if (askCode && run.gate?.kind === 'ask-code' && approvalWords === undefined && !edits.length) {
     const carry = await syncPr1(run, p);
@@ -3546,7 +3546,7 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
       releaseAdmission = acquireRunLock(dir, 'autopilot-admission.lock');
       if (explicitlyStopped(run, p)) return 'Automatic continuation refused: Autopilot is stopped. Start Autopilot and retry.';
       return null;
-    } catch { return 'Automatic continuation refused: admission lock is unavailable.'; }
+    } catch (error) { if (error?.code === 'workflow_progress_refused') throw error; return 'Automatic continuation refused: admission lock is unavailable.'; }
   };
   try {
   const admissionFailure = await admitApproval();
@@ -3561,7 +3561,7 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
       approvalSnapshot = current;
       edits = await approveGatePrompts(run, p, current);
     }
-  } catch (error) { return fail(`Cannot inspect selected prompts: ${error.message}. Show the gate again and ask the person again.`); }
+  } catch (error) { if (error?.code === 'workflow_progress_refused') throw error; return fail(`Cannot inspect selected prompts: ${error.message}. Show the gate again and ask the person again.`); }
   if (askCode && run.gate?.kind === 'ask-code') {
     const review = await normalCodeReview(run, area, p);
     if (review) return review;
@@ -3589,7 +3589,7 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
         if (!draftEligibility(latest)) throw Error('The draft publication gate is no longer ready and unpublished.');
         latest.draft = true;
       });
-    } catch (error) { return fail(`Draft publication policy was not saved: ${error.message}`); }
+    } catch (error) { if (error?.code === 'workflow_progress_refused') throw error; return fail(`Draft publication policy was not saved: ${error.message}`); }
   }
   carried.push(...edits.map(edit => `Approved ${edit.path} ${edit.proseSha256}`));
   if (askCode && run.gate?.kind === 'ask-code') {
@@ -5051,11 +5051,37 @@ async function returnToPrompt(run,selected,p) {
   if (integration) return integration;
   return null;
 }
-async function openRunLocked({ ref, cwd, area, newSession = false, model, herdrAgentName, codexThreads, packageRoot = PACKAGE_ROOT, automaticResume = null }, ports) {
+async function openRunLocked({ ref, cwd, area, newSession = false, model, herdrAgentName, codexThreads, expectGate, expectStep, packageRoot = PACKAGE_ROOT, automaticResume = null }, ports) {
   const p = deps(ports); p.pdd = pddFor(p, packageRoot);
   const found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
   const run = found.run;
+  let releaseOrdinary, ordinaryFinished = false;
+  const releaseOpenOwnership = () => { releaseOrdinary?.(); releaseOrdinary = undefined; ordinaryFinished = true; };
+  try {
+  if (expectGate !== undefined || expectStep !== undefined) {
+    const originalAcquire = p.acquireRunOwnership;
+    const guard = action => {
+      if (ordinaryFinished) return action();
+      if (!releaseOrdinary) {
+        releaseOrdinary = acquireOrdinaryRunOwnership(run.runDir, {...p, acquireRunOwnership: originalAcquire});
+        const stale = expectedState(readRun(run.runDir), {expectGate, expectStep});
+        if (stale) throw Object.assign(Error(stale.message), {code:'workflow_progress_refused', result:stale});
+      }
+      return action();
+    };
+    p.acquireRunOwnership = directory => { if (directory !== run.runDir || ordinaryFinished) return acquireOrdinaryRunOwnership(directory, {...p, acquireRunOwnership: originalAcquire}); guard(() => {}); return () => {}; };
+    const baseExec = p.execFile;
+    p.execFile = (file, args, options) => file === 'git' && ['add','commit','push','checkout','switch','branch','reset','merge','rebase'].includes(args[0]) ? guard(() => baseExec(file, args, options)) : baseExec(file, args, options);
+    p.commandPorts = {...p.commandPorts, execFile:p.execFile};
+    p.guardOpenEffect = guard;
+    const baseHerdr = herdrCommand(p);
+    p.herdr = args => ['create','run','prompt','close','focus','rename'].includes(args[1]) ? guard(() => baseHerdr(args)) : baseHerdr(args);
+    const fs = p.fs ?? {};
+    p.fs = {...fs, mkdirSync: (...args) => guard(() => (fs.mkdirSync ?? mkdirSync)(...args)),
+      writeFileSync: (...args) => guard(() => (fs.writeFileSync ?? writeFileSync)(...args))};
+    p.progressGuard = latest => { const stale = expectedState(latest, {expectGate, expectStep}); if (stale) throw Object.assign(Error(stale.message), {code:'workflow_progress_refused', result:stale}); };
+  }
   if (run.parking?.phase === 'releasing') return fail('This parked run is releasing its claim. Wait for release to finish.');
   const selected = area === undefined ? run.area : run.areas.findIndex(item => item.name === area);
   let chat = [...(run.chats ?? [])].reverse().find(item => item.area === run.areas[selected]?.name), started = false, handedOff = false, rebuilt = false;
@@ -5246,7 +5272,7 @@ async function openRunLocked({ ref, cwd, area, newSession = false, model, herdrA
       if (run.chatReplacement?.recovery?.resumeRequested) return replacementResult(`Resumed this attempt's ${chat.area} session in Herdr session pdd; no second first message was sent. The run, completed work, gates and approvals are kept.`);
       return replacementResult(`Started one fresh ${chat.area} chat in Herdr session pdd. The run, completed work, gates and approvals are kept.`);
     }
-    if (!chat) { chat = await startNextChat(run, p, packageRoot); defaultOriginal = structuredClone(chat); started = true; }
+    if (!chat) { p.guardOpenEffect?.(() => {}); chat = await startNextChat(run, p, packageRoot); defaultOriginal = structuredClone(chat); started = true; }
     p.say(`Opening the ${chat.area} chat in Herdr…`);
     const priorResumeAnchor = launchAnchor(chat);
     const opened = await openChat({ run, chat, resumeMessage }, { ...p, background: Boolean(automaticResume), beforeLaunch, beforeAttach: async () => {
@@ -5258,6 +5284,7 @@ async function openRunLocked({ ref, cwd, area, newSession = false, model, herdrA
       handedOff = true;
       if (saved && !automaticResume?.parked && !historical && Number.isFinite(chat.resumedAt)
         && (rebuilt || launchAnchor(chat) !== priorResumeAnchor)) await continueResumedChat(run, chat, p, packageRoot);
+      releaseOpenOwnership();
       p.releaseRunLock?.();
     } });
     if (automaticResume?.parked && (rebuilt || opened.resumed) && groupResumeRequests.length) {
@@ -5289,6 +5316,7 @@ async function openRunLocked({ ref, cwd, area, newSession = false, model, herdrA
     return done([...(opened.namingError ? [`Herdr name is not bound (${opened.namingError.code}); inspect the saved pane.`] : []), ...promptReturnLines(gateRun), ...returnWarnings, ...shownGate, ...(gateRun.gate ? [approvalGuide(gateRun, p.pdd)] : []), started ? `Started the ${chat.area} chat in ${where}.` : opened.resumed ? `Resumed the ${chat.area} chat in ${where}.` : `The ${chat.area} chat is in ${where}.`,
       ...(opened.attached ? [] : [p.env.HERDR_ENV === '1' ? 'pdd focused that tab. If you are in another Herdr session, run: herdr session attach pdd' : 'See it with: herdr session attach pdd'])].join('\n'));
   } catch (error) {
+    if (error?.code === 'workflow_progress_refused') throw error;
     if (automaticResume?.parked && ['agent_not_found', 'pane_not_found'].includes(error.code) && chat) {
       delete chat.startUnconfirmed; chat.state = 'ended';
     }
@@ -5301,6 +5329,7 @@ async function openRunLocked({ ref, cwd, area, newSession = false, model, herdrA
     if (['chat_start_unconfirmed', 'chat_start_failed'].includes(error.code)) return fail(oneLine(error.message));
     return fail([`pdd could not open the ${run.areas[selected].name} chat (${failureReason(error)}).`, ...failureDetails(error)].join('\n'));
   }
+  } finally { releaseOpenOwnership(); }
 }
 
 const openRunCommand = async (args, ports) => {
@@ -5581,6 +5610,14 @@ export const wakeParkedRun = saveGuard((args, ports) => lockedMutation(args, por
   const text = run.parking.text ?? input.text;
   const inferredGate = run.parking.blocker.kind === 'interpreter' && run.parking.interpreterWait && sameFact(run.gate, run.parking.interpreterGate) && run.gate?.kind === 'approve-pr' && !openQuestion(run);
   if (text && (RUNTIME_WAKE_TAG.test(text) || isEnvironmentWake(text)) && (run.gate || openQuestion(run)) && !inferredGate) return skipped();
+  let releaseExpected;
+  if (input.expectGate !== undefined || input.expectStep !== undefined) {
+    const originalAcquire = p.acquireRunOwnership;
+    releaseExpected = acquireOrdinaryRunOwnership(run.runDir, p);
+    p.acquireRunOwnership = directory => directory === run.runDir ? () => {} : acquireOrdinaryRunOwnership(directory, {...p, acquireRunOwnership: originalAcquire});
+  }
+  try {
+  const stale = expectedState(readRun(run.runDir), input); if (stale) return stale;
   commitRun(run, p, fresh => {
     if (fresh.parking?.at !== input.at) throw Object.assign(Error('Park changed'), {code: 'workflow_progress_refused'});
     if (fresh.parking.phase === 'parked') {
@@ -5619,6 +5656,7 @@ export const wakeParkedRun = saveGuard((args, ports) => lockedMutation(args, por
   }
   commitRun(fresh, p, latest => {if (latest.parking?.at === input.at) delete latest.parking;});
   return {...done('Resumed the saved parked session.'), recovery: 'resumed'};
+  } finally { releaseExpected?.(); }
 }));
 
 export const resumeStoppedRun = saveGuard(async ({ref, cwd, packageRoot, coordinatorId, machine}, ports) => {

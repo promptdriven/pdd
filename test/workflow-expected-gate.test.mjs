@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync, readdirSync, statSync, writeFileSync, mkdirSync, unlinkSync} from 'node:fs';
 import {hostname} from 'node:os';
 import {join} from 'node:path';
-import {approveRun, changeRun, cancelRun, openRun, stepDone, acquireRunLock} from '../src/workflow-runner.mjs';
+import {approveRun, changeRun, cancelRun, openRun, stepDone, acquireRunLock, runStatus} from '../src/workflow-runner.mjs';
 import {runPdd} from '../src/pdd-cli.mjs';
 import {fixture, packageRoot} from './helpers/workflow-runner-fixture.mjs';
 
@@ -189,4 +189,101 @@ test('automatic cancellation reports a stale gate before a busy lock', async t =
   const release=acquireRunLock(run.runDir); t.after(release);
   const result=await cancelRun({ref:'17',cwd:f.source,expectGate:'old'},f.ports);
   assert.equal(result.exitCode,3,result.message); assert.match(result.message,/new/);
+});
+
+test('approval reports moved gate after reading said words', async t => {
+  const f=await fixture(t); assert.equal((await f.run()).exitCode,0);
+  assert.equal((await stepDone({step:'scope',summary:'Done',cwd:f.record().root},f.agentPorts())).exitCode,0);
+  const run=f.record(), gate=run.gate.id; let after;
+  const stdin={async *[Symbol.asyncIterator]() {
+    const approved=await approveRun({ref:'17',cwd:f.source,expectGate:gate},f.ports);
+    assert.equal(approved.exitCode,0,approved.message); after=snapshot(run.runDir); yield 'approved';
+  }};
+  const result=await approveRun({ref:'17',cwd:f.source,said:'-',expectGate:gate}, {...f.ports,stdin});
+  assert.equal(result.exitCode,3,result.message); assert.match(result.message,/current step: change/);
+  assert.equal(f.record().decisions.length,1); assert.deepEqual(snapshot(run.runDir),after);
+});
+
+test('open replacement refuses progress during inspection before replacement effects', async t => {
+  const f=await fixture(t); assert.equal((await f.run()).exitCode,0);
+  const run=f.record(), step='scope', herdr=f.ports.herdr; let moved=false;
+  f.herdr.calls.length=0;
+  const result=await openRun({ref:'17',cwd:f.source,newSession:true,expectStep:step}, {...f.ports,herdr:async args=>{
+    if (!moved && args[1]==='list') { moved=true; assert.equal((await stepDone({step,summary:'Done',cwd:run.root},f.agentPorts())).exitCode,0); }
+    return herdr(args);
+  }});
+  assert.equal(moved,true); assert.equal(result.exitCode,3,result.message); assert.match(result.message,/current step: none/i);
+  assert.equal(f.record().chatReplacement,undefined);
+  assert.equal(f.herdr.calls.some(args=>['close','create','run'].includes(args[1])),false);
+});
+
+test('replacement excludes workflow progress after its first effect', async t => {
+  const f=await fixture(t); assert.equal((await f.run()).exitCode,0);
+  const run=f.record(), herdr=f.ports.herdr; let checked=false;
+  const result=await openRun({ref:'17',cwd:f.source,newSession:true,expectStep:'scope'}, {...f.ports,herdr:async args=>{
+    if (!checked && args[0]==='tab' && args[1]==='close') {
+      checked=true;
+      const progress=await stepDone({step:'scope',summary:'Done',cwd:run.root},f.agentPorts());
+      assert.notEqual(progress.exitCode,0,progress.message);
+      assert.equal(f.record().done.scope,undefined);
+    }
+    return herdr(args);
+  }});
+  assert.equal(checked,true); assert.equal(result.exitCode,0,result.message);
+});
+
+test('replacement refuses progress during later read-only inspection without files or close', async t => {
+  const f=await fixture(t); assert.equal((await f.run()).exitCode,0);
+  const run=f.record(), herdr=f.ports.herdr; let moved=false;
+  const before=snapshot(run.runDir); f.herdr.calls.length=0;
+  const result=await openRun({ref:'17',cwd:f.source,newSession:true,expectStep:'scope'}, {...f.ports,herdr:async args=>{
+    if (!moved && args[0]==='agent' && args[1]==='get') {
+      moved=true; assert.equal((await stepDone({step:'scope',summary:'Done',cwd:run.root},f.agentPorts())).exitCode,0);
+    }
+    return herdr(args);
+  }});
+  assert.equal(moved,true); assert.equal(result.exitCode,3,result.message);
+  const after=snapshot(run.runDir); delete before['status.json']; delete after['status.json'];
+  assert.deepEqual(after,before); assert.equal(f.record().chatReplacement,undefined);
+  assert.equal(f.herdr.calls.some(args=>['close','create','run'].includes(args[1])),false);
+});
+
+test('resume refuses a moved step before writing its pending request file', async t => {
+  const f=await fixture(t); assert.equal((await f.run()).exitCode,0);
+  assert.equal((await runStatus({ref:'17',cwd:f.source},f.ports)).exitCode,0);
+  const run=f.record(), chat=run.chats.at(-1), herdr=f.ports.herdr;
+  f.herdr.paneOf(chat).agent=null; f.tick(120000);
+  writeFileSync(join(run.runDir,'delivery-journal.json'),JSON.stringify({requests:[{id:'pending',text:'Continue work',kind:'change',area:chat.area,paneId:chat.paneId,state:'delivered',at:10,deliveredAt:11}]}));
+  let moved=false;
+  const result=await openRun({ref:'17',cwd:f.source,expectStep:'scope'}, {...f.ports,herdr:async args=>{
+    if (!moved && args[0]==='agent' && args[1]==='get') { moved=true; assert.equal((await stepDone({step:'scope',summary:'Done',cwd:run.root},f.agentPorts())).exitCode,0); }
+    return herdr(args);
+  }});
+  assert.equal(moved,true); assert.equal(result.exitCode,3,result.message);
+  assert.equal(readdirSync(run.runDir).includes(`${chat.area}-resume.md`),false);
+});
+
+test('open releases ordinary ownership before terminal attachment', async t => {
+  const f=await fixture(t); assert.equal((await f.run()).exitCode,0);
+  const run=f.record(); let attached=false;
+  const result=await openRun({ref:'17',cwd:f.source,expectStep:'scope'}, {...f.ports,isTTY:true,env:{...f.ports.env,HERDR_ENV:''},attach:async()=>{
+    attached=true; const progress=await stepDone({step:'scope',summary:'Done',cwd:run.root},f.agentPorts());
+    assert.equal(progress.exitCode,0,progress.message);
+  }});
+  assert.equal(attached,true); assert.equal(result.exitCode,0,result.message);
+});
+
+test('open refuses a moved step before renaming the inspected agent', async t => {
+  const f=await fixture(t); assert.equal((await f.run()).exitCode,0);
+  assert.equal((await runStatus({ref:'17',cwd:f.source},f.ports)).exitCode,0);
+  const run=f.record(), chat=run.chats.at(-1), herdr=f.ports.herdr;
+  f.herdr.paneOf(chat).agent.name='wrong-name'; let seen=false,moved=false;
+  f.herdr.calls.length=0;
+  const result=await openRun({ref:'17',cwd:f.source,expectStep:'scope'}, {...f.ports,herdr:async args=>{
+    if (seen && !moved && args[0]==='pane' && args[1]==='list') { moved=true; assert.equal((await stepDone({step:'scope',summary:'Done',cwd:run.root},f.agentPorts())).exitCode,0); }
+    if (args[0]==='agent' && args[1]==='get') seen=true;
+    return herdr(args);
+  }});
+  assert.equal(moved,true); assert.equal(result.exitCode,3,result.message);
+  assert.equal(f.herdr.calls.some(args=>args[0]==='agent' && args[1]==='rename'),false);
 });

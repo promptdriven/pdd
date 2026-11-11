@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runs.prompt.md (sha256: a1d28b96c30184b3885c65dbd4a5d83b05a2e92a73e80e06d89962b3d038899a).
+// Generated from prompts/cli/workflow-runs.prompt.md (sha256: 2f7a8216a4171f3a7e30be5c262aa527d99353c9cedf76603143aad84164c705).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import * as nativeRunFiles from 'node:fs';
@@ -196,6 +196,14 @@ function claimRun(runDir, fs,ports) {
     Atomics.wait(pauseBuffer,0,0,10);
   }
 }
+export function acquireOrdinaryRunOwnership(runDir, ports = {}) {
+  try {
+    const release = (ports.acquireRunOwnership ?? (directory => claimRun(directory, ownershipFiles(ports), ports)))(runDir);
+    if (typeof release !== 'function') throw Error('Run ownership was not acquired');
+    return release;
+  } catch (error) { throw saveError(error); }
+}
+
 function ownedRun(runDir, ports, action, {create=false}={}) {
   const fs={...nativeRunFiles,...ports.runFiles};
   let release;

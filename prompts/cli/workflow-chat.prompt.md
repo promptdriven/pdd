@@ -24,6 +24,14 @@ Herdr transport reads complete stdout/stderr before interpreting JSON or a nonze
 Full-access flags stay. Do not pin tool versions. No workflow or native-session lifetime timeouts; the message-readiness deadline below is the local exception. Shell-quote every path and the resume id in the shell line. A native session id (from Herdr, a session file or the run record) is stored or used only when it is a UUID; `chatCommand` refuses any other resume id.
 
 <a id="explicit-fresh-session"></a>
+For opening and closed-workspace recovery, message-file writes use the supplied
+`ports.fs.writeFileSync` when present, otherwise the native filesystem operation.
+This lets the runner admit an expected-state effect before writing a resume or
+replacement start message; a refused write skips the following launch. Before
+launch login-file cleanup or creation, and before starting the Herdr server, invoke optional synchronous
+`ports.guardOpenEffect` with a no-op callback; a thrown refusal skips both and
+the native launch or server start.
+
 ## Closed workspace recovery
 
 Export `rebuildClosedChat({run, chat, message}, ports)`, returning false when the saved workspace remains usable and true after rebuilding a closed or safely recovered workspace. The runner calls it before ordinary open or `--new`. This recovery restores the saved conversation for either command; a later `--new` on the live workspace keeps the normal fresh-session behavior. A pending replacement keeps its existing recovery protocol.
