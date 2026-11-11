@@ -1,6 +1,6 @@
 import { markdownLinks, markdownDefinitions, markdownSectionText } from './runtime-markdown.mjs';
 import { buildBindingPlan, runtimeBoundary } from './runtime-binding-plan.mjs';
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 306840bc71493e3ce7a5d5846aaa2751667272e0ea84f1370606fe75787f8cde).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: c95ab2215230b314ac0648ee8e48355dbab407c37a888ab4cb731d27fec1a9ed).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
@@ -971,7 +971,7 @@ export function preflight({ root, found, selected,workspace=found.workspace??loa
 
 // Keep PDD's declaration classification local. Token offsets preserve all other
 // JSON spellings; in particular, parsing and stringifying would round numbers.
-function executableInterfaceText(text) {
+export function executableInterfaceText(text) {
   const blocks = interfaceBlocks(text);
   if (blocks.length !== 1) return text;
   const block = blocks[0], body = block[1];

@@ -398,6 +398,12 @@ before omission.
 <a id="interface-kind-transport"></a>
 ### Interface kind stays local
 
+Export native `executableInterfaceText(text)`, taking already prepared UTF-8
+prompt text as a string and returning its executable upload text as a string.
+It performs only the projection below; it reads, writes, approves and hashes
+nothing. Capture and effective-hash readers share this same operation. Ordinary
+`readPrompt` text remains the local declaration, with its kind intact.
+
 `kind` classifies a PDD declaration; it is not an executable Runtime field.
 Keep explicit `full` and `partial` in authored files and local prompt readers.
 After reference expansion and ordinary closure/boundary selection, remove only

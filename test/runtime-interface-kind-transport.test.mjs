@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
-import { runCheck, runTry } from '../src/runtime-client.mjs';
+import { runCheck, runTry, readTryOwner, runDoorCall } from '../src/runtime-client.mjs';
 import { temp, fakeRuntime, portsFor } from './runtime-fake.mjs';
 
 // The optional test-only module selects the old capture boundary for the
@@ -66,6 +66,14 @@ async function transport(t) {
     }
     if (entry.command === 'lint') return { status: 200, json: fake.lint(entry.request.requestId, [{ path: SUBJECT, state: 'draft', admission_state: 'draft', interface: { calls: [] } }]) };
     if (entry.command === 'try') return { status: 200, json: fake.tryJob(entry.request.requestId) };
+    if (entry.url.endsWith('/model')) return { status: 200, json: { entries: [], calls: { cap: 400, remaining: 400 } } };
+    if (entry.url.endsWith('/state')) return { status: 200, json: { actions: [], world: {} } };
+    if (entry.json && entry.url.endsWith('/call')) {
+      const answer = { ...fake.job(entry.json.requestId, 'call', 'passed', { program_result: { text: 'hello' } }, 1), session_id: entry.url.split('/')[3] };
+      fake.jobs.set(entry.json.requestId, answer);
+      return { status: 200, json: answer };
+    }
+    if (fake.jobs.has(entry.url.split('/').at(-1))) return { status: 200, json: fake.jobs.get(entry.url.split('/').at(-1)) };
     return { status: 200, json: fake.check(entry.request?.requestId ?? entry.url.split('/').at(-1), 'passed', checks) };
   });
   return fake;
@@ -217,3 +225,30 @@ const actions = {
 };
 const cases = JSON.parse(readFileSync(new URL('./fixtures/runtime-interface-transport/cases.json', import.meta.url), 'utf8')).cases;
 for (const record of cases) test('interface transport: ' + record.id + ' (' + record.criteria.join(',') + ')', t => actions[record.id](t));
+
+for (const kind of ['partial', 'full', undefined]) test('interface transport: unchanged Try continuation ' + (kind ?? 'implicit') + ' (AC4,AC5)', async t => {
+  const root = fixture(t, kind), d = declaration(kind);
+  write(root, 'contracts/text.json', JSON.stringify(schema));
+  d.entries[0].input_schema = { $contract: 'contracts/text.json#' };
+  write(root, SUBJECT, textFor(JSON.stringify(d)));
+  const raw = readFileSync(join(root, SUBJECT)), fake = await transport(t);
+  const setup = fakePorts(root, fake);
+  assert.equal(await runTry({ cwd: root, words: ['echo'], options: { '--no-open': true, '--no-wait': true } }, setup), 0, setup.stderr.text);
+  const owner = await readTryOwner({ cwd: root, story: 'echo' }, fakePorts(root, fake));
+  const descriptor = { root, origin: fake.origin, sessionId: owner.record.id, login: owner.record.login, prompt: SUBJECT, operation: 'echo' };
+  const call = await runDoorCall(descriptor, { text: 'hello' }, fakePorts(root, fake));
+  assert.deepEqual(call.result, { text: 'hello' });
+  assert.equal(fake.jsonPosts.length, 1);
+  assert.deepEqual(readFileSync(join(root, SUBJECT)), raw);
+  // A real shared-contract edit keeps authored prompt bytes unchanged, but
+  // must still refuse owner reads and calls before dispatch.
+  write(root, 'contracts/text.json', JSON.stringify({ ...schema, description: 'Changed public schema.' }));
+  await assert.rejects(readTryOwner({ cwd: root, story: 'echo' }, fakePorts(root, fake)), /A prompt or shared contract changed/);
+  await assert.rejects(runDoorCall(descriptor, { text: 'hello' }, fakePorts(root, fake)), /A prompt or shared contract changed/);
+  assert.equal(fake.jsonPosts.length, 1, 'changed references must never dispatch another call');
+  write(root, 'contracts/text.json', JSON.stringify(schema));
+  write(root, SUBJECT, Buffer.concat([raw, Buffer.from('\nChanged authored prose.\n')]));
+  await assert.rejects(readTryOwner({ cwd: root, story: 'echo' }, fakePorts(root, fake)), /A prompt changed/);
+  await assert.rejects(runDoorCall(descriptor, { text: 'hello' }, fakePorts(root, fake)), /A prompt changed/);
+  assert.equal(fake.jsonPosts.length, 1, 'changed authored source must never dispatch another call');
+});
