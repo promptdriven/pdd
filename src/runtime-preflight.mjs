@@ -18,7 +18,7 @@ export const TEST_SCHEMA = 'prompt-runtime.program-scenario.v1';
 // The only size limit on what pdd sends; over it, pdd names the largest files with their sizes.
 export const LIMITS = Object.freeze({ bytes: 10_485_760, files: 10_000 });
 const TOP_KEYS = new Set(['schema_version', 'story_path', 'criteria', 'initial_world', 'steps', 'entry_paths', 'simulation',
-  'check_exemptions', 'context', 'context_byte_budget', 'criteria_scope', 'prompt_mappings']);
+  'check_exemptions', 'context', 'context_byte_budget', 'criteria_scope', 'prompt_mappings', 'app_maps']);
 const REQUIRED_KEYS = ['schema_version', 'criteria', 'initial_world', 'steps'];
 const STEP_KEYS = new Set(['step_id', 'entry_path', 'operation', 'input', 'checks', 'expected_error', 'simulation_overrides', 'model']);
 const RULE_OPS = new Set(['at_most', 'at_least', 'not_contains', 'all_in', 'equals_ignore_case']);
@@ -819,13 +819,28 @@ const stepShape = step => isObject(step) && !Object.keys(step).some(key=>!STEP_K
   && ['step_id','entry_path','operation','input','checks'].every(key=>Object.hasOwn(step,key))
   && ['step_id','entry_path','operation'].every(key=>typeof step[key]==='string'&&!!step[key]);
 const checkShape = check => isObject(check) && ['criterion_id','target','path','op'].every(key=>Object.hasOwn(check,key));
+function appMapsRefusal(doc) {
+  if (!Object.hasOwn(doc,'app_maps')) return null;
+  if (!Array.isArray(doc.app_maps)) return refusal('invalid-app-maps','app_maps','app_maps must be a list of repository-relative paths.');
+  const seen=new Set();
+  for (const [index,path] of doc.app_maps.entries()) {
+    const section='app_maps['+index+']';
+    if (typeof path!=='string' || !path || /[\\\p{Cc}]/u.test(path) || /^[A-Za-z]:/.test(path)
+      || path.split('/').some(part=>!part || part==='.' || part==='..')) {
+      return refusal('invalid-app-maps',section,'Each app map must be a safe repository-relative path.');
+    }
+    if (seen.has(path)) return refusal('invalid-app-maps',section,path+' is listed twice.');
+    seen.add(path);
+  }
+  return null;
+}
 function documentRefusal(doc,path) {
   if (!isObject(doc)) return refusal('invalid-document', 'scenario', `${path} is not a JSON object.`);
   const missing = REQUIRED_KEYS.filter(key => !Object.hasOwn(doc, key)), extra = Object.keys(doc).filter(key => !TOP_KEYS.has(key));
   if (missing.length) return refusal('invalid-document', 'scenario', `The test has no ${missing.map(key => `"${key}"`).join(', ')}.`);
   if (extra.length) return refusal('invalid-document', 'scenario', `The test has keys the interpreter does not know: ${extra.map(key => `"${key}"`).join(', ')}.`);
   if (doc.schema_version !== TEST_SCHEMA) return refusal('invalid-document', 'schema_version', `schema_version must be "${TEST_SCHEMA}".`);
-  return null;
+  return appMapsRefusal(doc);
 }
 
 export function scenarioShapeRefusal(doc,path) {
@@ -1539,11 +1554,15 @@ function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadR
             let doc;
             try { doc = JSON.parse(text); } catch { continue; } // Format refusals belong to preflight or server lint.
             if (!isObject(doc)) continue;
+            const mapRefusal=appMapsRefusal(doc);
+            if (mapRefusal) throw Object.assign(new PreflightError(4,path+': '+mapRefusal.section+': '+mapRefusal.message),
+              {code:mapRefusal.code,section:mapRefusal.section});
             if (typeof doc.story_path === 'string') {
               if (selecting) { if (!storyTests.has(doc.story_path)) storyTests.set(doc.story_path,[]); if (!storyTests.get(doc.story_path).includes(path)) storyTests.get(doc.story_path).push(path); }
               add(doc.story_path, path, 'story');
             }
             addStrings(doc.entry_paths, path);
+            addStrings(doc.app_maps, path, 'app-map');
             for (const step of Array.isArray(doc.steps) ? doc.steps : []) if (typeof step?.entry_path === 'string') add(step.entry_path, path);
             for (const item of Array.isArray(doc.context) ? doc.context : []) {
               if (typeof item?.prompt_path === 'string') add(item.prompt_path, path);
@@ -1556,8 +1575,9 @@ function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadR
               if (Array.isArray(value)) { for (const item of value) walk(item); return; }
               if (!isObject(value)) return;
               if (typeof value.prompt_path === 'string') add(value.prompt_path, path);
+              if (typeof value.owner_prompt === 'string') add(value.owner_prompt, path);
               addStrings(value.stylesheets, path);
-              for (const key of ['screens', 'router', 'routes', 'handlers', 'handler', 'after']) walk(value[key]);
+              for (const key of ['screens', 'router', 'routes', 'handlers', 'handler', 'after', 'timers', 'host_regions', 'helpers']) walk(value[key]);
             };
             walk(map);
           } else {
