@@ -2179,16 +2179,21 @@ test('N7 a question resets the streak; a quiet job gets no heartbeat', async t =
 const bindings = modules => JSON.stringify({ schema_version: 'pdd.bindings.v1', modules: modules.map(([module, prompt]) => ({ module, stories: ['user_stories/s.md'], prompt })) });
 const editIn = (w, n, path, text, role = 'build') => writeIn(w.job(n, role).cwd, path, text);
 
-test('O1 the build brief has the owner table (binding, header in the first 4 KiB, opening paragraph) and the path rules', async t => {
+test('O1 the build brief has the owner table (binding, header line in the first 4 KiB, opening sentence) and the path rules', async t => {
   const w = await coreWorld(t, { settings: { runs: 1 } });
   w.baseCommit('pdd-bindings.json', bindings([['src/words.js', 'prompts/words.prompt.md']]));
-  w.baseCommit('src/late.js', `${'// filler line\n'.repeat(30)}// Generated from prompts/late.prompt.md (sha256: x)\n`);
-  w.baseCommit('prompts/money.prompt.md', '# Money\n\nOwn `src/money.js`: format cents as money.\n\nLater text names src/other.js, which is not the opening paragraph.\n');
+  w.baseCommit('prompts/words.prompt.md', '# Words\n\nCount the words.\n'); w.baseCommit('src/words.js', 'export const words = 1;\n');
+  w.baseCommit('prompts/late.prompt.md', '# Late\n\nThe late module.\n');
+  w.baseCommit('src/late.js', `${'// filler line\n'.repeat(30)}// Generated from prompts/late.prompt.md\n`);
+  w.baseCommit('src/money.js', 'export const money = 1;\n'); w.baseCommit('src/other.js', 'export const other = 1;\n'); w.baseCommit('src/third.js', 'export const third = 1;\n');
+  w.baseCommit('prompts/money.prompt.md', '# Money\n\nOwn `src/money.js`: format cents as money. The next sentence names src/third.js.\n\nLater text names src/other.js, which is not the opening paragraph.\n');
   w.issue(17); await w.tick();
   const input = w.job(17, 'build').input;
   assert.match(input, /- src\/words\.js: prompts\/words\.prompt\.md \(binding\)/);
   assert.match(input, /- src\/late\.js: prompts\/late\.prompt\.md \(header\)/, 'a header past the first 10 lines, in the first 4 KiB');
-  assert.doesNotMatch(input, /- src\/other\.js:/, 'only the opening paragraph counts');
+  assert.match(input, /- src\/money\.js: prompts\/money\.prompt\.md \(prose, not certain: treat as owned\)/, 'the opening sentence (pdd owner)');
+  assert.doesNotMatch(input, /- src\/(?:other|third)\.js:/, 'only the opening sentence counts');
+  assert.match(input, /run the same lookup \(`pdd owner FILE`\)/); assert.match(input, /A file that you add is never path e/);
   assert.match(input, /e\. Existing code that no prompt owns: change it directly, with a regression test/);
   assert.match(input, /The prompt and the code may be in one commit\. Never rewrite history/);
   assert.match(input, /"adopt":\[/);
@@ -2213,11 +2218,12 @@ test('O3 native reds: an owned file on path d (R1), a new prompt with no new cod
   const cases = [
     ['R1', w => editIn(w, 17, 'src/words.js', 'export const words = s => s.split(/\\s+/);\n'), 'Path: d — src/words.js — unowned — no contract change — Test: done check', /src\/words\.js is owned by prompts\/words\.prompt\.md \(binding\), so it cannot take path d/],
     ['R3', w => editIn(w, 17, 'prompts/package.prompt.md', '# Package\n\nThe test:vectors script is exactly node --test.\n'), 'Path: d — package.json — unowned — new prompt — Test: test/package.test.js', /prompts\/package\.prompt\.md is a new prompt that owns no new code file/],
-    ['R4', w => editIn(w, 17, 'src/util.js', '// Generated from prompts/util.prompt.md (sha256: x)\nexport const util = 1;\n'), 'Path: e — src/util.js — unowned — no contract change — Test: test/util.test.js', /src\/util\.js exists on the base with no owner, and this PR adds a header for it/],
+    ['R4', w => editIn(w, 17, 'src/util.js', '// Generated from prompts/util.prompt.md\nexport const util = 1;\n'), 'Path: e — src/util.js — unowned — no contract change — Test: test/util.test.js', /src\/util\.js exists on the base with no owner, and this PR adds a header for it/],
     ['R6', () => {}, null, /The PR body has no Path line/]];
   for (const [name, edit, line, finding] of cases) {
     const w = await coreWorld(t, { settings: { runs: 1 } });
     w.baseCommit('pdd-bindings.json', bindings([['src/words.js', 'prompts/words.prompt.md']]));
+    w.baseCommit('prompts/words.prompt.md', '# Words\n\nCount the words.\n');
     w.baseCommit('src/words.js', 'export const words = s => s.split(" ");\n');
     w.baseCommit('src/util.js', 'export const util = 0;\n');
     w.issue(17); await w.tick(); edit(w);
@@ -2230,7 +2236,7 @@ test('O3 native reds: an owned file on path d (R1), a new prompt with no new cod
   const w = await coreWorld(t, { settings: { runs: 1 } });
   w.baseCommit('src/util.js', 'export const util = 0;\n');
   w.issue(17, { title: 'Adopt PDD for src/util.js' }); await w.tick();
-  editIn(w, 17, 'src/util.js', '// Generated from prompts/util.prompt.md (sha256: x)\nexport const util = 0;\n');
+  editIn(w, 17, 'src/util.js', '// Generated from prompts/util.prompt.md\nexport const util = 0;\n');
   editIn(w, 17, 'prompts/util.prompt.md', '# Util\n\nOwn `src/util.js`.\n');
   w.build(17, { body: 'Fixes #17\n\nRuntime: PASS\nPath: c — src/util.js, prompts/util.prompt.md — prompts/util.prompt.md — new prompt — Test: done check' }); await w.tick();
   assert.equal(w.job(17, 'repair'), undefined, 'adopting PDD is allowed when the issue asks');
@@ -2238,11 +2244,16 @@ test('O3 native reds: an owned file on path d (R1), a new prompt with no new cod
 
 test('O4 path e: the job result proposes adopting PDD; the tick files one deduped PDD report', async t => {
   const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.baseCommit('change-17.txt', 'old\n'); w.baseCommit('change-18.txt', 'old\n');   // path e is for existing files (R7)
   w.issue(17); w.issue(18); await w.tick();
+  const adoptDrafts = () => listReportDrafts({ root: w.reportRoot }).filter(d => d.fingerprint.startsWith('pdd.autopilot-core.adopt-pdd'));
   w.build(17, { body: 'Fixes #17\n\nRuntime: PASS\nPath: e — change-17.txt — unowned — no contract change — Test: test/c.test.js', result: { adopt: ['change-17.txt'] } }); await w.tick();
+  assert.equal(adoptDrafts().length, 0, '#3239: the report waits until every check passed at the final head');
   w.review(17, 'PASS'); w.suite(17, 0); await w.tick(); await w.tick();
+  assert.equal(adoptDrafts()[0]?.count, 1);
   w.build(18, { body: 'Fixes #18\n\nRuntime: PASS\nPath: e — change-18.txt — unowned — no contract change — Test: test/c.test.js', result: { adopt: ['change-18.txt'] } }); await w.tick();
-  const drafts = listReportDrafts({ root: w.reportRoot }).filter(d => d.fingerprint.startsWith('pdd.autopilot-core.adopt-pdd'));
+  w.review(18, 'PASS'); w.suite(18, 0); await w.tick(); await w.tick();
+  const drafts = adoptDrafts();
   assert.equal(drafts.length, 1); assert.equal(drafts[0].count, 2); assert.match(drafts[0].body, /^Autopilot changed existing code that no prompt owns/);
   assert.match(drafts[0].detail, /change-18\.txt/, 'the module list stays in the local draft'); assert.doesNotMatch(drafts[0].body, /change-18\.txt/);
 });
