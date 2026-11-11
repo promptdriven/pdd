@@ -223,6 +223,11 @@ that issue for this tick.
 
 ## Claim and start
 
+**No label, no claim.** When the settings have `labelRequired` (the launcher sets it) and no `label`, intake claims
+nothing and returns `intake held: no opt-in label; run pdd autopilot start --label pdd:autopilot and mark issues with
+pdd autopilot add N`. Jobs still advance. Without `labelRequired` (a direct `tickCore` call), no label means every
+ready issue.
+
 **Collisions at start (debate B 5.1, 5.2; notes and hints, never a lock).** S2: intake
 reads up to the free slots plus 4 ready issues and starts first those whose named
 paths (paths in the title and body) meet no other running job (its named paths and its
@@ -921,12 +926,12 @@ with the machine id.
 
 ## Machine settings
 
-`state.engine` (`core` or `full`, saved by `pdd autopilot start --engine`),
 `state.label` (saved by `start --label`) and `state.mode` (saved by `start --mode`)
 win over `pdd.json` for this repository on this machine. The launcher applies them;
 `coreStatus` takes `sources: {engine, label, mode, report}` (`machine` or `pdd.json`) and
 names the source: `engine core (this machine: pdd autopilot start --engine core)` or
-`engine core (pdd.json autopilot.engine)`, `only issues with LABEL (this machine)`
+`engine core (pdd.json autopilot.engine)` when `engine` is given (the launcher gives none, so the line says
+`engine core`), `only issues with LABEL (this machine)`
 or `(pdd.json)`, `mode M (this machine)` and `reports R (this machine)`; mode
 `observe` adds `(every check, no merge)`.
 

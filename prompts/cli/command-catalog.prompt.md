@@ -46,9 +46,9 @@ Help forms and completion name only the `NAMES` words.
 
 ## Autopilot routes
 
-Catalog four local routes before the product routes: `autopilot.start` (`autopilot start`, local `autopilot-start`, no operands, optional text --runs, --checks and --resume-custody); `autopilot.stop` (matching prefix/disposition, no operands/options); `autopilot.status` (matching prefix/disposition, no operands, optional flag --all); `autopilot.add` (`autopilot add`, local `autopilot-add`, required repeated issue operands). Forms and descriptions:
+Catalog four local routes before the product routes: `autopilot.start` (`autopilot start`, local `autopilot-start`, no operands, optional text --runs and --checks); `autopilot.stop` (matching prefix/disposition, no operands/options); `autopilot.status` (matching prefix/disposition, no operands, optional flag --all); `autopilot.add` (`autopilot add`, local `autopilot-add`, required repeated issue operands). Forms and descriptions:
 
-- `pdd autopilot start [--runs N] [--checks N] [--engine core|full] [--label NAME] [--mode auto|observe|off] [--report file|draft|off] [--intake off|shadow] [--resume-custody FILE]`: Start this repo in an interactive Herdr agent (the full engine: deprecated, removed in 0.1.29), or headless jobs with the core engine (--engine core); check now and every 30 minutes (10 with the core engine) without AI on empty ticks. --runs and --checks override machine-sized run and heavy-check limits; --engine (choice core or full), --label (text), --mode (choice auto, observe or off) and --report (choice file, draft or off) save this machine's engine, opt-in label, core mode and core report mode for this repo, over pdd.json (--mode observe runs every check but never merges; --report draft, the default, keeps problem reports on this machine); --intake (choice off or shadow) saves this machine's core intake mode (shadow writes local intake cards that never change what starts; off is the default); --resume-custody supplies the verified original-owner projection.
+- `pdd autopilot start [--runs N] [--checks N] [--label NAME] [--mode auto|observe|off] [--report file|draft|off] [--intake off|shadow]`: Start this repo with headless agent jobs (the core engine): check now and every 10 minutes, with no AI call on empty ticks. Autopilot works only on issues with an opt-in label: --label NAME (for example pdd:autopilot) or autopilot.label in pdd.json; a start with no label starts nothing. --runs and --checks override machine-sized run and heavy-check limits; --label (text), --mode (choice auto, observe or off) and --report (choice file, draft or off) save this machine's opt-in label, mode and report mode for this repo, over pdd.json (--mode observe runs every check but never merges; --report draft, the default, keeps problem reports on this machine); --intake (choice off or shadow) saves this machine's intake mode (shadow writes local intake cards that never change what starts; off is the default). A machine that ran the removed full engine moves to the core engine at its next tick. The route also accepts `--engine` (choice core or full) and shows it in no form: the launcher accepts core and refuses full with one line.
 - `pdd autopilot stop`: Stop this machine's timer; let the current agent step finish.
 - `pdd autopilot status [--all] [--json]`: Show this machine's repo, folder, agent and next tick; --all lists every repository with Autopilot on this machine, from any folder.
 - `pdd autopilot add N...`: Mark named old issues with pdd:autopilot so Autopilot may take them.
@@ -320,12 +320,6 @@ no operands and an optional flag `--json`. Form: `pdd autopilot intake [--json]`
 (Print this machine's local intake cards for this repo (shadow mode), the would-pick
 list and today's changes; no AI call or GitHub write.).
 
-## Post-merge audit route
-
-Catalog `autopilot.audit` with prefix `autopilot audit`, local `autopilot-audit`,
-required text operands RUN and PR, no options. Form: `pdd autopilot audit RUN PR`.
-Description: Audit an automatic merge once with a fresh agent and save its verdict.
-
 ## Finished chat maintenance
 
 Include public local route `workflow.tidy`, prefix `workflow tidy`, no operands, optional flag `--dry-run`, and help form `pdd workflow tidy [--dry-run]`. It closes safely finished chats or reports eligible tabs without changes.
@@ -376,7 +370,6 @@ The metrics routes are `pdd metrics [--json] [--date YYYY-MM-DD | --snapshot ID]
 
 For `workflow.run`, also accept optional `--origin` (manual, autopilot or unknown), `--decision-id` (text) and `--outcome` (code or prompt-only) as observational metadata. The runner verifies the decision against the actual repository and issue. Keep the draft, base and approved-corpus options and existing help form.
 
-Catalog `autopilot.check-base` with prefix `autopilot check-base`, local `autopilot-check-base`, required text operands RUN and PR, and no options. Form: `pdd autopilot check-base RUN PR`. Description: Check the saved automatic base, PR target, current default branch and newest release before a merge or after it. This command reads only.
 
 
 ## First-start doctor
