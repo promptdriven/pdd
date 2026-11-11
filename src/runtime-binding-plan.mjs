@@ -1,6 +1,18 @@
-// Generated from prompts/cli/runtime-binding-plan.prompt.md (sha256: 2edf900a03bd61d33842e55edc4cd1f93b91277528264f7aa0858cd6b9fc6b10).
+// Generated from prompts/cli/runtime-binding-plan.prompt.md (sha256: a3309e16808c518bd2ed5af944dcc1ccac086909325f2f08bc4d224cc4712779).
 
 const rows = value => Array.isArray(value) ? value : [];
+const selectedResources = (iface, operation) => {
+  const entries = rows(iface?.entries), selected = entries.filter(entry => entry?.operation === operation);
+  const declared = new Set(rows(iface?.resources).flatMap(resource => rows(resource?.operations)
+    .map(member => `${resource.name}.${member?.name}`)));
+  if (selected.length !== 1 || entries.some(entry => typeof entry?.operation !== 'string' || !entry.operation)
+      || new Set(entries.map(entry => entry.operation)).size !== entries.length
+      || !entries.every(entry => Array.isArray(entry?.resource_operations)
+      && entry.resource_operations.every(name => typeof name === 'string' && declared.has(name))
+      && new Set(entry.resource_operations).size === entry.resource_operations.length)) return null;
+  if (new Set(entries.flatMap(entry => entry.resource_operations)).size !== declared.size) return null;
+  return new Set(selected[0].resource_operations);
+};
 const boundaryNote = (notes, reason) => {
   notes.push({code:'boundary-not-applied',reason,message:reason === 'legacy-syntax'
     ? 'boundary not applied: use the pdd-boundary block'
@@ -62,11 +74,15 @@ export function buildBindingPlan({test, storyText, prompts, dependencyPaths=[], 
     }
     steps.push({step_id:step.step_id,closure:[...closure].sort()});
     const simulation = {...test.doc.simulation,...step.simulation_overrides};
+    const otherEntryCall = [...closure].some(path => rows(prompts.get(path)?.calls).some(call =>
+      call?.target === step.entry_path && call.target_operation !== step.operation));
+    const active = otherEntryCall ? null : selectedResources(prompts.get(step.entry_path), step.operation);
     for (const path of [...closure].sort()) {
       if (!allowed(path)) continue;
       for (const resource of rows(prompts.get(path)?.resources)) for (const operation of rows(resource?.operations)) {
         if (typeof resource?.name !== 'string' || typeof operation?.name !== 'string') continue;
         const key = `${resource.name}.${operation.name}`, candidates = [];
+        if (path === step.entry_path && active !== null && !active.has(key)) continue;
         for (const [name,binding] of Object.entries(simulation)) {
           const split = name.lastIndexOf('.'), resourceName = name.slice(0,split), operationName = name.slice(split+1);
           const cause = resourceName !== resource.name ? 'wrong-name' : operationName !== operation.name ? 'wrong-operation'

@@ -226,6 +226,28 @@ const actions = {
 const cases = JSON.parse(readFileSync(new URL('./fixtures/runtime-interface-transport/cases.json', import.meta.url), 'utf8')).cases;
 for (const record of cases) test('interface transport: ' + record.id + ' (' + record.criteria.join(',') + ')', t => actions[record.id](t));
 
+test('interface admission: partial entry scopes and process port survive capture (#817)', t => {
+  const root = fixture(t), d = declaration('partial');
+  d.entries[0].resource_operations = [];
+  d.entries.push({ ...structuredClone(d.entries[0]), operation: 'launch', resource_operations: ['process.run'] });
+  d.resources = [{ name: 'process', kind: 'port', access: 'write', operations: [{
+    name: 'run', access: 'write', arguments_schema: structuredClone(schema), result_schema: structuredClone(schema),
+  }] }];
+  write(root, SUBJECT, textFor(JSON.stringify(d)));
+  const scenario = JSON.parse(readFileSync(join(root, SCENARIO), 'utf8'));
+  scenario.simulation = { 'process.run': { action: 'port.write', world_pointer: '/processes', result_template: { text: 'done' } } };
+  scenario.initial_world = { processes: [] };
+  write(root, SCENARIO, JSON.stringify(scenario));
+  const authored = readFileSync(join(root, SUBJECT));
+  const captured = capture(root), executable = iface(projected(root, captured));
+  assert.deepEqual(executable.entries.map(entry => entry.resource_operations), [[], ['process.run']]);
+  assert.deepEqual(executable.resources, d.resources);
+  assert.deepEqual(captured.bindingPlans[0].edges, [], 'the pure selected entry needs no launch binding');
+  assert.equal(executable.status, 'draft');
+  assert.deepEqual(JSON.parse(source(captured, SCENARIO)), scenario, 'capture cannot rewrite inputs, expected values or port replies');
+  assert.deepEqual(readFileSync(join(root, SUBJECT)), authored);
+});
+
 for (const kind of ['partial', 'full', undefined]) test('interface transport: unchanged Try continuation ' + (kind ?? 'implicit') + ' (AC4,AC5)', async t => {
   const root = fixture(t, kind), d = declaration(kind);
   write(root, 'contracts/text.json', JSON.stringify(schema));

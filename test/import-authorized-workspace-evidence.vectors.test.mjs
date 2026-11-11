@@ -7,7 +7,7 @@ import {evidenceFixture,assertProtected,selection} from './helpers/workspace-evi
 
 // Execute the unchanged approved operations/checks in order. Isolated native
 // worlds are those in the approved native plan; repeat shares the clone world.
-const vectorPath=new URL('./runtime/import-authorized-workspace-evidence.json',import.meta.url);
+const vectorPath=new URL('./cases/import-authorized-workspace-evidence.scenario',import.meta.url);
 const original=readFileSync(vectorPath),scenario=JSON.parse(original);
 test('2899 replay: original selected workspace evidence through recordEvidence',async t=>{
   let repeat;const owner=t;
