@@ -255,6 +255,35 @@ test('recorder close without a terminal message reports failure',async t=>{
   fs.rmSync(start.environmentRoot,{recursive:true,force:true});
 });
 
+test('recorder drains a queued terminal report before disconnecting',async t=>{
+  const f=fixture(t),logPath=join(f.root,'output.log');fs.writeFileSync(logPath,'');
+  // Delay the terminal transport write for one event-loop turn. This models a
+  // write queued behind output without timing assumptions or large buffers.
+  const module=resolve('src/test-suite-recorder.mjs');
+  const child=spawn(process.execPath,['--input-type=module','-e',`
+    const send=process.send.bind(process);
+    process.send=(message,callback)=>{
+      if(message.result){setImmediate(()=>send(message,callback));return false;}
+      return send(message,callback);
+    };
+    await import(${JSON.stringify(module)});
+  `],{cwd:f.root,env:f.env,stdio:['ignore','ignore','pipe','ipc']});
+  let terminal=null,stderr='';
+  child.stderr.on('data',bytes=>{stderr+=bytes;});
+  child.on('message',message=>{if(message.result)terminal=message.result;});
+  const ended=new Promise((done,reject)=>{child.once('error',reject);child.once('close',(code,signal)=>done({code,signal}));});
+  child.once('spawn',()=>child.send({start:{
+    command:`printf %s ${quote(summary)}; exit 7`,cwd:f.root,env:f.env,timeoutMs:2000,
+    record:{receiptPath:f.receipt,logPath,state:'running',outcome:'running'},
+  }}));
+  const exit=await ended;
+  const row=read(f.receipt);
+  assert.equal(exit.code,0,stderr);assert.equal(row.exitCode,7);
+  assert.ok(terminal,'saved terminal receipt must reach a connected caller after queued output');
+  assert.equal(terminal.exitCode,7);assert.equal(terminal.record.outcome,'completed');
+  assert.deepEqual(terminal.record,row);assert.equal(fs.readFileSync(logPath,'utf8'),summary);
+});
+
 test('validation saves full output, source and terminal counts before forwarding or returning',async t=>{
   const f=fixture(t),cwd=join(f.root,'repo');fs.mkdirSync(cwd);
   const git=(...args)=>execFileSync('git',args,{cwd,env:f.env,stdio:['ignore','pipe','pipe']}).toString().trim();
