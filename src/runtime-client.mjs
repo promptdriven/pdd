@@ -3367,9 +3367,9 @@ function captureProductTry(root,test,options,ports) {
   return {capture,composition,maxTapCalls};
 }
 const productOptions = setup => setup ? {'--product':true,...(setup.parts?{'--parts':setup.parts.join(',')}:{}),...(setup.journey?{'--journey':setup.journey}:{})} : {};
-function tryCommand(test, setup, suffix='') {
-  const quote=value=>"'"+String(value).replace(/'/g,"'\"'\"'")+"'";
-  return `pdd simulate ${quote(test.story)}${setup?' --product'+(setup.parts?' --parts '+quote(setup.parts.join(',')):'')+(setup.journey?' --journey '+quote(setup.journey):''):''}${suffix}`;
+function tryCommand(test, setup, suffix='', target=test.story) {
+  const quote=value=>/^[A-Za-z0-9_./-]+$/.test(String(value))?String(value):"'"+String(value).replace(/'/g,"'\"'\"'")+"'";
+  return `pdd simulate ${quote(target)}${setup?' --product'+(setup.parts?' --parts '+quote(setup.parts.join(',')):'')+(setup.journey?' --journey '+quote(setup.journey):''):''}${suffix}`;
 }
 
 async function readUntil(context, id, command, isDone, ms, label) {
@@ -3411,7 +3411,7 @@ function tryRecovery(context, test, id) {
 
 async function reopenTry(context, record, test) {
   const target = /^[A-Za-z0-9_./-]+$/.test(test.path) ? test.path : "'" + test.path.replace(/'/g, "'\"'\"'") + "'";
-  const again = tryCommand(test,record.product_setup);
+  const again = tryCommand(test,record.product_setup,'',test.path);
   if (context.interrupted) throw new Stop(3, 'Stopped before reopening the Try.');
   line(context.ports.stderr, 'Reopening your Try…');
   const reply = await context.runtime.reopen(record.id);

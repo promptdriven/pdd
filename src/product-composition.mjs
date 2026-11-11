@@ -160,7 +160,7 @@ function joinMaps(product, parts, maps, chain, encode, selectedParts) {
         });
         if (handler.handler !== null && handler.handler !== undefined) {
           for (const [offset, operation] of chain.entries()) after.push({ handler: operation.handler, input: {}, bind: `/${escape(scratch)}/${offset}` });
-          if (after.length > 8) badMap(`app/maps/${part}.json needs ${after.length} after operations; the Runtime limit is 8 (40 total calls per tap).`);
+          if (after.length > 8) badMap(`app/maps/${part}.json needs ${after.length} after operations; the PDD interpreter limit is 8 (40 total calls per tap).`);
           tapOperations = Math.max(tapOperations, 1 + after.length);
         }
         const state = handler.state === null || handler.state === undefined ? null : Object.fromEntries(stateKeys.map(key => [key,
@@ -171,7 +171,7 @@ function joinMaps(product, parts, maps, chain, encode, selectedParts) {
     for (const stylesheet of map.stylesheets) if (!joined.stylesheets.includes(stylesheet)) joined.stylesheets.push(stylesheet);
   }
   if (routers.some(router => router !== null)) {
-    if (routers.some(router => router === null) || routers.some(router => encode(router) !== encode(routers[0]))) fail('unsupported-product-router', 'Selected maps require incompatible routers; the Runtime has one router slot.');
+    if (routers.some(router => router === null) || routers.some(router => encode(router) !== encode(routers[0]))) fail('unsupported-product-router', 'Selected maps require incompatible routers; the PDD interpreter has one router slot.');
     joined.router = routers[0];
   }
   joined.routes = [...routes.values()];
