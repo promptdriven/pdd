@@ -196,6 +196,6 @@ test('SETUP9: the block says that source code with no prompt first gets a whole-
   assert.equal(result.status, 0, result.stderr);
   const rule = readFileSync(join(project, 'AGENTS.md'), 'utf8').split('\n').find(line => line.startsWith('This project uses PDD.'));
   assert.ok(rule.includes("When no prompt owns source code that people maintain, first write its prompt from the current code: the file's whole behavior today"), rule);
-  assert.ok(rule.includes('Docs, config, CI, package data and tests get no prompt'), rule);
+  assert.ok(rule.includes('Docs, config, CI, package data and tests that no prompt owns get no new prompt'), rule);
   assert.equal(rule.includes('Files that no prompt owns change directly'), false, rule);
 });
