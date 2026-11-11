@@ -169,6 +169,10 @@ changes nothing on the issue (no comment, no label), marks this machine's own op
 PR of that job as draft with one note (one try; a failure only warns) and cleans up
 locally with outcome `handed-over`. It never merges.
 6. Intake fills free slots (see below).
+7. When `settings.intake` is `shadow` (the launcher sets it from the machine) and the
+   issue list was read, run one pass of the [intake cards](autopilot-intake.prompt.md)
+   (`shadowIntake(ctx, rows)`) after intake, inside a try/catch: an error is one
+   warning, and the pass never changes a start, a slot or the message.
 
 The message counts started, merged and ended jobs and repairs, the busy slots and
 any intake hold, for example
