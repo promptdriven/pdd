@@ -272,6 +272,19 @@ test('2870 review: path and Try values stay distinct, quoted and inert, and long
   assert.match(report,/x\\\\u200b/);assert.doesNotMatch(report,/\u200b/);
 });
 
+test('2953: terminal warnings show plain paths and links; the PR form keeps its escaping',async t=>{
+  const f=await fixture(t),result=f.api.readReplayEvidence(f.run);
+  result.warnings=[
+    {vector:'tests/add_one.json',path:'/link',before:'https://example.com/a?x=1&y=2',after:'https://example.com/b'},
+    {vector:'tests/add_one.json',path:'/marker',before:'pdd-workflow:old',after:'x\u200b'}
+  ];
+  const terminal=f.api.formatReplayEvidence(result,{terminal:true}),pr=f.api.formatReplayEvidence(result);
+  assert.ok(terminal.includes('warning: Saved test values changed: tests/add_one.json /link "https://example.com/a?x=1&y=2" -> "https://example.com/b"'),terminal);
+  assert.doesNotMatch(terminal,/&#47;|&amp;|\\_/);
+  assert.match(terminal,/pdd-workflow\\u003aold/);assert.match(terminal,/x\\u200b/);assert.doesNotMatch(terminal,/\u200b|pdd-workflow:/);
+  assert.match(pr,/tests&#47;add\\_one\.json/);assert.match(pr,/&amp;/);assert.doesNotMatch(pr,/https:\/\//);
+});
+
 test('2870 review: a display budget counts overflow and keeps the complete warning list',async t=>{
   const f=await fixture(t),result=f.api.readReplayEvidence(f.run);
   result.warnings=Array.from({length:800},(_,i)=>({vector:'tests/add.json',path:`/numbers/${i}`,before:i,after:i+1}));
