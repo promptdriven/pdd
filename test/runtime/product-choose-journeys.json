@@ -4,7 +4,7 @@
   "criteria": [
     {
       "id": "AC1",
-      "text": "Checking journeys selects only the journeys in my project\u2019s root journey folder, in their listed order."
+      "text": "Checking journeys selects only the journeys in my project’s root journey folder, in their listed order."
     },
     {
       "id": "AC2",
@@ -15,8 +15,27 @@
       "text": "If J1 names more than one journey, I get a clear request to choose one."
     }
   ],
-  "initial_world": {},
-  "simulation": {},
+  "initial_world": {
+    "requests": []
+  },
+  "simulation": {
+    "files.read": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "content": ""
+      }
+    },
+    "files.stat": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "exists": false,
+        "is_symlink": false,
+        "size": 0
+      }
+    }
+  },
   "context": [],
   "steps": [
     {
