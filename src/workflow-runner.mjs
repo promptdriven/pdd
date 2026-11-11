@@ -4164,6 +4164,7 @@ Nothing was sent to the chat.` };
           saved.inFlight = true; saved.owner = owner; claimed = true; return true;
         }); } catch { custodyFailed = true; return false; }
       } });
+      if (!releaseExpected) staleAtSubmit ||= expectedState(latest(), p.expected ?? {});
       if (staleAtSubmit) return await refuseStale(staleAtSubmit);
       if (custodyFailed) return fail(`Could not save submission intent; ${what} was not sent. ${kept}`);
       let observed;
@@ -5046,7 +5047,8 @@ async function returnToPrompt(run,selected,p) {
     await rawGit(p,run.root,'fetch','origin',`refs/heads/${pr1.branch}:refs/remotes/origin/${pr1.branch}`);
     await rawGit(p,run.root,'switch','-q',pr1.branch);
     await rawGit(p,run.root,'merge','--ff-only',`refs/remotes/origin/${pr1.branch}`);
-  } catch {
+  } catch (error) {
+    if (error?.code === 'workflow_progress_refused') throw error;
     await rawGit(p,run.root,'switch','-q',codeBranch).catch(()=>{});
     return 'Cannot fast-forward the owned PR 1 branch. Repair its local branch, then retry.';
   }

@@ -347,3 +347,45 @@ test('open refuses a moved step before renaming the inspected agent', async t =>
   assert.equal(moved,true); assert.equal(result.exitCode,3,result.message);
   assert.equal(f.herdr.calls.some(args=>args[0]==='agent' && args[1]==='rename'),false);
 });
+
+test('changes refuses progress during blocked chat inspection and restores journal bytes', async t => {
+  const f=await fixture(t); assert.equal((await f.run()).exitCode,0);
+  const run=f.record(), path=join(run.runDir,'delivery-journal.json');
+  const bytes=JSON.stringify({requests:[{id:'old',text:'Old',kind:'change',area:'other',paneId:'other',state:'delivered',at:1,deliveredAt:2}]},null,2)+'\n';
+  writeFileSync(path,bytes); const herdr=f.ports.herdr; let moved=false, afterTransition;
+  const result=await changeRun({ref:'17',cwd:f.source,text:'Revise',expectStep:'scope'}, {...f.ports,herdr:async args=>{
+    if (args[0]==='pane' && args[1]==='read') {
+      moved=true; assert.equal((await stepDone({step:'scope',summary:'Done',cwd:run.root},f.agentPorts())).exitCode,0);
+      afterTransition=snapshot(run.runDir); delete afterTransition['delivery-journal.json'];
+      return '────────────\n Bash command\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. No\n\n Esc to cancel · Tab to amend\n';
+    }
+    return herdr(args);
+  }});
+  assert.equal(moved,true); assert.equal(result.exitCode,3,result.message); assert.match(result.message,/current step: none/i);
+  assert.equal(readFileSync(path,'utf8'),bytes); assert.equal(f.herdr.calls.some(args=>args[0]==='agent' && args[1]==='prompt'),false);
+  const after=snapshot(run.runDir); delete after['delivery-journal.json']; assert.deepEqual(after,afterTransition);
+  assert.equal(f.record().changes.length,0);
+});
+
+test('open preserves stale refusal during prompt branch fetch and allows retry', async t => {
+  const {prepared}=await import('./helpers/workflow-prompt-reentry-fixture.mjs');
+  const f=await prepared(t,{realRemote:true,publishCode:false});
+  const run=f.record(); f.git(run.root,'add','value.mjs'); f.git(run.root,'commit','-qm','Code');
+  const branch=f.git(run.root,'branch','--show-current'), before=snapshot(run.runDir), execute=f.ports.execFile;
+  let moved=false, switches=0, statusAfterTransition;
+  const result=await openRun({ref:'17',cwd:f.source,area:'prompt-pr',expectStep:'verify'}, {...f.ports,execFile:async(file,args,options)=>{
+    const out=await execute(file,args,options);
+    if (file==='git' && args[0]==='switch') switches++;
+    if (!moved && file==='git' && args[0]==='fetch') {
+      moved=true; const current=f.record(); current.done.verify={summary:'Done',at:10}; writeFileSync(join(run.runDir,'status.json'),JSON.stringify(current));
+      statusAfterTransition=readFileSync(join(run.runDir,'status.json'));
+    }
+    return out;
+  }});
+  assert.equal(moved,true); assert.equal(result.exitCode,3,result.message); assert.match(result.message,/current step: none/i);
+  assert.equal(switches,0); assert.equal(f.git(run.root,'branch','--show-current'),branch);
+  assert.deepEqual(readFileSync(join(run.runDir,'status.json')),statusAfterTransition);
+  const after=snapshot(run.runDir); delete before['status.json']; delete after['status.json']; assert.deepEqual(after,before);
+  const retry=await openRun({ref:'17',cwd:f.source,area:'prompt-pr'},f.ports);
+  assert.equal(retry.exitCode,0,retry.message);
+});
