@@ -1,6 +1,6 @@
 import { markdownLinks, markdownDefinitions, markdownSectionText } from './runtime-markdown.mjs';
 import { buildBindingPlan, runtimeBoundary } from './runtime-binding-plan.mjs';
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 216851bda0983285f7264bb683a9aedb3db466cdfdcf202bd3d9ae3ab24cc9b0).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: cd4f2afcd72e5c51d58e7fc5f5fd0f4260c6193a4f99c509b47ac3ab279cccde).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
@@ -302,23 +302,44 @@ const INTERPRETER_INTEGERS = { min: -(2n ** 53n - 1n), max: 2n ** 53n - 1n, text
 const outsideInterpreter = value => typeof value === 'bigint' && (value < INTERPRETER_INTEGERS.min || value > INTERPRETER_INTEGERS.max);
 // The interpreter's section of a test value: keys joined by ".", indexes as [N] (steps[10].input.seconds).
 const interpreterSection = path => path.reduce((text, part) => typeof part === 'number' ? `${text}[${part}]` : text ? `${text}.${part}` : String(part), '');
-function interpreterIntegerRefusal(doc) {
+// Advice only: the interpreter is the one place that refuses; the test is still sent.
+function interpreterIntegerWarning(doc, path) {
   let found = null;
-  const visit = (value, path) => {
+  const visit = (value, at) => {
     if (found) return;
-    if (outsideInterpreter(value)) found = { value, path };
-    else if (Array.isArray(value)) value.forEach((item, index) => visit(item, [...path, index]));
-    else if (isObject(value)) for (const [key, item] of Object.entries(value)) visit(item, [...path, key]);
+    if (outsideInterpreter(value)) found = { value, path: at };
+    else if (Array.isArray(value)) value.forEach((item, index) => visit(item, [...at, index]));
+    else if (isObject(value)) for (const [key, item] of Object.entries(value)) visit(item, [...at, key]);
   };
   visit(doc, []);
   if (!found) return null;
   const section = interpreterSection(found.path), nearest = Number(found.value);
   const spelling = Number.isFinite(nearest) && BigInt(nearest) === found.value
     ? `If the parameter takes a Number, write its exact Number spelling ${String(nearest)}; the interpreter accepts it. ` : 'No JavaScript Number holds this value. ';
-  return refusal('scenario-integer-out-of-range', section, `${section} is ${found.value}, outside the PDD interpreter's integer range ${INTERPRETER_INTEGERS.text}. `
-    + 'pdd keeps the exact digits, but the interpreter cannot check this test yet (nothing sent, 0 AI calls). ' + spelling
-    + "Check the exact value in the repository's own vector test (RUNBOOK §17); do not change the input type or the expected value to fit the interpreter.",
-    found.path[0] === 'steps' && typeof found.path[1] === 'number' ? { step: found.path[1] + 1 } : {});
+  return `Warning: ${path} scenario-integer-out-of-range: ${section} is ${found.value}, outside the PDD interpreter's integer range ${INTERPRETER_INTEGERS.text}, `
+    + 'so the interpreter refuses this test before execution (0 AI calls). ' + spelling
+    + "Check the exact value in the repository's own vector test (RUNBOOK §17); do not change the input type or the expected value to fit the interpreter.";
+}
+// Advice only: integer schema bound tokens that the interpreter refuses (graph-schema-invalid).
+function schemaBoundWarnings(prompt) {
+  const found = [], iface = prompt?.interface;
+  const visit = (schema, pointer) => {
+    if (!isObject(schema)) return;
+    if (schema.type === 'integer' || schema.type === 'number') for (const key of [...BOUND_FIELDS, 'multipleOf']) {
+      const bound = schemaValue(schema, key);
+      if (outsideInterpreter(bound)) found.push(`Warning: ${prompt.path} ${pointer}/${key} is ${bound}, outside the PDD interpreter's integer range ${INTERPRETER_INTEGERS.text}, so the interpreter refuses this bound (graph-schema-invalid, bound_text ${bound}).`);
+    }
+    if (isObject(schema.properties)) for (const [name, child] of Object.entries(schema.properties)) visit(child, `${pointer}/properties/${pointerOf([name]).slice(1)}`);
+    if (isObject(schema.items)) visit(schema.items, `${pointer}/items`);
+    if (isObject(schema.additionalProperties)) visit(schema.additionalProperties, `${pointer}/additionalProperties`);
+    if (Array.isArray(schema.oneOf)) schema.oneOf.forEach((variant, index) => visit(variant, `${pointer}/oneOf/${index}`));
+  };
+  for (const [index, entry] of (Array.isArray(iface?.entries) ? iface.entries : []).entries())
+    for (const key of ['input_schema', 'result_schema']) visit(entry?.[key], `/entries/${index}/${key}`);
+  for (const [index, resource] of (Array.isArray(iface?.resources) ? iface.resources : []).entries())
+    for (const [opIndex, operation] of (Array.isArray(resource?.operations) ? resource.operations : []).entries())
+      for (const key of ['arguments_schema', 'result_schema']) visit(operation?.[key], `/resources/${index}/operations/${opIndex}/${key}`);
+  return found;
 }
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const show = value => { const text = stringifyScenarioJson(value) ?? String(value); return text.length > 60 ? `${text.slice(0, 57)}...` : text; };
@@ -529,12 +550,6 @@ function schemaRules(schema, pointer, out) {
   }
   for (const key of COUNT_FIELDS) if (Object.hasOwn(schema, key) && !(Number.isInteger(schema[key]) && schema[key] >= 0)) add('graph-schema-invalid', `"${key}" must be a whole number of 0 or more.`);
   for (const key of BOUND_FIELDS) if (Object.hasOwn(schema, key) && typeof schema[key] !== 'number') add('graph-schema-invalid', `"${key}" must be a number.`);
-  // The interpreter refuses an integer bound token outside its range; only the raw token decides.
-  if (type === 'integer' || type === 'number') for (const key of [...BOUND_FIELDS, 'multipleOf']) {
-    const bound = schemaValue(schema, key);
-    if (outsideInterpreter(bound)) out.push({ code: 'graph-schema-invalid', pointer: `${pointer}/${key}`,
-      rule: `is ${bound}, outside the PDD interpreter's integer range ${INTERPRETER_INTEGERS.text} (bound_text ${bound}).` });
-  }
   if (Object.hasOwn(schema, 'multipleOf') && !(typeof schema.multipleOf === 'number' && schema.multipleOf > 0)) add('graph-schema-invalid', '"multipleOf" must be a number above 0.');
   if (Object.hasOwn(schema, 'pattern') && typeof schema.pattern !== 'string') add('graph-schema-invalid', '"pattern" must be a string.');
   if (Object.hasOwn(schema, 'uniqueItems') && typeof schema.uniqueItems !== 'boolean') add('graph-schema-invalid', '"uniqueItems" must be true or false.');
@@ -912,7 +927,6 @@ function checkTest(root, found, test, prompts) {
   }
   if (test.error) return discoveryRefusal(test);
   const shape=documentRefusal(doc,test.path);if(shape)return shape;
-  const integers=interpreterIntegerRefusal(doc);if(integers)return integers;
   if (typeof doc.story_path !== 'string' || !doc.story_path) return refusal('pdd-no-story', 'story_path', 'The test has no story_path. Name its story, for example "user_stories/<story>.md".');
   if (!found.visible.has(doc.story_path)) return refusal('story-missing', 'story_path', `${doc.story_path} is not a Git-visible file.`);
   if (test.storyPath && doc.story_path !== test.storyPath) return discoveryRefusal({ ...test, doc });
@@ -1018,9 +1032,11 @@ export function preflight({ root, found, selected,workspace=found.workspace??loa
       const prompt = prompts.get(step?.entry_path), entry = prompt?.interface?.entries?.find?.(item => item?.operation === step?.operation);
       for (const text of entry ? checkInput(step.input, entry.input_schema, index).warnings : []) warnings.push(`Warning: ${test.path} ${text}`);
     }
-    // Number spelling advice: a token whose digits change when it is read as a Number. It never blocks.
-    let tokens = [];
-    try { const text = readText(root, test.path); tokens = text === null ? [] : roundedNumberTokens(text); } catch { tokens = []; }
+    // Number advice from the exact test values. It never blocks; the interpreter decides.
+    let tokens = [], range = null;
+    try { const text = readText(root, test.path); if (text !== null) { tokens = roundedNumberTokens(text); range = interpreterIntegerWarning(parseScenarioJson(text), test.path); } } catch { tokens = []; }
+    if (range) warnings.push(range);
+    for (const prompt of prompts.values()) for (const line of schemaBoundWarnings(prompt)) if (!warnings.includes(line)) warnings.push(line);
     for (const item of tokens) warnings.push(`Warning: ${test.path} ${interpreterSection(item.path)} is ${item.source}, which reads as the Number ${String(item.value)}. Write the value you mean: plain digits for an exact whole number, or the exact Number spelling.`);
     return row;
   });

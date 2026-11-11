@@ -191,8 +191,8 @@ and the supported range (`supported_integer_range`).
 
 **Large whole numbers.** Write an exact whole number as plain JSON digits, for example
 `"seconds": 4250129834582680692326400`. pdd reads, shows, compares and sends these exact digits. The PDD interpreter
-accepts plain digits only within ±(2^53−1), so pdd refuses larger ones locally with the interpreter's code
-(`scenario-integer-out-of-range`; nothing is sent, 0 AI calls). For a parameter that takes a Number, write its exact
+accepts plain digits only within ±(2^53−1): it refuses larger ones before execution (`scenario-integer-out-of-range`,
+0 AI calls), and pdd warns about them before it sends the test. For a parameter that takes a Number, write its exact
 Number spelling instead: `String(n)` in JavaScript, for example `4.2501298345826807e+24` for 3600 × 2^70. JavaScript
 and the interpreter read it as exactly that Number, and the interpreter admits it with `"type": "integer"`. A value
 that no Number holds (2^53 + 1, or a BigInt parameter) stays in plain digits; only the repository's own vector test
