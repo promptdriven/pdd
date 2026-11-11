@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 3d71704569d54014b65363e1877e0bcbd00b33c6b11df9fbebf8d66ef202031a).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: da6d22743dc5f3988507b23d446456b9bf9299ab12dbd367ca95cf56469d90c8).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +12,7 @@ import { redactSecrets } from './secret-redaction.mjs';
 import { interfaceBlocks, readPrompt, promptRefusal, gitFiles } from './runtime-preflight.mjs';
 import { readPromptApprovals } from './approval-policy.mjs';
 import { intakeTick } from './autopilot-intake.mjs';
+import { ciVsBase, suiteVsBase, baseRedWait, baseRedWaiting, baseRedStatus, stopBaseSuite } from './autopilot-base-red.mjs';
 
 const MIN = 60 * 1000, HOUR = 60 * MIN, DAY = 24 * HOUR, CLAIM_EXPIRES = 4 * HOUR, STRIKES = 3, MAX_PAUSE_HOURS = 8, NO_RESULT_LIMIT = 3, CLAIM_TRIES = 3, NO_CI_AFTER = 10 * MIN, END_TRIES = 6;
 const REPORT_LABELS = ['pdd:runtime', 'pdd:autopilot-report'];
@@ -161,8 +162,9 @@ function readJobs(fs, root) {
   return names.map(name => readJson(fs, join(dir, name))).filter(job => object(job) && Number.isSafeInteger(job.issue)).sort((a, b) => a.issue - b.issue);
 }
 // Slots come only from this engine's own job files. A job holds a slot while its process runs or its outcome
-// (merge check or END decision) is not yet handled; a job that only finishes its END writes holds none.
-const holdsSlot = job => job.phase !== 'ending';
+// (merge check or END decision) is not yet handled; a job that only finishes its END writes holds none, and so does a
+// job that waits because its red is also on the base (#3181).
+const holdsSlot = job => job.phase !== 'ending' && !baseRedWaiting(job);
 // One bad line (a cut append after a power loss or a full disk) is skipped; it never hides the other lines.
 function readHistory(fs, root, count = 5) {
   let text = '';
@@ -1037,10 +1039,11 @@ async function ciState(ctx, head, job) {
   const checks = [...(runs?.check_runs ?? []).map(r => ({ name: r.name, done: r.status === 'completed', good: ['success', 'neutral', 'skipped'].includes(r.conclusion) })),
     ...(status?.statuses ?? []).map(s => ({ name: s.context, done: s.state !== 'pending', good: s.state === 'success' }))];
   const failed = checks.filter(c => c.done && !c.good).map(c => c.name);
+  const failedRuns = (runs?.check_runs ?? []).filter(r => r.status === 'completed' && !['success', 'neutral', 'skipped'].includes(r.conclusion)).map(r => ({ id: r.id, name: r.name, app: r.app?.slug ?? null }));
   // The CI picture: each check's name, state and change time. Pending CI is progress only while this changes.
   const sig = [...(runs?.check_runs ?? []).map(r => `${r.name}:${r.status}:${r.conclusion}:${r.completed_at ?? r.started_at ?? ''}`), ...(status?.statuses ?? []).map(x => `${x.context}:${x.state}:${x.updated_at ?? ''}`)].sort().join('|');
   if (checks.length && !job.ciSeen) { job.ciSeen = true; ctx.saveJob(job); }
-  if (failed.length) return { state: 'red', failed, sig };
+  if (failed.length) return { state: 'red', failed, failedRuns, sig };
   // "CI: none" only for a repository with no CI at all (no head of this job ever had a check, and the base has no
   // workflow file), never because a new head has no run yet.
   if (!checks.length) return !job.ciSeen && !await repoHasCi(ctx, job) && ctx.now() - (job.prAt ?? ctx.now()) >= NO_CI_AFTER ? { state: 'none', sig } : { state: 'pending', pending: [], sig };
@@ -1432,7 +1435,9 @@ function engineEvidenceReds(ctx, job) {
   return reds;
 }
 
-function stopChecks(ctx, job) { for (const part of [job.agent, job.review?.agent, job.suite?.agent, job.vectors?.agent]) if (part) ctx.jobs.stop(part); }
+function stopChecks(ctx, job) { for (const part of [job.agent, job.review?.agent, job.suite?.agent, job.vectors?.agent]) if (part) ctx.jobs.stop(part); stopBaseSuite(ctx, job); }
+// The core helpers that the base-red owner (#3181) uses for its base suite, its hold and its refresh.
+const BASE_RED_TOOLS = { startJob, queuedCommand, watchProcess, readTail, removeTree, refreshBase, leaveLane, runnerLine: SUITE_RUNNER };
 
 async function mergeCheck(ctx, job) {
   const { gh, repo, state, settings } = ctx;
@@ -1454,6 +1459,8 @@ async function mergeCheck(ctx, job) {
   if (pr.state !== 'open') return end(ctx, job, cause('job', 'pr-closed', `PR #${job.pr} was closed without a merge`));
   if (pr.head?.sha !== job.head || pr.head?.ref !== job.branch || pr.base?.ref !== state.baseBranch)
     return end(ctx, job, cause('job', 'head-moved', `PR #${job.pr} is at head ${short(pr.head?.sha)} of ${pr.head?.ref} into ${pr.base?.ref}, not the job head ${short(job.head)} of ${job.branch} into ${state.baseBranch}`));
+  // #3181: a red that is also on the base waits with no slot, no repair and no END (the base-red owner).
+  if (job.baseRed) return baseRedWait(ctx, job, BASE_RED_TOOLS);
   // "Runtime: not run" is allowed and files no report by itself; a Runtime report comes only from a failed job
   // whose cause kind is runtime (END).
   job.runtime = normalRuntime(job.runtime);
@@ -1481,7 +1488,7 @@ async function mergeCheck(ctx, job) {
   }
   reds.push(...(await pathChecks(ctx, job, pr.body)).reds);
   if (drafts.length && approving(ctx) && !gate.strict) reds.push(`Changed prompts are not approved: ${drafts.join('; ')}. Record the operator approval for each changed prompt with the native command and commit it: printf '%s' ${quote(approvalWords(ctx))} | pdd approve PROMPT --said -`);
-  const ci = reds.length ? null : await ciState(ctx, job.head, job);
+  let ci = reds.length ? null : await ciState(ctx, job.head, job);
   // GitHub runs no pull_request workflow while a PR conflicts with its base, so a head with no check at all may be a
   // conflict: then the agent conflict update starts (debate B, outside the lane), not a 6-hour CI wait.
   if (ci?.state === 'pending' && !ci.pending?.length) {
@@ -1489,7 +1496,8 @@ async function mergeCheck(ctx, job) {
     const tree = await ctx.ports.git(['merge-tree', '--write-tree', '--name-only', '--no-messages', `origin/${state.baseBranch}`, job.head], { cwd: job.worktree });
     if (tree.code === 1) return conflictFix(ctx, job, { files: String(tree.stdout ?? '').split('\n').slice(1).map(line => line.trim()).filter(Boolean), hunks: '' });
   }
-  if (ci?.state === 'red') reds.push(`CI check ${ci.failed.join(', ')} failed for head ${short(job.head)}.`);
+  if (ci?.state === 'red') ci = await ciVsBase(ctx, job, ci);
+  if (ci?.state === 'red') reds.push(`CI check ${ci.failed.join(', ')} failed for head ${short(job.head)}.${ci.onBase ? `\n${ci.onBase}` : ''}`);
   let review, suite, vectors;
   if (!reds.length) {
     // One backstop end per job: a reviewer at its backstop ends the job before the suite is read.
@@ -1522,6 +1530,7 @@ async function mergeCheck(ctx, job) {
     if (suite.state === 'missing') return end(ctx, job, cause('job', 'no-test-command', 'no full test command: set autopilot.testCommand in pdd.json'));
     if (suite.state === 'broken') return end(ctx, job, suite.dead ? cause('job', 'no-result', suite.text) : cause('pdd', 'suite-broken', suite.text));
     if (review.state === 'fail') reds.push(`Review FAIL from a fresh reviewer: ${(review.mustFix ?? []).join('; ') || 'see the review comment on the PR'}`);
+    if ((suite = await suiteVsBase(ctx, job, { ci, review, suite, vectors, reds }, BASE_RED_TOOLS)) === 'wait') return;
     if (suite.state === 'fail') reds.push(suite.text);
   }
   // Red checks on a head that a mechanical lane merge made are a conflict for an agent, not a repair (debate B 5.4).
@@ -2485,7 +2494,7 @@ export function coreStatus({ state, settings, sources = {} }, ports) {
   const running = (job, part, role) => part && !part.watch?.stopped && !part.recorded ? `; ${processWords(job, part, role, words)}` : '';
   for (const job of jobs) {
     if (job.phase === 'pr') lines.push(`#${job.issue} PR #${job.pr} at ${short(job.head)}: review ${job.review?.verdict ?? (job.review ? 'running' : '-')}${job.review?.verdict ? '' : running(job, job.review?.agent, 'review')}, suite ${job.suite ? 'started' : '-'}${running(job, job.suite?.agent, 'suite')}, repairs ${job.repairs}${
-      job.lane?.state === 'final' ? '; merge lane: final step' : job.lane?.state === 'waiting' ? `; merge lane: waiting${job.lane.holder ? ` for PR #${job.lane.holder}` : ''} since ${new Date(job.lane.since).toISOString()}` : ''}${job.lastError ? `; last error: ${job.lastError}` : ''}`);
+      job.lane?.state === 'final' ? '; merge lane: final step' : job.lane?.state === 'waiting' ? `; merge lane: waiting${job.lane.holder ? ` for PR #${job.lane.holder}` : ''} since ${new Date(job.lane.since).toISOString()}` : ''}${baseRedStatus(job)}${job.lastError ? `; last error: ${job.lastError}` : ''}`);
     else if (job.phase === 'ending') lines.push(`#${job.issue} ending: ${job.end?.cause?.text}${job.lastError ? `; retry: ${job.lastError}` : ''}`);
     else lines.push(`#${job.issue} ${job.role} running ${age(job.agent?.started ?? job.started)} (log ${job.agent?.log ?? 'none'})${running(job, job.agent, job.role)}`);
   }

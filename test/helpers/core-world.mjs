@@ -23,6 +23,13 @@ function extend(f, w) {
     f.prs.set(pr.number, pr); return pr;
   };
   f.setChecks = (sha, conclusion = 'success', status = 'completed') => f.checks.set(sha, [{ name: 'ci', status, conclusion: status === 'completed' ? conclusion : null }]);
+  // Check runs with an id and an app (#3181): setRun puts the latest run of a name. With f.rerunnable (off by default)
+  // the rerun endpoints answer 201 and put a new queued run of that name; off, they answer 404 like an unknown route.
+  f.nextRun = 7000; f.rerunnable = false; f.reruns = [];
+  f.setRun = (sha, { name = 'ci', status = 'completed', conclusion = 'success', app = 'github-actions' } = {}) => {
+    const run = { id: f.nextRun++, name, status, conclusion: status === 'completed' ? conclusion : null, app: { slug: app } };
+    f.checks.set(sha, [...(f.checks.get(sha) ?? []).filter(r => r.name !== name), run]); return run;
+  };
   const original = f.gh;
   f.gh = async (args, options = {}) => {
     if (args[0] === 'pr' && args[1] === 'merge') {
@@ -83,6 +90,13 @@ function extend(f, w) {
       const pr = f.prs.get(Number(m[1]));
       if (method === 'POST') { const c = { id: f.nextComment++, body: input.body, user: { login: f.owner } }; pr.comments.push(c); return ok(201, c); }
       return ok(200, pr.comments);
+    }
+    if (f.rerunnable && method === 'POST' && (m = /^\/(?:actions\/jobs\/(\d+)\/rerun|check-runs\/(\d+)\/rerequest)$/.exec(route))) {
+      const id = Number(m[1] ?? m[2]), sha = [...f.checks.keys()].find(key => f.checks.get(key).some(r => r.id === id));
+      if (!sha) return ok(404, { message: 'Not Found' });
+      const old = f.checks.get(sha).find(r => r.id === id);
+      f.reruns.push({ id, sha, name: old.name, route }); f.setRun(sha, { name: old.name, status: 'queued', app: old.app?.slug });
+      return ok(201, {});
     }
     if ((m = /^\/commits\/([0-9a-f]{40})\/check-runs$/.exec(route))) { const runs = f.checks.get(m[1]) ?? []; return ok(200, { total_count: runs.length, check_runs: runs }); }
     if ((m = /^\/commits\/([0-9a-f]{40})\/status$/.exec(route))) { const statuses = f.statuses.get(m[1]) ?? []; return ok(200, { state: statuses.length ? statuses.every(s => s.state === 'success') ? 'success' : 'failure' : 'pending', statuses }); }
