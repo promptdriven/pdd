@@ -11,6 +11,7 @@ import { ignorePddFolder, setupProject as defaultSetupProject } from './project-
 import { findSkills, setupSkills as defaultSetupSkills } from './skills-install.mjs';
 import { pathDiagnostic as defaultPathDiagnostic } from './path-diagnostic.mjs';
 import { checkWorkflowAgents } from './workflow-agents.mjs';
+import { setupMayAsk } from './setup-interaction.mjs';
 import { setupWithWorkflowAgent } from './workflow-setup.mjs';
 import { causeText } from './runtime-output.mjs';
 
@@ -272,6 +273,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       } catch (error) { line(stderr, `pdd mcp could not start.${reason(error)}`); return 1; }
     }
     case 'setup': {
+      const interactive = setupMayAsk({ yes: plan.options['--yes'], stdinIsTTY: stdin.isTTY, stdoutIsTTY: stdout.isTTY });
       return setupWithWorkflowAgent({ cwd, env }, { ...workflowAgentPorts, checkWorkflowAgents: workflowAgents.checkWorkflowAgents, stderr, setup: async () => {
       let code = 0;
       for (const result of setupSkills({ packageRoot, cwd, home: env.HOME || homedir(), claudeConfigDir: env.CLAUDE_CONFIG_DIR })) {
@@ -304,7 +306,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
           const missing=missingInterfaces(context.toplevel);
           if(missing.length) {
             line(stdout,`${missing.length} prompts have no Runtime interface. Run pdd interface draft --all.`);
-            if(confirm || stdin.isTTY && stdout.isTTY) {
+            if(interactive) {
               const question='Draft missing Runtime interfaces now? [y/N] ';
               let answer;
               stdout.write(question);
@@ -322,12 +324,12 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       } catch(error) {line(stderr,`Interface drafts: ${error.message}`);code=1;}
       try {
         const action = setupAgentMcp ?? (await import('./agent-mcp-setup.mjs')).setupAgentMcp;
-        if (await action({ env, packageRoot }, { stdin, stdout, stderr, confirm })) code = 1;
+        if (await action({ env, packageRoot }, { stdin, stdout, stderr, confirm: interactive ? confirm : undefined, interactive })) code = 1;
       } catch (error) { line(stderr, `pdd setup: MCP registration failed.${reason(error)}`); code = 1; }
       try {
         const module = autopilot ?? await import('./autopilot.mjs');
         const before = savedAutopilot(context?.toplevel);
-        const result = await module.runAutopilot({ action: 'setup', interactive: !!stdin.isTTY, inRepo: !!context?.toplevel },
+        const result = await module.runAutopilot({ action: 'setup', interactive, inRepo: !!context?.toplevel },
           { cwd: context?.toplevel ?? cwd, stdin, stdout, ...autopilotPorts });
         if (result.message) line(result.exitCode === 0 ? stdout : stderr, result.message);
         if (result.exitCode) code = result.exitCode;

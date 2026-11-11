@@ -168,8 +168,8 @@ const routes = [
   { id: 'autopilot.auto', prefix: ['autopilot', 'auto'], local: 'autopilot.auto', operands: [], options: [], forms: [form('pdd autopilot auto', 'Set the repository Autopilot mode to auto.')] },
   { id: 'autopilot.trust', prefix: ['autopilot', 'trust'], local: 'autopilot-trust', operands: [{name:'name',type:'text',repeat:true}], options: [], forms: [form('pdd autopilot trust NAME...', 'Add explicitly trusted GitHub names.')] },
   { id: 'autopilot.untrust', prefix: ['autopilot', 'untrust'], local: 'autopilot-untrust', operands: [{name:'name',type:'text'}], options: [], forms: [form('pdd autopilot untrust NAME', 'Remove an explicitly trusted GitHub name.')] },
-  { id: 'setup', prefix: ['setup'], local: 'setup', operands: [], options: [],
-    forms: [form('pdd setup', 'Install the PDD skills for Codex and Claude if they are missing, and add the short PDD block to CLAUDE.md, else AGENTS.md. Offer detected Codex, Claude Code and Gemini MCP registrations after showing exact config changes and one y/N question. Offer Autopilot settings in a Git repository with a terminal; keep an existing mode on repeat setup.')] },
+  { id: 'setup', prefix: ['setup'], local: 'setup', operands: [], options: [{ name: '--yes', kind: 'flag' }],
+    forms: [form('pdd setup [--yes]', 'Install the PDD skills for Codex and Claude if they are missing, and add the short PDD block to CLAUDE.md, else AGENTS.md. Offer detected Codex, Claude Code and Gemini MCP registrations after showing exact config changes and one y/N question. Offer Autopilot settings in a Git repository with a terminal; keep an existing mode on repeat setup. Without a terminal or with --yes, use safe defaults without questions.')] },
 ];
 export const PUBLIC_COMMAND_ROUTES = Object.freeze(routes.map(route => Object.freeze({ ...route,
   prefix: Object.freeze(route.prefix), ...(route.quiet ? { quiet: Object.freeze(route.quiet) } : {}),
