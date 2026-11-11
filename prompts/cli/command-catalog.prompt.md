@@ -279,14 +279,24 @@ RUNBOOK: PACKAGE_ROOT/RUNBOOK.md
 
 ```text
 In PDD, prompts are the source. Code follows the prompts.
-1. Prompt: prompts/NAME.prompt.md. Write what the program does in plain English, then `The workflow park options also include text `--blocker` and `--until`. Show `pdd workflow park --reason TEXT --blocker KIND [--until VALUE]` for a named external blocker; clearing values belong to the runner contract.
-
-## Dependencies`, then one Runtime interface block.
+1. Prompt: prompts/NAME.prompt.md. Write what the program does in plain English, then ## Dependencies, then one Runtime interface block.
 2. Story: user_stories/STORY.md. Write one thing that a person can do, then a numbered ## Acceptance criteria list.
 3. Test: tests/STORY.json. When the repo keeps its own tests in tests/ or test/, use tests/runtime/ or test/runtime/. Write steps with an exact check for each criterion.
 4. Check: run pdd test --fill-hash && pdd test --files STORY && pdd test STORY in one shell call. Test includes interpreter lint (0 AI calls); use pdd lint for lint-only diagnosis.
 5. Approve: a person reads each prompt and runs pdd approve PROMPT. New behavior needs a person. An unchanged complete draft can use --automatic with passing existing tests and a full prompt check.
 ```
+
+The workflow park options also include text `--blocker` and `--until`. Show
+`pdd workflow park --reason TEXT --blocker KIND [--until VALUE]` for a named
+external blocker; clearing values belong to the runner contract.
+
+## Regression scan
+
+Register `autopilot.regressions`, prefix `autopilot regressions`, local
+`autopilot-regressions`, no operands, Boolean --json and text --file.
+Form: `pdd autopilot regressions [--json] [--file PATH]`.
+Description: Read core merge history and GitHub regression evidence; optionally
+save a local report, without GitHub writes or reverts. Preserve all other forms.
 
 
 ## Autopilot report route
