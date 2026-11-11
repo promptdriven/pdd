@@ -1,11 +1,11 @@
-// Generated from prompts/cli/autopilot.prompt.md (sha256: ed7bf16b7d540d308c9253bbf6a0d8301c582df52661c5cdc87d4d647d2c172b).
+// Generated from prompts/cli/autopilot.prompt.md (sha256: 2de8951a60667ac7c42c1343246c0a8b62832a89282ca2d3a0a2c068fa1e6902).
 import * as nativeFs from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createInterface } from 'node:readline/promises';
-import { githubBudgetSettings } from './github-calls.mjs';
+import { githubBudgetSettings, githubListArgs, githubListItems } from './github-calls.mjs';
 
 const execute = promisify(execFile);
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -88,9 +88,9 @@ function nativeGithub(root, exec) {
         const repo = JSON.parse((await command(['repo', 'view', '--json', 'nameWithOwner,owner'])).stdout);
         if (expired) return;
         owner = repo.owner?.login ?? '';
-        const pages = JSON.parse((await command(['api', `repos/${repo.nameWithOwner}/collaborators`, '--paginate', '--slurp'])).stdout);
+        const people = githubListItems((await command(['api', `repos/${repo.nameWithOwner}/collaborators`, ...githubListArgs('{login, permissions}')])).stdout);
         if (expired) return;
-        writers = unique(pages.flat().filter(person => person.permissions?.push || person.permissions?.maintain || person.permissions?.admin).map(person => person.login));
+        writers = unique(people.filter(person => person.permissions?.push || person.permissions?.maintain || person.permissions?.admin).map(person => person.login));
         complete = !!owner;
       } catch { /* Keep the people confirmed before the failure. */ }
     })();

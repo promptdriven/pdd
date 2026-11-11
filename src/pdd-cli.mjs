@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 847eab09489958a0dceccd6294a531286f8513b9720153948b1eb70eaba2e434).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: eaa12bfa20da3040dc37bf2c2014b4f34bc058301cb670a613107499641ccc20).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -47,7 +47,7 @@ const staleLine = ({ found, stale, staleSkills = [] }, version, cwd) => {
 };
 const profileOptions = plan => Object.fromEntries([['--model','model'],['--herdr-agent-name','herdrAgentName'],['--codex-threads','codexThreads']].filter(([flag]) => plan.options[flag] !== undefined).map(([flag,key]) => [key,plan.options[flag]]));
 const RUNNER_ROUTES = {
-  'workflow-suite': plan => ['runSuite', {command:plan.options['--command'], ...(plan.options['--timeout'] ? {timeout:Number(plan.options['--timeout'])} : {})}],
+  'workflow-suite': plan => ['runSuite', {command:plan.options['--command'], ...(plan.options['--timeout'] !== undefined ? {timeout:Number(plan.options['--timeout'])} : {})}],
   'workflow-request-uptake': plan => ['acknowledgeRequest', { requestId: plan.operands[0], summary: plan.options['--summary'] }],
   'workflow-run': plan => ['startRun', { name: plan.operands[0], issue: plan.operands[1], ...profileOptions(plan), agent: plan.options['--agent'] ?? 'codex', ...(plan.options['--base'] !== undefined ? { base: plan.options['--base'] } : {}), ...(plan.options['--adopt-corpus'] !== undefined ? { adoptCorpus: plan.options['--adopt-corpus'] } : {}), ...(plan.options['--draft'] !== undefined ? { draft: plan.options['--draft'] } : {}), ...(plan.options['--origin'] !== undefined ? {origin:plan.options['--origin']} : {}), ...(plan.options['--decision-id'] !== undefined ? {decisionId:plan.options['--decision-id']} : {}), ...(plan.options['--outcome'] !== undefined ? {outcome:plan.options['--outcome']} : {}), ...(plan.options['--through'] !== undefined ? {through:plan.options['--through']} : {}) }],
   'workflow-evidence-associate': plan => ['associateEvidenceWorkspace', { ref: plan.operands[0], workspace: plan.options['--workspace'], stage: plan.options['--stage'], tests: plan.options['--test'] }],
@@ -118,10 +118,10 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         (result.exitCode ? stderr : stdout).write(result.message); return result.exitCode;
       } catch(error) { line(stderr, `Dependency intake failed.${reason(error)}`); return 1; }
     }
-    case 'autopilot-doctor': case 'autopilot-audit': case 'autopilot-check-base': case 'autopilot-start': case 'autopilot-stop': case 'autopilot-status': case 'autopilot-add': case 'autopilot-release': {
+    case 'autopilot-doctor': case 'autopilot-audit': case 'autopilot-check-base': case 'autopilot-start': case 'autopilot-stop': case 'autopilot-status': case 'autopilot-add': case 'autopilot-release': case 'autopilot-report': {
       try {
         const module = autopilotLauncher ?? await import('./autopilot-launcher.mjs');
-        const result = await module.runAutopilotLauncher({ command: plan.local.slice(10), issues: [...plan.operands], runs: plan.options['--runs'], checks: plan.options['--checks'], resumeCustody: plan.options['--resume-custody'], all: plan.options['--all'] === true, ...(plan.options['--json'] === true ? { json: true } : {}), cwd, packageRoot, env }, autopilotLauncherPorts);
+        const result = await module.runAutopilotLauncher({ command: plan.local.slice(10), issues: [...plan.operands], runs: plan.options['--runs'], checks: plan.options['--checks'], ...(plan.options['--engine'] ? { engine: plan.options['--engine'] } : {}), ...(plan.options['--label'] ? { label: plan.options['--label'] } : {}), ...(plan.options['--mode'] ? { mode: plan.options['--mode'] } : {}), ...(plan.options['--report'] ? { report: plan.options['--report'] } : {}), resumeCustody: plan.options['--resume-custody'], all: plan.options['--all'] === true, ...(plan.options['--json'] === true ? { json: true } : {}), cwd, packageRoot, env }, autopilotLauncherPorts);
         if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255 || typeof result.message !== 'string' || !result.message.trim()) throw Error('Invalid Autopilot reply');
         line(result.exitCode === 0 ? stdout : stderr, result.message);
         if (result.exitCode === 0 && ['autopilot-start', 'autopilot-status'].includes(plan.local) && plan.options['--all'] !== true && plan.options['--json'] !== true) {

@@ -400,6 +400,81 @@ test('two machine launchers offer the same issue to the skill without making a c
   // The bundled skill owns the cross-machine claim; this proves separate launcher state.
 });
 
+test('a core start refuses a quietMinutes below 2 ticks of the core timer, before any change', async t => {
+  const f = await fixture(t, { tempPrefix: 'pdd-quiet-floor-' });
+  writeFileSync(join(f.cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', trust: ['helper'], quietMinutes: 10 } }));
+  const env = { HOME: f.home, PATH: process.env.PATH };
+  const refused = await f.invoke('start', { env, engine: 'core' });
+  assert.equal(refused.exitCode, 1); assert.match(refused.message, /autopilot\.quietMinutes is 10; it must be at least 20/);
+  assert.equal(f.active, false, 'no timer');
+  writeFileSync(join(f.cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', trust: ['helper'], quietMinutes: 20 } }));
+  assert.equal((await f.invoke('start', { env, engine: 'core' })).exitCode, 0);
+});
+
+test('core start --mode off saves mode off and stops the timer; the next tick starts nothing; auto turns it on again', async t => {
+  const f = await fixture(t, { tempPrefix: 'pdd-mode-off-' });
+  const env = { HOME: f.home, PATH: process.env.PATH };
+  const auto = await f.invoke('start', { env, engine: 'core', mode: 'auto' });
+  assert.equal(auto.exitCode, 0, auto.message); assert.equal(f.state().mode, 'auto'); assert.equal(f.active, true);
+  const off = await f.invoke('start', { env, engine: 'core', mode: 'off' });
+  assert.equal(off.exitCode, 0, off.message);
+  assert.match(off.message, /mode off is saved and the timer is stopped/); assert.match(off.message, /--mode auto or --mode observe/);
+  assert.equal(f.state().mode, 'off'); assert.equal(f.state().enabled, false); assert.equal(f.active, false, 'the timer is stopped');
+  const tick = await f.tick();
+  assert.doesNotMatch(tick?.message ?? '', /[1-9]\d* started/);
+  assert.match((await f.invoke('status', { env })).message, /mode off \(this machine\)/);
+  const again = await f.invoke('start', { env, engine: 'core', mode: 'auto' });
+  assert.equal(again.exitCode, 0, again.message); assert.equal(f.state().mode, 'auto'); assert.equal(f.state().enabled, true); assert.equal(f.active, true);
+});
+
+test('the core engine timer fires every 10 minutes, the full engine every 30; start --engine rewrites the timer; status says the interval', async t => {
+  for (const platform of ['linux', 'darwin']) {
+    const f = await fixture(t, {tempPrefix: 'pdd-autopilot-iv-'}); delete f.ports.timer; f.ports.platform = platform; f.ports.uid = 123;
+    const env = { HOME: f.home, PATH: '/fixture/bin', XDG_CONFIG_HOME: join(f.home, '.config') };
+    const run = f.ports.run, serviceCalls = [];
+    // Every timer tool is a fake, so no real launchd or systemd job is made.
+    f.ports.run = async (command, args, opts) => {
+      if (['systemctl', 'launchctl', 'loginctl'].includes(command)) { serviceCalls.push([command, args]); return { code: 0, stdout: command === 'loginctl' ? 'yes\n' : '', stderr: '' }; }
+      return run(command, args, opts);
+    };
+    const folder = platform === 'linux' ? join(f.home, '.config', 'systemd', 'user') : join(f.home, 'Library', 'LaunchAgents');
+    const definition = () => readFileSync(join(folder, readdirSync(folder).find(x => x.endsWith(platform === 'linux' ? '.timer' : '.plist'))), 'utf8');
+    const minutes = () => {
+      const text = definition();
+      if (platform === 'darwin') return Number(/<key>StartInterval<\/key><integer>(\d+)<\/integer>/.exec(text)[1]) / 60;
+      const first = Number(/^OnActiveSec=(\d+)min$/m.exec(text)[1]), every = Number(/^OnUnitActiveSec=(\d+)min$/m.exec(text)[1]);
+      assert.equal(first, every); assert.match(text, new RegExp(`^Description=PDD Autopilot every ${every} minutes$`, 'm'));
+      return every;
+    };
+    const full = await f.invoke('start', { env });
+    assert.equal(full.exitCode, 0, full.message);
+    assert.equal(minutes(), 30); assert.equal(f.state().timerMinutes, 30);
+    assert.match((await f.invoke('status', { env })).message, /timer active, every 30 minutes;/);
+    const reloads = serviceCalls.length;
+    const core = await f.invoke('start', { env, engine: 'core' });
+    assert.equal(core.exitCode, 0, core.message);
+    assert.equal(minutes(), 10, `${platform}: the switch rewrites the timer`); assert.equal(f.state().timerMinutes, 10);
+    assert.equal(f.state().startedAt, new Date(f.time).toISOString(), 'a core start saves its time (the auto-mode approval)');
+    assert.ok(serviceCalls.length > reloads, 'the new timer definition is loaded');
+    assert.ok(f.state().nextTick <= f.time + 10 * 60000, 'the next tick is at most 10 minutes away');
+    const status = await f.invoke('status', { env });
+    assert.match(status.message, /timer active, every 10 minutes;/); assert.doesNotMatch(status.message, /run pdd autopilot start to use/);
+    // A timer installed before the switch (or by an older pdd) keeps its interval until the next start; status says so.
+    writeFileSync(f.stateFile(), JSON.stringify({ ...f.state(), timerMinutes: 30 }));
+    assert.match((await f.invoke('status', { env })).message, /timer active, every 30 minutes \(run pdd autopilot start to use 10 minutes for the core engine\)/);
+    // start --mode saves the machine's core mode; pdd.json is not written.
+    const config = readFileSync(join(f.cwd, 'pdd.json'), 'utf8');
+    const observed = await f.invoke('start', { env, engine: 'core', mode: 'observe', report: 'draft' });
+    assert.equal(observed.exitCode, 0, observed.message); assert.equal(f.state().mode, 'observe'); assert.equal(f.state().report, 'draft');
+    assert.match((await f.invoke('status', { env })).message, /mode observe \(this machine\)/);
+    assert.equal(readFileSync(join(f.cwd, 'pdd.json'), 'utf8'), config);
+    const back = await f.invoke('start', { env, engine: 'full' });
+    assert.equal(back.exitCode, 0, back.message);
+    assert.equal(minutes(), 30); assert.equal(f.state().timerMinutes, 30);
+    assert.equal(serviceCalls.some(([command]) => command === (platform === 'linux' ? 'launchctl' : 'systemctl')), false);
+  }
+});
+
 test('native Linux and macOS user timers pin Node, script, state and environment without a shell', async t => {
   for (const platform of ['linux', 'darwin']) {
     const f = await fixture(t, {tempPrefix: 'pdd-autopilot-sh-'}); delete f.ports.timer; f.ports.platform = platform; f.ports.uid = 123;
@@ -2459,4 +2534,22 @@ test('start: guarded cleanup reclaims a finished workflow shell after its chat h
   assert.equal(result.exitCode,0,result.message);
   assert.equal(w.herdr.panes.length,paneCount-1);
   assert.ok(!w.herdr.paneOf(run.layout));
+});
+
+test('start --engine core --label saves the machine engine and label, opens no Herdr session, and status names the source', async t => {
+  const f = await fixture(t);
+  const started = await f.invoke('start', { engine: 'core', label: 'pdd:autopilot' });
+  assert.equal(started.exitCode, 0, started.message);
+  assert.match(started.message, /See: pdd autopilot status/);
+  assert.equal(f.state().engine, 'core'); assert.equal(f.state().label, 'pdd:autopilot');
+  assert.ok(!(f.herdrCalls ?? []).some(args => args[0] === 'workspace' || args[0] === 'pane' && args[1] === 'run'), 'no coordinator workspace or chat');
+  const again = await f.invoke('start');
+  assert.equal(again.exitCode, 0, again.message);
+  assert.equal(f.state().engine, 'core', 'a start without --engine keeps the saved engine');
+  const status = await f.invoke('status');
+  assert.match(status.message, /engine core \(this machine: pdd autopilot start --engine core\)/);
+  assert.match(status.message, /only issues with pdd:autopilot \(this machine\)/);
+  const back = await f.invoke('start', { engine: 'full' });
+  assert.equal(f.state().engine, 'full', back.message);
+  assert.equal((await f.invoke('start', { engine: 'turbo' })).exitCode, 2);
 });

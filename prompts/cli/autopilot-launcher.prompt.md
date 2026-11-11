@@ -9,10 +9,12 @@ Own `src/autopilot-launcher.mjs`. Export module functions `runAutopilotLauncher(
 `tickAutopilot(stateFile, ports)` and `requestAutopilotCompletion({cwd,env}, ports)`, and the pure
 `autopilotLaunchFingerprint(state)` that returns the launch fingerprint below for a saved state. This launcher connects a repository to the
 person's interactive coding agent in a dedicated Herdr session. It adds no
-approval, merge, quota-reset or headless execution route. Its read-only base check refuses unsafe merge targets without performing a merge. Preserve existing
+approval, merge, quota-reset or headless execution route of its own; with
+`autopilot.engine: "core"` it hands each tick to the [core engine](autopilot-core.prompt.md),
+which owns those for that engine. Its read-only base check refuses unsafe merge targets without performing a merge. Preserve existing
 setup, workflow and interpreter behavior.
 
-`runAutopilotLauncher` accepts command start, stop, status, add or release, cwd, packageRoot, env,
+`runAutopilotLauncher` accepts command start, stop, status, add, release or report, cwd, packageRoot, env,
 issues (argv issue references), and optional runs and checks text. Tests may inject `checkCapacityPorts` for the
 shared queue machine/filesystem ports independently of the launcher process port. Return `{exitCode,message}`.
 The CLI owns streams. Outside programs, timer installation, clock and state I/O
@@ -195,8 +197,9 @@ After these checks and rechecking the current control revision under admission o
 
 If an explicit start finds an active scan holding the tick lock, arrange one detached current-state follow-up after that scan releases the lock. Wait outside admission and tick locks; do not clear the lock or replay an old payload. Before the follow-up, verify the same enabled start and control, repository and coordinator identity, then use the existing guarded scan. A later stop or start supersedes the pending follow-up. A busy lock is not completed work.
 
-Start persists a repo/machine state outside the checkout, installs a 30-minute
-user timer and runs the first tick immediately. Repeated start reuses the timer
+Start persists a repo/machine state outside the checkout, installs a user timer
+(every 30 minutes; every 10 minutes for the [core engine](#core-engine-switch)) and
+runs the first tick immediately. Repeated start reuses the timer
 and saved activation time. An explicit start rearms the existing one-shot worker completion bridge for saved current automatic chats belonging to this repository and coordinator; timer ticks do not recreate listeners, except for the fresh pane after a [coordinator relaunch](#coordinator-relaunch) or a [gone coordinator pane](#gone-coordinator-pane). Yield retains its current claim and ownership checks. If observation is unavailable, report the manual completion-evidence and yield fallback. In auto mode, on every fresh reconciliation, including ordinary timer ticks, explicit start, completion and capacity refill, reconsider currently graph-eligible, open, unassigned and unclaimed work even when an earlier packet was acknowledged and its trusted content is unchanged. Delivery alone is not worker admission; preserve trust, ownership, custody and waiting checks and make a fresh selection observation. In observe mode retain unchanged notification deduplication; in all modes keep it for work that is not currently ready and for empty scans. Each reconciliation considers all open eligible
 backlog, regardless of creation or activation time.
 Optional --runs and --checks are positive safe integers with no product maximum.
@@ -1349,6 +1352,70 @@ unavailability. A binding-missing/missing-binding reason or refusal, or matched
 missing-binding compatibility state, parks as binding. Preserve independent
 person questions and explicit blockers.
 
+## Core engine switch
+
+`autopilot.engine` in the checkout's `pdd.json` selects the engine; the
+[core owner](autopilot-core.prompt.md) reads it with `autopilotEngine`, and any
+value other than `core` (or an unreadable file) is the full engine. The default
+stays `full`. The full engine below is unchanged; this section only adds a branch.
+
+- Engine source: `state.engine` (`core` or `full`), saved by `start --engine`, wins
+  over `pdd.json`; a start without `--engine` keeps the saved value. `start --label
+  NAME` saves `state.label`, which replaces the core's `label` setting. `start --mode
+  auto|observe|off` saves `state.mode`, which replaces the core's `mode` (the tick,
+  the start's off check and status, which names the source `this machine`); it never
+  writes `pdd.json` (unlike `pdd autopilot observe`). `start --report file|draft|off`
+  saves `state.report` the same way: it replaces the core's `report` in the tick and
+  status (`reports MODE (this machine)`). With an effective engine that is not core,
+  `--mode` or `--report` is refused before any change. A core start whose machine mode
+  is `off` saves the state as disabled with mode off, stops the timer and returns exit
+  0 with `Autopilot core is off on this machine for REPO: mode off is saved and the
+  timer is stopped. To turn it on, run pdd autopilot start --engine core --mode auto or
+  --mode observe.` (a timer stop failure is named; the ticks do nothing while off). Other values of `--engine` or
+  `--mode`, or a blank label, return exit code 2 before any effect. Doctor gets
+  the effective engine as `engine` in its input.
+- Tick: after the tick lock and the coordinator identity are settled, and before any
+  workflow cleanup, a core engine runs the core tick and returns its result. A
+  completion request returns `inactive` with no work. The core tick selects the
+  automatic base, computes the machine GitHub budget, and calls `tickCore` with this
+  launcher's counted `gh` and `git` process port, its issue list (`queryIssues` with
+  the saved ETag pages), its trust rule for authors (`trusted`, with the core trust
+  list), the read-only Codex limits as `agentReady` (only `limited` holds intake),
+  the package version, an `alert` port that sends one alert of the given kind for the issue
+through this machine's alert destination with the core's cause, tried and need (and `--update` when the core asks), `ROOT` = the state file path without `.json` plus `-core`,
+  and the machine report folder `core-reports` beside the state files. Tests may
+  replace core ports with `ports.corePorts`. Afterwards, under the admission lock and
+  only while still enabled, save the issue-list cache, base fields, `nextTick` and
+  `core: {at, message}`.
+- Start: a core start whose `autopilot.quietMinutes` is below 2 times the core timer
+  (20) refuses before any change: `Autopilot did not start: autopilot.quietMinutes is
+  N; it must be at least 20 (2 times the 10-minute core timer). Nothing was started or
+  claimed.` The core tick gets `tickMinutes` (the installed timer interval).
+- Start: a core engine skips the workflow-readiness check, the Herdr check and the
+  coordinator workspace; it still checks sign-ins, the agent, the base and the
+  timer, saves the agent profile and runs the first tick. With no coordinator launch,
+  the start also saves `launchProfile` from the profile binding, so that a later
+  start verifies the saved profile; a core state saved without one selects the agent
+  again instead of refusing. Each core start saves `startedAt` (ISO time): in auto
+  mode it is the operator action that approves the jobs' prompt changes. Its message names
+  `pdd autopilot status` instead of the Herdr session.
+- Timer: the core tick makes no AI call and each job phase needs a tick, so the core
+  engine's timer fires every 10 minutes; the full engine's fires every 30. Start writes
+  the effective engine's interval into the timer (`StartInterval`, or `OnActiveSec`
+  and `OnUnitActiveSec`, and the unit description) and, after the timer starts, saves
+  it as `timerMinutes`. So a start that switches the engine rewrites the interval. A
+  core tick saves `nextTick` as now plus `timerMinutes` (30 when absent, as an older
+  pdd installed). Both status texts show `timer active, every N minutes` with the
+  installed interval; when it differs from the effective engine's, they add `(run pdd
+  autopilot start to use M minutes for the ENGINE engine)`.
+- Status (without `--all` or `--json`): a core engine shows the enabled and timer
+  line, `coreStatus` from local files, and the last tick message. No Herdr read.
+- Report: catalog command `report` lists the machine's local report drafts
+  (`FINGERPRINT: title; seen N time(s), last TIME`, or `No local Autopilot report
+  drafts.`); `report send FINGERPRINT` sends one through `sendReportDraft` of the
+  [report owner](autopilot-reports.prompt.md) with the counted `gh` port. It needs
+  no repository. Other operands return exit code 2 with the usage line.
+
 ## Dependencies
 
 - [Workflow result evidence](workflow-results.prompt.md): required generation/runtime/testing context for verdict timestamps and the native saved-batch evidence boundary.
@@ -1366,6 +1433,8 @@ person questions and explicit blockers.
 - [Sort integration](issue-sort-github.prompt.md): required native generation and verification context for the group lifecycle. Recompute the current machine GitHub budget at each intake effect boundary; low or reserve defers the remaining sort stream. Save group summaries from intake and display size, cause and umbrella in status without a GitHub read.
 
 - [Automatic base](autopilot-base.prompt.md): required native generation and verification context for automatic base selection and merge safety.
+
+- [Autopilot core](autopilot-core.prompt.md) and [Autopilot reports](autopilot-reports.prompt.md): required native generation and verification context for the engine switch, the core tick, core status and the report command.
 
 - [Metrics store](metrics-store.prompt.md), [run records](workflow-runs.prompt.md) and [metrics gaps](metrics-gap.prompt.md): required native generation/verification context for observational selector/launch storage, run discovery and guarded custody updates.
 
@@ -1403,4 +1472,4 @@ person questions and explicit blockers.
 
 Use [automatic base selection](autopilot-base.prompt.md) for automatic runs. Each explicit start refreshes saved state.defaultBranch from one repository metadata read including defaultBranchRef, even when a default is already saved or Autopilot is already enabled. A failed read refuses startup rather than using the saved default. An old saved state without a default gets one metadata read on its next tick. Never add a metadata read per ordinary tick. Select state.baseBranch from the local config and this cached default at start and tick. Start, status and status --all show the selected base; status reads saved values only and makes no GitHub call for it. Include baseBranch in each work packet and tell the coordinator to use it for automatic starts, never to derive a base from documents. A changed selection at start or tick must be delivered even when issues are unchanged, so a repository default changed between starts reaches the coordinator and agrees with the base selected by a new automatic workflow run.
 
-Catalog command `check-base` receives issues `[RUN, PR]`. Resolve the saved run with resolveRun, then call checkAutopilotBase with the saved run and PR through this launcher's counted process port. Return its result unchanged. This read-only command does not require a running coordinator, timer or agent. It supplies the pre-merge guard and post-merge base audit.
+Catalog command `check-base` receives issues `[RUN, PR]`. Resolve the saved run with resolveRun, then call checkAutopilotBase with the saved run and PR through this launcher's counted process port, with its full reply (`{code, stdout, stderr}`), so a refused read names the tool's own error. Every list read of this launcher with `--paginate` uses `githubListArgs` and `githubListItems` from the GitHub call counter, never `--slurp` (gh before 2.48 has none). Return its result unchanged. This read-only command does not require a running coordinator, timer or agent. It supplies the pre-merge guard and post-merge base audit.

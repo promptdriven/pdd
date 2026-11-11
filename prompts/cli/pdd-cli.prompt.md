@@ -59,7 +59,8 @@ line and no automatic retry. No route silently chooses or calls an AI model.
 Preserve every existing evidence-associate route and --test text-list behavior.
 
 Dispatch `workflow-suite` through the workflow runner's `runSuite` with cwd,
-env, command from `--command` and optional timeout from `--timeout`. Require a
+env, command from `--command` and optional timeout from `--timeout` (passed whenever it is
+given, also 0). Require a
 nonblank command before importing execution. Pass workflow ports plus a `say`
 port for live queue status to stdout; use normal result stream and exit handling.
 The required [queue contract](test-suite-queue.prompt.md) owns execution.
@@ -273,5 +274,7 @@ finite local cause and returns 5. Catalog owns all syntax.
 Dispatch each metrics route to [metrics command](metrics-command.prompt.md) with the selected arguments, current cwd, stdout and stderr; return its exit code without an interpreter call. Forward optional origin, decisionId and outcome metadata alongside existing base, adoptCorpus and draft fields to startRun; these observations grant no workflow authority.
 
 Dispatch `autopilot-check-base` to the Autopilot launcher with command check-base and both operands in issues, using the same reply validation and stream rules as its other commands. Do not run the remote settings warning for this command.
+
+Dispatch `autopilot-report` to the Autopilot launcher with command report and its operands in issues, with the same reply validation and stream rules and no remote settings warning. For `autopilot-start`, also pass `--engine` as `engine` and `--label` as `label`, `--mode` as `mode` and `--report` as `report` when given.
 
 For interface-draft dispatch, pass parsed --contract as contract and the --extend/--refresh flags as extend/refresh to runInterfaceDraft alongside cwd, words, all and json. Forward stdout/stderr; drafting remains local.

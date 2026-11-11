@@ -50,8 +50,8 @@ if(a[0]==='repo')out({nameWithOwner:'example/project',defaultBranchRef:{name:'ma
 else if(a[1]==='list')out(s.prs.filter(p=>(!a.includes('--head')||p.headRefName===flag('--head'))&&(!a.includes('--search')||p.body.includes(flag('--search').split('"')[1]))).map(p=>({...p,headRefOid:remote(p.headRefName)||p.headRefOid})));
 else if(a[1]==='view'){const found=s.prs.find(p=>p.url===a[2]),p=found?.headRefName?{...found,headRefOid:remote(found.headRefName)||found.headRefOid}:found||{body:''};out(String(flag('--json')).split(',').includes('comments')?{...p,comments:(s.comments||[]).map(c=>({author:{login:'reviewer'},authorAssociation:c.author_association,body:c.body,createdAt:c.created_at,url:c.html_url}))}:p)}
 else if(a[0]==='api'&&/^repos\\/example\\/project\\/pulls\\/\\d+\\/files\\?per_page=100$/.test(a[1])){
- if(!a.includes('--paginate')||!a.includes('--slurp'))throw Error('file list must include every JSON page');
- const pages=s.prFiles?.[a[1].split('/')[4]];if(!pages)throw Error('file list unavailable');out(pages);
+ if(!a.includes('--paginate')||a.includes('--slurp')||a[a.indexOf('--jq')+1]!=='.[] | {filename} | tojson')throw Error('file list must read every page, one file per line, with no --slurp');
+ const pages=s.prFiles?.[a[1].split('/')[4]];if(!pages)throw Error('file list unavailable');out(pages.flat().map(f=>JSON.stringify(f)+'\\n').join(''));
 }
 else if(a[0]==='api'&&a.some(x=>x.includes('/comments')))out((s.comments||[]).map(c=>JSON.stringify(c)).join('\\n'));
 else if(a[1]==='create'||a[1]==='edit'){

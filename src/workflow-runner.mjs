@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 13bd2402793433e98e18074dd74b10e7d7f7ff62d8a3b67de88a475577c14ac7).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: fbc6e7e8dca9d885849c40889f84a466151e06c9d9608bb823cf0e15903e622c).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -41,7 +41,7 @@ import { collectTestInventory } from './workflow-inventory.mjs';
 import {readSmallChangeChecklist} from './workflow-small-change.mjs';
 import {adoptReplayCorpus,REPLAY_POLICY,sourceFingerprint as gitFingerprint,pinReplayVectors,pinRunAnchor,readReplayEvidence,readFormalEvidence,formatFormalEvidence,formatReplayEvidence} from './workflow-replay.mjs';
 import { DETAILS_OPEN, TOP_NOTE, balancedDetails, closingInert, detailsOf, pr1Order, prArea, prStatus, readPrFields, readableNextLines, readablePrBody, readablePrTitle, readablePrTop, sameReadableTop, userStory } from './workflow-pr-body.mjs';
-import { nativeGithubCounter } from './github-calls.mjs';
+import { nativeGithubCounter, githubListArgs, githubListItems } from './github-calls.mjs';
 import { storyCard, storyFingerprint, fingerprintChanges, fullCheckPass } from './workflow-story-card.mjs';
 
 import { applyCostMeasurement, captureClosedCi, costReport } from './cost-ledger.mjs';
@@ -1663,11 +1663,9 @@ async function pr1StoryPaths(run, p) {
   // its changes from upstream updates, including fast-forwards before its first
   // commit. Local history since baseSha cannot establish that distinction.
   try {
-    const reply = await p.execFile('gh', ['api', `repos/${run.repo}/pulls/${pr1.number}/files?per_page=100`, '--paginate', '--slurp'], { cwd: run.root });
+    const reply = await p.execFile('gh', ['api', `repos/${run.repo}/pulls/${pr1.number}/files?per_page=100`, ...githubListArgs('{filename}')], { cwd: run.root });
     if (reply.code !== undefined && reply.code !== 0) return [];
-    const pages = JSON.parse(reply.stdout);
-    if (!Array.isArray(pages) || !pages.every(Array.isArray)) return [];
-    return pages.flatMap(page => page.map(file => file?.filename));
+    return githubListItems(reply.stdout).map(file => file?.filename);
   } catch { return []; }
 }
 // Readable Stories come from the current run-base diff, PR 1 or explicit Story references/approval.

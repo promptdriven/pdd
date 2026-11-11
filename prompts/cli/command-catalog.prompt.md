@@ -48,7 +48,7 @@ Help forms and completion name only the `NAMES` words.
 
 Catalog four local routes before the product routes: `autopilot.start` (`autopilot start`, local `autopilot-start`, no operands, optional text --runs, --checks and --resume-custody); `autopilot.stop` (matching prefix/disposition, no operands/options); `autopilot.status` (matching prefix/disposition, no operands, optional flag --all); `autopilot.add` (`autopilot add`, local `autopilot-add`, required repeated issue operands). Forms and descriptions:
 
-- `pdd autopilot start [--runs N] [--checks N] [--resume-custody FILE]`: Start this repo in an interactive Herdr agent; check now and every 30 minutes without AI on empty ticks. --runs and --checks override machine-sized run and heavy-check limits; --resume-custody supplies the verified original-owner projection.
+- `pdd autopilot start [--runs N] [--checks N] [--engine core|full] [--label NAME] [--mode auto|observe|off] [--report file|draft|off] [--resume-custody FILE]`: Start this repo in an interactive Herdr agent, or headless jobs with the core engine; check now and every 30 minutes (10 with the core engine) without AI on empty ticks. --runs and --checks override machine-sized run and heavy-check limits; --engine (choice core or full), --label (text), --mode (choice auto, observe or off) and --report (choice file, draft or off) save this machine's engine, opt-in label, core mode and core report mode for this repo, over pdd.json (--mode observe runs every check but never merges); --resume-custody supplies the verified original-owner projection.
 - `pdd autopilot stop`: Stop this machine's timer; let the current agent step finish.
 - `pdd autopilot status [--all] [--json]`: Show this machine's repo, folder, agent and next tick; --all lists every repository with Autopilot on this machine, from any folder.
 - `pdd autopilot add N...`: Mark named old issues with pdd:autopilot so Autopilot may take them.
@@ -74,8 +74,9 @@ For `workflow.run`, accept optional `--adopt-corpus FILE`, a nonempty text path 
 
 - workflow.suite `workflow suite --command COMMAND [--timeout MIN]` (local
   `workflow-suite`): no operands, required nonblank command text enforced by
-  dispatch, optional integer timeout 1 to 120 minutes. Help describes the shared
-  machine queue, machine-sized check slots and the 30-minute execution timeout. The required
+  dispatch, optional integer timeout 0 to 120 minutes (0 is no time limit). Help describes the shared
+  machine queue, machine-sized check slots and the 30-minute execution timeout, and says that
+  --timeout 0 runs it with no time limit, for a caller that watches it. The required
   [queue contract](test-suite-queue.prompt.md) owns execution and status.
 
 - workflow.done `workflow done STEP [--summary TEXT] [--skipped REASON]`: STEP is a safe step name; the summary and the reason are free text. Help says it records the step with pdd's own latest `pdd <NAMES.test>`, `pdd <NAMES.lint>` and prove results (the summary is an agent note), and that --skipped records that the step was skipped, and why. Build the two command words from `NAMES`, like every other form, so a rename changes this help too.
@@ -287,6 +288,15 @@ In PDD, prompts are the source. Code follows the prompts.
 5. Approve: a person reads each prompt and runs pdd approve PROMPT. New behavior needs a person. An unchanged complete draft can use --automatic with passing existing tests and a full prompt check.
 ```
 
+
+## Autopilot report route
+
+Catalog `autopilot.report` with prefix `autopilot report`, local `autopilot-report`,
+an optional choice operand `send` and an optional text operand FINGERPRINT, no
+options. Forms: `pdd autopilot report` (List the local Autopilot report drafts of
+this machine; no GitHub call.) and `pdd autopilot report send FINGERPRINT` (File
+one local report draft to promptdriven/pdd, or count it on the matching open
+report.).
 
 ## Post-merge audit route
 
