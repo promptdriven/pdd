@@ -1,5 +1,5 @@
 import './helpers/test-home.mjs';
-import {spawnOwned} from './helpers/owned-process.mjs';
+import {spawnOwned,parseDarwinProcesses} from './helpers/owned-process.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {execFileSync,spawn} from 'node:child_process';
@@ -8,6 +8,10 @@ import {tmpdir} from 'node:os';
 import {join,dirname,resolve} from 'node:path';
 const modulePath=resolve('src/workflow-prove.mjs');
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
+function processAlive(pid){
+ try{const state=execFileSync('ps',['-o','state=','-p',String(pid)],{encoding:'utf8'}).trim();return state!==''&&!state.startsWith('Z');}
+ catch(error){if(error.status===1)return false;throw error;}
+}
 async function api(){let mod;try{mod=await import('../src/workflow-prove.mjs')}catch(error){if(error.code!=='ERR_MODULE_NOT_FOUND')throw error;}assert.equal(typeof mod?.proveRun,'function','review proof API must exist');return mod;}
 async function evidenceApi(){let mod;try{mod=await import('../src/workflow-pr-evidence.mjs')}catch(error){if(error.code!=='ERR_MODULE_NOT_FOUND')throw error;}assert.equal(typeof mod?.preparePrEvidence,'function','review evidence API must exist');return mod;}
 function fixture(t){
@@ -37,14 +41,14 @@ test('REVIEW-PROVE-SETUP: successful setup-looking head output is allowed; 127 d
  assert.equal((await proveRun({ref:'2594',cwd:f.root,test:command,expect:'defect-x'})).exitCode,0);
  const r=await proveRun({ref:'2594',cwd:f.root,test:'missing-pdd-command-2594',expect:'defect-x'});assert.equal(f.proof().outcome,'setup-error');assert.match(r.message,/127/);assert.match(r.message,/; tail .*missing-pdd-command-2594/);
 });
-for(const signal of ['SIGINT','SIGTERM','SIGHUP']) test(`REVIEW-PROVE-INTERRUPT-${signal}: actual parent signal kills descendants and removes both snapshots`, {timeout:20000,skip:process.platform!=='linux'},async t=>{
+for(const signal of ['SIGINT','SIGTERM','SIGHUP']) test(`REVIEW-PROVE-INTERRUPT-${signal}: actual parent signal kills descendants and removes both snapshots`, {timeout:20000},async t=>{
  const f=fixture(t);f.put('test/regression.test.mjs',regression);f.commit();const pidFile=join(f.runDir,'child.pid');
  const childScript=`const grandchild=require("child_process").spawn(process.execPath,["-e",'process.on("SIGTERM",()=>{});setInterval(()=>{},1000)'],{stdio:"ignore"});process.on("SIGTERM",()=>{});const fs=require("fs");fs.writeFileSync(${JSON.stringify(pidFile+".tmp")},JSON.stringify([process.pid,grandchild.pid]));fs.renameSync(${JSON.stringify(pidFile+".tmp")},${JSON.stringify(pidFile)});setInterval(()=>{},1000)`;
  const command=`node -e '${childScript.replaceAll("'", "'\\''")}'`;
  const script=`import {proveRun} from ${JSON.stringify(modulePath)};const r=await proveRun(${JSON.stringify({ref:'2594',cwd:f.root,test:command,expect:'defect-x'})});console.log(JSON.stringify(r));process.exitCode=r.exitCode;`;
  const owned=spawnOwned(script),{child,ended}=owned;let out='',err='';child.stdout.on('data',s=>out+=s);child.stderr.on('data',s=>err+=s);
  let pid,descendants=[];
- try {for(let n=0;n<200&&!descendants.length;n++){try{descendants=JSON.parse(readFileSync(pidFile))}catch{await wait(20)}}assert.equal(descendants.length,2,'child publishes its complete PID record');pid=descendants[0];process.kill(child.pid,signal);const result=await ended;assert.equal(result.code,{SIGINT:130,SIGTERM:143,SIGHUP:129}[signal],out+err);assert.equal(f.proof().interruptSignal,signal);assert.equal(f.proof().head.exitCode,null);assert.equal(f.git('worktree','list','--porcelain').split('worktree ').length,2);for(const descendant of descendants){let alive=false;try{alive=!/\) Z /.test(readFileSync(`/proc/${descendant}/stat`,'utf8'))}catch{}assert.equal(alive,false,'test descendant gone');}}
+ try {for(let n=0;n<200&&!descendants.length;n++){try{descendants=JSON.parse(readFileSync(pidFile))}catch{await wait(20)}}assert.equal(descendants.length,2,'child publishes its complete PID record');pid=descendants[0];process.kill(child.pid,signal);const result=await ended;assert.equal(result.code,{SIGINT:130,SIGTERM:143,SIGHUP:129}[signal],out+err);assert.equal(f.proof().interruptSignal,signal);assert.equal(f.proof().head.exitCode,null);assert.equal(f.git('worktree','list','--porcelain').split('worktree ').length,2);for(const descendant of descendants){assert.equal(processAlive(descendant),false,'test descendant gone');}}
  finally {await owned.cleanup();for(const row of f.git('worktree','list','--porcelain').split('\n'))if(row.startsWith('worktree ')&&row.slice(9)!==f.root){try{f.git('worktree','remove','--force',row.slice(9))}catch{}rmSync(row.slice(9),{recursive:true,force:true})}await ended;}
 });
 test('REVIEW-LABEL-WRITERS: only authorized steps lift, review needs direct known file, period duplicates retain first spelling',async()=>{
@@ -73,6 +77,17 @@ async function rescueMarkedProcesses(marker){
  for(const [pid,info] of frozen)signal(pid,info.start,'SIGKILL');
  for(let n=0;n<500;n++){if(scan().size===0)return;await wait(10)}throw Error('marked regression processes survived rescue');
 }
+test('REVIEW-PROVE-DARWIN-SCAN: ownership needs an exact token, matching UID and a live process',()=>{
+ const token='PDD_PROOF_FIXTURE_OWNER=abc123';
+ const rows=[
+  `  100 501 Wed Nov 11 01:02:03 2026 S node fixture ${token}`,
+  `  101 501 Wed Nov 11 01:02:03 2026 T node fixture ${token}x`,
+  `  102 502 Wed Nov 11 01:02:03 2026 S node fixture ${token}`,
+  `  103 501 Wed Nov 11 01:02:03 2026 Z node fixture ${token}`,
+  `  104 501 Wed Nov 11 01:02:03 2026 T node fixture ${token}`,
+ ];
+ assert.deepEqual([...parseDarwinProcesses(rows.join('\n'),token,501)],[[100,{state:'S',start:'Wed Nov 11 01:02:03 2026'}],[104,{state:'T',start:'Wed Nov 11 01:02:03 2026'}]]);
+});
 test('REVIEW-PROVE-RECOVERY-SETUP-FAILURE: failed setup cleans the runner and descendants',{timeout:40000,skip:process.platform!=='linux'},async t=>{
  const dir=mkdtempSync(join(tmpdir(),'pdd-recovery-failure-')),record=join(dir,'processes.json');t.after(()=>rmSync(dir,{recursive:true,force:true}));
  const env={...process.env,PDD_RECOVERY_SETUP_FAILURE:record};delete env.NODE_TEST_CONTEXT;
@@ -88,7 +103,7 @@ test('REVIEW-PROVE-RECOVERY-SETUP-FAILURE: failed setup cleans the runner and de
   await closed;
  }
 });
-test('REVIEW-PROVE-RECOVERY: next proof recovers only inactive owned snapshots and preserves unrelated registrations', {timeout:20000,skip:process.platform!=='linux'},async t=>{
+test('REVIEW-PROVE-RECOVERY: next proof recovers only inactive owned snapshots and preserves unrelated registrations', {timeout:20000},async t=>{
  const f=fixture(t),{proveRun}=await api();f.put('test/regression.test.mjs',regression);f.commit();const pidFile=join(f.runDir,'recovery.pid');
  const realTemp=join(f.parent,'proof-temp'),aliasTemp=join(f.parent,'proof-temp-alias');mkdirSync(realTemp);symlinkSync(realTemp,aliasTemp,'dir');
  const command=`node -e 'const fs=require("fs");fs.writeFileSync(${JSON.stringify(pidFile+".tmp")},String(process.pid));fs.renameSync(${JSON.stringify(pidFile+".tmp")},${JSON.stringify(pidFile)});setInterval(()=>{},1000)'`;
@@ -106,7 +121,7 @@ test('REVIEW-PROVE-RECOVERY: next proof recovers only inactive owned snapshots a
  f.git('worktree','add','--detach',unrelated,'HEAD');f.git('worktree','add','--detach',missing,'HEAD');rmSync(missing,{recursive:true,force:true});
  for(let n=0;n<200&&!(pid>0);n++){try{pid=Number(readFileSync(pidFile,'utf8'))}catch{}if(!(pid>0))await wait(20)}assert.ok(Number.isInteger(pid)&&pid>0,'child publishes its complete PID');process.kill(child.pid,'SIGKILL');await ended;
   const stale=f.git('worktree','list','--porcelain').split('\n').filter(x=>x.startsWith('worktree ')).map(x=>x.slice(9)).filter(x=>![f.root,unrelated,missing].includes(x));assert.equal(stale.length,2);
-  await owned.cleanup();
+  await owned.cleanup();assert.equal(processAlive(pid),false,'recovery child stopped');
   await proveRun({ref:'2594',cwd:f.root,test:'true',expect:'defect-x'});const registrations=f.git('worktree','list','--porcelain');for(const path of stale){assert.equal(registrations.includes(path),false,'stale ownership recovered');assert.equal(existsSync(path),false)}assert.ok(registrations.includes(unrelated));assert.ok(registrations.includes(missing),'no global prune');assert.ok(existsSync(unrelated));
  } finally {await owned.cleanup();for(const row of f.git('worktree','list','--porcelain').split('\n'))if(row.startsWith('worktree ')&&row.slice(9)!==f.root){try{f.git('worktree','remove','--force',row.slice(9))}catch{}rmSync(row.slice(9),{recursive:true,force:true})}await ended;}
 });
@@ -144,10 +159,10 @@ test('REVIEW-PROVE-CLEANUP-LAUNCH: owner dies as the proof command starts before
  try{await owned.ended;for(let n=0;n<200&&!pid;n++){try{pid=Number(readFileSync(observed,'utf8'))}catch{}if(!pid)await wait(20)}assert.ok(pid,'proof command ran after killing its owner');await owned.cleanup();let alive=false;try{alive=!/\) Z /.test(readFileSync(`/proc/${pid}/stat`,'utf8'))}catch{}assert.equal(alive,false);}
  finally{try{await owned.cleanup()}finally{if(pid)try{process.kill(pid,'SIGKILL')}catch{}}}
 });
-test('REVIEW-PROVE-CLEANUP-EARLY: cleanup prevents a later proof spawn',{timeout:20000,skip:process.platform!=='linux'},async t=>{
+test('REVIEW-PROVE-CLEANUP-EARLY: cleanup prevents a later proof spawn',{timeout:20000},async t=>{
  const marker=join(mkdtempSync(join(tmpdir(),'pdd-owned-')),'late');t.after(()=>rmSync(dirname(marker),{recursive:true,force:true}));
  const owned=spawnOwned(`import {spawn} from 'node:child_process';setTimeout(()=>spawn(process.execPath,['-e',${JSON.stringify(`require('fs').writeFileSync(${JSON.stringify(marker)},'late')`)}],{detached:true}),500);setInterval(()=>{},1000);`);
- await owned.cleanup();await wait(700);assert.equal(existsSync(marker),false);
+ await owned.cleanup();assert.equal(processAlive(owned.child.pid),false,'runner stopped');await wait(700);assert.equal(existsSync(marker),false);
 });
 test('REVIEW-PROVE-EARLY: parent SIGINT during real snapshot allocation records no invented process and restores listeners',async t=>{
  const f=fixture(t);f.put('test/regression.test.mjs',regression);f.commit();
