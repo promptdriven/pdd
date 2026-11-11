@@ -76,6 +76,15 @@ test('macOS memory falls back to free memory when vm_stat is unreadable or malfo
   }
 });
 
+// Wrong: an empty vm_stat (it timed out after 2 s) gives '' as memory, so the check queue refuses the machine.
+test('macOS memory falls back to free memory when vm_stat prints nothing', async () => {
+  const { machineCheckPorts } = await import('../src/machine-resources.mjs');
+  const row = await readMachineResources({ cwd: '/checkout' }, { platform: 'darwin', cpuCount: () => 8, load: () => 1,
+    vmStat: () => '', totalMemory: () => 16 * GiB, freeMemory: () => GiB, statfs: () => ({ bavail: 10, blocks: 100, bsize: 4096 }) });
+  assert.deepEqual(row.memory, { available: GiB, total: 16 * GiB });
+  assert.equal(machineCheckPorts({}, { platform: 'darwin', vmStat: () => '', freeMemory: () => 123 }).memory(), 123);
+});
+
 test('legacy capacity memory port uses the same macOS reader', async () => {
   const { machineCheckPorts } = await import('../src/machine-resources.mjs');
   const ports = machineCheckPorts({}, { platform: 'darwin', vmStat: () => VM_STAT, totalMemory: () => 16 * GiB, freeMemory: () => 1 });
