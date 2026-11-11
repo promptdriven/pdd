@@ -1,8 +1,7 @@
-// Generated from prompts/cli/runtime-check-plan.prompt.md (sha256: 3e49063f161439148454d19932d224952316c3dd597e10e0c24f0313ff3f89dd).
+// Generated from prompts/cli/runtime-check-plan.prompt.md (sha256: f3492c2521b1753e3717216d42e0a3b4cb8840cf3c486ef81f651b6408ec857b).
 import { spawnSync } from 'node:child_process';
 import { captureSource, readPrompt, sourceFilePort } from './runtime-preflight.mjs';
 import { resultOutcome } from './runtime-outcome.mjs';
-import { headerPrompts } from '../file-owner.mjs';
 import { allowsRuntimePath, loadRuntimeWorkspace } from './runtime-workspace.mjs';
 
 const sorted = values => [...new Set(values)].sort();
@@ -14,6 +13,7 @@ const gitRead = (root, args) => {
 
 export function buildCheckPlan({ root, found, selected, rows, full, base = 'HEAD' }, ports = {}) {
   const git = args => (ports.git ?? gitRead)(root, args);
+  const readHeaders = ports.headerPrompts ?? (() => []);
   let changed = null;
   try {
     changed = sorted([...git(['diff', '--name-only', '-z', '--no-renames', base, '--']).split('\0'),
@@ -40,7 +40,7 @@ export function buildCheckPlan({ root, found, selected, rows, full, base = 'HEAD
       // Validate the permitted source path even when its working file is absent.
       if (deleted.has(path)) source.stat({path});
       const content = deleted.has(path) ? git(['show', `${base}:${path}`]) : source.read({path}).content;
-      for (const prompt of headerPrompts(content)) own(prompt, path);
+      for (const prompt of readHeaders(content)) own(prompt, path);
     } catch { /* Unproved deleted ownership keeps target coverage conservative. */ }
   }
   if (changed?.length && found.visible.has('pdd-bindings.json')) {

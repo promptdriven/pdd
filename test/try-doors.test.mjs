@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, rmSync, statSync, symlinkSync, readdirSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
-import { runTry } from '../src/runtime/runtime-client.mjs';
+import { runTry } from '../src/runtime-seam.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
 import { harbor, fakeRuntime, portsFor, PLACE, TOKEN } from './runtime-fake.mjs';
 import { proseSha256, fillHashes } from '../src/runtime/runtime-preflight.mjs';

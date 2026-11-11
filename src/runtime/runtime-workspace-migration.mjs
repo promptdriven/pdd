@@ -1,11 +1,10 @@
-// Generated from prompts/cli/runtime-workspace-migration.prompt.md (sha256: b1a0fb20ff73a720238a3f76bdd84f725f8aa96d3de4697980bac6ffe826fd98).
+// Generated from prompts/cli/runtime-workspace-migration.prompt.md (sha256: a04019764a093a86ca9302c302617d38b2b5c875daefd0de44dfbe0d4525bcea).
 // Implements prompts/cli/runtime-workspace-migration.prompt.md.
 import {realpathSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {loadRuntimeWorkspace,requireRuntimePath} from './runtime-workspace.mjs';
 import {captureSource,sourceFilePort,gitFiles} from './runtime-preflight.mjs';
 import {runtimeWorkspaceMigrationStore,acquireCaseWriteOwnership,applyPendingCase} from './runtime-client.mjs';
-import {readEvidenceEligibility} from '../workflow-runner.mjs';
 const digest=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const safe=path=>typeof path==='string'&&path&&!/[\\\x00-\x1f*?]/.test(path)&&!path.startsWith('/')&&!path.split('/').some(p=>!p||p==='.'||p==='..'||p==='.git');
 export async function migrateRuntimeWorkspace({root,projectionRoot,mappings,write=false,signal},ports={}){
@@ -14,7 +13,7 @@ export async function migrateRuntimeWorkspace({root,projectionRoot,mappings,writ
   const unresolved=(id,reason,recoveryPath=null)=>{result.unresolved.push({id,reason,recoveryPath});if(write)result.state='incomplete';};
   if(!Array.isArray(mappings)||mappings.some(m=>!m||Object.keys(m).length!==2||!safe(m.from)||!safe(m.to))||new Set(mappings.map(m=>m.from)).size!==mappings.length||new Set(mappings.map(m=>m.to)).size!==mappings.length){unresolved('mappings','exact unique safe from/to file mappings are required');result.state='incomplete';return result;}
   const map=new Map(mappings.map(m=>[m.from,m.to])),policy=(ports.loadRuntimeWorkspace??loadRuntimeWorkspace)({root}),store=ports.store??runtimeWorkspaceMigrationStore({root,projectionRoot,env:ports.env});
-  const source=ports.sourceFilePort??sourceFilePort,capture=ports.captureSource??captureSource,eligibility=ports.readEvidenceEligibility??readEvidenceEligibility;
+  const source=ports.sourceFilePort??sourceFilePort,capture=ports.captureSource??captureSource,eligibility=ports.evidenceEligibility??ports.readEvidenceEligibility??(() => ({state:'unavailable',reason:'workflow evidence eligibility port is not bound'}));
   let oldFiles,newFiles;
   try{oldFiles=source(projectionRoot,new Set((ports.gitFiles??gitFiles)(projectionRoot)));newFiles=source(root,new Set((ports.gitFiles??gitFiles)(root)));}
   catch(error){unresolved('source',error.message);result.state='incomplete';return result;}

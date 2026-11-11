@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createAgentBridge} from '../src/runtime/agent-chat.mjs';
+import {createAgentBridge} from '../src/runtime-seam.mjs';
 const ID='11111111-1111-4111-8111-111111111111',KEY='x'.repeat(43);
 const agents=[{id:'codex',name:'Codex',state:'ready'},{id:'claude',name:'Claude',state:'signed_out'},{id:'gemini',name:'Gemini',state:'not_installed'}];
 const entry={entry_path:'prompts/main.prompt.md',operation:'main',input_schema:{type:'object',properties:{argv:{type:'array',items:{type:'string'}}},required:['argv'],additionalProperties:false}};
@@ -39,12 +39,12 @@ test('CHAT5 signed-out choice explains state without subprocess or fallback',asy
 
 test('CHAT6 public parser and mode conflicts fail before sign-in',async t=>{
  const {parseArgv}=await import('../src/argument-parser.mjs');assert.equal(parseArgv(['simulate','story','--agent','claude']).options['--agent'],'claude');assert.equal(parseArgv(['simulate','--agent','Codex (work5)']).options['--agent'],'Codex (work5)');
- const {runTry}=await import('../src/runtime/runtime-client.mjs'),{harbor,portsFor}=await import('./runtime-fake.mjs');const fixture=harbor(t),{ports,clock}=portsFor({HOME:fixture.home,PDD_STATE_DIR:fixture.state});
+ const {runTry}=await import('../src/runtime-seam.mjs'),{harbor,portsFor}=await import('./runtime-fake.mjs');const fixture=harbor(t),{ports,clock}=portsFor({HOME:fixture.home,PDD_STATE_DIR:fixture.state});
  for(const mode of ['--no-wait','--cli','--serve','--stop','--save-last'])assert.equal(await runTry({cwd:fixture.repo,words:['place-order'],options:{'--agent':'codex',[mode]:true}},ports),2);
  assert.equal(clock.gh.length,0);
 });
 test('CHAT7 explicit background Try waits on bridge, opens private owner URL and keeps shared output keyless',async t=>{
- const {runTry}=await import('../src/runtime/runtime-client.mjs'),{harbor,portsFor,fakeRuntime}=await import('./runtime-fake.mjs');
+ const {runTry}=await import('../src/runtime-seam.mjs'),{harbor,portsFor,fakeRuntime}=await import('./runtime-fake.mjs');
  const fixture=harbor(t),fake=await fakeRuntime(t,(e,f)=>{
   if(e.command==='lint')return{status:200,json:f.lint(e.request.requestId)};
   if(e.command==='try')return{status:200,json:f.tryJob(e.request.requestId)};
@@ -80,14 +80,14 @@ test('CHAT11 legacy preferences migrate to names and empty definitions fail befo
  const empty=setup(connect);empty.context.agentDefinitions=[];await assert.rejects(()=>createAgentBridge(empty.context,{},ID,{},'https://runtime.example/s/abc/'),/agent/i);assert.equal(empty.calls.length,0);
 });
 test('CHAT12 bad user configuration and unknown named choice stop public Try before sign-in',async t=>{
- const {runTry}=await import('../src/runtime/runtime-client.mjs'),{harbor,portsFor}=await import('./runtime-fake.mjs');const {mkdirSync,writeFileSync}=await import('node:fs'),{join}=await import('node:path');
+ const {runTry}=await import('../src/runtime-seam.mjs'),{harbor,portsFor}=await import('./runtime-fake.mjs');const {mkdirSync,writeFileSync}=await import('node:fs'),{join}=await import('node:path');
  const f=harbor(t);mkdirSync(join(f.home,'.config/pdd'),{recursive:true});const file=join(f.home,'.config/pdd/agents.json');const {ports,clock}=portsFor({HOME:f.home,PDD_STATE_DIR:f.state},{agentBridge:async()=>{throw Error('must not connect')}});
  writeFileSync(file,'{"agents":[{"name":"Work","kind":"wrong","command":"secret-command"}]}');assert.equal(await runTry({cwd:f.repo,words:['place-order'],options:{'--agent':'codex'}},ports),2);assert.equal(clock.gh.length,0);assert.ok(!ports.stderr.text.includes('secret-command'));
  writeFileSync(file,JSON.stringify({agents:namedDefinitions.map(({name,kind,command,env})=>({name,kind,command,env})),include_defaults:false}));assert.equal(await runTry({cwd:f.repo,words:['place-order'],options:{'--agent':'Unknown name'}},ports),2);assert.equal(clock.gh.length,0);
 });
 
 test('CHAT13 public named Try retains launcher configuration only in private bridge context',async t=>{
- const {runTry}=await import('../src/runtime/runtime-client.mjs'),{harbor,portsFor,fakeRuntime}=await import('./runtime-fake.mjs');const {mkdirSync,writeFileSync}=await import('node:fs'),{join}=await import('node:path');
+ const {runTry}=await import('../src/runtime-seam.mjs'),{harbor,portsFor,fakeRuntime}=await import('./runtime-fake.mjs');const {mkdirSync,writeFileSync}=await import('node:fs'),{join}=await import('node:path');
  const f=harbor(t);mkdirSync(join(f.home,'.config/pdd'),{recursive:true});writeFileSync(join(f.home,'.config/pdd/agents.json'),JSON.stringify({agents:namedDefinitions.map(({name,kind,command,env})=>({name,kind,command,env})),include_defaults:false}));
  const fake=await fakeRuntime(t,(e,r)=>{if(e.command==='lint')return{status:200,json:r.lint(e.request.requestId)};if(e.command==='try')return{status:200,json:r.tryJob(e.request.requestId)};if(e.url.endsWith('/tests'))return{status:200,json:{tests:[]}};if(e.url.endsWith('/approvals'))return{status:200,json:{approvals:[]}};return{status:404,json:{}}});
  let seen;const {ports}=portsFor({HOME:f.home,PDD_STATE_DIR:f.state,PDD_RUNTIME_URL:fake.origin},{agentBridge:async(context,test,id,options,link)=>{seen=context.agentDefinitions;assert.equal(options['--agent'],'Codex (work5)');return{url:link,run:async()=>0,close:async()=>{}}}});
@@ -96,7 +96,7 @@ test('CHAT13 public named Try retains launcher configuration only in private bri
 
 // Keep the production bridge enabled: the shared fake's compatibility switch must not hide non-TTY behavior.
 test('CHAT14 non-terminal plain Try returns after collecting saved cases without loading or starting an agent',async t=>{
- const {runTry}=await import('../src/runtime/runtime-client.mjs'),{harbor,portsFor,fakeRuntime}=await import('./runtime-fake.mjs');const {mkdirSync,writeFileSync}=await import('node:fs'),{join}=await import('node:path');
+ const {runTry}=await import('../src/runtime-seam.mjs'),{harbor,portsFor,fakeRuntime}=await import('./runtime-fake.mjs');const {mkdirSync,writeFileSync}=await import('node:fs'),{join}=await import('node:path');
  const f=harbor(t);mkdirSync(join(f.home,'.config/pdd'),{recursive:true});writeFileSync(join(f.home,'.config/pdd/agents.json'),'invalid user config must not be read for a link-only Try');
  const fake=await fakeRuntime(t,(e,r)=>{if(e.command==='lint')return{status:200,json:r.lint(e.request.requestId)};if(e.command==='try')return{status:200,json:r.tryJob(e.request.requestId)};if(e.url.endsWith('/tests'))return{status:200,json:{tests:[]}};if(e.url.endsWith('/approvals'))return{status:200,json:{approvals:[]}};return{status:404,json:{}}});
  const {ports}=portsFor({HOME:f.home,PDD_STATE_DIR:f.state,PDD_RUNTIME_URL:fake.origin},{agentBridge:undefined,discoverAgents:async()=>assert.fail('must not discover a local agent'),openUrl:async()=>true});
@@ -104,7 +104,7 @@ test('CHAT14 non-terminal plain Try returns after collecting saved cases without
 });
 
 test('CHAT15 stdout terminal connects ordinary Try; --no-wait disables it',async t=>{
- const {runTry}=await import('../src/runtime/runtime-client.mjs'),{harbor,portsFor,fakeRuntime}=await import('./runtime-fake.mjs');
+ const {runTry}=await import('../src/runtime-seam.mjs'),{harbor,portsFor,fakeRuntime}=await import('./runtime-fake.mjs');
  for(const noWait of [false,true]){
   const f=harbor(t),fake=await fakeRuntime(t,(e,r)=>{if(e.command==='lint')return{status:200,json:r.lint(e.request.requestId)};if(e.command==='try')return{status:200,json:r.tryJob(e.request.requestId)};if(e.url.endsWith('/tests'))return{status:200,json:{tests:[]}};if(e.url.endsWith('/approvals'))return{status:200,json:{approvals:[]}};return{status:404,json:{}}});let connects=0;
   const {ports}=portsFor({HOME:f.home,PDD_STATE_DIR:f.state,PDD_RUNTIME_URL:fake.origin},{openUrl:async()=>true,agentBridge:async(c,test,id,options,link)=>{connects++;return{url:link,run:async()=>0,close:async()=>{}}}});ports.stdout.isTTY=true;
@@ -113,7 +113,7 @@ test('CHAT15 stdout terminal connects ordinary Try; --no-wait disables it',async
 });
 
 test('CHAT16 non-terminal plain Try with production bridge enabled never discovers or calls relay endpoints',async t=>{
- const {runTry}=await import('../src/runtime/runtime-client.mjs'),{harbor,portsFor,fakeRuntime}=await import('./runtime-fake.mjs');
+ const {runTry}=await import('../src/runtime-seam.mjs'),{harbor,portsFor,fakeRuntime}=await import('./runtime-fake.mjs');
  const f=harbor(t);let discoveries=0;
  const fake=await fakeRuntime(t,(e,r)=>{
   if(e.command==='lint')return{status:200,json:r.lint(e.request.requestId)};
@@ -146,7 +146,7 @@ test('every launcher secret is scrubbed before memory and legacy upload',async()
 });
 
 test('saved collection notices are small, once-only, and callback failures do not undo saving',async t=>{
- const {runTry}=await import('../src/runtime/runtime-client.mjs'),{harbor,portsFor,fakeRuntime}=await import('./runtime-fake.mjs');const fs=await import('node:fs'),{join}=await import('node:path');const f=harbor(t),doc=JSON.parse(fs.readFileSync(join(f.repo,'tests/place-order.json'),'utf8'));doc.steps.at(-1).checks.push({criterion_id:'AC1',target:'world',path:'',op:'equals',value:doc.initial_world});fs.writeFileSync(join(f.repo,'tests/place-order.json'),JSON.stringify(doc));doc.steps=[{...doc.steps[0],step_id:'notice-case'}];const records=[];
+ const {runTry}=await import('../src/runtime-seam.mjs'),{harbor,portsFor,fakeRuntime}=await import('./runtime-fake.mjs');const fs=await import('node:fs'),{join}=await import('node:path');const f=harbor(t),doc=JSON.parse(fs.readFileSync(join(f.repo,'tests/place-order.json'),'utf8'));doc.steps.at(-1).checks.push({criterion_id:'AC1',target:'world',path:'',op:'equals',value:doc.initial_world});fs.writeFileSync(join(f.repo,'tests/place-order.json'),JSON.stringify(doc));doc.steps=[{...doc.steps[0],step_id:'notice-case'}];const records=[];
  const fake=await fakeRuntime(t,(e,r)=>{if(e.command==='lint')return{status:200,json:r.lint(e.request.requestId)};if(e.command==='try')return{status:200,json:r.tryJob(e.request.requestId)};if(e.url.endsWith('/tests'))return{status:200,json:{tests:[{id:'notice1',name:'My case',story_path:doc.story_path,test:doc}]}};if(e.url.endsWith('/approvals'))return{status:200,json:{approvals:[]}};return{status:404,json:{}};});
  const {ports}=portsFor({HOME:f.home,PDD_STATE_DIR:f.state,PDD_RUNTIME_URL:fake.origin},{caseHandoff:async({testPath})=>({kind:'closed-editor',testPath}),agentBridge:async(context,test,id,options,link)=>{context.onAgentCaseSaved=record=>{records.push(record);throw Error('observer failure');};return{url:link,close:async()=>{},run:async tick=>{await tick();await tick();return 0;}};}});
  assert.equal(await runTry({cwd:f.repo,words:['place-order'],options:{'--agent':'codex','--no-open':true}},ports),0,ports.stderr.text);assert.equal(records.length,1);assert.deepEqual(Object.keys(records[0]).sort(),['id','name','result','story_path']);assert.match(records[0].result,/^added to /);const after=JSON.parse(fs.readFileSync(join(f.repo,'tests/place-order.json'),'utf8'));assert.equal(after.steps.filter(s=>s.step_id==='notice-case').length,1);

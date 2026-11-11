@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runTry } from '../src/runtime/runtime-client.mjs';
+import { runTry } from '../src/runtime-seam.mjs';
 import { findTests, preflight, proseSha256 } from '../src/runtime/runtime-preflight.mjs';
 import { Readable } from 'node:stream';
 import { PLACE, fakeRuntime, harbor, portsFor, temp } from './runtime-fake.mjs';

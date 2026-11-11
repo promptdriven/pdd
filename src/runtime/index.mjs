@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-entry.prompt.md (sha256: 8e2d62f77a52737835624a8a2835f81ac44beb544e4a5f22f67616fcbae73c5b).
+// Generated from prompts/cli/runtime-entry.prompt.md (sha256: 46a6f9b5b43c34ffbd40e66052e8242df088c53be05b95698648a3038793c3e4).
 import { createRequire } from 'node:module';
 
 export {
@@ -52,6 +52,10 @@ export { buildAgentInput } from './agent-packet.mjs';
 let checkPlanModule = null;
 function loadCheckPlan() {
   return (checkPlanModule ??= createRequire(import.meta.url)('./runtime-check-plan.mjs'));
+}
+
+export function buildCheckPlan(input, ports) {
+  return loadCheckPlan().buildCheckPlan(input, ports);
 }
 
 export function checkPlanResults(plan, rows) {
@@ -123,4 +127,14 @@ export async function runCheck(input, ports) {
 export async function runTry(input, ports) {
   const { runTry: run } = await import('./runtime-client.mjs');
   return run(input, ports);
+}
+
+export async function createAgentBridge(context, test, tryId, options, link, seamPorts) {
+  const { createAgentBridge: create } = await import('./agent-chat.mjs');
+  return create(context, test, tryId, options, link, seamPorts);
+}
+
+export async function migrateRuntimeWorkspace(input, ports) {
+  const { migrateRuntimeWorkspace: migrate } = await import('./runtime-workspace-migration.mjs');
+  return migrate(input, ports);
 }

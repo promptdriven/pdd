@@ -12,8 +12,8 @@ import {syncBuiltinESMExports} from 'node:module';
 import {loadRuntimeWorkspace, allowsRuntimePath, requireRuntimePath} from '../src/runtime/runtime-workspace.mjs';
 import {captureSource, fillHashes, createStrictSourceAccess} from '../src/runtime/runtime-preflight.mjs';
 import {askAgent} from '../src/agent-adapters.mjs';
-import {saveDoorCase, acquireCaseWriteOwnership, applyPendingCase, runTry} from '../src/runtime/runtime-client.mjs';
-import {migrateRuntimeWorkspace} from '../src/runtime/runtime-workspace-migration.mjs';
+import {saveDoorCase, acquireCaseWriteOwnership, applyPendingCase} from '../src/runtime/runtime-client.mjs';
+import {migrateRuntimeWorkspace, runTry} from '../src/runtime-seam.mjs';
 import {associateEvidenceWorkspace, readEvidenceEligibility} from '../src/workflow-runner.mjs';
 import {writeRun} from '../src/workflow-runs.mjs';
 

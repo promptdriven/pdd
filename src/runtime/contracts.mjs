@@ -13,7 +13,8 @@ const line = (stream,text) => stream.write(`${text}\n`);
 const finite = error => String(error.message ?? error).replace(/[\r\n\x00-\x1f\x7f]/g,' ').slice(0,4000);
 const snapshotMap = references => new Map(references.map(ref=>[`${ref.kind}:${ref.target}`,ref.value_json]));
 
-export function runContracts({words = [],options = {},cwd = process.cwd()} = {}, {env = process.env,stdout = process.stdout,stderr = process.stderr} = {}) {
+export function runContracts({words = [],options = {},cwd = process.cwd()} = {}, ports = {}) {
+  const {env = process.env,stdout = process.stdout,stderr = process.stderr} = ports;
   if (words.length>1 || words.length===1 && words[0]!=='sync' || Object.keys(options).some(key=>key!=='--write') || options['--write']!==undefined && (words[0]!=='sync' || options['--write']!==true)) {
     line(stderr,'Use pdd contracts or pdd contracts sync [--write].'); return 2;
   }
@@ -108,7 +109,7 @@ export function runContracts({words = [],options = {},cwd = process.cwd()} = {},
       line(stdout,`Sync: ${changed} files updated, ${failures} refused.`);
       return failures ? 4 : 0;
     }
-    const history=readContractHistory({root,env});
+    const history=readContractHistory({root,env},ports);
     for (const warning of history.warnings) line(stderr,`Warning: ${warning}`);
     const unknownStories=capture.stories.some(story=>story.unavailable?.length);
     const unknownUses=prepared.length<promptPaths.length || unknownStories;

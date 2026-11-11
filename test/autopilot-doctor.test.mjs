@@ -9,7 +9,7 @@ import {runAutopilotDoctor} from '../src/autopilot-doctor.mjs';
 import {runPdd} from '../src/pdd-cli.mjs';
 import {runAutopilotLauncher} from '../src/autopilot-launcher.mjs';
 import {doctorFixture} from './helpers/doctor-fixture.mjs';
-import {checkRuntimeHealth} from '../src/runtime/runtime-client.mjs';
+import {checkRuntimeHealth} from '../src/runtime-seam.mjs';
 
 const invoke=async(f,command='doctor')=>{
   let stdout='',stderr='';

@@ -173,6 +173,34 @@ export function findSeamViolations(relPath, source) {
   return hits;
 }
 
+function referencesOutsideRuntime(relPath, candidate) {
+  const clean = candidate.split('?')[0].split('#')[0].trim();
+  if (!clean) return false;
+  if ((clean.startsWith('./') || clean.startsWith('../')) && clean !== './' && clean !== '../') {
+    const resolved = posix.normalize(posix.join(posix.dirname(relPath), clean));
+    if (resolved !== 'src/runtime' && !resolved.startsWith('src/runtime/')) return true;
+  }
+  if (/(?:^|[^A-Za-z0-9_.-])(?:src\/(?!runtime(?:\/|$))[A-Za-z0-9_./-]+\.(?:mjs|cjs|js)|bin\/pdd\.mjs)(?:$|[^A-Za-z0-9_.-])/.test(clean)) {
+    return true;
+  }
+  return false;
+}
+
+export function findInwardViolations(relPath, source) {
+  if (!relPath.startsWith('src/runtime/')) return [];
+  const hits = [];
+  for (const token of stringLiterals(source)) {
+    if (referencesOutsideRuntime(relPath, token.value)) {
+      hits.push(`${relPath}:${token.line}: ${token.raw}`);
+    }
+  }
+  const stripped = source.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+  if (/\b(?:import|from|require)\s*\(?\s*['"`]\.\.\/?['"`]|new\s+URL\s*\(\s*['"`]\.\.\/?['"`]/.test(stripped)) {
+    hits.push(`${relPath}: parent-directory module or URL specifier`);
+  }
+  return hits;
+}
+
 test('SEAM1: only src/runtime-seam.mjs imports or addresses src/runtime/ across src, bin and scripts', () => {
   const files = [...walk('src'), ...walk('bin'), ...walk('scripts')]
     .filter(rel => !rel.startsWith('src/runtime/') && rel !== 'src/runtime-seam.mjs');
@@ -318,6 +346,9 @@ test('SEAM5: pdd --help and pdd owner load the exact base src/ module set withou
       'src/runtime/contracts.mjs',
       'src/runtime/runtime-slots.mjs',
       'src/runtime/runtime-check-plan.mjs',
+      'src/runtime/agent-chat.mjs',
+      'src/runtime/runtime-workspace-migration.mjs',
+      'src/runtime/secret-redaction.mjs',
     ]) {
       assert.ok(!loaded.includes(forbidden), `${forbidden} must not load for pdd ${args.join(' ')}`);
     }
@@ -327,4 +358,34 @@ test('SEAM5: pdd --help and pdd owner load the exact base src/ module set withou
       .sort();
     assert.deepEqual(normalized, expectedBase, `loaded modules mismatch for pdd ${args.join(' ')}`);
   }
+});
+
+test('SEAM6: no file in src/runtime/ imports or addresses a path outside src/runtime/', () => {
+  const files = walk('src/runtime');
+  assert.ok(files.length >= 25, `expected full src/runtime/ file scan, got ${files.length}`);
+  const violations = files.flatMap(rel => findInwardViolations(rel, readFileSync(join(root, rel), 'utf8')));
+  assert.deepEqual(violations, [], `Files in src/runtime/ must not import outside src/runtime/:\n${violations.join('\n')}`);
+});
+
+test('SEAM7: inward detector catches static, dynamic, require, package.json URL and string paths outside src/runtime/', () => {
+  const cases = [
+    ['src/runtime/runtime-slots.mjs', "import { NAMES } from '../command-catalog.mjs';\n"],
+    ['src/runtime/index.mjs', "export * from '../runtime-seam.mjs';\n"],
+    ['src/runtime/interface-draft.mjs', "const m = await import('../approval-policy.mjs');\n"],
+    ['src/runtime/runtime-check-plan.mjs', "const { headerPrompts } = req('../file-owner.mjs');\n"],
+    ['src/runtime/runtime-client.mjs', "const pkg = new URL('../../package.json', import.meta.url);\n"],
+    ['src/runtime/try-doors.mjs', "const script = `import ${JSON.stringify('../try-doors.mjs')}`;\n"],
+    ['src/runtime/runtime-client.mjs', "const p = 'src/workflow-runner.mjs';\n"],
+    ['src/runtime/runtime-client.mjs', "import '..';\n"],
+  ];
+  for (const [file, code] of cases) {
+    assert.ok(findInwardViolations(file, code).length > 0, `expected inward violation for ${file}: ${code.trim()}`);
+  }
+  assert.deepEqual(
+    findInwardViolations(
+      'src/runtime/runtime-preflight.mjs',
+      "// Generated from prompts/cli/runtime-preflight.prompt.md\nimport { cleanText } from './runtime-output.mjs';\nconst ok = !word.startsWith('../') && word !== '..';\nconst pkg = `${head}:package.json`;\n",
+    ),
+    [],
+  );
 });

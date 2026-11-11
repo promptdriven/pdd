@@ -4,12 +4,19 @@ import { createHash } from 'node:crypto';
 import { accessSync, chmodSync, closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createInterface } from 'node:readline';
 import { gitFiles, readPrompt, captureSource } from './runtime-preflight.mjs';
-import {lineReader} from '../prompt-approve.mjs';
 import { cleanText, tryUsage, tryUsageLine } from './runtime-output.mjs';
 import { runDoorCall, saveDoorCaseResult, acquireCaseWriteOwnership } from './runtime-client.mjs';
 
 const WRAPPER_EXIT = 125;
+function defaultLineReader(stdin) {
+  const reader = createInterface({ input: stdin }), lines = [], waiting = [];
+  let closed = false;
+  reader.on('line', text => { const next = waiting.shift(); if (next) next(text); else lines.push(text); });
+  reader.on('close', () => { closed = true; for (const next of waiting.splice(0)) next(''); });
+  return { ask: () => lines.length ? Promise.resolve(lines.shift()) : closed ? Promise.resolve('') : new Promise(done => waiting.push(done)), close: () => reader.close() };
+}
 const hash = text => createHash('sha256').update(text).digest('hex');
 const quote = word => /^[A-Za-z0-9_./:@%+=,-]+$/.test(word) ? word : `'${word.replaceAll("'", "'\\''")}'`;
 const read = path => JSON.parse(readFileSync(path, 'utf8'));
@@ -180,7 +187,7 @@ export async function saveLast({ root, store, identity, ports }) {
     let lease;
     try{
       if(ports.caseHandoff){const handoff=await ports.caseHandoff({root,testPath:d.originalPath,signal:ports.signal});if(handoff)lease=await acquireCaseWriteOwnership({root,testPath:d.originalPath,handoff,signal:ports.signal},{env:ports.env});}
-      else if(ports.interactive){ports.stdout.write(`Close the editor for ${d.originalPath}. Hand over this closed file for the pending case apply? y/N\n`);const answers=lineReader(ports.stdin);try{if(/^y(?:es)?$/i.test((await answers.ask()).trim()))lease=await acquireCaseWriteOwnership({root,testPath:d.originalPath,handoff:{kind:'closed-editor',testPath:d.originalPath},signal:ports.signal},{env:ports.env});}finally{answers.close();}}
+      else if(ports.interactive){ports.stdout.write(`Close the editor for ${d.originalPath}. Hand over this closed file for the pending case apply? y/N\n`);const answers=(ports.lineReader??defaultLineReader)(ports.stdin);try{if(/^y(?:es)?$/i.test((await answers.ask()).trim()))lease=await acquireCaseWriteOwnership({root,testPath:d.originalPath,handoff:{kind:'closed-editor',testPath:d.originalPath},signal:ports.signal},{env:ports.env});}finally{answers.close();}}
       if(lease)outcome=saveDoorCaseResult(root,saved,{writeOwnership:lease,signal:ports.signal,env:ports.env});
     }catch(error){return refuse(retained,error.message??error);}
     finally{lease?.release();}

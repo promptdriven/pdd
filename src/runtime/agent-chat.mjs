@@ -1,8 +1,6 @@
 import {loadRuntimeWorkspace} from './runtime-workspace.mjs';
 import {captureSource} from './runtime-preflight.mjs';
-// Generated from prompts/cli/agent-chat.prompt.md (sha256: fa202c9aba70712508abc0a2048566fb396ced4083a4aa033ae843ea4726e28d).
-import {discoverAgents,askAgent} from '../agent-adapters.mjs';
-import {loadAgentDefinitions} from '../agent-config.mjs';
+// Generated from prompts/cli/agent-chat.prompt.md (sha256: a4868b63c088902974dc71d60e14943b433ee0bfc8e9f57a0f89c14a2c4d3aab).
 import {createTryGuide} from './agent-guide.mjs';
 import {cleanText} from './runtime-output.mjs';
 const object=x=>x!==null&&typeof x==='object'&&!Array.isArray(x);
@@ -19,22 +17,26 @@ function scrub(value,secrets){
  if(object(value))return Object.fromEntries(Object.entries(value).map(([k,v])=>[k,/token|password|secret|api[_-]?key|authorization|cookie|credential/i.test(k)?'[redacted]':scrub(v,secrets)]));
  return value;
 }
-export async function createAgentBridge(context,test,tryId,options={},link){
+export async function createAgentBridge(context,test,tryId,options={},link,seamPorts={}){
  const workspace=loadRuntimeWorkspace({root:context.root});
  if(workspace.configured){captureSource(context.root,{tests:[test.path]});throw Error('Bounded agent connection is unavailable: native controls cannot establish packet-only context.');}
- const definitions=context.agentDefinitions??loadAgentDefinitions({cwd:context.root,env:context.ports.env});
+ const ports={...seamPorts,...context.ports,guidePorts:{evidenceEligibility:context.ports?.evidenceEligibility??context.ports?.readEvidenceEligibility??seamPorts.evidenceEligibility??seamPorts.readEvidenceEligibility,...seamPorts.guidePorts,...context.ports?.guidePorts}};
+ const loadDefinitions=context.ports?.loadAgentDefinitions??context.ports?.agents?.loadDefinitions??seamPorts.loadAgentDefinitions??seamPorts.agents?.loadDefinitions;
+ const definitions=context.agentDefinitions??(loadDefinitions?loadDefinitions({cwd:context.root,env:ports.env}):[]);
  if(!definitions.length)throw Error('No agents are configured. Add an agent or enable defaults in agents.json.');
  const known=id=>definitions.some(d=>d.id===id),byChoice=value=>definitions.find(d=>d.name===value)??definitions.find(d=>['codex','claude','gemini'].includes(d.id)&&d.id===value);
  const explicit=options['--agent']!==undefined?byChoice(options['--agent']):null;
  if(options['--agent']!==undefined&&!explicit)throw Error('Unknown agent name. Choose a name from agents.json or an enabled default.');
- const {ports,root,store,runtime}=context,prefix=`/v1/try/${tryId}`,bridge_id=ports.randomUUID();
+ const {root,store,runtime}=context,prefix=`/v1/try/${tryId}`,bridge_id=ports.randomUUID();
  write(context,'Connecting your agent to the Try page…');
  const modelReply=await runtime.send(`${prefix}/model`,{method:'GET'},30000);
  if(modelReply.status===404){write(context,'This interpreter does not support Ask your agent yet. The ordinary Try link remains available.');return null;}
  if(!good(modelReply)||!Array.isArray(modelReply.json.entries))throw Error(`Could not read the owner’s Try model for agent chat (${why(modelReply)}). Run pdd simulate again.`);
  const model=modelReply.json,entries=model.entries.filter(e=>typeof e.entry_path==='string'&&typeof e.operation==='string'&&object(e.input_schema))
   .map(e=>({entry:`${e.entry_path}#${e.operation}`,prompt_path:e.entry_path,operation:e.operation,input_schema:e.input_schema,...Object.fromEntries(['label','name','cli','http'].filter(k=>Object.hasOwn(e,k)).map(k=>[k,e[k]]))}));
- const discovered=await (ports.discoverAgents??discoverAgents)({cwd:root,env:ports.env,definitions});
+ const discover=context.ports?.discoverAgents??context.ports?.agents?.list??seamPorts.discoverAgents??seamPorts.agents?.list??(async()=>[]);
+ const ask=context.ports?.askAgent??context.ports?.agents?.ask??seamPorts.askAgent??seamPorts.agents?.ask??(async()=>({say:'Agent adapter port is unavailable.',fill:null,error:{state:'error',message:'Agent adapter port is unavailable.'}}));
+ const discovered=await discover({cwd:root,env:ports.env,definitions});
  let agents=definitions.map(d=>{const found=discovered.find(a=>a.id===d.id);return{id:d.id,name:d.name,state:found?.state??'error',...(typeof found?.detail==='string'?{detail:found.detail}:{})};});
  let choice=(explicit??byChoice(store.repo(root).agent_choice))?.id;
  if(!known(choice)||(!explicit&&agents.find(a=>a.id===choice)?.state==='not_installed'))choice=agents.find(ready)?.id??agents.find(a=>a.state!=='not_installed')?.id??definitions[0].id;
@@ -59,7 +61,7 @@ export async function createAgentBridge(context,test,tryId,options={},link){
   const agent=agents.find(a=>a.id===message.agent),name=agent?.name??'Your agent',turn=guide.prepare(message);let result,asked=false;
   if(turn.fast)result=turn.fast;
   else if(!ready(agent))result={say:agent?.state==='signed_out'?`${agent.name} is signed out. Sign in at your terminal, or switch to another agent.`:agent?.state==='quota'?`${agent.name} has reached its usage limit. Switch to another agent.`:`${agent?.name??'This agent'} is not available. Choose an installed agent.`,fill:null};
-  else {asked=true;write(context,`${name} is answering a question from the Try page…`);result=await (ports.askAgent??askAgent)({agent:agent.id,definition:definitions.find(d=>d.id===agent.id),cwd:root,env:ports.env,entries,signal:controller.signal,supportsApply:features.includes('apply'),supportsRun:features.includes('run'),context:turn.context});}
+  else {asked=true;write(context,`${name} is answering a question from the Try page…`);result=await ask({agent:agent.id,definition:definitions.find(d=>d.id===agent.id),cwd:root,env:ports.env,entries,signal:controller.signal,supportsApply:features.includes('apply'),supportsRun:features.includes('run'),context:turn.context});}
   if(controller.signal.aborted)return;
   if(turn.fast)write(context,'PDD checked the run against the local test cases.');
   else write(context,result.error||!ready(agent)?`${name} could not answer: ${result.error?.message??result.say}`:`${name} answered.${result.fill?' It proposed input for the form.':''}`);

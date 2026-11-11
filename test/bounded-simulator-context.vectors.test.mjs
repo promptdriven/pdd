@@ -4,12 +4,12 @@ import {fixture,read,write,json,get,cases,stream} from './helpers/runtime-worksp
 import {readAgentScenarios,buildProjectCard} from '../src/runtime/agent-project.mjs';
 import {createTryGuide} from '../src/runtime/agent-guide.mjs';
 import {discoverAgents,askAgent} from '../src/agent-adapters.mjs';
-import {createAgentBridge} from '../src/runtime/agent-chat.mjs';
+import {createAgentBridge,runCheck,runTry} from '../src/runtime-seam.mjs';
 import {runContracts} from '../src/runtime/contracts.mjs';
 import {lintSvgLayouts} from '../src/svg-layout.mjs';
 import {bindingCoverage} from '../src/runtime/runtime-bindings.mjs';
 import {findTests,sharedSourceFiles} from '../src/runtime/runtime-preflight.mjs';
-import {runCheck,runTry,runDoorCall,readTryOwner} from '../src/runtime/runtime-client.mjs';
+import {runDoorCall,readTryOwner} from '../src/runtime/runtime-client.mjs';
 const actions={
  'private-card-and-judge-markers'(t){const f=fixture(t);write(f.root,'README.md','PRIVATE-MARKER');write(f.root,'private/prompts/x.prompt.md','PRIVATE-MARKER');write(f.root,'private/user_stories/order.md','# PRIVATE-MARKER');json(f.root,'private/tests/order.other.json',f.doc);write(f.root,'private/code.js','PRIVATE-MARKER');const scenarios=readAgentScenarios({root:f.root}),card=buildProjectCard({root:f.root,env:f.env,story:'order',entries:[{entry_path:f.prompt}],scenarios,seedTest:f.second});assert.equal(scenarios.incomplete,true);assert.equal(JSON.stringify({scenarios,card}).includes('PRIVATE-MARKER'),false);assert.equal(card.codeExists,false);assert.equal(card.saveTarget.path,f.second);},
  'refresh-removes-prior-context'(t){const f=fixture(t);json(f.root,'pdd-workspace.json',{allowed_paths:['simulation/','shared/']});write(f.root,'shared/x.prompt.md',read(f.root,f.prompt).replace('Return the value.','SHARED-RULE'));const guide=createTryGuide({root:f.root,env:f.env,model:{entries:[{entry_path:f.prompt,operation:'order',input_schema:{type:'object',properties:{},required:[],additionalProperties:false}},{entry_path:'shared/x.prompt.md',operation:'order',input_schema:{type:'object',properties:{},required:[],additionalProperties:false}}]},test:{path:f.second,storyPath:f.story,story:'order'}});guide.delivered({text:'hi'},{say:'SHARED-RULE',fill:null});const first=guide.prepare({text:'where',context:{}});assert.ok(JSON.stringify(first).includes('SHARED-RULE'));json(f.root,'pdd-workspace.json',{allowed_paths:['simulation/']});const next=guide.prepare({text:'where',context:{}});assert.equal(JSON.stringify(next).includes('SHARED-RULE'),false);guide.close();},

@@ -1,6 +1,6 @@
 # Runtime client
 
-Own `src/runtime-client.mjs`. Export `runCheck({words, options, cwd, cache=false}, ports)` and `runTry({words, options, cwd}, ports)`. Each returns an exit code. These commands and the Try MCP tools call the PDD interpreter with the person's `gh` login. Lines that pdd writes itself follow the [word rule](public-boundary.prompt.md#pdd-interpreter), except the plain busy-check messages owned below.
+Own `src/runtime-client.mjs`. Export `runCheck({words, options, cwd, cache=false, client, workflow}, ports)` and `runTry({words, options, cwd, client}, ports)`. Each returns an exit code. Caller metadata supplies `client.version` (or `ports.clientVersion`, default `'0.1.28'`) and `workflow.base_sha` (or `ports.workflowBaseSha`, default `'HEAD'`). These commands and the Try MCP tools call the PDD interpreter with the person's `gh` login (reporting read tokens to both the package redactor and optional `ports.rememberSecrets`). Lines that pdd writes itself follow the [word rule](public-boundary.prompt.md#pdd-interpreter), except the plain busy-check messages owned below.
 
 ## Runtime interface refusal diagnostics
 
@@ -1006,11 +1006,10 @@ pointer, but deduplication must retain the original location identity.
 - Load [runtime outcome](runtime-outcome.prompt.md) for the public result projection, reason codes and pass boundary used by this module.
 
 - [Native results](workflow-results.prompt.md#native-profile-and-criterion-assessment-draft):
-  required generation/runtime/verification context for native admission,
-  assessment and visible proof limits. This is an unapproved native draft;
+  caller context for the injected `allRuns`, `assessNativeEvidence`, `usableResult` and `resultLines` ports used by explicit native Story lint. This is an unapproved native draft;
   copied workspace contracts remain their owner's unapproved draft context.
 
-- [Evidence eligibility read owner](workflow-runner.prompt.md#read-evidence-eligibility): required generation/runtime/verification context for `readEvidenceEligibility`, its inputs/result and accepted association policy. Use this binding for contract history, saved Story evidence and migration handoff; do not invoke registration on reads.
+- [Evidence eligibility read owner](workflow-runner.prompt.md#read-evidence-eligibility): caller context for the injected `evidenceEligibility` (`readEvidenceEligibility`) port, its inputs/result and accepted association policy. Use this binding for contract history, saved Story evidence and migration handoff; do not invoke registration on reads.
 
 - [Workspace authority](runtime-workspace.prompt.md): required generation/runtime/verification context for policy; native migration is invoked as a caller without loading it back into this module's required dependency closure.
 
@@ -1026,10 +1025,11 @@ pointer, but deduplication must retain the original location identity.
 - [Runtime slots](runtime-slots.prompt.md): required generation and verification context for shared local admission and jobs. Runtime listing binds its own files port; native process exclusion remains a native verification obligation.
 
 - [Local bindings](runtime-bindings.prompt.md): required generation/runtime context for the local inventory helper.
-- [SVG layout lint](svg-layout.prompt.md): required local advisory behavior for generation and tests.
-- [Screen comparison](screen-compare.prompt.md): required browser comparison behavior for generation and tests.
+- [SVG layout lint](svg-layout.prompt.md): caller context for the injected `lintSvgLayouts` port (default empty advisory when omitted).
+- [Screen comparison](screen-compare.prompt.md): caller context for the injected `compareScreen` and `formatScreenComparison` ports.
+- [Prompt approval](prompt-approve.prompt.md): caller context for the injected `askApproval`, `lineReader` and `promptPath` ports used by Try-page approval collection and editor handoff.
 
-[Agent configuration](agent-config.prompt.md) is required generation/runtime context for loading private named launchers before owner authentication.
+[Agent configuration](agent-config.prompt.md) is caller context for the injected `loadAgentDefinitions` port loading private named launchers before owner authentication.
 
 Read the full [Prompting guide](../../docs/prompting-guide.md) before you change this prompt. Follow the [alpha boundary](public-boundary.prompt.md).
 

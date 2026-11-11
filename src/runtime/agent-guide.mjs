@@ -1,4 +1,4 @@
-import {redactSecrets} from '../secret-redaction.mjs';
+import {redactSecrets} from './secret-redaction.mjs';
 import {loadRuntimeWorkspace,allowsRuntimePath} from './runtime-workspace.mjs';
 import {captureSource} from './runtime-preflight.mjs';
 // Generated from prompts/cli/agent-guide.prompt.md (sha256: 8fa6f82da595f762dcf680e548a5d010c1a737a662722ae78a37af30c013df9c).
@@ -85,7 +85,7 @@ export function createTryGuide({root,env={},model,test={},features=[],secrets=[]
   if(digest!==scenarioHash){scenarios=next;scenarioHash=digest;judges=scenarios.map(s=>{const base=createRunJudge({scenario:s.doc});return{path:s.path,story:s.doc.story_path,judge:s.incomplete?{record:r=>uncertain(base.record(r)),snapshot:()=>uncertain(base.snapshot()),bindings:()=>base.bindings()}:base};});for(const r of runs)if(!r.redacted)for(const j of judges)j.judge.record(r);}
  }
  function refreshCard(byStory){
-  card=(ports.buildProjectCard??buildProjectCard)({root,workspace,env,story:test.story??currentStory(),progress:byStory[currentStory()]??[],previousFingerprint:card?.fingerprint,secrets,entries,startWorld:model.seed?.initial_world,model,scenarios,seedTest:test.path,savedCount});
+  card=(ports.buildProjectCard??buildProjectCard)({root,workspace,env,story:test.story??currentStory(),progress:byStory[currentStory()]??[],previousFingerprint:card?.fingerprint,secrets,entries,startWorld:model.seed?.initial_world,model,scenarios,seedTest:test.path,savedCount,evidenceEligibility:ports.evidenceEligibility??ports.readEvidenceEligibility});
   card={...card,productRules:(card.productRules??[]).filter(rule=>allowsRuntimePath(workspace,rule.path))};
   sourceAtConnect??=card.sourceFingerprint??card.fingerprint;
   const digest=hash({scenarioHash,source:card.sourceFingerprint??card.fingerprint,rules:card.productRules??[]});
