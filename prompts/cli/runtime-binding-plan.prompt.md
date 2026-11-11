@@ -75,6 +75,18 @@ key, state, candidate names and causes, plus the repair when missing and all
 closure problems and boundary notes. Label an unscoped plan as full dependency
 closure. Repairs name the pdd-boundary block. No truncation that hides missing edges.
 
+For the selected step entry, respect its explicit `resource_operations` list
+when the whole interface has valid entry scopes: every entry has a distinct-name
+list of declared qualified operations, and their union covers all declared
+resource operations. An empty list means that entry uses no resources. This
+narrows only the selected entry's resource advice, never source closure, boundary
+membership, approval or uploaded declarations. Keep the existing conservative
+resource advice for other required context modules. Missing, malformed or incomplete
+scope declarations, an ambiguous selected entry, or a call in the closure to a
+different operation of the same entry module retain the existing all-resource
+advice. Runtime remains the admission authority. Do not invent a missing binding
+for an unselected entry merely because it shares the selected module (#817).
+
 Export `bindingRefusals(plan,compatibility)`: for every reported missing resource
 edge return {step_id,prompt_path,key,cause,candidates,repair}. Use the exact local
 edge when present. A selected local fixture gives server-binding-disagreement;
@@ -90,6 +102,6 @@ path arithmetic; all filesystem, Git and service access belongs to callers.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"bb9a8d823855b1132b96aabea1925d4a7919f44f9e8672242ce4b88e6f727a7a","entries":[],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
+{"status":"draft","prose_sha256":"a3d441d36355ff7a599ac2156f18d58141cd9086547ec1e7801b191ac9fe66e6","entries":[],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
 ```
 </details>
