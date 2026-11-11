@@ -25,7 +25,7 @@ import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 import { readWorkflowAreas } from './workflow-areas.mjs';
 import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, reconcileWorkflowPr, readWorkflowPrChecker, readWorkflowPrStatus } from './workflow-github.mjs';
 import { allocateIssueWorktree, releaseIssueClaim } from './workflow-worktree.mjs';
-import { allRuns, currentChat, gitContext, listRuns, readRun, readRunOwnership, resolveRun, runDirFor, runForWorktree, updateRun, updateRunCosts, writeRun } from './workflow-runs.mjs';
+import { allRuns, currentChat, gitContext, listRuns, readRun, readRunOwnership, resolveRun, statusView, runDirFor, runForWorktree, updateRun, updateRunCosts, writeRun } from './workflow-runs.mjs';
 import { armSavedWorkerCompletion } from './workflow-worker-completion.mjs';
 import { startChat, sendToChat, herdrCommand, chatSession, chatHealth, openChat, rebuildClosedChat, assertRestartCaller, restartChat, validSessionId, closeFinishedChats, finishedChats, finishedAt, paneUsage, ensurePaneBudget, countReasons, mergeReasonCounts, reasonWords, expandHome, homeVariable, isFolder, observeLifecycle, applyLifecycle, launchAnchor, sessionEvidenceDue, ownSession, observedSession, START_GRACE_MS, removeStaleLoginFiles } from './workflow-chat.mjs';
 import { samePath } from './workflow-herdr-layout.mjs';
@@ -170,6 +170,25 @@ async function lockedMutation(args, ports, action, filename) {
   try { release = acquireRunLock(found.run.runDir, filename); return await action(args, { ...ports, releaseRunLock: release }); }
   catch (error) { if (error.code === 'run_busy') return fail(error.message); throw error; }
   finally { release?.(); }
+}
+
+// A caller may bind an action to the position it displayed.
+const hasExpectedPosition = args => args.expectGate !== undefined || args.expectStep !== undefined;
+function positionRefusal(run, args) {
+  const view = statusView(run), gate = view.waitingDecision?.id ?? null, step = view.stage?.id ?? null;
+  if ((args.expectGate !== undefined && args.expectGate !== gate) || (args.expectStep !== undefined && args.expectStep !== step)) {
+    const area = run.areas[run.area]?.name ?? 'none';
+    return {exitCode: 6, message: `Refused: the run is in the ${area} area; current gate: ${gate ?? 'none'}; current step: ${step ?? 'none'}.`};
+  }
+  return null;
+}
+async function guardedPosition(args, ports, action) {
+  if (!hasExpectedPosition(args)) return action(args, ports);
+  return lockedMutation(args, ports, async (input, lockedPorts) => {
+    const found = await resolveRun(input.ref, {cwd: input.cwd}, deps(lockedPorts));
+    if (found.error || !found.run) return action(input, lockedPorts);
+    return positionRefusal(found.run, input) ?? action(input, lockedPorts);
+  });
 }
 
 // The real reason of a failed gh, git or Herdr call, in plain words.
@@ -3973,7 +3992,7 @@ async function environmentWakeAllowed(run, text, p) {
   if (!currentEnvironmentWake(run, text, p) || explicitlyStopped(run, p) || await continuationOwnership(run, run.root, p)) return false;
   try { return await (p.environmentHealthy ?? environmentHealthy)({ env: p.env, reason: environmentRecovery(run).reason }) === true; } catch { return false; }
 }
-export async function changeRun({ ref, text, cwd, packageRoot = PACKAGE_ROOT }, ports) {
+async function changeRunCommand({ ref, text, cwd, expectGate, expectStep, packageRoot = PACKAGE_ROOT }, ports) {
   const p = deps(ports); p.packageRoot = packageRoot; const found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
   // An interpreter wake reaches the run only while it still waits for that park: a second copy sends nothing.
@@ -3985,8 +4004,10 @@ export async function changeRun({ ref, text, cwd, packageRoot = PACKAGE_ROOT }, 
   if (retryRefusal) return fail(retryRefusal);
   if (found.run.parking?.phase === 'releasing') return fail('This parked run is releasing its claim. Wait for release to finish.');
   if (!p.queueOnly && found.run.parking?.phase === 'parked') {
-    return lockedMutation({ref, cwd}, p, async (input, ports) => {
+    return (p.releaseRunLock ? async (_, __, action) => action(_, __) : lockedMutation)({ref, cwd}, p, async (input, ports) => {
       const current = await resolveRun(ref, {cwd}, ports), run = current.run;
+      const stale = run && positionRefusal(run, {expectGate, expectStep});
+      if (stale) return stale;
       if (!run || runIdentity(run) !== runIdentity(found.run) || run.parking?.phase !== 'parked'
         || run.parking.at !== found.run.parking.at) return fail('The parked run changed. Look again before replying.');
       const key = `park-reply:${run.parking.at}:${createHash('sha256').update(oneLine(text)).digest('hex')}`;
@@ -4992,11 +5013,13 @@ async function returnToPrompt(run,selected,p) {
   if (integration) return integration;
   return null;
 }
-async function openRunLocked({ ref, cwd, area, newSession = false, model, herdrAgentName, codexThreads, packageRoot = PACKAGE_ROOT, automaticResume = null }, ports) {
+async function openRunLocked({ ref, cwd, area, expectGate, expectStep, newSession = false, model, herdrAgentName, codexThreads, packageRoot = PACKAGE_ROOT, automaticResume = null }, ports) {
   const p = deps(ports); p.pdd = pddFor(p, packageRoot);
   const found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
   const run = found.run;
+  const stale = positionRefusal(run, {expectGate, expectStep});
+  if (stale) return stale;
   if (run.parking?.phase === 'releasing') return fail('This parked run is releasing its claim. Wait for release to finish.');
   const selected = area === undefined ? run.area : run.areas.findIndex(item => item.name === area);
   let chat = [...(run.chats ?? [])].reverse().find(item => item.area === run.areas[selected]?.name), started = false, handedOff = false, rebuilt = false;
@@ -5246,6 +5269,7 @@ async function openRunLocked({ ref, cwd, area, newSession = false, model, herdrA
 
 const openRunCommand = async (args, ports) => {
   const p = deps(ports), found = await resolveRun(args.ref, {cwd: args.cwd}, p);
+  if (found.run) { const stale = positionRefusal(found.run, args); if (stale) return stale; }
   if (found.run?.parking?.phase === 'releasing') return fail('This parked run is releasing its claim. Wait for release to finish.');
   if (found.run?.parking?.phase === 'parked') {
     const run = found.run, origin = run.automaticOrigin;
@@ -5492,6 +5516,7 @@ export const releaseParkedRun = saveGuard((args, ports) => lockedMutation(args, 
 export const wakeParkedRun = saveGuard((args, ports) => lockedMutation(args, ports, async (input, ports) => {
   const p = deps(ports), found = await resolveRun(input.ref, {cwd: input.cwd}, p), run = found.run;
   const skipped = () => ({...done(''), recovery: 'skipped'});
+  if (run) { const stale = positionRefusal(run, input); if (stale) return stale; }
   if (!run || !validSavedAutomaticOrigin(run) || run.automaticOrigin.coordinatorId !== input.coordinatorId
     || run.automaticOrigin.machine !== input.machine || !samePath(run.sourceRoot, input.cwd)
     || run.parking?.at !== input.at || !['parked', 'waking'].includes(run.parking.phase)) return skipped();
@@ -5727,16 +5752,17 @@ export const resendChecks = saveGuard(async ({refs, cwd, said, packageRoot = PAC
   finally { for (const release of releases.reverse()) release(); }
 });
 
-export const approveRun=saveGuard(approveRunCommand);
+export const approveRun=saveGuard((args, ports) => guardedPosition(args, ports, approveRunCommand));
+export const changeRun=saveGuard((args, ports) => guardedPosition(args, ports, changeRunCommand));
 
 export const askPerson=saveGuard(askPersonCommand);
 
-export const cancelRun=saveGuard(async (args, ports = {}) => {
+const cancelRunUnlocked=async (args, ports = {}) => {
   const p = deps(ports), found = await resolveRun(args.ref, {cwd: args.cwd}, p);
   if (!found.run || found.error || !validSavedAutomaticOrigin(found.run)) return cancelRunCommand(args, ports);
   let release;
   try {
-    release = acquireRunLock(found.run.runDir);
+    if (!ports.releaseRunLock) release = acquireRunLock(found.run.runDir);
     const latest = readRun(found.run.runDir);
     if (!latest || runIdentity(latest) !== runIdentity(found.run))
       return fail('The selected workflow run changed. Retry cancellation.');
@@ -5745,7 +5771,8 @@ export const cancelRun=saveGuard(async (args, ports = {}) => {
     if (error.code === 'run_busy') return fail(error.message);
     throw error;
   } finally { release?.(); }
-});
+};
+export const cancelRun=saveGuard((args, ports) => guardedPosition(args, ports, cancelRunUnlocked));
 
 export const runStatus=saveGuard(async(options,ports)=>{
   ports = { ...ports, skipCostSessions: true };

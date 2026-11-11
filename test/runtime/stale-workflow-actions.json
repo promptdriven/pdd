@@ -1,0 +1,104 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/stale-workflow-actions.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "An action with the current gate or step works as before."
+    },
+    {
+      "id": "AC2",
+      "text": "Approve, changes, cancel and open with a different expected gate or step refuse with exit code 6, name the current position and leave the run, approvals, chat and files unchanged."
+    }
+  ],
+  "initial_world": {
+    "resolveCalls": 0
+  },
+  "simulation": {
+    "runs.resolveRun": {
+      "action": "fixture.lookup",
+      "world_pointer": "/resolveCalls",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "ref": "17",
+            "cwd": "/project"
+          },
+          "result": {
+            "json": "{\"run\":{\"v\":1,\"runId\":\"synthetic-2572\",\"repo\":\"example/project\",\"number\":17,\"workflow\":\"feature\",\"agent\":\"codex\",\"issue\":{\"title\":\"Synthetic gate\",\"url\":\"https://github.com/example/project/issues/17\"},\"root\":\"/project\",\"sourceRoot\":\"/project\",\"commonDir\":\"/project/.git\",\"runDir\":\"/project/.git/pdd/runs/17\",\"branch\":\"topic\",\"baseBranch\":\"main\",\"baseSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"startedAt\":0,\"updatedAt\":1000,\"state\":\"waiting\",\"area\":0,\"gate\":{\"id\":\"gate-current\",\"kind\":\"approve\",\"area\":\"story\",\"at\":1000},\"chats\":[],\"pr\":[],\"decisions\":[],\"areas\":[{\"name\":\"story\",\"steps\":[\"prompt-story\"],\"optional\":[]}],\"done\":{\"prompt-story\":{\"at\":1000,\"area\":\"story\",\"summary\":\"Story ready\"}}}}"
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "ref": "17",
+            "cwd": "/project"
+          },
+          "result": {
+            "json": "{\"run\":{\"v\":1,\"runId\":\"synthetic-2572\",\"repo\":\"example/project\",\"number\":17,\"workflow\":\"feature\",\"agent\":\"codex\",\"issue\":{\"title\":\"Synthetic gate\",\"url\":\"https://github.com/example/project/issues/17\"},\"root\":\"/project\",\"sourceRoot\":\"/project\",\"commonDir\":\"/project/.git\",\"runDir\":\"/project/.git/pdd/runs/17\",\"branch\":\"topic\",\"baseBranch\":\"main\",\"baseSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"startedAt\":0,\"updatedAt\":1000,\"state\":\"waiting\",\"area\":0,\"gate\":{\"id\":\"gate-current\",\"kind\":\"approve\",\"area\":\"story\",\"at\":1000},\"chats\":[],\"pr\":[],\"decisions\":[],\"areas\":[{\"name\":\"story\",\"steps\":[\"prompt-story\"],\"optional\":[]}],\"done\":{\"prompt-story\":{\"at\":1000,\"area\":\"story\",\"summary\":\"Story ready\"}}}}"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "matching-gate",
+      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "operation": "changeRun",
+      "input": {
+        "ref": "17",
+        "text": "I approve",
+        "cwd": "/project",
+        "expectGate": "gate-current"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 2
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/message",
+          "op": "contains",
+          "value": "This looks like an approval."
+        }
+      ]
+    },
+    {
+      "step_id": "stale-gate",
+      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "operation": "changeRun",
+      "input": {
+        "ref": "17",
+        "text": "Change this",
+        "cwd": "/project",
+        "expectGate": "gate-old"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 6
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/message",
+          "op": "contains",
+          "value": "gate-current"
+        }
+      ]
+    }
+  ]
+}

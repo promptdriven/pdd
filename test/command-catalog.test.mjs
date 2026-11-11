@@ -24,7 +24,7 @@ test(proposed('catalog exposes one optional AREA and the --new flag'), () => {
   assert.equal(Boolean(route.operands[0].optional), false);
   assert.equal(route.operands[1].optional, true);
   assert.equal(Boolean(route.operands[1].repeat), false);
-  assert.deepEqual(route.options.map(({ name, kind }) => ({ name, kind })), [{ name: '--new', kind: 'flag' }, ...['--model','--herdr-agent-name','--codex-threads'].map(name => ({name,kind:'text'}))]);
+  assert.deepEqual(route.options.map(({ name, kind }) => ({ name, kind })), [...['--expect-gate','--expect-step'].map(name => ({name,kind:'text'})), { name: '--new', kind: 'flag' }, ...['--model','--herdr-agent-name','--codex-threads'].map(name => ({name,kind:'text'}))]);
   const forms = PUBLIC_COMMAND_MANIFEST.filter(item => /^pdd workflow open\b/.test(item.form));
   assert.ok(forms.some(({ form }) => /ISSUE\s+\[AREA\]\s+\[--new\]/.test(form)));
   const help = renderHelp(['workflow', 'open']);
