@@ -1072,6 +1072,14 @@ Before dispatch, save the call UUID with origin/login/session metadata privately
 Use the [preflight binding inventory](runtime-preflight.prompt.md#module-binding-inventory) for normal checks, explicit lint and file previews. Carry its coverage in text and JSON, preserving selected Story scope and showing every unbound module with its reason and port attempt. Metadata validation problems are lint problems, including absent/blank unbound reasons and port attempts; explicit lint still sends zero checks and consumes zero AI calls. Local metadata errors can refuse before transport. Coverage never changes a runtime assertion or claims that bound means passed. A missing inventory is explicitly unavailable, not zero modules fully bound.
 ## Owner access for Try tools
 
+Owner reads and door calls must compare effective prompt hashes against the
+same executable text saved at Try creation. When rebuilding these bytes without
+a supplied capture, apply preflight's native `executableInterfaceText` to each
+prepared `readPrompt` text under the [interface-kind transport contract](runtime-preflight.prompt.md#interface-kind-transport).
+Keep the authored raw-hash comparison and changed-reference refusal intact.
+Never remove an effective-hash check or replace saved baselines to accept a
+genuinely changed prompt or shared contract.
+
 Export `readTryOwner({cwd, story}={}, ports={})`. Resolve the Git root and discovered Story test using existing selection rules; no Story selects the sole open recorded test, otherwise the sole discovered test. When a Story name matches several test files, prefer its sole open recorded test; without that unique open selection, require an exact test path. Reject ambiguity, unknown Story, changed Story identity or changed/missing pinned prompt hashes before a door can run. Authenticate through the existing gh identity and require the saved Try's login. With no saved session, open through runTry with `--no-open` and `--no-wait`; then read its saved record. Read authenticated model metadata and current world from `/v1/try/ID/model` and `/v1/try/ID/state`. The latter returns `{world:...}`; failure leaves current data unavailable with a reason, never initial_world. Return `{root,test,record,model,data,data_error,actions}`. Model failures are actionable errors; a recorded ended session follows the explicit replacement rule in `pdd simulate`; owner lookup never silently creates another setup. Never automatically reopen after an unreachable read. Validate runtime origin before sending credentials.
 
 New Try records pin the Story bytes as `story_sha256`; owner access rejects changed pinned Story bytes. Older records without this field retain their existing Story-path identity check. Return authenticated state action history as `actions` when available.
