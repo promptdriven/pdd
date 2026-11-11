@@ -160,3 +160,7 @@ Proposed policy: missing/unknown selected compatibility stops new paid dispatch;
 
 1. [Follow a bounded authoring handoff](authoring-orchestration.md) — [native/manual cases](../test/authoring-guidance/authoring-orchestration-cases.json). Prompt tests and native/manual acceptance: NOT RUN.
 2. [Compare authoring guidance on one frozen task](authoring-orchestration-measurement.md) — [native/manual cases](../test/authoring-guidance/authoring-orchestration-measurement-cases.json). Prompt tests and native/manual acceptance: NOT RUN.
+
+## Open a simulation naturally (#812)
+
+1. [Open my program the way I use it](simulate-program-kind.md) — [native cases](../test/simulate-kind.test.mjs), replay and bounded selection cases, plus the Story-gate case in [workflow runner](../test/workflow-runner.test.mjs).
