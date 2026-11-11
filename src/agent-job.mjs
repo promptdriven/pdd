@@ -1,6 +1,7 @@
-// Generated from prompts/cli/agent-job.prompt.md (sha256: aad6a6fb488fa7af71afd8695b5c1a0642abeaa2131abe3fc5526b2ea8ab0cac).
-import { spawn, spawnSync } from 'node:child_process';
-import { closeSync, fstatSync, openSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from 'node:fs';
+// Generated from prompts/cli/agent-job.prompt.md (sha256: f825325b98247fcb7edfd3cf7e106c701ab787d7bb46c638b6cf3d68f4d0dbed).
+import { execFile, spawn, spawnSync } from 'node:child_process';
+import { accessSync, closeSync, constants, fstatSync, openSync, readFileSync, readSync, renameSync, statSync, writeFileSync, writeSync } from 'node:fs';
+import { setPriority } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -28,12 +29,12 @@ export function jobEnvironment(env = {}) {
 // The hung-command watch settings: after (ms of log silence), every (ms between rounds), cpu (seconds of growth).
 const hungSettings = value => object(value) && [value.after, value.every].every(n => Number.isFinite(n) && n > 0) && Number.isFinite(value.cpu) && value.cpu >= 0
   ? { after: value.after, every: value.every, cpu: value.cpu } : null;
-export function startAgentJob({ id, dir, cwd, command, args = [], input = '', env = {}, hung = null }, ports = {}) {
+export function startAgentJob({ id, dir, cwd, command, args = [], input = '', env = {}, priority = null, pddCheck = null, hung = null }, ports = {}) {
   if (!/^[A-Za-z0-9._-]+$/.test(String(id))) throw Error('Invalid job id');
   const base = join(resolve(dir), id), now = ports.now ?? Date.now, watch = hungSettings(hung);
   const job = { id, token: `${base}.spec.json`, log: `${base}.log`, exit: `${base}.exit.json`, result: `${base}.result.json`, input: `${base}.input`, hangs: `${base}.hangs.json` };
   writeFileSync(job.input, input, { mode: 0o600 });
-  writeAtomic(job.token, JSON.stringify({ command, args, cwd, input: job.input, log: job.log, exit: job.exit, hangs: job.hangs, ...(watch ? { hung: watch } : {}) }));
+  writeAtomic(job.token, JSON.stringify({ command, args, cwd, input: job.input, log: job.log, exit: job.exit, hangs: job.hangs, ...(priority ? { priority } : {}), ...(pddCheck ? { pddCheck } : {}), ...(watch ? { hung: watch } : {}) }));
   const child = (ports.spawn ?? spawn)(process.execPath, [self, '--wrapper', job.token], { cwd, env, detached: true, stdio: 'ignore' });
   // A spawn that fails later (a cwd that is gone, EAGAIN, ENOMEM) is an exit with code 127, never an uncaught error.
   child.on?.('error', error => { try { writeAtomic(job.exit, JSON.stringify({ code: 127, signal: null, at: now(), error: String(error.code ?? error.message) })); } catch { /* The job reads as dead. */ } });
@@ -161,9 +162,47 @@ function watchHung(spec, agentPid, out) {
   setInterval(() => { try { round(); } catch { /* The next round tries again. */ } }, every).unref();
 }
 
+// The lowest priority for every job (#3231): macOS utility QoS with throttled disk I/O (taskpolicy runs the command in
+// the same process), or a Linux CPU list (taskset) for Autopilot's share; else the command itself. Nice is set by the
+// wrapper for itself, so every child inherits it.
+const TASKPOLICY = '/usr/sbin/taskpolicy';
+const executable = file => { try { accessSync(file, constants.X_OK); return true; } catch { return false; } };
+export function jobCommand(spec, platform = process.platform, ports = {}) {
+  const p = spec?.priority ?? {}, can = ports.executable ?? executable, qos = p.qos === undefined ? 'utility' : p.qos;
+  if (platform === 'darwin' && qos && can(TASKPOLICY)) return { command: TASKPOLICY, args: ['-c', qos, '-d', 'throttle', spec.command, ...(spec.args ?? [])] };
+  if (platform === 'linux' && typeof p.cpus === 'string' && /^[0-9,-]+$/.test(p.cpus) && typeof p.taskset === 'string' && p.taskset.startsWith('/'))
+    return { command: p.taskset, args: ['--cpu-list', p.cpus, spec.command, ...(spec.args ?? [])] };
+  return { command: spec.command, args: spec.args ?? [] };
+}
+// #3177: the pdd that the agent's own login shell finds (Codex runs each command in one, and a profile can put an older
+// pdd first on PATH). When it is not the engine's version, one line goes to the job log and to ID.pdd-check.json, for
+// the status; the agent uses "$PDD_CLI" either way. A failed check writes nothing.
+export const pddCheckFile = log => String(log).replace(/\.log$/, '') + '.pdd-check.json';
+export function pddCheckLine({ found, path, version, engine, cli }) {
+  if (found && version === engine) return null;
+  return `pdd check: the agent shell finds ${found ? `pdd ${version ?? '(unknown version)'} at ${path}` : 'no pdd on PATH'}; the engine is ${engine}; using PDD_CLI (${cli})`;
+}
+export function checkShellPdd(spec, out, ports = {}) {
+  const shell = process.env.SHELL && process.env.SHELL.startsWith('/') ? process.env.SHELL : '/bin/sh';
+  // A marker line separates the two answers from anything that a profile prints.
+  const script = 'echo "@pdd-path $(command -v pdd || true)"; echo "@pdd-version $(pdd --version 2>/dev/null | head -n 5 | tr "\\n" " ")"';
+  (ports.execFile ?? execFile)(shell, ['-lc', script], { cwd: spec.cwd, env: process.env, timeout: 20000, encoding: 'utf8' }, (error, stdout) => {
+    const text = String(stdout ?? ''), answer = name => new RegExp(`^@pdd-${name} ?(.*)$`, 'm').exec(text)?.[1]?.trim() ?? null;
+    if (answer('path') === null) return;
+    const path = answer('path') || null, version = path ? /\b(\d+\.\d+\.\d+)\b/.exec(answer('version') ?? '')?.[1] ?? null : null;
+    const record = { at: Date.now(), found: Boolean(path), path, version, engine: spec.pddCheck.version ?? null, cli: spec.pddCheck.cli ?? null };
+    record.line = pddCheckLine(record);
+    try { writeAtomic(pddCheckFile(spec.log), JSON.stringify(record)); if (record.line) writeSync(out, `${record.line}\n`); } catch { /* The check is a note only. */ }
+  });
+}
+// The wrapper's own nice value (default 19); every child inherits it.
+function lowerPriority(spec) {
+  try { setPriority(0, Number.isSafeInteger(spec.priority?.nice) ? spec.priority.nice : 19); } catch { /* A lower priority is best effort. */ }
+}
 // The detached wrapper: it owns the agent process and records how it ended.
 function wrap(specFile) {
   const spec = JSON.parse(readFileSync(specFile, 'utf8'));
+  lowerPriority(spec);
   const stdin = openSync(spec.input, 'r'), out = openSync(spec.log, 'a', 0o600);
   let finished = false, stopping = null, ended = null, child;
   const finish = (code, signal, group = false) => {
@@ -185,11 +224,13 @@ function wrap(specFile) {
     // A kept timer: the wrapper waits the grace time also when its direct child exits at once (sh does).
     setTimeout(() => finish(ended?.code ?? null, ended?.signal ?? signal, true), GRACE_MS);
   });
-  try { child = spawn(spec.command, spec.args, { cwd: spec.cwd, env: process.env, stdio: [stdin, out, out] }); }
+  const run = jobCommand(spec);
+  try { child = spawn(run.command, run.args, { cwd: spec.cwd, env: process.env, stdio: [stdin, out, out] }); }
   catch (error) { writeFileSync(out, `agent-job: ${error.message}\n`); finish(127, null); return; }
   child.on('error', error => { try { writeFileSync(out, `agent-job: ${error.message}\n`); } catch {} finish(127, null); });
   if (object(spec.hung) && typeof spec.hangs === 'string') watchHung(spec, child.pid, out);
   child.on('exit', (code, signal) => { if (stopping) ended = { code, signal }; else finish(code, signal); });
+  if (spec.pddCheck) checkShellPdd(spec, out);
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === self && process.argv[2] === '--wrapper') wrap(process.argv[3]);

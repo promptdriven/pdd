@@ -44,7 +44,34 @@ record is simply dead. There is no "uncertain custody" state.
   `hung` is optional: `{after, every, cpu}` (milliseconds, milliseconds, CPU seconds),
   saved in the spec; it turns on the hung-command watch below. The core passes it for
   agent jobs only (15 minutes, 30 s, 2 s), never for a plain command such as the suite.
-- The wrapper starts `command args` in `cwd` with the input file as stdin and the
+- `startAgentJob` also takes `priority` (`{nice, qos, cpus, taskset}` from the
+  [machine guard](machine-guard.prompt.md)) and saves it in the spec. Every job
+  runs at the lowest priority (#3231): before the wrapper starts the child, it sets
+  its own nice value to `priority.nice`, default 19, with `os.setPriority` (a failure
+  is ignored), and children inherit it. `jobCommand(spec, platform)` gives the
+  command and arguments that the wrapper starts: on macOS with `qos` (default
+  `utility`) and an executable `/usr/sbin/taskpolicy`, it is `/usr/sbin/taskpolicy -c
+  utility -d throttle COMMAND ARGS…` (utility QoS and throttled disk I/O; taskpolicy
+  runs the command in the same process, so the CPU watch sees the same tree; not
+  background QoS, which keeps work on the efficiency cores); on Linux with `cpus` and
+  an absolute `taskset`, it is `TASKSET --cpu-list CPUS COMMAND ARGS…` (Node, `nproc`,
+  `cargo`, `pytest -n auto` and Go follow the CPU list, so an agent's own tests use
+  Autopilot's share); else the command itself.
+- `startAgentJob` also takes `pddCheck` (`{version, cli}`: the engine's pdd version and
+  the absolute path of its own pdd, #3177) and saves it in the spec. Right after the
+  wrapper starts the child, it asks the agent's own login shell which pdd it finds, the
+  way the agent's commands find it (Codex runs each command in one, and a profile can
+  put an older pdd first on PATH): `$SHELL -lc` (an absolute `SHELL`, else `/bin/sh`)
+  with the job environment and a 20-second limit, printing the marker lines `@pdd-path
+  …` (`command -v pdd`) and `@pdd-version …` (`pdd --version`, stderr dropped), so text
+  that a profile prints is never read as an answer. It writes the record `{at, found,
+  path, version, engine, cli, line}` to `ID.pdd-check.json` (`pddCheckFile(log)`) and,
+  when `line` is set, that one line to the log. `pddCheckLine` gives `line`: null when
+  the shell finds a pdd of the engine's version, else `pdd check: the agent shell finds
+  pdd X at PATH; the engine is Y; using PDD_CLI (CLI)` or `pdd check: the agent shell
+  finds no pdd on PATH; the engine is Y; using PDD_CLI (CLI)`. A check that fails or
+  times out writes nothing. It never changes the job.
+- The wrapper starts `jobCommand(spec)` in `cwd` with the input file as stdin and the
   log as stdout and stderr (append). When the child ends, it writes
   `{code, signal, at}` to the exit file with a temporary file and a rename. On
   SIGTERM, SIGINT or SIGHUP it stops the whole job: it sends SIGTERM to its own process

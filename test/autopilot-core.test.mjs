@@ -373,7 +373,7 @@ test('launcher: engine core ticks without Herdr or a coordinator; status and rep
       if (command !== 'git') assert.fail(`unexpected program ${command}`);
       const r = spawnSync('git', args, { cwd: options.cwd ?? cwd, encoding: 'utf8' }); return { code: r.status, stdout: r.stdout, stderr: r.stderr };
     },
-    corePorts: { jobs: w.jobs, checkBase: async () => ({ exitCode: 0, message: 'ok' }), agentReady: async () => true } };
+    machineGuard: w.machineGuard, corePorts: { jobs: w.jobs, checkBase: async () => ({ exitCode: 0, message: 'ok' }), agentReady: async () => true } };
   const result = await tickAutopilot(stateFile, ports);
   assert.match(result.message, /Autopilot core: 1 started/);
   assert.ok(w.job(17, 'build'));
@@ -855,7 +855,7 @@ test('R14 a machine engine and label saved by start win over pdd.json; status na
       if (command !== 'git') assert.fail(`unexpected program ${command}`);
       const r = spawnSync('git', args, { cwd: options.cwd ?? cwd, encoding: 'utf8' }); return { code: r.status, stdout: r.stdout, stderr: r.stderr };
     },
-    corePorts: { jobs: w.jobs, checkBase: async () => ({ exitCode: 0, message: 'ok' }), agentReady: async () => true } };
+    machineGuard: w.machineGuard, corePorts: { jobs: w.jobs, checkBase: async () => ({ exitCode: 0, message: 'ok' }), agentReady: async () => true } };
   const result = await tickAutopilot(stateFile, ports);
   assert.match(result.message, /Autopilot core: 1 started/, 'the machine engine core wins over pdd.json (full)');
   assert.ok(w.job(18, 'build') && !w.job(17), 'the machine label wins over pdd.json (no label)');
@@ -883,7 +883,7 @@ test('F2 start --mode saves a machine mode for the core engine: it wins over pdd
       if (command !== 'git') assert.fail(`unexpected program ${command}`);
       const r = spawnSync('git', args, { cwd: options.cwd ?? cwd, encoding: 'utf8' }); return { code: r.status, stdout: r.stdout, stderr: r.stderr };
     },
-    corePorts: { jobs: w.jobs, checkBase: async () => ({ exitCode: 0, message: 'ok' }), agentReady: async () => true } };
+    machineGuard: w.machineGuard, corePorts: { jobs: w.jobs, checkBase: async () => ({ exitCode: 0, message: 'ok' }), agentReady: async () => true } };
   const invoke = extra => runAutopilotLauncher({ command: 'start', cwd, packageRoot: join(w.dir, 'pkg'), env: ports.env, issues: [], ...extra }, ports);
   assert.equal((await invoke({ mode: 'loud' })).exitCode, 2);
   const refused = await invoke({ mode: 'observe' });
@@ -1583,12 +1583,12 @@ test('E1 report owner (Serhan\'s boundary): our input to Runtime (interface, bin
   const draft = listReportDrafts({ root }).find(d => d.fingerprint === scenario.fingerprint);
   assert.deepEqual(draft.labels, ['pdd:autopilot-report']); assert.equal(draft.runtimeOwner, undefined, 'no owner is configured'); assert.match(draft.title, /^Autopilot report: PDD /);
   for (const code of ['vector-replay-failed', 'safe-integer-limit', 'runtime-case-invalid']) assert.equal(reportKind({ kind: 'runtime', component: 'pdd test', code }), 'pdd', code);
-  assert.deepEqual([...RUNTIME_CODES].sort(), ['interpreter-error', 'no-verdict', 'server-incompatible', 'server-internal']);
+  assert.deepEqual([...RUNTIME_CODES].sort(), ['interpreter-error', 'maintenance', 'no-verdict', 'server-incompatible', 'server-internal']);
   // One spelling per code: the fixed code, then its owner when an agent says kind runtime.
-  const owners = { 'no-verdict': 'runtime', 'interpreter-error': 'runtime', 'server-incompatible': 'runtime', 'server-internal': 'runtime',
+  const owners = { 'no-verdict': 'runtime', maintenance: 'runtime', 'interpreter-error': 'runtime', 'server-incompatible': 'runtime', 'server-internal': 'runtime',
     'interface-refusal': 'pdd', 'binding-refusal': 'pdd', 'lint-refusal': 'pdd', 'scenario-limit': 'pdd', 'vector-replay': 'pdd', 'runtime-case': 'pdd',
     'cli-error': 'pdd', crash: 'pdd', 'claim-error': 'pdd', 'merge-check-tool': 'pdd', 'suite-broken': 'pdd', 'not-run': 'pdd', timeout: 'pdd', 'adopt-pdd': 'pdd', other: 'pdd', 'input-refusal': 'pdd' };
-  const spelled = { 'no-verdict': 'No verdict', 'interpreter-error': 'interpreter crashed', 'server-incompatible': 'server version incompatible', 'server-internal': 'HTTP 503',
+  const spelled = { 'no-verdict': 'No verdict', maintenance: 'interpreter maintenance', 'interpreter-error': 'interpreter crashed', 'server-incompatible': 'server version incompatible', 'server-internal': 'HTTP 503',
     'interface-refusal': 'interface refused', 'binding-refusal': 'binding refused', 'lint-refusal': 'lint refused', 'scenario-limit': 'scenario integer out of range',
     'vector-replay': 'vector replay failed', 'runtime-case': 'runtime case invalid', 'cli-error': 'cli usage', crash: 'panic', 'claim-error': 'claim lost',
     'merge-check-tool': 'merge-check-tool', 'suite-broken': 'suite-broken', 'not-run': 'not run', timeout: 'timed out', 'adopt-pdd': 'adopt-pdd', other: 'weird thing', 'input-refusal': 'server refused the prompt' };
@@ -2447,7 +2447,7 @@ test('S1 a machine report mode saved by start --report wins over pdd.json in the
       if (command !== 'git') assert.fail(`unexpected program ${command}`);
       const r = spawnSync('git', args, { cwd: options.cwd ?? cwd, encoding: 'utf8' }); return { code: r.status, stdout: r.stdout, stderr: r.stderr };
     },
-    corePorts: { jobs: w.jobs, checkBase: async () => ({ exitCode: 0, message: 'ok' }), agentReady: async () => true, reportRoot: w.reportRoot } };
+    machineGuard: w.machineGuard, corePorts: { jobs: w.jobs, checkBase: async () => ({ exitCode: 0, message: 'ok' }), agentReady: async () => true, reportRoot: w.reportRoot } };
   await tickAutopilot(stateFile, ports);
   w.finish(17, 'build', { result: { outcome: 'failed', kind: 'pdd', component: 'pdd test', code: 'crash', cause: 'pdd test crashed' } });
   await tickAutopilot(stateFile, ports);

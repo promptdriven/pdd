@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 98beab082809ab93ddb8229b29772d8b5d5d4404ab3e2c8519a900769d993eef).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 51390697f3cf4f533322dce621cae95fe2c5964507c00d25840ca1bddee59a46).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
@@ -350,6 +350,62 @@ async function readSavedStoryEvidence({ root, comparisonRoot = root, withTests =
   return { stories, warnings: [...new Set(warnings)] };
 }
 
+// Autopilot (#3241, rule B5): the Stories of root whose latest saved check can be sent once more. neverSent: no request
+// ID, not run, no refusal, no local unsent mark, no access gate (held in maintenance, busy, stopped before sending).
+// noVerdict: sent, and its saved answer ended with no verdict and no failed check (an AI provider failure). failed: a
+// check failed (never sent again). A check that is still open, or whose answer was not saved, is in none of them.
+// Local reads only, like savedStoryEvidence.
+export async function resendableStoryChecks({ root, since = 0 }, ports = {}) {
+  const env = ports.env ?? process.env;
+  const read = ports.readFile ?? (path => readFileSync(path, 'utf8'));
+  const list = ports.readDir ?? (path => readdirSync(path));
+  const canonical = ports.realpath ?? realpathSync;
+  const real = async path => { try { return await canonical(path); } catch { return resolve(path); } };
+  const wanted = await real(root), directory = join(resolve(env.PDD_STATE_DIR || join(env.HOME || homedir(), '.pdd', 'runtime')), 'batches');
+  const empty = { stories: [], neverSent: [], noVerdict: [], failed: [], maintenance: false };
+  let names;
+  try { names = await list(directory); } catch { return empty; }
+  const latest = new Map();
+  for (const name of names.filter(name => typeof name === 'string' && BATCH.test(name)).sort()) {
+    let batch;
+    try { batch = JSON.parse(await read(join(directory, name, 'batch.json'))); } catch { continue; }
+    if (!isObject(batch) || batch.batch !== name || batch.intent !== 'check' || typeof batch.root !== 'string' || !Array.isArray(batch.rows)) continue;
+    if (since > 0 && !(Date.parse(batch.created_at) >= since) || await real(batch.root) !== wanted) continue;
+    const files = Array.isArray(batch.files) ? batch.files : [];
+    const storyOf = row => typeof row?.story !== 'string' ? null : row.story.endsWith('.md') ? row.story
+      : (found => found.length === 1 ? found[0] : null)([...new Set(files.filter(file => typeof file === 'string' && file.endsWith('.md') && basename(file, '.md') === row.story))]);
+    // One row: never (never sent), sent-pass, failed, noVerdict (a saved answer with no verdict and no failed check), or other.
+    const kind = async row => {
+      const ids = Array.isArray(row.request_ids) ? row.request_ids : [];
+      if (!ids.length) return row.recovery_state === 'not_run' && !(Array.isArray(row.refusals) && row.refusals.length) && !row.unsent && row.note?.code !== 'blocked' ? 'never' : 'other';
+      if (row.recovery_state === 'passed') return 'pass';
+      if (row.recovery_state === 'failed') return 'failed';
+      const id = ids.at(-1);
+      let answer = null;
+      try { answer = typeof id === 'string' && UUID.test(id) ? JSON.parse(await read(join(directory, name, `${id}.json`))) : null; } catch { answer = null; }
+      if (!sameJob(answer, id, 'check')) return 'other';
+      const view = projectAnswer(answer, { origin: batch.origin, steps: row.steps ?? [], criterionTexts: row.criterion_texts ?? {}, test: row.test });
+      if (answer.state === 'failed' || view.failed_checks?.length) return 'failed';
+      return answer.state === 'unknown' ? 'noVerdict' : 'other';
+    };
+    const seen = new Map();
+    for (const row of batch.rows) {
+      const story = storyOf(row);
+      if (!story) continue;
+      const k = await kind(row), was = seen.get(story) ?? { kinds: [], notes: [] };
+      seen.set(story, { kinds: [...was.kinds, k], notes: k === 'never' ? [...was.notes, String(row.note?.message ?? '')] : was.notes });
+    }
+    for (const [story, { kinds, notes }] of seen) {
+      const state = kinds.includes('failed') ? 'failed' : kinds.includes('other') ? 'other' : kinds.includes('never') ? 'never' : kinds.includes('noVerdict') ? 'noVerdict' : 'pass';
+      latest.set(story, { state, notes });
+    }
+  }
+  const of = state => [...latest].filter(([, row]) => row.state === state).map(([story]) => story).sort();
+  const neverSent = of('never'), noVerdict = of('noVerdict');
+  return { stories: [...neverSent, ...noVerdict].sort(), neverSent, noVerdict, failed: of('failed'),
+    maintenance: neverSent.some(story => latest.get(story).notes.some(note => /maintenance/i.test(note))) };
+}
+
 class StateStore {
   constructor(dir) { this.dir = dir; this.secrets = []; }
   folder(...parts) {
@@ -565,7 +621,9 @@ export async function checkRuntimeHealth({ env = process.env } = {}, givenPorts 
   if (reply.status >= 500 || [408, 429].includes(reply.status)) return { state: 'unavailable', detail: `HTTP ${reply.status}` };
   if (reply.status === 200 && isObject(reply.json)) {
     const until = Date.parse(reply.json.maintenance?.until);
-    return Number.isFinite(until) && until > ports.now() ? { state: 'unavailable', detail: 'maintenance' } : { state: 'healthy', detail: 'HTTP 200' };
+    // A maintenance answer names its end and reason, so the Autopilot core can wait for it (#3241).
+    return Number.isFinite(until) && until > ports.now() ? { state: 'unavailable', detail: 'maintenance', until: new Date(until).toISOString(), reason: cleanText(reply.json.maintenance?.reason, [token]) || null }
+      : { state: 'healthy', detail: 'HTTP 200' };
   }
   // An older interpreter without the capacity read still answered with JSON; a 404 page that is not JSON is a wrong address.
   if (reply.status === 404 && isObject(reply.json)) return { state: 'healthy', detail: 'HTTP 404' };

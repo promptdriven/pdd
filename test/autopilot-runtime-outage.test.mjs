@@ -222,7 +222,9 @@ test('the health check is one free GET of /v1/capacity: no source, no check, no 
   assert.equal((await probe({ status: 502 })).state, 'unavailable');
   assert.equal((await probe({ status: 429 })).state, 'unavailable');
   assert.equal((await probe(Object.assign(Error('fetch failed'), { cause: { code: 'ECONNREFUSED' } }))).state, 'unavailable');
-  assert.deepEqual(await probe({ status: 200, body: '{"maintenance":{"until":"2026-11-06T13:00:00Z"}}' }), { state: 'unavailable', detail: 'maintenance' });
+  // #3241: a maintenance answer names its end and reason, so the core can wait for it.
+  assert.deepEqual(await probe({ status: 200, body: '{"maintenance":{"until":"2026-11-06T13:00:00Z"}}' }), { state: 'unavailable', detail: 'maintenance', until: '2026-11-06T13:00:00.000Z', reason: null });
+  assert.deepEqual(await probe({ status: 200, body: '{"maintenance":{"until":"2026-11-06T13:00:00Z","reason":"deploy gho_token"}}' }), { state: 'unavailable', detail: 'maintenance', until: '2026-11-06T13:00:00.000Z', reason: 'deploy [secret]' });
   // An answer that is neither healthy nor down is a sign-in or setup problem: it names its fix.
   for (const [reply, fix] of [[{ status: 401 }, /gh auth status/], [{ status: 403 }, /gh auth status/], [{ status: 302 }, /PDD_RUNTIME_URL/],
     [{ status: 200, body: '<html>proxy login</html>' }, /PDD_RUNTIME_URL/], [{ status: 418 }, /PDD_RUNTIME_URL/]]) {

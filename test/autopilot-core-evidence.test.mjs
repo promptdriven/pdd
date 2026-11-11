@@ -925,7 +925,7 @@ test('E49 (T10) start --decisions ask|decide is saved per machine like --report:
       if (command !== 'git') assert.fail(`unexpected program ${command}`);
       const r = spawnSync('git', args, { cwd: options.cwd ?? cwd, encoding: 'utf8' }); return { code: r.status, stdout: r.stdout, stderr: r.stderr };
     },
-    corePorts: { jobs: w.jobs, checkBase: async () => ({ exitCode: 0, message: 'ok' }), agentReady: async () => true } };
+    machineGuard: w.machineGuard, corePorts: { jobs: w.jobs, checkBase: async () => ({ exitCode: 0, message: 'ok' }), agentReady: async () => true } };
   const invoke = extra => runAutopilotLauncher({ command: 'start', cwd, packageRoot: join(w.dir, 'pkg'), env: ports.env, issues: [], ...extra }, ports);
   const bad = await invoke({ decisions: 'maybe' });
   assert.equal(bad.exitCode, 2); assert.equal(bad.message, 'Use --decisions ask or --decisions decide.');

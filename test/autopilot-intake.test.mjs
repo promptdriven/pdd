@@ -277,7 +277,7 @@ test('autopilot-intake-shadow: start --intake saves the machine mode, the tick u
       if (command !== 'git') assert.fail(`unexpected program ${command}`);
       const r = spawnSync('git', args, { cwd: options.cwd ?? cwd, encoding: 'utf8' }); return { code: r.status, stdout: r.stdout, stderr: r.stderr };
     },
-    corePorts: { jobs: w.jobs, checkBase: async () => ({ exitCode: 0, message: 'ok' }), agentReady: async () => true, reportRoot: w.reportRoot } };
+    machineGuard: w.machineGuard, corePorts: { jobs: w.jobs, checkBase: async () => ({ exitCode: 0, message: 'ok' }), agentReady: async () => true, reportRoot: w.reportRoot } };
   await tickAutopilot(stateFile, ports);
   w.issue(42);
   await tickAutopilot(stateFile, ports);

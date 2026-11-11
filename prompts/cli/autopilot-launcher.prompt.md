@@ -1383,7 +1383,12 @@ run full):
   `state.intake`; the core tick gets `intake` from it (`intakeMode` of the
   [intake cards](autopilot-intake.prompt.md); off when none is saved), so a later
   start without `--intake` keeps it and pdd.json never sets it. Another `--intake`
-  value returns exit code 2 with `Use --intake off or --intake shadow.` A core tick
+  value returns exit code 2 with `Use --intake off or --intake shadow.` `start --share
+  PERCENT` (#3231, `shareOption`) saves `state.share`, a whole percent from 1 to 100:
+  the part of this machine's CPU and memory that the core may use (default 50 when none
+  is saved); a later start without it keeps it, and pdd.json never sets it. Another
+  value returns exit code 2 with `Use --share with a whole percent from 1 to 100, for
+  example --share 70 (the default is 50).` before any change. A core tick
   whose mode is off, and `pdd autopilot stop`, call `stopCardJobs` of the intake
   cards on the core state folder (with the core's jobs port when one is given). With an
   effective engine that is not core, `--mode`, `--report`, `--decisions` or `--intake` is refused
@@ -1403,8 +1408,16 @@ run full):
   list), the read-only Codex limits as `agentReady` (only `limited` holds intake),
   the package version, an `alert` port that sends one alert of the given kind for the issue
 through this machine's alert destination with the core's cause, tried and need (and `--update` when the core asks), `ROOT` = the state file path without `.json` plus `-core`,
-  and the machine report folder `core-reports` beside the state files. Tests may
-  replace core ports with `ports.corePorts`. Afterwards, under the admission lock and
+  and the machine report folder `core-reports` beside the state files. Before the
+  core tick, the [machine guard](machine-guard.prompt.md) reads this machine once
+  (`readMachineGuard({cwd, runs: state.runs, repoRuns: pdd.json autopilot.runs, share: state.share, jobs})`,
+  where `jobs` is the sum of the core's `busySlots` over the core folder of every enabled
+  state file beside this one: the share is for the whole machine, every repository;
+  tests replace it with `ports.machineGuard`, #3231). The core settings come from
+  `readCoreSettings(cwd, fs, {auto, runs: state.runs})`, so this machine's
+  `start --runs N` reaches the core and a machine without it gets its automatic slots;
+  the core gets the guard as its `machine` port (the room check and each job's
+  priority). Tests may replace core ports with `ports.corePorts`. Afterwards, under the admission lock and
   only while still enabled, save the issue-list cache, base fields, `nextTick` and
   `core: {at, message}`.
 - Start: a core start whose `autopilot.quietMinutes` is below 2 times the core timer
@@ -1429,7 +1442,15 @@ through this machine's alert destination with the core's cause, tried and need (
   installed interval; when it differs from the effective engine's, they add `(run pdd
   autopilot start to use M minutes for the ENGINE engine)`.
 - Status (without `--all` or `--json`): a core engine shows the enabled and timer
-  line, `coreStatus` from local files, and the last tick message. No Herdr read.
+  line, `coreStatus` from local files with the same machine guard read (its slots and
+  its machine line: the share and where it comes from, the cores and memory, the slot
+  math, free memory and pressure, disk, load, priority and `new work: ok` or `held
+  (REASON)`), and the last
+  tick message. No Herdr read.
+- Timer priority (#3231): both timer files run Autopilot at the lowest priority, from
+  the guard's `timerPriority`: the LaunchAgent has `Nice` 19; the systemd service has
+  `Nice=19`, `CPUWeight=1` below a share of 100 and `CPUWeight=100` at 100, and
+  `MemoryHigh=SHARE%` (the saved share, default 50).
 - Report: catalog command `report` lists the machine's local report drafts
   (`FINGERPRINT: title; seen N time(s), last TIME`, or `No local Autopilot report
   drafts.`); `report send FINGERPRINT` sends one through `sendReportDraft` of the
@@ -1461,6 +1482,8 @@ through this machine's alert destination with the core's cause, tried and need (
 - [Automatic base](autopilot-base.prompt.md): required native generation and verification context for automatic base selection and merge safety.
 
 - [Autopilot core](autopilot-core.prompt.md) and [Autopilot reports](autopilot-reports.prompt.md): required native generation and verification context for the engine switch, the core tick, core status and the report command.
+
+- [Machine guard](machine-guard.prompt.md): required native generation and verification context for the core slots, the room and priority ports, the status machine line and the timer priority keys.
 
 - [Metrics store](metrics-store.prompt.md), [run records](workflow-runs.prompt.md) and [metrics gaps](metrics-gap.prompt.md): required native generation/verification context for observational selector/launch storage, run discovery and guarded custody updates.
 

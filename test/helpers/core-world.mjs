@@ -251,8 +251,15 @@ export async function coreWorld(t, { repository = 'acme/widgets', settings = {},
     },
     agentReady: async () => true,
     warn: () => {},
+    // #3241: no Runtime check to send again and a healthy interpreter, unless a test sets w.resend or w.health.
+    resendChecks: async input => { w.resendReads = [...(w.resendReads ?? []), input]; return w.resend ? w.resend(input) : { stories: [], neverSent: [], noVerdict: [], failed: [], maintenance: false }; },
+    runtimeHealth: async () => { w.healthReads = [...(w.healthReads ?? []), w.now()]; return w.health ? w.health() : { state: 'healthy', detail: 'HTTP 200' }; },
     ...extra,
   });
+  // #3231: a fixed machine for the launcher path (a server with room and 2 automatic slots), so a busy or unplugged
+  // test machine never holds intake.
+  w.machineGuard = async ({ runs } = {}) => ({ klass: 'server', auto: 2, slots: Number.isSafeInteger(runs) ? runs : 2, source: 'automatic', room: { ok: true, reason: null },
+    priority: () => ({}), line: 'Machine: server (test)' });
   w.tick = async (extra = {}) => { const r = await tickCore({ state: w.state, settings: w.settings, budget: { state: 'normal' } }, w.ports(extra)); w.ticks.push(r); return r; };
   w.peer = async (options = {}) => coreWorld(t, { repository, settings, machine: 'machine-b', coordinatorId: 'coord-b', ...options,
     shared: { dir, remote: w.remote, github: w.github, reports: w.reports, clock: w.clock } });

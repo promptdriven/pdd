@@ -2575,3 +2575,28 @@ test('0.1.28 the full engine is deprecated: one notice in the tick log that neve
   await f.tick().catch(() => {});
   assert.equal(notices.length, 1, 'a core tick sends no notice');
 });
+
+test('#3231 start --share: the timer files run Autopilot at the lowest priority (CPUWeight 1, or 100 at a share of 100) with MemoryHigh at the share; a bad share changes nothing', async t => {
+  for (const [platform, share] of [['darwin', undefined], ['linux', undefined], ['linux', '70'], ['linux', '100']]) {
+    const f = await fixture(t, {tempPrefix: 'pdd-autopilot-nice-'}); delete f.ports.timer; f.ports.platform = platform; f.ports.uid = 123;
+    const env = { HOME: f.home, PATH: '/fixture/bin', XDG_CONFIG_HOME: join(f.home, '.config') };
+    const run = f.ports.run;
+    f.ports.run = async (command, args, opts) => ['systemctl', 'launchctl', 'loginctl'].includes(command) ? { code: 0, stdout: command === 'loginctl' ? 'yes\n' : '', stderr: '' } : run(command, args, opts);
+    assert.equal((await f.invoke('start', { env, ...(share ? { share } : {}) })).exitCode, 0);
+    const folder = platform === 'linux' ? join(f.home, '.config', 'systemd', 'user') : join(f.home, 'Library', 'LaunchAgents');
+    const text = () => readFileSync(join(folder, readdirSync(folder).find(x => x.endsWith(platform === 'linux' ? '.service' : '.plist'))), 'utf8');
+    if (platform === 'darwin') { assert.match(text(), /<key>Nice<\/key><integer>19<\/integer>/); continue; }
+    assert.match(text(), /^Nice=19$/m); assert.match(text(), new RegExp(`^CPUWeight=${share === '100' ? 100 : 1}$`, 'm')); assert.match(text(), /^KillMode=process$/m);
+    assert.match(text(), new RegExp(`^MemoryHigh=${share ?? 50}%$`, 'm'));
+    assert.equal(f.state().share, share ? Number(share) : undefined);
+    if (share === '70') {
+      assert.equal((await f.invoke('start', { env })).exitCode, 0);
+      assert.equal(f.state().share, 70, 'a later start without --share keeps it'); assert.match(text(), /^MemoryHigh=70%$/m);
+      for (const bad of ['0', '101', '7.5', 'half']) {
+        const refused = await f.invoke('start', { env, share: bad });
+        assert.equal(refused.exitCode, 2, bad); assert.match(refused.message, /--share with a whole percent from 1 to 100/);
+        assert.equal(f.state().share, 70, `${bad} changes nothing`);
+      }
+    }
+  }
+});
