@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-base-red.prompt.md (sha256: 31592681d27b0f25f8452b95407e31f6ea8cae041147240f6108a0913423290d).
+// Generated from prompts/cli/autopilot-base-red.prompt.md (sha256: e62aa46573627d42a9ff02770b1699abe8751a439e7b631afa5962c1bb27b786).
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
@@ -42,28 +42,38 @@ function addTest(found, limit, name, file) {
   found.push(test);
   return test;
 }
+// A TAP failure stays open until its location line, the next test line or 12 lines: only then does it join the list,
+// so two failures with one name in two files stay two tests (review R1, P2).
+const OK = /^\s*ok \d+ /;
 export function failingTests(text, limit = MAX_NAMES) {
   const found = [];
-  let last = null, look = 0, at = null;
+  let open = null, look = 0, at = null;
+  const close = () => { if (open) addTest(found, limit, open.name, open.file); open = null; look = 0; };
   for (const raw of String(text ?? '').split('\n')) {
     const line = raw.replace(/\r$/, '').replace(ANSI, '');
     let m;
-    if (/^\s*ok \d+ /.test(line)) { last = null; look = 0; at = null; continue; }
-    if ((m = NOT_OK.exec(line))) { last = DIRECTIVE.test(m[1]) ? null : addTest(found, limit, m[1], null); look = last ? 12 : 0; at = null; continue; }
-    if (look > 0) { look--; if ((m = LOCATION.exec(line)) && last && !last.file) { last.file = m[1]; look = 0; } continue; }
+    if (OK.test(line)) { close(); at = null; continue; }
+    if ((m = NOT_OK.exec(line))) { close(); at = null; if (!DIRECTIVE.test(m[1])) { open = { name: m[1], file: null }; look = 12; } continue; }
+    if (open) { if ((m = LOCATION.exec(line))) { open.file = m[1]; close(); continue; } if (--look <= 0) close(); continue; }
     if ((m = SPEC_AT.exec(line))) { at = m[1]; continue; }
     if ((m = SPEC.exec(line))) { if (!m[2] && m[1].trim() !== 'failing tests:') addTest(found, limit, m[1], at); at = null; }
   }
+  close();
   return found;
 }
 // A log in 1 MB parts, whole lines only (an over-long line without an end is dropped), so it never sits in memory at
-// once. The checkout root goes from names and files, so one test in two checkouts is one test. `more`: over 50.
+// once. Only the lines that failingTests reads stay (an `ok` line as a short one), and it reads them once, so no test
+// line is cut from its location line. The checkout root goes from names and files, so one test in two checkouts is
+// one test. `more`: over 50.
+const KEPT = /^\s*(?:not ok \d+ - |location: '|test at |\u2716 )/;
 function readFailing(fs, file, root) {
   if (!file) return null;
-  const tests = [], decoder = new StringDecoder('utf8');
+  const kept = [], decoder = new StringDecoder('utf8');
   let carry = '', skipping = false, fd;
   const local = value => value && typeof root === 'string' && root.length > 1 ? value.split(`file://${root}/`).join('').split(`${root}/`).join('') : value;
-  const take = text => { for (const t of failingTests(text, MAX_NAMES + 1)) addTest(tests, MAX_NAMES + 1, local(t.name), local(t.file)); };
+  const take = text => {
+    for (const raw of text.split('\n')) { const line = raw.replace(/\r$/, '').replace(ANSI, ''); if (KEPT.test(line)) kept.push(line.slice(0, 4000)); else if (OK.test(line)) kept.push('ok 0 -'); }
+  };
   try {
     fd = fs.openSync(file, 'r');
     const buffer = Buffer.alloc(1024 * 1024);
@@ -77,6 +87,8 @@ function readFailing(fs, file, root) {
     }
     if (!skipping) take(carry + decoder.end());
   } catch { return null; } finally { if (fd !== undefined) try { fs.closeSync(fd); } catch { /* Closed. */ } }
+  const tests = [];
+  for (const t of failingTests(kept.join('\n'), MAX_NAMES + 1)) addTest(tests, MAX_NAMES + 1, local(t.name), local(t.file));
   return { tests: tests.slice(0, MAX_NAMES), more: tests.length > MAX_NAMES };
 }
 const testText = t => `${t.name}${t.file ? ` (${t.file})` : ''}`;
@@ -262,7 +274,12 @@ export async function baseRedWait(ctx, job, tools) {
   // A deleted or moved issue (404, 410) counts as closed.
   const read = red.report ? await ctx.gh.call('GET', `repos/${ctx.repo}/issues/${red.report.number}`) : null;
   if (read && read.status !== 200 && ![404, 410].includes(read.status)) throw Object.assign(Error(`GitHub GET issue returned ${read.status || 'no reply'}`), { code: 'github' });
-  const open = read?.status === 200 && read.value?.state !== 'closed';
+  let open = read?.status === 200 && read.value?.state !== 'closed';
+  // A closed report while another open issue has the marker (the first issue of a two-machine race): wait on that one.
+  if (tip !== red.tip && !open && red.report && red.fingerprint) {
+    const other = (await markerIssues(ctx, markerOf(red.fingerprint))).open;
+    if (other && other !== red.report.number) { red.report = issueRef(ctx, other, true); ctx.saveJob(job); open = true; }
+  }
   if (tip !== red.tip && !open) {
     const rerun = job.ciRerun;
     delete job.baseRed; delete job.ciRerun;
@@ -281,20 +298,25 @@ export async function baseRedWait(ctx, job, tools) {
 }
 
 // ---- The main-red issue ---------------------------------------------------------------------------------
+// The issues with one marker: the lowest open number, and the highest closed one.
+async function markerIssues(ctx, marker) {
+  let endpoint = `repos/${ctx.repo}/issues?state=all&labels=${encodeURIComponent(MAIN_RED_LABEL)}&per_page=100`, open = null, earlier = null;
+  for (let page = 0; endpoint && page < 5; page++) {
+    const r = await ctx.gh.call('GET', endpoint);
+    if (r.status !== 200 || !Array.isArray(r.value)) throw Error(`GitHub GET issues returned ${r.status || 'no reply'}`);
+    for (const row of r.value.filter(row => !row.pull_request && Number.isSafeInteger(row.number) && String(row.body ?? '').includes(marker)))
+      if (row.state === 'open') open = Math.min(open ?? Infinity, row.number); else earlier = Math.max(earlier ?? 0, row.number);
+    endpoint = r.next;
+  }
+  return { open, earlier };
+}
+const issueRef = (ctx, number, found, earlier = null) => ({ number, ref: `${ctx.repo}#${number}`, found, earlier });
 export async function fileMainRed(ctx, job, red) {
   if (mainRedRoute(ctx.settings) !== 'file') return null;
   const names = Array.isArray(red?.names) ? red.names : [], fingerprint = red.fingerprint ?? baseRedFingerprint(red.what, names), marker = markerOf(fingerprint);
   // Only an open match dedups. A closed match of any age is the same red come back: a new issue that names it.
-  let endpoint = `repos/${ctx.repo}/issues?state=all&labels=${encodeURIComponent(MAIN_RED_LABEL)}&per_page=100`, earlier = null;
-  for (let page = 0; endpoint && page < 5; page++) {
-    const r = await ctx.gh.call('GET', endpoint);
-    if (r.status !== 200 || !Array.isArray(r.value)) throw Error(`GitHub GET issues returned ${r.status || 'no reply'}`);
-    const same = r.value.filter(row => !row.pull_request && Number.isSafeInteger(row.number) && String(row.body ?? '').includes(marker));
-    const hit = same.find(row => row.state === 'open');
-    if (hit) return { number: hit.number, ref: `${ctx.repo}#${hit.number}`, found: true, earlier: null };
-    for (const row of same) earlier = Math.max(earlier ?? 0, row.number);
-    endpoint = r.next;
-  }
+  const seen = await markerIssues(ctx, marker), earlier = seen.earlier;
+  if (seen.open) return issueRef(ctx, seen.open, true);
   const base = ctx.state.baseBranch, ci = red.what === 'ci';
   const title = oneLine(ctx.publicBody(`Main is red: ${names.length ? `${names[0]}${names.length > 1 ? ` (and ${names.length - 1} more)` : ''}` : ci ? 'a CI check' : 'the full test suite'}`), 200);
   const listed = (Array.isArray(red.tests) ? red.tests.map(testText) : names).slice(0, ISSUE_NAMES).map(name => `  - ${oneLine(name, 300)}`);
@@ -309,7 +331,18 @@ export async function fileMainRed(ctx, job, red) {
   // The opt-in label only in auto mode, so that Autopilot takes the issue as its own work; observe mode builds nothing.
   const labels = [MAIN_RED_LABEL, ...(ctx.settings.mode === 'auto' && ctx.settings.label ? [ctx.settings.label] : [])];
   const issue = await ctx.gh.ok('POST', `repos/${ctx.repo}/issues`, { title, body: ctx.publicBody(body), labels });
-  return { number: issue.number, ref: `${ctx.repo}#${issue.number}`, found: false, earlier };
+  // Two machines at once (review R1): both read no open match and both post. The lowest number stays; the newer one,
+  // when this machine made it, closes as a duplicate. A machine that does not see the other one yet keeps its own; the
+  // wait corrects it.
+  const again = await markerIssues(ctx, marker).catch(error => { ctx.warn(`Autopilot core could not read the main-red issues again: ${error.message}`); return null; });
+  if (again?.open && again.open < issue.number) {
+    try {
+      await ctx.gh.ok('POST', `repos/${ctx.repo}/issues/${issue.number}/comments`, { body: ctx.publicBody(`Duplicate of #${again.open}.`) });
+      await ctx.gh.ok('PATCH', `repos/${ctx.repo}/issues/${issue.number}`, { state: 'closed', state_reason: 'not_planned' });
+    } catch (error) { ctx.warn(`Autopilot core could not close the duplicate main-red issue #${issue.number}: ${error.message}`); }
+    return issueRef(ctx, again.open, true, earlier);
+  }
+  return issueRef(ctx, issue.number, false, earlier);
 }
 
 // ---- Stop (with the core's stopChecks) ------------------------------------------------------------------

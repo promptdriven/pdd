@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { coreWorld } from './helpers/core-world.mjs';
 import { coreStatus } from '../src/autopilot-core.mjs';
-import { failingTests, sameTest, baseRedFingerprint, mainRedRoute, MAIN_RED_LABEL } from '../src/autopilot-base-red.mjs';
+import { failingTests, sameTest, baseRedFingerprint, mainRedRoute, fileMainRed, baseRedWait, MAIN_RED_LABEL } from '../src/autopilot-base-red.mjs';
 
 // Expected results come from issue #3181, chaos row B7, ticket T03 and the group 3 design (section B).
 const MIN = 60 * 1000;
@@ -49,6 +49,74 @@ test('failing tests: the real node:test output of a run, with the TAP and the sp
   const spec = run('spec');
   assert.deepEqual(failingTests(spec.stdout).map(x => x.name), ['fails on main', 'child', 'parent']);
   assert.match(failingTests(spec.stdout)[0].file, /a\.test\.mjs$/, 'the failure summary names the file');
+});
+
+// Review R1 (P2): one test name in two files is two failures, also in real node --test output.
+const tapFailure = (cwd, n, name, file) => `not ok ${n} - ${name}\n  ---\n  duration_ms: 1.5\n  type: 'test'\n  location: '${cwd}/${file}:1:1'\n  failureType: 'testCodeFailure'\n  ...\n`;
+test('R1 failing tests: one test name failing in two files is two tests (real node --test TAP output)', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'pdd-base-red-two-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  for (const file of ['a.test.mjs', 'b.test.mjs']) writeFileSync(join(dir, file), "import test from 'node:test';\ntest('saves the value', () => { throw Error('bad'); });\n");
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !['NODE_OPTIONS', 'NODE_TEST_CONTEXT'].includes(key)));
+  const run = spawnSync(process.execPath, ['--test', '--test-reporter=tap', 'a.test.mjs', 'b.test.mjs'], { cwd: dir, env, encoding: 'utf8' });
+  assert.equal(run.status, 1);
+  const found = failingTests(run.stdout);
+  assert.deepEqual(found.map(x => x.name), ['saves the value', 'saves the value']);
+  assert.deepEqual(found.map(x => x.file.split('/').pop()), ['a.test.mjs', 'b.test.mjs']);
+});
+
+test('R1 a new failure with the same name as a base failure, in another file, is the PR\'s own red: a repair', async t => {
+  const w = await coreWorld(t);
+  w.issue(17); await w.tick(); w.build(17); await w.tick(); w.review(17, 'PASS');
+  const head = w.job(17, 'suite');
+  w.say(17, 'suite', tapFailure(head.cwd, 1, 'saves the value', 'test/a.test.mjs') + tapFailure(head.cwd, 2, 'saves the value', 'test/b.test.mjs'));
+  w.suite(17, 1); await w.tick();
+  const base = w.job('base', 'suite');
+  w.say('base', 'suite', tapFailure(base.cwd, 1, 'saves the value', 'test/a.test.mjs')); w.finish('base', 'suite', { code: 1 }); await w.tick();
+  const repair = w.job(17, 'repair');
+  assert.ok(repair, 'the failure in test/b.test.mjs is not on the base');
+  assert.match(repair.input, /Failing tests from this change: saves the value \(test\/b\.test\.mjs\)\./);
+  assert.match(repair.input, /Also red on the base \([0-9a-f]{7}\), not from this change: saves the value \(test\/a\.test\.mjs\)\./);
+  assert.equal(jobFile(w, 17).baseRed, undefined); assert.equal(mainRed(w).length, 0);
+});
+
+// Review R1: two machines see no open main-red issue at once and both post. A small GitHub fake, both reads first.
+function issueFake() {
+  const issues = [], comments = [];
+  const gh = {
+    call: async (method, path) => ({ status: 200, value: issues.map(x => ({ ...x })), next: null }),
+    ok: async (method, path, value) => {
+      let m;
+      if (method === 'POST' && /\/issues$/.test(path)) { const row = { ...value, number: issues.length + 1, state: 'open' }; issues.push(row); return row; }
+      if (method === 'POST' && (m = /\/issues\/(\d+)\/comments$/.exec(path))) { comments.push({ issue: Number(m[1]), body: value.body }); return { id: comments.length }; }
+      if (method === 'PATCH' && (m = /\/issues\/(\d+)$/.exec(path))) { Object.assign(issues[Number(m[1]) - 1], value); return issues[Number(m[1]) - 1]; }
+      throw Error(`unexpected ${method} ${path}`);
+    } };
+  return { issues, comments, gh };
+}
+test('R1 two machines at once: both post, the newer issue closes as a duplicate of the older one, and both use the older one', async () => {
+  const { issues, comments, gh } = issueFake();
+  const ctx = { repo: 'acme/widgets', settings: { mode: 'auto' }, state: { baseBranch: 'main' }, publicBody: x => x, gh, now: () => 0, warn: () => {} };
+  const red = { what: 'ci', sha: 'a'.repeat(40), names: ['tests'] };
+  const results = await Promise.all([fileMainRed(ctx, { pr: 100, issue: 17 }, red), fileMainRed(ctx, { pr: 101, issue: 18 }, red)]);
+  assert.deepEqual(results.map(r => r.number), [1, 1]);
+  assert.deepEqual(issues.map(i => [i.number, i.state]), [[1, 'open'], [2, 'closed']]);
+  assert.equal(issues[1].state_reason, 'not_planned');
+  assert.deepEqual(comments, [{ issue: 2, body: 'Duplicate of #1.' }]);
+});
+
+test('R1 a job whose own issue closed as a duplicate waits on the open issue with the same marker when the base moves', async () => {
+  const { issues, gh } = issueFake();
+  const fingerprint = baseRedFingerprint('ci', ['tests']), body = `x\n<!-- pdd:autopilot-core:base-red:${fingerprint} -->`;
+  issues.push({ number: 1, state: 'open', body }, { number: 2, state: 'closed', body });
+  gh.call = async (method, path) => /\/issues\/2$/.test(path) ? { status: 200, value: { number: 2, state: 'closed' } } : { status: 200, value: issues.map(x => ({ ...x })), next: null };
+  let refreshed = 0, saved = 0;
+  const ctx = { repo: 'acme/widgets', settings: { mode: 'auto' }, state: { baseBranch: 'main' }, publicBody: x => x, gh, now: () => 1000, quiet: 45 * MIN, warn: () => {}, ports: {},
+    git: async args => args[0] === 'rev-parse' ? 'b'.repeat(40) : '', saveJob: () => { saved++; } };
+  const job = { issue: 18, pr: 101, phase: 'pr', baseRed: { what: 'ci', sha: 'a'.repeat(40), tip: 'a'.repeat(40), names: ['tests'], fingerprint, since: 900, report: { number: 2, ref: 'acme/widgets#2', found: false } } };
+  await baseRedWait(ctx, job, { refreshBase: async () => { refreshed++; } });
+  assert.equal(refreshed, 0, 'the red is not fixed: issue #1 is open');
+  assert.equal(job.baseRed.report.number, 1); assert.ok(saved > 0);
 });
 
 test('fingerprint: what and the names in any order, never the commit; the main-red issue goes to the work repository', () => {

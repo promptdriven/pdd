@@ -110,7 +110,10 @@ each tick:
   ends a job. A null `report` is filed again.
 - Read the base tip (fetch) and, with a report, the main-red issue (a deleted or
   moved issue, status 404 or 410, counts as closed; another failed read is a tick
-  error and the job waits). When the tip is
+  error and the job waits). A closed report while another open issue has the same
+  marker (for example the first issue of a two-machine race, after this machine's
+  duplicate was closed): the report becomes that open issue and the job waits on.
+  When the tip is
   not `baseRed.tip` and the issue is closed (or there is no report): clear `baseRed`
   and `ciRerun` and refresh the PR onto the base (`tools.refreshBase`). CI and the
   suite run again on the new head; a red again compares again.
@@ -135,11 +138,18 @@ in ISO form), else the empty string.
   is the same issue. **Marker**: `<!-- pdd:autopilot-core:base-red:FINGERPRINT -->`.
 - **Dedup**: first read `issues?state=all&labels=pdd:main-red&per_page=100` (at most
   5 pages) and look at the issues (not PRs) whose body has the marker. Only an **open**
-  match is the result (`found: true`); nothing is posted. So a second job with the
-  same base-red files no second issue. A closed match, of any age, means that the
+  match is the result (`found: true`), the one with the lowest number; nothing is
+  posted. So a second job with the same base-red files no second issue. A closed match, of any age, means that the
   same red came back after its issue was closed: a new red event. It files a new
   issue, and `earlier` is the number of the newest closed match (the highest
   number). So no job waits on a closed issue while nobody works on the new red.
+- **Two machines at once** (review R1): both can read no open match and both post.
+  After its post, a machine reads the open matches again. When an open match has a
+  lower number than its own new issue, it closes its own issue (`state: closed`,
+  `state_reason: not_planned`) with one comment "Duplicate of #N." and the result is
+  #N (`found: true`). A failed close or comment only warns; the result is still #N.
+  A machine whose read did not show the other issue yet keeps its own; the wait (below)
+  corrects it later.
 - **New issue**: title `Main is red: NAME` (the test or check name, `(and N more)`
   for the others, at most 200 characters, public text). Labels: `pdd:main-red` and,
   only in auto mode when `settings.label` is set, that label, so Autopilot takes the
@@ -162,7 +172,10 @@ null), in log order, at most `limit` entries. It has the shape of the core's
 
 - **TAP** (node --test): a line `not ok N - NAME` at any depth (a subtest is
   indented). The `location: 'FILE:LINE:COL'` line in the next 12 lines gives its
-  file. An `ok N` line ends the look for a location.
+  file. The failure stays open until its location line, the next `ok N` or `not ok
+  N` line, or 12 lines; only then does it join the list (by the one-test rule below).
+  So two failures with one name in two files are two tests (review R1, P2: else a
+  new failure in a second file hid behind a base failure in the first).
 - **Spec reporter**: a line `✖ NAME (DURATION)` at any depth; a `test at
   FILE:LINE:COL` line right before it (the failure summary) gives its file. The
   summary header `✖ failing tests:` is not a test. Color codes are removed first.
@@ -173,10 +186,12 @@ null), in log order, at most `limit` entries. It has the shape of the core's
   reporter's summary repeats no test.
 
 The engine reads the job's suite log and the base suite log in 1 MB parts, whole lines
-only, so a long log never sits in memory at once. It calls `failingTests` with a limit
-of 51 for each part and joins the parts with the same rule; more than 50 tests sets
-`more`. Every `ROOT/` and `file://ROOT/` (the checkout root) goes from names and
-files, so one test in two checkouts is one test.
+only, so a long log never sits in memory at once. It keeps only the lines that
+`failingTests` reads (`not ok`, `location:`, `test at`, `✖`, each cut to 4,000
+characters, and each `ok N` line as a short `ok` line) and calls `failingTests` once
+on them with a limit of 51; more than 50 tests sets `more`. Every `ROOT/` and
+`file://ROOT/` (the checkout root) goes from names and files, so one test in two
+checkouts is one test.
 
 ## The base suite record
 
