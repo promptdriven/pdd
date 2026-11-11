@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: f894beabf12fbb7e1c86c2789056784ce4a38c8904b72b563ac6a4a5e3ebee02).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 6b50f13c154f6c3e6799e3b3de3f02cb1de19ca62b680093ef1efe3e97d6e8e6).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -152,11 +152,12 @@ const routes = [
   // A quiet word (`sim`) parses like the prefix, with nothing added; help names `sim` once, completion never.
   { id: 'try', prefix: [simulate], local: 'runtime-try', quiet: ['sim'], removed: ['try'], operands: [{ name: 'story', type: 'text', optional: true }],
     options: [{ name: '--agent', kind: 'text' }, { name: '--tab', kind: 'value', choices: ['call', 'screen', 'terminal', 'world'] }, { name: '--new', kind: 'flag' },
-      { name: '--cli', kind: 'flag' }, { name: '--shell', kind: 'flag' }, { name: '--save-last', kind: 'flag' },
+      { name: '--page', kind: 'flag' }, { name: '--cli', kind: 'flag' }, { name: '--shell', kind: 'flag' }, { name: '--save-last', kind: 'flag' },
       { name: '--serve', kind: 'optional-integer', min: 1, max: 65535, default: 8080 }, { name: '--max-calls', kind: 'integer', min: 1, max: 1000 },
       { name: '--no-open', kind: 'flag' }, { name: '--stop', kind: 'flag' }, { name: '--app-map', kind: 'text' }, { name: '--no-wait', kind: 'flag' }],
-    forms: [form(`pdd ${simulate} [STORY] [--max-calls N] [--tab call|screen|terminal|world] [--app-map PATH] [--new] [--no-open] [--no-wait] [--agent NAME]`, 'Open the Story in the PDD Simulator: make a link on the PDD interpreter with your gh login and open it in your browser; it ends in 24 hours. Short form: pdd sim. A new simulation defaults to 400 calls; --max-calls accepts 1 to 1000. With terminal stdout or explicit --agent, it stays running to connect your own agent; otherwise it reads saved cases once and returns. --agent selects a configured name or a default Codex, Claude or Gemini; --no-wait skips the bridge. In a terminal it adds each test saved in the Simulator to the story\'s test file.'),
-      form(`pdd ${simulate} [STORY] --cli [--shell] [--max-calls N] [--new]`, 'Run your program in your terminal through a Simulator session; prints a PATH line, or opens a shell with --shell.'),
+    forms: [form(`pdd ${simulate} [STORY] [--max-calls N] [--tab call|screen|terminal|world] [--app-map PATH] [--new] [--no-open] [--no-wait] [--agent NAME]`, 'Open the Story automatically: a command-line program opens a shell, HTTP routes start on localhost with an example request, screens open the PDD Simulator page, and typed operations open its Form tab. With no Story, open the whole project. Make a session on the PDD interpreter with your gh login; it ends in 24 hours. Short form: pdd sim. A new simulation defaults to 400 calls; --max-calls accepts 1 to 1000. With terminal stdout or explicit --agent, it stays running to connect your own agent; otherwise it reads saved cases once and returns. --agent selects a configured name or a default Codex, Claude or Gemini; --no-wait skips the bridge. In a terminal it adds each test saved in the Simulator to the story\'s test file.'),
+      form(`pdd ${simulate} [STORY] --page [--new]`, 'Open the Simulator page explicitly.'),
+      form(`pdd ${simulate} [STORY] --cli [--shell] [--max-calls N] [--new]`, 'Run your program in your terminal through a Simulator session; prints a PATH line, or opens a shell with --shell. Use --shell alone to open the shell.'),
       form(`pdd ${simulate} [STORY] --serve [PORT] [--max-calls N] [--new]`, 'Serve real HTTP requests through your Simulator session on localhost (default port 8080).'),
       form(`pdd ${simulate} --save-last`, 'Save the last terminal command and its output in the original Story test file.'),
       form(`pdd ${simulate} --stop [STORY]`, 'Stop the open Simulator link of a story.')] },
