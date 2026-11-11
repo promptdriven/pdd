@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-reports.prompt.md (sha256: 3cea109b560a16e9d485f8c4da1d9a2c64326fc61fae32944ed03bd485c62627).
+// Generated from prompts/cli/autopilot-reports.prompt.md (sha256: 46fab7339a610e6db4eeed0004e5d7ebf8a417269d251c23d94c7d91929f337b).
 import * as nativeFs from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';

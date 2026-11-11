@@ -2,7 +2,7 @@ import { describeCallPreflight } from './lint-call-preflight.mjs';
 import { isRecentLintReceipt } from './runtime-lint-receipt.mjs';
 import {rememberSecrets} from './secret-redaction.mjs';
 import { bindingPlanLines, bindingRefusals } from './runtime-binding-plan.mjs';
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: afc659c2260bcbc0f5a4662c5c6f6bd0afdf42c94a85e144a30a6aa79586d979).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 36f52434532f27f1065cb5e6d35194ce1d1f8545a8c256c623d6d3bd37241a0a).
 import { buildCheckPlan, checkPlanResults, checkPlanLines, checkPlanResultLines } from './runtime-check-plan.mjs';
 import { interfaceFindings } from './interface-draft.mjs';
 import {readEvidenceEligibility} from './workflow-runner.mjs';

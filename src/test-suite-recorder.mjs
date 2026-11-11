@@ -1,4 +1,4 @@
-// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: f372251fc1f0bc0fc3c23cfd8a61822bbb46d2af1501320e4e0b702faea9efe3).
+// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: bc62cab09b2f567de66cdb099d23ca87252f46509f9610aae7f8b54aab9c8879).
 // This process keeps validation evidence when the calling chat disappears.
 import {rememberSecrets} from './secret-redaction.mjs';
 import * as fs from 'node:fs';

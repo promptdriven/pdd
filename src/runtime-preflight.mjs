@@ -1,6 +1,6 @@
 import { markdownLinks, markdownDefinitions, markdownSectionText } from './runtime-markdown.mjs';
 import { buildBindingPlan, runtimeBoundary } from './runtime-binding-plan.mjs';
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: b658e7cf652fab87e0e799cb28f2ff13dc4471bfa606f4e64d456c43c37ed22c).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 13b3df1384e746798ff9f953d62a7c0aa58ec75874765bd10b4bb608aa92b518).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
