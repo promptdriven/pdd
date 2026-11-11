@@ -18,8 +18,10 @@ most once a day.
   (`stableCode`): merge-check-tool, suite-broken, adopt-pdd (its body asks to adopt
   PDD for the listed modules), no-verdict, scenario-limit,
   vector-replay, runtime-case, lint-refusal, interface-refusal, binding-refusal,
+  input-refusal (any other refusal or rejection of our input: `refus` or `reject`),
   interpreter-error, server-internal (a server-side internal error: server-internal,
-  internal-server, server-error, server-5NN or http-5NN), server-incompatible, crash,
+  internal-server, server-error, a 5NN status as its own word, unavailable or
+  bad-gateway), server-incompatible, crash,
   claim-error, not-run, timeout,
   cli-error (matched in this order on the slug), else `other-HASH`: the first 8 hex
   digits of the SHA-256 of `STEP:CODE` (the step and the code slug without digits;
@@ -33,8 +35,8 @@ most once a day.
   inside Runtime after the call until the result comes back is Runtime's. So kind
   `runtime` stays only for the Runtime codes (`RUNTIME_CODES`) no-verdict,
   interpreter-error, server-incompatible and server-internal. Every other runtime cause,
-  also interface-refusal, binding-refusal and lint-refusal (a refusal of our input is
-  ours to fix first), is a PDD report.
+  also interface-refusal, binding-refusal, lint-refusal and input-refusal (a refusal of
+  our input is ours to fix first), is a PDD report.
 - Fingerprint: `reportFingerprint({kind, component, code, version})` is
   `KIND.COMPONENT.CODE.MINOR`, each part lowercased with runs of other characters
   as `-` (at most 40 characters; empty is `unknown`), and MINOR is the first two

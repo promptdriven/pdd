@@ -74,9 +74,11 @@ process: build, repair, conflict, review and suite. Each tick, for each running 
   first look sets the baseline (the clock keeps the process start); a sleep gap restarts
   the clock, and the part of a shorter tick gap beyond one timer interval (`ctx.tickGap`)
   moves the clock forward (a short sleep or a late timer is not quiet time). A suite that
-  waits in the machine's suite queue is never quiet (like a CI wait): T1 starts at the log
-  line "running the full test suite" (the queue admitted it); the note and the backstop
-  still count from the process start. **End:** nothing new for `quietMinutes` (at least 2 ticks) stops the process.
+  waits in the machine's suite queue is never quiet (like a CI wait): from a log line that
+  starts with "waiting for a check slot" until the line "running the full test suite" (the
+  queue admitted it), each tick counts as new. Only the queue time is exempt: before the
+  queue (`npm ci`, the start of the suite command) and after the admission, T1 applies as
+  usual. The note and the backstop count from the process start. **End:** nothing new for `quietMinutes` (at least 2 ticks) stops the process.
   Build, repair or conflict with no valid result: `no-result` ("the ROLE agent made nothing
   new for N minutes (no new commit, file state, tool call, output line or CPU use)"). A
   reviewer: no verdict (one retry, then `no-result`). A suite: a runner failure, started
@@ -408,11 +410,15 @@ any other pdd (for example an older global install).
   diff); an honest Runtime line and no unrelated or unsafe change. A Runtime FAIL line in the PR body means a FAIL verdict. It writes no files and makes no GitHub write. Its
   result is `{verdict: PASS|FAIL, head, summary, mustFix[]}`. Each must-fix item starts
   with its severity and place: `P1 file:line …` (wrong behavior or unsafe), `P2 file:line …`
-  (fix before the merge) or `P3 file:line …` (a follow-up). **P3 items never block**: a FAIL
-  with at least one item and only P3 items counts as PASS. **Fail closed:** a string
-  `mustFix` is one item; a missing or empty list is none, and a FAIL with no item stays a
-  FAIL (its red line says "see the review comment on the PR"); a verdict that does not
-  parse is no verdict; a PASS that lists a P1 or P2 item is a FAIL. The tick lists them as follow-ups in the review comment,
+  (fix before the merge) or `P3 file:line …` (a follow-up); a PASS lists only P3 items
+  (the scoped check is asked the same). **Fail closed:** an item is a follow-up only when
+  it starts with P3 and names no P1 or P2 anywhere; every other item blocks, also in a
+  PASS (a numbered, a "Severity P2:" or an untagged item, or "P3/P1"). The split comes
+  before each list is cut to 20 items, so no blocking item is lost. The verdict is PASS
+  only when no item blocks and the reviewer said PASS or listed at least one follow-up. A
+  string `mustFix` is one item; a missing or empty list is none, and a FAIL with no item
+  stays a FAIL (its red line says "see the review comment on the PR"); a verdict that is
+  not exactly PASS or FAIL is no verdict. The tick lists them as follow-ups in the review comment,
   in one section at the end of the PR body (a follow-up never reads as a `Runtime:`, `Path:`
   or `Evidence:` line) and in one note on the issue (marker
   `<!-- pdd:autopilot-core:follow-ups:N -->`), each updated in place and with no item twice.
@@ -549,8 +555,9 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
 4. Any red finding: stop the other checks. The **repair budget** (option B): repairs go on
    while they make progress. The findings of a round are each review must-fix (P1 and P2)
    and each other red line. Two findings are the same when they name the same `file:line`
-   (3 lines of tolerance) with a similar cause (at least a quarter of their words in common;
-   the words leave out paths, so two bugs at nearby lines of one file differ), or, with no
+   (3 lines of tolerance) with a similar cause (2 shared words and a quarter of the words,
+   or 40% of the words; the words leave out paths, so two bugs at nearby lines of one file
+   differ), or, with no
    place, when nearly all their words agree; a hex commit name does not count. After a
    repair, compare the findings with the last round. Stop (END `checks-red`, the END text
    names the rule and lists the findings) when (a) a finding of the last round is still
@@ -564,12 +571,21 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    review decide alone) only in a repository with no PR CI: no head of this job ever had a
    check (`ciSeen`), no workflow file of the base tip can run on the PR head
    (`workflowRunsOnPr`: its `on:` has `pull_request` or `pull_request_target` whose branch
-   filter admits the base, or `push` whose branch filter admits the job branch; GitHub's
-   globs `*`, `**`, `?` and `!`; a workflow with only `repository_dispatch`, a schedule, a
-   release, tags or pushes to other branches, such as the PDD App's dispatch file, is no PR
-   CI), and no required status checks on the base. The workflow files come from `git show
-   origin/BASE:.github/workflows/NAME` after one fetch per tick (no API call); a read error
-   counts as CI. And 10 minutes passed since `prAt`. A new head that has no run yet (for example after a
+   filter admits the base, whose `types` (when given) include opened, synchronize or
+   reopened, and whose `paths` / `paths-ignore` admit one of the PR's changed files (`git
+   diff --name-only origin/BASE...HEAD`); or `push` whose branch and path filters admit the
+   job branch and the changed files; GitHub's globs `*`, `**`, `?` and `!`; a workflow with
+   only `repository_dispatch`, a schedule, a release, closed PRs, other paths, tags or
+   pushes to other branches, such as the PDD App's dispatch file, is no PR CI), and no
+   required status checks on the base. The workflow files come from `git show
+   origin/BASE:.github/workflows/NAME` after one fetch per tick (no API call). The safe side
+   counts as CI: a read error, a file whose `on:` the reader cannot read (no `on:`, a
+   flow map over several lines), and more than 50 workflow files. And 10 minutes passed
+   since `prAt`. **A head with no check at all may be a conflict** (GitHub runs no
+   `pull_request` workflow while the PR conflicts with its base): then the tick fetches the
+   base and runs `git merge-tree --write-tree --name-only --no-messages origin/BASE HEAD` in
+   the job worktree; exit 1 (a conflict) starts the agent conflict update (`conflictFix`,
+   debate B, outside the lane, with the conflicting file names), not a CI wait. A new head that has no run yet (for example after a
    refresh) waits for its CI. A pending check still waits, as long as it takes; save `progress`
    first.
 6. **Merge lane** (one final step per repository). A green PR (CI green or none,
@@ -692,7 +708,8 @@ task, no progress, red checks). It stops the job's processes and saves phase
    link the issue natively: `POST repos/REPO/issues/N/dependencies/blocked_by` with
    the report's issue id. A refused link (for example across repositories) leaves
    the hidden marker in the END comment as the only record; the ready rule reads it.
-4. Post one issue comment with the cause text (one final period), kind and code, the
+4. Post one issue comment with the cause text (one final period), kind and code (the kind
+   is the report owner, `reportKind`, so a binding refusal says `pdd`), the
    log file name (`Log: \`NAME.log\` on this machine`), the
    branch and PR, `Blocked by REF` when a report has a reference (`#N` in the
    same repository), a draft note naming `pdd autopilot report`, and either "ready
