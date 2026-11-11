@@ -140,9 +140,13 @@ For a valid test with some exact checks, source capture keeps every authored ste
 | P5 | Test criterion texts belong to the Story items, including multiplicity. Extra or changed text refuses; omitted items follow Criteria with no check | `story-criterion-mismatch` |
 | P6 | Unique IDs; report missing checks under Criteria with no check | `duplicate-criterion`, `unchecked-criteria` |
 | P7 | `entry_path` is a Git-visible `*.prompt.md` with one interface block, `approved` or `draft`, hash current | `entry-missing`, `interface-missing`, `pdd-two-interfaces`, `invalid-json`, `interface-unapproved`, `interface-stale` |
+| F1 | A draft full interface omits `kind`; see [Runtime interface kind](#runtime-interface-kind) | `interface-kind-explicit-full` |
+| F2 | Executable schemas use the supported keywords below; `anyOf` is refused (use `oneOf` with complete variants) | `graph-schema-unsupported-keyword` |
 | P8 | `operation` is in the interface `entries` | `entry-operation-missing` |
 | P9 | `input` matches `input_schema`. Skip an input that holds `$step_result`. Report every problem of every step at once | `invalid-input` |
 | P10 | An error step's `expected_error` is in the entry `errors`, with one `equals` check on `error` `/code` | `pdd-unknown-error`, `missing-error-check` |
+
+F1–F2 are one local format admission table: apply them to selected entry and called prompts before authentication/upload in checks, files previews and local/server lint. F2 retains the offending prompt path and schema JSON Pointer, and explains the unsupported keyword; for `anyOf`, advise `oneOf` with complete variant schemas. Do not require every property in `required`: optional fields remain valid. No schema or expected value is rewritten. Other explicit-lint schema diagnostics remain server-owned.
 
 A broken step or check shape uses the engine code (`missing-steps`, `invalid-step`, `invalid-check`, `unknown-criterion`, `invalid-criterion`). A step may name a `model` (as the live engine eae2202a allows); a model that is not a nonblank string is `invalid-step-model`. pdd is never stricter than the live engine.
 - Default `max_calls` for a test: 12 for each step, at least 18, at most 1000. This is a ceiling, not a charge; steps that use saved data or prompt calls need room for their whole call graph. A refusal has `code`, `section` (engine style, for example `steps[0].input.items[0].quantity`), `message`, an optional `hint` and the 1-based `step`.
