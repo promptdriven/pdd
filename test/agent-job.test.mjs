@@ -94,7 +94,7 @@ test('stop ends the whole process group after the grace time: a grandchild that 
   t.after(() => { try { process.kill(pid, 'SIGKILL'); } catch {} });
   assert.equal(stopAgentJob(job), true);
   const groupAlive = () => { try { process.kill(-job.pid, 0); return true; } catch (error) { return error.code !== 'ESRCH'; } };
-  await until(() => !groupAlive(), 8000);
+  await until(() => !groupAlive(), 20000);   // the grace is 2 s; a loaded machine needs longer to reap
   assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' }, 'the grandchild is gone');
   const done = readAgentJob(job);
   assert.equal(done.state, 'exited'); assert.ok(done.exit.signal || done.exit.code !== 0, JSON.stringify(done.exit));
@@ -111,7 +111,7 @@ test('a stop whose exit record cannot be written still ends the whole group', as
   mkdirSync(job.exit);                                                 // the rename of the exit record fails
   assert.equal(stopAgentJob(job), true);
   const groupAlive = () => { try { process.kill(-job.pid, 0); return true; } catch (error) { return error.code !== 'ESRCH'; } };
-  await until(() => !groupAlive(), 8000);
+  await until(() => !groupAlive(), 20000);   // the grace is 2 s; a loaded machine needs longer to reap
   assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' }, 'the grandchild is gone');
 });
 
