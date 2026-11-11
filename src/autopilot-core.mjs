@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 5b66ab5ef51a10de417f888260984b902521f2ddd5b8a9cf3b7013bf48f36c02).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 363077f6448471b6e9634be9d016c3cd4e7e59ecd664c1f81c1565d84812b89f).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -349,8 +349,9 @@ async function decisionReplies(ctx, rows) {
     const key = String(row.number), stamp = String(row.updated_at ?? '');
     if (seen[key] === stamp) continue;
     try {
+      // A strict repository's prompt approval waits for the approval itself, never for a comment.
       const answer = await personAnswer(ctx, row.number);
-      if (answer?.comments.length) {
+      if (answer?.comments.length && !/\(strict_approvals\)/.test(answer.question)) {
         await ctx.gh.ok('DELETE', `repos/${ctx.repo}/issues/${row.number}/labels/${encodeURIComponent(DECISION)}`);
         ready.add(row.number); delete seen[key];
       } else seen[key] = stamp;

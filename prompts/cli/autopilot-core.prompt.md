@@ -805,7 +805,9 @@ remove `pdd:working`; clean up locally with outcome `needs-person`. The slot is 
 for it in the machine state (`decisionSeen`, so each change is read once), the core
 reads the answer below; with a trusted reply after the question (one that starts with
 an option letter, or any other), it removes `pdd:needs-decision` itself and the issue is
-ready in the same tick. A trusted person's removal of the label still works. When the core claims an issue with comments, it reads
+ready in the same tick. A strict repository's prompt approval question (its text names
+`(strict_approvals)`) is not ended by a reply: it waits for the approval and the label
+removal. A trusted person's removal of the label still works. When the core claims an issue with comments, it reads
 the latest question comment that this engine posted (author = the engine's own login,
 `GET user`, and a marker that names this issue; a marker comment by anyone else is
 not a question) and the comments after it by trusted people (`ports.trusted`), leaving
