@@ -166,7 +166,7 @@ Run Autopilot commands inside the repo folder. Each repo has its own Autopilot o
 | Command | What it does |
 |---|---|
 | `pdd autopilot doctor` | Read-only prerequisite checks, one line and a command per item. No GitHub writes or AI calls. Exit 1 for a required failure, 0 when only warnings remain |
-| `pdd autopilot start [--runs N] [--checks N] [--engine core\|full] [--label NAME] [--mode auto\|observe\|off] [--report file\|draft\|off] [--resume-custody FILE]` | Check sign-ins and the running pdd version, open a dedicated interactive Herdr session (not with the [core engine](#core-engine)) and check for work immediately. A user timer checks again every 30 minutes (every 10 minutes with the core engine; `pdd autopilot status` shows the interval). `--runs` overrides the open-run cap. `--checks` overrides heavy-check slots. Omission uses machine capacity. `--engine core` or `--engine full`, `--label NAME`, `--mode auto\|observe\|off` and `--report file\|draft\|off` (core engine only) save this machine's engine, opt-in label, mode and report mode for this repo; they win over `pdd.json`, and a later start without them keeps them. `--resume-custody` supplies the verified original-owner projection for explicit recovery |
+| `pdd autopilot start [--runs N] [--checks N] [--engine core\|full] [--label NAME] [--mode auto\|observe\|off] [--report file\|draft\|off] [--intake off\|shadow] [--resume-custody FILE]` | Check sign-ins and the running pdd version, open a dedicated interactive Herdr session (not with the [core engine](#core-engine)) and check for work immediately. A user timer checks again every 30 minutes (every 10 minutes with the core engine; `pdd autopilot status` shows the interval). `--runs` overrides the open-run cap. `--checks` overrides heavy-check slots. Omission uses machine capacity. `--engine core` or `--engine full`, `--label NAME`, `--mode auto\|observe\|off` and `--report file\|draft\|off` and `--intake off\|shadow` (core engine only) save this machine's engine, opt-in label, mode, report mode and [intake mode](#intake-cards-shadow) for this repo; they win over `pdd.json`, and a later start without them keeps them. `--resume-custody` supplies the verified original-owner projection for explicit recovery |
 | `pdd autopilot stop` | Disable this repo's timer on this machine and let the current agent step finish |
 | `pdd autopilot audit RUN PR` | Audit a confirmed automatic merge once with a fresh configured agent. Save OK, CONCERN or BAD and the separate revert recommendation with the run. Post the evidence once on the issue. BAD opens a revert PR only when recommended; otherwise it keeps the merge and reopens the issue with the missing parts. One decision alert states the recommendation and choices. Unknown external outcomes require inspection before any retry. |
 | `pdd autopilot check-base RUN PR` | Read the saved run and exact PR target, then check that its base contains the current default branch and newest published release tag, including prereleases. A refusal explains the reason and exits 1. Use this before an automatic merge and after it for the base audit. It makes no GitHub writes |
@@ -175,6 +175,7 @@ Run Autopilot commands inside the repo folder. Each repo has its own Autopilot o
 | `pdd autopilot regressions [--json] [--file PATH]` | Read core merge history and GitHub CI, parent checks, revert, reopen and issue-link evidence. Classify each merge as ok, suspect or proven; count distinct proven PRs per UTC evidence day. Issue-body attribution uses issue creation time even if added in a later edit; these buckets require a consumer confirmation policy before use as daily scorecard counts. At most 100 GitHub requests per scan; rate exhaustion or Retry-After stops further reads, preserving collected evidence and marking missing evidence incomplete. --json prints structured results; --file exclusively creates a local report without overwriting existing files. No GitHub writes or reverts. Incomplete reads exit 1; complete scans exit 0 even when they detect regressions |
 | `pdd autopilot report` | List this machine's local Autopilot report drafts ([core engine](#core-engine)). No GitHub call |
 | `pdd autopilot report send FINGERPRINT` | File one local report draft to promptdriven/pdd, or count it on the matching open report |
+| `pdd autopilot intake [--json]` | Print this machine's [intake cards](#intake-cards-shadow) for this repo, the would-pick list and today's changes. Local files only: no AI call and no GitHub call |
 | `pdd autopilot alerts set [--destination autopilot\|infrastructure]` | Read your Discord or Slack incoming webhook URL from stdin and save it for this machine |
 | `pdd autopilot alerts set --discord-channel ID [--token-command CMD] [--destination autopilot\|infrastructure]` | Use a Discord bot in one channel: read its token from stdin, or save CMD and run it at each send to get the token |
 | `pdd autopilot alerts test [--destination autopilot\|infrastructure]` | Send one test message and confirm that it was posted; for a bot, first check and show the bot name and channel name |
@@ -1635,6 +1636,38 @@ FINGERPRINT`; with `off` nothing is saved. In both cases the ended issue gets
 never taken as work. A PR that says `Runtime: not run (reason)` can merge and files
 no report by itself; a Runtime report comes only from a job that failed for a
 Runtime cause.
+
+### Intake cards (shadow)
+
+`pdd autopilot start --engine core --intake shadow` turns on intake cards for this
+repo on this machine; `--intake off` (the default) turns them off. A later start
+without `--intake` keeps the saved value. In shadow mode each core tick first
+checks native facts of each open issue in scope (the opt-in label, no report
+issues): an assignee, an open native blocked-by link, open sub-issues, a label
+`pdd:stuck`, `pdd:needs-decision`, `pdd:would-merge` or `pdd:working`, or a job of
+this machine gives a native reason and no AI call. An issue whose author the core
+does not trust gets `untrusted` and no AI call. For every other issue, one headless
+job of this machine's agent (Codex or Claude) writes one card per issue version,
+from the title, the body, the labels, the trusted person comments and the titles of
+the other open issues by trusted authors. The card agent runs in an empty folder
+with no tools, no write access and no GitHub token (Codex: a read-only sandbox, its
+tools off and no MCP server from your Codex config; Claude: no tools, plan mode),
+never with the bypass flags of build jobs. A card says ready,
+improve, person, duplicate, blocked, held, fixed or elsewhere, with a reason and a
+confidence. A new title, body, label, assignee, native link or comment makes a new
+version. At most 2 card jobs start per tick and 2 run at once; a card job that ends
+with no valid card is tried again after 6 hours, or at once for a new version.
+Each card names the agent and the model. Cards live in the `intake` folder of the
+core state; one file a day (UTC) lists the class changes, the "would pick" list
+(ready cards, issues that unblock others first, then the oldest) and the issues
+that the core really started. Shadow cards never write to GitHub and never change
+which issue starts. A failure skips only that issue or that tick. After a switch to
+`--intake off`, the next tick stops card jobs that still run; so do a core tick in
+mode off and `pdd autopilot stop`. Trust lookups are cached for 6 hours, with at
+most 40 a tick. The cards cover every
+open issue in scope: unlike the core, they do not skip issues that cool down after a
+no-result or whose blocker is named only in the text. `pdd autopilot intake` prints
+the cards and today's changes; `--json` prints them as JSON.
 
 ## Post-merge audit settings
 

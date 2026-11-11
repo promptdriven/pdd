@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 72e8fbdb0667e0b269e8b03b5f05fc5b48b990edc8f4928d5731ea584e4256b3).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 80f4361ca1e1b56e48db9e1858063464c146867e6b1987f28900a10d24f2d925).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,6 +10,7 @@ import { checkAutopilotBase } from './autopilot-base.mjs';
 import { redactSecrets } from './secret-redaction.mjs';
 import { interfaceBlocks, readPrompt, promptRefusal, gitFiles } from './runtime-preflight.mjs';
 import { readPromptApprovals } from './approval-policy.mjs';
+import { intakeTick } from './autopilot-intake.mjs';
 
 const MIN = 60 * 1000, HOUR = 60 * MIN, DAY = 24 * HOUR, CLAIM_EXPIRES = 4 * HOUR, STRIKES = 3, MAX_PAUSE_HOURS = 8, NO_RESULT_LIMIT = 3, CLAIM_TRIES = 3, NO_CI_AFTER = 10 * MIN, END_TRIES = 6;
 const REPORT_LABELS = ['pdd:runtime', 'pdd:autopilot-report'];
@@ -2004,6 +2005,7 @@ export async function tickCore(input, ports) {
   const b = ctx.budget;
   const hold = b?.state === 'low' ? `intake held: the GitHub budget is low (this machine used ${b.used} of ${b.allowed} calls in the last hour, a ${b.share ?? 30}% share for ${b.machines} machine(s) with live claims)`
     : rows ? await intake(ctx, rows) : 'intake skipped: the issue list is unavailable';
+  try { await intakeTick(ctx, rows); } catch (error) { ctx.warn(`Autopilot intake (shadow) skipped this tick: ${error.message}`); }
   if (ctx.peers.size) { const m = ctx.machineState(); ctx.saveMachine({ ...m, peers: { ...m.peers, ...Object.fromEntries(ctx.peers) } }); }
   const busy = readJobs(ctx.fs, ctx.root).filter(holdsSlot).length, c = ctx.counts;
   return { exitCode: 0, message: `Autopilot core${settings.mode === 'observe' ? ' (observe: no merge)' : ''}: ${c.started} started, ${c.merged} merged, ${c.wouldMerge ? `${c.wouldMerge} would merge, ` : ''}${c.ended} ended, ${c.repairs} repair(s); ${busy} of ${settings.runs} slots busy${hold ? `; ${hold}` : ''}.` };
