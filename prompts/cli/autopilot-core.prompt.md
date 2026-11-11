@@ -453,7 +453,8 @@ any other pdd (for example an older global install).
 - **Review** (in `worktrees/N-review`, a detached checkout of the head): a fresh agent
   that did not write the change. It gets the path checks' table of the PR's changed
   files, each in one of three states (owned on the base, with its owner; unowned on the
-  base; new in this PR, not on the base), and the R5 hints (below), and checks the
+  base; new in this PR, not on the base; or not checked when main's owners cannot be
+  read), and the R5 hints (below), and checks the
   issue fit; (2) Path and (3) Tests with the exact text of A-VERDICT section 6.2 (the
   Path lines match the owner table, disputed only by naming a missed binding, header or
   prompt line; a and c trace to the issue; b keeps the contract; d agrees with any
@@ -553,20 +554,30 @@ its claim (claim comment and `pdd:working`) and starts nothing. The next build p
 then has the question and those answers as data, or "no written answer" when there
 is none.
 
-**Owner table** (`ownerTable(fs, root, files)`, exported, the one owner function of the
-engine) reads a checkout with `findOwners` of the [file owner lookup](file-owner.prompt.md),
-the same reader as `pdd owner`; the engine has no second reader. Its `files` port is
-the checkout's Git files; its `read` port reads through `ctx.fs` and gives no content
-for a missing path or a path that is not a regular file (a submodule folder). Each
-file with an owner maps to `{prompt, how, owners, certain, note}`: `prompt` is the
-lookup's `owner` and `how` its `source` (`binding`, `header` or `prose`). A file with
-no owner whose answer is not certain (an unreadable `pdd-bindings.json`, or a file that
-cannot be read) is owned too, with `prompt` null and `how` `unknown`: the lookup's
-callers treat an uncertain answer as owned. In text an owner is `PROMPT (binding)`,
-`PROMPT (header)`, `PROMPT (prose, not certain: treat as owned)`, another uncertain
-answer `PROMPT (HOW, not certain: NOTE)`, and an unknown owner `an unknown prompt (not
-certain: NOTE)`. **Path e** results carry `adopt` (file paths): the tick files them as one
-deduped PDD report (`autopilot-core` / `adopt-pdd`), and it never blocks the job.
+**Owner table** (`ownerRead(fs, root, files)` and `ownerTable(fs, root, files)`, both
+exported; the one owner function of the engine) reads a checkout with `findOwners` of
+the [file owner lookup](file-owner.prompt.md), the same reader as `pdd owner`; the
+engine has no second reader. Its `files` port is the checkout's Git files; its `read`
+port reads through `ctx.fs` and gives no content for a missing path or a path that is
+not a regular file (a submodule folder). `ownerRead` returns `{owners, unchecked,
+bindings}`, and `ownerTable` is its `owners`. `owners` maps each file with an owner to
+`{prompt, how, owners, certain, note}`: `prompt` is the lookup's `owner` and `how` its
+`source` (`binding`, `header` or `prose`). A file with no owner whose answer is not
+certain is never owned by an unknown prompt: `unchecked` maps it to its cause,
+`pdd-bindings.json unreadable` when the lookup's note says that pdd-bindings.json could
+not be read, else `the file could not be read`. `bindings` is false only when the
+reader cannot use the checkout's `pdd-bindings.json`: the reader's `resolveOwners`
+gives a path that nothing names an uncertain answer with that text (its first 64 KiB,
+read with the same port, as `findOwners` reads it; a missing file is readable). In text
+an owner is `PROMPT (binding)`, `PROMPT (header)`, `PROMPT (prose, not certain: treat as
+owned)`, or another uncertain answer `PROMPT (HOW, not certain: NOTE)`. The build brief
+lists the owned files; with `bindings` false it adds the line `- (pdd-bindings.json
+cannot be read here, so no binding is known)`. **Path e** results carry `adopt` (file
+paths): the job keeps the union of the `adopt` lists of its results (`job.adopt`). It
+files them only when the PR passed every check at its final head, right before the
+merge note or the would-merge note, once per job: one deduped PDD report
+(`autopilot-core` / `adopt-pdd`) with only the paths that the path checks of that head
+call unowned on the base (so a new file never). It never blocks the job.
 
 ## Merge check
 
@@ -575,8 +586,9 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
 1. Read the PR. Merged: finish as merged, also when quiet, so END never runs on a
    merged issue. Quiet: stop the checks and end with the last error, a `pdd` cause
    `merge-check-tool` when the PR read fails or the last saved error came from a
-   GitHub or Git call, else a `job` cause `checks-quiet` ("the PR checks made no
-   progress for N minutes"). Closed: end
+   GitHub or Git call, a `pdd` cause `bindings-unreadable` when the merge waited for
+   an unreadable base `pdd-bindings.json` (step 5), else a `job` cause `checks-quiet`
+   ("the PR checks made no progress for N minutes"). Closed: end
    `pr-closed`. The PR head SHA, head branch or base differs from the job: end
    `head-moved`.
 2. `Runtime: not run (…)` is allowed, and the PR body is not rewritten. When the
@@ -670,14 +682,18 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    so problems outside a strict repository are red there too. In a strict repository
    observe mode asks no person: it lists the problems in its "would merge" note.
    **Path checks** (debate A section 6.3 and #3239; no AI, once per head and PR body,
-   saved as `paths`; the rules are the pure, exported `pathRules({changed, baseFiles,
-   before, after, body, adopting})`, which returns `{reds, owners, unowned}`). The changed files come from Git, never from the PR body: `git diff
+   saved as `paths`, and read again when its result has unchecked files and the base
+   tip moved; the rules are the pure, exported `pathRules({changed, baseFiles, before,
+   after, body, adopting})`, where `before` and `after` are `ownerRead` results, and
+   it returns `{reds, owners, unowned, unchecked, wait, quotes}`). The changed files
+   come from Git, never from the PR body: `git diff
    --name-status --find-renames origin/BASE...HEAD` (from the merge base; a renamed file
    is its new path, with its source). The owner tables before and after come from clean
    checkouts of the base tip and the head. Each changed file has one state: **owned**
    (the base table has the file, or the source of a renamed file), **unowned on the
-   base** (the file or its source is a file of the base tip with no owner) or **new in
-   this PR** (not a file of the base tip). The PR body gives only the path letter of
+   base** (the file or its source is a file of the base tip with no owner), **new in
+   this PR** (not a file of the base tip) or **not checked** (the base answer for the
+   file or its source is unchecked, see the Owner table). The PR body gives only the path letter of
    each file: from each `Path:` line only the files field, the text after the letter up
    to the next dash separator ` — `, ` – ` or ` - ` (T09). The words of that field
    (split at white space, commas, semicolons, quotes, backticks, brackets and `|`, each
@@ -698,11 +714,25 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    code file a binding or a Generated from header (path c); a non-code change takes
    path d, with no new prompt.`); R4 a file of the base with no owner (for a renamed
    file, its source) that the head gives a binding or header, unless the issue asks to
-   adopt PDD; R6 no `Path:` line. R5 is only a hint for the reviewer: prompts at the head
-   that mention a changed file that is unowned on the base. The saved `paths` also has
-   the reviewer's table, one line per changed file: `- F: owned on the base by OWNER`,
-   `- F: unowned on the base` or `- F: new in this PR (not on the base)`, with ` (moved
-   from S)` after a renamed F and `, deleted in this PR` after the state of a deleted F.
+   adopt PDD; R6 no `Path:` line; R8 the base `pdd-bindings.json` can be read and the
+   head's cannot (`pdd-bindings.json cannot be read at this head: fix it (pdd owner
+   needs valid JSON with schema_version pdd.bindings.v1 and a modules array, at most 64
+   KiB).`). A not-checked file gets no R1, R7 or R4 red: when the base
+   `pdd-bindings.json` cannot be read, that is main's problem, not this PR's. Then
+   `unchecked` lists the not-checked files and `wait` says why (`pdd-bindings.json
+   cannot be read on main, so the owners of F1, F2 are not checked`, or `F could not be
+   read on main`); see the merge wait in step 5. R5 is only a hint for the reviewer:
+   prompts at the head that mention a changed file that is unowned on the base. The
+   saved `paths` also has the reviewer's table, one line per changed file: `- F: owned
+   on the base by OWNER`, `- F: unowned on the base`, `- F: new in this PR (not on the
+   base)` or `- F: not checked (pdd-bindings.json unreadable on main)` (or `(the file
+   could not be read on main)`), with ` (moved from S)` after a renamed F and `, deleted
+   in this PR` after the state of a deleted F. `quotes` maps each R1, R7, R3 and R4 red
+   to what the check read for it: `read "FIELD" in the files field of the line "LINE"`
+   (R1 on a path d or e line, R7; LINE is `Path: X…`, at most 200 characters), `read
+   these files fields: "FIELD"; "FIELD"` (R1 on no Path line, at most 5 fields), `read
+   these head owners of the new files: F: OWNER; G: no owner` (R3, at most 5) or `read
+   the head owner of F: OWNER` (R4).
    Then a
    failed CI check
    (check runs and commit statuses of the head; neutral and skipped pass); else
@@ -780,7 +810,9 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    differ), or, with no
    place, when nearly all their words agree; a hex commit name does not count. After a
    repair, compare the findings with the last round. Stop (END `checks-red`, the END text
-   names the rule and lists the findings) when (a) a finding of the last round is still
+   names the rule and lists the findings, then `What the path checks read: …` with the
+   quote of each path red among them, from `paths.quotes`, so a person sees a false red
+   at once) when (a) a finding of the last round is still
    there, (b) a finding of an earlier round came back, or (c) the job has used `repairs`
    (the safety cap, default 6). A round that fixes all its findings and gets new, different
    ones goes on (the #2574 pattern: each repair fixes the last P2 and the reviewer finds a
@@ -808,7 +840,12 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    the job worktree; exit 1 (a conflict) starts the agent conflict update (`conflictFix`,
    debate B, outside the lane, with the conflicting file names), not a CI wait. A new head that has no run yet (for example after a
    refresh) waits for its CI. A pending check still waits, as long as it takes; save `progress`
-   first.
+   first. **The owner wait (#3239):** a green PR whose path checks have unchecked files
+   does not enter the lane. Its last error is `the merge waits: WAIT`. The wait is not
+   progress, so when nothing changes for the quiet period the job ends (step 1); with
+   an unreadable base `pdd-bindings.json` that END files the one deduplicated PDD
+   report and the issue waits for it. When the base tip moves, the path checks read
+   it again.
 6. **Merge lane** (one final step per repository). A green PR (CI green or none,
    review PASS, suite pass) enters the lane. The lane is the label `pdd:merge-lane` on
    one open PR, shared by every machine through GitHub (`issues?state=open&labels=…`,
