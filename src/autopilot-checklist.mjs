@@ -1,0 +1,242 @@
+// Generated from prompts/cli/autopilot-checklist.prompt.md (sha256: c1962120c79b3a99b2f7b198dcaed0de65c4e86041c55af5e1afc67799ab65ba).
+
+const MAX_ITEMS = 30, MAX_CHARS = 300, MAX_QUOTE = 200, PREFIX_WORDS = 8, MIN_QUOTE_WORDS = 3;
+const WORD = /[\p{L}\p{N}]+/gu, HAS_WORD = /[\p{L}\p{N}]/u;
+const LABEL = /^(?:done when|expected|acceptance criteri(?:a|on)|test(?:s|ing)?)(?![\p{L}\p{N}])/iu;
+// A colon after the label, with at most 3 more words before it ("Expected result:").
+const LABEL_COLON = /^((?:[\s*_`]*[\p{L}\p{N}][\p{L}\p{N}'’-]*){0,3})[\s*_`]*:(.*)$/u;
+const HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/;
+const LIST = /^( *)(?:[-*+]|\d{1,9}[.)])(?:[ \t]+(.*))?$/;
+const PR_LIST = /^( *)(?:[-*+]|\d{1,9}[.):])(?:[ \t]+(.*))?$/;
+const TASK = /^\[[ xX]\][ \t]+(.*)$/;
+const START = /^(?:issue\s+)?checklist\s*(?::.*)?$/i;
+const ID = /^[\s*_[(]*C(\d{1,3})(?![\p{L}\p{N}])[*_\])]*/iu;
+const ID_SEP = /^\s*(?:[,/&+]\s*)?(?:and(?![\p{L}\p{N}])\s*)?/iu;
+const ID_LINE = /^[\s*_[(]*C\d{1,3}(?![\p{L}\p{N}])/iu;
+const NO_EVIDENCE = /^(?:pending|todo|to do|tbd|not done|not yet|none|n\/a|missing|no evidence|not covered)[\s*_]*(?:$|[:(\-–—,;.])/iu;
+const RANK = { missing: 1, unsupported: 2, excluded: 3, covered: 4 };
+
+const str = value => typeof value === 'string' ? value : '';
+const lines = text => text.split(/\r\n|\r|\n/).map(line => line.replace(/\t/g, '    '));
+const indentOf = line => line.length - line.trimStart().length;
+const words = text => [...text.matchAll(WORD)];
+const lowerWords = text => words(text).map(match => match[0].toLowerCase());
+const quoteForm = text => text.normalize('NFC').replace(/[“”]/g, '"').replace(/[‘’]/g, "'").replace(/[`*_]/g, '').replace(/\s+/g, ' ').trim();
+const cut = (text, size) => [...text].slice(0, size).join('');
+
+// Fenced code blocks and HTML comment blocks are not read.
+function blockStart(line) {
+  const fence = /^ *(`{3,}|~{3,})(.*)$/.exec(line);
+  if (fence && !(fence[1][0] === '`' && fence[2].includes('`'))) return { fence: fence[1][0], size: fence[1].length };
+  const text = line.trimStart();
+  if (text.startsWith('<!--')) return text.indexOf('-->', 4) >= 0 ? { closed: true } : { comment: true };
+  return null;
+}
+function blockEnd(block, line) {
+  if (block.comment) return line.includes('-->');
+  const close = /^ *(`{3,}|~{3,}) *$/.exec(line);
+  return !!close && close[1][0] === block.fence && close[1].length >= block.size;
+}
+
+// The text after a label, or null. Leading marks and a number such as "2." do not count.
+function afterLabel(text) {
+  const plain = text.trim().replace(/^[*_`\s]+/, '').replace(/^\d{1,3}[.)]\s*/, '').replace(/^[*_`\s]+/, '');
+  const label = LABEL.exec(plain);
+  return label ? plain.slice(label[0].length) : null;
+}
+// A label line gives its item text ('' when none), or null when the line is not a label line.
+function labelLine(line) {
+  const after = afterLabel(line);
+  if (after === null) return null;
+  const colon = LABEL_COLON.exec(after);
+  if (colon) return colon[2];
+  if (/^[*_`\s]*$/.test(after)) return '';
+  const text = line.trim();
+  return text.length <= 60 && /^(\*\*|__).*\1$/.test(text) ? '' : null;
+}
+
+export function issueChecklist(text) {
+  const found = [];
+  let current = null, heading = null, label = false, blank = true, block = null;
+  const close = () => { if (current) found.push(current); current = null; };
+  const join = (separator, part) => {
+    if (!part.trim()) return;
+    current.text = current.text.trim() ? `${current.text}${separator}${part}` : part;
+  };
+  for (const line of lines(str(text))) {
+    if (block) { if (blockEnd(block, line)) { block = null; blank = true; } continue; }
+    const opened = blockStart(line);
+    if (opened) { if (opened.fence && indentOf(line) < 2) close(); if (!opened.closed) block = opened; blank = true; continue; }
+    if (!line.trim()) { blank = true; continue; }
+    const head = HEADING.exec(line);
+    if (head) {
+      close(); label = false; blank = false;
+      const level = head[1].length;
+      if (heading !== null && level <= heading) heading = null;
+      if (heading === null && afterLabel(head[2] ?? '') !== null) heading = level;
+      continue;
+    }
+    const list = LIST.exec(line);
+    if (list) {
+      const indent = list[1].length, body = list[2] ?? '', task = TASK.exec(body);
+      const empty = current?.label && !current.text.trim();
+      if (task) { close(); current = { indent, text: task[1] }; }
+      else if (current && !empty && indent > current.indent) join('; ', body);
+      else { close(); if (heading !== null || label) current = { indent, text: body }; }
+      blank = false; continue;
+    }
+    const labelText = labelLine(line);
+    if (labelText !== null) { close(); label = true; current = { indent: indentOf(line), text: labelText, label: true }; blank = false; continue; }
+    if (current && (!blank || indentOf(line) >= current.indent + 2)) join(' ', line.trim());
+    else { close(); label = false; }
+    blank = false;
+  }
+  close();
+  const items = [], seen = new Set();
+  for (const entry of found) {
+    let item = entry.text.replace(/\s+/g, ' ').trim();
+    if (entry.label) item = item.replace(/^[*_\s]+|[*_\s]+$/g, '');
+    item = cut(item, MAX_CHARS).trimEnd();
+    if (!HAS_WORD.test(item)) continue;
+    const form = lowerWords(item).join(' ');
+    if (seen.has(form)) continue;
+    seen.add(form);
+    items.push({ id: `C${items.length + 1}`, text: item });
+    if (items.length === MAX_ITEMS) break;
+  }
+  return items;
+}
+
+const listOf = items => Array.isArray(items) ? items : [];
+const itemLines = items => items.map((item, i) => `C${i + 1}. ${str(item?.text)}`).join('\n');
+
+export function checklistBrief(items) {
+  const list = listOf(items);
+  if (!list.length) return '';
+  return `Issue checklist. Autopilot took these items from the issue text, apart from your plan. Your plan cannot drop an item, and the list does not make the issue smaller:
+${itemLines(list)}
+In the PR body, write one "Checklist:" section with one line for each item, in this form:
+Checklist:
+- C1: EVIDENCE
+- C2: excluded: "QUOTE"
+EVIDENCE is the test (its file and name), the check (its command and result) or the file that shows that the item is done. QUOTE is an exact quote from the issue text, at least 3 words, that allows leaving the item out. Autopilot checks this section: an item with no line or no evidence is red, and an exclusion whose quote is not in the issue text is red. A fresh reviewer checks that the evidence is real and that each quote allows its exclusion.`;
+}
+
+export function checklistReview(items) {
+  const list = listOf(items);
+  if (!list.length) return '';
+  return `Issue checklist. Autopilot took these items from the issue text, apart from the builder's plan. The list does not make the issue smaller: check the change against the whole issue as before.
+${itemLines(list)}
+For each item, check its line in the PR body's "Checklist:" section against the diff. An item needs real evidence (a test that checks it, a check with its result, or a file that does it) or an exclusion whose exact quote from the issue text really allows leaving the item out. An item with no real evidence and no supported exclusion is a P2 must-fix that names the item, for example "P2 checklist C3: no test checks ...".`;
+}
+
+// The PR body's Checklist: section: its lines (with their continuations), or null when there is none.
+function prSection(body) {
+  const out = [];
+  let block = null, started = false, entry = null;
+  for (const line of lines(body)) {
+    if (!started) {
+      if (block) { if (blockEnd(block, line)) block = null; continue; }
+      const opened = blockStart(line);
+      if (opened) { if (!opened.closed) block = opened; continue; }
+      started = START.test(line.trim().replace(/^#{1,6}(?:\s+|$)/, '').replace(/[*_]/g, '').trim());
+      continue;
+    }
+    if (!line.trim()) continue;
+    if (blockStart(line) || HEADING.test(line)) break;
+    const indent = indentOf(line);
+    if (entry && indent >= entry.indent + 2) { entry.text += ` ${line.trim()}`; continue; }
+    if (!PR_LIST.test(line) && !ID_LINE.test(line)) break;
+    entry = { text: line.trim(), indent };
+    out.push(entry);
+  }
+  return started ? out : null;
+}
+
+const findWords = (hay, needle) => {
+  for (let at = 0; at + needle.length <= hay.length; at++) if (needle.every((word, i) => hay[at + i] === word)) return at;
+  return -1;
+};
+
+// The items that one section line names, and the rest of the line after the name.
+function matchLine(text, forms) {
+  let line = text, number = null, open = false;
+  const marker = /^(?:[-*+]|(\d{1,9})[.):])(?:[ \t]+|$)/.exec(line);
+  if (marker) { number = marker[1] ? Number(marker[1]) : null; line = line.slice(marker[0].length); }
+  const box = /^\[([ xX])\][ \t]*/.exec(line);
+  if (box) { open = box[1] === ' '; line = line.slice(box[0].length); }
+  const ids = [];
+  let rest = line, id;
+  while ((id = ID.exec(rest))) { ids.push(Number(id[1])); rest = rest.slice(id[0].length).replace(ID_SEP, ''); }
+  const named = [...new Set(ids)].filter(n => n >= 1 && n <= forms.length).map(n => n - 1);
+  if (named.length) return { indexes: named, rest: rest.replace(/^\s*[:.)\-–—]?\s*/, ''), open };
+  const found = words(line), lower = found.map(match => match[0].toLowerCase());
+  let best = null;
+  forms.forEach((form, i) => {
+    if (!form.words.length) return;
+    const at = findWords(lower, form.words);
+    if (at >= 0 && (!best || form.text.length > best.size)) best = { i, size: form.text.length, end: at + form.words.length };
+  });
+  if (!best) {
+    const hits = [];
+    forms.forEach((form, i) => {
+      if (form.words.length <= PREFIX_WORDS) return;
+      const at = findWords(lower, form.words.slice(0, PREFIX_WORDS));
+      if (at >= 0) hits.push({ i, end: at + PREFIX_WORDS });
+    });
+    if (hits.length === 1) best = hits[0];
+  }
+  if (best) {
+    const last = found[best.end - 1];
+    return { indexes: [best.i], rest: line.slice(last.index + last[0].length).replace(/^[\s*_:.,;)\]"'”’\-–—]+/, ''), open };
+  }
+  if (number !== null && number >= 1 && number <= forms.length) return { indexes: [number - 1], rest: line, open };
+  return null;
+}
+
+function lineState(rest, open, issueForm) {
+  const plain = rest.replace(/^[\s*_]+/, '');
+  const excluded = /^excluded(?![\p{L}\p{N}])/iu.exec(plain);
+  if (excluded) {
+    const after = plain.slice(excluded[0].length), start = after.search(/["“]/);
+    const end = Math.max(after.lastIndexOf('"'), after.lastIndexOf('”'));
+    const quote = start >= 0 && end > start ? after.slice(start + 1, end).trim() : '';
+    const form = quoteForm(quote);
+    return { state: words(form).length >= MIN_QUOTE_WORDS && issueForm.includes(form) ? 'excluded' : 'unsupported', quote };
+  }
+  if (open || !HAS_WORD.test(plain) || NO_EVIDENCE.test(plain)) return { state: 'missing', quote: null };
+  return { state: 'covered', quote: null };
+}
+
+function redText(row) {
+  if (row.state === 'missing') return `Checklist item ${row.id} has no evidence line in the PR body's "Checklist:" section: "${row.text}". Add "${row.id}: EVIDENCE" (the test, check or file that shows that it is done) or "${row.id}: excluded: "QUOTE"" with an exact quote from the issue text.`;
+  const quote = row.quote ? `"${cut(row.quote, MAX_QUOTE)}"` : '(no quote)';
+  return `Checklist item ${row.id} is excluded without an exact quote of at least 3 words from the issue text: ${quote}. Quote the issue text exactly, or give the evidence for "${row.text}".`;
+}
+
+export function checkChecklist(prBody, items, issueText) {
+  const list = listOf(items);
+  const rows = list.map((item, i) => ({ id: `C${i + 1}`, text: str(item?.text), state: 'missing', line: null, quote: null }));
+  const counts = { total: rows.length, covered: 0, excluded: 0, missing: 0, unsupported: 0 };
+  if (!rows.length) return { state: 'none', items: rows, counts, reds: [] };
+  const forms = rows.map(row => { const form = lowerWords(row.text); return { words: form, text: form.join(' ') }; });
+  const issueForm = quoteForm(str(issueText));
+  for (const entry of prSection(str(prBody)) ?? []) {
+    const hit = matchLine(entry.text, forms);
+    if (!hit) continue;
+    const { state, quote } = lineState(hit.rest, hit.open, issueForm);
+    for (const i of hit.indexes) {
+      const row = rows[i];
+      if (row.line === null || RANK[state] > RANK[row.state]) Object.assign(row, { state, line: entry.text, quote });
+    }
+  }
+  for (const row of rows) counts[row.state]++;
+  const reds = rows.filter(row => row.state === 'missing' || row.state === 'unsupported').map(redText);
+  return { state: reds.length ? 'red' : 'pass', items: rows, counts, reds };
+}
+
+export function checklistNote(check) {
+  if (!check || typeof check !== 'object' || check.state === 'none' || !check.counts) return [];
+  const { covered, total, excluded } = check.counts;
+  return [`- Checklist: ${covered} of ${total} covered (${excluded} excluded)`];
+}
