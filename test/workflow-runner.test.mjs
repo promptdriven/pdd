@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { execFile as callbackExec, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
-import { captureSource, proseSha256 } from '../src/runtime-preflight.mjs';
+import { captureSource, proseSha256, checkInput } from '../src/runtime-preflight.mjs';
 import { renderJson } from '../src/runtime-output.mjs';
 import { startRun, stepDone, approveRun, changeRun, cancelRun, runStatus, openRun, askPerson } from '../src/workflow-runner.mjs';
 
@@ -612,9 +612,9 @@ test('status --all lists every run on this machine across repositories, person-w
   const shown = await runStatus({ all: true, cancelled: true, cwd: outside }, a.ports);
   assert.match(shown.message.split('\n').filter(line => line.startsWith('example/'))[1], /^example\/project#17 · bug · story · cancelled · /);
   const json = JSON.parse((await runStatus({ all: true, json: true, cancelled: true, cwd: outside }, a.ports)).message);
-  assert.deepEqual(json.runs.map(run => [run.workflow, run.group, run.words]), [['small-change', 'waiting', 'waiting for you: approve the plan'], ['bug', 'cancelled', 'cancelled']]);
-  assert.equal(json.runs[0].ref, 'example/project#17'); assert.equal(typeof json.runs[0].updatedAt, 'number'); assert.ok(json.runs[0].runDir);
-  assert.equal(json.runs[0].viewCommand, 'pdd workflow view example/project#17');
+  assert.equal(json.version, 1);
+  assert.deepEqual(json.runs.map(run => [run.workflow, run.waitsFor]), [['small-change', 'gate'], ['bug', null]]);
+  assert.equal(json.runs[0].id, 'example/project#17'); assert.equal(typeof json.runs[0].updatedAt, 'number'); assert.equal(json.runs[0].repoFolder, a.record().root);
   // Inside a repository, plain status stays that repository's runs.
   assert.doesNotMatch((await runStatus({ cwd: a.source }, a.ports)).message, /· bug ·/);
 });
@@ -1619,7 +1619,8 @@ test('CHATFAIL1: closed-channel startup and open failures stay waiting on the sa
   assert.equal(before.baseBranch, base.name); assert.equal(before.baseSha, base.sha);
   for (const input of [{ ref: '17' }, {}, { all: true }]) {
     const out = await runStatus({ ...input, json: true, cwd: f.source }, f.ports);
-    const row = JSON.parse(out.message).runs[0];
+    const doc = JSON.parse(out.message), row = doc.runs[0];
+    if (input.all) { assert.equal(doc.version, 1); assert.equal(row.waitsFor, 'startup_failed'); continue; }
     assert.equal(row.group, 'waiting'); assert.match(row.words, /server_unavailable/);
     assert.doesNotMatch(row.words, /agent working/); assert.match(row.words, /workflow open 17/);
   }
@@ -2984,4 +2985,152 @@ test('2760: feature and bug Story gates offer the automatic simulation command a
     assert.match(gate.message, /whole project/i);
     assert.equal(f.prs.length, 0, 'advice must not publish or approve');
   }
+});
+
+// #2571: expected waits are a separate requirement-derived native vector inventory.
+const machineSchemaBytes = readFileSync(join(packageRoot, 'docs/workflow-status.v1.schema.json'), 'utf8');
+const machineSchema = JSON.parse(machineSchemaBytes);
+const machineVectors = JSON.parse(readFileSync(join(packageRoot, 'test/workflow-status-json/cases.json'), 'utf8')).cases;
+function assertMachineSchema(value) {
+  const checked = checkInput(value, machineSchema, 0);
+  assert.deepEqual(checked, {refusals: [], warnings: []}, JSON.stringify(checked));
+}
+async function machineStatusOf(f, extra = {}) {
+  const out = await runStatus({all: true, json: true, cwd: f.source, ...extra}, f.ports);
+  assert.equal(out.exitCode, 0, out.message);
+  const doc = JSON.parse(out.message); assertMachineSchema(doc);
+  assert.equal(doc.version, 1); return doc;
+}
+
+test('2571: version 1 schema is frozen and rejects incompatible field and version changes', async () => {
+  const {createHash} = await import('node:crypto');
+  // Keep this version's schema immutable; incompatible contracts get a new schema/version.
+  assert.equal(createHash('sha256').update(machineSchemaBytes).digest('hex'), '37f2333dae8e061b9650640bbf0adf981a3138b25a8ae833508cff5327ca527c');
+  for (const invalid of [{runs: []}, {version: 2, runs: []}, {version: 1, runs: [], secret: 'extra'}, {version: 1, runs: [{}]}]) {
+    assert.ok(checkInput(invalid, machineSchema, 0).refusals.length, JSON.stringify(invalid));
+  }
+});
+
+test('2571: no indexed runs is a versioned empty list', async t => {
+  const f = await fixture(t);
+  assert.deepEqual(await machineStatusOf(f), {version: 1, runs: []});
+});
+
+for (const vector of machineVectors) test(`2571 vectors: ${vector.setup}`, async t => {
+  const f = await fixture(t); await f.run();
+  let run = f.record(), pane = f.herdr.paneOf(run.chats[0]);
+  const question = 'Which option?\nExplain the choice.';
+  if (['gate', 'question', 'gate-blocked'].includes(vector.setup)) {
+    await stepDone({step: 'scope', summary: 'plan', cwd: run.root}, f.agentPorts()); f.herdr.idle();
+    if (vector.setup === 'gate-blocked') pane.agent.agent_status = 'blocked';
+    if (vector.setup === 'question') { f.tick(); const asked = await askPerson({text: question, cwd: run.root}, f.agentPorts()); assert.equal(asked.exitCode, 0, asked.message); }
+  } else if (vector.setup === 'blocked') pane.agent.agent_status = 'blocked';
+  else if (['usage', 'usage-exited', 'login'].includes(vector.setup)) {
+    pane.agent.agent_status = 'idle';
+    pane.screen = vector.setup.startsWith('usage') ? "> Start the plan.\n  ⎿  You've hit your usage limit." : '> Start the plan.\n  ⎿  Please sign in again.';
+    if (vector.setup === 'usage-exited') { pane.agent = null; f.tick(60000); }
+  } else if (vector.setup === 'exited') { pane.agent = null; f.tick(60000); }
+  else if (vector.setup === 'closed') { f.herdr.workspaces = []; f.herdr.panes = []; f.herdr.tabs = []; }
+  else if (vector.setup === 'unavailable') {
+    const original = f.ports.herdr;
+    f.ports.herdr = async args => { if (args[0] === 'agent') throw Object.assign(Error('unavailable'), {code: 'server_unavailable'}); return original(args); };
+  } else if (vector.setup === 'startup') {
+    run.chatFailure = {area: run.areas[run.area].name, phase: 'start', code: 'herdr_failed', message: 'Could not start', at: f.clock};
+    run.state = 'waiting'; pane.agent = null;
+    writeFileSync(join(run.runDir, 'status.json'), JSON.stringify(run));
+  } else if (vector.setup === 'unconfirmed' || vector.setup === 'legacy-stopped') {
+    pane.agent = null;
+    if (vector.setup === 'unconfirmed') run.chats[0].startUnconfirmed = true;
+    else { run.chats[0].state = 'ended'; delete run.chats[0].evidence; f.tick(60000); }
+    writeFileSync(join(run.runDir, 'status.json'), JSON.stringify(run));
+  } else if (vector.setup === 'missing-chat') {
+    run.chats = []; writeFileSync(join(run.runDir, 'status.json'), JSON.stringify(run));
+  } else if (['completed', 'cancelled'].includes(vector.setup)) {
+    run.state = vector.setup;
+    // Ended state wins over stale gate, question and failure facts.
+    run.gate = {id: 'stale-gate', area: 'plan', kind: 'approve', at: f.clock};
+    run.question = {text: question, at: f.clock};
+    run.chatFailure = {area: 'plan', phase: 'start', code: 'herdr_failed', message: 'old', at: f.clock};
+    writeFileSync(join(run.runDir, 'status.json'), JSON.stringify(run));
+  }
+  const doc = await machineStatusOf(f, {cancelled: true}), row = doc.runs[0];
+  assert.equal(doc.runs.length, 1);
+  assert.deepEqual({waitsFor: row.waitsFor, stopReason: row.stopReason}, vector.expect);
+  assert.equal(row.gateId, vector.setup === 'gate' ? f.record().gate.id : null);
+  assert.equal(row.question, vector.setup === 'question' ? question : null);
+  assert.equal(row.id, 'example/project#17'); assert.equal(row.repoFolder, run.root);
+  assert.equal(row.issueTitle, 'Use value two'); assert.equal(row.workflow, 'small-change'); assert.equal(row.agent, 'claude');
+  assert.equal(row.area, 'plan'); assert.equal(row.step, ['gate', 'question', 'gate-blocked'].includes(vector.setup) ? null : 'scope');
+  assert.deepEqual(row.prs, []); assert.equal(row.stories, null);
+  assert.deepEqual(row.chat, vector.setup === 'missing-chat' ? null : {session: 'pdd', tab: run.chats[0].tabId, pane: run.chats[0].paneId});
+  assert.equal(row.updatedAt, f.record().updatedAt);
+  if (vector.setup === 'cancelled') assert.deepEqual((await machineStatusOf(f)).runs, []);
+});
+
+test('2571: PR draft/CI facts, unavailable values and private strings stay within the machine contract', async t => {
+  const f = await fixture(t); await f.run(); const run = f.record();
+  const privateUrl = 'https://try.example/s/private-2571-token/';
+  run.issue.title += ` ${privateUrl}`;
+  run.question = {text: `Choose using ${privateUrl}`, at: f.clock};
+  run.pr = [
+    {number: 23, url: 'https://github.com/example/project/pull/23', draft: true, ci: 'passing'},
+    {number: 24, url: 'https://github.com/example/project/pull/24', draft: false, ci: 'pending'},
+    {number: 25, url: 'https://github.com/example/project/pull/25', ci: 'unrecognized'}];
+  run.links = [privateUrl]; run.done.check = {summary: `Try: ${privateUrl}\nPrompt tests (invented): ✓ 1 of 1 criteria`, at: f.clock};
+  run.chats[0].privateTry = privateUrl;
+  writeFileSync(join(run.runDir, 'status.json'), JSON.stringify(run));
+  const doc = await machineStatusOf(f), row = doc.runs[0], serialized = JSON.stringify(doc);
+  assert.deepEqual(row.prs, [
+    {number: 23, url: run.pr[0].url, draft: true, ci: 'passing'},
+    {number: 24, url: run.pr[1].url, draft: false, ci: 'pending'},
+    {number: 25, url: run.pr[2].url, draft: null, ci: 'unknown'}]);
+  assert.equal(row.stories, null, 'an agent-written pass never establishes a Story count');
+  assert.equal(row.waitsFor, 'question');
+  assert.ok(!serialized.includes(privateUrl) && !serialized.includes('private-2571-token') && !serialized.includes('/s/'));
+  assert.equal(row.issueTitle, 'Use value two (Try link removed)');
+  assert.equal(row.question, 'Choose using (Try link removed)');
+  assert.equal(Object.hasOwn(row, 'done'), false); assert.equal(Object.hasOwn(row, 'links'), false);
+  assert.equal(Object.hasOwn(row, 'chats'), false);
+  // Test schema enforcement with actual output as the valid starting point.
+  for (const mutate of [r => {delete r.agent;}, r => {r.step = 7;}, r => {r.waitsFor = 'new-wait';}, r => {r.prs[0].secret = privateUrl;}]) {
+    const invalid = structuredClone(doc); mutate(invalid.runs[0]);
+    assert.ok(checkInput(invalid, machineSchema, 0).refusals.length);
+  }
+});
+
+test('2571: machine Story counts use current pdd receipts and become unknown after source changes', async t => {
+  const {f, run, done} = await featureWithOwnResults(t, {results: false});
+  const tests = ['tests/value.json'], sha = captureSource(run.root, {tests, appMap: null}).sha256;
+  saveBatch(f.ports.env.PDD_STATE_DIR, '20261027-180000-2571',
+    {root: run.root, created_at: '2026-10-27T18:00:00.000Z', intent: 'check', source_sha256: sha,
+      rows: [{test: tests[0], story: 'user_stories/value.md', state: 'passed', request_ids: []}]},
+    {summary_line: 'Prompt tests: ✓ 1 of 1 criteria', rows: [{summary_line: 'Prompt tests (value): ✓ 1 of 1 criteria'}]});
+  await done('check', {summary: 'check finished'});
+  assert.deepEqual((await machineStatusOf(f)).runs[0].stories, {passed: 1, total: 1});
+  writeFileSync(join(run.root, tests[0]), '{}\n');
+  assert.equal((await machineStatusOf(f)).runs[0].stories, null);
+});
+
+test('2571: all-run PR refresh retains GitHub draft transitions without inventing a false default', async t => {
+  const f = await fixture(t); await f.run(); const run = f.record();
+  run.state = 'waiting'; run.pr = [{stage: 'plan', number: 23, url: 'https://github.com/example/project/pull/23'}];
+  writeFileSync(join(run.runDir, 'status.json'), JSON.stringify(run));
+  for (const draft of [true, false]) {
+    f.ports.readPrStatus = async () => ({state: 'open', ci: 'passing', draft});
+    const row = (await machineStatusOf(f)).runs[0];
+    assert.equal(row.prs[0].draft, draft); assert.equal(row.prs[0].ci, 'passing');
+    assert.equal(f.record().pr[0].draft, draft);
+  }
+});
+
+test('2571: real CLI process emits the schema with no live service for a saved ended run', async t => {
+  const f = await fixture(t); await f.run(); const run = f.record();
+  run.state = 'completed'; writeFileSync(join(run.runDir, 'status.json'), JSON.stringify(run));
+  const state = join(f.ports.env.HOME, '.local', 'state', 'pdd'); mkdirSync(state, {recursive: true});
+  writeFileSync(join(state, 'runs.json'), readFileSync(join(f.state, 'runs.json')));
+  const out = await exec(process.execPath, [join(packageRoot, 'bin/pdd.mjs'), 'workflow', 'status', '--all', '--json'],
+    {cwd: f.source, env: {...process.env, ...f.ports.env}, timeout: 10000, encoding: 'utf8'});
+  const doc = JSON.parse(out.stdout); assertMachineSchema(doc);
+  assert.equal(doc.version, 1); assert.equal(doc.runs[0].id, 'example/project#17');
+  assert.equal(doc.runs[0].waitsFor, null);
 });

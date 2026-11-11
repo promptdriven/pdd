@@ -1,0 +1,124 @@
+{
+  "purpose": "Requirement-derived native replay cases for workflow-status-json. Public runStatus uses scratch Git/HOME, saved run records and injected Herdr replies; no live agents. Expected waits and reasons are from issue #2571, not implementation output. Native all-run discovery and active chat inspection are not bound by the existing Runtime interface.",
+  "cases": [
+    {
+      "setup": "working",
+      "expect": {
+        "waitsFor": null,
+        "stopReason": null
+      }
+    },
+    {
+      "setup": "gate",
+      "expect": {
+        "waitsFor": "gate",
+        "stopReason": null
+      }
+    },
+    {
+      "setup": "question",
+      "expect": {
+        "waitsFor": "question",
+        "stopReason": null
+      }
+    },
+    {
+      "setup": "gate-blocked",
+      "expect": {
+        "waitsFor": "question",
+        "stopReason": null
+      }
+    },
+    {
+      "setup": "blocked",
+      "expect": {
+        "waitsFor": "question",
+        "stopReason": null
+      }
+    },
+    {
+      "setup": "usage",
+      "expect": {
+        "waitsFor": "chat_stopped",
+        "stopReason": "usage_limit"
+      }
+    },
+    {
+      "setup": "login",
+      "expect": {
+        "waitsFor": "chat_stopped",
+        "stopReason": "unknown"
+      }
+    },
+    {
+      "setup": "usage-exited",
+      "expect": {
+        "waitsFor": "chat_stopped",
+        "stopReason": "usage_limit"
+      }
+    },
+    {
+      "setup": "exited",
+      "expect": {
+        "waitsFor": "chat_stopped",
+        "stopReason": "exited"
+      }
+    },
+    {
+      "setup": "closed",
+      "expect": {
+        "waitsFor": "chat_stopped",
+        "stopReason": "unknown"
+      }
+    },
+    {
+      "setup": "startup",
+      "expect": {
+        "waitsFor": "startup_failed",
+        "stopReason": null
+      }
+    },
+    {
+      "setup": "missing-chat",
+      "expect": {
+        "waitsFor": "startup_failed",
+        "stopReason": null
+      }
+    },
+    {
+      "setup": "unavailable",
+      "expect": {
+        "waitsFor": null,
+        "stopReason": null
+      }
+    },
+    {
+      "setup": "completed",
+      "expect": {
+        "waitsFor": null,
+        "stopReason": null
+      }
+    },
+    {
+      "setup": "cancelled",
+      "expect": {
+        "waitsFor": null,
+        "stopReason": null
+      }
+    },
+    {
+      "setup": "unconfirmed",
+      "expect": {
+        "waitsFor": "startup_failed",
+        "stopReason": null
+      }
+    },
+    {
+      "setup": "legacy-stopped",
+      "expect": {
+        "waitsFor": "chat_stopped",
+        "stopReason": "unknown"
+      }
+    }
+  ]
+}

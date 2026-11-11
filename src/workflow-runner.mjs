@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 735cce86b6758d8f4981921304db1245e650784b36a2297af5f7b80d5e9670be).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 849ba0eea204cc8fddb9e684cddfa0c3a664ed47607f4bb26eaf68f4dc601c00).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -4573,7 +4573,10 @@ async function chatState(run, p, facts = {}) {
   if (failure) return 'unconfirmed';
   if (live.code === 'server_unavailable') return 'unavailable';
   // A saved end stays true while Herdr cannot tell; otherwise an unclear answer keeps the words status had.
-  if (observed.state === 'ended') return 'stopped';
+  if (observed.state === 'ended') {
+    if (facts.machineJson) facts.health = await chatHealth({run, chat: next, live}, p);
+    return 'stopped';
+  }
   if (!['agent_not_found', 'server_not_running'].includes(live.code)) return null;
   const anchor = launchAnchor(chat);
   return observed.state === 'starting' && (anchor === null || p.now() >= anchor + START_GRACE_MS) ? 'starting' : null;
@@ -4694,6 +4697,35 @@ function summary(run, timeZone, chat = null, { drafts = [], nothing = false, hea
     line: [ref, run.workflow, area?.name ?? '?', words, ...(stories ? [storyText(stories)] : []), ...(prs.length ? [`PR ${prs.map(pr => `#${pr.number}`).join(' ')}`] : []), when].join(' · ') };
 }
 
+// Public version 1 machine contract; do not spread saved records into this projection.
+function machineStatus(run, chatState, facts) {
+  const area = run.areas[run.area], chat = currentChat(run), question = openQuestion(run);
+  const replacement = run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase);
+  const startup = activeChatFailure(run) || replacement || chat?.startUnconfirmed || ['unconfirmed','starting'].includes(chatState)
+    || !chat && !run.gate && !prOf(run, area?.name);
+  const health = facts.health;
+  const stopped = ['stopped','closed','cannot-work'].includes(chatState);
+  const waitsFor = ended(run) ? null : startup ? 'startup_failed'
+    : question || chatState === 'blocked' ? 'question'
+    : run.gate ? 'gate' : stopped ? 'chat_stopped' : null;
+  const stories = ownStoryCount(run);
+  return {
+    id: `${run.repo}#${run.number}`, repoFolder: run.root, issueTitle: run.issue?.title ?? '',
+    workflow: run.workflow, agent: run.agent, area: area?.name ?? null,
+    step: area?.steps.find(step => !run.done?.[step]) ?? null,
+    waitsFor, gateId: waitsFor === 'gate' ? run.gate.id ?? null : null,
+    question: waitsFor === 'question' ? question?.text ?? null : null,
+    stopReason: waitsFor !== 'chat_stopped' ? null : health?.kind === 'usage-limit' ? 'usage_limit'
+      : chatState === 'stopped' && chat?.evidence?.kind === 'pane-exit' ? 'exited' : 'unknown',
+    prs: (run.pr ?? []).map(pr => ({number: pr.number ?? null, url: pr.url ?? null,
+      draft: typeof pr.draft === 'boolean' ? pr.draft : null,
+      ci: ['passing','failing','pending','none'].includes(pr.ci) ? pr.ci : 'unknown'})),
+    stories: stories && !stories.none && !stories.unknown?.length ? {passed: stories.pass, total: stories.total} : null,
+    chat: chat ? {session: PDD_HERDR_SESSION, tab: chat.tabId ?? null, pane: chat.paneId ?? null} : null,
+    updatedAt: Number.isFinite(run.updatedAt) ? run.updatedAt : null
+  };
+}
+
 function ownershipLines(owner) {
   return owner?[`Workflow progress ownership: ${owner.path}; PID ${owner.pid??'unknown'}, host ${owner.hostname??'unknown'}, token ${owner.token??'unknown'}.${owner.warning?` ${owner.warning}.`:''} If no pdd command is running, inspect and remove this ownership folder, then retry.`]:[];
 }
@@ -4705,21 +4737,24 @@ function savedStepResults(run) {
     pddResults: record.pddResults ?? [] }));
 }
 
-async function listStatus(runs, { json, cancelled, scope, snapshotOnly=false }, p) {
+async function listStatus(runs, { json, cancelled, scope, snapshotOnly=false, machineJson=false }, p) {
   const reading = runs.filter(run => run.state === 'waiting' && run.pr?.length).reduce((sum, run) => sum + run.pr.length, 0);
   if (reading) p.say(`Reading ${reading} PR${reading === 1 ? '' : 's'} from GitHub…`);
   for (const run of runs) if (!snapshotOnly && !readRunOwnership(run.runDir,p) && run.state === 'waiting' && run.pr?.length) { try { await refreshPr(run, p); } catch(error) { if(error?.code==='workflow_run_save_failed')throw error; /* A PR read failure keeps the saved state. */ } }
-  const all = [];
+  const all = [], machineRows = new Map();
   for (const run of runs) {
     const ordinaryOwnership=readRunOwnership(run.runDir,p);
-    const health = {}, chat = ordinaryOwnership||snapshotOnly?null:await chatState(run, p, health);
+    const health = {machineJson}, chat = ordinaryOwnership||snapshotOnly?null:await chatState(run, p, health);
     const item = summary(run, p.timeZone, chat, { ...(ended(run)||ordinaryOwnership||snapshotOnly ? {} : await gateFacts(run, p)), ...health, now: p.now(), suite: readSuiteProgress({cwd:run.root, since:run.updatedAt ?? 0, env:p.env}, p) });
+    if (machineJson) machineRows.set(run.runDir, machineStatus(run, chat, health));
     const snapshot = requestSnapshot(run, p);
     all.push({ ...item, chats: run.chats ?? [], steps: savedStepResults(run), ...snapshot, ordinaryOwnership, line: [item.line, ...cleanupLines(run), ...ownershipLines(ordinaryOwnership), ...requestLines(snapshot, { openOnly: true, ended: ended(run), currentArea: run.areas[run.area]?.name, p })].join('\n') });
   }
   const hidden = cancelled ? 0 : all.filter(item => item.group === 'cancelled').length;
   const shown = all.filter(item => cancelled || item.group !== 'cancelled')
     .sort((a, b) => GROUPS.indexOf(a.group) - GROUPS.indexOf(b.group) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+  if (machineJson) return done(JSON.stringify({version: 1, runs: shown.map(item => machineRows.get(item.runDir))},
+    (_key, value) => typeof value === 'string' ? redactTry(value) : value, 2));
   let herdr = null, inventory = [];
   try {
     herdr = {...await paneUsage({...p,onPaneUsage:rows=>{inventory=rows;}}), finishedOpen: 0};
@@ -4767,7 +4802,7 @@ async function showStoryCardCommand({ ref, cwd }, ports) {
 
 async function runStatusCommand({ ref, cwd, all = false, json = false, cancelled = false }, ports, snapshotOnly=false) {
   const p = deps(ports);
-  if (ref === undefined && (all || !(await gitContext(cwd, p)))) return listStatus(allRuns({ cancelled }, p), { json, cancelled, scope: 'on this machine', snapshotOnly }, p);
+  if (ref === undefined && (all || !(await gitContext(cwd, p)))) return listStatus(allRuns({ cancelled }, p), { json, cancelled, scope: 'on this machine', snapshotOnly, machineJson: all && json }, p);
   if (ref === undefined && !(await runForWorktree(cwd, p))) return listStatus(await listRuns({ cwd, cancelled }, p), { json, cancelled, scope: 'in this repository', snapshotOnly }, p);
   const found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);

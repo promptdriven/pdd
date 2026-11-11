@@ -532,3 +532,28 @@ test('PRBODY6: known refusals and uncertain gh diagnostics redact private paths 
     assert.match(result.message, /<local path>/);
   }
 });
+
+
+test('2571: PR status requests actual draft state and preserves true, false and unavailable', async () => {
+  const {readWorkflowPrStatus} = await import('../src/workflow-github.mjs');
+  for (const draft of [true, false, undefined]) {
+    const calls = [];
+    const out = await readWorkflowPrStatus({cwd: '/repo', url: 'https://github.com/example/project/pull/23'}, {
+      execFile: async (file, args) => { calls.push({file, args}); return {stdout: JSON.stringify({state: 'OPEN', statusCheckRollup: [], isDraft: draft})}; }
+    });
+    assert.equal(calls.length, 1); assert.equal(calls[0].file, 'gh');
+    assert.ok(calls[0].args.at(-1).split(',').includes('isDraft'));
+    assert.deepEqual(out, {state: 'open', ci: 'none', ...(draft === undefined ? {} : {draft})});
+  }
+});
+
+
+test('2571: unavailable CI is unknown and an actual empty check list means none', async () => {
+  const {readWorkflowPrStatus} = await import('../src/workflow-github.mjs');
+  for (const checks of [undefined, null, {}, [], [{conclusion: 'SUCCESS'}], [{conclusion: 'FAILURE'}], [{status: 'IN_PROGRESS'}]]) {
+    const out = await readWorkflowPrStatus({cwd: '/repo', url: 'https://github.com/example/project/pull/23'}, {
+      execFile: async () => ({stdout: JSON.stringify({state: 'OPEN', statusCheckRollup: checks})})
+    });
+    assert.equal(out.ci, !Array.isArray(checks) ? 'unknown' : !checks.length ? 'none' : checks[0].conclusion === 'SUCCESS' ? 'passing' : checks[0].conclusion === 'FAILURE' ? 'failing' : 'pending');
+  }
+});

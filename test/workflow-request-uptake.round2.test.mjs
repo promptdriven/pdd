@@ -45,7 +45,7 @@ for(const state of ['completed','cancelled'])test(`round2 ${state} pending custo
 for(const mode of ['read','malformed'])test(`round2 ${mode} journal keeps every visibility collection null`,async t=>{
  const f=await uptakeFixture(t);f.save([f.entry()]);if(mode==='malformed')fs.writeFileSync(f.path,'{broken');const bytes=f.bytes();
  const ports=mode==='read'?{...f.ports,deliveryFiles:{...fs,readFileSync:(path,...args)=>{if(path===f.path)throw Error('read denied');return fs.readFileSync(path,...args);}}}:f.ports;
- for(const options of [{},{ref:undefined},{ref:undefined,all:true}]){const result=await f.status({...options,json:true},ports);assert.equal(result.exitCode,0);const row=JSON.parse(result.message).runs[0];for(const key of ['requests','inFlightRequests','pendingRequests','uncertainRequests'])assert.equal(row[key],null,key);assert.match(row.requestWarning,/unavailable/i);}
+ for(const options of [{},{ref:undefined},{ref:undefined,all:true}]){const result=await f.status({...options,json:true},ports);assert.equal(result.exitCode,0);const doc=JSON.parse(result.message),row=doc.runs[0];if(options.all){assert.equal(doc.version,1);assert.equal(Object.hasOwn(row,'requests'),false);}else{for(const key of ['requests','inFlightRequests','pendingRequests','uncertainRequests'])assert.equal(row[key],null,key);assert.match(row.requestWarning,/unavailable/i);}}
  const result=await f.done('reproduce',ports);assert.equal(result.exitCode,0);assert.ok(f.record().done.reproduce);assert.match(result.message,/warning:.*unavailable/i);assert.equal(f.bytes(),bytes);
 });
 test('round2 done derives a shell safe conditional ACK hint without automatic uptake',async t=>{

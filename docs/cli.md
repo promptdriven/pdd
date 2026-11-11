@@ -580,7 +580,7 @@ senders at their own source; PDD does not change those programs.
 | `pdd workflow prove ISSUE --test COMMAND --expect TEXT [--timeout MIN]` | Fetch the selected base branch and run the supplied command on its merge-base with committed changed test files overlaid, then on committed head, in disposable snapshots. Both quoted text options are required; each phase has a limit of 10 minutes by default (`--timeout MIN` sets 1 to 120 minutes), 2-second termination grace and 1 MiB output cap. Save `old-code-proof.json` in the run folder. A successful comparison exits 0; failed or unavailable evidence exits 1 and never blocks publication. |
 | `pdd workflow run NAME ISSUE [--agent codex\|claude\|gemini\|agy\|ENTRY] [--base BRANCH] [--draft] [--model MODEL] [--herdr-agent-name NAME] [--codex-threads N]` | Make a branch and a worktree for the issue, open the first chat in Herdr and return at once. `--agent ENTRY` uses an entry name from `~/.config/pdd/agents.json` (quote spaces); see [Many accounts](USAGE.md#many-accounts). `--through prompt-pr\|code` saves where a normal run goes after PR 1: stop there (the default) or go on to the code PR. `--origin`, `--decision-id` and `--outcome` supply optional metrics metadata. `--base BRANCH` selects an existing branch on origin; omitted means the repository default. An explicit base must fetch successfully before startup. PRs target the saved base, with PR 2 stacked on an open PR 1. Startup saves this terminal's `CODEX_HOME` (Codex), `CLAUDE_CONFIG_DIR` (Claude Code) or `GEMINI_CLI_HOME` (Gemini) for later chats. A leading `~` in it means your home folder. If that folder does not exist, `workflow run` stops before it starts anything |
 | `pdd workflow list [--json]` | List the workflows that pdd finds, with their areas and gates: the PDD ones and [your own](workflows.md#make-your-own-workflow) |
-| `pdd workflow status [ISSUE] [--all] [--cancelled] [--json]` | Show the area, the step, what the run waits for, and the PRs with their CI state. For a run with many Stories, also `Stories: N of M Stories pass`, counted only from pdd's own `pdd test` results that `pdd workflow done` recorded (and `pdd workflow evidence` receipts); with none, `Stories: no pdd result (pdd:no-verdict)`. Without ISSUE, show all runs in this repo. In a run's worktree, show that run. With `--all`, or outside a Git repo, show every run on this machine: waiting for you first, then working, PR open, done. `--cancelled` also shows the hidden cancelled runs. `--json` gives the same list as data. It says "the chat stopped" only with evidence: Herdr sees no agent in the chat's tab, and the agent was seen running there or its own native session exists. Run `pdd workflow open ISSUE` to start it again. When the agent runs but every turn fails on its login or its usage limit, it says "the chat cannot work: the agent's login failed" or "the chat cannot work: usage limit until TIME", says how to start a new chat (`pdd workflow open ISSUE --new`), and lists the run as waiting for you. To find this, pdd reads only the chat screen and the end of the agent's own session file. It never types into the chat. While a launch is not confirmed, it says "the chat is starting, not confirmed". Failed or unconfirmed startup/open and unavailable Herdr status show waiting with recovery advice. At a gate it says that the agent writes the gate message until the chat has asked you |
+| `pdd workflow status [ISSUE] [--all] [--cancelled] [--json]` | Show the area, the step, what the run waits for, and the PRs with their CI state. For a run with many Stories, also `Stories: N of M Stories pass`, counted only from pdd's own `pdd test` results that `pdd workflow done` recorded (and `pdd workflow evidence` receipts); with none, `Stories: no pdd result (pdd:no-verdict)`. Without ISSUE, show all runs in this repo. In a run's worktree, show that run. With `--all`, or outside a Git repo, show every run on this machine: waiting for you first, then working, PR open, done. `--cancelled` also shows the hidden cancelled runs. `--json` gives the same list as data. Explicit `--all --json` uses the [versioned machine contract](#workflow-status-json). It says "the chat stopped" only with evidence: Herdr sees no agent in the chat's tab, and the agent was seen running there or its own native session exists. Run `pdd workflow open ISSUE` to start it again. When the agent runs but every turn fails on its login or its usage limit, it says "the chat cannot work: the agent's login failed" or "the chat cannot work: usage limit until TIME", says how to start a new chat (`pdd workflow open ISSUE --new`), and lists the run as waiting for you. To find this, pdd reads only the chat screen and the end of the agent's own session file. It never types into the chat. While a launch is not confirmed, it says "the chat is starting, not confirmed". Failed or unconfirmed startup/open and unavailable Herdr status show waiting with recovery advice. At a gate it says that the agent writes the gate message until the chat has asked you |
 | `pdd workflow evidence ISSUE --summary FILE` | Record saved check JSON after verifying its selected source hash. Keeps completed steps, gates, approvals, chats and open PRs unchanged; no tests or external calls |
 | `pdd workflow evidence-associate ISSUE --workspace PATH --stage current\|pr1\|before [--commit SHA] --test PATH...` | Register the producer workspace, evidence stage and selected tests for this run. Run it from the owned run worktree. Give one or more test paths after `--test`. `--stage before --commit SHA` registers the source of an earlier saved check, for example the failing check before a bug fix: the selection at that local commit must hash to the saved check's source. Registration runs no checks and changes no workflow progress. See the [association contract](../prompts/cli/workflow-runner.prompt.md#workspace-evidence-association) |
 | `pdd workflow view ISSUE` | Read-only review of the saved state, current gate, recorded approvals, pending decisions, PRs, check reports, Simulator links and current gate files. Never starts or resumes a chat, approves, or refreshes external state |
@@ -591,6 +591,56 @@ senders at their own source; PDD does not change those programs.
 | `pdd workflow changes ISSUE TEXT` | Send the text to the same chat. The chat revises. The gate stays open. Also use it to answer a question that the chat asked. At a gate, a plain approval such as "I approve" is not sent: pdd tells you to run `pdd workflow approve ISSUE` |
 | `pdd workflow tidy [--dry-run]` | Close safely finished chat tabs across runs on this machine. `--dry-run` lists the eligible count without changes. Keep the current chat of each live run, busy chats and chats whose pane identity cannot be verified. A finished chat without a native session requires a saved screen. Show retained counts by reason. |
 | `pdd workflow cancel ISSUE` | Close the run's chat tabs. Keep the worktree and the branch. A new `pdd workflow run` on the issue then starts fresh |
+
+### Workflow status JSON
+
+`pdd workflow status --all --json` is the machine interface for a phone or
+service that calls the CLI on the person's machine. It returns exactly
+`{"version":1,"runs":[...]}`. Check `version` before reading the runs.
+The [version 1 JSON Schema](workflow-status.v1.schema.json) fixes the field names
+and types. All fields below are present; unavailable facts are `null`, and empty
+collections are `[]`. The list uses the same discovery, cancelled filtering and
+order as text status: waiting, working, PR open, done, cancelled, newest first
+within each group. Add `--cancelled` to include cancelled runs. No runs returns
+`{"version":1,"runs":[]}`.
+
+| Field on each run | Type and meaning |
+|---|---|
+| `id` | String `owner/repo#N`, identifying the issue. |
+| `repoFolder` | String: absolute saved run worktree folder on this machine. |
+| `issueTitle` | String: issue title. |
+| `workflow` | String: workflow name. |
+| `agent` | String: agent kind, `codex`, `claude`, `gemini` or `agy`; custom account names use their underlying kind. |
+| `area` | String or null: current area name. |
+| `step` | String or null: first unfinished step of that area; null if none remains. |
+| `waitsFor` | `gate`, `question`, `chat_stopped`, `startup_failed`, or null when there is no wait in these categories. |
+| `gateId` | String or null: saved gate id when waiting for a gate; legacy gates without ids remain null. Otherwise null. |
+| `question` | String or null: full saved question when waiting for an answer. A native chat dialog whose text was not saved uses null. Otherwise null. |
+| `stopReason` | `usage_limit`, `exited` or `unknown` for a stopped or unworkable chat; null for other waits. Usage exhaustion and exit require positive evidence; login failure or a closed workspace without exit evidence uses unknown. |
+| `prs` | Array in saved PR order. Each object has exactly `number` (positive integer or null), `url` (string or null), `draft` (boolean or null when unrecorded), and `ci` (`passing`, `failing`, `pending`, `none` or `unknown`). `none` means no CI checks; unavailable or unrecognized CI is `unknown`. PR refresh records GitHub's actual draft flag, including false. |
+| `stories` | Object with integer `passed` and `total` counts, or null when there is no pdd-owned count or any Story is unknown. This represents "N of M pass"; agent-written claims never establish it. |
+| `chat` | Object with exactly `session` (`pdd`), `tab` (saved Herdr tab id or null) and `pane` (saved Herdr pane id or null); null if no current-area chat is saved. Historical chats are excluded. |
+| `updatedAt` | Integer epoch milliseconds of the last saved run change, or null if unavailable. It is not the time of this read. |
+
+Completed and cancelled runs have no wait, even with stale gate or question
+records. For active runs the precedence is startup/open failure or unconfirmed
+startup/replacement, current question (using the existing question/gate age
+rule), gate, then stopped/unworkable chat. An unavailable inspection alone does
+not prove a stop. A gate's presence remains visible while its chat writes the
+gate message. Null `waitsFor` does not assert that an agent is currently working.
+PR and Story facts use the existing status refresh and source-matching rules;
+if an ordinary run writer holds the record, status uses saved facts.
+
+Private Try links never appear, including inside titles, questions or paths;
+they are replaced with `(Try link removed)`. Internal summaries, journals,
+results, historical chats, links and Herdr inventory are excluded. Other status
+JSON forms retain their existing diagnostic output. Approval requirements stay
+the same; this output cannot approve a gate.
+
+Version 1's schema is immutable. Removing or renaming a field, adding a required
+field, changing a type or meaning, or expanding an enum incompatibly requires a
+new `version` and a new schema file. Tests validate command results against the
+schema and pin its contents for version 1.
 
 Finished chats close after a 15-minute grace period when they are idle and have
 a saved native session or a saved screen. Each new start and each Autopilot tick tries cleanup.

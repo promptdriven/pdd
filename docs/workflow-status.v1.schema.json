@@ -1,0 +1,265 @@
+{
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 1
+    },
+    "runs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "repoFolder": {
+            "type": "string"
+          },
+          "issueTitle": {
+            "type": "string"
+          },
+          "workflow": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string",
+            "enum": [
+              "codex",
+              "claude",
+              "gemini",
+              "agy"
+            ]
+          },
+          "area": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "step": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "waitsFor": {
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "gate",
+                  "question",
+                  "chat_stopped",
+                  "startup_failed"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "gateId": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "question": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stopReason": {
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "usage_limit",
+                  "exited",
+                  "unknown"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "prs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "number": {
+                  "oneOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "url": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "draft": {
+                  "oneOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "ci": {
+                  "type": "string",
+                  "enum": [
+                    "passing",
+                    "failing",
+                    "pending",
+                    "none",
+                    "unknown"
+                  ]
+                }
+              },
+              "required": [
+                "number",
+                "url",
+                "draft",
+                "ci"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "stories": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "passed": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "total": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "passed",
+                  "total"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "chat": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "session": {
+                    "type": "string",
+                    "const": "pdd"
+                  },
+                  "tab": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "pane": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "session",
+                  "tab",
+                  "pane"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "updatedAt": {
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "repoFolder",
+          "issueTitle",
+          "workflow",
+          "agent",
+          "area",
+          "step",
+          "waitsFor",
+          "gateId",
+          "question",
+          "stopReason",
+          "prs",
+          "stories",
+          "chat",
+          "updatedAt"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "version",
+    "runs"
+  ],
+  "additionalProperties": false
+}

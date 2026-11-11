@@ -16,7 +16,7 @@ for(const kind of ['dead','live','foreign','unknown','missing','malformed'])test
  const before=fs.readFileSync(join(run.runDir,'status.json'),'utf8'),entries=fs.readdirSync(path);
  const ports={...f.ports,...(kind==='unknown'?{processIdentity:()=>{throw Object.assign(Error('Denied'),{code:'EPERM'});}}:{})};
  for(const options of [{ref:'17'},{},{all:true},{ref:'17',json:true},{json:true},{all:true,json:true}]){
-  const out=await runStatus({...options,cwd:f.source},ports);assert.equal(out.exitCode,0,out.message);assert.match(out.message,/ordinary-owner/);
+  const out=await runStatus({...options,cwd:f.source},ports);assert.equal(out.exitCode,0,out.message);if(options.all&&options.json){const doc=JSON.parse(out.message);assert.equal(doc.version,1);assert.equal(doc.runs[0].id,'example/project#17');continue;}assert.match(out.message,/ordinary-owner/);
   if(options.json){const snapshot=JSON.parse(out.message).runs[0].ordinaryOwnership;assert.equal(snapshot.path,path);assert.equal(snapshot.token,kind==='missing'||kind==='malformed'?null:token);}
  }
  assert.equal(fs.readFileSync(join(run.runDir,'status.json'),'utf8'),before);assert.deepEqual(fs.readdirSync(path),entries);

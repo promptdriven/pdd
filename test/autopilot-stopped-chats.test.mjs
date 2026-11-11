@@ -68,7 +68,8 @@ async function statusViews(f) {
   for (const options of [{ref: '17'}, {}, {all: true}, {ref: '17', json: true}, {json: true}, {all: true, json: true}]) {
     const result = await runStatus({cwd: f.source, ...options}, f.ports);
     assert.equal(result.exitCode, 0, result.message);
-    views.push(options.json ? JSON.parse(result.message).runs[0].words : result.message);
+    if (options.all && options.json) { const doc = JSON.parse(result.message); assert.equal(doc.version, 1); assert.equal(doc.runs[0].id, 'example/project#17'); }
+    else views.push(options.json ? JSON.parse(result.message).runs[0].words : result.message);
   }
   return views;
 }

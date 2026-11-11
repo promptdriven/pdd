@@ -1457,11 +1457,11 @@ test('3157: cancel ends a parked or closing run, clears parking, releases claim 
   assert.match(detailOut.message, /State: cancelled/);
   assert.doesNotMatch(detailOut.message, /Parking:|parked/);
   const activeOut = await runStatus({all: true, json: true, cwd: f.source}, ports);
-  assert.equal(JSON.parse(activeOut.message).runs.find(r => r.number === 17), undefined);
+  assert.equal(JSON.parse(activeOut.message).runs.find(r => r.id === 'example/project#17'), undefined);
   const listOut = await runStatus({all: true, cancelled: true, json: true, cwd: f.source}, ports);
-  const row = JSON.parse(listOut.message).runs.find(r => r.number === 17);
-  assert.equal(row.group, 'cancelled');
-  assert.equal(row.words, 'cancelled');
+  const doc = JSON.parse(listOut.message), row = doc.runs.find(r => r.id === 'example/project#17');
+  assert.equal(doc.version, 1);
+  assert.ok(row); assert.equal(row.waitsFor, null);
 });
 
 test('3157: pdd autopilot release removes pdd:working and pdd:stuck, keeps run folder/branch/PRs, and refuses another machine live claim', async t => {

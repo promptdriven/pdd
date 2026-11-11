@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-github.prompt.md (sha256: cc5e47d00f72396a5e40f732e7782e48599a8310b13b5d65225bc33299196442).
+// Generated from prompts/cli/workflow-github.prompt.md (sha256: 39a357a3bf5287e9e06a2f470d1fe84bdb080f68f5f44ee192aa96053da0d3a6).
 import { execFile } from 'node:child_process';
 import { isAbsolute } from 'node:path';
 import { causeText } from './runtime-output.mjs';
@@ -293,15 +293,15 @@ export async function readWorkflowPrStatus(input, ports = {}) {
     const { cwd, url, view = false } = structuredClone(input ?? {});
     if (!text(url) || !/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/[1-9][0-9]*$/.test(url)) fail('workflow_github_pr_url_invalid');
     // With `view`, the same one read also gives the description, the head and the comments (a readable-top refresh).
-    const row = parseJson(await dependencies(ports).command(cwd, 'gh', ['pr', 'view', url, '--json', `state,mergedAt,statusCheckRollup,baseRefName,headRefOid${view ? ',body,comments' : ''}`]));
+    const row = parseJson(await dependencies(ports).command(cwd, 'gh', ['pr', 'view', url, '--json', `state,mergedAt,statusCheckRollup,baseRefName,headRefOid,isDraft${view ? ',body,comments' : ''}`]));
     const state = { OPEN: 'open', MERGED: 'merged', CLOSED: 'closed' }[row?.state];
     if (!state) fail('workflow_github_pr_state_invalid');
     const checks = Array.isArray(row.statusCheckRollup) ? row.statusCheckRollup : [];
     const outcome = check => String(check?.conclusion ?? check?.state ?? '').toUpperCase();
-    const ci = !checks.length ? 'none'
+    const ci = !Array.isArray(row.statusCheckRollup) ? 'unknown' : !checks.length ? 'none'
       : checks.some(check => ['FAILURE', 'CANCELLED', 'TIMED_OUT', 'ERROR', 'ACTION_REQUIRED', 'STARTUP_FAILURE'].includes(outcome(check))) ? 'failing'
       : checks.some(check => !['SUCCESS', 'NEUTRAL', 'SKIPPED'].includes(outcome(check))) ? 'pending' : 'passing';
-    return { state, ci, ...(text(row.baseRefName) ? { base: row.baseRefName } : {}),
+    return { state, ci, ...(typeof row.isDraft === 'boolean' ? {draft: row.isDraft} : {}), ...(text(row.baseRefName) ? { base: row.baseRefName } : {}),
       ...(text(row.headRefOid) ? { headSha: row.headRefOid } : {}),
       ...(view ? { view: { body: typeof row.body === 'string' ? row.body : null, head: text(row.headRefOid) ? row.headRefOid : null, comments: Array.isArray(row.comments) ? row.comments : null } } : {}) };
   } catch { return { state: 'unknown', ci: 'unknown' }; }
