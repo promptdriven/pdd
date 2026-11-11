@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: d15589dbde6f85078ba95afa8d9fd7078064eef41d2842e34dfad2ebb47bac1c).
+// Generated from prompts/cli/runtime-seam.prompt.md (sha256: c0992a6a707221d813d73cad123282d3b27bdb73b1db930ea4c703965040f611).
 import { realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';

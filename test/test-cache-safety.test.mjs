@@ -5,7 +5,7 @@ import * as disk from 'node:fs';
 import assert from 'node:assert/strict';
 import { cpSync, existsSync, mkdirSync, utimesSync, chmodSync, readFileSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runCheck } from '../src/runtime/runtime-client.mjs';
+import { runCheck } from '../src/runtime-seam.mjs';
 import { harbor, fakeRuntime, portsFor } from './runtime-fake.mjs';
 
 function portsFactory(env) {

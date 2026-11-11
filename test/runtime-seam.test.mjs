@@ -1008,3 +1008,55 @@ test('SEAM10 (R2-4): workflow base SHA is observed inside runBatch after discove
   );
   assert.equal(earlyReads, 0);
 });
+
+test('SEAM11 (M2-2): src/runtime has no hardcoded client version literal; seam supplies package.json version and direct callers get null', async t => {
+  const seam = await import('../src/runtime-seam.mjs');
+  const directClient = await import('../src/runtime/runtime-client.mjs');
+  const { harbor, fakeRuntime, portsFor } = await import('./runtime-fake.mjs');
+
+  for (const rel of walk('src/runtime')) {
+    const src = readFileSync(join(root, rel), 'utf8');
+    assert.ok(!src.includes('DEFAULT_CLIENT_VERSION'), `${rel} must not define DEFAULT_CLIENT_VERSION`);
+    if (rel !== 'src/runtime/try-mcp.mjs') {
+      assert.ok(!/['"`]0\.1\.\d+['"`]/.test(src), `${rel} must not contain a hardcoded 0.1.x version literal`);
+    }
+  }
+
+  const pkgVersion = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
+  const setup = harbor(t);
+  const fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
+
+  const seenSeam = [];
+  const seamPorts = portsFor(
+    { HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin },
+    {
+      cacheHash: bytes => {
+        try {
+          const parsed = JSON.parse(Buffer.from(bytes).toString('utf8'));
+          if (Object.hasOwn(parsed, 'pdd_version')) seenSeam.push(parsed.pdd_version);
+        } catch { /* non-fingerprint hash */ }
+        return seam.sha256(bytes);
+      },
+    },
+  ).ports;
+  const seamCode = await seam.runCheck({ cwd: setup.repo, words: ['place-order'], options: {}, cache: true }, seamPorts);
+  assert.equal(seamCode, 0, seamPorts.stderr.text);
+  assert.ok(seenSeam.length > 0 && seenSeam.every(v => v === pkgVersion), `expected seam pdd_version=${pkgVersion}, got ${JSON.stringify(seenSeam)}`);
+
+  const seenDirect = [];
+  const directPorts = portsFor(
+    { HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin },
+    {
+      cacheHash: bytes => {
+        try {
+          const parsed = JSON.parse(Buffer.from(bytes).toString('utf8'));
+          if (Object.hasOwn(parsed, 'pdd_version')) seenDirect.push(parsed.pdd_version);
+        } catch { /* non-fingerprint hash */ }
+        return seam.sha256(bytes);
+      },
+    },
+  ).ports;
+  const directCode = await directClient.runCheck({ cwd: setup.repo, words: ['place-order'], options: {}, cache: true }, directPorts);
+  assert.equal(directCode, 0, directPorts.stderr.text);
+  assert.ok(seenDirect.length > 0 && seenDirect.every(v => v === null), `expected direct pdd_version=null, got ${JSON.stringify(seenDirect)}`);
+});

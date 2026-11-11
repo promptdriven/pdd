@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 3ebe832639f105cfa69e41d78a5ddfdd318123e1fd1ef83cc8f4bb882dfd2e91).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 5e14421e5d760a38f51378130f992b768a8350d4c1b608f0bda8c22c47b3e181).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
@@ -50,7 +50,6 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const BATCH = /^\d{8}-\d{6}-[a-z0-9]{4}$/;
 // pdd's local rules match this engine build (checked Oct 27; spec OPEN 9: warn when the runtime runs another one).
 const ENGINE_SHA = 'eae2202a68d00ab762fcbbf1eba0d8607a132a15';
-const DEFAULT_CLIENT_VERSION = '0.1.28';
 function defaultLineReader(stdin) {
   const reader = createInterface({ input: stdin }), lines = [], waiting = [];
   let closed = false;
@@ -1614,7 +1613,7 @@ const authoredSha256 = capture => isObject(capture?.raw_file_hashes)
   ? sha256(Buffer.from(JSON.stringify(Object.entries(capture.raw_file_hashes).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)))) : null;
 function lintReceiptScope(context) {
   return { root: context.root, origin: context.origin, login: context.identity.login, user_id: context.identity.userId,
-    source_sha256: context.capture.sha256, authored_sha256: authoredSha256(context.capture), tests: [...new Set(sentTests(context.rows))].sort(), version: context.clientVersion ?? DEFAULT_CLIENT_VERSION,
+    source_sha256: context.capture.sha256, authored_sha256: authoredSha256(context.capture), tests: [...new Set(sentTests(context.rows))].sort(), version: context.clientVersion ?? null,
     selected_cap: context.lint.selected_cap ?? null };
 }
 const lintReceiptPath = context => join(context.store.folder('lint-receipts'), `${context.store.repoKey(context.root)}.json`);
@@ -2711,7 +2710,7 @@ async function withCheckRun(context, run) {
 // pdd test. Returns the exit code.
 export async function runCheck({ words = [], options = {}, cwd = process.cwd(), cache = false, client, workflow } = {}, givenPorts = {}) {
   const ports = withDefaults(givenPorts);
-  const context = { ports, clientVersion: client?.version ?? ports.clientVersion ?? DEFAULT_CLIENT_VERSION, workflow, singleAttempt: ports.env.PDD_CHECK_SINGLE_ATTEMPT === '1', cacheEnabled: cache || !!options['--lf'] || !!options['--cache-clear'], json: options['--json'] === true, details: options['--details'] === true, explicitTimeout: options['--timeout'] !== undefined, interrupted: false, warnings: [] };
+  const context = { ports, clientVersion: client?.version ?? ports.clientVersion ?? null, workflow, singleAttempt: ports.env.PDD_CHECK_SINGLE_ATTEMPT === '1', cacheEnabled: cache || !!options['--lf'] || !!options['--cache-clear'], json: options['--json'] === true, details: options['--details'] === true, explicitTimeout: options['--timeout'] !== undefined, interrupted: false, warnings: [] };
   let release = () => {};
   try {
     if(options['--journeys']!==undefined){
@@ -3178,7 +3177,7 @@ function storyFingerprint(cache, capture, story, options, origin) {
   const rawPaths = [...new Set([story, ...footprint.tests, ...footprint.files.filter(file => file.path.endsWith('.prompt.md')).map(file => file.path)])].sort();
   const raw = rawPaths.map(path => [path, capture.raw_file_hashes?.[path] ?? (path.endsWith('.prompt.md') ? capture.raw_prompt_hashes?.[path] : undefined)]);
   if (raw.some(([, hash]) => !hash)) return null;
-  return cache.context.ports.cacheHash(Buffer.from(JSON.stringify({ footprint, raw, origin, max_calls: options['--max-calls'] ?? null, pdd_version: cache.context.clientVersion ?? DEFAULT_CLIENT_VERSION })));
+  return cache.context.ports.cacheHash(Buffer.from(JSON.stringify({ footprint, raw, origin, max_calls: options['--max-calls'] ?? null, pdd_version: cache.context.clientVersion ?? null })));
 }
 // The captured footprint owns reachability; inspect its captured declarations without
 // inventing another dependency graph or reading a later version of a source file.

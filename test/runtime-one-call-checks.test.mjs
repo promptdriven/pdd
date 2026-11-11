@@ -4,7 +4,7 @@ import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { join } from 'node:path';
-import { runCheck } from '../src/runtime/runtime-client.mjs';
+import { runCheck } from '../src/runtime-seam.mjs';
 import { interfaceBlocks } from '../src/runtime/runtime-preflight.mjs';
 import { PLACE, TOKEN, fakeRuntime, filesUnder, harbor, portsFor, root } from './runtime-fake.mjs';
 
