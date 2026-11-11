@@ -382,14 +382,16 @@ any other pdd (for example an older global install).
   **the path from file ownership** (debate A, the exact text of A-VERDICT section 6.1):
   the brief has the owner table of the job worktree (`ownerTable`, below; up to 400
   owned files), and the rules say: a file is owned when pdd-bindings.json, a
-  `Generated from` header or a prompt's opening paragraph names it (not sure = owned);
+  `Generated from` header line or a prompt's opening sentence names it (`pdd owner
+  FILE` gives the same answer; not sure = owned);
   path a (owned code, the contract changes: the owning prompt first, in the issue's
   words, then Story, tests, code), b (owned code, the contract stays: prompt unchanged;
   quote the restored line or "no contract change"), c (a new code file with new
   behavior: its prompt first, with a binding or header; moved code keeps its owner), d
   (any other file: direct, never a new prompt; a value that a prompt states must agree
-  with it; docs take facts from the owning prompt), e (existing unowned code: direct,
-  with a regression test, and the file in the result's `adopt` list); never add a
+  with it; docs take facts from the owning prompt), e (existing unowned code, never a
+  file that the PR adds: direct, with a regression test, and the file in the result's
+  `adopt` list); never add a
   binding or header for a file of the base unless the issue asks to adopt PDD; tests
   only for a change of the public surface (a test that fails on base), else the done
   check; one `Path: <a|b|c|d|e> — <files> — <owner or unowned> — <prompt changed | quote
@@ -449,13 +451,16 @@ any other pdd (for example an older global install).
   the build rules; push to the same branch, no new PR, and update the `Runtime:` and
   `Evidence:` lines when they change.
 - **Review** (in `worktrees/N-review`, a detached checkout of the head): a fresh agent
-  that did not write the change. It gets the base owner table of the PR's changed files
-  and the R5 hints (below), and checks the issue fit; (2) Path and (3) Tests with the
-  exact text of A-VERDICT section 6.2 (the Path lines match the owner table, disputed
-  only by naming a missed binding, header or prompt line; a and c trace to the issue; b
-  keeps the contract; d agrees with any prompt that states a changed value;
-  must-fixes: a new prompt for a non-code file, a binding or header added for an
-  unowned file of the base, owned code that disagrees with its prompt; never a new
+  that did not write the change. It gets the path checks' table of the PR's changed
+  files, each in one of three states (owned on the base, with its owner; unowned on the
+  base; new in this PR, not on the base), and the R5 hints (below), and checks the
+  issue fit; (2) Path and (3) Tests with the exact text of A-VERDICT section 6.2 (the
+  Path lines match the owner table, disputed only by naming a missed binding, header or
+  prompt line; a and c trace to the issue; b keeps the contract; d agrees with any
+  prompt that states a changed value; a new code file with new behavior takes path c,
+  and its binding or header is required, never a must-fix; must-fixes: a new prompt
+  for a non-code file, owned code that disagrees with its prompt; the reviewer does not
+  report what the path checks (below) already check: R1, R3, R4, R6 and R7; never a new
   prompt for an unowned file; never commit order; a missing test is a must-fix only
   with the surface and the result named; no test that only copies a value from the
   diff); an honest Runtime line and no unrelated or unsafe change; and (6) **no choice
@@ -547,12 +552,19 @@ its claim (claim comment and `pdd:working`) and starts nothing. The next build p
 then has the question and those answers as data, or "no written answer" when there
 is none.
 
-**Owner table** (`ownerTable(fs, root, files)`, the one owner function; it can call
-`pdd owner PATH` when pdd ships it): bindings first (`pdd-bindings.json` modules: module
-to prompt), then a `Generated from PROMPT.prompt.md` header anywhere in the first 4 KiB
-of a file, then the first paragraph of each prompt that is not a heading or a comment,
-for each path in it that is a file of the tree (uncertain = owned). The first owner
-found wins. **Path e** results carry `adopt` (file paths): the tick files them as one
+**Owner table** (`ownerTable(fs, root, files)`, exported, the one owner function of the
+engine) reads a checkout with `findOwners` of the [file owner lookup](file-owner.prompt.md),
+the same reader as `pdd owner`; the engine has no second reader. Its `files` port is
+the checkout's Git files; its `read` port reads through `ctx.fs` and gives no content
+for a missing path or a path that is not a regular file (a submodule folder). Each
+file with an owner maps to `{prompt, how, owners, certain, note}`: `prompt` is the
+lookup's `owner` and `how` its `source` (`binding`, `header` or `prose`). A file with
+no owner whose answer is not certain (an unreadable `pdd-bindings.json`, or a file that
+cannot be read) is owned too, with `prompt` null and `how` `unknown`: the lookup's
+callers treat an uncertain answer as owned. In text an owner is `PROMPT (binding)`,
+`PROMPT (header)`, `PROMPT (prose, not certain: treat as owned)`, another uncertain
+answer `PROMPT (HOW, not certain: NOTE)`, and an unknown owner `an unknown prompt (not
+certain: NOTE)`. **Path e** results carry `adopt` (file paths): the tick files them as one
 deduped PDD report (`autopilot-core` / `adopt-pdd`), and it never blocks the job.
 
 ## Merge check
@@ -656,17 +668,41 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    Observe mode approves as auto mode does, with "in observe mode" in the words (above),
    so problems outside a strict repository are red there too. In a strict repository
    observe mode asks no person: it lists the problems in its "would merge" note.
-   **Path checks** (debate A section 6.3, no AI, once per head and PR body, saved as
-   `paths`): from clean checkouts of the base tip and the head, the owner tables before
-   and after, and the changed files (`--name-status --find-renames`). Red: R1 a file in
-   the files field of a path d or e line that the base owns (the files field is the text
-   after the letter up to the next dash separator ` — `, ` – ` or ` - `; a file named in
-   the owner, contract or test text, for example "owning prompt for docs/errors.md", is
-   not on that path: T09); R3 an added prompt that owns no added code file
-   of the PR (with an issue that asks to "adopt PDD", any changed file); R4 a file of the
-   base with no owner that the head gives a binding or header (unless the issue asks to
-   adopt PDD); R6 no `Path:` line. R5 is only a hint for the reviewer: prompts at the head
-   that mention a changed unowned file. Then a
+   **Path checks** (debate A section 6.3 and #3239; no AI, once per head and PR body,
+   saved as `paths`; the rules are the pure, exported `pathRules({changed, baseFiles,
+   before, after, body, adopting})`, which returns `{reds, owners, unowned}`). The changed files come from Git, never from the PR body: `git diff
+   --name-status --find-renames origin/BASE...HEAD` (from the merge base; a renamed file
+   is its new path, with its source). The owner tables before and after come from clean
+   checkouts of the base tip and the head. Each changed file has one state: **owned**
+   (the base table has the file, or the source of a renamed file), **unowned on the
+   base** (the file or its source is a file of the base tip with no owner) or **new in
+   this PR** (not a file of the base tip). The PR body gives only the path letter of
+   each file: from each `Path:` line only the files field, the text after the letter up
+   to the next dash separator ` — `, ` – ` or ` - ` (T09). The words of that field
+   (split at white space, commas, semicolons, quotes, backticks, brackets and `|`, each
+   without a leading `./` or a trailing `.` or `:`) name a file only when they are a
+   changed file or the source of a renamed one; every other word, for example a
+   prompt in parentheses or a file of the test text, is ignored. Red (each text once):
+   R1 an owned file on a path d or e line (`F is owned by OWNER, so it cannot take path
+   X: use path a or b.`) or on no `Path:` line (`F is owned by OWNER and this PR changes
+   it, but no Path line names it in its files field: put it on a path a or b line.`);
+   R7 a new file on a path e line (`F is new in this PR (not on the base), so it cannot
+   take path e (existing code that no prompt owns): a new code file takes path c, with
+   its prompt and a binding or a Generated from header; any other new file takes path
+   d.`); R3 an added prompt that no added file of the PR (with an issue that asks to
+   "adopt PDD", any changed file) names by a binding or header at the head (the head
+   table's `how` is `binding` or `header` and its `owners` has the prompt; the opening
+   sentence alone is not enough: `P is a new prompt that owns no new code file of this
+   PR by a binding or header (its opening sentence alone is not enough): give the new
+   code file a binding or a Generated from header (path c); a non-code change takes
+   path d, with no new prompt.`); R4 a file of the base with no owner (for a renamed
+   file, its source) that the head gives a binding or header, unless the issue asks to
+   adopt PDD; R6 no `Path:` line. R5 is only a hint for the reviewer: prompts at the head
+   that mention a changed file that is unowned on the base. The saved `paths` also has
+   the reviewer's table, one line per changed file: `- F: owned on the base by OWNER`,
+   `- F: unowned on the base` or `- F: new in this PR (not on the base)`, with ` (moved
+   from S)` after a renamed F and `, deleted in this PR` after the state of a deleted F.
+   Then a
    failed CI check
    (check runs and commit statuses of the head; neutral and skipped pass); else
    a review FAIL or a failed suite. With no red finding yet, start the review and
