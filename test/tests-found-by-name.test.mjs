@@ -275,7 +275,7 @@ test('NAME11: a saved case never makes a second test for a Story; a test path th
 });
 
 // The selected tests declare the maps that lint must judge, even when the CLI names none.
-test('NAME12: named lint refuses unknown scenario map keys before upload', async t => {
+test('NAME12: named lint refuses duplicate declared maps before upload', async t => {
   const setup = repoWith(t, {
     'user_stories/place-order.md': story(),
     'tests/place-order.json': scenario('user_stories/place-order.md', { app_maps: ['maps/b.json', 'maps/a.json', 'maps/a.json'] }),
@@ -288,10 +288,9 @@ test('NAME12: named lint refuses unknown scenario map keys before upload', async
   fake.capacity = () => ({ status: 200, json: { maintenance: null, features: ['lint-tests'] } });
   const { ports } = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: join(setup.home, 'state') });
   const code = await runCheck({ words: ['place-order'], options: { '--lint': true }, cwd: setup.repo }, ports);
-  // P1 owns the closed scenario keys. The capture check now applies it to
-  // lint too; app_maps is not an admitted scenario key.
+  // A recognized declaration still cannot silently deduplicate malformed input.
   assert.equal(code, 4, ports.stdout.text + ports.stderr.text);
-  assert.match(ports.stdout.text, /invalid-document/);
+  assert.match(ports.stdout.text, /invalid-app-maps/);
   assert.match(ports.stdout.text, /app_maps/);
   assert.equal(fake.posts.length, 0);
 });
