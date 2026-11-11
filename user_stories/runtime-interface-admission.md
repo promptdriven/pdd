@@ -19,6 +19,10 @@ the local resource-advice part of Runtime issue #817.
    conservative advice for that module.
 4. The plan remains local advice. Runtime decides admission. A lint, capture or
    native unit test does not establish a fresh AI behavior pass.
+5. Workspace policy callbacks use the repository-relative control-file path
+   already owned by the adapter. Existing saved-evidence cases remain in the
+   native suite, with their original inputs and expected results; unsupported
+   filesystem/locking behavior is never presented as a passing Runtime check.
 
 ## Native checks
 

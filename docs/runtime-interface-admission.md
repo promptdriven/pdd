@@ -57,3 +57,11 @@ tests. An advisory message does not establish which entry actually computes a ha
 
 Approval, required source context, truthful partial scope and the full native suite
 remain separate requirements. Admission cannot supply missing evidence for them.
+
+If the owning prompt deliberately leaves an operation out of its Runtime interface,
+adding fixture replies does not make that operation executable. Keep its native
+scenario vectors outside Runtime JSON test discovery and run their normal native
+tests. For example, saved-workspace evidence uses
+`node --test test/import-authorized-workspace-evidence.vectors.test.mjs` for its
+19 original cases. Those native results do not claim an AI Runtime pass or fill
+missing resource bindings.
