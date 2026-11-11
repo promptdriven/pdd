@@ -401,7 +401,7 @@ test('no daily cap: 4 new causes in one day are 4 reports, none stays a local dr
   assert.match(endComments(w, 20)[0], /Blocked by promptdriven\/pdd#4/);
 });
 
-test('a merge check that keeps failing on GitHub ends after its quiet period with a PDD report', async t => {
+test('a merge check that keeps failing on GitHub (a 502) is a service stop after its quiet period: it waits, with no END and no report (STOPS-0129)', async t => {
   const w = await coreWorld(t, { settings: { report: 'draft', quietMinutes: 30 } });
   w.issue(17);
   await w.tick(); const { pr } = w.build(17);
@@ -409,11 +409,13 @@ test('a merge check that keeps failing on GitHub ends after its quiet period wit
   w.gh = async (args, options) => args.some(a => String(a).includes(`/pulls/${pr.number}`)) && !args.includes('PATCH') ? { code: 1, stdout: 'HTTP/2.0 502 Bad Gateway\r\n\r\n{}', stderr: '' } : gh(args, options);
   await w.tick();
   assert.match(JSON.parse(readFileSync(join(w.root, 'jobs', '17.json'), 'utf8')).lastError, /502/);
-  // Ticks every 8 minutes (no sleep gap) until the time limit passes, then 2 more tries to read the PR.
+  // Ticks every 8 minutes (no sleep gap) until the quiet period passes.
   for (let i = 0; i < 4; i++) { w.advance(8 * MIN); await w.tick(); }
   await w.tick(); await w.tick();
-  assert.match(endComments(w, 17)[0], /made no progress for 30 minutes.*502/, 'after 3 tries to read the PR, the END goes on');
-  assert.equal(listReportDrafts({ root: w.reportRoot })[0].fingerprint, 'pdd.autopilot-core.merge-check-tool.0.1');
+  const job = JSON.parse(readFileSync(join(w.root, 'jobs', '17.json'), 'utf8'));
+  assert.equal(job.stepStop.owner, 'service'); assert.match(job.stepStop.text, /made no progress for 30 minutes.*502/);
+  assert.equal(endComments(w, 17).length, 0, 'a service stop never ENDs the issue');
+  assert.equal(listReportDrafts({ root: w.reportRoot }).length, 0, 'and files no report');
 });
 
 test('an agent other than Codex or Claude holds intake without a claim', async t => {
@@ -629,7 +631,8 @@ test('R4 a failed cleanup never keeps the job file, and END never runs on a merg
 });
 
 test('R5 should-fix: a cleared tool error, a dead suite, a restart, a partial claim and a stuck END', async t => {
-  // S1: one transient tool error, then a quiet wait (the base check cannot verify), is a job cause with no PDD report.
+  // S1: one transient tool error, then a quiet wait (the base check cannot verify), is a pdd stop of the base check
+  // (STOPS-0129, #2892): one base-check report, no END; the cleared tool error does not make it merge-check-tool.
   let w = await coreWorld(t, { settings: { report: 'draft', quietMinutes: 30 } });
   w.issue(17); await w.tick();
   const built = w.build(17);
@@ -638,7 +641,9 @@ test('R5 should-fix: a cleared tool error, a dead suite, a restart, a partial cl
   const checkBase = async () => ({ exitCode: 1, message: 'Base check could not verify the base; retry.' });
   await w.tick({ checkBase }); await w.tick({ checkBase }); w.review(17, 'PASS'); w.suite(17, 0); await w.tick({ checkBase });
   for (let i = 0; i < 4; i++) { w.advance(8 * MIN); await w.tick({ checkBase }); }   // ticks with no sleep gap
-  assert.match(endComments(w, 17)[0], /Cause: job \/ checks-quiet/); assert.equal(listReportDrafts({ root: w.reportRoot }).length, 0);
+  assert.equal(endComments(w, 17).length, 0);
+  assert.deepEqual(['pdd', 'base-check'], ['owner', 'code'].map(key => JSON.parse(readFileSync(join(w.root, 'jobs', '17.json'), 'utf8')).stepStop[key]));
+  assert.deepEqual(listReportDrafts({ root: w.reportRoot }).map(d => d.fingerprint), ['pdd.autopilot-core.base-check.0.1']);
   // S2: a dead suite run starts again and uses no repair.
   w = await coreWorld(t);
   w.issue(17); await w.tick(); w.build(17); await w.tick();
@@ -1637,7 +1642,8 @@ test('G3 a PR waits 3 hours while CI is in progress; nothing running and nothing
   assert.equal(endComments(w, 17).length, 0, 'queued or running CI keeps the PR waiting');
   w.github.setChecks(built.head); await w.tick();
   assert.deepEqual(w.github.merges, [built.pr.number]);
-  // The base check keeps saying "could not verify": nothing runs and nothing changes, so after 45 minutes it ends.
+  // The base check keeps saying "could not verify": nothing runs and nothing changes, so after 45 minutes it is a pdd
+  // stop (STOPS-0129, #2892): a wait with one report, never an END.
   const v = await coreWorld(t, { settings: { runs: 1 } });
   v.issue(17); await v.tick(); v.build(17); await v.tick(); v.review(17, 'PASS'); v.suite(17, 0);
   const checkBase = async () => ({ exitCode: 1, message: 'Base check could not verify the release tag; retry.' });
@@ -1645,7 +1651,9 @@ test('G3 a PR waits 3 hours while CI is in progress; nothing running and nothing
   for (let i = 0; i < 4; i++) { v.advance(10 * MIN); await v.tick({ checkBase }); }
   assert.equal(endComments(v, 17).length, 0);
   v.advance(10 * MIN); await v.tick({ checkBase });
-  assert.match(endComments(v, 17)[0], /Cause: job \/ checks-quiet/); assert.match(endComments(v, 17)[0], /made no progress for 45 minutes/);
+  assert.equal(endComments(v, 17).length, 0);
+  assert.match(JSON.parse(readFileSync(join(v.root, 'jobs', '17.json'), 'utf8')).stepStop.text, /made no progress for 45 minutes/);
+  assert.equal(listReportDrafts({ root: v.reportRoot })[0].fingerprint, 'pdd.autopilot-core.base-check.0.1');
 });
 
 test('G4 an agent that wrote its PR result but did not exit is stopped after the quiet period and its PR goes on', async t => {
@@ -2842,7 +2850,7 @@ test('W8 a reviewer in the merge lane whose log keeps growing ends at its backst
   assert.equal(alerts.filter(text => /ran 3 h/.test(text)).length, 1);
 });
 
-test('W9 the full suite: new test lines for 3 h pass (no fixed limit, CI=true, --timeout 0); the same lines again are a runner failure, never pdd suite-broken', async t => {
+test('W9 the full suite: new test lines for 3 h pass (no fixed limit, CI=true, --timeout 0); the same lines again: one restart, then a hang of the head (a repair), never pdd suite-broken', async t => {
   let w = await coreWorld(t, { settings: { runs: 1 } });
   w.issue(17); await w.tick();
   const { pr } = w.build(17); await w.tick(); w.review(17, 'PASS');
@@ -2854,10 +2862,12 @@ test('W9 the full suite: new test lines for 3 h pass (no fixed limit, CI=true, -
   assert.deepEqual(w.github.merges, [pr.number]);
   w = await coreWorld(t, { settings: { runs: 1 } });
   w.issue(17); await w.tick(); w.build(17); await w.tick(); w.review(17, 'PASS');
-  for (let i = 0; i < 20 && jobFile(w, 17); i++) { w.advance(10 * MIN); if (w.alive.has(w.job(17, 'suite').pid)) w.say(17, 'suite', 'ok 1 - the same test (12ms)'); await w.tick(); }
-  assert.equal(w.started.filter(j => j.role === 'suite').length, 3, 'nothing new: retried twice');
-  const row = history(w).find(r => r.issue === 17);
-  assert.match(row.text, /the full test suite made nothing new for 45 minutes/); assert.equal(row.outcome, 'released', 'a no-result, not a pdd fault');
+  for (let i = 0; i < 20 && !w.job(17, 'repair'); i++) { w.advance(10 * MIN); if (w.alive.has(w.job(17, 'suite').pid)) w.say(17, 'suite', 'ok 1 - the same test (12ms)'); await w.tick(); }
+  assert.equal(w.started.filter(j => j.role === 'suite').length, 2, 'nothing new: retried once');
+  // STOPS-0129: the second quiet suite at the same head is a hang of the change: a repair with the hang, not pdd.
+  assert.match(w.job(17, 'repair').input, /The full test suite hung at head \w{7}: `npm test` hung for 45 minutes/);
+  assert.equal(history(w).filter(r => r.issue === 17 && r.strike && r.owner === 'issue').length, 1);
+  assert.equal(listReportDrafts({ root: w.reportRoot }).length, 0, 'not a pdd fault');
 });
 
 test('W10 L: after a 10 h successful build in this repo the build backstop is 40 h; a backstop end and a T1 end do not change L', async t => {

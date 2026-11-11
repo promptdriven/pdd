@@ -240,7 +240,7 @@ test('P12 one owner reader: the engine table and `pdd owner` give the same answe
   assert.equal(engine.get('src/money.js')?.how, 'binding', 'the binding comes first');
 });
 
-test('P14 main cannot read pdd-bindings.json: the merge waits, a quiet period ends the job with one PDD report; a fixed main merges', async t => {
+test('P14 main cannot read pdd-bindings.json: the merge waits; a quiet period is a pdd step stop (no END, no strike, no note) with one PDD report; a fixed main merges', async t => {
   const waiting = async () => {
     const w = await coreWorld(t, { settings: { runs: 1 } });
     w.baseCommit('pdd-bindings.json', UNREADABLE); w.baseCommit('docs/x.md', '# X\n');
@@ -257,11 +257,16 @@ test('P14 main cannot read pdd-bindings.json: the merge waits, a quiet period en
     return { w, pr };
   };
   const { w } = await waiting();
-  for (let i = 0; i < 4 && !endComments(w, 17).length; i++) { w.advance(20 * MIN); await w.tick(); }   // ticks, not one long gap (a gap is sleep)
-  const end = endComments(w, 17);
-  assert.equal(end.length, 1); assert.match(end[0], /the merge waits: pdd-bindings\.json cannot be read on main/); assert.match(end[0], /Cause: pdd \/ bindings-unreadable/);
+  const notes = w.comments(17).length;
+  for (let i = 0; i < 4 && !jobFile(w, 17)?.stepStop; i++) { w.advance(20 * MIN); await w.tick(); }   // ticks, not one long gap (a gap is sleep)
+  // Main's file is not the issue (Stop owners, lead Nov 11): a pdd step stop, never an END.
+  const stop = jobFile(w, 17);
+  assert.deepEqual([stop.phase, stop.stepStop.owner, stop.stepStop.code], ['pr', 'pdd', 'bindings-unreadable']);
+  assert.match(stop.stepStop.text, /the merge waits: pdd-bindings\.json cannot be read on main/);
+  assert.equal(endComments(w, 17).length, 0, 'never an END'); assert.equal(w.comments(17).length, notes, 'no note on the issue');
+  assert.ok(!w.labels(17).includes('pdd:stuck'));
   const drafts = listReportDrafts({ root: w.reportRoot }).filter(d => d.fingerprint.startsWith('pdd.autopilot-core.'));
-  assert.equal(drafts.length, 1, 'one PDD report for the cause'); assert.match(drafts[0].detail, /pdd-bindings\.json cannot be read on main/);
+  assert.equal(drafts.length, 1, 'one PDD report for the cause'); assert.equal(drafts[0].stopped, true, 'a stop report'); assert.match(drafts[0].detail, /pdd-bindings\.json cannot be read on main/);
   // Main is fixed while the PR waits: the path checks read the new base tip, and the PR merges after the base refresh.
   const { w: v, pr } = await waiting();
   v.baseCommit('pdd-bindings.json', bindings([])); await v.tick();

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-reports.prompt.md (sha256: 693aa9fb8a8f5d1ee15dcfe024dcbc36a39bd634b4939185c832d1e573b57385).
+// Generated from prompts/cli/autopilot-reports.prompt.md (sha256: f3f9bfd3e25626933bbf943321bf786d1e23e587402d7897dbd86f0bf4578aed).
 import * as nativeFs from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -42,6 +42,8 @@ function publicReport(draft) {
   const body = [f.code === 'adopt-pdd' ? 'Autopilot changed existing code that no prompt owns (path e, a direct change with a regression test). Please adopt PDD for those modules (the local draft on the Autopilot machine lists them): give each one a prompt and a binding or header.'
     : draft.shipped === true && f.code === 'vector-replay' && f.component === 'autopilot-core' ? 'Autopilot could not run the replay or formal tests of one PR. The PR went on, with that claim marked as not checked in its merge note.'
     : draft.shipped === true ? 'Autopilot shipped one PR with "Runtime: not run" because Runtime could not check it. The job did not wait for a fix.'
+    : draft.stopped === true && f.code === 'stop-loop' ? 'Autopilot holds one issue: its own steps or a service stopped 3 jobs of it in 24 hours. The issue gets no strike; Autopilot takes it again after a new engine version or a person\'s comment on it.'
+    : draft.stopped === true ? 'Autopilot stopped one of its own steps for one job: it made no progress. The issue gets no strike, and Autopilot tries again later.'
     : `Autopilot ended one job because of a ${name} problem. The job did not wait for a fix.`, '',
     `- Kind: ${f.kind}`, `- Component: ${f.component}`, `- Error code: ${f.code}`, `- Step: ${f.step}`,
     `- Versions: PDD ${known(f.versions.pdd)}, Node ${known(f.versions.node)}, ${known(f.versions.platform)}, agent ${known(f.versions.agent)}`,
@@ -55,7 +57,7 @@ function draftFor({ cause, versions, step, words, runtimeRepo, runtimeOwner }) {
   const kind = cause.kind === 'runtime' ? 'runtime' : 'pdd';
   const draft = { fingerprint, kind, component: slug(cause.component) || 'unknown', code: slug(cause.code) || 'unknown', step: slug(step) || 'unknown',
     versions: { pdd: versions.pdd ?? null, node: versions.node ?? null, platform: versions.platform ?? null, agent: versions.agent ?? null },
-    ...(cause.shipped === true ? { shipped: true } : {}), ...(runtimeRepo ? { runtimeRepo } : {}), ...(LOGIN.test(String(runtimeOwner ?? '')) ? { runtimeOwner } : {}),
+    ...(cause.shipped === true ? { shipped: true } : {}), ...(cause.stopped === true ? { stopped: true } : {}), ...(runtimeRepo ? { runtimeRepo } : {}), ...(LOGIN.test(String(runtimeOwner ?? '')) ? { runtimeOwner } : {}),
     repository: REPORT_REPOSITORY, labels: [LABELS[kind]], detail: safeTail(cause.detail || cause.text, words) || '' };
   return { ...draft, ...publicReport(draft) };
 }
@@ -135,7 +137,7 @@ const CODES = [['merge-check-tool', /^merge-check-tool$/], ['suite-broken', /^su
   ['scenario-limit', /scenario|safe-integer|integer-out-of-range|out-of-range/], ['vector-replay', /vector|replay/], ['runtime-case', /runtime-case|test-case/],
   ['lint-refusal', /lint/], ['interface-refusal', /interface/], ['binding-refusal', /binding/], ['input-refusal', /refus|reject/], ['interpreter-error', /interpreter/],
   ['server-internal', /server-internal|internal-server|server-error|(?:^|-)5\d\d(?:-|$)|unavailable|bad-gateway/], ['server-incompatible', /server|compat/], ['crash', /crash|panic|segfault|exception/], ['claim-error', /claim/], ['not-run', /not-run/],
-  ['timeout', /timeout|timed-out/], ['cli-error', /cli|command|usage|exit|failed|error/]];
+  ['base-check', /^base-check$/], ['step-quiet', /^step-quiet$/], ['stop-loop', /^stop-loop$/], ['timeout', /timeout|timed-out/], ['cli-error', /cli|command|usage|exit|failed|error/]];
 // An unknown code is other-HASH of the step and the error class (the code slug with no digits) only, never of the
 // agent's text, so one cause is one report; at most one new "other" report per machine per day.
 export const stableCode = (code, step = '') => CODES.find(([, test]) => test.test(slug(code)))?.[0]

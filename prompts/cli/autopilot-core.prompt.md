@@ -9,8 +9,11 @@ owns the timer, the tick lock, the GitHub budget and the issue list; it calls
 `tickCore` when the engine is core and returns its result.
 
 The rule behind every decision here: **every failure ends one job**. No job waits
-for another job, for a person or for a tool fix. Jobs share only the slot count and
-the GitHub budget. A person retries an ended issue by removing `pdd:stuck`.
+for another job, for a person or for a tool fix. The one exception is a stop that
+this engine's own step or a service caused while a PR waits for its checks: that job
+keeps its PR and tries the step again after a backoff ([Stop owners](#stop-owners)),
+because the issue is fine. Jobs share only the slot count and the GitHub budget. A
+person retries an ended issue by removing `pdd:stuck`.
 
 ## Settings
 
@@ -85,7 +88,8 @@ process: build, repair, conflict, review and suite. Each tick, for each running 
   new for N minutes (no new commit, file state, tool call, output line or CPU use)"). A
   reviewer: no verdict (one retry, then `no-result`). A suite: a runner failure, started
   again at most twice; nothing new on all 3 tries (or deaths and quiet ends together 3
-  times) is `no-result`, never `pdd` / `suite-broken`.
+  times) is `no-result`, never `pdd` / `suite-broken`. A quiet suite can also be a hang
+  of the change, and every such stop has one owner: see [Stop owners](#stop-owners).
 - **The note** (alert only): at `noteHours` = 3 h of process age, one `long-running` alert
   per process with the issue, the role, the age, the new commits, file states and stream
   items of the last hour, the log name and "This job goes on … To stop it, remove
@@ -112,7 +116,8 @@ the review and suite states and the reviewer's log; it runs while CI is pending 
 or in progress, or no check yet within its 10 minutes), the reviewer runs or the suite
 process is alive. CI that stays pending with no change of its picture for
 `ciStuckMinutes` ends the job with `job` / `checks-stuck` under the no-result rules
-(named pending checks; a cause with `noResult` follows them like `no-result`). A new job, a repair, a PR result and a base
+(named pending checks; a cause with `noResult` follows them like `no-result`) as a
+`service` stop: CI never started, so it is not counted for the issue. A new job, a repair, a PR result and a base
 refresh start the clock again.
 
 Slots come only from these job files, never from workflow allocation or other
@@ -162,8 +167,11 @@ ended or moved to the merge check before free slots are counted.
 5. Advance each job, each in its own error boundary. An error saves `lastError` on
    that job, and `lastErrorTool` true when it came from a GitHub or Git call, and the
    tick continues with the next job. A job that waits with no error clears both, and
-   so does a new head. A quiet job whose advance fails on 2 ticks ends (`job` /
-   `no-result`), so no job holds a slot or a claim long past its quiet period. A
+   so does a new head. A step wait (below) clears neither. A quiet job whose advance
+   fails on 2 ticks is a stop of this engine's own step (owner `service` when the last
+   error is a service error, else `pdd`; see [Stop owners](#stop-owners)): in phase
+   `running` it ends as a `no-result` release, so no job holds a slot or a claim long
+   past its quiet period; in phase `pr` it is a step wait. A
    `running` job with no agent record (the tick died between its two saves) ends at
    once as `no-result`. After a sleep gap nothing could make progress: every job's
    quiet clock starts again (`progress.at` = now). A claim that expired in the gap, or
@@ -209,7 +217,8 @@ order. An issue is ready when all hold: it is an open issue (not a PR); it has n
 assignee; it has no `pdd:stuck`, `pdd:needs-decision` or `pdd:would-merge`; it is not cooling down (no `noResult` history
 line of the last 24 hours on this machine after the issue's latest `reset` line); it has neither report label (`pdd:runtime`,
 `pdd:autopilot-report`: report issues wait for a later self-fix lane); it has the
-opt-in label when `label` is set; no
+opt-in label when `label` is set; it is not held (the loop guard of
+[Stop owners](#stop-owners)); no
 local job holds it; its author is trusted (`ports.trusted(row)`, the launcher's
 trust rule); no open issue blocks it; and it has no live `pdd:working` claim by
 anyone. Blocking means a GitHub issue dependency (`dependencies/blocked_by`, read
@@ -284,7 +293,8 @@ For each ready issue while slots are free, at most 3 claim attempts per tick:
 
 Intake is held, and nothing is claimed, when the saved agent is not Codex or
 Claude, when `ports.agentReady()` is false at the first ready issue (for example a
-Codex usage limit), or while a machine pause runs (below).
+Codex usage limit), while a machine pause runs (below), or while CI does not start in
+this repository ([Stop owners](#stop-owners), #3260).
 
 **No result is a machine fault first.** An agent that exited with no result, a start
 failure (also one that the spawn reports later), a dead process (a restart or a
@@ -336,6 +346,9 @@ end as `no-result`. Every job kind follows the same rules, in every machine stat
    expected 3 requests, got 2" or "quota of 3 items exceeded in the fixture"), keeps its
    strike. A counted end of an issue with 2 strikes in the last 7 days is a normal
    END: one comment and `pdd:stuck`. Nothing else marks an issue stuck for no result.
+   A stop with an owner ([Stop owners](#stop-owners)) changes this counting: `machine`
+   is counted only for the cooldown (no `pending`, so never a strike or an END);
+   `service` and `pdd` are never counted; `issue` writes its strike at once.
    Each `ended` line has `reset: true`: the cooldown and the strikes read only the
    issue's lines after its latest reset, so a person's retry starts fresh.
 3. Machine pause, saved in `core.json` as `streak`, `hours` (the next pause length),
@@ -356,6 +369,123 @@ end as `no-result`. Every job kind follows the same rules, in every machine stat
 4. `history.jsonl` is read line by line and a line that does not parse is skipped.
    Before each append, the file gets a newline when it does not end with one, so a cut
    line never swallows the next record.
+
+## Stop owners
+
+A1 of #3238: a stop where the time ran out (a process that T1 stopped, a quiet merge
+check, a job that cannot advance, CI that stays pending) must not blame the issue for a
+fault of Autopilot, a service or the machine, and a person must see on the issue when
+the change itself is the cause. The engine knows what ran when the time ran out: its
+own step, a service wait, the agent, or a command of the agent. One function gives
+each such stop one **owner**, with the owner words of the report routing. The owner is
+saved as `owner` in the end cause, in the history line of the outcome and in the
+strike line, and status shows it.
+
+| Owner | The stop | Strike | Action | Note on the issue |
+|---|---|---|---|---|
+| `pdd` | a merge check step of this engine is quiet and its last error is not a service error: the base check could not verify (code `base-check`), a GitHub or Git call, a refused `gh pr merge` or an unconfirmed claim (`merge-check-tool`, `claim-error`), or no error (`step-quiet`); also an advance that throws on 2 quiet ticks (`crash`; in phase `pr`, `merge-check-tool` for a GitHub or Git error) | no | one report (below); a **step wait** in phase `pr`, a release that is not counted in phase `running`; `streak` + 1; never an END | no |
+| `service` | the same stops when the last error is a service error (a GitHub status 429 or 5xx, no reply, a time-out, a network error, a rate limit); an agent whose log names an AI-service problem (T08); CI pending with no change for `ciStuckMinutes`; CI that GitHub does not start (#3260, below) | no | no report; a step wait in phase `pr` (no `streak` count); CI that does not start: the job waits and intake holds; else a release that is not counted, `streak` + 1 | no |
+| `machine` | a build, repair or conflict agent that T1 stopped, with no repeated hang; a reviewer that ends with no verdict after a T1 stop; a suite run that ended with no result (it died, or died and went quiet, 3 times); a sleep gap | no | a release; `streak` + 1; when `streak` was 0 the issue cools down for 24 hours, with no `pending` | no |
+| `issue` | the same command hangs again at this head (two hang records of the agent with the same command at the same worktree HEAD, then a T1 stop or an exit with no result), or the full suite is quiet twice at one head, or once in a test file that the PR changes | yes | the issue stop (below); the 3rd strike in 7 days is the END | yes |
+
+**Hang records.** Agent jobs (build, repair, conflict, review) start with the
+wrapper's hung-command watch (`hung: {after: 15 min, every: 30 s, cpu: 2}`, the
+[headless job runner](agent-job.prompt.md)): the wrapper stops a command that makes no
+output and almost no CPU for 15 minutes, and the agent goes on. Each tick, for a
+running build, repair or conflict agent, the core reads `ports.jobs.hangs(part)`
+(native `agentJobHangs`) and saves each new record (by its `at`) in `job.hangs` (the
+last 20) as `{at, part, role, command, shown, minutes, last, test, head}`: `part` is the
+process id, `head` the record's own `head`, else the HEAD of the job worktree at that
+read, `shown` the command a person typed (the text
+after `-c` of a shell, or the text of Claude's `eval '…'`, at most 120 characters),
+and `test` the last test file that the command or the last line names (a path with
+`test` or `spec` and a `.js`, `.mjs`, `.cjs`, `.ts` or `.py` end). Two records with the
+same command after the output normalization of T1 (P4) and the same head are a
+**repeated hang**. A quiet suite gives a record too: `command` is the test command,
+`minutes` the quiet period, `last` the last nonblank line of its log and `test` the last
+test file named in its last 40 lines.
+
+**The step wait** (owner `pdd` or `service` in phase `pr`): stop the checks, leave the
+merge lane (the PR enters it again after the wait), save
+`stepStop {owner, code, text, head, count, at, until, report}` and set the quiet clock
+to `until` (`progress.at = until`): the job keeps its PR, claim, heartbeat and slot,
+and it is not quiet while it waits. The wait is 15 minutes × 2^(count − 1), at most 8
+hours (15, 30, 60, 120, 240, 480 minutes); `count` starts again at 1 for a new head.
+Until `until` the merge check does not run (person stops and heartbeats still do);
+then it runs as usual. Only owner `pdd` files the report and adds 1 to `streak`, so
+repeats of the same fault pause intake (the machine pause). The report goes through
+the [report owner](autopilot-reports.prompt.md) with the repository's settings and
+the cause `{kind: pdd, component: autopilot-core, code, text, stopped: true}`; each
+stop files or counts it, and the dedup keeps one report. A merged PR still finishes as
+merged at the next merge check, also after a wait. A person ends the wait by removing
+`pdd:working`.
+
+**CI that does not start** (#3260). In a person's private repository GitHub Actions can
+stop starting runs (the account's Actions minutes or spending limit). In the CI read
+of the merge check: CI is pending, no check run is in progress, and the CI picture
+of the head has not changed for 20 minutes, and either a check run is `queued`, or
+there is no check run and a workflow run for the head (`actions/runs?head_sha=HEAD`,
+status queued, waiting, pending or requested; at most 3 runs) has no job in progress
+or completed (`actions/runs/ID/jobs`); or every failed check of the head failed with a
+billing or spending-limit message (its output title or summary, else its annotations:
+"spending limit", "billing", "account payments have failed", "account is locked",
+"Actions minutes", "minutes quota" or "limit", "job was not started"). Then the CI
+state stays `pending` with `notStarted {reason: queued | billing, since}`: no red, no
+repair, no strike, no END, no issue note, and no `ciStuckMinutes` release (the job
+waits; the merge rule for this case is a later decision). The first such read of an
+outage saves `ciDown {since, reason, message, issue, pr, head, at}` in `core.json` and
+sends one `usage-limit` alert: "Autopilot: GitHub Actions does not start runs in this
+repository (queued since HH:MM UTC). This is often the account's Actions minutes or
+spending limit: Settings → Billing → Actions." (for a billing failure: "GitHub Actions
+did not start a run in this repository: GitHub said "MESSAGE". …"). There is no second
+alert while `ciDown` stays. While it stays, intake is held with `intake held: TEXT New
+jobs start when a CI run starts` and status shows `CI does not start: TEXT New jobs wait
+until a CI run starts.` A check run in progress or completed (not a billing failure)
+in any CI read clears `ciDown`; when no job read CI in a tick, intake reads the latest
+10 workflow runs at most every 10 minutes and clears it when one created after
+`since` is in progress or completed with success, neutral or skipped.
+
+**The loop guard** (lead decision, Nov 11): a fault of Autopilot or a service that
+never ends must not loop forever on one issue. Each step stop writes the history line
+`{at, issue, stop: true, owner, code}`; a release with owner `pdd` or `service` has the
+owner in its `released` line. When a stop is the 3rd one owned by `pdd` or `service`
+for the same issue in 24 hours (counting after the issue's latest reset and latest
+hold release), the engine **holds** the issue: one line `{at, issue, hold: true, owner,
+code, text, version}` (version = `ports.version`) and one report (code `stop-loop`,
+`stopped: true`), never an END and never a strike; the stop itself still adds 1 to
+`streak`. A held job in phase `pr` keeps its PR, claim and slot and runs no merge
+check; a released issue is not ready (ready rule). The hold ends with a new engine
+version (`ports.version` differs from the saved one), or with a comment on the issue
+by a trusted person after the hold (not a claim comment and no `<!-- pdd:` marker).
+The issue's comments are read only when the issue changed after the hold, and for a
+held job at most every 30 minutes. Then one line `{at, issue, unhold: true, text}`
+starts the count again, and a held job gets a fresh quiet clock and runs its merge
+check.
+
+**The issue stop** (owner `issue`):
+1. Count the issue's strike lines of the last 7 days after its latest reset. With 2 or
+   more, this stop is the 3rd: END with `job` / `hung` and the hang text (one END
+   comment and `pdd:stuck`, as today).
+2. Else append the strike line `{at, issue, strike: true, owner: "issue", hang}`.
+3. Post one note on the issue, or update in place (PATCH) the note of this engine's
+   login with the marker `<!-- pdd:autopilot-core:stop-note:N -->`: "Autopilot
+   stopped a job here: `SHOWN` hung for M minutes[ in TEST] on this change (head
+   SHORT). NEXT Nothing to do now." and "Stops caused by this change in the last 7
+   days: K of 3 (the 3rd one ends the run with `pdd:stuck`)." NEXT is "A repair starts
+   now with that detail." or "It tries again after YYYY-MM-DD HH:MM UTC with that
+   detail." (the cooldown end). A failed note write only warns.
+4. A job with a PR (the suite, or a repair or conflict agent) gets a repair through
+   the repair rules with one red finding that names the command, the minutes, the last
+   output line, the test and the head. The strikes decide the END of a hang, so this
+   repair compares no findings (the same-finding rule does not apply to it); with no
+   repair left (`maxRepairs`) the stop ENDs as `job` / `hung` before step 2. A build with no PR is released and counted for
+   the 24-hour cooldown, with no `pending` (the strike is already written) and no
+   `streak` count; the next build of the issue gets the hang in its brief ("An earlier
+   Autopilot job on this issue stopped: …", from the latest strike line with a hang
+   after the latest reset).
+
+A stop owned by `pdd`, `service` or `machine` writes nothing on the issue; status shows
+it, and a `pdd` stop files one report.
 
 ## Jobs
 
@@ -565,7 +695,10 @@ any other pdd (for example an older global install).
   A repository with no dependencies installs nothing.
 
 A running build, repair or conflict agent that T1 stops ends as `no-result` with no
-valid result file (the no-result rules apply); with one it goes on as an exited job. A
+valid result file (the no-result rules apply, with the owner of
+[Stop owners](#stop-owners): `service` for an AI-service problem, `issue` for a repeated
+hang, else `machine`); with one it goes on as an exited job. An agent that exits with no
+result after a repeated hang is an `issue` stop too. A
 reviewer that T1 stops counts as no verdict unless its result file is valid. An exited or dead job: a valid `pr` result moves
 to the merge check in the same tick. The PR number may be a number or a string of
 digits (an optional `#`); it becomes an integer above 0. The head is 40 hex digits in
@@ -626,14 +759,21 @@ call unowned on the base (so a new file never). It never blocks the job.
 
 ## Merge check
 
-Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
+Phase `pr` has no deadline. Each tick, in order (during a step wait, nothing below
+runs until its end):
 
 1. Read the PR. Merged: finish as merged, also when quiet, so END never runs on a
-   merged issue. Quiet: stop the checks and end with the last error, a `pdd` cause
-   `merge-check-tool` when the PR read fails or the last saved error came from a
-   GitHub or Git call, a `pdd` cause `bindings-unreadable` when the merge waited for
-   an unreadable base `pdd-bindings.json` (step 5), else a `job` cause `checks-quiet`
-   ("the PR checks made no progress for N minutes"). Closed: end
+   merged issue. Quiet (nothing ran and nothing changed for the quiet period), or a PR
+   read that fails while quiet: a **step stop**, never an END ("the PR checks made no
+   progress for N minutes (nothing ran and nothing changed); last error: …"). Its owner
+   and code come from the last saved error and its step (`lastErrorStep`): a service
+   error is `service`; else `pdd` with `base-check` (the base check could not verify),
+   `claim-error` (a claim that is not confirmed), `merge-check-tool` (a failed PR read,
+   a GitHub or Git error, a refused `gh pr merge`), `bindings-unreadable` (the merge
+   waited for an unreadable base `pdd-bindings.json`, step 5; main's file, not the
+   issue), `owner-unreadable` (it waited for another base file that the path checks
+   could not read) or `step-quiet` (no error). It becomes a step wait ([Stop
+   owners](#stop-owners)). Closed: end
    `pr-closed`. The PR head SHA, head branch or base differs from the job: end
    `head-moved`.
 2. `Runtime: not run (…)` is allowed, and the PR body is not rewritten. When the
@@ -992,11 +1132,13 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    debate B, outside the lane, with the conflicting file names), not a CI wait. A new head that has no run yet (for example after a
    refresh) waits for its CI. A pending check still waits, as long as it takes; save `progress`
    first. **The owner wait (#3239):** a green PR whose path checks have unchecked files
-   does not enter the lane. Its last error is `the merge waits: WAIT`. The wait is not
-   progress, so when nothing changes for the quiet period the job ends (step 1); with
-   an unreadable base `pdd-bindings.json` that END files the one deduplicated PDD
-   report and the issue waits for it. When the base tip moves, the path checks read
-   it again.
+   does not enter the lane. Its last error is `the merge waits: WAIT` (step `bindings`
+   with an unreadable base `pdd-bindings.json`, else `owners`). The wait is not
+   progress, so when nothing changes for the quiet period it is a step stop (step 1),
+   never an END: main's file is not the issue, so there is no strike and no note on
+   the issue, the stop files the one deduplicated PDD report (`bindings-unreadable` or
+   `owner-unreadable`), and the loop guard holds the issue after 3 such stops in 24
+   hours. When the base tip moves, the path checks read it again.
 6. **Merge lane** (one final step per repository). A green PR (CI green or none,
    review PASS, suite pass) enters the lane. The lane is the label `pdd:merge-lane` on
    one open PR, shared by every machine through GitHub (`issues?state=open&labels=…`,
@@ -1060,10 +1202,11 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    PR, or after a conflict update that changed F only in the conflict files. R3: a
    fresh full review for any other change of F.
    Run `checkAutopilotBase` of the [automatic base](autopilot-base.prompt.md). A
-   read failure ("could not verify", "unavailable", "retry") waits; another
-   refusal ends `base-check`.
+   read failure ("could not verify", "unavailable", "retry") waits and is saved as the
+   last error with step `base-check` (a quiet wait is a `pdd` step stop, as for #2892);
+   another refusal ends `base-check`.
 8. Read the winning claim again: another live owner means hand-over and no merge; a
-   claim that is not confirmed as this job's waits. Post one merge comment on the PR for this head: `CI: green (N check(s))` or
+   claim that is not confirmed as this job's waits (step `claim`). Post one merge comment on the PR for this head: `CI: green (N check(s))` or
    `CI: none (…)`, the suite, the lane (`Merge lane: final step`, with the queue
    minutes when it waited), the review (`Review: PASS from a fresh reviewer`,
    `Review: PASS (kept after a clean base refresh, same change)`, `Review: PASS (kept:
@@ -1074,7 +1217,7 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    and the base check,
    with the marker `<!-- pdd:autopilot-core:merge:HEAD -->`. Then
    `gh pr merge PR --repo REPO --merge --match-head-commit HEAD`. A failed merge
-   waits for the next tick. A confirmed merge closes the issue when it is open,
+   waits for the next tick (step `merge`). A confirmed merge closes the issue when it is open,
    removes `pdd:working`, cleans up locally (see END) and records `merged`.
    In mode `observe`, the same comment starts `Autopilot would merge this PR (observe
    mode): every check passed for head HEAD. It stays open and ready for review;
@@ -1093,8 +1236,9 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
 (as the agent says it; the [report owner](autopilot-reports.prompt.md) keeps only no
 verdict, interpreter error, server incompatibility and a server-side internal error as
 Runtime's, and makes a refusal of our input, such as a lint, interface or binding
-refusal, a PDD report), `pdd` (CLI error, crash, claim error, merge-check tool error) and `job` (the agent did not do the
-task, no progress, red checks). It stops the job's processes and saves phase
+refusal, a PDD report), `pdd` (CLI error, crash, claim error) and `job` (the agent did not do the
+task, no progress, red checks, a hang of the change). A quiet merge check step is a
+step wait, never an END ([Stop owners](#stop-owners)). It stops the job's processes and saves phase
 `ending`, then, resumable step by step on later ticks:
 
 0. Each tick counts one try. After 6 tries, or 24 hours in phase `ending`, send one
@@ -1147,8 +1291,13 @@ agent's commits may exist only there.
 `coreStatus({state, settings}, {root, reportRoot, now, fs})` returns text from local
 files only: the engine line (mode, repository, folder, base, agent), the slot line
 (`B of R slots busy`, no-progress limit, repairs, report mode, opt-in label), the pause
-line (`New jobs paused until TIME (H h): …` or `No pause: N no-result end(s) in a row …`), one line per job (`#N build running 12m (log …)`, `#N PR #P at SHA: review …,
-suite …`, with `; merge lane: final step` or `; merge lane: waiting for PR #P since TIME`, `#N ending: …`), the last 5 results (`#N ended TIME: cause`; strike lines are not results) and the count
+line (`New jobs paused until TIME (H h): …` or `No pause: N no-result end(s) in a row …`), the CI line
+while `ciDown` is set (`CI does not start: …`), one line per job (`#N build running 12m (log …)`, `#N PR #P at SHA: review …,
+suite …`, with `; merge lane: final step` or `; merge lane: waiting for PR #P since TIME`, `#N ending: …`), one line per step wait
+(`#N waits: OWNER stop CODE: TEXT; next try after TIME (try K)`, with `; report REF` when one was filed), one line per
+held issue (`#N held since TIME: TEXT; it goes on after a new engine version or a person's comment on the issue`), one
+line per issue that cools down (`#N cools down until TIME (owner OWNER): TEXT`), the last 5 results (`#N ended TIME: cause`,
+with ` (owner OWNER)` when the line has one; strike lines are not results) and the count
 of local report drafts.
 
 ## Text on GitHub
@@ -1185,7 +1334,7 @@ merge)`.
 REST calls use `gh api --include --method M ENDPOINT [--input -]`. Also `now()`,
 `fs`, `root`, `reportRoot`, `env`, `version` (the PDD version), `listIssues()`,
 `trusted(row)`, `agentReady()`, `warn(text)`, `alert({issue, kind, text, tried, need, update})`, and the replaceable `jobs`
-(`start`, `read`, `stop`), `owners(numbers)`, `heartbeat(job)` and `checkBase(input)`
+(`start`, `read`, `stop`, `cpu`, `hangs`), `owners(numbers)`, `heartbeat(job)` and `checkBase(input)`
 with the native defaults named above.
 
 ## Dependencies
