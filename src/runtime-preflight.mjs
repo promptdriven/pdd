@@ -1,6 +1,6 @@
 import { markdownLinks, markdownDefinitions, markdownSectionText } from './runtime-markdown.mjs';
 import { buildBindingPlan, runtimeBoundary } from './runtime-binding-plan.mjs';
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 593795d5383de3ba190e67df257d1f7f1973f0e36c599efdc6a3f2459525eeb9).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: c95ab2215230b314ac0648ee8e48355dbab407c37a888ab4cb731d27fec1a9ed).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
@@ -969,6 +969,47 @@ export function preflight({ root, found, selected,workspace=found.workspace??loa
   return { rows, warnings };
 }
 
+// Keep PDD's declaration classification local. Token offsets preserve all other
+// JSON spellings; in particular, parsing and stringifying would round numbers.
+export function executableInterfaceText(text) {
+  const blocks = interfaceBlocks(text);
+  if (blocks.length !== 1) return text;
+  const block = blocks[0], body = block[1];
+  let value;
+  try { value = JSON.parse(body); } catch { return text; }
+  if (!isObject(value) || !Object.hasOwn(value, 'kind') || !['full', 'partial'].includes(value.kind)) return text;
+  const tokens = [...body.matchAll(/"(?:[^"\\]|\\[\s\S])*"|[{}\[\],:]/g)];
+  const members = [];
+  let depth = 0, keyExpected = false, comma = null;
+  for (let index = 0; index < tokens.length; index++) {
+    const token = tokens[index], spelling = token[0];
+    if (spelling === '{' || spelling === '[') {
+      depth++;
+      if (depth === 1) keyExpected = true;
+    } else if (spelling === '}' || spelling === ']') depth--;
+    else if (depth === 1 && spelling === ',') { keyExpected = true; comma = token.index; }
+    else if (depth === 1 && keyExpected && spelling.startsWith('"')) {
+      if (JSON.parse(spelling) === 'kind') {
+        const result = tokens[index + 2];
+        if (tokens[index + 1]?.[0] !== ':' || !result?.[0].startsWith('"')) return text;
+        members.push({ start: token.index, end: result.index + result[0].length, comma });
+      }
+      keyExpected = false;
+    }
+  }
+  // Ambiguous duplicate metadata retains the original admission diagnostic.
+  if (members.length !== 1) return text;
+  const member = members[0];
+  let start = member.comma ?? member.start, end = member.end;
+  if (member.comma === null) {
+    const following = tokens.find(token => token.index >= end);
+    if (following?.[0] === ',') end = following.index + 1;
+  }
+  const projected = body.slice(0, start) + body.slice(end);
+  const offset = block.indices[1][0];
+  return text.slice(0, offset) + projected + text.slice(block.indices[1][1]);
+}
+
 // The caller has parsed a root object. Keep surrounding whitespace and all
 // string/token bytes; remove only JSON whitespace between tokens.
 function compactInterface(body) {
@@ -1593,6 +1634,18 @@ function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadR
       const projected=Buffer.from(bytes(file).toString('utf8').replace(INTERFACE,''),'utf8');
       const next={...file,bytes:projected,size:projected.length};
       payload.set(path,next); footprintPayload.set(path,next); effective.set(path,next);
+    }
+    // Project only effective executable bytes, after ordinary closure/boundary
+    // handling. Authored readers and raw hashes retain the local classification.
+    for (const [path, file] of footprintPayload) {
+      if (!path.endsWith('.prompt.md') || unavailable.has(path)) continue;
+      const original = bytes(file), text = original.toString('utf8'), projected = executableInterfaceText(text);
+      // Invalid source must retain its original refusal, not become valid text
+      // through UTF-8 replacement while removing unrelated metadata.
+      if (projected === text || !original.equals(Buffer.from(text, 'utf8'))) continue;
+      const content = Buffer.from(projected, 'utf8'), next = { ...file, bytes: content, size: content.length };
+      footprintPayload.set(path, next); effective.set(path, next);
+      if (payload.has(path)) payload.set(path, next);
     }
     const files = [...payload.values()].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0), total = sourceLimit(files);
     const entries = files.map(file => ({ path: file.path, bytes: bytes(file) }));
