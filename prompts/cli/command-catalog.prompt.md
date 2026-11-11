@@ -348,6 +348,10 @@ Catalog `autopilot.check-base` with prefix `autopilot check-base`, local `autopi
 Register autopilot.doctor, prefix autopilot doctor, local autopilot-doctor, no operands or options. Advertise `pdd autopilot doctor` as read-only first-start diagnostics with no AI call. Preserve other forms.
 Completion offers `doctor` only after `autopilot`. The top-level `doctor` command remains unsupported, including its help forms.
 
+
+## Whole-product Simulator (#808)
+
+Extend the existing simulate route with Boolean --product, text --parts and text --journey. Publish `pdd simulate --product [--parts PARTS] [--journey JOURNEY] [--max-calls N] [--no-open] [--no-wait]`; describe one composed product using its declared maps, starting data and planned operations. Keep ordinary STORY forms. Extend the existing test route with Boolean --journeys and form `pdd test --journeys [JOURNEY] [--max-calls N]`. Existing runtime-client owns option compatibility and orchestration; the catalog declares no second route or interpreter origin. Preserve all unrelated commands, including removed try/check handling.
 ## Cap-aware lint (draft)
 
 The lint route accepts optional integer `--max-calls`, minimum 1 and maximum 1000. Its help says this selects a cap for zero-AI structural call preflight; warnings never change the cap or guarantee completion. Existing hidden `test --lint` keeps the same remote semantics; removed commands remain removed. Local lint does not accept a call cap.

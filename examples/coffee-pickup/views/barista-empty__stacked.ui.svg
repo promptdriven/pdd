@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 390 330" role="img" aria-labelledby="view-title view-desc">
+  <title id="view-title">barista · Board</title>
+  <desc id="view-desc">Relational illustration of the empty ticket list. No action button is shown when no ticket is waiting.</desc>
+  <rect width="390" height="330" rx="16" fill="#fffaf3"/>
+  <g font-family="system-ui, sans-serif" fill="#3b2a20">
+    <text id="part-heading" x="24" y="45" font-size="24" font-weight="700">barista · Board</text>
+    <g id="empty-ticket-list">
+      <rect x="24" y="70" width="342" height="116" rx="12" fill="#efe7dc"/>
+      <text id="empty-board-message" x="40" y="119" font-size="20" font-weight="600">No waiting tickets.</text>
+      <text x="40" y="149" font-size="16">New orders appear here.</text>
+    </g>
+  </g>
+</svg>
