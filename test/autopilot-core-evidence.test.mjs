@@ -449,7 +449,7 @@ test('E21 (T08) an ordinary no-result is still counted; a reviewer on an AI-serv
 
 // ---- T09: the path check reads the files field only ---------------------------------------------------
 test('E22 (T09) R1 reads only the files field of a path d line: the #69 repair body has no false violation; an owned file on path d stays red', async t => {
-  const bindings = JSON.stringify({ modules: [{ module: 'docs/errors.md', prompt: 'prompts/errors.prompt.md' }] }, null, 2) + '\n';
+  const bindings = JSON.stringify({ schema_version: 'pdd.bindings.v1', modules: [{ module: 'docs/errors.md', prompt: 'prompts/errors.prompt.md' }] }, null, 2) + '\n';
   const setup = async body => {
     const w = await coreWorld(t, { settings: { runs: 1 } });
     seed(w, { 'pdd-bindings.json': bindings, 'prompts/errors.prompt.md': '# Errors\n\nThe error table.\n', 'docs/errors.md': '# Errors\n' });

@@ -457,10 +457,11 @@ any other pdd (for example an older global install).
   issue fit; (2) Path and (3) Tests with the exact text of A-VERDICT section 6.2 (the
   Path lines match the owner table, disputed only by naming a missed binding, header or
   prompt line; a and c trace to the issue; b keeps the contract; d agrees with any
-  prompt that states a changed value; a new code file with new behavior takes path c,
-  and its binding or header is required, never a must-fix; must-fixes: a new prompt
-  for a non-code file, owned code that disagrees with its prompt; the reviewer does not
-  report what the path checks (below) already check: R1, R3, R4, R6 and R7; never a new
+  prompt that states a changed value; a new code file with new behavior takes path c
+  with a binding or header, which the reviewer never asks to remove; must-fixes: a
+  new prompt for a non-code file, owned code that disagrees with its prompt; the
+  reviewer does not report what the path checks (below) already check (R1, R3, R4, R6
+  and R7); never a new
   prompt for an unowned file; never commit order; a missing test is a must-fix only
   with the surface and the result named; no test that only copies a value from the
   diff); an honest Runtime line and no unrelated or unsafe change; and (6) **no choice
