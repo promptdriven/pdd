@@ -11,9 +11,9 @@ Fix both: the brakes (the real defect) and the warning light (a test or check th
 
 Use this for a small change with a clear effect that is easy to undo. If the impact grows, suggest pdd-bug or pdd-feature.
 
-Each area is one main chat. Step briefs are in `steps/`.
-1. plan: scope → gate: approve
-2. build: change, verify, formal → gate: pr
+Each area is one main chat. Read the step files that its line names.
+1. plan: steps/scope.md → gate: approve
+2. build: steps/change.md, steps/verify.md, steps/formal.md → gate: pr
 
 ## Rules
 

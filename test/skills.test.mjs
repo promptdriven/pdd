@@ -81,7 +81,8 @@ test('SKILLS4: workflow skills have version 2 areas, one step file per step, and
     }
     const { body } = frontmatter(read(`${name}/SKILL.md`));
     for (const [area, list, optional, gate, , before] of areas) {
-      const shown = list.map(step => optional.includes(step) ? `${step}?` : step).join(', ');
+      // #3227 battle N3: agents read a bare step name ("story: understand") as a file name, so each step is its real path.
+      const shown = list.map(step => `steps/${step}.md${optional.includes(step) ? ' (optional)' : ''}`).join(', ');
       assert.ok(body.includes(`${area}: ${shown} → ${before ? `${before}, then ` : ''}gate: ${gate}`), `${name} lists ${area}`);
     }
     const skillBytes = statSync(join(skills, name, 'SKILL.md')).size;
@@ -89,6 +90,15 @@ test('SKILLS4: workflow skills have version 2 areas, one step file per step, and
     // The total is for information only: no one agent loads every file.
     t.diagnostic(`${name}: ${filesUnder(join(skills, name)).reduce((sum, file) => sum + statSync(file).size, 0)} bytes in all`);
     assert.deepEqual(readdirSync(join(skills, name)).sort(), ['SKILL.md', 'steps', 'workflow.json']);
+  }
+});
+
+// Wrong (#3227 battle N3): a SKILL.md names a step file that does not exist, so the agent's read fails and the rest of
+// its command (often the RUNBOOK read) never runs.
+test('SKILLS4b: every steps/NAME.md that a SKILL.md names exists', () => {
+  for (const name of ALL_SKILLS) {
+    const named = [...read(`${name}/SKILL.md`).matchAll(/\bsteps\/([a-z0-9-]+\.md)/g)].map(m => m[1]);
+    for (const file of named) assert.ok(existsSync(join(skills, name, 'steps', file)), `${name}/SKILL.md names steps/${file}`);
   }
 });
 
