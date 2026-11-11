@@ -531,7 +531,7 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    [runtime client](runtime-client.prompt.md): `pass` and `current`); each changed
    `*.prompt.md` must be in the footprint (`captureSource` stories) of such a Story. The
    job worktree must be at that head. Else red: "The PR body says "Runtime: PASS", but the
-   Runtime checks at head H do not cover FILES (the saved check of S is for an older
+   saved pdd test checks at head H do not cover FILES (the saved check of S is for an older
    source: a stale Runtime batch). A PASS of other Stories does not count. … or write
    "Runtime: not run (REASON)" when they have no Runtime check (for example a native-only
    prompt or a Story with no Runtime test)." A PR that changes no prompt and no Story needs

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 8dce07456e5c3235d9ae833b74d8d40ebb4d2cd71e50a964ed105ab6fda36c01).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 26110cff9f77481f47e0cf81dfc4a93f958b04cd5d8b13f78106345b73a976f2).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1124,7 +1124,7 @@ async function runtimeCoverage(ctx, job) {
   const missing = [...stories.filter(story => !passing.has(story)), ...prompts.filter(prompt => !reached.has(prompt))];
   if (!missing.length) return done({ ok: true, stories: [...passing].filter(story => stories.includes(story) || (evidence.footprints[story] ?? []).some(file => prompts.includes(file))) });
   const old = missing.filter(file => stale.has(file));
-  return done({ ok: false, missing, text: `The PR body says "Runtime: PASS", but the Runtime checks at head ${short(head)} do not cover ${missing.join(', ')}${old.length ? ` (the saved check of ${old.join(', ')} is for an older source: a stale Runtime batch)` : ''}. A PASS of other Stories does not count. Run pdd test for the Stories of these changes at this head, or write "Runtime: not run (REASON)" when they have no Runtime check (for example a native-only prompt or a Story with no Runtime test).` });
+  return done({ ok: false, missing, text: `The PR body says "Runtime: PASS", but the saved pdd test checks at head ${short(head)} do not cover ${missing.join(', ')}${old.length ? ` (the saved check of ${old.join(', ')} is for an older source: a stale Runtime batch)` : ''}. A PASS of other Stories does not count. Run pdd test for the Stories of these changes at this head, or write "Runtime: not run (REASON)" when they have no Runtime check (for example a native-only prompt or a Story with no Runtime test).` });
 }
 // T04: the engine runs the replay (vector) and formal test files that the change touches, at the final head: each
 // changed *.vectors.test.* and *.formal.test.* file, and each vector test file that names a changed scenario file.
