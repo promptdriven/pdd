@@ -58,7 +58,7 @@ Only prompt-story reads the full Prompting guide. check reads the `pdd-prompting
 
 | | In your chat | As a run on an issue |
 |---|---|---|
-| Start | Call `pdd-feature`, `pdd-bug` or `pdd-small-change` in Codex or Claude Code | `pdd workflow run NAME ISSUE` |
+| Start | Call `pdd-feature`, `pdd-bug`, `pdd-small-change` or `pdd-product` in your agent | `pdd workflow run NAME ISSUE` |
 | Branch and worktree | No. The agent works in your folder | Yes. A new branch and worktree for the issue |
 | Chats | One | One for each area, in Herdr |
 | Gates | The agent asks you | pdd holds them. You approve in the chat or with `pdd workflow approve` |
@@ -218,7 +218,7 @@ Read that output before you merge. Passing tests are useful evidence. They are n
 | For one project (commit it) | `.agents/skills/` in the repo | `.claude/skills/` in the repo |
 | For you, in all projects | `~/.agents/skills/` | `~/.claude/skills/` |
 
-If you set `CLAUDE_CONFIG_DIR`, Claude Code reads `$CLAUDE_CONFIG_DIR/skills/` for you, too.
+For copies installed by `pdd setup`, an absolute `CLAUDE_CONFIG_DIR` selects `$CLAUDE_CONFIG_DIR/skills/` instead of `~/.claude/skills/`.
 
 `pdd workflow run NAME` and `pdd workflow list` look for a folder `pdd-NAME` with a `workflow.json`, in this order. The first eligible one found wins; only a project copy can override a bundled workflow.
 
@@ -230,7 +230,7 @@ If you set `CLAUDE_CONFIG_DIR`, Claude Code reads `$CLAUDE_CONFIG_DIR/skills/` f
 
 The project is the top folder of the Git repo of your current folder. Put your copy where your agent reads it too, or in both folders of a level.
 
-`npx skills add promptdriven/pdd` installs the ten PDD skills at the project level, or at the "for you" level with `-g`. `pdd setup` copies them to the "for you" level only when they are missing: `~/.agents/skills/` for Codex, and `~/.claude/skills/` (or `$CLAUDE_CONFIG_DIR/skills/`) for Claude Code. After an update of the pdd command, `pdd setup` replaces an older copy that has its `.pdd-skill.json` marker. It never touches a copy without the marker, or a symlink. Do not edit these installed folders: an update replaces them.
+`npx skills add promptdriven/pdd` installs the ten PDD skills at the project level, or at the "for you" level with `-g`. `pdd setup` copies them to the "for you" level only when they are missing: `~/.agents/skills/` for Codex, and `~/.claude/skills/` (or `$CLAUDE_CONFIG_DIR/skills/`) for Claude Code. `pdd setup` replaces an older or same-version differing copy with its `.pdd-skill.json` marker, including an invalid marker. It never touches a copy without the marker, or a symlink. Do not edit these installed folders: an update replaces them.
 
 Give your workflow a new name. A project copy with the same name as a PDD skill (for example `pdd-bug`) works only in Codex:
 

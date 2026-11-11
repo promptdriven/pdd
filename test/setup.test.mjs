@@ -42,6 +42,9 @@ test('SETUP1: pdd setup creates AGENTS.md with the one short block when no agent
   const lines = text.trimEnd().split('\n');
   assert.ok(lines.length <= 10, `${lines.length} lines`);
   for (const word of ['pdd-prompting (the Prompting guide)', '`$pdd-feature` in Codex', '`/pdd-feature` in Claude Code', 'pdd workflow run NAME ISSUE', 'RUNBOOK.md']) assert.ok(text.includes(word), word);
+  for (const name of ['prompting', 'setup', 'feature', 'bug', 'small-change', 'product', 'graph', 'autopilot', 'check', 'merge'])
+    assert.ok(text.includes(`pdd-${name}`), `generated instructions name pdd-${name}`);
+  assert.match(text, /NAME: feature, bug, small-change, product or your own workflow name/);
   assert.equal(text.includes('Give the reader a useful first path'), false);
   const before = statSync(join(project, 'AGENTS.md')).mtimeMs;
   const second = run();

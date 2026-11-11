@@ -9,8 +9,6 @@ metadata:
 
 Add one short PDD block to the file that this repo's agents read, and keep `.pdd/` out of Git. This skill installs nothing: if you can read it, the PDD skills are already installed. The `pdd setup` command checks for a ready agent, does the same in the current folder, installs missing skills and updates eligible marked copies, then previews MCP changes for approval.
 
-The bundled skills also include pdd-product, pdd-autopilot, pdd-check, pdd-merge, pdd-graph and pdd-setup. Bundled workflow names also include `product`.
-
 1. Pick the file: `CLAUDE.md` if it exists, else `AGENTS.md`. If neither exists, create `AGENTS.md`. Use the repo root.
 2. Write this block exactly. Leave out the RUNBOOK.md line if the pdd-prompting skill has no RUNBOOK.md.
 3. If the file already has a `<!-- pdd:start -->` … `<!-- pdd:end -->` block, replace only that block. Otherwise add the block at the end, after one empty line. Keep all other text.
@@ -21,8 +19,8 @@ The bundled skills also include pdd-product, pdd-autopilot, pdd-check, pdd-merge
 <!-- pdd:start -->
 ## PDD
 This project uses PDD: prompts are the source. Write the prompt, Story and test cases first, then the code.
-Skills: pdd-prompting (the Prompting guide), pdd-feature, pdd-bug, pdd-small-change. Call one with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code, or just ask for it by name.
-Full run with PRs: `pdd workflow run NAME ISSUE` (NAME: feature, bug or small-change).
+Skills: pdd-prompting (the Prompting guide), pdd-setup, pdd-feature, pdd-bug, pdd-small-change, pdd-product, pdd-graph, pdd-autopilot, pdd-check, pdd-merge. Call one with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code, or just ask for it by name.
+Full run with PRs: `pdd workflow run NAME ISSUE` (NAME: feature, bug, small-change, product or your own workflow name).
 Before you write prompts or tests, read RUNBOOK.md in the pdd-prompting skill.
 <!-- pdd:end -->
 ```

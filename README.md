@@ -17,7 +17,7 @@ PDD is the `pdd` command and a set of skills for your agent. Your agent writes t
 
 ## Install
 
-You need [Node.js](https://nodejs.org) 22.16.0 or newer, [Git](https://git-scm.com), and the [GitHub CLI](https://cli.github.com) signed in with `gh auth login`. For `pdd setup` and workflow runs, you need a supported installed agent ready to use. Remote checks and Try need access to the PDD interpreter (see [Access](#access)). PDD is tested on macOS and Linux.
+You need [Node.js](https://nodejs.org) 22.16.0 or newer, [Git](https://git-scm.com), and the [GitHub CLI](https://cli.github.com) signed in with `gh auth login`. For `pdd setup` and workflow runs, you need Codex, Claude Code, Gemini CLI or Antigravity CLI installed and ready to use. Without `--agent`, workflow runs choose the first ready agent in that order. Remote checks and Try need access to the PDD interpreter (see [Access](#access)). PDD is tested on macOS and Linux.
 
 ```sh
 npm install -g github:promptdriven/pdd
@@ -134,6 +134,7 @@ The way to call a skill depends on your agent. You can also write "Use the pdd-f
 | `pdd-small-change` | make a small change that is easy to undo |
 | `pdd-prompting` | write or review prompts with the [Prompting guide](docs/prompting-guide.md) |
 | `pdd-setup` | set up a repo for PDD |
+| `pdd-graph` | read the saved issue dependency graph and explain blockers |
 | `pdd-autopilot`, `pdd-check`, `pdd-merge` | with Autopilot on, pick issues, check PRs with a fresh agent and merge them |
 
 The agent writes these files in prompt space:

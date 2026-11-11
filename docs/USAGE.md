@@ -3,7 +3,7 @@
 This guide is for people who install pdd 0.1.27 from `promptdriven/pdd`. Each section has commands that you can copy.
 
 > [!WARNING]
-> **Agents run with full access.** PDD starts Codex with `--dangerously-bypass-approvals-and-sandbox` Claude Code with `--dangerously-skip-permissions`, Gemini CLI with `--yolo`, and Antigravity CLI with `--dangerously-skip-permissions`. The agents do not stop to ask for approval. They can read, change and delete files and run commands as your user. Use PDD only in projects and on machines where you accept this.
+> **Agents run with full access.** PDD starts Codex with `--dangerously-bypass-approvals-and-sandbox`, Claude Code with `--dangerously-skip-permissions`, Gemini CLI with `--yolo`, and Antigravity CLI with `--dangerously-skip-permissions`. The agents do not stop to ask for approval. They can read, change and delete files and run commands as your user. Use PDD only in projects and on machines where you accept this.
 
 Contents:
 
@@ -52,13 +52,13 @@ Without `--agent`, pdd selects the first ready agent in order: Codex, Claude Cod
 
 ## 2. Install
 
-Do these steps in this order:
+For the command and workflow runs, follow this installation path. For skills alone, install the skills and use `pdd-setup` in your agent:
 
 | Step | Command | When |
 |---|---|---|
-| 1. Install the skills | `npx skills add promptdriven/pdd` | Always. Add `-g` for all your projects |
-| 2. Set up the repo | The `pdd-setup` skill in Codex or Claude Code | Once for each repo |
-| 3. Install the pdd command | `npm install -g github:promptdriven/pdd` | Only for runs with PRs, and for `pdd test`, `pdd lint`, `pdd simulate` and `pdd approve` |
+| 1. Install the pdd command | `npm install -g github:promptdriven/pdd` | For runs with PRs, `pdd test`, `pdd lint`, `pdd simulate` and `pdd approve` |
+| 2. Install the skills | `npx skills add promptdriven/pdd -g` | Add the skills for all your projects |
+| 3. Set up the repo | `pdd setup` in your repo | Check for a ready agent, install or update eligible skills, write the PDD block and preview MCP changes for approval |
 
 ### 2.1 Install the skills
 
@@ -68,7 +68,7 @@ npx skills add promptdriven/pdd       # for this project
 npx skills add promptdriven/pdd -g    # for all your projects
 ```
 
-This is the standard skills installer. It needs only Node.js. [Section 4](#4-the-pdd-skills) tells where the skills go. Then do [step 2](#5-set-up-a-repo-and-use-the-skills).
+This is the standard skills installer. It needs only Node.js. [Section 4](#4-the-pdd-skills) tells where the skills go. Then [set up your repo](#5-set-up-a-repo-and-use-the-skills).
 
 ### 2.2 Install the pdd command
 
@@ -81,7 +81,7 @@ pdd --version   # prints 0.1.27
 which -a pdd    # the first line must be in "$(npm prefix -g)/bin"
 ```
 
-npm downloads the repository's default branch, `main`, from GitHub. Install the CLI and skills from this same source. The package has no dependencies and no build step. The pdd command does not copy the skills on each command. Only `pdd setup` copies them, when they are missing.
+npm downloads the repository's default branch, `main`, from GitHub. Install the CLI and skills from this same source. The package has no dependencies and no build step. The pdd command does not copy the skills on each command. Only `pdd setup` copies missing skills or updates eligible marked copies.
 
 Important:
 
@@ -149,7 +149,7 @@ The agents that PDD starts always get the full path of this pdd. They are not af
 
 ## 4. The PDD skills
 
-PDD is nine skills. A skill is a folder of plain Markdown that your agent reads when it needs it. Call a skill with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code (or ask for it by name).
+PDD has ten skills. A skill is a folder of plain Markdown that your agent reads when it needs it. Call a skill with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code (or ask for it by name).
 
 | Skill | What it is |
 |---|---|
@@ -158,7 +158,8 @@ PDD is nine skills. A skill is a folder of plain Markdown that your agent reads 
 | `pdd-product` | Map a whole product and plan small feature runs |
 | `pdd-bug` | A workflow for something that is broken |
 | `pdd-small-change` | A workflow for a small change that is easy to undo |
-| `pdd-setup` | Set up a repo for PDD. It does the same as `pdd setup` |
+| `pdd-setup` | Add the PDD block and ignore local `.pdd/` files in a repo |
+| `pdd-graph` | Read the saved issue dependency graph and explain blockers |
 | `pdd-autopilot` | With Autopilot on (`autopilot.mode` is `observe` or `auto` in `pdd.json`), pick ready issues, claim them and run each one |
 | `pdd-check` | A fresh checker's verdict on a PR at its head |
 | `pdd-merge` | Merge a PR that a fresh checker passed, or write "would merge" in `observe` |
@@ -169,11 +170,11 @@ Where the skills go:
 |---|---|---|
 | `npx skills add promptdriven/pdd` | `.agents/skills/` in your project | `.claude/skills/` in your project |
 | `npx skills add promptdriven/pdd -g` | `~/.agents/skills/` | `~/.claude/skills/`, or `$CLAUDE_CONFIG_DIR/skills/` when you set that variable |
-| `pdd setup`, when the skills are missing | `~/.agents/skills/` | `~/.claude/skills/`, or `$CLAUDE_CONFIG_DIR/skills/` when you set that variable |
+| `pdd setup`, for missing or eligible marked copies | `~/.agents/skills/` | `~/.claude/skills/`, or `$CLAUDE_CONFIG_DIR/skills/` when it is an absolute path |
 
-`pdd setup` copies the skills only when your agent does not have them yet, and says where. If `npx skills` already installed them, it copies nothing. When those skills are older than this pdd, or differ from its skills, `pdd setup` says so and prints the command that updates them: `npx skills add promptdriven/pdd -g -a codex -a claude-code -y` (without `-g` for a copy in your project). `pdd --version` prints the same line when your skills are older. pdd never copies the skills into your repo.
+`pdd setup` installs missing skills in your user folders, and says where. If `npx skills` already installed them, it copies nothing. When those skills are older than this pdd, or differ from its skills, `pdd setup` says so and prints the command that updates them: `npx skills add promptdriven/pdd -g -a codex -a claude-code -y` (without `-g` for a copy in your project). `pdd --version` prints the same line when your skills are older. pdd never copies the skills into your repo.
 
-Each copy that pdd makes has a marker file, `.pdd-skill.json`. After you update the pdd command, `pdd setup` replaces an older copy that has this marker. It never touches a copy without the marker, or a symlink, for example an `npx skills` install.
+Each copy that pdd makes has a marker file, `.pdd-skill.json`. `pdd setup` replaces an older or same-version differing copy that has this marker, including an invalid marker. It never touches a copy without the marker, or a symlink, for example an `npx skills` install.
 
 `npx skills add promptdriven/pdd --skill pdd-prompting` installs one skill. `npx skills list` shows what you have. The `pdd-skills:` line at the top of each `SKILL.md` shows the version of that skill, for example `pdd-skills: 0.1.27`.
 
@@ -493,7 +494,7 @@ A workflow is a skill folder. Copy one of the PDD workflows as `pdd-NAME`, and e
 mkdir -p .agents/skills
 cp -RL ~/.agents/skills/pdd-bug .agents/skills/pdd-mybug   # or from .agents/skills/pdd-bug
 rm -f .agents/skills/pdd-mybug/.pdd-skill.json
-pdd workflow list            # pdd-mybug is in the list
+pdd workflow list            # mybug is in the list
 pdd workflow run mybug 42
 ```
 
@@ -565,14 +566,14 @@ Uninstall the pdd command, the skills that `pdd setup` copied, and its state:
 npm uninstall -g pdd
 rm -rf ~/.agents/skills/pdd-{prompting,setup,feature,bug,small-change,product,autopilot,check,merge,graph}
 rm -rf ~/.claude/skills/pdd-{prompting,setup,feature,bug,small-change,product,autopilot,check,merge,graph}
-# If you set CLAUDE_CONFIG_DIR, also remove the ten pdd-* folders in "$CLAUDE_CONFIG_DIR/skills"
+# If you set CLAUDE_CONFIG_DIR, also remove the ten pdd-* folders in "$CLAUDE_CONFIG_DIR/skills" when it is an absolute path
 rm -rf ~/.local/state/pdd
 rm -rf ~/.pdd
 ```
 
 Look before you run `rm -rf`: if `npx skills -g` installed these folders, use `npx skills remove -g` instead.
 
-Remove the `pdd` MCP entries from your Codex, Claude and Gemini configuration if setup added them. Leftovers can stay in your clones: `.pdd/`, `.git/pdd`, the `*.pdd-worktrees` folders and the `pdd/...` branches. See [Clean up after a run](#clean-up-after-a-run).
+Remove only the `pdd` MCP entries that setup added: `mcp_servers.pdd` in `$CODEX_HOME/config.toml` (default `~/.codex/config.toml`), and `mcpServers.pdd` in `~/.claude.json` (or `$CLAUDE_CONFIG_DIR/.claude.json`) and `~/.gemini/settings.json`. Keep other servers and settings. Leftovers can stay in your clones: `.pdd/`, `.git/pdd`, the `*.pdd-worktrees` folders and the `pdd/...` branches. See [Clean up after a run](#clean-up-after-a-run).
 
 ## 12. Known limits
 
@@ -592,7 +593,7 @@ This is a pre-release. These limits are known today:
 | You see | What to do |
 |---|---|
 | `pdd --version` does not print `0.1.27` | Another `pdd` comes first. See [section 3](#3-if-you-have-the-old-python-pdd). |
-| pdd says an agent is not installed or signed in | Install the agent and sign in, or use the other one with `--agent`. |
+| pdd says an agent is not installed or signed in | Install the agent and sign in, or select another ready agent with `--agent`. |
 | A message about `git rev-parse --show-toplevel` | You are not in a Git clone. `cd` into your clone. |
 | A message about `refs/remotes/origin/...` or a missing base | Run `git fetch origin`. |
 | A GitHub error when the run starts | Check `git remote -v` (a GitHub `origin`), `gh auth status`, and that the issue exists in this repository. |
@@ -692,7 +693,7 @@ exec claude "$@"
 
 Each chat also gets the login variables of the person who runs the pdd command, not the ones of the terminal that first started the Herdr session `pdd`. See [the CLI reference](cli.md).
 
-The picker shows installation and sign-in state. You can switch agents; pdd remembers the choice for this project. A usage limit or sign-in error is shown in the chat without sending your message to another agent automatically. Codex and Claude use fresh read-only turns with your default model and login. Gemini Try checks `--help` for `--approval-mode`, `--admin-policy`, `--extensions`, `--allowed-mcp-server-names` and `--output-format` before applying its restricted configuration. If a flag is missing, pdd names it in the error and asks you to update Gemini CLI. When its sign-in cannot be checked cheaply, the picker says it will be checked on the first message.
+The picker shows installation and sign-in state. You can switch agents; pdd remembers the choice for this project. A usage limit or sign-in error is shown in the chat without sending your message to another agent automatically. Codex and Claude use fresh read-only turns with your default model and login. Gemini Try accepts any Gemini CLI version whose `gemini --help` lists `--approval-mode`, `--admin-policy`, `--extensions`, `--allowed-mcp-server-names` and `--output-format`. It checks those options before applying its restricted configuration. If an option is missing, pdd reports `Gemini Try read-only mode requires <option>; update Gemini CLI.` When its sign-in cannot be checked cheaply, the picker says it will be checked on the first message.
 
 If an agent cannot start, the chat shows its first error line with recognized secrets removed. Full sanitized diagnostics stay on your computer in `~/.pdd/runtime/agent-chat.log`; the chat shows that path when the log was saved.
 
