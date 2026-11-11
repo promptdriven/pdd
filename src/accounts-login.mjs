@@ -1,10 +1,13 @@
-// Generated from prompts/cli/accounts-login.prompt.md (sha256: 8e93f5f06bc2d511765ffc921fe143d89128dbb249b8a1421a6bb39065fa0ed6).
+// Generated from prompts/cli/accounts-login.prompt.md (sha256: d0bfb8324b954567820215c54378e470839ab1ed84a8685917eadf18604c9c68).
 import * as realFs from 'node:fs/promises';
+import { constants } from 'node:fs';
 import { tmpdir as osTmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { createHash } from 'node:crypto';
 
 const MAX_LOGIN_BYTES = 64 * 1024;
+// Non-blocking, so a named pipe in place of the file cannot hang the read.
+const READ_NO_BLOCK = constants.O_RDONLY | constants.O_NONBLOCK;
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const facts = (state, accessExpiresAt = null, accountKey = null) => ({ state, accessExpiresAt, accountKey });
 
@@ -25,7 +28,7 @@ function accessEnd(token) {
 // document. The document stays inside this module.
 async function readLogin(home, fs) {
   let handle;
-  try { handle = await fs.open(join(home, 'auth.json'), 'r'); } catch (error) {
+  try { handle = await fs.open(join(home, 'auth.json'), READ_NO_BLOCK); } catch (error) {
     return { facts: facts(error?.code === 'ENOENT' || error?.code === 'ENOTDIR' ? 'none' : 'unreadable') };
   }
   let text;
@@ -65,8 +68,8 @@ function accessOnly(doc) {
   const tokens = { ...(text(doc.tokens.id_token) ? { id_token: doc.tokens.id_token } : {}),
     access_token: doc.tokens.access_token, refresh_token: '',
     ...(text(doc.tokens.account_id) ? { account_id: doc.tokens.account_id } : {}) };
-  return { ...(text(doc.auth_mode) ? { auth_mode: doc.auth_mode } : {}), tokens,
-    ...(text(doc.last_refresh) ? { last_refresh: doc.last_refresh } : {}) };
+  // A fresh last_refresh keeps any age rule in Codex from starting a renewal.
+  return { ...(text(doc.auth_mode) ? { auth_mode: doc.auth_mode } : {}), tokens, last_refresh: new Date().toISOString() };
 }
 
 const codedError = (code, message, extra = {}) => Object.assign(new Error(message), { code, ...extra });
@@ -75,7 +78,7 @@ export async function withAccessOnlyHome(home, fn, ports = {}) {
   checkHome(home);
   const fs = { ...realFs, ...ports.fs };
   const login = await readLogin(home, fs);
-  if (!login.doc) throw codedError('PDD_NO_LOGIN', 'No readable Codex login in this folder.');
+  if (!login.doc) throw codedError('PDD_NO_LOGIN', 'No readable Codex login in this folder.', { state: login.facts.state });
   let tempHome;
   try { tempHome = await fs.mkdtemp(join(ports.tmpdir ?? osTmpdir(), 'pdd-codex-read-')); } catch {
     throw codedError('PDD_TEMP_HOME_FAILED', 'Could not make the temporary login folder.');

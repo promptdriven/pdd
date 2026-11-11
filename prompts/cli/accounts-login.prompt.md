@@ -31,8 +31,9 @@ for the temporary home (default `os.tmpdir()`).
 
 Both exports read `<home>/auth.json` the same way:
 
-1. Open it read-only. A missing file or folder (`ENOENT`, `ENOTDIR`) is
-   `none`. Any other open failure is `unreadable`.
+1. Open it read-only and non-blocking (`O_RDONLY | O_NONBLOCK`), so that a
+   named pipe in its place cannot hang the read. A missing file or folder
+   (`ENOENT`, `ENOTDIR`) is `none`. Any other open failure is `unreadable`.
 2. It must be a regular file, else `unreadable`. A symbolic link is followed:
    the caller judges links from names.
 3. Read at most 64 KiB. A file larger than 64 KiB is `unreadable`, because no
@@ -63,16 +64,18 @@ Both exports read `<home>/auth.json` the same way:
 but can never refresh it:
 
 1. Read the login file (above). For `none` or `unreadable`, reject with an
-   `Error` whose message is `No readable Codex login in this folder.` and whose
-   `code` is `PDD_NO_LOGIN`. It makes no folder and does not call `fn`.
+   `Error` whose message is `No readable Codex login in this folder.`, whose
+   `code` is `PDD_NO_LOGIN` and whose `state` is that state. It makes no folder
+   and does not call `fn`.
 2. Make a new folder `mkdtemp(<tmpdir>/pdd-codex-read-)` and set its mode to
    0700.
 3. Write `auth.json` in it with mode 0600 (exclusive create). It holds only
    these fields of the source, each kept only when the source has it as a
    string: `auth_mode`, `tokens.id_token`, `tokens.access_token`,
-   `tokens.account_id`, `last_refresh`; and always `tokens.refresh_token` = "".
-   Every other field (for example `OPENAI_API_KEY`) is left out, so no other
-   secret enters the folder.
+   `tokens.account_id`; and always `tokens.refresh_token` = "" and
+   `last_refresh` = the time of the copy (ISO 8601, `Date#toISOString`), so
+   that no age rule in Codex starts a renewal. Every other field (for example
+   `OPENAI_API_KEY`) is left out, so no other secret enters the folder.
 4. Write `config.toml` with mode 0600 and exactly the text
    `cli_auth_credentials_store = "file"` and a newline, so Codex uses this file
    and not the OS credential store.

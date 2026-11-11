@@ -5,6 +5,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, sy
 import * as fsp from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { codexLoginFacts, withAccessOnlyHome } from '../src/accounts-login.mjs';
 
 // Fake logins only. Every secret below is made up for this test.
@@ -91,6 +92,7 @@ test('the access-only home has no refresh token, only the needed fields, private
   const before = readFileSync(join(source, 'auth.json'));
   const base = folder(t, 'pdd-login-base-');
   let seen;
+  const started = Date.now();
   const value = await withAccessOnlyHome(source, (tempHome, facts) => {
     const names = readdirSync(tempHome).sort();
     const auth = JSON.parse(readFileSync(join(tempHome, 'auth.json'), 'utf8'));
@@ -105,9 +107,11 @@ test('the access-only home has no refresh token, only the needed fields, private
   assert.deepEqual(seen.names, ['auth.json', 'config.toml']);
   assert.deepEqual(seen.modes, [0o700, 0o600, 0o600]);
   assert.equal(seen.config, 'cli_auth_credentials_store = "file"\n');
-  assert.deepEqual(seen.auth, { auth_mode: 'chatgpt',
-    tokens: { id_token: FAKE.id, access_token: FAKE.access, refresh_token: '', account_id: FAKE.account },
-    last_refresh: '2026-11-10T12:00:00Z' });
+  const { last_refresh: copiedAt, ...auth } = seen.auth;
+  assert.deepEqual(auth, { auth_mode: 'chatgpt',
+    tokens: { id_token: FAKE.id, access_token: FAKE.access, refresh_token: '', account_id: FAKE.account } });
+  assert.equal(new Date(copiedAt).toISOString(), copiedAt, 'last_refresh is an ISO time');
+  assert.ok(Date.parse(copiedAt) >= started && Date.parse(copiedAt) <= Date.now(), 'last_refresh is the time of the copy, not the source time');
   assert.equal(seen.text.includes(FAKE.refresh), false);
   assert.equal(seen.text.includes(FAKE.apiKey), false);
   assert.equal(seen.text.includes('fake-other-secret'), false);
@@ -131,9 +135,9 @@ test('the access-only home is removed after a thrown or rejected callback, and t
 test('no usable login: no folder is made and the callback never runs', async t => {
   const base = folder(t, 'pdd-login-base-');
   let called = 0;
-  for (const dir of [home(t), home(t, '{bad')])
+  for (const [dir, state] of [[home(t), 'none'], [home(t, '{bad'), 'unreadable']])
     await assert.rejects(withAccessOnlyHome(dir, () => { called++; }, { tmpdir: base }),
-      { code: 'PDD_NO_LOGIN', message: 'No readable Codex login in this folder.' });
+      { code: 'PDD_NO_LOGIN', state, message: 'No readable Codex login in this folder.' });
   assert.equal(called, 0);
   assert.deepEqual(readdirSync(base), []);
 });
@@ -156,4 +160,13 @@ test('a failed setup removes the folder; a failed removal wins and names the fol
   assert.equal(error.message, `Could not remove the temporary login folder ${tempHome}.`);
   assert.deepEqual(leaks(error.message), []);
   rmSync(tempHome, { recursive: true, force: true });
+});
+
+test('a named pipe in place of the login file is unreadable at once, not a hang', { skip: process.platform === 'win32' }, async t => {
+  const dir = home(t);
+  execFileSync('mkfifo', [join(dir, 'auth.json')]);
+  let timer;
+  const result = await Promise.race([codexLoginFacts(dir), new Promise(resolve => { timer = setTimeout(() => resolve('hang'), 2_000); })]);
+  clearTimeout(timer);
+  assert.deepEqual(result, { state: 'unreadable', accessExpiresAt: null, accountKey: null });
 });

@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import * as fsp from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { setImmediate } from 'node:timers/promises';
 import { loadUsage, markLimited, readAllUsage, readLoginUsage, saveUsage } from '../src/accounts-usage.mjs';
 
@@ -118,6 +119,8 @@ test('the codex bucket wins, and limits come from the read', async t => {
       { limitedUntil: S(600) * 1000, limitReason: 'limit' }],
     ['weekly window only', { rateLimits: { planType: 'pro', primary: windowRow(32, 10080, S(DAY)), secondary: null } },
       { plan: 'pro', week: { usedPercent: 32, resetsAt: S(DAY) * 1000 }, fiveHour: null, limitedUntil: null, limitReason: null }],
+    ['a blank limit type is no limit', { rateLimits: { primary: windowRow(40, 300, S(600)), rateLimitReachedType: '  ' } },
+      { limitedUntil: null, limitReason: null }],
     ['two windows of one length: the higher', { rateLimits: { primary: windowRow(10, 300, S(60)), secondary: windowRow(70, 300, S(90)) } },
       { fiveHour: { usedPercent: 70, resetsAt: S(90) * 1000 }, week: null }],
   ];
@@ -157,6 +160,51 @@ test('a login file that changes to an ending token between the two reads is not 
   const result = await readLoginUsage(cx6, { now: NOW }, { spawn: codex.spawn, fs: { open } });
   assert.deepEqual(result, { ...empty, state: 'expired', accessExpiresAt: S(60) * 1000, note: 'access ended; this read never refreshes' });
   assert.equal(codex.starts.length, 0);
+});
+
+test('a login file that goes away or breaks between the two reads gets its facts row', async t => {
+  for (const [change, expected] of [
+    [path => rmSync(path), { state: 'no-login', note: 'no Codex login in this folder' }],
+    [path => writeFileSync(path, '{bad'), { state: 'unknown', note: 'login file is unreadable' }]]) {
+    const login = codexLogin(t, 'cx8');
+    const codex = fakeCodex();
+    let opens = 0;
+    const open = async (path, flags) => {
+      if (path === join(login.home, 'auth.json') && ++opens === 2) change(path);
+      return fsp.open(path, flags);
+    };
+    assert.deepEqual(await readLoginUsage(login, { now: NOW }, { spawn: codex.spawn, fs: { open } }), { ...empty, ...expected });
+    assert.equal(codex.starts.length, 0);
+  }
+});
+
+test('login names such as __proto__ and constructor stay data and never touch shared objects', async t => {
+  const env = { XDG_STATE_HOME: folder(t, 'pdd-usage-xdg-') };
+  const names = ['__proto__', 'constructor', 'toString'];
+  for (const name of names) {
+    const marked = await markLimited({ env }, name, NOW, 'limit');
+    assert.equal(marked.note, 'not read yet', name);
+  }
+  assert.equal(Object.prototype.limitedUntil, undefined);
+  assert.equal(Object.limitedUntil, undefined);
+  const loaded = await loadUsage({ env });
+  assert.deepEqual(Object.keys(loaded).sort(), [...names].sort());
+  for (const name of names) assert.equal(Object.getOwnPropertyDescriptor(loaded, name).value.limitReason, 'limit', name);
+  const logins = names.map(name => ({ ...codexLogin(t, 'cx9'), name }));
+  const rows = await readAllUsage(logins, { env, now: NOW }, { spawn: fakeCodex().spawn });
+  assert.deepEqual(Object.keys(rows).sort(), [...names].sort());
+  assert.equal(Object.getPrototypeOf(rows), Object.prototype);
+  for (const name of names) assert.equal(Object.getOwnPropertyDescriptor(rows, name).value.state, 'ok', name);
+});
+
+test('a named pipe in place of the cache file loads as empty at once', { skip: process.platform === 'win32' }, async t => {
+  const xdg = folder(t, 'pdd-usage-xdg-');
+  mkdirSync(join(xdg, 'pdd', 'accounts'), { recursive: true });
+  execFileSync('mkfifo', [join(xdg, 'pdd', 'accounts', 'usage.json')]);
+  let timer;
+  const result = await Promise.race([loadUsage({ env: { XDG_STATE_HOME: xdg } }), new Promise(resolve => { timer = setTimeout(() => resolve('hang'), 2_000); })]);
+  clearTimeout(timer);
+  assert.deepEqual(result, {});
 });
 
 test('a bad reply or a failed read is unknown with a safe note, never a throw, and the temp home is removed', async t => {

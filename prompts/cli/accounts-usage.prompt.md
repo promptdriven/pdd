@@ -23,7 +23,9 @@ read. Nothing that it returns or saves holds a token, an account id or an email.
 Options: `env` defaults to `process.env`. `now` is a function that returns epoch
 milliseconds, or a fixed epoch-milliseconds number; default `Date.now`.
 `command` is the Codex program, default `codex`. A login is a pool row with at
-least `name` (non-empty string), `provider` and `home`.
+least `name` (non-empty string), `provider` and `home`. A name is only data:
+every returned map has each name as its own key, and a name such as
+`__proto__` or `constructor` never reaches an inherited member of any object.
 
 Ports (each optional): `spawn` (passed to the transport), `fs` and `tmpdir`
 (passed to the [login facts module](accounts-login.prompt.md)), `fs` also for
@@ -65,9 +67,10 @@ every failure is a row. It decides in this order, first match wins:
 | Otherwise | Read it (below). |
 
 The 10-minute margin keeps Codex away from its own refresh point (5 minutes
-before the end). The read runs inside `withAccessOnlyHome(home, ...)`. It checks
-the facts of the copied file again with the same table (the file can change
-between the two reads) and uses that `accessExpiresAt`. Then it calls
+before the end). The read runs inside `withAccessOnlyHome(home, ...)`. The file
+can change between the two reads, so it checks the access end of the copied
+file again with the last three rows of the table and uses that
+`accessExpiresAt`. Then it calls
 [`readCodexRateLimitsReply`](codex-limits.prompt.md#transport) with:
 
 - `command`; `cwd` = the temporary home (so no project config loads);
@@ -89,9 +92,11 @@ reason:
 | `protocol` | `bad reply from codex app-server` |
 | `error` | `codex app-server refused the read` |
 
-A `PDD_TEMP_HOME_LEFT` rejection is `unknown` with the note
-`temporary login folder not removed: <path>` (the error's `path`); any other rejection is `unknown`
-with the note `temporary login folder failed`. `readAt` is `now` after the read.
+A `PDD_NO_LOGIN` rejection (the file went away or broke between the two reads)
+gives the table row for the error's `state`. A `PDD_TEMP_HOME_LEFT` rejection is
+`unknown` with the note `temporary login folder not removed: <path>` (the
+error's `path`); any other rejection is `unknown` with the note
+`temporary login folder failed`. `readAt` is `now` after the read.
 
 ## Read the reply
 
@@ -103,14 +108,14 @@ The windows are the bucket's `primary` and `secondary` that are not null. Each
 one must be valid by the [Codex limits window rule](codex-limits.prompt.md#health-state)
 (finite `usedPercent` ≥ 0; `resetsAt` null or a finite non-negative Unix-seconds
 value within Date range); one invalid window makes the row `unknown` with the
-note `bad usage reply`. No window and no non-empty `rateLimitReachedType` is
+note `bad usage reply`. No window and no non-blank `rateLimitReachedType` is
 `unknown` with the note `no usage windows in reply`.
 
 - `windowDurationMins` 10080 gives `week`; 300 gives `fiveHour`; other values
   give neither. When both windows have one duration, keep the one with the higher
   `usedPercent` (on a tie, `primary`). `resetsAt` is Unix seconds × 1000, or null.
 - Limited when any window is at 100% or more, or `rateLimitReachedType` is a
-  non-empty string, or the reply's `ordinaryUsageAllowed` is `false` (the
+  non-blank string, or the reply's `ordinaryUsageAllowed` is `false` (the
   protocol says that a client must not infer recovery while it is false).
   `limitReason` is `credits` for `workspace_owner_credits_depleted` and
   `workspace_member_credits_depleted`, else `limit`. `limitedUntil` is the
@@ -141,7 +146,9 @@ The file is `{"version": 1, "rows": {"<name>": usage row}}`, mode 0600, in a
 folder with mode 0700. It is derived data: no login and no decision lives in it,
 and a read rebuilds it.
 
-- `loadUsage`: a missing file, a file over 1 MiB, text that is not JSON, or a
+- `loadUsage`: the file is opened read-only and non-blocking, like the login
+  file. A missing file, a path that is not a regular file, a file over 1 MiB,
+  text that is not JSON, or a
   value without `version` 1 and an object `rows` gives `{}`. Each row that is a
   non-array object passes through the row filter; other rows are dropped.
 - Row filter (for every load and every write): keep only the usage row fields.

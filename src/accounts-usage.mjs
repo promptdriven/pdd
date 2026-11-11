@@ -1,5 +1,6 @@
-// Generated from prompts/cli/accounts-usage.prompt.md (sha256: 155a311660c5bf234c7bd8b9288f6cd8e17851b7cbb976085957e3cd13a2cd4c).
+// Generated from prompts/cli/accounts-usage.prompt.md (sha256: de4d01f42f1812ba4009adc02250ba4f037ac51c3610b8a13303a72a0f74621b).
 import * as realFs from 'node:fs/promises';
+import { constants } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
 import { codexLoginFacts, withAccessOnlyHome } from './accounts-login.mjs';
@@ -19,6 +20,7 @@ const TRANSPORT_NOTES = {
   error: 'codex app-server refused the read',
 };
 const MAX_CACHE_BYTES = 1024 * 1024;
+const READ_NO_BLOCK = constants.O_RDONLY | constants.O_NONBLOCK;
 
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const finite = value => typeof value === 'number' && Number.isFinite(value);
@@ -92,6 +94,7 @@ async function readCodex(login, { env, now, command }, ports) {
       return { ...result, accessExpiresAt: copied.accessExpiresAt };
     }, loginPorts);
   } catch (error) {
+    if (error?.code === 'PDD_NO_LOGIN') return factsRow({ state: error.state, accessExpiresAt: null }, now()) ?? row('unknown', { note: 'login file is unreadable' });
     if (error?.code === 'PDD_TEMP_HOME_LEFT') return row('unknown', { note: `temporary login folder not removed: ${error.path}` });
     return row('unknown', { note: 'temporary login folder failed' });
   }
@@ -120,8 +123,8 @@ export async function readAllUsage(logins, { env = process.env, now, command = '
     }
   };
   await Promise.all(Array.from({ length: Math.min(4, logins.length) }, worker));
-  const rows = {};
-  logins.forEach((login, index) => { rows[login.name] = results[index]; });
+  // fromEntries makes own keys, so a name such as __proto__ stays data.
+  const rows = Object.fromEntries(logins.map((login, index) => [login.name, results[index]]));
   return save ? saveUsage({ env }, rows, ports) : rows;
 }
 
@@ -150,27 +153,26 @@ function cleanRow(value) {
   };
 }
 
+// The cache rows by name, as a Map: a login name never meets an inherited member.
 async function readCache(file, fs) {
   let text;
   try {
-    const handle = await fs.open(file, 'r');
+    const handle = await fs.open(file, READ_NO_BLOCK);
     try {
-      const { size } = await handle.stat();
-      if (size > MAX_CACHE_BYTES) return {};
+      const stat = await handle.stat();
+      if (!stat.isFile() || stat.size > MAX_CACHE_BYTES) return new Map();
       text = await handle.readFile('utf8');
     } finally { await handle.close().catch(() => {}); }
-  } catch { return {}; }
-  if (Buffer.byteLength(text) > MAX_CACHE_BYTES) return {};
+  } catch { return new Map(); }
+  if (Buffer.byteLength(text) > MAX_CACHE_BYTES) return new Map();
   let doc;
-  try { doc = JSON.parse(text); } catch { return {}; }
-  if (!object(doc) || doc.version !== 1 || !object(doc.rows)) return {};
-  const rows = {};
-  for (const [name, value] of Object.entries(doc.rows)) if (object(value)) rows[name] = cleanRow(value);
-  return rows;
+  try { doc = JSON.parse(text); } catch { return new Map(); }
+  if (!object(doc) || doc.version !== 1 || !object(doc.rows)) return new Map();
+  return new Map(Object.entries(doc.rows).filter(([, value]) => object(value)).map(([name, value]) => [name, cleanRow(value)]));
 }
 
 export async function loadUsage({ env = process.env } = {}, ports = {}) {
-  return readCache(statePaths(env).usageFile, { ...realFs, ...ports.fs });
+  return Object.fromEntries(await readCache(statePaths(env).usageFile, { ...realFs, ...ports.fs }));
 }
 
 async function updateCache(env, change, ports) {
@@ -199,7 +201,7 @@ async function updateCache(env, change, ports) {
     try {
       const handle = await fs.open(temp, 'wx', 0o600);
       try {
-        await handle.writeFile(JSON.stringify({ version: 1, rows }, null, 2) + '\n');
+        await handle.writeFile(JSON.stringify({ version: 1, rows: Object.fromEntries(rows) }, null, 2) + '\n');
         await handle.sync();
       } finally { await handle.close(); }
       await fs.rename(temp, usageFile);
@@ -219,15 +221,13 @@ const activeLimit = (old, next) => old && old.limitReason != null
 export async function saveUsage({ env = process.env } = {}, rows, ports = {}) {
   if (!object(rows)) throw new TypeError('rows must be an object of usage rows by login name.');
   return updateCache(env, cached => {
-    const saved = {};
+    const saved = [];
     for (const [name, value] of Object.entries(rows)) {
-      const next = cleanRow(value);
-      if (next.state !== 'ok' && activeLimit(cached[name], next)) {
-        next.limitedUntil = cached[name].limitedUntil; next.limitReason = cached[name].limitReason;
-      }
-      cached[name] = next; saved[name] = { ...next };
+      const next = cleanRow(value), old = cached.get(name);
+      if (next.state !== 'ok' && activeLimit(old, next)) { next.limitedUntil = old.limitedUntil; next.limitReason = old.limitReason; }
+      cached.set(name, next); saved.push([name, { ...next }]);
     }
-    return saved;
+    return Object.fromEntries(saved);
   }, ports);
 }
 
@@ -236,9 +236,9 @@ export async function markLimited({ env = process.env } = {}, name, untilMs, rea
   if (untilMs !== null && !(finite(untilMs) && untilMs >= 0)) throw new TypeError('untilMs must be epoch milliseconds or null.');
   if (!REASONS.has(reason)) throw new TypeError('reason must be limit or credits.');
   return updateCache(env, cached => {
-    const next = cached[name] ?? row('unknown', { note: 'not read yet' });
+    const next = cached.get(name) ?? row('unknown', { note: 'not read yet' });
     next.limitedUntil = untilMs; next.limitReason = reason;
-    cached[name] = next;
+    cached.set(name, next);
     return { ...next };
   }, ports);
 }
