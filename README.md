@@ -17,7 +17,7 @@ PDD is the `pdd` command and a set of skills for your agent. Your agent writes t
 
 ## Install
 
-You need [Node.js](https://nodejs.org) 22.16.0 or newer, [Git](https://git-scm.com), and the [GitHub CLI](https://cli.github.com) signed in with `gh auth login`. For `pdd setup` and workflow runs, you need a supported installed agent ready to use. Remote checks and Try need access to the PDD interpreter (see [Access](#access)). PDD is tested on macOS and Linux.
+You need [Node.js](https://nodejs.org) 22.16.0 or newer, [Git](https://git-scm.com), and the [GitHub CLI](https://cli.github.com) signed in with `gh auth login`. For `pdd setup` and workflow runs, install Codex, Claude Code, Gemini CLI or Antigravity CLI. Without `--agent`, pdd selects the first ready agent in that order. Codex and Claude status probes check for configured credentials; Gemini checks installation and leaves sign-in to the chat; Antigravity lists models for a signed-in account. Remote checks and Try need access to the PDD interpreter (see [Access](#access)). PDD is tested on macOS and Linux.
 
 ```sh
 npm install -g github:promptdriven/pdd
@@ -241,9 +241,9 @@ See [Record a chat approval](docs/cli.md#record-a-chat-approval) for safe comman
 
 ### 5. Code space
 
-Code space is the PDD compiler: your agent writes the code from the approved prompts, and the same tests run on that code. In a `feature` or `bug` workflow run, pdd opens two pull requests:
+Code space is the PDD compiler: your agent writes the code from the approved prompts, and the same tests run on that code. A `small-change` or `product` workflow opens one PR. A `feature` or `bug` workflow can open two:
 
-1. **Prompt space.** The prompts, the Stories and the tests. The pull request text starts with the `Prompt tests` lines and the report links.
+1. **Prompt space.** The prompts, the Stories and the tests. The pull request starts with a readable summary and checks; its Details section includes `Prompt tests` lines and report links.
 2. **Code space.** The code. To get it, say so in the chat, or run `pdd workflow approve 42`. The agent runs the unchanged tests from prompt space on the code and records the results, mutation control and formal check. pdd validates the source identity and report structure and shows missing or stale evidence as **BLOCKED**. These are agent-reported results, not independent proof of execution.
 
 The pdd CLI has no merge command. In manual workflows, ask your agent to merge under [RUNBOOK §2](RUNBOOK.md#2-the-files). In Autopilot `auto` mode, pdd-merge handles eligible merges after repository review and test rules pass; required human approvals still apply.
