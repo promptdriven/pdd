@@ -3117,10 +3117,12 @@ async function syncPr1(run, p) {
 }
 
 // PR 1's description names its draft prompts; after a push to PR 1 that line must say the new truth. A failure only warns.
-async function draftDescription(run, pr1, drafts, p) {
+async function draftDescription(run, pr1, drafts, p, recoveryView = null) {
+  let recovery;
   try {
-    await requireExistingDraft(run, pr1, p);
-    const body = JSON.parse(String((await p.execFile('gh', ['pr', 'view', pr1.url, '--json', 'body'], { cwd: run.root })).stdout ?? '')).body;
+    if (!recoveryView) await requireExistingDraft(run, pr1, p);
+    const view = recoveryView ?? JSON.parse(String((await p.execFile('gh', ['pr', 'view', pr1.url, '--json', 'body'], { cwd: run.root })).stdout ?? ''));
+    const body = view.body;
     if (typeof body !== 'string') throw Error('PR 1 description unavailable.');
     const old = body.split('\n').find(line => line.startsWith('Draft prompts: '));
     const draftBody = !old ? body : drafts.length ? body.replace(old, draftLine(drafts)) : body.replace(`\n\n${old}`, '').replace(old, '');
@@ -3187,11 +3189,20 @@ async function draftDescription(run, pr1, drafts, p) {
     const nextBody = from < 0 ? `${leading}${fitted}${footer}` : withSummaries(steps, texts, section => `${leading}${placed(section)}${footer}`, BODY_BUDGET);
     // Only the time of the status line changed: nothing to write.
     if (nextBody === body || sameReadableTop(nextBody, body)) { remember(); return []; }
+    if (recoveryView && commitSha(view.headRefOid)) {
+      recovery = { url: pr1.url, body, nextBody, head: view.headRefOid };
+      await requireExistingDraft(run, pr1, p);
+      const current = JSON.parse(String((await p.execFile('gh', ['pr', 'view', pr1.url, '--json', 'body,headRefOid'], {cwd:run.root})).stdout ?? ''));
+      if (current.body !== body || current.headRefOid !== view.headRefOid) throw Error('PR 1 description or head changed; inspect it before recovery.');
+      p.inspectProgress?.();
+    }
     await updatePrDescription(p, pr1.url, nextBody, run.root);
     remember();
     return [`pdd updated the PR 1 description: ${drafts.length ? `draft prompts left: ${drafts.join(', ')}` : 'no draft prompts are left'}.`];
   } catch (error) {
-    if(error?.code==='workflow_progress_refused')throw error; return [`warning: pdd could not update the PR 1 description (${descriptionCause(error)}). ${descriptionRetry(run, p, 'approve')}. ${run.publicationPending ? 'No source was pushed.' : 'The PR retains its previous evidence; after a source push it stays publication-pending.'}`]; }
+    if(error?.code==='workflow_progress_refused')throw error;
+    if (recovery) commitRun(run, p, latest => { latest.pr1DescriptionRecovery = recovery; });
+    return [`warning: pdd could not update the PR 1 description (${descriptionCause(error)}). ${descriptionRetry(run, p, 'approve')}. ${run.publicationPending ? 'No source was pushed.' : 'The PR retains its previous evidence; after a source push it stays publication-pending.'}`]; }
 }
 
 // A terminal in the run's own chat pane (Herdr session pdd) belongs to the chat; a person's other Herdr tab does not.
@@ -3394,6 +3405,27 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
   const ownershipFailure = await continuationOwnership(run, cwd, p);
   if (ownershipFailure) return fail(ownershipFailure);
   if (run.draft !== undefined && typeof run.draft !== 'boolean') return fail('The saved draft publication policy must be a Boolean.');
+  if (run.pr1DescriptionRecovery && (!run.gate || run.gate.kind === 'ask-code') && !draft && through === undefined && approvalWords === undefined) {
+    const recovery = run.pr1DescriptionRecovery, pr1 = run.pr?.find(pr => pr.url === recovery.url);
+    protectProgress(run, p, {approval:true, validate: latest => {
+      if (!equalFact(latest.pr1DescriptionRecovery, recovery) || !equalFact(latest.pr?.find(pr => pr.url === recovery.url), pr1))
+        throw Object.assign(Error('PR 1 recovery changed, look again.'), {code:'workflow_progress_refused'});
+    }});
+    try {
+      p.inspectProgress();
+      if (!pr1) throw Error('The saved PR 1 is unavailable.');
+      await requireExistingDraft(run, pr1, p);
+      const view = JSON.parse(String((await p.execFile('gh', ['pr', 'view', pr1.url, '--json', 'body,headRefOid'], {cwd:run.root})).stdout ?? ''));
+      if (view.body !== recovery.body || view.headRefOid !== recovery.head) throw Error('PR 1 description or head changed; inspect it before recovery.');
+      p.inspectProgress?.();
+      await updatePrDescription(p, pr1.url, recovery.nextBody, run.root);
+      commitRun(run, p, latest => { if (equalFact(latest.pr1DescriptionRecovery, recovery)) delete latest.pr1DescriptionRecovery; });
+      return done('pdd recovered the PR 1 description.');
+    } catch (error) {
+      if (error?.code === 'workflow_progress_refused') throw error;
+      return fail(`Could not recover the PR 1 description (${descriptionCause(error)}). ${descriptionRetry(run, p, 'approve')}.`);
+    }
+  }
   const strengthening = draft && run.draft !== true;
   const draftStage = run.areas.slice(run.area).find(item => item.gate === 'pr');
   const draftEligibility = latest => latest.gate && latest.gate.area === area.name
@@ -3606,7 +3638,19 @@ ${approvalGuide(run)}`, p, true);
     try { saved = await saveGateApproval(run, area, record, edits, p); }
     catch (error) { return fail(`Approval failed: ${error.message}`); }
   }
-  let based = '';
+  let based = '', recoveryView = null;
+  if (askCode) {
+    try {
+      const pr1 = prOf(run, area.name);
+      await requireExistingDraft(run, pr1, p);
+      recoveryView = JSON.parse(String((await p.execFile('gh', ['pr', 'view', pr1.url, '--json', 'body,headRefOid'], {cwd:run.root})).stdout ?? ''));
+      if (typeof recoveryView.body !== 'string' || !commitSha(recoveryView.headRefOid)) throw Error('PR 1 description or head unavailable.');
+      p.inspectProgress?.();
+    } catch (error) {
+      if (error?.code === 'workflow_progress_refused') throw error;
+      return fail(`Cannot read the PR 1 description and head (${descriptionCause(error)}). ${approvalGuide(run)} `);
+    }
+  }
   if (askCode) {
     const adoptedFailure=await adoptionFailure(run,p);if(adoptedFailure)return fail(adoptedFailure);
     // Reached at the code gate, or right after PR 1 opened when the terminal said yes to the code PR.
@@ -3626,7 +3670,7 @@ ${approvalGuide(run)}`, p, true);
     if(error?.code==='workflow_code_contract_changed')return fail(error.message);
     return fail(`${oneLine(error.message)} Check PR 1, then ${approvalRetry(run, p.pdd)}`); }
   }
-  if (askCode) carried.push(...await draftDescription(run, prOf(run, area.name), await pr1Drafts(run, p), p));
+  if (askCode) carried.push(...await draftDescription(run, prOf(run, area.name), await pr1Drafts(run, p), p, recoveryView));
   const now = invocationAt;
   const storyRecord = normal && storyGate ? { gateId: saved?.gateId ?? selectedGate?.id ?? null, evidenceId: saved?.evidence?.id ?? null, at: invocationAt,
     fingerprint: reviewedStory ?? storyFingerprint({ root: run.root, changed: await changedFiles(run, p) }), prompts: (approvalSnapshot ?? []).map(row => row.path) } : null;

@@ -109,7 +109,7 @@ async function fixture(t, { agent = 'claude', name = 'small-change' } = {}) {
     }
     if (args[0] === 'pr' && args[1] === 'view') {
       const pr = f.prs.find(item => item.url === args[2]);
-      return { stdout: JSON.stringify({ state: f.merged || f.mergedNumbers.includes(pr?.number) ? 'MERGED' : 'OPEN', mergedAt: null, statusCheckRollup: f.ci, body: pr?.body }) };
+      return { stdout: JSON.stringify({ state: f.merged || f.mergedNumbers.includes(pr?.number) ? 'MERGED' : 'OPEN', mergedAt: null, statusCheckRollup: f.ci, body: pr?.body, headRefOid: pr?.headRefOid }) };
     }
     if (args[0] === 'api' && args.includes('PATCH')) {
       const endpoint = args.find(arg => /^repos\/example\/project\/pulls\/\d+$/.test(arg));
@@ -1291,8 +1291,8 @@ if [ "$1" = pr ] && [ "$2" = list ]; then
 fi
 if [ "$1" = api ] && [ "$4" = --method ] && [ "$5" = PATCH ]; then node -e 'const fs=require("fs"),body=JSON.parse(fs.readFileSync(0,"utf8")).body;fs.writeFileSync(process.env.GH_CAPTURE,body);fs.writeFileSync(process.env.GH_PR_BODY_FILE,body);'; exit 0; fi
 if [ "$1" = pr ] && [ "$2" = view ]; then
-  if [ "$4" = --json ] && [ "$5" = body ]; then
-    node -e 'const fs=require("fs"); process.stdout.write(JSON.stringify({body:fs.readFileSync(process.env.GH_PR_BODY_FILE,"utf8")}));'
+  if [ "$4" = --json ] && { [ "$5" = body ] || [ "$5" = body,headRefOid ]; }; then
+    node -e 'const fs=require("fs"),cp=require("child_process"),p=JSON.parse(fs.readFileSync(process.env.GH_PR_BODY_FILE+".identity.json","utf8")); process.stdout.write(JSON.stringify({body:fs.readFileSync(process.env.GH_PR_BODY_FILE,"utf8"),headRefOid:cp.execFileSync("git",["rev-parse","refs/remotes/origin/"+p.headRefName],{encoding:"utf8"}).trim()}));'
   else
     echo '{"state":"OPEN"}'
   fi

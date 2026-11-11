@@ -116,7 +116,7 @@ async function fixture(t, { agent = 'claude', name = 'small-change' } = {}) {
     }
     if (args[0] === 'pr' && args[1] === 'view') {
       const pr = f.prs.find(item => item.url === args[2]);
-      return { stdout: JSON.stringify({ state: f.merged || f.mergedNumbers.includes(pr?.number) ? 'MERGED' : 'OPEN', mergedAt: null, statusCheckRollup: f.ci, body: pr?.body }) };
+      return { stdout: JSON.stringify({ state: f.merged || f.mergedNumbers.includes(pr?.number) ? 'MERGED' : 'OPEN', mergedAt: null, statusCheckRollup: f.ci, body: pr?.body, headRefOid: pr?.headRefOid }) };
     }
     if (args[0] === 'api' && args.includes('PATCH')) {
       const endpoint = args.find(arg => /^repos\/example\/project\/pulls\/\d+$/.test(arg));
