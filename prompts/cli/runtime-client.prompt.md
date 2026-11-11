@@ -17,8 +17,14 @@ This is lint admission evidence, never a behavioral pass or approval.
 
 Persist one recent receipt per canonical repository in private state, separate
 from the complete Story pass cache. Bind it to root, Runtime origin, GitHub
-login and user ID, captured source_sha256, sorted unique selected test paths,
-package version and the lint selected cap (null for preliminary lint). Use the
+login and user ID, captured source_sha256, authored_sha256, sorted unique selected
+test paths, package version and the lint selected cap (null for preliminary lint).
+`authored_sha256` is the SHA-256 of the capture's authored file hashes
+(`raw_file_hashes`, as JSON of its `[path, hash]` pairs sorted by path). The upload
+hash alone is not enough: the [interface-kind transport](runtime-preflight.prompt.md#interface-kind-transport)
+removes a `full` or `partial` kind from the upload copy, so a kind change leaves
+source_sha256 equal but changes authored_sha256 and runs a fresh lint. A capture
+without authored file hashes runs a fresh lint. Use the
 [receipt eligibility owner](runtime-lint-receipt.prompt.md) for metadata checks.
 Retain the actual answer and its engine_sha. Reuse only a confirmed lint answer
 with matching UUID requestId/id, command lint, state passed, complete per-test
@@ -26,10 +32,11 @@ lint evidence and a passing existing lint outcome for every selected test.
 Missing, corrupt, expired, future-dated, incomplete, refused, pending or unknown
 records run a fresh lint. Storage failure also falls back to fresh lint.
 
-Before adopting a candidate, perform normal capacity/access/maintenance checks;
-if capacity supplies engine_sha, require it to equal the receipt's engine_sha.
-Unknown current engine identity cannot prove that no deployment occurred during
-the ten-minute window; preserve ordinary check admission at the server.
+Before adopting a candidate, perform normal capacity/access/maintenance checks.
+Reuse only when capacity supplies the current engine_sha and it equals the
+receipt's engine_sha. An unknown current engine (a 404 capacity reply, an omitted
+or null engine_sha, or no capacity reply) cannot prove that no deployment occurred
+during the ten-minute window, so it runs a fresh lint.
 Copy the original answer and request ID into the new batch for saved reads and
 restart recovery; do not POST lint again, fabricate a receipt or refresh its
 original received time on reuse. Print `Reusing recent passing lint for unchanged source.`

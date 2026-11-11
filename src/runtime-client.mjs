@@ -1599,9 +1599,12 @@ function pendingLintMessage(context, answer) {
 const waitWord = (answer, read) => read?.kind === 'again' ? `waiting for an answer${read.why ? ` (${read.why})` : ''}`
   : answer?.state === 'queued' ? 'in line' : answer?.state === 'running' ? 'running' : 'waiting for an answer';
 
+// The upload hash plus the authored file hashes: the upload copy drops an interface kind (#3210), the authored bytes keep it.
+const authoredSha256 = capture => isObject(capture?.raw_file_hashes)
+  ? sha256(Buffer.from(JSON.stringify(Object.entries(capture.raw_file_hashes).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)))) : null;
 function lintReceiptScope(context) {
   return { root: context.root, origin: context.origin, login: context.identity.login, user_id: context.identity.userId,
-    source_sha256: context.capture.sha256, tests: [...new Set(sentTests(context.rows))].sort(), version: PDD_VERSION,
+    source_sha256: context.capture.sha256, authored_sha256: authoredSha256(context.capture), tests: [...new Set(sentTests(context.rows))].sort(), version: PDD_VERSION,
     selected_cap: context.lint.selected_cap ?? null };
 }
 const lintReceiptPath = context => join(context.store.folder('lint-receipts'), `${context.store.repoKey(context.root)}.json`);
@@ -1625,7 +1628,7 @@ function rememberRecentLint(context, answer) {
   try {
     const scope = lintReceiptScope(context), now = context.ports.now();
     const receipt = { schema_version: 'pdd.lint-receipt.v1', scope, received_at: now, engine_sha: answer?.engine_sha, answer };
-    if (context.lintReceiptOwner && isRecentLintReceipt({ receipt, scope, now }) && passingLintReceipt(context, answer)) {
+    if (context.lintReceiptOwner && isRecentLintReceipt({ receipt, scope, now, engineSha: answer?.engine_sha }) && passingLintReceipt(context, answer)) {
       lintReceiptTransaction(context, (path, current) => {
         if (current?.pending === context.batch) context.store.write(path, receipt);
       });
@@ -1636,7 +1639,8 @@ function readRecentLint(context) {
   try {
     if (lintReceiptBlocked(context)) return null;
     const receipt = context.store.read(lintReceiptPath(context));
-    return isRecentLintReceipt({ receipt, scope: lintReceiptScope(context), now: context.ports.now() })
+    // A candidate only: the current engine from capacity is compared before adoption.
+    return isRecentLintReceipt({ receipt, scope: lintReceiptScope(context), now: context.ports.now(), engineSha: receipt?.engine_sha })
       && receipt.engine_sha === receipt.answer?.engine_sha && passingLintReceipt(context, receipt.answer) ? receipt : null;
   } catch { return null; }
 }

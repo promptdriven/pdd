@@ -5,9 +5,13 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { join } from 'node:path';
 import { runCheck } from '../src/runtime-client.mjs';
+import { interfaceBlocks } from '../src/runtime-preflight.mjs';
 import { PLACE, TOKEN, fakeRuntime, filesUnder, harbor, portsFor, root } from './runtime-fake.mjs';
 
 const START = Date.parse('2026-10-27T16:27:47Z');
+// Reuse needs a known current engine: the capacity reply names the engine that the fake's answers carry.
+const ENGINE = 'eae2202a68d00ab762fcbbf1eba0d8607a132a15';
+const knownEngine = fake => { fake.capacity = () => ({ status: 200, json: { maintenance: null, engine_sha: ENGINE } }); return fake; };
 async function invoke(setup, fake, options = {}, words = ['place-order'], extra = {}) {
   const { ports } = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin }, extra);
   const code = await runCheck({ cwd: setup.repo, words, options: { '--json': true, ...options } }, ports);
@@ -30,7 +34,7 @@ test('lint JSON and saved read retain the validated Runtime report link', async 
 });
 
 test('a recent standalone lint admits test without a second lint and keeps its receipt for recovery', async t => {
-  const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
+  const setup = harbor(t), fake = knownEngine(await fakeRuntime(t, (entry, f) => f.normal(entry)));
   const lint = await invoke(setup, fake, { '--lint': true });
   const checked = await invoke(setup, fake);
   assert.equal(checked.code, 0, checked.err);
@@ -45,7 +49,7 @@ test('a recent standalone lint admits test without a second lint and keeps its r
 });
 
 test('receipt age is inclusive at ten minutes and reuse never renews its time', async t => {
-  const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
+  const setup = harbor(t), fake = knownEngine(await fakeRuntime(t, (entry, f) => f.normal(entry)));
   await invoke(setup, fake, { '--lint': true }, undefined, { now: () => START });
   const first = readFileSync(receiptPath(setup), 'utf8');
   const boundary = await invoke(setup, fake, {}, undefined, { now: () => START + 600_000 });
@@ -71,7 +75,7 @@ test('source and selected test changes require fresh lint', async t => {
 });
 
 test('explicit lint is always fresh, while a check can reuse another check preliminary lint', async t => {
-  const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
+  const setup = harbor(t), fake = knownEngine(await fakeRuntime(t, (entry, f) => f.normal(entry)));
   assert.equal((await invoke(setup, fake)).code, 0);
   assert.equal((await invoke(setup, fake)).code, 0);
   assert.deepEqual(commands(fake), ['lint', 'check', 'check']);
@@ -118,6 +122,40 @@ test('a refused or unknown lint never supplies a reusable pass', async t => {
     assert.notEqual((await invoke(setup, fake, { '--lint': true })).code, 0);
     assert.equal((await invoke(setup, fake)).code, 0);
     assert.deepEqual(commands(fake), ['lint', 'lint', 'check']);
+  }
+});
+
+// Wrong: the upload hash alone keys reuse, so a kind change that the upload copy drops (#3210) reuses the old lint.
+test('a kind change that the upload copy drops still runs a fresh lint within ten minutes', async t => {
+  const setKind = (repo, kind) => {
+    const file = join(repo, PLACE), text = readFileSync(file, 'utf8'), block = interfaceBlocks(text)[0];
+    writeFileSync(file, text.replace(block[1], JSON.stringify({ ...JSON.parse(block[1]), kind })));
+  };
+  const setup = harbor(t, repo => setKind(repo, 'full')), fake = knownEngine(await fakeRuntime(t, (entry, f) => f.normal(entry)));
+  assert.equal((await invoke(setup, fake, { '--lint': true }, undefined, { now: () => START })).code, 0);
+  setKind(setup.repo, 'partial');
+  const result = await invoke(setup, fake, {}, undefined, { now: () => START + 60_000 });
+  assert.equal(result.code, 0, result.err);
+  assert.equal(fake.posts[1].request.source_sha256, fake.posts[0].request.source_sha256, 'the upload copy is the same');
+  assert.deepEqual(commands(fake), ['lint', 'lint', 'check']);
+  assert.doesNotMatch(result.err, /Reusing recent passing lint/);
+});
+
+// Wrong: a capacity reply without the current engine lets an older lint be reused across a deployment.
+test('an unknown current engine runs a fresh lint: omitted, null or unavailable', async t => {
+  for (const [name, capacity] of [
+    ['no capacity endpoint (404)', undefined],
+    ['omitted engine', () => ({ status: 200, json: { maintenance: null } })],
+    ['null engine', () => ({ status: 200, json: { maintenance: null, engine_sha: null } })],
+    ['unknown engine', () => ({ status: 200, json: { maintenance: null, engine_sha: 'unknown' } })],
+    ['unavailable capacity', () => ({ status: 503, json: { error: { code: 'unavailable' } } })],
+  ]) {
+    const setup = harbor(t), fake = knownEngine(await fakeRuntime(t, (entry, f) => f.normal(entry)));
+    await invoke(setup, fake, { '--lint': true }, undefined, { now: () => START });
+    fake.capacity = capacity;
+    const result = await invoke(setup, fake, {}, undefined, { now: () => START + 10_000 });
+    assert.equal(result.code, 0, `${name}: ${result.err}`);
+    assert.deepEqual(commands(fake), ['lint', 'lint', 'check'], name);
   }
 });
 
