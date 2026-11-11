@@ -1,0 +1,20 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/format-duration.md",
+  "criteria": [
+    {"id": "AC1", "text": "A duration of 90000 seconds shows as \"25h 0m\"."},
+    {"id": "AC2", "text": "A duration of 3600 x 2^70 seconds shows as \"1180591620717411303424h 0m\"."},
+    {"id": "AC3", "text": "A duration of 3600 x 2^69 seconds shows as \"590295810358705651712h 0m\"."}
+  ],
+  "initial_world": {},
+  "simulation": {},
+  "context": [],
+  "steps": [
+    {"step_id": "ordinary", "entry_path": "prompts/duration.prompt.md", "operation": "formatDuration", "input": {"seconds": 90000},
+     "checks": [{"criterion_id": "AC1", "target": "result", "path": "/text", "op": "equals", "value": "25h 0m"}]},
+    {"step_id": "large-duration-2-70", "entry_path": "prompts/duration.prompt.md", "operation": "formatDuration", "input": {"seconds": 4250129834582680692326400},
+     "checks": [{"criterion_id": "AC2", "target": "result", "path": "/text", "op": "equals", "value": "1180591620717411303424h 0m"}]},
+    {"step_id": "large-duration-2-69", "entry_path": "prompts/duration.prompt.md", "operation": "formatDuration", "input": {"seconds": 2125064917291340346163200},
+     "checks": [{"criterion_id": "AC3", "target": "result", "path": "/text", "op": "equals", "value": "590295810358705651712h 0m"}]}
+  ]
+}
