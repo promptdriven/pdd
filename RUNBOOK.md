@@ -820,6 +820,47 @@ records. A line that the records do not support is red. The same rules, short en
   pass on the base code too, the base already holds the fix. Then keep the base's code, keep only what the base does
   not hold, and say so in the PR body.
 
+**Choices and questions.** These rules are in rule 1 of the job brief too.
+
+- Autopilot decides when at least one reasonable fix solves the problem and breaks nothing that people use today: pick
+  that fix and list it in the PR body under "Choices Autopilot made:", one line each with its reason
+  ("- CHOICE (REASON)"), with "(changes public behavior: WHAT)" when users see a change. For example, "make remove
+  safer" is decided: ask y/N only in an interactive terminal, --yes skips it, scripts stay unchanged; nothing is asked.
+- A pdd-bug or pdd-small-change run never asks a choice question: pick the fix that makes the reported behavior right
+  with the least surprise.
+- With `decisions` `decide` (the default): never ask a person about a choice. Decide every choice yourself,
+  product-direction ones too, and list each; list the big ones first, each marked "(big)". A choice question is never
+  posted: Autopilot starts the job once more with "Autopilot decides this choice: do not ask."
+- With `decisions` `ask`: a choice may be a question (`"kind":"choice"`) only when every reasonable fix breaks
+  something that people use today, or, in a pdd-feature run, for a product-direction decision that the issue and the
+  answers above do not settle: whether a new feature area or capability should exist, how a feature works at the
+  design level when there are two different designs, removing a feature, an on-purpose change to a core contract,
+  security, privacy or data policy, or something that costs money; an open trusted issue that asks the same product
+  question counts too. Then do not choose and open no PR. Decide and list every other choice. An issue gets at most
+  one choice question.
+- Two cases always go to a person, in every run: a change that contradicts a rule in an approved prompt or an earlier
+  recorded decision (an answer above, a decision issue) that the issue does not ask for in words, and a change of what
+  blocks merges (a new required check, a gate, a hash pin, CI policy). Do not make such a change: write the
+  needs-person result with `"kind":"blocker"`. A real blocker (missing access or a secret, an issue that contradicts
+  itself, work that cannot be done) is `"kind":"blocker"` too.
+- The needs-person result asks exactly one question with 2 or 3 options, so a person can answer with one letter:
+  ```json
+  {"outcome":"needs-person","kind":"blocker|choice","question":"<one plain question>","options":["<answer A>","<answer B>"],"recommended":"<the letter you recommend>"}
+  ```
+- A vague issue is never a reason to ask. When the issue, or a person's answer above, settles a choice, build.
+- Autopilot posts the question on the issue, adds `pdd:needs-decision` and says: "Please answer in a comment (one
+  letter is enough)." A trusted person's reply ends the wait: at its next check Autopilot reads the answer, removes
+  the label itself and goes on. The next job gets the answer.
+
+For the reviewer:
+
+- Every choice that the issue did not settle must be listed in the PR body under "Choices Autopilot made:" with its
+  reason (with "(changes public behavior: ...)" when users see a change); a missing or wrong line is a P2 must-fix
+  (fix the list).
+- A change that contradicts a rule in an approved prompt or an earlier recorded decision, which the issue does not ask
+  for in words, or a change of what blocks merges (a required check, a gate, a hash pin, CI policy), is a P1 must-fix
+  in every mode: undo it, or end with the needs-person result `"kind":"blocker"`.
+
 ## 16. Known limits today
 
 - The appearance-context reader searches `Appearance`, `Appearance context` and `Dependencies` sections.

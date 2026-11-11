@@ -9,10 +9,9 @@ metadata:
 
 Fix both: the brakes (the real defect) and the warning light (a test or check that would catch it next time). Brakes first. If the agent cannot find the defect yet, it fixes the warning light first: it adds what makes the defect visible (a failing reproducer test, a precise error, logging), so the cause becomes easy to find, and then it fixes the brakes. A warning-light-only change must say 'Not fixed yet: this helps find the cause' on the PR, and the issue stays open; it never closes the bug.
 
-`steps/`; `?` optional.
-1. story: reproduce, prompt-story → gate: approve
-2. prompt-pr: check, try? → approve, then gate: pr, then ask
-3. code: build, verify, formal, review → gate: pr
+1. story: steps/reproduce.md, steps/prompt-story.md → gate: approve
+2. prompt-pr: steps/check.md, steps/try.md (optional) → approve, then gate: pr, then ask
+3. code: steps/build.md, steps/verify.md, steps/formal.md, steps/review.md → gate: pr
 
 - Main chat coordinates; no code or checks.
 - Fresh subagents; never reuse builders or let them check code. Step file/paths at once; no chat history. Briefs: "the run's main chat"; actual actors/root paths. Wait one long time-out; no small follow-ups. Read §11 once; pdd-prompting RUNBOOK "Bounded handoffs".
