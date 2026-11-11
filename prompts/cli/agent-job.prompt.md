@@ -54,6 +54,11 @@ record is simply dead. There is no "uncertain custody" state.
     absent, or the string `invalid` when it does not parse to an object.
   - `log` is `{size, mtime}` (bytes and change time in milliseconds) of `job.log`, or
     null when it cannot be read; the core uses it to see progress.
+- `agentJobCpu(job, ports)` reads the process table once (`ps -A -o pid=,ppid=,time=`,
+  `ports.spawnSync`, 5 s timeout) and returns `{PID: CPU seconds}` for every process
+  under the job's wrapper by parent pid (a child that starts its own process group still
+  counts), without the wrapper and its direct child (the agent CLI or the suite runner);
+  null when the job has no pid or the table cannot be read. Times are `[DD-][HH:]MM:SS[.cc]`.
 - `stopAgentJob(job, ports)` sends SIGTERM to the job's process group and returns
   true only when the job was alive; it returns false and sends nothing otherwise.
 

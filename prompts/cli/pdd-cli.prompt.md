@@ -45,7 +45,8 @@ line and no automatic retry. No route silently chooses or calls an AI model.
 Preserve every existing evidence-associate route and --test text-list behavior.
 
 Dispatch `workflow-suite` through the workflow runner's `runSuite` with cwd,
-env, command from `--command` and optional timeout from `--timeout`. Require a
+env, command from `--command` and optional timeout from `--timeout` (passed whenever it is
+given, also 0). Require a
 nonblank command before importing execution. Pass workflow ports plus a `say`
 port for live queue status to stdout; use normal result stream and exit handling.
 The required [queue contract](test-suite-queue.prompt.md) owns execution.

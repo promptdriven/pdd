@@ -1001,7 +1001,8 @@ A suite failure, interruption or execution timeout has its own reason and the
 `test-suite` alert kind. It does not mark the issue stuck.
 
 The execution timeout defaults to 30 minutes. `--timeout` accepts 1 to 120
-minutes. Waiting does not use that time. Output and exit status come from the
+minutes, or 0 for no time limit (the Autopilot core uses 0 and watches the suite for new
+output instead). Waiting does not use that time. Output and exit status come from the
 suite; timeout returns 124. The runner stops the suite process group before
 releasing its slot.
 
@@ -1391,9 +1392,9 @@ says to run `pdd autopilot start`.
 |---|---|---|
 | `runs` | Issues in progress at the same time on this machine | 2 |
 | `label` | Take only issues with this label | none: every ready issue |
-| `quietMinutes` | Minutes with no progress after which a job or the checks of a PR end. There is no fixed time limit: a job runs as long as its log, its commits or its files change, and a PR waits while CI, the review or the suite still runs. At least 20 (2 ticks of the core timer) | 45 |
+| `quietMinutes` | Minutes with nothing new after which an agent process or the checks of a PR end. There is no fixed time limit: a process runs as long as it makes something new (a new commit, a new file state, a new tool call, a new output line, or CPU use in its child processes; a repeated line, a wait or a poll is not new), and a PR waits while CI, the review or the suite still runs. At least 20 (2 ticks of the core timer) | 45 |
 | `ciStuckMinutes` | Minutes that CI may stay pending with no change before the job ends | 360 |
-| `maxJobHours` | Backstop: each agent process (build, repair, review, suite) stops this many hours after its own start, whatever it does (sleep time is not counted); the job ends with no result and one alert | 24 |
+| `maxJobHours` | Backstop floor. Each agent process (build, repair, review, suite) stops at the larger of this many hours and 4 times the longest successful process of the same kind in this repository (last 30 days), counted from its own start, whatever it does (sleep time is not counted). The job ends with no result and one alert. At 3 hours a process sends one note and goes on | 24 |
 | `report` | `file`, `draft` or `off` for Runtime and PDD problem reports | `file` |
 | `reports.runtimeRepo` | Repository for Runtime problem reports, for example `promptdriven/prompt-runtime`; used when this machine can read it, else `promptdriven/pdd` with label `pdd:runtime` | none |
 | `maxRepairs` | Safety cap of repair jobs for one PR (the old key `repairs` still works). Repairs go on while they make progress: see below | 6 |

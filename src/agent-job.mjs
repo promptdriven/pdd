@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-job.prompt.md (sha256: ffbe4a8d6ef9730c263485bb8b3d685591b7fc9081bc4f82886f0a4799a6e2fe).
+// Generated from prompts/cli/agent-job.prompt.md (sha256: 9b64f03ba1c729087c35f09abcae80b7dfd5bbb2fc223cd9dd2fecd76c863189).
 import { spawn, spawnSync } from 'node:child_process';
 import { closeSync, openSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -53,6 +53,29 @@ export function readAgentJob(job, ports = {}) {
   try { const stat = statSync(job.log); log = { size: stat.size, mtime: stat.mtimeMs }; } catch { /* No log yet. */ }
   return { state: alive ? 'running' : object(exit) ? 'exited' : 'dead', exit: object(exit) ? exit : null,
     result: result === undefined ? null : object(result) ? result : 'invalid', log };
+}
+
+// CPU seconds of each process under the job, by pid, without the wrapper and its direct child (the agent CLI or the
+// suite runner). A child that starts its own process group still counts: the tree follows parent pids. null when the
+// process table cannot be read.
+const cpuSeconds = text => {
+  const [days, clock] = String(text).includes('-') ? String(text).split('-') : ['0', String(text)];
+  return clock.split(':').reduce((sum, part) => sum * 60 + Number(part), 0) + Number(days) * 86400;
+};
+export function agentJobCpu(job, ports = {}) {
+  if (!(Number.isSafeInteger(job?.pid) && job.pid > 0)) return null;
+  const table = (ports.spawnSync ?? spawnSync)('ps', ['-A', '-o', 'pid=,ppid=,time='], { encoding: 'utf8', timeout: 5000 });
+  if (table.status !== 0) return null;
+  const rows = String(table.stdout).split('\n').map(line => line.trim().split(/\s+/)).filter(row => row.length === 3).map(([pid, ppid, time]) => ({ pid: Number(pid), ppid: Number(ppid), cpu: cpuSeconds(time) }));
+  const children = new Map();
+  for (const row of rows) children.set(row.ppid, [...(children.get(row.ppid) ?? []), row]);
+  const found = {}, queue = (children.get(job.pid) ?? []).flatMap(cli => children.get(cli.pid) ?? []);
+  for (let i = 0; i < queue.length && i < 2000; i++) {
+    const row = queue[i];
+    if (Number.isFinite(row.cpu)) found[row.pid] = row.cpu;
+    queue.push(...(children.get(row.pid) ?? []));
+  }
+  return found;
 }
 
 export function stopAgentJob(job, ports = {}) {

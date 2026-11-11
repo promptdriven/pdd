@@ -53,7 +53,7 @@ test('easy issue: claim, build, review, suite, CI and base check lead to one mer
   assert.ok(review && suite, 'review and suite jobs start for the PR head');
   assert.equal(review.head, head); assert.equal(suite.head, head);
   assert.match(review.input, /did not write/); assert.match(review.input, new RegExp(`#${pr.number}`));
-  assert.deepEqual(suite.args.slice(-5), ['suite', '--command', 'npm test', '--timeout', '120']);
+  assert.deepEqual(suite.args.slice(-5), ['suite', '--command', 'npm test', '--timeout', '0']);
   assert.equal(w.git(suite.cwd, 'rev-parse', 'HEAD'), head);
   assert.equal(w.github.merges.length, 0, 'no merge before all checks are green');
 
@@ -103,7 +103,7 @@ test('a live agent that makes no progress for the quiet period is stopped and re
   w.advance(10 * MIN); await w.tick();
   assert.deepEqual(w.stopped, [w.job(17, 'build').id]);
   assert.equal(endComments(w, 17).length, 0, 'a no-result end only releases'); assert.ok(!w.labels(17).includes('pdd:stuck'));
-  assert.match(readFileSync(join(w.root, 'history.jsonl'), 'utf8'), /made no progress for 45 minutes/);
+  assert.match(readFileSync(join(w.root, 'history.jsonl'), 'utf8'), /made nothing new for 45 minutes/);
 });
 
 test('claim race between two machines: one machine starts, the loser starts nothing', async t => {
@@ -1038,7 +1038,7 @@ test('R19 a suite checkout with a lockfile installs dependencies first; an insta
   const suite = w.job(17, 'suite');
   assert.equal(suite.command, '/bin/sh');
   assert.match(suite.args.join(' '), /npm ci --ignore-scripts/);
-  assert.deepEqual(suite.args.slice(-5), ['suite', '--command', 'npm test', '--timeout', '120']);
+  assert.deepEqual(suite.args.slice(-5), ['suite', '--command', 'npm test', '--timeout', '0']);
   w.review(17, 'PASS');
   for (let i = 0; i < 3; i++) { writeFileSync(w.job(17, 'suite').log, 'Autopilot core: dependency install failed\n'); w.suite(17, 86); await w.tick(); }
   assert.equal(w.job(17, 'repair'), undefined, 'an install failure never uses a repair');
@@ -1128,7 +1128,7 @@ test('R24 a core.json that is null, not an object or not JSON reads as not pause
   let paused = 0;
   for (let i = 0; i < 40; i++) {
     const r = await w.tick(); if (/paused/.test(r.message)) paused++;
-    for (const job of w.started) if (w.alive.has(job.pid)) appendFileSync(job.log, 'working\n');   // working agents
+    for (const job of w.started) if (w.alive.has(job.pid)) w.step(job);   // working agents
     w.advance(30 * MIN);
   }
   assert.ok(paused <= 3, `paused ticks after the clock went back: ${paused}`);
@@ -1189,7 +1189,7 @@ async function lifeCycle(t, { runs = 2, issues = 20, hours, down, buildTicks = 1
         w.finish(job.issue, job.role, { code: 1 }); continue;
       }
       age.set(job.id, (age.get(job.id) ?? 0) + 1);
-      if (age.get(job.id) < (job.role === 'review' ? 1 : buildTicks)) { appendFileSync(job.log, 'working\n'); continue; }   // a working agent writes its log
+      if (age.get(job.id) < (job.role === 'review' ? 1 : buildTicks)) { w.step(job); continue; }   // a working agent makes new things
       if (job.role === 'build' || job.role === 'repair') w.build(job.issue, { role: job.role });
       else if (job.role === 'review') w.review(job.issue, 'PASS');
     }
@@ -2112,7 +2112,7 @@ test('N4 work in the worktree is progress (no log, no commit); a log that grows 
   w.issue(17); w.issue(18); await w.tick();
   const alerts = [];
   for (let i = 0; i < 20; i++) { w.advance(10 * MIN); w.progress(17, 'build'); await w.tick({ alert: async a => alerts.push(a.text) }); }
-  assert.ok(w.stopped.length === 1 && alerts.some(text => /ran 3 h \(its limit; set autopilot\.maxJobHours in pdd\.json\)/.test(text)));
+  assert.ok(w.stopped.length === 1 && alerts.some(text => /ran 3 h \(its limit: the larger of autopilot\.maxJobHours/.test(text)));
   assert.ok(w.job(18, 'build'), 'the slot is free');
 });
 
@@ -2674,4 +2674,183 @@ test('V5 the safety cap autopilot.maxRepairs ends a job that still makes progres
   const end = endComments(w, 17);
   assert.equal(end.length, 1); assert.match(end[0], /the safety cap of 2 repair\(s\) is reached/);
   assert.equal(w.started.filter(job => job.role === 'repair').length, 2);
+});
+
+// ---- Debate C: the process rule (T1 "something new", the 3 h note, the backstop) ----------------------------
+const codexWait = () => JSON.stringify({ type: 'item.completed', item: { id: `item_${Math.random().toString(36).slice(2)}`, type: 'collab_tool_call', tool: 'wait', status: 'completed' } });
+// Ticks of 10 minutes until the latest job of issue n is stopped: the minutes, or null.
+const ticksUntilStop = async (w, n, each, limit = 12) => {
+  const job = w.job(n);
+  for (let i = 0; i < limit; i++) { w.advance(10 * MIN); each(i); await w.tick(); if (w.stopped.includes(job.id)) return (i + 1) * 10; }
+  return null;
+};
+
+test('W1 T1: the same output line again and again, or "attempt N" with a rising number and time, is nothing new: the job stops at quietMinutes', async t => {
+  for (const line of [() => 'Waiting for checks to finish...', i => `attempt ${i} of 100 at 2026-11-10T12:${String(i % 60).padStart(2, '0')}:00Z (took ${i * 3}s)`]) {
+    const w = await coreWorld(t, { settings: { runs: 1 } });
+    w.issue(17); await w.tick();
+    const job = w.job(17, 'build');
+    let n = 0;
+    assert.equal(await ticksUntilStop(w, 17, () => { for (let k = 0; k < 20; k++) w.say(17, 'build', line(n++)); }), 50, 'stopped 45 min after the start (the first look sets the baseline)');
+    assert.deepEqual(w.stopped, [job.id]);
+    assert.match(history(w).at(-1).text, /the build agent made nothing new for 45 minutes \(no new commit, file state, tool call, output line or CPU use\)/);
+  }
+});
+
+test('W2 T1: wait calls and the same poll are nothing new; a new worktree state at minute 40 restarts the clock', async t => {
+  const poll = JSON.stringify({ type: 'item.completed', item: { id: 'x', type: 'command_execution', command: 'gh pr checks 7', aggregated_output: 'ci\tpending\t0s', exit_code: 8, status: 'completed' } });
+  let w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); await w.tick();
+  assert.equal(await ticksUntilStop(w, 17, () => { w.say(17, 'build', codexWait()); w.say(17, 'build', poll); }), 50);
+  w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); await w.tick();
+  const job = w.job(17, 'build');
+  assert.equal(await ticksUntilStop(w, 17, i => { w.say(17, 'build', codexWait()); if (i === 3) writeFileSync(join(job.cwd, 'fix.js'), 'export const value = 2;\n'); }), 90, 'minute 40 + 45 -> the tick at 90');
+});
+
+test('W3 T1: an edit that flips between 2 states is nothing new; a third state restarts the clock', async t => {
+  let w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); await w.tick();
+  let job = w.job(17, 'build');
+  assert.equal(await ticksUntilStop(w, 17, i => writeFileSync(join(job.cwd, 'flip.js'), i % 2 ? 'b\n' : 'a\n')), 70, 'the 2nd state is new once (minute 20); then 45 min');
+  w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); await w.tick();
+  job = w.job(17, 'build');
+  assert.equal(await ticksUntilStop(w, 17, i => writeFileSync(join(job.cwd, 'flip.js'), i === 4 ? 'c\n' : i % 2 ? 'b\n' : 'a\n')), 100, 'a 3rd state at minute 50');
+});
+
+test('W4 T1: a test re-run that rewrites the same untracked report (a new change time, the same content) is nothing new', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); await w.tick();
+  const job = w.job(17, 'build');
+  assert.equal(await ticksUntilStop(w, 17, () => { writeFileSync(join(job.cwd, 'report.xml'), '<testsuite failures="1"/>\n'); w.say(17, 'build', w.line('build', 'npm test').trim()); }), 50);
+});
+
+test('W5 P5: a silent child with rising CPU time keeps the job alive; with no CPU growth T1 stops it', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); await w.tick();
+  const job = w.job(17, 'build');
+  let cpu = 0;
+  assert.equal(await ticksUntilStop(w, 17, () => w.cpu.set(job.pid, { 4242: cpu += 30 }), 12), null, 'a 2-hour silent compile is progress');
+  assert.equal(await ticksUntilStop(w, 17, () => w.cpu.set(job.pid, { 4242: cpu += 5 })), 50, 'less than 10 s per tick is not');
+});
+
+test('W6 W12 the backstop: new lines and a new commit on every tick end the job 24 h after the process start, with one note at 3 h and one alert', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); w.issue(18); await w.tick();
+  const job = w.job(17, 'build'), alerts = [];
+  for (let i = 0; i < 50 && !w.stopped.length; i++) {
+    w.advance(30 * MIN); w.progress(17, 'build');
+    writeFileSync(join(job.cwd, 'work.txt'), `${i}\n`); w.git(job.cwd, 'add', '.'); w.git(job.cwd, 'commit', '-qm', `step ${i}`);
+    await w.tick({ alert: async a => alerts.push(a) });
+  }
+  assert.deepEqual(w.stopped, [job.id]);
+  assert.equal(w.now() - job.started, 24 * HOUR, 'stopped at 24 h from its start');
+  assert.equal(alerts.filter(a => a.kind === 'long-running').length, 1, 'one note');
+  assert.match(alerts.find(a => a.kind === 'long-running').text, /runs for 3 h/); assert.match(alerts.find(a => a.kind === 'long-running').need, /This job goes on/);
+  assert.equal(alerts.filter(a => /ran 24 h \(its limit/.test(a.text)).length, 1, 'one backstop alert');
+  const row = history(w).find(r => r.issue === 17);
+  assert.match(row.text, /the build agent ran 24 h \(its limit/); assert.equal(row.outcome, 'released');
+  assert.ok(existsSync(join(w.root, 'logs', `${job.id}.partial.log`)), 'the partial work is saved');
+  assert.ok(w.job(18, 'build'), 'the slot is free');
+});
+
+test('W7 a repair after a 30 h PR phase has its own clock: it is not stopped at its first look, and T1 counts from its start', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); await w.tick();
+  const { head } = w.build(17, { checks: false }); await w.tick();
+  w.review(17, 'PASS'); w.suite(17, 0);
+  for (let i = 0; i < 60; i++) { w.github.checks.set(head, [{ name: `ci ${String.fromCharCode(97 + i % 26)}${i}`, status: 'in_progress', conclusion: null }]); w.advance(30 * MIN); await w.tick(); }
+  assert.equal(w.started.filter(j => j.role === 'repair').length, 0, '30 h of a changing CI picture');
+  w.github.setChecks(head, 'failure'); await w.tick();
+  const repair = w.job(17, 'repair'); assert.ok(repair);
+  w.advance(10 * MIN); await w.tick();
+  assert.ok(!w.stopped.includes(repair.id), 'not stopped at its first look');
+  assert.equal(await ticksUntilStop(w, 17, () => {}), 40, 'stopped 45 min after its own start (ticks at 10, 20, ..., 50)');
+});
+
+test('W8 a reviewer in the merge lane whose log keeps growing ends at its backstop; the lane label goes', async t => {
+  const lines = edit => Array.from({ length: 12 }, (_, i) => (edit[i + 1] ?? `line ${i + 1}`)).join('\n') + '\n';
+  const w = await coreWorld(t, { settings: { runs: 1, maxJobHours: 3 } });
+  w.baseCommit('notes.txt', lines({}));
+  w.issue(17); await w.tick();
+  writeFileSync(join(w.job(17, 'build').cwd, 'notes.txt'), lines({ 2: 'line 2 changed by the PR' }));
+  const { pr } = w.build(17); await w.tick();
+  w.review(17, 'PASS'); w.suite(17, 0);
+  w.baseCommit('notes.txt', lines({ 5: 'line 5 changed on the base' }));
+  await w.tick(); await w.tick();
+  const review = w.job(17, 'review');
+  assert.match(review.input, /short scoped check/); assert.ok(pr.labels.includes('pdd:merge-lane'), 'the scoped check runs in the final step');
+  const alerts = [];
+  for (let i = 0; i < 8 && !w.stopped.includes(review.id); i++) { w.advance(30 * MIN); w.progress(17, 'review'); await w.tick({ alert: async a => alerts.push(a.text) }); }
+  assert.ok(w.stopped.includes(review.id));
+  assert.ok(!pr.labels.includes('pdd:merge-lane'), 'the lane is free');
+  assert.match(history(w).at(-1).text, /the reviewer ran 3 h \(its limit/);
+  assert.equal(alerts.filter(text => /ran 3 h/.test(text)).length, 1);
+});
+
+test('W9 the full suite: new test lines for 3 h pass (no fixed limit, CI=true, --timeout 0); the same lines again are a runner failure, never pdd suite-broken', async t => {
+  let w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); await w.tick();
+  const { pr } = w.build(17); await w.tick(); w.review(17, 'PASS');
+  const suite = w.job(17, 'suite');
+  assert.equal(suite.env.CI, 'true'); assert.deepEqual(suite.args.slice(-2), ['--timeout', '0']);
+  for (let i = 0; i < 18; i++) { w.advance(10 * MIN); w.progress(17, 'suite'); await w.tick(); }
+  assert.deepEqual(w.stopped, []);
+  w.suite(17, 0); await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number]);
+  w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); await w.tick(); w.build(17); await w.tick(); w.review(17, 'PASS');
+  for (let i = 0; i < 20 && jobFile(w, 17); i++) { w.advance(10 * MIN); if (w.alive.has(w.job(17, 'suite').pid)) w.say(17, 'suite', 'ok 1 - the same test (12ms)'); await w.tick(); }
+  assert.equal(w.started.filter(j => j.role === 'suite').length, 3, 'nothing new: retried twice');
+  const row = history(w).find(r => r.issue === 17);
+  assert.match(row.text, /the full test suite made nothing new for 45 minutes/); assert.equal(row.outcome, 'released', 'a no-result, not a pdd fault');
+});
+
+test('W10 L: after a 10 h successful build in this repo the build backstop is 40 h; a backstop end and a T1 end do not change L', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  const durations = () => existsSync(join(w.root, 'durations.jsonl')) ? readFileSync(join(w.root, 'durations.jsonl'), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line)) : [];
+  w.issue(17); await w.tick();
+  for (let i = 0; i < 20; i++) { w.advance(30 * MIN); w.progress(17, 'build'); await w.tick(); }
+  const { pr } = w.build(17); await w.tick(); w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number]);
+  assert.deepEqual(durations().filter(r => r.role === 'build').map(r => r.minutes), [600]);
+  w.issue(18); await w.tick();
+  const next = w.job(18, 'build');
+  for (let i = 0; i < 60; i++) { w.advance(30 * MIN); w.progress(18, 'build'); await w.tick(); }
+  assert.ok(!w.stopped.includes(next.id), 'runs past 24 h');
+  assert.match(coreStatus({ state: w.state, settings: w.settings }, w.ports()), /build 30 h 0 min; last new thing 0 min ago \(new tool\); quiet limit 45 min; backstop 40 h \(longest success here 10 h 0 min\)/);
+  for (let i = 0; i < 25 && !w.stopped.includes(next.id); i++) { w.advance(30 * MIN); w.progress(18, 'build'); await w.tick(); }
+  assert.equal(w.now() - next.started, 40 * HOUR, 'the backstop at 40 h');
+  w.issue(19); await w.tick();
+  const quiet = w.job(19, 'build');
+  await ticksUntilStop(w, 19, () => {});
+  assert.ok(w.stopped.includes(quiet.id));
+  assert.deepEqual(durations().filter(r => r.role === 'build').map(r => r.minutes), [600], 'neither end counts');
+});
+
+test('W11 a sleep gap is not charged to the backstop', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1, maxJobHours: 3 } });
+  w.issue(17); await w.tick();
+  const job = w.job(17, 'build');
+  for (let i = 0; i < 4; i++) { w.advance(15 * MIN); w.progress(17, 'build'); await w.tick(); }
+  w.advance(3.5 * HOUR); w.progress(17, 'build'); await w.tick();      // the machine slept 3.5 h
+  for (let i = 0; i < 7; i++) { w.advance(15 * MIN); w.progress(17, 'build'); await w.tick(); }
+  assert.ok(!w.stopped.includes(job.id), '1 h + 1 h 45 min awake: under 3 h');
+  for (let i = 0; i < 4 && !w.stopped.includes(job.id); i++) { w.advance(15 * MIN); w.progress(17, 'build'); await w.tick(); }
+  assert.ok(w.stopped.includes(job.id), 'stopped at 3 h awake');
+});
+
+test('W13 the stream parser: Claude tool calls and results, Codex items, prose and token counts', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); await w.tick();
+  const prose = [JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: `thinking ${Math.random()}` }], usage: { output_tokens: 5 } } }),
+    JSON.stringify({ type: 'item.completed', item: { id: 'a', type: 'agent_message', text: 'I will look again' } }), JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 99 } }),
+    JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: 'sleep 60' } }] } })];
+  let n = 0;
+  assert.equal(await ticksUntilStop(w, 17, () => { for (const line of prose) w.say(17, 'build', line.replace('5', String(n++))); }), 50, 'prose, token counts and sleep are nothing new');
+  const v = await coreWorld(t, { settings: { runs: 1 } });
+  v.issue(17); await v.tick();
+  const words = ['alpha', 'beta', 'gamma', 'delta', 'epsilon', 'zeta', 'eta', 'theta', 'iota', 'kappa'];
+  assert.equal(await ticksUntilStop(v, 17, i => v.say(17, 'build', JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', content: [{ type: 'text', text: `found ${words[i]}` }] }] } })), 10), null, 'a new tool result line is new');
 });

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { agentCommand, jobEnvironment, startAgentJob, readAgentJob, stopAgentJob } from '../src/agent-job.mjs';
+import { agentCommand, jobEnvironment, startAgentJob, readAgentJob, stopAgentJob, agentJobCpu } from '../src/agent-job.mjs';
 
 const folder = t => { const dir = mkdtempSync(join(tmpdir(), 'pdd-agent-job-')); t.after(() => rmSync(dir, { recursive: true, force: true })); return dir; };
 const until = async (check, ms = 10000) => {
@@ -81,4 +81,21 @@ test('stop ends the whole job process group and the wrapper records the signal',
   const done = await until(() => { const s = readAgentJob(job); return s.state !== 'running' && s; });
   assert.equal(done.state, 'exited'); assert.ok(done.exit.signal || done.exit.code !== 0);
   assert.equal(stopAgentJob(job), false);
+});
+
+test('agentJobCpu sums the tree under the wrapper by parent pid, without the wrapper and the agent CLI', () => {
+  const table = [
+    '  100     1      0:01.00',     // the wrapper (job pid)
+    '  101   100     12:30.50',     // the agent CLI: not counted
+    '  102   101      0:20.25',     // a test run under the CLI
+    '  103   102   1:02:03',        // its child in its own process group
+    '  104   101   2-00:00:01',     // days
+    '  200     1      9:00.00',     // another process
+  ].join('\n');
+  const calls = [];
+  const cpu = agentJobCpu({ pid: 100 }, { spawnSync: (command, args) => { calls.push([command, ...args]); return { status: 0, stdout: table }; } });
+  assert.deepEqual(cpu, { 102: 20.25, 103: 3723, 104: 172801 });
+  assert.deepEqual(calls, [['ps', '-A', '-o', 'pid=,ppid=,time=']]);
+  assert.equal(agentJobCpu({ pid: 100 }, { spawnSync: () => ({ status: 1, stdout: '' }) }), null);
+  assert.equal(agentJobCpu({}, { spawnSync: () => { throw Error('not called'); } }), null);
 });

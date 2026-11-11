@@ -154,7 +154,10 @@ export async function coreWorld(t, { repository = 'acme/widgets', settings = {},
       result: existsSync(job.result) ? JSON.parse(readFileSync(job.result, 'utf8')) : null,
       log: existsSync(job.log) ? { size: statSync(job.log).size, mtime: statSync(job.log).mtimeMs } : null }),
     stop: job => { const was = w.alive.delete(job.pid); if (was) w.stopped.push(job.id); return was; },
+    // CPU seconds by child pid, as agentJobCpu gives them; null when the test sets none.
+    cpu: job => w.cpu.get(job.pid) ?? null,
   };
+  w.cpu = new Map();
   w.job = (issue, role) => [...w.started].reverse().find(j => j.issue === issue && (!role || j.role === role));
   // Finish a job: exit record, optional result file.
   w.finish = (issue, role, { code = 0, result } = {}) => {
@@ -164,8 +167,14 @@ export async function coreWorld(t, { repository = 'acme/widgets', settings = {},
     writeFileSync(job.exit, JSON.stringify({ code, signal: null, at: w.now() }));
     return job;
   };
-  // The agent makes progress: one more log line.
-  w.progress = (issue, role) => appendFileSync(w.job(issue, role).log, `progress at ${w.now()}\n`);
+  // The agent makes progress: one new item in its stream (a tool call for an agent, a new test line for the suite).
+  // The words are new each time; numbers alone are not new (they are normalized away).
+  let steps = 0;
+  const word = n => { let text = ''; do { text = String.fromCharCode(97 + n % 26) + text; n = Math.floor(n / 26); } while (n > 0); return text; };
+  w.line = (role, text) => role === 'suite' ? `${text}\n` : `${JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: text } }] } })}\n`;
+  w.step = job => appendFileSync(job.log, w.line(job.role, `ok step ${word(steps++)}`));
+  w.progress = (issue, role) => w.step(w.job(issue, role));
+  w.say = (issue, role, text) => appendFileSync(w.job(issue, role).log, text.endsWith('\n') ? text : `${text}\n`);
   w.kill = (issue, role) => { const job = w.job(issue, role); w.alive.delete(job.pid); return job; };
   // The scripted builder: commit on the job branch, push, open a PR, finish with a pr result.
   // A scripted PR body gets a debate-A Path line unless it has one or the test asks for none (pathLine: false).

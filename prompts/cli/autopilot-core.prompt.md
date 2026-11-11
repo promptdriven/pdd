@@ -29,7 +29,7 @@ string `core`; any other value, or none, is `full`.
 | `label` | trimmed nonblank opt-in label, for example `pdd:autopilot`, else `null` |
 | `quietMinutes` | positive safe integer, default 45: the no-progress period (there is no fixed time limit); the tick uses at least 2 timer ticks (`ports.tickMinutes`, default 10), and a core start refuses a value below that |
 | `ciStuckMinutes` | positive safe integer, default 360: how long CI may stay pending with no change; at least 3 timer ticks |
-| `maxJobHours` | positive safe integer, default 24: the safety ceiling for an agent whose log grows with no commit and no file change |
+| `maxJobHours` | positive safe integer, default 24: the floor of the backstop (see the process rule); no value turns it off |
 | `report` | `file`, `draft` or `off`, default `file` |
 | `runtimeRepo` | `autopilot.reports.runtimeRepo` when it is `OWNER/NAME` (the Runtime report repository), else `null` |
 | `repairs` | `autopilot.maxRepairs` (the old key `autopilot.repairs` is an alias): safe integer of at least 0, default 6, the safety cap of repairs for one job |
@@ -48,23 +48,57 @@ logs, exit records and result files), `worktrees/` (`N` for the job branch,
 below) and `core.json` (the machine pause and the pending no-result). The job file and the GitHub labels are the whole state; a
 restart reads them again. A job file has `issue`, `title`, `url`, `body`,
 `branch`, `worktree`, `claim {commentId, labelEventId, lastSeen}`, `phase`
-(`running`, `pr` or `ending`), `role` (`build` or `repair`), `repairs`, `started`,
+(`running`, `pr` or `ending`), `role` (`build`, `repair` or `conflict`), `repairs`, `started`,
 `progress {sig, at, running}`, the started `agent` job, and in phase `pr` also `pr`,
 `head`, `runtime`, `review` and `suite`.
 
-**Progress, no fixed time limits.** A job ends only when it stops making progress.
-Each tick builds a signature of what it sees and saves `progress`: a changed
-signature, or something that still runs, sets `at` to now. A job is **quiet** when
-nothing ran at the last look and `at` is `quietMinutes` or more ago. A running build
-or repair agent's signature is its log size and change time (`readAgentJob().log`)
-and its work: the SHA-256 of the worktree commit, `git status --porcelain=v1
---untracked-files=all`, `git diff HEAD` and the size and change time of each new file
-(at most 200). **Backstop** (`backstop`, one function): every agent process (build,
-repair, review, suite) stops at `maxJobHours` after its own start (`started`), minus
-the sleep gaps of this machine in that time (`job.gaps`); nothing resets it. One
-`stuck` alert per process; the job ends as `job` / `no-result` with `ceiling: true`
-("the ROLE ran N h (its limit; set autopilot.maxJobHours in pdd.json) with no
-result"). In phase `pr` the signature
+**The process rule (debate C, one function `watchProcess`).** It applies to every agent
+process: build, repair, conflict, review and suite. Each tick, for each running process:
+
+- **T1 "something new".** The process makes progress when one of these is new to it (a
+  16-hex SHA-256 prefix that is not in its seen set, the file `LOG.seen`): (P1) the commit
+  at HEAD; (P2) the worktree state: HEAD, `git status --porcelain=v1
+  --untracked-files=all`, `git diff HEAD` and each new file with its content hash (files up
+  to 1 MB; the size only above), so a re-run that writes the same file or an edit that flips
+  back is not new; (P3) a tool call in its own stream that is not a wait (Codex `--json`
+  `item.completed` with its type and fields; Claude `stream-json` `tool_use` with its name and
+  input; the tools `wait`, `wait_agent`, `sleep`, `list_agents`, a `write_stdin` with no
+  input and a `sleep N` command are waits); (P4) a tool output line (also of a wait) or a
+  plain log line, after normalization: dates, clock times and durations removed; UUIDs, hex
+  ids of 7 or more characters and 20 or more base64 characters with a digit and a letter
+  become `X`; temp paths become `T`; digits become `N`; spaces trimmed; (P5) 10 s or more of
+  CPU time since the last tick in the process's children (`ports.jobs.cpu`, by pid, without
+  the wrapper and the agent CLI). The log size, prose, reasoning and token counts are never
+  new. The reviewer and the suite have no P1 and P2; the suite has no P3 (its log lines are
+  P4). Each tick reads only the new whole lines after a saved offset (at most 8 MB). The
+  first look sets the baseline (the clock keeps the process start); a sleep gap restarts
+  the clock. **End:** nothing new for `quietMinutes` (at least 2 ticks) stops the process.
+  Build, repair or conflict with no valid result: `no-result` ("the ROLE agent made nothing
+  new for N minutes (no new commit, file state, tool call, output line or CPU use)"). A
+  reviewer: no verdict (one retry, then `no-result`). A suite: a runner failure, started
+  again at most twice; nothing new on all 3 tries (or deaths and quiet ends together 3
+  times) is `no-result`, never `pdd` / `suite-broken`.
+- **The note** (alert only): at `noteHours` = 3 h of process age, one `long-running` alert
+  per process with the issue, the role, the age, the new commits, file states and stream
+  items of the last hour, the log name and "This job goes on … To stop it, remove
+  pdd:working or add pdd:stuck."
+- **The backstop:** the process age is the time since its own start (`started`) minus the
+  sleep gaps of this machine (`job.gaps`); nothing resets it (no line, commit, file, CI
+  change or lane wait). The limit is max(`maxJobHours`, 4 × L), where L is the longest
+  process of the same role that ended with a valid result by itself in this repository on
+  this machine in the last 30 days (`durations.jsonl` rows `{at, role, minutes}`; a process
+  that T1 or the backstop stopped never counts). At the limit: stop the process, write
+  `git status --porcelain` and `git diff HEAD` (redacted) to `logs/ID.partial.log` for a
+  worktree process, send one `stuck` alert per process, and end the job as `job` /
+  `no-result` with `ceiling: true` ("the ROLE ran N h (its limit: the larger of
+  autopilot.maxJobHours and 4 times the longest successful ROLE here, D) with no
+  result"). The job file keeps the alert keys (`alerted`).
+
+The build, repair and conflict prompts say: "Do not wait for CI and do not run the full
+test suite. Autopilot runs both after you finish." Status shows each running process as
+"ROLE AGE; last new thing D ago (new KIND); quiet limit N min; backstop H h (longest
+success here D)". `progress {sig, at, running}` mirrors the clock of the running agent.
+In phase `pr` the signature
 is the head, the CI state and picture (each check's name, state, conclusion and time),
 the review and suite states and the reviewer's log; it runs while CI is pending (queued
 or in progress, or no check yet within its 10 minutes), the reviewer runs or the suite
@@ -375,8 +409,9 @@ any other pdd (for example an older global install).
   or `Evidence:` line) and in one note on the issue (marker
   `<!-- pdd:autopilot-core:follow-ups:N -->`), each updated in place and with no item twice.
 - **Suite** (in `worktrees/N-suite`): `node bin/pdd.mjs workflow suite --command
-  TEST --timeout MIN` through the [shared full-suite queue](test-suite-queue.prompt.md),
-  with MIN = 120 (the shared queue's own runner limit). Exit 0 is green; any other
+  TEST --timeout 0` through the [shared full-suite queue](test-suite-queue.prompt.md):
+  no fixed time limit (the process rule watches it), with `CI=true` in its environment so
+  watch modes end. Exit 0 is green; any other
   exit code of the repository's test command is a red suite, and repairs apply. Only a
   failure of the runner itself is not a test result: a run that died (no exit record)
   or was killed by a signal, the wrapper's exit 127 (could not start), no output at
@@ -394,10 +429,9 @@ any other pdd (for example an older global install).
   "Autopilot core: dependency install failed") is a runner failure, not a red suite.
   A repository with no dependencies installs nothing.
 
-A running build or repair agent that is quiet is stopped; with no valid result file
-it ends as `no-result` (the no-result rules apply), with one it goes on as an exited
-job. A reviewer whose log does not change for the quiet period is stopped and counts
-as no verdict. An exited or dead job: a valid `pr` result moves
+A running build, repair or conflict agent that T1 stops ends as `no-result` with no
+valid result file (the no-result rules apply); with one it goes on as an exited job. A
+reviewer that T1 stops counts as no verdict unless its result file is valid. An exited or dead job: a valid `pr` result moves
 to the merge check in the same tick. The PR number may be a number or a string of
 digits (an optional `#`); it becomes an integer above 0. The head is 40 hex digits in
 any case and is saved in lower case. Any other PR value is no result. A `failed`
