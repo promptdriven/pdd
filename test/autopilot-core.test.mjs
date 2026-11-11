@@ -3319,7 +3319,7 @@ test('Y9 (T04) the engine runs the changed replay files at the head: a failing c
   let { w } = await setup('not-run');
   const run = w.job(17, 'vectors');
   assert.ok(run, 'the engine starts its own replay run');
-  assert.ok(run.args.at(-3).includes("node --test --test-reporter=tap 'test/workflow-draft-publication.vectors.test.mjs'"), run.args.join(' '));
+  assert.ok(run.args.at(-3).includes("node --test --test-reporter=tap -- './test/workflow-draft-publication.vectors.test.mjs'"), run.args.join(' '));
   assert.equal(run.env.CI, 'true');
   w.vectorsRun(17, { tests: 36, fail: 1, failed: [{ name: 'N3: merged former draft PR1 retains ordinary saved-base code entry and draft PR2', file: 'test/workflow-draft-publication.vectors.test.mjs' }] }); await w.tick();
   const repair = w.job(17, 'repair');
@@ -3336,7 +3336,7 @@ test('Y9 (T04) the engine runs the changed replay files at the head: a failing c
   ({ w, pr } = await setup('pass (36/36)'));
   w.vectorsRun(17, { tests: 36 }); await w.tick(); await w.tick();
   assert.deepEqual(w.github.merges, [pr.number]);
-  assert.match(mergeComment(pr), /- Replay and formal tests \(Autopilot's run at [0-9a-f]{7}\): pass \(36\/36\): test\/workflow-draft-publication\.vectors\.test\.mjs/);
+  assert.match(mergeComment(pr), /- Replay tests \(Autopilot's run at [0-9a-f]{7}\): pass \(36\/36\): test\/workflow-draft-publication\.vectors\.test\.mjs/);
 });
 
 test('Y10 (T01, T04) the real saved-check reader finds no check for a changed Story (red); a vector test that names a changed scenario runs too', async t => {
@@ -3350,9 +3350,9 @@ test('Y10 (T01, T04) the real saved-check reader finds no check for a changed St
   // A vector test file that names a changed scenario file runs, although the vector file itself is unchanged.
   const v = await coreWorld(t, { settings: { runs: 1 } });
   v.baseCommit('test/runtime/workflow-prove.json', '{"cases": [1]}\n');
-  v.baseCommit('test/workflow-prove.vectors.test.mjs', "const cases = 'test/runtime/workflow-prove.json';\n");
+  v.baseCommit('test/workflow-prove.vectors.test.mjs', "import test from 'node:test';\nconst cases = 'test/runtime/workflow-prove.json';\n");
   v.issue(17); await v.tick();
   writeIn(v.job(17, 'build').cwd, 'test/runtime/workflow-prove.json', '{"cases": [1, 2]}\n');
   v.build(17); await v.tick(); v.review(17, 'PASS'); v.suite(17, 0); await v.tick();
-  assert.ok(v.job(17, 'vectors')?.args.at(-3).includes("'test/workflow-prove.vectors.test.mjs'"), 'the linked replay runs');
+  assert.ok(v.job(17, 'vectors')?.args.at(-3).includes("'./test/workflow-prove.vectors.test.mjs'"), 'the linked replay runs');
 });

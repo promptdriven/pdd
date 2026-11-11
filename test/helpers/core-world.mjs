@@ -181,11 +181,13 @@ export async function coreWorld(t, { repository = 'acme/widgets', settings = {},
   // The scripted builder: commit on the job branch, push, open a PR, finish with a pr result.
   // A scripted PR body gets a debate-A Path line unless it has one or the test asks for none (pathLine: false).
   // write: false commits only what the test put in the worktree (a conflict fix), not the change-N.txt file.
-  w.build = (issue, { body, role = 'build', checks = 'success', runtime, result = {}, pathLine = true, write = true } = {}) => {
+  // add: false commits only what the test staged (the rest of the worktree stays as it is, for example not committed).
+  w.build = (issue, { body, role = 'build', checks = 'success', runtime, result = {}, pathLine = true, write = true, add = true } = {}) => {
     const job = w.job(issue, role);
     if (body && pathLine && !/^[\s>*-]*Path:/m.test(body)) body = `${body}\nPath: d — change-${issue}.txt — unowned — no contract change — Test: done check`;
     if (write) writeFileSync(join(job.cwd, `change-${issue}.txt`), `change ${job.id}\n`);
-    git(job.cwd, 'add', '.'); if (git(job.cwd, 'status', '--porcelain')) git(job.cwd, 'commit', '-qm', `change ${job.id}`); git(job.cwd, 'push', '-q', 'origin', `HEAD:${job.branch}`);
+    if (add) git(job.cwd, 'add', '.');
+    if (git(job.cwd, 'diff', '--cached', '--name-only')) git(job.cwd, 'commit', '-qm', `change ${job.id}`); git(job.cwd, 'push', '-q', 'origin', `HEAD:${job.branch}`);
     const head = git(job.cwd, 'rev-parse', 'HEAD');
     let pr = [...w.github.prs.values()].find(p => p.branch === job.branch);
     if (pr) { pr.head = head; if (body) pr.body = body; } else pr = w.github.openPr({ branch: job.branch, head, ...(body ? { body } : {}) });
@@ -199,11 +201,17 @@ export async function coreWorld(t, { repository = 'acme/widgets', settings = {},
     w.finish(issue, 'review', { result: { verdict, head: job.head, summary: `Review ${verdict}`, mustFix } });
   };
   w.suite = (issue, code = 0) => w.finish(issue, 'suite', { code });
-  // The engine's replay and formal run (T04): a node --test TAP summary, then the exit.
-  w.vectorsRun = (issue, { tests = 3, fail = 0, failed = [] } = {}) => {
-    const job = w.job(issue, 'vectors');
-    appendFileSync(job.log, [...failed.map((f, i) => `not ok ${i + 1} - ${f.name}\n  ---\n  location: '${job.cwd}/${f.file}:1:1'\n  ...`), `1..${tests}`, `# tests ${tests}`, `# pass ${tests - fail}`, `# fail ${fail}`, ''].join('\n'));
-    return w.finish(issue, 'vectors', { code: fail ? 1 : 0 });
+  // The engine's replay and formal run (T04): for each kind a node --test TAP summary and the marker with its exit,
+  // then the exit of the whole command. `formal` gives the formal part; `code` overrides a kind's exit.
+  w.tap = ({ tests = 3, fail = 0, failed = [], skipped = 0, code }, kind, cwd) => [...failed.map((f, i) => `not ok ${i + 1} - ${f.name}\n  ---\n  location: '${cwd}/${f.file}:1:1'\n  ...`),
+    `1..${tests}`, `# tests ${tests}`, `# pass ${tests - fail - skipped}`, `# fail ${fail}`, `# skipped ${skipped}`, `# pdd-autopilot: ${kind} exit ${code ?? (fail ? 1 : 0)}`, ''].join('\n');
+  w.vectorsRun = (issue, { formal, ...vectors } = {}) => {
+    const job = w.job(issue, 'vectors'), cmd = job.args.at(-3) ?? '', parts = [], both = /vectors exit/.test(cmd);
+    const formalPart = formal ?? (both ? { tests: 1 } : vectors), used = [];
+    if (both) { parts.push(w.tap(vectors, 'vectors', job.cwd)); used.push(vectors); }
+    if (/formal exit/.test(cmd)) { parts.push(w.tap(formalPart, 'formal', job.cwd)); used.push(formalPart); }
+    appendFileSync(job.log, parts.join(''));
+    return w.finish(issue, 'vectors', { code: used.some(k => k.fail || k.code) ? 1 : 0 });
   };
   w.issue = (n, extra = {}) => w.github.add(n, { created: w.now() - (1000 - n) * 60000, updated: w.now() - 60000, ...extra });
   w.ports = (extra = {}) => ({
@@ -215,9 +223,10 @@ export async function coreWorld(t, { repository = 'acme/widgets', settings = {},
     checkBase: async () => ({ exitCode: 0, message: 'Base check ok.' }),
     // The saved Runtime checks (T01). By default every changed Story and prompt is covered at the head; a test of the
     // coverage rule sets w.runtimeEvidence.
-    runtimeEvidence: async cwd => {
-      if (w.runtimeEvidence) return w.runtimeEvidence(cwd);
-      const changed = spawnSync('git', ['diff', '--name-only', 'origin/main...HEAD'], { cwd, encoding: 'utf8' }).stdout.split('\n').filter(Boolean);
+    runtimeEvidence: async (input, ctx) => {
+      w.evidenceReads = [...(w.evidenceReads ?? []), input];
+      if (w.runtimeEvidence) return w.runtimeEvidence(input, ctx);
+      const changed = spawnSync('git', ['diff', '--name-only', 'origin/main...HEAD'], { cwd: input.tree, encoding: 'utf8' }).stdout.split('\n').filter(Boolean);
       const stories = changed.filter(file => /^user_stories\/.+\.md$/.test(file));
       return { stories: [{ story: 'user_stories/all.md', pass: true, current: true }, ...stories.map(story => ({ story, pass: true, current: true }))], storyFiles: stories,
         footprints: { 'user_stories/all.md': changed.filter(file => file.endsWith('.prompt.md')) } };

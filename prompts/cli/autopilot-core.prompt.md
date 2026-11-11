@@ -308,7 +308,19 @@ end as `no-result`. Every job kind follows the same rules, in every machine stat
    `{at, issue, strike: true}` (the time of the no-result). When the next end is
    another `no-result`, the pending end is dropped; no strike. So an outage gives a
    strike only when it ends exactly one job, and a bad issue that fails between
-   results gets a strike each time. A counted end of an issue with 2 strikes in the last 7 days is a normal
+   results gets a strike each time. **An AI-service problem is the agent account, not
+   the issue (T08):** a build, repair, conflict or review agent that ended with no result
+   because the AI service refused it is never counted: no cooldown, no `pending`, no
+   strike. It adds 1 to `streak` like every `no-result` (the machine pause below). Its
+   text names the service message: "the ROLE agent exited with CODE with no result: the
+   AI service said "MESSAGE" (an agent account or service problem, not this issue)". The
+   message comes from the last 64 KB of the agent log: the last error event (Codex
+   `{"type":"error"}` or `turn.failed`, Claude a `result` with `is_error`, any JSON with
+   an `error` message) in its last 40 lines, or one of its last 5 plain lines, when it
+   says: at capacity, overloaded, rate limit, too many requests, usage limit, out of
+   credits, credit balance, quota, billing, not logged in, log in, sign in, login,
+   authentication, unauthorized, invalid API key, or HTTP 401, 429, 500, 502, 503, 504 or
+   529. A counted end of an issue with 2 strikes in the last 7 days is a normal
    END: one comment and `pdd:stuck`. Nothing else marks an issue stuck for no result.
    Each `ended` line has `reset: true`: the cooldown and the strikes read only the
    issue's lines after its latest reset, so a person's retry starts fresh.
@@ -317,7 +329,9 @@ end as `no-result`. Every job kind follows the same rules, in every machine stat
    pause runs and `streak` is 3 or more, no new job starts for `hours` hours (1, then 2,
    4 and 8 at most) and one `usage-limit` alert goes out through `ports.alert` with
    `update` and the text "Autopilot paused new jobs for H h: the agent ended N jobs with
-   no result. Check sign-in and limits." (the machine and the end time follow). When
+   no result. Check sign-in and limits." (the machine and the end time follow; when the
+   end that starts the pause is an AI-service problem, the text also has `The agent
+   said: "MESSAGE".`, so the alert names the account state). When
    the pause ends, intake goes on as usual. Any job result (a build or repair PR or
    reported failure, a valid review verdict, a merge) sets `streak` to 0 and `hours`
    to 1. Jobs that already run always go on. Unknown or broken saved state (a missing,
@@ -397,8 +411,10 @@ any other pdd (for example an older global install).
 - **Evidence** (for metrics): one fixed line, `Evidence: runtime=<pass|fail|not-run>
   (<n>/<m>); vectors=<pass|fail|not-run> (<n>/<m>); formal=<proved|bounded|failed|not-run|not-applicable>;
   tests=<pass|fail> (<n>/<m>)` (runtime = `pdd test` on the changed Stories, vectors =
-  the Story vector replays, formal = the formal tests, tests = the focused tests; a
-  count may be left out). The tick parses it with an allowlist: the first PR body line
+  the replay tests that the change touches: each changed `*.vectors.test.*` file and each
+  vector test file that names a changed scenario file, run with `node --test` (the merge
+  check runs the same files and compares the counts), formal = the changed formal
+  tests, tests = the focused tests; a count may be left out). The job prompt says this. The tick parses it with an allowlist: the first PR body line
   that starts with `Evidence:` after the Runtime-line marks go, else the result's
   `evidence`; each `key=value` part with a known key and value is kept once, with its
   count when it is `n/m` with n ≤ m (never for formal); anything else is dropped. The
@@ -521,21 +537,44 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    value is red, and the repair prompt quotes the line. Lines that disagree (PASS and
    not run) are red. The result's `runtime.state` (lower case, spaces as `-`) must be
    absent, `pass` or `not-run`, and must agree with the body; else red. A body with no
-   Runtime line is red unless the result says `"promptChanged": false`. **A PASS must be
-   true (T01):** a "Runtime: PASS" line counts only when the saved Runtime checks cover the
-   change at the agent's exact head (`agentHead`, the head of the last build, repair or
-   conflict result; read once per head and saved as `coverage`). The changed files are
-   `git diff --name-only --diff-filter=d origin/BASE...HEAD`. Each changed Story (a Story
-   of `findTests`) needs a check whose every criterion passed and whose batch source is
-   exactly this worktree's source (`savedStoryEvidence` of the
-   [runtime client](runtime-client.prompt.md): `pass` and `current`); each changed
-   `*.prompt.md` must be in the footprint (`captureSource` stories) of such a Story. The
-   job worktree must be at that head. Else red: "The PR body says "Runtime: PASS", but the
-   saved pdd test checks at head H do not cover FILES (the saved check of S is for an older
-   source: a stale Runtime batch). A PASS of other Stories does not count. … or write
-   "Runtime: not run (REASON)" when they have no Runtime check (for example a native-only
-   prompt or a Story with no Runtime test)." A PR that changes no prompt and no Story needs
-   no coverage. The reader is a port (`ports.runtimeEvidence`). **Prompt gate**
+   Runtime line is red when the change has a `*.prompt.md` (Git decides, also when the
+   result says `"promptChanged": false`); with no changed prompt it is red unless the
+   result says `"promptChanged": false`. **A Runtime pass must be true (T01):** every
+   positive Runtime claim is checked: a "Runtime: PASS" line, an Evidence part
+   `runtime=pass` (of the PR body, else of the result) and a result `runtime.state`
+   `pass`. A claim counts only when the saved Runtime checks cover the change at the
+   agent's exact head (`agentHead`, the head of the last build, repair or conflict
+   result). The read is saved as `coverage` for that head; a new agent result and a
+   repair clear it (and `vectors`), because `pdd test` saves its checks outside the
+   repository, so a repair that only runs `pdd test` keeps the same head. The changed
+   files are `git diff --name-only -z --diff-filter=d origin/BASE...HEAD` (NUL mode, so
+   every name stays exact). The read uses a clean checkout of that head
+   (`worktrees/N-agent`): the Stories and their tests come from `findTests` there, with
+   fixture projects excluded (as a full `pdd test` does), and `savedStoryEvidence` of the
+   [runtime client](runtime-client.prompt.md) reads the checks that `pdd test` saved for
+   the job worktree (`root`) and compares their source with the clean checkout
+   (`comparisonRoot`). So an uncommitted or untracked file of the job worktree never
+   counts as the head. A Story is changed when its Story file or one of its test files
+   changed. For each Story, the latest check of exactly this source (`current`, the
+   largest `at`) decides: it must pass (every criterion passed). A tie with a check that
+   did not pass, or a newer failed or no-verdict check, is not a pass. Each changed Story
+   needs such a pass. Each changed `*.prompt.md` must be in the footprint of a passing
+   Story: `captureSource` of that Story's tests alone at the clean checkout, each Story
+   in its own error boundary (changed Stories first; stop when every changed prompt is
+   reached), so a broken unrelated Story never hides a healthy one. Else red: "CLAIM, but
+   the saved pdd test checks at head H do not cover FILES (the saved check of S is for
+   another source: a stale Runtime batch, for example an older commit or files that are
+   not committed; the latest check of S at this source did not pass; the source of S
+   could not be read: CAUSE). A PASS of other Stories does not count. Run pdd test for
+   the Stories of these changes at this head, or write "Runtime: not run (REASON)" (and
+   runtime=not-run) when they have no Runtime check (for example a native-only prompt or
+   a Story with no Runtime test)." CLAIM names each claim, for example `The PR body says
+   "Runtime: PASS"`. A PR that changes no prompt, no Story and no Story test needs no
+   coverage. A reader error (for example `findTests` throws) is red with its cause, never
+   a tick error. The reader is a port: `ports.runtimeEvidence({root, tree, head}, ctx)`
+   returns `{stories, storyFiles, tests, footprint(story)}` (`tests` rows `{path, files,
+   stories}`; `footprint` gives `{files}` or `{error}`); a test port may give a
+   `footprints` map instead. **Prompt gate**
    (once per head, saved as `approvals {head, strict, problems}`): after a fetch of the
    base and the branch, each changed prompt of `git diff --name-status --find-renames
    origin/BASE...HEAD` (added, modified, renamed or copied; the new path) is read in a
@@ -563,11 +602,16 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    checkout of that branch undoes the claim and removes the worktree, as other intake
    failures do; the next tick tries again); in other repositories they are red,
    with the approval command and words in the finding (one repair, then END as usual).
-   Observe mode never approves: it lists the problems in its "would merge" note.
+   Observe mode approves as auto mode does, with "in observe mode" in the words (above),
+   so problems outside a strict repository are red there too. In a strict repository
+   observe mode asks no person: it lists the problems in its "would merge" note.
    **Path checks** (debate A section 6.3, no AI, once per head and PR body, saved as
    `paths`): from clean checkouts of the base tip and the head, the owner tables before
    and after, and the changed files (`--name-status --find-renames`). Red: R1 a file in
-   a path d or e line that the base owns; R3 an added prompt that owns no added code file
+   the files field of a path d or e line that the base owns (the files field is the text
+   after the letter up to the next dash separator ` — `, ` – ` or ` - `; a file named in
+   the owner, contract or test text, for example "owning prompt for docs/errors.md", is
+   not on that path: T09); R3 an added prompt that owns no added code file
    of the PR (with an issue that asks to "adopt PDD", any changed file); R4 a file of the
    base with no owner that the head gives a binding or header (unless the issue asks to
    adopt PDD); R6 no `Path:` line. R5 is only a hint for the reviewer: prompts at the head
@@ -580,20 +624,44 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    ends `no-test-command`; a broken suite ends `suite-broken`. The tick posts each verdict once as a PR comment with
    the head, summary and must-fix list.
    **The engine's own replay and formal run (T04):** with the review and the suite, at the
-   final head (once per head, saved as `vectors`): each changed `*.vectors.test.*` and
-   `*.formal.test.*` file, and each `*.vectors.test.*` file that names a changed scenario
-   file (a changed `.json` under a `test`, `tests`, `runtime` or `vectors` folder, by its
-   base name, `git grep` at the head), at most 40 each. It runs `node --test
-   --test-reporter=tap FILES` through the machine's suite queue in a clean checkout
-   (`worktrees/N-vectors`, the suite's dependency install, `CI=true`), watched by the
-   process rule (role `vectors`, like the suite). The TAP summary gives the counts and the
-   failing tests with their files. A failure is red ("Autopilot ran the replay and formal
-   tests that this change touches (FILES) at head H: F of N failed: TEST (FILE). The
-   Evidence line says vectors=CLAIM."). A pass makes a vectors claim other than `pass`, or a
-   formal claim other than `proved` or `bounded`, red (the claim is not true). A run with no
-   result is "not run (reason)": the engine then claims nothing. The merge note has the
-   line `- Replay and formal tests (Autopilot's run at H): STATE (P/N): FILES`, or `none
-   changed`, or `not run (REASON)`.
+   final head (once per head, saved as `vectors`; a repair clears it, so a repair at the
+   same head runs it again, like the suite). The set is complete: each changed
+   `*.vectors.test.*` and `*.formal.test.*` file, and each `*.vectors.test.*` file that
+   names any changed scenario file (a changed `.json` under a `test`, `tests`, `runtime`
+   or `vectors` folder, by its base name: `git grep -z -l -F` at the head, 100 names per
+   call). Discovery is in NUL mode (`-z`), so every name stays exact. Only node:test
+   files run: a `.js`, `.mjs` or `.cjs` file whose text at the head holds `node:test` and
+   whose name has no glob character (`* ? [ ] { } ( ) ! \`: node --test reads such a name
+   as a pattern). Each other file is "not run (runner: …)" in the note, and the claim
+   of its kind is not checked. More than 400 files, or a command over 100,000 bytes, runs
+   nothing: "not run (too many replay and formal files: N; the limit is 400)", never a
+   part of the set. The run is one bash command through the machine's suite queue in a
+   clean checkout (`worktrees/N-vectors`, the suite's dependency install, `CI=true`),
+   watched by the process rule (role `vectors`, like the suite): `set -o pipefail`, then
+   for each kind that has files, `node --test --test-reporter=tap -- ./FILE … 2>&1 | awk
+   …` and the marker line `# pdd-autopilot: KIND exit CODE` (KIND `vectors` or
+   `formal`), so each kind has its own counts. The awk filter bounds the log: after 4 MB
+   of output it passes only TAP result, location, plan and summary lines, and once
+   `# pdd-autopilot: output cut after 4194304 bytes`. The engine reads the log in 1 MB
+   parts, line by line (bounded memory), and keeps for each kind the last TAP summary
+   before its marker (`tests`, `pass`, `fail`, `skipped`, `todo`), the exit code, and at
+   most 20 failing tests with their files. A kind with exit 0 and 0 failures passes; a
+   non-zero exit or a failure fails (a `# fail 0` with a non-zero exit fails too). A
+   runner failure (a missing marker or summary, a run that died or was killed or stopped
+   by T1, exit 86 or 127, a queue runner line) starts again in the same checkout, at most
+   twice; then the run is "not run (REASON)". The claims against the run, for each kind:
+   - A failure is red: "Autopilot ran the KIND tests that this change touches (FILES) at
+     head H: F of N failed: TEST (FILE). The Evidence line says KIND=CLAIM."
+   - A pass: a `vectors` claim must be `pass`, with the same counts when it gives counts
+     (and the run skipped no file and no test); a `formal` claim must be `proved` or
+     `bounded`. Else red (the claim is not true), with the true value to write.
+   - Not run: a positive claim (`vectors=pass`, `formal=proved` or `bounded`) is red:
+     "… Autopilot could not check it: REASON. Fix the cause, or write KIND=not-run."
+   - A kind with no run (no file, or only other runners): its claim is not checked.
+   The merge note has one line for each kind with files: `- Replay tests (Autopilot's
+   run at H): STATE (P/N): FILES` and `- Formal tests (…)`, `- Not run by Autopilot
+   (REASON): FILES` for other runners, or `- Replay and formal tests (Autopilot's run):
+   none changed`.
 4. Any red finding: stop the other checks. The **repair budget** (option B): repairs go on
    while they make progress. The findings of a round are each review must-fix (P1 and P2)
    and each other red line. Two findings are the same when they name the same `file:line`
@@ -606,7 +674,8 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    there, (b) a finding of an earlier round came back, or (c) the job has used `repairs`
    (the safety cap, default 6). A round that fixes all its findings and gets new, different
    ones goes on (the #2574 pattern: each repair fixes the last P2 and the reviewer finds a
-   new P2), to a PASS or the cap. Else start one repair job, count it and start its quiet
+   new P2), to a PASS or the cap. Else start one repair job (it clears `review`, `suite`,
+   `vectors` and `coverage`, so every check runs again, also at the same head), count it and start its quiet
    clock. The job saves the last 8 rounds (`rounds`).
 5. Wait while CI, review or suite is not green. CI is green when the head has at
    least one check and none is pending. CI is `none` (the full suite and the fresh
@@ -829,3 +898,8 @@ with the native defaults named above.
 - [Shared full-suite queue](test-suite-queue.prompt.md): required context for the
   `pdd workflow suite` job.
 - [Secret redaction](secret-redaction.prompt.md): required for suite log tails.
+- [Runtime client](runtime-client.prompt.md): required for `savedStoryEvidence` (the
+  saved checks of T01, with `comparisonRoot`).
+- [Runtime preflight](runtime-preflight.prompt.md): required for `findTests` (Stories and
+  their tests, `excludeFixtureProjects`), `captureSource` (Story footprints), `gitFiles`,
+  `readPrompt`, `promptRefusal` and `interfaceBlocks`.

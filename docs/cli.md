@@ -1583,13 +1583,18 @@ native tests and `Runtime: not run (reason)`, and Autopilot files or counts one
 report for that cause. The `Evidence:` line has a fixed form, for example
 `Evidence: runtime=pass (11/11); vectors=not-run; formal=bounded; tests=pass (42/42)`.
 Autopilot keeps only the known parts, saves them in its local history and repeats
-them in the merge comment. The claims must be true. `Runtime: PASS` counts only when
-the saved `pdd test` checks cover every changed prompt and Story at the PR head (a PASS
-of other Stories does not count; write `Runtime: not run (reason)` for a native-only
-prompt or a Story with no Runtime test). Autopilot also runs the changed replay
-(`*.vectors.test.*`) and formal (`*.formal.test.*`) files itself, and the vector files
-that name a changed scenario, at the PR head. A failure, or a `vectors` or `formal`
-claim that its run contradicts, is red, and the merge comment shows its own counts.
+them in the merge comment. The claims must be true. A Runtime pass (`Runtime: PASS`,
+`runtime=pass` or the result's runtime state) counts only when the saved `pdd test`
+checks cover every changed prompt, Story and Story test at the PR head, compared with a
+clean checkout of that head (files that are not committed never count; the latest check
+of a Story decides; a PASS of other Stories does not count; write `Runtime: not run
+(reason)` for a native-only prompt or a Story with no Runtime test). A repair that only
+runs `pdd test` again is read again. Autopilot also runs, at the PR head, every changed
+replay (`*.vectors.test.*`) and formal (`*.formal.test.*`) file and every vector file
+that names a changed scenario, if it is a `node:test` JavaScript file (other files are
+listed as not run). It runs the replay and formal files apart, so each has its own
+counts. A failure, a claim that its run contradicts (a vectors count too), or a positive
+claim that it could not check, is red, and the merge comment shows its own counts.
 
 When a job needs a person's decision, Autopilot posts its one question on the issue,
 adds `pdd:needs-decision` (not `pdd:stuck`) and frees the slot. Answer in a comment
@@ -1626,7 +1631,11 @@ jobs on this machine for 1 hour and sends one alert ("Autopilot paused new jobs 
 1 h: the agent ended 3 jobs with no result. Check sign-in and limits."). Jobs that
 already run go on. After the pause, intake goes on as usual; if jobs still end with
 no result, the next pause is twice as long (2, 4, then 8 hours at most), with a new
-alert. A job with a result, a review verdict or a merge sets the pause length back
+alert. An agent that stops because the AI service refused it ("Selected model is at
+capacity", "Your workspace is out of credits", a usage limit, a sign-in error, a 5xx)
+is an agent account problem, not the issue: the issue is released with no strike and
+no cooldown, the end counts toward this pause, and the pause alert quotes the agent's
+message. A job with a result, a review verdict or a merge sets the pause length back
 to 1 hour. `pdd autopilot status` shows the jobs, the busy slots,
 a pause and the time it ends, and the last results from local files.
 
