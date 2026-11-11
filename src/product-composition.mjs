@@ -338,8 +338,7 @@ export function productTapCallBound(map, {root, readFile, statFile}) {
     };
     let maxTapCalls=0;
     for(const rule of map.handlers) {
-      if(!rule.handler)continue;
-      let bound=cost(rule.handler)+(rule.after??[]).reduce((sum,step)=>sum+cost(step.handler),0);
+      let bound=(rule.handler?cost(rule.handler):0)+(rule.after??[]).reduce((sum,step)=>sum+cost(step.handler),0);
       let destinations;
       if(rule.next.kind==='screen')destinations=map.screens.filter(screen=>screen.id===rule.next.screen);
       else if(rule.next.kind==='same')destinations=map.screens.filter(screen=>screen.id===rule.screen);

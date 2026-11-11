@@ -64,6 +64,8 @@ test('whole product sends a composed map and source-bound owners, without author
  assert.equal(readFileSync(join(setup.repo,request.seed),'utf8'),setup.authored);
  assert.equal(existsSync(join(setup.repo,request.app_map)),false);
  assert.match(result.err,/up to 40 AI calls/);
+ assert.match(result.err,/Product screens: phone · menu, barista · board/);
+ assert.match(result.err,/3 handler\/background operations per tap, before drawing/);
  assert.equal((await open(setup,fake,{},[request.seed])).code,0);
  assert.equal(fake.posts.length,2,'ordinary owner reuse must not create a standalone product');
  assert.equal((await open(setup,fake,{'--product':true,'--journey':setup.scenario.story_path})).code,0);

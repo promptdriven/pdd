@@ -3585,6 +3585,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if(version.status!==200)throw new Stop(5,`Product support could not be read (HTTP ${version.status ?? 'unknown'}). Nothing was uploaded.`);
       if(!Array.isArray(version.json?.features) || !version.json.features.includes('product-parts-v1'))throw new Stop(5,'This interpreter needs an upgrade for whole-product Simulator support (product-parts-v1). Nothing was uploaded.');
       line(ports.stderr,`Product parts: ${prepared.composition.parts.join(', ')}. One tap: up to ${prepared.maxTapCalls} AI calls.`);
+      line(ports.stderr,`Product screens: ${prepared.composition.labels.map(label=>label.title).join(', ')}. Up to ${prepared.composition.tapOperations} handler/background operations per tap, before drawing.`);
     }
     await checkLint(context, [row]);
     if (context.interrupted) throw new Stop(3, 'Stopped before the Try was made. Nothing new was sent.');

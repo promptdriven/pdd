@@ -58,3 +58,10 @@ test('budget oracle detects a missing destination draw without a load failure',a
  const f=boundFixture(39);
  assert.throws(()=>assert.equal(mutant.productTapCallBound(f.map,f.ports),40),{code:'ERR_ASSERTION'});
 });
+
+test('navigation without a model handler still includes destination drawing',()=>{
+ let f=boundFixture(1,undefined,1,40);f.map.handlers[0].handler=null;
+ assert.equal(productTapCallBound(f.map,f.ports),40);
+ f=boundFixture(1,undefined,1,41);f.map.handlers[0].handler=null;
+ assert.throws(()=>productTapCallBound(f.map,f.ports),e=>e.code==='invalid-product-map'&&/41/.test(e.message));
+});
