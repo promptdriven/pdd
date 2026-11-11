@@ -803,10 +803,11 @@ records. A line that the records do not support is red. The same rules, short en
   the merge.
 - A failed check is a FAIL, also when its check has no verdict (§11). Find the cause and fix it ("After a ✗"). Never
   write a failed check as `not run`.
-- `not run` is only for a cause that this PR cannot fix: a native-only prompt, a Story with no Runtime test, no
-  verdict with no failed step, or a refusal that pdd gives no fix for. A refusal with a fix from pdd is this PR's
-  work. For example, a whole number outside the interpreter's range: apply the Number spelling that pdd prints (§3
-  "Large whole numbers") and check again.
+- `not run` is only for a cause that this PR cannot fix: a native-only prompt, no verdict with no failed step, or a
+  refusal that pdd gives no fix for. A changed Story with no Runtime test is no such cause: write its Runtime test
+  (one step for each criterion) and run `pdd test`, or mark the owning prompt's interface native-only with a reason.
+  A refusal with a fix from pdd is this PR's work. For example, a whole number outside the interpreter's range: apply
+  the Number spelling that pdd prints (§3 "Large whole numbers") and check again.
 - Do not wait for maintenance. When pdd prints that the interpreter is in maintenance (§11), it has sent nothing yet.
   Stop pdd then. For each changed Story that pdd did not send, write `Runtime: not run (STORY: maintenance until
   HH:MM UTC)` with the end time that pdd printed. Autopilot sends the check itself when maintenance ends and rewrites the line. Never send it again yourself. Never

@@ -42,8 +42,10 @@ line against its own records. A line that the records do not support is red.
 
 ## When `not run` is allowed
 
-- `not run` is only for a cause that this PR cannot fix: a native-only prompt, a Story with no Runtime test, no
-  verdict with no failed step, maintenance (below), or a refusal that pdd gives no fix for.
+- `not run` is only for a cause that this PR cannot fix: a native-only prompt, no verdict with no failed step,
+  maintenance (below), or a refusal that pdd gives no fix for.
+- A changed Story with no Runtime test is no such cause. Write its Runtime test (one step for each criterion) and run
+  `pdd test`, or mark the owning prompt's interface native-only with a reason.
 - A refusal with a fix from pdd is this PR's work. Apply the fix and check again.
 - Write the exact cause in the line: `Runtime: not run (STORY: CAUSE)`.
 
