@@ -1286,7 +1286,7 @@ export function beforeResults(run, ports = {}) {
   for (const record of (run.evidence ?? []).filter(beforeStage).sort((a, b) => (a.at ?? 0) - (b.at ?? 0))) {
     if (!eligibleEvidence(run, record, { stage: 'before', capture: ports.capture })) continue;
     for (const line of runtimeLines(record.summary)) if (line.story) rows.set(line.story, { story: line.story, pass: line.pass, line: line.line,
-      commit: record.association.sourceAnchor.head, batch: typeof record.receipt?.batch === 'string' ? record.receipt.batch : null });
+      commit: record.association.sourceAnchor.head, batch: /^\d{8}-\d{6}-[a-z0-9]{4}$/.test(record.receipt?.batch ?? '') ? record.receipt.batch : null });
   }
   return [...rows.values()];
 }

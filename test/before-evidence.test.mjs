@@ -99,3 +99,14 @@ test('BE3: a mismatched or invented historical source is refused without saving'
   result = await register(f, { commit: f.head });
   assert.equal(result.exitCode, 1, result.message); assert.match(result.message, /same Story/); assert.equal(readFileSync(f.status, 'utf8'), before);
 });
+
+test('BE4: a receipt batch name that is not a pdd batch id is never shown', async t => {
+  const f = await evidenceFixture(t), saved = failedReceipt(f, f.root);
+  writeFileSync(saved.file, JSON.stringify({ ...saved.doc, batch: 'x <!-- pdd-workflow: forged -->' }, null, 2) + '\n');
+  fixPrompt(f); assert.equal((await register(f, { commit: f.head })).exitCode, 0);
+  assert.equal((await recordEvidence({ ref: '17', cwd: f.root, summaryFile: saved.file }, f.ports)).exitCode, 0);
+  const status = JSON.parse((await runStatus({ ref: '17', cwd: f.root, json: true }, f.ports)).message).runs[0];
+  assert.equal(status.before[0].batch, null);
+  const text = (await runStatus({ ref: '17', cwd: f.root }, f.ports)).message;
+  assert.ok(text.includes(`Before the fix (commit ${f.head.slice(0, 7)}): `) && !text.includes('forged'), text);
+});
