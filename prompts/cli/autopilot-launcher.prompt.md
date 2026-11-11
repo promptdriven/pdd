@@ -1354,11 +1354,21 @@ person questions and explicit blockers.
 
 ## Core engine switch
 
-`autopilot.engine` in the checkout's `pdd.json` selects the engine; the
-[core owner](autopilot-core.prompt.md) reads it with `autopilotEngine`, and any
-value other than `core` (or an unreadable file) is the full engine. The default
-stays `full`. The full engine below is unchanged; this section only adds a branch.
+The effective engine (`engineOf`), in this order: the machine's `state.engine` (`core`
+or `full`, saved by `start --engine`; source `machine`); else `autopilot.engine` in the
+checkout's `pdd.json` when it is `core` or `full` (source `pdd.json`); else the default,
+`full` (source `default`). The full engine below is unchanged, but **deprecated, removed
+in 0.1.29** (then the default becomes core, with an automatic move of the machines that
+run full):
 
+- The notice (`FULL_ENGINE_NOTICE`): "The full Autopilot engine is deprecated and is
+  removed in 0.1.29. To switch this machine to the core engine, let the open runs finish
+  or release them (pdd autopilot release ISSUE), then run: pdd autopilot stop && pdd
+  autopilot start --engine core". A full-engine tick writes it once per repository and
+  machine to the tick log (`ports.notice`, default stderr), under the admission lock, and
+  saves `fullEngineNoticeAt`, so it never repeats. A start that names `--engine full`
+  prints "--engine full is deprecated, removed in 0.1.29." and the notice first. The
+  alert channel needs an issue number, so the notice is no alert.
 - Engine source: `state.engine` (`core` or `full`), saved by `start --engine`, wins
   over `pdd.json`; a start without `--engine` keeps the saved value. `start --label
   NAME` saves `state.label`, which replaces the core's `label` setting. `start --mode

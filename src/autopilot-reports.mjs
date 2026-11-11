@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-reports.prompt.md (sha256: a5682849861a0f2b66e67b32660fc652036fbf470053b9c5d7ace701bba929fc).
+// Generated from prompts/cli/autopilot-reports.prompt.md (sha256: 3cea109b560a16e9d485f8c4da1d9a2c64326fc61fae32944ed03bd485c62627).
 import * as nativeFs from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -113,8 +113,8 @@ export function reportKind(cause) {
 // Stable fingerprints: an agent writes the code and the component as free text, so each is mapped to a fixed word.
 const CODES = [['merge-check-tool', /^merge-check-tool$/], ['suite-broken', /^suite-broken$/], ['adopt-pdd', /^adopt-pdd$/], ['no-verdict', /verdict/],
   ['scenario-limit', /scenario|safe-integer|integer-out-of-range|out-of-range/], ['vector-replay', /vector|replay/], ['runtime-case', /runtime-case|test-case/],
-  ['lint-refusal', /lint/], ['interface-refusal', /interface/], ['binding-refusal', /binding/], ['interpreter-error', /interpreter/],
-  ['server-internal', /server-internal|internal-server|server-error|server-5\d\d|http-5\d\d/], ['server-incompatible', /server|compat/], ['crash', /crash|panic|segfault|exception/], ['claim-error', /claim/], ['not-run', /not-run/],
+  ['lint-refusal', /lint/], ['interface-refusal', /interface/], ['binding-refusal', /binding/], ['input-refusal', /refus|reject/], ['interpreter-error', /interpreter/],
+  ['server-internal', /server-internal|internal-server|server-error|(?:^|-)5\d\d(?:-|$)|unavailable|bad-gateway/], ['server-incompatible', /server|compat/], ['crash', /crash|panic|segfault|exception/], ['claim-error', /claim/], ['not-run', /not-run/],
   ['timeout', /timeout|timed-out/], ['cli-error', /cli|command|usage|exit|failed|error/]];
 // An unknown code is other-HASH of the step and the error class (the code slug with no digits) only, never of the
 // agent's text, so one cause is one report; at most one new "other" report per machine per day.

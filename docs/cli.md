@@ -1464,8 +1464,19 @@ Build scripts and commands without test results do not qualify.
 
 ## Core engine
 
-Set `autopilot.engine` to `core` in `pdd.json` to run the small native engine
-instead of the coordinator chat. The default is `full`. To choose it on one
+**The full engine (the coordinator chat, still the default) is deprecated and is
+removed in 0.1.29**; then the core engine becomes the default. A machine that runs
+the full engine writes this once to its tick log (and `pdd autopilot start --engine
+full` prints it every time):
+
+> The full Autopilot engine is deprecated and is removed in 0.1.29. To switch this
+> machine to the core engine, let the open runs finish or release them (pdd
+> autopilot release ISSUE), then run: pdd autopilot stop && pdd autopilot start
+> --engine core
+
+`--engine full` still works for now and prints "--engine full is deprecated, removed
+in 0.1.29." Set `autopilot.engine` to `core` in `pdd.json` to choose the core engine
+for every machine of a repository. To choose it on one
 machine only, run `pdd autopilot start --engine core`; `--label NAME` sets the
 opt-in label and `--mode auto|observe|off` the mode the same way, on this machine
 only (`pdd autopilot observe` changes `pdd.json` instead). The machine values win over
