@@ -118,7 +118,10 @@ the filesystem port. Repeated status reads never count a session twice.
 
 ## Dependencies
 
-The [GitHub call counter](github-calls.prompt.md) is a navigation-only consumer
-reference; this module does not load it or call it.
 - Native Node filesystem, crypto hashing, path joins and deterministic arithmetic
   are injected at the file and clock boundaries above. No AI/model call is needed.
+
+## Consumer navigation
+
+The [GitHub call counter](github-calls.prompt.md) is a navigation-only consumer
+reference; this module does not load it or call it.

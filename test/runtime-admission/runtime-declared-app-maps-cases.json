@@ -1,0 +1,142 @@
+{
+  "format": "proposed-native-case-inventory",
+  "story_path": "user_stories/runtime-declared-app-maps.md",
+  "status": "proposal-not-executed",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "A pure shell Story can declare the app maps its screens use, so lint and a check accept map-only resource bindings without executing an unrelated tester warm-up."
+    },
+    {
+      "id": "AC2",
+      "text": "The files preview, lint and check select each declared map, its dispatched prompts, their required dependencies and stylesheets; unrelated maps and tester prompts stay out of the upload."
+    },
+    {
+      "id": "AC3",
+      "text": "A map declaration keeps existing safe-source, workspace and Story boundaries; a required missing or unsafe file refuses with the referring path instead of sending an incomplete upload."
+    },
+    {
+      "id": "AC4",
+      "text": "Malformed map selections and unknown scenario keys remain refused; a declared map never makes a misspelled simulation operation valid."
+    },
+    {
+      "id": "AC5",
+      "text": "An absent or empty app_maps selection keeps existing no-map behavior, and combined Story selection preserves each Story's own declared-map closure."
+    }
+  ],
+  "fixture": {
+    "provenance": "Portable synthetic fixture; no operational project material.",
+    "shell": "prompts/shell.prompt.md has one pure open operation returning {title: \"Home\"}; calls and resources are empty.",
+    "screen": "prompts/screen.prompt.md declares sink.send, calls prompts/format.prompt.md and requires docs/labels.md and views/home.ui.svg.",
+    "map": "app/home.app-map.json dispatches screen.render, uses styles/home.css, and has an operation handler that reaches sink.send.",
+    "scenario": "tests/shell.json names user_stories/shell.md, has one shell.open step and binds sink.send with a fake append-only request log.",
+    "initial_world": {
+      "requests": []
+    },
+    "decoys": [
+      "prompts/tester.prompt.md",
+      "app/unrelated.app-map.json",
+      "private-looking input strings are literal data, never dependencies"
+    ],
+    "expected_declared_manifest": [
+      "app/home.app-map.json",
+      "docs/labels.md",
+      "prompts/format.prompt.md",
+      "prompts/screen.prompt.md",
+      "prompts/shell.prompt.md",
+      "styles/home.css",
+      "tests/shell.json",
+      "user_stories/shell.md",
+      "views/home.ui.svg"
+    ]
+  },
+  "cases": [
+    {
+      "id": "declared-shell",
+      "criterion_ids": [
+        "AC1",
+        "AC2"
+      ],
+      "given": "Scenario declares app_maps:[\"app/home.app-map.json\"].",
+      "expect": "One shell.open step remains; result title Home; requests []; shell is not refused for app_maps; exact declared manifest includes screen resources but no tester."
+    },
+    {
+      "id": "same-upload-every-mode",
+      "criterion_ids": [
+        "AC2"
+      ],
+      "given": "Stable synthetic source; run --files, lint and check against a recording fake interpreter.",
+      "expect": "Preview paths, sizes and effective tar entries match exactly across modes; scenario steps/inputs/checks unchanged; all required map files present; distinct normal request IDs."
+    },
+    {
+      "id": "map-reference-closure",
+      "criterion_ids": [
+        "AC2"
+      ],
+      "given": "Parameterize map operation screen, router handler, handler.after, timer, timer.after and host-region helper; each reaches a distinct prompt/dependency.",
+      "expect": "Each actual dispatched prompt and transitive call/context/style file is captured once; strings in event/input/state values select nothing."
+    },
+    {
+      "id": "missing-required-source",
+      "criterion_ids": [
+        "AC3"
+      ],
+      "given": "Individually remove selected map, its screen prompt, called prompt or stylesheet.",
+      "expect": "Local source refusal names referring file and missing target; exit4; no authentication or HTTP; no incomplete upload."
+    },
+    {
+      "id": "source-ceiling",
+      "criterion_ids": [
+        "AC3"
+      ],
+      "given": "Parameterize map/dependency traversal, absolute path, secret name, outside symlink target, workspace exclusion and applied Story boundary conflict.",
+      "expect": "Existing path/workspace/boundary diagnostic and chain; no unauthorized content read or partial upload; keep allowed internal source-link rules unchanged."
+    },
+    {
+      "id": "malformed-map-selection",
+      "criterion_ids": [
+        "AC4"
+      ],
+      "given": "app_maps is null, string, object, [null], [42], duplicate safe paths, empty-string path, absolute path or traversal path.",
+      "expect": "No coercion, entry filtering or duplicate normalization into acceptance; invalid-app-maps under Runtime authority, or existing earlier local source refusal; zero AI calls."
+    },
+    {
+      "id": "unknown-scenario-key",
+      "criterion_ids": [
+        "AC4"
+      ],
+      "given": "Otherwise valid declared scenario also contains app_mpas:[\"app/home.app-map.json\"].",
+      "expect": "invalid-document still refuses the unknown key; it cannot become a map declaration."
+    },
+    {
+      "id": "misspelled-simulation",
+      "criterion_ids": [
+        "AC4"
+      ],
+      "given": "Valid declared map and fixture replace sink.send binding with sink.sned.",
+      "expect": "Interpreter admission refuses unknown-simulation-operation; zero AI calls; client does not rewrite operation names."
+    },
+    {
+      "id": "no-map-and-empty-map",
+      "criterion_ids": [
+        "AC5"
+      ],
+      "given": "Remove app_maps, then repeat with app_maps:[]; keep map-only sink.send binding.",
+      "expect": "No map-derived upload files; existing interpreter unknown-simulation-operation refusal remains. With no map-only binding, ordinary pure-shell behavior remains unchanged."
+    },
+    {
+      "id": "two-story-union-and-footprints",
+      "criterion_ids": [
+        "AC5"
+      ],
+      "given": "Second Story names another map; shared prompt/style dependency; one unselected sibling declares a third map.",
+      "expect": "Combined upload is sorted unique union of selected closures; each complete Story footprint retains its own map dependencies; sibling-only map stays out of upload; invalid sibling footprint remains unavailable, not a false pass."
+    }
+  ],
+  "verification_plan": {
+    "local": "Native regression must fail on baseline 9341f3b873771b99d4edb5fb194334f33613fe54 for app_maps rejection or missing closure, then pass on repaired code; use public captureSource/scenarioShapeRefusal/CLI boundaries, not TOP_KEYS introspection.",
+    "prompt_before": "Unavailable: no existing Runtime interface; local draft exit4 names required-context cycle. Do not claim a prompt-bug or code-only check verdict.",
+    "paid_calls_now": 0,
+    "future_canary": "After interface/gate resolution, one pure-shell declared-map step costs an estimated 1 model call; max-calls9 covers 3x(1 base+2 rerun allowance). Lint and malformed-admission cases consume zero AI calls. No live run authorized here."
+  }
+}
