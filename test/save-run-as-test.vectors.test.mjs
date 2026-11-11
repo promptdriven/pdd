@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, readdirSync} from 'node:fs';
 import {join} from 'node:path';
 import {Readable} from 'node:stream';
-import {spawnSync} from 'node:child_process';
+import {spawn, spawnSync} from 'node:child_process';
 import * as client from '../src/runtime-client.mjs';
 import {runPdd} from '../src/pdd-cli.mjs';
 import {parseArgv} from '../src/argument-parser.mjs';
@@ -184,6 +184,97 @@ test('AC6: an older completion cannot make a newer unknown run saveable', async 
   release(); await oldCall;
   const saving = terminal(f.io()); assert.equal(await save(f, saving), 125);
   assert.match(saving.stderr.text, /unknown/); assert.equal(JSON.parse(readFileSync(join(f.repo, file))).steps.length, 1);
+});
+
+test('AC6: a pending Try cannot restore an older confirmed run', {timeout: 10000}, async t => {
+  const f = await recorded(t), repoDir = join(f.state, 'repos');
+  const repoFile = join(repoDir, readdirSync(repoDir).find(name => name.endsWith('.json')));
+  const repo = JSON.parse(readFileSync(repoFile, 'utf8'));
+  repo.unrelated = {keep: 'value'};
+  writeFileSync(repoFile, JSON.stringify(repo));
+  let release, started;
+  const paused = new Promise(resolve => { started = resolve; });
+  const waiting = new Promise(resolve => { release = resolve; });
+  const trying = f.io();
+  trying.fetch = async (url, init) => {
+    if (String(url).endsWith('/v1/lint') && init.method === 'POST') { started(); await waiting; }
+    return fetch(url, init);
+  };
+  const pending = client.runTry({cwd: f.repo, words: ['finish-task'], options: {'--no-open': true, '--no-wait': true}}, trying);
+  await paused;
+  const newer = f.io(); newer.signal = AbortSignal.abort();
+  await assert.rejects(client.runDoorCall({root: f.repo, origin: f.fake.origin,
+    sessionId: '11111111-1111-4111-8111-111111111111', login: 'octo', prompt: PLACE, operation: 'main'}, input, newer));
+  release(); await pending;
+  const latest = JSON.parse(readFileSync(repoFile, 'utf8'));
+  assert.equal(latest.last_run.state, 'unknown');
+  assert.deepEqual(latest.unrelated, {keep: 'value'});
+  assert.ok(latest.tries[file], 'the Try is recorded');
+  const saving = terminal(f.io()); assert.equal(await save(f, saving), 125);
+  assert.match(saving.stderr.text, /unknown/);
+  assert.equal(JSON.parse(readFileSync(join(f.repo, file))).steps.length, 1);
+});
+
+test('AC6: a separate process cannot confirm over a newer unknown invocation', {timeout: 10000}, async t => {
+  const f = await recorded(t), repoDir = join(f.state, 'repos');
+  const repoFile = join(repoDir, readdirSync(repoDir).find(name => name.endsWith('.json')));
+  const repo = JSON.parse(readFileSync(repoFile, 'utf8')); repo.unrelated = {keep: 'value'};
+  writeFileSync(repoFile, JSON.stringify(repo));
+  const release = join(f.sandbox, 'release'), script = join(f.sandbox, 'older.mjs');
+  const clientUrl = new URL('../src/runtime-client.mjs', import.meta.url).href;
+  const fakeUrl = new URL('./runtime-fake.mjs', import.meta.url).href;
+  writeFileSync(script, `import fs from 'node:fs';
+import {syncBuiltinESMExports} from 'node:module';
+import {runDoorCall} from ${JSON.stringify(clientUrl)};
+import {portsFor} from ${JSON.stringify(fakeUrl)};
+const [root, state, home, origin, repoFile, release] = process.argv.slice(2);
+const io = portsFor({HOME: home, PDD_STATE_DIR: state, PDD_RUNTIME_URL: origin}).ports;
+let ready = false, paused = false, answer;
+const read = fs.readFileSync;
+fs.readFileSync = function(path, ...args) {
+  const value = read.call(this, path, ...args);
+  if (ready && !paused && String(path) === repoFile) {
+    paused = true; process.send('paused');
+    const deadline = Date.now() + 5000;
+    while (!fs.existsSync(release)) {
+      if (Date.now() >= deadline) throw Error('timed out waiting for release');
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    }
+  }
+  return value;
+};
+syncBuiltinESMExports();
+io.fetch = async (_url, init) => {
+  if (init.method === 'POST') {
+    const id = JSON.parse(init.body).requestId;
+    answer = {requestId:id,id,command:'call',state:'passed',result:{program_result:${JSON.stringify(result)},report:{input_world:${JSON.stringify(initial)},world:${JSON.stringify(after)}}}};
+  } else ready = true;
+  return new Response(JSON.stringify(answer), {status:200});
+};
+await runDoorCall({root,origin,sessionId:'11111111-1111-4111-8111-111111111111',login:'octo',prompt:${JSON.stringify(PLACE)},operation:'main'}, ${JSON.stringify(input)}, io);
+`);
+  const child = spawn(process.execPath, [script, f.repo, f.state, f.home, f.fake.origin, repoFile, release], {stdio: ['ignore', 'ignore', 'pipe', 'ipc']});
+  let errors = ''; child.stderr.on('data', chunk => { errors += chunk; });
+  const exited = new Promise(resolve => child.once('exit', (code, signal) => resolve({code, signal})));
+  t.after(async () => {
+    try { writeFileSync(release, 'cleanup'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    child.kill();
+    await exited;
+  });
+  await new Promise((resolve, reject) => { child.once('message', resolve); child.once('error', reject); child.once('exit', () => reject(Error(errors || 'older process exited before pause'))); });
+  const newer = f.io(); newer.signal = AbortSignal.abort();
+  const newCall = assert.rejects(client.runDoorCall({root: f.repo, origin: f.fake.origin, sessionId: '11111111-1111-4111-8111-111111111111', login: 'octo', prompt: PLACE, operation: 'main'}, input, newer));
+  // On the old code the newer invocation finishes here; with the lock it waits
+  // for the paused owner, so release that owner after a bounded interval.
+  await Promise.race([newCall, new Promise(resolve => setTimeout(resolve, 150))]);
+  writeFileSync(release, 'continue');
+  await newCall;
+  assert.deepEqual(await exited, {code: 0, signal: null}, errors);
+  const latest = JSON.parse(readFileSync(repoFile, 'utf8'));
+  assert.equal(latest.last_run.state, 'unknown'); assert.deepEqual(latest.unrelated, {keep: 'value'});
+  const before = readFileSync(join(f.repo, file), 'utf8'), saving = terminal(f.io());
+  assert.equal(await save(f, saving), 125); assert.match(saving.stderr.text, /unknown/);
+  assert.equal(readFileSync(join(f.repo, file), 'utf8'), before);
 });
 
 test('AC2: saving preserves dispatched input when the caller mutates its object', async t => {

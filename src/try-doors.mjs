@@ -249,8 +249,8 @@ export async function saveLast({ root, store, identity, ports, test }) {
     if(outcome.kind==='failure')fail(outcome.message);
     if(outcome.result.state!=='committed')return refuse(outcome);
     if (test) {
-      const current = store.repo(root);
-      if (current.last_run?.id === last.id) store.saveRepo(root, { ...current, last_run: { ...current.last_run, saved: [...(current.last_run.saved ?? []), originalPath] } });
+      await store.updateLastRun(root, current => current?.id !== last.id ? undefined :
+        { ...current, saved: [...(current.saved ?? []), originalPath] });
     } else writePrivate(pointer.last, { ...last, saved: true });
     const actualStep = outcome.result.steps?.[0] ?? step.step_id;
     ports.stdout.write(`Added to ${originalPath} as step ${actualStep}. Review the data before this step, then run: pdd test ${test?.story ?? basename(storyPath, '.md')}\n`);
