@@ -1,11 +1,11 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 2582a1754f6d54346a79c9269d8880cfa1d8cf1b2963b930ad3e494e6ce020b5).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: a43d41354a2c99a4cfb94c357b79951416cd2c9e787cb225a167a09f5fb8dbdb).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, createHash } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import { createDependencyReadPorts, refreshClaimHeartbeat, takeoverLimited } from './issue-dependencies-github.mjs';
-import { jobEnvironment, startAgentJob, readAgentJob, stopAgentJob, agentCommand, agentJobCpu, pddCheckFile } from './agent-job.mjs';
+import { jobEnvironment, startAgentJob, readAgentJob, stopAgentJob, agentCommand, agentJobCpu, pddCheckFile, skillsCheckFile } from './agent-job.mjs';
 import { fileReport, listReportDrafts, reportKind } from './autopilot-reports.mjs';
 import { checkAutopilotBase } from './autopilot-base.mjs';
 import { redactSecrets } from './secret-redaction.mjs';
@@ -814,12 +814,22 @@ function pddOnPath(ctx, env) {
   const file = join(ctx.dirs.bin, 'pdd'), text = `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(ctx.pdd)} "$@"\n`;
   ctx.fs.mkdirSync(ctx.dirs.bin, { recursive: true, mode: 0o700 });
   if (readText(ctx.fs, file) !== text) { const temp = `${file}.${process.pid}.tmp`; ctx.fs.writeFileSync(temp, text, { mode: 0o700 }); ctx.fs.renameSync(temp, file); }
-  // #3177: PDD_CLI names this pdd for the agent, because a login shell can put another pdd first on PATH again.
-  return { ...env, PDD_CLI: file, PATH: [ctx.dirs.bin, ...String(env.PATH ?? '').split(':').filter(dir => dir && dir !== ctx.dirs.bin)].join(':') };
+  // #3177: PDD_CLI names this pdd for the agent, because a login shell can put another pdd first on PATH again;
+  // PDD_SKILLS names the skills folder of this same package, because the installed skills can be older.
+  return { ...env, PDD_CLI: file, PDD_SKILLS: join(PACKAGE_ROOT, 'skills'), PATH: [ctx.dirs.bin, ...String(env.PATH ?? '').split(':').filter(dir => dir && dir !== ctx.dirs.bin)].join(':') };
 }
 // #3177: the agent roles run commands in a shell; their wrapper checks which pdd that shell finds.
 const SHELL_ROLES = new Set(['build', 'repair', 'conflict', 'review']);
 const engineVersion = ctx => ctx.ports.version ?? readJson(ctx.fs, join(PACKAGE_ROOT, 'package.json'), {})?.version ?? null;
+// The skills folders that the agent's tools load by default (as pdd setup installs them): Codex ~/.agents/skills,
+// Claude $CLAUDE_CONFIG_DIR/skills (absolute) else ~/.claude/skills; and the engine's own skills version.
+function skillsCheck(ctx) {
+  const env = ctx.ports.env ?? process.env, home = env.HOME, dir = join(PACKAGE_ROOT, 'skills');
+  const version = /^\s*pdd-skills:\s*(\d+\.\d+\.\d+)\s*$/m.exec(readText(ctx.fs, join(dir, 'pdd-feature', 'SKILL.md')) ?? '')?.[1] ?? null;
+  const claude = typeof env.CLAUDE_CONFIG_DIR === 'string' && env.CLAUDE_CONFIG_DIR.startsWith('/') ? join(env.CLAUDE_CONFIG_DIR, 'skills') : home ? join(home, '.claude', 'skills') : null;
+  const read = (ctx.state.agent?.kind === 'claude' ? [claude] : [home ? join(home, '.agents', 'skills') : null]).filter(Boolean);
+  return { dir, version, read };
+}
 function startJob(ctx, job, role, cwd, prompt, command = null, extraEnv = {}) {
   const id = `${job.issue}-${role}-${ctx.now().toString(36)}-${randomUUID().slice(0, 6)}`;
   ctx.fs.mkdirSync(ctx.dirs.logs, { recursive: true, mode: 0o700 });
@@ -830,7 +840,7 @@ function startJob(ctx, job, role, cwd, prompt, command = null, extraEnv = {}) {
   const { checkCpus, ...priority } = ctx.ports.machine?.priority?.(role) ?? {};
   return ctx.jobs.start({ id, dir: ctx.dirs.logs, cwd, command: run.command, args: run.args, input: typeof prompt === 'function' ? prompt(result) : prompt,
     env: { ...pddOnPath(ctx, jobEnvironment(ctx.ports.env ?? process.env)), ...(Number.isSafeInteger(checkCpus) ? { PDD_CHECK_CPUS: String(checkCpus) } : {}), ...extraEnv },
-    ...(Object.keys(priority).length ? { priority } : {}), ...(SHELL_ROLES.has(role) ? { pddCheck: { version: engineVersion(ctx), cli: join(ctx.dirs.bin, 'pdd') } } : {}),
+    ...(Object.keys(priority).length ? { priority } : {}), ...(SHELL_ROLES.has(role) ? { pddCheck: { version: engineVersion(ctx), cli: join(ctx.dirs.bin, 'pdd'), skills: skillsCheck(ctx) } } : {}),
     issue: job.issue, role, branch: job.branch, head: job.head });
 }
 async function checkout(ctx, job, name) {
@@ -2754,7 +2764,7 @@ async function sweepFiles(ctx) {
 
 // ---- Status (local files only) --------------------------------------------------------------------------
 // #3177: the wrapper's note when the agent's shell finds another pdd than the engine's.
-const pddWords = (fs, part) => { const line = readJson(fs, pddCheckFile(part.log ?? ''), null)?.line; return named(line) ? `; ${oneLine(line, 300)}` : ''; };
+const pddWords = (fs, part) => [pddCheckFile, skillsCheckFile].map(file => readJson(fs, file(part.log ?? ''), null)?.line).filter(named).map(line => `; ${oneLine(line, 300)}`).join('');
 const runtimeWords = job => runtimeWaiting(job) ? `; Runtime: waits for the interpreter maintenance since ${utcClock(job.runtimeWait.maintenance)}${job.runtimeWait.until ? ` (until ${utcClock(job.runtimeWait.until)})` : ''}; no slot`
   : runtimeCurrent(job) && job.runtimeWait.state === 'sent' ? '; Runtime: the check that was not sent runs again' : '';
 export function coreStatus({ state, settings, sources = {}, guard = null }, ports) {

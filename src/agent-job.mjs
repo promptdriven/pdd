@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-job.prompt.md (sha256: bce324d436e3a00418655f86031db0b94576f103ad2fb2a17b434eaaea456de4).
+// Generated from prompts/cli/agent-job.prompt.md (sha256: a8146af7cfae6e4173db9c318b9b391026a551bd3d99dd2269035061957b7410).
 import { execFile, spawn, spawnSync } from 'node:child_process';
 import { accessSync, closeSync, constants, openSync, readFileSync, renameSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { setPriority } from 'node:os';
@@ -85,17 +85,20 @@ export function stopAgentJob(job, ports = {}) {
   return true;
 }
 
-// The lowest priority for every job (#3231): macOS utility QoS with throttled disk I/O (taskpolicy runs the command in
-// the same process), or a Linux CPU list (taskset) for Autopilot's share; else the command itself. Nice is set by the
-// wrapper for itself, so every child inherits it.
-const TASKPOLICY = '/usr/sbin/taskpolicy';
+// The lowest priority for every job (#3231), for the child, not for the wrapper: the wrapper only waits, and it must
+// answer a stop at once on a busy machine. `nice -n 19` (nice and taskpolicy and taskset run the command in the same
+// process, so the CPU watch sees the same tree), then macOS utility QoS (it also lowers disk I/O; no extra disk
+// throttle, which kept stopped jobs alive on a busy disk) or a Linux CPU list (taskset) for Autopilot's share.
+const TASKPOLICY = '/usr/sbin/taskpolicy', NICE = '/usr/bin/nice';
 const executable = file => { try { accessSync(file, constants.X_OK); return true; } catch { return false; } };
+const niceOf = spec => Number.isSafeInteger(spec?.priority?.nice) ? spec.priority.nice : 19;
 export function jobCommand(spec, platform = process.platform, ports = {}) {
   const p = spec?.priority ?? {}, can = ports.executable ?? executable, qos = p.qos === undefined ? 'utility' : p.qos;
-  if (platform === 'darwin' && qos && can(TASKPOLICY)) return { command: TASKPOLICY, args: ['-c', qos, '-d', 'throttle', spec.command, ...(spec.args ?? [])] };
-  if (platform === 'linux' && typeof p.cpus === 'string' && /^[0-9,-]+$/.test(p.cpus) && typeof p.taskset === 'string' && p.taskset.startsWith('/'))
-    return { command: p.taskset, args: ['--cpu-list', p.cpus, spec.command, ...(spec.args ?? [])] };
-  return { command: spec.command, args: spec.args ?? [] };
+  let run = { command: spec.command, args: spec.args ?? [] };
+  if (platform === 'darwin' && qos && can(TASKPOLICY)) run = { command: TASKPOLICY, args: ['-c', qos, run.command, ...run.args] };
+  else if (platform === 'linux' && typeof p.cpus === 'string' && /^[0-9,-]+$/.test(p.cpus) && typeof p.taskset === 'string' && p.taskset.startsWith('/'))
+    run = { command: p.taskset, args: ['--cpu-list', p.cpus, run.command, ...run.args] };
+  return niceOf(spec) > 0 && can(NICE) ? { command: NICE, args: ['-n', String(niceOf(spec)), run.command, ...run.args] } : run;
 }
 // #3177: the pdd that the agent's own login shell finds (Codex runs each command in one, and a profile can put an older
 // pdd first on PATH). When it is not the engine's version, one line goes to the job log and to ID.pdd-check.json, for
@@ -118,9 +121,24 @@ export function checkShellPdd(spec, out, ports = {}) {
     try { writeAtomic(pddCheckFile(spec.log), JSON.stringify(record)); if (record.line) writeSync(out, `${record.line}\n`); } catch { /* The check is a note only. */ }
   });
 }
-// The wrapper's own nice value (default 19); every child inherits it.
+// The skills that the agent's tools load by default (pddCheck.skills.read, for example ~/.agents/skills) against the
+// engine's own skills: another version gives one line in the job log and ID.skills-check.json; the agent reads
+// "$PDD_SKILLS" either way. Missing or unreadable folders write nothing.
+export const skillsCheckFile = log => String(log).replace(/\.log$/, '') + '.skills-check.json';
+const skillVersion = folder => { try { return /^\s*pdd-skills:\s*(\d+\.\d+\.\d+)\s*$/m.exec(readFileSync(join(folder, 'pdd-feature', 'SKILL.md'), 'utf8'))?.[1] ?? null; } catch { return null; } };
+export function checkSkills(spec, out) {
+  const skills = spec.pddCheck?.skills;
+  if (!skills?.version || !Array.isArray(skills.read)) return null;
+  const found = skills.read.map(folder => ({ folder, version: skillVersion(folder) })).filter(row => row.version), other = found.filter(row => row.version !== skills.version);
+  const record = { at: Date.now(), found, engine: skills.version, dir: skills.dir ?? null,
+    line: other.length ? `pdd check: installed skills are ${other.map(row => `${row.version} at ${row.folder}`).join(' and ')}, the engine is ${skills.version}; jobs use PDD_SKILLS (${skills.dir})` : null };
+  try { writeAtomic(skillsCheckFile(spec.log), JSON.stringify(record)); if (record.line) writeSync(out, `${record.line}\n`); } catch { /* The check is a note only. */ }
+  return record;
+}
+// With no nice program, the wrapper lowers its own nice value instead (every child inherits it).
 function lowerPriority(spec) {
-  try { setPriority(0, Number.isSafeInteger(spec.priority?.nice) ? spec.priority.nice : 19); } catch { /* A lower priority is best effort. */ }
+  if (executable(NICE)) return;
+  try { setPriority(0, niceOf(spec)); } catch { /* A lower priority is best effort. */ }
 }
 // The detached wrapper: it owns the agent process and records how it ended.
 function wrap(specFile) {
@@ -141,18 +159,21 @@ function wrap(specFile) {
       process.exit(0);
     }
   };
-  for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(signal, () => {
+  const stop = signal => {
     if (stopping) return; stopping = signal;
     try { process.kill(-process.pid, 'SIGTERM'); } catch { try { child?.kill('SIGTERM'); } catch { /* The child may already be gone. */ } }
     // A kept timer: the wrapper waits the grace time also when its direct child exits at once (sh does).
     setTimeout(() => finish(ended?.code ?? null, ended?.signal ?? signal, true), GRACE_MS);
-  });
+  };
+  for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(signal, () => stop(signal));
   const run = jobCommand(spec);
   try { child = spawn(run.command, run.args, { cwd: spec.cwd, env: process.env, stdio: [stdin, out, out] }); }
   catch (error) { writeFileSync(out, `agent-job: ${error.message}\n`); finish(127, null); return; }
   child.on('error', error => { try { writeFileSync(out, `agent-job: ${error.message}\n`); } catch {} finish(127, null); });
-  child.on('exit', (code, signal) => { if (stopping) ended = { code, signal }; else finish(code, signal); });
-  if (spec.pddCheck) checkShellPdd(spec, out);
+  // A group stop can reach the child before the wrapper's own handler runs: a child killed by a stop signal is that
+  // stop, so the whole group still ends after the grace time (no process that ignores SIGTERM is left behind).
+  child.on('exit', (code, signal) => { if (stopping) ended = { code, signal }; else if (['SIGTERM', 'SIGINT', 'SIGHUP'].includes(signal)) { ended = { code, signal }; stop(signal); } else finish(code, signal); });
+  if (spec.pddCheck) { checkSkills(spec, out); checkShellPdd(spec, out); }
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === self && process.argv[2] === '--wrapper') wrap(process.argv[3]);

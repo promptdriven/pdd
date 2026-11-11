@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, readdirSync, truncateSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { coreWorld } from './helpers/core-world.mjs';
 import { coreStatus } from '../src/autopilot-core.mjs';
 import { readMachineGuard } from '../src/machine-guard.mjs';
@@ -137,16 +138,22 @@ test('the share is for the whole machine: with 2 repositories the jobs of both c
   }
 });
 
-test('#3177 every job gets PDD_CLI; agent roles get the pdd check; status shows its note', async t => {
+test('#3177 every job gets PDD_CLI and PDD_SKILLS; agent roles get the pdd and skills checks; status shows their notes', async t => {
   const w = await coreWorld(t);
   w.issue(17);
   await w.tick();
   const build = w.job(17, 'build'), cli = join(w.root, 'bin', 'pdd');
   assert.equal(build.env.PDD_CLI, cli); assert.equal(build.env.PATH.split(':')[0], join(w.root, 'bin'));
-  assert.deepEqual(build.pddCheck, { version: '0.1.27', cli });
+  const skillsDir = join(fileURLToPath(new URL('..', import.meta.url)), 'skills');
+  assert.equal(build.env.PDD_SKILLS, skillsDir, 'the skills of the engine\'s own package');
+  const engineSkills = /pdd-skills:\s*(\S+)/.exec(readFileSync(join(skillsDir, 'pdd-feature', 'SKILL.md'), 'utf8'))[1];
+  assert.deepEqual(build.pddCheck, { version: '0.1.27', cli, skills: { dir: skillsDir, version: engineSkills, read: [join(process.env.HOME, '.agents', 'skills')] } }, 'a Codex job checks ~/.agents/skills');
   const line = `pdd check: the agent shell finds pdd 0.1.15 at /home/u/.local/bin/pdd; the engine is 0.1.27; using PDD_CLI (${cli})`;
   writeFileSync(build.log.replace(/\.log$/, '.pdd-check.json'), JSON.stringify({ found: true, version: '0.1.15', line }));
   assert.ok(coreStatus({ state: w.state, settings: w.settings }, { root: w.root, now: w.now }).includes(`; ${line}`), 'status names the mismatch beside the build');
+  const skillsLine = `pdd check: installed skills are 0.1.20 at /home/u/.agents/skills, the engine is ${engineSkills}; jobs use PDD_SKILLS (${skillsDir})`;
+  writeFileSync(build.log.replace(/\.log$/, '.skills-check.json'), JSON.stringify({ line: skillsLine }));
+  assert.ok(coreStatus({ state: w.state, settings: w.settings }, { root: w.root, now: w.now }).includes(`; ${line}; ${skillsLine}`), 'and the skills note');
   w.build(17); await w.tick();
   assert.ok(w.job(17, 'review').pddCheck, 'the reviewer is checked too');
   assert.equal(w.job(17, 'suite').pddCheck, undefined, 'the suite runs no agent shell');

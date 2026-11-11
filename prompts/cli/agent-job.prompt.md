@@ -43,17 +43,20 @@ record is simply dead. There is no "uncertain custody" state.
   `dir/ID.result.json`. `id` must match `[A-Za-z0-9._-]+`.
 - `startAgentJob` also takes `priority` (`{nice, qos, cpus, taskset}` from the
   [machine guard](machine-guard.prompt.md)) and saves it in the spec. Every job
-  runs at the lowest priority (#3231): before the wrapper starts the child, it sets
-  its own nice value to `priority.nice`, default 19, with `os.setPriority` (a failure
-  is ignored), and children inherit it. `jobCommand(spec, platform)` gives the
-  command and arguments that the wrapper starts: on macOS with `qos` (default
-  `utility`) and an executable `/usr/sbin/taskpolicy`, it is `/usr/sbin/taskpolicy -c
-  utility -d throttle COMMAND ARGS…` (utility QoS and throttled disk I/O; taskpolicy
-  runs the command in the same process, so the CPU watch sees the same tree; not
-  background QoS, which keeps work on the efficiency cores); on Linux with `cpus` and
-  an absolute `taskset`, it is `TASKSET --cpu-list CPUS COMMAND ARGS…` (Node, `nproc`,
+  runs at the lowest priority (#3231), the child and not the wrapper: the wrapper only
+  waits, and it must answer a stop at once on a busy machine. `jobCommand(spec,
+  platform)` gives the command and arguments that the wrapper starts: first, on macOS
+  with `qos` (default `utility`) and an executable `/usr/sbin/taskpolicy`,
+  `/usr/sbin/taskpolicy -c utility COMMAND ARGS…` (utility QoS, which also lowers disk
+  I/O; not background QoS, which keeps work on the efficiency cores, and no extra disk
+  throttle, which kept stopped jobs alive on a busy disk), or on Linux with `cpus` and
+  an absolute `taskset`, `TASKSET --cpu-list CPUS COMMAND ARGS…` (Node, `nproc`,
   `cargo`, `pytest -n auto` and Go follow the CPU list, so an agent's own tests use
-  Autopilot's share); else the command itself.
+  Autopilot's share); then, with a nice value (`priority.nice`, default 19) above 0 and
+  an executable `/usr/bin/nice`, `/usr/bin/nice -n N` before it. nice, taskpolicy and
+  taskset run the command in the same process, so the CPU watch sees the same tree.
+  With no nice program the wrapper sets its own nice value with `os.setPriority`
+  instead (a failure is ignored), and children inherit it.
 - `startAgentJob` also takes `pddCheck` (`{version, cli}`: the engine's pdd version and
   the absolute path of its own pdd, #3177) and saves it in the spec. Right after the
   wrapper starts the child, it asks the agent's own login shell which pdd it finds, the
@@ -68,8 +71,20 @@ record is simply dead. There is no "uncertain custody" state.
   pdd X at PATH; the engine is Y; using PDD_CLI (CLI)` or `pdd check: the agent shell
   finds no pdd on PATH; the engine is Y; using PDD_CLI (CLI)`. A check that fails or
   times out writes nothing. It never changes the job.
+- `pddCheck.skills` (`{dir, version, read}`: the engine's own skills folder, its
+  `pdd-skills` version and the folders that the agent's tools load by default) is the
+  skills check (`checkSkills`): before the shell check, the wrapper reads `pdd-skills:`
+  from `FOLDER/pdd-feature/SKILL.md` of each `read` folder. When a folder has another
+  version, it writes `{at, found, engine, dir, line}` to `ID.skills-check.json`
+  (`skillsCheckFile(log)`) and the one line `pdd check: installed skills are X at
+  FOLDER, the engine is Y; jobs use PDD_SKILLS (DIR)` (several folders joined with
+  "and") to the log. A missing or unreadable folder is no mismatch; it never changes
+  the job.
 - The wrapper starts `jobCommand(spec)` in `cwd` with the input file as stdin and the
-  log as stdout and stderr (append). When the child ends, it writes
+  log as stdout and stderr (append). A group stop can reach the child before the
+  wrapper's own signal handler runs: a child that ends by SIGTERM, SIGINT or SIGHUP
+  while no stop runs starts the same stop (below), so the whole group still ends after
+  the grace time. When the child ends, it writes
   `{code, signal, at}` to the exit file with a temporary file and a rename. On
   SIGTERM, SIGINT or SIGHUP it stops the whole job: it sends SIGTERM to its own process
   group (the child and every process the child started, for example `npm ci` under

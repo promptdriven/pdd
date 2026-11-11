@@ -391,11 +391,16 @@ that runs the tick: the tick writes `bin/pdd` in `ROOT` (`#!/bin/sh` and `exec '
 'PACKAGE/bin/pdd.mjs' "$@"`, with this Node and this package, quoted for the shell;
 rewritten only when it differs) and puts `ROOT/bin` first on the job's `PATH`, before
 any other pdd (for example an older global install). Because a login shell can put
-another pdd first again (#3177), every job also gets `PDD_CLI` = `ROOT/bin/pdd`, and the
-build, repair, conflict and review jobs get `pddCheck {version, cli}` (the engine's
-version, `ports.version` or the package version, and `ROOT/bin/pdd`): the
-[job runner](agent-job.prompt.md) notes when the agent's shell finds another pdd, and
-status shows that note beside the running process. It files nothing and never ends a
+another pdd first again (#3177), every job also gets `PDD_CLI` = `ROOT/bin/pdd`, and
+`PDD_SKILLS` = the `skills` folder of this same package (the installed skills can be
+older than the engine). The build, repair, conflict and review jobs get `pddCheck
+{version, cli, skills}`: the engine's version (`ports.version` or the package version),
+`ROOT/bin/pdd`, and `skills {dir, version, read}` (`dir` = `PDD_SKILLS`, `version` = its
+`pdd-feature/SKILL.md` `pdd-skills:` value, `read` = the folder that the job's agent
+loads by default: Codex `~/.agents/skills`, Claude `$CLAUDE_CONFIG_DIR/skills` when that
+is absolute, else `~/.claude/skills`). The [job runner](agent-job.prompt.md) notes when
+the agent's shell finds another pdd or the installed skills have another version, and
+status shows those notes beside the running process. They file nothing and never end a
 job.
 
 - **Build** (in `worktrees/N`): the issue title, URL and body as data from a trusted

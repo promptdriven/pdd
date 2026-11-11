@@ -1539,7 +1539,7 @@ cores and the memory of the machine.
   64-core server share its 4 jobs. `--runs N` on this machine sets the most jobs of
   this repository; `autopilot.runs` in `pdd.json` can only lower them.
 - Every Autopilot process runs at the lowest priority: nice 19, on macOS the utility
-  QoS with throttled disk I/O, and in the Linux timer unit `CPUWeight=1` (a weight
+  QoS, and in the Linux timer unit `CPUWeight=1` (a weight
   counts only when the CPU is busy, so an idle machine still gives Autopilot all of it;
   at a share of 100 the normal weight) and `MemoryHigh` at the share. On Linux the
   agents run on the share of the CPUs. Every job gets `PDD_CHECK_CPUS`, the worker count
@@ -1605,7 +1605,10 @@ Each tick, without AI calls:
    comment, make a worktree and start one headless job. The job runs the same pdd
    as the tick (it goes first on the job's `PATH`, and `PDD_CLI` names it, because a
    login shell can put an older pdd first again; when the agent's shell finds another
-   pdd, the job log and `pdd autopilot status` say so). It makes one PR with prompt,
+   pdd, the job log and `pdd autopilot status` say so). `PDD_SKILLS` names the skills
+   of that same pdd, and the job reads its skills from there; when the installed skills
+   (`~/.agents/skills` or `~/.claude/skills`) have another version, the job log and
+   status say so too. It makes one PR with prompt,
    tests and code where the files are owned by a prompt, and changes other files
    directly: a file is owned when `pdd-bindings.json`, a `Generated from` header or a
    prompt's opening paragraph names it. The job gets this owner table and writes one
