@@ -154,7 +154,7 @@ launcher gives it these ports:
   [worktree allocator](workflow-worktree.prompt.md) for the run's local issue allocation.
 - `releaseSlots()`: `releaseCheckCapacity` of the [shared queue](test-suite-queue.prompt.md) for this state file.
 - `processes()`: one local read of this machine's process table (`ps -A -ww -o pid= -o ppid= -o pgid= -o rss= -o
-  args=`); `signal(pid, name)`: `process.kill`, where an ended process is no error; `sleep(ms)`.
+  args=`; on Linux without `ps`, `procTable` of the move owner reads `/proc`); `signal(pid, name)`: `process.kill`, where an ended process is no error; `sleep(ms)`.
 - `commonDir`: the real path of this checkout's Git common folder; `coreJobs()`: the issue numbers of the core's job
   files; `save(journal)`: saves `retiredFull` in the state file under the admission lock; `samePath`; `now`.
   Tests may replace any of them with `ports.movePorts`, or the whole step with `ports.moveToCore`.

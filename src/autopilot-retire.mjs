@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-retire.prompt.md (sha256: 31db67da6ac1a58635cebe7978e30545ad5fe1a02f3e5e102ffbde7fb1da4801).
+// Generated from prompts/cli/autopilot-retire.prompt.md (sha256: 93aa7aa7f4bdc5c1dc37a934451f948f9aff35a75245cf916a93b3a3bb32f69e).
 import { sep, join } from 'node:path';
 
 // The move of a machine from the removed full engine to the core engine. Each step is idempotent and saved in the
@@ -87,6 +87,18 @@ export function oldProcessOf(args, { runsRoot, stateFile }) {
   return null;
 }
 
+// The same rows from Linux /proc, for a machine without ps (a small container image): pid, ppid, pgid, rss (KiB), args.
+export function procTable(fs, root = '/proc') {
+  const rows = [];
+  for (const name of fs.readdirSync(root).filter(name => /^\d+$/.test(name))) {
+    try {
+      const args = fs.readFileSync(`${root}/${name}/cmdline`, 'utf8').split('\0').filter(Boolean).join(' ');
+      const stat = fs.readFileSync(`${root}/${name}/stat`, 'utf8'), fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+      if (args) rows.push(`${name} ${fields[1]} ${fields[2]} ${Number(fields[21]) * 4} ${args}`);
+    } catch { /* The process ended while it was read. */ }
+  }
+  return rows.join('\n');
+}
 // ps rows: pid, ppid, pgid, rss (KiB) and the command line.
 export function parseProcesses(text) {
   return String(text ?? '').split('\n').map(row => /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(.*)$/.exec(row)).filter(Boolean)

@@ -30,6 +30,8 @@ Export:
   null. An identity that is a file path, or JSON that does not parse, is not ours. A start follow-up
   (`--start-scan-wait`) is never stopped.
 - `parseProcesses(text)`: the `ps` rows `{pid, ppid, pgid, rss, args}` (rss in KiB); other lines are skipped.
+- `procTable(fs, root = '/proc')`: the same rows as text, read from Linux `/proc` (`cmdline`, and ppid, process group
+  and rss pages from `stat`), for a machine without `ps`; a process that ends while it is read is skipped.
 - `moveLine(state, journal)` and `moveToCore({state, stateFile, repoEngine}, ports)`.
 
 ## The journal and the steps

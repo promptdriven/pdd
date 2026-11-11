@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: bc45c0d9b365a6732d40ee7f8b12d5bb748f911a259bfa4444e9f35c7b1eec56).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: e6b19e479f80924e4a5c2966a912212acff345fa0596e7ccbcdc82f91538b42b).
 import {runAutopilotDoctor, resolveAutopilotAgent} from './autopilot-doctor.mjs';
 import {releaseRunClaim, cancelRun, acquireRunLock} from './workflow-runner.mjs';
 import { releaseCheckCapacity } from './test-suite-queue.mjs';
@@ -23,7 +23,8 @@ import { selectAutopilotBase } from './autopilot-base.mjs';
 import { readCoreSettings, tickCore, coreStatus } from './autopilot-core.mjs';
 import { listReportDrafts, sendReportDraft } from './autopilot-reports.mjs';
 import { intakeMode, readIntake, intakeText, stopCardJobs } from './autopilot-intake.mjs';
-import { moveToCore, moved, movedState, engineBefore, MAX_DEFERS, FULL_ENGINE_REMOVED } from './autopilot-retire.mjs';
+import { moveToCore, moved, movedState, engineBefore, procTable, MAX_DEFERS, FULL_ENGINE_REMOVED } from './autopilot-retire.mjs';
+import * as nativeFs from 'node:fs';
 
 const INTERVAL = 30 * 60 * 1000;
 // The core tick has no AI call and each job phase needs a tick, so the core engine's timer fires every 10 minutes.
@@ -399,8 +400,11 @@ async function moveTick(stateFile, state, p, ports) {
     cancelRun: run => (p.cancelRun ?? cancelRun)({ ref: String(run.number), cwd: state.cwd }, { ...cleanup, claimReleased: true, isTTY: false, skipMetricsDelivery: true }),
     releaseLocal: run => (p.releaseIssueClaim ?? releaseIssueClaim)({ cwd: run.sourceRoot, runId: run.runId, issueNumber: run.number }, cleanup.commandPorts ?? {}),
     releaseSlots: () => releaseCheckCapacity({ env: p.env, owner: stateFile }, p.checkCapacityPorts ?? p),
-    // A local read of this machine's process table (no agent, Git or GitHub call).
-    processes: async () => (await promisify(execFile)('ps', ['-A', '-ww', '-o', 'pid=', '-o', 'ppid=', '-o', 'pgid=', '-o', 'rss=', '-o', 'args='], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 30000 })).stdout,
+    // A local read of this machine's process table (no agent, Git or GitHub call); Linux without ps reads /proc.
+    processes: async () => {
+      try { return (await promisify(execFile)('ps', ['-A', '-ww', '-o', 'pid=', '-o', 'ppid=', '-o', 'pgid=', '-o', 'rss=', '-o', 'args='], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 30000 })).stdout; }
+      catch (error) { if (error.code === 'ENOENT' && process.platform === 'linux') return procTable(nativeFs); throw error; }
+    },
     signal: (pid, name) => { try { process.kill(pid, name); } catch { /* It ended already. */ } },
     sleep: ms => new Promise(done => setTimeout(done, ms)),
     ...p.movePorts,

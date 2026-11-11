@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-retire.prompt.md (sha256: 31db67da6ac1a58635cebe7978e30545ad5fe1a02f3e5e102ffbde7fb1da4801).
+// Generated from prompts/cli/autopilot-retire.prompt.md (sha256: 93aa7aa7f4bdc5c1dc37a934451f948f9aff35a75245cf916a93b3a3bb32f69e).
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -7,7 +7,7 @@ import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { moveToCore, movedState, engineBefore, oldProcessOf, parseProcesses, claimRecord, RETIRED_NOTE, MAX_DEFERS, FULL_ENGINE_REMOVED } from '../src/autopilot-retire.mjs';
+import { moveToCore, movedState, engineBefore, oldProcessOf, parseProcesses, procTable, claimRecord, RETIRED_NOTE, MAX_DEFERS, FULL_ENGINE_REMOVED } from '../src/autopilot-retire.mjs';
 import { coreWorld } from './helpers/core-world.mjs';
 
 const REPO = 'acme/widgets', ME = { coordinatorId: 'coord-a', machine: 'host-a' }, OTHER = { coordinatorId: 'coord-b', machine: 'host-b' };
@@ -224,6 +224,11 @@ test('M8 the engine before 0.1.29: the saved engine, else pdd.json, else full; t
   assert.equal(oldProcessOf(`node /x/autopilot-launcher.mjs --coordinator-idle {"stateFile":"/s.json"}`, { runsRoot: '/r', stateFile: '/s.json' }), 'coordinator-idle');
   assert.equal(oldProcessOf(`node /x/autopilot-launcher.mjs --start-scan-wait {"stateFile":"/s.json"}`, { runsRoot: '/r', stateFile: '/s.json' }), null);
   assert.deepEqual(parseProcesses('  12   1  12  300 node a b\nbad row\n'), [{ pid: 12, ppid: 1, pgid: 12, rss: 300, args: 'node a b' }]);
+  // Linux without ps: /proc gives the same rows; a kernel thread (empty cmdline) and a process that ended are skipped.
+  const proc = { '/proc/7/cmdline': 'node\0/x/workflow-worker-completion.mjs\0{"runDir":"/r/7"}\0', '/proc/7/stat': '7 (node (w)) S 1 7 7 0 -1 0 0 0 0 0 1 2 0 0 20 0 1 0 100 9000 25 0',
+    '/proc/2/cmdline': '', '/proc/2/stat': '2 (kthreadd) S 0 0 0' };
+  const fs = { readdirSync: () => ['7', '2', '9', 'self'], readFileSync: path => { if (!(path in proc)) throw Object.assign(Error('gone'), { code: 'ENOENT' }); return proc[path]; } };
+  assert.deepEqual(parseProcesses(procTable(fs)), [{ pid: 7, ppid: 1, pgid: 7, rss: 100, args: 'node /x/workflow-worker-completion.mjs {"runDir":"/r/7"}' }]);
   assert.match(FULL_ENGINE_REMOVED, /full Autopilot engine is removed/);
 });
 
