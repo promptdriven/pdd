@@ -18,19 +18,15 @@ line against its own records. A line that the records do not support is red.
 ## Runtime lines
 
 - Commit every change. Then run `pdd test` for each changed Story.
-- Write one `Runtime:` line for each changed Story, in one of these forms:
+- Write one `Runtime:` line for each changed Story. Put the verdict first. Then put the Story file path (as
+  `git diff` shows it) first in the parentheses:
   ```text
-  Runtime: STORY PASS (batch BATCH_ID)
-  Runtime: STORY FAIL (batch BATCH_ID)
-  Runtime: STORY not run (REASON)
+  Runtime: PASS (user_stories/format-bytes.md, 19/19 checks)
+  Runtime: FAIL (user_stories/format-bytes.md, 2 of 19 checks failed: steps format-10, zibi)
+  Runtime: not run (user_stories/package-repository.md: native-only prompt, no Runtime test)
   ```
-- STORY is the Story file path, as `git diff` shows it. BATCH_ID is the batch that pdd prints with its
-  `pdd test --read` command. For example:
-  ```text
-  Runtime: user_stories/format-bytes.md PASS (batch 20261111-112222-qlfr)
-  Runtime: user_stories/package-repository.md not run (native-only prompt, no Runtime test)
-  ```
-- A single `Runtime: PASS` line with no Story is accepted only when the PR changes exactly one Story.
+- A single line with no Story (for example `Runtime: PASS`) is valid only when the PR changes one Story or none.
+- Two lines for the same Story are red.
 - A PASS of a Story that the PR does not change never counts.
 - A FAIL line blocks the merge.
 
@@ -49,7 +45,7 @@ line against its own records. A line that the records do not support is red.
 - `not run` is only for a cause that this PR cannot fix: a native-only prompt, a Story with no Runtime test, no
   verdict with no failed step, maintenance (below), or a refusal that pdd gives no fix for.
 - A refusal with a fix from pdd is this PR's work. Apply the fix and check again.
-- Write the exact cause in the line: `Runtime: STORY not run (CAUSE)`.
+- Write the exact cause in the line: `Runtime: not run (STORY: CAUSE)`.
 
 ## Large whole numbers
 
@@ -69,8 +65,8 @@ line against its own records. A line that the records do not support is red.
 
 - Do not wait for maintenance. pdd prints `The interpreter is in maintenance until HH:MM UTC (…)` before it sends
   anything.
-- Stop pdd then. For each changed Story that pdd did not send, write `Runtime: STORY not run (maintenance until HH:MM
-  UTC)` with the end time that pdd printed.
+- Stop pdd then. For each changed Story that pdd did not send, write `Runtime: not run (STORY: maintenance until
+  HH:MM UTC)` with the end time that pdd printed.
 - Autopilot sends the check itself when maintenance ends, and it rewrites the line. Never send it again yourself.
 - Never cut short a check that pdd has already sent.
 

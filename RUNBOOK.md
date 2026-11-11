@@ -791,16 +791,16 @@ records. A line that the records do not support is red. The same rules, short en
   branch, usually `main`). It never means changed since the previous PR head. A Story or prompt that a merge from the
   base brought in is not changed. A changed Story is a Story whose Story file or test file changed, or whose test
   reaches a changed prompt.
-- Commit every change, then run `pdd test` for each changed Story. Write one `Runtime:` line for each changed Story:
-  `Runtime: STORY PASS (batch BATCH_ID)`, `Runtime: STORY FAIL (batch BATCH_ID)` or `Runtime: STORY not run (REASON)`.
-  STORY is the Story file path, as `git diff` shows it. BATCH_ID is the batch that pdd prints with its
-  `pdd test --read` command. For example:
+- Commit every change, then run `pdd test` for each changed Story. Write one `Runtime:` line for each changed Story.
+  Put the verdict first. Then put the Story file path (as `git diff` shows it) first in the parentheses:
   ```text
-  Runtime: user_stories/format-bytes.md PASS (batch 20261111-112222-qlfr)
-  Runtime: user_stories/package-repository.md not run (native-only prompt, no Runtime test)
+  Runtime: PASS (user_stories/format-bytes.md, 19/19 checks)
+  Runtime: FAIL (user_stories/format-bytes.md, 2 of 19 checks failed: steps format-10, zibi)
+  Runtime: not run (user_stories/package-repository.md: native-only prompt, no Runtime test)
   ```
-  A single `Runtime: PASS` line with no Story is accepted only when the PR changes exactly one Story. A PASS of a
-  Story that the PR does not change never counts. A FAIL line blocks the merge.
+  A single line with no Story (for example `Runtime: PASS`) is valid only when the PR changes one Story or none. Two
+  lines for the same Story are red. A PASS of a Story that the PR does not change never counts. A FAIL line blocks
+  the merge.
 - A failed check is a FAIL, also when its check has no verdict (§11). Find the cause and fix it ("After a ✗"). Never
   write a failed check as `not run`.
 - `not run` is only for a cause that this PR cannot fix: a native-only prompt, a Story with no Runtime test, no
@@ -808,8 +808,8 @@ records. A line that the records do not support is red. The same rules, short en
   work. For example, a whole number outside the interpreter's range: apply the Number spelling that pdd prints (§3
   "Large whole numbers") and check again.
 - Do not wait for maintenance. When pdd prints that the interpreter is in maintenance (§11), it has sent nothing yet.
-  Stop pdd then. For each changed Story that pdd did not send, write `Runtime: STORY not run (maintenance until HH:MM
-  UTC)` with the end time that pdd printed. Autopilot sends the check itself when maintenance ends and rewrites the line. Never send it again yourself. Never
+  Stop pdd then. For each changed Story that pdd did not send, write `Runtime: not run (STORY: maintenance until
+  HH:MM UTC)` with the end time that pdd printed. Autopilot sends the check itself when maintenance ends and rewrites the line. Never send it again yourself. Never
   cut short a check that pdd has already sent.
 - `vectors=` counts the replay files (`*.vectors.test.*`) that the PR changes or that read a changed scenario file.
   Count `node:test` tests (the `# tests` and `# pass` lines), not steps or checks, for example `vectors=pass (36/36)`.
