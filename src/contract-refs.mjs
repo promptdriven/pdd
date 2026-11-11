@@ -84,6 +84,7 @@ function writeJson(value, {canonical = false, collect = true, tooBig = () => { t
       }
       const written=new Set(layout.keys), added = keys.filter(key => !written.has(key));
       if (added.length) {
+        if (!layout.entries.length) { append(layout.text.slice(offset,layout.start+1)); offset = layout.start+1; }
         const first = layout.entries[0], last = layout.entries.at(-1);
         const prefix = first ? layout.text.slice(layout.start+1,first.keyStart) : '';
         const colon = first ? layout.text.slice(first.keyEnd,first.start) : ':';
