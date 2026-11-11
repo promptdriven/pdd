@@ -240,6 +240,6 @@ for (const [kind, red] of [['port', true], ['native-only', false]]) test(`case 1
   await w.tick();
   const repair = w.job(17, 'repair');
   assert.ok(repair, 'a repair starts (the draft prompt also needs its approval)');
-  const caseOne = /This PR changes user_stories\/format-bytes\.md, with no Runtime test: user_stories\/format-bytes\.md has no test: expected .*format-bytes\.json.* A missing test is not a reason for "Runtime: not run": write the Runtime test/;
+  const caseOne = /This PR changes user_stories\/format-bytes\.md, with no Runtime test: user_stories\/format-bytes\.md has no test: expected .*format-bytes\.json.* A missing test is not a reason for "Runtime: not run": write a Runtime test/;
   if (red) assert.match(repair.input, caseOne); else assert.doesNotMatch(repair.input, /with no Runtime test: /);
 });
