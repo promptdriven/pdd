@@ -6,7 +6,9 @@ import { lstatSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { relative, resolve, sep, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { isDeepStrictEqual } from 'node:util';
-import { gitFiles, interfaceBlocks, promptSchemaRefusals, readPrompt, proseSha256, sha256 } from './runtime-seam.mjs';
+import { runtimePreflightSlice } from './runtime-seam.mjs';
+
+const { gitFiles, interfaceBlocks, promptSchemaRefusals, readPrompt, proseSha256, sha256 } = runtimePreflightSlice();
 
 class Stop extends Error { constructor(exitCode, message) { super(message); this.exitCode = exitCode; } }
 const line = (stream, text) => stream.write(`${text}\n`);

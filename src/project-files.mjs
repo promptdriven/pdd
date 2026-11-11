@@ -1,6 +1,8 @@
 // Generated from prompts/cli/files.prompt.md (sha256: bd863b66a167409b0a76f97b9a78a27e3af4e9e7dd8408c4f276aaaf02419ded).
 import { spawnSync } from 'node:child_process';
-import { findTests, preflight, promptRefusal, promptSchemaRefusals, readPrompt } from './runtime-seam.mjs';
+import { runtimePreflightSlice } from './runtime-seam.mjs';
+
+const { findTests, preflight, promptRefusal, promptSchemaRefusals, readPrompt } = runtimePreflightSlice();
 
 const sorted = paths => [...new Set(paths)].sort();
 const problemKey = problem => JSON.stringify([problem.path, problem.code, problem.section, problem.message]);

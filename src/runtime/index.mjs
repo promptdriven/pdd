@@ -1,71 +1,178 @@
-// Generated from prompts/cli/runtime-entry.prompt.md (sha256: f97733acc0d28351be733812025ed125e3f86f1ee62bef37034592f26bd79fe6).
+// Generated from prompts/cli/runtime-entry.prompt.md (sha256: b2efb44968f2cf930507a975da40ccb4a72362686201db847eb08e544ea85d5f).
 import { createRequire } from 'node:module';
-
-export {
-  exactIntegerLeaves,
-  jsonSafe,
-  parseScenarioJson,
-  stringifyScenarioJson,
-  withExactIntegers,
-} from './scenario-json.mjs';
-
-export {
-  allowsRuntimePath,
-  loadRuntimeWorkspace,
-  requireRuntimePath,
-} from './runtime-workspace.mjs';
-
-export {
-  outcomeText,
-  resultOutcome,
-} from './runtime-outcome.mjs';
-
-export {
-  PROMPT_TESTS_LABEL,
-  PROMPT_TESTS_WORDS,
-  causeText,
-  cleanText,
-  storyLines,
-} from './runtime-output.mjs';
-
-export {
-  LIMITS,
-  captureSource,
-  checkInput,
-  findTests,
-  gitFiles,
-  interfaceBlocks,
-  interfaceSchemaProblems,
-  isSecretPath,
-  isStoryPath,
-  preflight,
-  promptRefusal,
-  promptSchemaRefusals,
-  proseSha256,
-  readPrompt,
-  sha256,
-  sourceFilePort,
-} from './runtime-preflight.mjs';
-
-export { buildAgentInput } from './agent-packet.mjs';
 
 const req = createRequire(import.meta.url);
 
+export const LIMITS = Object.freeze({ bytes: 10_485_760, files: 10_000 });
+export const PROMPT_TESTS_LABEL = 'Prompt tests';
+export const PROMPT_TESTS_WORDS = '(?:Prompt tests|Runtime check)';
+
+let scenarioJsonModule = null;
+export function runtimeScenarioJsonSlice() {
+  return (scenarioJsonModule ??= req('./scenario-json.mjs'));
+}
+
+let workspaceModule = null;
+export function runtimeWorkspaceSlice() {
+  return (workspaceModule ??= req('./runtime-workspace.mjs'));
+}
+
+let outcomeModule = null;
+export function runtimeOutcomeSlice() {
+  return (outcomeModule ??= req('./runtime-outcome.mjs'));
+}
+
+let outputModule = null;
+export function runtimeOutputSlice() {
+  return (outputModule ??= req('./runtime-output.mjs'));
+}
+
+let preflightModule = null;
+export function runtimePreflightSlice() {
+  return (preflightModule ??= req('./runtime-preflight.mjs'));
+}
+
+let agentPacketModule = null;
+export function runtimeAgentPacketSlice() {
+  return (agentPacketModule ??= req('./agent-packet.mjs'));
+}
+
 let checkPlanModule = null;
-function loadCheckPlan() {
+export function runtimeCheckPlanSlice() {
   return (checkPlanModule ??= req('./runtime-check-plan.mjs'));
 }
 
+let runtimeClientModule = null;
+export function runtimeClientSlice() {
+  return (runtimeClientModule ??= req('./runtime-client.mjs'));
+}
+
+export function exactIntegerLeaves(...args) {
+  return runtimeScenarioJsonSlice().exactIntegerLeaves(...args);
+}
+
+export function jsonSafe(...args) {
+  return runtimeScenarioJsonSlice().jsonSafe(...args);
+}
+
+export function parseScenarioJson(...args) {
+  return runtimeScenarioJsonSlice().parseScenarioJson(...args);
+}
+
+export function stringifyScenarioJson(...args) {
+  return runtimeScenarioJsonSlice().stringifyScenarioJson(...args);
+}
+
+export function withExactIntegers(...args) {
+  return runtimeScenarioJsonSlice().withExactIntegers(...args);
+}
+
+export function allowsRuntimePath(...args) {
+  return runtimeWorkspaceSlice().allowsRuntimePath(...args);
+}
+
+export function loadRuntimeWorkspace(...args) {
+  return runtimeWorkspaceSlice().loadRuntimeWorkspace(...args);
+}
+
+export function requireRuntimePath(...args) {
+  return runtimeWorkspaceSlice().requireRuntimePath(...args);
+}
+
+export function outcomeText(...args) {
+  return runtimeOutcomeSlice().outcomeText(...args);
+}
+
+export function resultOutcome(...args) {
+  return runtimeOutcomeSlice().resultOutcome(...args);
+}
+
+export function causeText(...args) {
+  return runtimeOutputSlice().causeText(...args);
+}
+
+export function cleanText(...args) {
+  return runtimeOutputSlice().cleanText(...args);
+}
+
+export function storyLines(...args) {
+  return runtimeOutputSlice().storyLines(...args);
+}
+
+export function captureSource(...args) {
+  return runtimePreflightSlice().captureSource(...args);
+}
+
+export function checkInput(...args) {
+  return runtimePreflightSlice().checkInput(...args);
+}
+
+export function findTests(...args) {
+  return runtimePreflightSlice().findTests(...args);
+}
+
+export function gitFiles(...args) {
+  return runtimePreflightSlice().gitFiles(...args);
+}
+
+export function interfaceBlocks(...args) {
+  return runtimePreflightSlice().interfaceBlocks(...args);
+}
+
+export function interfaceSchemaProblems(...args) {
+  return runtimePreflightSlice().interfaceSchemaProblems(...args);
+}
+
+export function isSecretPath(...args) {
+  return runtimePreflightSlice().isSecretPath(...args);
+}
+
+export function isStoryPath(...args) {
+  return runtimePreflightSlice().isStoryPath(...args);
+}
+
+export function preflight(...args) {
+  return runtimePreflightSlice().preflight(...args);
+}
+
+export function promptRefusal(...args) {
+  return runtimePreflightSlice().promptRefusal(...args);
+}
+
+export function promptSchemaRefusals(...args) {
+  return runtimePreflightSlice().promptSchemaRefusals(...args);
+}
+
+export function proseSha256(...args) {
+  return runtimePreflightSlice().proseSha256(...args);
+}
+
+export function readPrompt(...args) {
+  return runtimePreflightSlice().readPrompt(...args);
+}
+
+export function sha256(...args) {
+  return runtimePreflightSlice().sha256(...args);
+}
+
+export function sourceFilePort(...args) {
+  return runtimePreflightSlice().sourceFilePort(...args);
+}
+
+export function buildAgentInput(...args) {
+  return runtimeAgentPacketSlice().buildAgentInput(...args);
+}
+
 export function buildCheckPlan(input, ports) {
-  return loadCheckPlan().buildCheckPlan(input, ports);
+  return runtimeCheckPlanSlice().buildCheckPlan(input, ports);
 }
 
 export function checkPlanResults(plan, rows) {
-  return loadCheckPlan().checkPlanResults(plan, rows);
+  return runtimeCheckPlanSlice().checkPlanResults(plan, rows);
 }
 
 export function checkPlanResultLines(result) {
-  return loadCheckPlan().checkPlanResultLines(result);
+  return runtimeCheckPlanSlice().checkPlanResultLines(result);
 }
 
 let productCompositionModule = null;
@@ -165,30 +272,33 @@ export async function saveLast(input) {
   return save(input);
 }
 
-let runtimeClientModule = null;
-function loadRuntimeClientSync() {
-  return (runtimeClientModule ??= req('./runtime-client.mjs'));
+export function runtimeOrigin(env) {
+  return runtimeClientSlice().runtimeOrigin(env);
 }
 
 export function readContractHistory(input, ports) {
-  return loadRuntimeClientSync().readContractHistory(input, ports);
+  return runtimeClientSlice().readContractHistory(input, ports);
 }
 
 export function runtimeWorkspaceMigrationStore(input, given) {
-  return loadRuntimeClientSync().runtimeWorkspaceMigrationStore(input, given);
+  return runtimeClientSlice().runtimeWorkspaceMigrationStore(input, given);
 }
 
 export function saveDoorCaseResult(root, saved, options) {
-  return loadRuntimeClientSync().saveDoorCaseResult(root, saved, options);
+  return runtimeClientSlice().saveDoorCaseResult(root, saved, options);
 }
 
 export function saveDoorCase(root, saved, options) {
-  return loadRuntimeClientSync().saveDoorCase(root, saved, options);
+  return runtimeClientSlice().saveDoorCase(root, saved, options);
+}
+
+export function createSavedStoryEvidenceReader(ports = {}) {
+  return runtimeClientSlice().createSavedStoryEvidenceReader(ports);
 }
 
 export async function loadRuntimeClient() {
-  const { DEFAULT_RUNTIME_URL, checkRuntimeHealth, runtimeOrigin } = await import('./runtime-client.mjs');
-  return { DEFAULT_RUNTIME_URL, checkRuntimeHealth, runtimeOrigin };
+  const { DEFAULT_RUNTIME_URL, checkRuntimeHealth, runtimeOrigin: origin } = await import('./runtime-client.mjs');
+  return { DEFAULT_RUNTIME_URL, checkRuntimeHealth, runtimeOrigin: origin };
 }
 
 export async function checkRuntimeHealth(input, ports) {
@@ -199,14 +309,6 @@ export async function checkRuntimeHealth(input, ports) {
 export async function savedStoryEvidence(input, ports) {
   const { savedStoryEvidence: read } = await import('./runtime-client.mjs');
   return read(input, ports);
-}
-
-export function createSavedStoryEvidenceReader(ports = {}) {
-  let readerPromise = null;
-  return async input => {
-    readerPromise ??= import('./runtime-client.mjs').then(m => m.createSavedStoryEvidenceReader(ports));
-    return (await readerPromise)(input);
-  };
 }
 
 export async function acquireRuntimeBatchLock(folder, options) {

@@ -5,9 +5,11 @@ import { isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { resolveRun } from './workflow-runs.mjs';
-import { findTests, interfaceBlocks, isSecretPath, LIMITS, proseSha256 } from './runtime-seam.mjs';
-import { PROMPT_TESTS_WORDS } from './runtime-seam.mjs';
+import { runtimeOutputSlice, runtimePreflightSlice } from './runtime-seam.mjs';
 import { resultLines } from './workflow-results.mjs';
+
+const { findTests, interfaceBlocks, isSecretPath, LIMITS, proseSha256 } = runtimePreflightSlice();
+const { PROMPT_TESTS_WORDS } = runtimeOutputSlice();
 
 const execute = promisify(execFile);
 const text = value => String(value ?? '').replace(/[\x00-\x1f\x7f]/g, ' ').trim();

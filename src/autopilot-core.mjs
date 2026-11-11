@@ -8,9 +8,11 @@ import { jobEnvironment, startAgentJob, readAgentJob, stopAgentJob, agentCommand
 import { fileReport, listReportDrafts, reportKind } from './autopilot-reports.mjs';
 import { checkAutopilotBase } from './autopilot-base.mjs';
 import { redactSecrets } from './secret-redaction.mjs';
-import { interfaceBlocks, readPrompt, promptRefusal, gitFiles } from './runtime-seam.mjs';
+import { runtimePreflightSlice } from './runtime-seam.mjs';
 import { readPromptApprovals } from './approval-policy.mjs';
 import { intakeTick } from './autopilot-intake.mjs';
+
+const { interfaceBlocks, readPrompt, promptRefusal, gitFiles } = runtimePreflightSlice();
 
 const MIN = 60 * 1000, HOUR = 60 * MIN, DAY = 24 * HOUR, CLAIM_EXPIRES = 4 * HOUR, STRIKES = 3, MAX_PAUSE_HOURS = 8, NO_RESULT_LIMIT = 3, CLAIM_TRIES = 3, NO_CI_AFTER = 10 * MIN, END_TRIES = 6;
 const REPORT_LABELS = ['pdd:runtime', 'pdd:autopilot-report'];

@@ -13,7 +13,9 @@ import { pathDiagnostic as defaultPathDiagnostic } from './path-diagnostic.mjs';
 import { checkWorkflowAgents } from './workflow-agents.mjs';
 import { setupMayAsk } from './setup-interaction.mjs';
 import { setupWithWorkflowAgent } from './workflow-setup.mjs';
-import { causeText } from './runtime-seam.mjs';
+import { runtimeOutputSlice } from './runtime-seam.mjs';
+
+const { causeText } = runtimeOutputSlice();
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const line = (stream, text) => stream.write(`${text}\n`);

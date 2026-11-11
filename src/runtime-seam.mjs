@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 90c05af9b25d79720615e49971e820ddae325fa42183805aa660c49e3dcec39f).
+// Generated from prompts/cli/runtime-seam.prompt.md (sha256: c29a9fbce82a1b6a7e1efce242a77ebb4a7c0d3143dbad23153974020ea22fbe).
 import { realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -9,6 +9,7 @@ import {
   checkRuntimeHealth as runtimeCheckHealth,
   composeProductTry as runtimeComposeProductTry,
   createAgentBridge as runtimeCreateAgentBridge,
+  createSavedStoryEvidenceReader,
   createTryGuide as runtimeCreateTryGuide,
   createTryTools as runtimeCreateTryTools,
   loadRuntimeClient as runtimeLoadClient,
@@ -24,6 +25,8 @@ import {
   runMcp as runtimeRunMcp,
   runShim as runtimeRunShim,
   runTry as runtimeRunTry,
+  runtimeClientSlice as rawRuntimeClientSlice,
+  runtimeOrigin,
   saveLast as runtimeSaveLast,
 } from './runtime/index.mjs';
 
@@ -95,6 +98,16 @@ export function buildCheckPlan(input, ports = {}) {
   return runtimeBuildCheckPlan(input, withPortDefaults(ports, { headerPrompts }));
 }
 
+export function runtimeClientSlice() {
+  const mod = rawRuntimeClientSlice();
+  return {
+    ...mod,
+    checkRuntimeHealth,
+    createSavedStoryEvidenceReader,
+    runtimeOrigin,
+  };
+}
+
 export function composeProductTry(input, ports = {}) {
   const { parseProductDocuments, parseProductWorldWriters } = req('./product.mjs');
   return runtimeComposeProductTry(input, withPortDefaults(ports, { parseProductDocuments, parseProductWorldWriters }));
@@ -122,12 +135,17 @@ export function readContractHistory(input, ports = {}) {
 }
 
 export function runContracts(input, ports = {}) {
+  runtimeClientSlice();
+  req('./product.mjs');
   const lazyEligibility = (...args) => req('./workflow-runner.mjs').readEvidenceEligibility(...args);
   return runtimeRunContracts(input, withEligibilityDefault(ports, lazyEligibility));
 }
 
 export async function runJobs(input = {}, ports = {}) {
-  const { NAMES } = await import('./command-catalog.mjs');
+  const [{ NAMES }] = await Promise.all([
+    import('./command-catalog.mjs'),
+    import('./product.mjs'),
+  ]);
   const commands = input?.client?.commands ?? { test: NAMES.test, lint: NAMES.lint, simulate: NAMES.simulate };
   const client = { ...(input?.client ?? {}), commands };
   return runtimeRunJobs({ ...input, client }, ports);
@@ -139,13 +157,13 @@ export async function checkRuntimeHealth(input, ports = {}) {
 }
 
 export async function loadRuntimeClient() {
-  const [{ DEFAULT_RUNTIME_URL, checkRuntimeHealth: rawCheckHealth, runtimeOrigin }] = await Promise.all([
+  const [{ DEFAULT_RUNTIME_URL, checkRuntimeHealth: rawCheckHealth, runtimeOrigin: rawOrigin }] = await Promise.all([
     runtimeLoadClient(),
     import('./secret-redaction.mjs'),
   ]);
   return {
     DEFAULT_RUNTIME_URL,
-    runtimeOrigin,
+    runtimeOrigin: rawOrigin,
     checkRuntimeHealth: (input, ports = {}) =>
       rawCheckHealth(input, withPortDefaults(ports, { redaction: seamRedaction(ports) })),
   };
@@ -210,6 +228,7 @@ export async function runCheck(input = {}, ports = {}) {
     import('./workflow-results.mjs'),
     import('./svg-layout.mjs'),
     import('./screen-compare.mjs'),
+    import('./product.mjs'),
   ]);
   const env = ports.env ?? process.env;
   const client = input?.client ? { ...input.client, version: input.client.version ?? clientVersion() } : { version: clientVersion() };
@@ -306,6 +325,7 @@ export async function runShim(descriptorPath, argv, ports = {}) {
   const [, { lineReader }] = await Promise.all([
     import('./secret-redaction.mjs'),
     import('./prompt-approve.mjs'),
+    import('./product.mjs'),
   ]);
   return runtimeRunShim(descriptorPath, argv, withPortDefaults(ports, { lineReader, redaction: seamRedaction(ports) }));
 }
@@ -425,7 +445,15 @@ export {
   requireRuntimePath,
   resultOutcome,
   runInterfaceDraft,
+  runtimeAgentPacketSlice,
+  runtimeCheckPlanSlice,
+  runtimeOrigin,
+  runtimeOutcomeSlice,
+  runtimeOutputSlice,
+  runtimePreflightSlice,
+  runtimeScenarioJsonSlice,
   runtimeWorkspaceMigrationStore,
+  runtimeWorkspaceSlice,
   saveDoorCase,
   saveDoorCaseResult,
   savedStoryEvidence,

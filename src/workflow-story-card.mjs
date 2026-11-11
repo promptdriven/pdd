@@ -4,8 +4,10 @@ import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { captureSource, findTests } from './runtime-seam.mjs';
-import { parseScenarioJson, stringifyScenarioJson } from './runtime-seam.mjs';
+import { runtimePreflightSlice, runtimeScenarioJsonSlice } from './runtime-seam.mjs';
+
+const { captureSource, findTests } = runtimePreflightSlice();
+const { parseScenarioJson, stringifyScenarioJson } = runtimeScenarioJsonSlice();
 
 const SCENARIO = 'prompt-runtime.program-scenario.v1';
 const BATCH = /^\d{8}-\d{6}-[a-z0-9]{4}$/;

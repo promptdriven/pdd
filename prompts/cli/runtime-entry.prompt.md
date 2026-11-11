@@ -6,28 +6,41 @@ No module under `src/runtime/` may import or address any relative path outside `
 
 ## Public contract
 
-Keep module loading faithful to callers: statically re-export only the pure leaf readers and constants that pdd startup modules load statically, and defer command and check-plan modules until first invocation so light CLI commands never load `runtime-client.mjs` or other heavy Runtime modules and command load failures surface inside their callers' `try/catch` guards.
+Keep module loading faithful to callers: load zero `src/runtime/` submodules eagerly when `src/runtime/index.mjs` itself evaluates, expose scoped synchronous slice loaders so each static caller evaluates only the exact leaf or client slice it previously imported, and defer every individual function export until first call so light CLI commands and standalone leaf callers never load unrelated leaves or heavy Runtime modules and command load failures surface inside their callers' `try/catch` guards.
 
-### Static leaf exports
+### Pure constants and scoped slice loaders
 
-Re-export directly with identical binding identity, arity, errors, and port behavior:
+Expose these pure constants directly without loading any submodule:
 
-| Owner module | Exported bindings |
+- `LIMITS`: frozen `{ bytes: 10_485_760, files: 10_000 }` (identical to `src/runtime/runtime-preflight.mjs`).
+- `PROMPT_TESTS_LABEL`: `'Prompt tests'` and `PROMPT_TESTS_WORDS`: `'(?:Prompt tests|Runtime check)'` (identical to `src/runtime/runtime-output.mjs`).
+
+Expose these synchronous slice loaders (each loading and caching only its target owner module via `createRequire(import.meta.url)` on first call):
+
+| Slice loader | Target owner module |
 |---|---|
-| `src/runtime/scenario-json.mjs` | `exactIntegerLeaves`, `jsonSafe`, `parseScenarioJson`, `stringifyScenarioJson`, `withExactIntegers` |
-| `src/runtime/runtime-workspace.mjs` | `allowsRuntimePath`, `loadRuntimeWorkspace`, `requireRuntimePath` |
-| `src/runtime/runtime-outcome.mjs` | `outcomeText`, `resultOutcome` |
-| `src/runtime/runtime-output.mjs` | `PROMPT_TESTS_LABEL`, `PROMPT_TESTS_WORDS`, `causeText`, `cleanText`, `storyLines` |
-| `src/runtime/runtime-preflight.mjs` | `LIMITS`, `captureSource`, `checkInput`, `findTests`, `gitFiles`, `interfaceBlocks`, `interfaceSchemaProblems`, `isSecretPath`, `isStoryPath`, `preflight`, `promptRefusal`, `promptSchemaRefusals`, `proseSha256`, `readPrompt`, `sha256`, `sourceFilePort` |
-| `src/runtime/agent-packet.mjs` | `buildAgentInput` |
+| `runtimeScenarioJsonSlice()` | `src/runtime/scenario-json.mjs` |
+| `runtimeWorkspaceSlice()` | `src/runtime/runtime-workspace.mjs` |
+| `runtimeOutcomeSlice()` | `src/runtime/runtime-outcome.mjs` |
+| `runtimeOutputSlice()` | `src/runtime/runtime-output.mjs` |
+| `runtimePreflightSlice()` | `src/runtime/runtime-preflight.mjs` |
+| `runtimeAgentPacketSlice()` | `src/runtime/agent-packet.mjs` |
+| `runtimeCheckPlanSlice()` | `src/runtime/runtime-check-plan.mjs` |
+| `runtimeClientSlice()` | `src/runtime/runtime-client.mjs` |
 
-### Deferred exports
+### Leaf and command exports
 
-Load each owner module only when the exported function is called:
+Load each owner module only when the exported function (or its slice loader) is called, preserving argument forwarding, return values, thrown errors, and port behavior:
 
 | Owner module | Exported bindings | Loading rule |
 |---|---|---|
-| `src/runtime/runtime-check-plan.mjs` | `buildCheckPlan`, `checkPlanResultLines`, `checkPlanResults` | Load synchronously on first call via `createRequire(import.meta.url)` |
+| `src/runtime/scenario-json.mjs` | `exactIntegerLeaves`, `jsonSafe`, `parseScenarioJson`, `stringifyScenarioJson`, `withExactIntegers` | Load synchronously on first call via `runtimeScenarioJsonSlice()` |
+| `src/runtime/runtime-workspace.mjs` | `allowsRuntimePath`, `loadRuntimeWorkspace`, `requireRuntimePath` | Load synchronously on first call via `runtimeWorkspaceSlice()` |
+| `src/runtime/runtime-outcome.mjs` | `outcomeText`, `resultOutcome` | Load synchronously on first call via `runtimeOutcomeSlice()` |
+| `src/runtime/runtime-output.mjs` | `PROMPT_TESTS_LABEL`, `PROMPT_TESTS_WORDS`, `causeText`, `cleanText`, `storyLines` | Constants immediate; functions load synchronously on first call via `runtimeOutputSlice()` |
+| `src/runtime/runtime-preflight.mjs` | `LIMITS`, `captureSource`, `checkInput`, `findTests`, `gitFiles`, `interfaceBlocks`, `interfaceSchemaProblems`, `isSecretPath`, `isStoryPath`, `preflight`, `promptRefusal`, `promptSchemaRefusals`, `proseSha256`, `readPrompt`, `sha256`, `sourceFilePort` | `LIMITS` immediate; functions load synchronously on first call via `runtimePreflightSlice()` |
+| `src/runtime/agent-packet.mjs` | `buildAgentInput` | Load synchronously on first call via `runtimeAgentPacketSlice()` |
+| `src/runtime/runtime-check-plan.mjs` | `buildCheckPlan`, `checkPlanResultLines`, `checkPlanResults` | Load synchronously on first call via `runtimeCheckPlanSlice()` |
 | `src/runtime/product-composition.mjs` | `composeProductTry`, `productTapCallBound`, `selectJourneys` | Load synchronously on first call via `createRequire(import.meta.url)` |
 | `src/runtime/agent-guide.mjs` | `createTryGuide` | Load synchronously on first call via `createRequire(import.meta.url)` |
 | `src/runtime/agent-project.mjs` | `buildProjectCard`, `readAgentScenarios` | Load synchronously on first call via `createRequire(import.meta.url)` |
@@ -38,7 +51,7 @@ Load each owner module only when the exported function is called:
 | `src/runtime/runtime-workspace-migration.mjs` | `migrateRuntimeWorkspace` | `await import('./runtime-workspace-migration.mjs')` when called |
 | `src/runtime/try-mcp.mjs` | `createTryTools`, `runMcp` | `createTryTools` loads synchronously on first call via `createRequire(import.meta.url)`; `runMcp` uses `await import('./try-mcp.mjs')` |
 | `src/runtime/try-doors.mjs` | `openCli`, `runShim`, `saveLast` | `await import('./try-doors.mjs')` when called |
-| `src/runtime/runtime-client.mjs` | `acquireCaseWriteOwnership`, `acquireRuntimeBatchLock`, `applyPendingCase`, `applyPendingCaseWithHandoff`, `checkRuntimeHealth`, `createSavedStoryEvidenceReader`, `loadRuntimeClient`, `readContractHistory`, `readTryOwner`, `runCheck`, `runDoorCall`, `runTry`, `runtimeWorkspaceMigrationStore`, `saveDoorCase`, `saveDoorCaseResult`, `savedStoryEvidence` | Synchronous helpers (`readContractHistory`, `runtimeWorkspaceMigrationStore`, `saveDoorCase`, `saveDoorCaseResult`) load on first call via `createRequire(import.meta.url)`; async entries use `await import('./runtime-client.mjs')` (`createSavedStoryEvidenceReader(ports)` returns an async reader that loads `runtime-client.mjs` on first read and retains per-reader capture state; `loadRuntimeClient` resolves to `{ DEFAULT_RUNTIME_URL, checkRuntimeHealth, runtimeOrigin }`) |
+| `src/runtime/runtime-client.mjs` | `acquireCaseWriteOwnership`, `acquireRuntimeBatchLock`, `applyPendingCase`, `applyPendingCaseWithHandoff`, `checkRuntimeHealth`, `createSavedStoryEvidenceReader`, `loadRuntimeClient`, `readContractHistory`, `readTryOwner`, `runCheck`, `runDoorCall`, `runTry`, `runtimeOrigin`, `runtimeWorkspaceMigrationStore`, `saveDoorCase`, `saveDoorCaseResult`, `savedStoryEvidence` | Synchronous helpers (`createSavedStoryEvidenceReader`, `readContractHistory`, `runtimeOrigin`, `runtimeWorkspaceMigrationStore`, `saveDoorCase`, `saveDoorCaseResult`) load on first call via `runtimeClientSlice()`; async entries use `await import('./runtime-client.mjs')` (`loadRuntimeClient` resolves to `{ DEFAULT_RUNTIME_URL, checkRuntimeHealth, runtimeOrigin }`) |
 
 `runTry(input, ports)` forwards `ports.tryLauncherUrl` to `openCli` when supplied so the host CLI can pin a stable launcher module URL outside `src/runtime/`; when omitted, `openCli` falls back to `src/runtime/try-doors.mjs`.
 
@@ -64,6 +77,6 @@ Load each owner module only when the exported function is called:
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"native-only","status":"draft","prose_sha256": "96a3f352b3b2f6fd6f489af51d074370ba31bfffdff31f5078639911053e9b3e","reason":"Exposes live JavaScript ESM static and deferred dynamic-import bindings across src/runtime/ submodules, which bound Runtime ports cannot fake."}
+{"kind":"native-only","status":"draft","prose_sha256": "a31ec276f12115de44230a8fdaa5a28d96a61d4919658c90856c4675201ec6e7","reason":"Exposes live JavaScript ESM static and deferred dynamic-import bindings across src/runtime/ submodules, which bound Runtime ports cannot fake."}
 ```
 </details>

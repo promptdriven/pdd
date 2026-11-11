@@ -4,10 +4,12 @@ import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, readSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, realpathSync, symlinkSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep, basename } from 'node:path';
-import { gitFiles } from './runtime-seam.mjs';
-import { cleanText } from './runtime-seam.mjs';
 import { headerPrompts } from './file-owner.mjs';
-import { exactIntegerLeaves, jsonSafe, parseScenarioJson, stringifyScenarioJson, withExactIntegers } from './runtime-seam.mjs';
+import { runtimeOutputSlice, runtimePreflightSlice, runtimeScenarioJsonSlice } from './runtime-seam.mjs';
+
+const { gitFiles } = runtimePreflightSlice();
+const { cleanText } = runtimeOutputSlice();
+const { exactIntegerLeaves, jsonSafe, parseScenarioJson, stringifyScenarioJson, withExactIntegers } = runtimeScenarioJsonSlice();
 export const REPLAY_POLICY = 'pdd.replay-evidence.v1';
 const LIMIT = 2 * 1024 * 1024, MAX = 10000;
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');

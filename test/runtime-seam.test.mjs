@@ -374,89 +374,352 @@ test('SEAM3: detector catches static, dynamic, re-export, URL, escaped and child
   assert.deepEqual(findSeamViolations('src/workflow-view.mjs', "// Moved to src/runtime/runtime-preflight.mjs\nimport { findTests } from './runtime-seam.mjs';\nconst a = '.pdd/runtime';\nconst b = 'test/runtime/foo.json';\nconst c = 'prompts/cli/runtime-entry.prompt.md';\n"), []);
 });
 
-const BASE_HELP_MODULES = [
-  'src/agent-adapters.mjs',
-  'src/agent-config.mjs',
-  'src/agent-packet.mjs',
-  'src/argument-parser.mjs',
-  'src/command-catalog.mjs',
-  'src/completion.mjs',
-  'src/contract-refs.mjs',
-  'src/path-diagnostic.mjs',
-  'src/pdd-cli.mjs',
-  'src/project-setup.mjs',
-  'src/runtime-binding-plan.mjs',
-  'src/runtime-markdown.mjs',
-  'src/runtime-outcome.mjs',
-  'src/runtime-output.mjs',
-  'src/runtime-preflight.mjs',
-  'src/runtime-workspace.mjs',
-  'src/scenario-json.mjs',
-  'src/secret-redaction.mjs',
-  'src/setup-interaction.mjs',
-  'src/skills-install.mjs',
-  'src/workflow-agents.mjs',
-  'src/workflow-areas.mjs',
-  'src/workflow-setup.mjs',
+const BASE_SRC_CATALOG = [
+  'src/agent-adapters.mjs', 'src/agent-config.mjs', 'src/agent-job.mjs', 'src/agent-judge.mjs', 'src/agent-mcp-setup.mjs',
+  'src/agent-packet.mjs', 'src/approval-evidence.mjs', 'src/approval-policy.mjs', 'src/argument-parser.mjs', 'src/autopilot-alerts.mjs',
+  'src/autopilot-areas.mjs', 'src/autopilot-audit.mjs', 'src/autopilot-base.mjs', 'src/autopilot-cleanup.mjs', 'src/autopilot-core.mjs',
+  'src/autopilot-doctor.mjs', 'src/autopilot-environment.mjs', 'src/autopilot-intake.mjs', 'src/autopilot-launcher.mjs', 'src/autopilot-parking.mjs',
+  'src/autopilot-regressions.mjs', 'src/autopilot-reports.mjs', 'src/autopilot.mjs', 'src/codex-limits.mjs', 'src/command-catalog.mjs',
+  'src/completion.mjs', 'src/contract-refs.mjs', 'src/contracts.mjs', 'src/cost-ledger.mjs', 'src/file-owner.mjs',
+  'src/github-calls.mjs', 'src/interface-draft.mjs', 'src/issue-dependencies-github.mjs', 'src/issue-dependencies-intake.mjs', 'src/issue-dependencies.mjs',
+  'src/issue-dependency-graph-view.mjs', 'src/issue-dependency-graph.mjs', 'src/issue-mixed.mjs', 'src/issue-sort-github.mjs', 'src/issue-sort.mjs',
+  'src/lint-call-preflight.mjs', 'src/machine-resources.mjs', 'src/metrics-capture.mjs', 'src/metrics-command.mjs', 'src/metrics-gap.mjs',
+  'src/metrics-hooks.mjs', 'src/metrics-model.mjs', 'src/metrics-store.mjs', 'src/path-diagnostic.mjs', 'src/pdd-cli.mjs',
+  'src/product-composition.mjs', 'src/product.mjs', 'src/project-files.mjs', 'src/project-setup.mjs', 'src/prompt-approve.mjs',
+  'src/runtime-binding-plan.mjs', 'src/runtime-bindings.mjs', 'src/runtime-check-plan.mjs', 'src/runtime-client.mjs', 'src/runtime-lint-receipt.mjs',
+  'src/runtime-markdown.mjs', 'src/runtime-outcome.mjs', 'src/runtime-output.mjs', 'src/runtime-preflight.mjs', 'src/runtime-slots.mjs',
+  'src/runtime-workspace.mjs', 'src/scenario-json.mjs', 'src/screen-compare.mjs', 'src/setup-interaction.mjs', 'src/skills-install.mjs',
+  'src/svg-layout.mjs', 'src/test-suite-queue.mjs', 'src/toml-string.mjs', 'src/try-doors.mjs', 'src/try-mcp.mjs',
+  'src/validation-evidence.mjs', 'src/workflow-agents.mjs', 'src/workflow-areas.mjs', 'src/workflow-chat.mjs', 'src/workflow-github.mjs',
+  'src/workflow-herdr-layout.mjs', 'src/workflow-inventory.mjs', 'src/workflow-launch-profile.mjs', 'src/workflow-pr-body.mjs', 'src/workflow-pr-evidence.mjs',
+  'src/workflow-prove.mjs', 'src/workflow-replay.mjs', 'src/workflow-results.mjs', 'src/workflow-runner.mjs', 'src/workflow-runs.mjs',
+  'src/workflow-setup.mjs', 'src/workflow-small-change.mjs', 'src/workflow-story-card.mjs', 'src/workflow-view.mjs', 'src/workflow-worker-completion.mjs',
+  'src/workflow-worktree.mjs',
 ];
 
-async function loadedSrcModules(args) {
-  const { spawnSync } = await import('node:child_process');
-  const { pathToFileURL } = await import('node:url');
-  const rootPrefix = pathToFileURL(join(root, 'src/')).href;
-  const loaderSource = `
-    export async function resolve(specifier, context, nextResolve) {
-      const resolved = await nextResolve(specifier, context);
-      if (resolved.url.startsWith(${JSON.stringify(rootPrefix)})) {
-        process.stderr.write('PDD_LOADED:' + resolved.url.slice(${JSON.stringify(rootPrefix)}.length) + '\\n');
-      }
-      return resolved;
-    }
-  `;
-  const registerHook = `import { register } from 'node:module'; register(${JSON.stringify(`data:text/javascript,${encodeURIComponent(loaderSource)}`)});`;
-  const registerUrl = `data:text/javascript,${encodeURIComponent(registerHook)}`;
-  const run = spawnSync(process.execPath, ['--import', registerUrl, join(root, 'bin/pdd.mjs'), ...args], {
-    cwd: root,
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  assert.equal(run.status, 0, run.stderr);
-  assert.ok(run.stdout.length > 0);
-  return [...new Set(
-    run.stderr
-      .split('\n')
-      .filter(line => line.startsWith('PDD_LOADED:'))
-      .map(line => `src/${line.slice('PDD_LOADED:'.length)}`)
-  )].sort();
-}
+const RECORDED_BASE_ENTRIES = {
+  'cli:--help': [0,1,5,8,24,25,26,48,49,53,55,60,61,62,63,65,66,68,69,76,77,90],
+  'cli:help-topic': [0,1,5,8,24,25,26,48,49,53,55,60,61,62,63,65,66,68,69,76,77,90],
+  'cli:--version': [0,1,5,8,24,25,26,48,49,53,55,60,61,62,63,65,66,68,69,76,77,90],
+  'cli:completion': [0,1,5,8,24,25,26,48,49,53,55,60,61,62,63,65,66,68,69,76,77,90],
+  'cli:setup': [0,1,4,5,6,8,22,24,25,26,28,30,31,42,44,45,47,48,49,53,55,60,61,62,63,65,66,68,69,72,76,77,78,80,82,89,90,95],
+  'cli:files': [0,1,5,8,24,25,26,48,49,52,53,55,60,61,62,63,65,66,68,69,76,77,90],
+  'cli:owner': [0,1,5,8,24,25,26,29,48,49,53,55,60,61,62,63,65,66,68,69,76,77,90],
+  'cli:interface-draft': [0,1,5,8,24,25,26,31,48,49,53,55,60,61,62,63,65,66,68,69,76,77,90],
+  'cli:approve': [0,1,5,7,8,24,25,26,48,49,53,54,55,60,61,62,63,65,66,68,69,76,77,90],
+  'cli:test': [0,1,5,6,7,8,10,12,16,19,22,24,25,26,28,29,30,31,32,34,37,38,39,40,41,42,44,45,47,48,49,50,51,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,94,95],
+  'cli:lint': [0,1,5,6,7,8,10,12,16,19,22,24,25,26,28,29,30,31,32,34,37,38,39,40,41,42,44,45,47,48,49,50,51,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,94,95],
+  'cli:simulate': [0,1,5,6,7,8,10,12,16,19,22,24,25,26,28,29,30,31,32,34,37,38,39,40,41,42,44,45,47,48,49,50,51,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,94,95],
+  'cli:contracts': [0,1,5,6,7,8,10,12,16,19,22,24,25,26,27,28,29,30,31,32,34,37,38,39,40,41,42,44,45,47,48,49,50,51,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,94,95],
+  'cli:contracts-sync': [0,1,5,6,7,8,10,12,16,19,22,24,25,26,27,28,29,30,31,32,34,37,38,39,40,41,42,44,45,47,48,49,50,51,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,94,95],
+  'cli:jobs': [0,1,5,6,7,8,10,12,16,19,22,24,25,26,28,29,30,31,32,34,37,38,39,40,41,42,44,45,47,48,49,50,51,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,94,95],
+  'cli:mcp': [0,1,3,5,6,7,8,10,12,16,19,22,24,25,26,28,29,30,31,32,34,37,38,39,40,41,42,44,45,47,48,49,50,51,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,94,95],
+  'cli:metrics': [0,1,5,6,8,24,25,26,28,30,42,43,44,45,46,47,48,49,53,55,60,61,62,63,65,66,68,69,72,76,77,78,80,82,89,90,95],
+  'cli:graph': [0,1,5,6,8,10,16,19,22,24,25,26,28,30,32,34,35,36,37,38,39,41,42,44,45,47,48,49,53,55,60,61,62,63,65,66,68,69,71,72,75,76,77,78,79,80,82,89,90,95],
+  'cli:dependencies-prepare': [0,1,5,6,8,10,16,19,22,24,25,26,28,30,32,33,34,37,38,39,41,42,44,45,47,48,49,53,55,60,61,62,63,65,66,68,69,71,72,75,76,77,78,79,80,82,89,90,95],
+  'cli:dependencies-complete': [0,1,5,6,8,10,16,19,22,24,25,26,28,30,32,33,34,37,38,39,41,42,44,45,47,48,49,53,55,60,61,62,63,65,66,68,69,71,72,75,76,77,78,79,80,82,89,90,95],
+  'cli:product-status': [0,1,5,6,7,8,10,12,16,19,22,24,25,26,28,29,30,31,32,34,37,38,39,40,41,42,44,45,47,48,49,50,51,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,94,95],
+  'cli:product-next': [0,1,5,6,7,8,10,12,16,19,22,24,25,26,28,29,30,31,32,34,37,38,39,40,41,42,44,45,47,48,49,50,51,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,94,95],
+  'cli:product-start': [0,1,5,6,7,8,10,12,16,19,22,24,25,26,28,29,30,31,32,34,37,38,39,40,41,42,44,45,47,48,49,50,51,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,94,95],
+  'cli:workflow-list': [0,1,5,8,24,25,26,48,49,53,55,60,61,62,63,65,66,68,69,76,77,90],
+  'cli:workflow-status': [0,1,5,6,7,8,10,12,16,19,22,24,25,26,28,29,30,32,34,37,38,39,41,42,44,45,47,48,49,53,54,55,57,60,61,62,63,65,66,68,69,71,72,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,94,95],
+  'cli:workflow-run': [0,1,5,6,7,8,10,12,16,19,22,24,25,26,28,29,30,32,34,37,38,39,41,42,44,45,47,48,49,53,54,55,57,60,61,62,63,65,66,68,69,71,72,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,94,95],
+  'cli:workflow-done': [0,1,5,6,7,8,10,12,16,19,22,24,25,26,28,29,30,32,34,37,38,39,41,42,44,45,47,48,49,53,54,55,57,60,61,62,63,65,66,68,69,71,72,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,94,95],
+  'cli:workflow-view': [0,1,5,6,7,8,24,25,26,28,29,42,44,45,47,48,49,53,55,57,60,61,62,63,65,66,68,69,72,76,77,78,80,82,84,85,87,89,90,93,95],
+  'cli:workflow-cost': [0,1,5,6,7,8,10,12,16,19,22,24,25,26,28,29,30,32,34,37,38,39,41,42,44,45,47,48,49,53,54,55,57,60,61,62,63,65,66,68,69,71,72,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,94,95],
+  'cli:workflow-prove': [0,1,5,6,8,24,25,26,28,42,44,45,47,48,49,53,55,60,61,62,63,65,66,68,69,72,76,77,78,80,82,85,89,90,95],
+  'cli:autopilot-status': [0,1,2,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,21,22,23,24,25,26,28,29,30,31,32,33,34,37,38,39,40,41,42,44,45,47,48,49,50,51,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,94,95],
+  'cli:autopilot-doctor': [0,1,2,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,21,22,23,24,25,26,28,29,30,31,32,33,34,37,38,39,40,41,42,44,45,47,48,49,50,51,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,94,95],
+  'cli:autopilot-regressions': [0,1,5,8,20,24,25,26,28,30,48,49,53,55,60,61,62,63,65,66,68,69,76,77,90,95],
+  'cli:autopilot-alerts': [0,1,5,6,7,8,9,10,12,16,19,22,24,25,26,28,29,30,32,34,37,38,39,41,42,44,45,47,48,49,53,54,55,57,60,61,62,63,65,66,68,69,71,72,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,94,95],
+  'cli:autopilot-off': [0,1,5,8,22,24,25,26,28,30,48,49,53,55,60,61,62,63,65,66,68,69,76,77,90],
+  'child:workflow-worker-completion': [0,1,5,6,26,28,42,44,45,47,55,60,63,65,66,72,76,78,80,82,89,94,95],
+  'child:workflow-replay-selector': [26,55,60,63,65,66],
+  'child:try-doors-launcher': [0,1,5,6,7,10,12,16,19,22,24,26,28,29,30,31,32,34,37,38,39,40,41,42,44,45,47,50,51,54,55,56,57,58,59,60,61,62,63,64,65,66,67,70,71,72,73,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,91,92,94,95],
+  'child:scripts/autopilot-smoke.mjs': [],
+  'child:scripts/route-runtime-issues.mjs': [],
+  'tick:autopilot-launcher': [0,1,2,5,6,7,9,10,11,12,13,14,15,16,17,18,19,21,22,23,24,26,28,29,30,31,32,33,34,37,38,39,40,41,42,44,45,47,48,50,51,54,55,56,57,58,59,60,61,62,63,64,65,66,67,70,71,72,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,91,92,94,95],
+  'lib:svg-layout.mjs': [65,70],
+  'lib:prompt-approve.mjs': [7,26,54,55,60,63,65,66],
+  'lib:file-owner.mjs': [26,29,55,60,63,65,66],
+  'lib:agent-adapters.mjs': [0,1,5,26,55,60,63,65,66],
+  'lib:product.mjs': [0,1,5,6,7,10,12,16,19,22,24,26,28,29,30,31,32,34,37,38,39,40,41,42,44,45,47,50,51,54,55,56,57,58,59,60,61,62,63,64,65,66,67,70,71,72,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,91,92,94,95],
+  'lib:autopilot-doctor.mjs': [0,1,5,6,7,10,12,15,16,19,22,23,24,26,28,29,30,31,32,34,37,38,39,40,41,42,44,45,47,50,51,54,55,56,57,58,59,60,61,62,63,64,65,66,67,70,71,72,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,91,92,94,95],
+};
 
-test('SEAM5: pdd --help and pdd owner load the exact base src/ module set without loading runtime-client', async () => {
-  for (const [args, expectedBase] of [
-    [['--help'], BASE_HELP_MODULES],
-    [['owner', 'bin/pdd.mjs'], [...BASE_HELP_MODULES, 'src/file-owner.mjs'].sort()],
-  ]) {
-    const loaded = await loadedSrcModules(args);
-    for (const forbidden of [
-      'src/runtime/runtime-client.mjs',
-      'src/runtime/try-mcp.mjs',
-      'src/runtime/try-doors.mjs',
-      'src/runtime/interface-draft.mjs',
-      'src/runtime/contracts.mjs',
-      'src/runtime/runtime-slots.mjs',
-      'src/runtime/runtime-check-plan.mjs',
-      'src/runtime/product-composition.mjs',
-      'src/runtime/agent-chat.mjs',
-      'src/runtime/runtime-workspace-migration.mjs',
-      'src/runtime/secret-redaction.mjs',
-    ]) {
-      assert.ok(!loaded.includes(forbidden), `${forbidden} must not load for pdd ${args.join(' ')}`);
-    }
-    const normalized = loaded
-      .filter(rel => rel !== 'src/runtime-seam.mjs' && rel !== 'src/runtime/index.mjs')
-      .map(rel => rel.startsWith('src/runtime/') ? `src/${rel.slice('src/runtime/'.length)}` : rel)
-      .sort();
-    assert.deepEqual(normalized, expectedBase, `loaded modules mismatch for pdd ${args.join(' ')}`);
+test('SEAM5 (R2-3): every CLI command family, child entry, Autopilot tick and library entry matches recorded base module sets, cycles and guarded load failures', async t => {
+  const { execFile, execFileSync, spawnSync } = await import('node:child_process');
+  const { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { relative, sep } = await import('node:path');
+  const { pathToFileURL } = await import('node:url');
+  const { promisify } = await import('node:util');
+  const { PUBLIC_COMMAND_ROUTES } = await import('../src/command-catalog.mjs');
+
+  const execFileAsync = promisify(execFile);
+  const scratch = mkdtempSync(join(tmpdir(), 'pdd-seam5-'));
+  t.after(() => rmSync(scratch, { recursive: true, force: true }));
+
+  const home = join(scratch, 'home');
+  const stateDir = join(scratch, 'state');
+  const nonGit = join(scratch, 'nongit');
+  const repo = join(scratch, 'repo');
+  const fakeBin = join(scratch, 'bin');
+  for (const d of [home, stateDir, nonGit, join(repo, 'prompts'), join(repo, 'user_stories'), join(repo, 'tests'), fakeBin]) {
+    mkdirSync(d, { recursive: true });
   }
+  for (const tool of ['gh', 'claude', 'gemini', 'agy', 'herdr']) {
+    const p = join(fakeBin, tool);
+    writeFileSync(p, '#!/bin/sh\nexit 1\n');
+    chmodSync(p, 0o755);
+  }
+  writeFileSync(join(fakeBin, 'codex'), '#!/bin/sh\nif [ "$1" = "login" ]; then echo "Logged in"; exit 0; fi\nexit 1\n');
+  chmodSync(join(fakeBin, 'codex'), 0o755);
+  writeFileSync(join(repo, 'prompts/a.prompt.md'), '# A\n\nDo a.\n\n## Dependencies\n\nNone.\n');
+  writeFileSync(join(repo, 'user_stories/a.md'), '# A\n\nI can a.\n\n## Acceptance criteria\n\n1. A.\n');
+  writeFileSync(
+    join(repo, 'tests/a.json'),
+    JSON.stringify({
+      schema_version: 'prompt-runtime.program-scenario.v1',
+      story_path: 'user_stories/a.md',
+      criteria: [{ id: 'AC1', text: 'A.' }],
+      initial_world: {},
+      steps: [{ step_id: 's1', entry_path: 'prompts/a.prompt.md', operation: 'a', input: {}, checks: [{ criterion_id: 'AC1', target: 'result', path: '', op: 'equals', value: 1 }] }],
+    }) + '\n',
+  );
+  execFileSync('git', ['init', '-q'], { cwd: repo });
+  execFileSync('git', ['add', '.'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.name=T', '-c', 'user.email=t@e.c', 'commit', '-q', '-m', 'init'], { cwd: repo });
+
+  const preload = join(scratch, 'hook.mjs');
+  writeFileSync(
+    preload,
+    `import { registerHooks } from 'node:module';
+import { appendFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+const out = process.env.PROBE_OUT;
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    const res = nextResolve(specifier, context);
+    if (res.url && res.url.startsWith('file://')) {
+      const parent = context.parentURL && context.parentURL.startsWith('file://') ? fileURLToPath(context.parentURL) : '';
+      appendFileSync(out, parent + '\\t' + fileURLToPath(res.url) + '\\n');
+    }
+    return res;
+  }
+});\n`,
+  );
+
+  const ALLOWED_BASE_CYCLES = new Set([
+    'src/issue-sort-github.mjs <-> src/issue-sort.mjs',
+    'src/runtime/runtime-client.mjs <-> src/runtime/runtime-slots.mjs',
+    'src/toml-string.mjs <-> src/workflow-herdr-layout.mjs',
+  ]);
+
+  const analyzeProbeLines = lines => {
+    const out = new Set();
+    const adj = new Map();
+    const toRel = full => {
+      if (!full) return null;
+      const rel = relative(root, full).split(sep).join('/');
+      return rel.startsWith('src/') && rel.endsWith('.mjs') ? rel : null;
+    };
+    for (const line of lines) {
+      const tab = line.indexOf('\t');
+      const parentRel = tab >= 0 ? toRel(line.slice(0, tab)) : null;
+      const targetFull = tab >= 0 ? line.slice(tab + 1) : line;
+      let rel = toRel(targetFull);
+      if (!rel) continue;
+      if (parentRel && parentRel !== rel) {
+        if (!adj.has(parentRel)) adj.set(parentRel, new Set());
+        adj.get(parentRel).add(rel);
+      }
+      if (
+        rel === 'src/runtime-seam.mjs' ||
+        rel === 'src/runtime/index.mjs' ||
+        rel === 'src/runtime/secret-redaction.mjs' ||
+        rel === 'src/secret-redaction.mjs'
+      ) continue;
+      if (rel.startsWith('src/runtime/')) rel = `src/${rel.slice('src/runtime/'.length)}`;
+      out.add(rel);
+    }
+    let idx = 0;
+    const indices = new Map();
+    const low = new Map();
+    const stack = [];
+    const onStack = new Set();
+    const cycles = [];
+    const strong = v => {
+      indices.set(v, idx);
+      low.set(v, idx);
+      idx++;
+      stack.push(v);
+      onStack.add(v);
+      for (const w of adj.get(v) ?? []) {
+        if (!indices.has(w)) {
+          strong(w);
+          low.set(v, Math.min(low.get(v), low.get(w)));
+        } else if (onStack.has(w)) {
+          low.set(v, Math.min(low.get(v), indices.get(w)));
+        }
+      }
+      if (low.get(v) === indices.get(v)) {
+        const scc = [];
+        let w;
+        do {
+          w = stack.pop();
+          onStack.delete(w);
+          scc.push(w);
+        } while (w !== v);
+        if (scc.length > 1) cycles.push(scc.sort().join(' <-> '));
+      }
+    };
+    for (const v of adj.keys()) {
+      if (!indices.has(v)) strong(v);
+    }
+    return { loaded: [...out].sort(), cycles: cycles.sort() };
+  };
+
+  let seq = 0;
+  const runProbe = async (args, cwd) => {
+    const outFile = join(scratch, `out-${++seq}.txt`);
+    writeFileSync(outFile, '');
+    const child = execFileAsync(process.execPath, ['--import', pathToFileURL(preload).href, ...args], {
+      cwd,
+      env: {
+        PATH: `${fakeBin}:/usr/bin:/bin`,
+        HOME: home,
+        PDD_STATE_DIR: stateDir,
+        PDD_RUNTIME_URL: 'http://127.0.0.1:9',
+        PROBE_OUT: outFile,
+      },
+      timeout: 8000,
+    });
+    child.child.stdin?.end();
+    try { await child; } catch {}
+    const lines = readFileSync(outFile, 'utf8').split('\n').filter(Boolean);
+    return analyzeProbeLines(lines);
+  };
+
+  // Every route local in PUBLIC_COMMAND_ROUTES must map to a probed switch arm.
+  const coveredLocals = new Set([
+    'help', 'version', 'completion', 'setup', 'project-files', 'file-owner', 'interface-draft', 'prompt-approve',
+    'runtime-check', 'runtime-try', 'contracts', 'contracts-sync', 'runtime-jobs', 'mcp', 'metrics',
+    'issue-dependency-graph', 'dependencies-prepare', 'dependencies-complete',
+    'product-status', 'product-next', 'product-start',
+    'workflow-list', 'workflow-status', 'workflow-run', 'workflow-done', 'workflow-ask', 'workflow-request-uptake',
+    'workflow-approve', 'workflow-resend', 'workflow-card', 'workflow-changes', 'workflow-open', 'workflow-view',
+    'workflow-cost', 'workflow-prove', 'workflow-suite', 'workflow-evidence', 'workflow-evidence-associate',
+    'workflow-park', 'workflow-yield', 'workflow-cancel', 'workflow-tidy',
+    'autopilot-status', 'autopilot-doctor', 'autopilot-regressions', 'autopilot-alerts', 'autopilot-alert',
+    'autopilot-start', 'autopilot-stop', 'autopilot-add', 'autopilot-release', 'autopilot-report',
+    'autopilot-intake', 'autopilot-audit', 'autopilot-check-base',
+    'autopilot.off', 'autopilot.observe', 'autopilot.auto', 'autopilot-trust', 'autopilot-untrust',
+  ]);
+  for (const route of PUBLIC_COMMAND_ROUTES) {
+    assert.ok(coveredLocals.has(route.local), `PUBLIC_COMMAND_ROUTES local ${route.local} (${route.id}) must be covered in SEAM5`);
+  }
+
+  const bin = join(root, 'bin/pdd.mjs');
+  const replayScript = `import {captureSource} from ${JSON.stringify(pathToFileURL(join(root, 'src/runtime-seam.mjs')).href)};process.stdout.write(JSON.stringify(captureSource(process.argv[1],{tests:JSON.parse(process.argv[2])}).files));`;
+  const launcherScript = 'import(process.argv[1]).then(async ({ runShim }) => { process.exitCode = await runShim(process.argv[2], process.argv.slice(3)); }).catch(() => { process.exitCode = 125; });';
+  const probes = [
+    ['cli:--help', [bin, '--help'], repo],
+    ['cli:help-topic', [bin, 'help', 'prompting'], repo],
+    ['cli:--version', [bin, '--version'], repo],
+    ['cli:completion', [bin, 'completion', 'bash'], repo],
+    ['cli:setup', [bin, 'setup', '--yes'], repo],
+    ['cli:files', [bin, 'files', '--json'], repo],
+    ['cli:owner', [bin, 'owner', 'prompts/a.prompt.md', '--json'], repo],
+    ['cli:interface-draft', [bin, 'interface', 'draft', 'prompts/a.prompt.md', '--json'], repo],
+    ['cli:approve', [bin, 'approve', 'prompts/missing.prompt.md', '--said', 'ok'], repo],
+    ['cli:test', [bin, 'test', 'a'], repo],
+    ['cli:lint', [bin, 'lint', '--local'], repo],
+    ['cli:simulate', [bin, 'simulate', '--stop', 'a'], repo],
+    ['cli:contracts', [bin, 'contracts'], repo],
+    ['cli:contracts-sync', [bin, 'contracts', 'sync'], repo],
+    ['cli:jobs', [bin, 'jobs'], repo],
+    ['cli:mcp', [bin, 'mcp'], repo],
+    ['cli:metrics', [bin, 'metrics', '--json'], repo],
+    ['cli:graph', [bin, 'graph', '--issue', '1'], nonGit],
+    ['cli:dependencies-prepare', [bin, 'dependencies', 'prepare'], nonGit],
+    ['cli:dependencies-complete', [bin, 'dependencies', 'complete', '--input', '-'], nonGit],
+    ['cli:product-status', [bin, 'product', 'status'], repo],
+    ['cli:product-next', [bin, 'product', 'next'], repo],
+    ['cli:product-start', [bin, 'product', 'start', 'r1', '--no-run'], repo],
+    ['cli:workflow-list', [bin, 'workflow', 'list'], repo],
+    ['cli:workflow-status', [bin, 'workflow', 'status'], repo],
+    ['cli:workflow-run', [bin, 'workflow', 'run', 'feature', '1'], nonGit],
+    ['cli:workflow-done', [bin, 'workflow', 'done', 'story'], nonGit],
+    ['cli:workflow-view', [bin, 'workflow', 'view', '1'], nonGit],
+    ['cli:workflow-cost', [bin, 'workflow', 'cost', '1'], nonGit],
+    ['cli:workflow-prove', [bin, 'workflow', 'prove', '1', '--test', 'true', '--expect', 'ok'], nonGit],
+    ['cli:autopilot-status', [bin, 'autopilot', 'status'], nonGit],
+    ['cli:autopilot-doctor', [bin, 'autopilot', 'doctor'], repo],
+    ['cli:autopilot-regressions', [bin, 'autopilot', 'regressions'], nonGit],
+    ['cli:autopilot-alerts', [bin, 'autopilot', 'alerts', 'clear'], nonGit],
+    ['cli:autopilot-off', [bin, 'autopilot', 'off'], nonGit],
+    ['child:workflow-worker-completion', [join(root, 'src/workflow-worker-completion.mjs'), '{}'], nonGit],
+    ['child:workflow-replay-selector', ['--input-type=module', '-e', replayScript, repo, JSON.stringify(['tests/a.json'])], nonGit],
+    ['child:try-doors-launcher', ['--input-type=commonjs', '-e', launcherScript, '--', pathToFileURL(join(root, 'src/try-doors.mjs')).href, join(scratch, 'missing.door.json')], nonGit],
+    ['child:scripts/autopilot-smoke.mjs', [join(root, 'scripts/autopilot-smoke.mjs')], nonGit],
+    ['child:scripts/route-runtime-issues.mjs', [join(root, 'scripts/route-runtime-issues.mjs')], nonGit],
+    ['tick:autopilot-launcher', [join(root, 'src/autopilot-launcher.mjs'), join(scratch, 'missing-state.json')], nonGit],
+    ['lib:svg-layout.mjs', ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(root, 'src/svg-layout.mjs')).href)})`], nonGit],
+    ['lib:prompt-approve.mjs', ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(root, 'src/prompt-approve.mjs')).href)})`], nonGit],
+    ['lib:file-owner.mjs', ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(root, 'src/file-owner.mjs')).href)})`], nonGit],
+    ['lib:agent-adapters.mjs', ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(root, 'src/agent-adapters.mjs')).href)})`], nonGit],
+    ['lib:product.mjs', ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(root, 'src/product.mjs')).href)})`], nonGit],
+    ['lib:autopilot-doctor.mjs', ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(root, 'src/autopilot-doctor.mjs')).href)})`], nonGit],
+  ];
+
+  const ACYCLIC_ENTRIES = new Set([
+    'cli:--help', 'cli:owner', 'cli:files', 'cli:approve', 'cli:interface-draft',
+    'child:workflow-replay-selector', 'lib:svg-layout.mjs', 'lib:prompt-approve.mjs',
+    'lib:file-owner.mjs', 'lib:agent-adapters.mjs',
+  ]);
+  for (let i = 0; i < probes.length; i += 8) {
+    const chunk = probes.slice(i, i + 8);
+    const probeBatch = await Promise.all(chunk.map(([, args, cwd]) => runProbe(args, cwd)));
+    chunk.forEach(([key], idx) => {
+      const expected = RECORDED_BASE_ENTRIES[key].map(n => BASE_SRC_CATALOG[n]);
+      const { loaded, cycles } = probeBatch[idx];
+      assert.deepEqual(loaded, expected, `loaded modules mismatch for ${key}`);
+      if (ACYCLIC_ENTRIES.has(key)) {
+        assert.deepEqual(cycles, [], `expected zero import cycles for ${key}`);
+      } else {
+        const novel = cycles.filter(c => !ALLOWED_BASE_CYCLES.has(c));
+        assert.deepEqual(novel, [], `unexpected new import cycle for ${key}: ${novel.join('; ')}`);
+      }
+    });
+  }
+
+  // Guarded load failures must not escape try/catch, and light/leaf entries must not depend on unrelated leaves.
+  const runWithRejectedModule = (rejectSuffix, entryArgs) => {
+    const loader = `export async function resolve(s, c, n) { const r = await n(s, c); if (r.url.endsWith(${JSON.stringify(rejectSuffix)})) throw new Error('REVIEW_LOAD_FAILURE'); return r; }`;
+    const reg = `import { register } from 'node:module'; register(${JSON.stringify(`data:text/javascript,${encodeURIComponent(loader)}`)});`;
+    return spawnSync(process.execPath, ['--import', `data:text/javascript,${encodeURIComponent(reg)}`, ...entryArgs], {
+      cwd: nonGit,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  };
+
+  assert.equal(runWithRejectedModule('/runtime-client.mjs', [bin, '--help']).status, 0);
+  const mcpFail = runWithRejectedModule('/runtime-client.mjs', [bin, 'mcp']);
+  assert.equal(mcpFail.status, 1);
+  assert.equal(mcpFail.stderr.trim(), 'pdd mcp could not start. Reason: REVIEW_LOAD_FAILURE');
+  const jobsFail = runWithRejectedModule('/runtime-client.mjs', [bin, 'jobs']);
+  assert.equal(jobsFail.status, 5);
+  assert.equal(jobsFail.stderr.trim(), 'Local interpreter jobs could not be read. Reason: REVIEW_LOAD_FAILURE');
+  const contractsFail = runWithRejectedModule('/runtime-client.mjs', [bin, 'contracts']);
+  assert.equal(contractsFail.status, 5);
+  assert.equal(contractsFail.stderr.trim(), 'Local contracts could not be read. Reason: REVIEW_LOAD_FAILURE');
+  assert.equal(
+    runWithRejectedModule('/runtime-output.mjs', ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(root, 'src/svg-layout.mjs')).href)})`]).status,
+    0,
+  );
+  assert.equal(runWithRejectedModule('/runtime-output.mjs', [join(root, 'src/workflow-worker-completion.mjs'), '{}']).status, 0);
 });
 
 test('SEAM6: no file in src/runtime/ imports or addresses a path outside src/runtime/', () => {

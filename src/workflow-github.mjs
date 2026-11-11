@@ -1,8 +1,10 @@
 // Generated from prompts/cli/workflow-github.prompt.md (sha256: cc5e47d00f72396a5e40f732e7782e48599a8310b13b5d65225bc33299196442).
 import { execFile } from 'node:child_process';
 import { isAbsolute } from 'node:path';
-import { causeText } from './runtime-seam.mjs';
+import { runtimeOutputSlice } from './runtime-seam.mjs';
 import { nativeGithubCounter } from './github-calls.mjs';
+
+const { causeText } = runtimeOutputSlice();
 
 const execute = (file, args, options) => new Promise((resolve, reject) => {
   const { input, ...execOptions } = options;
