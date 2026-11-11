@@ -757,6 +757,9 @@ New reference-backed Try records also retain uploaded effective prompt hashes
 and the corresponding contract provenance. Apply the existing pinned-prompt
 freshness promise to the expanded current prompt bytes before connected reuse,
 doors or owner-tool access, so a contract-only prompt change requires `--new`.
+Use the preflight owner's executable-interface projection for these effective
+hashes, as for uploaded capture bytes; explicit full/partial classification
+metadata must not make unchanged source appear stale.
 Keep raw authored prompt hashes for compatibility. For legacy records, use the
 existing raw-hash rule; if a currently referenced prompt lacks the matching
 expanded snapshot, explain that its reference baseline is unavailable and ask for
@@ -828,7 +831,12 @@ flowchart TD
 ```
 
 For a named Story, apply the CLI/HTTP/page alternatives only to its entries; a project app
-map must not turn an unrelated CLI or typed-operation Story into a screen Story. Explicit `--cli` prints the
+map must not turn an unrelated CLI or typed-operation Story into a screen Story.
+Read the selected entries strictly. Inspect other Stories only for eligible-name
+advice: an unreadable prompt or failed shared-reference expansion in an unselected
+Story cannot block the selected Story or the direct CLI adapter's mismatch advice.
+Do not suppress failures in the selected Story's own source or dependencies.
+Explicit `--cli` prints the
 launcher/PATH and returns; `--cli --shell` opens the shell. `--shell` alone selects the CLI
 shell. `--serve [PORT]` forces the existing localhost adapter, including its Screen support.
 `--page` forces the Simulator page for any Story. Existing `--agent` and `--tab` requests also
@@ -858,6 +866,9 @@ and its dependency closure. Otherwise the one distinct CLI entry across Stories 
 program: multiple Stories for that same prompt/operation are not ambiguous. Without CLI,
 include all declared HTTP routes for the whole project. Choose a stable lexicographically
 first eligible test path as the seed only; do not limit captured project capabilities to it.
+Keep seed eligibility independent of the opening flags: prefer the unique CLI
+program's first Story, otherwise the first HTTP Story, otherwise the first selected
+Story. Opening a page instead of a shell or localhost must not change session identity.
 Several distinct CLI programs have no inferred main: refuse with exit 2, list their Story names
 and ask the person to name one. An empty project refuses plainly without authentication.
 A named Story matching several case files keeps the existing exact-test-path ambiguity rule.
@@ -873,6 +884,13 @@ refusal. Explicit page mode remains usable for generic call-only Stories.
 
 
 - Preflight, capture and lint apply to every selected Story; whole-project capture includes the complete selected app map and all selected Stories. A saved named session is not a whole-project session: retain the exact selected test paths, app-map path and raw hash as its simulation scope, and refuse incompatible scope reuse with exit 2 and `pdd simulate --new` recovery. Keep all other saved-session identity and recovery rules below.
+  Find an existing whole-project session independently of the current seed choice.
+  A changed or removed first seed cannot bypass that scope check. Reuse the original
+  seed and its saved associations; never reset the world or allowance just to change
+  the opening mode. If several whole-project records exist, refuse plainly and ask
+  the person to stop a named saved Try rather than choosing one. Explicit `--new`
+  stops the identified old session and removes its original key before storing the
+  replacement under the new seed; never overwrite a different saved named Try there.
 - If `repos/<key>.json` has a Try for this test and GET says `result.session.state` `running` with a valid link, open that link again. For `paused`, validate the same-origin link, then explicitly send one authenticated JSON `{}` POST to `/v1/try/<id>/reopen`. Keep the same ID and original seed identity. Read that ID until its session is running before showing/opening the link. Restore consumes no AI calls, creates no new Try and keeps the original expiry and remaining allowance. A lost reopen answer is read by the same ID; never automatically repeat the POST. A busy/refused/missing reopen or unconfirmed restore keeps the record and returns nonzero with its reason and retry advice naming the exact authored test path, shell-quoted when needed; never print a paused link as ready. `--new` stops the paused Try and creates a new one through its normal route, without reopening it. Options that apply only to a new Try remain refused before reopening. After interruption, send nothing new. `--new`: stop the old Try first, then make a new one. A plain repeat never replaces any saved setup, including a confirmed ended session; a separate setup requires explicit `--new`. A missing (404), expired (410), unknown setup or unknown session is not proof that its original intent did not execute. Without explicit `--new`, keep its complete saved record and request ID, exit 3, and make no lint, setup, stop or reopen submission. Name the original UUID, the authenticated read-only `GET <origin>/v1/runs/<UUID>` status endpoint, and an exact `pdd simulate <test path> --no-open --no-wait` repeat command (shell-quote the path when needed). Explain that a separate Try requires deliberate `--new` after reconciling the original outcome. Never infer zero AI calls or external effects from a setup receipt. A new setup that ends `unknown`, or first reports a passed job whose session is `unknown`, `stopped` or `stopping`, also keeps its complete original record, exits 3 and gives this same recovery advice. This applies both to a direct setup reply and the first status read; subsequent reads must not silently replace it. A Try that is still starting, or a GET with no answer, remains exit 3 with no new Try unless explicitly replaced through `--new`.
 - After Ctrl-C, pdd sends nothing new: no POST starts after the interrupt.
 - App map: `--app-map PATH`, else `app-map.json` at the repo root, else `app/app-map.json`. An app map is a Git-visible JSON object with `"schema_version": "prompt-runtime.app-map.v1"` and a nonempty `name` (the engine's first checks). A bad `--app-map` is exit 2 with the reason (`not a Git-visible file`, `not JSON`, wrong `schema_version`, no `name`) and `See RUNBOOK.md §13.`; a bad found file is skipped with a note. With an open Try, `--app-map` or `--tab` without `--new` is exit 2: they apply only to a new Try. POST `/v1/try` multipart `{requestId, source_sha256, seed: <test path>, app_map, tab}`: `app_map` only when there is one; `tab` = explicit `--tab`, else the selected Screen/Form/terminal way above (an unrelated app map does not change a typed Story's Form selection); `max_calls` is the explicit budget or400. Read until `state: passed`, `result.session.state: running` and a valid `result.url`: the origin's scheme and host, path `/s/<token>/`, no user or password. Else refused, not run or unknown, as for a check, with one exception.

@@ -61,7 +61,10 @@ An older session without pinned source hashes needs --new before becoming a CLI.
 
 For shared-reference prompts, apply the runtime client's expanded-prompt
 freshness rule alongside the existing raw pins at CLI opening, invocation and
-case saving. Keep expanded hashes in the private descriptor; a contract-only
+case saving, including its executable-interface projection. Compare the same
+effective bytes that capture uploads for implicit full, explicit full and partial
+interfaces, including dependencies; unchanged kind metadata cannot refuse opening
+or command execution. Keep expanded hashes in the private descriptor; a contract-only
 prompt change requires --new. A referenced legacy session without that snapshot
 has an unavailable baseline. Do not add a scenario, seed or world freshness gate.
 Keep the reported before/after world privately alongside the last result. Like the hosted Try Save, the appended

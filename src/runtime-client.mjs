@@ -1,7 +1,7 @@
 import { describeCallPreflight } from './lint-call-preflight.mjs';
 import {rememberSecrets} from './secret-redaction.mjs';
 import { bindingPlanLines, bindingRefusals } from './runtime-binding-plan.mjs';
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 61416796a1fd2d4ee2d9b5438a182bfe5236050592f24201b0f791d7c16740b1).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 38a32469b35f7706dab393d9eeb480215eb0603770ed1bac1863852ec5cb2c78).
 import { buildCheckPlan, checkPlanResults, checkPlanLines, checkPlanResultLines } from './runtime-check-plan.mjs';
 import { interfaceFindings } from './interface-draft.mjs';
 import {readEvidenceEligibility} from './workflow-runner.mjs';
@@ -3348,9 +3348,15 @@ function programEntries(root, found, test) {
 function simulationSelection(root, found, words, appMap, options) {
   const all = [...found.tests].sort((a, b) => a.path.localeCompare(b.path));
   if (!all.length) throw new Stop(2, 'No Stories are available to simulate.');
-  const kinds = all.map(test => programEntries(root, found, test));
   const selected = words.length ? [oneTest(found, words, root)] : all;
-  const rows = kinds.filter(row => selected.includes(row.test));
+  const rows = selected.map(test => programEntries(root, found, test));
+  const eligibleNames = predicate => [...new Set(all.flatMap(test => {
+    const selectedRow = rows.find(row => row.test === test);
+    // Selected source was read strictly above. Unselected failures cannot turn
+    // advisory eligible-name discovery into a new source requirement.
+    try { return predicate(selectedRow ?? programEntries(root, found, test)) ? [test.story] : []; }
+    catch { return []; }
+  }))].sort();
   const cli = new Set(rows.flatMap(row => [...row.cli]));
   const hasHttp = rows.some(row => row.http.size);
   const screens = appMap ? JSON.parse(readFileSync(join(root, appMap), 'utf8')).screens : [];
@@ -3359,14 +3365,14 @@ function simulationSelection(root, found, words, appMap, options) {
   const page = options['--page'] || options['--agent'] !== undefined || options['--tab'] !== undefined;
   const forcedCli = options['--cli'] || options['--shell'];
   if (forcedCli && cli.size !== 1) {
-    const names = [...new Set(kinds.filter(row => row.cli.size === 1).map(row => row.test.story))].sort();
+    const names = eligibleNames(row => row.cli.size === 1);
     const name = selected[0].story, target = /^[A-Za-z0-9_./-]+$/.test(name) ? name : "'" + name.replaceAll("'", "'\\''") + "'";
     const refusal = new Stop(125, `${cli.size ? 'This Story uses more than one command-line program.' : 'This Story is not a command-line program.'} ${names.length ? `These are: ${names.join(', ')}.` : 'No Stories are command-line programs.'}`);
     if (typed) refusal.formRecovery = `pdd simulate ${target} opens its Form tab.`;
     throw refusal;
   }
   if (options['--serve'] !== undefined && !hasHttp && !appMap) {
-    const names = [...new Set(kinds.filter(row => row.http.size).map(row => row.test.story))].sort();
+    const names = eligibleNames(row => row.http.size);
     throw new Stop(2, `This Story has no HTTP routes or screens. ${names.length ? `These are: ${names.join(', ')}.` : 'No Stories have HTTP routes or screens.'}`);
   }
   let seed = selected[0];
@@ -3376,8 +3382,9 @@ function simulationSelection(root, found, words, appMap, options) {
     else if (hasHttp) options['--serve'] = 0;
   }
   if (forcedCli) options['--cli'] = true;
-  if (options['--cli']) seed = rows.find(row => row.cli.size)?.test ?? seed;
-  else if (options['--serve'] !== undefined && hasHttp) seed = rows.find(row => row.http.size)?.test ?? seed;
+  // The seed establishes saved-case/session identity, not a preferred view.
+  if (cli.size === 1) seed = rows.find(row => row.cli.size).test;
+  else if (hasHttp) seed = rows.find(row => row.http.size).test;
   const tab = options['--tab'] ?? (options['--cli'] ? 'terminal' : appMap && (!words.length || mapped || !typed) ? 'screen' : 'call');
   return { test: seed, selected, tab, typed: typed && tab === 'call' && options['--serve'] === undefined };
 }
@@ -3520,7 +3527,13 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       }
     }
     const boundedCapture = loadRuntimeWorkspace({root}).configured && localSelected.length ? ports.captureSource(root, { tests: localSelected.map(item => item.path), appMap }) : null;
-    const { test, selected, tab, typed } = simulationSelection(root, found, normalized, appMap, options);
+    let { test, selected, tab, typed } = simulationSelection(root, found, normalized, appMap, options);
+    const repoState = store.repo(root);
+    const wholeRecords = normalized.length ? [] : Object.entries(repoState.tries ?? {}).filter(([, value]) => isObject(value.simulation_scope));
+    if (wholeRecords.length > 1) throw new Stop(2, 'Several whole-project simulations are saved. Stop a named Try with pdd simulate --stop STORY before opening the whole project.');
+    const [recordPath, record] = wholeRecords[0] ?? [test.path, repoState.tries?.[test.path]];
+    if (wholeRecords.length && !options['--new']) test = selected.find(item => item.path === recordPath) ?? test;
+    if (record && options['--new'] && recordPath !== test.path && repoState.tries?.[test.path]) throw new Stop(2, `A different saved Try uses ${test.path}. Stop it with pdd simulate --stop ${test.path} before replacing the whole-project simulation.`);
     context.typedForm = typed;
     context.doorMode = !!(options['--cli'] || options['--serve'] !== undefined);
     context.agentConnection = !options['--no-wait'] && !context.doorMode && ports.agentBridge !== false
@@ -3531,7 +3544,6 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (!context.agentDefinitions.length) throw new Stop(2,'No agents are configured. Add an agent or enable defaults in agents.json.');
       if (options['--agent'] !== undefined && !context.agentDefinitions.some(d => d.name === options['--agent'] || (['codex','claude','gemini'].includes(d.id) && d.id === options['--agent']))) throw new Stop(2,'Unknown agent name. Choose a name from agents.json or an enabled default.');
     }
-    const repoState = store.repo(root), record = repoState.tries?.[test.path];
     Object.assign(context, { root, store, origin, visible: found.visible, appMap, cwd: realpathSync(cwd), simulationTests: selected, seedTest: { path: test.path, storyPath: test.storyPath } });
     const row = rows.find(row => row.test === test.path) ?? rows[0];
     const capture = boundedCapture ?? ports.captureSource(root, { tests: selected.map(item => item.path), appMap }), note = otherNote(otherFiles(capture.files, found).length);
@@ -3588,7 +3600,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
         throw new Stop(3, `The last Try for "${test.title}" is not ready or its state is unknown. Run pdd simulate ${test.story} again later, or pdd simulate ${test.story} --new to stop it and make a new one.`);
       }
       if (!ended) { line(ports.stderr, 'Stopping the old Try…'); await stopTry(context, record); }
-      delete repoState.tries[test.path];
+      delete repoState.tries[recordPath];
       store.saveRepo(root, repoState);
     }
     await checkLint(context, rows);

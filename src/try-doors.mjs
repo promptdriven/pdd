@@ -1,10 +1,10 @@
-// Generated from prompts/cli/try-doors.prompt.md (sha256: e20ad11b8e081ed1a4a1879118cba1228f5943608b15cfbad63c2572b17167ed).
+// Generated from prompts/cli/try-doors.prompt.md (sha256: 03fbb1ad6f8d45995af8f303b79bbdd3048174b3df7e4d1a6084b34de0491df7).
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { accessSync, chmodSync, closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { findTests, gitFiles, readPrompt, captureSource } from './runtime-preflight.mjs';
+import { findTests, gitFiles, readPrompt, captureSource, executableInterfaceText } from './runtime-preflight.mjs';
 import {lineReader} from './prompt-approve.mjs';
 import { cleanText, tryUsage, tryUsageLine } from './runtime-output.mjs';
 import { runDoorCall, saveDoorCaseResult, acquireCaseWriteOwnership } from './runtime-client.mjs';
@@ -20,7 +20,7 @@ function checkEffectivePrompts(root, rawHashes, effectiveHashes) {
     const prompt=readPrompt(root,visible,path);
     if (!prompt.text) fail('A prompt is unavailable. Run pdd simulate STORY --cli --new.');
     if (effectiveHashes?.[path]) {
-      if (hash(prompt.text)!==effectiveHashes[path]) fail('A prompt or shared contract changed since this Try. Run pdd simulate STORY --cli --new.');
+      if (hash(executableInterfaceText(prompt.text))!==effectiveHashes[path]) fail('A prompt or shared contract changed since this Try. Run pdd simulate STORY --cli --new.');
     } else if (prompt.references?.length) fail('This Try reference baseline is unavailable. Run pdd simulate STORY --cli --new.');
   }
 }
@@ -84,7 +84,10 @@ function cliEntry(context, test) {
   if (entries.size !== 1) {
     if (entries.size) fail('This Story uses more than one command-line program. Choose a Story with one command-line program.');
     const found = context.found ?? findTests({ root: context.root, files: [...context.visible] });
-    const names = [...new Set(found.tests.filter(candidate => cliEntries(context, candidate).size === 1).map(candidate => candidate.story))].sort();
+    const names = [...new Set(found.tests.filter(candidate => {
+      // Other Stories supply advice only; their missing context is independent.
+      try { return cliEntries(context, candidate).size === 1; } catch { return false; }
+    }).map(candidate => candidate.story))].sort();
     fail(`This Story is not a command-line program. ${names.length ? `These are: ${names.join(', ')}.` : 'No Stories are command-line programs.'}${typedUnmappedStory(context, test) ? `\npdd simulate ${quote(test.story)} opens its Form tab.` : ''}`);
   }
   const value = [...entries.values()][0];
