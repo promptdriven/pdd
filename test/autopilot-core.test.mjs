@@ -1378,7 +1378,7 @@ test('B2 jobs run the pdd that runs the tick: its launcher is first on PATH', as
   assert.match(readFileSync(launcher, 'utf8'), new RegExp(`^#!/bin/sh\\nexec '${process.execPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}' '.*/bin/pdd\\.mjs' "\\$@"\\n$`));
   const version = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
   const out = execFileSync('pdd', ['--version'], { env: { ...process.env, PATH: job.env.PATH }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-  assert.match(out, new RegExp(`^${version.replace(/\./g, '\\.')}$`, 'm'), 'the pdd on the job PATH is this package');
+  assert.match(out, new RegExp(`^${version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'), 'the pdd on the job PATH is this package');
   w.build(17); await w.tick();
   assert.equal(w.job(17, 'review').env.PATH.split(':')[0], join(w.root, 'bin'), 'the reviewer gets it too');
 });
@@ -1401,7 +1401,7 @@ test('B3 public text: END and PR comments show no absolute path, user name or ho
     assert.doesNotMatch(body, /\bdana\b/, `no user name: ${body}`);
     assert.doesNotMatch(body.split('\n')[0], /\.\.$/, `one period: ${body.split('\n')[0]}`);
   }
-  assert.match(end, new RegExp(`- Log: \`${basename(job.log).replace(/\./g, '\\.')}\` on this machine`));
+  assert.match(end, new RegExp(`- Log: \`${basename(job.log).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\` on this machine`));
   assert.match(prComments.find(b => b.startsWith('Review: FAIL')), /Checked words\.js on this machine as \[user\]\./);
 });
 
