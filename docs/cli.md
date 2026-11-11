@@ -658,7 +658,7 @@ Changed criterion text and other malformed test rules still refuse the test.
 | `pdd test --fill-hash --compact` | Fill draft hashes and remove interface JSON formatting whitespace. Preserve values, strings, number spellings and prose. Approved and statusless files stay unchanged. No network |
 | `pdd test --explain-bindings [STORY...] [--json]` | Explain each selected resource edge, fixture candidate, mismatch cause and repair. Local reads only; no sign-in or interpreter call |
 | `pdd test --files [STORY...] [--app-map PATH] [--json]` | List the exact selected upload manifest and byte sizes. No network; `--app-map` previews the Simulator's app map |
-| `pdd lint [STORY...] [--json] [--timeout MIN]` | Print local SVG layout warnings, then the server checks the format of the prompts, Stories and tests only, with 0 AI calls, and requests complete diagnostics and prints the problems the server reports. Requires network access; use it before a real check |
+| `pdd lint [STORY...] [--json] [--timeout MIN] [--max-calls N]` | Print local SVG layout warnings, then the server checks the format of the prompts, Stories and tests only, with 0 AI calls, and requests complete diagnostics and prints the problems the server reports. Requires network access; use it before a real check |
 | `pdd lint --local [STORY...] [--json]` | Compare linked `.ui.svg` parts and labels with prompt prose locally; warning advice only, 0 AI calls and no network/authentication. Without Story names, inspect all Git-visible prompts, even with no PDD tests |
 | `pdd test --screen URL --drawing PATH [--json]` | Compare the real page with its `.ui.svg` layout spec in installed headless Chrome/Chromium at the SVG viewport. No AI or interpreter call; missing/hidden parts, order or region differences fail |
 | `pdd interface draft [PROMPT...] [--all] [--json]` | Draft missing Runtime blocks from explicit prose or contracts and lint locally, without AI or network calls. Uncertain facts include field questions and a recovery command. |
@@ -1460,3 +1460,20 @@ both the service report and `binding_diagnostics` with
 before retrying. A local match never replaces a service refusal with a pass.
 Autopilot parks a saved binding refusal with blocker `binding`. Interpreter
 health alone does not wake it. Use the normal reply/retry route after repair.
+
+### Inspect a call cap before paid work
+
+Run `pdd lint STORY --max-calls 25` to inspect a selected cap with 0 AI calls.
+The interpreter reports each step's catalog cost and a structural test estimate.
+For example, an estimate of 29 calls against cap 25 produces an advisory warning.
+The cap stays 25. This does not change paid Check admission or guarantee actual
+calls or completion. Resource continuations are not included in the estimate.
+
+Text and `--json` retain source, engine and configured maximum information.
+JSON rows expose the server's `call_preflight`; the result exposes
+`call_preflight_context` and the separate `call_preflight_requested_cap`.
+Unknown analysis stays unknown. Missing or inconsistent source, engine or cap
+association cannot support a fit claim. An interpreter without
+`lint-call-preflight` support refuses an explicitly selected lint cap before
+submission. Ordinary lint without a cap remains available. Local lint does not
+accept a call cap. Reading a saved standalone lint never starts a paid check.
