@@ -7,8 +7,9 @@ import {serializeValidationReceipt, redactingLines, validationLog, safeEvidenceT
 import {executeSuite} from './test-suite-queue.mjs';
 
 let started = false;
-const send = message => {
-  if (process.connected) try { process.send(message, () => {}); } catch {}
+const send = (message, done = () => {}) => {
+  if (process.connected) try { process.send(message, done); return; } catch {}
+  done();
 };
 // Losing the caller is not a request to cancel an already admitted command.
 process.on('disconnect', () => { if (!started) process.exitCode = 1; });
@@ -85,7 +86,8 @@ process.on('message', async message => {
     record.state = record.outcome === 'completed' ? 'finished' : 'running'; record.finishedAt = record.state === 'finished' ? Date.now() : null;
     record.reason = result.reason == null ? (result.exitCode ? `Test suite exited with status ${result.exitCode}.` : null) : safeEvidenceText(result.reason);
     save();
-    send({result:{...result,record}});
+    // Disconnect only after the terminal write clears earlier queued output.
+    await new Promise(done => send({result:{...result,record}},done));
   } catch (error) {
     // No terminal message may claim a receipt that was not saved.
     process.exitCode = 1;
