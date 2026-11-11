@@ -259,6 +259,8 @@ test('server errors: the message is the server line as safe text and never shows
   assert.equal(out.message, 'bad [31m[secret] for x');
   fake.failNext({ status: 403, body: { error: { code: 'forbidden', message: `ghp_${'A'.repeat(36)} is not yours` } } });
   assert.deepEqual(await run(), { exitCode: 1, message: '[redacted] is not yours' });
+  fake.failNext({ status: 500, body: { error: { code: 'invalid', message: 'crash in the handler' } } });
+  assert.deepEqual(await run(), { exitCode: 3, message: 'crash in the handler' }, 'a crash is never a firm no');
   fake.failNext({ status: 418, raw: `teapot ${ALI.token}` });
   assert.deepEqual(await run(), { exitCode: 1, message: 'The PDD login server refused this (HTTP 418, no code).' });
   fake.failNext({ status: 503, raw: 'down' });
@@ -289,7 +291,8 @@ test('copy desk: a copy that can renew itself is refused and nothing is saved; a
   assert.deepEqual(out, { ok: false, code: 'all_out', exitCode: 1, message: 'No login on the PDD login server has quota now. Next free: ali-own at Nov 11 16:48 PST.',
     earliest: { id: own, name: 'ali-own', at: Date.parse('2026-11-12T00:48:00Z') } });
   fake.failNext({ status: 409, body: { error: { code: 'all_out', message: 'none' }, earliest: { id: 'l_gone', at: '2026-11-12T00:48:00Z' } } });
-  assert.deepEqual((await cloudCopy(ali.input, ali.ports)).earliest, { id: 'l_gone', name: null, at: Date.parse('2026-11-12T00:48:00Z') });
+  assert.deepEqual(await cloudCopy(ali.input, ali.ports), { ok: false, code: 'all_out', exitCode: 1,
+    message: 'No login on the PDD login server has quota now. Next free at Nov 11 16:48 PST.', earliest: { id: 'l_gone', name: null, at: Date.parse('2026-11-12T00:48:00Z') } });
   fake.failNext({ status: 200, body: { login: { id: own, name: 'ali-own', owner: { login: 'ali', id: 102 } }, auth: 7 } });
   assert.equal((await cloudCopy(ali.input, ali.ports)).code, 'bad_reply');
   assert.deepEqual(await cloudCopy({ ...ali.input, provider: 'claude' }, ali.ports), { ok: false, code: 'input', exitCode: 2,
@@ -312,7 +315,10 @@ test('writeCopyHome: checks the copy first, writes only into its own folders, ne
   assert.deepEqual(writeCopyHome({ env, name: 'cx5', auth: copy('rt-live') }), unsafe);
   assert.deepEqual(writeCopyHome({ env, name: 'cx5', auth: copy('', { spare: [{ refresh_token: 'rt-hidden' }] }) }), unsafe);
   assert.deepEqual(writeCopyHome({ env, name: 'cx5', auth: copy({ value: 'x' }) }), unsafe);
+  assert.deepEqual(writeCopyHome({ env, name: 'cx5', auth: copy('', { OPENAI_API_KEY: 'sk-fake-lasting-key' }) }), { ...unsafe,
+    message: 'The login server sent a copy of cx5 with an API key. pdd did not save it. Tell the server owner.' });
   assert.equal(existsSync(homes), false, 'a refused copy touches no file');
+  assert.equal(writeCopyHome({ env, name: 'cx4', auth: copy('', { OPENAI_API_KEY: null }) }).ok, true);
   for (const name of ['../x', 'Cx5', 'a/b/c', '', '@x/cx5', 'ahmed/../x'])
     assert.equal(writeCopyHome({ env, name, auth: copy() }).code, 'input', name);
 
@@ -344,11 +350,13 @@ test('writeCopyHome: checks the copy first, writes only into its own folders, ne
 
   // A folder that pdd did not make, or a linked folder, gets nothing.
   const foreign = join(homes, 'cx7');
-  mkdirSync(foreign);
+  mkdirSync(foreign, { mode: 0o755 });
+  chmodSync(foreign, 0o755);
   writeFileSync(join(foreign, 'auth.json'), 'a person put this here');
   assert.deepEqual(writeCopyHome({ env, name: 'cx7', auth: copy() }), { ok: false, code: 'not_copy_home', exitCode: 1,
     message: '~/.local/state/pdd/accounts/homes/cx7 is not a folder that pdd made for copies. pdd did not write there.' });
   assert.equal(readFileSync(join(foreign, 'auth.json'), 'utf8'), 'a person put this here');
+  assert.equal(mode(foreign), 0o755, 'a refused folder keeps its mode');
   const target = mkdtempSync(join(home, 'target-'));
   symlinkSync(target, join(homes, 'cx8'));
   assert.equal(writeCopyHome({ env, name: 'cx8', auth: copy() }).code, 'not_copy_home');
@@ -439,4 +447,26 @@ test('accept: two invites with one name need OWNER/NAME; a bad machine.json is n
   assert.deepEqual(await runCloudAccounts('accept', { ...ali.input, name: 'nobody' }, ali.ports), { exitCode: 1, message: 'No invite for nobody. Run pdd accounts list.' });
   assert.equal(readFileSync(join(ali.home, '.config', 'pdd', 'machine.json'), 'utf8'), '{bad');
   assert.ok(fake.requests.filter(row => row.user === 'ali').every(row => /^m_[0-9a-f]{16}$/.test(row.machine)));
+});
+
+test('list: an owner without an id is matched by login; server keys and extra fields are cleaned or dropped', async t => {
+  const fake = await server(t);
+  const ali = person(ALI, fake);
+  const listing = { logins: [{ id: 'l_own', name: 'cx5', owner: { login: 'ALI' } }, { id: 'l_sh', name: 'cx5', owner: { login: 'ahmed', [ALI.token]: 1 }, secretField: ALI.token }],
+    invites: [{ id: 'l_inv', name: 'team', owner: { login: 'mehtab', [ALI.token]: 1 }, via: 'user', extra: ALI.token }],
+    order: ['l_sh', 'l_own', 'l_unknown'], groups: [{ id: 'g_1', name: 'eng', owner: 'ahmed', members: ['ali'], github: null, [ALI.token]: 'x' }] };
+  fake.failNext({ status: 200, body: listing });
+  const list = await cloudList(ali.input, ali.ports);
+  assert.deepEqual(list.logins.map(row => [row.display, row.shared, row.kind]), [['cx5', false, 'cloud login'], ['ahmed/cx5', true, 'shared by ahmed']]);
+  assert.deepEqual(list.logins[1].owner, { login: 'ahmed', '[secret]': 1 });
+  assert.equal(Object.hasOwn(list.logins[1], 'secretField'), false);
+  assert.deepEqual(list.order, ['ahmed/cx5', 'cx5']);
+  assert.deepEqual(list.invites, [{ id: 'l_inv', name: 'team', owner: { login: 'mehtab' }, via: 'user', display: 'mehtab/team' }]);
+  assert.deepEqual(list.groups, [{ id: 'g_1', name: 'eng', owner: 'ahmed', members: ['ali'], github: null }]);
+  assert.ok(!JSON.stringify(list).includes(ALI.token));
+  fake.failNext({ status: 200, body: listing });
+  fake.failNext({ status: 200, body: { id: 'l_own' } });
+  assert.deepEqual(await runCloudAccounts('share', { ...ali.input, name: 'cx5', with: 'mehtab' }, ali.ports),
+    { exitCode: 0, message: 'Shared cx5 with mehtab. Each person accepts it with: pdd accounts accept cx5' });
+  assert.equal(fake.requests.at(-1).path, '/v1/accounts/l_own/share');
 });

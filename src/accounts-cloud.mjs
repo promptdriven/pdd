@@ -1,9 +1,9 @@
-// Generated from prompts/cli/accounts-cloud.prompt.md (sha256: 68a68a51e2c92ea558db08db7f72fb8bb020b612d02ee906c3dfb6c2dfed1d75).
+// Generated from prompts/cli/accounts-cloud.prompt.md (sha256: 3e45ecb26ee5662d5067b0cf4a37c0b1407eb901d508e5c03071b8a3612d24bc).
 // The PDD login server client: share, accept, leave, groups, the server audit log, the list rows, the copy desk
 // and the access-only run home. The gh token stays in request headers only; a login text never reaches a message.
 import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { chmodSync, closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, constants, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir, hostname as osHostname } from 'node:os';
 import { isAbsolute, join, relative, sep } from 'node:path';
 import { redactSecrets, rememberSecrets } from './secret-redaction.mjs';
@@ -47,7 +47,7 @@ const shown = value => safe(typeof value === 'string' ? value : JSON.stringify(v
 function clean(value, secrets) {
   if (typeof value === 'string') return safe(value, secrets);
   if (Array.isArray(value)) return value.map(item => clean(item, secrets));
-  if (isObject(value)) return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, clean(item, secrets)]));
+  if (isObject(value)) return Object.fromEntries(Object.entries(value).map(([key, item]) => [safe(key, secrets), clean(item, secrets)]));
   return value;
 }
 
@@ -156,11 +156,10 @@ const signIn = (ctx, needMe) => readToken(ctx) ?? (needMe ? readMe(ctx) : null);
 async function loadPool(input, env, ports) {
   if (input.pool !== undefined || envUrlSet(env)) return input.pool ?? null;
   if (typeof ports.readPool === 'function') return ports.readPool({ env });
-  let store;
-  try { store = await import('./accounts-store.mjs'); } catch (error) {
-    if (error?.code === 'ERR_MODULE_NOT_FOUND' && String(error.message).includes('accounts-store')) return null;
-    throw error;
-  }
+  // Only a missing store file means "no pool"; a store that fails to load is an error.
+  const file = new URL('./accounts-store.mjs', import.meta.url);
+  if (!existsSync(file)) return null;
+  const store = await import(file.href);
   return typeof store.readPool === 'function' ? store.readPool({ env }) : null;
 }
 
@@ -235,7 +234,7 @@ async function call(ctx, method, path, body) {
   const error = isObject(json?.error) ? json.error : {};
   const serverCode = typeof error.code === 'string' && SERVER_CODES.has(error.code) ? error.code : null;
   const busy = status >= 500 || status === 408 || status === 429;
-  const code = serverCode ?? (busy ? 'unavailable' : 'refused');
+  const code = serverCode === 'all_out' ? 'all_out' : busy ? 'unavailable' : serverCode ?? 'refused';
   const said = typeof error.message === 'string' ? safe(error.message, ctx.secrets) : '';
   const shownCode = typeof error.code === 'string' ? safe(error.code, ctx.secrets).slice(0, 40) : 'no code';
   const message = said || (code === 'unavailable' ? `The PDD login server is not available now (HTTP ${status}). Try again later.`
@@ -471,6 +470,7 @@ export async function runCloudAccounts(action, input = {}, ports = {}) {
 
 // ---------- list ----------
 
+const GROUP_FIELDS = ['id', 'name', 'owner', 'members', 'github'];
 const ROW_FIELDS = ['id', 'name', 'owner', 'provider', 'plan', 'reset', 'stop', 'paused', 'state', 'week', 'fiveHour', 'accessExpiresAt', 'refreshOkAt', 'sharedWith', 'group'];
 const pickRow = (row, secrets) => Object.fromEntries(ROW_FIELDS.filter(key => Object.hasOwn(row, key)).map(key => [key, clean(row[key], secrets)]));
 
@@ -487,7 +487,9 @@ export async function cloudList(input = {}, ports = {}) {
     const shared = !isOwn(row, me);
     return { ...pickRow(row, ctx.secrets), display: displayOf(row, me), shared, kind: shared ? `shared by ${row.owner.login}` : 'cloud login' };
   });
-  const invites = json.invites.map(row => ({ ...clean(row, ctx.secrets), display: `${row.owner.login}/${row.name}` }));
+  const invites = json.invites.map(row => ({ ...clean({ id: row.id, name: row.name, owner: { login: row.owner.login }, ...(Object.hasOwn(row, 'via') ? { via: row.via } : {}) }, ctx.secrets),
+    display: `${row.owner.login}/${row.name}` }));
+  const groups = json.groups.map(group => clean(Object.fromEntries(GROUP_FIELDS.filter(key => Object.hasOwn(group, key)).map(key => [key, group[key]])), ctx.secrets));
   const inviteLines = json.invites.map(row => {
     const twin = json.invites.filter(other => other.name === row.name).length > 1;
     const via = typeof row.via === 'string' && row.via.startsWith('group:') ? ` (group ${safe(row.via.slice(6), ctx.secrets).slice(0, 40)})` : '';
@@ -495,7 +497,7 @@ export async function cloudList(input = {}, ports = {}) {
   });
   const byId = new Map(json.logins.map(row => [row.id, displayOf(row, me)]));
   const order = json.order.filter(id => byId.has(id)).map(id => byId.get(id));
-  return { ok: true, url: ctx.base, me: { ...me }, logins, invites, order, groups: clean(json.groups, ctx.secrets), inviteLines };
+  return { ok: true, url: ctx.base, me: { ...me }, logins, invites, order, groups, inviteLines };
 }
 
 // ---------- the copy desk and the run home ----------
@@ -522,7 +524,7 @@ export async function cloudCopy(input = {}, ports = {}) {
       earliest = { id: raw.id, name: row ? displayOf(row, ctx.me) : null, at: timeMs(raw.at) };
     }
     const when = earliest?.at === null || earliest?.at === undefined ? null : timeText(earliest.at, ctx.ports.timeZone, true);
-    const next = when ? ` Next free: ${earliest.name ?? 'a shared login'} at ${when}.` : '';
+    const next = !when ? '' : earliest.name ? ` Next free: ${earliest.name} at ${when}.` : ` Next free at ${when}.`;
     return { ...fail('all_out', `No login on the PDD login server has quota now.${next}`), earliest };
   }
   const { login, auth, expiresAt, copyId } = reply.json;
@@ -549,12 +551,13 @@ function canRenew(root) {
   return false;
 }
 
-function privateFolder(path) {
+// Make the folder (0700) when it is missing; false for a link or a file. The caller sets 0700 after its own checks.
+const absentKey = value => value === undefined || value === null;
+
+function realFolder(path) {
   try { mkdirSync(path, { mode: 0o700 }); } catch (error) { if (error?.code !== 'EEXIST') throw error; }
   const stat = lstatSync(path);
-  if (stat.isSymbolicLink() || !stat.isDirectory()) return false;
-  chmodSync(path, 0o700);
-  return true;
+  return !stat.isSymbolicLink() && stat.isDirectory();
 }
 
 function atomicWrite(path, text) {
@@ -591,6 +594,7 @@ export function writeCopyHome(input = {}, ports = {}) {
   let parsed = null;
   try { parsed = typeof auth === 'string' && Buffer.byteLength(auth) <= MAX_AUTH ? JSON.parse(auth) : null; } catch { parsed = null; }
   if (isObject(parsed) && canRenew(parsed)) return fail('unsafe_copy', `The login server sent a copy of ${label} that can renew itself. pdd did not save it. Tell the server owner.`);
+  if (isObject(parsed) && !absentKey(parsed.OPENAI_API_KEY)) return fail('unsafe_copy', `The login server sent a copy of ${label} with an API key. pdd did not save it. Tell the server owner.`);
   const tokens = isObject(parsed) ? parsed.tokens : null;
   if (!isObject(tokens) || typeof tokens.access_token !== 'string' || !tokens.access_token || tokens.refresh_token !== '')
     return fail('bad_copy', `The login server sent a copy of ${label} that pdd can not read. pdd did not save it.`);
@@ -600,7 +604,8 @@ export function writeCopyHome(input = {}, ports = {}) {
   const refuse = path => fail('not_copy_home', `${tilde(path, home)} is not a folder that pdd made for copies. pdd did not write there.`);
   try {
     mkdirSync(stateDir, { recursive: true, mode: 0o700 });
-    for (const path of [...chain, folder]) if (!privateFolder(path)) return refuse(path);
+    for (const path of chain) { if (!realFolder(path)) return refuse(path); chmodSync(path, 0o700); }
+    if (!realFolder(folder)) return refuse(folder);
     const entries = readdirSync(folder);
     if (!entries.includes(MARKER)) {
       if (entries.length) return refuse(folder);
@@ -609,6 +614,7 @@ export function writeCopyHome(input = {}, ports = {}) {
       try { fd = openSync(join(folder, MARKER), constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600); } catch (error) { if (error?.code !== 'EEXIST') throw error; }
       if (fd !== null) try { writeFileSync(fd, 'pdd copy home v1\n'); } finally { closeSync(fd); }
     }
+    chmodSync(folder, 0o700);
     const config = join(folder, 'config.toml');
     if (!hasFileStore(config)) atomicWrite(config, STORE_LINE);
     atomicWrite(join(folder, 'auth.json'), `${JSON.stringify(parsed, null, 2)}\n`);

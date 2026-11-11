@@ -45,8 +45,8 @@ writeCopyHome(input: { env?, name: string, auth: string }, ports?): HomeResult |
 - `input.env` defaults to `process.env`. `input.pool` is the pool object of
   `accounts-store.mjs`. When it is `undefined` and `PDD_ACCOUNTS_URL` is not
   set, the module reads it with `ports.readPool({ env })`, else with `readPool({ env })`
-  from `./accounts-store.mjs` (dynamic import); a missing store module means no
-  pool (the environment alone decides). An error from the pool read gives
+  from `./accounts-store.mjs` (dynamic import). Only a missing store file means
+  no pool (the environment alone decides); a store that fails to load throws. An error from the pool read gives
   `input` (exit 2) with its message as a safe text.
 - The module also exports `LOCAL_MODE_TEXT` (the local mode line). The error
   that `cloudUrl` throws has `exitCode` 2 and `code` `input`.
@@ -119,12 +119,14 @@ cell with two spaces, rows sorted by time, oldest first. No rows:
   Row fields `id, name, owner, provider, plan, reset, stop, paused, state, week,
   fiveHour, accessExpiresAt, refreshOkAt, sharedWith, group` as sent (absent stay
   absent), with every string in them as a safe text. Other Row fields are dropped.
-- `invites`: each Invite (strings as safe text) with `display` (`OWNER/NAME`); `inviteLines`: one line each,
+- `invites`: each Invite with only `id, name, owner: { login }` and `via` (when sent), plus `display` (`OWNER/NAME`); `inviteLines`: one line each,
   `OWNER shares NAME with you. Accept it with: pdd accounts accept NAME`
   (`... accept OWNER/NAME` when two invites share the name; `via` a group adds
   ` (group GROUP)` after `with you`).
 - `order`: the server `order` ids mapped to display names (unknown ids dropped).
-- `groups`: the server Groups as sent.
+- `groups`: each server Group with only `id, name, owner, members, github` (when sent).
+- In everything that `cloudList` and `cloudCopy` return from the server, every
+  string and every object key is a safe text.
 
 `cloudCopy` sends `POST /v1/copy` `{ provider, skip?, pin? }` (`skip` and `pin`
 are server login ids; empty `skip` and absent `pin` are not sent). Only
@@ -134,7 +136,7 @@ gives `{ ok: false, code: 'all_out', exitCode: 1, message, earliest }` with
 `earliest` = `{ id, name, at }` (name = display name when the id is in the
 listing, else null) from `error.earliest` or the top-level `earliest`, or null;
 message `No login on the PDD login server has quota now.` plus ` Next free: NAME at TIME.`
-when known. A good reply `{ login: Row, auth, expiresAt, copyId }` is written
+when both are known, or ` Next free at TIME.` when only the time is known. A good reply `{ login: Row, auth, expiresAt, copyId }` is written
 with `writeCopyHome` under the display name; the result is
 `{ ok: true, name, login, home, expiresAt, copyId }`. The auth text is never in
 the result, a message or a file other than the run home's `auth.json`.
@@ -151,10 +153,15 @@ the result, a message or a file other than the run home's `auth.json`.
    `refresh_token` that is a nonempty string, or any key named
    `refresh_token` at any depth with a value other than `""`, `null` or absent,
    gives `unsafe_copy`, `The login server sent a copy of NAME that can renew
-   itself. pdd did not save it. Tell the server owner.` These checks run before
-   any file is touched.
+   itself. pdd did not save it. Tell the server owner.` A top-level
+   `OPENAI_API_KEY` other than `null` or absent (a key that never ends) gives
+   `unsafe_copy`, `The login server sent a copy of NAME with an API key. pdd
+   did not save it. Tell the server owner.` These checks run before any file is
+   touched, the renew check first.
 3. `<state>/homes`, `<state>/homes/@owner` and the login folder are made with
-   mode 0700 (and set to 0700). None of them may be a symbolic link. A login
+   mode 0700 when missing. None of them may be a symbolic link or a file.
+   `homes` and `@owner` are set to 0700; the login folder is set to 0700 only
+   after it passes the marker check, so a refused folder keeps its mode. A login
    folder that exists, is not empty and has no marker file `.pdd-copy-home`
    gives `not_copy_home`, `FOLDER is not a folder that pdd made for copies.
    pdd did not write there.` (FOLDER relative to the home folder as `~/...`
@@ -209,7 +216,7 @@ the result, a message or a file other than the run home's `auth.json`.
 | fetch throws (refused, not found, timeout, TLS) | `unavailable`: `pdd could not reach the PDD login server at HOST (REASON). Check your network and PDD_ACCOUNTS_URL.` |
 | 3xx | `bad_reply`: `The PDD login server at HOST sent a redirect. pdd does not follow it with your GitHub login. Check PDD_ACCOUNTS_URL.` |
 | 401 | `sign-in`: `The PDD login server did not accept your GitHub login (HTTP 401). Run gh auth login, then run the command again.` |
-| other 4xx/5xx | the error code (table above); message = the server's `error.message` as a safe text, else `The PDD login server refused this (HTTP STATUS, CODE).` (`unavailable` codes: `The PDD login server is not available now (HTTP STATUS). Try again later.` when it sent no message) |
+| other 4xx/5xx | the code: `all_out` when the server says so; else `unavailable` for HTTP 408, 429 and 5xx whatever the error code (a crash is never a firm no); else the server's error code when it is in the table above; else `refused`. The message is the server's `error.message` as a safe text, else `The PDD login server is not available now (HTTP STATUS). Try again later.` (`unavailable`) or `The PDD login server refused this (HTTP STATUS, CODE).` (CODE = the error code as a safe text, or `no code`) |
 | 2xx, not a JSON object | `bad_reply`: `The PDD login server sent a reply that pdd can not read (HTTP STATUS). Nothing was saved.` |
 
 - A reply body larger than 1 MiB is a `bad_reply`. Each Row and Invite of a
