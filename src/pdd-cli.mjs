@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 0844f3050acb23a08e7504b116191998be01aed5397048d477938b29e8a0d3c1).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: ceaf43620cd6e3699c4db182dab60558a42ae9e49989182a675dbdc271e71d5e).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -357,11 +357,13 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         const commands = contracts ?? await import('./contracts.mjs');
         return await commands.runContracts({ words: plan.local === 'contracts-sync' ? ['sync'] : [], options: { ...plan.options }, cwd }, { env, stdout, stderr });
       } catch (error) { line(stderr, `Local contracts could not be read.${reason(error)}`); return 5; }
+    case 'runtime-save':
+      if (!plan.options['--save-last']) { line(stderr, 'Use pdd run --save-last STORY.'); return 2; }
     case 'runtime-check':
     case 'runtime-try':
       try {
         const runtime = await import('./runtime-client.mjs');
-        return await runtime[plan.local === 'runtime-check' ? 'runCheck' : 'runTry']({ words: [...plan.operands], options: { ...plan.options }, cwd, cache: plan.local === 'runtime-check' }, { stdout, stderr, env });
+        return await runtime[plan.local === 'runtime-check' ? 'runCheck' : plan.local === 'runtime-save' ? 'runSaveLast' : 'runTry']({ words: [...plan.operands], options: { ...plan.options }, cwd, cache: plan.local === 'runtime-check' }, { stdout, stderr, stdin, env });
       } catch (error) {
         line(stderr, `pdd stopped with an internal error. If it sent checks, read them with pdd test --read. Do not send them again.${reason(error)}`);
         return 3;

@@ -1161,6 +1161,27 @@ Refusals, unknown outcomes, stopped sessions and invalid replies throw a plain e
 Return normalized usage alongside the confirmed result (usage.calls and result.report.remaining_calls; unknown when absent/invalid). A refusal carries its known usage on the thrown error for wrappers. Never dispatch again to obtain usage. No wrapper progress or report text may enter a program's stdout; the door adapter owns the separate usage line on stderr. Session budgets and saved worlds belong
 to the runtime. Preserve paused-session refusals; never silently create a new world during a command.
 
+Export `runSaveLast({words, options, cwd}, ports={})` for `pdd run --save-last STORY`.
+Require exactly one Story and only `--save-last`; select its existing test through
+normal discovery and workspace permissions, authenticate, then delegate to
+[Try doors](try-doors.prompt.md) with that test. No session creation, interpreter
+request or prompt execution occurs during saving.
+
+For `runDoorCall` without `descriptor.originalPath`, retain the last confirmed run
+privately for the repository, independently of any Story. Before dispatch,
+invalidate the previous last-run eligibility under the new request ID and snapshot the entry's source
+closure with captureSource, including raw and expanded prompt hashes. The last-run
+record has `state` (`unknown` or `confirmed`); confirmed records contain `descriptor`
+(root, login, prompt, operation, promptHashes and effectivePromptHashes), `id`,
+`input`, `result`, and optional `inputWorld`/`world` from confirmed observations.
+Retain the exact dispatched JSON input, even if the caller later mutates its object.
+An older call completing after a newer invocation must not replace the newer
+last-run record or make an unknown newer outcome saveable.
+Only a confirmed owner GET may make this record saveable. Keep an unknown outcome
+unsaveable. This is the shared-engine recording boundary for the standalone run
+command; adding standalone execution itself belongs to its runner, not this save
+route. Saving must not synthesize a run from a Story or rerun the command.
+
 Export `saveDoorCase(root, saved, options={})` as the existing printable-result native entry to [received-case import](#received-case-import). Obtain target authority from the retained original native association; a supplied path alone is not authority. Keep its explicit isolated option under that same owner.
 
 <a id="native-received-case-outcomes"></a>
@@ -1176,6 +1197,12 @@ ownership wait or publication. Both entries use the same receipt, payload,
 identity, equality and transaction policy. `saveDoorCase` remains synchronous
 with its existing signature and returns only this outcome's `message`, preserving
 all existing printable results.
+
+`saveDoorCaseResult` accepts optional native `options.publicationGuard`, a
+zero-argument callback for a caller's current-source checks. During an apply
+with write ownership, invoke it before preparation and again immediately before
+publication while holding that ownership. If it throws, retain the case pending
+and do not publish the target.
 
 For CLI or HTTP setup every preflight, lint or runtime refusal is a wrapper failure on stderr prefixed `pdd:`
 and exits 125. Argument combinations alone may exit 2. Session records capture hashes of uploaded prompt files
@@ -1421,3 +1448,5 @@ Required context for these new boundaries: [product composition](product-composi
 ## Product presentation capability (#808)
 
 Before a new whole-product upload, read the existing hosted version endpoint and require its service feature product-parts-v1. Missing/unsupported capability refuses with an actionable server-upgrade explanation before upload/model dispatch. Do not retry after silently dropping ownership. Send the composer's product_parts as the admitted separate Try option, include it in retained setup, and preserve it on reopen. Source labels and service feature metadata do not attest deployed engine/UI bytes. Ordinary non-product sessions do not acquire this gate or field.
+
+Before authentication or reading the retained run prompt, validate its complete source closure against workspace authority as well as the selected Story.

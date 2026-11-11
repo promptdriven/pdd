@@ -1,10 +1,11 @@
-// Generated from prompts/cli/try-doors.prompt.md (sha256: 03fbb1ad6f8d45995af8f303b79bbdd3048174b3df7e4d1a6084b34de0491df7).
+// Generated from prompts/cli/try-doors.prompt.md (sha256: f53ffbda052ed92e700bb9466ae56d56413f9294667399f49f38d25ce6817780).
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { accessSync, chmodSync, closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { findTests, gitFiles, readPrompt, captureSource, executableInterfaceText } from './runtime-preflight.mjs';
+import { loadRuntimeWorkspace, requireRuntimePath } from './runtime-workspace.mjs';
 import {lineReader} from './prompt-approve.mjs';
 import { cleanText, tryUsage, tryUsageLine } from './runtime-output.mjs';
 import { runDoorCall, saveDoorCaseResult, acquireCaseWriteOwnership } from './runtime-client.mjs';
@@ -188,39 +189,71 @@ export async function runShim(descriptorPath, argv, givenPorts = {}) {
   }
 }
 
-export async function saveLast({ root, store, identity, ports }) {
-  const pointer = store.repo(root).last_door;
-  if (!pointer) fail('No last command is available. Run a command through the Try command first.');
-  regular(pointer.descriptor); regular(pointer.last);
-  const d = read(pointer.descriptor), last = read(pointer.last);
-  if (d.root !== root || identity.login !== d.login) fail(`This Try belongs to ${d.login}. Run: gh auth switch -u ${d.login}`);
-  if (last.state !== 'confirmed') fail('The last command result is unknown; there is no confirmed output to save.');
-  if (last.saved) { ports.stdout.write('The last command is already saved.\n'); return 0; }
-  if (hash(readFileSync(join(root, d.storyPath))) !== d.storyHash || Object.entries(d.promptHashes ?? { [d.prompt]: d.promptHash }).some(([path, expected]) => hash(readFileSync(join(root, path))) !== expected)) fail('The Story or prompt changed since this Try. Open a new Try and run the command again.');
-  checkEffectivePrompts(root,d.promptHashes ?? {[d.prompt]:d.promptHash},d.effectivePromptHashes);
-  const step = { step_id: `try-${last.id}`, entry_path: d.prompt, operation: d.operation, input: last.input,
-    checks: [{ criterion_id: d.criterion, target: 'result', path: '', op: 'equals', value: last.result }] };
-  captureSource(root,{tests:[d.originalPath]});
-  const saved={ id: last.id, name: 'Recorded terminal command', story_path: d.storyPath, original_path: d.originalPath,
-    test: { schema_version: 'prompt-runtime.program-scenario.v1', story_path: d.storyPath, criteria: d.criteria, ...(Object.hasOwn(last,'inputWorld')?{initial_world:last.inputWorld}:{}), steps: [step] } };
-  const retained=saveDoorCaseResult(root,saved,{signal:ports.signal,env:ports.env});
-  if(retained.kind==='failure')fail(retained.message);
-  const refuse=(outcome,error)=>{ports.stderr.write(`pdd: ${error?cleanText(error)+'. ':''}${outcome.message}\n`);return WRAPPER_EXIT;};
-  let outcome=retained;
-  if(retained.result.state==='pending'){
-    let lease;
-    try{
-      if(ports.caseHandoff){const handoff=await ports.caseHandoff({root,testPath:d.originalPath,signal:ports.signal});if(handoff)lease=await acquireCaseWriteOwnership({root,testPath:d.originalPath,handoff,signal:ports.signal},{env:ports.env});}
-      else if(ports.interactive){ports.stdout.write(`Close the editor for ${d.originalPath}. Hand over this closed file for the pending case apply? y/N\n`);const answers=lineReader(ports.stdin);try{if(/^y(?:es)?$/i.test((await answers.ask()).trim()))lease=await acquireCaseWriteOwnership({root,testPath:d.originalPath,handoff:{kind:'closed-editor',testPath:d.originalPath},signal:ports.signal},{env:ports.env});}finally{answers.close();}}
-      if(lease)outcome=saveDoorCaseResult(root,saved,{writeOwnership:lease,signal:ports.signal,env:ports.env});
-    }catch(error){return refuse(retained,error.message??error);}
-    finally{lease?.release();}
+export async function saveLast({ root, store, identity, ports, test }) {
+  const repo = store.repo(root), pointer = test ? null : repo.last_door;
+  if (!test && !pointer) fail('No last command is available. Run a command through the Try command first.');
+  if (pointer) { regular(pointer.descriptor); regular(pointer.last); }
+  const last = test ? repo.last_run : read(pointer.last);
+  const d = test ? last?.descriptor : read(pointer.descriptor);
+  if (last?.state !== 'confirmed') fail('The last command result is unknown; there is no confirmed output to save.');
+  if (!d || d.root !== root || identity.login !== d.login) fail(`This Try belongs to ${d?.login ?? 'another owner'}. Run: gh auth switch -u ${d?.login ?? 'OWNER'}`);
+  if (test ? last.saved?.includes(test.path) : last.saved) { ports.stdout.write('The last command is already saved.\n'); return 0; }
+  const originalPath = test?.path ?? d.originalPath, storyPath = test?.doc.story_path ?? d.storyPath;
+  const checkFresh = () => {
+    const policy = loadRuntimeWorkspace({root});
+    requireRuntimePath(policy, {path: originalPath, role: 'original test'});
+    requireRuntimePath(policy, {path: storyPath, role: 'original Story'});
+    for (const path of new Set([d.prompt, ...Object.keys(d.promptHashes ?? {}), ...Object.keys(d.effectivePromptHashes ?? {})].filter(Boolean))) requireRuntimePath(policy, {path, role: 'recorded prompt'});
+    captureSource(root, {tests: [d.prompt]});
+    if ((!test && hash(readFileSync(join(root, d.storyPath))) !== d.storyHash) || Object.entries(d.promptHashes ?? { [d.prompt]: d.promptHash }).some(([path, expected]) => hash(readFileSync(join(root, path))) !== expected)) fail('The Story or prompt changed since this Try. Open a new Try and run the command again.');
+    checkEffectivePrompts(root,d.promptHashes ?? {[d.prompt]:d.promptHash},d.effectivePromptHashes);
+  };
+  checkFresh();
+  const original = test?.doc ?? read(join(root, originalPath));
+  const tied = test ? [...new Set(original.steps.filter(step => step.entry_path === d.prompt && step.operation === d.operation).flatMap(step => (step.checks ?? []).map(check => check.criterion_id)))] : [d.criterion];
+  if (tied.length !== 1 || !original.criteria.some(item => item.id === tied[0])) fail('The Story must associate exactly one criterion with this run entry. Add the case and the right expected value by hand.');
+  if (!last.inputWorld || typeof last.inputWorld !== 'object' || Array.isArray(last.inputWorld)) fail('The interpreter did not provide confirmed data before this run. Add the input and the right expected value by hand.');
+  const manual = `Nothing added. To write the right expected value by hand, edit ${originalPath}: add the input to steps and the expected value to checks (target: "result", op: "equals", value: your correct answer).\n`;
+  ports.stdout.write(`Input:\n${JSON.stringify(last.input, null, 2)}\nData before:\n${JSON.stringify(last.inputWorld, null, 2)}\nOutput:\n${JSON.stringify(last.result, null, 2)}\n`);
+  if (!ports.stdin?.isTTY || !ports.stdout?.isTTY) {
+    ports.stderr.write('A person must answer "Is this answer right? [y/N]" in a terminal. Nothing added.\n');
+    return WRAPPER_EXIT;
   }
-  if(outcome.kind==='failure')fail(outcome.message);
-  if(outcome.result.state!=='committed')return refuse(outcome);
-  writePrivate(pointer.last, { ...last, saved: true });
-  ports.stdout.write(`${outcome.message}\n`);
-  if (last.inputWorld && Object.keys(last.inputWorld).length) ports.stdout.write('This records observed output. Review the saved-data setup before replaying this case.\n');
-  return 0;
+  const answers = lineReader(ports.stdin);
+  try {
+    ports.stdout.write('Is this answer right? [y/N]\n');
+    if (!/^y$/i.test((await answers.ask()).trim())) { ports.stdout.write(manual); return 0; }
+    checkFresh();
+    const step = { step_id: `try-${last.id}`, entry_path: d.prompt, operation: d.operation, input: last.input,
+      checks: [{ criterion_id: tied[0], target: 'result', path: '', op: 'equals', value: last.result }] };
+    captureSource(root,{tests:[originalPath]});
+    const saved={ id: last.id, name: 'Recorded terminal command', story_path: storyPath, original_path: originalPath,
+      test: { schema_version: 'prompt-runtime.program-scenario.v1', story_path: storyPath, criteria: original.criteria,
+        initial_world: last.inputWorld, ...(Object.keys(original.simulation ?? {}).length ? {simulation: original.simulation} : {}), ...(original.context?.length ? {context: original.context} : {}), steps: [step] } };
+    const retained=saveDoorCaseResult(root,saved,{signal:ports.signal,env:ports.env});
+    if(retained.kind==='failure')fail(retained.message);
+    const refuse=(outcome,error)=>{ports.stderr.write(`pdd: ${error?cleanText(error)+'. ':''}${outcome.message}\n`);return WRAPPER_EXIT;};
+    let outcome=retained;
+    if(retained.result.state==='pending'){
+      let lease;
+      try{
+        if(ports.caseHandoff){const handoff=await ports.caseHandoff({root,testPath:originalPath,signal:ports.signal});if(handoff)lease=await acquireCaseWriteOwnership({root,testPath:originalPath,handoff,signal:ports.signal},{env:ports.env});}
+        else {
+          ports.stdout.write(`Close the editor for ${originalPath}. Hand over this closed file for the pending case apply? y/N\n`);
+          if(/^y(?:es)?$/i.test((await answers.ask()).trim()))lease=await acquireCaseWriteOwnership({root,testPath:originalPath,handoff:{kind:'closed-editor',testPath:originalPath},signal:ports.signal},{env:ports.env});
+        }
+        if(lease) { checkFresh(); outcome=saveDoorCaseResult(root,saved,{writeOwnership:lease,signal:ports.signal,env:ports.env,publicationGuard:checkFresh}); }
+      }catch(error){return refuse(retained,error.message??error);}
+      finally{lease?.release();}
+    }
+    if(outcome.kind==='failure')fail(outcome.message);
+    if(outcome.result.state!=='committed')return refuse(outcome);
+    if (test) {
+      const current = store.repo(root);
+      if (current.last_run?.id === last.id) store.saveRepo(root, { ...current, last_run: { ...current.last_run, saved: [...(current.last_run.saved ?? []), originalPath] } });
+    } else writePrivate(pointer.last, { ...last, saved: true });
+    const actualStep = outcome.result.steps?.[0] ?? step.step_id;
+    ports.stdout.write(`Added to ${originalPath} as step ${actualStep}. Review the data before this step, then run: pdd test ${test?.story ?? basename(storyPath, '.md')}\n`);
+    return 0;
+  } finally { answers.close(); }
 }
-

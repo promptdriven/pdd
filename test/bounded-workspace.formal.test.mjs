@@ -1,3 +1,4 @@
+import {Readable} from 'node:stream';
 import './helpers/test-home.mjs';
 // Independent finite checks derived from the six issue-2781 Stories' Rules to check.
 // These domains are synthetic; enumeration establishes only the bounds stated below.
@@ -321,8 +322,8 @@ for (const state of ['paused', 'unknown']) test(`FORMAL migration default descri
   const originals = [oldRepo, descriptor, last].map(path => [path, fs.readFileSync(path)]);
   const result = await migrateRuntimeWorkspace({root: f.root, projectionRoot: f.old.root, mappings: f.mappings, write: true},
     {env: f.env, evidencePorts: {stateDir: f.workflowState}, handoff: async ({testPath}) => closed(testPath)});
-  const stdout = stream(), stderr = stream(); let auth = 0, network = 0;
-  const code = await runTry({cwd: f.root, options: {'--save-last': true}}, {env: f.env, stdout, stderr,
+  const stdout = stream(), stderr = stream(); stdout.isTTY = true; let auth = 0, network = 0;
+  const code = await runTry({cwd: f.root, options: {'--save-last': true}}, {env: f.env, stdout, stderr, stdin: Object.assign(Readable.from(['y\n']), {isTTY:true}),
     gh(args) { auth++; return {status: 0, stdout: args[0] === 'auth' ? 'SYNTHETIC-NOT-A-CREDENTIAL' : 'owner 1'}; },
     fetch() { network++; throw Error('migration/save cannot dispatch'); }, caseHandoff: async ({testPath}) => closed(testPath)});
   for (const [path, bytes] of originals) assert.deepEqual(fs.readFileSync(path), bytes, 'original receipt/descriptor bytes');
