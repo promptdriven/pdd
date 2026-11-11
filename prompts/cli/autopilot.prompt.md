@@ -37,7 +37,7 @@ Actions outside the stated set, invalid mode operands and missing or blank names
 
 ```json
 {
-  "status": "approved",
+  "status": "draft",
   "entries": [
     {
       "operation": "runAutopilot",
@@ -335,7 +335,7 @@ Actions outside the stated set, invalid mode operands and missing or blank names
     "max_model_calls": 6
   },
   "conventions": [],
-  "prose_sha256":"27a02e460e59e56b918e6d961f9c92c047a2b11910787e49afa34e5b045da782"
+  "prose_sha256":"ff8929dbe22ab5e36cfbadfaaa4cc7d970a6eaf0fefdb69979443fa9d644178a"
 }
 ```
 </details>
