@@ -1,0 +1,170 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/workflow-expected-gate.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Approve, changes, cancel and open accept an expected gate ID or step. A matching expectation preserves the action's existing behavior."
+    },
+    {
+      "id": "AC2",
+      "text": "A mismatch refuses with exit code 3 and names the current gate and step, including when either is absent. If both expectations are supplied, both must match."
+    },
+    {
+      "id": "AC3",
+      "text": "A refusal leaves the run state, approvals, chat and files unchanged, including for a request to open an old area or a new chat."
+    },
+    {
+      "id": "AC4",
+      "text": "Without an expectation these actions behave as before. The documented exit code lets a caller recognize a stale action."
+    }
+  ],
+  "initial_world": {
+    "lookups": 0
+  },
+  "simulation": {
+    "runs.resolveRun": {
+      "action": "fixture.lookup",
+      "world_pointer": "/lookups",
+      "cases": [
+        {
+          "args": {
+            "ref": "17",
+            "cwd": "/repo"
+          },
+          "call_index": 1,
+          "result": {
+            "json": "{\"run\":{\"area\":0,\"areas\":[{\"name\":\"code\",\"steps\":[\"build\"]}],\"done\":{},\"gate\":{\"id\":\"gate-new\"},\"state\":\"running\",\"repo\":\"example/project\",\"number\":17,\"chats\":[]}}"
+          }
+        },
+        {
+          "args": {
+            "ref": "17",
+            "cwd": "/repo"
+          },
+          "call_index": 2,
+          "result": {
+            "json": "{\"run\":{\"area\":0,\"areas\":[{\"name\":\"code\",\"steps\":[\"build\"]}],\"done\":{},\"gate\":{\"id\":\"gate-new\"},\"state\":\"running\",\"repo\":\"example/project\",\"number\":17,\"chats\":[]}}"
+          }
+        },
+        {
+          "args": {
+            "ref": "17",
+            "cwd": "/repo"
+          },
+          "call_index": 3,
+          "result": {
+            "json": "{\"run\":{\"area\":0,\"areas\":[{\"name\":\"code\",\"steps\":[\"build\"]}],\"done\":{},\"gate\":{\"id\":\"gate-new\"},\"state\":\"running\",\"repo\":\"example/project\",\"number\":17,\"chats\":[]}}"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "stale-change",
+      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "operation": "changeRun",
+      "input": {
+        "ref": "17",
+        "cwd": "/repo",
+        "text": "Fix it",
+        "expectGate": "gate-old"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 3
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/message",
+          "op": "equals",
+          "value": "Refused: the run moved. Current gate: gate-new; current step: build."
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "world",
+          "path": "/lookups",
+          "op": "equals",
+          "value": 1
+        }
+      ]
+    },
+    {
+      "step_id": "matching",
+      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "operation": "changeRun",
+      "input": {
+        "ref": "17",
+        "cwd": "/repo",
+        "text": "Fix it",
+        "expectGate": "gate-new",
+        "expectStep": "build"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/message",
+          "op": "equals",
+          "value": "The code area has no chat. Start it: pdd workflow open 17"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/lookups",
+          "op": "equals",
+          "value": 2
+        }
+      ]
+    },
+    {
+      "step_id": "unguarded",
+      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "operation": "changeRun",
+      "input": {
+        "ref": "17",
+        "cwd": "/repo",
+        "text": "Fix it"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/message",
+          "op": "equals",
+          "value": "The code area has no chat. Start it: pdd workflow open 17"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "world",
+          "path": "/lookups",
+          "op": "equals",
+          "value": 3
+        }
+      ]
+    }
+  ]
+}

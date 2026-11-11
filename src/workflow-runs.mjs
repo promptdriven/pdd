@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runs.prompt.md (sha256: 15c2ed51f64c3123dc8edcb6e87084beb70f34ffa94ccf74298b0114a67af0ed).
+// Generated from prompts/cli/workflow-runs.prompt.md (sha256: 2f7a8216a4171f3a7e30be5c262aa527d99353c9cedf76603143aad84164c705).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import * as nativeRunFiles from 'node:fs';
@@ -196,6 +196,14 @@ function claimRun(runDir, fs,ports) {
     Atomics.wait(pauseBuffer,0,0,10);
   }
 }
+export function acquireOrdinaryRunOwnership(runDir, ports = {}) {
+  try {
+    const release = (ports.acquireRunOwnership ?? (directory => claimRun(directory, ownershipFiles(ports), ports)))(runDir);
+    if (typeof release !== 'function') throw Error('Run ownership was not acquired');
+    return release;
+  } catch (error) { throw saveError(error); }
+}
+
 function ownedRun(runDir, ports, action, {create=false}={}) {
   const fs={...nativeRunFiles,...ports.runFiles};
   let release;
@@ -288,6 +296,16 @@ export function updateRun(runDir, update, ports = {}) {
   });
   deliverMetrics(committed,ports);
   return indexed(committed,ports);
+}
+
+// Invoke the guarded submission while ordinary progress is excluded, but never
+// retain ownership while waiting for the transport's asynchronous result.
+export function inspectRunAndStart(runDir, action, ports = {}) {
+  return ownedRun(runDir, ports, fs => {
+    const run = JSON.parse(fs.readFileSync(join(runDir, 'status.json'), 'utf8'));
+    if (!object(run) || run.v !== 1 || run.runDir !== runDir) throw Error('The existing run record is missing, unreadable or invalid');
+    return action(run);
+  });
 }
 
 // Persist observations without making a polling dashboard count as workflow activity.

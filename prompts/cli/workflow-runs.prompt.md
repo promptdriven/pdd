@@ -20,6 +20,19 @@ reloads and area transitions; storage never infers or changes policy from PR sta
 
 ## Concurrent record updates
 
+Module function `acquireOrdinaryRunOwnership(runDir, ports = {})` synchronously
+acquires the same ordinary ownership used by record updates and returns its
+release function. An injected `ports.acquireRunOwnership` supplies that acquisition
+when present. The caller must release on every exit. While held, other ordinary
+owners cannot mutate the run. A caller may explicitly pass a scoped acquisition
+port to its own nested updates that returns a no-op release while its outer
+ownership is held; that port must not be shared with other commands or used after
+release. Acquisition failures propagate. This supports a guarded sequence of
+consequential effects without allowing workflow progress between its decision and
+completion; the existing `inspectRunAndStart` remains synchronous and releases
+ownership when its callback returns.
+
+
 Module function `updateRun(runDir, update, ports = {})` synchronously returns the
 committed record. `update` is a synchronous callback receiving the latest durable
 record and returning the record to save. Reading that record, applying the
@@ -48,12 +61,23 @@ and perform only local state changes. A missing or unreadable existing record,
 callback failure or failed publication fails finitely without claiming a commit;
 never create an existing run from a stale fallback. Before publication, retain the
 previous durable bytes on failure. Always release only this invocation's ownership.
-Ownership covers no external Git, GitHub, Herdr or model effects, readiness waits,
+Ordinary record updates cover no external Git, GitHub, Herdr or model effects, readiness waits,
 journal claim acquisition or nested ordinary save. Storage/ownership effects have
 injectable native boundaries with production defaults. Contention fails with a
 finite diagnostic naming the ownership path and available owner details, with one retry instruction. Ordinary acquisition while a delivery
 journal claim is held must wait less than its 250 ms claim budget, never block the
 main thread there for five seconds. Retain journal-before-ordinary ordering.
+
+For an expected-state changes submission, module function
+`inspectRunAndStart(runDir, action, ports = {})` uses the same ownership and
+failure rules to read the existing version 1 record at `runDir`, validates that
+the saved `runDir` matches, and synchronously calls `action(record)`. It returns
+the callback's value unchanged; callback errors follow the ordinary ownership
+failure rules. The action may start the single validated Herdr prompt and return
+its promise. Release ownership immediately after the action returns, before
+awaiting that promise. This is the submission decision; it performs no run write
+or journal claim acquisition. Other external effects remain outside ordinary
+record updates; the explicitly acquired scope above may cover a guarded effect sequence.
 
 `writeRun(record, ports)` retains its synchronous signature, supplied-object
 mutation and returned record, and its explicit whole-record save capability. Its
