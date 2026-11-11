@@ -200,6 +200,10 @@ issue of another repository returns exit 2): `Marked N issue(s) with pdd:autopil
 (the run lock, worker and check-custody guard, chat cleanup and local allocation result stay with the runner), and
 returns its result unchanged.
 
+**Audit** (`pdd autopilot audit RUN PR`) resolves the saved run with `resolveRun` and calls `auditMerge` of the
+[audit owner](autopilot-audit.prompt.md) with that run and PR, through this launcher's counted process port (purpose
+`audit`), and returns its result. The core engine starts no audit by itself; #3182 plans to run it after core merges.
+
 **Report** lists the machine's local report drafts (`FINGERPRINT: title; seen N time(s), last TIME`, then `Send one with
 pdd autopilot report send FINGERPRINT.`, or `No local Autopilot report drafts.`); `report send FINGERPRINT` sends one
 through `sendReportDraft` of the [report owner](autopilot-reports.prompt.md) with the counted `gh` port. It needs no
@@ -226,6 +230,8 @@ the saved control revision, so a tick or start that read the old revision does n
 - [Autopilot core](autopilot-core.prompt.md), [Autopilot reports](autopilot-reports.prompt.md) and
   [intake cards](autopilot-intake.prompt.md): required native generation and verification context for the core tick,
   core status, the report and intake commands.
+- [Post-merge audit](autopilot-audit.prompt.md): required native generation and verification context for the audit
+  command.
 - [The move from the full engine](autopilot-retire.prompt.md): required native generation and verification context
   for the move steps, the journal and the refusal line.
 - [Doctor](autopilot-doctor.prompt.md): required native generation and verification context for first-start checks

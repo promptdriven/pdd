@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-job.prompt.md (sha256: d0111766b8918f4631e21ff6ef4f69ec4bc10d0f53ab9c9a3b8d76cdd7452182).
+// Generated from prompts/cli/agent-job.prompt.md (sha256: 281bfdfb7e1ac873d904b601ee76ef2f6c7f24d2366b833f3ab024641012dae9).
 import { spawn, spawnSync } from 'node:child_process';
 import { closeSync, openSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';

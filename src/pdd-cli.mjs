@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 9617e4aa319f99a98e26d0536b6236d8365fcaa0023e33b6b09ac71d1b6fe4eb).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 2bbaa158f1454bd52cc0e43a6ea50b041135ad8e6f3ef7d4fb62125de134a1ba).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -118,7 +118,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         line(result.exitCode === 0 ? stdout : stderr, result.message); return result.exitCode;
       } catch { line(stderr, 'Regression scan failed.'); return 1; }
     }
-    case 'autopilot-doctor': case 'autopilot-start': case 'autopilot-stop': case 'autopilot-status': case 'autopilot-add': case 'autopilot-release': case 'autopilot-report': case 'autopilot-intake': {
+    case 'autopilot-doctor': case 'autopilot-audit': case 'autopilot-start': case 'autopilot-stop': case 'autopilot-status': case 'autopilot-add': case 'autopilot-release': case 'autopilot-report': case 'autopilot-intake': {
       try {
         const module = autopilotLauncher ?? await import('./autopilot-launcher.mjs');
         const result = await module.runAutopilotLauncher({ command: plan.local.slice(10), issues: [...plan.operands], runs: plan.options['--runs'], checks: plan.options['--checks'], ...(plan.options['--engine'] ? { engine: plan.options['--engine'] } : {}), ...(plan.options['--label'] ? { label: plan.options['--label'] } : {}), ...(plan.options['--mode'] ? { mode: plan.options['--mode'] } : {}), ...(plan.options['--report'] ? { report: plan.options['--report'] } : {}), ...(plan.options['--decisions'] ? { decisions: plan.options['--decisions'] } : {}), ...(plan.options['--intake'] ? { intake: plan.options['--intake'] } : {}), all: plan.options['--all'] === true, ...(plan.options['--json'] === true ? { json: true } : {}), cwd, packageRoot, env }, autopilotLauncherPorts);

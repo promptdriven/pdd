@@ -181,6 +181,7 @@ Autopilot opens no chat and needs no Herdr.
 | `pdd autopilot doctor` | Read-only prerequisite checks, one line per item. A WARN or FAIL line also gives a fix command. No GitHub writes or AI calls. Exit 1 for a required failure, 0 when only warnings remain |
 | `pdd autopilot start [--runs N] [--checks N] [--label NAME] [--mode auto\|observe\|off] [--report file\|draft\|off] [--decisions ask\|decide] [--intake off\|shadow]` | Run doctor, check the sign-ins, start the user timer and run the first tick now. The timer runs a tick every 10 minutes. `--label NAME` sets the opt-in label, for example `pdd:autopilot`: Autopilot takes only the issues with this label. `--mode`, `--report`, `--decisions` and `--intake` set this machine's mode, report mode, [decision mode](#core-engine) and [intake mode](#intake-cards-shadow) for this repo. These machine values win over `pdd.json`, and a later start without them keeps them. The report mode is `draft` unless you choose `--report file`. `--runs N` and `--checks N` save this machine's run and heavy-check limits; a start without them removes them |
 | `pdd autopilot stop` | Save this repo as disabled on this machine, stop its timer and its intake card jobs, and let the current step finish |
+| `pdd autopilot audit RUN PR` | Audit a confirmed automatic merge once with a fresh configured agent. Save OK, CONCERN or BAD and the separate revert recommendation with the run. Post the evidence once on the issue. BAD opens a revert PR only when recommended; otherwise it keeps the merge and reopens the issue with the missing parts. One decision alert states the recommendation and choices. Unknown external outcomes require inspection before any retry. |
 | `pdd autopilot status [--all] [--json]` | Show this machine's Autopilot for this repo: enabled or disabled, the timer, the next tick, the jobs, an [alert](#alerts) that was not delivered and the last tick. `--all` lists every repository with Autopilot on this machine, from any folder. `--json` prints the [local cost report](#local-issue-costs) |
 | `pdd autopilot add N...` | Create the `pdd:autopilot` label when it is missing and add it to each named issue of this repository. Use it to choose the issues that Autopilot may take |
 | `pdd autopilot release ISSUE` | Release this machine's claim and remove `pdd:working` and `pdd:stuck`; keep the run folder, branch and PRs |
@@ -1434,6 +1435,50 @@ most 40 a tick. The cards cover every
 open issue in scope: unlike the core, they do not skip issues that cool down after a
 no-result or whose blocker is named only in the text. `pdd autopilot intake` prints
 the cards and today's changes; `--json` prints them as JSON.
+
+
+## Post-merge audit settings
+
+`pdd autopilot audit RUN PR` audits one merge of a saved workflow run. Autopilot does not
+call it by itself: the core engine starts no audit after its merges. Its fixed
+brief requires before/after reproduction, scope, Story quality, old-code tests,
+real check evidence, unchanged checks and actual merge gates. Audit files remain
+in shared durable custody under the machine workflow state root, keyed by
+repository, run attempt, PR and merge commit. The run's `audits/` folder holds
+evidence copies. Every clone reads shared results and effect reservations under
+the repository lock. An interrupted auditor is unknown, never a pass.
+
+Set `autopilot.audit` to `false` in this repository's `pdd.json` to disable audits.
+The default is on. Codex and Claude auditors start a fresh native session using
+the run's configured account and model. Unsupported agents remain pending.
+Auditor sessions count in the issue cost ledger and the provider's account
+limits. Optional `autopilot.auditTokenLimit` sets a nonnegative measured token
+cap for this repository's last day; unavailable usage holds a capped audit. A
+missing, damaged or full machine run index also holds it because cost coverage
+is unknown.
+Codex limit reads that are unknown or reached hold without a paid call.
+
+The saved audit keeps `result.verdict` and Boolean `result.revert` separately.
+BAD with a revert recommendation creates a unique revert branch and a PR against
+the saved base. It never pushes directly to that base or merges the revert. A
+revert conflict records an unknown follow-up and alerts for help. BAD without a
+revert recommendation keeps the merge and reopens or keeps the original issue
+open. One audit comment lists the missing parts from the saved summary and
+evidence. It creates no revert PR or follow-up issue. Both BAD forms send one
+decision alert that states the auditor's recommendation. When it recommends no
+revert, the default choice is to keep the merge and finish the rest. The alert
+also offers `git revert -m 1 MERGE_SHA` on a review branch and a PR against the
+saved base as the other choice. The same command accepts a merge commit or a
+single-parent squash commit. Two CONCERN verdicts of the same category
+from distinct PRs create one process issue in the repository. Publication
+attempts are saved before sending. An uncertain reopen, comment, PR, process issue or
+alert is never blindly repeated after a restart. Audit admission and concern
+records share the machine workflow state root by repository identity, including
+independent local clones. Every indexed repository record must validate and appear
+in run discovery before capped admission. Damaged or unreadable earlier audit
+evidence, including an unreadable audit folder, holds before another auditor
+launch. Unknown audit costs retain an explicit coverage marker. Separate machines
+retain separate local cost ledgers.
 
 ## Explain resource bindings
 

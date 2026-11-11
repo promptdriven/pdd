@@ -34,6 +34,7 @@ The rules for prompts are in `guide.md`. Use them for this review.
 - Read the full diff. Sum up the approved behavior, the tests that ran and the limits that remain.
 - A config or metadata file (`package.json`, a lock file, CI settings) needs no prompt and no Story. Never ask for a new prompt for it. Ask for a test only when the change alters a result that users see.
 - Never invent a PR link or say that a PR merged when it did not.
+- For a full suite or a build, use the shared machine queue: run the full-suite command with `pdd workflow suite --command COMMAND`. Wait for its result. Never start a second copy at the same time.
 
 ## Behavioral tests
 

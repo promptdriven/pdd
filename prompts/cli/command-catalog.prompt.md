@@ -320,6 +320,12 @@ no operands and an optional flag `--json`. Form: `pdd autopilot intake [--json]`
 (Print this machine's local intake cards for this repo (shadow mode), the would-pick
 list and today's changes; no AI call or GitHub write.).
 
+## Post-merge audit route
+
+Catalog `autopilot.audit` with prefix `autopilot audit`, local `autopilot-audit`,
+required text operands RUN and PR, no options. Form: `pdd autopilot audit RUN PR`.
+Description: Audit an automatic merge once with a fresh agent and save its verdict.
+
 ## Finished chat maintenance
 
 Include public local route `workflow.tidy`, prefix `workflow tidy`, no operands, optional flag `--dry-run`, and help form `pdd workflow tidy [--dry-run]`. It closes safely finished chats or reports eligible tabs without changes.

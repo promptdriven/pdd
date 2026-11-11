@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: ff4e6474f46bd641de558918981605c70cd532c0b94165545e16aa7cefd5b17a).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: d8c4504b382d8bea4310fd7c8fc65366b8274b35fb59bf64592c9db70c2c38bb).
 import {runAutopilotDoctor, resolveAutopilotAgent} from './autopilot-doctor.mjs';
 import {releaseRunClaim, cancelRun, acquireRunLock} from './workflow-runner.mjs';
 import { releaseCheckCapacity } from './test-suite-queue.mjs';
@@ -13,7 +13,8 @@ import { fileURLToPath } from 'node:url';
 import { runAgentProcess } from './agent-adapters.mjs';
 import { pathDiagnostic } from './path-diagnostic.mjs';
 import { runAutopilot } from './autopilot.mjs';
-import { allRuns, updateRunCosts, listRuns } from './workflow-runs.mjs';
+import { allRuns, updateRunCosts, listRuns, resolveRun } from './workflow-runs.mjs';
+import { auditMerge } from './autopilot-audit.mjs';
 import { releaseIssueClaim } from './workflow-worktree.mjs';
 import { samePath } from './workflow-herdr-layout.mjs';
 import { alertStatusLine, runAutopilotAlerts } from './autopilot-alerts.mjs';
@@ -604,6 +605,13 @@ export async function runAutopilotLauncher(input, ports = {}) {
       if (issues.length) return { exitCode: 2, message: 'Use pdd autopilot report, or pdd autopilot report send FINGERPRINT.' };
       const drafts = listReportDrafts({ root });
       return ok(drafts.length ? [...drafts.map(d => `${d.fingerprint}: ${d.title}; seen ${d.count} time(s), last ${new Date(d.lastAt).toISOString()}`), 'Send one with pdd autopilot report send FINGERPRINT.'].join('\n') : 'No local Autopilot report drafts.');
+    }
+    // The post-merge audit of a saved run's merge (kept for #3182: the core will reuse it after its own merges).
+    if (command === 'audit') {
+      const found = await resolveRun(issues[0], {cwd:input.cwd}, {...ports,env:p.env,execFile:async(file,args,options)=>({stdout:await p.checked(file,args,options)})});
+      if(found.error) return bad(found.error);
+      state.repo=found.run.repo;
+      return auditMerge({run:found.run,pr:issues[1]},{...ports,env:p.env,execFile:(file,args,options)=>p.execute(file,args,{...options,purpose:'audit'})});
     }
     if (command === 'status' && input.json) return ok(JSON.stringify(await localCosts(input, ports), null, 2));
     if (command === 'status' && input.all) {
