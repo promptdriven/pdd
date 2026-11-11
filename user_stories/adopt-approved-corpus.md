@@ -18,6 +18,10 @@ prompts and a nonempty unique list of at most 200 canonical scenario paths, and
 explicitly asserts human authorization covering that complete declared inventory
 and required prompt context. Both selected approved/current inventories must exactly
 match the declaration; unrelated fixture scenarios outside it do not block adoption.
+After a snapshot is available, an empty or duplicate declared scenario list is
+`invalid-approval` before comparing the independently selected inventories, even if
+those inventories are empty, duplicate or unequal. With a valid declaration, an
+empty, duplicate or unequal selected inventory is `inventory-mismatch`.
 The approved commit must be an ancestor of the selected base, and of current HEAD
 on subsequent validation. Even whitespace or newline changes
 invalidate reused authorization. Missing or malformed declarations fail closed.

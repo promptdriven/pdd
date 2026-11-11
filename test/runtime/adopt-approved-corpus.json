@@ -198,7 +198,8 @@
         {"criterion_id": "AC3", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"},
         {"criterion_id": "AC3", "target": "result", "path": "/reason", "op": "equals", "value": "invalid-approval"},
         {"criterion_id": "AC3", "target": "result", "path": "/cause", "op": "contains", "value": "duplicate"},
-        {"criterion_id": "AC3", "target": "result", "path": "/cause", "op": "contains", "value": "tests/one.json"}
+        {"criterion_id": "AC3", "target": "result", "path": "/cause", "op": "contains", "value": "tests/one.json"},
+        {"criterion_id": "AC3", "target": "result", "path": "/paths", "op": "equals", "value": []}
       ]
     },
     {
@@ -208,7 +209,10 @@
       "input": {"root": "/synthetic/repo", "declarationPath": "empty-declaration.json"},
       "checks": [
         {"criterion_id": "AC3", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"},
-        {"criterion_id": "AC3", "target": "result", "path": "/reason", "op": "equals", "value": "invalid-approval"}
+        {"criterion_id": "AC3", "target": "result", "path": "/reason", "op": "equals", "value": "invalid-approval"},
+        {"criterion_id": "AC3", "target": "result", "path": "/cause", "op": "contains", "value": "scenarios"},
+        {"criterion_id": "AC3", "target": "result", "path": "/cause", "op": "contains", "value": "nonempty"},
+        {"criterion_id": "AC3", "target": "result", "path": "/paths", "op": "equals", "value": []}
       ]
     },
     {"step_id": "over-limit-declaration", "entry_path": "prompts/cli/workflow-replay.prompt.md", "operation": "adoptReplayCorpus", "input": {"root": "/synthetic/repo", "declarationPath": "over-limit-declaration.json"}, "checks": [{"criterion_id": "AC3", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"}, {"criterion_id": "AC3", "target": "result", "path": "/reason", "op": "equals", "value": "invalid-approval"}, {"criterion_id": "AC3", "target": "result", "path": "/cause", "op": "contains", "value": "201"}, {"criterion_id": "AC3", "target": "result", "path": "/cause", "op": "contains", "value": "200"}]},

@@ -164,13 +164,16 @@ noncanonical paths name the path and canonical-path problem (for example
 must still be sanitized. Runtime declaration transport permits malformed scenario
 lists so this module, rather than schema admission, owns their diagnosis.
 
-Validate declaration version/types, nonempty unique prompt and scenario paths and assertion
-fields; malformed declarations block as invalid-approval. Require 64 lowercase hex
-SHA256 values and unique context paths as well as unique vector paths; malformed
-snapshot facts block as unavailable. Compare declaration repository/commit to resolved source first; foreign identity
-returns `blocked/foreign-source`. Missing/invalid assertion returns
-`blocked/invalid-approval`. Empty, duplicate or unequal inventories return
-`blocked/inventory-mismatch`; unequal bytes or check identities return
+After an available snapshot, validate declaration version/types, nonempty unique prompt
+and scenario paths and assertion fields first. A malformed declaration returns
+`blocked/invalid-approval`, including an empty or duplicate scenario list even when
+the independently selected approved/current vector rows are empty, duplicate or
+unequal. Then compare declaration repository/commit to resolved source; foreign
+identity returns `blocked/foreign-source`. Validate ancestry and snapshot facts as
+described above. With a valid declaration, empty, duplicate or unequal selected
+vector inventories return `blocked/inventory-mismatch`. Require 64 lowercase hex
+SHA256 values and unique context paths; malformed snapshot facts block as unavailable.
+Unequal bytes or check identities return
 `blocked/content-mismatch`. Successful selection returns `adopted`, empty reason,
 sorted scenario `paths` and provenance `{repository,commit,reference,asserted_by,
 trust:"external-assertion-unverified",declaration_sha256,prompts,scenarios}`. Blocked selection returns no paths, a cleaned `cause` (empty when none), and
@@ -380,8 +383,8 @@ A present base `pdd.json` must be a regular readable blob within the 10 MiB read
 
 ```json
 {
-  "status": "approved",
-  "prose_sha256": "7e396a88955169b5f1efed25bb5a6a96263640d09db6e105cd34edd0dd0315ac",
+  "status": "draft",
+  "prose_sha256": "a104a0e03ff00344eec664277e14a100c695bfacf613ccd14a0a536c0af52c17",
   "entries": [
     {
       "operation": "adoptReplayCorpus",
