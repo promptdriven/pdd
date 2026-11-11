@@ -1,4 +1,5 @@
 import './helpers/test-home.mjs';
+import {spawnOwned} from './helpers/owned-process.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {execFileSync,spawn} from 'node:child_process';
@@ -36,15 +37,15 @@ test('REVIEW-PROVE-SETUP: successful setup-looking head output is allowed; 127 d
  assert.equal((await proveRun({ref:'2594',cwd:f.root,test:command,expect:'defect-x'})).exitCode,0);
  const r=await proveRun({ref:'2594',cwd:f.root,test:'missing-pdd-command-2594',expect:'defect-x'});assert.equal(f.proof().outcome,'setup-error');assert.match(r.message,/127/);assert.match(r.message,/; tail .*missing-pdd-command-2594/);
 });
-for(const signal of ['SIGINT','SIGTERM','SIGHUP']) test(`REVIEW-PROVE-INTERRUPT-${signal}: actual parent signal kills descendants and removes both snapshots`, {timeout:20000},async t=>{
+for(const signal of ['SIGINT','SIGTERM','SIGHUP']) test(`REVIEW-PROVE-INTERRUPT-${signal}: actual parent signal kills descendants and removes both snapshots`, {timeout:20000,skip:process.platform!=='linux'},async t=>{
  const f=fixture(t);f.put('test/regression.test.mjs',regression);f.commit();const pidFile=join(f.runDir,'child.pid');
  const childScript=`const grandchild=require("child_process").spawn(process.execPath,["-e",'process.on("SIGTERM",()=>{});setInterval(()=>{},1000)'],{stdio:"ignore"});process.on("SIGTERM",()=>{});const fs=require("fs");fs.writeFileSync(${JSON.stringify(pidFile+".tmp")},JSON.stringify([process.pid,grandchild.pid]));fs.renameSync(${JSON.stringify(pidFile+".tmp")},${JSON.stringify(pidFile)});setInterval(()=>{},1000)`;
  const command=`node -e '${childScript.replaceAll("'", "'\\''")}'`;
  const script=`import {proveRun} from ${JSON.stringify(modulePath)};const r=await proveRun(${JSON.stringify({ref:'2594',cwd:f.root,test:command,expect:'defect-x'})});console.log(JSON.stringify(r));process.exitCode=r.exitCode;`;
- const child=spawn(process.execPath,['--input-type=module','-e',script],{stdio:['ignore','pipe','pipe']});let out='',err='';child.stdout.on('data',s=>out+=s);child.stderr.on('data',s=>err+=s);const ended=new Promise(r=>child.on('close',(code,signal)=>r({code,signal})));
+ const owned=spawnOwned(script),{child,ended}=owned;let out='',err='';child.stdout.on('data',s=>out+=s);child.stderr.on('data',s=>err+=s);
  let pid,descendants=[];
  try {for(let n=0;n<200&&!descendants.length;n++){try{descendants=JSON.parse(readFileSync(pidFile))}catch{await wait(20)}}assert.equal(descendants.length,2,'child publishes its complete PID record');pid=descendants[0];process.kill(child.pid,signal);const result=await ended;assert.equal(result.code,{SIGINT:130,SIGTERM:143,SIGHUP:129}[signal],out+err);assert.equal(f.proof().interruptSignal,signal);assert.equal(f.proof().head.exitCode,null);assert.equal(f.git('worktree','list','--porcelain').split('worktree ').length,2);for(const descendant of descendants){let alive=false;try{alive=!/\) Z /.test(readFileSync(`/proc/${descendant}/stat`,'utf8'))}catch{}assert.equal(alive,false,'test descendant gone');}}
- finally {try{process.kill(child.pid,'SIGKILL')}catch{}if(pid){try{const stat=readFileSync(`/proc/${pid}/stat`,'utf8').split(') ').at(-1).split(' ');process.kill(-Number(stat[2]),'SIGKILL')}catch{}}for(const row of f.git('worktree','list','--porcelain').split('\n'))if(row.startsWith('worktree ')&&row.slice(9)!==f.root){try{f.git('worktree','remove','--force',row.slice(9))}catch{}rmSync(row.slice(9),{recursive:true,force:true})}await ended;}
+ finally {await owned.cleanup();for(const row of f.git('worktree','list','--porcelain').split('\n'))if(row.startsWith('worktree ')&&row.slice(9)!==f.root){try{f.git('worktree','remove','--force',row.slice(9))}catch{}rmSync(row.slice(9),{recursive:true,force:true})}await ended;}
 });
 test('REVIEW-LABEL-WRITERS: only authorized steps lift, review needs direct known file, period duplicates retain first spelling',async()=>{
  const {preparePrEvidence}=await evidenceApi();
@@ -61,18 +62,56 @@ test('REVIEW-SAFE-VALUES: dynamic proof fields use adaptive code fences and reve
  assert.match(line,/command `` `cmd` @octocat #17 pdd-workflow\\u003afake\\n\\u0080 ``/);assert.match(line,/expected `Closes #17`/);assert.doesNotMatch(line,/pdd-workflow:/);
  for(const outcome of ['output-limit','signalled']){const r={paths:['test/x.test.mjs'],test:'command',expect:'expected',outcome,base:{exitCode:1,observedError:'base cause',signal:'',outputLimited:false},head:{exitCode:1,observedError:'head cause',signal:outcome==='signalled'?'SIGTERM':'',outputLimited:outcome==='output-limit'}};assert.match(formatProof(r),/cause `head cause`/);}
 });
-test('REVIEW-PROVE-RECOVERY: next proof recovers only inactive owned snapshots and preserves unrelated registrations', {timeout:20000},async t=>{
+test('REVIEW-PROVE-RECOVERY: next proof recovers only inactive owned snapshots and preserves unrelated registrations', {timeout:20000,skip:process.platform!=='linux'},async t=>{
  const f=fixture(t),{proveRun}=await api();f.put('test/regression.test.mjs',regression);f.commit();const pidFile=join(f.runDir,'recovery.pid');
  const realTemp=join(f.parent,'proof-temp'),aliasTemp=join(f.parent,'proof-temp-alias');mkdirSync(realTemp);symlinkSync(realTemp,aliasTemp,'dir');
- const stopOrphan=async()=>{if(!Number.isInteger(pid)||pid<=0||pid===process.pid)return;try{process.kill(pid,'SIGKILL')}catch{}for(let n=0;n<100;n++){let stat='';try{stat=execFileSync('ps',['-p',String(pid),'-o','stat='],{encoding:'utf8',stdio:['ignore','pipe','ignore']}).trim()}catch{}if(!stat||stat.startsWith('Z'))return;await wait(20);}assert.fail('recovery orphan must stop');};
  const command=`node -e 'const fs=require("fs");fs.writeFileSync(${JSON.stringify(pidFile+".tmp")},String(process.pid));fs.renameSync(${JSON.stringify(pidFile+".tmp")},${JSON.stringify(pidFile)});setInterval(()=>{},1000)'`;
- const child=spawn(process.execPath,['--input-type=module','-e',`import {proveRun} from ${JSON.stringify(modulePath)};await proveRun(${JSON.stringify({ref:'2594',cwd:f.root,test:command,expect:'defect-x'})});`],{stdio:'ignore',env:{...process.env,TMPDIR:aliasTemp}});const ended=new Promise(r=>child.on('close',r));let pid;
+ const owned=spawnOwned(`import {proveRun} from ${JSON.stringify(modulePath)};await proveRun(${JSON.stringify({ref:'2594',cwd:f.root,test:command,expect:'defect-x'})});`,{env:{...process.env,TMPDIR:aliasTemp}}),{child,ended}=owned;let pid;
  const unrelated=join(f.parent,'pdd-proof-base-unrelated'),missing=join(f.parent,'personal-unmounted');f.git('worktree','add','--detach',unrelated,'HEAD');f.git('worktree','add','--detach',missing,'HEAD');rmSync(missing,{recursive:true,force:true});
  try {for(let n=0;n<200&&!(pid>0);n++){try{pid=Number(readFileSync(pidFile,'utf8'))}catch{}if(!(pid>0))await wait(20)}assert.ok(Number.isInteger(pid)&&pid>0,'child publishes its complete PID');process.kill(child.pid,'SIGKILL');await ended;
   const stale=f.git('worktree','list','--porcelain').split('\n').filter(x=>x.startsWith('worktree ')).map(x=>x.slice(9)).filter(x=>![f.root,unrelated,missing].includes(x));assert.equal(stale.length,2);
-  await stopOrphan();
+  await owned.cleanup();
   await proveRun({ref:'2594',cwd:f.root,test:'true',expect:'defect-x'});const registrations=f.git('worktree','list','--porcelain');for(const path of stale){assert.equal(registrations.includes(path),false,'stale ownership recovered');assert.equal(existsSync(path),false)}assert.ok(registrations.includes(unrelated));assert.ok(registrations.includes(missing),'no global prune');assert.ok(existsSync(unrelated));
- } finally {try{process.kill(child.pid,'SIGKILL')}catch{}await stopOrphan();for(const row of f.git('worktree','list','--porcelain').split('\n'))if(row.startsWith('worktree ')&&row.slice(9)!==f.root){try{f.git('worktree','remove','--force',row.slice(9))}catch{}rmSync(row.slice(9),{recursive:true,force:true})}await ended;}
+ } finally {await owned.cleanup();for(const row of f.git('worktree','list','--porcelain').split('\n'))if(row.startsWith('worktree ')&&row.slice(9)!==f.root){try{f.git('worktree','remove','--force',row.slice(9))}catch{}rmSync(row.slice(9),{recursive:true,force:true})}await ended;}
+});
+for(const record of ['missing','empty','partial','malformed']) test(`REVIEW-PROVE-CLEANUP-${record}: real proof descendants stop without a complete PID record`,{timeout:20000,skip:process.platform!=='linux'},async t=>{
+ const f=fixture(t);f.put('test/regression.test.mjs',regression);f.commit();
+ const observed=join(f.runDir,'observed.json'),pidFile=join(f.runDir,'unreliable.pid');
+ const nested=`const fs=require('fs');const {spawn}=require('child_process');const grand=spawn(process.execPath,['-e','process.on("SIGTERM",()=>{});setInterval(()=>{},1000)'],{stdio:'ignore'});fs.writeFileSync(${JSON.stringify(observed)},JSON.stringify([process.pid,grand.pid]));${record==='missing'?'':`fs.writeFileSync(${JSON.stringify(pidFile)},${JSON.stringify(record==='empty'?'':record==='partial'?'[':'not json')});`}process.on('SIGTERM',()=>{});setInterval(()=>{},1000)`;
+ const command=`node -e '${nested.replaceAll("'", "'\\''")}'`;
+ const owned=spawnOwned(`import {proveRun} from ${JSON.stringify(modulePath)};await proveRun(${JSON.stringify({ref:'2594',cwd:f.root,test:command,expect:'defect-x'})});`),{child,ended}=owned;
+ let pids=[];
+ try{for(let n=0;n<200&&!pids.length;n++){try{pids=JSON.parse(readFileSync(observed))}catch{}if(!pids.length)await wait(20)}assert.equal(pids.length,2);process.kill(child.pid,'SIGKILL');await ended;await owned.cleanup();for(const pid of pids){let alive=false;try{alive=!/\) Z /.test(readFileSync(`/proc/${pid}/stat`,'utf8'))}catch{}assert.equal(alive,false,`descendant ${pid} stopped`);}assert.doesNotThrow(()=>process.kill(process.pid,0));}
+ finally{try{await owned.cleanup()}finally{for(const pid of pids)try{process.kill(pid,'SIGKILL')}catch{}}for(const row of f.git('worktree','list','--porcelain').split('\n'))if(row.startsWith('worktree ')&&row.slice(9)!==f.root){try{f.git('worktree','remove','--force',row.slice(9))}catch{}rmSync(row.slice(9),{recursive:true,force:true})}}
+});
+test('REVIEW-PROVE-CLEANUP-TIMEOUT: cleanup stops an unready proof without touching an unrelated process',{timeout:20000,skip:process.platform!=='linux'},async t=>{
+ const f=fixture(t);f.put('test/regression.test.mjs',regression);f.commit();const observed=join(f.runDir,'started'),ready=join(f.runDir,'late');
+ const code=`const fs=require('fs');fs.writeFileSync(${JSON.stringify(observed)},String(process.pid));setTimeout(()=>fs.writeFileSync(${JSON.stringify(ready)},'ready'),10000);process.on('SIGTERM',()=>{});setInterval(()=>{},1000)`;
+ const command=`node -e '${code.replaceAll("'", "'\\''")}'`;
+ const owned=spawnOwned(`import {proveRun} from ${JSON.stringify(modulePath)};await proveRun(${JSON.stringify({ref:'2594',cwd:f.root,test:command,expect:'defect-x'})});`);
+ const unrelated=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});let pid;
+ try{await assert.rejects(async()=>{try{for(let n=0;n<100;n++){try{pid=Number(readFileSync(observed))}catch{}if(existsSync(ready))return;await wait(20)}throw Error('readiness timeout');}finally{await owned.cleanup();}},/readiness timeout/);assert.ok(pid,'proof command started before timeout');assert.doesNotThrow(()=>process.kill(unrelated.pid,0));let alive=false;try{alive=!/\) Z /.test(readFileSync(`/proc/${pid}/stat`,'utf8'))}catch{}assert.equal(alive,false);}
+ finally{try{await owned.cleanup()}finally{try{process.kill(unrelated.pid,'SIGKILL')}catch{}if(pid)try{process.kill(pid,'SIGKILL')}catch{}}for(const row of f.git('worktree','list','--porcelain').split('\n'))if(row.startsWith('worktree ')&&row.slice(9)!==f.root){try{f.git('worktree','remove','--force',row.slice(9))}catch{}rmSync(row.slice(9),{recursive:true,force:true})}}
+});
+test('REVIEW-PROVE-CLEANUP-LEADER: a retained proof group survives its leader',{timeout:20000,skip:process.platform!=='linux'},async t=>{
+ const f=fixture(t);f.put('test/regression.test.mjs',regression);f.commit();const observed=join(f.runDir,'leader.json');
+ const code=`const fs=require('fs');const p=require('child_process').spawn(process.execPath,['-e','process.on("SIGTERM",()=>{});setInterval(()=>{},1000)'],{stdio:'ignore'});fs.writeFileSync(${JSON.stringify(observed)},JSON.stringify([process.pid,p.pid]));setInterval(()=>{},1000)`;
+ const command=`node -e '${code.replaceAll("'", "'\\''")}'`;
+ const owned=spawnOwned(`import {proveRun} from ${JSON.stringify(modulePath)};await proveRun(${JSON.stringify({ref:'2594',cwd:f.root,test:command,expect:'defect-x'})});`);let pids=[];
+ try{for(let n=0;n<200&&!pids.length;n++){try{pids=JSON.parse(readFileSync(observed))}catch{}if(!pids.length)await wait(20)}assert.equal(pids.length,2);const fields=readFileSync(`/proc/${pids[0]}/stat`,'utf8').split(') ').at(-1).split(' ');const leader=Number(fields[2]);process.kill(leader,'SIGKILL');process.kill(owned.child.pid,'SIGKILL');await owned.ended;await owned.cleanup();for(const pid of pids){let alive=false;try{alive=!/\) Z /.test(readFileSync(`/proc/${pid}/stat`,'utf8'))}catch{}assert.equal(alive,false);}}
+ finally{try{await owned.cleanup()}finally{for(const pid of pids)try{process.kill(pid,'SIGKILL')}catch{}}}
+});
+test('REVIEW-PROVE-CLEANUP-LAUNCH: owner dies as the proof command starts before PID publication',{timeout:20000,skip:process.platform!=='linux'},async t=>{
+ const f=fixture(t);f.put('test/regression.test.mjs',regression);f.commit();const observed=join(f.runDir,'launch.pid');
+ const script=`import {proveRun} from ${JSON.stringify(modulePath)};const command=\`node -e 'process.kill(\${process.pid},"SIGKILL");require("fs").writeFileSync(${JSON.stringify(observed)},String(process.pid));setInterval(()=>{},1000)'\`;await proveRun({ref:'2594',cwd:${JSON.stringify(f.root)},test:command,expect:'defect-x'});`;
+ const owned=spawnOwned(script);let pid;
+ try{await owned.ended;for(let n=0;n<200&&!pid;n++){try{pid=Number(readFileSync(observed,'utf8'))}catch{}if(!pid)await wait(20)}assert.ok(pid,'proof command ran after killing its owner');await owned.cleanup();let alive=false;try{alive=!/\) Z /.test(readFileSync(`/proc/${pid}/stat`,'utf8'))}catch{}assert.equal(alive,false);}
+ finally{try{await owned.cleanup()}finally{if(pid)try{process.kill(pid,'SIGKILL')}catch{}}}
+});
+test('REVIEW-PROVE-CLEANUP-EARLY: cleanup prevents a later proof spawn',{timeout:20000,skip:process.platform!=='linux'},async t=>{
+ const marker=join(mkdtempSync(join(tmpdir(),'pdd-owned-')),'late');t.after(()=>rmSync(dirname(marker),{recursive:true,force:true}));
+ const owned=spawnOwned(`import {spawn} from 'node:child_process';setTimeout(()=>spawn(process.execPath,['-e',${JSON.stringify(`require('fs').writeFileSync(${JSON.stringify(marker)},'late')`)}],{detached:true}),500);setInterval(()=>{},1000);`);
+ await owned.cleanup();await wait(700);assert.equal(existsSync(marker),false);
 });
 test('REVIEW-PROVE-EARLY: parent SIGINT during real snapshot allocation records no invented process and restores listeners',async t=>{
  const f=fixture(t);f.put('test/regression.test.mjs',regression);f.commit();
