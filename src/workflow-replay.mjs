@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-replay.prompt.md (sha256: 60fdb78236a539bf97b9126e0ce66595c6cee86d8c0975a96be07e987daa2f3b).
+// Generated from prompts/cli/workflow-replay.prompt.md (sha256: ae616e93a0404b2b8f86b4eed20937f45fbbeecdd8972d821c4b260e37f8bbff).
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -6,6 +6,7 @@ import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, rea
 import { dirname, isAbsolute, join, relative, resolve, sep, basename } from 'node:path';
 import { gitFiles } from './runtime-preflight.mjs';
 import { cleanText } from './runtime-output.mjs';
+import { exactIntegerLeaves, jsonSafe, parseScenarioJson, stringifyScenarioJson, withExactIntegers } from './scenario-json.mjs';
 export const REPLAY_POLICY = 'pdd.replay-evidence.v1';
 const LIMIT = 2 * 1024 * 1024, MAX = 10000;
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -70,7 +71,8 @@ function vectorFile(root, path, visible) {
   return boundedFile(join(root,path));
 }
 function scenario(path, bytes) {
-  const doc = parse(bytes);
+  // Exact whole numbers above 2^53 keep their digits beside the ordinary JSON snapshot.
+  const exact = parseScenarioJson(new TextDecoder('utf-8',{fatal:true}).decode(bytes)), doc = jsonSafe(exact), leaves = exactIntegerLeaves(exact);
   requireThat(object(doc) && doc.schema_version === 'prompt-runtime.program-scenario.v1' && Array.isArray(doc.steps) && doc.steps.length > 0 && doc.steps.length <= MAX, 'Original vectors need nonempty versioned scenario steps.');
   const seen = new Set(), steps = [], checks = [];
   for (const step of doc.steps) {
@@ -83,7 +85,7 @@ function scenario(path, bytes) {
       checks.push({...base,check_index,criterion_id:check.criterion_id,target:check.target,path:check.path,op:check.op});
     });
   }
-  return {path,sha256:hash(bytes),steps,checks,snapshot:doc};
+  return {path,sha256:hash(bytes),steps,checks,snapshot:doc,...(leaves.length?{exact_integers:leaves}:{})};
 }
 export function pinReplayVectors(root, paths) {
   const anchor = {schema_version:'pdd.replay-vectors.v1',vectors:[]};
@@ -439,8 +441,15 @@ const anchorLine=a=>`Anchor: ${plural(a.changed,'changed scenario')} (${checkCou
   ? ` (${checkCount(a.checks)}${a.select==='all'?'; pdd.json sets replay.base_scenarios to "all"':''}${a.note?`; ${render(a.note,Infinity)}`:''}).` : ` (${render(a.note,Infinity)}).`}`;
 
 const emptyCounts = (total=0) => ({total,pass:0,fail:0,blocked:0,not_replayed:total});
+const exactSnapshot = vector => vector?.snapshot === undefined ? undefined : withExactIntegers(vector.snapshot, vector.exact_integers);
+// A saved row stays JSON-safe; a side with an exact whole number above 2^53 also keeps its exact JSON text.
+function changeRow(path, before, after) {
+  const row = {path, before:jsonSafe(before), after:jsonSafe(after)};
+  if (exactIntegerLeaves(before).length || exactIntegerLeaves(after).length) row.exact = {before:changeValue(before), after:changeValue(after)};
+  return row;
+}
 function valueChanges(before, after, path = '') {
-  if(JSON.stringify(before)===JSON.stringify(after))return [];
+  if(stringifyScenarioJson(before)===stringifyScenarioJson(after))return [];
   const container=value=>object(value)||Array.isArray(value);
   if((container(before)||before===undefined) && (container(after)||after===undefined) &&
       !(before!==undefined && after!==undefined && Array.isArray(before)!==Array.isArray(after))) {
@@ -448,9 +457,9 @@ function valueChanges(before, after, path = '') {
     const member=(value,key)=>value!==undefined && Object.hasOwn(value,key) ? value[key] : undefined;
     if(keys.length)return keys.flatMap(key=>valueChanges(member(before,key),member(after,key),`${path}/${key.replace(/~/g,'~0').replace(/\//g,'~1')}`));
   }
-  return [{path,before,after}];
+  return [changeRow(path,before,after)];
 }
-const changeValue=value=>value===undefined ? '(missing)' : JSON.stringify(value);
+const changeValue=value=>value===undefined ? '(missing)' : stringifyScenarioJson(value);
 // JSON escaping keeps identities and values distinct. Entities display complete
 // separators without exposing URLs or matching the outer body's path cleaner.
 const renderValue=value=>inertMarkers(String(value).replace(/[^\x20-\x7e]/g,char=>'\\u'+char.charCodeAt(0).toString(16).padStart(4,'0')))
@@ -568,14 +577,14 @@ function replayRecord(run, paths) {
         // A removed vector no longer participates; an existing invalid file remains unproved.
         let missing=false;
         try {lstatSync(join(run.root,path));unavailable=true;} catch(error){if(error.code==='ENOENT')missing=true;else unavailable=true;}
-        if(missing && saved?.snapshot)for(const change of valueChanges(saved.snapshot,undefined))result.warnings.push({vector:path,...change});
+        if(missing && saved?.snapshot)for(const change of valueChanges(exactSnapshot(saved),undefined))result.warnings.push({vector:path,...change});
         continue;
       }
       current.vectors.push(vector);
       if(!saved || saved.sha256!==vector.sha256) {
         if(saved && !saved.snapshot)result.warnings.push({vector:path,reason:`SHA256 ${saved.sha256} -> ${vector.sha256}; original values unavailable.`});
         else {
-          const changes=valueChanges(saved?.snapshot,vector.snapshot);
+          const changes=valueChanges(exactSnapshot(saved),exactSnapshot(vector));
           if(changes.length)for(const change of changes)result.warnings.push({vector:path,...change});
           else result.warnings.push({vector:path,reason:`Bytes changed: SHA256 ${saved.sha256} -> ${vector.sha256}; JSON values unchanged.`});
         }
@@ -652,7 +661,7 @@ export function formatReplayEvidence(result, {maxCharacters=Infinity, rules} = {
   const failedFormal=formalStatus(result.formal).status==='recorded' && result.formal.result==='failed';
   const head=[ ...(counts.fail ? [`✗ ${counts.fail} replay assertions fail`] : []), ...(failedFormal ? ['✗ Formal check failed (counterexample in replay-evidence.json).'] : []),
     `Code replay: ${label} — ${render(emptyPass?'Replay cannot pass with zero checks.':result.reason)}`,`${counts.total} checks: ${counts.pass} passed, ${counts.fail} failed, ${counts.blocked} blocked, ${counts.not_replayed} not replayed.`];
-  const warnings=(result.warnings??[]).map(w=>`warning: Saved test values changed: ${reviewIdentity(w.vector)} ${w.reason ? reviewIdentity(w.reason) : `${reviewIdentity(w.path)} ${reviewText(changeValue(w.before))} -> ${reviewText(changeValue(w.after))}`}`);
+  const warnings=(result.warnings??[]).map(w=>`warning: Saved test values changed: ${reviewIdentity(w.vector)} ${w.reason ? reviewIdentity(w.reason) : `${reviewIdentity(w.path)} ${reviewText(typeof w.exact?.before==='string'?w.exact.before:changeValue(w.before))} -> ${reviewText(typeof w.exact?.after==='string'?w.exact.after:changeValue(w.after))}`}`);
   const tail=[...(warnings.length ? ['Saved-value changes are advisory; the checker or person decides.'] : []),
     ...(result.adoption ? [`Anchor adopted from ${render(result.adoption.repository)}@${render(result.adoption.commit)}; approval reference ${render(result.adoption.reference)} by ${render(result.adoption.asserted_by)}; external-assertion-unverified`] : []),
     ...(result.anchor ? [anchorLine(result.anchor)] : []),
