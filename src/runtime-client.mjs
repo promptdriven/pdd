@@ -1,7 +1,7 @@
 import { describeCallPreflight } from './lint-call-preflight.mjs';
 import {rememberSecrets} from './secret-redaction.mjs';
 import { bindingPlanLines, bindingRefusals } from './runtime-binding-plan.mjs';
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 00360092e97ae96b70130c2f3ee68bf453e4ef1fc1012f3cfbbd288a4ff2caa2).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: d11f88a66bfdf07b442e1bc15a1dba8a9c0948cd52d7ebeec8a8a913449edccc).
 import { buildCheckPlan, checkPlanResults, checkPlanLines, checkPlanResultLines } from './runtime-check-plan.mjs';
 import { interfaceFindings } from './interface-draft.mjs';
 import {readEvidenceEligibility} from './workflow-runner.mjs';
