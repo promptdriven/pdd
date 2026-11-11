@@ -9,7 +9,7 @@ import { configureCheckCapacity, releaseCheckCapacity, readCheckStatus, readSuit
 import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: fe0294b6cd144bf6cc2329a9745150630bca990e321371daabd1c9cf7df6d175).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 24659837abd1d2e50af7306ee180d3e8213fcf7b9f2ad39d83e583677afd3522).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -1547,6 +1547,8 @@ const machineLabel = state => typeof state?.label === 'string' && state.label.tr
 const machineMode = state => ['auto', 'observe', 'off'].includes(state?.mode) ? state.mode : null;
 // The machine's saved core report mode (pdd autopilot start --report) wins over pdd.json for the core engine.
 const machineReport = state => ['file', 'draft', 'off'].includes(state?.report) ? state.report : null;
+// The machine's saved core decision mode (pdd autopilot start --decisions) wins over pdd.json for the core engine.
+const machineDecisions = state => ['ask', 'decide'].includes(state?.decisions) ? state.decisions : null;
 // The machine's intake mode (pdd autopilot start --intake): shadow writes intake cards; off (the default) writes none.
 const machineIntake = state => intakeMode(state?.intake);
 const coreRoot = stateFile => stateFile.replace(/\.json$/, '-core');
@@ -1556,6 +1558,7 @@ async function coreTick(stateFile, state, p, ports) {
   if (machineLabel(state)) core.label = machineLabel(state);
   if (machineMode(state)) core.mode = machineMode(state);
   if (machineReport(state)) core.report = machineReport(state);
+  if (machineDecisions(state)) core.decisions = machineDecisions(state);
   core.intake = machineIntake(state);
   // Card jobs never outlive the core: mode off stops them (a tick that ends here does not reach the core's hook).
   if (core.mode === 'off') { try { stopCardJobs({ root: coreRoot(stateFile), ...(p.corePorts?.jobs ? { jobs: p.corePorts.jobs } : {}) }); } catch { /* Next tick. */ } return ok('Autopilot is off.'); }
@@ -2449,6 +2452,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
   if (input.mode !== undefined && !['auto', 'observe', 'off'].includes(input.mode)) return { exitCode: 2, message: 'Use --mode auto, --mode observe or --mode off.' };
   if (input.report !== undefined && !['file', 'draft', 'off'].includes(input.report)) return { exitCode: 2, message: 'Use --report file, --report draft or --report off.' };
   if (input.intake !== undefined && !['off', 'shadow'].includes(input.intake)) return { exitCode: 2, message: 'Use --intake off or --intake shadow.' };
+  if (input.decisions !== undefined && !['ask', 'decide'].includes(input.decisions)) return { exitCode: 2, message: 'Use --decisions ask or --decisions decide.' };
   let startSelection, startWarnings = [];
   if (command === 'doctor' || command === 'start') {
     const doctorPorts = typeof ports.doctorPorts === 'function' ? ports.doctorPorts(input,ports) : ports.doctorPorts ?? ports;
@@ -2462,7 +2466,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
       const previous=read(join(stateFolder(ports,env),`${id}.json`));
       const state={...previous,cwd};
       // --mode is a machine setting of the core engine only; it never writes pdd.json.
-      if (command==='start' && (input.mode || input.report || input.intake) && engineOf({...state,engine:input.engine ?? previous?.engine}).engine!=='core') throw Error(`${input.mode ? '--mode' : input.report ? '--report' : '--intake'} works with the core engine only; add --engine core.`);
+      if (command==='start' && (input.mode || input.report || input.intake || input.decisions) && engineOf({...state,engine:input.engine ?? previous?.engine}).engine!=='core') throw Error(`${input.mode ? '--mode' : input.report ? '--report' : input.decisions ? '--decisions' : '--intake'} works with the core engine only; add --engine core.`);
       let profile;
       if (resumeCustody) {
         if (!previous) throw Error('Original coordinator recovery needs saved local state.');
@@ -2537,7 +2541,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
     }
     const previous = read(stateFile);
     state = { ...state, ...previous, cwd: state.cwd, id, stateFile };
-    if (command === 'start') { if (input.engine) state.engine = input.engine; if (input.label) state.label = input.label.trim(); if (input.mode) state.mode = input.mode; if (input.report) state.report = input.report; if (input.intake) state.intake = input.intake; }
+    if (command === 'start') { if (input.engine) state.engine = input.engine; if (input.label) state.label = input.label.trim(); if (input.mode) state.mode = input.mode; if (input.report) state.report = input.report; if (input.decisions) state.decisions = input.decisions; if (input.intake) state.intake = input.intake; }
     let initialRevision = previous?.controlRevision ?? null;
     if (command === 'start' && !previous) { initialRevision = randomUUID(); state.controlRevision = initialRevision; state.enabled = false; state.timerInstalled = false; state.nextTick = null; save(stateFile, state); }
     // Explicit undefined values mask unrelated ambient provider directories in portsFor.
@@ -2554,8 +2558,9 @@ export async function runAutopilotLauncher(input, ports = {}) {
       const label = machineLabel(state) ?? settingsNow.label;
       if (machineMode(state)) settingsNow.mode = machineMode(state);
       if (machineReport(state)) settingsNow.report = machineReport(state);
+      if (machineDecisions(state)) settingsNow.decisions = machineDecisions(state);
       return ok(`Autopilot ${state.enabled ? 'enabled' : 'disabled'}; timer ${timerLine(state, timerActive)}; next tick: ${timerActive && state.nextTick ? new Date(state.nextTick).toISOString() : 'none'}\n`
-        + coreStatus({ state, settings: { ...settingsNow, label }, sources: { engine: engineOf(state).source, label: machineLabel(state) ? 'machine' : label ? 'pdd.json' : null, mode: machineMode(state) ? 'machine' : 'pdd.json', report: machineReport(state) ? 'machine' : 'pdd.json' } },
+        + coreStatus({ state, settings: { ...settingsNow, label }, sources: { engine: engineOf(state).source, label: machineLabel(state) ? 'machine' : label ? 'pdd.json' : null, mode: machineMode(state) ? 'machine' : 'pdd.json', report: machineReport(state) ? 'machine' : 'pdd.json', decisions: machineDecisions(state) ? 'machine' : 'pdd.json' } },
           { root: coreRoot(stateFile), reportRoot: coreReports(ports, p.env), now: p.now })
         + (state.core?.message ? `\nLast tick ${new Date(state.core.at).toISOString()}: ${line(state.core.message)}` : ''));
     }
