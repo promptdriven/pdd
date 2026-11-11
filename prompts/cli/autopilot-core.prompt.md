@@ -952,7 +952,8 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    PRs only). Any machine clears a stale holder (a closed or merged PR, or a core issue
    (`pdd/core-N-…` branch) with no live claim that is no local final-step job) and an
    orphan one (not a core PR). A PR of this machine in the final step is a holder
-   too, also when the list does not show its label yet. **One winner on every tick:** the lowest open holder
+   too, also when the list does not show its label yet (the PR itself when its own
+   labels show the lane), so it keeps its place. **One winner on every tick:** the lowest open holder
    number; every other PR removes its own label (also a PR in the final step whose label
    the list does not show yet; a failed DELETE throws and the next
    tick tries again) and waits. When another PR holds the lane, or an older green PR

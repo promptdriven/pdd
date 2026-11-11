@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 62f2b870b774932d48de5a910a5b2693ad2f82340bb24caa90880dc006d0f859).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 019256a14bb7bcfcae31a609b19aed95b094c3ceb7315687f216e67530183a3e).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1911,10 +1911,11 @@ async function enterLane(ctx, job) {
     job.progress = { ...job.progress, at: ctx.now(), running: true }; ctx.saveJob(job);
     return 'wait';
   };
-  let held = await laneHolders(ctx);
+  // A PR in the final step whose label the list does not show yet keeps its place when its own labels show the lane.
+  let held = await laneHolders(ctx, job.lane?.state === 'final' ? job.pr : undefined);
   // Stale or orphan holders (no live claim, not a core PR) are cleared by any machine.
   for (const number of held.filter(n => n !== job.pr)) if (await staleLane(ctx, number)) { await dropLabel(ctx, number); held = held.filter(n => n !== number); }
-  // A PR of this machine in the final step holds the lane, also while the list does not show its label yet.
+  // Another PR of this machine in the final step holds the lane, also while the list does not show its label yet.
   for (const j of readJobs(ctx.fs, ctx.root)) if (j.issue !== job.issue && j.pr && j.lane?.state === 'final' && !held.includes(j.pr)) held.push(j.pr);
   const others = held.filter(n => n !== job.pr);
   // One winner: the lowest open holder. Every other PR removes its label and waits.
