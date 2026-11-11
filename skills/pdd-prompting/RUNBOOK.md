@@ -650,8 +650,11 @@ ticks. Ticks use the existing action/call budget.
   `pdd workflow evidence 18 --summary /tmp/before.json`. pdd refuses a commit whose selected files do not hash to the
   batch's source. No new check is sent, and the result never counts as a current pass, check or approval.
 - If no prompt owns the behavior, say in reproduce: "No prompt exists yet for this behavior, so the bug can only be
-  in the code." The verdict line is "Verdict: no prompt covers this yet; the bug can only be in the code." Write the
-  prompt from the issue, and write "before: no prompt" in PR 1.
+  in the code." The verdict line is "Verdict: no prompt covers this yet; the bug can only be in the code." For a
+  product file (source code that people maintain; not generated, vendored or lock files), first write its prompt
+  from the current code, without asking the person: it states today's behavior and starts as a draft. Then change
+  that prompt for the issue. Write "before: no prompt" and list the new prompts in PR 1. A fix that changes only
+  docs, config, CI, package data or tests gets no prompt and no Story: it uses pdd-small-change.
 - Put the verdict line first in the gate message, before any details.
 - Keep the change small: change one prompt when you can, and test only the criteria of the bug.
 - PR 1 must not make the repo's own tests fail. Put a new failing code test in PR 2, or mark it `todo` in PR 1.

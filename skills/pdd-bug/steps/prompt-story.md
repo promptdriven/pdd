@@ -3,7 +3,8 @@
 - Read pdd-prompting's guide.md in full and its RUNBOOK.md §2–§4. Use RUNBOOK: `*.prompt.md` Runtime block; Story tests: RUNBOOK §2 folder rules. The code area adds unit tests; PR 1 keeps main green.
 - Read pdd-prompting/review.md for behavioral-test guidance.
 - Also read the RUNBOOK sections that fit: §6 CLI, §7 prompt calls, §9 money/dates, §13 screens; §8 check paths, §10 budgets (over cap: 0 calls). §18: one step = one action or about 10 moves/rows/calls; split replays; check expected state per part. Server limit: 10 minutes.
-- Find the prompt that owns the behavior. Change it only if it is wrong or incomplete. If none exists, write the SMALLEST prompt that owns only the issue's behavior (one function or one endpoint; a CLI has one program prompt), not the whole module.
+- Find the prompt that owns the behavior. Change it only if it is wrong or incomplete. If `pdd owner FILE` finds none, write the SMALLEST prompt that owns only the issue's behavior (one function or one endpoint; a CLI has one program prompt), not the whole module. Never write a new Story or prompt for a docs, config, CI, package data or test file.
+- For a product file (source code that people maintain; not generated, vendored or lock files), write that prompt from its current code first, without asking. It states today's behavior and starts as a draft. Then change it for the issue. List it in your `done` summary: `File: PROMPT — new, from the current code`.
 - Write the Story in the person's words: the "As a …" line, the correct behavior and what must not change.
 - For a page, check what it shows through its `render` operation (`{html}` and the facts it shows), with `count` or `equals`. It is never "browser-only, no PDD test".
 - Test the issue input. Use requirement-based expected results, not code; write cases only for the issue's criteria.

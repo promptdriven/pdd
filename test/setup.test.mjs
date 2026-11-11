@@ -186,3 +186,15 @@ test('SETUP8: pdd setup keeps a more specific "!" line for a path in .pdd/ and d
   assert.equal(run().status, 0);
   assert.equal(readFileSync(ignore, 'utf8'), '!.pddrc\n.pdd/\n');
 });
+
+// Wrong (#3255, #3248): the block tells agents to change code that no prompt owns directly, so the person must ask for
+// its prompt in a separate step; or it lets an agent write a prompt for a docs, config, CI, package data or test file.
+test('SETUP9: the block says that source code with no prompt first gets one from its current code, and non-code files get none', t => {
+  const { project, run } = fixture(t);
+  const result = run();
+  assert.equal(result.status, 0, result.stderr);
+  const rule = readFileSync(join(project, 'AGENTS.md'), 'utf8').split('\n').find(line => line.startsWith('This project uses PDD.'));
+  assert.ok(rule.includes('When no prompt owns source code that people maintain, first write its prompt from the current code.'), rule);
+  assert.ok(rule.includes('Docs, config, CI, package data and tests get no prompt'), rule);
+  assert.equal(rule.includes('Files that no prompt owns change directly'), false, rule);
+});

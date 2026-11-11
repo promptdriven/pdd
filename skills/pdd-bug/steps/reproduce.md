@@ -4,6 +4,7 @@
 - Find the smallest safe input that shows the bug. Write down the setup, input, command, expected and actual result.
 - If a prompt owns this behavior, follow section 14 of RUNBOOK.md (pdd-prompting skill): write a test from the issue and run `pdd test` on the CURRENT prompt. Report ✗ or ✓, and put its `Prompt tests` line(s) and the report link(s) in your `done` summary as the "before" report.
 - If no prompt exists, say so plainly, in the words of section 14.
+- If the fix changes no product behavior (only docs, config, CI, package data or tests), say so first in your `done` summary.
 - Record `Defect:` and `Not caught because:` in reproduce.md.
 - If you cannot reproduce it, say why. Never guess a cause.
 - In your `done` summary add `Problem:` and one `Case: INPUT | TODAY | EXPECTED` line per issue case (RUNBOOK §15).
