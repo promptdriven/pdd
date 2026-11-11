@@ -31,6 +31,30 @@ Show what changed after feedback, including any unresolved point. A proposed con
 
 Prepare a PR with the reason for the change, the behavior affected, actual test commands/results and remaining limits. Publish or merge only through the authorized repository workflow. Review and a green public full suite are required before publication of public source. Keep operational reports, private logs and credentials outside the tree.
 
+Before reporting a PR ready, verify affected generated-source prompt digests
+against the target revision:
+
+```sh
+node scripts/check-generated-source.mjs --base origin/alpha
+```
+
+Use the actual target revision (`origin/main` for a PR against main). The
+comparison needs that revision locally; fetch sufficient history when using a
+shallow checkout. Rerun the command after integrating alpha, against the target
+revision. It checks changed source files and all source files whose header's
+owning prompt changed, including unchanged source after an integration. Public
+CI runs the same check against the PR base SHA or the previous main/alpha push
+SHA (the first parent for manual dispatch).
+
+Failures name the source and prompt paths and the expected/current digests.
+Confirm that code implements the current prompt before refreshing its header;
+the check never rewrites it. It uses the shared owner lookup's behavior digest,
+which excludes Runtime approval metadata, and accepts the current release's
+whole-file compatibility form. Hashless ownership headers and unrelated stale
+headers are outside this check. A matching header records the writer's claim;
+Runtime prompt approval and generated-code full-file hashes are distinct checks
+and cannot establish that this header is current.
+
 ## Package checks
 
 The bundled `pdd-small-change`, `pdd-bug` and `pdd-feature` workflow skills have size limits enforced by [SKILLS4 in the skill tests](test/skills.test.mjs). Their `SKILL.md` limits are 3,072 bytes for small-change and 4,096 bytes each for bug and feature. Declared step briefs are limited to 15 lines and 1,228 bytes each, except `prompt-story` (1,638 bytes), `review` (2,304) and `change` (1,536). Each `steps/autopilot.md` is an Autopilot overlay with its own 3,072-byte limit, separate from ordinary step limits. SKILLS4 does not apply these workflow limits to `pdd-product`.
