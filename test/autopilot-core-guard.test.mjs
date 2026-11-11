@@ -136,3 +136,20 @@ test('the share is for the whole machine: with 2 repositories the jobs of both c
     if (held) assert.match(result.message, held); else assert.match(result.message, /1 started.*1 of 4 slots busy/);
   }
 });
+
+test('#3177 every job gets PDD_CLI; agent roles get the pdd check; status shows its note', async t => {
+  const w = await coreWorld(t);
+  w.issue(17);
+  await w.tick();
+  const build = w.job(17, 'build'), cli = join(w.root, 'bin', 'pdd');
+  assert.equal(build.env.PDD_CLI, cli); assert.equal(build.env.PATH.split(':')[0], join(w.root, 'bin'));
+  assert.deepEqual(build.pddCheck, { version: '0.1.27', cli });
+  const line = `pdd check: the agent shell finds pdd 0.1.15 at /home/u/.local/bin/pdd; the engine is 0.1.27; using PDD_CLI (${cli})`;
+  writeFileSync(build.log.replace(/\.log$/, '.pdd-check.json'), JSON.stringify({ found: true, version: '0.1.15', line }));
+  assert.ok(coreStatus({ state: w.state, settings: w.settings }, { root: w.root, now: w.now }).includes(`; ${line}`), 'status names the mismatch beside the build');
+  w.build(17); await w.tick();
+  assert.ok(w.job(17, 'review').pddCheck, 'the reviewer is checked too');
+  assert.equal(w.job(17, 'suite').pddCheck, undefined, 'the suite runs no agent shell');
+  assert.equal(w.job(17, 'suite').env.PDD_CLI, cli);
+  assert.equal(w.reports.calls?.length ?? 0, 0, 'nothing is filed');
+});

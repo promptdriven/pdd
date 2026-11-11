@@ -54,6 +54,20 @@ record is simply dead. There is no "uncertain custody" state.
   an absolute `taskset`, it is `TASKSET --cpu-list CPUS COMMAND ARGS…` (Node, `nproc`,
   `cargo`, `pytest -n auto` and Go follow the CPU list, so an agent's own tests use
   Autopilot's share); else the command itself.
+- `startAgentJob` also takes `pddCheck` (`{version, cli}`: the engine's pdd version and
+  the absolute path of its own pdd, #3177) and saves it in the spec. Right after the
+  wrapper starts the child, it asks the agent's own login shell which pdd it finds, the
+  way the agent's commands find it (Codex runs each command in one, and a profile can
+  put an older pdd first on PATH): `$SHELL -lc` (an absolute `SHELL`, else `/bin/sh`)
+  with the job environment and a 20-second limit, printing the marker lines `@pdd-path
+  …` (`command -v pdd`) and `@pdd-version …` (`pdd --version`, stderr dropped), so text
+  that a profile prints is never read as an answer. It writes the record `{at, found,
+  path, version, engine, cli, line}` to `ID.pdd-check.json` (`pddCheckFile(log)`) and,
+  when `line` is set, that one line to the log. `pddCheckLine` gives `line`: null when
+  the shell finds a pdd of the engine's version, else `pdd check: the agent shell finds
+  pdd X at PATH; the engine is Y; using PDD_CLI (CLI)` or `pdd check: the agent shell
+  finds no pdd on PATH; the engine is Y; using PDD_CLI (CLI)`. A check that fails or
+  times out writes nothing. It never changes the job.
 - The wrapper starts `jobCommand(spec)` in `cwd` with the input file as stdin and the
   log as stdout and stderr (append). When the child ends, it writes
   `{code, signal, at}` to the exit file with a temporary file and a rename. On

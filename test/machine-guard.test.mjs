@@ -9,7 +9,7 @@ import { GUARD, validShare, shareOf, autoSlots, slotMath, slotCount, machineRoom
 import { readAutopilotUse } from '../src/machine-resources.mjs';
 import { coreSettings } from '../src/autopilot-core.mjs';
 import { readMachineResources } from '../src/machine-resources.mjs';
-import { jobCommand, startAgentJob, readAgentJob } from '../src/agent-job.mjs';
+import { jobCommand, startAgentJob, readAgentJob, pddCheckFile, pddCheckLine } from '../src/agent-job.mjs';
 
 const GiB = 1024 ** 3;
 const ids = n => Array.from({ length: n }, (_, i) => i);
@@ -168,4 +168,30 @@ test('T8 readers: the macOS pressure level and cgroup v2 limits', async () => {
   assert.deepEqual(open.cgroup, { cpus: null, memoryMax: null, memoryFree: null });
   const legacy = await readMachineResources({ cwd: '/' }, { ...tree(base), includeGuard: false });
   assert.equal(legacy.cgroup, undefined, 'without includeGuard the observation is as before'); assert.equal(legacy.pressure.level, undefined);
+});
+
+// #3177: a login shell can put an old pdd first on PATH; the job uses PDD_CLI and the wrapper notes the mismatch.
+for (const [name, old] of [['an old pdd first in the login shell', true], ['the engine\'s own pdd', false]]) test(`#3177 pdd check with ${name}`, async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'pdd-guard-cli-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const { mkdirSync, writeFileSync, chmodSync } = await import('node:fs');
+  const fake = join(dir, 'oldbin'), engine = join(dir, 'enginebin');
+  for (const [folder, version] of [[fake, '0.1.15'], [engine, '0.1.29']]) {
+    mkdirSync(folder); writeFileSync(join(folder, 'pdd'), `#!/bin/sh\necho ${version}\n`); chmodSync(join(folder, 'pdd'), 0o755);
+  }
+  // A login shell whose profile puts the old pdd first again, like ~/.profile with ~/.local/bin on pdd-vm.
+  const shell = join(dir, 'login-sh');
+  writeFileSync(shell, `#!/bin/sh\necho "Welcome from the profile"\n${old ? `PATH="${fake}:$PATH"; export PATH\n` : ''}shift\nexec /bin/sh -c "$1"\n`); chmodSync(shell, 0o755);
+  const job = startAgentJob({ id: 'cli-1', dir, cwd: dir, command: '/bin/sh', args: ['-c', 'sleep 1; echo "agent uses $PDD_CLI"'], pddCheck: { version: '0.1.29', cli: join(engine, 'pdd') },
+    env: { PATH: `${engine}:${process.env.PATH}`, SHELL: shell, PDD_CLI: join(engine, 'pdd') } });
+  const end = Date.now() + 20000;
+  while (Date.now() < end && !(existsSync(job.exit) && existsSync(pddCheckFile(job.log)))) await new Promise(r => setTimeout(r, 50));
+  const log = readFileSync(job.log, 'utf8'), record = JSON.parse(readFileSync(pddCheckFile(job.log), 'utf8'));
+  assert.match(log, new RegExp(`agent uses ${join(engine, 'pdd').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`), 'the agent gets PDD_CLI');
+  if (old) {
+    assert.equal(record.line, `pdd check: the agent shell finds pdd 0.1.15 at ${join(fake, 'pdd')}; the engine is 0.1.29; using PDD_CLI (${join(engine, 'pdd')})`);
+    assert.ok(log.includes(record.line), 'one line in the job log');
+  } else {
+    assert.deepEqual([record.found, record.version, record.line], [true, '0.1.29', null]); assert.doesNotMatch(log, /pdd check/);
+  }
+  assert.equal(pddCheckLine({ found: false, engine: '0.1.29', cli: '/c/pdd' }), 'pdd check: the agent shell finds no pdd on PATH; the engine is 0.1.29; using PDD_CLI (/c/pdd)');
 });

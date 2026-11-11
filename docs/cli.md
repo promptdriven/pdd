@@ -1603,7 +1603,9 @@ Each tick, without AI calls:
    is the same. A merge conflict starts a repair.
 5. Fill free slots: claim the oldest ready issue with `pdd:working` and a claim
    comment, make a worktree and start one headless job. The job runs the same pdd
-   as the tick (it goes first on the job's `PATH`). It makes one PR with prompt,
+   as the tick (it goes first on the job's `PATH`, and `PDD_CLI` names it, because a
+   login shell can put an older pdd first again; when the agent's shell finds another
+   pdd, the job log and `pdd autopilot status` say so). It makes one PR with prompt,
    tests and code where the files are owned by a prompt, and changes other files
    directly: a file is owned when `pdd-bindings.json`, a `Generated from` header or a
    prompt's opening paragraph names it. The job gets this owner table and writes one

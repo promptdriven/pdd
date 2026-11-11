@@ -1,6 +1,6 @@
-// Generated from prompts/cli/agent-job.prompt.md (sha256: cf687a5427f8d6ad86b3b95ff16d8662fb1a214ce1d6d3e8ba2cf00b03a98ef5).
-import { spawn, spawnSync } from 'node:child_process';
-import { accessSync, closeSync, constants, openSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+// Generated from prompts/cli/agent-job.prompt.md (sha256: bce324d436e3a00418655f86031db0b94576f103ad2fb2a17b434eaaea456de4).
+import { execFile, spawn, spawnSync } from 'node:child_process';
+import { accessSync, closeSync, constants, openSync, readFileSync, renameSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { setPriority } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,12 +26,12 @@ export function jobEnvironment(env = {}) {
   return Object.fromEntries(Object.entries(env).filter(([key, value]) => typeof value === 'string' && !SESSION_KEYS.test(key)));
 }
 
-export function startAgentJob({ id, dir, cwd, command, args = [], input = '', env = {}, priority = null }, ports = {}) {
+export function startAgentJob({ id, dir, cwd, command, args = [], input = '', env = {}, priority = null, pddCheck = null }, ports = {}) {
   if (!/^[A-Za-z0-9._-]+$/.test(String(id))) throw Error('Invalid job id');
   const base = join(resolve(dir), id), now = ports.now ?? Date.now;
   const job = { id, token: `${base}.spec.json`, log: `${base}.log`, exit: `${base}.exit.json`, result: `${base}.result.json`, input: `${base}.input` };
   writeFileSync(job.input, input, { mode: 0o600 });
-  writeAtomic(job.token, JSON.stringify({ command, args, cwd, input: job.input, log: job.log, exit: job.exit, ...(priority ? { priority } : {}) }));
+  writeAtomic(job.token, JSON.stringify({ command, args, cwd, input: job.input, log: job.log, exit: job.exit, ...(priority ? { priority } : {}), ...(pddCheck ? { pddCheck } : {}) }));
   const child = (ports.spawn ?? spawn)(process.execPath, [self, '--wrapper', job.token], { cwd, env, detached: true, stdio: 'ignore' });
   // A spawn that fails later (a cwd that is gone, EAGAIN, ENOMEM) is an exit with code 127, never an uncaught error.
   child.on?.('error', error => { try { writeAtomic(job.exit, JSON.stringify({ code: 127, signal: null, at: now(), error: String(error.code ?? error.message) })); } catch { /* The job reads as dead. */ } });
@@ -97,6 +97,27 @@ export function jobCommand(spec, platform = process.platform, ports = {}) {
     return { command: p.taskset, args: ['--cpu-list', p.cpus, spec.command, ...(spec.args ?? [])] };
   return { command: spec.command, args: spec.args ?? [] };
 }
+// #3177: the pdd that the agent's own login shell finds (Codex runs each command in one, and a profile can put an older
+// pdd first on PATH). When it is not the engine's version, one line goes to the job log and to ID.pdd-check.json, for
+// the status; the agent uses "$PDD_CLI" either way. A failed check writes nothing.
+export const pddCheckFile = log => String(log).replace(/\.log$/, '') + '.pdd-check.json';
+export function pddCheckLine({ found, path, version, engine, cli }) {
+  if (found && version === engine) return null;
+  return `pdd check: the agent shell finds ${found ? `pdd ${version ?? '(unknown version)'} at ${path}` : 'no pdd on PATH'}; the engine is ${engine}; using PDD_CLI (${cli})`;
+}
+export function checkShellPdd(spec, out, ports = {}) {
+  const shell = process.env.SHELL && process.env.SHELL.startsWith('/') ? process.env.SHELL : '/bin/sh';
+  // A marker line separates the two answers from anything that a profile prints.
+  const script = 'echo "@pdd-path $(command -v pdd || true)"; echo "@pdd-version $(pdd --version 2>/dev/null | head -n 5 | tr "\\n" " ")"';
+  (ports.execFile ?? execFile)(shell, ['-lc', script], { cwd: spec.cwd, env: process.env, timeout: 20000, encoding: 'utf8' }, (error, stdout) => {
+    const text = String(stdout ?? ''), answer = name => new RegExp(`^@pdd-${name} ?(.*)$`, 'm').exec(text)?.[1]?.trim() ?? null;
+    if (answer('path') === null) return;
+    const path = answer('path') || null, version = path ? /\b(\d+\.\d+\.\d+)\b/.exec(answer('version') ?? '')?.[1] ?? null : null;
+    const record = { at: Date.now(), found: Boolean(path), path, version, engine: spec.pddCheck.version ?? null, cli: spec.pddCheck.cli ?? null };
+    record.line = pddCheckLine(record);
+    try { writeAtomic(pddCheckFile(spec.log), JSON.stringify(record)); if (record.line) writeSync(out, `${record.line}\n`); } catch { /* The check is a note only. */ }
+  });
+}
 // The wrapper's own nice value (default 19); every child inherits it.
 function lowerPriority(spec) {
   try { setPriority(0, Number.isSafeInteger(spec.priority?.nice) ? spec.priority.nice : 19); } catch { /* A lower priority is best effort. */ }
@@ -131,6 +152,7 @@ function wrap(specFile) {
   catch (error) { writeFileSync(out, `agent-job: ${error.message}\n`); finish(127, null); return; }
   child.on('error', error => { try { writeFileSync(out, `agent-job: ${error.message}\n`); } catch {} finish(127, null); });
   child.on('exit', (code, signal) => { if (stopping) ended = { code, signal }; else finish(code, signal); });
+  if (spec.pddCheck) checkShellPdd(spec, out);
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === self && process.argv[2] === '--wrapper') wrap(process.argv[3]);

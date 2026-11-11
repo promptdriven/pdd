@@ -1,11 +1,11 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: a06ec1033c585ab4dc2a5b210cb7f914648046d14f2617c21d5942d02e962980).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 2582a1754f6d54346a79c9269d8880cfa1d8cf1b2963b930ad3e494e6ce020b5).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, createHash } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import { createDependencyReadPorts, refreshClaimHeartbeat, takeoverLimited } from './issue-dependencies-github.mjs';
-import { jobEnvironment, startAgentJob, readAgentJob, stopAgentJob, agentCommand, agentJobCpu } from './agent-job.mjs';
+import { jobEnvironment, startAgentJob, readAgentJob, stopAgentJob, agentCommand, agentJobCpu, pddCheckFile } from './agent-job.mjs';
 import { fileReport, listReportDrafts, reportKind } from './autopilot-reports.mjs';
 import { checkAutopilotBase } from './autopilot-base.mjs';
 import { redactSecrets } from './secret-redaction.mjs';
@@ -814,8 +814,12 @@ function pddOnPath(ctx, env) {
   const file = join(ctx.dirs.bin, 'pdd'), text = `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(ctx.pdd)} "$@"\n`;
   ctx.fs.mkdirSync(ctx.dirs.bin, { recursive: true, mode: 0o700 });
   if (readText(ctx.fs, file) !== text) { const temp = `${file}.${process.pid}.tmp`; ctx.fs.writeFileSync(temp, text, { mode: 0o700 }); ctx.fs.renameSync(temp, file); }
-  return { ...env, PATH: [ctx.dirs.bin, ...String(env.PATH ?? '').split(':').filter(dir => dir && dir !== ctx.dirs.bin)].join(':') };
+  // #3177: PDD_CLI names this pdd for the agent, because a login shell can put another pdd first on PATH again.
+  return { ...env, PDD_CLI: file, PATH: [ctx.dirs.bin, ...String(env.PATH ?? '').split(':').filter(dir => dir && dir !== ctx.dirs.bin)].join(':') };
 }
+// #3177: the agent roles run commands in a shell; their wrapper checks which pdd that shell finds.
+const SHELL_ROLES = new Set(['build', 'repair', 'conflict', 'review']);
+const engineVersion = ctx => ctx.ports.version ?? readJson(ctx.fs, join(PACKAGE_ROOT, 'package.json'), {})?.version ?? null;
 function startJob(ctx, job, role, cwd, prompt, command = null, extraEnv = {}) {
   const id = `${job.issue}-${role}-${ctx.now().toString(36)}-${randomUUID().slice(0, 6)}`;
   ctx.fs.mkdirSync(ctx.dirs.logs, { recursive: true, mode: 0o700 });
@@ -826,7 +830,8 @@ function startJob(ctx, job, role, cwd, prompt, command = null, extraEnv = {}) {
   const { checkCpus, ...priority } = ctx.ports.machine?.priority?.(role) ?? {};
   return ctx.jobs.start({ id, dir: ctx.dirs.logs, cwd, command: run.command, args: run.args, input: typeof prompt === 'function' ? prompt(result) : prompt,
     env: { ...pddOnPath(ctx, jobEnvironment(ctx.ports.env ?? process.env)), ...(Number.isSafeInteger(checkCpus) ? { PDD_CHECK_CPUS: String(checkCpus) } : {}), ...extraEnv },
-    ...(Object.keys(priority).length ? { priority } : {}), issue: job.issue, role, branch: job.branch, head: job.head });
+    ...(Object.keys(priority).length ? { priority } : {}), ...(SHELL_ROLES.has(role) ? { pddCheck: { version: engineVersion(ctx), cli: join(ctx.dirs.bin, 'pdd') } } : {}),
+    issue: job.issue, role, branch: job.branch, head: job.head });
 }
 async function checkout(ctx, job, name) {
   const path = join(ctx.dirs.worktrees, `${job.issue}-${name}`);
@@ -2748,6 +2753,8 @@ async function sweepFiles(ctx) {
 }
 
 // ---- Status (local files only) --------------------------------------------------------------------------
+// #3177: the wrapper's note when the agent's shell finds another pdd than the engine's.
+const pddWords = (fs, part) => { const line = readJson(fs, pddCheckFile(part.log ?? ''), null)?.line; return named(line) ? `; ${oneLine(line, 300)}` : ''; };
 const runtimeWords = job => runtimeWaiting(job) ? `; Runtime: waits for the interpreter maintenance since ${utcClock(job.runtimeWait.maintenance)}${job.runtimeWait.until ? ` (until ${utcClock(job.runtimeWait.until)})` : ''}; no slot`
   : runtimeCurrent(job) && job.runtimeWait.state === 'sent' ? '; Runtime: the check that was not sent runs again' : '';
 export function coreStatus({ state, settings, sources = {}, guard = null }, ports) {
@@ -2760,7 +2767,7 @@ export function coreStatus({ state, settings, sources = {}, guard = null }, port
   lines.push(machine.pausedUntil ? `New jobs paused until ${new Date(machine.pausedUntil).toISOString()} (${machine.pausedHours} h): the agent ended ${machine.streak} jobs in a row with no result; then intake goes on.`
     : `No pause: ${machine.streak} no-result end(s) in a row (a pause starts at ${STRIKES}; the next pause is ${machine.hours} h).`);
   const words = { now: (ports.now ?? Date.now)(), settings, longest: readLongest(fs, ports.root, (ports.now ?? Date.now)()) };
-  const running = (job, part, role) => part && !part.watch?.stopped && !part.recorded ? `; ${processWords(job, part, role, words)}` : '';
+  const running = (job, part, role) => part && !part.watch?.stopped && !part.recorded ? `; ${processWords(job, part, role, words)}${pddWords(fs, part)}` : '';
   for (const job of jobs) {
     if (job.phase === 'pr') lines.push(`#${job.issue} PR #${job.pr} at ${short(job.head)}: review ${job.review?.verdict ?? (job.review ? 'running' : '-')}${job.review?.verdict ? '' : running(job, job.review?.agent, 'review')}, suite ${job.suite ? 'started' : '-'}${running(job, job.suite?.agent, 'suite')}, repairs ${job.repairs}${
       job.lane?.state === 'final' ? '; merge lane: final step' : job.lane?.state === 'waiting' ? `; merge lane: waiting${job.lane.holder ? ` for PR #${job.lane.holder}` : ''} since ${new Date(job.lane.since).toISOString()}` : ''}${runtimeWords(job)}${job.lastError ? `; last error: ${job.lastError}` : ''}`);

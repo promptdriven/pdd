@@ -390,7 +390,13 @@ Jobs run through the [headless job runner](agent-job.prompt.md) with
 that runs the tick: the tick writes `bin/pdd` in `ROOT` (`#!/bin/sh` and `exec 'NODE'
 'PACKAGE/bin/pdd.mjs' "$@"`, with this Node and this package, quoted for the shell;
 rewritten only when it differs) and puts `ROOT/bin` first on the job's `PATH`, before
-any other pdd (for example an older global install).
+any other pdd (for example an older global install). Because a login shell can put
+another pdd first again (#3177), every job also gets `PDD_CLI` = `ROOT/bin/pdd`, and the
+build, repair, conflict and review jobs get `pddCheck {version, cli}` (the engine's
+version, `ports.version` or the package version, and `ROOT/bin/pdd`): the
+[job runner](agent-job.prompt.md) notes when the agent's shell finds another pdd, and
+status shows that note beside the running process. It files nothing and never ends a
+job.
 
 - **Build** (in `worktrees/N`): the issue title, URL and body as data from a trusted
   author, and these rules: choose pdd-small-change, pdd-bug or pdd-feature, but make
