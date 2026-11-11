@@ -166,7 +166,7 @@ Run Autopilot commands inside the repo folder. Each repo has its own Autopilot o
 | Command | What it does |
 |---|---|
 | `pdd autopilot doctor` | Read-only prerequisite checks, one line and a command per item. No GitHub writes or AI calls. Exit 1 for a required failure, 0 when only warnings remain |
-| `pdd autopilot start [--runs N] [--checks N] [--engine core\|full] [--label NAME] [--mode auto\|observe\|off] [--report file\|draft\|off] [--decisions ask\|decide] [--intake off\|shadow] [--resume-custody FILE]` | Check sign-ins and the running pdd version, open a dedicated interactive Herdr session (not with the [core engine](#core-engine)) and check for work immediately. A user timer checks again every 30 minutes (every 10 minutes with the core engine; `pdd autopilot status` shows the interval). `--runs` overrides the open-run cap. `--checks` overrides heavy-check slots. Omission uses machine capacity. `--engine core` or `--engine full`, `--label NAME`, `--mode auto\|observe\|off`, `--report file\|draft\|off`, `--decisions ask\|decide` and `--intake off\|shadow` (core engine only) save this machine's engine, opt-in label, mode, report mode, decision mode and [intake mode](#intake-cards-shadow) for this repo; they win over `pdd.json`, and a later start without them keeps them. The report mode is `draft` unless you choose `--report file`. `--resume-custody` supplies the verified original-owner projection for explicit recovery |
+| `pdd autopilot start [--runs N] [--checks N] [--engine core\|full] [--label NAME] [--mode auto\|observe\|off] [--report file\|draft\|off] [--decisions ask\|decide] [--intake off\|shadow] [--share PERCENT] [--resume-custody FILE]` | Check sign-ins and the running pdd version, open a dedicated interactive Herdr session (not with the [core engine](#core-engine)) and check for work immediately. A user timer checks again every 30 minutes (every 10 minutes with the core engine; `pdd autopilot status` shows the interval). `--runs` overrides the open-run cap. `--checks` overrides heavy-check slots. Omission uses machine capacity. `--engine core` or `--engine full`, `--label NAME`, `--mode auto\|observe\|off`, `--report file\|draft\|off`, `--decisions ask\|decide` and `--intake off\|shadow` (core engine only) save this machine's engine, opt-in label, mode, report mode, decision mode and [intake mode](#intake-cards-shadow) for this repo; they win over `pdd.json`, and a later start without them keeps them. The report mode is `draft` unless you choose `--report file`. `--share PERCENT` (1 to 100, default 50) saves the part of this machine's CPU and memory that the core engine may use; a later start without it keeps it (see [the machine guard](#core-engine)). `--resume-custody` supplies the verified original-owner projection for explicit recovery |
 | `pdd autopilot stop` | Disable this repo's timer on this machine and let the current agent step finish |
 | `pdd autopilot audit RUN PR` | Audit a confirmed automatic merge once with a fresh configured agent. Save OK, CONCERN or BAD and the separate revert recommendation with the run. Post the evidence once on the issue. BAD opens a revert PR only when recommended; otherwise it keeps the merge and reopens the issue with the missing parts. One decision alert states the recommendation and choices. Unknown external outcomes require inspection before any retry. |
 | `pdd autopilot check-base RUN PR` | Read the saved run and exact PR target, then check that its base contains the current default branch and newest published release tag, including prereleases. A refusal explains the reason and exits 1. Use this before an automatic merge and after it for the base audit. It makes no GitHub writes |
@@ -1514,7 +1514,7 @@ says to run `pdd autopilot start`.
 
 | Key | Meaning | Default |
 |---|---|---|
-| `runs` | Issues in progress at the same time on this machine. A server takes the lower of this value and its automatic slots; a laptop ignores it. `pdd autopilot start --runs N` on one machine wins over both | automatic: 1 on a laptop; on a server the lowest of 4, its cores ÷ 2 and its free memory ÷ 3 GiB (cgroup limits count) |
+| `runs` | The most issues in progress at the same time on one machine. It can only lower the machine's automatic slots; `pdd autopilot start --runs N` on one machine wins | automatic, from the machine guard (below) |
 | `label` | Take only issues with this label | none: every ready issue |
 | `quietMinutes` | Minutes with nothing new after which an agent process or the checks of a PR end. There is no fixed time limit: a process runs as long as it makes something new (a new commit, a new file state, a new tool call, a new output line, or CPU use in its child processes; a repeated line, a wait or a poll is not new), and a PR waits while CI, the review or the suite still runs. At least 20 (2 ticks of the core timer) | 45 |
 | `ciStuckMinutes` | Minutes that CI may stay pending with no change before the job ends | 360 |
@@ -1525,27 +1525,33 @@ says to run `pdd autopilot start`.
 | `maxRepairs` | Safety cap of repair jobs for one PR (the old key `repairs` still works). Repairs go on while they make progress: see below | 6 |
 | `testCommand` | Full test command that runs on the PR head, in a clean checkout. With `package-lock.json` and listed dependencies, `npm ci --ignore-scripts` runs first | `npm test` when `package.json` has a test script |
 
-**The machine guard.** Autopilot never takes over a person's machine. It decides by
-itself from the machine, with no setting per repository:
+**The machine guard.** Autopilot never takes over a person's machine. It may use a
+share of the machine's CPU and memory: 50% by default, or `pdd autopilot start --share
+PERCENT` on this machine. The share counts the real limits: the CPU list and the
+cgroup or container limits on Linux, the cores and the memory of the machine.
 
-- A laptop is a Mac, or a Linux machine with a battery or that is not a virtual
-  machine. Every other machine is a server. A laptop runs 1 job at a time.
+- Slots: one job counts as 2 cores and 3 GiB (an agent is light, and a full suite
+  peaks near 3 GiB). The slots are the share of the cores divided by 2 and the share of
+  the memory divided by 3 GiB, the lower one, at least 1 and at most 4. So at 50% an
+  8 GB Mac or a 4-core, 8 GB box gets 1 job, a 10-core, 32 GB Mac gets 2, and a 64-core,
+  251 GB server gets 4. `--runs N` on this machine sets the slots; `autopilot.runs` in
+  `pdd.json` can only lower them.
 - Every Autopilot process runs at the lowest priority: nice 19, on macOS the utility
-  QoS with throttled disk I/O, and in the Linux timer unit `CPUWeight=20` (and
-  `MemoryHigh=50%` on a laptop). On a Linux laptop the agents run on half of the
-  cores. Every job gets `PDD_CHECK_CPUS`, the worker count for its tests and builds.
-- Before new work, each tick checks the room. A laptop needs AC power, 2 GiB and 15%
-  of its memory free with no memory pressure, 10 GiB and 5% of its disk free, and a
-  load that is not above half of its cores. A server needs 10% of its memory and 1 GiB
-  and 5% of its disk free. With no room, no issue is claimed, and the tick and
-  `pdd autopilot status` say why (`intake held: on battery power`). Running work goes
+  QoS with throttled disk I/O, and in the Linux timer unit `CPUWeight=20` and
+  `MemoryHigh` at the share. On Linux the agents run on the share of the CPUs. Every
+  job gets `PDD_CHECK_CPUS`, the worker count for its tests and builds.
+- Before new work, each tick checks the room: at least 3 GiB of memory free and no
+  memory pressure, at least 10 GiB and 5% of the disk free, and a load that is not
+  above the share of the cores. With no room, no issue is claimed, and the tick and
+  `pdd autopilot status` say why (`intake held: memory pressure`). Running work goes
   on.
 - Each tick removes worktrees that no job uses, job logs older than 14 days, and the
   oldest logs while the log folder holds more than 500 MiB.
 
-`pdd autopilot status` shows one machine line, for example `Machine: laptop · 10
-cores, Autopilot uses 5 · memory 3.1 of 16 GiB free, pressure normal · disk 210 GiB
-free · load 7.2 · AC power · priority low · 1 slot (automatic) · new work: ok`.
+`pdd autopilot status` shows the share, the slot math and the room in one line, for
+example `Machine: share 50% (default) of 10 cores and 16 GiB · slots min(4, 5 cores ÷
+2, 8 GiB ÷ 3 GiB) = 2 → 2 (automatic) · memory 6.1 GiB free, pressure normal · disk
+210 GiB free · load 3.2 · priority low · new work: ok`.
 
 Each tick, without AI calls:
 
@@ -1612,15 +1618,20 @@ Each tick, without AI calls:
 Only a real Runtime FAIL blocks a merge. When Runtime cannot check a change (a lint
 refusal, no interface, a scenario limit, no verdict), the job still ships its PR with
 native tests and `Runtime: not run (reason)`, and Autopilot files or counts one
-report for that cause. A check that was never sent, for example because the
-interpreter was in maintenance, is different: before the merge lane the PR waits
-for the end of the maintenance. It reads the free `GET /v1/capacity` again every 10
-minutes, holds no slot and never counts as quiet, and other jobs go on. When the
-maintenance ends, Autopilot itself runs `pdd test` once for those Stories (no
-agent): a pass makes the PR line `Runtime: PASS`, a real FAIL goes to a repair, and
-no verdict keeps `Runtime: not run (…)` with one report. After 12 hours of
-maintenance the PR says `Runtime: not run (maintenance since HH:MM UTC)`, Autopilot
-files one report, and the merge goes on. The `Evidence:` line has a fixed form, for example
+report for that cause. Two kinds of check are different, and Autopilot sends them
+once more by itself, once for each PR head, before the merge lane: a check that pdd
+never sent (the interpreter was in maintenance, busy, or pdd stopped before sending;
+the job writes `Runtime: not run (maintenance until HH:MM UTC)`, or one such line per
+Story), and a sent check with no verdict and no failed check (an AI provider
+failure). A check with a failed check is never sent again. While the interpreter is
+in maintenance the PR waits: Autopilot reads the free `GET /v1/capacity` again every
+10 minutes, the job holds no slot and never counts as quiet, and other jobs go on.
+Then Autopilot itself runs `pdd test` once for those Stories (no agent): a pass makes
+the PR line `Runtime: PASS`, a real FAIL goes to a repair, and no verdict keeps
+`Runtime: not run (…)` with one report. The job's history keeps the agent's own lines.
+After 12 hours of maintenance the PR says `Runtime: not run (maintenance since HH:MM
+UTC)`, Autopilot files one report, and the merge goes on. A job never sends a check
+again itself. The `Evidence:` line has a fixed form, for example
 `Evidence: runtime=pass (11/11); vectors=not-run; formal=bounded; tests=pass (42/42)`.
 Autopilot keeps only the known parts, saves them in its local history and repeats
 them in the merge comment. The claims must be true. A Runtime pass (`Runtime: PASS`,

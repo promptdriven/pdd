@@ -1,10 +1,12 @@
-// #3241: a Runtime check that was never sent because of an interpreter maintenance window is sent once after the
-// window, before the merge. The job waits (no "not run", no report, no slot, never quiet), reads the free capacity
-// every 10 minutes, and after 12 hours ships "Runtime: not run (maintenance since HH:MM UTC)" with one report.
+// #3241, rule B5: a Runtime check that was never sent because of an interpreter maintenance window is sent once after
+// the window, before the merge. The job waits (no "not run", no report, no slot, never quiet), reads the free capacity
+// every 10 minutes, and after 12 hours ships "Runtime: not run (maintenance since HH:MM UTC)" with one report. A sent
+// check with no verdict and no failed check is sent once more too; a failed check never.
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { coreWorld } from './helpers/core-world.mjs';
 import { coreStatus } from '../src/autopilot-core.mjs';
 import { listReportDrafts } from '../src/autopilot-reports.mjs';
@@ -12,13 +14,13 @@ import { listReportDrafts } from '../src/autopilot-reports.mjs';
 const MIN = 60 * 1000, HOUR = 60 * MIN;
 const STORY = 'user_stories/place-order.md';
 const mergeComment = pr => pr.comments.map(c => c.body).find(body => body.includes('<!-- pdd:autopilot-core:merge:'));
-const notRunBody = 'Fixes #17\n\nRuntime: not run (interpreter maintenance until 08:52 UTC; stopped before sending, 0 AI calls)\nEvidence: runtime=not-run; tests=pass (3/3)';
+const notRunBody = 'Fixes #17\n\nRuntime: not run (maintenance until 08:52 UTC)\nEvidence: runtime=not-run; tests=pass (3/3)';
 const maintenance = { state: 'not-run', kind: 'runtime', component: 'pdd-test', code: 'maintenance', cause: 'the interpreter is in maintenance' };
 // A fake interpreter that is in maintenance until `until`; the agent's pdd test stopped before sending one Story.
 function window(w, minutes) {
   const until = w.now() + minutes * MIN;
   w.health = () => w.now() < until ? { state: 'unavailable', detail: 'maintenance', until: new Date(until).toISOString(), reason: 'deploy' } : { state: 'healthy', detail: 'HTTP 200' };
-  w.unsent = () => ({ stories: [STORY], maintenance: true });
+  w.resend = () => ({ stories: [STORY], neverSent: [STORY], noVerdict: [], failed: [], maintenance: true });
   return until;
 }
 const summary = (exitCode, state) => `${JSON.stringify({ batch: '20261111-090000-abcd', exit_code: exitCode, summary_line: `1 of 1 Story ${state}`, rows: [{ story: 'place-order', test: 'tests/place-order.json', state }] })}\n`;
@@ -36,12 +38,12 @@ test('maintenance for 30 minutes: the job waits, sends the check after the windo
   await w.tick();
   assert.equal(w.github.merges.length, 0, 'no merge while the check waits');
   assert.equal(w.healthReads.length, 1, 'one free capacity read');
-  assert.match(pr.body, /Runtime: not run \(interpreter maintenance/, 'nothing is rewritten while it waits');
+  assert.match(pr.body, /Runtime: not run \(maintenance until 08:52 UTC\)/, 'nothing is rewritten while it waits');
   assert.equal(listReportDrafts({ root: w.reportRoot }).length, 0, 'no report while it waits');
   assert.ok(w.job(18, 'build'), 'the waiting job holds no slot: the next issue starts');
   assert.match(status(w), /#17 PR #\d+ at \w+: .*Runtime: waits for the interpreter maintenance since 12:\d\d UTC \(until 12:\d\d UTC\); no slot/);
-  assert.equal(w.unsentReads.length, 1, 'the unsent checks are read once for the head');
-  assert.equal(w.unsentReads[0].root, w.job(17, 'build').cwd);
+  assert.equal(w.resendReads.length, 1, 'the saved checks are read once for the head');
+  assert.equal(w.resendReads[0].root, w.job(17, 'build').cwd);
 
   for (let at = w.now(); at + 10 * MIN < until; at += 10 * MIN) { w.advance(10 * MIN); await w.tick(); }
   assert.equal(w.started.filter(job => job.role === 'runtime').length, 0, 'nothing is sent during the window');
@@ -88,14 +90,14 @@ test('a real FAIL after the window goes to a repair; no verdict keeps "not run" 
   w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
   w.advance(10 * MIN); await w.tick();
   answer(w, 17, 1, 'failed'); await w.tick();
-  assert.match(first.pr.body, /^Runtime: FAIL \(pdd test after the interpreter maintenance: place-order failed\)$/m);
+  assert.match(first.pr.body, /^Runtime: FAIL \(pdd test sent again by Autopilot: place-order failed\)$/m);
   await w.tick();
   const repair = w.job(17, 'repair');
   assert.ok(repair, 'a real FAIL starts a repair'); assert.match(repair.input, /Runtime: FAIL/);
 
   // #18: the check sent after the window gives no verdict: "not run" stays true, one report, and the merge goes on.
   w.build(17, { role: 'repair', body: 'Fixes #17\n\nRuntime: PASS\nEvidence: runtime=pass (1/1); tests=pass (3/3)', runtime: { state: 'pass' } });
-  w.unsent = input => input.root === w.job(18, 'build')?.cwd ? { stories: [STORY], maintenance: true } : { stories: [], maintenance: false };
+  w.resend = input => input.root === w.job(18, 'build')?.cwd ? { stories: [STORY], neverSent: [STORY], noVerdict: [], failed: [], maintenance: true } : { stories: [], neverSent: [], noVerdict: [], failed: [], maintenance: false };
   await w.tick(); w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
   assert.equal(w.github.prs.get(first.pr.number).merged, true, '#17 merges after its repair');
   await w.tick();
@@ -103,7 +105,7 @@ test('a real FAIL after the window goes to a repair; no verdict keeps "not run" 
   w.review(18, 'PASS'); w.suite(18, 0); await w.tick();
   answer(w, 18, 5, 'not run');
   await w.tick();
-  assert.match(second.pr.body, /^Runtime: not run \(the check sent after the interpreter maintenance gave no verdict: 1 of 1 Story not run\)$/m);
+  assert.match(second.pr.body, /^Runtime: not run \(the check that Autopilot sent again gave no verdict: 1 of 1 Story not run\)$/m);
   await w.tick();
   assert.equal(second.pr.merged, true, 'a check with no verdict does not block the merge');
   const drafts = listReportDrafts({ root: w.reportRoot });
@@ -139,4 +141,52 @@ test('a not-run line with no unsent check keeps today\'s route: no capacity read
   assert.equal(pr.merged, true); assert.equal(w.healthReads, undefined, 'no capacity read');
   assert.match(pr.body, /Runtime: not run \(pdd lint refused the case\)/);
   assert.equal(listReportDrafts({ root: w.reportRoot }).length, 1);
+});
+
+test('B5 a sent check with no verdict and no failed check is sent once more, with no wait; the history keeps the agent\'s lines', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17);
+  await w.tick();
+  w.resend = () => ({ stories: [STORY], neverSent: [], noVerdict: [STORY], failed: [], maintenance: false });
+  const body = 'Fixes #17\n\nRuntime: not run (graph-provider-failure: no verdict)\nEvidence: runtime=not-run (17/19); tests=pass (3/3)';
+  const { pr } = w.build(17, { body, runtime: { state: 'not-run', kind: 'runtime', component: 'pdd test', code: 'no-verdict', cause: 'graph-provider-failure' } });
+  await w.tick(); w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
+  assert.ok(w.job(17, 'runtime'), 'sent at once: the interpreter is healthy');
+  assert.equal(w.healthReads.length, 1);
+  answer(w, 17, 0, 'passed'); await w.tick();
+  assert.match(pr.body, /^Runtime: PASS$/m); assert.match(pr.body, /Evidence: runtime=pass; tests=pass \(3\/3\)/);
+  await w.tick();
+  assert.equal(pr.merged, true);
+  const history = readFileSync(join(w.root, 'history.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line)).find(row => row.outcome === 'merged');
+  assert.deepEqual(history.runtimeOriginal.lines, ['Runtime: not run (graph-provider-failure: no verdict)'], 'the agent\'s line stays for an audit');
+  assert.equal(history.runtimeOriginal.evidence, 'Evidence: runtime=not-run (17/19); tests=pass (3/3)');
+  assert.equal(history.runtimeOriginal.engine, 'Runtime: PASS');
+  assert.equal(history.runtimeOriginal.runtime.code, 'no-verdict');
+  assert.equal(w.started.filter(job => job.role === 'runtime').length, 1, 'once for the head');
+});
+
+test('B5 a check with a failed check is never sent again; one Story line each is fine', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17);
+  await w.tick();
+  w.resend = () => ({ stories: ['user_stories/b.md'], neverSent: [], noVerdict: ['user_stories/b.md'], failed: [STORY], maintenance: false });
+  w.build(17, { body: `Fixes #17\n\nRuntime: not run (${STORY}: no verdict)\nRuntime: not run (user_stories/b.md: no verdict)`, runtime: { state: 'not-run', kind: 'runtime', code: 'no-verdict', cause: 'no verdict' } });
+  await w.tick(); w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
+  assert.equal(w.started.filter(job => job.role === 'runtime').length, 0, 'no resend when a check failed');
+  assert.equal(w.healthReads, undefined, 'and no capacity read');
+});
+
+test('rule B5 maintenance lines, one per Story: the engine waits, sends both Stories once and writes one PASS line', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17);
+  await w.tick();
+  window(w, 20);
+  w.resend = () => ({ stories: [STORY, 'user_stories/b.md'], neverSent: [STORY, 'user_stories/b.md'], noVerdict: [], failed: [], maintenance: true });
+  const { pr } = w.build(17, { body: `Fixes #17\n\nRuntime: not run (${STORY}: maintenance until 08:52 UTC)\nRuntime: not run (user_stories/b.md: maintenance until 08:52 UTC)`, runtime: maintenance });
+  await w.tick(); w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
+  assert.equal(w.started.filter(job => job.role === 'runtime').length, 0, 'it waits');
+  w.advance(10 * MIN); await w.tick(); w.advance(10 * MIN); await w.tick();
+  assert.deepEqual(w.job(17, 'runtime').args.slice(1), ['test', '--json', STORY, 'user_stories/b.md']);
+  answer(w, 17, 0, 'passed'); await w.tick();
+  assert.equal(pr.body.match(/^Runtime:.*$/gm).join('|'), 'Runtime: PASS');
 });

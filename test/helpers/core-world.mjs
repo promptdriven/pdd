@@ -233,8 +233,8 @@ export async function coreWorld(t, { repository = 'acme/widgets', settings = {},
     },
     agentReady: async () => true,
     warn: () => {},
-    // #3241: no unsent Runtime check and a healthy interpreter, unless a test sets w.unsent or w.health.
-    unsentChecks: async input => { w.unsentReads = [...(w.unsentReads ?? []), input]; return w.unsent ? w.unsent(input) : { stories: [], maintenance: false }; },
+    // #3241: no Runtime check to send again and a healthy interpreter, unless a test sets w.resend or w.health.
+    resendChecks: async input => { w.resendReads = [...(w.resendReads ?? []), input]; return w.resend ? w.resend(input) : { stories: [], neverSent: [], noVerdict: [], failed: [], maintenance: false }; },
     runtimeHealth: async () => { w.healthReads = [...(w.healthReads ?? []), w.now()]; return w.health ? w.health() : { state: 'healthy', detail: 'HTTP 200' }; },
     ...extra,
   });

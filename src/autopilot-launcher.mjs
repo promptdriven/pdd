@@ -4,12 +4,12 @@ import {collectRouteQuestions, idleParkingBlocker, blockerFor, interpreterWaitFo
 import {currentChat} from './workflow-runs.mjs';
 import {chatHealth, chatSession, finishedChats} from './workflow-chat.mjs';
 import {WORKFLOW_CAPABILITIES, sweepIdleRuns, recoverAutomaticRunOwner, parkBlockedRun, wakeParkedRun, releaseParkedRun, releaseRunClaim, changeRun, hasParkedReply} from './workflow-runner.mjs';
-import { readMachineResources, machineCheckPorts } from './machine-resources.mjs';
+import { readMachineResources } from './machine-resources.mjs';
 import { configureCheckCapacity, releaseCheckCapacity, readCheckStatus, readSuiteProgress } from './test-suite-queue.mjs';
 import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: bf333fd5aec80ff76e53a639ae2daee15cc27eea27b6bcb8c27941757fffe5ea).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: d1b3367469931d57174c1a08332c7fd01e9103a44954d6887d2cb1397e8064af).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -42,7 +42,7 @@ import { costReport, costStatusLines } from './cost-ledger.mjs';
 
 import { selectAutopilotBase, checkAutopilotBase } from './autopilot-base.mjs';
 import { readCoreSettings, tickCore, coreStatus } from './autopilot-core.mjs';
-import { readMachineGuard, timerPriority, machineClass } from './machine-guard.mjs';
+import { readMachineGuard, timerPriority, validShare } from './machine-guard.mjs';
 import { listReportDrafts, sendReportDraft } from './autopilot-reports.mjs';
 import { intakeMode, readIntake, intakeText, stopCardJobs } from './autopilot-intake.mjs';
 
@@ -169,7 +169,7 @@ async function userTimer(action, state, p) {
     mkdirSync(folder, { recursive: true });
     const args = [process.execPath, self, state.stateFile].map(x => `<string>${xml(x)}</string>`).join('');
     const vars = Object.entries(state.environment).map(([k, v]) => `<key>${xml(k)}</key><string>${xml(v)}</string>`).join('');
-    writeFileSync(file, `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>Label</key><string>${name}</string><key>ProgramArguments</key><array>${args}</array><key>EnvironmentVariables</key><dict>${vars}</dict><key>StartInterval</key><integer>${minutes * 60}</integer>${timerPriority('laptop', 'darwin').plist}<key>StandardErrorPath</key><string>${xml(state.stateFile + '.log')}</string></dict></plist>`, { mode: 0o600 });
+    writeFileSync(file, `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>Label</key><string>${name}</string><key>ProgramArguments</key><array>${args}</array><key>EnvironmentVariables</key><dict>${vars}</dict><key>StartInterval</key><integer>${minutes * 60}</integer>${timerPriority('darwin').plist}<key>StandardErrorPath</key><string>${xml(state.stateFile + '.log')}</string></dict></plist>`, { mode: 0o600 });
     await p.execute('launchctl', ['bootout', `${domain}/${name}`]);
     await p.checked('launchctl', ['bootstrap', domain, file]);
     return true;
@@ -186,7 +186,7 @@ async function userTimer(action, state, p) {
   mkdirSync(folder, { recursive: true });
   const unit = value => JSON.stringify(String(value).replaceAll('%', '%%'));
   // #3231: Linux shares CPU between cgroups by weight before nice counts; the detached jobs stay in this cgroup.
-  writeFileSync(join(folder, `${name}.service`), `[Unit]\nDescription=PDD Autopilot tick\n[Service]\nType=oneshot\nKillMode=process\n${timerPriority(timerClass(p), 'linux').unit}ExecStart=${[process.execPath, self, state.stateFile].map(unit).join(' ')}\n${Object.entries(state.environment).map(([k, v]) => `Environment=${unit(k + '=' + v)}\n`).join('')}`, { mode: 0o600 });
+  writeFileSync(join(folder, `${name}.service`), `[Unit]\nDescription=PDD Autopilot tick\n[Service]\nType=oneshot\nKillMode=process\n${timerPriority('linux', state.share).unit}ExecStart=${[process.execPath, self, state.stateFile].map(unit).join(' ')}\n${Object.entries(state.environment).map(([k, v]) => `Environment=${unit(k + '=' + v)}\n`).join('')}`, { mode: 0o600 });
   writeFileSync(join(folder, `${name}.timer`), `[Unit]\nDescription=PDD Autopilot every ${minutes} minutes\n[Timer]\nOnActiveSec=${minutes}min\nOnUnitActiveSec=${minutes}min\nAccuracySec=1s\n[Install]\nWantedBy=timers.target\n`, { mode: 0o600 });
   await p.checked('systemctl', ['--user', 'daemon-reload']);
   await p.checked('systemctl', ['--user', 'enable', `${name}.timer`]);
@@ -194,12 +194,6 @@ async function userTimer(action, state, p) {
   return true;
 }
 async function timer(action, state, p) { return p.timer ? p.timer(action, state) : userTimer(action, state, p); }
-// The machine class for the timer unit (a laptop also gets MemoryHigh): the same personal rule as the guard.
-function timerClass(p) {
-  if (p.machineClass) return p.machineClass;
-  const check = machineCheckPorts(p.env, p);
-  try { return machineClass({ platform: p.platform ?? process.platform, battery: check.battery(), virtualized: check.virtualized() }); } catch { return 'laptop'; }
-}
 async function herdr(args, p) {
   if (p.herdr) return p.herdr(args);
   const result = await p.execute('herdr', ['--session', SESSION, ...args]);
@@ -1561,15 +1555,24 @@ const machineDecisions = state => ['ask', 'decide'].includes(state?.decisions) ?
 const machineIntake = state => intakeMode(state?.intake);
 const coreRoot = stateFile => stateFile.replace(/\.json$/, '-core');
 const coreReports = (ports, env) => join(stateFolder(ports, env), 'core-reports');
-// #3231: the machine guard reads this machine once: its class, its slots (this machine's --runs wins), the room for
-// new work and the priority of each job.
+// #3231: the machine guard reads this machine once: Autopilot's share of it (start --share, default 50%), the slots
+// (this machine's --runs wins), the room for new work and the priority of each job.
 async function coreGuard(state, p, ports) {
   const repoRuns = read(join(state.cwd, 'pdd.json'), {})?.autopilot?.runs;
-  return (ports.machineGuard ?? readMachineGuard)({ cwd: state.cwd, runs: state.runs, repoRuns }, { env: p.env });
+  return (ports.machineGuard ?? readMachineGuard)({ cwd: state.cwd, runs: state.runs, repoRuns, share: state.share }, { env: p.env });
+}
+// pdd autopilot start --share N: the percent of this machine's CPU and memory that Autopilot may use, saved for this
+// repository on this machine; a later start without it keeps it.
+function shareOption(command, input, state) {
+  if (command !== 'start' || input.share === undefined) return null;
+  const value = Number(input.share);
+  if (!/^[0-9]+$/.test(String(input.share)) || !validShare(value)) return { exitCode: 2, message: 'Use --share with a whole percent from 1 to 100, for example --share 70 (the default is 50).' };
+  if (state) state.share = value;
+  return null;
 }
 async function coreTick(stateFile, state, p, ports) {
   const guard = await coreGuard(state, p, ports);
-  const core = readCoreSettings(state.cwd, undefined, { klass: guard.klass, auto: guard.auto, runs: state.runs });
+  const core = readCoreSettings(state.cwd, undefined, { auto: guard.auto, runs: state.runs });
   if (machineLabel(state)) core.label = machineLabel(state);
   if (machineMode(state)) core.mode = machineMode(state);
   if (machineReport(state)) core.report = machineReport(state);
@@ -2469,6 +2472,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
   if (input.report !== undefined && !['file', 'draft', 'off'].includes(input.report)) return { exitCode: 2, message: 'Use --report file, --report draft or --report off.' };
   if (input.intake !== undefined && !['off', 'shadow'].includes(input.intake)) return { exitCode: 2, message: 'Use --intake off or --intake shadow.' };
   if (input.decisions !== undefined && !['ask', 'decide'].includes(input.decisions)) return { exitCode: 2, message: 'Use --decisions ask or --decisions decide.' };
+  const shareRefusal = shareOption(command, input, null); if (shareRefusal) return shareRefusal;
   let startSelection, startWarnings = [];
   if (command === 'doctor' || command === 'start') {
     const doctorPorts = typeof ports.doctorPorts === 'function' ? ports.doctorPorts(input,ports) : ports.doctorPorts ?? ports;
@@ -2558,6 +2562,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
     const previous = read(stateFile);
     state = { ...state, ...previous, cwd: state.cwd, id, stateFile };
     if (command === 'start') { if (input.engine) state.engine = input.engine; if (input.label) state.label = input.label.trim(); if (input.mode) state.mode = input.mode; if (input.report) state.report = input.report; if (input.decisions) state.decisions = input.decisions; if (input.intake) state.intake = input.intake; }
+    shareOption(command, input, state);
     let initialRevision = previous?.controlRevision ?? null;
     if (command === 'start' && !previous) { initialRevision = randomUUID(); state.controlRevision = initialRevision; state.enabled = false; state.timerInstalled = false; state.nextTick = null; save(stateFile, state); }
     // Explicit undefined values mask unrelated ambient provider directories in portsFor.
@@ -2571,7 +2576,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
     }
     if (command === 'status' && engineOf(state).engine === 'core') {
       const timerActive = Boolean(await timer('status', state, p)), guard = await coreGuard(state, p, ports);
-      const settingsNow = readCoreSettings(state.cwd, undefined, { klass: guard.klass, auto: guard.auto, runs: state.runs });
+      const settingsNow = readCoreSettings(state.cwd, undefined, { auto: guard.auto, runs: state.runs });
       const label = machineLabel(state) ?? settingsNow.label;
       if (machineMode(state)) settingsNow.mode = machineMode(state);
       if (machineReport(state)) settingsNow.report = machineReport(state);

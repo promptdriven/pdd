@@ -21,11 +21,11 @@ test('T2 the machine --runs reaches a core tick through the launcher: 3 ready is
   const cwd = w.git(w.cwd, 'rev-parse', '--show-toplevel'), stateRoot = join(w.dir, 'state');
   const stateFile = join(stateRoot, `${createHash('sha256').update(cwd).digest('hex').slice(0, 20)}.json`);
   mkdirSync(stateRoot, { recursive: true });
-  writeFileSync(stateFile, JSON.stringify({ enabled: true, cwd, repo: 'acme/widgets', defaultBranch: 'main', coordinatorId: 'coord-a', machine: 'machine-a', runs: 1,
+  writeFileSync(stateFile, JSON.stringify({ enabled: true, cwd, repo: 'acme/widgets', defaultBranch: 'main', coordinatorId: 'coord-a', machine: 'machine-a', runs: 1, share: 70,
     agent: { id: 'codex', kind: 'codex', command: 'codex' }, packageRoot: join(w.dir, 'pkg') }));
-  // A big server (4 automatic slots) whose start said --runs 1.
+  // A big machine (4 automatic slots at the default share of 50%) whose start said --runs 1 and --share 70.
   const server = { cpuCount: 64, load: 1, memory: { available: 200 * GiB, total: 251 * GiB }, pressure: { io: 0, memory: 0, level: null }, disk: { available: 500 * GiB, total: 1000 * GiB },
-    power: null, cgroup: { cpus: null, memory: null }, check: { cpuIds: Array.from({ length: 64 }, (_, i) => i), platform: 'linux', battery: false, virtualized: true, taskset: '/usr/bin/taskset' } };
+    cgroup: { cpus: null, memoryMax: null, memoryFree: null }, check: { cpuIds: Array.from({ length: 64 }, (_, i) => i), platform: 'linux', battery: false, virtualized: true, taskset: '/usr/bin/taskset' } };
   const reads = [];
   const ports = { stateRoot, now: w.now, env: { HOME: process.env.HOME, PATH: process.env.PATH }, timer: async () => true, warn: () => {},
     machineGuard: input => { reads.push(input); return readMachineGuard(input, { machineResources: async () => server }); },
@@ -37,28 +37,28 @@ test('T2 the machine --runs reaches a core tick through the launcher: 3 ready is
   const result = await tickAutopilot(stateFile, ports);
   assert.match(result.message, /Autopilot core: 1 started.*1 of 1 slots busy/);
   assert.equal(w.started.filter(job => job.role === 'build').length, 1, 'one claim of 3 ready issues');
-  assert.equal(reads[0].runs, 1, 'the saved --runs goes to the guard');
+  assert.equal(reads[0].runs, 1, 'the saved --runs goes to the guard'); assert.equal(reads[0].share, 70, 'and the saved --share');
   const status = await runAutopilotLauncher({ command: 'status', cwd, packageRoot: join(w.dir, 'pkg'), env: ports.env }, ports);
   assert.match(status.message, /Jobs: 1 of 1 slots busy/);
-  assert.match(status.message, /Machine: server · 64 cores, Autopilot uses 64 · .* · 1 slot \(this machine \(--runs 1\)\) · new work: ok/);
+  assert.match(status.message, /Machine: share 70% \(this machine, --share\) of 64 cores and 251 GiB · slots min\(4, 44\.8 cores ÷ 2, 175\.7 GiB ÷ 3 GiB\) = 4 → 1 \(this machine, --runs 1\) · .* · new work: ok/);
 });
 
-test('T9 no room: intake claims nothing and says why; running work goes on; with room again it claims', async t => {
+test('T9 no room for the share: intake claims nothing and says why; running work goes on; with room again it claims', async t => {
   const w = await coreWorld(t, { settings: { runs: 2 } });
   w.issue(17);
   await w.tick({ machine: room() });
   assert.ok(w.job(17, 'build'));
   w.issue(18);
-  const held = await w.tick({ machine: room('on battery power') });
-  assert.match(held.message, /intake held: on battery power/);
-  assert.equal(w.job(18), undefined, 'no claim on battery');
+  const held = await w.tick({ machine: room("load 6 is above 5 cores, Autopilot's 50% share") });
+  assert.match(held.message, /intake held: load 6 is above 5 cores, Autopilot's 50% share/);
+  assert.equal(w.job(18), undefined, 'no claim while the machine is busier than the share');
   assert.deepEqual(w.stopped, [], 'the running build goes on');
   w.build(17);
   await w.tick({ machine: room('memory pressure') });
   assert.ok(w.job(17, 'review') && w.job(17, 'suite'), 'reviews and suites of running work start');
   const ac = await w.tick({ machine: room() });
   assert.doesNotMatch(ac.message, /intake held/);
-  assert.ok(w.job(18, 'build'), 'on AC power the next issue starts');
+  assert.ok(w.job(18, 'build'), 'with room again the next issue starts');
 });
 
 test('every job gets the guard priority and PDD_CHECK_CPUS; the build brief names the worker count', async t => {
@@ -96,7 +96,7 @@ test('T13 cleanup: orphan worktrees and old free logs go; a live job keeps its f
 
 test('status shows the guard line from the launcher', async t => {
   const w = await coreWorld(t);
-  const text = coreStatus({ state: w.state, settings: w.settings, guard: 'Machine: laptop · … · new work: held (on battery power)' }, { root: w.root, now: w.now });
-  assert.match(text, /\nMachine: laptop · … · new work: held \(on battery power\)\n/);
+  const text = coreStatus({ state: w.state, settings: w.settings, guard: 'Machine: share 50% (default) · … · new work: held (memory pressure)' }, { root: w.root, now: w.now });
+  assert.match(text, /\nMachine: share 50% \(default\) · … · new work: held \(memory pressure\)\n/);
   assert.doesNotMatch(coreStatus({ state: w.state, settings: w.settings }, { root: w.root, now: w.now }), /Machine:/);
 });

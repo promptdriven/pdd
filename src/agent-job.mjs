@@ -97,10 +97,14 @@ export function jobCommand(spec, platform = process.platform, ports = {}) {
     return { command: p.taskset, args: ['--cpu-list', p.cpus, spec.command, ...(spec.args ?? [])] };
   return { command: spec.command, args: spec.args ?? [] };
 }
+// The wrapper's own nice value (default 19); every child inherits it.
+function lowerPriority(spec) {
+  try { setPriority(0, Number.isSafeInteger(spec.priority?.nice) ? spec.priority.nice : 19); } catch { /* A lower priority is best effort. */ }
+}
 // The detached wrapper: it owns the agent process and records how it ended.
 function wrap(specFile) {
   const spec = JSON.parse(readFileSync(specFile, 'utf8'));
-  try { setPriority(0, Number.isSafeInteger(spec.priority?.nice) ? spec.priority.nice : 19); } catch { /* A lower priority is best effort. */ }
+  lowerPriority(spec);
   const stdin = openSync(spec.input, 'r'), out = openSync(spec.log, 'a', 0o600);
   let finished = false, stopping = null, ended = null, child;
   const finish = (code, signal, group = false) => {

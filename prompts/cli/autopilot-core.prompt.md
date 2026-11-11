@@ -25,7 +25,7 @@ string `core`; any other value, or none, is `full`.
 | `engine` | `autopilotEngine(config)` |
 | `mode` | `off`, `observe` or `auto`; anything else is `off` |
 | `trust` | the nonblank strings of `autopilot.trust`, else `[]` |
-| `runs` | the slot count. With `machine` (`{klass, auto, runs}`: the machine class, its automatic slots and this machine's own `--runs`, from the [machine guard](machine-guard.prompt.md)) it is `slotCount({...machine, repoRuns: autopilot.runs}).slots` (#3231: a laptop 1, a server from its real limits, at most 4; `--runs` wins); without it a positive safe integer `autopilot.runs`, default 2 |
+| `runs` | the slot count. With `machine` (`{auto, runs}`: the automatic slots from the machine's share and this machine's own `--runs`, from the [machine guard](machine-guard.prompt.md)) it is `slotCount({...machine, repoRuns: autopilot.runs}).slots` (#3231: the share of the real limits, at most 4; `--runs` wins; pdd.json can only lower it); without it a positive safe integer `autopilot.runs`, default 2 |
 | `label` | trimmed nonblank opt-in label, for example `pdd:autopilot`, else `null` |
 | `quietMinutes` | positive safe integer, default 45: the no-progress period (there is no fixed time limit); the tick uses at least 2 timer ticks (`ports.tickMinutes`, default 10), and a core start refuses a value below that |
 | `ciStuckMinutes` | positive safe integer, default 360: how long CI may stay pending with no change; at least 3 timer ticks |
@@ -289,8 +289,8 @@ Intake is held, and nothing is claimed, when the saved agent is not Codex or
 Claude, when `ports.agentReady()` is false at the first ready issue (for example a
 Codex usage limit), while a machine pause runs (below), or when the machine has no
 room (#3231): `ports.machine.room` (the [machine guard](machine-guard.prompt.md)'s
-`machineRoom`, read by the launcher each tick) is not ok. The tick message then says
-`intake held: REASON`, for example `intake held: on battery power`. Running work goes
+`machineRoom` for Autopilot's share, read by the launcher each tick) is not ok. The tick
+message then says `intake held: REASON`, for example `intake held: memory pressure`. Running work goes
 on; the room check never stops a job and never counts as no progress.
 
 **No result is a machine fault first.** An agent that exited with no result, a start
@@ -363,8 +363,8 @@ end as `no-result`. Every job kind follows the same rules, in every machine stat
 ## Jobs
 
 Every job starts with `ports.machine.priority(role)` of the machine guard as its
-`priority` (nice 19; macOS utility QoS; on a Linux laptop a CPU list of Autopilot's
-share for agent roles) and that share as `PDD_CHECK_CPUS` in its environment; with no
+`priority` (nice 19; macOS utility QoS; on Linux a CPU list of Autopilot's share for
+agent roles) and that share of the cores as `PDD_CHECK_CPUS` in its environment; with no
 `ports.machine` the job runner's defaults apply (nice 19, macOS utility QoS). The
 build, repair and conflict rules say: "When you run tests or builds, pass
 `$PDD_CHECK_CPUS` as the worker count".
@@ -437,9 +437,11 @@ any other pdd (for example an older global install).
   tests, ships the PR with `Runtime: not run (EXACT REASON)` and puts the reason and
   the tool error in the result's `runtime` with kind `runtime`. When `pdd test` says
   that the interpreter is in maintenance, the job does not wait for it: it stops `pdd
-  test` (pdd saves the checks as not sent), ships the PR with `Runtime: not run
-  (interpreter maintenance)` and the runtime code `maintenance`; Autopilot sends the
-  check after the maintenance (merge check step 5a). One `Evidence:` line
+  test` before it sends (pdd saves the checks as not sent), writes `Runtime: not run
+  (maintenance until HH:MM UTC)` with the UTC end time that pdd printed (with several
+  changed Stories, one line each: `Runtime: not run (STORY: maintenance until HH:MM
+  UTC)`) and the runtime code `maintenance`. The job never sends a check again itself:
+  the engine does (merge check step 5a). One `Evidence:` line
   in the PR body and the same text as the result's `evidence` (below). No review
   verdict or review claim (for example "Review: no must-fix") in the PR body or a
   comment: only the core's fresh reviewer gives one. **Approval (auto and observe
@@ -618,7 +620,7 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    file or count one report through the [report owner](autopilot-reports.prompt.md)
    (with `runtimeRepo` and `runtimeOwner`) with the cause `{kind: runtime, component, code, text, detail, shipped: true}`
    (component default `pdd-test`, code default `not-run`), once per job and
-   component/code (`job.runtimeReport`), and only when the Runtime step (5a) has no
+   component/code (`job.runtimeReport`), and only when the Runtime resend (5a) has no
    check left to send for this head: while it may still send one, no report is filed.
    It never blocks or ends the job. A not-run
    with no Runtime kind (for example no prompt changed) files nothing.
@@ -821,40 +823,52 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    debate B, outside the lane, with the conflicting file names), not a CI wait. A new head that has no run yet (for example after a
    refresh) waits for its CI. A pending check still waits, as long as it takes; save `progress`
    first.
-5a. **Runtime step: a check that was never sent (#3241).** When the PR body has
-   exactly one Runtime line and it says "not run", the tick reads once for each agent
-   head the Stories of the job worktree whose saved check was never sent since the job
-   started (`unsentStoryChecks` of the [runtime client](runtime-client.prompt.md) with
-   `root` the job worktree and `since` the job start; saved as `runtimeWait {head,
-   state, stories}`). None: nothing changes, and step 2 applies as usual. Else, when
-   everything above is green, the job holds its Runtime step before the merge lane:
+5a. **Runtime resend (#3241, rule B5), one function `runtimeResend`.** When every
+   Runtime line of the PR body says "not run" (one line, or one line per Story), the
+   tick reads once for each agent head the saved checks of the job worktree since the
+   job started (`resendableStoryChecks` of the [runtime client](runtime-client.prompt.md)
+   with `root` the job worktree and `since` the job start; saved as `runtimeWait {head,
+   state, stories, neverSent, noVerdict, failed}`). A check is sent once more when it
+   was **never sent** (held in maintenance, busy, stopped before sending) or was **sent
+   with no verdict and no failed check** (an AI provider failure). A Story with a failed
+   check is never sent again, and then nothing is sent for that head. Nothing to send:
+   step 2 applies as usual. Else, when everything above is green, the job holds this
+   step before the merge lane:
    - **Wait.** At most every 10 minutes it reads the free interpreter health
      (`checkRuntimeHealth`: one `GET /v1/capacity`, no check, no AI call). While the
-     answer is maintenance, the job waits: it writes no "not run" line and files no
-     report, it holds no slot (it runs no process), and each tick counts as progress,
-     so the quiet rule never ends it. The claim heartbeat goes on. Other jobs and intake
-     go on as usual.
+     answer is maintenance, the job waits: it writes no new line and files no report,
+     it holds no slot (it runs no process), and each tick counts as progress, so the
+     quiet rule never ends it. The claim heartbeat goes on. Other jobs and intake go on
+     as usual.
    - **Send once.** When the answer is not maintenance, the engine itself runs `pdd
      test --json STORY…` for those Stories in the job worktree, with no agent (process
      role `runtime`, watched by the process rule like the suite). It sends at most once
      for each agent head.
-   - **Outcome**, from the last JSON summary line of its log (`exit_code`, `rows`):
-     0 rewrites the PR's Runtime line to `Runtime: PASS` and the Evidence part to
-     `runtime=pass` and saves the runtime state `pass` (T01 in step 3 then checks that
-     the saved checks cover the change, as for every PASS claim); 1 with a failed row
-     is a real FAIL: the line becomes `Runtime: FAIL (pdd test after the interpreter
-     maintenance: STORIES failed)`, and the Runtime gate sends it to a repair; anything
+   - **Outcome**, from the last JSON summary line of its log (`exit_code`, `rows`): 0
+     rewrites the Runtime lines of the PR to one `Runtime: PASS` and the Evidence part
+     to `runtime=pass` and saves the runtime state `pass` (T01 in step 3 then checks
+     that the saved checks cover the change, as for every PASS claim); 1 with a failed
+     row is a real FAIL: the line becomes `Runtime: FAIL (pdd test sent again by
+     Autopilot: STORIES failed)`, and the Runtime gate sends it to a repair; anything
      else (no summary, no verdict, a refusal, a run that was stopped or died) rewrites
-     the line to `Runtime: not run (the check sent after the interpreter maintenance
-     gave no verdict: SUMMARY)` with the runtime kind `runtime`, code `no-verdict`, and
-     step 2 files its one report. The next tick reads the PR again from step 1.
+     the line to `Runtime: not run (the check that Autopilot sent again gave no verdict:
+     SUMMARY)` with the runtime kind `runtime`, code `no-verdict`, and step 2 files its
+     one report. The next tick reads the PR again from step 1.
    - **Backstop.** When the maintenance lasts 12 hours from the first read that saw
      it, the job stops waiting: the line becomes `Runtime: not run (maintenance since
      HH:MM UTC)` (the time of that first read), the runtime cause is `{kind: runtime,
      component: pdd-test, code: maintenance}`, step 2 files one report, and the merge
      check goes on.
-   A repair and a new agent result clear `runtimeWait`. The PR body is written back
-   with a PATCH of the PR; a failed PATCH waits for the next tick.
+   - **Audit.** Before the first rewrite for a head, the job saves the agent's own
+     Runtime lines, its Evidence line and its runtime result as `runtimeOriginal
+     {head, lines, evidence, runtime, engine}` (`engine` is the line that the engine
+     wrote); the history line of the job keeps it.
+   `runtimeResend(ctx, job, pr)` returns `{state, hold, head, stories, neverSent,
+   noVerdict, failed, since, until, line}`: state `none`, `waiting`, `sending`, `pass`,
+   `fail`, `no-verdict` or `maintenance`, and `hold` true while the merge check stops
+   here; other steps (for example the #3227 line checks) read this result. A repair
+   and a new agent result clear `runtimeWait`. The PR body is written back with a
+   PATCH of the PR; a failed PATCH waits for the next tick.
 6. **Merge lane** (one final step per repository). A green PR (CI green or none,
    review PASS, suite pass) enters the lane. The lane is the label `pdd:merge-lane` on
    one open PR, shared by every machine through GitHub (`issues?state=open&labels=…`,
@@ -1006,7 +1020,8 @@ agent's commits may exist only there.
 files only: the engine line (mode, repository, folder, base, agent), the slot line
 (`B of R slots busy`, no-progress limit, repairs, report mode, opt-in label), the
 guard's machine line when the launcher gives one (`guard`, for example `Machine:
-laptop · 10 cores, Autopilot uses 5 · … · new work: held (on battery power)`), the pause
+share 50% (default) of 10 cores and 16 GiB · slots min(4, 5 cores ÷ 2, 8 GiB ÷ 3 GiB) = 2
+→ 2 (automatic) · … · new work: held (memory pressure)`), the pause
 line (`New jobs paused until TIME (H h): …` or `No pause: N no-result end(s) in a row …`), one line per job (`#N build running 12m (log …)`, `#N PR #P at SHA: review …,
 suite …`, with `; merge lane: final step`, `; merge lane: waiting for PR #P since TIME`,
 `; Runtime: waits for the interpreter maintenance since HH:MM UTC (until HH:MM UTC); no
@@ -1048,8 +1063,8 @@ REST calls use `gh api --include --method M ENDPOINT [--input -]`. Also `now()`,
 `fs`, `root`, `reportRoot`, `env`, `version` (the PDD version), `listIssues()`,
 `trusted(row)`, `agentReady()`, `warn(text)`, `alert({issue, kind, text, tried, need, update})`,
 `machine` (`{room, priority(role)}` of the [machine guard](machine-guard.prompt.md); absent: no
-room check and the job runner's default priority), `runtimeHealth()` (default `checkRuntimeHealth({env})`) and `unsentChecks({root, since})`
-(default `unsentStoryChecks` with `env`) of the runtime client, and the replaceable `jobs`
+room check and the job runner's default priority), `runtimeHealth()` (default `checkRuntimeHealth({env})`) and `resendChecks({root, since})`
+(default `resendableStoryChecks` with `env`) of the runtime client, and the replaceable `jobs`
 (`start`, `read`, `stop`), `owners(numbers)`, `heartbeat(job)` and `checkBase(input)`
 with the native defaults named above.
 
@@ -1066,7 +1081,7 @@ with the native defaults named above.
   `pdd workflow suite` job.
 - [Secret redaction](secret-redaction.prompt.md): required for suite log tails.
 - [Runtime client](runtime-client.prompt.md): required for `savedStoryEvidence` (the
-  saved checks of T01, with `comparisonRoot`), `unsentStoryChecks` and
+  saved checks of T01, with `comparisonRoot`), `resendableStoryChecks` and
   `checkRuntimeHealth` (the Runtime step 5a).
 - [Runtime preflight](runtime-preflight.prompt.md): required for `findTests` (Stories and
   their tests, `excludeFixtureProjects`), `captureSource` (Story footprints), `gitFiles`,

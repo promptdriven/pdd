@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 7e69a001387359b448f1d02eafe7ece218a157cb4a6c9a2f0f39076b33a32a2c).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: c114b369b01d88a4c1a20bffdc4ba00497c0ef216623439d7b19e326b0b0928f).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -139,7 +139,7 @@ function honestEvidence(job) {
 
 // ---- Settings -------------------------------------------------------------------------------------------
 export function autopilotEngine(config) { return config?.autopilot?.engine === 'core' ? 'core' : 'full'; }
-// With the machine's facts (#3231: its class, its automatic slots and its own --runs), the machine guard decides the
+// With the machine's facts (#3231: the automatic slots of its share and its own --runs), the machine guard decides the
 // slots; without them (tests, other callers) pdd.json autopilot.runs, default 2.
 export function coreSettings(config = {}, packageJson = null, machine = null) {
   const a = object(config?.autopilot) ? config.autopilot : {};
@@ -482,7 +482,7 @@ function workRules(ctx, job) {
 3. Tests. When the change alters what a person or program gets through the repo's public surface (a return value, error, output, exit code, written file, export, command or script), add a test through that surface that fails on base. For any other change, add no test: run the issue's done check and record the command and its result.
 4. In the PR body, write one line for each path that you use: \`Path: <a|b|c|d|e> — <files> — <owner or unowned> — <prompt changed | quote file:line | no contract change | new prompt> — Test: <file | done check>\`. The prompt and the code may be in one commit. Never rewrite history to change the commit order.
 5. Run focused tests for the changed behavior. Do not wait for CI and do not run the full test suite. Autopilot runs both after you finish (the full test command of this repository is \`${settings.testCommand ?? 'not set'}\`). When you run tests or builds, pass \`$PDD_CHECK_CPUS\` as the worker count (for example \`node --test --test-concurrency=$PDD_CHECK_CPUS\`, \`pytest -n $PDD_CHECK_CPUS\`, \`cargo test -j $PDD_CHECK_CPUS\`): it is this machine's share for Autopilot.
-6. If a prompt changed, run \`pdd test\` for the changed Stories (pdd: ${process.execPath} ${ctx.pdd}; \`pdd\` on PATH is the same). Put exactly one line in the PR body: "Runtime: PASS", "Runtime: FAIL (short reason)" or "Runtime: not run (exact reason)". Only a real Runtime FAIL verdict (the interpreter checked the Story and said FAIL) is a failure: fix the code until it passes. When Runtime could not check (a lint refusal, no interface or a binding refusal, a scenario limit such as a value that is not a safe integer, no verdict, an interpreter error), do not stop and do not invent an interface: cover the case with native tests, ship the PR with "Runtime: not run (<the exact reason>)", and put that reason and the tool's error in the result's runtime (kind "runtime"). Autopilot files one report for it. When pdd test says that the interpreter is in maintenance, do not wait for it: stop pdd test (pdd saves the checks as not sent), ship the PR with "Runtime: not run (interpreter maintenance)" and the runtime code "maintenance". Autopilot sends the check after the maintenance.
+6. If a prompt changed, run \`pdd test\` for the changed Stories (pdd: ${process.execPath} ${ctx.pdd}; \`pdd\` on PATH is the same). Put exactly one line in the PR body: "Runtime: PASS", "Runtime: FAIL (short reason)" or "Runtime: not run (exact reason)". Only a real Runtime FAIL verdict (the interpreter checked the Story and said FAIL) is a failure: fix the code until it passes. When Runtime could not check (a lint refusal, no interface or a binding refusal, a scenario limit such as a value that is not a safe integer, no verdict, an interpreter error), do not stop and do not invent an interface: cover the case with native tests, ship the PR with "Runtime: not run (<the exact reason>)", and put that reason and the tool's error in the result's runtime (kind "runtime"). Autopilot files one report for it. When pdd test says that the interpreter is in maintenance, do not wait for it: stop pdd test before it sends (pdd saves the checks as not sent) and write "Runtime: not run (maintenance until HH:MM UTC)", with the UTC end time that pdd printed (with several changed Stories, one line each: "Runtime: not run (STORY: maintenance until HH:MM UTC)"), and the runtime code "maintenance". Never send a check again yourself: Autopilot sends a check that was not sent, or that got no verdict with no failed check, once by itself before the merge.
 7. Put exactly one Evidence line in the PR body and the same text as "evidence" in the result: "Evidence: runtime=<pass|fail|not-run> (<passed>/<total>); vectors=<pass|fail|not-run> (<passed>/<total>); formal=<proved|bounded|failed|not-run|not-applicable>; tests=<pass|fail> (<passed>/<total>)". runtime is pdd test on the changed Stories, vectors the Story vector replay tests, formal the formal tests, tests your focused tests; give the counts you saw, and leave out a count you did not see.
 8. Do not write a review verdict or any review claim (for example "Review: no must-fix" or "Independent review: …") in the PR body or a comment. Only Autopilot's fresh reviewer gives a review verdict.
 ${approving(ctx) && !strictRepo(ctx, job) ? `9. Approval: in ${settings.mode} mode the operator's start is the approval of your prompt changes. For each *.prompt.md you changed, after its checks pass, record it with the native command and commit the result in the PR: printf '%s' ${quote(approvalWords(ctx))} | pdd approve PROMPT --said -
@@ -897,7 +897,7 @@ async function intake(ctx, rows) {
   // The machine pause: no new job starts until it ends; then intake goes on as usual.
   const pausedText = () => { const m = ctx.machineState(); return m.pausedUntil ? `new jobs paused until ${new Date(m.pausedUntil).toISOString()} (${m.pausedHours} h): the agent ended ${STRIKES} or more jobs in a row with no result` : null; };
   if (pausedText()) return pausedText();
-  // #3231: the one room check before new work (memory, disk, load and power on a laptop). Running work goes on.
+  // #3231: the one room check before new work (memory, disk and load, for Autopilot's share). Running work goes on.
   const room = ctx.ports.machine?.room;
   if (room && !room.ok) return `intake held: ${room.reason}`;
   let checked = false;
@@ -1489,7 +1489,7 @@ async function mergeCheck(ctx, job) {
   // "Runtime: not run" is allowed and files no report by itself; a Runtime report comes only from a failed job
   // whose cause kind is runtime (END).
   job.runtime = normalRuntime(job.runtime);
-  await runtimeUnsent(ctx, job, pr.body);
+  await runtimeResendable(ctx, job, pr.body);
   await runtimeNotRunReport(ctx, job);
   // The Runtime gate is an allowlist: only PASS or "not run" lines, and only a pass or not-run result, can merge. Git
   // decides whether a prompt changed (the agent's promptChanged never hides a changed prompt).
@@ -1572,8 +1572,8 @@ async function mergeCheck(ctx, job) {
   noteProgress(ctx, job, [job.head, ci.state, ci.sig, review.state, suite.state, vectors?.state, logSig(job.review?.agent && ctx.jobs.read(job.review.agent))].join('|'),
     ci.state === 'pending' || review.state === 'running' || suite.state === 'running' || vectors?.state === 'running');
   if (!['green', 'none'].includes(ci.state) || review.state !== 'pass' || suite.state !== 'pass' || vectors?.state === 'running') { delete job.lastError; delete job.lastErrorTool; ctx.saveJob(job); return; }
-  // #3241: a Runtime check that was never sent is sent once, after the interpreter maintenance, before the lane.
-  if (!await runtimeStep(ctx, job, pr)) return;
+  // #3241 (rule B5): a Runtime check that was never sent, or got no verdict with no failed check, is sent once more.
+  if ((await runtimeResend(ctx, job, pr)).hold) return;
   // The merge lane: one PR per repository in the final step. Other green PRs wait in claim order with their reviews.
   if (await enterLane(ctx, job) !== 'final') return;
   // L2: the exact conflict check. A conflict never goes to repairOrEnd: mechanical hunks are fixed in the lane, other
@@ -1623,33 +1623,40 @@ async function mergeCheck(ctx, job) {
   if (merged.code !== 0) { Object.assign(job, { lastError: safeLine(`gh pr merge: ${merged.stderr || merged.stdout}`), lastErrorTool: false }); ctx.saveJob(job); return; }
   return finishMerge(ctx, job);
 }
-// ---- The Runtime step (#3241) ---------------------------------------------------------------------------
-// A Runtime check that the agent could not send (the interpreter was in maintenance, or pdd test stopped before
-// sending) is sent once by the engine itself, before the merge lane, when no maintenance runs. While the interpreter is
-// in maintenance the job waits: it reads the free capacity at most every 10 minutes, holds no slot and is never quiet.
-// After 12 hours of maintenance the PR ships "Runtime: not run (maintenance since HH:MM UTC)" with one report.
+// ---- The Runtime resend (#3241, rule B5) -----------------------------------------------------------------
+// The engine sends a Runtime check once more by itself, before the merge lane, once for each agent head: a check that
+// pdd never sent (held in maintenance, busy, stopped before sending) and a sent check with no verdict and no failed
+// check (an AI provider failure). A check with a failed check is never sent again. While the interpreter is in
+// maintenance the job waits: it reads the free capacity at most every 10 minutes, holds no slot and is never quiet.
+// After 12 hours of maintenance the PR ships "Runtime: not run (maintenance since HH:MM UTC)" with one report. The agent
+// never sends a check again itself.
 const RUNTIME_READ_EVERY = 10 * MIN, RUNTIME_WAIT_LIMIT = 12 * HOUR;
 const utcClock = at => `${new Date(at).toISOString().slice(11, 16)} UTC`;
 const runtimeCurrent = job => job.runtimeWait && job.runtimeWait.head === (job.agentHead ?? job.head);
 const runtimePending = job => runtimeCurrent(job) && ['pending', 'waiting', 'sent'].includes(job.runtimeWait.state);
 const runtimeWaiting = job => job.phase === 'pr' && runtimeCurrent(job) && job.runtimeWait.state === 'waiting';
-// Once for each agent head: the Stories of the job worktree whose saved check was never sent since the job started.
-async function runtimeUnsent(ctx, job, body) {
+// Once for each agent head, when every Runtime line of the PR says "not run" (one line, or one per Story): the Stories
+// of the job worktree whose saved check can be sent again, from the batches since the job started.
+async function runtimeResendable(ctx, job, body) {
   const head = job.agentHead ?? job.head;
   if (runtimeCurrent(job)) return job.runtimeWait;
   const lines = runtimeVerdicts(body);
-  let stories = [];
-  if (lines.length === 1 && lines[0].verdict === 'not-run') {
+  let found = null;
+  if (lines.length && lines.every(line => line.verdict === 'not-run')) {
     try {
-      const read = ctx.ports.unsentChecks ?? (async input => (await import('./runtime-client.mjs')).unsentStoryChecks(input, { env: ctx.ports.env ?? process.env }));
-      stories = ((await read({ root: job.worktree, since: job.started ?? 0 }))?.stories ?? []).filter(named).slice(0, 50);
-    } catch (error) { ctx.warn(`Autopilot core could not read the unsent Runtime checks of #${job.issue}: ${error.message}`); }
+      const read = ctx.ports.resendChecks ?? (async input => (await import('./runtime-client.mjs')).resendableStoryChecks(input, { env: ctx.ports.env ?? process.env }));
+      found = await read({ root: job.worktree, since: job.started ?? 0 });
+    } catch (error) { ctx.warn(`Autopilot core could not read the saved Runtime checks of #${job.issue}: ${error.message}`); }
   }
-  job.runtimeWait = stories.length ? { head, state: 'pending', stories } : { head, state: 'none' };
+  const list = key => (Array.isArray(found?.[key]) ? found[key] : []).filter(named).slice(0, 50);
+  const stories = list('stories'), failed = list('failed');
+  // A failed check is red, never sent again; then nothing is sent for this head.
+  job.runtimeWait = stories.length && !failed.length ? { head, state: 'pending', stories, neverSent: list('neverSent'), noVerdict: list('noVerdict'), failed }
+    : { head, state: 'none', failed };
   ctx.saveJob(job);
   return job.runtimeWait;
 }
-// The one Runtime line of the PR body becomes LINE, and the runtime part of its Evidence line becomes STATE.
+// The Runtime lines of the PR body become one LINE, and the runtime part of its Evidence line becomes STATE.
 function withRuntimeLine(body, line, state) {
   let done = false;
   return String(body ?? '').split('\n').flatMap(raw => {
@@ -1657,12 +1664,17 @@ function withRuntimeLine(body, line, state) {
     return [/^evidence\s*:/i.test(normalLine(raw)) ? raw.replace(/\bruntime\s*=\s*[a-z-]+(?:\s*\(\s*\d+\s*\/\s*\d+\s*\))?/i, `runtime=${state}`) : raw];
   }).join('\n');
 }
+// The agent's own lines stay in the job and its history line (runtimeOriginal), so an audit can compare the two.
 async function setRuntimeLine(ctx, job, pr, line, runtime) {
+  const head = job.agentHead ?? job.head;
+  if (job.runtimeOriginal?.head !== head) job.runtimeOriginal = { head, lines: runtimeVerdicts(pr.body).map(row => row.line),
+    evidence: String(pr.body ?? '').split('\n').find(raw => /^evidence\s*:/i.test(normalLine(raw)))?.trim().slice(0, 300) ?? null, runtime: job.runtime ?? null };
   const body = withRuntimeLine(pr.body, line, runtime.state);
   await ctx.gh.ok('PATCH', `repos/${ctx.repo}/pulls/${job.pr}`, { body: safeBody(body) });
   pr.body = body;
   const evidence = parseEvidence(body) ?? job.evidence ?? null;
   Object.assign(job, { runtime, coverage: null, evidence: evidence?.runtime ? { ...evidence, runtime: { state: runtime.state } } : evidence });
+  job.runtimeOriginal.engine = line;
 }
 // The last pdd test --json summary line of the log: {exit_code, rows}, or null.
 function runtimeSummary(fs, file) {
@@ -1673,50 +1685,52 @@ function runtimeSummary(fs, file) {
   }
   return null;
 }
-// Returns true when the merge check may go on to the lane.
-async function runtimeStep(ctx, job, pr) {
-  const w = await runtimeUnsent(ctx, job, pr.body), now = ctx.now();
-  if (!['pending', 'waiting', 'sent'].includes(w.state)) return true;
-  const hold = sig => { noteProgress(ctx, job, `runtime|${w.state}|${sig}|${now}`, true); delete job.lastError; delete job.lastErrorTool; ctx.saveJob(job); return false; };
+// The one resend function. Returns {state, hold, head, stories, neverSent, noVerdict, failed, since, until, line}:
+// state none (nothing to send), waiting (maintenance), sending (pdd test runs), pass, fail or no-verdict (the outcome,
+// with the new PR line), or maintenance (the 12-hour backstop); hold is true while the merge check must stop here.
+async function runtimeResend(ctx, job, pr) {
+  const w = await runtimeResendable(ctx, job, pr.body), now = ctx.now();
+  const result = (state, hold, extra = {}) => ({ state, hold, head: w.head, stories: w.stories ?? [], neverSent: w.neverSent ?? [], noVerdict: w.noVerdict ?? [], failed: w.failed ?? [],
+    since: w.maintenance ?? null, until: w.until ?? null, line: w.line ?? null, ...extra });
+  if (w.state === 'none') return result('none', false);
+  if (w.state === 'done') return result(w.outcome, false);
+  const hold = (state, sig) => { noteProgress(ctx, job, `runtime|${w.state}|${sig}|${now}`, true); delete job.lastError; delete job.lastErrorTool; ctx.saveJob(job); return result(state, true); };
+  const finish = async (outcome, line, runtime) => { await setRuntimeLine(ctx, job, pr, line, runtime); Object.assign(w, { state: 'done', outcome, line }); return hold(outcome, 'done'); };
   if (w.state === 'sent') {
     const seen = ctx.jobs.read(w.agent);
     if (seen.state === 'running') {
       const watch = await watchProcess(ctx, job, w.agent, 'runtime');
-      if (watch.state === 'running') return hold(w.agent.id);
+      if (watch.state === 'running') return hold('sending', w.agent.id);
     }
     const summary = runtimeSummary(ctx.fs, w.agent.log), rows = Array.isArray(summary?.rows) ? summary.rows : [];
     const failed = [...new Set(rows.filter(row => row?.state === 'failed').map(row => oneLine(row.story ?? row.test, 120)))];
-    if (summary?.exit_code === 0 && rows.length) await setRuntimeLine(ctx, job, pr, 'Runtime: PASS', { state: 'pass' });
-    else if (summary?.exit_code === 1 && failed.length) await setRuntimeLine(ctx, job, pr, `Runtime: FAIL (pdd test after the interpreter maintenance: ${failed.slice(0, 5).join(', ')} failed)`, { state: 'fail', kind: 'runtime', component: 'pdd-test', code: 'fail' });
-    else {
-      const why = safeLine(summary?.summary_line ?? (seen.state === 'running' ? 'the run made nothing new and was stopped' : `exit ${seen.exit?.code ?? seen.exit?.signal ?? 'unknown'}, no summary`), 200);
-      await setRuntimeLine(ctx, job, pr, `Runtime: not run (the check sent after the interpreter maintenance gave no verdict: ${why})`,
-        { state: 'not-run', kind: 'runtime', component: 'pdd-test', code: 'no-verdict', cause: `the Runtime check that Autopilot sent after the interpreter maintenance gave no verdict: ${why}`, detail: `Log: ${basename(w.agent.log)} on this machine` });
-    }
-    Object.assign(w, { state: 'done', outcome: job.runtime.state });
-    return hold('done');
+    if (summary?.exit_code === 0 && rows.length) return finish('pass', 'Runtime: PASS', { state: 'pass' });
+    if (summary?.exit_code === 1 && failed.length) return finish('fail', `Runtime: FAIL (pdd test sent again by Autopilot: ${failed.slice(0, 5).join(', ')} failed)`, { state: 'fail', kind: 'runtime', component: 'pdd-test', code: 'fail' });
+    const why = safeLine(summary?.summary_line ?? (seen.state === 'running' ? 'the run made nothing new and was stopped' : `exit ${seen.exit?.code ?? seen.exit?.signal ?? 'unknown'}, no summary`), 200);
+    return finish('no-verdict', `Runtime: not run (the check that Autopilot sent again gave no verdict: ${why})`,
+      { state: 'not-run', kind: 'runtime', component: 'pdd-test', code: 'no-verdict', cause: `the Runtime check that Autopilot sent again gave no verdict: ${why}`, detail: `Log: ${basename(w.agent.log)} on this machine` });
   }
   if (Number.isFinite(w.maintenance) && now - w.maintenance >= RUNTIME_WAIT_LIMIT) {
     const since = `maintenance since ${utcClock(w.maintenance)}`;
     await setRuntimeLine(ctx, job, pr, `Runtime: not run (${since})`,
       { state: 'not-run', kind: 'runtime', component: 'pdd-test', code: 'maintenance', cause: `the interpreter stayed in maintenance for ${RUNTIME_WAIT_LIMIT / HOUR} hours (${since}), so the Runtime check was never sent`, detail: `Stories: ${w.stories.join(', ')}` });
-    Object.assign(w, { state: 'done', outcome: 'maintenance' });
+    Object.assign(w, { state: 'done', outcome: 'maintenance', line: `Runtime: not run (${since})` });
     ctx.saveJob(job);
     await runtimeNotRunReport(ctx, job);
-    return true;
+    return result('maintenance', false);
   }
-  if (Number.isFinite(w.readAt) && now - w.readAt < RUNTIME_READ_EVERY) return hold(w.readAt);
+  if (Number.isFinite(w.readAt) && now - w.readAt < RUNTIME_READ_EVERY) return hold(w.state === 'waiting' ? 'waiting' : 'sending', w.readAt);
   let health;
   try { health = await (ctx.ports.runtimeHealth ?? (async () => (await import('./runtime-client.mjs')).checkRuntimeHealth({ env: ctx.ports.env ?? process.env })))(); }
   catch (error) { health = { state: 'unavailable', detail: oneLine(error.message, 200) }; }
   w.readAt = now;
   if (health?.detail === 'maintenance') {
     Object.assign(w, { state: 'waiting', maintenance: w.maintenance ?? now, until: Number.isFinite(Date.parse(health.until)) ? Date.parse(health.until) : null });
-    return hold('maintenance');
+    return hold('waiting', 'maintenance');
   }
   w.agent = startJob(ctx, job, 'runtime', job.worktree, '', { command: process.execPath, args: [ctx.pdd, 'test', '--json', ...w.stories] });
   w.state = 'sent';
-  return hold('sent');
+  return hold('sending', 'sent');
 }
 // ---- The merge lane -------------------------------------------------------------------------------------
 // The label pdd:merge-lane on a PR is the repository's one final step, shared by every machine. A green PR takes it
@@ -2429,6 +2443,7 @@ async function finishLocal(ctx, job, outcome, text) {
     if (outcome === 'merged') await step('branch', () => ctx.git(['branch', '-D', job.branch]));
     for (const name of list(ctx.dirs.logs).filter(name => !name.endsWith('.log'))) await step('logs', () => ctx.fs.rmSync(join(ctx.dirs.logs, name), { force: true }));
     await step('history', () => appendHistory(ctx, { at: ctx.now(), issue: job.issue, outcome, text: oneLine(text), pr: job.pr ?? null, log: job.agent?.log ?? null, evidence: honestEvidence(job) ?? null,
+      ...(job.runtimeOriginal ? { runtimeOriginal: job.runtimeOriginal } : {}),
       ...(outcome === 'released' && job.end?.cause?.counted ? { noResult: true } : {}), ...(outcome === 'ended' ? { reset: true } : {}) }));
   } finally {
     try { ctx.fs.rmSync(join(ctx.dirs.jobs, `${job.issue}.json`), { force: true }); }

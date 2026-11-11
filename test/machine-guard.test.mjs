@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { GUARD, machineClass, autoSlots, slotCount, machineRoom, jobPriority, timerPriority, guardLine, readMachineGuard, usableCores, freeMemory } from '../src/machine-guard.mjs';
+import { GUARD, validShare, shareOf, autoSlots, slotMath, slotCount, machineRoom, jobPriority, timerPriority, guardLine, readMachineGuard, usableCores, freeMemory, memoryLimit } from '../src/machine-guard.mjs';
 import { coreSettings } from '../src/autopilot-core.mjs';
 import { readMachineResources } from '../src/machine-resources.mjs';
 import { jobCommand, startAgentJob, readAgentJob } from '../src/agent-job.mjs';
@@ -14,71 +14,74 @@ const GiB = 1024 ** 3;
 const ids = n => Array.from({ length: n }, (_, i) => i);
 // A healthy machine: n cores, plenty of memory and disk, low load, on AC power.
 const machine = (n = 8, extra = {}) => ({ cpuCount: n, load: 1, memory: { available: 12 * GiB, total: 16 * GiB }, pressure: { io: null, memory: null, level: 1 },
-  disk: { available: 200 * GiB, total: 500 * GiB }, power: 'ac', cgroup: { cpus: null, memory: null },
+  disk: { available: 200 * GiB, total: 500 * GiB }, cgroup: { cpus: null, memoryMax: null, memoryFree: null },
   check: { cpuIds: ids(n), platform: 'linux', battery: false, virtualized: false, taskset: '/usr/bin/taskset' }, ...extra });
 
-test('the machine class: macOS and a Linux machine with a battery or not a VM are laptops; a Linux VM is a server', () => {
-  assert.equal(machineClass({ platform: 'darwin', battery: false, virtualized: true }), 'laptop');
-  assert.equal(machineClass({ platform: 'linux', battery: true, virtualized: true }), 'laptop');
-  assert.equal(machineClass({ platform: 'linux', battery: false, virtualized: false }), 'laptop');
-  assert.equal(machineClass({ platform: 'linux', battery: false, virtualized: null }), 'laptop', 'unknown virtualization reserves the person');
-  assert.equal(machineClass({ platform: 'linux', battery: false, virtualized: true }), 'server');
-  assert.equal(machineClass({ platform: 'win32' }), 'server');
+test('the share: a whole percent from 1 to 100, default 50', () => {
+  assert.equal(GUARD.share, 50);
+  for (const value of [1, 50, 100]) { assert.equal(validShare(value), true); assert.equal(shareOf(value), value); }
+  for (const value of [0, 101, 49.5, '70', null, undefined, NaN]) { assert.equal(validShare(value), false, String(value)); assert.equal(shareOf(value), 50); }
 });
 
-test('T1 slots: laptop 1, server from its real limits (cgroup too) at most 4, the machine --runs wins, pdd.json only lowers a server', () => {
-  assert.equal(autoSlots(machine(64, { memory: { available: 232 * GiB, total: 251 * GiB } }), 'server'), 4, 'pdd-vm: the cap');
-  assert.equal(autoSlots(machine(4), 'server'), 2, '4 cores: 2 slots');
-  assert.equal(autoSlots(machine(64, { memory: { available: 7 * GiB, total: 8 * GiB } }), 'server'), 2, '7 GiB free: 2 slots');
-  assert.equal(autoSlots(machine(64, { cgroup: { cpus: 2.5, memory: null } }), 'server'), 1, 'a 2.5-CPU cgroup quota counts, not the 64 host cores');
-  assert.equal(autoSlots(machine(64, { memory: { available: 200 * GiB, total: 251 * GiB }, cgroup: { cpus: null, memory: 4 * GiB } }), 'server'), 1, 'the cgroup memory room counts');
-  assert.equal(autoSlots(machine(1), 'server'), 1, 'at least 1');
-  assert.equal(autoSlots(machine(64), 'laptop'), 1);
-  assert.equal(usableCores(machine(8, { cgroup: { cpus: 3, memory: null } })), 3); assert.equal(freeMemory(machine(8, { cgroup: { cpus: null, memory: GiB } })), GiB);
-  // The coreSettings table: class x pdd.json runs x machine --runs.
-  const runs = (klass, repoRuns, machineRuns, auto = klass === 'laptop' ? 1 : 4) => coreSettings({ autopilot: repoRuns === undefined ? {} : { runs: repoRuns } }, null, { klass, auto, runs: machineRuns }).runs;
-  assert.equal(runs('laptop'), 1, 'a laptop with no value: 1');
-  assert.equal(runs('server'), 4, 'a server with no value: its automatic slots');
-  assert.equal(runs('laptop', 3), 1, 'pdd.json does not raise a laptop');
-  assert.equal(runs('server', 3), 3, 'pdd.json lowers a server');
-  assert.equal(runs('server', 9), 4, 'pdd.json never raises a server above its room');
-  assert.equal(runs('laptop', undefined, 2), 2, 'the machine --runs wins on a laptop');
-  assert.equal(runs('server', 1, 2), 2, 'and on a server');
-  assert.equal(runs('server', undefined, 0), 4, 'an invalid --runs is absent');
+// One test per row of the slot table (the examples in the prompt). Each machine is on Linux or macOS; the OS decides
+// nothing.
+const box = (cores, gb, extra = {}) => machine(cores, { memory: { available: gb * GiB * 0.6, total: gb * GiB }, ...extra });
+for (const [name, resources, share, slots] of [
+  ['an 8 GB, 8-core Mac at 50%', box(8, 8, { check: { cpuIds: ids(8), platform: 'darwin' } }), 50, 1],
+  ['a 32 GB, 10-core Mac at 50%', box(10, 32, { check: { cpuIds: ids(10), platform: 'darwin' } }), 50, 2],
+  ['pdd-vm (64 cores, 251 GB) at 50%', box(64, 251), 50, 4],
+  ['a 4-CPU, 8 GB Linux container at 50%', box(4, 8), 50, 1],
+  ['a 64-core host whose cgroup allows 4 CPUs and 8 GiB, at 50%', box(64, 251, { cgroup: { cpus: 4, memoryMax: 8 * GiB, memoryFree: 6 * GiB } }), 50, 1],
+  ['a 32 GB, 10-core Mac at 100%', box(10, 32), 100, 4],
+  ['an 8 GB, 8-core Mac at 10%', box(8, 8), 10, 1],
+]) test(`T1 slots: ${name} gets ${slots}`, () => assert.equal(autoSlots(resources, share), slots));
+
+test('T1 the machine --runs wins, pdd.json only lowers the automatic slots; the core uses them', () => {
+  assert.equal(usableCores(machine(8, { cgroup: { cpus: 3, memoryMax: null, memoryFree: null } })), 3);
+  assert.equal(memoryLimit(machine(8, { cgroup: { cpus: null, memoryMax: 4 * GiB, memoryFree: GiB } })), 4 * GiB);
+  assert.equal(freeMemory(machine(8, { cgroup: { cpus: null, memoryMax: 4 * GiB, memoryFree: GiB } })), GiB);
+  assert.deepEqual(slotMath(box(10, 32), 50), { slots: 2, share: 50, cores: 10, limit: 32 * GiB, byCores: 2, byMemory: 5 });
+  const runs = (auto, repoRuns, machineRuns) => coreSettings({ autopilot: repoRuns === undefined ? {} : { runs: repoRuns } }, null, { auto, runs: machineRuns }).runs;
+  assert.equal(runs(4), 4, 'automatic');
+  assert.equal(runs(4, 3), 3, 'pdd.json lowers');
+  assert.equal(runs(1, 3), 1, 'pdd.json never raises');
+  assert.equal(runs(1, undefined, 2), 2, 'the machine --runs wins');
+  assert.equal(runs(4, 1, 2), 2, 'also over pdd.json');
+  assert.equal(runs(4, undefined, 0), 4, 'an invalid --runs is absent');
   assert.equal(coreSettings({ autopilot: { runs: 3 } }).runs, 3, 'without machine facts: pdd.json, as before');
-  assert.deepEqual(slotCount({ klass: 'server', auto: 4, runs: 2 }), { slots: 2, source: 'this machine (--runs 2)' });
-  assert.deepEqual(slotCount({ klass: 'server', auto: 4, repoRuns: 3 }), { slots: 3, source: 'pdd.json autopilot.runs' });
+  assert.deepEqual(slotCount({ auto: 4, runs: 2 }), { slots: 2, source: 'this machine, --runs 2' });
+  assert.deepEqual(slotCount({ auto: 4, repoRuns: 3 }), { slots: 3, source: 'pdd.json autopilot.runs' });
+  assert.deepEqual(slotCount({ auto: 2 }), { slots: 2, source: 'automatic' });
 });
 
-test('T7 the room check: each cause holds new work on a laptop; all fine passes; a server keeps today\'s floors', () => {
-  const room = (klass, extra) => machineRoom(machine(8, extra), klass);
-  assert.deepEqual(room('laptop', {}), { ok: true, reason: null });
-  assert.equal(room('laptop', { power: 'battery' }).reason, 'on battery power');
-  assert.equal(room('laptop', { power: null }).ok, true, 'unreadable power counts as AC');
-  assert.match(room('laptop', { memory: { available: 1.5 * GiB, total: 16 * GiB } }).reason, /^only 1\.5 GiB of memory free \(needs 2 GiB and 15%\)$/);
-  assert.match(room('laptop', { memory: { available: 2.2 * GiB, total: 16 * GiB } }).reason, /memory free/, '2.2 GiB is under 15% of 16 GiB');
-  assert.equal(room('laptop', { pressure: { level: 2 } }).reason, 'memory pressure', 'macOS pressure warn');
-  assert.equal(room('laptop', { pressure: { memory: 12, level: null } }).reason, 'memory pressure', 'Linux PSI some avg10 of 10 or more');
-  assert.equal(room('laptop', { pressure: { memory: null, level: null } }).ok, true, 'unreadable pressure falls back to the memory numbers');
-  assert.equal(room('laptop', { memory: { available: null, total: null } }).reason, 'memory cannot be read');
-  assert.match(room('laptop', { disk: { available: 5 * GiB, total: 500 * GiB } }).reason, /^only 5 GiB of disk free \(needs 10 GiB and 5%\)$/);
-  assert.equal(room('laptop', { disk: { available: null, total: null } }).reason, 'disk cannot be read');
-  assert.equal(room('laptop', { load: 4.5 }).reason, "load 4.5 is above Autopilot's share of 4 cores");
-  assert.equal(room('laptop', { load: 4 }).ok, true);
-  // A server: no power, pressure or load check; memory 10% and disk 1 GiB and 5%.
-  assert.equal(room('server', { power: 'battery', load: 60, pressure: { level: 4 } }).ok, true);
-  assert.match(room('server', { memory: { available: 1 * GiB, total: 16 * GiB } }).reason, /needs 10%/);
-  assert.match(room('server', { disk: { available: 0.5 * GiB, total: 100 * GiB } }).reason, /needs 1 GiB and 5%/);
+test('T7 the room check for the share: each cause holds new work; all fine passes; no battery check', () => {
+  const room = (extra, share = 50) => machineRoom(machine(8, extra), share);
+  assert.deepEqual(room({}), { ok: true, reason: null });
+  assert.deepEqual(room({ power: 'battery' }), { ok: true, reason: null }, 'power is not read');
+  assert.equal(room({ memory: { available: 2.5 * GiB, total: 16 * GiB } }).reason, 'only 2.5 GiB of memory free; a job needs 3 GiB');
+  assert.equal(room({ memory: { available: 12 * GiB, total: 16 * GiB }, cgroup: { cpus: null, memoryMax: 4 * GiB, memoryFree: GiB } }).reason, 'only 1 GiB of memory free; a job needs 3 GiB', 'the cgroup room counts');
+  assert.equal(room({ pressure: { level: 2 } }).reason, 'memory pressure', 'macOS pressure warn');
+  assert.equal(room({ pressure: { memory: 12, level: null } }).reason, 'memory pressure', 'Linux PSI some avg10 of 10 or more');
+  assert.equal(room({ pressure: { memory: null, level: null } }).ok, true, 'unreadable pressure falls back to the memory numbers');
+  assert.equal(room({ memory: { available: null, total: null } }).reason, 'memory cannot be read');
+  assert.equal(room({ disk: { available: 5 * GiB, total: 500 * GiB } }).reason, 'only 5 GiB of disk free; a job needs 10 GiB and 5%');
+  assert.equal(room({ disk: { available: 20 * GiB, total: 500 * GiB } }).reason, 'only 20 GiB of disk free; a job needs 10 GiB and 5%');
+  assert.equal(room({ disk: { available: null, total: null } }).reason, 'disk cannot be read');
+  assert.equal(room({ load: 4.5 }).reason, "load 4.5 is above 4 cores, Autopilot's 50% share");
+  assert.equal(room({ load: 4 }).ok, true);
+  assert.equal(room({ load: 6 }, 75).ok, true, 'a larger share allows more load'); assert.equal(room({ load: 6.5 }, 75).reason, "load 6.5 is above 6 cores, Autopilot's 75% share");
+  assert.equal(room({ load: null }).ok, true, 'an unreadable load is not checked');
 });
 
-test('T3 priority: nice 19 everywhere, macOS utility QoS through taskpolicy, a Linux laptop pins agent roles to its share', () => {
-  const linux = role => jobPriority({ klass: 'laptop', platform: 'linux', role, resources: machine(8), taskset: '/usr/bin/taskset' });
+test('T3 priority: nice 19 everywhere, macOS utility QoS through taskpolicy, Linux pins agent roles to the share', () => {
+  const linux = (role, share = 50, n = 8) => jobPriority({ platform: 'linux', role, resources: machine(n), share, taskset: '/usr/bin/taskset' });
   assert.deepEqual(linux('build'), { nice: 19, qos: null, cpus: '0-3', taskset: '/usr/bin/taskset', checkCpus: 4 });
   assert.equal(linux('review').cpus, '0-3');
   for (const role of ['suite', 'vectors', 'runtime']) assert.equal(linux(role).cpus, null, `${role} is not pinned (the queue pins suites)`);
-  assert.deepEqual(jobPriority({ klass: 'server', platform: 'linux', role: 'build', resources: machine(8), taskset: '/usr/bin/taskset' }), { nice: 19, qos: null, cpus: null, taskset: null, checkCpus: 8 });
-  assert.deepEqual(jobPriority({ klass: 'laptop', platform: 'darwin', role: 'build', resources: machine(10) }), { nice: 19, qos: 'utility', cpus: null, taskset: null, checkCpus: 5 });
-  assert.equal(jobPriority({ klass: 'laptop', platform: 'linux', role: 'build', resources: machine(8, { check: { cpuIds: [0, 2, 4, 6, 8, 10], platform: 'linux' } }), taskset: '/usr/bin/taskset' }).cpus, '0,2,4');
+  assert.deepEqual(linux('build', 100), { nice: 19, qos: null, cpus: null, taskset: null, checkCpus: 8 }, 'the whole machine needs no list');
+  assert.equal(linux('build', 50, 64).cpus, '0-31', 'pdd-vm at 50%');
+  assert.deepEqual(jobPriority({ platform: 'darwin', role: 'build', resources: machine(10), share: 50 }), { nice: 19, qos: 'utility', cpus: null, taskset: null, checkCpus: 5 });
+  assert.equal(jobPriority({ platform: 'linux', role: 'build', resources: machine(8, { check: { cpuIds: [0, 2, 4, 6, 8, 10], platform: 'linux' } }), share: 50, taskset: '/usr/bin/taskset' }).cpus, '0,2,4');
   // The wrapper's command: taskpolicy on macOS, taskset on Linux, else the command.
   const spec = priority => ({ command: 'codex', args: ['exec', '-'], ...(priority ? { priority } : {}) });
   assert.deepEqual(jobCommand(spec(), 'darwin', { executable: () => true }), { command: '/usr/sbin/taskpolicy', args: ['-c', 'utility', '-d', 'throttle', 'codex', 'exec', '-'] });
@@ -98,48 +101,45 @@ test('T4 a real job runs at nice 19 (the wrapper sets it; children inherit it)',
   assert.equal(readFileSync(job.log, 'utf8').trim(), '19');
 });
 
-test('T6 timer lines: launchd Nice 19; systemd Nice=19 and CPUWeight=20, MemoryHigh=50% only on a laptop', () => {
-  assert.deepEqual(timerPriority('laptop', 'darwin'), { plist: '<key>Nice</key><integer>19</integer>', unit: '' });
-  assert.deepEqual(timerPriority('laptop', 'linux'), { plist: '', unit: 'Nice=19\nCPUWeight=20\nMemoryHigh=50%\n' });
-  assert.deepEqual(timerPriority('server', 'linux'), { plist: '', unit: 'Nice=19\nCPUWeight=20\n' });
+test('T6 timer lines: launchd Nice 19; systemd Nice=19, CPUWeight=20 and MemoryHigh at the share', () => {
+  assert.deepEqual(timerPriority('darwin', 70), { plist: '<key>Nice</key><integer>19</integer>', unit: '' });
+  assert.deepEqual(timerPriority('linux'), { plist: '', unit: 'Nice=19\nCPUWeight=20\nMemoryHigh=50%\n' });
+  assert.deepEqual(timerPriority('linux', 70), { plist: '', unit: 'Nice=19\nCPUWeight=20\nMemoryHigh=70%\n' });
+  assert.deepEqual(timerPriority('win32'), { plist: '', unit: '' });
   assert.equal(GUARD.nice, 19); assert.equal(GUARD.cpuWeight, 20);
 });
 
-test('T12 the status line names the class, the share, memory, power, the slots and the hold reason', async () => {
-  const resources = machine(10, { power: 'battery', check: { cpuIds: ids(10), platform: 'darwin', battery: true, virtualized: false, taskset: null }, memory: { available: 3.1 * GiB, total: 16 * GiB } });
-  const guard = await readMachineGuard({ cwd: '/', runs: undefined }, { machineResources: async () => resources });
-  assert.equal(guard.klass, 'laptop'); assert.equal(guard.slots, 1); assert.equal(guard.room.reason, 'on battery power');
-  assert.match(guard.line, /^Machine: laptop · 10 cores, Autopilot uses 5 · memory 3\.1 of 16 GiB free, pressure normal · disk 200 GiB free · load 1 · battery power · priority low · 1 slot \(automatic\) · new work: held \(on battery power\)$/);
+test('T12 the status line names the share and its source, the slot math, memory, the slots and the hold reason', async () => {
+  const resources = machine(10, { check: { cpuIds: ids(10), platform: 'darwin', battery: true, virtualized: false, taskset: null }, memory: { available: 2.1 * GiB, total: 16 * GiB } });
+  const guard = await readMachineGuard({ cwd: '/' }, { machineResources: async () => resources });
+  assert.equal(guard.share, 50); assert.equal(guard.slots, 2); assert.equal(guard.room.reason, 'only 2.1 GiB of memory free; a job needs 3 GiB');
+  assert.equal(guard.line, 'Machine: share 50% (default) of 10 cores and 16 GiB · slots min(4, 5 cores ÷ 2, 8 GiB ÷ 3 GiB) = 2 → 2 (automatic) · memory 2.1 GiB free, pressure normal · disk 200 GiB free · load 1 · priority low · new work: held (only 2.1 GiB of memory free; a job needs 3 GiB)');
   assert.deepEqual(guard.priority('build'), { nice: 19, qos: 'utility', cpus: null, taskset: null, checkCpus: 5 });
+  const set = await readMachineGuard({ cwd: '/', share: 70, runs: 1 }, { machineResources: async () => machine(10) });
+  assert.match(set.line, /^Machine: share 70% \(this machine, --share\) of 10 cores and 16 GiB · slots min\(4, 7 cores ÷ 2, 11\.2 GiB ÷ 3 GiB\) = 3 → 1 \(this machine, --runs 1\) · .* · new work: ok$/);
   const failed = await readMachineGuard({ runs: 2 }, { machineResources: async () => { throw Error('no proc'); }, platform: 'linux' });
   assert.deepEqual([failed.slots, failed.room.ok, failed.room.reason], [2, false, 'machine resources cannot be read']);
-  assert.match(guardLine({ klass: 'server', slots: 4, source: 'automatic', room: { ok: true }, resources: {} }), /unknown cores.*power unknown \(counts as AC\).*4 slots \(automatic\) · new work: ok$/);
+  assert.match(guardLine({ slots: 4, source: 'automatic', room: { ok: true }, resources: {} }), /of unknown cores and unknown GiB · slots min\(4, \? cores ÷ 2, \? GiB ÷ 3 GiB\) = 1 → 4 \(automatic\).* · new work: ok$/);
 });
 
-test('T8 readers: pmset, the macOS pressure level, Linux power supplies and cgroup v2 limits', async () => {
-  const mac = async (pmset, sysctl) => readMachineResources({ cwd: '/' }, { platform: 'darwin', includeGuard: true, pmset: () => pmset, sysctl: () => sysctl,
+test('T8 readers: the macOS pressure level and cgroup v2 limits', async () => {
+  const mac = async sysctl => readMachineResources({ cwd: '/' }, { platform: 'darwin', includeGuard: true, sysctl: () => sysctl,
     vmStat: () => '', freeMemory: () => GiB, totalMemory: () => 16 * GiB, statfs: () => ({ bavail: 1, blocks: 2, bsize: 4096 }), cpuCount: () => 10, load: () => 1 });
-  assert.equal((await mac("Now drawing from 'AC Power'\n -InternalBattery-0 (id=1)\t100%; charged;", '1\n')).power, 'ac');
-  const battery = await mac("Now drawing from 'Battery Power'\n -InternalBattery-0 (id=1)\t81%; discharging;", '2\n');
-  assert.equal(battery.power, 'battery'); assert.equal(battery.pressure.level, 2);
-  const desktop = await mac("Now drawing from 'AC Power'\n", '');
-  assert.equal(desktop.power, 'ac'); assert.equal(desktop.pressure.level, null, 'an unreadable level is null');
-  // Linux: /sys/class/power_supply and the cgroup path of this process with its parents.
+  assert.equal((await mac('1\n')).pressure.level, 1);
+  assert.equal((await mac('2\n')).pressure.level, 2);
+  assert.equal((await mac('')).pressure.level, null, 'an unreadable level is null');
+  assert.equal((await mac('1\n')).power, undefined, 'no power read');
+  // Linux: the cgroup path of this process with its parents.
   const tree = files => ({ platform: 'linux', includeGuard: true, readFile: path => { if (path in files) return files[path]; throw Object.assign(Error('ENOENT'), { code: 'ENOENT' }); },
-    readDir: path => [...new Set(Object.keys(files).filter(f => f.startsWith(`${path}/`)).map(f => f.slice(path.length + 1).split('/')[0]))],
     statfs: () => ({ bavail: 1, blocks: 2, bsize: 4096 }), cpuCount: () => 4, load: () => 1 });
   const base = { '/proc/meminfo': 'MemTotal: 16384 kB\nMemAvailable: 8192 kB\n', '/proc/self/cgroup': '0::/user.slice/pdd.service\n',
     '/sys/fs/cgroup/user.slice/pdd.service/cpu.max': '200000 100000', '/sys/fs/cgroup/user.slice/pdd.service/memory.max': 'max',
     '/sys/fs/cgroup/user.slice/pdd.service/memory.high': String(6 * GiB), '/sys/fs/cgroup/user.slice/pdd.service/memory.current': String(2 * GiB),
     '/sys/fs/cgroup/user.slice/cpu.max': 'max 100000', '/sys/fs/cgroup/user.slice/memory.max': String(3 * GiB), '/sys/fs/cgroup/user.slice/memory.current': String(1 * GiB) };
-  const onBattery = await readMachineResources({ cwd: '/' }, tree({ ...base, '/sys/class/power_supply/AC/type': 'Mains', '/sys/class/power_supply/AC/online': '0',
-    '/sys/class/power_supply/BAT0/type': 'Battery', '/sys/class/power_supply/BAT0/status': 'Discharging' }));
-  assert.equal(onBattery.power, 'battery');
-  assert.deepEqual(onBattery.cgroup, { cpus: 2, memory: 2 * GiB }, 'the lowest quota and the lowest room of all levels');
-  const plugged = await readMachineResources({ cwd: '/' }, tree({ ...base, '/sys/class/power_supply/AC/type': 'Mains', '/sys/class/power_supply/AC/online': '1', '/sys/class/power_supply/BAT0/type': 'Battery', '/sys/class/power_supply/BAT0/status': 'Discharging' }));
-  assert.equal(plugged.power, 'ac');
-  const server = await readMachineResources({ cwd: '/' }, tree({ '/proc/meminfo': base['/proc/meminfo'], '/proc/self/cgroup': '0::/\n', '/sys/fs/cgroup/cpu.max': 'max 100000' }));
-  assert.equal(server.power, null, 'no power supply: null (counts as AC)'); assert.deepEqual(server.cgroup, { cpus: null, memory: null });
+  const limited = await readMachineResources({ cwd: '/' }, tree(base));
+  assert.deepEqual(limited.cgroup, { cpus: 2, memoryMax: 3 * GiB, memoryFree: 2 * GiB }, 'the lowest quota, limit and room of all levels');
+  const open = await readMachineResources({ cwd: '/' }, tree({ '/proc/meminfo': base['/proc/meminfo'], '/proc/self/cgroup': '0::/\n', '/sys/fs/cgroup/cpu.max': 'max 100000' }));
+  assert.deepEqual(open.cgroup, { cpus: null, memoryMax: null, memoryFree: null });
   const legacy = await readMachineResources({ cwd: '/' }, { ...tree(base), includeGuard: false });
-  assert.equal(legacy.power, undefined, 'without includeGuard the observation is as before'); assert.equal(legacy.cgroup, undefined);
+  assert.equal(legacy.cgroup, undefined, 'without includeGuard the observation is as before'); assert.equal(legacy.pressure.level, undefined);
 });
