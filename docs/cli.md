@@ -1596,6 +1596,11 @@ listed as not run). It runs the replay and formal files apart, so each has its o
 counts. A failure, a claim that its run contradicts (a vectors count too), or a positive
 claim that it could not check, is red, and the merge comment shows its own counts.
 
+The fresh review also checks that the change makes no product, contract or naming
+choice that the issue did not make (for example one option of an open decision issue
+that the change touches). Such a finding is not repaired: Autopilot asks the one
+question instead, and the PR waits for the answer.
+
 When a job needs a person's decision, Autopilot posts its one question on the issue,
 adds `pdd:needs-decision` (not `pdd:stuck`) and frees the slot. Answer in a comment
 and remove `pdd:needs-decision`: removing the label is the signal, and it counts only

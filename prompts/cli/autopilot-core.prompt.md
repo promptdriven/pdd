@@ -436,8 +436,24 @@ any other pdd (for example an older global install).
   unowned file of the base, owned code that disagrees with its prompt; never a new
   prompt for an unowned file; never commit order; a missing test is a must-fix only
   with the surface and the result named; no test that only copies a value from the
-  diff); an honest Runtime line and no unrelated or unsafe change. A Runtime FAIL line in the PR body means a FAIL verdict. It writes no files and makes no GitHub write. Its
-  result is `{verdict: PASS|FAIL, head, summary, mustFix[]}`. Each must-fix item starts
+  diff); an honest Runtime line and no unrelated or unsafe change; and (6) **no choice
+  that the issue did not make (T10)**: a choice between options that the issue or a
+  linked open issue leaves open, a change to a documented behavior (a prompt, a Story or
+  the docs) that the issue does not ask for, or a new name or format that the issue does
+  not give, is a P2 must-fix that starts with `P2 decision:`, and the result's `question`
+  is the one question for a person (it names the options). The brief has the linked open
+  issues: each open issue (not a PR, not this issue, from the tick's issue list) that the
+  issue title, the issue body or the PR body names by number (`#N`, `REPO#N` or its URL),
+  or whose title or body names a file that the PR changes (the path, or the file name of
+  a changed path), at most 5, each body cut to 2,000 characters; or "(none)". A Runtime FAIL line in the PR body means a FAIL verdict. It writes no files and makes no GitHub write. Its
+  result is `{verdict: PASS|FAIL, head, summary, mustFix[], question?}`. **A decision is a
+  question, not a repair:** when a blocking item of a FAIL starts with `P2 decision:`, the
+  merge check ends the job as **needs a person** (below) with that one question (the
+  reviewer's `question`, else "The review found a choice that issue #N did not make: ITEM.
+  Which option do you want?"), not a repair round, also when other items exist (the
+  answer can change the whole change; the next build reads the answer and the review
+  runs again). The open PR gets one note (`<!-- pdd:autopilot-core:needs-decision-pr:P -->`):
+  it waits for the answer and does not merge; the next build closes it as usual. Each must-fix item starts
   with its severity and place: `P1 file:line …` (wrong behavior or unsafe), `P2 file:line …`
   (fix before the merge) or `P3 file:line …` (a follow-up); a PASS lists only P3 items
   (the scoped check is asked the same). **Fail closed:** an item is a follow-up only when

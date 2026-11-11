@@ -422,3 +422,42 @@ test('E22 (T09) R1 reads only the files field of a path d line: the #69 repair b
   w = await setup(`Fixes #17.\n\n${NOT_RUN}\nPath: d — docs/errors.md — unowned — no contract change — Test: done check`);
   assert.match(w.job(17, 'repair')?.input ?? '', /docs\/errors\.md is owned by prompts\/errors\.prompt\.md \(binding\), so it cannot take path d/);
 });
+
+// ---- T10: the review flags a choice that the issue did not make --------------------------------------
+async function t10World(t) {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  seed(w, { 'src/duration.js': 'export const formatDuration = s => `${Math.floor(s / 60)}m`;\n', 'prompts/duration.prompt.md': '# Duration\n\nThere are no days: 25 hours is "25h 0m".\n' });
+  // Sandbox #82 (vague) and the open decision #4 that it touches through src/duration.js; #9 touches nothing.
+  w.issue(17, { title: 'Durations look weird', body: 'durations look weird in our dashboard, can you make them look nicer? some of them are really long and some show 0m' });
+  w.github.add(4, { title: 'Durations under one minute show as "0m"', labels: ['pdd:stuck'],
+    body: 'A 45-second call shows as `0m` (`formatDuration(45)` in `src/duration.js`).\n\nWe have two ideas and have not decided which one to use:\n\n1. `"45s"`.\n2. `"<1m"`.' });
+  w.github.add(9, { title: 'Docs typo', body: 'Fix a typo in docs/intro.md.', labels: ['pdd:stuck'] });
+  await w.tick();
+  writeIn(w.job(17, 'build').cwd, 'src/duration.js', 'export const formatDuration = s => s < 60 ? `${s}s` : `${Math.floor(s / 60)}m`;\n');
+  const { pr, head } = w.build(17, { body: `Fixes #17.\n\n${NOT_RUN}\nPath: e — src/duration.js — unowned — no contract change — Test: done check`, result: { promptChanged: false } });
+  await w.tick();
+  return { w, pr, head };
+}
+
+test('E23 (T10) the review brief has check (6) and the linked open issue; a P2 decision is one question (pdd:needs-decision), not a repair', async t => {
+  let { w, pr, head } = await t10World(t);
+  const brief = w.job(17, 'review').input;
+  assert.match(brief, /\(6\) the change makes no product, contract or naming choice that the issue did not make/);
+  assert.match(brief, /Issue #4: Durations under one minute show as "0m"\n<<<\n[\s\S]*We have two ideas and have not decided/);
+  assert.doesNotMatch(brief, /Issue #9:/);
+  const question = 'Issue #4 is still open: should a duration under one minute show "45s" or "<1m"?';
+  w.finish(17, 'review', { result: { verdict: 'FAIL', head, summary: 'Picks option 1 of #4.', mustFix: ['P2 decision: src/duration.js:1 picks "45s", option 1 of the open issue #4'], question } });
+  w.suite(17, 0); await w.tick();
+  assert.equal(w.job(17, 'repair'), undefined, 'no repair round');
+  assert.ok(w.labels(17).includes('pdd:needs-decision'));
+  const asked = w.comments(17).filter(body => body.includes('pdd:autopilot-core:question:'));
+  assert.equal(asked.length, 1); assert.match(asked[0], /should a duration under one minute show "45s" or "<1m"\?/);
+  assert.ok(pr.comments.some(c => c.body.includes('<!-- pdd:autopilot-core:needs-decision-pr:')));
+  assert.deepEqual(w.github.merges, []);
+  // No question field, and another item too: still one question, built from the decision item.
+  ({ w, head } = await t10World(t));
+  w.finish(17, 'review', { result: { verdict: 'FAIL', head, summary: 'x', mustFix: ['P1 src/duration.js:1 breaks 0 seconds', 'P2 decision: src/duration.js:1 picks "45s" from issue #4'] } });
+  w.suite(17, 0); await w.tick();
+  assert.equal(w.job(17, 'repair'), undefined);
+  assert.match(w.comments(17).find(body => body.includes('pdd:autopilot-core:question:')) ?? '', /The review found a choice that issue #17 did not make: src\/duration\.js:1 picks "45s" from issue #4\. Which option do you want\?/);
+});
