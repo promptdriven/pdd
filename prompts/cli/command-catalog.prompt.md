@@ -21,6 +21,9 @@ Catalog optional text `--model`, `--herdr-agent-name` and `--codex-threads` on
 `workflow run` and `workflow open`. Show them on both help forms. Open settings
 require `--new`; the runner owns validation and profile selection.
 
+Catalog optional text `--expect-gate ID` and `--expect-step STEP` on workflow
+approve, changes, cancel and open, and show both options in their help forms.
+
 ## Authoring
 
 Read the full [Prompting guide](../../docs/prompting-guide.md) before authoring prompts or Stories. Follow the [public alpha boundary](public-boundary.prompt.md) for native authoring/generation scope and shared local command policy. These authoring obligations do not add runtime facts: the complete catalog route declarations below own what the pure data module exposes.
@@ -82,14 +85,14 @@ For `workflow.run`, accept optional `--adopt-corpus FILE`, a nonempty text path 
 - workflow.done `workflow done STEP [--summary TEXT] [--skipped REASON]`: STEP is a safe step name; the summary and the reason are free text. Help says it records the step with pdd's own latest `pdd <NAMES.test>`, `pdd <NAMES.lint>` and prove results (the summary is an agent note), and that --skipped records that the step was skipped, and why. Build the two command words from `NAMES`, like every other form, so a rename changes this help too.
 - `workflow.request-uptake` (local `workflow-request-uptake`): the public verb comes only from `NAMES.requestUptake`, used for both the `['workflow', verb]` prefix and help form `pdd workflow <verb> REQUEST_ID --summary TEXT`. Require one text operand and text option `--summary` (dispatch enforces its presence). Help describes an agent in a run worktree recording that it took up one delivered change request, with a short note. Keep all five existing exports, including `NAMES` with its existing keys and values plus the uptake key; consumers find this route by its stable id, never by duplicating the public verb.
 - workflow.ask `workflow ask QUESTION…`: the question words join into one text; `--` ends options.
-- workflow.approve `workflow approve [ISSUE] [--said WORDS] [--draft]`, workflow.status `workflow status [ISSUE] [--all] [--cancelled] [--json]` (flags).
+- workflow.approve `workflow approve [ISSUE] [--said WORDS] [--draft] [--expect-gate ID] [--expect-step STEP]`, workflow.status `workflow status [ISSUE] [--all] [--cancelled] [--json]` (flags).
 `workflow.approve` also accepts Boolean flag `--draft` to strengthen publication policy at the current unpublished gate; the runner owns eligibility and persistence. Expose both draft flags in help and completion, including the quiet workflow-start alias. Preserve generic duplicate/unknown-option validation.
 
 For `workflow.run` and `workflow.approve`, also accept the value option `--through` with the choices `prompt-pr` and `code`. Keep both existing help forms unchanged and name the option in their help descriptions: it saves where a normal run goes after PR 1 (stop, or go on to the code PR). The runner owns where it applies and refuses it elsewhere.
 - workflow.card `workflow card [ISSUE]` (local `workflow-card`): one optional issue operand, no options. Help says it prints the run's Story card from its real files, read-only, with no GitHub, Herdr or interpreter call.
-- workflow.changes `workflow changes ISSUE TEXT…`: the text words join into one request; `--` ends options.
-- workflow.cancel `workflow cancel ISSUE`.
-- workflow.open `workflow open ISSUE [AREA] [--new] [--model MODEL] [--herdr-agent-name NAME] [--codex-threads N]`: optional AREA uses the existing `workflow-name` operand type (the parser's safe name validator); --new is a flag. Help distinguishes focusing/resuming a saved area from replacing the current area's native session, keeping the run and approvals. The runner owns area existence/history checks; the catalog does not inspect saved runs.
+- workflow.changes `workflow changes ISSUE TEXT… [--expect-gate ID] [--expect-step STEP]`: the text words join into one request; `--` ends options.
+- workflow.cancel `workflow cancel ISSUE [--expect-gate ID] [--expect-step STEP]`.
+- workflow.open `workflow open ISSUE [AREA] [--new] [--model MODEL] [--herdr-agent-name NAME] [--codex-threads N] [--expect-gate ID] [--expect-step STEP]`: optional AREA uses the existing `workflow-name` operand type (the parser's safe name validator); --new is a flag. Help distinguishes focusing/resuming a saved area from replacing the current area's native session, keeping the run and approvals. The runner owns area existence/history checks; the catalog does not inspect saved runs.
 - workflow.view `workflow view ISSUE` (local `workflow-view`): one required issue operand, no options. Help says it shows a read-only review of gates, approvals, files, PRs and Simulator links without starting or resuming a chat.
 - workflow.list `workflow list [--json]`.
 - workflow.prove `workflow prove ISSUE --test COMMAND --expect TEXT [--timeout MIN]` (local `workflow-prove`): one required issue operand, two text options and an optional integer `--timeout` from 1 to 120 (minutes). Help says it runs the supplied command on the merge-base of committed head with the fetched base branch and committed head, including when no eligible tests changed, with a limit per phase (default 10 minutes; --timeout sets 1 to 120), and saves a non-gating report that pull requests show as pdd's own result. No native option passthrough. Both text options are required by CLI dispatch before effects; parser retains ordinary text/duplicate/blank validation. [Old-code proof](workflow-prove.prompt.md) owns execution, outcome and saved-result policy (required generation/runtime/verification context).
@@ -209,12 +212,12 @@ The ordered help-form list consists of the lines below in their displayed order,
   pdd workflow evidence ISSUE --summary FILE  Record source-verified saved check JSON without rerunning steps, gates or publication.
   pdd workflow evidence-associate ISSUE --workspace PATH --stage current|pr1|before [--commit SHA] --test PATH...  Register this run's evidence workspace, stage and selected tests; before needs the commit of an earlier checked source; no checks or workflow progress.
   pdd workflow ask QUESTION  For the agent in a run worktree: show the person that the chat waits for their answer.
-  pdd workflow approve [ISSUE] [--said WORDS] [--draft]  Use --said - with the shared quoted-heredoc template to record chat words for the gate and all its drafts, or use terminal y/N; --draft requests draft publication at the current unpublished gate; strict mode requires a person terminal.
-  pdd workflow changes ISSUE TEXT  Send a change request to the same area chat; the gate stays open.
-  pdd workflow cancel ISSUE  Cancel the run and close its Herdr tabs; keep the worktree and branch.
+  pdd workflow approve [ISSUE] [--said WORDS] [--draft] [--expect-gate ID] [--expect-step STEP]  Use --said - with the shared quoted-heredoc template to record chat words for the gate and all its drafts, or use terminal y/N; --draft requests draft publication at the current unpublished gate; strict mode requires a person terminal.
+  pdd workflow changes ISSUE TEXT [--expect-gate ID] [--expect-step STEP]  Send a change request to the same area chat; the gate stays open.
+  pdd workflow cancel ISSUE [--expect-gate ID] [--expect-step STEP]  Cancel the run and close its Herdr tabs; keep the worktree and branch.
   pdd workflow status [ISSUE] [--all] [--cancelled] [--json]  Show this repo's runs, or one run with its area, gate, chat and PRs. --all (or outside a repo): every run on this machine, people-waiting first.
   pdd workflow view ISSUE  Read-only review of gates, approvals, files, PRs and Simulator links; never start or resume a chat.
-  pdd workflow open ISSUE [AREA] [--new]  Focus or resume a saved area chat; --new replaces the current session while keeping the run and approvals.
+  pdd workflow open ISSUE [AREA] [--new] [--expect-gate ID] [--expect-step STEP]  Focus or resume a saved area chat; --new replaces the current session while keeping the run and approvals.
   pdd  Show local commands.
   pdd --help  Show local commands.
   pdd -h  Show local commands.

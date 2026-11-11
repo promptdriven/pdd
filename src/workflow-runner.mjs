@@ -163,6 +163,14 @@ export function acquireRunLock(runDir, filename = 'chat-replacement.lock') {
   }
   return () => { try { if (sameOwner(owner, readLock(path))) unlinkSync(path); } catch { /* Never remove another or unreadable owner. */ } };
 }
+function expectedState(run, {expectGate, expectStep}) {
+  if (!run || (expectGate === undefined && expectStep === undefined)) return null;
+  const gate = run.gate?.id ?? null;
+  const step = run.areas?.[run.area]?.steps?.find(item => !run.done?.[item]) ?? null;
+  if ((expectGate !== undefined && expectGate !== gate) || (expectStep !== undefined && expectStep !== step))
+    return {exitCode: 3, message: `Refused: the run moved. Current gate: ${gate ?? 'none'}; current step: ${step ?? 'none'}.`};
+  return null;
+}
 async function lockedMutation(args, ports, action, filename) {
   const p = deps(ports), found = await resolveRun(args.ref, { cwd: args.cwd }, p);
   if (!found.run) return action(args, ports);
@@ -205,9 +213,10 @@ function commitMaintenance(run, p, update) {
   });
 }
 // Revalidate command authority at local commits and before consequential effects.
-function protectProgress(run,p,{approval=false,validate}={}) {
+function protectProgress(run,p,{approval=false,validate,expectState}={}) {
   const selectedState=run.state,selectedGate=structuredClone(run.gate ?? null),selectedArea=run.area;
   const check=latest=>{
+    expectState?.(latest);
     if (latest.parking?.phase === 'releasing') throw Object.assign(Error('This parked run is releasing its claim. Wait for release to finish.'), {code: 'workflow_progress_refused'});
     if(ended(latest) && !(selectedState==='completed'&&latest.state==='completed'&&selectedGate?.kind==='ask-code'))
       throw Object.assign(Error(`The run ended (${latest.state}). Stop working on it.`),{code:'workflow_progress_refused'});
@@ -225,7 +234,7 @@ function protectProgress(run,p,{approval=false,validate}={}) {
   };
   p.commandPorts={...p.commandPorts,execFile:p.execFile};
   p.herdr=async args=>{if(['create','run','prompt'].includes(args[1]))inspect();return herdr(args);};
-  return ()=>{approval=false;validate=undefined;};
+  return ()=>{approval=false;validate=undefined;expectState=undefined;};
 }
 const sameGate = (current, selected) => (!current || !selected) ? current === selected : ['area','kind','at'].every(key=>current[key]===selected[key]) && (!selected.id || current.id===selected.id);
 const equalFact = (a,b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
@@ -247,7 +256,7 @@ function publicationUpdate(run,keys=[]) {
 function saveGuard(action) {
   return async (...args)=>{
     try { return await action(...args); }
-    catch(error){if(error?.code==='workflow_run_save_failed' || error?.code==='workflow_progress_refused')return fail(error.message);throw error;}
+    catch(error){if(error?.code==='workflow_progress_refused' && error.result)return error.result;if(error?.code==='workflow_run_save_failed' || error?.code==='workflow_progress_refused')return fail(error.message);throw error;}
   };
 }
 
@@ -2598,7 +2607,7 @@ async function automaticPr1(run, area, step, p, lines, check, packageRoot, progr
         }
       } : null;
       try { await saveGateApproval(run, area, record, [], p, snapshot, false, authority); approvalRecorded = true; }
-      catch (error) { return fail(`Approval failed: ${error.message}`); }
+      catch (error) { if (error.result) throw error; return fail(`Approval failed: ${error.message}`); }
       return null;
     }
   };
@@ -3418,12 +3427,13 @@ async function saveGateApproval(run, area, record, edits, p, snapshot = run.gate
   commitRun(run,p,latest=>{latest.decisions.push(decision);latest.approvalRecord=approvalRecord;});
   return decision;
 }
-async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false, through, packageRoot = PACKAGE_ROOT }, ports) {
+async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false, through, expectGate, expectStep, packageRoot = PACKAGE_ROOT }, ports) {
   const p = deps(ports); p.pdd = pddFor(p, packageRoot);
   if (typeof draft !== 'boolean') return fail('Draft publication must be a Boolean.');
   if (through !== undefined && !THROUGH.includes(through)) return fail(throughWords);
   const found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
+  const stale = expectedState(found.run, {expectGate, expectStep}); if (stale) return stale;
   const run = found.run, area = run.areas[run.area], label = `${run.repo}#${run.number} "${oneLine(run.issue.title)}"`;
   if (explicitlyStopped(run, p)) return fail('Automatic continuation refused: Autopilot is stopped. Start Autopilot and retry.');
   const ownershipFailure = await continuationOwnership(run, cwd, p);
@@ -3441,7 +3451,7 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
   const askCode = area.then === 'ask-code', beforePr = run.gate?.kind === 'approve-pr';
   if (ended(run) && !(askCode && run.gate?.kind === 'ask-code')) return fail(`The run for ${run.repo}#${run.number} is ${run.state}. There is nothing to approve.`);
   if (area.gate === 'pr' && !askCode && !beforePr) return fail(`Nothing to approve for #${run.number}: the ${area.name} area ends with ${prLabel(run, area)}, which pdd opens after its last step.${prOf(run, area.name) ? ` ${prLabel(run, area) === 'the PR' ? 'PR' : prLabel(run, area)}: ${prOf(run, area.name).url}` : ''}`);
-  const approvalRecorded=protectProgress(run,p,{approval:true});
+  const approvalRecorded=protectProgress(run,p,{approval:true, expectState: latest => { const stale = expectedState(latest, {expectGate, expectStep}); if (stale) throw Object.assign(Error(stale.message), {code:'workflow_progress_refused', result:stale}); }});
   const invocationAt=p.now();
   const missing = missingHome(run, p.env);
   if (missing) return fail(missing);
@@ -3571,7 +3581,7 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
     if (askCode && !beforePr && run.gate) pendingCodeApproval=await saveGateApproval(run,area,record,edits,p,approvalSnapshot,true);
     else if (beforePr || !askCode) saved=await saveGateApproval(run,area,record,edits,p,approvalSnapshot);
   }
-  catch (error) { return fail(`Approval failed: ${error.message}`); }
+  catch (error) { if (error.result) throw error; return fail(`Approval failed: ${error.message}`); }
   if (strengthening) {
     try {
       commitRun(run,p,latest=>{
@@ -3639,7 +3649,7 @@ ${approvalGuide(run)}`, p, true);
   if (beforePr && askCode) saved = null;
   if (!saved && !askCode) {
     try { saved = await saveGateApproval(run, area, record, edits, p); }
-    catch (error) { return fail(`Approval failed: ${error.message}`); }
+    catch (error) { if (error.result) throw error; return fail(`Approval failed: ${error.message}`); }
   }
   let based = '';
   if (askCode) {
@@ -3973,9 +3983,10 @@ async function environmentWakeAllowed(run, text, p) {
   if (!currentEnvironmentWake(run, text, p) || explicitlyStopped(run, p) || await continuationOwnership(run, run.root, p)) return false;
   try { return await (p.environmentHealthy ?? environmentHealthy)({ env: p.env, reason: environmentRecovery(run).reason }) === true; } catch { return false; }
 }
-export async function changeRun({ ref, text, cwd, packageRoot = PACKAGE_ROOT }, ports) {
+export async function changeRun({ ref, text, cwd, expectGate, expectStep, packageRoot = PACKAGE_ROOT }, ports) {
   const p = deps(ports); p.packageRoot = packageRoot; const found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
+  const stale = expectedState(found.run, {expectGate, expectStep}); if (stale) return stale;
   // An interpreter wake reaches the run only while it still waits for that park: a second copy sends nothing.
   const wake = RUNTIME_WAKE_TAG.exec(String(text ?? '').trim())?.[0];
   if (wake && !(runtimeWaiting(found.run) && wake === runtimeWakeTag(found.run.runtimeWait.at)))
@@ -3987,13 +3998,16 @@ export async function changeRun({ ref, text, cwd, packageRoot = PACKAGE_ROOT }, 
   if (!p.queueOnly && found.run.parking?.phase === 'parked') {
     return lockedMutation({ref, cwd}, p, async (input, ports) => {
       const current = await resolveRun(ref, {cwd}, ports), run = current.run;
+      const stale = expectedState(run, {expectGate, expectStep}); if (stale) return stale;
       if (!run || runIdentity(run) !== runIdentity(found.run) || run.parking?.phase !== 'parked'
         || run.parking.at !== found.run.parking.at) return fail('The parked run changed. Look again before replying.');
       const key = `park-reply:${run.parking.at}:${createHash('sha256').update(oneLine(text)).digest('hex')}`;
       return deliverRequest(run, text, {...ports, queueOnly: true, requestKey: key});
     });
   }
-  return deliverRequest(found.run, text, p);
+  const current = expectGate !== undefined || expectStep !== undefined ? readRun(found.run.runDir) : found.run;
+  const laterStale = expectedState(current, {expectGate, expectStep}); if (laterStale) return laterStale;
+  return deliverRequest(current ?? found.run, text, p);
 }
 
 // Journal custody and FIFO delivery to the current area chat: the person's answer or change request, or (notice) a pdd
@@ -4302,10 +4316,11 @@ export async function tidyRuns({dryRun = false, graceMs, need, timeBudgetMs} = {
   return {...done([`${dryRun ? 'Would close' : 'Closed'} ${closed} finished chat tabs. Kept ${kept.length}. Retained: ${reasonWords(countReasons(kept))}.`, ...warnings].join('\n')),closed,kept:kept.length,reasonCounts:countReasons(kept)};
 }
 
-async function cancelRunCommand({ ref, cwd }, ports, expectedIdentity = null) {
+async function cancelRunCommand({ ref, cwd, expectGate, expectStep }, ports, expectedIdentity = null) {
   const p = deps(ports);
   const found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
+  const stale = expectedState(found.run, {expectGate, expectStep}); if (stale) return stale;
   const run = found.run;
   if (expectedIdentity && runIdentity(run) !== expectedIdentity) return fail('The selected workflow run changed. Retry cancellation.');
   const automatic = !ports?.claimReleased && validSavedAutomaticOrigin(run);
@@ -5246,13 +5261,17 @@ async function openRunLocked({ ref, cwd, area, newSession = false, model, herdrA
 
 const openRunCommand = async (args, ports) => {
   const p = deps(ports), found = await resolveRun(args.ref, {cwd: args.cwd}, p);
+  const stale = expectedState(found.run, args); if (stale) return stale;
   if (found.run?.parking?.phase === 'releasing') return fail('This parked run is releasing its claim. Wait for release to finish.');
   if (found.run?.parking?.phase === 'parked') {
     const run = found.run, origin = run.automaticOrigin;
     const resumed = await wakeParkedRun({...args, at: run.parking.at, coordinatorId: origin.coordinatorId, machine: origin.machine}, ports);
     if (resumed.exitCode !== 0) return resumed;
   }
-  return lockedMutation(args, ports, openRunLocked);
+  return lockedMutation(args, ports, async (input, lockedPorts) => {
+    const current = await resolveRun(input.ref, {cwd: input.cwd}, deps(lockedPorts));
+    return expectedState(current.run, input) ?? openRunLocked(input, lockedPorts);
+  });
 };
 
 function continueText(run, packageRoot) {
