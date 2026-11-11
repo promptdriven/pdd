@@ -65,6 +65,20 @@ test('two machine ticks before 15 minutes stay quiet; unpaused observation reset
   f.time++;await f.alert(1,'resource',fields);assert.equal(f.requests.length,1);
 });
 
+test('repair 3: replaying the second early tick cannot complete machine debounce', async t => {
+  const f = setup(t); await f.config();
+  const fields = {...ask, code:'io-stall', paused:true};
+  await f.alert(1, 'resource', {...fields, tick:'a'});
+  f.time += MINUTE;
+  await f.alert(1, 'resource', {...fields, tick:'b'});
+  assert.equal(f.requests.length, 0);
+  f.time += 14 * MINUTE;
+  await f.alert(1, 'resource', {...fields, tick:'b'});
+  assert.equal(f.requests.length, 0, 'a replay does not extend the distinct observation span');
+  await f.alert(1, 'resource', {...fields, tick:'c'});
+  assert.equal(f.requests.length, 1, 'a fresh observation at 15 minutes qualifies');
+});
+
 for(const kind of ['usage-limit','interpreter','interpreter-access'])test(`${kind} uses the machine debounce and infrastructure destination`,async t=>{
   const f=setup(t);await f.config();await f.run({action:'set',destination:'infrastructure',text:'https://hooks.slack.com/services/synthetic/infrastructure/fixture'});
   await f.alert(1,kind,{...ask,paused:true});assert.equal(f.requests.length,0);

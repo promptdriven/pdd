@@ -237,6 +237,28 @@ test('Slack: an ok reply is delivered, an error reply fails with only its status
 });
 
 
+test('repair 3: a failed recovery closes without retry and a delivered destination test clears status', async t => {
+  const f = setup(t);
+  await f.pdd(['autopilot', 'alerts', 'set'], DISCORD);
+  f.replies.push(echo);
+  assert.equal((await f.alert(12, 'decision', {cause:'A policy choice is needed', tried:'Read both policies', need:'Choose policy A?'})).exitCode, 0);
+  f.time += 24 * 60 * 60000;
+  f.replies.push({status:403, text:''});
+  assert.equal((await f.alert(12, 'recovered', {cause:'The policy was chosen', kind:'decision', code:'12:decision'})).exitCode, 0);
+  assert.equal(f.requests.length, 2, 'the recovery reaches transport after the issue budget clears');
+  assert.match(f.requests[1].body.content, /recovered/);
+  assert.deepEqual(f.record().incidents, {});
+  assert.match((await f.status())[1], /last delivery failed \(HTTP 403\) for #12 decision/);
+  f.time += 24 * 60 * 60000;
+  await f.alert(12, 'recovered', {cause:'Still resolved'});
+  assert.equal(f.requests.length, 2, 'a closed failed recovery is never retried');
+  f.replies.push(echo);
+  assert.equal((await f.pdd(['autopilot', 'alerts', 'test'])).exitCode, 0);
+  assert.equal(f.requests.length, 3);
+  assert.equal((await f.status()).length, 1, 'the delivered test clears historical failure status');
+  f.noSecret();
+});
+
 test('invalid alert input is refused with its problem named, and records and sends nothing', async t => {
   const f = setup(t);
   assert.equal((await f.pdd(['autopilot', 'alerts', 'set'], DISCORD)).exitCode, 0, 'a destination exists, so only validation stops a send');

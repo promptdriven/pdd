@@ -70,13 +70,16 @@ workers through the same injected ports and admission guard. The runner owns idl
 evidence, timing, bounded delivery and stop guards. Forward each `stuck` result,
 including a saved incident on a later tick, to the existing stuck alert service
 with the issue, idle cause, three attempted nudges and the need to inspect the
-agent. Keep retrying the handoff after failure or restart. The alert service owns
-retries for known unsent failures and deduplication of delivered or unconfirmed
-incidents; do not bypass it or send an update for a repeated incident.
+agent. Keep retrying the handoff after failure or restart until the service has
+local custody. Under the [alert owner's record-only policy](autopilot-alerts.prompt.md#alerts-one-real-ask),
+these non-core `stuck` observations are retained locally and never sent to chat,
+regardless of destination or transport health. Repeated ticks keep that local
+incident; they do not imply delivered or unconfirmed transport custody. Do not
+bypass the alert owner or send an update for a repeated incident.
 
 The runner owns eligibility, recovery, request visibility and the per-area limit.
-On its `stuck` result, send a `stuck` alert through the existing alert service with
-issue number, cause, tried and need fields. Its incident deduplication owns one alert
+On its `stuck` result, record a `stuck` observation through the existing alert service with
+issue number, cause, tried and need fields. Its incident deduplication owns one local record
 for this stop, including repeated ticks. Keep the stopped reason in workflow status.
 Never acquire a second claim, start another run or approve a gate to recover a chat.
 
@@ -1484,8 +1487,8 @@ stays `full`. The full engine below is unchanged; this section only adds a branc
 - [GitHub calls](github-calls.prompt.md): required native generation and
   verification context for the call ledger, the budget, the status line and the
   ETag cache.
-- [Autopilot alerts](autopilot-alerts.prompt.md#status-line): required native
-  generation and verification context for status. When `alertStatusLine` with the
+- [Autopilot alerts](autopilot-alerts.prompt.md): required native generation and
+  verification context for record-only stuck handoffs, send eligibility and status. When `alertStatusLine` with the
   saved repository and state root returns a line, status adds it on a second line.
   It reads local files only; an error adds nothing.
 ## One automatic base
