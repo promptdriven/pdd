@@ -171,6 +171,13 @@ ended or moved to the merge check before free slots are counted.
    fault, never a timeout or claim-expired END: a **machine no-result**, a release
    with no comment and no `pdd:stuck`, which is not counted for the issue (no
    cooldown, no strike) and does not add to `streak`.
+   **A lane that frees in this tick** (#3246): when a job of this machine was in the
+   merge lane's final step before this step and is not in it after the pass (it
+   merged, ended, handed over or left the lane), the next green PR does not wait for
+   the next tick. Advance once more each PR job that waits for the lane, in lane
+   order (merge check step 6), with the same error boundary. This is one extra pass
+   at most. It skips a job whose advance failed in this tick (so the 2-tick rule
+   above stays), and it does not apply the sleep gap again.
 
 **Hand-over**: a job that lost its claim to another machine stops its processes,
 changes nothing on the issue (no comment, no label), marks this machine's own open
@@ -839,19 +846,24 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    one open PR, shared by every machine through GitHub (`issues?state=open&labels=…`,
    PRs only). Any machine clears a stale holder (a closed or merged PR, or a core issue
    (`pdd/core-N-…` branch) with no live claim that is no local final-step job) and an
-   orphan one (not a core PR). **One winner on every tick:** the lowest open holder
+   orphan one (not a core PR). A PR of this machine in the final step is a holder
+   too, also when the list does not show its label yet. **One winner on every tick:** the lowest open holder
    number; every other PR removes its own label (a failed DELETE throws and the next
    tick tries again) and waits. When another PR holds the lane, or an older green PR
    of this machine (claim order, `started`) waits, the PR waits: `lane {state:
    waiting, holder, since, heldSince}`, and its quiet clock starts again each tick
    (`progress.running`), so waiting never ends a job and never counts as a refresh; a
    wait for the same holder longer than the quiet period sends one `stuck` alert. Else
-   the PR adds the label and reads the holders again (an empty read: try again next
-   tick). The holder is in the final step: `lane {state: final, since, waited}`. A
+   the PR adds the label and reads the holders again. **Label lag** (#3246): GitHub's
+   label list can lag a label write; the PR's own labels (`GET issues/PR`) do not. So
+   when the list does not show this PR, read its own labels: when they show the lane,
+   this PR is a holder, and the lane step goes on in the same tick. With the label in
+   neither read, try again next tick. The holder is in the final step: `lane {state: final, since, waited}`. A
    repair (which also clears a stale waiting state, as a new head does), an END (of
    any kind, before its other steps), a hand-over, a person's stop and an observe
    validation leave the lane (remove the label); a merge closes the PR. **Race
-   guard:** right before `gh pr merge` the PR reads the holders and the compare again;
+   guard:** right before `gh pr merge` the PR reads the holders (with the same
+   own-labels rule, so a list that lags never drops its label) and the compare again;
    it merges only as the lowest open holder with `behind_by` 0.
    The order (debate B L6, C1, C2): a PR that came back from a conflict update
    (`lanePriority`) goes first, then claim order; a PR whose changed files meet a live

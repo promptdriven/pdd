@@ -2032,6 +2032,78 @@ test('L4 an exact conflict in the final step (add/add) starts an agent conflict 
   assert.ok(!laneLabel(pr), 'the lane is free during the update');
 });
 
+// ---- #3246: the merge lane loses no tick (label read lag, the next PR in the same tick) ---------------------------
+const laneReads = (w, seen) => { const own = w.ports(); return async (args, options) => { seen.push(args.find(x => /^repos\//.test(String(x))) ?? ''); return own.gh(args, options); }; };
+// Ticks until every PR of `issues` merged; between ticks CI turns green on each head and running reviews and suites pass.
+const ticksToMerge = async (w, issues, limit = 10) => {
+  for (let ticks = 1; ticks <= limit; ticks++) {
+    await w.tick();
+    if (w.github.merges.length === issues.length) return ticks;
+    for (const n of issues) {
+      const job = jobFile(w, n); if (job?.head) w.github.setChecks(job.head);
+      if (w.job(n, 'suite') && w.alive.has(w.job(n, 'suite').pid)) w.suite(n, 0);
+      if (w.job(n, 'review') && w.alive.has(w.job(n, 'review').pid)) w.review(n, 'PASS');
+    }
+    w.advance(10 * MIN);
+  }
+  return Infinity;
+};
+
+test('L5 (#3246) the label list does not show the new lane label yet, the PR\'s own labels do: the PR merges in that tick and keeps its label', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } }); w.github.labelListLag = MIN;
+  w.issue(17); await w.tick();
+  const { pr } = await greenPr(w, 17); await w.tick(); w.review(17, 'PASS'); w.suite(17, 0);
+  const seen = [];
+  await w.tick({ gh: laneReads(w, seen) });
+  assert.deepEqual(w.github.merges, [pr.number], 'the lane step goes on in the tick that adds the label');
+  assert.ok(seen.filter(e => e.endsWith(`/issues/${pr.number}`)).length >= 2, 'the own labels are read after the write and right before the merge');
+  assert.ok(!w.github.writes.some(([method, route]) => method === 'DELETE' && route.startsWith(`/issues/${pr.number}/labels/`)), 'a list that lags never drops the label');
+  assert.match(mergeComment(pr), /- Merge lane: final step/);
+  // With the label in neither read, the PR tries again next tick.
+  const v = await coreWorld(t, { settings: { runs: 1 } }); v.github.labelListLag = MIN;
+  v.issue(17); await v.tick();
+  const { pr: late } = await greenPr(v, 17); await v.tick(); v.review(17, 'PASS'); v.suite(17, 0);
+  const real = v.ports();
+  await v.tick({ gh: async (args, options) => { const r = await real.gh(args, options); return args.some(x => String(x).endsWith(`/issues/${late.number}`)) ? { ...r, stdout: r.stdout.replace(/"labels":\[[^\]]*\]/, '"labels":[]') } : r; } });
+  assert.deepEqual(v.github.merges, [], 'no holder in either read: wait'); assert.ok(laneLabel(late), 'the label stays for the next read');
+  v.advance(10 * MIN); await v.tick();
+  assert.deepEqual(v.github.merges, [late.number]);
+});
+
+test('L6 (#3246) when the lane frees in a tick, the next green PR takes it in that tick: the lower issue waits for the higher holder, which merges', async t => {
+  const w = await coreWorld(t, { settings: { runs: 2 } }); w.github.mergeMovesBase = true;
+  w.issue(17); w.issue(18); await w.tick();
+  const a = await greenPr(w, 17), b = await greenPr(w, 18); await w.tick();
+  w.review(18, 'PASS'); w.suite(18, 0); w.baseCommit('person.txt', 'main moved\n');
+  await w.tick();                                    // only #18 is green: it takes the lane and refreshes
+  assert.ok(laneLabel(b.pr) && !laneLabel(a.pr));
+  await w.tick(); w.github.setChecks(jobFile(w, 18).head); w.suite(18, 0); w.review(17, 'PASS'); w.suite(17, 0);
+  await w.tick();                                    // #17 (advanced first) waits for #18; #18 merges; #17 takes the lane
+  assert.deepEqual(w.github.merges, [b.pr.number]);
+  assert.equal(jobFile(w, 17).lane?.state, 'final', 'the waiter entered the lane in the same tick'); assert.ok(laneLabel(a.pr));
+  await w.tick(); w.github.setChecks(jobFile(w, 17).head); w.suite(17, 0); await w.tick();
+  assert.deepEqual(w.github.merges, [b.pr.number, a.pr.number]);
+  assert.equal(w.started.filter(j => j.role === 'review').length, 2, 'one review each');
+});
+
+test('L7 (#3246) timing with the label list lag of GitHub: two queued green PRs merge in 3 ticks, also when the lower issue waits for the holder', async t => {
+  const queued = await coreWorld(t, { settings: { runs: 2 } }); Object.assign(queued.github, { mergeMovesBase: true, labelListLag: MIN });
+  queued.issue(17); queued.issue(18); await queued.tick();
+  await greenPr(queued, 17); await greenPr(queued, 18); await queued.tick();
+  queued.review(17, 'PASS'); queued.suite(17, 0); queued.review(18, 'PASS'); queued.suite(18, 0);
+  const both = await ticksToMerge(queued, [17, 18]);
+  // The higher issue holds the lane (it refreshed for a base move) when the lower one turns green.
+  const behind = await coreWorld(t, { settings: { runs: 2 } }); Object.assign(behind.github, { mergeMovesBase: true, labelListLag: MIN });
+  behind.issue(17); behind.issue(18); await behind.tick();
+  await greenPr(behind, 17); await greenPr(behind, 18); await behind.tick();
+  behind.review(18, 'PASS'); behind.suite(18, 0); behind.baseCommit('person.txt', 'main moved\n');
+  await behind.tick(); behind.advance(10 * MIN); await behind.tick(); behind.github.setChecks(jobFile(behind, 18).head); behind.suite(18, 0);
+  behind.review(17, 'PASS'); behind.suite(17, 0); behind.advance(10 * MIN);
+  const waiter = await ticksToMerge(behind, [17, 18]);
+  t.diagnostic(`ticks to merge two queued green PRs: ${both}; with the lower issue waiting for the holder: ${waiter}`);
+  assert.ok(both <= 3, `queued: ${both} ticks`); assert.ok(waiter <= 3, `waiter: ${waiter} ticks`);
+});
+
 // ---- Review 9 regressions (each failed on 5c8b7426c) -----------------------------------------------------------
 const { proseSha256 } = await import('../src/runtime-preflight.mjs');
 const block9 = json => `<details><summary>Runtime interface</summary>\n\n\`\`\`json\n${json}\n\`\`\`\n</details>\n`;
