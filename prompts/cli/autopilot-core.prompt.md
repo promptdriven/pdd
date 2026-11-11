@@ -30,8 +30,9 @@ string `core`; any other value, or none, is `full`.
 | `quietMinutes` | positive safe integer, default 45: the no-progress period (there is no fixed time limit); the tick uses at least 2 timer ticks (`ports.tickMinutes`, default 10), and a core start refuses a value below that |
 | `ciStuckMinutes` | positive safe integer, default 360: how long CI may stay pending with no change; at least 3 timer ticks |
 | `maxJobHours` | positive safe integer, default 24: the floor of the backstop (see the process rule); no value turns it off |
-| `report` | `file`, `draft` or `off`, default `file` |
+| `report` | `file`, `draft` or `off`, default `draft`: nothing is posted unless the operator chooses `file` |
 | `runtimeRepo` | `autopilot.reports.runtimeRepo` when it is `OWNER/NAME` (the Runtime report repository), else `null` |
+| `runtimeOwner` | `autopilot.reports.runtimeOwner` when it is a GitHub login (letters, digits and single inner hyphens, at most 39 characters), else `null`: the assignee of a Runtime report in `runtimeRepo` |
 | `repairs` | `autopilot.maxRepairs` (the old key `autopilot.repairs` is an alias): safe integer of at least 0, default 6, the safety cap of repairs for one job |
 | `testCommand` | nonblank `autopilot.testCommand`; else `npm test` when `packageJson.scripts.test` exists; else `null` |
 
@@ -502,7 +503,7 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
 2. `Runtime: not run (…)` is allowed, and the PR body is not rewritten. When the
    job's `runtime` has state `not-run` and kind `runtime` (Runtime could not check),
    file or count one report through the [report owner](autopilot-reports.prompt.md)
-   (with `runtimeRepo`) with the cause `{kind: runtime, component, code, text, detail, shipped: true}`
+   (with `runtimeRepo` and `runtimeOwner`) with the cause `{kind: runtime, component, code, text, detail, shipped: true}`
    (component default `pdd-test`, code default `not-run`), once per job and
    component/code (`job.runtimeReport`). It never blocks or ends the job. A not-run
    with no Runtime kind (for example no prompt changed) files nothing.
@@ -705,7 +706,7 @@ task, no progress, red checks). It stops the job's processes and saves phase
    issue.
 2. For a `runtime` or `pdd` cause, file or count one report through the
    [report owner](autopilot-reports.prompt.md) with the repository's settings
-   (`report` mode and `runtimeRepo`).
+   (`report` mode, `runtimeRepo` and `runtimeOwner`).
 3. A `runtime` or `pdd` cause whose report has a GitHub reference **waits for the
    report, not for a person**. Loop breaker first: when an earlier END comment on
    this issue has a blocked-by marker with the same fingerprint and that report is

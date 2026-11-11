@@ -22,11 +22,11 @@ test('settings: engine switch, defaults and bounded values', () => {
   assert.equal(autopilotEngine({ autopilot: { engine: 'core' } }), 'core');
   assert.equal(autopilotEngine({ autopilot: { engine: 'turbo' } }), 'full');
   assert.deepEqual(coreSettings({ autopilot: { mode: 'auto', engine: 'core' } }), {
-    engine: 'core', mode: 'auto', trust: [], runs: 2, label: null, quietMinutes: 45, ciStuckMinutes: 360, maxJobHours: 24, report: 'file', runtimeRepo: null, repairs: 6, testCommand: null });
+    engine: 'core', mode: 'auto', trust: [], runs: 2, label: null, quietMinutes: 45, ciStuckMinutes: 360, maxJobHours: 24, report: 'draft', runtimeRepo: null, runtimeOwner: null, repairs: 6, testCommand: null });
   const custom = coreSettings({ autopilot: { mode: 'auto', engine: 'core', runs: 3, label: 'pdd:autopilot', quietMinutes: 30, report: 'file', repairs: 0, testCommand: 'make check', trust: ['Dana'] } });
-  assert.deepEqual(custom, { engine: 'core', mode: 'auto', trust: ['Dana'], runs: 3, label: 'pdd:autopilot', quietMinutes: 30, ciStuckMinutes: 360, maxJobHours: 24, report: 'file', runtimeRepo: null, repairs: 0, testCommand: 'make check' });
+  assert.deepEqual(custom, { engine: 'core', mode: 'auto', trust: ['Dana'], runs: 3, label: 'pdd:autopilot', quietMinutes: 30, ciStuckMinutes: 360, maxJobHours: 24, report: 'file', runtimeRepo: null, runtimeOwner: null, repairs: 0, testCommand: 'make check' });
   const invalid = coreSettings({ autopilot: { mode: 'auto', engine: 'core', runs: 0, quietMinutes: -1, report: 'loud', repairs: 1.5, label: '' } });
-  assert.deepEqual([invalid.runs, invalid.quietMinutes, invalid.report, invalid.repairs, invalid.label], [2, 45, 'file', 6, null]);
+  assert.deepEqual([invalid.runs, invalid.quietMinutes, invalid.report, invalid.repairs, invalid.label], [2, 45, 'draft', 6, null]);
   assert.equal(coreSettings({ autopilot: { jobTimeoutMinutes: 120 } }).jobTimeoutMinutes, undefined, 'there is no fixed time limit');
   assert.equal(coreSettings({ autopilot: { engine: 'core' } }, { scripts: { test: 'node --test' } }).testCommand, 'npm test');
 });
@@ -200,9 +200,9 @@ test('Runtime no verdict files one report, links it, and the next issue starts',
   const reports = [...w.reports.issues.values()];
   assert.equal(reports.length, 1);
   assert.deepEqual(reports[0].labels, ['pdd:runtime']);
-  assert.deepEqual(reports[0].assignees, ['agarwal-ishaan']);
+  assert.deepEqual(reports[0].assignees, [], 'no owner is configured, so no assignee');
   assert.match(reports[0].body, /<!-- pdd:autopilot-report:runtime\.pdd-test\.no-verdict\.0\.1 -->/);
-  assert.match(reports[0].body, /0\.1\.27/); assert.match(reports[0].body, /no verdict/); assert.match(reports[0].body, /Seen on this machine: 1/);
+  assert.match(reports[0].body, /0\.1\.27/); assert.match(reports[0].body, /Error code: no-verdict/); assert.match(reports[0].body, /Seen on this machine: 1/);
   assert.doesNotMatch(reports[0].body, /change-17|widgets/, 'no user code or repository text');
   assert.match(endComments(w, 17)[0], /Blocked by promptdriven\/pdd#1/);
   assert.ok(w.job(18, 'build'), 'the next issue starts');
@@ -1596,10 +1596,10 @@ test('E1 report owner (Serhan\'s boundary): our input to Runtime (interface, bin
   }
   const binding = await file({ kind: 'runtime', component: 'pdd test', code: 'binding-refused', text: 'the binding was refused' });
   const pddDraft = listReportDrafts({ root }).find(d => d.fingerprint === binding.fingerprint);
-  assert.equal(binding.fingerprint, 'pdd.pdd-test.binding-refusal.0.1'); assert.deepEqual(pddDraft.labels, ['pdd:autopilot-report']); assert.deepEqual(pddDraft.assignees, []);
+  assert.equal(binding.fingerprint, 'pdd.pdd-test.binding-refusal.0.1'); assert.deepEqual(pddDraft.labels, ['pdd:autopilot-report']); assert.equal(pddDraft.runtimeOwner, undefined);
   const internal = await file({ kind: 'runtime', component: 'pdd test', code: 'server-internal', text: 'the server failed' });
   const runtime = listReportDrafts({ root }).find(d => d.fingerprint === internal.fingerprint);
-  assert.equal(internal.fingerprint, 'runtime.pdd-test.server-internal.0.1'); assert.deepEqual(runtime.labels, ['pdd:runtime']); assert.deepEqual(runtime.assignees, ['agarwal-ishaan']);
+  assert.equal(internal.fingerprint, 'runtime.pdd-test.server-internal.0.1'); assert.deepEqual(runtime.labels, ['pdd:runtime']); assert.equal(runtime.runtimeOwner, undefined, 'no owner is configured');
   assert.equal(reportKind({ kind: 'pdd', component: 'pdd', code: 'crash' }), 'pdd'); assert.equal(reportKind({ kind: 'job', code: 'scenario' }), 'job');
 });
 
@@ -1684,11 +1684,11 @@ const reportGh = ({ readable = true } = {}) => {
   return { gh, calls, issues };
 };
 
-test('H1 reports: file is the default mode; no daily cap; the same cause gets one "seen again" per machine per day', async t => {
+test('H1 reports: draft is the default mode; no daily cap; the same cause gets one "seen again" per machine per day', async t => {
   const { fileReport } = await import('../src/autopilot-reports.mjs');
   const { mkdtempSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
-  assert.equal(coreSettings({ autopilot: { engine: 'core' } }).report, 'file');
+  assert.equal(coreSettings({ autopilot: { engine: 'core' } }).report, 'draft');
   const root = mkdtempSync(join(tmpdir(), 'pdd-h1-')); t.after(() => rmSync(root, { recursive: true, force: true }));
   const fake = reportGh();
   const file = code => fileReport({ cause: { kind: 'pdd', component: 'pdd', code, text: 'x' }, mode: 'file', root, machine: 'host-a', versions: { pdd: '0.1.27' } }, { gh: fake.gh, now: () => 0 });
@@ -1710,7 +1710,7 @@ test('H2 a Runtime report goes to the configured Runtime repository when readabl
     const sent = await fileReport({ cause, mode: 'file', root, machine: 'm', versions: { pdd: '0.1.27' }, runtimeRepo: 'promptdriven/prompt-runtime' }, { gh: fake.gh, now: () => 0 });
     assert.equal(sent.state, 'filed'); assert.equal(sent.ref, `${repo}#501`);
     const issue = fake.issues.get(501);
-    assert.equal(issue.repo, repo); assert.deepEqual(issue.labels, ['pdd:runtime']); assert.deepEqual(issue.assignees, ['agarwal-ishaan']);
+    assert.equal(issue.repo, repo); assert.deepEqual(issue.labels, ['pdd:runtime']); assert.deepEqual(issue.assignees, [], 'no owner is configured');
   }
   // A PDD cause (a test vector, or a refusal of our input such as a binding) always goes to promptdriven/pdd.
   for (const code of ['scenario-integer-out-of-range', 'binding-refused']) {
@@ -2242,7 +2242,8 @@ test('O4 path e: the job result proposes adopting PDD; the tick files one dedupe
   w.review(17, 'PASS'); w.suite(17, 0); await w.tick(); await w.tick();
   w.build(18, { body: 'Fixes #18\n\nRuntime: PASS\nPath: e — change-18.txt — unowned — no contract change — Test: test/c.test.js', result: { adopt: ['change-18.txt'] } }); await w.tick();
   const drafts = listReportDrafts({ root: w.reportRoot }).filter(d => d.fingerprint.startsWith('pdd.autopilot-core.adopt-pdd'));
-  assert.equal(drafts.length, 1); assert.equal(drafts[0].count, 2); assert.match(drafts[0].body, /^Autopilot changed existing code that no prompt owns/); assert.match(drafts[0].body, /change-18\.txt/);
+  assert.equal(drafts.length, 1); assert.equal(drafts[0].count, 2); assert.match(drafts[0].body, /^Autopilot changed existing code that no prompt owns/);
+  assert.match(drafts[0].detail, /change-18\.txt/, 'the module list stays in the local draft'); assert.doesNotMatch(drafts[0].body, /change-18\.txt/);
 });
 
 // ---- Debate B (B-VERDICT.md section 5): collisions between parallel jobs and a moving main ----------------------
