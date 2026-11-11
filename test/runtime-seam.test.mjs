@@ -826,3 +826,185 @@ test('SEAM9 (R2-2): seam preserves legacy port overrides and ignores own undefin
   });
   assert.equal(undefGuide.wire({ say: `v=${undefMarker}`, fill: null }).say, 'v=[redacted]');
 });
+
+test('SEAM10 (R2-4): workflow base SHA is observed inside runBatch after discovery/cache/preflight and honors explicit workflow or workflowBaseSha', async t => {
+  const { execFileSync } = await import('node:child_process');
+  const { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const seam = await import('../src/runtime-seam.mjs');
+
+  const tmp = mkdtempSync(join(tmpdir(), 'pdd-r2-4-'));
+  t.after(() => rmSync(tmp, { recursive: true, force: true }));
+
+  const repo = join(tmp, 'repo');
+  const home = join(tmp, 'home');
+  const stateDir = join(home, '.local/state/pdd');
+  mkdirSync(join(repo, 'prompts'), { recursive: true });
+  mkdirSync(join(repo, 'user_stories'), { recursive: true });
+  mkdirSync(join(repo, 'tests'), { recursive: true });
+  mkdirSync(stateDir, { recursive: true });
+  execFileSync('git', ['init', '-q'], { cwd: repo });
+
+  const makePrompt = (title, bodyText) => {
+    const input = { type: 'object', properties: { argv: { type: 'array', items: { type: 'string' } } }, required: ['argv'], additionalProperties: false };
+    const result = { type: 'object', properties: { stdout: { type: 'string' }, stderr: { type: 'string' }, exit_code: { type: 'integer' } }, required: ['stdout', 'stderr', 'exit_code'], additionalProperties: false };
+    const iface = {
+      status: 'draft',
+      prose_sha256: '',
+      entries: [{
+        operation: 'main',
+        input_schema: input,
+        result_schema: result,
+        errors: [],
+      }],
+      calls: [],
+      resources: [],
+      limits: { max_steps: 1, max_model_calls: 1 },
+      conventions: ['input_schema', 'result_schema'].map(key => ({ path: `/entries/0/${key}`, convention: 'cli' })),
+    };
+    const render = () => `# ${title}\n\n${bodyText}\n\n## Dependencies\n\nNone.\n\n<details><summary>Runtime interface</summary>\n\n\`\`\`json\n${JSON.stringify(iface)}\n\`\`\`\n</details>\n`;
+    iface.prose_sha256 = seam.proseSha256(render());
+    return render();
+  };
+
+  for (const name of ['one', 'two']) {
+    writeFileSync(join(repo, `prompts/${name}.prompt.md`), makePrompt(name, `Behavior v1 for ${name}.`));
+    writeFileSync(join(repo, `user_stories/${name}.md`), `# ${name}\n\nI can run ${name}.\n\n## Acceptance criteria\n\n1. ${name} works.\n`);
+    writeFileSync(
+      join(repo, `tests/${name}.json`),
+      JSON.stringify({
+        schema_version: 'prompt-runtime.program-scenario.v1',
+        story_path: `user_stories/${name}.md`,
+        criteria: [{ id: 'AC1', text: `${name} works.` }],
+        initial_world: {},
+        simulation: {},
+        context: [],
+        steps: [{ step_id: 's1', entry_path: `prompts/${name}.prompt.md`, operation: 'main', input: { argv: ['hi'] }, checks: [{ criterion_id: 'AC1', target: 'result', path: '/stdout', op: 'equals', value: 'hi\n' }] }],
+      }, null, 2) + '\n',
+    );
+  }
+  execFileSync('git', ['add', '.'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '-m', 'commit A'], { cwd: repo });
+  const shaA = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim();
+
+  // Commit B modifies two.prompt.md; uncommitted edit modifies one.prompt.md after B.
+  writeFileSync(join(repo, 'prompts/two.prompt.md'), makePrompt('two', 'Behavior v2 for two.'));
+  execFileSync('git', ['add', '.'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '-m', 'commit B'], { cwd: repo });
+  const shaB = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim();
+  writeFileSync(join(repo, 'prompts/one.prompt.md'), makePrompt('one', 'Behavior v2 uncommitted for one.'));
+
+  const realRepo = realpathSync(repo);
+  const commonDir = realpathSync(execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: repo, encoding: 'utf8' }).trim());
+  const runDir = join(commonDir, 'pdd/runs/1');
+  mkdirSync(runDir, { recursive: true });
+  const writeRunBase = baseSha => {
+    writeFileSync(
+      join(runDir, 'status.json'),
+      JSON.stringify({
+        v: 1,
+        number: 1,
+        runId: 'run-r2-4',
+        repo: 'example/repo',
+        workflow: 'feature',
+        state: 'active',
+        root: realRepo,
+        commonDir,
+        runDir,
+        baseSha,
+        startedAt: '2026-11-11T00:00:00Z',
+        updatedAt: '2026-11-11T00:00:00Z',
+      }, null, 2) + '\n',
+    );
+  };
+  writeFileSync(
+    join(stateDir, 'runs.json'),
+    JSON.stringify({
+      version: 1,
+      runs: [{ repo: 'example/repo', number: 1, workflow: 'feature', state: 'active', runDir, root: realRepo, updatedAt: '2026-11-11T00:00:00Z' }],
+    }, null, 2) + '\n',
+  );
+
+  // 1. Race check: status.json starts at shaA before runCheck entry, and updates to shaB after discovery/cache-open (before preflight and buildCheckPlan).
+  writeRunBase(shaA);
+  let mutatedDuringStartup = false;
+  let stderrRace = '';
+  const raceCode = await seam.runCheck(
+    { cwd: repo, words: [], options: { '--cache-clear': true }, cache: true },
+    {
+      env: { HOME: home, PDD_STATE_DIR: stateDir, PDD_RUNTIME_URL: 'https://runtime.example.test' },
+      stdout: { write() {} },
+      stderr: {
+        write: c => {
+          stderrRace += c;
+          if (!mutatedDuringStartup && String(c).includes('pdd: test cache')) {
+            mutatedDuringStartup = true;
+            writeRunBase(shaB);
+          }
+        },
+      },
+      gh: () => ({ status: 1, stdout: '', stderr: '' }),
+      fetch: async () => { throw new Error('network disabled'); },
+    },
+  );
+  assert.equal(raceCode, 5, stderrRace);
+  assert.equal(mutatedDuringStartup, true);
+  assert.match(stderrRace, /target: user_stories\/one\.md/);
+  assert.match(stderrRace, /baseline: user_stories\/two\.md/);
+
+  // 2. Explicit input.workflow snapshot wins even when on-disk run points to shaB.
+  let stderrExplicitWorkflow = '';
+  const explicitWorkflowCode = await seam.runCheck(
+    { cwd: repo, words: [], options: {}, workflow: { base_sha: shaA } },
+    {
+      env: { HOME: home, PDD_STATE_DIR: stateDir, PDD_RUNTIME_URL: 'https://runtime.example.test' },
+      stdout: { write() {} },
+      stderr: { write: c => { stderrExplicitWorkflow += c; } },
+      gh: () => ({ status: 1, stdout: '', stderr: '' }),
+      fetch: async () => { throw new Error('network disabled'); },
+    },
+  );
+  assert.equal(explicitWorkflowCode, 5);
+  assert.match(stderrExplicitWorkflow, /target: user_stories\/one\.md/);
+  assert.match(stderrExplicitWorkflow, /target: user_stories\/two\.md/);
+
+  // 3. Explicit ports.workflowBaseSha (string and function) overrides default lookup.
+  let stderrPortString = '';
+  await seam.runCheck(
+    { cwd: repo, words: [], options: {} },
+    {
+      env: { HOME: home, PDD_STATE_DIR: stateDir, PDD_RUNTIME_URL: 'https://runtime.example.test' },
+      stdout: { write() {} },
+      stderr: { write: c => { stderrPortString += c; } },
+      workflowBaseSha: shaA,
+      gh: () => ({ status: 1, stdout: '', stderr: '' }),
+      fetch: async () => { throw new Error('network disabled'); },
+    },
+  );
+  assert.match(stderrPortString, /target: user_stories\/two\.md/);
+
+  // 4. Conflicting-mode usage error (--read + --retry) and --local do not invoke workflowBaseSha / allRuns.
+  let earlyReads = 0;
+  const bogusCode = await seam.runCheck(
+    { cwd: repo, words: ['batch-1'], options: { '--read': true, '--retry': true } },
+    {
+      env: { HOME: home, PDD_STATE_DIR: stateDir },
+      stdout: { write() {} },
+      stderr: { write() {} },
+      allRuns: () => { earlyReads += 1; return []; },
+    },
+  );
+  assert.equal(bogusCode, 2);
+  assert.equal(earlyReads, 0);
+
+  await seam.runCheck(
+    { cwd: repo, words: [], options: { '--local': true } },
+    {
+      env: { HOME: home, PDD_STATE_DIR: stateDir },
+      stdout: { write() {} },
+      stderr: { write() {} },
+      allRuns: () => { earlyReads += 1; return []; },
+    },
+  );
+  assert.equal(earlyReads, 0);
+});

@@ -1,5 +1,4 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 678988c8226c6ae750e100273560435eb64bb964492a4b366fd55db1956e06e6).
-import { spawnSync } from 'node:child_process';
+// Generated from prompts/cli/runtime-seam.prompt.md (sha256: d15589dbde6f85078ba95afa8d9fd7078064eef41d2842e34dfad2ebb47bac1c).
 import { realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -24,7 +23,6 @@ import {
 
 const req = createRequire(import.meta.url);
 const TRY_LAUNCHER_URL = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), 'try-doors.mjs')).href;
-const NON_BATCH_MODES = ['--read', '--retry', '--fill-hash', '--files', '--explain-bindings', '--request', '--lint', '--screen', '--drawing', '--local'];
 
 let cachedVersion = null;
 function clientVersion() {
@@ -75,15 +73,12 @@ function withEligibilityDefault(ports = {}, defaultEligibility) {
   };
 }
 
-function resolveWorkflowBaseSha(cwd = process.cwd(), env = process.env) {
-  const { allRuns } = req('./workflow-runs.mjs');
-  const runs = allRuns({ cancelled: true }, { env });
-  if (!runs.length) return null;
-  const found = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-  if (found.status !== 0 || !found.stdout.trim()) return null;
+function resolveWorkflowBaseSha({ root, env = process.env, allRunsPort } = {}) {
+  if (!root) return null;
+  const readAllRuns = allRunsPort ?? req('./workflow-runs.mjs').allRuns;
   let realRoot;
-  try { realRoot = realpathSync(found.stdout.trim()); } catch { return null; }
-  const matching = runs.filter(run => {
+  try { realRoot = realpathSync(root); } catch { return null; }
+  const matching = readAllRuns({ cancelled: true }, { env }).filter(run => {
     try { return realpathSync(run.root) === realRoot; } catch { return false; }
   });
   return matching.length === 1 && /^[a-f0-9]{40}$/.test(matching[0].baseSha ?? '') ? matching[0].baseSha : null;
@@ -147,6 +142,7 @@ export async function runAutomaticApproval(input = {}, ports = {}) {
     ,
     { headerPrompts },
     { readEvidenceEligibility },
+    { allRuns },
     { lintSvgLayouts },
   ] = await Promise.all([
     import('./approval-policy.mjs'),
@@ -154,11 +150,12 @@ export async function runAutomaticApproval(input = {}, ports = {}) {
     import('./secret-redaction.mjs'),
     import('./file-owner.mjs'),
     import('./workflow-runner.mjs'),
+    import('./workflow-runs.mjs'),
     import('./svg-layout.mjs'),
   ]);
   const env = ports.env ?? process.env;
   const client = ports.client ?? (input?.client ? { ...input.client, version: input.client.version ?? clientVersion() } : { version: clientVersion() });
-  const workflow = ports.workflow ?? input?.workflow ?? { base_sha: resolveWorkflowBaseSha(input?.root ?? input?.cwd, env) };
+  const explicitWorkflow = ports.workflow ?? input?.workflow;
   return runtimeRunAutomaticApproval(
     input,
     withPortDefaults(withEligibilityDefault(ports, readEvidenceEligibility), {
@@ -169,9 +166,12 @@ export async function runAutomaticApproval(input = {}, ports = {}) {
       approvePromptText,
       promptPath,
       headerPrompts,
+      allRuns,
+      workflowBaseSha: ({ root, env: runEnv }) =>
+        resolveWorkflowBaseSha({ root, env: runEnv ?? env, allRunsPort: ports.allRuns ?? allRuns }),
       lintSvgLayouts,
       client,
-      workflow,
+      ...(explicitWorkflow !== undefined ? { workflow: explicitWorkflow } : {}),
       redaction: seamRedaction(ports),
     }),
   );
@@ -196,20 +196,17 @@ export async function runCheck(input = {}, ports = {}) {
     import('./screen-compare.mjs'),
   ]);
   const env = ports.env ?? process.env;
-  const needsBatchPlan = !NON_BATCH_MODES.some(flag => input?.options?.[flag] !== undefined);
-  const workflow = input?.workflow !== undefined
-    ? input.workflow
-    : (needsBatchPlan ? { base_sha: resolveWorkflowBaseSha(input?.cwd, env) } : undefined);
   const client = input?.client ? { ...input.client, version: input.client.version ?? clientVersion() } : { version: clientVersion() };
   return runtimeRunCheck(
     {
       ...input,
       client,
-      ...(workflow !== undefined ? { workflow } : {}),
     },
     withPortDefaults(withEligibilityDefault(ports, readEvidenceEligibility), {
       headerPrompts,
       allRuns,
+      workflowBaseSha: ({ root, env: runEnv }) =>
+        resolveWorkflowBaseSha({ root, env: runEnv ?? env, allRunsPort: ports.allRuns ?? allRuns }),
       assessNativeEvidence,
       usableResult,
       resultLines,

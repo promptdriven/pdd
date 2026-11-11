@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 1f691fd32d194e63fc84516550f5d869816434bb0dc0aed44812a6be8f84902a).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 3ebe832639f105cfa69e41d78a5ddfdd318123e1fd1ef83cc8f4bb882dfd2e91).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
@@ -3350,12 +3350,16 @@ async function runBatch(context, cwd, words, options, setRelease) {
   if (options['--max-calls'] !== undefined) for (const row of rows) row.max_calls = Number(options['--max-calls']);
   const workflowBase = context.workflow !== undefined
     ? context.workflow?.base_sha
-    : (() => {
-        const runs = (ports.allRuns ?? (() => []))({cancelled:true}, {env:ports.env}).filter(run => {
-          try { return realpathSync(run.root) === realpathSync(root); } catch { return false; }
-        });
-        return runs.length === 1 ? runs[0].baseSha : null;
-      })();
+    : ports.workflowBaseSha !== undefined && ports.workflowBaseSha !== null
+      ? (typeof ports.workflowBaseSha === 'function'
+          ? ports.workflowBaseSha({ root, env: ports.env })
+          : ports.workflowBaseSha)
+      : (() => {
+          const runs = (ports.allRuns ?? (() => []))({ cancelled: true }, { env: ports.env }).filter(run => {
+            try { return realpathSync(run.root) === realpathSync(root); } catch { return false; }
+          });
+          return runs.length === 1 ? runs[0].baseSha : null;
+        })();
   context.checkPlan = buildCheckPlan({root,found,selected,rows,full:words.length === 0,
     base:/^[a-f0-9]{40}$/.test(workflowBase ?? '') ? workflowBase : 'HEAD'}, {headerPrompts: ports.headerPrompts});
   for (const value of checkPlanLines(context.checkPlan)) line(ports.stderr, value);

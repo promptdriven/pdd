@@ -662,7 +662,7 @@ export async function runAutomaticApproval({path,root,tests},ports={}) {
     if(!selected.length || selected.some(test=>test.error)) throw Error('No complete existing prompt tests cover this draft.');
     let output='';
     const checkPorts={...ports,stdout:{write:chunk=>{output+=chunk;}},stderr};
-    const code=await runCheck({cwd:root,words:selected.map(test=>test.path),options:{'--json':true},cache:false,client:ports.client,workflow:ports.workflow},checkPorts);
+    const code=await runCheck({cwd:root,words:selected.map(test=>test.path),options:{'--json':true},cache:false,client:ports.client,...(ports.workflow !== undefined ? {workflow:ports.workflow} : {})},checkPorts);
     let result;try {result=JSON.parse(output);}catch {throw Error('Prompt check evidence is unavailable.');}
     const complete=code===0 && result.exit_code===0 && result.rows?.length===selected.length && selected.every(test=>{
       const row=result.rows.find(row=>row.test===test.path),checks=test.doc.steps.reduce((sum,step)=>sum+(step.checks?.length ?? 0),0);

@@ -1,6 +1,6 @@
 # Runtime client
 
-Own `src/runtime-client.mjs`. Export `runCheck({words, options, cwd, cache=false}, ports)` and `runTry({words, options, cwd}, ports)`. Each returns an exit code. These commands and the Try MCP tools call the PDD interpreter with the person's `gh` login (recording read tokens through `ports.redaction.remember` or `ports.rememberSecrets`, falling back to the standalone package redactor only when no redaction port is supplied, and forwarding `ports.redaction` to `createAgentBridge`). Lines that pdd writes itself follow the [word rule](public-boundary.prompt.md#pdd-interpreter), except the plain busy-check messages owned below.
+Own `src/runtime-client.mjs`. Export `runCheck({words, options, cwd, cache=false, client, workflow}, ports)` and `runTry({words, options, cwd}, ports)`. Each returns an exit code. These commands and the Try MCP tools call the PDD interpreter with the person's `gh` login (recording read tokens through `ports.redaction.remember` or `ports.rememberSecrets`, falling back to the standalone package redactor only when no redaction port is supplied, and forwarding `ports.redaction` to `createAgentBridge`). Lines that pdd writes itself follow the [word rule](public-boundary.prompt.md#pdd-interpreter), except the plain busy-check messages owned below.
 
 ## Runtime interface refusal diagnostics
 
@@ -1334,8 +1334,7 @@ batches remain usable. Do not recover by a network read or change saved caches.
 ## Check scope plan
 
 Before normal Check dispatch, build the local plan owned by
-[check planning](runtime-check-plan.prompt.md), using the unique same-worktree
-workflow run's baseSha when available. Print its text to stderr once before
+[check planning](runtime-check-plan.prompt.md), using an explicit request `workflow.base_sha` when `workflow` is supplied, else resolving `ports.workflowBaseSha` right before planning inside `runBatch` after repository discovery, selection, cache opening, binding coverage and preflight (calling `ports.workflowBaseSha({root, env: ports.env})` when a function or accepting a 40-hex SHA string), else reading the unique same-worktree workflow run's `baseSha` through `ports.allRuns` (`'HEAD'` when unavailable or not 40 lowercase hex digits), and forwarding `ports.headerPrompts`. Print its text to stderr once before
 sign-in and lint. Save it as `check_plan` in batch.json and summary.json; restore
 it on saved reads and retries rather than recomputing against later edits.
 JSON results include `check_scope` from that owner's result projection. Text
