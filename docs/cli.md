@@ -1319,7 +1319,11 @@ claim that it could not check, is red, and the merge comment shows its own count
 claim that Autopilot could not check (no result, a file it does not run, or a skipped
 test) is red once per job; after that Autopilot never repeats it: the merge comment and
 the history write that kind as `not-run (Autopilot could not check: reason)`, and
-Autopilot files one report.
+Autopilot files one report. For each PR head, Autopilot writes its own evidence record
+(`logs/ISSUE-evidence-HEAD.json` in its state folder, kept after the run ends): the saved
+`pdd test` checks it read, each replay and formal file's result, and the full suite. The
+reviewer reads it, the merge comment names it, and the PR body gets a short "Autopilot
+evidence" block from it.
 
 With `--decisions ask`, a build job asks one question instead of choosing when it meets
 a big decision (its brief lists the other open issues by trusted authors, so it can see

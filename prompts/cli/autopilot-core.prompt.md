@@ -802,7 +802,29 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    20, then "and N more") and `- Formal tests (…)`, `- Not run by Autopilot
    (REASON): FILES` for other runners, or `- Replay and formal tests (Autopilot's run):
    none changed`.
-4. Any red finding: stop the other checks. The **repair budget** (option B): repairs go on
+   **The evidence record (#3227 fix 3):** each merge check writes one engine record per
+   head, `logs/N-evidence-HEAD.json` (`pdd.core-evidence.v1`, written only when it
+   changes): the PR's Runtime lines and claims, the T01 result with the saved rows that
+   it read (Story, pass, current, time, tests; at most 50), the replay and formal run with
+   each file's result, the full suite (state, exit, log name, failed tests), CI and review
+   states, the PR's Evidence claim and the honest Evidence (above). The agent's lines are
+   claims that the engine checks; the record is the engine's own. The reviewer's brief
+   names the record's path and a short summary. The merge and would-merge note take
+   their engine lines from it and name it, and the PR body gets one engine block between
+   `<!-- pdd:autopilot-core:evidence:start -->` and `<!-- pdd:autopilot-core:evidence:end -->`
+   (replaced in place, before the follow-ups section; its lines never read as a
+   Runtime, Path or Evidence line). The record stays after END: the local cleanup keeps
+   `*-evidence-*.json` like the logs, because worktrees and job files go.
+4. Any red finding: stop the other checks, but first keep the partial results (#3227 fix
+   4): while the engine's replay run (T04) still runs, the merge check waits for it (it
+   takes minutes; at most 30 minutes after the first red, `redAt`), so its reds join the
+   same round; and a full suite that is still running gives the failed tests that its
+   log already shows (`failingTests` of a bounded log tail) as one more red line: "The
+   full test suite (still running at head H) already shows failed tests: TEST (FILE), …".
+   A red suite's line names its failed tests the same way. `failingTests(text, limit=20)`
+   is exported: `[{name, file}]` from TAP `not ok N - NAME` lines at any depth (with the
+   `location:` line that follows) and spec-reporter `✖ NAME` lines, each name once. The
+   **repair budget** (option B): repairs go on
    while they make progress. The findings of a round are each review must-fix (P1 and P2)
    and each other red line. Two findings are the same when they name the same `file:line`
    (3 lines of tolerance) with a similar cause (2 shared words and a quarter of the words,
