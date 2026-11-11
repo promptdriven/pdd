@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 336130b69cf7e97a4c43f840c669c63f7a211df016a8bb0c3489ef4ad1a224ba).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: c32592b1f6011678d8d4c10b4072675f6878fe95491b27bb4f228eadecf8cc92).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -5781,6 +5781,8 @@ export function readEvidenceEligibility({root,producerRoot,tests,source_sha256,r
       if(candidates.length!==1)return{...result,state:'ineligible',reason:'workspace association is ambiguous'};
       const {run,association:a}=candidates[0];
       if(runId!==null&&runId!==run.runId||stage!==null&&stage!==a.stage)return{...result,state:'ineligible',reason:'saved run or stage disagrees with the owned association'};
+      // Before-the-fix evidence is historical: only a caller that names that stage may read it.
+      if(a.stage==='before'&&stage!=='before')return{...result,state:'ineligible',reason:'before-the-fix evidence is historical; it is read only through its registered import'};
       const inspect=ports.inspectRepository??(path=>{const git=spawnSync('git',['rev-parse','--path-format=absolute','--git-common-dir'],{cwd:path,encoding:'utf8'});if(git.status!==0)throw Error('repository ownership unavailable');return canonical(git.stdout.trim());});
       const common=inspect(root);
       if(canonical(run.commonDir)!==common||canonical(run.runDir)!==canonical(runDirFor(common,run.number))||typeof run.repo!=='string'||!run.runId)return{...result,state:'ineligible',reason:'run ownership is missing or contradictory'};

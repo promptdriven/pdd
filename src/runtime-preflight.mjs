@@ -1,6 +1,6 @@
 import { markdownLinks, markdownDefinitions, markdownSectionText } from './runtime-markdown.mjs';
 import { buildBindingPlan, runtimeBoundary } from './runtime-binding-plan.mjs';
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 796e64b137a0cf2935bfa76a13bfadc9ecb890a41f05a6dec4c5c942864b630b).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 216851bda0983285f7264bb683a9aedb3db466cdfdcf202bd3d9ae3ab24cc9b0).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
@@ -338,6 +338,12 @@ const schemaValue = (holder, key) => {
   const value = holder?.[key], source = numberSources.get(holder)?.get(String(key));
   return typeof value === 'number' && !Number.isSafeInteger(value) && typeof source === 'string' && /^-?(?:0|[1-9][0-9]*)$/.test(source) ? BigInt(source) : value;
 };
+// const and enum values read with their own tokens at every depth.
+const exactSchemaValue = (holder, key) => {
+  const value = schemaValue(holder, key);
+  return Array.isArray(value) ? value.map((_, index) => exactSchemaValue(value, index))
+    : isObject(value) ? Object.fromEntries(Object.keys(value).map(name => [name, exactSchemaValue(value, name)])) : value;
+};
 const sameValue = (a, b) => isDeepStrictEqual(exactValue(a), exactValue(b));
 const article = type => /^[aeiou]/.test(type) ? `an ${type}` : `a ${type}`;
 
@@ -393,7 +399,7 @@ function schemaProblems(value, schema, tokens, out, warnings, evidence = { miss:
     const types = Array.isArray(schema.type) ? schema.type : [schema.type];
     if (!types.some(type => typeMatches(value, type))) return at(`is ${show(value)}. The prompt wants ${types.map(article).join(' or ')}.`);
   }
-  const wanted = schemaValue(schema, 'const'), choices = Array.isArray(schema.enum) ? schema.enum.map((_, index) => schemaValue(schema.enum, index)) : null;
+  const wanted = exactSchemaValue(schema, 'const'), choices = Array.isArray(schema.enum) ? schema.enum.map((_, index) => exactSchemaValue(schema.enum, index)) : null;
   if (Object.hasOwn(schema, 'const') && !sameValue(value, wanted)) at(`is ${show(value)}. The prompt wants ${show(wanted)}.`);
   if (choices && !choices.some(choice => sameValue(choice, value))) at(`is ${show(value)}. The prompt allows ${either(choices.map(show))}.`);
   if (numeric(value)) {

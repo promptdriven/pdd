@@ -149,6 +149,27 @@ test('LI7: P9 compares an exact input with an exact schema bound', t => {
   assert.deepEqual(checkInput(input, schema, 1).refusals.map(row => row.message), [`steps[1] input /seconds is ${ABOVE}. The prompt allows 0 to ${ROUNDED}.`]);
   assert.deepEqual(checkInput(parseScenarioJson(`{"seconds": ${ROUNDED}}`), schema, 1).refusals, []);
   assert.deepEqual(checkInput(parseScenarioJson(`{"seconds": ${LARGE}}`), { ...schema, properties: { seconds: { type: 'integer', minimum: 0 } } }, 0).refusals, []);
+  // The bound token decides: a maximum of 2^53 + 1 admits 2^53 + 1, although its Number is 2^53.
+  const above = repo(t, { maximum: ABOVE });
+  const exactBound = readPrompt(above.root, findTests({ root: above.root }).visible, PROMPT).interface.entries[0].input_schema;
+  assert.deepEqual(checkInput(input, exactBound, 1).refusals, []);
+  assert.equal(checkInput(parseScenarioJson('{"seconds": 9007199254740995}'), exactBound, 1).refusals.length, 1);
+});
+
+test('LI8: P9 reads const and enum objects with their own tokens at every depth', t => {
+  const BIG = '12345678901234567890', OTHER = '12345678901234567891';
+  const object = extra => `{"type":"object","properties":{"o":{"type":"object","properties":{"id":{"type":"integer"}},"required":["id"],"additionalProperties":false,${extra}}},"required":["o"],"additionalProperties":false}`;
+  for (const [label, schemaText] of [['nested const', object(`"const":{"id":${BIG}}`)], ['enum of objects', object(`"enum":[{"id":1},{"id":${BIG}}]`)]]) {
+    const f = repo(t);
+    writeFileSync(join(f.root, PROMPT), promptText('1e30').replace(/"input_schema":\{[\s\S]*?\},"result_schema"/, `"input_schema":${schemaText},"result_schema"`));
+    const schema = readPrompt(f.root, findTests({ root: f.root }).visible, PROMPT).interface.entries[0].input_schema;
+    // The same value as the schema: no refusal, as JSON.parse on both sides also gives (the behavior of main stays).
+    assert.deepEqual(checkInput(parseScenarioJson(`{"o":{"id":${BIG}}}`), schema, 0).refusals, [], label);
+    // A different last digit is a difference, and the message shows exact digits.
+    const refused = checkInput(parseScenarioJson(`{"o":{"id":${OTHER}}}`), schema, 0).refusals;
+    assert.equal(refused.length, 1, label);
+    assert.ok(refused[0].message.includes(OTHER) && refused[0].message.includes(BIG) && !refused[0].message.includes('12345678901234567000'), refused[0].message);
+  }
 });
 
 test('LI5: an upload rewrite keeps exact digits in the bytes that pdd sends', t => {

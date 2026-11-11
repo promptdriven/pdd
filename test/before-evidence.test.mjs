@@ -3,12 +3,13 @@ import './helpers/test-home.mjs';
 // The saved result is admitted only when the selection at the named local commit hashes to its exact source.
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
 import { captureSource } from '../src/runtime-preflight.mjs';
 import { renderJson } from '../src/runtime-output.mjs';
+import { readRunResults, resultLines } from '../src/workflow-results.mjs';
 import * as runner from '../src/workflow-runner.mjs';
 import { evidenceFixture, assertProtected, selection } from './helpers/workspace-evidence-fixture.mjs';
 const { associateEvidenceWorkspace, recordEvidence, runStatus, storyCount } = runner;
@@ -109,4 +110,32 @@ test('BE4: a receipt batch name that is not a pdd batch id is never shown', asyn
   assert.equal(status.before[0].batch, null);
   const text = (await runStatus({ ref: '17', cwd: f.root }, f.ports)).message;
   assert.ok(text.includes(`Before the fix (commit ${f.head.slice(0, 7)}): `) && !text.includes('forged'), text);
+});
+
+test('BE5: a later before-the-fix batch never becomes the run\'s current pdd test result', async t => {
+  const f = await evidenceFixture(t), state = join(f.base, 'pdd-state');
+  // A saved check batch as pdd test writes it: producer root, rows, selected source identity.
+  const batch = (name, producer, at, pass) => {
+    const sha = captureSource(producer, { tests: selection, appMap: null }).sha256, dir = join(state, 'batches', name), line = `Prompt tests (place-order): ${pass ? '✓ 3 of 3' : '✗ 2 of 3'}`;
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'batch.json'), JSON.stringify({ batch: name, root: producer, rows: selection.map(test => ({ test, story: 'place-order', state: pass ? 'passed' : 'failed' })), created_at: new Date(at).toISOString(), intent: 'check', source_sha256: sha }));
+    writeFileSync(join(dir, 'summary.json'), JSON.stringify({ batch: name, repo: producer, source_sha256: sha, summary_line: line, rows: selection.map(test => ({ test, story: 'place-order', state: pass ? 'passed' : 'failed', summary_line: line })) }));
+  };
+  fixPrompt(f); f.git(f.root, 'commit', '-qam', 'Fix the prompt');
+  batch('20261110-100000-aaaa', f.root, Date.UTC(2026, 10, 10, 10), true); // the current pass
+  batch('20261110-110000-bbbb', f.other, Date.UTC(2026, 10, 10, 11), false); // a later check of the old source in another checkout
+  const read = () => readRunResults({ root: f.root, runDir: f.runDir, runId: f.read().runId, since: 0 },
+    { env: { ...f.ports.env, PDD_STATE_DIR: state }, workspace: input => runner.readEvidenceEligibility(input, { allRuns: () => [f.read()] }) }).filter(row => row.kind === 'pdd test');
+  const before = read();
+  assert.deepEqual(before.map(row => [row.batch, row.source]), [['20261110-100000-aaaa', 'current']]);
+  const registered = await associateEvidenceWorkspace({ ref: '17', cwd: f.root, workspace: f.other, stage: 'before', commit: f.head, tests: selection }, f.ports);
+  assert.equal(registered.exitCode, 0, registered.message);
+  const after = read();
+  assert.deepEqual(after.map(row => [row.batch, row.source, row.stage]), [['20261110-100000-aaaa', 'current', 'current']], resultLines(after).join('\n'));
+  // Only a caller that names the before stage may read it.
+  const eligibility = selector => runner.readEvidenceEligibility({ root: f.root, producerRoot: f.other, tests: selection,
+    source_sha256: f.read().evidenceAssociations[0].source_sha256, ...selector }, { allRuns: () => [f.read()] });
+  assert.equal(eligibility({}).state, 'ineligible');
+  assert.match(eligibility({}).reason, /historical/);
+  assert.equal(eligibility({ stage: 'before' }).state, 'eligible');
 });
