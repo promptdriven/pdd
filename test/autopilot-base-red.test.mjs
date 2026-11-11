@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { coreWorld } from './helpers/core-world.mjs';
 import { coreStatus } from '../src/autopilot-core.mjs';
-import { failingTestNames, baseRedFingerprint, mainRedRoute, MAIN_RED_LABEL } from '../src/autopilot-base-red.mjs';
+import { failingTests, sameTest, baseRedFingerprint, mainRedRoute, MAIN_RED_LABEL } from '../src/autopilot-base-red.mjs';
 
 // Expected results come from issue #3181, chaos row B7, ticket T03 and the group 3 design (section B).
 const MIN = 60 * 1000;
@@ -18,25 +18,37 @@ const tipOf = w => w.git(w.cwd, 'ls-remote', w.remote, 'refs/heads/main').split(
 const baseRuns = w => w.started.filter(job => job.issue === 'base');
 const status = w => coreStatus({ state: w.state, settings: w.settings }, { root: w.root, now: w.now });
 
-test('failing test names: top-level TAP failures of node:test, no TODO or SKIP, no checkout root, at most 50', () => {
-  const root = '/work/checkout';
-  const log = ['TAP version 13', '# Subtest: top fails', 'not ok 1 - top fails', '    not ok 1 - child fails', 'not ok 2 - parent', 'not ok 3 - todo test # TODO',
-    'not ok 4 - skipped test # SKIP', 'ok 5 - fine', `not ok 6 - ${root}/test/broken.test.mjs`, 'not ok 7 - top fails', 'not ok 8 -  ', '  not ok 9 - indented'].join('\r\n');
-  assert.deepEqual(failingTestNames(log, { root }), { names: ['top fails', 'parent', 'test/broken.test.mjs'], more: false });
+test('failing tests: TAP and spec lines at any depth, with the file when the log names it; no TODO or SKIP; a limit', () => {
+  const tap = ['TAP version 13', '# Subtest: top fails', 'not ok 1 - top fails', '  ---', "  location: '/work/checkout/test/a.test.mjs:4:1'", '  ...',
+    '# Subtest: parent', '    not ok 1 - child fails', '      ---', "      location: '/work/checkout/test/a.test.mjs:5:37'", '      ...', '    ok 2 - child ok',
+    "      location: '/work/checkout/test/other.test.mjs:9:1'", 'not ok 2 - parent', 'not ok 3 - todo test # TODO', 'not ok 4 - skipped test # SKIP', 'ok 5 - fine',
+    'not ok 6 - top fails', 'not ok 7 -  '].join('\r\n');
+  assert.deepEqual(failingTests(tap), [{ name: 'top fails', file: '/work/checkout/test/a.test.mjs' }, { name: 'child fails', file: '/work/checkout/test/a.test.mjs' },
+    { name: 'parent', file: null }]);
+  const spec = ['\x1b[31m✖ top fails \x1b[90m(0.48ms)\x1b[39m\x1b[39m', '▶ parent', '  \x1b[31m✖ child fails \x1b[90m(0.16ms)\x1b[39m', '\x1b[31m✖ parent \x1b[90m(1.7ms)\x1b[39m',
+    '\x1b[31m✖ todo fails \x1b[90m(0.07ms)\x1b[39m # TODO', '﹣ skipped (0.05ms) # SKIP', 'ℹ fail 3', '', '\x1b[31m✖ failing tests:\x1b[39m', '', 'test at test/a.test.mjs:4:1',
+    '\x1b[31m✖ top fails \x1b[90m(0.48ms)\x1b[39m', '  Error: x'].join('\n');
+  assert.deepEqual(failingTests(spec), [{ name: 'top fails', file: 'test/a.test.mjs' }, { name: 'child fails', file: null }, { name: 'parent', file: null }]);
   const many = Array.from({ length: 60 }, (_, i) => `not ok ${i + 1} - test ${i}`).join('\n');
-  const capped = failingTestNames(many);
-  assert.equal(capped.names.length, 50); assert.equal(capped.more, true); assert.equal(capped.names[49], 'test 49');
-  assert.deepEqual(failingTestNames(''), { names: [], more: false });
+  assert.equal(failingTests(many).length, 50, 'the limit is 50 by default'); assert.equal(failingTests(many, 10).length, 10); assert.equal(failingTests(many, 10)[9].name, 'test 9');
+  assert.deepEqual(failingTests(''), []);
+  assert.equal(sameTest({ name: 'a', file: 'x' }, { name: 'a', file: null }), true); assert.equal(sameTest({ name: 'a', file: 'x' }, { name: 'a', file: 'y' }), false);
 });
 
-test('failing test names: the real node:test TAP output of a run', t => {
+test('failing tests: the real node:test output of a run, with the TAP and the spec reporter', t => {
   const dir = mkdtempSync(join(tmpdir(), 'pdd-base-red-tap-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   writeFileSync(join(dir, 'a.test.mjs'), ["import test from 'node:test';", "test('passes', () => {});", "test('fails on main', () => { throw new Error('x'); });",
     "test('parent', async t => { await t.test('child', () => { throw new Error('y'); }); });", "test('later', { todo: true }, () => { throw new Error('z'); });", ''].join('\n'));
-  const run = spawnSync(process.execPath, ['--test', '--test-reporter=tap', join(dir, 'a.test.mjs')], { encoding: 'utf8', env: Object.fromEntries(Object.entries(process.env).filter(([key]) => !['NODE_OPTIONS', 'NODE_TEST_CONTEXT'].includes(key))) });
-  assert.notEqual(run.status, 0);
-  assert.deepEqual(failingTestNames(run.stdout, { root: dir }).names, ['fails on main', 'parent']);
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !['NODE_OPTIONS', 'NODE_TEST_CONTEXT'].includes(key)));
+  const run = reporter => spawnSync(process.execPath, ['--test', `--test-reporter=${reporter}`, 'a.test.mjs'], { cwd: dir, encoding: 'utf8', env });
+  const tap = run('tap');
+  assert.notEqual(tap.status, 0);
+  assert.deepEqual(failingTests(tap.stdout).map(x => x.name), ['fails on main', 'child', 'parent']);
+  assert.match(failingTests(tap.stdout)[0].file, /a\.test\.mjs$/);
+  const spec = run('spec');
+  assert.deepEqual(failingTests(spec.stdout).map(x => x.name), ['fails on main', 'child', 'parent']);
+  assert.match(failingTests(spec.stdout)[0].file, /a\.test\.mjs$/, 'the failure summary names the file');
 });
 
 test('fingerprint: what and the names in any order, never the commit; the main-red issue goes to the work repository', () => {
@@ -130,6 +142,56 @@ test('B2/B4 a CI check red twice and red on the base tip: no repair, no END, one
   w.suite(17, 0); w.progress(18, 'build'); await w.tick();
   assert.deepEqual(w.github.merges, [pr.number]);
   assert.equal(w.started.filter(job => job.role === 'repair').length, 0);
+});
+
+test('B4 main red again after its issue closed: a new main-red issue that names the old one, and the waiting PR waits on the new one', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.github.setRun(tipOf(w), { conclusion: 'failure' });
+  w.issue(17); await w.tick();
+  const { head } = w.build(17, { checks: false });
+  w.github.setRun(head, { conclusion: 'failure' });
+  await w.tick();
+  w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
+  const [first] = mainRed(w);
+  assert.equal(jobFile(w, 17).baseRed.report.number, first.number);
+  assert.doesNotMatch(first.body, /Earlier:/);
+  // A person closes the issue and the base moves, but main is still red the same way.
+  w.github.close(first.number);
+  const tip1 = w.baseCommit('other.txt', 'not the fix\n');
+  w.github.setRun(tip1, { conclusion: 'failure' });
+  await w.tick();
+  const refreshed = jobFile(w, 17);
+  assert.equal(refreshed.baseRed, undefined); assert.notEqual(refreshed.head, head);
+  w.github.setRun(refreshed.head, { conclusion: 'failure' });
+  await w.tick();
+  w.suite(17, 0); await w.tick();
+  const filed = mainRed(w);
+  assert.equal(filed.length, 2, 'a closed match is a new red event: a new issue');
+  const second = filed.find(issue => issue.number !== first.number);
+  assert.equal(second.state, 'open'); assert.equal(second.title, first.title);
+  assert.match(second.body, new RegExp(`^- Earlier: #${first.number} \\(closed; the same failure came back\\)$`, 'm'));
+  assert.equal(jobFile(w, 17).baseRed.report.number, second.number, 'the PR waits on the new issue');
+  assert.equal(w.started.filter(job => job.role === 'repair').length, 0);
+  // The base moves again while the new issue is open: the PR still waits.
+  w.github.setRun(w.baseCommit('third.txt', 'more\n'), { conclusion: 'success' });
+  await w.tick();
+  assert.equal(jobFile(w, 17).baseRed.report.number, second.number);
+});
+
+test('B4 the main-red issue is filed in auto and observe mode and with report off; only auto mode adds the opt-in label', async t => {
+  const labelsOf = async (mode, report) => {
+    const w = await coreWorld(t, { settings: { mode, report, label: 'pdd:autopilot' } });
+    w.github.setRun(tipOf(w), { conclusion: 'failure' });
+    w.issue(17, { labels: ['pdd:autopilot'] }); await w.tick();
+    const { head } = w.build(17, { checks: false });
+    w.github.setRun(head, { conclusion: 'failure' }); await w.tick();
+    w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
+    assert.equal(w.started.filter(job => job.role === 'repair').length, 0);
+    return mainRed(w).map(issue => issue.labels);
+  };
+  assert.deepEqual(await labelsOf('auto', 'off'), [[MAIN_RED_LABEL, 'pdd:autopilot']]);
+  assert.deepEqual(await labelsOf('observe', 'off'), [[MAIN_RED_LABEL]]);
+  assert.deepEqual(await labelsOf('observe', 'draft'), [[MAIN_RED_LABEL]]);
 });
 
 test('B3 a suite fails with X and the base suite at the merge base fails X: base-red; two jobs on one base share one base suite run and one main-red issue; one alert after the quiet period', async t => {
