@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 6d1b958f3fe14b5820cc806b8ac233afd35b07001addc17ab0fd1b3254a14721).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 22c3b754f2a25b22a276cabc560b4460fdb1d1882439627d994ac5b080d03ae4).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -192,7 +192,9 @@ function readMachine(fs, root, warn, now = Date.now()) {
   const peers = Object.fromEntries(Object.entries(object(m.peers) ? m.peers : {}).filter(([name, at]) => named(name) && Number.isFinite(at) && at <= now && now - at < CLAIM_EXPIRES));
   return { streak: Number.isSafeInteger(m.streak) && m.streak >= 0 ? m.streak : 0, hours: [1, 2, 4, 8].includes(m.hours) ? m.hours : 1,
     pausedUntil: paused ? m.pausedUntil : null, pausedHours: paused ? pausedHours : null, pending,
-    lastTick: Number.isFinite(m.lastTick) && m.lastTick <= now ? m.lastTick : null, peers };
+    lastTick: Number.isFinite(m.lastTick) && m.lastTick <= now ? m.lastTick : null, peers,
+    // #3260: GitHub Actions does not start runs in this repository (one record per outage).
+    ciDown: object(m.ciDown) && Number.isFinite(m.ciDown.since) && ['queued', 'billing'].includes(m.ciDown.reason) ? m.ciDown : null };
 }
 // One history line. A cut last line (no newline) must not swallow this record.
 function appendHistory(ctx, row) {
@@ -891,6 +893,9 @@ async function intake(ctx, rows) {
   // The machine pause: no new job starts until it ends; then intake goes on as usual.
   const pausedText = () => { const m = ctx.machineState(); return m.pausedUntil ? `new jobs paused until ${new Date(m.pausedUntil).toISOString()} (${m.pausedHours} h): the agent ended ${STRIKES} or more jobs in a row with no result` : null; };
   if (pausedText()) return pausedText();
+  // #3260: no new job while GitHub Actions does not start runs here; intake goes on by itself when a run starts.
+  const ciHeld = await ciHold(ctx);
+  if (ciHeld) return ciHeld;
   let checked = false;
   // S2 (debate B): among the first ready issues, start first one whose named paths meet no running job (its named
   // paths and its changed files); else the oldest. A hint only: it never leaves a slot idle.
@@ -1063,11 +1068,12 @@ async function ciState(ctx, head, job) {
   // The CI picture: each check's name, state and change time. Pending CI is progress only while this changes.
   const sig = [...(runs?.check_runs ?? []).map(r => `${r.name}:${r.status}:${r.conclusion}:${r.completed_at ?? r.started_at ?? ''}`), ...(status?.statuses ?? []).map(x => `${x.context}:${x.state}:${x.updated_at ?? ''}`)].sort().join('|');
   if (checks.length && !job.ciSeen) { job.ciSeen = true; ctx.saveJob(job); }
-  if (failed.length) return { state: 'red', failed, sig };
+  // #3260 (Stop owners): CI that GitHub does not start (queued with no job, or a billing failure) is a service wait.
+  if (failed.length) return ciStart(ctx, job, head, runs, { state: 'red', failed, sig });
   // "CI: none" only for a repository with no CI at all (no head of this job ever had a check, and the base has no
   // workflow file), never because a new head has no run yet.
-  if (!checks.length) return !job.ciSeen && !await repoHasCi(ctx, job) && ctx.now() - (job.prAt ?? ctx.now()) >= NO_CI_AFTER ? { state: 'none', sig } : { state: 'pending', pending: [], sig };
-  return checks.some(c => !c.done) ? { state: 'pending', pending: checks.filter(c => !c.done).map(c => c.name), sig } : { state: 'green', count: checks.length, sig };
+  if (!checks.length) return !job.ciSeen && !await repoHasCi(ctx, job) && ctx.now() - (job.prAt ?? ctx.now()) >= NO_CI_AFTER ? { state: 'none', sig } : ciStart(ctx, job, head, runs, { state: 'pending', pending: [], sig });
+  return ciStart(ctx, job, head, runs, checks.some(c => !c.done) ? { state: 'pending', pending: checks.filter(c => !c.done).map(c => c.name), sig } : { state: 'green', count: checks.length, sig });
 }
 async function reviewState(ctx, job, prBody = '') {
   if (!job.review || job.review.head !== job.head || job.review.retry || !job.review.agent && !job.review.verdict) {
@@ -1554,7 +1560,7 @@ async function mergeCheck(ctx, job) {
   // Pending CI waits while its picture changes, and at most ciStuckMinutes with no change: then it is stuck (a no-result
   // end), so it never holds a slot for good.
   if (ci.sig !== job.ci?.sig || job.ci?.head !== job.head) job.ci = { head: job.head, sig: ci.sig, at: ctx.now() };
-  if (ci.state === 'pending' && ctx.now() - job.ci.at >= ctx.ciStuck) {
+  if (ci.state === 'pending' && !ci.notStarted && ctx.now() - job.ci.at >= ctx.ciStuck) {
     stopChecks(ctx, job);
     return end(ctx, job, cause('job', 'checks-stuck', `CI stayed pending with no change for ${Math.round((ctx.now() - job.ci.at) / HOUR)} hours${ci.pending?.length ? ` (${ci.pending.join(', ')})` : ''}`, { noResult: true, owner: 'service' }));
   }
@@ -2291,6 +2297,84 @@ function stopLines(jobs, history, now) {
   return [...waits, ...held, ...cooling];
 }
 
+// ---- CI that does not start (#3260) -------------------------------------------------------------------------
+// In a person's private repository GitHub Actions can stop starting runs (the Actions minutes or the spending limit).
+// A run for the PR head that stays queued with no started job for 20 minutes, or a check that fails with a billing or
+// spending-limit message, is a service stop: no strike, no END, no repair and no issue note. The job waits (no
+// ciStuckMinutes release), one status line and one alert tell the person, and intake holds until a CI run starts.
+const CI_START = 20 * MIN, CI_PROBE = 10 * MIN, BILLING = /spending limit|billing|account payments? (?:have|has) failed|account is locked|actions minutes|minutes (?:quota|limit)|job was not started/i;
+const WAITING_RUN = new Set(['queued', 'waiting', 'pending', 'requested']);
+const clockUtc = at => `${new Date(at).toISOString().slice(11, 16)} UTC`;
+function ciDownText(down) {
+  const help = "This is often the account's Actions minutes or spending limit: Settings → Billing → Actions.";
+  return down.reason === 'billing' ? `GitHub Actions did not start a run in this repository: GitHub said "${down.message}". ${help}`
+    : `GitHub Actions does not start runs in this repository (queued since ${clockUtc(down.since)}). ${help}`;
+}
+const ciLines = machine => machine.ciDown ? [`CI does not start: ${ciDownText(machine.ciDown)} New jobs wait until a CI run starts.`] : [];
+// A workflow run for the head that waits with no started job (GitHub made no check run for it yet).
+async function queuedRun(ctx, head) {
+  const runs = (await ctx.gh.ok('GET', `repos/${ctx.repo}/actions/runs?head_sha=${head}&per_page=20`).catch(() => null))?.workflow_runs ?? [];
+  for (const run of runs.filter(r => WAITING_RUN.has(r.status)).slice(0, 3)) {
+    const jobs = (await ctx.gh.ok('GET', `repos/${ctx.repo}/actions/runs/${run.id}/jobs?per_page=50`).catch(() => null))?.jobs;
+    if (Array.isArray(jobs) && !jobs.some(j => j.status === 'in_progress' || j.status === 'completed')) return Date.parse(run.created_at) || ctx.now();
+  }
+  return null;
+}
+async function billingText(ctx, run) {
+  let text = `${run.output?.title ?? ''}\n${run.output?.summary ?? ''}`;
+  if (!BILLING.test(text) && run.output?.annotations_count > 0 && Number.isSafeInteger(run.id))
+    text += `\n${((await ctx.gh.ok('GET', `repos/${ctx.repo}/check-runs/${run.id}/annotations?per_page=20`).catch(() => null)) ?? []).map(a => a?.message ?? '').join('\n')}`;
+  const line = text.split('\n').find(l => BILLING.test(l));
+  return line ? safeLine(line, 200) : null;
+}
+async function ciStart(ctx, job, head, runs, ci) {
+  const rows = runs?.check_runs ?? [];
+  ctx.ciLooked = true;
+  if (ci.state === 'red') {
+    const billing = [];
+    for (const run of rows.filter(r => r.status === 'completed' && ci.failed.includes(r.name)).slice(0, 5)) { const text = await billingText(ctx, run); if (text) billing.push({ name: run.name, text }); }
+    const rest = ci.failed.filter(name => !billing.some(b => b.name === name));
+    if (billing.length && !rest.length) ci = { state: 'pending', pending: billing.map(b => b.name), sig: ci.sig, notStarted: { reason: 'billing', message: billing[0].text, since: ctx.now() } };
+    else if (billing.length) ci = { ...ci, failed: rest };
+  } else if (ci.state === 'pending' && !rows.some(r => r.status === 'in_progress')) {
+    const unchanged = job.ci?.head === head && job.ci.sig === ci.sig ? ctx.now() - job.ci.at : 0;
+    if (unchanged >= CI_START) {
+      const since = rows.some(r => r.status === 'queued') ? job.ci.at : rows.length ? null : await queuedRun(ctx, head);
+      if (since !== null) ci = { ...ci, notStarted: { reason: 'queued', since: Math.min(since, job.ci.at) } };
+    }
+  }
+  if (ci.notStarted) await ciDown(ctx, job, ci.notStarted);
+  else if (rows.some(r => r.status === 'in_progress' || r.status === 'completed')) ciUp(ctx);
+  return ci;
+}
+// One record and one alert per outage; a later outage after a started run is a new one.
+async function ciDown(ctx, job, notStarted) {
+  const m = ctx.machineState();
+  if (m.ciDown) return;
+  m.ciDown = { since: notStarted.since, reason: notStarted.reason, message: notStarted.message ?? null, issue: job.issue, pr: job.pr ?? null, head: job.head, at: ctx.now() };
+  ctx.saveMachine(m);
+  try { await (ctx.ports.alert ?? (async () => {}))({ issue: job.issue, kind: 'usage-limit', text: `Autopilot: ${ciDownText(m.ciDown)}`,
+    tried: `PR #${job.pr} waits for its CI (no strike, no repair). Autopilot starts no new job in this repository until a CI run starts, then it goes on by itself.`, need: 'Check the GitHub Actions minutes and the spending limit of the account: Settings → Billing → Actions.' }); }
+  catch (error) { ctx.warn(`Autopilot core alert failed: ${error.message}`); }
+}
+function ciUp(ctx) {
+  const m = ctx.machineState();
+  if (!m.ciDown) return;
+  delete m.ciDown; ctx.saveMachine({ ...m, ciDown: null });
+}
+// The intake hold. When no job looked at CI in this tick, one read of the latest runs (at most every 10 minutes) sees a
+// run that started after the outage began.
+async function ciHold(ctx) {
+  let m = ctx.machineState();
+  if (!m.ciDown) return null;
+  if (!ctx.ciLooked && ctx.now() - (m.ciDown.probedAt ?? m.ciDown.at) >= CI_PROBE) {
+    const runs = (await ctx.gh.ok('GET', `repos/${ctx.repo}/actions/runs?per_page=10`).catch(() => null))?.workflow_runs;
+    if (Array.isArray(runs) && runs.some(r => Date.parse(r.created_at) > m.ciDown.since && (r.status === 'in_progress' || r.status === 'completed' && ['success', 'neutral', 'skipped'].includes(r.conclusion)))) { ciUp(ctx); return null; }
+    m = ctx.machineState(); ctx.saveMachine({ ...m, ciDown: { ...m.ciDown, probedAt: ctx.now() } });
+  }
+  return `intake held: ${ciDownText(m.ciDown)} New jobs start when a CI run starts`;
+}
+
 // ---- END ------------------------------------------------------------------------------------------------
 async function report(ctx, job, why, step) {
   const [owner, name] = ctx.repo.split('/');
@@ -2700,6 +2784,7 @@ export function coreStatus({ state, settings, sources = {} }, ports) {
     `Jobs: ${busy} of ${settings.runs} slots busy; no-progress limit ${settings.quietMinutes} minutes; repairs ${settings.repairs}; reports ${settings.report}${sources.report === 'machine' ? ' (this machine)' : ''}; decisions ${settings.decisions ?? 'decide'}${sources.decisions === 'machine' ? ' (this machine)' : ''}${settings.label ? `; only issues with ${settings.label}${sources.label === 'machine' ? ' (this machine)' : sources.label === 'pdd.json' ? ' (pdd.json)' : ''}` : ''}`];
   lines.push(machine.pausedUntil ? `New jobs paused until ${new Date(machine.pausedUntil).toISOString()} (${machine.pausedHours} h): the agent ended ${machine.streak} jobs in a row with no result; then intake goes on.`
     : `No pause: ${machine.streak} no-result end(s) in a row (a pause starts at ${STRIKES}; the next pause is ${machine.hours} h).`);
+  lines.push(...ciLines(machine));
   const words = { now: (ports.now ?? Date.now)(), settings, longest: readLongest(fs, ports.root, (ports.now ?? Date.now)()) };
   const running = (job, part, role) => part && !part.watch?.stopped && !part.recorded ? `; ${processWords(job, part, role, words)}` : '';
   for (const job of jobs) {

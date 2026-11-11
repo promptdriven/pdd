@@ -293,7 +293,8 @@ For each ready issue while slots are free, at most 3 claim attempts per tick:
 
 Intake is held, and nothing is claimed, when the saved agent is not Codex or
 Claude, when `ports.agentReady()` is false at the first ready issue (for example a
-Codex usage limit), or while a machine pause runs (below).
+Codex usage limit), while a machine pause runs (below), or while CI does not start in
+this repository ([Stop owners](#stop-owners), #3260).
 
 **No result is a machine fault first.** An agent that exited with no result, a start
 failure (also one that the spawn reports later), a dead process (a restart or a
@@ -379,7 +380,7 @@ strike line, and status shows it.
 | Owner | The stop | Strike | Action | Note on the issue |
 |---|---|---|---|---|
 | `pdd` | a merge check step of this engine is quiet and its last error is not a service error: the base check could not verify (code `base-check`), a GitHub or Git call, a refused `gh pr merge` or an unconfirmed claim (`merge-check-tool`, `claim-error`), or no error (`step-quiet`); also an advance that throws on 2 quiet ticks (`crash`; in phase `pr`, `merge-check-tool` for a GitHub or Git error) | no | one report (below); a **step wait** in phase `pr`, a release that is not counted in phase `running`; `streak` + 1; never an END | no |
-| `service` | the same stops when the last error is a service error (a GitHub status 429 or 5xx, no reply, a time-out, a network error, a rate limit); an agent whose log names an AI-service problem (T08); CI pending with no change for `ciStuckMinutes` | no | no report; a step wait in phase `pr` (no `streak` count); else a release that is not counted, `streak` + 1 | no |
+| `service` | the same stops when the last error is a service error (a GitHub status 429 or 5xx, no reply, a time-out, a network error, a rate limit); an agent whose log names an AI-service problem (T08); CI pending with no change for `ciStuckMinutes`; CI that GitHub does not start (#3260, below) | no | no report; a step wait in phase `pr` (no `streak` count); CI that does not start: the job waits and intake holds; else a release that is not counted, `streak` + 1 | no |
 | `machine` | a build, repair or conflict agent that T1 stopped, with no repeated hang; a reviewer that ends with no verdict after a T1 stop; a suite run that ended with no result (it died, or died and went quiet, 3 times); a sleep gap | no | a release; `streak` + 1; when `streak` was 0 the issue cools down for 24 hours, with no `pending` | no |
 | `issue` | the same command hangs again at this head (two hang records of the agent with the same command at the same worktree HEAD, then a T1 stop or an exit with no result), or the full suite is quiet twice at one head, or once in a test file that the PR changes | yes | the issue stop (below); the 3rd strike in 7 days is the END | yes |
 
@@ -414,6 +415,31 @@ the cause `{kind: pdd, component: autopilot-core, code, text, stopped: true}`; e
 stop files or counts it, and the dedup keeps one report. A merged PR still finishes as
 merged at the next merge check, also after a wait. A person ends the wait by removing
 `pdd:working`.
+
+**CI that does not start** (#3260). In a person's private repository GitHub Actions can
+stop starting runs (the account's Actions minutes or spending limit). In the CI read
+of the merge check: CI is pending, no check run is in progress, and the CI picture
+of the head has not changed for 20 minutes, and either a check run is `queued`, or
+there is no check run and a workflow run for the head (`actions/runs?head_sha=HEAD`,
+status queued, waiting, pending or requested; at most 3 runs) has no job in progress
+or completed (`actions/runs/ID/jobs`); or every failed check of the head failed with a
+billing or spending-limit message (its output title or summary, else its annotations:
+"spending limit", "billing", "account payments have failed", "account is locked",
+"Actions minutes", "minutes quota" or "limit", "job was not started"). Then the CI
+state stays `pending` with `notStarted {reason: queued | billing, since}`: no red, no
+repair, no strike, no END, no issue note, and no `ciStuckMinutes` release (the job
+waits; the merge rule for this case is a later decision). The first such read of an
+outage saves `ciDown {since, reason, message, issue, pr, head, at}` in `core.json` and
+sends one `usage-limit` alert: "Autopilot: GitHub Actions does not start runs in this
+repository (queued since HH:MM UTC). This is often the account's Actions minutes or
+spending limit: Settings → Billing → Actions." (for a billing failure: "GitHub Actions
+did not start a run in this repository: GitHub said "MESSAGE". …"). There is no second
+alert while `ciDown` stays. While it stays, intake is held with `intake held: TEXT New
+jobs start when a CI run starts` and status shows `CI does not start: TEXT New jobs wait
+until a CI run starts.` A check run in progress or completed (not a billing failure)
+in any CI read clears `ciDown`; when no job read CI in a tick, intake reads the latest
+10 workflow runs at most every 10 minutes and clears it when one created after
+`since` is in progress or completed with success, neutral or skipped.
 
 **The loop guard** (lead decision, Nov 11): a fault of Autopilot or a service that
 never ends must not loop forever on one issue. Each step stop writes the history line
@@ -1058,7 +1084,8 @@ agent's commits may exist only there.
 `coreStatus({state, settings}, {root, reportRoot, now, fs})` returns text from local
 files only: the engine line (mode, repository, folder, base, agent), the slot line
 (`B of R slots busy`, no-progress limit, repairs, report mode, opt-in label), the pause
-line (`New jobs paused until TIME (H h): …` or `No pause: N no-result end(s) in a row …`), one line per job (`#N build running 12m (log …)`, `#N PR #P at SHA: review …,
+line (`New jobs paused until TIME (H h): …` or `No pause: N no-result end(s) in a row …`), the CI line
+while `ciDown` is set (`CI does not start: …`), one line per job (`#N build running 12m (log …)`, `#N PR #P at SHA: review …,
 suite …`, with `; merge lane: final step` or `; merge lane: waiting for PR #P since TIME`, `#N ending: …`), one line per step wait
 (`#N waits: OWNER stop CODE: TEXT; next try after TIME (try K)`, with `; report REF` when one was filed), one line per
 held issue (`#N held since TIME: TEXT; it goes on after a new engine version or a person's comment on the issue`), one

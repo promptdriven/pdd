@@ -275,3 +275,84 @@ test('S13 the loop guard: three service releases of one issue in 24 hours hold i
   assert.deepEqual(await readyIssues({ state: w.state, settings: w.settings }, w.ports({ version: '0.1.28' })), [17]);
   assert.ok(history(w).some(row => row.issue === 17 && row.unhold && /a new engine version/.test(row.text)));
 });
+
+// #3260: GitHub Actions answers the Actions routes of the fake: a queued workflow run with no job, and the latest runs.
+const actions = (w, state) => {
+  const gh = w.gh, reply = body => ({ code: 0, stdout: `HTTP/2.0 200 OK\r\n\r\n${JSON.stringify(body)}`, stderr: '' });
+  w.gh = async (args, options) => {
+    const endpoint = args.find(a => /^repos\//.test(String(a))) ?? '';
+    if (/\/actions\/runs\/\d+\/jobs/.test(endpoint)) return reply({ total_count: 0, jobs: [] });
+    if (/\/actions\/runs(\?|$)/.test(endpoint)) { state.reads = (state.reads ?? 0) + 1; return reply({ workflow_runs: state.runs }); }
+    if (/\/check-runs\/\d+\/annotations/.test(endpoint)) return reply(state.annotations ?? []);
+    return gh(args, options);
+  };
+};
+
+test('S14 #3260 CI queued with no job for 20 minutes: a service wait (no strike, no END, no repair, no note), one alert, intake held; it resumes when a run starts', async t => {
+  const w = await coreWorld(t, { settings: { runs: 2 } });
+  w.baseCommit('.github/workflows/ci.yml', 'on: pull_request\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm test\n');
+  w.issue(17); await w.tick();
+  const built = w.build(17, { checks: null }); w.github.checks.delete(built.head);
+  const state = { runs: [{ id: 901, status: 'queued', head_sha: built.head, created_at: new Date(w.now()).toISOString() }] };
+  actions(w, state);
+  const alerts = [], tick = () => w.tick({ alert: async a => alerts.push(a) });
+  await tick(); w.review(17, 'PASS'); w.suite(17, 0);
+  for (let i = 0; i < 3; i++) { w.advance(10 * MIN); await tick(); }
+  assert.equal(alerts.filter(a => /GitHub Actions/.test(a.text)).length, 1, 'one alert');
+  const [alert] = alerts.filter(a => /GitHub Actions/.test(a.text));
+  assert.equal(alert.kind, 'usage-limit'); assert.match(alert.text, /does not start runs in this repository \(queued since 12:\d\d UTC\)\. This is often the account's Actions minutes or spending limit: Settings → Billing → Actions\./);
+  assert.match(status(w), /^CI does not start: GitHub Actions does not start runs in this repository/m);
+  // Intake holds: a new ready issue gets no job.
+  w.issue(18);
+  const held = await tick();
+  assert.match(held.message, /intake held: GitHub Actions does not start runs/); assert.equal(w.job(18), undefined);
+  // Hours later: still one alert, no release at ciStuckMinutes, no strike, no END, no repair, no note.
+  for (let i = 0; i < 16; i++) { w.advance(30 * MIN); await tick(); }
+  assert.equal(alerts.filter(a => /GitHub Actions/.test(a.text)).length, 1, 'no repeated alert');
+  assert.equal(jobFile(w, 17)?.phase, 'pr', 'the job waits for its CI'); assert.equal(w.job(17, 'repair'), undefined);
+  assert.equal(w.comments(17).filter(body => !body.includes('"labelEventId"')).length, 0, 'no note, no END');
+  assert.equal(history(w).filter(row => row.strike).length, 0); assert.equal(w.job(18), undefined);
+  // A run starts and passes: the PR merges, the hold clears, and #18 starts.
+  w.github.setChecks(built.head, 'success');
+  await tick(); await tick();
+  assert.deepEqual(w.github.merges, [built.pr.number]);
+  assert.doesNotMatch(status(w), /CI does not start/); assert.ok(w.job(18, 'build'), 'intake goes on by itself');
+});
+
+test('S15 #3260 a check that fails with a billing message is no red and no repair: a service wait, one alert, intake held until a run starts', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); w.issue(18); await w.tick();
+  const built = w.build(17, { checks: null });
+  w.github.checks.set(built.head, [{ id: 77, name: 'ci', status: 'completed', conclusion: 'failure', output: { title: '', summary: '', annotations_count: 1 } }]);
+  const state = { runs: [], annotations: [{ message: "The job was not started because recent account payments have failed or your spending limit needs to be increased. Please check the 'Billing & plans' section in your settings." }] };
+  actions(w, state);
+  const alerts = [], tick = () => w.tick({ alert: async a => alerts.push(a) });
+  await tick(); w.review(17, 'PASS'); w.suite(17, 0); await tick(); await tick();
+  assert.equal(w.job(17, 'repair'), undefined, 'a billing failure is no red');
+  assert.equal(alerts.length, 1); assert.match(alerts[0].text, /did not start a run in this repository: GitHub said "The job was not started because recent account payments have failed/);
+  assert.match(alerts[0].text, /Settings → Billing → Actions/);
+  assert.equal(history(w).filter(row => row.strike).length, 0); assert.equal(endComments(w, 17).length, 0);
+  // A billing failure also holds intake; the release of #17's slot is not needed to see it.
+  const m = machine(w); assert.equal(m.ciDown.reason, 'billing');
+  // A rerun that passes: the merge, and the hold clears.
+  w.github.setChecks(built.head, 'success');
+  await tick(); await tick();
+  assert.deepEqual(w.github.merges, [built.pr.number]); assert.equal(machine(w).ciDown, null);
+  assert.ok(w.job(18, 'build'));
+});
+
+test('S16 #3260 with no job reading CI, intake reads the latest runs at most every 10 minutes and resumes when one started', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(18);
+  const { writeFileSync, mkdirSync } = await import('node:fs');
+  mkdirSync(w.root, { recursive: true });
+  writeFileSync(join(w.root, 'core.json'), JSON.stringify({ streak: 0, hours: 1, ciDown: { since: w.now() - HOUR, reason: 'queued', at: w.now() - HOUR, issue: 17, pr: 100, head: 'a'.repeat(40) } }));
+  const state = { runs: [{ id: 5, status: 'queued', created_at: new Date(w.now() - HOUR).toISOString() }] };
+  actions(w, state);
+  let r = await w.tick();
+  assert.match(r.message, /intake held: GitHub Actions does not start runs/); assert.equal(state.reads, 1);
+  w.advance(5 * MIN); await w.tick(); assert.equal(state.reads, 1, 'no second read within 10 minutes');
+  state.runs = [{ id: 6, status: 'in_progress', created_at: new Date(w.now()).toISOString() }, ...state.runs];
+  w.advance(6 * MIN); r = await w.tick();
+  assert.ok(w.job(18, 'build'), 'a started run ends the hold'); assert.equal(machine(w).ciDown, null);
+});
