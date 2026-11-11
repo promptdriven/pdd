@@ -59,8 +59,12 @@ nothing ran at the last look and `at` is `quietMinutes` or more ago. A running b
 or repair agent's signature is its log size and change time (`readAgentJob().log`)
 and its work: the SHA-256 of the worktree commit, `git status --porcelain=v1
 --untracked-files=all`, `git diff HEAD` and the size and change time of each new file
-(at most 200). A log that grows for `maxJobHours` while the work does not change is
-stopped with one `stuck` alert and ends as `no-result`. In phase `pr` the signature
+(at most 200). **Backstop** (`backstop`, one function): every agent process (build,
+repair, review, suite) stops at `maxJobHours` after its own start (`started`), minus
+the sleep gaps of this machine in that time (`job.gaps`); nothing resets it. One
+`stuck` alert per process; the job ends as `job` / `no-result` with `ceiling: true`
+("the ROLE ran N h (its limit; set autopilot.maxJobHours in pdd.json) with no
+result"). In phase `pr` the signature
 is the head, the CI state and picture (each check's name, state, conclusion and time),
 the review and suite states and the reviewer's log; it runs while CI is pending (queued
 or in progress, or no check yet within its 10 minutes), the reviewer runs or the suite
@@ -457,13 +461,22 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    problem is: a refusal (two blocks, invalid JSON, a bad status, a stale prose hash), a
    status other than `approved`, an interface that the base had and the head removed
    (no interface on both sides is not an approval matter), or an approved status with
-   no entry for that path and prose hash in the approval journal of the repository's
-   common Git dir (`readPromptApprovals`): a hand-written approval. `strict` is true
+   no approval: not the same interface and prose hash as the base version at the old
+   path (a pure rename keeps the approval that Git has), and no entry for that path and
+   prose hash in the approval journal of the repository's common Git dir
+   (`readPromptApprovals`). Its finding says: set the status to "draft", then run `pdd
+   approve` (it records an approval only for a draft or stale prompt). A strict
+   repository accepts only a person's approval: a trusted APPROVED review of the head
+   on GitHub, or a journal entry made at a terminal. `strict` is true
    when `strict_approvals` is true in `pdd.json` on the base or at the head. In auto
    mode, problems in a strict repository end the job as **needs a person** (below)
    with the question "PR #P changes prompts that need a person's approval in this
-   repository (strict_approvals): …", the PR stays open with one note
-   `<!-- pdd:autopilot-core:needs-approval:P -->`; in other repositories they are red,
+   repository (strict_approvals): … Please approve the PR on GitHub (or approve each
+   prompt with pdd approve on its branch and push), then remove pdd:needs-decision:
+   Autopilot checks the same PR again, with no new build. To give up on it, close the
+   PR.", the PR stays open with one note `<!-- pdd:autopilot-core:needs-approval:P -->`.
+   After a trusted removal of the label, intake resumes that PR (phase `pr`, its
+   branch in the job worktree, `resumed: true`) instead of a new build; in other repositories they are red,
    with the approval command and words in the finding (one repair, then END as usual).
    Observe mode never approves: it lists the problems in its "would merge" note.
    **Path checks** (debate A section 6.3, no AI, once per head and PR body, saved as
@@ -484,24 +497,32 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
 4. Any red finding: stop the other checks. With repairs left, start one repair job,
    count it and start its quiet clock. Without, end `checks-red` with the findings.
 5. Wait while CI, review or suite is not green. CI is green when the head has at
-   least one check and none is pending. When the head has no check run and no
-   status 10 minutes after the job reported the PR (`prAt`, set each time a build
-   or repair job reports a head), CI is `none`: the full suite and the fresh review
-   decide alone. A pending check still waits, as long as it takes; save `progress`
+   least one check and none is pending. CI is `none` (the full suite and the fresh
+   review decide alone) only in a repository with no CI at all: no head of this job
+   ever had a check (`ciSeen`), the base has no `.github/workflows/*.yml` and no
+   required status checks (read once per tick; a read error counts as CI), and 10
+   minutes passed since `prAt`. A new head that has no run yet (for example after a
+   refresh) waits for its CI. A pending check still waits, as long as it takes; save `progress`
    first.
 6. **Merge lane** (one final step per repository). A green PR (CI green or none,
    review PASS, suite pass) enters the lane. The lane is the label `pdd:merge-lane` on
    one open PR, shared by every machine through GitHub (`issues?state=open&labels=…`,
-   PRs only). A holder whose core issue (`pdd/core-N-…` branch) has no live claim, and
-   that is no local final-step job, is stale: remove its label. When another PR holds
-   the lane, or an older green PR of this machine (claim order, `started`) waits, the
-   PR waits: `lane {state: waiting, holder, since}`, and its quiet clock starts again
-   each tick (`progress.running`), so waiting never ends a job and never counts as a
-   refresh. Else the PR adds the label and reads the holders again; when two machines
-   added it, the lower PR number keeps it and the other removes its own label. The
-   holder is in the final step: `lane {state: final, since, waited}`. A repair, an
-   END (of any kind, before its other steps), a hand-over and an observe validation
-   leave the lane (remove the label); a merge closes the PR.
+   PRs only). Any machine clears a stale holder (a closed or merged PR, or a core issue
+   (`pdd/core-N-…` branch) with no live claim that is no local final-step job) and an
+   orphan one (not a core PR). **One winner on every tick:** the lowest open holder
+   number; every other PR removes its own label (a failed DELETE throws and the next
+   tick tries again) and waits. When another PR holds the lane, or an older green PR
+   of this machine (claim order, `started`) waits, the PR waits: `lane {state:
+   waiting, holder, since, heldSince}`, and its quiet clock starts again each tick
+   (`progress.running`), so waiting never ends a job and never counts as a refresh; a
+   wait for the same holder longer than the quiet period sends one `stuck` alert. Else
+   the PR adds the label and reads the holders again (an empty read: try again next
+   tick). The holder is in the final step: `lane {state: final, since, waited}`. A
+   repair (which also clears a stale waiting state, as a new head does), an END (of
+   any kind, before its other steps), a hand-over, a person's stop and an observe
+   validation leave the lane (remove the label); a merge closes the PR. **Race
+   guard:** right before `gh pr merge` the PR reads the holders and the compare again;
+   it merges only as the lowest open holder with `behind_by` 0.
    The order (debate B L6, C1, C2): a PR that came back from a conflict update
    (`lanePriority`) goes first, then claim order; a PR whose changed files meet a live
    reservation of another PR (this machine's job files, or the `reserved {files,

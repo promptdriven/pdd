@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-reports.prompt.md (sha256: 7f258ee616d3fd96d7fec4ef57de0c5095a652f6604139fe5c1a6dfa1236847c).
+// Generated from prompts/cli/autopilot-reports.prompt.md (sha256: 339400dfa087c426872b14fd4eb90774118af4defabeab379c02576a943892b0).
 import * as nativeFs from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -89,7 +89,7 @@ async function sendDraft(draft, { root, machine, runtimeRepo, limit = true }, po
     return { state: 'seen', number: found.number, id: found.id, ref: ref(found.number) };
   }
   // A cause with no known code ("other-…") files at most one new report per machine per hour; the rest stay drafts.
-  if (limit && /\.other-[0-9a-f]{8}\./.test(draft.fingerprint) && ledger.filed.some(row => /\.other-/.test(row.fingerprint) && now - row.at < 60 * 60 * 1000)) return { state: 'limit' };
+  if (limit && /\.other-[0-9a-f]{8}\./.test(draft.fingerprint) && ledger.filed.some(row => /\.other-/.test(row.fingerprint) && now - row.at < DAY)) return { state: 'limit' };
   const { value } = await api('POST', `repos/${draft.repository}/issues`, { title: draft.title, body: withCount(draft).body, labels: draft.labels, assignees: draft.assignees });
   ledger.filed = [...ledger.filed.filter(row => now - row.at < DAY), { fingerprint: draft.fingerprint, number: value.number, at: now }];
   save(fs, file, ledger);
@@ -106,7 +106,8 @@ function keepDraft(fs, root, draft, now) {
 // refusals, interpreter errors, no verdict, server compatibility.
 const PDD_OWNED = /scenario|vector|replay|safe-integer|integer-out-of-range|runtime-case|test-case/;
 export function reportKind(cause) {
-  return cause?.kind === 'runtime' && PDD_OWNED.test(`${slug(cause.component)} ${slug(cause.code)}`) ? 'pdd' : cause?.kind;
+  if (cause?.kind !== 'runtime') return cause?.kind;
+  return PDD_OWNED.test(`${slug(cause.component)} ${slug(cause.code)}`) || !RUNTIME_CODES.has(stableCode(cause.code)) ? 'pdd' : 'runtime';
 }
 // Stable fingerprints: an agent writes the code and the component as free text, so each is mapped to a fixed word.
 const CODES = [['merge-check-tool', /^merge-check-tool$/], ['suite-broken', /^suite-broken$/], ['adopt-pdd', /^adopt-pdd$/], ['no-verdict', /verdict/],
@@ -114,17 +115,20 @@ const CODES = [['merge-check-tool', /^merge-check-tool$/], ['suite-broken', /^su
   ['lint-refusal', /lint/], ['interface-refusal', /interface/], ['binding-refusal', /binding/], ['interpreter-error', /interpreter/],
   ['server-incompatible', /server|compat/], ['crash', /crash|panic|segfault|exception/], ['claim-error', /claim/], ['not-run', /not-run/],
   ['timeout', /timeout|timed-out/], ['cli-error', /cli|command|usage|exit|failed|error/]];
-// An unknown code is other-HASH of the normalized message, so one new cause is one report (and at most one new "other"
-// report per machine per hour).
-export const stableCode = (code, text = '') => CODES.find(([, test]) => test.test(slug(code)))?.[0]
-  ?? `other-${createHash('sha256').update(String(text || code || '').toLowerCase().replace(/\d+/g, '0').replace(/\s+/g, ' ').trim()).digest('hex').slice(0, 8)}`;
+// An unknown code is other-HASH of the step and the error class (the code slug with no digits) only, never of the
+// agent's text, so one cause is one report; at most one new "other" report per machine per day.
+export const stableCode = (code, step = '') => CODES.find(([, test]) => test.test(slug(code)))?.[0]
+  ?? `other-${createHash('sha256').update(`${slug(step)}:${slug(code).replace(/\d+/g, '')}`).digest('hex').slice(0, 8)}`;
+// Runtime kind is only what goes in and out of Runtime; every other cause (lint, scenario limits, test vectors, the
+// pdd command, the core) is a PDD report.
+const RUNTIME_CODES = new Set(['no-verdict', 'interface-refusal', 'binding-refusal', 'interpreter-error', 'server-incompatible']);
 const COMPONENTS = [['autopilot-core', /autopilot|core/], ['pdd-lint', /lint/], ['pdd-approve', /approve/], ['pdd-workflow', /workflow/],
   ['pdd-test', /test|runtime|interpreter|verdict|scenario|vector/], ['pdd', /pdd/], ['agent', /agent|codex|claude/]];
 export const stableComponent = component => COMPONENTS.find(([, test]) => test.test(slug(component)))?.[0] ?? 'other';
 // File, count or keep one report for a Runtime or PDD cause. It never throws: a failed send keeps a local draft.
 export async function fileReport({ cause, mode, root, machine, versions = {}, step, words = [], runtimeRepo = null }, ports = {}) {
   if (!['runtime', 'pdd'].includes(cause?.kind) || mode === 'off') return { state: 'off' };
-  cause = { ...cause, kind: reportKind(cause), code: stableCode(cause.code, cause.text), component: stableComponent(cause.component) };
+  cause = { ...cause, kind: reportKind(cause), code: stableCode(cause.code, step), component: stableComponent(cause.component) };
   const fs = ports.fs ?? nativeFs, now = (ports.now ?? Date.now)(), draft = { ...draftFor({ cause, versions, step, words }), ...(runtimeRepo ? { runtimeRepo } : {}) };
   if (mode === 'file') {
     try {

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: e17b6e2ba77eea37046819d1461cba003dfc186e5facbef51a429c585a20d83d).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 711eab2165e85454209ce5120e41678585f881c9e8497504c67e54b6b667c93a).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -514,6 +514,28 @@ const quietFor = (ctx, job) => ctx.now() - (job.progress?.at ?? job.prAt ?? job.
 const isQuiet = (ctx, job) => !job.progress?.running && quietFor(ctx, job) >= ctx.quiet;
 const logSig = seen => `${seen?.log?.size ?? '-'}:${seen?.log?.mtime ?? '-'}`;
 
+// ---- The backstop (one function) -------------------------------------------------------------------------
+// The age of one agent process (build, repair, review or suite) from its own start, without the sleep gaps that this
+// machine had in that time. Nothing resets it: no line, commit, file, CI change or lane wait.
+function processAge(ctx, job, part) {
+  const started = part?.started ?? job.started;
+  const slept = (job.gaps ?? []).filter(g => g.to > started).reduce((sum, g) => sum + g.to - Math.max(g.from, started), 0);
+  return ctx.now() - started - slept;
+}
+const backstopLimit = (ctx, role) => ctx.ceiling;
+// At the limit the process is stopped (one alert per process) and the caller ends the job as a no-result.
+async function backstop(ctx, job, part, role) {
+  if (!part || processAge(ctx, job, part) < backstopLimit(ctx, role)) return null;
+  ctx.jobs.stop(part);
+  const hours = Math.round(backstopLimit(ctx, role) / HOUR), text = `the ${role} ran ${hours} h (its limit; set autopilot.maxJobHours in pdd.json) with no result`;
+  if (!(job.ceilingAlerted ?? []).includes(part.id ?? role)) {
+    job.ceilingAlerted = [...(job.ceilingAlerted ?? []), part.id ?? role]; ctx.saveJob(job);
+    try { await (ctx.ports.alert ?? (async () => {}))({ issue: job.issue, kind: 'stuck', text: `Autopilot core stopped a job of #${job.issue}: ${text}.`, tried: `The ${role} ran past the backstop.`, need: 'Look at the job log on this machine.' }); }
+    catch (error) { ctx.warn(`Autopilot core alert failed: ${error.message}`); }
+  }
+  return cause('job', 'no-result', text, { ceiling: true });
+}
+
 // The work in a worktree: its commit, its changed files with their content, and its new files with size and time.
 async function worktreeSig(ctx, cwd) {
   const parts = [];
@@ -574,6 +596,15 @@ async function personAnswer(ctx, n) {
 async function undoClaim(ctx, n, claim) {
   if (claim?.commentId) await ctx.gh.call('DELETE', `repos/${ctx.repo}/issues/comments/${claim.commentId}`).catch(() => {});
   await ctx.gh.call('DELETE', `repos/${ctx.repo}/issues/${n}/labels/${encodeURIComponent('pdd:working')}`).catch(() => {});
+}
+// The open core PR of an issue that waits for a person's approval (this engine's needs-approval note on it).
+async function keptPr(ctx, n) {
+  const me = await ctx.login();
+  for (const pr of await ctx.gh.ok('GET', `repos/${ctx.repo}/pulls?state=open&per_page=100`) ?? []) {
+    if (!String(pr.head?.ref ?? '').startsWith(`pdd/core-${n}-`) || String(pr.head?.repo?.full_name ?? '').toLowerCase() !== ctx.repo.toLowerCase()) continue;
+    if ((await ctx.gh.all(`repos/${ctx.repo}/issues/${pr.number}/comments?per_page=100`)).some(c => String(c.user?.login ?? '').toLowerCase() === me && String(c.body ?? '').includes('<!-- pdd:autopilot-core:needs-approval:'))) return pr;
+  }
+  return null;
 }
 // The file paths that a text names (an issue's title and body).
 const namedPaths = text => [...new Set([...String(text ?? '').matchAll(PATH_WORD)].map(m => m[1]).filter(p => p.includes('/') || /\.(?:json|md|ya?ml|toml|js|mjs|ts|py|sh)$/.test(p)))];
@@ -651,6 +682,18 @@ async function intake(ctx, rows) {
       await undoClaim(ctx, n, claim); await removeTree(ctx, worktree); await ctx.git(['branch', '-D', branch]).catch(() => {}); ctx.skip.add(n);
       continue;
     }
+    // A PR that waits for a person's approval (strict repository) resumes after a trusted label removal: no new build.
+    const kept = await keptPr(ctx, n).catch(error => { ctx.warn(`Autopilot core could not read the PRs of #${n}: ${error.message}`); return null; });
+    if (kept) {
+      await removeTree(ctx, worktree); await ctx.git(['branch', '-D', branch]).catch(() => {});
+      await ctx.git(['fetch', '-q', 'origin', kept.head.ref]);
+      await ctx.git(['worktree', 'add', '-q', '-B', kept.head.ref, worktree, `origin/${kept.head.ref}`]);
+      ctx.saveJob({ schema: 'pdd.core-job.v1', id: randomUUID(), issue: n, title: oneLine(row.title, 200), url: row.html_url ?? issueKey(ctx.repo, n), body: String(row.body ?? '').slice(0, 20000),
+        branch: kept.head.ref, worktree, claim, phase: 'pr', role: 'build', repairs: 0, started: ctx.now(), pr: kept.number, head: String(kept.head.sha).toLowerCase(), prAt: ctx.now(),
+        progress: { sig: null, at: ctx.now(), running: false }, resumed: true });
+      ctx.counts.started++; free--;
+      continue;
+    }
     await closeOtherPrs(ctx, n, branch);
     const note = await concurrencyNote(ctx, row, others, worktree).catch(() => '');
     const job = { schema: 'pdd.core-job.v1', id: randomUUID(), issue: n, title: oneLine(row.title, 200), url: row.html_url ?? issueKey(ctx.repo, n), body: String(row.body ?? '').slice(0, 20000), ...(note ? { note } : {}),
@@ -668,6 +711,17 @@ async function intake(ctx, rows) {
 }
 
 // ---- Merge check ----------------------------------------------------------------------------------------
+// Does the repository have CI? Read once per tick: any GitHub Actions workflow file on the base branch, or required
+// status checks on it. A read error counts as CI (the safe side).
+async function repoHasCi(ctx) {
+  return ctx.hasCi ??= (async () => {
+    const workflows = await ctx.gh.call('GET', `repos/${ctx.repo}/contents/.github/workflows?ref=${encodeURIComponent(ctx.state.baseBranch)}`);
+    if (workflows.status === 200) return (Array.isArray(workflows.value) ? workflows.value : []).some(f => /\.ya?ml$/.test(String(f?.name ?? '')));
+    if (workflows.status !== 404) return true;
+    const required = await ctx.gh.call('GET', `repos/${ctx.repo}/branches/${encodeURIComponent(ctx.state.baseBranch)}/protection/required_status_checks`);
+    return required.status === 200 ? (required.value?.contexts?.length ?? 0) + (required.value?.checks?.length ?? 0) > 0 : ![403, 404].includes(required.status);
+  })();
+}
 async function ciState(ctx, head, job) {
   const runs = await ctx.gh.ok('GET', `repos/${ctx.repo}/commits/${head}/check-runs?per_page=100`);
   const status = await ctx.gh.ok('GET', `repos/${ctx.repo}/commits/${head}/status`);
@@ -676,8 +730,11 @@ async function ciState(ctx, head, job) {
   const failed = checks.filter(c => c.done && !c.good).map(c => c.name);
   // The CI picture: each check's name, state and change time. Pending CI is progress only while this changes.
   const sig = [...(runs?.check_runs ?? []).map(r => `${r.name}:${r.status}:${r.conclusion}:${r.completed_at ?? r.started_at ?? ''}`), ...(status?.statuses ?? []).map(x => `${x.context}:${x.state}:${x.updated_at ?? ''}`)].sort().join('|');
+  if (checks.length && !job.ciSeen) { job.ciSeen = true; ctx.saveJob(job); }
   if (failed.length) return { state: 'red', failed, sig };
-  if (!checks.length) return ctx.now() - (job.prAt ?? ctx.now()) >= NO_CI_AFTER ? { state: 'none', sig } : { state: 'pending', pending: [], sig };
+  // "CI: none" only for a repository with no CI at all (no head of this job ever had a check, and the base has no
+  // workflow file), never because a new head has no run yet.
+  if (!checks.length) return !job.ciSeen && !await repoHasCi(ctx) && ctx.now() - (job.prAt ?? ctx.now()) >= NO_CI_AFTER ? { state: 'none', sig } : { state: 'pending', pending: [], sig };
   return checks.some(c => !c.done) ? { state: 'pending', pending: checks.filter(c => !c.done).map(c => c.name), sig } : { state: 'green', count: checks.length, sig };
 }
 async function reviewState(ctx, job) {
@@ -691,6 +748,7 @@ async function reviewState(ctx, job) {
   if (job.review.verdict) return { state: job.review.verdict === 'PASS' ? 'pass' : 'fail', mustFix: job.review.mustFix };
   const seen = ctx.jobs.read(job.review.agent);
   let r = seen.result;
+  if (seen.state === 'running' && await backstop(ctx, job, job.review.agent, 'reviewer')) return { state: 'ceiling', role: 'reviewer' };
   if (seen.state === 'running') {
     // A reviewer whose log does not change for the quiet period is stopped: no verdict.
     if (logSig(seen) !== job.review.logSig) { Object.assign(job.review, { logSig: logSig(seen), seenAt: ctx.now() }); ctx.saveJob(job); return { state: 'running' }; }
@@ -721,6 +779,7 @@ async function suiteState(ctx, job) {
   };
   if (!job.suite || job.suite.head !== job.head) return start(await checkout(ctx, job, 'suite'));
   const seen = ctx.jobs.read(job.suite.agent);
+  if (seen.state === 'running' && await backstop(ctx, job, job.suite.agent, 'suite')) return { state: 'ceiling', role: 'suite' };
   if (seen.state === 'running') return { state: 'running' };
   if (seen.exit?.code === 0) return { state: 'pass' };
   let log = '';
@@ -774,7 +833,7 @@ async function mergeCheck(ctx, job) {
   if (drafts.length && ctx.settings.mode === 'auto' && gate.strict) {
     stopChecks(ctx, job);
     return end(ctx, job, { kind: 'job', component: 'autopilot-core', code: 'needs-person', text: 'the prompt changes need a person\'s approval', keepPr: true,
-      question: `PR #${job.pr} changes prompts that need a person's approval in this repository (strict_approvals): ${drafts.join('; ')}. Please review the PR and approve each prompt with pdd approve in a checkout of its branch, or say what to do instead.` });
+      question: `PR #${job.pr} changes prompts that need a person's approval in this repository (strict_approvals): ${drafts.join('; ')}. Please approve the PR on GitHub (or approve each prompt with pdd approve on its branch and push), then remove pdd:needs-decision: Autopilot checks the same PR again, with no new build. To give up on it, close the PR.` });
   }
   reds.push(...(await pathChecks(ctx, job, pr.body)).reds);
   if (drafts.length && ctx.settings.mode === 'auto') reds.push(`Changed prompts are not approved: ${drafts.join('; ')}. Record the operator approval for each changed prompt with the native command and commit it: printf '%s' ${quote(approvalWords(ctx))} | pdd approve PROMPT --said -`);
@@ -783,6 +842,7 @@ async function mergeCheck(ctx, job) {
   let review, suite;
   if (!reds.length) {
     review = await reviewState(ctx, job); suite = await suiteState(ctx, job);
+    for (const part of [review, suite]) if (part.state === 'ceiling') { stopChecks(ctx, job); return end(ctx, job, cause('job', 'no-result', `the ${part.role} ran ${Math.round(backstopLimit(ctx, part.role) / HOUR)} h (its limit; set autopilot.maxJobHours in pdd.json) with no result`, { ceiling: true })); }
     if (review.state === 'missing') return end(ctx, job, cause('job', 'no-result', 'the fresh reviewer ended twice with no valid verdict'));
     if (suite.state === 'missing') return end(ctx, job, cause('job', 'no-test-command', 'no full test command: set autopilot.testCommand in pdd.json'));
     if (suite.state === 'broken') return end(ctx, job, suite.dead ? cause('job', 'no-result', suite.text) : cause('pdd', 'suite-broken', suite.text));
@@ -845,6 +905,7 @@ async function mergeCheck(ctx, job) {
     job.mergeNote = job.head; ctx.saveJob(job);
   }
   if (observe) return wouldMerge(ctx, job, pr);
+  if (!await laneStillMine(ctx, job)) return;
   const merged = await ctx.ports.gh(['pr', 'merge', String(job.pr), '--repo', repo, '--merge', '--match-head-commit', job.head]);
   if (merged.code !== 0) { Object.assign(job, { lastError: safeLine(`gh pr merge: ${merged.stderr || merged.stdout}`), lastErrorTool: false }); ctx.saveJob(job); return; }
   return finishMerge(ctx, job);
@@ -854,10 +915,12 @@ async function mergeCheck(ctx, job) {
 // when no other open PR holds it and no older green PR of this machine waits; two machines at once keep the lower PR
 // number. A PR that waits restarts its quiet clock each tick: waiting never ends a job.
 const laneHolders = async ctx => (await ctx.gh.all(`repos/${ctx.repo}/issues?state=open&labels=${encodeURIComponent(LANE)}&per_page=100`)).filter(row => row.pull_request).map(row => row.number);
-// A holder is stale when its core issue has no live claim (its machine stopped, or a person stopped the job).
+// A holder is stale when its core issue has no live claim (its machine stopped, or a person stopped the job), and an
+// orphan when it is not a core PR (a hand-added label). Both are cleared.
 async function staleLane(ctx, number) {
-  const ref = (await ctx.gh.ok('GET', `repos/${ctx.repo}/pulls/${number}`))?.head?.ref, n = Number(/^pdd\/core-(\d+)-/.exec(String(ref ?? ''))?.[1]);
-  if (!Number.isSafeInteger(n)) return false;
+  const pr = await ctx.gh.ok('GET', `repos/${ctx.repo}/pulls/${number}`), ref = pr?.head?.ref, n = Number(/^pdd\/core-(\d+)-/.exec(String(ref ?? ''))?.[1]);
+  if (pr?.state !== 'open' || pr?.merged) return true;
+  if (!Number.isSafeInteger(n)) { ctx.warn(`Autopilot core: PR #${number} has ${LANE} but is not a core PR; the label is removed`); return true; }
   if (readJobs(ctx.fs, ctx.root).some(j => j.issue === n && j.pr === number && j.lane?.state === 'final')) return false;
   const claim = await ctx.readClaim(n);
   return !(claim?.active && !claim.expired);
@@ -868,15 +931,26 @@ async function nativeMergeQueue(ctx) { return null; }
 async function enterLane(ctx, job) {
   const { gh, repo } = ctx, label = encodeURIComponent(LANE);
   if (await nativeMergeQueue(ctx)) return 'final';
-  const wait = holder => {
-    job.lane = { state: 'waiting', holder, since: job.lane?.state === 'waiting' ? job.lane.since : ctx.now() };
+  // A waiting PR never keeps its own label (a loser whose DELETE failed tries again here). A wait that lasts longer
+  // than the quiet period with the same holder sends one alert; waiting never ends a job.
+  const wait = async holder => {
+    if (held.includes(job.pr)) await dropLabel(ctx, job.pr);
+    const same = job.lane?.state === 'waiting' && job.lane.holder === holder;
+    job.lane = { state: 'waiting', holder, since: job.lane?.state === 'waiting' ? job.lane.since : ctx.now(), heldSince: same ? job.lane.heldSince : ctx.now(), alerted: same ? job.lane.alerted : false };
+    if (!job.lane.alerted && ctx.now() - job.lane.heldSince >= ctx.quiet) {
+      job.lane.alerted = true;
+      try { await (ctx.ports.alert ?? (async () => {}))({ issue: job.issue, kind: 'stuck', text: `Autopilot core: PR #${job.pr} has waited ${Math.round((ctx.now() - job.lane.heldSince) / MIN)} minutes for the merge lane${holder ? `, which PR #${holder} holds` : ''}.`, tried: 'The lane holder made no merge in that time.', need: 'Look at the lane holder PR; remove its pdd:merge-lane label to free the lane.' }); }
+      catch (error) { ctx.warn(`Autopilot core alert failed: ${error.message}`); }
+    }
     job.progress = { ...job.progress, at: ctx.now(), running: true }; ctx.saveJob(job);
     return 'wait';
   };
   let held = await laneHolders(ctx);
-  for (const number of held.filter(n => n !== job.pr)) if (await staleLane(ctx, number)) { await gh.call('DELETE', `repos/${repo}/issues/${number}/labels/${label}`); held = held.filter(n => n !== number); }
+  // Stale or orphan holders (no live claim, not a core PR) are cleared by any machine.
+  for (const number of held.filter(n => n !== job.pr)) if (await staleLane(ctx, number)) { await dropLabel(ctx, number); held = held.filter(n => n !== number); }
   const others = held.filter(n => n !== job.pr);
-  if (others.length) return wait(Math.min(...others));
+  // One winner: the lowest open holder. Every other PR removes its label and waits.
+  if (others.some(n => n < job.pr) || others.length && !held.includes(job.pr)) return wait(Math.min(...others));
   if (!held.includes(job.pr)) {
     // L6/C1: a PR that came back from a conflict update goes first; then claim order. C2: files that another PR
     // reserved at its 2nd conflict wait for it.
@@ -886,11 +960,26 @@ async function enterLane(ctx, job) {
     const reserved = await reservations(ctx, job);
     if (reserved) return wait(reserved);
     await gh.ok('POST', `repos/${repo}/issues/${job.pr}/labels`, { labels: [LANE] });
-    const now = await laneHolders(ctx), lowest = Math.min(...now);
-    if (lowest !== job.pr) { await gh.call('DELETE', `repos/${repo}/issues/${job.pr}/labels/${label}`); return wait(lowest); }
+    const now = await laneHolders(ctx);
+    if (!now.length) return 'wait';                        // the read did not show the label yet: try again next tick
+    held = now;
+    if (Math.min(...now) !== job.pr) return wait(Math.min(...now));
   }
   if (job.lane?.state !== 'final') { job.lane = { state: 'final', since: ctx.now(), waited: job.lane?.since ? ctx.now() - job.lane.since : 0 }; ctx.saveJob(job); }
   return 'final';
+}
+// Remove a lane label (ours, or a stale or orphan one); a failure throws, so the next tick tries again.
+async function dropLabel(ctx, number) {
+  const r = await ctx.gh.call('DELETE', `repos/${ctx.repo}/issues/${number}/labels/${encodeURIComponent(LANE)}`);
+  if (r.status >= 300 && r.status !== 404) throw Object.assign(Error(`GitHub DELETE label returned ${r.status}`), { code: 'github' });
+}
+// The race guard right before the merge: this PR must still be the lowest open holder, and the base tip must still be
+// in its head. Else it does not merge in this tick.
+async function laneStillMine(ctx, job) {
+  const held = await laneHolders(ctx);
+  if (!held.includes(job.pr) || held.some(n => n < job.pr)) { await dropLabel(ctx, job.pr); job.lane = null; ctx.saveJob(job); return false; }
+  const compare = await ctx.gh.ok('GET', `repos/${ctx.repo}/compare/${encodeURIComponent(ctx.state.baseBranch)}...${job.head}`);
+  return compare?.behind_by === 0;
 }
 // Leave the lane (a repair, an END, a hand-over, an observe validation): the next green PR takes it.
 async function leaveLane(ctx, job) {
@@ -1150,6 +1239,12 @@ async function promptGate(ctx, job) {
     const head = await treeAt(ctx, job, 'head', job.head), visible = new Set(gitFiles(head));
     const commonDir = await ctx.git(['rev-parse', '--path-format=absolute', '--git-common-dir'], cwd);
     const journal = (() => { try { return readPromptApprovals({ commonDir }); } catch { return []; } })();
+    // The base version of each prompt: a pure rename (or no real change) of an approved, current prompt keeps the
+    // approval that Git already has.
+    const baseRoot = await treeAt(ctx, job, 'base', await ctx.git(['rev-parse', `origin/${base}`], cwd)), baseVisible = new Set(gitFiles(baseRoot));
+    // A strict repository accepts a person's approval only: a trusted APPROVED review of this head on GitHub, or a
+    // journal entry that a person made at a terminal.
+    const reviewed = strict && job.pr ? await githubApproved(ctx, job) : false;
     for (const { path, from } of changed) {
       let prompt;
       try { prompt = readPrompt(head, visible, path); } catch (error) { problems.push(`${path} cannot be checked (${oneLine(error.message, 200)})`); continue; }
@@ -1161,11 +1256,24 @@ async function promptGate(ctx, job) {
       const refusal = promptRefusal(prompt, 'prompt');
       if (refusal) { problems.push(oneLine(refusal.message, 300)); continue; }
       if (prompt.interface.status !== 'approved') { problems.push(`${path} has a draft Runtime interface`); continue; }
-      if (!journal.some(e => e.prompts.some(p => p.path === path && p.proseSha256 === prompt.prose))) problems.push(`${path} is marked approved, but no approval for its text is recorded (pdd approve)`);
+      let before = null;
+      try { before = baseVisible.has(from) ? readPrompt(baseRoot, baseVisible, from) : null; } catch { before = null; }
+      if (before && !before.error && before.prose === prompt.prose && deepSame(before.interface, prompt.interface)) continue;
+      if (reviewed) continue;
+      const recorded = journal.some(e => (!strict || e.actor?.kind === 'terminal') && e.prompts.some(p => p.path === path && p.proseSha256 === prompt.prose));
+      if (!recorded) problems.push(`${path} is marked approved, but no approval for its text is recorded: set its interface status to "draft", then run pdd approve (it records an approval only for a draft or stale prompt)`);
     }
   }
   job.approvals = { head: job.head, strict, problems }; ctx.saveJob(job);
   return job.approvals;
+}
+// A trusted person's APPROVED review of the PR head on GitHub.
+async function githubApproved(ctx, job) {
+  try {
+    for (const review of await ctx.gh.all(`repos/${ctx.repo}/pulls/${job.pr}/reviews?per_page=100`))
+      if (review.state === 'APPROVED' && review.commit_id === job.head && await ctx.ports.trusted({ user: review.user })) return true;
+  } catch (error) { ctx.warn(`Autopilot core could not read the reviews of PR #${job.pr}: ${error.message}`); }
+  return false;
 }
 // Runtime could not check, and the job shipped its PR with "Runtime: not run": file or count one deduped report for
 // the cause. It never blocks or ends the job; one report per job and cause.
@@ -1195,6 +1303,7 @@ async function wouldMerge(ctx, job, pr) {
 async function repairOrEnd(ctx, job, reds) {
   stopChecks(ctx, job);
   await leaveLane(ctx, job);
+  job.lane = null;
   if (job.repairs >= ctx.settings.repairs) return end(ctx, job, cause('job', 'checks-red', `the PR checks stayed red after ${job.repairs} repair(s): ${reds.join(' ')}`));
   Object.assign(job, { phase: 'running', role: 'repair', repairs: job.repairs + 1, review: null, suite: null, progress: { sig: null, at: ctx.now(), running: false } });
   job.agent = startJob(ctx, job, 'repair', job.worktree, result => repairPrompt(ctx, job, reds, result));
@@ -1486,6 +1595,7 @@ async function advance(ctx, job) {
   // with no comment, no pdd:stuck, no count and no streak.
   const machine = text => end(ctx, job, cause('job', 'no-result', `this machine ran no tick for ${(ctx.gap.hours).toFixed(1)} hours (for example while it slept), and ${text}`, { machine: true }));
   if (ctx.gap) {
+    job.gaps = [...(job.gaps ?? []).slice(-19), { from: ctx.gap.from, to: ctx.now() }];   // the backstop does not count a sleep
     if (ctx.now() - job.claim.lastSeen >= CLAIM_EXPIRES) return machine('the claim expired in that gap');
     job.progress = { ...job.progress, at: ctx.now() }; ctx.saveJob(job);
   }
@@ -1503,13 +1613,8 @@ async function advance(ctx, job) {
     if (work !== job.work?.sig) job.work = { sig: work, at: job.work ? ctx.now() : job.started };
     const before = job.progress?.sig;
     noteProgress(ctx, job, `${logSig(seen)}:${work}`);
-    if (ctx.now() - job.work.at >= ctx.ceiling) {
-      ctx.jobs.stop(job.agent);
-      const text = `the ${job.role} agent wrote its log for ${ctx.settings.maxJobHours} hours with no commit and no file change`;
-      try { await (ctx.ports.alert ?? (async () => {}))({ issue: job.issue, kind: 'stuck', text: `Autopilot core stopped a job of #${job.issue}: ${text}.`, tried: 'The job ran, but it changed no file and made no commit.', need: 'Look at the job log on this machine.' }); }
-      catch (error) { ctx.warn(`Autopilot core alert failed: ${error.message}`); }
-      return end(ctx, job, cause('job', 'no-result', text));
-    }
+    const stopped = await backstop(ctx, job, job.agent, `${job.role} agent`);
+    if (stopped) return end(ctx, job, stopped);
     if (job.progress.sig !== before || quietFor(ctx, job) < ctx.quiet) return;
     ctx.jobs.stop(job.agent);
     if (!object(seen.result)) return end(ctx, job, cause('job', 'no-result', `the ${job.role} agent made no progress for ${ctx.settings.quietMinutes} minutes (its log and branch did not change)`));
@@ -1519,7 +1624,7 @@ async function advance(ctx, job) {
   const prNumber = Number.isSafeInteger(r?.pr) ? r.pr : /^\s*#?\d+\s*$/.test(String(r?.pr ?? '')) ? Number(String(r.pr).replace(/[^\d]/g, '')) : null;
   const head = String(r?.head ?? '').trim().toLowerCase();
   if (object(r) && r.outcome === 'pr' && prNumber > 0 && /^[0-9a-f]{40}$/.test(head)) {
-    Object.assign(job, { phase: 'pr', pr: prNumber, head, runtime: normalRuntime(r.runtime), promptChanged: typeof r.promptChanged === 'boolean' ? r.promptChanged : null,
+    Object.assign(job, { phase: 'pr', pr: prNumber, head, lane: null, runtime: normalRuntime(r.runtime), promptChanged: typeof r.promptChanged === 'boolean' ? r.promptChanged : null,
       evidence: parseEvidence(r.evidence) ?? job.evidence ?? null, prAt: ctx.now(), progress: { sig: null, at: ctx.now(), running: false } });
     delete job.lastError; delete job.lastErrorTool;
     ctx.saveJob(job); ctx.produced();
@@ -1578,7 +1683,7 @@ export async function tickCore(input, ports) {
       // A closed issue can be the merge itself ("Fixes #N"): a merged PR finishes as merged, not as a person stop.
       const pr = job.pr ? await ctx.gh.ok('GET', `repos/${ctx.repo}/pulls/${job.pr}`).catch(() => null) : null;
       if (pr?.merged) await finishMerge(ctx, job, pr);
-      else await finishLocal(ctx, job, 'stopped', `stopped by a person: ${why}`);
+      else { await leaveLane(ctx, job).catch(error => ctx.warn(`Autopilot core could not leave the merge lane for #${job.issue}: ${error.message}`)); await finishLocal(ctx, job, 'stopped', `stopped by a person: ${why}`); }
     } catch (error) { ctx.warn(`Autopilot core #${job.issue}: ${error.message}`); }
   }
   // Heartbeats of own live claims, each after a read of the winning claim. An expired claim gets none: expiry is

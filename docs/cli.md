@@ -1393,7 +1393,7 @@ says to run `pdd autopilot start`.
 | `label` | Take only issues with this label | none: every ready issue |
 | `quietMinutes` | Minutes with no progress after which a job or the checks of a PR end. There is no fixed time limit: a job runs as long as its log, its commits or its files change, and a PR waits while CI, the review or the suite still runs. At least 20 (2 ticks of the core timer) | 45 |
 | `ciStuckMinutes` | Minutes that CI may stay pending with no change before the job ends | 360 |
-| `maxJobHours` | Safety ceiling: a job whose log grows this long with no commit and no file change ends, with one alert | 24 |
+| `maxJobHours` | Backstop: each agent process (build, repair, review, suite) stops this many hours after its own start, whatever it does (sleep time is not counted); the job ends with no result and one alert | 24 |
 | `report` | `file`, `draft` or `off` for Runtime and PDD problem reports | `file` |
 | `reports.runtimeRepo` | Repository for Runtime problem reports, for example `promptdriven/prompt-runtime`; used when this machine can read it, else `promptdriven/pdd` with label `pdd:runtime` | none |
 | `repairs` | Repair jobs for one PR after a red check | 2 |
@@ -1486,7 +1486,8 @@ another repository) and is ready again when the report closes. If the same
 problem comes back after its report closed, the issue gets `pdd:stuck`. An open PR
 of an ended job stays open as a draft, with the cause in a PR comment. A PR whose
 head has no CI check 10 minutes after it was opened merges on the full suite and
-the fresh review alone; its merge comment says `CI: none`. To stop a running job, close the issue, assign it or add
+the fresh review alone (its merge comment says `CI: none`) only in a repository with
+no CI at all; a new head of a repository with CI always waits for its CI. To stop a running job, close the issue, assign it or add
 `pdd:stuck`. After three jobs in a row end with no result, Autopilot pauses new
 jobs on this machine for 1 hour and sends one alert ("Autopilot paused new jobs for
 1 h: the agent ended 3 jobs with no result. Check sign-in and limits."). Jobs that
