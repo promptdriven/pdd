@@ -1,13 +1,14 @@
 # Register Try tools with the person's agents
 
-Own `src/agent-mcp-setup.mjs`; export async module function `setupAgentMcp({env, packageRoot}, {stdin, stdout, stderr, confirm})`, returning exit code 0 or 1. Setup discovers installed Codex, Claude Code and Gemini through executables on PATH or their configuration homes. It offers this package's `pdd mcp` stdio server named `pdd`. Pin the running package: command is `process.execPath`, args are `[absolute packageRoot/bin/pdd.mjs, "mcp"]`. Never resolve `pdd` through PATH: an older installation may shadow this package. Keep each argument separate, preserving spaces. Preserve every unrelated setting and existing server; never alter global approval policy.
+Own `src/agent-mcp-setup.mjs`; export async module function `setupAgentMcp({env, packageRoot}, {stdin, stdout, stderr, confirm, interactive})`, returning exit code 0 or 1. Setup discovers installed Codex, Claude Code and Gemini through executables on PATH or their configuration homes. It offers this package's `pdd mcp` stdio server named `pdd`. Pin the running package: command is `process.execPath`, args are `[absolute packageRoot/bin/pdd.mjs, "mcp"]`. Never resolve `pdd` through PATH: an older installation may shadow this package. Keep each argument separate, preserving spaces. Preserve every unrelated setting and existing server; never alter global approval policy.
 
 ## Consent and safe writes
 
 ```mermaid
 flowchart TD
     D[Discover and read configs] --> V{All candidates safe?}
-    V -->|No| E[Explain error; write nothing]
+    V -->|Symlink| W[Warn; write nothing; exit 0]
+    V -->|Other unsafe config| E[Explain error; write nothing; exit 1]
     V -->|Yes| C{Any changes?}
     C -->|No| N[Report no change]
     C -->|Yes| P[Show exact config patch for each file]
@@ -16,9 +17,9 @@ flowchart TD
     Y -->|Yes| R[Recheck files; apply shown patches]
 ```
 
-A preview identifies each absolute filename and exact added JSON pointer/value or appended TOML text, and explains JSON formatting. Ask once `Register these PDD Try tools? [y/N] `. Only trimmed case-insensitive `y` consents; other answers, EOF and noninteractive input default to no. An injected async `confirm` receives that question and may supply an answer for callers/tests; normal input requires stdin and stdout TTY. No config directories or files are created before consent. The project's PDD block and skills are outside this module.
+A preview identifies each absolute filename and exact added JSON pointer/value or appended TOML text, and explains JSON formatting. Ask once `Register these PDD Try tools? [y/N] `. Only trimmed case-insensitive `y` consents; other answers, EOF and noninteractive input default to no. An injected async `confirm` receives that question and may supply an answer for callers/tests; normal input requires stdin and stdout TTY. The optional `interactive` port defaults to whether confirm is supplied or both streams are terminals. Explicit false suppresses all questions, including confirm, and selects no registration; inspection and previews may still run. No config directories or files are created before consent. The project's PDD block and skills are outside this module.
 
-Reject malformed JSON/TOML, non-object JSON roots/mcpServers, existing conflicting `pdd` entries and any symlink in the target path with a clear filename diagnostic. Matching existing server fields are idempotent, retaining additional settings. Recheck the original bytes and path safety after consent; if changed meanwhile, write nothing and ask for setup again. Create missing directories privately and files with mode 0600; preserve an existing file's mode. Never overwrite unrelated config entries. Errors return 1 with a finite `pdd setup:` diagnostic.
+Reject malformed JSON/TOML, non-object JSON roots/mcpServers and existing conflicting `pdd` entries with a clear filename diagnostic. Any symlink in a candidate target path skips the entire optional registration action before consent or writes: print a finite `pdd setup: warning:` diagnostic naming that path and manual registration recovery, and return 0. Recheck-time symlinks also skip with warning before any write. Matching existing server fields are idempotent, retaining additional settings. Recheck the original bytes and path safety after consent; if changed meanwhile, write nothing and ask for setup again. Create missing directories privately and files with mode 0600; preserve an existing file's mode. Never overwrite unrelated config entries. Errors return 1 with a finite `pdd setup:` diagnostic.
 
 ## Agent registrations
 
