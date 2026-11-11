@@ -1,7 +1,7 @@
 import { describeCallPreflight } from './lint-call-preflight.mjs';
 import {rememberSecrets} from './secret-redaction.mjs';
 import { bindingPlanLines, bindingRefusals } from './runtime-binding-plan.mjs';
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 38a32469b35f7706dab393d9eeb480215eb0603770ed1bac1863852ec5cb2c78).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 00360092e97ae96b70130c2f3ee68bf453e4ef1fc1012f3cfbbd288a4ff2caa2).
 import { buildCheckPlan, checkPlanResults, checkPlanLines, checkPlanResultLines } from './runtime-check-plan.mjs';
 import { interfaceFindings } from './interface-draft.mjs';
 import {readEvidenceEligibility} from './workflow-runner.mjs';
@@ -3466,6 +3466,17 @@ async function stopTry(context, record) {
   if (done.answer?.state !== 'passed') throw new Stop(done.answer?.state === 'refused' ? 4 : 3, 'The Try did not confirm that it stopped. Run pdd simulate --stop again later.');
 }
 
+function trySourceSelection(record, path) {
+  const scope = record.simulation_scope;
+  if (scope === undefined) return { tests: [path] };
+  if (!isObject(scope) || !Array.isArray(scope.tests) || !scope.tests.length
+    || !scope.tests.every(test => typeof test === 'string') || !scope.tests.includes(path)
+    || !(scope.appMap === null || typeof scope.appMap === 'string')) {
+    throw new Stop(4, 'The saved whole-project source scope is unavailable. Run pdd simulate --new.');
+  }
+  return { tests: scope.tests, appMap: scope.appMap };
+}
+
 function tryPromptProblem(root, found, test, record, capture) {
   const hashes=record.prompt_hashes;
   if (!capture && isObject(hashes)) {
@@ -3532,6 +3543,8 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     const wholeRecords = normalized.length ? [] : Object.entries(repoState.tries ?? {}).filter(([, value]) => isObject(value.simulation_scope));
     if (wholeRecords.length > 1) throw new Stop(2, 'Several whole-project simulations are saved. Stop a named Try with pdd simulate --stop STORY before opening the whole project.');
     const [recordPath, record] = wholeRecords[0] ?? [test.path, repoState.tries?.[test.path]];
+    const simulationScope = normalized.length ? null : { tests: selected.map(item => item.path), appMap, appMapHash: appMap ? sha256(readFileSync(join(root, appMap))) : null };
+    if (record && simulationScope && !options['--new'] && !isDeepStrictEqual(record.simulation_scope, simulationScope)) throw new Stop(2, 'This saved simulation does not contain the current whole project. Run pdd simulate --new.');
     if (wholeRecords.length && !options['--new']) test = selected.find(item => item.path === recordPath) ?? test;
     if (record && options['--new'] && recordPath !== test.path && repoState.tries?.[test.path]) throw new Stop(2, `A different saved Try uses ${test.path}. Stop it with pdd simulate --stop ${test.path} before replacing the whole-project simulation.`);
     context.typedForm = typed;
@@ -3546,7 +3559,10 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     }
     Object.assign(context, { root, store, origin, visible: found.visible, appMap, cwd: realpathSync(cwd), simulationTests: selected, seedTest: { path: test.path, storyPath: test.storyPath } });
     const row = rows.find(row => row.test === test.path) ?? rows[0];
-    const capture = boundedCapture ?? ports.captureSource(root, { tests: selected.map(item => item.path), appMap }), note = otherNote(otherFiles(capture.files, found).length);
+    const capture = record?.simulation_scope && !options['--new']
+      ? ports.captureSource(root, trySourceSelection(record, recordPath))
+      : boundedCapture ?? ports.captureSource(root, { tests: selected.map(item => item.path), appMap });
+    const note = otherNote(otherFiles(capture.files, found).length);
     for (const warning of capture.warnings ?? []) line(ports.stderr, warning);
     if(context.agentConnection&&loadRuntimeWorkspace({root}).configured)throw new Stop(5,'Bounded agent connection is unavailable: installed CLI controls do not establish packet-only context. Use the ordinary simulator without an agent connection.');
     const identity = signIn(ports.gh, context.store);
@@ -3557,8 +3573,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     context.runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
     if (record) {
       if (!words.length && !options['--new']) {
-        const scope = { tests: selected.map(item => item.path), appMap, appMapHash: appMap ? sha256(readFileSync(join(root, appMap))) : null };
-        if (!isDeepStrictEqual(record.simulation_scope, scope) || !isDeepStrictEqual(record.prompt_hashes, capture.raw_prompt_hashes) || tryPromptProblem(root, found, test, record, capture)) throw new Stop(2, 'This saved simulation does not contain the current whole project. Run pdd simulate --new.');
+        if (!isDeepStrictEqual(record.prompt_hashes, capture.raw_prompt_hashes) || tryPromptProblem(root, found, test, record, capture)) throw new Stop(2, 'This saved simulation does not contain the current whole project. Run pdd simulate --new.');
       }
       const needsOwner = context.doorMode || requestedBudget !== null || context.agentConnection;
       if (needsOwner && record.login && record.login !== identity.login) throw new Stop(context.doorMode ? 125 : 5, `This Try belongs to ${record.login}. Run: gh auth switch -u ${record.login}`);
@@ -4097,7 +4112,7 @@ function retainedCaseAuthority(root,record,p){
   caseSafe(p,join(root,path));caseSafe(p,join(root,story));
   const found=findTests({root}),test=found.tests.find(test=>test.path===path&&test.storyPath===story);
   if(!test||test.doc?.story_path!==story||sha256(Buffer.from(caseRead(p,join(root,story))))!==original.story_sha256)throw Error('the original Story or test changed');
-  const capture=captureSource(root,{tests:[path]});
+  const selection=trySourceSelection(original,path),capture=captureSource(root,selection);
   const references=capture.references??[];
   if((references.length||original.contract_references!==undefined)
     &&(!Array.isArray(original.contract_references)||!isDeepStrictEqual(original.contract_references,references)))throw Error('original reference baseline is unavailable or changed');
@@ -4108,7 +4123,7 @@ function retainedCaseAuthority(root,record,p){
   // Let the capture owner discover both closures. Current scenario edits cannot
   // hide required context from the original uploaded seed, and neither capture
   // may supply a missing original pin.
-  const originalCapture=captureSource(root,{tests:[path],prepareSource:()=>[{path,bytes:JSON.stringify(seed)}]});
+  const originalCapture=captureSource(root,{...selection,prepareSource:()=>[{path,bytes:JSON.stringify(seed)}]});
   for(const selected of [capture,originalCapture]){
     if(!selected.sources.filter(file=>file.path.endsWith('.prompt.md')).every(file=>hash(raw[file.path])&&hash(effective[file.path])))
       throw Error('complete original raw/effective source pins are unavailable');

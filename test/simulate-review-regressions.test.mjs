@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
-import { runTry } from '../src/runtime-client.mjs';
+import { applyPendingCaseWithHandoff, runTry } from '../src/runtime-client.mjs';
 import { findTests, gitFiles, proseSha256 } from '../src/runtime-preflight.mjs';
 import { openCli, runShim } from '../src/try-doors.mjs';
 import { harbor, fakeRuntime, portsFor } from './runtime-fake.mjs';
@@ -41,8 +41,12 @@ function saved(setup) {
 async function harness(t, setup) {
   const events = [];
   const fake = await fakeRuntime(t, (entry, f) => {
+    if (entry.url.endsWith('/reopen')) {
+      const answer = f.jobs.get(entry.url.split('/').at(-2));
+      answer.result.session.state = 'running'; return { status: 200, json: answer };
+    }
     if (entry.json) {
-      const answer = { ...f.job(entry.json.requestId, 'call', 'passed', { program_result: { stdout: 'ready\n', stderr: '', exit_code: 0 }, report: { remaining_calls: 6 } }), session_id: entry.url.split('/')[3] };
+      const answer = { ...f.job(entry.json.requestId, 'call', 'passed', { program_result: { stdout: 'ready\n', stderr: '', exit_code: 0 }, report: { remaining_calls: 6, input_world: {}, world: {} } }), session_id: entry.url.split('/')[3] };
       f.jobs.set(entry.json.requestId, answer); return { status: 200, json: answer };
     }
     if (entry.url.endsWith('/model')) return { status: 200, json: { entries: [{ entry_path: 'prompts/z-http.prompt.md', operation: 'main', input_schema: object({}), http: { method: 'GET', path: '/health' } }], calls: { cap: 7, remaining: 6 }, app_map: false } };
@@ -64,6 +68,67 @@ async function harness(t, setup) {
     return { code, ports };
   };
   return { fake, events, io, run };
+}
+
+for (const state of ['running', 'paused']) {
+  test(`812 review: named recovery preserves an unchanged whole-project HTTP session (${state})`, async t => {
+    const setup = project(t, [['a-http', 'http'], ['z-http', 'http']]), h = await harness(t, setup);
+    const first = await h.run(); assert.equal(first.code, 0, first.ports.stderr.text);
+    const original = Object.entries(saved(setup).tries)[0], id = original[1].id;
+    h.fake.jobs.get(id).result.session.state = state;
+    const posts = h.fake.posts.length;
+    const repeat = await h.run(original[0], { '--no-open': true, '--no-wait': true });
+    assert.equal(repeat.code, 0, repeat.ports.stderr.text);
+    assert.equal(h.fake.posts.length, posts, 'named recovery cannot submit another setup or lint');
+    assert.equal(h.fake.deletes.length, 0);
+    assert.equal(h.fake.jsonPosts.length, state === 'paused' ? 1 : 0);
+    if (state === 'paused') assert.ok(h.fake.jsonPosts[0].url.endsWith(`/${id}/reopen`));
+    assert.deepEqual(Object.entries(saved(setup).tries), [original]);
+    writeFileSync(join(setup.repo, 'prompts/z-http.prompt.md'), readFileSync(join(setup.repo, 'prompts/z-http.prompt.md'), 'utf8') + '\nChanged independent source.\n');
+    const stale = await h.run(original[0], { '--no-open': true, '--no-wait': true });
+    assert.equal(stale.code, 125);
+    assert.match(stale.ports.stderr.text, /changed.*--new/);
+    assert.equal(h.fake.posts.length, posts);
+  });
+}
+
+for (const references of [false, true]) {
+  test(`812 review: delayed whole-project CLI case handoff retains all source pins (references: ${references})`, async t => {
+    const setup = project(t, [['cli', 'cli'], ['other', 'typed']]);
+    const target = join(setup.repo, 'tests/cli.json'), doc = JSON.parse(readFileSync(target));
+    doc.steps[0].checks.push({ criterion_id: 'AC1', target: 'world', path: '', op: 'equals', value: {} });
+    writeFileSync(target, JSON.stringify(doc));
+    if (references) {
+      mkdirSync(join(setup.repo, 'contracts'));
+      writeFileSync(join(setup.repo, 'contracts/input.json'), JSON.stringify(object({})));
+      const path = join(setup.repo, 'prompts/other.prompt.md'), source = readFileSync(path, 'utf8');
+      const iface = JSON.parse(source.match(/```json\s*([\s\S]*?)```/)[1]);
+      iface.entries[0].input_schema = { $contract: 'contracts/input.json#' };
+      writeFileSync(path, source.replace(/(```json\s*)[\s\S]*?(```)/, (_, open, close) => open + JSON.stringify(iface) + '\n' + close));
+    }
+    const h = await harness(t, setup), first = await h.run();
+    assert.equal(first.code, 0, first.ports.stderr.text);
+    const descriptor = join(setup.state, 'tries', readdirSync(join(setup.state, 'tries')).find(path => path.endsWith('.door.json')));
+    const command = h.io(); assert.equal(await runShim(descriptor, ['ready'], command), 0, command.stderr.text);
+    const before = readFileSync(target, 'utf8');
+    const pending = await h.run(undefined, { '--save-last': true });
+    assert.equal(pending.code, 125, pending.ports.stderr.text);
+    assert.equal(readFileSync(target, 'utf8'), before);
+    const receiptPath = readdirSync(setup.state, { recursive: true }).find(path => path.endsWith('.received.json'));
+    assert.ok(receiptPath, pending.ports.stderr.text);
+    const receipt = JSON.parse(readFileSync(join(setup.state, receiptPath)));
+    const local = { env: h.io().env, gh: () => assert.fail('local handoff cannot authenticate'), fetch: () => assert.fail('local handoff cannot submit') };
+    const applied = await applyPendingCaseWithHandoff({ cwd: setup.repo, pendingId: receipt.pendingId, handoff: { kind: 'closed-editor', testPath: 'tests/cli.json' } }, local);
+    assert.equal(applied.result?.state, 'committed', applied.message);
+    const after = JSON.parse(readFileSync(target));
+    assert.deepEqual(after.criteria, doc.criteria);
+    assert.deepEqual(after.steps[0], doc.steps[0]);
+    assert.equal(after.steps.length, 2);
+    assert.deepEqual(after.steps[1].input, { argv: ['ready'] });
+    const duplicate = await applyPendingCaseWithHandoff({ cwd: setup.repo, pendingId: receipt.pendingId, handoff: { kind: 'closed-editor', testPath: 'tests/cli.json' } }, local);
+    assert.equal(duplicate.result?.duplicate, true);
+    assert.equal(JSON.parse(readFileSync(target)).steps.length, 2);
+  });
 }
 
 for (const [label, entryKind, dependencyKind] of [
