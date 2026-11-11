@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: aa796511d17b69da37b85091af92c0c26d81a76db15a3d90ada0ee7dda50a690).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 8dce07456e5c3235d9ae833b74d8d40ebb4d2cd71e50a964ed105ab6fda36c01).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -596,7 +596,7 @@ function normalOutput(line) {
 }
 // P3 and P4 from one line of the process's own stream (Codex --json, Claude stream-json, or plain text).
 function streamItems(line, role) {
-  if (role === 'suite' || !/^\s*\{/.test(line)) return [{ kind: 'out', text: line }];
+  if (role === 'suite' || role === 'vectors' || !/^\s*\{/.test(line)) return [{ kind: 'out', text: line }];
   let event; try { event = JSON.parse(line); } catch { return [{ kind: 'out', text: line }]; }
   if (!object(event)) return [];
   const items = [], out = text => { for (const l of String(text ?? '').split('\n')) items.push({ kind: 'out', text: l }); };
@@ -664,10 +664,11 @@ async function watchProcess(ctx, job, part, role, cwd = null) {
   const lines = newStreamLines(ctx, part, w);
   // A suite that waits for a check slot in the machine's suite queue is not quiet (like a CI wait): T1 starts when the
   // queue admits it ("running the full test suite"). The note and the backstop count from the process start.
-  const admitted = role === 'suite' && !w.admitted && lines.some(line => line.trim() === 'running the full test suite');
+  const queued = role === 'suite' || role === 'vectors';
+  const admitted = queued && !w.admitted && lines.some(line => line.trim() === 'running the full test suite');
   if (admitted) w.admitted = true;
   // Only the time in the queue is exempt: a hang before the queue (npm ci, the suite start) is quiet as usual.
-  if (role === 'suite' && !w.queued && lines.some(line => /^waiting for a check slot\b/.test(line.trim()))) w.queued = true;
+  if (queued && !w.queued && lines.some(line => /^waiting for a check slot\b/.test(line.trim()))) w.queued = true;
   for (const line of lines)
     for (const item of streamItems(line, role)) {
       const text = item.kind === 'out' ? normalOutput(item.text) : oneLine(item.text, 4000);
@@ -686,11 +687,11 @@ async function watchProcess(ctx, job, part, role, cwd = null) {
   // of a shorter tick gap beyond one timer interval does not count either. A queued suite is never quiet.
   if (ctx.gap || !first && fresh.size) { w.at = now; if (fresh.size) w.last = [...fresh].join(', '); }
   else if (ctx.tickGap > 0) w.at = Math.min(now, w.at + ctx.tickGap);
-  if (role === 'suite' && (w.queued && !w.admitted || admitted)) { w.at = now; if (!w.admitted) w.last = 'queue wait'; }
+  if (queued && (w.queued && !w.admitted || admitted)) { w.at = now; if (!w.admitted) w.last = 'queue wait'; }
   if (!first) w.counts = { commits: w.counts.commits + n.commit, states: w.counts.states + n.state, items: w.counts.items + n.tool + n.out };
   w.marks = [...w.marks, { at: now, ...w.counts }].filter(m => now - m.at <= 2 * HOUR).slice(-30);
   if (['build', 'repair', 'conflict'].includes(role)) job.progress = { sig: 'process', at: w.at, running: false };
-  const age = processAge(ctx, job, part), limit = backstopLimit(ctx, role), label = role === 'review' ? 'reviewer' : role === 'suite' ? 'full test suite' : `${role} agent`;
+  const age = processAge(ctx, job, part), limit = backstopLimit(ctx, role), label = role === 'review' ? 'reviewer' : role === 'suite' ? 'full test suite' : role === 'vectors' ? 'replay and formal tests' : `${role} agent`;
   const alert = async (key, a) => {
     if ((job.alerted ?? []).includes(key)) return;
     job.alerted = [...(job.alerted ?? []), key].slice(-40); ctx.saveJob(job);
@@ -870,7 +871,7 @@ async function intake(ctx, rows) {
         continue;
       }
       ctx.saveJob({ schema: 'pdd.core-job.v1', id: randomUUID(), issue: n, title: oneLine(row.title, 200), url: row.html_url ?? issueKey(ctx.repo, n), body: String(row.body ?? '').slice(0, 20000),
-        branch: kept.head.ref, worktree, claim, phase: 'pr', role: 'build', repairs: 0, started: ctx.now(), pr: kept.number, head: String(kept.head.sha).toLowerCase(), prAt: ctx.now(),
+        branch: kept.head.ref, worktree, claim, phase: 'pr', role: 'build', repairs: 0, started: ctx.now(), pr: kept.number, head: String(kept.head.sha).toLowerCase(), agentHead: String(kept.head.sha).toLowerCase(), prAt: ctx.now(),
         progress: { sig: null, at: ctx.now(), running: false }, resumed: true });
       ctx.counts.started++; free--;
       continue;
@@ -1035,17 +1036,21 @@ async function reviewState(ctx, job) {
   if (followUps.length) await recordFollowUps(ctx, job, followUps).catch(error => ctx.warn(`Autopilot core could not record the follow-ups of #${job.issue}: ${error.message}`));
   return { state: verdict === 'PASS' ? 'pass' : 'fail', mustFix };
 }
+// A test command through the machine's suite queue, in a clean checkout. No fixed time limit (--timeout 0): the process
+// rule watches it. A fresh checkout has no node_modules: with a lockfile and dependencies, install them first (no
+// install scripts). An install failure exits 86, a failure of the runner, not a red test result.
+function queuedCommand(ctx, cwd, testCommand) {
+  const suite = [ctx.pdd, 'workflow', 'suite', '--command', testCommand, '--timeout', '0'];
+  const pkg = readJson(ctx.fs, join(cwd, 'package.json'), {}), deps = ['dependencies', 'devDependencies', 'optionalDependencies'].some(key => object(pkg?.[key]) && Object.keys(pkg[key]).length);
+  return ctx.fs.existsSync(join(cwd, 'package-lock.json')) && deps
+    ? { command: '/bin/sh', args: ['-c', 'npm ci --ignore-scripts --no-audit --no-fund || { echo "Autopilot core: dependency install failed" >&2; exit 86; }; exec "$@"', 'pdd-suite', process.execPath, ...suite] }
+    : { command: process.execPath, args: suite };
+}
 async function suiteState(ctx, job) {
   if (!ctx.settings.testCommand) return { state: 'missing' };
   const start = (cwd, restarts = 0, deaths = 0, quiets = 0) => {
-    // No fixed time limit (--timeout 0): the process rule watches the suite. CI=true stops watch modes.
-    const suite = [ctx.pdd, 'workflow', 'suite', '--command', ctx.settings.testCommand, '--timeout', '0'];
-    // A fresh checkout has no node_modules: with a lockfile and dependencies, install them first (no install scripts).
-    // An install failure exits 86, a failure of the runner, not a red test result.
-    const pkg = readJson(ctx.fs, join(cwd, 'package.json'), {}), deps = ['dependencies', 'devDependencies', 'optionalDependencies'].some(key => object(pkg?.[key]) && Object.keys(pkg[key]).length);
-    const command = ctx.fs.existsSync(join(cwd, 'package-lock.json')) && deps
-      ? { command: '/bin/sh', args: ['-c', 'npm ci --ignore-scripts --no-audit --no-fund || { echo "Autopilot core: dependency install failed" >&2; exit 86; }; exec "$@"', 'pdd-suite', process.execPath, ...suite] }
-      : { command: process.execPath, args: suite };
+    // CI=true stops watch modes.
+    const command = queuedCommand(ctx, cwd, ctx.settings.testCommand);
     job.suite = { head: job.head, cwd, restarts, deaths, quiets, agent: startJob(ctx, job, 'suite', cwd, '', command, { CI: 'true' }) }; ctx.saveJob(job); return { state: 'running' };
   };
   if (!job.suite || job.suite.head !== job.head) return start(await checkout(ctx, job, 'suite'));
@@ -1077,7 +1082,125 @@ async function suiteState(ctx, job) {
   recordSuccess(ctx, job, job.suite.agent, 'suite', seen);
   return { state: 'fail', text: `The full test suite failed for head ${short(job.head)} (exit ${seen.exit?.code ?? seen.exit?.signal ?? 'unknown'}). Log: ${basename(job.suite.agent.log)} on this machine${tail ? `\nLast lines:\n${tail}` : ''}` };
 }
-function stopChecks(ctx, job) { for (const part of [job.agent, job.review?.agent, job.suite?.agent]) if (part) ctx.jobs.stop(part); }
+// ---- True evidence (0.1.29) ---------------------------------------------------------------------------------
+// The files that the PR changes at the agent's head (they exist there), read once per head.
+async function changedFiles(ctx, job, head = job.agentHead ?? job.head) {
+  if (job.changed?.head === head) return job.changed.files;
+  const tip = `origin/${ctx.state.baseBranch}`;
+  await ctx.git(['fetch', '-q', 'origin', ctx.state.baseBranch], job.worktree).catch(() => {});
+  const files = (await ctx.git(['diff', '--name-only', '--diff-filter=d', `${tip}...${head}`], job.worktree)).split('\n').filter(Boolean);
+  job.changed = { head, files }; ctx.saveJob(job);
+  return files;
+}
+// The saved Runtime checks of a worktree: the strict per-Story read of pdd test (savedStoryEvidence: `pass` = every
+// criterion passed, `current` = the batch source is exactly this worktree's source), the Stories of the repo and the
+// footprint of each Story at this source (the prompts and files its tests reach).
+async function savedRuntime(cwd, ctx) {
+  const { savedStoryEvidence } = await import('./runtime-client.mjs');
+  const { findTests, captureSource } = await import('./runtime-preflight.mjs');
+  const saved = await savedStoryEvidence({ root: cwd, comparisonRoot: cwd }, { env: ctx.ports.env ?? process.env });
+  const found = findTests({ root: cwd }), footprints = {};
+  try { for (const story of captureSource(cwd, { tests: found.tests.map(test => test.path), appMap: null }).stories ?? []) footprints[story.story_path] = (story.files ?? []).map(file => file.path); }
+  catch { /* No footprint: a changed prompt is then not covered. */ }
+  return { stories: saved.stories ?? [], storyFiles: found.stories.map(story => story.path), footprints };
+}
+// T01: "Runtime: PASS" is true only when the saved Runtime checks cover the change at the agent's exact head: each
+// changed Story has a passed check of exactly this source, and each changed prompt is in the footprint of such a Story.
+// Anything else (a native-only prompt, a Story with no Runtime test, an older source) must say "Runtime: not run".
+async function runtimeCoverage(ctx, job) {
+  const head = job.agentHead ?? job.head;
+  if (job.coverage?.head === head) return job.coverage;
+  const done = coverage => { job.coverage = { head, ...coverage }; ctx.saveJob(job); return job.coverage; };
+  const changed = await changedFiles(ctx, job, head);
+  const prompts = changed.filter(file => file.endsWith('.prompt.md'));
+  const at = await ctx.git(['rev-parse', 'HEAD'], job.worktree).catch(() => '');
+  const evidence = await (ctx.ports.runtimeEvidence ?? savedRuntime)(job.worktree, ctx);
+  const stories = changed.filter(file => evidence.storyFiles.includes(file));
+  if (!prompts.length && !stories.length) return done({ ok: true });
+  if (at !== head) return done({ ok: false, text: `The PR body says "Runtime: PASS", but Autopilot cannot check it: the job worktree is at ${short(at)}, not at the PR head ${short(head)}. Run pdd test at the PR head, or write "Runtime: not run (REASON)".` });
+  const passing = new Set(evidence.stories.filter(row => row.pass && row.current).map(row => row.story));
+  const stale = new Set(evidence.stories.filter(row => row.pass && !row.current).map(row => row.story));
+  const reached = new Set([...passing].flatMap(story => evidence.footprints[story] ?? []));
+  const missing = [...stories.filter(story => !passing.has(story)), ...prompts.filter(prompt => !reached.has(prompt))];
+  if (!missing.length) return done({ ok: true, stories: [...passing].filter(story => stories.includes(story) || (evidence.footprints[story] ?? []).some(file => prompts.includes(file))) });
+  const old = missing.filter(file => stale.has(file));
+  return done({ ok: false, missing, text: `The PR body says "Runtime: PASS", but the Runtime checks at head ${short(head)} do not cover ${missing.join(', ')}${old.length ? ` (the saved check of ${old.join(', ')} is for an older source: a stale Runtime batch)` : ''}. A PASS of other Stories does not count. Run pdd test for the Stories of these changes at this head, or write "Runtime: not run (REASON)" when they have no Runtime check (for example a native-only prompt or a Story with no Runtime test).` });
+}
+// T04: the engine runs the replay (vector) and formal test files that the change touches, at the final head: each
+// changed *.vectors.test.* and *.formal.test.* file, and each vector test file that names a changed scenario file.
+async function evidenceFiles(ctx, job) {
+  const changed = await changedFiles(ctx, job, job.head);
+  const vectors = new Set(changed.filter(file => /\.vectors\.test\.[cm]?[jt]s$/.test(file))), formal = changed.filter(file => /\.formal\.test\.[cm]?[jt]s$/.test(file));
+  for (const scenario of changed.filter(file => /\.json$/.test(file) && /(^|\/)(tests?|runtime|vectors?)\//.test(file)).slice(0, 20)) {
+    const named = await ctx.git(['grep', '-l', '-F', '-e', basename(scenario), job.head, '--', '*.vectors.test.*'], job.worktree).catch(() => '');
+    for (const line of named.split('\n').filter(Boolean)) vectors.add(line.replace(`${job.head}:`, ''));
+  }
+  return { vectors: [...vectors].sort().slice(0, 40), formal: formal.sort().slice(0, 40) };
+}
+const quoteArg = file => `'${String(file).replaceAll("'", `'\\''`)}'`;
+// The summary of a node --test TAP log: the last counts, the failing tests and the files they belong to.
+function tapSummary(log) {
+  const count = name => { const all = [...log.matchAll(new RegExp(`^# ${name} (\\d+)$`, 'gm'))]; return all.length ? Number(all.at(-1)[1]) : null; };
+  const failed = [], lines = log.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^not ok \d+ - (.*)$/.exec(lines[i]);
+    if (!m) continue;
+    const location = lines.slice(i + 1, i + 12).map(line => /location: '([^']+?):\d+:\d+'/.exec(line)?.[1]).find(Boolean);
+    failed.push({ name: oneLine(m[1], 200), file: location ?? null });
+  }
+  return { tests: count('tests'), pass: count('pass'), fail: count('fail'), failed: failed.slice(0, 20) };
+}
+async function vectorsState(ctx, job) {
+  if (!job.vectors || job.vectors.head !== job.head) {
+    const files = await evidenceFiles(ctx, job);
+    if (!files.vectors.length && !files.formal.length) { job.vectors = { head: job.head, files, state: 'none' }; ctx.saveJob(job); return job.vectors; }
+    const cwd = await checkout(ctx, job, 'vectors');
+    const command = queuedCommand(ctx, cwd, `node --test --test-reporter=tap ${[...files.vectors, ...files.formal].map(quoteArg).join(' ')}`);
+    job.vectors = { head: job.head, files, state: 'running', agent: startJob(ctx, job, 'vectors', cwd, '', command, { CI: 'true' }) };
+    ctx.saveJob(job); return job.vectors;
+  }
+  if (job.vectors.state !== 'running') return job.vectors;
+  const seen = ctx.jobs.read(job.vectors.agent);
+  if (seen.state === 'running') {
+    const watch = await watchProcess(ctx, job, job.vectors.agent, 'vectors');
+    if (watch.state === 'ceiling') return { state: 'ceiling', cause: watch.cause };
+    if (watch.state !== 'quiet') return job.vectors;
+  }
+  let log = '';
+  try { log = ctx.fs.readFileSync(job.vectors.agent.log, 'utf8'); } catch { /* No log. */ }
+  const summary = tapSummary(log);
+  const run = seen.state === 'exited' && Number.isInteger(summary.tests) && Number.isInteger(summary.fail);
+  // A runner failure (no TAP summary, killed, quiet) is "not run" with its reason: the engine claims nothing.
+  Object.assign(job.vectors, run ? { state: summary.fail || seen.exit?.code ? 'fail' : 'pass', summary } : { state: 'not-run', reason: `the replay and formal run gave no result (${seen.state === 'dead' ? 'the run died' : seen.exit ? `exit ${seen.exit.code ?? seen.exit.signal}` : 'no progress'}); log ${basename(job.vectors.agent.log)} on this machine` });
+  ctx.saveJob(job);
+  return job.vectors;
+}
+// The merge note's line for the engine's own replay and formal run.
+function engineEvidenceLine(job) {
+  const v = job.vectors;
+  if (!v || v.state === 'none') return '- Replay and formal tests (Autopilot\'s run): none changed';
+  if (v.state === 'not-run') return `- Replay and formal tests (Autopilot's run): not run (${v.reason})`;
+  return `- Replay and formal tests (Autopilot's run at ${short(v.head)}): ${v.state} (${v.summary.pass}/${v.summary.tests}): ${[...v.files.vectors, ...v.files.formal].join(', ')}`;
+}
+// The Evidence claims of the PR body against the engine's own run: a failing changed replay or formal file is red; a
+// vectors or formal claim that the engine's run contradicts is red too.
+function engineEvidenceReds(job) {
+  const v = job.vectors, e = job.evidence ?? {}, reds = [];
+  if (!v || !['pass', 'fail'].includes(v.state)) return reds;
+  const where = [...v.files.vectors, ...v.files.formal].join(', '), counts = `${v.summary.pass}/${v.summary.tests}`;
+  if (v.state === 'fail') {
+    const names = v.summary.failed.map(f => `${f.name}${f.file ? ` (${basename(f.file)})` : ''}`).join('; ') || 'see the log';
+    reds.push(`Autopilot ran the replay and formal tests that this change touches (${where}) at head ${short(v.head)}: ${v.summary.fail} of ${v.summary.tests} failed: ${names}.${e.vectors?.state && e.vectors.state !== 'fail' && v.files.vectors.length ? ` The Evidence line says vectors=${e.vectors.state}.` : ''}`);
+    return reds;
+  }
+  if (v.files.vectors.length && e.vectors?.state && e.vectors.state !== 'pass')
+    reds.push(`The Evidence line says vectors=${e.vectors.state}, but Autopilot ran the changed replay files (${v.files.vectors.join(', ')}) at head ${short(v.head)}: ${counts} passed. Write vectors=pass (${counts}).`);
+  if (v.files.formal.length && e.formal?.state && !['proved', 'bounded'].includes(e.formal.state))
+    reds.push(`The Evidence line says formal=${e.formal.state}, but Autopilot ran the changed formal tests (${v.files.formal.join(', ')}) at head ${short(v.head)}: they pass. Write formal=proved or formal=bounded.`);
+  return reds;
+}
+
+function stopChecks(ctx, job) { for (const part of [job.agent, job.review?.agent, job.suite?.agent, job.vectors?.agent]) if (part) ctx.jobs.stop(part); }
 
 async function mergeCheck(ctx, job) {
   const { gh, repo, state, settings } = ctx;
@@ -1105,6 +1228,11 @@ async function mergeCheck(ctx, job) {
   await runtimeNotRunReport(ctx, job);
   // The Runtime gate is an allowlist: only PASS or "not run" lines, and only a pass or not-run result, can merge.
   const reds = runtimeReds(pr.body, job.runtime, job.promptChanged);
+  // T01: a PASS line must be covered by the saved Runtime checks of the change at the agent's exact head.
+  if (!reds.length && runtimeVerdicts(pr.body).some(line => line.verdict === 'pass')) {
+    const coverage = await runtimeCoverage(ctx, job);
+    if (!coverage.ok) reds.push(coverage.text);
+  }
   job.evidence = parseEvidence(pr.body) ?? job.evidence ?? null;
   reds.push(...evidenceReds(job.evidence, runtimeVerdicts(pr.body)[0]?.verdict));
   // In auto and observe mode a changed prompt must carry a recorded approval (the operator's start, with the real mode
@@ -1127,13 +1255,17 @@ async function mergeCheck(ctx, job) {
     if (tree.code === 1) return conflictFix(ctx, job, { files: String(tree.stdout ?? '').split('\n').slice(1).map(line => line.trim()).filter(Boolean), hunks: '' });
   }
   if (ci?.state === 'red') reds.push(`CI check ${ci.failed.join(', ')} failed for head ${short(job.head)}.`);
-  let review, suite;
+  let review, suite, vectors;
   if (!reds.length) {
     // One backstop end per job: a reviewer at its backstop ends the job before the suite is read.
     review = await reviewState(ctx, job);
     if (review.state === 'ceiling') { stopChecks(ctx, job); return end(ctx, job, review.cause); }
     suite = await suiteState(ctx, job);
     if (suite.state === 'ceiling') { stopChecks(ctx, job); return end(ctx, job, suite.cause); }
+    // T04: the engine's own run of the changed replay and formal files, and the Evidence claims against it.
+    vectors = await vectorsState(ctx, job);
+    if (vectors.state === 'ceiling') { stopChecks(ctx, job); return end(ctx, job, vectors.cause); }
+    reds.push(...engineEvidenceReds(job));
     if (review.state === 'missing') return end(ctx, job, cause('job', 'no-result', 'the fresh reviewer ended twice with no valid verdict'));
     if (suite.state === 'missing') return end(ctx, job, cause('job', 'no-test-command', 'no full test command: set autopilot.testCommand in pdd.json'));
     if (suite.state === 'broken') return end(ctx, job, suite.dead ? cause('job', 'no-result', suite.text) : cause('pdd', 'suite-broken', suite.text));
@@ -1153,8 +1285,8 @@ async function mergeCheck(ctx, job) {
   }
   // Something still runs (CI that still changes, a reviewer or a suite process): wait, and the quiet clock restarts.
   noteProgress(ctx, job, [job.head, ci.state, ci.sig, review.state, suite.state, logSig(job.review?.agent && ctx.jobs.read(job.review.agent))].join('|'),
-    ci.state === 'pending' || review.state === 'running' || suite.state === 'running');
-  if (!['green', 'none'].includes(ci.state) || review.state !== 'pass' || suite.state !== 'pass') { delete job.lastError; delete job.lastErrorTool; ctx.saveJob(job); return; }
+    ci.state === 'pending' || review.state === 'running' || suite.state === 'running' || vectors?.state === 'running');
+  if (!['green', 'none'].includes(ci.state) || review.state !== 'pass' || suite.state !== 'pass' || vectors?.state === 'running') { delete job.lastError; delete job.lastErrorTool; ctx.saveJob(job); return; }
   // The merge lane: one PR per repository in the final step. Other green PRs wait in claim order with their reviews.
   if (await enterLane(ctx, job) !== 'final') return;
   // L2: the exact conflict check. A conflict never goes to repairOrEnd: mechanical hunks are fixed in the lane, other
@@ -1193,6 +1325,7 @@ async function mergeCheck(ctx, job) {
       `- CI: ${ci.state === 'none' ? `none (no check run or status ${NO_CI_AFTER / MIN} minutes after the PR)` : `green (${ci.count} check(s))`}`,
       '- Full test suite: pass', job.review?.kept === 'mechanical' ? '- Review: PASS (kept: the lane fixed only mechanical conflict hunks)' : job.review?.kept ? '- Review: PASS (kept after a clean base refresh, same change)' : job.review?.scoped ? `- Review: PASS (a scoped check after ${job.review.scoped.reason}, on top of the earlier full review)` : '- Review: PASS from a fresh reviewer', `- ${runtimeLine}`, `- ${evidenceText(job.evidence)}`, `- Base: ${oneLine(base.message)}`,
       `- Merge lane: final step${job.lane?.waited ? ` after ${Math.round(job.lane.waited / MIN)} minutes in the queue` : ''}`,
+      engineEvidenceLine(job),
       ...(drafts.length ? [`- Prompts that need a person's approval before a merge (strict_approvals): ${drafts.join('; ')}`] : []), '',
       `<!-- pdd:autopilot-core:${observe ? 'would-merge' : 'merge'}:${job.head} -->`].join('\n'));
     job.mergeNote = job.head; ctx.saveJob(job);
@@ -1946,7 +2079,7 @@ async function advance(ctx, job) {
   const prNumber = Number.isSafeInteger(r?.pr) ? r.pr : /^\s*#?\d+\s*$/.test(String(r?.pr ?? '')) ? Number(String(r.pr).replace(/[^\d]/g, '')) : null;
   const head = String(r?.head ?? '').trim().toLowerCase();
   if (object(r) && r.outcome === 'pr' && prNumber > 0 && /^[0-9a-f]{40}$/.test(head)) {
-    Object.assign(job, { phase: 'pr', pr: prNumber, head, lane: null, runtime: normalRuntime(r.runtime), promptChanged: typeof r.promptChanged === 'boolean' ? r.promptChanged : null,
+    Object.assign(job, { phase: 'pr', pr: prNumber, head, agentHead: head, lane: null, runtime: normalRuntime(r.runtime), promptChanged: typeof r.promptChanged === 'boolean' ? r.promptChanged : null,
       evidence: parseEvidence(r.evidence) ?? job.evidence ?? null, prAt: ctx.now(), progress: { sig: null, at: ctx.now(), running: false } });
     delete job.lastError; delete job.lastErrorTool;
     ctx.saveJob(job); ctx.produced();

@@ -1583,7 +1583,13 @@ native tests and `Runtime: not run (reason)`, and Autopilot files or counts one
 report for that cause. The `Evidence:` line has a fixed form, for example
 `Evidence: runtime=pass (11/11); vectors=not-run; formal=bounded; tests=pass (42/42)`.
 Autopilot keeps only the known parts, saves them in its local history and repeats
-them in the merge comment.
+them in the merge comment. The claims must be true. `Runtime: PASS` counts only when
+the saved `pdd test` checks cover every changed prompt and Story at the PR head (a PASS
+of other Stories does not count; write `Runtime: not run (reason)` for a native-only
+prompt or a Story with no Runtime test). Autopilot also runs the changed replay
+(`*.vectors.test.*`) and formal (`*.formal.test.*`) files itself, and the vector files
+that name a changed scenario, at the PR head. A failure, or a `vectors` or `formal`
+claim that its run contradicts, is red, and the merge comment shows its own counts.
 
 When a job needs a person's decision, Autopilot posts its one question on the issue,
 adds `pdd:needs-decision` (not `pdd:stuck`) and frees the slot. Answer in a comment

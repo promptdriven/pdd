@@ -1733,7 +1733,7 @@ const writePrompt = (w, n, role, status) => {
 };
 const WORDS = `Operator action: pdd autopilot start --engine core in auto mode for acme/widgets on m-${createHash('sha256').update('machine-a').digest('hex').slice(0, 12)} at 2026-11-10T11:00:00.000Z`;
 
-test('I1 in auto mode the job records the operator approval for each changed prompt; observe mode does not approve', async t => {
+test('I1 in auto mode the job records the operator approval for each changed prompt; observe mode too, with "observe" in its words (T05)', async t => {
   const w = await coreWorld(t, { settings: { runs: 1 } });
   w.state.startedAt = '2026-11-10T11:00:00.000Z';
   w.issue(17); await w.tick();
@@ -1741,8 +1741,9 @@ test('I1 in auto mode the job records the operator approval for each changed pro
   assert.ok(input.includes(`printf '%s' '${WORDS}' | pdd approve PROMPT --said -`), 'the exact operator words');
   assert.match(input, /commit the result in the PR/);
   const v = await coreWorld(t, { settings: { runs: 1, mode: 'observe' } });
+  v.state.startedAt = '2026-11-10T11:00:00.000Z';
   v.issue(17); await v.tick();
-  assert.doesNotMatch(v.job(17, 'build').input, /pdd approve/);
+  assert.ok(v.job(17, 'build').input.includes(`printf '%s' '${WORDS.replace('in auto mode', 'in observe mode')}' | pdd approve PROMPT --said -`), 'the real mode in the words');
 });
 
 test('I2 a changed prompt with a draft interface is red: one repair with the approval command, then it merges; with no repairs left it ends', async t => {
@@ -1768,13 +1769,12 @@ test('I2 a changed prompt with a draft interface is red: one repair with the app
   assert.match(endComments(v, 17)[0], /Changed prompts are not approved/); assert.ok(v.labels(17).includes('pdd:stuck'));
 });
 
-test('I3 observe mode never approves: a draft prompt is listed in the "would merge" note, not red', async t => {
+test('I3 observe mode records approvals as auto mode does (T05): a draft prompt is red and gets a repair, not a "would merge" note', async t => {
   const w = await coreWorld(t, { settings: { runs: 1, mode: 'observe' } });
   w.issue(17); await w.tick(); writePrompt(w, 17, 'build', 'draft');
-  const { pr } = w.build(17); await w.tick(); w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
-  const note = pr.comments.map(c => c.body).find(body => body.includes('would-merge'));
-  assert.match(note, /- Prompts not approved \(observe mode does not approve\): prompts\/words\.prompt\.md/);
-  assert.equal(w.job(17, 'repair'), undefined);
+  const { pr } = w.build(17); await w.tick();
+  assert.match(w.job(17, 'repair')?.input ?? '', /Changed prompts are not approved: prompts\/words\.prompt\.md/);
+  assert.equal(pr.comments.map(c => c.body).find(body => body.includes('would-merge')), undefined);
 });
 
 // ---- D (#3188): a job asks a person; the answer and the label removal bring the issue back ---------------------
@@ -3266,4 +3266,93 @@ test('X7 (T05) observe mode records the operator approval of a changed approved 
   const note = strict.pr.comments.map(c => c.body).find(body => body.includes('<!-- pdd:autopilot-core:would-merge:'));
   assert.match(note ?? '', /Prompts that need a person's approval before a merge \(strict_approvals\): prompts\/words\.prompt\.md/);
   assert.deepEqual(s.github.merges, []);
+});
+
+test('Y8 (T01) "Runtime: PASS" counts only when the saved checks cover the changed prompts and Stories at the exact head', async t => {
+  const setup = async ({ body, evidence }) => {
+    const w = await coreWorld(t, { settings: { runs: 1 } });
+    w.baseCommit('prompts/package.prompt.md', '# Package\n\nRead the package name.\n');
+    w.baseCommit('user_stories/package-repository.md', '# Package repository\n\nThe package names its repository.\n');
+    w.baseCommit('prompts/percent.prompt.md', '# Percent\n\nFormat a percent.\n');
+    w.issue(17); await w.tick();
+    const cwd = w.job(17, 'build').cwd;
+    writeIn(cwd, 'prompts/package.prompt.md', '# Package\n\nRead the package name and its repository.\n');
+    writeIn(cwd, 'user_stories/package-repository.md', '# Package repository\n\nThe package names its repository URL.\n');
+    w.runtimeEvidence = evidence;
+    const { pr } = w.build(17, { body: `Fixes #17.\n\n${body}\nPath: a — prompts/package.prompt.md — prompts/package.prompt.md — prompt changed — Test: done check\nPath: d — user_stories/package-repository.md, change-17.txt — unowned — no contract change — Test: done check` });
+    await w.tick();
+    return { w, pr };
+  };
+  const stories = ['user_stories/package-repository.md', 'user_stories/format-percent.md'];
+  // 1. The sandbox PR #51 case: a PASS of an unchanged Story (format-percent) for a native-only change.
+  let { w } = await setup({ body: 'Runtime: PASS', evidence: async () => ({ stories: [{ story: 'user_stories/format-percent.md', pass: true, current: true }], storyFiles: stories, footprints: { 'user_stories/format-percent.md': ['prompts/percent.prompt.md'] } }) });
+  assert.equal(w.job(17, 'review'), undefined, 'red before the review');
+  assert.match(w.job(17, 'repair').input, /do not cover user_stories\/package-repository\.md, prompts\/package\.prompt\.md/);
+  assert.match(w.job(17, 'repair').input, /A PASS of other Stories does not count/); assert.match(w.job(17, 'repair').input, /Runtime: not run \(REASON\)/);
+  // 2. A check of the changed Story for an older source: stale.
+  ({ w } = await setup({ body: 'Runtime: PASS', evidence: async () => ({ stories: [{ story: 'user_stories/package-repository.md', pass: true, current: false }], storyFiles: stories, footprints: { 'user_stories/package-repository.md': ['prompts/package.prompt.md'] } }) }));
+  assert.match(w.job(17, 'repair').input, /a stale Runtime batch/);
+  // 3. A failed check of the changed Story: not covered.
+  ({ w } = await setup({ body: 'Runtime: PASS', evidence: async () => ({ stories: [{ story: 'user_stories/package-repository.md', pass: false, current: true }], storyFiles: stories, footprints: { 'user_stories/package-repository.md': ['prompts/package.prompt.md'] } }) }));
+  assert.ok(w.job(17, 'repair'));
+  // 4. Covered: the changed Story passed at this source and its footprint reaches the changed prompt.
+  let pr;
+  ({ w, pr } = await setup({ body: 'Runtime: PASS', evidence: async () => ({ stories: [{ story: 'user_stories/package-repository.md', pass: true, current: true }], storyFiles: stories, footprints: { 'user_stories/package-repository.md': ['prompts/package.prompt.md', 'user_stories/package-repository.md'] } }) }));
+  assert.equal(w.job(17, 'repair'), undefined); w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number]);
+  // 5. "Runtime: not run (reason)" needs no coverage.
+  ({ w, pr } = await setup({ body: 'Runtime: not run (prompts/package.prompt.md is native-only)', evidence: async () => assert.fail('no coverage read for a not-run line') }));
+  w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number]);
+});
+
+test('Y9 (T04) the engine runs the changed replay files at the head: a failing changed replay is red although the Evidence says vectors=not-run; a pass contradicts not-run', async t => {
+  const setup = async evidence => {
+    const w = await coreWorld(t, { settings: { runs: 1 } });
+    w.baseCommit('test/workflow-draft-publication.vectors.test.mjs', "import test from 'node:test';\ntest('N3', () => {});\n");
+    w.issue(17); await w.tick();
+    writeIn(w.job(17, 'build').cwd, 'test/workflow-draft-publication.vectors.test.mjs', "import test from 'node:test';\ntest('N3: merged former draft PR1', () => {});\n");
+    const { pr } = w.build(17, { body: `Fixes #17.\n\nRuntime: not run (no prompt changed)\nEvidence: runtime=not-run; vectors=${evidence}; formal=not-applicable; tests=pass (3/3)\nPath: d — test/workflow-draft-publication.vectors.test.mjs, change-17.txt — unowned — no contract change — Test: done check`, result: { promptChanged: false, evidence: `Evidence: runtime=not-run; vectors=${evidence}; formal=not-applicable; tests=pass (3/3)` } });
+    await w.tick(); w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
+    return { w, pr };
+  };
+  let { w } = await setup('not-run');
+  const run = w.job(17, 'vectors');
+  assert.ok(run, 'the engine starts its own replay run');
+  assert.ok(run.args.at(-3).includes("node --test --test-reporter=tap 'test/workflow-draft-publication.vectors.test.mjs'"), run.args.join(' '));
+  assert.equal(run.env.CI, 'true');
+  w.vectorsRun(17, { tests: 36, fail: 1, failed: [{ name: 'N3: merged former draft PR1 retains ordinary saved-base code entry and draft PR2', file: 'test/workflow-draft-publication.vectors.test.mjs' }] }); await w.tick();
+  const repair = w.job(17, 'repair');
+  assert.ok(repair, 'a failing changed replay is red');
+  assert.match(repair.input, /1 of 36 failed: N3: merged former draft PR1 retains ordinary saved-base code entry and draft PR2 \(workflow-draft-publication\.vectors\.test\.mjs\)/);
+  assert.match(repair.input, /The Evidence line says vectors=not-run/);
+  assert.equal(w.github.merges.length, 0);
+  // The replay passes, but the Evidence says not-run: the claim is not true.
+  ({ w } = await setup('not-run'));
+  w.vectorsRun(17, { tests: 36 }); await w.tick();
+  assert.match(w.job(17, 'repair').input, /The Evidence line says vectors=not-run, but Autopilot ran the changed replay files \(test\/workflow-draft-publication\.vectors\.test\.mjs\) at head [0-9a-f]{7}: 36\/36 passed/);
+  // A true claim merges, and the merge note has the engine's own counts.
+  let pr;
+  ({ w, pr } = await setup('pass (36/36)'));
+  w.vectorsRun(17, { tests: 36 }); await w.tick(); await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number]);
+  assert.match(mergeComment(pr), /- Replay and formal tests \(Autopilot's run at [0-9a-f]{7}\): pass \(36\/36\): test\/workflow-draft-publication\.vectors\.test\.mjs/);
+});
+
+test('Y10 (T01, T04) the real saved-check reader finds no check for a changed Story (red); a vector test that names a changed scenario runs too', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.baseCommit('user_stories/package-repository.md', '# Package repository\n\nThe package names its repository.\n\n## Acceptance criteria\n\n- AC1: The repository is shown.\n');
+  w.issue(17); await w.tick();
+  writeIn(w.job(17, 'build').cwd, 'user_stories/package-repository.md', '# Package repository\n\nThe package names its repository URL.\n\n## Acceptance criteria\n\n- AC1: The repository URL is shown.\n');
+  w.build(17, { body: 'Fixes #17.\n\nRuntime: PASS\nPath: d — user_stories/package-repository.md, change-17.txt — unowned — no contract change — Test: done check' });
+  await w.tick({ runtimeEvidence: undefined });                       // the real reader: savedStoryEvidence, findTests, captureSource
+  assert.match(w.job(17, 'repair')?.input ?? '', /do not cover user_stories\/package-repository\.md/);
+  // A vector test file that names a changed scenario file runs, although the vector file itself is unchanged.
+  const v = await coreWorld(t, { settings: { runs: 1 } });
+  v.baseCommit('test/runtime/workflow-prove.json', '{"cases": [1]}\n');
+  v.baseCommit('test/workflow-prove.vectors.test.mjs', "const cases = 'test/runtime/workflow-prove.json';\n");
+  v.issue(17); await v.tick();
+  writeIn(v.job(17, 'build').cwd, 'test/runtime/workflow-prove.json', '{"cases": [1, 2]}\n');
+  v.build(17); await v.tick(); v.review(17, 'PASS'); v.suite(17, 0); await v.tick();
+  assert.ok(v.job(17, 'vectors')?.args.at(-3).includes("'test/workflow-prove.vectors.test.mjs'"), 'the linked replay runs');
 });

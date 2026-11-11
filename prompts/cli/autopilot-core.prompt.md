@@ -521,7 +521,21 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    value is red, and the repair prompt quotes the line. Lines that disagree (PASS and
    not run) are red. The result's `runtime.state` (lower case, spaces as `-`) must be
    absent, `pass` or `not-run`, and must agree with the body; else red. A body with no
-   Runtime line is red unless the result says `"promptChanged": false`. **Prompt gate**
+   Runtime line is red unless the result says `"promptChanged": false`. **A PASS must be
+   true (T01):** a "Runtime: PASS" line counts only when the saved Runtime checks cover the
+   change at the agent's exact head (`agentHead`, the head of the last build, repair or
+   conflict result; read once per head and saved as `coverage`). The changed files are
+   `git diff --name-only --diff-filter=d origin/BASE...HEAD`. Each changed Story (a Story
+   of `findTests`) needs a check whose every criterion passed and whose batch source is
+   exactly this worktree's source (`savedStoryEvidence` of the
+   [runtime client](runtime-client.prompt.md): `pass` and `current`); each changed
+   `*.prompt.md` must be in the footprint (`captureSource` stories) of such a Story. The
+   job worktree must be at that head. Else red: "The PR body says "Runtime: PASS", but the
+   Runtime checks at head H do not cover FILES (the saved check of S is for an older
+   source: a stale Runtime batch). A PASS of other Stories does not count. … or write
+   "Runtime: not run (REASON)" when they have no Runtime check (for example a native-only
+   prompt or a Story with no Runtime test)." A PR that changes no prompt and no Story needs
+   no coverage. The reader is a port (`ports.runtimeEvidence`). **Prompt gate**
    (once per head, saved as `approvals {head, strict, problems}`): after a fetch of the
    base and the branch, each changed prompt of `git diff --name-status --find-renames
    origin/BASE...HEAD` (added, modified, renamed or copied; the new path) is read in a
@@ -565,6 +579,21 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    twice gives no valid verdict for the head ends as `no-result`; no test command
    ends `no-test-command`; a broken suite ends `suite-broken`. The tick posts each verdict once as a PR comment with
    the head, summary and must-fix list.
+   **The engine's own replay and formal run (T04):** with the review and the suite, at the
+   final head (once per head, saved as `vectors`): each changed `*.vectors.test.*` and
+   `*.formal.test.*` file, and each `*.vectors.test.*` file that names a changed scenario
+   file (a changed `.json` under a `test`, `tests`, `runtime` or `vectors` folder, by its
+   base name, `git grep` at the head), at most 40 each. It runs `node --test
+   --test-reporter=tap FILES` through the machine's suite queue in a clean checkout
+   (`worktrees/N-vectors`, the suite's dependency install, `CI=true`), watched by the
+   process rule (role `vectors`, like the suite). The TAP summary gives the counts and the
+   failing tests with their files. A failure is red ("Autopilot ran the replay and formal
+   tests that this change touches (FILES) at head H: F of N failed: TEST (FILE). The
+   Evidence line says vectors=CLAIM."). A pass makes a vectors claim other than `pass`, or a
+   formal claim other than `proved` or `bounded`, red (the claim is not true). A run with no
+   result is "not run (reason)": the engine then claims nothing. The merge note has the
+   line `- Replay and formal tests (Autopilot's run at H): STATE (P/N): FILES`, or `none
+   changed`, or `not run (REASON)`.
 4. Any red finding: stop the other checks. The **repair budget** (option B): repairs go on
    while they make progress. The findings of a round are each review must-fix (P1 and P2)
    and each other red line. Two findings are the same when they name the same `file:line`

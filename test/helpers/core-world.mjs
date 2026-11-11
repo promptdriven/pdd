@@ -147,7 +147,7 @@ export async function coreWorld(t, { repository = 'acme/widgets', settings = {},
       const job = { ...spec, pid: ++pid, token: `${spec.dir}/${spec.id}.spec.json`, log: join(spec.dir, `${spec.id}.log`), exit: join(spec.dir, `${spec.id}.exit.json`),
         result: join(spec.dir, `${spec.id}.result.json`), started: w.now() };
       // A suite starts admitted by the machine's suite queue, unless the test queues it (w.suiteQueued, then w.admit).
-      writeFileSync(job.log, spec.role === 'suite' ? (w.suiteQueued ? 'waiting for a check slot (position 1)\n' : 'running the full test suite\n') : `log of ${spec.id}\nError: pdd test returned no verdict\n`);
+      writeFileSync(job.log, ['suite', 'vectors'].includes(spec.role) ? (w.suiteQueued ? 'waiting for a check slot (position 1)\n' : 'running the full test suite\n') : `log of ${spec.id}\nError: pdd test returned no verdict\n`);
       w.started.push(job); w.alive.add(job.pid); return job;
     },
     read: job => ({ state: w.alive.has(job.pid) ? 'running' : existsSync(job.exit) ? 'exited' : 'dead',
@@ -199,6 +199,12 @@ export async function coreWorld(t, { repository = 'acme/widgets', settings = {},
     w.finish(issue, 'review', { result: { verdict, head: job.head, summary: `Review ${verdict}`, mustFix } });
   };
   w.suite = (issue, code = 0) => w.finish(issue, 'suite', { code });
+  // The engine's replay and formal run (T04): a node --test TAP summary, then the exit.
+  w.vectorsRun = (issue, { tests = 3, fail = 0, failed = [] } = {}) => {
+    const job = w.job(issue, 'vectors');
+    appendFileSync(job.log, [...failed.map((f, i) => `not ok ${i + 1} - ${f.name}\n  ---\n  location: '${job.cwd}/${f.file}:1:1'\n  ...`), `1..${tests}`, `# tests ${tests}`, `# pass ${tests - fail}`, `# fail ${fail}`, ''].join('\n'));
+    return w.finish(issue, 'vectors', { code: fail ? 1 : 0 });
+  };
   w.issue = (n, extra = {}) => w.github.add(n, { created: w.now() - (1000 - n) * 60000, updated: w.now() - 60000, ...extra });
   w.ports = (extra = {}) => ({
     gh: w.gh,
@@ -207,6 +213,15 @@ export async function coreWorld(t, { repository = 'acme/widgets', settings = {},
     listIssues: async () => { const r = await w.gh(['api', '--include', '--method', 'GET', `repos/${repository.toLowerCase()}/issues?state=open&per_page=100`]); return JSON.parse(r.stdout.split(/\r?\n\r?\n/).slice(1).join('\n\n')); },
     trusted: async row => ['acme', 'promptdriven'].includes(row.user?.login),
     checkBase: async () => ({ exitCode: 0, message: 'Base check ok.' }),
+    // The saved Runtime checks (T01). By default every changed Story and prompt is covered at the head; a test of the
+    // coverage rule sets w.runtimeEvidence.
+    runtimeEvidence: async cwd => {
+      if (w.runtimeEvidence) return w.runtimeEvidence(cwd);
+      const changed = spawnSync('git', ['diff', '--name-only', 'origin/main...HEAD'], { cwd, encoding: 'utf8' }).stdout.split('\n').filter(Boolean);
+      const stories = changed.filter(file => /^user_stories\/.+\.md$/.test(file));
+      return { stories: [{ story: 'user_stories/all.md', pass: true, current: true }, ...stories.map(story => ({ story, pass: true, current: true }))], storyFiles: stories,
+        footprints: { 'user_stories/all.md': changed.filter(file => file.endsWith('.prompt.md')) } };
+    },
     agentReady: async () => true,
     warn: () => {},
     ...extra,
