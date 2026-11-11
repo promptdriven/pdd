@@ -31,6 +31,7 @@ string `core`; any other value, or none, is `full`.
 | `ciStuckMinutes` | positive safe integer, default 360: how long CI may stay pending with no change; at least 3 timer ticks |
 | `maxJobHours` | positive safe integer, default 24: the floor of the backstop (see the process rule); no value turns it off |
 | `report` | `file`, `draft` or `off`, default `draft`: nothing is posted unless the operator chooses `file` |
+| `decisions` | `ask` or `decide`, default `decide` (T10, for the trial on test repositories; the release default comes later): `ask` asks a person ONE question only for a big decision; `decide` never asks, and every choice (big ones too) is listed in the PR |
 | `runtimeRepo` | `autopilot.reports.runtimeRepo` when it is `OWNER/NAME` (the Runtime report repository), else `null` |
 | `runtimeOwner` | `autopilot.reports.runtimeOwner` when it is a GitHub login (letters, digits and single inner hyphens, at most 39 characters), else `null`: the assignee of a Runtime report in `runtimeRepo` |
 | `repairs` | `autopilot.maxRepairs` (the old key `autopilot.repairs` is an alias): safe integer of at least 0, default 6, the safety cap of repairs for one job |
@@ -366,15 +367,25 @@ any other pdd (for example an older global install).
   author, and these rules: choose pdd-small-change, pdd-bug or pdd-feature, but make
   ONE PR with prompt, Story, tests and code; this is not a `pdd workflow run`, so no
   `pdd workflow` command, no Herdr, no person wait and no `steps/autopilot.md`. Rule 1
-  also carries the one-question rule of `steps/autopilot.md` (T10): when the issue does
-  not settle a product, contract or naming choice (options that the issue or a linked
-  open issue leaves open, a change to a documented behavior that the issue does not ask
-  for, a new public name or format that the issue does not give: a command, option,
-  setting, output field, file or message format that users or other programs see; an
-  internal helper, test or prompt file name is not such a choice), the job asks ONE
-  question (the `needs-person` result, which names the options) and opens no PR; a vague
-  issue is not a choice for the job; a clear issue, or a person's answer in the brief,
-  is built. The brief lists the open issues that the issue names by number and the titles
+  also carries the choice rule (T10, Serhan: a person is asked only for the big
+  decisions of the repository, never for small things). A choice is **big** only when
+  all of these are true: (a) the issue and the person's answers in the brief do not
+  settle it; (b) it has 2 or more reasonable answers with different results that users
+  see; (c) it is hard to undo or others depend on it: a public contract (a command,
+  option, config key, API, output or file format, stored data), a change or removal of
+  behavior that users rely on, or a product direction. An open trusted issue that asks
+  the same question (for example an open decision issue) also makes it big. Every other
+  choice is **small**: internal names, code structure, tests, message wording, docs
+  wording, small defaults that are easy to change. The job decides each small choice
+  itself and lists it in the PR body under `Choices Autopilot made:`, one line each with
+  its reason (`- CHOICE (REASON)`). With `decisions` `ask`, a big choice is ONE question
+  and no PR: the `needs-person` result with `question` (one plain question), `options`
+  (2 or 3 answers) and `recommended` (the letter of the option the job recommends), so a
+  person can answer with one letter; at most one question per issue. With `decisions`
+  `decide` (the default), the job never asks about a choice: it decides big choices
+  too and lists them first under `Choices Autopilot made:`, each marked `(big)`. A vague
+  issue is never a reason to ask about a small choice; a clear issue, or a person's
+  answer in the brief, is built. The brief lists the open issues that the issue names by number and the titles
   of up to 20 other open issues (not PRs, not this issue, only by trusted authors:
   `ports.trusted(row)`, read once per login and tick and shared with the ready rule; a
   failed read is not trusted), so the
@@ -458,29 +469,35 @@ any other pdd (for example an older global install).
   unowned file of the base, owned code that disagrees with its prompt; never a new
   prompt for an unowned file; never commit order; a missing test is a must-fix only
   with the surface and the result named; no test that only copies a value from the
-  diff); an honest Runtime line and no unrelated or unsafe change; and (6) **no choice
-  that the issue did not make (T10)**: a choice between options that the issue or a
-  linked open issue leaves open, a change to a documented behavior (a prompt, a Story or
-  the docs) that the issue does not ask for, or a new public name or format (as in rule
-  1) that the issue does not give, is a P2 must-fix with the word `decision:` after its
-  severity or its place (`P2 decision: …` or `P2 FILE:LINE decision: …`), and the
-  result's `question` is the one question for a person (it names the options). A person's
+  diff); an honest Runtime line and no unrelated or unsafe change; and (6) **the choices
+  (T10)**: every choice that the issue did not settle is listed under `Choices Autopilot
+  made:` with its reason; a missing or wrong line is a P2 must-fix (fix the list), never a
+  decision item. A small choice (rule 1) is never a decision item. With `decisions`
+  `ask`, a big choice (rule 1: all of a, b and c, or an open trusted issue that asks the
+  same question) that the job made instead of asking is a P2 must-fix with the word
+  `decision:` after its severity or its place (`P2 decision: …` or `P2 FILE:LINE decision:
+  …`), and the result's `question`, `options` (2 or 3) and `recommended` (a letter) are
+  the one question for a person. With `decisions` `decide`, the brief has no decision
+  item: the reviewer only checks the list (a big choice is listed and marked `(big)`). A person's
   answer to an earlier question is in the brief (the same answer text as the build), so a
   settled choice is not asked again. The brief has the linked open issues: each open
   issue (not a PR, not this issue, only by trusted authors, from the tick's issue list)
   that the issue title, the issue body or the PR body names by number (`#N`, `REPO#N` or
   its URL), or whose title or body names a file that the PR changes by its full path, at
   most 5, each body cut to 2,000 characters; or "(none)". A Runtime FAIL line in the PR body means a FAIL verdict. It writes no files and makes no GitHub write. Its
-  result is `{verdict: PASS|FAIL, head, summary, mustFix[], question?}`. **A decision is a
-  question, not a repair:** when a blocking item of a FAIL is a decision item (P1 or P2,
-  then the word `decision:` within its first 200 characters), the merge check ends the
-  job as **needs a person** (below), in auto and in observe mode (a question is not a
-  merge; observe mode only leaves out the merge), with that one question (the
+  result is `{verdict: PASS|FAIL, head, summary, mustFix[], question?, options?,
+  recommended?}`. **A decision is a question, not a repair (only with `decisions`
+  `ask`):** when a blocking item of a FAIL is a decision item (P1 or P2, then the word
+  `decision:` within its first 200 characters), the merge check ends the job as **needs
+  a person** (below), in auto and in observe mode (a question is not a merge; observe
+  mode only leaves out the merge), with that one question (the
   reviewer's `question`, else "The review found a choice that issue #N did not make: ITEM.
   Which option do you want?"), not a repair round, also when other items exist (the
   answer can change the whole change; the next build reads the answer and the review
   runs again). The open PR gets one note (`<!-- pdd:autopilot-core:needs-decision-pr:P -->`):
-  it waits for the answer and does not merge; the next build closes it as usual. Each must-fix item starts
+  it waits for the answer and does not merge; the next build closes it as usual. With
+  `decisions` `decide`, a decision item is an ordinary must-fix (a repair), never a
+  question. Each must-fix item starts
   with its severity and place: `P1 file:line …` (wrong behavior or unsafe), `P2 file:line …`
   (fix before the merge) or `P3 file:line …` (a follow-up); a PASS lists only P3 items
   (the scoped check is asked the same). **Fail closed:** an item is a follow-up only when
@@ -525,15 +542,20 @@ digits (an optional `#`); it becomes an integer above 0. The head is 40 hex digi
 any case and is saved in lower case. Any other PR value is no result. A `failed`
 result ends with the agent's cause; anything else ends with `no-result`.
 
-**Needs a person.** A result `{"outcome": "needs-person", "question"}` with a nonblank
-question counts as a job result (`produced`) and goes through the resumable END
-steps with a question instead of a cause: read the claim again before each write
-(hand over when another machine owns it); post one issue comment `Autopilot needs a
-decision from a person to go on with this issue:`, the question as a `> ` quote line,
-and "Please answer in a comment, then remove the `pdd:needs-decision` label. The next
-Autopilot job reads this question and your answer.", with the marker
-`<!-- pdd:autopilot-core:question:N:JOB-ID -->` (found again after an uncertain post);
-add `pdd:needs-decision` (never `pdd:stuck`); delete this machine's claim comment and
+**Needs a person.** A result `{"outcome": "needs-person", "question", "options"?,
+"recommended"?}` with a nonblank question counts as a job result (`produced`) and goes
+through the resumable END steps with a question instead of a cause: read the claim again
+before each write (hand over when another machine owns it); post one issue comment
+`Autopilot needs a decision from a person to go on with this issue:`, the question as
+`> ` quote lines, and "Please answer in a comment, then remove the `pdd:needs-decision`
+label. The next Autopilot job reads this question and your answer.", with the marker
+`<!-- pdd:autopilot-core:question:N:JOB-ID -->` (found again after an uncertain post). The question text
+(T10 format) is the plain question on one line, then, with 2 or 3 nonblank options,
+one line per option `A) OPTION`, `B) …`, `C) …`, the recommended one ending with
+` (recommended)` (`recommended` is a letter, a 1-based number or the option text), and
+the line `Reply with one letter, for example: X` (X the recommended letter, else A);
+with fewer than 2 or more than 3 options the question goes alone. The same format is
+used for a review decision. Then add `pdd:needs-decision` (never `pdd:stuck`); delete this machine's claim comment and
 remove `pdd:working`; clean up locally with outcome `needs-person`. The slot is free.
 The person answers and removes the label; **the label removal is the signal**, a
 comment alone changes nothing. When the core claims an issue with comments, it reads
@@ -944,13 +966,15 @@ with the machine id.
 ## Machine settings
 
 `state.engine` (`core` or `full`, saved by `pdd autopilot start --engine`),
-`state.label` (saved by `start --label`) and `state.mode` (saved by `start --mode`)
-win over `pdd.json` for this repository on this machine. The launcher applies them;
-`coreStatus` takes `sources: {engine, label, mode, report}` (`machine` or `pdd.json`) and
-names the source: `engine core (this machine: pdd autopilot start --engine core)` or
-`engine core (pdd.json autopilot.engine)`, `only issues with LABEL (this machine)`
-or `(pdd.json)`, `mode M (this machine)` and `reports R (this machine)`; mode
-`observe` adds `(every check, no merge)`.
+`state.label` (saved by `start --label`), `state.mode` (saved by `start --mode`) and
+`state.decisions` (saved by `start --decisions`) win over `pdd.json` for this repository
+on this machine. The launcher applies them; `coreStatus` takes `sources: {engine, label,
+mode, report, decisions}` (`machine` or `pdd.json`) and names the source: `engine core
+(this machine: pdd autopilot start --engine core)` or `engine core (pdd.json
+autopilot.engine)`, `only issues with LABEL (this machine)` or `(pdd.json)`, `mode M
+(this machine)`, `reports R (this machine)` and `decisions D (this machine)` (the Jobs
+line has `; decisions D` after the reports); mode `observe` adds `(every check, no
+merge)`.
 
 ## Ports
 

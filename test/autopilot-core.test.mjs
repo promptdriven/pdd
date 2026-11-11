@@ -22,9 +22,9 @@ test('settings: engine switch, defaults and bounded values', () => {
   assert.equal(autopilotEngine({ autopilot: { engine: 'core' } }), 'core');
   assert.equal(autopilotEngine({ autopilot: { engine: 'turbo' } }), 'full');
   assert.deepEqual(coreSettings({ autopilot: { mode: 'auto', engine: 'core' } }), {
-    engine: 'core', mode: 'auto', trust: [], runs: 2, label: null, quietMinutes: 45, ciStuckMinutes: 360, maxJobHours: 24, report: 'draft', runtimeRepo: null, runtimeOwner: null, repairs: 6, testCommand: null });
+    engine: 'core', mode: 'auto', trust: [], runs: 2, label: null, quietMinutes: 45, ciStuckMinutes: 360, maxJobHours: 24, report: 'draft', decisions: 'decide', runtimeRepo: null, runtimeOwner: null, repairs: 6, testCommand: null });
   const custom = coreSettings({ autopilot: { mode: 'auto', engine: 'core', runs: 3, label: 'pdd:autopilot', quietMinutes: 30, report: 'file', repairs: 0, testCommand: 'make check', trust: ['Dana'] } });
-  assert.deepEqual(custom, { engine: 'core', mode: 'auto', trust: ['Dana'], runs: 3, label: 'pdd:autopilot', quietMinutes: 30, ciStuckMinutes: 360, maxJobHours: 24, report: 'file', runtimeRepo: null, runtimeOwner: null, repairs: 0, testCommand: 'make check' });
+  assert.deepEqual(custom, { engine: 'core', mode: 'auto', trust: ['Dana'], runs: 3, label: 'pdd:autopilot', quietMinutes: 30, ciStuckMinutes: 360, maxJobHours: 24, report: 'file', decisions: 'decide', runtimeRepo: null, runtimeOwner: null, repairs: 0, testCommand: 'make check' });
   const invalid = coreSettings({ autopilot: { mode: 'auto', engine: 'core', runs: 0, quietMinutes: -1, report: 'loud', repairs: 1.5, label: '' } });
   assert.deepEqual([invalid.runs, invalid.quietMinutes, invalid.report, invalid.repairs, invalid.label], [2, 45, 'draft', 6, null]);
   assert.equal(coreSettings({ autopilot: { jobTimeoutMinutes: 120 } }).jobTimeoutMinutes, undefined, 'there is no fixed time limit');

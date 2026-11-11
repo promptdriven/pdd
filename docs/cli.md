@@ -166,7 +166,7 @@ Run Autopilot commands inside the repo folder. Each repo has its own Autopilot o
 | Command | What it does |
 |---|---|
 | `pdd autopilot doctor` | Read-only prerequisite checks, one line and a command per item. No GitHub writes or AI calls. Exit 1 for a required failure, 0 when only warnings remain |
-| `pdd autopilot start [--runs N] [--checks N] [--engine core\|full] [--label NAME] [--mode auto\|observe\|off] [--report file\|draft\|off] [--intake off\|shadow] [--resume-custody FILE]` | Check sign-ins and the running pdd version, open a dedicated interactive Herdr session (not with the [core engine](#core-engine)) and check for work immediately. A user timer checks again every 30 minutes (every 10 minutes with the core engine; `pdd autopilot status` shows the interval). `--runs` overrides the open-run cap. `--checks` overrides heavy-check slots. Omission uses machine capacity. `--engine core` or `--engine full`, `--label NAME`, `--mode auto\|observe\|off` and `--report file\|draft\|off` and `--intake off\|shadow` (core engine only) save this machine's engine, opt-in label, mode, report mode and [intake mode](#intake-cards-shadow) for this repo; they win over `pdd.json`, and a later start without them keeps them. The report mode is `draft` unless you choose `--report file`. `--resume-custody` supplies the verified original-owner projection for explicit recovery |
+| `pdd autopilot start [--runs N] [--checks N] [--engine core\|full] [--label NAME] [--mode auto\|observe\|off] [--report file\|draft\|off] [--decisions ask\|decide] [--intake off\|shadow] [--resume-custody FILE]` | Check sign-ins and the running pdd version, open a dedicated interactive Herdr session (not with the [core engine](#core-engine)) and check for work immediately. A user timer checks again every 30 minutes (every 10 minutes with the core engine; `pdd autopilot status` shows the interval). `--runs` overrides the open-run cap. `--checks` overrides heavy-check slots. Omission uses machine capacity. `--engine core` or `--engine full`, `--label NAME`, `--mode auto\|observe\|off`, `--report file\|draft\|off`, `--decisions ask\|decide` and `--intake off\|shadow` (core engine only) save this machine's engine, opt-in label, mode, report mode, decision mode and [intake mode](#intake-cards-shadow) for this repo; they win over `pdd.json`, and a later start without them keeps them. The report mode is `draft` unless you choose `--report file`. `--resume-custody` supplies the verified original-owner projection for explicit recovery |
 | `pdd autopilot stop` | Disable this repo's timer on this machine and let the current agent step finish |
 | `pdd autopilot audit RUN PR` | Audit a confirmed automatic merge once with a fresh configured agent. Save OK, CONCERN or BAD and the separate revert recommendation with the run. Post the evidence once on the issue. BAD opens a revert PR only when recommended; otherwise it keeps the merge and reopens the issue with the missing parts. One decision alert states the recommendation and choices. Unknown external outcomes require inspection before any retry. |
 | `pdd autopilot check-base RUN PR` | Read the saved run and exact PR target, then check that its base contains the current default branch and newest published release tag, including prereleases. A refusal explains the reason and exits 1. Use this before an automatic merge and after it for the base audit. It makes no GitHub writes |
@@ -1483,7 +1483,16 @@ opt-in label and `--mode auto|observe|off` the mode the same way, on this machin
 only (`pdd autopilot observe` changes `pdd.json` instead). The machine values win over
 `pdd.json`, and `pdd autopilot status` says where the engine, the label and the mode
 come from. `--report file|draft|off` sets where this machine's problem reports go,
-the same way. `--mode off` saves the mode and stops the timer of this machine. In
+the same way. `--decisions ask|decide` (or `autopilot.decisions` in `pdd.json`) sets
+whether a job may ask a person a question: `ask` asks only for a big decision of the
+repository (the issue does not settle it, it has 2 or more reasonable answers that
+users see, and it is hard to undo or others depend on it: a public contract, behavior
+that users rely on, or a product direction), as one plain question with 2 or 3 options
+and a recommended one, so you can answer with one letter; `decide`, the default for
+now, never asks. In both modes Autopilot decides small things itself (internal names,
+code structure, tests, wording, small defaults) and lists each choice in the PR under
+"Choices Autopilot made", with its reason; with `decide`, big choices are listed there
+too, marked "(big)". `--mode off` saves the mode and stops the timer of this machine. In
 `observe` mode the core does everything except the merge (it also records the
 operator approval of changed prompts, with "in observe mode" in its words; in a
 `strict_approvals` repository it asks no person and lists those prompts in its note): when all checks pass, it
@@ -1601,12 +1610,13 @@ test) is red once per job; after that Autopilot never repeats it: the merge comm
 the history write that kind as `not-run (Autopilot could not check: reason)`, and
 Autopilot files one report.
 
-A build job asks one question instead of choosing when the issue does not settle a
-product, contract or public naming choice (its brief lists the other open issues by
-trusted authors, so it can see an open decision); it opens no PR then. The fresh review also checks that the
-change makes no such choice (for example one option of an open decision issue that the
-change touches). Such a finding is not repaired: Autopilot asks the one question
-instead (in `observe` mode too), and the PR waits for the answer. The next build and
+With `--decisions ask`, a build job asks one question instead of choosing when it meets
+a big decision (its brief lists the other open issues by trusted authors, so it can see
+an open decision); it opens no PR then. The fresh review also checks the PR's list of
+choices, and with `ask` it flags a big choice that the job made instead of asking (for
+example one option of an open decision issue that the change touches). Such a finding
+is not repaired: Autopilot asks the one question instead (in `observe` mode too), and
+the PR waits for the answer. The next build and
 review read the answer, so a settled choice is not asked again.
 
 When a job needs a person's decision, Autopilot posts its one question on the issue,
