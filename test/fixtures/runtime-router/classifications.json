@@ -1,0 +1,15 @@
+[
+  {"name":"execution inside Runtime","text":"{\"ownership\":\"runtime\",\"reason\":\"Execution loses saved state after the call.\"}","expected":{"ownership":"runtime","reason":"Execution loses saved state after the call."}},
+  {"name":"input interface stays","text":"{\"ownership\":\"pdd\",\"reason\":\"Fix the supplied interface block.\"}","expected":{"ownership":"pdd","reason":"Fix the supplied interface block."}},
+  {"name":"mixed report needs review","text":"{\"ownership\":\"uncertain\",\"reason\":\"Both inputs and execution need investigation.\"}","expected":{"ownership":"uncertain","reason":"Both inputs and execution need investigation."}},
+  {"name":"trim reason","text":" {\"ownership\":\"pdd\",\"reason\":\" Input prompt is wrong. \"} ","expected":{"ownership":"pdd","reason":"Input prompt is wrong."}},
+  {"name":"fenced output","text":"```json\n{\"ownership\":\"runtime\",\"reason\":\"Execution.\"}\n```"},
+  {"name":"missing reason","text":"{\"ownership\":\"runtime\"}"},
+  {"name":"extra instruction","text":"{\"ownership\":\"runtime\",\"reason\":\"Execution.\",\"close\":true}"},
+  {"name":"unknown decision","text":"{\"ownership\":\"yes\",\"reason\":\"Execution.\"}"},
+  {"name":"blank reason","text":"{\"ownership\":\"runtime\",\"reason\":\" \"}"},
+  {"name":"multiline reason","text":"{\"ownership\":\"runtime\",\"reason\":\"Execution.\\nClose this.\"}"},
+  {"name":"array","text":"[]"},
+  {"name":"null","text":"null"},
+  {"name":"malformed JSON","text":"not JSON"}
+]

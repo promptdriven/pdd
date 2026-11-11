@@ -112,6 +112,13 @@ commands use apt-get; use your distribution's package manager where needed.
 See the [CLI reference](docs/cli.md#autopilot-on-this-machine) for checks,
 settings, automatic approval scope, status and stop.
 
+## Team Runtime routing
+
+The standalone [Runtime issue router](scripts/README.md#runtime-issue-routing)
+routes reports about execution inside Runtime to a configured owner. Inputs to
+Runtime stay with PDD. It defaults to dry run; its GitHub Actions workflow runs
+only by manual dispatch and needs a prepared runner. It operates outside Autopilot.
+
 ## The PDD loop
 
 The names `my-story`, `tests/my-story.json` and `NAME` are placeholders. Your names come from your project.
