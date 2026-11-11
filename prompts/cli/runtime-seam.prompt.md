@@ -29,6 +29,9 @@ Because `src/runtime/` imports nothing outside `src/runtime/`, `src/runtime-seam
 
 Expose every public binding of [`src/runtime/index.mjs`](runtime-entry.prompt.md), preserving lazy loading, synchronous vs async signatures, parameter handling, return values, thrown errors, and port forwarding:
 
+Forward additional package API bindings from that entry as well; keep the explicit
+host-adapted bindings below authoritative over forwarded bindings of the same name.
+
 - `checkRuntimeHealth`, `createSavedStoryEvidenceReader`, `loadRuntimeClient`, `readTryOwner`, `runCheck`, `runTry`
 - `LIMITS`, `captureSource`, `checkInput`, `findTests`, `gitFiles`, `interfaceBlocks`, `interfaceSchemaProblems`, `isSecretPath`, `isStoryPath`, `preflight`, `promptRefusal`, `promptSchemaRefusals`, `proseSha256`, `readPrompt`, `sha256`, `sourceFilePort`
 - `PROMPT_TESTS_LABEL`, `PROMPT_TESTS_WORDS`, `causeText`, `cleanText`, `storyLines`
@@ -63,6 +66,6 @@ The seam holds no mutable request state and loads zero additional pdd modules at
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"native-only","status":"draft","prose_sha256": "a7665bd1356ef06a9ad2fc784648f984846313cad1021dd1d5bab5ab7a1e4b14","reason":"Re-exports live JavaScript ESM module bindings from src/runtime/index.mjs as pdd's sole import seam, which bound Runtime ports cannot fake."}
+{"kind":"native-only","status":"draft","prose_sha256": "a7fc39641bd2d0e3f5ee60c3fd90174613666dc2c280c1a3a8ce97fb14b9921a","reason":"Re-exports live JavaScript ESM module bindings from src/runtime/index.mjs as pdd's sole import seam, which bound Runtime ports cannot fake."}
 ```
 </details>
