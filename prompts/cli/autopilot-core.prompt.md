@@ -780,8 +780,9 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    (`node --test-reporter=tap -- 'ABSOLUTE-FILE' 2>&1`; no glob reads the path, so
    brackets, braces such as `{a,b}`, stars, a leading `-` and such characters in the
    checkout path all work, checked on Node 22.23.2), then the marker line `# pdd-autopilot-
-   NONCE: KIND I exit CODE` (NONCE a random hex per run, KIND `vectors` or `formal`, I the
-   file's index in its kind). All files of the run go through one awk filter, so the
+   NONCE: KIND I exit CODE` (NONCE a random hex per run, KIND `vectors`, `formal`,
+   `linked`, `control-vectors` or `control-formal` (below), I the file's index in its
+   kind). All files of the run go through one awk filter, so the
    bound is for the whole log: after 4 MB of output it passes the marker lines, TAP
    result and location lines cut to 300 characters for 1 MB more, and once `# pdd-
    autopilot: output cut after 4194304 bytes`; it prints no other line, and keeps only
@@ -827,6 +828,39 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    20, then "and N more") and `- Formal tests (…)`, `- Not run by Autopilot
    (REASON): FILES` for other runners, or `- Replay and formal tests (Autopilot's run):
    none changed`.
+   **Replay files that import a changed module, and the control (#3227 fix 2):** the run
+   also has each `*.vectors.test.*` file of the head that imports a changed code module
+   by a relative path (a `from`, `import(` or `require(` string that resolves to the
+   changed file; the candidates come from `git grep -z -l -F` of the module's file name;
+   at most 100; a file that is already in the set is not repeated). Their KIND is
+   `linked`. A failure is red like the others ("Autopilot ran the replay tests that
+   import a changed module (FILES) at head H: …"), a file with no result is only shown,
+   and no Evidence claim counts them (the agent's `vectors=` counts the changed files and
+   the files that read a changed scenario). The note has `- Replay tests that import a
+   changed module (Autopilot's run at H): …`. A code file is a changed file with a code
+   extension (`.js`, `.mjs`, `.cjs`, `.ts`, `.mts`, `.cts`, `.jsx`, `.tsx`, `.py`) that is
+   not in a `test`, `tests`, `__tests__`, `spec` or `fixtures` folder and not named
+   `*.test.*` or `*.spec.*`. When the PR changes code files and the run has `vectors` or
+   `formal` files, the same command runs those files a second time, as the control: in a
+   second clean checkout of the head (`worktrees/N-control`) in which each changed code
+   file has its content at the merge base (`git merge-base origin/BASE HEAD`; a file that
+   the merge base does not have is removed). The control KINDS are `control-vectors` and
+   `control-formal`, with their own markers; a lost control file is a runner failure
+   like any other. A base merge makes a new head, so the control runs again against the
+   new merge base. The note has `- Control (the same tests on the merge-base code of
+   CODE, merge base B): F of N failed (the tests show the change)`, or `… all N passed
+   (the tests do not show the change)`, `… no file failed, but N of M gave no result`, or
+   `… not run (REASON)`. A control failure is
+   never red. When every control file passed, the Evidence line has a positive claim of
+   the kind (`vectors=pass`, `formal=proved` or `bounded`), and a Path line uses path a,
+   c or e (a behavior change; with path b the contract stays, so a pass on the base is
+   expected), the engine asks once per job, and only while a repair is left: "Autopilot
+   ran the replay and formal tests of this change (FILES) on the merge-base code of the
+   changed code files (CODE, merge base B): all N pass there too, so they do not show
+   the change. Add a test that fails on the merge-base code and passes at this head.
+   When the base already has the fix (for example after a base merge), keep the base's
+   code, keep only what the base does not have, and say so in the PR body." The record
+   keeps the linked and control results.
    **The evidence record (#3227 fix 3):** each merge check writes one engine record per
    head, `logs/N-evidence-HEAD.json` (`pdd.core-evidence.v1`, written only when it
    changes): the PR's Runtime lines and claims, the T01 result with the saved rows that

@@ -1238,3 +1238,83 @@ test('E64 (#3227 fix 1) the saved-check reader: anyRoot reads the batches of oth
   assert.deepEqual((await read({ anyRoot: true, limit: 1 })).stories.map(row => row.pass), [true]);
   assert.deepEqual((await runtime.savedStoryEvidence({ root: second, comparisonRoot: second }, { env })).stories.map(row => Object.keys(row).sort()), [['at', 'current', 'pass', 'result', 'story']], 'without withTests the rows stay as before');
 });
+
+// ---- #3227 fix 2: replay files that import a changed module, and the control -----------------------------------
+const MODULE = 'src/duration.mjs', REPLAY = 'test/duration.vectors.test.mjs';
+const replayOf = (name, want = 1) => `import test from 'node:test';\nimport assert from 'node:assert';\nimport { seconds } from '../src/duration.mjs';\ntest(${JSON.stringify(name)}, () => { assert.equal(seconds(60), ${want}); });\n`;
+async function fix2World(t, { base, change, evidence = 'vectors=not-run; formal=not-applicable', path = 'e' }) {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  seed(w, base);
+  w.issue(17); await w.tick();
+  const cwd = w.job(17, 'build').cwd;
+  for (const [file, text] of Object.entries(change)) writeIn(cwd, file, text);
+  const line = `Evidence: runtime=not-run; ${evidence}; tests=pass (3/3)`, code = Object.keys(change).filter(file => file.startsWith('src/'));
+  const { pr, head } = w.build(17, { body: `Fixes #17.\n\n${NOT_RUN}\n${line}\nPath: ${path} — ${code.join(', ')} — unowned — no contract change — Test: ${REPLAY}`, result: { promptChanged: false, evidence: line, adopt: path === 'e' ? code : [] } });
+  await w.tick(); w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
+  return { w, pr, head, cwd };
+}
+test('E65 (#3227 fix 2, case 2) a replay file that imports a changed module runs too: a failure is red, and no claim counts it', async t => {
+  const base = { [MODULE]: 'export const seconds = n => n / 60;\n', [REPLAY]: replayOf('N3'), 'test/other.vectors.test.mjs': "import test from 'node:test';\n// duration.mjs is named in a comment only\ntest('x', () => {});\n" };
+  let { w, pr } = await fix2World(t, { base, change: { [MODULE]: 'export const seconds = n => n / 30;\n' } });
+  const job = w.job(17, 'vectors');
+  assert.deepEqual(w.replayFiles(job).map(f => f.kind), ['linked'], 'only the importing file, and no control (no vectors or formal file of the change)');
+  assert.ok(job.args.at(-3).includes(`/${REPLAY}'`));
+  w.vectorsRun(17, { linked: { tests: 1, fail: 1, failed: [{ name: 'N3', file: REPLAY }] } }); await w.tick();
+  assert.match(w.job(17, 'repair')?.input ?? '', /Autopilot ran the replay tests that import a changed module \(test\/duration\.vectors\.test\.mjs\) at head [0-9a-f]{7}: 1 of 1 failed: N3 \(duration\.vectors\.test\.mjs\)\./);
+  assert.deepEqual(w.github.merges, []);
+  // A pass merges: the agent's vectors=not-run stays fine (no claim counts these files), and the note shows the run.
+  ({ w, pr } = await fix2World(t, { base, change: { [MODULE]: 'export const seconds = n => n / 60 + 0;\n' } }));
+  w.vectorsRun(17, {}); await w.tick(); await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number]);
+  assert.match(mergeNote(pr), /- Replay tests that import a changed module \(Autopilot's run at [0-9a-f]{7}\): pass \(1\/1\): test\/duration\.vectors\.test\.mjs pass \(1\/1\)/);
+});
+
+test('E66 (#3227 fix 2, case 3) the control runs the changed tests on the merge-base code: a failure there shows the change; a pass there is asked once', async t => {
+  const base = { [MODULE]: 'export const seconds = n => n / 30;\n' };
+  const change = { [MODULE]: 'export const seconds = n => n / 60;\n', [REPLAY]: replayOf('60 s is 1 min'), 'src/new-helper.mjs': 'export const x = 1;\n' };
+  const claim = 'vectors=pass (1/1); formal=not-applicable';
+  // 1. The control fails on the merge-base code: the tests show the change; the PR merges with the note line.
+  let { w, pr } = await fix2World(t, { base, change, evidence: claim });
+  const job = w.job(17, 'vectors'), command = job.args.at(-3), control = join(w.root, 'worktrees', '17-control');
+  assert.deepEqual(w.replayFiles(job).map(f => f.kind), ['vectors', 'control-vectors']);
+  assert.ok(command.includes(`'${control}/${REPLAY}'`), command);
+  assert.equal(readFileSync(join(control, MODULE), 'utf8'), base[MODULE], 'the changed code file has its merge-base content');
+  assert.ok(!existsSync(join(control, 'src/new-helper.mjs')), 'a code file that the merge base does not have is removed');
+  assert.equal(readFileSync(join(control, REPLAY), 'utf8'), change[REPLAY], "the tests are the head's");
+  w.vectorsRun(17, { tests: 1, control: { 'control-vectors': { tests: 1, fail: 1, failed: [{ name: '60 s is 1 min', file: REPLAY }] } } }); await w.tick(); await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number]);
+  assert.match(mergeNote(pr), /- Control \(the same tests on the merge-base code of src\/duration\.mjs, src\/new-helper\.mjs, merge base [0-9a-f]{7}\): 1 of 1 failed \(the tests show the change\)/);
+  // 2. The control passes too: asked once; the repair keeps it; then the PR merges and the note says so.
+  ({ w, pr } = await fix2World(t, { base, change, evidence: claim }));
+  w.vectorsRun(17, { tests: 1 }); await w.tick();
+  assert.match(w.job(17, 'repair')?.input ?? '', /Autopilot ran the replay and formal tests of this change \(test\/duration\.vectors\.test\.mjs\) on the merge-base code of the changed code files \(src\/duration\.mjs, src\/new-helper\.mjs, merge base [0-9a-f]{7}\): all 1 pass there too, so they do not show the change\. Add a test that fails on the merge-base code and passes at this head\./);
+  w.build(17, { role: 'repair', write: false }); await w.tick(); w.review(17, 'PASS'); w.suite(17, 0); w.vectorsRun(17, { tests: 1 }); await w.tick(); await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number]);
+  assert.match(mergeNote(pr), /- Control \(.*\): all 1 passed \(the tests do not show the change\)/);
+  // 3. Path b (the contract stays): a pass on the base is expected, so no question.
+  ({ w, pr } = await fix2World(t, { base, change, path: 'b', evidence: claim }));
+  w.vectorsRun(17, { tests: 1 }); await w.tick(); await w.tick();
+  assert.equal(w.job(17, 'repair'), undefined, w.job(17, 'repair')?.input);
+  assert.deepEqual(w.github.merges, [pr.number]);
+});
+
+test('E67 (#3227 fix 2, real command) the control checkout runs the head tests on the merge-base code and links the installed dependencies', async t => {
+  const base = { [MODULE]: 'export const seconds = n => n / 30;\n' };
+  const change = { [MODULE]: 'export const seconds = n => n / 60;\n', [REPLAY]: replayOf('60 s is 1 min') };
+  const { w, pr } = await fix2World(t, { base, change, evidence: 'vectors=pass (1/1); formal=not-applicable' });
+  const job = w.job(17, 'vectors');
+  mkdirSync(join(job.cwd, 'node_modules'), { recursive: true });        // what the queue's npm ci leaves in the run checkout
+  const run = await new Promise(done => {
+    const child = spawn('/bin/bash', ['-c', job.args.at(-3)], { cwd: job.cwd, detached: true, env: { PATH: process.env.PATH, HOME: process.env.HOME, CI: 'true', LANG: 'C' } });
+    let out = '';
+    child.stdout.on('data', chunk => { out += chunk; }); child.stderr.on('data', chunk => { out += chunk; });
+    const timer = setTimeout(() => { try { process.kill(-child.pid, 'SIGKILL'); } catch {} }, 90_000);
+    child.on('close', status => { clearTimeout(timer); done({ status, out }); });
+  });
+  assert.ok(statSync(join(w.root, 'worktrees', '17-control', 'node_modules')).isDirectory(), 'the control checkout links the dependencies');
+  appendFileSync(job.log, run.out);
+  w.finish(17, 'vectors', { code: run.status }); await w.tick(); await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number], w.job(17, 'repair')?.input);
+  assert.match(mergeNote(pr), /- Replay tests \(Autopilot's run at [0-9a-f]{7}\): pass \(1\/1\)/);
+  assert.match(mergeNote(pr), /- Control \(the same tests on the merge-base code of src\/duration\.mjs, merge base [0-9a-f]{7}\): 1 of 1 failed \(the tests show the change\)/);
+});
