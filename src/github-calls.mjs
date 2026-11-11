@@ -1,4 +1,4 @@
-// Generated from prompts/cli/github-calls.prompt.md (sha256: fbb5690ad3092e784178e1b66b1b52a36393276c8b3bb3a50e30ed155ff46ae2).
+// Generated from prompts/cli/github-calls.prompt.md (sha256: 1408163108cc4263bf6d47ffec18abefc2893dda8b984f0a16ccdb7c923dea6d).
 import * as nativeFs from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
@@ -297,6 +297,14 @@ export function githubFloorGuard({ floor = GITHUB_FLOOR, entries = [], now = Dat
     },
     get stopped() { return stopped; },
   };
+}
+
+// Every page of a list endpoint, with no --slurp (gh before 2.48 has no --slurp): each item is one line of JSON.
+// `pick` is an optional jq projection of one item, for example '{tag_name, draft, published_at}'.
+export const githubListArgs = (pick = '.') => ['--paginate', '--jq', `.[] | ${pick} | tojson`];
+export function githubListItems(stdout) {
+  // A line that is a whole JSON list (a gh or a double that ignored --jq) gives its items.
+  return String(stdout ?? '').split('\n').filter(line => line.trim()).flatMap(line => { const value = JSON.parse(line); return Array.isArray(value) ? value : [value]; });
 }
 
 // GitHub's ETag covers only the body, and a 304 reply has no Link header. A full page without a next page keeps its

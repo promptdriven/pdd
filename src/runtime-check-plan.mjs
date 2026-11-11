@@ -1,7 +1,8 @@
-// Generated from prompts/cli/runtime-check-plan.prompt.md (sha256: 54b8fa31a87d406f1e42a8c3d0e7a2916a95369df65685ca0e5a406c71cf4d37).
+// Generated from prompts/cli/runtime-check-plan.prompt.md (sha256: 3e49063f161439148454d19932d224952316c3dd597e10e0c24f0313ff3f89dd).
 import { spawnSync } from 'node:child_process';
 import { captureSource, readPrompt, sourceFilePort } from './runtime-preflight.mjs';
 import { resultOutcome } from './runtime-outcome.mjs';
+import { headerPrompts } from './file-owner.mjs';
 import { allowsRuntimePath, loadRuntimeWorkspace } from './runtime-workspace.mjs';
 
 const sorted = values => [...new Set(values)].sort();
@@ -39,8 +40,7 @@ export function buildCheckPlan({ root, found, selected, rows, full, base = 'HEAD
       // Validate the permitted source path even when its working file is absent.
       if (deleted.has(path)) source.stat({path});
       const content = deleted.has(path) ? git(['show', `${base}:${path}`]) : source.read({path}).content;
-      const header = content.slice(0, 4096).match(/Generated from\s+([^\s()]+\.prompt\.md)/);
-      if (header) own(header[1], path);
+      for (const prompt of headerPrompts(content)) own(prompt, path);
     } catch { /* Unproved deleted ownership keeps target coverage conservative. */ }
   }
   if (changed?.length && found.visible.has('pdd-bindings.json')) {

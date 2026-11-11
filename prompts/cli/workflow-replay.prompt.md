@@ -16,6 +16,9 @@ tracked file [path,"missing"]. Include uncommitted and untracked non-ignored fil
 
 pinReplayVectors receives the prompt area's selected original scenario paths at approved publication. Return
 an anchor containing version pdd.replay-vectors.v1, each raw file SHA256, parsed scenario snapshot and original step/check identity,
+read with the [exact scenario number](scenario-json.prompt.md) rules. The snapshot stays the ordinary JSON value. A vector
+with a whole number above 2^53 adds `exact_integers`: its `{pointer, value}` digit rows, so the saved anchor keeps them exactly;
+a vector without one has no such field,
 or an explicit blocked anchor with a reason. No paths or no checks is not_replayed. Paths must be unique,
 Git-visible, canonical repo-relative regular files with no symlink ancestors or hardlinks; refuse missing,
 empty, unreadable or malformed scenarios. Limit200files,10MiB aggregate vector bytes,2MiB per file and10000
@@ -45,12 +48,10 @@ one of its links is in the changed area. Use no other link: no folder, name, pro
 pdd-bindings.json adds no links.
 
 A header prompt is the prompt that a changed file names in its PDD header, in its base blob or its current file.
-The header is one of the first 10 lines: an optional comment opener (`//`, `#`, `--`, `;`, `/*`, `*`, `<!--`,
-`"""` or `'''`), then `Generated from PATH`, then optionally ` (sha256: HEX)`, then optionally `.` and a closer
-(`*/`, `-->`, `"""` or `'''`). PATH is a canonical repository-relative path that ends in `.prompt.md`. Other
-text, such as `Generated from the canonical m1_policy prompt`, is no header. Skip header lines longer than
-1,100 characters before parsing them. The Stories of a header prompt or a changed prompt file (the
-story_path of each base scenario that links to it) are also in the changed area.
+Read headers only with the shared [header reader](file-owner.prompt.md#generated-from-header) (`headerPrompts`):
+any complete line in the first 4 KiB, with its exact form and line limit. Other text, such as
+`Generated from the canonical m1_policy prompt`, is no header. The Stories of a header prompt or a changed
+prompt file (the story_path of each base scenario that links to it) are also in the changed area.
 
 The base commit's root `pdd.json` selects the base scenarios with `replay.base_scenarios`: `linked` (the rule
 above) or `all` (every base scenario belongs). A missing file, `replay` or `base_scenarios` means `linked`. A
@@ -252,6 +253,8 @@ the formal result for this record".
 Keep the original anchor for comparison; never replace it or approve changed expectations.
 Compare its snapshots to current files, using optional `paths` to include newly discovered scenarios.
 List every changed JSON value with vector path, JSON Pointer, before and after values; distinguish
+exact whole numbers by their digits (restore `exact_integers` on both sides and write values with exact digits, so a change in a
+last digit above 2^53 is a changed value, never "JSON values unchanged"); distinguish
 missing from null, zero, false and empty. Include additions, removals, moved files and byte-only changes.
 For older anchors without snapshots, report old/current hashes and say original values are unavailable.
 Unreadable, empty or malformed vectors get a warning with their path and cause.
@@ -374,6 +377,8 @@ A present base `pdd.json` must be a regular readable blob within the 10 MiB read
 
 - [Runtime preflight](runtime-preflight.prompt.md): required generation/runtime context for gitFiles(root).
 - [Runtime output](runtime-output.prompt.md): required generation/runtime context for safe diagnostic text.
+- [File owner lookup](file-owner.prompt.md#generated-from-header): required generation context for the header rule.
+- [Exact scenario numbers](scenario-json.prompt.md): required generation context for reading, saving and comparing scenario values.
 
 <details>
 <summary>Runtime interface</summary>
@@ -381,7 +386,7 @@ A present base `pdd.json` must be a regular readable blob within the 10 MiB read
 ```json
 {
   "status": "approved",
-  "prose_sha256": "7e396a88955169b5f1efed25bb5a6a96263640d09db6e105cd34edd0dd0315ac",
+  "prose_sha256": "5177102bd022915a457a31ad9c1f3665edb83147605edaa2ff8426c2564b1118",
   "entries": [
     {
       "operation": "adoptReplayCorpus",

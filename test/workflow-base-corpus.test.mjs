@@ -225,21 +225,23 @@ test('2640 repair B: a code-only change to a file with a Generated-from header a
   assert.equal(anchor.base.select,'linked');
 });
 
+// #3200: the shared header reader reads every line in the first 4 KiB, so a header after line 10 links (e.mjs).
 test('2640 repair B: header formats are exact; a "Generated from" line without a prompt path links nothing',async t=>{
   const {pinRunAnchor}=await api(),files={};
-  for(const n of [1,2,3,4,5,6]){files[`prompts/p${n}.prompt.md`]=`# P${n}\n`;files[`tests/p${n}.json`]=JSON.stringify(scenario(`user_stories/p${n}.md`,`prompts/p${n}.prompt.md`,[check('AC1',n)]));}
+  for(const n of [1,2,3,4,5,6,7]){files[`prompts/p${n}.prompt.md`]=`# P${n}\n`;files[`tests/p${n}.json`]=JSON.stringify(scenario(`user_stories/p${n}.md`,`prompts/p${n}.prompt.md`,[check('AC1',n)]));}
   files['a.py']='# Generated from prompts/p1.prompt.md.\nVALUE = 1\n';
   files['d.py']=M1_STYLE.replace('m1_policy prompt','p4 prompt');
   files['e.mjs']=`${'// line\n'.repeat(10)}// Generated from prompts/p5.prompt.md.\n`;
   files['f.mjs']='const x = "Generated from prompts/p6.prompt.md.";\n';
+  files['g.mjs']=`${' '.repeat(4096)}\n// Generated from prompts/p7.prompt.md.\n`;
   const r=repo(t,files);
   rmSync(join(r.root,'a.py'));// Removed in the run: its base header still counts.
   put(r.root,'b.py',`"""Generated from prompts/p2.prompt.md (sha256: ${hash('x')})."""\n`);// Added in the run.
   put(r.root,'c.html','<!doctype html>\n<!-- Generated from prompts/p3.prompt.md -->\n');
-  for(const path of ['d.py','e.mjs','f.mjs'])put(r.root,path,readFileSync(join(r.root,path),'utf8')+'\n');
-  const anchor=pinRunAnchor(r.root,{commit:r.base,changed:['a.py','b.py','c.html','d.py','e.mjs','f.mjs'],codeSpace:true});
+  for(const path of ['d.py','e.mjs','f.mjs','g.mjs'])put(r.root,path,readFileSync(join(r.root,path),'utf8')+'\n');
+  const anchor=pinRunAnchor(r.root,{commit:r.base,changed:['a.py','b.py','c.html','d.py','e.mjs','f.mjs','g.mjs'],codeSpace:true});
   assert.equal(anchor.outcome,undefined,anchor.reason);
-  assert.deepEqual(anchor.vectors.map(v=>v.path),['tests/p1.json','tests/p2.json','tests/p3.json']);
+  assert.deepEqual(anchor.vectors.map(v=>v.path),['tests/p1.json','tests/p2.json','tests/p3.json','tests/p5.json'],'a header after 4 KiB (g.mjs) links nothing');
 });
 
 test('2640 repair B: a changed file with no prompt header and no bindings adds nothing; the line says why',async t=>{

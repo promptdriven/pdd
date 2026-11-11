@@ -65,6 +65,11 @@ Check these boundaries in order and continue after failures:
   read-only account port. Limited and unknown are warnings. For Claude,
   unsupported read-only usage evidence is warning with `claude` and /usage advice;
   no generation call to discover allowance, and no credit/reset advice.
+- With the core engine (the input's `engine`, which a machine start saved, else
+  `autopilot.engine: "core"` in the checked repository's `pdd.json`), jobs run
+  headless: report `PASS herdr: Not needed: autopilot.engine is core, so jobs run
+  headless without Herdr`, run no Herdr command and add no `herdr-room` check.
+  Otherwise:
 - Herdr installed. Read the workflow session `pdd` server status and pane list without starting a server, matching the shared workflow pane budget.
   A stopped server has zero panes. Apply PDD_HERDR_PANE_BUDGET (default 56,
   0 unlimited), using the workflow owner's ensurePaneBudget with cleanup disabled,
@@ -132,7 +137,7 @@ Do not use a GitHub ledger that writes reads to disk. Do not mutate arrays retur
 {
   "kind": "partial",
   "status": "approved",
-  "prose_sha256": "7fc0ee92e59718fc535ceb4e43dddefd02ba88d2d7190b86720db8e56fa91b2e",
+  "prose_sha256": "18dae0f1a37855d569abe401be94c190e22b505c46127437f79e3ef7f04040fd",
   "entries": [
     {
       "operation": "runAutopilotDoctor",

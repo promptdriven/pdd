@@ -19,8 +19,8 @@ function repo(t) {
   const git = (...args) => execFileSync('git', ['-c', 'user.name=PDD Test', '-c', 'user.email=pdd@example.invalid', ...args], { cwd, encoding: 'utf8' });
   return { cwd, git };
 }
-async function invoke(cwd, argv, extra = {}) {
-  const stdout = capture(), stderr = capture();
+async function invoke(cwd, argv, { tty = false, ...extra } = {}) {
+  const stdout = { ...capture(), ...(tty ? { isTTY: true } : {}) }, stderr = capture();
   const exitCode = await runPdd(argv, { cwd, stdout, stderr, ...extra });
   return { exitCode, stdout: stdout.text, stderr: stderr.text };
 }
@@ -408,7 +408,8 @@ test('autopilot-github: setup that saves a first mode says how to update GitHub,
     const home = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-autopilot-github-home-')));
     t.after(() => rmSync(home, { recursive: true, force: true }));
     const fake = fakeGithub();
-    const setup = () => invoke(cwd, ['setup'], { packageRoot: fileURLToPath(new URL('..', import.meta.url)), env: { HOME: home, PATH: process.env.PATH }, stdin: { isTTY: true },
+    // A person's terminal: setup asks only when stdin and stdout are both terminals (#3207).
+    const setup = () => invoke(cwd, ['setup'], { packageRoot: fileURLToPath(new URL('..', import.meta.url)), env: { HOME: home, PATH: process.env.PATH }, stdin: { isTTY: true }, tty: true,
       pathDiagnostic: () => [], workflowAgents: { checkWorkflowAgents: async () => ({ ok: true, agent: 'codex', message: '' }) }, setupAgentMcp: async () => 0,
       autopilotPorts: { terminal: { mode: async () => ({ answer }), names: async () => ({ names: [] }) }, github: { lookup: async () => ({ owner: 'Ada', writers: [], complete: true }) } },
       autopilotGithubPorts: fake.ports });

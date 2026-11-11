@@ -29,7 +29,7 @@ pdd setup
 
 1. `npm install -g github:promptdriven/pdd` installs the `pdd` command.
 2. `npx skills add promptdriven/pdd -g` adds the PDD skills for your agents. The installer finds the agents on your computer, or asks you which agents get the skills. It can say `Failed to install` for an agent that cannot have global skills. That agent still gets them.
-3. `pdd --version` must print `0.1.27`. When your skills are older than pdd, it also prints the command that updates them.
+3. `pdd --version` must print `0.1.28`. When your skills are older than pdd, it also prints the command that updates them.
 4. `pdd setup` adds a short PDD block to `AGENTS.md`, or to `CLAUDE.md` when the repo has one. Then every agent chat in the repo knows that the project uses PDD. In a Git repo, it also adds the line `.pdd/` to `.gitignore`, because `pdd test` keeps its local cache there. Setup checks for a ready agent first, installs missing skills or updates eligible marked copies, and previews MCP configuration changes for your approval.
 
 To update, run the 2 install commands and `pdd setup` again, then start a new agent chat. After `npx skills add`, `npx skills update -g` also updates the skills.
@@ -111,6 +111,13 @@ Doctor prints commands to fix or inspect each item. Linux tool installation
 commands use apt-get; use your distribution's package manager where needed.
 See the [CLI reference](docs/cli.md#autopilot-on-this-machine) for checks,
 settings, automatic approval scope, status and stop.
+
+## Team Runtime routing
+
+The standalone [Runtime issue router](scripts/README.md#runtime-issue-routing)
+routes reports about execution inside Runtime to a configured owner. Inputs to
+Runtime stay with PDD. It defaults to dry run; its GitHub Actions workflow runs
+only by manual dispatch and needs a prepared runner. It operates outside Autopilot.
 
 ## The PDD loop
 
@@ -303,7 +310,7 @@ The skills and the other commands run on your computer; `pdd lint --local` is of
 | `This Try session is busy.` | A simulation runs one command at a time. Wait for the first command to finish. |
 | `The runtime is busy. Try again later.` (exit code 5), or `Too many Try links are open.` | Wait a few minutes, then run the command again. To close a simulation that you do not use, run `pdd simulate --stop STORY`. |
 | `This Try has ended` | The simulation used all its AI calls or its 24 hours. Run `pdd simulate STORY --new`. |
-| `pdd --version` does not print `0.1.27` | Another `pdd` comes first on your PATH. Run `"$(npm prefix -g)/bin/pdd" --version`. On a conflict it shows the `export PATH=…` line that puts this pdd first. |
+| `pdd --version` does not print `0.1.28` | Another `pdd` comes first on your PATH. Run `"$(npm prefix -g)/bin/pdd" --version`. On a conflict it shows the `export PATH=…` line that puts this pdd first. |
 
 The [usage guide](docs/USAGE.md#13-troubleshooting) has more.
 

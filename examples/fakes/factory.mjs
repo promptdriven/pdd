@@ -1,4 +1,4 @@
-// Generated from examples/fakes/factory.prompt.md (sha256: 63c1a8967a57cd871ad1e4311ea1a66e1afa99c88eb37a3f3d686b69b9cd20d6).
+// Generated from examples/fakes/factory.prompt.md (sha256: 12ebaa807b06b0a97137d6434ff511c693a10cba8d07d8d9df4a49152f070813).
 export function createGreeter(prefix) {
   return { greet(name) { return { text: prefix + name }; } };
 }

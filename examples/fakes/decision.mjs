@@ -1,4 +1,4 @@
-// Generated from examples/fakes/decision.prompt.md (sha256: 5f9c5ca68168d09a07385a20b8b22ab4ccac90414c5f0858ba89e055fea4c6bd).
+// Generated from examples/fakes/decision.prompt.md (sha256: 7e59f3a5cfd824dbb80f2c0e83fb69d33e8a2a72241205a2aecea35a2892d13b).
 export function decideReply(reply) {
   return { label: reply.available ? 'Available' : 'Unavailable' };
 }

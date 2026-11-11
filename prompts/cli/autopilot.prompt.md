@@ -4,7 +4,7 @@
 
 The optional object `autopilot.github`, for example `{"share":30,"floor":1000}`, sets the GitHub API budget. The [budget owner](github-calls.prompt.md#budget) defines the tick's share and the reserve floor for native dependency observations, including automatic start. This settings module preserves those values. When the setting has a `github` member, every result also has `github: {share, floor}`, read by `githubBudgetSettings` of [GitHub calls](github-calls.prompt.md#budget): a missing or invalid value takes its default (30 and 1000). Without the member the result has no `github` field and the defaults apply. No command writes this member; a person edits `pdd.json`, and mode and trust commands preserve it like other unknown Autopilot keys.
 
-Setup in a Git repository with a terminal asks for a mode only when no Autopilot setting exists; an empty answer selects off. It displays the repository owner and available write-access collaborators or team members and asks optionally for additional names; empty adds none. If lookup is incomplete, including when neither owner nor writers are available, warn that the trusted list may be incomplete and continue. When neither is available, only explicitly added names establish trust. Outside a Git root, setup returns exit code 0 with an empty message, asks nothing and saves nothing. Outside a Git repository, mode, trust and untrust return exit code 1 with exactly `This folder is not a Git repository. cd into the repo you want Autopilot to work on, then run the command again.` and save nothing; another Git failure reports that the Git repository could not be read. Run that Git root lookup with `LC_ALL=C` and `LANG=C` and keep the rest of the environment, so this holds also when Git prints its messages in another language. Without a terminal, setup asks nothing and saves nothing; effective mode is off when no setting exists. A failed write reports one clear error and nonzero exit and leaves the file unchanged.
+Setup in a Git repository with a terminal asks for a mode only when no Autopilot setting exists; an empty answer selects off. It displays the repository owner and available write-access collaborators or team members (every collaborator page, read with `githubListArgs('{login, permissions}')` and `githubListItems` from the GitHub call counter, never `--slurp`, which gh before 2.48 lacks) and asks optionally for additional names; empty adds none. If lookup is incomplete, including when neither owner nor writers are available, warn that the trusted list may be incomplete and continue. When neither is available, only explicitly added names establish trust. Outside a Git root, setup returns exit code 0 with an empty message, asks nothing and saves nothing. Outside a Git repository, mode, trust and untrust return exit code 1 with exactly `This folder is not a Git repository. cd into the repo you want Autopilot to work on, then run the command again.` and save nothing; another Git failure reports that the Git repository could not be read. Run that Git root lookup with `LC_ALL=C` and `LANG=C` and keep the rest of the environment, so this holds also when Git prints its messages in another language. Without a terminal, setup asks nothing and saves nothing; effective mode is off when no setting exists. A failed write reports one clear error and nonzero exit and leaves the file unchanged.
 
 `pdd autopilot off`, `observe`, and `auto` save the named mode. `pdd autopilot trust <name>...` adds explicit names; `pdd autopilot untrust <name>` removes an explicit name. Compare GitHub names case-insensitively, preserve the first spelling, ignore duplicates and absent removals. Owner and write-access people remain trusted independently of explicit names. An author is trusted if a supplied owner, write-access name or explicit name matches; missing lookup data never establishes trust. This lookup determines trust only; later skills own run actions.
 
@@ -19,6 +19,12 @@ Autopilot config optionally accepts `parking: {hours,maxParked}`. Positive finit
 
 `autopilot.audit` is an optional Boolean; false disables post-merge audits.
 Preserve it on settings writes. The audit owner reads it from the source checkout.
+
+`autopilot.engine` (`full`, the default, or `core`) and the core keys `runs`,
+`label`, `quietMinutes`, `report`, `reports`, `repairs` and `testCommand` belong to the
+[Autopilot core](autopilot-core.prompt.md), which reads and validates them. This
+module does not add them to its result; settings writes preserve them like other
+unknown Autopilot keys.
 
 ## Dependencies
 
@@ -329,7 +335,7 @@ Actions outside the stated set, invalid mode operands and missing or blank names
     "max_model_calls": 6
   },
   "conventions": [],
-  "prose_sha256":"27a02e460e59e56b918e6d961f9c92c047a2b11910787e49afa34e5b045da782"
+  "prose_sha256":"ff8929dbe22ab5e36cfbadfaaa4cc7d970a6eaf0fefdb69979443fa9d644178a"
 }
 ```
 </details>

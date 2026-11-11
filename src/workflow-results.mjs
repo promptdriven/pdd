@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-results.prompt.md (sha256: 12e25ce6aabc3495d93628602f7d5b05cb2f7527c980ef0c7bdbdb65a43e3af8).
+// Generated from prompts/cli/workflow-results.prompt.md (sha256: c2adffeb6681997d61033f6e01258d164964bbbde74f03a2ee4b73618f1bfb64).
 import {checkPlanResults,checkPlanResultLines} from './runtime-check-plan.mjs';
 import { outcomeText, resultOutcome } from './runtime-outcome.mjs';
 import { PROMPT_TESTS_WORDS } from './runtime-output.mjs';
@@ -67,6 +67,7 @@ function identity(rows) {
   return { engine, model, ...(engineCached ? { engineCached } : {}), ...(modelCached ? { modelCached } : {}) };
 }
 // A prove result that is not current is shown, but it is never pdd's proof.
+const STAGE_LABEL = {pr1:'PR 1 (historical)',before:'before the fix (historical)'};
 export const usableResult = result => result.states?.some(row => row.state === 'partial') ? false : result.kind === 'native evidence' ? result.assessment?.identity?.stage !== 'pr1' && result.assessment?.storyNativeProof !== 'none' && ['pdd-observed','qualified-external'].includes(result.assessment?.storyNativeProof) : result.kind !== 'pdd workflow prove' || result.state === 'current';
 
 function runtimeEvidence(batch, summary) {
@@ -257,8 +258,8 @@ export function resultLines(results, { kinds = null } = {}) {
   const shown = (results ?? []).filter(result => !kinds || kinds.includes(result.kind));
   if (!shown.length) return [noResultLine(kinds ?? KINDS)];
   return shown.map(result => {
-    if (result.kind === 'native evidence') return `${PDD_RESULT}: native evidence (${iso(result.at)}, source ${result.source}, ${result.stage === 'pr1' ? 'PR 1 (historical)' : result.stage || 'unknown stage'}): ${nativeResultSummary(result.assessment)}`;
-    const facts = [result.batch && `batch ${result.batch}`, iso(result.at), result.source && `source ${result.source}`, result.stage && (result.stage==='pr1'?'PR 1 (historical)':result.stage),
+    if (result.kind === 'native evidence') return `${PDD_RESULT}: native evidence (${iso(result.at)}, source ${result.source}, ${STAGE_LABEL[result.stage] ?? (result.stage || 'unknown stage')}): ${nativeResultSummary(result.assessment)}`;
+    const facts = [result.batch && `batch ${result.batch}`, iso(result.at), result.source && `source ${result.source}`, result.stage && (STAGE_LABEL[result.stage] ?? result.stage),
       result.engine && `engine ${result.engine}${result.engineCached ? ' (cached)' : ''}`, result.model && `model ${result.model}${result.modelCached ? ' (cached)' : ''}`,
       result.requests?.length && `request${result.requests.length > 1 ? 's' : ''} ${result.requests.slice(0, SHOWN).join(' ')}`,
       result.headSha && `head ${result.headSha.slice(0, 7)}`].filter(Boolean).join(', ');

@@ -1,3 +1,4 @@
+// Generated from prompts/cli/autopilot-parking.prompt.md.
 // Source: prompts/cli/autopilot-parking.prompt.md.
 import {environmentRecovery} from './autopilot-environment.mjs';
 

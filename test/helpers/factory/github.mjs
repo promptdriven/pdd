@@ -8,6 +8,8 @@ export function factoryGithub(w) {
   f.add(17,{title:'Use value two',body:'The value must be 2.',created:w.time-1000,updated:w.time-1000});
   f.prs = []; f.commands = []; f.merges = [];
   const ok = value => ({code:0,stdout:typeof value==='string'?value:JSON.stringify(value),stderr:''});
+  // gh api --paginate --jq '.[] | … | tojson' (githubListArgs): one item per line.
+  const jqLines = value => Array.isArray(value) ? value.map(item => `${JSON.stringify(item)}\n`).join('') : JSON.stringify(value);
   const flag = (a,k) => a[a.indexOf(k)+1];
   const body = (a,o) => a.includes('--body-file') && flag(a,'--body-file')!=='-' ? readFileSync(flag(a,'--body-file'),'utf8') : String(o.input ?? (a.includes('--body')?flag(a,'--body'):''));
   const find = value => f.prs.find(pr=>pr.url===value || pr.number===Number(value));
@@ -82,13 +84,13 @@ export function factoryGithub(w) {
       else if(/\/pulls\/\d+(?:\?.*)?$/.test(endpoint??''))value=restPr(find(endpoint.match(/pulls\/(\d+)/)[1]));
       else if(/\/pulls\/\d+\/reviews/.test(endpoint??''))value=find(endpoint.match(/pulls\/(\d+)/)[1]).reviews;
       else handled=false;
-      if(handled) return ok(a.includes('--include')?`HTTP/2 200 OK\r\n\r\n${JSON.stringify(value)}`:a.includes('--slurp')?[value]:value);
+      if(handled) return ok(a.includes('--include')?`HTTP/2 200 OK\r\n\r\n${JSON.stringify(value)}`:a.includes('--slurp')?[value]:a.includes('--jq')?jqLines(value):value);
     }
     const r=await original(a,o);
     // Shared fake models gh api --include. The real CLI also uses bare JSON and slurp.
     if(a[0]==='api' && !a.includes('--include')) {
       const text=r.stdout.split(/\r?\n\r?\n/).slice(1).join('\n\n');
-      r.stdout=a.includes('--slurp')?JSON.stringify([JSON.parse(text)]):text;
+      r.stdout=a.includes('--slurp')?JSON.stringify([JSON.parse(text)]):a.includes('--jq')?jqLines(JSON.parse(text)):text;
     }
     assert.ok(!/HTTP 404/.test(r.stderr),`unsupported factory gh route ${a.join(' ')}: ${r.stderr}`);
     return r;

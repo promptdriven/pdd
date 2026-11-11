@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-worker-completion.prompt.md.
+// Generated from prompts/cli/workflow-worker-completion.prompt.md (sha256: 8103f70556f87d6487fac012abf0d49a7ab01335266e23b600301810dac4660d).
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { readFileSync, realpathSync } from 'node:fs';

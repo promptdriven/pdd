@@ -1,4 +1,4 @@
-// Generated from prompts/cli/metrics-command.prompt.md.
+// Generated from prompts/cli/metrics-command.prompt.md (sha256: 91fee8d3f0656b7e8c9b1bbbdd260b9b563029c85a85e2273cb47d6cb0736d3b).
 import {execFile as callback, spawnSync} from 'node:child_process';
 import {promisify} from 'node:util';
 import {readFile, writeFile, readdir} from 'node:fs/promises';

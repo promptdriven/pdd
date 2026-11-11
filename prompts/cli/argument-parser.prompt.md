@@ -44,7 +44,7 @@ Runner routes accept exactly their catalogued operands and options. An option of
 
 Option kind `text-list` takes one or more nonblank words up to the next word that starts with `-` or the end of argv. Preserve each word's bytes and order in a fresh frozen array at that option's key. An empty list, including an option immediately followed by a help flag, refuses. Duplicate options still refuse; ordinary `text` options still take exactly one value. This supplies the catalog's selected test paths; the runner owns their path safety, uniqueness and source meaning.
 
-Option kind `integer` takes decimal digits with no sign, within the option's `min` and `max`. Option kind `uuid` takes one UUID (8-4-4-4-12 hex digits). Which `check` and `try` options go together belongs to the [runtime client](runtime-client.prompt.md).
+Option kind `integer` takes decimal digits with no sign and no leading zero (`0` itself only when the option's `min` is 0), within the option's `min` and `max`. Option kind `uuid` takes one UUID (8-4-4-4-12 hex digits). Which `check` and `try` options go together belongs to the [runtime client](runtime-client.prompt.md).
 
 Option kind `optional-integer` consumes the following word only when it is decimal digits; validate against
 min/max and store it as a string. With no number, store the catalog's default as a string. A subsequent option
