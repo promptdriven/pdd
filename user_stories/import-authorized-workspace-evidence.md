@@ -25,4 +25,14 @@ Use `pdd workflow evidence-associate ISSUE --workspace PATH --stage current|pr1 
 
 ## Cases and proof limit
 
-The scenario and native case draft call the real saved-evidence boundary. They derive expected outcomes from this request, not from implementation output. The current Runtime interface has no honest ingestion binding; no Interpreter pass or failure is claimed. Native filesystem, ownership, capture, persistence and later status/PR effects still require execution against implementation after approval.
+The [native scenario vectors](../test/cases/import-authorized-workspace-evidence.scenario)
+retain the original inputs and expected outcomes. They call the real saved-evidence
+boundary through the normal native test suite. They are not an executable
+Runtime scenario: the current Runtime interface deliberately has no ingestion
+binding. No Interpreter pass or failure is claimed for this operation.
+
+Run `node --test test/import-authorized-workspace-evidence.vectors.test.mjs` for
+all 19 cases, including real local filesystem/Git setup, receipt-byte preservation,
+ownership refusals and stage isolation. The tests never execute models, publish
+PRs or grant approvals. Native results remain native evidence; they cannot supply
+missing Runtime resource bindings or prove a hosted Interpreter run.

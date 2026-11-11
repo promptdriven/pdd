@@ -1,6 +1,13 @@
 # Saved workspace evidence: native case draft
 
-Review material, not executed tests. This is the native setup/check plan for every step in `test/runtime/import-authorized-workspace-evidence.json`. Its `recordEvidence` entry is intentionally unbound; the empty simulation is not an outside-world adapter. Each case gets an isolated fixture, except the repeat case. Paths are synthetic fixture paths, not host permissions.
+This is the native setup/check plan for every step in
+`test/cases/import-authorized-workspace-evidence.scenario`. The normal native
+vector test executes those cases; results must come from its actual run.
+`recordEvidence` is intentionally unbound in Runtime, and the empty simulation
+is not an outside-world adapter. These vectors stay outside Runtime JSON test
+discovery so they cannot be uploaded as an allegedly executable AI check. Each
+case gets an isolated fixture, except the repeat case. Paths are synthetic
+fixture paths, not host permissions.
 
 ## Fixture and public boundary
 
