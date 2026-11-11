@@ -2,6 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runCheck, runTry, runDoorCall } from '../src/runtime-client.mjs';
 import { projectAnswer, renderText, exitCodeFor } from '../src/runtime-output.mjs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { proseSha256 } from '../src/runtime-preflight.mjs';
 import { harbor, fakeRuntime, portsFor } from './runtime-fake.mjs';
 
 const advice = 'Make the step smaller, for example split 30 moves into 3 steps of 10.';
@@ -76,7 +79,23 @@ test('STEP-TIME7: typed step timeout without a duration uses ten minutes and san
 });
 
 for (const mode of ['--cli','--serve']) test(`STEP-TIME8: Try ${mode} setup preserves specific timeout guidance`, async t => {
-  const setup = harbor(t), fake = await fakeRuntime(t, (e, f) => e.command === 'try' ? { status: 200, json: timeout(f, e.request.requestId, 'try', { seconds: 600 }) } : f.normal(e));
+  const setup = harbor(t, root => {
+    // This timeout case must declare the requested kind to reach remote setup.
+    const path = join(root, 'prompts/place_order.prompt.md'), source = readFileSync(path, 'utf8');
+    const block = source.match(/```json\s*([\s\S]*?)```/), iface = JSON.parse(block[1]);
+    if (mode === '--cli') {
+      iface.entries[0].input_schema.properties.argv = { type: 'array', items: { type: 'string' } };
+      iface.entries[0].input_schema.required = ['argv'];
+      Object.assign(iface.entries[0].result_schema.properties, { stdout: { type: 'string' }, stderr: { type: 'string' }, exit_code: { type: 'integer' } });
+      iface.conventions = ['input_schema', 'result_schema'].map(key => ({ path: `/entries/0/${key}`, convention: 'cli' }));
+      const testPath = join(root, 'tests/place-order.json'), scenario = JSON.parse(readFileSync(testPath));
+      scenario.steps[0].input.argv = ['order'];
+      writeFileSync(testPath, JSON.stringify(scenario));
+    } else iface.entries[0].input_schema.title = 'HTTP POST /orders';
+    const content = () => source.replace(/^# .*/m, '# harbor-orders').replace(block[0], '```json\n' + JSON.stringify(iface) + '\n```');
+    iface.prose_sha256 = proseSha256(content());
+    writeFileSync(path, content());
+  }), fake = await fakeRuntime(t, (e, f) => e.command === 'try' ? { status: 200, json: timeout(f, e.request.requestId, 'try', { seconds: 600 }) } : f.normal(e));
   const { ports } = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin });
   assert.equal(await runTry({ cwd: setup.repo, words: ['place-order'], options: { [mode]: mode === '--cli' ? true : '8080' } }, ports), 125);
   assert.match(ports.stderr.text, /Step sam-orders-espressos-and-a-muffin took more than 10 minutes and was stopped\./);

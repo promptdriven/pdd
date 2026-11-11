@@ -6,7 +6,12 @@ route metadata before opening a port; never guess routes from operation names, t
 route label is input_schema.title = `HTTP METHOD /path`, optionally with whole `:name` parameter segments.
 Only declared entries returned by the model are callable. Identical method/path routes are ambiguous.
 
-Listen on 127.0.0.1 only, at the --serve port (default 8080); report the URL and named routes. For each matched
+Listen on 127.0.0.1 only, at the --serve port (default 8080); report the URL and named routes.
+Also print one safely shell-quoted `curl` example for a declared route, using its actual localhost
+port and a matching Story input for required path/query/body values. Never execute it or spend
+an AI call to build it. Without a complete example input, show the route with plainly marked
+required placeholders rather than inventing program data. Screen-only serving prints its Screen
+URL without inventing an HTTP example. For each matched
 request serialize dispatch on this session through runDoorCall, retaining the runtime's sign-in, budgets, saved
 world and exactly-once transport. A stopped server sends no further calls. Ctrl-C closes the listener and does
 not stop or reset the remote Try. Unknown route/method returns 404 without an AI call. HEAD may use GET while
