@@ -23,13 +23,13 @@ Keep the manifest outside Git-visible source. pdd reads it; it never executes th
 ## Exact whole numbers
 
 A test for a Number parameter writes a large whole number in its exact Number spelling, for example
-`4.2501298345826807e+24` for 3600 × 2^70 (in JavaScript `String(n)`, or `n.toExponential()` below 1e21; never `json.dumps` of a Python int). The
-interpreter accepts it, and the reviver below keeps it as that exact Number. Only a value that no Number holds
-(2^53 + 1, or a BigInt parameter) stays in plain JSON digits, at any size. The interpreter refuses plain digits outside
-±(2^53−1), so only the replay test checks such a value. `JSON.parse` gives a Number, and a Number holds whole numbers
-exactly only within ±(2^53−1): `9007199254740993` silently becomes `9007199254740992`. Read the scenario so that a
-whole number in plain digits outside that range becomes a BigInt with its exact digits. Every other number keeps its
-`JSON.parse` value:
+`4.2501298345826807e+24` for 3600 × 2^70 (in JavaScript `String(n)`, or `n.toExponential()` below 1e21; never
+`json.dumps` of a Python int). The interpreter accepts it, and the reviver below keeps it as that exact Number. Only a
+value that no Number holds (2^53 + 1, or a BigInt parameter) stays in plain JSON digits, at any size. The interpreter
+refuses plain digits outside ±(2^53−1), so only the replay test checks such a value. `JSON.parse` gives a Number, and
+a Number holds whole numbers exactly only within ±(2^53−1): `9007199254740993` silently becomes `9007199254740992`.
+Read the scenario so that a whole number in plain digits outside that range becomes a BigInt with its exact digits.
+Every other number keeps its `JSON.parse` value:
 
 ```js
 const scenario = JSON.parse(text, (key, value, context) =>
