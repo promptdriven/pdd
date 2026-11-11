@@ -17,20 +17,21 @@ PDD is the `pdd` command and a set of skills for your agent. Your agent writes t
 
 ## Install
 
-You need [Node.js](https://nodejs.org) 22.16.0 or newer, [Git](https://git-scm.com), and the [GitHub CLI](https://cli.github.com) signed in with `gh auth login`. For `pdd setup` and workflow runs, you need a supported installed agent ready to use. Remote checks and Try need access to the PDD interpreter (see [Access](#access)). PDD is tested on macOS and Linux.
+You need [Node.js](https://nodejs.org) 22.20 or newer, [Git](https://git-scm.com), and the [GitHub CLI](https://cli.github.com) signed in with `gh auth login`. You also need one agent, installed and signed in: Codex or Claude Code (see step 2 of [Autopilot](#autopilot-on-your-own-repository)). Remote checks and Try need access to the PDD interpreter (see [Access](#access)). PDD is tested on macOS and Linux.
 
 ```sh
 npm install -g github:promptdriven/pdd
-npx skills add promptdriven/pdd -g
+npx skills add promptdriven/pdd -g --skill '*'
 pdd --version
 cd your-repo
 pdd setup
 ```
 
 1. `npm install -g github:promptdriven/pdd` installs the `pdd` command.
-2. `npx skills add promptdriven/pdd -g` adds the PDD skills for your agents. The installer finds the agents on your computer, or asks you which agents get the skills. It can say `Failed to install` for an agent that cannot have global skills. That agent still gets them.
-3. `pdd --version` must print `0.1.28`. When your skills are older than pdd, it also prints the command that updates them.
-4. `pdd setup` adds a short PDD block to `AGENTS.md`, or to `CLAUDE.md` when the repo has one. Then every agent chat in the repo knows that the project uses PDD. In a Git repo, it also adds the line `.pdd/` to `.gitignore`, because `pdd test` keeps its local cache there. Setup checks for a ready agent first, installs missing skills or updates eligible marked copies, and previews MCP configuration changes for your approval.
+2. `npx skills add promptdriven/pdd -g --skill '*'` adds all the PDD skills for your agents. `--skill '*'` selects every PDD skill. Without it, the installer shows the list "Select skills to install" with no skill selected: select all of them, then press Enter. Then the installer asks which agents get the skills: select the agents that you use. It can say `Failed to install` for an agent that cannot have global skills. That agent still gets them.
+3. The installer also shows security ratings from outside scanners. Some PDD skills get a warning because they read GitHub issues and pull requests, and anyone can write those. The skills treat that text as data. Autopilot gives its agents only the text of trusted people: the owner, people with write access and the names in `trust`.
+4. `pdd --version` must print `0.1.28`. When your skills are older than pdd, it also prints the command that updates them.
+5. `pdd setup` adds a short PDD block to `AGENTS.md`, or to `CLAUDE.md` when the repo has one. Then every agent chat in the repo knows that the project uses PDD. In a Git repo, it also adds the line `.pdd/` to `.gitignore`, because `pdd test` keeps its local cache there. Setup checks for a ready agent first, installs missing skills or updates eligible marked copies, and previews MCP configuration changes for your approval.
 
 To update, run the 2 install commands and `pdd setup` again, then start a new agent chat. After `npx skills add`, `npx skills update -g` also updates the skills.
 
@@ -39,18 +40,22 @@ To update, run the 2 install commands and `pdd setup` again, then start a new ag
 
 ## Autopilot on your own repository
 
-Use Node.js 22.20 or newer, Git, and the GitHub CLI. Use a repository that you
-own or can write to. Read access alone cannot create branches and PRs or merge
-them. Required branch reviews and checks still apply. Fork a repository first
-if you need your own write access.
+Autopilot works on the GitHub issues that you mark with a label. For each issue, it runs your agent in the background and opens one pull request. A fresh agent reviews the pull request, and Autopilot runs your full test suite on it. In `auto` mode, Autopilot merges the pull request when CI, the review and the suite pass. In `observe` mode, it does the same work and writes "would merge" on the pull request; a person merges. Required branch reviews, checks and strict approvals still apply.
 
-1. Install PDD and its skills with the commands above. Check the active tools:
+Use a repository that you own or can write to. Read access alone cannot create
+branches and pull requests or merge them. Fork a repository first if you need
+your own write access.
+
+1. Install PDD and its skills with the commands above. Check the tools, sign in
+   to GitHub, and set your Git name and email, because Autopilot makes commits:
 
    ```sh
    node --version
    git --version
    gh auth login
    gh auth setup-git
+   git config --global user.name "Your Name"
+   git config --global user.email "you@example.com"
    pdd --version
    ```
 
@@ -65,40 +70,61 @@ if you need your own write access.
    For Claude Code, use `npm install -g @anthropic-ai/claude-code`,
    `claude auth login`, then `claude auth status --json`.
 
-3. Install Herdr, then enter your repository and run setup:
+3. Enter your repository and run setup:
 
    ```sh
-   curl -fsSL https://herdr.dev/install.sh | sh
-   herdr --version
    cd your-repo
    pdd setup
-   cat pdd.json
+   ```
+
+   Setup asks for the Autopilot mode: `off`, `observe` or `auto`. The default
+   is `off`, and `off` starts no work. Choose `observe` for a first try, or
+   `auto` to let Autopilot merge. An empty `trust: []` still trusts the owner
+   and the users with write access. Explicit trust names add users.
+
+4. Commit and push the files that setup changed, so that GitHub and the
+   Autopilot jobs have them. Use `CLAUDE.md` instead of `AGENTS.md` when setup
+   wrote the PDD block there:
+
+   ```sh
+   git add pdd.json .gitignore AGENTS.md
+   git commit -m "Set up PDD"
+   git push
+   ```
+
+   If you cannot push to the default branch, run `pdd autopilot observe` or
+   `pdd autopilot auto` instead. It puts the mode in `pdd.json` on GitHub, or it
+   opens a pull request with the change for you to merge.
+
+5. Check the machine:
+
+   ```sh
    pdd autopilot doctor
    ```
 
-   Setup lets you select observe or auto. In auto mode, starting authorizes
-   eligible branches, PRs, ordinary gates and merges under repository rules.
-   An empty `trust: []` still trusts the owner and users with write access.
-   Explicit trust names add users. Observe mode reports eligible work.
-   Strict approvals and required human reviews still need a person.
+   Doctor checks the tools, sign-ins, permissions, setup, the `pdd.json` on
+   GitHub and interpreter access. It makes no GitHub writes or AI calls. A WARN
+   or FAIL line ends with a command that fixes it. Start runs the same doctor
+   first. Only a missing agent sign-in stops the start.
 
-4. Sign in to an agent, review doctor warnings, then start and inspect the run:
+6. Mark the issues for Autopilot, then start it:
 
    ```sh
-   pdd autopilot start --runs 1
+   pdd autopilot add 12 15
+   pdd autopilot start --label pdd:autopilot
    pdd autopilot status
-   herdr session attach pdd-autopilot
    ```
 
-   Start runs the same doctor first. Only missing agent sign-in refuses preflight.
-   Other findings warn with fix commands; native start keeps its own guards.
-   Doctor reads tools, sign-ins, permissions, setup, pane room and interpreter
-   access. It makes no GitHub writes or AI calls. A read-only interpreter access
-   check does not prove prompt behavior. Draft prompts can need approval at the
-   first check. Doctor reports their paths and never approves them. Unknown
-   agent usage and unreadable branch rules remain warnings, not proof.
+   `pdd autopilot add` puts the label `pdd:autopilot` on the issues that you
+   name. Autopilot works only on open issues with that label, so it never takes
+   an issue that you did not choose. Without a label, `pdd autopilot start`
+   asks for one and starts nothing. You can add the label on GitHub later too.
+   Autopilot checks for work now and every 10 minutes, and works on a few
+   issues at a time; `pdd autopilot status` shows them. When an issue needs a
+   decision, Autopilot asks one question on the issue and adds
+   `pdd:needs-decision`. Answer in a comment, then remove the label.
 
-5. Keep the machine available. On Linux, a systemd user session is required.
+7. Keep the machine available. On Linux, a systemd user session is required.
    `loginctl enable-linger` keeps timers available after logout. On macOS,
    `caffeinate -i` can keep the machine awake while you work. Stop the repo's
    timer when you finish:
@@ -107,10 +133,9 @@ if you need your own write access.
    pdd autopilot stop
    ```
 
-Doctor prints commands to fix or inspect each item. Linux tool installation
-commands use apt-get; use your distribution's package manager where needed.
-See the [CLI reference](docs/cli.md#autopilot-on-this-machine) for checks,
-settings, automatic approval scope, status and stop.
+Linux tool installation commands use apt-get; use your distribution's package
+manager where needed. See the [CLI reference](docs/cli.md#autopilot-on-this-machine)
+for checks, settings, automatic approval scope, status and stop.
 
 ## Team Runtime routing
 
@@ -141,7 +166,6 @@ The way to call a skill depends on your agent. You can also write "Use the pdd-f
 | `pdd-small-change` | make a small change that is easy to undo |
 | `pdd-prompting` | write or review prompts with the [Prompting guide](docs/prompting-guide.md) |
 | `pdd-setup` | set up a repo for PDD |
-| `pdd-autopilot`, `pdd-check`, `pdd-merge` | with Autopilot on, pick issues, check PRs with a fresh agent and merge them |
 
 The agent writes these files in prompt space:
 
@@ -246,7 +270,7 @@ Code space is the PDD compiler: your agent writes the code from the approved pro
 1. **Prompt space.** The prompts, the Stories and the tests. The pull request text starts with the `Prompt tests` lines and the report links.
 2. **Code space.** The code. To get it, say so in the chat, or run `pdd workflow approve 42`. The agent runs the unchanged tests from prompt space on the code and records the results, mutation control and formal check. pdd validates the source identity and report structure and shows missing or stale evidence as **BLOCKED**. These are agent-reported results, not independent proof of execution.
 
-The pdd CLI has no merge command. In manual workflows, ask your agent to merge under [RUNBOOK §2](RUNBOOK.md#2-the-files). In Autopilot `auto` mode, pdd-merge handles eligible merges after repository review and test rules pass; required human approvals still apply.
+The pdd CLI has no merge command. In manual workflows, ask your agent to merge under [RUNBOOK §2](RUNBOOK.md#2-the-files). In Autopilot `auto` mode, Autopilot merges its own pull request after CI, a fresh review and the full test suite pass; required human approvals still apply.
 
 ## Commands
 
@@ -310,6 +334,7 @@ The skills and the other commands run on your computer; `pdd lint --local` is of
 | `This Try session is busy.` | A simulation runs one command at a time. Wait for the first command to finish. |
 | `The runtime is busy. Try again later.` (exit code 5), or `Too many Try links are open.` | Wait a few minutes, then run the command again. To close a simulation that you do not use, run `pdd simulate --stop STORY`. |
 | `This Try has ended` | The simulation used all its AI calls or its 24 hours. Run `pdd simulate STORY --new`. |
+| `Autopilot did not start: it works only on the issues that you mark with an opt-in label.` | Mark issues with `pdd autopilot add N`, then run `pdd autopilot start --label pdd:autopilot`. |
 | `pdd --version` does not print `0.1.28` | Another `pdd` comes first on your PATH. Run `"$(npm prefix -g)/bin/pdd" --version`. On a conflict it shows the `export PATH=…` line that puts this pdd first. |
 
 The [usage guide](docs/USAGE.md#13-troubleshooting) has more.
