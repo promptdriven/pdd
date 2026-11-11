@@ -1,4 +1,4 @@
-// Generated from prompts/cli/product-composition.prompt.md (sha256: 3f009afef4de00831d7f35b3215fce80ca68f836c32579187fd3da0ac95ff955).
+// Generated from prompts/cli/product-composition.prompt.md (sha256: 176dedfe3f2c85b5236357ac66b04b5d1798e136d54a3cdd168c64de6c349680).
 import { basename, join } from 'node:path';
 import { checkInput, interfaceBlocks, PreflightError, selectTests } from './runtime-preflight.mjs';
 import { expandSource, isJsonNumber, jsonNumberIdentity, parseJsonValue, stringifyJsonValue } from './contract-refs.mjs';

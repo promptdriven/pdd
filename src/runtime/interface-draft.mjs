@@ -1,4 +1,4 @@
-// Generated from prompts/cli/interface-draft.prompt.md (sha256: 964f1155c78fd45cc69ef93e07685273f47996db6c3217122018fa29948f685e).
+// Generated from prompts/cli/interface-draft.prompt.md (sha256: afe63d6eba63f0f5f66fd790cb462923d17d3d762bf99b03fe6404d7a9bab1ab).
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';

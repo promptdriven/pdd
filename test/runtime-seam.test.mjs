@@ -1060,3 +1060,78 @@ test('SEAM11 (M2-2): src/runtime has no hardcoded client version literal; seam s
   assert.equal(directCode, 0, directPorts.stderr.text);
   assert.ok(seenDirect.length > 0 && seenDirect.every(v => v === null), `expected direct pdd_version=null, got ${JSON.stringify(seenDirect)}`);
 });
+
+test('SEAM12 (MERGE-1): runtime-check-plan keeps approved prompt unchanged and direct buildCheckPlan parses Generated-from headers without ports.headerPrompts', async t => {
+  const { execFileSync } = await import('node:child_process');
+  const { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { buildCheckPlan } = await import('../src/runtime/runtime-check-plan.mjs');
+  const { findTests, interfaceBlocks, proseSha256 } = await import('../src/runtime/runtime-preflight.mjs');
+
+  const promptText = readFileSync(join(root, 'prompts/cli/runtime-check-plan.prompt.md'), 'utf8');
+  const blocks = interfaceBlocks(promptText);
+  assert.equal(blocks.length, 1);
+  const iface = JSON.parse(blocks[0][1]);
+  assert.equal(iface.status, 'approved');
+  assert.equal(iface.prose_sha256, proseSha256(promptText));
+
+  const tmp = mkdtempSync(join(tmpdir(), 'pdd-merge1-'));
+  t.after(() => rmSync(tmp, { recursive: true, force: true }));
+  const repo = join(tmp, 'repo');
+  mkdirSync(join(repo, 'prompts'), { recursive: true });
+  mkdirSync(join(repo, 'user_stories'), { recursive: true });
+  mkdirSync(join(repo, 'tests'), { recursive: true });
+  mkdirSync(join(repo, 'src'), { recursive: true });
+  execFileSync('git', ['init', '-q'], { cwd: repo });
+
+  for (const name of ['alpha', 'beta']) {
+    const entryIface = {
+      status: 'draft',
+      prose_sha256: '',
+      entries: [{
+        operation: 'run',
+        input_schema: { type: 'object', properties: { x: { type: 'number' } }, required: ['x'], additionalProperties: false },
+        result_schema: { type: 'object', properties: { y: { type: 'number' } }, required: ['y'], additionalProperties: false },
+        errors: [],
+      }],
+      calls: [],
+      resources: [],
+      limits: { max_steps: 1, max_model_calls: 1 },
+    };
+    const body = () => `# ${name}\n\nCompute ${name}.\n\n## Dependencies\n\nNone.\n\n<details><summary>Runtime interface</summary>\n\n\`\`\`json\n${JSON.stringify(entryIface)}\n\`\`\`\n</details>\n`;
+    entryIface.prose_sha256 = proseSha256(body());
+    writeFileSync(join(repo, `prompts/${name}.prompt.md`), body());
+    writeFileSync(join(repo, `src/${name}.mjs`), `// Generated from prompts/${name}.prompt.md\nexport const ${name} = x => ({ y: x });\n`);
+    writeFileSync(join(repo, `user_stories/${name}.md`), `# ${name}\n\nI can run ${name}.\n\n## Acceptance criteria\n\n1. ${name} works.\n`);
+    writeFileSync(
+      join(repo, `tests/${name}.json`),
+      JSON.stringify({
+        schema_version: 'prompt-runtime.program-scenario.v1',
+        story_path: `user_stories/${name}.md`,
+        criteria: [{ id: 'AC1', text: `${name} works.` }],
+        initial_world: {},
+        steps: [{ step_id: 's1', entry_path: `prompts/${name}.prompt.md`, operation: 'run', input: { x: 1 }, checks: [{ criterion_id: 'AC1', target: 'result', path: '/y', op: 'equals', value: 1 }] }],
+      }, null, 2) + '\n',
+    );
+  }
+  execFileSync('git', ['add', '.'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '-m', 'base'], { cwd: repo });
+
+  // Modify only src/alpha.mjs and call buildCheckPlan directly WITHOUT ports.headerPrompts.
+  writeFileSync(join(repo, 'src/alpha.mjs'), '// Generated from prompts/alpha.prompt.md\nexport const alpha = x => ({ y: x + 1 });\n');
+  const found = findTests({ root: repo });
+  const rows = found.tests.map(test => ({ test: test.path, state: 'passed', steps: [] }));
+  const planEdited = buildCheckPlan({ root: repo, found, selected: found.tests, rows, full: true, base: 'HEAD' });
+  const alphaStory = planEdited.stories.find(s => s.story_path === 'user_stories/alpha.md');
+  const betaStory = planEdited.stories.find(s => s.story_path === 'user_stories/beta.md');
+  assert.equal(alphaStory?.role, 'target');
+  assert.deepEqual(alphaStory?.affected_paths, ['src/alpha.mjs']);
+  assert.equal(betaStory?.role, 'baseline');
+
+  // Delete src/beta.mjs while src/alpha.mjs is edited: deleted implementation reads base Generated-from header.
+  unlinkSync(join(repo, 'src/beta.mjs'));
+  const planDeleted = buildCheckPlan({ root: repo, found, selected: found.tests, rows, full: true, base: 'HEAD' });
+  const betaDeleted = planDeleted.stories.find(s => s.story_path === 'user_stories/beta.md');
+  assert.equal(betaDeleted?.role, 'target');
+  assert.deepEqual(betaDeleted?.affected_paths, ['src/beta.mjs']);
+});

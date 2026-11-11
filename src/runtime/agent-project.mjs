@@ -1,5 +1,5 @@
 import {loadRuntimeWorkspace,allowsRuntimePath} from './runtime-workspace.mjs';
-// Generated from prompts/cli/agent-project.prompt.md (sha256: a7a70a17fd19cc262ea3f563f17eb21fc9d851f582654bfa88d43d40fa80e168).
+// Generated from prompts/cli/agent-project.prompt.md (sha256: ad945fa28a81d1c872ea8ce17caaa73c8d3c4f9ed8a817cae8100e87ce4b93f8).
 import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {constants,lstatSync,realpathSync,openSync,fstatSync,readSync,closeSync,readdirSync} from 'node:fs';

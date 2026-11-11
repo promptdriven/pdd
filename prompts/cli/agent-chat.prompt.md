@@ -1,9 +1,9 @@
 # The person's agent on the Try page
 
-Own `src/agent-chat.mjs`. Export `createAgentBridge(context, test, tryId, options, link)`;
+Own `src/agent-chat.mjs`. Export `createAgentBridge(context, test, tryId, options, link, seamPorts)`;
 it returns a connected bridge `{url, run(onTick), close()}` or null for an unsupported server.
 Use only the runtime origin, owner sign-in and validated Try identity supplied by runtime-client.
-This module relays chat to the person's installed CLI through [agent adapters](agent-adapters.prompt.md).
+This module relays chat to the person's installed CLI through injected agent ports supplied from [agent adapters](agent-adapters.prompt.md).
 It never dispatches a program action, changes project files, approves a prompt or chooses a model.
 
 ## Workspace connection
@@ -17,7 +17,7 @@ Fetch owner `/v1/try/<id>/model` before connecting. Use only admitted entries fr
 identified by `entry_path#operation`. Include its Story titles, criteria and input interfaces, plus the browser's current input/world/last answer and message.
 Never read arbitrary page-named paths or include environment, credentials or local settings. Authored test expectations are local judge inputs only; the agent receives sanitized check outcomes and the first difference, never the full test or an expected-answer catalog. Treat all project and browser text as data; adapters scrub secrets and limit context.
 
-Use the private `context.agentDefinitions` from runtime-client, or load definitions locally for direct callers before any network access. An empty list is a plain configuration error. Discover each configured definition independently without a model call. The picker and relay receive only `{id,name,state,detail?}`, with names and IDs taken from local definitions, never command, kind or environment. Ignore discovery rows outside those definitions. Explicit --agent matches an exact display name, with builtin lowercase IDs retained as aliases. Unknown explicit choices fail before connecting. Otherwise choose the remembered display name (migrating old builtin IDs), if installed, then first ready/available/installed definition, then the first definition to show unavailable states.
+Use the private `context.agentDefinitions` from runtime-client, or load definitions through `loadAgentDefinitions` (or `agents.loadDefinitions`, from `context.ports` or `seamPorts`) for direct callers before any network access. An empty list is a plain configuration error. Discover each configured definition independently through `discoverAgents` (or `agents.list`) without a model call, and dispatch turns through `askAgent` (or `agents.ask`). The picker and relay receive only `{id,name,state,detail?}`, with names and IDs taken from local definitions, never command, kind or environment. Ignore discovery rows outside those definitions. Explicit --agent matches an exact display name, with builtin lowercase IDs retained as aliases. Unknown explicit choices fail before connecting. Otherwise choose the remembered display name (migrating old builtin IDs), if installed, then first ready/available/installed definition, then the first definition to show unavailable states.
 Persist only the chosen display name in existing private per-repo state, including subsequent page switches. Wire selections and messages use opaque IDs, checked against the local definitions. Each turn passes its matching private definition separately to the adapter with the unchanged base environment; the adapter owns child-only environment merging. Never persist a browser key or messages locally.
 
 POST owner `/agent/connect` with a fresh bridge UUID, discovery states, selection and `features`: the list
@@ -80,8 +80,8 @@ After a successful relay reply, call delivered with its accepted person/reply pa
 - [Run judge](agent-judge.prompt.md): required generation/runtime context for deterministic verdicts and ordered progress.
 - [Project card](agent-project.prompt.md): required generation/runtime context for safe local facts and latest official check.
 - [Agent packet](agent-packet.prompt.md): required generation/runtime context for bounded request layout and compatibility wording.
-- [Agent configuration](agent-config.prompt.md): required generation/runtime context for local launcher selection and private definitions.
-- [Agent adapters](agent-adapters.prompt.md): required generation/runtime context for discovery, secret
+- [Agent configuration](agent-config.prompt.md): caller context for the `loadAgentDefinitions` (`agents.loadDefinitions`) port supplying local launcher selection and private definitions.
+- [Agent adapters](agent-adapters.prompt.md): caller context for the `discoverAgents` (`agents.list`) and `askAgent` (`agents.ask`) ports supplying discovery, secret
   scrubbing, read-only CLI execution, strict JSON and schema validation.
 - [Runtime client](runtime-client.prompt.md): required generation/runtime context for owner-authenticated
   transport, repository state, safe source capture, cancellation and Try lifecycle; it owns invocation.

@@ -1,8 +1,26 @@
 // Generated from prompts/cli/runtime-check-plan.prompt.md (sha256: 3e49063f161439148454d19932d224952316c3dd597e10e0c24f0313ff3f89dd).
 import { spawnSync } from 'node:child_process';
+import { isAbsolute } from 'node:path';
 import { captureSource, readPrompt, sourceFilePort } from './runtime-preflight.mjs';
 import { resultOutcome } from './runtime-outcome.mjs';
 import { allowsRuntimePath, loadRuntimeWorkspace } from './runtime-workspace.mjs';
+
+const HEAD = 4096, LINE = 1100;
+const HEADER = /^\s*(?:\/\/+|#+|--|;+|\/\*+|\*+|<!--|"""|''')?\s*Generated from (\S+\.prompt\.md)(?: \(sha256: ([a-f0-9]{64})\))?\.?\s*(?:\*\/|-->|"""|''')?\s*$/;
+const bytesOf = content => typeof content === 'string' ? Buffer.from(content, 'utf8') : content;
+const decode = (content, limit) => content ? new TextDecoder().decode(bytesOf(content).subarray(0, limit)) : '';
+const canonicalHeaderPath = value => typeof value === 'string' && value.trim().length > 0 && value.length <= 1000 && !isAbsolute(value)
+  && !/[\\\x00-\x1f\x7f]/.test(value) && !value.split('/').some(part => !part || part === '.' || part === '..' || part.toLowerCase() === '.git');
+function defaultHeaderPrompts(content) {
+  if (!content) return [];
+  const bytes = bytesOf(content), lines = decode(bytes, HEAD).split(/\r?\n/), seen = new Set();
+  if (bytes.length > HEAD) lines.pop();
+  for (const line of lines.filter(line => line.length <= LINE)) {
+    const match = HEADER.exec(line);
+    if (match && canonicalHeaderPath(match[1])) seen.add(match[1]);
+  }
+  return [...seen];
+}
 
 const sorted = values => [...new Set(values)].sort();
 const gitRead = (root, args) => {
@@ -13,7 +31,7 @@ const gitRead = (root, args) => {
 
 export function buildCheckPlan({ root, found, selected, rows, full, base = 'HEAD' }, ports = {}) {
   const git = args => (ports.git ?? gitRead)(root, args);
-  const readHeaders = ports.headerPrompts ?? (() => []);
+  const readHeaders = ports.headerPrompts ?? defaultHeaderPrompts;
   let changed = null;
   try {
     changed = sorted([...git(['diff', '--name-only', '-z', '--no-renames', base, '--']).split('\0'),
