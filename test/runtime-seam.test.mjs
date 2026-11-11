@@ -18,12 +18,92 @@ function walk(dir, prefix = dir) {
   return out.sort();
 }
 
+// Decode JavaScript string and template escape sequences before resolving module/file paths.
+function decodeJsEscapes(raw) {
+  let out = '';
+  for (let i = 0; i < raw.length; i++) {
+    if (raw[i] !== '\\') {
+      out += raw[i];
+      continue;
+    }
+    i++;
+    if (i >= raw.length) break;
+    const c = raw[i];
+    if (c === '\r') {
+      if (raw[i + 1] === '\n') i++;
+      continue;
+    }
+    if (c === '\n' || c === '\u2028' || c === '\u2029') continue;
+    if (c === 'x' && /^[0-9a-fA-F]{2}$/.test(raw.slice(i + 1, i + 3))) {
+      out += String.fromCharCode(Number.parseInt(raw.slice(i + 1, i + 3), 16));
+      i += 2;
+      continue;
+    }
+    if (c === 'u' && raw[i + 1] === '{') {
+      const close = raw.indexOf('}', i + 2);
+      const hex = close > i + 2 ? raw.slice(i + 2, close) : '';
+      if (/^[0-9a-fA-F]{1,6}$/.test(hex)) {
+        const cp = Number.parseInt(hex, 16);
+        if (cp <= 0x10ffff) {
+          out += String.fromCodePoint(cp);
+          i = close;
+          continue;
+        }
+      }
+    }
+    if (c === 'u' && /^[0-9a-fA-F]{4}$/.test(raw.slice(i + 1, i + 5))) {
+      out += String.fromCharCode(Number.parseInt(raw.slice(i + 1, i + 5), 16));
+      i += 4;
+      continue;
+    }
+    if (/[0-7]/.test(c)) {
+      const oct = raw.slice(i, i + 3).match(/^[0-7]{1,3}/)[0];
+      out += String.fromCharCode(Number.parseInt(oct, 8));
+      i += oct.length - 1;
+      continue;
+    }
+    const single = { n: '\n', r: '\r', t: '\t', b: '\b', f: '\f', v: '\v' };
+    out += single[c] ?? c;
+  }
+  return out;
+}
+
+// Extract embedded JS module specifiers (import/export ... from, import(), require(), new URL()) inside string/template text.
+function embeddedModuleSpecifiers(text) {
+  const specs = [];
+  const patterns = [
+    /\bimport\s+(?:[^;]*?\bfrom\s*)?(['"`])((?:\\[\s\S]|(?!\1)[\s\S])*)\1/g,
+    /\bexport\s+[^;]*?\bfrom\s*(['"`])((?:\\[\s\S]|(?!\1)[\s\S])*)\1/g,
+    /\b(?:import|require|req)\s*\(\s*(['"`])((?:\\[\s\S]|(?!\1)[\s\S])*)\1/g,
+    /\bnew\s+URL\s*\(\s*(['"`])((?:\\[\s\S]|(?!\1)[\s\S])*)\1/g,
+  ];
+  for (const pattern of patterns) {
+    let match;
+    while ((match = pattern.exec(text)) !== null) {
+      specs.push(decodeJsEscapes(match[2]));
+    }
+  }
+  return specs;
+}
+
 // Extract string and template-chunk literals while skipping JS comments and regex literals.
 function stringLiterals(source) {
   const out = [];
   const stack = [];
   let i = 0;
   let prev = '';
+  const history = [];
+  const pushToken = token => {
+    prev = token;
+    history.push(token);
+    if (history.length > 4) history.shift();
+  };
+  const isSpecifierContext = () => (
+    prev === 'import'
+    || prev === 'from'
+    || (prev === '(' && ['import', 'require', 'req'].includes(history.at(-2)))
+    || (prev === '(' && history.at(-2) === 'URL' && history.at(-3) === 'new')
+  );
   const regexAllowed = () => !prev || ['(', ',', '=', ':', '[', '!', '&', '|', '?', '{', '}', ';', '+', '-', '*', '%', '<', '>', '^', '~', 'return', 'throw', 'case', 'in', 'of', 'typeof', 'void', 'delete', 'await', 'yield'].includes(prev);
 
   const lineAt = index => source.slice(0, index).split('\n').length;
@@ -43,66 +123,68 @@ function stringLiterals(source) {
     }
     if (c === "'" || c === '"') {
       const start = i;
+      const isModuleSpecifier = isSpecifierContext();
       let j = i + 1;
-      let value = '';
       while (j < source.length && source[j] !== c) {
-        if (source[j] === '\\') {
-          value += source.slice(j, j + 2);
-          j += 2;
-        } else {
-          value += source[j++];
-        }
+        if (source[j] === '\\') j += 2;
+        else j++;
       }
-      out.push({ value, raw: source.slice(start, j + 1), line: lineAt(start) });
-      prev = 'string';
+      const rawBody = source.slice(i + 1, j);
+      out.push({ value: decodeJsEscapes(rawBody), raw: source.slice(start, j + 1), line: lineAt(start), isModuleSpecifier });
+      pushToken('string');
       i = j + 1;
       continue;
     }
     if (c === '`') {
       const start = i;
+      const isModuleSpecifier = isSpecifierContext();
       let j = i + 1;
-      let chunkStart = i + 1;
+      const chunkStart = i + 1;
+      let interpolated = false;
       while (j < source.length && source[j] !== '`') {
         if (source[j] === '\\') { j += 2; continue; }
         if (source[j] === '$' && source[j + 1] === '{') {
-          out.push({ value: source.slice(chunkStart, j), raw: source.slice(start, j + 2), line: lineAt(start) });
+          out.push({ value: decodeJsEscapes(source.slice(chunkStart, j)), raw: source.slice(start, j + 2), line: lineAt(start), isModuleSpecifier });
           stack.push({ depth: 1, tickStart: start });
-          prev = '${';
+          pushToken('${');
           j += 2;
+          interpolated = true;
           break;
         }
         j++;
       }
-      if (prev !== '${') {
-        out.push({ value: source.slice(chunkStart, j), raw: source.slice(start, j + 1), line: lineAt(start) });
-        prev = 'string';
+      if (!interpolated) {
+        out.push({ value: decodeJsEscapes(source.slice(chunkStart, j)), raw: source.slice(start, j + 1), line: lineAt(start), isModuleSpecifier });
+        pushToken('string');
         i = j + 1;
       } else {
         i = j;
       }
       continue;
     }
-    if (c === '{' && stack.length) { stack.at(-1).depth++; prev = c; i++; continue; }
+    if (c === '{' && stack.length) { stack.at(-1).depth++; pushToken(c); i++; continue; }
     if (c === '}' && stack.length && --stack.at(-1).depth === 0) {
       stack.pop();
       const resume = i;
       let j = i + 1;
       const chunkStart = i + 1;
       prev = '';
+      let interpolated = false;
       while (j < source.length && source[j] !== '`') {
         if (source[j] === '\\') { j += 2; continue; }
         if (source[j] === '$' && source[j + 1] === '{') {
-          out.push({ value: source.slice(chunkStart, j), raw: source.slice(resume, j + 2), line: lineAt(resume) });
+          out.push({ value: decodeJsEscapes(source.slice(chunkStart, j)), raw: source.slice(resume, j + 2), line: lineAt(resume), isModuleSpecifier: false });
           stack.push({ depth: 1, tickStart: resume });
-          prev = '${';
+          pushToken('${');
           j += 2;
+          interpolated = true;
           break;
         }
         j++;
       }
-      if (prev !== '${') {
-        out.push({ value: source.slice(chunkStart, j), raw: source.slice(resume, j + 1), line: lineAt(resume) });
-        prev = 'string';
+      if (!interpolated) {
+        out.push({ value: decodeJsEscapes(source.slice(chunkStart, j)), raw: source.slice(resume, j + 1), line: lineAt(resume), isModuleSpecifier: false });
+        pushToken('string');
         i = j + 1;
       } else {
         i = j;
@@ -121,7 +203,7 @@ function stringLiterals(source) {
         }
       }
       while (/[a-z]/i.test(source[j + 1] ?? '')) j++;
-      prev = 'regex';
+      pushToken('regex');
       i = j + 1;
       continue;
     }
@@ -129,14 +211,25 @@ function stringLiterals(source) {
     if (/[A-Za-z0-9_$]/.test(c)) {
       let j = i;
       while (/[A-Za-z0-9_$]/.test(source[j] ?? '')) j++;
-      prev = source.slice(i, j);
+      pushToken(source.slice(i, j));
       i = j;
       continue;
     }
-    prev = c;
+    pushToken(c);
     i++;
   }
   return out;
+}
+
+function scannedCandidates(source) {
+  const candidates = [];
+  for (const token of stringLiterals(source)) {
+    candidates.push({ value: token.value, raw: token.raw, line: token.line, isModuleSpecifier: token.isModuleSpecifier });
+    for (const embedded of embeddedModuleSpecifiers(token.value)) {
+      candidates.push({ value: embedded, raw: token.raw, line: token.line, isModuleSpecifier: true });
+    }
+  }
+  return candidates;
 }
 
 function referencesRuntimeDir(relPath, candidate) {
@@ -155,12 +248,12 @@ export function findSeamViolations(relPath, source) {
   if (relPath === 'src/runtime-seam.mjs' || relPath.startsWith('src/runtime/')) return [];
   const hits = [];
   if (/\.(?:mjs|cjs|js)$/.test(relPath)) {
-    for (const token of stringLiterals(source)) {
-      if (referencesRuntimeDir(relPath, token.value)) {
-        hits.push(`${relPath}:${token.line}: ${token.raw}`);
+    for (const item of scannedCandidates(source)) {
+      if (referencesRuntimeDir(relPath, item.value)) {
+        hits.push(`${relPath}:${item.line}: ${item.raw}`);
       }
     }
-    return hits;
+    return [...new Set(hits)];
   }
   const lines = source.split('\n');
   lines.forEach((line, index) => {
@@ -173,9 +266,10 @@ export function findSeamViolations(relPath, source) {
   return hits;
 }
 
-function referencesOutsideRuntime(relPath, candidate) {
+function referencesOutsideRuntime(relPath, candidate, { isModuleSpecifier = false } = {}) {
   const clean = candidate.split('?')[0].split('#')[0].trim();
   if (!clean) return false;
+  if (isModuleSpecifier && (clean === '..' || clean === '../')) return true;
   if ((clean.startsWith('./') || clean.startsWith('../')) && clean !== './' && clean !== '../') {
     const resolved = posix.normalize(posix.join(posix.dirname(relPath), clean));
     if (resolved !== 'src/runtime' && !resolved.startsWith('src/runtime/')) return true;
@@ -189,16 +283,12 @@ function referencesOutsideRuntime(relPath, candidate) {
 export function findInwardViolations(relPath, source) {
   if (!relPath.startsWith('src/runtime/')) return [];
   const hits = [];
-  for (const token of stringLiterals(source)) {
-    if (referencesOutsideRuntime(relPath, token.value)) {
-      hits.push(`${relPath}:${token.line}: ${token.raw}`);
+  for (const item of scannedCandidates(source)) {
+    if (referencesOutsideRuntime(relPath, item.value, { isModuleSpecifier: item.isModuleSpecifier })) {
+      hits.push(`${relPath}:${item.line}: ${item.raw}`);
     }
   }
-  const stripped = source.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
-  if (/\b(?:import|from|require)\s*\(?\s*['"`]\.\.\/?['"`]|new\s+URL\s*\(\s*['"`]\.\.\/?['"`]/.test(stripped)) {
-    hits.push(`${relPath}: parent-directory module or URL specifier`);
-  }
-  return hits;
+  return [...new Set(hits)];
 }
 
 test('SEAM1: only src/runtime-seam.mjs imports or addresses src/runtime/ across src, bin and scripts', () => {
@@ -211,7 +301,7 @@ test('SEAM1: only src/runtime-seam.mjs imports or addresses src/runtime/ across 
 
 test('SEAM2: src/runtime-seam.mjs imports only src/runtime/index.mjs from src/runtime/ and exposes its surface', async () => {
   const seamSource = readFileSync(join(root, 'src/runtime-seam.mjs'), 'utf8');
-  const runtimeSpecifiers = stringLiterals(seamSource)
+  const runtimeSpecifiers = scannedCandidates(seamSource)
     .map(item => item.value)
     .filter(specifier => referencesRuntimeDir('src/runtime-seam.mjs', specifier));
   assert.deepEqual([...new Set(runtimeSpecifiers)], ['./runtime/index.mjs']);
@@ -258,13 +348,21 @@ test('SEAM4: Try CLI launcher names stable pdd-owned src/try-doors.mjs entry', a
   assert.ok(!launcherText.includes('/src/runtime/try-doors.mjs'), launcherText);
 });
 
-test('SEAM3: detector catches static, dynamic, re-export, URL and child-process imports of src/runtime/', () => {
+test('SEAM3: detector catches static, dynamic, re-export, URL, escaped and child-process imports of src/runtime/', () => {
   const cases = [
     ['src/pdd-cli.mjs', "import { runCheck } from './runtime/runtime-client.mjs';\n"],
     ['src/pdd-cli.mjs', "export * from './runtime/index.mjs';\n"],
     ['src/autopilot-launcher.mjs', "const m = await import('./runtime/runtime-client.mjs');\n"],
     ['src/workflow-replay.mjs', "const u = new URL('./runtime/runtime-preflight.mjs', import.meta.url);\n"],
     ['src/workflow-replay.mjs', "const script = `import {captureSource} from ${JSON.stringify(new URL('./runtime/runtime-preflight.mjs', import.meta.url).href)};`;\n"],
+    ['src/pdd-cli.mjs', "execFileSync(process.execPath, ['--input-type=module', '-e', \"import {runCheck} from './runtime/runtime-client.mjs';\"], {cwd: new URL('.', import.meta.url)});\n"],
+    ['src/pdd-cli.mjs', "execFileSync(process.execPath, ['--input-type=module', '-e', `export { runCheck } from './runtime/runtime-client.mjs';`]);\n"],
+    ['src/pdd-cli.mjs', "execFileSync(process.execPath, ['--input-type=module', '-e', \"await import('./runtime/runtime-client.mjs');\"]);\n"],
+    ['src/pdd-cli.mjs', "execFileSync(process.execPath, ['--input-type=module', '-e', \"new URL('./runtime/runtime-client.mjs', import.meta.url);\"]);\n"],
+    ['src/pdd-cli.mjs', "import './\\x72untime/runtime-client.mjs';\n"],
+    ['src/pdd-cli.mjs', "import './\\u0072untime/runtime-client.mjs';\n"],
+    ['src/pdd-cli.mjs', "const m = await import(`./\\u{72}untime/runtime-client.mjs`);\n"],
+    ['src/pdd-cli.mjs', "execFileSync(process.execPath, ['--input-type=module', '-e', \"import './\\\\x72untime/runtime-client.mjs';\"]);\n"],
     ['bin/pdd.mjs', "import '../src/runtime/index.mjs';\n"],
     ['scripts/autopilot-smoke.mjs', "const p = 'src/runtime/runtime-client.mjs';\n"],
     ['scripts/vm-suite.sh', "node src/runtime/runtime-client.mjs\n"],
@@ -368,7 +466,7 @@ test('SEAM6: no file in src/runtime/ imports or addresses a path outside src/run
   assert.deepEqual(violations, [], `Files in src/runtime/ must not import outside src/runtime/:\n${violations.join('\n')}`);
 });
 
-test('SEAM7: inward detector catches static, dynamic, require, package.json URL and string paths outside src/runtime/', () => {
+test('SEAM7: inward detector catches static, dynamic, require, package.json URL, escaped, child-process and string paths outside src/runtime/', () => {
   const cases = [
     ['src/runtime/runtime-slots.mjs', "import { NAMES } from '../command-catalog.mjs';\n"],
     ['src/runtime/index.mjs', "export * from '../runtime-seam.mjs';\n"],
@@ -376,6 +474,14 @@ test('SEAM7: inward detector catches static, dynamic, require, package.json URL 
     ['src/runtime/runtime-check-plan.mjs', "const { headerPrompts } = req('../file-owner.mjs');\n"],
     ['src/runtime/runtime-client.mjs', "const pkg = new URL('../../package.json', import.meta.url);\n"],
     ['src/runtime/try-doors.mjs', "const script = `import ${JSON.stringify('../try-doors.mjs')}`;\n"],
+    ['src/runtime/runtime-client.mjs', "execFileSync(process.execPath, ['--input-type=module', '-e', \"import { NAMES } from '../command-catalog.mjs';\"], {cwd: new URL('.', import.meta.url)});\n"],
+    ['src/runtime/runtime-client.mjs', "execFileSync(process.execPath, ['--input-type=module', '-e', \"export * from '../product.mjs';\"]);\n"],
+    ['src/runtime/runtime-client.mjs', "execFileSync(process.execPath, ['--input-type=module', '-e', \"await import('../workflow-runner.mjs');\"]);\n"],
+    ['src/runtime/runtime-client.mjs', "execFileSync(process.execPath, ['--input-type=module', '-e', \"new URL('../../package.json', import.meta.url);\"]);\n"],
+    ['src/runtime/runtime-slots.mjs', "import { NAMES } from '../\\x63ommand-catalog.mjs';\n"],
+    ['src/runtime/runtime-slots.mjs', "import { NAMES } from '\\u002e\\u002e/command-catalog.mjs';\n"],
+    ['src/runtime/runtime-client.mjs', "const u = new URL(`..\\u{2f}..\\u{2f}package.json`, import.meta.url);\n"],
+    ['src/runtime/runtime-client.mjs', "import '\\x2e\\x2e';\n"],
     ['src/runtime/runtime-client.mjs', "const p = 'src/workflow-runner.mjs';\n"],
     ['src/runtime/runtime-client.mjs', "import '..';\n"],
   ];
