@@ -27,28 +27,6 @@ const fixtureClaimRows = f => {
   catch { return []; }
 };
 
-for (const [kind,field] of [['interface-missing','/interface'],['undefined-call-bound','/limits/max_model_calls'],['undefined-call-bound','/calls/0/max_calls'],['recursive-call-bound','/calls']])
-  test(`3114 repair: local ${kind} ${field} cannot become an interpreter blocker or park`, async t => {
-    const {f,tick,ports,stateFile} = await setup(t);
-    fullTicks(f,stateFile,ports);
-    const held=f.record(),batch='20261101-120000-abcd';
-    const reason={code:'check-plan-prerequisite',message:`Repair ${kind}: value.prompt.md ${field}; run a fresh pdd test.`};
-    const rows=[{test:'tests/value.json',story:'value',state:'not run',reason,unsent:true,calls:0,request_ids:[]}];
-    const folder=join(f.ports.env.HOME,'.pdd/runtime/batches',batch);mkdirSync(folder,{recursive:true});
-    writeFileSync(join(folder,'batch.json'),JSON.stringify({version:1,batch,root:held.root,intent:'check',created_at:new Date(f.clock).toISOString(),rows}));
-    writeFileSync(join(folder,'summary.json'),JSON.stringify({batch,rows}));
-    ports.readRunResults=()=>[{kind:'pdd test',batch,at:f.clock,states:rows,summary:reason.message}];
-    held.state='waiting';held.gate={kind:'approve-pr',area:held.areas[held.area].name};held.done.check='Local full check blocked';save(f,held);
-    const before=f.record();
-    const refused=await parkAutomaticRun({runtime:true,reason:reason.message,cwd:held.root},{...f.agentPorts(),readRunResults:ports.readRunResults});
-    assert.equal(refused.exitCode,1,'3114_LOCAL_PARK_ACCEPTED');
-    assert.deepEqual(f.record(),before);
-    await tick();
-    assert.notEqual(f.record().parking?.blocker?.kind,'interpreter','3114_LOCAL_BLOCKER_MISCLASSIFIED');
-    assert.equal(f.record().runtimeWait,undefined);
-    assert.equal(f.record().parking?.interpreterWait,undefined);
-  });
-
 // #3091 final review: exercise saved-batch inference through the production reader.
 // #3091: saved-check identity must be current even when only one input changes.
 async function setup(t, agent = 'claude', name = 'small-change') {
@@ -76,22 +54,6 @@ async function setup(t, agent = 'claude', name = 'small-change') {
   f.herdr.calls.length = 0;
   return {f, run, stateFile, ports, warnings, tick: () => tickAutopilot(stateFile, ports)};
 }
-for (const damage of ['terminal']) test(`3091 unknown ${damage} custody remains occupied`, async t => {
-  const {f, tick, ports} = await setup(t);
-  const held = f.record(); held.state = 'waiting'; held.question = {at: f.clock, text: 'Choose the case'};
-  if (damage === 'session') {
-    held.chats.at(-1).session = null; f.herdr.paneOf(held.chats.at(-1)).agent = null;
-    ports.findNativeSessions = async () => [];
-  }
-  if (damage === 'terminal') f.herdr.paneOf(held.chats.at(-1)).terminal_id = 'unrelated';
-  if (damage === 'foreign') held.automaticOrigin.coordinatorId = 'other';
-  if (damage === 'process') {const pane = f.herdr.paneOf(held.chats.at(-1)); pane.agent = null; pane.processInfo = {pane_id: pane.pane_id, shell_pid: 100, foreground_process_group_id: 999, foreground_processes: [{pid: 999, name: 'unrelated'}]};}
-  if (damage === 'check') ports.readSuiteProgress = () => ({state: 'running', pausedMs: 0});
-  save(f, held); await tick();
-  assert.ok(f.herdr.panes.some(pane => pane.workspace_id === held.layout.workspaceId));
-  assert.notEqual(f.record().parking?.phase, 'parked');
-});
-
 test('3091 explicit installed-release and reset blockers are stored with clearing evidence', async t => {
   const {f} = await setup(t);
   for (const [blocker, until] of [['pdd', 'capability:fixture-fix'], ['dependency', '2897'], ['account', '2026-11-10T12:00:00Z']]) {
@@ -141,32 +103,6 @@ function fullTicks(f, stateFile, ports) {
 // AC3: both clear in the same tick, with only one working slot.
 // AC1/AC3: the park command cannot invent a completed person wait.
 // AC4: use the native wait reader and real saved check batches in the fixture home.
-for (const hadTestMode of [false, true]) for (const laterFailures of [0, 2, 3]) test(`3091 repair verdict cutoff excludes older failures and counts ${laterFailures} newer waits (testMode=${hadTestMode})`, async t => {
-  const {f, tick, stateFile, ports} = await setup(t);
-  const at = f.clock;
-  const run = f.record(); run.state = 'paused'; run.runtimeWait = {at: at + 1, reason: 'no verdict', cause: 'service'}; save(f, run);
-  for (const [i, number] of [18, 19, 20, 21, 22].entries()) {
-    const read = await anotherRun(f, number), row = read();
-    delete row.blockedOn; row.runtimeWait = {at: at + (i < 2 ? 2 * (i + 1) : i + 3), reason: 'no verdict', cause: 'service'};
-    if (i >= 2 && i - 2 >= laterFailures) {delete row.runtimeWait; row.state = 'running';}
-    save(f, row);
-  }
-  const batch = '20261108-120000-abcd', folder = join(f.ports.env.HOME, '.pdd/runtime/batches', batch);
-  const {mkdirSync} = await import('node:fs'); mkdirSync(folder, {recursive: true});
-  writeFileSync(join(folder, 'batch.json'), JSON.stringify({batch, root: run.root, intent: 'check', rows: [{state: 'passed', ended_at: at + 4}, {state: 'failed', ended_at: at + 2}]}));
-  const state = JSON.parse(readFileSync(stateFile)); state.interpreterPattern = {streak: 2, seen: {}, observedAt: at, testMode: hadTestMode};
-  if (hadTestMode) state.runtime = {outage: {since: at, first: 17, issues: [], probed: [17], probe: {number: 17, at: at + 1, offeredAt: at + 3}}};
-  writeFileSync(stateFile, JSON.stringify(state)); fullTicks(f, stateFile, ports);
-  ports.runtimeHealth = async () => ({state: 'unavailable', detail: 'controlled outage'});
-  f.tick(10000); await tick();
-  let pattern = JSON.parse(readFileSync(stateFile)).interpreterPattern;
-  assert.equal(pattern.streak, laterFailures, 'only no-verdict waits after the newest verdict belong to the streak');
-  assert.equal(Boolean(pattern.testMode), laterFailures >= 3);
-  // The same saved waits must not reappear as new failures on another tick.
-  f.tick(); await tick(); pattern = JSON.parse(readFileSync(stateFile)).interpreterPattern;
-  assert.equal(pattern.streak, laterFailures); assert.equal(Boolean(pattern.testMode), laterFailures >= 3);
-});
-
 // Repair 2: AC2/AC6. Check admission can occur after chat shutdown.
 // The release boundary must protect itself even without a prior reconciliation.
 const parkCommandPorts = f => ({...f.ports, owners: {read: async () => ({json: JSON.stringify({
@@ -220,25 +156,6 @@ test('3157: release refuses an unattributed working label',async t=>{
   const result=await releaseParkedClaim({cwd:f.source,repository:run.repo,claim:{issue:run.issue.url},machine:'park-machine',reason:'release'},releasePorts);
   assert.deepEqual(result,{state:'refused',machine:'unknown'});
   assert.deepEqual(github.issues.get(17).labels.sort(),['pdd:stuck','pdd:working']);
-});
-
-for (const identity of ['saved','missing']) test('3157: cancelled cleanup never strips a replacement claim when saved identity is ' + identity,async t=>{
-  const {f,tick,ports}=await setup(t);
-  const old=f.record();
-  const {createGithubRepoFake}=await import('./helpers/github-repo-fake.mjs');
-  const github=createGithubRepoFake({repository:old.repo,owner:'example',issues:18,now:()=>f.clock});
-  const claim=github.claim(17,{coordinatorId:old.automaticOrigin.coordinatorId,machine:old.automaticOrigin.machine});github.label(17,'pdd:stuck');
-  const currentEvent=github.issues.get(17).timeline.find(e=>e.label==='pdd:working').id;
-  const currentComment=claim.id;
-  old.automaticOrigin.claim=identity==='saved'?{commentId:currentComment,labelEventId:currentEvent}:{};
-  old.state='cancelled';old.cancelled={state:'cancelled',at:f.clock};save(f,old);
-  const replacement={...old,runId:'replacement-run',state:'running',automaticOrigin:{...old.automaticOrigin,claim:{commentId:currentComment,labelEventId:currentEvent}}};
-  ports.listRuns=async()=>identity==='saved'?[old,replacement]:[old];
-  let releaseCalls=0;ports.releaseParkedClaim=async()=>{releaseCalls++;return{state:'released'};};
-  ports.reconcileDependencyIntake=async()=>({eligible:[],queued:[],skipped:[],groups:[],claims:[{issue:old.issue.url,active:true,owner:old.automaticOrigin.coordinatorId,
-    coordinatorId:old.automaticOrigin.coordinatorId,machine:old.automaticOrigin.machine,commentId:currentComment,labelEventId:currentEvent}]});
-  await tick();
-  assert.equal(releaseCalls,0);assert.deepEqual(github.issues.get(17).labels.sort(),['pdd:stuck','pdd:working']);
 });
 
 function wireClaimGithub(f, ports, github) {

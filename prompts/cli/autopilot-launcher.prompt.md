@@ -148,8 +148,9 @@ launcher gives it these ports:
   `pdd-autopilot` (`ports.herdr` when injected; a missing Herdr is `herdr_missing`, so it has nothing to close).
 - `listRuns(cancelled)`: the run records of this checkout ([run records](workflow-runs.prompt.md)).
 - `cancelRun(run)`: `cancelRun` of the [workflow runner](workflow-runner.prompt.md) with the workflow cleanup ports
-  (the `pdd` Herdr session) and `claimReleased: true`, so it closes the run's worker chats and records the run as
-  cancelled, and the move releases the claim itself. `releaseLocal(run)`: `releaseIssueClaim` of the
+  (the `pdd` Herdr session), `claimReleased: true` and `skipMetricsDelivery: true`, so it closes the run's worker chats
+  and records the run as cancelled, the move releases the claim itself, and the run's metrics events stay in its outbox:
+  the tick leaves no background work behind. `releaseLocal(run)`: `releaseIssueClaim` of the
   [worktree allocator](workflow-worktree.prompt.md) for the run's local issue allocation.
 - `releaseSlots()`: `releaseCheckCapacity` of the [shared queue](test-suite-queue.prompt.md) for this state file.
 - `processes()`: one local read of this machine's process table (`ps -A -ww -o pid= -o ppid= -o pgid= -o rss= -o

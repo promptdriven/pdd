@@ -339,3 +339,51 @@ test('M11 start: --engine full is refused with one line; a start with no opt-in 
   assert.deepEqual(timer, ['start']);
   assert.ok(w.job(18, 'build') && !w.job(17), 'only the labeled issue starts');
 });
+
+// launchd: start rewrites the LaunchAgent with the 10-minute interval before the tick; the tick that moves the
+// machine (in start, and from the timer) never calls launchctl, so it never unloads its own job.
+test('M12 launchd: start writes StartInterval 600 and only start calls launchctl; the moving tick never does', async t => {
+  const { runAutopilotLauncher, tickAutopilot } = await import('../src/autopilot-launcher.mjs');
+  const w = await coreWorld(t);
+  writeFileSync(join(w.cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', trust: [], testCommand: 'npm test', label: 'pdd:autopilot' } }));
+  mkdirSync(join(w.dir, 'pkg'), { recursive: true }); writeFileSync(join(w.dir, 'pkg', 'package.json'), JSON.stringify({ version: '0.1.29' }));
+  const home = join(w.dir, 'home'); mkdirSync(home, { recursive: true });
+  const cwd = w.git(w.cwd, 'rev-parse', '--show-toplevel'), stateRoot = join(w.dir, 'state');
+  const id = createHash('sha256').update(cwd).digest('hex').slice(0, 20), stateFile = join(stateRoot, `${id}.json`);
+  mkdirSync(stateRoot, { recursive: true });
+  // A full-engine state of an older pdd: no engine, a coordinator pane, a 30-minute timer.
+  writeFileSync(stateFile, JSON.stringify({ enabled: true, cwd, repo: 'acme/widgets', defaultBranch: 'main', coordinatorId: 'coord-a', machine: 'machine-a', paneId: 'pane-1', workspaceId: 'ws-1',
+    agent: { id: 'codex', kind: 'codex', command: 'codex' }, packageRoot: join(w.dir, 'pkg'), timerMinutes: 30, environment: { HOME: home, PATH: process.env.PATH } }));
+  const calls = [], phase = { now: 'start' };
+  const run = async (command, args, options = {}) => {
+    calls.push([phase.now, command, ...args.slice(0, 2)]);
+    if (command === 'gh' && args[0] === 'repo') return { code: 0, stdout: JSON.stringify({ nameWithOwner: 'acme/widgets', defaultBranchRef: { name: 'main' } }), stderr: '' };
+    if (command === 'gh' && args[0] === 'auth') return { code: 0, stdout: '', stderr: '' };
+    if (command === 'gh') return w.gh(args, options);
+    if (command === 'launchctl') return { code: args[0] === 'print' ? 1 : 0, stdout: '', stderr: '' };
+    if (command !== 'git') return { code: 0, stdout: '', stderr: '' };
+    const r = spawnSync('git', args, { cwd: options.cwd ?? cwd, encoding: 'utf8' }); return { code: r.status, stdout: r.stdout, stderr: r.stderr };
+  };
+  const agent = async () => ({ id: 'codex', kind: 'codex', command: 'codex' });
+  const ports = { stateRoot, now: w.now, env: { HOME: home, PATH: process.env.PATH }, platform: 'darwin', uid: 501, warn: () => {}, notice: () => {}, run, selectAgent: agent,
+    doctorPorts: { run: async (command, args, options) => command === 'git' ? run(command, args, options) : { code: 0, stdout: '', stderr: '' }, selectAgent: agent },
+    herdr: async () => { phase.herdr = true; throw Object.assign(Error('gone'), { code: 'agent_not_found' }); },
+    movePorts: { processes: async () => '', releaseSlots: async () => false },
+    corePorts: { jobs: w.jobs, checkBase: async () => ({ exitCode: 0, message: 'ok' }), agentReady: async () => true } };
+  // The tick inside start: every launchctl call must come before it.
+  const started = await runAutopilotLauncher({ command: 'start', cwd, packageRoot: join(w.dir, 'pkg'), env: ports.env, issues: [] }, { ...ports, run: async (command, args, options) => {
+    if (command === 'gh' && args.includes('--include') && calls.some(([, c]) => c === 'launchctl')) phase.now = 'tick';
+    return run(command, args, options);
+  } });
+  assert.equal(started.exitCode, 0, started.message);
+  assert.match(started.message, /Autopilot moved this machine to the core engine for acme\/widgets/);
+  const plist = readFileSync(join(home, 'Library', 'LaunchAgents', `pdd-autopilot-${id}.plist`), 'utf8');
+  assert.match(plist, /<key>StartInterval<\/key><integer>600<\/integer>/);
+  assert.deepEqual(calls.filter(([p, c]) => p === 'tick' && c === 'launchctl'), [], 'the tick in start calls no launchctl');
+  assert.equal(JSON.parse(readFileSync(stateFile, 'utf8')).timerMinutes, 10);
+  // A timer tick after the move: no launchctl, no Herdr.
+  phase.now = 'timer'; phase.herdr = false; w.advance(10 * 60 * 1000);
+  await tickAutopilot(stateFile, ports);
+  assert.deepEqual(calls.filter(([p, c]) => p === 'timer' && ['launchctl', 'systemctl'].includes(c)), []);
+  assert.equal(phase.herdr, false);
+});

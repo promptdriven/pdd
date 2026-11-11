@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 3f12ee4f9a8ee76df4afcba8eedb9174f8501cc40c646c4a2950e7bd5eecfb2e).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: bc45c0d9b365a6732d40ee7f8b12d5bb748f911a259bfa4444e9f35c7b1eec56).
 import {runAutopilotDoctor, resolveAutopilotAgent} from './autopilot-doctor.mjs';
 import {releaseRunClaim, cancelRun, acquireRunLock} from './workflow-runner.mjs';
 import { releaseCheckCapacity } from './test-suite-queue.mjs';
@@ -396,7 +396,7 @@ async function moveTick(stateFile, state, p, ports) {
     gh: (args, options = {}) => p.execute('gh', args, { timeoutMs: 120000, purpose: 'claims', ...options }),
     herdr: args => coordinatorHerdr(args, p),
     listRuns: (cancelled = false) => (p.listRuns ?? listRuns)({ cwd: state.cwd, cancelled }, p),
-    cancelRun: run => (p.cancelRun ?? cancelRun)({ ref: String(run.number), cwd: state.cwd }, { ...cleanup, claimReleased: true, isTTY: false }),
+    cancelRun: run => (p.cancelRun ?? cancelRun)({ ref: String(run.number), cwd: state.cwd }, { ...cleanup, claimReleased: true, isTTY: false, skipMetricsDelivery: true }),
     releaseLocal: run => (p.releaseIssueClaim ?? releaseIssueClaim)({ cwd: run.sourceRoot, runId: run.runId, issueNumber: run.number }, cleanup.commandPorts ?? {}),
     releaseSlots: () => releaseCheckCapacity({ env: p.env, owner: stateFile }, p.checkCapacityPorts ?? p),
     // A local read of this machine's process table (no agent, Git or GitHub call).
