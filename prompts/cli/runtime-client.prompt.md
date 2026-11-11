@@ -6,6 +6,61 @@ Own `src/runtime-client.mjs`. Export `runCheck({words, options, cwd, cache=false
 
 For Runtime interface refusals, preserve a server-provided field or JSON pointer and its rule in lint and check output, in text and JSON. If `invalid-interface` has no field or pointer, show any supported local schema findings for the named prompt as local advice, without claiming they caused the server refusal. If none are available, say the Runtime did not identify the field and ask the person to inspect the interface or request a detailed Runtime diagnostic. Always retain the supplied Runtime rule text, including when no field pointer exists. Show the rule together with a field-unknown note and any separately labeled local findings in text and JSON. Never guess a rejected field.
 
+## Recent passing lint receipts
+
+A normal `pdd test` may reuse a terminal passing lint received at most ten
+minutes ago, inclusive, for exactly the current captured source and selected
+tests. Local discovery, preflight, source validation, account authentication and
+ordinary check admission still run. Explicit lint always requests a fresh lint;
+Try, saved reads/retries and standalone local modes keep their existing routes.
+This is lint admission evidence, never a behavioral pass or approval.
+
+Persist one recent receipt per canonical repository in private state, separate
+from the complete Story pass cache. Bind it to root, Runtime origin, GitHub
+login and user ID, captured source_sha256, authored_sha256, sorted unique selected
+test paths, package version and the lint selected cap (null for preliminary lint).
+`authored_sha256` is the SHA-256 of the capture's authored file hashes
+(`raw_file_hashes`, as JSON of its `[path, hash]` pairs sorted by path). The upload
+hash alone is not enough: the [interface-kind transport](runtime-preflight.prompt.md#interface-kind-transport)
+removes a `full` or `partial` kind from the upload copy, so a kind change leaves
+source_sha256 equal but changes authored_sha256 and runs a fresh lint. A capture
+without authored file hashes runs a fresh lint. Use the
+[receipt eligibility owner](runtime-lint-receipt.prompt.md) for metadata checks.
+Retain the actual answer and its engine_sha. Reuse only a confirmed lint answer
+with matching UUID requestId/id, command lint, state passed, complete per-test
+lint evidence and a passing existing lint outcome for every selected test.
+Missing, corrupt, expired, future-dated, incomplete, refused, pending or unknown
+records run a fresh lint. Storage failure also falls back to fresh lint.
+
+Before adopting a candidate, perform normal capacity/access/maintenance checks.
+Reuse only when capacity supplies the current engine_sha and it equals the
+receipt's engine_sha. An unknown current engine (a 404 capacity reply, an omitted
+or null engine_sha, or no capacity reply) cannot prove that no deployment occurred
+during the ten-minute window, so it runs a fresh lint.
+Copy the original answer and request ID into the new batch for saved reads and
+restart recovery; do not POST lint again, fabricate a receipt or refresh its
+original received time on reuse. Print `Reusing recent passing lint for unchanged source.`
+on stderr. Before a fresh lint request, discard the prior optional receipt so a newer
+refusal or unknown cannot leave an older pass reusable. Serialize short receipt
+metadata operations with an exclusive local file lock, never held over network
+or waits. Each fresh lint publishes its batch ownership marker first; only
+that marker's owner can replace it with a passing answer. An older in-flight
+lint cannot supersede a newer attempt. After a capacity wait, recheck the same
+saved candidate under this transaction before adopting it. Lock contention,
+an abandoned lock or any bookkeeping failure falls back to fresh lint without
+blocking or repairing the lock. When a fresh attempt cannot acquire ownership,
+write a separate per-batch blocker before dispatch; any blocker prevents reuse.
+At that attempt's exit, clear the optional receipt and remove only its blocker
+under the metadata lock. If cleanup cannot lock, retain the blocker and run
+fresh lint on later calls. Never remove another attempt's blocker. A newly received passing lint can replace the saved receipt only
+when all selected rows have their own pass and complete evidence. Store no token.
+
+Standalone lint JSON, including saved reads and pending/unknown lint results, adds `report_url`: the server's
+report_url sanitized against known secrets and validated by the existing
+same-origin report-link rules, or null
+when absent or unsafe. Save the same field in summary.json and print a supplied
+valid link as `Report: <url>` in text. Local lint has no server report link.
+
 ## Native lint selection and display (draft)
 
 For explicit `pdd lint STORY` (including `--local` without `--timeout`,
@@ -978,7 +1033,7 @@ Explicit lint JSON uses the deciding selected row for its aggregate public state
 
 ## Missing and native-only interfaces
 
-Use the preflight owner's missing-block, kind, native-reason and draft-gap findings in local lint, even without Stories. Preserve server ownership of other schema/hash diagnostics in explicit lint, and retain the existing local limits gate, its hints and selected rows. Keep SVG advice separate. Server lint reports these local findings before authentication or upload. Checks and lint omit native-only scenarios from uploads even when criteria, checks or reached declarations are invalid. Preserve local refusals and native-only paths/reasons; internal recovery keeps invalid rows refused and valid rows not_run, including called prompts. Public output uses the outcome owner state and reason. Mixed selections still run the other scenarios. Save the exact source selection as source_selection {tests, exclude_fixture_projects}, and separately save native_source {tests, sha256} for omitted native-only scenarios. Neither the native capture nor its scenarios enter uploads. Preserve native_only [{path, reason}] in batch rows. Saved reads retain both source identities. A selection with only native-only scenarios still saves local check/lint evidence, coverage, refusals and reasons without authentication or Runtime requests; mark that batch local_only true and every row unsent, and allow its saved read without authentication or Runtime requests. This also applies when other selected rows are refused locally and no row is ready. An unavailable native capture keeps sha256 null and freshness unknown. Native-only is never a pass and does not silently turn a partial result into success. Each test summary shows repository Runtime coverage: N of M prompts checkable, K native-only. Count valid current full/partial blocks as checkable, valid current native-only declarations separately, and include missing/invalid/stale prompts in M. Keep this separate from module binding coverage.
+Use the preflight owner's missing-block, kind, native-reason and draft-gap findings in local lint over the repository prompts when no Story is selected, also in a repository without Stories. Local lint with selected Story words gives only its advice and never refuses for these findings. Server lint applies these findings to selected entries and called prompts before authentication/upload. Report the preflight local format advice (`interface-kind-explicit-full` at `/kind` and unsupported schema keywords) as warnings in explicit lint, for entry and called prompts; it never refuses a row or changes its state, exit code or upload. Local lint reports this advice for its selected prompt closure, or repository prompts when no Story is selected. Preserve server ownership of other schema/hash diagnostics in explicit lint, and retain the existing local limits gate, its hints and selected rows. Keep SVG advice separate. Server lint reports these local findings before authentication or upload. Checks and lint omit native-only scenarios from uploads even when criteria, checks or reached declarations are invalid. Preserve local refusals and native-only paths/reasons; internal recovery keeps invalid rows refused and valid rows not_run, including called prompts. Public output uses the outcome owner state and reason. Mixed selections still run the other scenarios. Save the exact source selection as source_selection {tests, exclude_fixture_projects}, and separately save native_source {tests, sha256} for omitted native-only scenarios. Neither the native capture nor its scenarios enter uploads. Preserve native_only [{path, reason}] in batch rows. Saved reads retain both source identities. A selection with only native-only scenarios still saves local check/lint evidence, coverage, refusals and reasons without authentication or Runtime requests; mark that batch local_only true and every row unsent, and allow its saved read without authentication or Runtime requests. This also applies when other selected rows are refused locally and no row is ready. An unavailable native capture keeps sha256 null and freshness unknown. Native-only is never a pass and does not silently turn a partial result into success. Each test summary shows repository Runtime coverage: N of M prompts checkable, K native-only. Count valid current full/partial blocks as checkable, valid current native-only declarations separately, and include missing/invalid/stale prompts in M. Keep this separate from module binding coverage.
 
 Saved lint refresh and check continuation apply only to rows prepared for Runtime
 lint. Exclude local rows and rows with native_only declarations from every
@@ -1000,7 +1055,7 @@ empty rows. These paths require neither authentication nor Runtime requests.
 
 ## Native selection and no-verdict lint
 
-The files preview uses the same native omission selection as a check. Exclude
+Files previews and local/server lint report the [preflight local format advice](runtime-preflight.prompt.md) as warnings before authentication/upload; checks report its explicit-full warning. The files preview prints each warning with its path, JSON Pointer and repair message (stderr in text, a `warnings` list in JSON) and keeps every selected test's preview, state and exit code. The files preview uses the same native omission selection as a check. Exclude
 native-only scenario closures from its upload inventory, retaining each local
 path, reason, refusal and coverage in text/JSON. A valid native omission is not a
 broken test and does not itself fail a files preview; a malformed native scenario
@@ -1044,6 +1099,7 @@ pointer, but deduplication must retain the original location identity.
 
 ## Dependencies
 
+- [Recent lint receipt eligibility](runtime-lint-receipt.prompt.md): required generation and testing context for bounded metadata reuse.
 - [Product composition](product-composition.prompt.md): required generation/runtime/verification context for product assembly and journey selection under #808.
 
 - [Call preflight display](lint-call-preflight.prompt.md): required generation, verification and testing context for the pure advisory renderer and exact server report fields.

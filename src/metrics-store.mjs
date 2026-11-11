@@ -1,4 +1,4 @@
-// Generated from prompts/cli/metrics-store.prompt.md.
+// Generated from prompts/cli/metrics-store.prompt.md (sha256: 134bb856fa813ff633240e1871a48a8a6720565b995bf1140934d4df3d6c55d0).
 import * as fs from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';

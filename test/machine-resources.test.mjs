@@ -51,3 +51,44 @@ test('non-Linux fallback uses injected OS memory and no proc files', async () =>
     memory: () => ({ available: 20, total: 100 }), readFile: () => assert.fail('proc read'), statfs: () => ({ bavail: 10, blocks: 100, bsize: 4096 }) });
   assert.deepEqual(row.memory, { available: 20, total: 100 }); assert.deepEqual(row.pressure, { io: null, memory: null });
 });
+
+const VM_STAT = `Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                1000.
+Pages active:                             90000.
+Pages inactive:                            3000.
+Pages speculative:                          500.
+Pages throttled:                              0.
+Pages wired down:                          4000.
+Pages purgeable:                            200.
+`;
+
+test('macOS memory counts free, inactive and purgeable vm_stat pages', async () => {
+  const row = await readMachineResources({ cwd: '/checkout' }, { platform: 'darwin', cpuCount: () => 8, load: () => 1,
+    vmStat: () => VM_STAT, totalMemory: () => 16 * GiB, freeMemory: () => 1, statfs: () => ({ bavail: 10, blocks: 100, bsize: 4096 }) });
+  assert.deepEqual(row.memory, { available: (1000 + 3000 + 200) * 16384, total: 16 * GiB });
+});
+
+test('macOS memory falls back to free memory when vm_stat is unreadable or malformed', async () => {
+  for (const vmStat of [() => { throw Error('no vm_stat'); }, () => 'garbage', () => VM_STAT.replace('page size of 16384', 'page size of x')]) {
+    const row = await readMachineResources({ cwd: '/checkout' }, { platform: 'darwin', cpuCount: () => 8, load: () => 1,
+      vmStat, totalMemory: () => 16 * GiB, freeMemory: () => GiB, statfs: () => ({ bavail: 10, blocks: 100, bsize: 4096 }) });
+    assert.deepEqual(row.memory, { available: GiB, total: 16 * GiB });
+  }
+});
+
+// Wrong: an empty vm_stat (it timed out after 2 s) gives '' as memory, so the check queue refuses the machine.
+test('macOS memory falls back to free memory when vm_stat prints nothing', async () => {
+  const { machineCheckPorts } = await import('../src/machine-resources.mjs');
+  const row = await readMachineResources({ cwd: '/checkout' }, { platform: 'darwin', cpuCount: () => 8, load: () => 1,
+    vmStat: () => '', totalMemory: () => 16 * GiB, freeMemory: () => GiB, statfs: () => ({ bavail: 10, blocks: 100, bsize: 4096 }) });
+  assert.deepEqual(row.memory, { available: GiB, total: 16 * GiB });
+  assert.equal(machineCheckPorts({}, { platform: 'darwin', vmStat: () => '', freeMemory: () => 123 }).memory(), 123);
+});
+
+test('legacy capacity memory port uses the same macOS reader', async () => {
+  const { machineCheckPorts } = await import('../src/machine-resources.mjs');
+  const ports = machineCheckPorts({}, { platform: 'darwin', vmStat: () => VM_STAT, totalMemory: () => 16 * GiB, freeMemory: () => 1 });
+  assert.equal(ports.memory(), (1000 + 3000 + 200) * 16384);
+  const linux = machineCheckPorts({}, { platform: 'linux', freeMemory: () => 7 });
+  assert.equal(linux.memory(), 7);
+});

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/product.prompt.md (sha256: c9377d3b12b1d5326271b3342c0b6f5a7d24917e93d0dec51fc75bc2aee35195).
+// Generated from prompts/cli/product.prompt.md (sha256: cef023803dd7da9161cadd59566990dcc67af086f476c5db8919ddc4728c6278).
 import { execFile as execute } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, existsSync, fstatSync, lstatSync, openSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';

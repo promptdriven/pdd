@@ -132,11 +132,23 @@ test('workflow JSON status reads queue position even while the run has ordinary 
 });
 
 test('CLI rejects absent commands and invalid timeouts before execution', async () => {
-  for (const args of [[], ['--command','x','--timeout','0'], ['--command','x','--timeout','121']]) {
+  for (const args of [[], ['--command','x','--timeout','-1'], ['--command','x','--timeout','121'], ['--command','x','--timeout','1.5']]) {
     const stderr = capture(); let calls = 0;
     const code = await runPdd(['workflow','suite',...args], {stderr, stdout:capture(), workflowRunner:{runSuite:() => { calls++; }}});
     assert.equal(code, 2); assert.equal(calls, 0);
   }
+});
+
+test('--timeout 0 runs a suite with no time limit (a caller that watches it, such as the Autopilot core)', async t => {
+  const f = fixture(t);
+  const run = f.run(1, {timeout:'0'});
+  await until(() => f.started.length === 1, 'the suite starts');
+  assert.equal(f.started[0].options.timeoutMs, 0);
+  f.started[0].finish(0);
+  assert.equal(await run, 0);
+  const {executeSuite} = await import('../src/test-suite-queue.mjs');
+  const native = await executeSuite('sleep 0.3; exit 3', {cwd:f.root, env:{PATH:process.env.PATH}, timeoutMs:0, onChild:() => {}});
+  assert.equal(native.exitCode, 3, 'no timer stops it');
 });
 
 test('native CLI preserves cwd, explicit command variables, closed stdin, stdout, stderr and exit code', async t => {

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-binding-plan.prompt.md (sha256: a3309e16808c518bd2ed5af944dcc1ccac086909325f2f08bc4d224cc4712779).
+// Generated from prompts/cli/runtime-binding-plan.prompt.md (sha256: 5287e914876856ec130dfdbff660f78b68805ea54e6c75760aaa3db373f5f0d6).
 
 const rows = value => Array.isArray(value) ? value : [];
 const selectedResources = (iface, operation) => {

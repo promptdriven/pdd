@@ -2,7 +2,7 @@
 name: pdd-prompting
 description: The PDD Prompting guide. Use when you write, change or review a module prompt (*.prompt.md), a Story or test cases, when the person asks how to write prompts in PDD, or asks to set up real behavior verification for a repository. In PDD, prompts are the source and code follows them.
 metadata:
-  pdd-skills: 0.1.27
+  pdd-skills: 0.1.28
 ---
 
 # PDD prompting
@@ -11,14 +11,14 @@ Each code module's `.prompt.md` is the source; code implements it.
 
 ## Core rules
 
-- Read `guide.md` in full before you write or change a prompt, Story or test cases. Read RUNBOOK.md §2–§4 before you write a prompt or a test file.
+- Read `guide.md` fully before writing/changing prompts, Stories or cases. Read RUNBOOK.md §2–§4 before you write a prompt or a test file.
 - Change the prompt first, then the code.
 - One prompt per module: purpose and behavior. Give each rule one owner prompt. Link to a shared rule. Do not copy it. For a CLI, say if a rule belongs to the whole-CLI prompt or to one module's prompt.
 - Keep caller behavior and important edges. Outside code (database, files, network, clock, randomness, programs): use an injected port that the PDD interpreter fakes, never direct calls. See [RUNBOOK §21](RUNBOOK.md#21-fake-the-outside-world).
 - Linked `.ui.svg` is the layout spec: parts, words, order, ids and states. Prose and drawing must agree (RUNBOOK §13).
 - Derive expectations from requirements before code; never copy code output.
 - Show prompt, Story and cases before building. The person decides; record their actual chat approval with --said (RUNBOOK §2), never invent it.
-- Report only checks that you ran, with their real output.
+- Do not run `pdd lint` before `pdd test`; test includes lint. Report only real checks and output.
 
 ## Files
 

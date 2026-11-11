@@ -1,3 +1,4 @@
+// Generated from prompts/cli/metrics-gap.prompt.md (sha256: 2bd474af2b688457c5358e550521bd73e6869cfbbcb85a6b28cd52d9df81b7a6).
 // Best-effort durable fallback when metrics identity or outbox creation fails.
 import * as nativeFiles from 'node:fs';
 import {join} from 'node:path';

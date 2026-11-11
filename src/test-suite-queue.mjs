@@ -1,4 +1,4 @@
-// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: f372251fc1f0bc0fc3c23cfd8a61822bbb46d2af1501320e4e0b702faea9efe3).
+// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: bc62cab09b2f567de66cdb099d23ca87252f46509f9610aae7f8b54aab9c8879).
 import {knownSecretValues, rememberSecrets} from './secret-redaction.mjs';
 import * as files from 'node:fs';
 import {serializeValidationReceipt, safeEvidenceText} from './validation-evidence.mjs';
@@ -220,8 +220,9 @@ export function suiteStatusWords(suite) {
     : 'full test suite finished';
 }
 export async function runTestSuite({ cwd, command, timeout = 30, env = process.env }, ports = {}) {
-  if (typeof command !== 'string' || !command.trim() || !Number.isInteger(timeout) || timeout < 1 || timeout > 120)
-    return { exitCode: 2, message: 'Supply a suite command and a timeout of 1 to 120 minutes.' };
+  // A timeout of 0 is no time limit: the caller watches the run (the Autopilot core does).
+  if (typeof command !== 'string' || !command.trim() || !Number.isInteger(timeout) || timeout < 0 || timeout > 120)
+    return { exitCode: 2, message: 'Supply a suite command and a timeout of 1 to 120 minutes, or 0 for no time limit.' };
   rememberSecrets(...knownSecretValues(env));
   let p, row, environmentRoot, executionStarted = false, keepEnvironment = false;
   try {
@@ -284,7 +285,7 @@ export async function runTestSuite({ cwd, command, timeout = 30, env = process.e
     }
     childEnv.PDD_CHECK_CPUS = String(row.coresPerCheck);
     executionStarted = true;
-    const result = await p.execute(command, { cwd, env:childEnv, cpuIds:row.cpuIds, taskset:row.taskset, timeoutMs: Number(timeout) * 60_000,
+    const result = await p.execute(command, { cwd, env:childEnv, cpuIds:row.cpuIds, taskset:row.taskset, timeoutMs: timeout ? Number(timeout) * 60_000 : 0,
       record:row, environmentRoot, secrets:knownSecretValues(env),
       onRecorder: pid => { row.recorderPid = pid; row.recorderIdentity = p.processIdentity(pid); save(p,row); keepEnvironment = true; },
       onChild: pid => { row.childPid = pid; save(p, row); } });
@@ -332,7 +333,7 @@ export async function executeSuite(command, { cwd, env, timeoutMs, onChild, onOu
     const interrupt = () => stop(130, 'Test suite interrupted (SIGINT).');
     const terminate = () => stop(143, 'Test suite interrupted (SIGTERM).');
     process.on('SIGINT', interrupt); process.on('SIGTERM', terminate);
-    const timer = setTimeout(() => stop(124, `Test suite execution timeout after ${timeoutMs / 60_000} minutes.`), timeoutMs);
+    const timer = timeoutMs ? setTimeout(() => stop(124, `Test suite execution timeout after ${timeoutMs / 60_000} minutes.`), timeoutMs) : null;
     const cleanup = () => { clearTimeout(timer); clearTimeout(escalation); process.off('SIGINT', interrupt); process.off('SIGTERM', terminate); killGroup('SIGKILL'); };
     let settled = false;
     const finish = async result => {
@@ -358,7 +359,7 @@ export async function executeSuite(command, { cwd, env, timeoutMs, onChild, onOu
 // The recorder starts no command until its caller has saved its custody.
 async function executeRecordedSuite(command, options, ports) {
   return new Promise((done, reject) => {
-    const child = spawn(process.execPath, [fileURLToPath(new URL('./test-suite-recorder.mjs',import.meta.url))],
+    const child = (ports.spawnRecorder ?? spawn)(process.execPath, [fileURLToPath(new URL('./test-suite-recorder.mjs',import.meta.url))],
       {cwd:options.cwd,env:options.env,detached:true,stdio:['ignore','ignore','ignore','ipc']});
     let terminal = false;
     const cancel = signal => { if (child.connected) child.send({cancel:signal},()=>{}); };
@@ -366,7 +367,8 @@ async function executeRecordedSuite(command, options, ports) {
     process.on('SIGINT',interrupt); process.on('SIGTERM',terminate);
     const cleanup = () => { process.off('SIGINT',interrupt); process.off('SIGTERM',terminate); };
     child.once('error', error => { cleanup(); reject(error); });
-    child.once('exit', () => { cleanup(); if (!terminal) reject(Error('Validation recorder ended without a terminal receipt.')); });
+    // Exit can precede delivery of queued IPC messages; close waits for the channel.
+    child.once('close', () => { cleanup(); if (!terminal) reject(Error('Validation recorder ended without a terminal receipt.')); });
     child.on('message', message => {
       if (message.stream) {
         const output = ports[message.stream] ?? process[message.stream];

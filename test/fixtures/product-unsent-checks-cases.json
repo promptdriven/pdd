@@ -1431,7 +1431,7 @@
         "product": "Use the existing synthetic coffee product map/plan in test/runtime/product-saved-checks.json; create S01, S02, S03, S04 copies of the Harbor Story/scenario, preserving complete authored criteria/steps and exact original test selection.",
         "first_check": "Use injected deterministic passing lint and complete matching-ID check receipts to produce four genuine current saved passes through runCheck, with no external Runtime.",
         "second_check": "On the same files and exact four tests, use runCheck with injected lint hold or an interrupt after lint but before the first check dispatch. Require every row request_ids to be empty and no Check POST. Retain the original captured source SHA, complete row metadata and lint receipt.",
-        "clock": "Use distinct deterministic command times so the unsent producer batch is later than the first batch.",
+        "clock": "Use distinct deterministic command times so the unsent producer batch is later than the first batch. For the lint hold, the second command is more than ten minutes later, past the recent passing lint reuse window, so it sends a fresh lint.",
         "conversion": "Run independently with the produced intent check intact, and with only intent removed from both batches. Do not repair row metadata or synthesize Check receipts for the unsent batch."
       },
       "stop_variants": [

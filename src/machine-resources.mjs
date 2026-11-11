@@ -1,4 +1,4 @@
-// Generated from prompts/cli/machine-resources.prompt.md (sha256: 217d7b0ad19c8eca8ae2160d572e17e3f912823526d070df16aeadbb8136095e).
+// Generated from prompts/cli/machine-resources.prompt.md (sha256: b0cbcac8d1670bc0fae7973e6325220c3fc2fcb876ee1b006101ca79b8f46f2e).
 import * as files from 'node:fs';
 import { readFileSync, statfsSync } from 'node:fs';
 import { join, isAbsolute } from 'node:path';
@@ -23,7 +23,7 @@ export async function readMachineResources({ cwd } = {}, ports = {}) {
   const cpuCount = await observe(ports.cpuCount ?? (() => cpus().length));
   const load = await observe(ports.load ?? (() => loadavg()[0]));
   const memory = pair(await observe(ports.memory ?? (async () => {
-    if (!linux) return { available: freemem(), total: totalmem() };
+    if (!linux) return { available: availableMemory(ports), total: (ports.totalMemory ?? totalmem)() };
     const text = await read('/proc/meminfo');
     return { available: Number(/^MemAvailable:\s+(\d+)\s+kB$/m.exec(text)?.[1]) * 1024,
       total: Number(/^MemTotal:\s+(\d+)\s+kB$/m.exec(text)?.[1]) * 1024 };
@@ -36,6 +36,21 @@ export async function readMachineResources({ cwd } = {}, ports = {}) {
   }));
   return { ...(check ? {check} : {}), cpuCount: Number.isSafeInteger(cpuCount) && cpuCount > 0 ? cpuCount : null,
     load: finite(load) ? load : null, memory, pressure: { io, memory: memoryPressure }, disk };
+}
+
+// macOS keeps reclaimable pages out of free memory: count free, inactive and purgeable pages.
+function macAvailable(text) {
+  const size = Number(/page size of (\d+) bytes/.exec(text)?.[1]);
+  const pages = ['free', 'inactive', 'purgeable'].map(name => Number(new RegExp(`^Pages ${name}:\\s+(\\d+)\\.?$`, 'm').exec(text)?.[1]));
+  return size > 0 && pages.every(Number.isSafeInteger) ? pages.reduce((a, b) => a + b, 0) * size : null;
+}
+function availableMemory(ports = {}) {
+  const free = ports.freeMemory ?? freemem;
+  if ((ports.platform ?? process.platform) !== 'darwin') return free();
+  let text = null;
+  try { text = String((ports.vmStat ?? (() => spawnSync('vm_stat', [], { encoding: 'utf8', timeout: 2000 }).stdout))()); } catch { /* Fall back to free memory. */ }
+  // Empty output (vm_stat timed out) is a failed read, like malformed text: use free memory.
+  return (text ? macAvailable(text) : null) ?? free();
 }
 
 function nativeCores() {
@@ -72,5 +87,5 @@ function nativeTaskset(env) {
 export function machineCheckPorts(env = process.env, ports = {}) {
   return {cores:nativeCores, platform:process.platform, battery:nativeBattery,
     virtualized:()=>nativeVirtualized(ports.spawnSync ?? spawnSync), taskset:()=>nativeTaskset(env),
-    memory:freemem, load:()=>loadavg()[0]};
+    memory:()=>availableMemory(ports), load:()=>loadavg()[0]};
 }

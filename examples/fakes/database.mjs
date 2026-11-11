@@ -1,4 +1,4 @@
-// Generated from examples/fakes/database.prompt.md (sha256: 738fc34ee397d9642da28b1857e769c9bb455a1db3657d68aff733a2030e03bb).
+// Generated from examples/fakes/database.prompt.md (sha256: ca76ca82fa4402545fa24c747079065bb381b81b822ad422843715fc9b7331ea).
 export function findBook(db, id) {
   return db.find({ id });
 }

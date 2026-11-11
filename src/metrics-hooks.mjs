@@ -1,4 +1,4 @@
-// Generated from prompts/cli/metrics-hooks.prompt.md.
+// Generated from prompts/cli/metrics-hooks.prompt.md (sha256: 78a1fcf7077f3cc5fc6275f9385e26e33a7a1499581f97d43fe891a94c48ba3f).
 import { captureObservation } from './metrics-capture.mjs';
 
 const time = value => typeof value === 'number' && Number.isFinite(value) ? new Date(value).toISOString() : value;

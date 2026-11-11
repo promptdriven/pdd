@@ -108,7 +108,7 @@ test('bulk draft respects the workspace and does not draft nested fixture projec
 test('setup offers offline drafts, respects a decline, and does not approve an accepted draft', async t => {
   for(const answer of ['n','y',null]) {
     const setup=harbor(t,repo=>explicitContract(repo));
-    const stdout=sink(),stderr=sink(),questions=[];
+    const stdout={...sink(),isTTY:answer!==null},stderr=sink(),questions=[];
     const code=await runPdd(['setup'],{cwd:setup.repo,stdout,stderr,stdin:{isTTY:answer!==null},env:{HOME:setup.home},
       pathDiagnostic:()=>[],setupSkills:()=>[],setupProject:()=>({file:'AGENTS.md',changed:false}),setupAgentMcp:async()=>0,
       workflowAgents:{checkWorkflowAgents:async()=>({ok:true,agent:'codex'})},gitContext:async()=>({toplevel:setup.repo}),

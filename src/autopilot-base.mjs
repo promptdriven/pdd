@@ -1,9 +1,10 @@
-// Generated from prompts/cli/autopilot-base.prompt.md (sha256: 0e88eee1fa9c731f81dfce090112f791d88320e39c40de9b4bd6fb3b69dd3b48).
+// Generated from prompts/cli/autopilot-base.prompt.md (sha256: 9e6669a86756b7ba2c76552e81a1173c48b98b0600b371a5928fa3bf6bec4c3a).
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { nativeGithubCounter } from './github-calls.mjs';
+import { nativeGithubCounter, githubListArgs, githubListItems } from './github-calls.mjs';
+import { redactSecrets } from './secret-redaction.mjs';
 
 const nativeExec = nativeGithubCounter(promisify(execFile));
 const named = value => typeof value === 'string' && value.trim().length > 0 && !/[\x00-\x1f\x7f]/.test(value);
@@ -13,9 +14,13 @@ function readConfig(cwd) {
   try { return JSON.parse(readFileSync(join(cwd, 'pdd.json'), 'utf8')); }
   catch (error) { if (error.code === 'ENOENT') return {}; throw Error('Cannot read base settings from pdd.json.'); }
 }
+// A failed read carries its real cause: the first line of the tool's error output, without secrets, at most 200 characters.
+const reason = text => redactSecrets(String(text ?? '').split('\n').map(line => line.trim()).find(Boolean) ?? '').replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 200);
 async function command(ports, cwd, file, args) {
-  const result = await (ports.execFile ?? nativeExec)(file, args, { cwd, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
-  if (!result || result.code !== undefined && result.code !== 0) throw Error('Read failed.');
+  let result;
+  try { result = await (ports.execFile ?? nativeExec)(file, args, { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }); }
+  catch (error) { throw Error(reason(error.stderr) || reason(error.message) || 'the read failed'); }
+  if (!result || result.code !== undefined && result.code !== 0) throw Error(reason(result?.stderr) || `${file} exited with ${result?.code ?? 'no result'}`);
   return result.stdout;
 }
 export async function selectAutopilotBase({ cwd, defaultBranch }, ports = {}) {
@@ -45,9 +50,10 @@ export async function checkAutopilotBase({ run, pr }, ports = {}) {
     const metadata = await api(`repos/${repo}`), defaultBranch = metadata.default_branch;
     if (!branchName(defaultBranch)) return refuse('the current default branch is unavailable.');
     stage = 'releases';
-    const pages = await api(`repos/${repo}/releases?per_page=100`, ['--paginate', '--slurp']);
-    if (!Array.isArray(pages) || pages.some(page => !Array.isArray(page))) return refuse('release history is unavailable.');
-    const releases = pages.flat();
+    // Every page, with no --slurp (gh before 2.48 has none): one release per line, only the fields this check reads.
+    let releases;
+    const text = await command(ports, run.root, 'gh', ['api', `repos/${repo}/releases?per_page=100`, ...githubListArgs('{tag_name, draft, published_at}')]);
+    try { releases = githubListItems(text); } catch { return refuse(`${base}: could not verify releases (the release list is not JSON); retry the read before merging.`); }
     if (releases.some(release => !release || typeof release.draft !== 'boolean'
       || !release.draft && (!named(release.tag_name) || !Number.isFinite(Date.parse(release.published_at))))) return refuse('release history is incomplete.');
     const latest = releases.filter(release => !release.draft).sort((a, b) => Date.parse(b.published_at) - Date.parse(a.published_at))[0];
@@ -59,5 +65,5 @@ export async function checkAutopilotBase({ run, pr }, ports = {}) {
       if (comparison.behind_by > 0 || !['identical', 'ahead'].includes(comparison.status)) return refuse(`${base} does not contain ${description} ${ref} (${comparison.behind_by} commit(s) behind).`);
     }
     return { exitCode: 0, message: `Base check: PR #${pr} targets saved base ${base}; contains default branch ${defaultBranch} and ${latest ? `newest release tag ${latest.tag_name}` : 'no published release is present'}.` };
-  } catch { return refuse(`${base}: could not verify ${stage}; retry the read before merging.`); }
+  } catch (error) { return refuse(`${base}: could not verify ${stage} (${reason(error.message) || 'the read failed'}); retry the read before merging.`); }
 }

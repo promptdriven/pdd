@@ -1,3 +1,4 @@
+// Generated from prompts/cli/autopilot-doctor.prompt.md (sha256: 5c6aa8ed50bee8d8a4d0f4dc3477b6b0a6eb254714268d42e2b39581d5e725f1).
 // Source: prompts/cli/autopilot-doctor.prompt.md.
 import {rememberSecrets, knownSecretValues} from './secret-redaction.mjs';
 import * as nativeFiles from 'node:fs';
@@ -140,9 +141,13 @@ export async function runAutopilotDoctor(input, ports = {}) {
   if (agent?.kind==='codex') { try { usage = await (ports.codexLimits ?? readCodexLimits)({command:agent.command??'codex',cwd,env}, {spawn:ports.spawn}); } catch {} }
   add('agent-usage',usage.state==='healthy'?'pass':'warn',usage.state==='limited'?'Agent usage limit reached; retry after allowance is available':usage.state==='healthy'?'Read-only usage check healthy':`${agent?.kind ?? 'Agent'} usage is unproved${agent?.kind==='claude'?'; run /usage in Claude Code':''}`,agent?.kind==='claude'?quote(agent.command??'claude'):retry);
 
-  const herdr = await run('herdr',['--version']);
-  add('herdr',ready(herdr)?'pass':'fail','Herdr installation','curl -fsSL https://herdr.dev/install.sh | sh');
-  if (input.coordinatorPaneId) {
+  // The core engine runs jobs headless: Herdr is not needed.
+  const engine = (['core','full'].includes(input.engine) ? input.engine : json(read(join(cwd,'pdd.json')))?.autopilot?.engine) === 'core' ? 'core' : 'full';
+  const herdr = engine === 'core' ? null : await run('herdr',['--version']);
+  if (engine === 'core') add('herdr','pass','Not needed: autopilot.engine is core, so jobs run headless without Herdr','pdd autopilot status');
+  else add('herdr',ready(herdr)?'pass':'fail','Herdr installation','curl -fsSL https://herdr.dev/install.sh | sh');
+  if (engine === 'core') { /* No coordinator room or workflow panes. */ }
+  else if (input.coordinatorPaneId) {
     let health;
     try { health=await ports.coordinatorHealth?.({env}); } catch {}
     const verified=['working','starting','idle','blocked','done'].includes(health?.state);

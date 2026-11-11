@@ -49,6 +49,8 @@ An explicit absolute `PDD_SUITE_QUEUE` selects a shared directory; the compatibi
 `PDD_VM_SUITE_LOCK` selects `VALUE.queue` when the first variable is absent.
 Reject relative paths, blank commands and invalid timeouts before execution.
 Timeout is an integer of 1 to 120 minutes, default 30, measured only after admission.
+A timeout of 0 means no time limit (`timeoutMs` 0: `executeSuite` starts no timer), for a
+caller that watches the run itself, such as the Autopilot core.
 The compatibility script accepts `--check` without executing, uses `SUITE` when
 nonblank, otherwise `POCKET_BROWSER_BIN=/usr/bin/google-chrome npm test`, and
 returns the child's status. Preserve the compatibility queued/started/finished
