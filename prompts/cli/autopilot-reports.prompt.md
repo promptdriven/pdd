@@ -18,17 +18,23 @@ most once a day.
   (`stableCode`): merge-check-tool, suite-broken, adopt-pdd (its body asks to adopt
   PDD for the listed modules), no-verdict, scenario-limit,
   vector-replay, runtime-case, lint-refusal, interface-refusal, binding-refusal,
-  interpreter-error, server-incompatible, crash, claim-error, not-run, timeout,
+  interpreter-error, server-internal (a server-side internal error: server-internal,
+  internal-server, server-error, server-5NN or http-5NN), server-incompatible, crash,
+  claim-error, not-run, timeout,
   cli-error (matched in this order on the slug), else `other-HASH`: the first 8 hex
   digits of the SHA-256 of `STEP:CODE` (the step and the code slug without digits;
   never the agent's text, paths or numbers). The component becomes one fixed word (`stableComponent`):
   autopilot-core, pdd-lint, pdd-approve, pdd-workflow, pdd-test (also runtime,
   interpreter, verdict, scenario, vector), pdd, agent, else other. So spellings of one
   cause are one report. A new `other-…` cause files at most one new report per machine
-  per day (the ledger); the rest stay drafts (a person's send has no such cap). Kind
-  `runtime` stays only for the Runtime codes no-verdict, interface-refusal,
-  binding-refusal, interpreter-error and server-incompatible; every other runtime cause
-  is a PDD report.
+  per day (the ledger); the rest stay drafts (a person's send has no such cap). The
+  owner follows Serhan's boundary: everything that goes INTO Runtime is PDD's (prompts,
+  interface blocks, bindings, Stories, test vectors, tests, up to the call); everything
+  inside Runtime after the call until the result comes back is Runtime's. So kind
+  `runtime` stays only for the Runtime codes (`RUNTIME_CODES`) no-verdict,
+  interpreter-error, server-incompatible and server-internal. Every other runtime cause,
+  also interface-refusal, binding-refusal and lint-refusal (a refusal of our input is
+  ours to fix first), is a PDD report.
 - Fingerprint: `reportFingerprint({kind, component, code, version})` is
   `KIND.COMPONENT.CODE.MINOR`, each part lowercased with runs of other characters
   as `-` (at most 40 characters; empty is `unknown`), and MINOR is the first two

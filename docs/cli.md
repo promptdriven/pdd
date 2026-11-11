@@ -1512,10 +1512,11 @@ several machines run the core on one repository, each machine's GitHub share is 
 machine over its share starts no new job. A machine that finishes an END or a release
 after a pause writes nothing on an issue that another machine took over.
 
-A Runtime problem (no verdict, interface or binding refusal, interpreter error,
-server compatibility) or a PDD problem (CLI error, crash, claim or merge-check tool
-error, and test vectors: a Runtime case, a scenario value limit such as a value that
-is not a safe integer, a vector replay) also gets one report for its owners: a PDD
+A Runtime problem (inside Runtime after the call: no verdict, an interpreter error,
+server incompatibility, a server-side internal error) or a PDD problem (everything
+that goes into Runtime: a lint, interface or binding refusal of our input, test
+vectors such as a Runtime case, a scenario value limit or a vector replay; and CLI
+errors, crashes, claim or merge-check tool errors) also gets one report for its owners: a PDD
 problem in promptdriven/pdd with label `pdd:autopilot-report`; a Runtime problem in
 `reports.runtimeRepo` when this machine can read it, else in promptdriven/pdd, with
 label `pdd:runtime` (assigned to the Runtime owner). One cause has one report: a

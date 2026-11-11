@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-reports.prompt.md (sha256: 339400dfa087c426872b14fd4eb90774118af4defabeab379c02576a943892b0).
+// Generated from prompts/cli/autopilot-reports.prompt.md (sha256: a5682849861a0f2b66e67b32660fc652036fbf470053b9c5d7ace701bba929fc).
 import * as nativeFs from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -101,9 +101,10 @@ function keepDraft(fs, root, draft, now) {
   save(fs, file, { ...draft, count: (old?.count ?? 0) + 1, firstAt: old?.firstAt ?? now, lastAt: now });
 }
 
-// The owner of a cause. Test vectors are PDD's: a Runtime case, a scenario value limit (for example a value that is not
-// a safe integer) or a vector replay is kind pdd. Kind runtime is what goes in and out of Runtime: interface and binding
-// refusals, interpreter errors, no verdict, server compatibility.
+// The owner of a cause (Serhan's boundary): everything that goes INTO Runtime is PDD's (prompts, interface blocks,
+// bindings, Stories, test vectors, tests, up to the call), so a refusal of our input (interface, binding, lint), a
+// scenario value limit, a vector replay or a Runtime case is kind pdd. Kind runtime is only what happens inside Runtime
+// after the call: no verdict, an interpreter error, server incompatibility, a server-side internal error.
 const PDD_OWNED = /scenario|vector|replay|safe-integer|integer-out-of-range|runtime-case|test-case/;
 export function reportKind(cause) {
   if (cause?.kind !== 'runtime') return cause?.kind;
@@ -113,15 +114,15 @@ export function reportKind(cause) {
 const CODES = [['merge-check-tool', /^merge-check-tool$/], ['suite-broken', /^suite-broken$/], ['adopt-pdd', /^adopt-pdd$/], ['no-verdict', /verdict/],
   ['scenario-limit', /scenario|safe-integer|integer-out-of-range|out-of-range/], ['vector-replay', /vector|replay/], ['runtime-case', /runtime-case|test-case/],
   ['lint-refusal', /lint/], ['interface-refusal', /interface/], ['binding-refusal', /binding/], ['interpreter-error', /interpreter/],
-  ['server-incompatible', /server|compat/], ['crash', /crash|panic|segfault|exception/], ['claim-error', /claim/], ['not-run', /not-run/],
+  ['server-internal', /server-internal|internal-server|server-error|server-5\d\d|http-5\d\d/], ['server-incompatible', /server|compat/], ['crash', /crash|panic|segfault|exception/], ['claim-error', /claim/], ['not-run', /not-run/],
   ['timeout', /timeout|timed-out/], ['cli-error', /cli|command|usage|exit|failed|error/]];
 // An unknown code is other-HASH of the step and the error class (the code slug with no digits) only, never of the
 // agent's text, so one cause is one report; at most one new "other" report per machine per day.
 export const stableCode = (code, step = '') => CODES.find(([, test]) => test.test(slug(code)))?.[0]
   ?? `other-${createHash('sha256').update(`${slug(step)}:${slug(code).replace(/\d+/g, '')}`).digest('hex').slice(0, 8)}`;
-// Runtime kind is only what goes in and out of Runtime; every other cause (lint, scenario limits, test vectors, the
-// pdd command, the core) is a PDD report.
-const RUNTIME_CODES = new Set(['no-verdict', 'interface-refusal', 'binding-refusal', 'interpreter-error', 'server-incompatible']);
+// Runtime kind is only what happens inside Runtime; every other cause (a refusal of our input, scenario limits, test
+// vectors, the pdd command, the core) is a PDD report.
+export const RUNTIME_CODES = new Set(['no-verdict', 'interpreter-error', 'server-incompatible', 'server-internal']);
 const COMPONENTS = [['autopilot-core', /autopilot|core/], ['pdd-lint', /lint/], ['pdd-approve', /approve/], ['pdd-workflow', /workflow/],
   ['pdd-test', /test|runtime|interpreter|verdict|scenario|vector/], ['pdd', /pdd/], ['agent', /agent|codex|claude/]];
 export const stableComponent = component => COMPONENTS.find(([, test]) => test.test(slug(component)))?.[0] ?? 'other';

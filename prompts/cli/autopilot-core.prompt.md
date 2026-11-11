@@ -646,8 +646,10 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
 ## END
 
 `END(cause)` takes `{kind, component, code, text, detail}`; kinds are `runtime`
-(no verdict, lint refusal, binding refusal, interpreter error), `pdd` (CLI error,
-crash, claim error, merge-check tool error) and `job` (the agent did not do the
+(as the agent says it; the [report owner](autopilot-reports.prompt.md) keeps only no
+verdict, interpreter error, server incompatibility and a server-side internal error as
+Runtime's, and makes a refusal of our input, such as a lint, interface or binding
+refusal, a PDD report), `pdd` (CLI error, crash, claim error, merge-check tool error) and `job` (the agent did not do the
 task, no progress, red checks). It stops the job's processes and saves phase
 `ending`, then, resumable step by step on later ticks:
 

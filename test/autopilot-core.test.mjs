@@ -1565,8 +1565,8 @@ test('D1 base refresh: a clean merge with the same change keeps the PASS review;
   assert.ok(w.job(17, 'conflict'), 'a conflict update'); assert.equal(w.job(17, 'repair'), undefined); assert.match(w.job(17, 'conflict').input, /conflict/i);
 });
 
-test('E1 report owner: a scenario or test-vector cause is a PDD report; interface, binding, interpreter and no-verdict causes stay Runtime', async t => {
-  const { fileReport, reportKind } = await import('../src/autopilot-reports.mjs');
+test('E1 report owner (Serhan\'s boundary): our input to Runtime (interface, binding, lint, vectors, scenarios) is PDD; only no-verdict, interpreter, server errors stay Runtime', async t => {
+  const { fileReport, reportKind, stableCode, RUNTIME_CODES } = await import('../src/autopilot-reports.mjs');
   const { mkdtempSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
   const root = mkdtempSync(join(tmpdir(), 'pdd-owner-'));
@@ -1577,10 +1577,26 @@ test('E1 report owner: a scenario or test-vector cause is a PDD report; interfac
   const draft = listReportDrafts({ root }).find(d => d.fingerprint === scenario.fingerprint);
   assert.deepEqual(draft.labels, ['pdd:autopilot-report']); assert.deepEqual(draft.assignees, []); assert.match(draft.title, /^Autopilot report: PDD /);
   for (const code of ['vector-replay-failed', 'safe-integer-limit', 'runtime-case-invalid']) assert.equal(reportKind({ kind: 'runtime', component: 'pdd test', code }), 'pdd', code);
-  for (const code of ['binding-refused', 'interface-refused', 'interpreter-error', 'no-verdict', 'server-incompatible']) assert.equal(reportKind({ kind: 'runtime', component: 'pdd test', code }), 'runtime', code);
+  assert.deepEqual([...RUNTIME_CODES].sort(), ['interpreter-error', 'no-verdict', 'server-incompatible', 'server-internal']);
+  // One spelling per code: the fixed code, then its owner when an agent says kind runtime.
+  const owners = { 'no-verdict': 'runtime', 'interpreter-error': 'runtime', 'server-incompatible': 'runtime', 'server-internal': 'runtime',
+    'interface-refusal': 'pdd', 'binding-refusal': 'pdd', 'lint-refusal': 'pdd', 'scenario-limit': 'pdd', 'vector-replay': 'pdd', 'runtime-case': 'pdd',
+    'cli-error': 'pdd', crash: 'pdd', 'claim-error': 'pdd', 'merge-check-tool': 'pdd', 'suite-broken': 'pdd', 'not-run': 'pdd', timeout: 'pdd', 'adopt-pdd': 'pdd', other: 'pdd' };
+  const spelled = { 'no-verdict': 'No verdict', 'interpreter-error': 'interpreter crashed', 'server-incompatible': 'server version incompatible', 'server-internal': 'HTTP 503',
+    'interface-refusal': 'interface refused', 'binding-refusal': 'binding refused', 'lint-refusal': 'lint refused', 'scenario-limit': 'scenario integer out of range',
+    'vector-replay': 'vector replay failed', 'runtime-case': 'runtime case invalid', 'cli-error': 'cli usage', crash: 'panic', 'claim-error': 'claim lost',
+    'merge-check-tool': 'merge-check-tool', 'suite-broken': 'suite-broken', 'not-run': 'not run', timeout: 'timed out', 'adopt-pdd': 'adopt-pdd', other: 'weird thing' };
+  for (const [code, owner] of Object.entries(owners)) {
+    const spelling = spelled[code] === 'HTTP 503' ? 'http-503' : spelled[code];
+    assert.equal(code === 'other' ? stableCode(spelling).startsWith('other-') : stableCode(spelling), code === 'other' ? true : code, spelling);
+    assert.equal(reportKind({ kind: 'runtime', component: 'pdd test', code: spelling }), owner, `${code} is ${owner}`);
+  }
   const binding = await file({ kind: 'runtime', component: 'pdd test', code: 'binding-refused', text: 'the binding was refused' });
-  const runtime = listReportDrafts({ root }).find(d => d.fingerprint === binding.fingerprint);
-  assert.equal(binding.fingerprint, 'runtime.pdd-test.binding-refusal.0.1'); assert.deepEqual(runtime.labels, ['pdd:runtime']); assert.deepEqual(runtime.assignees, ['agarwal-ishaan']);
+  const pddDraft = listReportDrafts({ root }).find(d => d.fingerprint === binding.fingerprint);
+  assert.equal(binding.fingerprint, 'pdd.pdd-test.binding-refusal.0.1'); assert.deepEqual(pddDraft.labels, ['pdd:autopilot-report']); assert.deepEqual(pddDraft.assignees, []);
+  const internal = await file({ kind: 'runtime', component: 'pdd test', code: 'server-internal', text: 'the server failed' });
+  const runtime = listReportDrafts({ root }).find(d => d.fingerprint === internal.fingerprint);
+  assert.equal(internal.fingerprint, 'runtime.pdd-test.server-internal.0.1'); assert.deepEqual(runtime.labels, ['pdd:runtime']); assert.deepEqual(runtime.assignees, ['agarwal-ishaan']);
   assert.equal(reportKind({ kind: 'pdd', component: 'pdd', code: 'crash' }), 'pdd'); assert.equal(reportKind({ kind: 'job', code: 'scenario' }), 'job');
 });
 
