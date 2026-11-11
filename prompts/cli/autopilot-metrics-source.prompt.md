@@ -65,6 +65,12 @@ commands. Native calls use the counted gh runner, purpose other.
 ports={})` is the lifecycle integration hook: validate the scorecard event domain
 and any supplied PR/SHA or throw `Invalid Autopilot metric`. Keep only named
 fields, lowercase repo/head, append `{metric:event}` to root/history.jsonl.
+For an evidence event with a canonical identity defined by the scorecard, read
+history before appending and skip an identity already recorded there. Malformed
+or partial lines supply no identity. A read error other than a missing file
+propagates without appending; core treats it as a local measurement failure.
+This makes a successful append survive failed job bookkeeping/restarts. The
+scorecard also reconciles historical duplicates to their earliest timestamps.
 Repair a cut trailing line with newline first. Directory/file modes: 0700/0600.
 All filesystem effects use `ports.fs`. The reporting reader uses it only for the discovered BAD/revert observations
 above; it never changes jobs, workflow state, approvals or public objects.

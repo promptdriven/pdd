@@ -29,6 +29,15 @@ ci:{head,state:pass}}`, all heads equal the event SHA. A regression requires
 reason `reverted`, `bad-audit` or `merge-ci-red` and an earlier Autopilot merge
 for the same repo/issue and PR when supplied. A merge alone proves no checks.
 Deduplicate each day by lowercase repository + issue, across jobs/retries/PRs.
+Before selecting reporting windows, reconcile evidence events with a recorded
+head by `(repo, issue, head, canonical evidence)`, retaining the earliest valid
+timestamp regardless of input order or PR number. This repairs duplicate durable
+facts after a failed job save or crash; without an execution identity they cannot
+represent another check. Different heads or canonical facts remain independent.
+`autopilotEvidenceIdentity(event)` returns that JSON tuple string for a normalized
+valid evidence event with head and complete canonical evidence, otherwise null.
+The writer reuses it for durable deduplication; headless historical events retain
+their existing daily treatment.
 
 `normalizeAutopilotMetric(event)` returns a fresh allowlisted event with lowercase
 repo/head/mergeCommit and UTC ISO at, or null for an invalid event. Drop unknown fields,

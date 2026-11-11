@@ -321,7 +321,10 @@ Phase `pr` has its own deadline (entry plus `jobTimeoutMinutes`). Each tick, in 
    claim that is not confirmed as this job's waits. Post one merge comment on the PR for this head: `CI: green (N check(s))` or
    `CI: none (…)`, the suite, the review, the PR's Runtime line and the base check,
    with the marker `<!-- pdd:autopilot-core:merge:HEAD -->`. Then
-   `gh pr merge PR --repo REPO --merge --match-head-commit HEAD`. A failed merge
+   `PUT repos/REPO/pulls/PR/merge` with `{sha: HEAD, merge_method: "merge"}`
+   through the GitHub port. This synchronous mutation preserves the exact-head
+   guard and exposes the operation's acknowledgement (see attribution below).
+   A failed merge
    waits for the next tick. A confirmed merge closes the issue when it is open,
    removes `pdd:working`, cleans up locally (see END) and records `merged`.
 
@@ -388,7 +391,10 @@ including after cleanup. The scorecard's canonical parser owns validation and
 normalization. Reject the whole observation on malformed or conflicting lines.
 Deduplicate `(head, canonical evidence)` facts, including equivalent signatures
 saved by older jobs; duplicate lines and presentation edits never create a later
-check event. Without producer execution identity, repeated equivalent facts are
+check event. The durable history must supply this identity after a failed job
+save or a restart between the history append and job save; job bookkeeping alone
+cannot establish absence. Failure to read history warns locally and skips the
+measurement without holding work. Without producer execution identity, repeated equivalent facts are
 not a recorded rerun. Use the first successful local observation time, never
 mutable PR/comment timestamps or caller-supplied backdated times.
 
@@ -409,9 +415,14 @@ record a `validated` event with `head`, and `validation` containing
 `ci: {head, state: "pass"}`. Keep `metricValidatedHead` on the job to preserve its
 first occurrence time through retries. CI none never establishes validation.
 
-Only a successful core-issued merge command sets and saves
-`autopilotMerge: {head, at}` on the job. After confirming the merge, record
-`merged` only when this attribution matches the head; use the confirmed immutable
+Only a synchronous core-issued merge mutation with HTTP 200,
+`merged: true`, message exactly `Pull Request successfully merged`, and a valid
+40-hex `sha` sets and saves `autopilotMerge: {head, mergeCommit, at}` on the job,
+where `mergeCommit` is that acknowledged SHA. A successful CLI exit, already-merged
+response, queue-only response or ambiguous reply never supplies attribution.
+After confirming the merge, record `merged` only when this attribution matches
+both the head and confirmed merge SHA; legacy records without that acknowledgement
+do not qualify. Use the confirmed immutable
 `merged_at` when present, otherwise the saved successful-command time. Merely
 observing a merged PR, including during END or person-stop cleanup, never creates
 attribution. Job cleanup preserves the durable events and never infers a merge

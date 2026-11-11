@@ -253,3 +253,83 @@ test('round 2: pending result evidence never transfers to a refreshed head',asyn
   const observations=fs.readFileSync(join(w.root,'history.jsonl'),'utf8').split('\n').filter(Boolean).map(line=>JSON.parse(line)).filter(row=>row.metric?.kind === 'evidence');
   assert.deepEqual([...new Set(observations.map(row=>row.metric.head))],[old]);
 });
+
+const mutationReply=(value,status=200)=>({code:status < 300 ? 0 : 1,stdout:`HTTP/2.0 ${status} OK\r\n\r\n${JSON.stringify(value)}`,stderr:''});
+const isMerge=args=>args[0] === 'pr' && args[1] === 'merge' || args.includes('PUT') && args.some(arg=>/\/pulls\/\d+\/merge$/.test(arg));
+
+for(const mode of ['already-merged','queued','ambiguous','missing-sha','wrong-merge-sha'])test(`round 3: ${mode} success never credits a person's merge or its regression`,async t=>{
+  const w=await lifecycle(t);w.clock.at=Date.parse(monday);w.issue(17);await w.tick();
+  const {pr}=w.build(17);await w.tick();w.review(17,'PASS');w.suite(17);
+  const gh=w.gh;
+  const personMerge=()=>{pr.state='closed';pr.merged=true;pr.mergeSha=merge;pr.merged_by={login:'person'};};
+  await w.tick({gh:async(args,options)=>{
+    if(!isMerge(args))return gh(args,options);
+    if(mode !== 'queued')personMerge();
+    // The old CLI exits zero for a no-op or queue request; only the mutation
+    // exposes the distinction. A second preliminary read cannot close this race.
+    if(args[0] === 'pr')return {code:0,stdout:'',stderr:''};
+    if(mode === 'already-merged')return mutationReply({merged:true,sha:merge,message:'Pull Request already merged'});
+    if(mode === 'queued')return mutationReply({merged:false,message:'Added to merge queue'},202);
+    if(mode === 'ambiguous')return mutationReply({});
+    return mutationReply({merged:true,message:'Pull Request successfully merged',...(mode === 'wrong-merge-sha' ? {sha:foreign} : {})});
+  }});
+  if(mode === 'queued') {
+    const job=JSON.parse(fs.readFileSync(join(w.root,'jobs','17.json'),'utf8'));
+    assert.equal(job.autopilotMerge,undefined,'a queued request carries no completed-merge acknowledgement');
+    personMerge();await w.tick();
+  }
+  assert.equal(w.github.merges.length,0,'the core performed no merge');
+  assert.equal(fs.existsSync(join(w.root,'jobs','17.json')),false,'observed merge still cleans up');
+  recordAutopilotMetric({root:w.root,repo:w.state.repo,issue:17,pr:pr.number,kind:'regression',reason:'bad-audit',mergeCommit:merge,at:tuesday});
+  const report=rows(await w.read());assert.equal(report.merged,0);assert.equal(report.regressions,0);
+});
+
+test('round 3: legacy successful-command bookkeeping cannot credit an observed manual merge',async t=>{
+  const w=await lifecycle(t);w.issue(17);await w.tick();const {pr,head}=w.build(17);await w.tick();
+  const path=join(w.root,'jobs','17.json'),job=JSON.parse(fs.readFileSync(path,'utf8'));
+  job.autopilotMerge={head,at:w.now()};fs.writeFileSync(path,JSON.stringify(job));
+  pr.merged=true;pr.state='closed';pr.mergeSha=merge;await w.tick();
+  assert.equal(rows(await w.read()).merged,0);
+});
+
+for(const fault of ['save-failure','crash'])test(`round 3: ${fault} after evidence append retains Monday's observation across 09:00 and restart`,async t=>{
+  const w=await lifecycle(t);w.clock.at=Date.parse(monday);w.issue(17);await w.tick();
+  w.build(17,{body:`Runtime: PASS\n${evidence}`});
+  const file=join(w.root,'jobs','17.json'),warnings=[];
+  const badFs={...fs,renameSync(from,to){
+    if(to === file && JSON.parse(fs.readFileSync(from,'utf8')).metricEvidence)throw Error('synthetic bookkeeping failure');
+    return fs.renameSync(from,to);
+  }};
+  const ports=fault === 'save-failure' ? {fs:badFs,warn:s=>warnings.push(s)} : {};
+  await w.tick(ports);
+  if(fault === 'crash') {
+    const job=JSON.parse(fs.readFileSync(file,'utf8'));delete job.metricEvidence;fs.writeFileSync(file,JSON.stringify(job));
+  }
+  // Each tick reloads the saved job, emulating a new core process.
+  for(let i=0;i<8;i++){w.advance(3*3600000);await w.tick(ports);}
+  const events=fs.readFileSync(join(w.root,'history.jsonl'),'utf8').split('\n').filter(Boolean).map(JSON.parse).filter(row=>row.metric?.kind === 'evidence');
+  assert.equal(events.length,1,'the successful append is the durable identity');
+  assert.equal(events[0].metric.at,new Date(monday).toISOString());
+  for(const key of ['runtime','vectors','formal']) {
+    assert.equal(rows(await w.read())[key],0,`${key}: unchanged Monday evidence is not a Tuesday execution`);
+    assert.equal(rows(await w.read('2026-11-10T10:00:00Z'))[key],1,key);
+    assert.equal((await w.read()).rows.find(row=>row.key === key).weekAverage,0.5,key);
+  }
+  if(fault === 'save-failure')assert.ok(warnings.some(s=>/bookkeeping/.test(s)));
+  await w.tick();w.review(17,'PASS');w.suite(17);await w.tick();
+  assert.equal(w.github.merges.length,1,'core resumes and completes after local bookkeeping recovers');
+  assert.equal(fs.existsSync(file),false);
+  for(const key of ['runtime','vectors','formal'])assert.equal(rows(await w.read())[key],0,key);
+});
+
+test('round 3: reader reconciles older duplicate evidence to its earliest timestamp independent of order',async t=>{
+  const w=fixture(t),fact={repo:'owner/repo',issue:1,kind:'evidence',pr:10,head,evidence};
+  // Write pre-repair durable facts directly: the recorder must no longer produce them.
+  w.history([{metric:{...fact,at:tuesday,evidence:`  ${evidence.replaceAll('; ',';')}  `}},{metric:{...fact,at:monday}}]);
+  const github=async()=>[];
+  for(const key of ['runtime','vectors','formal']) {
+    assert.equal(rows(await w.read(github))[key],0,key);
+    assert.equal(rows(await w.read(github,'2026-11-10T10:00:00Z'))[key],1,key);
+    assert.equal((await w.read(github)).rows.find(row=>row.key === key).weekAverage,0.5,key);
+  }
+});

@@ -78,3 +78,12 @@ test('invalid calendar dates do not become recorded work on another day',()=>{
   const event={repo:'owner/repo',issue:1,kind:'started',at:'2026-11-10T24:00:00Z'};
   assert.equal(counts(score([event])).worked[0],0);
 });
+
+test('round 3: evidence identity retains earliest facts across windows but isolates heads, issues and repos',()=>{
+  const fact={repo:'owner/repo',issue:1,kind:'evidence',head:'a'.repeat(40),at:'2026-11-09T12:00:00Z',evidence:line};
+  const later={...fact,repo:'OWNER/REPO',head:'A'.repeat(40),pr:20,at:'2026-11-10T12:00:00Z',evidence:`${line}\r\n ${line.replaceAll('; ',';')} `};
+  const events=[later,fact];
+  assert.deepEqual(counts(score(events)).runtime,[0,0.5],'input order and presentation never shift the first observation');
+  for(const edit of [{head:'b'.repeat(40)},{issue:2},{repo:'owner/other'},{evidence:line.replace('formal=not-run','formal=pass')}])
+    assert.deepEqual(counts(score([...events,{...later,...edit}])).runtime,[1,1],'independent facts remain recorded');
+});
