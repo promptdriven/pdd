@@ -56,8 +56,8 @@ test('easy issue: claim, build, review, suite, CI and base check lead to one mer
   w.review(17, 'PASS'); w.suite(17, 0);
   const result = await w.tick();
   assert.deepEqual(w.github.merges, [pr.number]);
-  const merge = w.github.writes.find(row => row[0] === 'merge');
-  assert.ok(merge.includes('--merge') && merge.includes(head));
+  const merge = w.github.writes.find(row => row[0] === 'PUT' && row[1] === `/pulls/${pr.number}/merge`);
+  assert.deepEqual(merge, ['PUT', `/pulls/${pr.number}/merge`, {sha:head,merge_method:'merge'}]);
   assert.ok(pr.comments.some(c => c.body.includes('Review: PASS') && c.body.includes(head)), 'the tick posts the verdict on the PR');
   assert.equal(w.github.issues.get(17).state, 'closed');
   assert.deepEqual(w.labels(17), []);
