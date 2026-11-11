@@ -110,14 +110,24 @@ The reader reads the issue line by line (a tab counts as 4 spaces of indent).
   characters keeps its first 300 characters (whole code points), then trailing space goes. A text
   with no letter or digit is no item.
 - **Order, dedup and limit.** The items come in issue order, then the summary items in the order
-  of their first line. Two items with the same match form are one item, at the place of the
-  first; summary items are never merged. When there are more than 30 items after the dedup, the
+  of their first line. Two items are one item only when their same form (below) is the same; the
+  item stays at the place of the first. Summary items are never merged. When there are more than 30 items after the dedup, the
   first 29 stay, the 30th item stays with `; and N more items in the issue; the reviewer checks
   them` at the end of its text (N is the number of items after it; one is `1 more item`), and the
   rest go. Its own text is cut first, so that the whole text stays within 300 characters.
 
+The **same form** of an item's text decides the dedup. Markdown emphasis marks go: a run of `*`
+or `_`, or of 2 or more `~`, that opens (no letter or digit before it, and no space after it) or
+closes (no letter or digit after it, and no space before it). A run between two letters or digits
+(`max_items`) or between spaces (`x * y`) stays. Then runs of white space become one space,
+leading and trailing space go, and the text is in lower case. Every other character stays:
+operators, numbers and punctuation. So `Reject x < 0.` and `Reject x = 0.` are two items (review
+round 1, Nov 11: a loose dedup made one item of them, and a PR with only the negative case
+passed).
+
 The **match form** of a text is its words (runs of letters and digits, in lower case), joined by
-one space. Marks, punctuation and spacing do not change it.
+one space. Marks, punctuation and spacing do not change it. It only matches PR lines to items; it
+never makes one item of two.
 
 ## The brief for the build and repair jobs
 
@@ -170,8 +180,9 @@ and a numbered list after them, are not part of it. A PR body with no section ha
    item matches that item. An id later in the line ("see C1") does not count. The **rest** is the
    text after the ids and one separator (`:`, `.`, `)`, `-`, `–` or `—`).
 2. **Item text.** The line repeats an item's text: the line's match form holds the item's whole
-   match form as whole words. When several items match, the longest match form wins (on a tie, the
-   first item). When none matches this way, an item with more than 8 words matches when the line
+   match form as whole words. When several items match, the longest match form wins. On a tie,
+   the one item whose same form is part of the line's same form wins; when that is not exactly
+   one item, the line gives no match this way. When none matches this way, an item with more than 8 words matches when the line
    holds its first 8 words and no other item matches that way. The rest is the text after the last
    matched word, without the spaces, marks, quote marks, dashes and `:`, `.`, `,`, `;`, `)` or `]`
    that lead it.

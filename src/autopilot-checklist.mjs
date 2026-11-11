@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-checklist.prompt.md (sha256: ce2f040f30336b338a3774d435cf5ee7154230679e2e1419fee0a6eb67c08138).
+// Generated from prompts/cli/autopilot-checklist.prompt.md (sha256: 347daaf4cb137252a7c892228ec8ed7bbf74f4132d34cd3e37f5237a3ae7fd54).
 
 const MAX_ITEMS = 30, MAX_CHARS = 300, MAX_QUOTE = 200, PREFIX_WORDS = 8, MIN_QUOTE_WORDS = 3;
 const WORD = /[\p{L}\p{N}]+/gu, HAS_WORD = /[\p{L}\p{N}]/u;
@@ -26,6 +26,14 @@ const words = text => [...text.matchAll(WORD)];
 const lowerWords = text => words(text).map(match => match[0].toLowerCase());
 const quoteForm = text => text.normalize('NFC').replace(/[“”]/g, '"').replace(/[‘’]/g, "'").replace(/[`*_]/g, '').replace(/\s+/g, ' ').trim();
 const cut = (text, size) => [...text].slice(0, size).join('');
+// The same form decides the dedup: emphasis marks, white space and case go; every other character stays.
+const wordChar = char => /[\p{L}\p{N}]/u.test(char);
+const unmark = text => text.replace(/\*+|_+|~{2,}/g, (run, at) => {
+  const before = text[at - 1] ?? '', after = text[at + run.length] ?? '';
+  const opens = !wordChar(before) && after !== '' && !/\s/.test(after), closes = !wordChar(after) && before !== '' && !/\s/.test(before);
+  return opens || closes ? '' : run;
+});
+const sameForm = text => unmark(text).replace(/\s+/g, ' ').trim().toLowerCase();
 // A table row's cells: outer pipes go, an escaped pipe (\|) stays in its cell.
 const cells = line => line.trim().replace(/^\|/, '').replace(/(?<!\\)\|$/, '').split(/(?<!\\)\|/).map(cell => cell.trim().replace(/\\\|/g, '|'));
 const delimiter = row => row.length > 0 && row.every(cell => /^:?-+:?$/.test(cell));
@@ -150,7 +158,7 @@ export function issueChecklist(text) {
     if (entry.label) item = item.replace(/^[*_\s]+|[*_\s]+$/g, '');
     item = cut(item, MAX_CHARS).trimEnd();
     if (!HAS_WORD.test(item)) continue;
-    const form = lowerWords(item).join(' ');
+    const form = sameForm(item);
     if (seen.has(form)) continue;
     seen.add(form);
     items.push(item);
@@ -229,12 +237,17 @@ function matchLine(text, forms) {
   const named = [...new Set(ids)].filter(n => n >= 1 && n <= forms.length).map(n => n - 1);
   if (named.length) return { indexes: named, rest: rest.replace(/^\s*[:.)\-–—]?\s*/, ''), open };
   const found = words(line), lower = found.map(match => match[0].toLowerCase());
-  let best = null;
+  let best = null, ties = [];
   forms.forEach((form, i) => {
     if (!form.words.length) return;
     const at = findWords(lower, form.words);
-    if (at >= 0 && (!best || form.text.length > best.size)) best = { i, size: form.text.length, end: at + form.words.length };
+    if (at < 0) return;
+    const hit = { i, size: form.text.length, end: at + form.words.length };
+    if (!ties.length || hit.size > ties[0].size) ties = [hit]; else if (hit.size === ties[0].size) ties.push(hit);
   });
+  // On a tie of the loose form, only the one item whose same form is in the line matches.
+  if (ties.length === 1) best = ties[0];
+  else if (ties.length > 1) { const exact = ties.filter(hit => sameForm(line).includes(forms[hit.i].same)); if (exact.length === 1) best = exact[0]; }
   if (!best) {
     const hits = [];
     forms.forEach((form, i) => {
@@ -277,7 +290,7 @@ export function checkChecklist(prBody, items, issueText) {
   const rows = list.map((item, i) => ({ id: `C${i + 1}`, text: str(item?.text), state: 'missing', line: null, quote: null }));
   const counts = { total: rows.length, covered: 0, excluded: 0, missing: 0, unsupported: 0 };
   if (!rows.length) return { state: 'none', items: rows, counts, reds: [] };
-  const forms = rows.map(row => { const form = lowerWords(row.text); return { words: form, text: form.join(' ') }; });
+  const forms = rows.map(row => { const form = lowerWords(row.text); return { words: form, text: form.join(' '), same: sameForm(row.text) }; });
   const issueForm = quoteForm(str(issueText));
   for (const entry of prSection(str(prBody)) ?? []) {
     const hit = matchLine(entry.text, forms);

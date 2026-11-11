@@ -295,7 +295,7 @@ test('the reader: task items anywhere, section list items, label lines, nesting,
     '-->',
     '## Tests',
     '- Test item',
-    '- TEST ITEM!',
+    '- TEST   item',
   ].join('\r\n');
   assert.deepEqual(texts(issueChecklist(issue)), [
     'Star task item',
@@ -332,6 +332,22 @@ test('the reader keeps at most 30 items of at most 300 characters, and the 30th 
   assert.equal([...long[0].text].length, 300);
   assert.equal(long[0].text, `x${'😀'.repeat(299)}`);
   assert.equal(long[1].text, 'word '.repeat(60).trimEnd());
+});
+
+test('review round 1: punctuation that changes a condition keeps two items, and a PR with only the negative case is red', () => {
+  // The probe of the round 1 review: "Reject x < 0." and "Reject x = 0." are two requirements.
+  const issue = '## Acceptance criteria\n- [ ] Reject x < 0.\n- [ ] Reject x = 0.\n';
+  const items = issueChecklist(issue);
+  assert.equal(items.length, 2, 'negative values and zero are separate requirements');
+  assert.deepEqual(texts(items), ['Reject x < 0.', 'Reject x = 0.']);
+  const check = checkChecklist('Checklist:\n- C1: test/negative.test.mjs rejects negative values\n', items, issue);
+  assert.equal(check.state, 'red', 'the PR has no evidence for rejecting zero');
+  assert.deepEqual(states(check), ['covered', 'missing']);
+  // The loose match form ties; the line's exact text names the zero case, not the first item.
+  assert.deepEqual(states(checkChecklist('Checklist:\n- Reject x = 0. — test/zero.test.mjs\n', items, issue)), ['missing', 'covered']);
+  // Emphasis, case and white space still make one item; operators, punctuation and underscores in words do not.
+  assert.deepEqual(texts(issueChecklist('## Test\n- The **lane** waits.\n- the lane   WAITS.\n- The lane waits!\n- Keep max_items\n- Keep maxitems\n- x * y\n- x y\n')),
+    ['The **lane** waits.', 'The lane waits!', 'Keep max_items', 'Keep maxitems', 'x * y', 'x y']);
 });
 
 // Six items; the issue allows leaving the docs pages out.
