@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 2c8c4348c703a5d31c6d4615fe039fc903b448d085062bf8203031554a045f5b).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 16510970e567a5884883311fba9a3b8058001a6dc6dc9d373ca1d24908656479).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
@@ -2728,6 +2728,9 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
       if (selection.nativeSelections?.length) {
         if(selection.untested.length)throw new Stop(2,selection.untested.join('\n'));
         if(selection.unknown.length)throw new Stop(2,[`Unknown story ${selection.unknown.map(word=>JSON.stringify(cleanText(word))).join(', ')}. Stories:`,...storyList(found)].join('\n'));
+        if (typeof ports.assessNativeEvidence !== 'function' || typeof ports.usableResult !== 'function' || (!context.json && typeof ports.resultLines !== 'function')) {
+          throw new Error('Native Story assessment ports (assessNativeEvidence, usableResult, resultLines) are not bound.');
+        }
         const runs = (ports.allRuns ?? (() => []))({cancelled:true},{env:ports.env}).filter(run => {
           try { return realpathSync(run.root) === realpathSync(root); } catch { return false; }
         });
@@ -2758,7 +2761,7 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
           for (const row of native) {
             line(ports.stdout,`Native Story: ${row.storyPath}; profile ${row.profileId ?? 'unknown'}; owner ${row.promptPath ?? 'unknown'}`);
             for (const criterion of row.assessment.criteria) line(ports.stdout,`${criterion.id}: ${criterion.text}`);
-            for (const value of (ports.resultLines ?? (() => []))([{kind:'native evidence',assessment:row.assessment,source:row.assessment.sourceState,stage:row.assessment.identity.stage}])) line(ports.stdout,value);
+            for (const value of ports.resultLines([{kind:'native evidence',assessment:row.assessment,source:row.assessment.sourceState,stage:row.assessment.identity.stage}])) line(ports.stdout,value);
           }
           if (runtimeWords.length) exitCode = await runCheck({words:runtimeWords,options,cwd,cache,client,workflow},givenPorts);
           if (exitCode === 0 && missing) exitCode = 1;
@@ -2771,6 +2774,9 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
     // Local modes dispatch before repository runtime state, origin or sign-in.
     if (options['--screen'] !== undefined || options['--drawing'] !== undefined) {
       if (!options['--screen'] || !options['--drawing'] || words.length || Object.keys(options).some(name => !['--screen', '--drawing', '--json'].includes(name))) throw new Stop(2, 'Use pdd test --screen URL --drawing PATH [--json], without other options or Stories.');
+      if (typeof ports.compareScreen !== 'function' || (!context.json && typeof ports.formatScreenComparison !== 'function')) {
+        throw new Error('Screen comparison ports (compareScreen, formatScreenComparison) are not bound.');
+      }
       try {
         const report = await ports.compareScreen({ url: options['--screen'], drawingPath: options['--drawing'], cwd, chromePath: ports.env.PDD_CHROME_PATH }, { env: ports.env, browser: givenPorts.screenBrowser });
         const exitCode = report.passed ? 0 : 1;

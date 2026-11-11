@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { captureSource, defaultMaxCalls, gitFiles, isSecretPath, numberWarnings, proseSha256, storyCriteria, tarFiles } from '../src/runtime/runtime-preflight.mjs';
-import { runCheck } from '../src/runtime/runtime-client.mjs';
+import { runCheck } from '../src/runtime-seam.mjs';
 import { fakeRuntime, portsFor } from './runtime-fake.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
 

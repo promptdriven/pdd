@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync, readdirSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { runCheck, runTry } from '../../src/runtime/runtime-client.mjs';
+import { runCheck, runTry } from '../../src/runtime-seam.mjs';
 import { outcomeFor, outcomeExitCode } from '../../src/runtime/runtime-outcome.mjs';
 import { projectAnswer, renderJson, renderText } from '../../src/runtime/runtime-output.mjs';
 import { captureSource } from '../../src/runtime/runtime-preflight.mjs';

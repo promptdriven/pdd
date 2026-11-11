@@ -6,7 +6,7 @@ import fs, { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, renam
 import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
 import { hostname } from 'node:os';
-import * as client from '../src/runtime/runtime-client.mjs';
+import * as client from '../src/runtime-seam.mjs';
 import { fakeRuntime, harbor, portsFor, temp } from './runtime-fake.mjs';
 
 const read = file => JSON.parse(readFileSync(file, 'utf8'));
@@ -80,7 +80,7 @@ test('2675: two same-process retries send one check and keep its receipt and acc
 });
 
 function worker(t, r, options, words = []) {
-  const source = `import {runCheck} from ${JSON.stringify(new URL('../src/runtime/runtime-client.mjs', import.meta.url).href)};
+  const source = `import {runCheck} from ${JSON.stringify(new URL('../src/runtime-seam.mjs', import.meta.url).href)};
     import {portsFor} from ${JSON.stringify(new URL('./runtime-fake.mjs', import.meta.url).href)};
     const {ports}=portsFor(${JSON.stringify(r.env)}); console.error('START');
     const code=await runCheck(${JSON.stringify({ cwd: r.setup.repo, words, options: { '--json': true, ...options } })},ports); process.stdout.write(ports.stdout.text); process.stderr.write(ports.stderr.text); process.exitCode=code;`;
@@ -418,7 +418,7 @@ test('2675 review: native release errors warn and do not escape', async t => {
 });
 
 async function createRace(t, folder, count = 5) {
-  const url = new URL('../src/runtime/runtime-client.mjs', import.meta.url).href;
+  const url = new URL('../src/runtime-seam.mjs', import.meta.url).href;
   const source = `import {acquireRuntimeBatchLock} from ${JSON.stringify(url)};
     process.send({ready:true}); process.once('message', async () => {
       let release; try { release=await acquireRuntimeBatchLock(${JSON.stringify(folder)}); process.send({won:true}); }

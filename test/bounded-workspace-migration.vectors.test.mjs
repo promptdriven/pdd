@@ -9,8 +9,8 @@ import {migrateRuntimeWorkspace,runTry,runShim} from '../src/runtime-seam.mjs';
 import {captureSource} from '../src/runtime/runtime-preflight.mjs';
 import {associateEvidenceWorkspace,readEvidenceEligibility} from '../src/workflow-runner.mjs';
 import {writeRun} from '../src/workflow-runs.mjs';
-import {runtimeWorkspaceMigrationStore,saveDoorCase,acquireCaseWriteOwnership,applyPendingCase} from '../src/runtime/runtime-client.mjs';
-import {saveLast} from '../src/runtime/try-doors.mjs';
+import {runtimeWorkspaceMigrationStore,saveDoorCase,acquireCaseWriteOwnership,applyPendingCase} from '../src/runtime-seam.mjs';
+import {saveLast} from '../src/runtime-seam.mjs';
 const hash=text=>createHash('sha256').update(text).digest('hex');
 async function migrationFixture(t){
  const f=fixture(t),old=fixture(t),workflowState=join(f.parent,'workflow-state');

@@ -6,7 +6,7 @@ import { runTry } from '../src/runtime-seam.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
 import { renderHelp } from '../src/pdd-cli.mjs';
 import { PUBLIC_COMMAND_MANIFEST } from '../src/command-catalog.mjs';
-import { openCli } from '../src/runtime/try-doors.mjs';
+import { openCli } from '../src/runtime-seam.mjs';
 import { proseSha256, captureSource, findTests } from '../src/runtime/runtime-preflight.mjs';
 import { harbor, fakeRuntime, portsFor } from './runtime-fake.mjs';
 

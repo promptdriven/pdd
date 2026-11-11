@@ -1,24 +1,30 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: bdb1d7aba4369378685c11c9261b5350460cc0d97a12952e7a7ca5e928124d1c).
+// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 90c05af9b25d79720615e49971e820ddae325fa42183805aa660c49e3dcec39f).
 import { realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   buildCheckPlan as runtimeBuildCheckPlan,
+  buildProjectCard as runtimeBuildProjectCard,
   checkRuntimeHealth as runtimeCheckHealth,
   composeProductTry as runtimeComposeProductTry,
   createAgentBridge as runtimeCreateAgentBridge,
   createTryGuide as runtimeCreateTryGuide,
+  createTryTools as runtimeCreateTryTools,
   loadRuntimeClient as runtimeLoadClient,
   migrateRuntimeWorkspace as runtimeMigrateWorkspace,
+  openCli as runtimeOpenCli,
+  readContractHistory as runtimeReadContractHistory,
   readTryOwner as runtimeReadTryOwner,
   runAutomaticApproval as runtimeRunAutomaticApproval,
   runCheck as runtimeRunCheck,
   runContracts as runtimeRunContracts,
+  runDoorCall as runtimeRunDoorCall,
   runJobs as runtimeRunJobs,
   runMcp as runtimeRunMcp,
   runShim as runtimeRunShim,
   runTry as runtimeRunTry,
+  saveLast as runtimeSaveLast,
 } from './runtime/index.mjs';
 
 const req = createRequire(import.meta.url);
@@ -103,6 +109,16 @@ export function createTryGuide(options = {}) {
       redaction: seamRedaction(givenPorts),
     }),
   });
+}
+
+export function buildProjectCard(input = {}) {
+  const lazyEligibility = (...args) => req('./workflow-runner.mjs').readEvidenceEligibility(...args);
+  return runtimeBuildProjectCard(withEligibilityDefault(input, lazyEligibility));
+}
+
+export function readContractHistory(input, ports = {}) {
+  const lazyEligibility = (...args) => req('./workflow-runner.mjs').readEvidenceEligibility(...args);
+  return runtimeReadContractHistory(input, withEligibilityDefault(ports, lazyEligibility));
 }
 
 export function runContracts(input, ports = {}) {
@@ -278,12 +294,34 @@ export async function createAgentBridge(context, test, tryId, options, link, sea
   );
 }
 
+export async function openCli(context, test, sessionId, options) {
+  const nextContext =
+    context && typeof context.ports === 'object' && context.ports !== null
+      ? { ...context, ports: withPortDefaults(context.ports, { tryLauncherUrl: TRY_LAUNCHER_URL }) }
+      : context;
+  return runtimeOpenCli(nextContext, test, sessionId, options);
+}
+
 export async function runShim(descriptorPath, argv, ports = {}) {
   const [, { lineReader }] = await Promise.all([
     import('./secret-redaction.mjs'),
     import('./prompt-approve.mjs'),
   ]);
   return runtimeRunShim(descriptorPath, argv, withPortDefaults(ports, { lineReader, redaction: seamRedaction(ports) }));
+}
+
+export async function saveLast(input) {
+  const { lineReader } = await import('./prompt-approve.mjs');
+  const nextInput =
+    input && typeof input.ports === 'object' && input.ports !== null
+      ? { ...input, ports: withPortDefaults(input.ports, { lineReader }) }
+      : input;
+  return runtimeSaveLast(nextInput);
+}
+
+export async function runDoorCall(descriptor, input, ports = {}) {
+  await import('./secret-redaction.mjs');
+  return runtimeRunDoorCall(descriptor, input, withPortDefaults(ports, { redaction: seamRedaction(ports) }));
 }
 
 export async function readTryOwner(input = {}, ports = {}) {
@@ -302,6 +340,21 @@ export async function readTryOwner(input = {}, ports = {}) {
       tryLauncherUrl: TRY_LAUNCHER_URL,
       parseProductDocuments,
       parseProductWorldWriters,
+      redaction: seamRedaction(ports),
+    }),
+  );
+}
+
+export function createTryTools(input, ports = {}) {
+  const lazyEligibility = (...args) => req('./workflow-runner.mjs').readEvidenceEligibility(...args);
+  const lazyParseProductDocuments = (...args) => req('./product.mjs').parseProductDocuments(...args);
+  const lazyParseProductWorldWriters = (...args) => req('./product.mjs').parseProductWorldWriters(...args);
+  return runtimeCreateTryTools(
+    input,
+    withPortDefaults(withEligibilityDefault(ports, lazyEligibility), {
+      tryLauncherUrl: TRY_LAUNCHER_URL,
+      parseProductDocuments: lazyParseProductDocuments,
+      parseProductWorldWriters: lazyParseProductWorldWriters,
       redaction: seamRedaction(ports),
     }),
   );
@@ -337,7 +390,11 @@ export {
   LIMITS,
   PROMPT_TESTS_LABEL,
   PROMPT_TESTS_WORDS,
+  acquireCaseWriteOwnership,
+  acquireRuntimeBatchLock,
   allowsRuntimePath,
+  applyPendingCase,
+  applyPendingCaseWithHandoff,
   buildAgentInput,
   captureSource,
   causeText,
@@ -363,10 +420,15 @@ export {
   promptRefusal,
   promptSchemaRefusals,
   proseSha256,
+  readAgentScenarios,
   readPrompt,
   requireRuntimePath,
   resultOutcome,
   runInterfaceDraft,
+  runtimeWorkspaceMigrationStore,
+  saveDoorCase,
+  saveDoorCaseResult,
+  savedStoryEvidence,
   selectJourneys,
   sha256,
   sourceFilePort,

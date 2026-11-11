@@ -4,7 +4,7 @@ import { request } from 'node:http';
 import { writeFileSync, mkdirSync, renameSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
-import { runTry } from '../src/runtime/runtime-client.mjs';
+import { runTry } from '../src/runtime-seam.mjs';
 import { fakeRuntime, harbor, portsFor } from './runtime-fake.mjs';
 import { openServe } from '../src/runtime/try-http.mjs';
 const raw = (port, path, method = 'GET', body = '', headers = {}) => new Promise((resolve, reject) => {

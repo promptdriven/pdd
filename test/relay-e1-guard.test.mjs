@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync, copyFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runCheck } from '../src/runtime/runtime-client.mjs';
+import { runCheck } from '../src/runtime-seam.mjs';
 import { harbor, fakeRuntime, portsFor, storyTest } from './runtime-fake.mjs';
 
 // E1: within one continuation --read, row A gets a fresh "unknown" verdict (410 or wrong ID),

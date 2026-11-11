@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {interfaceSchemaProblems,readPrompt,findTests,preflight,proseSha256,captureSource} from '../src/runtime/runtime-preflight.mjs';
-import {runCheck} from '../src/runtime/runtime-client.mjs';
+import {runCheck} from '../src/runtime-seam.mjs';
 import {harbor,PLACE,portsFor,fakeRuntime} from './runtime-fake.mjs';
 const empty={type:'object',properties:{},required:[],additionalProperties:false};
 const iface=limits=>({status:'draft',prose_sha256:'',entries:[{operation:'value',input_schema:empty,result_schema:empty,errors:[]}],calls:[],resources:[],limits});

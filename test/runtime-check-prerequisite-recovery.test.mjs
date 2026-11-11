@@ -4,7 +4,7 @@ import {randomUUID} from 'node:crypto';
 import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync,readdirSync} from 'node:fs';
 import {join} from 'node:path';
-import {runCheck} from '../src/runtime/runtime-client.mjs';
+import {runCheck} from '../src/runtime-seam.mjs';
 import {checkCause,readRunResults,savedCheckCause} from '../src/workflow-results.mjs';
 import {interfaceBlocks,proseSha256} from '../src/runtime/runtime-preflight.mjs';
 import {harbor,fakeRuntime,portsFor,PLACE} from './runtime-fake.mjs';

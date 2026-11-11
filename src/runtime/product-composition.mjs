@@ -1,4 +1,4 @@
-// Generated from prompts/cli/product-composition.prompt.md (sha256: 176dedfe3f2c85b5236357ac66b04b5d1798e136d54a3cdd168c64de6c349680).
+// Generated from prompts/cli/product-composition.prompt.md (sha256: 9f44476a35c4aa305c0b82a84a37e66a37671c654bfd7d6dc24edd4bbd786dcb).
 import { basename, join } from 'node:path';
 import { checkInput, interfaceBlocks, PreflightError, selectTests } from './runtime-preflight.mjs';
 import { expandSource, isJsonNumber, jsonNumberIdentity, parseJsonValue, stringifyJsonValue } from './contract-refs.mjs';
@@ -194,6 +194,9 @@ export function selectJourneys(tests, selector) {
 }
 
 export function composeProductTry({ root, parts, journey, testPath }, ports) {
+  if (typeof ports?.parseProductDocuments !== 'function' || typeof ports?.parseProductWorldWriters !== 'function') {
+    throw new Error('Product composition ports (parseProductDocuments, parseProductWorldWriters) are not bound.');
+  }
   const cached = new Map();
   const read = (path, optional = false) => {
     if (cached.has(path)) return cached.get(path);

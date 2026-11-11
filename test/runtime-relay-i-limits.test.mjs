@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runCheck } from '../src/runtime/runtime-client.mjs';
+import { runCheck } from '../src/runtime-seam.mjs';
 import { harbor, PLACE, portsFor, fakeRuntime } from './runtime-fake.mjs';
 
 // Relay I joins #2676 limits admission with #2590's saved lint/wait contract.

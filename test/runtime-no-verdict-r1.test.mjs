@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync } from 'node:fs';
-import { runCheck } from '../src/runtime/runtime-client.mjs';
+import { runCheck } from '../src/runtime-seam.mjs';
 import { renderText } from '../src/runtime/runtime-output.mjs';
 import { harbor, fakeRuntime, portsFor } from './runtime-fake.mjs';
 

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runCheck } from '../src/runtime/runtime-client.mjs';
+import { runCheck } from '../src/runtime-seam.mjs';
 import { harbor, fakeRuntime, portsFor } from './runtime-fake.mjs';
 const ID = '1b3b9253-8488-4c3a-a138-168d97db262a';
 

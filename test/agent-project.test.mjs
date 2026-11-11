@@ -6,7 +6,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {captureSource} from '../src/runtime/runtime-preflight.mjs';
-import {buildProjectCard,readAgentScenarios} from '../src/runtime/agent-project.mjs';
+import {buildProjectCard,readAgentScenarios} from '../src/runtime-seam.mjs';
 // Saved state must name the canonical repo and have no symlink ancestors.
 function fixture(t){const dir=realpathSync(mkdtempSync(join(tmpdir(),'pdd-card-')));t.after(()=>rmSync(dir,{recursive:true,force:true}));const root=join(dir,'repo'),home=join(dir,'home');mkdirSync(root);mkdirSync(home);assert.equal(spawnSync('git',['init','-q'],{cwd:root}).status,0);const put=(path,text)=>{mkdirSync(join(root,path,'..'),{recursive:true});writeFileSync(join(root,path),text);};put('README.md','# Bookmarks\n\nSave shared bookmarks.\n');put('prompts/bm.prompt.md','# Bookmark program\n\nOwn bookmarks through CLI and HTTP.\n<details><summary>Runtime interface</summary>\n```json\n{"status":"draft","entries":[]}\n```\n</details>\n');put('user_stories/bookmarks.md','# Shared bookmarks\n\nI can save bookmarks.\n\n## Acceptance criteria\n1. First works.\n2. Second works.\n');return{dir,root,home,put,env:{HOME:home}};}
 const ID='12345678-1234-4234-8234-123456789abc';

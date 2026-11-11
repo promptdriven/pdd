@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { captureSource, checkInput, fillHashes, findTests, preflight, readPrompt } from '../src/runtime/runtime-preflight.mjs';
 import { parseScenarioJson } from '../src/runtime/scenario-json.mjs';
-import { runCheck } from '../src/runtime/runtime-client.mjs';
+import { runCheck } from '../src/runtime-seam.mjs';
 import { interfaceBlocks, proseSha256 } from '../src/runtime/runtime-preflight.mjs';
 import { harbor, PLACE, sink } from './runtime-fake.mjs';
 import { fingerprintChanges, storyCard, storyFingerprint } from '../src/workflow-story-card.mjs';

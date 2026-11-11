@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
-import { runCheck, runTry, readTryOwner, runDoorCall } from '../src/runtime/runtime-client.mjs';
+import { runCheck, runTry, readTryOwner, runDoorCall } from '../src/runtime-seam.mjs';
 import { temp, fakeRuntime, portsFor } from './runtime-fake.mjs';
 
 // The optional test-only module selects the old capture boundary for the

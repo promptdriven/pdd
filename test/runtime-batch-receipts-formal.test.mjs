@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { runCheck } from '../src/runtime/runtime-client.mjs';
+import { runCheck } from '../src/runtime-seam.mjs';
 import { fakeRuntime, harbor, portsFor } from './runtime-fake.mjs';
 
 // Story: recover-retried-check-results, Rules to check. The oracle depends only

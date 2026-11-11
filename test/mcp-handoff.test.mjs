@@ -7,8 +7,8 @@ import {PassThrough} from 'node:stream';
 import {setTimeout as delay} from 'node:timers/promises';
 import {spawn} from 'node:child_process';
 import {harbor,fakeRuntime,portsFor,PLACE} from './runtime-fake.mjs';
-import {runMcp} from '../src/runtime/try-mcp.mjs';
-import * as client from '../src/runtime/runtime-client.mjs';
+import {runMcp} from '../src/runtime-seam.mjs';
+import * as client from '../src/runtime-seam.mjs';
 import {interfaceBlocks,proseSha256} from '../src/runtime/runtime-preflight.mjs';
 
 const read=path=>fs.readFileSync(path,'utf8');
@@ -191,7 +191,7 @@ test('default stdio retains source drift after actual wait, times out safely and
 
 function childMcp(f,{crash=false}={}){
   const code=`const {runMcp}=await import(process.argv[1]);let gh=0,http=0;const before=process.listenerCount('SIGINT');const ports={progressMs:10,gh(){gh++;throw Error('AUTH_FORBIDDEN');},fetch(){http++;throw Error('HTTP_FORBIDDEN');},${crash?"fault(stage){if(stage==='published'){process.stderr.write('CRASH_PUBLISHED\\n');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0);}},":''}};const exit=await runMcp({cwd:process.argv[2],env:process.env},ports);process.stderr.write('LOCAL_DIAGNOSTIC '+JSON.stringify({gh,http,before,after:process.listenerCount('SIGINT')})+'\\n');process.exitCode=exit;`;
-  const child=spawn(process.execPath,['--input-type=module','-e',code,new URL('../src/runtime/try-mcp.mjs',import.meta.url).href,f.repo],{env:f.env,stdio:['pipe','pipe','pipe']});let output='',errors='';child.stdout.on('data',data=>output+=data);child.stderr.on('data',data=>errors+=data);
+  const child=spawn(process.execPath,['--input-type=module','-e',code,new URL('../src/runtime-seam.mjs',import.meta.url).href,f.repo],{env:f.env,stdio:['pipe','pipe','pipe']});let output='',errors='';child.stdout.on('data',data=>output+=data);child.stderr.on('data',data=>errors+=data);
   const done=new Promise((resolve,reject)=>{child.once('error',reject);child.once('exit',(code,signal)=>resolve({code,signal}));});
   return{child,done,send(){child.stdin.write(JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/call',params:{name:'try_save_case',arguments:argumentsFor(f)}})+'\n');},get output(){return output;},get errors(){return errors;}};
 }

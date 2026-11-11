@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { runCheck, runTry } from '../src/runtime/runtime-client.mjs';
+import { runCheck, runTry } from '../src/runtime-seam.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
 import { harbor, fakeRuntime, portsFor, PLACE, TOKEN, storyTest } from './runtime-fake.mjs';
 

@@ -6,8 +6,8 @@ import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runPdd } from '../src/pdd-cli.mjs';
-import { runContracts } from '../src/runtime/contracts.mjs';
-import { runCheck, runTry, runDoorCall, readContractHistory, readTryOwner } from '../src/runtime/runtime-client.mjs';
+import { runContracts } from '../src/runtime-seam.mjs';
+import { runCheck, runTry, runDoorCall, readContractHistory, readTryOwner } from '../src/runtime-seam.mjs';
 import { captureSource, findTests, fillHashes, gitFiles, interfaceBlocks, preflight, proseSha256, readPrompt, sourceFilePort } from '../src/runtime/runtime-preflight.mjs';
 import { harbor, fakeRuntime, portsFor, PLACE, sink } from './runtime-fake.mjs';
 

@@ -1135,3 +1135,69 @@ test('SEAM12 (MERGE-1): runtime-check-plan keeps approved prompt unchanged and d
   assert.equal(betaDeleted?.role, 'target');
   assert.deepEqual(betaDeleted?.affected_paths, ['src/beta.mjs']);
 });
+
+test('SEAM13 (WEAKER DEFAULTS): agent-project has no localEvidenceEligibility fallback, and unbound host ports fail loudly', async t => {
+  const { execFileSync } = await import('node:child_process');
+  const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const seam = await import('../src/runtime-seam.mjs');
+  const directProject = await import('../src/runtime/agent-project.mjs');
+  const directComposition = await import('../src/runtime/product-composition.mjs');
+  const directClient = await import('../src/runtime/runtime-client.mjs');
+  const { harbor, fakeRuntime, portsFor } = await import('./runtime-fake.mjs');
+
+  const agentProjectSrc = readFileSync(join(root, 'src/runtime/agent-project.mjs'), 'utf8');
+  assert.ok(!agentProjectSrc.includes('localEvidenceEligibility'), 'agent-project.mjs must not keep localEvidenceEligibility');
+
+  const setup = harbor(t);
+  const fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
+  const env = { HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin };
+  const checkCode = await seam.runCheck({ cwd: setup.repo, words: ['place-order'], options: {} }, portsFor(env).ports);
+  assert.equal(checkCode, 0);
+
+  // Direct buildProjectCard without evidenceEligibility reports unavailable (latestCheck: null), while seam binds workflow eligibility.
+  const directCard = directProject.buildProjectCard({ root: setup.repo, env, story: 'place-order' });
+  assert.equal(directCard.latestCheck, null);
+  const seamCard = seam.buildProjectCard({ root: setup.repo, env, story: 'place-order' });
+  assert.notEqual(seamCard.latestCheck, null);
+
+  // Direct composeProductTry without product parser ports throws an unbound-port Error, not invalid-product-map or TypeError.
+  assert.throws(
+    () => directComposition.composeProductTry({ root: '/project' }, {}),
+    err => !(err instanceof TypeError) && err.code !== 'invalid-product-map' && /port.*not bound/i.test(err.message),
+  );
+
+  // Direct runCheck --screen without compareScreen throws an unbound-port Error instead of masking as browser failure.
+  await assert.rejects(
+    () => directClient.runCheck(
+      { cwd: setup.repo, words: [], options: { '--screen': 'https://example.test', '--drawing': 'prompts/x.ui.svg' } },
+      { env, stdout: { write() {} }, stderr: { write() {} } },
+    ),
+    err => !(err instanceof TypeError) && /Screen comparison ports.*not bound/.test(err.message),
+  );
+
+  // Direct runCheck --lint on a native-only Story without native assessment ports throws an unbound-port Error.
+  const tmp = mkdtempSync(join(tmpdir(), 'pdd-native-unbound-'));
+  t.after(() => rmSync(tmp, { recursive: true, force: true }));
+  const nativeRepo = join(tmp, 'repo');
+  mkdirSync(join(nativeRepo, 'prompts'), { recursive: true });
+  mkdirSync(join(nativeRepo, 'user_stories'), { recursive: true });
+  execFileSync('git', ['init', '-q'], { cwd: nativeRepo });
+  const nativeIface = { kind: 'native-only', status: 'draft', prose_sha256: '', reason: 'Native process boundary.' };
+  const nativeBody = () => `# Native\n\nRun natively.\n\n## Dependencies\n\nNone.\n\n<details><summary>Runtime interface</summary>\n\n\`\`\`json\n${JSON.stringify(nativeIface)}\n\`\`\`\n</details>\n`;
+  nativeIface.prose_sha256 = seam.proseSha256(nativeBody());
+  writeFileSync(join(nativeRepo, 'prompts/native.prompt.md'), nativeBody());
+  writeFileSync(
+    join(nativeRepo, 'user_stories/native-story.md'),
+    '# Native Story\n\nI can run natively.\n\n## Acceptance criteria\n\n1. Works.\n\n## Native validation\n\n[Native profile](../prompts/native.prompt.md#native-validation-profile-native-prof)\n',
+  );
+  execFileSync('git', ['add', '.'], { cwd: nativeRepo });
+
+  await assert.rejects(
+    () => directClient.runCheck(
+      { cwd: nativeRepo, words: ['native-story'], options: { '--lint': true } },
+      { env: { HOME: join(tmp, 'home'), PDD_STATE_DIR: join(tmp, 'state') }, stdout: { write() {} }, stderr: { write() {} } },
+    ),
+    err => !(err instanceof TypeError) && /Native Story assessment ports.*not bound/.test(err.message),
+  );
+});

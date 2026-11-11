@@ -6,7 +6,7 @@ import { syncBuiltinESMExports } from 'node:module';
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { captureSource, proseSha256 } from '../src/runtime/runtime-preflight.mjs';
-import { runCheck, runTry } from '../src/runtime/runtime-client.mjs';
+import { runCheck, runTry } from '../src/runtime-seam.mjs';
 import { PLACE, fakeRuntime, harbor, portsFor } from './runtime-fake.mjs';
 
 const ORDER = 'tests/place-order.json';

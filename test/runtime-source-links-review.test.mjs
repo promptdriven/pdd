@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { captureSource, sourceFilePort, findTests } from '../src/runtime/runtime-preflight.mjs';
 import { bindingCoverage } from '../src/runtime/runtime-bindings.mjs';
 import { harbor, portsFor } from './runtime-fake.mjs';
-import { runCheck } from '../src/runtime/runtime-client.mjs';
+import { runCheck } from '../src/runtime-seam.mjs';
 const ORDER = 'tests/place-order.json';
 const write = (root,path,bytes) => { mkdirSync(join(root,path,'..'),{recursive:true}); writeFileSync(join(root,path),bytes); };
 const refusal = (action, reason) => assert.throws(action, error => error.exitCode === 4 && reason.test(error.message));

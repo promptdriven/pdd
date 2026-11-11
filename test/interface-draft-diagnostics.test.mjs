@@ -1,7 +1,7 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { runCheck } from '../src/runtime/runtime-client.mjs';
+import { runCheck } from '../src/runtime-seam.mjs';
 import { PLACE, fakeRuntime, harbor, portsFor } from './runtime-fake.mjs';
 
 async function run(setup, fake, options = {}) {

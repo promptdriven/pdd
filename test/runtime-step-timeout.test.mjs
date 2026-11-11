@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runTry } from '../src/runtime-seam.mjs';
-import { runCheck, runDoorCall } from '../src/runtime/runtime-client.mjs';
+import { runCheck, runDoorCall } from '../src/runtime-seam.mjs';
 import { projectAnswer, renderText, exitCodeFor } from '../src/runtime/runtime-output.mjs';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';

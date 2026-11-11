@@ -7,8 +7,8 @@ import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, tr
 import { dirname, join } from 'node:path';
 import { captureSource, findTests, preflight, selectTests } from '../src/runtime/runtime-preflight.mjs';
 import { runCheck } from '../src/runtime-seam.mjs';
-import { saveDoorCase } from '../src/runtime/runtime-client.mjs';
-import { readAgentScenarios } from '../src/runtime/agent-project.mjs';
+import { saveDoorCase } from '../src/runtime-seam.mjs';
+import { readAgentScenarios } from '../src/runtime-seam.mjs';
 import { fakeRuntime, harbor, portsFor, root, sink, temp } from './runtime-fake.mjs';
 
 const HARBOR = join(root, 'test/fixtures/harbor');

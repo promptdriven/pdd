@@ -5,7 +5,7 @@ import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { harbor, PLACE, storyTest, portsFor } from './runtime-fake.mjs';
-import { runCheck } from '../src/runtime/runtime-client.mjs';
+import { runCheck } from '../src/runtime-seam.mjs';
 import { interfaceBlocks, proseSha256 } from '../src/runtime/runtime-preflight.mjs';
 import { readRunResults } from '../src/workflow-results.mjs';
 

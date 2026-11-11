@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { chmodSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
-import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs, runJobs } from '../src/runtime/runtime-slots.mjs';
+import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from '../src/runtime/runtime-slots.mjs';
+import { runJobs } from '../src/runtime-seam.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { harbor, fakeRuntime, sink, temp, root } from './runtime-fake.mjs';
 

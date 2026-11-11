@@ -6,9 +6,9 @@ import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'nod
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { runTry } from '../src/runtime-seam.mjs';
-import { applyPendingCaseWithHandoff } from '../src/runtime/runtime-client.mjs';
+import { applyPendingCaseWithHandoff } from '../src/runtime-seam.mjs';
 import { findTests, gitFiles, proseSha256 } from '../src/runtime/runtime-preflight.mjs';
-import { openCli, runShim } from '../src/runtime/try-doors.mjs';
+import { openCli, runShim } from '../src/runtime-seam.mjs';
 import { harbor, fakeRuntime, portsFor } from './runtime-fake.mjs';
 
 // Requirements: simulate-program-kind's saved-session and selection rules, plus

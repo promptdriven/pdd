@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runCheck } from '../src/runtime/runtime-client.mjs';
+import { runCheck } from '../src/runtime-seam.mjs';
 import { fakeRuntime, harbor, portsFor, TOKEN } from './runtime-fake.mjs';
 
 // Independent oracle: approved runtime-busy-upload-wait Story, Rules to check,

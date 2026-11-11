@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { captureSource, sourceFilePort } from '../src/runtime/runtime-preflight.mjs';
 import { expandSource } from '../src/runtime/contract-refs.mjs';
 import { bindingCoverage } from '../src/runtime/runtime-bindings.mjs';
-import { runCheck } from '../src/runtime/runtime-client.mjs';
+import { runCheck } from '../src/runtime-seam.mjs';
 import { harbor, portsFor, PLACE } from './runtime-fake.mjs';
 const ORDER='tests/place-order.json';
 const write=(repo,path,bytes)=>{mkdirSync(join(repo,path,'..'),{recursive:true});writeFileSync(join(repo,path),bytes);};

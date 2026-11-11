@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {runTry,runCheck} from '../src/runtime/runtime-client.mjs';
+import {runTry,runCheck} from '../src/runtime-seam.mjs';
 import {parseArgv} from '../src/argument-parser.mjs';
 import {defaultMaxCalls} from '../src/runtime/runtime-preflight.mjs';
 import {harbor,fakeRuntime,portsFor} from './runtime-fake.mjs';

@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { runApprove, approvePromptText, askApproval } from '../src/prompt-approve.mjs';
-import { runCheck } from '../src/runtime/runtime-client.mjs';
+import { runCheck } from '../src/runtime-seam.mjs';
 import { interfaceBlocks } from '../src/runtime/runtime-preflight.mjs';
 import { fakeRuntime, harbor, PLACE, portsFor, root, sink } from './runtime-fake.mjs';
 

@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { captureSource } from '../src/runtime/runtime-preflight.mjs';
-import { runCheck } from '../src/runtime/runtime-client.mjs';
+import { runCheck } from '../src/runtime-seam.mjs';
 import { PLACE, harbor, portsFor } from './runtime-fake.mjs';
 
 // Root approved these literal Markdown expectations before either old-code or

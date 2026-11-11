@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, readdirSync, copyFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { runCheck } from '../src/runtime/runtime-client.mjs';
+import { runCheck } from '../src/runtime-seam.mjs';
 import { harbor, fakeRuntime, portsFor, storyTest } from './runtime-fake.mjs';
 const CLAIMED = '99999999-9999-4999-8999-999999999999';
 const WHY = 'No verdict. The judge service was unavailable for this check.';

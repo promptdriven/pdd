@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { runCheck } from '../src/runtime/runtime-client.mjs';
+import { runCheck } from '../src/runtime-seam.mjs';
 import { interfaceBlocks, proseSha256 } from '../src/runtime/runtime-preflight.mjs';
 import { readRunResults, resultLines } from '../src/workflow-results.mjs';
 import { runStatus, ownStoryCount } from '../src/workflow-runner.mjs';

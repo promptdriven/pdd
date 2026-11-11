@@ -4,8 +4,8 @@ import fs, { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } f
 import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
 import { runPdd } from '../src/pdd-cli.mjs';
-import { runContracts } from '../src/runtime/contracts.mjs';
-import { runCheck } from '../src/runtime/runtime-client.mjs';
+import { runContracts } from '../src/runtime-seam.mjs';
+import { runCheck } from '../src/runtime-seam.mjs';
 import { gitFiles, interfaceBlocks } from '../src/runtime/runtime-preflight.mjs';
 import { harbor, fakeRuntime, portsFor, PLACE, sink } from './runtime-fake.mjs';
 

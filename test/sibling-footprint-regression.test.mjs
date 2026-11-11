@@ -5,8 +5,8 @@ import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
 import { captureSource, findTests, interfaceBlocks, gitFiles, proseSha256 } from '../src/runtime/runtime-preflight.mjs';
 import { expandSource } from '../src/runtime/contract-refs.mjs';
-import { runContracts } from '../src/runtime/contracts.mjs';
-import { runCheck, runTry, readContractHistory } from '../src/runtime/runtime-client.mjs';
+import { runContracts } from '../src/runtime-seam.mjs';
+import { runCheck, runTry, readContractHistory } from '../src/runtime-seam.mjs';
 import { harbor, fakeRuntime, portsFor, PLACE, sink } from './runtime-fake.mjs';
 
 // Expected observations are the eight reviewed native-only case declarations.

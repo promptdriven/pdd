@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { runCheck } from '../src/runtime/runtime-client.mjs';
+import { runCheck } from '../src/runtime-seam.mjs';
 import { harbor, fakeRuntime, portsFor, PLACE } from './runtime-fake.mjs';
 
 // Bounded native check of the approved runtime-lint-continuation Story's Rules

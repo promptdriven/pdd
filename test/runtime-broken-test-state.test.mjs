@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {harbor,storyTest,fakeRuntime,portsFor} from './runtime-fake.mjs';
-import {runCheck} from '../src/runtime/runtime-client.mjs';
+import {runCheck} from '../src/runtime-seam.mjs';
 for(const mode of ['test','lint','files']) test(`local broken test has a named not-run result in ${mode}`, async t=>{
   const {repo,home,state}=harbor(t,repo=>{
     storyTest(repo,'z-broken');const doc=JSON.parse(readFileSync(join(repo,'tests/z-broken.json')));

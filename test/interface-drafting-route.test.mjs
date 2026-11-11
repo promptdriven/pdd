@@ -5,7 +5,7 @@ import {readFileSync, writeFileSync, mkdirSync} from 'node:fs';
 import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {runPdd} from '../src/pdd-cli.mjs';
-import {runCheck} from '../src/runtime/runtime-client.mjs';
+import {runCheck} from '../src/runtime-seam.mjs';
 import {interfaceBlocks, proseSha256, interfaceSchemaProblems, checkInput} from '../src/runtime/runtime-preflight.mjs';
 import {harbor, PLACE, sink, fakeRuntime, portsFor} from './runtime-fake.mjs';
 

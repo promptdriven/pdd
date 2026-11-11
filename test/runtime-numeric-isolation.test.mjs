@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {chmodSync,readFileSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
-import {runCheck} from '../src/runtime/runtime-client.mjs';
+import {runCheck} from '../src/runtime-seam.mjs';
 import {findTests,preflight} from '../src/runtime/runtime-preflight.mjs';
 import {harbor,storyTest,fakeRuntime,portsFor,sha} from './runtime-fake.mjs';
 
