@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runTry } from '../src/runtime-seam.mjs';
-import { findTests, preflight, proseSha256 } from '../src/runtime/runtime-preflight.mjs';
+import { captureSource, findTests, preflight, proseSha256 } from '../src/runtime/runtime-preflight.mjs';
 import { Readable } from 'node:stream';
 import { PLACE, fakeRuntime, harbor, portsFor, temp } from './runtime-fake.mjs';
 
@@ -87,16 +87,19 @@ test('RUNTIME-TRY3: a Try link with another host, scheme, path or a user is not 
   }
 });
 
-// Confirmed server capacity waits; ambiguous Story selection remains a local error.
-test('RUNTIME-TRY4: confirmed capacity waits until exit 5; no STORY with many tests lists them (exit 2)', async t => {
+// Confirmed server capacity waits also apply when opening the whole project.
+test('RUNTIME-TRY4: confirmed capacity waits until exit 5, including the whole project', async t => {
   const setup = harbor(t);
   const busy = await fakeRuntime(t, (entry, f) => entry.method === 'POST' && entry.command === 'try'
     ? { status: 429, headers: { 'retry-after': '5' }, json: { error: { code: 'server-full', message: 'The runtime is busy. Try again later.' }, dispatch: 'not_started' } } : trying()(entry, f));
   const full = await tryStory(setup, busy, ['place-order']);
   assert.equal(full.code, 5); assert.match(full.err, /busy.*wait|wait.*busy/i);
   assert.ok(busy.posts.filter(post => post.command === 'try').length > 3);
-  const many = await tryStory(setup, busy, []);
-  assert.equal(many.code, 2); assert.match(many.err, /place-order/); assert.match(many.err, /unknown-item/);
+  const captures = [];
+  const many = await tryStory(setup, busy, [], {}, { captureSource: (root, options) => { captures.push(options.tests); return captureSource(root, options); } });
+  assert.equal(many.code, 5);
+  assert.deepEqual(captures, [['tests/place-order.json', 'tests/unknown-item.json']]);
+  assert.equal(busy.posts.at(-1).request.seed, 'tests/place-order.json');
   const one = harbor(t, repo => rmSync(join(repo, 'tests/unknown-item.json')));
   const lone = await fakeRuntime(t, trying());
   const used = await tryStory(one, lone, []);
@@ -274,7 +277,7 @@ test('RUNTIME-TRY11: pdd simulate says once, in calm words, how many sent files 
   assert.deepEqual(said, ['Starting your Try: sending 4 files, 6 KB (1 is not prompt, story or test files; run `pdd test --files` to see them)…']);
 });
 
-const APP_MAP = JSON.stringify({ schema_version: 'prompt-runtime.app-map.v1', name: 'Harbor', initial_screen: 'menu' });
+const APP_MAP = JSON.stringify({ schema_version: 'prompt-runtime.app-map.v1', name: 'Harbor', initial_screen: 'menu', screens: [{ id: 'menu', source: 'operation', prompt_path: PLACE, operation: 'place_order', input: { customerName: 'Sam', pickupAt: '08:30', items: [{ itemId: 'espresso', size: 'S', quantity: 1 }] }, format: 'text', result_pointer: '/customerName' }] });
 
 // Wrong: --app-map with an HTML page is sent (or silently ignored) and the Try breaks later (real-user web test, issue 4).
 test('RUNTIME-TRY12: --app-map must be a Git-visible app-map JSON; an open Try needs --new for a new app map or tab', async t => {

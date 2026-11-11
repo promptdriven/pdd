@@ -1354,11 +1354,21 @@ person questions and explicit blockers.
 
 ## Core engine switch
 
-`autopilot.engine` in the checkout's `pdd.json` selects the engine; the
-[core owner](autopilot-core.prompt.md) reads it with `autopilotEngine`, and any
-value other than `core` (or an unreadable file) is the full engine. The default
-stays `full`. The full engine below is unchanged; this section only adds a branch.
+The effective engine (`engineOf`), in this order: the machine's `state.engine` (`core`
+or `full`, saved by `start --engine`; source `machine`); else `autopilot.engine` in the
+checkout's `pdd.json` when it is `core` or `full` (source `pdd.json`); else the default,
+`full` (source `default`). The full engine below is unchanged, but **deprecated, removed
+in 0.1.29** (then the default becomes core, with an automatic move of the machines that
+run full):
 
+- The notice (`FULL_ENGINE_NOTICE`): "The full Autopilot engine is deprecated and is
+  removed in 0.1.29. To switch this machine to the core engine, let the open runs finish
+  or release them (pdd autopilot release ISSUE), then run: pdd autopilot stop && pdd
+  autopilot start --engine core". A full-engine tick writes it once per repository and
+  machine to the tick log (`ports.notice`, default stderr), under the admission lock, and
+  saves `fullEngineNoticeAt`, so it never repeats. A start that names `--engine full`
+  prints "--engine full is deprecated, removed in 0.1.29." and the notice first. The
+  alert channel needs an issue number, so the notice is no alert.
 - Engine source: `state.engine` (`core` or `full`), saved by `start --engine`, wins
   over `pdd.json`; a start without `--engine` keeps the saved value. `start --label
   NAME` saves `state.label`, which replaces the core's `label` setting. `start --mode
@@ -1366,8 +1376,15 @@ stays `full`. The full engine below is unchanged; this section only adds a branc
   the start's off check and status, which names the source `this machine`); it never
   writes `pdd.json` (unlike `pdd autopilot observe`). `start --report file|draft|off`
   saves `state.report` the same way: it replaces the core's `report` in the tick and
-  status (`reports MODE (this machine)`). With an effective engine that is not core,
-  `--mode` or `--report` is refused before any change. A core start whose machine mode
+  status (`reports MODE (this machine)`). `start --intake off|shadow` saves
+  `state.intake`; the core tick gets `intake` from it (`intakeMode` of the
+  [intake cards](autopilot-intake.prompt.md); off when none is saved), so a later
+  start without `--intake` keeps it and pdd.json never sets it. Another `--intake`
+  value returns exit code 2 with `Use --intake off or --intake shadow.` A core tick
+  whose mode is off, and `pdd autopilot stop`, call `stopCardJobs` of the intake
+  cards on the core state folder (with the core's jobs port when one is given). With an
+  effective engine that is not core, `--mode`, `--report` or `--intake` is refused
+  before any change. A core start whose machine mode
   is `off` saves the state as disabled with mode off, stops the timer and returns exit
   0 with `Autopilot core is off on this machine for REPO: mode off is saved and the
   timer is stopped. To turn it on, run pdd autopilot start --engine core --mode auto or
@@ -1415,6 +1432,12 @@ through this machine's alert destination with the core's cause, tried and need (
   drafts.`); `report send FINGERPRINT` sends one through `sendReportDraft` of the
   [report owner](autopilot-reports.prompt.md) with the counted `gh` port. It needs
   no repository. Other operands return exit code 2 with the usage line.
+- Intake: catalog command `intake` resolves this repository's state file like status
+  (no admission lock), reads the cards with `readIntake` of the
+  [intake cards](autopilot-intake.prompt.md) from the core state folder and returns
+  exit 0 with `Intake: MODE on this machine.` and `intakeText`, or with `--json` the
+  JSON of `{repository, intake, day, cards, running, wouldPick, diff}`. No AI call
+  and no GitHub call.
 
 ## Dependencies
 

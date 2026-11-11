@@ -1,13 +1,12 @@
-// Generated from prompts/cli/autopilot-reports.prompt.md (sha256: a5682849861a0f2b66e67b32660fc652036fbf470053b9c5d7ace701bba929fc).
+// Generated from prompts/cli/autopilot-reports.prompt.md (sha256: 46fab7339a610e6db4eeed0004e5d7ebf8a417269d251c23d94c7d91929f337b).
 import * as nativeFs from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { redactSecrets } from './secret-redaction.mjs';
 
 export const REPORT_REPOSITORY = 'promptdriven/pdd';
-export const RUNTIME_OWNER = 'agarwal-ishaan';
-const DAY = 24 * 60 * 60 * 1000, RECENT = 14 * DAY, COUNT = '{{count}}';
-const withCount = draft => ({ ...draft, body: draft.body.replace(COUNT, String(draft.count ?? 1)) });
+const DAY = 24 * 60 * 60 * 1000, RECENT = 14 * DAY;
+const LOGIN = /^[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38}$/i;
 const LABELS = { runtime: 'pdd:runtime', pdd: 'pdd:autopilot-report' };
 const slug = value => String(value ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
 const minor = version => /^(\d+)\.(\d+)/.exec(String(version ?? ''))?.slice(1, 3).join('.') ?? 'unknown';
@@ -31,18 +30,33 @@ function safeTail(text, words = []) {
   return value.split(/\r?\n/).map(line => line.slice(0, 200)).filter(line => line.trim()).slice(-20).join('\n');
 }
 
-function draftFor({ cause, versions, step, words }) {
+// The public text has fixed fields only (kind, component, code, step, versions, count, fingerprint), never free-form
+// text. A draft written earlier may lack the fields: its fingerprint KIND.COMPONENT.CODE.MINOR gives the first three.
+function publicReport(draft) {
+  const [kind = 'unknown', component = 'unknown', code = 'unknown'] = String(draft.fingerprint ?? '').split('.');
+  const f = { kind: draft.kind === 'runtime' ? 'runtime' : 'pdd', component: slug(draft.component ?? component) || 'unknown', code: slug(draft.code ?? code) || 'unknown',
+    step: slug(draft.step) || 'unknown', versions: draft.versions && typeof draft.versions === 'object' ? draft.versions : {} };
+  const known = value => /^[\w.+-]{1,40}$/.test(String(value ?? '')) ? value : 'unknown';
+  const name = f.kind === 'runtime' ? 'Runtime' : 'PDD';
+  const title = `Autopilot report: ${name} ${f.component} ${f.code} (PDD ${minor(f.versions.pdd)})`;
+  const body = [f.code === 'adopt-pdd' ? 'Autopilot changed existing code that no prompt owns (path e, a direct change with a regression test). Please adopt PDD for those modules (the local draft on the Autopilot machine lists them): give each one a prompt and a binding or header.'
+    : draft.shipped === true ? 'Autopilot shipped one PR with "Runtime: not run" because Runtime could not check it. The job did not wait for a fix.'
+    : `Autopilot ended one job because of a ${name} problem. The job did not wait for a fix.`, '',
+    `- Kind: ${f.kind}`, `- Component: ${f.component}`, `- Error code: ${f.code}`, `- Step: ${f.step}`,
+    `- Versions: PDD ${known(f.versions.pdd)}, Node ${known(f.versions.node)}, ${known(f.versions.platform)}, agent ${known(f.versions.agent)}`,
+    `- Seen on this machine: ${Number.isSafeInteger(draft.count) && draft.count > 0 ? draft.count : 1}`,
+    '', 'The detail stays in the local draft on the Autopilot machine.', '', reportMarker(draft.fingerprint)].join('\n');
+  return { title, body };
+}
+
+function draftFor({ cause, versions, step, words, runtimeRepo, runtimeOwner }) {
   const fingerprint = reportFingerprint({ ...cause, version: versions.pdd });
   const kind = cause.kind === 'runtime' ? 'runtime' : 'pdd';
-  const title = `Autopilot report: ${kind === 'runtime' ? 'Runtime' : 'PDD'} ${slug(cause.component) || 'unknown'} ${slug(cause.code) || 'unknown'} (PDD ${minor(versions.pdd)})`;
-  const tail = safeTail(cause.detail || cause.text, words);
-  const body = [cause.code === 'adopt-pdd' ? 'Autopilot changed existing code that no prompt owns (path e, a direct change with a regression test). Please adopt PDD for these modules: give each one a prompt and a binding or header.'
-    : cause.shipped ? 'Autopilot shipped one PR with "Runtime: not run" because Runtime could not check it. The job did not wait for a fix.'
-    : `Autopilot ended one job because of a ${kind === 'runtime' ? 'Runtime' : 'PDD'} problem. The job did not wait for a fix.`, '',
-    `- Kind: ${kind}`, `- Component: ${slug(cause.component) || 'unknown'}`, `- Error code: ${slug(cause.code) || 'unknown'}`, `- Step: ${slug(step) || 'unknown'}`,
-    `- Versions: PDD ${versions.pdd ?? 'unknown'}, Node ${versions.node ?? 'unknown'}, ${versions.platform ?? 'unknown'}, agent ${versions.agent ?? 'unknown'}`, `- Seen on this machine: ${COUNT}`,
-    '', 'Redacted detail (no repository code):', '', '```text', tail || '(none)', '```', '', reportMarker(fingerprint)].join('\n');
-  return { fingerprint, kind, repository: REPORT_REPOSITORY, title, body, labels: [LABELS[kind]], assignees: kind === 'runtime' ? [RUNTIME_OWNER] : [] };
+  const draft = { fingerprint, kind, component: slug(cause.component) || 'unknown', code: slug(cause.code) || 'unknown', step: slug(step) || 'unknown',
+    versions: { pdd: versions.pdd ?? null, node: versions.node ?? null, platform: versions.platform ?? null, agent: versions.agent ?? null },
+    ...(cause.shipped === true ? { shipped: true } : {}), ...(runtimeRepo ? { runtimeRepo } : {}), ...(LOGIN.test(String(runtimeOwner ?? '')) ? { runtimeOwner } : {}),
+    repository: REPORT_REPOSITORY, labels: [LABELS[kind]], detail: safeTail(cause.detail || cause.text, words) || '' };
+  return { ...draft, ...publicReport(draft) };
 }
 
 function github(ports) {
@@ -79,7 +93,10 @@ async function ownerRepository(api, draft, runtimeRepo) {
 async function sendDraft(draft, { root, machine, runtimeRepo, limit = true }, ports) {
   const fs = ports.fs ?? nativeFs, now = (ports.now ?? Date.now)(), api = github(ports), file = join(root, 'ledger.json');
   const ledger = readJson(fs, file, { filed: [], seen: {} });
-  draft = { ...draft, repository: await ownerRepository(api, draft, runtimeRepo ?? draft.runtimeRepo) };
+  const destination = runtimeRepo ?? draft.runtimeRepo, repository = await ownerRepository(api, draft, destination);
+  // An assignee only when the operator configured one for the Runtime repository that receives the report.
+  const assignees = draft.kind === 'runtime' && repository === destination && LOGIN.test(String(draft.runtimeOwner ?? '')) ? [draft.runtimeOwner] : [];
+  draft = { ...draft, repository, labels: [LABELS[draft.kind === 'runtime' ? 'runtime' : 'pdd']], assignees };
   const ref = number => `${draft.repository}#${number}`;
   const found = await findReport(api, draft, now);
   if (found) {
@@ -90,7 +107,8 @@ async function sendDraft(draft, { root, machine, runtimeRepo, limit = true }, po
   }
   // A cause with no known code ("other-…") files at most one new report per machine per hour; the rest stay drafts.
   if (limit && /\.other-[0-9a-f]{8}\./.test(draft.fingerprint) && ledger.filed.some(row => /\.other-/.test(row.fingerprint) && now - row.at < DAY)) return { state: 'limit' };
-  const { value } = await api('POST', `repos/${draft.repository}/issues`, { title: draft.title, body: withCount(draft).body, labels: draft.labels, assignees: draft.assignees });
+  const { title, body } = publicReport(draft);
+  const { value } = await api('POST', `repos/${draft.repository}/issues`, { title, body, labels: draft.labels, assignees: draft.assignees });
   ledger.filed = [...ledger.filed.filter(row => now - row.at < DAY), { fingerprint: draft.fingerprint, number: value.number, at: now }];
   save(fs, file, ledger);
   return { state: 'filed', number: value.number, id: value.id, ref: ref(value.number) };
@@ -98,7 +116,8 @@ async function sendDraft(draft, { root, machine, runtimeRepo, limit = true }, po
 
 function keepDraft(fs, root, draft, now) {
   const file = join(root, 'drafts', `${draft.fingerprint}.json`), old = readJson(fs, file, null);
-  save(fs, file, { ...draft, count: (old?.count ?? 0) + 1, firstAt: old?.firstAt ?? now, lastAt: now });
+  const kept = { ...draft, count: (old?.count ?? 0) + 1, firstAt: old?.firstAt ?? now, lastAt: now };
+  save(fs, file, { ...kept, ...publicReport(kept) });
 }
 
 // The owner of a cause (Serhan's boundary): everything that goes INTO Runtime is PDD's (prompts, interface blocks,
@@ -113,8 +132,8 @@ export function reportKind(cause) {
 // Stable fingerprints: an agent writes the code and the component as free text, so each is mapped to a fixed word.
 const CODES = [['merge-check-tool', /^merge-check-tool$/], ['suite-broken', /^suite-broken$/], ['adopt-pdd', /^adopt-pdd$/], ['no-verdict', /verdict/],
   ['scenario-limit', /scenario|safe-integer|integer-out-of-range|out-of-range/], ['vector-replay', /vector|replay/], ['runtime-case', /runtime-case|test-case/],
-  ['lint-refusal', /lint/], ['interface-refusal', /interface/], ['binding-refusal', /binding/], ['interpreter-error', /interpreter/],
-  ['server-internal', /server-internal|internal-server|server-error|server-5\d\d|http-5\d\d/], ['server-incompatible', /server|compat/], ['crash', /crash|panic|segfault|exception/], ['claim-error', /claim/], ['not-run', /not-run/],
+  ['lint-refusal', /lint/], ['interface-refusal', /interface/], ['binding-refusal', /binding/], ['input-refusal', /refus|reject/], ['interpreter-error', /interpreter/],
+  ['server-internal', /server-internal|internal-server|server-error|(?:^|-)5\d\d(?:-|$)|unavailable|bad-gateway/], ['server-incompatible', /server|compat/], ['crash', /crash|panic|segfault|exception/], ['claim-error', /claim/], ['not-run', /not-run/],
   ['timeout', /timeout|timed-out/], ['cli-error', /cli|command|usage|exit|failed|error/]];
 // An unknown code is other-HASH of the step and the error class (the code slug with no digits) only, never of the
 // agent's text, so one cause is one report; at most one new "other" report per machine per day.
@@ -127,10 +146,10 @@ const COMPONENTS = [['autopilot-core', /autopilot|core/], ['pdd-lint', /lint/], 
   ['pdd-test', /test|runtime|interpreter|verdict|scenario|vector/], ['pdd', /pdd/], ['agent', /agent|codex|claude/]];
 export const stableComponent = component => COMPONENTS.find(([, test]) => test.test(slug(component)))?.[0] ?? 'other';
 // File, count or keep one report for a Runtime or PDD cause. It never throws: a failed send keeps a local draft.
-export async function fileReport({ cause, mode, root, machine, versions = {}, step, words = [], runtimeRepo = null }, ports = {}) {
+export async function fileReport({ cause, mode, root, machine, versions = {}, step, words = [], runtimeRepo = null, runtimeOwner = null }, ports = {}) {
   if (!['runtime', 'pdd'].includes(cause?.kind) || mode === 'off') return { state: 'off' };
   cause = { ...cause, kind: reportKind(cause), code: stableCode(cause.code, step), component: stableComponent(cause.component) };
-  const fs = ports.fs ?? nativeFs, now = (ports.now ?? Date.now)(), draft = { ...draftFor({ cause, versions, step, words }), ...(runtimeRepo ? { runtimeRepo } : {}) };
+  const fs = ports.fs ?? nativeFs, now = (ports.now ?? Date.now)(), draft = draftFor({ cause, versions, step, words, runtimeRepo, runtimeOwner });
   if (mode === 'file') {
     try {
       const sent = await sendDraft(draft, { root, machine, runtimeRepo }, ports);

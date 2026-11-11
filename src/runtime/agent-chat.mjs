@@ -1,6 +1,6 @@
 import {loadRuntimeWorkspace} from './runtime-workspace.mjs';
 import {captureSource} from './runtime-preflight.mjs';
-// Generated from prompts/cli/agent-chat.prompt.md (sha256: a4868b63c088902974dc71d60e14943b433ee0bfc8e9f57a0f89c14a2c4d3aab).
+// Generated from prompts/cli/agent-chat.prompt.md (sha256: fa202c9aba70712508abc0a2048566fb396ced4083a4aa033ae843ea4726e28d).
 import {createTryGuide} from './agent-guide.mjs';
 import {cleanText} from './runtime-output.mjs';
 const object=x=>x!==null&&typeof x==='object'&&!Array.isArray(x);

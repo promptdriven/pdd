@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-slots.prompt.md (sha256: 03138cc99782f12aa34ccfaff9509c923b900693da76b4dea12ffdf3e8e91444).
+// Generated from prompts/cli/runtime-slots.prompt.md (sha256: d43d62233b3109774b127669b7dc2bb6da6d6477df5a27d14ea51915750f38ce).
 import { chmodSync, closeSync, lstatSync, mkdirSync, linkSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync, fsyncSync, utimesSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';

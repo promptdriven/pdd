@@ -1,6 +1,6 @@
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: a2f38067c5398c95bff5d3f362a3d0cdd2c9dce57d9e4784575aea6509496f0d).
 import { markdownLinks, markdownDefinitions, markdownSectionText } from './runtime-markdown.mjs';
 import { buildBindingPlan, runtimeBoundary } from './runtime-binding-plan.mjs';
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: b658e7cf652fab87e0e799cb28f2ff13dc4471bfa606f4e64d456c43c37ed22c).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
@@ -1384,7 +1384,7 @@ function snapshotReader(root, diskVisible, beforeRead = () => {}, strict = false
     return true;
   }
   observe('');
-  function inspectRaw(path, from, allowMissing = false, noLinks = false, control = false) {
+  function inspectRaw(path, from, allowMissing = false, noLinks = false, control = false, presenceOnly = false) {
     path = sourcePath(path, from);
     if(!control)requireRuntimePath(workspace,{path,from});
     if (isSecretPath(path)) {
@@ -1404,6 +1404,7 @@ function snapshotReader(root, diskVisible, beforeRead = () => {}, strict = false
     }
     if (snapshots.has(path)) {
       const file = snapshots.get(path);
+      if (!presenceOnly && file.presenceOnly) throw sourceProblem(from,path,'is not a Git-visible file.');
       if (noLinks && file.target) throw sourceProblem(from, path, ': symbolic links are not allowed for prepared output.');
       return file;
     }
@@ -1458,8 +1459,8 @@ function snapshotReader(root, diskVisible, beforeRead = () => {}, strict = false
       if (!pending.length) {
         if (!stat.isFile()) refuse('a submodule, folder or other non-regular file. pdd sends only regular files.', context ?? lastLink);
         if (!diskVisible.has(path) && !linkedVisible && firstLink) refuse('link itself is not a Git-visible file. Add it to Git or correct the declared dependency.', firstLink);
-        if (!diskVisible.has(current)) refuse(`${lastLink ? 'target is not' : 'is not'} a Git-visible file. Add it to Git or correct the declared dependency.`, context ?? lastLink, !lastLink);
-        const file = { path, stat, size: Number(stat.size), observed, ...(lastLink ? { target: current } : {}) };
+        if (!presenceOnly && !diskVisible.has(current)) refuse(`${lastLink ? 'target is not' : 'is not'} a Git-visible file. Add it to Git or correct the declared dependency.`, context ?? lastLink, !lastLink);
+        const file = { path, stat, size: Number(stat.size), observed, ...(presenceOnly && !diskVisible.has(current) ? {presenceOnly:true} : {}), ...(lastLink ? { target: current } : {}) };
         snapshots.set(path, file); return file;
       }
     }
@@ -1592,9 +1593,9 @@ function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadR
     if (prepareSource !== undefined) {
       if (typeof prepareSource !== 'function') throw new PreflightError(4, 'prepareSource must be a synchronous function.');
       let active = true, prepared;
-      const raw = path => {
+      const raw = (path, presenceOnly = false) => {
         if (!active) throw new PreflightError(4, 'Preparation ports are valid only during prepareSource.');
-        return inspectRaw(sourcePath(path, 'prepareSource'), 'prepareSource', true);
+        return inspectRaw(sourcePath(path, 'prepareSource'), 'prepareSource', true, presenceOnly, false, presenceOnly);
       };
       try {
         prepared = prepareSource({
@@ -1603,8 +1604,9 @@ function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadR
             if (!file.stat) throw sourceProblem('prepareSource', path, 'is missing.');
             return Buffer.from(bytes(file));
           },
-          statFile(path) {
-            const file = raw(path);
+          statFile(path, options) {
+            if(options !== undefined && (!isObject(options)||Object.keys(options).join(',')!=='presenceOnly'||options.presenceOnly!==true))throw new PreflightError(4,'Invalid presence-only stat option.');
+            const file = raw(path, options?.presenceOnly===true);
             return { exists: !!file.stat, is_symlink: false, size: file.size };
           },
         });
@@ -1614,6 +1616,12 @@ function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadR
       for (const output of prepared) {
         if (!isObject(output) || !(typeof output.bytes === 'string' || output.bytes instanceof Uint8Array)) throw new PreflightError(4, 'prepareSource files need a path and Buffer, Uint8Array or UTF-8 string bytes.');
         const path = sourcePath(output.path, 'prepareSource');
+        if (output.role !== undefined) {
+          if (output.role !== 'app-map' || prepared.filter(file=>file.role==='app-map').length !== 1 || appMap !== null) throw new PreflightError(4,'prepareSource may mark exactly one app-map and cannot override an explicit map.');
+          let map;try{map=JSON.parse(Buffer.from(output.bytes).toString('utf8'));}catch{throw new PreflightError(4,'Prepared app-map must be valid JSON.');}
+          if(!isObject(map)||map.schema_version!=='prompt-runtime.app-map.v1')throw new PreflightError(4,'Prepared app-map must be a v1 app map.');
+          appMap=path;
+        }
         if (overlay.has(path)) throw sourceProblem('prepareSource', path, `duplicates prepared file ${path}.`);
         for (const other of overlay.keys()) if (other.startsWith(`${path}/`) || path.startsWith(`${other}/`)) throw sourceProblem('prepareSource', path, `conflicts with prepared file ${other}.`);
         inspectRaw(path, 'prepareSource', true, true);
@@ -1827,7 +1835,7 @@ function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadR
       if (failures.length) return {story_path:story.story_path,tests:story.tests.sort(),unavailable:failures};
       return {story_path:story.story_path,tests:story.tests.sort(),files:[...reached].sort().filter(path=>footprintPayload.has(path)).map(path=>({path,sha256:sha256(bytes(footprintPayload.get(path)))})),references:[...reached].sort().flatMap(path=>provenance.get(path) ?? [])};
     });
-    return { tar, sha256: sha256(tar), files: files.map(({ path, size, target }) => ({ path, size, ...(target ? { target } : {}) })), bytes: total,
+    return { appMap, tar, sha256: sha256(tar), files: files.map(({ path, size, target }) => ({ path, size, ...(target ? { target } : {}) })), bytes: total,
       references:[...provenance.keys()].filter(path=>payload.has(path)).sort().flatMap(path=>provenance.get(path)), stories:footprints,
       warnings:footprints.flatMap(story=>(story.unavailable ?? []).map(item=>`Warning: ${story.story_path}: footprint unavailable: ${item.cause}`)),
       raw_file_hashes:rawFileHashes,

@@ -1,8 +1,10 @@
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 21becfcf6be955bfb6cfcc0631c9fdd2570d964ed84ff0d4b434adb5b9b76261).
+import { composeProductTry, selectJourneys, productTapCallBound } from '../product-composition.mjs';
+import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
 import { isRecentLintReceipt } from './runtime-lint-receipt.mjs';
 import { rememberSecrets } from './secret-redaction.mjs';
 import { bindingPlanLines, bindingRefusals } from './runtime-binding-plan.mjs';
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 1251ed57ce46a3436dd667051294fef14a915e774d4e558bd8daf5a7834009c0).
 import { buildCheckPlan, checkPlanResults, checkPlanLines, checkPlanResultLines } from './runtime-check-plan.mjs';
 import { interfaceFindings } from './interface-draft.mjs';
 import {loadRuntimeWorkspace,allowsRuntimePath,requireRuntimePath,RuntimeWorkspaceError} from './runtime-workspace.mjs';
@@ -1602,9 +1604,12 @@ function pendingLintMessage(context, answer) {
 const waitWord = (answer, read) => read?.kind === 'again' ? `waiting for an answer${read.why ? ` (${read.why})` : ''}`
   : answer?.state === 'queued' ? 'in line' : answer?.state === 'running' ? 'running' : 'waiting for an answer';
 
+// The upload hash plus the authored file hashes: the upload copy drops an interface kind (#3210), the authored bytes keep it.
+const authoredSha256 = capture => isObject(capture?.raw_file_hashes)
+  ? sha256(Buffer.from(JSON.stringify(Object.entries(capture.raw_file_hashes).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)))) : null;
 function lintReceiptScope(context) {
   return { root: context.root, origin: context.origin, login: context.identity.login, user_id: context.identity.userId,
-    source_sha256: context.capture.sha256, tests: [...new Set(sentTests(context.rows))].sort(), version: context.clientVersion ?? DEFAULT_CLIENT_VERSION,
+    source_sha256: context.capture.sha256, authored_sha256: authoredSha256(context.capture), tests: [...new Set(sentTests(context.rows))].sort(), version: context.clientVersion ?? DEFAULT_CLIENT_VERSION,
     selected_cap: context.lint.selected_cap ?? null };
 }
 const lintReceiptPath = context => join(context.store.folder('lint-receipts'), `${context.store.repoKey(context.root)}.json`);
@@ -1628,7 +1633,7 @@ function rememberRecentLint(context, answer) {
   try {
     const scope = lintReceiptScope(context), now = context.ports.now();
     const receipt = { schema_version: 'pdd.lint-receipt.v1', scope, received_at: now, engine_sha: answer?.engine_sha, answer };
-    if (context.lintReceiptOwner && isRecentLintReceipt({ receipt, scope, now }) && passingLintReceipt(context, answer)) {
+    if (context.lintReceiptOwner && isRecentLintReceipt({ receipt, scope, now, engineSha: answer?.engine_sha }) && passingLintReceipt(context, answer)) {
       lintReceiptTransaction(context, (path, current) => {
         if (current?.pending === context.batch) context.store.write(path, receipt);
       });
@@ -1639,7 +1644,8 @@ function readRecentLint(context) {
   try {
     if (lintReceiptBlocked(context)) return null;
     const receipt = context.store.read(lintReceiptPath(context));
-    return isRecentLintReceipt({ receipt, scope: lintReceiptScope(context), now: context.ports.now() })
+    // A candidate only: the current engine from capacity is compared before adoption.
+    return isRecentLintReceipt({ receipt, scope: lintReceiptScope(context), now: context.ports.now(), engineSha: receipt?.engine_sha })
       && receipt.engine_sha === receipt.answer?.engine_sha && passingLintReceipt(context, receipt.answer) ? receipt : null;
   } catch { return null; }
 }
@@ -2703,6 +2709,13 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
   const context = { ports, clientVersion: client?.version ?? ports.clientVersion ?? DEFAULT_CLIENT_VERSION, workflow, singleAttempt: ports.env.PDD_CHECK_SINGLE_ATTEMPT === '1', cacheEnabled: cache || !!options['--lf'] || !!options['--cache-clear'], json: options['--json'] === true, details: options['--details'] === true, explicitTimeout: options['--timeout'] !== undefined, interrupted: false, warnings: [] };
   let release = () => {};
   try {
+    if(options['--journeys']!==undefined){
+      if(options['--journeys']!==true||words.length>1||['--read','--retry','--fill-hash','--request','--screen','--drawing'].some(key=>options[key]!==undefined))throw new Stop(2,'Use pdd test --journeys [JOURNEY] with normal test options.');
+      const {root,found}=localSetup(cwd,[]);
+      try { words=selectJourneys(found.tests.map(test=>({testPath:test.path,storyPath:test.storyPath})),words[0]); } catch(error) { throw new Stop(2,error.message); }
+      if(!words.length)throw new Stop(2,'No root product journeys found.');
+      options={...options};delete options['--journeys'];
+    }
     requestedCalls(options['--max-calls']);
     if (options['--local'] !== undefined && options['--max-calls'] !== undefined) throw new Stop(2, '--local does not accept --max-calls.');
     if (options['--lint'] === true && words.length && (options['--local'] === undefined || options['--local'] === true && !Object.hasOwn(options, '--timeout')) && Object.keys(options).every(key => ['--lint','--local','--json','--timeout'].includes(key))) {
@@ -3458,6 +3471,102 @@ function oneTest(found, words, root) {
   return selected[0];
 }
 
+function productTest(found, words, journey, root) {
+  if(journey===undefined && words.length)return oneTest(found,words,root);
+  const paths=selectJourneys(found.tests.map(test=>({testPath:test.path,storyPath:test.storyPath})),journey);
+  if(!paths.length && journey===undefined)return oneTest(found,words,root);
+  const requested=words.length?new Set(select(found,words,root).map(test=>test.path)):null;
+  const selected=found.tests.filter(test=>paths.includes(test.path)&&(!requested||requested.has(test.path)));
+  if(selected.length!==1)throw new Stop(2,'Product Simulator needs one explicit Story or journey test.');
+  return selected[0];
+}
+function captureProductTry(root,test,options,ports) {
+  let composition, maxTapCalls;
+  const capture=ports.captureSource(root,{tests:[test.path],appMap:null,prepareSource(snapshot){
+    const adapters={root,statFile:(path,options)=>snapshot.statFile(relative(root,path).split(sep).join('/'),options),
+      readFile:path=>snapshot.readFile(relative(root,path).split(sep).join('/'))};
+    const journey=options['--journey']??(/^user_stories\/journeys\/[^/]+\.md$/.test(test.storyPath)?test.path:undefined);
+    composition=composeProductTry({root,...(options['--parts']!==undefined?{parts:options['--parts'].split(',').map(part=>part.trim())}:{}),
+      ...(journey!==undefined?{journey,testPath:test.path}:{})},adapters);
+    maxTapCalls=productTapCallBound(parseJsonValue(composition.files[0].content),adapters);
+    const output=new Map(composition.files.map(file=>[file.path,file.content]));
+    const files={stat:({path})=>output.has(path)?{exists:true,is_symlink:false,size:Buffer.byteLength(output.get(path))}:snapshot.statFile(path),
+      read:({path})=>({content:output.get(path)??snapshot.readFile(path).toString('utf8')})};
+    const scenario=parseJsonValue(snapshot.readFile(test.path).toString('utf8'));
+    if(options['--journey']!==undefined)selectJourneys([{testPath:test.path,storyPath:scenario.story_path}],options['--journey']);
+    scenario.initial_world={$seed:composition.seedPath};
+    const expanded=expandSource({path:test.path,text:stringifyJsonValue(scenario),format:'scenario'},files);
+    return [...composition.files.map(file=>({path:file.path,bytes:file.content,...(file.path===composition.appMapPath?{role:'app-map'}:{})})),{path:test.path,bytes:expanded.text}];
+  }});
+  return {capture,composition,maxTapCalls};
+}
+const productOptions = setup => setup ? {'--product':true,...(setup.parts?{'--parts':setup.parts.join(',')}:{}),...(setup.journey?{'--journey':setup.journey}:{})} : {};
+function tryCommand(test, setup, suffix='', target=test.story) {
+  const quote=value=>/^[A-Za-z0-9_./-]+$/.test(String(value))?String(value):"'"+String(value).replace(/'/g,"'\"'\"'")+"'";
+  return `pdd simulate ${quote(target)}${setup?' --product'+(setup.parts?' --parts '+quote(setup.parts.join(',')):'')+(setup.journey?' --journey '+quote(setup.journey):''):''}${suffix}`;
+}
+
+// Read the authored interfaces, never scenario output, to choose an interaction.
+function programEntries(root, found, test) {
+  const cli = new Set(), http = new Set();
+  for (const step of Array.isArray(test.doc?.steps) ? test.doc.steps : []) {
+    if (!step || typeof step.entry_path !== 'string' || typeof step.operation !== 'string') continue;
+    const prompt = readPrompt(root, found.visible, step.entry_path);
+    const entries = Array.isArray(prompt.interface?.entries) ? prompt.interface.entries : [];
+    const conventions = Array.isArray(prompt.interface?.conventions) ? prompt.interface.conventions : [];
+    const index = entries.findIndex(entry => entry?.operation === step.operation);
+    if (!(index >= 0)) continue;
+    const entry = entries[index], key = `${step.entry_path}#${step.operation}`;
+    if (['input_schema', 'result_schema'].every(name => conventions.some(c => c?.path === `/entries/${index}/${name}` && c.convention === 'cli'))) cli.add(key);
+    if (typeof entry.input_schema?.title === 'string' && /^HTTP (GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS) \/\S*$/.test(entry.input_schema.title)) http.add(key);
+  }
+  return { test, cli, http };
+}
+
+function simulationSelection(root, found, words, appMap, options) {
+  const all = [...found.tests].sort((a, b) => a.path.localeCompare(b.path));
+  if (!all.length) throw new Stop(2, 'No Stories are available to simulate.');
+  const selected = words.length ? [oneTest(found, words, root)] : all;
+  const rows = selected.map(test => programEntries(root, found, test));
+  const eligibleNames = predicate => [...new Set(all.flatMap(test => {
+    const selectedRow = rows.find(row => row.test === test);
+    // Selected source was read strictly above. Unselected failures cannot turn
+    // advisory eligible-name discovery into a new source requirement.
+    try { return predicate(selectedRow ?? programEntries(root, found, test)) ? [test.story] : []; }
+    catch { return []; }
+  }))].sort();
+  const cli = new Set(rows.flatMap(row => [...row.cli]));
+  const hasHttp = rows.some(row => row.http.size);
+  const screens = appMap ? JSON.parse(readFileSync(join(root, appMap), 'utf8')).screens : [];
+  const mapped = Array.isArray(screens) && selected.some(test => (Array.isArray(test.doc?.steps) ? test.doc.steps : []).some(step => step && screens.some(screen => screen?.source === 'operation' && screen.prompt_path === step.entry_path && screen.operation === step.operation)));
+  const typed = words.length && !cli.size && !hasHttp && !mapped;
+  const page = options['--page'] || options['--agent'] !== undefined || options['--tab'] !== undefined;
+  const forcedCli = options['--cli'] || options['--shell'];
+  if (forcedCli && cli.size !== 1) {
+    const names = eligibleNames(row => row.cli.size === 1);
+    const name = selected[0].story, target = /^[A-Za-z0-9_./-]+$/.test(name) ? name : "'" + name.replaceAll("'", "'\\''") + "'";
+    const refusal = new Stop(125, `${cli.size ? 'This Story uses more than one command-line program.' : 'This Story is not a command-line program.'} ${names.length ? `These are: ${names.join(', ')}.` : 'No Stories are command-line programs.'}`);
+    if (typed) refusal.formRecovery = `pdd simulate ${target} opens its Form tab.`;
+    throw refusal;
+  }
+  if (options['--serve'] !== undefined && !hasHttp && !appMap) {
+    const names = eligibleNames(row => row.http.size);
+    throw new Stop(2, `This Story has no HTTP routes or screens. ${names.length ? `These are: ${names.join(', ')}.` : 'No Stories have HTTP routes or screens.'}`);
+  }
+  let seed = selected[0];
+  if (!page && !forcedCli && options['--serve'] === undefined && !(appMap && !words.length)) {
+    if (cli.size > 1) throw new Stop(2, `There is more than one command-line program. Name a Story: ${[...new Set(rows.filter(row => row.cli.size).map(row => row.test.story))].sort().join(', ')}.`);
+    if (cli.size === 1) { options['--cli'] = true; options['--shell'] = true; }
+    else if (hasHttp) options['--serve'] = 0;
+  }
+  if (forcedCli) options['--cli'] = true;
+  // The seed establishes saved-case/session identity, not a preferred view.
+  if (cli.size === 1) seed = rows.find(row => row.cli.size).test;
+  else if (hasHttp) seed = rows.find(row => row.http.size).test;
+  const tab = options['--tab'] ?? (options['--cli'] ? 'terminal' : appMap && (!words.length || mapped || !typed) ? 'screen' : 'call');
+  return { test: seed, selected, tab, typed: typed && tab === 'call' && options['--serve'] === undefined };
+}
+
 async function readUntil(context, id, command, isDone, ms, label) {
   const end = Math.min(context.deadline ?? Infinity, context.ports.now() + ms), tick = progressTicker(context.ports.stderr, context.ports.now);
   let last = null;
@@ -3492,12 +3601,12 @@ function tryLink(answer, origin) {
 
 function tryRecovery(context, test, id) {
   const target = /^[A-Za-z0-9_./-]+$/.test(test.path) ? test.path : "'" + test.path.replace(/'/g, "'\"'\"'") + "'";
-  return new Stop(3, `The original Try ${id} is not confirmed running. Its saved setup is kept; no replacement was sent.\nRead-only status: GET ${context.origin}/v1/runs/${id} (authenticated).\nRead it again with: pdd simulate ${target} --no-open --no-wait\nUse --new only after reconciling the original outcome to start a separate Try.`);
+  return new Stop(3, `The original Try ${id} is not confirmed running. Its saved setup is kept; no replacement was sent.\nRead-only status: GET ${context.origin}/v1/runs/${id} (authenticated).\nRead it again with: ${tryCommand(test,context.product_setup,' --no-open --no-wait')}\nUse --new only after reconciling the original outcome to start a separate Try.`);
 }
 
 async function reopenTry(context, record, test) {
   const target = /^[A-Za-z0-9_./-]+$/.test(test.path) ? test.path : "'" + test.path.replace(/'/g, "'\"'\"'") + "'";
-  const again = `pdd simulate ${target}`;
+  const again = tryCommand(test,record.product_setup,'',test.path);
   if (context.interrupted) throw new Stop(3, 'Stopped before reopening the Try.');
   line(context.ports.stderr, 'Reopening your Try…');
   const reply = await context.runtime.reopen(record.id);
@@ -3535,8 +3644,20 @@ async function stopTry(context, record) {
   if (done.answer?.state !== 'passed') throw new Stop(done.answer?.state === 'refused' ? 4 : 3, 'The Try did not confirm that it stopped. Run pdd simulate --stop again later.');
 }
 
+function trySourceSelection(record, path) {
+  const scope = record.simulation_scope;
+  if (scope === undefined) return { tests: [path] };
+  if (!isObject(scope) || !Array.isArray(scope.tests) || !scope.tests.length
+    || !scope.tests.every(test => typeof test === 'string') || !scope.tests.includes(path)
+    || !(scope.appMap === null || typeof scope.appMap === 'string')) {
+    throw new Stop(4, 'The saved whole-project source scope is unavailable. Run pdd simulate --new.');
+  }
+  return { tests: scope.tests, appMap: scope.appMap };
+}
+
 function tryPromptProblem(root, found, test, record, capture) {
   const hashes=record.prompt_hashes;
+  if (!capture && record.simulation_scope?.appMap) capture = captureSource(root, trySourceSelection(record, test?.path));
   if (!capture && isObject(hashes)) {
     const files=sourceFilePort(root,found.visible), sources=[], references=[], raw_prompt_hashes={};
     for (const path of Object.keys(hashes)) {
@@ -3546,6 +3667,10 @@ function tryPromptProblem(root, found, test, record, capture) {
       raw_prompt_hashes[path]=sha256(Buffer.from(files.read({path}).content,'utf8'));
     }
     capture={sources,references,raw_prompt_hashes};
+  }
+  if (record.simulation_scope?.appMap != null) {
+    const scope = record.simulation_scope, map = capture.sources.find(file => file.path === scope.appMap);
+    if (!/^[a-f0-9]{64}$/.test(scope.appMapHash ?? '') || !map || sha256(map.bytes) !== scope.appMapHash) return 'The saved simulation app map changed or its source baseline is unavailable.';
   }
   if (!isObject(hashes) || !Object.keys(hashes).length || (test && !test.doc?.steps?.every(step=>typeof hashes[step.entry_path]==='string'))
     || !Object.entries(hashes).every(([path,expected])=>found.visible.has(path) && capture.raw_prompt_hashes[path]===expected)) return 'A prompt changed or this Try has no source record.';
@@ -3559,14 +3684,18 @@ function tryPromptProblem(root, found, test, record, capture) {
 
 // pdd simulate. Returns the exit code.
 export async function runTry({ words = [], options = {}, cwd = process.cwd() } = {}, givenPorts = {}) {
-  const ports = withDefaults(givenPorts), context = { ports, interrupted: false, doorMode: !!(options['--cli'] || options['--serve']) };
+  options = { ...options };
+  const ports = withDefaults(givenPorts), context = { ports, interrupted: false, doorMode: false };
   let release = () => {};
   try {
+    const productMode=options['--product']===true;
+    if(options['--product']!==undefined&&!productMode || !productMode&&['--parts','--journey'].some(key=>options[key]!==undefined))throw new Stop(2,'--parts and --journey require --product.');
+    if(productMode&&options['--app-map']!==undefined)throw new Stop(2,'--product builds its map; omit --app-map.');
     const requestedBudget = requestedCalls(options['--max-calls']);
-    if (options['--agent'] !== undefined && (typeof options['--agent'] !== 'string' || !options['--agent'].trim() || ['--no-wait','--stop','--save-last','--cli','--serve'].some(key => options[key] !== undefined))) throw new Stop(2, '--agent chooses a configured agent name for an ordinary connected pdd simulate; omit --no-wait and door modes.');
-    const doorModes = ['--cli', '--serve', '--save-last'].filter(key => options[key]);
-    if (doorModes.length > 1 || (options['--shell'] && !options['--cli']) || (doorModes.length && options['--stop'])
-      || (options['--save-last'] && (words.length || Object.keys(options).length !== 1))) throw new Stop(2, 'Choose one of --cli, --serve, --save-last or --stop; --shell needs --cli.');
+    if (options['--agent'] !== undefined && (typeof options['--agent'] !== 'string' || !options['--agent'].trim() || ['--no-wait','--stop','--save-last','--cli','--shell','--serve'].some(key => options[key] !== undefined))) throw new Stop(2, '--agent chooses a configured agent name for an ordinary connected pdd simulate; omit --no-wait and door modes.');
+    const doorModes = [options['--cli'] || options['--shell'], options['--serve'] !== undefined, options['--page'] || options['--tab'] !== undefined || options['--agent'] !== undefined, options['--save-last']].filter(Boolean);
+    if (doorModes.length > 1 || (doorModes.length && options['--stop'])
+      || (options['--save-last'] && (words.length || Object.keys(options).length !== 1))) throw new Stop(2, 'Choose one of --cli (with optional --shell), --shell, --serve, --page, --save-last or --stop.');
     if (options['--save-last']) {
       const root = repoRoot(cwd), store = stateFor(ports.env, root);
       const pointer=store.repo(root).last_door,descriptor=pointer?.descriptor?store.read(pointer.descriptor):null;
@@ -3574,11 +3703,49 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       const identity = signIn(ports.gh, store, ports);
       return await (await import('./try-doors.mjs')).saveLast({ root, store, identity, ports });
     }
-    if (options['--stop'] && (options['--tab'] || options['--new'] || options['--no-open'] || options['--no-wait'] || options['--app-map'] !== undefined || requestedBudget !== null)) throw new Stop(2, 'pdd simulate --stop takes only a STORY. Run pdd simulate --help.');
+    if (options['--stop'] && (options['--tab'] || options['--new'] || options['--no-open'] || options['--no-wait'] || options['--app-map'] !== undefined || productMode || requestedBudget !== null)) throw new Stop(2, 'pdd simulate --stop takes only a STORY. Run pdd simulate --help.');
     if (words.length > 1) throw new Stop(2, 'pdd simulate takes one STORY.');
     const origin = runtimeOrigin(ports.env);
     if (options['--stop']) return await stopByName(context, cwd, words, origin);
     const { root, found, normalized } = localSetup(cwd, words), store = stateFor(ports.env, root);
+    const repoState = store.repo(root);
+    if (!productMode && normalized.length && !options['--new']) {
+      const prior = repoState.tries?.[oneTest(found, normalized, root).path];
+      if (prior?.product_setup) options = { ...options, ...productOptions(prior.product_setup) };
+    }
+    const productSetup = options['--product'] ? { parts: options['--parts']?.split(',').map(p => p.trim()) ?? null, journey: options['--journey'] ?? null } : null;
+    const localSelected = productSetup ? [productTest(found, normalized, options['--journey'], root)]
+      : normalized.length ? [oneTest(found, normalized, root)] : [...found.tests].sort((a, b) => a.path.localeCompare(b.path));
+    const checked = preflight({ root, found, selected: localSelected }), rows = localRows(checked.rows);
+    const refused = rows.find(row => row.state === 'refused');
+    if (refused) {
+      if (options['--cli'] || options['--shell'] || options['--serve'] !== undefined) throw new Stop(125, refused.refusals?.map(r => r.message || r.code).join('; ') || 'The Story input was refused.');
+      line(ports.stdout, renderText({ rows: [refused], exitCode: 4 })); return 4;
+    }
+    let appMap = productSetup ? null : appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
+    if (!productSetup && options['--serve'] !== undefined && normalized.length && !options['--new']) {
+      const priorTest = oneTest(found, normalized, root), prior = repoState.tries?.[priorTest.path];
+      if (prior) {
+        const problem = tryPromptProblem(root, found, priorTest, prior);
+        if (problem) throw new Stop(125, `${problem} Run pdd simulate STORY --serve --new.`);
+      }
+    }
+    const boundedCapture = !productSetup && loadRuntimeWorkspace({root}).configured && localSelected.length ? ports.captureSource(root, { tests: localSelected.map(item => item.path), appMap }) : null;
+    let { test, selected, tab, typed } = productSetup
+      ? { test: localSelected[0], selected: localSelected, tab: options['--tab'] ?? (options['--cli'] || options['--shell'] ? 'terminal' : 'screen'), typed: false }
+      : simulationSelection(root, found, normalized, appMap, options);
+    if (productSetup && options['--shell']) options['--cli'] = true;
+    const wholeRecords = productSetup || normalized.length ? [] : Object.entries(repoState.tries ?? {}).filter(([, value]) => isObject(value.simulation_scope));
+    if (wholeRecords.length > 1) throw new Stop(2, 'Several whole-project simulations are saved. Stop a named Try with pdd simulate --stop STORY before opening the whole project.');
+    const [recordPath, record] = wholeRecords[0] ?? [test.path, repoState.tries?.[test.path]];
+    if (record && !options['--new'] && productSetup && (!record.product_setup || JSON.stringify(productSetup.parts) !== JSON.stringify(record.product_setup.parts) || Boolean(productSetup.journey) !== Boolean(record.product_setup.journey))) throw new Stop(4, 'Product selection changed; use --new explicitly.');
+    const simulationScope = productSetup || normalized.length ? null : { tests: selected.map(item => item.path), appMap, appMapHash: appMap ? sha256(readFileSync(join(root, appMap))) : null };
+    if (record && simulationScope && !options['--new'] && !isDeepStrictEqual(record.simulation_scope, simulationScope)) throw new Stop(2, 'This saved simulation does not contain the current whole project. Run pdd simulate --new.');
+    if (wholeRecords.length && !options['--new']) test = selected.find(item => item.path === recordPath) ?? test;
+    if (record && options['--new'] && recordPath !== test.path && repoState.tries?.[test.path]) throw new Stop(2, `A different saved Try uses ${test.path}. Stop it with pdd simulate --stop ${test.path} before replacing the whole-project simulation.`);
+    context.product_setup = productSetup;
+    context.typedForm = typed;
+    context.doorMode = !!(options['--cli'] || options['--serve'] !== undefined);
     context.agentConnection = !options['--no-wait'] && !context.doorMode && ports.agentBridge !== false
       && (ports.stdout.isTTY === true || options['--agent'] !== undefined);
     if (context.agentConnection) {
@@ -3588,20 +3755,27 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (!context.agentDefinitions.length) throw new Stop(2,'No agents are configured. Add an agent or enable defaults in agents.json.');
       if (options['--agent'] !== undefined && !context.agentDefinitions.some(d => d.name === options['--agent'] || (['codex','claude','gemini'].includes(d.id) && d.id === options['--agent']))) throw new Stop(2,'Unknown agent name. Choose a name from agents.json or an enabled default.');
     }
-    const appMap = appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
-    const test = oneTest(found, normalized, root), repoState = store.repo(root), record = repoState.tries?.[test.path];
-    Object.assign(context, { root, store, origin, visible: found.visible, appMap, cwd: realpathSync(cwd), seedTest: { path: test.path, storyPath: test.storyPath } });
-    const checked = preflight({ root, found, selected: [test] }), row = localRows(checked.rows)[0];
-    if (row.state === 'refused') {
-      if (options['--cli'] || options['--serve']) throw new Stop(125, row.refusals?.map(r => r.message || r.code).join('; ') || 'The Story input was refused.');
-      line(ports.stdout, renderText({ rows: [row], exitCode: 4 })); return 4;
-    }
-    const capture = ports.captureSource(root, { tests: [test.path], appMap }), note = otherNote(otherFiles(capture.files, found).length);
+    Object.assign(context, { root, store, origin, visible: found.visible, appMap, cwd: realpathSync(cwd), simulationTests: selected, seedTest: { path: test.path, storyPath: test.storyPath } });
+    const row = rows.find(row => row.test === test.path) ?? rows[0];
+    const prepared = productSetup ? captureProductTry(root, test, options, ports) : null;
+    const capture = prepared?.capture ?? (record?.simulation_scope && !options['--new']
+      ? ports.captureSource(root, trySourceSelection(record, recordPath))
+      : boundedCapture ?? ports.captureSource(root, { tests: selected.map(item => item.path), appMap }));
+    if (prepared && record?.product_parts && !options['--new'] && JSON.stringify(prepared.composition.product_parts) !== JSON.stringify(record.product_parts)) throw new Stop(4, 'The product part ownership changed. The original session is kept; use --new explicitly.');
+    if (prepared) appMap = capture.appMap;
+    context.appMap = appMap;
+    const note = otherNote(otherFiles(capture.files, found).length);
     for (const warning of capture.warnings ?? []) line(ports.stderr, warning);
+    if (record?.simulation_scope && !options['--new']) {
+      const problem = !isDeepStrictEqual(record.prompt_hashes, capture.raw_prompt_hashes)
+        ? 'A prompt changed or this Try has no source record.' : tryPromptProblem(root, found, test, record, capture);
+      if (problem) throw new Stop(normalized.length ? context.doorMode ? 125 : 4 : 2,
+        normalized.length ? `${problem} Run pdd simulate --new.` : 'This saved simulation does not contain the current whole project. Run pdd simulate --new.');
+    }
     if(context.agentConnection&&loadRuntimeWorkspace({root}).configured)throw new Stop(5,'Bounded agent connection is unavailable: installed CLI controls do not establish packet-only context. Use the ordinary simulator without an agent connection.');
     const identity = signIn(ports.gh, context.store, ports);
     Object.assign(context, { capture, identity, secrets: [identity.token], startedAt: ports.now(), deadline: ports.now() + TRY_MS, lint: { request_ids: [], state: null },
-      batch: null, rows: [row], timeoutMin: TRY_MS / 60_000, agentLimit: false, head: null });
+      batch: null, rows, timeoutMin: TRY_MS / 60_000, agentLimit: false, head: null });
     context.folder = store.folder('tries');
     release = interruptible(context);
     context.runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
@@ -3627,9 +3801,9 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (live && !options['--new'] && (options['--app-map'] !== undefined || options['--tab'])) {
         throw new Stop(2, `A Try for "${test.title}" is already open. --app-map and --tab apply only to a new Try: run pdd simulate ${test.story} --new (it stops the open Try first).`);
       }
-      if (live && (options['--serve'] || context.agentConnection) && !options['--new']) {
+      if (live && (context.doorMode || context.agentConnection) && !options['--new']) {
         const problem=tryPromptProblem(root,found,test,record,capture);
-        if (problem) throw new Stop(options['--serve'] ? 125 : 4, `${problem} Run pdd simulate STORY${options['--serve'] ? ' --serve' : ''} --new.`);
+        if (problem) throw new Stop(context.doorMode ? 125 : 4, `${problem} Run pdd simulate STORY${options['--serve'] !== undefined ? ' --serve' : ''} --new.`);
       }
       if (answer?.state === 'passed' && answer.result?.session?.state === 'paused' && !options['--new']) {
         if (!validLink(answer.result?.url, origin, 'try')) throw new Stop(3, refusedLink(answer, origin));
@@ -3646,28 +3820,44 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
         throw new Stop(3, `The last Try for "${test.title}" is not ready or its state is unknown. Run pdd simulate ${test.story} again later, or pdd simulate ${test.story} --new to stop it and make a new one.`);
       }
       if (!ended) { line(ports.stderr, 'Stopping the old Try…'); await stopTry(context, record); }
-      delete repoState.tries[test.path];
+      delete repoState.tries[recordPath];
       store.saveRepo(root, repoState);
     }
-    await checkLint(context, [row]);
+    if(prepared){
+      const version=await context.runtime.send('/v1/version',{method:'GET',headers:{'X-PDD-Features':'product-parts-v1'}},GET_MS);
+      const blocked=blockingAnswer(version);
+      if(blocked)throw new Stop(5,blocked);
+      if(version.status===401)throw new Stop(5,AUTH_TEXT);
+      if(version.unreachable)throw new Stop(5,version.unreachable);
+      if(version.status!==200)throw new Stop(5,`Product support could not be read (HTTP ${version.status ?? 'unknown'}). Nothing was uploaded.`);
+      if(!Array.isArray(version.json?.features) || !version.json.features.includes('product-parts-v1'))throw new Stop(5,'This interpreter needs an upgrade for whole-product Simulator support (product-parts-v1). Nothing was uploaded.');
+      line(ports.stderr,`Product parts: ${prepared.composition.parts.join(', ')}. One tap: up to ${prepared.maxTapCalls} AI calls.`);
+      line(ports.stderr,`Product screens: ${prepared.composition.labels.map(label=>label.title).join(', ')}. Up to ${prepared.composition.tapOperations} handler/background operations per tap, before drawing.`);
+    }
+    await checkLint(context, rows);
+    const failedRow = rows.find(item => item.state !== 'ready');
+    if (failedRow && failedRow !== row) {
+      if (context.doorMode) throw new Stop(125, failedRow.refusals?.map(r => r.message || r.code).join('; ') || 'A selected Story did not pass lint.');
+      return printTryProblem(context, failedRow);
+    }
     if (context.interrupted) throw new Stop(3, 'Stopped before the Try was made. Nothing new was sent.');
     if (row.state !== 'ready') {
-      if (options['--cli'] || options['--serve']) throw new Stop(125, row.refusals?.map(r => r.message || r.code).join('; ') || 'The Story did not pass lint.');
+      if (options['--cli'] || options['--serve'] !== undefined) throw new Stop(125, row.refusals?.map(r => r.message || r.code).join('; ') || 'The Story did not pass lint.');
       return printTryProblem(context, row);
     }
     let request, verdict, reply, done;
     const setup = { request_ids: [], reservation: null };
     for (;;) {
       if (!await admission(context, 'try', setup)) throw new Stop(context.interrupted ? 3 : 5, context.interrupted ? 'Stopped before sending.' : 'The interpreter stayed busy until the Try setup wait ended. No new Try was sent.');
-      request = { requestId: ports.randomUUID(), source_sha256: capture.sha256, seed: test.path, max_calls: requestedBudget ?? 400, ...(appMap ? { app_map: appMap } : {}),
-        tab: options['--tab'] ?? (options['--cli'] ? 'terminal' : appMap ? 'screen' : 'call') };
+      request = { requestId: ports.randomUUID(), source_sha256: capture.sha256, seed: test.path, max_calls: requestedBudget ?? 400, ...(appMap ? { app_map: appMap } : {}), ...(prepared ? {product_parts:prepared.composition.product_parts} : {}),
+        tab };
       setup.request_ids.push(request.requestId);
       const registered = await recordRuntimeRequest(setup.reservation, request.requestId, slotPorts(context));
       if (registered === false) { await finishReservation(context, setup, { state: 'not_run' }); throw new Stop(3, context.interrupted ? 'Stopped before sending.' : 'Stopped before the Try was sent.'); }
       if (context.interrupted || ports.now() >= context.deadline) { await finishReservation(context, setup, { state: 'not_run' }); throw new Stop(3, context.interrupted ? 'Stopped before sending.' : 'Stopped before the Try was sent.'); }
       const uploadedSeed=capture.sources.find(file=>file.path===test.path);
-      store.saveRepo(root, { ...repoState, tries: { ...repoState.tries, [test.path]: { id: request.requestId, ...setup, story: test.story, storyPath: test.storyPath, title: test.title, origin, login: identity.login, seed_scenario: uploadedSeed ? JSON.parse(uploadedSeed.bytes.toString('utf8')) : test.doc, story_sha256: createHash('sha256').update(readFileSync(join(root, test.storyPath))).digest('hex'), prompt_hashes: capture.raw_prompt_hashes,
-        effective_prompt_hashes:Object.fromEntries(capture.sources.filter(file=>file.path.endsWith('.prompt.md')).map(file=>[file.path,sha256(file.bytes)])),contract_references:capture.references } } });
+      store.saveRepo(root, { ...repoState, tries: { ...repoState.tries, [test.path]: { id: request.requestId, ...setup, story: test.story, storyPath: test.storyPath, title: test.title, origin, login: identity.login, ...(!productSetup && !words.length ? { simulation_scope: { tests: selected.map(item => item.path), appMap, appMapHash: appMap ? sha256(capture.sources.find(file => file.path === appMap).bytes) : null } } : {}), seed_scenario: uploadedSeed ? JSON.parse(uploadedSeed.bytes.toString('utf8')) : test.doc, story_sha256: createHash('sha256').update(readFileSync(join(root, test.storyPath))).digest('hex'), prompt_hashes: capture.raw_prompt_hashes,
+        effective_prompt_hashes:Object.fromEntries(capture.sources.filter(file=>file.path.endsWith('.prompt.md')).map(file=>[file.path,sha256(file.bytes)])),contract_references:capture.references, ...(productSetup?{product_setup:productSetup,product_parts:prepared.composition.product_parts}:{}) } } });
       store.posted(context.folder, request.requestId);
       line(ports.stderr, `Starting your Try: sending ${capture.files.length} files, ${formatSize(capture.bytes)}${note ? ` ${note}` : ''}…`);
       reply = await context.runtime.post('/v1/try', request, capture.tar, Math.max(1, Math.min(ports.postMs, context.deadline - ports.now())));
@@ -3721,8 +3911,17 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     }
     return printTryProblem(context, row);
   } catch (error) {
-    if (options['--cli'] || options['--serve'] || options['--save-last']) { line(ports.stderr, `pdd: ${cleanText(error.message || 'The Try could not start.', context.secrets ?? [])}`); return error.exitCode === 2 ? 2 : 125; }
-    if (error instanceof Stop || error instanceof PreflightError || error instanceof RuntimeWorkspaceError) { line(ports.stderr, error.message); return error.exitCode; }
+    if(options['--product'] && error.code && !error.exitCode){line(ports.stderr,`${error.code}: ${cleanText(error.message)}`);return 4;}
+    if (options['--cli'] || options['--serve'] !== undefined || options['--save-last']) {
+      line(ports.stderr, `pdd: ${cleanText(error.message || 'The Try could not start.', context.secrets ?? [])}`);
+      if (error instanceof Stop && error.formRecovery) line(ports.stderr, cleanText(error.formRecovery, context.secrets ?? []));
+      return error.exitCode === 2 ? 2 : 125;
+    }
+    if (error instanceof Stop || error instanceof PreflightError || error instanceof RuntimeWorkspaceError) {
+      line(ports.stderr, error.message);
+      if (error instanceof Stop && error.formRecovery) line(ports.stderr, cleanText(error.formRecovery, context.secrets ?? []));
+      return error.exitCode;
+    }
     throw error;
   } finally { release();for(const lease of context.caseWriteLeases?.values()??[])lease.release(); await Promise.all([...(context.reservations ?? [])].map(reservation => releaseRuntimeSlot(reservation, { ended: false }, slotPorts(context)))); }
 }
@@ -3787,9 +3986,9 @@ function trySetupRefused(context, test, appMap, refusals, reportUrl) {
     fix: text(item.fix), where: text(item.where) || [text(item.file), text(item.at)].filter(Boolean).join(' ') }));
   const mapped = !!appMap && items.some(item => Object.hasOwn(APP_MAP_RULES, item.code) || /^app-map-/.test(item.code) || /app[-_]map/i.test(item.section));
   const why = items.map(item => `${item.reason ? `${item.code}: ${item.reason}` : item.code}${item.where ? `; at ${item.where}` : ''}`).join('; '), fix = items.find(item => item.fix)?.fix;
-  const again = `run pdd simulate ${test.story} --new.`;
+  const again = `run ${tryCommand(test,context.product_setup,' --new')}.`;
   line(context.ports.stdout, `The Try could not start: ${mapped ? 'the app map was refused' : 'the server refused it'} (${why}).`);
-  line(context.ports.stdout, fix ? `${fix} Then ${again}` : mapped ? `Fix ${appMap} (RUNBOOK §13), then ${again}`
+  line(context.ports.stdout, fix ? `${fix} Then ${again}` : mapped ? `Fix ${context.product_setup?'the authored part maps or product/plan.md':appMap} (RUNBOOK §13), then ${again}`
     : `Fix what it names, then ${again}${reportUrl ? ` Details: ${reportUrl}` : ''}`);
   return 4;
 }
@@ -3802,12 +4001,13 @@ function printTryProblem(context, row) {
 }
 
 async function showTry(context, test, link, options, tryId, reused = false, session) {
+  if (context.typedForm) line(context.ports.stderr, "This Story's operation takes typed input, so it opens on the Form tab.");
   const budget = Number.isSafeInteger(session?.max_calls) && session.max_calls > 0 && Number.isSafeInteger(session?.remaining_calls)
     && session.remaining_calls >= 0 && session.remaining_calls <= session.max_calls
     ? `Try budget ${session.max_calls} calls; ${session.remaining_calls} remaining. You are charged only for calls that run.`
     : 'The interpreter did not report this Try’s budget.';
-  line(options['--cli'] || options['--serve'] ? context.ports.stderr : context.ports.stdout, budget);
-  if (options['--cli'] || options['--serve']) {
+  line(options['--cli'] || options['--serve'] !== undefined ? context.ports.stderr : context.ports.stdout, budget);
+  if (options['--cli'] || options['--serve'] !== undefined) {
     const doors = await import('./try-doors.mjs');
     return options['--cli'] ? doors.openCli(context, test, tryId, options) : (await import('./try-http.mjs')).openServe(context, test, tryId, options);
   }
@@ -4140,7 +4340,7 @@ function retainedCaseAuthority(root,record,p){
   caseSafe(p,join(root,path));caseSafe(p,join(root,story));
   const found=findTests({root}),test=found.tests.find(test=>test.path===path&&test.storyPath===story);
   if(!test||test.doc?.story_path!==story||sha256(Buffer.from(caseRead(p,join(root,story))))!==original.story_sha256)throw Error('the original Story or test changed');
-  const capture=captureSource(root,{tests:[path]});
+  const selection=trySourceSelection(original,path),capture=captureSource(root,selection);
   const references=capture.references??[];
   if((references.length||original.contract_references!==undefined)
     &&(!Array.isArray(original.contract_references)||!isDeepStrictEqual(original.contract_references,references)))throw Error('original reference baseline is unavailable or changed');
@@ -4151,7 +4351,7 @@ function retainedCaseAuthority(root,record,p){
   // Let the capture owner discover both closures. Current scenario edits cannot
   // hide required context from the original uploaded seed, and neither capture
   // may supply a missing original pin.
-  const originalCapture=captureSource(root,{tests:[path],prepareSource:()=>[{path,bytes:JSON.stringify(seed)}]});
+  const originalCapture=captureSource(root,{...selection,prepareSource:()=>[{path,bytes:JSON.stringify(seed)}]});
   for(const selected of [capture,originalCapture]){
     if(!selected.sources.filter(file=>file.path.endsWith('.prompt.md')).every(file=>hash(raw[file.path])&&hash(effective[file.path])))
       throw Error('complete original raw/effective source pins are unavailable');
@@ -4375,7 +4575,7 @@ export async function readTryOwner({ cwd = process.cwd(), story } = {}, givenPor
   const test = selected[0];
   ports.captureSource(root,{tests:[test.path]});
   async function openTry() {
-    const code = await runTry({ cwd, words: [test.path], options: { '--no-open': true, '--no-wait': true } }, { ...ports, stdout: ports.stderr, interactive: false, agentBridge: false });
+    const code = await runTry({ cwd, words: [test.path], options: { '--page': true, ...productOptions(record?.product_setup), '--no-open': true, '--no-wait': true } }, { ...ports, stdout: ports.stderr, interactive: false, agentBridge: false });
     if (code !== 0) throw new Error('The Try could not open. Read the progress on stderr and fix the reported problem.');
   }
   let record = repo.tries?.[test.path];

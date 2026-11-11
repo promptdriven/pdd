@@ -8,7 +8,9 @@ caller must validate the actual answer and per-test admission before reuse.
 
 `scope` has exactly root (canonical repository path), origin (normalized Runtime
 origin), login, user_id (GitHub numeric identity), source_sha256 (64 lower-case
-hex characters), tests (nonempty sorted unique repository-relative test paths),
+hex characters, the upload hash), authored_sha256 (64 lower-case hex characters,
+the hash of the authored file hashes, so a change that the upload projection
+removes is still a change), tests (nonempty sorted unique repository-relative test paths),
 version (package version), selected_cap (null or integer 1 through 1000).
 All path/name/version strings must be nonblank; user_id is a nonblank string of decimal digits.
 A receipt has schema_version `pdd.lint-receipt.v1`, scope in that shape,
@@ -18,9 +20,11 @@ than case-insensitive `unknown`), plus an answer retained by the caller.
 Return true exactly when both scopes are well formed and equal field for field,
 the receipt version and engine are valid, and `now - received_at` is between
 zero and 600000 milliseconds inclusive. `now` must also be finite. Missing,
-null, malformed or future times are false. If engineSha is supplied, it must be
-a known nonblank string equal to receipt.engine_sha; null means the capacity
-endpoint provided no current engine identity. Extra receipt fields (the answer)
+null, malformed or future times are false. `engineSha` is the current engine
+identity and is required: return true only when it is a known nonblank string
+(not `unknown`) equal to receipt.engine_sha. Omitted, null or unknown returns
+false, because an unknown current engine cannot prove that no deployment
+happened. Extra receipt fields (the answer)
 are ignored by this metadata hook; scope keys are exact. Never mutate inputs,
 read files, access a clock, authenticate or send requests.
 

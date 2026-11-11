@@ -48,7 +48,7 @@ Help forms and completion name only the `NAMES` words.
 
 Catalog four local routes before the product routes: `autopilot.start` (`autopilot start`, local `autopilot-start`, no operands, optional text --runs, --checks and --resume-custody); `autopilot.stop` (matching prefix/disposition, no operands/options); `autopilot.status` (matching prefix/disposition, no operands, optional flag --all); `autopilot.add` (`autopilot add`, local `autopilot-add`, required repeated issue operands). Forms and descriptions:
 
-- `pdd autopilot start [--runs N] [--checks N] [--engine core|full] [--label NAME] [--mode auto|observe|off] [--report file|draft|off] [--resume-custody FILE]`: Start this repo in an interactive Herdr agent, or headless jobs with the core engine; check now and every 30 minutes (10 with the core engine) without AI on empty ticks. --runs and --checks override machine-sized run and heavy-check limits; --engine (choice core or full), --label (text), --mode (choice auto, observe or off) and --report (choice file, draft or off) save this machine's engine, opt-in label, core mode and core report mode for this repo, over pdd.json (--mode observe runs every check but never merges); --resume-custody supplies the verified original-owner projection.
+- `pdd autopilot start [--runs N] [--checks N] [--engine core|full] [--label NAME] [--mode auto|observe|off] [--report file|draft|off] [--intake off|shadow] [--resume-custody FILE]`: Start this repo in an interactive Herdr agent (the full engine: deprecated, removed in 0.1.29), or headless jobs with the core engine (--engine core); check now and every 30 minutes (10 with the core engine) without AI on empty ticks. --runs and --checks override machine-sized run and heavy-check limits; --engine (choice core or full), --label (text), --mode (choice auto, observe or off) and --report (choice file, draft or off) save this machine's engine, opt-in label, core mode and core report mode for this repo, over pdd.json (--mode observe runs every check but never merges; --report draft, the default, keeps problem reports on this machine); --intake (choice off or shadow) saves this machine's core intake mode (shadow writes local intake cards that never change what starts; off is the default); --resume-custody supplies the verified original-owner projection.
 - `pdd autopilot stop`: Stop this machine's timer; let the current agent step finish.
 - `pdd autopilot status [--all] [--json]`: Show this machine's repo, folder, agent and next tick; --all lists every repository with Autopilot on this machine, from any folder.
 - `pdd autopilot add N...`: Mark named old issues with pdd:autopilot so Autopilot may take them.
@@ -127,10 +127,17 @@ Check also catalogs visible flag `--compact`. Its help form `pdd test --fill-has
 
 Check also catalogs `--retry` as a text option with form `pdd test --retry BATCH [--json] [--details] [--timeout MIN]`. Help says it retries only proven unstarted checks for the saved identical source, preserving completed/running results.
 
-Try also catalogs flags --cli, --shell and --save-last and optional-integer --serve (1..65535, default 8080).
+Try also catalogs flags --cli, --shell, --page and --save-last and optional-integer --serve (1..65535, default 8080).
 Help forms: `pdd simulate [STORY] --cli [--shell] [--max-calls N] [--new]`, `pdd simulate [STORY] --serve [PORT] [--max-calls N] [--new]`,
 `pdd simulate --save-last`. Describe real terminal commands, localhost HTTP requests and saving the last command
-into its original test. --shell compatibility and mode conflicts belong to runtime-client.
+into its original test. Add the explicit form `pdd simulate [STORY] --page [--new]`.
+The default help explains automatic choice: command-line program opens a shell, HTTP routes
+start on localhost with an example request, screens open the PDD Simulator page, and typed
+operations open its Form tab. With no Story,
+open the whole project. `--page` forces the page. The standalone form above is required as its own manifest/help
+entry; an optional `[--page]` token in the general form does not replace it. Preserve the optional Story operand and all
+existing explicit forms. Mode conflicts and choice are owned by
+[runtime client](runtime-client.prompt.md#choose-how-to-open-the-program).
 
 `pdd workflow evidence ISSUE --summary FILE` records newer source-verified saved check JSON without rerunning workflow steps or publication; require ISSUE and --summary, no extra operands/options.
 
@@ -308,6 +315,11 @@ this machine; no GitHub call.) and `pdd autopilot report send FINGERPRINT` (File
 one local report draft to promptdriven/pdd, or count it on the matching open
 report.).
 
+Catalog `autopilot.intake` with prefix `autopilot intake`, local `autopilot-intake`,
+no operands and an optional flag `--json`. Form: `pdd autopilot intake [--json]`
+(Print this machine's local intake cards for this repo (shadow mode), the would-pick
+list and today's changes; no AI call or GitHub write.).
+
 ## Post-merge audit route
 
 Catalog `autopilot.audit` with prefix `autopilot audit`, local `autopilot-audit`,
@@ -372,6 +384,10 @@ Catalog `autopilot.check-base` with prefix `autopilot check-base`, local `autopi
 Register autopilot.doctor, prefix autopilot doctor, local autopilot-doctor, no operands or options. Advertise `pdd autopilot doctor` as read-only first-start diagnostics with no AI call. Preserve other forms.
 Completion offers `doctor` only after `autopilot`. The top-level `doctor` command remains unsupported, including its help forms.
 
+
+## Whole-product Simulator (#808)
+
+Extend the existing simulate route with Boolean --product, text --parts and text --journey. Publish `pdd simulate --product [--parts PARTS] [--journey JOURNEY] [--max-calls N] [--no-open] [--no-wait]`; describe one composed product using its declared maps, starting data and planned operations. Keep ordinary STORY forms. Extend the existing test route with Boolean --journeys and form `pdd test --journeys [JOURNEY] [--max-calls N]`. Existing runtime-client owns option compatibility and orchestration; the catalog declares no second route or interpreter origin. Preserve all unrelated commands, including removed try/check handling.
 ## Cap-aware lint (draft)
 
 The lint route accepts optional integer `--max-calls`, minimum 1 and maximum 1000. Its help says this selects a cap for zero-AI structural call preflight; warnings never change the cap or guarantee completion. Existing hidden `test --lint` keeps the same remote semantics; removed commands remain removed. Local lint does not accept a call cap.

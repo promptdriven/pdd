@@ -1,6 +1,6 @@
 # CLI reference
 
-This page lists every command of pdd 0.1.27, as `pdd --help` shows it. A test (`test/docs-commands.test.mjs`) checks that each command form of the help is on this page.
+This page lists every command of pdd 0.1.28, as `pdd --help` shows it. A test (`test/docs-commands.test.mjs`) checks that each command form of the help is on this page.
 
 You need the pdd command only for runs with PRs, for `pdd test`, `pdd lint`, `pdd simulate` and `pdd approve`. Install the skills with `npx skills add promptdriven/pdd` (add `-g` for all your projects), and set up a repo with the `pdd-setup` skill in your agent. For simulations that your agent drives, use the Try tools in `pdd mcp`. Then use a PDD skill: `pdd-feature`, `pdd-bug`, `pdd-small-change` or `pdd-prompting`. Call a skill with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code (or ask for it by name). See [Install](USAGE.md#2-install).
 
@@ -166,7 +166,7 @@ Run Autopilot commands inside the repo folder. Each repo has its own Autopilot o
 | Command | What it does |
 |---|---|
 | `pdd autopilot doctor` | Read-only prerequisite checks, one line and a command per item. No GitHub writes or AI calls. Exit 1 for a required failure, 0 when only warnings remain |
-| `pdd autopilot start [--runs N] [--checks N] [--engine core\|full] [--label NAME] [--mode auto\|observe\|off] [--report file\|draft\|off] [--resume-custody FILE]` | Check sign-ins and the running pdd version, open a dedicated interactive Herdr session (not with the [core engine](#core-engine)) and check for work immediately. A user timer checks again every 30 minutes (every 10 minutes with the core engine; `pdd autopilot status` shows the interval). `--runs` overrides the open-run cap. `--checks` overrides heavy-check slots. Omission uses machine capacity. `--engine core` or `--engine full`, `--label NAME`, `--mode auto\|observe\|off` and `--report file\|draft\|off` (core engine only) save this machine's engine, opt-in label, mode and report mode for this repo; they win over `pdd.json`, and a later start without them keeps them. `--resume-custody` supplies the verified original-owner projection for explicit recovery |
+| `pdd autopilot start [--runs N] [--checks N] [--engine core\|full] [--label NAME] [--mode auto\|observe\|off] [--report file\|draft\|off] [--intake off\|shadow] [--resume-custody FILE]` | Check sign-ins and the running pdd version, open a dedicated interactive Herdr session (not with the [core engine](#core-engine)) and check for work immediately. A user timer checks again every 30 minutes (every 10 minutes with the core engine; `pdd autopilot status` shows the interval). `--runs` overrides the open-run cap. `--checks` overrides heavy-check slots. Omission uses machine capacity. `--engine core` or `--engine full`, `--label NAME`, `--mode auto\|observe\|off` and `--report file\|draft\|off` and `--intake off\|shadow` (core engine only) save this machine's engine, opt-in label, mode, report mode and [intake mode](#intake-cards-shadow) for this repo; they win over `pdd.json`, and a later start without them keeps them. The report mode is `draft` unless you choose `--report file`. `--resume-custody` supplies the verified original-owner projection for explicit recovery |
 | `pdd autopilot stop` | Disable this repo's timer on this machine and let the current agent step finish |
 | `pdd autopilot audit RUN PR` | Audit a confirmed automatic merge once with a fresh configured agent. Save OK, CONCERN or BAD and the separate revert recommendation with the run. Post the evidence once on the issue. BAD opens a revert PR only when recommended; otherwise it keeps the merge and reopens the issue with the missing parts. One decision alert states the recommendation and choices. Unknown external outcomes require inspection before any retry. |
 | `pdd autopilot check-base RUN PR` | Read the saved run and exact PR target, then check that its base contains the current default branch and newest published release tag, including prereleases. A refusal explains the reason and exits 1. Use this before an automatic merge and after it for the base audit. It makes no GitHub writes |
@@ -175,6 +175,7 @@ Run Autopilot commands inside the repo folder. Each repo has its own Autopilot o
 | `pdd autopilot regressions [--json] [--file PATH]` | Read core merge history and GitHub CI, parent checks, revert, reopen and issue-link evidence. Classify each merge as ok, suspect or proven; count distinct proven PRs per UTC evidence day. Issue-body attribution uses issue creation time even if added in a later edit; these buckets require a consumer confirmation policy before use as daily scorecard counts. At most 100 GitHub requests per scan; rate exhaustion or Retry-After stops further reads, preserving collected evidence and marking missing evidence incomplete. --json prints structured results; --file exclusively creates a local report without overwriting existing files. No GitHub writes or reverts. Incomplete reads exit 1; complete scans exit 0 even when they detect regressions |
 | `pdd autopilot report` | List this machine's local Autopilot report drafts ([core engine](#core-engine)). No GitHub call |
 | `pdd autopilot report send FINGERPRINT` | File one local report draft to promptdriven/pdd, or count it on the matching open report |
+| `pdd autopilot intake [--json]` | Print this machine's [intake cards](#intake-cards-shadow) for this repo, the would-pick list and today's changes. Local files only: no AI call and no GitHub call |
 | `pdd autopilot alerts set [--destination autopilot\|infrastructure]` | Read your Discord or Slack incoming webhook URL from stdin and save it for this machine |
 | `pdd autopilot alerts set --discord-channel ID [--token-command CMD] [--destination autopilot\|infrastructure]` | Use a Discord bot in one channel: read its token from stdin, or save CMD and run it at each send to get the token |
 | `pdd autopilot alerts test [--destination autopilot\|infrastructure]` | Send one test message and confirm that it was posted; for a bot, first check and show the bot name and channel name |
@@ -728,7 +729,8 @@ Changed criterion text and other malformed test rules still refuse the test.
 | `pdd interface draft PROMPT [--contract FILE] [--extend \| --refresh] [--json]` | Supply schemas and effect ports, extend an existing block, or reopen a stale block as draft. |
 | `pdd approve PROMPT --automatic --tests COMMAND` | Approve a complete draft of unchanged committed behavior after existing native tests and a complete current prompt check. Strict mode requires a person. |
 | `pdd approve PROMPT [--said WORDS]` | Approve one prompt with your chat words, or terminal y/N without --said; strict mode requires a person terminal. |
-| `pdd simulate [STORY] [--max-calls N] [--tab call\|screen\|terminal\|world] [--app-map PATH] [--new] [--no-open] [--no-wait] [--agent NAME]` | Open the Story in the PDD Simulator: make a Simulator link and open it in your browser. It ends in 24 hours. Short form: `pdd sim`. `--agent NAME` chooses a configured display name (quote spaces), or codex, claude or gemini. With terminal stdout or explicit `--agent`, it connects your agent and waits. Without either, it reads saved cases once and returns. `--no-wait` skips the connection. In a terminal, it adds each case saved in the Simulator to the Story's test file, and asks y/n when you click Approve on the page |
+| `pdd simulate [STORY] [--max-calls N] [--tab call\|screen\|terminal\|world] [--app-map PATH] [--new] [--no-open] [--no-wait] [--agent NAME]` | Automatically open a shell for command-line programs, localhost with an example request for HTTP routes, or the Simulator page for screens and typed operations. With no Story, open the whole project. |
+| `pdd simulate [STORY] --page [--new]` | Open the Simulator page explicitly |
 | `pdd simulate --stop [STORY]` | Stop the open Simulator link of a Story |
 
 Ordinary `pdd test` reuses complete unchanged Story passes from the Git-ignored `.pdd/cache/test/` folder, showing their previous pass time and zero current AI calls. `pdd test --lf` selects the last known failures; a later attempt without a verdict keeps a failure selected until it passes. With no failures in the selected scope it uses the normal selection, including unchanged-pass reuse. Completed saved reads populate the cache after source verification, dated from the original batch start, never the later read time. `pdd test --cache-clear` discards prior local evidence and runs the normal selected scope; it takes precedence over `--lf`. It sends again and prints one stderr notice with the selected Story count; the interpreter may return a saved answer for the same key.
@@ -808,7 +810,7 @@ The agent runs these from the run's worktree. pdd finds the run from that folder
 |---|---|
 | `pdd`, `pdd --help`, `pdd -h`, `pdd help` | Show the commands and the full paths of the installed Prompting guide and RUNBOOK |
 | `pdd help prompting` | Show how to write a prompt, a Story and its test, which commands check them, and the full paths of the Prompting guide and RUNBOOK |
-| `pdd --version` | Print the version, `0.1.27`. When the PDD skills that your agent finds are older, also print the update command on stderr |
+| `pdd --version` | Print the version, `0.1.28`. When the PDD skills that your agent finds are older, also print the update command on stderr |
 | `pdd completion bash\|zsh` | Print a shell completion script. It does not change your shell files |
 | `pdd jobs` | List active slots and waiting interpreter jobs on this machine, including kind, PID, age and request IDs. Local and read-only; no repository, authentication or interpreter call |
 
@@ -1463,8 +1465,19 @@ Build scripts and commands without test results do not qualify.
 
 ## Core engine
 
-Set `autopilot.engine` to `core` in `pdd.json` to run the small native engine
-instead of the coordinator chat. The default is `full`. To choose it on one
+**The full engine (the coordinator chat, still the default) is deprecated and is
+removed in 0.1.29**; then the core engine becomes the default. A machine that runs
+the full engine writes this once to its tick log (and `pdd autopilot start --engine
+full` prints it every time):
+
+> The full Autopilot engine is deprecated and is removed in 0.1.29. To switch this
+> machine to the core engine, let the open runs finish or release them (pdd
+> autopilot release ISSUE), then run: pdd autopilot stop && pdd autopilot start
+> --engine core
+
+`--engine full` still works for now and prints "--engine full is deprecated, removed
+in 0.1.29." Set `autopilot.engine` to `core` in `pdd.json` to choose the core engine
+for every machine of a repository. To choose it on one
 machine only, run `pdd autopilot start --engine core`; `--label NAME` sets the
 opt-in label and `--mode auto|observe|off` the mode the same way, on this machine
 only (`pdd autopilot observe` changes `pdd.json` instead). The machine values win over
@@ -1495,8 +1508,9 @@ says to run `pdd autopilot start`.
 | `quietMinutes` | Minutes with nothing new after which an agent process or the checks of a PR end. There is no fixed time limit: a process runs as long as it makes something new (a new commit, a new file state, a new tool call, a new output line, or CPU use in its child processes; a repeated line, a wait or a poll is not new), and a PR waits while CI, the review or the suite still runs. At least 20 (2 ticks of the core timer) | 45 |
 | `ciStuckMinutes` | Minutes that CI may stay pending with no change before the job ends | 360 |
 | `maxJobHours` | Backstop floor. Each agent process (build, repair, review, suite) stops at the larger of this many hours and 4 times the longest successful process of the same kind in this repository (last 30 days), counted from its own start, whatever it does (sleep time is not counted). The job ends with no result and one alert. At 3 hours a process sends one note and goes on | 24 |
-| `report` | `file`, `draft` or `off` for Runtime and PDD problem reports | `file` |
+| `report` | `file`, `draft` or `off` for Runtime and PDD problem reports | `draft` |
 | `reports.runtimeRepo` | Repository for Runtime problem reports, for example `promptdriven/prompt-runtime`; used when this machine can read it, else `promptdriven/pdd` with label `pdd:runtime` | none |
+| `reports.runtimeOwner` | GitHub login to assign Runtime problem reports filed in `reports.runtimeRepo`. Without it, reports have no assignee | none |
 | `maxRepairs` | Safety cap of repair jobs for one PR (the old key `repairs` still works). Repairs go on while they make progress: see below | 6 |
 | `testCommand` | Full test command that runs on the PR head, in a clean checkout. With `package-lock.json` and listed dependencies, `npm ci --ignore-scripts` runs first | `npm test` when `package.json` has a test script |
 
@@ -1624,17 +1638,52 @@ vectors such as a Runtime case, a scenario value limit or a vector replay; and C
 errors, crashes, claim or merge-check tool errors) also gets one report for its owners: a PDD
 problem in promptdriven/pdd with label `pdd:autopilot-report`; a Runtime problem in
 `reports.runtimeRepo` when this machine can read it, else in promptdriven/pdd, with
-label `pdd:runtime` (assigned to the Runtime owner). One cause has one report: a
+label `pdd:runtime`. A report has no assignee unless you set `reports.runtimeOwner`,
+which assigns Runtime reports filed in `reports.runtimeRepo`. One cause has one report: a
 repeat adds at most one "seen again" comment per machine a day. There is no daily
-cap on new reports. Reports hold versions, the step, the error code and a short
-redacted detail, never code or text from your repository. With `report` `file` (the
-default) Autopilot files them. With `draft` the
+cap on new reports. A filed report holds only fixed fields: the kind, component,
+error code, step, versions, count and fingerprint. It never holds free-form text, code
+or text from your repository. A short redacted detail stays in the local draft file
+only. With `report` `draft` (the default) the
 report stays on this machine until you run `pdd autopilot report send
-FINGERPRINT`; with `off` nothing is saved. In both cases the ended issue gets
+FINGERPRINT`; with `file` Autopilot files it; with `off` nothing is saved. With
+`draft` and `off` the ended issue gets
 `pdd:stuck`, because there is no report to wait on. Report issues themselves are
 never taken as work. A PR that says `Runtime: not run (reason)` can merge and files
 no report by itself; a Runtime report comes only from a job that failed for a
 Runtime cause.
+
+### Intake cards (shadow)
+
+`pdd autopilot start --engine core --intake shadow` turns on intake cards for this
+repo on this machine; `--intake off` (the default) turns them off. A later start
+without `--intake` keeps the saved value. In shadow mode each core tick first
+checks native facts of each open issue in scope (the opt-in label, no report
+issues): an assignee, an open native blocked-by link, open sub-issues, a label
+`pdd:stuck`, `pdd:needs-decision`, `pdd:would-merge` or `pdd:working`, or a job of
+this machine gives a native reason and no AI call. An issue whose author the core
+does not trust gets `untrusted` and no AI call. For every other issue, one headless
+job of this machine's agent (Codex or Claude) writes one card per issue version,
+from the title, the body, the labels, the trusted person comments and the titles of
+the other open issues by trusted authors. The card agent runs in an empty folder
+with no tools, no write access and no GitHub token (Codex: a read-only sandbox, its
+tools off and no MCP server from your Codex config; Claude: no tools, plan mode),
+never with the bypass flags of build jobs. A card says ready,
+improve, person, duplicate, blocked, held, fixed or elsewhere, with a reason and a
+confidence. A new title, body, label, assignee, native link or comment makes a new
+version. At most 2 card jobs start per tick and 2 run at once; a card job that ends
+with no valid card is tried again after 6 hours, or at once for a new version.
+Each card names the agent and the model. Cards live in the `intake` folder of the
+core state; one file a day (UTC) lists the class changes, the "would pick" list
+(ready cards, issues that unblock others first, then the oldest) and the issues
+that the core really started. Shadow cards never write to GitHub and never change
+which issue starts. A failure skips only that issue or that tick. After a switch to
+`--intake off`, the next tick stops card jobs that still run; so do a core tick in
+mode off and `pdd autopilot stop`. Trust lookups are cached for 6 hours, with at
+most 40 a tick. The cards cover every
+open issue in scope: unlike the core, they do not skip issues that cool down after a
+no-result or whose blocker is named only in the text. `pdd autopilot intake` prints
+the cards and today's changes; `--json` prints them as JSON.
 
 ## Post-merge audit settings
 
@@ -1739,6 +1788,25 @@ before retrying. A local match never replaces a service refusal with a pass.
 Autopilot parks a saved binding refusal with blocker `binding`. Interpreter
 health alone does not wake it. Use the normal reply/retry route after repair.
 
+
+## Whole-product Simulator
+
+- `pdd simulate --product [--parts PARTS] [--journey JOURNEY] [--max-calls N] [--no-open] [--no-wait]`
+- `pdd test --journeys [JOURNEY] [--max-calls N]`
+
+Product mode combines the selected parts' maps and starting data in one upload.
+Parts without screens retain their data and planned background operations.
+Each part keeps separate screen state. Cross-part navigation and background
+operations follow the authored maps and product plan. Shared world/seed files
+are optional. Authored project files are unchanged. A product requires at least
+one screen and one selected Story/scenario. Select parts with a comma-separated
+list. Journey names match complete IDs: J1 does not select J10.
+
+The interpreter must advertise product-parts-v1. Otherwise product setup stops
+before upload with an upgrade explanation. Step labels use admitted product
+ownership; unnamed operations remain unlabeled. Normal Story sessions keep their
+existing behavior. Reopening a product retains its original selection and world;
+use --new to deliberately replace it. Unknown requests must be reconciled first.
 ### Inspect a call cap before paid work
 
 Run `pdd lint STORY --max-calls 25` to inspect a selected cap with 0 AI calls.

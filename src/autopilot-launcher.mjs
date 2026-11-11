@@ -9,7 +9,7 @@ import { configureCheckCapacity, releaseCheckCapacity, readCheckStatus, readSuit
 import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 0f19dfb8dcd898eed0c130d18ec8b458cf47ea3dfded6c06b9f2701c2ca689c2).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: fe0294b6cd144bf6cc2329a9745150630bca990e321371daabd1c9cf7df6d175).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -41,8 +41,9 @@ import { lookupRepositoryParent, githubOriginRepository } from './workflow-workt
 import { costReport, costStatusLines } from './cost-ledger.mjs';
 
 import { selectAutopilotBase, checkAutopilotBase } from './autopilot-base.mjs';
-import { autopilotEngine, readCoreSettings, tickCore, coreStatus } from './autopilot-core.mjs';
+import { readCoreSettings, tickCore, coreStatus } from './autopilot-core.mjs';
 import { listReportDrafts, sendReportDraft } from './autopilot-reports.mjs';
+import { intakeMode, readIntake, intakeText, stopCardJobs } from './autopilot-intake.mjs';
 
 const INTERVAL = 30 * 60 * 1000;
 // The core tick has no AI call and each job phase needs a tick, so the core engine's timer fires every 10 minutes.
@@ -1522,9 +1523,15 @@ function workflowCleanupPorts(p, ports) {
   })};
 }
 // The small native engine (autopilot.engine "core"): no coordinator chat, Herdr, parking or AI scheduling.
-const engineAt = cwd => { try { return autopilotEngine(JSON.parse(readFileSync(join(cwd, 'pdd.json'), 'utf8'))); } catch { return 'full'; } };
-// The machine's saved engine (pdd autopilot start --engine) wins over pdd.json.
-const engineOf = state => ['core', 'full'].includes(state?.engine) ? { engine: state.engine, source: 'machine' } : { engine: engineAt(state.cwd), source: 'pdd.json' };
+// pdd.json's autopilot.engine when it names one, else null.
+const engineAt = cwd => { try { const engine = JSON.parse(readFileSync(join(cwd, 'pdd.json'), 'utf8'))?.autopilot?.engine; return ['core', 'full'].includes(engine) ? engine : null; } catch { return null; } };
+// The engine: the machine's saved engine (pdd autopilot start --engine) wins; then pdd.json; then the default, full.
+// The full engine is deprecated (removed in 0.1.29): a machine that runs it gets one notice. The default changes to core
+// in 0.1.29, together with the automatic move of the machines that run full.
+const engineOf = state => ['core', 'full'].includes(state?.engine) ? { engine: state.engine, source: 'machine' }
+  : engineAt(state?.cwd) ? { engine: engineAt(state.cwd), source: 'pdd.json' } : { engine: 'full', source: 'default' };
+export const FULL_ENGINE_NOTICE = 'The full Autopilot engine is deprecated and is removed in 0.1.29. To switch this machine to the core engine, let the open runs finish or release them (pdd autopilot release ISSUE), then run: pdd autopilot stop && pdd autopilot start --engine core';
+export const FULL_ENGINE_DEPRECATED = '--engine full is deprecated, removed in 0.1.29.';
 // The timer interval of the effective engine. Start writes it into the timer, so a start that switches the engine
 // also switches the interval.
 function intervalOf(state) { return engineOf(state).engine === 'core' ? CORE_INTERVAL : INTERVAL; }
@@ -1540,6 +1547,8 @@ const machineLabel = state => typeof state?.label === 'string' && state.label.tr
 const machineMode = state => ['auto', 'observe', 'off'].includes(state?.mode) ? state.mode : null;
 // The machine's saved core report mode (pdd autopilot start --report) wins over pdd.json for the core engine.
 const machineReport = state => ['file', 'draft', 'off'].includes(state?.report) ? state.report : null;
+// The machine's intake mode (pdd autopilot start --intake): shadow writes intake cards; off (the default) writes none.
+const machineIntake = state => intakeMode(state?.intake);
 const coreRoot = stateFile => stateFile.replace(/\.json$/, '-core');
 const coreReports = (ports, env) => join(stateFolder(ports, env), 'core-reports');
 async function coreTick(stateFile, state, p, ports) {
@@ -1547,7 +1556,9 @@ async function coreTick(stateFile, state, p, ports) {
   if (machineLabel(state)) core.label = machineLabel(state);
   if (machineMode(state)) core.mode = machineMode(state);
   if (machineReport(state)) core.report = machineReport(state);
-  if (core.mode === 'off') return ok('Autopilot is off.');
+  core.intake = machineIntake(state);
+  // Card jobs never outlive the core: mode off stops them (a tick that ends here does not reach the core's hook).
+  if (core.mode === 'off') { try { stopCardJobs({ root: coreRoot(stateFile), ...(p.corePorts?.jobs ? { jobs: p.corePorts.jobs } : {}) }); } catch { /* Next tick. */ } return ok('Autopilot is off.'); }
   await automaticBase(state, p);
   let budget = { state: 'normal' };
   try { budget = githubBudget({ usage: githubUsage(githubMachineEntries({ root: p.githubRoot }), p.now()), ...githubBudgetSettings(read(join(state.cwd, 'pdd.json'), {})?.autopilot?.github) }); }
@@ -1604,6 +1615,12 @@ async function runTick(stateFile, ports, completion) {
       finally { release(); }
     }
     if (engineOf(state).engine === 'core') return completion ? { state: 'inactive' } : await coreTick(stateFile, state, p, ports);
+    // The full engine is deprecated: one notice per repository and machine, never repeated (saved in the state file).
+    if (!state.fullEngineNoticeAt && !completion) {
+      const release = await claimAdmission(state, p);
+      if (release) try { const latest = read(stateFile); if (latest && !latest.fullEngineNoticeAt) { latest.fullEngineNoticeAt = p.now(); save(stateFile, latest); state.fullEngineNoticeAt = latest.fullEngineNoticeAt; (ports.notice ?? (text => process.stderr.write(`${text}\n`)))(`Autopilot (${state.repo}): ${FULL_ENGINE_NOTICE}`); } }
+      finally { release(); }
+    }
     try { await (ports.tidyRuns ?? tidyRuns)({timeBudgetMs:5000}, workflowCleanupPorts(p, ports)); }
     catch (error) { p.warn(`Finished chat cleanup waits (${error.code ?? 'unavailable'}).`); }
     const config = await settings(state, p);
@@ -2431,6 +2448,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
   if (input.label !== undefined && !(typeof input.label === 'string' && input.label.trim())) return { exitCode: 2, message: 'Use --label with a GitHub label name.' };
   if (input.mode !== undefined && !['auto', 'observe', 'off'].includes(input.mode)) return { exitCode: 2, message: 'Use --mode auto, --mode observe or --mode off.' };
   if (input.report !== undefined && !['file', 'draft', 'off'].includes(input.report)) return { exitCode: 2, message: 'Use --report file, --report draft or --report off.' };
+  if (input.intake !== undefined && !['off', 'shadow'].includes(input.intake)) return { exitCode: 2, message: 'Use --intake off or --intake shadow.' };
   let startSelection, startWarnings = [];
   if (command === 'doctor' || command === 'start') {
     const doctorPorts = typeof ports.doctorPorts === 'function' ? ports.doctorPorts(input,ports) : ports.doctorPorts ?? ports;
@@ -2444,14 +2462,14 @@ export async function runAutopilotLauncher(input, ports = {}) {
       const previous=read(join(stateFolder(ports,env),`${id}.json`));
       const state={...previous,cwd};
       // --mode is a machine setting of the core engine only; it never writes pdd.json.
-      if (command==='start' && (input.mode || input.report) && engineOf({...state,engine:input.engine ?? previous?.engine}).engine!=='core') throw Error(`${input.mode ? '--mode' : '--report'} works with the core engine only; add --engine core.`);
+      if (command==='start' && (input.mode || input.report || input.intake) && engineOf({...state,engine:input.engine ?? previous?.engine}).engine!=='core') throw Error(`${input.mode ? '--mode' : input.report ? '--report' : '--intake'} works with the core engine only; add --engine core.`);
       let profile;
       if (resumeCustody) {
         if (!previous) throw Error('Original coordinator recovery needs saved local state.');
         profile=custodyProjection(state,resolve(input.cwd,resumeCustody));
       } else profile=savedProfile(previous,env);
       coordinatorState=resumeCustody?{...state,paneId:profile.paneId,workspaceId:profile.workspaceId,agent:profile.agent}:state;
-      doctorInput={...input,cwd,env,profile,coordinatorPaneId:resumeCustody?profile.paneId:previous?.paneId,engine:input.engine ?? previous?.engine};
+      doctorInput={...input,cwd,env,profile,coordinatorPaneId:resumeCustody?profile.paneId:previous?.paneId,engine:input.engine ?? engineOf(state).engine};
     } catch (error) {
       if (command==='start') return bad(error.message);
       // Doctor still reports repository failures in its complete report.
@@ -2519,7 +2537,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
     }
     const previous = read(stateFile);
     state = { ...state, ...previous, cwd: state.cwd, id, stateFile };
-    if (command === 'start') { if (input.engine) state.engine = input.engine; if (input.label) state.label = input.label.trim(); if (input.mode) state.mode = input.mode; if (input.report) state.report = input.report; }
+    if (command === 'start') { if (input.engine) state.engine = input.engine; if (input.label) state.label = input.label.trim(); if (input.mode) state.mode = input.mode; if (input.report) state.report = input.report; if (input.intake) state.intake = input.intake; }
     let initialRevision = previous?.controlRevision ?? null;
     if (command === 'start' && !previous) { initialRevision = randomUUID(); state.controlRevision = initialRevision; state.enabled = false; state.timerInstalled = false; state.nextTick = null; save(stateFile, state); }
     // Explicit undefined values mask unrelated ambient provider directories in portsFor.
@@ -2527,6 +2545,10 @@ export async function runAutopilotLauncher(input, ports = {}) {
       CODEX_HOME:startSelection.env.CODEX_HOME,CLAUDE_CONFIG_DIR:startSelection.env.CLAUDE_CONFIG_DIR,GEMINI_CLI_HOME:startSelection.env.GEMINI_CLI_HOME} : input.env;
     p = portsFor(state, { ...ports, env: invocationEnv });
     if (command === 'start') { releaseAdmission(); releaseAdmission = null; }
+    if (command === 'intake') {
+      const report = readIntake({ root: coreRoot(stateFile), now: p.now() });
+      return ok(input.json ? JSON.stringify({ repository: state.repo ?? null, intake: machineIntake(state), ...report }, null, 2) : `Intake: ${machineIntake(state)} on this machine.\n${intakeText(report)}`);
+    }
     if (command === 'status' && engineOf(state).engine === 'core') {
       const timerActive = Boolean(await timer('status', state, p)), settingsNow = readCoreSettings(state.cwd);
       const label = machineLabel(state) ?? settingsNow.label;
@@ -2580,6 +2602,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
     if (command === 'stop') {
       if (previous) { state.enabled = false; state.nextTick = null; state.controlRevision = randomUUID(); save(stateFile, state); }
       await timer('stop', state, p);
+      try { stopCardJobs({ root: coreRoot(stateFile), ...(p.corePorts?.jobs ? { jobs: p.corePorts.jobs } : {}) }); } catch { /* The card jobs end by themselves. */ }
       await releaseCheckCapacity({env:p.env,owner:stateFile}, p.checkCapacityPorts ?? p);
       if (previous) { state.timerInstalled = false; save(stateFile, state); }
       return ok('Autopilot stopped on this machine; the current step can finish.');
@@ -2739,7 +2762,8 @@ export async function runAutopilotLauncher(input, ports = {}) {
       }
     }
     catch (e) { warning += ` Warning: ${line(e.message)}; next tick will retry.`; }
-    return ok(`${startWarnings.length ? startWarnings.join('\n')+'\n' : ''}Autopilot started for ${state.repo} in ${state.cwd}. Base ${state.baseBranch}. Agent ${state.agent.id} · pdd ${version} · next tick: ${new Date(state.nextTick).toISOString()}. See: ${core ? 'pdd autopilot status' : `herdr session attach ${SESSION}`}.${warning}${warnings.length ? ' ' + warnings.map(line).join(' ') : ''}`);
+    const deprecated = input.engine === 'full' ? `${FULL_ENGINE_DEPRECATED} ${FULL_ENGINE_NOTICE}\n` : '';
+    return ok(`${deprecated}${startWarnings.length ? startWarnings.join('\n')+'\n' : ''}Autopilot started for ${state.repo} in ${state.cwd}. Base ${state.baseBranch}. Agent ${state.agent.id} · pdd ${version} · next tick: ${new Date(state.nextTick).toISOString()}. See: ${core ? 'pdd autopilot status' : `herdr session attach ${SESSION}`}.${warning}${warnings.length ? ' ' + warnings.map(line).join(' ') : ''}`);
   } catch (e) { return bad(e.exact ? e.message : `Autopilot: ${e.code === 'ENOENT' ? 'install git, gh and Herdr, and sign in to your agent, then retry.' : line(e.message)}`); }
   finally { releaseAdmission?.(); controlLock?.(); }
 }

@@ -22,11 +22,11 @@ test('settings: engine switch, defaults and bounded values', () => {
   assert.equal(autopilotEngine({ autopilot: { engine: 'core' } }), 'core');
   assert.equal(autopilotEngine({ autopilot: { engine: 'turbo' } }), 'full');
   assert.deepEqual(coreSettings({ autopilot: { mode: 'auto', engine: 'core' } }), {
-    engine: 'core', mode: 'auto', trust: [], runs: 2, label: null, quietMinutes: 45, ciStuckMinutes: 360, maxJobHours: 24, report: 'file', runtimeRepo: null, repairs: 6, testCommand: null });
+    engine: 'core', mode: 'auto', trust: [], runs: 2, label: null, quietMinutes: 45, ciStuckMinutes: 360, maxJobHours: 24, report: 'draft', runtimeRepo: null, runtimeOwner: null, repairs: 6, testCommand: null });
   const custom = coreSettings({ autopilot: { mode: 'auto', engine: 'core', runs: 3, label: 'pdd:autopilot', quietMinutes: 30, report: 'file', repairs: 0, testCommand: 'make check', trust: ['Dana'] } });
-  assert.deepEqual(custom, { engine: 'core', mode: 'auto', trust: ['Dana'], runs: 3, label: 'pdd:autopilot', quietMinutes: 30, ciStuckMinutes: 360, maxJobHours: 24, report: 'file', runtimeRepo: null, repairs: 0, testCommand: 'make check' });
+  assert.deepEqual(custom, { engine: 'core', mode: 'auto', trust: ['Dana'], runs: 3, label: 'pdd:autopilot', quietMinutes: 30, ciStuckMinutes: 360, maxJobHours: 24, report: 'file', runtimeRepo: null, runtimeOwner: null, repairs: 0, testCommand: 'make check' });
   const invalid = coreSettings({ autopilot: { mode: 'auto', engine: 'core', runs: 0, quietMinutes: -1, report: 'loud', repairs: 1.5, label: '' } });
-  assert.deepEqual([invalid.runs, invalid.quietMinutes, invalid.report, invalid.repairs, invalid.label], [2, 45, 'file', 6, null]);
+  assert.deepEqual([invalid.runs, invalid.quietMinutes, invalid.report, invalid.repairs, invalid.label], [2, 45, 'draft', 6, null]);
   assert.equal(coreSettings({ autopilot: { jobTimeoutMinutes: 120 } }).jobTimeoutMinutes, undefined, 'there is no fixed time limit');
   assert.equal(coreSettings({ autopilot: { engine: 'core' } }, { scripts: { test: 'node --test' } }).testCommand, 'npm test');
 });
@@ -200,9 +200,9 @@ test('Runtime no verdict files one report, links it, and the next issue starts',
   const reports = [...w.reports.issues.values()];
   assert.equal(reports.length, 1);
   assert.deepEqual(reports[0].labels, ['pdd:runtime']);
-  assert.deepEqual(reports[0].assignees, ['agarwal-ishaan']);
+  assert.deepEqual(reports[0].assignees, [], 'no owner is configured, so no assignee');
   assert.match(reports[0].body, /<!-- pdd:autopilot-report:runtime\.pdd-test\.no-verdict\.0\.1 -->/);
-  assert.match(reports[0].body, /0\.1\.27/); assert.match(reports[0].body, /no verdict/); assert.match(reports[0].body, /Seen on this machine: 1/);
+  assert.match(reports[0].body, /0\.1\.27/); assert.match(reports[0].body, /Error code: no-verdict/); assert.match(reports[0].body, /Seen on this machine: 1/);
   assert.doesNotMatch(reports[0].body, /change-17|widgets/, 'no user code or repository text');
   assert.match(endComments(w, 17)[0], /Blocked by promptdriven\/pdd#1/);
   assert.ok(w.job(18, 'build'), 'the next issue starts');
@@ -1378,7 +1378,7 @@ test('B2 jobs run the pdd that runs the tick: its launcher is first on PATH', as
   assert.match(readFileSync(launcher, 'utf8'), new RegExp(`^#!/bin/sh\\nexec '${process.execPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}' '.*/bin/pdd\\.mjs' "\\$@"\\n$`));
   const version = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
   const out = execFileSync('pdd', ['--version'], { env: { ...process.env, PATH: job.env.PATH }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-  assert.match(out, new RegExp(`^${version.replace(/\./g, '\\.')}$`, 'm'), 'the pdd on the job PATH is this package');
+  assert.match(out, new RegExp(`^${version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'), 'the pdd on the job PATH is this package');
   w.build(17); await w.tick();
   assert.equal(w.job(17, 'review').env.PATH.split(':')[0], join(w.root, 'bin'), 'the reviewer gets it too');
 });
@@ -1401,7 +1401,7 @@ test('B3 public text: END and PR comments show no absolute path, user name or ho
     assert.doesNotMatch(body, /\bdana\b/, `no user name: ${body}`);
     assert.doesNotMatch(body.split('\n')[0], /\.\.$/, `one period: ${body.split('\n')[0]}`);
   }
-  assert.match(end, new RegExp(`- Log: \`${basename(job.log).replace(/\./g, '\\.')}\` on this machine`));
+  assert.match(end, new RegExp(`- Log: \`${basename(job.log).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\` on this machine`));
   assert.match(prComments.find(b => b.startsWith('Review: FAIL')), /Checked words\.js on this machine as \[user\]\./);
 });
 
@@ -1575,17 +1575,20 @@ test('E1 report owner (Serhan\'s boundary): our input to Runtime (interface, bin
   const scenario = await file({ kind: 'runtime', component: 'pdd lint', code: 'scenario-integer-out-of-range', text: 'a value is not a safe integer' });
   assert.equal(scenario.fingerprint, 'pdd.pdd-lint.scenario-limit.0.1');
   const draft = listReportDrafts({ root }).find(d => d.fingerprint === scenario.fingerprint);
-  assert.deepEqual(draft.labels, ['pdd:autopilot-report']); assert.deepEqual(draft.assignees, []); assert.match(draft.title, /^Autopilot report: PDD /);
+  assert.deepEqual(draft.labels, ['pdd:autopilot-report']); assert.equal(draft.runtimeOwner, undefined, 'no owner is configured'); assert.match(draft.title, /^Autopilot report: PDD /);
   for (const code of ['vector-replay-failed', 'safe-integer-limit', 'runtime-case-invalid']) assert.equal(reportKind({ kind: 'runtime', component: 'pdd test', code }), 'pdd', code);
   assert.deepEqual([...RUNTIME_CODES].sort(), ['interpreter-error', 'no-verdict', 'server-incompatible', 'server-internal']);
   // One spelling per code: the fixed code, then its owner when an agent says kind runtime.
   const owners = { 'no-verdict': 'runtime', 'interpreter-error': 'runtime', 'server-incompatible': 'runtime', 'server-internal': 'runtime',
     'interface-refusal': 'pdd', 'binding-refusal': 'pdd', 'lint-refusal': 'pdd', 'scenario-limit': 'pdd', 'vector-replay': 'pdd', 'runtime-case': 'pdd',
-    'cli-error': 'pdd', crash: 'pdd', 'claim-error': 'pdd', 'merge-check-tool': 'pdd', 'suite-broken': 'pdd', 'not-run': 'pdd', timeout: 'pdd', 'adopt-pdd': 'pdd', other: 'pdd' };
+    'cli-error': 'pdd', crash: 'pdd', 'claim-error': 'pdd', 'merge-check-tool': 'pdd', 'suite-broken': 'pdd', 'not-run': 'pdd', timeout: 'pdd', 'adopt-pdd': 'pdd', other: 'pdd', 'input-refusal': 'pdd' };
   const spelled = { 'no-verdict': 'No verdict', 'interpreter-error': 'interpreter crashed', 'server-incompatible': 'server version incompatible', 'server-internal': 'HTTP 503',
     'interface-refusal': 'interface refused', 'binding-refusal': 'binding refused', 'lint-refusal': 'lint refused', 'scenario-limit': 'scenario integer out of range',
     'vector-replay': 'vector replay failed', 'runtime-case': 'runtime case invalid', 'cli-error': 'cli usage', crash: 'panic', 'claim-error': 'claim lost',
-    'merge-check-tool': 'merge-check-tool', 'suite-broken': 'suite-broken', 'not-run': 'not run', timeout: 'timed out', 'adopt-pdd': 'adopt-pdd', other: 'weird thing' };
+    'merge-check-tool': 'merge-check-tool', 'suite-broken': 'suite-broken', 'not-run': 'not run', timeout: 'timed out', 'adopt-pdd': 'adopt-pdd', other: 'weird thing', 'input-refusal': 'server refused the prompt' };
+  // Review 12 should-fix 4: a server that refuses our input is ours; server-side 5NN errors are Runtime's.
+  for (const code of ['server-rejected-input', 'the server refused the scenario']) assert.equal(reportKind({ kind: 'runtime', component: 'pdd test', code }), 'pdd', code);
+  for (const code of ['runtime 500', 'upstream 502', 'service-unavailable', 'bad gateway']) { assert.equal(stableCode(code), 'server-internal', code); assert.equal(reportKind({ kind: 'runtime', component: 'pdd test', code }), 'runtime', code); }
   for (const [code, owner] of Object.entries(owners)) {
     const spelling = spelled[code] === 'HTTP 503' ? 'http-503' : spelled[code];
     assert.equal(code === 'other' ? stableCode(spelling).startsWith('other-') : stableCode(spelling), code === 'other' ? true : code, spelling);
@@ -1593,10 +1596,10 @@ test('E1 report owner (Serhan\'s boundary): our input to Runtime (interface, bin
   }
   const binding = await file({ kind: 'runtime', component: 'pdd test', code: 'binding-refused', text: 'the binding was refused' });
   const pddDraft = listReportDrafts({ root }).find(d => d.fingerprint === binding.fingerprint);
-  assert.equal(binding.fingerprint, 'pdd.pdd-test.binding-refusal.0.1'); assert.deepEqual(pddDraft.labels, ['pdd:autopilot-report']); assert.deepEqual(pddDraft.assignees, []);
+  assert.equal(binding.fingerprint, 'pdd.pdd-test.binding-refusal.0.1'); assert.deepEqual(pddDraft.labels, ['pdd:autopilot-report']); assert.equal(pddDraft.runtimeOwner, undefined);
   const internal = await file({ kind: 'runtime', component: 'pdd test', code: 'server-internal', text: 'the server failed' });
   const runtime = listReportDrafts({ root }).find(d => d.fingerprint === internal.fingerprint);
-  assert.equal(internal.fingerprint, 'runtime.pdd-test.server-internal.0.1'); assert.deepEqual(runtime.labels, ['pdd:runtime']); assert.deepEqual(runtime.assignees, ['agarwal-ishaan']);
+  assert.equal(internal.fingerprint, 'runtime.pdd-test.server-internal.0.1'); assert.deepEqual(runtime.labels, ['pdd:runtime']); assert.equal(runtime.runtimeOwner, undefined, 'no owner is configured');
   assert.equal(reportKind({ kind: 'pdd', component: 'pdd', code: 'crash' }), 'pdd'); assert.equal(reportKind({ kind: 'job', code: 'scenario' }), 'job');
 });
 
@@ -1681,11 +1684,11 @@ const reportGh = ({ readable = true } = {}) => {
   return { gh, calls, issues };
 };
 
-test('H1 reports: file is the default mode; no daily cap; the same cause gets one "seen again" per machine per day', async t => {
+test('H1 reports: draft is the default mode; no daily cap; the same cause gets one "seen again" per machine per day', async t => {
   const { fileReport } = await import('../src/autopilot-reports.mjs');
   const { mkdtempSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
-  assert.equal(coreSettings({ autopilot: { engine: 'core' } }).report, 'file');
+  assert.equal(coreSettings({ autopilot: { engine: 'core' } }).report, 'draft');
   const root = mkdtempSync(join(tmpdir(), 'pdd-h1-')); t.after(() => rmSync(root, { recursive: true, force: true }));
   const fake = reportGh();
   const file = code => fileReport({ cause: { kind: 'pdd', component: 'pdd', code, text: 'x' }, mode: 'file', root, machine: 'host-a', versions: { pdd: '0.1.27' } }, { gh: fake.gh, now: () => 0 });
@@ -1707,7 +1710,7 @@ test('H2 a Runtime report goes to the configured Runtime repository when readabl
     const sent = await fileReport({ cause, mode: 'file', root, machine: 'm', versions: { pdd: '0.1.27' }, runtimeRepo: 'promptdriven/prompt-runtime' }, { gh: fake.gh, now: () => 0 });
     assert.equal(sent.state, 'filed'); assert.equal(sent.ref, `${repo}#501`);
     const issue = fake.issues.get(501);
-    assert.equal(issue.repo, repo); assert.deepEqual(issue.labels, ['pdd:runtime']); assert.deepEqual(issue.assignees, ['agarwal-ishaan']);
+    assert.equal(issue.repo, repo); assert.deepEqual(issue.labels, ['pdd:runtime']); assert.deepEqual(issue.assignees, [], 'no owner is configured');
   }
   // A PDD cause (a test vector, or a refusal of our input such as a binding) always goes to promptdriven/pdd.
   for (const code of ['scenario-integer-out-of-range', 'binding-refused']) {
@@ -2239,7 +2242,8 @@ test('O4 path e: the job result proposes adopting PDD; the tick files one dedupe
   w.review(17, 'PASS'); w.suite(17, 0); await w.tick(); await w.tick();
   w.build(18, { body: 'Fixes #18\n\nRuntime: PASS\nPath: e — change-18.txt — unowned — no contract change — Test: test/c.test.js', result: { adopt: ['change-18.txt'] } }); await w.tick();
   const drafts = listReportDrafts({ root: w.reportRoot }).filter(d => d.fingerprint.startsWith('pdd.autopilot-core.adopt-pdd'));
-  assert.equal(drafts.length, 1); assert.equal(drafts[0].count, 2); assert.match(drafts[0].body, /^Autopilot changed existing code that no prompt owns/); assert.match(drafts[0].body, /change-18\.txt/);
+  assert.equal(drafts.length, 1); assert.equal(drafts[0].count, 2); assert.match(drafts[0].body, /^Autopilot changed existing code that no prompt owns/);
+  assert.match(drafts[0].detail, /change-18\.txt/, 'the module list stays in the local draft'); assert.doesNotMatch(drafts[0].body, /change-18\.txt/);
 });
 
 // ---- Debate B (B-VERDICT.md section 5): collisions between parallel jobs and a moving main ----------------------
@@ -3115,4 +3119,105 @@ test('Y7 (R11 should-fix 5) a failed checkout of a kept PR undoes the claim: no 
   assert.equal(claimComments(w, 17).length, 0, 'no claim comment');
   await w.tick();
   assert.equal(jobFile(w, 17)?.pr, pr.number, 'the next tick resumes the same PR');
+});
+
+// ---- Review 12 ------------------------------------------------------------------------------------------------
+async function reviewOnce(t, result) {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); await w.tick();
+  const { pr } = w.build(17); await w.tick();
+  const review = w.job(17, 'review');
+  w.finish(17, 'review', { result: { head: review.head, summary: 'Reviewed.', ...result } });
+  w.suite(17, 0); await w.tick(); await w.tick();
+  return { w, pr, merged: w.github.merges.length > 0, comment: (pr.comments.map(c => c.body).find(body => /^Review: /.test(body)) ?? '').split('\n')[0] };
+}
+test('Z1 (R12-1) fail closed: six review shapes with a P1 or P2 never merge; the controls stay right', async t => {
+  for (const [label, result] of [
+    ['1a a string that starts with P3 and holds a P1', { verdict: 'FAIL', mustFix: 'P3 docs/cli.md:4 typo in the table\nP1 src/a.js:3 the parser drops the last line' }],
+    ['1b 20 P3 items, then a P1', { verdict: 'FAIL', mustFix: [...Array.from({ length: 20 }, (_, i) => `P3 docs/notes.md:${i * 10 + 1} wording nit ${i}`), 'P1 src/a.js:3 the parser drops the last line'] }],
+    ['1c a PASS with "1. P1 ..."', { verdict: 'PASS', mustFix: ['1. P1 src/a.js:3 the parser drops the last line'] }],
+    ['1d a PASS with "Severity P2: ..."', { verdict: 'PASS', mustFix: ['Severity P2: src/a.js:3 the new flag has no test'] }],
+    ['1e a PASS with an untagged item', { verdict: 'PASS', mustFix: ['src/a.js:3 the base change to the parser is lost'] }],
+    ['1f a FAIL with "P3/P1 ..."', { verdict: 'FAIL', mustFix: ['P3/P1 src/a.js:3 the parser drops the last line'] }],
+    ['FAIL [P1]', { verdict: 'FAIL', mustFix: ['P1 src/a.js:3 crash'] }], ['FAIL ""', { verdict: 'FAIL', mustFix: '' }], ['FAIL {}', { verdict: 'FAIL', mustFix: {} }],
+    ['FAIL [null]', { verdict: 'FAIL', mustFix: [null] }], ['lowercase pass', { verdict: 'pass', mustFix: [] }], ['PASS [P2]', { verdict: 'PASS', mustFix: ['[P2] src/a.js:3 x'] }],
+    ['PASS **P1**', { verdict: 'PASS', mustFix: ['**P1** src/a.js:3 x'] }],
+  ]) {
+    const r = await reviewOnce(t, result);
+    assert.equal(r.merged, false, label);
+    if (label === '1b 20 P3 items, then a P1') assert.match(r.w.job(17, 'repair').input, /P1 src\/a\.js:3 the parser drops the last line/, 'the P1 after 20 P3 items is kept');
+  }
+  assert.equal((await reviewOnce(t, { verdict: 'FAIL', mustFix: ['P3 docs/a.md:3 nit'] })).merged, true, 'a FAIL with only a P3 merges');
+  assert.equal((await reviewOnce(t, { verdict: 'PASS', mustFix: ['P3 docs/a.md:3 nit'] })).merged, true, 'a PASS with a P3 merges');
+  assert.equal((await reviewOnce(t, { verdict: 'PASS', mustFix: [] })).merged, true);
+});
+
+test('Z2 (R12-2) PR CI filters: types without opened/synchronize/reopened and paths that miss the PR are no PR CI; an unreadable trigger and more than 50 files count as CI', async t => {
+  const { workflowRunsOnPr, workflowTriggers } = await import('../src/autopilot-core.mjs');
+  const b = 'pdd/core-17-ab12', docs = ['docs/a.md'], src = ['src/a.js', 'docs/a.md'];
+  for (const [text, files, want] of [
+    ['on:\n  pull_request:\n    types: [closed]\n', docs, false], ['on:\n  pull_request:\n    types: [opened, labeled]\n', docs, true],
+    ['on:\n  pull_request:\n    types:\n      - synchronize\n', docs, true],
+    ['on:\n  pull_request:\n    paths: ["src/**"]\n', docs, false], ['on:\n  pull_request:\n    paths: ["src/**"]\n', src, true],
+    ['on:\n  pull_request:\n    paths-ignore:\n      - "**.md"\n      - "docs/**"\n', docs, false], ['on:\n  pull_request:\n    paths-ignore: ["**.md", "docs/**"]\n', src, true],
+    ['on:\n  pull_request:\n    paths: ["src/**"]\n', null, true],
+    ['on:\n  push:\n    paths: ["src/**"]\n', docs, false], ['on:\n  push:\n    paths: ["src/**"]\n', src, true],
+    ['name: ci\non:\n- push\n- pull_request\njobs:\n  test:\n    runs-on: ubuntu-latest\n', docs, true],
+    ['name: no trigger\njobs:\n  x:\n    runs-on: ubuntu-latest\n', docs, true], ['on: {pull_request:\n  {branches: [main]}}\n', docs, true],
+  ]) assert.equal(workflowRunsOnPr(text, b, 'main', files), want, `${text} ${files}`);
+  assert.equal(workflowTriggers('jobs:\n  x: {}\n'), null);
+  // A docs-only PR in a repository whose only PR CI watches src/: "CI: none" and a merge (not a 6-hour wait).
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.baseCommit('.github/workflows/ci.yml', 'on:\n  pull_request:\n    paths: ["src/**"]\njobs:\n  x:\n    runs-on: ubuntu-latest\n');
+  w.issue(17); await w.tick();
+  const { pr } = w.build(17, { checks: false }); await w.tick(); w.review(17, 'PASS'); w.suite(17, 0);
+  w.advance(11 * MIN); await w.tick(); await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number]); assert.match(mergeComment(pr), /- CI: none/);
+  // More than 50 workflow files count as CI: a head with no run waits.
+  const v = await coreWorld(t, { settings: { runs: 1 } });
+  const seed = join(v.dir, 'seed51'); v.git(v.dir, 'clone', '-q', v.remote, seed); mkdirSync(join(seed, '.github', 'workflows'), { recursive: true });
+  for (let i = 0; i < 51; i++) writeFileSync(join(seed, '.github', 'workflows', `a${String(i).padStart(2, '0')}-release.yml`), 'on:\n  release:\n');
+  v.git(seed, 'add', '.'); v.git(seed, '-c', 'user.name=t', '-c', 'user.email=t@x', 'commit', '-qm', 'workflows'); v.git(seed, 'push', '-q', 'origin', 'HEAD:main');
+  v.issue(17); await v.tick();
+  v.build(17, { checks: false }); await v.tick(); v.review(17, 'PASS'); v.suite(17, 0);
+  for (let i = 0; i < 3; i++) { v.advance(10 * MIN); await v.tick(); }
+  assert.deepEqual(v.github.merges, [], 'more than 50 files: counted as CI');
+});
+
+test('Z3 (R12-3) T1 applies before the suite reaches the queue: a hang in npm ci is stopped; only the queue wait is exempt', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); await w.tick();
+  w.build(17); await w.tick(); w.review(17, 'PASS');
+  const suite = w.job(17, 'suite');
+  writeFileSync(suite.log, 'npm warn deprecated inflight@1.0.6\n');           // npm ci printed one line, then hangs
+  for (let i = 0; i < 6 && !w.stopped.includes(suite.id); i++) { w.advance(10 * MIN); await w.tick(); }
+  assert.ok(w.stopped.includes(suite.id), 'a hang before the queue is quiet');
+});
+
+test('Z4 (R12-4) a PR that conflicts with its base gets no CI on GitHub: the tick sees the conflict, starts the conflict update, and then the PR merges', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.baseCommit('.github/workflows/ci.yml', 'on:\n  pull_request:\n  push:\n    branches: [main, alpha]\n  workflow_dispatch:\njobs:\n  t:\n    runs-on: ubuntu-latest\n');
+  w.issue(17); await w.tick();
+  w.baseCommit('change-17.txt', 'a person changed the same file on main\n');     // main moved while the job built
+  const { pr } = w.build(17, { checks: false }); await w.tick();
+  const fix = w.job(17, 'conflict');
+  assert.ok(fix, 'a conflict update at the first PR tick'); assert.match(fix.input, /conflicts in: change-17\.txt/);
+  assert.equal(w.job(17, 'repair'), undefined);
+  const cwd = fix.cwd; w.git(cwd, 'fetch', '-q', 'origin', 'main');
+  try { w.git(cwd, 'merge', '-q', 'origin/main'); } catch { /* the conflict */ }
+  writeFileSync(join(cwd, 'change-17.txt'), 'a person changed the same file on main\nthe PR change\n'); w.git(cwd, 'add', '.'); w.git(cwd, 'commit', '-qm', 'merge main');
+  w.build(17, { role: 'conflict', write: false, checks: false }); await w.tick();
+  w.review(17, 'PASS'); w.suite(17, 0); w.github.setChecks(jobFile(w, 17).head); await w.tick(); await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number]);
+  assert.equal(jobFile(w, 17), null);
+});
+
+test('Z5 (R12 should-fix 7) two short findings at nearby lines that share one word are different findings', async t => {
+  const w = await coreWorld(t);
+  w.issue(17); await w.tick(); w.build(17); await w.tick();
+  await reviewRound(w, 17, ['P2 src/a.js:10 the error is not handled']);
+  await repairBuild(w, 17);
+  await reviewRound(w, 17, ['P2 src/a.js:12 the error message is wrong']);
+  assert.equal(endComments(w, 17).length, 0);
+  assert.equal(w.started.filter(job => job.role === 'repair').length, 2);
 });

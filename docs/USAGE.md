@@ -1,6 +1,6 @@
 # PDD usage guide
 
-This guide is for people who install pdd 0.1.27 from `promptdriven/pdd`. Each section has commands that you can copy.
+This guide is for people who install pdd 0.1.28 from `promptdriven/pdd`. Each section has commands that you can copy.
 
 > [!WARNING]
 > **Agents run with full access.** PDD starts Codex with `--dangerously-bypass-approvals-and-sandbox` Claude Code with `--dangerously-skip-permissions`, Gemini CLI with `--yolo`, and Antigravity CLI with `--dangerously-skip-permissions`. The agents do not stop to ask for approval. They can read, change and delete files and run commands as your user. Use PDD only in projects and on machines where you accept this.
@@ -77,7 +77,7 @@ You need the pdd command only for runs on GitHub issues ([section 6](#6-run-a-wo
 ```sh
 npm install -g github:promptdriven/pdd
 "$(npm prefix -g)/bin/pdd" --version  # reports PATH conflicts without changing files
-pdd --version   # prints 0.1.27
+pdd --version   # prints 0.1.28
 which -a pdd    # the first line must be in "$(npm prefix -g)/bin"
 ```
 
@@ -116,7 +116,7 @@ See all of them:
 
 ```sh
 which -a pdd
-pdd --version   # this pdd prints 0.1.27
+pdd --version   # this pdd prints 0.1.28
 ```
 
 If you choose to remove the Python installation, use the tool that installed it:
@@ -175,7 +175,7 @@ Where the skills go:
 
 Each copy that pdd makes has a marker file, `.pdd-skill.json`. After you update the pdd command, `pdd setup` replaces an older copy that has this marker. It never touches a copy without the marker, or a symlink, for example an `npx skills` install.
 
-`npx skills add promptdriven/pdd --skill pdd-prompting` installs one skill. `npx skills list` shows what you have. The `pdd-skills:` line at the top of each `SKILL.md` shows the version of that skill, for example `pdd-skills: 0.1.27`.
+`npx skills add promptdriven/pdd --skill pdd-prompting` installs one skill. `npx skills list` shows what you have. The `pdd-skills:` line at the top of each `SKILL.md` shows the version of that skill, for example `pdd-skills: 0.1.28`.
 
 Do not edit the installed skill folders: an update replaces your edits. To change a workflow, [make your own](#8-make-your-own-workflow).
 
@@ -466,7 +466,7 @@ pdd shows the prompt's runtime interface in plain words: each input, result and 
 
 ### 7.2 Simulate a Story
 
-`pdd simulate STORY` opens the Story in the PDD Simulator: it makes a Simulator link and opens it in your browser. In the Simulator, you use the prompt by hand. The link ends after 24 hours, or with `pdd simulate --stop STORY`. If an idle simulation is paused, run `pdd simulate STORY` again: pdd asks the server to reopen that same simulation and waits until it is running. Reopening uses no AI calls and keeps its original expiry and remaining allowance. A failed reopen keeps the record and reports a nonzero result instead of printing a paused link as ready.
+`pdd simulate STORY` automatically opens a shell for a command-line program, localhost with an example request for HTTP routes, the PDD Simulator page for screens, or its Form tab for typed operations. Omit STORY to open the whole project: all mapped screens, the unique main command-line program, or all HTTP routes. Use `--page` to choose the Simulator page. On the page, it makes a Simulator link and opens it in your browser. In the Simulator, you use the prompt by hand. The link ends after 24 hours, or with `pdd simulate --stop STORY`. If an idle simulation is paused, run `pdd simulate STORY` again: pdd asks the server to reopen that same simulation and waits until it is running. Reopening uses no AI calls and keeps its original expiry and remaining allowance. A failed reopen keeps the record and reports a nonzero result instead of printing a paused link as ready.
 
 In your terminal, `pdd simulate` keeps waiting while the page is open:
 
@@ -591,7 +591,7 @@ This is a pre-release. These limits are known today:
 
 | You see | What to do |
 |---|---|
-| `pdd --version` does not print `0.1.27` | Another `pdd` comes first. See [section 3](#3-if-you-have-the-old-python-pdd). |
+| `pdd --version` does not print `0.1.28` | Another `pdd` comes first. See [section 3](#3-if-you-have-the-old-python-pdd). |
 | pdd says an agent is not installed or signed in | Install the agent and sign in, or use the other one with `--agent`. |
 | A message about `git rev-parse --show-toplevel` | You are not in a Git clone. `cd` into your clone. |
 | A message about `refs/remotes/origin/...` or a missing base | Run `git fetch origin`. |
@@ -630,7 +630,7 @@ Do not paste tokens, passwords, Simulator links or private code.
 
 ## Use your program for real with pdd simulate
 
-Run `pdd simulate <story> --cli`. Copy the printed PATH line, then type your program's commands in your
+Run `pdd simulate <story>` to open a shell with your program ready. Use `--cli` to print the PATH line instead, then type your program's commands in your
 own terminal, or run the printed absolute path. For example: `tipjar split 100 --people 3 --tip 18 --round-up`.
 Each command runs the prompt on the interpreter with your gh login; saved data stays in the same simulation.
 `--help` also runs the prompt. `--shell` opens a shell with the PATH ready. Piped UTF-8 input is forwarded when

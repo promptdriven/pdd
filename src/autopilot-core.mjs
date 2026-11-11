@@ -1,15 +1,16 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 72e8fbdb0667e0b269e8b03b5f05fc5b48b990edc8f4928d5731ea584e4256b3).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 9464ac474b570f1f80dcbf651e21021a92c1aba2f1691c97f442a0ed36febeab).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, createHash } from 'node:crypto';
 import { createDependencyReadPorts, refreshClaimHeartbeat, takeoverLimited } from './issue-dependencies-github.mjs';
 import { jobEnvironment, startAgentJob, readAgentJob, stopAgentJob, agentCommand, agentJobCpu } from './agent-job.mjs';
-import { fileReport, listReportDrafts } from './autopilot-reports.mjs';
+import { fileReport, listReportDrafts, reportKind } from './autopilot-reports.mjs';
 import { checkAutopilotBase } from './autopilot-base.mjs';
 import { redactSecrets } from './secret-redaction.mjs';
 import { interfaceBlocks, readPrompt, promptRefusal, gitFiles } from './runtime-seam.mjs';
 import { readPromptApprovals } from './approval-policy.mjs';
+import { intakeTick } from './autopilot-intake.mjs';
 
 const MIN = 60 * 1000, HOUR = 60 * MIN, DAY = 24 * HOUR, CLAIM_EXPIRES = 4 * HOUR, STRIKES = 3, MAX_PAUSE_HOURS = 8, NO_RESULT_LIMIT = 3, CLAIM_TRIES = 3, NO_CI_AFTER = 10 * MIN, END_TRIES = 6;
 const REPORT_LABELS = ['pdd:runtime', 'pdd:autopilot-report'];
@@ -129,8 +130,9 @@ export function coreSettings(config = {}, packageJson = null) {
   const count = (value, fallback, min = 1) => Number.isSafeInteger(value) && value >= min ? value : fallback;
   return { engine: autopilotEngine(config), mode: ['off', 'observe', 'auto'].includes(a.mode) ? a.mode : 'off',
     trust: Array.isArray(a.trust) ? a.trust.filter(named) : [], runs: count(a.runs, 2), label: named(a.label) ? a.label.trim() : null,
-    quietMinutes: count(a.quietMinutes, 45), ciStuckMinutes: count(a.ciStuckMinutes, 360), maxJobHours: count(a.maxJobHours, 24), report: ['file', 'draft', 'off'].includes(a.report) ? a.report : 'file',
+    quietMinutes: count(a.quietMinutes, 45), ciStuckMinutes: count(a.ciStuckMinutes, 360), maxJobHours: count(a.maxJobHours, 24), report: ['file', 'draft', 'off'].includes(a.report) ? a.report : 'draft',
     runtimeRepo: /^[\w.-]+\/[\w.-]+$/.test(String(a.reports?.runtimeRepo ?? '')) ? a.reports.runtimeRepo : null,
+    runtimeOwner: /^[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38}$/i.test(String(a.reports?.runtimeOwner ?? '')) ? a.reports.runtimeOwner : null,
     repairs: count(a.maxRepairs, count(a.repairs, 6, 0), 0), testCommand: named(a.testCommand) ? a.testCommand : packageJson?.scripts?.test ? 'npm test' : null };
 }
 export function readCoreSettings(cwd, fs = nativeFs) {
@@ -479,7 +481,7 @@ ${job.paths?.owners ?? '(not read)'}${job.paths?.hints?.length ? `\nHints (promp
 Check: (1) the change does what the issue asks; (2) Path: the Path lines match the owner table. You may dispute the table only when you name a binding, header or prompt line that it missed. For a and c: the prompt states the issue's behavior in words that trace to the issue, not to the code, and the code agrees with it. For b: the quoted line really requires the fixed behavior, or the diff keeps the contract. For d: each changed value that a prompt states agrees with that prompt at this head. These are must-fixes: a new prompt for a non-code file; a binding or header added for an unowned file on the base; owned code that disagrees with its prompt. Do not ask for a new prompt for an unowned file. Do not judge commit order. (3) Tests: when the change alters a result through the public surface, a test checks it and fails on base, and no test was weakened. To make a missing test a must-fix, name the surface and the result that changed. Do not ask for a test that only copies a value from the diff. (4) the PR body has one honest Runtime line, and a Runtime FAIL line in the PR body means your verdict is FAIL; (5) no unrelated change, secret or unsafe effect.
 Read the change with: git fetch origin ${ctx.state.baseBranch} && git diff origin/${ctx.state.baseBranch}...HEAD. You may run focused tests. Do not edit files, commit, push, comment, approve or merge.
 Before you exit, write this JSON file: ${result}
-{"verdict":"PASS" or "FAIL","head":"${job.head}","summary":"<one paragraph>","mustFix":["<each required fix>"]}. A FAIL names at least one required fix. Start each item with its severity and its place: "P1 file:line ..." (wrong behavior or unsafe), "P2 file:line ..." (must be fixed before the merge) or "P3 file:line ..." (a follow-up that does not block the merge).
+{"verdict":"PASS" or "FAIL","head":"${job.head}","summary":"<one paragraph>","mustFix":["<each required fix>"]}. A FAIL names at least one required fix. Start each item with its severity and its place: "P1 file:line ..." (wrong behavior or unsafe), "P2 file:line ..." (must be fixed before the merge) or "P3 file:line ..." (a follow-up that does not block the merge). One item per finding. A PASS lists only P3 items: any other item blocks the merge.
 `;
 
 const scopedPrompt = (ctx, job, scoped, result) => `You are a short scoped check for an Autopilot core job in ${ctx.repo}. You did not write this change.
@@ -487,7 +489,7 @@ PR #${job.pr} at head ${job.head} for issue #${job.issue} passed a full review b
 The base moved: ${scoped.reason}. Read only this part: ${scoped.detail}
 Answer one question: does the result keep both changes (the PR's and the base's) and break neither? Read with: git fetch origin ${ctx.state.baseBranch} && git diff origin/${ctx.state.baseBranch}...HEAD -- ${(scoped.files ?? []).join(' ')}. You may run focused tests. Do not edit files, commit, push, comment, approve or merge.
 Before you exit, write this JSON file: ${result}
-{"verdict":"PASS" or "FAIL","head":"${job.head}","summary":"<one paragraph>","mustFix":["<each required fix>"]}. A FAIL names at least one required fix.
+{"verdict":"PASS" or "FAIL","head":"${job.head}","summary":"<one paragraph>","mustFix":["<each required fix>"]}. A FAIL names at least one required fix. Start each item with "P1 file:line ..." or "P2 file:line ..." (must be fixed) or "P3 file:line ..." (a follow-up). A PASS lists only P3 items: any other item blocks the merge.
 `;
 const conflictPrompt = (ctx, job, info, result) => `You are an Autopilot core conflict job for ${ctx.repo}, issue #${job.issue}, PR #${job.pr} on branch ${job.branch}.
 Work only in this folder: ${job.worktree}. The base origin/${ctx.state.baseBranch} moved, and merging it into ${job.branch} conflicts in: ${info.files.join(', ')}.
@@ -661,6 +663,8 @@ async function watchProcess(ctx, job, part, role, cwd = null) {
   // queue admits it ("running the full test suite"). The note and the backstop count from the process start.
   const admitted = role === 'suite' && !w.admitted && lines.some(line => line.trim() === 'running the full test suite');
   if (admitted) w.admitted = true;
+  // Only the time in the queue is exempt: a hang before the queue (npm ci, the suite start) is quiet as usual.
+  if (role === 'suite' && !w.queued && lines.some(line => /^waiting for a check slot\b/.test(line.trim()))) w.queued = true;
   for (const line of lines)
     for (const item of streamItems(line, role)) {
       const text = item.kind === 'out' ? normalOutput(item.text) : oneLine(item.text, 4000);
@@ -679,7 +683,7 @@ async function watchProcess(ctx, job, part, role, cwd = null) {
   // of a shorter tick gap beyond one timer interval does not count either. A queued suite is never quiet.
   if (ctx.gap || !first && fresh.size) { w.at = now; if (fresh.size) w.last = [...fresh].join(', '); }
   else if (ctx.tickGap > 0) w.at = Math.min(now, w.at + ctx.tickGap);
-  if (role === 'suite' && (!w.admitted || admitted)) { w.at = now; if (!w.admitted) w.last = 'queue wait'; }
+  if (role === 'suite' && (w.queued && !w.admitted || admitted)) { w.at = now; if (!w.admitted) w.last = 'queue wait'; }
   if (!first) w.counts = { commits: w.counts.commits + n.commit, states: w.counts.states + n.state, items: w.counts.items + n.tool + n.out };
   w.marks = [...w.marks, { at: now, ...w.counts }].filter(m => now - m.at <= 2 * HOUR).slice(-30);
   if (['build', 'repair', 'conflict'].includes(role)) job.progress = { sig: 'process', at: w.at, running: false };
@@ -885,22 +889,27 @@ async function intake(ctx, rows) {
 }
 
 // ---- Merge check ----------------------------------------------------------------------------------------
-// The triggers of one GitHub Actions workflow file: event name -> its branch and tag filters. A small reader of the
-// `on:` key (a word, a list, or a block of events), enough to see which events run and on which branches.
+// The triggers of one GitHub Actions workflow file: event name -> its filters (branches, branches-ignore, tags,
+// tags-ignore, types, paths, paths-ignore). A small reader of the `on:` key (a word, a list, an indentless list, a flow
+// map, or a block of events). null when it finds no `on:` key (the caller counts such a file as CI: the safe side).
+const FILTERS = ['branches-ignore', 'branches', 'tags-ignore', 'tags', 'types', 'paths-ignore', 'paths'];
 export function workflowTriggers(text) {
   const lines = String(text ?? '').split(/\r?\n/).map(line => line.replace(/(^|\s)#.*$/, '')).filter(line => line.trim());
   const at = lines.findIndex(line => /^["']?(on|true)["']?\s*:/.test(line)), events = new Map();
-  if (at < 0) return events;
+  if (at < 0) return null;
   const words = value => String(value).replace(/[[\]{}"']/g, ' ').split(/[\s,]+/).map(word => word.replace(/:$/, '')).filter(Boolean);
-  const flow = (event, value) => { for (const key of ['branches-ignore', 'branches', 'tags-ignore', 'tags']) { const m = new RegExp(`(?:^|[{,\\s])${key}\\s*:\\s*\\[([^\\]]*)\\]`).exec(value); if (m) event[key] = words(m[1]); } };
+  const flow = (event, value) => { for (const key of FILTERS) { const m = new RegExp(`(?:^|[{,\\s])${key}\\s*:\\s*\\[([^\\]]*)\\]`).exec(value); if (m) event[key] = words(m[1]); } };
   const inline = lines[at].replace(/^["']?(on|true)["']?\s*:\s*/, '').trim();
   if (inline) {
     if (!inline.startsWith('{')) { for (const name of words(inline)) events.set(name, {}); return events; }
+    if (!inline.includes('}')) return null;                        // a flow map over several lines: unknown
     for (const m of inline.matchAll(/(?:^|[{,])\s*["']?([\w-]+)["']?\s*:\s*(\{[^}]*\}|[^,}]*)/g)) { const event = {}; flow(event, m[2]); events.set(m[1], event); }
     return events;
   }
   const block = [];
-  for (let i = at + 1; i < lines.length && /^\s/.test(lines[i]); i++) block.push(lines[i]);
+  // The events: indented lines, or an indentless list ("- push" at column 0).
+  for (let i = at + 1; i < lines.length && (/^\s/.test(lines[i]) || /^-\s/.test(lines[i])); i++) block.push(lines[i]);
+  if (!block.length) return null;
   const indent = Math.min(...block.map(line => line.match(/^\s*/)[0].length));
   let event = null, key = null;
   for (const line of block) {
@@ -911,50 +920,64 @@ export function workflowTriggers(text) {
       continue;
     }
     if (!event) continue;
-    const m = /^(branches-ignore|branches|tags-ignore|tags)\s*:\s*(.*)$/.exec(body);
+    const m = new RegExp(`^(${FILTERS.join('|')})\\s*:\\s*(.*)$`).exec(body);
     if (m) { key = m[1]; event[key] = m[2] ? words(m[2]) : []; }
     else if (body.startsWith('-') && key) event[key].push(...words(body.slice(1)));
     else if (/^[\w-]+\s*:/.test(body)) key = null;
   }
   return events;
 }
-// GitHub's branch filter: * is any text but "/", ** is any text, ? one character; a "!" pattern excludes; the last
+// GitHub's filter patterns: * is any text but "/", ** is any text, ? one character; a "!" pattern excludes; the last
 // matching pattern wins.
 const globMatch = (pattern, name) => new RegExp(`^${pattern.replace(/[.+^${}()|\\]/g, '\\$&').replace(/\*\*/g, '\0').replace(/\*/g, '[^/]*').replace(/\?/g, '.').replace(/\0/g, '.*')}$`).test(name);
 const branchMatch = (patterns, name) => patterns.reduce((hit, p) => p.startsWith('!') ? (globMatch(p.slice(1), name) ? false : hit) : (globMatch(p, name) ? true : hit), false);
-// Can this workflow run on a PR head of `branch` into `base`? pull_request or pull_request_target (their branch filter
-// names the target branch), or a push to `branch`.
 const filtered = (event, name) => event.branches ? branchMatch(event.branches, name) : event['branches-ignore'] ? !branchMatch(event['branches-ignore'], name) : true;
-export function workflowRunsOnPr(text, branch, base = 'main') {
+// paths: some changed file matches; paths-ignore: some changed file is not ignored. With no file list, filters pass.
+const pathsPass = (event, files) => !Array.isArray(files) ? true
+  : event.paths ? files.some(file => branchMatch(event.paths, file)) : event['paths-ignore'] ? files.some(file => !branchMatch(event['paths-ignore'], file)) : true;
+const PR_TYPES = ['opened', 'synchronize', 'reopened'];
+// Can this workflow run on a PR head of `branch` into `base`, for the PR's changed `files`? pull_request or
+// pull_request_target (the branch filter names the target branch; `types` must include opened, synchronize or reopened
+// when given; `paths` and `paths-ignore` apply to the changed files), or a push to `branch` (its branch and path
+// filters). A file with no readable `on:` counts as CI.
+export function workflowRunsOnPr(text, branch, base = 'main', files = null) {
   const events = workflowTriggers(text);
-  if (['pull_request', 'pull_request_target'].some(name => events.has(name) && filtered(events.get(name), base))) return true;
+  if (events === null) return true;
+  for (const name of ['pull_request', 'pull_request_target']) {
+    const event = events.get(name);
+    if (event && filtered(event, base) && (!event.types || event.types.some(type => PR_TYPES.includes(type))) && pathsPass(event, files)) return true;
+  }
   const push = events.get('push');
-  if (!push) return false;
+  if (!push || !pathsPass(push, files)) return false;
   if (push.branches || push['branches-ignore']) return filtered(push, branch);
   return !push.tags && !push['tags-ignore'];
 }
-// Does the repository have CI that runs on a PR head? Read once per tick from the base tip (no API call): a workflow
-// file that can run on the PR (workflowRunsOnPr), else required status checks on the base. A workflow that runs only
-// on repository_dispatch, a schedule, a release or a push to other branches (the PDD App's dispatch file, for example)
-// is not PR CI. A read error counts as CI (the safe side).
-async function repoHasCi(ctx, branch) {
+// Does the repository have CI that runs on this PR head? Read once per tick from the base tip (no API call): a workflow
+// file that can run on the PR (workflowRunsOnPr, with the PR's changed files), else required status checks on the base.
+// A workflow that runs only on repository_dispatch, a schedule, a release, closed PRs, other paths or a push to other
+// branches (the PDD App's dispatch file, for example) is not PR CI. A read error, a file with no readable trigger and
+// more than 50 workflow files count as CI (the safe side).
+async function repoHasCi(ctx, job) {
   ctx.hasCi ??= new Map();
-  if (!ctx.hasCi.has(branch)) ctx.hasCi.set(branch, (async () => {
-    const files = await (ctx.ciFiles ??= (async () => {
-      const tip = `origin/${ctx.state.baseBranch}`;
+  const key = `${job.branch}@${job.head}`;
+  if (!ctx.hasCi.has(key)) ctx.hasCi.set(key, (async () => {
+    const tip = `origin/${ctx.state.baseBranch}`;
+    const texts = await (ctx.ciFiles ??= (async () => {
       try {
         await ctx.git(['fetch', '-q', 'origin', ctx.state.baseBranch]);
         if (!await ctx.git(['rev-parse', '--verify', '-q', `${tip}:.github/workflows`]).catch(() => '')) return [];
-        const names = (await ctx.git(['ls-tree', '--name-only', `${tip}:.github/workflows`])).split('\n').filter(name => /\.ya?ml$/.test(name)).slice(0, 50);
+        const names = (await ctx.git(['ls-tree', '--name-only', `${tip}:.github/workflows`])).split('\n').filter(name => /\.ya?ml$/.test(name));
+        if (names.length > 50) return null;
         return await Promise.all(names.map(name => ctx.git(['show', `${tip}:.github/workflows/${name}`])));
       } catch { return null; }
     })());
-    if (files === null) return true;
-    if (files.some(text => workflowRunsOnPr(text, branch, ctx.state.baseBranch))) return true;
+    if (texts === null) return true;
+    const files = texts.length ? await ctx.git(['diff', '--name-only', `${tip}...${job.head}`], job.worktree).then(out => out.split('\n').filter(Boolean)).catch(() => null) : null;
+    if (texts.some(text => workflowRunsOnPr(text, job.branch, ctx.state.baseBranch, files))) return true;
     const required = await ctx.gh.call('GET', `repos/${ctx.repo}/branches/${encodeURIComponent(ctx.state.baseBranch)}/protection/required_status_checks`);
     return required.status === 200 ? (required.value?.contexts?.length ?? 0) + (required.value?.checks?.length ?? 0) > 0 : ![403, 404].includes(required.status);
   })());
-  return ctx.hasCi.get(branch);
+  return ctx.hasCi.get(key);
 }
 async function ciState(ctx, head, job) {
   const runs = await ctx.gh.ok('GET', `repos/${ctx.repo}/commits/${head}/check-runs?per_page=100`);
@@ -968,7 +991,7 @@ async function ciState(ctx, head, job) {
   if (failed.length) return { state: 'red', failed, sig };
   // "CI: none" only for a repository with no CI at all (no head of this job ever had a check, and the base has no
   // workflow file), never because a new head has no run yet.
-  if (!checks.length) return !job.ciSeen && !await repoHasCi(ctx, job.branch) && ctx.now() - (job.prAt ?? ctx.now()) >= NO_CI_AFTER ? { state: 'none', sig } : { state: 'pending', pending: [], sig };
+  if (!checks.length) return !job.ciSeen && !await repoHasCi(ctx, job) && ctx.now() - (job.prAt ?? ctx.now()) >= NO_CI_AFTER ? { state: 'none', sig } : { state: 'pending', pending: [], sig };
   return checks.some(c => !c.done) ? { state: 'pending', pending: checks.filter(c => !c.done).map(c => c.name), sig } : { state: 'green', count: checks.length, sig };
 }
 async function reviewState(ctx, job) {
@@ -996,10 +1019,12 @@ async function reviewState(ctx, job) {
   // a FAIL is a PASS only when it lists at least one item and every item is P3; a FAIL with no item (a string list is
   // one item; a missing or empty list is none) stays a FAIL. A PASS that lists a P1 or P2 item is a FAIL.
   recordSuccess(ctx, job, job.review.agent, 'review', seen);
+  // An item is a follow-up only when it is P3 and names no P1 or P2; every other item blocks, also in a PASS. The
+  // split comes before the cut to 20, so no blocking item is lost.
   const raw = Array.isArray(r.mustFix) ? r.mustFix : r.mustFix === undefined || r.mustFix === null ? [] : [r.mustFix];
-  const items = raw.map(item => oneLine(typeof item === 'string' ? item : JSON.stringify(item), 500)).filter(Boolean).slice(0, 20);
-  const followUps = items.filter(isFollowUp), mustFix = items.filter(item => !isFollowUp(item));
-  const verdict = r.verdict === 'FAIL' ? (followUps.length && !mustFix.length ? 'PASS' : 'FAIL') : mustFix.some(item => /^\W*P[12]\b/i.test(item)) ? 'FAIL' : 'PASS';
+  const all = raw.map(item => oneLine(typeof item === 'string' ? item : JSON.stringify(item), 500)).filter(Boolean);
+  const followUps = all.filter(isFollowUp).slice(0, 20), mustFix = all.filter(item => !isFollowUp(item)).slice(0, 20);
+  const verdict = !mustFix.length && (r.verdict === 'PASS' || followUps.length) ? 'PASS' : 'FAIL';
   await ctx.comment(job.pr, [`Review: ${verdict} for head ${job.head} (a fresh Autopilot reviewer that did not write the change).`, '',
     oneLine(r.summary, 2000), ...(mustFix.length ? ['', 'Must fix:', ...mustFix.map(item => `- ${item}`)] : []),
     ...(followUps.length ? ['', 'Follow-ups (P3, they do not block the merge):', ...followUps.map(item => `- ${item}`)] : []), '', `<!-- pdd:autopilot-core:review:${job.head} -->`].join('\n'));
@@ -1090,6 +1115,13 @@ async function mergeCheck(ctx, job) {
   reds.push(...(await pathChecks(ctx, job, pr.body)).reds);
   if (drafts.length && ctx.settings.mode === 'auto') reds.push(`Changed prompts are not approved: ${drafts.join('; ')}. Record the operator approval for each changed prompt with the native command and commit it: printf '%s' ${quote(approvalWords(ctx))} | pdd approve PROMPT --said -`);
   const ci = reds.length ? null : await ciState(ctx, job.head, job);
+  // GitHub runs no pull_request workflow while a PR conflicts with its base, so a head with no check at all may be a
+  // conflict: then the agent conflict update starts (debate B, outside the lane), not a 6-hour CI wait.
+  if (ci?.state === 'pending' && !ci.pending?.length) {
+    await ctx.git(['fetch', '-q', 'origin', state.baseBranch], job.worktree).catch(() => {});
+    const tree = await ctx.ports.git(['merge-tree', '--write-tree', '--name-only', '--no-messages', `origin/${state.baseBranch}`, job.head], { cwd: job.worktree });
+    if (tree.code === 1) return conflictFix(ctx, job, { files: String(tree.stdout ?? '').split('\n').slice(1).map(line => line.trim()).filter(Boolean), hunks: '' });
+  }
   if (ci?.state === 'red') reds.push(`CI check ${ci.failed.join(', ')} failed for head ${short(job.head)}.`);
   let review, suite;
   if (!reds.length) {
@@ -1563,7 +1595,7 @@ async function wouldMerge(ctx, job, pr) {
 // stop when a finding of the last round is still there, when a finding of an earlier round comes back, or at the safety
 // cap (autopilot.maxRepairs, default 6). A round that fixes its findings and gets new, different ones goes on (the
 // #2574 pattern). The END comment names the rule.
-const isFollowUp = item => /^\W*P3\b/i.test(item);
+const isFollowUp = item => /^\W*P3\b/i.test(item) && !/\bP[12]\b/i.test(item);
 const STOP_WORDS = new Set('the and are for not with from this that has have was but its into only than then when does which there'.split(' '));
 function finding(text) {
   const raw = String(text);
@@ -1574,8 +1606,9 @@ function finding(text) {
   return { places, words, text: oneLine(raw, 200) };
 }
 function sameFinding(a, b) {
-  const union = new Set([...a.words, ...b.words]).size, overlap = a.words.filter(x => b.words.includes(x)).length / Math.max(1, union);
-  if (a.places.length && b.places.length) return a.places.some(([file, line]) => b.places.some(([other, at]) => file === other && Math.abs(line - at) <= 3)) && overlap >= 0.25;
+  const union = new Set([...a.words, ...b.words]).size, shared = a.words.filter(x => b.words.includes(x)).length, overlap = shared / Math.max(1, union);
+  // A similar cause: 2 shared words and a quarter of the words, or 40% of the words (one shared word is not enough).
+  if (a.places.length && b.places.length) return a.places.some(([file, line]) => b.places.some(([other, at]) => file === other && Math.abs(line - at) <= 3)) && (shared >= 2 && overlap >= 0.25 || overlap >= 0.4);
   return !a.places.length && !b.places.length && overlap >= 0.6;
 }
 function repairStop(ctx, job, findings) {
@@ -1649,7 +1682,7 @@ async function finishMerge(ctx, job, read = null) {
 // ---- END ------------------------------------------------------------------------------------------------
 async function report(ctx, job, why, step) {
   const [owner, name] = ctx.repo.split('/');
-  return fileReport({ cause: why, mode: ctx.settings.report, root: ctx.ports.reportRoot ?? join(ctx.root, 'reports'), machine: ctx.state.machine, step, words: [ctx.repo, owner, name], runtimeRepo: ctx.settings.runtimeRepo,
+  return fileReport({ cause: why, mode: ctx.settings.report, root: ctx.ports.reportRoot ?? join(ctx.root, 'reports'), machine: ctx.state.machine, step, words: [ctx.repo, owner, name], runtimeRepo: ctx.settings.runtimeRepo, runtimeOwner: ctx.settings.runtimeOwner,
     versions: { pdd: ctx.ports.version, node: process.version, platform: process.platform, agent: ctx.state.agent?.kind } }, { gh: ctx.ports.gh, now: ctx.now, warn: ctx.warn, fs: ctx.fs });
 }
 // Another machine holds the claim: stop locally, change nothing on its issue, and leave this machine's own open PR
@@ -1818,7 +1851,7 @@ async function continueEnd(ctx, job) {
   if (!e.comment) {
     const ref = e.report?.ref ? (e.report.ref.toLowerCase().startsWith(`${repo.toLowerCase()}#`) ? `#${e.report.number}` : e.report.ref) : null;
     const log = job.agent?.log ?? job.suite?.agent?.log;
-    const body = [`Autopilot ended this run: ${sentence(why.text)}`, '', `- Cause: ${why.kind} / ${why.code}`, ...(log ? [`- Log: \`${basename(log)}\` on this machine`] : []),
+    const body = [`Autopilot ended this run: ${sentence(why.text)}`, '', `- Cause: ${reportKind(why) ?? why.kind} / ${why.code}`, ...(log ? [`- Log: \`${basename(log)}\` on this machine`] : []),
       `- Branch: \`${job.branch}\`${job.pr ? `, PR #${job.pr}` : ''}`, ...(ref ? [`- Blocked by ${ref}`] : []),
       ...(e.report?.state === 'draft' ? ['- Report: saved as a local draft on this machine; a person can send it with `pdd autopilot report`.'] : []),
       '', waits ? `Nothing else waits on this run. This issue is ready again when ${ref} closes.`
@@ -2004,6 +2037,7 @@ export async function tickCore(input, ports) {
   const b = ctx.budget;
   const hold = b?.state === 'low' ? `intake held: the GitHub budget is low (this machine used ${b.used} of ${b.allowed} calls in the last hour, a ${b.share ?? 30}% share for ${b.machines} machine(s) with live claims)`
     : rows ? await intake(ctx, rows) : 'intake skipped: the issue list is unavailable';
+  try { await intakeTick(ctx, rows); } catch (error) { ctx.warn(`Autopilot intake (shadow) skipped this tick: ${error.message}`); }
   if (ctx.peers.size) { const m = ctx.machineState(); ctx.saveMachine({ ...m, peers: { ...m.peers, ...Object.fromEntries(ctx.peers) } }); }
   const busy = readJobs(ctx.fs, ctx.root).filter(holdsSlot).length, c = ctx.counts;
   return { exitCode: 0, message: `Autopilot core${settings.mode === 'observe' ? ' (observe: no merge)' : ''}: ${c.started} started, ${c.merged} merged, ${c.wouldMerge ? `${c.wouldMerge} would merge, ` : ''}${c.ended} ended, ${c.repairs} repair(s); ${busy} of ${settings.runs} slots busy${hold ? `; ${hold}` : ''}.` };

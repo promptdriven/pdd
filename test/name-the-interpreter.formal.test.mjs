@@ -32,11 +32,14 @@ function helpArgvs() {
 }
 
 test('help: every help argv names the interpreter and keeps "runtime" only for the Runtime interface block', async t => {
+  // Exercise the wording independently of the real package folder's name.
+  // packageRoot is the public port for paths printed by local help.
+  const packageRoot = '/pdd-test-package';
   const list = helpArgvs();
   let lines = 0;
   for (const argv of list) {
     const stdout = sink(), stderr = sink();
-    assert.equal(await runPdd(argv, { stdout, stderr }), 0, label(argv));
+    assert.equal(await runPdd(argv, { stdout, stderr, packageRoot }), 0, label(argv));
     assert.equal(stderr.text, '', label(argv));
     for (const pattern of [...FORBIDDEN, /\bruntime calls?\b/i]) assert.doesNotMatch(stdout.text, pattern, label(argv));
     for (const match of stdout.text.matchAll(/runtime/gi)) {
@@ -45,9 +48,9 @@ test('help: every help argv names the interpreter and keeps "runtime" only for t
     if (argv.includes('product')) assert.doesNotMatch(stdout.text, /runtime/i, label(argv));
     lines += stdout.text.split('\n').length;
   }
-  const rootHelp = sink(); await runPdd(['--help'], { stdout: rootHelp, stderr: sink() });
+  const rootHelp = sink(); await runPdd(['--help'], { stdout: rootHelp, stderr: sink(), packageRoot });
   assert.match(rootHelp.text, /PDD interpreter/, 'the root help names the interpreter');
-  const simulateHelp = sink(); await runPdd(['simulate', '--help'], { stdout: simulateHelp, stderr: sink() });
+  const simulateHelp = sink(); await runPdd(['simulate', '--help'], { stdout: simulateHelp, stderr: sink(), packageRoot });
   assert.match(simulateHelp.text, /PDD Simulator/, 'the simulate help names the Simulator');
   t.diagnostic(`bounds: ${list.length} help argv, ${lines} help lines`);
 });

@@ -49,7 +49,8 @@ function availableMemory(ports = {}) {
   if ((ports.platform ?? process.platform) !== 'darwin') return free();
   let text = null;
   try { text = String((ports.vmStat ?? (() => spawnSync('vm_stat', [], { encoding: 'utf8', timeout: 2000 }).stdout))()); } catch { /* Fall back to free memory. */ }
-  return (text && macAvailable(text)) ?? free();
+  // Empty output (vm_stat timed out) is a failed read, like malformed text: use free memory.
+  return (text ? macAvailable(text) : null) ?? free();
 }
 
 function nativeCores() {
