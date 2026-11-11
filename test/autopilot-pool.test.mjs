@@ -125,6 +125,17 @@ test('P3 a limit end with no reset time reads the login once; a failed read wait
   const read = await afterStep({ login, end: { kind: 'limit', until: null }, env: {}, now: NOW }, w.ports);
   assert.deepEqual(w.calls.reads, ['cx1']);
   assert.equal(read.mark.until, NOW + 41 * MIN, 'the 5-hour window resets in 41 minutes');
+  // A failed cache save keeps the read's time and says so.
+  const saveFails = { ...w.ports, usage: { ...w.ports.usage, saveUsage: () => { throw new Error('usage.json is locked'); } } };
+  const kept = await afterStep({ login, end: { kind: 'limit', until: null }, env: {}, now: NOW }, saveFails);
+  assert.equal(kept.mark.until, NOW + 41 * MIN);
+  assert.match(kept.line, / \(the pool could not save this: usage\.json is locked\)$/);
+  // A failed read gives the 30-minute time; a name with no row is never read.
+  const readFails = { ...w.ports, usage: { ...w.ports.usage, readLoginUsage: () => { throw new Error('codex app-server timed out'); } } };
+  assert.equal((await afterStep({ login, end: { kind: 'limit', until: null }, env: {}, now: NOW }, readFails)).mark.until, NOW + 30 * MIN);
+  const reads = w.calls.reads.length;
+  assert.equal((await afterStep({ login: 'cx1', end: { kind: 'limit', until: NOW - 1 }, env: {}, now: NOW }, w.ports)).mark.until, NOW + 30 * MIN);
+  assert.equal(w.calls.reads.length, reads);
   const v = world(t, { logins: [{ name: 'cx9' }], rows: {} });
   const fallback = await afterStep({ login: { ...v.pool.logins[0] }, end: { kind: 'credits', until: null }, env: {}, now: NOW }, v.ports);
   assert.deepEqual(fallback.mark, { name: 'cx9', until: NOW + 30 * MIN, reason: 'credits' });
@@ -163,7 +174,7 @@ test('P3 a new login during the pause: the next tick wakes and takes it', async 
   const paused = await stepLogin({ provider: 'codex', env: {}, now: NOW }, w.ports);
   assert.equal(paused.pause.reason, 'all-out');
   const home = w.addLogin({ name: 'cx7' });
-  w.cache.cx7 = ok(5, 5, { readAt: NOW + 4 * MIN });
+  w.cache.cx7 = ok(5, 5, { readAt: NOW - MIN });  // read before the pause check: only the changed pool can wake it
   const woke = await stepLogin({ provider: 'codex', env: {}, now: NOW + 5 * MIN }, w.ports);
   assert.equal(woke.login.name, 'cx7');
   assert.deepEqual(woke.env, { CODEX_HOME: home });
@@ -187,6 +198,15 @@ test('P3 a new sign-in or a fresh usage read wakes the pause; nothing else does'
   w.cache.cx1 = ok(10, 10, { readAt: NOW - 30 * MIN });
   const step = await stepLogin({ provider: 'codex', env: {}, now: NOW + 2 * MIN }, { ...w.ports, usage: { ...w.ports.usage, readLoginUsage: (login, { now }) => { w.calls.reads.push(login.name); return ok(10, 10, { readAt: now }); } } });
   assert.equal(step.login.name, 'cx1', 'the changed stamp wakes the pause and the read shows room');
+});
+
+test('P3 skip is a preference of one step: it never makes a machine pause', async t => {
+  const w = world(t, { logins: [{ name: 'cx1' }, { name: 'cx2' }], rows: { cx1: ok(10, 10), cx2: ok(99, 10) } });
+  const step = await stepLogin({ provider: 'codex', env: {}, now: NOW, skip: ['cx1'] }, w.ports);
+  assert.equal(step.login.name, 'cx1', 'only the skipped login is ready, so the step takes it');
+  assert.equal(JSON.parse(readFileSync(w.recordFile, 'utf8')).providers.codex.pause, undefined, 'no pause is saved');
+  const other = world(t, { logins: [{ name: 'cx1' }, { name: 'cx2' }], rows: { cx1: ok(10, 10), cx2: ok(10, 10) } });
+  assert.equal((await stepLogin({ provider: 'codex', env: {}, now: NOW, skip: ['cx1'] }, other.ports)).login.name, 'cx2');
 });
 
 test('P3 an explicit CODEX_HOME pins the step, and one line says so', async t => {
@@ -213,15 +233,18 @@ test('P3 no pool login, an unsupported agent or a pdd without the pool keeps the
 
 test('P3 a pool file that cannot be read holds new steps with one alert', async t => {
   const w = world(t, { logins: [{ name: 'cx1' }], rows: { cx1: ok(1, 1) }, reads: { cx1: ok(1, 1) } });
-  w.failPool(new Error('accounts.json does not parse; pdd did not change it.'));
+  w.failPool(new Error(`accounts.json is version 2; pdd did not change it. Saw "${'x'.repeat(50)}" and ${SECRET}`));
   const first = await stepLogin({ provider: 'codex', env: {}, now: NOW }, w.ports);
   assert.equal(first.pause.reason, 'pool-error');
   assert.equal(first.pause.wakeAt, null);
-  assert.equal(first.pause.line, 'Paused: Autopilot cannot read the login pool file (accounts.json does not parse; pdd did not change it.). Fix it, then the next tick goes on; no step starts until then.');
+  assert.equal(first.pause.line, 'Paused: Autopilot cannot read the login pool file (accounts.json is version 2; pdd did not change it. Saw "…" and [redacted]). Fix it, then the next tick goes on; no step starts until then.');
+  noSecret([first, readFileSync(w.recordFile, 'utf8')], 'the pool error line and the record');
   assert.equal(first.pause.alert.need, 'Fix the login pool file; pdd accounts list shows the problem.');
   const second = await stepLogin({ provider: 'codex', env: {}, now: NOW + 10 * MIN }, w.ports);
   assert.equal(second.pause.alert, null);
   assert.equal(second.pause.since, NOW);
+  w.failPool(new SyntaxError(`Unexpected token 'x', "{"logins": [${SECRET}" is not valid JSON`));
+  assert.match((await stepLogin({ provider: 'codex', env: {}, now: NOW + 15 * MIN }, w.ports)).pause.line, /\(the file does not parse\)/);
   w.failPool(null);
   const back = await stepLogin({ provider: 'codex', env: {}, now: NOW + 20 * MIN }, w.ports);
   assert.equal(back.login.name, 'cx1');
@@ -253,11 +276,14 @@ test('P3 sorting a step end: account kinds, service kinds and work', () => {
   assert.equal(kind(codex({ type: 'error', message: 'stream disconnected - retrying turn (1/5)' }, { type: 'turn.completed', usage: {} })).kind, 'other', 'a later success wins');
   assert.equal(kind('not ok 3 - expected "You have hit your usage limit" in the fixture').kind, 'other', 'a test diagnostic is never a limit');
   assert.equal(kind('').kind, 'other');
-  const others = Array.from({ length: 10 }, (_, i) => codex({ type: 'error', message: `tool call ${i} failed` })).join('\n');
-  assert.equal(kind(`${codex({ type: 'error', message: 'usage limit reached' })}\n${others}`).kind, 'other', 'only the 10 newest messages count');
   assert.equal(kind(`Your workspace is out of credits.\n${'x\n'.repeat(5)}`).kind, 'other', 'only the last 5 plain lines count');
   assert.equal(kind(`Your workspace is out of credits.\n${'x\n'.repeat(4)}`).kind, 'credits');
-  assert.equal(kind(`${codex({ type: 'error', message: 'usage limit reached' })}\npdd-account: cx2 limited until 14:41 UTC (usage limit).`).kind, 'limit', 'the pool\'s own lines never count');
+  assert.equal(kind("pdd-account: cx2: You've hit your usage limit.").kind, 'other', 'the pool\'s own lines never count');
+  assert.equal(kind(codex({ type: 'turn.failed', error: { message: 'apply_patch failed at line 401' } })).kind, 'other', 'a bare 401 is no status');
+  assert.equal(kind("Wrote 401 files").kind, 'other');
+  assert.equal(kind(codex({ type: 'turn.failed', error: { message: "You've hit your weekly usage limit." } })).kind, 'limit');
+  assert.equal(kind(codex({ type: 'error', message: 'stream disconnected - retrying turn (1/5)' }, { type: 'turn.failed', error: { message: 'apply_patch failed: context mismatch' } })).kind, 'other', 'the newest error event decides, also with no kind');
+  assert.equal(kind(`${codex({ type: 'turn.failed', error: { message: 'Selected model is at capacity.' } })}\nERROR: something else`).kind, 'capacity', 'a plain line counts only with no error event');
 });
 
 test('P3 sorting a Claude step end, with its reset words in their own time zone', () => {
@@ -267,6 +293,9 @@ test('P3 sorting a Claude step end, with its reset words in their own time zone'
   const dated = claude({ type: 'result', is_error: true, result: '5-hour limit reached ∙ resets Jan 2 at 3:30pm (Europe/Berlin)' });
   assert.equal(classifyAgentEnd({ provider: 'claude', output: dated, exitCode: 1, now: Date.UTC(2026, 11, 30, 12, 0) }).until, Date.UTC(2027, 0, 2, 14, 30), 'a date with no year rolls into the next year');
   assert.equal(classifyAgentEnd({ provider: 'claude', output: claude({ type: 'result', is_error: true, result: 'Claude AI usage limit reached|1762891200' }), exitCode: 1, now: NOW }).until, 1762891200000);
+  const late = Date.UTC(2026, 10, 12, 6, 0);  // Nov 11 22:00 in Los Angeles
+  assert.equal(classifyAgentEnd({ provider: 'claude', output: claude({ type: 'result', is_error: true, result: "You've hit your limit · resets 3am (America/Los_Angeles)" }), exitCode: 1, now: late }).until,
+    Date.UTC(2026, 10, 12, 11, 0), 'a time of day before now is the next day');
   assert.equal(classifyAgentEnd({ provider: 'claude', output: claude({ type: 'assistant', error: 'rate_limit', message: { content: [] } }), exitCode: 1, now: NOW }).kind, 'limit');
   assert.equal(classifyAgentEnd({ provider: 'claude', output: claude({ type: 'result', is_error: true, result: 'Invalid API key · Please run /login' }), exitCode: 1, now: NOW }).kind, 'needs-sign-in');
   assert.equal(classifyAgentEnd({ provider: 'claude', output: claude({ type: 'result', is_error: false, result: 'done' }), exitCode: 0, now: NOW }).kind, 'other');
@@ -333,4 +362,6 @@ test('P3 a pdd without the pool modules works as before the pool; a broken modul
     { strike: false, line: 'pdd-account: cx1 ended with: usage limit (the pool could not save this: this pdd has no login pool).', mark: null, alert: null });
   const broken = { importModule: async () => { throw new SyntaxError('Unexpected token'); } };
   await assert.rejects(stepLogin({ provider: 'codex', env: {}, now: NOW }, broken), /Unexpected token/);
+  const inner = { importModule: async () => { throw Object.assign(new Error("Cannot find module '/pdd/src/accounts-login.mjs' imported from /pdd/src/accounts-usage.mjs"), { code: 'ERR_MODULE_NOT_FOUND' }); } };
+  await assert.rejects(stepLogin({ provider: 'codex', env: {}, now: NOW }, inner), /accounts-login\.mjs/, 'a missing file that a pool module imports is a broken install');
 });

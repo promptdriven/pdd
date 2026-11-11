@@ -56,7 +56,7 @@ running step keeps its login until it ends. The first matching row decides:
 | No provider variable for `provider` | pinned, reason `no-pool`: "Agent login: PROVIDER is not in the login pool; the step uses its own environment." |
 | `env[variable]` is a nonblank string | pinned, reason `env`: "Agent login: pinned: VARIABLE=HOME is set for this Autopilot; pdd does not rotate it." When HOME is the `home` of a pool login, `login` is that row and the line names it: "Agent login: pinned to codex cx5: …". The pool read for this name is best effort; its failure changes nothing. |
 | The store, usage or pick module is missing in this pdd | pinned, reason `no-pool`: "Agent login: this pdd has no login pool; the step uses its own environment." |
-| `readPool` fails | pause, reason `pool-error`, `wakeAt` null: "Paused: Autopilot cannot read the login pool file (MESSAGE). Fix it, then the next tick goes on; no step starts until then." Each call reads the pool again. The alert goes out once per error event (no saved `error` before). |
+| `readPool` fails | pause, reason `pool-error`, `wakeAt` null: "Paused: Autopilot cannot read the login pool file (REASON). Fix it, then the next tick goes on; no step starts until then." Each call reads the pool again. The alert goes out once per error event (no saved `error` before). |
 | No pool login for the provider | pinned, reason `no-pool`: "Agent login: no PROVIDER login in the pool; the step uses its own environment." Autopilot then works as before the pool. |
 | A saved all-out `pause` and `shouldWake` says no | the saved pause, `alert` null. No usage read: a waiting tick costs only local file reads. |
 | Otherwise | the pick below. |
@@ -68,13 +68,22 @@ readiness reason is `stale`, read its usage now (`readLoginUsage`), put the new
 row in the cache and compute the readiness again. Stop at the first ready login.
 So a pick reads at most the logins before the first ready one, one at a time, in
 order. A read that throws keeps the old row. Save the cache once when a read
-happened. Then `pickLogin({logins, usage, now, skip})` decides.
+happened. Then `pickLogin({logins, usage, now, skip})` decides. `skip` is a
+preference of one step, never a pause: when it leaves no login but a skipped
+login is ready, `pickLogin` runs again with no skip and the step takes that
+login.
+
+REASON (in every line about a pool file error) is "the file does not parse" for a
+JSON syntax error, else the store's message on one line (at most 160
+characters), with each quoted part longer than 40 characters shortened to `…`
+and token-like words (`eyJ…`, `sk-…`, `gh?_…`, `Bearer …`) replaced by
+`[redacted]`, so no file text reaches a line, an alert or the pool record.
 
 - A picked login: the result is `{login, env: {VARIABLE: login.home}, line,
   logLine, recovered}`. `line` is "Agent login: codex cx2 (week 63%, 5h 42%).
   Pool: R of T ready. Next free: cx5 at 14:41 PST." R, T and next free come from
   `poolSummary`; "Next free" is left out when it is null. When S pool logins
-  have no row or a `stale` readiness, "Pool: R of T ready (S not read in the last
+  that are not paused have no row or a `stale` readiness, "Pool: R of T ready (S not read in the last
   10 minutes)." The percentages are the rounded `usedPercent` of the `week` and
   `fiveHour` windows; a missing window shows `?`. `logLine` is the job log line
   "pdd-account: cx2 (local pool)". Save `last` in the pool record. When a saved
@@ -90,8 +99,7 @@ happened. Then `pickLogin({logins, usage, now, skip})` decides.
   only when not zero: "N at a limit" (`week`, `five-hour`, `limited`), "1 needs a
   sign-in" or "N need a sign-in" (`needs-sign-in`, `expired`, `no-login`), "N
   paused" (`paused: true` or reason `paused`), "N not readable" (`unknown`,
-  `stale` and every other reason), "N skipped for this step" (a name in `skip`
-  that is not counted before). With no earliest: "Earliest reset: unknown;
+  `stale` and every other reason). With no earliest: "Earliest reset: unknown;
   Autopilot checks again at TIME." WORD is "off" when every pool login has
   `reset: "never"`, else "on for NAMES (setting ask or auto; the reset rule
   decides)". A new all-out event (no saved pause) gets `since` = now and one
@@ -146,16 +154,18 @@ lines and this module's own `pdd-account:` lines.
   not read like a test diagnostic (the words test, assert, assertion, expected,
   fixture or spec).
 
-`exitCode` does not change the kind: the events decide. Look at most at the 10
-newest messages. The newest message with a kind decides.
-Each message gets the first kind that matches, in this order:
+`exitCode` does not change the kind: the events decide. The newest error event
+with a message decides, also when its message has no kind (then `other`): an
+older retry or capacity message never overrides the real end. Only when no error
+event gives a message, the newest of the last 5 plain lines that has a kind
+decides. A message gets the first kind that matches, in this order:
 
 | Kind | Matches |
 |---|---|
-| `limit` | `usage_limit_reached`, `usage_limit_exceeded`; "hit your limit", "hit your usage limit" (also weekly, 5-hour, daily); "usage limit reached", "usage limit exceeded", "usage limit has been reached"; "weekly limit reached", "5-hour limit reached"; "Claude AI usage limit reached" |
+| `limit` | `usage_limit_reached`, `usage_limit_exceeded`; "hit your limit", "hit your usage limit", "hit your weekly limit", "hit your weekly usage limit" (also daily, monthly, 5-hour, session); "usage limit reached", "usage limit exceeded", "usage limit has been reached"; "weekly limit reached", "5-hour limit reached"; "Claude AI usage limit reached" |
 | `credits` | `credits_depleted`; "out of credits"; "credit balance is too low"; "insufficient credits", "insufficient_quota", "insufficient funds"; "exceeded your current quota" |
 | `needs-sign-in` | `refresh_token_expired`, `_reused`, `_invalidated`, `_revoked`; "refresh token has expired", "was already used", "was revoked", "is invalid"; "sign in again", "log in again"; "please run /login", "please log in", "please sign in"; "not logged in", "not signed in"; "login required", "authentication required"; `authentication_failed`; "invalid api key"; "OAuth token has expired" |
-| `stale-copy` | HTTP 401; "unauthorized"; "access token expired", "access token is invalid", "access token was rejected" |
+| `stale-copy` | a 401 status ("status 401", "HTTP 401", "error 401", "401 Unauthorized"; a bare 401, such as a line number, is no status); "unauthorized"; "access token expired", "access token is invalid", "access token was rejected" |
 | `capacity` | "at capacity", "over capacity", "overloaded"; a 429 or 5xx status, "too many requests", "internal server error", "bad gateway", "service unavailable", "gateway timeout"; "rate limit" or `rate_limit_exceeded` without the word usage; `server_error`; "stream disconnected"; "connection reset", "connection refused" |
 | `other` | nothing above, no message, or a success first |
 
@@ -173,7 +183,8 @@ itself, else null. The first source that gives a time wins:
 4. Codex words "try again at Nov 3rd, 2026 10:35 PM" (a full date) or "try again
    at 4:17 PM" (the same day as `now`, needs `now`), in `timeZone` (default: the
    machine's own zone; Codex writes its local time).
-5. Claude words "resets 3pm (America/Los_Angeles)" (the same day as `now`) or
+5. Claude words "resets 3pm (America/Los_Angeles)" (the next such time: today,
+   or tomorrow when that time today is before `now`) or
    "resets Nov 6 at 3:30pm (America/Los_Angeles)", in the named zone (needs
    `now`). A date with no year is in the year of `now`, or in the next year when
    that date is more than 32 days before `now`.
@@ -203,7 +214,7 @@ alert}`:
 |---|---|
 | `other` | Nothing. `{strike: true, line: null, mark: null, alert: null}`. |
 | `capacity` | No login change and no mark (the core waits a short time). `line` "pdd-account: NAME: the AI service is busy (service busy); no login change." `strike` false. |
-| `limit`, `credits` | `until` = `end.until` when it is after now; else one usage read of this login (`readLoginUsage`, saved in the cache) and its readiness `until` when it is not ready and after now; else now + 30 minutes. `markLimited({env}, name, until, kind)`. One local log row `{at, action: "limited", login: name, detail: "KIND until ISO"}`. `line` "pdd-account: cx2 limited until 14:41 PST (usage limit). The next step takes the next login." |
+| `limit`, `credits` | `until` = `end.until` when it is after now; else, when `login` is the pool row (the read needs its folder), one usage read of this login (`readLoginUsage`, saved in the cache) and its readiness `until` when it is not ready and after now; else now + 30 minutes. `markLimited({env}, name, until, kind)`. One local log row `{at, action: "limited", login: name, detail: "KIND until ISO"}`. `line` "pdd-account: cx2 limited until 14:41 PST (usage limit). The next step takes the next login." |
 | `needs-sign-in` | `markLimited({env}, name, now + 60 minutes, "needs-sign-in")`, one log row (action `needs-sign-in`), `line` "pdd-account: cx3 needs a new sign-in (sign-in ended). The next step takes the next login." One `alert` with `text` "Codex login cx3 needs a new sign-in. Autopilot skips it. Run: pdd accounts add cx3" ("Pool login" when `login` is only a name), `tried` "Autopilot uses the other logins of the pool.", `need` "Sign in to this login again." No alert when the cached row already has `limitReason: "needs-sign-in"` with `limitedUntil` after now (one alert per event), and no alert when the mark failed (the next step would alert again). |
 | `stale-copy` | `markLimited({env}, name, now + 10 minutes, "stale-copy")`, one log row (action `limited`), `line` "pdd-account: cx2 got 401 on its login copy; it waits 10 minutes. The next step takes the next login." |
 
@@ -212,10 +223,11 @@ nothing; its line is "pdd-account: the pinned login ended with: MESSAGE. pdd
 does not rotate a pinned login." (`capacity` says "the pinned login" instead of
 a name). When the store, usage or pick module is missing, an account kind
 returns `strike` false, no mark and "pdd-account: NAME ended with: MESSAGE (the
-pool could not save this: this pdd has no login pool)." A port failure in
-the read, the mark or the log is caught: `strike` stays as in the table, `mark`
-is null when the mark failed, and the line ends with " (the pool could not save
-this: MESSAGE)".
+pool could not save this: this pdd has no login pool)." A port failure is
+caught and `strike` stays as in the table. A failed read only gives the 30-minute
+time. A failed cache save after a read keeps the read's time. A failed cache
+save, mark or log row adds " (the pool could not save this: MESSAGE)" to the
+line, and `mark` is null when the mark failed.
 
 ## The start binding (`startBinding`, #3230)
 
@@ -239,7 +251,7 @@ row decides; the result is `{agentPool, home, line}`:
 
 WHAT is "the PROVIDER pool", "VARIABLE=OLD" or "no saved login". A pool that
 cannot be read counts as no login, and the line says "(the pool file cannot be
-read: MESSAGE)" instead of "(pdd accounts add NAME)".
+read: REASON)" instead of "(pdd accounts add NAME)".
 
 ## Status lines (`poolStatusLines`)
 
@@ -251,7 +263,7 @@ environment, not the person's shell.
 - Pinned (`env[variable]` nonblank): the pinned line of `stepLogin`.
 - No pool module, or no pool login for the provider: no line.
 - A pool that cannot be read: "Agent login: the login pool file cannot be read
-  (MESSAGE)."
+  (REASON)."
 - A saved all-out pause: its line, then the sign-in lines below.
 - Else: "Agent login: codex cx2 (week 63%, 5h 42%) since 14:05 PST. Pool: R of T
   ready (S not read in the last 10 minutes). Next free: cx5 at 14:41 PST." The
@@ -271,7 +283,7 @@ classifyAgentEnd({provider, output, exitCode, now, timeZone})
   // -> {kind: 'limit'|'credits'|'needs-sign-in'|'stale-copy'|'capacity'|'other', until, message}
 afterStep({login, end, env = {}, now, command}, ports = {})
   // -> {strike, line, mark: {name, until, reason}|null, alert}
-startBinding({provider, env = {}, saved = {}, pool = false}, ports = {})
+startBinding({provider, env = {}, saved = null, pool = false}, ports = {})
   // -> {agentPool, home, line}
 poolStatusLines({provider, env = {}, now}, ports = {})   // -> string[]
 shouldWake(pause, {now, stamp, usage})                    // -> {wake, reason}
@@ -287,8 +299,9 @@ shouldWake(pause, {now, stamp, usage})                    // -> {wake, reason}
   argument to every store, usage and pick call), `importModule` (default:
   dynamic `import`). A missing `store`, `usage` or `pick` port loads its module
   (`./accounts-store.mjs`, `./accounts-usage.mjs`, `./accounts-pick.mjs`). Only a
-  module that is not installed (`ERR_MODULE_NOT_FOUND` that names its file) means
-  "no pool"; any other load error is thrown, so a broken install is visible.
+  module that is not installed (`ERR_MODULE_NOT_FOUND` whose missing file, the
+  first quoted path of the message, is that module) means "no pool"; a missing
+  file that the module itself imports is a broken install; any other load error is thrown, so a broken install is visible.
 - `loadUsage` may return the cache file object (`{version, rows}`) or the rows
   map; this module uses the rows map keyed by login name, and passes the full map
   to `saveUsage` and to the pick rules.

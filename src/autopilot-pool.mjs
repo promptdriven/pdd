@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-pool.prompt.md (sha256: 31be33c304284213c0ceaedb02b2a4483a55bd7f3f1c719ff48904b6241c6d37).
+// Generated from prompts/cli/autopilot-pool.prompt.md (sha256: 9f76e10db9c11ec8d880f42dfac84611c1b0084e770ac63dbbfc9abb1cf39469).
 import * as nativeFs from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
@@ -21,6 +21,12 @@ const iso = ms => new Date(ms).toISOString();
 const pct = window => Number.isFinite(window?.usedPercent) ? `${Math.round(window.usedPercent)}%` : '?';
 const plural = (n, word) => `${n} login${n === 1 ? '' : 's'}${word}`;
 // The usage cache may come as the file object ({version, rows}) or as the rows map keyed by login name.
+// A safe reason from a pool file error: no file text (a JSON parse error quotes the file), no token-like words.
+function safeReason(error) {
+  if (error instanceof SyntaxError) return 'the file does not parse';
+  return oneLine(String(error?.message ?? 'unknown error').replace(/(["'`])[^"'`]{41,}\1/g, '$1…$1')
+    .replace(/\b(?:eyJ[\w-]+\.[\w.-]+|sk-[\w-]{8,}|gh[pousr]_\w+|Bearer\s+\S+)/g, '[redacted]'), 160);
+}
 const usageRows = value => object(value) && value.version === 1 && object(value.rows) ? value.rows : object(value) ? value : {};
 
 // A port that is not given loads its module. Only a module that is not installed means "no pool"; a broken one throws.
@@ -29,7 +35,12 @@ async function modules(ports) {
   for (const [key, path] of Object.entries(MODULES)) {
     if (ports[key]) { out[key] = ports[key]; continue; }
     try { out[key] = await load(path); }
-    catch (error) { if (error?.code === 'ERR_MODULE_NOT_FOUND' && String(error.message).includes(path.slice(2))) return null; throw error; }
+    catch (error) {
+      // Node names the missing file first ("Cannot find module '/x/src/accounts-store.mjs' imported from ...").
+      const missing = /Cannot find (?:module|package) '([^']+)'/.exec(String(error?.message))?.[1] ?? '';
+      if (error?.code === 'ERR_MODULE_NOT_FOUND' && (missing === path || missing.endsWith(`/${path.slice(2)}`))) return null;
+      throw error;
+    }
   }
   return out;
 }
@@ -127,19 +138,18 @@ const pauseAlert = line => ({ kind: 'usage-limit', text: line, tried: 'Autopilot
 const pauseView = pause => ({ reason: pause.reason, since: Number.isFinite(pause.since) ? pause.since : null, wakeAt: Number.isFinite(pause.wakeAt) ? pause.wakeAt : null,
   line: String(pause.line ?? ''), alert: null, earliest: object(pause.earliest) ? pause.earliest : null });
 const LIMIT_REASONS = new Set(['week', 'five-hour', 'limited']), SIGN_IN_REASONS = new Set(['needs-sign-in', 'expired', 'no-login']);
-function outWords(m, logins, rows, now, skip) {
-  const count = { limit: 0, signIn: 0, paused: 0, unreadable: 0, skipped: 0 };
+function outWords(m, logins, rows, now) {
+  const count = { limit: 0, signIn: 0, paused: 0, unreadable: 0 };
   for (const login of logins) {
     if (login.paused === true) { count.paused++; continue; }
     const reason = readiness(m, login, rows[login.name], now).reason;
     if (LIMIT_REASONS.has(reason)) count.limit++;
     else if (SIGN_IN_REASONS.has(reason)) count.signIn++;
     else if (reason === 'paused') count.paused++;
-    else if (skip.has(login.name)) count.skipped++;
     else count.unreadable++;
   }
   return [[count.limit, 'at a limit'], [count.signIn, count.signIn === 1 ? 'needs a sign-in' : 'need a sign-in'], [count.paused, 'paused'],
-    [count.unreadable, 'not readable'], [count.skipped, 'skipped for this step']].filter(([n]) => n > 0).map(([n, words]) => `${n} ${words}`).join(', ');
+    [count.unreadable, 'not readable']].filter(([n]) => n > 0).map(([n, words]) => `${n} ${words}`).join(', ');
 }
 
 // ---- A step's login -------------------------------------------------------------------------------------
@@ -153,7 +163,7 @@ export async function stepLogin({ provider, env = {}, now, command = provider, s
   let pool;
   try { pool = await m.store.readPool({ env }, mp); }
   catch (error) {
-    const line = `Paused: Autopilot cannot read the login pool file (${oneLine(error?.message)}). Fix it, then the next tick goes on; no step starts until then.`;
+    const line = `Paused: Autopilot cannot read the login pool file (${safeReason(error)}). Fix it, then the next tick goes on; no step starts until then.`;
     let fresh = false, since = now;
     const saved = updateRecord(fs, file, provider, entry => {
       fresh = !object(entry.error); if (!fresh && Number.isFinite(entry.error.since)) since = entry.error.since;
@@ -183,7 +193,9 @@ export async function stepLogin({ provider, env = {}, now, command = provider, s
     if (state.ready) break;
   }
   if (read) try { await m.usage.saveUsage({ env }, rows, mp); } catch { /* The next pick reads again. */ }
-  const picked = m.pick.pickLogin({ logins, usage: rows, now, skip: [...skipped] });
+  let picked = m.pick.pickLogin({ logins, usage: rows, now, skip: [...skipped] });
+  // skip is a preference of one step: when only skipped logins are ready, the step takes one; it never makes a pause.
+  if (!object(picked?.login) && skipped.size) picked = m.pick.pickLogin({ logins, usage: rows, now, skip: [] });
   if (object(picked?.login)) {
     const login = picked.login, row = rows[login.name];
     let ended = false;
@@ -200,7 +212,7 @@ export async function stepLogin({ provider, env = {}, now, command = provider, s
   // A reset time that is already past (the login is still out) is checked again after one tick, not on every tick.
   const wakeAt = !earliest ? now + UNKNOWN_WAKE : earliest.at > now ? earliest.at : now + PAST_WAKE;
   const resets = logins.filter(login => nonblank(login.reset) && login.reset !== 'never').map(login => login.name);
-  const line = `Paused: no ${name} login has quota now (${outWords(m, logins, rows, now, skipped)}). `
+  const line = `Paused: no ${name} login has quota now (${outWords(m, logins, rows, now)}). `
     + (earliest ? `Earliest reset: ${earliest.name} at ${timeWords(earliest.at, now, timeZone)}.` : `Earliest reset: unknown; Autopilot checks again at ${timeWords(wakeAt, now, timeZone)}.`)
     + ` Add a login (pdd accounts add NAME) and the pause ends at the next tick. Resets: ${resets.length ? `on for ${resets.join(', ')} (setting ask or auto; the reset rule decides)` : 'off'}.`;
   let fresh = false, since = now;
@@ -224,10 +236,10 @@ export function shouldWake(pause, { now, stamp, usage } = {}) {
 
 // ---- Sorting the end of a step (pure) -------------------------------------------------------------------
 const KINDS = [
-  ['limit', /usage_limit_(?:reached|exceeded)|\bhit your (?:(?:usage|weekly|5-hour|five-hour|daily) )?limit\b|\busage limit (?:reached|exceeded|has been reached)\b|\b(?:weekly|5-hour|five-hour) limit reached\b|\bclaude ai usage limit reached\b/i],
+  ['limit', /usage_limit_(?:reached|exceeded)|\bhit your (?:(?:weekly|daily|monthly|5-hour|five-hour|session) )?(?:usage )?limit\b|\busage limit (?:reached|exceeded|has been reached)\b|\b(?:weekly|5-hour|five-hour) limit reached\b|\bclaude ai usage limit reached\b/i],
   ['credits', /credits_depleted|\bout of credits\b|\bcredit balance is too low\b|\binsufficient[_ ](?:credits?|quota|funds)\b|\bexceeded your current quota\b/i],
   ['needs-sign-in', /refresh_token_(?:expired|reused|invalidated|revoked)|\brefresh token (?:has expired|was already used|was revoked|is invalid)\b|\b(?:sign|log) ?in again\b|\bplease (?:run \/login|log ?in|sign ?in)\b|\bnot (?:logged|signed) in\b|\b(?:login|authentication) required\b|authentication_failed|\binvalid[_ ]api[_ ]key\b|\boauth token has expired\b/i],
-  ['stale-copy', /\b401\b|\bunauthori[sz]ed\b|\baccess token (?:expired|is invalid|was rejected)\b/i],
+  ['stale-copy', /\b(?:status|http|error|code)\W{0,3}401\b|\b401 unauthori[sz]ed\b|\bunauthori[sz]ed\b|\baccess token (?:expired|is invalid|was rejected)\b/i],
   ['capacity', /\b(?:at|over) capacity\b|\boverloaded\b|\b(?:status|http|error|code)\W{0,3}(?:429|5\d\d)\b|\b(?:429|5\d\d) (?:too many|internal|bad gateway|service|gateway|overloaded)|\btoo many requests\b|\binternal server error\b|\bbad gateway\b|\bservice unavailable\b|\bgateway time-?out\b|\bserver_error\b|\bstream disconnected\b|\bconnection (?:reset|refused)\b/i],
 ];
 const TEST_DIAGNOSTIC = /\b(?:tests?|assert(?:ion)?s?|expected|fixtures?|specs?)\b/i;
@@ -274,7 +286,11 @@ function untilOf({ message, json }, now, timeZone) {
     if (h < 1 || h > 12 || mi > 59 || !Number.isFinite(now)) return null;
     const today = todayIn(now, zone);
     if (!today) return null;
-    if (!month) return valid(zonedTime(today.year, today.month, today.day, clock(hour, half), mi, zone));
+    // Claude names the next such time: a time of day before now is tomorrow.
+    if (!month) {
+      const at = zonedTime(today.year, today.month, today.day, clock(hour, half), mi, zone);
+      return valid(at !== null && at < now ? zonedTime(today.year, today.month, today.day + 1, clock(hour, half), mi, zone) : at);
+    }
     const index = MONTHS.indexOf(month.toLowerCase());
     if (index < 0) return null;
     const at = year => zonedTime(year, index, Number(day), clock(hour, half), mi, zone);
@@ -285,30 +301,29 @@ function untilOf({ message, json }, now, timeZone) {
 }
 export function classifyAgentEnd({ provider, output, exitCode, now, timeZone } = {}) {
   const all = String(output ?? ''), tail = all.length > 262144 ? all.slice(-262144) : all;
-  const lines = tail.split(/\r?\n/).slice(-200), messages = [];
-  let plain = 0;
-  for (let i = lines.length - 1; i >= 0 && messages.length < 10; i--) {
+  const lines = tail.split(/\r?\n/).slice(-200), plainLines = [];
+  let event = null, plain = 0;
+  for (let i = lines.length - 1; i >= 0 && !event; i--) {
     const line = lines[i].trim();
     if (!line || line.startsWith('pdd-account:')) continue;
     if (line.startsWith('{')) {
-      let event;
-      try { event = JSON.parse(line); } catch { continue; }
-      if (!object(event)) continue;
+      let row;
+      try { row = JSON.parse(line); } catch { continue; }
+      if (!object(row)) continue;
       // A success is newer than every error before it: the step did not end on them.
-      if (event.type === 'turn.completed' || event.type === 'result' && event.is_error !== true) break;
-      const hint = eventHint(event), message = eventMessage(event);
-      if (hint || message) messages.push({ message: message ?? '', hint, json: line });
+      if (row.type === 'turn.completed' || row.type === 'result' && row.is_error !== true) return { kind: 'other', until: null, message: null };
+      const hint = eventHint(row), message = eventMessage(row);
+      if (hint || message) event = { message: message ?? '', hint, json: line };
       continue;
     }
     // Only the agent's last plain lines (its own stderr), and never a line that reads like a test diagnostic.
-    if (plain++ >= 5 || TEST_DIAGNOSTIC.test(line)) continue;
-    messages.push({ message: line, hint: null, json: null });
+    if (plain++ < 5 && !TEST_DIAGNOSTIC.test(line)) plainLines.push({ message: line, hint: null, json: null });
   }
-  for (const found of messages) {
-    const kind = found.hint ?? kindOf(found.message);
-    if (kind) return { kind, until: kind === 'limit' || kind === 'credits' ? untilOf(found, now, timeZone) : null, message: MESSAGES[kind] };
-  }
-  return { kind: 'other', until: null, message: null };
+  // The newest error event decides; with no error event, the newest plain line with a kind.
+  const found = event ?? plainLines.find(row => kindOf(row.message));
+  const kind = found ? found.hint ?? kindOf(found.message) : null;
+  return kind ? { kind, until: kind === 'limit' || kind === 'credits' ? untilOf(found, now, timeZone) : null, message: MESSAGES[kind] }
+    : { kind: 'other', until: null, message: null };
 }
 
 // ---- After a step ---------------------------------------------------------------------------------------
@@ -326,11 +341,12 @@ export async function afterStep({ login, end, env = {}, now, command } = {}, por
     else if (row) try {
       const fresh = await m.usage.readLoginUsage(row, { env, now, command }, mp);
       if (object(fresh)) {
-        await m.usage.saveUsage({ env }, { ...usageRows(await m.usage.loadUsage({ env }, mp)), [name]: fresh }, mp);
         const state = readiness(m, row, fresh, now);
         if (!state.ready && Number.isFinite(state.until) && state.until > now) until = state.until;
+        try { await m.usage.saveUsage({ env }, { ...usageRows(await m.usage.loadUsage({ env }, mp)), [name]: fresh }, mp); }
+        catch (error) { failure = error; }
       }
-    } catch { /* The fallback below. */ }
+    } catch { /* A failed read: the fallback below. */ }
     until ??= now + LIMIT_FALLBACK;
   } else if (kind === 'needs-sign-in') {
     until = now + SIGN_IN_HOLD;
@@ -357,7 +373,7 @@ export async function startBinding({ provider, env = {}, saved = null, pool = fa
   if (!variable) return { agentPool: null, home: savedHome, line: `Agent login: ${provider} is not in the login pool.` };
   let count = 0, problem = null;
   const m = await modules(ports);
-  if (m) try { count = (await providerLogins(m, await m.store.readPool({ env }, modulePorts(ports)), provider)).length; } catch (error) { problem = oneLine(error?.message); }
+  if (m) try { count = (await providerLogins(m, await m.store.readPool({ env }, modulePorts(ports)), provider)).length; } catch (error) { problem = safeReason(error); }
   const was = savedPool ? `the ${provider} pool` : savedHome ? `${variable}=${savedHome}` : null;
   const poolLine = extra => `Agent login: the ${provider} pool (${plural(count, '')}); each step takes the first login with quota.${extra}`;
   const hint = count ? " Run pdd autopilot start --pool to rotate the pool's logins." : '';
@@ -383,7 +399,7 @@ export async function poolStatusLines({ provider, env = {}, now } = {}, ports = 
   if (!m) return [];
   const fs = ports.fs ?? nativeFs, timeZone = ports.timeZone, mp = modulePorts(ports);
   let pool;
-  try { pool = await m.store.readPool({ env }, mp); } catch (error) { return [`Agent login: the login pool file cannot be read (${oneLine(error?.message)}).`]; }
+  try { pool = await m.store.readPool({ env }, mp); } catch (error) { return [`Agent login: the login pool file cannot be read (${safeReason(error)}).`]; }
   const logins = await providerLogins(m, pool, provider);
   if (!logins.length) return [];
   const entry = readRecord(fs, await recordFile(m, env)).providers[provider] ?? {};
