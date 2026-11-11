@@ -324,7 +324,10 @@ Phase `pr` has its own deadline (entry plus `jobTimeoutMinutes`). Each tick, in 
    `PUT repos/REPO/pulls/PR/merge` with `{sha: HEAD, merge_method: "merge"}`
    through the GitHub port. This synchronous mutation preserves the exact-head
    guard and exposes the operation's acknowledgement (see attribution below).
-   A failed merge
+   When the synchronous mutation is refused (non-2xx), retain the CLI route
+   `gh pr merge PR --repo REPO --merge --match-head-commit HEAD` so branches
+   requiring a merge queue can still enqueue through the CLI. Its success alone
+   remains ambiguous and never records attribution. A failed fallback
    waits for the next tick. A confirmed merge closes the issue when it is open,
    removes `pdd:working`, cleans up locally (see END) and records `merged`.
 

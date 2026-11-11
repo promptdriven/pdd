@@ -292,6 +292,23 @@ test('round 3: legacy successful-command bookkeeping cannot credit an observed m
   assert.equal(rows(await w.read()).merged,0);
 });
 
+test('round 3: a refused direct mutation retains exact-head CLI queue submission without merge credit',async t=>{
+  const w=await lifecycle(t);w.issue(17);await w.tick();const {pr,head}=w.build(17);await w.tick();
+  w.review(17,'PASS');w.suite(17);const gh=w.gh,commands=[];
+  await w.tick({gh:async(args,options)=>{
+    if(!isMerge(args))return gh(args,options);
+    if(args[0] !== 'pr')return mutationReply({merged:false,message:'Required merge queue'},405);
+    commands.push(args);return {code:0,stdout:'',stderr:''};
+  }});
+  assert.deepEqual(commands,[['pr','merge',String(pr.number),'--repo',w.state.repo,'--merge','--match-head-commit',head]],'queue submission retains the tested head guard');
+  const file=join(w.root,'jobs','17.json');
+  assert.equal(JSON.parse(fs.readFileSync(file,'utf8')).autopilotMerge,undefined);
+  assert.equal(w.github.merges.length,0);
+  pr.state='closed';pr.merged=true;pr.mergeSha=merge;await w.tick();
+  assert.equal(fs.existsSync(file),false,'eventual queue completion still cleans up');
+  assert.equal(rows(await w.read()).merged,0,'queue submission is not acknowledgement of performing the merge');
+});
+
 for(const fault of ['save-failure','crash'])test(`round 3: ${fault} after evidence append retains Monday's observation across 09:00 and restart`,async t=>{
   const w=await lifecycle(t);w.clock.at=Date.parse(monday);w.issue(17);await w.tick();
   w.build(17,{body:`Runtime: PASS\n${evidence}`});

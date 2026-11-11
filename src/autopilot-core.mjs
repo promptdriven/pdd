@@ -566,7 +566,12 @@ async function mergeCheck(ctx, job) {
     job.mergeNote = job.head; ctx.saveJob(job);
   }
   const merged = await gh.call('PUT', `repos/${repo}/pulls/${job.pr}/merge`, { sha: job.head, merge_method: 'merge' });
-  if (merged.status < 200 || merged.status >= 300) { Object.assign(job, { lastError: safeLine(`GitHub merge returned ${merged.status || 'no reply'}`), lastErrorTool: false }); ctx.saveJob(job); return; }
+  if (merged.status < 200 || merged.status >= 300) {
+    // The CLI can submit to a required merge queue. Its result cannot establish
+    // who performed a merge, even when a later PR read confirms completion.
+    const fallback = await ctx.ports.gh(['pr', 'merge', String(job.pr), '--repo', repo, '--merge', '--match-head-commit', job.head]);
+    if (fallback.code !== 0) { Object.assign(job, { lastError: safeLine(`gh pr merge: ${fallback.stderr || fallback.stdout}`), lastErrorTool: false }); ctx.saveJob(job); return; }
+  }
   // A zero CLI exit can be a no-op or a queued request. Attribute only the
   // synchronous mutation's explicit acknowledgement, and bind its commit below.
   if (merged.status === 200 && merged.value?.merged === true && merged.value.message === 'Pull Request successfully merged' && /^[a-f0-9]{40}$/i.test(merged.value.sha ?? '')) {
