@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: b5e47f87ffda754c2a1c00c806620045a9ab3d6d70ead3a381c3d329e33f633d).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: a29195ef616b72757112d1f6c2eac73570d6305b0713ebfec9e6ce48926a7922).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
@@ -326,6 +326,42 @@ async function readSavedStoryEvidence({ root, comparisonRoot = root, withTests =
   return { stories, warnings: [...new Set(warnings)] };
 }
 
+// Autopilot (#3241): the Stories of root whose latest saved check was never sent (no request ID, not run, no refusal,
+// no local unsent mark, no access gate), for example held in maintenance or stopped before sending. A check that was
+// sent is never listed. Local reads only, like savedStoryEvidence.
+export async function unsentStoryChecks({ root, since = 0 }, ports = {}) {
+  const env = ports.env ?? process.env;
+  const read = ports.readFile ?? (path => readFileSync(path, 'utf8'));
+  const list = ports.readDir ?? (path => readdirSync(path));
+  const canonical = ports.realpath ?? realpathSync;
+  const real = async path => { try { return await canonical(path); } catch { return resolve(path); } };
+  const wanted = await real(root), directory = join(resolve(env.PDD_STATE_DIR || join(env.HOME || homedir(), '.pdd', 'runtime')), 'batches');
+  const latest = new Map();
+  let names;
+  try { names = await list(directory); } catch { return { stories: [], maintenance: false }; }
+  for (const name of names.filter(name => typeof name === 'string' && BATCH.test(name)).sort()) {
+    let batch;
+    try { batch = JSON.parse(await read(join(directory, name, 'batch.json'))); } catch { continue; }
+    if (!isObject(batch) || batch.batch !== name || batch.intent !== 'check' || typeof batch.root !== 'string' || !Array.isArray(batch.rows)) continue;
+    if (since > 0 && !(Date.parse(batch.created_at) >= since) || await real(batch.root) !== wanted) continue;
+    const files = Array.isArray(batch.files) ? batch.files : [];
+    const storyOf = row => typeof row?.story !== 'string' ? null : row.story.endsWith('.md') ? row.story
+      : (found => found.length === 1 ? found[0] : null)([...new Set(files.filter(file => typeof file === 'string' && file.endsWith('.md') && basename(file, '.md') === row.story))]);
+    const seen = new Map();
+    for (const row of batch.rows) {
+      const story = storyOf(row);
+      if (!story) continue;
+      const sent = Array.isArray(row.request_ids) && row.request_ids.length > 0;
+      const unsent = !sent && row.recovery_state === 'not_run' && !(Array.isArray(row.refusals) && row.refusals.length) && !row.unsent && row.note?.code !== 'blocked';
+      const was = seen.get(story) ?? { unsent: false, sent: true, notes: [] };
+      seen.set(story, { unsent: was.unsent || unsent, sent: was.sent && sent, notes: unsent ? [...was.notes, String(row.note?.message ?? '')] : was.notes });
+    }
+    for (const [story, state] of seen) latest.set(story, state.unsent ? state.notes : null);
+  }
+  const stories = [...latest].filter(([, notes]) => notes).map(([story]) => story).sort();
+  return { stories, maintenance: stories.some(story => latest.get(story).some(note => /maintenance/i.test(note))) };
+}
+
 class StateStore {
   constructor(dir) { this.dir = dir; this.secrets = []; }
   folder(...parts) {
@@ -541,7 +577,9 @@ export async function checkRuntimeHealth({ env = process.env } = {}, givenPorts 
   if (reply.status >= 500 || [408, 429].includes(reply.status)) return { state: 'unavailable', detail: `HTTP ${reply.status}` };
   if (reply.status === 200 && isObject(reply.json)) {
     const until = Date.parse(reply.json.maintenance?.until);
-    return Number.isFinite(until) && until > ports.now() ? { state: 'unavailable', detail: 'maintenance' } : { state: 'healthy', detail: 'HTTP 200' };
+    // A maintenance answer names its end and reason, so the Autopilot core can wait for it (#3241).
+    return Number.isFinite(until) && until > ports.now() ? { state: 'unavailable', detail: 'maintenance', until: new Date(until).toISOString(), reason: cleanText(reply.json.maintenance?.reason, [token]) || null }
+      : { state: 'healthy', detail: 'HTTP 200' };
   }
   // An older interpreter without the capacity read still answered with JSON; a 404 page that is not JSON is a wrong address.
   if (reply.status === 404 && isObject(reply.json)) return { state: 'healthy', detail: 'HTTP 404' };

@@ -1581,7 +1581,15 @@ Each tick, without AI calls:
 Only a real Runtime FAIL blocks a merge. When Runtime cannot check a change (a lint
 refusal, no interface, a scenario limit, no verdict), the job still ships its PR with
 native tests and `Runtime: not run (reason)`, and Autopilot files or counts one
-report for that cause. The `Evidence:` line has a fixed form, for example
+report for that cause. A check that was never sent, for example because the
+interpreter was in maintenance, is different: before the merge lane the PR waits
+for the end of the maintenance. It reads the free `GET /v1/capacity` again every 10
+minutes, holds no slot and never counts as quiet, and other jobs go on. When the
+maintenance ends, Autopilot itself runs `pdd test` once for those Stories (no
+agent): a pass makes the PR line `Runtime: PASS`, a real FAIL goes to a repair, and
+no verdict keeps `Runtime: not run (…)` with one report. After 12 hours of
+maintenance the PR says `Runtime: not run (maintenance since HH:MM UTC)`, Autopilot
+files one report, and the merge goes on. The `Evidence:` line has a fixed form, for example
 `Evidence: runtime=pass (11/11); vectors=not-run; formal=bounded; tests=pass (42/42)`.
 Autopilot keeps only the known parts, saves them in its local history and repeats
 them in the merge comment. The claims must be true. A Runtime pass (`Runtime: PASS`,

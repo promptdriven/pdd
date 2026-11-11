@@ -54,7 +54,8 @@ restart reads them again. A job file has `issue`, `title`, `url`, `body`,
 `head`, `runtime`, `review` and `suite`.
 
 **The process rule (debate C, one function `watchProcess`).** It applies to every agent
-process: build, repair, conflict, review and suite. Each tick, for each running process:
+process: build, repair, conflict, review and suite, and to the `pdd test` run of the
+Runtime step (role `runtime`, like the suite: no P1, P2 or P3). Each tick, for each running process:
 
 - **T1 "something new".** The process makes progress when one of these is new to it (a
   16-hex SHA-256 prefix that is not in its seen set, the file `LOG.seen`): (P1) the commit
@@ -116,7 +117,9 @@ refresh start the clock again.
 
 Slots come only from these job files, never from workflow allocation or other
 local records. A job holds a slot while its process runs or its outcome is not yet
-handled (phase `running` or `pr`). A job in phase `ending` has its outcome decided
+handled (phase `running` or `pr`), except a job whose Runtime step waits for the
+interpreter maintenance (merge check step 5a): it runs no process, so it holds no
+slot and other jobs go on. A job in phase `ending` has its outcome decided
 and only finishes its GitHub writes, so it holds no slot. Each tick advances every
 job before intake, so a job whose process died, for example after a restart, is
 ended or moved to the merge check before free slots are counted.
@@ -395,7 +398,11 @@ any other pdd (for example an older global install).
   such as a value that is not a safe integer, no verdict, an interpreter error), the
   job does not stop and does not invent an interface: it covers the case with native
   tests, ships the PR with `Runtime: not run (EXACT REASON)` and puts the reason and
-  the tool error in the result's `runtime` with kind `runtime`. One `Evidence:` line
+  the tool error in the result's `runtime` with kind `runtime`. When `pdd test` says
+  that the interpreter is in maintenance, the job does not wait for it: it stops `pdd
+  test` (pdd saves the checks as not sent), ships the PR with `Runtime: not run
+  (interpreter maintenance)` and the runtime code `maintenance`; Autopilot sends the
+  check after the maintenance (merge check step 5a). One `Evidence:` line
   in the PR body and the same text as the result's `evidence` (below). No review
   verdict or review claim (for example "Review: no must-fix") in the PR body or a
   comment: only the core's fresh reviewer gives one. **Approval (auto and observe
@@ -558,7 +565,9 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    file or count one report through the [report owner](autopilot-reports.prompt.md)
    (with `runtimeRepo` and `runtimeOwner`) with the cause `{kind: runtime, component, code, text, detail, shipped: true}`
    (component default `pdd-test`, code default `not-run`), once per job and
-   component/code (`job.runtimeReport`). It never blocks or ends the job. A not-run
+   component/code (`job.runtimeReport`), and only when the Runtime step (5a) has no
+   check left to send for this head: while it may still send one, no report is filed.
+   It never blocks or ends the job. A not-run
    with no Runtime kind (for example no prompt changed) files nothing.
 3. Red findings. The Runtime gate is an allowlist (fail closed). A Runtime line is a
    PR body line that, after heading, list, quote, table, bold and code marks go,
@@ -750,6 +759,40 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    debate B, outside the lane, with the conflicting file names), not a CI wait. A new head that has no run yet (for example after a
    refresh) waits for its CI. A pending check still waits, as long as it takes; save `progress`
    first.
+5a. **Runtime step: a check that was never sent (#3241).** When the PR body has
+   exactly one Runtime line and it says "not run", the tick reads once for each agent
+   head the Stories of the job worktree whose saved check was never sent since the job
+   started (`unsentStoryChecks` of the [runtime client](runtime-client.prompt.md) with
+   `root` the job worktree and `since` the job start; saved as `runtimeWait {head,
+   state, stories}`). None: nothing changes, and step 2 applies as usual. Else, when
+   everything above is green, the job holds its Runtime step before the merge lane:
+   - **Wait.** At most every 10 minutes it reads the free interpreter health
+     (`checkRuntimeHealth`: one `GET /v1/capacity`, no check, no AI call). While the
+     answer is maintenance, the job waits: it writes no "not run" line and files no
+     report, it holds no slot (it runs no process), and each tick counts as progress,
+     so the quiet rule never ends it. The claim heartbeat goes on. Other jobs and intake
+     go on as usual.
+   - **Send once.** When the answer is not maintenance, the engine itself runs `pdd
+     test --json STORY…` for those Stories in the job worktree, with no agent (process
+     role `runtime`, watched by the process rule like the suite). It sends at most once
+     for each agent head.
+   - **Outcome**, from the last JSON summary line of its log (`exit_code`, `rows`):
+     0 rewrites the PR's Runtime line to `Runtime: PASS` and the Evidence part to
+     `runtime=pass` and saves the runtime state `pass` (T01 in step 3 then checks that
+     the saved checks cover the change, as for every PASS claim); 1 with a failed row
+     is a real FAIL: the line becomes `Runtime: FAIL (pdd test after the interpreter
+     maintenance: STORIES failed)`, and the Runtime gate sends it to a repair; anything
+     else (no summary, no verdict, a refusal, a run that was stopped or died) rewrites
+     the line to `Runtime: not run (the check sent after the interpreter maintenance
+     gave no verdict: SUMMARY)` with the runtime kind `runtime`, code `no-verdict`, and
+     step 2 files its one report. The next tick reads the PR again from step 1.
+   - **Backstop.** When the maintenance lasts 12 hours from the first read that saw
+     it, the job stops waiting: the line becomes `Runtime: not run (maintenance since
+     HH:MM UTC)` (the time of that first read), the runtime cause is `{kind: runtime,
+     component: pdd-test, code: maintenance}`, step 2 files one report, and the merge
+     check goes on.
+   A repair and a new agent result clear `runtimeWait`. The PR body is written back
+   with a PATCH of the PR; a failed PATCH waits for the next tick.
 6. **Merge lane** (one final step per repository). A green PR (CI green or none,
    review PASS, suite pass) enters the lane. The lane is the label `pdd:merge-lane` on
    one open PR, shared by every machine through GitHub (`issues?state=open&labels=…`,
@@ -901,7 +944,9 @@ agent's commits may exist only there.
 files only: the engine line (mode, repository, folder, base, agent), the slot line
 (`B of R slots busy`, no-progress limit, repairs, report mode, opt-in label), the pause
 line (`New jobs paused until TIME (H h): …` or `No pause: N no-result end(s) in a row …`), one line per job (`#N build running 12m (log …)`, `#N PR #P at SHA: review …,
-suite …`, with `; merge lane: final step` or `; merge lane: waiting for PR #P since TIME`, `#N ending: …`), the last 5 results (`#N ended TIME: cause`; strike lines are not results) and the count
+suite …`, with `; merge lane: final step`, `; merge lane: waiting for PR #P since TIME`,
+`; Runtime: waits for the interpreter maintenance since HH:MM UTC (until HH:MM UTC); no
+slot` or `; Runtime: the check that was not sent runs again`, `#N ending: …`), the last 5 results (`#N ended TIME: cause`; strike lines are not results) and the count
 of local report drafts.
 
 ## Text on GitHub
@@ -935,7 +980,9 @@ or `(pdd.json)`, `mode M (this machine)` and `reports R (this machine)`; mode
 `gh(args, {input})` and `git(args, {cwd})` return `{code, stdout, stderr}`; GitHub
 REST calls use `gh api --include --method M ENDPOINT [--input -]`. Also `now()`,
 `fs`, `root`, `reportRoot`, `env`, `version` (the PDD version), `listIssues()`,
-`trusted(row)`, `agentReady()`, `warn(text)`, `alert({issue, kind, text, tried, need, update})`, and the replaceable `jobs`
+`trusted(row)`, `agentReady()`, `warn(text)`, `alert({issue, kind, text, tried, need, update})`,
+`runtimeHealth()` (default `checkRuntimeHealth({env})`) and `unsentChecks({root, since})`
+(default `unsentStoryChecks` with `env`) of the runtime client, and the replaceable `jobs`
 (`start`, `read`, `stop`), `owners(numbers)`, `heartbeat(job)` and `checkBase(input)`
 with the native defaults named above.
 
@@ -950,7 +997,8 @@ with the native defaults named above.
   `pdd workflow suite` job.
 - [Secret redaction](secret-redaction.prompt.md): required for suite log tails.
 - [Runtime client](runtime-client.prompt.md): required for `savedStoryEvidence` (the
-  saved checks of T01, with `comparisonRoot`).
+  saved checks of T01, with `comparisonRoot`), `unsentStoryChecks` and
+  `checkRuntimeHealth` (the Runtime step 5a).
 - [Runtime preflight](runtime-preflight.prompt.md): required for `findTests` (Stories and
   their tests, `excludeFixtureProjects`), `captureSource` (Story footprints), `gitFiles`,
   `readPrompt`, `promptRefusal` and `interfaceBlocks`.

@@ -1,0 +1,142 @@
+// #3241: a Runtime check that was never sent because of an interpreter maintenance window is sent once after the
+// window, before the merge. The job waits (no "not run", no report, no slot, never quiet), reads the free capacity
+// every 10 minutes, and after 12 hours ships "Runtime: not run (maintenance since HH:MM UTC)" with one report.
+import './helpers/test-home.mjs';
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { appendFileSync } from 'node:fs';
+import { coreWorld } from './helpers/core-world.mjs';
+import { coreStatus } from '../src/autopilot-core.mjs';
+import { listReportDrafts } from '../src/autopilot-reports.mjs';
+
+const MIN = 60 * 1000, HOUR = 60 * MIN;
+const STORY = 'user_stories/place-order.md';
+const mergeComment = pr => pr.comments.map(c => c.body).find(body => body.includes('<!-- pdd:autopilot-core:merge:'));
+const notRunBody = 'Fixes #17\n\nRuntime: not run (interpreter maintenance until 08:52 UTC; stopped before sending, 0 AI calls)\nEvidence: runtime=not-run; tests=pass (3/3)';
+const maintenance = { state: 'not-run', kind: 'runtime', component: 'pdd-test', code: 'maintenance', cause: 'the interpreter is in maintenance' };
+// A fake interpreter that is in maintenance until `until`; the agent's pdd test stopped before sending one Story.
+function window(w, minutes) {
+  const until = w.now() + minutes * MIN;
+  w.health = () => w.now() < until ? { state: 'unavailable', detail: 'maintenance', until: new Date(until).toISOString(), reason: 'deploy' } : { state: 'healthy', detail: 'HTTP 200' };
+  w.unsent = () => ({ stories: [STORY], maintenance: true });
+  return until;
+}
+const summary = (exitCode, state) => `${JSON.stringify({ batch: '20261111-090000-abcd', exit_code: exitCode, summary_line: `1 of 1 Story ${state}`, rows: [{ story: 'place-order', test: 'tests/place-order.json', state }] })}\n`;
+const answer = (w, n, exitCode, state) => { const job = w.job(n, 'runtime'); appendFileSync(job.log, summary(exitCode, state)); w.finish(n, 'runtime', { code: exitCode }); return job; };
+const status = w => coreStatus({ state: w.state, settings: w.settings }, { root: w.root, now: w.now });
+
+test('maintenance for 30 minutes: the job waits, sends the check after the window, gets PASS, and the PR has no "not run"', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); w.issue(18);
+  await w.tick();
+  const until = window(w, 30);
+  const { pr } = w.build(17, { body: notRunBody, runtime: maintenance });
+  await w.tick();
+  w.review(17, 'PASS'); w.suite(17, 0);
+  await w.tick();
+  assert.equal(w.github.merges.length, 0, 'no merge while the check waits');
+  assert.equal(w.healthReads.length, 1, 'one free capacity read');
+  assert.match(pr.body, /Runtime: not run \(interpreter maintenance/, 'nothing is rewritten while it waits');
+  assert.equal(listReportDrafts({ root: w.reportRoot }).length, 0, 'no report while it waits');
+  assert.ok(w.job(18, 'build'), 'the waiting job holds no slot: the next issue starts');
+  assert.match(status(w), /#17 PR #\d+ at \w+: .*Runtime: waits for the interpreter maintenance since 12:\d\d UTC \(until 12:\d\d UTC\); no slot/);
+  assert.equal(w.unsentReads.length, 1, 'the unsent checks are read once for the head');
+  assert.equal(w.unsentReads[0].root, w.job(17, 'build').cwd);
+
+  for (let at = w.now(); at + 10 * MIN < until; at += 10 * MIN) { w.advance(10 * MIN); await w.tick(); }
+  assert.equal(w.started.filter(job => job.role === 'runtime').length, 0, 'nothing is sent during the window');
+  w.advance(10 * MIN); await w.tick();
+  const run = w.job(17, 'runtime');
+  assert.ok(run, 'after the window the engine sends the check itself');
+  assert.equal(run.command, process.execPath); assert.deepEqual(run.args.slice(1), ['test', '--json', STORY]);
+  assert.equal(run.cwd, w.job(17, 'build').cwd, 'in the job worktree, where the agent ran pdd test');
+  assert.equal(w.started.filter(job => job.issue === 17 && ['build', 'repair'].includes(job.role)).length, 1, 'no agent for the resend');
+  assert.ok(w.healthReads.length >= 4 && w.healthReads.length <= 5, `a read every 10 minutes (${w.healthReads.length})`);
+  assert.match(status(w), /Runtime: the check that was not sent runs again/);
+
+  answer(w, 17, 0, 'passed');
+  await w.tick();
+  assert.match(pr.body, /^Runtime: PASS$/m); assert.match(pr.body, /Evidence: runtime=pass; tests=pass \(3\/3\)/);
+  assert.doesNotMatch(pr.body, /not run/);
+  await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number], 'the PR merges after the PASS');
+  assert.match(mergeComment(pr), /- Runtime: PASS/); assert.doesNotMatch(mergeComment(pr), /not run/);
+  assert.equal(listReportDrafts({ root: w.reportRoot }).length, 0, 'no Runtime report');
+  assert.equal(w.started.filter(job => job.role === 'runtime').length, 1, 'the check is sent once');
+});
+
+test('a long window is no quiet step: 2 hours of waiting never end the job, then the check is sent', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1, quietMinutes: 45 } });
+  w.issue(17);
+  await w.tick();
+  window(w, 120);
+  w.build(17, { body: notRunBody, runtime: maintenance }); await w.tick();
+  w.review(17, 'PASS'); w.suite(17, 0);
+  for (let i = 0; i < 12; i++) { await w.tick(); w.advance(10 * MIN); }
+  assert.deepEqual(w.stopped, [], 'no process is stopped');
+  assert.ok(w.github.issues.get(17).labels.includes('pdd:working'), 'the claim stays');
+  await w.tick();
+  assert.ok(w.job(17, 'runtime'), 'the check is sent after 2 hours');
+});
+
+test('a real FAIL after the window goes to a repair; no verdict keeps "not run" with one report and merges', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); w.issue(18);
+  await w.tick();
+  window(w, 10);
+  const first = w.build(17, { body: notRunBody, runtime: maintenance }); await w.tick();
+  w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
+  w.advance(10 * MIN); await w.tick();
+  answer(w, 17, 1, 'failed'); await w.tick();
+  assert.match(first.pr.body, /^Runtime: FAIL \(pdd test after the interpreter maintenance: place-order failed\)$/m);
+  await w.tick();
+  const repair = w.job(17, 'repair');
+  assert.ok(repair, 'a real FAIL starts a repair'); assert.match(repair.input, /Runtime: FAIL/);
+
+  // #18: the check sent after the window gives no verdict: "not run" stays true, one report, and the merge goes on.
+  w.build(17, { role: 'repair', body: 'Fixes #17\n\nRuntime: PASS\nEvidence: runtime=pass (1/1); tests=pass (3/3)', runtime: { state: 'pass' } });
+  w.unsent = input => input.root === w.job(18, 'build')?.cwd ? { stories: [STORY], maintenance: true } : { stories: [], maintenance: false };
+  await w.tick(); w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
+  assert.equal(w.github.prs.get(first.pr.number).merged, true, '#17 merges after its repair');
+  await w.tick();
+  const second = w.build(18, { body: notRunBody.replace('#17', '#18'), runtime: maintenance }); await w.tick();
+  w.review(18, 'PASS'); w.suite(18, 0); await w.tick();
+  answer(w, 18, 5, 'not run');
+  await w.tick();
+  assert.match(second.pr.body, /^Runtime: not run \(the check sent after the interpreter maintenance gave no verdict: 1 of 1 Story not run\)$/m);
+  await w.tick();
+  assert.equal(second.pr.merged, true, 'a check with no verdict does not block the merge');
+  const drafts = listReportDrafts({ root: w.reportRoot });
+  assert.equal(drafts.length, 1); assert.match(drafts[0].fingerprint, /no-verdict/);
+  assert.equal(w.started.filter(j => j.issue === 18 && j.role === 'runtime').length, 1, 'a sent check with no verdict is not sent again');
+});
+
+test('maintenance for more than 12 hours: "Runtime: not run (maintenance since HH:MM UTC)", one report, then the merge', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17);
+  await w.tick();
+  window(w, 24 * 60);
+  const { pr } = w.build(17, { body: notRunBody, runtime: maintenance }); await w.tick();
+  w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
+  const first = w.now();
+  for (let i = 0; i < 72 && !pr.merged; i++) { w.advance(10 * MIN); await w.tick(); }
+  assert.equal(w.started.filter(job => job.role === 'runtime').length, 0, 'nothing is sent while the maintenance lasts');
+  assert.ok(w.now() - first >= 12 * HOUR && w.now() - first <= 12 * HOUR + 20 * MIN, 'the backstop is 12 hours');
+  assert.match(pr.body, new RegExp(`^Runtime: not run \\(maintenance since ${new Date(first).toISOString().slice(11, 16)} UTC\\)$`, 'm'));
+  assert.match(pr.body, /Evidence: runtime=not-run/);
+  assert.equal(pr.merged, true);
+  const drafts = listReportDrafts({ root: w.reportRoot });
+  assert.equal(drafts.length, 1, 'one report'); assert.match(drafts[0].fingerprint, /maintenance/);
+  assert.ok(w.healthReads.length >= 72 && w.healthReads.length <= 75, `one read every 10 minutes for 12 hours (${w.healthReads.length})`);
+});
+
+test('a not-run line with no unsent check keeps today\'s route: no capacity read, one report, the merge', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17);
+  await w.tick();
+  const { pr } = w.build(17, { body: 'Fixes #17\n\nRuntime: not run (pdd lint refused the case)', runtime: { state: 'not-run', kind: 'runtime', component: 'pdd lint', code: 'lint-refusal', cause: 'pdd lint refused the case' } });
+  await w.tick(); w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
+  assert.equal(pr.merged, true); assert.equal(w.healthReads, undefined, 'no capacity read');
+  assert.match(pr.body, /Runtime: not run \(pdd lint refused the case\)/);
+  assert.equal(listReportDrafts({ root: w.reportRoot }).length, 1);
+});

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-reports.prompt.md (sha256: 82164dcbfb9d3f87fb357c020f3406d3ed757bdb9f65a9b263d376fd1c0f36ec).
+// Generated from prompts/cli/autopilot-reports.prompt.md (sha256: 20c2d2e7a067c3cbe500799001f5dabd9ee5d961b1c50966f29553c2ede5b02a).
 import * as nativeFs from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -131,7 +131,7 @@ export function reportKind(cause) {
   return PDD_OWNED.test(`${slug(cause.component)} ${slug(cause.code)}`) || !RUNTIME_CODES.has(stableCode(cause.code)) ? 'pdd' : 'runtime';
 }
 // Stable fingerprints: an agent writes the code and the component as free text, so each is mapped to a fixed word.
-const CODES = [['merge-check-tool', /^merge-check-tool$/], ['suite-broken', /^suite-broken$/], ['adopt-pdd', /^adopt-pdd$/], ['no-verdict', /verdict/],
+const CODES = [['merge-check-tool', /^merge-check-tool$/], ['suite-broken', /^suite-broken$/], ['adopt-pdd', /^adopt-pdd$/], ['no-verdict', /verdict/], ['maintenance', /maintenance/],
   ['scenario-limit', /scenario|safe-integer|integer-out-of-range|out-of-range/], ['vector-replay', /vector|replay/], ['runtime-case', /runtime-case|test-case/],
   ['lint-refusal', /lint/], ['interface-refusal', /interface/], ['binding-refusal', /binding/], ['input-refusal', /refus|reject/], ['interpreter-error', /interpreter/],
   ['server-internal', /server-internal|internal-server|server-error|(?:^|-)5\d\d(?:-|$)|unavailable|bad-gateway/], ['server-incompatible', /server|compat/], ['crash', /crash|panic|segfault|exception/], ['claim-error', /claim/], ['not-run', /not-run/],
@@ -142,7 +142,7 @@ export const stableCode = (code, step = '') => CODES.find(([, test]) => test.tes
   ?? `other-${createHash('sha256').update(`${slug(step)}:${slug(code).replace(/\d+/g, '')}`).digest('hex').slice(0, 8)}`;
 // Runtime kind is only what happens inside Runtime; every other cause (a refusal of our input, scenario limits, test
 // vectors, the pdd command, the core) is a PDD report.
-export const RUNTIME_CODES = new Set(['no-verdict', 'interpreter-error', 'server-incompatible', 'server-internal']);
+export const RUNTIME_CODES = new Set(['no-verdict', 'maintenance', 'interpreter-error', 'server-incompatible', 'server-internal']);
 const COMPONENTS = [['autopilot-core', /autopilot|core/], ['pdd-lint', /lint/], ['pdd-approve', /approve/], ['pdd-workflow', /workflow/],
   ['pdd-test', /test|runtime|interpreter|verdict|scenario|vector/], ['pdd', /pdd/], ['agent', /agent|codex|claude/]];
 export const stableComponent = component => COMPONENTS.find(([, test]) => test.test(slug(component)))?.[0] ?? 'other';

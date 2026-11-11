@@ -233,6 +233,9 @@ export async function coreWorld(t, { repository = 'acme/widgets', settings = {},
     },
     agentReady: async () => true,
     warn: () => {},
+    // #3241: no unsent Runtime check and a healthy interpreter, unless a test sets w.unsent or w.health.
+    unsentChecks: async input => { w.unsentReads = [...(w.unsentReads ?? []), input]; return w.unsent ? w.unsent(input) : { stories: [], maintenance: false }; },
+    runtimeHealth: async () => { w.healthReads = [...(w.healthReads ?? []), w.now()]; return w.health ? w.health() : { state: 'healthy', detail: 'HTTP 200' }; },
     ...extra,
   });
   w.tick = async (extra = {}) => { const r = await tickCore({ state: w.state, settings: w.settings, budget: { state: 'normal' } }, w.ports(extra)); w.ticks.push(r); return r; };

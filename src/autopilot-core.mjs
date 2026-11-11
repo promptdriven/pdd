@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 101205c07c3ee2e2168f0461ae7138d1e5a529f30486bca03058789f20206498).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 42b69ca3a28d8deecb3da39bad9351149f946a75b8e0956aa5ab47eebd43db2a).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -151,7 +151,8 @@ function readJobs(fs, root) {
 }
 // Slots come only from this engine's own job files. A job holds a slot while its process runs or its outcome
 // (merge check or END decision) is not yet handled; a job that only finishes its END writes holds none.
-const holdsSlot = job => job.phase !== 'ending';
+// A job whose Runtime step waits for the interpreter maintenance runs no process: it holds no slot (#3241).
+const holdsSlot = job => job.phase !== 'ending' && !runtimeWaiting(job);
 // One bad line (a cut append after a power loss or a full disk) is skipped; it never hides the other lines.
 function readHistory(fs, root, count = 5) {
   let text = '';
@@ -442,7 +443,7 @@ function workRules(ctx, job) {
 3. Tests. When the change alters what a person or program gets through the repo's public surface (a return value, error, output, exit code, written file, export, command or script), add a test through that surface that fails on base. For any other change, add no test: run the issue's done check and record the command and its result.
 4. In the PR body, write one line for each path that you use: \`Path: <a|b|c|d|e> — <files> — <owner or unowned> — <prompt changed | quote file:line | no contract change | new prompt> — Test: <file | done check>\`. The prompt and the code may be in one commit. Never rewrite history to change the commit order.
 5. Run focused tests for the changed behavior. Do not wait for CI and do not run the full test suite. Autopilot runs both after you finish (the full test command of this repository is \`${settings.testCommand ?? 'not set'}\`).
-6. If a prompt changed, run \`pdd test\` for the changed Stories (pdd: ${process.execPath} ${ctx.pdd}; \`pdd\` on PATH is the same). Put exactly one line in the PR body: "Runtime: PASS", "Runtime: FAIL (short reason)" or "Runtime: not run (exact reason)". Only a real Runtime FAIL verdict (the interpreter checked the Story and said FAIL) is a failure: fix the code until it passes. When Runtime could not check (a lint refusal, no interface or a binding refusal, a scenario limit such as a value that is not a safe integer, no verdict, an interpreter error), do not stop and do not invent an interface: cover the case with native tests, ship the PR with "Runtime: not run (<the exact reason>)", and put that reason and the tool's error in the result's runtime (kind "runtime"). Autopilot files one report for it.
+6. If a prompt changed, run \`pdd test\` for the changed Stories (pdd: ${process.execPath} ${ctx.pdd}; \`pdd\` on PATH is the same). Put exactly one line in the PR body: "Runtime: PASS", "Runtime: FAIL (short reason)" or "Runtime: not run (exact reason)". Only a real Runtime FAIL verdict (the interpreter checked the Story and said FAIL) is a failure: fix the code until it passes. When Runtime could not check (a lint refusal, no interface or a binding refusal, a scenario limit such as a value that is not a safe integer, no verdict, an interpreter error), do not stop and do not invent an interface: cover the case with native tests, ship the PR with "Runtime: not run (<the exact reason>)", and put that reason and the tool's error in the result's runtime (kind "runtime"). Autopilot files one report for it. When pdd test says that the interpreter is in maintenance, do not wait for it: stop pdd test (pdd saves the checks as not sent), ship the PR with "Runtime: not run (interpreter maintenance)" and the runtime code "maintenance". Autopilot sends the check after the maintenance.
 7. Put exactly one Evidence line in the PR body and the same text as "evidence" in the result: "Evidence: runtime=<pass|fail|not-run> (<passed>/<total>); vectors=<pass|fail|not-run> (<passed>/<total>); formal=<proved|bounded|failed|not-run|not-applicable>; tests=<pass|fail> (<passed>/<total>)". runtime is pdd test on the changed Stories, vectors the Story vector replay tests, formal the formal tests, tests your focused tests; give the counts you saw, and leave out a count you did not see.
 8. Do not write a review verdict or any review claim (for example "Review: no must-fix" or "Independent review: …") in the PR body or a comment. Only Autopilot's fresh reviewer gives a review verdict.
 ${approving(ctx) && !strictRepo(ctx, job) ? `9. Approval: in ${settings.mode} mode the operator's start is the approval of your prompt changes. For each *.prompt.md you changed, after its checks pass, record it with the native command and commit the result in the PR: printf '%s' ${quote(approvalWords(ctx))} | pdd approve PROMPT --said -
@@ -621,7 +622,7 @@ function normalOutput(line) {
 }
 // P3 and P4 from one line of the process's own stream (Codex --json, Claude stream-json, or plain text).
 function streamItems(line, role) {
-  if (role === 'suite' || role === 'vectors' || !/^\s*\{/.test(line)) return [{ kind: 'out', text: line }];
+  if (role === 'suite' || role === 'vectors' || role === 'runtime' || !/^\s*\{/.test(line)) return [{ kind: 'out', text: line }];
   let event; try { event = JSON.parse(line); } catch { return [{ kind: 'out', text: line }]; }
   if (!object(event)) return [];
   const items = [], out = text => { for (const l of String(text ?? '').split('\n')) items.push({ kind: 'out', text: l }); };
@@ -716,7 +717,7 @@ async function watchProcess(ctx, job, part, role, cwd = null) {
   if (!first) w.counts = { commits: w.counts.commits + n.commit, states: w.counts.states + n.state, items: w.counts.items + n.tool + n.out };
   w.marks = [...w.marks, { at: now, ...w.counts }].filter(m => now - m.at <= 2 * HOUR).slice(-30);
   if (['build', 'repair', 'conflict'].includes(role)) job.progress = { sig: 'process', at: w.at, running: false };
-  const age = processAge(ctx, job, part), limit = backstopLimit(ctx, role), label = role === 'review' ? 'reviewer' : role === 'suite' ? 'full test suite' : role === 'vectors' ? 'replay and formal tests' : `${role} agent`;
+  const age = processAge(ctx, job, part), limit = backstopLimit(ctx, role), label = role === 'review' ? 'reviewer' : role === 'suite' ? 'full test suite' : role === 'vectors' ? 'replay and formal tests' : role === 'runtime' ? 'Runtime check (pdd test)' : `${role} agent`;
   const alert = async (key, a) => {
     if ((job.alerted ?? []).includes(key)) return;
     job.alerted = [...(job.alerted ?? []), key].slice(-40); ctx.saveJob(job);
@@ -1424,6 +1425,7 @@ async function mergeCheck(ctx, job) {
   // "Runtime: not run" is allowed and files no report by itself; a Runtime report comes only from a failed job
   // whose cause kind is runtime (END).
   job.runtime = normalRuntime(job.runtime);
+  await runtimeUnsent(ctx, job, pr.body);
   await runtimeNotRunReport(ctx, job);
   // The Runtime gate is an allowlist: only PASS or "not run" lines, and only a pass or not-run result, can merge. Git
   // decides whether a prompt changed (the agent's promptChanged never hides a changed prompt).
@@ -1506,6 +1508,8 @@ async function mergeCheck(ctx, job) {
   noteProgress(ctx, job, [job.head, ci.state, ci.sig, review.state, suite.state, vectors?.state, logSig(job.review?.agent && ctx.jobs.read(job.review.agent))].join('|'),
     ci.state === 'pending' || review.state === 'running' || suite.state === 'running' || vectors?.state === 'running');
   if (!['green', 'none'].includes(ci.state) || review.state !== 'pass' || suite.state !== 'pass' || vectors?.state === 'running') { delete job.lastError; delete job.lastErrorTool; ctx.saveJob(job); return; }
+  // #3241: a Runtime check that was never sent is sent once, after the interpreter maintenance, before the lane.
+  if (!await runtimeStep(ctx, job, pr)) return;
   // The merge lane: one PR per repository in the final step. Other green PRs wait in claim order with their reviews.
   if (await enterLane(ctx, job) !== 'final') return;
   // L2: the exact conflict check. A conflict never goes to repairOrEnd: mechanical hunks are fixed in the lane, other
@@ -1554,6 +1558,101 @@ async function mergeCheck(ctx, job) {
   const merged = await ctx.ports.gh(['pr', 'merge', String(job.pr), '--repo', repo, '--merge', '--match-head-commit', job.head]);
   if (merged.code !== 0) { Object.assign(job, { lastError: safeLine(`gh pr merge: ${merged.stderr || merged.stdout}`), lastErrorTool: false }); ctx.saveJob(job); return; }
   return finishMerge(ctx, job);
+}
+// ---- The Runtime step (#3241) ---------------------------------------------------------------------------
+// A Runtime check that the agent could not send (the interpreter was in maintenance, or pdd test stopped before
+// sending) is sent once by the engine itself, before the merge lane, when no maintenance runs. While the interpreter is
+// in maintenance the job waits: it reads the free capacity at most every 10 minutes, holds no slot and is never quiet.
+// After 12 hours of maintenance the PR ships "Runtime: not run (maintenance since HH:MM UTC)" with one report.
+const RUNTIME_READ_EVERY = 10 * MIN, RUNTIME_WAIT_LIMIT = 12 * HOUR;
+const utcClock = at => `${new Date(at).toISOString().slice(11, 16)} UTC`;
+const runtimeCurrent = job => job.runtimeWait && job.runtimeWait.head === (job.agentHead ?? job.head);
+const runtimePending = job => runtimeCurrent(job) && ['pending', 'waiting', 'sent'].includes(job.runtimeWait.state);
+const runtimeWaiting = job => job.phase === 'pr' && runtimeCurrent(job) && job.runtimeWait.state === 'waiting';
+// Once for each agent head: the Stories of the job worktree whose saved check was never sent since the job started.
+async function runtimeUnsent(ctx, job, body) {
+  const head = job.agentHead ?? job.head;
+  if (runtimeCurrent(job)) return job.runtimeWait;
+  const lines = runtimeVerdicts(body);
+  let stories = [];
+  if (lines.length === 1 && lines[0].verdict === 'not-run') {
+    try {
+      const read = ctx.ports.unsentChecks ?? (async input => (await import('./runtime-client.mjs')).unsentStoryChecks(input, { env: ctx.ports.env ?? process.env }));
+      stories = ((await read({ root: job.worktree, since: job.started ?? 0 }))?.stories ?? []).filter(named).slice(0, 50);
+    } catch (error) { ctx.warn(`Autopilot core could not read the unsent Runtime checks of #${job.issue}: ${error.message}`); }
+  }
+  job.runtimeWait = stories.length ? { head, state: 'pending', stories } : { head, state: 'none' };
+  ctx.saveJob(job);
+  return job.runtimeWait;
+}
+// The one Runtime line of the PR body becomes LINE, and the runtime part of its Evidence line becomes STATE.
+function withRuntimeLine(body, line, state) {
+  let done = false;
+  return String(body ?? '').split('\n').flatMap(raw => {
+    if (runtimeVerdicts(raw).length) { if (done) return []; done = true; return [line]; }
+    return [/^evidence\s*:/i.test(normalLine(raw)) ? raw.replace(/\bruntime\s*=\s*[a-z-]+(?:\s*\(\s*\d+\s*\/\s*\d+\s*\))?/i, `runtime=${state}`) : raw];
+  }).join('\n');
+}
+async function setRuntimeLine(ctx, job, pr, line, runtime) {
+  const body = withRuntimeLine(pr.body, line, runtime.state);
+  await ctx.gh.ok('PATCH', `repos/${ctx.repo}/pulls/${job.pr}`, { body: safeBody(body) });
+  pr.body = body;
+  const evidence = parseEvidence(body) ?? job.evidence ?? null;
+  Object.assign(job, { runtime, coverage: null, evidence: evidence?.runtime ? { ...evidence, runtime: { state: runtime.state } } : evidence });
+}
+// The last pdd test --json summary line of the log: {exit_code, rows}, or null.
+function runtimeSummary(fs, file) {
+  const lines = readTail(fs, file, 1024 * 1024).split('\n').reverse();
+  for (const line of lines) {
+    if (!/^\s*\{/.test(line)) continue;
+    try { const row = JSON.parse(line); if (object(row) && Number.isSafeInteger(row.exit_code) && Array.isArray(row.rows)) return row; } catch { /* Not the summary. */ }
+  }
+  return null;
+}
+// Returns true when the merge check may go on to the lane.
+async function runtimeStep(ctx, job, pr) {
+  const w = await runtimeUnsent(ctx, job, pr.body), now = ctx.now();
+  if (!['pending', 'waiting', 'sent'].includes(w.state)) return true;
+  const hold = sig => { noteProgress(ctx, job, `runtime|${w.state}|${sig}|${now}`, true); delete job.lastError; delete job.lastErrorTool; ctx.saveJob(job); return false; };
+  if (w.state === 'sent') {
+    const seen = ctx.jobs.read(w.agent);
+    if (seen.state === 'running') {
+      const watch = await watchProcess(ctx, job, w.agent, 'runtime');
+      if (watch.state === 'running') return hold(w.agent.id);
+    }
+    const summary = runtimeSummary(ctx.fs, w.agent.log), rows = Array.isArray(summary?.rows) ? summary.rows : [];
+    const failed = [...new Set(rows.filter(row => row?.state === 'failed').map(row => oneLine(row.story ?? row.test, 120)))];
+    if (summary?.exit_code === 0 && rows.length) await setRuntimeLine(ctx, job, pr, 'Runtime: PASS', { state: 'pass' });
+    else if (summary?.exit_code === 1 && failed.length) await setRuntimeLine(ctx, job, pr, `Runtime: FAIL (pdd test after the interpreter maintenance: ${failed.slice(0, 5).join(', ')} failed)`, { state: 'fail', kind: 'runtime', component: 'pdd-test', code: 'fail' });
+    else {
+      const why = safeLine(summary?.summary_line ?? (seen.state === 'running' ? 'the run made nothing new and was stopped' : `exit ${seen.exit?.code ?? seen.exit?.signal ?? 'unknown'}, no summary`), 200);
+      await setRuntimeLine(ctx, job, pr, `Runtime: not run (the check sent after the interpreter maintenance gave no verdict: ${why})`,
+        { state: 'not-run', kind: 'runtime', component: 'pdd-test', code: 'no-verdict', cause: `the Runtime check that Autopilot sent after the interpreter maintenance gave no verdict: ${why}`, detail: `Log: ${basename(w.agent.log)} on this machine` });
+    }
+    Object.assign(w, { state: 'done', outcome: job.runtime.state });
+    return hold('done');
+  }
+  if (Number.isFinite(w.maintenance) && now - w.maintenance >= RUNTIME_WAIT_LIMIT) {
+    const since = `maintenance since ${utcClock(w.maintenance)}`;
+    await setRuntimeLine(ctx, job, pr, `Runtime: not run (${since})`,
+      { state: 'not-run', kind: 'runtime', component: 'pdd-test', code: 'maintenance', cause: `the interpreter stayed in maintenance for ${RUNTIME_WAIT_LIMIT / HOUR} hours (${since}), so the Runtime check was never sent`, detail: `Stories: ${w.stories.join(', ')}` });
+    Object.assign(w, { state: 'done', outcome: 'maintenance' });
+    ctx.saveJob(job);
+    await runtimeNotRunReport(ctx, job);
+    return true;
+  }
+  if (Number.isFinite(w.readAt) && now - w.readAt < RUNTIME_READ_EVERY) return hold(w.readAt);
+  let health;
+  try { health = await (ctx.ports.runtimeHealth ?? (async () => (await import('./runtime-client.mjs')).checkRuntimeHealth({ env: ctx.ports.env ?? process.env })))(); }
+  catch (error) { health = { state: 'unavailable', detail: oneLine(error.message, 200) }; }
+  w.readAt = now;
+  if (health?.detail === 'maintenance') {
+    Object.assign(w, { state: 'waiting', maintenance: w.maintenance ?? now, until: Number.isFinite(Date.parse(health.until)) ? Date.parse(health.until) : null });
+    return hold('maintenance');
+  }
+  w.agent = startJob(ctx, job, 'runtime', job.worktree, '', { command: process.execPath, args: [ctx.pdd, 'test', '--json', ...w.stories] });
+  w.state = 'sent';
+  return hold('sent');
 }
 // ---- The merge lane -------------------------------------------------------------------------------------
 // The label pdd:merge-lane on a PR is the repository's one final step, shared by every machine. A green PR takes it
@@ -1926,7 +2025,7 @@ async function githubApproved(ctx, job) {
 // the cause. It never blocks or ends the job; one report per job and cause.
 async function runtimeNotRunReport(ctx, job) {
   const rt = job.runtime;
-  if (rt?.state !== 'not-run' || rt.kind !== 'runtime') return;
+  if (rt?.state !== 'not-run' || rt.kind !== 'runtime' || runtimePending(job)) return;
   const why = { kind: 'runtime', component: slug(rt.component) || 'pdd-test', code: slug(rt.code) || 'not-run', text: oneLine(rt.cause) || 'Runtime could not check the change', detail: String(rt.detail ?? '').slice(0, 4000), shipped: true };
   const key = `${why.component}.${why.code}`;
   if (job.runtimeReport?.key === key) return;
@@ -1989,7 +2088,7 @@ async function repairOrEnd(ctx, job, reds, findings = reds) {
   if (stop) return end(ctx, job, cause('job', 'checks-red', `the repairs stopped because ${stop}. The PR checks after ${job.repairs} repair(s): ${reds.join(' ')}`));
   // A repair clears every check, so it all runs again also at the same head (pdd test saves its checks outside the
   // repository: a repair that only runs pdd test keeps the head).
-  Object.assign(job, { phase: 'running', role: 'repair', repairs: job.repairs + 1, review: null, suite: null, vectors: null, coverage: null, progress: { sig: null, at: ctx.now(), running: false } });
+  Object.assign(job, { phase: 'running', role: 'repair', repairs: job.repairs + 1, review: null, suite: null, vectors: null, coverage: null, runtimeWait: null, progress: { sig: null, at: ctx.now(), running: false } });
   job.agent = startJob(ctx, job, 'repair', job.worktree, result => repairPrompt(ctx, job, reds, result));
   ctx.saveJob(job); ctx.counts.repairs++;
 }
@@ -2333,7 +2432,7 @@ async function advance(ctx, job) {
   const head = String(r?.head ?? '').trim().toLowerCase();
   if (object(r) && r.outcome === 'pr' && prNumber > 0 && /^[0-9a-f]{40}$/.test(head)) {
     // A new agent result reads the saved checks and runs the replays again (coverage and vectors).
-    Object.assign(job, { phase: 'pr', pr: prNumber, head, agentHead: head, lane: null, coverage: null, vectors: null, runtime: normalRuntime(r.runtime), promptChanged: typeof r.promptChanged === 'boolean' ? r.promptChanged : null,
+    Object.assign(job, { phase: 'pr', pr: prNumber, head, agentHead: head, lane: null, coverage: null, vectors: null, runtimeWait: null, runtime: normalRuntime(r.runtime), promptChanged: typeof r.promptChanged === 'boolean' ? r.promptChanged : null,
       evidence: parseEvidence(r.evidence) ?? job.evidence ?? null, prAt: ctx.now(), progress: { sig: null, at: ctx.now(), running: false } });
     delete job.lastError; delete job.lastErrorTool;
     ctx.saveJob(job); ctx.produced();
@@ -2436,6 +2535,8 @@ export async function tickCore(input, ports) {
 }
 
 // ---- Status (local files only) --------------------------------------------------------------------------
+const runtimeWords = job => runtimeWaiting(job) ? `; Runtime: waits for the interpreter maintenance since ${utcClock(job.runtimeWait.maintenance)}${job.runtimeWait.until ? ` (until ${utcClock(job.runtimeWait.until)})` : ''}; no slot`
+  : runtimeCurrent(job) && job.runtimeWait.state === 'sent' ? '; Runtime: the check that was not sent runs again' : '';
 export function coreStatus({ state, settings, sources = {} }, ports) {
   const fs = ports.fs ?? nativeFs, now = (ports.now ?? Date.now)(), jobs = readJobs(fs, ports.root), machine = readMachine(fs, ports.root, null, now);
   const busy = jobs.filter(holdsSlot).length, age = at => `${Math.max(0, Math.round((now - at) / MIN))}m`;
@@ -2448,7 +2549,7 @@ export function coreStatus({ state, settings, sources = {} }, ports) {
   const running = (job, part, role) => part && !part.watch?.stopped && !part.recorded ? `; ${processWords(job, part, role, words)}` : '';
   for (const job of jobs) {
     if (job.phase === 'pr') lines.push(`#${job.issue} PR #${job.pr} at ${short(job.head)}: review ${job.review?.verdict ?? (job.review ? 'running' : '-')}${job.review?.verdict ? '' : running(job, job.review?.agent, 'review')}, suite ${job.suite ? 'started' : '-'}${running(job, job.suite?.agent, 'suite')}, repairs ${job.repairs}${
-      job.lane?.state === 'final' ? '; merge lane: final step' : job.lane?.state === 'waiting' ? `; merge lane: waiting${job.lane.holder ? ` for PR #${job.lane.holder}` : ''} since ${new Date(job.lane.since).toISOString()}` : ''}${job.lastError ? `; last error: ${job.lastError}` : ''}`);
+      job.lane?.state === 'final' ? '; merge lane: final step' : job.lane?.state === 'waiting' ? `; merge lane: waiting${job.lane.holder ? ` for PR #${job.lane.holder}` : ''} since ${new Date(job.lane.since).toISOString()}` : ''}${runtimeWords(job)}${job.lastError ? `; last error: ${job.lastError}` : ''}`);
     else if (job.phase === 'ending') lines.push(`#${job.issue} ending: ${job.end?.cause?.text}${job.lastError ? `; retry: ${job.lastError}` : ''}`);
     else lines.push(`#${job.issue} ${job.role} running ${age(job.agent?.started ?? job.started)} (log ${job.agent?.log ?? 'none'})${running(job, job.agent, job.role)}`);
   }

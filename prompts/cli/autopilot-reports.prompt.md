@@ -16,7 +16,9 @@ comments on a known cause at most once a day.
   return `{state: "off"}` and write nothing.
 - Stable causes: before the fingerprint, the code becomes one fixed word
   (`stableCode`): merge-check-tool, suite-broken, adopt-pdd (its body asks to adopt
-  PDD for the modules that the local draft lists), no-verdict, scenario-limit,
+  PDD for the modules that the local draft lists), no-verdict, maintenance (the
+  interpreter stayed in maintenance, so the check was never sent: the
+  [core](autopilot-core.prompt.md) waits 12 hours first, #3241), scenario-limit,
   vector-replay, runtime-case, lint-refusal, interface-refusal, binding-refusal,
   input-refusal (any other refusal or rejection of our input: `refus` or `reject`),
   interpreter-error, server-internal (a server-side internal error: server-internal,
@@ -34,7 +36,7 @@ comments on a known cause at most once a day.
   interface blocks, bindings, Stories, test vectors, tests, up to the call); everything
   inside Runtime after the call until the result comes back is Runtime's. So kind
   `runtime` stays only for the Runtime codes (`RUNTIME_CODES`) no-verdict,
-  interpreter-error, server-incompatible and server-internal. Every other runtime cause,
+  maintenance, interpreter-error, server-incompatible and server-internal. Every other runtime cause,
   also interface-refusal, binding-refusal, lint-refusal and input-refusal (a refusal of
   our input is ours to fix first), is a PDD report.
 - Fingerprint: `reportFingerprint({kind, component, code, version})` is

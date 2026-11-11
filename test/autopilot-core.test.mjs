@@ -1577,12 +1577,12 @@ test('E1 report owner (Serhan\'s boundary): our input to Runtime (interface, bin
   const draft = listReportDrafts({ root }).find(d => d.fingerprint === scenario.fingerprint);
   assert.deepEqual(draft.labels, ['pdd:autopilot-report']); assert.equal(draft.runtimeOwner, undefined, 'no owner is configured'); assert.match(draft.title, /^Autopilot report: PDD /);
   for (const code of ['vector-replay-failed', 'safe-integer-limit', 'runtime-case-invalid']) assert.equal(reportKind({ kind: 'runtime', component: 'pdd test', code }), 'pdd', code);
-  assert.deepEqual([...RUNTIME_CODES].sort(), ['interpreter-error', 'no-verdict', 'server-incompatible', 'server-internal']);
+  assert.deepEqual([...RUNTIME_CODES].sort(), ['interpreter-error', 'maintenance', 'no-verdict', 'server-incompatible', 'server-internal']);
   // One spelling per code: the fixed code, then its owner when an agent says kind runtime.
-  const owners = { 'no-verdict': 'runtime', 'interpreter-error': 'runtime', 'server-incompatible': 'runtime', 'server-internal': 'runtime',
+  const owners = { 'no-verdict': 'runtime', maintenance: 'runtime', 'interpreter-error': 'runtime', 'server-incompatible': 'runtime', 'server-internal': 'runtime',
     'interface-refusal': 'pdd', 'binding-refusal': 'pdd', 'lint-refusal': 'pdd', 'scenario-limit': 'pdd', 'vector-replay': 'pdd', 'runtime-case': 'pdd',
     'cli-error': 'pdd', crash: 'pdd', 'claim-error': 'pdd', 'merge-check-tool': 'pdd', 'suite-broken': 'pdd', 'not-run': 'pdd', timeout: 'pdd', 'adopt-pdd': 'pdd', other: 'pdd', 'input-refusal': 'pdd' };
-  const spelled = { 'no-verdict': 'No verdict', 'interpreter-error': 'interpreter crashed', 'server-incompatible': 'server version incompatible', 'server-internal': 'HTTP 503',
+  const spelled = { 'no-verdict': 'No verdict', maintenance: 'interpreter maintenance', 'interpreter-error': 'interpreter crashed', 'server-incompatible': 'server version incompatible', 'server-internal': 'HTTP 503',
     'interface-refusal': 'interface refused', 'binding-refusal': 'binding refused', 'lint-refusal': 'lint refused', 'scenario-limit': 'scenario integer out of range',
     'vector-replay': 'vector replay failed', 'runtime-case': 'runtime case invalid', 'cli-error': 'cli usage', crash: 'panic', 'claim-error': 'claim lost',
     'merge-check-tool': 'merge-check-tool', 'suite-broken': 'suite-broken', 'not-run': 'not run', timeout: 'timed out', 'adopt-pdd': 'adopt-pdd', other: 'weird thing', 'input-refusal': 'server refused the prompt' };
