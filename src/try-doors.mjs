@@ -8,7 +8,7 @@ import { findTests, gitFiles, readPrompt, captureSource, executableInterfaceText
 import { loadRuntimeWorkspace, requireRuntimePath } from './runtime-workspace.mjs';
 import {lineReader} from './prompt-approve.mjs';
 import { cleanText, tryUsage, tryUsageLine } from './runtime-output.mjs';
-import { runDoorCall, saveDoorCaseResult, acquireCaseWriteOwnership } from './runtime-client.mjs';
+import { runDoorCall, saveDoorCaseResult, acquireCaseWriteOwnership, acquireRuntimeBatchLock } from './runtime-client.mjs';
 
 const WRAPPER_EXIT = 125;
 const hash = text => createHash('sha256').update(text).digest('hex');
@@ -150,11 +150,27 @@ export async function openCli(context, test, sessionId, options) {
   return 0;
 }
 
-function invalidate(descriptor, path) {
+async function invalidate(descriptor, path) {
   const last = join(dirname(path), `${descriptor.sessionId}.last.json`);
   writePrivate(last, { state: 'unknown' });
-  regular(descriptor.repoState);
-  writePrivate(descriptor.repoState, { ...read(descriptor.repoState), last_door: { descriptor: path, last } });
+  const folder = descriptor.repoState.replace(/\.json$/, '.last-run');
+  mkdirSync(folder, { recursive: true, mode: 0o700 });
+  const lockFolder = lstatSync(folder);
+  if (lockFolder.isSymbolicLink() || !lockFolder.isDirectory()) fail('Refusing an unsafe Try lock folder.');
+  chmodSync(folder, 0o700);
+  let release;
+  const deadline = Date.now() + 2000;
+  for (;;) {
+    try { release = await acquireRuntimeBatchLock(folder); break; }
+    catch (error) {
+      if (error.code !== 'BATCH_LOCK_BUSY' || Date.now() >= deadline) throw error;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+  }
+  try {
+    regular(descriptor.repoState);
+    writePrivate(descriptor.repoState, { ...read(descriptor.repoState), last_door: { descriptor: path, last } });
+  } finally { release(); }
   return last;
 }
 export async function runShim(descriptorPath, argv, givenPorts = {}) {
@@ -163,7 +179,7 @@ export async function runShim(descriptorPath, argv, givenPorts = {}) {
     regular(descriptorPath);
     const d = read(descriptorPath);
     if (d.version !== 1 || !d.sessionId || !d.root || realpathSync(d.root) !== d.root) fail('The Try session record is invalid. Run pdd simulate STORY --cli again.');
-    const last = invalidate(d, descriptorPath), input = { argv };
+    const last = await invalidate(d, descriptorPath), input = { argv };
     if (Object.entries(d.promptHashes ?? { [d.prompt]: d.promptHash }).some(([path, expected]) => hash(readFileSync(join(d.root, path))) !== expected)) fail('The CLI prompt changed since this Try. Run pdd simulate STORY --cli --new.');
     checkEffectivePrompts(d.root,d.promptHashes ?? {[d.prompt]:d.promptHash},d.effectivePromptHashes);
     if (d.inputSchema.properties?.stdin && !ports.stdin.isTTY) {

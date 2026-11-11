@@ -277,6 +277,60 @@ await runDoorCall({root,origin,sessionId:'11111111-1111-4111-8111-111111111111',
   assert.equal(readFileSync(join(f.repo, file), 'utf8'), before);
 });
 
+test('AC6: shim invalidation cannot restore an older confirmed run', {timeout: 10000}, async t => {
+  const f = await recorded(t), repoDir = join(f.state, 'repos');
+  const repoFile = join(repoDir, readdirSync(repoDir).find(name => name.endsWith('.json')));
+  const descriptorPath = join(f.sandbox, 'shim.door.json'), release = join(f.sandbox, 'shim-release');
+  const script = join(f.sandbox, 'shim.mjs'), sessionId = '11111111-1111-4111-8111-111111111111';
+  const repo = JSON.parse(readFileSync(repoFile, 'utf8')); repo.unrelated = {keep: 'value'};
+  writeFileSync(repoFile, JSON.stringify(repo));
+  writeFileSync(descriptorPath, JSON.stringify({version: 1, root: f.repo, sessionId, repoState: repoFile, prompt: PLACE, promptHash: 'deliberately-invalid'}));
+  const shimUrl = new URL('../src/try-doors.mjs', import.meta.url).href;
+  writeFileSync(script, `import fs from 'node:fs';
+import {syncBuiltinESMExports} from 'node:module';
+import {runShim} from ${JSON.stringify(shimUrl)};
+const [descriptor, repoFile, release] = process.argv.slice(2);
+const read = fs.readFileSync;
+let paused = false;
+fs.readFileSync = function(path, ...args) {
+  const value = read.call(this, path, ...args);
+  if (!paused && String(path) === repoFile) {
+    paused = true; process.send('paused');
+    const deadline = Date.now() + 5000;
+    while (!fs.existsSync(release)) {
+      if (Date.now() >= deadline) throw Error('timed out waiting for release');
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    }
+  }
+  return value;
+};
+syncBuiltinESMExports();
+const code = await runShim(descriptor, []);
+if (code !== 125) process.exitCode = 1;
+`);
+  const child = spawn(process.execPath, [script, descriptorPath, repoFile, release], {stdio: ['ignore', 'ignore', 'pipe', 'ipc']});
+  let errors = ''; child.stderr.on('data', chunk => { errors += chunk; });
+  const exited = new Promise(resolve => child.once('exit', (code, signal) => resolve({code, signal})));
+  t.after(async () => {
+    try { writeFileSync(release, 'cleanup'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    child.kill(); await exited;
+  });
+  await new Promise((resolve, reject) => { child.once('message', resolve); child.once('error', reject); child.once('exit', () => reject(Error(errors || 'shim exited before pause'))); });
+  const newer = f.io(); newer.signal = AbortSignal.abort();
+  const newCall = assert.rejects(client.runDoorCall({root: f.repo, origin: f.fake.origin, sessionId, login: 'octo', prompt: PLACE, operation: 'main'}, input, newer));
+  await Promise.race([newCall, new Promise(resolve => setTimeout(resolve, 150))]);
+  writeFileSync(release, 'continue');
+  await newCall;
+  assert.deepEqual(await exited, {code: 0, signal: null}, errors);
+  const latest = JSON.parse(readFileSync(repoFile, 'utf8'));
+  assert.equal(latest.last_run.state, 'unknown');
+  assert.deepEqual(latest.unrelated, {keep: 'value'});
+  assert.deepEqual(latest.last_door, {descriptor: descriptorPath, last: join(f.sandbox, `${sessionId}.last.json`)});
+  const before = readFileSync(join(f.repo, file), 'utf8'), saving = terminal(f.io());
+  assert.equal(await save(f, saving), 125); assert.match(saving.stderr.text, /unknown/);
+  assert.equal(readFileSync(join(f.repo, file), 'utf8'), before);
+});
+
 test('AC2: saving preserves dispatched input when the caller mutates its object', async t => {
   const f = await recorded(t), mutableInput = {argv: ['done', '4']}, io = f.io();
   let answer;
