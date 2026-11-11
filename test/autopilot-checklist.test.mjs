@@ -79,10 +79,10 @@ test('an exclusion whose quote is not in the issue text is red, and so is one wi
   const check = checkChecklist(withThird('- C3: excluded: "The issue says that docs are not needed"'), items, LANE_ISSUE);
   assert.equal(check.state, 'red');
   assert.equal(check.items[2].state, 'unsupported');
-  assert.deepEqual(check.reds, ['Checklist item C3 is excluded without an exact quote of at least 3 words from the issue text: "The issue says that docs are not needed". Quote the issue text exactly, or give the evidence for "docs/cli.md describes the lane line.".']);
+  assert.deepEqual(check.reds, ['Checklist item C3 is excluded without an exact quote of at least 3 whole words from the issue text (not from the item itself, a code block or a comment): "The issue says that docs are not needed". Quote the issue text exactly, or give the evidence for "docs/cli.md describes the lane line.".']);
   const none = checkChecklist(withThird('- C3: excluded (the docs can wait)'), items, LANE_ISSUE);
   assert.equal(none.items[2].quote, '');
-  assert.match(none.reds[0], /from the issue text: \(no quote\)\. Quote/);
+  assert.match(none.reds[0], /a comment\): \(no quote\)\. Quote/);
   assert.equal(checkChecklist(withThird('- C3: excluded: "docs pass"'), items, LANE_ISSUE).items[2].state, 'unsupported', 'a quote needs 3 words');
   assert.equal(checkChecklist(withThird('- C3: excluded: "the docs change can wait"'), items, LANE_ISSUE).items[2].state, 'unsupported', 'the case must match');
   // White space, curly quotes and the marks ` * _ do not count: a quote over a line break of the issue is exact.
@@ -317,7 +317,7 @@ test('the reader: task items anywhere, section list items, label lines, nesting,
     ['the lane step goes on', 'the note shows the wait.', otherList('before its first heading', 1)]);
 });
 
-test('the reader keeps at most 30 items of at most 300 characters, and the 30th says how many more there are', () => {
+test('the reader keeps at most 30 items of at most 300 characters, a cut ends with "…", and the 30th says how many more there are', () => {
   const tasks = n => Array.from({ length: n }, (_, i) => `- [ ] item ${i + 1}`).join('\n');
   const items = issueChecklist(tasks(35));
   assert.equal(items.length, 30);
@@ -327,11 +327,11 @@ test('the reader keeps at most 30 items of at most 300 characters, and the 30th 
   // A long 30th item is cut first, so that the note stays and the whole text has at most 300 characters.
   const tail = '; and 1 more item in the issue; the reviewer checks them';
   const longThirtieth = issueChecklist(`${tasks(29)}\n- [ ] ${'b'.repeat(400)}\n- [ ] item 31`).at(-1).text;
-  assert.equal(longThirtieth, `${'b'.repeat(300 - tail.length)}${tail}`);
+  assert.equal(longThirtieth, `${'b'.repeat(300 - tail.length - 1)}…${tail}`);
   const long = issueChecklist(`## Test\n- x${'😀'.repeat(400)}\n- ${'word '.repeat(100)}`);
   assert.equal([...long[0].text].length, 300);
-  assert.equal(long[0].text, `x${'😀'.repeat(299)}`);
-  assert.equal(long[1].text, 'word '.repeat(60).trimEnd());
+  assert.equal(long[0].text, `x${'😀'.repeat(298)}…`);
+  assert.equal(long[1].text, `${'word '.repeat(60).trimEnd()}…`);
 });
 
 test('review round 1: punctuation that changes a condition keeps two items, and a PR with only the negative case is red', () => {
@@ -348,6 +348,84 @@ test('review round 1: punctuation that changes a condition keeps two items, and 
   // Emphasis, case and white space still make one item; operators, punctuation and underscores in words do not.
   assert.deepEqual(texts(issueChecklist('## Test\n- The **lane** waits.\n- the lane   WAITS.\n- The lane waits!\n- Keep max_items\n- Keep maxitems\n- x * y\n- x y\n')),
     ['The **lane** waits.', 'The lane waits!', 'Keep max_items', 'Keep maxitems', 'x * y', 'x y']);
+});
+
+test('review round 1 (Claude 2): a label with no text takes no list line; a setext underline makes a heading', () => {
+  // Probe 1 cases A and G: one merged item before the fix.
+  assert.deepEqual(texts(issueChecklist('**Acceptance criteria:**\n  - the status names the holder\n  - the note shows the wait\n  - docs/cli.md describes it\n')),
+    ['the status names the holder', 'the note shows the wait', 'docs/cli.md describes it']);
+  assert.deepEqual(texts(issueChecklist('Done when\n---------\n  - one\n  - two\n')), ['one', 'two']);
+  // A setext heading scopes like a # heading: a context heading gives no summary, a Proposal heading does.
+  assert.deepEqual(texts(issueChecklist('Evidence\n--------\n- a fact\n\nProposal\n--------\n- do this\n')), [otherList('under "Proposal"', 1)]);
+  // "=" is level 1 and "-" is level 2: a Proposal under an Evidence title is part of the context.
+  assert.deepEqual(texts(issueChecklist('Evidence\n========\n- a fact\n\nProposal\n--------\n- do this\n')), []);
+  // A thematic break and an HTML tag line end an item and continue none.
+  assert.deepEqual(texts(issueChecklist('## Test\n- one\n---\nnot part of one\n<details>\n\n- [ ] task inside details\n</details>\n')), ['one', 'task inside details']);
+});
+
+test('review round 1 (Claude 3): a deferral or a negation is no evidence; every exclusion form needs a quote from the issue', () => {
+  // Probe 2: each of these lines counted as covered before the fix.
+  const items = issueChecklist(LANE_ISSUE);
+  const third = line => checkChecklist(withThird(line), items, LANE_ISSUE).items[2].state;
+  for (const line of ['- C3: deferred to a follow-up PR', '- C3: not applicable', '- C3: skipped', '- C3: will do in #3301', '- C3: later', '- C3: not needed',
+    '- C3: no', '- C3: done', '- C3: no evidence yet', '- C3 - Pending review', '- C3: not done yet', '- C3: todo add a test', '- C3: Follow up in #12'])
+    assert.equal(third(line), 'missing', line);
+  for (const line of ['- C3: out of scope', '- C3: (excluded) not in this PR', '- C3: exclusion: "a quote that is not in the issue"',
+    '- C3: Not in scope: "a quote that is not in the issue"', '- C3: ~~excluded~~ "made up words here"'])
+    assert.equal(third(line), 'unsupported', line);
+  // The new exclusion forms pass with a real quote from the issue.
+  assert.equal(third('- C3: Not in scope: "The docs change can wait"'), 'excluded');
+  assert.equal(third('- C3: exclusion — "can wait for the next docs pass"'), 'excluded');
+  // Evidence that names a test, a check or a file stays covered.
+  assert.equal(third('- C3: docs/cli.md "Merge lane" section, checked by test/docs-commands.test.mjs'), 'covered');
+  assert.equal(third('- C3: done in docs/cli.md (the lane line)'), 'covered');
+});
+
+test('review round 1 (Claude C1): a checklist section that holds only prose gives one item, its prose', () => {
+  assert.deepEqual(texts(issueChecklist('## Expected behavior\nThe status line names the PR that holds the lane.\n')), ['The status line names the PR that holds the lane.']);
+  assert.deepEqual(texts(issueChecklist('## Done when\nThe lane names its holder\nand the merge note shows the wait.\n\nThe docs say so too.\n\n## Notes\nx\n')),
+    ['The lane names its holder and the merge note shows the wait. The docs say so too.']);
+  // A label line with no text takes the paragraph after it, also after a blank line.
+  assert.deepEqual(texts(issueChecklist('**Done when**\n\nThe lane names its holder.\n')), ['The lane names its holder.']);
+  // A section with items keeps only its items; long prose is cut with "…".
+  assert.deepEqual(texts(issueChecklist('## Test\nIntro text.\n- one\n')), ['one']);
+  assert.equal(issueChecklist(`## Expected\n${'word '.repeat(100)}\n`)[0].text, `${'word '.repeat(60).trimEnd()}…`);
+});
+
+test('review round 1 (Claude C2): quoted task lists are items; a table with no leading pipe is a table', () => {
+  assert.deepEqual(texts(issueChecklist('> - [ ] quoted task one\n> - [ ] quoted task two\n')), ['quoted task one', 'quoted task two']);
+  assert.deepEqual(texts(issueChecklist('## Wanted\n> - a wanted thing\n')), ['a wanted thing']);
+  assert.deepEqual(texts(issueChecklist('## Wanted\nWhere | What\n--- | ---\nREADME | name Gemini\ndocs | name Gemini too\n')), ['README | name Gemini', 'docs | name Gemini too']);
+  assert.deepEqual(texts(issueChecklist('## Audit\nWhere | What\n--- | ---\nREADME | name Gemini\n')), [otherTable('under "Audit"', 1)]);
+  // A quoted heading is not a heading (a quoted "## Test" still reads as a label line); an emoji before a label does not hide it.
+  assert.deepEqual(texts(issueChecklist('> ## Proposal\n> - quoted bullet\n')), [otherList('before its first heading', 1)]);
+  assert.deepEqual(texts(issueChecklist('> ## Test\n> - quoted bullet\n')), ['quoted bullet']);
+  assert.deepEqual(texts(issueChecklist('## ✅ Done when\n- the lane names its holder\n')), ['the lane names its holder']);
+});
+
+test('review round 1 (Claude C4): an exclusion quote needs whole words, not the item\'s own text, and no code block or comment', () => {
+  const issue = '## Done when\n- [ ] a status line names the holder\n- [ ] docs/cli.md describes the lane line\n\nThe docs change can wait for the next docs pass.\n<!-- Leave out anything that the template says -->\n```\nskip this one for now please\n```\n';
+  const items = issueChecklist(issue);
+  const second = line => checkChecklist(`Checklist:\n- C1: test/a.test.mjs "x"\n${line}\n`, items, issue).items[1].state;
+  assert.equal(second('- C2: excluded: "he docs change can wai"'), 'unsupported', 'part of a word');
+  assert.equal(second('- C2: excluded: "docs/cli.md describes the lane line"'), 'unsupported', 'the item\'s own text');
+  assert.equal(second('- C2: excluded: "describes the lane"'), 'unsupported', 'a part of the item\'s own text');
+  assert.equal(second('- C2: excluded: "Leave out anything that"'), 'unsupported', 'an HTML comment');
+  assert.equal(second('- C2: excluded: "skip this one for now"'), 'unsupported', 'a code block');
+  assert.equal(second('- C2: excluded: "The docs change can wait"'), 'excluded');
+});
+
+test('review round 1 (Claude P3): a long heading line reads in linear time; every Checklist section of the PR body counts', () => {
+  // Probe 4: 64,000 spaces took 12.7 s before the fix.
+  const started = Date.now();
+  assert.deepEqual(texts(issueChecklist(`# a${' '.repeat(64000)}x\n- y\n`)), [otherList('under "a x"', 1)]);
+  assert.ok(Date.now() - started < 2000, `took ${Date.now() - started} ms`);
+  assert.deepEqual(issueChecklist('## Test ##\n- one\n').map(item => item.text), ['one']);
+  // Probe 3: a template's own checklist heading came first and hid the job's section.
+  const items = issueChecklist(LANE_ISSUE);
+  const body = '## Checklist\n- [x] I ran the tests\n- [x] I updated docs\n\n## Issue checklist\n- C1: t1\n- C2: t2\n- C3: excluded: "The docs change can wait"\n';
+  assert.deepEqual(states(checkChecklist(body, items, LANE_ISSUE)), ['covered', 'covered', 'excluded']);
+  assert.deepEqual(states(checkChecklist('Checklist:\n- `C1`: t1\n- **C2:** t2\n- C3: t3\n', items, LANE_ISSUE)), ['covered', 'covered', 'covered']);
 });
 
 // Six items; the issue allows leaving the docs pages out.
@@ -396,8 +474,9 @@ test('an id later in a line does not count; one line may name several items; a l
   const items = issueChecklist(SIX);
   const body = 'Checklist:\n- C2: see C1\n- C3, C4 and C5: test/lane.test.mjs\n- C6: TODO\n';
   assert.deepEqual(states(checkChecklist(body, items, SIX)), ['missing', 'covered', 'covered', 'covered', 'covered', 'missing']);
+  // A negation at the start of the rest is no evidence, also "none of …" (review round 1).
   const numbered = 'Checklist:\n1) test one\n2: test two\n3. none of the old tests break\n4. n/a\n5.\n';
-  assert.deepEqual(states(checkChecklist(numbered, items, SIX)), ['covered', 'covered', 'covered', 'missing', 'missing', 'missing']);
+  assert.deepEqual(states(checkChecklist(numbered, items, SIX)), ['covered', 'covered', 'missing', 'missing', 'missing', 'missing']);
 });
 
 test('no Checklist: section, or one only in a code block: every item is missing', () => {

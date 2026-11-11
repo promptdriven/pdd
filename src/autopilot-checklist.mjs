@@ -1,22 +1,28 @@
-// Generated from prompts/cli/autopilot-checklist.prompt.md (sha256: 347daaf4cb137252a7c892228ec8ed7bbf74f4132d34cd3e37f5237a3ae7fd54).
+// Generated from prompts/cli/autopilot-checklist.prompt.md (sha256: 2bc2918866d806d3422a7a5dce854bed59efed4372a894aff4b46f39e24a88b5).
 
-const MAX_ITEMS = 30, MAX_CHARS = 300, MAX_QUOTE = 200, PREFIX_WORDS = 8, MIN_QUOTE_WORDS = 3;
+const MAX_ITEMS = 30, MAX_CHARS = 300, MAX_QUOTE = 200, MAX_HEADING = 120, PREFIX_WORDS = 8, MIN_QUOTE_WORDS = 3;
 const WORD = /[\p{L}\p{N}]+/gu, HAS_WORD = /[\p{L}\p{N}]/u;
 const LABEL = /^(?:done when|expected|acceptance criteri(?:a|on)|test(?:s|ing)?|wanted|proposed outcomes?)(?![\p{L}\p{N}])/iu;
 // Context words (the release lead's list): their lists and tables describe the issue and give no summary item.
 const CONTEXT = /^(?:problem|evidence|background|context|notes|related|references|sources|what\s+happens)(?![\p{L}\p{N}])/iu;
 // A colon after the label, with at most 3 more words before it ("Expected result:").
 const LABEL_COLON = /^((?:[\s*_`]*[\p{L}\p{N}][\p{L}\p{N}'’-]*){0,3})[\s*_`]*:(.*)$/u;
-const HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/;
+const ATX = /^ {0,3}(#{1,6})(?=[ \t]|$)/;
+const SETEXT = /^ {0,3}(=+|-+)[ \t]*$/;
+const THEMATIC = /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/;
+const HTML_LINE = /^ {0,3}<\/?[A-Za-z][\w-]*(?:[\s>/]|$)/;
+const QUOTED = /^ {0,3}>/;
 const LIST = /^( *)(?:[-*+]|\d{1,9}[.)])(?:[ \t]+(.*))?$/;
 const PR_LIST = /^( *)(?:[-*+]|\d{1,9}[.):])(?:[ \t]+(.*))?$/;
 const TASK = /^\[[ xX]\][ \t]+(.*)$/;
-const TABLE_ROW = /^\s*\|/;
+const PIPE = /(?<!\\)\|/;
 const START = /^(?:issue\s+)?checklist\s*(?::.*)?$/i;
-const ID = /^[\s*_[(]*C(\d{1,3})(?![\p{L}\p{N}])[*_\])]*/iu;
+const ID = /^[\s*_[(`]*C(\d{1,3})(?![\p{L}\p{N}])[*_\])`]*/iu;
 const ID_SEP = /^\s*(?:[,/&+]\s*)?(?:and(?![\p{L}\p{N}])\s*)?/iu;
-const ID_LINE = /^[\s*_[(]*C\d{1,3}(?![\p{L}\p{N}])/iu;
-const NO_EVIDENCE = /^(?:pending|todo|to do|tbd|not done|not yet|none|n\/a|missing|no evidence|not covered)[\s*_]*(?:$|[:(\-–—,;.])/iu;
+const ID_LINE = /^[\s*_[(`]*C\d{1,3}(?![\p{L}\p{N}])/iu;
+const EXCLUSION = /^(?:exclu\p{L}*|out\s+of\s+scope|not\s+in\s+scope)(?![\p{L}\p{N}])/iu;
+const NOT_DONE = /^(?:no|not|none|nothing|never|n\/a|na|without|cannot|can[’']t|won[’']t|pending|todo|to\s+do|tbd|tbc|wip|later|deferred|defer|postponed|will|follow(?:-|\s+)?up|skipped|skip|missing|planned|blocked|waiting)(?![\p{L}\p{N}])/iu;
+const BARE = /^(?:done|yes|ok|okay|complete|completed|covered|fixed|implemented|verified|finished|tested)[^\p{L}\p{N}]*$/iu;
 const RANK = { missing: 1, unsupported: 2, excluded: 3, covered: 4 };
 
 const str = value => typeof value === 'string' ? value : '';
@@ -25,7 +31,8 @@ const indentOf = line => line.length - line.trimStart().length;
 const words = text => [...text.matchAll(WORD)];
 const lowerWords = text => words(text).map(match => match[0].toLowerCase());
 const quoteForm = text => text.normalize('NFC').replace(/[“”]/g, '"').replace(/[‘’]/g, "'").replace(/[`*_]/g, '').replace(/\s+/g, ' ').trim();
-const cut = (text, size) => [...text].slice(0, size).join('');
+// Every cut keeps whole code points and ends with "…".
+const clip = (text, size) => { const chars = [...text]; return chars.length <= size ? text : `${chars.slice(0, size - 1).join('').trimEnd()}…`; };
 // The same form decides the dedup: emphasis marks, white space and case go; every other character stays.
 const wordChar = char => /[\p{L}\p{N}]/u.test(char);
 const unmark = text => text.replace(/\*+|_+|~{2,}/g, (run, at) => {
@@ -34,9 +41,21 @@ const unmark = text => text.replace(/\*+|_+|~{2,}/g, (run, at) => {
   return opens || closes ? '' : run;
 });
 const sameForm = text => unmark(text).replace(/\s+/g, ' ').trim().toLowerCase();
-// A table row's cells: outer pipes go, an escaped pipe (\|) stays in its cell.
+// A table row's cells: outer pipes go (both are optional), an escaped pipe (\|) stays in its cell.
 const cells = line => line.trim().replace(/^\|/, '').replace(/(?<!\\)\|$/, '').split(/(?<!\\)\|/).map(cell => cell.trim().replace(/\\\|/g, '|'));
-const delimiter = row => row.length > 0 && row.every(cell => /^:?-+:?$/.test(cell));
+const delimiter = line => PIPE.test(line) && cells(line).every(cell => /^:?-+:?$/.test(cell));
+// A quoted line is read as the text after its > marks.
+const unquote = line => QUOTED.test(line) ? { line: line.replace(/^(?: {0,3}> ?)+/, ''), quoted: true } : { line, quoted: false };
+
+// An ATX heading with its level and text, in linear time (no regex backtracking on long lines).
+function headingOf(line) {
+  const open = ATX.exec(line);
+  if (!open) return null;
+  let text = line.slice(open[0].length).trim(), at = text.length;
+  while (at > 0 && text[at - 1] === '#') at--;
+  if (at < text.length && (at === 0 || text[at - 1] === ' ' || text[at - 1] === '\t')) text = text.slice(0, at).trimEnd();
+  return { level: open[1].length, text };
+}
 
 // Fenced code blocks and HTML comment blocks are not read.
 function blockStart(line) {
@@ -51,10 +70,23 @@ function blockEnd(block, line) {
   const close = /^ *(`{3,}|~{3,}) *$/.exec(line);
   return !!close && close[1][0] === block.fence && close[1].length >= block.size;
 }
+// The issue text that the reader reads: no fenced code block, no HTML comment block, no > marks.
+function readable(text) {
+  const out = [];
+  let block = null;
+  for (const raw of lines(text)) {
+    const { line } = unquote(raw);
+    if (block) { if (blockEnd(block, line)) block = null; continue; }
+    const opened = blockStart(line);
+    if (opened) { if (!opened.closed) block = opened; continue; }
+    out.push(line);
+  }
+  return out.join('\n');
+}
 
-// The text after a label (or a context word), or null. Leading marks and a number such as "2." do not count.
+// The text after a label (or a context word), or null. Leading non-letters (marks, emoji) and a number such as "2." do not count.
 function afterLabel(text, words = LABEL) {
-  const plain = text.trim().replace(/^[*_`\s]+/, '').replace(/^\d{1,3}[.)]\s*/, '').replace(/^[*_`\s]+/, '');
+  const plain = text.trim().replace(/^[^\p{L}\p{N}]+/u, '').replace(/^\d{1,3}[.)]\s*/, '').replace(/^[^\p{L}\p{N}]+/u, '');
   const label = words.exec(plain);
   return label ? plain.slice(label[0].length) : null;
 }
@@ -84,10 +116,9 @@ function summaryText({ heading, kind, count, n }) {
 }
 
 export function issueChecklist(text) {
-  const found = [], groups = new Map();
+  const found = [], groups = new Map(), stack = [];
   let current = null, heading = null, label = false, blank = true, block = null, table = null;
-  let title = null, headings = 0, run = null, context = false;
-  const stack = [];
+  let title = null, headings = 0, run = null, context = false, sectionStart = 0, prose = [];
   const close = () => { if (current) found.push(current); current = null; };
   const inSection = () => heading !== null || label;
   // Under a context heading (or a parent one), or after a descriptive label line: no summary item.
@@ -101,28 +132,34 @@ export function issueChecklist(text) {
     if (!part.trim()) return;
     current.text = current.text.trim() ? `${current.text}${separator}${part}` : part;
   };
-  const all = lines(str(text));
-  for (const [at, line] of all.entries()) {
+  // A heading section with no item but with prose gives one item: its prose.
+  const endSection = () => {
+    if (heading !== null && !found.slice(sectionStart).some(entry => HAS_WORD.test(entry.text)) && prose.length) found.push({ text: prose.join(' ') });
+    heading = null;
+  };
+  const startHeading = (level, headingText) => {
+    close(); label = false; blank = false; run = null; context = false;
+    headings++; title = clip(headingText.replace(/\s+/g, ' ').trim(), MAX_HEADING);
+    while (stack.length && stack.at(-1).level >= level) stack.pop();
+    stack.push({ level, context: afterLabel(headingText, CONTEXT) !== null });
+    if (heading !== null && level <= heading) endSection();
+    if (heading === null && afterLabel(headingText) !== null) { heading = level; sectionStart = found.length; prose = []; }
+  };
+  const all = lines(str(text)).map(unquote);
+  for (let at = 0; at < all.length; at++) {
+    const { line, quoted } = all[at];
     if (block) { if (blockEnd(block, line)) { block = null; blank = true; } continue; }
-    const row = TABLE_ROW.test(line) ? cells(line) : null;
+    const row = PIPE.test(line) ? cells(line) : null;
     if (!row) table = null;
     const opened = blockStart(line);
     if (opened) { if (opened.fence && indentOf(line) < 2) close(); if (!opened.closed) block = opened; blank = true; continue; }
     if (!line.trim()) { blank = true; continue; }
-    const head = HEADING.exec(line);
-    if (head) {
-      close(); label = false; blank = false; run = null; context = false;
-      headings++; title = cut((head[2] ?? '').replace(/\s+/g, ' ').trim(), 120);
-      const level = head[1].length;
-      while (stack.length && stack.at(-1).level >= level) stack.pop();
-      stack.push({ level, context: afterLabel(head[2] ?? '', CONTEXT) !== null });
-      if (heading !== null && level <= heading) heading = null;
-      if (heading === null && afterLabel(head[2] ?? '') !== null) heading = level;
-      continue;
-    }
+    if (HTML_LINE.test(line) || THEMATIC.test(line)) { close(); blank = true; continue; }
+    const head = quoted ? null : headingOf(line);
+    if (head) { startHeading(head.level, head.text); continue; }
     // A table: a header row, a delimiter row, then data rows. In a section each data row is an item.
-    const next = all[at + 1];
-    if (row && (table || (TABLE_ROW.test(next ?? '') && delimiter(cells(next))))) {
+    const next = all[at + 1]?.line ?? '';
+    if (row && (table || delimiter(next))) {
       close(); blank = false; run = null;
       if (table === null && !inSection() && !quiet()) group('table').count++;
       if (table === 'rows') { if (inSection()) found.push({ text: row.filter(Boolean).join(' | ') }); else if (!quiet()) group('table').n++; }
@@ -132,7 +169,7 @@ export function issueChecklist(text) {
     const list = LIST.exec(line);
     if (list) {
       const indent = list[1].length, body = list[2] ?? '', task = TASK.exec(body);
-      const empty = current?.label && !current.text.trim();
+      const empty = current?.label && !HAS_WORD.test(current.text);
       if (task) { close(); current = { indent, text: task[1] }; }
       else if (current && !empty && indent > current.indent) join('; ', body);
       else {
@@ -142,21 +179,25 @@ export function issueChecklist(text) {
       }
       blank = false; continue;
     }
+    // A line of other text continues the current item right after it, when indented, or as the text of an empty label.
+    const continues = !!current && (!blank || indentOf(line) >= current.indent + 2 || (current.label && !HAS_WORD.test(current.text)));
+    if (!quoted && !continues && all[at + 1] && !all[at + 1].quoted && SETEXT.test(next)) { startHeading(next.trim()[0] === '=' ? 1 : 2, line.trim()); at++; continue; }
     const labelText = labelLine(line);
     if (labelText !== null) { close(); label = true; run = null; context = false; current = { indent: indentOf(line), text: labelText, label: true }; blank = false; continue; }
     if (contextLine(line)) { close(); label = false; run = null; context = true; blank = false; continue; }
     if (run !== null && blank && indentOf(line) < run + 2) run = null;
     if (context && blank && indentOf(line) < 2) context = false;
-    if (current && (!blank || indentOf(line) >= current.indent + 2)) join(' ', line.trim());
-    else { close(); label = false; }
+    if (continues) join(' ', line.trim());
+    else { close(); label = false; if (heading !== null) prose.push(line.trim()); }
     blank = false;
   }
   close();
+  endSection();
   const items = [], seen = new Set();
   for (const entry of found) {
     let item = entry.text.replace(/\s+/g, ' ').trim();
     if (entry.label) item = item.replace(/^[*_\s]+|[*_\s]+$/g, '');
-    item = cut(item, MAX_CHARS).trimEnd();
+    item = clip(item, MAX_CHARS);
     if (!HAS_WORD.test(item)) continue;
     const form = sameForm(item);
     if (seen.has(form)) continue;
@@ -168,7 +209,7 @@ export function issueChecklist(text) {
   if (items.length > MAX_ITEMS) {
     const more = items.length - MAX_ITEMS, tail = `; and ${more} more item${more === 1 ? '' : 's'} in the issue; the reviewer checks them`;
     items.length = MAX_ITEMS;
-    items[MAX_ITEMS - 1] = cut(items[MAX_ITEMS - 1], MAX_CHARS - [...tail].length).trimEnd() + tail;
+    items[MAX_ITEMS - 1] = clip(items[MAX_ITEMS - 1], MAX_CHARS - [...tail].length) + tail;
   }
   return items.map((item, i) => ({ id: `C${i + 1}`, text: item }));
 }
@@ -185,7 +226,7 @@ In the PR body, write one "Checklist:" section with one line for each item, in t
 Checklist:
 - C1: EVIDENCE
 - C2: excluded: "QUOTE"
-EVIDENCE is the test (its file and name), the check (its command and result) or the file that shows that the item is done. QUOTE is an exact quote from the issue text, at least 3 words, that allows leaving the item out. Autopilot checks this section: an item with no line or no evidence is red, and an exclusion whose quote is not in the issue text is red. A fresh reviewer checks that the evidence is real and that each quote allows its exclusion.`;
+EVIDENCE is the test (its file and name), the check (its command and result) or the file that shows that the item is done. A line that defers the item or says that it is not done ("later", "follow-up", "not done") is no evidence. QUOTE is an exact quote from the issue text, at least 3 whole words and not the item's own text, that allows leaving the item out. Autopilot checks this section: an item with no line or no evidence is red, and an exclusion whose quote is not in the issue text is red. A fresh reviewer checks that the evidence is real and that each quote allows its exclusion.`;
 }
 
 export function checklistReview(items) {
@@ -196,27 +237,24 @@ ${itemLines(list)}
 For each item, check its line in the PR body's "Checklist:" section against the diff. An item needs real evidence (a test that checks it, a check with its result, or a file that does it) or an exclusion whose exact quote from the issue text really allows leaving the item out. An item with no real evidence and no supported exclusion is a P2 must-fix that names the item, for example "P2 checklist C3: no test checks ...".`;
 }
 
-// The PR body's Checklist: section: its lines (with their continuations), or null when there is none.
+// The lines of every Checklist: section of the PR body, in body order (with their continuations), or null when there is none.
 function prSection(body) {
   const out = [];
-  let block = null, started = false, entry = null;
+  let block = null, open = false, any = false, entry = null;
   for (const line of lines(body)) {
-    if (!started) {
-      if (block) { if (blockEnd(block, line)) block = null; continue; }
-      const opened = blockStart(line);
-      if (opened) { if (!opened.closed) block = opened; continue; }
-      started = START.test(line.trim().replace(/^#{1,6}(?:\s+|$)/, '').replace(/[*_]/g, '').trim());
-      continue;
-    }
-    if (!line.trim()) continue;
-    if (blockStart(line) || HEADING.test(line)) break;
+    if (block) { if (blockEnd(block, line)) block = null; continue; }
+    const opened = blockStart(line);
+    if (opened) { open = false; if (!opened.closed) block = opened; continue; }
+    if (START.test(line.trim().replace(/^#{1,6}(?:\s+|$)/, '').replace(/[*_]/g, '').trim())) { open = true; any = true; entry = null; continue; }
+    if (!open || !line.trim()) continue;
+    if (headingOf(line)) { open = false; continue; }
     const indent = indentOf(line);
     if (entry && indent >= entry.indent + 2) { entry.text += ` ${line.trim()}`; continue; }
-    if (!PR_LIST.test(line) && !ID_LINE.test(line)) break;
+    if (!PR_LIST.test(line) && !ID_LINE.test(line)) { open = false; continue; }
     entry = { text: line.trim(), indent };
     out.push(entry);
   }
-  return started ? out : null;
+  return any ? out : null;
 }
 
 const findWords = (hay, needle) => {
@@ -265,24 +303,34 @@ function matchLine(text, forms) {
   return null;
 }
 
-function lineState(rest, open, issueForm) {
-  const plain = rest.replace(/^[\s*_]+/, '');
-  const excluded = /^excluded(?![\p{L}\p{N}])/iu.exec(plain);
-  if (excluded) {
-    const after = plain.slice(excluded[0].length), start = after.search(/["“]/);
+// The quote is in the readable issue text at whole words: it does not start or end inside a word.
+function wholeIn(hay, needle) {
+  for (let at = hay.indexOf(needle); needle && at >= 0; at = hay.indexOf(needle, at + 1)) {
+    const before = hay[at - 1] ?? '', after = hay[at + needle.length] ?? '';
+    if ((!wordChar(needle[0]) || !wordChar(before)) && (!wordChar(needle.at(-1)) || !wordChar(after))) return true;
+  }
+  return false;
+}
+
+function lineState(rest, open, issueForm, own) {
+  const plain = rest.replace(/^[\s*_~([]+/, '');
+  const exclusion = EXCLUSION.exec(plain);
+  if (exclusion) {
+    const after = plain.slice(exclusion[0].length), start = after.search(/["“]/);
     const end = Math.max(after.lastIndexOf('"'), after.lastIndexOf('”'));
     const quote = start >= 0 && end > start ? after.slice(start + 1, end).trim() : '';
     const form = quoteForm(quote);
-    return { state: words(form).length >= MIN_QUOTE_WORDS && issueForm.includes(form) ? 'excluded' : 'unsupported', quote };
+    const ok = words(form).length >= MIN_QUOTE_WORDS && wholeIn(issueForm, form) && !quoteForm(own).includes(form);
+    return { state: ok ? 'excluded' : 'unsupported', quote };
   }
-  if (open || !HAS_WORD.test(plain) || NO_EVIDENCE.test(plain)) return { state: 'missing', quote: null };
+  if (open || !HAS_WORD.test(plain) || NOT_DONE.test(plain) || BARE.test(plain)) return { state: 'missing', quote: null };
   return { state: 'covered', quote: null };
 }
 
 function redText(row) {
   if (row.state === 'missing') return `Checklist item ${row.id} has no evidence line in the PR body's "Checklist:" section: "${row.text}". Add "${row.id}: EVIDENCE" (the test, check or file that shows that it is done) or "${row.id}: excluded: "QUOTE"" with an exact quote from the issue text.`;
-  const quote = row.quote ? `"${cut(row.quote, MAX_QUOTE)}"` : '(no quote)';
-  return `Checklist item ${row.id} is excluded without an exact quote of at least 3 words from the issue text: ${quote}. Quote the issue text exactly, or give the evidence for "${row.text}".`;
+  const quote = row.quote ? `"${clip(row.quote, MAX_QUOTE)}"` : '(no quote)';
+  return `Checklist item ${row.id} is excluded without an exact quote of at least 3 whole words from the issue text (not from the item itself, a code block or a comment): ${quote}. Quote the issue text exactly, or give the evidence for "${row.text}".`;
 }
 
 export function checkChecklist(prBody, items, issueText) {
@@ -291,13 +339,12 @@ export function checkChecklist(prBody, items, issueText) {
   const counts = { total: rows.length, covered: 0, excluded: 0, missing: 0, unsupported: 0 };
   if (!rows.length) return { state: 'none', items: rows, counts, reds: [] };
   const forms = rows.map(row => { const form = lowerWords(row.text); return { words: form, text: form.join(' '), same: sameForm(row.text) }; });
-  const issueForm = quoteForm(str(issueText));
+  const issueForm = quoteForm(readable(str(issueText)));
   for (const entry of prSection(str(prBody)) ?? []) {
     const hit = matchLine(entry.text, forms);
     if (!hit) continue;
-    const { state, quote } = lineState(hit.rest, hit.open, issueForm);
     for (const i of hit.indexes) {
-      const row = rows[i];
+      const row = rows[i], { state, quote } = lineState(hit.rest, hit.open, issueForm, row.text);
       if (row.line === null || RANK[state] > RANK[row.state]) Object.assign(row, { state, line: entry.text, quote });
     }
   }
