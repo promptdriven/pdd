@@ -392,3 +392,37 @@ test('M12 launchd: start writes StartInterval 600 and only start calls launchctl
   assert.deepEqual(calls.filter(([p, c]) => p === 'timer' && ['launchctl', 'systemctl'].includes(c)), []);
   assert.equal(phase.herdr, false);
 });
+
+// The core tick's issue list (queryIssues): a list of two pages is read in full, then only the issues changed since
+// that read, until 6 hours pass. A closed issue leaves the cached list.
+test('M13 the core tick reads only changed issues between full reads of a two-page list', async t => {
+  const { tickAutopilot } = await import('../src/autopilot-launcher.mjs');
+  const w = await coreWorld(t);
+  writeFileSync(join(w.cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', trust: [], testCommand: 'npm test', label: 'pdd:autopilot' } }));
+  for (let n = 1; n <= 120; n++) w.issue(n);
+  const cwd = w.git(w.cwd, 'rev-parse', '--show-toplevel'), stateRoot = join(w.dir, 'state');
+  const stateFile = join(stateRoot, `${createHash('sha256').update(cwd).digest('hex').slice(0, 20)}.json`);
+  mkdirSync(stateRoot, { recursive: true });
+  writeFileSync(stateFile, JSON.stringify({ enabled: true, cwd, repo: 'acme/widgets', defaultBranch: 'main', coordinatorId: 'coord-a', machine: 'machine-a', engine: 'core',
+    label: 'pdd:autopilot', retiredFull: { done: 1 }, agent: { id: 'codex', kind: 'codex', command: 'codex' }, packageRoot: join(w.dir, 'pkg') }));
+  const lists = [];
+  const ports = { stateRoot, now: w.now, env: { HOME: process.env.HOME, PATH: process.env.PATH }, timer: async () => true, warn: () => {},
+    run: async (command, args, options = {}) => {
+      if (command === 'gh') { const endpoint = args.find(arg => /^repos\/acme\/widgets\/issues\?/.test(String(arg))); if (endpoint) lists.push(endpoint); return w.gh(args, options); }
+      if (command !== 'git') assert.fail(`unexpected program ${command}`);
+      const r = spawnSync('git', args, { cwd: options.cwd ?? cwd, encoding: 'utf8' }); return { code: r.status, stdout: r.stdout, stderr: r.stderr };
+    },
+    corePorts: { jobs: w.jobs, checkBase: async () => ({ exitCode: 0, message: 'ok' }), agentReady: async () => true } };
+  await tickAutopilot(stateFile, ports);
+  assert.ok(lists.some(e => e.includes('state=open')) && lists.some(e => e.includes('page=2')), 'the first tick reads the full two-page list');
+  assert.equal(JSON.parse(readFileSync(stateFile, 'utf8')).cachedIssues.length, 120);
+  lists.length = 0; w.advance(10 * 60 * 1000);
+  w.github.close(7); w.issue(121);
+  await tickAutopilot(stateFile, ports);
+  assert.ok(lists.length && lists.every(e => e.includes('state=all') && e.includes('&since=')), `between full reads only changed issues are read: ${lists.join(' ')}`);
+  const cached = JSON.parse(readFileSync(stateFile, 'utf8')).cachedIssues.map(row => row.number);
+  assert.ok(!cached.includes(7) && cached.includes(121), 'the closed issue left the list; the new one came in');
+  lists.length = 0; w.advance(6 * 60 * 60 * 1000);
+  await tickAutopilot(stateFile, ports);
+  assert.ok(lists.some(e => e.includes('state=open')), 'after 6 hours the whole open list is read again');
+});
