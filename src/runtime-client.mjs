@@ -2766,7 +2766,8 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
           const { found, normalized } = localSetup(cwd, words), selected = select(found, normalized, root);
           promptPaths = ports.captureSource(root, { tests: selected.filter(test => !test.error).map(test => test.path), appMap: null }).files.map(file => file.path).filter(path => path.endsWith('.prompt.md'));
         }
-        const problems = interfaceFindings({root,paths:promptPaths}).filter(localInterfaceProblem);
+        // Interface findings refuse only a repository-wide local lint; a selected one gives advice only.
+        const problems = words.length ? [] : interfaceFindings({root,paths:promptPaths}).filter(localInterfaceProblem);
         const advice = formatAdvice(root, new Set(gitFiles(root)), promptPaths ?? files.filter(path => path.endsWith('.prompt.md')), workspace);
         const warnings = [...advice, ...lintSvgLayouts({ root, files, promptPaths })], summary = `partial: checked SVG layout only; prompts not checked (local-only). ${warnings.length} warnings. 0 AI calls. No checks were sent.`;
         line(ports.stdout, context.json ? JSON.stringify({ repo: root, exit_code: problems.length ? 4 : 0, state: problems.length ? 'refused' : 'partial', lint_state: 'partial', ...resultOutcome({state:'partial',note:{code:'local-only',message:'checked SVG layout only; prompts not checked'}}), rows: [], problems, warnings, summary_line: summary }) : [...problems.map(item => `${item.code}: ${item.message}`), ...warnings, summary].join('\n'));
