@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-checklist.prompt.md (sha256: a8bc7462bfd3c5d507b43624081af855b559f4745650c5131dfb49de9504c802).
+// Generated from prompts/cli/autopilot-checklist.prompt.md (sha256: dc8be89c0b9405a8b43517c190d485f88c0a289716772c069f4c7c893544ec58).
 
 const MAX_ITEMS = 30, MAX_CHARS = 300, MAX_QUOTE = 200, PREFIX_WORDS = 8, MIN_QUOTE_WORDS = 3;
 const WORD = /[\p{L}\p{N}]+/gu, HAS_WORD = /[\p{L}\p{N}]/u;
@@ -59,10 +59,24 @@ function labelLine(line) {
   return text.length <= 60 && /^(\*\*|__).*\1$/.test(text) ? '' : null;
 }
 
+// A summary item for the lists or tables of one kind under one heading, outside the checklist sections.
+function summaryText({ heading, kind, count, n }) {
+  const [one, many, part, parts] = kind === 'table' ? ['table', 'tables', 'row', 'rows'] : ['list', 'lists', 'item', 'items'];
+  const where = heading === null ? 'before its first heading' : `under "${heading}"`;
+  return `The issue's other ${count > 1 ? `${count} ${many}` : one} ${where} (${n} ${n === 1 ? part : parts}): each ${part} done, or left out with a reason`;
+}
+
 export function issueChecklist(text) {
-  const found = [];
+  const found = [], groups = new Map();
   let current = null, heading = null, label = false, blank = true, block = null, table = null;
+  let title = null, headings = 0, run = null;
   const close = () => { if (current) found.push(current); current = null; };
+  const inSection = () => heading !== null || label;
+  const group = kind => {
+    const key = `${headings}|${kind}`;
+    if (!groups.has(key)) groups.set(key, { heading: title, kind, count: 0, n: 0 });
+    return groups.get(key);
+  };
   const join = (separator, part) => {
     if (!part.trim()) return;
     current.text = current.text.trim() ? `${current.text}${separator}${part}` : part;
@@ -77,7 +91,8 @@ export function issueChecklist(text) {
     if (!line.trim()) { blank = true; continue; }
     const head = HEADING.exec(line);
     if (head) {
-      close(); label = false; blank = false;
+      close(); label = false; blank = false; run = null;
+      headings++; title = cut((head[2] ?? '').replace(/\s+/g, ' ').trim(), 120);
       const level = head[1].length;
       if (heading !== null && level <= heading) heading = null;
       if (heading === null && afterLabel(head[2] ?? '') !== null) heading = level;
@@ -86,8 +101,9 @@ export function issueChecklist(text) {
     // A table: a header row, a delimiter row, then data rows. In a section each data row is an item.
     const next = all[at + 1];
     if (row && (table || (TABLE_ROW.test(next ?? '') && delimiter(cells(next))))) {
-      close(); blank = false;
-      if (table === 'rows' && (heading !== null || label)) found.push({ text: row.filter(Boolean).join(' | ') });
+      close(); blank = false; run = null;
+      if (table === null && !inSection()) group('table').count++;
+      if (table === 'rows') { if (inSection()) found.push({ text: row.filter(Boolean).join(' | ') }); else group('table').n++; }
       table = table === null ? 'header' : 'rows';
       continue;
     }
@@ -97,11 +113,16 @@ export function issueChecklist(text) {
       const empty = current?.label && !current.text.trim();
       if (task) { close(); current = { indent, text: task[1] }; }
       else if (current && !empty && indent > current.indent) join('; ', body);
-      else { close(); if (heading !== null || label) current = { indent, text: body }; }
+      else {
+        close();
+        if (inSection()) current = { indent, text: body };
+        else if (run === null || indent <= run) { const g = group('list'); if (run === null) g.count++; g.n++; run = indent; }
+      }
       blank = false; continue;
     }
     const labelText = labelLine(line);
-    if (labelText !== null) { close(); label = true; current = { indent: indentOf(line), text: labelText, label: true }; blank = false; continue; }
+    if (labelText !== null) { close(); label = true; run = null; current = { indent: indentOf(line), text: labelText, label: true }; blank = false; continue; }
+    if (run !== null && blank && indentOf(line) < run + 2) run = null;
     if (current && (!blank || indentOf(line) >= current.indent + 2)) join(' ', line.trim());
     else { close(); label = false; }
     blank = false;
@@ -116,10 +137,16 @@ export function issueChecklist(text) {
     const form = lowerWords(item).join(' ');
     if (seen.has(form)) continue;
     seen.add(form);
-    items.push({ id: `C${items.length + 1}`, text: item });
-    if (items.length === MAX_ITEMS) break;
+    items.push(item);
   }
-  return items;
+  for (const g of groups.values()) if (g.n) items.push(summaryText(g));
+  // Never cut silently: the 30th item says how many items the cut leaves out.
+  if (items.length > MAX_ITEMS) {
+    const more = items.length - MAX_ITEMS, tail = `; and ${more} more item${more === 1 ? '' : 's'} in the issue; the reviewer checks them`;
+    items.length = MAX_ITEMS;
+    items[MAX_ITEMS - 1] = cut(items[MAX_ITEMS - 1], MAX_CHARS - [...tail].length).trimEnd() + tail;
+  }
+  return items.map((item, i) => ({ id: `C${i + 1}`, text: item }));
 }
 
 const listOf = items => Array.isArray(items) ? items : [];

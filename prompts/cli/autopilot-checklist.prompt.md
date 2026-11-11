@@ -16,7 +16,9 @@ exclusion, is the fresh reviewer's work (Serhan agreed that this may make review
 
 The module is pure: no files, network, clock or processes. The core is the caller: at job start it
 saves the items in the job file, apart from the builder's scope, and it shows the texts and results.
-An issue with no checklist gives no text, no line and no new red.
+Nothing in the issue is lost silently: a list or a table outside the checklist sections gives one
+summary item, and a cut at the limit says how many items it left out. An issue with no checklist
+(no task item, no list and no table) gives no text, no line and no new red.
 
 ## Read the checklist from the issue
 
@@ -69,12 +71,35 @@ The reader reads the issue line by line (a tab counts as 4 spaces of indent).
     is not in a table is a line of other text.
   - A paragraph under a heading is not an item: a section's items are its list lines, its table
     rows and the text of a label line.
+- **Other lists and tables.** A list or a table outside the checklist sections gives one
+  **summary item** for each heading and kind (list or table). Why: the audit rows R0 to R64 of
+  pdd #2892 were under a heading that is not a label, and its first PR left one of them pending.
+  The summary item makes the PR say what it did with each row (release lead decision, Nov 11).
+  - A list here is a run of list lines outside the sections that are not task items (task items
+    are items already). The run's first line sets its indent; a list line more indented than that
+    is nested and does not count (a less indented one counts and sets the indent), and a list line
+    that joins a task item does not count. A run
+    ends at a heading, a table, a label line, or a line of other text after a blank line that is
+    not indented at least 2 spaces more than the run. A table here is a table outside the sections.
+  - N is the number of counted list lines, or of data rows, of that kind under that heading.
+    HEADING is the text of the nearest heading above (white space runs as one space, at most 120
+    characters). The text is
+    `The issue's other list under "HEADING" (N items): each item done, or left out with a reason`
+    or `The issue's other table under "HEADING" (N rows): each row done, or left out with a reason`.
+    When there are K lists (or tables) under one heading, `other list` becomes `other K lists`
+    (`other K tables`). One item or row is `(1 item)` or `(1 row)`. With no heading above,
+    `under "HEADING"` becomes `before its first heading`. When N is 0 (a table with no data row),
+    there is no summary item.
 - **Text.** Runs of white space become one space, and leading and trailing space go. A label line's
   item loses its leading `*` and `_` marks and its trailing ones. A text with more than 300
   characters keeps its first 300 characters (whole code points), then trailing space goes. A text
   with no letter or digit is no item.
-- **Dedup and limit.** Two items with the same match form are one item, at the place of the first.
-  After the dedup, the first 30 items count, and the rest go.
+- **Order, dedup and limit.** The items come in issue order, then the summary items in the order
+  of their first line. Two items with the same match form are one item, at the place of the
+  first; summary items are never merged. When there are more than 30 items after the dedup, the
+  first 29 stay, the 30th item stays with `; and N more items in the issue; the reviewer checks
+  them` at the end of its text (N is the number of items after it; one is `1 more item`), and the
+  rest go. Its own text is cut first, so that the whole text stays within 300 characters.
 
 The **match form** of a text is its words (runs of letters and digits, in lower case), joined by
 one space. Marks, punctuation and spacing do not change it.

@@ -62,7 +62,8 @@ test('#3249 case 2: the same PR with a quoted exclusion from the issue for the t
 });
 
 test('#3249 case 3: an issue with no checklist: no items, no brief, no line and no new red', () => {
-  const issue = '## Problem\nThe lane is slow.\n\n## Proposal\n- Read the PR\'s own labels.\n1. Then go on in the same tick.\n';
+  // No task item, no checklist section, no list and no table.
+  const issue = '## Problem\nThe lane is slow.\n\n## Proposal\nRead the PR\'s own labels, then go on in the same tick.\n';
   const items = issueChecklist(issue);
   assert.deepEqual(items, []);
   const check = checkChecklist(COVERS_TWO, items, issue);
@@ -89,40 +90,71 @@ test('an exclusion whose quote is not in the issue text is red, and so is one wi
   assert.equal(checkChecklist(withThird('- C3: Excluded — “The docs change can wait for the next”'), items, wrapped).items[2].state, 'excluded');
 });
 
-test('real ticket #3249: the three items of its Test section, not the bullets of its other sections', () => {
+// The summary item of the prompt for the lists or tables outside the checklist sections.
+const otherList = (where, n, k = 1) => `The issue's other ${k > 1 ? `${k} lists` : 'list'} ${where} (${n} ${n === 1 ? 'item' : 'items'}): each item done, or left out with a reason`;
+const otherTable = (where, n, k = 1) => `The issue's other ${k > 1 ? `${k} tables` : 'table'} ${where} (${n} ${n === 1 ? 'row' : 'rows'}): each row done, or left out with a reason`;
+
+test('real ticket #3249: the three items of its Test section, then one summary item each for its Evidence and Proposal lists', () => {
   assert.deepEqual(texts(issueChecklist(real[3249].body)), [
     'A fake issue with 3 checklist items, and a PR that covers 2. Expect a review must-fix that names the third item, and no merge.',
     'The same PR with a quoted exclusion from the issue for the third item. Expect a pass.',
     'An issue with no checklist. Expect no checklist line and no new red.',
+    otherList('under "Evidence (funnel audit, Nov 9 17:00 to Nov 11 17:00 UTC)"', 3),
+    otherList('under "Proposal"', 4),
   ]);
 });
 
-test('real ticket #3246: the three items of its Test section', () => {
+test('real ticket #3246: the three items of its Test section, then the summary items of its Problem, Evidence and Proposal lists', () => {
   assert.deepEqual(texts(issueChecklist(real[3246].body)), [
     'A fake GitHub whose label list is empty right after the write, while the PR\'s own labels show the lane. Expect the lane step to go on in the same tick.',
     'Two green PRs in the queue. After the first merges, expect the second to enter the lane in the same tick.',
     'Core factory timing: two queued green PRs merge in fewer ticks than today.',
+    otherList('under "Problem"', 3),
+    otherList('under "Evidence"', 3),
+    otherList('under "Proposal"', 2),
   ]);
 });
 
-test('real ticket #3260: the three items of its Test section; its numbered Proposal items are not checklist items', () => {
+test('real ticket #3260: the three items of its Test section; its 7 numbered Proposal items are one summary item (nested lines do not count)', () => {
   const items = issueChecklist(real[3260].body);
   assert.deepEqual(texts(items), [
     'A fake GitHub whose CI run stays queued: after 20 minutes the job is held with the service reason, one alert, no strike, and new intake stops. When a run starts, intake resumes.',
     'Rule B with no required check: the PR merges with the CI line in the note. With a required check: it waits.',
     'The setup workflow has the concurrency group, and a second push cancels the first run.',
+    otherList('under "Evidence (Nov 11)"', 3),
+    otherList('under "Proposal"', 7),
   ]);
-  assert.deepEqual(items.map(item => item.id), ['C1', 'C2', 'C3']);
+  assert.deepEqual(items.map(item => item.id), ['C1', 'C2', 'C3', 'C4', 'C5']);
 });
 
-test('real ticket #2892 (evidence): the two items of its Wanted section; its audit tables are under another heading, so they are not items', () => {
-  assert.deepEqual(texts(issueChecklist(real[2892].body)), [
+test('real ticket #2892 (evidence): the two Wanted items, one summary item per audit table with its row count (64 rows R1 to R64), and one for the Limits list', () => {
+  const items = issueChecklist(real[2892].body);
+  assert.deepEqual(texts(items), [
     'The guide describes what pdd does now: Gemini CLI works with any version that has the needed options, and pdd names the option that is missing. It describes only the current state (no "used to" or "no longer").',
     'No other text in `docs/`, `skills/`, the RUNBOOK or the README names one required Gemini CLI version.',
+    otherTable('under "Agents: Gemini CLI is a workflow agent, and the docs often leave it out"', 10),
+    otherTable('under "Skills and workflows: pdd has six skills and four bundled workflows"', 9),
+    otherTable('under "Node.js version"', 2),
+    otherTable('under "`pdd setup`"', 8),
+    otherTable('under "The PDD interpreter"', 4),
+    otherTable('under "Workflow runs, gates and PRs"', 17),
+    otherTable('under "`pdd test`, local files and uninstall"', 5),
+    otherTable('under "Other"', 6),
+    otherTable('under "Steps that do not ask for lines that pdd reads"', 3),
+    otherList('under "Limits for the fix"', 4),
   ]);
 });
 
-test('real ticket #3012 (evidence): the seven items of its Proposed outcome section, with the Pocket pilot; its other bullets are not items', () => {
+test('real ticket #2892 (evidence) with 40 more task items: 30 items, and the 30th says that 22 more are in the issue for the reviewer', () => {
+  // 2 Wanted items + 40 task items + 10 summary items = 52 items: 29 stay, the 30th keeps its text and names the other 22.
+  const extra = Array.from({ length: 40 }, (_, i) => `- [ ] extra item ${i + 1}`).join('\n');
+  const items = issueChecklist(`${real[2892].body}\n\n## Test\n${extra}\n`);
+  assert.equal(items.length, 30);
+  assert.equal(items[28].text, 'extra item 27');
+  assert.deepEqual(items[29], { id: 'C30', text: 'extra item 28; and 22 more items in the issue; the reviewer checks them' });
+});
+
+test('real ticket #3012 (evidence): the seven items of its Proposed outcome section, with the Pocket pilot, then one summary item for its other list', () => {
   const items = texts(issueChecklist(real[3012].body));
   assert.deepEqual(items, [
     'During setup or explicit verification setup, inspect the repository for its supported start command, usable-ready signal, existing test driver, data/auth requirements, observable outputs, isolation and cleanup.',
@@ -132,6 +164,7 @@ test('real ticket #3012 (evidence): the seven items of its Proposed outcome sect
     'Independent verification consumes the actual artifact and evidence. Required behavior that was not exercised remains unproved. Use Runtime when applicable and available; native proof must execute the native behavior it claims to prove.',
     'Update verification instructions when the app changes without weakening a user journey to hide a product regression. A recurrence records the actual failing case and checks the installed build before another proposed fix.',
     'Pilot in PDD and Pocket, then a fresh small CRM repository. Include restart and isolated parallel execution so this does not depend on Serhan\'s local setup.',
+    otherList('under "Additional main-session use case: compile success is not native scenario acceptance"', 5),
   ]);
 });
 
@@ -165,6 +198,8 @@ test('the reader: Wanted and Proposed outcome sections, one item per table data 
     '2 | Keep `a | b` in one cell',
     'Wanted bullet after the table',
     'The lane names its holder',
+    otherList('under "Proposal"', 1),
+    otherTable('under "Notes"', 1),
   ]);
 });
 
@@ -226,17 +261,27 @@ test('the reader: task items anywhere, section list items, label lines, nesting,
     'the inline expected result right below the label line.',
     'Done item one',
     'Test item',
+    // The bullets outside the checklist sections: one summary item per heading (two lists under Notes).
+    otherList('before its first heading', 1),
+    otherList('under "Notes"', 2, 2),
+    otherList('under "Testability"', 1),
   ]);
   // A label line needs a colon within 3 words, only marks, or a short bold line: prose that starts with a label is not one.
   assert.deepEqual(texts(issueChecklist('Expected results come from the issue.\n- not an item\n\n**Expected behavior**\n- the lane step goes on\n\n**Done when:** the note shows the wait.\n')),
-    ['the lane step goes on', 'the note shows the wait.']);
+    ['the lane step goes on', 'the note shows the wait.', otherList('before its first heading', 1)]);
 });
 
-test('the reader keeps at most 30 items of at most 300 characters (whole code points)', () => {
-  const many = Array.from({ length: 35 }, (_, i) => `- [ ] item ${i + 1}`).join('\n');
-  const items = issueChecklist(many);
+test('the reader keeps at most 30 items of at most 300 characters, and the 30th says how many more there are', () => {
+  const tasks = n => Array.from({ length: n }, (_, i) => `- [ ] item ${i + 1}`).join('\n');
+  const items = issueChecklist(tasks(35));
   assert.equal(items.length, 30);
-  assert.deepEqual(items.at(-1), { id: 'C30', text: 'item 30' });
+  assert.deepEqual(items.at(-1), { id: 'C30', text: 'item 30; and 5 more items in the issue; the reviewer checks them' });
+  assert.equal(issueChecklist(tasks(31)).at(-1).text, 'item 30; and 1 more item in the issue; the reviewer checks them');
+  assert.equal(issueChecklist(tasks(30)).at(-1).text, 'item 30');
+  // A long 30th item is cut first, so that the note stays and the whole text has at most 300 characters.
+  const tail = '; and 1 more item in the issue; the reviewer checks them';
+  const longThirtieth = issueChecklist(`${tasks(29)}\n- [ ] ${'b'.repeat(400)}\n- [ ] item 31`).at(-1).text;
+  assert.equal(longThirtieth, `${'b'.repeat(300 - tail.length)}${tail}`);
   const long = issueChecklist(`## Test\n- x${'😀'.repeat(400)}\n- ${'word '.repeat(100)}`);
   assert.equal([...long[0].text].length, 300);
   assert.equal(long[0].text, `x${'😀'.repeat(299)}`);
