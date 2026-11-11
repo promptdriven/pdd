@@ -2553,3 +2553,25 @@ test('start --engine core --label saves the machine engine and label, opens no H
   assert.equal(f.state().engine, 'full', back.message);
   assert.equal((await f.invoke('start', { engine: 'turbo' })).exitCode, 2);
 });
+
+test('0.1.28 the full engine is deprecated: one notice in the tick log that never repeats, and the --engine full line', async t => {
+  const { FULL_ENGINE_NOTICE, FULL_ENGINE_DEPRECATED } = await import('../src/autopilot-launcher.mjs');
+  assert.match(FULL_ENGINE_NOTICE, /deprecated and is removed in 0\.1\.29/); assert.match(FULL_ENGINE_NOTICE, /pdd autopilot stop && pdd autopilot start --engine core/);
+  const f = await fixture(t), notices = [];
+  f.ports.notice = text => notices.push(text);
+  const started = await f.invoke('start');
+  assert.equal(started.exitCode, 0, started.message); assert.doesNotMatch(started.message, /deprecated/);
+  // The tick logs it once, saves the time, and never repeats it.
+  await f.tick().catch(() => {});
+  assert.deepEqual(notices, [`Autopilot (owner/repo): ${FULL_ENGINE_NOTICE}`]);
+  assert.equal(f.state().fullEngineNoticeAt, f.time);
+  f.time += 30 * 60000; await f.tick().catch(() => {});
+  assert.equal(notices.length, 1, 'never repeated');
+  // --engine full prints the deprecation line and the notice first; the core engine prints neither.
+  const full = await f.invoke('start', { engine: 'full' });
+  assert.ok(full.message.startsWith(`${FULL_ENGINE_DEPRECATED} ${FULL_ENGINE_NOTICE}\n`), full.message);
+  const core = await f.invoke('start', { engine: 'core' });
+  assert.equal(core.exitCode, 0, core.message); assert.doesNotMatch(core.message, /deprecated/);
+  await f.tick().catch(() => {});
+  assert.equal(notices.length, 1, 'a core tick sends no notice');
+});
