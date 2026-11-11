@@ -9,7 +9,7 @@ import { configureCheckCapacity, releaseCheckCapacity, readCheckStatus, readSuit
 import { readCodexLimits } from './codex-limits.mjs';
 import { cleanupWorktrees } from './autopilot-cleanup.mjs';
 import { environmentRecovery, environmentWakeTag, environmentHealthy, machineHealth, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 9e13148186c4c3b4219de0b5a75dba9208fd85cce58816c68f0c9c63a128a539).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 0f19dfb8dcd898eed0c130d18ec8b458cf47ea3dfded6c06b9f2701c2ca689c2).
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, chmodSync, openSync, closeSync, fchmodSync, fstatSync, constants, watch, realpathSync } from 'node:fs';
@@ -36,7 +36,7 @@ import { armSavedWorkerCompletion } from './workflow-worker-completion.mjs';
 import { samePath } from './workflow-herdr-layout.mjs';
 import { tomlString } from './toml-string.mjs';
 import { alertStatusLine, runAutopilotAlerts } from './autopilot-alerts.mjs';
-import { countGithubCalls, githubBudget, githubBudgetSettings, githubEtagCache, githubFloorGuard, githubFullLastPage, githubLedger, githubMachineEntries, githubReply, githubStateRoot, githubStatusLine, githubUsage } from './github-calls.mjs';
+import { countGithubCalls, githubBudget, githubBudgetSettings, githubEtagCache, githubFloorGuard, githubFullLastPage, githubLedger, githubListArgs, githubListItems, githubMachineEntries, githubReply, githubStateRoot, githubStatusLine, githubUsage } from './github-calls.mjs';
 import { lookupRepositoryParent, githubOriginRepository } from './workflow-worktree.mjs';
 import { costReport, costStatusLines } from './cost-ledger.mjs';
 
@@ -440,10 +440,9 @@ function parkingPorts(state, p, {localOnly = false} = {}) {
         // A closed issue alone is not proof of a merge.
         const issue = await p.execute('gh', ['api', `repos/${state.repo}/issues/${blocker.until}`], {purpose: 'dependencies'});
         if (issue.code !== 0 || JSON.parse(issue.stdout).state !== 'closed') return false;
-        const result = await p.execute('gh', ['api', `repos/${state.repo}/issues/${blocker.until}/timeline?per_page=100`, '--paginate', '--slurp'], {purpose: 'dependencies'});
+        const result = await p.execute('gh', ['api', `repos/${state.repo}/issues/${blocker.until}/timeline?per_page=100`, ...githubListArgs()], {purpose: 'dependencies'});
         if (result.code !== 0) return false;
-        const pages = JSON.parse(result.stdout);
-        for (const event of pages.flat()) {
+        for (const event of githubListItems(result.stdout)) {
           const pull = event.source?.issue;
           if (event.event !== 'cross-referenced' || !pull?.pull_request?.url || !pull.pull_request.url.startsWith(`https://api.github.com/repos/${state.repo}/pulls/`)) continue;
           const reply = await p.execute('gh', ['api', pull.pull_request.url], {purpose: 'dependencies'});
@@ -2488,7 +2487,8 @@ export async function runAutopilotLauncher(input, ports = {}) {
       const found = await resolveRun(issues[0], { cwd: input.cwd }, { ...ports, env: p.env, execFile: async (file, args, options) => ({ stdout: await p.checked(file, args, options) }) });
       if (found.error) return bad(found.error);
       state.repo = found.run.repo;
-      return checkAutopilotBase({ run: found.run, pr: issues[1] }, { execFile: async (file, args, options) => ({ stdout: await p.checked(file, args, options) }) });
+      // The full reply ({code, stdout, stderr}), so a refused read names the tool's own error.
+      return checkAutopilotBase({ run: found.run, pr: issues[1] }, { execFile: (file, args, options) => p.execute(file, args, options) });
     }
     if (command === 'status' && input.json) {
       const folder = stateFolder(ports, p.env), routeQuestions = [], auditHolds = [];

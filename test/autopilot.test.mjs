@@ -160,8 +160,9 @@ test('autopilot-author: actual GitHub adapter uses only people with write access
     calls.push([file, args]);
     if (file === 'git') return { stdout: cwd };
     if (args[0] === 'repo') return { stdout: JSON.stringify({ nameWithOwner: 'Org/repo', owner: { login: 'Org' } }) };
-    assert.deepEqual(args, ['api', 'repos/Org/repo/collaborators', '--paginate', '--slurp']);
-    return { stdout: JSON.stringify([[{ login: 'Bo', permissions: { push: true } }, { login: 'ReadOnly', permissions: { pull: true } }], [{ login: 'TeamWriter', permissions: { push: true } }]]) };
+    // Every page with no --slurp (gh 2.45 has none): one person per line.
+    assert.deepEqual(args, ['api', 'repos/Org/repo/collaborators', '--paginate', '--jq', '.[] | {login, permissions} | tojson']);
+    return { stdout: [{ login: 'Bo', permissions: { push: true } }, { login: 'ReadOnly', permissions: { pull: true } }, { login: 'TeamWriter', permissions: { push: true } }].map(row => `${JSON.stringify(row)}\n`).join('') };
   };
   for (const [author, trusted] of [['bO', true], ['teamwriter', true], ['ReadOnly', false], ['Eve', false]]) {
     const result = await runAutopilot({ action: 'isTrusted', author }, { cwd, execFile });

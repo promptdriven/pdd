@@ -32,6 +32,8 @@ coordinator and worker chats make themselves are not counted.
 | `githubEtagCache({root, repository, fs, now})` | `{file, get(endpoint), set(endpoint, entry), save()}` |
 | `githubFloorGuard({floor, entries, now})` | `{floor, observe(reply), blocked(resource), stopped}`: see [Floor guard](#floor-guard) |
 | `githubFullLastPage(endpoint, items, next)` | True for a [full last page](#full-last-page): never read it with its ETag |
+| `githubListArgs(pick = '.')` | `['--paginate', '--jq', '.[] \| PICK \| tojson']`: every page of a list endpoint, one item per line, with no `--slurp` (gh before 2.48 has no `--slurp`, and Ubuntu ships gh 2.45) |
+| `githubListItems(stdout)` | The items of such a reply: each nonblank line parsed as JSON; a line that is a whole JSON list gives its items. Invalid JSON throws |
 
 `fs` is the injected file port (native `node:fs`). `now` is a clock in
 milliseconds (native `Date.now`).
