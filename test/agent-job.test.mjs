@@ -83,6 +83,22 @@ test('stop ends the whole job process group and the wrapper records the signal',
   assert.equal(stopAgentJob(job), false);
 });
 
+// CHAOS-B2: a hung `npm ci` under `sh` took the first SIGTERM as "stop gracefully" and lived on as an orphan.
+test('stop ends the whole process group after the grace time: a grandchild that traps the first SIGTERM does not survive', async t => {
+  const dir = folder(t), mark = join(dir, 'grandchild.pid');
+  const grandchild = `require('fs').writeFileSync(${JSON.stringify(mark)}, String(process.pid)); let n = 0; process.on('SIGTERM', () => { if (++n > 1) process.exit(0); }); setInterval(() => {}, 1000);`;
+  const job = startAgentJob({ id: '20-suite-1', dir, cwd: dir, command: '/bin/sh', args: ['-c', `${JSON.stringify(process.execPath)} -e ${JSON.stringify(grandchild)} & wait`],
+    input: '', env: { PATH: process.env.PATH } });
+  const pid = Number(await until(() => existsSync(mark) && readFileSync(mark, 'utf8')));
+  t.after(() => { try { process.kill(pid, 'SIGKILL'); } catch {} });
+  assert.equal(stopAgentJob(job), true);
+  const groupAlive = () => { try { process.kill(-job.pid, 0); return true; } catch (error) { return error.code !== 'ESRCH'; } };
+  await until(() => !groupAlive(), 8000);
+  assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' }, 'the grandchild is gone');
+  const done = readAgentJob(job);
+  assert.equal(done.state, 'exited'); assert.ok(done.exit.signal || done.exit.code !== 0, JSON.stringify(done.exit));
+});
+
 test('agentJobCpu sums the tree under the wrapper by parent pid, without the wrapper and the agent CLI', () => {
   const table = [
     '  100     1      0:01.00',     // the wrapper (job pid)

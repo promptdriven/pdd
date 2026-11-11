@@ -1,10 +1,10 @@
-// Generated from prompts/cli/agent-job.prompt.md (sha256: 9b64f03ba1c729087c35f09abcae80b7dfd5bbb2fc223cd9dd2fecd76c863189).
+// Generated from prompts/cli/agent-job.prompt.md (sha256: c3c33a08a0df9a057180b6363096228e8a9ea59d557c6da6a6b87f529b3053e4).
 import { spawn, spawnSync } from 'node:child_process';
 import { closeSync, openSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const self = fileURLToPath(import.meta.url);
+const self = fileURLToPath(import.meta.url), GRACE_MS = 2000;
 const SESSION_KEYS = /^(?:CLAUDECODE$|CLAUDE_CODE_|CLAUDE_PID$|CODEX_THREAD_ID$|CODEX_SANDBOX|HERDR_|PDD_AGENT_SESSION$|PDD_AUTOPILOT_CONTEXT$)/;
 const readJson = file => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch (error) { if (error.code === 'ENOENT') return undefined; return 'invalid'; } };
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -88,20 +88,24 @@ export function stopAgentJob(job, ports = {}) {
 function wrap(specFile) {
   const spec = JSON.parse(readFileSync(specFile, 'utf8'));
   const stdin = openSync(spec.input, 'r'), out = openSync(spec.log, 'a', 0o600);
-  let finished = false, child;
-  const finish = (code, signal) => {
+  let finished = false, stopping = null, ended = null, child;
+  const finish = (code, signal, group = false) => {
     if (finished) return; finished = true;
     try { writeAtomic(spec.exit, JSON.stringify({ code, signal: signal ?? null, at: Date.now() })); } finally { closeSync(stdin); closeSync(out); }
+    // A stop ends the whole group (this wrapper leads it): no process that waits after the first SIGTERM survives.
+    if (group) try { process.kill(-process.pid, 'SIGKILL'); } catch { /* Only this wrapper is left. */ }
     process.exit(0);
   };
   for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(signal, () => {
-    try { child?.kill('SIGTERM'); } catch { /* The child may already be gone. */ }
-    setTimeout(() => { try { child?.kill('SIGKILL'); } catch {} finish(null, signal); }, 2000).unref();
+    if (stopping) return; stopping = signal;
+    try { process.kill(-process.pid, 'SIGTERM'); } catch { try { child?.kill('SIGTERM'); } catch { /* The child may already be gone. */ } }
+    // A kept timer: the wrapper waits the grace time also when its direct child exits at once (sh does).
+    setTimeout(() => finish(ended?.code ?? null, ended?.signal ?? signal, true), GRACE_MS);
   });
   try { child = spawn(spec.command, spec.args, { cwd: spec.cwd, env: process.env, stdio: [stdin, out, out] }); }
   catch (error) { writeFileSync(out, `agent-job: ${error.message}\n`); finish(127, null); return; }
   child.on('error', error => { try { writeFileSync(out, `agent-job: ${error.message}\n`); } catch {} finish(127, null); });
-  child.on('exit', (code, signal) => finish(code, signal));
+  child.on('exit', (code, signal) => { if (stopping) ended = { code, signal }; else finish(code, signal); });
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === self && process.argv[2] === '--wrapper') wrap(process.argv[3]);

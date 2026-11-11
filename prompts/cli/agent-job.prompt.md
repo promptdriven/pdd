@@ -44,7 +44,13 @@ record is simply dead. There is no "uncertain custody" state.
 - The wrapper starts `command args` in `cwd` with the input file as stdin and the
   log as stdout and stderr (append). When the child ends, it writes
   `{code, signal, at}` to the exit file with a temporary file and a rename. On
-  SIGTERM, SIGINT or SIGHUP it stops the child and still writes the exit record.
+  SIGTERM, SIGINT or SIGHUP it stops the whole job: it sends SIGTERM to its own process
+  group (the child and every process the child started, for example `npm ci` under
+  `sh`), waits 2 s (a timer that keeps the wrapper alive, also when the direct child
+  exits first), writes the exit record (the child's code and signal when it exited,
+  else the stop signal), and then sends SIGKILL to the whole group, itself last. A
+  process that treats the first SIGTERM as "stop gracefully" and waits never survives
+  as an orphan. A process that left the group (its own `setsid`) is out of reach.
 - `readAgentJob(job, ports)` returns `{state, exit, result, log}`; a missing job record
   is `dead`:
   - `state` is `running` when `ports.alive(pid, token)` is true; else `exited` when
@@ -60,7 +66,9 @@ record is simply dead. There is no "uncertain custody" state.
   counts), without the wrapper and its direct child (the agent CLI or the suite runner);
   null when the job has no pid or the table cannot be read. Times are `[DD-][HH:]MM:SS[.cc]`.
 - `stopAgentJob(job, ports)` sends SIGTERM to the job's process group and returns
-  true only when the job was alive; it returns false and sends nothing otherwise.
+  true only when the job was alive; it returns false and sends nothing otherwise. The
+  wrapper, the group leader, then ends the group (above): after the 2 s grace no
+  process of the group is left.
 
 Default `alive(pid, token)` is true only when signal 0 reaches `pid` and the
 process command line (`ps -o command= -p PID`) contains `token`. A pid that the
