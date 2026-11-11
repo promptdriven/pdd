@@ -44,7 +44,7 @@ The reader reads the issue line by line (a tab counts as 4 spaces of indent).
 - **List lines.** A list line starts, after its indent, with `-`, `*` or `+`, or a number and `.` or
   `)`, then a space. A **task item** is a list line whose text starts with `[ ]`, `[x]` or `[X]` and
   a space; its text is the text after the box.
-- **Labels.** "Done when", "Expected", "Acceptance criteria" (also "criterion"), "Test" (also
+- **Labels.** "Done when" (also "Done-when"), "Expected", "Acceptance criteria" (also "criterion"), "Test" (also
   "Tests" and "Testing"), "Wanted" and "Proposed outcome" (also "outcomes"), in any case, as whole
   words ("Testability" is not a label). "Proposal" is not a label: a proposal lists ways to do the
   work, not what must be true. Before the label, characters that are not letters or digits (marks,
@@ -185,8 +185,11 @@ blocks, that is `Checklist` or `Issue checklist` (any case), alone or with a col
 after it, when its leading `#` marks, its `*` and `_` marks and its outer spaces are left out
 (`Checklist:`, `## Checklist`, `**Checklist:**`). Every section counts, in body order, so a
 template's own `## Checklist` before the job's section does not hide it. The lines after it belong to the section: blank
-lines, list lines (also a number and `:`), lines that start with an item id, and lines indented at
-least 2 spaces more than the section line before them, which continue that line. The section ends
+lines, list lines (also a number and `:`), lines that start with an item id, table rows, and lines
+indented at least 2 spaces more than the section line before them, which continue that line. A
+**table row** (a line with a `|` that is not escaped) is read as its cells that are not empty,
+joined by `: ` (`| C3 | excluded | "QUOTE" |` reads as `C3: excluded: "QUOTE"`); a delimiter row
+and the header row above it are not read. The item's `line` is the row as written. The section ends
 at a heading, a fence, a comment block or any other line. So the `Runtime:` and `Evidence:` lines,
 and a numbered list after them, are not part of it. A PR body with no section has every item
 `missing`.
@@ -195,9 +198,11 @@ and a numbered list after them, are not part of it. A PR body with no section ha
 `[x]`) go. The first rule that gives an item decides:
 
 1. **Ids.** The line starts with one or more ids: `C` and the item number, in any case, alone or in
-   `[]`, `()`, backtick, `*` or `_` marks, separated by spaces, `,`, `/`, `&`, `+` or "and". Each id of an
-   item matches that item. An id later in the line ("see C1") does not count. The **rest** is the
-   text after the ids and one separator (`:`, `.`, `)`, `-`, `–` or `—`).
+   `[]`, `()`, backtick, `*` or `_` marks, separated by spaces, `,`, `/`, `&`, `+` or "and". A
+   range (`C1-C3`, also with `–`, `—`, `..` or "to") names each id from the first to the last; a
+   range whose last id is lower names only its two ids. Each id of an item matches that item. An
+   id later in the line ("see C1") does not count. The **rest** is the text after the ids and one
+   separator (`:`, `.`, `)`, `-`, `–` or `—`).
 2. **Item text.** The line repeats an item's text: the line's match form holds the item's whole
    match form as whole words. When several items match, the longest match form wins. On a tie,
    the one item whose same form is part of the line's same form wins; when that is not exactly
@@ -220,7 +225,11 @@ forms escaped the quote rule):
   may hold quotes. It is `excluded` when the quote has at least 3 words, its quote form is part of
   the quote form of the issue's readable text at whole words (a quote that starts or ends with a
   letter or digit does not start or end inside a word), and it is not part of the quote form of
-  the item's own text. Else it is `unsupported`. The **readable text** is `issueText` without the
+  any item's text (release lead, Nov 11). One exception keeps the RUNBOOK §15 example right: when
+  the item's own text marks it as optional ("optional", "optionally", "if possible" or "nice to
+  have", whole words, any case), a quote from its own text supports its exclusion. So
+  `Optionally add a picture` can exclude the item `Optionally add a picture`, and a plain quote of
+  an item's text cannot exclude it or another item. Else it is `unsupported`. The **readable text** is `issueText` without the
   fenced code blocks and HTML comment blocks that the reader does not read.
 - Else the line gives no evidence (`missing`) when its box is `[ ]`, when the rest has no letter or
   digit, when the rest starts with a negation or a deferral (any case, as a whole word or words:

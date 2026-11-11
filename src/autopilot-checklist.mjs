@@ -1,8 +1,8 @@
-// Generated from prompts/cli/autopilot-checklist.prompt.md (sha256: 2bc2918866d806d3422a7a5dce854bed59efed4372a894aff4b46f39e24a88b5).
+// Generated from prompts/cli/autopilot-checklist.prompt.md (sha256: 84456317b86350f21adf5a0d30c0e6470b5cdf542f652fe7d1641108b1764150).
 
 const MAX_ITEMS = 30, MAX_CHARS = 300, MAX_QUOTE = 200, MAX_HEADING = 120, PREFIX_WORDS = 8, MIN_QUOTE_WORDS = 3;
 const WORD = /[\p{L}\p{N}]+/gu, HAS_WORD = /[\p{L}\p{N}]/u;
-const LABEL = /^(?:done when|expected|acceptance criteri(?:a|on)|test(?:s|ing)?|wanted|proposed outcomes?)(?![\p{L}\p{N}])/iu;
+const LABEL = /^(?:done(?:\s+|-)when|expected|acceptance criteri(?:a|on)|test(?:s|ing)?|wanted|proposed outcomes?)(?![\p{L}\p{N}])/iu;
 // Context words (the release lead's list): their lists and tables describe the issue and give no summary item.
 const CONTEXT = /^(?:problem|evidence|background|context|notes|related|references|sources|what\s+happens)(?![\p{L}\p{N}])/iu;
 // A colon after the label, with at most 3 more words before it ("Expected result:").
@@ -18,10 +18,14 @@ const TASK = /^\[[ xX]\][ \t]+(.*)$/;
 const PIPE = /(?<!\\)\|/;
 const START = /^(?:issue\s+)?checklist\s*(?::.*)?$/i;
 const ID = /^[\s*_[(`]*C(\d{1,3})(?![\p{L}\p{N}])[*_\])`]*/iu;
+// A range of ids after an id: C1-C3, C1–C3, C1..C3, C1 to C3.
+const ID_RANGE = /^\s*(?:-|–|—|\.\.|to(?![\p{L}\p{N}]))\s*[*_[(`]*C(\d{1,3})(?![\p{L}\p{N}])[*_\])`]*/iu;
 const ID_SEP = /^\s*(?:[,/&+]\s*)?(?:and(?![\p{L}\p{N}])\s*)?/iu;
 const ID_LINE = /^[\s*_[(`]*C\d{1,3}(?![\p{L}\p{N}])/iu;
 const EXCLUSION = /^(?:exclu\p{L}*|out\s+of\s+scope|not\s+in\s+scope)(?![\p{L}\p{N}])/iu;
 const NOT_DONE = /^(?:no|not|none|nothing|never|n\/a|na|without|cannot|can[’']t|won[’']t|pending|todo|to\s+do|tbd|tbc|wip|later|deferred|defer|postponed|will|follow(?:-|\s+)?up|skipped|skip|missing|planned|blocked|waiting)(?![\p{L}\p{N}])/iu;
+// An item whose own text marks it as optional may be excluded with a quote of its own text (RUNBOOK §15).
+const OPTIONAL = /(?<![\p{L}\p{N}])(?:optional|optionally|if\s+possible|nice\s+to\s+have)(?![\p{L}\p{N}])/iu;
 const BARE = /^(?:done|yes|ok|okay|complete|completed|covered|fixed|implemented|verified|finished|tested)[^\p{L}\p{N}]*$/iu;
 const RANK = { missing: 1, unsupported: 2, excluded: 3, covered: 4 };
 
@@ -240,18 +244,26 @@ For each item, check its line in the PR body's "Checklist:" section against the 
 // The lines of every Checklist: section of the PR body, in body order (with their continuations), or null when there is none.
 function prSection(body) {
   const out = [];
-  let block = null, open = false, any = false, entry = null;
-  for (const line of lines(body)) {
+  let block = null, open = false, any = false, entry = null, table = false;
+  const all = lines(body);
+  for (const [at, line] of all.entries()) {
+    if (!PIPE.test(line)) table = false;
     if (block) { if (blockEnd(block, line)) block = null; continue; }
     const opened = blockStart(line);
     if (opened) { open = false; if (!opened.closed) block = opened; continue; }
     if (START.test(line.trim().replace(/^#{1,6}(?:\s+|$)/, '').replace(/[*_]/g, '').trim())) { open = true; any = true; entry = null; continue; }
     if (!open || !line.trim()) continue;
     if (headingOf(line)) { open = false; continue; }
-    const indent = indentOf(line);
-    if (entry && indent >= entry.indent + 2) { entry.text += ` ${line.trim()}`; continue; }
+    const indent = indentOf(line), next = all[at + 1] ?? '';
+    if (entry && indent >= entry.indent + 2) { entry.text += ` ${line.trim()}`; entry.raw += ` ${line.trim()}`; continue; }
+    // A table row (a leading pipe, a delimiter row below, or a row of a table) reads as its cells joined by ": ".
+    if (PIPE.test(line) && (table || line.trim().startsWith('|') || delimiter(next))) {
+      entry = null; table = true;
+      if (!delimiter(line) && !delimiter(next)) out.push({ text: cells(line).filter(Boolean).join(': '), raw: line.trim(), indent });
+      continue;
+    }
     if (!PR_LIST.test(line) && !ID_LINE.test(line)) { open = false; continue; }
-    entry = { text: line.trim(), indent };
+    entry = { text: line.trim(), raw: line.trim(), indent };
     out.push(entry);
   }
   return any ? out : null;
@@ -271,9 +283,16 @@ function matchLine(text, forms) {
   if (box) { open = box[1] === ' '; line = line.slice(box[0].length); }
   const ids = [];
   let rest = line, id;
-  while ((id = ID.exec(rest))) { ids.push(Number(id[1])); rest = rest.slice(id[0].length).replace(ID_SEP, ''); }
+  while ((id = ID.exec(rest))) {
+    const first = Number(id[1]);
+    rest = rest.slice(id[0].length);
+    const range = ID_RANGE.exec(rest), last = range ? Number(range[1]) : first;
+    if (range) rest = rest.slice(range[0].length);
+    if (last >= first && last - first < 100) for (let n = first; n <= last; n++) ids.push(n); else ids.push(first, last);
+    rest = rest.replace(ID_SEP, '');
+  }
   const named = [...new Set(ids)].filter(n => n >= 1 && n <= forms.length).map(n => n - 1);
-  if (named.length) return { indexes: named, rest: rest.replace(/^\s*[:.)\-–—]?\s*/, ''), open };
+  if (named.length) return { indexes: named, rest: rest.replace(/^\s*[:.)|\-–—]?\s*/, ''), open };
   const found = words(line), lower = found.map(match => match[0].toLowerCase());
   let best = null, ties = [];
   forms.forEach((form, i) => {
@@ -312,7 +331,7 @@ function wholeIn(hay, needle) {
   return false;
 }
 
-function lineState(rest, open, issueForm, own) {
+function lineState(rest, open, issueForm, own, items) {
   const plain = rest.replace(/^[\s*_~([]+/, '');
   const exclusion = EXCLUSION.exec(plain);
   if (exclusion) {
@@ -320,7 +339,9 @@ function lineState(rest, open, issueForm, own) {
     const end = Math.max(after.lastIndexOf('"'), after.lastIndexOf('”'));
     const quote = start >= 0 && end > start ? after.slice(start + 1, end).trim() : '';
     const form = quoteForm(quote);
-    const ok = words(form).length >= MIN_QUOTE_WORDS && wholeIn(issueForm, form) && !quoteForm(own).includes(form);
+    // Never a part of another item's text; a part of its own text only when the item marks itself as optional.
+    const ok = words(form).length >= MIN_QUOTE_WORDS && wholeIn(issueForm, form)
+      && items.every(text => text === own || !quoteForm(text).includes(form)) && (!quoteForm(own).includes(form) || OPTIONAL.test(own));
     return { state: ok ? 'excluded' : 'unsupported', quote };
   }
   if (open || !HAS_WORD.test(plain) || NOT_DONE.test(plain) || BARE.test(plain)) return { state: 'missing', quote: null };
@@ -344,8 +365,8 @@ export function checkChecklist(prBody, items, issueText) {
     const hit = matchLine(entry.text, forms);
     if (!hit) continue;
     for (const i of hit.indexes) {
-      const row = rows[i], { state, quote } = lineState(hit.rest, hit.open, issueForm, row.text);
-      if (row.line === null || RANK[state] > RANK[row.state]) Object.assign(row, { state, line: entry.text, quote });
+      const row = rows[i], { state, quote } = lineState(hit.rest, hit.open, issueForm, row.text, rows.map(other => other.text));
+      if (row.line === null || RANK[state] > RANK[row.state]) Object.assign(row, { state, line: entry.raw, quote });
     }
   }
   for (const row of rows) counts[row.state]++;

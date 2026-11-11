@@ -412,7 +412,39 @@ test('review round 1 (Claude C4): an exclusion quote needs whole words, not the 
   assert.equal(second('- C2: excluded: "describes the lane"'), 'unsupported', 'a part of the item\'s own text');
   assert.equal(second('- C2: excluded: "Leave out anything that"'), 'unsupported', 'an HTML comment');
   assert.equal(second('- C2: excluded: "skip this one for now"'), 'unsupported', 'a code block');
+  assert.equal(second('- C2: excluded: "a status line names"'), 'unsupported', 'another item\'s text');
   assert.equal(second('- C2: excluded: "The docs change can wait"'), 'excluded');
+});
+
+test('an exclusion quote is never part of any item\'s text, except the item\'s own text when it marks itself as optional (RUNBOOK §15)', () => {
+  const issue = '## Done when\n- [ ] Optionally add a picture\n- [ ] Name the lane holder\n- [ ] Add a picture if possible\n- [ ] Describe the lane in the docs\n- [ ] The docs may describe the lane\n\nThe docs change can wait for the next docs pass.\n';
+  const items = issueChecklist(issue);
+  const state = line => checkChecklist(`Checklist:\n${line}\n`, items, issue).items[Number(/C(\d)/.exec(line)[1]) - 1].state;
+  assert.equal(state('- C1: excluded: "Optionally add a picture"'), 'excluded', 'the §15 example: the item marks itself as optional');
+  assert.equal(state('- C3: excluded: "Add a picture if possible"'), 'excluded', '"if possible" marks it as optional');
+  assert.equal(state('- C2: excluded: "Name the lane holder"'), 'unsupported', 'a plain quote of the item\'s own text');
+  assert.equal(state('- C5: excluded: "docs may describe"'), 'unsupported', 'only four words mark an item as optional; "may" is not one');
+  assert.equal(state('- C4: excluded: "Name the lane holder"'), 'unsupported', 'a quote from another item\'s text');
+  assert.equal(state('- C2: excluded: "Optionally add a picture"'), 'unsupported', 'another item\'s optional text does not make this item optional');
+  assert.equal(state('- C4: excluded: "The docs change can wait"'), 'excluded', 'a quote from the issue outside the items');
+});
+
+test('review round 1 (lead): "Done-when" is a label, "C1-C3" names three items, and a PR checklist in table form is read', () => {
+  assert.deepEqual(texts(issueChecklist('## Done-when\n- the lane names its holder\n')), ['the lane names its holder']);
+  const items = issueChecklist(LANE_ISSUE);
+  const read = body => states(checkChecklist(body, items, LANE_ISSUE));
+  assert.deepEqual(read('Checklist:\n- C1-C3: test/lane.test.mjs\n'), ['covered', 'covered', 'covered']);
+  assert.deepEqual(read('Checklist:\n- C1-C3: pending\n'), ['missing', 'missing', 'missing'], 'the rest after a range is read');
+  assert.deepEqual(read('Checklist:\n- C1 – C2: test/lane.test.mjs\n- C3 - pending\n'), ['covered', 'covered', 'missing']);
+  assert.deepEqual(read('Checklist:\n- C2 to C3: test/lane.test.mjs\n'), ['missing', 'covered', 'covered']);
+  assert.deepEqual(read('Checklist:\n- C3-C1: test/lane.test.mjs\n'), ['covered', 'missing', 'covered'], 'a falling range names only its two ids');
+  const table = 'Checklist:\n| Item | Evidence |\n|---|---|\n| C1 | test/lane.test.mjs |\n| C2 | test/note.test.mjs |\n| C3 | excluded | "The docs change can wait" |\n\nRuntime: not run\n';
+  const check = checkChecklist(table, items, LANE_ISSUE);
+  assert.deepEqual(states(check), ['covered', 'covered', 'excluded']);
+  assert.equal(check.items[0].line, '| C1 | test/lane.test.mjs |');
+  assert.deepEqual(read('Checklist:\nItem | Evidence\n--- | ---\nC1 | t1\nC2 | t2\nC3 | excluded: "The docs change can wait"\n'), ['covered', 'covered', 'excluded']);
+  // A pipe in a list line is not a table.
+  assert.deepEqual(read('Checklist:\n- C1: test checks `a | b`\n- C2: t2\n- C3: t3\n'), ['covered', 'covered', 'covered']);
 });
 
 test('review round 1 (Claude P3): a long heading line reads in linear time; every Checklist section of the PR body counts', () => {
