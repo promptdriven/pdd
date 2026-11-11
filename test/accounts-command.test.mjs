@@ -372,9 +372,11 @@ test('set changes stop lines; the reset setting needs a person at a terminal and
 });
 
 test('remove forgets the row, never signs out, and keeps every folder that pdd did not make', async () => {
-  const env = { HOME: freshHome() }, root = join(env.HOME, 'h');
-  const imported = await makeFolder(root, 'cx5', 'acct-5'), made = await makeFolder(root, 'cx7', 'acct-7'), made2 = await makeFolder(root, 'cx8', 'acct-8');
-  await seed(env, [{ name: 'cx5', home: imported }, { name: 'cx7', home: made, source: 'add' }, { name: 'cx8', home: made2, source: 'add' }], { order: ['cx7', 'cx5', 'cx8'] });
+  const env = { HOME: freshHome() }, root = join(env.HOME, 'h'), homes = join(env.HOME, '.pdd', 'codex');
+  const imported = await makeFolder(root, 'cx5', 'acct-5'), made = await makeFolder(homes, 'cx7', 'acct-7'), made2 = await makeFolder(homes, 'cx8', 'acct-8');
+  const elsewhere = await makeFolder(root, 'cx9', 'acct-9');
+  await seed(env, [{ name: 'cx5', home: imported }, { name: 'cx7', home: made, source: 'add' }, { name: 'cx8', home: made2, source: 'add' },
+    { name: 'cx9', home: elsewhere, source: 'add' }], { order: ['cx7', 'cx5', 'cx8', 'cx9'] });
   const programs = [], ports = { spawn: (...args) => { programs.push(args); throw new Error('no program may run'); } };
   assert.deepEqual(await run('remove', { env, operands: ['cx5'], tty: true, input: 'y\n', ports }),
     { code: 0, out: `Removed cx5 from the pool. pdd did not sign out.\npdd kept ${imported} (pdd did not make it).\n`, err: '' });
@@ -384,15 +386,18 @@ test('remove forgets the row, never signs out, and keeps every folder that pdd d
   const asked = await run('remove', { env, operands: ['cx8'], tty: true, input: 'y\n', ports });
   assert.deepEqual(asked, { code: 0, out: `Delete ${made2} too? It holds the Codex login of cx8. [y/N] Removed cx8 from the pool. pdd did not sign out.\npdd deleted ${made2}.\n`, err: '' });
   assert.equal(existsSync(made2), false);
+  const other = await run('remove', { env, operands: ['cx9'], tty: true, input: 'y\n', ports });
+  assert.deepEqual(other, { code: 0, out: `Removed cx9 from the pool. pdd did not sign out.\npdd kept ${elsewhere}.\n`, err: '' }, 'only the folder that add makes can be deleted');
+  assert.equal(existsSync(join(elsewhere, 'auth.json')), true);
   assert.deepEqual(programs, []);
   const pool = await readPool({ env });
   assert.deepEqual([pool.logins, pool.order], [[], []]);
-  assert.deepEqual((await readLog({ env })).map(row => [row.login, row.detail]), [['cx5', 'kept folder'], ['cx7', 'kept folder'], ['cx8', 'deleted folder']]);
+  assert.deepEqual((await readLog({ env })).map(row => [row.login, row.detail]), [['cx5', 'kept folder'], ['cx7', 'kept folder'], ['cx8', 'deleted folder'], ['cx9', 'kept folder']]);
   assert.deepEqual(await run('remove', { env, operands: ['cx5'] }), { code: 1, out: '', err: 'No login named cx5.\n' });
 });
 
 test('remove keeps an added folder when the person does not type y', async () => {
-  const env = { HOME: freshHome() }, made = await makeFolder(join(env.HOME, 'h'), 'cx7', 'acct-7');
+  const env = { HOME: freshHome() }, made = await makeFolder(join(env.HOME, '.pdd', 'codex'), 'cx7', 'acct-7');
   await seed(env, [{ name: 'cx7', home: made, source: 'add' }]);
   const result = await run('remove', { env, operands: ['cx7'], tty: true, input: '\n' });
   assert.equal(result.out.endsWith(`pdd kept ${made}.\n`), true);

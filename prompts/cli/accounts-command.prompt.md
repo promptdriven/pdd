@@ -232,7 +232,7 @@ Save, log `set` with detail naming the changed values, print
 never signs out and never deletes a folder that pdd did not make.
 
 - `source: 'import'`: keep the folder; print `pdd kept FOLDER (pdd did not make it).`
-- `source: 'add'`: at a terminal, ask `Delete FOLDER too? It holds the Codex login of NAME. [y/N] ` before the change; only `y` or `yes` (any case) deletes, and only when FOLDER is a real folder, not a link. Without a terminal, or for any other answer, keep it: `pdd kept FOLDER.`
+- `source: 'add'` and FOLDER is `HOMES/codex/NAME` (the folder that `add` makes): at a terminal, ask `Delete FOLDER too? It holds the Codex login of NAME. [y/N] ` before the change; only `y` or `yes` (any case) deletes, and only when FOLDER is a real folder, not a link. Without a terminal, for any other answer, or for an `add` row with another folder, keep it: `pdd kept FOLDER.`
 
 Print `Removed NAME from the pool. pdd did not sign out.` first. Log `remove` with
 detail `kept folder` or `deleted folder`. A failed delete prints

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/accounts-command.prompt.md (sha256: bf3e79d8c11fec9d0dc3afc24e985a16d3ca750cb178d7e6e51f2df99fbeca81).
+// Generated from prompts/cli/accounts-command.prompt.md (sha256: bf316b73d368ec6413d3e2992bd4d0de57ca6f437ce0273c03c43fce8d0732cb).
 import { spawn as nodeSpawn } from 'node:child_process';
 import * as nodeFs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -46,6 +46,11 @@ const terminal = ctx => Boolean(ctx.stdin?.isTTY && ctx.stdout?.isTTY);
 const serverUrl = (ctx, pool) => (typeof ctx.env.PDD_ACCOUNTS_URL === 'string' && ctx.env.PDD_ACCOUNTS_URL.trim())
   || (object(pool.server) && typeof pool.server.url === 'string' && pool.server.url) || null;
 const find = (pool, name) => pool.logins.find(row => row.name === name);
+// The one folder that add makes for a name; null without an absolute home.
+const addFolder = (pool, env, name) => {
+  const base = pool.homesDir ?? (isAbsolute(env.HOME ?? '') ? join(env.HOME, '.pdd') : null);
+  return base && join(base, 'codex', name);
+};
 const log = (ctx, action, login, detail) => appendLog({ env: ctx.env }, { action, login, detail }, ctx.ports);
 
 async function facts(module, home) {
@@ -273,9 +278,7 @@ async function add(ctx) {
   if (find(pool, name)) stop(1, nameInUse(name, ''));
   const login = await need(ctx, 'accountsLogin', ['codexLoginFacts']);
   if (ctx.options['--local'] !== true && serverUrl(ctx, pool)) await need(ctx, 'accountsCloud', ['runCloudAccounts']);
-  const homes = pool.homesDir ?? (isAbsolute(ctx.env.HOME ?? '') ? join(ctx.env.HOME, '.pdd')
-    : stop(1, 'pdd accounts add needs an absolute home folder; set HOME to an absolute path.'));
-  const fs = ctx.fs, folder = join(homes, 'codex', name);
+  const fs = ctx.fs, folder = addFolder(pool, ctx.env, name) ?? stop(1, 'pdd accounts add needs an absolute home folder; set HOME to an absolute path.');
   const exists = `${folder} exists. Use pdd accounts import ${folder}, or move it away first.`;
   if (await fs.lstat(folder).catch(() => null)) stop(1, exists);
   await fs.mkdir(dirname(folder), { recursive: true, mode: 0o700 });
@@ -403,11 +406,11 @@ async function set(ctx) {
 }
 
 async function remove(ctx) {
-  const name = ctx.operands[0], row = find(await readPool({ env: ctx.env }, ctx.ports), name);
+  const name = ctx.operands[0], pool = await readPool({ env: ctx.env }, ctx.ports), row = find(pool, name);
   if (!row) throw noLogin(name);
-  const folder = row.home;
+  const folder = row.home, made = row.source === 'add' && folder === addFolder(pool, ctx.env, name);
   let wipe = false;
-  if (row.source === 'add' && terminal(ctx)) {
+  if (made && terminal(ctx)) {
     ctx.stdout.write(`Delete ${folder} too? It holds the Codex login of ${name}. [y/N] `);
     wipe = ['y', 'yes'].includes((await readLine(ctx.stdin)).trim().toLowerCase());
   }
