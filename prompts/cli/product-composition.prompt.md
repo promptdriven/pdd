@@ -2,6 +2,12 @@
 
 Own `src/product-composition.mjs`. Export synchronous `composeProductTry({root,parts,journey,testPath}, ports)` and `selectJourneys(tests, selector)`. These are ordinary public module operations used by the Runtime client, not a second CLI or upload archive. Preserve standalone test and Simulator, product startup/status, source privacy and caller files.
 
+## Assembly and setup boundaries
+
+`composeProductTry` is pure artifact assembly. It performs the map, writer, seed and explicit After every tap schema rules below and returns the two artifacts. It does not upload or execute them. Read an After every tap prompt only to find and expand its selected result schema for the scratch-state binding. Do not reject pure assembly because an ordinary screen/handler prompt body is absent from supplied fixture data, its draft prose hash is a fixture placeholder, or its interface lacks setup-only admission metadata. The map owns references to those operations; assembly does not lint or execute every reference. Existing source safety still applies to every file actually read.
+
+The separate native helper `productTapCallBound(map,{root,readFile,statFile})` runs in the client's capture attempt before upload. It resolves all executable bodies, includes handler, after chain, caller resumes, declared provider allowances and destination rendering, and returns the greatest positive tap bound. Recursion, missing/unsupported bounds or a bound above forty refuse setup; equality at forty is eligible. Its filesystem calls use the same safe attempt reader. This helper has no model/HTTP effects and is not an interpreted entry in the interface below. Setup and hosted lint retain their complete source/interface/hash admission checks. This separation must not become a way to upload an incomplete or over-budget product.
+
 ## Composition
 
 Before encoding or upload, validate required v1 app-map fields used by composition, including the required router field and each screen’s prompt_path, operation, source, format, input and result_pointer. Each missing screen field diagnostic names that exact field; a generic invalid screen ID message does not satisfy this requirement. A missing or malformed required field gives finite invalid-product-map naming the field; never emit JavaScript undefined as JSON or silently default a malformed required field. Preserve permitted optional defaults and canonical target grammar without unrelated admission restrictions. Screen prompt_path is a nonempty repository-relative source-path string under the existing path safety rules; source is operation or mockup. For operation source, operation is a nonempty string, format is html, text or grid, and result_pointer is a JSON-pointer string (the empty root pointer is valid; nonempty pointers start with / and use only ~0/~1 escapes). For mockup source, operation and result_pointer are null and format is svg. Name the malformed field in invalid-product-map, including a source/format mismatch as format. A present screen input is an unrestricted JSON template: null, scalar, array and object values remain valid here; later operation/schema admission remains with its existing owner.
@@ -42,7 +48,7 @@ The Runtime client passes runtime-preflight’s captureSource(root,{tests,attemp
 ```json
 {
   "status": "draft",
-  "prose_sha256": "8a300db699cb97b506e6d828025790a29885b563e457797f5d368fc5317d4358",
+  "prose_sha256": "3f009afef4de00831d7f35b3215fce80ca68f836c32579187fd3da0ac95ff955",
   "entries": [
     {
       "operation": "composeProductTry",

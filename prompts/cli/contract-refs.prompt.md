@@ -237,7 +237,7 @@ These helpers have no outside effects. Reuse this module's existing bounded exac
 
 ```json
 {
-  "status": "draft", "prose_sha256": "6bcc602c533997ea8c6a5e7640473947f5305f599f165922502ac21a2b6de041",
+  "status": "approved", "prose_sha256": "6bcc602c533997ea8c6a5e7640473947f5305f599f165922502ac21a2b6de041",
   "entries": [{
     "operation": "expandSource",
     "input_schema": {

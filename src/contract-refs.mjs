@@ -1,4 +1,4 @@
-// Generated from prompts/cli/contract-refs.prompt.md (sha256: e0f43342f6dd6c0450eb2983e022e6b2605e59f93e63b3154c3aaa6015132edd).
+// Generated from prompts/cli/contract-refs.prompt.md (sha256: 6bcc602c533997ea8c6a5e7640473947f5305f599f165922502ac21a2b6de041).
 // Numbers remain tokens until serialization, including values outside binary64.
 class JsonNumber { constructor(text) { this.text = text; Object.freeze(this); } }
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value) && !(value instanceof JsonNumber);
@@ -435,4 +435,14 @@ export function planSync(sources, matches) {
     if (after !== text) edits.push({path,before:text,after});
   }
   return { edits, warnings };
+}
+
+// Public codec shares the exact token representation and bounded serializer above.
+export const parseJsonValue = text => parse(text);
+export const stringifyJsonValue = value => encode(value);
+export const isJsonNumber = value => value instanceof JsonNumber;
+export function jsonNumberIdentity(value) {
+  if (value instanceof JsonNumber) return numericIdentity(value.text);
+  if (typeof value !== 'number' || !Number.isFinite(value)) throw new TypeError('Expected a finite JSON number.');
+  return numericIdentity(JSON.stringify(value));
 }

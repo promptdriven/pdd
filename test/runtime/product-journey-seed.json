@@ -235,6 +235,40 @@
       "result_template": {
         "milliseconds": 100000
       }
+    },
+    "github.pullRequest": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "json": "null"
+      }
+    },
+    "repository.openBaseSource": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "root": null,
+        "handle": null
+      }
+    },
+    "repository.closeBaseSource": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {}
+    },
+    "savedChecks.evidence": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "json": "{\"stories\":[],\"warnings\":[]}"
+      }
+    },
+    "github.createIssue": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "url": "https://github.com/example/coffee/issues/82"
+      }
     }
   },
   "context": [],

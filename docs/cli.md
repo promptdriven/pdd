@@ -1460,3 +1460,23 @@ both the service report and `binding_diagnostics` with
 before retrying. A local match never replaces a service refusal with a pass.
 Autopilot parks a saved binding refusal with blocker `binding`. Interpreter
 health alone does not wake it. Use the normal reply/retry route after repair.
+
+
+## Whole-product Simulator
+
+- `pdd simulate --product [--parts PARTS] [--journey JOURNEY] [--max-calls N] [--no-open] [--no-wait]`
+- `pdd test --journeys [JOURNEY] [--max-calls N]`
+
+Product mode combines the selected parts' maps and starting data in one upload.
+Parts without screens retain their data and planned background operations.
+Each part keeps separate screen state. Cross-part navigation and background
+operations follow the authored maps and product plan. Shared world/seed files
+are optional. Authored project files are unchanged. A product requires at least
+one screen and one selected Story/scenario. Select parts with a comma-separated
+list. Journey names match complete IDs: J1 does not select J10.
+
+The interpreter must advertise product-parts-v1. Otherwise product setup stops
+before upload with an upgrade explanation. Step labels use admitted product
+ownership; unnamed operations remain unlabeled. Normal Story sessions keep their
+existing behavior. Reopening a product retains its original selection and world;
+use --new to deliberately replace it. Unknown requests must be reconciled first.
