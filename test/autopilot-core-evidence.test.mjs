@@ -1060,3 +1060,38 @@ test('E55 (#3227) one Runtime line per changed Story: Story first; different ver
   ({ w, pr } = await world(`Runtime: PASS (${STORY}, 19/19 checks)\nRuntime: not run (${other}: native-only prompt)`, evidence));
   assert.equal(w.job(17, 'repair'), undefined, w.job(17, 'repair')?.input);
 });
+
+// ---- #3227 fix 4: partial results are not dropped --------------------------------------------------------
+test('E56 (#3227 fix 4) failingTests reads TAP at any depth (with the location) and spec lines, each name once', async () => {
+  const { failingTests } = await import('../src/autopilot-core.mjs');
+  const log = ["TAP version 13", "    not ok 1 - inner case", "      ---", "      location: '/w/test/a.test.mjs:3:1'", "      ...",
+    "not ok 1 - outer suite", "  ---", "  location: '/w/test/a.test.mjs:1:1'", "ok 2 - fine", "  ✖ spec failure (12.5ms)", "not ok 3 - inner case", "# fail 2"].join('\n');
+  assert.deepEqual(failingTests(log), [{ name: 'inner case', file: '/w/test/a.test.mjs' }, { name: 'outer suite', file: '/w/test/a.test.mjs' }, { name: 'spec failure', file: null }]);
+  assert.equal(failingTests(Array.from({ length: 40 }, (_, i) => `not ok ${i} - t${i}`).join('\n')).length, 20);
+});
+
+test('E57 (#3227 fix 4) a red waits for the running replay run; the repair brief gets its reds and the failed tests of the running suite', async t => {
+  // A review FAIL while the suite and the replay still run.
+  const w2 = await coreWorld(t, { settings: { runs: 1 } });
+  seed(w2, { 'test/a.vectors.test.mjs': nodeTest('a') }); w2.issue(17); await w2.tick();
+  writeIn(w2.job(17, 'build').cwd, 'test/a.vectors.test.mjs', nodeTest('a2'));
+  const line = 'Evidence: runtime=not-run; vectors=pass (1/1); formal=not-applicable; tests=pass (3/3)';
+  w2.build(17, { body: `Fixes #17.\n\n${NOT_RUN}\n${line}`, result: { promptChanged: false, evidence: line } }); await w2.tick();
+  appendFileSync(w2.job(17, 'suite').log, "not ok 12 - parser keeps the old flag\n  ---\n  location: '/w/test/parse.test.mjs:9:1'\n");
+  w2.review(17, 'FAIL', ['P2 src/x.js:1 the flag is gone']); await w2.tick();
+  assert.equal(w2.job(17, 'repair'), undefined, 'the red waits for the replay run');
+  w2.vectorsRun(17, { tests: 1, fail: 1, failed: [{ name: 'a2', file: 'test/a.vectors.test.mjs' }] }); await w2.tick();
+  const input = w2.job(17, 'repair')?.input ?? '';
+  assert.match(input, /Review FAIL from a fresh reviewer: P2 src\/x\.js:1 the flag is gone/);
+  assert.match(input, /Autopilot ran the replay tests that this change touches \(test\/a\.vectors\.test\.mjs\) at head [0-9a-f]{7}: 1 of 1 failed: a2/);
+  assert.match(input, /The full test suite \(still running at head [0-9a-f]{7}\) already shows failed tests: parser keeps the old flag \(parse\.test\.mjs\)\./);
+});
+
+test('E58 (#3227 fix 4) a red suite names its failed tests', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); await w.tick();
+  w.build(17, { body: `Fixes #17.\n\n${NOT_RUN}`, result: { promptChanged: false } }); await w.tick();
+  appendFileSync(w.job(17, 'suite').log, "not ok 7 - N3: merged former draft PR1\n  ---\n  location: '/w/test/draft.vectors.test.mjs:40:3'\n# fail 1\n");
+  w.review(17, 'PASS'); w.suite(17, 1); await w.tick();
+  assert.match(w.job(17, 'repair')?.input ?? '', /The full test suite failed for head [0-9a-f]{7} \(exit 1\): N3: merged former draft PR1 \(draft\.vectors\.test\.mjs\)\./);
+});

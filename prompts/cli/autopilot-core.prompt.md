@@ -797,7 +797,16 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    20, then "and N more") and `- Formal tests (…)`, `- Not run by Autopilot
    (REASON): FILES` for other runners, or `- Replay and formal tests (Autopilot's run):
    none changed`.
-4. Any red finding: stop the other checks. The **repair budget** (option B): repairs go on
+4. Any red finding: stop the other checks, but first keep the partial results (#3227 fix
+   4): while the engine's replay run (T04) still runs, the merge check waits for it (it
+   takes minutes; at most 30 minutes after the first red, `redAt`), so its reds join the
+   same round; and a full suite that is still running gives the failed tests that its
+   log already shows (`failingTests` of a bounded log tail) as one more red line: "The
+   full test suite (still running at head H) already shows failed tests: TEST (FILE), …".
+   A red suite's line names its failed tests the same way. `failingTests(text, limit=20)`
+   is exported: `[{name, file}]` from TAP `not ok N - NAME` lines at any depth (with the
+   `location:` line that follows) and spec-reporter `✖ NAME` lines, each name once. The
+   **repair budget** (option B): repairs go on
    while they make progress. The findings of a round are each review must-fix (P1 and P2)
    and each other red line. Two findings are the same when they name the same `file:line`
    (3 lines of tolerance) with a similar cause (2 shared words and a quarter of the words,

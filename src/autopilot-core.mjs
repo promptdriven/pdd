@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 68787c013c23de5eb7cfa10b288861200ab3ed05224f48d2b8f3ec731182f5a0).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 810291d8e43495ca07685f1426f2d1a823add8a6a4d1b1c9d934d12d5d46b25c).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1126,6 +1126,20 @@ async function reviewState(ctx, job, prBody = '') {
 // The runner lines of the suite queue and the dependency install: a failure of the runner, not a test result.
 // A runner line starts with its phrase; a failing test that quotes one (in an indented TAP line) is a test failure.
 const SUITE_RUNNER = /^(?:Shared test suite queue failed|Test suite execution timeout|Test suite could not start|Test suite ended by SIG|Test suite descendants could not be confirmed|Supply a suite command|Autopilot core: dependency install failed)/m;
+// #3227 fix 4: the failed tests that a test log shows (also a partial log): node --test TAP "not ok N - NAME" lines at
+// any depth, with the location line that follows, and spec-reporter "✖ NAME" lines; each name once, at most `limit`.
+export function failingTests(text, limit = 20) {
+  const found = [], lines = String(text ?? '').split('\n');
+  for (let i = 0; i < lines.length && found.length < limit; i++) {
+    const tap = /^\s*not ok \d+ - (.+?)\s*(?:#.*)?$/.exec(lines[i]), spec = /^\s*\u2716\s+(.+?)(?:\s+\(\d+(?:\.\d+)?m?s\))?\s*$/.exec(lines[i]);
+    const name = oneLine((tap ?? spec)?.[1], 200);
+    if (!name || found.some(f => f.name === name) || /^(?:failing tests|tests? failed):?$/i.test(name)) continue;
+    const file = tap ? lines.slice(i + 1, i + 12).map(line => /location: '([^']+?):\d+:\d+'/.exec(line)?.[1]).find(Boolean) ?? null : null;
+    found.push({ name, file });
+  }
+  return found;
+}
+const testList = list => list.map(f => `${f.name}${f.file ? ` (${basename(f.file)})` : ''}`).join('; ');
 // The last bytes of a log (the summary and the runner lines are at the end), never the whole file in memory.
 function readTail(fs, file, bytes = 256 * 1024) {
   let fd;
@@ -1175,7 +1189,8 @@ async function suiteState(ctx, job) {
     return { state: 'broken', dead: deaths + (job.suite.quiets ?? 0) >= 3, text: `the full test suite runner failed for head ${short(job.head)} (${seen.state === 'dead' ? 'the run died' : seen.exit?.signal ? `killed by ${seen.exit.signal}` : `exit ${seen.exit?.code}`}, 3 tries). Log: ${basename(job.suite.agent.log)} on this machine` };
   }
   recordSuccess(ctx, job, job.suite.agent, 'suite', seen);
-  return { state: 'fail', text: `The full test suite failed for head ${short(job.head)} (exit ${seen.exit?.code ?? seen.exit?.signal ?? 'unknown'}). Log: ${basename(job.suite.agent.log)} on this machine${tail ? `\nLast lines:\n${tail}` : ''}` };
+  const failed = failingTests(redactSecrets(log));
+  return { state: 'fail', text: `The full test suite failed for head ${short(job.head)} (exit ${seen.exit?.code ?? seen.exit?.signal ?? 'unknown'})${failed.length ? `: ${testList(failed)}` : ''}. Log: ${basename(job.suite.agent.log)} on this machine${tail ? `\nLast lines:\n${tail}` : ''}` };
 }
 // ---- True evidence (0.1.29) ---------------------------------------------------------------------------------
 // Git names in NUL mode: every name stays exact (Git quotes a non-ASCII, quote, tab or newline name in line mode).
@@ -1592,6 +1607,16 @@ async function mergeCheck(ctx, job) {
   }
   // Red checks on a head that a mechanical lane merge made are a conflict for an agent, not a repair (debate B 5.4).
   // The repair budget compares single findings: each review must-fix, and each other red line.
+  // #3227 fix 4: keep the partial results. A replay run that still runs is waited for (minutes; at most 30 after the
+  // first red), so its reds join this round; a running suite gives the failed tests that its log already shows.
+  if (reds.length && vectors?.state === 'running' && ctx.now() - (job.redAt ??= ctx.now()) < 30 * MIN) {
+    noteProgress(ctx, job, `red-wait|${job.head}|${logSig(ctx.jobs.read(job.vectors.agent))}`, true); return;
+  }
+  if (reds.length && suite?.state === 'running' && job.suite?.agent) {
+    const partial = failingTests(redactSecrets(readTail(ctx.fs, job.suite.agent.log)));
+    if (partial.length) reds.push(`The full test suite (still running at head ${short(job.head)}) already shows failed tests: ${testList(partial)}.`);
+  }
+  delete job.redAt;
   const findings = reds.flatMap(red => red.startsWith('Review FAIL') && review?.mustFix?.length ? review.mustFix : [red]);
   if (reds.length) return job.mechanical?.head === job.head ? conflictFix(ctx, job, { files: job.mechanical.files, reds }) : repairOrEnd(ctx, job, reds, findings);
   // Pending CI waits while its picture changes, and at most ciStuckMinutes with no change: then it is stuck (a no-result
