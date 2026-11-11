@@ -220,6 +220,41 @@ test(`repair 2: overflow retains ${kind} state (transport splits=${split})`,asyn
     omittedBytes:Buffer.byteLength(opening),truncated:true});
 });
 
+test('recorder exit waits for its remaining IPC messages and close',async t=>{
+  const f=fixture(t),child=new EventEmitter();child.pid=process.pid;child.connected=true;
+  let started;const ready=new Promise(resolve=>{started=resolve;});
+  child.send=message=>{if(message.start)started(message.start);};
+  const run=runTestSuite({cwd:f.root,command:'false',env:f.env},{...f.ports,spawnRecorder:()=>{
+    queueMicrotask(()=>child.emit('spawn'));return child;
+  }});
+  const start=await ready;
+  let settled=false;run.then(()=>{settled=true;});
+  child.emit('exit',0,null);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(settled,false,'exit must not discard pending IPC');
+  const record={...start.record,state:'finished',outcome:'completed',exitCode:7,signal:null,finishedAt:Date.now()};
+  fs.writeFileSync(record.receiptPath,JSON.stringify(record));
+  fs.rmSync(start.environmentRoot,{recursive:true,force:true});
+  child.emit('message',{result:{exitCode:7,record}});
+  child.emit('close',0,null);
+  assert.equal((await run).exitCode,7);
+});
+
+test('recorder close without a terminal message reports failure',async t=>{
+  const f=fixture(t),child=new EventEmitter();child.pid=process.pid;child.connected=true;
+  let started;const ready=new Promise(resolve=>{started=resolve;});
+  child.send=message=>{if(message.start)started(message.start);};
+  const run=runTestSuite({cwd:f.root,command:'false',env:f.env},{...f.ports,spawnRecorder:()=>{
+    queueMicrotask(()=>child.emit('spawn'));return child;
+  }});
+  const start=await ready;
+  child.emit('exit',1,null);child.emit('close',1,null);
+  const result=await run;
+  assert.equal(result.exitCode,1);
+  assert.match(result.message,/Validation recorder ended without a terminal receipt/);
+  fs.rmSync(start.environmentRoot,{recursive:true,force:true});
+});
+
 test('recorder drains a queued terminal report before disconnecting',async t=>{
   const f=fixture(t),logPath=join(f.root,'output.log');fs.writeFileSync(logPath,'');
   // Delay the terminal transport write for one event-loop turn. This models a
@@ -263,7 +298,7 @@ test('validation saves full output, source and terminal counts before forwarding
   const output={write(bytes){const row=read(f.receipt);assert.ok(fs.readFileSync(row.logPath).includes(bytes));forwarded+=bytes;}};
   const command=`${quote(process.execPath)} ${quote(program)}`;
   const result=await runTestSuite({cwd,command,env:f.env},{...f.ports,stdout:output,stderr:output});
-  assert.equal(result.exitCode,7,result.message);
+  assert.equal(result.exitCode,7,JSON.stringify(result));
   const row=read(f.receipt),log=fs.readFileSync(row.logPath,'utf8');
   assert.ok(log.includes(data));assert.ok(log.includes('stderr-end'));assert.ok(forwarded.includes(data));
   assert.equal(row.command.includes(command),false);assert.equal(row.commandFingerprint,createHash('sha256').update(command).digest('hex'));assert.equal(row.source.head,head);assert.match(row.source.fingerprint,/^[a-f0-9]{64}$/);

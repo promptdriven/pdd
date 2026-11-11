@@ -227,11 +227,17 @@ The caller supplies complete source text and the actual `files` port.
 Preflight owns safe native reads; the contract command owns discovery and writes;
 the runtime client owns saved Check provenance and freshness judgments.
 
+## Public exact-JSON helpers for product composition (#808)
+
+Expose the existing shared exact-number policy through native helpers `parseJsonValue(text)`, `stringifyJsonValue(value)`, `isJsonNumber(value)` and `jsonNumberIdentity(value)`. Parsing retains every own JSON key, array order and authored JSON number token without binary64 rounding. Serialization emits compact JSON with recursively sorted object keys, preserves array order and numeric tokens, and has no trailing newline. isJsonNumber distinguishes the owned number-token representation from ordinary objects. jsonNumberIdentity returns the canonical exact decimal identity for a finite numeric value or an owned number token: numerically equivalent decimal spellings compare equal without Number conversion. Boolean values are not numeric inputs; callers that deliberately implement Runtime matcher Boolean/number equality must make that conversion explicitly.
+
+These helpers have no outside effects. Reuse this module's existing bounded exact parsing and canonicalization facilities; do not copy a second numeric codec into the composer. Preserve existing expansion byte/layout/provenance guarantees, source limits and all current exports. The helper exports do not permit ordinary references to rewrite literal inputs or expected values.
+
 <details><summary>Runtime interface</summary>
 
 ```json
 {
-  "status": "approved", "prose_sha256": "3a84aa203ba844948e320226a44f28c86e4392bd60bb6a2f13aa3e0fd973a585",
+  "status": "approved", "prose_sha256": "6bcc602c533997ea8c6a5e7640473947f5305f599f165922502ac21a2b6de041",
   "entries": [{
     "operation": "expandSource",
     "input_schema": {

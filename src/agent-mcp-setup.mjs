@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-mcp-setup.prompt.md (sha256: d500ed09a2bd77ffa58681b233bf1ab062df7a3e5e071899389712a1798b6dfb).
+// Generated from prompts/cli/agent-mcp-setup.prompt.md (sha256: db494764e71aa74ffc473d28219ea0162741c91edd61fd65582df82ec0f89dfe).
 import { accessSync, constants, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, delimiter, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
@@ -13,7 +13,7 @@ function safePath(file) {
   while (true) {
     try {
       const stat = lstatSync(current);
-      if (stat.isSymbolicLink()) throw Error(`${current} is a symlink; register PDD manually or use a regular config path.`);
+      if (stat.isSymbolicLink()) throw Object.assign(Error(`${current} is a symlink; register PDD manually or use a regular config path.`), { code: 'PDD_MCP_SYMLINK' });
       if (current === resolve(file) && !stat.isFile()) throw Error(`${file} is not a regular file.`);
     } catch (error) { if (error.code !== 'ENOENT') throw error; }
     const parent = dirname(current); if (parent === current) break; current = parent;
@@ -53,7 +53,7 @@ function planConfig({ name, file, wanted, toml }) {
   }
   return { name, file, before, after, preview };
 }
-export async function setupAgentMcp({ env = process.env, packageRoot = fileURLToPath(new URL('..', import.meta.url)) } = {}, { stdin = process.stdin, stdout = process.stdout, stderr = process.stderr, confirm } = {}) {
+export async function setupAgentMcp({ env = process.env, packageRoot = fileURLToPath(new URL('..', import.meta.url)) } = {}, { stdin = process.stdin, stdout = process.stdout, stderr = process.stderr, confirm, interactive = !!confirm || !!(stdin.isTTY && stdout.isTTY) } = {}) {
   const say = value => stdout.write(`${value}\n`);
   try {
     const home = env.HOME || homedir();
@@ -72,6 +72,7 @@ export async function setupAgentMcp({ env = process.env, packageRoot = fileURLTo
     if (!changes.length) { say(candidates.length ? 'PDD Try tools already registered. No config change.' : 'No Codex, Claude Code or Gemini installation found. No config change.'); return 0; }
     for (const change of changes) say(`${change.name}: ${change.file}\n${change.preview}`);
     say('Only the PDD server is approved to run on your intent. Runs use the Try call budget and appear on its page. Claude Code keeps its normal tool approval controls.');
+    if (!interactive) { say('PDD MCP registration skipped. No config change.'); return 0; }
     const question = 'Register these PDD Try tools? [y/N] ';
     let answer;
     if (confirm) { stdout.write(question); answer = await confirm(question); }
@@ -96,5 +97,9 @@ export async function setupAgentMcp({ env = process.env, packageRoot = fileURLTo
       say(`Registered PDD Try tools for ${change.name} in ${change.file}.`);
     }
     return 0;
-  } catch (error) { stderr.write(`pdd setup: ${String(error.message).split(/[\r\n]/)[0]}\n`); return 1; }
+  } catch (error) {
+    const warning = error.code === 'PDD_MCP_SYMLINK';
+    stderr.write(`pdd setup: ${warning ? 'warning: ' : ''}${String(error.message).split(/[\r\n]/)[0]}\n`);
+    return warning ? 0 : 1;
+  }
 }

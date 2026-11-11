@@ -188,7 +188,8 @@ for (const stop of authentic.stop_variants) for (const intent of ['check', 'abse
   const earlier = readdirSync(join(f.state, 'batches'))[0];
   mode = stop.startsWith('lint hold') ? 'hold' : 'interrupt';
   const later = portsFor(env, { onInterrupt: handler => { interrupt = handler; return () => { interrupt = null; }; } });
-  later.clock.now = first.clock.now + 10000;
+  // A lint hold needs a fresh lint: go past the ten-minute recent-lint reuse window (#3208), which would reuse the first pass.
+  later.clock.now = first.clock.now + (mode === 'hold' ? 600_001 : 10000);
   if (mode === 'interrupt') {
     const output = later.ports.stderr;
     later.ports.stderr = { write(text) { output.write(text); if (text.includes('If pdd stops, read the results with:')) interrupt(); return true; } };

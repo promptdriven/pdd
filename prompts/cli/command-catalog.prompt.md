@@ -5,7 +5,7 @@ The `pdd test --files` usage form also accepts optional `--json` for its manifes
 
 The public command catalog also includes `pdd autopilot off`, `pdd autopilot observe`, `pdd autopilot auto`, `pdd autopilot trust <name>...`, and `pdd autopilot untrust <name>`. Expose these forms in help and completion; reject missing or extra operands through the existing parser contract.
 
-Own `src/command-catalog.mjs`; export only `PUBLIC_COMMAND_ROUTES`, `PUBLIC_COMMAND_IDS`, `PUBLIC_COMMAND_MANIFEST`, `NAMES` ([Names](#names)), `PUBLIC_HELP_TEXT` ([Help text](#help-text)) and `BUNDLED_WORKFLOW_NAMES` (feature, bug, small-change, product). Catalog the complete small alpha surface: root help, --version, completion bash|zsh, workflow list [--json] and setup (`pdd setup`, local `setup`, no operands or options; its help says that it installs the PDD skills for Codex and Claude if they are missing, adds the short PDD block to CLAUDE.md, else AGENTS.md, and that repeat setup keeps an existing Autopilot mode). Each route has stable id, exact prefix, local disposition, operand/option specs and plain help forms. Expose no excluded command, private schema/type, service flag or hosted execution operation. Help, parser and completion share this one authority.
+Own `src/command-catalog.mjs`; export only `PUBLIC_COMMAND_ROUTES`, `PUBLIC_COMMAND_IDS`, `PUBLIC_COMMAND_MANIFEST`, `NAMES` ([Names](#names)), `PUBLIC_HELP_TEXT` ([Help text](#help-text)) and `BUNDLED_WORKFLOW_NAMES` (feature, bug, small-change, product). Catalog the complete small alpha surface: root help, --version, completion bash|zsh, workflow list [--json] and setup (`pdd setup [--yes]`, local `setup`, no operands, optional flag `--yes` selecting safe defaults without questions; its help says that it installs the PDD skills for Codex and Claude if they are missing, adds the short PDD block to CLAUDE.md, else AGENTS.md, and that repeat setup keeps an existing Autopilot mode). Each route has stable id, exact prefix, local disposition, operand/option specs and plain help forms. Expose no excluded command, private schema/type, service flag or hosted execution operation. Help, parser and completion share this one authority.
 
 Catalog `dependencies prepare` (local `dependencies-prepare`, optional text `--issue`), `dependencies complete` (local `dependencies-complete`, text `--input`), and `workflow yield` (local `workflow-yield`, run reference). Show their forms `pdd dependencies prepare [--issue N]`, `pdd dependencies complete --input -`, and `pdd workflow yield N`.
 
@@ -48,7 +48,7 @@ Help forms and completion name only the `NAMES` words.
 
 Catalog four local routes before the product routes: `autopilot.start` (`autopilot start`, local `autopilot-start`, no operands, optional text --runs, --checks and --resume-custody); `autopilot.stop` (matching prefix/disposition, no operands/options); `autopilot.status` (matching prefix/disposition, no operands, optional flag --all); `autopilot.add` (`autopilot add`, local `autopilot-add`, required repeated issue operands). Forms and descriptions:
 
-- `pdd autopilot start [--runs N] [--checks N] [--resume-custody FILE]`: Start this repo in an interactive Herdr agent; check now and every 30 minutes without AI on empty ticks. --runs and --checks override machine-sized run and heavy-check limits; --resume-custody supplies the verified original-owner projection.
+- `pdd autopilot start [--runs N] [--checks N] [--engine core|full] [--label NAME] [--mode auto|observe|off] [--report file|draft|off] [--intake off|shadow] [--resume-custody FILE]`: Start this repo in an interactive Herdr agent (the full engine: deprecated, removed in 0.1.29), or headless jobs with the core engine (--engine core); check now and every 30 minutes (10 with the core engine) without AI on empty ticks. --runs and --checks override machine-sized run and heavy-check limits; --engine (choice core or full), --label (text), --mode (choice auto, observe or off) and --report (choice file, draft or off) save this machine's engine, opt-in label, core mode and core report mode for this repo, over pdd.json (--mode observe runs every check but never merges; --report draft, the default, keeps problem reports on this machine); --intake (choice off or shadow) saves this machine's core intake mode (shadow writes local intake cards that never change what starts; off is the default); --resume-custody supplies the verified original-owner projection.
 - `pdd autopilot stop`: Stop this machine's timer; let the current agent step finish.
 - `pdd autopilot status [--all] [--json]`: Show this machine's repo, folder, agent and next tick; --all lists every repository with Autopilot on this machine, from any folder.
 - `pdd autopilot add N...`: Mark named old issues with pdd:autopilot so Autopilot may take them.
@@ -74,8 +74,9 @@ For `workflow.run`, accept optional `--adopt-corpus FILE`, a nonempty text path 
 
 - workflow.suite `workflow suite --command COMMAND [--timeout MIN]` (local
   `workflow-suite`): no operands, required nonblank command text enforced by
-  dispatch, optional integer timeout 1 to 120 minutes. Help describes the shared
-  machine queue, machine-sized check slots and the 30-minute execution timeout. The required
+  dispatch, optional integer timeout 0 to 120 minutes (0 is no time limit). Help describes the shared
+  machine queue, machine-sized check slots and the 30-minute execution timeout, and says that
+  --timeout 0 runs it with no time limit, for a caller that watches it. The required
   [queue contract](test-suite-queue.prompt.md) owns execution and status.
 
 - workflow.done `workflow done STEP [--summary TEXT] [--skipped REASON]`: STEP is a safe step name; the summary and the reason are free text. Help says it records the step with pdd's own latest `pdd <NAMES.test>`, `pdd <NAMES.lint>` and prove results (the summary is an agent note), and that --skipped records that the step was skipped, and why. Build the two command words from `NAMES`, like every other form, so a rename changes this help too.
@@ -140,7 +141,7 @@ existing explicit forms. Mode conflicts and choice are owned by
 
 `pdd workflow evidence ISSUE --summary FILE` records newer source-verified saved check JSON without rerunning workflow steps or publication; require ISSUE and --summary, no extra operands/options.
 
-Catalog `workflow.evidence-associate` with prefix `workflow evidence-associate`, local disposition `workflow-evidence-associate`, one required issue operand, and options `--workspace` (text), `--stage` (value, choices `current` and `pr1`) and `--test` (text-list). Dispatch requires all three before effects. Its form is `pdd workflow evidence-associate ISSUE --workspace PATH --stage current|pr1 --test PATH...`. Expose it in help and completion immediately after the evidence route. [Workspace evidence association](workflow-runner.prompt.md#workspace-evidence-association) owns registration and source validation; this catalog owns only the route facts.
+Catalog `workflow.evidence-associate` with prefix `workflow evidence-associate`, local disposition `workflow-evidence-associate`, one required issue operand, and options `--workspace` (text), `--stage` (value, choices `current`, `pr1` and `before`), `--commit` (text, optional) and `--test` (text-list). Dispatch requires `--workspace`, `--stage` and `--test` before effects. Its form is `pdd workflow evidence-associate ISSUE --workspace PATH --stage current|pr1|before [--commit SHA] --test PATH...`. Expose it in help and completion immediately after the evidence route. [Workspace evidence association](workflow-runner.prompt.md#workspace-evidence-association) owns registration and source validation; this catalog owns only the route facts.
 
 Try catalogs --agent as nonempty text NAME: accept quoted custom display names as one argument as well as the default codex, claude and gemini names. Agent discovery and unknown-name errors belong to the local agent bridge; parsing does not read configuration or execute a launcher. Workflow and product --agent are text options with the codex|claude|gemini|agy completion choices, so an agents.json ENTRY name also parses. Completion must not present a fixed provider-only list for Try agent names. Its help says pdd stays running to connect the person’s own agent when stdout is a terminal or --agent is explicit; ordinary non-terminal Try returns after collecting saved cases once. --agent selects a configured name and --no-wait skips the bridge. Runtime-client owns conflicts/lifecycle.
 
@@ -158,6 +159,16 @@ flag `--json`, with no operands. Help describes a read-only list of prompts,
 Runtime interfaces, Stories, tests and refusal reasons, without network calls.
 Include it in root help and completion. The [files view](files.prompt.md) owns
 its output; do not import the Runtime client for this route.
+
+## Owner route
+
+Catalog `owner` (stable id `owner`, local `file-owner`) immediately after `files`.
+Its form is `pdd owner PATH... [--json]`: one or more text operands PATH and only
+the optional Boolean flag `--json`. Help says it shows which prompt owns each
+file, from pdd-bindings.json, Generated from headers and prompt opening
+sentences, and that it reads local files only. Include it in root help and
+completion. The [file owner lookup](file-owner.prompt.md) owns its output; do not
+import the Runtime client for this route.
 
 ## Shared contract routes
 
@@ -196,7 +207,7 @@ The ordered help-form list consists of the lines below in their displayed order,
   pdd workflow prove ISSUE --test COMMAND --expect TEXT [--timeout MIN]  Run the supplied command on the fetched base branch merge-base and committed head, including when no eligible tests changed, with a limit per phase (default 10 minutes; --timeout sets 1 to 120); save a non-gating report that pull requests show as pdd's own result.
   pdd workflow done STEP [--summary TEXT] [--skipped REASON]  For the agent in a run worktree: record a step with pdd's own latest pdd test, pdd lint and prove results (the summary is an agent note) and print what to do next; --skipped records that the step was skipped, and why.
   pdd workflow evidence ISSUE --summary FILE  Record source-verified saved check JSON without rerunning steps, gates or publication.
-  pdd workflow evidence-associate ISSUE --workspace PATH --stage current|pr1 --test PATH...  Register this run's evidence workspace, stage and selected tests; no checks or workflow progress.
+  pdd workflow evidence-associate ISSUE --workspace PATH --stage current|pr1|before [--commit SHA] --test PATH...  Register this run's evidence workspace, stage and selected tests; before needs the commit of an earlier checked source; no checks or workflow progress.
   pdd workflow ask QUESTION  For the agent in a run worktree: show the person that the chat waits for their answer.
   pdd workflow approve [ISSUE] [--said WORDS] [--draft]  Use --said - with the shared quoted-heredoc template to record chat words for the gate and all its drafts, or use terminal y/N; --draft requests draft publication at the current unpublished gate; strict mode requires a person terminal.
   pdd workflow changes ISSUE TEXT  Send a change request to the same area chat; the gate stays open.
@@ -222,6 +233,7 @@ The ordered help-form list consists of the lines below in their displayed order,
   pdd lint [STORY...] [--json] [--timeout MIN] [--max-calls N]  Print local SVG layout warnings, then the PDD interpreter lint (0 AI calls) on selected Stories and their dependencies; sends no checks.
   pdd lint --local [STORY...] [--json]  Check linked SVG layout parts locally with warning diagnostics and 0 AI/network calls.
   pdd files [--json]  List prompts, Runtime interfaces, Stories, tests and refusal reasons; no network calls.
+  pdd owner PATH... [--json]  Show which prompt owns each file, from pdd-bindings.json, Generated from headers and prompt opening sentences; reads local files only.
   pdd approve PROMPT [--said WORDS]  Approve one prompt with the person's chat words in easy mode, or show its interface/text changes and ask terminal y/N; strict mode requires a person terminal.
   pdd simulate [STORY] [--max-calls N] [--tab call|screen|terminal|world] [--app-map PATH] [--new] [--no-open] [--no-wait] [--agent NAME]  Open the Story in the PDD Simulator: make a link on the PDD interpreter with your gh login and open it in your browser; it ends in 24 hours. Short form: pdd sim. A new simulation defaults to 400 calls; --max-calls accepts 1 to 1000. With terminal stdout or explicit --agent, it stays running to connect your own agent; otherwise it reads saved cases once and returns. --agent selects a configured name or a default Codex, Claude or Gemini; --no-wait skips the bridge. In a terminal it adds each test saved in the Simulator to the story's test file.
   pdd simulate [STORY] --cli [--shell] [--max-calls N] [--new]  Run your program in your terminal through a Simulator session; prints a PATH line, or opens a shell with --shell.
@@ -237,7 +249,7 @@ The ordered help-form list consists of the lines below in their displayed order,
   pdd autopilot auto  Set the repository Autopilot mode to auto.
   pdd autopilot trust NAME...  Add explicitly trusted GitHub names.
   pdd autopilot untrust NAME  Remove an explicitly trusted GitHub name.
-  pdd setup  Install the PDD skills for Codex and Claude if they are missing, and add the short PDD block to CLAUDE.md, else AGENTS.md. Offer detected Codex, Claude Code and Gemini MCP registrations after showing exact config changes and one y/N question. Offer Autopilot settings in a Git repository with a terminal; keep an existing mode on repeat setup.
+  pdd setup [--yes]  Install the PDD skills for Codex and Claude if they are missing, and add the short PDD block to CLAUDE.md, else AGENTS.md. Offer detected Codex, Claude Code and Gemini MCP registrations after showing exact config changes and one y/N question. Offer Autopilot settings in a Git repository with a terminal; keep an existing mode on repeat setup. Without a terminal or with --yes, use safe defaults without questions.
 ```
 
 
@@ -274,15 +286,39 @@ RUNBOOK: PACKAGE_ROOT/RUNBOOK.md
 
 ```text
 In PDD, prompts are the source. Code follows the prompts.
-1. Prompt: prompts/NAME.prompt.md. Write what the program does in plain English, then `The workflow park options also include text `--blocker` and `--until`. Show `pdd workflow park --reason TEXT --blocker KIND [--until VALUE]` for a named external blocker; clearing values belong to the runner contract.
-
-## Dependencies`, then one Runtime interface block.
+1. Prompt: prompts/NAME.prompt.md. Write what the program does in plain English, then ## Dependencies, then one Runtime interface block.
 2. Story: user_stories/STORY.md. Write one thing that a person can do, then a numbered ## Acceptance criteria list.
 3. Test: tests/STORY.json. When the repo keeps its own tests in tests/ or test/, use tests/runtime/ or test/runtime/. Write steps with an exact check for each criterion.
-4. Check: run pdd test --fill-hash, then pdd lint (0 AI calls), then pdd test STORY on the PDD interpreter.
+4. Check: run pdd test --fill-hash && pdd test --files STORY && pdd test STORY in one shell call. Test includes interpreter lint (0 AI calls); use pdd lint for lint-only diagnosis.
 5. Approve: a person reads each prompt and runs pdd approve PROMPT. New behavior needs a person. An unchanged complete draft can use --automatic with passing existing tests and a full prompt check.
 ```
 
+The workflow park options also include text `--blocker` and `--until`. Show
+`pdd workflow park --reason TEXT --blocker KIND [--until VALUE]` for a named
+external blocker; clearing values belong to the runner contract.
+
+## Regression scan
+
+Register `autopilot.regressions`, prefix `autopilot regressions`, local
+`autopilot-regressions`, no operands, Boolean --json and text --file.
+Form: `pdd autopilot regressions [--json] [--file PATH]`.
+Description: Read core merge history and GitHub regression evidence; optionally
+save a local report, without GitHub writes or reverts. Preserve all other forms.
+
+
+## Autopilot report route
+
+Catalog `autopilot.report` with prefix `autopilot report`, local `autopilot-report`,
+an optional choice operand `send` and an optional text operand FINGERPRINT, no
+options. Forms: `pdd autopilot report` (List the local Autopilot report drafts of
+this machine; no GitHub call.) and `pdd autopilot report send FINGERPRINT` (File
+one local report draft to promptdriven/pdd, or count it on the matching open
+report.).
+
+Catalog `autopilot.intake` with prefix `autopilot intake`, local `autopilot-intake`,
+no operands and an optional flag `--json`. Form: `pdd autopilot intake [--json]`
+(Print this machine's local intake cards for this repo (shadow mode), the would-pick
+list and today's changes; no AI call or GitHub write.).
 
 ## Post-merge audit route
 
@@ -348,6 +384,10 @@ Catalog `autopilot.check-base` with prefix `autopilot check-base`, local `autopi
 Register autopilot.doctor, prefix autopilot doctor, local autopilot-doctor, no operands or options. Advertise `pdd autopilot doctor` as read-only first-start diagnostics with no AI call. Preserve other forms.
 Completion offers `doctor` only after `autopilot`. The top-level `doctor` command remains unsupported, including its help forms.
 
+
+## Whole-product Simulator (#808)
+
+Extend the existing simulate route with Boolean --product, text --parts and text --journey. Publish `pdd simulate --product [--parts PARTS] [--journey JOURNEY] [--max-calls N] [--no-open] [--no-wait]`; describe one composed product using its declared maps, starting data and planned operations. Keep ordinary STORY forms. Extend the existing test route with Boolean --journeys and form `pdd test --journeys [JOURNEY] [--max-calls N]`. Existing runtime-client owns option compatibility and orchestration; the catalog declares no second route or interpreter origin. Preserve all unrelated commands, including removed try/check handling.
 ## Cap-aware lint (draft)
 
 The lint route accepts optional integer `--max-calls`, minimum 1 and maximum 1000. Its help says this selects a cap for zero-AI structural call preflight; warnings never change the cap or guarantee completion. Existing hidden `test --lint` keeps the same remote semantics; removed commands remain removed. Local lint does not accept a call cap.

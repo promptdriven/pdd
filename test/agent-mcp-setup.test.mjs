@@ -64,7 +64,7 @@ test('MCP setup declines empty, n, yes, EOF and noninteractive input without cre
   assert.equal(await setupAgentMcp({ env: f.env }, f.ports), 0);
   assert.ok(f.files.every(path => !existsSync(path)));
 });
-test('MCP setup safely refuses malformed configs, wrong roots, conflicts and symlinks before consent', async t => {
+test('MCP setup refuses malformed configs, wrong roots and conflicts, and warns on symlinks before consent', async t => {
   const f = fixture(t);
   for (const [file, text] of [[f.files[0], '[broken'], [f.files[1], '{broken'], [f.files[1], '[]'], [f.files[1], '{"mcpServers":[]}'], [f.files[0], '[mcp_servers.pdd]\ncommand="different"']]) {
     writeFileSync(file, text);
@@ -73,7 +73,7 @@ test('MCP setup safely refuses malformed configs, wrong roots, conflicts and sym
     rmSync(file);
   }
   const target = join(f.home, 'target'); writeFileSync(target, '{}'); symlinkSync(target, f.files[1]);
-  assert.equal(await setupAgentMcp({ env: f.env }, { ...f.ports, confirm: () => 'y' }), 1);
+  assert.equal(await setupAgentMcp({ env: f.env }, { ...f.ports, confirm: () => assert.fail('symlink must skip before consent') }), 0);
   assert.equal(readFileSync(target, 'utf8'), '{}');
   assert.match(f.errors(), /malformed TOML/); assert.match(f.errors(), /symlink/);
   assert.equal(existsSync(f.files[0]), false);

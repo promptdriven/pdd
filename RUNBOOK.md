@@ -59,8 +59,9 @@ The block of Harbor Coffee's `place_order` (schemas cut):
  "entries": [{"operation": "place_order", "input_schema": {...}, "result_schema": {...}, "errors": ["unknown-item"]}],
  "calls": [], "resources": [], "limits": {"max_steps": 4, "max_model_calls": 2}, "conventions": []}
 ```
-- `kind` is `full`, `partial` or `native-only`. Without kind, a block means full.
-  Full declares the module's checkable behavior. Partial declares only some operations.
+- Omit `kind` for a full interface. Explicit `kind` is `partial` or `native-only`.
+  A draft with `"kind": "full"` gets a warning at `/kind`, not a refusal; `pdd test --fill-hash` removes it.
+  Approved prompts stay unchanged. Full declares the module's checkable behavior. Partial declares only some operations.
   Native-only requires `reason`: name the native effect that the bound ports in §21 cannot fake.
   It needs status and prose_sha256, but no entries or limits. A checker reviews this reason.
   Approval records it. Checks show `not run: <reason>`; they never count it as passed.
@@ -188,6 +189,16 @@ Integer bounds in schemas (`minimum`, `maximum`, `exclusiveMinimum`, `exclusiveM
 within `[-9007199254740991, 9007199254740991]`, or ±(2^53−1). An out-of-range integer bound is refused. The refusal
 names the bad bound's JSON Pointer (for example `/properties/count/maximum`), the declared bound (`bound_text`)
 and the supported range (`supported_integer_range`).
+
+**Large whole numbers.** Write an exact whole number as plain JSON digits, for example
+`"seconds": 4250129834582680692326400`. pdd reads, shows, compares and sends these exact digits. The PDD interpreter
+accepts plain digits only within ±(2^53−1): it refuses larger ones before execution (`scenario-integer-out-of-range`,
+0 AI calls), and pdd warns about them before it sends the test. For a parameter that takes a Number, write its exact
+Number spelling instead: `String(n)` in JavaScript, for example `4.2501298345826807e+24` for 3600 × 2^70. JavaScript
+and the interpreter read it as exactly that Number, and the interpreter admits it with `"type": "integer"`. A value
+that no Number holds (2^53 + 1, or a BigInt parameter) stays in plain digits; only the repository's own vector test
+(§17) checks it. Do not change the input type or the expected value to fit the interpreter. pdd warns when a token
+with a fraction or an exponent loses digits: `9007199254740993.0` reads as `9007199254740992`.
 
 For an optional input field, leave it out of `required`. Do not use `oneOf` with `null` for it: the Simulator's form shows
 `oneOf` only as a raw JSON box. A correct schema (`read` is optional):
@@ -350,7 +361,7 @@ node `<file>--op-<operation>--hex-<operation name in hex>`. `printf add | xxd -p
 
 `pdd test --fill-hash` fills the hash of draft prompts. `pdd test` checks discovered tests, reusing unchanged passing Stories from `.pdd/cache/test/`. Use `--lf` for last failures, `--cache-clear` to clear the cache, or `--retry` to retry confirmed unstarted checks in a saved batch.
 `pdd test place-order` checks one story. `pdd test --read` reads the last results again. `--fill-hash` sends nothing. A saved `--read` may continue original checks held for lint after it passes, using identical source, owner and call ceilings; other reads send nothing.
-Before you send a check, run `pdd lint` to find format problems (0 AI calls). Exit 0 means finished and passed; queued/running lint exits 3 with its saved read command. Never import pdd's source.
+Do not run `pdd lint` immediately before `pdd test`: test includes interpreter lint (0 AI calls). Run `pdd test --fill-hash && pdd test --files STORY && pdd test STORY` in one shell call (omit STORY twice for all Stories). Use standalone lint for admission diagnostics alone. Exit 0 means finished and passed; queued/running lint exits 3 with its saved read command. Never import pdd's source.
 `pdd lint [STORY…]` sends the files to the server's lint only. It makes no AI call, and it prints every problem
 the server finds.
 pdd checks the files on this computer first. Then it sends checks for tests without a reusable pass. It shows one table (story, test,
@@ -615,6 +626,13 @@ ticks. Ticks use the existing action/call budget.
 4. ✓ passed: tell the person "Verdict: the prompt is right; the bug is only in the CODE." Keep the correct prompt
    unchanged. The code-only checker route below proves the code fix.
 5. For a prompt bug the check report shows before ✗ → after ✓; for a code-only bug show before ✓ → after ✓. `pdd simulate <story>` opens with the issue's input ready.
+- The failing check of step 2 is the "before" evidence. If the prompt changed after it, register that saved result
+  for the same Story. Name a full local commit id whose files are exactly the checked files (commit an exact
+  reconstruction if that state was never committed). For run 18 and test `tests/count-words.json`:
+  `pdd workflow evidence-associate 18 --workspace . --stage before --commit SHA --test tests/count-words.json`, then
+  save `pdd test --read BATCH --json` to a file outside the repository and run
+  `pdd workflow evidence 18 --summary /tmp/before.json`. pdd refuses a commit whose selected files do not hash to the
+  batch's source. No new check is sent, and the result never counts as a current pass, check or approval.
 - If no prompt owns the behavior, say in reproduce: "No prompt exists yet for this behavior, so the bug can only be
   in the code." The verdict line is "Verdict: no prompt covers this yet; the bug can only be in the code." Write the
   prompt from the issue, and write "before: no prompt" in PR 1.
@@ -790,6 +808,10 @@ In verify after the last commit, run one `pdd workflow prove <run> --test "<comm
 - In `build`, write one replay test in the repo's own test runner (for example `test/<story>.vectors.test.mjs`).
   It reads the JSON file when it runs, and for each step it calls the real public boundary named by `operation`
   (function, command or route). Steps run in order and share state, as on the interpreter.
+- Read whole numbers exactly. `JSON.parse` rounds a whole number above 2^53 without a sign; read the file with
+  `JSON.parse(text, (key, value, context) => typeof value === 'number' && /^-?(?:0|[1-9][0-9]*)$/.test(context.source) && !Number.isSafeInteger(value) ? BigInt(context.source) : value)`.
+  Give a Number parameter `Number(value)` only when `BigInt(Number(value)) === value`; otherwise the case fails.
+  Compare an integer result as a BigInt. See [exact whole numbers](docs/replay-evidence.md#exact-whole-numbers).
 - Map each check target: `result` → the returned value at the path; `error` → the error code; `world` → the app's
   store after the step, seeded from `initial_world`; `calls` → a spy count. A target you cannot map is
   "Not replayed", with the reason. It is never a pass. Missing checks and unexecuted operations are not replayed.
@@ -972,7 +994,6 @@ The examples below specify small JavaScript modules with matching prompt contrac
 
 ```sh
 pdd test --fill-hash
-pdd lint fake-database fake-files fake-hash fake-service fake-decision fake-factory
 pdd test fake-database --max-calls 9
 # Substitute fake-files, fake-hash, fake-service, fake-decision or fake-factory.
 ```
@@ -1278,7 +1299,7 @@ This is an agent instruction example, not an executable Runtime program. The wor
 Use a small task such as a change to `examples/fakes/service.prompt.md`, its `user_stories/fake-service.md` and `test/runtime/fake-service.json`. The following is an illustrative route, not approval or a command to spend calls. The coordinator records the task, accepted decisions, source identity, exclusive file owners, current stage, unresolved failures/approvals and durable report paths in the run folder. It keeps that ledger between stages instead of each child's full conversation.
 
 1. **Author.** Give a fresh author the governing AGENTS and skill instructions, full prompting guide, relevant RUNBOOK sections, task and acceptance, owning prompt, dependencies and relevant callers and cases. Assign exclusive draft paths without inherited chat. The author returns the paths, changed behavior, missing context, case coverage and open choices; the coordinator shows the required Story gate.
-2. **Long CHECK.** Give a fresh checker the governing instructions, frozen drafts, dependencies, source, authorized call cap and §11. After authorization and required lint, run `pdd test fake-service --max-calls 6` once. Retain the printed batch/read command, report links and each Story's actual verdict, including failures, refusals and no verdict. For a check expected to exceed a short wait, choose the longest blocking wait allowed by the tool and the active progress and cancellation requirements on the first call. If it returns a session or cell ID, continue bounded waits on that same ID until terminal, cancelled or interrupted, within tool limits. These are tool wait continuations, not separate process/status polling; do not restart or separately poll an uncertain check. If the tool stops CHECK, use its printed saved-batch read command as §11 directs; do not resubmit uncertain work. The CLI's progress stream and internal receipt polling need no coordinator turn; reads can continue lint-held checks under §11.
+2. **Long CHECK.** Give a fresh checker the governing instructions, frozen drafts, dependencies, source, authorized call cap and §11. After authorization, run `pdd test fake-service --max-calls 6` once. Retain the printed batch/read command, report links and each Story's actual verdict, including failures, refusals and no verdict. For a check expected to exceed a short wait, choose the longest blocking wait allowed by the tool and the active progress and cancellation requirements on the first call. If it returns a session or cell ID, continue bounded waits on that same ID until terminal, cancelled or interrupted, within tool limits. These are tool wait continuations, not separate process/status polling; do not restart or separately poll an uncertain check. If the tool stops CHECK, use its printed saved-batch read command as §11 directs; do not resubmit uncertain work. The CLI's progress stream and internal receipt polling need no coordinator turn; reads can continue lint-held checks under §11.
 3. **Repair.** Give a fresh author the failed criterion, exact input, expected and actual values, owning prompt, dependencies, report and authorized repair scope. Preserve the original failure and expected values, make a minimal repair, return changed prompts to the required gate and check only the affected Story under the existing rules.
 4. **Independent verify.** After the person requests code and build completes, give a fresh eligible verifier the approved cases, current source, dependencies, regressions and failure evidence. Verify the real public boundary and regressions under §17. Independent review remains separately eligible; unrun or unmapped checks are not passes.
 

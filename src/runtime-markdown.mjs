@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-markdown.prompt.md (sha256: 066267dbe58b6c16c2abad1d0fb2922e60b98511bc4b4ffd5055b162c7e83437).
+// Generated from prompts/cli/runtime-markdown.prompt.md (sha256: d7b0956dc0634d345ff82c8affb24cbd8f863f70012b8c65cab71df07f342c01).
 export function markdownDefinitions(text) {
   const definitions = new Map();
   for (const match of text.matchAll(/^ {0,3}\[([^\]\n]+)\]:[ \t]*(?:<([^>\n]+)>|(\S+))/gm)) {

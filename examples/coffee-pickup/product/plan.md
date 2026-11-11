@@ -14,3 +14,7 @@ Never crosses: the phone never talks to the barista screen.
 | phone-1 | phone | 1 | P01, P02, P03, P04 | plan PR |
 | barista-1 | barista | 1 | B01, B02, B03, B04 | plan PR |
 | journeys | all | 1 | J1 | server-1, phone-1, barista-1 |
+
+## After every tap
+1. examples/coffee-pickup/prompts/server/server.prompt.md#forward_tickets
+2. examples/coffee-pickup/prompts/barista/board.prompt.md#refresh

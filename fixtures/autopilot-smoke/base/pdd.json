@@ -1,0 +1,9 @@
+{
+  "autopilot": {
+    "engine": "core",
+    "mode": "off",
+    "label": "pdd:autopilot",
+    "report": "off",
+    "testCommand": "npm test"
+  }
+}

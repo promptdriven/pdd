@@ -1,4 +1,4 @@
-// Generated from prompts/cli/interface-draft.prompt.md (sha256: 4cf8bc048142d9ccbe73086251ec7f4f8da9971436f10cb9b5db12c275250fc8).
+// Generated from prompts/cli/interface-draft.prompt.md (sha256: 964f1155c78fd45cc69ef93e07685273f47996db6c3217122018fa29948f685e).
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -178,7 +178,8 @@ function completeContract(value) {
   if (Object.hasOwn(value,'kind') && value.kind!=='full') throw declarationError('/kind','Supply a full executable contract.');
   const allowed=['kind','status','prose_sha256','entries','calls','resources','limits','conventions','schema_version','instance_types'];
   for(const key of Object.keys(value)) if(!allowed.includes(key)) throw declarationError('/'+key,'Unknown interface field; declare effect ports in resources.');
-  const iface={...value,kind:'full',status:'draft',prose_sha256:''};
+  const iface={...value,status:'draft',prose_sha256:''};
+  delete iface.kind;
   const fields=(item,names,pointer)=>{for(const key of Object.keys(item)) if(!names.includes(key)) throw declarationError(pointer+'/'+key,'Unknown declaration field.');};
   const questions=questionsFor(iface);
   if (questions.length) throw declarationError(questions[0].pointer,questions[0].question);
@@ -535,13 +536,13 @@ export async function runInterfaceDraft({words=[],all=false,json=false,cwd=proce
         const inference=!extend && !supplied && !refresh ? inferInterface(root,path,text,sources) : null;
         const iface=extend ? extendContract(previous,supplied) : {...(supplied ?? (refresh ? previous : inference.iface))};
         iface.status='draft';iface.prose_sha256='';
+        if(iface.kind==='full') delete iface.kind;
         const expanded=expandedInterface(path,iface,files);
         if(!inference) completeContract(expanded);
         const questions=questionsFor(iface,interfaceSchemaProblems(expanded));
         if(inference && !questions.length) completeContract(expanded);
         const coverage=sentenceCoverage(sources,expanded);
         const reviewQuestions=coverageQuestions(coverage,recovery(path));
-        if(iface.kind==='full') delete iface.kind;
         const inferredBudget=inference?.defaultBudget===true;
         if(inferredBudget) questions.push(...reviewQuestions);
         if(questions.length) {

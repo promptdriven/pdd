@@ -29,7 +29,7 @@ export function createGithubRepoFake({ repository = 'acme/widgets', owner = 'acm
   };
   const row = issue => ({ id: Number(issue.id), node_id: `I_${issue.id}`, number: issue.number, html_url: issue.movedTo ? `https://github.com/${issue.movedTo}/issues/${issue.number}` : url(issue.number),
     title: issue.title, body: issue.body, state: issue.state, state_reason: issue.state_reason, user: { login: issue.user }, labels: issue.labels.map(name => ({ name })),
-    assignees: (issue.assignees ?? []).map(login => ({ login })), assignee: null, comments: issue.comments.length, created_at: iso(issue.created), updated_at: iso(issue.updated), closed_at: null,
+    assignees: (issue.assignees ?? []).map(login => ({ login })), assignee: null, comments: issue.comments.length, created_at: iso(issue.created), updated_at: iso(issue.updated), closed_at: issue.closedAt ? iso(issue.closedAt) : null,
     author_association: 'OWNER', issue_dependencies_summary: summary(issue) });
   const comment = (issue, c) => ({ id: Number(c.id), html_url: `${url(issue.number)}#issuecomment-${c.id}`, body: c.body, user: { login: c.user }, created_at: iso(c.created), updated_at: iso(c.updated), author_association: 'OWNER' });
   const events = issue => [...issue.timeline.map(e => ({ id: Number(e.id), event: e.event, actor: { login: e.actor }, created_at: iso(e.created), ...(e.label ? { label: { name: e.label } } : {}) })),
@@ -41,7 +41,7 @@ export function createGithubRepoFake({ repository = 'acme/widgets', owner = 'acm
   f.label = (n, name, actor = owner) => { const issue = f.issues.get(n); issue.labels.push(name); const e = { id: String(f.nextEvent++), event: 'labeled', label: name, actor, created: f.now() }; issue.timeline.push(e); touch(issue); return e; };
   f.unlabel = (n, name, actor = owner) => { const issue = f.issues.get(n); issue.labels = issue.labels.filter(x => x !== name); issue.timeline.push({ id: String(f.nextEvent++), event: 'unlabeled', label: name, actor, created: f.now() }); touch(issue); };
   f.link = (dependent, blocker) => { const issue = f.issues.get(dependent); issue.blockedBy.push(blocker); if (f.linkBumpsUpdate) touch(issue); };
-  f.close = n => { const issue = f.issues.get(n); issue.state = 'closed'; issue.state_reason = 'completed'; touch(issue); };
+  f.close = n => { const issue = f.issues.get(n); issue.state = 'closed'; issue.state_reason = 'completed'; issue.closedAt = f.now(); touch(issue); };
   f.edit = (n, body) => { const issue = f.issues.get(n); issue.body = body; touch(issue); };
   // GitHub drops a deleted or transferred issue from the lists without a change that `since` shows.
   f.remove = n => { f.issues.get(n).deleted = true; };
