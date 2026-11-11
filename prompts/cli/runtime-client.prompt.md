@@ -1254,11 +1254,14 @@ If owner metadata refuses a saved Try with session-stopped, read that same owner
 
 ## Read saved Story evidence locally
 
-Export module function `savedStoryEvidence({root, comparisonRoot=root}, ports={})`,
+Export module function `savedStoryEvidence({root, comparisonRoot=root, withTests=false}, ports={})`,
 returning `{stories, warnings}`. Each Story row is
 `{story, pass, current, result, at}`: repository-relative Story path, Boolean
 pass/current, `result` equal to "✓" for pass and "no verdict" otherwise, and
-Unix epoch milliseconds `at`. This read-only capability never resolves runtime
+Unix epoch milliseconds `at`. With `withTests: true` each row also has `tests`: the
+sorted repository-relative test paths of that Story that its batch selected (for a
+pass, every one of them was sent), so a caller can bind a pass to the exact tests that
+it checked; without it the rows are exactly as above. This read-only capability never resolves runtime
 configuration, signs in, calls a service, creates a directory, writes saved state
 or dispatches work. Use the injected `env` for the existing state-directory
 selection. The optional raw ports are `readFile(path)` returning UTF-8 text,

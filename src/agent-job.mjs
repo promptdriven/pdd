@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-job.prompt.md (sha256: c3c33a08a0df9a057180b6363096228e8a9ea59d557c6da6a6b87f529b3053e4).
+// Generated from prompts/cli/agent-job.prompt.md (sha256: 281bfdfb7e1ac873d904b601ee76ef2f6c7f24d2366b833f3ab024641012dae9).
 import { spawn, spawnSync } from 'node:child_process';
 import { closeSync, openSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -91,10 +91,16 @@ function wrap(specFile) {
   let finished = false, stopping = null, ended = null, child;
   const finish = (code, signal, group = false) => {
     if (finished) return; finished = true;
-    try { writeAtomic(spec.exit, JSON.stringify({ code, signal: signal ?? null, at: Date.now() })); } finally { closeSync(stdin); closeSync(out); }
-    // A stop ends the whole group (this wrapper leads it): no process that waits after the first SIGTERM survives.
-    if (group) try { process.kill(-process.pid, 'SIGKILL'); } catch { /* Only this wrapper is left. */ }
-    process.exit(0);
+    try {
+      try { writeAtomic(spec.exit, JSON.stringify({ code, signal: signal ?? null, at: Date.now() })); }
+      finally { for (const fd of [stdin, out]) try { closeSync(fd); } catch { /* Already closed. */ } }
+    } catch { /* The exit record is best effort; the job then reads as dead. */ }
+    finally {
+      // A stop ends the whole group (this wrapper leads it), also after a failed write: no process that waits after the
+      // first SIGTERM survives.
+      if (group) try { process.kill(-process.pid, 'SIGKILL'); } catch { /* Only this wrapper is left. */ }
+      process.exit(0);
+    }
   };
   for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(signal, () => {
     if (stopping) return; stopping = signal;

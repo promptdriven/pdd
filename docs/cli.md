@@ -1567,15 +1567,16 @@ Each tick, without AI calls:
    Existing code that no prompt owns changes directly with a regression test, and
    Autopilot files one report that proposes adopting PDD for it. The job writes one
    `Runtime:` line and one `Evidence:` line in the PR
-   body. It writes no review verdict: only the fresh reviewer gives one. In `auto`
-   mode your `pdd autopilot start` is the approval of the job's prompt changes: the
-   job records it for each changed prompt with `pdd approve PROMPT --said -` and the
-   words "Operator action: pdd autopilot start --engine core in auto mode for REPO on
-   MACHINE at TIME", in the PR. A changed prompt that still has a draft interface is
-   red: a draft, a stale or broken interface, or an approval that `pdd approve` did
-   not record. In a repository with `strict_approvals`, the job does not approve:
-   Autopilot asks a person (`pdd:needs-decision`) and keeps the PR open. `observe`
-   mode never approves.
+   body. It writes no review verdict: only the fresh reviewer gives one. In `auto` and
+   `observe` mode your `pdd autopilot start` is the approval of the job's prompt
+   changes: the job records it for each changed prompt with `pdd approve PROMPT --said
+   -` and the words "Operator action: pdd autopilot start --engine core in MODE mode for
+   REPO on MACHINE at TIME" (MODE is the real mode), in the PR. A changed prompt that
+   still has a draft interface is red: a draft, a stale or broken interface, or an
+   approval that `pdd approve` did not record. In a repository with `strict_approvals`,
+   the job does not approve: in `auto` mode Autopilot asks a person
+   (`pdd:needs-decision`) and keeps the PR open; in `observe` mode it asks no one and
+   lists those prompts in its "would merge" note.
 
 Only a real Runtime FAIL blocks a merge. When Runtime cannot check a change (a lint
 refusal, no interface, a scenario limit, no verdict), the job still ships its PR with
@@ -1594,12 +1595,16 @@ replay (`*.vectors.test.*`) and formal (`*.formal.test.*`) file and every vector
 that names a changed scenario, if it is a `node:test` JavaScript file (other files are
 listed as not run). It runs the replay and formal files apart, so each has its own
 counts. A failure, a claim that its run contradicts (a vectors count too), or a positive
-claim that it could not check, is red, and the merge comment shows its own counts.
+claim that it could not check, is red, and the merge comment shows its own counts. A
+claim that Autopilot's own runner could not check is red once per job; after that the
+merge comment marks it as not checked and Autopilot files one report.
 
-The fresh review also checks that the change makes no product, contract or naming
-choice that the issue did not make (for example one option of an open decision issue
-that the change touches). Such a finding is not repaired: Autopilot asks the one
-question instead, and the PR waits for the answer.
+A build job asks one question instead of choosing when the issue does not settle a
+product, contract or naming choice (its brief lists the other open issues, so it can
+see an open decision); it opens no PR then. The fresh review also checks that the
+change makes no such choice (for example one option of an open decision issue that the
+change touches). Such a finding is not repaired: Autopilot asks the one question
+instead, and the PR waits for the answer.
 
 When a job needs a person's decision, Autopilot posts its one question on the issue,
 adds `pdd:needs-decision` (not `pdd:stuck`) and frees the slot. Answer in a comment

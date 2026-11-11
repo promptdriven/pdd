@@ -1,7 +1,7 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { agentCommand, jobEnvironment, startAgentJob, readAgentJob, stopAgentJob, agentJobCpu } from '../src/agent-job.mjs';
@@ -84,9 +84,10 @@ test('stop ends the whole job process group and the wrapper records the signal',
 });
 
 // CHAOS-B2: a hung `npm ci` under `sh` took the first SIGTERM as "stop gracefully" and lived on as an orphan.
-test('stop ends the whole process group after the grace time: a grandchild that traps the first SIGTERM does not survive', async t => {
+// The grandchild ignores every SIGTERM, so only the group SIGKILL after the grace time ends it.
+test('stop ends the whole process group after the grace time: a grandchild that ignores every SIGTERM does not survive', async t => {
   const dir = folder(t), mark = join(dir, 'grandchild.pid');
-  const grandchild = `require('fs').writeFileSync(${JSON.stringify(mark)}, String(process.pid)); let n = 0; process.on('SIGTERM', () => { if (++n > 1) process.exit(0); }); setInterval(() => {}, 1000);`;
+  const grandchild = `require('fs').writeFileSync(${JSON.stringify(mark)}, String(process.pid)); process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);`;
   const job = startAgentJob({ id: '20-suite-1', dir, cwd: dir, command: '/bin/sh', args: ['-c', `${JSON.stringify(process.execPath)} -e ${JSON.stringify(grandchild)} & wait`],
     input: '', env: { PATH: process.env.PATH } });
   const pid = Number(await until(() => existsSync(mark) && readFileSync(mark, 'utf8')));
@@ -97,6 +98,21 @@ test('stop ends the whole process group after the grace time: a grandchild that 
   assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' }, 'the grandchild is gone');
   const done = readAgentJob(job);
   assert.equal(done.state, 'exited'); assert.ok(done.exit.signal || done.exit.code !== 0, JSON.stringify(done.exit));
+});
+
+// Codex delta 7: a failed exit-record write (here a folder at its path) never skips the group SIGKILL.
+test('a stop whose exit record cannot be written still ends the whole group', async t => {
+  const dir = folder(t), mark = join(dir, 'grandchild.pid');
+  const grandchild = `require('fs').writeFileSync(${JSON.stringify(mark)}, String(process.pid)); process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);`;
+  const job = startAgentJob({ id: '22-suite-1', dir, cwd: dir, command: '/bin/sh', args: ['-c', `${JSON.stringify(process.execPath)} -e ${JSON.stringify(grandchild)} & wait`],
+    input: '', env: { PATH: process.env.PATH } });
+  const pid = Number(await until(() => existsSync(mark) && readFileSync(mark, 'utf8')));
+  t.after(() => { try { process.kill(pid, 'SIGKILL'); } catch {} });
+  mkdirSync(job.exit);                                                 // the rename of the exit record fails
+  assert.equal(stopAgentJob(job), true);
+  const groupAlive = () => { try { process.kill(-job.pid, 0); return true; } catch (error) { return error.code !== 'ESRCH'; } };
+  await until(() => !groupAlive(), 8000);
+  assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' }, 'the grandchild is gone');
 });
 
 test('agentJobCpu sums the tree under the wrapper by parent pid, without the wrapper and the agent CLI', () => {

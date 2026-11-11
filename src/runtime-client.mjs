@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 21becfcf6be955bfb6cfcc0631c9fdd2570d964ed84ff0d4b434adb5b9b76261).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: b5e47f87ffda754c2a1c00c806620045a9ab3d6d70ead3a381c3d329e33f633d).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
@@ -226,7 +226,7 @@ export function createSavedStoryEvidenceReader(ports = {}) {
   return input => readSavedStoryEvidence(input, ports, captures);
 }
 
-async function readSavedStoryEvidence({ root, comparisonRoot = root }, ports, captures) {
+async function readSavedStoryEvidence({ root, comparisonRoot = root, withTests = false }, ports, captures) {
   const env = ports.env ?? process.env;
   const read = ports.readFile ?? (path => readFileSync(path, 'utf8'));
   const list = ports.readDir ?? (path => readdirSync(path));
@@ -320,7 +320,7 @@ async function readSavedStoryEvidence({ root, comparisonRoot = root }, ports, ca
     for (const row of grouped.values()) {
       if (row.pass && sent.get(row.story).size !== selected.get(row.story).size) continue;
       if (row.pass) row.result = '✓';
-      stories.push(row);
+      stories.push(withTests ? { ...row, tests: [...selected.get(row.story)].sort() } : row);
     }
   }
   return { stories, warnings: [...new Set(warnings)] };

@@ -48,7 +48,8 @@ record is simply dead. There is no "uncertain custody" state.
   group (the child and every process the child started, for example `npm ci` under
   `sh`), waits 2 s (a timer that keeps the wrapper alive, also when the direct child
   exits first), writes the exit record (the child's code and signal when it exited,
-  else the stop signal), and then sends SIGKILL to the whole group, itself last. A
+  else the stop signal; best effort), and then sends SIGKILL to the whole group, itself
+  last. A failed exit-record write or descriptor close never skips that SIGKILL. A
   process that treats the first SIGTERM as "stop gracefully" and waits never survives
   as an orphan. A process that left the group (its own `setsid`) is out of reach.
 - `readAgentJob(job, ports)` returns `{state, exit, result, log}`; a missing job record
