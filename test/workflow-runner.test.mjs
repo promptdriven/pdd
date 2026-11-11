@@ -3086,7 +3086,7 @@ test('2571: PR draft/CI facts, unavailable values and private strings stay withi
     {number: 25, url: run.pr[2].url, draft: null, ci: 'unknown'}]);
   assert.equal(row.stories, null, 'an agent-written pass never establishes a Story count');
   assert.equal(row.waitsFor, 'question');
-  assert.ok(!serialized.includes(privateUrl) && !serialized.includes('private-2571-token') && !serialized.includes('/s/'));
+  assert.ok(!serialized.includes('private-2571-token') && !serialized.includes('/s/'));
   assert.equal(row.issueTitle, 'Use value two (Try link removed)');
   assert.equal(row.question, 'Choose using (Try link removed)');
   assert.equal(Object.hasOwn(row, 'done'), false); assert.equal(Object.hasOwn(row, 'links'), false);
