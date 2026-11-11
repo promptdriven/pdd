@@ -1,8 +1,8 @@
 # Working on PDD
 
-Before you write or change a Story or a prompt, read the full [Prompting guide](docs/prompting-guide.md) in this conversation. Follow its method for module ownership, public behavior, what must not change, required dependencies and the edge cases that matter. A link or a Story template is not enough. If you lose the context, read the guide again before you write.
+Before you write or change a Story or a prompt, read the full [Prompting guide](docs/prompting-guide.md) in this conversation. Follow its method for module ownership, public behavior, what must not change, required dependencies and the edge cases that matter. A link or a Story template is not enough. If you lose the context, read the guide again before you write. Before you write a Story, also read the full [Story guide](docs/story-guide.md).
 
-Read [skills/pdd-prompting/SKILL.md](skills/pdd-prompting/SKILL.md) for the core rules. Prompts are the source: change the prompt that owns the behavior before you change the code. Keep expected cases apart from what the code returns. Review changes to the contract with the person. Never invent their decision. `skills/pdd-prompting/guide.md` must stay the same as `docs/prompting-guide.md`, byte for byte. A test checks this, so change both together.
+Read [skills/pdd-prompting/SKILL.md](skills/pdd-prompting/SKILL.md) for the core rules. Prompts are the source: change the prompt that owns the behavior before you change the code. Keep expected cases apart from what the code returns. Review changes to the contract with the person. Never invent their decision. `skills/pdd-prompting/guide.md` must stay the same as `docs/prompting-guide.md`, and `skills/pdd-prompting/story-guide.md` the same as `docs/story-guide.md`, byte for byte. A test checks this, so change both together.
 
 What this package contains:
 

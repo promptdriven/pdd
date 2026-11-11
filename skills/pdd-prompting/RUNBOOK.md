@@ -441,7 +441,7 @@ A step that shows `expected X, got Y` is a failed check. Follow "After a ✗" fo
 | `graph-schema-…` | A schema breaks a rule of section 3. Local diagnostics give the rule and JSON Pointer | Check the named schema against section 3. |
 | `invalid-input` | A step input breaks the input schema: `"7pm"`, or a tax rate as a number | Fix the input. pdd shows the field and the rule. |
 | `story-criterion-mismatch` | A test criterion is not the story text: often curly quotes | Copy the story line exactly. |
-| `unchecked-criteria` | A criterion has no exact check | Add a check for it. |
+| `unchecked-criteria` | No criterion has an exact check. One criterion with no exact check is `not checked`: the others run, but the Story is not a full pass | Add an exact check for each criterion. |
 | `interface-stale` | The prose changed after the hash | Draft: run `--fill-hash`. Approved: set draft and fill the hash. In a normal run, a full check pass re-approves it at PR 1 (section 2); else ask again. |
 | `repository-graph-catalog-error` | Too few AI calls left for a step | Run again with a higher `--max-calls`. |
 | `graph-result-failure` | Often the prose calls a prompt more than `max_calls` | Make the prose and `max_calls` agree. |

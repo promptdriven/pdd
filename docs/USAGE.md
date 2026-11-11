@@ -153,7 +153,7 @@ PDD is nine skills. A skill is a folder of plain Markdown that your agent reads 
 
 | Skill | What it is |
 |---|---|
-| [`pdd-prompting`](../skills/pdd-prompting/SKILL.md) | The full [Prompting guide](prompting-guide.md) (`guide.md`), its core rules, how to review a prompt, and `RUNBOOK.md` for checks on the PDD interpreter |
+| [`pdd-prompting`](../skills/pdd-prompting/SKILL.md) | The full [Prompting guide](prompting-guide.md) (`guide.md`), the [Story guide](story-guide.md) (`story-guide.md`), its core rules, how to review a prompt, and `RUNBOOK.md` for checks on the PDD interpreter |
 | `pdd-feature` | A workflow for new behavior |
 | `pdd-product` | Map a whole product and plan small feature runs |
 | `pdd-bug` | A workflow for something that is broken |
