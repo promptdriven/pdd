@@ -60,7 +60,7 @@ comments on a known cause at most once a day.
 - Safe text: the title names the kind, component, code and PDD minor version. The
   public body starts with a fixed sentence for what the job did: it ended, or, for a
   cause with `shipped: true` (Runtime could not check), it shipped its PR with
-  "Runtime: not run", or, for a `shipped` cause with the code `vector-replay` (the
+  "Runtime: not run", or, for a `shipped` cause of the component `autopilot-core` with the code `vector-replay` (the
   core could not run the replay or formal tests of a PR), it went on with that claim
   marked as not checked, or, for `adopt-pdd`, a fixed request to adopt PDD. Then it has
   only fixed fields: the kind, component, error code, step, the PDD, Node, platform

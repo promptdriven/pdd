@@ -1596,15 +1596,18 @@ that names a changed scenario, if it is a `node:test` JavaScript file (other fil
 listed as not run). It runs the replay and formal files apart, so each has its own
 counts. A failure, a claim that its run contradicts (a vectors count too), or a positive
 claim that it could not check, is red, and the merge comment shows its own counts. A
-claim that Autopilot's own runner could not check is red once per job; after that the
-merge comment marks it as not checked and Autopilot files one report.
+claim that Autopilot could not check (no result, a file it does not run, or a skipped
+test) is red once per job; after that Autopilot never repeats it: the merge comment and
+the history write that kind as `not-run (Autopilot could not check: reason)`, and
+Autopilot files one report.
 
 A build job asks one question instead of choosing when the issue does not settle a
-product, contract or naming choice (its brief lists the other open issues, so it can
-see an open decision); it opens no PR then. The fresh review also checks that the
+product, contract or public naming choice (its brief lists the other open issues by
+trusted authors, so it can see an open decision); it opens no PR then. The fresh review also checks that the
 change makes no such choice (for example one option of an open decision issue that the
 change touches). Such a finding is not repaired: Autopilot asks the one question
-instead, and the PR waits for the answer.
+instead (in `observe` mode too), and the PR waits for the answer. The next build and
+review read the answer, so a settled choice is not asked again.
 
 When a job needs a person's decision, Autopilot posts its one question on the issue,
 adds `pdd:needs-decision` (not `pdd:stuck`) and frees the slot. Answer in a comment

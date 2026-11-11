@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-reports.prompt.md (sha256: 82164dcbfb9d3f87fb357c020f3406d3ed757bdb9f65a9b263d376fd1c0f36ec).
+// Generated from prompts/cli/autopilot-reports.prompt.md (sha256: 693aa9fb8a8f5d1ee15dcfe024dcbc36a39bd634b4939185c832d1e573b57385).
 import * as nativeFs from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -40,7 +40,7 @@ function publicReport(draft) {
   const name = f.kind === 'runtime' ? 'Runtime' : 'PDD';
   const title = `Autopilot report: ${name} ${f.component} ${f.code} (PDD ${minor(f.versions.pdd)})`;
   const body = [f.code === 'adopt-pdd' ? 'Autopilot changed existing code that no prompt owns (path e, a direct change with a regression test). Please adopt PDD for those modules (the local draft on the Autopilot machine lists them): give each one a prompt and a binding or header.'
-    : draft.shipped === true && f.code === 'vector-replay' ? 'Autopilot could not run the replay or formal tests of one PR. The PR went on, with that claim marked as not checked in its merge note.'
+    : draft.shipped === true && f.code === 'vector-replay' && f.component === 'autopilot-core' ? 'Autopilot could not run the replay or formal tests of one PR. The PR went on, with that claim marked as not checked in its merge note.'
     : draft.shipped === true ? 'Autopilot shipped one PR with "Runtime: not run" because Runtime could not check it. The job did not wait for a fix.'
     : `Autopilot ended one job because of a ${name} problem. The job did not wait for a fix.`, '',
     `- Kind: ${f.kind}`, `- Component: ${f.component}`, `- Error code: ${f.code}`, `- Step: ${f.step}`,
