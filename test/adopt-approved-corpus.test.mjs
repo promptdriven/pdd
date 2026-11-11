@@ -63,6 +63,32 @@ test('2640 snapshot failures, malformed facts, duplicate inventories and throw n
   }
   assert.equal((await adoptReplayCorpus('unused','unused',{readAdoptionSnapshot:async()=>{throw Error('Unavailable');}})).reason,'unavailable');
 });
+for(const mode of ['empty','duplicate']) test(`2640 native rejects ${mode} declared scenarios before inventory selection`,async t=>{
+  const f=fixture(t);
+  f.declaration.scenarios=mode==='empty'?[]:[f.declaration.scenarios[0],f.declaration.scenarios[0]];f.save();
+  const result=await f.adopt();
+  assert.equal(result.outcome,'blocked');assert.equal(result.reason,'invalid-approval');assert.deepEqual(result.paths,[]);
+  assert.match(result.cause,mode==='empty'?/scenarios:.*nonempty/:/scenarios:.*duplicate.*arbitrary\/é corpus\.json/);
+});
+test('2640 malformed declaration precedes independently selected inventory failures',async()=>{
+  const original=JSON.parse(readFileSync(new URL('./runtime/adopt-approved-corpus.json',import.meta.url))).initial_world.snapshots[0].snapshot;
+  const run=async snapshot=>adoptReplayCorpus('unused','unused',{readAdoptionSnapshot:async()=>({snapshot})});
+  for(const declaration of ['empty','duplicate']) for(const inventory of ['empty-approved','empty-current','duplicate-approved','duplicate-current','unequal']) {
+    const snapshot=structuredClone(original);
+    snapshot.declaration.scenarios=declaration==='empty'?[]:[snapshot.declaration.scenarios[0],snapshot.declaration.scenarios[0]];
+    if(inventory==='empty-approved')snapshot.approved_vectors=[];
+    if(inventory==='empty-current')snapshot.current_vectors=[];
+    if(inventory==='duplicate-approved')snapshot.approved_vectors.push(structuredClone(snapshot.approved_vectors[0]));
+    if(inventory==='duplicate-current')snapshot.current_vectors.push(structuredClone(snapshot.current_vectors[0]));
+    if(inventory==='unequal')snapshot.current_vectors.pop();
+    const result=await run(snapshot);
+    assert.equal(result.reason,'invalid-approval',`${declaration} / ${inventory}`);assert.deepEqual(result.paths,[]);
+    assert.match(result.cause,declaration==='empty'?/scenarios:.*nonempty/:/scenarios:.*duplicate.*tests\/one\.json/);
+  }
+  assert.equal((await run(structuredClone(original))).outcome,'adopted');
+  const mismatch=structuredClone(original);mismatch.current_vectors.pop();
+  assert.equal((await run(mismatch)).reason,'inventory-mismatch');
+});
 test('2640 native preserves long composite check identities and exact whitespace/NUL Git paths',async t=>{
   const f=fixture(t),path='arbitrary/ café \n.json';
   f.vector.steps[0].operation='o'.repeat(900);f.vector.steps[0].step_id='\u0001'.repeat(900);f.vector.steps[0].checks[0].criterion_id='\u0001'.repeat(900);
