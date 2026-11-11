@@ -3,8 +3,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runTry } from '../src/runtime-seam.mjs';
-import { readTryOwner } from '../src/runtime/runtime-client.mjs';
+import { runTry, readTryOwner } from '../src/runtime-seam.mjs';
 import { fakeRuntime, portsFor, sha, temp } from './runtime-fake.mjs';
 
 function coffee(t) {

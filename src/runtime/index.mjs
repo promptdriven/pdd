@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-entry.prompt.md (sha256: 46a6f9b5b43c34ffbd40e66052e8242df088c53be05b95698648a3038793c3e4).
+// Generated from prompts/cli/runtime-entry.prompt.md (sha256: bd5041422b55080d2c20f36c41930b249fd9c361952503d4c18b3311fdd15e6f).
 import { createRequire } from 'node:module';
 
 export {
@@ -66,6 +66,23 @@ export function checkPlanResultLines(result) {
   return loadCheckPlan().checkPlanResultLines(result);
 }
 
+let productCompositionModule = null;
+function loadProductComposition() {
+  return (productCompositionModule ??= createRequire(import.meta.url)('./product-composition.mjs'));
+}
+
+export function composeProductTry(input, ports) {
+  return loadProductComposition().composeProductTry(input, ports);
+}
+
+export function productTapCallBound(map, ports) {
+  return loadProductComposition().productTapCallBound(map, ports);
+}
+
+export function selectJourneys(tests, selector) {
+  return loadProductComposition().selectJourneys(tests, selector);
+}
+
 export async function runJobs(input, ports) {
   const { runJobs: run } = await import('./runtime-slots.mjs');
   return run(input, ports);
@@ -127,6 +144,11 @@ export async function runCheck(input, ports) {
 export async function runTry(input, ports) {
   const { runTry: run } = await import('./runtime-client.mjs');
   return run(input, ports);
+}
+
+export async function readTryOwner(input, ports) {
+  const { readTryOwner: read } = await import('./runtime-client.mjs');
+  return read(input, ports);
 }
 
 export async function createAgentBridge(context, test, tryId, options, link, seamPorts) {

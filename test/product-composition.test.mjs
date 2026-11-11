@@ -5,8 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseProductDocuments, parseProductWorldWriters, productStatus, readProduct } from '../src/product.mjs';
-import { selectJourneys } from '../src/product-composition.mjs';
-import { runCheck, captureSource } from '../src/runtime-seam.mjs';
+import { selectJourneys, runCheck, captureSource } from '../src/runtime-seam.mjs';
 
 const coffee = relative => readFileSync(new URL(`../examples/coffee-pickup/${relative}`, import.meta.url), 'utf8');
 

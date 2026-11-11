@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 51e4de76c0c948e2d0758f3ca86e668dfbdc2224c2a1d5f4a5c9550534d3137e).
+// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 72e979750c678311b499988efbb5605974e4b6e0f7df6cfde228c40d856df4a5).
 import { spawnSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -7,9 +7,11 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   buildCheckPlan as runtimeBuildCheckPlan,
   checkRuntimeHealth as runtimeCheckHealth,
+  composeProductTry as runtimeComposeProductTry,
   createAgentBridge as runtimeCreateAgentBridge,
   loadRuntimeClient as runtimeLoadClient,
   migrateRuntimeWorkspace as runtimeMigrateWorkspace,
+  readTryOwner as runtimeReadTryOwner,
   runAutomaticApproval as runtimeRunAutomaticApproval,
   runCheck as runtimeRunCheck,
   runContracts as runtimeRunContracts,
@@ -45,6 +47,11 @@ function resolveWorkflowBaseSha(cwd = process.cwd(), env = process.env) {
 export function buildCheckPlan(input, ports = {}) {
   const { headerPrompts } = req('./file-owner.mjs');
   return runtimeBuildCheckPlan(input, { headerPrompts, ...ports });
+}
+
+export function composeProductTry(input, ports = {}) {
+  const { parseProductDocuments, parseProductWorldWriters } = req('./product.mjs');
+  return runtimeComposeProductTry(input, { parseProductDocuments, parseProductWorldWriters, ...ports });
 }
 
 export async function runContracts(input, ports = {}) {
@@ -157,11 +164,13 @@ export async function runTry(input = {}, ports = {}) {
     { rememberSecrets },
     { loadAgentDefinitions },
     { readEvidenceEligibility },
+    { parseProductDocuments, parseProductWorldWriters },
     { askApproval, lineReader, promptPath },
   ] = await Promise.all([
     import('./secret-redaction.mjs'),
     import('./agent-config.mjs'),
     import('./workflow-runner.mjs'),
+    import('./product.mjs'),
     import('./prompt-approve.mjs'),
   ]);
   return runtimeRunTry(input, {
@@ -171,6 +180,8 @@ export async function runTry(input = {}, ports = {}) {
     discoverAgents: async (...args) => (await import('./agent-adapters.mjs')).discoverAgents(...args),
     askAgent: async (...args) => (await import('./agent-adapters.mjs')).askAgent(...args),
     evidenceEligibility: readEvidenceEligibility,
+    parseProductDocuments,
+    parseProductWorldWriters,
     askApproval,
     lineReader,
     promptPath,
@@ -205,9 +216,44 @@ export async function runShim(descriptorPath, argv, ports = {}) {
   return runtimeRunShim(descriptorPath, argv, { rememberSecrets, lineReader, ...ports });
 }
 
+export async function readTryOwner(input = {}, ports = {}) {
+  const [
+    { rememberSecrets },
+    { readEvidenceEligibility },
+    { parseProductDocuments, parseProductWorldWriters },
+  ] = await Promise.all([
+    import('./secret-redaction.mjs'),
+    import('./workflow-runner.mjs'),
+    import('./product.mjs'),
+  ]);
+  return runtimeReadTryOwner(input, {
+    tryLauncherUrl: TRY_LAUNCHER_URL,
+    rememberSecrets,
+    evidenceEligibility: readEvidenceEligibility,
+    parseProductDocuments,
+    parseProductWorldWriters,
+    ...ports,
+  });
+}
+
 export async function runMcp(input, ports = {}) {
-  const { rememberSecrets } = await import('./secret-redaction.mjs');
-  return runtimeRunMcp(input, { rememberSecrets, ...ports });
+  const [
+    { rememberSecrets },
+    { readEvidenceEligibility },
+    { parseProductDocuments, parseProductWorldWriters },
+  ] = await Promise.all([
+    import('./secret-redaction.mjs'),
+    import('./workflow-runner.mjs'),
+    import('./product.mjs'),
+  ]);
+  return runtimeRunMcp(input, {
+    tryLauncherUrl: TRY_LAUNCHER_URL,
+    rememberSecrets,
+    evidenceEligibility: readEvidenceEligibility,
+    parseProductDocuments,
+    parseProductWorldWriters,
+    ...ports,
+  });
 }
 
 export async function migrateRuntimeWorkspace(input, ports = {}) {
@@ -241,6 +287,7 @@ export {
   outcomeText,
   parseScenarioJson,
   preflight,
+  productTapCallBound,
   promptRefusal,
   promptSchemaRefusals,
   proseSha256,
@@ -248,6 +295,7 @@ export {
   requireRuntimePath,
   resultOutcome,
   runInterfaceDraft,
+  selectJourneys,
   sha256,
   sourceFilePort,
   storyLines,

@@ -8,7 +8,6 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { listRuns } from './workflow-runs.mjs';
 import { workflowAgentEntry } from './workflow-agents.mjs';
-import { recordedRuntimeLines, storyEvidence, startRun } from './workflow-runner.mjs';
 import { resolveWorkflowRepository } from './workflow-github.mjs';
 import { causeText } from './runtime-seam.mjs';
 import { createSavedStoryEvidenceReader } from './runtime-seam.mjs';
@@ -52,7 +51,10 @@ const portsFor = given => {
   // The native runner records each gh call in the GitHub call ledger of its repository.
   const execFile = given.execFile ?? nativeGithubCounter((file, args, options) => ordinary(file, args, { ...options, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 }));
   const p = { readFile: path => readFile(path, 'utf8'), listRuns: input => listRuns(input, { execFile }),
-    storyEvidence, savedStoryEvidence: createSavedStoryEvidenceReader(), startRun, resolveRepository: input => resolveWorkflowRepository(input, { execFile }),
+    storyEvidence: (...args) => import('./workflow-runner.mjs').then(m => m.storyEvidence(...args)),
+    savedStoryEvidence: createSavedStoryEvidenceReader(),
+    startRun: (...args) => import('./workflow-runner.mjs').then(m => m.startRun(...args)),
+    resolveRepository: input => resolveWorkflowRepository(input, { execFile }),
     ...given, execFile };
   p.issuePage ??= async ({ cwd, repository, marker, page, perPage }) => {
     const quoted = marker.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
@@ -493,6 +495,7 @@ function cycles(product) {
   return [...new Set(warnings)];
 }
 async function progress(input, given, target) {
+  const { recordedRuntimeLines } = await import('./workflow-runner.mjs');
   const p = portsFor(given), { product } = await documents(input, p), cwd = input.cwd;
   const localRuns = await p.listRuns({ cwd }), repo = await p.resolveRepository({ cwd });
   const parent = localRuns.find(run => run.workflow === 'product'), warning = cycles(product), views = new Map();

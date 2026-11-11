@@ -346,6 +346,7 @@ test('SEAM5: pdd --help and pdd owner load the exact base src/ module set withou
       'src/runtime/contracts.mjs',
       'src/runtime/runtime-slots.mjs',
       'src/runtime/runtime-check-plan.mjs',
+      'src/runtime/product-composition.mjs',
       'src/runtime/agent-chat.mjs',
       'src/runtime/runtime-workspace-migration.mjs',
       'src/runtime/secret-redaction.mjs',

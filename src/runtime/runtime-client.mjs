@@ -1,5 +1,5 @@
 // Generated from prompts/cli/runtime-client.prompt.md (sha256: 21becfcf6be955bfb6cfcc0631c9fdd2570d964ed84ff0d4b434adb5b9b76261).
-import { composeProductTry, selectJourneys, productTapCallBound } from '../product-composition.mjs';
+import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
 import { isRecentLintReceipt } from './runtime-lint-receipt.mjs';
@@ -108,7 +108,7 @@ function withDefaults(ports) {
     return () => { handlers.delete(handler); if (!handlers.size) { unsubscribe?.(); unsubscribe = null; } };
   };
   return {
-    env, tryLauncherUrl: ports.tryLauncherUrl, rememberSecrets: ports.rememberSecrets, clientVersion: ports.clientVersion, workflowBaseSha: ports.workflowBaseSha, headerPrompts: ports.headerPrompts, evidenceEligibility: ports.evidenceEligibility, readEvidenceEligibility: ports.readEvidenceEligibility, evidencePorts: ports.evidencePorts, allRuns: ports.allRuns, assessNativeEvidence: ports.assessNativeEvidence, usableResult: ports.usableResult, resultLines: ports.resultLines, loadAgentDefinitions: ports.loadAgentDefinitions, agents: ports.agents, guidePorts: ports.guidePorts, askApproval: ports.askApproval, promptPath: ports.promptPath, lineReader: ports.lineReader ?? defaultLineReader, lintSvgLayouts: ports.lintSvgLayouts, compareScreen: ports.compareScreen, formatScreenComparison: ports.formatScreenComparison, caseHandoff:ports.caseHandoff, cacheFiles: ports.cacheFiles ?? nativeCacheFiles, cacheHash: ports.cacheHash ?? sha256, acquireBatchLock: ports.acquireBatchLock ?? acquireRuntimeBatchLock, timers: ports.timers, random: ports.random, captureSource: ports.captureSource ?? captureSource, slotFiles: ports.slotFiles, isAlive: ports.isAlive, pid: ports.pid, agentBridge: ports.agentBridge, discoverAgents: ports.discoverAgents, askAgent: ports.askAgent, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
+    env, tryLauncherUrl: ports.tryLauncherUrl, rememberSecrets: ports.rememberSecrets, clientVersion: ports.clientVersion, workflowBaseSha: ports.workflowBaseSha, headerPrompts: ports.headerPrompts, evidenceEligibility: ports.evidenceEligibility, readEvidenceEligibility: ports.readEvidenceEligibility, evidencePorts: ports.evidencePorts, allRuns: ports.allRuns, assessNativeEvidence: ports.assessNativeEvidence, usableResult: ports.usableResult, resultLines: ports.resultLines, parseProductDocuments: ports.parseProductDocuments, parseProductWorldWriters: ports.parseProductWorldWriters, loadAgentDefinitions: ports.loadAgentDefinitions, agents: ports.agents, guidePorts: ports.guidePorts, askApproval: ports.askApproval, promptPath: ports.promptPath, lineReader: ports.lineReader ?? defaultLineReader, lintSvgLayouts: ports.lintSvgLayouts, compareScreen: ports.compareScreen, formatScreenComparison: ports.formatScreenComparison, caseHandoff:ports.caseHandoff, cacheFiles: ports.cacheFiles ?? nativeCacheFiles, cacheHash: ports.cacheHash ?? sha256, acquireBatchLock: ports.acquireBatchLock ?? acquireRuntimeBatchLock, timers: ports.timers, random: ports.random, captureSource: ports.captureSource ?? captureSource, slotFiles: ports.slotFiles, isAlive: ports.isAlive, pid: ports.pid, agentBridge: ports.agentBridge, discoverAgents: ports.discoverAgents, askAgent: ports.askAgent, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
     gh: ports.gh ?? (args => {
       const executable = authExecutable(env, ports.ghPath);
       return executable ? spawnSync(executable, args, { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 })
@@ -3484,7 +3484,8 @@ function captureProductTry(root,test,options,ports) {
   let composition, maxTapCalls;
   const capture=ports.captureSource(root,{tests:[test.path],appMap:null,prepareSource(snapshot){
     const adapters={root,statFile:(path,options)=>snapshot.statFile(relative(root,path).split(sep).join('/'),options),
-      readFile:path=>snapshot.readFile(relative(root,path).split(sep).join('/'))};
+      readFile:path=>snapshot.readFile(relative(root,path).split(sep).join('/')),
+      parseProductDocuments:ports.parseProductDocuments,parseProductWorldWriters:ports.parseProductWorldWriters};
     const journey=options['--journey']??(/^user_stories\/journeys\/[^/]+\.md$/.test(test.storyPath)?test.path:undefined);
     composition=composeProductTry({root,...(options['--parts']!==undefined?{parts:options['--parts'].split(',').map(part=>part.trim())}:{}),
       ...(journey!==undefined?{journey,testPath:test.path}:{})},adapters);

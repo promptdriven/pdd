@@ -1,7 +1,6 @@
 // Generated from prompts/cli/product-composition.prompt.md (sha256: 3f009afef4de00831d7f35b3215fce80ca68f836c32579187fd3da0ac95ff955).
 import { basename, join } from 'node:path';
 import { checkInput, interfaceBlocks, PreflightError, selectTests } from './runtime-preflight.mjs';
-import { parseProductDocuments, parseProductWorldWriters } from './product.mjs';
 import { expandSource, isJsonNumber, jsonNumberIdentity, parseJsonValue, stringifyJsonValue } from './contract-refs.mjs';
 
 const fail = (code, message) => { throw Object.assign(Error(message), { code }); };
@@ -213,13 +212,13 @@ export function composeProductTry({ root, parts, journey, testPath }, ports) {
   };
   try {
     const mapText = read('product/map.md'), planText = read('product/plan.md', true) ?? '';
-    const { product } = parseProductDocuments({ mapText, planText });
+    const { product } = ports.parseProductDocuments({ mapText, planText });
     const selected = parts === undefined ? product.parts.map(part => part.part) : [...parts];
     if (!selected.length || new Set(selected).size !== selected.length || selected.some(part => !product.parts.some(row => row.part === part))) {
       fail('invalid-product', `Choose distinct product parts from: ${product.parts.map(part => part.part).join(', ')}.`);
     }
     const writers = new Map();
-    for (const { key, writer } of parseProductWorldWriters({ worldText: read('contracts/world.md', true) ?? '' })) {
+    for (const { key, writer } of ports.parseProductWorldWriters({ worldText: read('contracts/world.md', true) ?? '' })) {
       if (writers.has(key) && writers.get(key) !== writer) fail('world-writer-conflict', `${key} is written by ${writers.get(key)} and ${writer}.`);
       writers.set(key, writer);
     }

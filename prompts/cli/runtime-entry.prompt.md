@@ -1,8 +1,8 @@
 # Runtime package entry
 
-Own `src/runtime/index.mjs`. It is the single public entry of `src/runtime/`, exposing the Runtime commands, local format and workspace readers, check-plan and outcome helpers, agent bridge and workspace migration entries, constants, and agent packet builder consumed by pdd through [`src/runtime-seam.mjs`](runtime-seam.prompt.md).
+Own `src/runtime/index.mjs`. It is the single public entry of `src/runtime/`, exposing the Runtime commands, local format and workspace readers, check-plan, product-composition, and outcome helpers, agent bridge and workspace migration entries, constants, and agent packet builder consumed by pdd through [`src/runtime-seam.mjs`](runtime-seam.prompt.md).
 
-No module under `src/runtime/` may import or address any relative path outside `src/runtime/`. Caller metadata (`client.version`, `client.commands`, `workflow.base_sha`) and host-owned capabilities (file-owner headers, approvals, local agent launchers, workflow evidence eligibility, native Story assessment, SVG layout advisory, and screen comparison) arrive exclusively through request fields and `ports`.
+No module under `src/runtime/` may import or address any relative path outside `src/runtime/`. Caller metadata (`client.version`, `client.commands`, `workflow.base_sha`) and host-owned capabilities (file-owner headers, approvals, local agent launchers, workflow evidence eligibility, native Story assessment, product Markdown document and world-writer parsers, SVG layout advisory, and screen comparison) arrive exclusively through request fields and `ports`.
 
 ## Public contract
 
@@ -28,6 +28,7 @@ Load each owner module only when the exported function is called:
 | Owner module | Exported bindings | Loading rule |
 |---|---|---|
 | `src/runtime/runtime-check-plan.mjs` | `buildCheckPlan`, `checkPlanResultLines`, `checkPlanResults` | Load synchronously on first call via `createRequire(import.meta.url)` |
+| `src/runtime/product-composition.mjs` | `composeProductTry`, `productTapCallBound`, `selectJourneys` | Load synchronously on first call via `createRequire(import.meta.url)` |
 | `src/runtime/contracts.mjs` | `runContracts` | `await import('./contracts.mjs')` when called |
 | `src/runtime/runtime-slots.mjs` | `runJobs` | `await import('./runtime-slots.mjs')` when called |
 | `src/runtime/interface-draft.mjs` | `loadInterfaceDraft`, `runAutomaticApproval`, `runInterfaceDraft` | `await import('./interface-draft.mjs')` when called (`loadInterfaceDraft` resolves to `{ contractCoverage, coverageView, missingInterfaces }`) |
@@ -35,7 +36,7 @@ Load each owner module only when the exported function is called:
 | `src/runtime/runtime-workspace-migration.mjs` | `migrateRuntimeWorkspace` | `await import('./runtime-workspace-migration.mjs')` when called |
 | `src/runtime/try-mcp.mjs` | `runMcp` | `await import('./try-mcp.mjs')` when called |
 | `src/runtime/try-doors.mjs` | `runShim` | `await import('./try-doors.mjs')` when called |
-| `src/runtime/runtime-client.mjs` | `checkRuntimeHealth`, `createSavedStoryEvidenceReader`, `loadRuntimeClient`, `runCheck`, `runTry` | `await import('./runtime-client.mjs')` when called (`createSavedStoryEvidenceReader(ports)` returns an async reader that loads `runtime-client.mjs` on first read and retains per-reader capture state; `loadRuntimeClient` resolves to `{ DEFAULT_RUNTIME_URL, checkRuntimeHealth, runtimeOrigin }`) |
+| `src/runtime/runtime-client.mjs` | `checkRuntimeHealth`, `createSavedStoryEvidenceReader`, `loadRuntimeClient`, `readTryOwner`, `runCheck`, `runTry` | `await import('./runtime-client.mjs')` when called (`createSavedStoryEvidenceReader(ports)` returns an async reader that loads `runtime-client.mjs` on first read and retains per-reader capture state; `loadRuntimeClient` resolves to `{ DEFAULT_RUNTIME_URL, checkRuntimeHealth, runtimeOrigin }`) |
 
 `runTry(input, ports)` forwards `ports.tryLauncherUrl` to `openCli` when supplied so the host CLI can pin a stable launcher module URL outside `src/runtime/`; when omitted, `openCli` falls back to `src/runtime/try-doors.mjs`.
 
@@ -48,6 +49,7 @@ Load each owner module only when the exported function is called:
 - [Runtime preflight](runtime-preflight.prompt.md): required generation context for `LIMITS`, `captureSource`, `checkInput`, `findTests`, `gitFiles`, `interfaceBlocks`, `interfaceSchemaProblems`, `isSecretPath`, `isStoryPath`, `preflight`, `promptRefusal`, `promptSchemaRefusals`, `proseSha256`, `readPrompt`, `sha256`, and `sourceFilePort`.
 - [Agent packet](agent-packet.prompt.md): required generation context for `buildAgentInput`.
 - [Runtime check plan](runtime-check-plan.prompt.md): required generation context for `buildCheckPlan`, `checkPlanResultLines`, and `checkPlanResults`.
+- [Product Simulator composition](product-composition.prompt.md): required generation context for `composeProductTry`, `productTapCallBound`, and `selectJourneys`.
 - [Runtime slots](runtime-slots.prompt.md): required generation context for `runJobs`.
 - [Shared contracts](contracts.prompt.md): required generation context for `runContracts`.
 - [Interface drafting](interface-draft.prompt.md): required generation context for `contractCoverage`, `coverageView`, `missingInterfaces`, `runAutomaticApproval`, and `runInterfaceDraft`.
@@ -55,11 +57,11 @@ Load each owner module only when the exported function is called:
 - [Workspace migration](runtime-workspace-migration.prompt.md): required generation context for `migrateRuntimeWorkspace`.
 - [Try MCP server](try-mcp.prompt.md): required generation context for `runMcp`.
 - [Try doors](try-doors.prompt.md): required generation context for `runShim` and `tryLauncherUrl` forwarding.
-- [Runtime client](runtime-client.prompt.md): required generation context for `DEFAULT_RUNTIME_URL`, `checkRuntimeHealth`, `createSavedStoryEvidenceReader`, `runCheck`, `runTry`, and `runtimeOrigin`.
+- [Runtime client](runtime-client.prompt.md): required generation context for `DEFAULT_RUNTIME_URL`, `checkRuntimeHealth`, `createSavedStoryEvidenceReader`, `readTryOwner`, `runCheck`, `runTry`, and `runtimeOrigin`.
 
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"native-only","status":"draft","prose_sha256":"7eace3b5b2522584d85564a7dcac6c7972ba2689dbf8a4b7d2781e2dc5e278c0","reason":"Exposes live JavaScript ESM static and deferred dynamic-import bindings across src/runtime/ submodules, which bound Runtime ports cannot fake."}
+{"kind":"native-only","status":"draft","prose_sha256":"2988cd2b1a79fc40ab6cfe41e8a19a7f1c75ebaaa0ee2da736d4fad29d9f4a6a","reason":"Exposes live JavaScript ESM static and deferred dynamic-import bindings across src/runtime/ submodules, which bound Runtime ports cannot fake."}
 ```
 </details>

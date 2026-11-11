@@ -13,9 +13,11 @@ Because `src/runtime/` imports nothing outside `src/runtime/`, `src/runtime-seam
 
 - `runJobs(input, ports)`: supplies `client.commands` (`{ test, lint, simulate }`) from `src/command-catalog.mjs` (`NAMES`).
 - `buildCheckPlan(input, ports)`: supplies `ports.headerPrompts` from `src/file-owner.mjs`.
+- `composeProductTry(input, ports)`: supplies `ports.parseProductDocuments` and `ports.parseProductWorldWriters` from `src/product.mjs`.
 - `runCheck(input, ports)`: supplies `client.version` from `package.json`, `ports.workflowBaseSha` from `src/workflow-runs.mjs` (`allRuns`), `ports.headerPrompts` from `src/file-owner.mjs`, `ports.rememberSecrets` from `src/secret-redaction.mjs`, `ports.evidenceEligibility` from `src/workflow-runner.mjs` (`readEvidenceEligibility`), `ports.allRuns`, `ports.assessNativeEvidence`, `ports.usableResult`, and `ports.resultLines` from `src/workflow-runs.mjs` and `src/workflow-results.mjs` (when `--lint` is set), `ports.lintSvgLayouts` from `src/svg-layout.mjs` (when `--lint` is set), and `ports.compareScreen` and `ports.formatScreenComparison` from `src/screen-compare.mjs` (when `--screen` or `--drawing` is set).
-- `runTry(input, ports)`: supplies `ports.tryLauncherUrl`, `ports.rememberSecrets` from `src/secret-redaction.mjs`, `ports.loadAgentDefinitions` from `src/agent-config.mjs`, `ports.discoverAgents` and `ports.askAgent` from `src/agent-adapters.mjs`, `ports.evidenceEligibility` from `src/workflow-runner.mjs`, and `ports.askApproval`, `ports.lineReader`, and `ports.promptPath` from `src/prompt-approve.mjs`.
+- `runTry(input, ports)`: supplies `ports.tryLauncherUrl`, `ports.rememberSecrets` from `src/secret-redaction.mjs`, `ports.loadAgentDefinitions` from `src/agent-config.mjs`, `ports.discoverAgents` and `ports.askAgent` from `src/agent-adapters.mjs`, `ports.evidenceEligibility` from `src/workflow-runner.mjs`, `ports.parseProductDocuments` and `ports.parseProductWorldWriters` from `src/product.mjs`, and `ports.askApproval`, `ports.lineReader`, and `ports.promptPath` from `src/prompt-approve.mjs`.
 - `createAgentBridge(context, test, tryId, options, link)`: supplies default `loadAgentDefinitions`, `discoverAgents`, `askAgent`, and `guidePorts.evidenceEligibility` without cloning `context`.
+- `readTryOwner(input, ports)` and `runMcp(input, ports)`: supply `ports.tryLauncherUrl`, `ports.rememberSecrets` from `src/secret-redaction.mjs`, and `ports.parseProductDocuments` and `ports.parseProductWorldWriters` from `src/product.mjs` so MCP owner tools and Try reopening support whole-product simulations.
 - `runShim(descriptorPath, argv, ports)`: supplies `ports.lineReader` from `src/prompt-approve.mjs` for `--save-last` interactive editor handoff.
 - `runContracts(input, ports)`: supplies `ports.evidenceEligibility` from `src/workflow-runner.mjs` (`readEvidenceEligibility`).
 - `migrateRuntimeWorkspace(input, ports)`: supplies `ports.evidenceEligibility` from `src/workflow-runner.mjs` (`readEvidenceEligibility`).
@@ -26,11 +28,12 @@ Because `src/runtime/` imports nothing outside `src/runtime/`, `src/runtime-seam
 
 Expose every public binding of [`src/runtime/index.mjs`](runtime-entry.prompt.md), preserving lazy loading, synchronous vs async signatures, parameter handling, return values, thrown errors, and port forwarding:
 
-- `checkRuntimeHealth`, `createSavedStoryEvidenceReader`, `loadRuntimeClient`, `runCheck`, `runTry`
+- `checkRuntimeHealth`, `createSavedStoryEvidenceReader`, `loadRuntimeClient`, `readTryOwner`, `runCheck`, `runTry`
 - `LIMITS`, `captureSource`, `checkInput`, `findTests`, `gitFiles`, `interfaceBlocks`, `interfaceSchemaProblems`, `isSecretPath`, `isStoryPath`, `preflight`, `promptRefusal`, `promptSchemaRefusals`, `proseSha256`, `readPrompt`, `sha256`, `sourceFilePort`
 - `PROMPT_TESTS_LABEL`, `PROMPT_TESTS_WORDS`, `causeText`, `cleanText`, `storyLines`
 - `outcomeText`, `resultOutcome`
 - `buildCheckPlan`, `checkPlanResultLines`, `checkPlanResults`
+- `composeProductTry`, `productTapCallBound`, `selectJourneys`
 - `allowsRuntimePath`, `loadRuntimeWorkspace`, `requireRuntimePath`
 - `exactIntegerLeaves`, `jsonSafe`, `parseScenarioJson`, `stringifyScenarioJson`, `withExactIntegers`
 - `loadInterfaceDraft`, `runAutomaticApproval`, `runInterfaceDraft`
@@ -53,11 +56,12 @@ The seam holds no mutable request state and loads zero additional pdd modules at
 - [Agent configuration](agent-config.prompt.md) and [Agent adapters](agent-adapters.prompt.md): required generation context for `loadAgentDefinitions`, `discoverAgents`, and `askAgent`.
 - [Prompt approval](prompt-approve.prompt.md) and [Approval policy](approval-policy.prompt.md): required generation context for Try and automatic-approval ports.
 - [Workflow runner](workflow-runner.prompt.md), [Workflow runs](workflow-runs.prompt.md), and [Workflow results](workflow-results.prompt.md): required generation context for evidence eligibility, workflow base SHA, and native Story lint assessment ports.
+- [Product workflow](product.prompt.md): required generation context for `parseProductDocuments` and `parseProductWorldWriters` ports.
 - [SVG layout lint](svg-layout.prompt.md) and [Screen comparison](screen-compare.prompt.md): required generation context for local drawing check ports.
 
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"native-only","status":"draft","prose_sha256":"c28ce9ef9cfde5815465611c16a259b6fba11443c2a0913f579f5b249b107010","reason":"Re-exports live JavaScript ESM module bindings from src/runtime/index.mjs as pdd's sole import seam, which bound Runtime ports cannot fake."}
+{"kind":"native-only","status":"draft","prose_sha256":"9c5f2086427431b4fdce635f129d7a462243e692f8a7653bc4a2d83efd345d56","reason":"Re-exports live JavaScript ESM module bindings from src/runtime/index.mjs as pdd's sole import seam, which bound Runtime ports cannot fake."}
 ```
 </details>
