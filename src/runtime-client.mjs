@@ -1,7 +1,7 @@
 import { describeCallPreflight } from './lint-call-preflight.mjs';
 import {rememberSecrets} from './secret-redaction.mjs';
 import { bindingPlanLines, bindingRefusals } from './runtime-binding-plan.mjs';
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: d11f88a66bfdf07b442e1bc15a1dba8a9c0948cd52d7ebeec8a8a913449edccc).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 016c038a6f38260e5bff016a8d50007b32293524cace5fc8287f97d8d7040007).
 import { buildCheckPlan, checkPlanResults, checkPlanLines, checkPlanResultLines } from './runtime-check-plan.mjs';
 import { interfaceFindings } from './interface-draft.mjs';
 import {readEvidenceEligibility} from './workflow-runner.mjs';
@@ -3479,6 +3479,7 @@ function trySourceSelection(record, path) {
 
 function tryPromptProblem(root, found, test, record, capture) {
   const hashes=record.prompt_hashes;
+  if (!capture && record.simulation_scope?.appMap) capture = captureSource(root, trySourceSelection(record, test?.path));
   if (!capture && isObject(hashes)) {
     const files=sourceFilePort(root,found.visible), sources=[], references=[], raw_prompt_hashes={};
     for (const path of Object.keys(hashes)) {
@@ -3488,6 +3489,10 @@ function tryPromptProblem(root, found, test, record, capture) {
       raw_prompt_hashes[path]=sha256(Buffer.from(files.read({path}).content,'utf8'));
     }
     capture={sources,references,raw_prompt_hashes};
+  }
+  if (record.simulation_scope?.appMap != null) {
+    const scope = record.simulation_scope, map = capture.sources.find(file => file.path === scope.appMap);
+    if (!/^[a-f0-9]{64}$/.test(scope.appMapHash ?? '') || !map || sha256(map.bytes) !== scope.appMapHash) return 'The saved simulation app map changed or its source baseline is unavailable.';
   }
   if (!isObject(hashes) || !Object.keys(hashes).length || (test && !test.doc?.steps?.every(step=>typeof hashes[step.entry_path]==='string'))
     || !Object.entries(hashes).every(([path,expected])=>found.visible.has(path) && capture.raw_prompt_hashes[path]===expected)) return 'A prompt changed or this Try has no source record.';
@@ -3596,9 +3601,9 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (live && !options['--new'] && (options['--app-map'] !== undefined || options['--tab'])) {
         throw new Stop(2, `A Try for "${test.title}" is already open. --app-map and --tab apply only to a new Try: run pdd simulate ${test.story} --new (it stops the open Try first).`);
       }
-      if (live && (options['--serve'] !== undefined || context.agentConnection) && !options['--new']) {
+      if (live && (context.doorMode || context.agentConnection) && !options['--new']) {
         const problem=tryPromptProblem(root,found,test,record,capture);
-        if (problem) throw new Stop(options['--serve'] !== undefined ? 125 : 4, `${problem} Run pdd simulate STORY${options['--serve'] !== undefined ? ' --serve' : ''} --new.`);
+        if (problem) throw new Stop(context.doorMode ? 125 : 4, `${problem} Run pdd simulate STORY${options['--serve'] !== undefined ? ' --serve' : ''} --new.`);
       }
       if (answer?.state === 'passed' && answer.result?.session?.state === 'paused' && !options['--new']) {
         if (!validLink(answer.result?.url, origin, 'try')) throw new Stop(3, refusedLink(answer, origin));

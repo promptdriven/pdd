@@ -38,6 +38,12 @@ function saved(setup) {
   const folder = join(setup.state, 'repos');
   return JSON.parse(readFileSync(join(folder, readdirSync(folder).find(path => path.endsWith('.json')))));
 }
+function appMap(root, name) {
+  const path = join(root, 'app-map.json');
+  const map = { schema_version: 'prompt-runtime.app-map.v1', name: 'Saved screens', initial_screen: 'view', initial_route: null, initial_state: {}, state_schema: object({}), synthetic: true, router: null, routes: [], stylesheets: [], handlers: [], screens: [{ id: 'view', source: 'operation', prompt_path: `prompts/${name}.prompt.md`, operation: 'main', input: {}, format: 'html', result_pointer: name.endsWith('http') ? '/body' : '/value' }] };
+  writeFileSync(path, JSON.stringify(map));
+  return path;
+}
 async function harness(t, setup) {
   const events = [];
   const fake = await fakeRuntime(t, (entry, f) => {
@@ -92,8 +98,30 @@ for (const state of ['running', 'paused']) {
   });
 }
 
-for (const references of [false, true]) {
-  test(`812 review: delayed whole-project CLI case handoff retains all source pins (references: ${references})`, async t => {
+test('812 review: named recovery refuses a map-only change against the saved whole-project pin', async t => {
+  const setup = project(t, [['a-http', 'http'], ['z-http', 'http']]), path = appMap(setup.repo, 'z-http');
+  const h = await harness(t, setup), first = await h.run();
+  assert.equal(first.code, 0, first.ports.stderr.text);
+  const [seed] = Object.keys(saved(setup).tries);
+  const unchanged = await h.run(seed, { '--serve': '0' });
+  assert.equal(unchanged.code, 0, unchanged.ports.stderr.text);
+  const before = readFileSync(path, 'utf8'), map = JSON.parse(before), posts = h.fake.posts.length;
+  map.screens[0].id = 'edited-view'; map.initial_screen = 'edited-view';
+  writeFileSync(path, JSON.stringify(map));
+  const named = await h.run(seed, { '--serve': '0' });
+  assert.equal(named.code, 125, named.ports.stderr.text);
+  assert.match(named.ports.stderr.text, /app map.*changed.*--new/);
+  const whole = await h.run();
+  assert.equal(whole.code, 2);
+  assert.equal(h.fake.posts.length, posts);
+  assert.equal(h.fake.deletes.length, 0);
+  writeFileSync(path, before);
+  const restored = await h.run(seed, { '--serve': '0' });
+  assert.equal(restored.code, 0, restored.ports.stderr.text);
+});
+
+for (const [references, withMap] of [[false, false], [true, false], [false, true]]) {
+  test(`812 review: delayed whole-project CLI case handoff retains all source pins (references: ${references}, map: ${withMap})`, async t => {
     const setup = project(t, [['cli', 'cli'], ['other', 'typed']]);
     const target = join(setup.repo, 'tests/cli.json'), doc = JSON.parse(readFileSync(target));
     doc.steps[0].checks.push({ criterion_id: 'AC1', target: 'world', path: '', op: 'equals', value: {} });
@@ -106,7 +134,8 @@ for (const references of [false, true]) {
       iface.entries[0].input_schema = { $contract: 'contracts/input.json#' };
       writeFileSync(path, source.replace(/(```json\s*)[\s\S]*?(```)/, (_, open, close) => open + JSON.stringify(iface) + '\n' + close));
     }
-    const h = await harness(t, setup), first = await h.run();
+    const mapPath = withMap ? appMap(setup.repo, 'other') : null;
+    const h = await harness(t, setup), first = await h.run(undefined, withMap ? { '--cli': true } : {});
     assert.equal(first.code, 0, first.ports.stderr.text);
     const descriptor = join(setup.state, 'tries', readdirSync(join(setup.state, 'tries')).find(path => path.endsWith('.door.json')));
     const command = h.io(); assert.equal(await runShim(descriptor, ['ready'], command), 0, command.stderr.text);
@@ -118,6 +147,15 @@ for (const references of [false, true]) {
     assert.ok(receiptPath, pending.ports.stderr.text);
     const receipt = JSON.parse(readFileSync(join(setup.state, receiptPath)));
     const local = { env: h.io().env, gh: () => assert.fail('local handoff cannot authenticate'), fetch: () => assert.fail('local handoff cannot submit') };
+    if (mapPath) {
+      const originalMap = readFileSync(mapPath, 'utf8'), map = JSON.parse(originalMap);
+      map.screens[0].id = 'edited-view'; map.initial_screen = 'edited-view'; writeFileSync(mapPath, JSON.stringify(map));
+      const stale = await applyPendingCaseWithHandoff({ cwd: setup.repo, pendingId: receipt.pendingId, handoff: { kind: 'closed-editor', testPath: 'tests/cli.json' } }, local);
+      assert.equal(stale.result?.state, 'pending', stale.message);
+      assert.match(stale.message, /app map.*changed/);
+      assert.equal(readFileSync(target, 'utf8'), before);
+      writeFileSync(mapPath, originalMap);
+    }
     const applied = await applyPendingCaseWithHandoff({ cwd: setup.repo, pendingId: receipt.pendingId, handoff: { kind: 'closed-editor', testPath: 'tests/cli.json' } }, local);
     assert.equal(applied.result?.state, 'committed', applied.message);
     const after = JSON.parse(readFileSync(target));
