@@ -121,6 +121,8 @@ line against its own records. A line that the records do not support is red.
 
 ## For the reviewer
 
+- A tool output over about 10,000 tokens loses its middle, so never read the whole PR's diff in one call. Run
+  `git diff --stat` first, then read one file per command. End the summary with "Read: FILE, FILE, ...".
 - A Runtime PASS counts only for a changed Story (above). A PASS of another Story proves nothing for this PR.
 - A failed step inside a check with no verdict is a FAIL. When the checks did not all pass, open the report.
 - A `not run` line needs a cause from "When `not run` is allowed". A cause that pdd gives a fix for is a must-fix.
