@@ -155,7 +155,7 @@ answer. A sendable message must retain its full ask and all issue links. There i
 | Kind | Chat eligibility |
 | --- | --- |
 | decision, access | One clear person ask, code, tried and ifNoAnswer |
-| usage-limit, resource, interpreter, interpreter-access | The same fields, plus paused work on two distinct consecutive observations spanning at least 15 minutes; measure from the first paused observation to the latest distinct tick's observation time, never the current replay time. Paused false resets the observation window. Repeating one tick never advances it. |
+| usage-limit, resource, interpreter, interpreter-access | The same fields, plus paused work on two distinct consecutive observations spanning at least 15 minutes; measure from the first paused observation to the latest distinct tick's observation time, never the current replay time. Paused false resets the observation window. Repeating any tick already observed in that window never advances it, including a replay of an earlier tick after a newer one. Once qualified, retain that evidence without accumulating more tick identities. |
 | test-suite, long-running | Record only for the issue/daily report; never send, even with update |
 | stuck | Record only; the core owns retry exhaustion and must express any actual person ask as decision/access |
 | recovered | Close matching incidents, but notify only for a confirmed delivered alert that remained open at least 15 minutes from delivery and passes the message budgets |
@@ -202,7 +202,7 @@ files in filename order, else hostname. Retain the existing record path:
 `<state root>/alerts/<first 20 hex SHA-256 of lowercase repo>.json`, private
 atomic JSON `{v:1, repo, incidents, log}`. Retain the latest 200 log rows.
 Incidents store kind, code, host, issues, listed, fields, openedAt, updatedAt,
-result, optional detail/destination, firstPausedAt, lastPausedAt (the latest distinct paused tick's ISO observation time), ticks, lastTick, asked (the last attempted need/owner identity),
+result, optional detail/destination, firstPausedAt, lastPausedAt (the latest distinct paused tick's ISO observation time), ticks, lastTick, pausedTicks (distinct tick identities accumulated until qualification, cleared on unpause), asked (the last attempted need/owner identity),
 channel (destination hash) and sentAt
 (the confirmed delivery time). `listed` means issues in the last attempted send.
 Logs retain at, issue, kind, action, result, optional detail/destination.

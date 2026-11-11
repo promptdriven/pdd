@@ -65,7 +65,7 @@ test('two machine ticks before 15 minutes stay quiet; unpaused observation reset
   f.time++;await f.alert(1,'resource',fields);assert.equal(f.requests.length,1);
 });
 
-test('repair 3: replaying the second early tick cannot complete machine debounce', async t => {
+for (const replay of ['a', 'b']) test(`repair 3: replaying early tick ${replay} cannot complete machine debounce`, async t => {
   const f = setup(t); await f.config();
   const fields = {...ask, code:'io-stall', paused:true};
   await f.alert(1, 'resource', {...fields, tick:'a'});
@@ -73,7 +73,7 @@ test('repair 3: replaying the second early tick cannot complete machine debounce
   await f.alert(1, 'resource', {...fields, tick:'b'});
   assert.equal(f.requests.length, 0);
   f.time += 14 * MINUTE;
-  await f.alert(1, 'resource', {...fields, tick:'b'});
+  await f.alert(1, 'resource', {...fields, tick:replay});
   assert.equal(f.requests.length, 0, 'a replay does not extend the distinct observation span');
   await f.alert(1, 'resource', {...fields, tick:'c'});
   assert.equal(f.requests.length, 1, 'a fresh observation at 15 minutes qualifies');

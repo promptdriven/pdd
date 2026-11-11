@@ -327,6 +327,7 @@ async function withRecord(repo, env, ports, fs, action) {
 const destinationFor = (fs, env, ports, kind) => MACHINE_KINDS.includes(kind)
   ? readDestination(fs, env, ports, 'infrastructure') ?? readDestination(fs, env, ports)
   : readDestination(fs, env, ports);
+const pausedLongEnough = item => item.ticks >= 2 && Date.parse(item.lastPausedAt) - Date.parse(item.firstPausedAt) >= 15 * MINUTE;
 
 async function sendAlert(input, ports, env, fs) {
   const issue = String(input.issue ?? '');
@@ -388,17 +389,20 @@ async function sendAlert(input, ports, env, fs) {
       openedAt:open?.openedAt ?? at, updatedAt:at, result:open?.result ?? 'recorded',
       channel: destinationFor(fs, env, ports, kind) ? destinationIdentity(destinationFor(fs, env, ports, kind)) : null};
     if (machine && incomingMachine) {
-      if (fields.paused !== true) { item.firstPausedAt = null; item.ticks = 0; item.lastTick = null; }
-      else {
+      if (fields.paused !== true) { item.firstPausedAt = null; item.lastPausedAt = null; item.ticks = 0; item.lastTick = null; item.pausedTicks = []; }
+      else if (!pausedLongEnough(item)) {
         const tick = String(fields.tick ?? now);
         item.firstPausedAt ??= at;
-        if (item.lastTick !== tick) { item.ticks = (item.ticks ?? 0) + 1; item.lastTick = tick; }
+        item.pausedTicks ??= item.lastTick == null ? [] : [item.lastTick];
+        if (!item.pausedTicks.includes(tick)) {
+          item.pausedTicks.push(tick); item.ticks = (item.ticks ?? 0) + 1; item.lastTick = tick; item.lastPausedAt = at;
+        }
       }
     }
     record.incidents[key] = item;
     const ids = issues.map(n => issueIdentity(repo, n));
     const hasAsk = clearAsk(fields.need) && Boolean(code && clean.ifNoAnswer);
-    const persistent = !machine || item.ticks >= 2 && now - Date.parse(item.firstPausedAt) >= 15 * MINUTE;
+    const persistent = !machine || pausedLongEnough(item);
     const quiet = ids.some(id => history.recoveredAt[id] !== undefined && now - history.recoveredAt[id] < 2 * HOUR);
     const changed = input.update && open?.asked !== askIdentity(clean);
     const canSend = !open?.asked || changed || ['failed','not-configured'].includes(open?.result);
