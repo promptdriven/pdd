@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime/runtime-lint-receipt.prompt.md (sha256: 874f9e5bdd935ce6f0996252f5498db4ed28e689235c85eaa7a2a83a35b62ade).
+// Generated from prompts/cli/runtime-lint-receipt.prompt.md.
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const text = value => typeof value === 'string' && value.trim().length > 0;
 const knownEngine = value => text(value) && value.trim().toLowerCase() !== 'unknown';

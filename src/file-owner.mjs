@@ -1,4 +1,4 @@
-// Generated from prompts/cli/file-owner.prompt.md (sha256: d8e62e0db6c4c17145e40e2cf962f831067ac8a28095a985d40decf9797061ee).
+// Generated from prompts/cli/file-owner.prompt.md (sha256: e2da2bbb20ca838e010e6e7ba8a7a947e6f41bc61fc41e6c0b510ddff03d4d69).
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { closeSync, fstatSync, openSync, readSync, realpathSync } from 'node:fs';

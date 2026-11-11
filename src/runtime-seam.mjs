@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: f05b6b539868bb57e38663db20beb255483d744de2a1253d9e23816bb300a546).
+// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 1e3981da29b1c1ffb2b556f09b36f8b92ede9d4afac4229c09789acbc4c318fa).
 
 export {
   DEFAULT_RUNTIME_URL,

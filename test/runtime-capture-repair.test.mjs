@@ -99,7 +99,7 @@ for(const [variant,edit] of Object.entries(variants))test(`capture repair: sole 
 
 const root=fileURLToPath(new URL('..',import.meta.url));
 test('capture repair: changed output prompt keeps a current approved prose hash',()=>{
-  const text=readFileSync(join(root,'prompts/cli/runtime/runtime-output.prompt.md'),'utf8');
+  const text=readFileSync(join(root,'prompts/cli/runtime-output.prompt.md'),'utf8');
   const iface=JSON.parse(interfaceBlocks(text)[0][1]);
   assert.equal(iface.status,'approved');assert.equal(iface.prose_sha256,proseSha256(text));
 });

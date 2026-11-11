@@ -107,7 +107,7 @@
   "steps": [
     {
       "step_id": "literal-heading",
-      "entry_path": "prompts/cli/runtime/contract-refs.prompt.md",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
       "operation": "expandSource",
       "input": {
         "path": "prompts/shop.prompt.md",
@@ -142,7 +142,7 @@
     },
     {
       "step_id": "heading-fragment",
-      "entry_path": "prompts/cli/runtime/contract-refs.prompt.md",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
       "operation": "expandSource",
       "input": {
         "path": "prompts/shop.prompt.md",
@@ -162,7 +162,7 @@
     },
     {
       "step_id": "prompt-schema-position",
-      "entry_path": "prompts/cli/runtime/contract-refs.prompt.md",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
       "operation": "expandSource",
       "input": {
         "path": "prompts/shop.prompt.md",
@@ -182,7 +182,7 @@
     },
     {
       "step_id": "pointer-and-nested",
-      "entry_path": "prompts/cli/runtime/contract-refs.prompt.md",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
       "operation": "expandSource",
       "input": {
         "path": "prompts/shop.prompt.md",
@@ -224,7 +224,7 @@
     },
     {
       "step_id": "missing-record",
-      "entry_path": "prompts/cli/runtime/contract-refs.prompt.md",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
       "operation": "expandSource",
       "input": {
         "path": "prompts/shop.prompt.md",
@@ -245,7 +245,7 @@
     },
     {
       "step_id": "cycle",
-      "entry_path": "prompts/cli/runtime/contract-refs.prompt.md",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
       "operation": "expandSource",
       "input": {
         "path": "prompts/shop.prompt.md",
@@ -266,7 +266,7 @@
     },
     {
       "step_id": "ambiguous",
-      "entry_path": "prompts/cli/runtime/contract-refs.prompt.md",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
       "operation": "expandSource",
       "input": {
         "path": "prompts/shop.prompt.md",
@@ -287,7 +287,7 @@
     },
     {
       "step_id": "literal-no-reference",
-      "entry_path": "prompts/cli/runtime/contract-refs.prompt.md",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
       "operation": "expandSource",
       "input": {
         "path": "prompts/shop.prompt.md",
@@ -314,7 +314,7 @@
     },
     {
       "step_id": "local-annotations",
-      "entry_path": "prompts/cli/runtime/contract-refs.prompt.md",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
       "operation": "expandSource",
       "input": {
         "path": "prompts/shop.prompt.md",
@@ -334,7 +334,7 @@
     },
     {
       "step_id": "constraint-sibling",
-      "entry_path": "prompts/cli/runtime/contract-refs.prompt.md",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
       "operation": "expandSource",
       "input": {
         "path": "prompts/shop.prompt.md",
@@ -355,7 +355,7 @@
     },
     {
       "step_id": "exact-number-and-own-record-key",
-      "entry_path": "prompts/cli/runtime/contract-refs.prompt.md",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
       "operation": "expandSource",
       "input": {
         "path": "prompts/shop.prompt.md",
@@ -390,7 +390,7 @@
     },
     {
       "step_id": "preserve-consumer-layout",
-      "entry_path": "prompts/cli/runtime/contract-refs.prompt.md",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
       "operation": "expandSource",
       "input": {
         "path": "prompts/layout.prompt.md",
@@ -410,7 +410,7 @@
     },
     {
       "step_id": "literal-hash-title",
-      "entry_path": "prompts/cli/runtime/contract-refs.prompt.md",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
       "operation": "expandSource",
       "input": {
         "path": "prompts/layout.prompt.md",
@@ -437,7 +437,7 @@
     },
     {
       "step_id": "spaced-closing-hashes",
-      "entry_path": "prompts/cli/runtime/contract-refs.prompt.md",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
       "operation": "expandSource",
       "input": {
         "path": "prompts/layout.prompt.md",

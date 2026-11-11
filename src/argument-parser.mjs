@@ -1,4 +1,4 @@
-// Generated from prompts/cli/argument-parser.prompt.md (sha256: c6c1116fa129b7642b68117c4480437b582b2da6a8bfe31cb329cd29d90a0764).
+// Generated from prompts/cli/argument-parser.prompt.md (sha256: 74756ba9ef5f5e819dd046bb4f906c480b854044f97048dd691054af58cfc8da).
 import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 
 export class CommandInputError extends Error {

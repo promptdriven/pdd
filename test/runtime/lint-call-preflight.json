@@ -25,7 +25,7 @@
   "steps": [
     {
       "step_id": "warning",
-      "entry_path": "prompts/cli/runtime/lint-call-preflight.prompt.md",
+      "entry_path": "prompts/cli/lint-call-preflight.prompt.md",
       "operation": "describeCallPreflight",
       "input": {
         "test": "tests/example.json",
@@ -79,7 +79,7 @@
     },
     {
       "step_id": "within",
-      "entry_path": "prompts/cli/runtime/lint-call-preflight.prompt.md",
+      "entry_path": "prompts/cli/lint-call-preflight.prompt.md",
       "operation": "describeCallPreflight",
       "input": {
         "test": "tests/example.json",
@@ -125,7 +125,7 @@
     },
     {
       "step_id": "unknown",
-      "entry_path": "prompts/cli/runtime/lint-call-preflight.prompt.md",
+      "entry_path": "prompts/cli/lint-call-preflight.prompt.md",
       "operation": "describeCallPreflight",
       "input": {
         "test": "tests/example.json",
@@ -171,7 +171,7 @@
     },
     {
       "step_id": "mismatch",
-      "entry_path": "prompts/cli/runtime/lint-call-preflight.prompt.md",
+      "entry_path": "prompts/cli/lint-call-preflight.prompt.md",
       "operation": "describeCallPreflight",
       "input": {
         "test": "tests/example.json",

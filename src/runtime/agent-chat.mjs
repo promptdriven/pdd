@@ -1,6 +1,6 @@
 import {loadRuntimeWorkspace} from './runtime-workspace.mjs';
 import {captureSource} from './runtime-preflight.mjs';
-// Generated from prompts/cli/runtime/agent-chat.prompt.md (sha256: 72e430b070cf75f7bef30fef975797ff0aabfb867e7ecf8729a14d7530a6c4d3).
+// Generated from prompts/cli/agent-chat.prompt.md (sha256: fa202c9aba70712508abc0a2048566fb396ced4083a4aa033ae843ea4726e28d).
 import {discoverAgents,askAgent} from '../agent-adapters.mjs';
 import {loadAgentDefinitions} from '../agent-config.mjs';
 import {createTryGuide} from './agent-guide.mjs';
