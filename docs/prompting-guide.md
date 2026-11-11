@@ -299,7 +299,7 @@ permitted variation in decisions.
 
 A behavior prompt ends with one Runtime interface block. Omit `kind` for its full
 checkable contract; use `kind: partial` for a declared subset. An explicit
-`"kind": "full"` in a draft is refused locally at `/kind`; `pdd test --fill-hash`
+`"kind": "full"` in a draft gets a warning at `/kind`; `pdd test --fill-hash`
 removes that redundant field from drafts while leaving approved prompts unchanged. Use `kind: native-only` only with a nonblank `reason` that names
 the effect that bound ports cannot fake (RUNBOOK §21). A checker confirms the
 reason. Approval records it; checks show not run and preserve the reason.

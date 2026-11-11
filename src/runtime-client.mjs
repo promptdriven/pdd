@@ -2,7 +2,7 @@ import { describeCallPreflight } from './lint-call-preflight.mjs';
 import { isRecentLintReceipt } from './runtime-lint-receipt.mjs';
 import {rememberSecrets} from './secret-redaction.mjs';
 import { bindingPlanLines, bindingRefusals } from './runtime-binding-plan.mjs';
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 9e677aec492313cc7c2f3b1ae0843ae1f95ef14f43305d5a9dd6af02b791ff87).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 19e96c92f44414c2af3c21900d600412516ec092c2681cb5530a7af828bb342b).
 import { buildCheckPlan, checkPlanResults, checkPlanLines, checkPlanResultLines } from './runtime-check-plan.mjs';
 import { interfaceFindings } from './interface-draft.mjs';
 import {readEvidenceEligibility} from './workflow-runner.mjs';
@@ -20,17 +20,31 @@ import { isDeepStrictEqual } from 'node:util';
 import { homedir, hostname } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { DRAFT_SERVER_TEXT, NO_TESTS, PreflightError, TEST_SCHEMA, captureSource, scenarioShapeRefusal, checkInput, expectedTestPath, fillHashes, sharedSourceFiles, whyNoTests, findTests, formatSize, gitFiles, otherFiles,
-  discoveryRefusal, preflight, interfaceBlocks, executableInterfaceText, readPrompt, selectTests, sourceFilePort, sha256, STALE_HINT, staleHint } from './runtime-preflight.mjs';
+  discoveryRefusal, preflight, interfaceBlocks, executableInterfaceText, readPrompt, formatWarningLines, schemaKeywordWarningLines, selectTests, sourceFilePort, sha256, STALE_HINT, staleHint } from './runtime-preflight.mjs';
 import { catalogRecords, compareCopies } from './contract-refs.mjs';
 import { askApproval, lineReader, promptPath } from './prompt-approve.mjs';
 import { OPEN_STATES, causeText, cleanText, exitCodeFor, progressTicker, projectAnswer, refusalView, renderJson, renderText, summaryLine, stepTimeLimit, tryUsage, validLink, coverageText } from './runtime-output.mjs';
 import { lintSvgLayouts } from './svg-layout.mjs';
 import { compareScreen, formatScreenComparison } from './screen-compare.mjs';
 
-// The preflight owner's local format admission table, shared by lint and files.
-const LOCAL_FORMAT_CODES = new Set(['interface-kind-explicit-full', 'graph-schema-unsupported-keyword']);
-const localFormatProblem = problem => LOCAL_FORMAT_CODES.has(problem.code);
-const localInterfaceProblem = problem => localFormatProblem(problem) || ['interface-missing','interface-kind-invalid','native-reason-missing','interface-draft-incomplete'].includes(problem.code);
+const localInterfaceProblem = problem => ['interface-missing','interface-kind-invalid','native-reason-missing','interface-draft-incomplete'].includes(problem.code);
+// The preflight owner's local format advice (#3206): an explicit full kind in a draft and unsupported schema
+// keywords are warnings in lint and the files preview, never refusals; the engine is the one place that refuses.
+// It reads the selected entry prompts and the prompts they call.
+function formatAdvice(root, visible, paths, workspace) {
+  const lines = [], seen = new Set();
+  const visit = path => {
+    if (typeof path !== 'string' || seen.has(path)) return;
+    seen.add(path);
+    let prompt;
+    try { prompt = readPrompt(root, visible, path, workspace); } catch { return; }
+    for (const text of [...formatWarningLines(prompt), ...schemaKeywordWarningLines(prompt)]) if (!lines.includes(text)) lines.push(text);
+    for (const call of Array.isArray(prompt.interface?.calls) ? prompt.interface.calls : []) visit(call?.target);
+  };
+  for (const path of paths) visit(path);
+  return lines;
+}
+const entryPaths = tests => tests.filter(test => !test.error).flatMap(test => (Array.isArray(test.doc?.steps) ? test.doc.steps : []).map(step => step?.entry_path));
 
 // The one place in pdd that names the PDD runtime address; PDD_RUNTIME_URL overrides it.
 export const DEFAULT_RUNTIME_URL = 'https://runtime.promptdriven.ai';
@@ -1944,12 +1958,8 @@ function runFiles(cwd, words, options, ports) {
   const selected = select(found, normalized, root), coverage = bindingCoverage({ root, found, selected, includeRuntime:true });
   const rows = selected.map(test => ({test:test.path,story:test.story,state:'ready',refusals:[],
     ...(discoveryRefusal(test) ? {state:'refused',unsent:true,refusals:[discoveryRefusal(test)]} : {})}));
-  const checkedRows = preflight({root,found,selected}).rows;
-  const nativeRows = new Map(checkedRows.filter(row=>row.native_only?.length).map(row=>[row.test,row]));
-  for (const row of rows) {
-    const refusals = checkedRows.find(checked => checked.test === row.test)?.refusals.filter(localFormatProblem) ?? [];
-    if (refusals.length) Object.assign(row, {state:'refused',unsent:true,refusals:[...row.refusals,...refusals]});
-  }
+  const nativeRows = new Map(preflight({root,found,selected}).rows.filter(row=>row.native_only?.length).map(row=>[row.test,row]));
+  const advice = formatAdvice(root, found.visible, entryPaths(selected), found.workspace);
   for (const row of rows) {
     const native = nativeRows.get(row.test);
     if (native) Object.assign(row,{native_only:native.native_only,unsent:true,state:native.refusals.length ? 'refused' : 'not_run',
@@ -1962,7 +1972,7 @@ function runFiles(cwd, words, options, ports) {
   const broken = rows.filter(row => row.unsent && row.refusals.length), exitCode = broken.length ? 4 : 0;
   const summary = `${capture.files.length} files, ${formatSize(capture.bytes)} (${capture.bytes} bytes). ${otherFiles(capture.files, found).length} of them are not prompt, story or test files.${broken.length ? ` ${broken.length} tests could not run.` : ''}`;
   if (options['--json']) {
-    line(ports.stdout, JSON.stringify({repo:root,exit_code:exitCode,summary_line:summary,rows:[...rows.filter(row=>row.unsent).map(row=>({...row,...resultOutcome(row)})),...rows.filter(row=>!row.unsent)],files:capture.files,coverage}));
+    line(ports.stdout, JSON.stringify({repo:root,exit_code:exitCode,summary_line:summary,rows:[...rows.filter(row=>row.unsent).map(row=>({...row,...resultOutcome(row)})),...rows.filter(row=>!row.unsent)],files:capture.files,coverage,...(advice.length ? {warnings:advice} : {})}));
     return exitCode;
   }
   for (const row of broken) for (const problem of row.refusals) {
@@ -1970,7 +1980,7 @@ function runFiles(cwd, words, options, ports) {
     line(ports.stdout, problem.hint ?? 'Fix the named test file, then run the selection again.');
   }
   for (const row of rows.filter(row=>row.native_only?.length)) line(ports.stdout, `${row.test}: ${outcomeText(row)}: ${row.note.message}`);
-  for (const warning of [...(capture.warnings ?? []), ...unmatchedLines(found)]) line(ports.stderr, warning);
+  for (const warning of [...advice, ...(capture.warnings ?? []), ...unmatchedLines(found)]) line(ports.stderr, warning);
   const width = Math.max(0, ...capture.files.map(file => file.path.length));
   for(const read of capture.reads??[])line(ports.stderr,`Local read (${read.roles.join(', ')}, not uploaded): ${read.path}`);
   for (const file of capture.files) line(ports.stdout, `  ${(file.path + (file.target ? ` -> ${file.target}` : '')).padEnd(width)}  ${file.size} bytes`);
@@ -1986,13 +1996,18 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   context.excludeFixtureProjects = words.length === 0;
   const paths = words.length ? undefined : [...found.discoveryVisible].filter(path => path.endsWith('.prompt.md'));
   const findings = paths ? interfaceFindings({root,paths}).filter(localInterfaceProblem) : [];
+  const advice = paths ? formatAdvice(root, found.visible, paths, found.workspace) : [];
+  found.warnings.push(...advice);
   if (findings.length && !found.tests.length) {
     const summary = 'Lint refused Runtime interfaces. 0 AI calls. No files were sent.';
     if (context.json) line(ports.stdout,JSON.stringify({repo:root,exit_code:4,lint_state:'refused',problems:findings,rows:[],summary_line:summary}));
     else for (const text of [...findings.map(item => `${item.code}: ${item.message}`),summary]) line(ports.stdout,text);
     return 4;
   }
-  const selected = select(found, normalized, root);
+  let selected;
+  try { selected = select(found, normalized, root); }
+  catch (error) { if (error instanceof Stop && advice.length) error.message = [error.message, ...advice].join('\n'); throw error; }
+  if (!paths) { advice.push(...formatAdvice(root, found.visible, entryPaths(selected), found.workspace)); found.warnings.push(...advice); }
   context.coverage = bindingCoverage({ root, found, selected, includeRuntime:true });
   // A test that the test name rule cannot use is refused here and never sent; the other tests are linted.
   const rows = selected.map(test => ({ test: test.path, story: test.story, title: test.title, state: 'ready', phase: 'lint',
@@ -2005,7 +2020,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
     const native = nativeRows.get(row.test);
     if (native) Object.assign(row,{state:native.refusals.length ? 'refused' : 'not_run',refusals:native.refusals,phase:'local',native_only:native.native_only,unsent:true,note:{code:'native-only',message:native.native_only.map(item => `${item.path}: ${item.reason}`).join('; ')}});
   }
-  if (!findings.length && rows.every(row => row.native_only?.length)) { saveLocalNativeResult(context, rows, 'lint-only'); return printLintResult(context,rows,[]); }
+  if (!findings.length && rows.every(row => row.native_only?.length)) { saveLocalNativeResult(context, rows, 'lint-only'); return printLintResult(context,rows,[],advice); }
   const local = row => row.phase === 'local';
   const {promptSchemaRefusals} = await import('./runtime-preflight.mjs');
   const prompts = new Map();
@@ -2752,7 +2767,8 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
           promptPaths = ports.captureSource(root, { tests: selected.filter(test => !test.error).map(test => test.path), appMap: null }).files.map(file => file.path).filter(path => path.endsWith('.prompt.md'));
         }
         const problems = interfaceFindings({root,paths:promptPaths}).filter(localInterfaceProblem);
-        const warnings = lintSvgLayouts({ root, files, promptPaths }), summary = `partial: checked SVG layout only; prompts not checked (local-only). ${warnings.length} warnings. 0 AI calls. No checks were sent.`;
+        const advice = formatAdvice(root, new Set(gitFiles(root)), promptPaths ?? files.filter(path => path.endsWith('.prompt.md')), workspace);
+        const warnings = [...advice, ...lintSvgLayouts({ root, files, promptPaths })], summary = `partial: checked SVG layout only; prompts not checked (local-only). ${warnings.length} warnings. 0 AI calls. No checks were sent.`;
         line(ports.stdout, context.json ? JSON.stringify({ repo: root, exit_code: problems.length ? 4 : 0, state: problems.length ? 'refused' : 'partial', lint_state: 'partial', ...resultOutcome({state:'partial',note:{code:'local-only',message:'checked SVG layout only; prompts not checked'}}), rows: [], problems, warnings, summary_line: summary }) : [...problems.map(item => `${item.code}: ${item.message}`), ...warnings, summary].join('\n'));
         return problems.length ? 4 : 0;
       } catch (error) { throw new Stop(2, error.message); }

@@ -4,9 +4,9 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fillHashes, interfaceBlocks, interfaceKindProblems } from '../src/runtime-preflight.mjs';
+import { fillHashes, interfaceBlocks, interfaceFormatWarnings, interfaceKindProblems } from '../src/runtime-preflight.mjs';
 import { runCheck } from '../src/runtime-client.mjs';
-import { harbor, PLACE, sink } from './runtime-fake.mjs';
+import { fakeRuntime, harbor, PLACE, portsFor, sink } from './runtime-fake.mjs';
 
 const prefix = '# Synthetic contract\n\nKeep this prose exactly.\n\n';
 const suffix = '\nAfter the interface.\n';
@@ -24,9 +24,9 @@ function offline(setup) {
     gh: () => assert.fail('local refusal must precede authentication'),
     fetch: () => assert.fail('local operation must not contact the Runtime') };
 }
-function draft(repo, called = false) {
+function draft(repo, called = false, explicit = true) {
   const file = join(repo, PLACE), before = readFileSync(file, 'utf8'), block = interfaceBlocks(before)[0];
-  const iface = { ...JSON.parse(block[1]), status: 'draft', kind: 'full' };
+  const iface = { ...JSON.parse(block[1]), status: 'draft', ...(explicit ? { kind: 'full' } : {}) };
   if (called) {
     const target = 'prompts/called.prompt.md';
     writeFileSync(join(repo, target), before.replace(block[1], JSON.stringify(iface)));
@@ -36,37 +36,54 @@ function draft(repo, called = false) {
   writeFileSync(file, before.replace(block[1], JSON.stringify(iface)));
 }
 
-test('explicit full draft diagnostic names /kind and the local repair; other kinds retain admission', () => {
-  const [problem] = interfaceKindProblems({ status: 'draft', kind: 'full' });
-  assert.equal(problem?.code, 'interface-kind-explicit-full');
-  assert.equal(problem.pointer, '/kind');
-  assert.match(problem.rule, /omit.*kind/);
-  assert.match(problem.rule, /pdd test --fill-hash/);
+test('explicit full draft warning names /kind and the local repair; it is no kind refusal', () => {
+  const [warning] = interfaceFormatWarnings({ status: 'draft', kind: 'full' });
+  assert.equal(warning?.code, 'interface-kind-explicit-full');
+  assert.equal(warning.pointer, '/kind');
+  assert.match(warning.rule, /omit.*kind/);
+  assert.match(warning.rule, /pdd test --fill-hash/);
+  assert.deepEqual(interfaceKindProblems({ status: 'draft', kind: 'full' }), []);
   for (const iface of [{ status: 'draft' }, { status: 'approved', kind: 'full' }, { kind: 'full' },
     { status: 'draft', kind: 'partial' }, { status: 'draft', kind: 'native-only', reason: 'Kernel ownership.' }]) {
     assert.deepEqual(interfaceKindProblems(iface), []);
+    assert.deepEqual(interfaceFormatWarnings(iface), []);
   }
   assert.equal(interfaceKindProblems({ status: 'draft', kind: 'unknown' })[0].code, 'interface-kind-invalid');
 });
 
+// The same selection with an implicit full draft is the control: the warning changes no state, exit code or upload.
+async function run(t, options, explicit, called = false) {
+  const setup = harbor(t, repo => draft(repo, called, explicit)), fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
+  const { ports } = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin });
+  const code = await runCheck({ cwd: setup.repo, options }, ports), json = JSON.parse(ports.stdout.text);
+  return { code, json, text: ports.stdout.text + ports.stderr.text,
+    rows: (json.rows ?? []).map(row => [row.test, row.state, row.reason ?? null]), files: json.files ?? null,
+    uploads: fake.posts.map(post => [post.command, post.request.source_sha256]) };
+}
 for (const [name, options] of [
   ['files', { '--files': true, '--json': true }],
   ['local lint', { '--lint': true, '--local': true, '--json': true }],
   ['hosted lint', { '--lint': true, '--json': true }],
   ['test', { '--json': true }],
-]) test(`${name} refuses an explicit full draft before authentication or upload`, async t => {
-  const setup = harbor(t, repo => draft(repo)), ports = offline(setup);
-  assert.equal(await runCheck({ cwd: setup.repo, options }, ports), 4);
-  assert.match(ports.stdout.text + ports.stderr.text, /interface-kind-explicit-full/);
-  assert.match(ports.stdout.text + ports.stderr.text, /\/kind/);
-  assert.match(ports.stdout.text + ports.stderr.text, /pdd test --fill-hash/);
+]) test(`${name} warns about an explicit full draft and keeps its state, exit code and upload`, async t => {
+  const control = await run(t, options, false), warned = await run(t, options, true);
+  assert.match(warned.text, /interface-kind-explicit-full/);
+  assert.match(warned.text, /\/kind/);
+  assert.match(warned.text, /pdd test --fill-hash/);
+  assert.doesNotMatch(control.text, /interface-kind-explicit-full/);
+  assert.equal(warned.code, control.code);
+  assert.equal(warned.json.state ?? warned.json.lint_state ?? null, control.json.state ?? control.json.lint_state ?? null);
+  assert.deepEqual(warned.rows, control.rows);
+  assert.deepEqual(warned.files, control.files);
+  assert.deepEqual(warned.uploads, control.uploads);
+  assert.ok(!warned.rows.some(row => row[1] === 'refused'), JSON.stringify(warned.rows));
 });
 
-test('preflight diagnoses an explicit full draft reached through a call', async t => {
-  const setup = harbor(t, repo => draft(repo, true)), ports = offline(setup);
-  assert.equal(await runCheck({ cwd: setup.repo, options: { '--files': true, '--json': true } }, ports), 4);
-  assert.match(ports.stdout.text, /prompts\/called.prompt.md/);
-  assert.match(ports.stdout.text, /interface-kind-explicit-full/);
+test('a warning names an explicit full draft reached through a call', async t => {
+  const control = await run(t, { '--files': true, '--json': true }, false, true), warned = await run(t, { '--files': true, '--json': true }, true, true);
+  assert.equal(warned.code, control.code);
+  assert.deepEqual(warned.files, control.files);
+  assert.ok(warned.json.warnings.some(line => /prompts\/called.prompt.md \/kind interface-kind-explicit-full/.test(line)), JSON.stringify(warned.json.warnings));
 });
 
 test('fill hash removes root full members while preserving nested values and exact remaining tokens', t => {

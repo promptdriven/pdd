@@ -1335,7 +1335,7 @@ Automatic runs use `autopilot.base` in `pdd.json` when set; otherwise they use t
 ## Runtime interface kinds and coverage
 
 Omit `kind` for a full interface; explicit kinds are `partial` or `native-only`.
-A draft with `"kind": "full"` is refused locally at `/kind`. `pdd test --fill-hash`
+A draft with `"kind": "full"` gets a warning at `/kind`, not a refusal. `pdd test --fill-hash`
 reports and removes that redundant field from drafts, including current drafts.
 Approved prompts stay unchanged.
 Native-only requires a reason that names an effect the bound ports cannot fake

@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { interfaceBlocks, interfaceSchemaProblems } from '../src/runtime-preflight.mjs';
 import { runCheck } from '../src/runtime-client.mjs';
-import { harbor, PLACE, sink } from './runtime-fake.mjs';
+import { fakeRuntime, harbor, PLACE, portsFor, sink } from './runtime-fake.mjs';
 
 const closed = properties => ({ type: 'object', properties, required: Object.keys(properties), additionalProperties: false });
 const nullable = keyword => ({ [keyword]: [closed({ x: { type: 'integer' }, y: { type: 'integer' } }), { type: 'null' }] });
@@ -16,15 +16,15 @@ function rewrite(repo, path, change) {
   change(iface);
   writeFileSync(file, text.replace(block[1], JSON.stringify(iface)));
 }
-function unsupported(repo, called = false) {
+function unsupported(repo, called = false, keyword = 'anyOf') {
   const target = called ? 'prompts/child.prompt.md' : PLACE;
   if (called) {
     writeFileSync(join(repo, target), read(join(repo, PLACE)));
     rewrite(repo, PLACE, iface => { iface.calls = [{ target, target_operation: 'place_order', max_calls: 1 }]; });
   }
   rewrite(repo, target, iface => {
-    iface.entries[0].input_schema.properties.state = state('anyOf');
-    iface.entries[0].result_schema.properties.food = nullable('anyOf');
+    iface.entries[0].input_schema.properties.state = state(keyword);
+    iface.entries[0].result_schema.properties.food = nullable(keyword);
   });
   return target;
 }
@@ -51,38 +51,69 @@ test('local format diagnostics name nested anyOf and its oneOf recovery without 
   assert.deepEqual(iface, before);
 });
 
+// The same selection with oneOf is the control: in lint and the files preview the anyOf advice is a
+// warning that changes no state, exit code or upload (the interpreter is the one place that refuses).
+async function run(t, options, keyword, { called = false, words = ['place-order'], stories = true } = {}) {
+  const setup = harbor(t, repo => unsupported(repo, called, keyword)), fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
+  if (!stories) for (const folder of ['tests', 'user_stories']) rmSync(join(setup.repo, folder), { recursive: true });
+  const { ports } = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin });
+  const file = join(setup.repo, PLACE), before = read(file), code = await runCheck({ cwd: setup.repo, words, options }, ports);
+  const json = ports.stdout.text ? JSON.parse(ports.stdout.text) : {};
+  assert.equal(read(file), before);
+  return { code, json, text: ports.stdout.text + ports.stderr.text, rows: (json.rows ?? []).map(row => [row.test, row.state]),
+    uploads: fake.posts.map(post => post.command), files: (json.files ?? []).map(item => item.path) };
+}
+function sameOutcome(warned, control) {
+  assert.equal(warned.code, control.code);
+  assert.equal(warned.json.state ?? warned.json.lint_state ?? null, control.json.state ?? control.json.lint_state ?? null);
+  assert.deepEqual(warned.rows, control.rows);
+  assert.deepEqual(warned.uploads, control.uploads);
+  assert.deepEqual(warned.files, control.files);
+  assert.ok(!warned.rows.some(row => row[1] === 'refused'), JSON.stringify(warned.rows));
+}
+
 for (const [mode, options] of [
   ['files', { '--files': true, '--json': true }],
   ['local lint', { '--lint': true, '--local': true, '--json': true }],
   ['hosted lint', { '--lint': true, '--json': true }],
-  ['test', { '--json': true }],
-]) for (const selected of [false, true]) test(`${mode} catches unsupported schema before transport (selected=${selected})`, async t => {
+]) for (const selected of [false, true]) test(`${mode} warns about an unsupported schema keyword and keeps its state, exit code and upload (selected=${selected})`, async t => {
+  const words = selected ? ['place-order'] : [];
+  const control = await run(t, options, 'oneOf', { words }), warned = await run(t, options, 'anyOf', { words });
+  assert.match(warned.text, /graph-schema-unsupported-keyword/);
+  assert.match(warned.text, /\/entries\/0\/(?:input_schema|result_schema)\/properties\/(?:state\/properties\/)?food/);
+  assert.match(warned.text, /anyOf/);
+  assert.match(warned.text, /oneOf/);
+  assert.doesNotMatch(control.text, /graph-schema-unsupported-keyword/);
+  sameOutcome(warned, control);
+});
+
+// A check keeps the schema rules it had before the format advice: the engine's executable schema subset.
+test('test refuses an unsupported schema keyword before transport, as its schema rules say', async t => {
   const setup = harbor(t, repo => unsupported(repo)), ports = offline(setup);
   const file = join(setup.repo, PLACE), before = read(file);
-  assert.equal(await runCheck({ cwd: setup.repo, words: selected ? ['place-order'] : [], options }, ports), 4);
+  assert.equal(await runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--json': true } }, ports), 4);
   const out = ports.stdout.text + ports.stderr.text;
   assert.match(out, /graph-schema-unsupported-keyword/);
-  assert.match(out, /\/entries\/0\/(?:input_schema|result_schema)\/properties\/(?:state\/properties\/)?food/);
   assert.match(out, /anyOf/);
   assert.match(out, /oneOf/);
   assert.equal(read(file), before);
 });
 
-for (const local of [false, true]) test(`lint catches unsupported schema in called prompts (local=${local})`, async t => {
-  const setup = harbor(t, repo => unsupported(repo, true)), ports = offline(setup);
-  assert.equal(await runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--lint': true, '--json': true, ...(local ? { '--local': true } : {}) } }, ports), 4);
-  assert.match(ports.stdout.text + ports.stderr.text, /prompts\/child.prompt.md/);
-  assert.match(ports.stdout.text + ports.stderr.text, /anyOf/);
+for (const local of [false, true]) test(`lint warns about an unsupported schema in called prompts (local=${local})`, async t => {
+  const options = { '--lint': true, '--json': true, ...(local ? { '--local': true } : {}) };
+  const control = await run(t, options, 'oneOf', { called: true }), warned = await run(t, options, 'anyOf', { called: true });
+  assert.match(warned.text, /prompts\/child.prompt.md/);
+  assert.match(warned.text, /anyOf/);
+  sameOutcome(warned, control);
 });
 
-test('hosted lint catches unsupported schema without any Stories', async t => {
-  const setup = harbor(t, repo => unsupported(repo)), ports = offline(setup);
-  rmSync(join(setup.repo, 'tests'), { recursive: true });
-  rmSync(join(setup.repo, 'user_stories'), { recursive: true });
-  assert.equal(await runCheck({ cwd: setup.repo, options: { '--lint': true, '--json': true } }, ports), 4);
-  const report = JSON.parse(ports.stdout.text);
-  assert.deepEqual(report.rows, []);
-  assert.ok(report.problems.some(problem => problem.code === 'graph-schema-unsupported-keyword'));
+test('hosted lint warns about an unsupported schema without any Stories', async t => {
+  const control = await run(t, { '--lint': true, '--json': true }, 'oneOf', { words: [], stories: false });
+  const warned = await run(t, { '--lint': true, '--json': true }, 'anyOf', { words: [], stories: false });
+  assert.deepEqual(warned.json.problems ?? [], control.json.problems ?? []);
+  assert.match(warned.text, /graph-schema-unsupported-keyword/);
+  assert.doesNotMatch(control.text, /graph-schema-unsupported-keyword/);
+  sameOutcome(warned, control);
 });
 
 test('closed nullable oneOf and optional properties remain valid local schemas', () => {

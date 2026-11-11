@@ -1,6 +1,6 @@
 import { markdownLinks, markdownDefinitions, markdownSectionText } from './runtime-markdown.mjs';
 import { buildBindingPlan, runtimeBoundary } from './runtime-binding-plan.mjs';
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: c8b4a02b191a619b5c9ec0b1665205508f5638a1291d3a0437140690bd104272).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: b658e7cf652fab87e0e799cb28f2ff13dc4471bfa606f4e64d456c43c37ed22c).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
@@ -601,11 +601,20 @@ function limitProblems(iface) {
 export function interfaceKindProblems(iface) {
   if (!isObject(iface)) return [{code:'invalid-interface',pointer:'',rule:'must be an object.'}];
   const kind = Object.hasOwn(iface, 'kind') ? iface.kind : 'full';
-  if (Object.hasOwn(iface, 'kind') && kind === 'full' && iface.status === 'draft') return [{code:'interface-kind-explicit-full',pointer:'/kind',rule:'must omit /kind for a full interface. Run pdd test --fill-hash to remove the redundant field from drafts.'}];
   if (!['full', 'partial', 'native-only'].includes(kind)) return [{code:'interface-kind-invalid',pointer:'/kind',rule:'must be full, partial or native-only.'}];
   if (kind === 'native-only' && (typeof iface.reason !== 'string' || !iface.reason.trim())) return [{code:'native-reason-missing',pointer:'/reason',rule:'must name the native effect that bound ports cannot fake (RUNBOOK §21).'}];
   return [];
 }
+// Local format advice (#3206): a draft that spells "kind": "full" still works, because
+// upload copies omit kind (#3210). So it is a warning, never a refusal; the engine decides.
+export function interfaceFormatWarnings(iface) {
+  return isObject(iface) && Object.hasOwn(iface, 'kind') && iface.kind === 'full' && iface.status === 'draft'
+    ? [{code:'interface-kind-explicit-full',pointer:'/kind',rule:'must omit /kind for a full interface. Run pdd test --fill-hash to remove the redundant field from drafts.'}] : [];
+}
+export const formatWarningLines = prompt => interfaceFormatWarnings(prompt?.interface).map(item => `Warning: ${prompt.path} ${item.pointer} ${item.code}: ${item.rule}`);
+// Lint and the files preview give unsupported schema keywords as advice too (#3206); a check keeps its schema rules.
+export const schemaKeywordWarningLines = prompt => (isObject(prompt?.interface) ? interfaceSchemaProblems(prompt.interface) : [])
+  .filter(item => item.code === 'graph-schema-unsupported-keyword').map(item => `Warning: ${prompt.path} ${item.pointer} ${item.code}: ${item.rule}`);
 export function interfaceSchemaProblems(iface) {
   const kindProblems = interfaceKindProblems(iface);
   if (kindProblems.length || iface?.kind === 'native-only') return kindProblems;
@@ -1039,6 +1048,7 @@ export function preflight({ root, found, selected,workspace=found.workspace??loa
     if (!row.native_only.length) try { const text = readText(root, test.path); if (text !== null) { tokens = roundedNumberTokens(text); range = interpreterIntegerWarning(parseScenarioJson(text), test.path); } } catch { tokens = []; }
     if (range) warnings.push(range);
     if (!row.native_only.length) for (const prompt of prompts.values()) for (const line of schemaBoundWarnings(prompt)) if (!warnings.includes(line)) warnings.push(line);
+    for (const prompt of prompts.values()) for (const line of formatWarningLines(prompt)) if (!warnings.includes(line)) warnings.push(line);
     for (const item of tokens) warnings.push(`Warning: ${test.path} ${interpreterSection(item.path)} is ${item.source}, which reads as the Number ${String(item.value)}. Write the value you mean: plain digits for an exact whole number, or the exact Number spelling.`);
     return row;
   });
