@@ -1,0 +1,72 @@
+{
+  "schema_version": "pdd.runtime-interface-transport.cases.v1",
+  "scope": "Draft native cases, not an executable Runtime scenario. Expected observations come from the Story, not generated code output.",
+  "cases": [
+    {
+      "id": "partial-upload",
+      "criteria": ["AC1", "AC3", "AC6"],
+      "input": "A two-operation prompt declares only echo, with a current draft interface and top-level kind partial. Select an echo test with fixed input and result checks.",
+      "expected": "Uploaded interface has echo only and no top-level kind. Authored interface still says partial. No operation, input, expectation or coverage claim is added."
+    },
+    {
+      "id": "explicit-full-and-legacy",
+      "criteria": ["AC2", "AC3"],
+      "input": "Otherwise equal declarations use explicit full, or omit kind.",
+      "expected": "Full loses only its top-level kind in the upload copy. The absent-kind source and tar remain byte for byte unchanged. Authored declarations are unchanged."
+    },
+    {
+      "id": "json-member-position",
+      "criteria": ["AC1", "AC2", "AC3"],
+      "input": "Place full or partial first, middle and last in compact and multiline JSON, including CRLF and an escaped root key spelling.",
+      "expected": "Each upload is valid JSON without the root kind; all retained tokens and outside-block bytes remain exact."
+    },
+    {
+      "id": "nested-kinds-and-text",
+      "criteria": ["AC3", "AC5"],
+      "input": "An executable interface includes a resource kind port, a nested input field kind and descriptions/prose containing the literal kind partial.",
+      "expected": "Only the executable interface root member changes. Resource kinds, schema properties, descriptions and prose remain exact."
+    },
+    {
+      "id": "number-and-escape-spelling",
+      "criteria": ["AC3"],
+      "input": "A valid declaration uses exponent/decimal schema values, a large integer limit, escaped strings and non-ASCII prose.",
+      "expected": "Projection retains every non-kind numeric token and escape byte. It does not round or reserialize JSON or change the prose hash."
+    },
+    {
+      "id": "preview-and-upload-consistency",
+      "criteria": ["AC1", "AC4"],
+      "input": "Capture one selected test and preview it, then observe lint, Check and fresh Try source multipart bodies through injected transport ports.",
+      "expected": "Preview sizes match uploaded bytes. Every source archive and its SHA use the same projected content; no request contains the PDD root kind."
+    },
+    {
+      "id": "prepared-and-referenced-declaration",
+      "criteria": ["AC1", "AC3", "AC4"],
+      "input": "The reached partial declaration contains shared schema references or is supplied by the existing preparation hook.",
+      "expected": "Projection uses the same safely expanded/replaced effective source and snapshot. It creates no alternate discovery or archive path."
+    },
+    {
+      "id": "authored-kind-freshness",
+      "criteria": ["AC4", "AC6"],
+      "input": "Change only the authored classification between partial and full, leaving the executable declarations equal.",
+      "expected": "Authored file/prompt hashes change and local readers retain the new classification. Upload projection cannot bypass existing raw-source cache or approval freshness checks."
+    },
+    {
+      "id": "saved-source-recovery",
+      "criteria": ["AC4", "AC5"],
+      "input": "Read/retry a saved batch after the source no longer recaptures to its original archive hash.",
+      "expected": "Existing source-mismatch safeguards prevent dispatch or reuse. Saved hashes, IDs and completed/unknown outcomes are not rewritten."
+    },
+    {
+      "id": "invalid-and-native-only",
+      "criteria": ["AC5", "AC6"],
+      "input": "Select unknown kind, malformed/multiple interfaces, missing operations, invalid limits, stale declarations, native-only or a caller reaching native-only.",
+      "expected": "Existing validation or not-run outcomes and reasons remain. No source filtering approves, repairs or dispatches a refused/native-only selection."
+    },
+    {
+      "id": "unrelated-root-field",
+      "criteria": ["AC3", "AC5"],
+      "input": "A partial declaration also contains an unrelated unknown root field.",
+      "expected": "The unknown field is not silently deleted; normal admission diagnostics remain possible. Removing kind is not a generic schema bypass."
+    }
+  ]
+}

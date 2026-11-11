@@ -1,7 +1,7 @@
 import { describeCallPreflight } from './lint-call-preflight.mjs';
 import {rememberSecrets} from './secret-redaction.mjs';
 import { bindingPlanLines, bindingRefusals } from './runtime-binding-plan.mjs';
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: f7460672424110a387581e9859815b0de4b13bdbb4830ef1767f8d663014844f).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 61416796a1fd2d4ee2d9b5438a182bfe5236050592f24201b0f791d7c16740b1).
 import { buildCheckPlan, checkPlanResults, checkPlanLines, checkPlanResultLines } from './runtime-check-plan.mjs';
 import { interfaceFindings } from './interface-draft.mjs';
 import {readEvidenceEligibility} from './workflow-runner.mjs';
@@ -19,7 +19,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { homedir, hostname } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { DRAFT_SERVER_TEXT, NO_TESTS, PreflightError, TEST_SCHEMA, captureSource, scenarioShapeRefusal, checkInput, expectedTestPath, fillHashes, sharedSourceFiles, whyNoTests, findTests, formatSize, gitFiles, otherFiles,
-  discoveryRefusal, preflight, interfaceBlocks, readPrompt, selectTests, sourceFilePort, sha256, STALE_HINT, staleHint } from './runtime-preflight.mjs';
+  discoveryRefusal, preflight, interfaceBlocks, executableInterfaceText, readPrompt, selectTests, sourceFilePort, sha256, STALE_HINT, staleHint } from './runtime-preflight.mjs';
 import { catalogRecords, compareCopies } from './contract-refs.mjs';
 import { askApproval, lineReader, promptPath } from './prompt-approve.mjs';
 import { OPEN_STATES, causeText, cleanText, exitCodeFor, progressTicker, projectAnswer, refusalView, renderJson, renderText, summaryLine, stepTimeLimit, tryUsage, validLink, coverageText } from './runtime-output.mjs';
@@ -3466,7 +3466,7 @@ function tryPromptProblem(root, found, test, record, capture) {
     for (const path of Object.keys(hashes)) {
       const prepared=readPrompt(root,found.visible,path);
       if (!prepared.text) return 'A prompt changed or this Try has no source record.';
-      sources.push({path,bytes:Buffer.from(prepared.text,'utf8')});references.push(...(prepared.references??[]));
+      sources.push({path,bytes:Buffer.from(executableInterfaceText(prepared.text),'utf8')});references.push(...(prepared.references??[]));
       raw_prompt_hashes[path]=sha256(Buffer.from(files.read({path}).content,'utf8'));
     }
     capture={sources,references,raw_prompt_hashes};
