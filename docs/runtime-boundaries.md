@@ -21,6 +21,9 @@ The AI cannot compute a hash. Declare a compute resource with hash_json or hash_
 
 ## Native factories and JSON operations
 
+See [selected interface admission](runtime-interface-admission.md) for partial
+scope, entry-specific resources, process ports and refusal locations.
+
 Factories, constructors and objects of methods can bind through Runtime interface v2:
 set `schema_version` to `prompt-runtime.interface.v2`. Declare `instance_types` rows with
 `name` and `resource`, where the resource is a declared write-access `collection`.
