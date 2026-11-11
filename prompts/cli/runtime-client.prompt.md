@@ -6,6 +6,54 @@ Own `src/runtime-client.mjs`. Export `runCheck({words, options, cwd, cache=false
 
 For Runtime interface refusals, preserve a server-provided field or JSON pointer and its rule in lint and check output, in text and JSON. If `invalid-interface` has no field or pointer, show any supported local schema findings for the named prompt as local advice, without claiming they caused the server refusal. If none are available, say the Runtime did not identify the field and ask the person to inspect the interface or request a detailed Runtime diagnostic. Always retain the supplied Runtime rule text, including when no field pointer exists. Show the rule together with a field-unknown note and any separately labeled local findings in text and JSON. Never guess a rejected field.
 
+## Recent passing lint receipts
+
+A normal `pdd test` may reuse a terminal passing lint received at most ten
+minutes ago, inclusive, for exactly the current captured source and selected
+tests. Local discovery, preflight, source validation, account authentication and
+ordinary check admission still run. Explicit lint always requests a fresh lint;
+Try, saved reads/retries and standalone local modes keep their existing routes.
+This is lint admission evidence, never a behavioral pass or approval.
+
+Persist one recent receipt per canonical repository in private state, separate
+from the complete Story pass cache. Bind it to root, Runtime origin, GitHub
+login and user ID, captured source_sha256, sorted unique selected test paths,
+package version and the lint selected cap (null for preliminary lint). Use the
+[receipt eligibility owner](runtime-lint-receipt.prompt.md) for metadata checks.
+Retain the actual answer and its engine_sha. Reuse only a confirmed lint answer
+with matching UUID requestId/id, command lint, state passed, complete per-test
+lint evidence and a passing existing lint outcome for every selected test.
+Missing, corrupt, expired, future-dated, incomplete, refused, pending or unknown
+records run a fresh lint. Storage failure also falls back to fresh lint.
+
+Before adopting a candidate, perform normal capacity/access/maintenance checks;
+if capacity supplies engine_sha, require it to equal the receipt's engine_sha.
+Unknown current engine identity cannot prove that no deployment occurred during
+the ten-minute window; preserve ordinary check admission at the server.
+Copy the original answer and request ID into the new batch for saved reads and
+restart recovery; do not POST lint again, fabricate a receipt or refresh its
+original received time on reuse. Print `Reusing recent passing lint for unchanged source.`
+on stderr. Before a fresh lint request, discard the prior optional receipt so a newer
+refusal or unknown cannot leave an older pass reusable. Serialize short receipt
+metadata operations with an exclusive local file lock, never held over network
+or waits. Each fresh lint publishes its batch ownership marker first; only
+that marker's owner can replace it with a passing answer. An older in-flight
+lint cannot supersede a newer attempt. After a capacity wait, recheck the same
+saved candidate under this transaction before adopting it. Lock contention,
+an abandoned lock or any bookkeeping failure falls back to fresh lint without
+blocking or repairing the lock. When a fresh attempt cannot acquire ownership,
+write a separate per-batch blocker before dispatch; any blocker prevents reuse.
+At that attempt's exit, clear the optional receipt and remove only its blocker
+under the metadata lock. If cleanup cannot lock, retain the blocker and run
+fresh lint on later calls. Never remove another attempt's blocker. A newly received passing lint can replace the saved receipt only
+when all selected rows have their own pass and complete evidence. Store no token.
+
+Standalone lint JSON, including saved reads and pending/unknown lint results, adds `report_url`: the server's
+report_url sanitized against known secrets and validated by the existing
+same-origin report-link rules, or null
+when absent or unsafe. Save the same field in summary.json and print a supplied
+valid link as `Report: <url>` in text. Local lint has no server report link.
+
 ## Native lint selection and display (draft)
 
 For explicit `pdd lint STORY` (including `--local` without `--timeout`,
@@ -943,6 +991,8 @@ rule and other richer fields. Diagnostic display may replace section with a
 pointer, but deduplication must retain the original location identity.
 
 ## Dependencies
+
+- [Recent lint receipt eligibility](runtime-lint-receipt.prompt.md): required generation and testing context for bounded metadata reuse.
 
 - [Call preflight display](lint-call-preflight.prompt.md): required generation, verification and testing context for the pure advisory renderer and exact server report fields.
 
