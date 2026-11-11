@@ -1,6 +1,6 @@
 # Runtime Markdown links
 
-Own `src/runtime/runtime-markdown.mjs`. Share the existing runtime source discovery
+Own `src/runtime-markdown.mjs`. Share the existing runtime source discovery
 parser with Story boundary parsing. Preserve destination ordering and spelling,
 inline angle destinations, escaped characters and balanced parentheses, and
 inline optional titles. Link labels are not paths.
@@ -42,6 +42,6 @@ None.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"draft","prose_sha256":"8af99b61e04d8303ef72798dc9aee16914a688f40a6574747b852dbb1d58e9c1","entries":[],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
+{"status":"approved","prose_sha256":"523fd4233bf4dd963e1304a420a2b00d2dbab7c5ec7e961717d6b08d43a0edc9","entries":[],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
 ```
 </details>

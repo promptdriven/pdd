@@ -12,7 +12,7 @@ I can start my Try from an agent shell when lint takes longer than 90 seconds bu
 
 ## Rules to check
 
-The [runtime client](../prompts/cli/runtime/runtime-client.prompt.md#retry-confirmed-lint-capacity-refusals) owns this wait. Starting at remote setup admission, every setup stage consumes the same 300000 milliseconds. A new Try dispatch requires the selected test's own lint pass, remaining setup time and no interruption. Forbidden: a separate 90000-millisecond agent lint cutoff, a reset clock after lint, or Try dispatch at/after the deadline or without a pass. Confirmed not-started capacity recovery retains its existing safeguards; accepted or uncertain submissions never gain retry permission from this longer wait.
+The [runtime client](../prompts/cli/runtime-client.prompt.md#retry-confirmed-lint-capacity-refusals) owns this wait. Starting at remote setup admission, every setup stage consumes the same 300000 milliseconds. A new Try dispatch requires the selected test's own lint pass, remaining setup time and no interruption. Forbidden: a separate 90000-millisecond agent lint cutoff, a reset clock after lint, or Try dispatch at/after the deadline or without a pass. Confirmed not-started capacity recovery retains its existing safeguards; accepted or uncertain submissions never gain retry permission from this longer wait.
 
 ## Expected native cases
 

@@ -1,6 +1,6 @@
 # Runtime package entry
 
-Own `src/runtime/index.mjs`. It is the single public entry of `src/runtime/`, exposing the Runtime commands, local format and workspace readers, check-plan and outcome helpers, constants, and agent packet builder consumed by pdd through [`src/runtime-seam.mjs`](../runtime-seam.prompt.md).
+Own `src/runtime/index.mjs`. It is the single public entry of `src/runtime/`, exposing the Runtime commands, local format and workspace readers, check-plan and outcome helpers, constants, and agent packet builder consumed by pdd through [`src/runtime-seam.mjs`](runtime-seam.prompt.md).
 
 ## Public contract
 
@@ -39,3 +39,10 @@ Re-export pure leaf readers and constants (`scenario-json.mjs`, `runtime-workspa
 - [Interface drafting](interface-draft.prompt.md): required generation context for `contractCoverage`, `coverageView`, `missingInterfaces`, `runAutomaticApproval`, and `runInterfaceDraft`.
 - [Try MCP server](try-mcp.prompt.md): required generation context for `runMcp`.
 - [Runtime client](runtime-client.prompt.md): required generation context for `DEFAULT_RUNTIME_URL`, `checkRuntimeHealth`, `createSavedStoryEvidenceReader`, `runCheck`, `runTry`, and `runtimeOrigin`.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{"kind":"native-only","status":"draft","prose_sha256":"077f3f0a835ed9fda342ca1c7f7911f2634b614ffa916873af101a1dde744a3e","reason":"Re-exports live JavaScript ESM module bindings and preserves module evaluation order across src/runtime/ submodules, which bound Runtime ports cannot fake."}
+```
+</details>

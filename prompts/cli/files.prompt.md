@@ -50,5 +50,5 @@ an inventory, not a pass verdict. Use injected stdout/stderr ports for output.
 
 ## Dependencies
 
-- [Shared authored-file reader](runtime/runtime-preflight.prompt.md): required generation,
+- [Shared authored-file reader](runtime-preflight.prompt.md): required generation,
   verification and testing context for all parsing, pairing and refusal rules.

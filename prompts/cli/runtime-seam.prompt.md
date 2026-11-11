@@ -4,7 +4,7 @@ Own `src/runtime-seam.mjs`. It is the sole module in pdd outside `src/runtime/` 
 
 ## Public contract
 
-Re-export the public bindings of [`src/runtime/index.mjs`](runtime/index.prompt.md) unchanged, preserving exact binding identity, parameter handling, return values, thrown errors, and port forwarding:
+Re-export the public bindings of [`src/runtime/index.mjs`](runtime-entry.prompt.md) unchanged, preserving exact binding identity, parameter handling, return values, thrown errors, and port forwarding:
 
 - `DEFAULT_RUNTIME_URL`, `checkRuntimeHealth`, `createSavedStoryEvidenceReader`, `runCheck`, `runTry`, `runtimeOrigin`
 - `LIMITS`, `captureSource`, `checkInput`, `findTests`, `gitFiles`, `interfaceBlocks`, `interfaceSchemaProblems`, `isSecretPath`, `isStoryPath`, `preflight`, `promptRefusal`, `promptSchemaRefusals`, `proseSha256`, `readPrompt`, `sha256`, `sourceFilePort`
@@ -23,4 +23,11 @@ The seam holds no mutable state and performs no I/O at load time beyond loading 
 
 ## Dependencies
 
-- [Runtime package entry](runtime/index.prompt.md): required generation context for the exported Runtime package bindings and their contracts.
+- [Runtime package entry](runtime-entry.prompt.md): required generation context for the exported Runtime package bindings and their contracts.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{"kind":"native-only","status":"draft","prose_sha256":"0b6ff8207420382995670f02eeeb4c5d4f87d4286bd60f56068a2940f1722ba5","reason":"Re-exports live JavaScript ESM module bindings from src/runtime/index.mjs as pdd's sole import seam, which bound Runtime ports cannot fake."}
+```
+</details>

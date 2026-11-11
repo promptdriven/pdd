@@ -13,7 +13,7 @@ I can leave my check waiting for room without repeatedly uploading the same file
 
 ## Rules to check
 
-The [client prompt](../prompts/cli/runtime/runtime-client.prompt.md#check-admission-and-confirmed-capacity-recovery) owns retry authority, timing and precedence; its [shared admission](../prompts/cli/runtime/runtime-client.prompt.md#shared-local-admission-and-maintenance) owns capacity reads/cache and maintenance. The [slots prompt](../prompts/cli/runtime/runtime-slots.prompt.md) owns local exclusion and reservation cleanup. Apply this new timing only to Check uploads after authoritative confirmed-unstarted capacity evidence, including explicit batch retry.
+The [client prompt](../prompts/cli/runtime-client.prompt.md#check-admission-and-confirmed-capacity-recovery) owns retry authority, timing and precedence; its [shared admission](../prompts/cli/runtime-client.prompt.md#shared-local-admission-and-maintenance) owns capacity reads/cache and maintenance. The [slots prompt](../prompts/cli/runtime-slots.prompt.md) owns local exclusion and reservation cleanup. Apply this new timing only to Check uploads after authoritative confirmed-unstarted capacity evidence, including explicit batch retry.
 
 With unsupported capacity and one-second server advice, a 90-second finite wait allows more than three uploads and at most ten, spaced at least ten seconds apart; this bound is a fixture consequence, never a global attempt limit. Longer advice remains binding even after the capacity hold ends. Waiting alone cannot create another check request or upload; capacity GETs cannot run under a local claim lock. Saved reads/retries cannot reset either absolute time or authorize replay from missing proof.
 

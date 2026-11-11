@@ -6,7 +6,7 @@ Own `src/svg-layout.mjs`. Its module function `lintSvgLayouts({root, files, prom
 
 ## Workspace advice
 
-Use the [workspace authority](runtime/runtime-workspace.prompt.md) before prompt/drawing content access, including no-Story local scans. Filter optional excluded candidates without opening them; report unavailable advice where relevant. Required linked drawings remain preflight's capture responsibility and cannot be silently pruned. Keep advisory warnings advisory and retain strict no-link reads.
+Use the [workspace authority](runtime-workspace.prompt.md) before prompt/drawing content access, including no-Story local scans. Filter optional excluded candidates without opening them; report unavailable advice where relevant. Required linked drawings remain preflight's capture responsibility and cannot be silently pruned. Keep advisory warnings advisory and retain strict no-link reads.
 
 
 ## Parts and advice
@@ -27,10 +27,10 @@ Warnings start `Warning: SVG layout`, are deduplicated and ordered by prompt pat
 
 ## Dependencies
 
-- [Workspace authority](runtime/runtime-workspace.prompt.md): required generation/runtime/verification context for opt-in permission.
+- [Workspace authority](runtime-workspace.prompt.md): required generation/runtime/verification context for opt-in permission.
 
 - [Screen rules](../../RUNBOOK.md#13-give-your-app-a-screen-app-map): authoring and verification context.
 
 ## Caller navigation
 
-The CLI exposes this advisory through [Check](runtime/runtime-client.prompt.md).
+The CLI exposes this advisory through [Check](runtime-client.prompt.md).

@@ -849,7 +849,7 @@ with `pdd workflow changes N` under the existing room and delivery rules.
 
 When no run waits and no outage or interpreter access problem is open, the tick
 makes no health check. Else it makes one free health check,
-[`checkRuntimeHealth`](runtime/runtime-client.prompt.md#free-interpreter-health-check)
+[`checkRuntimeHealth`](runtime-client.prompt.md#free-interpreter-health-check)
 (an injectable `runtimeHealth` port): `healthy`, `unavailable` (down) or
 `access` (an answer that is neither: a sign-in or setup problem with a `fix`).
 

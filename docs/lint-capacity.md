@@ -10,7 +10,7 @@ There is no fixed number of attempts. It keeps the same selected files and saves
 every request ID. Check and saved-batch reads have no default wait limit in any shell; `--timeout`
 sets an explicit limit. Standalone remote lint retains its 90-second agent default
 and unlimited interactive wait, with `--timeout` override. `pdd simulate` follows the
-[Try lint deadline policy](../prompts/cli/runtime/runtime-client.prompt.md#retry-confirmed-lint-capacity-refusals).
+[Try lint deadline policy](../prompts/cli/runtime-client.prompt.md#retry-confirmed-lint-capacity-refusals).
 For a new Check with `--timeout MIN`, preliminary lint has its own MIN-minute
 wait, capped at 90 seconds in an agent shell. The paid Check clock starts after
 lint returns. With no explicit timeout, preliminary lint has no default limit.
@@ -79,6 +79,6 @@ If the interpreter confirms that a check ended because the service restarted, pd
 tries that Story row once more. It saves both request IDs, receipts and usage,
 and prevents a second replacement across later or overlapping reads and retries.
 Other uncertain outcomes and paid simulation actions are never sent again automatically.
-The [client prompt](../prompts/cli/runtime/runtime-client.prompt.md) and
-[slots prompt](../prompts/cli/runtime/runtime-slots.prompt.md) define the exact retry
+The [client prompt](../prompts/cli/runtime-client.prompt.md) and
+[slots prompt](../prompts/cli/runtime-slots.prompt.md) define the exact retry
 and slot rules.

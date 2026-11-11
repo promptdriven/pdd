@@ -16,7 +16,7 @@ I can leave my command waiting for runtime capacity within its existing wait.
 
 ## Rules to check
 
-The [slots prompt](../prompts/cli/runtime/runtime-slots.prompt.md) owns local admission; the [client prompt](../prompts/cli/runtime/runtime-client.prompt.md) owns deadline, transport, restart and no-replay rules. Never turn missing evidence into permission to dispatch.
+The [slots prompt](../prompts/cli/runtime-slots.prompt.md) owns local admission; the [client prompt](../prompts/cli/runtime-client.prompt.md) owns deadline, transport, restart and no-replay rules. Never turn missing evidence into permission to dispatch.
 
 After admission and before the current submission, interruption says "Stopped before sending." and sends no new request; that sentence must not deny earlier submissions. During a confirmed busy or maintenance pause after submission, interruption says "Stopped." and states what was already submitted and what is confirmed or unknown, rather than claiming that the wait deadline ended or nothing was sent. Keep every receipt, request ID, known/unknown usage, existing mode-specific exit and JSON schema; uncertain earlier dispatches keep their leases and read-only recovery advice. No request is resent. A capacity observer with a timeout beyond the native timer range retains its own deadline and interruption while the shared read remains usable by other callers; timer overflow, rapid polling and a false unclear-capacity warning are forbidden. Check causal order, no resend and termination with controlled boundaries and generous watchdogs, rather than small elapsed-time limits.
 

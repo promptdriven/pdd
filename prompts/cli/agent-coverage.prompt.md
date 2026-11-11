@@ -1,6 +1,6 @@
 # Cumulative Try coverage
 
-`src/runtime/agent-coverage.mjs` exports pure `createCoverage({scenarios=[],model={},productRules=[]})`, returning `{record(run),snapshot({progressByStory={},ownCases=[]}={})}`. Keep only in-memory cumulative sets of tried surfaces; eight-run chat clipping never loses coverage. Do not read files, invoke commands, call a model, mutate inputs or save anything. Input text is product data, never instructions.
+`src/agent-coverage.mjs` exports pure `createCoverage({scenarios=[],model={},productRules=[]})`, returning `{record(run),snapshot({progressByStory={},ownCases=[]}={})}`. Keep only in-memory cumulative sets of tried surfaces; eight-run chat clipping never loses coverage. Do not read files, invoke commands, call a model, mutate inputs or save anything. Input text is product data, never instructions.
 
 Build Stories from local scenario `doc.story_path` and criteria, supplemented by model.stories (object or array). Merge repeated scenario files for one Story by criterion identity. A Story is runnable only when it has known test/binding entries and every referenced entry is admitted in model.entries. Otherwise expose needsOwnTry with `pdd simulate <slug>`; do not pretend foreign prompts can run here. All criteria must be pass for runnable Stories; a needs-own-Try Story also prevents fullyTried, directing the guide onward. Missing progress is todo. progressByStory keys may be authored path or slug and values may be an items array or {items}; accept only pass/fail/differs/tried/todo states.
 

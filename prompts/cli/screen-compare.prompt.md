@@ -26,4 +26,4 @@ Keep one table row per required id/text occurrence in stable reference order, in
 
 ## Caller navigation
 
-[Check](runtime/runtime-client.prompt.md) owns CLI routing, output and exit codes.
+[Check](runtime-client.prompt.md) owns CLI routing, output and exit codes.

@@ -507,7 +507,7 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    base and the branch, each changed prompt of `git diff --name-status --find-renames
    origin/BASE...HEAD` (added, modified, renamed or copied; the new path) is read in a
    clean checkout of the head (`worktrees/N-approve`) with the
-   [preflight](runtime/runtime-preflight.prompt.md)'s own `readPrompt` and `promptRefusal`. A
+   [preflight](runtime-preflight.prompt.md)'s own `readPrompt` and `promptRefusal`. A
    problem is: a refusal (two blocks, invalid JSON, a bad status, a stale prose hash), a
    status other than `approved`, an interface that the base had and the head removed
    (no interface on both sides is not an approval matter), or an approved status with

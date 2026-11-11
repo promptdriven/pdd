@@ -32,9 +32,9 @@ Show a native-only declaration's kind and reason before approval. It is eligible
 
 ## Dependencies
 
-- [Automatic draft approval](runtime/interface-draft.prompt.md): required generation and verification context for `runAutomaticApproval`, `contractCoverage` and `coverageView`. The caller consumes this public operation; ordinary person approval policy remains here.
+- [Automatic draft approval](interface-draft.prompt.md): required generation and verification context for `runAutomaticApproval`, `contractCoverage` and `coverageView`. The caller consumes this public operation; ordinary person approval policy remains here.
 
-- [Shared authored-file reader](runtime/runtime-preflight.prompt.md#shared-authored-file-reader): required generation/verification/testing context for parsing, references, numeric tokens and schema refusals.
+- [Shared authored-file reader](runtime-preflight.prompt.md#shared-authored-file-reader): required generation/verification/testing context for parsing, references, numeric tokens and schema refusals.
 
 - [Approval policy and journal](approval-policy.prompt.md): required authoring/generation/native-production/verification/testing context for config, actor, evidence shape and storage.
 
@@ -42,6 +42,6 @@ Read the full [Prompting guide](../../docs/prompting-guide.md) before you change
 
 ## Caller navigation
 
-The [CLI](pdd-cli.prompt.md) routes `pdd approve PROMPT` here. The [runtime client](runtime/runtime-client.prompt.md) uses the same view and edit for Try-page approvals.
+The [CLI](pdd-cli.prompt.md) routes `pdd approve PROMPT` here. The [runtime client](runtime-client.prompt.md) uses the same view and edit for Try-page approvals.
 
 Use “Runtime interface” when naming the declaration and its global approval status in user messages.

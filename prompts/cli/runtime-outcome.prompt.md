@@ -1,6 +1,6 @@
 # Runtime outcome
 
-Own `src/runtime/runtime-outcome.mjs`: the one place that decides what happened to one
+Own `src/runtime-outcome.mjs`: the one place that decides what happened to one
 selected test from one server answer. `pdd lint`, the lint gate for paid work, the
 table, the Story summary, the progress line and the exit code all read this
 decision, so two consumers can never disagree about the same answer. A pass needs

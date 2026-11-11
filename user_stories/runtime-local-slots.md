@@ -14,7 +14,7 @@ I can run several local agents without exceeding my shared runtime limit.
 
 ## Rules to check
 
-The [slots prompt](../prompts/cli/runtime/runtime-slots.prompt.md) owns local admission; the [client prompt](../prompts/cli/runtime/runtime-client.prompt.md) owns deadline, transport, restart and no-replay rules. Never turn missing evidence into permission to dispatch.
+The [slots prompt](../prompts/cli/runtime-slots.prompt.md) owns local admission; the [client prompt](../prompts/cli/runtime-client.prompt.md) owns deadline, transport, restart and no-replay rules. Never turn missing evidence into permission to dispatch.
 
 Signal checks synchronize with the actual claim/admission boundary before interruption, then verify termination, cleanup and no new dispatch while preserving uncertain leases. Do not depend on a short signal timer winning a race against another short pause.
 

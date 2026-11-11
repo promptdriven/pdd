@@ -1,9 +1,9 @@
 # The person's agent on the Try page
 
-Own `src/runtime/agent-chat.mjs`. Export `createAgentBridge(context, test, tryId, options, link)`;
+Own `src/agent-chat.mjs`. Export `createAgentBridge(context, test, tryId, options, link)`;
 it returns a connected bridge `{url, run(onTick), close()}` or null for an unsupported server.
 Use only the runtime origin, owner sign-in and validated Try identity supplied by runtime-client.
-This module relays chat to the person's installed CLI through [agent adapters](../agent-adapters.prompt.md).
+This module relays chat to the person's installed CLI through [agent adapters](agent-adapters.prompt.md).
 It never dispatches a program action, changes project files, approves a prompt or chooses a model.
 
 ## Workspace connection
@@ -80,8 +80,8 @@ After a successful relay reply, call delivered with its accepted person/reply pa
 - [Run judge](agent-judge.prompt.md): required generation/runtime context for deterministic verdicts and ordered progress.
 - [Project card](agent-project.prompt.md): required generation/runtime context for safe local facts and latest official check.
 - [Agent packet](agent-packet.prompt.md): required generation/runtime context for bounded request layout and compatibility wording.
-- [Agent configuration](../agent-config.prompt.md): required generation/runtime context for local launcher selection and private definitions.
-- [Agent adapters](../agent-adapters.prompt.md): required generation/runtime context for discovery, secret
+- [Agent configuration](agent-config.prompt.md): required generation/runtime context for local launcher selection and private definitions.
+- [Agent adapters](agent-adapters.prompt.md): required generation/runtime context for discovery, secret
   scrubbing, read-only CLI execution, strict JSON and schema validation.
 - [Runtime client](runtime-client.prompt.md): required generation/runtime context for owner-authenticated
   transport, repository state, safe source capture, cancellation and Try lifecycle; it owns invocation.

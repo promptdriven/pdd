@@ -30,7 +30,7 @@ Export `latestCheckVerdict({root, since}, {env})`, returning the greatest qualif
 ## Runtime selection and coverage evidence
 
 Retain a saved check's `check_plan` as `checkPlan` and compute `checkScope` from
-its original rows with the required [check planning](runtime/runtime-check-plan.prompt.md)
+its original rows with the required [check planning](runtime-check-plan.prompt.md)
 owner. Append that owner's separate target/baseline states and guidance to the
 run's result summary. Baseline failures remain failed full-batch evidence, with
 an owner handoff route instead of an instruction to repair unrelated target
@@ -43,7 +43,7 @@ Check and lint results retain coverage from the batch (summary fallback) and nat
 
 ## Native profile and criterion assessment (draft)
 
-The existing [preflight capture owner](runtime/runtime-preflight.prompt.md#source-capture)
+The existing [preflight capture owner](runtime-preflight.prompt.md#source-capture)
 remains authoritative for the supplied capture callback; this link is navigation.
 This module also owns the shared native judgment for
 [profile completeness](../../user_stories/native-validation-profile.md) and
@@ -446,12 +446,12 @@ Export `savedLostCheck(batch,{env,root})`. Read only the named check batch and i
 
 ## Dependencies
 
-- [Check planning](runtime/runtime-check-plan.prompt.md): required for saved target and
+- [Check planning](runtime-check-plan.prompt.md): required for saved target and
   baseline result groups and their run guidance.
 
-- [Runtime output](runtime/runtime-output.prompt.md): required context for the canonical current and legacy Prompt tests label pattern used to identify per-Story summary lines.
+- [Runtime output](runtime-output.prompt.md): required context for the canonical current and legacy Prompt tests label pattern used to identify per-Story summary lines.
 
-- Load [runtime outcome](runtime/runtime-outcome.prompt.md) for the public result projection, reason codes and pass boundary used by this module.
+- Load [runtime outcome](runtime-outcome.prompt.md) for the public result projection, reason codes and pass boundary used by this module.
 
 - Existing local batch readers supply the `batch.json`/`summary.json` fields and original receipts declared above; the saved record is data, not an eligible/pass assertion.
 - Required supplied `ports.workspace` is the actual synchronous `src/workflow-runner.mjs` module function `readEvidenceEligibility({root,producerRoot,tests,source_sha256,runId=null,stage=null}, ports={})`, returning `{state,reason,runId,repo,producerRoot,tests,stage,sourceAnchor,source_sha256}`. State is `eligible`, `ineligible` or `unavailable`; only eligible resolves the owned identity and `current`/`pr1` stage/anchor. Null unresolved fields and reasons cannot authorize a result. The owner supplies this local read without registration/import or writes; this module consumes it without a second association policy.
@@ -481,8 +481,8 @@ Export `savedLostCheck(batch,{env,root})`. Read only the named check batch and i
 
 ```json
 {
-  "kind":"partial","status":"draft",
-  "prose_sha256":"4f049e1b2dd4980549f8b3b84ef58c93fb5b62130fac51905a7753de330f210c",
+  "kind":"partial","status":"approved",
+  "prose_sha256":"b682e9b16c24a48cde25434cb6afba90ef3da9cf84a57d3d63f4f2d4b50a9658",
   "entries": [{"operation":"assessNativeEvidence","input_schema":{"type":"object","properties":{"root":{"type":"string"},"runDir":{"type":"string"},"runId":{"type":"string"},"profileId":{"type":"string"},"storyPath":{"type":"string"}},"required":["root","runDir","runId","profileId","storyPath"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"profileId":{"type":"string"},"profileState":{"type":"string"},"sourceState":{"type":"string"},"receiptState":{"type":"string"},"origin":{"type":"string"},"requiresReview":{"type":"boolean"},"requiredIds":{"type":"array","items":{"type":"string"}},"missingIds":{"type":"array","items":{"type":"string"}},"failedIds":{"type":"array","items":{"type":"string"}},"skippedIds":{"type":"array","items":{"type":"string"}},"unknownIds":{"type":"array","items":{"type":"string"}},"unexecutedGates":{"type":"array","items":{"type":"string"}},"prerequisiteProblems":{"type":"array","items":{"type":"string"}},"optionalSkippedIds":{"type":"array","items":{"type":"string"}},"duplicateIds":{"type":"array","items":{"type":"string"}},"occurrenceCount":{"oneOf":[{"type":"integer","minimum":0},{"type":"null"}]},"uniqueIdCount":{"oneOf":[{"type":"integer","minimum":0},{"type":"null"}]},"observations":{"type":"array","items":{"type":"object","properties":{"occurrenceId":{"type":"string"},"testId":{"type":"string"},"selected":{"oneOf":[{"type":"boolean"},{"type":"null"}]},"started":{"oneOf":[{"type":"boolean"},{"type":"null"}]},"outcome":{"type":"string"},"skipReason":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["occurrenceId","testId","selected","started","outcome","skipReason"],"additionalProperties":false}},"identity":{"type":"object","properties":{"sourceId":{"type":"string"},"implementationId":{"type":"string"},"testsId":{"type":"string"},"requirementsId":{"type":"string"},"profilePrompt":{"type":"string"},"profileApproval":{"type":"string"},"originalRef":{"type":"string"},"verificationRef":{"type":"string"},"producer":{"type":"string"},"producerVersion":{"type":"string"},"reportFormat":{"type":"string"},"runnerVersion":{"type":"string"},"runtimeVersion":{"type":"string"},"stage":{"type":"string"},"sourceRef":{"type":"string"}},"required":["sourceId","implementationId","testsId","requirementsId","profilePrompt","profileApproval","originalRef","verificationRef","producer","producerVersion","reportFormat","runnerVersion","runtimeVersion","stage","sourceRef"],"additionalProperties":false},"criteria":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"},"state":{"type":"string"},"nativeIds":{"type":"array","items":{"type":"string"}},"reason":{"type":"string"}},"required":["id","text","state","nativeIds","reason"],"additionalProperties":false}},"comparison":{"type":"object","properties":{"state":{"type":"string"},"reason":{"type":"string"},"lostIds":{"type":"array","items":{"type":"string"}},"changes":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"before":{"type":"string"},"after":{"type":"string"}},"required":["id","before","after"],"additionalProperties":false}}},"required":["state","reason","lostIds","changes"],"additionalProperties":false},"limits":{"type":"array","items":{"type":"string"}},"profileNativeProof":{"type":"string"},"storyNativeProof":{"type":"string"},"gates":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"outcome":{"type":"string"}},"required":["id","outcome"],"additionalProperties":false}},"prerequisites":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"expectedArtifactId":{"type":"string"},"artifactId":{"type":"string"},"state":{"type":"string"},"verificationRef":{"type":"string"}},"required":["id","expectedArtifactId","artifactId","state","verificationRef"],"additionalProperties":false}}},"required":["profileId","profileState","sourceState","receiptState","origin","profileNativeProof","requiresReview","requiredIds","missingIds","failedIds","skippedIds","unknownIds","unexecutedGates","prerequisiteProblems","optionalSkippedIds","duplicateIds","occurrenceCount","uniqueIdCount","observations","identity","criteria","comparison","limits","storyNativeProof","gates","prerequisites"],"additionalProperties":false},"errors":[]}],
   "calls": [],
   "resources": [{"name":"native","kind":"port","access":"read","operations":[{"name":"read_context","access":"read","arguments_schema":{"type":"object","properties":{"root":{"type":"string"},"runDir":{"type":"string"},"runId":{"type":"string"},"profileId":{"type":"string"},"storyPath":{"type":"string"}},"required":["root","runDir","runId","profileId","storyPath"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"content":{"type":"string"}},"required":["content"],"additionalProperties":false}}]}],

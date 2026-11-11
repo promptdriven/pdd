@@ -28,7 +28,7 @@ The card has these lines, in this order:
 
 The card has at most 160 lines. Cap each list of Stories, plans, tests, prompts, results and changes at 20 entries with an omitted count. Truncate any remaining overflow with an omitted-line count before the final three lines. The card keeps these final lines even for large batches. When the Stories need more, show the first Stories in full while they fit. Each later Story shows only `Story: ABSOLUTE PATH (not shown in full: N criteria, M cases)`. The last Story line is followed by `… K more Stories not shown in full. Read their files.` Lines 10 to 12 always show.
 
-Read each test file with the [exact scenario number](runtime/scenario-json.prompt.md) rules, and write every JSON value of the card and the fingerprint (Input, VALUE and the canonical JSON) with them. A whole number above 2^53 then shows and hashes with its exact digits, so the person approves the value that the file holds, and a change in its last digit is a changed expected value. For a test without such a number, the text and hashes are the same as with `JSON.stringify`.
+Read each test file with the [exact scenario number](scenario-json.prompt.md) rules, and write every JSON value of the card and the fingerprint (Input, VALUE and the canonical JSON) with them. A whole number above 2^53 then shows and hashes with its exact digits, so the person approves the value that the file holds, and a change in its last digit is a changed expected value. For a test without such a number, the text and hashes are the same as with `JSON.stringify`.
 
 A file that cannot be read, or a test file that is not valid JSON, shows `(cannot read PATH)` in its place. The card never stops for one bad file. A path outside the physical run root, including a symlink target outside it, is unreadable; never show its content.
 
@@ -66,7 +66,7 @@ Return `{pass, tests, problems}`. `tests` is one row `{path, batch, state}` for 
 
 ## Dependencies
 
-- [Runtime preflight](runtime/runtime-preflight.prompt.md): `captureSource`, `findTests` and `interfaceBlocks`.
+- [Runtime preflight](runtime-preflight.prompt.md): `captureSource`, `findTests` and `interfaceBlocks`.
 - [Workflow results](workflow-results.prompt.md): the batch folder and name rule for pdd's own results.
-- [Exact scenario numbers](runtime/scenario-json.prompt.md): `parseScenarioJson` and `stringifyScenarioJson` for test values.
+- [Exact scenario numbers](scenario-json.prompt.md): `parseScenarioJson` and `stringifyScenarioJson` for test values.
 - RUNBOOK §2 (Story, test and prompt files), §4 (expected values) and §11 (what an agent may fix).

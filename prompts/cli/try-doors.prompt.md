@@ -1,6 +1,6 @@
 # Use a Try session from a terminal or HTTP client
 
-Own src/runtime/try-doors.mjs. Provide one generic adapter around the owner's saved Try. Preserve argv strings, program
+Own src/try-doors.mjs. Provide one generic adapter around the owner's saved Try. Preserve argv strings, program
 streams and saved session identity. Do not interpret commands, execute a project binary, or generate project logic.
 
 `openCli(context, test, sessionId, options)` selects the first distinct CLI entry used by the Story's tests; refuse
@@ -45,7 +45,7 @@ Carry the [workspace authority](runtime-workspace.prompt.md) through opening, di
 - [Runtime client](runtime-client.prompt.md): required generation/runtime context for authentication, state, owner
   calls, confirmed results and safe original-test append.
 - [Runtime preflight](runtime-preflight.prompt.md): required generation/runtime context for CLI interfaces.
-- [Prompting guide](../../../docs/prompting-guide.md): required authoring context.
+- [Prompting guide](../../docs/prompting-guide.md): required authoring context.
 
 Launcher execution must work inside projects declaring CommonJS or ESM. Use an absolute Node executable and
 syntax-neutral dynamic import rather than relying on extensionless-file module detection. The launcher must
