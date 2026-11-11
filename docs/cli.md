@@ -1384,7 +1384,7 @@ says to run `pdd autopilot start`.
 
 ```json
 {"autopilot":{"mode":"auto","trust":[],"engine":"core","runs":2,"label":"pdd:autopilot",
-  "quietMinutes":45,"report":"draft","repairs":2,"testCommand":"npm test"}}
+  "quietMinutes":45,"report":"draft","maxRepairs":6,"testCommand":"npm test"}}
 ```
 
 | Key | Meaning | Default |
@@ -1396,7 +1396,7 @@ says to run `pdd autopilot start`.
 | `maxJobHours` | Backstop: each agent process (build, repair, review, suite) stops this many hours after its own start, whatever it does (sleep time is not counted); the job ends with no result and one alert | 24 |
 | `report` | `file`, `draft` or `off` for Runtime and PDD problem reports | `file` |
 | `reports.runtimeRepo` | Repository for Runtime problem reports, for example `promptdriven/prompt-runtime`; used when this machine can read it, else `promptdriven/pdd` with label `pdd:runtime` | none |
-| `repairs` | Repair jobs for one PR after a red check | 2 |
+| `maxRepairs` | Safety cap of repair jobs for one PR (the old key `repairs` still works). Repairs go on while they make progress: see below | 6 |
 | `testCommand` | Full test command that runs on the PR head, in a clean checkout. With `package-lock.json` and listed dependencies, `npm ci --ignore-scripts` runs first | `npm test` when `package.json` has a test script |
 
 Each tick, without AI calls:
@@ -1414,7 +1414,12 @@ Each tick, without AI calls:
    `Runtime:` line of the PR says `PASS` or `not run (…)`, the head contains the
    current base tip, and the base check passes. Then
    `gh pr merge --merge --match-head-commit HEAD` merges it, and the issue closes.
-   A red check starts one repair job on the same branch, up to `repairs` times. A
+   A red check starts one repair job on the same branch while the repairs make
+   progress: each round must fix every finding of the last round, bring back no
+   finding of an earlier round, and within 2 rounds give a smaller or less severe
+   list; `maxRepairs` is the cap. The END comment names the rule that stopped the
+   repairs. Review findings marked P3 never block: they go to a follow-up section in
+   the PR body and one follow-up note on the issue. A
    missing or unclear `Runtime:` line is red, unless the job says no prompt
    changed. A non-zero exit of the test command is red; a failure of the suite
    runner itself (it could not start, was killed or timed out) runs the suite again

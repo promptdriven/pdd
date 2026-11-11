@@ -22,11 +22,11 @@ test('settings: engine switch, defaults and bounded values', () => {
   assert.equal(autopilotEngine({ autopilot: { engine: 'core' } }), 'core');
   assert.equal(autopilotEngine({ autopilot: { engine: 'turbo' } }), 'full');
   assert.deepEqual(coreSettings({ autopilot: { mode: 'auto', engine: 'core' } }), {
-    engine: 'core', mode: 'auto', trust: [], runs: 2, label: null, quietMinutes: 45, ciStuckMinutes: 360, maxJobHours: 24, report: 'file', runtimeRepo: null, repairs: 2, testCommand: null });
+    engine: 'core', mode: 'auto', trust: [], runs: 2, label: null, quietMinutes: 45, ciStuckMinutes: 360, maxJobHours: 24, report: 'file', runtimeRepo: null, repairs: 6, testCommand: null });
   const custom = coreSettings({ autopilot: { mode: 'auto', engine: 'core', runs: 3, label: 'pdd:autopilot', quietMinutes: 30, report: 'file', repairs: 0, testCommand: 'make check', trust: ['Dana'] } });
   assert.deepEqual(custom, { engine: 'core', mode: 'auto', trust: ['Dana'], runs: 3, label: 'pdd:autopilot', quietMinutes: 30, ciStuckMinutes: 360, maxJobHours: 24, report: 'file', runtimeRepo: null, repairs: 0, testCommand: 'make check' });
   const invalid = coreSettings({ autopilot: { mode: 'auto', engine: 'core', runs: 0, quietMinutes: -1, report: 'loud', repairs: 1.5, label: '' } });
-  assert.deepEqual([invalid.runs, invalid.quietMinutes, invalid.report, invalid.repairs, invalid.label], [2, 45, 'file', 2, null]);
+  assert.deepEqual([invalid.runs, invalid.quietMinutes, invalid.report, invalid.repairs, invalid.label], [2, 45, 'file', 6, null]);
   assert.equal(coreSettings({ autopilot: { jobTimeoutMinutes: 120 } }).jobTimeoutMinutes, undefined, 'there is no fixed time limit');
   assert.equal(coreSettings({ autopilot: { engine: 'core' } }, { scripts: { test: 'node --test' } }).testCommand, 'npm test');
 });
@@ -2583,4 +2583,95 @@ test('U8 mutation guards: a question marker for another issue and a label remova
   const forged = v.github.openPr({ branch: 'pdd/core-17-older', head: 'd'.repeat(40) }); forged.comments.push({ id: 901, body: '<!-- pdd:autopilot-core:would-merge:x -->', user: { login: 'stranger' } });
   v.kill(17, 'build'); v.advance(25 * HOUR); await v.tick(); await v.tick();
   assert.equal(forged.state, 'closed', 'a note by another author does not protect a PR');
+});
+
+// ---- Repair budget B: repairs go on while they make progress -----------------------------------------------
+const reviewRound = async (w, n, items) => { w.review(n, items.length ? 'FAIL' : 'PASS', items); w.suite(n, 0); await w.tick(); };
+const repairBuild = async (w, n) => { w.build(n, { role: 'repair' }); await w.tick(); };
+
+test('V1 each repair fixes the last findings and gets a smaller list: the repairs go past the old cap of 2 and the PR merges', async t => {
+  const w = await coreWorld(t);
+  w.issue(17); await w.tick(); w.build(17); await w.tick();
+  await reviewRound(w, 17, ['P1 src/a.js:10 the parser drops the last line', 'P2 src/b.js:20 no test for an empty file', 'P2 src/c.js:30 the error text names the wrong flag']);
+  assert.match(w.job(17, 'repair').input, /src\/a\.js:10/);
+  await repairBuild(w, 17);
+  await reviewRound(w, 17, ['P2 src/d.js:40 the new helper is not exported', 'P2 src/e.js:50 a typo in the help text']);
+  await repairBuild(w, 17);
+  await reviewRound(w, 17, ['P2 src/f.js:60 the log line prints a full path']);
+  await repairBuild(w, 17);
+  await reviewRound(w, 17, []);
+  assert.equal(w.started.filter(job => job.role === 'repair').length, 3);
+  assert.equal(w.github.merges.length, 1);
+  assert.equal(endComments(w, 17).length, 0);
+});
+
+test('V2 the same finding after a repair ends the job and the END comment names the rule', async t => {
+  const w = await coreWorld(t);
+  w.issue(17); await w.tick(); w.build(17); await w.tick();
+  await reviewRound(w, 17, ['P2 src/a.js:10 the parser drops the last line of the file']);
+  await repairBuild(w, 17);
+  await reviewRound(w, 17, ['P2 src/a.js:12 the parser still drops the last line']);
+  assert.equal(w.github.merges.length, 0);
+  const end = endComments(w, 17);
+  assert.equal(end.length, 1); assert.match(end[0], /a finding of the last round is still there/); assert.match(end[0], /src\/a\.js:12/);
+  assert.equal(w.started.filter(job => job.role === 'repair').length, 1);
+});
+
+test('V2b a finding of an earlier round that comes back ends the job; a different cause at the same line does not', async t => {
+  const w = await coreWorld(t);
+  w.issue(17); await w.tick(); w.build(17); await w.tick();
+  await reviewRound(w, 17, ['P2 src/a.js:10 the parser drops the last line of the file']);
+  await repairBuild(w, 17);
+  await reviewRound(w, 17, ['P2 src/a.js:10 the help text has a spelling error in the usage block']);
+  assert.equal(endComments(w, 17).length, 0, 'the same place with a different cause is a new finding');
+  await repairBuild(w, 17);
+  await reviewRound(w, 17, ['P1 src/a.js:11 the parser drops the last line of the file again']);
+  const end = endComments(w, 17);
+  assert.equal(end.length, 1); assert.match(end[0], /a finding of an earlier round came back/);
+  assert.equal(w.started.filter(job => job.role === 'repair').length, 2);
+});
+
+test('V3 P3 findings never block: a FAIL with only P3 items merges, the PR body and one issue note list the follow-ups', async t => {
+  const w = await coreWorld(t);
+  w.issue(17); await w.tick(); const { pr } = w.build(17); await w.tick();
+  await reviewRound(w, 17, ['P2 src/a.js:10 the parser drops the last line', 'P3 src/b.js:5 rename the helper to a clearer name']);
+  await repairBuild(w, 17);
+  await reviewRound(w, 17, ['P3 src/b.js:5 rename the helper to a clearer name', 'P3 docs/x.md:3 Runtime: add an example']);
+  assert.equal(w.github.merges.length, 1, 'P3-only merges');
+  assert.equal(endComments(w, 17).length, 0);
+  assert.equal(pr.body.split('Follow-ups from the Autopilot review').length, 2, 'one section in the PR body');
+  assert.match(pr.body, /rename the helper/); assert.match(pr.body, /docs\/x\.md:3 Runtime - add an example/, 'a follow-up never reads as a Runtime line');
+  const notes = w.comments(17).filter(body => body.includes('pdd:autopilot-core:follow-ups:17'));
+  assert.equal(notes.length, 1, 'one deduped note on the issue');
+  assert.equal(notes[0].split('rename the helper').length, 2); assert.match(notes[0], /add an example/);
+  assert.ok(pr.comments.some(c => /^Review: PASS/.test(c.body) && /Follow-ups \(P3/.test(c.body)));
+});
+
+test('V4 two rounds in a row that are not smaller or less severe end the job', async t => {
+  const w = await coreWorld(t);
+  w.issue(17); await w.tick(); w.build(17); await w.tick();
+  await reviewRound(w, 17, ['P2 src/a.js:10 the parser drops the last line']);
+  await repairBuild(w, 17);
+  await reviewRound(w, 17, ['P2 src/b.js:20 the new flag has no test']);
+  assert.equal(endComments(w, 17).length, 0, 'one stalled round goes on');
+  await repairBuild(w, 17);
+  await reviewRound(w, 17, ['P2 src/c.js:30 the docs table misses the new key']);
+  const end = endComments(w, 17);
+  assert.equal(end.length, 1); assert.match(end[0], /not fewer or less severe for 2 rounds in a row/);
+});
+
+test('V5 the safety cap autopilot.maxRepairs ends a job that still makes progress; repairs is an alias', async t => {
+  assert.equal(coreSettings({ autopilot: { maxRepairs: 4 } }).repairs, 4);
+  assert.equal(coreSettings({ autopilot: { repairs: 3 } }).repairs, 3);
+  assert.equal(coreSettings({ autopilot: {} }).repairs, 6);
+  const w = await coreWorld(t, { settings: { maxRepairs: 2 } });
+  w.issue(17); await w.tick(); w.build(17); await w.tick();
+  await reviewRound(w, 17, ['P2 src/a.js:10 one', 'P2 src/b.js:20 two', 'P2 src/c.js:30 three', 'P2 src/d.js:40 four']);
+  await repairBuild(w, 17);
+  await reviewRound(w, 17, ['P2 src/e.js:50 five', 'P2 src/f.js:60 six', 'P2 src/g.js:70 seven']);
+  await repairBuild(w, 17);
+  await reviewRound(w, 17, ['P2 src/h.js:80 eight']);
+  const end = endComments(w, 17);
+  assert.equal(end.length, 1); assert.match(end[0], /the safety cap of 2 repair\(s\) is reached/);
+  assert.equal(w.started.filter(job => job.role === 'repair').length, 2);
 });

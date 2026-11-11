@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 711eab2165e85454209ce5120e41678585f881c9e8497504c67e54b6b667c93a).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 26f53fcf435d479181e5f43f634b8bfbdd0d824e4f90879d4be8cc4214c42168).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -131,7 +131,7 @@ export function coreSettings(config = {}, packageJson = null) {
     trust: Array.isArray(a.trust) ? a.trust.filter(named) : [], runs: count(a.runs, 2), label: named(a.label) ? a.label.trim() : null,
     quietMinutes: count(a.quietMinutes, 45), ciStuckMinutes: count(a.ciStuckMinutes, 360), maxJobHours: count(a.maxJobHours, 24), report: ['file', 'draft', 'off'].includes(a.report) ? a.report : 'file',
     runtimeRepo: /^[\w.-]+\/[\w.-]+$/.test(String(a.reports?.runtimeRepo ?? '')) ? a.reports.runtimeRepo : null,
-    repairs: count(a.repairs, 2, 0), testCommand: named(a.testCommand) ? a.testCommand : packageJson?.scripts?.test ? 'npm test' : null };
+    repairs: count(a.maxRepairs, count(a.repairs, 6, 0), 0), testCommand: named(a.testCommand) ? a.testCommand : packageJson?.scripts?.test ? 'npm test' : null };
 }
 export function readCoreSettings(cwd, fs = nativeFs) {
   return coreSettings(readJson(fs, join(cwd, 'pdd.json'), {}), readJson(fs, join(cwd, 'package.json'), null));
@@ -227,7 +227,8 @@ function context({ state, settings, budget }, ports) {
   ctx.saveJob = job => save(fs, join(dirs.jobs, `${job.issue}.json`), job);
   // The local user name is the last part of HOME (/home/NAME, /Users/NAME).
   const user = ports.user ?? basename(String((ports.env ?? process.env).HOME ?? ''));
-  ctx.comment = (number, body) => gh.ok('POST', `repos/${repo}/issues/${number}/comments`, { body: safeBody(publicText(body, state.machine, user)) });
+  ctx.publicBody = body => safeBody(publicText(body, state.machine, user));
+  ctx.comment = (number, body) => gh.ok('POST', `repos/${repo}/issues/${number}/comments`, { body: ctx.publicBody(body) });
   let warned = false;
   ctx.machineState = () => readMachine(fs, root, text => { if (!warned) { warned = true; ctx.warn(text); } }, now());
   ctx.saveMachine = value => save(fs, dirs.machine, value);
@@ -478,7 +479,7 @@ ${job.paths?.owners ?? '(not read)'}${job.paths?.hints?.length ? `\nHints (promp
 Check: (1) the change does what the issue asks; (2) Path: the Path lines match the owner table. You may dispute the table only when you name a binding, header or prompt line that it missed. For a and c: the prompt states the issue's behavior in words that trace to the issue, not to the code, and the code agrees with it. For b: the quoted line really requires the fixed behavior, or the diff keeps the contract. For d: each changed value that a prompt states agrees with that prompt at this head. These are must-fixes: a new prompt for a non-code file; a binding or header added for an unowned file on the base; owned code that disagrees with its prompt. Do not ask for a new prompt for an unowned file. Do not judge commit order. (3) Tests: when the change alters a result through the public surface, a test checks it and fails on base, and no test was weakened. To make a missing test a must-fix, name the surface and the result that changed. Do not ask for a test that only copies a value from the diff. (4) the PR body has one honest Runtime line, and a Runtime FAIL line in the PR body means your verdict is FAIL; (5) no unrelated change, secret or unsafe effect.
 Read the change with: git fetch origin ${ctx.state.baseBranch} && git diff origin/${ctx.state.baseBranch}...HEAD. You may run focused tests. Do not edit files, commit, push, comment, approve or merge.
 Before you exit, write this JSON file: ${result}
-{"verdict":"PASS" or "FAIL","head":"${job.head}","summary":"<one paragraph>","mustFix":["<each required fix>"]}. A FAIL names at least one required fix.
+{"verdict":"PASS" or "FAIL","head":"${job.head}","summary":"<one paragraph>","mustFix":["<each required fix>"]}. A FAIL names at least one required fix. Start each item with its severity and its place: "P1 file:line ..." (wrong behavior or unsafe), "P2 file:line ..." (must be fixed before the merge) or "P3 file:line ..." (a follow-up that does not block the merge).
 `;
 
 const scopedPrompt = (ctx, job, scoped, result) => `You are a short scoped check for an Autopilot core job in ${ctx.repo}. You did not write this change.
@@ -499,6 +500,23 @@ ${issueText(job)}
 
 ${RESULT_RULES(result)}
 `;
+
+// P3 follow-ups: one section at the end of the PR body and one note on the issue. Both are updated with new items, and
+// no item is written twice.
+async function recordFollowUps(ctx, job, items) {
+  const { gh, repo } = ctx, marker = `<!-- pdd:autopilot-core:follow-ups:${job.issue} -->`, title = 'Follow-ups from the Autopilot review (P3, they do not block this change):';
+  const old = job.followUps ?? [], all = [...old, ...items.filter(item => !old.some(o => sameFinding(finding(o), finding(item))))].slice(0, 40);
+  if (all.length === old.length && job.followUpsPr === job.pr) return;
+  job.followUps = all; ctx.saveJob(job);
+  // A follow-up never reads as a Runtime, Path or Evidence line of the PR body.
+  const text = [title, '', ...all.map(item => `- ${item.replace(/\b(runtime|path|evidence)\s*:/gi, '$1 -')}`), '', marker].join('\n');
+  const pr = await gh.ok('GET', `repos/${repo}/pulls/${job.pr}`), body = String(pr?.body ?? ''), cut = body.indexOf(title);
+  await gh.ok('PATCH', `repos/${repo}/pulls/${job.pr}`, { body: `${(cut >= 0 ? body.slice(0, cut) : body).trimEnd()}\n\n${text}` });
+  job.followUpsPr = job.pr; ctx.saveJob(job);
+  const note = (await gh.all(`repos/${repo}/issues/${job.issue}/comments?per_page=100`)).find(c => String(c.body ?? '').includes(marker));
+  if (note) await gh.ok('PATCH', `repos/${repo}/issues/comments/${note.id}`, { body: ctx.publicBody(text) });
+  else await ctx.comment(job.issue, text);
+}
 
 // ---- Progress (no fixed time limits) --------------------------------------------------------------------
 // A job ends only when it stops making progress: nothing runs and nothing changes for the quiet period. Each tick
@@ -759,11 +777,17 @@ async function reviewState(ctx, job) {
     if (job.review.attempts >= 2) return { state: 'missing' };
     job.review.retry = true; return reviewState(ctx, job);
   }
-  const mustFix = (Array.isArray(r.mustFix) ? r.mustFix : []).map(item => oneLine(item, 500)).filter(Boolean).slice(0, 20);
-  await ctx.comment(job.pr, [`Review: ${r.verdict} for head ${job.head} (a fresh Autopilot reviewer that did not write the change).`, '',
-    oneLine(r.summary, 2000), ...(mustFix.length ? ['', 'Must fix:', ...mustFix.map(item => `- ${item}`)] : []), '', `<!-- pdd:autopilot-core:review:${job.head} -->`].join('\n'));
-  Object.assign(job.review, { verdict: r.verdict, mustFix }); ctx.saveJob(job); ctx.produced();
-  return { state: r.verdict === 'PASS' ? 'pass' : 'fail', mustFix };
+  // P3 findings never block: they are follow-ups (one section in the PR body and one note on the issue). A FAIL with
+  // only P3 findings is a PASS.
+  const items = (Array.isArray(r.mustFix) ? r.mustFix : []).map(item => oneLine(item, 500)).filter(Boolean).slice(0, 20);
+  const followUps = items.filter(isFollowUp), mustFix = items.filter(item => !isFollowUp(item));
+  const verdict = r.verdict === 'FAIL' && !mustFix.length ? 'PASS' : r.verdict;
+  await ctx.comment(job.pr, [`Review: ${verdict} for head ${job.head} (a fresh Autopilot reviewer that did not write the change).`, '',
+    oneLine(r.summary, 2000), ...(mustFix.length ? ['', 'Must fix:', ...mustFix.map(item => `- ${item}`)] : []),
+    ...(followUps.length ? ['', 'Follow-ups (P3, they do not block the merge):', ...followUps.map(item => `- ${item}`)] : []), '', `<!-- pdd:autopilot-core:review:${job.head} -->`].join('\n'));
+  Object.assign(job.review, { verdict, mustFix, followUps }); ctx.saveJob(job); ctx.produced();
+  if (followUps.length) await recordFollowUps(ctx, job, followUps).catch(error => ctx.warn(`Autopilot core could not record the follow-ups of #${job.issue}: ${error.message}`));
+  return { state: verdict === 'PASS' ? 'pass' : 'fail', mustFix };
 }
 async function suiteState(ctx, job) {
   if (!ctx.settings.testCommand) return { state: 'missing' };
@@ -850,7 +874,9 @@ async function mergeCheck(ctx, job) {
     if (suite.state === 'fail') reds.push(suite.text);
   }
   // Red checks on a head that a mechanical lane merge made are a conflict for an agent, not a repair (debate B 5.4).
-  if (reds.length) return job.mechanical?.head === job.head ? conflictFix(ctx, job, { files: job.mechanical.files, reds }) : repairOrEnd(ctx, job, reds);
+  // The repair budget compares single findings: each review must-fix, and each other red line.
+  const findings = reds.flatMap(red => red.startsWith('Review FAIL') && review?.mustFix?.length ? review.mustFix : [red]);
+  if (reds.length) return job.mechanical?.head === job.head ? conflictFix(ctx, job, { files: job.mechanical.files, reds }) : repairOrEnd(ctx, job, reds, findings);
   // Pending CI waits while its picture changes, and at most ciStuckMinutes with no change: then it is stuck (a no-result
   // end), so it never holds a slot for good.
   if (ci.sig !== job.ci?.sig || job.ci?.head !== job.head) job.ci = { head: job.head, sig: ci.sig, at: ctx.now() };
@@ -1300,11 +1326,46 @@ async function wouldMerge(ctx, job, pr) {
   ctx.counts.wouldMerge++; ctx.produced();
   return finishLocal(ctx, job, 'would-merge', `observe mode: PR #${job.pr} passed every check at ${short(job.head)}; not merged`);
 }
-async function repairOrEnd(ctx, job, reds) {
+// The repair budget (option B): repairs go on while they make progress. After each repair, the new findings are
+// compared with the findings of the last round. A finding is the same when it names the same file:line (3 lines of
+// tolerance) with a similar cause, or, with no place, has nearly the same words. The repairs stop when a finding of the
+// last round is still there, when a finding of an earlier round comes back, when the list is not smaller or less severe
+// for 2 rounds in a row, or at the safety cap (autopilot.maxRepairs, default 6). The END comment names the rule.
+const isFollowUp = item => /^\W*P3\b/i.test(item);
+const STOP_WORDS = new Set('the and are for not with from this that has have was but its into only than then when does which there'.split(' '));
+function finding(text) {
+  const raw = String(text);
+  const places = [...raw.matchAll(/([\w./-]+\.[A-Za-z0-9]{1,8}):(\d+)/g)].map(m => [m[1], Number(m[2])]);
+  const words = [...new Set(raw.toLowerCase().replace(/\b[0-9a-f]{7,40}\b/g, ' ').replace(/^\W*p[123]\b/, ' ').split(/[^a-z0-9]+/).filter(x => x.length > 2 && !STOP_WORDS.has(x)))];
+  return { places, words, severity: /^\W*P1\b/i.test(raw) ? 1 : 2, text: oneLine(raw, 200) };
+}
+function sameFinding(a, b) {
+  const union = new Set([...a.words, ...b.words]).size, overlap = a.words.filter(x => b.words.includes(x)).length / Math.max(1, union);
+  if (a.places.length && b.places.length) return a.places.some(([file, line]) => b.places.some(([other, at]) => file === other && Math.abs(line - at) <= 3)) && overlap >= 0.25;
+  return !a.places.length && !b.places.length && overlap >= 0.6;
+}
+function repairStop(ctx, job, findings) {
+  const now = findings.map(finding), rounds = job.rounds ?? [], last = rounds.at(-1), worst = list => Math.min(3, ...list.map(f => f.severity));
+  let stop = null;
+  if (last) {
+    const unfixed = now.find(f => last.findings.some(old => sameFinding(f, old)));
+    const back = now.find(f => rounds.slice(0, -1).some(round => round.findings.some(old => sameFinding(f, old))));
+    const better = now.length < last.findings.length || worst(now) > worst(last.findings);
+    job.stalls = better ? 0 : (job.stalls ?? 0) + 1;
+    stop = unfixed ? `a finding of the last round is still there (${unfixed.text})`
+      : back ? `a finding of an earlier round came back (${back.text})`
+      : job.stalls >= 2 ? 'the findings were not fewer or less severe for 2 rounds in a row' : null;
+  }
+  if (!stop && job.repairs >= ctx.settings.repairs) stop = `the safety cap of ${ctx.settings.repairs} repair(s) is reached (autopilot.maxRepairs)`;
+  job.rounds = [...rounds, { findings: now }].slice(-8);
+  return stop;
+}
+async function repairOrEnd(ctx, job, reds, findings = reds) {
   stopChecks(ctx, job);
   await leaveLane(ctx, job);
   job.lane = null;
-  if (job.repairs >= ctx.settings.repairs) return end(ctx, job, cause('job', 'checks-red', `the PR checks stayed red after ${job.repairs} repair(s): ${reds.join(' ')}`));
+  const stop = repairStop(ctx, job, findings);
+  if (stop) return end(ctx, job, cause('job', 'checks-red', `the repairs stopped because ${stop}. The PR checks after ${job.repairs} repair(s): ${reds.join(' ')}`));
   Object.assign(job, { phase: 'running', role: 'repair', repairs: job.repairs + 1, review: null, suite: null, progress: { sig: null, at: ctx.now(), running: false } });
   job.agent = startJob(ctx, job, 'repair', job.worktree, result => repairPrompt(ctx, job, reds, result));
   ctx.saveJob(job); ctx.counts.repairs++;

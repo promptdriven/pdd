@@ -32,7 +32,7 @@ string `core`; any other value, or none, is `full`.
 | `maxJobHours` | positive safe integer, default 24: the safety ceiling for an agent whose log grows with no commit and no file change |
 | `report` | `file`, `draft` or `off`, default `file` |
 | `runtimeRepo` | `autopilot.reports.runtimeRepo` when it is `OWNER/NAME` (the Runtime report repository), else `null` |
-| `repairs` | safe integer of at least 0, default 2 |
+| `repairs` | `autopilot.maxRepairs` (the old key `autopilot.repairs` is an alias): safe integer of at least 0, default 6, the safety cap of repairs for one job |
 | `testCommand` | nonblank `autopilot.testCommand`; else `npm test` when `packageJson.scripts.test` exists; else `null` |
 
 `readCoreSettings(cwd, fs)` applies it to `cwd/pdd.json` and `cwd/package.json`;
@@ -367,7 +367,13 @@ any other pdd (for example an older global install).
   prompt for an unowned file; never commit order; a missing test is a must-fix only
   with the surface and the result named; no test that only copies a value from the
   diff); an honest Runtime line and no unrelated or unsafe change. A Runtime FAIL line in the PR body means a FAIL verdict. It writes no files and makes no GitHub write. Its
-  result is `{verdict: PASS|FAIL, head, summary, mustFix[]}`.
+  result is `{verdict: PASS|FAIL, head, summary, mustFix[]}`. Each must-fix item starts
+  with its severity and place: `P1 file:line …` (wrong behavior or unsafe), `P2 file:line …`
+  (fix before the merge) or `P3 file:line …` (a follow-up). **P3 items never block**: a FAIL
+  with only P3 items counts as PASS. The tick lists them as follow-ups in the review comment,
+  in one section at the end of the PR body (a follow-up never reads as a `Runtime:`, `Path:`
+  or `Evidence:` line) and in one note on the issue (marker
+  `<!-- pdd:autopilot-core:follow-ups:N -->`), each updated in place and with no item twice.
 - **Suite** (in `worktrees/N-suite`): `node bin/pdd.mjs workflow suite --command
   TEST --timeout MIN` through the [shared full-suite queue](test-suite-queue.prompt.md),
   with MIN = 120 (the shared queue's own runner limit). Exit 0 is green; any other
@@ -494,8 +500,17 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    twice gives no valid verdict for the head ends as `no-result`; no test command
    ends `no-test-command`; a broken suite ends `suite-broken`. The tick posts each verdict once as a PR comment with
    the head, summary and must-fix list.
-4. Any red finding: stop the other checks. With repairs left, start one repair job,
-   count it and start its quiet clock. Without, end `checks-red` with the findings.
+4. Any red finding: stop the other checks. The **repair budget** (option B): repairs go on
+   while they make progress. The findings of a round are each review must-fix (P1 and P2)
+   and each other red line. Two findings are the same when they name the same `file:line`
+   (3 lines of tolerance) with a similar cause (at least a quarter of their words in common),
+   or, with no place, when nearly all their words agree; a hex commit name does not count.
+   After a repair, compare the findings with the last round. Stop (END `checks-red`, the END
+   text names the rule and lists the findings) when (a) a finding of the last round is still
+   there, (b) a finding of an earlier round came back, (c) the list was not smaller and not
+   less severe (its worst item) for 2 rounds in a row, or (d) the job has used `repairs`
+   (the safety cap, default 6). Else start one repair job, count it and start its quiet
+   clock. The job saves the last 8 rounds (`rounds`) and the stalled-round count (`stalls`).
 5. Wait while CI, review or suite is not green. CI is green when the head has at
    least one check and none is pending. CI is `none` (the full suite and the fresh
    review decide alone) only in a repository with no CI at all: no head of this job
