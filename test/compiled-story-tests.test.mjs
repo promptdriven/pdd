@@ -115,3 +115,32 @@ test('missing paths from a nested directory do not select root Stories',()=>{
   assert.equal(out.status,2, `selector ${selector} unexpectedly selected a Story: ${out.stdout}`);
  }
 });
+
+test('explicit selections include nested fixture Stories while unqualified selection excludes them',()=>{
+ const root=project(); const fixture='test/fixtures/sample';
+ mkdirSync(join(root,fixture,'user_stories'),{recursive:true}); mkdirSync(join(root,fixture,'tests'),{recursive:true});
+ const doc=JSON.parse(readFileSync(join(root,'tests/demo.json'),'utf8')); doc.story_path=`${fixture}/user_stories/nested.md`;
+ writeFileSync(join(root,fixture,'user_stories/nested.md'),'# Nested\n\n## Acceptance criteria\n\n1. A result.\n');
+ writeFileSync(join(root,fixture,'tests/nested.json'),JSON.stringify(doc));
+ for(const selector of ['nested',`${fixture}/user_stories/nested.md`,`${fixture}/tests/nested.json`,fixture]) {
+  const out=selected(root,selector); assert.equal(out.status,0,`${selector}: ${out.stderr}`);
+  assert.deepEqual(JSON.parse(out.stdout).stories.map(s=>s.story),[doc.story_path]);
+ }
+ const all=selected(root); assert.equal(all.status,0,all.stderr);
+ assert.deepEqual(JSON.parse(all.stdout).stories.map(s=>s.story),['user_stories/demo.md']);
+});
+
+test('malformed world and simulation containers never execute or save a pass',()=>{
+ const app="import {writeFileSync} from 'node:fs';writeFileSync('EXECUTED','yes');process.stdout.write('hello\\n');";
+ for(const field of ['initial_world','simulation','simulation_overrides']) for(const value of [[],null,false,42,'bad']) {
+  const root=project({app,change:d=>{if(field==='simulation_overrides') d.steps[0][field]=value; else d[field]=value;}});
+  const promptPath=join(root,'prompts/app.prompt.md');
+  writeFileSync(promptPath,readFileSync(promptPath,'utf8').replace('"status":"draft"','"status":"approved"'));
+  const out=selected(root,'demo'); assert.equal(out.status,1,`${field}=${JSON.stringify(value)}: ${out.stderr}`);
+  const report=JSON.parse(out.stdout); assert.equal(report.stories[0].status,'not run',field);
+  assert.ok(report.stories[0].steps.every(step=>step.status==='not run' && typeof step.reason==='string' && step.reason.trim()),field);
+  assert.equal(existsSync(join(root,'EXECUTED')),false,field);
+  assert.equal(JSON.parse(readFileSync(join(root,'.pdd/code-test/latest.json'),'utf8')).stories[0].status,'not run',field);
+ }
+ for(const change of [d=>{delete d.simulation;},d=>{d.steps[0].simulation_overrides={};}]) assert.equal(selected(project({change}),'demo').status,0);
+});

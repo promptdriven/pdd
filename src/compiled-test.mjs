@@ -9,11 +9,13 @@ const commandWords = command => {
   if (typeof command !== 'string' || !command.trim() || /[\n\r;|&<>`$\\'"(){}*?\[\]]/.test(command)) return null;
   return command.trim().split(/\s+/);
 };
+const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const unrun = (step, reason) => ({step_id:step?.step_id, status:'not run', reason});
 function execute(step, doc, found, root, ports) {
-  if (step.simulation_overrides && Object.keys(step.simulation_overrides).length)
+  if (step.simulation_overrides !== undefined && (!object(step.simulation_overrides) || Object.keys(step.simulation_overrides).length))
     return unrun(step, 'Step simulation overrides are not supported.');
-  if (doc.simulation && Object.keys(doc.simulation).length || doc.initial_world && Object.keys(doc.initial_world).length)
+  if (!object(doc.initial_world) || Object.keys(doc.initial_world).length ||
+      doc.simulation !== undefined && (!object(doc.simulation) || Object.keys(doc.simulation).length))
     return unrun(step, 'Scenario world and port simulation are not supported.');
   let prompt;
   try { prompt = readPrompt(root, found.visible, step.entry_path, found.workspace); } catch { return unrun(step, 'Entry prompt is unavailable.'); }
@@ -42,7 +44,7 @@ export async function runCompiledTest({root, words, json}, {stdout, stderr, spaw
   const top = spawn('git',['rev-parse','--show-toplevel'],{cwd:root,encoding:'utf8'});
   if (top.status !== 0 || !top.stdout?.trim()) { stderr.write('No Git project root is available.\n'); return 2; }
   root = top.stdout.trim();
-  const found = findTests({root, excludeFixtureProjects:true});
+  const found = findTests({root, excludeFixtureProjects:words.length === 0});
   const directories = new Set();
   const normalized = words.map(word => {
     const path = resolve(realpathSync(cwd), word), rel = relative(realpathSync(root), path).split(sep).join('/');
