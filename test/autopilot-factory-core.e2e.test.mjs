@@ -47,7 +47,7 @@ async function factory(t, autopilot = {}, { stateRoot: sharedStateRoot, reposito
     },
     timer: async action => { if (action === 'status') return f.active; f.timer.push(action); f.active = action === 'start'; return f.active; },
     doctorPorts: { run: async (command, args, options) => command === 'git' ? run(command, args, options) : { code: 0, stdout: '', stderr: '' }, selectAgent: agent },
-    movePorts: { processes: async () => '', releaseSlots: async () => false },
+    movePorts: { processes: async () => `${process.pid} ${process.ppid} ${process.pid} 1 Mon Nov 11 10:00:00 2026 node test-runner`, releaseSlots: async () => false },
     corePorts: { jobs: w.jobs, checkBase: async () => ({ exitCode: 0, message: 'Base check ok.' }), agentReady: async () => true, runtimeEvidence: w.ports().runtimeEvidence } };
   const call = (command, extra = {}) => runAutopilotLauncher({ command, cwd, packageRoot: join(w.dir, 'pkg'), env: f.ports.env, issues: [], ...extra }, f.ports);
   f.start = extra => call('start', extra);

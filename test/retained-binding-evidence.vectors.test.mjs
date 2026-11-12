@@ -95,7 +95,7 @@ async function retirementFixture(t, row) {
     save: async journal => { saves.push(structuredClone(journal)); }, listRuns: async () => [f.record()],
     cancelRun: async current => { cancellations.push(current.runId); current.state = 'cancelled'; save(current); return {exitCode: 0}; },
     releaseLocal: async current => { releases.push(current.runId); return {state: 'released'}; }, releaseSlots: async () => true,
-    processes: async () => '', signal: () => assert.fail('The fixture has no old worker process.'), sleep: async () => {}};
+    processes: async () => `${process.pid} ${process.ppid} ${process.pid} 1 Mon Nov 11 10:00:00 2026 node test-runner`, signal: () => assert.fail('The fixture has no old worker process.'), sleep: async () => {}};
   f.herdr.calls.length = 0;
   return {f, state, stateFile, ports, actions, saves, cancellations, releases};
 }

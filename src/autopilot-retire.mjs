@@ -116,7 +116,10 @@ export function parseProcesses(text) {
 
 // Stop selected old workers and coordinators: capture their descendants, then TERM and KILL only matching PIDs.
 async function stopOldProcesses(ctx) {
-  const { ports, self } = ctx, list = async () => parseProcesses(await ports.processes());
+  const { ports, self } = ctx, list = async () => {
+    const rows = parseProcesses(await ports.processes());
+    return Array.isArray(rows) && rows.some(row => self.has(row.pid)) ? rows : null;
+  };
   const first = await list();
   // A selected root can leave its group or later become parentless. Capture its
   // descendants now, while the parent links still prove that ownership.

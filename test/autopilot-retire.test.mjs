@@ -89,7 +89,7 @@ function fullWorld() {
     cancelRun: async r => { w.cancelled.push(r.number); r.state = 'cancelled'; return { exitCode: 0, message: 'Cancelled.' }; },
     releaseLocal: async r => { w.released.push(r.number); return { state: 'released' }; },
     releaseSlots: async () => true,
-    processes: async () => w.procs.map(p => `${p.pid} ${p.ppid} ${p.pgid} ${p.rss} ${p.uid ?? UID} ${p.start} ${p.args}`).join('\n'),
+    processes: async () => [`${process.pid} ${process.ppid} ${process.pid} 1 ${UID} Mon Nov 11 10:00:00 2026 node test-runner`, ...w.procs.map(p => `${p.pid} ${p.ppid} ${p.pgid} ${p.rss} ${p.uid ?? UID} ${p.start} ${p.args}`)].join('\n'),
     uid: UID,
     cwdOf: async pid => w.procs.find(p => p.pid === pid)?.cwd ?? '/other',
     signal: (target, name) => { w.signals.push([target, name]); const pid = Math.abs(target), at = w.procs.findIndex(p => p.pid === pid); if (at >= 0 && (name === 'SIGKILL' || !w.procs[at].stubborn)) w.procs.splice(at, 1); },
@@ -329,6 +329,25 @@ test('M7 a machine that already ran the core engine: no claim search and no PR r
   assert.equal(idle.done, true, idle.message);
   assert.equal(idle.message, '', 'an empty complete process inventory is a valid no-op');
   assert.deepEqual(empty.signals, []);
+  const unavailable = fullWorld();
+  unavailable.runs = []; unavailable.state = { ...unavailable.state, engine: 'core', paneId: undefined };
+  unavailable.ports.processes = async () => '';
+  const held = await unavailable.move();
+  assert.equal(held.done, false);
+  assert.match(held.message, /old process inventory is unreadable/);
+  assert.equal(held.journal.steps.workers, undefined);
+  assert.deepEqual(unavailable.signals, []);
+  const changed = fullWorld();
+  changed.runs = [run(9, ME, { state: 'cancelled', runDir: '/repo/.git/pdd/runs/9-cancelled-abcd1234' })];
+  changed.state = { ...changed.state, engine: 'core', paneId: undefined };
+  changed.procs = [{ pid: 701, ppid: 1, pgid: 701, rss: 1, start: 'Mon Nov 11 10:00:07 2026', args: `node /pkg/src/workflow-worker-completion.mjs ${JSON.stringify({ runId: 'r0', runDir: '/repo/.git/pdd/runs/9-cancelled-abcd1234', sourceRoot: '/repo' })}` }];
+  const completeInventory = changed.ports.processes;
+  let inventories = 0;
+  changed.ports.processes = async () => ++inventories === 1 ? completeInventory() : '';
+  const retried = await changed.move();
+  assert.equal(retried.done, false);
+  assert.match(retried.message, /old process cleanup is not confirmed/);
+  assert.deepEqual(changed.signals, [], 'an unreadable recheck never treats a saved worker as gone');
 });
 
 test('retirement leaves a current-user manual helper in a cancelled worktree, and does not inspect another user', async () => {
@@ -451,7 +470,7 @@ test('M10 a full-engine state moves at its first tick without a timer call; the 
       if (command !== 'git') assert.fail(`unexpected program ${command}`);
       const r = spawnSync('git', args, { cwd: options.cwd ?? cwd, encoding: 'utf8' }); return { code: r.status, stdout: r.stdout, stderr: r.stderr };
     },
-    movePorts: { processes: async () => '700 1 700 1 501 Mon Nov 11 10:00:07 2026 node unrelated', releaseSlots: async () => false },
+    movePorts: { processes: async () => `${process.pid} ${process.ppid} ${process.pid} 1 501 Mon Nov 11 10:00:00 2026 node test-runner\n700 1 700 1 501 Mon Nov 11 10:00:07 2026 node unrelated`, releaseSlots: async () => false },
     corePorts: { jobs: w.jobs, checkBase: async () => ({ exitCode: 0, message: 'ok' }), agentReady: async () => true } };
   const first = await tickAutopilot(stateFile, ports);
   assert.match(first.message, /Autopilot core: 1 started/, first.message);
@@ -539,7 +558,7 @@ test('M12 launchd: start writes StartInterval 600 and only start calls launchctl
   const ports = { stateRoot, now: w.now, machineGuard: w.machineGuard, env: { HOME: home, PATH: process.env.PATH }, platform: 'darwin', uid: 501, warn: () => {}, notice: () => {}, run, selectAgent: agent,
     doctorPorts: { run: async (command, args, options) => command === 'git' ? run(command, args, options) : { code: 0, stdout: '', stderr: '' }, selectAgent: agent },
     herdr: async () => { phase.herdr = true; throw Object.assign(Error('gone'), { code: 'agent_not_found' }); },
-    movePorts: { processes: async () => '700 1 700 1 501 Mon Nov 11 10:00:07 2026 node unrelated', releaseSlots: async () => false },
+    movePorts: { processes: async () => `${process.pid} ${process.ppid} ${process.pid} 1 501 Mon Nov 11 10:00:00 2026 node test-runner\n700 1 700 1 501 Mon Nov 11 10:00:07 2026 node unrelated`, releaseSlots: async () => false },
     corePorts: { jobs: w.jobs, checkBase: async () => ({ exitCode: 0, message: 'ok' }), agentReady: async () => true } };
   // The tick inside start: every launchctl call must come before it.
   const started = await runAutopilotLauncher({ command: 'start', cwd, packageRoot: join(w.dir, 'pkg'), env: ports.env, issues: [] }, { ...ports, run: async (command, args, options) => {
