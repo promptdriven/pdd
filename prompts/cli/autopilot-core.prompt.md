@@ -68,8 +68,10 @@ Runtime step (role `runtime`, like the suite: no P1, P2 or P3). Each tick, for e
   to 1 MB; the size only above), so a re-run that writes the same file or an edit that flips
   back is not new; (P3) a tool call in its own stream that is not a wait (Codex `--json`
   `item.completed` with its type and fields; Claude `stream-json` `tool_use` with its name and
-  input; the tools `wait`, `wait_agent`, `sleep`, `list_agents`, a `write_stdin` with no
-  input and a `sleep N` command are waits); (P4) a tool output line (also of a wait) or a
+  input; agy `stream-json` `step_update` of `step_type` `tool` and `state` `DONE` with its
+  `tool_name` and `tool_info.parameters`; the tools `wait`, `wait_5_seconds`, `wait_agent`,
+  `sleep`, `list_agents`, a `write_stdin` with no input and a `sleep N` command are waits);
+  (P4) a tool output line (also of a wait) or a
   plain log line, after normalization: dates, clock times and durations removed; UUIDs, hex
   ids of 7 or more characters and 20 or more base64 characters with a digit and a letter
   become `X`; temp paths become `T`; digits become `N`; spaces trimmed; (P5) 10 s or more of
@@ -324,7 +326,7 @@ For each ready issue while slots are free, at most 3 claim attempts per tick:
    start error, also one that the spawn reports later, ends the saved job as
    `no-result`; it never stops the tick.
 
-Intake is held before a claim when the saved agent is not Codex or Claude, when
+Intake is held before a claim when the saved agent is not Codex, Claude or agy, when
 `ports.agentReady()` is false at the first ready issue (for example a Codex usage
 limit), while a machine pause runs (below), or while CI does not start in this
 repository ([Stop owners](#stop-owners), #3260). A final machine-room denial can
@@ -592,7 +594,7 @@ older than the engine). The build, repair, conflict and review jobs get `pddChec
 {version, cli, skills}`: the engine's version (`ports.version` or the package version),
 `ROOT/bin/pdd`, and `skills {dir, version, read}` (`dir` = `PDD_SKILLS`, `version` = its
 `pdd-feature/SKILL.md` `pdd-skills:` value, `read` = the folder that the job's agent
-loads by default: Codex `~/.agents/skills`, Claude `$CLAUDE_CONFIG_DIR/skills` when that
+loads by default: Codex and agy `~/.agents/skills`, Claude `$CLAUDE_CONFIG_DIR/skills` when that
 is absolute, else `~/.claude/skills`). The [job runner](agent-job.prompt.md) notes when
 the agent's shell finds another pdd or the installed skills have another version, and
 status shows those notes beside the running process. They file nothing and never end a
