@@ -1287,8 +1287,11 @@ if [ "$1" = pr ] && [ "$2" = list ]; then
   node -e 'const fs=require("fs"),cp=require("child_process"),p=JSON.parse(fs.readFileSync(process.env.GH_PR_BODY_FILE+".identity.json","utf8"));p.body=fs.readFileSync(process.env.GH_PR_BODY_FILE,"utf8");p.headRefOid=cp.execFileSync("git",["rev-parse","refs/remotes/origin/"+p.headRefName],{encoding:"utf8"}).trim();process.stdout.write(JSON.stringify([p]));'
   exit 0
 fi
+if [ "$1" = label ] && [ "$2" = list ]; then echo '[{"name":"pdd:no-verdict"}]'; exit 0; fi
+if [ "$1" = pr ] && [ "$2" = edit ] && [ "$4" = --add-label ]; then echo "$5" > "$GH_CAPTURE.label"; exit 0; fi
 if [ "$1" = pr ] && [ "$2" = edit ]; then cat > "$GH_CAPTURE"; cp "$GH_CAPTURE" "$GH_PR_BODY_FILE"; exit 0; fi
 if [ "$1" = pr ] && [ "$2" = view ]; then
+  if [ "$4" = --json ] && [ "$5" = labels ]; then echo '{"labels":[]}'; exit 0; fi
   if [ "$4" = --json ] && [ "$5" = body ]; then
     node -e 'const fs=require("fs"); process.stdout.write(JSON.stringify({body:fs.readFileSync(process.env.GH_PR_BODY_FILE,"utf8")}));'
   else
@@ -1306,6 +1309,7 @@ exit 0
   process.env.PATH = oldPath; if(oldCap===undefined) delete process.env.GH_CAPTURE; else process.env.GH_CAPTURE=oldCap; if(oldBody===undefined) delete process.env.GH_PR_BODY_FILE; else process.env.GH_PR_BODY_FILE=oldBody;
   f.prs[0].body = readFileSync(capture, 'utf8'); assert.equal(readFileSync(capture, 'utf8'), f.prs[0].body);
   assert.equal(code.exitCode, 0, code.message);
+  assert.equal(readFileSync(capture+'.label', 'utf8').trim(), 'pdd:no-verdict');
   assert.match(code.message, /pdd pushed 1 new commit from the worktree to PR 1\./); assert.match(code.message, /pdd updated the PR 1 description: no draft prompts are left\./);
   assert.equal(f.git(run.root, 'rev-parse', `refs/remotes/origin/${run.branch}`), approval, 'the approval is on PR 1');
   assert.doesNotMatch(f.prs[0].body, /Draft prompts/); assert.match(pddPart(f.prs[0].body), /^Part of #17$/m);

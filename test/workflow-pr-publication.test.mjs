@@ -46,9 +46,12 @@ const file=process.env.PDD_PUBLICATION_GH_STATE,s=JSON.parse(fs.readFileSync(fil
 const flag=n=>a[a.indexOf(n)+1],out=x=>process.stdout.write(typeof x==='string'?x:JSON.stringify(x));
 const commit=()=>cp.execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();
 const remote=(ref='topic')=>{try{return cp.execFileSync('git',['ls-remote','origin','refs/heads/'+ref],{encoding:'utf8'}).trim().split('\\t')[0]}catch{return ''}};
-if(a[0]==='repo')out({nameWithOwner:'example/project',defaultBranchRef:{name:'main'},url:'https://github.com/example/project'});
+if(a[0]==='label'&&a[1]==='list')out((s.repoLabels||[]).map(name=>({name})));
+else if(a[0]==='label'&&a[1]==='create'){if(s.failLabel){process.stderr.write('label refused');process.exit(1)} s.repoLabels=[...(s.repoLabels||[]),a[2]];fs.writeFileSync(file,JSON.stringify(s));}
+else if(a[0]==='pr'&&a[1]==='edit'&&(a.includes('--add-label')||a.includes('--remove-label'))){const pr=s.prs.find(p=>p.url===a[2]);pr.labels=pr.labels||[];if(a.includes('--add-label'))pr.labels.push(flag('--add-label'));else pr.labels=pr.labels.filter(x=>x!==flag('--remove-label'));fs.writeFileSync(file,JSON.stringify(s));}
+else if(a[0]==='repo')out({nameWithOwner:'example/project',defaultBranchRef:{name:'main'},url:'https://github.com/example/project'});
 else if(a[1]==='list')out(s.prs.filter(p=>(!a.includes('--head')||p.headRefName===flag('--head'))&&(!a.includes('--search')||p.body.includes(flag('--search').split('"')[1]))).map(p=>({...p,headRefOid:remote(p.headRefName)||p.headRefOid})));
-else if(a[1]==='view'){const found=s.prs.find(p=>p.url===a[2]),p=found?.headRefName?{...found,headRefOid:remote(found.headRefName)||found.headRefOid}:found||{body:''};out(String(flag('--json')).split(',').includes('comments')?{...p,comments:(s.comments||[]).map(c=>({author:{login:'reviewer'},authorAssociation:c.author_association,body:c.body,createdAt:c.created_at,url:c.html_url}))}:p)}
+else if(a[1]==='view'){const found=s.prs.find(p=>p.url===a[2]),p=found?.headRefName?{...found,labels:(found.labels||[]).map(name=>({name})),headRefOid:remote(found.headRefName)||found.headRefOid}:found||{body:'',labels:[]};out(String(flag('--json')).split(',').includes('comments')?{...p,comments:(s.comments||[]).map(c=>({author:{login:'reviewer'},authorAssociation:c.author_association,body:c.body,createdAt:c.created_at,url:c.html_url}))}:p)}
 else if(a[0]==='api'&&/^repos\\/example\\/project\\/pulls\\/\\d+\\/files\\?per_page=100$/.test(a[1])){
  if(!a.includes('--paginate')||!a.includes('--slurp'))throw Error('file list must include every JSON page');
  const pages=s.prFiles?.[a[1].split('/')[4]];if(!pages)throw Error('file list unavailable');out(pages);
@@ -65,12 +68,12 @@ else if(a[1]==='create'||a[1]==='edit'){
 `;
   writeFileSync(join(bin, 'gh'), fake); chmodSync(join(bin, 'gh'), 0o755);
   const save = () => writeFileSync(join(runDir, 'status.json'), JSON.stringify(run)); save();
-  const invoke = (summary, method = 'stepDone', step = prompt ? 'check' : 'formal') => {
+  const invoke = (summary, method = 'stepDone', step = prompt ? 'check' : 'formal', results = null) => {
     const review=String(summary).split('\n').filter(row=>row.startsWith('Review:')).join('\n');if(review)writeFileSync(join(runDir,'review.md'),review);
     const verify=String(summary).split('\n').filter(row=>/^(?:Not fixed yet:|Proof \()/.test(row)).join('\n');if(verify)writeFileSync(join(runDir,'verify.md'),verify);
     const scope=String(summary).split('\n').filter(row=>row.startsWith('Not caught because:')).join('\n');if(scope)writeFileSync(join(runDir,'scope.md'),scope);
 
-    const script = `import {${method}} from ${JSON.stringify(join(packageRoot, 'src/workflow-runner.mjs'))};const r=await ${method}({ref:'17',step:${JSON.stringify(step)},summary:${JSON.stringify(summary)},cwd:${JSON.stringify(root)}},{stateDir:${JSON.stringify(join(base, 'pdd-state'))},isTTY:true,env:{HOME:${JSON.stringify(base)}},confirm:async()=>false});process.stdout.write(JSON.stringify(r));`;
+    const script = `import {${method}} from ${JSON.stringify(join(packageRoot, 'src/workflow-runner.mjs'))};const r=await ${method}({ref:'17',step:${JSON.stringify(step)},summary:${JSON.stringify(summary)},cwd:${JSON.stringify(root)}},{stateDir:${JSON.stringify(join(base, 'pdd-state'))},isTTY:true,env:{HOME:${JSON.stringify(base)}},confirm:async()=>false,...(${JSON.stringify(results)} ? {readRunResults:()=>${JSON.stringify(results)}} : {})});process.stdout.write(JSON.stringify(r));`;
     return JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], { cwd: root, encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, PDD_PUBLICATION_GH_STATE: state, GIT_ALLOW_PROTOCOL: 'file' } }));
   };
   const machine = (proved = head) => writeFileSync(join(runDir, 'old-code-proof.json'), JSON.stringify({ v: 2, origin: 'pdd.workflow-prove.v2',interruptSignal:'', runId: run.runId, baseSha, headSha: proved, test: 'node --test test/value.test.mjs', expect: 'defect', paths: ['test/value.test.mjs'], base: phase(1, true), head: phase(0), outcome: 'proved', cleanupError: '', setupError: '' }));
@@ -1408,4 +1411,34 @@ for (const options of [{ extraFiles: 45 }, { extraFiles: 45, production: true },
   if (options.extraFiles) { assert.equal(pr.facts.diff.files.length, 40); assert.ok(pr.facts.diff.count > 40); }
   if (coverage) assert.doesNotMatch(pr.visible, /^⛔/);
   else assert.match(pr.visible, /^⛔/);
+});
+
+test('publication labels a PR without a saved pdd result', t => {
+  const f = fixture(t);
+  const out = f.invoke('Review: agent claims a pass');
+  assert.equal(out.exitCode, 0, out.message);
+  assert.ok(f.data().prs[0].labels?.includes('pdd:no-verdict'));
+});
+
+for (const kind of ['pdd test', 'pdd lint']) test(`saved failed ${kind} removes only the no-result label`, t => {
+  const f = fixture(t, { existing: true });
+  const state = f.data(); state.prs[0].labels = ['other', 'pdd:no-verdict']; state.repoLabels = ['pdd:no-verdict']; f.configure(state);
+  const out = f.invoke('Review: note', 'stepDone', 'formal', [{kind, result:'failed', at:1}]);
+  assert.equal(out.exitCode, 0, out.message);
+  assert.deepEqual(f.data().prs[0].labels, ['other']);
+});
+
+test('label failure warns while the PR remains open', t => {
+  const f = fixture(t); f.configure({failLabel:true});
+  const out = f.invoke('Review: note');
+  assert.equal(out.exitCode, 0, out.message);
+  assert.match(out.message, /warning: pdd could not update the pdd:no-verdict PR label/);
+  assert.equal(f.data().prs[0].state, 'OPEN');
+});
+
+test('existing repository label is reused without changing it', t => {
+  const f = fixture(t); f.configure({repoLabels:['pdd:no-verdict', 'other']});
+  const out = f.invoke('Review: note'); assert.equal(out.exitCode, 0, out.message);
+  assert.deepEqual(f.data().repoLabels, ['pdd:no-verdict', 'other']);
+  assert.deepEqual(f.data().prs[0].labels, ['pdd:no-verdict']);
 });

@@ -1424,6 +1424,31 @@ async function matchingPromptApprovals(run, p) {
     return prompts.length ? [{ ...record, prompts }] : [];
   });
 }
+// Keep GitHub's filterable label aligned with the same saved evidence as the PR body.
+async function syncNoVerdictLabel(run, pr, evidence, p) {
+  try {
+    const call = async args => {
+      const reply = await p.execFile('gh', args, { cwd: run.root });
+      if (reply.code !== undefined && reply.code !== 0) throw Error(reply.stderr || 'GitHub label request failed');
+      return reply.stdout;
+    };
+    const hasResult = evidence.results.some(result => ['pdd test', 'pdd lint'].includes(result.kind));
+    const view = JSON.parse(String(await call(['pr', 'view', pr.url, '--json', 'labels'])));
+    if (!Array.isArray(view.labels)) throw Error('PR labels unavailable');
+    const present = view.labels.some(label => label.name === NO_VERDICT);
+    if (!hasResult && !present) {
+      const labels = JSON.parse(String(await call(['label', 'list', '--repo', run.repo, '--limit', '1000', '--json', 'name'])));
+      if (!Array.isArray(labels)) throw Error('Repository labels unavailable');
+      if (!labels.some(label => label.name === NO_VERDICT)) await call(['label', 'create', NO_VERDICT, '--repo', run.repo]);
+      await call(['pr', 'edit', pr.url, '--add-label', NO_VERDICT]);
+    } else if (hasResult && present) await call(['pr', 'edit', pr.url, '--remove-label', NO_VERDICT]);
+    return [];
+  } catch (error) {
+    if (error?.code === 'workflow_progress_refused') throw error;
+    return [`warning: pdd could not update the ${NO_VERDICT} PR label (${causeOf(error)}); retry publication.`];
+  }
+}
+
 async function publicationEvidence(run, area, p) {
   const saved = { runId: run.runId, ...(Number.isFinite(run.startedAt) ? { startedAt: run.startedAt } : {}), runDir: run.runDir, root: run.root, baseSha: run.baseSha, baseBranch:run.baseBranch, workflow:run.workflow, number: run.number,
     decisions: run.decisions ?? [], promptApprovals: await matchingPromptApprovals(run, p),
@@ -2116,6 +2141,7 @@ async function publishAreaPr(run, area, p, lines, retry, automatic = null) {
     const metadata=Object.fromEntries(['publishedHeadSha','publicationBodySha256','readable','sourcePaths'].filter(key=>Object.hasOwn(existing,key)).map(key=>[key,existing[key]]));
     commitRun(run,p,latest=>{applyPublication(latest);const pr=latest.pr.find(pr=>pr.url===existing.url&&pr.stage===existing.stage);if(pr)Object.assign(pr,metadata);});
     if (area.then === 'ask-code') await refreshReplayBaseline(run,p,false,sourcePaths);
+    lines.push(...await syncNoVerdictLabel(run, existing, prepared, p));
     lines.push(`Pushed the new commits to ${label}.`);
     return null;
   }
@@ -2163,6 +2189,7 @@ async function publishAreaPr(run, area, p, lines, retry, automatic = null) {
   if (commitSha(published.publishedHeadSha)) published.readable = savedReadable(readable.facts, published.publishedHeadSha);
   const applyPublication=publicationUpdate(run,codePr?['testInventory']:[]);
   commitRun(run,p,latest=>{applyPublication(latest);if(!latest.pr.some(pr=>pr.url===published.url&&pr.stage===published.stage))latest.pr.push(published);});
+  lines.push(...await syncNoVerdictLabel(run, published, prepared, p));
   // PR 1's Next line now links PR 2 (#3042). A failure there only warns.
   const ask = askArea(run), pr1 = codePr && ask && prOf(run, ask.name);
   if (pr1) {
@@ -3219,12 +3246,13 @@ async function draftDescription(run, pr1, drafts, p) {
     const fitted = verifyFit(safeRemainder, BODY_BUDGET - characters(leading) - characters(footer) - reserved, p.env, true);
     const placed = section => { const text = section.join('\n'); return fitted.includes(SLOT) ? fitted.replace(SLOT, () => text) : `${fitted}\n\n${text}`; };
     const nextBody = from < 0 ? `${leading}${fitted}${footer}` : withSummaries(steps, texts, section => `${leading}${placed(section)}${footer}`, BODY_BUDGET);
+    const labelWarnings = run.publicationPending ? [] : await syncNoVerdictLabel(run, pr1, evidence, p);
     // Only the time of the status line changed: nothing to write.
-    if (nextBody === body || sameReadableTop(nextBody, body)) { remember(); return []; }
+    if (nextBody === body || sameReadableTop(nextBody, body)) { remember(); return labelWarnings; }
     const reply = await p.execFile('gh', ['pr', 'edit', pr1.url, '--body-file', '-'], { cwd: run.root, input: nextBody });
     if (reply.code !== undefined && reply.code !== 0) throw Object.assign(Error('PR 1 description update failed.'), { code: reply.code });
     remember();
-    return [`pdd updated the PR 1 description: ${drafts.length ? `draft prompts left: ${drafts.join(', ')}` : 'no draft prompts are left'}.`];
+    return [...labelWarnings, `pdd updated the PR 1 description: ${drafts.length ? `draft prompts left: ${drafts.join(', ')}` : 'no draft prompts are left'}.`];
   } catch (error) {
     if(error?.code==='workflow_progress_refused')throw error; return [`warning: pdd could not update the PR 1 description (${error.code ?? 'error'}). ${run.publicationPending ? 'No source was pushed.' : 'The PR retains its previous evidence; after a source push it stays publication-pending.'}`]; }
 }
