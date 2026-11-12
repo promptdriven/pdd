@@ -509,5 +509,24 @@ Load runtime-outcome's public vocabulary for saved lint and check rows. Include
 its public state and reason codes in pdd result lines, including when the saved
 summary is absent. Keep partial results visible as evidence, but `usableResult` returns false when
 its public `states` array contains partial. Each saved check/lint result includes
-`states: [{test, state, reason}]` from the public projection. It cannot establish
-a full pass. Suppress a saved pass mark when its own rows do not all pass. Keep existing source and identity checks.
+`states` in original saved row order. Each row has `test` from that saved row and
+the canonical `{state, reason}` public projection. Retain these optional saved
+fields on that same row, without replacing the canonical state or short reason:
+
+- `refusals`: when the saved value is an array, retain its non-null, non-array
+  object records in order, including duplicates, all fields and nested values.
+  Retain an explicitly empty array. Ignore non-record elements; omit this field
+  when its saved value is absent or is not an array.
+- `compatibility` and `binding_plan`: retain each when its saved value is a
+  non-null, non-array object, with all fields and nested values unchanged;
+  otherwise omit it. Compatibility retains the outcome owner's association,
+  state, issue and original reported evidence. The saved binding plan retains
+  its edge identities, candidate causes and repair instructions as evidence.
+
+These fields are retained JSON records, not fresh judgments. Never derive a
+missing field from another row, the short reason, a summary, or diagnostic text.
+Do not recheck compatibility, repair bindings or infer a new result state. The
+consumer owns how this evidence affects its existing hold policy. Legacy rows
+keep only their available fields; optional evidence never supplies a full pass.
+Suppress a saved pass mark when its own rows do not all pass. Keep existing
+source and identity checks, file-only reads and display cleaning boundaries.
