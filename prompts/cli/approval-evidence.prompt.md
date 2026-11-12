@@ -59,6 +59,30 @@ match). Incomplete discovery throws code `session_unreadable`; it never returns
 an empty list that hides an unreadable file.
 Skip symlink entries and refuse over-depth discovery rather than silently truncate.
 
+## Gemini session discovery for recovery
+
+`findNativeSessions` also accepts `stage.agent: "gemini"`. This does not extend
+`readApprovalEvidence`: Gemini approvals still require explicitly recorded words.
+Optional `ports.geminiCliHome` overrides `env.GEMINI_CLI_HOME`, then `home` (or
+`env.HOME`, else OS home); Gemini appends `.gemini` to that selected home.
+Read direct `session-*.json` and `session-*.jsonl` files in
+`.gemini/tmp/<project>/chats`. Select the SHA-256 hex hash of the exact absolute
+worktree root as the legacy project folder, and, when present, the native single
+folder identifier (one or more lowercase ASCII letters, digits or hyphens) from `.gemini/projects.json`'s `projects[root]` mapping. Do not
+create or migrate registry or session files. Skip symlink entries, including the
+selected project and chats directories. Missing paths mean no matches; unreadable
+or malformed registry/session data throws `session_unreadable`, never false absence.
+
+For JSON, the conversation object supplies UUID `sessionId`, `projectHash` and
+ISO `startTime`. For JSONL, merge complete metadata objects and `$set` updates
+in file order; ignore an unterminated final line. Reject malformed complete rows
+or missing/invalid identity. Match `projectHash` to the worktree hash and start time
+inclusively to the supplied window, with exact optional `sessionId` filtering.
+Exclude `kind: "subagent"`; absent kind is a legacy main session. Return distinct
+`{id, startedAt}` sessions, including duplicates across format migration only once.
+Ignore foreign worktrees, sessions outside the window, and files older than its
+start. A filename's shortened ID never establishes identity.
+
 <details>
 <summary>Native identity and user-message rules</summary>
 

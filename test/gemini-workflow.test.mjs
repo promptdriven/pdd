@@ -78,7 +78,7 @@ test('Gemini run opens and reopens the same Herdr chat; recorded words approve w
   if(args[0]==='pane'&&args[1]==='run'&&args[3].includes(' gemini '))f.herdr.panes.find(p=>p.pane_id===args[2]).agent={agent:'gemini',agent_status:'idle',prompts:[]};
   return reply;
  };
- f.ports.findNativeSessions=async()=>assert.fail('Gemini has no native chat-file evidence reader');
+ const lookups=[];f.ports.findNativeSessions=async stage=>{lookups.push(stage);return [];};
  assert.equal((await f.run()).exitCode,0);
  let run=f.record();assert.equal(run.agent,'gemini');
  const launches=()=>f.herdr.calls.filter(a=>a[0]==='pane'&&a[1]==='run');
@@ -92,7 +92,9 @@ test('Gemini run opens and reopens the same Herdr chat; recorded words approve w
  const approved=await approveRun({ref:'17',cwd:run.root,said:words},f.agentPorts());
  assert.equal(approved.exitCode,0,approved.message);run=f.record();assert.equal(run.decisions[0].evidence.words,words);assert.equal(run.decisions[0].evidence.route,'said');assert.equal(run.agent,'gemini');
  assert.ok(launches().every(a=>a[3].includes(' gemini ')));
- assert.deepEqual(await ownSession({run,chat:run.chats[0],since:0,ports:f.ports}),{kind:'unknown'});
+ assert.equal(lookups.length,0,'Live chat approval never reads native session files');
+ assert.deepEqual(await ownSession({run,chat:run.chats[0],since:0,ports:f.ports}),{kind:'none'});
+ assert.equal(lookups[0].agent,'gemini');
 });
 
 for(const version of ['0.65.0','0.66.0','0.67.1','1.0.0'])test(`Gemini Try accepts feature-compatible CLI ${version} without a version pin`,async()=>{

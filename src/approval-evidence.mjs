@@ -1,7 +1,8 @@
-// Generated from prompts/cli/approval-evidence.prompt.md (sha256: 0ff0081adb287056f3b443b516d614b56dca97c4622b92ec4e1b74451f41d56d).
+// Generated from prompts/cli/approval-evidence.prompt.md (sha256: e08eb1eb98c917d26f1c0e6b425fdbc1781d25e540885350632dc58dce4ac3c1).
 import * as nodeFs from 'node:fs/promises';
 import { join, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
+import { createHash } from 'node:crypto';
 
 // Match a workflow stage to its agent session files.
 const sessionFile = /^rollout-[^/]+\.jsonl$/;
@@ -186,11 +187,66 @@ export async function readApprovalEvidence(request, ports = {}) {
 
 // Find the native session IDs that started in this worktree inside the window, for resuming a chat. Incomplete discovery
 // throws session_unreadable: an unreadable file must not look like "no session".
+// Gemini stores one conversation per file; this reader supplies identity only, never approval text.
+async function geminiSessions(stage, ports) {
+  const fs = ports.fs ?? nodeFs, env = ports.env ?? process.env;
+  const home = ports.geminiCliHome ?? env.GEMINI_CLI_HOME ?? ports.home ?? env.HOME ?? homedir();
+  const base = join(home, '.gemini'), hash = createHash('sha256').update(stage.root).digest('hex');
+  const projects = new Set([hash]);
+  try {
+    const registry = JSON.parse(await fs.readFile(join(base, 'projects.json'), 'utf8'));
+    if (!registry?.projects || typeof registry.projects !== 'object' || Array.isArray(registry.projects)) throw new Error('invalid_registry');
+    const slug = registry.projects[stage.root];
+    if (slug !== undefined) {
+      if (typeof slug !== 'string' || !/^[a-z0-9-]+$/.test(slug)) throw new Error('invalid_project_identifier');
+      projects.add(slug);
+    }
+  } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  const matches = new Map();
+  for (const project of projects) {
+    const directory = join(base, 'tmp', project), chats = join(directory, 'chats');
+    let entries;
+    try {
+      if (!(await fs.lstat(directory)).isDirectory() || !(await fs.lstat(chats)).isDirectory()) continue;
+      entries = await fs.readdir(chats, {withFileTypes:true});
+    } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+    for (const entry of entries) {
+      if (!entry.isFile() || !/^session-.*\.jsonl?$/.test(entry.name)) continue;
+      const path = join(chats, entry.name);
+      if ((await fs.stat(path)).mtimeMs < stage.startedAt) continue;
+      const text = await fs.readFile(path, 'utf8');
+      let meta;
+      if (entry.name.endsWith('.json')) meta = JSON.parse(text);
+      else {
+        const parsed = parseRows(text);
+        if (parsed.malformed) throw new Error('malformed_gemini_session');
+        meta = {};
+        for (const row of parsed.rows) {
+          if (row.sessionId !== undefined || row.projectHash !== undefined) Object.assign(meta, row);
+          else if (row.$set !== undefined) {
+            if (!row.$set || typeof row.$set !== 'object' || Array.isArray(row.$set)) throw new Error('invalid_gemini_update');
+            Object.assign(meta, row.$set);
+          }
+        }
+      }
+      const startedAt = typeof meta?.startTime === 'string' ? Date.parse(meta.startTime) : NaN;
+      if (!sessionId.test(meta?.sessionId ?? '') || typeof meta?.projectHash !== 'string' || !Number.isFinite(startedAt)) throw new Error('invalid_gemini_identity');
+      if (meta.projectHash !== hash || startedAt < stage.startedAt || startedAt > stage.endedAt
+        || meta.kind === 'subagent' || stage.sessionId && meta.sessionId !== stage.sessionId) continue;
+      matches.set(meta.sessionId, {id:meta.sessionId, startedAt});
+    }
+  }
+  return [...matches.values()];
+}
+
 export async function findNativeSessions(stage, ports = {}) {
-  if (!stage || !['codex', 'claude'].includes(stage.agent) || typeof stage.root !== 'string' || !isAbsolute(stage.root)
+  if (!stage || !['codex', 'claude', 'gemini'].includes(stage.agent) || typeof stage.root !== 'string' || !isAbsolute(stage.root)
     || !Number.isFinite(stage.startedAt) || !Number.isFinite(stage.endedAt)) return [];
   let matches;
-  try { matches = await sessionCandidates(stage, ports); }
+  try {
+    if (stage.agent === 'gemini') return await geminiSessions(stage, ports);
+    matches = await sessionCandidates(stage, ports);
+  }
   catch (error) { throw Object.assign(new Error(`The native session files cannot be read completely (${error.message}).`), { code: 'session_unreadable' }); }
   return [...new Map(matches.map(match => [match.meta.id, { id: match.meta.id, startedAt: match.meta.timestamp }])).values()];
 }

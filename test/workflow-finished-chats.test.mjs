@@ -127,6 +127,7 @@ for (const condition of ['busy','blocked','own-pane','foreign-terminal','foreign
     if (condition === 'current-gate') { run.state = 'waiting'; run.gate = {area:'story',kind:'approve',at:f.clock}; save(f,run); }
     if (condition === 'no-session-no-screen') {
       pane.agent=null;run.chats[0].session=null;save(f,run);
+      f.ports.findNativeSessions = async () => [];
       const h=f.ports.herdr; f.ports.herdr=async args=>{
       if (args[0]==='pane' && args[1]==='read') throw Object.assign(Error('capture unavailable'),{code:'screen_unavailable'});
       return h(args);

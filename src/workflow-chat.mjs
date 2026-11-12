@@ -1,5 +1,5 @@
 import { launchProfile, chatAgentName, validLaunchProfile } from './workflow-launch-profile.mjs';
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: badc0c8c124e14c6d707736e770146a5533d2a9120f28bd0fe3db84824250c2c).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 81ba4da744c40bad0da680795c32d18deb58bc7acfdbb5c126f5316d9e38bd82).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, lstatSync, readdirSync, writeFileSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
@@ -80,13 +80,14 @@ export function sessionEvidenceDue(chat, live, at) {
 // An unreadable, ambiguous or unrelated result is never evidence and never authorizes a launch.
 export async function ownSession({ run, chat, since, sessionId, ports = {} }) {
   const env = ports.env ?? process.env, kind = chat.agent ?? run.agent;
-  if (kind === 'gemini' || kind === 'agy') return { kind: 'unknown' };
+  if (kind === 'agy') return { kind: 'unknown' };
   // A saved default selection unsets the config variable at launch. Evidence must use that same account.
-  const folder = expandHome(chat.configDir, env) ?? join(env.HOME || homedir(), kind === 'claude' ? '.claude' : '.codex');
+  const home = env.HOME || homedir();
+  const folder = expandHome(chat.configDir, env) ?? (kind === 'gemini' ? home : join(home, kind === 'claude' ? '.claude' : '.codex'));
   if (sessionId !== undefined && !validSessionId(sessionId)) return { kind: 'unknown' };
   const saved = sessionId ?? (kind === 'claude' && validSessionId(chat.session?.id) ? chat.session.id : null);
   let end = (ports.now ?? Date.now)();
-  if (kind === 'codex' && !saved) {
+  if ((kind === 'codex' || kind === 'gemini') && !saved) {
     const next = (run.chats ?? []).flatMap(item => [item.startedAt, item.resumedAt])
       .filter(at => Number.isFinite(at) && at > since);
     if (next.length) end = Math.min(end, Math.min(...next) - 1);
@@ -96,12 +97,12 @@ export async function ownSession({ run, chat, since, sessionId, ports = {} }) {
   let sessions;
   try {
     sessions = await (ports.findNativeSessions ?? findNativeSessions)({ agent: kind, root: run.root, startedAt: since, endedAt: end, ...(saved && kind === 'claude' ? { sessionId: saved } : {}) },
-      { env, ...(folder ? (kind === 'claude' ? { claudeConfigDir: folder } : { codexHome: folder }) : {}) });
+      { env, ...(folder ? (kind === 'claude' ? { claudeConfigDir: folder } : kind === 'gemini' ? {geminiCliHome: folder} : { codexHome: folder }) : {}) });
   } catch { return { kind: 'unknown' }; }
   if (!Array.isArray(sessions)) return { kind: 'unknown' };
   // Codex discovery admits rollout filenames without a UUID. Select its parsed identity,
   // rather than using the reader's optional filename filter for a known resumed session.
-  if (kind === 'codex' && saved) sessions = sessions.filter(session => session?.id === saved);
+  if ((kind === 'codex' || kind === 'gemini') && saved) sessions = sessions.filter(session => session?.id === saved);
   if (!sessions.length) return { kind: 'none' };
   if (sessions.length !== 1 || !validSessionId(sessions[0]?.id) || (kind === 'claude' || saved) && sessions[0].id !== saved) return { kind: 'unknown' };
   return { kind: 'match', id: sessions[0].id };
@@ -628,7 +629,7 @@ async function workspaceInventory(herdr) {
   return validateHerdrInventory(await herdr(['workspace', 'list']), 'workspace');
 }
 
-export async function rebuildClosedChat({ run, chat, message, resumeMessage }, ports = {}) {
+export async function rebuildClosedChat({ run, chat, message, resumeMessage, newSession = false }, ports = {}) {
   ports = {...ports, run};
   const herdr = herdrCommand(ports), now = ports.now ?? Date.now, env = ports.env ?? process.env;
   await ensureServer(herdr, ports);
@@ -669,10 +670,11 @@ export async function rebuildClosedChat({ run, chat, message, resumeMessage }, p
     }
     const agent = chat.agent ?? run.agent, configDir = expandHome(chat.configDir, ports.env ?? process.env);
     let resumeId = validSessionId(chat.session?.id) ? chat.session.id : null;
-    if (chat.startUnconfirmed) {
+    if (chat.startUnconfirmed || agent === 'gemini' && !resumeId) {
       const own = await ownSession({run, chat, since: launchAnchor(chat), ports});
-      if (own.kind !== 'match' || resumeId && own.id !== resumeId) throw problem('chat_start_unconfirmed', 'Inspect the saved unconfirmed session before rebuilding its workspace.');
-      resumeId = own.id;
+      if (chat.startUnconfirmed && (own.kind !== 'match' || resumeId && own.id !== resumeId)) throw problem('chat_start_unconfirmed', 'Inspect the saved unconfirmed session before rebuilding its workspace.');
+      if (own.kind === 'match') resumeId = own.id;
+      else if (!newSession) throw nativeSessionUnknown(run, chat);
     }
     const layout = await openHerdrRunLayout({repository: run.repo, issueNumber: run.number, runId: run.runId,
       workflowName: run.workflow, stageId: chat.area, sourceRoot: run.sourceRoot, cwd: run.root, commonDir: run.commonDir, run},
@@ -713,6 +715,12 @@ function resumeInput(run, chat, message) {
   writeFileSync(messageFile, message, {mode: 0o600});
   return {messageFile};
 }
+
+const nativeSessionUnknown = (run, chat) => problem('native_session_unknown', (chat.agent ?? run.agent) === 'gemini'
+  ? `The ${chat.area} chat ended and pdd cannot recover its gemini session. ${run.areas?.[run.area]?.name && chat.area !== run.areas[run.area].name
+    ? "A fresh chat is available only in the current area."
+    : `Start a fresh chat for this area: pdd workflow open ${run.number} --new`}`
+  : `The ${chat.area} chat ended and pdd cannot tell which ${run.agent} session it was. Start ${run.agent} in the tab yourself.`);
 
 // Returns {resumed, attached}; it may change chat.tabId/paneId/terminalId/session/resumedAt, and the caller saves the run.
 export async function openChat({ run, chat, resumeMessage }, ports = {}) {
@@ -775,7 +783,7 @@ export async function openChat({ run, chat, resumeMessage }, ports = {}) {
     let id = validSessionId(chat.session?.id) ? chat.session.id : null;
     if (!id) {
       const found = await ownSession({run, chat, since: launchAnchor(chat), ports});
-      if (found.kind !== 'match') throw problem('native_session_unknown', `The ${chat.area} chat ended and pdd cannot tell which ${run.agent} session it was. Start ${run.agent} in the tab yourself.`);
+      if (found.kind !== 'match') throw nativeSessionUnknown(run, chat);
       id = found.id; chat.session = { agent: run.agent, id };
     }
     // A missing agents.json entry refuses before the resume request.
