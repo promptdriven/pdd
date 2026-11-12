@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 5cb946d3218aef1ffeba17b676220ea091bf5e72a272debcc11a62c11342169f).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 19a0a6ed90184cb21a347eae63fd1dc45ed98464e88752089609ce12c0d1ff71).
 import { markdownLinks, markdownDefinitions, markdownSectionText } from './runtime-markdown.mjs';
 import { buildBindingPlan, runtimeBoundary } from './runtime-binding-plan.mjs';
 import { promptClaims, resolveOwners } from './file-owner.mjs';
@@ -1922,38 +1922,50 @@ const HEADER_COMMENT = /^\s*(?:\/\/+|#+|--|;+|\/\*+|\*+|<!--|"""|''')?\s*Generat
 const EXCUSE_CLAUSE = /(?:^|;\s*)(?:(TODO|FIXME|HACK|XXX)(?:\([^)\r\n]*\))?(?=$|[\s:—–-])|(todo|fixme|hack)(?:\([^)\r\n]*\))?\s*[:—–-])/;
 const STORY_STEP_LIMIT = 15;
 
-function readRegularPrefix(root, path, limit) {
-  const stat = statOf(join(root, path));
-  if (!stat?.isFile()) return null;
-  let fd;
-  try { fd = openSync(join(root, path), constants.O_RDONLY | constants.O_NOFOLLOW); }
-  catch (error) {
-    if (['ENOENT', 'ENOTDIR', 'ELOOP'].includes(error.code)) return null;
-    if (['EACCES', 'EPERM', 'EISDIR'].includes(error.code)) return false;
-    throw error;
+function promptOpeningSentence(text) {
+  const lines = new TextDecoder().decode(Buffer.from(text, 'utf8').subarray(0, 65_536)).split(/\r?\n/);
+  let at = 0;
+  const blanks = () => { while (at < lines.length && !lines[at].trim()) at++; };
+  blanks();
+  if (/^# /.test(lines[at] ?? '')) { at++; blanks(); }
+  const stop = line => !line.trim() || /^\s*#/.test(line) || /^\s*(?:```|~~~)/.test(line);
+  const paragraph = [];
+  while (at < lines.length && !stop(lines[at])) paragraph.push(lines[at++].trim());
+  const joined = paragraph.join(' ');
+  let code = false;
+  for (let i = 0; i < joined.length; i++) {
+    if (joined[i] === '`') code = !code;
+    else if (!code && '.!?'.includes(joined[i]) && (i + 1 === joined.length || /\s/.test(joined[i + 1]))) return joined.slice(0, i + 1);
   }
-  try {
-    const buffer = Buffer.alloc(Math.min(limit, Number(fstatSync(fd).size) + 1));
-    let total = 0;
-    while (total < buffer.length) {
-      const count = readSync(fd, buffer, total, buffer.length - total, total);
-      if (!count) break;
-      total += count;
-    }
-    return buffer.subarray(0, total);
-  } finally { closeSync(fd); }
+  return joined;
 }
 
-function readOnlyConfigMention(promptText, configPath) {
-  const lines = promptText.split(/\r?\n/);
-  let at = 0;
-  while (at < lines.length && !lines[at].trim()) at++;
-  if (/^# /.test(lines[at] ?? '')) { at++; while (at < lines.length && !lines[at].trim()) at++; }
-  const paragraph = [];
-  while (at < lines.length && lines[at].trim() && !/^\s*(?:#|```|~~~)/.test(lines[at])) paragraph.push(lines[at++].trim());
-  const opening = paragraph.join(' ');
-  const escaped = configPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`\\b(?:reads?|loads?|parses?|inspects?|from)\\s+(?:[^.;!?]{0,40}?\\s+)?\`?${escaped}\`?`, 'i').test(opening);
+function readOnlyConfigMention(promptPath, promptText, configPath) {
+  const opening = promptOpeningSentence(promptText);
+  const folder = posix.dirname(promptPath), near = target => posix.normalize(posix.join(folder, target));
+  const positions = [];
+  const masked = opening.replace(/\]\(([^)\s]+)\)/g, (full, target, index) => {
+    const file = target.split('#')[0];
+    if (file && !/^[a-z][a-z0-9+.-]*:/i.test(file) && near(file) === configPath) positions.push(index);
+    return `]${' '.repeat(full.length - 1)}`;
+  });
+  for (const match of masked.matchAll(/[A-Za-z0-9_@+~./-]+/g)) {
+    const run = match[0].replace(/\.+$/, '');
+    if (!run.includes('/') && !run.includes('.')) continue;
+    const resolved = /^\.\.?\//.test(run) ? near(run) : run;
+    if (resolved === configPath) positions.push(match.index);
+  }
+  if (!positions.length) return false;
+  const readVerb = /\b(?:read(?:s|ing)?|load(?:s|ing)?|pars(?:es?|ing)|inspect(?:s|ing)?|from)\b/gi;
+  const ownVerb = /\b(?:owns?|owning|generates?|generating|writes?|writing|maintains?|maintaining|produces?|producing)\b/i;
+  return positions.every(pos => {
+    const prefix = opening.slice(0, pos);
+    const matches = [...prefix.matchAll(readVerb)];
+    if (!matches.length) return false;
+    const last = matches.at(-1);
+    const between = prefix.slice(last.index + last[0].length);
+    return !ownVerb.test(between) && !/;/.test(between);
+  });
 }
 
 function scanExcuseComments(source, filePath) {
@@ -1962,26 +1974,29 @@ function scanExcuseComments(source, filePath) {
     || /(?:^|\/)(?:Makefile|Dockerfile|Containerfile|Justfile)$/i.test(filePath);
   const dashComments = /\.(?:sql|lua|hs|elm|ada)$/i.test(filePath);
   const slashComments = !hashComments && !dashComments;
+  const jsLike = /\.(?:[cm]?[jt]sx?)$/i.test(filePath);
+  const goFile = /\.go$/i.test(filePath);
+  const rustFile = /\.rs$/i.test(filePath);
   const hits = [];
   const checkComment = (rawLine, body, lineNumber) => {
     if (HEADER_COMMENT.test(rawLine)) return;
     if (!EXCUSE_CLAUSE.test(body.trim())) return;
     hits.push({ line: lineNumber, text: rawLine.trim().replace(/\s+/g, ' ').slice(0, 160) });
   };
-  let i = 0, line = 1, canStartRegex = true;
+  let i = 0, line = 1, canStartRegex = true, afterDot = false;
   const templateBraces = [];
   if (source.startsWith('#!')) {
     const end = source.indexOf('\n');
     if (end < 0) return [];
     i = end + 1; line = 2;
   }
-  const consumeTemplateBody = () => {
+  const consumeJsTemplateBody = () => {
     while (i < source.length) {
       const ch = source[i];
       if (ch === '\\') { if (source[i + 1] === '\n') line++; i += 2; continue; }
       if (ch === '\n') { line++; i++; continue; }
-      if (ch === '`') { i++; canStartRegex = false; return; }
-      if (ch === '$' && source[i + 1] === '{') { i += 2; templateBraces.push(0); canStartRegex = true; return; }
+      if (ch === '`') { i++; canStartRegex = false; afterDot = false; return; }
+      if (ch === '$' && source[i + 1] === '{') { i += 2; templateBraces.push(0); canStartRegex = true; afterDot = false; return; }
       i++;
     }
   };
@@ -1999,19 +2014,60 @@ function scanExcuseComments(source, filePath) {
       i = Math.min(source.length, i + 3);
       continue;
     }
+    if (rustFile && (ch === 'r' || (ch === 'b' && next === 'r'))) {
+      const rawMatch = /^b?r(#*)"/.exec(source.slice(i));
+      if (rawMatch) {
+        const closing = `"${rawMatch[1]}`;
+        i += rawMatch[0].length;
+        const end = source.indexOf(closing, i);
+        const body = source.slice(i, end < 0 ? source.length : end);
+        for (let k = 0; k < body.length; k++) if (body[k] === '\n') line++;
+        i = end < 0 ? source.length : end + closing.length;
+        continue;
+      }
+    }
+    if (rustFile && ch === "'") {
+      if (next === '\\') {
+        i += 2;
+        while (i < source.length && source[i] !== "'" && source[i] !== '\n') {
+          if (source[i] === '\\') i += 2;
+          else i++;
+        }
+        if (source[i] === "'") i++;
+        continue;
+      }
+      if (next && next !== "'" && next !== '\n') {
+        const cp = source.codePointAt(i + 1);
+        const cpLen = cp > 0xffff ? 2 : 1;
+        if (source[i + 1 + cpLen] === "'") { i += 2 + cpLen; continue; }
+      }
+      let j = i + 1;
+      while (j < source.length && /[A-Za-z0-9_]/.test(source[j])) j++;
+      i = j;
+      continue;
+    }
     if (ch === "'" || ch === '"') {
       const quote = ch; i++;
       while (i < source.length && source[i] !== quote) {
         if (source[i] === '\\') { if (source[i + 1] === '\n') line++; i += 2; continue; }
-        if (source[i] === '\n') { line++; if (!hashComments) { i++; break; } }
+        if (source[i] === '\n') { line++; if (!hashComments && !rustFile) { i++; break; } }
         i++;
       }
       if (source[i] === quote) i++;
-      canStartRegex = false;
+      canStartRegex = false; afterDot = false;
       continue;
     }
-    if (slashComments && ch === '`') {
-      i++; consumeTemplateBody(); continue;
+    if (jsLike && ch === '`') {
+      i++; consumeJsTemplateBody(); continue;
+    }
+    if (goFile && ch === '`') {
+      i++;
+      while (i < source.length && source[i] !== '`') {
+        if (source[i] === '\n') line++;
+        i++;
+      }
+      if (source[i] === '`') i++;
+      continue;
     }
     if ((slashComments && ch === '/' && next === '/') || (hashComments && ch === '#') || (dashComments && ch === '-' && next === '-')) {
       const prefixLen = ch === '#' ? 1 : 2;
@@ -2036,7 +2092,7 @@ function scanExcuseComments(source, filePath) {
       i = end;
       continue;
     }
-    if (slashComments && ch === '/' && canStartRegex) {
+    if (jsLike && ch === '/' && canStartRegex) {
       let j = i + 1, inClass = false, closed = false;
       while (j < source.length && source[j] !== '\n') {
         if (source[j] === '\\') { j += 2; continue; }
@@ -2047,14 +2103,14 @@ function scanExcuseComments(source, filePath) {
       }
       if (closed) {
         while (j < source.length && /[A-Za-z]/.test(source[j])) j++;
-        i = j; canStartRegex = false; continue;
+        i = j; canStartRegex = false; afterDot = false; continue;
       }
     }
-    if (slashComments && templateBraces.length) {
+    if (jsLike && templateBraces.length) {
       if (ch === '{') templateBraces[templateBraces.length - 1]++;
       else if (ch === '}') {
         if (templateBraces[templateBraces.length - 1] === 0) {
-          templateBraces.pop(); i++; consumeTemplateBody(); continue;
+          templateBraces.pop(); i++; consumeJsTemplateBody(); continue;
         }
         templateBraces[templateBraces.length - 1]--;
       }
@@ -2063,15 +2119,26 @@ function scanExcuseComments(source, filePath) {
       let j = i + 1;
       while (j < source.length && /[A-Za-z0-9_$]/.test(source[j])) j++;
       const word = source.slice(i, j);
-      canStartRegex = /^(?:return|throw|case|delete|void|typeof|instanceof|in|of|new|yield|await|else|do)$/.test(word);
+      canStartRegex = !afterDot && /^(?:return|throw|case|delete|void|typeof|instanceof|in|of|new|yield|await|else|do)$/.test(word);
+      afterDot = false;
       i = j;
       continue;
     }
     if (/[0-9]/.test(ch)) {
       let j = i + 1;
       while (j < source.length && /[0-9A-Za-z_.]/.test(source[j])) j++;
-      canStartRegex = false; i = j; continue;
+      canStartRegex = false; afterDot = false; i = j; continue;
     }
+    if ((ch === '+' && next === '+') || (ch === '-' && next === '-')) {
+      canStartRegex = false; afterDot = false; i += 2; continue;
+    }
+    if (ch === '?' && next === '.') {
+      afterDot = true; canStartRegex = true; i += 2; continue;
+    }
+    if (ch === '!' && next !== '=' && !canStartRegex) {
+      afterDot = false; i++; continue;
+    }
+    afterDot = ch === '.';
     canStartRegex = !/[)\]]/.test(ch);
     i++;
   }
@@ -2080,19 +2147,61 @@ function scanExcuseComments(source, filePath) {
 
 export function lintLocalHygiene({ root, files = gitFiles(root), promptPaths, tests, workspace = loadRuntimeWorkspace({ root }) } = {}) {
   const policy = boundedWorkspace(root, workspace);
-  const allowedFiles = [...new Set(files)].filter(path => allowsRuntimePath(policy, path)).sort();
-  const excluded = promptPaths === undefined ? fixtureProjectRoots(root, allowedFiles) : [];
+  const allowedFiles = [...new Set(files)].filter(path => !isSecretPath(path) && allowsRuntimePath(policy, path)).sort();
+  const selectedPaths = [
+    ...(promptPaths ?? []).map(path => path.replace(/^\.\//, '')),
+    ...(tests ?? []).map(entry => typeof entry === 'string' ? entry.replace(/^\.\//, '') : entry?.path).filter(Boolean),
+  ];
+  const allFixtureRoots = fixtureProjectRoots(root, allowedFiles);
+  const excluded = allFixtureRoots
+    .filter(fixtureRoot => !selectedPaths.some(path => path === fixtureRoot || path.startsWith(`${fixtureRoot}/`)));
+  const activeFixtureRoots = allFixtureRoots.filter(fixtureRoot => !excluded.includes(fixtureRoot));
+  const projectRelativePath = path => {
+    const ownerRoot = activeFixtureRoots.find(fixtureRoot => path.startsWith(`${fixtureRoot}/`));
+    return ownerRoot ? path.slice(ownerRoot.length + 1) : path;
+  };
   const scopedFiles = outsideFixtureProjects(allowedFiles, excluded);
-  const visibleSet = new Set(promptPaths === undefined ? scopedFiles : allowedFiles);
+  const visibleSet = new Set(scopedFiles);
   const inspectedPrompts = [...new Set((promptPaths ?? scopedFiles.filter(path => path.endsWith('.prompt.md')))
-    .filter(path => visibleSet.has(path) && path.endsWith('.prompt.md')))].sort();
+    .map(path => path.replace(/^\.\//, ''))
+    .filter(path => visibleSet.has(path) && !isSecretPath(path) && path.endsWith('.prompt.md')))].sort();
   const inspectedSet = new Set(inspectedPrompts);
 
-  let linkedPort;
-  const readSafeText = path => {
-    const stat = statOf(join(root, path));
-    if (!stat || Number(stat.size) > LIMITS.bytes) return null;
-    try { return stat.isSymbolicLink() ? (linkedPort ??= sourceFilePort(root, visibleSet, policy)).read({ path }).content : readText(root, path); }
+  const realRoot = realpathSync(root);
+  const strictReader = snapshotReader(realRoot, visibleSet, undefined, true, policy);
+  const inspectStrict = (path, isControl = false) => {
+    if (!visibleSet.has(path) || isSecretPath(path)) return null;
+    try {
+      const file = strictReader.inspectRaw(path, 'Source', true, isControl, isControl);
+      return file.stat ? file : null;
+    } catch { return null; }
+  };
+  const readStrictPrefix = (path, limit, isControl = false) => {
+    const file = inspectStrict(path, isControl);
+    if (!file) return null;
+    let fd;
+    try {
+      fd = openSync(join(realRoot, file.path), constants.O_RDONLY | constants.O_NOFOLLOW);
+      if (!sameStat(file.stat, fstatSync(fd, { bigint: true })) || !strictReader.stable(file.observed)) return null;
+      const buffer = Buffer.alloc(Math.min(limit, file.size + 1));
+      let total = 0;
+      while (total < buffer.length) {
+        const count = readSync(fd, buffer, total, buffer.length - total, total);
+        if (!count) break;
+        total += count;
+      }
+      if (!strictReader.stable(file.observed) || !sameStat(file.stat, fstatSync(fd, { bigint: true }))) return null;
+      return buffer.subarray(0, total);
+    } catch (error) {
+      if (['ENOENT', 'ENOTDIR', 'ELOOP'].includes(error.code)) return null;
+      if (['EACCES', 'EPERM', 'EISDIR'].includes(error.code)) return false;
+      throw error;
+    } finally { if (fd !== undefined) closeSync(fd); }
+  };
+  const readStrictText = path => {
+    const file = inspectStrict(path);
+    if (!file || file.size > LIMITS.bytes) return null;
+    try { return strictReader.bytes(file).toString('utf8'); }
     catch { return null; }
   };
 
@@ -2100,18 +2209,18 @@ export function lintLocalHygiene({ root, files = gitFiles(root), promptPaths, te
   const promptTexts = new Map();
   const extraClaims = [];
   for (const prompt of allPromptPaths) {
-    const text = readSafeText(prompt);
+    const text = readStrictText(prompt);
     if (typeof text !== 'string') continue;
     promptTexts.set(prompt, text);
     if (inspectedSet.has(prompt)) for (const claim of promptClaims(prompt, text)) {
-      if (allowsRuntimePath(policy, claim) && !claim.endsWith('.md')) extraClaims.push(claim);
+      if (!isSecretPath(claim) && allowsRuntimePath(policy, claim) && !claim.endsWith('.md')) extraClaims.push(claim);
     }
   }
 
   const candidatePaths = [...new Set([...[...visibleSet].filter(path => !path.endsWith('.md')), ...extraClaims])].sort();
-  const rawBindings = visibleSet.has('pdd-bindings.json') ? readRegularPrefix(root, 'pdd-bindings.json', 65_536) : null;
-  const bindings = rawBindings ? rawBindings.toString('utf8') : rawBindings;
-  const heads = candidatePaths.map(path => ({ path, content: readRegularPrefix(root, path, 4097) }));
+  const rawBindings = visibleSet.has('pdd-bindings.json') ? readStrictPrefix('pdd-bindings.json', 65_537, true) : null;
+  const bindings = rawBindings ? (rawBindings.length > 65_536 ? false : rawBindings.toString('utf8')) : rawBindings;
+  const heads = candidatePaths.map(path => ({ path, content: visibleSet.has(path) ? readStrictPrefix(path, 4097) : null }));
   const prompts = [...promptTexts.entries()].map(([path, content]) => ({ path, content }));
   const resolved = resolveOwners({ paths: candidatePaths, bindings, heads, prompts });
 
@@ -2119,19 +2228,20 @@ export function lintLocalHygiene({ root, files = gitFiles(root), promptPaths, te
   for (const row of resolved.files) {
     const validOwners = row.owners.filter(prompt => promptTexts.has(prompt));
     if (!validOwners.length) continue;
-    const isMisplacedTest = MISPLACED_TEST_OR_CI.test(row.path);
-    const isConfig = MISPLACED_CONFIG.test(row.path);
-    const isCode = !isMisplacedTest && !isConfig && !NON_CODE_ASSET.test(row.path);
-    const stat = isCode ? statOf(join(root, row.path)) : null;
+    const classifiedPath = projectRelativePath(row.path);
+    const isMisplacedTest = MISPLACED_TEST_OR_CI.test(classifiedPath);
+    const isConfig = MISPLACED_CONFIG.test(classifiedPath);
+    const isCode = !isMisplacedTest && !isConfig && !NON_CODE_ASSET.test(classifiedPath);
+    const fileInfo = isCode ? inspectStrict(row.path) : null;
     for (const owner of validOwners) {
       if (!rawRowsByPrompt.has(owner)) rawRowsByPrompt.set(owner, []);
-      rawRowsByPrompt.get(owner).push(row);
-      if (isCode && stat?.isFile()) {
+      rawRowsByPrompt.get(owner).push({ row, isCode, isMisplacedTest, isConfig });
+      if (fileInfo) {
         if (!productionCodeByPrompt.has(owner)) productionCodeByPrompt.set(owner, []);
-        productionCodeByPrompt.get(owner).push({ path: row.path, bytes: Number(stat.size) });
+        productionCodeByPrompt.get(owner).push({ path: row.path, bytes: fileInfo.size });
       }
     }
-    if (isCode && stat?.isFile() && validOwners.some(owner => inspectedSet.has(owner))) {
+    if (fileInfo && validOwners.some(owner => inspectedSet.has(owner))) {
       codeRowMap.set(row.path, [...new Set(validOwners)].sort());
     }
   }
@@ -2140,12 +2250,14 @@ export function lintLocalHygiene({ root, files = gitFiles(root), promptPaths, te
   for (const prompt of inspectedPrompts) {
     const promptText = promptTexts.get(prompt);
     if (typeof promptText !== 'string') continue;
+    const promptRows = rawRowsByPrompt.get(prompt) ?? [];
+    const claimsProductionCode = promptRows.some(item => item.isCode);
     const ownedCode = (productionCodeByPrompt.get(prompt) ?? []).sort((a, b) => a.path.localeCompare(b.path));
     const misplaced = [];
-    for (const row of rawRowsByPrompt.get(prompt) ?? []) {
-      if (MISPLACED_TEST_OR_CI.test(row.path)) misplaced.push(row.path);
-      else if (MISPLACED_CONFIG.test(row.path)) {
-        if (row.source === 'prose' && ownedCode.length > 0 && readOnlyConfigMention(promptText, row.path)) continue;
+    for (const { row, isMisplacedTest, isConfig } of promptRows) {
+      if (isMisplacedTest) misplaced.push(row.path);
+      else if (isConfig) {
+        if (row.source === 'prose' && claimsProductionCode && readOnlyConfigMention(prompt, promptText, row.path)) continue;
         misplaced.push(row.path);
       }
     }
@@ -2162,28 +2274,39 @@ export function lintLocalHygiene({ root, files = gitFiles(root), promptPaths, te
     }
   }
 
+  const matchedStoryByTest = new Map(
+    matchTests(scopedFiles.filter(isStoryPath), scopedFiles).tests.map(item => [item.path, item.storyPath]),
+  );
   const inspectedTests = tests === undefined
-    ? discoverTests(root, scopedFiles, false, policy, true).tests
+    ? discoverTests(root, scopedFiles, true, policy, true).tests
     : tests.map(entry => {
-      if (typeof entry !== 'string') return entry;
-      const clean = entry.replace(/^\.\//, '');
-      if (!visibleSet.has(clean)) return null;
-      const raw = readSafeText(clean);
+      const rawPath = typeof entry === 'string' ? entry : entry?.path;
+      if (typeof rawPath !== 'string') return null;
+      const clean = rawPath.replace(/^\.\//, '');
+      if (!inspectStrict(clean)) return null;
+      const raw = readStrictText(clean);
       if (!raw) return null;
-      try { const doc = JSON.parse(raw); return { path: clean, storyPath: typeof doc?.story_path === 'string' ? doc.story_path : null, doc }; }
-      catch { return null; }
+      let doc;
+      try { doc = JSON.parse(raw); } catch { return null; }
+      const docStory = typeof doc?.story_path === 'string' && doc.story_path.trim() ? doc.story_path.trim() : null;
+      const storyPath = (isObject(entry) && typeof entry.storyPath === 'string' && entry.storyPath)
+        ? entry.storyPath
+        : (matchedStoryByTest.get(clean) ?? docStory);
+      return { path: clean, storyPath, doc };
     }).filter(Boolean);
 
   for (const testEntry of [...inspectedTests].sort((a, b) => String(a?.path ?? '').localeCompare(String(b?.path ?? '')))) {
-    const steps = Array.isArray(testEntry?.doc?.steps) ? testEntry.doc.steps.length : 0;
+    const doc = testEntry?.doc;
+    if (!isObject(doc) || (Object.hasOwn(doc, 'schema_version') && doc.schema_version !== TEST_SCHEMA)) continue;
+    const steps = Array.isArray(doc.steps) ? doc.steps.length : 0;
     if (steps > STORY_STEP_LIMIT) {
-      const storyLabel = testEntry.storyPath ?? (typeof testEntry.doc?.story_path === 'string' ? testEntry.doc.story_path : testEntry.path);
+      const storyLabel = testEntry.storyPath ?? testEntry.path;
       warnings.push(`Warning: oversized Story: ${storyLabel} (${testEntry.path}) has ${steps} scenario steps (limit: ${STORY_STEP_LIMIT}). Keep Story scenarios focused on behavior boundaries and move long step sequences to code tests.`);
     }
   }
 
   for (const filePath of [...codeRowMap.keys()].sort()) {
-    const sourceText = readSafeText(filePath);
+    const sourceText = readStrictText(filePath);
     if (typeof sourceText !== 'string') continue;
     const owners = codeRowMap.get(filePath);
     for (const hit of scanExcuseComments(sourceText, filePath)) {

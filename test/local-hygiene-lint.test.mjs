@@ -166,3 +166,224 @@ test('excuse comment scanner handles block comments, Python hash comments, and w
   ]);
 });
 
+test('strict boundary skips symlinks, ancestor symlinks, secret paths, and non-visible extra claims', async t => {
+  const { symlinkSync } = await import('node:fs');
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { lintLocalHygiene } = await import('../src/runtime-preflight.mjs');
+
+  const outside = mkdtempSync(join(tmpdir(), 'pdd-hygiene-outside-'));
+  writeFileSync(join(outside, 'leak.mjs'), '// Generated from prompts/app.prompt.md.\n// TODO: OUTSIDE-SYMLINK-LEAK\n');
+  mkdirSync(join(outside, 'nested'), { recursive: true });
+  writeFileSync(join(outside, 'nested', 'mod.mjs'), '// Generated from prompts/app.prompt.md.\n// TODO: ANCESTOR-SYMLINK-LEAK\n');
+  writeFileSync(join(outside, 'bindings.json'), JSON.stringify({
+    schema_version: 'pdd.bindings.v1',
+    modules: [{ module: 'test/bound-via-symlink.test.mjs', prompt: 'prompts/app.prompt.md' }],
+  }));
+
+  const setup = harbor(t, repo => {
+    write(repo, 'prompts/app.prompt.md', withApprovedInterface(
+      '# App\n\nOwns `src/app.mjs`, `src/unlisted.mjs`, `src/direct-link.mjs`, `src/ancestor-link/mod.mjs`, `secrets/key.mjs` and `test/unlisted.test.mjs`.\n\n',
+      'runApp',
+    ));
+    write(repo, 'src/app.mjs', [
+      '// Generated from prompts/app.prompt.md.',
+      'export function runApp({ x }) { return { y: x }; }',
+      '// padding so owned code exceeds prompt prose bytes cleanly without oversized warning: 01234567890123456789012345678901234567890123456789',
+      '',
+    ].join('\n'));
+    write(repo, 'src/unlisted.mjs', '// Generated from prompts/app.prompt.md.\n// TODO: UNLISTED-DISK-LEAK\n');
+    write(repo, 'secrets/key.mjs', '// Generated from prompts/app.prompt.md.\n// TODO: SECRET-PATH-LEAK\n');
+    write(repo, '.env', '# TODO: DOTENV-SECRET-LEAK\n');
+    symlinkSync(join(outside, 'leak.mjs'), join(repo, 'src/direct-link.mjs'));
+    symlinkSync(join(outside, 'nested'), join(repo, 'src/ancestor-link'));
+    symlinkSync(join(outside, 'bindings.json'), join(repo, 'pdd-bindings.json'));
+  });
+
+  // Pass explicit visible files list that omits src/unlisted.mjs while including secret and symlinked entries.
+  const warnings = lintLocalHygiene({
+    root: setup.repo,
+    files: [
+      '.env',
+      'pdd-bindings.json',
+      'prompts/app.prompt.md',
+      'secrets/key.mjs',
+      'src/ancestor-link/mod.mjs',
+      'src/app.mjs',
+      'src/direct-link.mjs',
+    ],
+  });
+
+  const combined = warnings.join('\n');
+  assert.equal(combined.includes('OUTSIDE-SYMLINK-LEAK'), false);
+  assert.equal(combined.includes('ANCESTOR-SYMLINK-LEAK'), false);
+  assert.equal(combined.includes('UNLISTED-DISK-LEAK'), false);
+  assert.equal(combined.includes('SECRET-PATH-LEAK'), false);
+  assert.equal(combined.includes('DOTENV-SECRET-LEAK'), false);
+  assert.equal(combined.includes('bound-via-symlink'), false);
+  // Name-only misplaced test claim is still reported without opening test/unlisted.test.mjs.
+  assert.deepEqual(warnings, [
+    'Warning: misplaced prompt owner: prompts/app.prompt.md claims test/unlisted.test.mjs. Prompts own production modules, not test suites, CI workflows or repository config files.',
+  ]);
+});
+
+test('PR 1 prompt-before-code and opening-sentence config mentions avoid false positives while catching owned configs', async t => {
+  const { lintLocalHygiene } = await import('../src/runtime-preflight.mjs');
+  const setup = harbor(t, repo => {
+    write(repo, 'pdd.json', '{"strict_approvals":false}\n');
+    write(repo, 'package.json', '{"name":"demo"}\n');
+    // PR 1: src/future.mjs does not exist on disk yet; long participle phrase reads pdd.json and package.json.
+    write(repo, 'prompts/pr1.prompt.md', withApprovedInterface(
+      '# Future module\n\nOwns `src/future.mjs`, reading repository strict approval flags, workspace ceiling settings and package metadata from `pdd.json` and `package.json`.\n\n',
+      'futureOp',
+    ));
+    // Participle verbs loading / parsing / inspecting without tight character limit.
+    write(repo, 'prompts/loader.prompt.md', withApprovedInterface(
+      '# Loader\n\nOwns `src/loader.mjs` while loading default compiler flags and module resolution paths defined inside `tsconfig.json`.\n\n',
+      'loadOp',
+    ));
+    write(repo, 'src/loader.mjs', '// Generated from prompts/loader.prompt.md.\nexport const loadOp = () => ({ y: 1 }); // padding 0123456789012345678901234567890123456789012345678901234567890123456789\n');
+    // Sentence 1 claims ownership of tsconfig.json; Sentence 2 says "reads tsconfig.json" — must STILL warn!
+    write(repo, 'prompts/sneaky.prompt.md', withApprovedInterface(
+      '# Sneaky\n\nOwns `src/sneaky.mjs` and `tsconfig.json`. Later at runtime it reads `tsconfig.json`.\n\n',
+      'sneakOp',
+    ));
+    write(repo, 'src/sneaky.mjs', '// Generated from prompts/sneaky.prompt.md.\nexport const sneakOp = () => ({ y: 2 }); // padding 012345678901234567890123456789012345678901234567890123456789\n');
+    // Mixed clause: reads pdd.json, then owns src/mixed.mjs and jsconfig.json — must warn ONLY on jsconfig.json!
+    write(repo, 'prompts/mixed.prompt.md', withApprovedInterface(
+      '# Mixed\n\nReads `pdd.json` and owns `src/mixed.mjs` and `jsconfig.json`.\n\n',
+      'mixOp',
+    ));
+    write(repo, 'src/mixed.mjs', '// Generated from prompts/mixed.prompt.md.\nexport const mixOp = () => ({ y: 3 }); // padding 012345678901234567890123456789012345678901234567890123456789\n');
+  });
+
+  const warnings = lintLocalHygiene({ root: setup.repo });
+  assert.deepEqual(warnings, [
+    'Warning: misplaced prompt owner: prompts/mixed.prompt.md claims jsconfig.json. Prompts own production modules, not test suites, CI workflows or repository config files.',
+    'Warning: misplaced prompt owner: prompts/sneaky.prompt.md claims tsconfig.json. Prompts own production modules, not test suites, CI workflows or repository config files.',
+  ]);
+});
+
+test('excuse comment lexer handles postfix ++/--/! before division, Rust lifetimes, and Go raw strings', async t => {
+  const { lintLocalHygiene } = await import('../src/runtime-preflight.mjs');
+  const setup = harbor(t, repo => {
+    write(repo, 'prompts/polyglot.prompt.md', withApprovedInterface(
+      '# Polyglot\n\nOwns `src/math.ts`, `src/slice.rs` and `src/path.go`.\n\n',
+      'polyOp',
+    ));
+    write(repo, 'src/math.ts', [
+      '// Generated from prompts/polyglot.prompt.md.',
+      'export function compute(count: number, value: number | null, box: { return: number }) {',
+      '  const ok = !/TODO/.test(String(count));',
+      '  const tpl = `${count + 1} // TODO: inside template`;',
+      '  const half = count++ / 2; // TODO: check overflow after increment',
+      '  const quarter = count-- / 4; // FIXME: check underflow after decrement',
+      '  const asserted = value! / 2; // HACK: remove non-null assertion',
+      '  const prop = box.return / 2; // XXX: rename reserved property',
+      '  return { ok, tpl, half, quarter, asserted, prop };',
+      '}',
+      '',
+    ].join('\n'));
+    write(repo, 'src/slice.rs', [
+      '// Generated from prompts/polyglot.prompt.md.',
+      'pub fn borrow<\'a>(input: &\'a str, fallback: &\'static str) -> char {',
+      '    let raw = r#"// TODO: inside rust raw string"#;',
+      '    let _ = (input, fallback, raw, \'\\\'\');',
+      '    \'/\' // TODO: handle empty slice',
+      '}',
+      '',
+    ].join('\n'));
+    write(repo, 'src/path.go', [
+      '// Generated from prompts/polyglot.prompt.md.',
+      'package pathutil',
+      'const winPrefix = `C:\\temp\\${not_js} // TODO: inside go raw string\\`',
+      'func Normalize(n int) int { return n / 2 } // FIXME: normalize volume root',
+      '',
+    ].join('\n'));
+  });
+
+  const warnings = lintLocalHygiene({ root: setup.repo }).filter(line => line.startsWith('Warning: excuse comment'));
+  assert.deepEqual(warnings, [
+    'Warning: excuse comment in src/math.ts:5 (owned by prompts/polyglot.prompt.md): // TODO: check overflow after increment',
+    'Warning: excuse comment in src/math.ts:6 (owned by prompts/polyglot.prompt.md): // FIXME: check underflow after decrement',
+    'Warning: excuse comment in src/math.ts:7 (owned by prompts/polyglot.prompt.md): // HACK: remove non-null assertion',
+    'Warning: excuse comment in src/math.ts:8 (owned by prompts/polyglot.prompt.md): // XXX: rename reserved property',
+    'Warning: excuse comment in src/path.go:4 (owned by prompts/polyglot.prompt.md): // FIXME: normalize volume root',
+    'Warning: excuse comment in src/slice.rs:5 (owned by prompts/polyglot.prompt.md): // TODO: handle empty slice',
+  ]);
+});
+
+test('scoped local lint excludes unselected nested fixtures, preserves filename-matched storyPath, and ignores non-scenario JSON', async t => {
+  const setup = harbor(t, repo => {
+    const prompt = withApprovedInterface('# Draft calc\n\nOwns `src/calc.mjs`.\n\n');
+    write(repo, 'prompts/calc.prompt.md', prompt);
+    write(repo, 'src/calc.mjs', '// Generated from prompts/calc.prompt.md.\nexport const calculate = ({ x }) => ({ y: x * 2 }); // padding 0123456789012345678901234567890123456789\n');
+    write(repo, 'user_stories/calc.md', '# Calculator\n\n## Acceptance criteria\n\n1. Doubling x returns 2x.\n');
+    // Draft scenario test omits both schema_version and story_path; matched to user_stories/calc.md by filename!
+    write(repo, 'tests/calc.json', JSON.stringify({
+      criteria: [{ id: 'AC1', text: 'Doubling x returns 2x.' }],
+      initial_world: {},
+      steps: makeSteps(18),
+    }, null, 2));
+    // Non-scenario vector JSON matching calc.<variant>.json with a 25-item steps array — must NOT trigger oversized Story!
+    write(repo, 'tests/calc.vectors.json', JSON.stringify({
+      schema_version: 'custom.vectors.v1',
+      steps: Array.from({ length: 25 }, (_, i) => ({ case: i })),
+    }, null, 2));
+
+    // Nested fixture project under test/fixtures/nested-app with traps (including claiming root src/calc.mjs!).
+    write(repo, 'test/fixtures/nested-app/prompts/nested.prompt.md', withApprovedInterface(
+      '# Nested fixture\n\nOwns `test/fixtures/nested-app/src/nested.mjs` and `test/nested.test.mjs`.\n\n',
+      'nestedOp',
+    ));
+    write(repo, 'test/fixtures/nested-app/src/nested.mjs', '// TODO: inside nested fixture project\nexport {};\n');
+    write(repo, 'test/fixtures/nested-app/user_stories/nested.md', '# Nested\n\n## Acceptance criteria\n\n1. Nested rule.\n');
+    write(repo, 'test/fixtures/nested-app/tests/nested.json', JSON.stringify({
+      schema_version: 'prompt-runtime.program-scenario.v1',
+      story_path: 'test/fixtures/nested-app/user_stories/nested.md',
+      criteria: [{ id: 'AC1', text: 'Nested rule.' }],
+      initial_world: {},
+      steps: Array.from({ length: 20 }, (_, idx) => ({
+        step_id: `n${idx + 1}`,
+        entry_path: 'test/fixtures/nested-app/prompts/nested.prompt.md',
+        operation: 'nestedOp',
+        input: { x: 1 },
+        checks: [{ criterion_id: 'AC1', target: 'result', path: '/y', op: 'equals', value: 2 }],
+      })),
+    }, null, 2));
+  });
+
+  const env = { HOME: setup.home, PDD_RUNTIME_URL: 'invalid', PDD_STATE_DIR: setup.state };
+  const runLint = async (extra = []) => {
+    const stdout = sink(), stderr = sink();
+    const code = await runPdd(['lint', '--local', ...extra], { cwd: setup.repo, env, stdout, stderr });
+    return { code, out: stdout.text, err: stderr.text };
+  };
+
+  // Unscoped local lint: excludes nested-app, ignores calc.vectors.json, and names user_stories/calc.md for calc.json.
+  const unscoped = await runLint(['--json']);
+  assert.equal(unscoped.code, 0, unscoped.err);
+  const unscopedJson = JSON.parse(unscoped.out);
+  assert.equal(unscopedJson.reason.code, 'local-only');
+  assert.equal(unscopedJson.reason.message, 'checked SVG layout only; prompts not checked');
+  assert.deepEqual(unscopedJson.warnings, [
+    'Warning: oversized Story: user_stories/calc.md (tests/calc.json) has 18 scenario steps (limit: 15). Keep Story scenarios focused on behavior boundaries and move long step sequences to code tests.',
+  ]);
+
+  // Scoped local lint on root Story calc: still excludes nested-app and preserves user_stories/calc.md!
+  const scopedRoot = await runLint(['calc', '--json']);
+  assert.equal(scopedRoot.code, 0, scopedRoot.err);
+  const scopedRootJson = JSON.parse(scopedRoot.out);
+  assert.deepEqual(scopedRootJson.warnings, [
+    'Warning: oversized Story: user_stories/calc.md (tests/calc.json) has 18 scenario steps (limit: 15). Keep Story scenarios focused on behavior boundaries and move long step sequences to code tests.',
+  ]);
+
+  // Explicitly selecting the nested fixture Story inspects that nested fixture root.
+  const scopedFixture = await runLint(['test/fixtures/nested-app/user_stories/nested.md', '--json']);
+  assert.equal(scopedFixture.code, 0, scopedFixture.err);
+  const scopedFixtureJson = JSON.parse(scopedFixture.out);
+  assert.ok(scopedFixtureJson.warnings.some(line => line.includes('test/fixtures/nested-app/user_stories/nested.md')));
+  assert.ok(scopedFixtureJson.warnings.some(line => line.includes('test/fixtures/nested-app/src/nested.mjs:1')));
+});
+
+

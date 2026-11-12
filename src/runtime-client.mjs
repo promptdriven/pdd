@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 9a3fc492621c2c7d6bfa9c1e1c47bcd499921dc1c0243718fb957837e76f12c5).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 0c54dcbc8472e1c88156339ac88d3f1545f72d09769411ff507a60a55d5b26f5).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
