@@ -1,0 +1,401 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/affected-baseline-report.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "After affected Stories A and B pass, a separate baseline report retains Story C's saved failure with its original batch, Check ID, time and report link; it creates no current C result or paid C rerun."
+    },
+    {
+      "id": "AC2",
+      "text": "Baseline history keeps older failures after newer passes or unsent records, distinguishes current, stale and unavailable original-batch source evidence, and shows missing or nonpassing evidence without inventing a pass, defect age or owner."
+    },
+    {
+      "id": "AC3",
+      "text": "An affected command uses its selected results for the process exit status and clearly says it is not a full workflow pass. Saved reads and retries keep the original report snapshot, while all existing full-pass, approval, publication, code, merge and native-suite gates remain blocking."
+    }
+  ],
+  "initial_world": {},
+  "simulation": {},
+  "context": [],
+  "steps": [
+    {
+      "step_id": "keep-original-failure",
+      "entry_path": "prompts/cli/runtime-check-plan.prompt.md",
+      "operation": "baselineReport",
+      "input": {
+        "plan": {
+          "schema_version": "pdd.check-plan.v1",
+          "stories": [
+            {
+              "role": "target",
+              "tests": [
+                "test/runtime/A.json",
+                "test/runtime/A.recorded.json"
+              ]
+            },
+            {
+              "role": "target",
+              "tests": [
+                "test/runtime/B.json"
+              ]
+            },
+            {
+              "role": "baseline",
+              "tests": [
+                "test/runtime/C.json"
+              ]
+            }
+          ]
+        },
+        "observations": [
+          {
+            "story_path": "user_stories/A.md",
+            "test": "test/runtime/A.json",
+            "batch": "synthetic-target-history",
+            "request_id": "00000000-0000-4000-8000-000000000001",
+            "evidence_kind": "receipt",
+            "state": "failed",
+            "reason": {
+              "code": "check-failed",
+              "message": "Synthetic saved failed."
+            },
+            "created_at": "2026-11-01T10:00:00Z",
+            "report_url": "https://runtime.example.test/r/synthetic-original",
+            "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "currentness": "stale",
+            "currentness_scope": "original-batch",
+            "stage": "current"
+          },
+          {
+            "story_path": "user_stories/C.md",
+            "test": "test/runtime/C.json",
+            "batch": "synthetic-batch-old",
+            "request_id": "00000000-0000-4000-8000-000000000001",
+            "evidence_kind": "receipt",
+            "state": "failed",
+            "reason": {
+              "code": "check-failed",
+              "message": "Synthetic saved failed."
+            },
+            "created_at": "2026-11-01T10:00:00Z",
+            "report_url": "https://runtime.example.test/r/synthetic-original",
+            "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "currentness": "stale",
+            "currentness_scope": "original-batch",
+            "stage": "current"
+          },
+          {
+            "story_path": "user_stories/C.md",
+            "test": "test/runtime/C.json",
+            "batch": "synthetic-batch-new",
+            "request_id": "00000000-0000-4000-8000-000000000002",
+            "evidence_kind": "receipt",
+            "state": "passed",
+            "reason": null,
+            "created_at": "2026-11-01T10:00:00Z",
+            "report_url": "https://runtime.example.test/r/synthetic-original",
+            "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "currentness": "current",
+            "currentness_scope": "original-batch",
+            "stage": "current"
+          },
+          {
+            "story_path": "user_stories/C.md",
+            "test": "test/runtime/C.json",
+            "batch": "synthetic-unsent",
+            "request_id": null,
+            "evidence_kind": "local",
+            "state": "not run",
+            "reason": {
+              "code": "no-server-verdict",
+              "message": "Synthetic saved not run."
+            },
+            "created_at": "2026-11-01T10:00:00Z",
+            "report_url": null,
+            "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "currentness": "unavailable",
+            "currentness_scope": "original-batch",
+            "stage": "current"
+          }
+        ],
+        "availability": "available",
+        "warnings": []
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/tests",
+          "op": "equals",
+          "value": [
+            "test/runtime/C.json"
+          ]
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/observations/0",
+          "op": "equals",
+          "value": {
+            "story_path": "user_stories/C.md",
+            "test": "test/runtime/C.json",
+            "batch": "synthetic-batch-old",
+            "request_id": "00000000-0000-4000-8000-000000000001",
+            "evidence_kind": "receipt",
+            "state": "failed",
+            "reason": {
+              "code": "check-failed",
+              "message": "Synthetic saved failed."
+            },
+            "created_at": "2026-11-01T10:00:00Z",
+            "report_url": "https://runtime.example.test/r/synthetic-original",
+            "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "currentness": "stale",
+            "currentness_scope": "original-batch",
+            "stage": "current"
+          }
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/observations",
+          "op": "equals",
+          "value": [
+            {
+              "story_path": "user_stories/C.md",
+              "test": "test/runtime/C.json",
+              "batch": "synthetic-batch-old",
+              "request_id": "00000000-0000-4000-8000-000000000001",
+              "evidence_kind": "receipt",
+              "state": "failed",
+              "reason": {
+                "code": "check-failed",
+                "message": "Synthetic saved failed."
+              },
+              "created_at": "2026-11-01T10:00:00Z",
+              "report_url": "https://runtime.example.test/r/synthetic-original",
+              "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "currentness": "stale",
+              "currentness_scope": "original-batch",
+              "stage": "current"
+            },
+            {
+              "story_path": "user_stories/C.md",
+              "test": "test/runtime/C.json",
+              "batch": "synthetic-batch-new",
+              "request_id": "00000000-0000-4000-8000-000000000002",
+              "evidence_kind": "receipt",
+              "state": "passed",
+              "reason": null,
+              "created_at": "2026-11-01T10:00:00Z",
+              "report_url": "https://runtime.example.test/r/synthetic-original",
+              "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "currentness": "current",
+              "currentness_scope": "original-batch",
+              "stage": "current"
+            },
+            {
+              "story_path": "user_stories/C.md",
+              "test": "test/runtime/C.json",
+              "batch": "synthetic-unsent",
+              "request_id": null,
+              "evidence_kind": "local",
+              "state": "not run",
+              "reason": {
+                "code": "no-server-verdict",
+                "message": "Synthetic saved not run."
+              },
+              "created_at": "2026-11-01T10:00:00Z",
+              "report_url": null,
+              "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "currentness": "unavailable",
+              "currentness_scope": "original-batch",
+              "stage": "current"
+            }
+          ]
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/missing_tests",
+          "op": "equals",
+          "value": []
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "nonpassing-and-missing",
+      "entry_path": "prompts/cli/runtime-check-plan.prompt.md",
+      "operation": "baselineReport",
+      "input": {
+        "plan": {
+          "schema_version": "pdd.check-plan.v1",
+          "stories": [
+            {
+              "role": "baseline",
+              "tests": [
+                "test/runtime/C.json",
+                "test/runtime/D.json"
+              ]
+            }
+          ]
+        },
+        "observations": [
+          {
+            "story_path": "user_stories/C.md",
+            "test": "test/runtime/C.json",
+            "batch": "synthetic-batch-old",
+            "request_id": "00000000-0000-4000-8000-000000000001",
+            "evidence_kind": "receipt",
+            "state": "refused",
+            "reason": {
+              "code": "no-server-verdict",
+              "message": "Synthetic saved refused."
+            },
+            "created_at": "2026-11-01T10:00:00Z",
+            "report_url": "https://runtime.example.test/r/synthetic-original",
+            "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "currentness": "unavailable",
+            "currentness_scope": "original-batch",
+            "stage": "current"
+          },
+          {
+            "story_path": "user_stories/C.md",
+            "test": "test/runtime/C.json",
+            "batch": "synthetic-partial",
+            "request_id": "00000000-0000-4000-8000-000000000003",
+            "evidence_kind": "receipt",
+            "state": "partial",
+            "reason": {
+              "code": "no-server-verdict",
+              "message": "Synthetic saved partial."
+            },
+            "created_at": "2026-11-01T10:00:00Z",
+            "report_url": "https://runtime.example.test/r/synthetic-original",
+            "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "currentness": "current",
+            "currentness_scope": "original-batch",
+            "stage": "current"
+          }
+        ],
+        "availability": "partial",
+        "warnings": [
+          "Synthetic unreadable batch; history is incomplete."
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/observations/0/state",
+          "op": "equals",
+          "value": "refused"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/observations/1/state",
+          "op": "equals",
+          "value": "partial"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/missing_tests",
+          "op": "equals",
+          "value": [
+            "test/runtime/D.json"
+          ]
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/availability",
+          "op": "equals",
+          "value": "partial"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/warnings",
+          "op": "equals",
+          "value": [
+            "Synthetic unreadable batch; history is incomplete."
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "unavailable-is-not-success",
+      "entry_path": "prompts/cli/runtime-check-plan.prompt.md",
+      "operation": "baselineReport",
+      "input": {
+        "plan": {
+          "schema_version": "pdd.check-plan.v1",
+          "stories": [
+            {
+              "role": "target",
+              "tests": [
+                "test/runtime/A.json",
+                "test/runtime/A.recorded.json"
+              ]
+            },
+            {
+              "role": "target",
+              "tests": [
+                "test/runtime/B.json"
+              ]
+            },
+            {
+              "role": "baseline",
+              "tests": [
+                "test/runtime/C.json"
+              ]
+            }
+          ]
+        },
+        "observations": [],
+        "availability": "unavailable",
+        "warnings": [
+          "Synthetic history unavailable."
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/schema_version",
+          "op": "equals",
+          "value": "pdd.baseline-report.v1"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/availability",
+          "op": "equals",
+          "value": "unavailable"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/observations",
+          "op": "equals",
+          "value": []
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/missing_tests",
+          "op": "equals",
+          "value": [
+            "test/runtime/C.json"
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}
