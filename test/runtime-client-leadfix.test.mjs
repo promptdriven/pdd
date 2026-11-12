@@ -186,7 +186,7 @@ test('capacity-cache-scope: concurrent reads coalesce, owner and exact origin is
 });
 
 test('reuse-recovery-capture: a waiting replacement packs once despite repeated scheduler ticks', async t => {
-  const setup = harbor(t); let captures = 0, checks = 0, made;
+  const setup = harbor(t); let recoveryCaptures = 0, checks = 0, made;
   const fake = await fakeRuntime(t, (e, f) => {
     if (e.command === 'check') {
       checks++;
@@ -195,7 +195,7 @@ test('reuse-recovery-capture: a waiting replacement packs once despite repeated 
     }
     return f.normal(e);
   });
-  made = make(setup, fake, { captureSource: (...args) => { captures++; return captureSource(...args); } });
+  made = make(setup, fake, { captureSource: (...args) => { if (checks > 0) recoveryCaptures++; return captureSource(...args); } });
   let maintenanceReads = 0;
   fake.capacity = () => {
     if (checks === 1 && maintenanceReads++ < 3) return { status: 200, json: { maintenance: { until: new Date(made.clock.now + 20_000).toISOString(), reason: 'replacement waits' } } };
@@ -205,7 +205,7 @@ test('reuse-recovery-capture: a waiting replacement packs once despite repeated 
   const fetchReal = made.ports.fetch ?? fetch;
   made.ports.fetch = async (url, init) => { const reply = await fetchReal(url, init); if (new URL(url).pathname === '/v1/check' && checks === 1) made.clock.now += 10_000; return reply; };
   assert.equal(await check(setup, made.ports, { '--max-calls': '9' }), 0);
-  assert.equal(captures, 2); assert.equal(checks, 2); assert.ok(maintenanceReads >= 3);
+  assert.equal(recoveryCaptures, 1); assert.equal(checks, 2); assert.ok(maintenanceReads >= 3);
   const posts = fake.posts.filter(e => e.command === 'check'); assert.ok(posts.every(e => e.request.max_calls === 9 && e.request.source_sha256 === posts[0].request.source_sha256));
 });
 

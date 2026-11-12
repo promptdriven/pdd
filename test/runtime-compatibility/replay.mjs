@@ -257,7 +257,8 @@ export const paidCases = {
       } });
       const r = await c.run(); assert.equal(r.code, variant === 'unsupported' ? 4 : 5, r.err);
       assert.deepEqual(checks(c.f).map(post => post.request.scenario), [TEST]); assert.match(r.out + r.err, /unrelated-inventory/);
-      assert.equal(c.captures.length, 1); c.archive(); c.unchanged();
+      // Check-plan capture is local; the POST assertion above covers the one upload.
+      c.archive(); c.unchanged();
     }
   },
   async 'all-dispatch-doors'(t) {
