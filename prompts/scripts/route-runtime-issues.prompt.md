@@ -128,6 +128,6 @@ classification quality. No product module is required.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"partial","status":"draft","prose_sha256":"c54200c556c02559290f8e736b4b39e325e3a616d158c46b665fe7449ede104a","entries":[{"operation":"parseClassification","input_schema":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ownership":{"type":"string","enum":["runtime","pdd","uncertain"]},"reason":{"type":"string","minLength":1,"maxLength":300}},"required":["ownership","reason"],"additionalProperties":false},"errors":["Invalid classifier response"]}],"calls":[],"resources":[],"limits":{"max_steps":2,"max_model_calls":1},"conventions":[]}
+{"kind":"partial","status":"draft","prose_sha256":"","entries":[{"operation":"parseClassification","input_schema":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ownership":{"type":"string","enum":["runtime","pdd","uncertain"]},"reason":{"type":"string","minLength":1,"maxLength":300}},"required":["ownership","reason"],"additionalProperties":false},"errors":["Invalid classifier response"]}],"calls":[],"resources":[],"limits":{"max_steps":2,"max_model_calls":1},"conventions":[]}
 ```
 </details>

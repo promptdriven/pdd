@@ -38,6 +38,6 @@ invalid JSON returns false. Native callers use the object signature above.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"draft","prose_sha256":"c43ecf5d546c39f680c5860f2ffb9fbcc680d566a81a1b0421b5f7129c708029","entries":[{"operation":"isRecentLintReceipt","input_schema":{"type":"object","properties":{"receipt_json":{"type":"string"},"scope_json":{"type":"string"},"now":{"type":"number"},"engineSha":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["receipt_json","scope_json","now","engineSha"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"eligible":{"type":"boolean"}},"required":["eligible"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":4},"conventions":[]}
+{"status":"draft","prose_sha256":"","entries":[{"operation":"isRecentLintReceipt","input_schema":{"type":"object","properties":{"receipt_json":{"type":"string"},"scope_json":{"type":"string"},"now":{"type":"number"},"engineSha":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["receipt_json","scope_json","now","engineSha"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"eligible":{"type":"boolean"}},"required":["eligible"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":4},"conventions":[]}
 ```
 </details>

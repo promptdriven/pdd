@@ -18,7 +18,7 @@ None; ECMAScript arithmetic and string operations suffice.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"partial","status":"draft","prose_sha256":"51a2b3c951d9a6ad5e7055599e57f08d63f8008784cc370f8e44589f46ac1fa8","entries":[{"operation":"clamp","input_schema":{"type":"object","properties":{"value":{"type":"number"},"min":{"type":"number"},"max":{"type":"number"}},"required":["value","min","max"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"value":{"type":"number"}},"required":["value"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":2,"max_model_calls":0},"conventions":["Partial clamp contract only; native tests cover the other helpers."]}
+{"kind":"partial","status":"draft","prose_sha256":"","entries":[{"operation":"clamp","input_schema":{"type":"object","properties":{"value":{"type":"number"},"min":{"type":"number"},"max":{"type":"number"}},"required":["value","min","max"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"value":{"type":"number"}},"required":["value"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":2,"max_model_calls":0},"conventions":["Partial clamp contract only; native tests cover the other helpers."]}
 ```
 
 </details>
