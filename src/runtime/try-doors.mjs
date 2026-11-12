@@ -229,4 +229,3 @@ export async function saveLast({ root, store, identity, ports }) {
   if (last.inputWorld && Object.keys(last.inputWorld).length) ports.stdout.write('This records observed output. Review the saved-data setup before replaying this case.\n');
   return 0;
 }
-
