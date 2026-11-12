@@ -1,0 +1,293 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/bug-cause-relations.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "A reproduced bug records the file, function, flaw, class and explicit relations with exact evidence quotes; no discovered relations is recorded as an empty list."
+    },
+    {
+      "id": "AC2",
+      "text": "A quote absent from the named issue or code is refused before any GitHub link is written."
+    },
+    {
+      "id": "AC3",
+      "text": "Only explicitly selected relations write links: needs can block the current issue, same class can put it under an existing Class parent, and duplicate can mark the duplicate; shared cause alone creates no dependency."
+    }
+  ],
+  "initial_world": {
+    "links": [],
+    "counters": {
+      "code.read": 0,
+      "issues.read": 0
+    }
+  },
+  "simulation": {
+    "code.read": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/code.read",
+      "cases": [
+        {
+          "args": {
+            "root": "/repo",
+            "path": "value.mjs"
+          },
+          "call_index": 1,
+          "result": {
+            "content": "export const value = 1;"
+          }
+        },
+        {
+          "args": {
+            "root": "/repo",
+            "path": "value.mjs"
+          },
+          "call_index": 2,
+          "result": {
+            "content": "export const value = 1;"
+          }
+        },
+        {
+          "args": {
+            "root": "/repo",
+            "path": "value.mjs"
+          },
+          "call_index": 3,
+          "result": {
+            "content": "export const value = 1;"
+          }
+        },
+        {
+          "args": {
+            "root": "/repo",
+            "path": "value.mjs"
+          },
+          "call_index": 4,
+          "result": {
+            "content": "export const value = 1;"
+          }
+        },
+        {
+          "args": {
+            "root": "/repo",
+            "path": "value.mjs"
+          },
+          "call_index": 5,
+          "result": {
+            "content": "export const value = 1;"
+          }
+        },
+        {
+          "args": {
+            "root": "/repo",
+            "path": "value.mjs"
+          },
+          "call_index": 6,
+          "result": {
+            "content": "export const value = 1;"
+          }
+        },
+        {
+          "args": {
+            "root": "/repo",
+            "path": "value.mjs"
+          },
+          "call_index": 7,
+          "result": {
+            "content": "export const value = 1;"
+          }
+        },
+        {
+          "args": {
+            "root": "/repo",
+            "path": "value.mjs"
+          },
+          "call_index": 8,
+          "result": {
+            "content": "export const value = 1;"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "issues.read": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/issues.read",
+      "cases": [
+        {
+          "args": {
+            "repository": "a/b",
+            "number": 18
+          },
+          "call_index": 1,
+          "result": {
+            "json": "{\"number\": 18, \"id\": 180, \"node_id\": \"I_18\", \"state\": \"open\", \"title\": \"Wrong value\", \"body\": \"Value is fixed.\"}"
+          }
+        },
+        {
+          "args": {
+            "repository": "a/b",
+            "number": 18
+          },
+          "call_index": 2,
+          "result": {
+            "json": "{\"number\": 18, \"id\": 180, \"node_id\": \"I_18\", \"state\": \"open\", \"title\": \"Wrong value\", \"body\": \"Value is fixed.\"}"
+          }
+        },
+        {
+          "args": {
+            "repository": "a/b",
+            "number": 18
+          },
+          "call_index": 3,
+          "result": {
+            "json": "{\"number\": 18, \"id\": 180, \"node_id\": \"I_18\", \"state\": \"open\", \"title\": \"Wrong value\", \"body\": \"Value is fixed.\"}"
+          }
+        },
+        {
+          "args": {
+            "repository": "a/b",
+            "number": 18
+          },
+          "call_index": 4,
+          "result": {
+            "json": "{\"number\": 18, \"id\": 180, \"node_id\": \"I_18\", \"state\": \"open\", \"title\": \"Wrong value\", \"body\": \"Value is fixed.\"}"
+          }
+        },
+        {
+          "args": {
+            "repository": "a/b",
+            "number": 18
+          },
+          "call_index": 5,
+          "result": {
+            "json": "{\"number\": 18, \"id\": 180, \"node_id\": \"I_18\", \"state\": \"open\", \"title\": \"Wrong value\", \"body\": \"Value is fixed.\"}"
+          }
+        },
+        {
+          "args": {
+            "repository": "a/b",
+            "number": 18
+          },
+          "call_index": 6,
+          "result": {
+            "json": "{\"number\": 18, \"id\": 180, \"node_id\": \"I_18\", \"state\": \"open\", \"title\": \"Wrong value\", \"body\": \"Value is fixed.\"}"
+          }
+        },
+        {
+          "args": {
+            "repository": "a/b",
+            "number": 18
+          },
+          "call_index": 7,
+          "result": {
+            "json": "{\"number\": 18, \"id\": 180, \"node_id\": \"I_18\", \"state\": \"open\", \"title\": \"Wrong value\", \"body\": \"Value is fixed.\"}"
+          }
+        },
+        {
+          "args": {
+            "repository": "a/b",
+            "number": 18
+          },
+          "call_index": 8,
+          "result": {
+            "json": "{\"number\": 18, \"id\": 180, \"node_id\": \"I_18\", \"state\": \"open\", \"title\": \"Wrong value\", \"body\": \"Value is fixed.\"}"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "links.ensure": {
+      "action": "port.write",
+      "world_pointer": "/links",
+      "result_template": {
+        "ok": true
+      }
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "record-empty-relations",
+      "entry_path": "prompts/cli/workflow-bug-cause.prompt.md",
+      "operation": "recordBugCause",
+      "input": {
+        "text": "Cause: value.mjs#value · Flaw: The value is fixed at one. · Class: fixed value\nRelations: []",
+        "repository": "a/b",
+        "number": 17,
+        "root": "/repo"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/json",
+          "op": "equals",
+          "value": "{\"file\":\"value.mjs\",\"function\":\"value\",\"flaw\":\"The value is fixed at one.\",\"class\":\"fixed value\",\"relations\":[],\"causeLine\":\"Cause: value.mjs#value · Flaw: The value is fixed at one. · Class: fixed value\",\"relationsLine\":\"Relations: []\"}"
+        }
+      ]
+    },
+    {
+      "step_id": "reject-invented-quote",
+      "entry_path": "prompts/cli/workflow-bug-cause.prompt.md",
+      "operation": "recordBugCause",
+      "input": {
+        "text": "Cause: value.mjs#value · Flaw: The value is fixed at one. · Class: fixed value\nRelations: [{\"issue\":18,\"kind\":\"needs\",\"source\":\"issue:18\",\"quote\":\"Invented quote\",\"link\":\"blocked by\"}]",
+        "repository": "a/b",
+        "number": 17,
+        "root": "/repo"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "bug-cause-invalid"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/links",
+          "op": "equals",
+          "value": []
+        }
+      ],
+      "expected_error": "bug-cause-invalid"
+    },
+    {
+      "step_id": "explicit-blocker",
+      "entry_path": "prompts/cli/workflow-bug-cause.prompt.md",
+      "operation": "recordBugCause",
+      "input": {
+        "text": "Cause: value.mjs#value · Flaw: The value is fixed at one. · Class: fixed value\nRelations: [{\"issue\":18,\"kind\":\"needs\",\"source\":\"issue:18\",\"quote\":\"Value is fixed.\",\"link\":\"blocked by\"}]",
+        "repository": "a/b",
+        "number": 17,
+        "root": "/repo"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/json",
+          "op": "equals",
+          "value": "{\"file\":\"value.mjs\",\"function\":\"value\",\"flaw\":\"The value is fixed at one.\",\"class\":\"fixed value\",\"relations\":[{\"issue\":18,\"kind\":\"needs\",\"source\":\"issue:18\",\"quote\":\"Value is fixed.\",\"link\":\"blocked by\"}],\"causeLine\":\"Cause: value.mjs#value · Flaw: The value is fixed at one. · Class: fixed value\",\"relationsLine\":\"Relations: [{\\\"issue\\\":18,\\\"kind\\\":\\\"needs\\\",\\\"source\\\":\\\"issue:18\\\",\\\"quote\\\":\\\"Value is fixed.\\\",\\\"link\\\":\\\"blocked by\\\"}]\"}"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "world",
+          "path": "/links/0",
+          "op": "equals",
+          "value": {
+            "repository": "a/b",
+            "number": 17,
+            "target": 18,
+            "kind": "blocked by"
+          }
+        }
+      ]
+    }
+  ]
+}

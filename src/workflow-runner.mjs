@@ -1,3 +1,4 @@
+import { recordBugCause } from './workflow-bug-cause.mjs';
 import {routeQuestionFor, idleParkingBlocker, idleSince, interpreterWaitFor, blockerFor} from './autopilot-parking.mjs';
 import { selectAutopilotBase } from './autopilot-base.mjs';
 import { runTestSuite, readSuiteProgress, suiteStatusWords } from './test-suite-queue.mjs';
@@ -8,7 +9,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 735cce86b6758d8f4981921304db1245e650784b36a2297af5f7b80d5e9670be).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: de77aa929765fb52bf178b9996f1f56b8abc931079ddf84a2f2b0bdf3e4b8f5e).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -1426,6 +1427,7 @@ async function matchingPromptApprovals(run, p) {
 }
 async function publicationEvidence(run, area, p) {
   const saved = { runId: run.runId, ...(Number.isFinite(run.startedAt) ? { startedAt: run.startedAt } : {}), runDir: run.runDir, root: run.root, baseSha: run.baseSha, baseBranch:run.baseBranch, workflow:run.workflow, number: run.number,
+    bugCause: run.done.reproduce?.bugCause,
     decisions: run.decisions ?? [], promptApprovals: await matchingPromptApprovals(run, p),
     steps: run.areas.flatMap(item => item.steps).map(step => ({ step, summary: run.done[step]?.summary ?? '' })) };
   let observedHead, observedProof;
@@ -2885,6 +2887,18 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
     ...(reason === null ? {} : { skipped: { reason } }), ...(PROOF_STEPS.includes(step) ? { pddResults: ownResults(run, p) } : {}),
     ...(typeof worktree === 'string' ? { worktreeSha256: worktree } : {}),
     ...(source ? { integrationSource: source } : {}), ...(integration ? { integration } : {}) };
+  if (run.workflow === 'bug' && step === 'reproduce' && reason === null) {
+    try {
+      const note = join(run.runDir, 'reproduce.md');
+      let text = record.summary;
+      try {
+        if (!lstatSync(note).isFile()) throw Object.assign(Error('reproduce.md must be a regular file.'), { code: 'bug-cause-invalid' });
+        text = readFileSync(note, 'utf8');
+      } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      const result = await recordBugCause({ text, repository: run.repo, number: run.number, root: run.root }, p);
+      if (result.json) record.bugCause = JSON.parse(result.json);
+    } catch (error) { return fail(`${error.code ?? 'bug-cause-unavailable'}: ${error.message}`); }
+  }
   if (PROOF_STEPS.includes(step) && reason === null) {
     const usable = record.pddResults.some(usableResult), shown = usable || !record.pddResults.length ? resultLines(record.pddResults) : [...resultLines(record.pddResults), noResultLine()];
     lines.push(...(usable ? ['pdd recorded its own results with this step:'] : ['warning: pdd has no result of its own for this run yet. pdd recorded the step with the label "no pdd result".']), ...shown,
