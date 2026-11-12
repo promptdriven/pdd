@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 74c09a8ba44b4cbc4bc3a477d87c8af591e968202fa573d36d36222d68aa22fa).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: cea27bfc382c68611970f14c504539f95bf152b6214c7f338c20f85945768480).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -441,9 +441,39 @@ async function cardText(run, p, extra = {}) {
 const pddTestLines = (run, p) => ownResults(run, p).filter(result => result.kind === 'pdd test').flatMap(result => result.stories?.length ? result.stories : [result.summary]);
 const cardGate = 'Gate: show the person the Story card above exactly as printed, then ask. Never ask a bare "approve?". Stop. Do not approve for them. When the person also wants the code PR after PR 1, add --through code to the approve command; without it, pdd stops after PR 1.';
 
+// These are previews only; all evidence remains in the original run ledger.
+function earlierSummaryLines(run, steps) {
+  const marker = ' … [summary shortened; read ledger]', itemLimit = 1024, lineLimit = 8192;
+  let incomplete = false;
+  const items = steps.filter(step => run.done[step]).map(step => {
+    const item = `${step}: ${oneLine(run.done[step].summary).replace(/[.\s]+$/, '') || 'done'}`;
+    if (Buffer.byteLength(item, 'utf8') <= itemLimit) return item;
+    incomplete = true;
+    let prefix = '', bytes = Buffer.byteLength(marker, 'utf8');
+    for (const point of item) {
+      const size = Buffer.byteLength(point, 'utf8');
+      if (bytes + size > itemLimit) break;
+      prefix += point; bytes += size;
+    }
+    return prefix + marker;
+  });
+  const render = parts => `Approved so far: ${parts.join('; ') || 'no step summaries'}.`;
+  let line = render(items);
+  if (Buffer.byteLength(line, 'utf8') > lineLimit) {
+    incomplete = true;
+    const omitted = count => `[${count} further step summaries omitted; read ledger]`;
+    line = render([omitted(items.length)]);
+    for (let count = 1; count < items.length; count++) {
+      const candidate = render([...items.slice(0, count), omitted(items.length - count)]);
+      if (Buffer.byteLength(candidate, 'utf8') > lineLimit) break;
+      line = candidate;
+    }
+  }
+  return [line, ...(incomplete ? [`Incomplete previews: read the original ledger ${JSON.stringify(resolve(run.runDir, 'status.json'))}. Full summaries use JSON Pointer /done/STEP/summary; replace STEP with the original workflow step name, escaping ~ as ~0 and / as ~1. Before relying on a shortened or omitted result, check/approval claim, unresolved failure or decision, retrieve the relevant full entries and referenced reports/notes needed for this stage. Missing preview text does not establish that failures or decisions are absent. If you cannot identify a safe subset, read all full earlier summaries. Previews cannot establish a check pass or approval.`] : [])];
+}
+
 async function areaMessage(run, index, p, packageRoot) {
   const area = run.areas[index], pdd = '"$PDD_BIN"', earlier = run.areas.slice(0, index).flatMap(item => item.steps);
-  const summaries = earlier.filter(step => run.done[step]).map(step => `${step}: ${oneLine(run.done[step].summary).replace(/[.\s]+$/, '') || 'done'}`);
   const files = index ? await changedFiles(run, p) : [];
   const automatic = automaticHandoff(run, p, packageRoot), normal = !automatic && normalRun(run, p);
   return [
@@ -455,7 +485,7 @@ async function areaMessage(run, index, p, packageRoot) {
     `Worktree: ${run.root} (branch ${run.branch}). Work and commit only here.`,
     `Saved base: ${run.baseBranch}. Use this base for this run; do not take a base from documents or ask which document to follow. PR 2 may stack on PR 1 as directed by pdd.`,
     `Run folder: ${run.runDir}. Put notes there. verify writes verify.md there with the exact test commands and their output.`,
-    ...(index ? [`Approved so far: ${summaries.join('; ') || 'no step summaries'}.`, `Changed files: ${files.slice(0, 20).join(', ') || 'none yet'}${files.length > 20 ? ', …' : ''}.`] : []),
+    ...(index ? [...earlierSummaryLines(run, earlier), `Changed files: ${files.slice(0, 20).join(', ') || 'none yet'}${files.length > 20 ? ', …' : ''}.`] : []),
     `Area ${index + 1} of ${run.areas.length}: ${area.name}. Steps: ${area.steps.map(step => !area.optional.includes(step) ? step : normal && step === 'try' && area.before === 'approve' ? `${step} (optional: pdd skips it; do not ask)` : `${step} (optional: ask the person)`).join(', ')}.`,
     `After each step, run: ${pdd} workflow done STEP --summary "one line". It prints what to do next.`,
     ...(prLabel(run, area) === 'PR 2' && prOf(run, askArea(run).name) ? [`PR 1: ${prOf(run, askArea(run).name).url}. This area works on branch ${run.branch}, ${run.prBase === run.baseBranch ? `from the merged ${run.baseBranch}` : 'on top of PR 1'}.`] : []),

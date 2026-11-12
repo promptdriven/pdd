@@ -1193,11 +1193,15 @@ whether a job may ask a person about a choice. Autopilot decides when at least o
 reasonable fix solves the problem and breaks nothing that people use today, and lists
 it in the PR under "Choices Autopilot made", with its reason and "(changes public
 behavior: …)" when users see a change. A bug fix or a small change never asks about a
-choice. With `ask`, a job may ask one plain question with 2 or 3 options and a
-recommended one (you answer with one letter) only when every reasonable fix breaks
-something people use today, or for a product-direction decision of a feature (whether
-a feature should exist, two different designs, removing a feature, a core contract,
-security, privacy, data policy, or cost); `decide`, the default for now, asks no choice
+choice. With `ask`, routine compatible choices of command syntax, options or data
+representation are agent decisions when a safe, low-surprise choice exists. Preserve
+existing APIs, defaults and behavior unless the request authorizes a change. Several
+valid designs alone are not a reason to ask. A job may ask one plain question with 2
+or 3 options and a recommended one (you answer with one letter) only when every
+reasonable fix breaks something people use today, or, in a pdd-feature run, when the
+choice actually changes product direction: whether a new feature area or capability
+should exist, removing a feature, an on-purpose change to a core contract, security,
+privacy, data policy, or cost; `decide`, the default for now, asks no choice
 question and lists big choices marked "(big)". In both modes a blocker asks: missing
 access or a secret, an issue that contradicts itself, work that cannot be done, a
 change against a person's answer to an earlier question, and a change of what blocks
