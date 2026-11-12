@@ -7,11 +7,13 @@ import { findTests, preflight, proseSha256 } from '../src/runtime-preflight.mjs'
 const bin = join(process.cwd(), 'bin/pdd.mjs');
 const roots = [];
 after(() => { for (const root of roots) rmSync(root,{recursive:true,force:true}); });
-function project({ resources = [], expected = 'hello\n', implementation = {kind:'cli',command:'node app.mjs'}, story = '1. A result.', change = () => {}, app = "process.stdin.setEncoding('utf8');let s='';for await (const c of process.stdin) s+=c;process.stdout.write(process.argv[2]+s);\n" } = {}) {
+function project({ resources = [], expected = 'hello\n', implementation = {kind:'cli',command:'node app.mjs'}, story = '1. A result.', change = () => {}, interfaceChange = () => {}, app = "process.stdin.setEncoding('utf8');let s='';for await (const c of process.stdin) s+=c;process.stdout.write(process.argv[2]+s);\n" } = {}) {
  const root=mkdtempSync(join(process.cwd(),'.compiled-test-')); roots.push(root); spawnSync('git',['init','-q',root]);
  for(const d of ['prompts','tests','user_stories']) mkdirSync(join(root,d));
  writeFileSync(join(root,'app.mjs'),app);
- const prompt = '# app\n\n<details><summary>Runtime interface</summary>\n\n```json\n'+JSON.stringify({status:'draft',prose_sha256:'HASH',entries:[{operation:'main',implementation,input_schema:{type:'object',properties:{argv:{type:'array',items:{type:'string'}},stdin:{type:'string'}},required:['argv'],additionalProperties:false},result_schema:{type:'object',properties:{stdout:{type:'string'},stderr:{type:'string'},exit_code:{type:'integer'}},required:['stdout','stderr','exit_code'],additionalProperties:false},errors:['bad-input']}],resources,conventions:[{path:'/entries/0/input_schema',convention:'cli'},{path:'/entries/0/result_schema',convention:'cli'}],calls:[],limits:{max_steps:4,max_model_calls:2}})+'\n```\n</details>\n'; writeFileSync(join(root,'prompts/app.prompt.md'),prompt.replace('HASH',proseSha256(prompt)));
+ const iface = {status:'draft',prose_sha256:'HASH',entries:[{operation:'main',implementation,input_schema:{type:'object',properties:{argv:{type:'array',items:{type:'string'}},stdin:{type:'string'}},required:['argv'],additionalProperties:false},result_schema:{type:'object',properties:{stdout:{type:'string'},stderr:{type:'string'},exit_code:{type:'integer'}},required:['stdout','stderr','exit_code'],additionalProperties:false},errors:['bad-input']}],resources,conventions:[{path:'/entries/0/input_schema',convention:'cli'},{path:'/entries/0/result_schema',convention:'cli'}],calls:[],limits:{max_steps:4,max_model_calls:2}};
+ interfaceChange(iface);
+ const prompt = '# app\n\n<details><summary>Runtime interface</summary>\n\n```json\n'+JSON.stringify(iface)+'\n```\n</details>\n'; writeFileSync(join(root,'prompts/app.prompt.md'),prompt.replace('HASH',proseSha256(prompt)));
  writeFileSync(join(root,'user_stories/demo.md'),'# Demo\n\n## Acceptance criteria\n\n'+story+'\n');
  const doc={schema_version:'prompt-runtime.program-scenario.v1',story_path:'user_stories/demo.md',criteria:[{id:'AC1',text:'A result.'}],initial_world:{},simulation:{},context:[],steps:[{step_id:'one',entry_path:'prompts/app.prompt.md',operation:'main',input:{argv:['hello'],stdin:'\n'},checks:[{criterion_id:'AC1',target:'result',path:'/stdout',op:'equals',value:expected},{criterion_id:'AC1',target:'result',path:'/exit_code',op:'equals',value:0},{criterion_id:'AC1',target:'result',path:'/stderr',op:'equals',value:''}]}]};
  change(doc); writeFileSync(join(root,'tests/demo.json'),JSON.stringify(doc));
@@ -143,4 +145,26 @@ test('malformed world and simulation containers never execute or save a pass',()
   assert.equal(JSON.parse(readFileSync(join(root,'.pdd/code-test/latest.json'),'utf8')).stories[0].status,'not run',field);
  }
  for(const change of [d=>{delete d.simulation;},d=>{d.steps[0].simulation_overrides={};}]) assert.equal(selected(project({change}),'demo').status,0);
+});
+
+test('malformed CLI interfaces never launch or save a pass',()=>{
+ const app="import {writeFileSync} from 'node:fs';writeFileSync('EXECUTED','yes');process.stdout.write('hello\\n');";
+ const cases=[
+  ['resources object',i=>{i.resources={name:'db',kind:'port'};}],
+  ['calls object',i=>{i.calls={operation:'helper',target:'prompts/helper.prompt.md'};}],
+  ...['resources','calls'].flatMap(field=>[null,false,42,'bad',{}].map(value=>[`${field} ${JSON.stringify(value)}`,i=>{i[field]=value;} ])),
+  ['entries object',i=>{i.entries={operation:'main'};}], ['null entry',i=>{i.entries=[null];}],
+  ['conventions object',i=>{i.conventions={};}], ['null convention',i=>{i.conventions=[null];}],
+  ['missing input schema',i=>{delete i.entries[0].input_schema;}], ['missing result schema',i=>{delete i.entries[0].result_schema;}],
+  ['invalid result schema',i=>{i.entries[0].result_schema={type:'invalid'};}],
+ ];
+ for(const [label,interfaceChange] of cases){
+  const root=project({app,interfaceChange:i=>{i.status='approved';interfaceChange(i);}}); const out=selected(root,'demo');
+  assert.equal(out.status,1,`${label}: ${out.stderr} ${out.stdout}`);
+  const report=JSON.parse(out.stdout); assert.equal(report.stories[0].status,'not run',label);
+  assert.ok(report.stories[0].steps.every(step=>step.status==='not run' && step.reason),label);
+  assert.equal(existsSync(join(root,'EXECUTED')),false,label);
+  assert.equal(JSON.parse(readFileSync(join(root,'.pdd/code-test/latest.json'),'utf8')).stories[0].status,'not run',label);
+ }
+ for(const field of ['resources','calls']) {const root=project({interfaceChange:i=>{i.status='approved';delete i[field];}});assert.equal(selected(root,'demo').status,0,field);}
 });

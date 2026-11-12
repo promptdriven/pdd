@@ -20,10 +20,16 @@ function execute(step, doc, found, root, ports) {
   let prompt;
   try { prompt = readPrompt(root, found.visible, step.entry_path, found.workspace); } catch { return unrun(step, 'Entry prompt is unavailable.'); }
   if (Object.hasOwn(step, 'expected_error')) return unrun(step, 'Expected-error steps are unsupported.');
-  const iface = prompt.interface, index = iface?.entries?.findIndex(entry => entry.operation === step.operation) ?? -1;
+  const iface = prompt.interface;
+  if (!object(iface) || !Array.isArray(iface.entries) || !iface.entries.every(object) ||
+      !['resources', 'calls'].every(key => iface[key] === undefined || Array.isArray(iface[key])) ||
+      !Array.isArray(iface.conventions) || !iface.conventions.every(object))
+    return unrun(step, 'Entry interface is malformed.');
+  const index = iface.entries.findIndex(entry => entry.operation === step.operation);
   if (index < 0) return unrun(step, 'Entry is unavailable.');
   if (iface.resources?.length || iface.calls?.length) return unrun(step, 'Entry resources or calls cannot be supplied to code.');
-  const conventions = iface.conventions ?? [];
+  if (!object(iface.entries[index].input_schema) || !object(iface.entries[index].result_schema)) return unrun(step, 'Entry schemas are missing or malformed.');
+  const conventions = iface.conventions;
   if (!['input_schema','result_schema'].every(key => conventions.some(c => c.path === `/entries/${index}/${key}` && c.convention === 'cli'))) return unrun(step, 'Entry is not a CLI.');
   const admission = checkInput(step.input, iface.entries[index].input_schema, 0);
   if (!iface.entries[index].input_schema || admission.refusals.length || admission.warnings.length) return unrun(step, 'CLI input schema cannot admit this input.');
