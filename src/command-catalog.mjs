@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 1307a640660a0a3a4ec2b76247dfc508de0bb246fb7d6ce08272abca8bc11b45).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: cd5031087e333a28a900d441580d41a6d45c6fc0c43405e30664f92b903d9979).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -119,8 +119,10 @@ const routes = [
     form('pdd', 'Show local commands.'), form('pdd --help', 'Show local commands.'),
     form('pdd -h', 'Show local commands.'), form('pdd help', 'Show local commands.'),
     form('pdd help prompting', 'Show how to write prompts, Stories and tests, and where the guide is.') ] },
-  { id: 'version', prefix: ['--version'], local: 'version', operands: [], options: [],
-    forms: [form('pdd --version', 'Show this package version.')] },
+  { id: 'version', prefix: ['--version'], quiet: ['-V'], local: 'version', operands: [], options: [],
+    forms: [form('pdd --version', 'Show this package version.'), form('pdd -V', 'Show this package version.')] },
+  { id: 'version.detailed', prefix: ['-VV'], local: 'version-detailed', operands: [], options: [],
+    forms: [form('pdd -VV', 'Show this package version and the interpreter build and supported formats; unknown when unavailable. Uses existing gh sign-in, with no AI call.')] },
   { id: 'completion', prefix: ['completion'], local: 'completion', operands: [{ name: 'shell', type: 'choice:bash,zsh' }], options: [],
     forms: [form('pdd completion bash|zsh', 'Print local shell completion.')] },
   { id: 'workflow.list', prefix: ['workflow', 'list'], local: 'workflow-list', operands: [], options: [{ name: '--json', kind: 'flag' }],
