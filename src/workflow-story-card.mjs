@@ -1,13 +1,14 @@
-// Generated from prompts/cli/workflow-story-card.prompt.md (sha256: e1d964dd121794050a4572ce181cf7c59a55514dfd731f5433e620af4de2d4f7).
+// Generated from prompts/cli/workflow-story-card.prompt.md (sha256: 9e687c2383018694f2ce90e037bf102b09714c359de2e267324481d9223b6e89).
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { runtimePreflightSlice, runtimeScenarioJsonSlice } from './runtime-seam.mjs';
+import { format, runtimePreflightSlice, runtimeScenarioJsonSlice, source } from './runtime-seam.mjs';
 
-const { captureSource, findTests } = runtimePreflightSlice();
-const { parseScenarioJson, stringifyScenarioJson } = runtimeScenarioJsonSlice();
+const { findTests } = runtimePreflightSlice();
+runtimeScenarioJsonSlice();
+const { parseScenario, stringifyScenario } = format;
 
 const SCENARIO = 'prompt-runtime.program-scenario.v1';
 const BATCH = /^\d{8}-\d{6}-[a-z0-9]{4}$/;
@@ -25,7 +26,7 @@ const cell = (text, max = 80) => clip(text, max).replaceAll('|', '\\|');
 const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object'
   ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
 // Exact digits for a whole number above 2^53 (scenario-json); otherwise the same text as JSON.stringify.
-const compact = value => { try { return stringifyScenarioJson(value) ?? 'null'; } catch { return 'null'; } };
+const compact = value => { try { return stringifyScenario(value) ?? 'null'; } catch { return 'null'; } };
 
 const segments = path => String(path).split('/');
 const storyFolder = path => segments(path).slice(0, -1).includes('user_stories');
@@ -50,7 +51,7 @@ function readScenario(root, path) {
   const text = readText(root, path);
   if (text === null) return { path, text: null, doc: null };
   try {
-    const doc = parseScenarioJson(text);
+    const doc = parseScenario(text);
     return { path, text, doc: doc?.schema_version === SCENARIO ? doc : undefined };
   } catch { return { path, text, doc: null }; }
 }
@@ -178,7 +179,7 @@ function expectedCases(doc) {
   return (Array.isArray(doc?.steps) ? doc.steps : []).map((step, index) => ({ case: caseName(step, index),
     error: step?.expected_error ?? null,
     expected: (Array.isArray(step?.checks) ? step.checks : []).map(check => [check?.criterion_id ?? null, check?.target ?? null, check?.op ?? null, check?.value ?? null])
-      .map(row => stringifyScenarioJson(canonical(row))).sort() }));
+      .map(row => stringifyScenario(canonical(row))).sort() }));
 }
 export function storyFingerprint({ root, changed = [] } = {}) {
   const paths = [...new Set(changed)].sort();
@@ -192,8 +193,8 @@ export function storyFingerprint({ root, changed = [] } = {}) {
   const tests = testsInRun.map(test => {
     if (!test.doc) return { path: test.path, sha256: sha256(test.text ?? ''), cases: [] };
     const cases = expectedCases(test.doc), steps = Array.isArray(test.doc.steps) ? test.doc.steps : [];
-    return { path: test.path, sha256: sha256(stringifyScenarioJson(canonical({ criteria: test.doc.criteria ?? null, cases }))),
-      cases: cases.map((item, index) => ({ case: item.case, sha256: sha256(stringifyScenarioJson(item)), text: clip(expectedText(steps[index]), 120) })) };
+    return { path: test.path, sha256: sha256(stringifyScenario(canonical({ criteria: test.doc.criteria ?? null, cases }))),
+      cases: cases.map((item, index) => ({ case: item.case, sha256: sha256(stringifyScenario(item)), text: clip(expectedText(steps[index]), 120) })) };
   });
   return { stories, tests };
 }
@@ -228,7 +229,10 @@ const real = path => { try { return realpathSync(path); } catch { return resolve
 const NO_VERDICT_STATES = new Set(['refused', 'not run', 'partial', 'waiting', 'sent', 'not_run', 'unknown', 'queued', 'running']);
 // pdd's own saved check results decide whether the prompt check passed in full on the current files.
 export function fullCheckPass({ root, since = 0, tests = [], prompts = [], stories = [] } = {}, ports = {}) {
-  const env = ports.env ?? process.env, capture = ports.capture ?? captureSource;
+  const env = ports.env ?? process.env;
+  const capture = ports.capture
+    ? (r, opts) => ports.capture(r, opts)
+    : (r, opts) => source.identity({ root: r, ...opts });
   const directory = join(resolve(env.PDD_STATE_DIR || join(env.HOME || homedir(), '.pdd', 'runtime')), 'batches');
   const problems = [], judged = [], wanted = real(root), latest = new Map();
   let names = [];

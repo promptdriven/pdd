@@ -92,7 +92,7 @@ Check these boundaries in order and continue after failures:
 - Enumerate tracked *.prompt.md and report draft/missing interfaces as advisory
   paths that may need approval on first check. Malformed or unreadable prompts
   warn. Never approve them or block doctor solely for drafts.
-- Read interpreter access through the runtime client's existing checkRuntimeHealth
+- Read interpreter access through the [Runtime seam](runtime-seam.prompt.md) `health` check (`checkRuntimeHealth`)
   with the selected environment and injected gh/fetch/clock ports. No upload or job.
   Preserve its health rules, including a JSON 404 from an interpreter without the
   optional capacity endpoint. Missing auth, denial, maintenance or unreachable
@@ -116,7 +116,7 @@ Check these boundaries in order and continue after failures:
 - [Workflow worktree](workflow-worktree.prompt.md): canonical GitHub origin normalization.
 - [Workflow agents](workflow-agents.prompt.md): read-only agy readiness.
 - [Codex limits](codex-limits.prompt.md): read-only account usage states.
-- [Runtime client](runtime-client.prompt.md#free-interpreter-health-check): required health classification and runtimeOrigin address rules.
+- [PDD to Runtime seam](runtime-seam.prompt.md) and [Runtime client](runtime-client.prompt.md#free-interpreter-health-check): required `health` classification and `runtimeOrigin` address rules.
 - [Workflow chat](workflow-chat.prompt.md): required ensurePaneBudget admission and pane inventory rules; doctor disables all cleanup.
 
 All program, file, network, environment/platform/version/uid and account reads
@@ -136,8 +136,8 @@ Do not use a GitHub ledger that writes reads to disk. Do not mutate arrays retur
 ```json
 {
   "kind": "partial",
-  "status": "approved",
-  "prose_sha256": "18dae0f1a37855d569abe401be94c190e22b505c46127437f79e3ef7f04040fd",
+  "status": "draft",
+  "prose_sha256": "f62b95d205625f2eeaa429a47c0df79b72ed0d8b55d72e4340e5b3d7ebd21e7f",
   "entries": [
     {
       "operation": "runAutopilotDoctor",

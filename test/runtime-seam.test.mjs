@@ -886,7 +886,12 @@ registerHooks({
   }
 
   const bin = join(root, 'bin/pdd.mjs');
-  const replayScript = `import {captureSource} from ${JSON.stringify(pathToFileURL(join(root, 'src/runtime-seam.mjs')).href)};process.stdout.write(JSON.stringify(captureSource(process.argv[1],{tests:JSON.parse(process.argv[2])}).files));`;
+  const replayChildExpr = 'source.identity({root:process.argv[1],tests:JSON.parse(process.argv[2])}).files';
+  assert.ok(
+    readFileSync(join(root, 'src/workflow-replay.mjs'), 'utf8').includes(replayChildExpr),
+    'SEAM5 replayScript must match src/workflow-replay.mjs selectedFiles child expression',
+  );
+  const replayScript = `import {source} from ${JSON.stringify(pathToFileURL(join(root, 'src/runtime-seam.mjs')).href)};process.stdout.write(JSON.stringify(${replayChildExpr}));`;
   const launcherScript = 'import(process.argv[1]).then(async ({ runShim }) => { process.exitCode = await runShim(process.argv[2], process.argv.slice(3)); }).catch(() => { process.exitCode = 125; });';
   const probes = [
     ['cli:--help', [bin, '--help'], repo],
@@ -2200,6 +2205,11 @@ test('SEAM17 (S3): stateless header reader in runtime-check-plan matches file-ow
   assert.deepEqual(seam.COMMAND_EXIT_CODE, hostExit.COMMAND_EXIT_CODE);
   assert.deepEqual(seam.PROMPT_TESTS_LABEL, hostPromptWords.PROMPT_TESTS_LABEL);
   assert.deepEqual(seam.PROMPT_TESTS_WORDS, hostPromptWords.PROMPT_TESTS_WORDS);
+  const clientSource = readFileSync(join(root, 'src/runtime/runtime-client.mjs'), 'utf8');
+  const engineShaMatch = /\bconst ENGINE_SHA = '([0-9a-f]{40})';/.exec(clientSource);
+  assert.ok(engineShaMatch, 'expected ENGINE_SHA in src/runtime/runtime-client.mjs');
+  assert.equal(index.version().engine_sha, engineShaMatch[1]);
+  assert.equal(seam.version().engine_sha, engineShaMatch[1]);
 
   const prefixes = ['', '//', '///', '  // ', '\t#', '##', '--', ';', ';;', '/*', '/**', ' *', '<!--', '"""', "'''", 'rem ', '% ', '// prefix '];
   const suffixes = ['', '.', ' */', '. */', ' -->', '. -->', ' """', " '''", '   ', ' */ trailing'];
@@ -2269,4 +2279,242 @@ test('SEAM17 (S3): stateless header reader in runtime-check-plan matches file-ow
     }
   }
   assert.ok(checked > 3500, `expected >3500 corpus checks, ran ${checked}`);
+});
+
+test('SEAM18 (M3-1, M3-2, M3-3): section 4.1 API keeps zero-static-import lazy loading and binds all host ports on runtime-seam', async t => {
+  const { execFileSync, spawnSync } = await import('node:child_process');
+  const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { pathToFileURL } = await import('node:url');
+
+  const indexSource = readFileSync(join(root, 'src/runtime/index.mjs'), 'utf8');
+  const staticImports = [...indexSource.matchAll(/^\s*(?:import|export)\s+(?:[^'"]*?\s+from\s+)?['"]([^'"]+)['"]/gm)].map(m => m[1]);
+  assert.ok(staticImports.length > 0);
+  for (const spec of staticImports) {
+    assert.ok(spec.startsWith('node:'), `src/runtime/index.mjs must have zero relative static imports, found: ${spec}`);
+  }
+
+  const loadedSrcInFreshChild = expr => {
+    const hookDataUrl = `data:text/javascript,${encodeURIComponent(
+      `const prefix = ${JSON.stringify(pathToFileURL(join(root, 'src/')).href)};
+       const base = ${JSON.stringify(pathToFileURL(root + '/').href)};
+       export async function resolve(s, c, next) {
+         const r = await next(s, c);
+         if (r.url.startsWith(prefix)) process.stderr.write('MOD:' + r.url.slice(base.length) + '\\n');
+         return r;
+       }`,
+    )}`;
+    const registerHook = `data:text/javascript,${encodeURIComponent(
+      `import { register } from 'node:module'; register(${JSON.stringify(hookDataUrl)});`,
+    )}`;
+    const child = spawnSync(
+      process.execPath,
+      ['--import', registerHook, '--input-type=module', '-e', expr],
+      { cwd: root, encoding: 'utf8', timeout: 8000 },
+    );
+    assert.equal(child.status, 0, `child failed:\n${child.stderr}`);
+    const mods = [...new Set(
+      child.stderr
+        .split('\n')
+        .filter(l => l.startsWith('MOD:'))
+        .map(l => l.slice(4)),
+    )];
+    return { mods, stdout: child.stdout.trim() };
+  };
+
+  const entryUrl = JSON.stringify(pathToFileURL(join(root, 'src/runtime/index.mjs')).href);
+  const seamUrl = JSON.stringify(pathToFileURL(join(root, 'src/runtime-seam.mjs')).href);
+
+  assert.deepEqual(loadedSrcInFreshChild(`await import(${entryUrl});`).mods, ['src/runtime/index.mjs']);
+  assert.deepEqual(loadedSrcInFreshChild(`await import(${seamUrl});`).mods, [
+    'src/runtime-seam.mjs',
+    'src/runtime/index.mjs',
+  ]);
+  const verChild = loadedSrcInFreshChild(`const s = await import(${seamUrl}); process.stdout.write(JSON.stringify(s.version()));`);
+  assert.deepEqual(verChild.mods, ['src/runtime-seam.mjs', 'src/runtime/index.mjs']);
+  const ver = JSON.parse(verChild.stdout);
+  assert.equal(ver.package, '@promptdriven/runtime-client');
+  assert.equal(ver.api_version, 1);
+  assert.deepEqual(ver.formats, {
+    scenario: 'prompt-runtime.program-scenario.v1',
+    app_map: 'prompt-runtime.app-map.v1',
+  });
+  assert.deepEqual(ver.limits, { bytes: 10_485_760, files: 10_000 });
+
+  // CJS createRequire loads do not pass through ESM resolve, so verify CJS require.cache + ESM mods together:
+  const rootPrefix = join(root, 'src/').replaceAll('\\', '/');
+  const rootDir = rootPrefix.slice(0, -4);
+  const sliceProbe = callExpr => {
+    const script = `
+      import { createRequire } from 'node:module';
+      const req = createRequire(${entryUrl});
+      const s = await import(${seamUrl});
+      ${callExpr};
+      const cjs = Object.keys(req.cache)
+        .map(p => p.replaceAll('\\\\', '/'))
+        .filter(p => p.startsWith(${JSON.stringify(rootPrefix)}))
+        .map(p => p.slice(${JSON.stringify(rootDir)}.length))
+        .sort();
+      process.stdout.write(JSON.stringify(cjs));
+    `;
+    const res = loadedSrcInFreshChild(script);
+    return JSON.parse(res.stdout);
+  };
+  assert.deepEqual(sliceProbe('s.version()'), []);
+  assert.deepEqual(sliceProbe('s.format.parseScenario(\'{"a":1}\')'), ['src/runtime/scenario-json.mjs']);
+  assert.deepEqual(sliceProbe('s.format.interfaceBlocks("# hi\\n")'), ['src/runtime/runtime-preflight.mjs']);
+  assert.deepEqual(sliceProbe(`s.workspace.policy({ root: ${JSON.stringify(root)} })`), [
+    'src/runtime/runtime-workspace.mjs',
+  ]);
+
+  const index = await import('../src/runtime/index.mjs');
+  const seam = await import('../src/runtime-seam.mjs');
+  const { redactSecrets } = await import('../src/secret-redaction.mjs');
+  const { approvePromptText } = await import('../src/prompt-approve.mjs');
+
+  for (const name of ['lint', 'check', 'read', 'retry', 'local', 'simulate', 'jobs', 'health', 'mcp', 'draftInterfaces', 'contracts', 'render']) {
+    assert.equal(typeof seam[name], 'function', `seam.${name} must be a function`);
+    assert.notEqual(seam[name], index[name], `seam.${name} must wrap host ports, not re-export index.${name}`);
+  }
+  assert.notEqual(seam.source.identity, index.source.identity);
+  assert.notEqual(seam.saved.results, index.saved.results);
+  assert.equal(seam.format, index.format);
+  assert.equal(seam.workspace, index.workspace);
+  assert.equal(seam.version, index.version);
+  assert.equal(seam.exactValue, index.exactValue);
+
+  // Reproduce Claude M3-3 probe: seam.health must register gh token into host secret-redaction registry.
+  const markerToken = `ghp_seam18HealthSecretMarker${Date.now()}xyz987654321`;
+  await seam.health(
+    { env: { ...process.env, PDD_RUNTIME_URL: 'https://example.invalid' } },
+    {
+      gh: () => ({ status: 0, stdout: `${markerToken}\n` }),
+      fetch: async () => {
+        throw new Error('offline');
+      },
+    },
+  );
+  assert.equal(redactSecrets(`token=${markerToken}`), 'token=[redacted]');
+
+  // seam.lint({ root, local: true }) binds lintSvgLayouts and selection ports (whereas index.lint throws unboundPort).
+  const tmp = mkdtempSync(join(tmpdir(), 'pdd-seam18-'));
+  t.after(() => rmSync(tmp, { recursive: true, force: true }));
+  mkdirSync(join(tmp, 'prompts/ui/views'), { recursive: true });
+  mkdirSync(join(tmp, 'user_stories'), { recursive: true });
+  mkdirSync(join(tmp, 'tests'), { recursive: true });
+  writeFileSync(
+    join(tmp, 'prompts/ui/views/card__stacked.ui.svg'),
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 40"><title>Card</title><desc>Card</desc><g id="unmentioned-card-box"><text x="10" y="20">Hello</text></g></svg>\n',
+  );
+  const rawPrompt = [
+    '# Card view',
+    '',
+    '## Appearance',
+    '',
+    '![Card](views/card__stacked.ui.svg)',
+    '',
+    'Shows Hello.',
+    '',
+    '<details><summary>Runtime interface</summary>',
+    '',
+    '```json',
+    '{"status":"draft","prose_sha256":"","entries":[{"operation":"render","input_schema":{"type":"object","additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"],"additionalProperties":false}}],"limits":{"max_steps":10,"max_model_calls":4}}',
+    '```',
+    '</details>',
+    '',
+  ].join('\n');
+  const filledPrompt = seam.format.setInterfaceStatus(rawPrompt, {
+    status: 'approved',
+    prose_sha256: seam.format.proseSha256(rawPrompt),
+  });
+  assert.ok(filledPrompt);
+  writeFileSync(join(tmp, 'prompts/ui/card.prompt.md'), filledPrompt);
+  writeFileSync(join(tmp, 'user_stories/card.md'), '# Card\n\n## Acceptance criteria\n\n1. Shows Hello.\n');
+  writeFileSync(
+    join(tmp, 'tests/card.json'),
+    JSON.stringify({
+      schema_version: 'prompt-runtime.program-scenario.v1',
+      story_path: 'user_stories/card.md',
+      criteria: [{ id: 'AC1', text: 'Shows Hello.' }],
+      initial_world: {},
+      steps: [
+        {
+          step_id: 's1',
+          entry_path: 'prompts/ui/card.prompt.md',
+          operation: 'render',
+          input: {},
+          checks: [{ criterion_id: 'AC1', target: 'result', path: '/ok', op: 'equals', value: true }],
+        },
+      ],
+    }) + '\n',
+  );
+  execFileSync('git', ['init', '-q'], { cwd: tmp });
+  execFileSync('git', ['add', '.'], { cwd: tmp });
+
+  await assert.rejects(() => index.lint({ root: tmp, local: true }), /SVG layout port \(lintSvgLayouts\) is not bound/);
+  let lintOut = '';
+  const lintErr = { write() {} };
+  const lintCode = await seam.lint(
+    { root: tmp, local: true, options: { '--json': true } },
+    { stdout: { write: s => { lintOut += s; } }, stderr: lintErr, env: { ...process.env, HOME: tmp } },
+  );
+  assert.equal(lintCode, 0);
+  const lintReport = JSON.parse(lintOut);
+  assert.ok(
+    lintReport.warnings.some(w => String(w).includes('unmentioned-card-box')),
+    `expected SVG layout warning from seam.lint, got: ${JSON.stringify(lintReport.warnings)}`,
+  );
+
+  let filesOut = '';
+  const filesCode = await seam.local(
+    { root: tmp, what: 'files' },
+    { stdout: { write: s => { filesOut += s; } }, stderr: lintErr, env: { ...process.env, HOME: tmp } },
+  );
+  assert.equal(filesCode, 0);
+  assert.ok(filesOut.includes('prompts/ui/card.prompt.md'));
+
+  let jobsOut = '';
+  const jobsCode = await seam.jobs(
+    { env: { HOME: tmp, PDD_STATE_DIR: join(tmp, 'state') } },
+    { stdout: { write: s => { jobsOut += s; } }, stderr: lintErr },
+  );
+  assert.equal(jobsCode, 0);
+  assert.ok(jobsOut.length > 0);
+
+  const snap = seam.source.identity({ root: tmp, tests: [{ path: 'tests/card.json' }] });
+  assert.equal(snap.stories.length, 1);
+  assert.equal(snap.stories[0].story_path, 'user_stories/card.md');
+
+  const savedRes = await seam.saved.results({ root: tmp });
+  assert.ok(Array.isArray(savedRes.stories));
+
+  const sampleRows = [{ story: 'card', state: 'passed' }];
+  assert.equal(seam.render(sampleRows, { as: 'summary' }), seam.summaryLine(sampleRows));
+  assert.match(seam.render(sampleRows, { as: 'summary' }), /^Prompt tests:/);
+  assert.match(seam.render(sampleRows, { as: 'summary' }, { promptTestsLabel: 'Custom check' }), /^Custom check:/);
+  assert.deepEqual(seam.render(sampleRows, { as: 'story-lines' }), seam.storyLines(sampleRows));
+  assert.equal(seam.render({ rows: sampleRows, exitCode: 0 }, { as: 'json' }).exit_code, 0);
+
+  // format.setInterfaceStatus agrees with approvePromptText on single-key prompts and rejects duplicate keys / fence injection.
+  for (const body of [
+    '{"status":"draft","prose_sha256":"0000"}',
+    '{\n  "kind": "partial",\n  "status": "draft",\n  "prose_sha256": "",\n  "entries": [{"operation": "op", "nested": {"status": "keep"}}]\n}',
+    '{"prose_sha256": "abcd", "status": "approved", "reason": "x", "kind": "native-only"}',
+  ]) {
+    const doc = `# Title\n\nBody text.\n\n<details><summary>Runtime interface</summary>\n\n\`\`\`json\n${body}\n\`\`\`\n</details>\n`;
+    const digest = seam.format.proseSha256(doc);
+    assert.equal(
+      seam.format.setInterfaceStatus(doc, { status: 'approved', prose_sha256: digest }),
+      approvePromptText(doc),
+    );
+  }
+  const dupStatusDoc =
+    '# Title\n\nBody.\n\n<details><summary>Runtime interface</summary>\n\n```json\n{"status":"draft","status":"draft","prose_sha256":""}\n```\n</details>\n';
+  assert.equal(seam.format.setInterfaceStatus(dupStatusDoc, { status: 'approved', prose_sha256: 'a'.repeat(64) }), null);
+  const dupDigestDoc =
+    '# Title\n\nBody.\n\n<details><summary>Runtime interface</summary>\n\n```json\n{"status":"draft","prose_sha256":"","prose_sha256":""}\n```\n</details>\n';
+  assert.equal(seam.format.setInterfaceStatus(dupDigestDoc, { status: 'approved', prose_sha256: 'a'.repeat(64) }), null);
+  assert.equal(seam.format.setInterfaceStatus(filledPrompt, { status: 'x```</details>' }), null);
+  assert.equal(seam.format.setInterfaceStatus('# No block\n', { status: 'approved' }), null);
+  assert.equal(seam.format.setInterfaceStatus(filledPrompt, { status: 123 }), null);
 });

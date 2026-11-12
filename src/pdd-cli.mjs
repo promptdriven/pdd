@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 0844f3050acb23a08e7504b116191998be01aed5397048d477938b29e8a0d3c1).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 1552cd2aaed3f89fbfcf20cc3973340413fb75542f65b136ca712046c67a0f9b).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -13,9 +13,9 @@ import { pathDiagnostic as defaultPathDiagnostic } from './path-diagnostic.mjs';
 import { checkWorkflowAgents } from './workflow-agents.mjs';
 import { setupMayAsk } from './setup-interaction.mjs';
 import { setupWithWorkflowAgent } from './workflow-setup.mjs';
-import { runtimeOutputSlice } from './runtime-seam.mjs';
+import { causeText, runtimeOutputSlice } from './runtime-seam.mjs';
 
-const { causeText } = runtimeOutputSlice();
+runtimeOutputSlice();
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const line = (stream, text) => stream.write(`${text}\n`);
@@ -278,8 +278,9 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     }
     case 'mcp': {
       try {
-        const server = mcpServer ?? await import('./runtime-seam.mjs');
-        return await server.runMcp({ cwd, env }, { stdin, stdout, stderr });
+        if (mcpServer) return await (mcpServer.mcp ?? mcpServer.runMcp).call(mcpServer, { cwd, env }, { stdin, stdout, stderr });
+        const { mcp } = await import('./runtime-seam.mjs');
+        return await mcp({ cwd, env }, { stdin, stdout, stderr });
       } catch (error) { line(stderr, `pdd mcp could not start.${reason(error)}`); return 1; }
     }
     case 'setup': {
@@ -312,7 +313,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       } catch (error) { line(stderr, `pdd setup: ${error.message}`); code = 1; }
       try {
         if(context?.toplevel) {
-          const {loadInterfaceDraft,runInterfaceDraft}=await import('./runtime-seam.mjs');
+          const {loadInterfaceDraft,draftInterfaces}=await import('./runtime-seam.mjs');
           const {missingInterfaces}=await loadInterfaceDraft();
           const missing=missingInterfaces(context.toplevel);
           if(missing.length) {
@@ -328,7 +329,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
                 try {answer=await reader.ask();} finally {reader.close();}
               }
               if(typeof answer==='string' && /^(y|yes)$/i.test(answer.trim()))
-                if(await runInterfaceDraft({cwd:context.toplevel,all:true},{stdout,stderr})) code=1;
+                if(await draftInterfaces({cwd:context.toplevel,all:true},{stdout,stderr})) code=1;
             }
           }
         }
@@ -353,18 +354,26 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       } });
     }
     case 'runtime-jobs':
-      try { const slots = runtimeSlots ?? await import('./runtime-seam.mjs'); return await slots.runJobs({ env }, { stdout, stderr }); }
+      try {
+        if (runtimeSlots) return await (runtimeSlots.jobs ?? runtimeSlots.runJobs).call(runtimeSlots, { env }, { stdout, stderr });
+        const { jobs } = await import('./runtime-seam.mjs');
+        return await jobs({ env }, { stdout, stderr });
+      }
       catch (error) { line(stderr, `Local interpreter jobs could not be read.${reason(error)}`); return 5; }
     case 'contracts': case 'contracts-sync':
       try {
-        const commands = contracts ?? (await Promise.all([import('./runtime-seam.mjs'), import('./product.mjs'), import('./workflow-runner.mjs')]))[0];
-        return await commands.runContracts({ words: plan.local === 'contracts-sync' ? ['sync'] : [], options: { ...plan.options }, cwd }, { env, stdout, stderr });
+        const input = { words: plan.local === 'contracts-sync' ? ['sync'] : [], options: { ...plan.options }, cwd };
+        const ports = { env, stdout, stderr };
+        if (contracts) return await (contracts.contracts ?? contracts.runContracts).call(contracts, input, ports);
+        const [{ contracts: run }] = await Promise.all([import('./runtime-seam.mjs'), import('./product.mjs'), import('./workflow-runner.mjs')]);
+        return await run(input, ports);
       } catch (error) { line(stderr, `Local contracts could not be read.${reason(error)}`); return 5; }
     case 'runtime-check':
     case 'runtime-try':
       try {
         const runtime = await import('./runtime-seam.mjs');
-        return await runtime[plan.local === 'runtime-check' ? 'runCheck' : 'runTry']({ words: [...plan.operands], options: { ...plan.options }, cwd, cache: plan.local === 'runtime-check' }, { stdout, stderr, env });
+        const action = plan.local === 'runtime-try' ? 'simulate' : plan.options['--lint'] === true ? 'lint' : 'check';
+        return await runtime[action]({ words: [...plan.operands], options: { ...plan.options }, cwd }, { stdout, stderr, env });
       } catch (error) {
         line(stderr, `pdd stopped with an internal error. If it sent checks, read them with pdd test --read. Do not send them again.${reason(error)}`);
         return 3;
@@ -378,8 +387,8 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       return runOwner({ cwd, paths: [...plan.operands], json: !!plan.options['--json'] }, { stdout, stderr });
     }
     case 'interface-draft': {
-      const {runInterfaceDraft}=await import('./runtime-seam.mjs');
-      return runInterfaceDraft({cwd,words:[...plan.operands],all:!!plan.options['--all'],json:!!plan.options['--json'],contract:plan.options['--contract'],extend:!!plan.options['--extend'],refresh:!!plan.options['--refresh']},{stdout,stderr});
+      const {draftInterfaces}=await import('./runtime-seam.mjs');
+      return draftInterfaces({cwd,words:[...plan.operands],all:!!plan.options['--all'],json:!!plan.options['--json'],contract:plan.options['--contract'],extend:!!plan.options['--extend'],refresh:!!plan.options['--refresh']},{stdout,stderr});
     }
     case 'prompt-approve': {
       const { runApprove } = await import('./prompt-approve.mjs');

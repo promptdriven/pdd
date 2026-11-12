@@ -8,7 +8,7 @@ Discovery uses supplied private `definitions`, or loads them through [`loadAgent
 
 ## Bounded workspace discovery
 
-When `workspace` or [`loadRuntimeWorkspace({root: cwd})`](runtime-workspace.prompt.md) has `configured: true`, return `{id, name, state: 'error', detail: 'Bounded agent connection is unavailable: packet-only context cannot be established.'}` for each supplied or default agent without starting any subprocess.
+When `workspace` or [`workspace.policy({root: cwd})`](runtime-entry.prompt.md) ([workspace boundary](runtime-workspace.prompt.md)) has `configured: true`, return `{id, name, state: 'error', detail: 'Bounded agent connection is unavailable: packet-only context cannot be established.'}` for each supplied or default agent without starting any subprocess.
 
 ## Shared credential-status interpretation
 

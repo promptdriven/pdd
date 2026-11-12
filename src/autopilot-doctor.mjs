@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-doctor.prompt.md (sha256: 5c6aa8ed50bee8d8a4d0f4dc3477b6b0a6eb254714268d42e2b39581d5e725f1).
+// Generated from prompts/cli/autopilot-doctor.prompt.md (sha256: 658607d791f06efc5885b591e71b541b1395a56dde36cb4af76615fdc1032437).
 // Source: prompts/cli/autopilot-doctor.prompt.md.
 import {rememberSecrets, knownSecretValues} from './secret-redaction.mjs';
 import * as nativeFiles from 'node:fs';
@@ -10,10 +10,10 @@ import {readCodexLimits} from './codex-limits.mjs';
 import {checkWorkflowAgents} from './workflow-agents.mjs';
 import {githubOriginRepository} from './workflow-worktree.mjs';
 import './product.mjs';
-import {runtimeClientSlice} from './runtime-seam.mjs';
+import {health as runtimeHealthCheck, runtimeClientSlice} from './runtime-seam.mjs';
 import {ensurePaneBudget} from './workflow-chat.mjs';
 
-const {runtimeOrigin, checkRuntimeHealth} = runtimeClientSlice();
+const {runtimeOrigin} = runtimeClientSlice();
 
 const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`;
 const clean = value => String(value).replace(/[\x00-\x1f\x7f-\x9f]/g, ' ');
@@ -204,7 +204,7 @@ export async function runAutopilotDoctor(input, ports = {}) {
     else {
       const token = await run('gh',['auth','token']);
       if (ready(token)) rememberSecrets(token.stdout.trim());
-      health=await checkRuntimeHealth({env},{gh:()=>({status:token.code,stdout:token.stdout}),fetch:ports.fetch,now:ports.now});
+      health=await runtimeHealthCheck({env},{gh:()=>({status:token.code,stdout:token.stdout}),fetch:ports.fetch,now:ports.now});
       if (!ready(token)||!token.stdout.trim()) health={...health,state:'auth'};
     }
   } catch { health = {state:'unavailable'}; }

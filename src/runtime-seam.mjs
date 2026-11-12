@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 8e5cc04b12975b91b1b24e768144e32ee1cd94f4f984a5cf6fc3c403219ddc89).
+// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 07aa88582c60616e29bbcf498d74e57df3640f12d3357dc421b94d67bc48fecf).
 import { readFileSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -40,9 +40,11 @@ import {
   discoveryRefusal,
   discoveryVisibleFiles,
   exactIntegerLeaves,
+  exactValue,
   executableInterfaceText,
   fillHashes,
   findTests as rawFindTests,
+  format,
   formatSize,
   formatWarningLines,
   gitFiles,
@@ -90,7 +92,7 @@ import {
   runCheck as runtimeRunCheck,
   runContracts as runtimeRunContracts,
   runDoorCall as runtimeRunDoorCall,
-  runInterfaceDraft,
+  runInterfaceDraft as runtimeRunInterfaceDraft,
   runJobs as runtimeRunJobs,
   runMcp as runtimeRunMcp,
   runShim as runtimeRunShim,
@@ -126,7 +128,9 @@ import {
   tryUsageHeaders,
   tryUsageLine,
   validLink,
+  version,
   withExactIntegers,
+  workspace,
 } from './runtime/index.mjs';
 
 const req = createRequire(import.meta.url);
@@ -384,6 +388,7 @@ export function runtimeClientSlice() {
     applyPendingCaseWithHandoff,
     checkRuntimeHealth,
     createSavedStoryEvidenceReader,
+    health,
     readContractHistory,
     runtimeOrigin,
     runtimeWorkspaceMigrationStore,
@@ -456,12 +461,18 @@ export async function checkRuntimeHealth(input, ports = {}) {
 export async function loadRuntimeClient() {
   const [{ DEFAULT_RUNTIME_URL: defaultUrl, checkRuntimeHealth: rawCheckHealth, runtimeOrigin: rawOrigin }] =
     await Promise.all([runtimeLoadClient(), import('./secret-redaction.mjs')]);
+  const boundHealth = (input, ports = {}) =>
+    rawCheckHealth(input, withPortDefaults(ports, { redaction: seamRedaction(ports) }));
   return {
     DEFAULT_RUNTIME_URL: defaultUrl,
     runtimeOrigin: rawOrigin,
-    checkRuntimeHealth: (input, ports = {}) =>
-      rawCheckHealth(input, withPortDefaults(ports, { redaction: seamRedaction(ports) })),
+    checkRuntimeHealth: boundHealth,
+    health: boundHealth,
   };
+}
+
+export async function runInterfaceDraft(input = {}, ports = {}) {
+  return runtimeRunInterfaceDraft(input, seamSelectionPorts(ports));
 }
 
 export async function runAutomaticApproval(input = {}, ports = {}) {
@@ -798,6 +809,217 @@ export async function savedStoryEvidence(input, ports = {}) {
   return rawSavedStoryEvidence(input, seamSelectionPorts(ports));
 }
 
+function commandWords(input = {}) {
+  if (Array.isArray(input?.words)) return [...input.words];
+  if (Array.isArray(input?.tests)) {
+    return input.tests
+      .map(item => (typeof item === 'string' ? item : item?.path ?? item?.story))
+      .filter(item => typeof item === 'string' && item.length > 0);
+  }
+  return [];
+}
+
+function buildCheckInput(input = {}, { defaultCache = false, extraOptions = {} } = {}) {
+  const cwd = input?.cwd ?? input?.root;
+  const options = { ...(input?.options ?? {}), ...extraOptions };
+  return {
+    ...(cwd !== undefined ? { cwd } : {}),
+    words: commandWords(input),
+    options,
+    cache: input?.cache ?? defaultCache,
+    ...(input?.client !== undefined ? { client: input.client } : {}),
+    ...(input?.workflow !== undefined ? { workflow: input.workflow } : {}),
+  };
+}
+
+const LOCAL_WHAT_FLAGS = Object.freeze({
+  files: '--files',
+  'fill-hash': '--fill-hash',
+  'explain-bindings': '--explain-bindings',
+});
+
+const SIMULATE_MODES = new Set(['open', 'cli', 'serve', 'save-last', 'stop']);
+
+export async function check(input = {}, ports = {}) {
+  return runCheck(buildCheckInput(input, { defaultCache: true }), ports);
+}
+
+export async function lint(input = {}, ports = {}) {
+  const extraOptions = {
+    '--lint': true,
+    ...(input?.local === true && input?.options?.['--local'] === undefined ? { '--local': true } : {}),
+  };
+  return runCheck(buildCheckInput(input, { defaultCache: true, extraOptions }), ports);
+}
+
+export async function read(input = {}, ports = {}) {
+  const cwd = input?.cwd ?? input?.root;
+  const target = input?.call_id ?? input?.batch;
+  const words = Array.isArray(input?.words)
+    ? [...input.words]
+    : target !== undefined && target !== null && target !== ''
+      ? [String(target)]
+      : [];
+  return runCheck(
+    {
+      ...(cwd !== undefined ? { cwd } : {}),
+      words,
+      options: { ...(input?.options ?? {}), '--read': true },
+      cache: input?.cache ?? false,
+      ...(input?.client !== undefined ? { client: input.client } : {}),
+      ...(input?.workflow !== undefined ? { workflow: input.workflow } : {}),
+    },
+    ports,
+  );
+}
+
+export async function retry(input = {}, ports = {}) {
+  const cwd = input?.cwd ?? input?.root;
+  const words = Array.isArray(input?.words) ? [...input.words] : [];
+  const retryTarget = input?.batch ?? input?.options?.['--retry'];
+  return runCheck(
+    {
+      ...(cwd !== undefined ? { cwd } : {}),
+      words,
+      options: {
+        ...(input?.options ?? {}),
+        ...(retryTarget !== undefined ? { '--retry': retryTarget } : {}),
+      },
+      cache: input?.cache ?? false,
+      ...(input?.client !== undefined ? { client: input.client } : {}),
+      ...(input?.workflow !== undefined ? { workflow: input.workflow } : {}),
+    },
+    ports,
+  );
+}
+
+export async function local(input = {}, ports = {}) {
+  const flag = LOCAL_WHAT_FLAGS[input?.what];
+  if (!flag) {
+    throw new RangeError(`Unsupported local inspection mode: ${String(input?.what)}`);
+  }
+  const extraOptions = {
+    [flag]: true,
+    ...(input?.compact === true && input?.options?.['--compact'] === undefined ? { '--compact': true } : {}),
+  };
+  return runCheck({ ...buildCheckInput(input, { defaultCache: false, extraOptions }), cache: false }, ports);
+}
+
+export async function simulate(input = {}, ports = {}) {
+  if (input?.mode !== undefined && !SIMULATE_MODES.has(input.mode)) {
+    throw new RangeError(`Unsupported simulate mode: ${String(input.mode)}`);
+  }
+  const cwd = input?.cwd ?? input?.root;
+  const options = { ...(input?.options ?? {}) };
+  if (input?.mode === 'cli') options['--cli'] = true;
+  else if (input?.mode === 'serve' && options['--serve'] === undefined) options['--serve'] = input?.port ?? true;
+  else if (input?.mode === 'save-last') options['--save-last'] = true;
+  else if (input?.mode === 'stop') options['--stop'] = true;
+  const testWord =
+    typeof input?.test === 'string' && input.test.length > 0
+      ? input.test
+      : input?.test && typeof input.test === 'object' && typeof (input.test.path ?? input.test.story) === 'string'
+        ? input.test.path ?? input.test.story
+        : null;
+  const words = Array.isArray(input?.words)
+    ? [...input.words]
+    : testWord !== null
+      ? [testWord]
+      : commandWords(input);
+  return runTry({ ...(cwd !== undefined ? { cwd } : {}), words, options }, ports);
+}
+
+export async function jobs(input = {}, ports = {}) {
+  const env = input?.env ?? ports?.env;
+  return runJobs({ ...(input ?? {}), ...(env !== undefined ? { env } : {}) }, ports);
+}
+
+export async function health(input = {}, ports = {}) {
+  const env = input?.env ?? ports?.env;
+  return checkRuntimeHealth({ ...(input ?? {}), ...(env !== undefined ? { env } : {}) }, ports);
+}
+
+export async function mcp(input = {}, ports = {}) {
+  const cwd = input?.cwd ?? input?.root;
+  const words = Array.isArray(input?.words) ? [...input.words] : input?.story ? [input.story] : [];
+  const env = input?.env ?? ports?.env;
+  return runMcp(
+    {
+      ...(cwd !== undefined ? { cwd } : {}),
+      words,
+      ...(env !== undefined ? { env } : {}),
+    },
+    ports,
+  );
+}
+
+export async function draftInterfaces(input = {}, ports = {}) {
+  const cwd = input?.cwd ?? input?.root;
+  const words = Array.isArray(input?.words) ? [...input.words] : Array.isArray(input?.paths) ? [...input.paths] : [];
+  return runInterfaceDraft(
+    {
+      ...(cwd !== undefined ? { cwd } : {}),
+      words,
+      all: Boolean(input?.all),
+      json: Boolean(input?.json),
+      contract: input?.contract,
+      extend: Boolean(input?.extend),
+      refresh: Boolean(input?.refresh),
+    },
+    ports,
+  );
+}
+
+export function contracts(input = {}, ports = {}) {
+  const cwd = input?.cwd ?? input?.root;
+  const words = Array.isArray(input?.words) ? [...input.words] : input?.sync ? ['sync'] : [];
+  const options =
+    input?.options !== undefined
+      ? {
+          ...input.options,
+          ...(input?.write !== undefined && input.options['--write'] === undefined ? { '--write': input.write } : {}),
+        }
+      : input?.write !== undefined
+        ? { '--write': input.write }
+        : {};
+  return runContracts({ ...(cwd !== undefined ? { cwd } : {}), words, options }, ports);
+}
+
+export const source = Object.freeze({
+  identity({ root, tests, ...options } = {}, ports = {}) {
+    const normalizedTests = Array.isArray(tests)
+      ? tests
+          .map(item => (typeof item === 'string' ? item : item?.path ?? item?.story))
+          .filter(item => typeof item === 'string')
+      : tests;
+    return captureSource(
+      root,
+      { ...(normalizedTests !== undefined ? { tests: normalizedTests } : {}), ...options },
+      ports,
+    );
+  },
+});
+
+export const saved = Object.freeze({
+  results(input = {}, ports = {}) {
+    return savedStoryEvidence(input, ports);
+  },
+});
+
+export function render(result, { as = 'table' } = {}, ports = {}) {
+  if (as === 'table') return renderText(result, ports);
+  if (as === 'json') return renderJson(result, ports);
+  if (as === 'story-lines') return storyLines(Array.isArray(result) ? result : result?.rows ?? [], ports);
+  if (as === 'summary') {
+    return summaryLine(
+      Array.isArray(result) ? result : result?.rows ?? [],
+      Array.isArray(result) ? null : result?.story ?? null,
+      ports,
+    );
+  }
+  throw new RangeError(`Unsupported render format: ${String(as)}`);
+}
+
 export {
   CHECK_STATES,
   DRAFT_SERVER_TEXT,
@@ -821,8 +1043,10 @@ export {
   discoveryRefusal,
   discoveryVisibleFiles,
   exactIntegerLeaves,
+  exactValue,
   executableInterfaceText,
   fillHashes,
+  format,
   formatSize,
   formatWarningLines,
   gitFiles,
@@ -857,7 +1081,6 @@ export {
   requireRuntimePath,
   resultOutcome,
   resultOverall,
-  runInterfaceDraft,
   runtimeAgentPacketSlice,
   runtimeCheckPlanSlice,
   runtimeOrigin,
@@ -878,5 +1101,7 @@ export {
   tryUsageHeaders,
   tryUsageLine,
   validLink,
+  version,
   withExactIntegers,
+  workspace,
 };

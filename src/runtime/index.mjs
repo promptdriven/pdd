@@ -1,10 +1,13 @@
-// Generated from prompts/cli/runtime-entry.prompt.md (sha256: 0d3af7b266693c3ca1fc7a16abd42717184494059a58286bcc1fb9813cc142f7).
+// Generated from prompts/cli/runtime-entry.prompt.md (sha256: 410fd18a13bf0c6805631af18b1d15481737e02661ad6177b1377c7aca007a84).
 import { createRequire } from 'node:module';
+import { isDeepStrictEqual } from 'node:util';
 
 const req = createRequire(import.meta.url);
 
 export const LIMITS = Object.freeze({ bytes: 10_485_760, files: 10_000 });
 export const TEST_SCHEMA = 'prompt-runtime.program-scenario.v1';
+const APP_MAP_SCHEMA = 'prompt-runtime.app-map.v1';
+const ENGINE_SHA = 'eae2202a68d00ab762fcbbf1eba0d8607a132a15';
 export const DRAFT_SERVER_TEXT = 'The server does not run draft prompts yet. Approve the prompt first, or wait for the server update.';
 export const STALE_HINT = 'the text changed after approval: set status to draft, run pdd test --fill-hash, ask the person';
 export const staleHint = `pdd: ${STALE_HINT}.`;
@@ -64,6 +67,10 @@ export function runtimeClientSlice() {
 
 export function exactIntegerLeaves(...args) {
   return runtimeScenarioJsonSlice().exactIntegerLeaves(...args);
+}
+
+export function exactValue(...args) {
+  return runtimeScenarioJsonSlice().exactValue(...args);
 }
 
 export function jsonSafe(...args) {
@@ -536,4 +543,387 @@ export async function createAgentBridge(context, test, tryId, options, link, sea
 export async function migrateRuntimeWorkspace(input, ports) {
   const { migrateRuntimeWorkspace: migrate } = await import('./runtime-workspace-migration.mjs');
   return migrate(input, ports);
+}
+
+const isPlainObject = value =>
+  value !== null &&
+  typeof value === 'object' &&
+  !Array.isArray(value) &&
+  (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
+
+function commandWords(input = {}) {
+  if (Array.isArray(input?.words)) return [...input.words];
+  if (Array.isArray(input?.tests)) {
+    return input.tests
+      .map(item => (typeof item === 'string' ? item : item?.path ?? item?.story))
+      .filter(item => typeof item === 'string' && item.length > 0);
+  }
+  return [];
+}
+
+function buildCheckInput(input = {}, { defaultCache = false, extraOptions = {} } = {}) {
+  const cwd = input?.cwd ?? input?.root;
+  const options = { ...(input?.options ?? {}), ...extraOptions };
+  return {
+    ...(cwd !== undefined ? { cwd } : {}),
+    words: commandWords(input),
+    options,
+    cache: input?.cache ?? defaultCache,
+    ...(input?.client !== undefined ? { client: input.client } : {}),
+    ...(input?.workflow !== undefined ? { workflow: input.workflow } : {}),
+  };
+}
+
+const LOCAL_WHAT_FLAGS = Object.freeze({
+  files: '--files',
+  'fill-hash': '--fill-hash',
+  'explain-bindings': '--explain-bindings',
+});
+
+const SIMULATE_MODES = new Set(['open', 'cli', 'serve', 'save-last', 'stop']);
+
+export async function check(input = {}, ports) {
+  return runCheck(buildCheckInput(input, { defaultCache: true }), ports);
+}
+
+export async function lint(input = {}, ports) {
+  const extraOptions = {
+    '--lint': true,
+    ...(input?.local === true && input?.options?.['--local'] === undefined ? { '--local': true } : {}),
+  };
+  return runCheck(buildCheckInput(input, { defaultCache: true, extraOptions }), ports);
+}
+
+export async function read(input = {}, ports) {
+  const cwd = input?.cwd ?? input?.root;
+  const target = input?.call_id ?? input?.batch;
+  const words = Array.isArray(input?.words)
+    ? [...input.words]
+    : target !== undefined && target !== null && target !== ''
+      ? [String(target)]
+      : [];
+  return runCheck(
+    {
+      ...(cwd !== undefined ? { cwd } : {}),
+      words,
+      options: { ...(input?.options ?? {}), '--read': true },
+      cache: input?.cache ?? false,
+      ...(input?.client !== undefined ? { client: input.client } : {}),
+      ...(input?.workflow !== undefined ? { workflow: input.workflow } : {}),
+    },
+    ports,
+  );
+}
+
+export async function retry(input = {}, ports) {
+  const cwd = input?.cwd ?? input?.root;
+  const words = Array.isArray(input?.words) ? [...input.words] : [];
+  const retryTarget = input?.batch ?? input?.options?.['--retry'];
+  return runCheck(
+    {
+      ...(cwd !== undefined ? { cwd } : {}),
+      words,
+      options: {
+        ...(input?.options ?? {}),
+        ...(retryTarget !== undefined ? { '--retry': retryTarget } : {}),
+      },
+      cache: input?.cache ?? false,
+      ...(input?.client !== undefined ? { client: input.client } : {}),
+      ...(input?.workflow !== undefined ? { workflow: input.workflow } : {}),
+    },
+    ports,
+  );
+}
+
+export async function local(input = {}, ports) {
+  const flag = LOCAL_WHAT_FLAGS[input?.what];
+  if (!flag) {
+    throw new RangeError(`Unsupported local inspection mode: ${String(input?.what)}`);
+  }
+  const extraOptions = {
+    [flag]: true,
+    ...(input?.compact === true && input?.options?.['--compact'] === undefined ? { '--compact': true } : {}),
+  };
+  return runCheck({ ...buildCheckInput(input, { defaultCache: false, extraOptions }), cache: false }, ports);
+}
+
+export async function simulate(input = {}, ports) {
+  if (input?.mode !== undefined && !SIMULATE_MODES.has(input.mode)) {
+    throw new RangeError(`Unsupported simulate mode: ${String(input.mode)}`);
+  }
+  const cwd = input?.cwd ?? input?.root;
+  const options = { ...(input?.options ?? {}) };
+  if (input?.mode === 'cli') options['--cli'] = true;
+  else if (input?.mode === 'serve' && options['--serve'] === undefined) options['--serve'] = input?.port ?? true;
+  else if (input?.mode === 'save-last') options['--save-last'] = true;
+  else if (input?.mode === 'stop') options['--stop'] = true;
+  const testWord =
+    typeof input?.test === 'string' && input.test.length > 0
+      ? input.test
+      : input?.test && typeof input.test === 'object' && typeof (input.test.path ?? input.test.story) === 'string'
+        ? input.test.path ?? input.test.story
+        : null;
+  const words = Array.isArray(input?.words)
+    ? [...input.words]
+    : testWord !== null
+      ? [testWord]
+      : commandWords(input);
+  return runTry({ ...(cwd !== undefined ? { cwd } : {}), words, options }, ports);
+}
+
+export async function jobs(input = {}, ports) {
+  const env = input?.env ?? ports?.env;
+  return runJobs({ ...(input ?? {}), ...(env !== undefined ? { env } : {}) }, ports);
+}
+
+export async function health(input = {}, ports) {
+  const env = input?.env ?? ports?.env;
+  return checkRuntimeHealth({ ...(input ?? {}), ...(env !== undefined ? { env } : {}) }, ports);
+}
+
+export async function mcp(input = {}, ports) {
+  const cwd = input?.cwd ?? input?.root;
+  const words = Array.isArray(input?.words) ? [...input.words] : input?.story ? [input.story] : [];
+  const env = input?.env ?? ports?.env;
+  return runMcp(
+    {
+      ...(cwd !== undefined ? { cwd } : {}),
+      words,
+      ...(env !== undefined ? { env } : {}),
+    },
+    ports,
+  );
+}
+
+export async function draftInterfaces(input = {}, ports) {
+  const cwd = input?.cwd ?? input?.root;
+  const words = Array.isArray(input?.words) ? [...input.words] : Array.isArray(input?.paths) ? [...input.paths] : [];
+  return runInterfaceDraft(
+    {
+      ...(cwd !== undefined ? { cwd } : {}),
+      words,
+      all: Boolean(input?.all),
+      json: Boolean(input?.json),
+      contract: input?.contract,
+      extend: Boolean(input?.extend),
+      refresh: Boolean(input?.refresh),
+    },
+    ports,
+  );
+}
+
+export function contracts(input = {}, ports) {
+  const cwd = input?.cwd ?? input?.root;
+  const words = Array.isArray(input?.words) ? [...input.words] : input?.sync ? ['sync'] : [];
+  const options =
+    input?.options !== undefined
+      ? {
+          ...input.options,
+          ...(input?.write !== undefined && input.options['--write'] === undefined ? { '--write': input.write } : {}),
+        }
+      : input?.write !== undefined
+        ? { '--write': input.write }
+        : {};
+  return runContracts({ ...(cwd !== undefined ? { cwd } : {}), words, options }, ports);
+}
+
+function parseInterfaceBlockMatch(match) {
+  let parsed = null;
+  try {
+    const candidate = JSON.parse(match[1]);
+    if (isPlainObject(candidate)) parsed = candidate;
+  } catch {
+    parsed = null;
+  }
+  return {
+    raw: match[0],
+    json: parsed,
+    status: typeof parsed?.status === 'string' ? parsed.status : null,
+    prose_sha256: typeof parsed?.prose_sha256 === 'string' ? parsed.prose_sha256 : null,
+    start: match.indices[0][0],
+    end: match.indices[0][1],
+  };
+}
+
+function topLevelStringSpans(body) {
+  const skipString = start => {
+    let i = start + 1;
+    while (i < body.length) {
+      if (body[i] === '\\') {
+        i += 2;
+        continue;
+      }
+      if (body[i] === '"') return i + 1;
+      i += 1;
+    }
+    return -1;
+  };
+  const spans = new Map();
+  const counts = new Map();
+  let depth = 0;
+  for (let i = 0; i < body.length; ) {
+    const ch = body[i];
+    if (ch === '"') {
+      const end = skipString(i);
+      if (end < 0) return null;
+      const after = /^\s*:\s*/.exec(body.slice(end));
+      if (depth === 1 && after) {
+        const key = JSON.parse(body.slice(i, end));
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+        const valStart = end + after[0].length;
+        if (body[valStart] === '"') {
+          const valEnd = skipString(valStart);
+          if (valEnd < 0) return null;
+          spans.set(key, [valStart, valEnd]);
+          i = valEnd;
+          continue;
+        }
+        spans.delete(key);
+      }
+      i = end;
+      continue;
+    }
+    if (ch === '{' || ch === '[') depth += 1;
+    else if (ch === '}' || ch === ']') depth -= 1;
+    i += 1;
+  }
+  return { spans, counts };
+}
+
+function setInterfaceStatusImpl(text, { status, prose_sha256: nextDigest } = {}) {
+  if (typeof text !== 'string' || typeof status !== 'string') return null;
+  if (nextDigest !== undefined && typeof nextDigest !== 'string') return null;
+  const preflightSlice = runtimePreflightSlice();
+  const blocks = preflightSlice.interfaceBlocks(text);
+  if (blocks.length !== 1) return null;
+  const [start, end] = blocks[0].indices[1];
+  const body = blocks[0][1];
+  const expectedDigest = preflightSlice.proseSha256(text);
+  let value;
+  try {
+    value = JSON.parse(body);
+  } catch {
+    return null;
+  }
+  if (!isPlainObject(value)) return null;
+  const parsedSpans = topLevelStringSpans(body);
+  if (!parsedSpans) return null;
+  const { spans, counts } = parsedSpans;
+  if (counts.get('status') !== 1 || counts.get('prose_sha256') !== 1) return null;
+  const statusSpan = spans.get('status');
+  const digestSpan = spans.get('prose_sha256');
+  if (!statusSpan || !digestSpan) return null;
+  const edits = [[...statusSpan, JSON.stringify(status)]];
+  if (nextDigest !== undefined) edits.push([...digestSpan, JSON.stringify(nextDigest)]);
+  edits.sort((a, b) => b[0] - a[0]);
+  const changed = edits.reduce(
+    (acc, [from, to, replacement]) => acc.slice(0, from) + replacement + acc.slice(to),
+    body,
+  );
+  const next = text.slice(0, start) + changed + text.slice(end);
+  try {
+    const expectedValue = {
+      ...value,
+      status,
+      ...(nextDigest !== undefined ? { prose_sha256: nextDigest } : {}),
+    };
+    const nextBlocks = preflightSlice.interfaceBlocks(next);
+    if (nextBlocks.length !== 1 || preflightSlice.proseSha256(next) !== expectedDigest) return null;
+    return isDeepStrictEqual(JSON.parse(changed), expectedValue) &&
+      isDeepStrictEqual(JSON.parse(nextBlocks[0][1]), expectedValue)
+      ? next
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export const format = Object.freeze({
+  parseScenario(text) {
+    return runtimeScenarioJsonSlice().parseScenarioJson(text);
+  },
+  stringifyScenario(doc, space) {
+    return runtimeScenarioJsonSlice().stringifyScenarioJson(doc, space);
+  },
+  exactValue(value) {
+    return runtimeScenarioJsonSlice().exactValue(value);
+  },
+  isScenario(text) {
+    if (typeof text !== 'string') return false;
+    try {
+      const doc = runtimeScenarioJsonSlice().parseScenarioJson(text);
+      return isPlainObject(doc) && doc.schema_version === TEST_SCHEMA;
+    } catch {
+      return false;
+    }
+  },
+  interfaceBlocks(text) {
+    return runtimePreflightSlice().interfaceBlocks(String(text ?? '')).map(parseInterfaceBlockMatch);
+  },
+  proseSha256(text) {
+    return runtimePreflightSlice().proseSha256(text);
+  },
+  interfaceProblems(json) {
+    return runtimePreflightSlice().interfaceSchemaProblems(json);
+  },
+  setInterfaceStatus(text, fields) {
+    return setInterfaceStatusImpl(text, fields);
+  },
+  storyCriteria(text) {
+    return runtimePreflightSlice().storyCriteria(text);
+  },
+});
+
+export const source = Object.freeze({
+  identity({ root, tests, ...options } = {}, ports) {
+    const normalizedTests = Array.isArray(tests)
+      ? tests
+          .map(item => (typeof item === 'string' ? item : item?.path ?? item?.story))
+          .filter(item => typeof item === 'string')
+      : tests;
+    return captureSource(
+      root,
+      { ...(normalizedTests !== undefined ? { tests: normalizedTests } : {}), ...options },
+      ports,
+    );
+  },
+});
+
+export const saved = Object.freeze({
+  results(input = {}, ports) {
+    return savedStoryEvidence(input, ports);
+  },
+});
+
+export const workspace = Object.freeze({
+  policy(input) {
+    return runtimeWorkspaceSlice().loadRuntimeWorkspace(input);
+  },
+  allows(policy, path) {
+    return runtimeWorkspaceSlice().allowsRuntimePath(policy, path);
+  },
+});
+
+export function render(result, { as = 'table' } = {}, ports) {
+  if (as === 'table') return renderText(result, ports);
+  if (as === 'json') return renderJson(result, ports);
+  if (as === 'story-lines') return storyLines(Array.isArray(result) ? result : result?.rows ?? [], ports);
+  if (as === 'summary') {
+    return summaryLine(
+      Array.isArray(result) ? result : result?.rows ?? [],
+      Array.isArray(result) ? null : result?.story ?? null,
+      ports,
+    );
+  }
+  throw new RangeError(`Unsupported render format: ${String(as)}`);
+}
+
+export function version() {
+  return {
+    package: '@promptdriven/runtime-client',
+    api_version: 1,
+    formats: { scenario: TEST_SCHEMA, app_map: APP_MAP_SCHEMA },
+    limits: { ...LIMITS },
+    engine_sha: ENGINE_SHA,
+  };
 }

@@ -5,11 +5,12 @@ import { createHash } from 'node:crypto';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, readSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, realpathSync, symlinkSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep, basename } from 'node:path';
 import { headerPrompts } from './file-owner.mjs';
-import { runtimeOutputSlice, runtimePreflightSlice, runtimeScenarioJsonSlice } from './runtime-seam.mjs';
+import { cleanText, format, runtimeOutputSlice, runtimePreflightSlice, runtimeScenarioJsonSlice } from './runtime-seam.mjs';
 
 const { gitFiles } = runtimePreflightSlice();
-const { cleanText } = runtimeOutputSlice();
-const { exactIntegerLeaves, jsonSafe, parseScenarioJson, stringifyScenarioJson, withExactIntegers } = runtimeScenarioJsonSlice();
+runtimeOutputSlice();
+const { exactIntegerLeaves, jsonSafe, withExactIntegers } = runtimeScenarioJsonSlice();
+const { parseScenario, stringifyScenario } = format;
 export const REPLAY_POLICY = 'pdd.replay-evidence.v1';
 const LIMIT = 2 * 1024 * 1024, MAX = 10000;
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -75,7 +76,7 @@ function vectorFile(root, path, visible) {
 }
 function scenario(path, bytes) {
   // Exact whole numbers above 2^53 keep their digits beside the ordinary JSON snapshot.
-  const exact = parseScenarioJson(new TextDecoder('utf-8',{fatal:true}).decode(bytes)), doc = jsonSafe(exact), leaves = exactIntegerLeaves(exact);
+  const exact = parseScenario(new TextDecoder('utf-8',{fatal:true}).decode(bytes)), doc = jsonSafe(exact), leaves = exactIntegerLeaves(exact);
   requireThat(object(doc) && doc.schema_version === 'prompt-runtime.program-scenario.v1' && Array.isArray(doc.steps) && doc.steps.length > 0 && doc.steps.length <= MAX, 'Original vectors need nonempty versioned scenario steps.');
   const seen = new Set(), steps = [], checks = [];
   for (const step of doc.steps) {
@@ -216,7 +217,7 @@ function adoptionView(root, ref, scenarios, source, scenarioReference) {
   } catch(error) {rmSync(temp,{recursive:true,force:true});throw error;}
 }
 function selectedFiles(root, tests) {
-  const script=`import {captureSource} from ${JSON.stringify(new URL('./runtime-seam.mjs',import.meta.url).href)};try{process.stdout.write(JSON.stringify(captureSource(process.argv[1],{tests:JSON.parse(process.argv[2])}).files));}catch(error){process.stderr.write(String(error.message));process.exitCode=1;}`;
+  const script=`import {source} from ${JSON.stringify(new URL('./runtime-seam.mjs',import.meta.url).href)};try{process.stdout.write(JSON.stringify(source.identity({root:process.argv[1],tests:JSON.parse(process.argv[2])}).files));}catch(error){process.stderr.write(String(error.message));process.exitCode=1;}`;
   try {return JSON.parse(execFileSync(process.execPath,['--input-type=module','-e',script,root,JSON.stringify(tests)],{env:gitEnvironment(),maxBuffer:16*1024*1024,stdio:['ignore','pipe','pipe']}).toString());}
   catch(error) {throw Error(`Required context selection failed: ${error.stderr?.toString().trim() || 'local selector failed'}`);}
 }
@@ -447,7 +448,7 @@ function changeRow(path, before, after) {
   return row;
 }
 function valueChanges(before, after, path = '') {
-  if(stringifyScenarioJson(before)===stringifyScenarioJson(after))return [];
+  if(stringifyScenario(before)===stringifyScenario(after))return [];
   const container=value=>object(value)||Array.isArray(value);
   if((container(before)||before===undefined) && (container(after)||after===undefined) &&
       !(before!==undefined && after!==undefined && Array.isArray(before)!==Array.isArray(after))) {
@@ -457,7 +458,7 @@ function valueChanges(before, after, path = '') {
   }
   return [changeRow(path,before,after)];
 }
-const changeValue=value=>value===undefined ? '(missing)' : stringifyScenarioJson(value);
+const changeValue=value=>value===undefined ? '(missing)' : stringifyScenario(value);
 // JSON escaping keeps identities and values distinct. Entities display complete
 // separators without exposing URLs or matching the outer body's path cleaner.
 const renderValue=value=>inertMarkers(String(value).replace(/[^\x20-\x7e]/g,char=>'\\u'+char.charCodeAt(0).toString(16).padStart(4,'0')))

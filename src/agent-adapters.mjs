@@ -1,10 +1,10 @@
-import { runtimeWorkspaceSlice } from './runtime-seam.mjs';
-// Generated from prompts/cli/agent-adapters.prompt.md (sha256: f487d9b159e782bf408a898f1dfc47b788a283fa2b4a3e599849014aa5c180d6).
+// Generated from prompts/cli/agent-adapters.prompt.md (sha256: f778e52a2317b125f122cd9765b1d20c7657231e5b1d6e1c3cbaf7d6f5f58f98).
 import { spawn } from 'node:child_process';
 import { lstatSync, statSync } from 'node:fs';
 import { delimiter, resolve, isAbsolute } from 'node:path';
 import { loadAgentDefinitions } from './agent-config.mjs';
-const { loadRuntimeWorkspace } = runtimeWorkspaceSlice();
+import { runtimeWorkspaceSlice, workspace } from './runtime-seam.mjs';
+runtimeWorkspaceSlice();
 const AGENTS = [['codex','Codex'],['claude','Claude'],['gemini','Gemini']];
 // A configured credential is not a successful provider request; never expose the status payload.
 export function parseAgentAuthStatus({agent,result} = {}) {
@@ -55,7 +55,7 @@ function geminiCapabilityError(help) {
  return missing?`Gemini Try read-only mode requires ${missing}; update Gemini CLI.`:null;
 }
 export async function discoverAgents({cwd=process.cwd(),env=process.env,run=runAgentProcess,definitions}={}) {
- if((arguments[0]?.workspace??loadRuntimeWorkspace({root:cwd})).configured)return (arguments[0].definitions??AGENTS.map(([id,name])=>({id,name}))).map(d=>({id:d.id,name:d.name,state:'error',detail:'Bounded agent connection is unavailable: packet-only context cannot be established.'}));
+ if((arguments[0]?.workspace??workspace.policy({root:cwd})).configured)return (arguments[0].definitions??AGENTS.map(([id,name])=>({id,name}))).map(d=>({id:d.id,name:d.name,state:'error',detail:'Bounded agent connection is unavailable: packet-only context cannot be established.'}));
  const result=[];
  for(const {id,name,kind,command,env:overrides} of definitions??loadAgentDefinitions({cwd,env})){
   const childEnv={...env,...overrides},opts={cwd,env:childEnv,timeoutMs:10000,maxBytes:131072};

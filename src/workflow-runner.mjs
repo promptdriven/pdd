@@ -50,7 +50,7 @@ import { startChat, sendToChat, herdrCommand, chatSession, chatHealth, openChat,
 import { samePath } from './workflow-herdr-layout.mjs';
 import { workflowAgentEntry } from './workflow-agents.mjs';
 import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
-import { runtimeOutputSlice, runtimePreflightSlice } from './runtime-seam.mjs';
+import { PROMPT_TESTS_LABEL, PROMPT_TESTS_WORDS, causeText, format, isStoryPath, render, runtimeOutputSlice, runtimePreflightSlice } from './runtime-seam.mjs';
 import { approvalRecords, preparePrEvidence } from './workflow-pr-evidence.mjs';
 import { validateProofRecord } from './workflow-prove.mjs';
 import { readRunResults, resultLines, usableResult, noResultLine, NO_VERDICT, prepareNativeEvidence, savedCheckCause, savedLostCheck } from './workflow-results.mjs';
@@ -58,8 +58,9 @@ import { collectTestInventory } from './workflow-inventory.mjs';
 import {readSmallChangeChecklist} from './workflow-small-change.mjs';
 import {adoptReplayCorpus,REPLAY_POLICY,sourceFingerprint as gitFingerprint,pinReplayVectors,pinRunAnchor,readReplayEvidence,readFormalEvidence,formatFormalEvidence,formatReplayEvidence} from './workflow-replay.mjs';
 
-const { captureSource, findTests, gitFiles, interfaceBlocks, interfaceSchemaProblems, isStoryPath, proseSha256 } = runtimePreflightSlice();
-const { storyLines, PROMPT_TESTS_LABEL, PROMPT_TESTS_WORDS, causeText } = runtimeOutputSlice();
+const { captureSource, findTests, gitFiles, interfaceBlocks } = runtimePreflightSlice();
+runtimeOutputSlice();
+const { interfaceProblems, proseSha256 } = format;
 import { DETAILS_OPEN, TOP_NOTE, balancedDetails, closingInert, detailsOf, pr1Order, prArea, prStatus, readPrFields, readableNextLines, readablePrBody, readablePrTitle, readablePrTop, sameReadableTop, userStory } from './workflow-pr-body.mjs';
 import { nativeGithubCounter } from './github-calls.mjs';
 import { storyCard, storyFingerprint, fingerprintChanges, fullCheckPass } from './workflow-story-card.mjs';
@@ -2689,7 +2690,7 @@ async function recordEvidenceCommand({ ref, summaryFile, cwd }, ports) {
         throw Error('Evidence row Story/state does not match its selected test.');
       return { ...row, phase: 'server', criteria_total: test.doc?.criteria?.length ?? 0 };
     });
-    const expected = new Map(storyLines(rows));
+    const expected = new Map(render(rows, { as: 'story-lines' }));
     lines = rows.map(row => row.summary_line);
     // A saved result of an older pdd says `Runtime check`: read its label as `Prompt tests` before the compare.
     const label = line => typeof line === 'string' ? line.replace(LABEL_START, PROMPT_TESTS_LABEL) : line;
@@ -3332,7 +3333,7 @@ async function approveGatePrompts(run, p, snapshot = null) {
     if (blocks.length !== 1) throw Error(`${path} must have one Runtime interface block.`);
     let iface;
     try { iface = JSON.parse(blocks[0][1]); } catch { throw Error(`${path} has invalid Runtime interface JSON.`); }
-    const problems = interfaceSchemaProblems(iface);
+    const problems = interfaceProblems(iface);
     if (problems.length) throw Error(`${path}: ${problems.map(item => `${item.code} ${item.pointer} ${item.rule}`).join('; ')}`);
     const hash = proseSha256(text);
     if (iface.status === 'approved' && iface.prose_sha256 === hash) continue;
