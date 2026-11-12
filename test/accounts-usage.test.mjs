@@ -6,9 +6,11 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import * as fsp from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { execFileSync } from 'node:child_process';
 import { setImmediate } from 'node:timers/promises';
 import { loadUsage, markLimited, readAllUsage, readLoginUsage, saveUsage } from '../src/accounts-usage.mjs';
+import { claudeFolderFacts } from '../src/accounts-login.mjs';
 
 // Fake logins only. Every secret below is made up for this test.
 const NOW = Date.UTC(2026, 10, 11, 23, 0, 0);
@@ -142,7 +144,8 @@ test('an access token that ends within 10 minutes is not read, and other logins 
   assert.deepEqual(await read(codexLogin(t, 'cx3', { file: '{bad' })), { ...empty, note: 'login file is unreadable' });
   assert.deepEqual(await read(codexLogin(t, 'cx3', { file: authFile(0).replace(/"access_token":"[^"]*"/, '"access_token":"opaque"') })),
     { ...empty, kind: 'full', note: 'access end is unknown; not read' });
-  assert.deepEqual(await read({ name: 'c1', provider: 'claude', home: '/fake/claude' }), { ...empty, note: 'usage read is only for codex logins' });
+  assert.deepEqual(await read({ name: 'c1', provider: 'claude', home: '/fake/claude' }), { ...empty, note: 'Claude has no usage read; pdd uses the limit message' });
+  assert.deepEqual(await read({ name: 'g1', provider: 'gemini', home: '/fake/gemini' }), { ...empty, note: 'usage read is only for codex logins' });
   assert.deepEqual(await read({ name: 'cx4', provider: 'codex', home: 'relative/cx4' }), { ...empty, note: 'login folder is not an absolute path' });
   assert.equal(codex.starts.length, 0);
   await read(codexLogin(t, 'cx2', { exp: S(10 * 60 + 1) }));
@@ -404,4 +407,53 @@ test('the cache lock: a stale lock is taken over; a held lock refuses after 100 
   assert.equal(sleeps, 100);
   assert.equal(existsSync(lock), true, 'another process owns the lock');
   assert.equal(readFileSync(join(dir, 'usage.json'), 'utf8'), before);
+});
+
+// Wraps every function of fs, fs/promises and child_process while `run` runs, and
+// records each call with its string arguments.
+async function spyEverything(run) {
+  const require = createRequire(import.meta.url);
+  const calls = [], restore = [];
+  for (const [label, mod] of [['fs', require('node:fs')], ['fs/promises', require('node:fs/promises')], ['child_process', require('node:child_process')]]) {
+    for (const key of Object.keys(mod)) {
+      const original = mod[key];
+      if (typeof original !== 'function' || /^[A-Z]/.test(key)) continue;
+      mod[key] = function (...args) {
+        calls.push({ module: label, name: key, args: args.filter(a => typeof a === 'string' || a instanceof URL || Buffer.isBuffer(a)).map(String) });
+        return original.apply(this, args);
+      };
+      restore.push(() => { mod[key] = original; });
+    }
+  }
+  syncBuiltinESMExports();
+  try { await run(); } finally { for (const undo of restore) undo(); syncBuiltinESMExports(); }
+  return calls;
+}
+
+test('Claude folders: names only; no credential file is opened or named, and no program (Keychain) starts', async t => {
+  const signed = folder(t, 'pdd-claude-a-');
+  writeFileSync(join(signed, '.credentials.json'), '{"claudeAiOauth":{"accessToken":"fake-claude-secret"}}');
+  writeFileSync(join(signed, '.claude.json'), '{"oauthAccount":{"emailAddress":"fake@example.test"}}');
+  const used = folder(t, 'pdd-claude-b-');
+  writeFileSync(join(used, '.claude.json'), '{}');
+  const fresh = folder(t, 'pdd-claude-c-');
+  writeFileSync(join(fresh, 'settings.json'), '{}');
+  const results = {};
+  let spawned = 0;
+  const calls = await spyEverything(async () => {
+    for (const [name, dir] of Object.entries({ signed, used, fresh, missing: join(fresh, 'missing'), file: join(fresh, 'settings.json') }))
+      results[name] = await claudeFolderFacts(dir);
+    results.usage = await readLoginUsage({ name: 'claude1', provider: 'claude', home: signed }, { now: NOW }, { spawn: () => { spawned++; } });
+  });
+  assert.deepEqual(results, { signed: { state: 'present' }, used: { state: 'present' }, fresh: { state: 'none' },
+    missing: { state: 'none' }, file: { state: 'none' },
+    usage: { ...empty, note: 'Claude has no usage read; pdd uses the limit message' } });
+  assert.equal(spawned, 0);
+  assert.deepEqual(calls.filter(call => call.module === 'child_process'), [], 'no program starts, so never security');
+  const touched = calls.filter(call => call.args.some(arg => /\.credentials\.json|\.claude\.json/.test(arg)));
+  assert.deepEqual(touched, [], 'no fs call names a credential file');
+  const folders = [signed, used, fresh, join(fresh, 'missing'), join(fresh, 'settings.json')];
+  assert.deepEqual(calls.map(call => [call.name, call.args[0]]), folders.map(dir => ['readdir', dir]),
+    'the spy sees every call: one readdir per folder and nothing for the usage row');
+  await assert.rejects(claudeFolderFacts('relative/claude'), { name: 'TypeError' });
 });

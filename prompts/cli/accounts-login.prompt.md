@@ -1,4 +1,4 @@
-# Codex login facts
+# Login facts
 
 Own `src/accounts-login.mjs`. This is the only pdd module that opens a Codex
 `auth.json`. The login pool needs a few facts about a login folder (is there a
@@ -6,7 +6,8 @@ login, can it renew itself, when does its access end, is it the same account as
 another folder) and a safe place to run a usage read. A login file is a
 password: a refresh token that leaks or gets used twice can end the login for
 every machine that has it. So this module answers with facts only, and the one
-copy that it writes holds no refresh token.
+copy that it writes holds no refresh token. For a Claude folder it reads
+file names only (see [Claude folders](#claude-folders)).
 
 It never logs or saves a token, an account id or an email, and it returns one
 only from `readLoginForUpload` (below). It changes the login folder only in
@@ -23,14 +24,17 @@ starts no program.
   `{text, sha256, facts}`.
 - async `makeAccessOnly(home, expectedSha256, ports = {})` returns exactly
   `{changed, reason}`.
+- async `claudeFolderFacts(dir, ports = {})` returns exactly `{state}` (see
+  [Claude folders](#claude-folders)).
 
-`home` is the login folder (`CODEX_HOME`). It must be a non-empty absolute path
+`home` is the login folder (`CODEX_HOME`); for Claude, `dir` is the
+`CLAUDE_CONFIG_DIR` folder. It must be a non-empty absolute path
 string; otherwise every export rejects with `TypeError('A login folder must be
 an absolute path.')` before any file access, so a relative path never reads an
 `auth.json` from the working folder.
 
 Ports (each optional): `fs` overrides single functions of `node:fs/promises`
-(`open`, `lstat`, `mkdtemp`, `chmod`, `writeFile`, `rename`, `rm`); `tmpdir`
+(`open`, `lstat`, `mkdtemp`, `chmod`, `writeFile`, `rename`, `rm`, `readdir`); `tmpdir`
 is the base folder for the temporary home (default `os.tmpdir()`).
 
 ## Reading the login file
@@ -153,6 +157,28 @@ the temporary file, leaves `auth.json` as it was and rejects with an `Error`
 with `code` `PDD_ACCESS_ONLY_FAILED` and the message
 `Could not make the login file access-only.` A renewal that lands between the
 second read and the rename can still be lost; the window is a few milliseconds.
+
+## Claude folders
+
+A Claude login is a `CLAUDE_CONFIG_DIR` folder that a person signed into with
+the normal `claude` sign-in. Its credential is `.credentials.json` in that
+folder (Linux) or a macOS Keychain item. Anthropic's terms forbid a third party
+to collect or store Claude.ai credentials, so pdd only chooses which folder a
+step uses and never reads the credential.
+
+`claudeFolderFacts` decides from names only. It makes exactly one file-system
+call, `readdir(dir)` (names, no file types), and no other: it never opens,
+stats or reads `.credentials.json`, `.claude.json` or any other file in the
+folder, and it starts no program (so never `security`, the Keychain tool).
+
+| Case | `state` |
+|---|---|
+| `readdir` lists `.credentials.json` or `.claude.json` | `present` |
+| `readdir` fails (missing, not a folder, no access) or lists neither name | `none` |
+
+`present` means that Claude Code has used the folder. It does not prove a live
+sign-in; the step's own output shows that (a limit or sign-in message). It never
+rejects except for the `dir` check.
 
 ## Dependencies
 

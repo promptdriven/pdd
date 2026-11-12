@@ -61,6 +61,7 @@ every failure is a row. It decides in this order, first match wins:
 
 | Check | Row |
 |---|---|
+| `provider` is `claude` | `unknown`, `kind` null, note `Claude has no usage read; pdd uses the limit message`. No file or program is touched: Claude Code has no public usage read, so Autopilot learns a Claude limit from the agent's limit message and marks it with `markLimited`. |
 | `provider` is not `codex` | `unknown`, note `usage read is only for codex logins` |
 | `home` is not a non-empty absolute path | `unknown`, note `login folder is not an absolute path` |
 | Facts state `none` | `no-login`, note `no Codex login in this folder` |
@@ -185,7 +186,7 @@ lock. A failed write rejects with its error and leaves the old file.
 
 ## Dependencies
 
-- [Codex login facts](accounts-login.prompt.md): `codexLoginFacts` and
+- [Login facts](accounts-login.prompt.md): `codexLoginFacts` and
   `withAccessOnlyHome`; required context for the read.
 - [Codex limits](codex-limits.prompt.md): `readCodexRateLimitsReply` (the
   transport) and the window rule; required context for the read.

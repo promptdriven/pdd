@@ -1,4 +1,4 @@
-// Generated from prompts/cli/accounts-login.prompt.md (sha256: 05a24f0a5756be9619c9582d443cf2fe2ef9676b6f796f5dd949035ff7536fb0).
+// Generated from prompts/cli/accounts-login.prompt.md (sha256: 7151836184cf6971ed3f066f43329fc8b8a64131c4a5bdc12550cb5e111e6776).
 import * as realFs from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { tmpdir as osTmpdir } from 'node:os';
@@ -165,4 +165,16 @@ export async function makeAccessOnly(home, expectedSha256, ports = {}) {
     if (made) await fs.rm(temp, { force: true }).catch(() => {});
     throw codedError('PDD_ACCESS_ONLY_FAILED', 'Could not make the login file access-only.');
   }
+}
+
+const CLAUDE_SIGNS = ['.credentials.json', '.claude.json'];
+
+// Names only: one readdir of the folder. Never a stat, open or read of a file in it,
+// and no program (so never the Keychain).
+export async function claudeFolderFacts(dir, ports = {}) {
+  checkHome(dir);
+  const readdir = ports.fs?.readdir ?? realFs.readdir;
+  let names;
+  try { names = await readdir(dir); } catch { return { state: 'none' }; }
+  return { state: Array.isArray(names) && names.some(name => CLAUDE_SIGNS.includes(String(name))) ? 'present' : 'none' };
 }

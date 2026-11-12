@@ -1,4 +1,4 @@
-// Generated from prompts/cli/accounts-usage.prompt.md (sha256: 1f7f5aedbda1fda760e770824f5ba4e6f8252eaf921563ed9d650305dc52760e).
+// Generated from prompts/cli/accounts-usage.prompt.md (sha256: b1ada721b732addae0ec9faec32e2b18bfb93caedf51c53036e78de4b01496c0).
 import * as realFs from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { homedir } from 'node:os';
@@ -83,6 +83,8 @@ function childEnv(env, tempHome) {
 }
 
 async function readCodex(login, { env, now, command }, ports) {
+  // Claude Code has no public usage read: a Claude limit comes from the agent's limit message.
+  if (login.provider === 'claude') return row('unknown', { note: 'Claude has no usage read; pdd uses the limit message' });
   if (login.provider !== 'codex') return row('unknown', { note: 'usage read is only for codex logins' });
   if (typeof login.home !== 'string' || login.home === '' || !isAbsolute(login.home))
     return row('unknown', { note: 'login folder is not an absolute path' });
