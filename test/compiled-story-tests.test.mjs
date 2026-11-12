@@ -74,6 +74,18 @@ test('native-only declarations stay not run with reason and do not execute',()=>
 function selected(cwd, ...words) {
  return spawnSync(process.execPath,[bin,'test','--target','code',...words,'--json'],{cwd,encoding:'utf8'});
 }
+test('launch exception is not run and later steps and Stories execute and are saved',()=>{
+ const root=project({change:d=>{d.steps[0].input.argv=['bad\u0000arg'];d.steps.push({...structuredClone(d.steps[0]),step_id:'later',input:{argv:['hello'],stdin:'\n'}});}});
+ const doc=JSON.parse(readFileSync(join(root,'tests/demo.json'),'utf8'));
+ doc.story_path='user_stories/other.md'; doc.steps=[{...doc.steps[1],step_id:'other'}];
+ writeFileSync(join(root,'user_stories/other.md'),'# Other\n\n## Acceptance criteria\n\n1. A result.\n');
+ writeFileSync(join(root,'tests/other.json'),JSON.stringify(doc));
+ const out=selected(root,'demo','other'); assert.equal(out.status,1,out.stderr);
+ const report=JSON.parse(out.stdout), demo=report.stories.find(s=>s.story==='user_stories/demo.md'), other=report.stories.find(s=>s.story==='user_stories/other.md');
+ assert.equal(demo.status,'not run'); assert.equal(demo.steps[0].status,'not run'); assert.match(demo.steps[0].reason,/Command did not complete/);
+ assert.equal(demo.steps[1].status,'passed'); assert.equal(other.status,'passed');
+ assert.deepEqual(JSON.parse(readFileSync(join(root,'.pdd/code-test/latest.json'),'utf8')),report);
+});
 test('step simulation overrides cannot execute the CLI',()=>{
  const app="import {writeFileSync} from 'node:fs';writeFileSync('EXECUTED','yes');process.stdout.write('hello\\n');";
  const blocked=project({app,change:d=>{d.steps[0].simulation_overrides={anything:{action:'fixture'}};}});

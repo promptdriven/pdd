@@ -1193,6 +1193,25 @@ test('RUNTIME-UPDATE1: code update-required (any status, top level or error.code
 });
 
 // Wrong: agents import pdd's source for a lint, or a lint runs pdd's local copy of the engine rules.
+test('RUNTIME-LINT: selected preflight warnings appear in JSON and text', async t => {
+  const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
+  const warning = 'Warning: prompts/place_order.prompt.md entry place_order has no implementation declaration.';
+  const json = await check(setup, fake, [], { '--lint': true, '--json': true });
+  assert.equal(json.code, 0);
+  assert.equal(json.json.warnings.filter(text => text === warning).length, 1);
+  const plain = await check(setup, fake, ['place-order'], { '--lint': true });
+  assert.equal(plain.code, 0);
+  assert.ok((plain.out + plain.err).includes(warning));
+  assert.deepEqual(fake.posts.map(post => post.command), ['lint', 'lint']);
+  const implemented = harbor(t, repo => {
+    const path = join(repo, PLACE);
+    writeFileSync(path, readFileSync(path, 'utf8').replace('"operation": "place_order",', '"operation": "place_order",\n      "implementation": {"kind":"cli","command":"node app.mjs"},'));
+  });
+  const withImplementation = await check(implemented, fake, ['place-order'], { '--lint': true, '--json': true });
+  assert.equal(withImplementation.code, 0);
+  assert.equal(withImplementation.json.warnings.includes(warning), false);
+});
+
 test('RUNTIME-LINT1: pdd lint sends one lint and no checks, prints every server problem, and skips the local rules', async t => {
   const setup = harbor(t, repo => {
     const file = join(repo, 'tests/place-order.json'), doc = JSON.parse(readFileSync(file, 'utf8'));
