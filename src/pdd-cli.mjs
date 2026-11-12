@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 7e81436a195eb2462535a47ff22c1a2d087c27905ed47da7d7a627b99874a0b3).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 26196d785daa816ab1fb78f7454500c7ac386288f2bf073d959152d4d77485bd).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -375,6 +375,11 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     case 'runtime-check':
     case 'runtime-try':
       try {
+        if (plan.local === 'runtime-check' && plan.options['--target'] === 'code') {
+          if (Object.keys(plan.options).some(key => !['--target', '--json'].includes(key))) { line(stderr, 'pdd test --target code accepts only --json and Story selections.'); return 2; }
+          const { runCompiledTest } = await import('./compiled-test.mjs');
+          return await runCompiledTest({ root: cwd, words: [...plan.operands], json: !!plan.options['--json'] }, { stdout, stderr });
+        }
         const runtime = await import('./runtime-client.mjs');
         return await runtime[plan.local === 'runtime-check' ? 'runCheck' : 'runTry']({ words: [...plan.operands], options: { ...plan.options }, cwd, cache: plan.local === 'runtime-check' }, { stdout, stderr, env });
       } catch (error) {

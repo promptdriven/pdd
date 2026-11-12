@@ -1,0 +1,72 @@
+import { test, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { findTests, preflight, proseSha256 } from '../src/runtime-preflight.mjs';
+const bin = join(process.cwd(), 'bin/pdd.mjs');
+const roots = [];
+after(() => { for (const root of roots) rmSync(root,{recursive:true,force:true}); });
+function project({ resources = [], expected = 'hello\n', implementation = {kind:'cli',command:'node app.mjs'}, story = '1. A result.', change = () => {}, app = "process.stdin.setEncoding('utf8');let s='';for await (const c of process.stdin) s+=c;process.stdout.write(process.argv[2]+s);\n" } = {}) {
+ const root=mkdtempSync(join(process.cwd(),'.compiled-test-')); roots.push(root); spawnSync('git',['init','-q',root]);
+ for(const d of ['prompts','tests','user_stories']) mkdirSync(join(root,d));
+ writeFileSync(join(root,'app.mjs'),app);
+ const prompt = '# app\n\n<details><summary>Runtime interface</summary>\n\n```json\n'+JSON.stringify({status:'draft',prose_sha256:'HASH',entries:[{operation:'main',implementation,input_schema:{type:'object',properties:{argv:{type:'array',items:{type:'string'}},stdin:{type:'string'}},required:['argv'],additionalProperties:false},result_schema:{type:'object',properties:{stdout:{type:'string'},stderr:{type:'string'},exit_code:{type:'integer'}},required:['stdout','stderr','exit_code'],additionalProperties:false},errors:['bad-input']}],resources,conventions:[{path:'/entries/0/input_schema',convention:'cli'},{path:'/entries/0/result_schema',convention:'cli'}],calls:[],limits:{max_steps:4,max_model_calls:2}})+'\n```\n</details>\n'; writeFileSync(join(root,'prompts/app.prompt.md'),prompt.replace('HASH',proseSha256(prompt)));
+ writeFileSync(join(root,'user_stories/demo.md'),'# Demo\n\n## Acceptance criteria\n\n'+story+'\n');
+ const doc={schema_version:'prompt-runtime.program-scenario.v1',story_path:'user_stories/demo.md',criteria:[{id:'AC1',text:'A result.'}],initial_world:{},simulation:{},context:[],steps:[{step_id:'one',entry_path:'prompts/app.prompt.md',operation:'main',input:{argv:['hello'],stdin:'\n'},checks:[{criterion_id:'AC1',target:'result',path:'/stdout',op:'equals',value:expected},{criterion_id:'AC1',target:'result',path:'/exit_code',op:'equals',value:0},{criterion_id:'AC1',target:'result',path:'/stderr',op:'equals',value:''}]}]};
+ change(doc); writeFileSync(join(root,'tests/demo.json'),JSON.stringify(doc));
+ spawnSync('git',['add','.'],{cwd:root}); spawnSync('git',['-c','user.name=test','-c','user.email=test@example.com','commit','-qm','fixture'],{cwd:root}); return root;
+}
+function run(root){return spawnSync(process.execPath,[bin,'test','--target','code','demo','--json'],{cwd:root,encoding:'utf8',env:{...process.env,GH_TOKEN:'',GITHUB_TOKEN:'',PDD_RUNTIME_URL:'http://127.0.0.1:1'}});}
+function outcome(root){const out=run(root); assert.ok(out.stdout, out.stderr);return {out,data:JSON.parse(out.stdout)};}
+test('replays CLI arguments and stdin and records commit',()=>{const root=project();const {out,data}=outcome(root);assert.equal(out.status,0,out.stderr);assert.equal(data.stories[0].status,'passed');assert.match(data.commit,/^[0-9a-f]{40}$/);assert.equal(data.ai_calls,0);assert.equal(JSON.parse(readFileSync(join(root,'.pdd/code-test/latest.json'))).commit,data.commit);});
+test('mismatch fails and resource steps are not run',()=>{const bad=outcome(project({expected:'wrong'}));assert.notEqual(bad.out.status,0);assert.equal(bad.data.stories[0].status,'failed');const unrun=outcome(project({resources:[{name:'db',kind:'port'}]}));assert.notEqual(unrun.out.status,0);assert.equal(unrun.data.stories[0].steps[0].status,'not run');});
+test('Story criteria cannot be silently omitted or changed',()=>{for (const story of ['1. A result.\n2. Another result.', '1. A different result.']) {const {out,data}=outcome(project({story}));assert.notEqual(out.status,0);assert.notEqual(data.stories[0].status,'passed');}});
+test('expected errors are never silently ignored',()=>{const {out,data}=outcome(project({change:doc=>{doc.steps[0].expected_error='bad-input';}}));assert.notEqual(out.status,0);assert.equal(data.stories[0].status,'not run');});
+test('passes arguments literally, stdin, nonzero exit and stderr',()=>{const marker='$(touch SHOULD_NOT_EXIST)';const root=project({app:"process.stdin.setEncoding('utf8');let s='';for await(const c of process.stdin)s+=c;process.stdout.write(JSON.stringify(process.argv.slice(2))+s);process.stderr.write('problem\\n');process.exitCode=7;",change:doc=>{const s=doc.steps[0];s.input={argv:[marker,'two words'],stdin:'input\n'};s.checks[0].value=JSON.stringify([marker,'two words'])+'input\n';s.checks[1].value=7;s.checks[2].value='problem\n';}});const {out,data}=outcome(root);assert.equal(out.status,0,out.stderr);assert.equal(data.stories[0].status,'passed');assert.equal(existsSync(join(root,'SHOULD_NOT_EXIST')),false);});
+test('bounded unsupported bindings and checks never pass',()=>{const cases=[
+ {implementation:null}, {implementation:{kind:'http',command:'node app.mjs'}}, {implementation:{kind:'cli',command:'node app.mjs; touch BAD'}},
+ {resources:[{name:'db',kind:'port'}]}, {change:d=>{d.initial_world={x:1};}}, {change:d=>{d.simulation={x:1};}},
+ {change:d=>{d.steps[0].checks[0].target='world';}}, {change:d=>{d.steps[0].checks[0].path='/other';}}, {change:d=>{d.steps[0].checks[0].op='contains';}},
+ {change:d=>{d.steps[0].checks=[];}}, {change:d=>{d.steps[0].input.argv=[3];}}
+ ];for(const spec of cases){const {out,data}=outcome(project(spec));assert.notEqual(out.status,0,JSON.stringify(spec));assert.notEqual(data.stories[0].status,'passed',JSON.stringify(spec));assert.ok(data.stories[0].steps.every(step=>step.status!=='passed'),JSON.stringify(spec));}});
+
+test('lint preflight names tested entries missing implementation',()=>{
+ const missing=project({implementation:null});
+ const path=join(missing,'prompts/app.prompt.md');
+ writeFileSync(path,readFileSync(path,'utf8').replace('\"implementation\":null,',''));
+ for(const [root,expectWarning] of [[missing,true],[project(),false]]) {
+  const found=findTests({root}); const result=preflight({root,found,selected:found.tests});
+  const warnings=result.warnings.filter(line=>line.includes('has no implementation declaration'));
+  if(expectWarning) assert.deepEqual(warnings,['Warning: prompts/app.prompt.md entry main has no implementation declaration.']);
+  else assert.deepEqual(warnings,[]);
+ }
+});
+
+test('default selection includes an untested Story and cannot pass',()=>{
+ const root=project(); writeFileSync(join(root,'user_stories/other.md'),'# Other\n\n## Acceptance criteria\n\n1. Another result.\n');
+ const out=spawnSync(process.execPath,[bin,'test','--target','code','--json'],{cwd:root,encoding:'utf8'});
+ assert.notEqual(out.status,0); assert.match(out.stdout+out.stderr,/other/i);
+});
+test('scenario cannot name a different Story or claim partial coverage',()=>{
+ for (const change of [d=>{d.story_path='user_stories/other.md';},d=>{d.criteria_scope=['AC1'];},d=>{d.check_exemptions=[{criterion_id:'AC1'}];}]) {
+  const {out,data}=outcome(project({change})); assert.notEqual(out.status,0); assert.notEqual(data.stories[0].status,'passed');
+ }
+});
+test('stale or invalid Runtime interfaces cannot pass',()=>{
+ const edits=[s=>s.replace('"status":"draft"','"status":"unknown"'),s=>s.replace('"status":"draft",',''),s=>s.replace(/"prose_sha256":"[a-f0-9]+"/,'"prose_sha256":"stale"'),s=>s.replace('"input_schema":{','"input_schema":{"unsupported_keyword":true,')];
+ for(const edit of edits){const root=project();const path=join(root,'prompts/app.prompt.md');writeFileSync(path,edit(readFileSync(path,'utf8')));const {out,data}=outcome(root);assert.notEqual(out.status,0);assert.notEqual(data.stories[0].status,'passed');}
+});
+
+test('report distinguishes clean and modified source',()=>{
+ const clean=project(); assert.equal(outcome(clean).data.dirty,false);
+ const modified=project(); writeFileSync(join(modified,'app.mjs'),readFileSync(join(modified,'app.mjs'),'utf8')+'\n'); assert.equal(outcome(modified).data.dirty,true);
+});
+
+test('native-only declarations stay not run with reason and do not execute',()=>{
+ const root=project({app:"import {writeFileSync} from 'node:fs';writeFileSync('EXECUTED','yes');process.stdout.write('hello\\n');"});
+ const path=join(root,'prompts/app.prompt.md'); const text=readFileSync(path,'utf8');
+ writeFileSync(path,text.replace('"status":"draft"','"kind":"native-only","reason":"The hardware port requires a physical device.","status":"draft"'));
+ const {out,data}=outcome(root); assert.notEqual(out.status,0); assert.equal(data.stories[0].status,'not run');
+ assert.match(JSON.stringify(data),/hardware port requires a physical device/); assert.equal(existsSync(join(root,'EXECUTED')),false);
+});

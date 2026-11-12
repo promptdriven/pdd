@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: a2f38067c5398c95bff5d3f362a3d0cdd2c9dce57d9e4784575aea6509496f0d).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: f6441d71e2eb41ddd1479af851313fd75e565e6b1a6a89bb443726a2241a50b6).
 import { markdownLinks, markdownDefinitions, markdownSectionText } from './runtime-markdown.mjs';
 import { buildBindingPlan, runtimeBoundary } from './runtime-binding-plan.mjs';
 import { createHash } from 'node:crypto';
@@ -1056,6 +1056,7 @@ export function preflight({ root, found, selected,workspace=found.workspace??loa
     for (const [index, step] of row.steps.entries()) {
       const prompt = prompts.get(step?.entry_path), entry = prompt?.interface?.entries?.find?.(item => item?.operation === step?.operation);
       for (const text of entry ? checkInput(step.input, entry.input_schema, index).warnings : []) warnings.push(`Warning: ${test.path} ${text}`);
+      if (entry && !entry.implementation) { const message = `Warning: ${step.entry_path} entry ${step.operation} has no implementation declaration.`; if (!warnings.includes(message)) warnings.push(message); }
     }
     // Number advice from the exact test values. It never blocks; the interpreter decides.
     // A native-only test is never sent to the interpreter, so it gets no number advice.

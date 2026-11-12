@@ -403,3 +403,5 @@ Extend the existing simulate route with Boolean --product, text --parts and text
 ## Cap-aware lint (draft)
 
 The lint route accepts optional integer `--max-calls`, minimum 1 and maximum 1000. Its help says this selects a cap for zero-AI structural call preflight; warnings never change the cap or guarantee completion. Existing hidden `test --lint` keeps the same remote semantics; removed commands remain removed. Local lint does not accept a call cap.
+
+`pdd test --target code [STORY...] [--json]` checks selected Story scenarios on real CLI implementations without interpreter or AI calls. Its result is saved with the current commit. Unsupported steps are not run and cannot pass.
