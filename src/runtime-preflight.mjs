@@ -1,9 +1,10 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: f3d567124b7719c1492d3111bb041ff75a389957f91c5bf77965020e43c2c2ab).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 0a4ccf6451432c383419ef43c84be2f264135477cda4209f9c5ec438f5337776).
 import { markdownLinks, markdownDefinitions, markdownSectionText } from './runtime-markdown.mjs';
 import { buildBindingPlan, runtimeBoundary } from './runtime-binding-plan.mjs';
+import { resolveOwners } from './file-owner.mjs';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
 import { basename, join, posix, isAbsolute } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { expandSource } from './contract-refs.mjs';
@@ -1887,25 +1888,140 @@ export function whyNoTests(root, visible, found = discoverTests(root, [...visibl
   return why.length > 5 ? [...why.slice(0, 5), `…and ${why.length - 5} more`] : why;
 }
 
-// Source files named (in backticks) by more than one prompt: one warning line each (real-user cli issue 10).
-export function sharedSourceFiles(root, visible) {
-  const owners = new Map(), warnings = [];
-  for (const prompt of [...visible].filter(path => allowsRuntimePath(loadRuntimeWorkspace({root}),path)&&path.endsWith('.prompt.md')).sort()) {
-    if (Number(statOf(join(root,prompt))?.size ?? 0) > LIMITS.bytes) continue;
+const PROSE_NON_SOURCE_FILE = /(?:^|\/)\.[^/]+$|\.(?:json|jsonl|ndjson|ya?ml|toml|ini|cfg|conf|lock|md|txt|csv|tsv|xml|svg|png|jpe?g|gif|webp|ico|pdf|woff2?)$/i;
+
+function readRegularPrefix(root, path, limit) {
+  const stat = statOf(join(root, path));
+  if (!stat?.isFile()) return null;
+  let fd;
+  try { fd = openSync(join(root, path), constants.O_RDONLY | constants.O_NOFOLLOW); }
+  catch (error) {
+    if (['ENOENT', 'ENOTDIR', 'ELOOP'].includes(error.code)) return null;
+    if (['EACCES', 'EPERM', 'EISDIR'].includes(error.code)) return false;
+    throw error;
+  }
+  try {
+    const buffer = Buffer.alloc(Math.min(limit, Number(fstatSync(fd).size) + 1));
+    let total = 0;
+    while (total < buffer.length) {
+      const count = readSync(fd, buffer, total, buffer.length - total, total);
+      if (!count) break;
+      total += count;
+    }
+    return buffer.subarray(0, total);
+  } finally { closeSync(fd); }
+}
+
+function safeClosureTarget(raw, from, allowedSet) {
+  if (typeof raw !== 'string') return null;
+  try {
+    const resolved = from ? contextPath(raw, from, allowedSet) : sourcePath(raw, 'Selected source');
+    return resolved && allowedSet.has(resolved) ? resolved : null;
+  } catch { return null; }
+}
+
+// Source files owned by more than one prompt: one warning line each, scoped to selected tests when supplied.
+export function sharedSourceFiles(root, visible, { tests = null, prompts: selectedPrompts = null, workspace = loadRuntimeWorkspace({ root }) } = {}) {
+  const policy = boundedWorkspace(root, workspace);
+  const allowedSet = new Set([...visible].filter(path => allowsRuntimePath(policy, path)));
+  const promptPaths = [...allowedSet].filter(path => path.endsWith('.prompt.md')).sort();
+  const promptTexts = new Map(), warnings = [];
+  let linkedPort;
+  for (const prompt of promptPaths) {
+    const stat = statOf(join(root, prompt));
+    if (Number(stat?.size ?? 0) > LIMITS.bytes) continue;
     let text;
-    try { text = readText(root, prompt); }
+    try { text = stat?.isSymbolicLink() ? (linkedPort ??= sourceFilePort(root, allowedSet, policy)).read({ path: prompt }).content : readText(root, prompt); }
     catch (error) {
-      if (!(error instanceof PreflightError && error.exitCode === 4) && !['EACCES','EPERM','EISDIR','ENOENT'].includes(error.code)) throw error;
+      if (!(error instanceof PreflightError && error.exitCode === 4) && !['EACCES', 'EPERM', 'EISDIR', 'ENOENT'].includes(error.code)) throw error;
       warnings.push(`Warning: ${prompt}: source ownership advice unavailable (${error.code ?? error.message}).`); continue;
     }
-    for (const match of text.matchAll(/`([^`\s]+)`/g)) {
-      const path = match[1].replace(/^\.\//, '');
-      if (path === prompt || path.endsWith('.md') || !visible.has(path)) continue;
-      owners.set(path, new Set([...(owners.get(path) ?? []), prompt]));
+    promptTexts.set(prompt, text);
+  }
+  let scope = null;
+  if (tests !== null || selectedPrompts !== null) {
+    scope = new Set();
+    const queue = [], visited = new Set();
+    const enqueue = (raw, from = null, role = 'context') => {
+      const target = safeClosureTarget(raw, from, allowedSet);
+      if (target && !visited.has(`${role}:${target}`)) queue.push({ path: target, role });
+    };
+    const readSafe = path => {
+      if (promptTexts.has(path)) return promptTexts.get(path);
+      const stat = statOf(join(root, path));
+      if (!stat || Number(stat.size) > LIMITS.bytes) return null;
+      try { return stat.isSymbolicLink() ? (linkedPort ??= sourceFilePort(root, allowedSet, policy)).read({ path }).content : readText(root, path); }
+      catch { return null; }
+    };
+    for (const raw of selectedPrompts ?? []) {
+      const target = safeClosureTarget(raw, null, allowedSet);
+      if (target?.endsWith('.prompt.md')) { scope.add(target); enqueue(target); }
+    }
+    for (const entry of tests ?? []) {
+      const testPath = typeof entry === 'string' ? safeClosureTarget(entry, null, allowedSet) : safeClosureTarget(entry?.path, null, allowedSet);
+      let doc = isObject(entry?.doc) ? entry.doc : null;
+      if (!doc && testPath) {
+        const raw = readSafe(testPath);
+        if (raw) { try { const parsed = JSON.parse(raw); if (isObject(parsed)) doc = parsed; } catch {} }
+      }
+      if (typeof entry?.storyPath === 'string') enqueue(entry.storyPath, null, 'story');
+      if (!doc) continue;
+      if (typeof doc.story_path === 'string') enqueue(doc.story_path, null, 'story');
+      for (const item of Array.isArray(doc.entry_paths) ? doc.entry_paths : []) enqueue(item);
+      for (const item of Array.isArray(doc.app_maps) ? doc.app_maps : []) enqueue(item, null, 'app-map');
+      for (const step of Array.isArray(doc.steps) ? doc.steps : []) if (typeof step?.entry_path === 'string') enqueue(step.entry_path);
+      for (const item of Array.isArray(doc.context) ? doc.context : []) {
+        if (typeof item?.prompt_path === 'string') enqueue(item.prompt_path);
+        for (const contextItem of Array.isArray(item?.paths) ? item.paths : []) enqueue(contextItem);
+      }
+    }
+    while (queue.length) {
+      const { path, role } = queue.shift(), key = `${role}:${path}`;
+      if (visited.has(key)) continue;
+      visited.add(key);
+      if (path.endsWith('.prompt.md')) scope.add(path);
+      if (role === 'app-map') {
+        const text = readSafe(path); if (!text) continue;
+        let map; try { map = JSON.parse(text); } catch { continue; }
+        const walk = value => {
+          if (Array.isArray(value)) { for (const item of value) walk(item); return; }
+          if (!isObject(value)) return;
+          if (typeof value.prompt_path === 'string') enqueue(value.prompt_path);
+          if (typeof value.owner_prompt === 'string') enqueue(value.owner_prompt);
+          for (const field of ['screens', 'router', 'routes', 'handlers', 'handler', 'after', 'timers', 'host_regions', 'helpers']) walk(value[field]);
+        };
+        walk(map);
+      } else if (path.endsWith('.md')) {
+        const text = readSafe(path); if (!text) continue;
+        if (role === 'story' || isStoryPath(path)) {
+          for (const member of runtimeBoundary(path, text) ?? []) enqueue(member);
+        }
+        for (const raw of markdownContext(text)) enqueue(raw, path);
+        if (path.endsWith('.prompt.md')) {
+          for (const block of interfaceBlocks(text)) {
+            let doc; try { doc = JSON.parse(block[1]); } catch { continue; }
+            for (const call of Array.isArray(doc?.calls) ? doc.calls : []) if (typeof call?.target === 'string') enqueue(call.target, path);
+          }
+        }
+      }
     }
   }
-  return [...warnings,...[...owners].filter(([, prompts]) => prompts.size > 1).sort(([a], [b]) => a.localeCompare(b))
-    .map(([path, prompts]) => `Warning: ${path} is named by ${prompts.size} prompts (${[...prompts].join(', ')}). One prompt should own each source file.`)];
+  const candidatePaths = [...allowedSet].filter(path => !path.endsWith('.md')).sort((a, b) => a.localeCompare(b));
+  const rawBindings = allowedSet.has('pdd-bindings.json') ? readRegularPrefix(root, 'pdd-bindings.json', 65_536) : null;
+  const bindings = rawBindings ? rawBindings.toString('utf8') : rawBindings;
+  const heads = candidatePaths.map(path => ({ path, content: readRegularPrefix(root, path, 4097) }));
+  const prompts = [...promptTexts.entries()].map(([path, content]) => ({ path, content }));
+  const allowedPromptSet = new Set(promptPaths);
+  const resolved = resolveOwners({ paths: candidatePaths, bindings, heads, prompts });
+  const conflicts = [];
+  for (const row of resolved.files) {
+    if (row.source === 'prose' && PROSE_NON_SOURCE_FILE.test(row.path)) continue;
+    const owners = [...new Set(row.owners.filter(prompt => allowedPromptSet.has(prompt)))].sort();
+    if (owners.length < 2) continue;
+    if (scope && !owners.some(prompt => scope.has(prompt))) continue;
+    conflicts.push(`Warning: ${row.path} is named by ${owners.length} prompts (${owners.join(', ')}). One prompt should own each source file.`);
+  }
+  return [...warnings, ...conflicts];
 }
 
 // Files sent that are not prompt, story or test files.

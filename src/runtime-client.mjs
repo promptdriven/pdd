@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 37ad530ce7c49f63b5cb2145c8246173f8600afd95fc8846209f19e6d7a43e77).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 742b7d587ca586ea6601dcc281aa912fe77d1efd3173bc3f6033b83a6f6d54c7).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
@@ -3832,7 +3832,8 @@ async function runBatch(context, cwd, words, options, setRelease) {
     return 4;
   }
 
-  context.warnings.push(...found.warnings, ...checked.warnings, ...sharedSourceFiles(root, found.discoveryVisible ?? found.visible));
+  const scopedOwnership = words.length > 0 || affected || selected.length < found.tests.length;
+  context.warnings.push(...found.warnings, ...checked.warnings, ...sharedSourceFiles(root, found.discoveryVisible ?? found.visible, { ...(scopedOwnership ? { tests: selected } : {}), workspace: found.workspace }));
   context.unmatched = unmatchedLines(found);
   if (cache) await beginTestAttempts(cache, rows.filter(row => row.state !== 'ready'), null, options, origin);
   if (!rows.some(row => row.state === 'ready')) { if (rows.some(row => row.native_only?.length)) saveLocalNativeResult(context, rows, 'check'); return printResult(context, rows); }
