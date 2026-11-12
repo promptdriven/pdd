@@ -1,0 +1,782 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/affected-story-selection.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "With changes that affect Stories A and B, `pdd test --affected` selects all their test variants and criteria, and sends no Check for known unrelated Story C."
+    },
+    {
+      "id": "AC2",
+      "text": "When change scope, ownership or a required dependency relationship is uncertain, affected selection conservatively keeps all Stories that might be affected; with no established target it keeps the full inventory."
+    },
+    {
+      "id": "AC3",
+      "text": "Ordinary full and named checks keep their current selection, cache, call limits and recovery behavior. Affected mode accepts no Story operands or `--lf`; rejected combinations have no execution effects."
+    }
+  ],
+  "synthetic": true,
+  "cases": [
+    {
+      "id": "shared-change-all-variants",
+      "criterion_id": "AC1",
+      "given": {
+        "fixture": {
+          "story_tests": {
+            "A": [
+              "test/runtime/A.json",
+              "test/runtime/A.recorded.json"
+            ],
+            "B": [
+              "test/runtime/B.json"
+            ],
+            "C": [
+              "test/runtime/C.json"
+            ]
+          },
+          "closures": {
+            "A": [
+              "prompts/A.prompt.md",
+              "docs/shared.md"
+            ],
+            "B": [
+              "prompts/B.prompt.md",
+              "docs/shared.md"
+            ],
+            "C": [
+              "prompts/C.prompt.md"
+            ]
+          },
+          "base": "saved-run-base-or-HEAD",
+          "workspace": "synthetic-permitted-project",
+          "max_calls": 30
+        },
+        "changed": [
+          "docs/shared.md"
+        ],
+        "command": [
+          "test",
+          "--affected"
+        ],
+        "remote_results": "hold all replies until POST inventory captured"
+      },
+      "expected": {
+        "check_tests": [
+          "test/runtime/A.json",
+          "test/runtime/A.recorded.json",
+          "test/runtime/B.json"
+        ],
+        "omitted_tests": [
+          "test/runtime/C.json"
+        ],
+        "selected_criteria": "all original IDs/texts/checks",
+        "source_selection_tests": [
+          "test/runtime/A.json",
+          "test/runtime/A.recorded.json",
+          "test/runtime/B.json"
+        ],
+        "baseline_current_rows": []
+      }
+    },
+    {
+      "id": "direct-story-test-and-transitive",
+      "criterion_id": "AC1",
+      "given": {
+        "fixture": {
+          "story_tests": {
+            "A": [
+              "test/runtime/A.json",
+              "test/runtime/A.recorded.json"
+            ],
+            "B": [
+              "test/runtime/B.json"
+            ],
+            "C": [
+              "test/runtime/C.json"
+            ]
+          },
+          "closures": {
+            "A": [
+              "prompts/A.prompt.md",
+              "docs/shared.md",
+              "docs/transitive-to-A-and-B.md"
+            ],
+            "B": [
+              "prompts/B.prompt.md",
+              "docs/shared.md",
+              "docs/transitive-to-A-and-B.md"
+            ],
+            "C": [
+              "prompts/C.prompt.md"
+            ]
+          },
+          "base": "saved-run-base-or-HEAD",
+          "workspace": "synthetic-permitted-project",
+          "max_calls": 30,
+          "dependency_edges": {
+            "prompts/A.prompt.md": [
+              "docs/shared.md"
+            ],
+            "prompts/B.prompt.md": [
+              "docs/shared.md"
+            ],
+            "docs/shared.md": [
+              "docs/transitive-to-A-and-B.md"
+            ],
+            "prompts/C.prompt.md": []
+          }
+        },
+        "change_sets": [
+          [
+            "user_stories/A.md"
+          ],
+          [
+            "test/runtime/A.recorded.json"
+          ],
+          [
+            "prompts/A.prompt.md"
+          ],
+          [
+            "docs/transitive-to-A-and-B.md"
+          ]
+        ]
+      },
+      "expected": {
+        "selected_by_set": [
+          [
+            "test/runtime/A.json",
+            "test/runtime/A.recorded.json"
+          ],
+          [
+            "test/runtime/A.json",
+            "test/runtime/A.recorded.json"
+          ],
+          [
+            "test/runtime/A.json",
+            "test/runtime/A.recorded.json"
+          ],
+          [
+            "test/runtime/A.json",
+            "test/runtime/A.recorded.json",
+            "test/runtime/B.json"
+          ]
+        ],
+        "criteria_dropped": 0
+      }
+    },
+    {
+      "id": "global-config-conservative",
+      "criterion_id": "AC2",
+      "given": {
+        "fixture": {
+          "story_tests": {
+            "A": [
+              "test/runtime/A.json",
+              "test/runtime/A.recorded.json"
+            ],
+            "B": [
+              "test/runtime/B.json"
+            ],
+            "C": [
+              "test/runtime/C.json"
+            ]
+          },
+          "closures": {
+            "A": [
+              "prompts/A.prompt.md",
+              "docs/shared.md"
+            ],
+            "B": [
+              "prompts/B.prompt.md",
+              "docs/shared.md"
+            ],
+            "C": [
+              "prompts/C.prompt.md"
+            ]
+          },
+          "base": "saved-run-base-or-HEAD",
+          "workspace": "synthetic-permitted-project",
+          "max_calls": 30
+        },
+        "changed_each": [
+          "pdd-source.json",
+          "pdd-workspace.json",
+          "pdd-bindings.json"
+        ]
+      },
+      "expected": {
+        "check_tests": [
+          "test/runtime/A.json",
+          "test/runtime/A.recorded.json",
+          "test/runtime/B.json",
+          "test/runtime/C.json"
+        ],
+        "excluded_reads": []
+      }
+    },
+    {
+      "id": "safe-link-target-consumers",
+      "criterion_id": "AC2",
+      "given": {
+        "fixture": {
+          "story_tests": {
+            "A": [
+              "test/runtime/A.json",
+              "test/runtime/A.recorded.json"
+            ],
+            "B": [
+              "test/runtime/B.json"
+            ],
+            "C": [
+              "test/runtime/C.json"
+            ]
+          },
+          "closures": {
+            "A": [
+              "prompts/A.prompt.md",
+              "docs/shared.md"
+            ],
+            "B": [
+              "prompts/B.prompt.md",
+              "docs/shared.md"
+            ],
+            "C": [
+              "prompts/C.prompt.md"
+            ]
+          },
+          "base": "saved-run-base-or-HEAD",
+          "workspace": "synthetic-permitted-project",
+          "max_calls": 30
+        },
+        "safe_links": {
+          "docs/A-link.md": "docs/shared-target.md",
+          "docs/B-link.md": "docs/shared-target.md"
+        },
+        "changed": [
+          "docs/shared-target.md"
+        ],
+        "closures": "A and B include authored link names"
+      },
+      "expected": {
+        "check_tests": [
+          "test/runtime/A.json",
+          "test/runtime/A.recorded.json",
+          "test/runtime/B.json"
+        ],
+        "fallback_if_relationship_unavailable": [
+          "test/runtime/A.json",
+          "test/runtime/A.recorded.json",
+          "test/runtime/B.json",
+          "test/runtime/C.json"
+        ],
+        "unsafe_target_reads": 0
+      }
+    },
+    {
+      "id": "old-new-and-unknown-owners",
+      "criterion_id": "AC2",
+      "given": {
+        "fixture": {
+          "story_tests": {
+            "A": [
+              "test/runtime/A.json",
+              "test/runtime/A.recorded.json"
+            ],
+            "B": [
+              "test/runtime/B.json"
+            ],
+            "C": [
+              "test/runtime/C.json"
+            ]
+          },
+          "closures": {
+            "A": [
+              "prompts/A.prompt.md",
+              "docs/shared.md"
+            ],
+            "B": [
+              "prompts/B.prompt.md",
+              "docs/shared.md"
+            ],
+            "C": [
+              "prompts/C.prompt.md"
+            ]
+          },
+          "base": "saved-run-base-or-HEAD",
+          "workspace": "synthetic-permitted-project",
+          "max_calls": 30
+        },
+        "changed": [
+          "src/owned.mjs",
+          "prompts/A.prompt.md"
+        ],
+        "ownership_variants": [
+          "old A/new B",
+          "removed owner header",
+          "missing old metadata",
+          "multiple A/B headers",
+          "unknown added implementation"
+        ]
+      },
+      "expected": {
+        "old_A_new_B_checks": [
+          "test/runtime/A.json",
+          "test/runtime/A.recorded.json",
+          "test/runtime/B.json"
+        ],
+        "multiple_owner_checks": [
+          "test/runtime/A.json",
+          "test/runtime/A.recorded.json",
+          "test/runtime/B.json"
+        ],
+        "unknown_owner_checks": [
+          "test/runtime/A.json",
+          "test/runtime/A.recorded.json",
+          "test/runtime/B.json",
+          "test/runtime/C.json"
+        ],
+        "excluded_base_reads": 0
+      }
+    },
+    {
+      "id": "deleted-unknown-even-with-target",
+      "criterion_id": "AC2",
+      "given": {
+        "fixture": {
+          "story_tests": {
+            "A": [
+              "test/runtime/A.json",
+              "test/runtime/A.recorded.json"
+            ],
+            "B": [
+              "test/runtime/B.json"
+            ],
+            "C": [
+              "test/runtime/C.json"
+            ]
+          },
+          "closures": {
+            "A": [
+              "prompts/A.prompt.md",
+              "docs/shared.md"
+            ],
+            "B": [
+              "prompts/B.prompt.md",
+              "docs/shared.md"
+            ],
+            "C": [
+              "prompts/C.prompt.md"
+            ]
+          },
+          "base": "saved-run-base-or-HEAD",
+          "workspace": "synthetic-permitted-project",
+          "max_calls": 30
+        },
+        "changed": [
+          "prompts/A.prompt.md",
+          "src/deleted-unknown.mjs"
+        ],
+        "deleted_owner": "unavailable"
+      },
+      "expected": {
+        "check_tests": [
+          "test/runtime/A.json",
+          "test/runtime/A.recorded.json",
+          "test/runtime/B.json",
+          "test/runtime/C.json"
+        ],
+        "reason": "explicit conservative deleted ownership"
+      }
+    },
+    {
+      "id": "git-scope-and-no-target",
+      "criterion_id": "AC2",
+      "given": {
+        "fixture": {
+          "story_tests": {
+            "A": [
+              "test/runtime/A.json",
+              "test/runtime/A.recorded.json"
+            ],
+            "B": [
+              "test/runtime/B.json"
+            ],
+            "C": [
+              "test/runtime/C.json"
+            ]
+          },
+          "closures": {
+            "A": [
+              "prompts/A.prompt.md",
+              "docs/shared.md"
+            ],
+            "B": [
+              "prompts/B.prompt.md",
+              "docs/shared.md"
+            ],
+            "C": [
+              "prompts/C.prompt.md"
+            ]
+          },
+          "base": "saved-run-base-or-HEAD",
+          "workspace": "synthetic-permitted-project",
+          "max_calls": 30
+        },
+        "scope_variants": [
+          "Git unavailable",
+          "empty changes",
+          "no established target",
+          "unreadable required closure",
+          "rename deletion/addition",
+          "committed no-run changes with HEAD comparison"
+        ]
+      },
+      "expected": {
+        "never_underselect": true,
+        "no_established_target_checks": [
+          "test/runtime/A.json",
+          "test/runtime/A.recorded.json",
+          "test/runtime/B.json",
+          "test/runtime/C.json"
+        ],
+        "no_working_changes_checks": [
+          "test/runtime/A.json",
+          "test/runtime/A.recorded.json",
+          "test/runtime/B.json",
+          "test/runtime/C.json"
+        ]
+      }
+    },
+    {
+      "id": "staged-unstaged-untracked-saved-base",
+      "criterion_id": "AC2",
+      "given": {
+        "fixture": {
+          "story_tests": {
+            "A": [
+              "test/runtime/A.json",
+              "test/runtime/A.recorded.json"
+            ],
+            "B": [
+              "test/runtime/B.json"
+            ],
+            "C": [
+              "test/runtime/C.json"
+            ]
+          },
+          "closures": {
+            "A": [
+              "prompts/A.prompt.md",
+              "docs/shared.md"
+            ],
+            "B": [
+              "prompts/B.prompt.md",
+              "docs/shared.md"
+            ],
+            "C": [
+              "prompts/C.prompt.md"
+            ]
+          },
+          "base": "saved-run-base-or-HEAD",
+          "workspace": "synthetic-permitted-project",
+          "max_calls": 30
+        },
+        "change_variants": [
+          "staged A",
+          "unstaged A",
+          "untracked dependency A",
+          "committed A against saved run base"
+        ],
+        "excluded_fixture_project": "fixtures/example-project"
+      },
+      "expected": {
+        "check_tests": [
+          "test/runtime/A.json",
+          "test/runtime/A.recorded.json"
+        ],
+        "fixture_tests_added": [],
+        "excluded_source_reads": 0
+      }
+    },
+    {
+      "id": "full-and-named-unchanged",
+      "criterion_id": "AC3",
+      "given": {
+        "fixture": {
+          "story_tests": {
+            "A": [
+              "test/runtime/A.json",
+              "test/runtime/A.recorded.json"
+            ],
+            "B": [
+              "test/runtime/B.json"
+            ],
+            "C": [
+              "test/runtime/C.json"
+            ]
+          },
+          "closures": {
+            "A": [
+              "prompts/A.prompt.md",
+              "docs/shared.md"
+            ],
+            "B": [
+              "prompts/B.prompt.md",
+              "docs/shared.md"
+            ],
+            "C": [
+              "prompts/C.prompt.md"
+            ]
+          },
+          "base": "saved-run-base-or-HEAD",
+          "workspace": "synthetic-permitted-project",
+          "max_calls": 30
+        },
+        "commands": [
+          [
+            "test"
+          ],
+          [
+            "test",
+            "C"
+          ],
+          [
+            "test",
+            "--lf"
+          ],
+          [
+            "test",
+            "--lf",
+            "--cache-clear"
+          ]
+        ]
+      },
+      "expected": {
+        "full_check_tests": [
+          "test/runtime/A.json",
+          "test/runtime/A.recorded.json",
+          "test/runtime/B.json",
+          "test/runtime/C.json"
+        ],
+        "named_check_tests": [
+          "test/runtime/C.json"
+        ],
+        "lf_and_cache_clear": "existing selection/precedence unchanged"
+      }
+    },
+    {
+      "id": "cache-and-call-plan-stay-selected",
+      "criterion_id": "AC3",
+      "given": {
+        "fixture": {
+          "story_tests": {
+            "A": [
+              "test/runtime/A.json",
+              "test/runtime/A.recorded.json"
+            ],
+            "B": [
+              "test/runtime/B.json"
+            ],
+            "C": [
+              "test/runtime/C.json"
+            ]
+          },
+          "closures": {
+            "A": [
+              "prompts/A.prompt.md",
+              "docs/shared.md"
+            ],
+            "B": [
+              "prompts/B.prompt.md",
+              "docs/shared.md"
+            ],
+            "C": [
+              "prompts/C.prompt.md"
+            ]
+          },
+          "base": "saved-run-base-or-HEAD",
+          "workspace": "synthetic-permitted-project",
+          "max_calls": 30
+        },
+        "changed": [
+          "docs/shared.md"
+        ],
+        "cache": "current A pass; B executes with changed interpreter identity; C has old failure",
+        "command": [
+          "test",
+          "--affected",
+          "--max-calls",
+          "30"
+        ]
+      },
+      "expected": {
+        "all_dispatch_tests_with_replacements": [
+          "test/runtime/A.json",
+          "test/runtime/A.recorded.json",
+          "test/runtime/B.json"
+        ],
+        "C_check_posts": 0,
+        "variant_and_criterion_counts": "unchanged",
+        "baseline_prerequisites": "separate, not target admission",
+        "selected_test_count": 3,
+        "per_attempt_max_calls": 30,
+        "initial_check_posts_maximum": 3,
+        "replacement_check_posts_maximum": 3,
+        "total_check_posts_maximum": 6,
+        "aggregate_requested_call_ceiling_maximum": 180,
+        "observed_spend": "only actual confirmed accounting; missing or uncertain usage stays unknown",
+        "per_test_initial_check_posts_maximum": 1,
+        "per_test_replacement_check_posts_maximum": 1,
+        "per_request_max_calls": 30,
+        "plan_calls": {
+          "maximum": 180,
+          "check_requests": 6
+        },
+        "ceiling_formula": "3 selected tests * (1 initial + 1 replacement) * 30 requested calls = 180; 3 * 2 = 6 Check requests"
+      }
+    },
+    {
+      "id": "clear-and-target-prerequisites",
+      "criterion_id": "AC3",
+      "given": {
+        "fixture": {
+          "story_tests": {
+            "A": [
+              "test/runtime/A.json",
+              "test/runtime/A.recorded.json"
+            ],
+            "B": [
+              "test/runtime/B.json"
+            ],
+            "C": [
+              "test/runtime/C.json"
+            ]
+          },
+          "closures": {
+            "A": [
+              "prompts/A.prompt.md",
+              "docs/shared.md"
+            ],
+            "B": [
+              "prompts/B.prompt.md",
+              "docs/shared.md"
+            ],
+            "C": [
+              "prompts/C.prompt.md"
+            ]
+          },
+          "base": "saved-run-base-or-HEAD",
+          "workspace": "synthetic-permitted-project",
+          "max_calls": 30
+        },
+        "changed": [
+          "prompts/A.prompt.md"
+        ],
+        "commands": [
+          [
+            "test",
+            "--affected",
+            "--cache-clear"
+          ],
+          [
+            "test",
+            "--affected"
+          ]
+        ],
+        "target_or_baseline_interface_missing": [
+          "A",
+          "C"
+        ]
+      },
+      "expected": {
+        "cache_clear_scope": [
+          "test/runtime/A.json",
+          "test/runtime/A.recorded.json"
+        ],
+        "target_missing": "existing refusal/nonzero, zero paid A checks",
+        "baseline_missing": "C reported separately, no C dispatch",
+        "fallback_all_missing": "ordinary full prerequisite stop"
+      }
+    },
+    {
+      "id": "invalid-option-combinations",
+      "criterion_id": "AC3",
+      "given": {
+        "commands": [
+          [
+            "test",
+            "--affected",
+            "A"
+          ],
+          [
+            "test",
+            "--affected",
+            "--lf"
+          ],
+          [
+            "test",
+            "--affected",
+            "--files"
+          ],
+          [
+            "test",
+            "--affected",
+            "--read"
+          ],
+          [
+            "test",
+            "--affected",
+            "--retry",
+            "saved"
+          ],
+          [
+            "test",
+            "--affected",
+            "--fill-hash"
+          ],
+          [
+            "test",
+            "--affected",
+            "--lint"
+          ],
+          [
+            "test",
+            "--affected",
+            "--explain-bindings"
+          ],
+          [
+            "test",
+            "--affected",
+            "--journeys"
+          ],
+          [
+            "test",
+            "--affected",
+            "--screen",
+            "http://localhost/"
+          ]
+        ]
+      },
+      "expected": {
+        "exit_code": 2,
+        "state_writes": 0,
+        "auth_calls": 0,
+        "network_calls": 0
+      }
+    },
+    {
+      "id": "public-help-completion-and-docs",
+      "criterion_id": "AC3",
+      "given": {
+        "boundary": "actual local CLI help/parser/completion",
+        "new_form": "pdd test --affected [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]"
+      },
+      "expected": {
+        "flag_accepted": true,
+        "help_and_completion_include_affected": true,
+        "docs_cli_has_exact_form": true,
+        "ordinary_form_unchanged": true
+      }
+    }
+  ]
+}

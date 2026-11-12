@@ -1,11 +1,11 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: d2bc64351fb61407978f456eebbd12c42fd848a36232de822063bd56c8c3c322).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 37ad530ce7c49f63b5cb2145c8246173f8600afd95fc8846209f19e6d7a43e77).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
 import { isRecentLintReceipt } from './runtime-lint-receipt.mjs';
 import {rememberSecrets} from './secret-redaction.mjs';
 import { bindingPlanLines, bindingRefusals } from './runtime-binding-plan.mjs';
-import { buildCheckPlan, checkPlanResults, checkPlanLines, checkPlanResultLines } from './runtime-check-plan.mjs';
+import { buildCheckPlan, checkPlanResults, checkPlanLines, checkPlanResultLines, selectCheckTests, baselineReport } from './runtime-check-plan.mjs';
 import { interfaceFindings } from './interface-draft.mjs';
 import {readEvidenceEligibility} from './workflow-runner.mjs';
 import {allRuns} from './workflow-runs.mjs';
@@ -107,7 +107,7 @@ function withDefaults(ports) {
     return () => { handlers.delete(handler); if (!handlers.size) { unsubscribe?.(); unsubscribe = null; } };
   };
   return {
-    env, caseHandoff:ports.caseHandoff, cacheFiles: ports.cacheFiles ?? nativeCacheFiles, cacheHash: ports.cacheHash ?? sha256, acquireBatchLock: ports.acquireBatchLock ?? acquireRuntimeBatchLock, timers: ports.timers, random: ports.random, captureSource: ports.captureSource ?? captureSource, slotFiles: ports.slotFiles, isAlive: ports.isAlive, pid: ports.pid, agentBridge: ports.agentBridge, discoverAgents: ports.discoverAgents, askAgent: ports.askAgent, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
+    env, baselineFiles: ports.baselineFiles, baselineIdentity: ports.baselineIdentity, evidencePorts: ports.evidencePorts, readEvidenceEligibility: ports.readEvidenceEligibility, checkPlanPorts: ports.checkPlanPorts, caseHandoff:ports.caseHandoff, cacheFiles: ports.cacheFiles ?? nativeCacheFiles, cacheHash: ports.cacheHash ?? sha256, acquireBatchLock: ports.acquireBatchLock ?? acquireRuntimeBatchLock, timers: ports.timers, random: ports.random, captureSource: ports.captureSource ?? captureSource, slotFiles: ports.slotFiles, isAlive: ports.isAlive, pid: ports.pid, agentBridge: ports.agentBridge, discoverAgents: ports.discoverAgents, askAgent: ports.askAgent, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
     gh: ports.gh ?? (args => {
       const executable = authExecutable(env, ports.ghPath);
       return executable ? spawnSync(executable, args, { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 })
@@ -216,6 +216,226 @@ export function readContractHistory({root,env = process.env},ports={}) {
   return {stories:[...latest.values()].map(row=>warnings.length && row.value.baseline==='not-checked' ? {...row.value,baseline:'unavailable'} : row.value).sort((a,b)=>a.story_path<b.story_path?-1:a.story_path>b.story_path?1:0),warnings:[...new Set(warnings)]};
 }
 
+const AFFECTED_DISCLAIMER = 'Affected checks only; this is not a full workflow pass. Required full-pass gates still apply.';
+function selectedCheckScope(plan, rows, selection) {
+  const scope = checkPlanResults(plan, rows);
+  if (scope && selection?.mode === 'affected' && scope.baseline.unresolved.length && !plan.prerequisites?.length) {
+    const selected = scope.target.failures.length ? `Repair target failures: ${scope.target.failures.join(', ')}. `
+      : scope.target.unresolved.length ? `Read the saved batch for unresolved selected checks: ${scope.target.unresolved.join(', ')}. ` : '';
+    scope.guidance = `${selected}Omitted baseline work: ${scope.baseline.unresolved.join(', ')}. Historical observations are separate; run a full check for required full-pass gates.`;
+  }
+  return scope;
+}
+function historicalBaselineLines(report) {
+  if (!report) return [];
+  return [`Historical baseline report (${report.availability}); omitted tests: ${report.tests.join(', ') || 'none'}.`,
+    ...report.observations.map(row => `${row.test}: historical ${row.state}; original batch ${row.batch}; Check ${row.request_id ?? 'not sent (local)'}; ${row.created_at ?? 'time unavailable'}; ${row.currentness} (original-batch); stage ${row.stage}${row.report_url ? `; Report: ${row.report_url}` : ''}`),
+    ...report.missing_tests.map(path => `${path}: no admitted saved baseline observation.`), ...report.warnings];
+}
+// This reader consumes raw local bytes. It never signs in, repairs receipts or writes history.
+async function readBaselineReport(context, plan, identity) {
+  const {ports,root,origin} = context, observations = [], warnings = [], captures = new Map();
+  const warn = message => { if (warnings.length < 20 && !warnings.includes(message)) warnings.push(message); };
+  const project = availability => baselineReport({plan,observations,availability,warnings});
+  const wanted = new Set(selectCheckTests(plan,{affected:true}).baseline_tests);
+  if (!wanted.size) return project('available');
+  if (!identity?.login || !/^\d+$/.test(String(identity.userId ?? ''))) {
+    warn('Runtime/account identity is unavailable; saved baseline evidence was not admitted.'); return project('unavailable');
+  }
+  const files = ports.baselineFiles ?? {
+    read(path) { safeCachePath(nativeCacheFiles,path); return nativeCacheFiles.read(path,'utf8',16 * 1024 * 1024); },
+    list(path) { safeCachePath(nativeCacheFiles,path,{directory:true}); return readdirSync(path); },
+    realpath:realpathSync
+  };
+  const real = async path => { try { return await (files.realpath ?? realpathSync)(path); } catch { return resolve(path); } };
+  let stateRoot = stateDirectory(ports.env,root);
+  if (!ports.baselineFiles) {
+    if (statOrNull(stateRoot)?.isSymbolicLink()) { warn('Saved Check state root is a symlink; history is unavailable.'); return project('unavailable'); }
+    // The accepted external state boundary may have aliased ancestors. Below it, links remain forbidden.
+    stateRoot = realish(stateRoot);
+  }
+  const directory = join(stateRoot,'batches');
+  let names, partial = false;
+  try { names = await files.list(directory); }
+  catch (error) { warn(error.code === 'ENOENT' ? 'No saved Check history is available.' : 'Saved Check history directory is unavailable.'); return project('unavailable'); }
+  const read = async path => JSON.parse(await files.read(path));
+  const capture = async (folder,selection) => {
+    const key = JSON.stringify([folder,selection]);
+    if (!captures.has(key)) captures.set(key,Promise.resolve().then(()=>ports.captureSource(folder,selection)));
+    return captures.get(key);
+  };
+  for (const name of names.filter(name=>typeof name === 'string' && BATCH.test(name)).sort()) {
+    const folder = join(directory,name); let saved;
+    try { saved = await read(join(folder,'batch.json')); }
+    catch { partial=true;warn('Some saved Check batches are unreadable or corrupt.');continue; }
+    if (saved?.intent !== 'check' && (Object.hasOwn(saved ?? {},'intent') || !Array.isArray(saved?.rows) || !saved.rows.every(row=>isObject(row) && validSavedCheck(row)))) continue;
+    if (saved.version !== 1 || saved.batch !== name || !Array.isArray(saved.rows) || typeof saved.root !== 'string') {
+      partial=true;warn('Some saved Check batches have invalid original identity.');continue;
+    }
+    if (saved.origin !== origin || saved.login !== identity.login || String(saved.user_id) !== String(identity.userId)) {
+      if (!saved.origin || !saved.login || saved.user_id == null) { partial=true;warn('Some saved Check batches lack runtime/account identity.'); }
+      continue;
+    }
+    const tests = saved.source_selection == null ? [...new Set(saved.rows.filter(row=>!row?.unsent).map(row=>row?.test))] : saved.source_selection.tests;
+    if (!Array.isArray(tests) || new Set(tests).size !== tests.length || tests.some(path=>typeof path !== 'string' || !path || path.startsWith('/') || path.split('/').some(part=>part === '..') || path.includes('\\'))) {
+      partial=true;warn('Some saved Check batches lack a safe original selection.');continue;
+    }
+    let admission;
+    try { admission = await (ports.readEvidenceEligibility ?? readEvidenceEligibility)({root,producerRoot:saved.root,tests,source_sha256:saved.source_sha256,runId:saved.association?.runId??null,stage:saved.association?.stage??null}, {env:ports.env,captureSource:ports.captureSource,...ports.evidencePorts}); }
+    catch { admission = null; }
+    const sameRoot = await real(saved.root) === await real(root);
+    if (admission?.state !== 'eligible' && (!sameRoot || saved.association)) { partial=true;warn('Some saved Check history was not admitted by workspace ownership.');continue; }
+    const stage = admission?.state === 'eligible' ? admission.stage : sameRoot && !saved.association ? 'current' : 'unavailable';
+    let currentness = 'unavailable', originalSource = null;
+    if (/^[a-f0-9]{64}$/.test(saved.source_sha256 ?? '')) {
+      try {
+        const sourceRoot = admission?.sourceAnchor?.root ?? root;
+        const selection = {tests,appMap:null,...(saved.source_selection ? {excludeFixtureProjects:saved.source_selection.exclude_fixture_projects === true} : saved.exclude_fixture_projects ? {excludeFixtureProjects:true} : {})};
+        const original = await capture(sourceRoot,selection);
+        currentness = original.sha256 === saved.source_sha256 ? 'current' : 'stale';
+        if (currentness === 'current') originalSource = original;
+        const nativeTests = saved.rows.filter(row=>row?.native_only?.length).map(row=>row.test);
+        if (saved.native_source != null || nativeTests.length) {
+          const nativeIdentity = saved.native_source;
+          if (!isObject(nativeIdentity) || typeof nativeIdentity.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(nativeIdentity.sha256)
+            || !Array.isArray(nativeIdentity.tests) || !nativeIdentity.tests.length
+            || new Set(nativeIdentity.tests).size !== nativeIdentity.tests.length
+            || nativeIdentity.tests.some(path=>typeof path !== 'string' || !path || path.startsWith('/') || path.includes('\\') || path.split('/').some(part=>!part || part==='.' || part==='..'))
+            || !isDeepStrictEqual([...nativeIdentity.tests].sort(),[...nativeTests].sort())) throw Error('original native source identity unavailable');
+          const native = await capture(sourceRoot,{...selection,tests:nativeIdentity.tests});
+          if (typeof native.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(native.sha256)) throw Error('original native capture unavailable');
+          if (native.sha256 !== nativeIdentity.sha256) currentness='stale';
+        }
+      } catch {
+        if (currentness !== 'stale') currentness='unavailable';
+        partial=true;warn('Some original-batch source selections are unavailable.');
+      }
+    }
+    const created_at = typeof saved.created_at === 'string' && Number.isFinite(Date.parse(saved.created_at)) ? saved.created_at : null;
+    const snapshots = Array.isArray(saved.contract_snapshots) ? saved.contract_snapshots : [];
+    const manifest = Array.isArray(saved.files) ? new Set(saved.files) : null;
+    const claims = new Map();
+    let claimFiles = 0, claimsUnavailable = false;
+    try {
+      for (const file of await files.list(folder)) {
+        const match = /^([a-f0-9]{64})\.[0-9]+\.dispatch\.json$/.exec(file);
+        if (!match) continue;
+        claimFiles++;
+        try {
+          const claim = await read(join(folder,file));
+          if (!UUID.test(claim?.id ?? '')) throw Error('invalid dispatch claim');
+          claims.set(claim.id,[...(claims.get(claim.id) ?? []),match[1]]);
+        } catch { partial=true;warn('Some original Check dispatch identities are unavailable.'); }
+      }
+    } catch { claimsUnavailable=true;partial=true;warn('Original Check dispatch identities are unavailable.'); }
+    let capabilities = null;
+    const lintId = Array.isArray(saved.lint?.request_ids) ? saved.lint.request_ids.at(-1) : null;
+    if (UUID.test(lintId ?? '')) {
+      try {
+        const lint = await read(join(folder,`${lintId}.json`));
+        if (!sameJob(lint,lintId,'lint') || lint.source_sha256 != null && saved.source_sha256 != null && lint.source_sha256 !== saved.source_sha256) throw Error('mismatched original lint');
+        if (Array.isArray(lint.result?.capabilities)) capabilities = lint.result.capabilities;
+      } catch { partial=true;warn('Some original Check source manifests are unavailable or mismatched.'); }
+    }
+    const inconsistent = () => { partial=true;warn('Some saved Check rows contradict their original selection, Story, source or request identity.'); };
+    for (const row of saved.rows) {
+      if (!row || !wanted.has(row.test)) continue;
+      const story_path = row.story_path ?? (Array.isArray(saved.contract_snapshots) ? saved.contract_snapshots : []).find(story=>Array.isArray(story?.tests) && story.tests.includes(row.test))?.story_path
+        ?? (typeof row.story === 'string' && row.story.endsWith('.md') ? row.story : (()=>{const paths=[...new Set((Array.isArray(saved.files)?saved.files:[]).filter(path=>typeof path==='string' && path.endsWith('.md') && basename(path,'.md')===row.story))];return paths.length===1?paths[0]:null;})());
+      if (typeof story_path !== 'string' || !story_path || story_path.startsWith('/') || story_path.includes('\\') || story_path.split('/').some(part=>!part || part==='.' || part==='..') || !Array.isArray(row.request_ids)) { partial=true;warn('Some saved Check rows lack original Story or request identity.');continue; }
+      const ownSnapshots = snapshots.filter(story=>Array.isArray(story?.tests) && story.tests.includes(row.test));
+      const snapshot = ownSnapshots[0];
+      const sent = row.request_ids.length > 0;
+      if (sent && !validSavedCheck(row)) { inconsistent();continue; }
+      const originalFootprint = originalSource?.stories?.find(story=>story.tests?.includes(row.test));
+      const duplicate = saved.rows.filter(other=>other?.test === row.test).length !== 1;
+      const storyName = typeof row.story === 'string' ? row.story : null;
+      const storyConflict = storyName && (storyName.endsWith('.md') ? storyName !== story_path : storyName !== basename(story_path,'.md'));
+      const invalidSnapshot = ownSnapshots.length > 1 || (snapshot && (snapshot.story_path !== story_path
+        || !Array.isArray(snapshot.files) || !snapshot.files.some(file=>file?.path === row.test)
+        || !snapshot.files.some(file=>file?.path === story_path)
+        || snapshot.files.some(file=>!file || typeof file.path !== 'string' || !/^[a-f0-9]{64}$/.test(file.sha256 ?? '') || manifest && !manifest.has(file.path))
+        || new Set(snapshot.files.map(file=>file?.path)).size !== snapshot.files.length));
+      const capabilityEntries = capabilities?.filter(item=>item?.path === row.test);
+      const capability = capabilityEntries?.[0]?.report;
+      const snapshotFiles = new Map((Array.isArray(snapshot?.files) ? snapshot.files : originalFootprint?.files ?? []).filter(isObject).map(file=>[file.path,file.sha256]));
+      const capabilityConflict = sent && capabilities && (capabilityEntries.length !== 1
+        || !Array.isArray(capability?.source?.files) || capability.source.scenario_sha256 !== snapshotFiles.get(row.test)
+        || capability.source.files.some(file=>!isObject(file) || !/^[a-f0-9]{64}$/.test(file.sha256 ?? '') || snapshotFiles.has(file.path) && snapshotFiles.get(file.path) !== file.sha256)
+        || !capability.source.files.some(file=>file?.path === story_path && file.sha256 === snapshotFiles.get(story_path))
+        || !Array.isArray(capability.operations) || capability.operations.some(operation=>!(row.steps ?? []).some(step=>step.step_id === operation?.selection?.step_id
+          && step.entry_path === operation.selection.prompt_path && step.operation === operation.selection.operation)));
+      if (duplicate || storyConflict || invalidSnapshot || capabilityConflict
+        || sent && (row.unsent || !tests.includes(row.test) || manifest && (!manifest.has(row.test) || !manifest.has(story_path)))
+        || originalFootprint && (originalFootprint.story_path !== story_path || snapshot && !isDeepStrictEqual(snapshot,originalFootprint))) {
+        inconsistent();continue;
+      }
+      // A legacy receipt without a snapshot can still retain a readable nonpass.
+      // It cannot supply positive evidence without the original Story association.
+      const boundStory = !!snapshot || originalFootprint?.story_path === story_path;
+      if (sent && (!boundStory || !manifest)) { partial=true;warn('Some legacy Check history lacks original Story/source binding.'); }
+      const retain = (view,request_id,evidence_kind,report_url) => observations.push({story_path,test:row.test,batch:name,request_id,evidence_kind,
+        ...resultOutcome(view),created_at,report_url,source_sha256:typeof saved.source_sha256 === 'string' ? saved.source_sha256 : null,
+        currentness,currentness_scope:'original-batch',stage:['current','pr1','before'].includes(stage)?stage:'unavailable'});
+      if (!row.request_ids.length) {
+        if (row.unsent && resultOutcome(row).state !== 'passed') retain(row,null,'local',null);
+        continue;
+      }
+      for (const id of [...new Set(row.request_ids)]) {
+        try {
+          if (!UUID.test(id)) throw Error('invalid request identity');
+          if (saved.rows.filter(other=>Array.isArray(other?.request_ids) && other.request_ids.includes(id)).length !== 1
+            || claimsUnavailable || claimFiles > 0 && !claims.has(id)
+            || claims.has(id) && (claims.get(id).length !== 1 || claims.get(id)[0] !== sha256(Buffer.from(row.test)))) {
+            inconsistent();continue;
+          }
+          if (!claims.has(id)) { partial=true;warn('Some legacy Check receipts lack original dispatch ownership.'); }
+          const originals = [];
+          const admit = answer => {
+            if (!sameJob(answer,id,'check')) { partial=true;warn('Some original Check receipts are missing, corrupt or mismatched.');return; }
+            const report = answer.result?.report;
+            const sourceMismatch = answer.source_sha256 != null && saved.source_sha256 != null && answer.source_sha256 !== saved.source_sha256;
+            const files = new Map((Array.isArray(snapshot?.files) ? snapshot.files : originalFootprint?.files ?? []).filter(isObject).map(file=>[file.path,file.sha256]));
+            const projectedMismatch = Array.isArray(report?.projected_context_bindings) && report.projected_context_bindings.some(binding=>
+              !isObject(binding) || files.get(binding.prompt_path) !== binding.prompt_sha256 || !Array.isArray(binding.context_blobs) || binding.context_blobs.some(blob=>!isObject(blob) || files.get(blob.path) !== blob.sha256));
+            const executionMismatch = Array.isArray(report?.call_depth) && report.call_depth.some(step=>
+              !(row.steps ?? []).some(original=>original.step_id === step?.step_id && original.entry_path === step?.entry_path && original.operation === step?.operation));
+            const malformedIdentity = isObject(report) && (Object.hasOwn(report,'projected_context_bindings') && !Array.isArray(report.projected_context_bindings)
+              || Object.hasOwn(report,'call_depth') && !Array.isArray(report.call_depth));
+            if (sourceMismatch || projectedMismatch || executionMismatch || malformedIdentity) { inconsistent();return; }
+            // A whole-batch hash cannot identify the test that produced a receipt.
+            // Without a dispatch claim, require actual execution that matches only
+            // this producer test; an empty list proves no such relationship.
+            const executionTests = Array.isArray(report?.call_depth) && report.call_depth.length
+              ? saved.rows.filter(candidate=>tests.includes(candidate?.test) && report.call_depth.every(step=>(candidate.steps ?? []).some(original=>
+                original.step_id === step?.step_id && original.entry_path === step?.entry_path && original.operation === step?.operation))) : [];
+            const boundExecution = executionTests.length === 1 && executionTests[0].test === row.test;
+            if (answer.source_sha256 == null || saved.source_sha256 == null) {
+              partial=true;warn('Some legacy Check receipts lack a bound original source hash.');
+            }
+            if ((!boundStory || !manifest || saved.source_sha256 == null || !claims.has(id) && !boundExecution) && resultOutcome(projectAnswer(answer,{test:row.test,steps:row.steps??[]})).state === 'passed') return;
+            if (!originals.some(previous=>isDeepStrictEqual(previous,answer))) originals.push(answer);
+          };
+          try {
+            const previous = await read(join(folder,`${id}.observations.json`));
+            if (!Array.isArray(previous)) throw Error('invalid original Check observations');
+            for (const answer of previous) admit(answer);
+          } catch (error) { if (error.code !== 'ENOENT') { partial=true;warn('Some retained original Check observations are unavailable.'); } }
+          try { admit(await read(join(folder,`${id}.json`))); }
+          catch { partial=true;warn('Some original Check receipts are missing, corrupt or mismatched.'); }
+          for (const answer of originals) {
+            const secrets = [...(context.secrets??[]),identity.token].filter(Boolean);
+            const view = projectAnswer(answer,{origin:saved.origin,steps:row.steps??[],criterionTexts:row.criterion_texts??{},test:row.test,secrets});
+            retain(view,id,'receipt',validLink(cleanText(answer.report_url,secrets),saved.origin,'report'));
+          }
+        } catch { partial=true;warn('Some original Check receipts are missing, corrupt or mismatched.'); }
+      }
+    }
+  }
+  observations.sort((a,b)=>(a.created_at === null ? Infinity : Date.parse(a.created_at))-(b.created_at === null ? Infinity : Date.parse(b.created_at)) || a.batch.localeCompare(b.batch) || a.test.localeCompare(b.test) || String(a.request_id??'').localeCompare(String(b.request_id??'')));
+  return project(partial ? 'partial' : 'available');
+}
+
 // Read receipts without StateStore.folder: status must never allocate or mutate runtime state.
 export async function savedStoryEvidence(input, ports = {}) {
   return createSavedStoryEvidenceReader(ports)(input);
@@ -226,7 +446,7 @@ export function createSavedStoryEvidenceReader(ports = {}) {
   return input => readSavedStoryEvidence(input, ports, captures);
 }
 
-async function readSavedStoryEvidence({ root, comparisonRoot = root }, ports, captures) {
+async function readSavedStoryEvidence({ root, comparisonRoot = root, withTests = false, anyRoot = false, limit = null }, ports, captures) {
   const env = ports.env ?? process.env;
   const read = ports.readFile ?? (path => readFileSync(path, 'utf8'));
   const list = ports.readDir ?? (path => readdirSync(path));
@@ -236,21 +456,22 @@ async function readSavedStoryEvidence({ root, comparisonRoot = root }, ports, ca
   const warning = (path, error) => warnings.push(`Could not read saved checks ${path} (${cleanText(error?.code ?? error?.message ?? 'invalid record')}).`);
   const legacyHint = () => warnings.push('Older checks are not counted; run pdd test again.');
   const real = async path => { try { return await canonical(path); } catch { return resolve(path); } };
-  const wanted = await real(root);
+  const wanted = anyRoot ? null : await real(root);
   const directory = join(resolve(env.PDD_STATE_DIR || join(env.HOME || homedir(), '.pdd', 'runtime')), 'batches');
   const relativeFile = path => typeof path === 'string' && path.length > 0 && !path.startsWith('/') && !path.includes('\\')
     && path.split('/').every(part => part && part !== '.' && part !== '..');
   let names;
   try { names = await list(directory); }
   catch (error) { if (error.code !== 'ENOENT') warning(directory, error); return { stories, warnings }; }
-  for (const name of names.filter(name => typeof name === 'string' && BATCH.test(name)).sort()) {
+  const all = names.filter(name => typeof name === 'string' && BATCH.test(name)).sort();
+  for (const name of Number.isSafeInteger(limit) && limit > 0 ? all.slice(-limit) : all) {
     const folder = join(directory, name), path = join(folder, 'batch.json');
     let batch;
     try {
       batch = JSON.parse(await read(path));
       if (!isObject(batch) || batch.version !== 1 || batch.batch !== name || typeof batch.root !== 'string' || !Array.isArray(batch.rows)) throw Error('invalid batch');
     } catch (error) { warning(path, error); continue; }
-    if (await real(batch.root) !== wanted) continue;
+    if (!anyRoot && await real(batch.root) !== wanted) continue;
     const legacy = !Object.hasOwn(batch, 'intent');
     if (batch.intent !== 'check') {
       if (!legacy) continue;
@@ -279,12 +500,19 @@ async function readSavedStoryEvidence({ root, comparisonRoot = root }, ports, ca
         current = source.sha256 === batch.source_sha256;
       } catch (error) { warning(path, error); }
     }
-    const selected = new Map(), sent = new Map(), grouped = new Map();
+    const selected = new Map(), sent = new Map(), grouped = new Map(), extra = new Map();
+    // withTests: the failed checks, refusals and states of each Story's rows, and the rows that were never sent.
+    const note = (story, add) => { const was = extra.get(story) ?? { failed: 0, failedSteps: [], refusals: [], states: [], codes: [], fixes: [], sent: false }; extra.set(story, add(was)); };
+    const codesOf = list => Array.isArray(list) ? list.map(item => item?.code).filter(code => typeof code === 'string') : [];
+    const fixesOf = list => Array.isArray(list) ? list.map(item => item?.fix).filter(fix => typeof fix === 'string' && fix.trim()) : [];
     for (const row of rows) {
       if (!selected.has(row.story)) selected.set(row.story, new Set());
       selected.get(row.story).add(row.test);
     }
     for (const row of rows) {
+      note(row.story, was => ({ ...was, refusals: [...new Set([...was.refusals, ...codesOf(row.refusals)])], fixes: [...new Set([...was.fixes, ...fixesOf(row.refusals)])],
+        states: [...new Set([...was.states, ...(typeof row.recovery_state === 'string' ? [row.recovery_state] : [])])],
+        codes: [...new Set([...was.codes, ...(typeof row.reason?.code === 'string' ? [row.reason.code] : [])])], sent: was.sent || row.request_ids.length > 0 }));
       if (!row.request_ids.length) continue;
       if (!sent.has(row.story)) sent.set(row.story, new Set());
       sent.get(row.story).add(row.test);
@@ -296,6 +524,10 @@ async function readSavedStoryEvidence({ root, comparisonRoot = root }, ports, ca
           const answer = JSON.parse(await read(receiptPath));
           if (answer?.requestId === id && answer.id === id && answer.command === 'check') {
             const view = projectAnswer(answer, { origin: batch.origin, steps: row.steps ?? [], criterionTexts: row.criterion_texts ?? {}, test: row.test });
+            const failedChecks = Array.isArray(view.failed_checks) ? view.failed_checks : [];
+            note(row.story, was => ({ ...was, failed: was.failed + failedChecks.length,
+              failedSteps: [...new Set([...was.failedSteps, ...failedChecks.map(check => check?.step_id).filter(step => typeof step === 'string' && step)])].slice(0, 10),
+              refusals: [...new Set([...was.refusals, ...codesOf(view.refusals)])], fixes: [...new Set([...was.fixes, ...fixesOf(view.refusals)])] }));
             let authored = Object.keys(row.criterion_texts ?? {});
             if (legacy) {
               const fromChecks = [...new Set(row.steps.flatMap(step => step.checks.map(check => check.criterion_id)))];
@@ -317,13 +549,81 @@ async function readSavedStoryEvidence({ root, comparisonRoot = root }, ports, ca
       const previous = grouped.get(row.story);
       grouped.set(row.story, { story: row.story, pass: pass && (previous?.pass ?? true), current, result: 'no verdict', at: Math.max(previous?.at ?? at, at) });
     }
+    // withTests: pdd's own fix texts of a Story's refusals (its saved warnings, then each refusal's fix).
+    const advised = story => {
+      const { fixes, ...info } = extra.get(story), tests = [...selected.get(story)];
+      const warned = (Array.isArray(batch.warnings) ? batch.warnings : []).filter(text => typeof text === 'string'
+        && tests.some(test => text.startsWith(`Warning: ${test} `)) && info.refusals.some(code => text.includes(code)));
+      return { ...info, advice: [...new Set([...warned, ...fixes])].slice(0, 3).map(text => text.slice(0, 800)) };
+    };
     for (const row of grouped.values()) {
       if (row.pass && sent.get(row.story).size !== selected.get(row.story).size) continue;
       if (row.pass) row.result = '✓';
-      stories.push(row);
+      stories.push(withTests ? { ...row, tests: [...selected.get(row.story)].sort(), ...advised(row.story), sent: true } : row);
+    }
+    // withTests: a Story whose tests were never sent (refused before execution, interrupted) is listed too.
+    if (withTests) for (const story of extra.keys()) if (!grouped.has(story)) {
+      const at = Math.max(0, ...rows.filter(row => row.story === story).map(row => Number.isFinite(row.ended_at) ? row.ended_at : Date.parse(batch.created_at) || 0));
+      stories.push({ story, pass: false, current, result: 'not sent', at, tests: [...selected.get(story)].sort(), ...advised(story), sent: false });
     }
   }
   return { stories, warnings: [...new Set(warnings)] };
+}
+
+// Autopilot (#3241, rule B5): the Stories of root whose latest saved check can be sent once more. neverSent: no request
+// ID, not run, no refusal, no local unsent mark, no access gate (held in maintenance, busy, stopped before sending).
+// noVerdict: sent, and its saved answer ended with no verdict and no failed check (an AI provider failure). failed: a
+// check failed (never sent again). A check that is still open, or whose answer was not saved, is in none of them.
+// Local reads only, like savedStoryEvidence.
+export async function resendableStoryChecks({ root, since = 0 }, ports = {}) {
+  const env = ports.env ?? process.env;
+  const read = ports.readFile ?? (path => readFileSync(path, 'utf8'));
+  const list = ports.readDir ?? (path => readdirSync(path));
+  const canonical = ports.realpath ?? realpathSync;
+  const real = async path => { try { return await canonical(path); } catch { return resolve(path); } };
+  const wanted = await real(root), directory = join(resolve(env.PDD_STATE_DIR || join(env.HOME || homedir(), '.pdd', 'runtime')), 'batches');
+  const empty = { stories: [], neverSent: [], noVerdict: [], failed: [], maintenance: false };
+  let names;
+  try { names = await list(directory); } catch { return empty; }
+  const latest = new Map();
+  for (const name of names.filter(name => typeof name === 'string' && BATCH.test(name)).sort()) {
+    let batch;
+    try { batch = JSON.parse(await read(join(directory, name, 'batch.json'))); } catch { continue; }
+    if (!isObject(batch) || batch.batch !== name || batch.intent !== 'check' || typeof batch.root !== 'string' || !Array.isArray(batch.rows)) continue;
+    if (since > 0 && !(Date.parse(batch.created_at) >= since) || await real(batch.root) !== wanted) continue;
+    const files = Array.isArray(batch.files) ? batch.files : [];
+    const storyOf = row => typeof row?.story !== 'string' ? null : row.story.endsWith('.md') ? row.story
+      : (found => found.length === 1 ? found[0] : null)([...new Set(files.filter(file => typeof file === 'string' && file.endsWith('.md') && basename(file, '.md') === row.story))]);
+    // One row: never (never sent), sent-pass, failed, noVerdict (a saved answer with no verdict and no failed check), or other.
+    const kind = async row => {
+      const ids = Array.isArray(row.request_ids) ? row.request_ids : [];
+      if (!ids.length) return row.recovery_state === 'not_run' && !(Array.isArray(row.refusals) && row.refusals.length) && !row.unsent && row.note?.code !== 'blocked' ? 'never' : 'other';
+      if (row.recovery_state === 'passed') return 'pass';
+      if (row.recovery_state === 'failed') return 'failed';
+      const id = ids.at(-1);
+      let answer = null;
+      try { answer = typeof id === 'string' && UUID.test(id) ? JSON.parse(await read(join(directory, name, `${id}.json`))) : null; } catch { answer = null; }
+      if (!sameJob(answer, id, 'check')) return 'other';
+      const view = projectAnswer(answer, { origin: batch.origin, steps: row.steps ?? [], criterionTexts: row.criterion_texts ?? {}, test: row.test });
+      if (answer.state === 'failed' || view.failed_checks?.length) return 'failed';
+      return answer.state === 'unknown' ? 'noVerdict' : 'other';
+    };
+    const seen = new Map();
+    for (const row of batch.rows) {
+      const story = storyOf(row);
+      if (!story) continue;
+      const k = await kind(row), was = seen.get(story) ?? { kinds: [], notes: [] };
+      seen.set(story, { kinds: [...was.kinds, k], notes: k === 'never' ? [...was.notes, String(row.note?.message ?? '')] : was.notes });
+    }
+    for (const [story, { kinds, notes }] of seen) {
+      const state = kinds.includes('failed') ? 'failed' : kinds.includes('other') ? 'other' : kinds.includes('never') ? 'never' : kinds.includes('noVerdict') ? 'noVerdict' : 'pass';
+      latest.set(story, { state, notes });
+    }
+  }
+  const of = state => [...latest].filter(([, row]) => row.state === state).map(([story]) => story).sort();
+  const neverSent = of('never'), noVerdict = of('noVerdict');
+  return { stories: [...neverSent, ...noVerdict].sort(), neverSent, noVerdict, failed: of('failed'),
+    maintenance: neverSent.some(story => latest.get(story).notes.some(note => /maintenance/i.test(note))) };
 }
 
 class StateStore {
@@ -541,7 +841,9 @@ export async function checkRuntimeHealth({ env = process.env } = {}, givenPorts 
   if (reply.status >= 500 || [408, 429].includes(reply.status)) return { state: 'unavailable', detail: `HTTP ${reply.status}` };
   if (reply.status === 200 && isObject(reply.json)) {
     const until = Date.parse(reply.json.maintenance?.until);
-    return Number.isFinite(until) && until > ports.now() ? { state: 'unavailable', detail: 'maintenance' } : { state: 'healthy', detail: 'HTTP 200' };
+    // A maintenance answer names its end and reason, so the Autopilot core can wait for it (#3241).
+    return Number.isFinite(until) && until > ports.now() ? { state: 'unavailable', detail: 'maintenance', until: new Date(until).toISOString(), reason: cleanText(reply.json.maintenance?.reason, [token]) || null }
+      : { state: 'healthy', detail: 'HTTP 200' };
   }
   // An older interpreter without the capacity read still answered with JSON; a 404 page that is not JSON is a wrong address.
   if (reply.status === 404 && isObject(reply.json)) return { state: 'healthy', detail: 'HTTP 404' };
@@ -1328,6 +1630,56 @@ function nativeSourceIdentity(context, rows) {
   catch { return {tests,sha256:null}; }
 }
 
+// The saved local-layout contract is deliberately distinct from legacy native-only batches.
+function localLayoutResult(batch, summary) {
+  const keys = (value, names) => value && typeof value === 'object' && !Array.isArray(value)
+    && isDeepStrictEqual(Object.keys(value).sort(), names.split(' ').sort());
+  const paths = values => Array.isArray(values) && values.every(path => typeof path === 'string' && path.length
+    && !/^[a-zA-Z]:|^[\\/]|[\\\x00-\x1f\x7f]/.test(path) && path.split('/').every(part => part && part !== '.' && part !== '..' && part !== '.git'))
+    && isDeepStrictEqual(values, [...new Set(values)].sort());
+  if (!keys(batch, 'version batch root created_at intent local_only source_sha256 local_scope summary_line exit_code warnings problems rows lint')
+    || batch.version !== 1 || !BATCH.test(batch.batch) || typeof batch.root !== 'string' || !batch.root.startsWith('/')
+    || typeof batch.created_at !== 'string' || !Number.isFinite(Date.parse(batch.created_at))
+    || batch.intent !== 'lint-only' || batch.local_only !== true || batch.source_sha256 !== null
+    || !keys(batch.local_scope, 'tests prompts') || !paths(batch.local_scope.tests) || !paths(batch.local_scope.prompts)
+    || typeof batch.summary_line !== 'string' || ![0, 4].includes(batch.exit_code)
+    || !Array.isArray(batch.warnings) || !batch.warnings.every(item => typeof item === 'string')
+    || !Array.isArray(batch.problems) || !batch.problems.every(item => (keys(item, 'code path message') || keys(item, 'code path message section')) && Object.values(item).every(value => typeof value === 'string'))
+    || !Array.isArray(batch.rows) || batch.rows.length || !keys(batch.lint, 'state lint_state reason request_ids')
+    || batch.lint.state !== 'partial' || batch.lint.lint_state !== 'partial'
+    || !isDeepStrictEqual(batch.lint.reason, {code:'local-only',message:'checked SVG layout only; prompts not checked'})
+    || !Array.isArray(batch.lint.request_ids) || batch.lint.request_ids.length) return null;
+  const result = {batch:batch.batch,repo:batch.root,exit_code:batch.exit_code,state:'partial',lint_state:'partial',reason:batch.lint.reason,
+    local_only:true,local_scope:batch.local_scope,summary_line:batch.summary_line,warnings:batch.warnings,problems:batch.problems,rows:[],report_url:null};
+  return isDeepStrictEqual(summary, result) ? result : {...result,exit_code:2,
+    summary_line:'Local lint result not saved (the local save did not finish). partial (local-only).'};
+}
+
+function printLocalLayout(context, result) {
+  if (result.exit_code === 2) line(context.ports.stderr,'Could not save local lint result. Run a fresh pdd lint --local after fixing the state folder.');
+  line(context.ports.stdout, context.json ? JSON.stringify(result) : [...result.problems.map(item => `${item.code}: ${item.message}`), ...result.warnings, result.summary_line].join('\n'));
+  return result.exit_code;
+}
+
+function saveLocalLayout(context, {root, tests, prompts, warnings, problems, summary}) {
+  const store = stateFor(context.ports.env,root), now = context.ports.now(), batch = batchId(now,context.ports.randomUUID);
+  try {
+    const record = {version:1,batch,root,created_at:new Date(now).toISOString(),intent:'lint-only',local_only:true,source_sha256:null,
+      local_scope:{tests:[...new Set(tests)].sort(),prompts:[...new Set(prompts)].sort()},summary_line:summary,exit_code:problems.length ? 4 : 0,
+      warnings,problems,rows:[],lint:{state:'partial',lint_state:'partial',reason:resultOutcome({state:'partial',note:{code:'local-only',message:'checked SVG layout only; prompts not checked'}}).reason,request_ids:[]}};
+    const projection = localLayoutResult(record,null);
+    if (!projection) throw new Error('Local lint record cannot satisfy the saved result contract, including safe inspected scope.');
+    const result = {...projection,exit_code:record.exit_code,summary_line:record.summary_line};
+    const folder = join(store.folder('batches'),batch);
+    // Exclusive creation keeps every previous batch intact even if the ordinary ID collides.
+    mkdirSync(folder,{mode:0o700});
+    store.write(join(folder,'batch.json'),record);
+    store.saveRepo(root,{...store.repo(root),last_batch:batch});
+    store.write(join(folder,'summary.json'),result);
+    return result;
+  } catch (error) { throw new Stop(2,`Could not save local lint result in PDD_STATE_DIR: ${error.message}`); }
+}
+
 // Local omissions are evidence too; recording them needs no owner token or job.
 function saveLocalNativeResult(context, rows, intent, problems = []) {
   const startedAt = context.ports.now(), batch = batchId(startedAt, context.ports.randomUUID);
@@ -1343,7 +1695,7 @@ function saveLocalNativeResult(context, rows, intent, problems = []) {
 
 function batchRecord(context) {
   const { batch, origin, root, identity, capture, rows, lint, warnings } = context;
-  return { version: 1, batch, origin, root, check_plan: context.checkPlan ?? null, head: context.head, login: identity.login, user_id: identity.userId,
+  return { version: 1, batch, origin, root, check_plan: context.checkPlan ?? null, ...(context.checkSelection ? {check_selection:context.checkSelection,baseline_report:context.baselineReport} : {}), head: context.head, login: identity.login, user_id: identity.userId,
     source_sha256: capture.sha256, files: capture.files.map(file => file.path), bytes: capture.bytes, timeout_min: context.timeoutMin,
     ...(context.singleAttempt ? {single_attempt:true} : {}),
     source_selection: context.sourceSelection ?? {tests:sentTests(rows),exclude_fixture_projects:context.excludeFixtureProjects === true},
@@ -1926,7 +2278,11 @@ function printResult(context, rows, extra = {}) {
   }
   if (context.checkPlan) {
     summary.check_plan = context.checkPlan;
-    summary.check_scope = checkPlanResults(context.checkPlan, rows);
+    summary.check_scope = selectedCheckScope(context.checkPlan, rows, context.checkSelection);
+  }
+  if (context.checkSelection) {
+    summary.check_selection = context.checkSelection; summary.baseline_report = context.baselineReport;
+    summary.warnings = [...new Set([...summary.warnings, AFFECTED_DISCLAIMER])];
   }
   if (context.folder) context.store.write(join(context.folder, 'summary.json'), summary);
   if (context.batch && rows.some(row => row.can_retry)) line(ports.stderr, `Retry only unstarted checks with: pdd test --retry ${context.batch}`);
@@ -1939,6 +2295,10 @@ function printResult(context, rows, extra = {}) {
     now: ports.now(), noFailed: context.noFailed, interrupted: context.interrupted || !!context.readStop, reading: !!context.reading, exitCode, secrets: context.secrets, ...extra })));
   if (!context.json && summary.report_url) line(ports.stdout, `Report: ${summary.report_url}`);
   if (!context.json) for (const value of checkPlanResultLines(summary.check_scope)) line(ports.stdout, scrub(value));
+  if (!context.json && context.checkSelection) {
+    line(ports.stdout, AFFECTED_DISCLAIMER);
+    for (const value of historicalBaselineLines(context.baselineReport)) line(ports.stdout, scrub(value));
+  }
   // At the time limit the jobs keep running on the server.
   if (exitCode === 3 && context.batch) line(ports.stderr, context.timedOut ? `Still running. Read the results later with: pdd test --read ${context.batch}`
     : `If pdd stops, read the results with: pdd test --read ${context.batch}`);
@@ -2383,10 +2743,17 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
   const timeout = options['--timeout'] === undefined ? quiet ? AGENT_WAIT_MIN : null : Number(options['--timeout']);
   context.deadline ??= timeout === null ? Infinity : ports.now() + timeout * 60_000;
   context.timeoutMin = timeout; context.agentLimit = false;
-  const name = batchWord ?? store.repo(root).last_batch;
+  const name = batchWord ?? store.read(join(store.dir,'repos',`${store.repoKey(root)}.json`))?.last_batch;
   if (!name || !BATCH.test(name)) throw new Stop(2, name ? 'BATCH looks like 20261027-092747-k3f9.' : 'No saved check for this repository. Run pdd test first.');
   context.folder = join(store.dir, 'batches', name);
   if (!statOrNull(join(context.folder, 'batch.json'))) throw new Stop(2, `No saved batch ${name}.`);
+  const local = localLayoutResult(store.read(join(context.folder,'batch.json')),store.read(join(context.folder,'summary.json')));
+  if (local) {
+    if (local.repo !== root) throw new Stop(2,'This saved batch belongs to a different repository.');
+    context.localLayout = local;
+    if (quiet) return local.rows;
+    return printLocalLayout(context,local);
+  }
   await ownBatch(context, name);
   const saved = store.read(join(context.folder, 'batch.json'));
   if (!saved) throw new Stop(2, `No saved batch ${name}.`);
@@ -2395,6 +2762,7 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
   }
   if (saved.root !== root) throw new Stop(2, 'This saved batch belongs to a different repository.');
   context.checkPlan = saved.check_plan ?? null;
+  context.checkSelection = saved.check_selection; context.baselineReport = saved.baseline_report;
   if (saved.local_only === true && saved.rows.length && saved.rows.every(row => row.unsent && ['refused','not_run'].includes(row.state) && !row.request_ids?.length)) {
     Object.assign(context,{localOnly:true,batch:name,intent:saved.intent,coverage:saved.coverage,rows:saved.rows,warnings:saved.warnings ?? [],
       capture:{sha256:saved.source_sha256},startedAt:Date.parse(saved.created_at),lint:saved.lint});
@@ -2532,6 +2900,10 @@ async function runRetry(context, name, options) {
   const timeout = options['--timeout'] === undefined ? AGENT_WAIT_MIN : Number(options['--timeout']);
   context.deadline = ports.now() + timeout * 60_000;
   const rows = await runRead(context, name, true, options);
+  if (context.localLayout) {
+    line(ports.stderr,'For new evidence, run a fresh pdd lint --local.');
+    return () => printLocalLayout(context,context.localLayout);
+  }
   if (context.intent !== undefined && context.intent !== 'check') throw new Stop(2, 'The saved batch has no Check intent. Start a fresh selected pdd test.');
   if (context.localOnly) return () => printResult(context, rows);
   if (context.interrupted || ports.now() >= context.deadline) return () => printResult(context, rows);
@@ -2709,6 +3081,8 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
   const context = { ports, singleAttempt: ports.env.PDD_CHECK_SINGLE_ATTEMPT === '1', cacheEnabled: cache || !!options['--lf'] || !!options['--cache-clear'], json: options['--json'] === true, details: options['--details'] === true, explicitTimeout: options['--timeout'] !== undefined, interrupted: false, warnings: [] };
   let release = () => {};
   try {
+    if (options['--affected'] !== undefined && (options['--affected'] !== true || words.length || Object.keys(options).some(key => !['--affected','--json','--details','--timeout','--max-calls','--cache-clear'].includes(key))))
+      throw new Stop(2, '--affected accepts no Stories and only --cache-clear, --json, --details, --timeout and --max-calls.');
     if(options['--journeys']!==undefined){
       if(options['--journeys']!==true||words.length>1||['--read','--retry','--fill-hash','--request','--screen','--drawing'].some(key=>options[key]!==undefined))throw new Stop(2,'Use pdd test --journeys [JOURNEY] with normal test options.');
       const {root,found}=localSetup(cwd,[]);
@@ -2771,23 +3145,31 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
         const exitCode = report.passed ? 0 : 1;
         line(ports.stdout, context.json ? JSON.stringify({ ...report, exit_code: exitCode }) : formatScreenComparison(report));
         return exitCode;
-      } catch (error) { throw new Stop(error.exitCode === 2 ? 2 : 5, `Screen comparison: ${causeText(error.message) || 'browser execution failed'}`); }
+      } catch (error) {
+        if (error.code === 'screen-not-ready' && error.exitCode === 6) {
+          const result = { drawing: resolve(cwd, options['--drawing']), url: new URL(options['--screen']).href, outcome: 'not-ready', code: error.code, state: error.state, reason: error.reason, message: error.message, exit_code: 6 };
+          line(ports.stdout, context.json ? JSON.stringify(result) : `Screen not ready (${result.state}; ${result.reason}): ${result.message}`);
+          return 6;
+        }
+        throw new Stop(error.exitCode === 2 ? 2 : 5, `Screen comparison: ${causeText(error.message) || 'browser execution failed'}`);
+      }
     }
     if (options['--local'] !== undefined) {
       if (options['--local'] !== true || options['--lint'] !== true || Object.keys(options).some(name => !['--lint', '--local', '--json'].includes(name))) throw new Stop(2, '--local requires --lint and accepts only Story words and --json.');
       try {
         const root = repoRoot(cwd), workspace=loadRuntimeWorkspace({root}), files = gitFiles(root).filter(path=>allowsRuntimePath(workspace,path));
-        let promptPaths;
+        let promptPaths, tests = [];
         if (words.length) {
           const { found, normalized } = localSetup(cwd, words), selected = select(found, normalized, root);
-          promptPaths = ports.captureSource(root, { tests: selected.filter(test => !test.error).map(test => test.path), appMap: null }).files.map(file => file.path).filter(path => path.endsWith('.prompt.md'));
+          tests = selected.filter(test => !test.error).map(test => test.path);
+          promptPaths = ports.captureSource(root, { tests, appMap: null }).files.map(file => file.path).filter(path => path.endsWith('.prompt.md'));
         }
         // Interface findings refuse only a repository-wide local lint; a selected one gives advice only.
         const problems = words.length ? [] : interfaceFindings({root,paths:promptPaths}).filter(localInterfaceProblem);
         const advice = formatAdvice(root, new Set(gitFiles(root)), promptPaths ?? files.filter(path => path.endsWith('.prompt.md')), workspace);
         const warnings = [...advice, ...lintSvgLayouts({ root, files, promptPaths })], summary = `partial: checked SVG layout only; prompts not checked (local-only). ${warnings.length} warnings. 0 AI calls. No checks were sent.`;
-        line(ports.stdout, context.json ? JSON.stringify({ repo: root, exit_code: problems.length ? 4 : 0, state: problems.length ? 'refused' : 'partial', lint_state: 'partial', ...resultOutcome({state:'partial',note:{code:'local-only',message:'checked SVG layout only; prompts not checked'}}), rows: [], problems, warnings, summary_line: summary }) : [...problems.map(item => `${item.code}: ${item.message}`), ...warnings, summary].join('\n'));
-        return problems.length ? 4 : 0;
+        const result = saveLocalLayout(context,{root,tests,prompts:promptPaths ?? files.filter(path => path.endsWith('.prompt.md')),warnings,problems,summary});
+        return printLocalLayout(context,result);
       } catch (error) { throw new Stop(2, error.message); }
     }
     const modes = ['--read', '--retry', '--fill-hash', '--files', '--explain-bindings', '--request', '--lint'].filter(name => options[name] !== undefined);
@@ -2809,11 +3191,12 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
   } catch (error) {
     if (error instanceof Stop || error instanceof PreflightError || error instanceof RuntimeWorkspaceError) {
       line(ports.stderr, error.message);
+      if (options['--affected'] === true && error.exitCode !== 2) line(ports.stderr,AFFECTED_DISCLAIMER);
       if (context.rows?.some(row=>row.unsent || row.not_checked?.length)) {
         const rows = context.rows.map(row=>['ready','sending','waiting'].includes(row.state)
           ? {...row,state:'not_run',note:{code:null,message:error.message}} : row);
         const summary = {...renderJson({batch:context.batch??null,repo:context.root,rows,coverage:context.coverage,
-          exitCode:error.exitCode,warnings:context.warnings}),message:error.message,lint_state:error.exitCode===3?'unknown':'not_run'};
+          exitCode:error.exitCode,warnings:context.warnings}),...(context.checkSelection?{check_selection:context.checkSelection,baseline_report:context.baselineReport,check_plan:context.checkPlan,check_scope:selectedCheckScope(context.checkPlan,rows,context.checkSelection)}:{}),message:error.message,lint_state:error.exitCode===3?'unknown':'not_run'};
         if (context.folder) context.store.write(join(context.folder,'summary.json'),summary);
         if (context.json) line(ports.stdout,JSON.stringify(summary));
         else ports.stdout.write(renderText({batch:context.batch,rows,coverage:context.coverage,warnings:context.warnings,exitCode:error.exitCode,secrets:context.secrets}));
@@ -3311,6 +3694,37 @@ async function finishTestAttempts(cache, rows, capture) {
   });
 }
 
+// Bind planning to the Git comparison and the exact permitted classification inputs.
+// Git's binary diff also preserves link spelling and non-UTF-8 implementation bytes.
+// The source reader admits each working path before Git reads its raw bytes.
+function affectedPlanningAuthority(root, found, base, ports) {
+  const git = args => {
+    if (ports.checkPlanPorts?.git) return ports.checkPlanPorts.git(root,args);
+    const result = spawnSync('git',args,{cwd:root,stdio:['ignore','pipe','pipe'],maxBuffer:512*1024*1024});
+    if (result.status !== 0 && !(args.includes('--no-index') && result.status === 1)) throw Error('comparison unavailable');
+    return result.stdout;
+  };
+  const permitted = path => allowsRuntimePath(found.workspace,path)
+    && !(found.excludedFixtureProjects ?? []).some(prefix=>path === prefix || path.startsWith(`${prefix}/`));
+  try {
+    const revision = String(git(['rev-parse',`${base}^{tree}`])).trim();
+    const tracked = String(git(['diff','--name-only','-z','--no-renames',base,'--'])).split('\0').filter(permitted).filter(Boolean).sort();
+    const untracked = String(git(['ls-files','--others','--exclude-standard','-z'])).split('\0').filter(permitted).filter(Boolean).sort();
+    // Validate working paths through the source authority before Git reads bytes.
+    const source = sourceFilePort(root,found.visible,found.workspace);
+    const content = [...new Set([...tracked,...untracked])].map(path=>{
+      try { return [path,sha256(Buffer.from(source.read({path}).content))]; }
+      catch { return [path,null]; }
+    });
+    const readable = new Set(content.filter(([,hash])=>hash !== null).map(([path])=>path));
+    const paths = tracked.filter(path=>readable.has(path));
+    const diff = paths.length ? sha256(Buffer.from(git(['diff','--no-ext-diff','--no-textconv','--no-renames','--binary',base,'--',...paths.map(path=>`:(literal)${path}`)]))) : null;
+    const added = untracked.filter(path=>readable.has(path)).map(path=>[path,sha256(Buffer.from(git([
+      'diff','--no-index','--no-ext-diff','--no-textconv','--binary','--','/dev/null',path])))]);
+    return {revision,tracked,untracked,content,diff,added};
+  } catch { return {unavailable:true}; }
+}
+
 async function runBatch(context, cwd, words, options, setRelease) {
   const { ports } = context;
   const origin = runtimeOrigin(ports.env);
@@ -3320,7 +3734,65 @@ async function runBatch(context, cwd, words, options, setRelease) {
   context.agentLimit = false;
   context.timeoutMin = options['--timeout'] !== undefined ? Number(options['--timeout']) : null;
   let selected = select(found, normalized, root);
-  const cache = context.cacheEnabled ? await openTestCache(context, root, !!options['--cache-clear'], found.visible) : null;
+  const inventory = selected;
+  const affected = options['--affected'] === true;
+  const runs = allRuns({cancelled:true}, {env:ports.env}).filter(run => {
+    try { return realpathSync(run.root) === realpathSync(root); } catch { return false; }
+  });
+  const base = runs.length === 1 && /^[a-f0-9]{40}$/.test(runs[0].baseSha ?? '') ? runs[0].baseSha : 'HEAD';
+  const planningPorts = {capture:ports.captureSource,...ports.checkPlanPorts};
+  // Discovery is part of selection authority, including complete sibling variants.
+  // Recheck after captures too: a capture can observe a newly created test that
+  // was absent from the discovery result passed to the planner.
+  const discoveryScope = current => ({tests:current.tests,visible:current.discoveryVisible ?? current.visible,workspace:current.workspace,
+    authority:affected ? affectedPlanningAuthority(root,current,base,ports) : null});
+  const initialDiscovery = discoveryScope(found);
+  if (affected && initialDiscovery.authority.unavailable) context.forceAffectedFull = true;
+  let discoveryChanged = false, cache = null;
+  const discover = () => {
+    const current = localSetup(cwd, words);
+    discoveryChanged ||= !isDeepStrictEqual(initialDiscovery,discoveryScope(current.found));
+    return current;
+  };
+  const planFor = rows => {
+    const current = discover();
+    const plan = buildCheckPlan({root,found:current.found,selected:select(current.found,current.normalized,root),rows,full:true,base,affected:!context.forceAffectedFull},planningPorts);
+    discover();
+    return context.forceAffectedFull ? {...plan,stories:plan.stories.map(story=>({...story,role:'target',reason:'conservative: source selection changed during planning'}))} : plan;
+  };
+  const restartConservatively = async () => {
+    // A late discovery change can follow provisional cache admission. Retire
+    // only this attempt's mark, leaving its invalidations and other owners intact.
+    if (cache?.mark) await cacheTransaction(cache, data => {
+      if (data.latest_identity?.in_progress) {
+        data.latest_identity.in_progress = data.latest_identity.in_progress.filter(mark=>mark.token!==cache.mark.token);
+        Object.assign(data.latest_identity,{clean:false,conflict:true});
+      }
+    });
+    if (context.testCache === cache) context.testCache = null;
+    if ((context.affectedPlanningRestarts ?? 0) >= 3)
+      throw new Stop(4,'Source selection kept changing during planning. No checks were sent. Run a fresh pdd test --affected once local source is stable.');
+    context.affectedPlanningRestarts = (context.affectedPlanningRestarts ?? 0) + 1;
+    context.forceAffectedFull = true;
+    line(ports.stderr,'Source selection changed during planning; checking every Story conservatively before any paid Check.');
+    return runBatch(context,cwd,words,options,setRelease);
+  };
+  let classification;
+  if (affected) {
+    classification = planFor([]);
+    if (discoveryChanged) return restartConservatively();
+    // Re-read local membership before any dispatch preflight or cache mutation.
+    const revalidated = planFor([]);
+    const first = selectCheckTests(classification,{affected:true}), second = selectCheckTests(revalidated,{affected:true});
+    classification = revalidated;
+    if (discoveryChanged || !isDeepStrictEqual(first.tests,second.tests)) return restartConservatively();
+    context.checkSelection = selectCheckTests(classification,{affected:true});
+    selected = inventory.filter(test=>context.checkSelection.tests.includes(test.path));
+    context.baselineReport = await readBaselineReport(context,classification,ports.baselineIdentity ?? null);
+    discover();
+    if (discoveryChanged) return restartConservatively();
+  }
+  cache = context.cacheEnabled ? await openTestCache(context, root, !!options['--cache-clear'], found.visible) : null;
   if (cache && !cache.disabled && options['--lf'] && !options['--cache-clear'] && cache.history) {
     const failures = selected.filter(test => cache.failed[test.storyPath] === true);
     if (failures.length) selected = failures;
@@ -3342,11 +3814,14 @@ async function runBatch(context, cwd, words, options, setRelease) {
       ...(row.not_checked??[]).map(item=>[item.criterion_id,item.text])]);
   }
   if (options['--max-calls'] !== undefined) for (const row of rows) row.max_calls = Number(options['--max-calls']);
-  const runs = allRuns({cancelled:true}, {env:ports.env}).filter(run => {
-    try { return realpathSync(run.root) === realpathSync(root); } catch { return false; }
-  });
-  context.checkPlan = buildCheckPlan({root,found,selected,rows,full:words.length === 0,
-    base:runs.length === 1 && /^[a-f0-9]{40}$/.test(runs[0].baseSha ?? '') ? runs[0].baseSha : 'HEAD'});
+  context.checkPlan = affected ? planFor(rows) : buildCheckPlan({root,found,selected,rows,full:words.length === 0,base});
+  if (affected) {
+    const finalSelection = selectCheckTests(context.checkPlan,{affected:true});
+    if (discoveryChanged || !isDeepStrictEqual(finalSelection.tests,context.checkSelection.tests)) return restartConservatively();
+    context.baselineReport = await readBaselineReport(context, context.checkPlan, ports.baselineIdentity ?? null);
+    discover();
+    if (discoveryChanged) return restartConservatively();
+  }
   for (const value of checkPlanLines(context.checkPlan)) line(ports.stderr, value);
   if (!words.length && context.checkPlan.prerequisites.length) {
     const note = {code:'check-plan-prerequisite',message:checkPlanResults(context.checkPlan,rows).guidance};
@@ -3372,12 +3847,19 @@ async function runBatch(context, cwd, words, options, setRelease) {
     if (cache) await beginTestAttempts(cache,rows,null,options,origin);
     return printResult(context,rows);
   }
+  if (affected) {
+    const validated = selectCheckTests(planFor([]),{affected:true});
+    if (discoveryChanged || !isDeepStrictEqual(validated.tests,context.checkSelection.tests)) return restartConservatively();
+  }
   context.sourceSelection = {tests:sentTests(rows),exclude_fixture_projects:words.length === 0};
   context.warnings.push(...(capture.warnings ?? []));
   if (cache) await beginTestAttempts(cache, rows, capture, options, origin);
   context.testCache = cache;
   const fresh = rows.filter(row => !row.cached);
-  if (!fresh.some(row => row.state === 'ready')) return printResult(context, rows);
+  if (!fresh.some(row => row.state === 'ready')) {
+    if (affected) { discover(); if (discoveryChanged) return restartConservatively(); }
+    return printResult(context, rows);
+  }
   context.otherNote = otherNote(otherFiles(capture.files, found).length);
   let identity;
   try { identity = signIn(ports.gh, context.store); }
@@ -3389,6 +3871,11 @@ async function runBatch(context, cwd, words, options, setRelease) {
       }
     });
     throw error;
+  }
+  if (affected) {
+    context.baselineReport = await readBaselineReport(context, context.checkPlan, identity);
+    const validated = selectCheckTests(planFor([]),{affected:true});
+    if (discoveryChanged || !isDeepStrictEqual(validated.tests,context.checkSelection.tests)) return restartConservatively();
   }
   const startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
   const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });

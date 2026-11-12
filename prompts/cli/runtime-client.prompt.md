@@ -363,7 +363,7 @@ Export `checkRuntimeHealth({env}, ports)` for the [Autopilot launcher](autopilot
 | HTTP 401 or 403, or no gh token (then nothing is sent) | `access`; `fix` says to run `gh auth status` and sign in again with `gh auth login`, or to ask the PDD team for interpreter access |
 | an invalid `PDD_RUNTIME_URL` origin (nothing is sent), a 3xx redirect (not followed), a 200 or 404 that is not a JSON object such as an HTML page or an empty body, or any other status | `access`; `fix` says to check `PDD_RUNTIME_URL` |
 
-`detail` is a short text such as `HTTP 503`, `not reached`, `no answer`, `maintenance`, `no gh sign-in` or `HTTP 401: The interpreter did not accept the gh login`; neither `detail` nor `fix` ever holds the token.
+`detail` is a short text such as `HTTP 503`, `not reached`, `no answer`, `maintenance`, `no gh sign-in` or `HTTP 401: The interpreter did not accept the gh login`; neither `detail` nor `fix` ever holds the token. For a future `maintenance.until` the result also has `until` (that time as an ISO string) and `reason` (the maintenance reason as clean text, or null), so a caller such as the [Autopilot core](autopilot-core.prompt.md) can wait for the end and name it (#3241).
 
 ## `pdd test`
 
@@ -407,17 +407,28 @@ Use the [preflight hash-fill contract](runtime-preflight.prompt.md#prose-hash) f
 
 ### Local drawing checks
 
-`--lint --local [STORY...] [--json]` runs only [SVG layout lint](svg-layout.prompt.md), with no runtime, network, token lookup, state-directory access or AI call. With no Story, inspect every Git-visible prompt, including prompts without a Runtime interface or tests. With Story words, use ordinary Story selection and the selected source dependency closure to select prompts; unknown selection is exit 2. Do not run engine P1–P10 or require an approved interface for this advisory. Its warnings never change exit 0. Print every warning and the partial result specified in Named check results; JSON is `{repo, exit_code:0, state, lint_state, reason, rows:[], warnings, summary_line}`. State and reason come from the shared projection. An actual repository/discovery failure is exit 2. `--local` requires `--lint` and mixes only with `--json` and Story words.
+`--lint --local [STORY...] [--json]` runs [SVG layout lint](svg-layout.prompt.md), with no runtime, network, token lookup or AI call. With no Story, inspect every Git-visible prompt, including prompts without a Runtime interface or tests. With Story words, use ordinary Story selection and the selected source dependency closure to select prompts; unknown selection is exit 2. Do not run engine P1–P10 or require an approved interface for this advisory. Its warnings never change exit 0. Print every warning and the partial result; [Named check results](#named-check-results) owns local persistence, the JSON record and saved reads. The existing [interface findings](#missing-and-native-only-interfaces) still refuse default local lint with exit 4; selected local lint stays advisory. An actual repository/discovery failure is exit 2. `--local` requires `--lint` and mixes only with `--json` and Story words.
 
 Ordinary `--lint` runs the same advisory on its selected captured prompts before sign-in/server work; merge its warnings into the existing text/JSON warnings without changing server lint semantics, rows, refusal rules, request shapes or call counts. Warning-only SVG differences do not become server refusals.
 
-`--screen URL --drawing PATH [--json]` is a separate local Check mode with no Story operand, gh sign-in, runtime call, saved batch or AI call. Reject all other options/modes, an orphan `--drawing`, or a missing drawing option with exit 2 before side effects. Call [screen comparison](screen-compare.prompt.md) with `cwd`, URL and drawing path; pass `PDD_CHROME_PATH` from the injected environment when present. Text prints its `Screen vs drawing` Markdown table and summary, JSON prints the returned report plus `exit_code`. Exit 0 when all parts pass, 1 for a comparison failure, 2 for invalid input and 5 for unavailable browser, navigation or execution failure. An error must not print a passing table. Keep stdout valid JSON in JSON mode and diagnostics on stderr. These local modes return before runtime address/state/authentication setup.
+`--screen URL --drawing PATH [--json]` is a separate local Check mode with no Story operand, gh sign-in, runtime call, saved batch or AI call. Reject all other options/modes, an orphan `--drawing`, or a missing drawing option with exit 2 before side effects. Call [screen comparison](screen-compare.prompt.md) with `cwd`, URL and drawing path; pass `PDD_CHROME_PATH` from the injected environment when present. Text prints its `Screen vs drawing` Markdown table and summary, JSON prints the returned report plus `exit_code`. Exit 0 when all parts pass, 1 for a comparison failure, 2 for invalid input and 5 for unavailable browser, navigation or execution failure. An error must not print a passing table. Keep stdout valid JSON in JSON mode and diagnostics on stderr. These local modes return before runtime address/authentication setup; local lint alone saves the evidence specified in [Named check results](#named-check-results).
+
+For the screen comparator's `screen-not-ready` outcome, preserve its
+`state`, `reason`, and actionable `message` and return exit 6. This is a distinct
+local result, not a failed drawing comparison or unavailable browser. Text prints
+`Screen not ready (<state>; <reason>): <message>` without a parts table. JSON
+prints exactly `{drawing, url, outcome:"not-ready", code:"screen-not-ready",
+state, reason, message, exit_code:6}`; `drawing` is the resolved reference path
+and `url` is the requested URL, as for ordinary screen reports. It has no `rows`
+or `passed` field. Keep stdout valid JSON and retain ordinary pass/mismatch
+reports and invalid-input/execution errors. The comparator owns detection,
+waiting, selected app surface and the no-action rule.
 
 For explicit complete lint, print every canonical diagnostic from `result.problems` (or the kept report's problems on older servers), preserving file, section, severity, JSON pointer and plain reason/fix. Merge legacy `program.refused_prompts` without duplicating the same code/file/section. A selected test's confirmed `result.tests` refusal also refuses that row, including Story/criterion mismatches even when prompt admission passed. Unselected tests or diagnostics remain visible without overriding selected rows. Preserve unknown and transport rules; complete lint is zero AI calls, never a check.
 
 For lint-only JSON, `lint_state` summarizes selected outcomes under the Outcome contract below. Keep every returned diagnostic in `problems`, including unselected refusals.
 
-**Saved standalone lint.** For a saved batch with explicit lint-only intent,
+**Saved standalone lint.** The new local-layout record uses [Named check results](#named-check-results). For other saved batches with explicit lint-only intent,
 `--read BATCH` (including latest-batch reads) reports the same selected lint
 outcomes, diagnostics, lint summary and exit policy as explicit complete lint
 above, in text and JSON. This holds whether the original command ended pending
@@ -555,6 +566,8 @@ When time runs out, show busy/not-run with zero calls and plain advice that no c
 `pdd test --retry BATCH [--json] [--details] [--timeout MIN]` is explicit recovery for that batch only. Check owner login and repository, refresh prior IDs, recapture the original selected source and require the exact saved source SHA before any POST. Retry only confirmed unstarted capacity rows or locally held eligible rows with no POST. Keep all earlier IDs/answers, original per-test caps and original source identity; never re-execute completed, running or unknown submissions. Recover their evidence under the lifecycle below. Reuse confirmed lint for identical source. A changed capture, missing proof, unresolved lint or expired/unverifiable receipt cannot authorize a retry; explain how to start a fresh selected check. Honor the saved absolute Check retry time and capacity-hold bound across recovery invocations. Each recovery invocation gets its own finite caller wait (including refreshing prior IDs), with no admission-attempt ceiling. `--read` remains GET-only except saved-lint continuation and confirmed restart recovery below. No other check-mode options mix with --retry except json/details/timeout, and it takes no Story words.
 
 ## Concurrent saved-batch operations
+
+The new local-layout record uses the read-only route in [Named check results](#named-check-results); the following recovery ownership applies to other saved batches.
 
 One batch has one writer across processes, including separate terminals. A new Check and
 explicit `--lint` own their batch from before the first saved record until the command ends,
@@ -1113,9 +1126,11 @@ pointer, but deduplication must retain the original location identity.
 
 - Load [runtime outcome](runtime-outcome.prompt.md) for the public result projection, reason codes and pass boundary used by this module.
 
-- [Native results](workflow-results.prompt.md#native-profile-and-criterion-assessment-draft):
+- [Native results](workflow-results.prompt.md#native-profile-and-criterion-assessment-draft)
+  and [saved local-layout record](workflow-results.prompt.md#saved-local-layout-record):
   required generation/runtime/verification context for native admission,
-  assessment and visible proof limits. This is an unapproved native draft;
+  assessment, visible proof limits and the canonical persisted local-layout
+  shape, completion boundary and saved-reader projection. This is an unapproved native draft;
   copied workspace contracts remain their owner's unapproved draft context.
 
 - [Evidence eligibility read owner](workflow-runner.prompt.md#read-evidence-eligibility): required generation/runtime/verification context for `readEvidenceEligibility`, its inputs/result and accepted association policy. Use this binding for contract history, saved Story evidence and migration handoff; do not invoke registration on reads.
@@ -1254,11 +1269,25 @@ If owner metadata refuses a saved Try with session-stopped, read that same owner
 
 ## Read saved Story evidence locally
 
-Export module function `savedStoryEvidence({root, comparisonRoot=root}, ports={})`,
+Export module function `savedStoryEvidence({root, comparisonRoot=root, withTests=false}, ports={})`,
 returning `{stories, warnings}`. Each Story row is
 `{story, pass, current, result, at}`: repository-relative Story path, Boolean
 pass/current, `result` equal to "✓" for pass and "no verdict" otherwise, and
-Unix epoch milliseconds `at`. This read-only capability never resolves runtime
+Unix epoch milliseconds `at`. With `withTests: true` each row also has `tests`: the
+sorted repository-relative test paths of that Story that its batch selected (for a
+pass, every one of them was sent), so a caller can bind a pass to the exact tests that
+it checked; `sent` (false for a row whose tests were never sent, for example refused
+before execution or interrupted; such a row is listed too, with `pass` false); `failed`,
+the number of failed checks in the answers of its tests (a failed check counts also
+when the answer has no verdict) and `failedSteps`, their step ids (at most 10);
+`refusals`, the refusal codes of its batch rows and answers; `states`, the batch row
+states (for example `refused`, `not_run`, `unknown`); `codes`, the row reason codes
+(for example `interrupted`, `server-busy`, `graph-provider-failure`); and `advice`, the
+fix texts that pdd saved for it (at most 3, each at most 800 characters): each batch
+warning that starts with `Warning: TEST ` for one of its tests and names one of its
+refusal codes, and each refusal `fix`. Two more options read other folders: `anyRoot: true` reads batches of any
+root (each compared with `comparisonRoot`), and `limit: N` reads only the newest N batch
+folders. Without these options the rows are exactly as above. This read-only capability never resolves runtime
 configuration, signs in, calls a service, creates a directory, writes saved state
 or dispatches work. Use the injected `env` for the existing state-directory
 selection. The optional raw ports are `readFile(path)` returning UTF-8 text,
@@ -1331,7 +1360,106 @@ run's current base. Missing state is empty. Malformed or unreadable
 records produce finite warnings and no invented pass, while unrelated readable
 batches remain usable. Do not recover by a network read or change saved caches.
 
+## Read the Story checks that can be sent again
+
+Export module function `resendableStoryChecks({root, since=0}, ports={})` for the
+[Autopilot core](autopilot-core.prompt.md) (#3241, rule B5). It returns `{stories,
+neverSent, noVerdict, failed, maintenance}`: sorted repository-relative Story paths of
+`root` whose latest saved check can be sent once more (`stories` = `neverSent` and
+`noVerdict` together), the Stories whose latest check has a failed check (never sent
+again), and whether the note of a never-sent check names maintenance. It reads like
+`savedStoryEvidence`: the same state directory from the injected `env`, the canonical
+root match, the same optional `readFile`, `readDir` and `realpath` ports, and no
+sign-in, service call, directory creation or write.
+
+- Only batches with `intent: "check"` count, and with `since` above 0 only those
+  whose `created_at` is at or after `since` (Unix epoch milliseconds). A batch that
+  cannot be read or parsed is skipped with no warning.
+- Batches are read in name order; a later batch that has rows of a Story replaces
+  the earlier state of that Story.
+- Each row is one of these. **Never sent**: no request ID, the recovery state
+  `not_run`, no refusal, no `unsent` mark (a local discovery refusal or a native-only
+  row) and no note with the code `blocked` (an access gate): held in maintenance,
+  busy, or stopped before sending. **Passed** or **failed** by its recovery state.
+  Else a sent row reads the saved answer of its latest request ID in the batch folder
+  (`ID.json`, the same projection as `savedStoryEvidence`): a `failed` answer, or any
+  failed check in it, is **failed**; an `unknown` answer with no failed check (for
+  example `graph-provider-failure`, an AI provider failure) is **no verdict**. Any
+  other row (a refusal, an open or unsaved answer) is **other**.
+- A Story in one batch is failed when one of its rows failed; else other when one is
+  other; else never sent when one was never sent; else no verdict when one has no
+  verdict; else passed. Only never sent and no verdict are listed in `stories`.
+- A Story is named as `savedStoryEvidence` names it: a row Story that is a `.md`
+  path, else the unique captured `.md` file of the batch with that base name; a row
+  whose Story cannot be named is skipped.
+
 ## Check scope plan
+
+### Affected checks and historical baseline report (draft)
+
+`pdd test --affected` is an explicit ordinary-check mode with no operands. Allow
+only `--json`, `--details`, `--timeout`, `--max-calls` and `--cache-clear` beside
+it. Reject other combinations, including `--lf`, journeys, files, bindings,
+lint, read/retry, request, hash and screen modes, with exit 2 before state writes,
+sign-in or network effects. Ordinary full and named selections remain unchanged.
+No new comparison flag is introduced: use the existing unique saved-run base or
+HEAD. A committed no-run change with no working changes falls back to all Stories.
+
+Discover the ordinary full inventory and obtain the planning owner's complete
+classification first. Use its `selectCheckTests` for actual dispatch selection.
+Apply dispatch preflight, capture, lint, cache attempts and all call/admission
+bounds only to that selection. Keep every selected Story variant and criterion.
+`--cache-clear` clears the ordinary cache and sends the affected selection again;
+all existing cache age/identity/CI/declaration and restart rules still apply.
+An identity-change second phase cannot add an omitted baseline. Never widen a
+saved read/retry, or recompute its affected scope from later edits.
+
+Persist `check_selection:{mode,tests,baseline_tests}` alongside the full
+`check_plan` and the exact selected `source_selection`. This metadata records
+selection, not execution or proof. Current batch rows contain selected tests
+only; omitted baselines never acquire synthetic rows, passes, calls or receipts.
+Keep `check_scope`'s missing-row semantics. Its baseline unresolved guidance in
+affected mode must identify omitted work, not imply that this batch has a pending
+baseline request to read.
+
+Build `baseline_report` through the planning owner's projection, using locally
+saved Check history only. Scan every available eligible batch, not only the
+newest batch and not the pass-only Story summary. Reuse `readEvidenceEligibility`,
+saved Check row/receipt validation and source-capture authorities. Filter by the
+actual original producer/selection/stage and known runtime/account identity;
+unknown identity supplies unavailable evidence, never a guessed account. Do not
+sign in, GET receipts or POST checks solely to populate this report. Read raw
+files/directories and capture hashes through injected ports with native defaults.
+Retain every available original failed Check receipt, including an older failed
+attempt after a later passing receipt. Use a matching-ID Check receipt for sent
+outcomes; never trust a saved passed label alone. Local unsent problems may appear
+as local observations, never execution or success, and cannot erase sent history.
+Retain failed/refused/partial/not-run distinctions through canonical outcomes.
+Sort observations by original batch time (unknown last), batch ID, test path and
+request ID; preserve distinct original attempts. Missing/corrupt/ineligible
+records cannot attest a pass. Mark partial/unavailable history and finite warnings
+without hiding other readable failures. Missing state gives empty history.
+
+Compare each observation with its complete original source selection/hash under
+the existing eligibility/stage authority: equal is current, different is stale,
+and missing/unreadable identity is unavailable. Historical PR 1/before evidence
+keeps that qualifier in its stage and cannot attest current-code proof. Validate
+and redact original report links as usual. Never infer baseline age or owner.
+Save the report snapshot in batch.json and summary.json; JSON exposes the same
+field. Text lists baseline paths, original outcomes/batch/time/report and
+currentness with the original-batch scope. Explicitly label this historical or
+omitted evidence, not work performed in this invocation. Saved batch reads and
+retries preserve that snapshot rather than refreshing history or paying for a
+baseline rerun. No saved original is rewritten or deleted to assemble a report.
+
+**Proposed exit contract for person review:** affected command status follows
+the existing named-selection convention, based only on its selected target
+results. A target pass can exit 0 beside a saved baseline failure. Always state
+`Affected checks only; this is not a full workflow pass. Required full-pass gates still apply.`
+This adds no failure waiver: `fullCheckPass`, Story/approval/publication/code/merge
+gates, strict approval and repository-required native full-suite checks remain
+unchanged and blocking, including failed, missing and stale baseline evidence.
+The baseline snapshot itself is never submitted as current gate evidence.
 
 Before normal Check dispatch, build the local plan owned by
 [check planning](runtime-check-plan.prompt.md), using the unique same-worktree
@@ -1365,10 +1493,58 @@ This also applies to earlier rows when a later submission is interrupted.
 Read older saved batches without that field. Lint metadata also carries the
 public state and reason, with its internal state in recovery_state.
 
-`pdd lint --local` exits 0 when its SVG check completes. Both text and JSON state
-`partial: checked SVG layout only; prompts not checked`. JSON includes state and
-lint_state partial, reason local-only, and rows with the same public result.
-It never supplies a full lint pass. Local mode runs this path for all selections.
+`pdd lint --local` retains its existing immediate text: every interface finding,
+every advisory warning, then `partial: checked SVG layout only; prompts not
+checked (local-only). N warnings. 0 AI calls. No checks were sent.` Completed
+advisory inspection exits 0; default interface refusals retain exit 4. Named and
+default selection, warning order and refusal precedence stay with their existing
+owners. Native Story assessment keeps its separate route. Actual scope belongs
+in the saved record and JSON; no new immediate text scope line is required.
+
+Persist completed local inspection before returning its ordinary result. Use
+exactly the shared [saved local-layout record](workflow-results.prompt.md#saved-local-layout-record)
+for `batch.json` and `summary.json`, including its completion boundary and
+incomplete-read classification. This is a version 1 `lint-only` batch in the
+existing external state, with the canonical root, creation time and ordinary
+batch identity. Its scope records the selected test paths and actually inspected
+prompt paths; a repository scan has no selected tests. Keep the current local
+advisory `rows: []`, even for a selected Story; do not fabricate a test row.
+Expose that shared summary shape in immediate JSON. Do not broaden preflight
+or interface admission to produce this record.
+
+Use the existing native state writer and repository `last_batch` discovery.
+Prepare the batch and update its repository pointer before publishing the
+matching complete `summary.json`; that summary is the completion boundary.
+Report completion only after its successful save. On a failure, retain any
+newly prepared batch as incomplete, without a completed summary or saved-success
+claim. Existing batches and summaries remain untouched. The workflow reader's
+shared incomplete rule prevents this newer prepared record from exposing an
+older hosted pass. This bounded native save needs no new public API or source
+capture/refactor route.
+
+Use the existing outside-repository state boundary, including exit 2 for a
+state path inside the repository. Proposed persistence-failure policy for review:
+if creating or saving this result fails, exit 2 with a clear state-save diagnostic.
+No fallback calls the interpreter. Other preflight/refusal policies remain with
+their owners. Saving needs no sign-in, Runtime-origin validation, network/model
+call, Check or Try. It creates no full-pass cache or recent passing lint receipt,
+server receipt, token, engine/model identity or report link.
+
+Before the authenticated saved-read/recovery route, recognize only the new
+shared local-layout discriminator. `pdd test --read BATCH`, with or without
+`--json`, reads this new record offline, including its empty rows. A matching
+complete record returns its original summary, scope, diagnostics, partial/local-only
+classification and original exit (0 or 4), using the shared JSON shape or the
+same immediate text facts. An incomplete record exits 2 with the shared incomplete
+summary and a clear state-save diagnostic; JSON keeps the same shape with
+`exit_code: 2`. A quiet read returns the saved rows without reclassifying them.
+Retry of this new record returns the same saved result and asks for a fresh
+local lint when new evidence is wanted; it starts no continuation. These reads
+and retries perform no authentication, origin validation, source recapture,
+network/model call, dispatch, lock/state/repository-pointer write, cache update
+or receipt update. Apply the existing root and safe batch-path checks. Legacy
+native-only local batches keep their existing separate read/retry route; their
+`local_only: true` alone cannot identify this new SVG record.
 
 Print a Sent progress line only after the Check POST has occurred and its reply
 confirms admission (accepted job or terminal executed result). No such line may

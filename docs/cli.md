@@ -1,6 +1,6 @@
 # CLI reference
 
-This page lists every command of pdd 0.1.28, as `pdd --help` shows it. A test (`test/docs-commands.test.mjs`) checks that each command form of the help is on this page.
+This page lists every command of pdd 0.1.29, as `pdd --help` shows it. A test (`test/docs-commands.test.mjs`) checks that each command form of the help is on this page.
 
 You need the pdd command only for runs with PRs, for `pdd test`, `pdd lint`, `pdd simulate` and `pdd approve`. Install the skills with `npx skills add promptdriven/pdd` (add `-g` for all your projects), and set up a repo with the `pdd-setup` skill in your agent. For simulations that your agent drives, use the Try tools in `pdd mcp`. Then use a PDD skill: `pdd-feature`, `pdd-bug`, `pdd-small-change`, `pdd-product` or `pdd-prompting`. Call a skill with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code (or ask for it by name). See [Install](USAGE.md#2-install).
 
@@ -10,9 +10,9 @@ Typing `pdd check` or `pdd try` runs nothing and prints the name of the command 
 
 | Command | What it does |
 |---|---|
-| `pdd setup [--yes]` | Check for a ready agent, install the ten [PDD skills](USAGE.md#4-the-pdd-skills) when they are missing, and say where. Then add or update the short PDD block (7 lines, between `<!-- pdd:start -->` and `<!-- pdd:end -->`) in `CLAUDE.md` of this folder, else in `AGENTS.md`. If neither exists, make `AGENTS.md`. In a Git repository, add the line `.pdd/` at the end of the root `.gitignore` when no line there is `.pdd`, `.pdd/`, `/.pdd` or `/.pdd/`; `pdd test` keeps its local cache there. Setup only appends: all other bytes stay the same. When the last such line starts with `!`, or no such line exists but a `!` line names `.pdd` or a path in it (such as `!.pdd/config.json`), setup changes nothing and says so. Repeat setup keeps an existing Autopilot mode |
+| `pdd setup [--yes]` | Check for a ready agent, install the seven [PDD skills](USAGE.md#4-the-pdd-skills) when they are missing, and say where. Then add or update the short PDD block (7 lines, between `<!-- pdd:start -->` and `<!-- pdd:end -->`) in `CLAUDE.md` of this folder, else in `AGENTS.md`. If neither exists, make `AGENTS.md`. In a Git repository, add the line `.pdd/` at the end of the root `.gitignore` when no line there is `.pdd`, `.pdd/`, `/.pdd` or `/.pdd/`; `pdd test` keeps its local cache there. Setup only appends: all other bytes stay the same. When the last such line starts with `!`, or no such line exists but a `!` line names `.pdd` or a path in it (such as `!.pdd/config.json`), setup changes nothing and says so. Repeat setup keeps an existing Autopilot mode |
 
-`pdd setup` copies the skills to `~/.agents/skills` (Codex and Gemini) and `~/.claude/skills`, or `$CLAUDE_CONFIG_DIR/skills` when it is an absolute path (Claude Code). If `npx skills` already installed them, it copies nothing. When the skills it finds are older than this pdd, or differ from its skills, it says so and prints the command that updates them: `npx skills add promptdriven/pdd -g -a codex -a claude-code -y`, without `-g` for a copy in the project. After an update of the pdd command, it replaces an older or same-version differing copy with the `.pdd-skill.json` marker, including an invalid marker. It never touches a copy without the marker, or a symlink. When `pdd --version` or `pdd setup` reports older skills, it names each affected skill and its installed version, for example `pdd-autopilot is 0.1.20`. Run `pdd setup` to update copies installed by pdd in user folders. For copies from another installer, use the shown `npx skills add` command. No other pdd command copies skills. The `pdd-setup` skill adds the project block and ignore rule in a chat; it installs nothing and does not register MCP tools. Run it in the top folder of the repo.
+`pdd setup` copies the skills to `~/.agents/skills` (Codex and Gemini) and `~/.claude/skills`, or `$CLAUDE_CONFIG_DIR/skills` when it is an absolute path (Claude Code). If `npx skills` already installed them, it copies nothing. When the skills it finds are older than this pdd, or differ from its skills, it says so and prints the command that updates them: `npx skills add promptdriven/pdd -g -a codex -a claude-code -y`, without `-g` for a copy in the project. After an update of the pdd command, it replaces an older or same-version differing copy with the `.pdd-skill.json` marker, including an invalid marker. It never touches a copy without the marker, or a symlink. When `pdd --version` or `pdd setup` reports older skills, it names each affected skill and its installed version, for example `pdd-feature is 0.1.20`. Run `pdd setup` to update copies installed by pdd in user folders. For copies from another installer, use the shown `npx skills add` command. No other pdd command copies skills. The `pdd-setup` skill adds the project block and ignore rule in a chat; it installs nothing and does not register MCP tools. Run it in the top folder of the repo.
 
 Setup previews the exact MCP configuration changes for the Codex, Claude Code and Gemini agents it finds, then asks once (y/N). Only `y` writes those changes, including the approval setting for this Codex server. Registrations pin this running pdd executable, so another installation earlier on PATH cannot receive its tools. Other configuration is preserved. Codex uses `$CODEX_HOME/config.toml` (default `~/.codex/config.toml`) and the `mcp_servers.pdd` entry with `default_tools_approval_mode = "approve"`. Claude Code uses the `mcpServers.pdd` entry in its configuration; Gemini uses `mcpServers.pdd` in `~/.gemini/settings.json` with server trust. Each entry runs `pdd mcp`. A conflicting existing entry is preserved and reported.
 
@@ -29,16 +29,15 @@ Setup also reports the running pdd executable and version, the `pdd` paths in or
 | `pdd autopilot auto` | Save mode `auto` |
 | `pdd autopilot trust NAME...` | Add one or more explicitly trusted GitHub names |
 | `pdd autopilot untrust NAME` | Remove one explicitly trusted GitHub name |
-| `pdd autopilot release ISSUE` | Release this machine's claim and remove `pdd:working` and `pdd:stuck`; keep the run folder, branch and PRs |
 
-Settings live in the repository's `pdd.json`, for example `{"autopilot":{"mode":"off","trust":[]}}`. Other settings are preserved. Autopilot workers start from the default branch on GitHub and read `pdd.json` there, not your local copy. So `pdd autopilot off`, `observe`, `auto`, `trust` and `untrust` also update `pdd.json` on the default branch, through the GitHub API with your `gh` sign-in. Each command makes only its own change on GitHub: a mode command sets `autopilot.mode`, `trust` adds its names to `autopilot.trust`, and `untrust` removes its name. All other keys and fields keep the GitHub values, also when your checkout is behind. The commit message says what changed, and the commit changes only those bytes of `pdd.json`: the indent and the key order of the file stay. They do not touch your current branch or your uncommitted work. More lines tell the result:
+Settings live in the repository's `pdd.json`, for example `{"autopilot":{"mode":"off","trust":[]}}`. Other settings are preserved. Autopilot on this machine reads `pdd.json` of this checkout. Its job worktrees, other machines and other people read `pdd.json` of the default branch on GitHub. So `pdd autopilot off`, `observe`, `auto`, `trust` and `untrust` also update `pdd.json` on the default branch, through the GitHub API with your `gh` sign-in. Each command makes only its own change on GitHub: a mode command sets `autopilot.mode`, `trust` adds its names to `autopilot.trust`, and `untrust` removes its name. All other keys and fields keep the GitHub values, also when your checkout is behind. The commit message says what changed, and the commit changes only those bytes of `pdd.json`: the indent and the key order of the file stay. They do not touch your current branch or your uncommitted work. More lines tell the result:
 
 - GitHub is already up to date.
 - The commit URL, then `pdd.json on GitHub is updated. To update your local copy, run git restore pdd.json, then git pull.` `git restore pdd.json` drops your local change of `pdd.json`, which GitHub now has. Run `git pull` on the default branch.
-- When the default branch accepts changes only through a PR: the URL of a PR from a `pdd/autopilot-settings-…` branch, which you must merge before workers use the new setting. While that PR is open, the next command adds its change to the same PR. When the new setting is the same as on the default branch, pdd closes the PR with a short comment.
+- When the default branch accepts changes only through a PR: the URL of a PR from a `pdd/autopilot-settings-…` branch, which you must merge before the GitHub copy has the new setting. While that PR is open, the next command adds its change to the same PR. When the new setting is the same as on the default branch, pdd closes the PR with a short comment.
 - When the copy on GitHub then has other settings than your checkout, one more line shows both.
 
-When another change of `pdd.json` on GitHub comes between pdd's read and its write, pdd reads the file again and tries once more. When GitHub cannot be reached or `gh` is not signed in, the local setting stays, the exit code is 0, and the line tells you to run the same command again. `pdd autopilot start` and `pdd autopilot status` print a warning when the copy on GitHub has another mode or trust list, with the commands that change it, or when a settings PR is still open, with its URL. `pdd setup` saves a first mode only in your checkout and never writes to GitHub; it prints the command that puts the mode there. Invalid saved modes count as `off` with a notice; setup leaves them unchanged, and a mode command replaces them. Names match ignoring case. The repository owner, people with write access (including access through an organization team), and explicitly added names are trusted independently. An incomplete lookup never establishes trust for an unknown person.
+When another change of `pdd.json` on GitHub comes between pdd's read and its write, pdd reads the file again and tries once more. When GitHub cannot be reached or `gh` is not signed in, the local setting stays, the exit code is 0, and the line tells you to run the same command again. `pdd autopilot start` and `pdd autopilot status` print a warning when the copy on GitHub has another mode or trust list, with the commands that change it, or when a settings PR is still open, with its URL. The warning says that Autopilot on this machine uses this checkout's settings (and this machine's `--mode` and `--label`, when set), and that other machines and people read the GitHub copy. `pdd setup` saves a first mode only in your checkout and never writes to GitHub; it prints the command that puts the mode there. Invalid saved modes count as `off` with a notice; setup leaves them unchanged, and a mode command replaces them. Names match ignoring case. The repository owner, people with write access (including access through an organization team), and explicitly added names are trusted independently. An incomplete lookup never establishes trust for an unknown person.
 
 These commands store settings and determine trust. Selecting a mode starts no run and makes no interpreter call. Approval policy, including `strict_approvals`, stays independent. Code replay reads `replay.base_scenarios` (`"linked"` or `"all"`) from `pdd.json` on each run's base commit; see [add all approved base scenarios](replay-evidence.md#add-all-approved-base-scenarios).
 
@@ -116,7 +115,7 @@ approval keeps the headers of the prompt current.
 | `state` | Meaning |
 |---|---|
 | `current` | The hash is the prompt's header hash. |
-| `current` with `legacy: true` | The hash is the SHA-256 of the whole prompt file. pdd 0.1.28 accepts this form as current. Write the expected hash instead. |
+| `current` with `legacy: true` | The hash is the SHA-256 of the whole prompt file. pdd accepts this form for compatibility and marks it `legacy: true`. Write the expected hash for a canonical header. |
 | `stale` | The prompt changed after the header was written. Check that the file follows the prompt, then write the expected hash. |
 | `none` | The header has no hash. |
 | `unknown` | The named prompt is not available. |
@@ -131,246 +130,181 @@ only.
 ## Autopilot on this machine
 
 `pdd autopilot doctor` checks the pdd selected by PATH, Node 22.20 or newer,
-Git, gh sign-in, write access, merge methods and effective branch rules, agent
-sign-in and read-only usage, Herdr and pane room, setup instructions and skills,
-mode and trust, draft prompts, authenticated interpreter capacity access, and the
-platform's user scheduler. Linux lingering and macOS sleep are advisory.
+Git, gh sign-in, write access, merge methods and effective branch rules, the Git
+name and email, agent sign-in and read-only usage, setup instructions and skills,
+mode and trust, the `pdd.json` on GitHub, draft prompts, authenticated interpreter
+capacity access, and the platform's user scheduler. Linux lingering and macOS
+sleep are advisory. Doctor needs no Herdr: Autopilot jobs run headless.
 Codex usage uses a read-only account request. Claude usage remains unproved;
 run `claude` and `/usage` to inspect it. No agent prompt is sent.
 Unreadable branch rules are advisory; repository reviews and checks still apply.
-Each line includes a repair or inspection command. PATH repairs name this
-installation, including source checkouts. A required failure refuses start with
-the same report before state files, locks, timers, panes or claims change.
+A PASS line shows the check and its result only. A WARN or FAIL line also shows a
+repair or inspection command after `fix:`. PATH repairs name this installation,
+including source checkouts. A required failure refuses start with the same
+report before state files, locks, timers or claims change.
 Draft and unreadable prompt paths are warnings. Doctor never approves them.
 A successful interpreter access read sends no source and proves no prompt behavior.
 See [the first-start path](../README.md#autopilot-on-your-own-repository).
 
-Doctor uses the saved coordinator profile on restart.
+Autopilot jobs make commits, so Git needs `user.name` and `user.email`. Doctor
+reads both in the repository. `GIT_AUTHOR_NAME` with `GIT_COMMITTER_NAME`, and
+`GIT_AUTHOR_EMAIL` with `GIT_COMMITTER_EMAIL` (or `EMAIL`), also count. A missing
+value is a warning. Its fix sets the value with `git config --global`.
+
+Autopilot jobs and other machines read `pdd.json` of the default branch on
+GitHub, not the copy in this checkout. Doctor reads that file and compares the
+mode and the trust names; case and order do not count. When GitHub has no
+`pdd.json`, the warning gives the commit and push that adds it, or
+`pdd autopilot MODE`. When the settings differ, the warning shows both and gives
+the `pdd autopilot` commands that publish the settings of this checkout. Doctor
+itself writes nothing to GitHub.
+
+Doctor uses the saved agent profile on restart.
 A selected agent's HOME, CODEX_HOME, CLAUDE_CONFIG_DIR and other environment
-settings apply to its checks. Repair commands carry that profile environment.
+settings apply to its checks. A repair command sets only the environment names
+whose values differ from your shell, so most repair commands are plain. A
+secret value is never printed.
 A malformed agents.json report names the file to edit. An invalid
 PDD_RUNTIME_URL report gives the HTTPS-origin or unset repair.
-Pane pressure, unreadable capacity, interpreter health and agent usage limits
-are warnings with fix commands. They never refuse start at preflight. Start can
-sweep, park and wait. It must still prove room through guarded cleanup and admission,
-including cleanup of a finished run shell after its chats have closed.
-Doctor closes no panes. A reused coordinator needs no extra pane.
-Doctor verifies that coordinator in `pdd-autopilot`. A full `pdd` workflow
-session does not block reuse. Fresh allocation uses the native workflow pane
-admission rules. Unavailable saved-target evidence defers to guarded recovery.
+Interpreter health and agent usage limits are warnings with fix commands. They
+never refuse start at preflight.
 Interpreter readiness uses the runtime client's health check, including a JSON
 404 from an interpreter without the optional capacity endpoint.
 
-Run Autopilot commands inside the repo folder. Each repo has its own Autopilot on each machine.
+Run Autopilot commands inside the repo folder. Each repo has its own Autopilot on
+each machine. Autopilot has one engine, the [core engine](#core-engine). Its tick
+makes no AI call. Each issue gets one headless Codex or Claude job with a log file.
+Autopilot opens no chat and needs no Herdr.
 
 | Command | What it does |
 |---|---|
-| `pdd autopilot doctor` | Read-only prerequisite checks, one line and a command per item. No GitHub writes or AI calls. Exit 1 for a required failure, 0 when only warnings remain |
-| `pdd autopilot start [--runs N] [--checks N] [--engine core\|full] [--label NAME] [--mode auto\|observe\|off] [--report file\|draft\|off] [--intake off\|shadow] [--resume-custody FILE]` | Check sign-ins and the running pdd version, open a dedicated interactive Herdr session (not with the [core engine](#core-engine)) and check for work immediately. A user timer checks again every 30 minutes (every 10 minutes with the core engine; `pdd autopilot status` shows the interval). `--runs` overrides the open-run cap. `--checks` overrides heavy-check slots. Omission uses machine capacity. `--engine core` or `--engine full`, `--label NAME`, `--mode auto\|observe\|off` and `--report file\|draft\|off` and `--intake off\|shadow` (core engine only) save this machine's engine, opt-in label, mode, report mode and [intake mode](#intake-cards-shadow) for this repo; they win over `pdd.json`, and a later start without them keeps them. The report mode is `draft` unless you choose `--report file`. `--resume-custody` supplies the verified original-owner projection for explicit recovery |
-| `pdd autopilot stop` | Disable this repo's timer on this machine and let the current agent step finish |
+| `pdd autopilot doctor` | Read-only prerequisite checks, one line per item. A WARN or FAIL line also gives a fix command. No GitHub writes or AI calls. Exit 1 for a required failure, 0 when only warnings remain |
+| `pdd autopilot start [--runs N] [--checks N] [--label NAME] [--mode auto\|observe\|off] [--report file\|draft\|off] [--decisions ask\|decide] [--intake off\|shadow] [--share PERCENT]` | Run doctor, check the sign-ins, start the user timer and run the first tick now. The timer runs a tick every 10 minutes. `--label NAME` sets the opt-in label, for example `pdd:autopilot`: Autopilot takes only the issues with this label. `--mode`, `--report`, `--decisions` and `--intake` set this machine's mode, report mode, [decision mode](#core-engine) and [intake mode](#intake-cards-shadow) for this repo. These machine values win over `pdd.json`, and a later start without them keeps them. The report mode is `draft` unless you choose `--report file`. `--share PERCENT` (1 to 100, default 50) saves the part of this machine's CPU and memory that Autopilot may use; a later start without it keeps it (see [the machine guard](#core-engine)). `--runs N` and `--checks N` save this machine's run and heavy-check limits; a start without them removes them |
+| `pdd autopilot stop` | Save this repo as disabled on this machine, stop its timer and its intake card jobs, and let the current step finish |
 | `pdd autopilot audit RUN PR` | Audit a confirmed automatic merge once with a fresh configured agent. Save OK, CONCERN or BAD and the separate revert recommendation with the run. Post the evidence once on the issue. BAD opens a revert PR only when recommended; otherwise it keeps the merge and reopens the issue with the missing parts. One decision alert states the recommendation and choices. Unknown external outcomes require inspection before any retry. |
-| `pdd autopilot check-base RUN PR` | Read the saved run and exact PR target, then check that its base contains the current default branch and newest published release tag, including prereleases. A refusal explains the reason and exits 1. Use this before an automatic merge and after it for the base audit. It makes no GitHub writes |
-| `pdd autopilot status [--all] [--json]` | Show this machine's repo, the folder Autopilot works in, selected base, agent, timer, coordinator health and next tick without waking an agent; an idle coordinator is healthy. It reads `pdd.json` on GitHub only to warn when its Autopilot settings differ from this checkout. Another line says when pdd workflows cannot start in this folder, and why. Other lines show a pending or held coordinator relaunch an [alert](#alerts) that was not delivered, and the [GitHub calls](#github-api-budget) of the last hour. `--all` works from any folder and lists every repository with Autopilot on this machine: repository, folder, mode, enabled or disabled, timer and coordinator state. It reads only local files, the timer and Herdr: no GitHub call |
-| `pdd autopilot add N...` | Label named issues `pdd:autopilot`. Autopilot does not need this label: it considers every open issue |
+| `pdd autopilot check-base RUN PR` | Check the saved automatic base, PR target, current default branch and newest release before a merge or after it. This command reads only. |
+| `pdd autopilot status [--all] [--json]` | Show this machine's Autopilot for this repo: enabled or disabled, the timer, the next tick, the jobs, an [alert](#alerts) that was not delivered and the last tick. `--all` lists every repository with Autopilot on this machine, from any folder. `--json` prints the [local cost report](#local-issue-costs) |
+| `pdd autopilot add N...` | Create the `pdd:autopilot` label when it is missing and add it to each named issue of this repository. Use it to choose the issues that Autopilot may take |
+| `pdd autopilot release ISSUE` | Release this machine's claim and remove `pdd:working` and `pdd:stuck`; keep the run folder, branch and PRs |
 | `pdd autopilot regressions [--json] [--file PATH]` | Read core merge history and GitHub CI, parent checks, revert, reopen and issue-link evidence. Classify each merge as ok, suspect or proven; count distinct proven PRs per UTC evidence day. Issue-body attribution uses issue creation time even if added in a later edit; these buckets require a consumer confirmation policy before use as daily scorecard counts. At most 100 GitHub requests per scan; rate exhaustion or Retry-After stops further reads, preserving collected evidence and marking missing evidence incomplete. --json prints structured results; --file exclusively creates a local report without overwriting existing files. No GitHub writes or reverts. Incomplete reads exit 1; complete scans exit 0 even when they detect regressions |
-| `pdd autopilot report` | List this machine's local Autopilot report drafts ([core engine](#core-engine)). No GitHub call |
+| `pdd autopilot report` | List this machine's local Autopilot report drafts. No GitHub call |
 | `pdd autopilot report send FINGERPRINT` | File one local report draft to promptdriven/pdd, or count it on the matching open report |
 | `pdd autopilot intake [--json]` | Print this machine's [intake cards](#intake-cards-shadow) for this repo, the would-pick list and today's changes. Local files only: no AI call and no GitHub call |
 | `pdd autopilot alerts set [--destination autopilot\|infrastructure]` | Read your Discord or Slack incoming webhook URL from stdin and save it for this machine |
 | `pdd autopilot alerts set --discord-channel ID [--token-command CMD] [--destination autopilot\|infrastructure]` | Use a Discord bot in one channel: read its token from stdin, or save CMD and run it at each send to get the token |
 | `pdd autopilot alerts test [--destination autopilot\|infrastructure]` | Send one test message and confirm that it was posted; for a bot, first check and show the bot name and channel name |
 | `pdd autopilot alerts clear [--destination autopilot\|infrastructure]` | Remove the alert destination from this machine |
-| `pdd autopilot alert --issue N --kind usage-limit\|resource\|interpreter\|interpreter-access\|access\|decision\|stuck\|test-suite\|long-running\|recovered --input - [--update]` | For the coordinator: record one alert and send it to this machine's destination |
+| `pdd autopilot alert --issue N --kind usage-limit\|resource\|interpreter\|interpreter-access\|access\|decision\|stuck\|test-suite\|long-running\|recovered --input - [--update]` | Record one alert and send it to this machine's destination. See [Alerts](#alerts) |
 
 Outside a Git repository, `start`, `stop`, `status`, `add`, `off`, `observe`,
 `auto`, `trust` and `untrust` stop with exit code 1 and say: `This folder is not a
 Git repository. cd into the repo you want Autopilot to work on, then run the
-command again.` A successful start says which repository and folder it works
-in, for example `Autopilot started for OWNER/NAME in /path/to/checkout.`
+command again.` `status --all` works from any folder.
 
-Before start turns on the timer or opens a chat, it checks that `pdd workflow
-run` can make an issue worktree in this checkout. The workflow worktree allocator
-makes this decision, so Autopilot accepts the same Git layouts and the same
-`origin` forms as `pdd workflow run`. The check reads Git only: no AI, no GitHub
-call, no claim and no worktree. When the checkout cannot make issue worktrees, for
-example because its `origin` remote names another repository or Git keeps its
-files in a separate Git directory, start stops with exit code 1. The message names
-the folder, the cause and the next step: run Autopilot from a normal clone of the
-repository. When Git could not be read, the message says so and tells you to try
-again. Start then changes no timer, also not the timers of other checkouts, and
-claims no issue.
+Autopilot works only on the issues that you mark with an opt-in label. Set the
+label with `--label NAME`, or with `autopilot.label` in `pdd.json`. A start with no
+label starts nothing and says: `Autopilot did not start: it works only on the
+issues that you mark with an opt-in label. Run pdd autopilot start --label
+pdd:autopilot, then mark issues with pdd autopilot add N (or add the label on
+GitHub). Nothing was started or claimed.` `add` always uses `pdd:autopilot`; for
+another label, add it on GitHub. When a tick has no label, it claims no issue (`intake held: no opt-in
+label; …`), and status says `No opt-in label: Autopilot takes no issue.`
 
-A tick makes the same check before it offers new issue work. Issues with
-`pdd:stuck` or `pdd:code-pending` are not new work. While the check fails, the
-tick offers no new issue, writes a warning to the timer log and keeps those issues
-for a later tick. It still delivers the start-up recipe, dependency review, time
-rules, the work of existing claims, and reviews and trusted comments on claimed
-and held issues.
-
-Starting Autopilot again keeps this machine's repository claim owner when it
-replaces the coordinator chat. Open runs keep their heartbeats after a crash or
-machine restart. A tick can also recover an unfinished local run whose claim
-still names an earlier coordinator. The run folder, checkout, machine, claim
-comment and label event must match. Another machine's claim always wins.
-A claim that expired after a coordinator change can recover once. The tick
-updates the run's custody, posts one short issue comment and resumes heartbeats.
-Then `pdd workflow done` can publish finished work under its usual ownership
-checks. Recovery makes no AI call and does not approve a prompt or a gate.
-
-In `status --all`, each line is independent. A saved folder that is gone still
-shows its real timer and coordinator state, with `mode unknown (folder missing)`.
-A saved folder that is not a Git repository shows `mode unknown (not a Git
-repository)`. A timer that cannot be read shows `timer unknown`, and a broken
-state file shows `FILE: saved state unreadable`. One bad line changes no other
-line.
-
-The launcher uses the repository settings module to read root `pdd.json`. An
-active mode is `observe` or `auto`; missing or invalid settings count as `off`. It uses an
-installed, signed-in Codex, Claude Code, agy or Gemini agent. Missing dependencies
-get one actionable line. Linux uses a systemd user timer; macOS uses a
-LaunchAgent. On Linux, start warns when user-session lingering is off or
-unavailable: `loginctl enable-linger` keeps the timer after logout. The tick
-service preserves a Herdr server it starts when the tick exits. See the chat with
-`herdr session attach pdd-autopilot`. The coordinator chat starts with a `cd` to the
-repository, so a `cd` in your shell startup file (for example `~/.zshrc`) does not
-change where the agent works.
-
-A Codex coordinator also gets
-`-c shell_environment_policy.set.PDD_AUTOPILOT_CONTEXT=…` for this launch only, so
-the commands of its chat keep the Autopilot start context when the Codex profile
-sets `inherit = "core"` or `"none"`. When Autopilot started with an explicit
-`CODEX_HOME`, the chat also gets `-c shell_environment_policy.set.CODEX_HOME=…`,
-so a `pdd workflow run` from the chat keeps that Codex profile. Autopilot does not
-change Codex settings. Limit: a `shell_environment_policy.include_only` list that
-leaves out one of these names still removes it.
+A start also stops when the repository mode is `off`, or when
+`autopilot.quietMinutes` is below 20 (2 times the 10-minute timer). `--mode off`
+saves mode `off` for this machine and stops the timer. To turn it on again, run
+`pdd autopilot start --mode auto` or `--mode observe`. A successful start prints
+one line, for example `Autopilot started for OWNER/NAME in /path/to/checkout. Base
+main. Mode auto · issues with pdd:autopilot · agent ID · pdd VERSION · next tick:
+TIME. See: pdd autopilot status.`
 
 The first start of a repo on this machine selects the agent. It tries the agent of
 the session that runs the command first: Claude Code when you run it from Claude
 Code, Codex when you run it from Codex. Then it tries Codex, Claude Code, agy and
 Gemini, in that order, and takes the first one that is signed in. This check makes
 no model call. Later starts on this machine keep that agent, also after
-`pdd autopilot stop`. To select Codex, sign in to Codex and run the first
+`pdd autopilot stop`. The core needs a Codex or Claude agent. With another agent,
+the tick claims no issue. To select Codex, sign in to Codex and run the first
 `pdd autopilot start` from Codex or from a plain terminal. From a Claude Code
 session, run `env -u CLAUDECODE pdd autopilot start`.
 
-A coordinator chat keeps the launch settings that it started with. Autopilot
-saves a fingerprint of the pdd package and the launch arguments with each
-coordinator launch. When a start or tick finds a chat with another or no
-fingerprint, for example after you install a newer pdd, it ends that chat
-when the chat is idle or done and starts a fresh chat with the current
-settings. The coordinator identity stays the same, so claims, saved runs and
-progress do not change. A busy chat is not interrupted: its work stays pending,
-and `pdd autopilot status` shows `Coordinator relaunch pending after upgrade`
-until the relaunch is done. Autopilot relaunches for the same settings only
-once. If the settings change again, for example when starts from two pdd
-installs alternate, the current chat stays and gets work, and status shows
-`Coordinator relaunch held`. Close the coordinator pane in Herdr to start a
-fresh chat with the current settings.
+Linux uses a systemd user timer; macOS uses a LaunchAgent. No process runs between
+ticks. On Linux, start warns when user-session lingering is off or unavailable:
+`loginctl enable-linger` keeps the timer after logout. A tick never changes its own
+timer; only start and stop change it. When the installed timer has another
+interval, status says `(run pdd autopilot start to use 10 minutes)`.
 
-Autopilot saves the Herdr terminal of each coordinator chat. When the saved
-pane is gone, for example after a failed relaunch, a closed pane or a Herdr
-server restart, the next tick opens a fresh pane for the same coordinator and
-delivers the pending work there. After `pdd autopilot stop`, also during a
-relaunch, the next `pdd autopilot start` does this. A pane that now has the old
-pane ID but another terminal gets no prompt, no close and no launch.
+Each tick runs the [core tick](#core-engine). It reads the settings from this
+checkout's `pdd.json`, and this machine's label, mode and report mode win over
+them. Empty ticks make no AI call. The issue list uses ETags. When the open issue
+list has more than one page, the tick reads it in full every 6 hours. Between, it
+reads only the issues that changed since then (`since=`).
 
-In auto mode, each tick checks the saved run agents in Herdr without an AI call.
-A resumed run gets one continue request through the same delivery route as
-`pdd workflow changes`. The request points to its current step brief and STEP.md.
-An unfinished run whose agent stays idle gets a continue request after 10 idle
-minutes. Requests are at least 10 minutes apart. After three attempts in one area
-without recorded step progress, another idle interval marks the run stuck and
-sends one alert. A recorded step change resets that area's allowance. A working
-agent alone does not reset it. Gates, questions, deliberate chat closure, login
-failures and usage limits keep their holds. Observe and off modes send no nudges.
-Workflow status shows `agent idle since HH:MM` for an idle unfinished run, with
-the configured status time zone or UTC. Status reads send no request.
+Autopilot uses `autopilot.base` in `pdd.json` when it is set; else it uses the
+repository default branch. Start and status show the selection. Each start reads
+the default branch from GitHub again. Repository documents do not select the
+base. A manual workflow still accepts `--base`.
 
-A tick checks GitHub with ETags and wakes the coordinator only for a repo's first
-start-up recipe or an unseen trusted issue, comment or related PR change.
-Already-seen issues stay quiet across unchanged ticks, including stuck,
-code-pending, claimed and observe-mode issues waiting for a person. Busy coordinators
-receive no tick prompt; pending changes are coalesced until they are idle.
-Empty ticks use no AI. This applies to Claude
-Code too: the user timer keeps empty ticks out of the conversation. Paginated
-queues revalidate every cached page; changed candidates may require comment and
-write-permission lookups. GitHub rate limits wait until the reset time. When the
-open issue list has more than one page, the tick reads it in full every 6 hours.
-Between, it reads only the issues and PRs that changed since that full read
-(`since=`), so an unchanged list costs no counted call.
+`pdd autopilot status` reads local files and the timer, with no Herdr or AI call.
+It shows `Autopilot enabled; timer active, every 10 minutes; next tick: TIME`. Then
+come the core lines: mode, repository, folder, base and agent; the busy slots, the
+no-progress limit, repairs, the report mode and the opt-in label, each with its
+source (`this machine` or `pdd.json`); the pause; one line for each job; the last
+results and the count of local report drafts. Then come the move line, when there
+is one, and the last tick. After start and status, one warning follows when
+`pdd.json` on GitHub has other Autopilot settings than this checkout (see
+[Repository Autopilot settings](#repository-autopilot-settings)). This warning is
+the only GitHub read of status.
 
-Every open issue can enter the queue, old or new, with or without `pdd:autopilot`.
-Autopilot starts fresh work only on an issue that the current dependency review
-lists as eligible. That review checks dependencies, trust, the GitHub Assignees
-field and the `pdd:working` claim; a missing result waits. On an outsider's issue,
-a static reply says "thanks, a maintainer will look" until a trusted person comments.
-The agent receives only trusted people's text, including comments. Owners, people with write access and configured trusted
-names count as trusted. The `pdd-autopilot` skill owns the start-up recipe,
-`pdd:working` claim and one comment across machines, capacity and progress
-tracking. Only Autopilot uses `pdd:working`; a person or a manual session assigns
-a person instead. Each tick writes a `lastSeen` time into its own claim comments
-without an AI call; that edit is the heartbeat. A new claim record has
-`"lastSeen": ""`. A claim record with a top-level `lastSeen` and no GitHub edit
-for 4 hours (counted from its creation until the first heartbeat) is expired. A
-claim record without `lastSeen`, as older pdd writes it, a claim without a claim
-record, or a bare label is expired after 24 hours with no issue activity. For an
-expired claim, `pdd graph` shows "Expired claim, last seen" and another
-coordinator may take it over. The last-seen time is only the claim comment's GitHub edit or creation
-time; the recorded `lastSeen` value never extends a claim. In `off` mode a tick
-does nothing on this machine: it releases no claim and writes no `lastSeen`, so the claims expire after 4 hours, as
-on a stopped machine; their runs then cannot open or update a PR. After 4
-hours stuck, the owner tries a changed approach or asks for help, and the claim then expires. After a ceiling (the repair limit or the takeover limit), the owner does not retry and sends no second alert. After 3 takeovers of one issue, its expired claim is not taken over again: `pdd graph` shows "Taken over 3 times", a 4th start is refused, and the tick asks one coordinator once to take the stuck path. A takeover is the removal of an expired `pdd:working` whose remover adds the label again within 10 minutes for another coordinator or machine. A coordinator that takes back its own expired claim (same coordinator ID and machine) makes no takeover. To let Autopilot continue after the takeover limit, a person removes `pdd:stuck`: this resets the count. A normal release, or a person's removal of an expired `pdd:working`, also starts the count again. When people and coordinators share one GitHub login, pdd cannot tell them apart: a person's cleanup of an expired `pdd:working` followed by an Autopilot claim within 10 minutes counts as a takeover. Removing `pdd:stuck` at the limit always resets the count. 24 hours after the claim with no merge, the tick asks the owner once for an informational alert and records it in the claim comment, so that no machine sends it again; work continues. Related PRs are associated through same-repository closing references;
-trusted PR discussion comments and state transitions can wake waiting work once.
-Claimed issues stay identified as claimed when a trusted change needs attention.
-`add` rejects foreign repository references before writing any labels. Status
-reports unavailable Herdr instead of claiming a healthy running session. Stop
-leaves the interactive session open.
+`pdd autopilot status --all` prints one line for each saved state on this machine:
+repository, folder, base, mode, enabled or disabled, and the timer. The mode is the
+machine mode with `(this machine)`, else the mode of that folder's `pdd.json`. A
+folder that is gone shows `mode unknown (folder missing)`. A folder that is not a
+Git repository shows `mode unknown (not a Git repository)`. A timer that cannot be
+read shows `timer unknown`, and a broken state file shows `FILE: saved state
+unreadable`. One bad line changes no other line. Without saved state it prints
+`No Autopilot on this machine.` The local cost lines come last. It makes no GitHub
+call.
 
-Upgrade all coordinators of one repository at the same time, when no run is in
-the middle of a step. Older pdd sends no heartbeat, so its claims follow the
-24-hour rule until their owner upgrades. It still pushes at its last `done`
-without a claim check and removes `pdd:working` when its run ends. A stopped
-launcher or `off` mode lets its claims expire after 4 hours. The heartbeat moves
-claimed issues to the top of "recently updated" every 30 minutes.
+A machine state that ran the full engine moves to the core engine at its next
+tick. A start runs a tick, so a start moves it too. No new work starts before the
+move is complete. While old work is busy (a live run with a merged PR, or a working
+old Autopilot chat), the move waits, for at most 6 ticks. Then it closes the old
+Autopilot chat pane when the pane is Autopilot's own. It cancels this machine's
+live old runs and closes their worker chats. It releases this machine's claims: it
+deletes their claim comments, and it removes `pdd:working` only when the claim is
+this machine's. All other labels stay, also `pdd:stuck` and `pdd:needs-decision`.
+Each open PR of an old run gets one note: `Autopilot moved this machine to the core
+engine; this PR is not worked on. A person can merge or close it.` PRs and branches
+stay. Last, the move releases the check slots and stops the old completion workers
+of this repository (TERM, then KILL). It prints one line with the counts. A failed
+step goes on at the next tick. The move does not change the timer: the next
+`pdd autopilot start` sets the 10-minute interval, and status says so until then.
+Before the move, status says `This machine moves from the full engine to the core
+engine at its next tick`, and `status --all` adds the same words. For 7 days after
+the move, status shows `Moved from the full engine at TIME:` and the line.
+`pdd autopilot start --engine full` stops with exit code 2 and says `The full
+Autopilot engine is removed; Autopilot runs only the core engine. Run pdd autopilot
+start without --engine.` `--engine core` changes nothing.
 
 ## Machine and account health
 
-Each no-AI tick checks available memory and free disk on the checkout volume.
-Available memory must be at least 10% of total. Disk must have at least 1 GiB
-and 5% free. The shared machine observation port also supplies CPU count, load
-and Linux pressure for validation retries and machine-sized checks.
-Validation retries reuse the tick's checkout observation. They also check load,
-pressure, required tools and suite capacity before offering a retry.
+Before the tick claims an issue for a Codex agent, it reads the usage of the saved
+Codex profile. The read starts a short app-server connection and uses only
+`initialize`, `initialized` and `account/rateLimits/read`. It makes no model call.
+It does not spend, request credits, consume a usage reset, change sign-in or log
+out an account. A reached limit holds intake: the tick claims no issue and says
+`intake held: the agent is not ready (sign-in or usage limit); no issue was
+claimed`. Jobs that run go on. Unknown usage does not hold intake. Other agent
+kinds have no usage read.
 
-For the saved Codex profile, the tick starts a short app-server connection and
-uses only `initialize`, `initialized` and `account/rateLimits/read`. This makes
-no model call. It reads usage and the ordinary reset time. It does not spend,
-request credits, consume a usage reset, change sign-in or log out an account.
-Other agent kinds have no Codex usage check.
-Malformed protocol frames stop the connection and report unknown usage.
-The read waits at most one second for cleanup after selecting its result.
-It sends SIGTERM first and sends SIGKILL after 500 milliseconds if the direct
-child has not exited. If close has not arrived after another 500 milliseconds,
-it releases the connection's streams and process handle and returns the selected
-result. A descendant holding an inherited pipe cannot block the health read.
+Malformed protocol frames stop the connection and report unknown usage. The read
+waits at most one second for cleanup after it selects its result. It sends SIGTERM
+first and SIGKILL after 500 milliseconds. A descendant that holds an inherited pipe
+cannot block the read.
 
-Low resources, reached usage limits and unreadable health observations pause new
-automatic admissions. Claims, progress and heartbeats remain. One `resource` or
-`usage-limit` incident covers the affected issues on this repository and machine.
-The alert includes a known reset time. A later healthy read sends one recovery
-and wakes the coordinator. A busy coordinator keeps that wake pending. Passing
-the saved reset time alone does not establish recovery.
-
-`pdd autopilot status` and `status --all` show the saved Health line and observation
-time. Status does not probe an account or the machine. Before any observation,
-health is unknown. If no issue can own an alert, health stays visible and the
-next tick attaches the incident when an issue is known.
-
-When the GitHub budget permits reads, the tick removes an ended run's worktree only after a read-only PR lookup shows
-its branch closed or merged. It verifies allocator identity, a clean worktree,
-and a branch equal to its tracked upstream. Dirty, unpushed, active, waiting,
-locked and unverifiable worktrees stay. It does not delete branches or run
-records. Cleanup makes no push or fetch. A cleanup failure keeps the worktree.
+When jobs end with no result again and again, the core pauses new jobs on this
+machine and sends one alert; see [Core engine](#core-engine).
 
 ## GitHub API budget
 
@@ -381,7 +315,7 @@ its purpose and the limit that GitHub reports in the reply headers:
 
 | Purpose | Calls |
 |---|---|
-| `dependencies` | The dependency re-sync: open issues, comments, links, history |
+| `dependencies` | Issue dependency, timeline and sub-issue reads |
 | `claims` | Claim checks and the `lastSeen` heartbeat |
 | `issues` | The tick's issue list, comments and permission lookups |
 | `pulls` | PR, review and check reads |
@@ -389,44 +323,28 @@ its purpose and the limit that GitHub reports in the reply headers:
 | `setup` | Sign-in, repository and settings calls |
 | `other` | Everything else, such as `pdd metrics` |
 
-pdd does not count the `gh` calls that the coordinator and worker chats make
-themselves, such as `gh pr checks` or `gh run watch`. It also does not count
-other machines or your own work on the same login. All of them use the same
-limit. Their use shows only in the limit that is left on the status line.
-
-The counts stay on this machine, one file for each repository in
-`~/.local/state/pdd/autopilot/github/`. `pdd autopilot status` shows one line
-when there was a call in the last hour, for example:
-
-```text
-GitHub calls in the last hour: 212 (dependencies 120, claims 14, issues 60, pulls 18); 150 of 190 conditional reads were 304 (79%); REST limit 4210 of 5000 left until 17:05Z; budget normal: Autopilot on this machine used 61 of 1500 (30%).
-```
-
-"Autopilot on this machine used 61" is the counted calls of this machine: the
-tick and the counted `pdd` commands, not the chats.
+pdd does not count the `gh` calls that the agent jobs make themselves. It also does
+not count other machines or your own work on the same login. All of them use the
+same limit. The counts stay on this machine, one file for each repository in
+`~/.local/state/pdd/autopilot/github/`. Each tick keeps the last 2 hours.
 
 A conditional read sends the ETag of the last reply. A `304` reply means that
-nothing changed, and GitHub does not count it against the limit. The tick, the
-dependency re-sync, `pdd dependencies prepare` and `complete` and the workflow
-claim checks use conditional reads for an Autopilot repository. They share one
-file of ETags and reply bodies in the same folder. A full page (100 items) that
-has no next page is read without its ETag: a `304` reply does not show that a
-next page came.
+nothing changed, and GitHub does not count it against the limit. The tick,
+`pdd dependencies prepare` and `complete` use conditional reads for an Autopilot
+repository. They share one file of ETags and reply bodies in the same folder. A
+full page (100 items) that has no next page is read without its ETag: a `304`
+reply does not show that a next page came.
 
-Autopilot keeps one saved dependency snapshot for each repository in the same
-folder (`*.snapshot.json`, private to you). The tick, `pdd dependencies complete`
-and the claim scan use it. A read asks GitHub only for the issues that changed
-since the last read (`since`, in update order), and reads the comments, links and
-history of an issue again when its update time, comment count or link identities
-changed. It checks the open index with conditional requests and compares native
-link identities in batches. Equal link counts can still mean different blockers.
-Incomplete batch connections fall back to complete REST link pages. Once a day
-it rebuilds the open list, so a deleted or moved issue leaves it. Safety reads always ask GitHub (a `304` is fine): the claim
-checks before a start, a push and a merge, heartbeats, trust, and the readback
-after each write. A quiet tick then makes a few calls instead of hundreds, and
-a batch reuses the same observations. After `pdd dependencies complete`, the next
-request comes from the saved snapshot: the completion tick and the idle wake
-reuse the dependency issue list for 10 minutes after its last complete read.
+pdd keeps one saved dependency snapshot for each repository in the same folder
+(`*.snapshot.json`, private to you). `pdd dependencies complete` uses it. A read
+asks GitHub only for the issues that changed since the last read (`since`, in
+update order). It reads the comments, links and history of an issue again when its
+update time, comment count or link identities changed. It checks the open index
+with conditional requests and compares native link identities in batches. Equal
+link counts can still mean different blockers. Incomplete batch connections fall
+back to complete REST link pages. Once a day it rebuilds the open list, so a
+deleted or moved issue leaves it. Safety reads always ask GitHub (a `304` is
+fine): claim checks, heartbeats, trust, and the readback after each write.
 
 The budget acts on the tick, and its floor on the dependency commands too. It
 has two settings in `pdd.json`, a share (default 30%) and a floor (default 1,000
@@ -440,30 +358,24 @@ calls):
 missing or invalid value uses the default.
 
 - **Low.** The counted REST calls of all Autopilot repositories on this machine
-  in the last hour reach the share. A 304 reply does not count. Then the tick
-  runs the dependency re-sync at most once an hour and uses its last result
-  between. All other calls of the tick go on: the issue list, comment, review
-  and PR reads, heartbeats and wakes.
+  in the last hour reach the share. A 304 reply does not count. When several
+  machines hold live claims on one repository, each machine gets the share
+  divided by their number. Then no new job starts, and the tick says
+  `intake held: the GitHub budget is low (…)`. Jobs go on.
 - **Reserve.** GitHub reports fewer calls left than the floor, for REST or
-  GraphQL. Then the tick makes no GitHub call until the reset time, except the
-  heartbeat of each live claim of this machine (2 REST calls each). So a claim
-  does not expire while its chat works. With fewer REST calls left than these
-  heartbeats need, it sends none. The tick also wakes no chat with new work
-  until the reset. Native dependency observations for an Autopilot repository
-  also stop non-safety reads. This includes `pdd dependencies prepare`,
-  `complete`, direct snapshot reads and automatic workflow start. A reply that
-  shows fewer calls than the floor stops the reads
-  after it. A stopped `complete` keeps its request and analysis; the first tick
-  after the reset saves the remaining reviews without a new analysis. Reviews
-  that were already saved are never saved twice.
+  GraphQL. Then the tick reads no issue list until the reset. It refreshes only
+  the heartbeat of each live claim of this machine, so a claim does not expire
+  while its job works. Native dependency observations for an Autopilot
+  repository also stop non-safety reads. This includes `pdd dependencies
+  prepare`, `complete` and direct snapshot reads. A reply that shows fewer calls
+  than the floor stops the reads after it. A stopped `complete` keeps its request
+  and analysis. Reviews that were already saved are never saved twice.
 
-The coordinator and worker chats go on, and their own `gh` calls are not counted.
-Safety reads, including workflow start's live subject and claim checks, trust,
-permissions and write readbacks, can use the reserve. Writes can use it too.
-Other `pdd` operations are counted but do not wait for this floor. The budget
-does not keep 70% of the limit for you. The floor makes the tick and native
-dependency observations read less. To
-give Autopilot a limit of its own, see the design note
+The agent jobs' own `gh` calls are not counted and do not wait for the floor.
+Safety reads (claim checks, trust, permissions and write readbacks) and writes can
+use the reserve. Other `pdd` operations are counted but do not wait for this
+floor. The budget does not keep 70% of the limit for you. To give Autopilot a
+limit of its own, see the design note
 [A GitHub App token for Autopilot](autopilot-github-app-token.md).
 
 The dependency snapshot is saved beside the repository's GitHub call ledger as
@@ -510,11 +422,12 @@ the bot and the channel, read-only, and shows the bot name and the channel name.
 pdd never prints the token or the command output. The bot needs permission to
 view the channel, send messages and read message history.
 
-The coordinator alerts only for a real need: an AI account usage limit (with the
-reset time when known), a CPU, memory or disk failure, an access or spending
-decision, an unresolved product choice, or an issue stuck after its retry time.
-It also sends one informational `long-running` alert when an issue was claimed 24
-hours ago and has no merge yet; work goes on. It gives the cause, what it tried and what it needs as JSON on stdin:
+The core sends an alert only for a real need. It sends `stuck` when a job process
+reaches its backstop, when a PR waits too long for the merge lane, or when an END
+cannot finish. It sends one informational `long-running` note when a job process
+runs for 3 hours; work goes on. It sends `usage-limit` when it pauses new jobs
+after jobs end with no result. Each alert gives the cause, what Autopilot tried and
+what it needs. To record one alert yourself, give that JSON on stdin:
 
 ```sh
 pdd autopilot alert --issue 12 --kind usage-limit --input - <<'PDD_ALERT'
@@ -523,35 +436,22 @@ PDD_ALERT
 ```
 
 Each message names the repository, the issue link, the cause, what Autopilot tried
-and what it needs. Answer on the GitHub issue, so the answer stays with the run.
+and what it needs. Answer on the GitHub issue, so the answer stays with the issue.
 A usage limit, a resource failure, an interpreter outage or an interpreter access problem
 (`interpreter-access`: this machine cannot read the interpreter health check) is one incident for the
-repository and machine, so a limit that blocks 5 runs sends one alert. A call for another
+repository and machine, so a limit that blocks 5 issues sends one alert. A call for another
 blocked issue adds that issue to the incident and sends nothing. The machine is
 the name that Autopilot saved at its first start (this checkout's start first),
 else the host name, so a host rename does not open a new incident. An access or spending decision, a product
 decision, a stuck issue or a long-running issue is one incident per issue. A repeat call sends
 nothing for a delivered or unconfirmed alert, and sends again an alert that
 failed or had no destination. `--update` sends a new cause, a changed decision needed or the new
-issue list. Changing only what was tried sends nothing. Keep cause and need
-stable during a review with no new facts. A 4-hour stuck review alone sends no
-new message. `--kind recovered` sends one recovery and closes the matching
+issue list. Changing only what was tried sends nothing. `--kind recovered` sends one recovery and closes the matching
 alerts; give `"kind"` in the JSON to close only that incident. Every call and
 its delivery result are recorded in
 `~/.local/state/pdd/autopilot/alerts/`. Without a destination, the alert stays in
-that record. `pdd autopilot status` adds one line when an alert was not delivered.
-Work continues in both cases. A delivered `pdd autopilot alerts test` ends that
-line for an older failed send, such as a failed recovery. An open alert that was
-not delivered stays in the line until a later call sends it.
-
-The native tick sends one short digest per repository and machine at most every
-6 hours, only while open work exists. It lists stuck issues and their causes,
-parked automatic runs, and decisions waiting for a person. It reads saved runs
-across parallel worktrees. It does not wake an agent or approve work. The last
-digest attempt is saved across restarts. Failed or unconfirmed digest attempts
-also wait 6 hours, so a delivery problem cannot cause a burst of digests. Other
-work continues when delivery fails. Each repository's alert record has a shared
-lock, so parallel runs cannot overwrite incidents or send concurrent digests.
+that record. Work continues in both cases. Each repository's alert record has a
+shared lock, so parallel calls cannot overwrite incidents.
 
 To send infrastructure incidents to another channel, set a second destination:
 
@@ -567,9 +467,8 @@ the same private permissions. Set, test and clear affect only the selected
 destination. The default is `--destination autopilot`. Machine incidents
 (`usage-limit`, `resource`, `interpreter`, `interpreter-access`) and their
 recoveries use the infrastructure destination when it is set. Without it they
-use the ordinary destination. Issue decisions, stuck alerts and digests use the
-Autopilot destination. Status identifies the failing destination; a test clears
-only that route's older delivery failure. An open undelivered incident still
+use the ordinary destination. Issue decisions and stuck alerts use the
+Autopilot destination. A test clears only that route's older delivery failure. An open undelivered incident still
 needs attention. Configure external credential-maintenance and machine-health
 senders at their own source; PDD does not change those programs.
 
@@ -593,7 +492,7 @@ senders at their own source; PDD does not change those programs.
 | `pdd workflow cancel ISSUE` | Close the run's chat tabs. Keep the worktree and the branch. A new `pdd workflow run` on the issue then starts fresh |
 
 Finished chats close after a 15-minute grace period when they are idle and have
-a saved native session or a saved screen. Each new start and each Autopilot tick tries cleanup.
+a saved native session or a saved screen. Each new start tries cleanup.
 `pdd workflow tidy` also retries cleanup. It refreshes restart terminal IDs for matching area tabs and the saved run shell, with confirmed agent absence and idle foreground shells. Done runs release their workspace after verified chat cleanup. Workspace closure requires a saved creation record for that exact workspace. If the creation field is missing, pdd can save it only when the workspace has the run worktree path, clone identity and run label. Other workspaces remain open with a cleanup reason. Saved native sessions, run folders and Git worktrees remain available. Missing or foreign workspaces stay protected. List status suggests tidy only when its read-only eligibility check finds a chat it can close. Status shows pane counts for working, parked, done and unowned panes. It warns at 90 percent of the configured pane budget and lists unowned workspaces with commands for manual closure. These observations do not authorize automatic closure. Status and view close nothing. A manual
 start on a completed issue keeps its history and starts a fresh run. A replaced
 run remains discoverable from its retained worktree; its agent sees the old and
@@ -604,8 +503,7 @@ worktree to close a retained busy chat.
 disables it). The count includes personal panes. Before making a new run, pdd
 checks capacity and can close safely finished chats without the grace period.
 If there is no room, `herdr_pane_budget` reports the count, required capacity and retained counts by reason;
-no new branch or worktree is made. Autopilot holds fresh work with reason `panes`
-and checks again on its next tick. Raise the budget or close unused tabs.
+no new branch or worktree is made. Raise the budget or close unused tabs.
 
 For an ended run, `pdd workflow open ISSUE [AREA]` prints saved screen paths and
 native resume commands with its saved account folder. It changes nothing in
@@ -620,15 +518,7 @@ A run saves one launch profile: agent kind, account folder, model, Herdr name pr
 
 `--codex-threads N` selects a whole number from 4 through 8 for Codex chats. For example, 5 allows the main thread and four helpers. PDD passes the effective limit only to this chat. A higher positive limit in the selected account's `config.toml` is kept and shown in status. Missing files keep the requested limit; malformed configuration refuses before closing a chat. New Codex runs default to 5, while runs without a saved thread setting keep the account default. Other agents reject this option. This setting cannot prove that a required check can start. If a fresh checker cannot start, report `Not checked: STEP (agent limit)`; keep the builder separate from checkers and always use a fresh reviewer.
 
-Saved Autopilot chats check current claim ownership before open, replacement,
-automatic resume or parked wake. If another machine owns the active claim, PDD
-marks the local run as handed over and closes its identified local chats. The
-worktree, branch and completed work stay available. The other machine's claim
-stays unchanged. Unavailable or uncertain ownership refuses continuation and
-keeps the saved run. A handover with unconfirmed cleanup lists the retained panes;
-use `pdd workflow tidy` to retry safe cleanup.
-
-To fix a prompt after code review, commit or keep the current code edits so the worktree is clean. Run `pdd workflow open ISSUE prompt-pr` (or `story`). PR 1 must still be open. PDD fast-forwards its owned branch from the remote and merges the fetched current commit of the run's saved base (usually main) into PR 1. Resolve and commit any base merge conflicts on PR 1. Repeating the explicit `open ISSUE prompt-pr` command in returned prompt space integrates a newer base and clears the prompt checks when the head changes. Make the correction on PR 1 and finish the prompt checks with `workflow done`. PDD updates the same PR 1. A changed Story or scenario contract returns to the Story gate for a new decision. PDD compares PR 1 with the contract covered by the last Story decision, including changes fetched during return. Missing approval coverage also returns to that gate. Story coverage includes supported `user_stories` directories at any depth. Additions, edits and deletions require fresh coverage. A reply covers only the Story and cases shown at the gate. If they change, run `workflow done` again to show the gate and obtain a later decision. Prompt-only edits rerun the prompt checks. PDD rechecks the contract and published scenario bytes after code confirmation or an explicit reply and against the exact fetched commit before code entry. PDD merges that pinned commit and checks the resulting code source before saving the code decision. A changed contract reopens Story approval. Unpublished scenario bytes keep the run in prompt space. The normal code-choice gate then resumes the existing code branch and merges the updated PR 1 without rewriting published history. Run code generation and all code checks again. PR 2 contains no prompt edits relative to its fetched PR base. PDD checks the staged tree before its automatic commit and checks the exact candidate commit before pushing that SHA. A concurrent unsafe edit refuses publication and keeps the local work, with advice to return to prompt space. After PR 1 merges, PDD compares prompts with the fetched default or selected topic base. Automatic runs use this same route when review finds a prompt defect. A returned automatic run with current operator delegation, unchanged Story coverage and a full current check pass updates PR 1 and resumes PR 2 without a person question. A later Story approval replaces its earlier coverage before checked continuation. The run keeps both PR identities and its claim. Strict approvals and changed Story gates still apply. Normal runs keep the Story card and its saved code-or-stop choice.
+To fix a prompt after code review, commit or keep the current code edits so the worktree is clean. Run `pdd workflow open ISSUE prompt-pr` (or `story`). PR 1 must still be open. PDD fast-forwards its owned branch from the remote and merges the fetched current commit of the run's saved base (usually main) into PR 1. Resolve and commit any base merge conflicts on PR 1. Repeating the explicit `open ISSUE prompt-pr` command in returned prompt space integrates a newer base and clears the prompt checks when the head changes. Make the correction on PR 1 and finish the prompt checks with `workflow done`. PDD updates the same PR 1. A changed Story or scenario contract returns to the Story gate for a new decision. PDD compares PR 1 with the contract covered by the last Story decision, including changes fetched during return. Missing approval coverage also returns to that gate. Story coverage includes supported `user_stories` directories at any depth. Additions, edits and deletions require fresh coverage. A reply covers only the Story and cases shown at the gate. If they change, run `workflow done` again to show the gate and obtain a later decision. Prompt-only edits rerun the prompt checks. PDD rechecks the contract and published scenario bytes after code confirmation or an explicit reply and against the exact fetched commit before code entry. PDD merges that pinned commit and checks the resulting code source before saving the code decision. A changed contract reopens Story approval. Unpublished scenario bytes keep the run in prompt space. The normal code-choice gate then resumes the existing code branch and merges the updated PR 1 without rewriting published history. Run code generation and all code checks again. PR 2 contains no prompt edits relative to its fetched PR base. PDD checks the staged tree before its automatic commit and checks the exact candidate commit before pushing that SHA. A concurrent unsafe edit refuses publication and keeps the local work, with advice to return to prompt space. After PR 1 merges, PDD compares prompts with the fetched default or selected topic base. Normal runs keep the Story card and its saved code-or-stop choice.
 
 The run status and PR descriptions show the return to prompt space and its reason. The ordinary replay anchor includes only scenarios changed by this run against the current merge-base of its original base branch. Unrelated scenarios merged from that base do not enter the anchor. PR 1 retains its full owned path set across publications. Later edits to already-integrated upstream prompts or scenarios do not block code entry after PR 1 merges. Owned source and anchored scenarios still require their current checks. A concurrent merge of PR 1 into the base does not remove its owned scenarios from the replay anchor during publication. Adopted runs retain their declared corpus and approval authority.
 
@@ -650,11 +540,11 @@ The fresh replacement keeps the run, worktree, progress, gates and approvals, an
 - Without `--agent`, pdd selects the first ready agent in order: Codex, Claude Code, Gemini CLI, then Antigravity CLI (`agy`). An explicit agent or configured launcher selects that choice. The chats start in full-access mode: Codex with `--dangerously-bypass-approvals-and-sandbox`, Claude Code with `--dangerously-skip-permissions`, Gemini with `--yolo`, Antigravity CLI (`--agent agy`) with `--dangerously-skip-permissions` and the run worktree trusted for that session only. An Antigravity chat also gets pdd's runs folder and worktrees folder with `--add-dir`, so it reads its start file with its own file tools. pdd finds a signed-in Antigravity CLI with `agy models`. Gemini CLI needs a paid Gemini API key, Vertex AI or Code Assist; with a free or Google One account, use `--agent agy`. Without `--model`, the account selects the model. PDD does not change your agent's settings, sign-in or config.
 - Each chat uses the sign-in of the person who runs the pdd command that starts or resumes it, not the environment of the terminal that first started the Herdr server. pdd gives the chat your own login variables and removes the ones you do not have with `env -u`. Claude Code: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`. Codex: `OPENAI_API_KEY`, `CODEX_API_KEY`, `CODEX_ACCESS_TOKEN`, `OPENAI_FEDERATION_RULE_ID`, `OPENAI_IDENTITY_TOKEN_FILE`, `OPENAI_WORKLOAD_IDENTITY_CONTEXT`, `OPENAI_BASE_URL`. Gemini: `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_GENAI_USE_GCA`, `GOOGLE_APPLICATION_CREDENTIALS`, `GOOGLE_CLOUD_PROJECT`. The base URLs are in these lists because the address goes with the key. Other variables, such as `AWS_*` for Bedrock, come from the Herdr server as they are.
 - pdd writes the login values to a one-time private file (mode 0600) in the run folder, inside your clone's `.git` folder. The chat deletes that file first, then reads the values and starts the agent. If it cannot delete the file, the agent does not start. So the values never show in the Herdr pane or in the shell history. When a file stays because pdd stopped before the chat ran, a start or status of the run deletes it only when it is at least five minutes old. Cancel deletes all login files, including newer ones.
-- When your environment has no login variable, the chat gets none and uses the login in its config folder. An example is an Autopilot Codex coordinator with `shell_environment_policy.inherit = "core"`. The Gemini start check runs only `gemini --version`, so it does not show whether that login works.
+- When your environment has no login variable, the chat gets none and uses the login in its config folder. An example is a Codex profile with `shell_environment_policy.inherit = "core"`. The Gemini start check runs only `gemini --version`, so it does not show whether that login works.
 - The first message of each chat gives the full path of this pdd. The agent uses it, so another `pdd` on its PATH does not matter.
 - A Codex chat also gets `-c shell_environment_policy.set.PDD_BIN=…` and `-c shell_environment_policy.set.PDD_AGENT_SESSION="1"` for this launch only, so its commands keep both values when the Codex profile sets `inherit = "core"` or `"none"`. pdd does not change Codex settings. Limit: a `shell_environment_policy.include_only` list that leaves out a name still removes it.
 - Workflow chats have no overall time limit. `pdd workflow prove` limits each phase to 10 minutes by default; remote lint has a caller wait limit. You can close the workflow-start terminal at any time.
-The pdd CLI has no merge command. In manual workflows, ask your agent to merge under [RUNBOOK §2](../RUNBOOK.md#2-the-files). In Autopilot `auto` mode, pdd-merge handles eligible merges after repository review and test rules pass; required human approvals still apply.
+The pdd CLI has no merge command. In manual workflows, ask your agent to merge under [RUNBOOK §2](../RUNBOOK.md#2-the-files). In Autopilot `auto` mode, the [core engine](#core-engine) merges a PR only after its merge check passes; required human approvals still apply.
 
 `pdd workflow run bug 2544 --draft` saves draft PR publication before starting the
 chat. The saved Boolean applies to PR 1 and the separately approved code PR, or
@@ -716,6 +606,7 @@ Changed criterion text and other malformed test rules still refuse the test.
 | Command | What it does |
 |---|---|
 | `pdd test --target code [STORY...] [--json]` | Run the selected Story scenarios on their declared real CLI commands, with 0 AI calls. Compare arguments, optional stdin, exit code, stdout and stderr using the same cases. Save one result per Story with the commit. Unsupported steps say `not run` with a reason and cannot pass. |
+| `pdd test --affected [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]` | Check every Story affected by local changes against the unique saved-run base or HEAD, including all variants and criteria. Uncertain scope keeps complete coverage. Read omitted baseline obligations from local original Check history in a separate historical report. Status describes selected checks only. Required full-pass gates still apply. |
 | `pdd test [PATH\|STORY...] [--lf] [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]` | Reuse complete unchanged passes from `.pdd/cache/test/`. `--lf` selects last-known failures, or the normal scope when none are recorded. `--cache-clear` discards the cache while retaining operand scope and takes precedence over `--lf`. Check Stories on the PDD interpreter with your gh login. With no STORY, test every Story. Send your Git files and wait for the checks, with one progress line every 30 s. Then print one table with a report link for each test, one `Prompt tests` line for each Story and, with two or more Stories, the overall line |
 | `pdd test --read [BATCH\|CALL_ID] [--json] [--timeout MIN]` | Read saved results; a normal Check held for lint may continue its original checks. Other reads send no work |
 | `pdd test --retry BATCH [--json] [--details] [--timeout MIN]` | Retry only confirmed unstarted checks with the saved source and call caps. Keeps completed, running and unknown jobs; changed source requires a fresh selected check |
@@ -794,6 +685,23 @@ An explicitly selected Story with a `Native validation` owner link is assessed f
 
 For a built screen, serve the app in the state shown by its drawing and run, for example, `pdd test --screen http://127.0.0.1:8080/ --drawing prompts/views/active__stacked.ui.svg`. Set `PDD_CHROME_PATH` to a Chrome/Chromium executable when discovery needs help. The command checks every visible text occurrence and id, including numeric values, at the SVG viewport; metadata, hidden and context-only drawing regions are excluded. It accepts center differences of at most 15% per viewport axis and requires the same spatial order of separated parts. It prints a `Screen vs drawing` table for the code PR; retain any stricter accepted visual comparator. Exit codes are 0 for pass, 1 for mismatch, 2 for invalid input and 5 when browser/navigation execution fails. `--screen` requires `--drawing`, accepts only `--json` alongside them and takes no Story names. JSON includes the comparison rows and `exit_code`.
 
+For a supported Simulator Screen viewer, comparison waits up to 10 seconds after
+page load for readiness, app fonts and layout. It inspects only the marked
+same-origin app iframe or open shadow surface, using the app's local viewport.
+Shell labels and offsets do not participate. Comparison never opens the app,
+clicks controls or sends an action. If the app is not open, deliberately open it
+before rerunning; opening can spend AI calls.
+
+Exit 6 means the Screen is not ready, rather than a drawing mismatch. Text gives
+the state, reason and next step without a parts table. JSON contains exactly
+`drawing`, `url`, `outcome` (`not-ready`), `code` (`screen-not-ready`), `state`,
+`reason`, `message` and `exit_code` (6), without `rows` or `passed`. Reasons include
+`timeout`, `not-open`, `state-read-failed`, `render-failed`, `action-unknown`,
+`surface-unavailable` and `viewer-update-required`. An old or unsupported viewer
+must be updated before comparison. An unknown action needs read-only state
+reconciliation; the comparator never sends it again. Ordinary page reports and
+exit codes remain as described above.
+
 See [Check prompts on the PDD interpreter](USAGE.md#7-check-prompts-on-the-pdd-interpreter) for the exit codes, `pdd test --help`, `pdd lint --help` and `pdd simulate --help` for the options, and `RUNBOOK.md` for the file formats.
 
 The Simulator's agent fills the fields directly when supported. It runs the action only when you explicitly ask, in your own words; otherwise you press Run. Actions use the simulation budget. Older pages keep manual Fill fields and Run.
@@ -810,7 +718,7 @@ The tools are `try_open`, `try_state`, `try_run`, `try_check` and `try_save_case
 
 | Command | What it does |
 |---|---|
-| `pdd workflow done STEP [--summary TEXT] [--skipped REASON]` | Record a finished step. `check`, `try` and `verify` also record pdd's own latest `pdd test`, `pdd lint` and `pdd workflow prove` results, or warn that pdd has none; the summary stays an agent note. `--skipped REASON` records that the step was skipped, and why. Print the next instruction: the next step, the gate, or "pdd opens the PR now". After the last step of an area with a PR gate, push the branch and open the PR when the applicable gate is satisfied. In a normal feature or bug run, a valid Story approval and a verified full saved check pass open PR 1 without another question; strict and other routes can require a separate approval gate. In an Autopilot run, a `done` that returns to an earlier step and clears later recorded steps is a repair round; a retry of the same step (after a failed PR open, claim check or push) or a check recorded again on unchanged files is not. A clean merge of a newer saved base, with no extra issue edits, uses a separate base integration budget of 2 per area. Each new source-changing merge charges once, even when a step return clears no later records. Repeating any step on an already charged source tree consumes neither budget, including after a source-identical base advance and across mixed step returns. A base advance that leaves the source tree identical also consumes neither budget. Commit the issue work before recording the step so pdd can retain its Git snapshot. A missing snapshot, dirty tree or merge conflict gives no exemption. Each accepted integration prints its reason, retains superseded step records in history and clears later checks for fresh evidence. It also archives and clears every current step record tied to an older source tree, including steps before the returning step. PDD requests the first missing step. Record all cleared steps on the new tree before a PR opens; this does not charge the integration again. Archived snapshots remain budget baselines, so further merges and issue edits still respect their limits. A third integration stops the run and refuses later `done` calls; use the same cancel and new-run recovery route. The bug skill still allows only 2 defect repair rounds after review. After 5 native repair rounds in one area, pdd refuses another, marks the run stuck ("Repair limit reached in AREA: take the stuck path" in `status`) and refuses every later `done` of it. To let Autopilot try again, a person removes `pdd:stuck` and `pdd:working`, then runs `pdd workflow cancel N` in the checkout that holds the stuck run; the next tick starts a new run with a fresh repair count. Without the cancel, a new automatic start of the issue in that checkout waits: "Automatic start deferred: issue has an active run" |
+| `pdd workflow done STEP [--summary TEXT] [--skipped REASON]` | Record a finished step. `check`, `try` and `verify` also record pdd's own latest `pdd test`, `pdd lint` and `pdd workflow prove` results, or warn that pdd has none; the summary stays an agent note. `--skipped REASON` records that the step was skipped, and why. Print the next instruction: the next step, the gate, or "pdd opens the PR now". After the last step of an area with a PR gate, push the branch and open the PR when the applicable gate is satisfied. In a normal feature or bug run, a valid Story approval and a verified full saved check pass open PR 1 without another question; strict and other routes can require a separate approval gate. The bug skill still allows only 2 defect repair rounds after review. |
 | `pdd workflow ask QUESTION` | Show the person that the chat waits for an answer in the middle of a step. `status` then says "waiting for you" with the question |
 
 The agent runs these from the run's worktree. pdd finds the run from that folder. You do not run them yourself.
@@ -821,7 +729,7 @@ The agent runs these from the run's worktree. pdd finds the run from that folder
 |---|---|
 | `pdd`, `pdd --help`, `pdd -h`, `pdd help` | Show the commands and the full paths of the installed Prompting guide and RUNBOOK |
 | `pdd help prompting` | Show how to write a prompt, a Story and its test, which commands check them, and the full paths of the Prompting guide and RUNBOOK |
-| `pdd --version` | Print the version, `0.1.28`. When the PDD skills that your agent finds are older, also print the update command on stderr |
+| `pdd --version` | Print the version, `0.1.29`. When the PDD skills that your agent finds are older, also print the update command on stderr |
 | `pdd -V` | Same version and local diagnostics as `pdd --version` |
 | `pdd -VV` | Print the local CLI version, the interpreter's full build identifier and its supported interface, test and app-map format IDs. Use existing gh sign-in without prompting; unavailable metadata prints `PDD interpreter: unknown` and exits 0 |
 | `pdd completion bash\|zsh` | Print a shell completion script. It does not change your shell files |
@@ -957,13 +865,15 @@ Replace the payload line with the person's words. Choose a delimiter that does n
 
 When the gate is shown, pdd saves the selected prompt paths and prose hashes. Approval covers that snapshot. If a prompt changes, show the gate again before approval. Output lists the prompt paths and hashes. Only an explicit approve call passes a gate. Chat messages, steps and `workflow done` never approve it. A workflow with no approve gate before code gets a warning.
 
-In a normal run (no `strict_approvals`, not an Autopilot run), the Story gate prints a Story card; show it as printed, then ask. The person approves each Story with that context and may choose the code PR after PR 1 (`--through code`). After that approval, a prompt-only repair needs no new approval. When pdd verifies its own saved check results (every criterion of every scenario in the default project check scope passes, and each result belongs to its batch and matches the current files), `pdd workflow done` opens PR 1 with no question and records the route `automatic-check-pass`; PR 1 shows it as `Opened after a full check pass (no person asked):`. pdd skips the optional try step. A failed check keeps the gate for repairs. A change to a Story, the plan or an expected value shows the card again and waits for the person. The same checks apply before updating an open PR 1 and before a later said or terminal code approval, including after PR 1 merged. A revised Story must be shown and approved first. Unpublished source changes need a current full check. Default discovery excludes nested fixture projects, as `pdd test` does. With `--through code`, pdd then starts the code area and records the route `card-choice`. Strict mode keeps its person gates. In `auto` mode, each Autopilot tick handles waiting PR 1 gates before local parking and dependency reviews when its GitHub budget permits. This includes a gate already parked solely for that approval wait. A changed Story reopens Story approval and replaces any earlier check-failure guidance. The park follows the revised gate and keeps its age and closed sessions. Later ticks keep the Story approval reason until that gate is resolved. A successful publication keeps its saved sessions closed and binds the park to the separate code gate. A run with current operator scope, current claim custody, unchanged approved Story coverage and a full saved check pass uses the same `automatic-check-pass` route with automatic origin. It leaves the code gate for the scoped coordinator handoff. When an automatic run has no saved Story coverage, pdd can derive it once from the recorded Story approval and its matching journal evidence. A saved Story contract and file inventory bound to that approval must establish the approved files. An earlier Story-step source hash cannot establish what a later approval covered. pdd derives the contract and fingerprint from the same temporary snapshot, then compares them and the prompt list with the recorded approval and current files before saving coverage with source "derived from the recorded approval". A difference or intervening edit reopens the Story card and saves no coverage. Missing or unverified coverage, incomplete or stale checks, strict policy and unavailable authority keep PR 1 closed. Normal runs with missing coverage keep their person gate. Status shows the hold reason. A cancellation, new person question or changed gate during preparation or publication stops further approval, push and PR effects. This includes a blocker saved while waiting for the approval journal lock: pdd rechecks the saved run under journal custody before committing approval evidence. Saved blockers remain in place. Observe mode does not cross this gate. `pdd workflow status` names the runs that wait for a Story approval.
+In a normal run (no `strict_approvals`), the Story gate prints a Story card; show it as printed, then ask. The person approves each Story with that context and may choose the code PR after PR 1 (`--through code`). After that approval, a prompt-only repair needs no new approval. When pdd verifies its own saved check results (every criterion of every scenario in the default project check scope passes, and each result belongs to its batch and matches the current files), `pdd workflow done` opens PR 1 with no question and records the route `automatic-check-pass`; PR 1 shows it as `Opened after a full check pass (no person asked):`. pdd skips the optional try step. A failed check keeps the gate for repairs. A change to a Story, the plan or an expected value shows the card again and waits for the person. The same checks apply before updating an open PR 1 and before a later said or terminal code approval, including after PR 1 merged. A revised Story must be shown and approved first. Unpublished source changes need a current full check. Default discovery excludes nested fixture projects, as `pdd test` does. With `--through code`, pdd then starts the code area and records the route `card-choice`. Strict mode keeps its person gates. A changed Story reopens Story approval and replaces any earlier check-failure guidance. Missing or unverified coverage, incomplete or stale checks, strict policy and unavailable authority keep PR 1 closed. Normal runs with missing coverage keep their person gate. Status shows the hold reason. A cancellation, new person question or changed gate during preparation or publication stops further approval, push and PR effects. This includes a blocker saved while waiting for the approval journal lock: pdd rechecks the saved run under journal custody before committing approval evidence. Saved blockers remain in place. `pdd workflow status` names the runs that wait for a Story approval.
 
 Without `--said`, a person at a normal terminal answers y/N. The question lists the gate and its drafts; one answer approves them together. `pdd approve PROMPT` still approves only one prompt. Agent, non-TTY and current Herdr chat-pane callers must ask the person, then relay the reply with the safe form above. Native Herdr evidence never authorizes approval by itself.
 
 Workflow approval reads `pdd.json` from the main checkout (`sourceRoot`), outside the agent's run worktree. Standalone `pdd approve` reads it from the Git root of the current checkout. `"strict_approvals": true` permits only a person at a terminal and refuses `--said`. Absent or false keeps easy mode. Agents never edit approval fields or decide expected values. Records retain the invoking actor, time, route, exact words and prompt path/hash. PRs show matching approvals safely quoted. Approval of PR 1 does not approve the later code-or-stop gate.
 
 `pdd workflow ack REQUEST_ID --summary TEXT` records the agent’s uptake of a delivered change request from its active run worktree. The first note and time are retained on repeat calls. Delivery and this explicit agent claim do not prove the request was fully addressed. Status shows delivered requests still awaiting uptake; done warns without blocking progress.
+
+`pdd workflow approve [ISSUE] [--said WORDS] [--draft]` records the ready approval gate. A normal Story-card choice can also use `--through prompt-pr|code`.
 
 ## Metrics
 
@@ -974,45 +884,21 @@ Workflow approval reads `pdd.json` from the main checkout (`sourceRoot`), outsid
 
 `pdd graph` reads the saved dependency graph; `pdd graph --open` opens its viewer. Use `pdd graph --issue N` to select an issue, or `pdd graph --open --issue N --repo OWNER/REPO` to select a repository explicitly.
 
-`pdd dependencies prepare [--issue N]` prepares a coordinator packet. Review batches use the stable owner of this machine’s Autopilot for the repository. A replacement coordinator chat can finish the same batch. Ownership is checked before automatic review delivery and again before saving reviews. A different owner leaves the batch pending with `owner-changed`. `pdd dependencies complete --input -` reads a structured completion from stdin. `pdd workflow yield N` hands off automatic capacity after the current worker has stopped.
+`pdd dependencies prepare [--issue N]` reads a scoped native review packet without AI or GitHub writes. `pdd dependencies complete --input -` reads a structured completion from stdin, saves the review and reconciles its intended effects. `pdd workflow yield N` hands off automatic capacity after the current worker has stopped.
+
+The `pdd workflow park` forms record a stop in the run worktree. Each one keeps the run, its claim, branch, worktree and completed work, and asks no person.
 
 `pdd workflow park --reason TEXT --step STEP` records an environment failure of
 check, verify or formal in the current area. Environment parks require `--step`;
-pdd does not guess the failed target from unfinished steps in an older run. Autopilot retries only that validation
-after 15 minutes, 1 hour and 4 hours. It keeps the run and completed work. After
-three failed retries, it stays stuck and sends one alert naming the cause.
+pdd does not guess the failed target from unfinished steps in an older run.
 
-`pdd workflow park --route KIND --reason TEXT [--until FIX] [--step STEP]` records a missing supported PDD route. Use a lowercase kind such as `interface-drafting` or `native-replay`; put the agent's full question in `--reason`. The default fix is `capability:route-KIND`; `prompt-reentry` uses `#2897`. An explicit fix can name a capability, issue fix or commit. A package version alone cannot clear this wait. The command keeps gates, independent questions, work and the claim. It asks no person.
-
-The native tick saves route questions and counts by kind in `routeQuestions` in the coordinator state. On an automatic tick with GitHub work allowed, two distinct records of a kind create one issue in `promptdriven/pdd`. An uncertain issue write stays recorded and is not sent again. JSON Autopilot status includes this ledger. A run parks with a `missing PDD route` blocker and wakes through the saved session when the installed PDD provides the required capability or commit. An issue closing alone cannot wake it.
+`pdd workflow park --route KIND --reason TEXT [--until FIX] [--step STEP]` records a missing supported PDD route. Use a lowercase kind such as `interface-drafting` or `native-replay`; put the agent's full question in `--reason`. The default fix is `capability:route-KIND`; `prompt-reentry` uses `#2897`. An explicit fix can name a capability, issue fix or commit. A package version alone cannot clear this wait. The command keeps gates and independent questions.
 
 `pdd workflow park --reason TEXT --blocker KIND [--until VALUE]` names an external wait. Use `dependency --until 2897` for an issue that must merge, `pdd --until capability:prompt-reentry` for an installed capability, `pdd --until commit:SHA` for an installed ancestor commit, or `pdd --until '#2897'` for the PR 1 re-entry route, or `account` / `github` with an ISO reset time. `person` requires an existing pending question or gate and clears on its reply. `ci` and `review` use the saved PR result or review evidence. Invalid clearing values save nothing.
 
-Autopilot closes a blocked run's chat and shell panes after it saves their native session identity. A live UUID supplies resume custody only for the same agent kind, pane and saved terminal, with successful naming verification when required. A current chat without proven session evidence stays open. A matching legacy workspace can be adopted for cleanup only when its creation field is absent; explicit null keeps it protected. The run keeps its claim, folder, branch and worktree. Only working runs count against `--runs`, with the same count as status. Idle stuck and parked runs use the separate parked-run limit. A deferred automatic start names `runs` when the working cap is full and `parked` when the parked-run limit is full. A queued or running check counts as working even after its chat closes. Unknown check custody retains that slot and prevents claim release. A reply to a parked question is saved in the request journal. Its chat stays closed until the coordinator admits the ready run within the working cap. A ready parked run resumes its saved session before new work, oldest first. Three consecutive no-verdict observations enable test mode. During recovery, `outage.probe` tests one waiting run at a time; the other waiting runs wake only after that check reaches a verdict. A verdict restores ordinary interpreter admission; older saved no-verdict waits cannot override it. When a verdict arrives late, failures that occurred after it still count. Code and native tests can continue.
-
-Set `autopilot.parking.hours` in `pdd.json` to change the 48-hour park limit. `autopilot.parking.maxParked` sets the parked-run limit; the default is twice the chosen run cap. Replacing a parked run's named blocker replaces its clearing condition and keeps its saved session and original park time. A timeout or surplus park releases its claim to the existing queue, keeps its work on its branch and posts one marked comment. Release holds run custody; replies cannot resume a run while its claim is being released. An uncertain release keeps a reservation for retry. Each tick also classifies saved stuck and waiting runs, including those without a parking record. Interpreter no-verdict and unknown saved reads use the same test-mode wake rules. A replacement interpreter wait keeps its current saved batch and counts once across unchanged ticks. At a generic approval gate without an independent question, a finished check with no verdict refines an existing park to an interpreter wait bound to the current gate and saved batch. Each tick re-reads this inferred evidence. A changed gate, completed check record, batch or saved result refreshes the wait, even when the other values stay unchanged. Unchanged evidence keeps the same wait identity and original park time. A saved verdict returns the wait to its current approval gate. Another blocker retires the old interpreter evidence without changing the original park time. A saved wait for the missing PR 1 re-entry route wakes when that capability is installed. A wake consumes its saved stop cause. A later person gate or new stop uses its own blocker and keeps its pending question or gate. Package version numbers alone do not prove a fix is installed. Saved idle or resume ceilings keep their existing recovery and alert custody. A pause without a saved blocker or failure cause stays paused. Other unknown causes stay stuck with one alert. Status shows working and parked counts by blocker. A same-group issue joins the group's existing run. File overlap does not prevent independent runs; update each PR from its base before merge.
-
-Parking waits for the current agent to be idle or done. A done chat closes without
-finished-chat grace after its screen and session are saved. Complete Herdr
-inventory can confirm an absent workspace or pane, including a starting chat,
-as closed with reason `absent`. Every tab and pane row must name the requested
-workspace and include its required IDs. An empty scoped list proves absence
-only after a valid workspace list confirms that workspace exists. Malformed
-or out-of-scope inventory retains the chat with `invalid_cleanup_inventory`
-and supplies no close mark. Confirmed absence sends no close request and keeps
-the saved session. A `closing` run holds a working slot in status and admission until all
-chat and shell absence checks pass. Without a current blocker, fresh running
-progress holds cleanup with `new progress since park`. An unelapsed recovery
-grace holds it with `recovery grace until T`, where T is its UTC deadline.
-Both holds keep saved custody and count as working. When neither progress
-timestamp is newer than the park time and no grace remains, a stale or missing
-blocker permits guarded cleanup to retry. Status names the retained reasons;
-after 60 seconds it also shows `closing-retry`.
-Busy agents and uncertain identity keep their protection during every retry.
-
 `pdd workflow park --reason TEXT` records an automatic stop from its existing run worktree without releasing its claim or treating the worker as done.
 
-A lost verdict, such as `runner-stopped`, needs a person decision before another paid attempt. Autopilot waits for the free health check to answer, then sends one decision alert for all such runs. The alert lists each old batch and its earlier AI calls. Unknown usage stays unknown. To authorize one resend for each listed run, relay the person's exact words:
+A lost verdict, such as `runner-stopped`, needs a person decision before another paid attempt. To authorize one resend for each listed run, relay the person's exact words:
 
 ```sh
 pdd workflow resend 17 23 --said - <<'PDD_SAID'
@@ -1022,19 +908,9 @@ PDD_SAID
 
 Use a quoted delimiter absent as a whole line from the words. Without `--said`, a person can use terminal y/N. Strict mode requires a person terminal. This decision does not approve prompts or workflow gates. Automatic setup and start do not authorize it. There is no automatic resend budget setting.
 
-pdd saves the decision, old batch and earlier cost before sending only the lost checks. It keeps the original call caps or lowers them to the smallest selected cap. Active checks, changed source and consumed attempts cannot be resent. The new batch is saved in the run's `checkResends` record. If another attempt has no verdict, the command stops the group at once and names that batch for the interpreter owner. A `service-restarted` receipt also stops this command without an automatic replacement. Later reads and retries of that batch keep this limit. An interrupted send is uncertain; it is never replayed automatically. Gates, questions, parking and completed steps stay as saved.
+pdd saves the decision, old batch and earlier cost before sending only the lost checks. It keeps the original call caps or lowers them to the smallest selected cap. Active checks, changed source and consumed attempts cannot be resent. The new batch is saved in the run's `checkResends` record. If another attempt has no verdict, the command stops the group at once and names that batch for the interpreter owner. A `service-restarted` receipt also stops this command without an automatic replacement. Later reads and retries of that batch keep this limit. An interrupted send is uncertain; it is never replayed automatically. Gates, questions, parks and completed steps stay as saved.
 
-`pdd workflow park --interpreter --reason TEXT` records that an automatic run waits for the PDD interpreter, the hosted service behind `pdd test`. pdd first reads the run's latest `pdd test` result. Only a check with no verdict from the AI service, a busy or not-run check, or an unknown outcome may wait. A failed check, a refusal that names a file rule or a step that took longer than the server time limit is the issue's own work (make the step smaller). A sign-in, access or interpreter address problem needs a person, and waiting does not fix it. For these, the command exits 1, names the fix and parks nothing. If pdd cannot read the result, the outcome counts as unknown. A waiting run asks no person. `pdd workflow status` shows `waiting for the interpreter: REASON`, and `pdd graph` shows the hold `Waiting for the interpreter`. The run keeps its claim, branch, worktree and progress, and the native tick frees its worker slot after it confirms chat and shell closure.
-
-### Interpreter outage in Autopilot
-
-While a run waits for the interpreter, or an outage or an interpreter access problem is open, each Autopilot tick makes one free health check: a `GET /v1/capacity` read of the interpreter with your gh login. It sends no files and makes no AI call. When nothing waits and nothing is open, a tick makes no check.
-
-- the interpreter unavailable (no answer, HTTP 408, 429 or 5xx, or maintenance): this is an outage. Only a failed health check opens one. Autopilot sends one `interpreter` alert for the repository and machine, wakes no waiting run, and offers other work as usual. New issues can start; their workers wait only at the interpreter check.
-- An answer that is neither healthy nor down (HTTP 401 or 403, a redirect, an HTML page, a 404 that is not JSON, no gh sign-in, or an invalid `PDD_RUNTIME_URL`): this is a sign-in or setup problem on this machine. Autopilot sends one `interpreter-access` alert with the fix (`gh auth status`, or check `PDD_RUNTIME_URL`) and resends nothing. This alert includes lost-verdict waits, even when no other run waits. The runs stay visibly waiting. Lost-verdict runs remain parked for a person decision. After 4 hours, other waiting runs follow the stuck rule.
-- interpreter healthy and no outage open: waiting runs, from one issue or from many, are a problem of their own issues. Autopilot wakes each run once to retry. If the same step waits for the interpreter again, the coordinator follows the stuck rule.
-- the interpreter back after an outage: Autopilot first wakes one waiting run as a test, the oldest. Only when that run saves a new `pdd test` result that passed or failed does Autopilot send one recovery and wake the others, oldest first, within the worker cap. A test run that waits again or goes stuck is no proof, and neither is a test with no verdict within 60 minutes of its wake, also a wake that was never delivered. Each run is the test at most once in an outage.
-- A woken worker first runs `pdd test --read BATCH`. It resends only a check that surely gave no verdict: `pdd test --retry BATCH` only when pdd names it (busy or held checks), and else the Story's check once with `pdd test STORY --max-calls N`, for another check that did not run or an AI-service refusal. Lost-verdict runs remain parked for the grouped person decision above. A worker never resends a failed check. Each wake reaches the run at most once for each park. `--max-calls`, strict mode and the merge rules do not change.
+`pdd workflow park --interpreter --reason TEXT` records that a run waits for the PDD interpreter, the hosted service behind `pdd test`. pdd first reads the run's latest `pdd test` result. Only a check with no verdict from the AI service, a busy or not-run check, or an unknown outcome may wait. A failed check, a refusal that names a file rule or a step that took longer than the server time limit is the issue's own work (make the step smaller). A sign-in, access or interpreter address problem needs a person, and waiting does not fix it. For these, the command exits 1, names the fix and parks nothing. If pdd cannot read the result, the outcome counts as unknown. A waiting run asks no person. `pdd workflow status` shows `waiting for the interpreter: REASON`, and `pdd graph` shows the hold `Waiting for the interpreter`. The run keeps its claim, branch, worktree and progress.
 
 ## Shared full-suite queue
 
@@ -1116,18 +992,17 @@ keeps earlier evidence. A receipt describes execution; it does not approve a mer
 Full suites and full builds share machine capacity across repositories and
 worktrees. Run a full build through the same command. Additional
 runs show "waiting for a check slot (position N)". Workflow status also shows the
-queue position. Queue waiting and suite execution pause Autopilot's stuck clock.
-A suite failure, interruption or execution timeout has its own reason and the
-`test-suite` alert kind. It does not mark the issue stuck.
+queue position. For an Autopilot job, a wait for a check slot is not quiet time.
+A suite failure, interruption or execution timeout has its own reason.
 
 The execution timeout defaults to 30 minutes. `--timeout` accepts 1 to 120
-minutes, or 0 for no time limit (the Autopilot core uses 0 and watches the suite for new
+minutes, or 0 for no time limit (Autopilot uses 0 and watches the suite for new
 output instead). Waiting does not use that time. Output and exit status come from the
 suite; timeout returns 124. The runner stops the suite process group before
 releasing its slot.
 
-Autopilot samples usable CPU IDs, free memory and one-minute load at each active
-tick. macOS and personal Linux machines use the first half of available
+The queue reads usable CPU IDs, free memory and one-minute load when it admits a
+check. macOS and personal Linux machines use the first half of available
 cores (round down, minimum one). Linux desktops without batteries are included.
 Linux uses all available cores only when virtualization is detected and no battery
 is present. Detection uses `systemd-detect-virt --quiet` with a one-second timeout.
@@ -1138,84 +1013,24 @@ Without Linux taskset, calculated slots are capped at one. With enough memory,
 Linux VMs with taskset and 4, 8, 16, 32, 64 and 96 cores get 1, 1, 1, 2, 5
 and 8 slots. A 96-core machine with 8 GiB free gets two slots.
 
-`--checks N` replaces the calculated slots. Default open runs are twice the chosen
-slots, capped at the largest safe integer. `--runs N` replaces that open-run limit. Both options require positive safe
-integers and are saved for timer ticks. A start without an option selects its
-machine default, except while an uncertain delivery retains saved options.
-Native workflow admission enforces the current open-run cap. A resize changes
-that cap without changing the coordinator identity or cancelling existing runs.
-
 Each check gets `max(1, floor(U / chosen slots))` cores. Linux taskset gives each
 check a distinct CPU list from the parent's allowed CPUs, so tools such as
 `nproc` and Node `os.availableParallelism()` see that share. Every child receives
 `PDD_CHECK_CPUS` with the share. macOS and Linux without taskset use that hint;
-custom test or build tools must read it to set their worker count. Manual slot
-overrides can permit several hint-only checks. If affinity slots outnumber CPUs,
-extra checks wait for a distinct CPU share.
+custom test or build tools must read it to set their worker count. If affinity
+slots outnumber CPUs, extra checks wait for a distinct CPU share.
 
-A tick with load above U holds new checks in the queue. The next active tick
-refreshes the shared snapshot, including busy-machine state. Running checks keep
-their CPU lists when the machine shrinks; queued checks wait for free CPUs.
-A standalone queue without a saved snapshot reads its machine ports on admission.
-The latest active tick supplies the machine-wide snapshot and any check override,
-including when several repositories use the same queue. Stopping its owner
-removes that snapshot, while running checks keep their tickets. A snapshot
-expires after 31 minutes without a refresh. Standalone checks then probe current
-machine capacity with default limits. Another active repository's snapshot is
-retained when a different repository stops.
-
-Idle automatic runs release their chat process and panes through parking. This
-includes stuck runs, person waits, and stopped recovery attempts. Bare pauses and recovery
-ceilings without a named blocker get a 60-second grace period. Saved sessions, worktrees and claims stay.
-A continuation uses the saved session in a new pane. Before pane admission fails,
-pdd tries the oldest idle automatic runs with zero grace. Active or uncertain
-checks and workspaces without a saved creation record prevent cleanup. Personal
-workspaces stay open and are listed for manual inspection.
-
-`pdd autopilot status` reports calculated and chosen checks and runs, and
-`check slots: B busy of S, W waiting, cores per check C`. These are the shared
-admission limits, including another repository's active override. Status uses
-current machine defaults only when the shared snapshot is absent or expired.
-It labels this repository's saved options separately as repository overrides.
-It reads shared tickets without changing queue or workflow state. An unavailable
-observation reports its cause. Machine-caused check retries are separate from
-capacity admission.
+When the one-minute load is above U, new checks wait in the queue. Running checks
+keep their CPU lists when the machine shrinks; queued checks wait for free CPUs.
 
 The default queue directory is `/tmp/pdd-full-suite-UID`, where UID is the local
 user ID. It is independent of repository, HOME and agent profile. All launchers
 on the machine must use the same queue directory. `PDD_SUITE_QUEUE` can select
 an absolute shared directory. `PDD_VM_SUITE_LOCK` selects `VALUE.queue` when
 `PDD_SUITE_QUEUE` is absent. `scripts/vm-suite-lock.sh` uses the same queue.
-Autopilot keeps both selectors in its saved environment, timers and coordinator
-and worker launches. Workflow status reports an unavailable queue with its cause.
-While queue activity is unknown, Autopilot withholds inactivity rules for the run
-and retries the read on later ticks.
+Autopilot keeps both selectors in its saved environment and timer. Workflow status
+reports an unavailable queue with its cause.
 Queue records stay outside the repository and contain no commands or test output.
-
-Environment validation stops show the next attempt and UTC time in workflow status.
-A person can request another try by removing the observed `pdd:stuck` label or
-posting a trusted retry comment, such as `Please retry the failed validation.`
-Diagnostic mentions and negative continuation instructions do not request a retry.
-The next tick offers the signal through the existing coordinator packet. The
-coordinator passes its exact retry text with `pdd workflow changes N`. Confirmed
-worker delivery resumes only the failed step and keeps completed work, gates,
-questions, branch, claim and the automatic retry count. This person request does
-not wait for the automatic backoff. STOP, current ownership and repair ceilings
-still apply. A failed or uncertain delivery does not resume the run.
-
-Autopilot classifies causes as environment, interpreter or work. Real failing
-assertions, review must-fixes and decisions follow the work rules. Unknown
-interpreter outcomes retain saved-batch reconciliation. Mixed causes with real
-work failures do not retry automatically. Missing-tool stops must name the
-executable (for example `missing tool: node`); the retry checks PATH first.
-The host preflight requires one-minute load per CPU below 1, at least 10% available
-memory, and Linux I/O and memory PSI avg10 below 10%. Unknown host or queue facts
-block retry. The optional shared suite queue is observed without changing it;
-only confirmed-dead waiting owners, or dead running owners with confirmed-dead
-descendant process groups, release capacity in this read. Live or unknown ownership
-still blocks. Queue records stay unchanged, and the validation command must still
-use normal suite admission. An environment wake
-is offered by the next regular tick after its due time, as worker room permits.
 
 ## Local issue costs
 
@@ -1248,8 +1063,8 @@ identity does not prove active person effort. These are separate quantities.
 
 The ledger is saved in each run's local `status.json` as `cost`. Its numeric GitHub
 call journal is `github-cost.jsonl`. Calls made by pdd from that exact run worktree
-are counted, including normal runs. Unallocated coordinator calls and calls made
-by agents outside pdd are excluded. Costs remain after GitHub budget compaction.
+are counted, including normal runs. Calls made by agents outside pdd are
+excluded. Costs remain after GitHub budget compaction.
 
 Token accounts are hashes of local config profiles, not billing identities. Codex
 usage comes from cumulative rollout counts. Claude usage comes from transcript
@@ -1266,94 +1081,6 @@ and marks coverage incomplete. It reads at most 100 workflow runs, without pagin
 workflow wall time, not billed job minutes. Incomplete data is marked in coverage;
 a failed or interrupted measurement is not retried. Status never fetches durations.
 
-
-## Autopilot issue sorting and areas
-
-Before new issue work, the coordinator sorts the issue on the current release.
-It supplies `analysis.sorts` in the same dependency completion. PDD validates and
-saves the records. It makes no model call for sorting. The record schema and agent
-steps are in [sort and route](../skills/pdd-autopilot/steps/sort.md).
-
-Set owners in root `pdd.json`, for example:
-
-```json
-{
-  "autopilot": {
-    "mode": "observe",
-    "areas": [
-      {"name": "cli", "match": {"paths": ["src/**", "skills/**", "docs/**"]}, "owner": "autopilot"},
-      {"name": "runtime", "match": {"repositories": ["promptdriven/prompt-runtime"], "keywords": ["hosted interpreter"], "labels": ["runtime"]}, "owner": "agarwal-ishaan", "mixed": "whole"}
-    ]
-  }
-}
-```
-
-Match rules accept paths, keywords, labels and repositories. Explicit areas win
-over local CODEOWNERS. Ambiguous matches need a person. Without a rule, the repo
-has one Autopilot area. On the first visit without an explicit map, the coordinator
-shows a draft from CODEOWNERS, folders, labels and known assignees. A person edits
-and saves it once. A repository owner can use `repo:OWNER/NAME` to route work to
-another repository with a link note.
-
-Auto closes fixed, duplicate and old-code issues with evidence and a reopen hint.
-Observe labels them `pdd:close-proposed` and proposes the close. Another login gets
-one assignment note. An unknown owner gets `pdd:needs-owner` and one question.
-Each area's optional `mixed` is `whole` or `split`. For promptdriven/pdd,
-Runtime defaults to `whole`: its owner receives the complete issue, including
-CLI work, with one note naming all parts. Autopilot does not start it.
-`pdd:owner-whole` and `pdd:owner-split` labels from a trusted person override
-comments and defaults. A trusted comment can use either directive or
-`mixed: whole` / `mixed: split`. Conflicting labels or unknown label authority
-need one owner question.
-
-The sort record includes `touchedAreas`, with an `{area,evidence}` row for
-every area. Split also needs `splitOrder:{first,evidence}`. Auto creates one
-issue for each of the two parts, titled `<area> part of #N`, links them as
-sub-issues, assigns the external part and adds native blocked-by links in the
-required order. Autopilot works the local part. Each part closes independently;
-the original tracker closes only after both complete. Observe retains the split
-proposal. Missing area evidence, policy or work order gets `pdd:needs-owner`
-and one question. More complex owner or order choices also need a person.
-Person assignees and live claims prevent all issue writes. Writes are
-guarded inside native admission. Closing a split tracker checks its ownership,
-state and inputs again after reading both child completions. Missing split links
-check both endpoints after evidence reads. Child claims are read before child
-assignees, then parent ownership is checked again. An interrupted split recovers
-the same completed, unassigned and unclaimed child, confirms missing links and
-saves the split note without assigning completed work. Person assignments and
-live claims hold recovery until released. Malformed sort
-records cannot abort the snapshot read. Invalid trusted heads hold selection;
-outsider records do not block it. Writes are
-serial and wait at least one second between effects. Each invocation routes at
-most 10 unfinished issues. Record saves, group effects and routing share a limit
-of 20 write attempts. A low or reserve GitHub budget stops further effects. The
-next tick resumes the remaining work. Existing route notes and labels prevent
-repeat effects from holding later issues.
-
-Grouping is continuous. New and changed sorts are compared with all open saved
-sorts and groups. Equal causes join or form a group. A changed cause leaves it.
-At three members, or across locally owned areas, auto creates one
-`Global fix: <cause>` issue with the member links, cause and one fix statement.
-Observe keeps the group proposal. Claimed issues and open-PR work finish before
-they can join. A running umbrella gets one note when membership changes.
-
-The global fix PR references its members. After that PR merges, every member
-needs a fresh sort against the fix. Only members confirmed fixed close with
-evidence; the others stay open. `pdd autopilot status` and the graph issue list
-show group size, cause and umbrella. Umbrella creation uses a shared GitHub
-reservation for each cause. This requires repository Contents write access. The
-reservation is a temporary `pdd/issue-groups/` branch. While holding it, PDD checks
-the current open issue index for an existing trusted umbrella. Separate machines
-therefore recover the same issue. This does not claim the members or start work.
-An uncertain create keeps the reservation and holds another create. A visible
-trusted umbrella can still be recovered on a later tick. Without such evidence,
-a person must inspect the cause before removing a retained reservation. PDD never
-expires it by age. Local group state is kept in the checkout's
-Git common directory. Existing dependencies, claims, trust and merge rules apply.
-
-`pdd workflow approve [ISSUE] [--said WORDS] [--draft]` records the ready approval gate. A normal Story-card choice can also use `--through prompt-pr|code`.
-
-Automatic runs use `autopilot.base` in `pdd.json` when set; otherwise they use the repository default branch. Start and status show the selection. Each explicit start refreshes the cached default branch from one repository read, including after stop. A changed selection reaches the coordinator even when issues are unchanged. Ordinary ticks and status use the cached value. Each run saves its base at start and keeps it for its area briefs and PRs. Repository documents do not select the automatic base. A manual workflow still accepts `--base`.
 
 ## Runtime interface kinds and coverage
 
@@ -1380,10 +1107,6 @@ preview uses that same selection and shows native omissions with their reasons.
 
 M includes missing, stale and invalid blocks. Checkable means a valid current full
 or partial declaration; it does not mean that all module behavior has passed.
-
-The installed interface drafting capability clears a saved Autopilot wait for
-`capability:route-interface-drafting`. It wakes the saved session through the
-ordinary continuation route. It does not approve a prompt or a person gate.
 
 `pdd interface draft --all` selects workspace prompts and excludes nested fixture
 projects. Without extension or refresh, existing blocks stay unchanged. Each result includes local lint findings.
@@ -1486,46 +1209,51 @@ Build scripts and commands without test results do not qualify.
 
 ## Core engine
 
-**The full engine (the coordinator chat, still the default) is deprecated and is
-removed in 0.1.29**; then the core engine becomes the default. A machine that runs
-the full engine writes this once to its tick log (and `pdd autopilot start --engine
-full` prints it every time):
-
-> The full Autopilot engine is deprecated and is removed in 0.1.29. To switch this
-> machine to the core engine, let the open runs finish or release them (pdd
-> autopilot release ISSUE), then run: pdd autopilot stop && pdd autopilot start
-> --engine core
-
-`--engine full` still works for now and prints "--engine full is deprecated, removed
-in 0.1.29." Set `autopilot.engine` to `core` in `pdd.json` to choose the core engine
-for every machine of a repository. To choose it on one
-machine only, run `pdd autopilot start --engine core`; `--label NAME` sets the
-opt-in label and `--mode auto|observe|off` the mode the same way, on this machine
-only (`pdd autopilot observe` changes `pdd.json` instead). The machine values win over
-`pdd.json`, and `pdd autopilot status` says where the engine, the label and the mode
-come from. `--report file|draft|off` sets where this machine's problem reports go,
-the same way. `--mode off` saves the mode and stops the timer of this machine. In
-`observe` mode the core does everything except the merge: when all checks pass, it
+Autopilot has one engine, the core. Each tick makes no AI call, so the timer runs a
+tick every 10 minutes. Each job is a headless Codex or Claude process with a log
+file. The core needs no Herdr: `pdd autopilot doctor` has no Herdr check, and
+`start` opens no chat. `--label NAME` sets the opt-in label and
+`--mode auto|observe|off` the mode, on this machine only (`pdd autopilot observe`
+changes `pdd.json` instead). The machine values win over `pdd.json`, and
+`pdd autopilot status` says where the label and the mode come from.
+`--report file|draft|off` sets where this machine's problem reports go, the same
+way. `--decisions ask|decide` (or `autopilot.decisions` in `pdd.json`) sets
+whether a job may ask a person about a choice. Autopilot decides when at least one
+reasonable fix solves the problem and breaks nothing that people use today, and lists
+it in the PR under "Choices Autopilot made", with its reason and "(changes public
+behavior: …)" when users see a change. A bug fix or a small change never asks about a
+choice. With `ask`, routine compatible choices of command syntax, options or data
+representation are agent decisions when a safe, low-surprise choice exists. Preserve
+existing APIs, defaults and behavior unless the request authorizes a change. Several
+valid designs alone are not a reason to ask. A job may ask one plain question with 2
+or 3 options and a recommended one (you answer with one letter) only when every
+reasonable fix breaks something people use today, or, in a pdd-feature run, when the
+choice actually changes product direction: whether a new feature area or capability
+should exist, removing a feature, an on-purpose change to a core contract, security,
+privacy, data policy, or cost; `decide`, the default for now, asks no choice
+question and lists big choices marked "(big)". In both modes a blocker asks: missing
+access or a secret, an issue that contradicts itself, work that cannot be done, a
+change against a person's answer to an earlier question, and a change of what blocks
+merges (a required check, a gate, CI policy). A bug fix may change a rule of an approved
+prompt without asking; the PR lists it as "(changes approved rule: OLD -> NEW)", and
+the repository's approval setting still applies to that prompt. `--mode off` saves the mode and stops the timer of this machine. In
+`observe` mode the core does everything except the merge (it also records the
+operator approval of changed prompts, with "in observe mode" in its words; in a
+`strict_approvals` repository it asks no person and lists those prompts in its note): when all checks pass, it
 posts "Autopilot would merge this PR (observe mode)" with the same evidence, keeps
 the PR open and ready for review, releases the issue and adds `pdd:would-merge`, so
 no machine builds it again. Remove the label to have it built again. Comments
-that the core engine posts are redacted for secrets and cut in length. The core engine needs no
-Herdr: `pdd autopilot doctor` skips the Herdr checks, `start` opens no Herdr
-session, and each job is a headless Codex or Claude process with a log file. A
-core tick makes no AI call, so its timer fires every 10 minutes instead of 30. A
-start that switches the engine (`--engine`, or a changed `pdd.json`) also switches
-the timer; until that start, `pdd autopilot status` names the interval in use and
-says to run `pdd autopilot start`.
+that the core posts are redacted for secrets and cut in length.
 
 ```json
-{"autopilot":{"mode":"auto","trust":[],"engine":"core","runs":2,"label":"pdd:autopilot",
+{"autopilot":{"mode":"auto","trust":[],"runs":2,"label":"pdd:autopilot",
   "quietMinutes":45,"report":"draft","maxRepairs":6,"testCommand":"npm test"}}
 ```
 
 | Key | Meaning | Default |
 |---|---|---|
-| `runs` | Issues in progress at the same time on this machine | 2 |
-| `label` | Take only issues with this label | none: every ready issue |
+| `runs` | The most issues in progress at the same time on one machine. It can only lower the machine's automatic slots; `pdd autopilot start --runs N` on one machine wins | automatic, from the machine guard (below) |
+| `label` | The opt-in label: take only issues with this label. `--label NAME` on this machine wins over it | none: Autopilot takes no issue, and start asks for a label |
 | `quietMinutes` | Minutes with nothing new after which an agent process or the checks of a PR end. There is no fixed time limit: a process runs as long as it makes something new (a new commit, a new file state, a new tool call, a new output line, or CPU use in its child processes; a repeated line, a wait or a poll is not new), and a PR waits while CI, the review or the suite still runs. At least 20 (2 ticks of the core timer) | 45 |
 | `ciStuckMinutes` | Minutes that CI may stay pending with no change before the job ends | 360 |
 | `maxJobHours` | Backstop floor. Each agent process (build, repair, review, suite) stops at the larger of this many hours and 4 times the longest successful process of the same kind in this repository (last 30 days), counted from its own start, whatever it does (sleep time is not counted). The job ends with no result and one alert. At 3 hours a process sends one note and goes on | 24 |
@@ -1535,12 +1263,48 @@ says to run `pdd autopilot start`.
 | `maxRepairs` | Safety cap of repair jobs for one PR (the old key `repairs` still works). Repairs go on while they make progress: see below | 6 |
 | `testCommand` | Full test command that runs on the PR head, in a clean checkout. With `package-lock.json` and listed dependencies, `npm ci --ignore-scripts` runs first | `npm test` when `package.json` has a test script |
 
+**The machine guard.** Autopilot never takes over a person's machine. It may use a
+share of the machine's CPU and memory, for all repositories on the machine together:
+50% by default, or `pdd autopilot start --share PERCENT` on this machine. The share
+counts the real limits: the CPU list and the cgroup or container limits on Linux, the
+cores and the memory of the machine.
+
+- Slots: one job counts as 2 cores and 3 GiB (an agent is light, and a full suite
+  peaks near 3 GiB). The slots are the share of the cores divided by 2 and the share of
+  the memory divided by 3 GiB, the lower one, at least 1 and at most 4. So at 50% an
+  8 GB Mac or a 4-core, 8 GB box gets 1 job, a 10-core, 32 GB Mac gets 2, and a 64-core,
+  251 GB server gets 4. These slots are for the whole machine: two repositories on the
+  64-core server share its 4 jobs. `--runs N` on this machine sets the most jobs of
+  this repository; `autopilot.runs` in `pdd.json` can only lower them.
+- Every Autopilot process runs at the lowest priority: nice 19, on macOS the utility
+  QoS, and in the Linux timer unit `CPUWeight=1` (a weight
+  counts only when the CPU is busy, so an idle machine still gives Autopilot all of it;
+  at a share of 100 the normal weight) and `MemoryHigh` at the share. On Linux the
+  agents run on the share of the CPUs. Every job gets `PDD_CHECK_CPUS`, the worker count
+  for its tests and builds.
+- Before new work, each tick checks the room for the whole machine: what all Autopilot
+  jobs on this machine use now (every repository) must leave room in the share for one
+  more job (its jobs, its memory and its CPU), the machine needs at least 3 GiB of
+  memory free and no memory pressure, and at least 10 GiB and 5% of the disk free. With
+  no room, no issue is claimed, and the tick and `pdd autopilot status` say why
+  (`intake held: 4 of 4 Autopilot jobs on this machine run (all repositories, 50%
+  share)`). Running work goes on.
+- Each tick removes worktrees that no job uses, job logs older than 14 days, and the
+  oldest logs while the log folder holds more than 500 MiB.
+
+`pdd autopilot status` shows the share, the slot math, what Autopilot uses now and the
+room in one line, for example `Machine: share 50% (default) of 10 cores and 16 GiB ·
+slots min(4, 5 cores ÷ 2, 8 GiB ÷ 3 GiB) = 2 → 2 (automatic) · Autopilot on this
+machine now: 1 job, 0.4 GiB, 0.3 cores · memory 6.1 GiB free, pressure normal · disk
+210 GiB free · load 3.2 · priority low · new work: ok`.
+
 Each tick, without AI calls:
 
 1. List the open issues. An issue is ready when it has no assignee, no live
    `pdd:working` claim, no `pdd:stuck`, no open issue that blocks it (a GitHub
-   issue dependency or a `blocked by #N` line in its body), a trusted author and,
-   when `label` is set, that label. The oldest ready issue goes first.
+   issue dependency or a `blocked by #N` line in its body), a trusted author and
+   the opt-in label. Without a label, the tick claims no issue. The oldest ready
+   issue goes first.
 2. Refresh the heartbeat of this machine's claims.
 3. Check each job. A job that made no progress for `quietMinutes`, failed, died or left no
    result ends. A job with a PR goes to the merge check.
@@ -1578,36 +1342,112 @@ Each tick, without AI calls:
    is the same. A merge conflict starts a repair.
 5. Fill free slots: claim the oldest ready issue with `pdd:working` and a claim
    comment, make a worktree and start one headless job. The job runs the same pdd
-   as the tick (it goes first on the job's `PATH`). It makes one PR with prompt,
+   as the tick (it goes first on the job's `PATH`, and `PDD_CLI` names it, because a
+   login shell can put an older pdd first again; when the agent's shell finds another
+   pdd, the job log and `pdd autopilot status` say so). `PDD_SKILLS` names the skills
+   of that same pdd, and the job reads its skills from there; when the installed skills
+   (`~/.agents/skills` or `~/.claude/skills`) have another version, the job log and
+   status say so too. It makes one PR with prompt,
    tests and code where the files are owned by a prompt, and changes other files
-   directly: a file is owned when `pdd-bindings.json`, a `Generated from` header or a
-   prompt's opening paragraph names it. The job gets this owner table and writes one
-   `Path:` line per path in the PR body; Autopilot checks the lines against the table.
-   Existing code that no prompt owns changes directly with a regression test, and
-   Autopilot files one report that proposes adopting PDD for it. The job writes one
-   `Runtime:` line and one `Evidence:` line in the PR
-   body. It writes no review verdict: only the fresh reviewer gives one. In `auto`
-   mode your `pdd autopilot start` is the approval of the job's prompt changes: the
-   job records it for each changed prompt with `pdd approve PROMPT --said -` and the
-   words "Operator action: pdd autopilot start --engine core in auto mode for REPO on
-   MACHINE at TIME", in the PR. A changed prompt that still has a draft interface is
-   red: a draft, a stale or broken interface, or an approval that `pdd approve` did
-   not record. In a repository with `strict_approvals`, the job does not approve:
-   Autopilot asks a person (`pdd:needs-decision`) and keeps the PR open. `observe`
-   mode never approves.
+   directly: a file is owned when `pdd-bindings.json`, a `Generated from` header or the
+   opening sentence of a prompt names it (`pdd owner FILE` gives the same answer). The
+   job gets this owner table and writes one `Path:` line per path in the PR body.
+   Autopilot takes the changed files from Git and checks the lines against the owners
+   on the base: an owned file must be on a path a or b line, a file that the PR adds
+   never takes path e, and a new prompt needs a binding or a `Generated from` header.
+   When `pdd-bindings.json` on the base branch cannot be read, the PR is not red: its
+   merge waits, and after the quiet period the run ends with one report. Existing code
+   that no prompt owns changes directly with a regression test, and when the PR passed
+   every check, Autopilot files one report that proposes adopting PDD for it. A config
+   or metadata file (`package.json`, a lock file, CI settings) needs no prompt, and the
+   review never asks for a new prompt for one. The job writes one `Runtime:` line for each changed
+   Story, the verdict first and the Story file path first in the parentheses
+   (`Runtime: PASS (STORY, N/N checks)`, `Runtime: FAIL (STORY, N of M checks failed:
+   STEPS)` or `Runtime: not run (STORY: REASON)`), and one `Evidence:` line in the PR
+   body ([RUNBOOK §15, "Autopilot core jobs"](../RUNBOOK.md#autopilot-core-jobs)). A
+   single line with no Story is valid only when the PR changes one Story or none. Two
+   lines for the same Story are red. It writes no review verdict: only the
+   fresh reviewer gives one. In `auto` and
+   `observe` mode your `pdd autopilot start` is the approval of the job's prompt
+   changes: the job records it for each changed prompt with `pdd approve PROMPT --said
+   -`, in the PR. The words start with "Operator action: pdd autopilot start" and
+   name the real mode, the repository, the machine id and the time of the start. A changed prompt that
+   still has a draft interface is red: a draft, a stale or broken interface, or an
+   approval that `pdd approve` did not record. In a repository with `strict_approvals`,
+   the job does not approve: in `auto` mode Autopilot asks a person
+   (`pdd:needs-decision`) and keeps the PR open; in `observe` mode it asks no one and
+   lists those prompts in its "would merge" note.
 
-Only a real Runtime FAIL blocks a merge. When Runtime cannot check a change (a lint
-refusal, no interface, a scenario limit, no verdict), the job still ships its PR with
-native tests and `Runtime: not run (reason)`, and Autopilot files or counts one
-report for that cause. The `Evidence:` line has a fixed form, for example
-`Evidence: runtime=pass (11/11); vectors=not-run; formal=bounded; tests=pass (42/42)`.
+Only a real Runtime FAIL blocks a merge. A failed check is a FAIL, also when its check
+has no verdict because another step had no answer. When Runtime cannot check a change
+(a lint refusal, no interface, no verdict with no failed step, a scenario limit that pdd
+gives no fix for), the job still ships its PR with native tests and `Runtime: not run
+(STORY: REASON)`, and Autopilot files or counts one report for that cause. A value that is not
+a safe integer is no such reason: pdd prints its exact Number spelling, and the job
+applies that fix and checks again. During announced maintenance the job does not wait:
+pdd has sent nothing yet, so the job stops it and writes `Runtime: not run (STORY:
+maintenance until HH:MM UTC)` for each Story that pdd did not send, with the end time
+that pdd printed. A job never cuts short a check that pdd has already sent, and never
+sends a check again itself. Autopilot sends a check once more by itself, once for each
+PR head, before the merge lane: a check that pdd never sent (maintenance, busy, or pdd
+stopped before sending), and a sent check with no verdict and no failed check (an AI
+provider failure). A check with a failed check is never sent again. While the
+interpreter is in maintenance the PR waits: Autopilot reads the free `GET /v1/capacity`
+again every 10 minutes, the job holds no slot and never counts as quiet, and other jobs
+go on. Then Autopilot itself runs `pdd test` once for those Stories (no agent) and
+rewrites the line of each one: a pass gives `Runtime: PASS (STORY, N/N checks)`, a real
+FAIL goes to a repair, and no verdict keeps `Runtime: not run (STORY: …)` with one
+report. The job's history keeps the agent's own lines. After 12 hours of maintenance
+the line says `Runtime: not run (STORY: maintenance since HH:MM UTC)`, Autopilot files
+one report, and the merge goes on. "Changed" means changed against the base (`git diff origin/BASE...HEAD`),
+never since the previous PR head: a Story that a merge from the base brought in is not
+changed. A job that merges the base into its branch checks that its fix is still
+needed: when the PR's changed tests also pass on the code of the new merge base, the
+base already holds the fix, and the job keeps only what the base does not hold.
+The `Evidence:` line has a fixed form, for example
+`Evidence: runtime=pass (11/11); vectors=pass (36/36); formal=bounded; tests=pass (42/42)`.
+`vectors` counts the replay files that the PR changes or that read a changed scenario
+file, in `node:test` tests (not steps or checks).
 Autopilot keeps only the known parts, saves them in its local history and repeats
-them in the merge comment.
+them in the merge comment. The claims must be true. A Runtime pass (`Runtime: PASS`,
+`runtime=pass` or the result's runtime state) counts only when the saved `pdd test`
+checks cover every changed prompt, Story and Story test at the PR head, compared with a
+clean checkout of that head (files that are not committed never count; the latest check
+of a Story decides; a PASS of other Stories does not count; write `Runtime: not run
+(STORY: REASON)` for a native-only prompt; a changed Story with no Runtime test is red
+until the PR adds its test, unless every changed prompt is native-only). A repair that only
+runs `pdd test` again is read again. Autopilot also runs, at the PR head, every changed
+replay (`*.vectors.test.*`) and formal (`*.formal.test.*`) file and every vector file
+that names a changed scenario, if it is a `node:test` JavaScript file (other files are
+listed as not run). It runs the replay and formal files apart, so each has its own
+counts. A failure, a claim that its run contradicts (a vectors count too), or a positive
+claim that it could not check, is red, and the merge comment shows its own counts. A
+claim that Autopilot could not check (no result, a file it does not run, or a skipped
+test) is red once per job; after that Autopilot never repeats it: the merge comment and
+the history write that kind as `not-run (Autopilot could not check: reason)`, and
+Autopilot files one report. For each PR head, Autopilot writes its own evidence record
+(`logs/ISSUE-evidence-HEAD.json` in its state folder, kept after the run ends): the saved
+`pdd test` checks it read, each replay and formal file's result, and the full suite. The
+reviewer reads it, the merge comment names it, and the PR body gets a short "Autopilot
+evidence" block from it.
+
+With `--decisions ask`, a feature job asks one question instead of choosing when it
+meets a product-direction decision that the issue does not settle (its brief lists the
+other open issues by trusted authors, so it can see an open decision); it opens no PR
+then. A bug or small-change job never asks about a choice. With `decide`, a choice
+question is never posted: the job runs once more and decides it. The fresh review also
+checks the PR's list of choices, and with `ask` it flags a product-direction choice of a
+feature that the job made instead of asking (for example one option of an open decision
+issue that the change touches). Such a finding
+is not repaired: Autopilot asks the one question instead (in `observe` mode too), and
+the PR waits for the answer. The next build and
+review read the answer, so a settled choice is not asked again.
 
 When a job needs a person's decision, Autopilot posts its one question on the issue,
 adds `pdd:needs-decision` (not `pdd:stuck`) and frees the slot. Answer in a comment
-and remove `pdd:needs-decision`: removing the label is the signal, and it counts only
-when a trusted person removes it. The next job gets Autopilot's own question and the
+(one letter is enough): at its next tick Autopilot reads a trusted person's reply,
+removes `pdd:needs-decision` itself and goes on. A trusted person's removal of the
+label works too. The next job gets Autopilot's own question and the
 comments of trusted people after it.
 
 When a job ends, the issue gets one comment with the cause and the log file name
@@ -1639,9 +1479,32 @@ jobs on this machine for 1 hour and sends one alert ("Autopilot paused new jobs 
 1 h: the agent ended 3 jobs with no result. Check sign-in and limits."). Jobs that
 already run go on. After the pause, intake goes on as usual; if jobs still end with
 no result, the next pause is twice as long (2, 4, then 8 hours at most), with a new
-alert. A job with a result, a review verdict or a merge sets the pause length back
+alert. An agent that stops because the AI service refused it ("Selected model is at
+capacity", "Your workspace is out of credits", a usage limit, a sign-in error, a 5xx)
+is an agent account problem, not the issue: the issue is released with no strike and
+no cooldown, the end counts toward this pause, and the pause alert quotes the agent's
+message. A job with a result, a review verdict or a merge sets the pause length back
 to 1 hour. `pdd autopilot status` shows the jobs, the busy slots,
 a pause and the time it ends, and the last results from local files.
+
+Each stop where the time ran out has one owner, and only the issue owner blames
+the issue:
+
+| Owner | Example | What Autopilot does |
+|---|---|---|
+| pdd | Autopilot's own merge check step makes no progress (the base check cannot verify the releases, a refused merge) | Files one PDD report, keeps the PR and the claim, and tries the step again after 15 minutes, then 30, 60 and up to 8 hours. It never ends the issue. Repeats count toward the pause |
+| service | GitHub answers 502 for the whole quiet period, CI stays pending with no change for `ciStuckMinutes`, the AI account is out of credits | Waits or releases the issue, with no report and no strike |
+| service | GitHub Actions does not start a run for the PR head for 20 minutes (queued with no job), or fails it with a billing or spending-limit message | The PR waits for its CI with no repair. One alert and one status line name the cause ("Settings → Billing → Actions"), and no new job starts in this repository until a CI run starts again |
+| machine | the agent stops answering | Releases the issue with no strike; the pause counts it |
+| issue | the same command hangs again at the same head, or the suite hangs in a test that the PR changes | One strike and one short note on the issue (updated in place), then a repair with the hang details or a later try; the 3rd strike in 7 days ends the issue with `pdd:stuck` |
+
+Agent jobs run with a hung-command watch: a command of the agent that prints
+nothing and uses almost no CPU for 15 minutes (a stalled `npm install`, a test that
+waits forever) is stopped alone, and the agent goes on. `pdd autopilot status`
+shows each wait, its next try and each issue that cools down, with the owner. When
+one issue has 3 stops owned by pdd or a service in 24 hours, Autopilot holds it (no
+`pdd:stuck`) and files one report; it takes the issue again after a new pdd version
+or a comment on the issue by a trusted person.
 
 When the machine sleeps longer than `quietMinutes`, every job's no-progress clock
 starts again at wake-up. A job whose claim expired or whose agent ended during the
@@ -1676,7 +1539,7 @@ Runtime cause.
 
 ### Intake cards (shadow)
 
-`pdd autopilot start --engine core --intake shadow` turns on intake cards for this
+`pdd autopilot start --intake shadow` turns on intake cards for this
 repo on this machine; `--intake off` (the default) turns them off. A later start
 without `--intake` keeps the saved value. In shadow mode each core tick first
 checks native facts of each open issue in scope (the opt-in label, no report
@@ -1706,17 +1569,17 @@ open issue in scope: unlike the core, they do not skip issues that cool down aft
 no-result or whose blocker is named only in the text. `pdd autopilot intake` prints
 the cards and today's changes; `--json` prints them as JSON.
 
+
 ## Post-merge audit settings
 
-Autopilot calls `pdd autopilot audit RUN PR` after each automatic merge. Its fixed
+`pdd autopilot audit RUN PR` audits one merge of a saved workflow run. Autopilot does not
+call it by itself: the core engine starts no audit after its merges. Its fixed
 brief requires before/after reproduction, scope, Story quality, old-code tests,
 real check evidence, unchanged checks and actual merge gates. Audit files remain
 in shared durable custody under the machine workflow state root, keyed by
 repository, run attempt, PR and merge commit. The run's `audits/` folder holds
 evidence copies. Every clone reads shared results and effect reservations under
 the repository lock. An interrupted auditor is unknown, never a pass.
-Pending known work is offered to the coordinator on later ticks. Discovery reads
-saved runs through the tick process port. The local scan needs no GitHub read.
 
 Set `autopilot.audit` to `false` in this repository's `pdd.json` to disable audits.
 The default is on. Codex and Claude auditors start a fresh native session using
@@ -1806,8 +1669,6 @@ If the service refuses an exact fixture selected locally, the result retains
 both the service report and `binding_diagnostics` with
 `server-binding-disagreement`. Ask the compatibility owner to diagnose selection
 before retrying. A local match never replaces a service refusal with a pass.
-Autopilot parks a saved binding refusal with blocker `binding`. Interpreter
-health alone does not wake it. Use the normal reply/retry route after repair.
 
 
 ## Whole-product Simulator

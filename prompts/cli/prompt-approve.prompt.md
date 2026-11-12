@@ -32,7 +32,7 @@ Show a native-only declaration's kind and reason before approval. It is eligible
 
 ## Dependencies
 
-- [Automatic draft approval](interface-draft.prompt.md): required generation and verification context for `runAutomaticApproval`, `contractCoverage` and `coverageView`. The caller consumes this public operation; ordinary person approval policy remains here.
+- [Automatic draft approval](interface-draft.prompt.md#coverage-and-automatic-approval): required generation and verification context for `runAutomaticApproval`, `contractCoverage` and `coverageView`. The caller consumes this public operation; ordinary person approval policy remains here.
 
 - [Shared authored-file reader](runtime-preflight.prompt.md#shared-authored-file-reader): required generation/verification/testing context for parsing, references, numeric tokens and schema refusals.
 

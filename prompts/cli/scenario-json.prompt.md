@@ -23,10 +23,12 @@ This is the lossless representation of a large whole number in a scenario and in
 a Runtime interface schema. There is no wrapper object and no new schema
 keyword: `"type": "integer"` means any whole number.
 
-An **exact Number spelling** is the shortest JavaScript spelling of a Number
-(`String(n)`), for example `4.2501298345826807e+24` for 3600 × 2^70. JavaScript and
-Python read it as exactly that Number, so for a parameter that takes a Number it is
-also lossless. It exists only for whole numbers that a Number holds exactly.
+An **exact Number spelling** is the shortest JavaScript spelling of a Number with an
+exponent: `String(n)` from 1e21 (for example `4.2501298345826807e+24` for 3600 × 2^70),
+`n.toExponential()` below 1e21 (for example `1.152921504606847e+18` for 2^60; `String(n)`
+is plain digits there, an integer literal). JavaScript and Python read it as exactly that
+Number, so for a parameter that takes a Number it is also lossless. It exists only for
+whole numbers that a Number holds exactly.
 
 The PDD interpreter refuses exact integer literals outside ±(2^53 − 1) today
 (`scenario-integer-out-of-range`, in `prompt_runtime/program_scenario.py`

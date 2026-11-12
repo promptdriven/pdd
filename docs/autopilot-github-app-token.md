@@ -86,7 +86,7 @@ person. This matters for the rules of pdd:
   two identities for the label and the comment does not win.
 - Reviews and merges: a review or approval by the bot is not a person's review.
   Repository rules that need a human review still need one. Merges stay under
-  the [pdd-merge](../skills/pdd-merge/SKILL.md) rules.
+  the merge check of the [core engine](cli.md#core-engine).
 - Audit: the GitHub history shows the bot for these actions. The person's own
   actions still show the person.
 

@@ -168,3 +168,26 @@ test('malformed CLI interfaces never launch or save a pass',()=>{
  }
  for(const field of ['resources','calls']) {const root=project({interfaceChange:i=>{i.status='approved';delete i[field];}});assert.equal(selected(root,'demo').status,0,field);}
 });
+
+test('plain-text failure prints scenario, step, criterion, path and expected vs actual',()=>{
+ const root=project({expected:'23.00\n',app:"process.stdout.write('20.15\\n');process.exitCode=2;\n"});
+ const out=spawnSync(process.execPath,[bin,'test','--target','code','demo'],{cwd:root,encoding:'utf8',env:{...process.env,GH_TOKEN:'',GITHUB_TOKEN:'',PDD_RUNTIME_URL:'http://127.0.0.1:1'}});
+ assert.equal(out.status,1);
+ assert.match(out.stdout,/^FAILED\s+user_stories\/demo\.md\s+[0-9a-f]{40}\s+clean/m);
+ assert.match(out.stdout,/tests\/demo\.json · step one · AC1 \/stdout: expected "23\.00\\n", actual "20\.15\\n"/);
+ assert.match(out.stdout,/tests\/demo\.json · step one · AC1 \/exit_code: expected 0, actual 2/);
+});
+
+test('preserves 64-bit integers above 2^53 in scenario JSON and CLI streams',()=>{
+ const root=project({expected:'9007199254740994\n',app:"process.stdin.setEncoding('utf8');let s='';for await(const c of process.stdin)s+=c;const id=BigInt(s.trim());process.stdout.write(String(id+1n)+'\\n');\n"});
+ const raw=readFileSync(join(root,'tests/demo.json'),'utf8')
+  .replace('"checks":[','"checks":[{"criterion_id":"AC1","target":"result","path":"/exit_code","op":"equals","value":9007199254740993},')
+  .replace('"stdin":"\\n"','"stdin":"9007199254740993\\n"');
+ writeFileSync(join(root,'tests/demo.json'),raw);
+ spawnSync('git',['add','tests/demo.json'],{cwd:root});
+ spawnSync('git',['-c','user.name=test','-c','user.email=test@example.com','commit','-qm','bigint'],{cwd:root});
+ const failText=spawnSync(process.execPath,[bin,'test','--target','code','demo'],{cwd:root,encoding:'utf8',env:{...process.env,GH_TOKEN:'',GITHUB_TOKEN:'',PDD_RUNTIME_URL:'http://127.0.0.1:1'}});
+ assert.equal(failText.status,1);
+ assert.match(failText.stdout,/expected 9007199254740993, actual 0/);
+ assert.match(readFileSync(join(root,'.pdd/code-test/latest.json'),'utf8'),/"expected": 9007199254740993/);
+});

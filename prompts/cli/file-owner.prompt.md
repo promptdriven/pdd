@@ -92,7 +92,7 @@ Each header has a hash state:
 | State | When |
 |---|---|
 | `current` | HEX equals the header hash of the named prompt. |
-| `current` with `legacy: true` | HEX equals the SHA-256 of the whole prompt file (the earlier form, which every approval changed). pdd accepts this form as current through pdd 0.1.28 only, so one release can refresh headers without making every file stale at once; remove this row after that release. |
+| `current` with `legacy: true` | HEX equals the SHA-256 of the whole prompt file (the earlier form, which every approval changed). pdd accepts this form as current for compatibility and marks it `legacy: true`; write the expected hash for a canonical header. |
 | `stale` | HEX is any other value: the prompt changed after the header was written. |
 | `none` | The header has no hash. |
 | `unknown` | The named prompt is not a Git-visible prompt, or its content is not available. |
