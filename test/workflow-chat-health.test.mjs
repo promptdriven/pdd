@@ -480,12 +480,14 @@ test('Gemini shell safety dialog appears in status without answering it', async 
   await f.run();
   const pane = f.herdr.paneOf(f.record().chats.at(-1));
   pane.agent.agent_status = 'blocked';
-  pane.screen = '⚠ CRITICAL SECURITY WARNING: Untrusted Command Flags Detected\nThe following flags/arguments were sourced from external untrusted input\nAllow execution of [Shell]?\n● 1. Allow once\n  2. No, suggest changes (esc)\n';
-  const before = f.herdr.calls.length;
-  const shown = await statusAll(f);
-  for (const words of [shown.detail, shown.line, shown.json.words]) assert.match(words, /Gemini shell-safety dialog.*pdd workflow open 17/);
-  assert.equal(shown.json.group, 'waiting');
-  assertOnlyReads(f, before);
+  for (const heading of ['CRITICAL SECURITY WARNING: Untrusted Command Flags Detected', 'CAUTION: Build Configuration Was Recently Modified']) {
+    pane.screen = `⚠ ${heading}\nThe command needs confirmation.\nAllow execution of [Shell]?\n● 1. Allow once\n  2. No, suggest changes (esc)\n`;
+    const before = f.herdr.calls.length;
+    const shown = await statusAll(f);
+    for (const words of [shown.detail, shown.line, shown.json.words]) assert.match(words, /Gemini shell-safety dialog.*pdd workflow open 17/);
+    assert.equal(shown.json.group, 'waiting');
+    assertOnlyReads(f, before);
+  }
   pane.screen = 'Other question\n(Use Enter to select)\n';
   assert.match((await statusAll(f)).detail, /the chat asks a question in its window/);
 });

@@ -4570,7 +4570,7 @@ async function chatState(run, p, facts = {}) {
     if (live.status === 'blocked' && (chat.agent ?? run.agent) === 'gemini' && run.state === 'running' && !run.gate && !openQuestion(run)) {
       try {
         const screen = await herdrCommand(p)(['pane', 'read', chat.paneId, '--source', 'detection']);
-        if (typeof screen === 'string' && /CRITICAL SECURITY WARNING: Untrusted Command Flags Detected[^]*?Allow execution of \[Shell\]\?[^]*?(?:(?:●|❯)[ \t]*1\.[ \t]*Allow once[^\n]*\r?\n[ \t]*2\.|1\.[ \t]*Allow once[^\n]*\r?\n[ \t]*(?:●|❯)[ \t]*2\.)[ \t]*No, suggest changes(?:[ \t]*\(esc\))?[ \t]*(?:\r?\n[ \t]*\(Use Enter to select\)[ \t]*)?\s*$/i.test(screen)) facts.geminiShellSafety = true;
+        if (typeof screen === 'string' && /(?:CRITICAL SECURITY WARNING: Untrusted Command Flags Detected|CAUTION: Build Configuration Was Recently Modified)[^]*?Allow execution of \[Shell\]\?[^]*?(?:(?:●|❯)[ \t]*1\.[ \t]*Allow once[^\n]*\r?\n[ \t]*2\.|1\.[ \t]*Allow once[^\n]*\r?\n[ \t]*(?:●|❯)[ \t]*2\.)[ \t]*No, suggest changes(?:[ \t]*\(esc\))?[ \t]*(?:\r?\n[ \t]*\(Use Enter to select\)[ \t]*)?\s*$/i.test(screen)) facts.geminiShellSafety = true;
       } catch { /* An unreadable screen leaves the generic blocked status. */ }
     }
     const saved = currentChat(run);

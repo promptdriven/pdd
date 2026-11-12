@@ -10,6 +10,6 @@ As a person using a Gemini workflow, I can learn before relying on it that shell
 
 ## Rules to check
 
-- The live ordered shell safety menu is named when either choice is selected, with or without its selection footer.
+- The live ordered shell safety menu is named for either the untrusted command flags warning or the recently modified build configuration warning, when either choice is selected, with or without its selection footer.
 - An older menu followed by an input or a different dialog, or an unreadable screen, keeps the generic blocked status.
 - Status reads the pane without answering the dialog.
