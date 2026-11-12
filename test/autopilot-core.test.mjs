@@ -449,8 +449,9 @@ test('an ended job holds no slot after a restart, and END and merge remove its p
   w.issue(19);
   w.build(18); await w.tick(); w.review(18, 'PASS'); w.suite(18, 0); await w.tick();
   assert.deepEqual(w.github.merges.length, 1);
-  const merged = name => readdirSync(join(w.root, name)).filter(file => /^18(?:[-.]|$)/.test(file) && !file.endsWith('.log'));
+  const merged = name => readdirSync(join(w.root, name)).filter(file => /^18(?:[-.]|$)/.test(file) && !file.endsWith('.log') && !/-evidence-[0-9a-f]+\.json$/.test(file));
   assert.deepEqual([...merged('jobs'), ...merged('worktrees'), ...merged('logs')], []);
+  assert.ok(readdirSync(join(w.root, 'logs')).some(file => /^18-evidence-[0-9a-f]{40}\.json$/.test(file)), 'the evidence record stays (#3227 fix 3)');
   assert.ok(w.job(19, 'build'), 'the merged slot is free in the same tick');
 });
 
@@ -2148,6 +2149,37 @@ test('L8 (#3246) two machines add their lane labels within the lag: neither merg
   assert.doesNotThrow(() => execFileSync('git', ['--git-dir', a.remote, 'merge-base', '--is-ancestor', pa.pr.mergeSha, pb.pr.head]), 'the second merge contains the first');
 });
 
+test('L9 (#3246) a final holder whose label the list does not show yet keeps its place: an older waiter of the same machine and a higher holder of another machine do not make it yield', async t => {
+  const w = await coreWorld(t, { settings: { runs: 2 } }); Object.assign(w.github, { mergeMovesBase: true, labelListLag: 50 });
+  w.issue(17); await w.tick(); w.advance(10 * MIN);            // #17 starts first (claim order)
+  w.issue(18); await w.tick();
+  const a = w.build(17), b = w.build(18); await w.tick();
+  w.review(18, 'PASS'); w.suite(18, 0); await w.tick();         // #18 turns green first and takes the lane
+  assert.equal(jobFile(w, 18).lane?.state, 'final');
+  w.review(17, 'PASS'); w.suite(17, 0); await w.tick();         // the list still lags: #17 waits for #18
+  assert.equal(jobFile(w, 18).lane?.state, 'final', 'the holder keeps the final step'); assert.ok(laneLabel(b.pr), 'and its label');
+  assert.equal(jobFile(w, 17).lane?.state, 'waiting'); assert.equal(jobFile(w, 17).lane?.holder, b.pr.number); assert.ok(!laneLabel(a.pr));
+  assert.deepEqual(w.github.merges, [], 'no merge while the list does not show the label');
+  w.github.listCatchUp(); w.github.labelListLag = 0;
+  const ticks = await ticksToMerge(w, [17, 18]);
+  assert.deepEqual(w.github.merges, [b.pr.number, a.pr.number], `the holder merges first, then the waiter (${ticks} ticks)`);
+  // Another machine: the list shows the label of a HIGHER PR of machine B, but not the lower final holder's own label.
+  // The holder keeps its place and its label and does not merge; when the list shows both, it merges.
+  const m = await coreWorld(t, { settings: { runs: 1 } }); Object.assign(m.github, { mergeMovesBase: true, labelListLag: 50 });
+  m.issue(17); m.issue(18); await m.tick();
+  const n = await m.peer({ settings: { runs: 1 } }); await n.tick();
+  const pa = m.build(17), pb = n.build(18); await m.tick(); await n.tick();
+  m.review(17, 'PASS'); m.suite(17, 0); await m.tick();          // machine A: final step, the list lags its label
+  assert.equal(jobFile(m, 17).lane?.state, 'final');
+  pb.pr.labels.push('pdd:merge-lane');                         // the list shows the label of B's higher PR
+  m.advance(10 * MIN); await m.tick();
+  assert.equal(jobFile(m, 17).lane?.state, 'final', 'a higher holder of another machine does not make the final holder yield');
+  assert.ok(laneLabel(pa.pr) && laneLabel(pb.pr)); assert.deepEqual(m.github.merges, [], 'no merge while the list does not show the label');
+  assert.ok(!m.github.writes.some(([method, route]) => method === 'DELETE' && route.startsWith(`/issues/${pa.pr.number}/labels/`)), 'the label is never dropped');
+  m.github.listCatchUp(); m.advance(10 * MIN); await m.tick();
+  assert.deepEqual(m.github.merges, [pa.pr.number], 'the lowest holder merges when the list shows both labels');
+});
+
 // ---- Review 9 regressions (each failed on 5c8b7426c) -----------------------------------------------------------
 const { proseSha256 } = await import('../src/runtime-preflight.mjs');
 const block9 = json => `<details><summary>Runtime interface</summary>\n\n\`\`\`json\n${json}\n\`\`\`\n</details>\n`;
@@ -3416,8 +3448,11 @@ test('Y8 (T01) "Runtime: PASS" counts only when the saved checks cover the chang
   ({ w, pr } = await setup({ body: 'Runtime: PASS', evidence: async () => ({ stories: [{ story: 'user_stories/package-repository.md', pass: true, current: true }], storyFiles: stories, footprints: { 'user_stories/package-repository.md': ['prompts/package.prompt.md', 'user_stories/package-repository.md'] } }) }));
   assert.equal(w.job(17, 'repair'), undefined); w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
   assert.deepEqual(w.github.merges, [pr.number]);
-  // 5. "Runtime: not run (reason)" needs no coverage.
-  ({ w, pr } = await setup({ body: 'Runtime: not run (prompts/package.prompt.md is native-only)', evidence: async () => assert.fail('no coverage read for a not-run line') }));
+  // 5. "Runtime: not run (reason)" needs no coverage; its saved rows are read (#3227 fix 1), and with none and no pass at
+  // the merge base it merges.
+  ({ w, pr } = await setup({ body: 'Runtime: not run (prompts/package.prompt.md is native-only)', evidence: async () => ({ stories: [], storyFiles: stories, footprints: {} }) }));
+  assert.equal(w.job(17, 'repair'), undefined, w.job(17, 'repair')?.input);
+  assert.deepEqual(w.evidenceReads.map(input => input.base === true), [false, true], 'the head rows, then the merge base rows');
   w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
   assert.deepEqual(w.github.merges, [pr.number]);
 });

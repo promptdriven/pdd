@@ -132,15 +132,15 @@ test('E06 (MF5, Codex 1) the reader compares the saved checks with a clean check
 const HARBOR = fileURLToPath(new URL('./fixtures/harbor/', import.meta.url));
 const harbor = (extra = {}) => ({ ...Object.fromEntries(['prompts/place_order.prompt.md', 'user_stories/place-order.md', 'tests/place-order.json', 'user_stories/unknown-item.md', 'tests/unknown-item.json']
   .map(path => [path, readFileSync(join(HARBOR, path), 'utf8')])), ...extra });
-async function pddTest(t, w, cwd, words) {
+async function pddTest(t, w, cwd, words, { state: verdict = 'passed', checks: given, refusals = [], exit = 0 } = {}) {
   const state = join(w.dir, 'runtime-state'), home = join(w.dir, 'runtime-home'); mkdirSync(home, { recursive: true });
-  const checks = JSON.parse(readFileSync(join(HARBOR, 'tests/place-order.json'), 'utf8')).steps[0].checks.map(check => ({ ...check, expected: check.value, actual: check.value, passed: true }));
+  const checks = given ?? JSON.parse(readFileSync(join(HARBOR, 'tests/place-order.json'), 'utf8')).steps[0].checks.map(check => ({ ...check, expected: check.value, actual: check.value, passed: true }));
   const fake = await fakeRuntime(t, (entry, server) => {
     if (entry.command === 'lint') return { status: 200, json: server.lint(entry.request.requestId) };
-    return { status: 200, json: server.check(entry.request?.requestId ?? entry.url.split('/').at(-1), 'passed', checks) };
+    return { status: 200, json: server.check(entry.request?.requestId ?? entry.url.split('/').at(-1), verdict, checks, refusals) };
   });
   const { ports } = portsFor({ HOME: home, PATH: process.env.PATH, PDD_STATE_DIR: state, PDD_RUNTIME_URL: fake.origin }, { now: Date.now, sleep: ms => new Promise(done => setTimeout(done, ms)) });
-  assert.equal(await runtime.runCheck({ words, options: { '--json': true }, cwd }, ports), 0, ports.stderr.text + ports.stdout.text);
+  assert.equal(await runtime.runCheck({ words, options: { '--json': true }, cwd }, ports), exit, ports.stderr.text + ports.stdout.text);
   return { ...process.env, PDD_STATE_DIR: state };
 }
 const PLACE_STORY = 'user_stories/place-order.md';
@@ -1059,4 +1059,262 @@ test('E55 (#3227) one Runtime line per changed Story: Story first; different ver
   assert.match(w.job(17, 'repair')?.input ?? '', /a Runtime line that is not PASS or "not run": "Runtime: user_stories\/package-repository\.md FAIL \(batch b1\)"/);
   ({ w, pr } = await world(`Runtime: PASS (${STORY}, 19/19 checks)\nRuntime: not run (${other}: native-only prompt)`, evidence));
   assert.equal(w.job(17, 'repair'), undefined, w.job(17, 'repair')?.input);
+});
+
+// ---- #3227 fix 4: partial results are not dropped --------------------------------------------------------
+test('E56 (#3227 fix 4) failingTests reads TAP at any depth (with the location) and spec lines, each name once', async () => {
+  const { failingTests } = await import('../src/autopilot-core.mjs');
+  const log = ["TAP version 13", "    not ok 1 - inner case", "      ---", "      location: '/w/test/a.test.mjs:3:1'", "      ...",
+    "not ok 1 - outer suite", "  ---", "  location: '/w/test/a.test.mjs:1:1'", "ok 2 - fine", "  ✖ spec failure (12.5ms)", "not ok 3 - inner case", "# fail 2"].join('\n');
+  assert.deepEqual(failingTests(log), [{ name: 'inner case', file: '/w/test/a.test.mjs' }, { name: 'outer suite', file: '/w/test/a.test.mjs' }, { name: 'spec failure', file: null }]);
+  assert.equal(failingTests(Array.from({ length: 40 }, (_, i) => `not ok ${i} - t${i}`).join('\n')).length, 20);
+});
+
+test('E57 (#3227 fix 4) a red waits for the running replay run; the repair brief gets its reds and the failed tests of the running suite', async t => {
+  // A review FAIL while the suite and the replay still run.
+  const w2 = await coreWorld(t, { settings: { runs: 1 } });
+  seed(w2, { 'test/a.vectors.test.mjs': nodeTest('a') }); w2.issue(17); await w2.tick();
+  writeIn(w2.job(17, 'build').cwd, 'test/a.vectors.test.mjs', nodeTest('a2'));
+  const line = 'Evidence: runtime=not-run; vectors=pass (1/1); formal=not-applicable; tests=pass (3/3)';
+  w2.build(17, { body: `Fixes #17.\n\n${NOT_RUN}\n${line}`, result: { promptChanged: false, evidence: line } }); await w2.tick();
+  appendFileSync(w2.job(17, 'suite').log, "not ok 12 - parser keeps the old flag\n  ---\n  location: '/w/test/parse.test.mjs:9:1'\n");
+  w2.review(17, 'FAIL', ['P2 src/x.js:1 the flag is gone']); await w2.tick();
+  assert.equal(w2.job(17, 'repair'), undefined, 'the red waits for the replay run');
+  w2.vectorsRun(17, { tests: 1, fail: 1, failed: [{ name: 'a2', file: 'test/a.vectors.test.mjs' }] }); await w2.tick();
+  const input = w2.job(17, 'repair')?.input ?? '';
+  assert.match(input, /Review FAIL from a fresh reviewer: P2 src\/x\.js:1 the flag is gone/);
+  assert.match(input, /Autopilot ran the replay tests that this change touches \(test\/a\.vectors\.test\.mjs\) at head [0-9a-f]{7}: 1 of 1 failed: a2/);
+  assert.match(input, /The full test suite \(still running at head [0-9a-f]{7}\) already shows failed tests: parser keeps the old flag \(parse\.test\.mjs\)\./);
+});
+
+test('E58 (#3227 fix 4) a red suite names its failed tests', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); await w.tick();
+  w.build(17, { body: `Fixes #17.\n\n${NOT_RUN}`, result: { promptChanged: false } }); await w.tick();
+  appendFileSync(w.job(17, 'suite').log, "not ok 7 - N3: merged former draft PR1\n  ---\n  location: '/w/test/draft.vectors.test.mjs:40:3'\n# fail 1\n");
+  w.review(17, 'PASS'); w.suite(17, 1); await w.tick();
+  assert.match(w.job(17, 'repair')?.input ?? '', /The full test suite failed for head [0-9a-f]{7} \(exit 1\): N3: merged former draft PR1 \(draft\.vectors\.test\.mjs\)\./);
+});
+
+// ---- #3227 fix 3: one engine record per head ---------------------------------------------------------------
+test('E59 (#3227 fix 3) the engine writes one evidence record per head; the reviewer gets it; the note and the PR block come from it; it stays after the merge', async t => {
+  const { w, pr, head } = await t04World(t, { base: { 'test/a.vectors.test.mjs': nodeTest('a') }, change: { 'test/a.vectors.test.mjs': nodeTest('a2') }, evidence: 'vectors=pass (1/1); formal=not-applicable' });
+  const file = join(w.root, 'logs', `17-evidence-${head}.json`);
+  assert.ok(existsSync(file), 'the record of this head');
+  assert.match(w.job(17, 'review').input, new RegExp(`Autopilot's evidence record of this head \\(written by the engine; the PR's Runtime and Evidence lines are claims that it checks\\): ${file.replaceAll('/', '\\/').replaceAll('.', '\\.')}`));
+  w.vectorsRun(17, { tests: 1 }); await w.tick(); await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number]);
+  const record = JSON.parse(readFileSync(file, 'utf8'));
+  assert.equal(record.schema, 'pdd.core-evidence.v1'); assert.equal(record.head, head);
+  assert.deepEqual(record.vectors.kinds.vectors.files.map(f => [f.file, f.state, f.pass, f.tests]), [['test/a.vectors.test.mjs', 'pass', 1, 1]]);
+  assert.equal(record.suite.state, 'pass'); assert.equal(record.review.state, 'pass');
+  assert.equal(record.claimed.vectors.state, 'pass'); assert.equal(record.evidence.vectors.state, 'pass');
+  assert.match(mergeNote(pr), new RegExp(`- Evidence record: 17-evidence-${head}\\.json on this machine`));
+  // The PR body has one engine block; it never reads as a Runtime or Evidence line, so the claims stay the agent's.
+  const body = w.github.prs.get(pr.number).body;
+  assert.match(body, /<!-- pdd:autopilot-core:evidence:start -->\n### Autopilot evidence for head [0-9a-f]{7}\n\n- Saved pdd test checks of this source:[\s\S]*- Record: 17-evidence-[0-9a-f]{40}\.json on this machine\n<!-- pdd:autopilot-core:evidence:end -->/);
+  const block = body.slice(body.indexOf('<!-- pdd:autopilot-core:evidence:start -->'));
+  assert.doesNotMatch(block, /^\s*(?:-\s*)?(?:runtime|evidence|path)\s*:/im);
+  assert.ok(existsSync(file), 'the record stays after the merge (worktrees and job files go)');
+});
+
+// ---- #3227 fix 1: every Runtime line, "not run" too, is checked against the saved rows ------------------------
+const notRun = line => BODY.replace('Runtime: PASS', line);
+test('E60 (#3227 fix 1, case 4) a "not run" line is checked too: failed checks in a no-verdict batch are red; a service-only row is not', async t => {
+  const row = { story: STORY, pass: false, current: true, at: 1000, sent: true, failed: 2, failedSteps: ['format-10', 'zibi'], states: ['unknown'], codes: ['graph-provider-failure'] };
+  for (const line of ['Runtime: not run (the AI provider failed during step 20; no verdict)', `Runtime: not run (${STORY}: the AI provider failed during step 20)`]) {
+    const { w } = await t01World(t, async () => ({ stories: [row], storyFiles: STORIES, footprints: { [STORY]: [PROMPT] } }), { body: notRun(line) });
+    assert.match(w.job(17, 'repair')?.input ?? '', /The latest saved pdd test check of user_stories\/package-repository\.md at head [0-9a-f]{7} has 2 failed checks \(steps: format-10, zibi\)\. A failed check is a FAIL, also when the batch has no verdict/, line);
+    assert.deepEqual(w.github.merges, []);
+  }
+  // No verdict, no failed check, no refusal (an AI provider failure): not red here, and no merge base read.
+  const { w, pr } = await t01World(t, async () => ({ stories: [{ ...row, failed: 0, failedSteps: [] }], storyFiles: STORIES, footprints: { [STORY]: [PROMPT] } }), { body: notRun('Runtime: not run (the AI provider failed; no verdict)') });
+  assert.equal(w.job(17, 'repair'), undefined, w.job(17, 'repair')?.input);
+  assert.ok(!w.evidenceReads.some(input => input.base));
+  await finishChecks(w); await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number]);
+});
+
+const ADVICE = "Warning: tests/package-repository.json scenario-integer-out-of-range: steps[0].input.seconds is 4250129834582680692326400, outside the PDD interpreter's integer range -9007199254740991 through 9007199254740991, so the interpreter refuses this test before execution (0 AI calls). If the parameter takes a Number, write its exact Number spelling 4.2501298345826807e+24; the interpreter accepts it.";
+test('E61 (#3227 fix 1, case 6) a refusal that pdd can fix is red once, with the fix that pdd printed, and only while a repair is left', async t => {
+  const row = { story: STORY, pass: false, current: true, at: 1000, sent: false, result: 'not sent', tests: ['tests/package-repository.json'], refusals: ['scenario-integer-out-of-range'], states: ['refused'], advice: [ADVICE] };
+  const { w, pr, head } = await t01World(t, async () => ({ stories: [row], storyFiles: STORIES, footprints: { [STORY]: [PROMPT] } }), { body: notRun('Runtime: not run (refused before execution with zero AI calls)') });
+  assert.match(w.job(17, 'repair')?.input ?? '', /The saved pdd test check of user_stories\/package-repository\.md at head [0-9a-f]{7} was refused before execution \(scenario-integer-out-of-range\)\. pdd printed the fix: Warning: .*write its exact Number spelling 4\.2501298345826807e\+24; the interpreter accepts it\. Apply the fix that pdd prints and run pdd test again at this head\./);
+  // The merge base had no pass of the Story, so the refusal alone is red only once: the repair keeps it, and the PR goes on.
+  assert.equal(w.build(17, { role: 'repair', write: false }).head, head);
+  await w.tick(); await finishChecks(w); await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number]);
+  assert.equal(w.started.filter(job => job.issue === 17 && job.role === 'repair').length, 1);
+  // No repair left: no red for it at all.
+  const n = await coreWorld(t, { settings: { runs: 1, repairs: 0 } });
+  seed(n, { [PROMPT]: '# Package\n\nRead the package name.\n', [STORY]: '# Package repository\n\nThe package names its repository.\n' });
+  n.issue(17); await n.tick();
+  writeIn(n.job(17, 'build').cwd, STORY, '# Package repository\n\nThe package names its repository URL.\n');
+  n.runtimeEvidence = async () => ({ stories: [row], storyFiles: STORIES, footprints: {} });
+  n.build(17, { body: `Fixes #17.\n\nRuntime: not run (refused before execution)\nPath: d — ${STORY}, change-17.txt — unowned — no contract change — Test: done check` });
+  await n.tick();
+  assert.equal(n.job(17, 'repair'), undefined, n.job(17, 'repair')?.input);
+  assert.doesNotMatch(endComments(n, 17).join('\n'), /pdd printed the fix/);
+});
+
+test('E62 (#3227 fix 1, case 6) Runtime coverage must not go down: a Story that passed at the merge base is red when it is refused or unchecked here', async t => {
+  const T = 'tests/package-repository.json';
+  const port = rows => async input => input.base
+    ? { stories: [{ story: STORY, pass: true, current: true, at: 500, tests: [T] }, { story: 'user_stories/format-percent.md', pass: true, current: true, at: 500 }], storyFiles: [], tests: [] }
+    : { stories: rows, storyFiles: STORIES, footprints: { [STORY]: [PROMPT] } };
+  const refused = { story: STORY, pass: false, current: true, at: 2000, sent: true, tests: [T], refusals: ['scenario-integer-out-of-range'], states: ['refused'], advice: [] };
+  for (const [rows, why] of [[[refused], 'a check that was refused before execution \\(scenario-integer-out-of-range\\)'], [[], 'no saved pdd test check at this source'],
+    [[{ ...refused, refusals: [], states: ['refused'] }], 'a check that was refused before execution']]) {
+    const { w, head } = await t01World(t, port(rows), { body: notRun('Runtime: not run (refused before execution)') });
+    const input = w.job(17, 'repair')?.input ?? '';
+    assert.match(input, new RegExp(`Runtime coverage went down: user_stories/package-repository\\.md had a passing pdd test check at the merge base [0-9a-f]{7}, but at head [0-9a-f]{7} it has ${why}\\. A PR must not lose a Runtime pass: make the check of user_stories/package-repository\\.md pass again at this head\\.`), input);
+    assert.doesNotMatch(input, /format-percent\.md had a passing/, 'an unchanged Story never counts');
+    const fork = w.evidenceReads.find(read => read.base);
+    assert.equal(w.git(fork.tree, 'rev-parse', 'HEAD'), w.git(w.job(17, 'build').cwd, 'merge-base', 'origin/main', 'HEAD'), 'a clean checkout of the merge base');
+    assert.equal(fork.head, w.git(fork.tree, 'rev-parse', 'HEAD'));
+    const record = JSON.parse(readFileSync(join(w.root, 'logs', `17-evidence-${head}.json`), 'utf8'));
+    assert.deepEqual(record.runtime.coverage.base.passing, [STORY, 'user_stories/format-percent.md'].sort());
+    assert.deepEqual(w.github.merges, []);
+  }
+  // A service-only row (interrupted for maintenance, never sent): not red; the engine sends it again (B5).
+  const { w, pr } = await t01World(t, port([{ story: STORY, pass: false, current: true, at: 2000, sent: false, tests: [T], refusals: [], states: ['not_run'], codes: ['interrupted'] }]), { body: notRun('Runtime: not run (maintenance until 08:52 UTC)') });
+  assert.equal(w.job(17, 'repair'), undefined, w.job(17, 'repair')?.input);
+  await finishChecks(w); await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number]);
+  // A PASS later at the same source covers the Story: no drop.
+  const later = await t01World(t, port([{ ...refused, at: 1000 }, { story: STORY, pass: true, current: true, at: 3000, sent: true, tests: [T] }]), { body: notRun('Runtime: not run (refused before execution)') });
+  assert.equal(later.w.job(17, 'repair'), undefined, later.w.job(17, 'repair')?.input);
+});
+
+test('E63 (#3227 fix 1, real saved checks) failed checks in a no-verdict answer are red; a refusal shows the fix that pdd printed; a pass at the merge base in another folder must not go down', async t => {
+  const place = JSON.parse(readFileSync(join(HARBOR, 'tests/place-order.json'), 'utf8'));
+  const body = `Fixes #17.\n\nRuntime: not run (no verdict)\nPath: d — tests/place-order.json, ${PLACE_STORY}, change-17.txt — unowned — no contract change — Test: done check`;
+  // 1. Case 4: the answer has no verdict, but one check failed.
+  let w = await coreWorld(t, { settings: { runs: 1 } });
+  seed(w, harbor()); w.issue(17); await w.tick();
+  let cwd = w.job(17, 'build').cwd;
+  writeIn(cwd, PLACE_STORY, placeStory(' Pickup is at the counter.'));
+  w.git(cwd, 'add', '.'); w.git(cwd, 'commit', '-qm', 'story');
+  const checks = place.steps[0].checks.map((check, i) => ({ ...check, expected: check.value, actual: i ? check.value : 800, passed: i > 0 }));
+  let env = await pddTest(t, w, cwd, ['place-order'], { state: 'unknown', checks, exit: 3 });
+  w.build(17, { body, write: false, add: false });
+  await w.tick({ runtimeEvidence: undefined, env });
+  assert.match(w.job(17, 'repair')?.input ?? '', /The latest saved pdd test check of user_stories\/place-order\.md at head [0-9a-f]{7} has 1 failed check \(steps: sam-orders-espressos-and-a-muffin\)/);
+  assert.deepEqual(w.github.merges, []);
+  // 2. Case 6: the base passed in another folder of this machine; the PR writes a whole number above 2^53 as plain digits.
+  w = await coreWorld(t, { settings: { runs: 1 } });
+  seed(w, harbor());
+  const other = join(w.dir, 'base-clone'); w.git(w.dir, 'clone', '-q', w.remote, other);
+  await pddTest(t, w, other, ['place-order']);
+  w.issue(17); await w.tick();
+  cwd = w.job(17, 'build').cwd;
+  // The expected total, not an input (the prompt's input schema allows 1 to 20 items, and pdd refuses that locally).
+  writeIn(cwd, 'tests/place-order.json', JSON.stringify(place, null, 2).replace('"value": 900', '"value": 4250129834582680692326400') + '\n');
+  w.git(cwd, 'add', '.'); w.git(cwd, 'commit', '-qm', 'big quantity');
+  env = await pddTest(t, w, cwd, ['place-order'], { state: 'refused', checks: [], refusals: [{ code: 'scenario-integer-out-of-range', reason: 'A whole number is outside the integer range.' }], exit: 4 });
+  w.build(17, { body, write: false, add: false });
+  await w.tick({ runtimeEvidence: undefined, env });
+  const input = w.job(17, 'repair')?.input ?? '';
+  assert.match(input, /was refused before execution \(scenario-integer-out-of-range\)\. pdd printed the fix: Warning: tests\/place-order\.json scenario-integer-out-of-range: steps\[0\]\.checks\[0\]\.value is 4250129834582680692326400, .*write its exact Number spelling 4\.2501298345826807e\+24/, input);
+  assert.match(input, /Runtime coverage went down: user_stories\/place-order\.md had a passing pdd test check at the merge base [0-9a-f]{7}, but at head [0-9a-f]{7} it has a check that was refused before execution \(scenario-integer-out-of-range\)/, input);
+  assert.deepEqual(w.github.merges, []);
+});
+
+test('E64 (#3227 fix 1) the saved-check reader: anyRoot reads the batches of other folders, limit reads the newest only, and each row tells sent, failed checks and refusals', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  seed(w, harbor());
+  const first = join(w.dir, 'first'), second = join(w.dir, 'second');
+  w.git(w.dir, 'clone', '-q', w.remote, first); w.git(w.dir, 'clone', '-q', w.remote, second);
+  const place = JSON.parse(readFileSync(join(HARBOR, 'tests/place-order.json'), 'utf8'));
+  const checks = place.steps[0].checks.map((check, i) => ({ ...check, expected: check.value, actual: i ? check.value : 800, passed: i > 0 }));
+  await pddTest(t, w, first, ['place-order'], { state: 'unknown', checks, exit: 3 });
+  await new Promise(done => setTimeout(done, 1100));                // batch folders sort by their time
+  const env = await pddTest(t, w, second, ['place-order']);
+  const read = options => runtime.savedStoryEvidence({ root: second, comparisonRoot: second, withTests: true, ...options }, { env });
+  const own = await read({});
+  assert.deepEqual(own.stories.map(row => [row.pass, row.current, row.sent, row.failed, row.refusals]), [[true, true, true, 0, []]]);
+  const all = await read({ anyRoot: true });
+  assert.deepEqual(all.stories.map(row => [row.pass, row.current, row.sent, row.failed, row.failedSteps]), [[false, true, true, 1, ['sam-orders-espressos-and-a-muffin']], [true, true, true, 0, []]]);
+  assert.deepEqual((await read({ anyRoot: true, limit: 1 })).stories.map(row => row.pass), [true]);
+  assert.deepEqual((await runtime.savedStoryEvidence({ root: second, comparisonRoot: second }, { env })).stories.map(row => Object.keys(row).sort()), [['at', 'current', 'pass', 'result', 'story']], 'without withTests the rows stay as before');
+});
+
+// ---- #3227 fix 2: replay files that import a changed module, and the control -----------------------------------
+const MODULE = 'src/duration.mjs', REPLAY = 'test/duration.vectors.test.mjs';
+const replayOf = (name, want = 1) => `import test from 'node:test';\nimport assert from 'node:assert';\nimport { seconds } from '../src/duration.mjs';\ntest(${JSON.stringify(name)}, () => { assert.equal(seconds(60), ${want}); });\n`;
+async function fix2World(t, { base, change, evidence = 'vectors=not-run; formal=not-applicable', path = 'e' }) {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  seed(w, base);
+  w.issue(17); await w.tick();
+  const cwd = w.job(17, 'build').cwd;
+  for (const [file, text] of Object.entries(change)) writeIn(cwd, file, text);
+  const line = `Evidence: runtime=not-run; ${evidence}; tests=pass (3/3)`, code = Object.keys(change).filter(file => file.startsWith('src/'));
+  const { pr, head } = w.build(17, { body: `Fixes #17.\n\n${NOT_RUN}\n${line}\nPath: ${path} — ${code.join(', ')} — unowned — no contract change — Test: ${REPLAY}`, result: { promptChanged: false, evidence: line, adopt: path === 'e' ? code : [] } });
+  await w.tick(); w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
+  return { w, pr, head, cwd };
+}
+test('E65 (#3227 fix 2, case 2) a replay file that imports a changed module runs too: a failure is red, and no claim counts it', async t => {
+  const base = { [MODULE]: 'export const seconds = n => n / 60;\n', [REPLAY]: replayOf('N3'), 'test/other.vectors.test.mjs': "import test from 'node:test';\n// duration.mjs is named in a comment only\ntest('x', () => {});\n" };
+  let { w, pr } = await fix2World(t, { base, change: { [MODULE]: 'export const seconds = n => n / 30;\n' } });
+  const job = w.job(17, 'vectors');
+  assert.deepEqual(w.replayFiles(job).map(f => f.kind), ['linked'], 'only the importing file, and no control (no vectors or formal file of the change)');
+  assert.ok(job.args.at(-3).includes(`/${REPLAY}'`));
+  w.vectorsRun(17, { linked: { tests: 1, fail: 1, failed: [{ name: 'N3', file: REPLAY }] } }); await w.tick();
+  assert.match(w.job(17, 'repair')?.input ?? '', /Autopilot ran the replay tests that import a changed module \(test\/duration\.vectors\.test\.mjs\) at head [0-9a-f]{7}: 1 of 1 failed: N3 \(duration\.vectors\.test\.mjs\)\./);
+  assert.deepEqual(w.github.merges, []);
+  // A pass merges: the agent's vectors=not-run stays fine (no claim counts these files), and the note shows the run.
+  ({ w, pr } = await fix2World(t, { base, change: { [MODULE]: 'export const seconds = n => n / 60 + 0;\n' } }));
+  w.vectorsRun(17, {}); await w.tick(); await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number]);
+  assert.match(mergeNote(pr), /- Replay tests that import a changed module \(Autopilot's run at [0-9a-f]{7}\): pass \(1\/1\): test\/duration\.vectors\.test\.mjs pass \(1\/1\)/);
+});
+
+test('E66 (#3227 fix 2, case 3) the control runs the changed tests on the merge-base code: a failure there shows the change; a pass there is asked once', async t => {
+  const base = { [MODULE]: 'export const seconds = n => n / 30;\n' };
+  const change = { [MODULE]: 'export const seconds = n => n / 60;\n', [REPLAY]: replayOf('60 s is 1 min'), 'src/new-helper.mjs': 'export const x = 1;\n' };
+  const claim = 'vectors=pass (1/1); formal=not-applicable';
+  // 1. The control fails on the merge-base code: the tests show the change; the PR merges with the note line.
+  let { w, pr } = await fix2World(t, { base, change, evidence: claim });
+  const job = w.job(17, 'vectors'), command = job.args.at(-3), control = join(w.root, 'worktrees', '17-control');
+  assert.deepEqual(w.replayFiles(job).map(f => f.kind), ['vectors', 'control-vectors']);
+  assert.ok(command.includes(`'${control}/${REPLAY}'`), command);
+  assert.equal(readFileSync(join(control, MODULE), 'utf8'), base[MODULE], 'the changed code file has its merge-base content');
+  assert.ok(!existsSync(join(control, 'src/new-helper.mjs')), 'a code file that the merge base does not have is removed');
+  assert.equal(readFileSync(join(control, REPLAY), 'utf8'), change[REPLAY], "the tests are the head's");
+  w.vectorsRun(17, { tests: 1, control: { 'control-vectors': { tests: 1, fail: 1, failed: [{ name: '60 s is 1 min', file: REPLAY }] } } }); await w.tick(); await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number]);
+  assert.match(mergeNote(pr), /- Control \(the same tests on the merge-base code of src\/duration\.mjs, src\/new-helper\.mjs, merge base [0-9a-f]{7}\): 1 of 1 failed \(the tests show the change\)/);
+  // 2. The control passes too: asked once; the repair keeps it; then the PR merges and the note says so.
+  ({ w, pr } = await fix2World(t, { base, change, evidence: claim }));
+  w.vectorsRun(17, { tests: 1 }); await w.tick();
+  assert.match(w.job(17, 'repair')?.input ?? '', /Autopilot ran the replay and formal tests of this change \(test\/duration\.vectors\.test\.mjs\) on the merge-base code of the changed code files \(src\/duration\.mjs, src\/new-helper\.mjs, merge base [0-9a-f]{7}\): all 1 pass there too, so they do not show the change\. Add a test that fails on the merge-base code and passes at this head\./);
+  w.build(17, { role: 'repair', write: false }); await w.tick(); w.review(17, 'PASS'); w.suite(17, 0); w.vectorsRun(17, { tests: 1 }); await w.tick(); await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number]);
+  assert.match(mergeNote(pr), /- Control \(.*\): all 1 passed \(the tests do not show the change\)/);
+  // 3. Path b (the contract stays): a pass on the base is expected, so no question.
+  ({ w, pr } = await fix2World(t, { base, change, path: 'b', evidence: claim }));
+  w.vectorsRun(17, { tests: 1 }); await w.tick(); await w.tick();
+  assert.equal(w.job(17, 'repair'), undefined, w.job(17, 'repair')?.input);
+  assert.deepEqual(w.github.merges, [pr.number]);
+});
+
+test('E67 (#3227 fix 2, real command) the control checkout runs the head tests on the merge-base code and links the installed dependencies', async t => {
+  const base = { [MODULE]: 'export const seconds = n => n / 30;\n' };
+  const change = { [MODULE]: 'export const seconds = n => n / 60;\n', [REPLAY]: replayOf('60 s is 1 min') };
+  const { w, pr } = await fix2World(t, { base, change, evidence: 'vectors=pass (1/1); formal=not-applicable' });
+  const job = w.job(17, 'vectors');
+  mkdirSync(join(job.cwd, 'node_modules'), { recursive: true });        // what the queue's npm ci leaves in the run checkout
+  const run = await new Promise(done => {
+    const child = spawn('/bin/bash', ['-c', job.args.at(-3)], { cwd: job.cwd, detached: true, env: { PATH: process.env.PATH, HOME: process.env.HOME, CI: 'true', LANG: 'C' } });
+    let out = '';
+    child.stdout.on('data', chunk => { out += chunk; }); child.stderr.on('data', chunk => { out += chunk; });
+    const timer = setTimeout(() => { try { process.kill(-child.pid, 'SIGKILL'); } catch {} }, 90_000);
+    child.on('close', status => { clearTimeout(timer); done({ status, out }); });
+  });
+  assert.ok(statSync(join(w.root, 'worktrees', '17-control', 'node_modules')).isDirectory(), 'the control checkout links the dependencies');
+  appendFileSync(job.log, run.out);
+  w.finish(17, 'vectors', { code: run.status }); await w.tick(); await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number], w.job(17, 'repair')?.input);
+  assert.match(mergeNote(pr), /- Replay tests \(Autopilot's run at [0-9a-f]{7}\): pass \(1\/1\)/);
+  assert.match(mergeNote(pr), /- Control \(the same tests on the merge-base code of src\/duration\.mjs, merge base [0-9a-f]{7}\): 1 of 1 failed \(the tests show the change\)/);
 });
