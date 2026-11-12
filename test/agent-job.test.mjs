@@ -253,14 +253,18 @@ test('a vanished wrapper keeps a valid saved manifest; missing or invalid manife
 test('an active 0.1.28 wrapper can be snapshotted after upgrade, but an exited one needs a core-validated legacy scan', async t => {
   const dir = folder(t), token = join(dir, 'legacy.spec.json'), caller = { pid: process.pid, ppid: 1, pgid: process.pid, rss: 1, start: '@caller', args: 'node test' };
   writeFileSync(token, JSON.stringify({ command: 'node', args: [], cwd: dir, input: join(dir, 'legacy.input'), log: join(dir, 'legacy.log'), exit: join(dir, 'legacy.exit.json') }));
-  let live = true;
+  let wrapperLive = true, childLive = true;
   const wrapper = { pid: 7001, ppid: 1, pgid: 7001, rss: 1, start: '@legacy-wrapper', args: `node wrapper ${token}` };
   const child = { pid: 7002, ppid: 7001, pgid: 7002, rss: 1, start: '@legacy-child', args: 'node legacy agent' };
-  const rows = () => live ? [caller, wrapper, child] : [caller], job = { pid: wrapper.pid, token, log: join(dir, 'legacy.log'), exit: join(dir, 'legacy.exit.json'), result: join(dir, 'legacy.result.json') };
+  const rows = () => [caller, ...(wrapperLive ? [wrapper] : []), ...(childLive ? [child] : [])], job = { pid: wrapper.pid, token, log: join(dir, 'legacy.log'), exit: join(dir, 'legacy.exit.json'), result: join(dir, 'legacy.result.json') };
   const saved = snapshotAgentJob(job, { list: rows });
   assert.deepEqual(saved.map(row => row.pid), [7001, 7002]);
   assert.equal(JSON.parse(readFileSync(token, 'utf8')).custodyRoot, undefined, 'the old spec is not upgraded by guessing a root');
-  const signals = [], proof = await cleanupAgentJob(job, { alive: () => false, list: rows, kill: (pid, signal) => { signals.push([pid, signal]); if (signal === 'SIGTERM') live = false; }, sleep: async () => {}, grace: 1, poll: 1 });
+  const signals = [], proof = await cleanupAgentJob(job, { alive: () => false, list: rows, kill: (pid, signal) => {
+    signals.push([pid, signal]);
+    if (signal === 'SIGTERM' && pid === wrapper.pid) wrapperLive = false;
+    if (signal === 'SIGTERM' && pid === child.pid) childLive = false;
+  }, sleep: async () => {}, grace: 1, poll: 1 });
   assert.equal(proof.confirmed, true, 'the post-upgrade snapshot supplies stable identities for the live old wrapper');
   assert.deepEqual(signals.map(([pid]) => pid).sort(), [7001, 7002]);
 
@@ -529,9 +533,14 @@ test('a cwd-read failure keeps only a same-identity live process in custody', { 
 });
 
 test('a persistent source cwd is not custody without an explicit disposable root', async t => {
-  const dir = folder(t);
-  const job = startAgentJob({ id: 'source-cwd', dir, cwd: process.cwd(), command: process.execPath, args: ['-e', 'process.exit(0)'], input: '', env: { PATH: process.env.PATH } });
+  const dir = folder(t); let wrapper;
+  const job = startAgentJob({ id: 'source-cwd', dir, cwd: process.cwd(), command: process.execPath, args: ['-e', 'process.exit(0)'], input: '', env: { PATH: process.env.PATH } }, {
+    spawn: (...args) => { wrapper = spawn(...args); return wrapper; }
+  });
   await until(() => existsSync(job.exit));
+  // The wrapper writes its exit file before process.exit. Observe its direct child
+  // completion before asking cleanup to prove that no owned process remains.
+  await until(() => wrapper && (wrapper.exitCode !== null || wrapper.signalCode !== null));
   assert.equal(JSON.parse(readFileSync(job.token, 'utf8')).custodyRoot, undefined);
   assert.equal(existsSync(`${job.token}.processes.error`), false);
   assert.equal((await cleanupAgentJob(job)).confirmed, true);

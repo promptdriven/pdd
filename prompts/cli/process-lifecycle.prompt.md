@@ -16,9 +16,12 @@ parent pid, once each. Its non-enumerable `incomplete` flag is true when its bou
 walk cannot cover the tree. A malformed or incomplete inventory is never evidence that
 a process has ended.
 
-`terminateCaptured(captured, ports)` first re-reads the inventory. It sends TERM
-only to captured rows that still have the same identity, waits through the supplied
-grace period, and sends KILL only to survivors with that same identity. It returns
+`terminateCaptured(captured, ports)` first re-reads the inventory. Before each
+TERM and again before each KILL, it reads the inventory and checks that target's
+PID, start identity and command still match the captured row. It sends no signal
+to a missing, reused or changed identity. An unavailable, malformed or incomplete
+inventory or a changed same-PID/start process stays uncertain. It waits through
+the supplied grace period between TERM and KILL. It returns
 `{confirmed, stopped, killed, remaining}`. `confirmed` is false when either
 inventory cannot be read or a captured process remains. A different process that
 reused a pid is treated as gone and is never signalled. `ports` supplies `list`,

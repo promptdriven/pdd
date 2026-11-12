@@ -3855,7 +3855,8 @@ test('legacy cleanup accepts only the exact core checkout and records its missin
   const build = w.job(17, 'build');
   w.finish(17, 'build');
   delete build.custodyRoot;
-  const saved = jobFile(w, 17); delete saved.agent.custodyRoot;
+  const saved = jobFile(w, 17); delete saved.agent.custodyRoot; delete saved.agent.issue; delete saved.agent.role;
+  assert.equal(Object.hasOwn(saved.agent, 'issue'), false); assert.equal(Object.hasOwn(saved.agent, 'role'), false);
   writeFileSync(join(w.root, 'jobs', '17.json'), JSON.stringify(saved));
   writeFileSync(build.token, JSON.stringify({ command: 'codex', args: [], cwd: build.cwd, input: build.input, log: build.log, exit: build.exit }));
   const { cleanupAgentJob } = await import('../src/agent-job.mjs');
@@ -3872,6 +3873,7 @@ test('legacy cleanup accepts only the exact core checkout and records its missin
   assert.equal(jobFile(w, 17), null, 'a clear bounded legacy scan permits normal final cleanup');
   assert.equal(existsSync(build.cwd), false);
   const history = readFileSync(join(w.root, 'history.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line)).at(-1);
+  assert.equal(history.legacyCleanup[0].role, 'build');
   assert.ok(typeof history.legacyCleanup[0].limitation === 'string' && history.legacyCleanup[0].limitation.trim());
   assert.ok(warnings.some(message => typeof message === 'string' && message.trim()));
 });
@@ -3882,7 +3884,7 @@ test('legacy cleanup omits an unproven age boundary and retains unreadable proce
   const build = w.job(17, 'build');
   w.finish(17, 'build');
   delete build.custodyRoot;
-  const saved = jobFile(w, 17); delete saved.started; delete saved.agent.custodyRoot;
+  const saved = jobFile(w, 17); delete saved.started; delete saved.agent.custodyRoot; delete saved.agent.issue; delete saved.agent.role;
   writeFileSync(join(w.root, 'jobs', '17.json'), JSON.stringify(saved));
   writeFileSync(build.token, JSON.stringify({ command: 'codex', args: [], cwd: build.cwd, input: build.input, log: build.log, exit: build.exit }));
   const { cleanupAgentJob } = await import('../src/agent-job.mjs');

@@ -807,17 +807,19 @@ const hash8 = text => createHash('sha256').update(text).digest('hex').slice(0, 1
 const AGO = ms => ms >= HOUR ? `${Math.floor(ms / HOUR)} h ${Math.round(ms % HOUR / MIN)} min` : `${Math.round(ms / MIN)} min`;
 const LEGACY_WORKTREE_ROLES = new Set(['build', 'repair', 'conflict', 'runtime']);
 const LEGACY_CHECKOUT_ROLES = new Set(['review', 'suite', 'vectors']);
-function legacyCustodyRoot(ctx, job, part) {
-  if (!Number.isSafeInteger(job?.issue) || part?.issue !== job.issue || !Number.isSafeInteger(part.pid) || part.pid < 1
-      || ![...LEGACY_WORKTREE_ROLES, ...LEGACY_CHECKOUT_ROLES].includes(part.role)
+function legacyCustodyRoot(ctx, job, part, role) {
+  const issue = job?.issue;
+  if (!Number.isSafeInteger(issue) || part?.issue !== undefined && part.issue !== issue
+      || part?.role !== undefined && part.role !== role || !Number.isSafeInteger(part?.pid) || part.pid < 1
+      || ![...LEGACY_WORKTREE_ROLES, ...LEGACY_CHECKOUT_ROLES].includes(role)
       || typeof part.id !== 'string' || typeof part.token !== 'string' || typeof part.exit !== 'string' || typeof part.log !== 'string') return null;
   const id = basename(part.token).replace(/\.spec\.json$/, ''), logs = resolve(ctx.dirs.logs), worktrees = resolve(ctx.dirs.worktrees);
-  if (id !== part.id || !id.startsWith(`${job.issue}-${part.role}-`) || resolve(dirname(part.token)) !== logs) return null;
-  const expected = LEGACY_WORKTREE_ROLES.has(part.role) ? job.worktree
-    : part.role === 'review' ? join(ctx.dirs.worktrees, `${job.issue}-review`)
-      : part.role === 'suite' ? job.suite?.cwd ?? join(ctx.dirs.worktrees, `${job.issue}-suite`)
-        : job.vectors?.cwd ?? join(ctx.dirs.worktrees, `${job.issue}-vectors`);
-  const expectedName = LEGACY_WORKTREE_ROLES.has(part.role) ? String(job.issue) : `${job.issue}-${part.role}`;
+  if (id !== part.id || !id.startsWith(`${issue}-${role}-`) || resolve(dirname(part.token)) !== logs) return null;
+  const expected = LEGACY_WORKTREE_ROLES.has(role) ? job.worktree
+    : role === 'review' ? join(ctx.dirs.worktrees, `${issue}-review`)
+      : role === 'suite' ? job.suite?.cwd ?? join(ctx.dirs.worktrees, `${issue}-suite`)
+        : job.vectors?.cwd ?? join(ctx.dirs.worktrees, `${issue}-vectors`);
+  const expectedName = LEGACY_WORKTREE_ROLES.has(role) ? String(issue) : `${issue}-${role}`;
   if (typeof expected !== 'string' || basename(expected) !== expectedName || resolve(expected) !== resolve(join(ctx.dirs.worktrees, expectedName))) return null;
   const spec = readJson(ctx.fs, part.token, null);
   if (!object(spec) || Object.prototype.hasOwnProperty.call(spec, 'custodyRoot') || resolve(spec.cwd ?? '') !== resolve(expected)
@@ -828,20 +830,20 @@ function legacyCustodyRoot(ctx, job, part) {
     return root;
   } catch { return null; }
 }
-async function cleanupPart(ctx, job, part) {
+async function cleanupPart(ctx, job, part, role) {
   if (!part || !ctx.jobs.cleanup) return false;
   try {
     ctx.saveJob(job);
-    const root = legacyCustodyRoot(ctx, job, part), options = root ? { legacyCustodyRoot: root,
+    const root = legacyCustodyRoot(ctx, job, part, role), options = root ? { legacyCustodyRoot: root,
       ...(Number.isFinite(job.started) ? { legacyCustodyBoundary: job.started } : {}) } : null;
     const result = options ? await ctx.jobs.cleanup(part, options) : await ctx.jobs.cleanup(part);
     if (result?.legacy) {
       job.legacyCleanup ??= [];
       if (!job.legacyCleanup.some(row => row.id === part.id)) {
-        job.legacyCleanup.push({ id: part.id, role: part.role, limitation: result.legacy });
+        job.legacyCleanup.push({ id: part.id, role, limitation: result.legacy });
         ctx.saveJob(job);
       }
-      ctx.warn(`Autopilot core cleanup of #${job.issue} (${part.role}): ${result.legacy}`);
+      ctx.warn(`Autopilot core cleanup of #${job.issue} (${role}): ${result.legacy}`);
     }
     return result?.confirmed === true;
   } catch { return false; }
@@ -897,7 +899,7 @@ async function watchProcess(ctx, job, part, role, cwd = null) {
     try { await (ctx.ports.alert ?? (async () => {}))({ issue: job.issue, ...a }); } catch (error) { ctx.warn(`Autopilot core alert failed: ${error.message}`); }
   };
   if (age >= limit) {
-    if (!await cleanupPart(ctx, job, part)) return { state: 'cleanup' };
+    if (!await cleanupPart(ctx, job, part, role)) return { state: 'cleanup' };
     w.stopped = 'backstop';
     const longest = longestSuccess(ctx, role), text = `the ${label} ran ${Math.round(limit / HOUR)} h (its limit: the larger of autopilot.maxJobHours and 4 times the longest successful ${role} here${longest ? `, ${AGO(longest)}` : ''}) with no result`;
     if (cwd) try {
@@ -915,7 +917,7 @@ async function watchProcess(ctx, job, part, role, cwd = null) {
       tried: `It still makes new things (last: ${w.last ?? 'none'}, ${AGO(now - w.at)} ago).`, need: `This job goes on (it stops at ${Math.round(limit / HOUR)} h). To stop it, remove pdd:working or add pdd:stuck.` });
   }
   if (now - w.at >= ctx.quiet) {
-    if (!await cleanupPart(ctx, job, part)) return { state: 'cleanup' };
+    if (!await cleanupPart(ctx, job, part, role)) return { state: 'cleanup' };
     w.stopped = 'quiet'; ctx.saveJob(job); return { state: 'quiet' };
   }
   ctx.saveJob(job);
@@ -1277,7 +1279,7 @@ async function ciState(ctx, head, job) {
 }
 async function reviewState(ctx, job, prBody = '') {
   if (!job.review || job.review.head !== job.head || job.review.retry || !job.review.agent && !job.review.verdict) {
-    if (job.review?.agent && !await cleanupPart(ctx, job, job.review.agent)) return { state: 'running' };
+    if (job.review?.agent && !await cleanupPart(ctx, job, job.review.agent, 'review')) return { state: 'running' };
     // A scoped check (debate B R2) is a short review of one part; a fresh review reads the whole PR.
     const cwd = await checkout(ctx, job, 'review'), scoped = job.review?.head === job.head ? job.review.scoped : null;
     const linked = scoped ? '(none)' : await linkedIssues(ctx, job, prBody, await changedFiles(ctx, job, job.head));
@@ -1432,7 +1434,7 @@ async function suiteState(ctx, job) {
     job.suite = { head: job.head, cwd, restarts, deaths, quiets, agent: startJob(ctx, job, 'suite', cwd, '', command, { CI: 'true' }) }; ctx.saveJob(job); return { state: 'running' };
   };
   const replace = async (cwdOf, restarts = 0, deaths = 0, quiets = 0) => {
-    if (job.suite?.agent && !await cleanupPart(ctx, job, job.suite.agent)) return { state: 'running' };
+    if (job.suite?.agent && !await cleanupPart(ctx, job, job.suite.agent, 'suite')) return { state: 'running' };
     return start(await cwdOf(), restarts, deaths, quiets);
   };
   if (!job.suite || job.suite.head !== job.head) return replace(() => checkout(ctx, job, 'suite'));
@@ -1843,7 +1845,7 @@ async function vectorsState(ctx, job) {
   // A new head, or a record of an older build, starts again. Its running predecessor stays saved until cleanup proves
   // that its captured process tree is gone; otherwise the next tick retries the same record.
   if (!job.vectors || job.vectors.head !== job.head || job.vectors.schema !== 4) {
-    if (job.vectors?.agent && !await cleanupPart(ctx, job, job.vectors.agent)) return job.vectors;
+    if (job.vectors?.agent && !await cleanupPart(ctx, job, job.vectors.agent, 'vectors')) return job.vectors;
     const files = await evidenceFiles(ctx, job);
     if (!HEAD_KINDS.some(kind => files[kind].length)) return save({ head: job.head, files, skipped: [], state: 'none' });
     const cwd = await checkout(ctx, job, 'vectors'), { run, skipped } = replayPlan(ctx, cwd, files), count = HEAD_KINDS.reduce((n, kind) => n + run[kind].length, 0);
@@ -1880,7 +1882,7 @@ async function vectorsState(ctx, job) {
     : log.runner ? 'a runner failure of the suite queue' : lost.length ? `no result for ${someFiles(lost)} (exit ${seen.exit?.code ?? 'unknown'})` : null;
   if (why) {
     if ((job.vectors.restarts ?? 0) < 2) {
-      if (!stopped && !await cleanupPart(ctx, job, job.vectors.agent)) return job.vectors;
+      if (!stopped && !await cleanupPart(ctx, job, job.vectors.agent, 'vectors')) return job.vectors;
       return start(job.vectors, (job.vectors.restarts ?? 0) + 1);
     }
     return save({ ...job.vectors, state: 'not-run', reason: `the run gave no result (${why}, 3 tries); log ${basename(job.vectors.agent.log)} on this machine` });
@@ -2037,8 +2039,9 @@ async function writeEvidenceBlock(ctx, job) {
 }
 
 async function stopChecks(ctx, job) {
-  const parts = [job.agent, job.review?.agent, job.suite?.agent, job.vectors?.agent, job.runtimeWait?.agent].filter(Boolean);
-  for (const part of parts) if (!await cleanupPart(ctx, job, part)) return false;
+  const parts = [[job.agent, job.role], [job.review?.agent, 'review'], [job.suite?.agent, 'suite'],
+    [job.vectors?.agent, 'vectors'], [job.runtimeWait?.agent, 'runtime']].filter(([part]) => Boolean(part));
+  for (const [part, role] of parts) if (!await cleanupPart(ctx, job, part, role)) return false;
   return true;
 }
 

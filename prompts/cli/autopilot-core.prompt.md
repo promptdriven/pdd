@@ -552,6 +552,11 @@ the exact disposable checkout proved by the saved issue, role, spec cwd and this
 machine's core worktrees directory. Pass the saved outer core job start as the legacy
 custody boundary only when it is a finite epoch-millisecond value; it predates every
 part spawn. Otherwise omit the boundary, and keep unreadable processes uncertain.
+Read the issue from the enclosing core job and the role from its authoritative slot:
+`job.agent` uses the saved `job.role`; review, suite, vector and Runtime parts use
+their named slots. Older agent-job part records do not contain duplicate issue or
+role fields. If the enclosing issue or slot role is missing or inconsistent with the
+part ID, do not infer it from cwd or scan another checkout.
 Require the exit record, a complete process table
 that proves the old wrapper is gone, and complete cwd and old process-group scans.
 Keep any found process by identity and retry; never signal it from this legacy scan.
