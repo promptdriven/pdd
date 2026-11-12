@@ -2,15 +2,6 @@
 
 Own `src/workflow-runner.mjs`. It runs a workflow for one GitHub issue as a few area chats. pdd has four jobs: start, gates, PR and status. The agent does the work. For an automatic fresh area chat, arm the one-shot [worker completion bridge](workflow-worker-completion.prompt.md) after its identity is saved and launch confirmed. The bridge waits for native worker completion and coordinator availability; it does not impose a workflow timeout. After saving a supported current automatic resume, arm the same bridge with its new resume anchor and require fresh activity evidence before completion. Arm a confirmed current automatic `--new` replacement with its saved fresh pane identity, and treat a resumed replacement as a resume. Reused-pane recovery needs fresh activity evidence and is not armed as a fresh turn. pdd does not run tests automatically or merge. The explicit local [old-code proof](workflow-prove.prompt.md) command and shared full-suite queue are the bounded supplied-command execution exceptions; this runner never executes a command from notes or evidence.
 
-## Native admission lock
-
-Native module function `acquireRunLock(runDir, filename = 'chat-replacement.lock')`
-uses the existing PID and token lock format and returns an own-token release
-callback. A live or uncertain owner or an acquisition failure gives `run_busy`;
-reclaim only a proven-dead owner. This native interface selection has no required
-context outside this section. The queue loads only this selection, so it does
-not depend on the runner's execution policy.
-
 ## Full-suite execution and status
 
 Expose module function `runSuite({cwd, command, timeout, env}, ports)` for the
