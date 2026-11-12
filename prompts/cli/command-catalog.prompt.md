@@ -5,7 +5,7 @@ The `pdd test --files` usage form also accepts optional `--json` for its manifes
 
 The public command catalog also includes `pdd autopilot off`, `pdd autopilot observe`, `pdd autopilot auto`, `pdd autopilot trust <name>...`, and `pdd autopilot untrust <name>`. Expose these forms in help and completion; reject missing or extra operands through the existing parser contract.
 
-Own `src/command-catalog.mjs`; export only `PUBLIC_COMMAND_ROUTES`, `PUBLIC_COMMAND_IDS`, `PUBLIC_COMMAND_MANIFEST`, `NAMES` ([Names](#names)), `PUBLIC_HELP_TEXT` ([Help text](#help-text)) and `BUNDLED_WORKFLOW_NAMES` (feature, bug, small-change, product). Catalog the complete small alpha surface: root help, --version, completion bash|zsh, workflow list [--json] and setup (`pdd setup [--yes]`, local `setup`, no operands, optional flag `--yes` selecting safe defaults without questions; its help says that it installs the PDD skills for Codex and Claude if they are missing, adds the short PDD block to CLAUDE.md, else AGENTS.md, and that repeat setup keeps an existing Autopilot mode). Each route has stable id, exact prefix, local disposition, operand/option specs and plain help forms. Expose no excluded command, private schema/type, service flag or hosted execution operation. Help, parser and completion share this one authority.
+Own `src/command-catalog.mjs`; export only `PUBLIC_COMMAND_ROUTES`, `PUBLIC_COMMAND_IDS`, `PUBLIC_COMMAND_MANIFEST`, `NAMES` ([Names](#names)), `PUBLIC_HELP_TEXT` ([Help text](#help-text)) and `BUNDLED_WORKFLOW_NAMES` (feature, bug, small-change, product). Catalog the complete small alpha surface: root help, --version (also -V), -VV, completion bash|zsh, workflow list [--json] and setup (`pdd setup [--yes]`, local `setup`, no operands, optional flag `--yes` selecting safe defaults without questions; its help says that it installs the PDD skills for Codex and Claude if they are missing, adds the short PDD block to CLAUDE.md, else AGENTS.md, and that repeat setup keeps an existing Autopilot mode). Each route has stable id, exact prefix, local disposition, operand/option specs and plain help forms. Expose no excluded command, private schema/type, service flag or hosted execution operation. Help, parser and completion share this one authority.
 
 Catalog `dependencies prepare` (local `dependencies-prepare`, optional text `--issue`), `dependencies complete` (local `dependencies-complete`, text `--input`), and `workflow yield` (local `workflow-yield`, run reference). Show their forms `pdd dependencies prepare [--issue N]`, `pdd dependencies complete --input -`, and `pdd workflow yield N`.
 
@@ -221,6 +221,8 @@ The ordered help-form list consists of the lines below in their displayed order,
   pdd help  Show local commands.
   pdd help prompting  Show how to write prompts, Stories and tests, and where the guide is.
   pdd --version  Show this package version.
+  pdd -V  Show this package version.
+  pdd -VV  Show this package version, interpreter build and supported formats; unavailable metadata is unknown.
   pdd completion bash|zsh  Print local shell completion.
   pdd workflow list [--json]  List the bundled workflows with their areas and gates.
   pdd test [PATH|STORY...] [--lf] [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]  Check stories on the PDD interpreter with your gh login: reuses unchanged passing Stories from .pdd/cache/test/; --lf selects previous failures in scope or uses the normal selection when none match, --cache-clear clears the cache and sends the selected Stories again (the interpreter may reuse saved answers); sends selected PATH or STORY dependencies (every Story when you name none), waits for every check (no default limit in any shell; --timeout MIN sets the limit) with a progress line every 30 s, then prints one table with report links. Defaults to 12 calls per step, at least 18 and at most 1000; --max-calls accepts 1 to 1000.
@@ -326,6 +328,14 @@ Catalog `autopilot.audit` with prefix `autopilot audit`, local `autopilot-audit`
 required text operands RUN and PR, no options. Form: `pdd autopilot audit RUN PR`.
 Description: Audit an automatic merge once with a fresh agent and save its verdict.
 
+## Automatic base check route
+
+Catalog `autopilot.check-base` with prefix `autopilot check-base`, local
+`autopilot-check-base`, required text operands RUN and PR, and no options. Form:
+`pdd autopilot check-base RUN PR`. Description: Check the saved automatic base,
+PR target, current default branch and newest release before a merge or after it.
+This command reads only.
+
 ## Finished chat maintenance
 
 Include public local route `workflow.tidy`, prefix `workflow tidy`, no operands, optional flag `--dry-run`, and help form `pdd workflow tidy [--dry-run]`. It closes safely finished chats or reports eligible tabs without changes.
@@ -351,6 +361,16 @@ The test route accepts flag `--explain-bindings` and publishes the form
 `pdd test --explain-bindings [STORY...] [--json]`. Its description states that it
 explains local edge and fixture selection before any paid call. Runtime-client
 owns mode compatibility and execution.
+
+## Version flags
+
+The version route retains id `version`, prefix `--version` and local `version`.
+Add its quiet alias `-V`, with no notice or additional options. Register separate
+id `version.detailed`, prefix `-VV`, local `version-detailed`, no operands or
+options. Both are exact single tokens, not repeatable or clustered flags.
+Preserve ordinary local help behavior; a help request never reads metadata.
+Do not interpret `-V -V`, `-VVV`, `--version --verbose`, extra operands or mixed
+version flags as detailed version. Existing parser refusal policy applies.
 
 ## Dependencies
 

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { expandSource } from '../src/contract-refs.mjs';
 
-for (const name of ['shared-records','shared-seed']) test(`VECTOR ${name}: immutable Runtime cases through expandSource`, async t => {
+for (const name of ['shared-records','shared-seed','empty-seed']) test(`VECTOR ${name}: immutable Runtime cases through expandSource`, async t => {
   const scenario = JSON.parse(readFileSync(new URL(`runtime/${name}.json`, import.meta.url), 'utf8'));
   const world = structuredClone(scenario.initial_world);
   for (const step of scenario.steps) await t.test(step.step_id, () => {

@@ -44,10 +44,10 @@ async function baseWorld(t, changes = {}) {
     else assert.fail(`Unexpected fake read: ${path}`);
     return {code:0,stdout:JSON.stringify(value),stderr:''};
   };
-  // The merge guard that the core engine calls (checkAutopilotBase) with the saved run, through the same fake reads.
   f.check = async (pr='23') => {
-    const out=await checkAutopilotBase({run:f.record(),pr},{execFile:async(file,args,opts)=>{const result=await execute(file,args,opts);return {code:result.code ?? 0,stdout:result.stdout ?? '',stderr:result.stderr ?? ''};}});
-    return {code:out.exitCode,text:out.message,stdout:out.exitCode===0?out.message:'',stderr:out.exitCode===0?'':out.message};
+    const stdout=capture(),stderr=capture();
+    const code=await runPdd(['autopilot','check-base','17',pr],{cwd:f.source,stdout,stderr,env:f.ports.env,autopilotLauncherPorts:{...f.ports,run:async(file,args,opts)=>{const result=await execute(file,args,opts);return {code:result.code ?? 0,stdout:result.stdout ?? '',stderr:result.stderr ?? ''};}}});
+    return {code,text:stdout.text+stderr.text,stdout:stdout.text,stderr:stderr.text};
   };
   return {...f,world,calls,run};
 }

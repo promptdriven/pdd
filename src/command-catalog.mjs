@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: efe8b884a1b0f08fcd1fbc45abc51cbf9aa3291340244a574f003f01f05fbd83).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 2ff43cfb08074810bc5217ead8646db82afd56f17ec7a89676ba7064bc17b2ce).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -30,6 +30,8 @@ const routes = [
     forms: [form('pdd autopilot start [--runs N] [--checks N] [--label NAME] [--mode auto|observe|off] [--report file|draft|off] [--decisions ask|decide] [--intake off|shadow] [--share PERCENT]', 'Start this repo with headless agent jobs (the core engine): check now and every 10 minutes, with no AI call on empty ticks. Autopilot works only on issues with an opt-in label: --label NAME (for example pdd:autopilot) or autopilot.label in pdd.json; a start with no label starts nothing. --runs and --checks override machine-sized run and heavy-check limits; --label, --mode and --report save this machine\'s opt-in label, mode and report mode for this repo, over pdd.json (--mode observe runs every check but never merges; --report draft, the default, keeps problem reports on this machine); --decisions saves this machine\'s decision mode (ask asks a person only for a big decision; decide, the default, never asks); --intake saves this machine\'s intake mode (shadow writes local intake cards that never change what starts; off is the default). --share saves the percent of this machine\'s CPU and memory that Autopilot may use (1-100, default 50; it sets the automatic slots, the room check and the timer\'s memory limit). A machine that ran the removed full engine moves to the core engine at its next tick.')] },
   { id: 'autopilot.audit', prefix: ['autopilot', 'audit'], local: 'autopilot-audit', operands: [{name:'run',type:'text'},{name:'pr',type:'text'}], options: [],
     forms: [form('pdd autopilot audit RUN PR', 'Audit an automatic merge once with a fresh agent and save its verdict.')] },
+  { id: 'autopilot.check-base', prefix: ['autopilot', 'check-base'], local: 'autopilot-check-base', operands: [{name:'run',type:'text'},{name:'pr',type:'text'}], options: [],
+    forms: [form('pdd autopilot check-base RUN PR', 'Check the saved automatic base, PR target, current default branch and newest release before a merge or after it. This command reads only.')] },
   { id: 'autopilot.stop', prefix: ['autopilot', 'stop'], local: 'autopilot-stop', operands: [], options: [],
     forms: [form('pdd autopilot stop', "Stop this machine's timer; let the current agent step finish.")] },
   { id: 'autopilot.status', prefix: ['autopilot', 'status'], local: 'autopilot-status', operands: [], options: [{name:'--all',kind:'flag'},{name:'--json',kind:'flag'}],
@@ -117,8 +119,10 @@ const routes = [
     form('pdd', 'Show local commands.'), form('pdd --help', 'Show local commands.'),
     form('pdd -h', 'Show local commands.'), form('pdd help', 'Show local commands.'),
     form('pdd help prompting', 'Show how to write prompts, Stories and tests, and where the guide is.') ] },
-  { id: 'version', prefix: ['--version'], local: 'version', operands: [], options: [],
-    forms: [form('pdd --version', 'Show this package version.')] },
+  { id: 'version', prefix: ['--version'], quiet: ['-V'], local: 'version', operands: [], options: [],
+    forms: [form('pdd --version', 'Show this package version.'), form('pdd -V', 'Show this package version.')] },
+  { id: 'version.detailed', prefix: ['-VV'], local: 'version-detailed', operands: [], options: [],
+    forms: [form('pdd -VV', 'Show this package version and the interpreter build and supported formats; unknown when unavailable. Uses existing gh sign-in, with no AI call.')] },
   { id: 'completion', prefix: ['completion'], local: 'completion', operands: [{ name: 'shell', type: 'choice:bash,zsh' }], options: [],
     forms: [form('pdd completion bash|zsh', 'Print local shell completion.')] },
   { id: 'workflow.list', prefix: ['workflow', 'list'], local: 'workflow-list', operands: [], options: [{ name: '--json', kind: 'flag' }],

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 51390697f3cf4f533322dce621cae95fe2c5964507c00d25840ca1bddee59a46).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 4e1b2fc947542314c15b25d1c0feb81a1acbe2369ee9ab65be9e2eb3be1f2655).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
@@ -4003,7 +4003,7 @@ async function stopByName(context, cwd, words, origin) {
   const { ports } = context, root = repoRoot(cwd), store = stateFor(ports.env, root), repoState = store.repo(root);
   const entries = Object.entries(repoState.tries ?? {}), word = words[0]?.replace(/^\.\//, '');
   const names = entries.map(([path, record]) => record.story ?? basename(path, '.json')).join(', ') || 'none';
-  const hits = word === undefined ? entries : entries.filter(([path, record]) => [record.story, path, basename(path, '.json')].includes(word));
+  const hits = word === undefined ? entries : entries.filter(([path, record]) => [record.storyPath, record.story, path, basename(path, '.json')].includes(word));
   if (hits.length !== 1) {
     throw new Stop(2, word !== undefined ? `No open Try for "${cleanText(word)}". Open Try links: ${names}.`
       : entries.length ? `Name the Try to stop. Open Try links: ${names}.` : 'No open Try in this repository.');

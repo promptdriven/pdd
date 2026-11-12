@@ -76,7 +76,7 @@ The block of Harbor Coffee's `place_order` (schemas cut):
   current prompt check must pass; pdd records `automatic-check-pass` evidence.
   Strict mode still requires a person. New behavior requires a person.
 - Every schema follows section 3. List every error that the prose can return in `errors`.
-- Do not write `prose_sha256`: `pdd test --fill-hash` fills it.
+- Include `"prose_sha256": ""` in the Runtime interface; let `pdd test --fill-hash` calculate its value instead of calculating the hash manually.
 - Show the gate. Judge the person's later reply in any chat. A question, change request or earlier message is not approval. No exact phrase is needed. Never invent a decision or edit approval fields. See [Record a chat approval](https://github.com/promptdriven/pdd/blob/main/docs/cli.md#record-a-chat-approval). In a normal workflow run (not strict mode, not Autopilot), the Story gate shows pdd's Story card: show it as printed, then ask, never a bare "approve?". The person approves each Story with that context. With the approval they may choose the code PR after PR 1 (`--through code`); without it, pdd stops after PR 1. For several runs, show the cards one after another and record one answer for each card.
 - After actual approval, record the exact words for the ready gate and all its drafts:
 

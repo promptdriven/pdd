@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: ac47273e0fa517855f16da98c3be3e2b89d08086ccb500914de8c39039950f28).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 28d035c7774f772f56cf145141180c39d493f63ccd53af9b9b25c814f254aa08).
 import {runAutopilotDoctor, resolveAutopilotAgent} from './autopilot-doctor.mjs';
 import {releaseRunClaim, cancelRun, acquireRunLock} from './workflow-runner.mjs';
 import { releaseCheckCapacity } from './test-suite-queue.mjs';
@@ -20,7 +20,7 @@ import { samePath } from './workflow-herdr-layout.mjs';
 import { alertStatusLine, runAutopilotAlerts } from './autopilot-alerts.mjs';
 import { countGithubCalls, githubBudget, githubBudgetSettings, githubEtagCache, githubFullLastPage, githubLedger, githubMachineEntries, githubReply, githubStateRoot, githubUsage } from './github-calls.mjs';
 import { costReport, costStatusLines } from './cost-ledger.mjs';
-import { selectAutopilotBase } from './autopilot-base.mjs';
+import { selectAutopilotBase, checkAutopilotBase } from './autopilot-base.mjs';
 import { readCoreSettings, tickCore, coreStatus, busySlots } from './autopilot-core.mjs';
 import { readMachineGuard, timerPriority, validShare } from './machine-guard.mjs';
 import { listReportDrafts, sendReportDraft } from './autopilot-reports.mjs';
@@ -650,6 +650,12 @@ export async function runAutopilotLauncher(input, ports = {}) {
       if(found.error) return bad(found.error);
       state.repo=found.run.repo;
       return auditMerge({run:found.run,pr:issues[1]},{...ports,env:p.env,execFile:(file,args,options)=>p.execute(file,args,{...options,purpose:'audit'})});
+    }
+    if (command === 'check-base') {
+      const found = await resolveRun(issues[0], { cwd: input.cwd }, { ...ports, env: p.env, execFile: async (file, args, options) => ({ stdout: await p.checked(file, args, options) }) });
+      if (found.error) return bad(found.error);
+      state.repo = found.run.repo;
+      return checkAutopilotBase({ run: found.run, pr: issues[1] }, { execFile: (file, args, options) => p.execute(file, args, options) });
     }
     if (command === 'status' && input.json) return ok(JSON.stringify(await localCosts(input, ports), null, 2));
     if (command === 'status' && input.all) {

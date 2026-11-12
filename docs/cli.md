@@ -2,7 +2,7 @@
 
 This page lists every command of pdd 0.1.28, as `pdd --help` shows it. A test (`test/docs-commands.test.mjs`) checks that each command form of the help is on this page.
 
-You need the pdd command only for runs with PRs, for `pdd test`, `pdd lint`, `pdd simulate` and `pdd approve`. Install the skills with `npx skills add promptdriven/pdd` (add `-g` for all your projects), and set up a repo with the `pdd-setup` skill in your agent. For simulations that your agent drives, use the Try tools in `pdd mcp`. Then use a PDD skill: `pdd-feature`, `pdd-bug`, `pdd-small-change` or `pdd-prompting`. Call a skill with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code (or ask for it by name). See [Install](USAGE.md#2-install).
+You need the pdd command only for runs with PRs, for `pdd test`, `pdd lint`, `pdd simulate` and `pdd approve`. Install the skills with `npx skills add promptdriven/pdd` (add `-g` for all your projects), and set up a repo with the `pdd-setup` skill in your agent. For simulations that your agent drives, use the Try tools in `pdd mcp`. Then use a PDD skill: `pdd-feature`, `pdd-bug`, `pdd-small-change`, `pdd-product` or `pdd-prompting`. Call a skill with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code (or ask for it by name). See [Install](USAGE.md#2-install).
 
 Typing `pdd check` or `pdd try` runs nothing and prints the name of the command to use.
 
@@ -12,7 +12,7 @@ Typing `pdd check` or `pdd try` runs nothing and prints the name of the command 
 |---|---|
 | `pdd setup [--yes]` | Check for a ready agent, install the seven [PDD skills](USAGE.md#4-the-pdd-skills) when they are missing, and say where. Then add or update the short PDD block (7 lines, between `<!-- pdd:start -->` and `<!-- pdd:end -->`) in `CLAUDE.md` of this folder, else in `AGENTS.md`. If neither exists, make `AGENTS.md`. In a Git repository, add the line `.pdd/` at the end of the root `.gitignore` when no line there is `.pdd`, `.pdd/`, `/.pdd` or `/.pdd/`; `pdd test` keeps its local cache there. Setup only appends: all other bytes stay the same. When the last such line starts with `!`, or no such line exists but a `!` line names `.pdd` or a path in it (such as `!.pdd/config.json`), setup changes nothing and says so. Repeat setup keeps an existing Autopilot mode |
 
-`pdd setup` copies the skills to `~/.agents/skills` (Codex and Gemini) and `~/.claude/skills`, or `$CLAUDE_CONFIG_DIR/skills` when it is an absolute path (Claude Code). If `npx skills` already installed them, it copies nothing. When the skills it finds are older than this pdd, or differ from its skills, it says so and prints the command that updates them: `npx skills add promptdriven/pdd -g -a codex -a claude-code -y`, without `-g` for a copy in the project. After an update of the pdd command, it replaces an older or same-version differing copy with the `.pdd-skill.json` marker, including an invalid marker. It never touches a copy without the marker, or a symlink. When `pdd --version` or `pdd setup` reports older skills, it names each affected skill and its installed version, for example `pdd-feature is 0.1.20`. Run `pdd setup` to update copies installed by pdd in user folders. For copies from another installer, use the shown `npx skills add` command. No other pdd command copies skills. The `pdd-setup` skill does the same in a chat. Run it in the top folder of the repo.
+`pdd setup` copies the skills to `~/.agents/skills` (Codex and Gemini) and `~/.claude/skills`, or `$CLAUDE_CONFIG_DIR/skills` when it is an absolute path (Claude Code). If `npx skills` already installed them, it copies nothing. When the skills it finds are older than this pdd, or differ from its skills, it says so and prints the command that updates them: `npx skills add promptdriven/pdd -g -a codex -a claude-code -y`, without `-g` for a copy in the project. After an update of the pdd command, it replaces an older or same-version differing copy with the `.pdd-skill.json` marker, including an invalid marker. It never touches a copy without the marker, or a symlink. When `pdd --version` or `pdd setup` reports older skills, it names each affected skill and its installed version, for example `pdd-feature is 0.1.20`. Run `pdd setup` to update copies installed by pdd in user folders. For copies from another installer, use the shown `npx skills add` command. No other pdd command copies skills. The `pdd-setup` skill adds the project block and ignore rule in a chat; it installs nothing and does not register MCP tools. Run it in the top folder of the repo.
 
 Setup previews the exact MCP configuration changes for the Codex, Claude Code and Gemini agents it finds, then asks once (y/N). Only `y` writes those changes, including the approval setting for this Codex server. Registrations pin this running pdd executable, so another installation earlier on PATH cannot receive its tools. Other configuration is preserved. Codex uses `$CODEX_HOME/config.toml` (default `~/.codex/config.toml`) and the `mcp_servers.pdd` entry with `default_tools_approval_mode = "approve"`. Claude Code uses the `mcpServers.pdd` entry in its configuration; Gemini uses `mcpServers.pdd` in `~/.gemini/settings.json` with server trust. Each entry runs `pdd mcp`. A conflicting existing entry is preserved and reported.
 
@@ -700,8 +700,18 @@ The agent runs these from the run's worktree. pdd finds the run from that folder
 | `pdd`, `pdd --help`, `pdd -h`, `pdd help` | Show the commands and the full paths of the installed Prompting guide and RUNBOOK |
 | `pdd help prompting` | Show how to write a prompt, a Story and its test, which commands check them, and the full paths of the Prompting guide and RUNBOOK |
 | `pdd --version` | Print the version, `0.1.28`. When the PDD skills that your agent finds are older, also print the update command on stderr |
+| `pdd -V` | Same version and local diagnostics as `pdd --version` |
+| `pdd -VV` | Print the local CLI version, the interpreter's full build identifier and its supported interface, test and app-map format IDs. Use existing gh sign-in without prompting; unavailable metadata prints `PDD interpreter: unknown` and exits 0 |
 | `pdd completion bash\|zsh` | Print a shell completion script. It does not change your shell files |
 | `pdd jobs` | List active slots and waiting interpreter jobs on this machine, including kind, PID, age and request IDs. Local and read-only; no repository, authentication or interpreter call |
+
+`pdd -VV` skips PATH and skill diagnostics. It reads the existing token with a
+two-second limit, then sends at most one `GET /v1/version` to the configured
+interpreter origin. The request and response body have one ten-second limit.
+It follows no redirects, sends no source, starts no jobs and makes no AI calls.
+Format IDs keep the interpreter's order; an empty list shows `none`, and a
+missing or unsafe list shows `unknown`. Each version flag must be one exact
+token; repeated flags, extra operands and `--verbose` are unsupported.
 
 ## Run from a source checkout
 

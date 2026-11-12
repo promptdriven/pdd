@@ -1,0 +1,292 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/empty-seed.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Adding a first key to an empty seed produces valid JSON with that own key and its exact false, null or empty-string value."
+    },
+    {
+      "id": "AC2",
+      "text": "Keys `__proto__` and `constructor` remain ordinary own data, and the seed and surrounding scenario bytes stay unchanged."
+    }
+  ],
+  "initial_world": {
+    "files": {
+      "contracts/empty.json": {
+        "content": "{}",
+        "is_symlink": false
+      }
+    }
+  },
+  "simulation": {
+    "files.stat": {
+      "action": "blob.stat",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "exists": false,
+        "is_symlink": false,
+        "size": 0
+      },
+      "result_value_pointer": ""
+    },
+    "files.read": {
+      "action": "blob.read",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "content": ""
+      },
+      "result_value_pointer": "/content"
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "x-false",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "test/empty.json",
+        "text": " {\"initial_world\":{\"$seed\":\"contracts/empty.json\",\"set\":{\"/x\":false}},\"literal\":false} ",
+        "format": "scenario"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": " {\"initial_world\":{\"x\":false},\"literal\":false} "
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/files/contracts~1empty.json/content",
+          "op": "equals",
+          "value": "{}"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "x-null",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "test/empty.json",
+        "text": " {\"initial_world\":{\"$seed\":\"contracts/empty.json\",\"set\":{\"/x\":null}},\"literal\":false} ",
+        "format": "scenario"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": " {\"initial_world\":{\"x\":null},\"literal\":false} "
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/files/contracts~1empty.json/content",
+          "op": "equals",
+          "value": "{}"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "x-empty",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "test/empty.json",
+        "text": " {\"initial_world\":{\"$seed\":\"contracts/empty.json\",\"set\":{\"/x\":\"\"}},\"literal\":false} ",
+        "format": "scenario"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": " {\"initial_world\":{\"x\":\"\"},\"literal\":false} "
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/files/contracts~1empty.json/content",
+          "op": "equals",
+          "value": "{}"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "__proto__-false",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "test/empty.json",
+        "text": " {\"initial_world\":{\"$seed\":\"contracts/empty.json\",\"set\":{\"/__proto__\":false}},\"literal\":false} ",
+        "format": "scenario"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": " {\"initial_world\":{\"__proto__\":false},\"literal\":false} "
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/files/contracts~1empty.json/content",
+          "op": "equals",
+          "value": "{}"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "__proto__-null",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "test/empty.json",
+        "text": " {\"initial_world\":{\"$seed\":\"contracts/empty.json\",\"set\":{\"/__proto__\":null}},\"literal\":false} ",
+        "format": "scenario"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": " {\"initial_world\":{\"__proto__\":null},\"literal\":false} "
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/files/contracts~1empty.json/content",
+          "op": "equals",
+          "value": "{}"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "__proto__-empty",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "test/empty.json",
+        "text": " {\"initial_world\":{\"$seed\":\"contracts/empty.json\",\"set\":{\"/__proto__\":\"\"}},\"literal\":false} ",
+        "format": "scenario"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": " {\"initial_world\":{\"__proto__\":\"\"},\"literal\":false} "
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/files/contracts~1empty.json/content",
+          "op": "equals",
+          "value": "{}"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "constructor-false",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "test/empty.json",
+        "text": " {\"initial_world\":{\"$seed\":\"contracts/empty.json\",\"set\":{\"/constructor\":false}},\"literal\":false} ",
+        "format": "scenario"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": " {\"initial_world\":{\"constructor\":false},\"literal\":false} "
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/files/contracts~1empty.json/content",
+          "op": "equals",
+          "value": "{}"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "constructor-null",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "test/empty.json",
+        "text": " {\"initial_world\":{\"$seed\":\"contracts/empty.json\",\"set\":{\"/constructor\":null}},\"literal\":false} ",
+        "format": "scenario"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": " {\"initial_world\":{\"constructor\":null},\"literal\":false} "
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/files/contracts~1empty.json/content",
+          "op": "equals",
+          "value": "{}"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "constructor-empty",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "test/empty.json",
+        "text": " {\"initial_world\":{\"$seed\":\"contracts/empty.json\",\"set\":{\"/constructor\":\"\"}},\"literal\":false} ",
+        "format": "scenario"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": " {\"initial_world\":{\"constructor\":\"\"},\"literal\":false} "
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/files/contracts~1empty.json/content",
+          "op": "equals",
+          "value": "{}"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

@@ -8,7 +8,7 @@ and END. The launcher owns the machine state, the user timer, the tick lock, doc
 below, and the one-time [move from the removed full engine](#the-move-from-the-full-engine). It adds no approval,
 merge, quota-reset or interactive route of its own. Preserve existing setup, workflow and interpreter behavior.
 
-`runAutopilotLauncher` accepts command doctor, start, stop, status, add, release, report or intake, cwd, packageRoot,
+`runAutopilotLauncher` accepts command doctor, start, stop, status, add, release, report, intake or check-base, cwd, packageRoot,
 env, issues (argv operands), and optional runs, checks, engine, label, share, mode, report, decisions, intake, all and
 json. Return
 `{exitCode, message}`; the CLI owns streams. Outside programs, timer installation, clock and state I/O are injectable
@@ -227,6 +227,12 @@ returns its result unchanged.
 [audit owner](autopilot-audit.prompt.md) with that run and PR, through this launcher's counted process port (purpose
 `audit`), and returns its result. The core engine starts no audit by itself; #3182 plans to run it after core merges.
 
+**Check base** (`pdd autopilot check-base RUN PR`) resolves the saved run with `resolveRun`, then calls
+`checkAutopilotBase` of the [automatic base](autopilot-base.prompt.md) with the saved run and PR through this
+launcher's counted process port and its full reply (`{code, stdout, stderr}`), so a refused read names the tool's own
+error. It is read-only, does not require a running timer or agent, and supplies the pre-merge guard and post-merge
+base audit.
+
 **Report** lists the machine's local report drafts (`FINGERPRINT: title; seen N time(s), last TIME`, then `Send one with
 pdd autopilot report send FINGERPRINT.`, or `No local Autopilot report drafts.`); `report send FINGERPRINT` sends one
 through `sendReportDraft` of the [report owner](autopilot-reports.prompt.md) with the counted `gh` port. It needs no
@@ -261,7 +267,8 @@ the saved control revision, so a tick or start that read the old revision does n
   and the shared agent selection.
 - [Autopilot settings](autopilot.prompt.md): required native generation and verification context for read-only
   settings resolution and notices.
-- [Automatic base](autopilot-base.prompt.md): required native generation and verification context for base selection.
+- [Automatic base](autopilot-base.prompt.md): required native generation and verification context for base selection
+  and merge safety.
 - [Machine guard](machine-guard.prompt.md): required native generation and verification context for the core slots, the
   room and priority ports, the status machine line and the timer priority keys.
 - [Workflow runner](workflow-runner.prompt.md): required native generation and verification context for the admission

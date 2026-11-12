@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 6bc8899a294466088354dd35284f6170c7c6771565554836fea4d1184dda614f).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: d83c90fc616a21a3189f5580d388e04057372a9bad259b2019c4010ccc5263a2).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -8,7 +8,7 @@ import { renderCompletion } from './completion.mjs';
 import { NAMES, PUBLIC_COMMAND_MANIFEST, PUBLIC_COMMAND_ROUTES, PUBLIC_HELP_TEXT } from './command-catalog.mjs';
 import { listWorkflowAreas, formatWorkflowList } from './workflow-areas.mjs';
 import { ignorePddFolder, setupProject as defaultSetupProject } from './project-setup.mjs';
-import { findSkills, setupSkills as defaultSetupSkills } from './skills-install.mjs';
+import { findSkills as defaultFindSkills, setupSkills as defaultSetupSkills } from './skills-install.mjs';
 import { pathDiagnostic as defaultPathDiagnostic } from './path-diagnostic.mjs';
 import { checkWorkflowAgents } from './workflow-agents.mjs';
 import { setupMayAsk } from './setup-interaction.mjs';
@@ -16,6 +16,11 @@ import { setupWithWorkflowAgent } from './workflow-setup.mjs';
 import { causeText } from './runtime-output.mjs';
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+const defaultReadPackageVersion = ({ packageRoot }) => {
+  try { const { version } = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'));
+    return typeof version === 'string' && !!version ? { ok: true, version } : { ok: false, version: '' }; }
+  catch { return { ok: false, version: '' }; }
+};
 const line = (stream, text) => stream.write(`${text}\n`);
 // The real reason of an unexpected error, after the fixed safe line.
 const reason = error => { const text = causeText(error?.message ?? error); return text ? ` Reason: ${text}` : ''; };
@@ -77,7 +82,8 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
   cwd = process.cwd(), packageRoot = PACKAGE_ROOT, env = process.env, workflowRunner, workflowAreas,
   stdin = process.stdin, confirm, mcpServer, runtimeSlots, contracts, product, productPorts, gitContext, workflowProve, provePorts,
   autopilotRegressions, autopilotRegressionsPorts = {}, issueGraph, issueGraphPorts = {}, dependencyIntake, dependencyIntakePorts = {}, autopilotLauncher, autopilotLauncherPorts = {}, workflowAgents = { checkWorkflowAgents }, workflowAgentPorts = {}, setupSkills = defaultSetupSkills,
-  setupProject = defaultSetupProject, setupAgentMcp, autopilot, autopilotPorts = {}, autopilotAlerts, autopilotAlertsPorts = {}, autopilotGithub: autopilotGithubModule, autopilotGithubPorts = {}, pathDiagnostic = defaultPathDiagnostic } = {}) {
+  setupProject = defaultSetupProject, setupAgentMcp, autopilot, autopilotPorts = {}, autopilotAlerts, autopilotAlertsPorts = {}, autopilotGithub: autopilotGithubModule, autopilotGithubPorts = {}, pathDiagnostic = defaultPathDiagnostic,
+  readPackageVersion = defaultReadPackageVersion, findSkills = defaultFindSkills, interpreterVersion, interpreterVersionPorts = {} } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
@@ -118,7 +124,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         line(result.exitCode === 0 ? stdout : stderr, result.message); return result.exitCode;
       } catch { line(stderr, 'Regression scan failed.'); return 1; }
     }
-    case 'autopilot-doctor': case 'autopilot-audit': case 'autopilot-start': case 'autopilot-stop': case 'autopilot-status': case 'autopilot-add': case 'autopilot-release': case 'autopilot-report': case 'autopilot-intake': {
+    case 'autopilot-doctor': case 'autopilot-audit': case 'autopilot-check-base': case 'autopilot-start': case 'autopilot-stop': case 'autopilot-status': case 'autopilot-add': case 'autopilot-release': case 'autopilot-report': case 'autopilot-intake': {
       try {
         const module = autopilotLauncher ?? await import('./autopilot-launcher.mjs');
         const result = await module.runAutopilotLauncher({ command: plan.local.slice(10), issues: [...plan.operands], runs: plan.options['--runs'], checks: plan.options['--checks'], ...(plan.options['--engine'] ? { engine: plan.options['--engine'] } : {}), ...(plan.options['--label'] ? { label: plan.options['--label'] } : {}), ...(plan.options['--mode'] ? { mode: plan.options['--mode'] } : {}), ...(plan.options['--report'] ? { report: plan.options['--report'] } : {}), ...(plan.options['--decisions'] ? { decisions: plan.options['--decisions'] } : {}), ...(plan.options['--intake'] ? { intake: plan.options['--intake'] } : {}), ...(plan.options['--share'] !== undefined ? { share: plan.options['--share'] } : {}), all: plan.options['--all'] === true, ...(plan.options['--json'] === true ? { json: true } : {}), cwd, packageRoot, env }, autopilotLauncherPorts);
@@ -157,16 +163,25 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       return runMetrics({ argv: args, cwd, stdout, stderr });
     }
     case 'help': line(stdout, plan.topic ? renderTopic(plan.topic, packageRoot) : renderHelp(plan.helpPrefix, packageRoot));return 0;
-    case 'version':
-      try { const metadata = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'));
-        if (typeof metadata.version !== 'string' || !metadata.version) throw Error('version');
-        line(stdout, metadata.version);
-        try {
-          for (const result of findSkills({ packageRoot, cwd, home: env.HOME || homedir(), claudeConfigDir: env.CLAUDE_CONFIG_DIR }))
-            if (result.found && (result.stale === 'older' || result.staleSkills?.some(({ state }) => state === 'older'))) line(stderr, staleLine(result, metadata.version, cwd));
-        } catch { /* The skills check never changes --version. */ }
-        return 0;
+    case 'version': case 'version-detailed': {
+      let metadata;
+      try { metadata = await readPackageVersion({ packageRoot });
+        if (!metadata?.ok || typeof metadata.version !== 'string' || !metadata.version) throw Error('version');
       } catch { line(stderr, 'This PDD package has no readable version metadata.');return 1; }
+      if (plan.local === 'version-detailed') {
+        let result;
+        try { const module = interpreterVersion ?? await import('./interpreter-version.mjs');
+          result = await module.runDetailedVersion({ version: metadata.version, env }, interpreterVersionPorts);
+        } catch { result = { exit_code: 0, stdout: `PDD CLI: ${metadata.version}\nPDD interpreter: unknown\n`, stderr: '' }; }
+        stdout.write(result.stdout); stderr.write(result.stderr); return result.exit_code;
+      }
+      line(stdout, metadata.version);
+      try {
+        for (const result of findSkills({ packageRoot, cwd, home: env.HOME || homedir(), claudeConfigDir: env.CLAUDE_CONFIG_DIR }))
+          if (result.found && (result.stale === 'older' || result.staleSkills?.some(({ state }) => state === 'older'))) line(stderr, staleLine(result, metadata.version, cwd));
+      } catch { /* The skills check never changes --version. */ }
+      return 0;
+    }
     case 'autopilot.off': case 'autopilot.observe': case 'autopilot.auto': case 'autopilot-trust': case 'autopilot-untrust': {
       try {
         const module = autopilot ?? await import('./autopilot.mjs');
