@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 735cce86b6758d8f4981921304db1245e650784b36a2297af5f7b80d5e9670be).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 85d6efe7589e7ed5838e3727915e023da9a32e0f03c6fcb6ce154c2cb9310c88).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -5117,7 +5117,7 @@ async function openRunLocked({ ref, cwd, area, newSession = false, model, herdrA
   try {
     if (newSession) assertRestartCaller({chat, pending}, p);
     if (chat && !recovering) {
-      rebuilt = await rebuildClosedChat({run, chat, resumeMessage, message: await areaMessage(run, selected, p, packageRoot) + (resumeMessage ?? '')}, {...p, beforeLaunch,
+      rebuilt = await rebuildClosedChat({run, chat, resumeMessage, newSession, message: await areaMessage(run, selected, p, packageRoot) + (resumeMessage ?? '')}, {...p, beforeLaunch,
         checkpoint: async (observed, layout) => {
           if (layout && automaticResume?.parked) layout.phase = 'open';
           if (!saveChatObservations(run, defaultOriginal, observed, p, {checkpoint: true, layout}))
@@ -5239,7 +5239,7 @@ async function openRunLocked({ ref, cwd, area, newSession = false, model, herdrA
       else saveChatObservations(run, defaultOriginal, chat, p, { error, phase: chat ? 'open' : 'start', automatic: Boolean(automaticResume) });
     }
     // A starting chat is not a failed one: say so, with the one safe next step.
-    if (['chat_start_unconfirmed', 'chat_start_failed'].includes(error.code)) return fail(oneLine(error.message));
+    if (['chat_start_unconfirmed', 'chat_start_failed'].includes(error.code) || run.agent === 'gemini' && error.code === 'native_session_unknown') return fail(oneLine(error.message));
     return fail([`pdd could not open the ${run.areas[selected].name} chat (${failureReason(error)}).`, ...failureDetails(error)].join('\n'));
   }
 }

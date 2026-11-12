@@ -1,0 +1,174 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/gemini-session-recovery.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Reopening an ended Gemini area resumes the unique saved main session for its worktree, launch window and original account, even when Herdr never recorded its ID or the workspace closed."
+    },
+    {
+      "id": "AC2",
+      "text": "Sessions from another worktree or outside that area's launch window, and subagent sessions, are never selected; multiple matching sessions or unreadable evidence never authorize a guessed resume."
+    },
+    {
+      "id": "AC3",
+      "text": "When the current area\u2019s session cannot be recovered, pdd gives one line naming the area and offering a fresh chat with `pdd workflow open N --new`; an explicit fresh choice works in the same area. A historical area keeps the existing restriction on fresh chats, and its diagnostic never offers to replace another area."
+    },
+    {
+      "id": "AC4",
+      "text": "Gemini recovery reads legacy JSON and current JSONL session files, without modifying them or treating their messages as approval."
+    }
+  ],
+  "initial_world": {
+    "kv": {
+      "nativeSessions": [
+        {
+          "root": "/repo/native",
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "startedAt": 1000,
+          "format": "json"
+        },
+        {
+          "root": "/repo/native",
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "startedAt": 1000,
+          "format": "jsonl"
+        }
+      ],
+      "workflowChat": {
+        "state": "running",
+        "session": null
+      }
+    }
+  },
+  "simulation": {},
+  "context": [],
+  "steps": [
+    {
+      "step_id": "recover-native-uuid",
+      "entry_path": "prompts/cli/workflow-chat.prompt.md",
+      "operation": "ownSession",
+      "input": {
+        "run": {
+          "agent": "gemini",
+          "root": "/repo/native"
+        },
+        "chat": {
+          "agent": "gemini",
+          "startedAt": 1000
+        },
+        "since": 1000
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/kind",
+          "op": "equals",
+          "value": "match"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/id",
+          "op": "equals",
+          "value": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        }
+      ]
+    },
+    {
+      "step_id": "ignore-foreign-worktree",
+      "entry_path": "prompts/cli/workflow-chat.prompt.md",
+      "operation": "ownSession",
+      "input": {
+        "run": {
+          "agent": "gemini",
+          "root": "/repo/foreign"
+        },
+        "chat": {
+          "agent": "gemini",
+          "startedAt": 1000
+        },
+        "since": 1000
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/kind",
+          "op": "equals",
+          "value": "none"
+        }
+      ]
+    },
+    {
+      "step_id": "deduplicate-native-formats",
+      "entry_path": "prompts/cli/approval-evidence.prompt.md",
+      "operation": "findNativeSessions",
+      "input": {
+        "agent": "gemini",
+        "root": "/repo/native",
+        "startedAt": 1000,
+        "endedAt": 2000
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": [
+            {
+              "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+              "startedAt": 1000
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "step_id": "offer-fresh-current-area",
+      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "operation": "openRun",
+      "input": {
+        "ref": "17",
+        "cwd": "/repo"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/message",
+          "op": "equals",
+          "value": "The plan chat ended and pdd cannot recover its gemini session. Start a fresh chat for this area: pdd workflow open 17 --new"
+        }
+      ]
+    },
+    {
+      "step_id": "explicit-fresh-chat",
+      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "operation": "openRun",
+      "input": {
+        "ref": "17",
+        "cwd": "/repo",
+        "newSession": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 0
+        }
+      ]
+    }
+  ]
+}
