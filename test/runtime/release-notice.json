@@ -1,0 +1,122 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/release-notice.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "When pdd 0.1.28 checks and the latest release is v0.2.0, it prints `pdd 0.1.28: update available (0.2.0). Run: npm install -g github:promptdriven/pdd` on stderr."
+    },
+    {
+      "id": "AC2",
+      "text": "When the latest release is v0.1.28 or older, or the release check fails, pdd prints no update notice."
+    },
+    {
+      "id": "AC3",
+      "text": "In CI, pdd makes no release check and prints no update notice."
+    },
+    {
+      "id": "AC4",
+      "text": "pdd never starts an update automatically, including during a workflow command."
+    }
+  ],
+  "initial_world": {
+    "counters": {
+      "release": 0
+    }
+  },
+  "simulation": {
+    "release.latest": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/release",
+      "cases": [
+        {
+          "args": {},
+          "call_index": 1,
+          "result": {
+            "tag": "alpha-v0.2.0"
+          }
+        },
+        {
+          "args": {},
+          "call_index": 2,
+          "result": {
+            "tag": "alpha-v0.2.0"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "new-release",
+      "entry_path": "prompts/cli/release-notice.prompt.md",
+      "operation": "releaseNotice",
+      "input": {
+        "version": "0.1.28",
+        "ci": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/notice",
+          "op": "equals",
+          "value": "pdd 0.1.28: update available (0.2.0). Run: npm install -g github:promptdriven/pdd\n"
+        }
+      ]
+    },
+    {
+      "step_id": "same-release",
+      "entry_path": "prompts/cli/release-notice.prompt.md",
+      "operation": "releaseNotice",
+      "input": {
+        "version": "0.2.0",
+        "ci": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/notice",
+          "op": "equals",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "step_id": "ci",
+      "entry_path": "prompts/cli/release-notice.prompt.md",
+      "operation": "releaseNotice",
+      "input": {
+        "version": "0.1.28",
+        "ci": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/notice",
+          "op": "equals",
+          "value": ""
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/release-notice-release-latest",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/notice",
+          "op": "equals",
+          "value": ""
+        }
+      ]
+    }
+  ]
+}
