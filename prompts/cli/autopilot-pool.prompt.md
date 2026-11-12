@@ -63,18 +63,20 @@ running step keeps its login until it ends. The first matching row decides:
 
 **The pick.** Load the usage cache. Walk the pool logins in order and skip the
 names in `skip` and the rows with `paused: true` (they are never read). For each
-other login, compute its readiness. When the login has no usage row, or its
-readiness reason is `stale`, read its usage now (`readLoginUsage`), put the new
-row in the cache and compute the readiness again. Stop at the first ready login.
-So a pick reads at most the logins before the first ready one, one at a time, in
-order. A read that throws keeps the old row. Save the cache once when a read
-happened. Then `pickLogin({logins, usage, now, skip})` decides. `skip` is a
+other login, compute its readiness. When the provider is `codex` (the only one
+with a usage read) and the login has no usage row, or its readiness reason is
+`stale`, read its usage now (`readLoginUsage`), put the new row in the cache and
+compute the readiness again. Stop at the first ready login. So a pick reads at
+most the logins before the first ready one, one at a time, in order. A read that
+throws keeps the old row. When a read happened, save once, with only the rows
+read in this call: `saveUsage` merges them into the cache, so a newer mark that
+another process wrote on another login stays. Then `pickLogin({logins, usage, now, skip})` decides. `skip` is a
 preference of one step, never a pause: when it leaves no login but a skipped
 login is ready, `pickLogin` runs again with no skip and the step takes that
 login.
 
 REASON (in every line about a pool file error) is "the file does not parse" for a
-JSON syntax error, else the store's message on one line (at most 160
+JSON syntax error, else the store's message on one line (at most 400
 characters), with each quoted part longer than 40 characters shortened to `…`
 and token-like words (`eyJ…`, `sk-…`, `gh?_…`, `Bearer …`) replaced by
 `[redacted]`, so no file text reaches a line, an alert or the pool record.
@@ -85,7 +87,10 @@ and token-like words (`eyJ…`, `sk-…`, `gh?_…`, `Bearer …`) replaced by
   `poolSummary`; "Next free" is left out when it is null. When S pool logins
   that are not paused have no row or a `stale` readiness, "Pool: R of T ready (S not read in the last
   10 minutes)." The percentages are the rounded `usedPercent` of the `week` and
-  `fiveHour` windows; a missing window shows `?`. `logLine` is the job log line
+  `fiveHour` windows; a missing window shows `?`. A login whose readiness reason
+  is `renews` (a full local login whose access ended; its own Codex renews it)
+  shows "(access ended; Codex renews it at this step)" instead of the
+  percentages. `logLine` is the job log line
   "pdd-account: cx2 (local pool)". Save `last` in the pool record. When a saved
   all-out pause or pool error existed, remove it; `recovered` is then "Autopilot
   has a PROVIDER login again: cx2. The pause ended." (else null).
@@ -97,7 +102,8 @@ and token-like words (`eyJ…`, `sk-…`, `gh?_…`, `Bearer …`) replaced by
   login (pdd accounts add NAME) and the pause ends at the next tick. Resets:
   WORD." COUNTS lists each readiness reason with its count, in this order and
   only when not zero: "N at a limit" (`week`, `five-hour`, `limited`), "1 needs a
-  sign-in" or "N need a sign-in" (`needs-sign-in`, `expired`, `no-login`), "N
+  sign-in" or "N need a sign-in" (`needs-sign-in`, `expired`, `no-login`, and
+  `limited` when the cached row has `limitReason: "needs-sign-in"`), "N
   paused" (`paused: true` or reason `paused`), "N not readable" (`unknown`,
   `stale` and every other reason). With no earliest: "Earliest reset: unknown;
   Autopilot checks again at TIME." WORD is "off" when every pool login has
@@ -114,7 +120,9 @@ paused login (pdd accounts resume NAME)." The pool-error alert has the same
 `text` and `tried`, and `need` "Fix the login pool file; pdd accounts list shows
 the problem." An alert goes out only after the pool
 record with this event is saved, so a record that cannot be written gives no
-alert (no alert on every tick).
+alert (no alert on every tick). A record path that cannot be made (`poolPaths`
+fails, for example with no absolute HOME) means no record: reads give an empty
+record and writes fail.
 
 ## Waking a pause (`shouldWake`)
 
@@ -214,7 +222,7 @@ alert}`:
 |---|---|
 | `other` | Nothing. `{strike: true, line: null, mark: null, alert: null}`. |
 | `capacity` | No login change and no mark (the core waits a short time). `line` "pdd-account: NAME: the AI service is busy (service busy); no login change." `strike` false. |
-| `limit`, `credits` | `until` = `end.until` when it is after now; else, when `login` is the pool row (the read needs its folder), one usage read of this login (`readLoginUsage`, saved in the cache) and its readiness `until` when it is not ready and after now; else now + 30 minutes. `markLimited({env}, name, until, kind)`. One local log row `{at, action: "limited", login: name, detail: "KIND until ISO"}`. `line` "pdd-account: cx2 limited until 14:41 PST (usage limit). The next step takes the next login." |
+| `limit`, `credits` | `until` = `end.until` when it is after now; else, when `login` is the pool row (the read needs its folder), one usage read of this login (`readLoginUsage`; only this row is saved in the cache) and its readiness `until` when it is not ready and after now; else now + 30 minutes. `markLimited({env}, name, until, kind)`. One local log row `{at, action: "limited", login: name, detail: "KIND until ISO"}`. `line` "pdd-account: cx2 limited until 14:41 PST (usage limit). The next step takes the next login." |
 | `needs-sign-in` | `markLimited({env}, name, now + 60 minutes, "needs-sign-in")`, one log row (action `needs-sign-in`), `line` "pdd-account: cx3 needs a new sign-in (sign-in ended). The next step takes the next login." One `alert` with `text` "Codex login cx3 needs a new sign-in. Autopilot skips it. Run: pdd accounts add cx3" ("Pool login" when `login` is only a name), `tried` "Autopilot uses the other logins of the pool.", `need` "Sign in to this login again." No alert when the cached row already has `limitReason: "needs-sign-in"` with `limitedUntil` after now (one alert per event), and no alert when the mark failed (the next step would alert again). |
 | `stale-copy` | `markLimited({env}, name, now + 10 minutes, "stale-copy")`, one log row (action `limited`), `line` "pdd-account: cx2 got 401 on its login copy; it waits 10 minutes. The next step takes the next login." |
 
@@ -303,8 +311,9 @@ shouldWake(pause, {now, stamp, usage})                    // -> {wake, reason}
   first quoted path of the message, is that module) means "no pool"; a missing
   file that the module itself imports is a broken install; any other load error is thrown, so a broken install is visible.
 - `loadUsage` may return the cache file object (`{version, rows}`) or the rows
-  map; this module uses the rows map keyed by login name, and passes the full map
-  to `saveUsage` and to the pick rules.
+  map; this module uses the rows map keyed by login name, passes the full map to
+  the pick rules, and passes only new rows to `saveUsage`. `poolPaths` gets
+  `modulePorts` too.
 
 ## Dependencies
 
@@ -316,9 +325,9 @@ shouldWake(pause, {now, stamp, usage})                    // -> {wake, reason}
 - [Pick rules](accounts-pick.prompt.md): `loginReadiness`, `pickLogin`,
   `poolSummary`; required for readiness, the pick and the summary.
 - The shared shapes are in the pool group's DESIGN.md sections 3 to 5 (outside
-  this repository). These three prompts are written in parallel on other
-  branches; until they merge, the links are an explicit gap and the tests use
-  fakes of these ports.
+  this repository). Native tests check this module with fakes of these ports,
+  and with the real modules, a temp HOME, fake logins and a fake `codex
+  app-server` (the usage read's `spawn` port).
 - Node built-ins only: `node:fs`, `node:path`, `node:crypto`, `Intl`.
 
 <details><summary>Runtime interface</summary>

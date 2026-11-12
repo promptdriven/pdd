@@ -26,7 +26,8 @@ function world(t, { logins = [], rows = {}, reads = {} } = {}) {
   };
   const usage = {
     loadUsage: () => ({ version: 1, rows: structuredClone(cache) }),
-    saveUsage: (_input, next) => { calls.saves++; for (const key of Object.keys(cache)) delete cache[key]; Object.assign(cache, structuredClone(next)); },
+    // Like the real saveUsage: the given rows are merged into the cache.
+    saveUsage: (_input, next) => { calls.saves++; Object.assign(cache, structuredClone(next)); },
     readLoginUsage: (login, { now }) => { calls.reads.push(login.name); const row = reads[login.name]; return row ? { ...row, readAt: now } : { state: 'unknown', note: 'read failed', readAt: now }; },
     markLimited: (_input, name, until, reason) => { calls.marks.push({ name, until, reason }); cache[name] = { ...cache[name], limitedUntil: until, limitReason: reason }; },
   };

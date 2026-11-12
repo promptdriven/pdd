@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-pool.prompt.md (sha256: 9f76e10db9c11ec8d880f42dfac84611c1b0084e770ac63dbbfc9abb1cf39469).
+// Generated from prompts/cli/autopilot-pool.prompt.md (sha256: 93b418dfbad54c39acc6e45b22667666a55086331ce550f51bb2b4d3d4e7675a).
 import * as nativeFs from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
@@ -25,7 +25,7 @@ const plural = (n, word) => `${n} login${n === 1 ? '' : 's'}${word}`;
 function safeReason(error) {
   if (error instanceof SyntaxError) return 'the file does not parse';
   return oneLine(String(error?.message ?? 'unknown error').replace(/(["'`])[^"'`]{41,}\1/g, '$1…$1')
-    .replace(/\b(?:eyJ[\w-]+\.[\w.-]+|sk-[\w-]{8,}|gh[pousr]_\w+|Bearer\s+\S+)/g, '[redacted]'), 160);
+    .replace(/\b(?:eyJ[\w-]+\.[\w.-]+|sk-[\w-]{8,}|gh[pousr]_\w+|Bearer\s+\S+)/g, '[redacted]'), 400);
 }
 const usageRows = value => object(value) && value.version === 1 && object(value.rows) ? value.rows : object(value) ? value : {};
 
@@ -84,14 +84,16 @@ function todayIn(now, timeZone) {
 }
 
 // ---- The pool record: this module's own machine file (last login, all-out pause, pool error) -------------
-async function recordFile(m, env) { return join((await m.store.poolPaths(env)).stateDir, RECORD); }
+async function recordFile(m, env, ports) { try { return join((await m.store.poolPaths(env, modulePorts(ports))).stateDir, RECORD); } catch { return null; } }
 function readRecord(fs, file) {
+  if (!file) return { version: 1, providers: {} };
   try { const value = JSON.parse(fs.readFileSync(file, 'utf8')); if (object(value) && value.version === 1 && object(value.providers)) return value; }
   catch { /* A missing or broken record reads as empty. */ }
   return { version: 1, providers: {} };
 }
 // Read again, change one provider's entry and write atomically. False when the write failed.
 function updateRecord(fs, file, provider, change) {
+  if (!file) { change({}); return false; }
   const record = readRecord(fs, file), before = object(record.providers[provider]) ? record.providers[provider] : {};
   record.providers[provider] = change({ ...before });
   try {
@@ -142,8 +144,9 @@ function outWords(m, logins, rows, now) {
   const count = { limit: 0, signIn: 0, paused: 0, unreadable: 0 };
   for (const login of logins) {
     if (login.paused === true) { count.paused++; continue; }
-    const reason = readiness(m, login, rows[login.name], now).reason;
-    if (LIMIT_REASONS.has(reason)) count.limit++;
+    const row = rows[login.name], reason = readiness(m, login, row, now).reason;
+    if (reason === 'limited' && row?.limitReason === 'needs-sign-in') count.signIn++;
+    else if (LIMIT_REASONS.has(reason)) count.limit++;
     else if (SIGN_IN_REASONS.has(reason)) count.signIn++;
     else if (reason === 'paused') count.paused++;
     else count.unreadable++;
@@ -159,8 +162,9 @@ export async function stepLogin({ provider, env = {}, now, command = provider, s
   const m = await modules(ports);
   if (nonblank(env[variable])) return pinnedResult(m, provider, variable, env, ports);
   if (!m) return noPool('Agent login: this pdd has no login pool; the step uses its own environment.');
-  const fs = ports.fs ?? nativeFs, timeZone = ports.timeZone, mp = modulePorts(ports), file = await recordFile(m, env);
+  const fs = ports.fs ?? nativeFs, timeZone = ports.timeZone, mp = modulePorts(ports), file = await recordFile(m, env, ports);
   let pool;
+  // readPool also fails when no pool path can be made (no absolute HOME).
   try { pool = await m.store.readPool({ env }, mp); }
   catch (error) {
     const line = `Paused: Autopilot cannot read the login pool file (${safeReason(error)}). Fix it, then the next tick goes on; no step starts until then.`;
@@ -180,19 +184,19 @@ export async function stepLogin({ provider, env = {}, now, command = provider, s
   // A waiting tick: only local files, no usage read.
   if (object(saved.pause) && saved.pause.reason === 'all-out' && !shouldWake(saved.pause, { now, stamp, usage: rows }).wake) return { pause: pauseView(saved.pause) };
   // Read the logins in order, one at a time, up to the first ready one; a login with no row or a stale one is read.
-  const skipped = new Set(Array.isArray(skip) ? skip : []);
-  let read = false;
+  const skipped = new Set(Array.isArray(skip) ? skip : []), readRows = {};
   for (const login of logins) {
     if (skipped.has(login.name) || login.paused === true) continue;
     let state = readiness(m, login, rows[login.name], now);
-    if (!object(rows[login.name]) || state.reason === 'stale') {
-      try { const row = await m.usage.readLoginUsage(login, { env, now, command }, mp); if (object(row)) { rows[login.name] = row; read = true; } }
+    if (provider === 'codex' && (!object(rows[login.name]) || state.reason === 'stale')) {
+      try { const row = await m.usage.readLoginUsage(login, { env, now, command }, mp); if (object(row)) rows[login.name] = readRows[login.name] = row; }
       catch { /* A failed read keeps the old row. */ }
       state = readiness(m, login, rows[login.name], now);
     }
     if (state.ready) break;
   }
-  if (read) try { await m.usage.saveUsage({ env }, rows, mp); } catch { /* The next pick reads again. */ }
+  // Only the rows read here: saveUsage merges them, so a newer mark by another process on another login stays.
+  if (Object.keys(readRows).length) try { await m.usage.saveUsage({ env }, readRows, mp); } catch { /* The next pick reads again. */ }
   let picked = m.pick.pickLogin({ logins, usage: rows, now, skip: [...skipped] });
   // skip is a preference of one step: when only skipped logins are ready, the step takes one; it never makes a pause.
   if (!object(picked?.login) && skipped.size) picked = m.pick.pickLogin({ logins, usage: rows, now, skip: [] });
@@ -203,8 +207,9 @@ export async function stepLogin({ provider, env = {}, now, command = provider, s
       ended = object(entry.pause) || object(entry.error);
       const next = { ...entry, last: { name: login.name, at: now } }; delete next.pause; delete next.error; return next;
     });
+    const words = readiness(m, login, row, now).reason === 'renews' ? 'access ended; Codex renews it at this step' : `week ${pct(row?.week)}, 5h ${pct(row?.fiveHour)}`;
     return { login, env: { [variable]: login.home },
-      line: `Agent login: ${provider} ${login.name} (week ${pct(row?.week)}, 5h ${pct(row?.fiveHour)}). ${poolWords(m, logins, rows, now, timeZone)}`,
+      line: `Agent login: ${provider} ${login.name} (${words}). ${poolWords(m, logins, rows, now, timeZone)}`,
       logLine: `pdd-account: ${login.name} (local pool)`, recovered: ended ? `Autopilot has a ${name} login again: ${login.name}. The pause ended.` : null };
   }
   // All out: wake at the earliest reset, or check again in 60 minutes when no reset is known.
@@ -343,7 +348,7 @@ export async function afterStep({ login, end, env = {}, now, command } = {}, por
       if (object(fresh)) {
         const state = readiness(m, row, fresh, now);
         if (!state.ready && Number.isFinite(state.until) && state.until > now) until = state.until;
-        try { await m.usage.saveUsage({ env }, { ...usageRows(await m.usage.loadUsage({ env }, mp)), [name]: fresh }, mp); }
+        try { await m.usage.saveUsage({ env }, { [name]: fresh }, mp); }
         catch (error) { failure = error; }
       }
     } catch { /* A failed read: the fallback below. */ }
@@ -402,7 +407,7 @@ export async function poolStatusLines({ provider, env = {}, now } = {}, ports = 
   try { pool = await m.store.readPool({ env }, mp); } catch (error) { return [`Agent login: the login pool file cannot be read (${safeReason(error)}).`]; }
   const logins = await providerLogins(m, pool, provider);
   if (!logins.length) return [];
-  const entry = readRecord(fs, await recordFile(m, env)).providers[provider] ?? {};
+  const entry = readRecord(fs, await recordFile(m, env, ports)).providers[provider] ?? {};
   let rows = {};
   try { rows = usageRows(await m.usage.loadUsage({ env }, mp)); } catch { /* No cache: no percentages. */ }
   const lines = [];
