@@ -1,0 +1,262 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/show-predecessor-error.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "When a completed Check refusal has a verified earlier error, I see the dependent step, input pointer, predecessor step, result pointer and reported error code in terminal output and JSON."
+    },
+    {
+      "id": "AC2",
+      "text": "When dependency evidence is missing or ambiguous, I see the existing refusal without an added dependency diagnosis."
+    },
+    {
+      "id": "AC3",
+      "text": "The original refusal, check results, counts, usage and recovery advice stay the same; showing or reading the diagnosis never resends the Check."
+    }
+  ],
+  "initial_world": {},
+  "simulation": {},
+  "context": [],
+  "steps": [
+    {
+      "step_id": "retain-ordered-dependency-facts",
+      "entry_path": "prompts/cli/runtime-output.prompt.md",
+      "operation": "renderJson",
+      "input": {
+        "repo": "example/project",
+        "rows": [
+          {
+            "story": "example",
+            "title": "Example",
+            "test": "test/runtime/example.json",
+            "state": "refused",
+            "why": "The result is unavailable.",
+            "next_step": "Inspect the original report. Do not resend.",
+            "refusals": [
+              {
+                "code": "key-error",
+                "field": "samples[0].steps[1]",
+                "section": "samples[0].steps[1]",
+                "message": "Result is unavailable.",
+                "engine_message": null,
+                "hint": null,
+                "reason": "The referenced result is unavailable.",
+                "fix": "Inspect the original report.",
+                "where": "test/runtime/example.json samples[0].steps[1]",
+                "cause": "test",
+                "dependency_errors": [
+                  {
+                    "step_id": "draw-refusal",
+                    "input_path": "/loaded",
+                    "predecessor_step_id": "unknown-order",
+                    "result_path": "/loaded",
+                    "error_code": "board-unavailable"
+                  },
+                  {
+                    "step_id": "draw-refusal",
+                    "input_path": "/rows/0/a~1b~0c",
+                    "predecessor_step_id": "unknown-order",
+                    "result_path": "/loaded",
+                    "error_code": "board-unavailable"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "exitCode": 4
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/rows/0/refusals/0/dependency_errors",
+          "op": "equals",
+          "value": [
+            {
+              "step_id": "draw-refusal",
+              "input_path": "/loaded",
+              "predecessor_step_id": "unknown-order",
+              "result_path": "/loaded",
+              "error_code": "board-unavailable"
+            },
+            {
+              "step_id": "draw-refusal",
+              "input_path": "/rows/0/a~1b~0c",
+              "predecessor_step_id": "unknown-order",
+              "result_path": "/loaded",
+              "error_code": "board-unavailable"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "step_id": "keep-refusal-without-dependency",
+      "entry_path": "prompts/cli/runtime-output.prompt.md",
+      "operation": "renderJson",
+      "input": {
+        "repo": "example/project",
+        "rows": [
+          {
+            "story": "example",
+            "title": "Example",
+            "test": "test/runtime/example.json",
+            "state": "refused",
+            "why": "The result is unavailable.",
+            "next_step": "Inspect the original report. Do not resend.",
+            "refusals": [
+              {
+                "code": "key-error",
+                "field": "samples[0].steps[1]",
+                "section": "samples[0].steps[1]",
+                "message": "Result is unavailable.",
+                "engine_message": null,
+                "hint": null,
+                "reason": "The referenced result is unavailable.",
+                "fix": "Inspect the original report.",
+                "where": "test/runtime/example.json samples[0].steps[1]",
+                "cause": "test"
+              }
+            ]
+          }
+        ],
+        "exitCode": 4
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/rows/0/refusals/0",
+          "op": "equals",
+          "value": {
+            "code": "key-error",
+            "field": "samples[0].steps[1]",
+            "section": "samples[0].steps[1]",
+            "message": "Result is unavailable.",
+            "engine_message": null,
+            "hint": null,
+            "reason": "The referenced result is unavailable.",
+            "fix": "Inspect the original report.",
+            "where": "test/runtime/example.json samples[0].steps[1]",
+            "cause": "test"
+          }
+        }
+      ]
+    },
+    {
+      "step_id": "preserve-refusal-and-recovery",
+      "entry_path": "prompts/cli/runtime-output.prompt.md",
+      "operation": "renderJson",
+      "input": {
+        "repo": "example/project",
+        "rows": [
+          {
+            "story": "example",
+            "title": "Example",
+            "test": "test/runtime/example.json",
+            "state": "refused",
+            "why": "The result is unavailable.",
+            "next_step": "Inspect the original report. Do not resend.",
+            "refusals": [
+              {
+                "code": "key-error",
+                "field": "samples[0].steps[1]",
+                "section": "samples[0].steps[1]",
+                "message": "Result is unavailable.",
+                "engine_message": null,
+                "hint": null,
+                "reason": "The referenced result is unavailable.",
+                "fix": "Inspect the original report.",
+                "where": "test/runtime/example.json samples[0].steps[1]",
+                "cause": "test",
+                "dependency_errors": [
+                  {
+                    "step_id": "draw-refusal",
+                    "input_path": "/loaded",
+                    "predecessor_step_id": "unknown-order",
+                    "result_path": "/loaded",
+                    "error_code": "board-unavailable"
+                  },
+                  {
+                    "step_id": "draw-refusal",
+                    "input_path": "/rows/0/a~1b~0c",
+                    "predecessor_step_id": "unknown-order",
+                    "result_path": "/loaded",
+                    "error_code": "board-unavailable"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "exitCode": 4
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/rows/0/refusals/0",
+          "op": "equals",
+          "value": {
+            "code": "key-error",
+            "field": "samples[0].steps[1]",
+            "section": "samples[0].steps[1]",
+            "message": "Result is unavailable.",
+            "engine_message": null,
+            "hint": null,
+            "reason": "The referenced result is unavailable.",
+            "fix": "Inspect the original report.",
+            "where": "test/runtime/example.json samples[0].steps[1]",
+            "cause": "test",
+            "dependency_errors": [
+              {
+                "step_id": "draw-refusal",
+                "input_path": "/loaded",
+                "predecessor_step_id": "unknown-order",
+                "result_path": "/loaded",
+                "error_code": "board-unavailable"
+              },
+              {
+                "step_id": "draw-refusal",
+                "input_path": "/rows/0/a~1b~0c",
+                "predecessor_step_id": "unknown-order",
+                "result_path": "/loaded",
+                "error_code": "board-unavailable"
+              }
+            ]
+          }
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/rows/0/why",
+          "op": "equals",
+          "value": "The result is unavailable."
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/rows/0/next_step",
+          "op": "equals",
+          "value": "Inspect the original report. Do not resend."
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/exit_code",
+          "op": "equals",
+          "value": 4
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/summary_line",
+          "op": "equals",
+          "value": "Prompt tests: no verdict \u00b7 0 of 0 criteria \u00b7 0/0 checks \u00b7 1 refused (key-error) \u00b7 0 AI calls"
+        }
+      ]
+    }
+  ]
+}
