@@ -68,7 +68,7 @@ function identity(rows) {
 }
 // A prove result that is not current is shown, but it is never pdd's proof.
 const STAGE_LABEL = {pr1:'PR 1 (historical)',before:'before the fix (historical)'};
-export const usableResult = result => result.states?.some(row => row.state === 'partial') ? false : result.kind === 'native evidence' ? result.assessment?.identity?.stage !== 'pr1' && result.assessment?.storyNativeProof !== 'none' && ['pdd-observed','qualified-external'].includes(result.assessment?.storyNativeProof) : result.kind !== 'pdd workflow prove' || result.state === 'current';
+export const usableResult = result => result.states?.some(row => row.state === 'partial') ? false : result.kind === 'native evidence' ? result.assessment?.identity?.stage === 'current' && result.assessment?.storyNativeProof !== 'none' && ['pdd-observed','qualified-external'].includes(result.assessment?.storyNativeProof) : result.kind !== 'pdd workflow prove' || result.state === 'current';
 
 function runtimeEvidence(batch, summary) {
   const coverage = batch.coverage ?? summary?.coverage;
@@ -515,7 +515,14 @@ function nativeReport(bytes,profile,reference) {
       base.observations.push({occurrenceId:`${reference}/events/${index}`,testId:`${row.file}::${row.name}@${row.line}:${row.column}`,selected:enqueued.some(same)?true:null,started:row.skip||row.todo?false:dequeued.some(same)?true:null,outcome:row.skip?'skipped':row.todo?'todo':event.type==='test:pass'?'passed':'failed',skipReason:row.skip||row.todo||null});
     }
     base.capture.selectionComplete=enqueued.length>0;
-    base.complete=base.capture.terminalSeen&&enqueued.length===base.observations.length;
+    const same=(a,b)=>['file','line','column','name','nesting'].every(key=>a?.[key]===b?.[key]);
+    const terminal=doc.events.filter(event=>['test:pass','test:fail'].includes(event.type)).map(event=>event.data);
+    const wrapper=row=>row?.nesting===0&&row.line===1&&row.column===1&&typeof row.name==='string'&&isAbsolute(row.name)
+      && typeof row.file==='string'&&row.name.split(sep).join('/').endsWith('/'+row.file)
+      && dequeued.some(item=>same(item,row))&&terminal.some(item=>item?.file===row.file&&!same(item,row));
+    const pending=enqueued.filter(row=>!wrapper(row)), starts=[...dequeued.filter(row=>!wrapper(row))], ends=[...terminal];
+    const consume=(rows,row)=>{const index=rows.findIndex(item=>same(item,row));if(index<0)return false;rows.splice(index,1);return true;};
+    base.complete=base.capture.terminalSeen&&pending.every(row=>consume(starts,row)&&consume(ends,row))&&!starts.length&&!ends.length;
     return base;
   }
   if(profile.reportFormat==='junit-xml') {
@@ -641,18 +648,19 @@ function nativeContextFromOriginals(selectors,input,retained,ports,historical=fa
     try{association=ports.workspace({root:selectors.root,producerRoot,tests,source_sha256:source.source_sha256,runId:source.runId??null,stage:source.stage??null});}catch(error){limits.push(`Native association lookup unavailable: ${text(error.message)}.`);}
   }
   const ownedSameRoot=association.runId===null&&source?.runId==null&&association.stage==='current'&&real(association.producerRoot??'')===real(selectors.root);
-  const associationValid=association?.state==='eligible'&&(!selectors.runId||association.runId===selectors.runId||ownedSameRoot)&&['current','pr1'].includes(association.stage)&&known(association.producerRoot)&&Array.isArray(association.tests)&&association.tests.length===tests?.length&&association.tests.every(path=>tests.includes(path));
+  const associationValid=association?.state==='eligible'&&(!selectors.runId||association.runId===selectors.runId||ownedSameRoot)&&['current','pr1','before'].includes(association.stage)&&known(association.producerRoot)&&Array.isArray(association.tests)&&association.tests.length===tests?.length&&association.tests.every(path=>tests.includes(path));
   checks.push({check:'workspace-association',state:associationValid?'checked':'unavailable',reason:association?.reason??'unknown',stage:association?.stage??'unknown'});
   if(!associationValid)limits.push(`Native run/source association is unverified: ${text(association?.reason||'unknown owner or stage')}.`);
   // Only the canonical owner can choose a historical comparator. Current
   // evidence always binds to the current selection, even for a PR 1 original.
-  const sourceRoot=historical&&associationValid?association.sourceAnchor?.root:selectors.root;
+  const before=associationValid&&association.stage==='before';
+  const sourceRoot=(historical||before)&&associationValid?association.sourceAnchor?.root:selectors.root;
   if(!known(sourceRoot))throw nativeError('Canonical historical source anchor is unavailable.');
   const selection=nativeSelection(sourceRoot,selectors.storyPath,selectors.profileId,ports,retained);selection.root=sourceRoot;
-  const reviewed=reviewedNative(selectors,selection,retained,ports,historical),profile=reviewed.profile;
+  const reviewed=reviewedNative(selectors,selection,retained,ports,historical||before),profile=reviewed.profile;
   const protectedProfile={...profile,requirementsId:reviewed.requirementsId,promptPath:reviewed.promptPath,sourceRoot:reviewed.sourceRoot,approvalRef:reviewed.approvalRef,review:reviewed.review};
   let candidate={sourceId:'unknown',implementationId:'unknown',testsId:'unknown',requirementsId:'unknown'};
-  try{candidate=nativeSource({...selectors,root:sourceRoot},selection,reviewed,ports);checks.push({check:'selected-native-source',state:'checked',sourceId:candidate.sourceId,sourceAnchor:historical?association.sourceAnchor:null});}catch(error){limits.push(`Native source capture unavailable: ${text(error.message)}.`);}
+  try{candidate=nativeSource({...selectors,root:sourceRoot},selection,reviewed,ports);checks.push({check:'selected-native-source',state:'checked',sourceId:candidate.sourceId,sourceAnchor:(historical||before)?association.sourceAnchor:null});}catch(error){limits.push(`Native source capture unavailable: ${text(error.message)}.`);}
   const original=input.originals.find(row=>row.role==='report'),originalRef=`sha256:${original.sha256}`;
   let report,parsed=false;
   try{report=nativeReport(original.bytes,profile,originalRef);parsed=nativeFormats.includes(profile.reportFormat)&&!report.interpretation;checks.push({check:'original-report',state:'read',format:profile.reportFormat,sha256:original.sha256,rowReferences:report.rowReferences});}

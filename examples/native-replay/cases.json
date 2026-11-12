@@ -1,0 +1,6 @@
+{
+  "cases": [
+    {"id":"two-words","input":"two words","expected":{"return":2}},
+    {"id":"non-string","input":42,"expected":{"error":{"name":"TypeError","message":"text must be a string"}}}
+  ]
+}

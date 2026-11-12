@@ -297,7 +297,9 @@ permitted variation in decisions.
 
 ## Runtime interface declarations
 
-A behavior prompt ends with one Runtime interface block. Omit `kind` for its full
+A behavior prompt ends with one Runtime interface block when it has a truthful
+Runtime entry. A native verification-command contract without such an entry
+records the gap instead of inventing an interface. Omit `kind` for its full
 checkable contract; use `kind: partial` for a declared subset. An explicit
 `"kind": "full"` in a draft gets a warning at `/kind`; `pdd test --fill-hash`
 removes that redundant field from drafts while leaving approved prompts unchanged. Use `kind: native-only` only with a nonblank `reason` that names
@@ -314,3 +316,66 @@ lint is not a Runtime check; run `pdd lint STORY` for admission.
 The automatic-check-pass approval route needs unchanged committed behavior, passing
 existing native tests and a full prompt check on current source. New behavior and
 strict approval mode require a person.
+
+## Native verification when Runtime cannot admit a case
+
+Keep the real module's contract and Runtime interface intact. A native public
+boundary may expose behavior outside that interface, or a repository may need
+to verify an existing top-level test command. Describe the verification command
+in its own prompt only when it is a new owned code module; do not assign its
+behavior to unrelated helper prompts. Do not invent a Runtime entry, widen an
+interface for a test, or claim a native effect that does not exist.
+
+Write a Story and requirement-derived native cases with exact inputs and expected
+returns or error names and messages, independently of observed output. Identify
+the real function or command and run each case there. The runnable
+Node example in `examples/native-replay/` and its cases show a
+native command, including a non-string input to a public function. From the
+repository root, run:
+
+```sh
+node examples/native-replay/replay.mjs examples/native-replay/cases.json examples/native-replay/count-words.mjs
+```
+
+The fixture is synthetic and does not reproduce another project. Adapt the
+command and cases to the actual public boundary, preserving its own contract.
+Check wrong results, wrong or missing expected errors and unexpected errors with
+controls; setup failures and crashes before the assertion are not detection.
+
+For a bug, run the issue case against the current native code before repairing
+the harness or target. Record the command, source identity, exit, assertion and
+actual result separately from the expected case. Run `pdd test` for admitted
+Runtime scenarios and retain its actual result. An out-of-interface case is not
+an admitted Runtime check; a native failure does not prove the prompt failed or
+that the bug is code-only. Record an unavailable Runtime verdict as such. Never
+omit criteria to manufacture a full check or derive expected values from code.
+
+For a workflow Story, add a `## Native validation` section with one link to the
+owning prompt's `#native-validation-profile-ID` anchor. The profile inventories
+required native test identities and maps each Story criterion to them. See the
+[replay profile](../examples/native-replay/replay.prompt.md) and the
+[native evidence contract](../prompts/cli/workflow-results.prompt.md#native-profile-and-criterion-assessment-draft)
+for the declaration and original report requirements. In this example,
+`node examples/native-replay/capture.mjs /tmp/pdd-replay` runs the Node test and
+retains its events and source, selection and execution records in that directory.
+From the run worktree, associate the current workspace with the selected paths:
+
+```sh
+pdd workflow evidence-associate ISSUE --workspace . --stage current --test examples/native-replay/replay.mjs examples/native-replay/count-words.mjs examples/native-replay/cases.json examples/native-replay/capture.mjs examples/native-replay/capture.prompt.md test/native-replay-recipe-3160.test.mjs examples/native-replay/replay.prompt.md
+pdd workflow evidence ISSUE --summary /tmp/pdd-replay/import.json
+```
+
+Use the actual issue number. Capture and association must refer to the same
+unchanged source. For a before check, run the capture on the before source with
+`before` as its second argument, then associate that source with `--stage before
+--commit SHA` and the same paths. Preserve those originals separately from the
+current capture. For another project, adapt the producer to its own real runner
+and profile; preserve the original observations and process outcome.
+Associate their workspace and stage with `pdd workflow evidence-associate`, then
+import the originals with `pdd workflow evidence --summary`; `pdd lint STORY`
+shows the resulting criterion assessment. A missing, stale, incomplete or
+unreviewed profile is not a pass. The Story and profile must be approved before
+their evidence can support the manual PR gate.
+
+Native evidence does not create an automatic-check-pass or waive Story, strict,
+PR or required human approvals. Existing workflow gate rules still apply.
