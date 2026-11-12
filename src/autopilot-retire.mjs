@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-retire.prompt.md (sha256: c03cbcc1c4b6011174c523d9c405b2357692adf1eec5c3bc7c7cf84d3fd78989).
+// Generated from prompts/cli/autopilot-retire.prompt.md (sha256: 4c820f17d0ed0a5fe7a975c29736f23b50df59966f7986ce34087f2bdbfc204f).
 import { sep, join } from 'node:path';
 
 // The move of a machine from the removed full engine to the core engine. Each step is idempotent and saved in the
@@ -160,18 +160,23 @@ async function mergeStage(ctx) {
   return busy;
 }
 
-async function cancelRuns(ctx, journal) {
+async function cancelRuns(ctx, journal, persist) {
   const { state, ports } = ctx, live = ownRuns(await ports.listRuns(), state).filter(run => !ended(run));
-  const claims = [], warnings = [];
+  journal.claims ??= [];
+  const claimIds = new Set(journal.claims.map(claim => String(claim?.commentId)));
+  const warnings = [];
   for (const run of live) {
+    const claim = run.automaticOrigin?.claim;
+    if (named(claim?.commentId) && named(claim?.labelEventId) && !claimIds.has(String(claim.commentId))) {
+      journal.claims.push({ issue: run.number, commentId: String(claim.commentId), labelEventId: String(claim.labelEventId) });
+      claimIds.add(String(claim.commentId));
+      await persist();
+    }
     const result = await ports.cancelRun(run);
     if (result?.exitCode !== 0) throw Error(`run #${run.number} could not be cancelled: ${oneLine(result?.message)}`);
     const local = await ports.releaseLocal(run).catch(() => ({ state: 'recovery_required' }));
     if (local?.state !== 'released') warnings.push(`run #${run.number}: the local issue allocation stays`);
-    const claim = run.automaticOrigin?.claim;
-    if (named(claim?.commentId) && named(claim?.labelEventId)) claims.push({ issue: run.number, commentId: String(claim.commentId), labelEventId: String(claim.labelEventId) });
   }
-  journal.claims = [...(journal.claims ?? []), ...claims];
   return { runs: live.length, warnings };
 }
 
@@ -274,7 +279,14 @@ export async function moveToCore({ state, stateFile, repoEngine = null }, ports)
   }
   const run = {
     pane: async () => { const r = await closeCoordinator(ctx); journal.counts.panes = r.closed; journal.counts.keptPanes = r.kept; },
-    runs: async () => { const r = await cancelRuns(ctx, journal); journal.counts.runs = r.runs; if (r.warnings.length) journal.warnings = r.warnings; },
+    runs: async () => {
+      const r = await cancelRuns(ctx, journal, async () => {
+        const saveError = await save();
+        if (saveError) throw Error(saveError);
+      });
+      journal.counts.runs = r.runs;
+      if (r.warnings.length) journal.warnings = r.warnings;
+    },
     claims: async () => { journal.counts.claims = (await releaseClaims(ctx, journal)).claims; },
     notes: async () => { journal.counts.notes = (await notePrs(ctx)).notes; },
     slots: async () => { journal.counts.slots = (await ports.releaseSlots()) ? 1 : 0; },

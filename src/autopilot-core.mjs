@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 716c5cdd4d2d766dbc0ac3724f3e983052f3ef3de4bff1602910d21bc74e2438).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 402197eaf6a27da114262e3eca28ea0806e40ebce46ad759da40de8df25f9224).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,7 +10,7 @@ import { fileReport, listReportDrafts, reportKind } from './autopilot-reports.mj
 import { checkAutopilotBase } from './autopilot-base.mjs';
 import { redactSecrets } from './secret-redaction.mjs';
 import { interfaceBlocks, readPrompt, promptRefusal, gitFiles } from './runtime-preflight.mjs';
-import { findOwners, resolveOwners } from './file-owner.mjs';
+import { findOwners, promptHeaderHash, resolveOwners } from './file-owner.mjs';
 import { readPromptApprovals } from './approval-policy.mjs';
 import { intakeTick } from './autopilot-intake.mjs';
 import { slotCount, GUARD } from './machine-guard.mjs';
@@ -1006,12 +1006,6 @@ async function intake(ctx, rows) {
   // #3260: no new job while GitHub Actions does not start runs here; intake goes on by itself when a run starts.
   const ciHeld = await ciHold(ctx);
   if (ciHeld) return ciHeld;
-  // #3231: the one room check before new work (memory, disk and load, for Autopilot's share). Running work goes on.
-  const room = ctx.ports.machine?.room;
-  if (room && !room.ok) return `intake held: ${room.reason}`;
-  // The machine's share is for every repository: claim at most the jobs that it still allows.
-  if (Number.isSafeInteger(room?.free)) free = Math.min(free, room.free);
-  let checked = false;
   // S2 (debate B): among the first ready issues, start first one whose named paths meet no running job (its named
   // paths and its changed files); else the oldest. A hint only: it never leaves a slot idle.
   const ready = [];
@@ -1019,68 +1013,75 @@ async function intake(ctx, rows) {
   // The other jobs' files are read only when an issue is ready (they cost GitHub reads).
   const others = ready.length ? await otherJobs(ctx, rows) : [], busyPaths = new Set(others.flatMap(o => [...o.files, ...namedPaths(o.text)]));
   const order = [...ready.filter(row => !namedPaths(`${row.title}\n${row.body}`).some(p => busyPaths.has(p))), ...ready.filter(row => namedPaths(`${row.title}\n${row.body}`).some(p => busyPaths.has(p)))];
-  for (const row of order) {
-    if (free <= 0 || tries++ >= CLAIM_TRIES) break;
-    if (!checked) {
-      if (!await (ctx.ports.agentReady ?? (async () => true))()) return 'intake held: the agent is not ready (sign-in or usage limit); no issue was claimed';
-      // A base fetch failure is not about one issue: it stops intake for this tick.
-      try { ctx.fs.mkdirSync(ctx.dirs.worktrees, { recursive: true, mode: 0o700 }); await ctx.git(['fetch', '-q', 'origin', state.baseBranch]); }
-      catch (error) { return `intake stopped: ${error.message}`; }
-      checked = true;
-    }
-    const n = row.number, stamp = `${ctx.now().toString(36)}-${randomUUID().slice(0, 6)}`, branch = `pdd/core-${n}-${stamp}`, worktree = join(ctx.dirs.worktrees, String(n));
-    // A leftover worktree, even a locked one, is ours; if it cannot go, only this issue waits.
-    try {
-      if (!await removeTree(ctx, worktree)) throw Error(`the leftover worktree ${worktree} cannot be removed`);
-      await ctx.git(['worktree', 'add', '-q', '-b', branch, worktree, `origin/${state.baseBranch}`]);
-    } catch (error) {
-      ctx.warn(`Autopilot core skipped #${n}: ${error.message}`); ctx.skip.add(n);
-      await ctx.git(['branch', '-D', branch]).catch(() => {}); continue;
-    }
-    let claim = null;
-    try { claim = await claimIssue(ctx, n); } catch (error) { ctx.warn(`Autopilot core claim of #${n} failed: ${error.message}`); }
-    if (!claim) { await removeTree(ctx, worktree); await ctx.git(['branch', '-D', branch]).catch(() => {}); continue; }
-    const answer = row.comments ? await personAnswer(ctx, n).catch(error => { ctx.warn(`Autopilot core could not read the answer of #${n}: ${error.message}`); return null; }) : null;
-    // A trusted reply or a trusted person's label removal answers a question: otherwise the label goes back and nothing starts.
-    if (answer && !answer.trustedRemoval && !answer.comments.length) {
-      ctx.warn(`Autopilot core: #${n} has an open question; a trusted reply or a trusted removal of ${DECISION} answers it`);
-      await ctx.gh.ok('POST', `repos/${ctx.repo}/issues/${n}/labels`, { labels: [DECISION] }).catch(() => {});
-      await undoClaim(ctx, n, claim); await removeTree(ctx, worktree); await ctx.git(['branch', '-D', branch]).catch(() => {}); ctx.skip.add(n);
-      continue;
-    }
-    // A PR that waits for a person's approval (strict repository) resumes after a trusted label removal: no new build.
-    const kept = await keptPr(ctx, n).catch(error => { ctx.warn(`Autopilot core could not read the PRs of #${n}: ${error.message}`); return null; });
-    if (kept) {
-      await removeTree(ctx, worktree); await ctx.git(['branch', '-D', branch]).catch(() => {});
-      // A failed checkout of the kept branch undoes the claim, as the other intake steps do: no orphan claim.
+  if (!order.length) return null;
+  if (!await (ctx.ports.agentReady ?? (async () => true))()) return 'intake held: the agent is not ready (sign-in or usage limit); no issue was claimed';
+  // A base fetch failure is not about one issue: it stops intake for this tick.
+  try { ctx.fs.mkdirSync(ctx.dirs.worktrees, { recursive: true, mode: 0o700 }); await ctx.git(['fetch', '-q', 'origin', state.baseBranch]); }
+  catch (error) { return `intake stopped: ${error.message}`; }
+  const reserve = ctx.ports.machine?.reserve, release = reserve ? await reserve() : null;
+  if (reserve && !release) return 'intake held: the machine admission is busy; the next tick retries.';
+  try {
+    // #3231: the reservation refreshed this room check (memory, disk and load, for Autopilot's share). Running work goes on.
+    const room = ctx.ports.machine?.room;
+    if (room && !room.ok) return `intake held: ${room.reason}`;
+    // The machine's share is for every repository: claim at most the jobs that it still allows.
+    if (Number.isSafeInteger(room?.free)) free = Math.min(free, room.free);
+    for (const row of order) {
+      if (free <= 0 || tries++ >= CLAIM_TRIES) break;
+      const n = row.number, stamp = `${ctx.now().toString(36)}-${randomUUID().slice(0, 6)}`, branch = `pdd/core-${n}-${stamp}`, worktree = join(ctx.dirs.worktrees, String(n));
+      // A leftover worktree, even a locked one, is ours; if it cannot go, only this issue waits.
       try {
-        await ctx.git(['fetch', '-q', 'origin', kept.head.ref]);
-        await ctx.git(['worktree', 'add', '-q', '-B', kept.head.ref, worktree, `origin/${kept.head.ref}`]);
+        if (!await removeTree(ctx, worktree)) throw Error(`the leftover worktree ${worktree} cannot be removed`);
+        await ctx.git(['worktree', 'add', '-q', '-b', branch, worktree, `origin/${state.baseBranch}`]);
       } catch (error) {
-        ctx.warn(`Autopilot core could not check out the kept PR #${kept.number} of #${n}: ${error.message}`);
-        await undoClaim(ctx, n, claim); await removeTree(ctx, worktree); ctx.skip.add(n);
+        ctx.warn(`Autopilot core skipped #${n}: ${error.message}`); ctx.skip.add(n);
+        await ctx.git(['branch', '-D', branch]).catch(() => {}); continue;
+      }
+      let claim = null;
+      try { claim = await claimIssue(ctx, n); } catch (error) { ctx.warn(`Autopilot core claim of #${n} failed: ${error.message}`); }
+      if (!claim) { await removeTree(ctx, worktree); await ctx.git(['branch', '-D', branch]).catch(() => {}); continue; }
+      const answer = row.comments ? await personAnswer(ctx, n).catch(error => { ctx.warn(`Autopilot core could not read the answer of #${n}: ${error.message}`); return null; }) : null;
+      // A trusted reply or a trusted person's label removal answers a question: otherwise the label goes back and nothing starts.
+      if (answer && !answer.trustedRemoval && !answer.comments.length) {
+        ctx.warn(`Autopilot core: #${n} has an open question; a trusted reply or a trusted removal of ${DECISION} answers it`);
+        await ctx.gh.ok('POST', `repos/${ctx.repo}/issues/${n}/labels`, { labels: [DECISION] }).catch(() => {});
+        await undoClaim(ctx, n, claim); await removeTree(ctx, worktree); await ctx.git(['branch', '-D', branch]).catch(() => {}); ctx.skip.add(n);
         continue;
       }
-      ctx.saveJob({ schema: 'pdd.core-job.v1', id: randomUUID(), issue: n, title: oneLine(row.title, 200), url: row.html_url ?? issueKey(ctx.repo, n), body: cutText(row.body, 20000, `read the issue for the rest: ${row.html_url ?? issueKey(ctx.repo, n)}`),
-        cuts: cutsOf('issue text', row.body, 20000), branch: kept.head.ref, worktree, claim, phase: 'pr', role: 'build', repairs: 0, started: ctx.now(), pr: kept.number, head: String(kept.head.sha).toLowerCase(), agentHead: String(kept.head.sha).toLowerCase(), prAt: ctx.now(),
-        progress: { sig: null, at: ctx.now(), running: false }, resumed: true });
-      ctx.counts.started++; free--;
-      continue;
+      // A PR that waits for a person's approval (strict repository) resumes after a trusted label removal: no new build.
+      const kept = await keptPr(ctx, n).catch(error => { ctx.warn(`Autopilot core could not read the PRs of #${n}: ${error.message}`); return null; });
+      if (kept) {
+        await removeTree(ctx, worktree); await ctx.git(['branch', '-D', branch]).catch(() => {});
+        // A failed checkout of the kept branch undoes the claim, as the other intake steps do: no orphan claim.
+        try {
+          await ctx.git(['fetch', '-q', 'origin', kept.head.ref]);
+          await ctx.git(['worktree', 'add', '-q', '-B', kept.head.ref, worktree, `origin/${kept.head.ref}`]);
+        } catch (error) {
+          ctx.warn(`Autopilot core could not check out the kept PR #${kept.number} of #${n}: ${error.message}`);
+          await undoClaim(ctx, n, claim); await removeTree(ctx, worktree); ctx.skip.add(n);
+          continue;
+        }
+        ctx.saveJob({ schema: 'pdd.core-job.v1', id: randomUUID(), issue: n, title: oneLine(row.title, 200), url: row.html_url ?? issueKey(ctx.repo, n), body: cutText(row.body, 20000, `read the issue for the rest: ${row.html_url ?? issueKey(ctx.repo, n)}`),
+          cuts: cutsOf('issue text', row.body, 20000), branch: kept.head.ref, worktree, claim, phase: 'pr', role: 'build', repairs: 0, started: ctx.now(), pr: kept.number, head: String(kept.head.sha).toLowerCase(), agentHead: String(kept.head.sha).toLowerCase(), prAt: ctx.now(),
+          progress: { sig: null, at: ctx.now(), running: false }, resumed: true });
+        ctx.counts.started++; free--;
+        continue;
+      }
+      await closeOtherPrs(ctx, n, branch);
+      const note = [await concurrencyNote(ctx, row, others, worktree).catch(() => ''), hangNote(ctx, n)].filter(Boolean).join('\n\n');
+      const job = { schema: 'pdd.core-job.v1', id: randomUUID(), issue: n, title: oneLine(row.title, 200), url: row.html_url ?? issueKey(ctx.repo, n), body: cutText(row.body, 20000, `read the issue for the rest: ${row.html_url ?? issueKey(ctx.repo, n)}`), ...(note ? { note } : {}),
+        cuts: [...cutsOf('issue text', row.body, 20000), ...(answer?.comments ?? []).filter(c => c.cut > 0).map(c => ({ input: `the answer of ${c.author}`, more: c.cut }))],
+        branch, worktree, claim, phase: 'running', role: 'build', repairs: 0, started: ctx.now(), progress: { sig: null, at: ctx.now(), running: false }, ...(answer ? { answer } : {}) };
+      ctx.saveJob(job);
+      try { const others = await openIssuesBrief(ctx, job); job.agent = startJob(ctx, job, 'build', worktree, result => buildPrompt(ctx, job, result, others)); ctx.saveJob(job); ctx.counts.started++; free--; }
+      catch (error) {
+        await end(ctx, job, cause('job', 'no-result', `the agent could not start: ${oneLine(error.message)}`))
+          .catch(failure => ctx.warn(`Autopilot core END of #${n} waits: ${failure.message}`));
+        // The END can start a pause: no further claim in this tick then.
+        if (pausedText()) return pausedText();
+      }
     }
-    await closeOtherPrs(ctx, n, branch);
-    const note = [await concurrencyNote(ctx, row, others, worktree).catch(() => ''), hangNote(ctx, n)].filter(Boolean).join('\n\n');
-    const job = { schema: 'pdd.core-job.v1', id: randomUUID(), issue: n, title: oneLine(row.title, 200), url: row.html_url ?? issueKey(ctx.repo, n), body: cutText(row.body, 20000, `read the issue for the rest: ${row.html_url ?? issueKey(ctx.repo, n)}`), ...(note ? { note } : {}),
-      cuts: [...cutsOf('issue text', row.body, 20000), ...(answer?.comments ?? []).filter(c => c.cut > 0).map(c => ({ input: `the answer of ${c.author}`, more: c.cut }))],
-      branch, worktree, claim, phase: 'running', role: 'build', repairs: 0, started: ctx.now(), progress: { sig: null, at: ctx.now(), running: false }, ...(answer ? { answer } : {}) };
-    ctx.saveJob(job);
-    try { const others = await openIssuesBrief(ctx, job); job.agent = startJob(ctx, job, 'build', worktree, result => buildPrompt(ctx, job, result, others)); ctx.saveJob(job); ctx.counts.started++; free--; }
-    catch (error) {
-      await end(ctx, job, cause('job', 'no-result', `the agent could not start: ${oneLine(error.message)}`))
-        .catch(failure => ctx.warn(`Autopilot core END of #${n} waits: ${failure.message}`));
-      // The END can start a pause: no further claim in this tick then.
-      if (pausedText()) return pausedText();
-    }
-  }
+  } finally { release?.(); }
   return null;
 }
 
@@ -1242,12 +1243,12 @@ const SUITE_RUNNER = /^(?:Shared test suite queue failed|Test suite execution ti
 // #3227 fix 4: the failed tests that a test log shows (also a partial log), each test once, at most `limit`, in log
 // order. node --test TAP "not ok N - NAME" lines at any depth: a failure stays open until its location line, the next
 // test line or 12 lines, so one name in two files is two tests; a TODO or SKIP directive is no failure; "\#" and "\\"
-// unescape. Spec-reporter "✖ NAME (DURATION)" lines at any depth, without color codes; the summary's "test at FILE"
-// line gives the file. One test: the same name with the same file, or with no file on one side (the known file stays).
+// unescape. Spec summaries and failure rows are parsed per run; suite close rows are not extra failed tests. One test:
+// the same name with the same file, or with no file on one side (the known file stays).
 export function failingTests(text, limit = 20) {
   const found = [];
-  const specRows = [], specTreeRows = [];
-  let open = null, look = 0, specSummary = false, specSection = false, specAt = null, specFail = null, specTodo = 0, specSkipped = 0;
+  const specBlocks = [];
+  let open = null, look = 0, specBlock = null, pendingSpecTreeRows = [], specSection = false, specAt = null;
   const add = (raw, file) => {
     const name = oneLine(raw, 200);
     if (!name || /^(?:failing tests|tests? failed):?$/i.test(name)) return;
@@ -1255,19 +1256,31 @@ export function failingTests(text, limit = 20) {
     if (same) same.file ??= file ?? null; else if (found.length < limit) found.push({ name, file: file ?? null });
   };
   const close = () => { if (open) add(open.name, open.file); open = null; look = 0; };
+  const finishSpec = () => { if (specBlock) specBlocks.push(specBlock); specBlock = null; specSection = false; specAt = null; };
   for (const raw of String(text ?? '').split('\n')) {
     const line = raw.replace(/\r$/, '').replace(/\x1b\[[0-9;]*m/g, '');
     let m;
-    if (/^\s*ℹ\s+tests\s+\d+\s*$/.test(line)) { specSummary = true; continue; }
-    if (specSummary && (m = /^\s*ℹ\s+fail\s+(\d+)\s*$/.exec(line))) { specFail = Number(m[1]); continue; }
-    if (specSummary && (m = /^\s*ℹ\s+todo\s+(\d+)\s*$/.exec(line))) { specTodo = Number(m[1]); continue; }
-    if (specSummary && (m = /^\s*ℹ\s+skipped\s+(\d+)\s*$/.exec(line))) { specSkipped = Number(m[1]); continue; }
-    if (/^\s*✖\s+failing tests:\s*$/.test(line)) { specSection = true; specAt = null; continue; }
-    if (!specSection && (m = /^\s*✖\s+(.+?)\s*$/.exec(line))) { specTreeRows.push({ text: m[1], file: null }); continue; }
+    const tree = /^\s*([▶✔✖])\s+(.+?)\s*$/.exec(line);
+    const treeAtRoot = tree && !/^\s/.test(line);
+    const failureSectionHeader = /^\s*✖\s+failing tests:\s*$/.test(line);
+    // A new reporter's tree follows the previous summary's failure details. Its top-level
+    // row starts a new block; tree rows never become failure-section details by accident.
+    if (specBlock && treeAtRoot && !specAt && !failureSectionHeader) {
+      finishSpec(); pendingSpecTreeRows.push({ marker: tree[1], text: tree[2] }); continue;
+    }
+    if (/^\s*ℹ\s+tests\s+\d+\s*$/.test(line)) {
+      finishSpec(); specBlock = { treeRows: pendingSpecTreeRows, rows: [], fail: null, todo: 0, skipped: 0, suites: null }; pendingSpecTreeRows = []; continue;
+    }
+    if (specBlock && (m = /^\s*ℹ\s+fail\s+(\d+)\s*$/.exec(line))) { specBlock.fail = Number(m[1]); continue; }
+    if (specBlock && (m = /^\s*ℹ\s+todo\s+(\d+)\s*$/.exec(line))) { specBlock.todo = Number(m[1]); continue; }
+    if (specBlock && (m = /^\s*ℹ\s+skipped\s+(\d+)\s*$/.exec(line))) { specBlock.skipped = Number(m[1]); continue; }
+    if (specBlock && (m = /^\s*ℹ\s+suites\s+(\d+)\s*$/.exec(line))) { specBlock.suites = Number(m[1]); continue; }
+    if (specBlock && /^\s*✖\s+failing tests:\s*$/.test(line)) { specSection = true; specAt = null; continue; }
     if (specSection) {
       if ((m = /^\s*test at (.+?):\d+:\d+\s*$/.exec(line))) { specAt = m[1]; continue; }
-      if ((m = /^\s*✖\s+(.+?)\s*$/.exec(line))) { specRows.push({ text: m[1], file: specAt }); specAt = null; continue; }
+      if ((m = /^\s*✖\s+(.+?)\s*$/.exec(line))) { if (specAt) specBlock.rows.push({ text: m[1], file: specAt }); specAt = null; continue; }
     }
+    if (tree) { pendingSpecTreeRows.push({ marker: tree[1], text: tree[2] }); continue; }
     if (/^\s*ok \d+ /.test(line)) { close(); continue; }
     if ((m = /^\s*not ok \d+ - (.*)$/.exec(line))) {
       close();
@@ -1277,28 +1290,34 @@ export function failingTests(text, limit = 20) {
     if (open) { if ((m = /^\s*location: '(.+?):\d+:\d+'/.exec(line))) { open.file = m[1]; close(); } else if (--look <= 0) close(); continue; }
   }
   close();
-  if (specFail > 0) {
-    const named = [];
-    const rows = specTreeRows.map(row => ({ ...row })), used = new Set();
-    for (const row of specRows) {
-      const at = rows.findIndex((candidate, index) => !used.has(index) && candidate.text === row.text);
-      if (at >= 0) { rows[at].file = row.file; used.add(at); }
-      else rows.push(row);
+  finishSpec();
+  let unclearSpecFailures = 0, specRowsMismatch = false;
+  for (const block of specBlocks) {
+    if (block.fail > 0) {
+      const candidates = [...(block.suites === 0 ? block.treeRows.filter(row => row.marker === '✖').map(row => ({ text: row.text, file: null })) : []), ...block.rows];
+      const named = [];
+      const name = row => {
+        const durations = [...row.text.matchAll(/\s+\(\d+(?:\.\d+)?m?s\)/gi)];
+        const hash = row.text.indexOf('#'), before = hash < 0 ? [] : durations.filter(match => match.index < hash), after = hash < 0 ? [] : durations.filter(match => match.index > hash);
+        if (hash >= 0 && before.length && after.length && (block.todo || block.skipped)) return null;
+        if (hash >= 0 && before.length && !after.length && (block.todo || block.skipped)) return null;
+        const duration = durations.at(-1);
+        return duration ? { name: row.text.slice(0, duration.index).trim(), file: row.file ?? null } : null;
+      };
+      for (const row of candidates) {
+        const item = name(row);
+        if (!item) continue;
+        const same = named.find(existing => existing.name === item.name && (!existing.file || !item.file || existing.file === item.file));
+        if (same) same.file ??= item.file; else named.push(item);
+      }
+      if (named.length <= block.fail) {
+        for (const row of named) add(row.name, row.file);
+        unclearSpecFailures += block.fail - named.length;
+      } else specRowsMismatch = true;
     }
-    for (const row of rows) {
-      const durations = [...row.text.matchAll(/\s+\(\d+(?:\.\d+)?m?s\)/gi)];
-      const hash = row.text.indexOf('#'), before = hash < 0 ? [] : durations.filter(match => match.index < hash), after = hash < 0 ? [] : durations.filter(match => match.index > hash);
-      if (hash >= 0 && before.length && after.length && (specTodo || specSkipped)) continue;
-      if (hash >= 0 && before.length && !after.length && (specTodo || specSkipped)) continue;
-      const duration = durations.at(-1);
-      if (duration) named.push({ name: row.text.slice(0, duration.index).trim(), file: row.file });
-    }
-    if (named.length <= specFail) {
-      for (const row of named) add(row.name, row.file);
-      const missing = specFail - named.length;
-      if (missing) add(`Spec output reports ${missing} failed test${missing === 1 ? '' : 's'} with unclear names; see the log`, null);
-    } else add(`Spec output reports ${specFail} failures, but its test rows do not match the summary; see the log`, null);
   }
+  if (unclearSpecFailures) add(`Spec output reports ${unclearSpecFailures} failed test${unclearSpecFailures === 1 ? '' : 's'} with unclear names; see the log`, null);
+  if (specRowsMismatch) add('Spec output has failed-test rows that do not match its summary; see the log', null);
   return found;
 }
 const testList = list => list.map(f => `${f.name}${f.file ? ` (${basename(f.file)})` : ''}`).join('; ');
@@ -2450,7 +2469,10 @@ async function laneConflict(ctx, job) {
   // M-a: recompute the derived hash headers of the fixed files from their prompts.
   for (const file of files) {
     const text = ctx.fs.readFileSync(join(cwd, file), 'utf8'), m = /Generated from (\S+\.prompt\.md) \(sha256: [0-9a-f]*\)/.exec(text);
-    if (m && ctx.fs.existsSync(join(cwd, m[1]))) ctx.fs.writeFileSync(join(cwd, file), text.replace(m[0], `Generated from ${m[1]} (sha256: ${createHash('sha256').update(ctx.fs.readFileSync(join(cwd, m[1]))).digest('hex')})`));
+    if (m && ctx.fs.existsSync(join(cwd, m[1]))) {
+      const prompt = ctx.fs.readFileSync(join(cwd, m[1]));
+      ctx.fs.writeFileSync(join(cwd, file), text.replace(m[0], `Generated from ${m[1]} (sha256: ${promptHeaderHash(prompt)})`));
+    }
   }
   await ctx.git(['add', '--', ...files], cwd);
   await ctx.git([...IDENTITY, 'commit', '-q', '--no-edit', '-m', `Merge ${base} into ${job.branch} (mechanical conflict fix)`], cwd);

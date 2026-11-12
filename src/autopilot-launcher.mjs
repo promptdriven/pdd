@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 28d035c7774f772f56cf145141180c39d493f63ccd53af9b9b25c814f254aa08).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 870d872340025b29542e47f34802bcb932220c2bae5284b7542c8de469dc6a26).
 import {runAutopilotDoctor, resolveAutopilotAgent} from './autopilot-doctor.mjs';
 import {releaseRunClaim, cancelRun, acquireRunLock} from './workflow-runner.mjs';
 import { releaseCheckCapacity } from './test-suite-queue.mjs';
@@ -355,13 +355,18 @@ function shareOption(command, input, state) {
   return null;
 }
 async function coreTick(stateFile, state, p, ports) {
-  const releaseMachine = await claimMachineAdmission(stateFile, p);
-  if (!releaseMachine) return ok('Autopilot machine admission is busy; the next tick will retry.');
-  try { return await runCoreTick(stateFile, state, p, ports); }
-  finally { releaseMachine(); }
+  return runCoreTick(stateFile, state, p, ports);
 }
 async function runCoreTick(stateFile, state, p, ports) {
   const guard = await coreGuard(state, p, ports, stateFile);
+  const machine = { ...guard };
+  const reserveMachine = async () => {
+    const release = await claimMachineAdmission(stateFile, p);
+    if (!release) return null;
+    try { Object.assign(machine, await coreGuard(state, p, ports, stateFile)); machine.reserve = reserveMachine; return release; }
+    catch (error) { release(); throw error; }
+  };
+  machine.reserve = reserveMachine;
   const core = readCoreSettings(state.cwd, undefined, { auto: guard.auto, runs: state.runs });
   if (machineLabel(state)) core.label = machineLabel(state);
   if (machineMode(state)) core.mode = machineMode(state);
@@ -397,7 +402,7 @@ async function runCoreTick(stateFile, state, p, ports) {
     alert: ({ issue, kind, text, tried, need, update }) => (p.sendAlert ?? runAutopilotAlerts)({ action: 'alert', cwd: state.cwd, env: p.env, issue: String(issue), kind, ...(update ? { update: true } : {}),
       text: JSON.stringify({ cause: text, tried: tried ?? 'The Autopilot core engine could not go on with this issue.', need: need ?? 'Check the issue and this machine.' }) },
       { ...p.alertPorts, repository: async () => ({ nameWithOwner: state.repo }), stateRoot: dirname(stateFile), now: p.now, hostname: () => state.machine }),
-    machine: guard,
+    machine,
     ...p.corePorts,
   });
   const release = await claimAdmission(state, p);

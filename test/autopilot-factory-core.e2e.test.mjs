@@ -1,4 +1,4 @@
-// Generated from prompts/test/autopilot-factory.prompt.md (sha256: 447fb20ca2b7b8b2bdee739a1d5a88a2f6a2e9e318bf00b52680a1f2ac4d69e8).
+// Generated from prompts/test/autopilot-factory.prompt.md (sha256: 1e63cdda15ec0d34499b1a62a4e6664b040d3a8ff76de2435d17a01988e09b29).
 // The core factory: each user path of Autopilot end to end through the real launcher (start, tick, status, add,
 // stop) and the real core tick, with real Git (a bare origin and clones), a fake GitHub and scripted agent jobs.
 import './helpers/test-home.mjs';
@@ -198,28 +198,42 @@ test('core factory 7: stop disables the timer and every later tick; a person who
   assert.match((await f.status()).message, /^Autopilot disabled; timer inactive/);
 });
 
-test('core factory 8: repository ticks share one machine slot under concurrent admission', async t => {
+test('core factory 8: a slow repository tick does not hold admission, and shared reservation gives one machine slot', async t => {
   const first = await factory(t, { label: 'pdd:autopilot' }, { repository: 'acme/first' });
   const second = await factory(t, { label: 'pdd:autopilot' }, { stateRoot: first.stateRoot, repository: 'acme/second' });
   first.w.issue(17, { labels: ['pdd:autopilot'] });
   second.w.issue(17, { labels: ['pdd:autopilot'] });
 
-  let guardCalls = 0, releaseTogether;
-  const together = new Promise(resolve => { releaseTogether = resolve; });
   const seenJobs = [];
   const machineGuard = async ({ jobs = 0 } = {}) => {
     seenJobs.push(jobs);
-    if (++guardCalls === 2) releaseTogether();
-    else await Promise.race([together, new Promise(resolve => setTimeout(resolve, 500))]);
     return { klass: 'server', auto: 1, slots: 1, source: 'automatic', room: { ok: true, reason: null, free: Math.max(0, 1 - jobs) },
       priority: () => ({}), line: 'Machine: one slot (test)' };
   };
   first.ports.machineGuard = machineGuard;
   second.ports.machineGuard = machineGuard;
 
-  const started = await Promise.all([first.start(), second.start()]);
-  assert.deepEqual(started.map(result => result.exitCode), [0, 0]);
+  let scanStarted, releaseFirstScan;
+  const scanning = new Promise(resolve => { scanStarted = resolve; });
+  const continueFirst = new Promise(resolve => { releaseFirstScan = resolve; });
+  let scans = 0;
+  first.ports.queryIssues = async () => {
+    if (++scans === 1) { scanStarted(); await continueFirst; }
+    const issues = [...first.w.github.issues.values()].filter(issue => issue.state === 'open');
+    return { status: 200, etag: 'first', issues, pages: {}, since: null, fullAt: first.w.now() };
+  };
+
+  const firstStart = first.start();
+  await scanning;
+  const secondStart = await second.start();
+  assert.equal(secondStart.exitCode, 0, secondStart.message);
+  assert.equal(first.w.started.filter(job => job.role === 'build').length, 0, 'the slow issue scan has not reserved the machine');
+  assert.equal(second.w.started.filter(job => job.role === 'build').length, 1, 'the other repository reaches admission while the first scans');
+  releaseFirstScan();
+  const firstResult = await firstStart;
+  assert.equal(firstResult.exitCode, 0, firstResult.message);
+  assert.match(first.state().core?.message ?? '', /Autopilot core:/, JSON.stringify(first.state()));
   const builds = [...first.w.started, ...second.w.started].filter(job => job.role === 'build');
   assert.equal(builds.length, 1, 'only one repository starts a build in the one shared machine slot');
-  assert.deepEqual([...seenJobs].sort(), [0, 1], 'the later guard snapshot includes the admitted job');
+  assert.ok(seenJobs.filter(jobs => jobs === 0).length >= 3, 'the admitted repository refreshes the guard under reservation');
 });

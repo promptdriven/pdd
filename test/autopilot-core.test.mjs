@@ -6,6 +6,7 @@ import { join, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { promptHeaderHash } from '../src/file-owner.mjs';
 import { coreWorld } from './helpers/core-world.mjs';
 import { autopilotEngine, coreSettings, readyIssues, coreStatus, tickCore } from '../src/autopilot-core.mjs';
 import { listReportDrafts, sendReportDraft } from '../src/autopilot-reports.mjs';
@@ -2341,23 +2342,25 @@ test('Q2 mechanical conflicts are fixed in the lane with no agent and no repair:
 });
 
 test('Q2b M-a: a conflict only in a derived hash header is fixed by recomputing it from the merged prompt', async t => {
-  const prompt = lines => `# X\n\n${lines.join('\n')}\n`;
-  const sha = text => createHash('sha256').update(text).digest('hex');
+  const prompt = lines => approvedText(lines.join('\n'));
+  const sha = text => promptHeaderHash(text);
   const base = prompt(['Rule 1.', 'Rule 2.', 'Rule 3.', 'Rule 4.', 'Rule 5.', 'Rule 6.']);
+  assert.notEqual(createHash('sha256').update(base).digest('hex'), sha(base), 'approval metadata is excluded from the generated prompt hash');
   const w = await coreWorld(t, { settings: { runs: 1 } }); w.github.mergeMovesBase = true;
   w.baseCommit('prompts/x.prompt.md', base);
-  w.baseCommit('src/x.js', `// Generated from prompts/x.prompt.md (sha256: ${sha(base)})\nexport const x = 1;\n`);
+  w.baseCommit('src/x.js', `// Generated from prompts/x.prompt.md (sha256: ${createHash('sha256').update(base).digest('hex')})\nexport const x = 1;\n`);
+  recordApproval(w, 'prompts/x.prompt.md', base);
   w.issue(17); await w.tick();
   const mine = prompt(['Rule 1 (PR).', 'Rule 2.', 'Rule 3.', 'Rule 4.', 'Rule 5.', 'Rule 6.']);
   editIn(w, 17, 'prompts/x.prompt.md', mine); editIn(w, 17, 'src/x.js', `// Generated from prompts/x.prompt.md (sha256: ${sha(mine)})\nexport const x = 1;\n`);
+  recordApproval(w, 'prompts/x.prompt.md', mine);
   w.build(17, { body: 'Fixes #17\n\nRuntime: PASS\nPath: b — src/x.js, prompts/x.prompt.md — prompts/x.prompt.md — prompt changed — Test: done check' }); await greenLane(w, 17);
-  const theirs = prompt(['Rule 1.', 'Rule 2.', 'Rule 3.', 'Rule 4.', 'Rule 5.', 'Rule 6 (base).']);
-  w.baseCommit('prompts/x.prompt.md', theirs); w.baseCommit('src/x.js', `// Generated from prompts/x.prompt.md (sha256: ${sha(theirs)})\nexport const x = 1;\n`);
+  w.baseCommit('src/x.js', `// Generated from prompts/x.prompt.md (sha256: ${sha(base)})\nexport const x = 1;\n`);
   await w.tick();
   const job = jobFile(w, 17);
-  assert.ok(job.mechanical, roles(w, 17).join(','));
+  assert.ok(job.mechanical, `${roles(w, 17).join(',')}: ${job.conflict?.files?.join(',') ?? ''}`);
   const merged = w.git(job.worktree, 'show', `${job.head}:prompts/x.prompt.md`) + '\n';
-  assert.match(merged, /Rule 1 \(PR\)\.[\s\S]*Rule 6 \(base\)\./);
+  assert.match(merged, /Rule 1 \(PR\)\.[\s\S]*Rule 6\./);
   assert.match(w.git(job.worktree, 'show', `${job.head}:src/x.js`), new RegExp(`sha256: ${sha(merged)}`), 'the header is recomputed from the merged prompt');
 });
 

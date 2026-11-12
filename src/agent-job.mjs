@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-job.prompt.md (sha256: 4de5e43a35d7fef5eecca73ed82786faaeea70a7e721e627e7a11fcfb03a3c14).
+// Generated from prompts/cli/agent-job.prompt.md (sha256: 88916b3afb1f29c22f157abee074ee60ce9b07e5411dc5a5d2ecf9f66e290c2b).
 import { execFile, spawn, spawnSync } from 'node:child_process';
 import { accessSync, closeSync, constants, fstatSync, openSync, readFileSync, readSync, renameSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { setPriority } from 'node:os';
@@ -44,7 +44,7 @@ export function startAgentJob({ id, dir, cwd, command, args = [], input = '', en
 
 function nativeAlive(pid, token) {
   try { process.kill(pid, 0); } catch (error) { if (error.code !== 'EPERM') return false; }
-  const row = spawnSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8', timeout: 5000 });
+  const row = spawnSync('ps', ['-ww', '-o', 'command=', '-p', String(pid)], { encoding: 'utf8', timeout: 5000, env: { ...process.env, LC_ALL: 'C', LANG: 'C' } });
   return row.status === 0 && String(row.stdout).includes(token);
 }
 
@@ -102,7 +102,7 @@ const etimeSeconds = text => {
   return clock.split(':').reduce((sum, part) => sum * 60 + Number(part), 0) + Number(days) * 86400;
 };
 function processTable() {
-  const table = spawnSync('ps', ['-A', '-o', 'pid=,ppid=,time=,etime=,command='], { encoding: 'utf8', timeout: 5000 });
+  const table = spawnSync('ps', ['-A', '-ww', '-o', 'pid=,ppid=,time=,etime=,command='], { encoding: 'utf8', timeout: 5000, env: { ...process.env, LC_ALL: 'C', LANG: 'C' } });
   if (table.status !== 0) return null;
   const now = Date.now();
   return String(table.stdout).split('\n').map(line => /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s?(.*)$/.exec(line)).filter(Boolean)

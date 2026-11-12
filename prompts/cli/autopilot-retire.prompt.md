@@ -59,9 +59,10 @@ next tick in the same way, without a count.
    step fails). A pane that belongs to something else is never closed (`keptPanes`). Another Herdr error fails the
    step.
 2. **runs**: every run record of this machine (`automaticOrigin.machine` is this machine, same repository, any older
-   coordinator of this machine too) that is not cancelled or completed: `ports.cancelRun(run)` (exit 0 needed, else the
-   step fails), then `ports.releaseLocal(run)` (not released: a warning). Keep each run's saved claim identity
-   (`commentId`, `labelEventId`) for the claims step.
+   coordinator of this machine too) that is not cancelled or completed: first add its saved claim identity
+   (`commentId`, `labelEventId`) to the journal and save the journal. If that save fails, do not cancel the run. Then
+   call `ports.cancelRun(run)` (exit 0 needed, else the step fails), then `ports.releaseLocal(run)` (not released: a
+   warning). The saved claim lets a retry release a run's remote claim after its local status was already cancelled.
 3. **claims**: release this machine's claims of the full engine. Issues to read: the claims of the runs step; for a
    machine that ran the full engine also the saved intake claims of this machine (`githubIntake.claims`) and every open
    issue with `pdd:working`. Skip an issue that has a core job file (`ports.coreJobs()`). On each issue, this machine's
@@ -93,8 +94,8 @@ async and the move awaits it. The launcher supplies the native ones.
 
 ## Dependencies
 
-- [Autopilot launcher](autopilot-launcher.prompt.md): required native generation and verification context for the
+- [Autopilot launcher](autopilot-launcher.prompt.md#the-move-from-the-full-engine): required native generation and verification context for the
   tick that calls the move and for its ports.
-- [Workflow runner](workflow-runner.prompt.md): required native generation and verification context for `cancelRun`.
+- [Workflow runner](workflow-runner.prompt.md#commands): required native generation and verification context for `cancelRun`.
 - [GitHub dependency reader](issue-dependencies-github.prompt.md): required verification context for the claim comment
   record and the winning label event.

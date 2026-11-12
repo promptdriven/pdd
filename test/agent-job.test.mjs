@@ -1,12 +1,18 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync, mkdirSync, chmodSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { agentCommand, jobEnvironment, startAgentJob, readAgentJob, stopAgentJob, agentJobCpu, agentJobHangs, jobStopper, hungRound } from '../src/agent-job.mjs';
 
 const folder = t => { const dir = mkdtempSync(join(tmpdir(), 'pdd-agent-job-')); t.after(() => rmSync(dir, { recursive: true, force: true })); return dir; };
+const fakePs = (dir, body) => {
+  const bin = join(dir, 'bin'), file = join(bin, 'ps');
+  mkdirSync(bin, { recursive: true }); writeFileSync(file, `#!/bin/sh\n${body}\n`); chmodSync(file, 0o755);
+  return bin;
+};
 const until = async (check, ms = 10000) => {
   const end = Date.now() + ms;
   while (Date.now() < end) { const value = check(); if (value) return value; await new Promise(r => setTimeout(r, 25)); }
@@ -70,6 +76,15 @@ test('a dead job without an exit file is dead; a reused pid without the job toke
   const job = { pid: process.pid, token: join(dir, 'never-started.spec.json'), exit: join(dir, 'e.json'), result: join(dir, 'r.json') };
   assert.equal(readAgentJob(job).state, 'dead');
   assert.equal(readAgentJob(job, { alive: () => true }).state, 'running');
+});
+
+test('the native liveness read keeps a long job token after ps wide output', t => {
+  const dir = folder(t), token = `job-${'x'.repeat(200)}`, bin = fakePs(dir, 'case "$LC_ALL:$*" in C:*-ww*) printf "%s\\n" "$PS_TOKEN" ;; *) printf "%s\\n" "node truncated" ;; esac');
+  const module = new URL('../src/agent-job.mjs', import.meta.url).href;
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', `import { readAgentJob } from ${JSON.stringify(module)}; process.stdout.write(readAgentJob({ pid: process.pid, token: process.env.PS_TOKEN, exit: '/missing-exit', result: '/missing-result' }).state);`],
+    { encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, PS_TOKEN: token } });
+  assert.equal(child.status, 0, child.stderr);
+  assert.equal(child.stdout, 'running');
 });
 
 test('stop ends the whole job process group and the wrapper records the signal', async t => {
@@ -228,8 +243,9 @@ setTimeout(() => {
 test('the hung-command watch never stops a pdd test that waits for Runtime (lead, Nov 11)', async t => {
   const dir = folder(t), commandPid = join(dir, 'command.pid'), fake = join(dir, 'bin', 'pdd.mjs');
   mkdirSync(join(dir, 'bin'), { recursive: true }); writeFileSync(fake, 'setInterval(() => {}, 1e6); // waits for Runtime capacity\n');
+  const widePs = fakePs(dir, 'case "$LC_ALL:$*" in C:*-ww*) exec /bin/ps "$@" ;; *) /bin/ps "$@" | awk \'{ printf "%s %s %s %s node\\n", $1, $2, $3, $4 }\' ;; esac');
   const job = startAgentJob({ id: '32-build-1', dir, cwd: dir, command: process.execPath, args: ['-e', WAITING_AGENT], input: '',
-    env: { PATH: process.env.PATH, COMMAND_PID: commandPid, PDD_FAKE: fake }, hung: { after: 1200, every: 150, cpu: 0.5 } });
+    env: { PATH: `${widePs}:${process.env.PATH}`, COMMAND_PID: commandPid, PDD_FAKE: fake }, hung: { after: 1200, every: 150, cpu: 0.5 } });
   const command = Number(await until(() => existsSync(commandPid) && readFileSync(commandPid, 'utf8')));
   t.after(() => { try { process.kill(command, 'SIGKILL'); } catch {} try { stopAgentJob(job); } catch {} });
   await new Promise(r => setTimeout(r, 4000));                      // more than 3 times the silent time

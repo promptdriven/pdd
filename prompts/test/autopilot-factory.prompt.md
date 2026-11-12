@@ -43,8 +43,8 @@ are fake. The tick calls no Herdr, launchctl or systemctl. Cases:
 7. A person who removes `pdd:working` stops that job; `pdd autopilot stop` stops the timer, and a later tick starts
    nothing; status says disabled.
 8. Two independent repository checkouts share one state folder and compete at the same time for one machine slot.
-   Only one build starts; the second tick reads the first job while holding the machine admission lock and starts no
-   build. Fix the machine guard result to one slot so the case does not depend on host memory.
+   A slow first tick can do its unrelated work while the second reaches intake. Only one build starts. Fix the
+   machine guard result to one slot so the case does not depend on host memory.
 
 ## Dependencies
 

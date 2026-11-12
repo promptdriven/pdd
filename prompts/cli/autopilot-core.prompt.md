@@ -304,8 +304,13 @@ Claude, when `ports.agentReady()` is false at the first ready issue (for example
 Codex usage limit), while a machine pause runs (below), while CI does not start in
 this repository ([Stop owners](#stop-owners), #3260), or when the machine has no
 room (#3231): `ports.machine.room` (the [machine guard](machine-guard.prompt.md)'s
-`machineRoom` for Autopilot's share of the whole machine, read by the launcher each tick
-with the jobs of every repository of this machine) is not ok. The tick message then says
+`machineRoom` for Autopilot's share of the whole machine). Before a ready intake reads this
+room, the core calls the optional launcher's `ports.machine.reserve()`. It returns a release
+function after refreshing the shared guard while holding the machine admission lock, or null
+after its bounded wait. The core holds that function only through the room check and new job
+save/start sequence, then calls it in `finally`; it does not reserve around issue scans,
+heartbeats, merge checks, reports or running-job work. A null reservation holds intake with
+`intake held: the machine admission is busy; the next tick retries.` The tick message then says
 `intake held: REASON`, for example `intake held: 4 of 4 Autopilot jobs on this machine
 run (all repositories, 50% share)`. With room, intake claims at most `room.free` issues,
 the jobs that the machine's share still allows. `busySlots(root, fs)` (exported) is the
@@ -1257,17 +1262,22 @@ runs until its end):
    side; the known file stays). TAP `not ok N - NAME` lines at any depth: a failure stays
    open until its `location:` line, the next `ok` or `not ok` line or 12 lines, so one name
    in two files is two tests; a `# TODO` or `# SKIP` directive is no failure; `\#` and `\\`
-   unescape. Spec-reporter `✖` lines use the `ℹ fail N` and `ℹ todo N` summary and the
-   `✖ failing tests:` section. A complete summary with `fail 0` means there is no
-   spec failure, even when TODO or skipped tests have `✖` lines. A partial spec log
-   without the summary does not prove a failure. When no TODO or skipped tests ran, the
-   final duration suffix gives the test name; earlier duration-like text and `# TODO` or
-   `# SKIP` stay in the name. When TODO or skipped tests ran, report a test name only when
-   its line is clear: a reason after the duration is not a failure, while a duration-shaped
-   reason or title is ambiguous. If the summary confirms failures but their names cannot
-   be separated from TODO or skipped rows, report the failure count and say the names are
-   unclear; do not guess a test or file. The `test at FILE:LINE:COL` line before a spec row
-   gives its file. The
+   unescape. Spec-reporter results use each run's own `ℹ fail N`, `ℹ todo N` and
+   `ℹ suites N` summary, plus its `✖ failing tests:` section. Keep failed counts from
+   every run in a combined log; a later passing run does not erase an earlier failure.
+   The section's failure rows give test names. The leading tree can repeat a failed child
+   as a failed `describe` or `suite`; those suite rows are not additional failed tests.
+   When a run has no suites, its failed parent `test()` rows can add counted test names.
+   Never use an unmatched suite tree row as a test. A complete summary with `fail 0`
+   means that run has no spec failure, even when TODO or skipped tests have `✖` lines. A
+   partial spec log without the summary does not prove a failure. When no TODO or skipped
+   tests ran, the final duration suffix gives the test name; earlier duration-like text and
+   `# TODO` or `# SKIP` stay in the name. When TODO or skipped tests ran, report a test name
+   only when its line is clear: a reason after the duration is not a failure, while a
+   duration-shaped reason or title is ambiguous. If a summary confirms failures but the
+   rows do not identify all failed tests clearly, report the remaining failure count as
+   unclear; do not guess a test or file. The `test at FILE:LINE:COL` line before a spec
+   row gives its file. The
    **repair budget** (option B): repairs go on
    while they make progress. The findings of a round are each review must-fix (P1 and P2)
    and each other red line. Two findings are the same when they name the same `file:line`
@@ -1396,8 +1406,9 @@ runs until its end):
    `merge.conflictStyle=diff3` in the job worktree and classify each conflicted file. A
    conflict never goes to a repair. Mechanical (fixed in the lane, no agent, the review
    kept as `mechanical`, never a repair): M-a a hunk that differs only in derived
-   `Generated from P (sha256: …)` header lines (the header is then recomputed from the
-   merged prompt P); M-b pure inserts (one copy of identical text, else the base side
+   `Generated from P (sha256: …)` header lines (the header is then recomputed with
+   `promptHeaderHash` from the merged prompt P, so approval metadata does not change it);
+   M-b pure inserts (one copy of identical text, else the base side
    first); M-c adjacent hunks that do not overlap (both applied); M-d a JSON file merged
    3-way (union of keys, a key changed on both sides is not mechanical, arrays that
    both sides only extend keep both additions). The fixed merge is committed and
@@ -1574,6 +1585,8 @@ with the native defaults named above.
 
 ## Dependencies
 
+- [File owner lookup](file-owner.prompt.md): required for `findOwners`, `resolveOwners`
+  and `promptHeaderHash` (M-a derived prompt headers).
 - [Headless job runner](agent-job.prompt.md): required for job start, outcome and stop.
 - [Machine guard](machine-guard.prompt.md): required for `slotCount` (the slots) and
   `GUARD` (the cleanup limits).

@@ -31,12 +31,6 @@ Autopilot to work on, then run the command again.` and change nothing. Report an
 failure; a sign-in message is only for a real sign-in failure. Git translates its messages, so run each Git call whose
 error text pdd reads (this Git root lookup and the one in `withAutopilotModeLock`) with `LC_ALL=C` and `LANG=C`.
 
-The state file is `ROOT/ID.json`, where ROOT is `ports.stateRoot` or `~/.local/state/pdd/autopilot` and ID is the
-first 20 hex characters of the SHA-256 of the Git root. Save it atomically (a temporary file and a rename, mode 0600).
-A new state that a start creates gets `engine: "core"`, because only a state that an older pdd saved can need the
-move. The core state folder is the state file path without `.json` plus `-core`; the machine report folder is
-`core-reports` beside the state files.
-
 `start --label NAME` saves `state.label`, which replaces the core's `label` setting. `start --mode auto|observe|off`
 saves `state.mode`, which replaces the core's mode in the tick, the start's off check and status (source `this
 machine`); it never writes `pdd.json` (unlike `pdd autopilot observe`). `start --report file|draft|off` saves
@@ -51,6 +45,21 @@ saved); a later start without it keeps it, and pdd.json never sets it. Another v
 --share with a whole percent from 1 to 100, for example --share 70 (the default is 50).` before any change. Optional
 `--runs` and `--checks` are positive safe integers with no product maximum; save explicit values, and remove them when
 a start omits them.
+
+## Automatic continuation custody
+
+The state file is `ROOT/ID.json`, where ROOT is `ports.stateRoot` or `~/.local/state/pdd/autopilot` and ID is the
+first 20 hex characters of the SHA-256 of the Git root. Save it atomically (a temporary file and a rename, mode 0600).
+A new state that a start creates gets `engine: "core"`, because only a state that an older pdd saved can need the
+move. The core state folder is the state file path without `.json` plus `-core`; the machine report folder is
+`core-reports` beside the state files.
+
+Start, stop, release and mode controls serialize on one admission lock (`acquireRunLock` of the workflow runner on the
+admission folder); a wait that times out returns `Timed out waiting for the current Autopilot operation; retry.`
+`withAutopilotModeLock({cwd, env}, action, ports)` runs a settings write (`pdd autopilot auto` and the others) under
+that lock for this checkout's state; outside a Git repository it runs the action without the lock, and another Git
+failure returns `Autopilot settings could not verify the Git repository; retry.` After a successful action it replaces
+the saved control revision, so a tick or start that read the old revision does not publish stale state.
 
 ## Doctor and start
 
@@ -126,13 +135,15 @@ A tick:
 4. Saves a missing `coordinatorId` (a random UUID) and `machine` (the host name) under the admission lock.
 5. Runs [the move](#the-move-from-the-full-engine) while the state has no complete move journal. Until the move is
    complete, the tick returns the move's message and starts no core work.
-6. Takes the machine admission lock at `ROOT/autopilot-machine-admission.lock`, where ROOT is the shared state
-   folder beside every repository's state file. It holds this lock while it reads the machine guard and runs
-   `tickCore` through the point where any new job record is saved and agent is started. This serializes the shared
-   room check and job admission across repositories; two ticks cannot use the same free machine slot. It then saves
-   this repository's tick result under its repository admission lock and releases the machine lock. If it cannot get
-   the machine lock within 5 seconds, it starts no core work and returns a deferred tick result; the next timer tick
-   retries. This lock is separate from the repository admission lock used by start, stop, release and state saves.
+6. Reads the machine guard before the core tick, so existing work can advance without waiting for another
+   repository's intake. When the core has a ready issue, its `machine.reserve()` port takes the machine admission
+   lock at `ROOT/autopilot-machine-admission.lock`, where ROOT is the shared state folder beside every repository's
+   state file. Under that lock it reads the guard again, then holds the reservation only while the core checks room,
+   saves a new job record and starts its agent. This serializes the shared room check and job admission across
+   repositories; two ticks cannot use the same free machine slot. The release happens before unrelated core work,
+   such as issue scans, claim heartbeats, merge checks and reports. A busy reservation waits up to 5 seconds; it
+   holds only new intake with `intake held: the machine admission is busy; the next tick retries.` Running work
+   continues. This lock is separate from the repository admission lock used by start, stop, release and state saves.
 7. At the end, saves the tick's ETag cache, compacts the GitHub ledger to its last 2 hours and removes the lock.
 
 The core tick reads the core settings from this checkout's `pdd.json` and replaces label, mode and report with the
@@ -150,8 +161,10 @@ interval). Before the core tick, the [machine guard](machine-guard.prompt.md) re
 (`readMachineGuard({cwd, runs: state.runs, repoRuns: pdd.json autopilot.runs, share: state.share, jobs})`, where
 `jobs` is the sum of the core's `busySlots` over the core folder of every enabled state file beside this one: the
 share is for the whole machine, every repository; tests replace it with `ports.machineGuard`, #3231). The machine
-admission lock is acquired before this snapshot and remains held until `tickCore` has saved and started any new jobs,
-so the snapshot stays current while the core makes its admission decision. The core
+port includes `reserve()`: only when ready intake exists, it takes the shared machine-admission lock, refreshes this
+guard object from the current job files, and returns a release function. The core calls it immediately before its
+room check and releases it after all new job records and agents are started, so the snapshot stays current while the
+core makes its admission decision without blocking unrelated core work. The core
 settings come from `readCoreSettings(cwd, fs, {auto, runs: state.runs})`, so this machine's `start --runs N` reaches
 the core and a machine without it gets its automatic slots; the core gets the guard as its `machine` port (the room
 check and each job's priority). Tests may replace core ports with `ports.corePorts`. Afterwards, under the admission lock and only while
@@ -244,15 +257,6 @@ machine.` and `intakeText`, or with `--json` the JSON of `{repository, intake, d
 
 Another command returns exit 2 with `Use pdd autopilot start, stop, status, add or release.` A thrown error returns
 exit 1 with one line; a missing program says `install git and gh, and sign in to your agent, then retry.`
-
-## Admission
-
-Start, stop, release and mode controls serialize on one admission lock (`acquireRunLock` of the workflow runner on the
-admission folder); a wait that times out returns `Timed out waiting for the current Autopilot operation; retry.`
-`withAutopilotModeLock({cwd, env}, action, ports)` runs a settings write (`pdd autopilot auto` and the others) under
-that lock for this checkout's state; outside a Git repository it runs the action without the lock, and another Git
-failure returns `Autopilot settings could not verify the Git repository; retry.` After a successful action it replaces
-the saved control revision, so a tick or start that read the old revision does not publish stale state.
 
 ## Dependencies
 

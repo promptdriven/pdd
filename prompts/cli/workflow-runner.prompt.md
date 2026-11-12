@@ -104,7 +104,7 @@ without this field is manual or legacy; a present field of any other shape or ty
 including null or empty values, is malformed and cannot be treated as absent.
 Normal runner updates preserve this caller-owned field.
 
-Before any `approveRun` approval or progress effect for such a run, read the local launcher state owned by [Autopilot launcher](autopilot-launcher.prompt.md): use SHA-256 of the canonical Git source checkout root, first 20 hex characters, as the JSON filename under `HOME/.local/state/pdd/autopilot` (or the injected Autopilot state root). After each terminal confirmation and before approval or progression effects, serialize the stopped-state check and those effects with the existing Autopilot admission boundary shared by STOP. Do not hold that boundary while waiting for a person. An explicit saved `enabled: false` refuses continuation with a restart instruction; absent legacy state or field is not an explicit stop. A deliberate launcher start enables later continuation, subject to the existing claim check. This does not block finishing the current step or capacity handoff.
+Before any `approveRun` approval or progress effect for such a run, read the local launcher state owned by [Autopilot launcher](autopilot-launcher.prompt.md#automatic-continuation-custody): use SHA-256 of the canonical Git source checkout root, first 20 hex characters, as the JSON filename under `HOME/.local/state/pdd/autopilot` (or the injected Autopilot state root). After each terminal confirmation and before approval or progression effects, serialize the stopped-state check and those effects with the existing Autopilot admission boundary shared by STOP. Do not hold that boundary while waiting for a person. An explicit saved `enabled: false` refuses continuation with a restart instruction; absent legacy state or field is not an explicit stop. A deliberate launcher start enables later continuation, subject to the existing claim check. This does not block finishing the current step or capacity handoff.
 
 Before `approveRun` advances such a run into a later area or requests its chat,
 read current shared ownership from the admitted canonical `run.sourceRoot`, even when the caller is in its linked worker worktree; local coordinator state belongs to that source checkout. Preserve the current remote claim check. Read it for the run repository and issue using
@@ -1632,7 +1632,7 @@ Export recoverAutomaticRunOwner({ref,cwd,coordinatorId,machine},ports), with the
 
 - [Metrics capture](metrics-capture.prompt.md): required native generation/verification context for filtered start/outcome/readiness observations; [approval evidence](approval-evidence.prompt.md) supplies native metadata discovery without altering approval semantics.
 
-- [Autopilot launcher](autopilot-launcher.prompt.md): required authoring, generation, runtime, verification and testing context for local launcher control state and supported start and stop.
+- [Autopilot launcher](autopilot-launcher.prompt.md#automatic-continuation-custody): required authoring, generation, runtime, verification and testing context for local launcher control state and supported start and stop.
 
 - [Dependency intake](issue-dependencies-intake.prompt.md#current-automatic-start-check): required authoring, generation, runtime, verification and testing context for the current Autopilot start check. Preserve explicit manual starts and active-run open/resume behavior.
 

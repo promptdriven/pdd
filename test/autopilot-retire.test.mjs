@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-retire.prompt.md (sha256: c03cbcc1c4b6011174c523d9c405b2357692adf1eec5c3bc7c7cf84d3fd78989).
+// Generated from prompts/cli/autopilot-retire.prompt.md (sha256: 4c820f17d0ed0a5fe7a975c29736f23b50df59966f7986ce34087f2bdbfc204f).
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -158,6 +158,53 @@ test('M1a each move-journal save finishes before the next step or return; a reje
   assert.equal(saves, 1);
   assert.match(deferred.message, /could not save the move journal \(save: Timed out waiting for automatic admission; retry\.\); the next tick retries/);
   assert.equal(deferred.journal.steps.pane, failed.now, 'the caller receives the unsaved checkpoint for diagnostics');
+});
+
+test('M1b a run claim is saved before cancellation, so retry releases old-coordinator claims after a save failure or a later cancellation failure', async () => {
+  const prepare = count => {
+    const w = fullWorld(), old = { coordinatorId: 'old-coordinator', machine: ME.machine };
+    w.state = { ...w.state, engine: 'core', coordinatorId: 'new-coordinator', paneId: undefined, githubIntake: undefined };
+    w.runs = [];
+    for (let i = 0; i < count; i++) {
+      const issue = 40 + i, claimed = w.g.claim(issue, old);
+      const row = run(issue, old);
+      row.automaticOrigin.claim = { commentId: String(claimed.comments[0].id), labelEventId: String(claimed.timeline[0].id) };
+      w.runs.push(row);
+    }
+    return w;
+  };
+
+  const saved = prepare(1);
+  let state = saved.state, failClaimSave = true;
+  saved.ports.save = async journal => {
+    if (journal.claims?.length && failClaimSave) { failClaimSave = false; throw Error('admission busy'); }
+    saved.saves.push(structuredClone(journal));
+  };
+  const held = await saved.move(state);
+  assert.equal(held.done, false);
+  assert.equal(saved.runs[0].state, 'running', 'a failed claim save prevents cancellation');
+  state = { ...state, retiredFull: saved.saves.at(-1) };
+  assert.equal((await saved.move(state)).done, true);
+  assert.equal(saved.g.issues.get(40).comments.length, 0);
+  assert.ok(!saved.g.issues.get(40).labels.includes('pdd:working'));
+
+  const partial = prepare(2);
+  state = partial.state;
+  let failedSecond = false;
+  partial.ports.cancelRun = async row => {
+    if (row.number === 41 && !failedSecond) { failedSecond = true; throw Error('stop failed'); }
+    row.state = 'cancelled'; return { exitCode: 0 };
+  };
+  const first = await partial.move(state);
+  assert.equal(first.done, false);
+  assert.equal(partial.runs[0].state, 'cancelled');
+  assert.ok(first.journal.claims.some(claim => claim.issue === 40), 'the first cancellation has a durable claim record');
+  state = { ...state, retiredFull: partial.saves.at(-1) };
+  assert.equal((await partial.move(state)).done, true);
+  for (const issue of [40, 41]) {
+    assert.equal(partial.g.issues.get(issue).comments.length, 0, `#${issue} claim comment is released`);
+    assert.ok(!partial.g.issues.get(issue).labels.includes('pdd:working'), `#${issue} claim label is released`);
+  }
 });
 
 test('M2 a PR note is never written twice, also when a step runs again', async () => {

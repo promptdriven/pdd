@@ -1683,6 +1683,16 @@ test('E84 spec failures use summary counts when test names or free-text TODO rea
   assert.equal(namedFailure.status, 1);
   assert.deepEqual(failingTests(namedFailure.stdout), [{ name: 'slow (5ms) # TODO handling', file: 'duration-name.test.mjs' }]);
 
+  writeFileSync(join(dir, 'suite.test.mjs'), "import { describe, it } from 'node:test';\nimport assert from 'node:assert/strict';\ndescribe('outer suite', () => { it('failing child', () => assert.equal(1, 2)); });\n");
+  const suiteFailure = run('suite.test.mjs');
+  assert.equal(suiteFailure.status, 1);
+  assert.deepEqual(failingTests(suiteFailure.stdout), [{ name: 'failing child', file: 'suite.test.mjs' }], 'a failed suite row does not add another failed test');
+
+  writeFileSync(join(dir, 'pass.test.mjs'), "import test from 'node:test';\ntest('passing', () => {});\n");
+  const passingRun = run('pass.test.mjs');
+  assert.equal(passingRun.status, 0);
+  assert.deepEqual(failingTests(`${namedFailure.stdout}\n${passingRun.stdout}`), [{ name: 'slow (5ms) # TODO handling', file: 'duration-name.test.mjs' }], 'a later passing run does not clear earlier failures');
+
   writeFileSync(join(dir, 'todo.test.mjs'), "import test from 'node:test';\ntest('flaky timer', { todo: 'budget ends (5ms)' }, () => { throw new Error('todo'); });\n");
   const todoOnly = run('todo.test.mjs');
   assert.equal(todoOnly.status, 0);
