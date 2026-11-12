@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { readRunResults, resultLines, usableResult } from '../../src/workflow-results.mjs';
+import { readRunResults, resultLines, usableResult } from '../src/workflow-results.mjs';
 
 // Oracle authority: approved local-lint-result Story, Rules to check; the
 // workflow-results prompt's saved-local-layout-record/named-result-evidence.

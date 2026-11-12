@@ -1,10 +1,10 @@
-import '../helpers/test-home.mjs';
+import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runPdd } from '../../src/pdd-cli.mjs';
+import { runPdd } from '../src/pdd-cli.mjs';
 
 const capture = () => ({ text: '', write(value) { this.text += value; } });
 const cases = [

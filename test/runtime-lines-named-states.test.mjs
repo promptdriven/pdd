@@ -1,7 +1,7 @@
-import '../helpers/test-home.mjs';
+import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {runtimeLines} from '../../src/workflow-runner.mjs';
+import {runtimeLines} from '../src/workflow-runner.mjs';
 for(const result of [
   'no verdict · 0 of 2 criteria · 0/0 checks · 1 tests could not run · 1 not run (broken-test) · 0 AI calls',
   'running · 0 of 2 criteria · 0/0 checks · sent (awaiting-server-verdict) · pay · 3 AI calls so far · 1 not yet settled · 1 sent (awaiting-server-verdict)'
