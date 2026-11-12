@@ -29,16 +29,17 @@ async function recorded(t){
   const beforeWorld={count:7,nested:{tag:'A-original-world',items:[1,2]}},afterWorld={count:8,nested:{tag:'A-after-world',items:[1,2,3]}};
   const doc={...f.doc,initial_world:beforeWorld,steps:[{...f.doc.steps[0],operation:'main',input:{argv:['initial']},checks:[{criterion_id:'AC1',target:'result',path:'',op:'equals',value:{stdout:'initial\n',stderr:'',exit_code:0}},{criterion_id:'AC1',target:'world',path:'',op:'equals',value:beforeWorld}]}]};
   json(f.root,f.second,doc);json(f.root,f.test,doc);
-  const session='11111111-1111-4111-8111-111111111111',ids=['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'];
+  const session='11111111-1111-4111-8111-111111111111',ids=[];
   const descriptor=join(f.state,'tries',session+'.door.json'),last=join(f.state,'tries',session+'.last.json'),repoState=join(f.state,'repos',hash(f.root).slice(0,16)+'.json');
   const d={version:1,root:f.root,sessionId:session,origin:'https://synthetic.example.invalid',login:'owner',prompt:f.prompt,operation:'main',originalPath:f.second,storyPath:f.story,criteria:doc.criteria,criterion:'AC1',promptHash:hash(read(f.root,f.prompt)),promptHashes:{[f.prompt]:hash(read(f.root,f.prompt))},effectivePromptHashes:{[f.prompt]:hash(read(f.root,f.prompt))},storyHash:hash(read(f.root,f.story)),stateDir:f.state,repoState,name:'custodycmd',inputSchema};
   json(f.state,relative(f.state,descriptor),d);json(f.state,relative(f.state,repoState),{root:f.root,last_batch:null,tries:{}});
   const input={argv:['A-unique-input','two words'],stdin:'A-private-stdin\n'},result={stdout:'A unique observed output\n',stderr:'A stderr\n',exit_code:0};
-  let seq=0;const replies=new Map(),requests=[];
-  const ports=()=>({env:f.env,gh:args=>({status:0,stdout:args[0]==='auth'?'SYNTHETIC-NOT-A-CREDENTIAL':'owner 1'}),stdout:stream(),stderr:stream(),interactive:false,agentBridge:false,stdin:Readable.from([]),randomUUID:()=>ids[seq++],fetch:async(url,init)=>{
+  let uuidSeq=0; // Receipt and owner files also allocate from this port.
+  const replies=new Map(),requests=[];
+  const ports=()=>({env:f.env,gh:args=>({status:0,stdout:args[0]==='auth'?'SYNTHETIC-NOT-A-CREDENTIAL':'owner 1'}),stdout:stream(),stderr:stream(),interactive:false,agentBridge:false,stdin:Readable.from([]),randomUUID:()=>`aaaaaaaa-aaaa-4aaa-8aaa-${(++uuidSeq).toString(16).padStart(12,'0')}`,fetch:async(url,init)=>{
     const path=new URL(url).pathname;requests.push({path,method:init.method});
     if(init.method==='POST'){
-      const request=JSON.parse(init.body),a=request.requestId===ids[0];
+      const request=JSON.parse(init.body),a=request.input.argv[0]==='A-unique-input';ids.push(request.requestId);
       assert.deepEqual(request.input,a?input:{argv:['B-later-independent'],stdin:'B-stdin\n'});
       const answer={requestId:request.requestId,id:request.requestId,command:'call',state:'passed',session_id:session,result:{program_result:a?result:{stdout:'B later output\n',stderr:'',exit_code:0},report:{input_world:a?beforeWorld:{count:20},world:a?afterWorld:{count:21}}}};
       replies.set(request.requestId,answer);return new Response(JSON.stringify(answer),{status:200});
