@@ -15,6 +15,30 @@ falls back to OS free memory. Other platforms use OS free/total memory. Non-Linu
 with bavail (space available to this user) and blocks times bsize. Failed or
 malformed individual observations return null for that metric; never fabricate a
 healthy value. An unreadable pressure file does not hide other observations.
+When `ports.includeGuard` is true, add the facts of the
+[machine guard](machine-guard.prompt.md) (#3231): `pressure.level` (the macOS `sysctl
+-n kern.memorystatus_vm_pressure_level` number, 1 normal, 2 warn, 4 critical; null
+elsewhere or when unreadable) and `cgroup:{cpus, memoryMax, memoryFree}`. `cgroup` is
+Linux cgroup v2 only, from the process's own cgroup (`/proc/self/cgroup` line
+`0::PATH`) and each parent up to `/sys/fs/cgroup`: `cpus` is the lowest `cpu.max`
+quota divided by its period (null when every level says `max`); `memoryMax` is the
+lowest `memory.max` or `memory.high` of all levels, and `memoryFree` the lowest room
+`min(memory.max, memory.high) - memory.current` of a level that has a limit, at least
+0 (each null when no level has a limit). The one exception is the process's own
+`pdd-autopilot-ID.service`: its `MemoryHigh=SHARE%` is Autopilot's requested share,
+not a machine or container limit, so its `memory.high` and its derived room are left
+out. Its `memory.max`, and every limit at a parent or another cgroup, still count.
+This lets the guard apply the configured share once. Elsewhere `cgroup` is `{cpus: null,
+memoryMax: null, memoryFree: null}`. Each read is bounded (a 2 s spawn timeout) and a
+failed read is null.
+Export `readAutopilotUse(ports)` for the machine guard: one process table read (`ps -A
+-ww -o pid=,ppid=,rss=,pcpu=,command=`, `ports.spawnSync`, 5 s timeout, with the C
+locale) and the sum over
+every Autopilot job on this machine, of any repository: each process whose command has
+`agent-job.mjs --wrapper` and all its descendants by parent pid, each counted once. It
+returns `{processes, wrappers, rss, cores}` (rss in bytes from KiB; cores = %CPU ÷ 100,
+two decimals), or null when the table cannot be read or its nonempty output has no
+readable process rows.
 When `ports.includeChecks` is true, add `check:{cpuIds,platform,battery,virtualized,taskset}`.
 CPU IDs are the allowed Linux affinity IDs, else available parallelism indices.
 Battery detection uses Linux power-supply types. Virtualization is true only after
@@ -25,7 +49,8 @@ legacy capacity callers: cores, platform, battery, virtualized, taskset, memory
 and load. Its memory adapter returns available bytes by the same platform rule. They use the same native readers; policy stays with the queue.
 
 Ports: `readFile(path)`, `statfs(path)`, `cpuCount()`, `load()`, `memory()`,
-`vmStat()` (the `vm_stat` text), `freeMemory()`, `totalMemory()` and `platform`,
+`vmStat()` (the `vm_stat` text), `sysctl(name)`
+(the `sysctl -n` text), `freeMemory()`, `totalMemory()` and `platform`,
 with native Node defaults. An injected `memory()` replaces the platform rule. Callers can inject `machineResources`
 with the same input/output contract; policy belongs to those callers.
 

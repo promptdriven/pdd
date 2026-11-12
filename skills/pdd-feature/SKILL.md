@@ -2,19 +2,17 @@
 name: pdd-feature
 description: Use when the person asks for a new feature or new behavior in a PDD project.
 metadata:
-  pdd-skills: 0.1.28
+  pdd-skills: 0.1.29
 ---
 
 # PDD feature
 
 Fix both: the brakes (the real defect) and the warning light (a test or check that would catch it next time). Brakes first. If the agent cannot find the defect yet, it fixes the warning light first: it adds what makes the defect visible (a failing reproducer test, a precise error, logging), so the cause becomes easy to find, and then it fixes the brakes. A warning-light-only change must say 'Not fixed yet: this helps find the cause' on the PR, and the issue stays open; it never closes the bug.
 
-`steps/`; `?` optional.
-1. story: understand, visual?, prompt-story → gate: approve
-2. prompt-pr: check, try? → approve, then gate: pr, then ask
-3. code: build, verify, formal, review → gate: pr
+1. story: steps/understand.md, steps/visual.md (optional), steps/prompt-story.md → gate: approve
+2. prompt-pr: steps/check.md, steps/try.md (optional) → approve, then gate: pr, then ask
+3. code: steps/build.md, steps/verify.md, steps/formal.md, steps/review.md → gate: pr
 
-- If Autopilot is `observe` or `auto`, read `steps/autopilot.md` first.
 - Main chat coordinates; no code or checks.
 - Fresh subagents; never reuse builders or let them check code. Step file/paths at once; no chat history. Briefs: "the run's main chat"; actual actors/root paths. Wait one long time-out; no small follow-ups. Read §11 once; pdd-prompting RUNBOOK "Bounded handoffs".
 - Checks: fresh first. Only verify/formal may reuse after startup failure; no code, tests or prompts this run.
@@ -28,7 +26,7 @@ Fix both: the brakes (the real defect) and the warning light (a test or check th
 - On verify/formal failure or review must-fixes, allow 2 repairs after initial review. Use fresh build, verify, formal and review agents. PR 2 starts with real `Review:` verdict, remaining must-fixes and "✗ N vectors fail" for failing vectors. No new human gate.
   - Repair pending: with must-fixes and fewer than 2 repairs, do not run `workflow done review`; fresh build with the must-fix list.
   - Final review: clear or 2 repairs used; run `workflow done review` to open PR 2.
-- A person decides expected values. Never change a test to make it pass. Inject ports for databases, files, network, clocks, randomness and programs. No direct calls (RUNBOOK §21).
+- A person decides expected values. Never change a test to make it pass. Inject ports for databases, files, network, clocks, randomness, programs. No direct calls (RUNBOOK §21).
 
 ## In a run
 
