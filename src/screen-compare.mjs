@@ -22,9 +22,9 @@ async function browserRun({ source, url, chromePath, env }) {
   const profile = mkdtempSync(join(tmpdir(), 'pdd-screen-'));
   let child, session, timeout, closed = false, serial = 0, pending = new Map(), events = new Map(), documentStatus = 0, mainFrame;
   const stop = error => { for (const { reject, timer } of pending.values()) { clearTimeout(timer); reject(error); } pending.clear(); };
-  const send = (method, params = {}, sessionId = session) => new Promise((resolve, reject) => {
+  const send = (method, params = {}, sessionId = session, commandTimeout = 20_000) => new Promise((resolve, reject) => {
     if (closed) { reject(failure('Chrome closed unexpectedly.', 5)); return; }
-    const id = ++serial, timer = setTimeout(() => { pending.delete(id); reject(failure(`Chrome timed out during ${method}.`, 5)); }, 20_000);
+    const id = ++serial, timer = commandTimeout === null ? undefined : setTimeout(() => { pending.delete(id); reject(failure(`Chrome timed out during ${method}.`, 5)); }, commandTimeout);
     pending.set(id, { resolve, reject, timer });
     child.stdio[3].write(`${JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) })}\0`, error => {
       if (error) { clearTimeout(timer); pending.delete(id); reject(failure('Chrome command pipe failed.', 5)); }
@@ -56,7 +56,9 @@ async function browserRun({ source, url, chromePath, env }) {
       }
     });
     timeout = setTimeout(() => { stop(failure('Screen comparison exceeded its 60 second browser limit.', 5)); child.kill('SIGKILL'); }, 60_000);
-    const target = await send('Target.createTarget', { url: 'about:blank' }, null);
+    // The first reply includes cold browser startup. The whole-browser guard
+    // above bounds it; later commands retain their separate 20-second limit.
+    const target = await send('Target.createTarget', { url: 'about:blank' }, null, null);
     session = (await send('Target.attachToTarget', { targetId: target.targetId, flatten: true }, null)).sessionId;
     await send('Page.enable'); await send('Runtime.enable'); await send('Network.enable');
     const reference = await evaluate(`(${prepareReference.toString()})(${JSON.stringify(source)})`);
