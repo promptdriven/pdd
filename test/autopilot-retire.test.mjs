@@ -322,6 +322,13 @@ test('M7 a machine that already ran the core engine: no claim search and no PR r
   busy.runs = []; busy.state = { ...busy.state, engine: 'core', paneId: undefined };
   busy.procs = [{ pid: 700, ppid: 1, pgid: 700, rss: 1, start: 'Mon Nov 11 10:00:07 2026', args: 'node unrelated', cwd: '/other' }];
   assert.equal((await busy.move()).message, '', 'nothing found and the engine was core: no line');
+  const empty = fullWorld();
+  empty.runs = []; empty.state = { ...empty.state, engine: 'core', paneId: undefined };
+  empty.procs = [];
+  const idle = await empty.move();
+  assert.equal(idle.done, true, idle.message);
+  assert.equal(idle.message, '', 'an empty complete process inventory is a valid no-op');
+  assert.deepEqual(empty.signals, []);
 });
 
 test('retirement leaves a current-user manual helper in a cancelled worktree, and does not inspect another user', async () => {

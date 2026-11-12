@@ -120,7 +120,7 @@ async function stopOldProcesses(ctx) {
   const first = await list();
   // A selected root can leave its group or later become parentless. Capture its
   // descendants now, while the parent links still prove that ownership.
-  if (!Array.isArray(first) || !first.length) throw Error('old process inventory is unreadable');
+  if (!Array.isArray(first)) throw Error('old process inventory is unreadable');
   const roots = [], pids = new Set(first.map(row => row.pid)), uid = Number.isSafeInteger(ports.uid) ? ports.uid : typeof process.getuid === 'function' ? process.getuid() : null;
   for (const row of first) {
     if (self.has(row.pid)) continue;
