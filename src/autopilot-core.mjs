@@ -976,8 +976,8 @@ async function repoHasCi(ctx, job) {
 async function ciState(ctx, head, job) {
   const runs = await ctx.gh.ok('GET', `repos/${ctx.repo}/commits/${head}/check-runs?per_page=100`);
   const status = await ctx.gh.ok('GET', `repos/${ctx.repo}/commits/${head}/status`);
-  const checks = [...(runs?.check_runs ?? []).map(r => ({ name: r.name, done: r.status === 'completed', good: ['success', 'neutral', 'skipped'].includes(r.conclusion) })),
-    ...(status?.statuses ?? []).map(s => ({ name: s.context, done: s.state !== 'pending', good: s.state === 'success' }))];
+  const checks = [...(runs?.check_runs ?? []).map(r => ({ name: r.name, done: r.status === 'completed', good: ['success', 'neutral', 'skipped'].includes(r.conclusion), passing: r.status === 'completed' && r.conclusion === 'success' })),
+    ...(status?.statuses ?? []).map(s => ({ name: s.context, done: s.state !== 'pending', good: s.state === 'success', passing: s.state === 'success' }))];
   const failed = checks.filter(c => c.done && !c.good).map(c => c.name);
   // The CI picture: each check's name, state and change time. Pending CI is progress only while this changes.
   const sig = [...(runs?.check_runs ?? []).map(r => `${r.name}:${r.status}:${r.conclusion}:${r.completed_at ?? r.started_at ?? ''}`), ...(status?.statuses ?? []).map(x => `${x.context}:${x.state}:${x.updated_at ?? ''}`)].sort().join('|');
@@ -986,7 +986,7 @@ async function ciState(ctx, head, job) {
   // "CI: none" only for a repository with no CI at all (no head of this job ever had a check, and the base has no
   // workflow file), never because a new head has no run yet.
   if (!checks.length) return !job.ciSeen && !await repoHasCi(ctx, job) && ctx.now() - (job.prAt ?? ctx.now()) >= NO_CI_AFTER ? { state: 'none', sig } : { state: 'pending', pending: [], sig };
-  return checks.some(c => !c.done) ? { state: 'pending', pending: checks.filter(c => !c.done).map(c => c.name), sig } : { state: 'green', count: checks.length, sig };
+  return checks.some(c => !c.done) || !checks.some(c => c.passing) ? { state: 'pending', pending: checks.filter(c => !c.done).map(c => c.name), sig } : { state: 'green', count: checks.length, sig };
 }
 const validReviewProof = (proof, job) => {
   const nonblank = value => typeof value === 'string' && value.trim().length > 0;

@@ -1851,21 +1851,53 @@ for (const name of ['autopilot', 'pdd', 'core', 'end']) test(`K3 user or host na
   assert.equal(w.started.filter(job => job.issue === 17 && job.role === 'build').length, 1, 'no loop: the issue waits for its report');
 });
 
-test('K4 debate B removed the refresh caps: 8 base moves never end the PR; it leaves the lane after 2 rechecks per entry and comes back first', async t => {
+test('K4 eight base moves retain fresh proof and yield the lane after two rechecks', async t => {
   const w = await coreWorld(t, { settings: { runs: 1 } });
   w.issue(17); w.issue(18); await w.tick();
   const built = w.build(17); await w.tick();
   w.review(17, 'PASS'); w.suite(17, 0);
+  const heads = new Set([built.head]), refreshedHeads = new Set([built.head]); let yielded = false, reentered = false, maxRechecks = 0;
   for (let i = 0; i < 8; i++) {
     w.baseCommit(`other-${i}.txt`, `base ${i}\n`);
-    await w.tick(); await w.tick();
-    const job = jobFile(w, 17);
-    if (job) { w.github.setChecks(job.head); if (w.job(17, 'suite') && w.alive.has(w.job(17, 'suite').pid)) w.suite(17, 0); }
+    await w.tick();
+    let job = jobFile(w, 17);
+    assert.ok(job, `still active after base move ${i + 1}`);
+    refreshedHeads.add(job.head);
+    maxRechecks = Math.max(maxRechecks, job.lane?.rechecks ?? 0);
+    if (!laneLabel(built.pr)) { yielded = true; assert.equal(job.lanePriority, true, 'yield retains priority'); }
+    else if (yielded) { reentered = true; assert.equal(job.lanePriority, true, 'priority survives reentry'); }
+    await w.tick(); job = jobFile(w, 17);
+    refreshedHeads.add(job.head);
+    w.github.setChecks(job.head);
+    const review = w.job(17, 'review');
+    if (review && w.alive.has(review.pid)) {
+      assert.equal(review.head, job.head, 'review targets the current head');
+      heads.add(review.head); w.review(17, 'PASS');
+    }
+    const suite = w.job(17, 'suite');
+    if (suite && w.alive.has(suite.pid)) w.suite(17, 0);
     w.advance(5 * MIN);
   }
+  const last = jobFile(w, 17);
+  w.github.setChecks(last.head, null, 'in_progress');
+  await w.tick(); // start or consume checks while CI holds the PR
+  if (w.job(17, 'review') && w.alive.has(w.job(17, 'review').pid)) { heads.add(w.job(17, 'review').head); w.review(17, 'PASS'); }
+  if (w.job(17, 'suite') && w.alive.has(w.job(17, 'suite').pid)) w.suite(17, 0);
+  await w.tick();
   const job = jobFile(w, 17);
+  for (const head of heads) assert.ok(built.pr.comments.some(c => c.body.includes(`Review: PASS for head ${head}`)), `review evidence for ${head}`);
+  assert.equal(job.review.proof.head, job.head, 'saved proof belongs to the current head');
+  assert.equal(job.suite.head, job.head, 'suite belongs to the current head');
+  assert.equal(maxRechecks, 2, 'two rechecks are allowed per lane entry');
   assert.ok(job, 'never ended for refreshing'); assert.equal(endComments(w, 17).length, 0); assert.equal(built.pr.merged, false);
-  assert.equal(w.started.filter(j => j.role === 'review').length, 1, 'the review is kept on every clean refresh');
+  const reviews = w.started.filter(j => j.issue === 17 && j.role === 'review');
+  assert.deepEqual(heads, refreshedHeads, 'every refreshed head was reviewed');
+  assert.deepEqual(new Set(reviews.map(r => r.head)), heads, 'every reviewed head has one fresh reviewer');
+  assert.equal(reviews.length, heads.size, 'no reviewer is reused or repeated');
+  assert.ok(reviews.every(r => !w.alive.has(r.pid)), 'every reviewer finished');
+  assert.equal(w.job(18, 'build'), undefined, 'the queued issue does not displace the returning PR');
+  assert.ok(yielded, 'the lane is yielded after repeated rechecks');
+  assert.ok(reentered, 'the PR reenters the lane');
 });
 
 test('K5 a distant base change in a PR file requires a fresh review', async t => {
@@ -3355,4 +3387,28 @@ test('observe mode refuses would-merge when the repository has no CI', async t =
   assert.ok(!pr.comments.some(c => /would-merge/.test(c.body)));
   assert.match(endComments(w, 17).join(' '), /no-ci/);
   assert.equal(w.started.filter(j => j.role === 'repair').length, 0);
+});
+
+test('CI requires a successful check or status in auto and observe modes', async t => {
+  const cases = [
+    { name: 'skipped only', runs: ['skipped'], green: false },
+    { name: 'neutral only', runs: ['neutral'], green: false },
+    { name: 'skipped and neutral', runs: ['skipped', 'neutral'], green: false },
+    { name: 'success with skipped and neutral', runs: ['success', 'skipped', 'neutral'], green: true },
+    { name: 'successful status with skipped and neutral', runs: ['skipped', 'neutral'], statuses: ['success'], green: true },
+    { name: 'success with pending', runs: ['success'], statuses: ['pending'], green: false },
+    { name: 'success with failure', runs: ['success', 'failure'], green: false },
+  ];
+  for (const mode of ['auto', 'observe']) for (const example of cases) await t.test(`${mode}: ${example.name}`, async t => {
+    const w = await coreWorld(t, { settings: { mode, runs: 1 } });
+    w.issue(17); await w.tick(); const { head, pr } = w.build(17);
+    w.github.checks.set(head, example.runs.map((conclusion, i) => ({ name: `check-${i}`, status: 'completed', conclusion })));
+    w.github.statuses.set(head, (example.statuses ?? []).map((state, i) => ({ context: `status-${i}`, state })));
+    await w.tick();
+    if (w.job(17, 'review') && w.alive.has(w.job(17, 'review').pid)) w.review(17, 'PASS');
+    if (w.job(17, 'suite') && w.alive.has(w.job(17, 'suite').pid)) w.suite(17, 0);
+    await w.tick(); await w.tick();
+    assert.equal(mode === 'auto' ? w.github.merges.includes(pr.number) : w.labels(17).includes('pdd:would-merge'), example.green, example.name);
+    if (!example.green) assert.ok(!pr.comments.some(c => /CI: green/.test(c.body)), 'no published green CI claim');
+  });
 });
