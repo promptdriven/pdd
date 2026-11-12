@@ -380,6 +380,13 @@ No outside values or callback replies are required for this data-only module. Al
 
 ## Test cache options
 
+The check route also accepts Boolean `--affected`. Publish the additional form
+`pdd test --affected [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]`.
+Describe automatic affected-Story selection, conservative full fallback and a
+separate historical baseline report, with unchanged full-pass gates. The runtime
+client owns mode compatibility, selection, reporting and the proposed exit rule.
+Keep the existing ordinary test form and all unrelated help text unchanged.
+
 The check route accepts Boolean flags `--lf` and `--cache-clear`. PATH operands
 select files or directories as defined by preflight. Ordinary tests reuse
 unchanged successful Stories; `--lf` selects prior failed Stories, and
