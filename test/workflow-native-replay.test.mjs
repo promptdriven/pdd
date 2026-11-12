@@ -8,6 +8,22 @@ import {join} from 'node:path';
 import {pinReplayVectors,readReplayEvidence,sourceFingerprint} from '../src/workflow-replay.mjs';
 import {storyFingerprint,storyCard} from '../src/workflow-story-card.mjs';
 
+test('missing or renamed frozen native cases block replay even with a valid survivor', t => {
+  const root=mkdtempSync(join(tmpdir(),'native-missing-'));t.after(()=>rmSync(root,{recursive:true,force:true}));
+  mkdirSync(join(root,'tests'));execFileSync('git',['init','-q'],{cwd:root});
+  const paths=['tests/first.json','tests/second.json'];
+  const doc={schema_version:'pdd.native-scenario.v1',story_path:'user_stories/native.md',criteria:[{id:'AC1'}],steps:[{step_id:'request',entry_path:'prompts/example.prompt.md',operation:'example CLI',runtime_reason:'Native command effects require this boundary.',input:{value:4},checks:[{criterion_id:'AC1',target:'result',path:'/value',op:'equals',value:4}]}]};
+  for(const path of paths)writeFileSync(join(root,path),JSON.stringify(doc));
+  const anchor=pinReplayVectors(root,paths), survivor=anchor.vectors[1];
+  const runDir=mkdtempSync(join(tmpdir(),'native-missing-record-'));t.after(()=>rmSync(runDir,{recursive:true,force:true}));
+  const run={root,runDir,runId:'one',replayBaseline:anchor};
+  const save=()=>writeFileSync(join(runDir,'replay-evidence.json'),JSON.stringify({schema_version:'pdd.replay-evidence.v1',run_id:'one',source:{kind:'git-content-v1',sha256:sourceFingerprint(root)},vectors:[{path:survivor.path,sha256:survivor.sha256}],checks:[{...survivor.checks[0],outcome:'pass'}],operations:[{...survivor.steps[0],executed:true,outcome:'returned',boundary:{kind:'command',name:'example CLI'},command:'synthetic test',exit_code:0}],counts:{total:1,pass:1,fail:0,blocked:0,not_replayed:0},mutation:{kind:'semantic',description:'change value',command:'synthetic control',exit_code:1,outcome:'assertion_failure',failed_checks:[{vector:survivor.path,step_id:'request',check_index:0}]},formal:{result:'not_applicable',scope:'display',reason:'plain wording',control_outcome:'not_run'}}));
+  rmSync(join(root,paths[0]));save();
+  assert.equal(readReplayEvidence(run).outcome,'blocked','deleted frozen native case');
+  writeFileSync(join(root,'tests/renamed.json'),JSON.stringify(doc));save();
+  assert.equal(readReplayEvidence(run).outcome,'blocked','renamed frozen native case');
+});
+
 test('native cases appear in the Story card and pin their original public boundary and checks', t => {
   const root=mkdtempSync(join(tmpdir(),'native-case-'));t.after(()=>rmSync(root,{recursive:true,force:true}));
   mkdirSync(join(root,'tests'));mkdirSync(join(root,'user_stories'));

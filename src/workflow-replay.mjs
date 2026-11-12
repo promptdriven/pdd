@@ -571,6 +571,7 @@ function replayRecord(run, paths) {
     for(const path of new Set([...originals.keys(),...(paths??[])])) {
       const saved=originals.get(path), pinned=pinReplayVectors(run.root,[path]), vector=pinned.vectors[0];
       if(pinned.outcome) {
+        if(saved?.snapshot?.schema_version === 'pdd.native-scenario.v1') return {...result,outcome:'blocked',reason:'Approved native case bytes changed or are unavailable; return to prompt space.'};
         result.warnings.push({vector:path,reason:pinned.reason});
         // A removed vector no longer participates; an existing invalid file remains unproved.
         let missing=false;
