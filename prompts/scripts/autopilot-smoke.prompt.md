@@ -101,7 +101,7 @@ account names are embedded in sandbox behavior.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"partial","status":"draft","prose_sha256":"","entries":[{"operation":"runSmoke","input_schema":{"type":"object","properties":{"argv":{"type":"array","items":{"type":"string"}}},"required":["argv"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":5,"max_model_calls":0},"conventions":["Partial interface covers usage and argument rejection only; native fake-process tests cover external creation and reading."]}
+{"kind":"partial","status":"draft","prose_sha256":"858efee7de23113aec7868b96adf72c3e94b1b9b8a3d108a13a78ea35b632d1e","entries":[{"operation":"runSmoke","input_schema":{"type":"object","properties":{"argv":{"type":"array","items":{"type":"string"}}},"required":["argv"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":5,"max_model_calls":0},"conventions":["Partial interface covers usage and argument rejection only; native fake-process tests cover external creation and reading."]}
 ```
 
 </details>
