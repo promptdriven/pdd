@@ -299,7 +299,7 @@ async function adoptionFailure(run,p) {
   const blocked=reason=>{
     const evidence={...readReplayEvidence(run),outcome:'blocked',reason};
     const step=run.areas[run.area]?.steps.filter(step=>run.done[step]).at(-1);
-    if(p)commitRun(run,p,latest=>{latest.replayEvidence=evidence;if(step&&latest.done[step])latest.done[step].replayEvidence=evidence;});
+    if(p)commitRun(run,p,latest=>{latest.replayEvidence=evidence;if(!p.preserveStepRecords&&step&&latest.done[step])latest.done[step].replayEvidence=evidence;});
     return reason;
   };
   if (!run.replayAdoption) return null;
@@ -634,6 +634,7 @@ function describe(run, chat = null, { drafts = [], nothing = false, health = nul
   if (run.gate?.kind === 'ask-code') return `PR 1 open (${pr1?.url}); waiting for you: code PR now, or stop and merge PR 1. ${codeLater(run)}`;
   if (run.gate) return `waiting for you: approve the ${run.gate.area} area or ask for changes`;
   if (run.promptReturn && area?.steps.some(step=>!run.done[step])) return `the agent works on ${area.steps.find(step=>!run.done[step])} after returning to prompt space`;
+  if (run.localPublication?.area === area?.name && area.steps.every(step => run.done[step])) return `publication deferred: pdd workflow publish ${run.number}`;
   if (prOf(run, area?.name) && area.gate === 'pr') return `waiting for you: review and merge ${prLabel(run, area)} on GitHub`;
   if (run.state === 'running' && chat === 'idle' && area?.steps.some(step => !run.done[step])) return idleWords(run, timeZone);
   const recovery = run.state === 'running' && automaticResumeWords(run, now);
@@ -2016,7 +2017,7 @@ async function publishAreaPr(run, area, p, lines, retry, automatic = null) {
   let prepared = await publicationEvidence(run, area, p);
   if (opted) {run.replayEvidence=await currentReplayEvidence(run,p,true);
     const last=area.steps.filter(step=>run.done[step]).at(-1),evidence=run.replayEvidence,applyPublication=publicationUpdate(run,['replayEvidence',...(codePr?['testInventory']:[])]);
-    commitRun(run,p,latest=>{applyPublication(latest);if(last&&latest.done[last])latest.done[last].replayEvidence=evidence;});
+    commitRun(run,p,latest=>{applyPublication(latest);if(!p.preserveStepRecords&&last&&latest.done[last])latest.done[last].replayEvidence=evidence;});
   }
 
   // #3053: current shared-cause members travel with the umbrella's PR pair.
@@ -2288,9 +2289,10 @@ async function finishPr(run, area, step, p, lines, packageRoot = PACKAGE_ROOT) {
   if (ownership) return fail(ownership);
   const label = prLabel(run, area), existing = prOf(run, area.name);
   const selectedArea=run.area,selectedGate=run.gate;
-  lines.push(`pdd recorded ${step}. pdd opens ${label} now.`);
-  const failed = await publishAreaPr(run, area, p, lines, `run done ${step} again`);
+  lines.push(step ? `pdd recorded ${step}. pdd opens ${label} now.` : `pdd publishes ${label} now.`);
+  const failed = await publishAreaPr(run, area, p, lines, `run ${step ? `done ${step}` : `pdd workflow publish ${run.number}`} again`);
   if (failed) return failed;
+  commitRun(run, p, latest => { if (latest.localPublication?.area === area.name) delete latest.localPublication; });
   // Capture readiness in the native waiting transition, never in a separate save.
   const candidate = prOf(run, area.name);
   const ready = step === area.steps.at(-1) && run.done[step] && !run.done[step].skipped && run.area === run.areas.length - 1 && (area.name === 'code' || run.workflow === 'small-change' || run.areas.slice(0,-1).some(item => item.then === 'ask-code')) && area.steps.every(name => run.done[name] && (!run.done[name].skipped || area.optional.includes(name))) && candidate?.number && commitSha(candidate.publishedHeadSha);
@@ -2840,7 +2842,7 @@ async function refreshCompletedCodeReview(run, step, p, packageRoot = PACKAGE_RO
     return fail(`Cannot refresh the code-choice review: ${causeText(error?.stderr || error?.detail || error?.message) || causeOf(error)}. Repair the selection or inspect the current run and gate, then run done again and ask the person again.`);
   }
 }
-async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACKAGE_ROOT }, ports) {
+async function stepDoneCommand({ step, summary, skipped, noPublish = false, cwd, packageRoot = PACKAGE_ROOT }, ports) {
   const p = deps(ports); p.pdd = pddFor(p, packageRoot);
   const run = await runForWorktree(cwd, p);
   if (!run) return fail('pdd workflow done works only in a run worktree. cd to the worktree that pdd made for this run.');
@@ -2849,6 +2851,7 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
     ? refreshCompletedCodeReview(run, step, p, packageRoot) : done(`The run for #${run.number} is complete. Stop.`);
   protectProgress(run,p);
   const area = run.areas[run.area], lines = [], normal = normalRun(run, p), automaticReturn = automaticPromptReturn(run,p);
+  if (noPublish && (area.gate !== 'pr' || area.before === 'approve')) return fail('--no-publish is available only in a code PR area after its approval gates. No step was recorded.');
   // After the repair limit, the run is stuck: no step of it is recorded, so it cannot go on to open a PR.
   if (Object.hasOwn(run, 'automaticOrigin') && run.repairLimit) return fail(repairRefusal(run.repairLimit.area, step, false, run.number));
   if (Object.hasOwn(run, 'automaticOrigin') && run.integrationLimit) return fail(integrationRefusal(run.integrationLimit.area, step, run.number));
@@ -2893,7 +2896,7 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
   if (reason !== null) lines.push(`pdd recorded that ${step} was skipped. Reason (agent note): ${oneLine(reason)}`);
   const hasRuntime=runtimeLines(record.summary).length>0;
   if(hasRuntime)record.source={kind:'git-content-v1',sha256:gitFingerprint(run.root)};
-  const replay=area.replay_evidence===REPLAY_POLICY && (area.steps.some(item=>item!==step&&!run.done[item]) || area.gate!=='pr' || area.before==='approve'&&!prOf(run,area.name))?await currentReplayEvidence(run,p):null;
+  const replay=area.replay_evidence===REPLAY_POLICY && (noPublish || run.localPublication?.area === area.name || area.steps.some(item=>item!==step&&!run.done[item]) || area.gate!=='pr' || area.before==='approve'&&!prOf(run,area.name))?await currentReplayEvidence(run,p):null;
   if(replay){record.replayEvidence=replay;lines.push(formatReplayEvidence(replay,{rules:await rulesToCheck(run,p,record.summary)}));}
   if (run.workflow === 'small-change' && !askArea(run) && ['scope','change','verify','formal'].includes(step))
     record.smallChange = {checklist: readSmallChangeChecklist(run), formal: readFormalEvidence(run)};
@@ -2937,6 +2940,7 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
     for(const result of record.pddResults??[])if(result.kind==='pdd test'&&!(latest.pddHistory??=[]).some(item=>item.batch===result.batch))latest.pddHistory.push(result);
     if(replay)latest.replayEvidence=replay;
     latest.done[step]=record;
+    if (noPublish) latest.localPublication = { area: area.name, step };
   };
   let next, currentArea, autoSkipped=false;
   const gateAt=p.now();
@@ -2981,6 +2985,16 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
       'If they ask for changes, revise in this chat, run done again for the step you changed, and ask again.');
     return doneWithRequests(done(lines.join('\n')), run, p);
   }
+  if (area.gate === 'pr' && (noPublish || run.localPublication?.area === area.name)) {
+    commitRun(run, p, latest => {
+      if (latest.area !== run.area || !sameGate(latest.gate, observedGate) || latest.question || area.steps.some(item => !latest.done[item]))
+        throw Object.assign(Error('The run changed; look again.'), { code: 'workflow_progress_refused' });
+      latest.localPublication = { area: area.name, step };
+      latest.state = 'waiting';
+    });
+    lines.push(`pdd recorded ${step}. Publication is deferred; inspect the local result, then run pdd workflow publish ${run.number}.`);
+    return doneWithRequests(done(lines.join('\n')), run, p);
+  }
   if (area.gate === 'pr') {
     return doneWithRequests(await finishPr(run,area,step,p,lines),run,p);
   }
@@ -2997,6 +3011,30 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
   lines.push(`pdd recorded ${step}. The ${area.name} area is done.`,
     ...(automatic ? [automatic, 'Gate: show the result and follow the scoped automatic overlay and owner handoff; preserve required human decisions.'] : ['Gate: show the person the result, ask them to approve it or ask for changes, and stop. Do not approve for them.', approvalGuide(run, p.pdd), 'If they ask for changes, revise in this chat, run done again for the step you changed, and ask again.']));
   return doneWithRequests(done(lines.join('\n')), run, p);
+}
+
+async function publishRunCommand({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports) {
+  const p = deps(ports); p.pdd = pddFor(p, packageRoot);
+  const found = await resolveRun(ref, { cwd }, p);
+  if (found.error) return fail(found.error);
+  const run = found.run, area = run.areas[run.area];
+  const refusal = latest => {
+    if (ended(latest) || latest.state === 'stuck' || latest.repairLimit || latest.integrationLimit) return 'The run is stopped; publication is unavailable.';
+    if (openQuestion(latest) || latest.gate) return 'Resolve the pending question or approval gate before publishing.';
+    if (latest.area !== run.area || area?.gate !== 'pr' || area.before === 'approve') return 'Publish is available only in a finished code PR area after its approval gates.';
+    const missing = area.steps.filter(step => !latest.done[step]);
+    if (missing.length) return `Finish these steps before publishing: ${missing.join(', ')}.`;
+    return null;
+  };
+  const blocked = refusal(run);
+  if (blocked) return fail(blocked);
+  const records = structuredClone(run.done);
+  protectProgress(run, p, { approval: true, validate: latest => {
+    const blocked = refusal(latest);
+    if (blocked || !equalFact(latest.done, records)) throw Object.assign(Error(blocked || 'The completed steps changed; inspect the local result again.'), { code: 'workflow_progress_refused' });
+  } });
+  p.preserveStepRecords = true;
+  return doneWithRequests(await finishPr(run, area, null, p, [], packageRoot), run, p);
 }
 
 // The code area works on <branch>-code: on PR 1's head while PR 1 is open (PR 2 stacks on it), else on the merged saved base branch.
@@ -4602,7 +4640,7 @@ function detail(run, chat = null, facts = {}) {
     : facts.normal && run.storyApproval && run.gate?.kind === 'ask-code' ? run.through === 'code' ? 'Fix the reported code entry problem, then run pdd workflow done check.' : codeLater(run)
     : run.gate ? approvalGuide(run)
     : runtimeWaiting(run) ? `nothing for a person unless an Autopilot alert asks (pdd autopilot status). Autopilot wakes this run when the interpreter is back; the worker then reads pdd test --read${run.runtimeWait.batch ? ` ${run.runtimeWait.batch}` : ''} first.`
-    : ended(run) ? null : run.promptReturn && area?.steps.some(step=>!run.done[step]) ? `pdd workflow open ${run.number}` : prOf(run, area?.name) ? (run.pr.length > 1 && run.prBase && run.prBase !== run.baseBranch && run.pr[0]?.state === 'open' && run.pr[0]?.ci === 'failing'
+    : ended(run) ? null : run.localPublication?.area === area?.name && area.steps.every(step => run.done[step]) ? `pdd workflow publish ${run.number}` : run.promptReturn && area?.steps.some(step=>!run.done[step]) ? `pdd workflow open ${run.number}` : prOf(run, area?.name) ? (run.pr.length > 1 && run.prBase && run.prBase !== run.baseBranch && run.pr[0]?.state === 'open' && run.pr[0]?.ci === 'failing'
       ? 'Review and merge PR 2 on GitHub: PR 1\'s CI fails, so PR 2 also merges PR 1. Do not merge PR 1 alone. pdd never merges.'
       : `Review and merge ${run.pr.length > 1 && run.prBase && run.prBase !== run.baseBranch ? 'PR 1, then PR 2,' : 'the PR'} on GitHub. pdd never merges.`) : `pdd workflow open ${run.number}`;
   return [`${run.repo}#${run.number} "${oneLine(run.issue.title)}" · ${run.workflow} · ${run.agent}${run.agentDefinition?.name ? ` ${JSON.stringify(run.agentDefinition.name)}` : ''}`,
@@ -4655,7 +4693,7 @@ function summary(run, timeZone, chat = null, { drafts = [], nothing = false, hea
   const question = openQuestion(run), writing = !problem && Boolean(run.gate) && !question && chat === 'working';
   const cannotWork = !problem && !question && !run.gate && running && chat === 'cannot-work' && health ? health : null;
   const group = run.state === 'cancelled' ? 'cancelled' : run.state === 'completed' ? 'done' : run.parking?.phase === 'parked' ? 'waiting' : environmentRecovery(run) && environmentRecovery(run).attempts < ENVIRONMENT_BACKOFF.length ? 'working' : run.state === 'stuck' ? 'waiting' : runtimeWaiting(run) ? 'working' : problem ? 'waiting' : writing ? 'working'
-    : run.state === 'stuck' || run.gate || question || cannotWork || running && ['blocked', 'stopped'].includes(chat) ? 'waiting' : prOf(run, area?.name) && !(run.promptReturn && area?.steps.some(step=>!run.done[step])) ? 'pr-open' : 'working';
+    : run.state === 'stuck' || run.localPublication?.area === area?.name || run.gate || question || cannotWork || running && ['blocked', 'stopped'].includes(chat) ? 'waiting' : prOf(run, area?.name) && !(run.promptReturn && area?.steps.some(step=>!run.done[step])) ? 'pr-open' : 'working';
   const step = area?.steps.find(item => !run.done[item]);
   const words = group === 'cancelled' ? (run.cancelled?.state === 'replaced' ? 'replaced' : 'cancelled')
     : group === 'done' ? (run.gate?.kind === 'ask-code' ? 'done at PR 1' : 'done')
@@ -4670,6 +4708,7 @@ function summary(run, timeZone, chat = null, { drafts = [], nothing = false, hea
     : cannotWork ? cannotWorkWords(run, cannotWork).short
     : !run.gate && running && chat === 'blocked' ? `waiting for you: the chat asks a question in its window`
     : !run.gate && running && chat === 'stopped' ? `the chat stopped: run pdd workflow open ${run.number}`
+    : run.localPublication?.area === area?.name && !step ? `publication deferred: pdd workflow publish ${run.number}`
     : run.gate?.automaticHold ? `PR 1 waits: ${run.gate.automaticHold}`
     : writing ? (revising(run) ? 'agent working on your changes' : 'agent writing the gate message')
     : run.gate?.kind === 'ask-code' && drafts.length ? `waiting for you: approve the draft prompt${drafts.length > 1 ? 's' : ''}, then the code PR (PR 1 open)`
@@ -5655,6 +5694,7 @@ export const recordEvidence=saveGuard(recordEvidenceCommand);
 export const associateEvidenceWorkspace=saveGuard(associateEvidenceWorkspaceCommand);
 
 export const stepDone=saveGuard(stepDoneCommand);
+export const publishRun=saveGuard((args, ports) => lockedMutation(args, ports, publishRunCommand));
 
 // The run locks cover authorization and dispatch. An interrupted send is consumed, never replayed.
 export const resendChecks = saveGuard(async ({refs, cwd, said, packageRoot = PACKAGE_ROOT}, ports = {}) => {

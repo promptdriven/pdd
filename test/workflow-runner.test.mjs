@@ -9,6 +9,7 @@ import { execFile as callbackExec, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { captureSource, proseSha256 } from '../src/runtime-preflight.mjs';
 import { renderJson } from '../src/runtime-output.mjs';
+import * as runner from '../src/workflow-runner.mjs';
 import { startRun, stepDone, approveRun, changeRun, cancelRun, runStatus, openRun, askPerson } from '../src/workflow-runner.mjs';
 
 const exec = promisify(callbackExec);
@@ -2984,4 +2985,128 @@ test('2760: feature and bug Story gates offer the automatic simulation command a
     assert.match(gate.message, /whole project/i);
     assert.equal(f.prs.length, 0, 'advice must not publish or approve');
   }
+});
+
+
+// #2947: native public-boundary cases; no real GitHub or Herdr effects.
+async function localPublicationFixture(t, name = 'bug') {
+  const f = await fixture(t, { name });
+  writeFileSync(join(f.source, 'pdd.json'), JSON.stringify({ strict_approvals: true }));
+  assert.equal((await f.run()).exitCode, 0);
+  while (f.record().area < f.record().areas.length - 1) {
+    const run = f.record(), area = run.areas[run.area];
+    for (const step of area.steps) {
+      if (area.gate === 'pr') writeFileSync(join(run.root, 'prompt-change.txt'), 'prompt result\n');
+      const out = await stepDone({ step, cwd: run.root }, f.agentPorts());
+      assert.equal(out.exitCode, 0, out.message);
+    }
+    const out = await approveRun({ ref: '17', cwd: f.source }, f.ports);
+    assert.equal(out.exitCode, 0, out.message);
+  }
+  const run = f.record(), area = run.areas[run.area];
+  writeFileSync(join(run.root, 'value.mjs'), 'export const value = 2;\n');
+  for (const step of area.steps.slice(0, -1)) {
+    const out = await stepDone({ step, cwd: run.root }, f.agentPorts());
+    assert.equal(out.exitCode, 0, out.message);
+  }
+  return f;
+}
+
+for (const name of ['bug', 'small-change']) test(`#2947: ${name} records locally, publishes separately and defers a PR update`, async t => {
+  const f = await localPublicationFixture(t, name), run = f.record(), area = run.areas[run.area], step = area.steps.at(-1);
+  const head = f.git(run.root, 'rev-parse', 'HEAD'), before = { pushes: f.pushes.length, prs: f.prs.length, edits: f.edits.length, chats: run.chats.length };
+  const out = await stepDone({ step, noPublish: true, summary: 'Local review complete', cwd: run.root }, f.agentPorts());
+  assert.equal(out.exitCode, 0, out.message);
+  assert.match(out.message, /publication.*deferred/i); assert.match(out.message, /pdd workflow publish 17/);
+  assert.equal(f.git(run.root, 'rev-parse', 'HEAD'), head, 'local recording must not auto-commit');
+  assert.deepEqual({ pushes: f.pushes.length, prs: f.prs.length, edits: f.edits.length, chats: f.record().chats.length }, before);
+  assert.equal(f.record().done[step].summary, 'Local review complete');
+  const recorded = structuredClone(f.record().done);
+  for (const json of [false, true]) {
+    const status = await runStatus({ ref: '17', cwd: f.source, json }, f.ports);
+    assert.equal(status.exitCode, 0, status.message); assert.match(status.message, /publication.*deferred/i); assert.match(status.message, /pdd workflow publish 17/);
+  }
+  const published = await runner.publishRun({ ref: '17', cwd: f.source }, f.agentPorts());
+  assert.equal(published.exitCode, 0, published.message);
+  assert.equal(f.prs.length, before.prs + 1); assert.ok(f.pushes.length > before.pushes);
+  assert.deepEqual(f.record().done, recorded); assert.equal(f.record().localPublication, undefined);
+
+  writeFileSync(join(run.root, 'value.mjs'), 'export const value = 3;\n');
+  const afterPublish = { pushes: f.pushes.length, edits: f.edits.length, body: f.prs.at(-1).body };
+  assert.equal((await stepDone({ step, noPublish: true, cwd: run.root }, f.agentPorts())).exitCode, 0);
+  assert.equal((await stepDone({ step, cwd: run.root }, f.agentPorts())).exitCode, 0, 'ordinary done must preserve a saved local hold');
+  assert.deepEqual({ pushes: f.pushes.length, edits: f.edits.length, body: f.prs.at(-1).body }, afterPublish);
+  const updateRecords = structuredClone(f.record().done);
+  const updated = await runner.publishRun({ ref: '17', cwd: f.source }, f.agentPorts());
+  assert.equal(updated.exitCode, 0, updated.message); assert.equal(f.prs.length, before.prs + 1);
+  assert.ok(f.pushes.length > afterPublish.pushes); assert.deepEqual(f.record().done, updateRecords);
+});
+
+test('#2947: publish refuses incomplete steps, questions and approval gates without recording review', async t => {
+  const f = await fixture(t); await f.run(); const run = f.record();
+  const rejected = await stepDone({ step: 'scope', noPublish: true, cwd: run.root }, f.agentPorts());
+  assert.equal(rejected.exitCode, 1); assert.deepEqual(f.record().done, {});
+  assert.equal((await runner.publishRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 1);
+  await stepDone({ step: 'scope', cwd: run.root }, f.agentPorts());
+  assert.equal((await runner.publishRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 1);
+  await approveRun({ ref: '17', cwd: f.source }, f.ports);
+  const unfinished = await runner.publishRun({ ref: '17', cwd: f.source }, f.ports);
+  assert.equal(unfinished.exitCode, 1); assert.match(unfinished.message, /change.*verify.*formal/); assert.equal(f.record().done.review, undefined);
+  for (const step of f.record().areas.at(-1).steps) await stepDone({ step, noPublish: true, cwd: run.root }, f.agentPorts());
+  await askPerson({ text: 'Inspect the local head first', cwd: run.root }, f.agentPorts());
+  const saved = f.record();
+  assert.equal((await runner.publishRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 1);
+  assert.deepEqual(f.record().question, saved.question); assert.deepEqual(f.record().done, saved.done); assert.equal(f.prs.length, 0);
+});
+
+test('#2947: a failed explicit publication keeps the hold and retries without rerecording steps', async t => {
+  const f = await localPublicationFixture(t, 'small-change'), run = f.record();
+  await stepDone({ step: 'formal', noPublish: true, cwd: run.root }, f.agentPorts());
+  const saved = f.record(), execFile = f.ports.execFile;
+  const failurePorts = f.agentPorts({ execFile: async (file, args, opts) => {
+    if (file === 'git' && args[0] === 'push') throw Object.assign(Error('offline'), { code: 'ENETUNREACH' });
+    return execFile(file, args, opts);
+  } });
+  const failed = await runner.publishRun({ ref: '17', cwd: f.source }, failurePorts);
+  assert.equal(failed.exitCode, 1, failed.message); assert.equal(f.prs.length, 0);
+  assert.deepEqual(f.record().done, saved.done); assert.deepEqual(f.record().localPublication, saved.localPublication);
+  const retried = await runner.publishRun({ ref: '17', cwd: f.source }, f.agentPorts());
+  assert.equal(retried.exitCode, 0, retried.message); assert.equal(f.prs.length, 1); assert.deepEqual(f.record().done, saved.done);
+});
+
+
+test('#2947: an out-of-order local review holds publication when missing steps finish', async t => {
+  const f = await localPublicationFixture(t, 'small-change'), run = f.record();
+  // Rerunning change clears the later verify record through the public boundary.
+  await stepDone({ step: 'change', cwd: run.root }, f.agentPorts());
+  const held = await stepDone({ step: 'formal', noPublish: true, cwd: run.root }, f.agentPorts());
+  assert.equal(held.exitCode, 0, held.message); assert.match(held.message, /Next step: verify/);
+  assert.equal((await runner.publishRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 1);
+  const next = await stepDone({ step: 'verify', cwd: run.root }, f.agentPorts());
+  assert.equal(next.exitCode, 0, next.message);
+  // Rerecording an earlier step invalidates formal, so finish it again.
+  const final = await stepDone({ step: 'formal', cwd: run.root }, f.agentPorts());
+  assert.equal(final.exitCode, 0, final.message); assert.match(final.message, /publication.*deferred/i);
+  assert.equal(f.pushes.length, 0); assert.equal(f.prs.length, 0);
+});
+
+test('#2947: cancellation and a concurrent question stop explicit publication', async t => {
+  const f = await localPublicationFixture(t, 'small-change'), run = f.record();
+  await stepDone({ step: 'formal', noPublish: true, cwd: run.root }, f.agentPorts());
+  const records = structuredClone(f.record().done), execFile = f.ports.execFile;
+  let interrupted = false;
+  const publish = await runner.publishRun({ ref: '17', cwd: f.source }, f.agentPorts({ execFile: async (file, args, opts) => {
+    if (!interrupted && file === 'git' && args[0] === 'status') {
+      interrupted = true;
+      const question = await askPerson({ text: 'Inspect this before publishing', cwd: run.root }, f.agentPorts());
+      assert.equal(question.exitCode, 0, question.message);
+    }
+    return execFile(file, args, opts);
+  } }));
+  assert.equal(interrupted, true); assert.equal(publish.exitCode, 1, publish.message);
+  assert.deepEqual(f.record().done, records); assert.equal(f.pushes.length, 0); assert.equal(f.prs.length, 0);
+  assert.equal((await cancelRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
+  const cancelled = await runner.publishRun({ ref: '17', cwd: f.source }, f.ports);
+  assert.equal(cancelled.exitCode, 1); assert.match(cancelled.message, /stopped/);
+  assert.equal(f.pushes.length, 0); assert.equal(f.prs.length, 0);
 });
