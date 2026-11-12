@@ -67,6 +67,7 @@ PDD_VERIFY_GH_CONFIG_DIR="${GH_CONFIG_DIR:-$HOME/.config/gh}" node --input-type=
 import {appendFileSync,cpSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {affectedFixture,cli} from './test/helpers/affected-check-fixture.mjs';
+import {DEFAULT_RUNTIME_URL} from './src/runtime-client.mjs';
 const evidence=process.env.PDD_VERIFY_EVIDENCE;
 if(!evidence)throw Error('Set PDD_VERIFY_EVIDENCE to a private external evidence directory.');
 const cleanup=[];
@@ -74,7 +75,7 @@ const setup=affectedFixture({after:fn=>cleanup.push(fn)});
 try {
   appendFileSync(join(setup.repo,'docs/shared.md'),'\n');
   const result=await cli(setup,['test','--affected','--json','--max-calls','3'],{
-    env:{PDD_RUNTIME_URL:'https://runtime.promptdriven.ai',
+    env:{PDD_RUNTIME_URL:process.env.PDD_RUNTIME_URL??DEFAULT_RUNTIME_URL,
       GH_CONFIG_DIR:process.env.PDD_VERIFY_GH_CONFIG_DIR}
   });
   writeFileSync(join(evidence,'affected-hosted-cli.json'),JSON.stringify({

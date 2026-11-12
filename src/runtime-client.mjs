@@ -3660,7 +3660,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
       ...(row.not_checked??[]).map(item=>[item.criterion_id,item.text])]);
   }
   if (options['--max-calls'] !== undefined) for (const row of rows) row.max_calls = Number(options['--max-calls']);
-  context.checkPlan = affected ? planFor(rows) : buildCheckPlan({root,found,selected,rows,full:words.length === 0,base},planningPorts);
+  context.checkPlan = affected ? planFor(rows) : buildCheckPlan({root,found,selected,rows,full:words.length === 0,base});
   if (affected) {
     const finalSelection = selectCheckTests(context.checkPlan,{affected:true});
     if (discoveryChanged || !isDeepStrictEqual(finalSelection.tests,context.checkSelection.tests)) return restartConservatively();
