@@ -1362,15 +1362,17 @@ function printLocalLayout(context, result) {
 function saveLocalLayout(context, {root, tests, prompts, warnings, problems, summary}) {
   const store = stateFor(context.ports.env,root), now = context.ports.now(), batch = batchId(now,context.ports.randomUUID);
   try {
-    const folder = join(store.folder('batches'),batch);
-    // Exclusive creation keeps every previous batch intact even if the ordinary ID collides.
-    mkdirSync(folder,{mode:0o700});
     const record = {version:1,batch,root,created_at:new Date(now).toISOString(),intent:'lint-only',local_only:true,source_sha256:null,
       local_scope:{tests:[...new Set(tests)].sort(),prompts:[...new Set(prompts)].sort()},summary_line:summary,exit_code:problems.length ? 4 : 0,
       warnings,problems,rows:[],lint:{state:'partial',lint_state:'partial',reason:resultOutcome({state:'partial',note:{code:'local-only',message:'checked SVG layout only; prompts not checked'}}).reason,request_ids:[]}};
+    const projection = localLayoutResult(record,null);
+    if (!projection) throw new Error('Local lint record cannot satisfy the saved result contract, including safe inspected scope.');
+    const result = {...projection,exit_code:record.exit_code,summary_line:record.summary_line};
+    const folder = join(store.folder('batches'),batch);
+    // Exclusive creation keeps every previous batch intact even if the ordinary ID collides.
+    mkdirSync(folder,{mode:0o700});
     store.write(join(folder,'batch.json'),record);
     store.saveRepo(root,{...store.repo(root),last_batch:batch});
-    const result = {...localLayoutResult(record,null),exit_code:record.exit_code,summary_line:record.summary_line};
     store.write(join(folder,'summary.json'),result);
     return result;
   } catch (error) { throw new Stop(2,`Could not save local lint result in PDD_STATE_DIR: ${error.message}`); }
