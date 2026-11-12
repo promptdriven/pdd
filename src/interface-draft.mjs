@@ -1,4 +1,4 @@
-// Generated from prompts/cli/interface-draft.prompt.md (sha256: 2e06ce27b5f76efcd34f62f46d5f697c171b60e14a67a85509afe12d98bf4224).
+// Generated from prompts/cli/interface-draft.prompt.md (sha256: ffefb26b5154fe96e536a04c2a1897e6d4d75ff1c901ff30525922a4e8d5482b).
 import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, linkSync, renameSync, rmSync, openSync, closeSync, fstatSync, chmodSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { basename, dirname, join, relative, resolve } from 'node:path';
@@ -425,7 +425,8 @@ function declaredDependencyLinks(section) {
     return links.filter(link => {
       const start=declaration.lastIndexOf('\n',link.index)+1,end=declaration.indexOf('\n',link.index);
       const line=declaration.slice(start,end < 0 ? declaration.length : end);
-      return /\brequired\b/i.test(line) && !negatedMarker(line,'required');
+      const bareLink=/^\s*\[[^\]]*\]\([^\s)]+\)\.?\s*$/.test(line);
+      return !negatedMarker(line,'required') && (/\brequired\b/i.test(line) || bareLink);
     });
   });
 }

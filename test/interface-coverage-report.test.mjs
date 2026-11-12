@@ -209,6 +209,17 @@ test('integration 013: star list records declare required Markdown context', asy
   assert.ok(stdout.text.includes('Retain the star-list formatter rule.'));
 });
 
+test('integration 013: a bare link-only record remains declared compatibility context', async t => {
+  const value={...original,status:'draft',prose_sha256:''};
+  const text=prose.replace('## Dependencies\n\nNone.','## Dependencies\n\n[Rules](../contracts/meaning.md#rules).')+block(value);
+  const meaning='# Meaning\n\n## Rules\n\nRetain the bare-link formatter rule.\n';
+  const f=setup(t,text,{'contracts/meaning.md':meaning}),stdout=sink(),stderr=sink();
+  const code=await runApprove({cwd:f.repo,words:[PLACE],said:'Accept the authored contract with the shown coverage questions.'},
+    {stdout,stderr,interactive:false});
+  assert.equal(code,0,stderr.text);
+  assert.ok(stdout.text.includes('Retain the bare-link formatter rule.'));
+});
+
 test('integration 013: negated dependency markers do not hide or load context', async t => {
   const value={...original,status:'draft',prose_sha256:''};
   const text=prose.replace('## Dependencies\n\nNone.','## Dependencies\n\nNot required: [Retired](../contracts/missing.md).\n\nThis is not navigation-only. Required: [Rules](../contracts/meaning.md#rules).')+block(value);
