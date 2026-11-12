@@ -18,7 +18,7 @@ import { causeText } from './runtime-output.mjs';
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const defaultReadPackageVersion = ({ packageRoot }) => {
   try { const { version } = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'));
-    return typeof version === 'string' && !!version.trim() ? { ok: true, version } : { ok: false, version: '' }; }
+    return typeof version === 'string' && !!version ? { ok: true, version } : { ok: false, version: '' }; }
   catch { return { ok: false, version: '' }; }
 };
 const line = (stream, text) => stream.write(`${text}\n`);
@@ -174,7 +174,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     case 'version': case 'version-detailed': {
       let metadata;
       try { metadata = await readPackageVersion({ packageRoot });
-        if (!metadata?.ok || typeof metadata.version !== 'string' || !metadata.version.trim()) throw Error('version');
+        if (!metadata?.ok || typeof metadata.version !== 'string' || !metadata.version) throw Error('version');
       } catch { line(stderr, 'This PDD package has no readable version metadata.');return 1; }
       if (plan.local === 'version-detailed') {
         let result;
