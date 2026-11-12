@@ -958,6 +958,40 @@ test('PR1-REFRESH-SUMMARIES: a PR 1 update shortens the full summaries again and
   assert.equal(outsideCode(pddPart(body)).split('<details').length - 1, 1); assert.equal((body.match(/pdd-workflow:/g) ?? []).length, 1);
 });
 
+test('2874: a PR 1 refresh reserves all protected summaries before fitting large top evidence', t => {
+  const protectedLines = Array.from({ length: 120 }, (_, index) => `Limitation: ${String(index).padStart(3, '0')} ${'e'.repeat(74)}`);
+  const summary = `${'ordinary notes '.repeat(6000).trim()}\n${protectedLines.join('\n')}`;
+  const note = `Not checked: ${'y'.repeat(50000)}`;
+  const first = fixture(t, { prompt: true }); first.run.done.scope.summary = summary; first.save();
+  assert.equal(first.invoke('check done').exitCode, 0);
+  const before = first.data().prs[0].body;
+  const creation = fixture(t, { prompt: true }); creation.run.done.scope.summary = summary; creation.save();
+  writeFileSync(join(creation.runDir, 'check.md'), note);
+  assert.equal(creation.invoke('check done').exitCode, 0, 'The same inputs fit at initial publication.');
+  const f = fixture(t, { existing: true, prompt: true });
+  f.run.done.scope.summary = summary; f.run.done.check = { summary: 'check done', at: 5 }; awaitingCode(f);
+  const prs = f.data().prs; prs[0].body = before; f.configure({ prs });
+  writeFileSync(join(f.runDir, 'check.md'), note);
+  const edits = f.data().events.length;
+  const out = f.invoke('', 'approveRun');
+  assert.doesNotMatch(out.message, /workflow_pr_body_too_large/);
+  assert.equal(f.data().events.length, edits + 1, 'Fresh evidence refreshes the PR when protected summaries fit.');
+  for (const body of [creation.data().prs[0].body, f.data().prs[0].body]) {
+    const scope = sectionItems(fullSection(body)).find(item => item.step === 'scope');
+    for (const line of protectedLines) assert.ok(scope.lines.includes(line), 'Every protected line stays whole.');
+    assert.match(body, /Evidence omitted:/, 'Oversized top evidence uses the existing omission policy.');
+    assert.ok([...body].length <= 60000, `The whole description has ${[...body].length} characters.`);
+  }
+  const body = f.data().prs[0].body;
+  assert.equal(stepsList(body), stepsList(before), 'Refreshing does not cut the Steps list.');
+  const scope = sectionItems(fullSection(body)).find(item => item.step === 'scope');
+  const notice = body.split('\n').find(row => /step summary was shortened/.test(row));
+  const count = /scope \(([\d,]+) characters left out\)/.exec(notice ?? '');
+  assert.ok(count, 'The refreshed omission notice identifies the shortened step.');
+  const retained = scope.lines.filter(line => line !== '…').reduce((sum, line) => sum + [...line].length, 0) + protectedLines.length - 1;
+  assert.equal(retained + Number(count[1].replaceAll(',', '')), [...summary].length, 'The notice counts omitted characters, excluding inserted gap markers.');
+});
+
 test('2874: a PR 1 refresh preserves late evidence and refuses an oversized replacement', t => {
   const line = 'Limitation: upstream failure remains DEFERRED; https://github.com/example/upstream/issues/476';
   const summary = `${'ordinary notes '.repeat(6000).trim()}\n${line}`;

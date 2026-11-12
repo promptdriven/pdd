@@ -3240,7 +3240,8 @@ async function draftDescription(run, pr1, drafts, p) {
     const footer = `${closing}\n\n${marker}\n`;
     const approvalLines = (evidence.approvalLines ?? []).map(line => hideLocalPaths(redactTry(line), run));
     const room = BODY_BUDGET - characters(opening) - characters(footer) - characters(evidence.issueReference) - characters(ordinaryTop.join('\n')) - 8;
-    const { lifted, approvals } = publicationFit(evidence.lines.map(line => hideLocalPaths(redactTry(line), run)), approvalLines, Math.max(0, room - Math.min(1000, characters(safeRemainder) + reserved)), p.env);
+    // Protected summaries are mandatory; only the ordinary remainder's reservation is capped.
+    const { lifted, approvals } = publicationFit(evidence.lines.map(line => hideLocalPaths(redactTry(line), run)), approvalLines, Math.max(0, room - reserved - Math.min(1000, characters(safeRemainder))), p.env);
     const leading = opening + [...lifted, ...(lifted.length ? [''] : []), ...ordinaryTop, ...(ordinaryTop.length ? [''] : []), evidence.issueReference, '', ...approvals, ...(approvals.length ? [''] : []), ''].join('\n');
     const fitted = verifyFit(safeRemainder, BODY_BUDGET - characters(leading) - characters(footer) - reserved, p.env, true);
     const placed = section => { const text = section.join('\n'); return fitted.includes(SLOT) ? fitted.replace(SLOT, () => text) : `${fitted}\n\n${text}`; };
