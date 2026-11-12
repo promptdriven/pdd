@@ -278,18 +278,10 @@ function evalStaticStringExpr(expr) {
   return tokens.map(t => t.value).join('');
 }
 
-function inwardPathCallViolations(relPath, codeText, baseLine = null) {
-  const clean = stripCommentsPreservingLines(codeText);
-  const hits = [];
-  const lineAt = index => baseLine ?? clean.slice(0, index).split('\n').length;
-
-  const doubleDirname = /\bdirname\s*\(\s*dirname\s*\([^;]*?\bimport\.meta\b|\bdirname\s*\(\s*import\.meta\.dirname\b/g;
-  let match;
-  while ((match = doubleDirname.exec(clean)) !== null) {
-    hits.push(`${relPath}:${lineAt(match.index)}: ${match[0].trim()}`);
-  }
-
+function parsePathBuilderCalls(clean) {
+  const calls = [];
   const callStart = /\b(?:join|resolve)\s*\(/g;
+  let match;
   while ((match = callStart.exec(clean)) !== null) {
     const openIdx = clean.indexOf('(', match.index);
     let depth = 1;
@@ -320,20 +312,84 @@ function inwardPathCallViolations(relPath, codeText, baseLine = null) {
       }
       k++;
     }
-    if (depth !== 0) continue;
-    const callRaw = clean.slice(match.index, k + 1).trim();
-    const evaluated = args.map(evalStaticStringExpr);
+    if (depth === 0) {
+      calls.push({ index: match.index, raw: clean.slice(match.index, k + 1).trim(), args });
+    }
+  }
+  return calls;
+}
+
+function inwardPathCallViolations(relPath, codeText, baseLine = null) {
+  const clean = stripCommentsPreservingLines(codeText);
+  const hits = [];
+  const lineAt = index => baseLine ?? clean.slice(0, index).split('\n').length;
+
+  const doubleDirname = /\bdirname\s*\(\s*dirname\s*\([^;]*?\bimport\.meta\b|\bdirname\s*\(\s*import\.meta\.dirname\b/g;
+  let match;
+  while ((match = doubleDirname.exec(clean)) !== null) {
+    hits.push(`${relPath}:${lineAt(match.index)}: ${match[0].trim()}`);
+  }
+
+  for (const call of parsePathBuilderCalls(clean)) {
+    const evaluated = call.args.map(evalStaticStringExpr);
     for (let idx = 0; idx < evaluated.length; idx++) {
       const val = evaluated[idx];
       if (val === null) continue;
       const isParent = val === '..' || val === '../' || val.startsWith('../');
       if (!isParent) continue;
-      const earlierMentionsImportMeta = args.slice(0, idx).some(a => /\bimport\.meta\b/.test(a));
-      if (idx < args.length - 1 || (val.startsWith('../') && val.length > 3) || earlierMentionsImportMeta) {
-        hits.push(`${relPath}:${lineAt(match.index)}: ${callRaw}`);
+      const earlierMentionsImportMeta = call.args.slice(0, idx).some(a => /\bimport\.meta\b/.test(a));
+      if (idx < call.args.length - 1 || (val.startsWith('../') && val.length > 3) || earlierMentionsImportMeta) {
+        hits.push(`${relPath}:${lineAt(call.index)}: ${call.raw}`);
         break;
       }
     }
+  }
+  return hits;
+}
+
+function outwardPathCallViolations(relPath, codeText, baseLine = null) {
+  const clean = stripCommentsPreservingLines(codeText);
+  const hits = [];
+  const lineAt = index => baseLine ?? clean.slice(0, index).split('\n').length;
+
+  const evalOutwardSegment = argExpr => {
+    const literal = evalStaticStringExpr(argExpr);
+    if (literal !== null) return literal;
+    if (!/\bimport\.meta\b/.test(argExpr)) return null;
+    let dir = posix.dirname(relPath);
+    if (
+      /\bdirname\s*\(\s*import\.meta\.dirname\b/.test(argExpr)
+      || /\bdirname\s*\(\s*dirname\s*\([^)]*\bimport\.meta\.url\b/.test(argExpr)
+    ) {
+      dir = posix.dirname(dir);
+    }
+    return dir;
+  };
+
+  for (const call of parsePathBuilderCalls(clean)) {
+    const segs = call.args.map(evalOutwardSegment);
+    let run = [];
+    const flushRun = () => {
+      if (run.length === 0) return false;
+      const joined = posix.normalize(posix.join(...run));
+      run = [];
+      return (
+        joined === 'src/runtime'
+        || joined.startsWith('src/runtime/')
+        || referencesRuntimeDir(relPath, joined)
+      );
+    };
+    let flagged = false;
+    for (const seg of segs) {
+      if (seg !== null && seg !== '') {
+        run.push(seg);
+      } else if (flushRun()) {
+        flagged = true;
+        break;
+      }
+    }
+    if (!flagged && flushRun()) flagged = true;
+    if (flagged) hits.push(`${relPath}:${lineAt(call.index)}: ${call.raw}`);
   }
   return hits;
 }
@@ -386,10 +442,12 @@ export function findSeamViolations(relPath, source) {
   if (relPath === 'src/runtime-seam.mjs' || relPath.startsWith('src/runtime/')) return [];
   const hits = [];
   if (/\.(?:mjs|cjs|js)$/.test(relPath)) {
+    hits.push(...outwardPathCallViolations(relPath, source));
     for (const item of scannedCandidates(source)) {
       if (referencesRuntimeDir(relPath, item.value)) {
         hits.push(`${relPath}:${item.line}: ${item.raw}`);
       }
+      hits.push(...outwardPathCallViolations(relPath, item.value, item.line));
     }
     return [...new Set(hits)];
   }
@@ -503,7 +561,13 @@ test('SEAM3: detector catches static, dynamic, re-export, URL, escaped and child
     ['src/pdd-cli.mjs', "const m = await import(`./\\u{72}untime/runtime-client.mjs`);\n"],
     ['src/pdd-cli.mjs', "execFileSync(process.execPath, ['--input-type=module', '-e', \"import './\\\\x72untime/runtime-client.mjs';\"]);\n"],
     ['src/pdd-cli.mjs', "const m = await import('./run' + 'time/runtime-client.mjs');\n"],
+    ['src/pdd-cli.mjs', "import(pathToFileURL(join(import.meta.dirname, 'runtime', 'runtime-client.mjs')).href);\n"],
+    ['src/pdd-cli.mjs', "import(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), 'runtime', 'index.mjs')).href);\n"],
+    ['src/pdd-cli.mjs', "const p = join(here, 'runtime', 'runtime-client.mjs');\n"],
+    ['src/pdd-cli.mjs', "const p = resolve(packageRoot, 'src', 'runtime', 'index.mjs');\n"],
+    ['src/pdd-cli.mjs', "execFileSync(process.execPath, ['--input-type=module', '-e', \"import(pathToFileURL(join(import.meta.dirname, 'runtime', 'runtime-client.mjs')).href);\"]);\n"],
     ['bin/pdd.mjs', "import '../src/runtime/index.mjs';\n"],
+    ['bin/pdd.mjs', "import(pathToFileURL(join(import.meta.dirname, '..', 'src', 'runtime', 'index.mjs')).href);\n"],
     ['scripts/autopilot-smoke.mjs', "const p = 'src/runtime/runtime-client.mjs';\n"],
     ['scripts/vm-suite.sh', "node src/runtime/runtime-client.mjs\n"],
   ];
@@ -511,7 +575,7 @@ test('SEAM3: detector catches static, dynamic, re-export, URL, escaped and child
     assert.ok(findSeamViolations(file, code).length > 0, `expected violation for ${file}: ${code.trim()}`);
   }
   // Comments, .pdd/runtime, test/runtime/ and prompts/cli/runtime-entry.prompt.md are allowed.
-  assert.deepEqual(findSeamViolations('src/workflow-view.mjs', "// Moved to src/runtime/runtime-preflight.mjs\nimport { findTests } from './runtime-seam.mjs';\nconst a = '.pdd/runtime';\nconst b = 'test/runtime/foo.json';\nconst c = 'prompts/cli/runtime-entry.prompt.md';\n"), []);
+  assert.deepEqual(findSeamViolations('src/workflow-view.mjs', "// Moved to src/runtime/runtime-preflight.mjs\nimport { findTests } from './runtime-seam.mjs';\nconst a = '.pdd/runtime';\nconst b = 'test/runtime/foo.json';\nconst c = 'prompts/cli/runtime-entry.prompt.md';\nconst d = join(env.HOME, '.pdd', 'runtime');\n"), []);
 });
 
 const BASE_SRC_CATALOG = [
@@ -1733,4 +1797,89 @@ test('SEAM14 (Should-fix 1 & 5): single shared defaultLineReader in src/runtime 
   assert.equal(parsed.message, 'ADAPTERS_LOAD_FAILURE');
   assert.equal(parsed.stderr, '');
   assert.equal(parsed.modelCalls, 0);
+});
+
+test('SEAM15 (R2b-2): src/runtime-seam.mjs supports base standalone call forms with host defaults bound', async t => {
+  const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const seam = await import('../src/runtime-seam.mjs');
+
+  // 1. composeProductTry with only { statFile, readFile } snapshot ports.
+  const emptySchema = { type: 'object', properties: {}, required: [], additionalProperties: false };
+  const files = new Map();
+  const put = (path, value) => files.set(`/project/${path}`, typeof value === 'string' ? value : JSON.stringify(value));
+  put('product/map.md', '# Shop: map\nSize: medium\n## Parts\n| Part | Folder | What it is |\n|---|---|---|\n| server | prompts/server | Processing |\n| phone | prompts/phone | Ordering |\n| barista | prompts/barista | Preparation |\n## Stories\n| Id | Part | Story | Tag |\n|---|---|---|---|\n| P01 | phone | Order | CORE |\n');
+  put('product/plan.md', '# Plan\n## Runs\n| Run | Part | Slice | Stories | Needs |\n|---|---|---|---|---|\n| phone-1 | phone | core | P01 | |\n## After every tap\n1. prompts/server/server.prompt.md#forward\n');
+  put('contracts/world.md', '# World\n| Key | Writer | Readers |\n|---|---|---|\n| orders | phone | server |\n| tickets | server | barista |\n');
+  put('contracts/seed-world.json', { base: true });
+  put('prompts/server/seed.json', { tickets: ['retained'] });
+  put('prompts/phone/seed.json', { orders: [] });
+  put('prompts/server/server.prompt.md', `<details><summary>Runtime interface</summary>\n\`\`\`json\n${JSON.stringify({ entries: [{ operation: 'forward', result_schema: emptySchema }] })}\n\`\`\`\n</details>`);
+  for (const part of ['phone', 'barista']) {
+    put(`app/maps/${part}.json`, {
+      schema_version: 'prompt-runtime.app-map.v1',
+      name: part,
+      initial_screen: 'home',
+      initial_route: null,
+      initial_state: { selected: part },
+      state_schema: { type: 'object', properties: { selected: { type: 'string' } }, required: ['selected'], additionalProperties: false },
+      synthetic: false,
+      screens: [{ id: 'home', prompt_path: `prompts/${part}/view.prompt.md`, operation: 'render', source: 'operation', format: 'html', input: {}, result_pointer: '/html' }],
+      router: null,
+      routes: [],
+      stylesheets: [],
+      handlers: [{ screen: 'home', kind: 'click', match: {}, handler: { prompt_path: `prompts/${part}/view.prompt.md`, operation: 'tap' }, input: {}, next: { kind: 'screen', screen: 'home', route_pointer: null }, state: { selected: part } }],
+    });
+  }
+  const composed = seam.composeProductTry(
+    { root: '/project' },
+    {
+      statFile: path => ({ exists: files.has(path), is_symlink: false }),
+      readFile: path => {
+        if (!files.has(path)) throw new Error(`Unexpected read ${path}`);
+        return files.get(path);
+      },
+    },
+  );
+  assert.deepEqual(composed.parts, ['server', 'phone', 'barista']);
+  assert.equal(composed.files.length, 2);
+
+  // 2. runCheck with --screen, --drawing, --json and only { screenBrowser, env, stdout, stderr }.
+  const dir = mkdtempSync(join(tmpdir(), 'pdd-r2b-2-screen-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  mkdirSync(join(dir, 'prompts'), { recursive: true });
+  writeFileSync(
+    join(dir, 'prompts/ready.ui.svg'),
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300"><title>Ready</title><desc>Ready screen</desc><text id="status" x="20" y="40">READY</text></svg>\n',
+  );
+  let browserCalls = 0;
+  let stdout = '';
+  let stderr = '';
+  const code = await seam.runCheck(
+    {
+      cwd: dir,
+      words: [],
+      options: { '--screen': 'https://example.test/app', '--drawing': 'prompts/ready.ui.svg', '--json': true },
+    },
+    {
+      screenBrowser: async () => {
+        browserCalls++;
+        return {
+          viewport: { width: 400, height: 300 },
+          reference: [{ kind: 'text', value: 'READY', node: 1, visible: true, box: { x: 20, y: 20, width: 80, height: 24 }, ancestors: [], region: null, tokens: ['tok-1'] }],
+          actual: [{ kind: 'text', value: 'READY', node: 'tok-1', visible: true, box: { x: 20, y: 20, width: 80, height: 24 }, ancestors: [], region: null, tokens: ['tok-1'] }],
+        };
+      },
+      gh: () => assert.fail('unexpected auth'),
+      fetch: async () => assert.fail('unexpected network'),
+      env: {},
+      stdout: { write(chunk) { stdout += chunk; } },
+      stderr: { write(chunk) { stderr += chunk; } },
+    },
+  );
+  assert.equal(code, 0, stderr);
+  assert.equal(browserCalls, 1);
+  assert.equal(stderr, '');
+  const report = JSON.parse(stdout);
+  assert.equal(report.passed, true);
 });

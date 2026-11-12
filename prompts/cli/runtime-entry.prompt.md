@@ -2,7 +2,7 @@
 
 Own `src/runtime/index.mjs`. It is the single public entry of `src/runtime/`, exposing the Runtime commands, local format and workspace readers, check-plan, product-composition, and outcome helpers, agent bridge and workspace migration entries, constants, and agent packet builder consumed by pdd through [`src/runtime-seam.mjs`](runtime-seam.prompt.md).
 
-No module under `src/runtime/` may import or address any relative path outside `src/runtime/`. Caller metadata (`client.version`, `client.commands`, `workflow.base_sha`) and host-owned capabilities (file-owner headers, approvals, local agent launchers, workflow evidence eligibility, native Story assessment, product Markdown document and world-writer parsers, SVG layout advisory, and screen comparison) arrive exclusively through request fields and `ports`.
+No module under `src/runtime/` may import or address any relative path outside `src/runtime/`. Caller metadata (`client.version`, `client.commands`, `workflow.base_sha`) and host-owned capabilities (file-owner headers, approvals, local agent launchers, workflow evidence eligibility, native Story assessment, product Markdown document and world-writer parsers, SVG layout advisory, and screen comparison) arrive exclusively through request fields and `ports`. Direct `src/runtime/` functions require their host ports (failing with a descriptive unbound-port error when a required host capability is omitted); [`src/runtime-seam.mjs`](runtime-seam.prompt.md) is the compatible entry for pdd code and tests, supplying every host port with pdd's behavior.
 
 ## Public contract
 
@@ -77,6 +77,6 @@ Load each owner module only when the exported function (or its slice loader) is 
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"native-only","status":"draft","prose_sha256": "a31ec276f12115de44230a8fdaa5a28d96a61d4919658c90856c4675201ec6e7","reason":"Exposes live JavaScript ESM static and deferred dynamic-import bindings across src/runtime/ submodules, which bound Runtime ports cannot fake."}
+{"kind":"native-only","status":"draft","prose_sha256": "d137610f0b6351edf9c5ab2cb293f1937de92164acfbc8d7dd2ecad7e4fb791a","reason":"Exposes live JavaScript ESM static and deferred dynamic-import bindings across src/runtime/ submodules, which bound Runtime ports cannot fake."}
 ```
 </details>

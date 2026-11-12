@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-entry.prompt.md (sha256: b2efb44968f2cf930507a975da40ccb4a72362686201db847eb08e544ea85d5f).
+// Generated from prompts/cli/runtime-entry.prompt.md (sha256: 443d22f5cde45b9bf07ecc3d502a24d3205d4d807712bc65bba7a224549df7e0).
 import { createRequire } from 'node:module';
 
 const req = createRequire(import.meta.url);

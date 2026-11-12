@@ -1,6 +1,6 @@
 # PDD to Runtime seam
 
-Own `src/runtime-seam.mjs` and the stable launcher entry `src/try-doors.mjs`. `src/runtime-seam.mjs` is the sole module in pdd outside `src/runtime/` permitted to import `src/runtime/`. Every pdd module in `src/`, `bin/`, and `scripts/` accesses Runtime commands, local format and workspace readers, check-plan and outcome helpers, and constants exclusively through `./runtime-seam.mjs`.
+Own `src/runtime-seam.mjs` and the stable launcher entry `src/try-doors.mjs`. `src/runtime-seam.mjs` is the sole module in pdd outside `src/runtime/` permitted to import `src/runtime/`, and it is the compatible entry for pdd code and tests: while direct `src/runtime/` functions require their ports, `src/runtime-seam.mjs` fills every host port with pdd's behavior. Every pdd module in `src/`, `bin/`, and `scripts/` accesses Runtime commands, local format and workspace readers, check-plan and outcome helpers, and constants exclusively through `./runtime-seam.mjs`.
 
 The seam keeps stable pdd-owned file paths for anything pdd writes into a user's files or passes to a child process:
 
@@ -65,6 +65,6 @@ The seam holds no mutable request state and loads zero additional pdd or Runtime
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"native-only","status":"draft","prose_sha256": "8f603ceba7f757c352daa977b747af5b6fea2a5fb8ba368a001a346027f16ded","reason":"Re-exports live JavaScript ESM module bindings from src/runtime/index.mjs as pdd's sole import seam, which bound Runtime ports cannot fake."}
+{"kind":"native-only","status":"draft","prose_sha256": "09bad3f2c06b4eabf40983b80a5788e5ef838f1ae4f5fc7591bfd5d548e41d43","reason":"Re-exports live JavaScript ESM module bindings from src/runtime/index.mjs as pdd's sole import seam, which bound Runtime ports cannot fake."}
 ```
 </details>
