@@ -635,16 +635,19 @@ the evidence record.
   unchanged), and nothing is asked. A pdd-bug or pdd-small-change run never asks a
   choice question: it picks the fix that makes the reported behavior right with the
   least surprise (for example a bug in "1 KiB" for 1.9 KiB is decided and listed with
-  `(changes public behavior: …)`). A choice may be a question (`needs-person` with
-  `kind` `choice`) only when every reasonable fix breaks something that people use
-  today, or, in a pdd-feature run, for a product-direction decision that the issue and
-  the answers in the brief do not settle: whether a new feature area or capability
-  should exist, how a feature works at the design level when there are two different
-  designs, removing a feature, an on-purpose change to a core contract, security,
-  privacy or data policy, or something that costs money. An open trusted issue that
-  asks the same product question (for example an open decision issue) counts too.
-  Every other choice in a feature is decided and listed (small ones: internal names,
-  code structure, tests, message and docs wording, small defaults). **A bug fix may
+  `(changes public behavior: …)`). Routine compatible choices of command syntax,
+  options or data representation are agent decisions when a safe, low-surprise choice
+  exists. Preserve existing APIs, defaults and behavior unless the request authorizes a
+  change. Several valid designs alone are not a reason to ask. A choice may be a
+  question (`needs-person` with `kind` `choice`) only when every reasonable fix breaks
+  something that people use today, or, in a pdd-feature run, when the choice actually
+  changes product direction. Product direction
+  includes whether a new feature area or capability should exist, removing a feature,
+  an on-purpose change to a core contract, security, privacy or data policy, or
+  something that costs money. An open trusted issue that asks the same product question
+  (for example an open decision issue) counts too. Every other choice in a feature is
+  decided and listed (small ones: internal names, code structure, tests, message and
+  docs wording, small defaults). **A bug fix may
   change an approved rule** (Serhan, D1, Nov 11: "it can change the rule without you
   needed if its a bug"): a pdd-bug or pdd-small-change run whose fix is a change of a
   rule in an approved prompt makes it without asking and lists it under `Choices

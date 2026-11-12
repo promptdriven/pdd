@@ -833,13 +833,14 @@ records. A line that the records do not support is red. The same rules, short en
 - With `decisions` `decide` (the default): never ask a person about a choice. Decide every choice yourself,
   product-direction ones too, and list each; list the big ones first, each marked "(big)". A choice question is never
   posted: Autopilot starts the job once more with "Autopilot decides this choice: do not ask."
-- With `decisions` `ask`: a choice may be a question (`"kind":"choice"`) only when every reasonable fix breaks
-  something that people use today, or, in a pdd-feature run, for a product-direction decision that the issue and the
-  answers above do not settle: whether a new feature area or capability should exist, how a feature works at the
-  design level when there are two different designs, removing a feature, an on-purpose change to a core contract,
-  security, privacy or data policy, or something that costs money; an open trusted issue that asks the same product
-  question counts too. Then do not choose and open no PR. Decide and list every other choice. An issue gets at most
-  one choice question.
+- With `decisions` `ask`: routine compatible choices of command syntax, options or data representation are agent
+  decisions when a safe, low-surprise choice exists. Preserve existing APIs, defaults and behavior unless the request
+  authorizes a change. Several valid designs alone are not a reason to ask. A choice may be a question
+  (`"kind":"choice"`) only when every reasonable fix breaks something that people use today, or, in a pdd-feature
+  run, when the choice actually changes product direction: whether a new feature
+  area or capability should exist, removing a feature, an on-purpose change to a core contract, security, privacy or
+  data policy, or something that costs money; an open trusted issue that asks the same product question counts too.
+  Then do not choose and open no PR. Decide and list every other choice. An issue gets at most one choice question.
 - A bug fix may change an approved rule (Serhan, D1): when the fix of a pdd-bug or pdd-small-change run changes a
   rule in an approved prompt, change it without asking and list it with "(changes approved rule: OLD -> NEW)", so a
   person sees it. The repository's approval setting still applies to the changed prompt.

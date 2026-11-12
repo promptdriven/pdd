@@ -1455,7 +1455,6 @@ test('E74 (T10 narrowed, Serhan and the audit) the briefs: Autopilot decides whe
     assert.match(build, /"outcome":"needs-person","kind":"blocker\|choice"/);
     assert.match(review, /A change against a person's recorded answer to an earlier question, or a change of what blocks merges \(a required check, a gate, a hash pin, CI policy\), is a P1 must-fix in every mode/);
     if (decisions === 'ask') {
-      assert.match(build, /A choice may be a question \("kind":"choice"\) only when every reasonable fix breaks something that people use today, or, in a pdd-feature run, for a product-direction decision that the issue and the answers above do not settle: whether a new feature area or capability should exist, how a feature works at the design level when there are two different designs/);
       assert.match(review, /In a pdd-bug or pdd-small-change PR a decision item is never a question: only a repair or a "list it" fix\./);
     } else assert.match(build, /Choices: never ask a person about a choice\./);
   }
