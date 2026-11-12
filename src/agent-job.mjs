@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-job.prompt.md (sha256: d44d6cb6ecbf816cb78e9f2c3823b32ac5709affea004b9608cf71f151c779c8).
+// Generated from prompts/cli/agent-job.prompt.md (sha256: 4de5e43a35d7fef5eecca73ed82786faaeea70a7e721e627e7a11fcfb03a3c14).
 import { execFile, spawn, spawnSync } from 'node:child_process';
 import { accessSync, closeSync, constants, fstatSync, openSync, readFileSync, readSync, renameSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { setPriority } from 'node:os';
@@ -119,42 +119,49 @@ function lastLogLine(file) {
   } catch { return ''; } finally { if (fd !== undefined) try { closeSync(fd); } catch { /* Closed. */ } }
 }
 const PDD_WAIT = /(?:^|[\s/'"])pdd(?:\.mjs)?['"]?\s+(?:test|lint)(?=\s|$)|PDD_CLI['"}]*\s+(?:test|lint)(?=\s|$)/;
+// One round of the hung-command watch as a pure function (the test feeds it process tables and times, so it checks the
+// decisions and not wall time). memo keeps the helpers, the reference CPU of each command and the stopped commands
+// between rounds. It returns the commands to stop: [{row, sub, minutes}].
+export function hungRound(memo, { rows, log, now, agentPid, settings }) {
+  const { after, cpu: cpuLimit } = settings, SAME = 3000, FRESH = 10_000, stops = [];
+  if (!Number.isSafeInteger(agentPid) || !log?.size || !Array.isArray(rows)) return stops;
+  memo.refs ??= new Map(); memo.stopped ??= new Set();
+  const children = new Map(), byPid = new Map(rows.map(row => [row.pid, row]));
+  for (const row of rows) children.set(row.ppid, [...(children.get(row.ppid) ?? []), row]);
+  const below = pid => { const found = [], queue = [...(children.get(pid) ?? [])]; for (let i = 0; i < queue.length && i < 2000; i++) { found.push(queue[i]); queue.push(...(children.get(queue[i].pid) ?? [])); } return found; };
+  const tree = below(agentPid), inTree = new Set(tree.map(row => row.pid));
+  for (const pid of memo.refs.keys()) if (!inTree.has(pid)) memo.refs.delete(pid);
+  // The helpers: every process under the agent at the first round with log content (its MCP servers and helpers).
+  if (!memo.helpers) { memo.helpers = new Map(tree.map(row => [row.pid, row.start])); return stops; }
+  const helper = row => memo.helpers.has(row.pid) && Math.abs(memo.helpers.get(row.pid) - row.start) < SAME;
+  const fresh = row => Boolean(row) && row.pid !== agentPid && !helper(row) && row.start >= log.mtimeMs - FRESH && inTree.has(row.pid);
+  for (const row of tree) {
+    if (!fresh(row) || fresh(byPid.get(row.ppid))) continue;
+    const key = `${row.pid}:${Math.round(row.start / SAME)}`;
+    if (memo.stopped.has(key)) continue;
+    const sub = [row, ...below(row.pid)], used = sub.reduce((sum, r) => sum + r.cpu, 0);
+    // A pdd test or lint that waits for Runtime capacity or a maintenance window has no output in this log and almost
+    // no CPU, like a hang: it is never stopped here (lead, Nov 11). Its own time limits end it, and the engine's quiet
+    // rule still sees a job that stays silent.
+    if (sub.some(r => PDD_WAIT.test(r.command))) continue;
+    let ref = memo.refs.get(row.pid);
+    if (!ref || Math.abs(ref.start - row.start) >= SAME) ref = { start: row.start, since: Math.max(log.mtimeMs, row.start), cpu: used };
+    if (used - ref.cpu >= cpuLimit) Object.assign(ref, { since: now, cpu: used });
+    ref.since = Math.max(ref.since, log.mtimeMs);
+    memo.refs.set(row.pid, ref);
+    if (now - ref.since < after) continue;
+    memo.stopped.add(key); memo.refs.delete(row.pid);
+    stops.push({ row, sub, minutes: Math.round((now - ref.since) / 6000) / 10 });
+  }
+  return stops;
+}
 function watchHung(spec, agentPid, out) {
-  const { after, every, cpu: cpuLimit } = spec.hung, SAME = 3000, FRESH = 10_000;
-  let helpers = null;
-  const refs = new Map(), stopped = new Set();
+  const memo = {};
   const round = () => {
-    if (!Number.isSafeInteger(agentPid)) return;
     const log = statSync(spec.log), now = Date.now();
     if (!log.size) return;
-    const rows = processTable();
-    if (!rows) return;
-    const children = new Map(), byPid = new Map(rows.map(row => [row.pid, row]));
-    for (const row of rows) children.set(row.ppid, [...(children.get(row.ppid) ?? []), row]);
-    const below = pid => { const found = [], queue = [...(children.get(pid) ?? [])]; for (let i = 0; i < queue.length && i < 2000; i++) { found.push(queue[i]); queue.push(...(children.get(queue[i].pid) ?? [])); } return found; };
-    const tree = below(agentPid), inTree = new Set(tree.map(row => row.pid));
-    for (const pid of refs.keys()) if (!inTree.has(pid)) refs.delete(pid);
-    // The helpers: every process under the agent at the first round with log content (its MCP servers and helpers).
-    if (!helpers) { helpers = new Map(tree.map(row => [row.pid, row.start])); return; }
-    const helper = row => helpers.has(row.pid) && Math.abs(helpers.get(row.pid) - row.start) < SAME;
-    const fresh = row => Boolean(row) && row.pid !== agentPid && !helper(row) && row.start >= log.mtimeMs - FRESH && inTree.has(row.pid);
-    for (const row of tree) {
-      if (!fresh(row) || fresh(byPid.get(row.ppid))) continue;
-      const key = `${row.pid}:${Math.round(row.start / SAME)}`;
-      if (stopped.has(key)) continue;
-      const sub = [row, ...below(row.pid)], used = sub.reduce((sum, r) => sum + r.cpu, 0);
-      // A pdd test or lint that waits for Runtime capacity or a maintenance window has no output in this log and almost
-      // no CPU, like a hang: it is never stopped here (lead, Nov 11). Its own time limits end it, and the engine's quiet
-      // rule still sees a job that stays silent.
-      if (sub.some(r => PDD_WAIT.test(r.command))) continue;
-      let ref = refs.get(row.pid);
-      if (!ref || Math.abs(ref.start - row.start) >= SAME) ref = { start: row.start, since: Math.max(log.mtimeMs, row.start), cpu: used };
-      if (used - ref.cpu >= cpuLimit) Object.assign(ref, { since: now, cpu: used });
-      ref.since = Math.max(ref.since, log.mtimeMs);
-      refs.set(row.pid, ref);
-      if (now - ref.since < after) continue;
-      stopped.add(key); refs.delete(row.pid);
-      const last = lastLogLine(spec.log), minutes = Math.round((now - ref.since) / 6000) / 10, command = row.command.slice(0, 500);
+    for (const { row, sub, minutes } of hungRound(memo, { rows: processTable(), log, now, agentPid, settings: spec.hung })) {
+      const last = lastLogLine(spec.log), command = row.command.slice(0, 500);
       for (const r of sub) try { process.kill(r.pid, 'SIGTERM'); } catch { /* Gone. */ }
       setTimeout(() => { for (const r of sub) try { process.kill(r.pid, 'SIGKILL'); } catch { /* Gone. */ } }, GRACE_MS).unref();
       const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: spec.cwd, encoding: 'utf8', timeout: 5000 });
@@ -164,7 +171,7 @@ function watchHung(spec, agentPid, out) {
     }
   };
   // A failed round (a process table that cannot be read, a log that is gone) never stops the job.
-  setInterval(() => { try { round(); } catch { /* The next round tries again. */ } }, every).unref();
+  setInterval(() => { try { round(); } catch { /* The next round tries again. */ } }, spec.hung.every).unref();
 }
 
 // The lowest priority for every job (#3231), for the child, not for the wrapper: the wrapper only waits, and it must
@@ -222,31 +229,43 @@ function lowerPriority(spec) {
   if (executable(NICE)) return;
   try { setPriority(0, niceOf(spec)); } catch { /* A lower priority is best effort. */ }
 }
+// The stop of a whole job, in order, with ports (the test checks the order and not wall time): a stop signal sends
+// SIGTERM to the group (this wrapper leads it) and keeps one timer; after the grace time the wrapper writes the exit
+// record (best effort; the child's code and signal when it exited, else the stop signal) and then sends SIGKILL to the
+// whole group, itself last. A failed write never skips the SIGKILL. A second stop changes nothing. A child that ends by
+// a stop signal before the wrapper's own handler runs is that stop (guard, Nov 11).
+const STOP_SIGNALS = ['SIGTERM', 'SIGINT', 'SIGHUP'];
+export function jobStopper({ killGroup, setTimer, writeExit, exit, now = Date.now, grace = GRACE_MS }) {
+  let finished = false, stopping = null, ended = null;
+  const finish = (code, signal, group = false) => {
+    if (finished) return; finished = true;
+    try { writeExit({ code, signal: signal ?? null, at: now() }); }
+    catch { /* The exit record is best effort; the job then reads as dead. */ }
+    finally {
+      if (group) try { killGroup('SIGKILL'); } catch { /* Only this wrapper is left. */ }
+      exit();
+    }
+  };
+  const stop = signal => {
+    if (stopping) return; stopping = signal;
+    killGroup('SIGTERM');
+    // A kept timer: the wrapper waits the grace time also when its direct child exits at once (sh does).
+    setTimer(() => finish(ended?.code ?? null, ended?.signal ?? signal, true), grace);
+  };
+  const exited = (code, signal) => { if (stopping) ended = { code, signal }; else if (STOP_SIGNALS.includes(signal)) { ended = { code, signal }; stop(signal); } else finish(code, signal); };
+  return { finish, stop, exited };
+}
 // The detached wrapper: it owns the agent process and records how it ended.
 function wrap(specFile) {
   const spec = JSON.parse(readFileSync(specFile, 'utf8'));
   lowerPriority(spec);
   const stdin = openSync(spec.input, 'r'), out = openSync(spec.log, 'a', 0o600);
-  let finished = false, stopping = null, ended = null, child;
-  const finish = (code, signal, group = false) => {
-    if (finished) return; finished = true;
-    try {
-      try { writeAtomic(spec.exit, JSON.stringify({ code, signal: signal ?? null, at: Date.now() })); }
-      finally { for (const fd of [stdin, out]) try { closeSync(fd); } catch { /* Already closed. */ } }
-    } catch { /* The exit record is best effort; the job then reads as dead. */ }
-    finally {
-      // A stop ends the whole group (this wrapper leads it), also after a failed write: no process that waits after the
-      // first SIGTERM survives.
-      if (group) try { process.kill(-process.pid, 'SIGKILL'); } catch { /* Only this wrapper is left. */ }
-      process.exit(0);
-    }
-  };
-  const stop = signal => {
-    if (stopping) return; stopping = signal;
-    try { process.kill(-process.pid, 'SIGTERM'); } catch { try { child?.kill('SIGTERM'); } catch { /* The child may already be gone. */ } }
-    // A kept timer: the wrapper waits the grace time also when its direct child exits at once (sh does).
-    setTimeout(() => finish(ended?.code ?? null, ended?.signal ?? signal, true), GRACE_MS);
-  };
+  let child;
+  const { finish, stop, exited } = jobStopper({
+    killGroup: signal => { try { process.kill(-process.pid, signal); } catch { if (signal === 'SIGTERM') try { child?.kill('SIGTERM'); } catch { /* The child may already be gone. */ } } },
+    setTimer: (fn, ms) => setTimeout(fn, ms),
+    writeExit: record => { try { writeAtomic(spec.exit, JSON.stringify(record)); } finally { for (const fd of [stdin, out]) try { closeSync(fd); } catch { /* Already closed. */ } } },
+    exit: () => process.exit(0) });
   for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(signal, () => stop(signal));
   const run = jobCommand(spec);
   try { child = spawn(run.command, run.args, { cwd: spec.cwd, env: process.env, stdio: [stdin, out, out] }); }
@@ -255,7 +274,7 @@ function wrap(specFile) {
   if (object(spec.hung) && typeof spec.hangs === 'string') watchHung(spec, child.pid, out);
   // A group stop can reach the child before the wrapper's own handler runs: a child killed by a stop signal is that
   // stop, so the whole group still ends after the grace time (no process that ignores SIGTERM is left behind).
-  child.on('exit', (code, signal) => { if (stopping) ended = { code, signal }; else if (['SIGTERM', 'SIGINT', 'SIGHUP'].includes(signal)) { ended = { code, signal }; stop(signal); } else finish(code, signal); });
+  child.on('exit', (code, signal) => exited(code, signal));
   if (spec.pddCheck) { checkSkills(spec, out); checkShellPdd(spec, out); }
 }
 

@@ -922,10 +922,13 @@ runs until its end):
    prompt P (its tests upload it), but it has no passing pdd test check at this source
    and no Runtime line. Run "$PDD_CLI" test for S at this head, or write "Runtime: not
    run (S: REASON)"."; a consumer with a "not run" line, or with no pass, is checked
-   against its saved rows like any changed Story (fix 1: a failed row is red). With more
-   than 10 consumers of the change, a consumer with no pass and no line is no red: the
-   merge note and the record say `Runtime: not run (N Stories reach PROMPT; checked K)`
-   (K the consumers with a passing current check), never a silent pass. The single-line
+   against its saved rows like any changed Story (fix 1: a failed row is red). There is
+   no cap (Serhan, D3: "it should check all"): every consumer counts, however many; rule
+   6 asks to send them in one `pdd test` batch where it can. Only a consumer that Runtime
+   could not check (its deciding rows have no verdict, no failed check and no refusal:
+   maintenance, a service failure) is no red; then the merge note and the record say
+   `Runtime: not run (N Stories reach PROMPT; checked K)` (K the consumers with a passing
+   current check), never a silent pass and never a way to skip work. The single-line
    rule (one line with no Story) counts only Story and test file changes. On pdd, a
    change to `prompts/cli/runtime-client.prompt.md` reads its consumers in one tick in
    under 60 s (a test checks it). The result's `runtime.state` (lower case, spaces as `-`) must be

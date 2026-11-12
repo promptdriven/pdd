@@ -18,7 +18,8 @@ line against its own records. A line that the records do not support is red.
 
 ## Runtime lines
 
-- Commit every change. Then run `pdd test` for each changed Story.
+- Commit every change. Then run `pdd test` for each changed Story, all of them in one `pdd test` batch where you can
+  (`pdd test STORY STORY ...`). Every Story whose test reaches a changed prompt counts, however many (Serhan, D3).
 - Write one `Runtime:` line for each changed Story. Put the verdict first. Then put the Story file path (as
   `git diff` shows it) first in the parentheses:
   ```text

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { agentCommand, jobEnvironment, startAgentJob, readAgentJob, stopAgentJob, agentJobCpu, agentJobHangs } from '../src/agent-job.mjs';
+import { agentCommand, jobEnvironment, startAgentJob, readAgentJob, stopAgentJob, agentJobCpu, agentJobHangs, jobStopper, hungRound } from '../src/agent-job.mjs';
 
 const folder = t => { const dir = mkdtempSync(join(tmpdir(), 'pdd-agent-job-')); t.after(() => rmSync(dir, { recursive: true, force: true })); return dir; };
 const until = async (check, ms = 10000) => {
@@ -99,9 +99,42 @@ test('stop ends the whole process group after the grace time: a grandchild that 
   assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' }, 'the grandchild is gone');
   const done = readAgentJob(job);
   assert.equal(done.state, 'exited'); assert.equal(done.exit.signal, 'SIGTERM', JSON.stringify(done.exit));
-  // Claude round 5 SF: the wrapper writes the exit record just before the group SIGKILL, after the 2 s grace time.
+  // A real-process smoke check with a wide bound (the order and the grace time are checked with ports below): the exit
+  // record, written just before the group SIGKILL, comes after the grace time and within 15 s on a loaded machine.
   const after = done.exit.at - stoppedAt;
-  assert.ok(after >= 1500 && after < 6000, `the SIGKILL came ${after} ms after the stop`);
+  assert.ok(after >= 1500 && after < 15000, `the SIGKILL came ${after} ms after the stop`);
+});
+
+// Claude round 5 SF, lead: the stop order with ports, not wall time: SIGTERM to the group, one timer of the grace time,
+// then the exit record and SIGKILL to the group, then the exit; a failed record write never skips the SIGKILL.
+test('jobStopper: a stop is SIGTERM, then after the grace time the exit record, SIGKILL and the exit, in that order', () => {
+  const run = (options = {}) => {
+    const log = [], timers = [];
+    const stopper = jobStopper({ killGroup: signal => log.push(signal), setTimer: (fn, ms) => { log.push(`timer ${ms}`); timers.push(fn); },
+      writeExit: record => { if (options.writeFails) throw Error('EISDIR'); log.push(`exit record ${record.signal} ${record.code}`); }, exit: () => log.push('exit'), now: () => 7, grace: 2000 });
+    return { log, timers, stopper };
+  };
+  let { log, timers, stopper } = run();
+  stopper.stop('SIGTERM');
+  assert.deepEqual(log, ['SIGTERM', 'timer 2000'], 'nothing else before the grace time');
+  stopper.stop('SIGINT'); stopper.exited(null, 'SIGTERM');
+  assert.deepEqual(log, ['SIGTERM', 'timer 2000'], 'a second stop and the child exit change nothing');
+  timers[0]();
+  assert.deepEqual(log, ['SIGTERM', 'timer 2000', 'exit record SIGTERM null', 'SIGKILL', 'exit']);
+  timers[0](); assert.equal(log.length, 5, 'it finishes once');
+  // A failed exit record write never skips the group SIGKILL.
+  ({ log, timers, stopper } = run({ writeFails: true }));
+  stopper.stop('SIGHUP'); timers[0]();
+  assert.deepEqual(log, ['SIGTERM', 'timer 2000', 'SIGKILL', 'exit']);
+  // A child that ends by a stop signal before the wrapper's own handler runs is that stop (no orphan is left).
+  ({ log, timers, stopper } = run());
+  stopper.exited(null, 'SIGTERM');
+  assert.deepEqual(log, ['SIGTERM', 'timer 2000']); timers[0]();
+  assert.deepEqual(log.slice(2), ['exit record SIGTERM null', 'SIGKILL', 'exit']);
+  // A child that exits by itself: the record, no group signal.
+  ({ log, stopper } = run());
+  stopper.exited(0, null);
+  assert.deepEqual(log, ['exit record null 0', 'exit']);
 });
 
 // Codex delta 7: a failed exit-record write (here a folder at its path) never skips the group SIGKILL.
@@ -206,18 +239,26 @@ test('the hung-command watch never stops a pdd test that waits for Runtime (lead
   await until(() => readAgentJob(job).state === 'exited', 15000);
 });
 
-test('the hung-command watch leaves a busy command, a job without hung and a plain command alone (STOPS-0129)', async t => {
-  const dir = folder(t), mark = join(dir, 'busy.done');
-  // A command with CPU growth runs past the silent time and ends by itself.
-  const busy = `const { spawnSync } = require('child_process');
-process.stdout.write('agent started\\n');
-setTimeout(() => { process.stdout.write('{"type":"item.started"}\\n');
-  const r = spawnSync(process.execPath, ['-e', 'const end = Date.now() + 2500; while (Date.now() < end) {}'], { stdio: 'ignore' });
-  require('fs').writeFileSync(${JSON.stringify(mark)}, String(r.status)); process.exit(0); }, 400);`;
-  const job = startAgentJob({ id: '31-build-1', dir, cwd: dir, command: process.execPath, args: ['-e', busy], input: '', env: { PATH: process.env.PATH }, hung: { after: 1200, every: 150, cpu: 0.3 } });
-  const done = await until(() => { const s = readAgentJob(job); return s.state === 'exited' && s; }, 15000);
-  assert.equal(done.exit.code, 0); assert.equal(readFileSync(mark, 'utf8'), '0', 'the busy command ended by itself');
-  assert.doesNotMatch(readFileSync(job.log, 'utf8'), /stopped a hung command/); assert.deepEqual(agentJobHangs(job), []);
+test('the hung-command watch rounds (pure): a busy command, a helper and a waiting pdd test stay; a silent command is stopped once (STOPS-0129)', () => {
+  const settings = { after: 1200, cpu: 0.3 }, agent = 10, at = 1_000_000, log = { size: 10, mtimeMs: at };
+  const row = (pid, ppid, cpu, command, start = at + 100) => ({ pid, ppid, cpu, start, command });
+  const memo = {};
+  // Round 1 with log content: the helper of the agent is known.
+  assert.deepEqual(hungRound(memo, { rows: [row(10, 1, 1, 'codex'), row(11, 10, 0, 'mcp-server', at - 50_000)], log, now: at + 200, agentPid: agent, settings }), []);
+  const table = (busyCpu, silentCpu) => [row(10, 1, 1, 'codex'), row(11, 10, 0, 'mcp-server', at - 50_000),
+    row(20, 10, busyCpu, 'node build.js'), row(30, 10, silentCpu, 'npm install'), row(40, 10, 0, '/bin/bash -lc "$PDD_CLI" test format-bytes'), row(41, 40, 0, 'node /p/bin/pdd.mjs test format-bytes')];
+  // The busy command grows by 0.5 s of CPU each round; the silent one by nothing; time goes on in fixed steps.
+  let stopped = [];
+  for (let i = 1; i <= 6; i++) stopped.push(...hungRound(memo, { rows: table(0.5 * i, 0.01), log, now: at + 200 + i * 500, agentPid: agent, settings }).map(s => s.row.command));
+  assert.deepEqual(stopped, ['npm install'], 'only the silent command, once');
+  // A log change starts the silent time again.
+  const fresh = {};
+  hungRound(fresh, { rows: table(0, 0), log, now: at + 200, agentPid: agent, settings });
+  assert.deepEqual(hungRound(fresh, { rows: table(0, 0), log: { size: 20, mtimeMs: at + 1500 }, now: at + 2000, agentPid: agent, settings }), []);
+});
+
+test('the hung-command watch: a job without hung and a broken setting have no watch (STOPS-0129)', async t => {
+  const dir = folder(t);
   // No hung setting: no watch, no record, and the spec has no hung field.
   const plain = startAgentJob({ id: '32-suite-1', dir, cwd: dir, command: process.execPath, args: ['-e', 'process.exit(0)'], input: '', env: { PATH: process.env.PATH } });
   assert.equal(JSON.parse(readFileSync(plain.token, 'utf8')).hung, undefined);

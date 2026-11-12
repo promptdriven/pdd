@@ -792,7 +792,9 @@ records. A line that the records do not support is red. The same rules, short en
   branch, usually `main`). It never means changed since the previous PR head. A Story or prompt that a merge from the
   base brought in is not changed. A changed Story is a Story whose Story file or test file changed, or whose test
   reaches a changed prompt.
-- Commit every change, then run `pdd test` for each changed Story. Write one `Runtime:` line for each changed Story.
+- Commit every change, then run `pdd test` for each changed Story, all of them in one `pdd test` batch where you
+  can (`pdd test STORY STORY ...`); every Story whose test reaches a changed prompt counts, however many. Write one
+  `Runtime:` line for each changed Story.
   Put the verdict first. Then put the Story file path (as `git diff` shows it) first in the parentheses:
   ```text
   Runtime: PASS (user_stories/format-bytes.md, 19/19 checks)

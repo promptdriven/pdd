@@ -129,6 +129,14 @@ record is simply dead. There is no "uncertain custody" state.
     stop (at most 300 characters) and `head` the output of `git rev-parse HEAD` in `cwd`
     (5 s timeout), or null. The job goes on; the wrapper never stops the agent CLI or the
     whole job for a hang, and a failed round only waits for the next one.
+- Two parts are pure and exported, so their tests check the order and the decisions, not wall time (lead, Nov 11):
+  `jobStopper({killGroup, setTimer, writeExit, exit, now, grace})` returns `{stop, exited, finish}` with the stop
+  order above (SIGTERM to the group and one timer of `grace` ms, then the exit record, SIGKILL to the group and the
+  exit; a second stop changes nothing; a failed write never skips the SIGKILL; a child that ends by a stop signal is
+  that stop); `hungRound(memo, {rows, log, now, agentPid, settings})` is one round of the hung-command watch over a
+  process table (`memo` keeps the helpers, the reference CPU of each command and the stopped commands) and returns
+  the commands to stop, `[{row, sub, minutes}]`. The wrapper and the watch use them with the real process, clock and
+  timers.
 - `agentJobHangs(job)` returns the parsed hang list of `job.hangs` (only the objects in
   it), or `[]` when the file is absent, unreadable or not a list.
 - `readAgentJob(job, ports)` returns `{state, exit, result, log}`; a missing job record

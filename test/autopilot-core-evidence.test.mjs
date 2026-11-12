@@ -1500,7 +1500,7 @@ async function consumerWorld(t, line, rows, more = {}) {
   await w.tick();
   return { w, pr, head };
 }
-test('E77 (B1) a changed shared prompt checks every Story that reaches it: an unrun or failing consumer is red; its own "not run" line is enough; all passing merges', async t => {
+test('E77 (B1, Serhan D3) a changed shared prompt checks every Story that reaches it, with no cap: an unrun or failing consumer is red; its own "not run" line is enough; only a check that Runtime could not run is noted; all passing merges', async t => {
   const A = { story: STORY, pass: true, current: true, at: 1000 };
   // 1. A passes, B has no check: B is red although A's check reaches the prompt (the Codex probe).
   let { w } = await consumerWorld(t, 'Runtime: PASS', [A]);
@@ -1520,10 +1520,17 @@ test('E77 (B1) a changed shared prompt checks every Story that reaches it: an un
   assert.equal(w.job(17, 'repair'), undefined, w.job(17, 'repair')?.input);
   await finishChecks(w); await w.tick();
   assert.deepEqual(w.github.merges, [pr.number]);
-  // 5. Above 10 consumers: no red for the unchecked ones, but one honest line in the merge note and the record.
+  // 5. Serhan D3: no cap. With 13 consumers, an unchecked one is still red.
   const many = Object.fromEntries(Array.from({ length: 11 }, (_, i) => [`user_stories/c${i}.md`, [PROMPT]]));
+  const passed = [A, { story: B_STORY, pass: true, current: true, at: 1000 }];
+  ({ w } = await consumerWorld(t, 'Runtime: PASS', passed, many));
+  assert.match(w.job(17, 'repair')?.input ?? '', /user_stories\/c0\.md reaches a changed prompt/);
+  assert.match(w.job(17, 'repair').input, /user_stories\/c10\.md reaches a changed prompt/);
+  // 6. Only a consumer that Runtime could not check (no verdict, no failed check, no refusal) is no red; the merge note
+  // and the record say so.
+  const waiting = Array.from({ length: 11 }, (_, i) => ({ story: `user_stories/c${i}.md`, pass: false, current: true, at: 1000, sent: true, failed: 0, states: ['unknown'], codes: ['graph-provider-failure'] }));
   let head;
-  ({ w, pr, head } = await consumerWorld(t, 'Runtime: PASS', [A, { story: B_STORY, pass: true, current: true, at: 1000 }], many));
+  ({ w, pr, head } = await consumerWorld(t, 'Runtime: PASS', [...passed, ...waiting], many));
   assert.equal(w.job(17, 'repair'), undefined, w.job(17, 'repair')?.input);
   await finishChecks(w); await w.tick();
   assert.deepEqual(w.github.merges, [pr.number]);
