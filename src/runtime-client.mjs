@@ -1,11 +1,11 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: d2bc64351fb61407978f456eebbd12c42fd848a36232de822063bd56c8c3c322).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: fcb75cca658782f7cff47a4c152c235a157af73fb4d478f03f9d6fa3e87924c0).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
 import { isRecentLintReceipt } from './runtime-lint-receipt.mjs';
 import {rememberSecrets} from './secret-redaction.mjs';
 import { bindingPlanLines, bindingRefusals } from './runtime-binding-plan.mjs';
-import { buildCheckPlan, checkPlanResults, checkPlanLines, checkPlanResultLines } from './runtime-check-plan.mjs';
+import { buildCheckPlan, checkPlanResults, checkPlanLines, checkPlanResultLines, selectCheckTests, baselineReport } from './runtime-check-plan.mjs';
 import { interfaceFindings } from './interface-draft.mjs';
 import {readEvidenceEligibility} from './workflow-runner.mjs';
 import {allRuns} from './workflow-runs.mjs';
@@ -107,7 +107,7 @@ function withDefaults(ports) {
     return () => { handlers.delete(handler); if (!handlers.size) { unsubscribe?.(); unsubscribe = null; } };
   };
   return {
-    env, caseHandoff:ports.caseHandoff, cacheFiles: ports.cacheFiles ?? nativeCacheFiles, cacheHash: ports.cacheHash ?? sha256, acquireBatchLock: ports.acquireBatchLock ?? acquireRuntimeBatchLock, timers: ports.timers, random: ports.random, captureSource: ports.captureSource ?? captureSource, slotFiles: ports.slotFiles, isAlive: ports.isAlive, pid: ports.pid, agentBridge: ports.agentBridge, discoverAgents: ports.discoverAgents, askAgent: ports.askAgent, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
+    env, baselineFiles: ports.baselineFiles, baselineIdentity: ports.baselineIdentity, evidencePorts: ports.evidencePorts, readEvidenceEligibility: ports.readEvidenceEligibility, checkPlanPorts: ports.checkPlanPorts, caseHandoff:ports.caseHandoff, cacheFiles: ports.cacheFiles ?? nativeCacheFiles, cacheHash: ports.cacheHash ?? sha256, acquireBatchLock: ports.acquireBatchLock ?? acquireRuntimeBatchLock, timers: ports.timers, random: ports.random, captureSource: ports.captureSource ?? captureSource, slotFiles: ports.slotFiles, isAlive: ports.isAlive, pid: ports.pid, agentBridge: ports.agentBridge, discoverAgents: ports.discoverAgents, askAgent: ports.askAgent, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
     gh: ports.gh ?? (args => {
       const executable = authExecutable(env, ports.ghPath);
       return executable ? spawnSync(executable, args, { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 })
@@ -214,6 +214,131 @@ export function readContractHistory({root,env = process.env},ports={}) {
     }
   } catch (error) { warnings.push(`Local Check history is unavailable: ${cleanText(error.message).slice(0,500)}`); }
   return {stories:[...latest.values()].map(row=>warnings.length && row.value.baseline==='not-checked' ? {...row.value,baseline:'unavailable'} : row.value).sort((a,b)=>a.story_path<b.story_path?-1:a.story_path>b.story_path?1:0),warnings:[...new Set(warnings)]};
+}
+
+const AFFECTED_DISCLAIMER = 'Affected checks only; this is not a full workflow pass. Required full-pass gates still apply.';
+function selectedCheckScope(plan, rows, selection) {
+  const scope = checkPlanResults(plan, rows);
+  if (scope && selection?.mode === 'affected' && scope.baseline.unresolved.length && !plan.prerequisites?.length) {
+    const selected = scope.target.failures.length ? `Repair target failures: ${scope.target.failures.join(', ')}. `
+      : scope.target.unresolved.length ? `Read the saved batch for unresolved selected checks: ${scope.target.unresolved.join(', ')}. ` : '';
+    scope.guidance = `${selected}Omitted baseline work: ${scope.baseline.unresolved.join(', ')}. Historical observations are separate; run a full check for required full-pass gates.`;
+  }
+  return scope;
+}
+function historicalBaselineLines(report) {
+  if (!report) return [];
+  return [`Historical baseline report (${report.availability}); omitted tests: ${report.tests.join(', ') || 'none'}.`,
+    ...report.observations.map(row => `${row.test}: historical ${row.state}; original batch ${row.batch}; Check ${row.request_id ?? 'not sent (local)'}; ${row.created_at ?? 'time unavailable'}; ${row.currentness} (original-batch); stage ${row.stage}${row.report_url ? `; Report: ${row.report_url}` : ''}`),
+    ...report.missing_tests.map(path => `${path}: no admitted saved baseline observation.`), ...report.warnings];
+}
+// This reader consumes raw local bytes. It never signs in, repairs receipts or writes history.
+async function readBaselineReport(context, plan, identity) {
+  const {ports,root,origin} = context, observations = [], warnings = [], captures = new Map();
+  const warn = message => { if (warnings.length < 20 && !warnings.includes(message)) warnings.push(message); };
+  const project = availability => baselineReport({plan,observations,availability,warnings});
+  const wanted = new Set(selectCheckTests(plan,{affected:true}).baseline_tests);
+  if (!wanted.size) return project('available');
+  if (!identity?.login || !/^\d+$/.test(String(identity.userId ?? ''))) {
+    warn('Runtime/account identity is unavailable; saved baseline evidence was not admitted.'); return project('unavailable');
+  }
+  const files = ports.baselineFiles ?? {
+    read(path) { safeCachePath(nativeCacheFiles,path); return nativeCacheFiles.read(path,'utf8',16 * 1024 * 1024); },
+    list(path) { safeCachePath(nativeCacheFiles,path,{directory:true}); return readdirSync(path); },
+    realpath:realpathSync
+  };
+  const real = async path => { try { return await (files.realpath ?? realpathSync)(path); } catch { return resolve(path); } };
+  let stateRoot = stateDirectory(ports.env,root);
+  if (!ports.baselineFiles) {
+    if (statOrNull(stateRoot)?.isSymbolicLink()) { warn('Saved Check state root is a symlink; history is unavailable.'); return project('unavailable'); }
+    // The accepted external state boundary may have aliased ancestors. Below it, links remain forbidden.
+    stateRoot = realish(stateRoot);
+  }
+  const directory = join(stateRoot,'batches');
+  let names, partial = false;
+  try { names = await files.list(directory); }
+  catch (error) { warn(error.code === 'ENOENT' ? 'No saved Check history is available.' : 'Saved Check history directory is unavailable.'); return project('unavailable'); }
+  const read = async path => JSON.parse(await files.read(path));
+  const capture = async (folder,selection) => {
+    const key = JSON.stringify([folder,selection]);
+    if (!captures.has(key)) captures.set(key,Promise.resolve().then(()=>ports.captureSource(folder,selection)));
+    return captures.get(key);
+  };
+  for (const name of names.filter(name=>typeof name === 'string' && BATCH.test(name)).sort()) {
+    const folder = join(directory,name); let saved;
+    try { saved = await read(join(folder,'batch.json')); }
+    catch { partial=true;warn('Some saved Check batches are unreadable or corrupt.');continue; }
+    if (saved?.intent !== 'check' && (Object.hasOwn(saved ?? {},'intent') || !Array.isArray(saved?.rows) || !saved.rows.every(row=>isObject(row) && validSavedCheck(row)))) continue;
+    if (saved.version !== 1 || saved.batch !== name || !Array.isArray(saved.rows) || typeof saved.root !== 'string') {
+      partial=true;warn('Some saved Check batches have invalid original identity.');continue;
+    }
+    if (saved.origin !== origin || saved.login !== identity.login || String(saved.user_id) !== String(identity.userId)) {
+      if (!saved.origin || !saved.login || saved.user_id == null) { partial=true;warn('Some saved Check batches lack runtime/account identity.'); }
+      continue;
+    }
+    const tests = saved.source_selection?.tests ?? [...new Set(saved.rows.map(row=>row?.test))];
+    if (!Array.isArray(tests) || tests.some(path=>typeof path !== 'string' || !path || path.startsWith('/') || path.split('/').some(part=>part === '..') || path.includes('\\'))) {
+      partial=true;warn('Some saved Check batches lack a safe original selection.');continue;
+    }
+    let admission;
+    try { admission = await (ports.readEvidenceEligibility ?? readEvidenceEligibility)({root,producerRoot:saved.root,tests,source_sha256:saved.source_sha256,runId:saved.association?.runId??null,stage:saved.association?.stage??null}, {env:ports.env,captureSource:ports.captureSource,...ports.evidencePorts}); }
+    catch { admission = null; }
+    const sameRoot = await real(saved.root) === await real(root);
+    if (admission?.state !== 'eligible' && (!sameRoot || saved.association)) { partial=true;warn('Some saved Check history was not admitted by workspace ownership.');continue; }
+    const stage = admission?.state === 'eligible' ? admission.stage : sameRoot && !saved.association ? 'current' : 'unavailable';
+    let currentness = 'unavailable';
+    if (/^[a-f0-9]{64}$/.test(saved.source_sha256 ?? '')) {
+      try {
+        const sourceRoot = admission?.sourceAnchor?.root ?? root;
+        const selection = {tests,appMap:null,...(saved.source_selection ? {excludeFixtureProjects:saved.source_selection.exclude_fixture_projects === true} : saved.exclude_fixture_projects ? {excludeFixtureProjects:true} : {})};
+        const original = await capture(sourceRoot,selection);
+        currentness = original.sha256 === saved.source_sha256 ? 'current' : 'stale';
+        if (saved.native_source) {
+          const native = await capture(sourceRoot,{...selection,tests:saved.native_source.tests});
+          if (saved.native_source.sha256 && native.sha256 !== saved.native_source.sha256) currentness='stale';
+          else if (!saved.native_source.sha256 && currentness !== 'stale') currentness='unavailable';
+        }
+      } catch { partial=true;warn('Some original-batch source selections are unavailable.'); }
+    }
+    const created_at = typeof saved.created_at === 'string' && Number.isFinite(Date.parse(saved.created_at)) ? saved.created_at : null;
+    for (const row of saved.rows) {
+      if (!row || !wanted.has(row.test)) continue;
+      const story_path = row.story_path ?? (Array.isArray(saved.contract_snapshots) ? saved.contract_snapshots : []).find(story=>Array.isArray(story?.tests) && story.tests.includes(row.test))?.story_path
+        ?? (typeof row.story === 'string' && row.story.endsWith('.md') ? row.story : (()=>{const paths=[...new Set((Array.isArray(saved.files)?saved.files:[]).filter(path=>typeof path==='string' && path.endsWith('.md') && basename(path,'.md')===row.story))];return paths.length===1?paths[0]:null;})());
+      if (typeof story_path !== 'string' || !story_path || story_path.startsWith('/') || story_path.includes('\\') || story_path.split('/').some(part=>!part || part==='.' || part==='..') || !Array.isArray(row.request_ids)) { partial=true;warn('Some saved Check rows lack original Story or request identity.');continue; }
+      const retain = (view,request_id,evidence_kind,report_url) => observations.push({story_path,test:row.test,batch:name,request_id,evidence_kind,
+        ...resultOutcome(view),created_at,report_url,source_sha256:typeof saved.source_sha256 === 'string' ? saved.source_sha256 : null,
+        currentness,currentness_scope:'original-batch',stage:['current','pr1','before'].includes(stage)?stage:'unavailable'});
+      if (!row.request_ids.length) {
+        if (row.unsent && resultOutcome(row).state !== 'passed') retain(row,null,'local',null);
+        continue;
+      }
+      for (const id of [...new Set(row.request_ids)]) {
+        try {
+          if (!UUID.test(id)) throw Error('invalid request identity');
+          const originals = [];
+          const admit = answer => {
+            if (!sameJob(answer,id,'check')) { partial=true;warn('Some original Check receipts are missing, corrupt or mismatched.');return; }
+            if (!originals.some(previous=>isDeepStrictEqual(previous,answer))) originals.push(answer);
+          };
+          try {
+            const previous = await read(join(folder,`${id}.observations.json`));
+            if (!Array.isArray(previous)) throw Error('invalid original Check observations');
+            for (const answer of previous) admit(answer);
+          } catch (error) { if (error.code !== 'ENOENT') { partial=true;warn('Some retained original Check observations are unavailable.'); } }
+          try { admit(await read(join(folder,`${id}.json`))); }
+          catch { partial=true;warn('Some original Check receipts are missing, corrupt or mismatched.'); }
+          for (const answer of originals) {
+            const secrets = [...(context.secrets??[]),identity.token].filter(Boolean);
+            const view = projectAnswer(answer,{origin:saved.origin,steps:row.steps??[],criterionTexts:row.criterion_texts??{},test:row.test,secrets});
+            retain(view,id,'receipt',validLink(cleanText(answer.report_url,secrets),saved.origin,'report'));
+          }
+        } catch { partial=true;warn('Some original Check receipts are missing, corrupt or mismatched.'); }
+      }
+    }
+  }
+  observations.sort((a,b)=>(a.created_at === null ? Infinity : Date.parse(a.created_at))-(b.created_at === null ? Infinity : Date.parse(b.created_at)) || a.batch.localeCompare(b.batch) || a.test.localeCompare(b.test) || String(a.request_id??'').localeCompare(String(b.request_id??'')));
+  return project(partial ? 'partial' : 'available');
 }
 
 // Read receipts without StateStore.folder: status must never allocate or mutate runtime state.
@@ -1343,7 +1468,7 @@ function saveLocalNativeResult(context, rows, intent, problems = []) {
 
 function batchRecord(context) {
   const { batch, origin, root, identity, capture, rows, lint, warnings } = context;
-  return { version: 1, batch, origin, root, check_plan: context.checkPlan ?? null, head: context.head, login: identity.login, user_id: identity.userId,
+  return { version: 1, batch, origin, root, check_plan: context.checkPlan ?? null, ...(context.checkSelection ? {check_selection:context.checkSelection,baseline_report:context.baselineReport} : {}), head: context.head, login: identity.login, user_id: identity.userId,
     source_sha256: capture.sha256, files: capture.files.map(file => file.path), bytes: capture.bytes, timeout_min: context.timeoutMin,
     ...(context.singleAttempt ? {single_attempt:true} : {}),
     source_selection: context.sourceSelection ?? {tests:sentTests(rows),exclude_fixture_projects:context.excludeFixtureProjects === true},
@@ -1926,7 +2051,11 @@ function printResult(context, rows, extra = {}) {
   }
   if (context.checkPlan) {
     summary.check_plan = context.checkPlan;
-    summary.check_scope = checkPlanResults(context.checkPlan, rows);
+    summary.check_scope = selectedCheckScope(context.checkPlan, rows, context.checkSelection);
+  }
+  if (context.checkSelection) {
+    summary.check_selection = context.checkSelection; summary.baseline_report = context.baselineReport;
+    summary.warnings = [...new Set([...summary.warnings, AFFECTED_DISCLAIMER])];
   }
   if (context.folder) context.store.write(join(context.folder, 'summary.json'), summary);
   if (context.batch && rows.some(row => row.can_retry)) line(ports.stderr, `Retry only unstarted checks with: pdd test --retry ${context.batch}`);
@@ -1939,6 +2068,10 @@ function printResult(context, rows, extra = {}) {
     now: ports.now(), noFailed: context.noFailed, interrupted: context.interrupted || !!context.readStop, reading: !!context.reading, exitCode, secrets: context.secrets, ...extra })));
   if (!context.json && summary.report_url) line(ports.stdout, `Report: ${summary.report_url}`);
   if (!context.json) for (const value of checkPlanResultLines(summary.check_scope)) line(ports.stdout, scrub(value));
+  if (!context.json && context.checkSelection) {
+    line(ports.stdout, AFFECTED_DISCLAIMER);
+    for (const value of historicalBaselineLines(context.baselineReport)) line(ports.stdout, scrub(value));
+  }
   // At the time limit the jobs keep running on the server.
   if (exitCode === 3 && context.batch) line(ports.stderr, context.timedOut ? `Still running. Read the results later with: pdd test --read ${context.batch}`
     : `If pdd stops, read the results with: pdd test --read ${context.batch}`);
@@ -2392,6 +2525,7 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
   }
   if (saved.root !== root) throw new Stop(2, 'This saved batch belongs to a different repository.');
   context.checkPlan = saved.check_plan ?? null;
+  context.checkSelection = saved.check_selection; context.baselineReport = saved.baseline_report;
   if (saved.local_only === true && saved.rows.length && saved.rows.every(row => row.unsent && ['refused','not_run'].includes(row.state) && !row.request_ids?.length)) {
     Object.assign(context,{localOnly:true,batch:name,intent:saved.intent,coverage:saved.coverage,rows:saved.rows,warnings:saved.warnings ?? [],
       capture:{sha256:saved.source_sha256},startedAt:Date.parse(saved.created_at),lint:saved.lint});
@@ -2706,6 +2840,8 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
   const context = { ports, singleAttempt: ports.env.PDD_CHECK_SINGLE_ATTEMPT === '1', cacheEnabled: cache || !!options['--lf'] || !!options['--cache-clear'], json: options['--json'] === true, details: options['--details'] === true, explicitTimeout: options['--timeout'] !== undefined, interrupted: false, warnings: [] };
   let release = () => {};
   try {
+    if (options['--affected'] !== undefined && (options['--affected'] !== true || words.length || Object.keys(options).some(key => !['--affected','--json','--details','--timeout','--max-calls','--cache-clear'].includes(key))))
+      throw new Stop(2, '--affected accepts no Stories and only --cache-clear, --json, --details, --timeout and --max-calls.');
     if(options['--journeys']!==undefined){
       if(options['--journeys']!==true||words.length>1||['--read','--retry','--fill-hash','--request','--screen','--drawing'].some(key=>options[key]!==undefined))throw new Stop(2,'Use pdd test --journeys [JOURNEY] with normal test options.');
       const {root,found}=localSetup(cwd,[]);
@@ -2806,11 +2942,12 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
   } catch (error) {
     if (error instanceof Stop || error instanceof PreflightError || error instanceof RuntimeWorkspaceError) {
       line(ports.stderr, error.message);
+      if (options['--affected'] === true && error.exitCode !== 2) line(ports.stderr,AFFECTED_DISCLAIMER);
       if (context.rows?.some(row=>row.unsent || row.not_checked?.length)) {
         const rows = context.rows.map(row=>['ready','sending','waiting'].includes(row.state)
           ? {...row,state:'not_run',note:{code:null,message:error.message}} : row);
         const summary = {...renderJson({batch:context.batch??null,repo:context.root,rows,coverage:context.coverage,
-          exitCode:error.exitCode,warnings:context.warnings}),message:error.message,lint_state:error.exitCode===3?'unknown':'not_run'};
+          exitCode:error.exitCode,warnings:context.warnings}),...(context.checkSelection?{check_selection:context.checkSelection,baseline_report:context.baselineReport,check_plan:context.checkPlan,check_scope:selectedCheckScope(context.checkPlan,rows,context.checkSelection)}:{}),message:error.message,lint_state:error.exitCode===3?'unknown':'not_run'};
         if (context.folder) context.store.write(join(context.folder,'summary.json'),summary);
         if (context.json) line(ports.stdout,JSON.stringify(summary));
         else ports.stdout.write(renderText({batch:context.batch,rows,coverage:context.coverage,warnings:context.warnings,exitCode:error.exitCode,secrets:context.secrets}));
@@ -3317,6 +3454,34 @@ async function runBatch(context, cwd, words, options, setRelease) {
   context.agentLimit = false;
   context.timeoutMin = options['--timeout'] !== undefined ? Number(options['--timeout']) : null;
   let selected = select(found, normalized, root);
+  const inventory = selected;
+  const affected = options['--affected'] === true;
+  const runs = allRuns({cancelled:true}, {env:ports.env}).filter(run => {
+    try { return realpathSync(run.root) === realpathSync(root); } catch { return false; }
+  });
+  const base = runs.length === 1 && /^[a-f0-9]{40}$/.test(runs[0].baseSha ?? '') ? runs[0].baseSha : 'HEAD';
+  const planningPorts = {capture:ports.captureSource,...ports.checkPlanPorts};
+  const planFor = rows => {
+    const plan = buildCheckPlan({root,found,selected:inventory,rows,full:true,base,affected:!context.forceAffectedFull},planningPorts);
+    return context.forceAffectedFull ? {...plan,stories:plan.stories.map(story=>({...story,role:'target',reason:'conservative: source selection changed during planning'}))} : plan;
+  };
+  const restartConservatively = () => {
+    context.forceAffectedFull = true;
+    line(ports.stderr,'Source selection changed during planning; checking every Story conservatively before any paid Check.');
+    return runBatch(context,cwd,words,options,setRelease);
+  };
+  let classification;
+  if (affected) {
+    classification = planFor([]);
+    // Re-read local membership before any dispatch preflight or cache mutation.
+    const revalidated = planFor([]);
+    const first = selectCheckTests(classification,{affected:true}), second = selectCheckTests(revalidated,{affected:true});
+    classification = revalidated;
+    if (!isDeepStrictEqual(first.tests,second.tests)) return restartConservatively();
+    context.checkSelection = selectCheckTests(classification,{affected:true});
+    selected = inventory.filter(test=>context.checkSelection.tests.includes(test.path));
+    context.baselineReport = await readBaselineReport(context,classification,ports.baselineIdentity ?? null);
+  }
   const cache = context.cacheEnabled ? await openTestCache(context, root, !!options['--cache-clear'], found.visible) : null;
   if (cache && !cache.disabled && options['--lf'] && !options['--cache-clear'] && cache.history) {
     const failures = selected.filter(test => cache.failed[test.storyPath] === true);
@@ -3339,11 +3504,12 @@ async function runBatch(context, cwd, words, options, setRelease) {
       ...(row.not_checked??[]).map(item=>[item.criterion_id,item.text])]);
   }
   if (options['--max-calls'] !== undefined) for (const row of rows) row.max_calls = Number(options['--max-calls']);
-  const runs = allRuns({cancelled:true}, {env:ports.env}).filter(run => {
-    try { return realpathSync(run.root) === realpathSync(root); } catch { return false; }
-  });
-  context.checkPlan = buildCheckPlan({root,found,selected,rows,full:words.length === 0,
-    base:runs.length === 1 && /^[a-f0-9]{40}$/.test(runs[0].baseSha ?? '') ? runs[0].baseSha : 'HEAD'});
+  context.checkPlan = affected ? planFor(rows) : buildCheckPlan({root,found,selected,rows,full:words.length === 0,base},planningPorts);
+  if (affected) {
+    const finalSelection = selectCheckTests(context.checkPlan,{affected:true});
+    if (!isDeepStrictEqual(finalSelection.tests,context.checkSelection.tests)) return restartConservatively();
+    context.baselineReport = await readBaselineReport(context, context.checkPlan, ports.baselineIdentity ?? null);
+  }
   for (const value of checkPlanLines(context.checkPlan)) line(ports.stderr, value);
   if (!words.length && context.checkPlan.prerequisites.length) {
     const note = {code:'check-plan-prerequisite',message:checkPlanResults(context.checkPlan,rows).guidance};
@@ -3369,6 +3535,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
     if (cache) await beginTestAttempts(cache,rows,null,options,origin);
     return printResult(context,rows);
   }
+  if (affected && !isDeepStrictEqual(selectCheckTests(planFor([]),{affected:true}).tests,context.checkSelection.tests)) return restartConservatively();
   context.sourceSelection = {tests:sentTests(rows),exclude_fixture_projects:words.length === 0};
   context.warnings.push(...(capture.warnings ?? []));
   if (cache) await beginTestAttempts(cache, rows, capture, options, origin);
@@ -3387,6 +3554,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
     });
     throw error;
   }
+  if (affected) context.baselineReport = await readBaselineReport(context, context.checkPlan, identity);
   const startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
   const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   Object.assign(context, { capture, identity, batch, startedAt, deadline: Infinity, rows,

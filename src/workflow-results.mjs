@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-results.prompt.md (sha256: c2adffeb6681997d61033f6e01258d164964bbbde74f03a2ee4b73618f1bfb64).
+// Generated from prompts/cli/workflow-results.prompt.md (sha256: 43934393e7c3a7c2b6965d7e4e9f190c3fe61fd273c2001e5332e16b02300a6e).
 import {checkPlanResults,checkPlanResultLines} from './runtime-check-plan.mjs';
 import { outcomeText, resultOutcome } from './runtime-outcome.mjs';
 import { PROMPT_TESTS_WORDS } from './runtime-output.mjs';
@@ -70,10 +70,20 @@ function identity(rows) {
 const STAGE_LABEL = {pr1:'PR 1 (historical)',before:'before the fix (historical)'};
 export const usableResult = result => result.states?.some(row => row.state === 'partial') ? false : result.kind === 'native evidence' ? result.assessment?.identity?.stage !== 'pr1' && result.assessment?.storyNativeProof !== 'none' && ['pdd-observed','qualified-external'].includes(result.assessment?.storyNativeProof) : result.kind !== 'pdd workflow prove' || result.state === 'current';
 
+const AFFECTED_DISCLAIMER = 'Affected checks only; this is not a full workflow pass. Required full-pass gates still apply.';
+function savedCheckScope(batch) {
+  const scope = checkPlanResults(batch.check_plan,batch.rows);
+  if (scope && batch.check_selection?.mode === 'affected' && scope.baseline.unresolved.length && !batch.check_plan.prerequisites?.length) {
+    const selected = scope.target.failures.length ? `Repair target failures: ${scope.target.failures.join(', ')}. `
+      : scope.target.unresolved.length ? `Read the saved batch for unresolved selected checks: ${scope.target.unresolved.join(', ')}. ` : '';
+    scope.guidance = `${selected}Omitted baseline work: ${scope.baseline.unresolved.join(', ')}. Historical observations are separate; run a full check for required full-pass gates.`;
+  }
+  return scope;
+}
 function runtimeEvidence(batch, summary) {
   const coverage = batch.coverage ?? summary?.coverage;
   const nativeOnly = batch.rows.filter(row => Array.isArray(row?.native_only) && row.native_only.length).map(row => ({test:row.test,state:row.state,prompts:row.native_only.filter(item => item && typeof item.path === 'string' && typeof item.reason === 'string').map(item => ({path:item.path,reason:item.reason}))}));
-  return {...(batch.check_plan ? {checkPlan:batch.check_plan,checkScope:checkPlanResults(batch.check_plan,batch.rows)} : {}), ...(coverage ? {coverage} : {}), ...(nativeOnly.length ? {nativeOnly} : {})};
+  return {...(batch.check_selection ? {checkSelection:batch.check_selection} : {}), ...(batch.baseline_report ? {baselineReport:batch.baseline_report} : {}), ...(batch.check_plan ? {checkPlan:batch.check_plan,checkScope:savedCheckScope(batch)} : {}), ...(coverage ? {coverage} : {}), ...(nativeOnly.length ? {nativeOnly} : {})};
 }
 
 // pdd's own saved results for one run: the newest `pdd test` check batch, the newest `pdd lint` batch (both from the
@@ -141,7 +151,7 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
       ...(check.association?.runId?{producerRoot:batch.root,association:{runId:check.association.runId,repo:check.association.repo,
         workspaceRoot:check.association.producerRoot,tests:check.association.tests,source_sha256:check.association.source_sha256,
         stage:check.association.stage,sourceAnchor:check.association.sourceAnchor}}:{}),
-      ...(check.association?{stage:check.association.stage,sourceAnchor:check.association.sourceAnchor}:{}),states, summary: [safeSummary || 'result not saved (the check did not finish)', stateEvidence, ...checkPlanResultLines(checkPlanResults(batch.check_plan,batch.rows))].filter(Boolean).join('; '), stories,
+      ...(check.association?{stage:check.association.stage,sourceAnchor:check.association.sourceAnchor}:{}),states, summary: [safeSummary || 'result not saved (the check did not finish)', stateEvidence, ...checkPlanResultLines(savedCheckScope(batch)), ...(batch.check_selection?.mode === 'affected' ? [AFFECTED_DISCLAIMER] : [])].filter(Boolean).join('; '), stories,
       ...identity(batch.rows) });
   }
   if (lint) {
