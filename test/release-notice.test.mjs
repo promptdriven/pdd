@@ -4,9 +4,10 @@ import assert from 'node:assert/strict';
 import { releaseNotice } from '../src/release-notice.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, readFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { harbor } from './runtime-fake.mjs';
 
 const line = 'pdd 0.1.28: update available (0.2.0). Run: npm install -g github:promptdriven/pdd\n';
 test('newer stable release gives the exact notice', async () => {
@@ -62,6 +63,85 @@ test('dispatcher selects notice after parsing and ignores notice failures', asyn
   assert.equal(calls, 0);
   assert.equal(await run(['--version']), 0);
   assert.equal(calls, 1);
+});
+
+function testCommand(t) {
+  const { sandbox, repo, home } = harbor(t);
+  const tools = join(sandbox, 'tools'), preload = join(sandbox, 'fetch.mjs'), audit = join(sandbox, 'requests');
+  mkdirSync(tools);
+  writeFileSync(join(tools, 'gh'), '#!/bin/sh\nif [ "$1" = auth ]; then echo fixture-token; else echo "fixture-user 123"; fi\n', { mode: 0o755 });
+  writeFileSync(preload, `
+import { appendFileSync } from 'node:fs';
+globalThis.fetch = async (url, options = {}) => {
+  const release = String(url).startsWith('https://api.github.com/');
+  appendFileSync(process.env.PDD_TEST_AUDIT, JSON.stringify({
+    kind: release ? 'release' : 'interpreter',
+    authorization: new Headers(options.headers).has('authorization')
+  }) + '\\n');
+  if (release) {
+    if (process.env.PDD_TEST_RELEASE_OFFLINE) throw Error('offline');
+    return Response.json({ tag_name: 'alpha-v999.0.0' });
+  }
+  return new URL(url).pathname === '/v1/capacity'
+    ? Response.json({ error: { code: 'not-found' } }, { status: 404 })
+    : Response.json({ error: { code: 'not-invited', message: 'Fixture access refused.' } }, { status: 403 });
+};
+`);
+  let invocation = 0;
+  return (argv, extraEnv = {}) => {
+    writeFileSync(audit, '');
+    const result = spawnSync(process.execPath, ['--import', preload, resolve('bin/pdd.mjs'), 'test', ...argv], {
+      cwd: repo, encoding: 'utf8', timeout: 10000,
+      env: { ...process.env, HOME: home, PATH: tools + ':' + process.env.PATH, CI: '',
+        PDD_STATE_DIR: join(sandbox, `state-${invocation++}`), PDD_RUNTIME_URL: 'http://127.0.0.1:9',
+        PDD_TEST_AUDIT: audit, PDD_TEST_RELEASE_OFFLINE: '', ...extraEnv }
+    });
+    assert.equal(result.error, undefined, result.stderr);
+    assert.equal(result.signal, null, result.stderr);
+    return { ...result, requests: readFileSync(audit, 'utf8').split('\n').filter(Boolean).map(row => JSON.parse(row)) };
+  };
+}
+
+test('ordinary public test command prints one unauthenticated notice before interpreter requests', t => {
+  const run = testCommand(t);
+  const ci = run(['place-order'], { CI: 'true' });
+  assert.equal(ci.status, 5, ci.stderr);
+  assert.ok(ci.requests.length >= 2, 'fixture reaches several interpreter requests');
+  assert.ok(ci.requests.every(row => row.kind === 'interpreter' && row.authorization));
+  assert.doesNotMatch(ci.stderr, /update available/);
+
+  const normal = run(['place-order']);
+  const version = JSON.parse(readFileSync('package.json', 'utf8')).version;
+  const notice = `pdd ${version}: update available (999.0.0). Run: npm install -g github:promptdriven/pdd\n`;
+  assert.equal(normal.stderr.split(notice).length - 1, 1, normal.stderr);
+  assert.deepEqual(normal.requests, [{ kind: 'release', authorization: false }, ...ci.requests]);
+  assert.equal(normal.status, ci.status);
+  assert.equal(normal.stdout, ci.stdout);
+  assert.equal(normal.stderr.replace(notice, ''), ci.stderr);
+
+  const offline = run(['place-order'], { PDD_TEST_RELEASE_OFFLINE: '1' });
+  assert.deepEqual(offline.requests, normal.requests);
+  assert.equal(offline.status, ci.status);
+  assert.equal(offline.stdout, ci.stdout);
+  assert.equal(offline.stderr, ci.stderr);
+});
+
+test('public test local modes and early refusals still make no release or interpreter lookup', t => {
+  const run = testCommand(t);
+  for (const [argv, status] of [
+    [['--files', 'place-order'], 0],
+    [['--explain-bindings', 'place-order'], 0],
+    [['--fill-hash'], 0],
+    [['--lint', '--local', 'place-order'], 0],
+    [['missing-story'], 2],
+    [['place-order', '--max-calls', '0'], 2],
+    [['--fill-hash', '--compact', 'place-order'], 2]
+  ]) {
+    const result = run(argv);
+    assert.equal(result.status, status, `${argv}: ${result.stderr}`);
+    assert.deepEqual(result.requests, [], argv.join(' '));
+    assert.doesNotMatch(result.stderr, /update available/);
+  }
 });
 
 test('native lookup stays silent when offline or aborted', async () => {

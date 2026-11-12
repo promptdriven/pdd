@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 7e81436a195eb2462535a47ff22c1a2d087c27905ed47da7d7a627b99874a0b3).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 13ffc29bb26714c2cf555e7083b021c994c24b65ae916ed7d4b7e76b292c246a).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -90,9 +90,10 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     line(stderr, error instanceof CommandInputError ? error.message : 'The command could not be parsed. Run pdd --help.');
     return 2;
   }
-  if (releaseNotice && !['help', 'completion', 'workflow-list', 'workflow-view', 'runtime-check'].includes(plan.local)) {
-    try { await releaseNotice(); } catch { /* An optional notice never prevents the requested command. */ }
-  }
+  let notice;
+  // Share one best-effort lookup even when interpreter requests overlap.
+  const notifyRelease = () => notice ??= Promise.resolve().then(() => releaseNotice?.()).catch(() => {});
+  if (releaseNotice && !['help', 'completion', 'workflow-list', 'workflow-view', 'runtime-check'].includes(plan.local)) await notifyRelease();
   if (['setup', 'version', 'workflow-run'].includes(plan.local)) {
     try {
       const mode = plan.local === 'workflow-run' ? 'workflow' : plan.local;
@@ -379,7 +380,12 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     case 'runtime-try':
       try {
         const runtime = await import('./runtime-client.mjs');
-        return await runtime[plan.local === 'runtime-check' ? 'runCheck' : 'runTry']({ words: [...plan.operands], options: { ...plan.options }, cwd, cache: plan.local === 'runtime-check' }, { stdout, stderr, env });
+        const fetch = globalThis.fetch;
+        return await runtime[plan.local === 'runtime-check' ? 'runCheck' : 'runTry']({ words: [...plan.operands], options: { ...plan.options }, cwd, cache: plan.local === 'runtime-check' }, { stdout, stderr, env,
+          ...(plan.local === 'runtime-check' && releaseNotice ? { fetch: async (...args) => {
+            await notifyRelease();
+            return fetch(...args);
+          } } : {}) });
       } catch (error) {
         line(stderr, `pdd stopped with an internal error. If it sent checks, read them with pdd test --read. Do not send them again.${reason(error)}`);
         return 3;
