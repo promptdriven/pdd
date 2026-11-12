@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import {mkdtempSync, mkdirSync, writeFileSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -135,16 +136,36 @@ test('formal: missing or nonpassing current rows cannot become a current full re
 
 test('formal: planner uncertainty preserves all obligations within supplied change/closure bounds', t => {
   const root = sandbox(t), names = ['A','B','C'];
+  // Known changed paths need readable permitted bytes in both revisions. The
+  // capture port supplies closures; it does not replace the source file port.
+  const knownFiles = new Map([
+    ['docs/shared.md', 'Shared dependency without an implementation owner.\n'],
+    ['prompts/A.prompt.md', '# Story A prompt\n']
+  ]);
+  for (const [path,content] of knownFiles) {
+    mkdirSync(join(root,path,'..'), {recursive:true});
+    writeFileSync(join(root,path), content);
+  }
+  const gitBlob = content => createHash('sha1')
+    .update(`blob ${Buffer.byteLength(content)}\0`).update(content).digest('hex');
   const selected = names.flatMap(name => (name === 'A' ? [path(name),path('A.recorded')] : [path(name)])
     .map(testPath => ({path:testPath,storyPath:`user_stories/${name}.md`})));
   const changes = [null,[],['docs/unrelated.md'],['docs/shared.md'],['prompts/A.prompt.md'],
     ['pdd-source.json'],['pdd-workspace.json'],['pdd-bindings.json']];
   let count = 0;
   for (const changed of changes) for (const missingClosure of [null,...names]) for (const oldMetadata of [true,false]) {
-    const plan = buildCheckPlan({root,found:{visible:new Set(),workspace:{configured:false}},selected,full:true,affected:true}, {
+    const plan = buildCheckPlan({root,found:{visible:new Set(knownFiles.keys()),workspace:{configured:false}},selected,full:true,affected:true}, {
       git(_root,args) {
         if (changed === null) throw Error('Synthetic unavailable comparison');
         if (args[0] === 'ls-tree' && !oldMetadata) throw Error('Synthetic unavailable old metadata');
+        if (args[0] === 'ls-tree') return [...knownFiles]
+          .filter(([path]) => args.slice(args.indexOf('--') + 1).includes(path))
+          .map(([path,content]) => `100644 blob ${gitBlob(content)}\t${path}\0`).join('');
+        if (args[0] === 'show') {
+          const path = args[1].slice(args[1].indexOf(':') + 1);
+          if (!knownFiles.has(path)) throw Error('Synthetic unavailable old file');
+          return knownFiles.get(path);
+        }
         if (args[0] === 'diff' && !args.includes('--diff-filter=D')) return changed.join('\0');
         return '';
       },
