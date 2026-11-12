@@ -391,3 +391,11 @@ Extend the existing simulate route with Boolean --product, text --parts and text
 ## Cap-aware lint (draft)
 
 The lint route accepts optional integer `--max-calls`, minimum 1 and maximum 1000. Its help says this selects a cap for zero-AI structural call preflight; warnings never change the cap or guarantee completion. Existing hidden `test --lint` keeps the same remote semantics; removed commands remain removed. Local lint does not accept a call cap.
+
+## Save a standalone run
+
+Catalog `run` with local disposition `runtime-save`, one required text Story operand
+and flag `--save-last`. Its form is `pdd run --save-last STORY`: show the last run's
+input, starting data and output, and save it in that Story only after a person
+answers in a terminal. This route covers saving; it does not catalog standalone
+execution options. Dispatch rejects the route without `--save-last`.

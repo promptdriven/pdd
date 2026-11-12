@@ -1,0 +1,58 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/save-run-as-test.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "`pdd run --save-last finish-task` shows the last confirmed run's input, data before and output, then asks \"Is this answer right? [y/N]\"."
+    },
+    {
+      "id": "AC2",
+      "text": "Answering y adds that input and observed output as one new step of the existing Story test, which can be selected by `pdd test finish-task`."
+    },
+    {
+      "id": "AC3",
+      "text": "Answering N, an empty answer or any answer other than y writes nothing and explains how to write the right expected value by hand."
+    },
+    {
+      "id": "AC4",
+      "text": "Without terminal input and output, saving writes nothing and says that a person must answer in a terminal."
+    },
+    {
+      "id": "AC5",
+      "text": "After saving, the message names the test file and actual step, asks me to review the data before it, and gives `pdd test finish-task`."
+    },
+    {
+      "id": "AC6",
+      "text": "An unknown run, changed prompt, missing starting data or starting data incompatible with the Story continuation cannot become a saved passing test."
+    }
+  ],
+  "initial_world": {},
+  "simulation": {},
+  "context": [],
+  "steps": [
+    {
+      "step_id": "decline-last-run",
+      "entry_path": "prompts/cli/runtime-client.prompt.md",
+      "operation": "runSaveLast",
+      "input": {
+        "words": [
+          "finish-task"
+        ],
+        "options": {
+          "--save-last": true
+        },
+        "cwd": "/project"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": 0
+        }
+      ]
+    }
+  ]
+}

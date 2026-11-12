@@ -38,11 +38,11 @@ export async function createAgentBridge(context,test,tryId,options={},link){
  let agents=definitions.map(d=>{const found=discovered.find(a=>a.id===d.id);return{id:d.id,name:d.name,state:found?.state??'error',...(typeof found?.detail==='string'?{detail:found.detail}:{})};});
  let choice=(explicit??byChoice(store.repo(root).agent_choice))?.id;
  if(!known(choice)||(!explicit&&agents.find(a=>a.id===choice)?.state==='not_installed'))choice=agents.find(ready)?.id??agents.find(a=>a.state!=='not_installed')?.id??definitions[0].id;
- const remember=id=>{if(!known(id))return;choice=id;const name=definitions.find(d=>d.id===id).name,saved=store.repo(root);if(saved.agent_choice!==name)store.saveRepo(root,{...saved,agent_choice:name});};
+ const remember=async id=>{if(!known(id))return;choice=id;const name=definitions.find(d=>d.id===id).name,saved=store.repo(root);if(saved.agent_choice!==name)await store.saveRepo(root,{...saved,agent_choice:name});};
  const connected=await runtime.send(`${prefix}/agent/connect`,json({bridge_id,agents,selected:choice,features:FEATURES}),30000);
  if(connected.status===404){write(context,'This interpreter does not support Ask your agent yet. The ordinary Try link remains available.');return null;}
  if(!good(connected)||connected.json.bridge_id!==bridge_id||connected.json.connected!==true||!/^[A-Za-z0-9_-]{43,128}$/.test(connected.json.browser_key??''))throw Error(`Could not connect your agent to this Try (${why(connected)}). Run pdd simulate again.`);
- remember(choice);
+ await remember(choice);
  const features=Array.isArray(connected.json.features)?connected.json.features.slice(0,32).filter(x=>FEATURES.includes(x)):[];
  const secretName=/token|password|secret|api[_-]?key|authorization|cookie|credential/i;
  const secrets=[...(context.secrets??[]),...Object.entries(ports.env??{}).filter(([k,v])=>secretName.test(k)&&typeof v==='string'&&v).map(([,v])=>v),...definitions.flatMap(d=>Object.entries(d.env??{}).filter(([k,v])=>secretName.test(k)&&typeof v==='string'&&v).map(([,v])=>v))];
@@ -76,7 +76,7 @@ export async function createAgentBridge(context,test,tryId,options={},link){
    const before=ports.now();const poll=await runtime.send(`${prefix}/agent/poll?bridge_id=${bridge_id}`,{method:'GET'},25000);
    if(controller.signal.aborted||context.interrupted)break;
    if(!good(poll)||poll.json.connected!==true){failed=true;write(context,'Your agent connection ended. Run pdd simulate again to reconnect.');break;}
-   remember(poll.json.selected);
+   await remember(poll.json.selected);
    const message=poll.json.message;
    if(message!==null&&message!==undefined){
     if(!object(message)||typeof message.id!=='string'||message.id.length>128||typeof message.text!=='string'||message.text.length>8000||!known(message.agent)||(message.kind!==undefined&&!['chat','run','walk','own'].includes(message.kind))){failed=true;write(context,'The server sent an invalid agent message. Reconnect with pdd simulate.');break;}

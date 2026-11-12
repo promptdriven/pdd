@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 21becfcf6be955bfb6cfcc0631c9fdd2570d964ed84ff0d4b434adb5b9b76261).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 78ac16b165fd847cddeb3b80e4449ed3b80b1df0bf6af4364bec56ea50cb0c2f).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
@@ -349,7 +349,33 @@ class StateStore {
   }
   repoKey(root) { return createHash('sha256').update(realpathSync(root)).digest('hex').slice(0, 16); }
   repo(root) { return this.read(join(this.folder('repos'), `${this.repoKey(root)}.json`)) ?? { root: realpathSync(root), last_batch: null, tries: {} }; }
-  saveRepo(root, value) { this.write(join(this.folder('repos'), `${this.repoKey(root)}.json`), value); }
+  async withRepoLock(root, action) {
+    const folder = this.folder('repos', `${this.repoKey(root)}.last-run`);
+    let release;
+    const deadline = Date.now() + 2000;
+    for (;;) {
+      try { release = await acquireRuntimeBatchLock(folder); break; }
+      catch (error) {
+        if (error.code !== 'BATCH_LOCK_BUSY' || Date.now() >= deadline) throw error;
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+    }
+    try { return action(); } finally { release(); }
+  }
+  async saveRepo(root, value) {
+    return this.withRepoLock(root, () => {
+      const current = this.repo(root), next = { ...value };
+      if (Object.hasOwn(current, 'last_run')) next.last_run = current.last_run;
+      else delete next.last_run;
+      this.write(join(this.folder('repos'), `${this.repoKey(root)}.json`), next);
+    });
+  }
+  async updateLastRun(root, update) {
+    return this.withRepoLock(root, () => {
+      const current = this.repo(root), last = update(current.last_run);
+      if (last !== undefined) this.write(join(this.folder('repos'), `${this.repoKey(root)}.json`), { ...current, last_run: last });
+    });
+  }
 }
 
 // Native boundary: one owner from the fresh batch load through the final saves.
@@ -1329,7 +1355,7 @@ function nativeSourceIdentity(context, rows) {
 }
 
 // Local omissions are evidence too; recording them needs no owner token or job.
-function saveLocalNativeResult(context, rows, intent, problems = []) {
+async function saveLocalNativeResult(context, rows, intent, problems = []) {
   const startedAt = context.ports.now(), batch = batchId(startedAt, context.ports.randomUUID);
   for (const row of rows) row.unsent = true;
   context.sourceSelection = {tests:[],exclude_fixture_projects:context.excludeFixtureProjects === true};
@@ -1338,7 +1364,7 @@ function saveLocalNativeResult(context, rows, intent, problems = []) {
   Object.assign(context,{localOnly:true,startedAt,batch,intent,capture,rows,identity:{login:null,userId:null},lint:{state:'not_run',request_ids:[],...(problems.length ? {problems} : {})}});
   context.folder = context.store.folder('batches',batch);
   saveBatch(context);
-  context.store.saveRepo(context.root,{...context.store.repo(context.root),last_batch:batch});
+  await context.store.saveRepo(context.root,{...context.store.repo(context.root),last_batch:batch});
 }
 
 function batchRecord(context) {
@@ -2026,7 +2052,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
     const native = nativeRows.get(row.test);
     if (native) Object.assign(row,{state:native.refusals.length ? 'refused' : 'not_run',refusals:native.refusals,phase:'local',native_only:native.native_only,unsent:true,note:{code:'native-only',message:native.native_only.map(item => `${item.path}: ${item.reason}`).join('; ')}});
   }
-  if (!findings.length && rows.every(row => row.native_only?.length)) { saveLocalNativeResult(context, rows, 'lint-only'); return printLintResult(context,rows,[],advice); }
+  if (!findings.length && rows.every(row => row.native_only?.length)) { await saveLocalNativeResult(context, rows, 'lint-only'); return printLintResult(context,rows,[],advice); }
   const local = row => row.phase === 'local';
   const {promptSchemaRefusals} = await import('./runtime-preflight.mjs');
   const prompts = new Map();
@@ -2045,7 +2071,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   });
   const limited = findings.length > 0 || limitRows.some(row => !local(row) && row.refusals.length);
   if (!limited && rows.every(local)) {
-    if (rows.some(row => row.native_only?.length)) saveLocalNativeResult(context,rows,'lint-only');
+    if (rows.some(row => row.native_only?.length)) await saveLocalNativeResult(context,rows,'lint-only');
     return printLintResult(context,rows,[],found.warnings);
   }
   if (limited) {
@@ -2057,7 +2083,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
     }
     if (refusedRows.some(row => row.native_only?.length)) {
       context.warnings = found.warnings;
-      saveLocalNativeResult(context, refusedRows, 'lint-only', problems);
+      await saveLocalNativeResult(context, refusedRows, 'lint-only', problems);
       return printLintResult(context, refusedRows, problems);
     }
     const broken = refusedRows.filter(row=>row.unsent).length;
@@ -2114,7 +2140,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   await ownBatch(context, batch);
   saveBatch(context);
   const repoState = context.store.repo(root);
-  context.store.saveRepo(root, { ...repoState, last_batch: batch });
+  await context.store.saveRepo(root, { ...repoState, last_batch: batch });
   context.runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
   let lint;
   try { lint = await runLint(context); }
@@ -3352,7 +3378,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
       if (row.state !== 'passed') row.note = note;
     }
     context.warnings.push('Full check blocked by a check-plan prerequisite. 0 AI calls. No checks were sent.');
-    saveLocalNativeResult(context,rows,'check');
+    await saveLocalNativeResult(context,rows,'check');
     printResult(context,rows);
     return 4;
   }
@@ -3360,7 +3386,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
   context.warnings.push(...found.warnings, ...checked.warnings, ...sharedSourceFiles(root, found.discoveryVisible ?? found.visible));
   context.unmatched = unmatchedLines(found);
   if (cache) await beginTestAttempts(cache, rows.filter(row => row.state !== 'ready'), null, options, origin);
-  if (!rows.some(row => row.state === 'ready')) { if (rows.some(row => row.native_only?.length)) saveLocalNativeResult(context, rows, 'check'); return printResult(context, rows); }
+  if (!rows.some(row => row.state === 'ready')) { if (rows.some(row => row.native_only?.length)) await saveLocalNativeResult(context, rows, 'check'); return printResult(context, rows); }
   context.nativeSource = nativeSourceIdentity(context, rows);
   let capture;
   try { capture = captureIndependent(root, rows, ports, {appMap:null,excludeFixtureProjects:words.length === 0}); }
@@ -3396,7 +3422,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
   await ownBatch(context, batch);
   saveBatch(context);
   const repoState = context.store.repo(root);
-  context.store.saveRepo(root, { ...repoState, last_batch: batch });
+  await context.store.saveRepo(root, { ...repoState, last_batch: batch });
   context.runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
   await checkBatch(context, fresh);
   if (cache) {
@@ -3673,6 +3699,27 @@ function tryPromptProblem(root, found, test, record, capture) {
 }
 
 
+// Save a confirmed shared-engine run in a Story chosen after execution.
+export async function runSaveLast({ words = [], options = {}, cwd = process.cwd() } = {}, givenPorts = {}) {
+  const ports = withDefaults(givenPorts);
+  try {
+    if (words.length !== 1 || options['--save-last'] !== true || Object.keys(options).length !== 1) throw new Stop(2, 'Use pdd run --save-last STORY.');
+    const { root, found, normalized } = localSetup(cwd, words), test = oneTest(found, normalized, root);
+    ports.captureSource(root, { tests: [test.path] });
+    const store = stateFor(ports.env, root);
+    const recordedPrompt = store.repo(root).last_run?.descriptor?.prompt;
+    const descriptor = store.repo(root).last_run?.descriptor;
+    const policy = loadRuntimeWorkspace({root});
+    for (const path of new Set([recordedPrompt, ...Object.keys(descriptor?.promptHashes ?? {}), ...Object.keys(descriptor?.effectivePromptHashes ?? {})].filter(Boolean))) requireRuntimePath(policy, {path, role: 'recorded prompt'});
+    if (recordedPrompt) ports.captureSource(root, { tests: [recordedPrompt] });
+    const identity = signIn(ports.gh, store);
+    return await (await import('./try-doors.mjs')).saveLast({ root, store, identity, ports, test });
+  } catch (error) {
+    line(ports.stderr, `pdd run: ${cleanText(error.message || 'The last run could not be saved.')}`);
+    return error.exitCode === 2 ? 2 : 125;
+  }
+}
+
 // pdd simulate. Returns the exit code.
 export async function runTry({ words = [], options = {}, cwd = process.cwd() } = {}, givenPorts = {}) {
   options = { ...options };
@@ -3811,7 +3858,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       }
       if (!ended) { line(ports.stderr, 'Stopping the old Try…'); await stopTry(context, record); }
       delete repoState.tries[recordPath];
-      store.saveRepo(root, repoState);
+      await store.saveRepo(root, repoState);
     }
     if(prepared){
       const version=await context.runtime.send('/v1/version',{method:'GET',headers:{'X-PDD-Features':'product-parts-v1'}},GET_MS);
@@ -3846,7 +3893,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (registered === false) { await finishReservation(context, setup, { state: 'not_run' }); throw new Stop(3, context.interrupted ? 'Stopped before sending.' : 'Stopped before the Try was sent.'); }
       if (context.interrupted || ports.now() >= context.deadline) { await finishReservation(context, setup, { state: 'not_run' }); throw new Stop(3, context.interrupted ? 'Stopped before sending.' : 'Stopped before the Try was sent.'); }
       const uploadedSeed=capture.sources.find(file=>file.path===test.path);
-      store.saveRepo(root, { ...repoState, tries: { ...repoState.tries, [test.path]: { id: request.requestId, ...setup, story: test.story, storyPath: test.storyPath, title: test.title, origin, login: identity.login, ...(!productSetup && !words.length ? { simulation_scope: { tests: selected.map(item => item.path), appMap, appMapHash: appMap ? sha256(capture.sources.find(file => file.path === appMap).bytes) : null } } : {}), seed_scenario: uploadedSeed ? JSON.parse(uploadedSeed.bytes.toString('utf8')) : test.doc, story_sha256: createHash('sha256').update(readFileSync(join(root, test.storyPath))).digest('hex'), prompt_hashes: capture.raw_prompt_hashes,
+      await store.saveRepo(root, { ...repoState, tries: { ...repoState.tries, [test.path]: { id: request.requestId, ...setup, story: test.story, storyPath: test.storyPath, title: test.title, origin, login: identity.login, ...(!productSetup && !words.length ? { simulation_scope: { tests: selected.map(item => item.path), appMap, appMapHash: appMap ? sha256(capture.sources.find(file => file.path === appMap).bytes) : null } } : {}), seed_scenario: uploadedSeed ? JSON.parse(uploadedSeed.bytes.toString('utf8')) : test.doc, story_sha256: createHash('sha256').update(readFileSync(join(root, test.storyPath))).digest('hex'), prompt_hashes: capture.raw_prompt_hashes,
         effective_prompt_hashes:Object.fromEntries(capture.sources.filter(file=>file.path.endsWith('.prompt.md')).map(file=>[file.path,sha256(file.bytes)])),contract_references:capture.references, ...(productSetup?{product_setup:productSetup,product_parts:prepared.composition.product_parts}:{}) } } });
       store.posted(context.folder, request.requestId);
       line(ports.stderr, `Starting your Try: sending ${capture.files.length} files, ${formatSize(capture.bytes)}${note ? ` ${note}` : ''}…`);
@@ -3859,11 +3906,11 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
         await finishReservation(context, setup, { state: 'not_run' });
         if (!verdict.maintenance) line(ports.stderr, 'The interpreter is busy. Waiting to start your Try…');
         if (await waitBudget(context, verdict.wait)) continue;
-        delete repoState.tries[test.path]; store.saveRepo(root, repoState);
+        delete repoState.tries[test.path]; await store.saveRepo(root, repoState);
         throw new Stop(context.interrupted ? 3 : 5, context.interrupted ? stoppedPause(context, setup, 'Try setup') : 'The interpreter stayed busy until the Try setup wait ended.');
       }
       if (verdict.kind !== 'accepted') {
-        if (verdict.kind !== 'unknown') { await finishReservation(context, setup, { state: 'not_run' }); delete repoState.tries[test.path]; store.saveRepo(root, repoState); }
+        if (verdict.kind !== 'unknown') { await finishReservation(context, setup, { state: 'not_run' }); delete repoState.tries[test.path]; await store.saveRepo(root, repoState); }
         if (reply.status === 429) throw new Stop(5, cleanText(reply.json?.error?.message, context.secrets) || 'Too many Try links are open. Stop one with pdd simulate --stop');
         if (verdict.kind === 'refused') return trySetupRefused(context, test, appMap, [{ ...reply.json.error, ...verdict.refusal }], null);
         if (verdict.blocked) throw new Stop(5, verdict.note.message);
@@ -3892,7 +3939,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     if (done.answer.state === 'passed' && LIVE_SESSION.has(done.answer.result?.session?.state)) throw new Stop(3, refusedLink(done.answer, origin));
     applyAnswer(row, done.answer, context);
     delete repoState.tries[test.path];
-    store.saveRepo(root, repoState);
+    await store.saveRepo(root, repoState);
     if (row.state === 'refused') {
       const report = isObject(done.answer.result?.report?.refusal) ? done.answer.result.report.refusal : null, given = done.answer.result?.refusals;
       const refusals = (Array.isArray(given) && given.length ? given : report ? [report] : []).filter(isObject)
@@ -3934,7 +3981,7 @@ async function stopByName(context, cwd, words, origin) {
   line(ports.stderr, `Stopping the Try for "${title}"…`);
   await stopTry(context, record);
   delete repoState.tries[path];
-  store.saveRepo(root, repoState);
+  await store.saveRepo(root, repoState);
   line(ports.stdout, `The Try link for "${title}" is stopped.`);
   return 0;
 }
@@ -4225,7 +4272,7 @@ function caseImportState(root,record,p,{inspect=false,reconcile=false,reason='re
   const journal=record.recoveryPath.replace('.received.json','.transaction.json');
   if(!caseStat(p,journal))return{};
   const transaction=JSON.parse(caseRead(p,journal));
-  if(transaction.state==='committed')return{result:caseResult(record,'committed','already applied',{path:transaction.path,duplicate:true})};
+  if(transaction.state==='committed')return{result:caseResult(record,'committed','already applied',{path:transaction.path,steps:transaction.steps,duplicate:true})};
   // Only a conflict recorded before publication retains the observed baseline
   // in its history. Older conflicts lost their phase, so absence is uncertain.
   if(transaction.state==='conflict'&&!transaction.observed?.includes(transaction.before))
@@ -4291,7 +4338,7 @@ export const saveDoorCaseResult=(root,saved,options={})=>{
   const p=casePorts(options.ports??{env:options.env});let record;
   try{root=p.files.realpath(root);record=retainCase(root,saved,options,p);
     const known=caseImportState(root,record,p);if(known.result)return caseOutcome(known.result);
-    if(options.writeOwnership)return caseOutcome(applyPendingCaseSync({root,pendingId:record.pendingId,writeOwnership:options.writeOwnership,signal:options.signal},options.ports??{env:options.env}));
+    if(options.writeOwnership)return caseOutcome(applyPendingCaseSync({root,pendingId:record.pendingId,writeOwnership:options.writeOwnership,signal:options.signal},options.ports??{env:options.env},options.publicationGuard));
     let reason;try{prepareCase(root,record,p);}catch(error){reason=error.message;}
     const result=caseResult(record,'pending',options.signal?.aborted?'case save cancelled':reason??'close the editor for the named original test and apply the retained case with supported ownership');return caseOutcome(result);}
   catch(error){return{kind:'failure',message:`not added: durable case receipt failed (${cleanText(error.message??error)}).${record?' Recovery: '+record.recoveryPath:''}`};}
@@ -4491,16 +4538,24 @@ export async function runDoorCall(descriptor, input, givenPorts = {}) {
     const problem=tryPromptProblem(root,found,test,saved[1]);
     if (problem) throw new Stop(125,`${problem} Run pdd simulate STORY --new.`);
   }
+  let runSource, runId;
+  if (!descriptor.originalPath) {
+    runId = ports.randomUUID();
+    await store.updateLastRun(root, () => ({ state: 'unknown', id: runId }));
+    runSource = ports.captureSource(root, { tests: [prompt] });
+  }
   const runtime = new Runtime({ origin, token: identity.token, ports, signal: ports.signal });
   if (ports.signal?.aborted) throw new Stop(125, 'The local server stopped before the command was sent.');
-  const id = ports.randomUUID(), request = { requestId: id, prompt, operation, input };
+  const id = runId ?? ports.randomUUID(), request = { requestId: id, prompt, operation, input };
+  const runBody = runSource ? JSON.stringify(request) : null;
+  const recordedInput = runSource ? JSON.parse(runBody).input : null;
   const recovery = ` Read the result with: pdd test --read ${id}`;
   store.write(join(store.folder('calls'), `${id}.meta.json`), { id, origin, root, login, user_id: identity.userId, session_id: sessionId });
   store.posted(store.folder('tries'), id);
   let knownOutcome = false;
   try {
     const reply = await runtime.send(`/v1/try/${sessionId}/call`, { method: 'POST',
-      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) }, ports.postMs);
+      headers: { 'Content-Type': 'application/json' }, body: runBody ?? JSON.stringify(request) }, ports.postMs);
     if (reply.status && ![200, 202].includes(reply.status)) {
       knownOutcome = reply.status >= 400 && reply.status < 500 && reply.status != 408;
       throw new Stop(125, cleanText(reply.json?.error?.message || reply.json?.error?.code || `The interpreter refused the command (HTTP ${reply.status}).`, [identity.token]) + recovery);
@@ -4530,7 +4585,12 @@ export async function runDoorCall(descriptor, input, givenPorts = {}) {
               ...(Object.hasOwn(matched, 'world') ? { world: matched.world } : {}) };
           } catch { /* Observation is optional; the confirmed result remains confirmed. */ }
         }
-        return { id, result: answer.result.program_result, usage: tryUsage(answer, { cap: descriptor.callCap }), inputWorld: observation.input_world, world: observation.world };
+        const confirmed = { id, result: answer.result.program_result, usage: tryUsage(answer, { cap: descriptor.callCap }), inputWorld: observation.input_world, world: observation.world };
+        if (runSource) await store.updateLastRun(root, last => last?.id !== id ? undefined : ({ state: 'confirmed',
+          descriptor: { root, login, prompt, operation, promptHashes: runSource.raw_prompt_hashes,
+            effectivePromptHashes: Object.fromEntries(runSource.sources.filter(file => file.path.endsWith('.prompt.md')).map(file => [file.path, sha256(executableInterfaceText(file.bytes.toString('utf8')))])) },
+          input: recordedInput, ...confirmed }));
+        return confirmed;
       }
       if (ports.now() >= end) throw new Stop(125, 'The command result is unknown. Do not repeat it automatically.' + recovery);
       await ports.sleep(ports.pollMs, ports.signal);

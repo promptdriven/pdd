@@ -186,7 +186,7 @@ for (const [references, withMap] of [[false, false], [true, false], [false, true
     const descriptor = join(setup.state, 'tries', readdirSync(join(setup.state, 'tries')).find(path => path.endsWith('.door.json')));
     const command = h.io(); assert.equal(await runShim(descriptor, ['ready'], command), 0, command.stderr.text);
     const before = readFileSync(target, 'utf8');
-    const pending = await h.run(undefined, { '--save-last': true });
+    const pending = await h.run(undefined, { '--save-last': true }, {stdin:Object.assign(Readable.from(['y\nN\n']),{isTTY:true}), stdout:Object.assign(portsFor({}).ports.stdout,{isTTY:true})});
     assert.equal(pending.code, 125, pending.ports.stderr.text);
     assert.equal(readFileSync(target, 'utf8'), before);
     const receiptPath = readdirSync(setup.state, { recursive: true }).find(path => path.endsWith('.received.json'));

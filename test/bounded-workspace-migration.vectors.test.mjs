@@ -1,3 +1,4 @@
+import {Readable} from 'node:stream';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
@@ -59,7 +60,7 @@ test('default migration store publishes a usable authored saveLast descriptor an
  assert.equal(mapped.root,f.root);assert.equal(mapped.originalPath,f.test);assert.equal(mapped.repoState,target);assert.equal(mapped.migration.producerRoot,f.old.root);assert.notEqual(pointer.descriptor,descriptor);assert.notEqual(pointer.last,last);
  let output='';const store={repo:()=>JSON.parse(fs.readFileSync(target))};
  const save=()=>saveLast({root:f.root,store,identity:{login:'owner'},ports:{env:f.env,stdout:{write:s=>{output+=s;}},caseHandoff:async({testPath})=>closed(testPath)}});
- const code=await runTry({cwd:f.root,options:{'--save-last':true}},{env:f.env,gh:args=>({status:0,stdout:args[0]==='auth'?'SYNTHETIC-NOT-A-CREDENTIAL':'owner 1'}),stdout:{write:s=>{output+=s;}},stderr:{write:s=>{output+=s;}},caseHandoff:async({testPath})=>closed(testPath)});
+ const code=await runTry({cwd:f.root,options:{'--save-last':true}},{env:f.env,gh:args=>({status:0,stdout:args[0]==='auth'?'SYNTHETIC-NOT-A-CREDENTIAL':'owner 1'}),stdout:{isTTY:true,write:s=>{output+=s;}},stderr:{write:s=>{output+=s;}},stdin:Object.assign(Readable.from(['y\n']),{isTTY:true}),caseHandoff:async({testPath})=>closed(testPath)});
  assert.equal(code,0,output);assert.match(output,/added/i);assert.equal(JSON.parse(read(f.root,f.test)).steps.filter(row=>row.step_id.startsWith('try-')).length,1);
  assert.equal(await save(),0);assert.equal(JSON.parse(read(f.root,f.test)).steps.filter(row=>row.step_id.startsWith('try-')).length,1);
  const shimCode=await runShim(pointer.descriptor,[],{env:f.env,stdin:{isTTY:true},stdout:{write(){}},stderr:{write(){}},gh:()=>({status:1,stdout:''}),fetch:()=>assert.fail('no hosted launcher request')});assert.equal(shimCode,125);

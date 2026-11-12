@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 1307a640660a0a3a4ec2b76247dfc508de0bb246fb7d6ce08272abca8bc11b45).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 3ca5644a7c3232adf3194ddb1001c397682b28b0dc9d7246dadcf5d8ca338f35).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -161,6 +161,8 @@ const routes = [
       form(`pdd ${simulate} [STORY] --serve [PORT] [--max-calls N] [--new]`, 'Serve real HTTP requests through your Simulator session on localhost (default port 8080).'),
       form(`pdd ${simulate} --save-last`, 'Save the last terminal command and its output in the original Story test file.'),
       form(`pdd ${simulate} --stop [STORY]`, 'Stop the open Simulator link of a story.')] },
+  { id: 'run.save-last', prefix: [run], local: 'runtime-save', operands: [{ name: 'story', type: 'text' }], options: [{ name: '--save-last', kind: 'flag' }],
+    forms: [form(`pdd ${run} --save-last STORY`, 'Show the last run and save it in the Story test only after a person confirms its answer in a terminal.')] },
   { id: 'jobs', prefix: ['jobs'], local: 'runtime-jobs', operands: [], options: [],
     forms: [form('pdd jobs', 'List active and waiting interpreter jobs on this machine without contacting the interpreter.')] },
   { id: 'contracts', prefix: ['contracts'], local: 'contracts', operands: [], options: [],

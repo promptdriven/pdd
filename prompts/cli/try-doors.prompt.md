@@ -29,12 +29,31 @@ Preserve program stdout byte-for-byte and return its exit code. Preserve program
 Record the last confirmed command/result with the original test identity in private state, independently of
 whether the program exited successfully. Unknown execution must not leave an older command eligible for Save.
 
-`saveLast(context)` reads the last confirmed invocation for this repository, verifies the current gh login and
-original session identity, and appends the input/result as one exact recorded case in the original test file
-through saveDoorCase. This records an observation; it does not approve a prompt or validate that the answer is
-correct. Repeated Save for the same action is a no-op. Refuse missing/unknown evidence or a changed Story/test
-identity, and keep earlier checks and all unrelated test bytes. Tie the recording to the original step's criterion.
-Print the target file and new step name. No model call is needed.
+`saveLast(context)` saves the last confirmed terminal invocation in its original Story.
+With `context.test`, save the shared engine's last Story-free run into that selected
+Story test instead: the run supplies prompt, operation, input, observed result and
+confirmed before/after data; the Story is chosen only now. Require one criterion
+associated with that entry, rather than inventing a criterion. Refuse unavailable
+starting data, missing/unknown evidence, a different repository/login, changed
+pinned prompts or changed original Story identity. Repeated Save of the same
+invocation to the same target is a no-op. Keep earlier checks and unrelated bytes.
+
+Before retaining or writing any case, show JSON for `Input`, `Data before` and
+`Output`, then ask exactly `Is this answer right? [y/N]`. Require actual terminal
+stdin and stdout; an interactive flag or editor handoff alone cannot substitute.
+Without a terminal, consume no stdin and write no case, say that a person must
+answer in a terminal, and return 125. Only a single `y` (case-insensitive, ignoring
+surrounding whitespace) permits saving. Any other answer, including empty input or
+EOF, writes nothing, returns 0, and explains how to add the input and a correct
+expected value by hand in the target test's steps/checks. This question judges the
+observed answer only; it neither approves a prompt nor replaces file ownership.
+Use the same line reader for correctness and any later closed-editor handoff.
+
+After confirmation, append one exact result check through saveDoorCase, with the
+confirmed before-world, original criteria, simulation and context. Keep the
+importer's starting-world continuation check and pending/conflict recovery.
+After a committed write print `Added to <test path> as step <actual step id>. Review the data before this step, then run: pdd test <story>`.
+No model call is needed to save.
 
 ## Workspace and received cases
 
@@ -69,7 +88,7 @@ prompt change requires --new. A referenced legacy session without that snapshot
 has an unavailable baseline. Do not add a scenario, seed or world freshness gate.
 Keep the reported before/after world privately alongside the last result. Like the hosted Try Save, the appended
 case records the last command's observed output; it does not rewrite the original scenario's initial_world or
-preceding steps. For a nonempty saved world, print a short reminder to review the saved-data setup before replay.
+preceding steps. The committed-save message always reminds the person to review the data before the step.
 
 At CLI startup, read authenticated owner model metadata once (GET /v1/try/ID/model, no model calls) and print current session usage on stderr; model calls.cap/remaining are authoritative. If metadata is unavailable, show unknown and keep existing CLI startup behavior. Retain the known cap in the private descriptor so each confirmed call can show session used/remaining. Do not treat usage as a new budget or reset it.
 
@@ -77,3 +96,5 @@ Usage normalization and formatting are owned by [runtime output](runtime-output.
 
 ## Progress
 A command on the Try can take many seconds. When stderr is a terminal and the call takes more than 2 s, the launcher prints `pdd: running <name> on the Try…` on stderr. With a pipe or an agent it prints nothing extra, so the program's output stays exact.
+
+Before retaining an approved case, recheck the recorded prompt and expanded dependencies after the answer. Recheck them again after any awaited editor handoff before applying a pending case; a change refuses the stale case.
