@@ -7,6 +7,7 @@ import {spawnSync} from 'node:child_process';
 import {findTests,interfaceBlocks,proseSha256,captureSource} from '../src/runtime-preflight.mjs';
 import {buildCheckPlan,selectCheckTests} from '../src/runtime-check-plan.mjs';
 import {temp,root as projectRoot} from './runtime-fake.mjs';
+import {affectedFixture,affectedRuntime,checks,cli,commit as commitAffected,installGh,put as putAffected} from './helpers/affected-check-fixture.mjs';
 
 const cases = JSON.parse(readFileSync(new URL('./affected-checks/affected-story-selection-cases.json',import.meta.url),'utf8'));
 const approved = id => cases.cases.find(item=>item.id === id);
@@ -168,4 +169,47 @@ test('3146 native dispatch bounds inspect selected rows only, and full fallback 
   assert.equal(full.calls.maximum,null);assert.equal(full.calls.estimated,null);
   const fallback=plan(root,{rows},{git:()=>{throw Error('scope unavailable');}});
   assert.ok(fallback.prerequisites.some(item=>item.path === 'prompts/C.prompt.md'));assert.equal(fallback.calls.maximum,null);
+});
+
+// A canonical owner header is authoritative for every extension and location.
+for (const extension of ['svg','md','json','txt','csv']) for (const variant of ['removed header','changed owner','old metadata unavailable']) test(`3146 repair asset ownership: ${extension}, ${variant}`,t=>{
+  const root=fixture(t),path=`assets/generated.${extension}`;
+  put(root,path,'<!-- Generated from prompts/C.prompt.md. -->\noriginal asset\n');commit(root);
+  put(root,path,variant === 'changed owner' ? '<!-- Generated from prompts/A.prompt.md. -->\nchanged asset\n' : 'changed asset\n');
+  appendFileSync(join(root,'prompts/A.prompt.md'),'\n');
+  const reads=[],result=plan(root,{}, {git:(cwd,args)=>{
+    reads.push(args);
+    if(variant === 'old metadata unavailable' && args[0] === 'show' && args[1] === `HEAD:${path}`)throw Error('old asset metadata unavailable');
+    return git(cwd,...args);
+  }});
+  const expected=variant === 'changed owner' ? ['test/runtime/A.json','test/runtime/A.recorded.json','test/runtime/C.json'] : all;
+  assert.deepEqual(selected(result),expected,'3146_OLD_ASSET_OWNER_MUST_NOT_BE_OMITTED');
+  assert.ok(reads.some(args=>args[0] === 'show' && args[1] === `HEAD:${path}`));
+});
+
+test('3146 repair asset ownership: excluded old headers are never read or admitted',t=>{
+  const root=fixture(t),paths=['private/generated.svg','test/fixtures/nested/generated.md'];
+  for(const path of paths)put(root,path,'<!-- Generated from prompts/C.prompt.md. -->\noriginal\n');
+  put(root,'test/fixtures/nested/user_stories/README.md','# Fixture\n');
+  put(root,'test/fixtures/nested/tests/fixture-data.json','{}');
+  put(root,'pdd-workspace.json',JSON.stringify({allowed_paths:['prompts/','user_stories/','test/','docs/']}));commit(root);
+  for(const path of paths)put(root,path,'<!-- Generated from prompts/B.prompt.md. -->\nchanged\n');
+  appendFileSync(join(root,'prompts/A.prompt.md'),'\n');
+  const result=plan(root,{}, {git:(cwd,args)=>{
+    if(['show','ls-tree'].includes(args[0]))assert.ok(!args.some(arg=>paths.some(path=>arg.includes(path))),'excluded historical asset metadata must not be requested');
+    return git(cwd,...args);
+  }});
+  assert.deepEqual(selected(result),['test/runtime/A.json','test/runtime/A.recorded.json']);
+});
+
+test('3146 repair asset ownership: real CLI dispatch retains an SVG owner after its header disappears',async t=>{
+  const setup=affectedFixture(t),path='assets/generated.svg';
+  putAffected(setup.repo,path,'<!-- Generated from prompts/C.prompt.md. -->\n<svg xmlns="http://www.w3.org/2000/svg"><rect width="1"/></svg>\n');
+  commitAffected(setup.repo);
+  putAffected(setup.repo,path,'<svg xmlns="http://www.w3.org/2000/svg"><rect width="2"/></svg>\n');setup.change('prompts/A.prompt.md');
+  const fake=await affectedRuntime(t,setup),result=await cli(setup,['test','--affected','--json'],{env:{PATH:installGh(setup),PDD_RUNTIME_URL:fake.origin}});
+  assert.equal(result.code,0,result.stderr);
+  const output=JSON.parse(result.stdout);
+  assert.deepEqual(checks(fake).map(row=>row.request.scenario).sort(),setup.tests.slice().sort(),'3146_CLI_OLD_SVG_OWNER_MUST_NOT_BE_OMITTED');
+  assert.deepEqual(output.check_selection.tests,setup.tests);assert.deepEqual(output.check_selection.baseline_tests,[]);
 });

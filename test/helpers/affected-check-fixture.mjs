@@ -36,7 +36,10 @@ export function affectedFixture(t,{transitive=false}={}) {
 export async function affectedRuntime(t,setup,{fail=[],answer}={}) {
   const fake=await fakeRuntime(t,(entry,f)=>{
     if(answer){const result=answer(entry,f);if(result)return result;}
-    if(entry.command==='lint')return {status:200,json:f.lint(entry.request.requestId,['A','B','C'].map(name=>({path:`prompts/${name}.prompt.md`,state:'draft',admission_state:'draft',interface:{calls:[]}})))};
+    if(entry.command==='lint'){
+      const receipt=f.lint(entry.request.requestId,['A','B','C'].map(name=>({path:`prompts/${name}.prompt.md`,state:'draft',admission_state:'draft',interface:{calls:[]}})));
+      f.jobs.set(entry.request.requestId,receipt);return {status:200,json:receipt};
+    }
     if(entry.command==='check'){
       const test=JSON.parse(readFileSync(join(setup.repo,entry.request.scenario),'utf8'));
       const passed=!fail.includes(entry.request.scenario),checks=test.steps.flatMap(step=>step.checks).map(check=>({...check,expected:check.value,actual:passed?check.value:'fixture failure',passed}));
@@ -47,6 +50,8 @@ export async function affectedRuntime(t,setup,{fail=[],answer}={}) {
       receipt.result.report.call_depth=test.steps.map(step=>({step_id:step.step_id,entry_path:step.entry_path,operation:step.operation}));
       return {status:200,json:receipt};
     }
+    const id=entry.url?.split('/').at(-1),receipt=f.jobs.get(id);
+    if(entry.method==='GET' && receipt?.command==='lint')return {status:200,json:receipt};
     return f.normal(entry);
   });
   fake.failTests=fail;

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {appendFileSync,mkdirSync,readFileSync,readdirSync,renameSync,symlinkSync,unlinkSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
-import {captureSource} from '../src/runtime-preflight.mjs';
+import {captureSource,interfaceBlocks,proseSha256} from '../src/runtime-preflight.mjs';
 import {readRunResults} from '../src/workflow-results.mjs';
 import {fullCheckPass} from '../src/workflow-story-card.mjs';
 import {affectedFixture,affectedRuntime,batch,check,checks,commit,disclaimer,historicalAssociation,put,vectors} from './helpers/affected-check-fixture.mjs';
@@ -334,4 +334,88 @@ test('3146 separately identified unsent local evidence stays local outside the u
   const observation=result.output.baseline_report.observations.find(row=>row.test===c);
   assert.equal(observation?.evidence_kind,'local');assert.equal(observation?.request_id,null);assert.equal(observation?.state,'not run');
   assert.equal(checks(fake).slice(offset).some(row=>row.request.scenario===c),false);
+});
+
+test('3146 repair complete original currentness: mixed native and Runtime identities',async t=>{
+  for(const variant of ['matching','native unavailable','stale and native unavailable','native changed','missing native identity','missing native hash','malformed native hash','array native hash','missing native tests','malformed native tests','empty native tests','unsafe native tests','duplicate native tests'])await t.test(variant,async t=>{
+    const setup=affectedFixture(t),b='test/runtime/B.json',file=join(setup.repo,'prompts/B.prompt.md');
+    const text=readFileSync(file,'utf8'),block=interfaceBlocks(text)[0];
+    writeFileSync(file,text.replace(block[1],JSON.stringify({kind:'native-only',reason:'Real process identity.',status:'draft',prose_sha256:proseSha256(text)})));commit(setup.repo);
+    const fake=await affectedRuntime(t,setup,{fail:[c]}),seed=await check(setup,fake,{words:['B','C'],options:{'--json':true}});
+    assert.equal(seed.code,5,seed.ports.stderr.text); // The native-only row is a final not-run outcome.
+    const saved=batch(setup,seed.output.batch),row=saved.rows.find(row=>row.test===c),id=row.request_ids[0],receipt=read(setup,saved.batch,`${id}.json`);
+    assert.equal(row.state,'failed');assert.equal(receipt.state,'failed');
+    assert.deepEqual(saved.source_selection.tests,[c]);assert.deepEqual(saved.native_source.tests,[b]);assert.match(saved.native_source.sha256,/^[a-f0-9]{64}$/);
+    if(variant==='missing native hash')delete saved.native_source.sha256;
+    if(variant==='malformed native hash')saved.native_source.sha256='not-a-sha256';
+    if(variant==='array native hash')saved.native_source.sha256=[saved.native_source.sha256];
+    if(variant==='missing native tests')delete saved.native_source.tests;
+    if(variant==='malformed native tests')saved.native_source.tests={path:b};
+    if(variant==='empty native tests')saved.native_source.tests=[];
+    if(variant==='unsafe native tests')saved.native_source.tests=['../outside.json'];
+    if(variant==='duplicate native tests')saved.native_source.tests=[b,b];
+    if(variant==='missing native identity')delete saved.native_source;
+    write(setup,saved.batch,saved);const bytes=saveBytes(setup,saved.batch),offset=checks(fake).length;setup.change('prompts/A.prompt.md');
+    let nativeCaptures=0;
+    const result=await check(setup,fake,{advance:2000,extra:{captureSource(root,selection){
+      if(Array.isArray(selection.tests) && selection.tests.length===1 && selection.tests[0]===b){
+        nativeCaptures++;
+        if(variant.includes('unavailable'))throw Error('Controlled original native capture unavailable');
+        const captured=captureSource(root,selection);return variant==='native changed'?{...captured,sha256:'a'.repeat(64)}:captured;
+      }
+      const captured=captureSource(root,selection);
+      return variant==='stale and native unavailable' && selection.tests?.length===1 && selection.tests[0]===c ? {...captured,sha256:'a'.repeat(64)} : captured;
+    }}});
+    assert.equal(result.code,0,result.ports.stderr.text);
+    const report=result.output.baseline_report,observed=report.observations.find(item=>item.request_id===id);
+    const expected=variant==='matching'?'current':['stale and native unavailable','native changed'].includes(variant)?'stale':'unavailable';
+    assert.equal(observed?.currentness,expected,'3146_INCOMPLETE_NATIVE_ORIGINAL_SOURCE_MUST_NOT_BE_CURRENT');
+    assert.equal(observed.currentness_scope,'original-batch');assert.equal(observed.state,'failed');assert.equal(observed.batch,saved.batch);
+    assert.equal(observed.created_at,saved.created_at);assert.equal(observed.report_url,receipt.report_url);assert.equal(observed.owner,undefined);assert.equal(observed.defect_age,undefined);
+    const local=report.observations.find(item=>item.test===b);assert.equal(local?.evidence_kind,'local');assert.equal(local?.currentness,expected);
+    assert.deepEqual(checks(fake).slice(offset).map(item=>item.request.scenario).sort(),['test/runtime/A.json','test/runtime/A.recorded.json'].sort());
+    assert.deepEqual(saveBytes(setup,saved.batch),bytes);
+    if(variant.includes('unavailable'))assert.ok(nativeCaptures>0,'the controlled failure must reach native capture');
+    if(expected==='unavailable' || variant==='stale and native unavailable'){
+      assert.equal(report.availability,'partial');assert.ok(report.warnings.some(message=>/original-batch source selections.*unavailable/.test(message)));
+    }
+  });
+});
+
+test('3146 repair lint fixture recovery: a lost accepted lint response keeps the original lint receipt',async t=>{
+  const setup=affectedFixture(t),fake=await affectedRuntime(t,setup);setup.change('docs/shared.md');
+  let lost=0;
+  const result=await check(setup,fake,{extra:{async fetch(url,options){
+    const response=await globalThis.fetch(url,options);
+    if(options?.method==='POST' && String(url).endsWith('/v1/lint') && !lost){
+      await response.text();lost++;throw new TypeError('Controlled lost accepted lint response');
+    }
+    return response;
+  }}});
+  assert.equal(lost,1);assert.equal(result.code,0,result.ports.stderr.text);
+  const lints=fake.posts.filter(entry=>entry.command==='lint');assert.equal(lints.length,1);
+  const id=lints[0].request.requestId;assert.equal(fake.jobs.get(id)?.command,'lint');assert.ok(fake.gets.some(entry=>entry.url===`/v1/runs/${id}`));
+  assert.deepEqual(result.output.rows.map(row=>row.test),setup.selected);assert.ok(result.output.rows.every(row=>row.state==='passed'));
+  assert.deepEqual(checks(fake).map(entry=>entry.request.scenario).sort(),setup.selected.slice().sort());
+});
+
+test('3146 repair legacy execution binding: empty execution cannot assign a positive receipt',async t=>{
+  for(const variant of ['crossed empty','own empty pass','own empty failure','own substantive pass'])await t.test(variant,async t=>{
+    const {setup,fake,saved}=await original(t,{full:true,fail:variant==='crossed empty' || variant==='own empty failure'});
+    const row=saved.rows.find(row=>row.test===c),a=saved.rows.find(row=>row.test==='test/runtime/A.json'),originalId=row.request_ids[0];
+    const folder=join(setup.state,'batches',saved.batch);
+    for(const name of readdirSync(folder))if(name.endsWith('.dispatch.json'))unlinkSync(join(folder,name));
+    if(variant!=='own substantive pass')for(const id of [...row.request_ids,...a.request_ids]){
+      const receipt=read(setup,saved.batch,`${id}.json`);receipt.result.report.call_depth=[];write(setup,saved.batch,receipt,`${id}.json`);
+    }
+    if(variant==='crossed empty')[row.request_ids,a.request_ids]=[a.request_ids,row.request_ids];
+    write(setup,saved.batch,saved);const bytes=saveBytes(setup,saved.batch),offset=checks(fake).length;setup.change('docs/shared.md');
+    const result=await check(setup,fake,{advance:2000});assert.equal(result.code,0,result.ports.stderr.text);
+    const report=result.output.baseline_report,observations=report.observations.filter(item=>item.test===c);
+    assert.equal(observations.some(item=>item.state==='passed'),variant==='own substantive pass','3146_EMPTY_EXECUTION_MUST_NOT_INVENT_HISTORICAL_PASS');
+    if(variant==='own empty failure')assert.ok(observations.some(item=>item.request_id===originalId && item.state==='failed'));
+    if(variant==='own substantive pass')assert.ok(observations.some(item=>item.request_id===originalId && item.state==='passed'));
+    assert.equal(report.availability,'partial');assert.ok(report.warnings.some(message=>/dispatch ownership/.test(message)));
+    assert.deepEqual(checks(fake).slice(offset).map(item=>item.request.scenario).sort(),setup.selected.slice().sort());assert.deepEqual(saveBytes(setup,saved.batch),bytes);
+  });
 });

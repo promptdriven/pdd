@@ -135,7 +135,6 @@ export function buildCheckPlan({ root, found, selected, rows = [], full, base = 
       } catch { conservative ||= 'binding ownership unavailable; conservative selection'; }
     }
     for (const path of changed.filter(permitted)) {
-      if (!implementation(path) && !bindings.some(item=>item?.module === path)) continue;
       const bound = bindings.filter(item=>item?.module === path && typeof item.prompt === 'string').map(item=>item.prompt);
       const inspectOwners = content => {
         const named = unique([...bound,...headerPrompts(content)]);
@@ -144,8 +143,13 @@ export function buildCheckPlan({ root, found, selected, rows = [], full, base = 
         for (const prompt of named) if (permitted(prompt)) own(prompt,path);
       };
       try {
-        if (!deleted.has(path)) inspectOwners(source.read({path}).content);
-        if (old.has(path)) inspectOwners(git(['show',`${base}:${path}`]));
+        // Headers in either revision establish ownership, including assets whose
+        // current header was removed. Apply permission before either read.
+        const current = deleted.has(path) ? null : source.read({path}).content;
+        const previous = old.has(path) ? git(['show',`${base}:${path}`]) : null;
+        if (!implementation(path) && !bound.length && !headerPrompts(previous).length && !headerPrompts(current).length) continue;
+        if (current !== null) inspectOwners(current);
+        if (previous !== null) inspectOwners(previous);
         else if (deleted.has(path)) conservative ||= `deleted ownership unavailable: ${path}; conservative selection`;
       } catch { conservative ||= `${deleted.has(path)?'deleted':'old/new implementation'} ownership unavailable: ${path}; conservative selection`; }
     }

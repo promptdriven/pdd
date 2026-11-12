@@ -294,12 +294,22 @@ async function readBaselineReport(context, plan, identity) {
         const original = await capture(sourceRoot,selection);
         currentness = original.sha256 === saved.source_sha256 ? 'current' : 'stale';
         if (currentness === 'current') originalSource = original;
-        if (saved.native_source) {
-          const native = await capture(sourceRoot,{...selection,tests:saved.native_source.tests});
-          if (saved.native_source.sha256 && native.sha256 !== saved.native_source.sha256) currentness='stale';
-          else if (!saved.native_source.sha256 && currentness !== 'stale') currentness='unavailable';
+        const nativeTests = saved.rows.filter(row=>row?.native_only?.length).map(row=>row.test);
+        if (saved.native_source != null || nativeTests.length) {
+          const nativeIdentity = saved.native_source;
+          if (!isObject(nativeIdentity) || typeof nativeIdentity.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(nativeIdentity.sha256)
+            || !Array.isArray(nativeIdentity.tests) || !nativeIdentity.tests.length
+            || new Set(nativeIdentity.tests).size !== nativeIdentity.tests.length
+            || nativeIdentity.tests.some(path=>typeof path !== 'string' || !path || path.startsWith('/') || path.includes('\\') || path.split('/').some(part=>!part || part==='.' || part==='..'))
+            || !isDeepStrictEqual([...nativeIdentity.tests].sort(),[...nativeTests].sort())) throw Error('original native source identity unavailable');
+          const native = await capture(sourceRoot,{...selection,tests:nativeIdentity.tests});
+          if (typeof native.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(native.sha256)) throw Error('original native capture unavailable');
+          if (native.sha256 !== nativeIdentity.sha256) currentness='stale';
         }
-      } catch { partial=true;warn('Some original-batch source selections are unavailable.'); }
+      } catch {
+        if (currentness !== 'stale') currentness='unavailable';
+        partial=true;warn('Some original-batch source selections are unavailable.');
+      }
     }
     const created_at = typeof saved.created_at === 'string' && Number.isFinite(Date.parse(saved.created_at)) ? saved.created_at : null;
     const snapshots = Array.isArray(saved.contract_snapshots) ? saved.contract_snapshots : [];
@@ -393,10 +403,17 @@ async function readBaselineReport(context, plan, identity) {
             const malformedIdentity = isObject(report) && (Object.hasOwn(report,'projected_context_bindings') && !Array.isArray(report.projected_context_bindings)
               || Object.hasOwn(report,'call_depth') && !Array.isArray(report.call_depth));
             if (sourceMismatch || projectedMismatch || executionMismatch || malformedIdentity) { inconsistent();return; }
+            // A whole-batch hash cannot identify the test that produced a receipt.
+            // Without a dispatch claim, require actual execution that matches only
+            // this producer test; an empty list proves no such relationship.
+            const executionTests = Array.isArray(report?.call_depth) && report.call_depth.length
+              ? saved.rows.filter(candidate=>tests.includes(candidate?.test) && report.call_depth.every(step=>(candidate.steps ?? []).some(original=>
+                original.step_id === step?.step_id && original.entry_path === step?.entry_path && original.operation === step?.operation))) : [];
+            const boundExecution = executionTests.length === 1 && executionTests[0].test === row.test;
             if (answer.source_sha256 == null || saved.source_sha256 == null) {
               partial=true;warn('Some legacy Check receipts lack a bound original source hash.');
             }
-            if ((!boundStory || !manifest || saved.source_sha256 == null || !claims.has(id) && !Array.isArray(report?.call_depth)) && resultOutcome(projectAnswer(answer,{test:row.test,steps:row.steps??[]})).state === 'passed') return;
+            if ((!boundStory || !manifest || saved.source_sha256 == null || !claims.has(id) && !boundExecution) && resultOutcome(projectAnswer(answer,{test:row.test,steps:row.steps??[]})).state === 'passed') return;
             if (!originals.some(previous=>isDeepStrictEqual(previous,answer))) originals.push(answer);
           };
           try {
