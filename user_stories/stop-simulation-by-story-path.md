@@ -9,6 +9,10 @@ As a person trying my app, I want to stop the simulation with the Story path tha
 3. The saved test path `tests/rehearsal/control-panel.json` and test name `control-panel` still identify the simulation. A stop also works on a branch where the original Story file is absent. With one saved simulation, `pdd simulate --stop` still stops it.
 4. A stop removes only the selected saved simulation after the service confirms the stop. A DELETE response of 404 or 410 also counts as confirmation. An unconfirmed stop keeps the saved record and returns a nonzero exit. An unknown or ambiguous selector stops nothing and exits 2.
 
+## Must not change
+
+Keep existing short Story names, saved test paths, test basenames and no-argument selection with one saved simulation. Keep stopping when the Story file is absent, unique selection before authentication or a stop request, confirmed removal of only the selected saved record, and the owner's existing unknown-session recovery.
+
 ## Rules to check
 
 The exact saved repository-relative Story path and the existing short name must identify the same simulation. Stop selection uses saved records, without requiring the Story file to exist on the current branch. Selection must be unique before authentication or a stop request. Confirmation must precede removal of the selected record; other saved records must stay unchanged. Never print a success confirmation or remove the record for an unconfirmed stop.
