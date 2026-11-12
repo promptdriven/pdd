@@ -468,3 +468,61 @@ for (const [words, now, expected] of [
     assert.equal(/until/i.test(state), Date.parse(expected) > f.clock);
   }
 });
+
+test('Gemini startup warns about unattended shell safety stops', async t => {
+  const f = await fixture(t, { agent: 'gemini' });
+  const started = await f.run();
+  assert.match(started.message, /Gemini.*shell safety dialogs.*--yolo.*person.*unattended/i);
+});
+
+test('Gemini shell safety dialog appears in status without answering it', async t => {
+  const f = await fixture(t, { agent: 'gemini' });
+  await f.run();
+  const pane = f.herdr.paneOf(f.record().chats.at(-1));
+  pane.agent.agent_status = 'blocked';
+  pane.screen = '⚠ CRITICAL SECURITY WARNING: Untrusted Command Flags Detected\nThe following flags/arguments were sourced from external untrusted input\nAllow execution of [Shell]?\n● 1. Allow once\n  2. No, suggest changes (esc)\n';
+  const before = f.herdr.calls.length;
+  const shown = await statusAll(f);
+  for (const words of [shown.detail, shown.line, shown.json.words]) assert.match(words, /Gemini shell-safety dialog.*pdd workflow open 17/);
+  assert.equal(shown.json.group, 'waiting');
+  assertOnlyReads(f, before);
+  pane.screen = 'Other question\n(Use Enter to select)\n';
+  assert.match((await statusAll(f)).detail, /the chat asks a question in its window/);
+});
+
+
+test('Gemini shell safety status names the menu when the second choice is selected', async t => {
+  const f = await fixture(t, { agent: 'gemini' });
+  await f.run();
+  const pane = f.herdr.paneOf(f.record().chats.at(-1));
+  pane.agent.agent_status = 'blocked';
+  const menu = '⚠ CRITICAL SECURITY WARNING: Untrusted Command Flags Detected\nAllow execution of [Shell]?\n  1. Allow once\n● 2. No, suggest changes (esc)\n';
+  for (const footer of ['', '(Use Enter to select)\n']) {
+    pane.screen = menu + footer;
+    const before = f.herdr.calls.length;
+    const shown = await statusAll(f);
+    for (const words of [shown.detail, shown.line, shown.json.words]) assert.match(words, /Gemini shell-safety dialog.*pdd workflow open 17/);
+    assertOnlyReads(f, before);
+  }
+});
+
+test('Gemini status keeps generic blocked words for stale or unreadable screens', async t => {
+  const f = await fixture(t, { agent: 'gemini' });
+  await f.run();
+  const pane = f.herdr.paneOf(f.record().chats.at(-1));
+  pane.agent.agent_status = 'blocked';
+  const old = '⚠ CRITICAL SECURITY WARNING: Untrusted Command Flags Detected\nAllow execution of [Shell]?\n● 1. Allow once\n  2. No, suggest changes (esc)\n';
+  for (const suffix of ['> \n', 'Another question?\n● 1. Yes\n  2. No\n(Use Enter to select)\n']) {
+    pane.screen = old + suffix;
+    const shown = await statusAll(f);
+    assert.match(shown.json.words, /the chat asks a question/);
+  }
+  const original = f.ports.herdr;
+  f.ports.herdr = async args => { if (args[0] === 'pane' && args[1] === 'read') throw Error('unavailable'); return original(args); };
+  assert.match((await statusAll(f)).json.words, /the chat asks a question/);
+});
+
+test('other agent startup does not warn about Gemini safety dialogs', async t => {
+  const f = await fixture(t, { agent: 'claude' });
+  assert.doesNotMatch((await f.run()).message, /Gemini shell safety dialogs/);
+});

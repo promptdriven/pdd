@@ -1686,3 +1686,5 @@ adding conventions or adapters to obtain a shell. Do not promise a browser/page 
 or require flags for the ordinary path. Offer `--page` only when the person wants the page.
 [Runtime client](runtime-client.prompt.md#choose-how-to-open-the-program) owns the choice;
 keep approval and workflow transitions unchanged.
+
+Gemini workflow startup warns that shell safety dialogs can override `--yolo` and require a person even in unattended runs. For a running Gemini chat reported blocked, read its pane once: if a live dialog contains `CRITICAL SECURITY WARNING: Untrusted Command Flags Detected` and `Allow execution of [Shell]?`, detail, list and JSON status name the Gemini shell-safety dialog and direct the person to open the chat. Recognize only the current menu: require its warning, shell question and both choices in order at the bottom of the screen, with either choice selected and only an optional selection footer after the last choice. An input line or another dialog after it means the warning is stale. A failed or inconclusive read keeps the generic blocked status. Never answer the dialog.

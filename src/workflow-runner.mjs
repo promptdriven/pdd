@@ -609,7 +609,7 @@ const idleWords = (run, timeZone = 'UTC') => `agent idle since ${new Intl.DateTi
   hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone,
 }).format(new Date(currentChat(run).idleSince))}`;
 // chat: what Herdr shows (chatState); facts: {drafts, nothing} read by the caller (gateFacts). describe itself makes no calls.
-function describe(run, chat = null, { drafts = [], nothing = false, health = null, now = null, normal = false, suite = null, timeZone } = {}) {
+function describe(run, chat = null, { drafts = [], nothing = false, health = null, geminiShellSafety = false, now = null, normal = false, suite = null, timeZone } = {}) {
   const area = run.areas[run.area], pr1 = askArea(run) && prOf(run, askArea(run).name);
   if (run.state === 'cancelled') return run.cancelled?.state === 'replaced' ? 'replaced' : 'cancelled';
   if (environmentStatus(run)) return environmentStatus(run);
@@ -619,6 +619,7 @@ function describe(run, chat = null, { drafts = [], nothing = false, health = nul
   if (activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting', 'closed'].includes(chat)) return chatStatusWords(run, chat);
   if (openQuestion(run) && run.state !== 'completed') return `waiting for you: ${run.question.text.split('\n')[0]}`;
   if (chat === 'cannot-work' && health && run.state === 'running') return cannotWorkWords(run, health).long;
+  if (chat === 'blocked' && run.state === 'running' && geminiShellSafety) return `waiting for you: Gemini shell-safety dialog (pdd workflow open ${run.number})`;
   if (chat === 'blocked' && run.state === 'running') return `waiting for you: the chat asks a question in its window (pdd workflow open ${run.number})`;
   if (chat === 'stopped' && run.state === 'running') return `the chat stopped. Run pdd workflow open ${run.number} to start it again.`;
   if (run.state === 'completed' && run.gate?.kind === 'ask-code') return `done at PR 1 (merged: ${pr1?.url}). ${codeLater(run)}`;
@@ -995,6 +996,7 @@ async function startRunUnlocked({ name, issue, agent = 'codex', model, herdrAgen
   return done([...warnings,
     `Started ${name} for ${run.repo}#${number} "${oneLine(run.issue.title)}".`,
     `Area 1 of ${run.areas.length}: ${first.name} (${first.steps.join(', ')}). ${agent === 'claude' ? 'Claude' : agent === 'gemini' ? 'Gemini' : agent === 'agy' ? 'Antigravity' : 'Codex'}${definition ? ` (agents.json entry ${JSON.stringify(definition.name)})` : ''} works in Herdr session pdd, tab "${chat.label}".`,
+    ...(agent === 'gemini' ? ['Gemini shell safety dialogs can override --yolo and require a person even in unattended runs.'] : []),
     ...(agent === 'claude' && !claudeTrusts(run.sourceRoot, run.configDir, p.env) ? ['Claude may first ask you to trust the new worktree folder. Open the chat and choose "Yes, I trust this folder".'] : []),
     `Base: origin/${run.baseBranch}`,
     `Worktree: ${run.root} (branch ${run.branch})`,
@@ -4565,6 +4567,12 @@ async function chatState(run, p, facts = {}) {
     // An alive agent can still fail every turn on its login or usage limit (#2902); a gate or question keeps its words.
     const health = run.state === 'running' && !run.gate && !openQuestion(run) && !failure ? await chatHealth({ run, chat: next, live }, p) : null;
     if (health) { facts.health = { ...health, at: p.now(), timeZone: p.timeZone }; return 'cannot-work'; }
+    if (live.status === 'blocked' && (chat.agent ?? run.agent) === 'gemini' && run.state === 'running' && !run.gate && !openQuestion(run)) {
+      try {
+        const screen = await herdrCommand(p)(['pane', 'read', chat.paneId, '--source', 'detection']);
+        if (typeof screen === 'string' && /CRITICAL SECURITY WARNING: Untrusted Command Flags Detected[^]*?Allow execution of \[Shell\]\?[^]*?(?:(?:●|❯)[ \t]*1\.[ \t]*Allow once[^\n]*\r?\n[ \t]*2\.|1\.[ \t]*Allow once[^\n]*\r?\n[ \t]*(?:●|❯)[ \t]*2\.)[ \t]*No, suggest changes(?:[ \t]*\(esc\))?[ \t]*(?:\r?\n[ \t]*\(Use Enter to select\)[ \t]*)?\s*$/i.test(screen)) facts.geminiShellSafety = true;
+      } catch { /* An unreadable screen leaves the generic blocked status. */ }
+    }
     const saved = currentChat(run);
     if (idleAgent(next, live) && saved?.paneId === next.paneId && saved.session?.id === next.session?.id
       && saved.idleAnchor === launchAnchor(next) && Number.isFinite(saved.idleSince)) return 'idle';
@@ -4647,7 +4655,7 @@ function runtimeStatusLines(evidence, {smallChange = true} = {}) {
     ...(evidence.nativeOnly ?? []).flatMap(row => (row.prompts ?? []).map(prompt => `${row.test} ${row.state}: ${prompt.path}: ${oneLine(prompt.reason)}`))] : [])];
 }
 
-function summary(run, timeZone, chat = null, { drafts = [], nothing = false, health = null, normal = false, suite = null, now = null, namingError = null } = {}) {
+function summary(run, timeZone, chat = null, { drafts = [], nothing = false, health = null, geminiShellSafety = false, normal = false, suite = null, now = null, namingError = null } = {}) {
   const area = run.areas[run.area], ask = askArea(run), running = run.state === 'running';
   const cardRun = normal && Boolean(run.storyApproval);
   const replacementPending = run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase);
@@ -4668,6 +4676,7 @@ function summary(run, timeZone, chat = null, { drafts = [], nothing = false, hea
     : problem ? chatStatusWords(run, chat)
     : question ? `waiting for you: ${question.text.split('\n')[0]}`
     : cannotWork ? cannotWorkWords(run, cannotWork).short
+    : !run.gate && running && chat === 'blocked' && geminiShellSafety ? `waiting for you: Gemini shell-safety dialog (pdd workflow open ${run.number})`
     : !run.gate && running && chat === 'blocked' ? `waiting for you: the chat asks a question in its window`
     : !run.gate && running && chat === 'stopped' ? `the chat stopped: run pdd workflow open ${run.number}`
     : run.gate?.automaticHold ? `PR 1 waits: ${run.gate.automaticHold}`
