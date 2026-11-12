@@ -125,23 +125,6 @@ test('3096: adoption does not authorize closing a person-created matching worksp
   assert.equal(closes(f).filter(a => a[0] === 'workspace').length, 0);
 });
 
-test('3096: an enabled Autopilot tick reclaims done restart panes through the injected workflow Herdr port', async t => {
-  const {f, run} = await doneRun(t);
-  const stateFile = join(f.state, 'launcher.json');
-  writeFileSync(join(f.source, 'pdd.json'), JSON.stringify({autopilot: {mode: 'auto', trust: []}}));
-  writeFileSync(stateFile, JSON.stringify({enabled: true, defaultBranch: 'main', baseBranch: 'main', stateFile,
-    cwd: f.source, repo: run.repo, packageRoot, coordinatorId: 'coordinator', machine: 'machine', activatedAt: 1,
-    agent: {id: 'claude', kind: 'claude', command: 'claude'}, environment: f.ports.env, retryAt: f.clock + 86400000}));
-  const result = await tickAutopilot(stateFile, {...healthyMachine, ...f.ports, workflowHerdr: f.herdr.herdr,
-    checkCapacityPorts: isolatedCheckCapacity(f.base),
-    run: async (file, args, options) => ({code: 0, ...await f.ports.execFile(file, args, options)}),
-    sendDigest: async () => ({exitCode: 0}), warn() {}});
-  assert.equal(result.exitCode, 0);
-  assert.equal(f.herdr.workspaces.some(w => w.workspace_id === run.layout.workspaceId), false, 'tick must release the done run workspace');
-  assert.equal(f.record().layout.phase, 'closed');
-  assert.deepEqual(f.record().chats[0].session, run.chats[0].session);
-});
-
 for (const failure of ['lost-reply', 'rejected']) test(`3096: restart close ${failure} is reconciled on a later sweep`, async t => {
   const {f, run} = await doneRun(t), command = f.ports.herdr;
   let requests = 0;

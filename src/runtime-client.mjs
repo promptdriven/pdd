@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 8e86e6184c2b5fc7249f72986e244daf98d3b397bf7234b424b97f2534f08424).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 37ad530ce7c49f63b5cb2145c8246173f8600afd95fc8846209f19e6d7a43e77).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
@@ -446,7 +446,7 @@ export function createSavedStoryEvidenceReader(ports = {}) {
   return input => readSavedStoryEvidence(input, ports, captures);
 }
 
-async function readSavedStoryEvidence({ root, comparisonRoot = root }, ports, captures) {
+async function readSavedStoryEvidence({ root, comparisonRoot = root, withTests = false, anyRoot = false, limit = null }, ports, captures) {
   const env = ports.env ?? process.env;
   const read = ports.readFile ?? (path => readFileSync(path, 'utf8'));
   const list = ports.readDir ?? (path => readdirSync(path));
@@ -456,21 +456,22 @@ async function readSavedStoryEvidence({ root, comparisonRoot = root }, ports, ca
   const warning = (path, error) => warnings.push(`Could not read saved checks ${path} (${cleanText(error?.code ?? error?.message ?? 'invalid record')}).`);
   const legacyHint = () => warnings.push('Older checks are not counted; run pdd test again.');
   const real = async path => { try { return await canonical(path); } catch { return resolve(path); } };
-  const wanted = await real(root);
+  const wanted = anyRoot ? null : await real(root);
   const directory = join(resolve(env.PDD_STATE_DIR || join(env.HOME || homedir(), '.pdd', 'runtime')), 'batches');
   const relativeFile = path => typeof path === 'string' && path.length > 0 && !path.startsWith('/') && !path.includes('\\')
     && path.split('/').every(part => part && part !== '.' && part !== '..');
   let names;
   try { names = await list(directory); }
   catch (error) { if (error.code !== 'ENOENT') warning(directory, error); return { stories, warnings }; }
-  for (const name of names.filter(name => typeof name === 'string' && BATCH.test(name)).sort()) {
+  const all = names.filter(name => typeof name === 'string' && BATCH.test(name)).sort();
+  for (const name of Number.isSafeInteger(limit) && limit > 0 ? all.slice(-limit) : all) {
     const folder = join(directory, name), path = join(folder, 'batch.json');
     let batch;
     try {
       batch = JSON.parse(await read(path));
       if (!isObject(batch) || batch.version !== 1 || batch.batch !== name || typeof batch.root !== 'string' || !Array.isArray(batch.rows)) throw Error('invalid batch');
     } catch (error) { warning(path, error); continue; }
-    if (await real(batch.root) !== wanted) continue;
+    if (!anyRoot && await real(batch.root) !== wanted) continue;
     const legacy = !Object.hasOwn(batch, 'intent');
     if (batch.intent !== 'check') {
       if (!legacy) continue;
@@ -499,12 +500,19 @@ async function readSavedStoryEvidence({ root, comparisonRoot = root }, ports, ca
         current = source.sha256 === batch.source_sha256;
       } catch (error) { warning(path, error); }
     }
-    const selected = new Map(), sent = new Map(), grouped = new Map();
+    const selected = new Map(), sent = new Map(), grouped = new Map(), extra = new Map();
+    // withTests: the failed checks, refusals and states of each Story's rows, and the rows that were never sent.
+    const note = (story, add) => { const was = extra.get(story) ?? { failed: 0, failedSteps: [], refusals: [], states: [], codes: [], fixes: [], sent: false }; extra.set(story, add(was)); };
+    const codesOf = list => Array.isArray(list) ? list.map(item => item?.code).filter(code => typeof code === 'string') : [];
+    const fixesOf = list => Array.isArray(list) ? list.map(item => item?.fix).filter(fix => typeof fix === 'string' && fix.trim()) : [];
     for (const row of rows) {
       if (!selected.has(row.story)) selected.set(row.story, new Set());
       selected.get(row.story).add(row.test);
     }
     for (const row of rows) {
+      note(row.story, was => ({ ...was, refusals: [...new Set([...was.refusals, ...codesOf(row.refusals)])], fixes: [...new Set([...was.fixes, ...fixesOf(row.refusals)])],
+        states: [...new Set([...was.states, ...(typeof row.recovery_state === 'string' ? [row.recovery_state] : [])])],
+        codes: [...new Set([...was.codes, ...(typeof row.reason?.code === 'string' ? [row.reason.code] : [])])], sent: was.sent || row.request_ids.length > 0 }));
       if (!row.request_ids.length) continue;
       if (!sent.has(row.story)) sent.set(row.story, new Set());
       sent.get(row.story).add(row.test);
@@ -516,6 +524,10 @@ async function readSavedStoryEvidence({ root, comparisonRoot = root }, ports, ca
           const answer = JSON.parse(await read(receiptPath));
           if (answer?.requestId === id && answer.id === id && answer.command === 'check') {
             const view = projectAnswer(answer, { origin: batch.origin, steps: row.steps ?? [], criterionTexts: row.criterion_texts ?? {}, test: row.test });
+            const failedChecks = Array.isArray(view.failed_checks) ? view.failed_checks : [];
+            note(row.story, was => ({ ...was, failed: was.failed + failedChecks.length,
+              failedSteps: [...new Set([...was.failedSteps, ...failedChecks.map(check => check?.step_id).filter(step => typeof step === 'string' && step)])].slice(0, 10),
+              refusals: [...new Set([...was.refusals, ...codesOf(view.refusals)])], fixes: [...new Set([...was.fixes, ...fixesOf(view.refusals)])] }));
             let authored = Object.keys(row.criterion_texts ?? {});
             if (legacy) {
               const fromChecks = [...new Set(row.steps.flatMap(step => step.checks.map(check => check.criterion_id)))];
@@ -537,13 +549,81 @@ async function readSavedStoryEvidence({ root, comparisonRoot = root }, ports, ca
       const previous = grouped.get(row.story);
       grouped.set(row.story, { story: row.story, pass: pass && (previous?.pass ?? true), current, result: 'no verdict', at: Math.max(previous?.at ?? at, at) });
     }
+    // withTests: pdd's own fix texts of a Story's refusals (its saved warnings, then each refusal's fix).
+    const advised = story => {
+      const { fixes, ...info } = extra.get(story), tests = [...selected.get(story)];
+      const warned = (Array.isArray(batch.warnings) ? batch.warnings : []).filter(text => typeof text === 'string'
+        && tests.some(test => text.startsWith(`Warning: ${test} `)) && info.refusals.some(code => text.includes(code)));
+      return { ...info, advice: [...new Set([...warned, ...fixes])].slice(0, 3).map(text => text.slice(0, 800)) };
+    };
     for (const row of grouped.values()) {
       if (row.pass && sent.get(row.story).size !== selected.get(row.story).size) continue;
       if (row.pass) row.result = '✓';
-      stories.push(row);
+      stories.push(withTests ? { ...row, tests: [...selected.get(row.story)].sort(), ...advised(row.story), sent: true } : row);
+    }
+    // withTests: a Story whose tests were never sent (refused before execution, interrupted) is listed too.
+    if (withTests) for (const story of extra.keys()) if (!grouped.has(story)) {
+      const at = Math.max(0, ...rows.filter(row => row.story === story).map(row => Number.isFinite(row.ended_at) ? row.ended_at : Date.parse(batch.created_at) || 0));
+      stories.push({ story, pass: false, current, result: 'not sent', at, tests: [...selected.get(story)].sort(), ...advised(story), sent: false });
     }
   }
   return { stories, warnings: [...new Set(warnings)] };
+}
+
+// Autopilot (#3241, rule B5): the Stories of root whose latest saved check can be sent once more. neverSent: no request
+// ID, not run, no refusal, no local unsent mark, no access gate (held in maintenance, busy, stopped before sending).
+// noVerdict: sent, and its saved answer ended with no verdict and no failed check (an AI provider failure). failed: a
+// check failed (never sent again). A check that is still open, or whose answer was not saved, is in none of them.
+// Local reads only, like savedStoryEvidence.
+export async function resendableStoryChecks({ root, since = 0 }, ports = {}) {
+  const env = ports.env ?? process.env;
+  const read = ports.readFile ?? (path => readFileSync(path, 'utf8'));
+  const list = ports.readDir ?? (path => readdirSync(path));
+  const canonical = ports.realpath ?? realpathSync;
+  const real = async path => { try { return await canonical(path); } catch { return resolve(path); } };
+  const wanted = await real(root), directory = join(resolve(env.PDD_STATE_DIR || join(env.HOME || homedir(), '.pdd', 'runtime')), 'batches');
+  const empty = { stories: [], neverSent: [], noVerdict: [], failed: [], maintenance: false };
+  let names;
+  try { names = await list(directory); } catch { return empty; }
+  const latest = new Map();
+  for (const name of names.filter(name => typeof name === 'string' && BATCH.test(name)).sort()) {
+    let batch;
+    try { batch = JSON.parse(await read(join(directory, name, 'batch.json'))); } catch { continue; }
+    if (!isObject(batch) || batch.batch !== name || batch.intent !== 'check' || typeof batch.root !== 'string' || !Array.isArray(batch.rows)) continue;
+    if (since > 0 && !(Date.parse(batch.created_at) >= since) || await real(batch.root) !== wanted) continue;
+    const files = Array.isArray(batch.files) ? batch.files : [];
+    const storyOf = row => typeof row?.story !== 'string' ? null : row.story.endsWith('.md') ? row.story
+      : (found => found.length === 1 ? found[0] : null)([...new Set(files.filter(file => typeof file === 'string' && file.endsWith('.md') && basename(file, '.md') === row.story))]);
+    // One row: never (never sent), sent-pass, failed, noVerdict (a saved answer with no verdict and no failed check), or other.
+    const kind = async row => {
+      const ids = Array.isArray(row.request_ids) ? row.request_ids : [];
+      if (!ids.length) return row.recovery_state === 'not_run' && !(Array.isArray(row.refusals) && row.refusals.length) && !row.unsent && row.note?.code !== 'blocked' ? 'never' : 'other';
+      if (row.recovery_state === 'passed') return 'pass';
+      if (row.recovery_state === 'failed') return 'failed';
+      const id = ids.at(-1);
+      let answer = null;
+      try { answer = typeof id === 'string' && UUID.test(id) ? JSON.parse(await read(join(directory, name, `${id}.json`))) : null; } catch { answer = null; }
+      if (!sameJob(answer, id, 'check')) return 'other';
+      const view = projectAnswer(answer, { origin: batch.origin, steps: row.steps ?? [], criterionTexts: row.criterion_texts ?? {}, test: row.test });
+      if (answer.state === 'failed' || view.failed_checks?.length) return 'failed';
+      return answer.state === 'unknown' ? 'noVerdict' : 'other';
+    };
+    const seen = new Map();
+    for (const row of batch.rows) {
+      const story = storyOf(row);
+      if (!story) continue;
+      const k = await kind(row), was = seen.get(story) ?? { kinds: [], notes: [] };
+      seen.set(story, { kinds: [...was.kinds, k], notes: k === 'never' ? [...was.notes, String(row.note?.message ?? '')] : was.notes });
+    }
+    for (const [story, { kinds, notes }] of seen) {
+      const state = kinds.includes('failed') ? 'failed' : kinds.includes('other') ? 'other' : kinds.includes('never') ? 'never' : kinds.includes('noVerdict') ? 'noVerdict' : 'pass';
+      latest.set(story, { state, notes });
+    }
+  }
+  const of = state => [...latest].filter(([, row]) => row.state === state).map(([story]) => story).sort();
+  const neverSent = of('never'), noVerdict = of('noVerdict');
+  return { stories: [...neverSent, ...noVerdict].sort(), neverSent, noVerdict, failed: of('failed'),
+    maintenance: neverSent.some(story => latest.get(story).notes.some(note => /maintenance/i.test(note))) };
 }
 
 class StateStore {
@@ -761,7 +841,9 @@ export async function checkRuntimeHealth({ env = process.env } = {}, givenPorts 
   if (reply.status >= 500 || [408, 429].includes(reply.status)) return { state: 'unavailable', detail: `HTTP ${reply.status}` };
   if (reply.status === 200 && isObject(reply.json)) {
     const until = Date.parse(reply.json.maintenance?.until);
-    return Number.isFinite(until) && until > ports.now() ? { state: 'unavailable', detail: 'maintenance' } : { state: 'healthy', detail: 'HTTP 200' };
+    // A maintenance answer names its end and reason, so the Autopilot core can wait for it (#3241).
+    return Number.isFinite(until) && until > ports.now() ? { state: 'unavailable', detail: 'maintenance', until: new Date(until).toISOString(), reason: cleanText(reply.json.maintenance?.reason, [token]) || null }
+      : { state: 'healthy', detail: 'HTTP 200' };
   }
   // An older interpreter without the capacity read still answered with JSON; a 404 page that is not JSON is a wrong address.
   if (reply.status === 404 && isObject(reply.json)) return { state: 'healthy', detail: 'HTTP 404' };
@@ -3060,7 +3142,14 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
         const exitCode = report.passed ? 0 : 1;
         line(ports.stdout, context.json ? JSON.stringify({ ...report, exit_code: exitCode }) : formatScreenComparison(report));
         return exitCode;
-      } catch (error) { throw new Stop(error.exitCode === 2 ? 2 : 5, `Screen comparison: ${causeText(error.message) || 'browser execution failed'}`); }
+      } catch (error) {
+        if (error.code === 'screen-not-ready' && error.exitCode === 6) {
+          const result = { drawing: resolve(cwd, options['--drawing']), url: new URL(options['--screen']).href, outcome: 'not-ready', code: error.code, state: error.state, reason: error.reason, message: error.message, exit_code: 6 };
+          line(ports.stdout, context.json ? JSON.stringify(result) : `Screen not ready (${result.state}; ${result.reason}): ${result.message}`);
+          return 6;
+        }
+        throw new Stop(error.exitCode === 2 ? 2 : 5, `Screen comparison: ${causeText(error.message) || 'browser execution failed'}`);
+      }
     }
     if (options['--local'] !== undefined) {
       if (options['--local'] !== true || options['--lint'] !== true || Object.keys(options).some(name => !['--lint', '--local', '--json'].includes(name))) throw new Stop(2, '--local requires --lint and accepts only Story words and --json.');

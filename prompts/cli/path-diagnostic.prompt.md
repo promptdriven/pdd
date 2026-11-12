@@ -12,5 +12,5 @@ For a conflict (the selected executable differs, or another distinct pdd is pres
 
 ## Dependencies
 
-- Read the full [Prompting guide](../../docs/prompting-guide.md) before authoring. The [CLI](pdd-cli.prompt.md) owns dispatch and output streams.
+- Read the full [Prompting guide](../../docs/prompting-guide.md) before authoring. Navigation only: the [CLI](pdd-cli.prompt.md) owns dispatch and output streams.
 - Runtime: Node filesystem, child-process and path primitives provide local discovery and bounded version probes. Package metadata and `bin/pdd.mjs` identify the running pdd.

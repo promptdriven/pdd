@@ -1,4 +1,4 @@
-// Generated from prompts/cli/product-composition.prompt.md (sha256: 3f009afef4de00831d7f35b3215fce80ca68f836c32579187fd3da0ac95ff955).
+// Generated from prompts/cli/product-composition.prompt.md (sha256: 3bff92f7915a64c79f6f3afecee8710b138680b1ac87a472880fccd64a9c8c72).
 import { basename, join } from 'node:path';
 import { checkInput, interfaceBlocks, PreflightError, selectTests } from './runtime-preflight.mjs';
 import { parseProductDocuments, parseProductWorldWriters } from './product.mjs';

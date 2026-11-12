@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-github.prompt.md (sha256: baf589cc7861bba0f250337310433876145627f5bf804ee4d0f1ad1f3300d492).
+// Generated from prompts/cli/autopilot-github.prompt.md (sha256: c3a04c94ba4680979de2771a4506e1f1fb562044c8352af28b9ecc91e5d3c1a3).
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -318,9 +318,9 @@ export async function checkAutopilotSettings({ cwd } = {}, ports = {}) {
     const differ = !sameSettings(remote, local);
     if (!differ && !pull) return { state: 'same', message: '' };
     const parts = [];
-    if (differ) parts.push(`pdd.json on GitHub (${clean(defaultBranch)}) has other Autopilot settings (GitHub: ${settings(remote)}; this checkout: ${settings(local)}). Autopilot workers use the GitHub copy.`);
-    if (pull) parts.push(`The settings PR ${clean(pull.html_url)} is open: Autopilot workers use its change only after the merge.`);
-    if (differ) parts.push(`To change the GitHub copy, run ${commands(remote, local).join(' and ')}.`);
+    if (differ) parts.push(`pdd.json on GitHub (${clean(defaultBranch)}) has other Autopilot settings (GitHub: ${settings(remote)}; this checkout: ${settings(local)}). Autopilot on this machine uses this checkout's settings (and this machine's --mode and --label, when set); other machines and people read the GitHub copy.`);
+    if (pull) parts.push(`The settings PR ${clean(pull.html_url)} is open: the GitHub copy changes only after the merge.`);
+    if (differ) parts.push(`To put this checkout's settings on GitHub, run ${commands(remote, local).join(' and ')}.`);
     return { state: 'different', message: `Warning: ${parts.join(' ')}` };
   } catch { return { state: 'unknown', message: '' }; }
 }

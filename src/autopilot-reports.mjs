@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-reports.prompt.md (sha256: 46fab7339a610e6db4eeed0004e5d7ebf8a417269d251c23d94c7d91929f337b).
+// Generated from prompts/cli/autopilot-reports.prompt.md (sha256: 1ae5b3fbf1cf59b48c91ac97d87f9f996d3ebcbfaad27ad366a743755224ea17).
 import * as nativeFs from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -40,7 +40,10 @@ function publicReport(draft) {
   const name = f.kind === 'runtime' ? 'Runtime' : 'PDD';
   const title = `Autopilot report: ${name} ${f.component} ${f.code} (PDD ${minor(f.versions.pdd)})`;
   const body = [f.code === 'adopt-pdd' ? 'Autopilot changed existing code that no prompt owns (path e, a direct change with a regression test). Please adopt PDD for those modules (the local draft on the Autopilot machine lists them): give each one a prompt and a binding or header.'
+    : draft.shipped === true && f.code === 'vector-replay' && f.component === 'autopilot-core' ? 'Autopilot could not run the replay or formal tests of one PR. The PR went on, with that claim marked as not checked in its merge note.'
     : draft.shipped === true ? 'Autopilot shipped one PR with "Runtime: not run" because Runtime could not check it. The job did not wait for a fix.'
+    : draft.stopped === true && f.code === 'stop-loop' ? 'Autopilot holds one issue: its own steps or a service stopped 3 jobs of it in 24 hours. The issue gets no strike; Autopilot takes it again after a new engine version or a person\'s comment on it.'
+    : draft.stopped === true ? 'Autopilot stopped one of its own steps for one job: it made no progress. The issue gets no strike, and Autopilot tries again later.'
     : `Autopilot ended one job because of a ${name} problem. The job did not wait for a fix.`, '',
     `- Kind: ${f.kind}`, `- Component: ${f.component}`, `- Error code: ${f.code}`, `- Step: ${f.step}`,
     `- Versions: PDD ${known(f.versions.pdd)}, Node ${known(f.versions.node)}, ${known(f.versions.platform)}, agent ${known(f.versions.agent)}`,
@@ -54,7 +57,7 @@ function draftFor({ cause, versions, step, words, runtimeRepo, runtimeOwner }) {
   const kind = cause.kind === 'runtime' ? 'runtime' : 'pdd';
   const draft = { fingerprint, kind, component: slug(cause.component) || 'unknown', code: slug(cause.code) || 'unknown', step: slug(step) || 'unknown',
     versions: { pdd: versions.pdd ?? null, node: versions.node ?? null, platform: versions.platform ?? null, agent: versions.agent ?? null },
-    ...(cause.shipped === true ? { shipped: true } : {}), ...(runtimeRepo ? { runtimeRepo } : {}), ...(LOGIN.test(String(runtimeOwner ?? '')) ? { runtimeOwner } : {}),
+    ...(cause.shipped === true ? { shipped: true } : {}), ...(cause.stopped === true ? { stopped: true } : {}), ...(runtimeRepo ? { runtimeRepo } : {}), ...(LOGIN.test(String(runtimeOwner ?? '')) ? { runtimeOwner } : {}),
     repository: REPORT_REPOSITORY, labels: [LABELS[kind]], detail: safeTail(cause.detail || cause.text, words) || '' };
   return { ...draft, ...publicReport(draft) };
 }
@@ -130,18 +133,18 @@ export function reportKind(cause) {
   return PDD_OWNED.test(`${slug(cause.component)} ${slug(cause.code)}`) || !RUNTIME_CODES.has(stableCode(cause.code)) ? 'pdd' : 'runtime';
 }
 // Stable fingerprints: an agent writes the code and the component as free text, so each is mapped to a fixed word.
-const CODES = [['merge-check-tool', /^merge-check-tool$/], ['suite-broken', /^suite-broken$/], ['adopt-pdd', /^adopt-pdd$/], ['no-verdict', /verdict/],
+const CODES = [['merge-check-tool', /^merge-check-tool$/], ['suite-broken', /^suite-broken$/], ['adopt-pdd', /^adopt-pdd$/], ['no-verdict', /verdict/], ['maintenance', /maintenance/],
   ['scenario-limit', /scenario|safe-integer|integer-out-of-range|out-of-range/], ['vector-replay', /vector|replay/], ['runtime-case', /runtime-case|test-case/],
   ['lint-refusal', /lint/], ['interface-refusal', /interface/], ['binding-refusal', /binding/], ['input-refusal', /refus|reject/], ['interpreter-error', /interpreter/],
   ['server-internal', /server-internal|internal-server|server-error|(?:^|-)5\d\d(?:-|$)|unavailable|bad-gateway/], ['server-incompatible', /server|compat/], ['crash', /crash|panic|segfault|exception/], ['claim-error', /claim/], ['not-run', /not-run/],
-  ['timeout', /timeout|timed-out/], ['cli-error', /cli|command|usage|exit|failed|error/]];
+  ['base-check', /^base-check$/], ['step-quiet', /^step-quiet$/], ['stop-loop', /^stop-loop$/], ['timeout', /timeout|timed-out/], ['cli-error', /cli|command|usage|exit|failed|error/]];
 // An unknown code is other-HASH of the step and the error class (the code slug with no digits) only, never of the
 // agent's text, so one cause is one report; at most one new "other" report per machine per day.
 export const stableCode = (code, step = '') => CODES.find(([, test]) => test.test(slug(code)))?.[0]
   ?? `other-${createHash('sha256').update(`${slug(step)}:${slug(code).replace(/\d+/g, '')}`).digest('hex').slice(0, 8)}`;
 // Runtime kind is only what happens inside Runtime; every other cause (a refusal of our input, scenario limits, test
 // vectors, the pdd command, the core) is a PDD report.
-export const RUNTIME_CODES = new Set(['no-verdict', 'interpreter-error', 'server-incompatible', 'server-internal']);
+export const RUNTIME_CODES = new Set(['no-verdict', 'maintenance', 'interpreter-error', 'server-incompatible', 'server-internal']);
 const COMPONENTS = [['autopilot-core', /autopilot|core/], ['pdd-lint', /lint/], ['pdd-approve', /approve/], ['pdd-workflow', /workflow/],
   ['pdd-test', /test|runtime|interpreter|verdict|scenario|vector/], ['pdd', /pdd/], ['agent', /agent|codex|claude/]];
 export const stableComponent = component => COMPONENTS.find(([, test]) => test.test(slug(component)))?.[0] ?? 'other';

@@ -7,7 +7,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { captureSource, checkInput, fillHashes, findTests, preflight, readPrompt } from '../src/runtime-preflight.mjs';
-import { parseScenarioJson } from '../src/scenario-json.mjs';
+import { parseScenarioJson, roundedNumberTokens } from '../src/scenario-json.mjs';
 import { runCheck } from '../src/runtime-client.mjs';
 import { interfaceBlocks, proseSha256 } from '../src/runtime-preflight.mjs';
 import { harbor, PLACE, sink } from './runtime-fake.mjs';
@@ -218,4 +218,29 @@ test('LI10: a native-only test with a whole number above 2^53 keeps the state an
   assert.equal(large.rows[0].state, 'not run');
   assert.equal(large.rows[0].reason.code, 'native-only');
   assert.deepEqual(large, plain);
+});
+
+test('T02 (#3150 advice): for 2^53 <= n < 1e21 the advice offers an exponent spelling that reads back as n and that today\'s refusal rule admits', async t => {
+  const { exactNumberSpelling } = await import('../src/runtime-preflight.mjs');
+  // Today's interpreter rule (prompt_runtime/program_scenario.py _validate_scenario_integers): an integer literal (no
+  // fraction, no exponent) outside +-(2^53 - 1) is refused; a token with a fraction or exponent is a float and passes.
+  const refusedToday = token => /^-?(?:0|[1-9][0-9]*)$/.test(token) && (BigInt(token) > 2n ** 53n - 1n || BigInt(token) < -(2n ** 53n - 1n));
+  for (const n of [2 ** 53, 2 ** 60, 2 ** 69, 1e20, 999999999999999900000, 1e21, 2 ** 80, Number(LARGE), -(2 ** 60)]) {
+    const spelling = exactNumberSpelling(n);
+    assert.ok(spelling, `a spelling for ${n}`);
+    assert.equal(Number(spelling), n, `${spelling} reads back as ${n}`);
+    assert.equal(refusedToday(spelling), false, `${spelling} is admitted today`);
+    assert.match(spelling, /e/, 'never plain digits');
+    assert.deepEqual(roundedNumberTokens(`{"v": ${spelling}}`), [], `${spelling} gives no rounding warning`);
+  }
+  assert.equal(exactNumberSpelling(2 ** 60), '1.152921504606847e+18');
+  assert.equal(String(2 ** 60), '1152921504606847000', 'the old advice: plain digits, refused today');
+  assert.equal(refusedToday(String(2 ** 60)), true);
+  // The warning itself offers the exponent spelling for 2^60.
+  const two60 = '1152921504606846976';
+  const f = repo(t, { scenario: scenarioText({ large: two60 }) });
+  fillHashes({ root: f.root }); const found = findTests({ root: f.root });
+  const warning = preflight({ root: f.root, found, selected: found.tests }).warnings.find(line => line.includes(`steps[0].input.seconds is ${two60},`));
+  assert.ok(warning?.includes('write its exact Number spelling 1.152921504606847e+18;'), warning);
+  assert.doesNotMatch(warning, /spelling 1152921504606847000/);
 });
