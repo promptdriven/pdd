@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-ci-jobs.prompt.md (sha256: 95e9b8042ea3e053f6090d08eb0335e75928d08f2f721b5310f02fd2477e9c8d).
+// Generated from prompts/cli/autopilot-ci-jobs.prompt.md (sha256: 551ba625fe52d11df842725eab4d907e531e4a6e62b4e7dd0c2125e8995a204b).
 import * as nativeFs from 'node:fs';
 import { join, isAbsolute } from 'node:path';
 import { redactSecrets } from './secret-redaction.mjs';
@@ -302,6 +302,20 @@ function words(command) {
   if (cur || has) out.push(cur);
   return out;
 }
+// The words of a command as written (quotes kept), for a file word that the shell must expand the same way.
+function rawWords(command) {
+  const out = []; let cur = '', q = null;
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i];
+    if (q) { cur += c; if (c === q) q = null; else if (c === '\\' && q === '"' && i + 1 < command.length) cur += command[++i]; continue; }
+    if (c === "'" || c === '"') { q = c; cur += c; continue; }
+    if (c === '\\' && i + 1 < command.length) { cur += c + command[++i]; continue; }
+    if (/\s/.test(c)) { if (cur) out.push(cur); cur = ''; continue; }
+    cur += c;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
 // Lines joined after a final "\", here-document bodies kept with their command, blank and comment lines gone.
 function commandLines(script) {
   const raw = String(script).split(/\r?\n/), out = [];
@@ -366,6 +380,22 @@ function changesState(command) {
     i = j;
   }
   return false;
+}
+// The files that suite commands write their output to: output redirections and tee files ({raw, text}).
+function outputsOf(parts) {
+  const found = [];
+  for (const part of parts) {
+    const [first, ...rest] = splitPipes(part), w = rawWords(first);
+    for (let i = 0; i < w.length; i++) {
+      const m = /^(?:\d*|&)>>?\|?(.*)$/.exec(w[i]);
+      if (!m) continue;
+      const raw = m[1] || w[i + 1] || '';
+      if (!m[1]) i++;
+      if (!raw.startsWith('&')) found.push(raw);
+    }
+    for (const segment of rest) { const t = rawWords(segment); if (t[0] === 'tee') found.push(...t.slice(1).filter(word => !word.startsWith('-'))); }
+  }
+  return found.map(raw => ({ raw, text: words(raw)[0] ?? '' })).filter(file => file.text && !NO_STATE.has(file.text));
 }
 const isInstall = v => (v[0] === 'npm' && ['ci', 'install', 'i'].includes(v[1])) || (v[0] === 'pnpm' && ['install', 'i'].includes(v[1]))
   || (v[0] === 'yarn' && (v[1] === 'install' || v.slice(1).every(word => word.startsWith('-'))));
@@ -607,12 +637,25 @@ function sortEntry(job, wf, entry, ctx) {
     if (s.reason) return { reason: s.reason };
     sorted.push(s);
   }
-  // A suite step that writes files runs locally too when a later step runs locally: the later step may read them.
-  sorted.forEach((s, i) => { if (s.kind === 'suite' && s.writes && sorted.slice(i + 1).some(later => later.kind === 'real')) s.kind = 'real'; });
-  const steps = sorted.filter(s => s.kind === 'real').map(s => s.step), parts = sorted.filter(s => s.kind === 'suite').flatMap(s => s.parts);
-  const suite = parts.length > 0;
-  if (steps.length) return { kind: 'local', suite, steps, commands: steps.map(step => step.script), why: `runs ${steps.length} command(s) that Autopilot can run on this machine${suite ? ', and the full test command' : ''}` };
-  return { kind: 'covered', suite, steps: [], commands: parts, why: suite ? `runs only the full test command (${ctx.testCommand})` : 'runs only setup steps' };
+  // A covered suite step never runs again. When later steps run locally, a copy step puts Autopilot's suite log in the
+  // files that the suite step writes, and a later step that only reads them is a report step.
+  const steps = [], parts = [], files = [];
+  sorted.forEach((s, i) => {
+    if (s.kind === 'suite') {
+      parts.push(...s.parts);
+      const out = outputsOf(s.parts);
+      if (out.length && sorted.slice(i + 1).some(later => later.kind === 'real')) steps.push({ ...s.step, name: `${s.step.name} (covered: the full suite log is copied to its output)`, script: null, copy: out.map(file => file.raw) });
+      files.push(...out);
+    } else if (s.kind === 'real') {
+      const report = files.some(file => s.step.script.includes(file.text)) && commandLines(s.step.script).flatMap(splitCommands).filter(Boolean).every(command => !changesState(command));
+      steps.push(report ? { ...s.step, report: true } : s.step);
+    }
+  });
+  const suite = parts.length > 0, own = steps.filter(step => !step.copy && !step.report).length, reports = steps.filter(step => step.report).length;
+  if (!suite && steps.length) return { kind: 'local', suite, steps, commands: steps.map(step => step.script), why: `runs ${steps.length} command(s) that Autopilot can run on this machine` };
+  const why = !suite ? 'runs only setup steps' : !steps.length ? `runs only the full test command (${ctx.testCommand})`
+    : `runs the full test command (${ctx.testCommand}) and ${own} more step(s) that Autopilot can run on this machine${reports ? `, and ${reports} report step(s) on the suite log` : ''}`;
+  return { kind: 'covered', suite, steps, commands: parts, why };
 }
 function sortJob(file, wf, id, job, ctx, on) {
   const workflow = file.name, title = typeof wf.name === 'string' && wf.name.trim() ? wf.name.trim() : workflow;
@@ -687,7 +730,8 @@ export function ciJobsSummary(jobs = []) {
   const count = kind => jobs.filter(job => job.kind === kind).length, ciOnly = jobs.filter(job => job.kind === 'ci-only');
   const needs = [...new Set(ciOnly.map(job => text(job.need) || 'unknown'))];
   const shown = `${needs.slice(0, 4).join(', ')}${needs.length > 4 ? `, and ${needs.length - 4} more` : ''}`;
-  return `CI: ${count('covered')} covered, ${count('local')} local, ${ciOnly.length} CI-only${ciOnly.length ? ` (${shown})` : ''}`;
+  const extra = jobs.filter(job => job.kind === 'covered').reduce((sum, job) => sum + (job.steps ?? []).filter(step => !step.copy && !step.report).length, 0);
+  return `CI: ${count('covered')} covered${extra ? ` (+${extra} local step${extra === 1 ? '' : 's'})` : ''}, ${count('local')} local, ${ciOnly.length} CI-only${ciOnly.length ? ` (${shown})` : ''}`;
 }
 
 // ---- Read the base tip ----------------------------------------------------------------------------------
@@ -739,11 +783,14 @@ const SHELL_ARGS = { bash: ['--noprofile', '--norc', '-eo', 'pipefail'], sh: ['-
 // A check name that another entry shares gets the job id and the matrix values, so each line names one job.
 const labelOf = job => !job.duplicate || !job.job ? job.check
   : `${job.check} (job ${job.job}${object(job.matrix) && Object.keys(job.matrix).length ? `, ${Object.entries(job.matrix).map(([key, value]) => `${key} ${text(value)}`).join(', ')}` : ''})`;
-export function localJobPlan({ jobs = [], head, base = null, checkout, temp, machine = {} } = {}) {
+const planned = job => ['local', 'covered'].includes(job.kind) && Array.isArray(job.steps) && job.steps.length > 0;
+export function localJobPlan({ jobs = [], head, base = null, checkout, temp, suiteLog = null, machine = {} } = {}) {
   if (!SHA.test(String(head ?? ''))) throw new TypeError('head must be 40 hex digits');
   if (!isAbsolute(String(checkout ?? '')) || !isAbsolute(String(temp ?? ''))) throw new TypeError('checkout and temp must be absolute paths');
+  const list = jobs.filter(planned);
+  if (list.some(job => job.steps.some(step => step.copy)) && !isAbsolute(String(suiteLog ?? ''))) throw new TypeError('suiteLog must be the absolute path of the full suite log');
   const os = familyOf(machine?.platform ?? process.platform);
-  return jobs.filter(job => job.kind === 'local').map((entry, index) => {
+  return list.map((entry, index) => {
     const folder = join(temp, `job-${index + 1}`), values = object(entry.matrix) ? entry.matrix : {};
     const env = { CI: 'true', GITHUB_WORKSPACE: checkout, GITHUB_SHA: head, ...(typeof base === 'string' && base ? { GITHUB_BASE_REF: base } : {}),
       RUNNER_TEMP: join(folder, 'runner-temp'), GITHUB_STEP_SUMMARY: join(folder, 'step-summary.md'), GITHUB_OUTPUT: join(folder, 'output') };
@@ -759,8 +806,15 @@ export function localJobPlan({ jobs = [], head, base = null, checkout, temp, mac
     });
     const steps = (entry.steps ?? []).map(step => {
       const raw = object(step.env) ? step.env : {}, own = Object.fromEntries(Object.entries(raw).map(([name, value]) => [name, fill(value, raw)]));
+      const cwd = step.workingDirectory && step.workingDirectory !== '.' ? join(checkout, step.workingDirectory) : checkout;
+      if (step.copy) {
+        // The covered suite step's output files get Autopilot's saved suite log (the file words as written).
+        const script = step.copy.map(file => fill(file, own)).map(file => `mkdir -p -- "$(dirname -- ${file})" && cp -- "$PDD_SUITE_LOG" ${file}`).join('\n');
+        const copied = { ...own, PDD_SUITE_LOG: suiteLog };
+        return { name: fill(step.name, own), command: 'bash', args: ['-e', '-c', script], cwd, env: { ...env, ...copied }, own: copied, copy: true };
+      }
       const command = step.shell === 'sh' ? 'sh' : 'bash';
-      return { name: fill(step.name, own), command, args: [...SHELL_ARGS[step.shell ?? 'default'], '-c', fill(step.script, own)], cwd: step.workingDirectory && step.workingDirectory !== '.' ? join(checkout, step.workingDirectory) : checkout, env: { ...env, ...own }, own };
+      return { name: fill(step.name, own), command, args: [...SHELL_ARGS[step.shell ?? 'default'], '-c', fill(step.script, own)], cwd, env: { ...env, ...own }, own, ...(step.report ? { report: true } : {}) };
     });
     const lines = [`mkdir -p ${quote(env.RUNNER_TEMP)} || exit 1`, `: > ${quote(env.GITHUB_STEP_SUMMARY)}; : > ${quote(env.GITHUB_OUTPUT)}`];
     steps.forEach((step, i) => {
@@ -771,7 +825,7 @@ export function localJobPlan({ jobs = [], head, base = null, checkout, temp, mac
     });
     lines.push(`echo ${quote(`pdd-ci-local: all ${steps.length} steps passed`)}`);
     return { key: entry.key, label: labelOf(entry), workflow: entry.workflow, job: entry.job, check: entry.check, head, cwd: checkout, env, command: lines.join('\n'),
-      steps: steps.map(({ own, ...step }) => step) };
+      steps: steps.map(({ own, ...step }) => step), reports: steps.filter(step => step.report).map(step => step.name) };
   });
 }
 export function localJobResult(entry, run) {
@@ -801,11 +855,15 @@ const resultOf = record => { const rows = new Map(); for (const row of record?.j
 export function ciMergeNote({ jobs = [], record = null, notStarted = null } = {}) {
   const reason = notStarted?.reason === 'billing' ? `GitHub said "${oneLine(notStarted.message, 200)}"`
     : notStarted?.reason === 'queued' && Number.isFinite(notStarted.since) ? `queued since ${new Date(notStarted.since).toISOString().slice(11, 16)} UTC` : 'reason unknown';
-  const covered = jobs.filter(job => job.kind === 'covered' || (job.kind === 'local' && job.suite)).map(job => job.check);
+  const covered = jobs.filter(job => job.kind === 'covered').map(job => job.check);
   const lines = [`- CI: did not start (${reason})${covered.length ? `; covered by the local full suite: ${covered.join(', ')}` : ''}`], result = resultOf(record);
   for (const job of jobs) {
     const label = labelOf(job);
-    if (job.kind === 'local') {
+    if (job.kind === 'covered' && job.steps?.length) {
+      const r = result(job), names = job.steps.filter(step => step.report).map(step => `"${step.name}"`);
+      const state = r?.state === 'pass' ? 'local pass' : r?.state === 'fail' ? `local fail (step "${r.step ?? 'unknown'}", exit ${r.exit})` : `not run yet (CI did not start; ${r?.why ?? 'no local result'})`;
+      lines.push(`- CI job ${label}: the full suite is covered; the other steps: ${state}${names.length ? ` (report steps on the suite log: ${names.join(', ')})` : ''}`);
+    } else if (job.kind === 'local') {
       const r = result(job);
       lines.push(r?.state === 'pass' ? `- CI job ${label}: local pass` : r?.state === 'fail' ? `- CI job ${label}: local fail (step "${r.step ?? 'unknown'}", exit ${r.exit})`
         : `- CI job ${label}: not run yet (CI did not start; ${r?.why ?? 'no local result'})`);
@@ -820,7 +878,7 @@ export function ciMergeNote({ jobs = [], record = null, notStarted = null } = {}
 // ---- Missed CI on the base ------------------------------------------------------------------------------
 export function missedCiJobs({ jobs = [], record = null } = {}) {
   const result = resultOf(record);
-  return jobs.filter(job => job.workflow && (job.kind === 'ci-only' || (job.kind === 'local' && !['pass', 'fail'].includes(result(job)?.state))))
+  return jobs.filter(job => job.workflow && (job.kind === 'ci-only' || (planned(job) && !['pass', 'fail'].includes(result(job)?.state))))
     .map(job => ({ key: job.key, workflow: job.workflow, job: job.job, checks: job.checks?.length ? [...job.checks] : [job.check].filter(Boolean), onBase: job.onBase !== false,
       dispatch: Boolean(job.dispatch), rerun: job.rerun === true, duplicate: Boolean(job.duplicate) }))
     .filter(job => job.checks.length);

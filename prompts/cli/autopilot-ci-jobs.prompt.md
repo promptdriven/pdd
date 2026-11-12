@@ -251,9 +251,17 @@ with `run` (a string):
     (step 5) is empty or only `CI: true`. Else it is a local command, run in its own
     context (#3260 review: `npm test` in `working-directory: nested` runs another
     package's tests).
-11. **A suite step that changes state** (for example `| tee "$RUNNER_TEMP/tests.tap"`) is
-    a local command too when a later step of the job is a local command, so that the
-    later steps see its files. With no later local command, it stays covered.
+11. **A covered suite step that writes its output to files** (a `tee` or an output
+    redirection, for example `npm test 2>&1 | tee "$RUNNER_TEMP/tests.tap"` with `set +e`
+    and the `PIPESTATUS` exit) stays covered: Autopilot's full suite ran the same command,
+    so it never runs again locally (release lead, Nov 11). When a later step of the job
+    runs locally, a **copy step** takes its place in the job: it copies Autopilot's saved
+    full suite log to those files, so a later step that reads them sees the suite's output.
+12. **A report step** is a later local command that reads such a file (its text has the
+    file's path) and none of whose commands changes state (step 8: it writes only to
+    `$GITHUB_STEP_SUMMARY` or its own output), for example pdd's "Summarize test counts".
+    It runs locally on the copied log like any local step (an `always()` step still
+    runs); it is not counted as a local step, and the merge note names it.
 
 **The full test command** is `testCommand` (spaces made single). When it is an npm test
 spelling (`npm test`, `npm run test`, `npm t`, `npm run-script test`), or it is exactly
@@ -264,12 +272,13 @@ spelling (`npm test`, `npm run test`, `npm t`, `npm run-script test`), or it is 
 | Kind | When | `commands` |
 |---|---|---|
 | CI-only | any reason above | `[]` |
-| local | no reason, and at least one local command | the local commands' texts |
-| covered | no reason, no local command | the suite commands (empty when the job has only setup steps) |
+| covered | no reason, and a covered suite step or no local command | the suite commands (empty when the job has only setup steps) |
+| local | no reason, no covered suite step, and at least one local command | the local commands' texts |
 
-A local job that also has a covered suite step has `suite: true`: its suite part is
-covered by the local full suite, and only its other commands run locally (#3260: "if ...
-same thing is being done by github ci then no point").
+A covered entry has `suite: true` when it has a covered suite step. Its other local
+commands still run locally as its `steps` (with copy and report steps): the suite part is
+covered by the local full suite, the rest is not (#3260: "if ... same thing is being done
+by github ci then no point").
 
 **Entries.** A job with no matrix is one entry. In a matrix job, each covered or local
 matrix entry is its own entry, and all CI-only matrix entries of the job are one CI-only
@@ -294,7 +303,7 @@ commands, steps, matrix, duplicate, onBase, dispatch, rerun}`:
 | `need` | for CI-only, the short need (above); else `null` |
 | `suite` | `true` when the job has a covered suite step |
 | `commands` | see Kinds |
-| `steps` | for local, the steps to run: `{name, shell, script, workingDirectory, env}` (`shell` is `null`, `bash` or `sh`; `env` the merged environment); else `[]` |
+| `steps` | the steps to run locally, in job order: `{name, shell, script, workingDirectory, env}` (`shell` is `null`, `bash` or `sh`; `env` the merged environment); a copy step has `copy` (the file words of its suite command, as written) and `script: null`; a report step has `report: true`. `[]` when nothing runs locally |
 | `matrix` | the entry's matrix values (`{}` with no matrix; `null` for a combined entry) |
 | `duplicate` | `true` when one of its check names is also a check name of another entry (two jobs with one `name:`, or a matrix name that leaves out an axis): GitHub's check runs cannot tell them apart |
 | `onBase` | `true` when a push to `base` runs the job: the workflow's `push` filter admits `base` and the job's `if` is not false for `push` |
@@ -304,28 +313,35 @@ commands, steps, matrix, duplicate, onBase, dispatch, rerun}`:
 A job **deploys** when it has an `environment`, a secret (the job rules), or a step whose
 `uses` or `run` has the word deploy, publish or release.
 
-The `why` of a local entry is "runs N command(s) that Autopilot can run on this machine"
-(", and the full test command" with `suite`); of a covered entry "runs only the full test
-command (COMMAND)", or "runs only setup steps".
+The `why` of a local entry is "runs N command(s) that Autopilot can run on this machine";
+of a covered entry "runs only the full test command (COMMAND)", or "runs the full test
+command (COMMAND) and N more step(s) that Autopilot can run on this machine" (with ", and
+R report step(s) on the suite log"), or "runs only setup steps". N never counts copy or
+report steps.
 
 ## The summary line
 
-`ciJobsSummary(jobs)` is `CI: A covered, B local, C CI-only` and, when C is above 0,
-` (NEEDS)`: the distinct needs of the CI-only entries in order, at most 4, then
-`, and N more`. With no entry it is `CI: none`. Example: `CI: 2 covered, 1 local, 1 CI-only
-(CodeQL)`.
+`ciJobsSummary(jobs)` is `CI: A covered, B local, C CI-only`. After `A covered` comes
+` (+N local steps)` (` (+1 local step)`) when the covered entries have N local steps (no
+copy or report step). When C is above 0, ` (NEEDS)` follows: the distinct needs of the
+CI-only entries in order, at most 4, then `, and N more`. With no entry it is `CI: none`.
+Examples: `CI: 2 covered, 1 local, 1 CI-only (CodeQL)`; pdd's own `ci.yml` is `CI: 1
+covered (+2 local steps), 1 local, 0 CI-only`.
 
 ## Local jobs at the final head
 
 These run only when CI did not start for the head. When CI runs, CI's own result counts.
 
-`localJobPlan({jobs, head, base, checkout, temp, machine})` plans each local entry for
-the PR head (`head` is 40 hex digits; `checkout` and `temp` are absolute paths; else it
-throws a `TypeError`; `base` is the base branch name, optional; `machine.platform` as for
-the sort). The commands are the base tip's, read by `readCiJobs`, never the head's.
+`localJobPlan({jobs, head, base, checkout, temp, suiteLog, machine})` plans each entry
+with `steps` (local, or covered with local steps) for the PR head (`head` is 40 hex
+digits; `checkout` and `temp` are absolute paths; else it throws a `TypeError`; `base` is
+the base branch name, optional; `suiteLog` is the absolute path of Autopilot's full suite
+log at this head, required (a `TypeError`) when a planned entry has a copy step;
+`machine.platform` as for the sort). The commands are the base tip's, read by `readCiJobs`, never the head's.
 The caller runs each plan entry in a clean checkout of the head, after the same
 dependency install as the full suite. Each plan entry is
-`{key, label, workflow, job, check, head, cwd, env, command, steps}`:
+`{key, label, workflow, job, check, head, cwd, env, command, steps, reports}`
+(`reports`: the names of its report steps):
 
 - `key` is the entry's unique `key`; `label` is its check name, and for a `duplicate`
   ` (job JOB)`, or ` (job JOB, KEY VALUE, …)` with its matrix values; `cwd` is the
@@ -338,7 +354,11 @@ dependency install as the full suite. Each plan entry is
   `bash --noprofile --norc -eo pipefail -c SCRIPT` for `bash`, `sh -e -c SCRIPT` for
   `sh` (GitHub's shells); `cwd` is the checkout joined with the working directory; `env`
   is the plan `env` with the step's environment. The step name is its `name`, else the
-  first line of its script (at most 80 characters), with its expressions filled in.
+  first line of its script (at most 80 characters), with its expressions filled in. A
+  copy step is `bash -e -c` with, for each file, `mkdir -p -- "$(dirname -- FILE)" && cp
+  -- "$PDD_SUITE_LOG" FILE` (FILE as written, with its expressions filled in) and
+  `PDD_SUITE_LOG` set to `suiteLog`; its name is "NAME (covered: the full suite log is
+  copied to its output)".
 - Expressions are filled in: `matrix.KEY` with the entry's value, `runner.os` with
   `Linux`, `macOS` or `Windows` (this machine), `runner.temp` with `RUNNER_TEMP`,
   `github.workspace` with the checkout, `env.NAME` with that value.
@@ -374,10 +394,13 @@ did not start. `notStarted` is the core's `ci.notStarted`: the reason is `GitHub
 "MESSAGE"` for `billing`, `queued since HH:MM UTC` for `queued`, else `reason unknown`.
 
 1. `- CI: did not start (REASON); covered by the local full suite: CHECKS`: the checks of
-   the covered entries and of the local entries with `suite`, in order. With none:
-   `- CI: did not start (REASON)`.
-2. Then one line for each local or CI-only entry, in order; the record row of a local
-   entry is the one with its `key`. LABEL is the plan's `label`. A local entry: `- CI job LABEL: local pass`, `- CI job LABEL: local fail
+   the covered entries, in order. With none: `- CI: did not start (REASON)`.
+2. Then one line for each local entry, each covered entry with `steps`, and each CI-only
+   entry, in order; the record row of an entry is the one with its `key`. A covered entry
+   with `steps`: `- CI job LABEL: the full suite is covered; the other steps: RESULT`,
+   with RESULT `local pass`, `local fail (step "STEP", exit CODE)` or `not run yet (CI did
+   not start; WHY)`, and ` (report steps on the suite log: "NAME", …)` when it has report
+   steps. LABEL is the plan's `label`. A local entry: `- CI job LABEL: local pass`, `- CI job LABEL: local fail
    (step "STEP", exit CODE)`, or `- CI job LABEL: not run yet (CI did not start; WHY)` for
    `could-not-run` or a missing result (WHY "no local result"). A CI-only entry: `- CI job
    CHECKS: not run yet (CI did not start)` (its `checks` joined with `, `, or its `check`,
@@ -387,7 +410,8 @@ did not start. `notStarted` is the core's `ci.notStarted`: the reason is `GitHub
 ## Missed CI on the base
 
 `missedCiJobs({jobs, record})` lists what did not run before the merge: each CI-only
-entry, and each local entry whose result (by `key`) is `could-not-run` or missing, as
+entry, and each local entry or covered entry with `steps` whose result (by `key`) is
+`could-not-run` or missing, as
 `{key, workflow, job, checks, onBase, dispatch, rerun, duplicate}`. An entry with no
 workflow file (`workflow: null`) or with no check name (an unreadable file) is left out:
 Autopilot cannot find its run again.

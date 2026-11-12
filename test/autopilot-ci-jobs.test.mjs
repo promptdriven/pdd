@@ -21,22 +21,34 @@ const byCheck = (result, check) => result.jobs.find(job => job.check === check);
 const temp = t => { const dir = mkdtempSync(join(tmpdir(), 'pdd-ci-jobs-')); t.after(() => rmSync(dir, { recursive: true, force: true })); return dir; };
 const ON_PR = 'on:\n  pull_request:\n  push:\n    branches: [main]\n';
 
-test('sort: pdd\'s own ci.yml has the tests job and install-smoke as local jobs; the dispatch-only router is no PR CI', () => {
+test('sort: pdd\'s own ci.yml: the suite of the tests job is covered, its other steps and install-smoke run locally; the router is no PR CI', t => {
   const dir = join(root, '.github/workflows');
   const files = readdirSync(dir).sort().map(name => file(name, readFileSync(join(dir, name), 'utf8')));
   const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
   const result = sortCiJobs({ files, base: 'main', testCommand: 'npm test', scripts: pkg.scripts, machine: LINUX });
-  assert.deepEqual(result.jobs.map(job => [job.workflow, job.job, job.check, job.kind, job.suite]), [['ci.yml', 'public', 'tests', 'local', false], ['ci.yml', 'install-smoke', 'install-smoke', 'local', false]]);
-  // The design's extras (node bin/pdd.mjs --help, npm pack --dry-run) run locally. Review R1 item 6: the always()
-  // summary step runs too (it is not only a summary write). It reads the file that the test step writes with tee, so
-  // the test step runs in the local job as well (rule 11); the shell check step and npm ci are setup.
-  assert.deepEqual(byCheck(result, 'tests').steps.map(step => step.name), ['Run offline tests', 'Summarize test counts', 'node bin/pdd.mjs --help', 'npm pack --ignore-scripts --dry-run']);
-  assert.deepEqual(byCheck(result, 'tests').commands.slice(2), ['node bin/pdd.mjs --help', 'npm pack --ignore-scripts --dry-run']);
-  assert.equal(byCheck(result, 'install-smoke').commands.length, 1);
-  assert.match(byCheck(result, 'install-smoke').commands[0], /npm pack --ignore-scripts --json/);
-  assert.equal(result.summary, 'CI: 0 covered, 2 local, 0 CI-only');
-  // The same workflow on a macOS machine: both jobs need a Linux runner.
-  assert.equal(sortCiJobs({ files, base: 'main', testCommand: 'npm test', scripts: pkg.scripts, machine: { platform: 'darwin', node: '22.16.0' } }).summary, 'CI: 0 covered, 0 local, 2 CI-only (Linux)');
+  // Release lead (Nov 11): the test step (npm test | tee, set +e, the PIPESTATUS exit) is covered by Autopilot's
+  // suite and never runs again; "Summarize test counts" is a report step on the copied suite log; --help and npm
+  // pack run locally; install-smoke is a local job.
+  assert.equal(result.summary, 'CI: 1 covered (+2 local steps), 1 local, 0 CI-only');
+  assert.deepEqual(result.jobs.map(job => [job.workflow, job.job, job.check, job.kind, job.suite]), [['ci.yml', 'public', 'tests', 'covered', true], ['ci.yml', 'install-smoke', 'install-smoke', 'local', false]]);
+  const tests = byCheck(result, 'tests');
+  assert.deepEqual(tests.steps.map(step => [step.name, Boolean(step.copy), Boolean(step.report)]), [['Run offline tests (covered: the full suite log is copied to its output)', true, false],
+    ['Summarize test counts', false, true], ['node bin/pdd.mjs --help', false, false], ['npm pack --ignore-scripts --dry-run', false, false]]);
+  assert.deepEqual(tests.steps[0].copy, ['"$RUNNER_TEMP/tests.tap"']);
+  assert.equal(byCheck(result, 'install-smoke').steps.length, 1);
+  assert.deepEqual(result.dropped, []);
+  // The tests job runs locally on a saved suite log: the summary step reads the copied TAP totals.
+  const scratch = temp(t), suiteLog = join(scratch, 'suite.log');
+  writeFileSync(suiteLog, ['running the full test suite', 'ok 1 - a', 'ok 2 - b', '1..2', '# tests 2', '# suites 0', '# pass 2', '# fail 0', '# cancelled 0', '# skipped 0', '# todo 0', '# duration_ms 5.5', ''].join('\n'));
+  const [plan] = localJobPlan({ jobs: [tests], head: HEAD, base: 'main', checkout: root, temp: join(scratch, 'tmp'), suiteLog, machine: LINUX });
+  assert.deepEqual(plan.reports, ['Summarize test counts']);
+  const r = spawnSync('/bin/bash', ['-c', plan.command], { cwd: root, encoding: 'utf8', env: { ...process.env, ...plan.env } });
+  assert.equal(r.status, 0, `${r.stdout}${r.stderr}`.slice(-2000));
+  assert.equal(readFileSync(plan.env.GITHUB_STEP_SUMMARY, 'utf8'), '### tests\n2/2 passed, 0 failed, 0 cancelled, 0 skipped, 0 todo.\n');
+  assert.deepEqual(ciMergeNote({ jobs: result.jobs, record: localJobsRecord({ head: HEAD, plan: [plan], runs: { [plan.key]: { exit: { code: 0 }, log: r.stdout } } }), notStarted: { reason: 'queued', since: 0 } }).slice(0, 2), [
+    '- CI: did not start (queued since 00:00 UTC); covered by the local full suite: tests',
+    '- CI job tests: the full suite is covered; the other steps: local pass (report steps on the suite log: "Summarize test counts")']);
+  assert.throws(() => localJobPlan({ jobs: [tests], head: HEAD, checkout: root, temp: join(scratch, 'tmp'), machine: LINUX }), /suiteLog must be the absolute path/);
 });
 
 test('E5: pdd\'s own ci.yml skips draft PRs, runs again at ready_for_review, keeps cancel-in-progress, and still counts as PR CI', () => {
@@ -260,19 +272,32 @@ test('review R1 item 5: a step that writes state is kept and run; only a step th
 test('review R1 item 6: an always() step runs like any other step; only a pure summary write is no command', t => {
   const dir = temp(t);
   const failing = oneJob('      - run: npm test\n      - if: always()\n        run: |\n          node -e "process.exit(1)"\n          echo summary >> "$GITHUB_STEP_SUMMARY"\n');
-  assert.deepEqual([failing.kind, failing.suite, failing.commands], ['local', true, ['node -e "process.exit(1)"\necho summary >> "$GITHUB_STEP_SUMMARY"\n']]);
+  // The suite step is covered; the always() step is a local step of the job, and it fails.
+  assert.deepEqual([failing.kind, failing.suite, failing.steps.map(step => step.script)], ['covered', true, ['node -e "process.exit(1)"\necho summary >> "$GITHUB_STEP_SUMMARY"\n']]);
   assert.equal(runLocal(failing, dir).state, 'fail');
-  assert.equal(oneJob('      - run: npm test\n      - if: always()\n        run: echo "### tests passed" >> "$GITHUB_STEP_SUMMARY"\n').kind, 'covered');
-  assert.equal(oneJob('      - run: npm test\n      - if: \'!cancelled()\'\n        run: npm run lint\n').kind, 'local');
+  const pure = oneJob('      - run: npm test\n      - if: always()\n        run: echo "### tests passed" >> "$GITHUB_STEP_SUMMARY"\n');
+  assert.deepEqual([pure.kind, pure.steps], ['covered', []]);
+  assert.deepEqual(oneJob('      - run: npm test\n      - if: \'!cancelled()\'\n        run: npm run lint\n').steps.map(step => step.script), ['npm run lint']);
 });
 
-test('a suite step that writes a file runs locally when a later step runs locally; with none it stays covered', () => {
+test('a covered suite step that tees its output never runs again; a later step reads Autopilot\'s copied suite log as a report step', t => {
   const tee = '      - run: npm test 2>&1 | tee "$RUNNER_TEMP/tests.tap"\n';
   const read = oneJob(`${tee}      - run: grep -c "^ok" "$RUNNER_TEMP/tests.tap"\n`);
-  assert.deepEqual([read.kind, read.suite, read.commands], ['local', false, ['npm test 2>&1 | tee "$RUNNER_TEMP/tests.tap"', 'grep -c "^ok" "$RUNNER_TEMP/tests.tap"']]);
-  assert.equal(oneJob(`${tee}      - if: always()\n        run: echo done >> "$GITHUB_STEP_SUMMARY"\n`).kind, 'covered');
-  // A suite step that writes nothing stays covered next to a local command.
-  assert.deepEqual([oneJob('      - run: npm test\n      - run: npm run lint\n').suite, oneJob('      - run: npm test\n      - run: npm run lint\n').commands], [true, ['npm run lint']]);
+  assert.deepEqual([read.kind, read.suite, read.commands], ['covered', true, ['npm test 2>&1 | tee "$RUNNER_TEMP/tests.tap"']]);
+  assert.deepEqual(read.steps.map(step => [step.copy ?? null, step.script, Boolean(step.report)]), [[['"$RUNNER_TEMP/tests.tap"'], null, false], [null, 'grep -c "^ok" "$RUNNER_TEMP/tests.tap"', true]]);
+  assert.equal(ciJobsSummary([read]), 'CI: 1 covered, 0 local, 0 CI-only');
+  const dir = temp(t), suiteLog = join(dir, 'suite.log');
+  writeFileSync(suiteLog, 'ok 1 - a\nok 2 - b\n');
+  const [plan] = localJobPlan({ jobs: [read], head: HEAD, checkout: dir, temp: join(dir, 'tmp'), suiteLog, machine: LINUX });
+  const r = spawnSync('/bin/bash', ['-c', plan.command], { cwd: dir, encoding: 'utf8', env: { ...process.env, ...plan.env } });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /^2$/m);
+  // No later local step: no copy step. A plain suite step next to a local command: covered, with one local step.
+  assert.deepEqual(oneJob(`${tee}      - if: always()\n        run: echo done >> "$GITHUB_STEP_SUMMARY"\n`).steps, []);
+  const lint = oneJob('      - run: npm test\n      - run: npm run lint\n');
+  assert.deepEqual([lint.kind, lint.suite, lint.steps.map(step => step.script), ciJobsSummary([lint])], ['covered', true, ['npm run lint'], 'CI: 1 covered (+1 local step), 0 local, 0 CI-only']);
+  // A later step that changes state (a redirection to a file) is no report step: it is a local step.
+  assert.equal(oneJob(`${tee}      - run: cat "$RUNNER_TEMP/tests.tap" > out.tap\n`).steps[1].report, undefined);
 });
 
 // Claude review round 1 (the "ci" items) and its probes (scratchpad ci/probe1-6.mjs): expected results from the review
@@ -360,7 +385,7 @@ test('merge note: CI did not start, the covered jobs, each local result and each
   // A local job with the full suite inside is covered and local; a missing result is "not run yet".
   assert.deepEqual(ciMergeNote({ jobs: lintOnly, record: localJobsRecord({ head: HEAD, plan, runs: {} }), notStarted: { reason: 'billing', message: 'The job was not started because your account is locked due to a billing issue.' } }), [
     '- CI: did not start (GitHub said "The job was not started because your account is locked due to a billing issue."); covered by the local full suite: tests',
-    '- CI job tests: not run yet (CI did not start; the local run did not finish)', '- CI job codeql: not run yet (CI did not start)']);
+    '- CI job tests: the full suite is covered; the other steps: not run yet (CI did not start; the local run did not finish)', '- CI job codeql: not run yet (CI did not start)']);
   assert.equal(record.jobs[0].state, 'pass');
   assert.deepEqual(ciMergeNote({ jobs: [], notStarted: null }), ['- CI: did not start (reason unknown)']);
 });
