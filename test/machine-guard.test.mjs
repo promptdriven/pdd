@@ -125,7 +125,8 @@ test('T4 a real job runs at nice 19 (nice starts the child; its children inherit
   const end = Date.now() + 15000;
   while (Date.now() < end && !existsSync(job.exit)) await new Promise(r => setTimeout(r, 50));
   assert.equal(readAgentJob(job).state, 'exited');
-  assert.equal(readFileSync(job.log, 'utf8').trim(), '19');
+  // At least 19: when another test of this process already lowered its own priority, nice adds to it (macOS caps at 20).
+  assert.ok(Number(readFileSync(job.log, 'utf8').trim()) >= 19, readFileSync(job.log, 'utf8'));
 });
 
 test('T6 timer lines: launchd Nice 19; systemd Nice=19, CPUWeight=1 below a share of 100 (100 at 100), MemoryHigh at the share', () => {
