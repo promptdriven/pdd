@@ -51,10 +51,11 @@ test('SKILLS1: each new skill has standard frontmatter that names its own folder
 });
 
 // Wrong: the skill copy of the guide drifts from docs/prompting-guide.md.
-test('SKILLS2: pdd-prompting guide.md and RUNBOOK.md equal the canonical files byte for byte', () => {
+test('SKILLS2: pdd-prompting guide.md, story-guide.md and RUNBOOK.md equal the canonical files byte for byte', () => {
   assert.deepEqual(readFileSync(join(skills, 'pdd-prompting/guide.md')), readFileSync(join(root, 'docs/prompting-guide.md')));
+  assert.deepEqual(readFileSync(join(skills, 'pdd-prompting/story-guide.md')), readFileSync(join(root, 'docs/story-guide.md')));
   assert.deepEqual(readFileSync(join(skills, 'pdd-prompting/RUNBOOK.md')), readFileSync(join(root, 'RUNBOOK.md')));
-  assert.deepEqual(readdirSync(join(skills, 'pdd-prompting')).sort(), ['RUNBOOK.md', 'SKILL.md', 'autopilot-job-rules.md', 'guide.md', 'review.md', 'verification-recipe.md', 'verification-setup.md']);
+  assert.deepEqual(readdirSync(join(skills, 'pdd-prompting')).sort(), ['RUNBOOK.md', 'SKILL.md', 'autopilot-job-rules.md', 'guide.md', 'review.md', 'story-guide.md', 'verification-recipe.md', 'verification-setup.md']);
 });
 
 // Wrong: the core page grows past one page or loses the core rules that pdd session inlines.
