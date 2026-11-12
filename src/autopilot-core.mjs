@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: c6693d25ba5b18bcd4732a258083dfbdc3d5aa8392769b6055e792efebe73088).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 7d15175d6d53df2d3642078be75969ebdeaa5c9b223e0d3f27f61869aa7ed402).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -2035,14 +2035,46 @@ function evidenceSummary(ctx, job) {
     `- Record: ${basename(evidencePath(ctx, job))} on this machine`].join('\n');
 }
 const EVIDENCE_START = '<!-- pdd:autopilot-core:evidence:start -->', EVIDENCE_END = '<!-- pdd:autopilot-core:evidence:end -->';
+function plainPrText(body) {
+  let fence = null;
+  return String(body ?? '').replace(/\r\n?/g, '\n').split('\n').map(line => {
+    const mark = line.trim().match(/^(`{3,}|~{3,})/)?.[1];
+    if (fence) { if (mark && line.trim().startsWith(fence) && !line.trim().slice(mark.length).trim()) fence = null; return ''; }
+    const open = /^ {0,3}(?:(`{3,})[^`]*|(~{3,}).*)$/.exec(line);
+    if (open) { fence = open[1] ?? open[2]; return ''; }
+    return line;
+  }).join('\n')
+    .replace(/(?<![`\\])(`+)(?!`)(?:(?!\n[ \t]*\n)[\s\S])*?(?<!`)\1(?!`)/g, ' ')
+    .replace(/<!--[\s\S]*?-->/g, ' ');
+}
+function matchedIssues(plain, words, repo) {
+  const escaped = String(repo ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const ref = `(?:(?<![\\w./-])${escaped}#(\\d+)|https?:\\/\\/github\\.com\\/${escaped}\\/issues\\/(\\d+)|(?<![\\w./-])#(\\d+))(?![\\w/])`;
+  const listRe = new RegExp(`\\b(?:${words})(?!\\u200b)(?::[ \\t]*|[ \\t]+)(${ref}(?:(?:[ \\t]*,[ \\t]*(?:and[ \\t]+)?|[ \\t]+and[ \\t]+)${ref})*)`, 'gi');
+  const numRe = new RegExp(ref, 'gi'), out = new Set();
+  for (const m of plain.matchAll(listRe)) for (const n of m[1].matchAll(numRe)) out.add(Number(n[1] ?? n[2] ?? n[3]));
+  return out;
+}
+function hasClosingKeyword(body, issue, repo) {
+  return matchedIssues(plainPrText(body), 'close[sd]?|fix(?:e[sd])?|resolve[sd]?', repo).has(issue);
+}
+function isPartialIssuePr(body, issue, repo) {
+  const plain = plainPrText(body);
+  if (/^\s*Not fixed yet:/im.test(plain)) return true;
+  return !matchedIssues(plain, 'close[sd]?|fix(?:e[sd])?|resolve[sd]?', repo).has(issue)
+    && matchedIssues(plain, 'refs?|part[ \\t]+of', repo).has(issue);
+}
 async function writeEvidenceBlock(ctx, job) {
   const block = `${EVIDENCE_START}\n### Autopilot evidence for head ${short(job.head)}\n\n${ctx.publicBody(evidenceSummary(ctx, job))}\n${EVIDENCE_END}`;
   // A fresh read: the review may have written the follow-ups section in this tick.
   const pr = await ctx.gh.ok('GET', `repos/${ctx.repo}/pulls/${job.pr}`);
   const body = String(pr?.body ?? ''), at = body.indexOf(EVIDENCE_START), end = body.indexOf(EVIDENCE_END);
+  const closing = hasClosingKeyword(body, job.issue, ctx.repo) || isPartialIssuePr(body, job.issue, ctx.repo) ? '' : `Fixes #${job.issue}\n\n`;
+  const addition = `${closing}${block}`;
   const followUps = body.indexOf('Follow-ups from the Autopilot review');
-  const next = at >= 0 && end > at ? `${body.slice(0, at)}${block}${body.slice(end + EVIDENCE_END.length)}`
-    : followUps >= 0 ? `${body.slice(0, followUps).trimEnd()}\n\n${block}\n\n${body.slice(followUps)}` : `${body.trimEnd()}\n\n${block}`;
+  const next = at >= 0 && end > at ? `${body.slice(0, at)}${addition}${body.slice(end + EVIDENCE_END.length)}`
+    : followUps >= 0 ? `${body.slice(0, followUps).trimEnd()}\n\n${addition}\n\n${body.slice(followUps)}`.trimStart()
+    : body.trimEnd() ? `${body.trimEnd()}\n\n${addition}` : addition;
   if (next !== body) await ctx.gh.ok('PATCH', `repos/${ctx.repo}/pulls/${job.pr}`, { body: next });
 }
 
@@ -2935,8 +2967,44 @@ async function finishMerge(ctx, job, read = null) {
   const issue = await gh.ok('GET', `repos/${repo}/issues/${job.issue}`);
   if (issue.state === 'open') await gh.ok('PATCH', `repos/${repo}/issues/${job.issue}`, { state: 'closed', state_reason: 'completed' });
   if (labelsOf(issue).includes('pdd:working')) await gh.call('DELETE', `repos/${repo}/issues/${job.issue}/labels/${encodeURIComponent('pdd:working')}`);
+  if (labelsOf(issue).includes(WOULD_MERGE)) await gh.call('DELETE', `repos/${repo}/issues/${job.issue}/labels/${encodeURIComponent(WOULD_MERGE)}`);
   ctx.counts.merged++; ctx.produced();
   await finishLocal(ctx, job, 'merged', `merged PR #${job.pr}`);
+}
+async function sweepWouldMerge(ctx, open, rows) {
+  if (!open) return;
+  const active = new Set(readJobs(ctx.fs, ctx.root).map(job => job.issue));
+  const want = new Set([...open.values()].filter(row => row.state === 'open' && labelsOf(row).includes(WOULD_MERGE)
+    && !labelsOf(row).includes('pdd:working') && !active.has(row.number)).map(row => row.number));
+  if (!want.size) return;
+  const pulls = await ctx.gh.ok('GET', `repos/${ctx.repo}/pulls?state=all&base=${encodeURIComponent(ctx.state.baseBranch)}&per_page=30`);
+  const latest = new Map();
+  for (const pr of pulls ?? []) {
+    if (pr?.base?.ref !== ctx.state.baseBranch) continue;
+    if (String(pr.head?.repo?.full_name ?? '').toLowerCase() !== ctx.repo.toLowerCase()) continue;
+    const n = Number(/^pdd\/core-(\d+)-/.exec(String(pr.head?.ref ?? ''))?.[1] ?? 0);
+    if (want.has(n) && pr.number > (latest.get(n)?.number ?? 0)) latest.set(n, pr);
+  }
+  for (const [n, pr] of latest) {
+    if (pr.state === 'open' || !(pr.merged || pr.merged_at)) continue;
+    try {
+      const timeline = await ctx.gh.all(`repos/${ctx.repo}/issues/${n}/timeline?per_page=100`);
+      const labeledIdx = timeline.findLastIndex(e => e.event === 'labeled' && e.label?.name === WOULD_MERGE);
+      const reopenedIdx = timeline.findLastIndex(e => e.event === 'reopened');
+      const reopenedAfter = reopenedIdx >= 0 && (reopenedIdx > labeledIdx
+        || (pr.merged_at && (Date.parse(timeline[reopenedIdx]?.created_at) || 0) > (Date.parse(pr.merged_at) || 0)));
+      const row = open.get(n);
+      if (!reopenedAfter && !isPartialIssuePr(pr.body, n, ctx.repo)) {
+        await ctx.gh.ok('PATCH', `repos/${ctx.repo}/issues/${n}`, { state: 'closed', state_reason: 'completed' });
+        if (row) row.state = 'closed';
+        open.delete(n); ctx.skip.add(n);
+        if (Array.isArray(rows) && row) { const idx = rows.indexOf(row); if (idx >= 0) rows.splice(idx, 1); }
+      }
+      const removed = await ctx.gh.call('DELETE', `repos/${ctx.repo}/issues/${n}/labels/${encodeURIComponent(WOULD_MERGE)}`);
+      if (removed.status >= 300 && removed.status !== 404) throw Error(`DELETE label ${WOULD_MERGE}: HTTP ${removed.status}`);
+      if (row?.labels) row.labels = row.labels.filter(l => (typeof l === 'string' ? l : l?.name) !== WOULD_MERGE);
+    } catch (error) { ctx.warn(`Autopilot core could not close merged would-merge issue #${n}: ${error.message}`); }
+  }
 }
 
 // ---- Stop owners (A1 of #3238) ------------------------------------------------------------------------------
@@ -3589,6 +3657,7 @@ export async function tickCore(input, ports) {
   let rows = null;
   if (input.budget?.state !== 'reserve') try { rows = await ports.listIssues(); } catch (error) { ctx.warn(`Autopilot core could not list issues: ${error.message}`); }
   const open = rows && new Map(rows.filter(row => !row.pull_request).map(row => [row.number, row]));
+  if (open) await sweepWouldMerge(ctx, open, rows).catch(error => ctx.warn(`Autopilot core could not sweep would-merge issues: ${error.message}`));
   // Only open issues by trusted authors reach a prompt (the same rule as intake).
   ctx.trustedOpen = async () => ctx.openRows ??= Array.isArray(rows) ? (await Promise.all(rows.filter(row => !row.pull_request).map(async row => await ctx.trust(row) ? row : null))).filter(Boolean) : null;
   if (open) for (const job of readJobs(ctx.fs, ctx.root)) {
