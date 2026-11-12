@@ -1,4 +1,4 @@
-// Generated from prompts/cli/screen-compare.prompt.md (sha256: e8d686b54a135b5aeeff0831cf3264b453f78e6ab11856602080ccec2b9c2121).
+// Generated from prompts/cli/screen-compare.prompt.md (sha256: d4cdafddcfb7d66f9307696be17a67ad581b20b90f104b8f1656711c55bd9a77).
 import { spawn } from 'node:child_process';
 import { accessSync, constants, lstatSync, mkdtempSync, readFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
@@ -20,11 +20,11 @@ function executable(explicit, env) {
 // CDP's local pipe requires no package, TCP listener or downloaded browser.
 async function browserRun({ source, url, chromePath, env }) {
   const profile = mkdtempSync(join(tmpdir(), 'pdd-screen-'));
-  let child, session, timeout, closed = false, serial = 0, pending = new Map(), events = new Map(), documentStatus = 0;
+  let child, session, timeout, closed = false, serial = 0, pending = new Map(), events = new Map(), documentStatus = 0, mainFrame;
   const stop = error => { for (const { reject, timer } of pending.values()) { clearTimeout(timer); reject(error); } pending.clear(); };
-  const send = (method, params = {}, sessionId = session) => new Promise((resolve, reject) => {
+  const send = (method, params = {}, sessionId = session, commandTimeout = 20_000) => new Promise((resolve, reject) => {
     if (closed) { reject(failure('Chrome closed unexpectedly.', 5)); return; }
-    const id = ++serial, timer = setTimeout(() => { pending.delete(id); reject(failure(`Chrome timed out during ${method}.`, 5)); }, 20_000);
+    const id = ++serial, timer = commandTimeout === null ? undefined : setTimeout(() => { pending.delete(id); reject(failure(`Chrome timed out during ${method}.`, 5)); }, commandTimeout);
     pending.set(id, { resolve, reject, timer });
     child.stdio[3].write(`${JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) })}\0`, error => {
       if (error) { clearTimeout(timer); pending.delete(id); reject(failure('Chrome command pipe failed.', 5)); }
@@ -47,7 +47,7 @@ async function browserRun({ source, url, chromePath, env }) {
       while ((end = buffer.indexOf('\0')) >= 0) {
         const message = buffer.slice(0, end); buffer = buffer.slice(end + 1);
         let reply; try { reply = JSON.parse(message); } catch { continue; }
-        if (reply.method === 'Network.responseReceived' && reply.params?.type === 'Document') documentStatus = reply.params.response.status;
+        if (reply.method === 'Network.responseReceived' && reply.params?.type === 'Document' && reply.params.frameId === mainFrame) documentStatus = reply.params.response.status;
         if (events.has(reply.method)) events.get(reply.method)(reply.params);
         const request = pending.get(reply.id);
         if (!request) continue;
@@ -56,7 +56,9 @@ async function browserRun({ source, url, chromePath, env }) {
       }
     });
     timeout = setTimeout(() => { stop(failure('Screen comparison exceeded its 60 second browser limit.', 5)); child.kill('SIGKILL'); }, 60_000);
-    const target = await send('Target.createTarget', { url: 'about:blank' }, null);
+    // The first reply includes cold browser startup. The whole-browser guard
+    // above bounds it; later commands retain their separate 20-second limit.
+    const target = await send('Target.createTarget', { url: 'about:blank' }, null, null);
     session = (await send('Target.attachToTarget', { targetId: target.targetId, flatten: true }, null)).sessionId;
     await send('Page.enable'); await send('Runtime.enable'); await send('Network.enable');
     const reference = await evaluate(`(${prepareReference.toString()})(${JSON.stringify(source)})`);
@@ -67,6 +69,7 @@ async function browserRun({ source, url, chromePath, env }) {
     const expected = await evaluate(`(${snapshot.toString()})(true)`);
     if (expected.error) throw failure(expected.error);
     if (!expected.parts.length) throw failure('The SVG drawing has no visible required ids or text.');
+    mainFrame = (await send('Page.getFrameTree')).frameTree.frame.id;
     const load = new Promise(done => { events.set('Page.loadEventFired', done); });
     const navigation = await send('Page.navigate', { url });
     if (navigation.errorText || navigation.isDownload) throw failure(`Page navigation failed: ${navigation.errorText || 'URL is a download'}`, 5);
@@ -74,12 +77,8 @@ async function browserRun({ source, url, chromePath, env }) {
     try { await Promise.race([load, new Promise((_, reject) => { loadTimer = setTimeout(() => reject(failure('Page load timed out.', 5)), 15000); })]); }
     finally { clearTimeout(loadTimer); events.delete('Page.loadEventFired'); }
     if (documentStatus >= 400) throw failure(`Page navigation failed: HTTP ${documentStatus}.`, 5);
-    await evaluate(`new Promise((resolve, reject) => {
-      const deadline = setTimeout(() => reject(Error('Page load timed out')), 15000);
-      const ready = async () => { try { await document.fonts.ready; await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))); clearTimeout(deadline); resolve(true); } catch (error) { reject(error); } };
-      if (document.readyState === 'complete') ready(); else addEventListener('load', ready, {once:true});
-    })`);
-    const actual = await evaluate(`(${snapshot.toString()})(false)`);
+    const actual = await evaluate(`(${capturePage.toString()})(${snapshot.toString()}, ${JSON.stringify(viewport)})`);
+    if (actual?.notReady) return actual;
     if (!actual || actual.error) throw failure(actual?.error || 'Could not inspect the page.', 5);
     return { viewport, reference: expected.parts, actual: actual.parts };
   } finally {
@@ -94,6 +93,85 @@ async function browserRun({ source, url, chromePath, env }) {
     // isolated process group before deleting the profile they may still write.
     if (child?.pid && process.platform !== 'win32') { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* group has exited */ } }
     await rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+}
+
+// Executes in the loaded page. Door reads never activate a control or call an
+// action endpoint. A monotonic deadline includes fonts and the final layout.
+async function capturePage(snapshot, referenceViewport) {
+  const root = document.documentElement, version = root.getAttribute('data-pdd-screen-door');
+  const legacy = root.hasAttribute('data-try-session') && [...document.querySelectorAll('base[href]')].some(base => {
+    try { return new URL(base.href).pathname === '/__pdd/screen/'; } catch { return false; }
+  }) && [...document.scripts].some(script => {
+    try { const url = new URL(script.src); return url.origin === location.origin && url.pathname === '/__pdd/screen/door-screen.js'; } catch { return false; }
+  });
+  const notReady = (state, reason) => ({ notReady: { state, reason } });
+  if (version === null && !legacy) {
+    await new Promise((resolve, reject) => {
+      const deadline = setTimeout(() => reject(Error('Page load timed out')), 15000);
+      const ready = async () => { try { await document.fonts.ready; await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))); clearTimeout(deadline); resolve(); } catch (error) { clearTimeout(deadline); reject(error); } };
+      if (document.readyState === 'complete') ready(); else addEventListener('load', ready, { once: true });
+    });
+    return snapshot(false);
+  }
+  const started = performance.now(), expired = () => performance.now() - started >= 10000;
+  const observe = () => {
+    if (root.getAttribute('data-pdd-screen-door') !== '1') return { state: 'unknown', reason: 'viewer-update-required' };
+    const state = root.getAttribute('data-pdd-screen-state');
+    if (!['loading', 'ready', 'not-open', 'error'].includes(state)) return { state: 'unknown', reason: 'viewer-update-required' };
+    if (state === 'not-open') return { state, reason: 'not-open' };
+    if (state === 'error') {
+      const reason = root.getAttribute('data-pdd-screen-reason');
+      return ['state-read-failed', 'render-failed', 'action-unknown'].includes(reason) ? { state, reason } : { state: 'unknown', reason: 'viewer-update-required' };
+    }
+    return { state };
+  };
+  const surface = () => {
+    const frames = document.querySelectorAll('#frame');
+    if (frames.length !== 1) return null;
+    const marked = frames[0].querySelectorAll('[data-pdd-app-frame]');
+    if (marked.length !== 1 || !marked[0].isConnected) return null;
+    const host = marked[0], kind = host.getAttribute('data-pdd-app-frame');
+    if (kind === 'html' && host.localName === 'iframe') {
+      try {
+        const doc = host.contentDocument, win = host.contentWindow;
+        if (!doc?.documentElement || !win || !(win.innerWidth > 0 && win.innerHeight > 0)) return null;
+        return { host, scope: doc, win, width: win.innerWidth, height: win.innerHeight };
+      } catch { return null; }
+    }
+    if (kind === 'shadow' && host.shadowRoot && host.clientWidth > 0 && host.clientHeight > 0 && host.getBoundingClientRect().width > 0 && host.getBoundingClientRect().height > 0) return { host, scope: host.shadowRoot, win: window, width: host.clientWidth, height: host.clientHeight };
+    return null;
+  };
+  let selected, settled = false, settleError, lastState = 'loading';
+  for (;;) {
+    const observation = observe();
+    if (observation.reason) return notReady(observation.state, observation.reason);
+    lastState = observation.state;
+    if (expired()) return notReady(lastState, 'timeout');
+    if (lastState === 'ready') {
+      const current = surface();
+      if (!current) return notReady('ready', 'surface-unavailable');
+      if (current.host !== selected?.host || current.scope !== selected?.scope) {
+        selected = current; settled = false; settleError = undefined;
+        const identity = selected;
+        (async () => {
+          if (current.scope.nodeType === Node.DOCUMENT_NODE && current.scope.readyState !== 'complete') await new Promise(resolve => current.host.addEventListener('load', resolve, { once: true }));
+          await (current.scope.ownerDocument || current.scope).fonts.ready;
+          await new Promise(resolve => current.win.requestAnimationFrame(() => current.win.requestAnimationFrame(resolve)));
+          if (selected === identity) settled = true;
+        })().catch(error => { if (selected === identity) settleError = error; });
+      }
+      if (settleError) throw settleError;
+      if (settled) {
+        const result = snapshot(false, current.scope, referenceViewport, current);
+        const after = observe(), latest = surface();
+        if (after.reason) return notReady(after.state, after.reason);
+        if (expired()) return notReady(after.state, 'timeout');
+        if (after.state === 'ready' && latest?.host === current.host && latest?.scope === current.scope) return result;
+        selected = undefined; settled = false;
+      }
+    } else { selected = undefined; settled = false; }
+    await new Promise(resolve => setTimeout(resolve, Math.min(25, Math.max(1, 10000 - (performance.now() - started)))));
   }
 }
 
@@ -130,10 +208,18 @@ function prepareReference(source) {
   return { viewport: { width, height } };
 }
 
-function snapshot(reference) {
+function snapshot(reference, scope = globalThis.document, referenceViewport, selected) {
+  const document = scope.ownerDocument || scope, win = document.defaultView;
+  const getComputedStyle = element => win.getComputedStyle(element);
+  const host = selected?.host, shadow = scope.nodeType === Node.DOCUMENT_FRAGMENT_NODE;
+  const hostBox = shadow ? host.getBoundingClientRect() : null;
+  const sx = shadow ? hostBox.width / host.offsetWidth : 1, sy = shadow ? hostBox.height / host.offsetHeight : 1;
+  const left = shadow ? hostBox.left + host.clientLeft * sx : 0, top = shadow ? hostBox.top + host.clientTop * sy : 0;
+  const width = selected?.width || win.innerWidth, height = selected?.height || win.innerHeight;
+  const right = left + width * sx, bottom = top + height * sy;
   const normalize = text => text.replace(/\s+/g, ' ').trim();
-  const elements = [...document.querySelectorAll('*')], indexes = new Map(elements.map((el, i) => [el, i])), parts = [];
-  const walker = document.createTreeWalker(document.documentElement, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_CDATA_SECTION), textNodes = [], tokenIds = new Map();
+  const elements = [...scope.querySelectorAll('*')], indexes = new Map(elements.map((el, i) => [el, i])), parts = [];
+  const walker = document.createTreeWalker(scope.documentElement || scope, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_CDATA_SECTION), textNodes = [], tokenIds = new Map();
   while (walker.nextNode()) { tokenIds.set(walker.currentNode, `text:${textNodes.length}`); textNodes.push(walker.currentNode); }
   const excluded = el => !!el.closest('title,desc,defs,metadata,script,style,noscript,template,symbol,marker,pattern,clipPath,mask,linearGradient,radialGradient,stop,filter');
   const svgPaint = new Set(['text', 'tspan', 'textPath', 'rect', 'circle', 'ellipse', 'path', 'polygon', 'polyline', 'line']);
@@ -143,7 +229,7 @@ function snapshot(reference) {
   const painted = (color, opacity) => {
     if (transparent(color) || Number(opacity) === 0) return false;
     if (!color.startsWith('url(')) return true;
-    const fragment = /^url\(["']?#([^"')]+)["']?\)$/.exec(color), paint = fragment && document.getElementById(fragment[1]);
+    const fragment = /^url\(["']?#([^"')]+)["']?\)$/.exec(color), paint = fragment && scope.getElementById(fragment[1]);
     if (paint && ['linearGradient', 'radialGradient'].includes(paint.localName)) {
       if (paint.hasAttribute('href') || paint.hasAttribute('xlink:href')) { unsupported = 'Unsupported SVG paint inheritance; visible paint cannot be established.'; return false; }
       return [...paint.querySelectorAll('stop')].some(stop => { const style = getComputedStyle(stop); return !transparent(style.stopColor) && Number(style.stopOpacity) > 0; });
@@ -176,6 +262,12 @@ function snapshot(reference) {
       || ['input', 'textarea', 'select'].includes(el.localName) && (style.appearance !== 'none' || !!controlValue(el) && textPaint(style));
   };
   const visible = (el, box, kind) => {
+    const effects = [];
+    if (selected && !shadow) for (let outer = host; outer; outer = outer.parentElement) {
+      const style = outer.ownerDocument.defaultView.getComputedStyle(outer);
+      if (style.display === 'none' || ['hidden', 'collapse'].includes(style.visibility) || Number(style.opacity) === 0 || style.contentVisibility === 'hidden') return false;
+      if (style.clipPath !== 'none' || !['auto', 'rect(auto, auto, auto, auto)'].includes(style.clip) || style.maskImage !== 'none' || style.filter !== 'none') effects.push(outer);
+    }
     const style = getComputedStyle(el), svg = el.namespaceURI === 'http://www.w3.org/2000/svg';
     const degenerate = svg && svgPaint.has(el.localName) && !(box.width > 0 && box.height > 0);
     // SVG geometric bounds omit the stroke. Probe its possible extent only to
@@ -184,16 +276,17 @@ function snapshot(reference) {
     const stroke = degenerate ? parseFloat(style.strokeWidth) * Math.max(1, parseFloat(style.strokeMiterlimit) || 1) : 0;
     const margin = matrix ? stroke * Math.max(1, Math.abs(matrix.a) + Math.abs(matrix.c), Math.abs(matrix.b) + Math.abs(matrix.d)) : stroke;
     const probe = degenerate ? { left: box.left - margin, right: box.right + margin, top: box.top - margin, bottom: box.bottom + margin, width: box.width + 2 * margin, height: box.height + 2 * margin } : box;
-    if (!(probe.width > 0 && probe.height > 0 && probe.right > 0 && probe.bottom > 0 && probe.left < innerWidth && probe.top < innerHeight)) return false;
-    const intersection = { left: Math.max(0, probe.left), top: Math.max(0, probe.top), right: Math.min(innerWidth, probe.right), bottom: Math.min(innerHeight, probe.bottom) }, effects = [];
-    for (let parent = el; parent; parent = parent.parentElement) {
+    if (!(probe.width > 0 && probe.height > 0 && probe.right > left && probe.bottom > top && probe.left < right && probe.top < bottom)) return false;
+    const intersection = { left: Math.max(left, probe.left), top: Math.max(top, probe.top), right: Math.min(right, probe.right), bottom: Math.min(bottom, probe.bottom) };
+    for (let parent = el; parent; parent = parent.parentElement || (shadow && parent.getRootNode() === scope ? host : null)) {
       const style = getComputedStyle(parent);
       if (style.display === 'none' || ['hidden', 'collapse'].includes(style.visibility) || Number(style.opacity) === 0 || style.contentVisibility === 'hidden') return false;
       if (style.clipPath !== 'none' || !['auto', 'rect(auto, auto, auto, auto)'].includes(style.clip) || style.maskImage !== 'none' || style.filter !== 'none') effects.push(parent);
-      if (parent !== el && /(hidden|clip|scroll|auto)/.test(`${style.overflowX} ${style.overflowY}`)) {
+      if (parent !== el && (!shadow || parent === host || scope.contains(parent)) && /(hidden|clip|scroll|auto)/.test(`${style.overflowX} ${style.overflowY}`)) {
         const clip = parent.getBoundingClientRect();
-        if (/(hidden|clip|scroll|auto)/.test(style.overflowX)) { intersection.left = Math.max(intersection.left, clip.left + parent.clientLeft); intersection.right = Math.min(intersection.right, clip.left + parent.clientLeft + parent.clientWidth); }
-        if (/(hidden|clip|scroll|auto)/.test(style.overflowY)) { intersection.top = Math.max(intersection.top, clip.top + parent.clientTop); intersection.bottom = Math.min(intersection.bottom, clip.top + parent.clientTop + parent.clientHeight); }
+        const scaleX = clip.width / (parent.offsetWidth || parent.clientWidth || clip.width), scaleY = clip.height / (parent.offsetHeight || parent.clientHeight || clip.height);
+        if (/(hidden|clip|scroll|auto)/.test(style.overflowX)) { intersection.left = Math.max(intersection.left, clip.left + parent.clientLeft * scaleX); intersection.right = Math.min(intersection.right, clip.left + (parent.clientLeft + parent.clientWidth) * scaleX); }
+        if (/(hidden|clip|scroll|auto)/.test(style.overflowY)) { intersection.top = Math.max(intersection.top, clip.top + parent.clientTop * scaleY); intersection.bottom = Math.min(intersection.bottom, clip.top + (parent.clientTop + parent.clientHeight) * scaleY); }
         if (intersection.right <= intersection.left || intersection.bottom <= intersection.top) return false;
       }
     }
@@ -237,7 +330,12 @@ function snapshot(reference) {
     const box = bounds || el.getBoundingClientRect(), ancestors = [];
     for (let parent = el.parentElement; parent; parent = parent.parentElement) ancestors.push(indexes.get(parent));
     const region = el.parentElement?.closest('[id]')?.id || null;
-    return { kind, value, node: indexes.get(el), ancestors, region, visible: visible(el, box, kind), box: { x: box.x, y: box.y, width: box.width, height: box.height },
+    return { kind, value, node: indexes.get(el), ancestors, region, visible: visible(el, box, kind), box: referenceViewport ? {
+        x: (box.x - left) / sx * referenceViewport.width / width,
+        y: (box.y - top) / sy * referenceViewport.height / height,
+        width: box.width / sx * referenceViewport.width / width,
+        height: box.height / sy * referenceViewport.height / height,
+      } : { x: box.x, y: box.y, width: box.width, height: box.height },
       tokens: textNodes.filter(node => el.contains(node) && normalize(node.textContent)).map(node => tokenIds.get(node)) };
   };
   const textInfo = new Map(textNodes.map(node => {
@@ -341,6 +439,19 @@ export async function compareScreen({ url, drawingPath, cwd = process.cwd(), chr
   const active = tokens.filter(token => !token.startsWith('<!--') && !token.startsWith('<![CDATA[')).join('\n');
   if (!source.trim() || /<!DOCTYPE|<!ENTITY|<\s*(?:script|foreignObject)\b|\son\w+\s*=/i.test(active)) throw failure('Empty or unsafe SVG drawing.');
   const rendered = await (ports.browser ?? browserRun)({ source, url: target.href, chromePath, env: ports.env ?? process.env });
+  if (rendered?.notReady) {
+    const { state, reason } = rendered.notReady;
+    const messages = {
+      'not-open': 'Deliberately open the app before rerunning this comparison. Opening can spend AI calls.',
+      timeout: 'The Screen did not finish its 10-second ready wait. Wait for the app to settle, then rerun.',
+      'viewer-update-required': 'Update the Simulator Screen viewer to the supported readiness protocol, then rerun.',
+      'surface-unavailable': 'The ready Screen has no single accessible app surface. Reload or update the viewer, then rerun.',
+      'state-read-failed': 'The Screen state could not be read. Reload to read its state, then rerun.',
+      'render-failed': 'The app Screen could not render. Repair the render error, then rerun.',
+      'action-unknown': 'The action outcome is unknown. Reload for read-only reconciliation before rerunning; do not send it again.',
+    };
+    throw Object.assign(failure(messages[reason] || 'The Screen is not ready.', 6), { code: 'screen-not-ready', state, reason });
+  }
   if (!rendered?.reference?.length || !rendered.actual || !(rendered.viewport?.width > 0 && rendered.viewport?.height > 0)) throw failure('Browser returned no valid reference parts.', 5);
   const rows = compareParts(rendered.reference, rendered.actual, rendered.viewport);
   return { drawing, url: target.href, viewport: rendered.viewport, rows, passed: rows.every(row => row.status === 'pass') };

@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
 import { PassThrough } from 'node:stream';
 import { createTryTools, runMcp } from '../src/runtime-seam.mjs';
+
+const packageVersion = createRequire(import.meta.url)('../package.json').version;
 
 function fixture(overrides = {}) {
   const scenario = { criteria: [{ id: 'AC1', text: 'Adds bookmark' }], initial_world: { kv: {} }, steps: [{ step_id: 'add', entry_path: 'prompts/bm.prompt.md', operation: 'main', input: { argv: ['add', 'news'] }, checks: [{ criterion_id: 'AC1', target: 'result', path: '/stdout', op: 'equals', value: 'Added\n' }] }] };
@@ -67,6 +70,7 @@ test('stdio serves MCP negotiation and errors with stdout exclusively JSON', asy
   assert.equal(rows.filter(row => row.error?.code === -32700).length, 1);
   assert.equal(rows.filter(row => row.error?.code === -32600).length, 2);
   assert.equal(rows.find(row => row.id === 1).result.protocolVersion, '2025-06-18');
+  assert.equal(rows.find(row => row.id === 1).result.serverInfo.version, packageVersion);
   assert.deepEqual(rows.find(row => row.id === 2).result.tools.map(tool => tool.name), ['try_open', 'try_state', 'try_run', 'try_check', 'try_save_case']);
   assert.equal(rows.find(row => row.id === 3).error.code, -32601);
   assert.equal(rows.find(row => row.id === 4).error.code, -32602);

@@ -71,43 +71,116 @@ Number settings that a person may choose (for example `COLUMNS`, `LINES`, `HISTS
 - Load the [Prompting guide](../../docs/prompting-guide.md) for authoring and generation.
 - [Named local agents](agent-config.prompt.md) owns `loadAgentDefinitions` and the agents.json format, validation and `~` expansion; this module only selects an entry by name.
 - [Agent adapters](agent-adapters.prompt.md) owns the reusable `runAgentProcess` native process boundary, including closed input, process cleanup, bounded output, executableMissing evidence and the shared parseAgentAuthStatus credential-status rules. This module supplies only status commands, the caller environment and the probe bounds; it does not use Try discovery or invoke the model adapter.
-- The [CLI](pdd-cli.prompt.md) and [runner](workflow-runner.prompt.md) own setup/startup dispatch and all subsequent effects. A refused readiness result must not be interpreted as a started workflow. They do not infer readiness themselves.
-- Native command reference: [Claude Code CLI](https://code.claude.com/docs/en/cli-reference). Commands and accepted readiness facts are specified above so generation does not depend on a live documentation fetch.
+- The [CLI](pdd-cli.prompt.md#setup-and-workflow-admission) and [runner](workflow-runner.prompt.md#commands) own setup/startup dispatch and all subsequent effects. A refused readiness result must not be interpreted as a started workflow. They do not infer readiness themselves.
+- Navigation only: [Claude Code CLI](https://code.claude.com/docs/en/cli-reference). Commands and accepted readiness facts are specified above so generation does not depend on a live documentation fetch.
 
-<details>
-<summary>Runtime interface</summary>
+<details><summary>Runtime interface</summary>
 
 ```json
 {
   "status": "approved",
-  "prose_sha256": "ad7081577ca3c3008e1f927a9abe76a5a70a2c99cb2bafa01d38e95856650184",
-  "entries": [{
-    "operation": "chooseWorkflowAgent",
-    "input_schema": {
-      "type": "object",
-      "properties": {
-        "codex": {"type": "string", "enum": ["ready", "missing", "signed_out", "unavailable"]},
-        "claude": {"type": "string", "enum": ["ready", "missing", "signed_out", "unavailable"]},
-        "gemini": {"type": "string", "enum": ["ready", "missing", "signed_out", "unavailable"]},
-        "agy": {"type": "string", "enum": ["ready", "missing", "signed_out", "unavailable"]},
-        "requested": {"type": "string", "enum": ["codex", "claude", "gemini", "agy"]}
+  "prose_sha256": "59c0ad4e8151d6fa433a5e4a22929325e007e093f4ee995376adab057c3d85d4",
+  "entries": [
+    {
+      "operation": "chooseWorkflowAgent",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "codex": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "missing",
+              "signed_out",
+              "unavailable"
+            ]
+          },
+          "claude": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "missing",
+              "signed_out",
+              "unavailable"
+            ]
+          },
+          "gemini": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "missing",
+              "signed_out",
+              "unavailable"
+            ]
+          },
+          "agy": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "missing",
+              "signed_out",
+              "unavailable"
+            ]
+          },
+          "requested": {
+            "type": "string",
+            "enum": [
+              "codex",
+              "claude",
+              "gemini",
+              "agy"
+            ]
+          }
+        },
+        "required": [
+          "codex",
+          "claude"
+        ],
+        "additionalProperties": false
       },
-      "required": ["codex", "claude"], "additionalProperties": false
-    },
-    "result_schema": {
-      "type": "object",
-      "properties": {
-        "ok": {"type": "boolean"},
-        "agent": {"oneOf": [{"type": "string", "enum": ["codex", "claude", "gemini", "agy"]}, {"type": "null"}]},
-        "message": {"type": "string"}
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "agent": {
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "codex",
+                  "claude",
+                  "gemini",
+                  "agy"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "agent",
+          "message"
+        ],
+        "additionalProperties": false
       },
-      "required": ["ok", "agent", "message"], "additionalProperties": false
-    },
-    "errors": []
-  }],
-  "calls": [], "resources": [],
-  "limits": {"max_steps": 1, "max_model_calls": 1}, "conventions": []
+      "errors": []
+    }
+  ],
+  "calls": [],
+  "resources": [],
+  "limits": {
+    "max_steps": 1,
+    "max_model_calls": 1
+  },
+  "conventions": []
 }
 ```
-
 </details>

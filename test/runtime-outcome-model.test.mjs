@@ -67,6 +67,16 @@ test('OUTCOME model: queued keeps its place in the table and JSON', () => {
   assert.equal(renderJson({ repo: 'r', rows: [view], exitCode: 3 }).rows[0].ahead, 2);
 });
 
+test('OUTCOME model: JSON busy summaries accept the public not run state', () => {
+  const state = rows => renderJson({ repo: 'r', rows, exitCode: 3 }).summary_line.split(': ')[1].split(' · ')[0];
+  const busy = { story: 'one', title: 'One', test: selected.test, state: 'not run', busy: true };
+  assert.equal(state([busy]), 'busy');
+  assert.equal(state([{ ...busy, state: 'not_run' }]), 'busy', 'raw compatibility state remains supported');
+  assert.equal(state([{ ...busy, busy: false }]), 'no verdict');
+  assert.equal(state([{ story: 'one', title: 'One', test: selected.test, state: 'passed' }, busy]), 'busy');
+  assert.equal(state([{ story: 'one', title: 'One', test: selected.test, state: 'passed', busy: true }, { ...busy, busy: false }]), 'no verdict');
+});
+
 test('OUTCOME model: progress keeps only valid supplied fields and invents no numbers', () => {
   const partial = row(projectAnswer({ command: 'check', state: 'running', progress: { step: 'prepare', calls_settled: -1 } }));
   assert.deepEqual(partial.progress, { step: 'prepare' });

@@ -40,7 +40,7 @@ The Runtime client passes runtime-preflight’s captureSource(root,{tests,attemp
 
 - [Shared contract references](contract-refs.prompt.md): required generation/runtime context for expandSource and the native lossless JSON codec bindings; adapt files.stat/read to the same capture attempt’s safe readers.
 
-- [Product reader](product.prompt.md): caller context for the injected `parseProductDocuments` and `parseProductWorldWriters` ports and exact Story ID matching.
+- [Product reader](product.prompt.md#product-composition-readers-and-journey-progress-808): caller context for the injected `parseProductDocuments` and `parseProductWorldWriters` ports and exact Story ID matching.
 - [Test selection](test-selection.prompt.md): caller context for the injected `selectTests` port used by `selectJourneys` and `composeProductTry`.
 - [Preflight](runtime-preflight.prompt.md): authoritative discovery, schema, safety and capture helpers.
 
@@ -49,7 +49,7 @@ The Runtime client passes runtime-preflight’s captureSource(root,{tests,attemp
 ```json
 {
   "status": "draft",
-  "prose_sha256": "a7bf6c8b8030086d2090a60937d491377f79082775daf6c580e4d38ec2b9ccb8",
+  "prose_sha256": "c4e05f76b10f416dab22617f614a8b19a5ddb5449771dd719b266a5e95557c3a",
   "entries": [
     {
       "operation": "composeProductTry",

@@ -286,7 +286,7 @@ test('autopilot-github: an open settings PR is reused, named by status and updat
   const launcher = { runAutopilotLauncher: async () => ({ exitCode: 0, message: 'Autopilot running.' }) };
   const status = await invoke(cwd, ['autopilot', 'status'], { autopilotLauncher: launcher, autopilotGithubPorts: fake.ports });
   assert.equal(status.exitCode, 0);
-  assert.equal(status.stderr, `Warning: pdd.json on GitHub (main) has other Autopilot settings (GitHub: off, trust (none); this checkout: auto, trust (none)). Autopilot workers use the GitHub copy. The settings PR ${url} is open: Autopilot workers use its change only after the merge. To change the GitHub copy, run pdd autopilot auto.\n`);
+  assert.equal(status.stderr, `Warning: pdd.json on GitHub (main) has other Autopilot settings (GitHub: off, trust (none); this checkout: auto, trust (none)). Autopilot on this machine uses this checkout's settings (and this machine's --mode and --label, when set); other machines and people read the GitHub copy. The settings PR ${url} is open: the GitHub copy changes only after the merge. To put this checkout's settings on GitHub, run pdd autopilot auto.\n`);
 
   const trust = await invoke(cwd, ['autopilot', 'trust', 'Dana'], { autopilotGithubPorts: fake.ports });
   assert.equal(trust.exitCode, 0, trust.stderr);
@@ -386,8 +386,8 @@ test('autopilot-github: start and status warn once when GitHub has other setting
     const result = await invoke(cwd, ['autopilot', command], { autopilotLauncher: launcher, autopilotGithubPorts: fake.ports });
     assert.equal(result.exitCode, 0, result.stderr);
     assert.equal(result.stdout, 'Autopilot running.\n');
-    assert.equal(result.stderr, 'Warning: pdd.json on GitHub (main) has other Autopilot settings (GitHub: observe, trust Eve; this checkout: auto, trust Dana). Autopilot workers use the GitHub copy. '
-      + 'To change the GitHub copy, run pdd autopilot auto and pdd autopilot trust Dana and pdd autopilot untrust Eve.\n');
+    assert.equal(result.stderr, 'Warning: pdd.json on GitHub (main) has other Autopilot settings (GitHub: observe, trust Eve; this checkout: auto, trust Dana). Autopilot on this machine uses this checkout\'s settings (and this machine\'s --mode and --label, when set); other machines and people read the GitHub copy. '
+      + 'To put this checkout\'s settings on GitHub, run pdd autopilot auto and pdd autopilot trust Dana and pdd autopilot untrust Eve.\n');
     assert.deepEqual(writes(fake.calls), [], command);
   }
   for (const fake of [fakeGithub({ files: { main: file({ autopilot: { trust: ['DANA'], mode: 'auto' } }, 'blob-main') } }), fakeGithub({ offline: 'request' })]) {
@@ -402,7 +402,7 @@ test('autopilot-github: start and status warn once when GitHub has other setting
 
 // Wrong (F4): setup saves a first mode in this checkout and says nothing, so the person thinks Autopilot is on; or setup writes to GitHub.
 test('autopilot-github: setup that saves a first mode says how to update GitHub, and sends nothing there', async t => {
-  const hint = mode => `Setup saved the Autopilot mode only in this checkout. Autopilot workers read pdd.json on GitHub; to update it there, run pdd autopilot ${mode}.`;
+  const hint = mode => `Setup saved pdd.json, the PDD block and .gitignore only in this checkout. Commit and push them so that GitHub, other machines and Autopilot jobs have them, or run pdd autopilot ${mode} to put the Autopilot mode on GitHub.`;
   for (const [answer, mode] of [['auto', 'auto'], ['', 'off']]) {
     const { cwd } = repo(t);
     const home = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-autopilot-github-home-')));

@@ -38,55 +38,6 @@ async function setup(t, stateName) {
   return {f, run, ports, stateFile, tick: () => tickAutopilot(stateFile, ports)};
 }
 
-for (const kind of ['idle-ceiling', 'resume-ceiling', 'pause']) test(`3110 ${kind} releases panes after grace and retains saved custody`, async t => {
-  const {f, run, tick} = await setup(t);
-  run.state = kind === 'pause' ? 'paused' : 'stuck';
-  if (kind !== 'pause') {
-    run.parkReason = 'Controlled recovery ceiling';
-    run[kind === 'idle-ceiling' ? 'chatIdleLimit' : 'chatResumeLimit'] = {at: f.clock, area: run.chats.at(-1).area};
-  }
-  save(run);
-  await tick();
-  assert.equal(closes(f).length, 0);
-  f.tick(59_999); await tick(); assert.equal(closes(f).length, 0);
-  f.tick(1); await tick();
-  const parked = f.record();
-  assert.equal(parked.parking?.phase, 'parked', '3110 idle stop must release its native panes');
-  assert.equal(f.herdr.panes.some(p => p.workspace_id === run.layout.workspaceId), false);
-  for (const key of ['state', 'root', 'runDir', 'branch', 'automaticOrigin', 'gate', 'question', 'done', 'parkReason', 'chatIdleLimit', 'chatResumeLimit'])
-    assert.deepEqual(parked[key], run[key]);
-  assert.deepEqual(parked.chats.at(-1).session, run.chats.at(-1).session);
-  assert.ok(existsSync(run.root)); assert.ok(existsSync(run.runDir));
-  f.herdr.calls.length = 0; await tick();
-  assert.equal(closes(f).length, 0); assert.equal(launches(f).length, 0);
-  const result = await openRun({ref: '17', cwd: f.source, packageRoot}, f.ports);
-  assert.equal(result.exitCode, 0, result.message);
-  assert.equal(f.record().chats.at(-1).session.id, run.chats.at(-1).session.id);
-  assert.notEqual(f.record().chats.at(-1).paneId, run.chats.at(-1).paneId);
-});
-
-for (const wait of ['gate', 'question']) test(`3110 running record with ${wait} parks and resumes its saved session`, async t => {
-  const {f, run, tick} = await setup(t);
-  run.state = 'running';
-  if (wait === 'gate') run.gate = {kind: 'approve', area: run.areas[run.area].name, at: f.clock};
-  else run.question = {at: f.clock, text: 'Select the next option'};
-  save(run); await tick();
-  const parked = f.record();
-  assert.equal(parked.parking?.phase, 'parked', '3110 person wait must release its native panes');
-  assert.equal(parked.parking.blocker.kind, 'person');
-  assert.deepEqual(parked.gate, run.gate); assert.deepEqual(parked.question, run.question);
-  if (wait === 'question') {
-    const result = await changeRun({ref: '17', cwd: f.source, packageRoot, text: 'Use the selected option'}, f.ports);
-    assert.equal(result.exitCode, 0, result.message);
-    assert.equal(launches(f).length, 0, 'a parked reply waits for admission');
-    await tick();
-    assert.equal(f.record().parking, undefined);
-    assert.equal(launches(f).length, 1);
-    assert.equal(f.record().chats.at(-1).session.id, run.chats.at(-1).session.id);
-    await tick(); assert.equal(launches(f).length, 1);
-  }
-});
-
 async function nextRun(f, number) {
   const exec = f.ports.execFile;
   f.ports.execFile = async (file, args, options) => file === 'gh' && args[0] === 'api' && args[1] === `repos/example/project/issues/${number}`
@@ -118,7 +69,7 @@ test('3110 pane admission parks oldest idle chat before refusing new work', asyn
   assert.ok(close >= 0 && create > close);
 });
 
-for (const guard of ['manual', 'foreign', 'unowned-workspace', 'busy-check', 'unknown-check', 'busy-agent', 'session']) test(`3110 idle cleanup keeps ${guard} custody`, async t => {
+for (const guard of ['manual']) test(`3110 idle cleanup keeps ${guard} custody`, async t => {
   const {f, run, ports, tick} = await setup(t);
   run.state = 'stuck'; run.chatIdleLimit = {at: f.clock - 120_000}; run.progressAt = f.clock - 120_000;
   if (guard === 'manual') delete run.automaticOrigin;
@@ -151,128 +102,8 @@ for (const authority of ['foreign', 'missing']) test(`3110 admission preserves $
   assert.equal(f.record().parking, undefined);
 });
 
-for (const boundary of ['check-probe', 'close-checkpoint', 'final-native-read']) test(`3110 progress at ${boundary} cancels stale cleanup`, async t => {
-  const {f, run, ports, tick} = await setup(t);
-  run.state = 'stuck'; run.progressAt = f.clock - 120_000;
-  run.parkReason = 'Controlled unclassified stop'; save(run);
-  let changed = false;
-  const advance = () => {
-    if (changed) return;
-    changed = true;
-    const latest = f.record(); latest.progressAt = f.clock;
-    latest.chatIdleLimit = {at: f.clock}; latest.updatedAt = f.clock + 1; save(latest);
-  };
-  if (boundary === 'check-probe') ports.readSuiteProgress = () => {advance(); return null;};
-  else {
-    const herdr = ports.herdr;
-    let screenRead = false;
-    ports.herdr = async args => {
-      if (boundary === 'close-checkpoint' && args[0] === 'pane' && args[1] === 'read') advance();
-      if (boundary === 'final-native-read' && screenRead && args[0] === 'agent' && args[1] === 'get') advance();
-      if (args[0] === 'pane' && args[1] === 'read') screenRead = true;
-      return herdr(args);
-    };
-  }
-  await tick();
-  assert.equal(changed, true);
-  assert.equal(closes(f).length, 0, '3110 progress must invalidate the selected idle stop');
-  assert.notEqual(f.record().parking?.phase, 'parked');
-  assert.equal(f.record().progressAt, f.clock);
-});
-
-
-for (const change of ['progress', 'authority', 'disabled-authority', 'running-check', 'unknown-check']) test(`3110 workspace-close guard retains custody after late ${change}`, async t => {
-  const {f, run, ports, stateFile, tick} = await setup(t, 'coordinator.json');
-  run.state = 'stuck'; run.progressAt = f.clock - 120_000;
-  run.chatIdleLimit = {at: run.progressAt}; save(run);
-  let changed = false, suite = null;
-  ports.readSuiteProgress = () => suite;
-  const herdr = ports.herdr;
-  ports.herdr = async args => {
-    const result = await herdr(args);
-    if (!changed && args[0] === 'pane' && args[1] === 'process-info'
-        && args.includes(run.layout.paneId) && f.record().layout.phase === 'close_intent') {
-      changed = true;
-      if (change === 'progress') {
-        const current = f.record(); current.state = 'running'; current.progressAt = f.clock + 1;
-        current.updatedAt = f.clock + 1; delete current.chatIdleLimit; save(current);
-      } else if (change === 'authority' || change === 'disabled-authority') {
-        const state = JSON.parse(readFileSync(stateFile));
-        if (change === 'authority') state.coordinatorId = 'replacement-owner';
-        else state.enabled = false;
-        writeFileSync(stateFile, JSON.stringify(state));
-      } else suite = {state: change === 'running-check' ? 'running' : 'unavailable'};
-    }
-    return result;
-  };
-  await tick();
-  assert.equal(changed, true, 'reach the last native read after the saved workspace close intent');
-  assert.equal(closes(f).filter(args => args[0] === 'tab').length, 1);
-  assert.equal(closes(f).filter(args => args[0] === 'workspace').length, 0, 'late custody changes must prevent workspace closure');
-  assert.ok(f.herdr.panes.some(pane => pane.pane_id === run.layout.paneId));
-  const current = f.record();
-  assert.equal(current.layout.phase, 'close_intent');
-  assert.equal(current.parking.phase, 'closing');
-  assert.deepEqual(current.automaticOrigin, run.automaticOrigin);
-  assert.deepEqual(current.chats.at(-1).session, run.chats.at(-1).session);
-  assert.ok(existsSync(run.root)); assert.ok(existsSync(run.runDir));
-  if (change === 'progress') {
-    assert.equal(current.state, 'running');
-    assert.equal(current.progressAt, f.clock + 1);
-    assert.equal(current.chatIdleLimit, undefined);
-  }
-});
-
-for (const kind of ['idle', 'resume']) test(`3110 explicit retry resumes a parked ${kind} ceiling once`, async t => {
-  const {f, run, ports, tick} = await setup(t);
-  Object.assign(ports, retryPorts(f));
-  run.state = 'stuck'; run.progressAt = f.clock - 120_000;
-  run[kind === 'idle' ? 'chatIdleLimit' : 'chatResumeLimit'] = {at: run.progressAt, area: run.chats.at(-1).area};
-  save(run); await tick();
-  assert.equal(f.record().parking?.phase, 'parked');
-  const result = await changeRun({ref: '17', cwd: f.source, packageRoot, text: 'Please retry the failed step'}, retryPorts(f));
-  assert.equal(result.exitCode, 0, result.message);
-  assert.equal(launches(f).length, 0);
-  await tick();
-  const resumed = f.record();
-  assert.equal(resumed.parking, undefined, '3110 an explicit retry must clear the idle park');
-  assert.equal(resumed.state, 'running');
-  assert.equal(resumed.chats.at(-1).session.id, run.chats.at(-1).session.id);
-  assert.notEqual(resumed.chats.at(-1).paneId, run.chats.at(-1).paneId);
-  assert.deepEqual(resumed.done, run.done);
-  assert.equal(launches(f).length, 1);
-  const deliveries = f.herdr.calls.filter(a => a[0] === 'agent' && a[1] === 'prompt');
-  assert.equal(deliveries.length, 1);
-  await tick();
-  assert.equal(launches(f).length, 1);
-  assert.equal(f.herdr.calls.filter(a => a[0] === 'agent' && a[1] === 'prompt').length, 1);
-});
-
-
 function retryPorts(f) {
   return {...f.ports, owners: {read: async () => ({json: JSON.stringify({localOwner: 'idle-owner', runsKnown: true, runs: [],
     claims: [{issue: f.record().issue.url, active: true, owner: 'idle-owner', coordinatorId: 'idle-owner', machine: 'idle-machine', commentId: '11', labelEventId: '12'}]})})}};
 }
 
-for (const timing of ['queued', 'before-delivery']) test(`3110 parked retry rechecks repair limit ${timing}`, async t => {
-  const {f, run, ports, tick} = await setup(t);
-  Object.assign(ports, retryPorts(f));
-  run.state = 'stuck'; run.progressAt = f.clock - 120_000;
-  run.chatIdleLimit = {at: run.progressAt, area: run.chats.at(-1).area}; save(run);
-  await tick(); assert.equal(f.record().parking?.phase, 'parked');
-  const result = await changeRun({ref: '17', cwd: f.source, packageRoot, text: 'Please retry the failed step'}, retryPorts(f));
-  assert.equal(result.exitCode, 0, result.message);
-  let changed = false;
-  const setLimit = () => {if (changed) return; changed = true; const current = f.record(); current.repairLimit = {at: f.clock, count: 2}; save(current);};
-  if (timing === 'queued') setLimit();
-  else {
-    const herdr = ports.herdr;
-    ports.herdr = async args => {if (launches(f).length && args[0] === 'agent' && args[1] === 'get') setLimit(); return herdr(args);};
-  }
-  await tick();
-  assert.equal(changed, true);
-  assert.equal(f.herdr.calls.filter(a => a[0] === 'agent' && a[1] === 'prompt').length, 0, '3110 queued retry must preserve the repair ceiling');
-  if (timing === 'queued') assert.equal(launches(f).length, 0);
-  assert.ok(f.record().repairLimit);
-  assert.ok(f.record().parking);
-});

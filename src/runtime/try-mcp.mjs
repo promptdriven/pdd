@@ -1,4 +1,4 @@
-// Generated from prompts/cli/try-mcp.prompt.md (sha256: 633585cf8b86f56ae25a40bf2b7856d3b6e1f81028c01f3244474f8b609d524a).
+// Generated from prompts/cli/try-mcp.prompt.md (sha256: e328d3c2c00b49291d2fc14650035514fe885f4ab03de25621753c6e4ff12134).
 import { createInterface } from 'node:readline';
 import { readTryOwner, runDoorCall, saveDoorCase, applyPendingCaseWithHandoff } from './runtime-client.mjs';
 import { createRunJudge } from './agent-judge.mjs';
@@ -128,7 +128,8 @@ export function createTryTools({ cwd = process.cwd(), words = [], env } = {}, po
   return { call(name, args = {}) { const result = queue.then(() => invoke(name, args)); queue = result.catch(() => {}); return result; } };
 }
 
-export async function runMcp({ cwd = process.cwd(), words = [], env } = {}, ports = {}) {
+export async function runMcp({ cwd = process.cwd(), words = [], env, client } = {}, ports = {}) {
+  const serverVersion = typeof client?.version === 'string' && client.version ? client.version : typeof ports.clientVersion === 'string' && ports.clientVersion ? ports.clientVersion : '0.0.0';
   const stdin = ports.stdin ?? process.stdin, stdout = ports.stdout ?? process.stdout, stderr = ports.stderr ?? process.stderr;
   const service = createTryTools({ cwd, words, env }, ports), replay = new Map();
   const send = message => stdout.write(`${JSON.stringify(message)}\n`);
@@ -139,7 +140,7 @@ export async function runMcp({ cwd = process.cwd(), words = [], env } = {}, port
     if (msg.method === 'initialize') {
       if (!object(msg.params) || typeof msg.params.protocolVersion !== 'string' || !object(msg.params.capabilities) || !object(msg.params.clientInfo)) return error(id, -32602, 'Invalid initialize parameters');
       const versions = ['2025-06-18', '2025-03-26', '2024-11-05'];
-      return { jsonrpc: '2.0', id, result: { protocolVersion: versions.includes(msg.params.protocolVersion) ? msg.params.protocolVersion : versions[0], capabilities: { tools: {} }, serverInfo: { name: 'pdd-try', version: '0.1.28' } } };
+      return { jsonrpc: '2.0', id, result: { protocolVersion: versions.includes(msg.params.protocolVersion) ? msg.params.protocolVersion : versions[0], capabilities: { tools: {} }, serverInfo: { name: 'pdd-try', version: serverVersion } } };
     }
     if (msg.method === 'ping' || msg.method === 'tools/list') {
       if (msg.params !== undefined && !object(msg.params)) return error(id, -32602, 'Parameters must be an object');

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-entry.prompt.md (sha256: 4ee8da83ca6ebf98cd3446e7482db398ebb2d933b12ac1768e4a51803d2dca6d).
+// Generated from prompts/cli/runtime-entry.prompt.md (sha256: dd0a0edd17645fc4baad05bef01261fd7146802a86bb82781c60043385dff665).
 import { createRequire } from 'node:module';
 import { isDeepStrictEqual } from 'node:util';
 
@@ -79,6 +79,10 @@ export function jsonSafe(...args) {
 
 export function parseScenarioJson(...args) {
   return runtimeScenarioJsonSlice().parseScenarioJson(...args);
+}
+
+export function roundedNumberTokens(...args) {
+  return runtimeScenarioJsonSlice().roundedNumberTokens(...args);
 }
 
 export function stringifyScenarioJson(...args) {
@@ -223,6 +227,10 @@ export function discoveryRefusal(...args) {
 
 export function discoveryVisibleFiles(...args) {
   return runtimePreflightSlice().discoveryVisibleFiles(...args);
+}
+
+export function exactNumberSpelling(...args) {
+  return runtimePreflightSlice().exactNumberSpelling(...args);
 }
 
 export function executableInterfaceText(...args) {
@@ -491,6 +499,11 @@ export async function loadRuntimeClient() {
 export async function checkRuntimeHealth(input, ports) {
   const { checkRuntimeHealth: check } = await import('./runtime-client.mjs');
   return check(input, ports);
+}
+
+export async function resendableStoryChecks(input, ports) {
+  const { resendableStoryChecks: read } = await import('./runtime-client.mjs');
+  return read(input, ports);
 }
 
 export async function savedStoryEvidence(input, ports) {

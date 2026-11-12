@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 21bb7148cfb471ef967baa91fa92348953c744c1cdd82f0ee78114d0fafcbb91).
+// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 6a722862aec1bf1a2ad5cc886c9922e50a45975f9bdddba9b72a450e5e980263).
 import { readFileSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -41,6 +41,7 @@ import {
   discoveryRefusal,
   discoveryVisibleFiles,
   exactIntegerLeaves,
+  exactNumberSpelling,
   exactValue,
   executableInterfaceText,
   fillHashes,
@@ -87,7 +88,9 @@ import {
   renderJson as rawRenderJson,
   renderText as rawRenderText,
   requireRuntimePath,
+  resendableStoryChecks as rawResendableStoryChecks,
   resultOutcome,
+  roundedNumberTokens,
   resultOverall,
   runAutomaticApproval as runtimeRunAutomaticApproval,
   runCheck as runtimeRunCheck,
@@ -405,6 +408,7 @@ export function runtimeClientSlice() {
     readContractHistory,
     runtimeOrigin,
     runtimeWorkspaceMigrationStore,
+    resendableStoryChecks,
     saveDoorCase,
     saveDoorCaseResult,
     savedStoryEvidence,
@@ -775,6 +779,7 @@ export async function runMcp(input, ports = {}) {
     input,
     seamRuntimePorts(
       withPortDefaults(withEligibilityDefault(ports, readEvidenceEligibility), {
+        clientVersion: clientVersion(),
         tryLauncherUrl: TRY_LAUNCHER_URL,
         parseProductDocuments,
         parseProductWorldWriters,
@@ -816,6 +821,10 @@ export async function applyPendingCaseWithHandoff(input, ports = {}) {
 
 export function createSavedStoryEvidenceReader(ports = {}) {
   return rawCreateSavedStoryEvidenceReader(seamSelectionPorts(ports));
+}
+
+export async function resendableStoryChecks(input, ports = {}) {
+  return rawResendableStoryChecks(input, ports);
 }
 
 export async function savedStoryEvidence(input, ports = {}) {
@@ -1059,6 +1068,7 @@ export {
   discoveryRefusal,
   discoveryVisibleFiles,
   exactIntegerLeaves,
+  exactNumberSpelling,
   exactValue,
   executableInterfaceText,
   fillHashes,
@@ -1097,6 +1107,7 @@ export {
   requireRuntimePath,
   resultOutcome,
   resultOverall,
+  roundedNumberTokens,
   runtimeAgentPacketSlice,
   runtimeCheckPlanSlice,
   runtimeOrigin,

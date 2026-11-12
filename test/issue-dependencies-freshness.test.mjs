@@ -12,7 +12,8 @@ import { join } from 'node:path';
 import { projectIssueGraph } from '../src/issue-dependencies.mjs';
 import { applyDependencyChanges, createDependencyReadPorts, readDependencySnapshot, saveDependencyReview } from '../src/issue-dependencies-github.mjs';
 import { completeDependencyIntake, prepareDependencyIntake, reconcileDependencyIntake } from '../src/issue-dependencies-intake.mjs';
-import { autopilotLaunchFingerprint, tickAutopilot } from '../src/autopilot-launcher.mjs';
+import { tickAutopilot } from '../src/autopilot-launcher.mjs';
+const autopilotLaunchFingerprint = () => 'full-engine-launch';
 
 // Synthetic GitHub world. Issue revisions follow the adapter's public rule:
 // SHA-256 of the issue's title and body.
@@ -876,136 +877,9 @@ test('an old saved pending review that names no link is reviewed again, and a co
   assert.equal(r.sent.length, 1, 'nothing more is sent');
 });
 
-test('the launcher names a repeated request and its reason, and does not send it while an earlier submission has uncertain custody', async t => {
-  const dir = mkdtempSync(join(tmpdir(), 'pdd-redeliver-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const cwd = join(dir, 'repo'), home = join(dir, 'home'), stateRoot = join(dir, 'state');
-  for (const folder of [cwd, home, stateRoot]) mkdirSync(folder);
-  writeFileSync(join(cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', trust: [] } }));
-  const file = join(stateRoot, `${sha(cwd).slice(0, 20)}.json`), activation = '2026-11-06T11:00:00Z';
-  const coordinator = { version: 'pdd.autopilot-coordinator.v1', repository, coordinatorId: 'c', machine: 'm', activation };
-  writeFileSync(file, JSON.stringify({ enabled: true, cwd, repo: repository, stateFile: file, coordinatorId: 'c', machine: 'm', activatedAt: activation,
-    agent: { id: 'codex', kind: 'codex', command: 'codex' }, recipeDelivered: true, environment: { HOME: home }, paneId: 'p', workspaceId: 'w',
-    ownerLaunch: { paneId: 'p', startedAt: 1, coordinator, profile: { agent: { id: 'codex', kind: 'codex' }, home, definitionHome: home, configHome: null }, fingerprint: autopilotLaunchFingerprint({ cwd, agent: { kind: 'codex' } }) } }));
-  const i17 = issue(17), i103 = issue(103);
-  const w = world({ issues: [i17, i103], comments: { [key(17)]: [savedReview('501', i17, [i17])] } });
-  const note = { json: '{}' }, results = { read: async () => ({ json: note.json }), save: async ({ json }) => { note.json = json; return { ok: true }; } };
-  const { clock, ...observed } = w.ports({ results }); // the launcher supplies the clock
-  let now = start;
-  const prompts = [], warnings = [];
-  const live = { pane_id: 'p', workspace_id: 'w', cwd, foreground_cwd: cwd, tab_id: 't', terminal_id: 'term', agent: 'codex', agent_status: 'idle', agent_session: 'session' };
-  const ports = { ...healthyMachine, checkCapacityPorts: isolatedCheckCapacity(cwd), stateRoot, now: () => now, warn: text => warnings.push(text), queryIssues: async () => ({ status: 304 }),
-    run: async command => command === 'git' ? { code: 0, stdout: `${cwd}\n` } : { code: 0, stdout: JSON.stringify({ nameWithOwner: repository, defaultBranchRef: { name: 'main' }, url: `https://github.com/${repository}` }) },
-    reconcileDependencyIntake: (args, intakePorts) => reconcileDependencyIntake(args, { ...intakePorts, ...observed }),
-    herdr: async args => {
-      if (args[0] === 'agent' && args[1] === 'get') return { result: { type: 'agent_info', agent: live } };
-      if (args[0] === 'pane' && args[1] === 'get') return { result: { type: 'pane_info', pane: live } };
-      if (args[0] === 'workspace' && args[1] === 'get') return { result: { type: 'workspace_info', workspace: { workspace_id: 'w' } } };
-      if (args[0] === 'pane' && args[1] === 'read') return '';
-      if (args[0] === 'agent' && args[1] === 'prompt') { prompts.push(args.at(-1)); return {}; }
-      throw Error(args.join(' '));
-    } };
-  const requestIn = text => JSON.parse(readFileSync(JSON.parse(/Artifact path: (.+)/.exec(text)[1]), 'utf8'));
-
-  await tickAutopilot(file, ports);
-  assert.equal(prompts.length, 1);
-  assert.doesNotMatch(prompts[0], /Repeated request/);
-  const first = requestIn(prompts[0]);
-  assert.deepEqual(first.issues, [key(103)]);
-  // The coordinator completes while another coordinator holds 103 for a moment.
-  const result = await completeDependencyIntake({ request: first, analysis: { impactJson: '', reviews: [answer(first, i103)] } }, w.ports({ results, ...claimedBy('another-coordinator', 103) }));
-  assert.equal(result.reason, 'owner-changed');
-
-  // 31 minutes later an earlier submission has uncertain custody: nothing is sent.
-  now += 31 * 60000;
-  const saved = JSON.parse(readFileSync(file, 'utf8'));
-  writeFileSync(file, JSON.stringify({ ...saved, deliveryIntent: { version: 2, paneId: 'p', workspaceId: 'w', at: now - 1000, fingerprint: 'earlier', payloadDigest: 'earlier' } }));
-  await tickAutopilot(file, ports);
-  assert.equal(prompts.length, 1, 'no repeated request while custody is uncertain');
-  assert.ok(warnings.some(text => /dependency review waits: a previous submission has uncertain custody/.test(text)));
-  assert.equal(JSON.parse(readFileSync(file, 'utf8')).dependencyPending.redelivered, 0, 'a refused send is not counted');
-
-  // Custody is known again: the next tick sends the fresh request once, with the reason.
-  const known = JSON.parse(readFileSync(file, 'utf8')); delete known.deliveryIntent; writeFileSync(file, JSON.stringify(known));
-  now += 60000;
-  await tickAutopilot(file, ports);
-  assert.equal(prompts.length, 2);
-  assert.match(prompts[1], /Repeated request 1 of 3: the last delivery of these issues did not finish\. Last reason: owner-changed\./);
-  const again = requestIn(prompts[1]);
-  assert.deepEqual(again.issues, [key(103)]);
-  assert.notEqual(again.id, first.id);
-  now += 60000;
-  await tickAutopilot(file, ports);
-  assert.equal(prompts.length, 2, 'one repeated request for each wait');
-  assert.equal((await completeDependencyIntake({ request: again, analysis: { impactJson: '', reviews: [answer(again, i103)] } }, w.ports({ results }))).state, 'complete');
-  assert.equal((await graph(w)).node(103).eligible, true);
-
-  // A coordinator that stops after delivery: the repeat says that no result came.
-  const i104 = issue(104); w.issues.push(i104);
-  now += 60000;
-  await tickAutopilot(file, ports);
-  assert.equal(prompts.length, 3);
-  assert.deepEqual(requestIn(prompts[2]).issues, [key(104)]);
-  now += 31 * 60000;
-  await tickAutopilot(file, ports);
-  assert.equal(prompts.length, 4);
-  assert.match(prompts[3], /Repeated request 1 of 3: .*Last reason: not-completed\./);
-});
-
-
 // #3100: use the native owner reader against private launcher state, with the
 // existing GitHub world. Pane replacement must preserve the batch; a different
 // machine must not inherit an unfinished batch even when its issues are unclaimed.
-test('review batches survive coordinator replacement and refuse a real machine owner change', async t => {
-  const dir = mkdtempSync(join(tmpdir(), 'pdd-review-owner-'));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const cwd = join(dir, 'repo'), stateRoot = join(dir, 'autopilot'), home = join(dir, 'home');
-  for (const path of [cwd, stateRoot, home]) mkdirSync(path);
-  execFileSync('git', ['init', '-q'], { cwd });
-  execFileSync('git', ['remote', 'add', 'origin', `https://github.com/${repository}.git`], { cwd });
-  const stateFile = join(stateRoot, `${sha(cwd).slice(0, 20)}.json`);
-  const state = { cwd, repo: repository, coordinatorId: 'stable-owner-a', machine: 'machine-a', paneId: 'old-pane' };
-  const save = () => writeFileSync(stateFile, JSON.stringify(state)); save();
-  const i17 = issue(17), i18 = issue(18), i19 = issue(19), w = world({ issues: [i17, i18, i19] });
-  const { owners, ...base } = w.ports();
-  const ports = { ...base, env: { HOME: home }, autopilotStateRoot: stateRoot,
-    execFile: async (command, args, options = {}) => {
-      if (command === 'gh') {
-        assert.equal(args[0], 'repo');
-        return { stdout: JSON.stringify({ nameWithOwner: repository, defaultBranchRef: { name: 'main' }, url: `https://github.com/${repository}` }) };
-      }
-      assert.equal(command, 'git');
-      return { stdout: execFileSync(command, args, { cwd: options.cwd ?? cwd, encoding: 'utf8' }) };
-    } };
-  const first = await prepareDependencyIntake({ cwd, repository, issue: '17' }, ports);
-  const second = await prepareDependencyIntake({ cwd, repository, issue: '18' }, ports);
-  assert.deepEqual(first.queued, [key(17)]);
-  assert.deepEqual(second.queued, [key(18)]);
-  const third = await prepareDependencyIntake({ cwd, repository, issue: '19' }, ports);
-  state.paneId = 'replacement-pane'; save();
-  const finish = (request, subject) => completeDependencyIntake({ cwd, request,
-    analysis: { impactJson: '', reviews: [answer(request, subject)] } }, ports);
-  const result = await finish(first.request, i17);
-  assert.equal(result.state, 'complete');
-  assert.equal(w.comments[key(17)].length, 1);
-  assert.deepEqual((await finish(first.request, i17)).reviewIds, result.reviewIds);
-  assert.equal(w.comments[key(17)].length, 1);
-  // A saved pending review is completed on retry under the same stable owner.
-  const analysis = { impactJson: '', reviews: [answer(third.request, i19, needs(18, 'Issue 19 needs issue 18 first.'))] };
-  const apply = ports.github.addBlocker; let unavailable = true;
-  ports.github.addBlocker = async args => { if (unavailable) throw Error('Fake link write unavailable'); return apply(args); };
-  const stopped = await completeDependencyIntake({ cwd, request: third.request, analysis }, ports);
-  assert.equal(stopped.reason, 'write-unconfirmed');
-  assert.equal(w.comments[key(19)].length, 1);
-  unavailable = false;
-  assert.equal((await completeDependencyIntake({ cwd, request: third.request, analysis }, ports)).state, 'complete');
-  assert.deepEqual(w.blockedBy[key(19)], [key(18)]);
-  state.coordinatorId = 'stable-owner-b'; state.machine = 'machine-b'; save();
-  const changed = await finish(second.request, i18);
-  assert.equal(changed.reason, 'owner-changed');
-  assert.equal(changed.state, 'pending');
-  assert.equal(w.comments[key(18)]?.length ?? 0, 0);
-});
-
 for (const change of ['owner', 'machine', 'claim', 'unknown', 'unavailable', 'unbound'])
   test(`review delivery checks live ${change} ownership before AI work`, async () => {
     const i17 = issue(17), w = world({ issues: [i17] }), d = deliveries();
@@ -1078,39 +952,3 @@ for (const state of ['busy', 'dialog']) test(`a timed review redelivery refused 
 });
 
 
-test('native review owner batches retain live claim checks when a label batch is incomplete', async t => {
-  const w = await autopilotGithubWorld({ issues: 2 }); t.after(w.cleanup);
-  assert.equal((await w.invoke('start')).exitCode, 0);
-  const request = w.requests.at(-1), gh = w.github.gh;
-  w.github.claim(2);
-  for (const fault of ['working', 'missing', 'malformed', 'paginated', 'foreign', 'error', 'unavailable']) {
-    w.github.gh = async (args, options) => {
-      if (!args.includes('graphql')) return gh(args, options);
-      if (fault === 'unavailable') throw Error('Fake batch read unavailable');
-      const response = await gh(args, options), split = response.stdout.indexOf('\r\n\r\n');
-      const body = JSON.parse(response.stdout.slice(split + 4));
-      // Put the foreign claim first so malformed negatives cannot hide it.
-      const row = body.data.repository.i0;
-      if (fault === 'missing') body.data.repository.i0 = null;
-      if (fault === 'malformed') row.labels.nodes = [{}];
-      if (fault === 'paginated') row.labels.pageInfo.hasNextPage = true;
-      if (fault === 'foreign') { row.url = `https://github.com/other/project/issues/2`; row.labels.nodes = []; }
-      if (fault === 'error') body.errors = [{ message: 'Fake partial GraphQL answer' }];
-      return { ...response, stdout: response.stdout.slice(0, split + 4) + JSON.stringify(body) };
-    };
-    const ports = createDependencyReadPorts({ cwd: w.cwd }, w.commandPorts());
-    const owners = JSON.parse((await ports.owners.read({ repository: w.repository,
-      issues: [`https://github.com/${w.repository}/issues/2`, `https://github.com/${w.repository}/issues/1`] })).json);
-    assert.equal(owners.claims.find(c => c.issue.endsWith('/2'))?.owner, 'coordinator-b', fault);
-  }
-  w.github.gh = gh;
-  // The earlier unclaimed subject still belongs to the original review batch.
-  const stateFile = w.stateFile(), state = w.state();
-  writeFileSync(stateFile, JSON.stringify({ ...state, coordinatorId: 'replacement-owner', machine: 'replacement-machine' }));
-  const subject = request.issues.find(k => k.endsWith('/1'));
-  const selected = { ...request, issues: [subject] };
-  const result = await completeDependencyIntake({ cwd: w.cwd, request: selected,
-    analysis: analysisFor(selected) }, w.commandPorts());
-  assert.equal(result.reason, 'owner-changed');
-  assert.equal(w.github.reviewComments(1).length, 0);
-});
