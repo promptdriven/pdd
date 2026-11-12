@@ -206,11 +206,14 @@ and effects without a parallel prose translation.
 Purpose, domain decisions and meaningful exceptions remain visible when detailed
 references are closed. Named references provide exact declarations and boundaries.
 Disclosures organize necessary detail; they do not hide duplicate explanations.
-Labels and prose remain readable at their intended display size, including narrow
-layouts. Additional space is appropriate for necessary meaning and legibility.
+Labels and prose remain concise and readable at their intended display size,
+including narrow layouts.
 
 The contract states exact defaults, boundaries, payloads and failure precedence
-without word caps, diagram quotas, opaque shorthand or hidden sidecars. Dependency
+concisely, without diagram quotas, opaque shorthand, hidden sidecars or
+line-by-line code restatement. Keep a prompt smaller than the code it owns; when
+prose grows toward code length, state the domain rule or move low-level mechanics
+to native proof. Dependency
 declarations name required context and facilities without absent-package lists or
 repeated independence claims. Links and image paths are relative to the prompt
 that contains them.
@@ -294,6 +297,30 @@ whether those boundaries remain stable across the error envelope and names any
 permitted variation in decisions.
 
 </details>
+
+## Choose evidence before Stories
+
+Before splitting work into Stories, list each claimed behavior and the evidence
+that can prove it. A Story and an executable Runtime prompt suit product policy
+and observable input/output: for example pricing or incentive rules, admission
+rules, state changes, and CLI or UX flows.
+
+Real process termination, filesystem durability, concurrency fences, cryptographic
+primitives, GPU memory behavior and similar physical or byte-level effects need
+native proof. Use the existing `kind: native-only` declaration only when its
+required nonblank `reason` names an effect that bound ports cannot fake. A
+native-only declaration does not make a prompt check pass; it records why the
+check cannot run.
+
+Test suites, fixtures, CI workflows, package manifests, build configs and
+documentation do not get `.prompt.md` owners. Internal test observers and
+harnesses usually support native tests and do not by themselves need a separate
+User Story or paid Runtime scenario, while a testing tool feature that a person
+uses as product behavior can still need a Story. For a mixed module, check
+deterministic policy and individual transitions in prompt space, then prove
+byte-exact wire formats, long protocol traces and physical execution with native
+tests. Do not mark a whole codec, GPU module or OS wrapper native-only when it
+also has a useful deterministic contract.
 
 ## Runtime interface declarations
 
