@@ -2060,7 +2060,11 @@ test('L3 two machines on one repository respect one lane; a lane whose machine s
   // A stops (no more ticks): its claim expires after 4 hours, and B (still ticking) frees the lane.
   for (let i = 0; i < 20 && !laneLabel(pb.pr); i++) { a.advance(10 * MIN); await b.tick(); }
   assert.ok(!laneLabel(pa.pr) && laneLabel(pb.pr), 'the stale lane is freed');
-  await b.tick(); const job = jobFile(b, 18); b.github.setChecks(job.head); b.suite(18, 0); await b.tick();
+  await b.tick(); const job = jobFile(b, 18);
+  assert.equal(job.review.head, job.head, 'the new review checks the refreshed head');
+  b.github.setChecks(job.head); b.suite(18, 0); await b.tick();
+  assert.deepEqual(b.github.merges, [], 'green checks cannot replace the new review');
+  b.review(18, 'PASS'); await b.tick();
   assert.deepEqual(b.github.merges, [pb.pr.number]);
 });
 
@@ -2564,7 +2568,8 @@ test('U3 (M2) after a final-step refresh, a head with no CI run yet waits for it
   const { pr } = w.build(17); await w.tick(); w.review(17, 'PASS'); w.suite(17, 0);
   w.baseCommit('person.txt', 'a person pushed\n');
   await w.tick();                                    // final step: refresh; the new head has no CI yet
-  await w.tick(); w.advance(30 * MIN); w.suite(17, 0); await w.tick(); await w.tick();
+  await w.tick(); assert.equal(jobFile(w, 17).review.head, jobFile(w, 17).head, 'the new review checks the refreshed head');
+  w.advance(30 * MIN); w.suite(17, 0); w.review(17, 'PASS'); await w.tick(); await w.tick();
   assert.deepEqual(w.github.merges, [], 'no merge without the CI of the new head');
   w.github.setChecks(jobFile(w, 17).head); await w.tick();
   assert.deepEqual(w.github.merges, [pr.number]); assert.match(mergeComment(pr), /- CI: green/);
