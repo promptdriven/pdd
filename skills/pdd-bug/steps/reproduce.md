@@ -2,7 +2,7 @@
 
 - Read the issue, repo instructions and the prompt that owns the behavior.
 - Find the smallest safe input that shows the bug. Write down the setup, input, command, expected and actual result.
-- If a prompt owns this behavior, follow section 14 of RUNBOOK.md (pdd-prompting skill): write a test from the issue and run `pdd test` on the CURRENT prompt. Report ✗ or ✓, and put its `Prompt tests` line(s) and the report link(s) in your `done` summary as the "before" report.
+- If a prompt owns this behavior, follow section 14 of RUNBOOK.md (pdd-prompting skill), including native cases outside the Runtime interface: write a test from the issue and run `pdd test` on the CURRENT prompt. Report ✗ or ✓ when returned, or report that there was no verdict and why. When emitted, put its `Prompt tests` line(s) and the report link(s) in your `done` summary as the "before" report.
 - If no prompt exists, say so plainly, in the words of section 14.
 - Record `Defect:` and `Not caught because:` in reproduce.md.
 - If you cannot reproduce it, say why. Never guess a cause.

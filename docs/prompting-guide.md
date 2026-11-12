@@ -297,7 +297,9 @@ permitted variation in decisions.
 
 ## Runtime interface declarations
 
-A behavior prompt ends with one Runtime interface block. Omit `kind` for its full
+A behavior prompt ends with one Runtime interface block when it has a truthful
+Runtime entry. A native verification-command contract without such an entry
+records the gap instead of inventing an interface. Omit `kind` for its full
 checkable contract; use `kind: partial` for a declared subset. An explicit
 `"kind": "full"` in a draft gets a warning at `/kind`; `pdd test --fill-hash`
 removes that redundant field from drafts while leaving approved prompts unchanged. Use `kind: native-only` only with a nonblank `reason` that names
@@ -314,3 +316,41 @@ lint is not a Runtime check; run `pdd lint STORY` for admission.
 The automatic-check-pass approval route needs unchanged committed behavior, passing
 existing native tests and a full prompt check on current source. New behavior and
 strict approval mode require a person.
+
+## Native verification when Runtime cannot admit a case
+
+Keep the real module's contract and Runtime interface intact. A native public
+boundary may expose behavior outside that interface, or a repository may need
+to verify an existing top-level test command. Describe the verification command
+in its own prompt only when it is a new owned code module; do not assign its
+behavior to unrelated helper prompts. Do not invent a Runtime entry, widen an
+interface for a test, or claim a native effect that does not exist.
+
+Write a Story and requirement-derived native cases with exact inputs and expected
+returns or error names and messages, independently of observed output. Identify
+the real function or command and run each case there. The runnable
+Node example in `examples/native-replay/` and its cases show a
+native command, including a non-string input to a public function. From the
+repository root, run:
+
+```sh
+node examples/native-replay/replay.mjs examples/native-replay/cases.json examples/native-replay/count-words.mjs
+```
+
+The fixture is synthetic and does not reproduce another project. Adapt the
+command and cases to the actual public boundary, preserving its own contract.
+Check wrong results, wrong or missing expected errors and unexpected errors with
+controls; setup failures and crashes before the assertion are not detection.
+
+For a bug, run the issue case against the current native code before repairing
+the harness or target. Record the command, source identity, exit, assertion and
+actual result separately from the expected case. Run `pdd test` for admitted
+Runtime scenarios and retain its actual result. An out-of-interface case is not
+an admitted Runtime check; a native failure does not prove the prompt failed or
+that the bug is code-only. Record an unavailable Runtime verdict as such. Never
+omit criteria to manufacture a full check or derive expected values from code.
+
+Native evidence does not create an automatic-check-pass or waive Story, strict,
+PR or required human approvals. Existing workflow gate rules still apply. This
+recipe supplies authoring and native execution; it does not itself advance a
+gate or establish the installed capability for a parked replay route.

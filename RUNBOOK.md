@@ -617,6 +617,8 @@ ticks. Ticks use the existing action/call budget.
 
 ## 14. Bug workflow
 
+For a public native case outside the declared Runtime interface, follow the native verification recipe in the prompting guide. Run and record the issue case on current native code before repair; retain the actual Runtime no-verdict separately. Neither native failure nor Runtime refusal classifies the prompt as failed or the defect as code-only. Preserve the gates below.
+
 1. Reproduce: turn the issue into a test. Add a criterion to the story and a step that checks it to the story's test file.
    The expected value comes from the issue and the person.
 2. Run `pdd test <story>` on the CURRENT prompt. Do not change the prompt first.
