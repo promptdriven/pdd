@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-retire.prompt.md (sha256: 4c820f17d0ed0a5fe7a975c29736f23b50df59966f7986ce34087f2bdbfc204f).
+// Generated from prompts/cli/autopilot-retire.prompt.md (sha256: 4fd78683bc360ef25f74ab2735d4932765f7d65644d1893d336bc00b9d4a0ce9).
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -160,7 +160,7 @@ test('M1a each move-journal save finishes before the next step or return; a reje
   assert.equal(deferred.journal.steps.pane, failed.now, 'the caller receives the unsaved checkpoint for diagnostics');
 });
 
-test('M1b a run claim is saved before cancellation, so retry releases old-coordinator claims after a save failure or a later cancellation failure', async () => {
+test('M1b a run claim is saved before cancellation, and retry keeps cumulative cancellation evidence', async () => {
   const prepare = count => {
     const w = fullWorld(), old = { coordinatorId: 'old-coordinator', machine: ME.machine };
     w.state = { ...w.state, engine: 'core', coordinatorId: 'new-coordinator', paneId: undefined, githubIntake: undefined };
@@ -175,15 +175,18 @@ test('M1b a run claim is saved before cancellation, so retry releases old-coordi
   };
 
   const saved = prepare(1);
-  let state = saved.state, failClaimSave = true;
+  let state = saved.state, failClaimSave = true, claimSaves = 0;
   saved.ports.save = async journal => {
+    if (journal.claims?.length) claimSaves++;
     if (journal.claims?.length && failClaimSave) { failClaimSave = false; throw Error('admission busy'); }
     saved.saves.push(structuredClone(journal));
   };
   const held = await saved.move(state);
   assert.equal(held.done, false);
   assert.equal(saved.runs[0].state, 'running', 'a failed claim save prevents cancellation');
-  state = { ...state, retiredFull: saved.saves.at(-1) };
+  assert.equal(claimSaves, 1, 'a failed pre-cancel save is not retried in this tick');
+  assert.match(held.message, /could not save the move journal \(save: admission busy\)/);
+  state = { ...state, retiredFull: saved.saves.at(-1) ?? {} };
   assert.equal((await saved.move(state)).done, true);
   assert.equal(saved.g.issues.get(40).comments.length, 0);
   assert.ok(!saved.g.issues.get(40).labels.includes('pdd:working'));
@@ -191,6 +194,7 @@ test('M1b a run claim is saved before cancellation, so retry releases old-coordi
   const partial = prepare(2);
   state = partial.state;
   let failedSecond = false;
+  partial.ports.releaseLocal = async row => row.number === 40 ? { state: 'recovery_required' } : { state: 'released' };
   partial.ports.cancelRun = async row => {
     if (row.number === 41 && !failedSecond) { failedSecond = true; throw Error('stop failed'); }
     row.state = 'cancelled'; return { exitCode: 0 };
@@ -199,12 +203,45 @@ test('M1b a run claim is saved before cancellation, so retry releases old-coordi
   assert.equal(first.done, false);
   assert.equal(partial.runs[0].state, 'cancelled');
   assert.ok(first.journal.claims.some(claim => claim.issue === 40), 'the first cancellation has a durable claim record');
+  assert.equal(first.journal.counts.runs, 1);
+  assert.deepEqual(first.journal.warnings, ['run #40: the local issue allocation stays']);
   state = { ...state, retiredFull: partial.saves.at(-1) };
-  assert.equal((await partial.move(state)).done, true);
+  const complete = await partial.move(state);
+  assert.equal(complete.done, true);
+  assert.equal(complete.journal.counts.runs, 2, 'the retry adds to the first tick count');
+  assert.deepEqual(complete.journal.warnings, ['run #40: the local issue allocation stays'], 'the first warning stays once');
+  assert.match(complete.message, /cancelled 2 old run\(s\)/);
   for (const issue of [40, 41]) {
     assert.equal(partial.g.issues.get(issue).comments.length, 0, `#${issue} claim comment is released`);
     assert.ok(!partial.g.issues.get(issue).labels.includes('pdd:working'), `#${issue} claim label is released`);
   }
+});
+
+test('M1c a failed post-cancel checkpoint reconciles only the saved intent whose run is cancelled', async () => {
+  const w = fullWorld(), old = { coordinatorId: 'old-coordinator', machine: ME.machine };
+  w.state = { ...w.state, engine: 'core', coordinatorId: 'new-coordinator', paneId: undefined, githubIntake: undefined };
+  const claimed = w.g.claim(40, old), row = run(40, old);
+  row.automaticOrigin.claim = { commentId: String(claimed.comments[0].id), labelEventId: String(claimed.timeline[0].id) };
+  w.runs = [row];
+  let failCheckpoint = true, releases = 0;
+  w.ports.releaseLocal = async () => { releases++; return { state: 'recovery_required' }; };
+  w.ports.save = async journal => {
+    if (journal.cancelledRuns?.includes('run-40') && failCheckpoint) { failCheckpoint = false; throw Error('admission busy'); }
+    w.saves.push(structuredClone(journal));
+  };
+  const delayed = await w.move();
+  assert.equal(delayed.done, false);
+  assert.equal(row.state, 'cancelled', 'the cancellation completed before its checkpoint failed');
+  assert.equal(w.cancelled.filter(number => number === 40).length, 1);
+  const saved = w.saves.at(-1);
+  assert.deepEqual(saved.runIntents, [{ runId: 'run-40', issue: 40 }]);
+  assert.equal(saved.counts.runs, 0, 'the failed checkpoint did not claim an unsaved count');
+  const complete = await w.move({ ...w.state, retiredFull: saved });
+  assert.equal(complete.done, true);
+  assert.equal(complete.journal.counts.runs, 1);
+  assert.deepEqual(complete.journal.warnings, ['run #40: the local issue allocation stays']);
+  assert.equal(w.cancelled.filter(number => number === 40).length, 1, 'a cancelled run is reconciled, not cancelled again');
+  assert.equal(releases, 2, 'the local release is retried for the cancelled intent');
 });
 
 test('M2 a PR note is never written twice, also when a step runs again', async () => {

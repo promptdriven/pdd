@@ -205,8 +205,9 @@ const alive = pid => { try { process.kill(pid, 0); return true; } catch { return
 
 test('the hung-command watch stops only the silent command; the agent goes on and a helper stays (STOPS-0129)', async t => {
   const dir = folder(t), helperPid = join(dir, 'helper.pid'), commandPid = join(dir, 'command.pid'), result = join(dir, 'r.json');
+  const largePs = fakePs(dir, 'case "$LC_ALL:$*" in C:*-ww*) /usr/bin/head -c 1100000 /dev/zero | /usr/bin/tr \'\\000\' x; printf "\\n"; exec /bin/ps "$@" ;; *) exec /bin/ps "$@" ;; esac');
   const job = startAgentJob({ id: '30-build-1', dir, cwd: dir, command: process.execPath, args: ['-e', HUNG_AGENT], input: '',
-    env: { PATH: process.env.PATH, HELPER_PID: helperPid, COMMAND_PID: commandPid, RESULT: result }, hung: { after: 1500, every: 150, cpu: 0.5 } });
+    env: { PATH: `${largePs}:/usr/bin:/bin`, HELPER_PID: helperPid, COMMAND_PID: commandPid, RESULT: result }, hung: { after: 1500, every: 150, cpu: 0.5 } });
   assert.equal(job.hangs, join(dir, '30-build-1.hangs.json'));
   assert.deepEqual(JSON.parse(readFileSync(job.token, 'utf8')).hung, { after: 1500, every: 150, cpu: 0.5 });
   const helper = Number(await until(() => existsSync(helperPid) && readFileSync(helperPid, 'utf8')));

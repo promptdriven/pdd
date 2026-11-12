@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 402197eaf6a27da114262e3eca28ea0806e40ebce46ad759da40de8df25f9224).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 9309fe9eb10a44da7025e3c25acb51ef76b1b634298c07b98d8cc46c9afcf074).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -946,7 +946,10 @@ async function personAnswer(ctx, n) {
 // Undo a claim of this tick: the claim comment and pdd:working go.
 async function undoClaim(ctx, n, claim) {
   if (claim?.commentId) await ctx.gh.call('DELETE', `repos/${ctx.repo}/issues/comments/${claim.commentId}`).catch(() => {});
-  await ctx.gh.call('DELETE', `repos/${ctx.repo}/issues/${n}/labels/${encodeURIComponent('pdd:working')}`).catch(() => {});
+  // The label can belong to a later contender after this tick's claim was made. Match the
+  // original label event and its owner again instead of removing the shared label blindly.
+  if (claim?.labelEventId && await ownLabel(ctx, n, { id: claim.labelEventId }, { id: claim.commentId }).catch(() => false))
+    await ctx.gh.call('DELETE', `repos/${ctx.repo}/issues/${n}/labels/${encodeURIComponent('pdd:working')}`).catch(() => {});
 }
 // The open core PR of an issue that waits for a person's approval (this engine's needs-approval note on it).
 async function keptPr(ctx, n) {
@@ -992,6 +995,26 @@ async function concurrencyNote(ctx, row, others, cwd) {
   return [lines.length ? `Other jobs change these files now. Change them only when the issue needs it. Keep such edits small and on their own lines.\n${lines.join('\n')}` : '',
     merges.length ? `Base merges of the last 24 hours that touched files that the issue names:\n${[...new Set(merges)].join('\n')}` : ''].filter(Boolean).join('\n');
 }
+// The persisted job is the machine-wide admission record. The lock is deliberately held
+// only while the guard is refreshed, capacity is checked and that record is saved.
+async function admitJob(ctx, job) {
+  const reserve = ctx.ports.machine?.reserve;
+  let release = null;
+  try {
+    release = reserve ? await reserve() : null;
+    if (reserve && !release) return { state: 'busy' };
+    // #3231: reservation refreshes this room check (memory, disk and load, for Autopilot's share).
+    const room = ctx.ports.machine?.room;
+    if (room && !room.ok) return { state: 'held', room, reason: room.reason };
+    if (Number.isSafeInteger(room?.free) && room.free <= 0) return { state: 'held', room, reason: room.reason ?? 'the machine has no free Autopilot slots' };
+    ctx.saveJob(job);
+    return { state: 'admitted', room };
+  } catch (error) {
+    return { state: 'error', error };
+  } finally {
+    try { release?.(); } catch (error) { ctx.warn(`Autopilot core could not release machine admission: ${error.message}`); }
+  }
+}
 async function intake(ctx, rows) {
   const { state, settings } = ctx, jobs = readJobs(ctx.fs, ctx.root);
   const busy = jobs.filter(holdsSlot).length;
@@ -1018,15 +1041,16 @@ async function intake(ctx, rows) {
   // A base fetch failure is not about one issue: it stops intake for this tick.
   try { ctx.fs.mkdirSync(ctx.dirs.worktrees, { recursive: true, mode: 0o700 }); await ctx.git(['fetch', '-q', 'origin', state.baseBranch]); }
   catch (error) { return `intake stopped: ${error.message}`; }
-  const reserve = ctx.ports.machine?.reserve, release = reserve ? await reserve() : null;
-  if (reserve && !release) return 'intake held: the machine admission is busy; the next tick retries.';
-  try {
-    // #3231: the reservation refreshed this room check (memory, disk and load, for Autopilot's share). Running work goes on.
-    const room = ctx.ports.machine?.room;
-    if (room && !room.ok) return `intake held: ${room.reason}`;
-    // The machine's share is for every repository: claim at most the jobs that it still allows.
-    if (Number.isSafeInteger(room?.free)) free = Math.min(free, room.free);
-    for (const row of order) {
+  const rejectAdmission = async (admission, n, claim, worktree, branch, dropBranch = true) => {
+    await undoClaim(ctx, n, claim);
+    if (!await removeTree(ctx, worktree)) ctx.warn(`Autopilot core could not remove the unadmitted worktree of #${n}`);
+    if (dropBranch) await ctx.git(['branch', '-D', branch]).catch(() => {});
+    ctx.skip.add(n);
+    if (admission.state === 'busy') return 'intake held: the machine admission is busy; the next tick retries.';
+    if (admission.state === 'held') return `intake held: ${admission.reason}`;
+    return `intake stopped: ${oneLine(admission.error?.message ?? 'machine admission failed')}`;
+  };
+  for (const row of order) {
       if (free <= 0 || tries++ >= CLAIM_TRIES) break;
       const n = row.number, stamp = `${ctx.now().toString(36)}-${randomUUID().slice(0, 6)}`, branch = `pdd/core-${n}-${stamp}`, worktree = join(ctx.dirs.worktrees, String(n));
       // A leftover worktree, even a locked one, is ours; if it cannot go, only this issue waits.
@@ -1061,27 +1085,41 @@ async function intake(ctx, rows) {
           await undoClaim(ctx, n, claim); await removeTree(ctx, worktree); ctx.skip.add(n);
           continue;
         }
-        ctx.saveJob({ schema: 'pdd.core-job.v1', id: randomUUID(), issue: n, title: oneLine(row.title, 200), url: row.html_url ?? issueKey(ctx.repo, n), body: cutText(row.body, 20000, `read the issue for the rest: ${row.html_url ?? issueKey(ctx.repo, n)}`),
+        const resumed = { schema: 'pdd.core-job.v1', id: randomUUID(), issue: n, title: oneLine(row.title, 200), url: row.html_url ?? issueKey(ctx.repo, n), body: cutText(row.body, 20000, `read the issue for the rest: ${row.html_url ?? issueKey(ctx.repo, n)}`),
           cuts: cutsOf('issue text', row.body, 20000), branch: kept.head.ref, worktree, claim, phase: 'pr', role: 'build', repairs: 0, started: ctx.now(), pr: kept.number, head: String(kept.head.sha).toLowerCase(), agentHead: String(kept.head.sha).toLowerCase(), prAt: ctx.now(),
-          progress: { sig: null, at: ctx.now(), running: false }, resumed: true });
+          progress: { sig: null, at: ctx.now(), running: false }, resumed: true };
+        const admission = await admitJob(ctx, resumed);
+        if (admission.state !== 'admitted') return rejectAdmission(admission, n, claim, worktree, kept.head.ref, false);
+        if (Number.isSafeInteger(admission.room?.free)) free = Math.min(free, admission.room.free);
         ctx.counts.started++; free--;
         continue;
       }
-      await closeOtherPrs(ctx, n, branch);
       const note = [await concurrencyNote(ctx, row, others, worktree).catch(() => ''), hangNote(ctx, n)].filter(Boolean).join('\n\n');
       const job = { schema: 'pdd.core-job.v1', id: randomUUID(), issue: n, title: oneLine(row.title, 200), url: row.html_url ?? issueKey(ctx.repo, n), body: cutText(row.body, 20000, `read the issue for the rest: ${row.html_url ?? issueKey(ctx.repo, n)}`), ...(note ? { note } : {}),
         cuts: [...cutsOf('issue text', row.body, 20000), ...(answer?.comments ?? []).filter(c => c.cut > 0).map(c => ({ input: `the answer of ${c.author}`, more: c.cut }))],
         branch, worktree, claim, phase: 'running', role: 'build', repairs: 0, started: ctx.now(), progress: { sig: null, at: ctx.now(), running: false }, ...(answer ? { answer } : {}) };
-      ctx.saveJob(job);
-      try { const others = await openIssuesBrief(ctx, job); job.agent = startJob(ctx, job, 'build', worktree, result => buildPrompt(ctx, job, result, others)); ctx.saveJob(job); ctx.counts.started++; free--; }
+      let openIssues = '', briefError = null;
+      try { openIssues = await openIssuesBrief(ctx, job); }
       catch (error) {
+        ctx.warn(`Autopilot core could not prepare the build brief of #${n}: ${error.message}`);
+        briefError = error;
+      }
+      const admission = await admitJob(ctx, job);
+      if (admission.state !== 'admitted') return rejectAdmission(admission, n, claim, worktree, branch);
+      if (Number.isSafeInteger(admission.room?.free)) free = Math.min(free, admission.room.free);
+      try {
+        // The saved job holds its shared slot while this slow GitHub cleanup runs.
+        await closeOtherPrs(ctx, n, branch);
+        if (briefError) throw briefError;
+        job.agent = startJob(ctx, job, 'build', worktree, result => buildPrompt(ctx, job, result, openIssues));
+        ctx.saveJob(job); ctx.counts.started++; free--;
+      } catch (error) {
         await end(ctx, job, cause('job', 'no-result', `the agent could not start: ${oneLine(error.message)}`))
           .catch(failure => ctx.warn(`Autopilot core END of #${n} waits: ${failure.message}`));
         // The END can start a pause: no further claim in this tick then.
         if (pausedText()) return pausedText();
       }
-    }
-  } finally { release?.(); }
+  }
   return null;
 }
 
@@ -1263,9 +1301,11 @@ export function failingTests(text, limit = 20) {
     const tree = /^\s*([▶✔✖])\s+(.+?)\s*$/.exec(line);
     const treeAtRoot = tree && !/^\s/.test(line);
     const failureSectionHeader = /^\s*✖\s+failing tests:\s*$/.test(line);
-    // A new reporter's tree follows the previous summary's failure details. Its top-level
-    // row starts a new block; tree rows never become failure-section details by accident.
-    if (specBlock && treeAtRoot && !specAt && !failureSectionHeader) {
+    // A new reporter's root tree follows the previous summary's failure details. Only a
+    // fileless root failure within that detail stays in the current block for an eventual
+    // location row; root suite and pass rows still start the next reporter block.
+    const filelessFailureDetail = specSection && treeAtRoot && tree[1] === '✖' && !specAt;
+    if (specBlock && treeAtRoot && !specAt && !failureSectionHeader && !filelessFailureDetail) {
       finishSpec(); pendingSpecTreeRows.push({ marker: tree[1], text: tree[2] }); continue;
     }
     if (/^\s*ℹ\s+tests\s+\d+\s*$/.test(line)) {

@@ -8,7 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { promptHeaderHash } from '../src/file-owner.mjs';
 import { coreWorld } from './helpers/core-world.mjs';
-import { autopilotEngine, coreSettings, readyIssues, coreStatus, tickCore } from '../src/autopilot-core.mjs';
+import { autopilotEngine, busySlots, coreSettings, failingTests, readyIssues, coreStatus, tickCore } from '../src/autopilot-core.mjs';
 import { listReportDrafts, sendReportDraft } from '../src/autopilot-reports.mjs';
 
 const MIN = 60 * 1000, HOUR = 60 * MIN;
@@ -119,6 +119,198 @@ test('claim race between two machines: one machine starts, the loser starts noth
   assert.ok(claimComments(a, 17)[0].includes(winner));
   await Promise.all([a.tick(), b.tick()]);
   assert.equal([...a.started, ...b.started].filter(job => job.issue === 17).length, 1, 'no second start later');
+});
+
+test('machine admission lets another repository start while slow intake preparation runs, without over-admitting', async t => {
+  const a = await coreWorld(t, { repository: 'acme/alpha', settings: { runs: 2 }, machine: 'alpha' });
+  const b = await coreWorld(t, { repository: 'acme/beta', settings: { runs: 2 }, machine: 'beta' });
+  a.issue(17); b.issue(17);
+  const roots = [a.root, b.root];
+  let locked = false, resumeSlow, reachedSlow;
+  const slow = new Promise(resolve => { resumeSlow = resolve; });
+  const reached = new Promise(resolve => { reachedSlow = resolve; });
+  const admissions = [];
+  const machine = () => {
+    const port = {
+      reserve: async () => {
+        if (locked) return null;
+        locked = true;
+        const used = roots.reduce((total, root) => total + busySlots(root), 0);
+        admissions.push(used);
+        port.room = used < 2 ? { ok: true, reason: null, free: 2 - used } : { ok: false, reason: 'two shared slots are busy', free: 0 };
+        return () => { locked = false; };
+      },
+    };
+    return port;
+  };
+  const originalGh = a.gh;
+  let pullReads = 0;
+  const slowGh = async (args, options) => {
+    const endpoint = args.find((word, index) => index > 0 && /^repos\//.test(String(word)));
+    if (endpoint === 'repos/acme/alpha/pulls?state=open&per_page=100' && ++pullReads === 2) {
+      reachedSlow();
+      await slow;
+    }
+    return originalGh(args, options);
+  };
+  const first = a.tick({ gh: slowGh, machine: machine() });
+  await reached;
+  await b.tick({ machine: machine() });
+  assert.ok(b.job(17, 'build'), 'the second repository starts while the first prepares');
+  assert.equal(locked, false, 'the slow preparation does not retain the shared admission lock');
+  resumeSlow();
+  await first;
+  assert.ok(a.job(17, 'build'), 'the delayed repository gets the second shared slot');
+  assert.deepEqual(admissions, [0, 1], 'each saved job reduces the next admission room');
+  assert.equal(roots.reduce((total, root) => total + busySlots(root), 0), 2, 'two slots never admit a third job');
+
+  const c = await coreWorld(t, { repository: 'acme/gamma', settings: { runs: 2 }, machine: 'gamma' });
+  roots.push(c.root); c.issue(17);
+  const held = await c.tick({ machine: machine() });
+  assert.match(held.message, /two shared slots are busy/);
+  assert.equal(c.job(17), undefined, 'a full machine starts no third job');
+  assert.deepEqual(c.labels(17), [], 'the rejected job leaves no claim label');
+  assert.equal(claimComments(c, 17).length, 0, 'the rejected job leaves no claim comment');
+  assert.equal(existsSync(join(c.root, 'worktrees', '17')), false, 'the rejected job removes its worktree');
+  assert.deepEqual(admissions, [0, 1, 2]);
+});
+
+test('machine admission releases its lock and cleans the saved claim when local start fails', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17);
+  let locked = false, releases = 0;
+  const machine = {
+    reserve: async () => {
+      assert.equal(locked, false, 'only one short admission section is held');
+      locked = true;
+      machine.room = { ok: true, reason: null, free: 1 };
+      return () => { locked = false; releases++; };
+    },
+  };
+  await w.tick({ machine, jobs: { ...w.jobs, start: () => { throw Error('local start failed'); } } });
+  assert.equal(locked, false, 'start cleanup runs after the admission lock releases');
+  assert.equal(releases, 1);
+  assert.deepEqual(w.labels(17), [], 'the failed start releases the claim');
+  assert.equal(claimComments(w, 17).length, 0, 'the failed start removes its claim comment');
+  assert.deepEqual(jobFiles(w), [], 'the failed start leaves no saved slot');
+  assert.equal(existsSync(join(w.root, 'worktrees', '17')), false, 'the failed start removes its worktree');
+});
+
+test('machine admission denial leaves an older core PR open', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17);
+  const older = w.github.openPr({ branch: 'pdd/core-17-older', head: 'f'.repeat(40) });
+  const machine = {
+    reserve: async () => {
+      machine.room = { ok: false, reason: 'the machine has no free slot', free: 0 };
+      return () => {};
+    },
+  };
+  const held = await w.tick({ machine });
+  assert.match(held.message, /machine has no free slot/);
+  assert.equal(older.state, 'open', 'admission denial does not close a predecessor PR');
+  assert.deepEqual(w.labels(17), []);
+  assert.equal(w.job(17), undefined);
+});
+
+test('machine admission denial removes only this claim when a later owner replaces its label event', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17);
+  let replaced = false;
+  const machine = {
+    reserve: async () => {
+      if (!replaced) {
+        replaced = true;
+        w.github.unlabel(17, 'pdd:working', 'person');
+        w.github.claim(17, { coordinatorId: 'coord-later', machine: 'later-machine', actor: 'person' });
+      }
+      machine.room = { ok: false, reason: 'the later owner has the only shared slot', free: 0 };
+      return () => {};
+    },
+  };
+  const held = await w.tick({ machine });
+  assert.match(held.message, /later owner has the only shared slot/);
+  assert.deepEqual(w.labels(17), ['pdd:working'], 'the later claim label remains');
+  assert.equal(claimComments(w, 17).length, 1, 'only the later claim comment remains');
+  assert.match(claimComments(w, 17)[0], /coord-later/);
+  assert.equal(w.job(17), undefined, 'the denied attempt saves no job');
+  assert.equal(existsSync(join(w.root, 'worktrees', '17')), false, 'the denied attempt removes its worktree');
+});
+
+test('a build-brief read failure ends as no-result after admission and older PR cleanup', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17);
+  const older = w.github.openPr({ branch: 'pdd/core-17-older', head: 'f'.repeat(40) });
+  const rows = await w.ports().listIssues(), filter = rows.filter;
+  rows.filter = function (...args) {
+    if (new Error().stack?.includes('openIssuesBrief')) throw Error('open issue reader failed');
+    return filter.call(this, ...args);
+  };
+  let releases = 0;
+  const machine = {
+    reserve: async () => {
+      machine.room = { ok: true, reason: null, free: 1 };
+      return () => { releases++; };
+    },
+  };
+  await w.tick({ listIssues: async () => rows, machine });
+  assert.equal(releases, 1, 'admission releases before the failing build preparation ends');
+  assert.equal(older.state, 'closed', 'older PR cleanup still runs after admission');
+  assert.equal(w.started.length, 0, 'the failed brief never starts an agent');
+  assert.deepEqual(w.labels(17), [], 'normal END releases the claim');
+  assert.deepEqual(jobFiles(w), [], 'normal END removes the saved slot');
+  assert.equal(existsSync(join(w.root, 'worktrees', '17')), false, 'normal END removes the worktree');
+  const history = readFileSync(join(w.root, 'history.jsonl'), 'utf8');
+  assert.match(history, /"noResult":true/, 'the normal no-result classification is preserved');
+  assert.match(history, /open issue reader failed/, 'the normal no-result cause is preserved');
+});
+
+test('failingTests keeps a later file-backed spec row after a synthetic fileless root detail', () => {
+  // This is a synthetic reporter transcript. Its shape models Node's supported
+  // `node --test --test-reporter=spec` detail block without starting a child test run.
+  const syntheticSpecOutput = [
+    '▶ a nested suite',
+    '  ✖ repeated suite child (0.1ms)',
+    'ℹ tests 2',
+    'ℹ suites 1',
+    'ℹ pass 0',
+    'ℹ fail 2',
+    'ℹ cancelled 0',
+    'ℹ skipped 0',
+    'ℹ todo 0',
+    'ℹ duration_ms 2.0',
+    '',
+    '✖ failing tests:',
+    '',
+    '✖ reporter detail without a test location (0.1ms)',
+    '',
+    'test at /tmp/later.test.mjs:7:3',
+    '✖ later file-backed failure (0.2ms)',
+  ].join('\n');
+  assert.deepEqual(failingTests(syntheticSpecOutput), [
+    { name: 'later file-backed failure', file: '/tmp/later.test.mjs' },
+    { name: 'Spec output reports 1 failed test with unclear names; see the log', file: null },
+  ]);
+});
+
+test('failingTests starts a later synthetic reporter block at a root suite row', () => {
+  const syntheticCombinedOutput = [
+    'ℹ tests 1',
+    'ℹ suites 1',
+    'ℹ fail 1',
+    '✖ failing tests:',
+    'test at /tmp/first.test.mjs:2:1',
+    '✖ first file-backed failure (0.1ms)',
+    '▶ later reporter root',
+    '✖ second root failure (0.2ms)',
+    'ℹ tests 1',
+    'ℹ suites 0',
+    'ℹ fail 1',
+  ].join('\n');
+  assert.deepEqual(failingTests(syntheticCombinedOutput), [
+    { name: 'first file-backed failure', file: '/tmp/first.test.mjs' },
+    { name: 'second root failure', file: null },
+  ]);
 });
 
 test('suite red leads to one repair on the same branch, then the merge', async t => {

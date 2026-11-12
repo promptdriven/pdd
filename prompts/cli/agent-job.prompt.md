@@ -102,9 +102,9 @@ record is simply dead. There is no "uncertain custody" state.
   keeps the whole job silent until the core's quiet rule stops the job. So the wrapper
   stops only that command, and the agent sees it fail and can go on. Every `every` ms it
   reads the job log size and change time and the process table once (`LC_ALL=C ps -A
-  -ww -o pid=,ppid=,time=,etime=,command=`, 5 s timeout; a failed read skips the
-  round). Wide C-locale output keeps a long command's final `pdd test` or `pdd lint`
-  words visible to the wait exemption:
+  -ww -o pid=,ppid=,time=,etime=,command=`, 5 s timeout and a 64 MiB output bound; a
+  failed or over-bound read skips the round). Wide C-locale output keeps a long
+  command's final `pdd test` or `pdd lint` words visible to the wait exemption:
   - The **helpers** are the processes under the agent at the first round in which the
     log has content (the agent's MCP servers and its own helper processes start before
     its first output). They are never stopped. Before the log has content nothing is

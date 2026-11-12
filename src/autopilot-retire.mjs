@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-retire.prompt.md (sha256: 4c820f17d0ed0a5fe7a975c29736f23b50df59966f7986ce34087f2bdbfc204f).
+// Generated from prompts/cli/autopilot-retire.prompt.md (sha256: 4fd78683bc360ef25f74ab2735d4932765f7d65644d1893d336bc00b9d4a0ce9).
 import { sep, join } from 'node:path';
 
 // The move of a machine from the removed full engine to the core engine. Each step is idempotent and saved in the
@@ -161,23 +161,53 @@ async function mergeStage(ctx) {
 }
 
 async function cancelRuns(ctx, journal, persist) {
-  const { state, ports } = ctx, live = ownRuns(await ports.listRuns(), state).filter(run => !ended(run));
+  const { state, ports } = ctx, runs = ownRuns(await ports.listRuns(true), state), live = runs.filter(run => !ended(run));
   journal.claims ??= [];
+  journal.runIntents ??= [];
+  journal.cancelledRuns ??= [];
   const claimIds = new Set(journal.claims.map(claim => String(claim?.commentId)));
-  const warnings = [];
+  const intentIds = new Set(journal.runIntents.map(intent => String(intent?.runId)));
+  const cancelledIds = new Set(journal.cancelledRuns.map(String));
+  journal.counts.runs ??= 0;
+  journal.warnings ??= [];
+  const recordCancelled = async run => {
+    const id = String(run.runId), local = await ports.releaseLocal(run).catch(() => ({ state: 'recovery_required' }));
+    if (!cancelledIds.has(id)) {
+      journal.counts.runs++;
+      journal.cancelledRuns.push(id);
+      cancelledIds.add(id);
+    }
+    if (local?.state !== 'released') {
+      const warning = `run #${run.number}: the local issue allocation stays`;
+      if (!journal.warnings.includes(warning)) journal.warnings.push(warning);
+    }
+    await persist();
+  };
+  for (const intent of journal.runIntents) {
+    const run = runs.find(row => String(row.runId) === String(intent?.runId) && row.state === 'cancelled');
+    if (run && !cancelledIds.has(String(run.runId))) await recordCancelled(run);
+  }
   for (const run of live) {
     const claim = run.automaticOrigin?.claim;
-    if (named(claim?.commentId) && named(claim?.labelEventId) && !claimIds.has(String(claim.commentId))) {
-      journal.claims.push({ issue: run.number, commentId: String(claim.commentId), labelEventId: String(claim.labelEventId) });
-      claimIds.add(String(claim.commentId));
-      await persist();
+    const id = String(run.runId), addIntent = named(run.runId) && !intentIds.has(id);
+    const addClaim = named(claim?.commentId) && named(claim?.labelEventId) && !claimIds.has(String(claim.commentId));
+    if (addIntent || addClaim) {
+      if (addIntent) { journal.runIntents.push({ runId: id, issue: run.number }); intentIds.add(id); }
+      if (addClaim) {
+        journal.claims.push({ issue: run.number, runId: id, commentId: String(claim.commentId), labelEventId: String(claim.labelEventId) });
+        claimIds.add(String(claim.commentId));
+      }
+      try { await persist(); }
+      catch (error) {
+        if (addIntent) { journal.runIntents.pop(); intentIds.delete(id); }
+        if (addClaim) { journal.claims.pop(); claimIds.delete(String(claim.commentId)); }
+        throw error;
+      }
     }
     const result = await ports.cancelRun(run);
     if (result?.exitCode !== 0) throw Error(`run #${run.number} could not be cancelled: ${oneLine(result?.message)}`);
-    const local = await ports.releaseLocal(run).catch(() => ({ state: 'recovery_required' }));
-    if (local?.state !== 'released') warnings.push(`run #${run.number}: the local issue allocation stays`);
+    await recordCancelled(run);
   }
-  return { runs: live.length, warnings };
 }
 
 // Release the claims of this machine's full engine: its claim comments go; pdd:working goes only when the winning
@@ -259,6 +289,7 @@ export async function moveToCore({ state, stateFile, repoEngine = null }, ports)
     journal.lastError = error;
     return { done: false, journal, message: `Autopilot could not save the move journal (${error}); the next tick retries. No new work starts.` };
   };
+  const saveAbort = error => Object.assign(Error(error), { saveAbort: true });
   // A run in a merge, or a busy coordinator chat, holds the move for up to 6 ticks; then it moves with the reason.
   if (journal.wasFull && !Object.keys(journal.steps).length) {
     let busy = [];
@@ -280,12 +311,10 @@ export async function moveToCore({ state, stateFile, repoEngine = null }, ports)
   const run = {
     pane: async () => { const r = await closeCoordinator(ctx); journal.counts.panes = r.closed; journal.counts.keptPanes = r.kept; },
     runs: async () => {
-      const r = await cancelRuns(ctx, journal, async () => {
+      await cancelRuns(ctx, journal, async () => {
         const saveError = await save();
-        if (saveError) throw Error(saveError);
+        if (saveError) throw saveAbort(saveError);
       });
-      journal.counts.runs = r.runs;
-      if (r.warnings.length) journal.warnings = r.warnings;
     },
     claims: async () => { journal.counts.claims = (await releaseClaims(ctx, journal)).claims; },
     notes: async () => { journal.counts.notes = (await notePrs(ctx)).notes; },
@@ -296,6 +325,7 @@ export async function moveToCore({ state, stateFile, repoEngine = null }, ports)
     if (journal.steps[step]) continue;
     try { await run[step](); }
     catch (error) {
+      if (error?.saveAbort) return saveFailure(error.message);
       journal.lastError = `${step}: ${oneLine(error.message)}`;
       const saveError = await save();
       if (saveError) return saveFailure(saveError);

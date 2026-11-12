@@ -38,12 +38,14 @@ Export:
 
 `moveToCore` reads the journal `state.retiredFull` (or a new one) and returns `{done, journal, message}`. The journal
 keeps `startedAt`, `wasFull` (`engineBefore` is full), `steps` (step name → time done), `counts`, `defers`, `claims`
-(the claims that the runs step found), `forced`, `warnings` and `lastError`. A complete journal returns `{done: true,
+(the claims that the runs step found), `runIntents` (saved `{runId, issue}` cancellation intents), `cancelledRuns` (run IDs
+whose cancellation count is saved), `forced`, `warnings` and `lastError`. A complete journal returns `{done: true,
 message: ''}` with no read or write. Each step runs only when it is not done; after it, the move awaits
 `ports.save(journal)` before it starts another step or returns. A failed step saves `lastError` (`STEP: one line`) and
 returns done false with `Autopilot could not finish the move to the core engine (LAST_ERROR); the next tick goes on
 from this step. No new work starts.` A failed journal save returns done false with `Autopilot could not save the move
-journal (save: ERROR); the next tick retries. No new work starts.` It never leaves a save running after it returns.
+journal (save: ERROR); the next tick retries. No new work starts.` A failed save returns that result directly and is
+not retried in the same tick. It never leaves a save running after it returns.
 So a failed step goes on at the next tick, and a done step never runs again.
 
 **Merge hold.** Before the first step of a machine that ran the full engine, the move reads which old work is busy:
@@ -60,9 +62,14 @@ next tick in the same way, without a count.
    step.
 2. **runs**: every run record of this machine (`automaticOrigin.machine` is this machine, same repository, any older
    coordinator of this machine too) that is not cancelled or completed: first add its saved claim identity
-   (`commentId`, `labelEventId`) to the journal and save the journal. If that save fails, do not cancel the run. Then
-   call `ports.cancelRun(run)` (exit 0 needed, else the step fails), then `ports.releaseLocal(run)` (not released: a
-   warning). The saved claim lets a retry release a run's remote claim after its local status was already cancelled.
+   (`commentId`, `labelEventId`) and its `runId` intent to the journal and save the journal. If that save fails, do not
+   cancel the run. Then call `ports.cancelRun(run)` (exit 0 needed, else the step fails), then
+   `ports.releaseLocal(run)` (not released: a warning). After each cancelled run, add to the journal's cumulative run
+   count and warnings, then save before the next run. If that post-cancel save fails, the next tick reads
+   `listRuns(true)`: it records only a saved intent whose same `runId` is now cancelled, retries its local release and
+   saves the cumulative result. A live intended run is cancelled again; it is not counted. A retry therefore adds its
+   remaining runs without dropping or duplicating earlier counts or warnings. The saved claim lets a retry release a
+   run's remote claim after its local status was already cancelled.
 3. **claims**: release this machine's claims of the full engine. Issues to read: the claims of the runs step; for a
    machine that ran the full engine also the saved intake claims of this machine (`githubIntake.claims`) and every open
    issue with `pdd:working`. Skip an issue that has a core job file (`ports.coreJobs()`). On each issue, this machine's

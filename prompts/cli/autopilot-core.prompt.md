@@ -289,27 +289,51 @@ For each ready issue while slots are free, at most 3 claim attempts per tick:
    winner's actor is this machine's login (its comment's author, else `GET user`),
    and no other claim comment names that event. Otherwise (another login, a later era,
    or an error in these reads) the label stays.
-3. Close the issue's older core PRs: each open PR of this repository (not a fork)
-   whose head branch starts with `pdd/core-N-` and is not the new branch, and that
-   is not merged, gets `state: closed` and one short note with the marker
+3. Prepare the build brief before machine admission, including the collision note and
+   the open-issues brief. These local and GitHub reads can be slow. They never hold a
+   shared machine admission lock. If the open-issues read fails, retain that failure
+   through admission: a denied job uses rollback, while an admitted new build closes
+   older PRs and then ends as `no-result` without starting an agent.
+4. Immediately before retaining a new slot, call the optional launcher's
+   `ports.machine.reserve()`. While its release function is held, read the refreshed
+   machine room, refuse a full room, and atomically save the slot-holding job file.
+   For a resumed approval PR, save its `pr` job instead. Release the function before
+   older-PR cleanup and local process start. That saved record retains the slot
+   through those slow operations.
+   If admission is busy or the room is full, start no job and attempt to roll back this
+   tick's claim and worktree under the claim-owner rule, plus its newly-created branch
+   for a new build. A resumed approval job keeps its existing approval branch. If
+   GitHub rejects a claim delete, its existing expiration and takeover path handles that
+   stale claim on a later tick; this attempt never deletes a later owner's label. A
+   crash after the job save but before an agent record leaves a slot-holding job that
+   the next tick releases as `no-result`, with its claim and worktree.
+5. For a new build after admission and release, close the issue's older core PRs: each
+   open PR of this repository (not a fork) whose head branch starts with
+   `pdd/core-N-` and is not the new branch, and that is not merged, gets
+   `state: closed` and one short note with the marker
    `<!-- pdd:autopilot-core:superseded:N:BRANCH -->`; its branch stays. A PR from
    another branch prefix, or one with a `would-merge` or `needs-approval` note by this
    engine's own login (observe mode validated it, or it waits for a person), is never
-   touched. A failure only warns.
-4. Save the job file, then start the build job (below). A start error, also one that
-   the spawn reports later, ends the job as `no-result`; it never stops the tick.
+   touched. A failure only warns. Start the local build process after that cleanup. A
+   start error, also one that the spawn reports later, ends the saved job as
+   `no-result`; it never stops the tick.
 
-Intake is held, and nothing is claimed, when the saved agent is not Codex or
-Claude, when `ports.agentReady()` is false at the first ready issue (for example a
-Codex usage limit), while a machine pause runs (below), while CI does not start in
-this repository ([Stop owners](#stop-owners), #3260), or when the machine has no
-room (#3231): `ports.machine.room` (the [machine guard](machine-guard.prompt.md)'s
-`machineRoom` for Autopilot's share of the whole machine). Before a ready intake reads this
-room, the core calls the optional launcher's `ports.machine.reserve()`. It returns a release
-function after refreshing the shared guard while holding the machine admission lock, or null
-after its bounded wait. The core holds that function only through the room check and new job
-save/start sequence, then calls it in `finally`; it does not reserve around issue scans,
-heartbeats, merge checks, reports or running-job work. A null reservation holds intake with
+Intake is held before a claim when the saved agent is not Codex or Claude, when
+`ports.agentReady()` is false at the first ready issue (for example a Codex usage
+limit), while a machine pause runs (below), or while CI does not start in this
+repository ([Stop owners](#stop-owners), #3260). A final machine-room denial can
+occur after this tick made a worktree and claim; it leaves no admitted job and uses
+the owner-safe rollback above. The room is `ports.machine.room` (the
+[machine guard](machine-guard.prompt.md)'s `machineRoom` for Autopilot's share of
+the whole machine). Immediately before it saves a new slot-holding job, the core
+calls the optional launcher's `ports.machine.reserve()`. It returns a release
+function after refreshing the shared guard while holding the machine admission lock,
+or null after its bounded wait. The core holds that function only through the room
+check and atomic job save, then calls it before older-PR cleanup, process start, any
+END or other cleanup. The saved job retains the admitted slot while those later
+operations run. It does not reserve around issue scans, worktree preparation, claim
+and other GitHub reads, build-brief preparation, heartbeats, merge checks, reports
+or running-job work. A null reservation holds intake with
 `intake held: the machine admission is busy; the next tick retries.` The tick message then says
 `intake held: REASON`, for example `intake held: 4 of 4 Autopilot jobs on this machine
 run (all repositories, 50% share)`. With room, intake claims at most `room.free` issues,
@@ -1276,8 +1300,13 @@ runs until its end):
    only when its line is clear: a reason after the duration is not a failure, while a
    duration-shaped reason or title is ambiguous. If a summary confirms failures but the
    rows do not identify all failed tests clearly, report the remaining failure count as
-   unclear; do not guess a test or file. The `test at FILE:LINE:COL` line before a spec
-   row gives its file. The
+   unclear; do not guess a test or file. A root-level fileless `✖` inside the
+   `✖ failing tests:` detail is not a new reporter block and does not close that detail:
+   it has no test name by itself, while a later `test at FILE:LINE:COL` and failure row
+   still give a file-backed test. This exception is only that root fileless `✖`: a later
+   root `▶` or `✔` starts the next reporter block. An unpaired fileless row stays
+   represented only by the summary's unclear count. The `test at FILE:LINE:COL` line
+   before a spec row gives its file. The
    **repair budget** (option B): repairs go on
    while they make progress. The findings of a round are each review must-fix (P1 and P2)
    and each other red line. Two findings are the same when they name the same `file:line`
