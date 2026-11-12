@@ -26,7 +26,7 @@ Fix both: the brakes (the real defect) and the warning light (a test or check th
 - On verify/formal failure or review must-fixes, allow 2 repairs after initial review. Use fresh build, verify, formal and review agents. PR 2 starts with real `Review:` verdict, remaining must-fixes and "✗ N vectors fail" for failing vectors. No new human gate.
   - Repair pending: with must-fixes and fewer than 2 repairs, do not run `workflow done review`; fresh build with the must-fix list.
   - Final review: clear or 2 repairs used; run `workflow done review` to open PR 2.
-- A person decides expected values. Never change a test to make it pass. Inject ports for databases, files, network, clocks, randomness and programs. No direct calls (RUNBOOK §21).
+- A person decides expected values. Never change a test to make it pass. Inject ports for databases, files, network, clocks, randomness, programs. No direct calls (RUNBOOK §21).
 
 ## In a run
 
