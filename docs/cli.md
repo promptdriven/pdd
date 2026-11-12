@@ -1189,8 +1189,10 @@ a feature should exist, two different designs, removing a feature, a core contra
 security, privacy, data policy, or cost); `decide`, the default for now, asks no choice
 question and lists big choices marked "(big)". In both modes a blocker asks: missing
 access or a secret, an issue that contradicts itself, work that cannot be done, a
-change against a rule of an approved prompt or an earlier decision that the issue does
-not ask for, and a change of what blocks merges (a required check, a gate, CI policy). `--mode off` saves the mode and stops the timer of this machine. In
+change against a person's answer to an earlier question, and a change of what blocks
+merges (a required check, a gate, CI policy). A bug fix may change a rule of an approved
+prompt without asking; the PR lists it as "(changes approved rule: OLD -> NEW)", and
+the repository's approval setting still applies to that prompt. `--mode off` saves the mode and stops the timer of this machine. In
 `observe` mode the core does everything except the merge (it also records the
 operator approval of changed prompts, with "in observe mode" in its words; in a
 `strict_approvals` repository it asks no person and lists those prompts in its note): when all checks pass, it
@@ -1231,7 +1233,7 @@ cores and the memory of the machine.
   64-core server share its 4 jobs. `--runs N` on this machine sets the most jobs of
   this repository; `autopilot.runs` in `pdd.json` can only lower them.
 - Every Autopilot process runs at the lowest priority: nice 19, on macOS the utility
-  QoS with throttled disk I/O, and in the Linux timer unit `CPUWeight=1` (a weight
+  QoS, and in the Linux timer unit `CPUWeight=1` (a weight
   counts only when the CPU is busy, so an idle machine still gives Autopilot all of it;
   at a share of 100 the normal weight) and `MemoryHigh` at the share. On Linux the
   agents run on the share of the CPUs. Every job gets `PDD_CHECK_CPUS`, the worker count
@@ -1298,7 +1300,10 @@ Each tick, without AI calls:
    comment, make a worktree and start one headless job. The job runs the same pdd
    as the tick (it goes first on the job's `PATH`, and `PDD_CLI` names it, because a
    login shell can put an older pdd first again; when the agent's shell finds another
-   pdd, the job log and `pdd autopilot status` say so). It makes one PR with prompt,
+   pdd, the job log and `pdd autopilot status` say so). `PDD_SKILLS` names the skills
+   of that same pdd, and the job reads its skills from there; when the installed skills
+   (`~/.agents/skills` or `~/.claude/skills`) have another version, the job log and
+   status say so too. It makes one PR with prompt,
    tests and code where the files are owned by a prompt, and changes other files
    directly: a file is owned when `pdd-bindings.json`, a `Generated from` header or the
    opening sentence of a prompt names it (`pdd owner FILE` gives the same answer). The

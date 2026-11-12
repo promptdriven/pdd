@@ -526,21 +526,30 @@ that runs the tick: the tick writes `bin/pdd` in `ROOT` (`#!/bin/sh` and `exec '
 'PACKAGE/bin/pdd.mjs' "$@"`, with this Node and this package, quoted for the shell;
 rewritten only when it differs) and puts `ROOT/bin` first on the job's `PATH`, before
 any other pdd (for example an older global install). Because a login shell can put
-another pdd first again (#3177), every job also gets `PDD_CLI` = `ROOT/bin/pdd`, and the
-build, repair, conflict and review jobs get `pddCheck {version, cli}` (the engine's
-version, `ports.version` or the package version, and `ROOT/bin/pdd`): the
-[job runner](agent-job.prompt.md) notes when the agent's shell finds another pdd, and
-status shows that note beside the running process. It files nothing and never ends a
+another pdd first again (#3177), every job also gets `PDD_CLI` = `ROOT/bin/pdd`, and
+`PDD_SKILLS` = the `skills` folder of this same package (the installed skills can be
+older than the engine). The build, repair, conflict and review jobs get `pddCheck
+{version, cli, skills}`: the engine's version (`ports.version` or the package version),
+`ROOT/bin/pdd`, and `skills {dir, version, read}` (`dir` = `PDD_SKILLS`, `version` = its
+`pdd-feature/SKILL.md` `pdd-skills:` value, `read` = the folder that the job's agent
+loads by default: Codex `~/.agents/skills`, Claude `$CLAUDE_CONFIG_DIR/skills` when that
+is absolute, else `~/.claude/skills`). The [job runner](agent-job.prompt.md) notes when
+the agent's shell finds another pdd or the installed skills have another version, and
+status shows those notes beside the running process. They file nothing and never end a
 job. The briefs use it (#3177): build and repair rule 6 says "Run pdd as "$PDD_CLI" (for
 example "$PDD_CLI" test STORY), never as a bare pdd: your shell can find an older pdd
 first on PATH. $PDD_CLI is the pdd of this Autopilot."; the approval command of rule 9
 is `printf '%s' WORDS | "$PDD_CLI" approve PROMPT --said -`; the conflict and review
 briefs say "When you run pdd, run it as "$PDD_CLI", never as a bare pdd."; and the red
-texts that name a pdd command name `"$PDD_CLI" test` and `"$PDD_CLI" approve`. Every
-agent brief also names the short job rules file of the package (#3227 fix 5,
-`PACKAGE/skills/pdd-prompting/autopilot-job-rules.md`, absolute): build, repair and
-conflict say "Read FILE in full before you write the PR body"; review says "Read FILE in
-full before you check the PR body".
+texts that name a pdd command name `"$PDD_CLI" test` and `"$PDD_CLI" approve`. Build and
+repair rule 1 says "Read these PDD skills and their step files from "$PDD_SKILLS" (for
+example "$PDD_SKILLS/pdd-feature/SKILL.md"), never from ~/.agents/skills or
+~/.claude/skills: the installed copies can be older than this Autopilot."; the review
+and conflict briefs say "Read any PDD skill or rules file from "$PDD_SKILLS"." Every
+agent brief names the short job rules file of the package (#3227 fix 5) as
+`"$PDD_SKILLS/pdd-prompting/autopilot-job-rules.md"`: build, repair and conflict say
+"Read FILE in full before you write the PR body"; review says "Read FILE in full before
+you check the PR body".
 
 **No input is cut silently (B2, final battle plan).** Each cap ends with a marker that
 says how much is left out and where to read it: the issue text (20,000 characters)
@@ -575,13 +584,18 @@ the evidence record.
   privacy or data policy, or something that costs money. An open trusted issue that
   asks the same product question (for example an open decision issue) counts too.
   Every other choice in a feature is decided and listed (small ones: internal names,
-  code structure, tests, message and docs wording, small defaults). **Two cases always
-  go to a person**, in every run kind and mode (audit, Nov 11): a change that
-  contradicts a rule in an approved prompt or an earlier recorded decision (an answer in
-  the brief, a decision issue) that the issue does not ask for in words, and a change of
-  what blocks merges (a new required check, a gate, a hash pin, CI policy). The job does
-  not make such a change by itself: it writes the `needs-person` result with `kind`
-  `blocker`. A real blocker (missing access or a secret, an issue that contradicts
+  code structure, tests, message and docs wording, small defaults). **A bug fix may
+  change an approved rule** (Serhan, D1, Nov 11: "it can change the rule without you
+  needed if its a bug"): a pdd-bug or pdd-small-change run whose fix is a change of a
+  rule in an approved prompt makes it without asking and lists it under `Choices
+  Autopilot made:` with `(changes approved rule: OLD -> NEW)`, so a person sees it; the
+  repository's approval setting still applies to the changed prompt (strict approvals
+  wait for a person's approval, as before), but the choice rule never asks for it.
+  **Two cases always go to a person**, in every run kind and mode (audit, Nov 11): a
+  change against a person's recorded answer to an earlier question (an answer in the
+  brief, a decision issue), and a change of what blocks merges (a new required check, a
+  gate, a hash pin, CI policy). The job does not make such a change by itself: it writes
+  the `needs-person` result with `kind` `blocker`. A real blocker (missing access or a secret, an issue that contradicts
   itself, work that cannot be done) is `kind` `blocker` too. A question is ONE plain
   question, 2 or 3 options and the letter that the job recommends, so a person can
   answer with one letter. With `decisions` `decide` (the default) the job never asks a
@@ -700,12 +714,14 @@ the evidence record.
   with the surface and the result named; no test that only copies a value from the
   diff); an honest Runtime line and no unrelated or unsafe change; and (6) **the choices
   (T10)**: every choice that the issue did not settle is listed under `Choices Autopilot
-  made:` with its reason (with `(changes public behavior: …)` when users see a change); a
-  missing or wrong line is a P2 must-fix (fix the list), never a decision item. A change
-  that contradicts a rule in an approved prompt or an earlier recorded decision, which
-  the issue does not ask for in words, or a change of what blocks merges, is a P1
-  must-fix in every mode: undo it, or end with the `needs-person` result `kind`
-  `blocker` (so such a PR never merges by itself). In a pdd-bug or pdd-small-change PR a
+  made:` with its reason (with `(changes public behavior: …)` when users see a change,
+  and `(changes approved rule: OLD -> NEW)` when a bug or small-change fix changes a rule
+  of an approved prompt; a missing such mark is a P2 must-fix: fix the list); a missing
+  or wrong line is a P2 must-fix (fix the list), never a decision item. A change against
+  a person's recorded answer to an earlier question, or a change of what blocks merges,
+  is a P1 must-fix in every mode: undo it, or end with the `needs-person` result `kind`
+  `blocker` (so such a PR never merges by itself). A feature that changes an approved
+  rule on its own, with no product-direction answer, is a decision item with `ask`. In a pdd-bug or pdd-small-change PR a
   decision item is never a question: only a repair or a "list it" fix. With `decisions`
   `ask`, only a product-direction choice of a feature PR (rule 1) that the job made
   instead of asking is a P2 must-fix with the word `decision:` after its severity or its

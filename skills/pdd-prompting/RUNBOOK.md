@@ -838,10 +838,12 @@ records. A line that the records do not support is red. The same rules, short en
   security, privacy or data policy, or something that costs money; an open trusted issue that asks the same product
   question counts too. Then do not choose and open no PR. Decide and list every other choice. An issue gets at most
   one choice question.
-- Two cases always go to a person, in every run: a change that contradicts a rule in an approved prompt or an earlier
-  recorded decision (an answer above, a decision issue) that the issue does not ask for in words, and a change of what
-  blocks merges (a new required check, a gate, a hash pin, CI policy). Do not make such a change: write the
-  needs-person result with `"kind":"blocker"`. A real blocker (missing access or a secret, an issue that contradicts
+- A bug fix may change an approved rule (Serhan, D1): when the fix of a pdd-bug or pdd-small-change run changes a
+  rule in an approved prompt, change it without asking and list it with "(changes approved rule: OLD -> NEW)", so a
+  person sees it. The repository's approval setting still applies to the changed prompt.
+- Two cases always go to a person, in every run: a change against a person's recorded answer to an earlier question
+  (an answer above, a decision issue), and a change of what blocks merges (a new required check, a gate, a hash pin,
+  CI policy). Do not make such a change: write the needs-person result with `"kind":"blocker"`. A real blocker (missing access or a secret, an issue that contradicts
   itself, work that cannot be done) is `"kind":"blocker"` too.
 - The needs-person result asks exactly one question with 2 or 3 options, so a person can answer with one letter:
   ```json
@@ -857,9 +859,10 @@ For the reviewer:
 - Every choice that the issue did not settle must be listed in the PR body under "Choices Autopilot made:" with its
   reason (with "(changes public behavior: ...)" when users see a change); a missing or wrong line is a P2 must-fix
   (fix the list).
-- A change that contradicts a rule in an approved prompt or an earlier recorded decision, which the issue does not ask
-  for in words, or a change of what blocks merges (a required check, a gate, a hash pin, CI policy), is a P1 must-fix
-  in every mode: undo it, or end with the needs-person result `"kind":"blocker"`.
+- A bug or small-change fix may change a rule in an approved prompt; it must be listed with "(changes approved rule:
+  OLD -> NEW)", and a missing mark is a P2 must-fix (fix the list). A change against a person's recorded answer to an
+  earlier question, or a change of what blocks merges (a required check, a gate, a hash pin, CI policy), is a P1
+  must-fix in every mode: undo it, or end with the needs-person result `"kind":"blocker"`.
 
 ## 16. Known limits today
 

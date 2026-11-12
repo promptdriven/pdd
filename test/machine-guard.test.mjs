@@ -9,7 +9,7 @@ import { GUARD, validShare, shareOf, autoSlots, slotMath, slotCount, machineRoom
 import { readAutopilotUse } from '../src/machine-resources.mjs';
 import { coreSettings } from '../src/autopilot-core.mjs';
 import { readMachineResources } from '../src/machine-resources.mjs';
-import { jobCommand, startAgentJob, readAgentJob, pddCheckFile, pddCheckLine } from '../src/agent-job.mjs';
+import { jobCommand, startAgentJob, readAgentJob, pddCheckFile, pddCheckLine, skillsCheckFile } from '../src/agent-job.mjs';
 
 const GiB = 1024 ** 3;
 const ids = n => Array.from({ length: n }, (_, i) => i);
@@ -109,15 +109,17 @@ test('T3 priority: nice 19 everywhere, macOS utility QoS through taskpolicy, Lin
   assert.equal(jobPriority({ platform: 'linux', role: 'build', resources: machine(8, { check: { cpuIds: [0, 2, 4, 6, 8, 10], platform: 'linux' } }), share: 50, taskset: '/usr/bin/taskset' }).cpus, '0,2,4');
   // The wrapper's command: taskpolicy on macOS, taskset on Linux, else the command.
   const spec = priority => ({ command: 'codex', args: ['exec', '-'], ...(priority ? { priority } : {}) });
-  assert.deepEqual(jobCommand(spec(), 'darwin', { executable: () => true }), { command: '/usr/sbin/taskpolicy', args: ['-c', 'utility', '-d', 'throttle', 'codex', 'exec', '-'] });
-  assert.deepEqual(jobCommand(spec({ qos: null }), 'darwin', { executable: () => true }), { command: 'codex', args: ['exec', '-'] });
-  assert.deepEqual(jobCommand(spec(), 'darwin', { executable: () => false }), { command: 'codex', args: ['exec', '-'] }, 'no taskpolicy: the command itself');
-  assert.deepEqual(jobCommand(spec(linux('build')), 'linux'), { command: '/usr/bin/taskset', args: ['--cpu-list', '0-3', 'codex', 'exec', '-'] });
-  assert.deepEqual(jobCommand(spec(linux('suite')), 'linux'), { command: 'codex', args: ['exec', '-'] });
-  assert.deepEqual(jobCommand(spec({ cpus: '0-3; rm -rf /', taskset: '/usr/bin/taskset' }), 'linux'), { command: 'codex', args: ['exec', '-'] }, 'only a plain CPU list');
+  const all = { executable: () => true }, none = { executable: () => false };
+  assert.deepEqual(jobCommand(spec(), 'darwin', all), { command: '/usr/bin/nice', args: ['-n', '19', '/usr/sbin/taskpolicy', '-c', 'utility', 'codex', 'exec', '-'] });
+  assert.deepEqual(jobCommand(spec({ qos: null }), 'darwin', all), { command: '/usr/bin/nice', args: ['-n', '19', 'codex', 'exec', '-'] });
+  assert.deepEqual(jobCommand(spec(), 'darwin', none), { command: 'codex', args: ['exec', '-'] }, 'no nice or taskpolicy: the command itself (the wrapper lowers its own nice value)');
+  assert.deepEqual(jobCommand(spec(linux('build')), 'linux', all), { command: '/usr/bin/nice', args: ['-n', '19', '/usr/bin/taskset', '--cpu-list', '0-3', 'codex', 'exec', '-'] });
+  assert.deepEqual(jobCommand(spec(linux('suite')), 'linux', all), { command: '/usr/bin/nice', args: ['-n', '19', 'codex', 'exec', '-'] });
+  assert.deepEqual(jobCommand(spec({ nice: 0 }), 'linux', all), { command: 'codex', args: ['exec', '-'] }, 'nice 0 adds nothing');
+  assert.deepEqual(jobCommand(spec({ cpus: '0-3; rm -rf /', taskset: '/usr/bin/taskset' }), 'linux', all), { command: '/usr/bin/nice', args: ['-n', '19', 'codex', 'exec', '-'] }, 'only a plain CPU list');
 });
 
-test('T4 a real job runs at nice 19 (the wrapper sets it; children inherit it)', async t => {
+test('T4 a real job runs at nice 19 (nice starts the child; its children inherit it)', async t => {
   const dir = mkdtempSync(join(tmpdir(), 'pdd-guard-job-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
   const job = startAgentJob({ id: 'nice-1', dir, cwd: dir, command: '/bin/sh', args: ['-c', 'ps -o ni= -p $$'], env: { PATH: process.env.PATH } });
   const end = Date.now() + 15000;
@@ -194,4 +196,39 @@ for (const [name, old] of [['an old pdd first in the login shell', true], ['the 
     assert.deepEqual([record.found, record.version, record.line], [true, '0.1.29', null]); assert.doesNotMatch(log, /pdd path check/);
   }
   assert.equal(pddCheckLine({ found: false, engine: '0.1.29', cli: '/c/pdd' }), 'pdd path check: the agent shell finds no pdd on PATH; the engine is 0.1.29; using PDD_CLI (/c/pdd)');
+});
+
+// #3177, the skills part: the agent's tools load ~/.agents/skills by default; the job reads "$PDD_SKILLS".
+for (const [name, installed, line] of [['an old installed skills folder', '0.1.20', true], ['skills of the engine\'s version', '0.1.29', false], ['no installed skills', null, false]]) test(`#3177 skills check with ${name}`, async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'pdd-guard-skills-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const { mkdirSync, writeFileSync } = await import('node:fs');
+  const home = join(dir, 'home'), installedDir = join(home, '.agents', 'skills'), engineDir = join(dir, 'pkg', 'skills');
+  if (installed) { mkdirSync(join(installedDir, 'pdd-feature'), { recursive: true }); writeFileSync(join(installedDir, 'pdd-feature', 'SKILL.md'), `---\nname: pdd-feature\nmetadata:\n  pdd-skills: ${installed}\n---\n`); }
+  const job = startAgentJob({ id: 'skills-1', dir, cwd: dir, command: '/bin/sh', args: ['-c', 'echo "skills in $PDD_SKILLS"'],
+    pddCheck: { version: '0.1.29', cli: '/engine/bin/pdd', skills: { dir: engineDir, version: '0.1.29', read: [installedDir] } }, env: { PATH: process.env.PATH, HOME: home, SHELL: '/bin/sh', PDD_SKILLS: engineDir } });
+  const end = Date.now() + 20000;
+  while (Date.now() < end && !(existsSync(job.exit) && existsSync(skillsCheckFile(job.log)))) await new Promise(r => setTimeout(r, 50));
+  const log = readFileSync(job.log, 'utf8'), record = JSON.parse(readFileSync(skillsCheckFile(job.log), 'utf8'));
+  assert.match(log, new RegExp(`skills in ${engineDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`), 'the agent gets PDD_SKILLS');
+  if (line) {
+    assert.equal(record.line, `pdd skills check: installed skills are 0.1.20 at ${installedDir}, the engine is 0.1.29; jobs use PDD_SKILLS (${engineDir})`);
+    assert.ok(log.includes(record.line), 'one line in the job log');
+  } else { assert.equal(record.line, null); assert.doesNotMatch(log, /installed skills/); }
+});
+
+test('a child that a stop signal ends before the wrapper sees the stop still ends the whole group (no orphan)', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'pdd-guard-race-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const mark = join(dir, 'grandchild.pid');
+  const grandchild = `require('fs').writeFileSync(${JSON.stringify(mark)}, String(process.pid)); process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);`;
+  // The child starts a grandchild that ignores SIGTERM, waits for it, then dies by SIGTERM itself: the wrapper never got
+  // a signal, so only the child's exit signal tells it that a stop ended the job.
+  const job = startAgentJob({ id: 'race-1', dir, cwd: dir, command: '/bin/sh', args: ['-c', `${JSON.stringify(process.execPath)} -e ${JSON.stringify(grandchild)} & while [ ! -s ${JSON.stringify(mark)} ]; do sleep 0.1; done; kill -TERM $$`], env: { PATH: process.env.PATH } });
+  const end = Date.now() + 25000;
+  while (Date.now() < end && !existsSync(mark)) await new Promise(r => setTimeout(r, 50));
+  const pid = Number(readFileSync(mark, 'utf8'));
+  t.after(() => { try { process.kill(pid, 'SIGKILL'); } catch {} });
+  const gone = () => { try { process.kill(pid, 0); return false; } catch (error) { return error.code === 'ESRCH'; } };
+  while (Date.now() < end && !gone()) await new Promise(r => setTimeout(r, 100));
+  assert.equal(gone(), true, 'the grandchild that ignores SIGTERM is gone');
+  assert.equal(JSON.parse(readFileSync(job.exit, 'utf8')).signal, 'SIGTERM');
 });

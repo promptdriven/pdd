@@ -1,11 +1,11 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 6681f73d71e4883edeb19df37a865dcc411e7b1de2cfb0aee72c0ff70e2ff918).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: a392413a4003649a6d57f35a6f7f773e00b24d013f6a6b8539e6b8a1d27d1cd5).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, createHash } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import { createDependencyReadPorts, refreshClaimHeartbeat, takeoverLimited } from './issue-dependencies-github.mjs';
-import { jobEnvironment, startAgentJob, readAgentJob, stopAgentJob, agentCommand, agentJobCpu, agentJobHangs, pddCheckFile } from './agent-job.mjs';
+import { jobEnvironment, startAgentJob, readAgentJob, stopAgentJob, agentCommand, agentJobCpu, agentJobHangs, pddCheckFile, skillsCheckFile } from './agent-job.mjs';
 import { fileReport, listReportDrafts, reportKind } from './autopilot-reports.mjs';
 import { checkAutopilotBase } from './autopilot-base.mjs';
 import { redactSecrets } from './secret-redaction.mjs';
@@ -21,7 +21,7 @@ const REPORT_LABELS = ['pdd:runtime', 'pdd:autopilot-report'];
 const BLOCK_MARKER = /<!-- pdd:core-blocked-by:([\w.-]+\/[\w.-]+)?#(\d+)(?::([a-z0-9.-]+))? -->/;
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 // #3227 fix 5: the short job rules file of this package (RUNBOOK §15 and the rules that a job needs, in one read).
-const JOB_RULES = join(PACKAGE_ROOT, 'skills', 'pdd-prompting', 'autopilot-job-rules.md');
+const JOB_RULES = '"$PDD_SKILLS/pdd-prompting/autopilot-job-rules.md"';
 const RULES_LINE = `Read ${JOB_RULES} in full before you write the PR body.`;
 // A job that needs a person's decision posts one question and adds this label; the person answers in a comment and
 // removes the label, and then the issue is ready again.
@@ -513,9 +513,10 @@ const approvalWords = ctx => `Operator action: pdd autopilot start --engine core
 
 // T10, the choice rule (Serhan, Nov 11): a bug fix is not a big decision. Autopilot decides when one reasonable fix
 // solves the problem and breaks nothing people use today; it asks a choice only when every fix breaks something, or for
-// a product-direction decision of a feature. Two cases always go to a person (audit, Nov 11), as a blocker.
-const DECIDE_RULE = 'Autopilot decides when at least one reasonable fix solves the problem and breaks nothing that people use today: pick that fix and list it in the PR body under "Choices Autopilot made:", one line each with its reason ("- CHOICE (REASON)"), with "(changes public behavior: WHAT)" when users see a change. For example, "make remove safer" is decided: ask y/N only in an interactive terminal, --yes skips it, scripts stay unchanged; nothing is asked. A pdd-bug or pdd-small-change run never asks a choice question: pick the fix that makes the reported behavior right with the least surprise.';
-const PERSON_CASES = 'Two cases always go to a person, in every run: a change that contradicts a rule in an approved prompt or an earlier recorded decision (an answer above, a decision issue) that the issue does not ask for in words, and a change of what blocks merges (a new required check, a gate, a hash pin, CI policy). Do not make such a change: write the needs-person result with "kind":"blocker". A real blocker (missing access or a secret, an issue that contradicts itself, work that cannot be done) is "kind":"blocker" too.';
+// a product-direction decision of a feature. A bug fix may change an approved rule (Serhan, D1). Two cases always go to
+// a person (audit, Nov 11), as a blocker.
+const DECIDE_RULE = 'Autopilot decides when at least one reasonable fix solves the problem and breaks nothing that people use today: pick that fix and list it in the PR body under "Choices Autopilot made:", one line each with its reason ("- CHOICE (REASON)"), with "(changes public behavior: WHAT)" when users see a change. For example, "make remove safer" is decided: ask y/N only in an interactive terminal, --yes skips it, scripts stay unchanged; nothing is asked. A pdd-bug or pdd-small-change run never asks a choice question: pick the fix that makes the reported behavior right with the least surprise. When that fix changes a rule in an approved prompt, change it without asking and list it with "(changes approved rule: OLD -> NEW)", so a person sees it; the repository\'s approval setting still applies to the changed prompt.';
+const PERSON_CASES = 'Two cases always go to a person, in every run: a change against a person\'s recorded answer to an earlier question (an answer above, a decision issue), and a change of what blocks merges (a new required check, a gate, a hash pin, CI policy). Do not make such a change: write the needs-person result with "kind":"blocker". A real blocker (missing access or a secret, an issue that contradicts itself, work that cannot be done) is "kind":"blocker" too.';
 const PRODUCT_DIRECTION = 'whether a new feature area or capability should exist, how a feature works at the design level when there are two different designs, removing a feature, an on-purpose change to a core contract, security, privacy or data policy, or something that costs money; an open trusted issue that asks the same product question counts too';
 const asking = ctx => ctx.settings.decisions === 'ask';
 const choiceRule = ctx => asking(ctx)
@@ -540,7 +541,7 @@ const RESULT_RULES = (result, ctx = null) => `Before you exit, write this JSON f
 function workRules(ctx, job) {
   const { state, settings } = ctx;
   return `Rules:
-1. Choose the PDD skill that fits: pdd-small-change for a small contained change, pdd-bug for a defect, pdd-feature for new behavior. Follow its method, but make ONE PR that holds the prompt, Story, tests and code together. This is not a \`pdd workflow run\`: do not run \`pdd workflow\` commands, do not use Herdr, do not wait for a person, and skip the skill's steps/autopilot.md. ${choiceRule(ctx)}
+1. Choose the PDD skill that fits: pdd-small-change for a small contained change, pdd-bug for a defect, pdd-feature for new behavior. Read these PDD skills and their step files from "$PDD_SKILLS" (for example "$PDD_SKILLS/pdd-feature/SKILL.md"), never from ~/.agents/skills or ~/.claude/skills: the installed copies can be older than this Autopilot. Follow its method, but make ONE PR that holds the prompt, Story, tests and code together. This is not a \`pdd workflow run\`: do not run \`pdd workflow\` commands, do not use Herdr, do not wait for a person, and skip the skill's steps/autopilot.md. ${choiceRule(ctx)}
 2. Path. Autopilot gives you an owner table. For each other file you change, run the same lookup (\`pdd owner FILE\`). A file is OWNED when pdd-bindings.json, a \`Generated from\` header line, or the opening sentence of a prompt names it. When you are not sure, treat it as owned. Take your path from the table:
    a. Owned code, and the contract changes (what a caller, user or program gets): change the owning prompt first, in the issue's words, never from code output. Then the Story and tests, then the code.
    b. Owned code, and the contract stays (the prompt is already right, a refactor, a log line): keep the prompt unchanged. Quote the prompt line that the fix restores (file:line), or write "no contract change".
@@ -616,7 +617,7 @@ async function openIssuesBrief(ctx, job) {
 }
 // A decision item: P1 or P2, then the word "decision:" within the first 200 characters (after the place or not).
 const DECISION_ITEM = /^\W*P[12]\b(?:\W*|.{0,200}?\s)decision\b\s*:/i;
-const REVIEW_PERSON = 'A change that contradicts a rule in an approved prompt or an earlier recorded decision, which the issue does not ask for in words, or a change of what blocks merges (a required check, a gate, a hash pin, CI policy), is a P1 must-fix in every mode: undo it, or end with the needs-person result "kind":"blocker".';
+const REVIEW_PERSON = 'A bug or small-change fix may change a rule in an approved prompt; it must be listed with "(changes approved rule: OLD -> NEW)", and a missing mark is a P2 must-fix (fix the list). A change against a person\'s recorded answer to an earlier question, or a change of what blocks merges (a required check, a gate, a hash pin, CI policy), is a P1 must-fix in every mode: undo it, or end with the needs-person result "kind":"blocker".';
 const reviewChoices = ctx => asking(ctx)
   ? `(6) choices: every choice that the issue did not settle must be listed in the PR body under "Choices Autopilot made:" with its reason (with "(changes public behavior: ...)" when users see a change); a missing or wrong line is a P2 must-fix (fix the list), never a decision item. ${REVIEW_PERSON} In a pdd-bug or pdd-small-change PR a decision item is never a question: only a repair or a "list it" fix. Only a product-direction choice of a feature PR (${PRODUCT_DIRECTION}) that the job made instead of asking is a P2 must-fix with "decision:" after its severity or place ("P2 decision: ..." or "P2 file:line decision: ..."); then write "question" (one plain question), "options" (2 or 3) and "recommended" (the letter you recommend). A person's answer above settles its choice: do not ask it again.`
   : `(6) choices: every choice that the issue did not settle must be listed in the PR body under "Choices Autopilot made:" with its reason (big ones marked "(big)", with "(changes public behavior: ...)" when users see a change); a missing or wrong line is a P2 must-fix (fix the list). ${REVIEW_PERSON} Never write a decision item: Autopilot decides every other choice in this repository. A person's answer above settles its choice.`;
@@ -635,7 +636,7 @@ Autopilot's evidence record of this head (written by the engine; the PR's Runtim
 ${evidenceSummary(ctx, job)}
 
 Check: (1) the change does what the issue asks; (2) Path: the Path lines match the owner table. You may dispute the table only when you name a binding, header or prompt line that it missed. For a and c: the prompt states the issue's behavior in words that trace to the issue, not to the code, and the code agrees with it. For b: the quoted line really requires the fixed behavior, or the diff keeps the contract. For d: each changed value that a prompt states agrees with that prompt at this head. A new code file with new behavior takes path c, with its prompt and a binding or header: that binding or header is required, so never ask to remove it. These are must-fixes: a new prompt for a non-code file; owned code that disagrees with its prompt. Autopilot checks the ownership rules itself (an owned file on path d or e or on no Path line, a new file on path e, a new prompt with no binding or header, a binding or header added for a file that is unowned on the base, no Path line): do not report them. Do not ask for a new prompt for an unowned file. A config or metadata file (package.json, a lock file, CI settings) needs no prompt and no Story. Never ask for a new prompt for it. Ask for a test only when the change alters a result that users see. Do not judge commit order. (3) Tests: when the change alters a result through the public surface, a test checks it and fails on base, and no test was weakened. To make a missing test a must-fix, name the surface and the result that changed. Do not ask for a test that only copies a value from the diff. (4) the PR body has one honest Runtime line, and a Runtime FAIL line in the PR body means your verdict is FAIL; (5) no unrelated change, secret or unsafe effect; ${reviewChoices(ctx)}
-Read ${JOB_RULES} in full before you check the PR body. When you run pdd, run it as "$PDD_CLI", never as a bare pdd.
+Read ${JOB_RULES} in full before you check the PR body. Read any PDD skill or rules file from "$PDD_SKILLS". When you run pdd, run it as "$PDD_CLI", never as a bare pdd.
 Read the change in parts. A tool output over about 10,000 tokens loses its middle, so never read the whole PR's diff in one call. First run git fetch origin ${ctx.state.baseBranch} && git diff --stat origin/${ctx.state.baseBranch}...HEAD. Then read one changed file per command: git diff origin/${ctx.state.baseBranch}...HEAD -- FILE. Read a file whose diff is larger than about 30 KB in hunks (for example git diff origin/${ctx.state.baseBranch}...HEAD -- FILE | sed -n '1,400p', then the next lines). You may run focused tests. Do not edit files, commit, push, comment, approve or merge.
 Before you exit, write this JSON file: ${result}
 {"verdict":"PASS" or "FAIL","head":"${job.head}","summary":"<one paragraph, then one line: Read: FILE, FILE, ... (every changed file that you read in full)>","mustFix":["<each required fix>"]${asking(ctx) ? ',"question":"<only with a P2 decision item: one plain question>","options":["<answer A>","<answer B>"],"recommended":"<the letter you recommend>"' : ''}}. A FAIL names at least one required fix. Start each item with its severity and its place: "P1 file:line ..." (wrong behavior or unsafe), "P2 file:line ..." (must be fixed before the merge) or "P3 file:line ..." (a follow-up that does not block the merge). One item per finding. A PASS lists only P3 items: any other item blocks the merge.
@@ -657,7 +658,7 @@ Merge origin/${ctx.state.baseBranch} into ${job.branch} (git fetch origin ${ctx.
 
 ${issueText(job)}
 
-${RULES_LINE} When you run pdd, run it as "$PDD_CLI", never as a bare pdd.
+${RULES_LINE} Read any PDD skill or rules file from "$PDD_SKILLS". When you run pdd, run it as "$PDD_CLI", never as a bare pdd.
 
 ${RESULT_RULES(result, ctx)}
 `;
@@ -884,12 +885,22 @@ function pddOnPath(ctx, env) {
   const file = join(ctx.dirs.bin, 'pdd'), text = `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(ctx.pdd)} "$@"\n`;
   ctx.fs.mkdirSync(ctx.dirs.bin, { recursive: true, mode: 0o700 });
   if (readText(ctx.fs, file) !== text) { const temp = `${file}.${process.pid}.tmp`; ctx.fs.writeFileSync(temp, text, { mode: 0o700 }); ctx.fs.renameSync(temp, file); }
-  // #3177: PDD_CLI names this pdd for the agent, because a login shell can put another pdd first on PATH again.
-  return { ...env, PDD_CLI: file, PATH: [ctx.dirs.bin, ...String(env.PATH ?? '').split(':').filter(dir => dir && dir !== ctx.dirs.bin)].join(':') };
+  // #3177: PDD_CLI names this pdd for the agent, because a login shell can put another pdd first on PATH again;
+  // PDD_SKILLS names the skills folder of this same package, because the installed skills can be older.
+  return { ...env, PDD_CLI: file, PDD_SKILLS: join(PACKAGE_ROOT, 'skills'), PATH: [ctx.dirs.bin, ...String(env.PATH ?? '').split(':').filter(dir => dir && dir !== ctx.dirs.bin)].join(':') };
 }
 // #3177: the agent roles run commands in a shell; their wrapper checks which pdd that shell finds.
 const SHELL_ROLES = new Set(['build', 'repair', 'conflict', 'review']);
 const engineVersion = ctx => ctx.ports.version ?? readJson(ctx.fs, join(PACKAGE_ROOT, 'package.json'), {})?.version ?? null;
+// The skills folders that the agent's tools load by default (as pdd setup installs them): Codex ~/.agents/skills,
+// Claude $CLAUDE_CONFIG_DIR/skills (absolute) else ~/.claude/skills; and the engine's own skills version.
+function skillsCheck(ctx) {
+  const env = ctx.ports.env ?? process.env, home = env.HOME, dir = join(PACKAGE_ROOT, 'skills');
+  const version = /^\s*pdd-skills:\s*(\d+\.\d+\.\d+)\s*$/m.exec(readText(ctx.fs, join(dir, 'pdd-feature', 'SKILL.md')) ?? '')?.[1] ?? null;
+  const claude = typeof env.CLAUDE_CONFIG_DIR === 'string' && env.CLAUDE_CONFIG_DIR.startsWith('/') ? join(env.CLAUDE_CONFIG_DIR, 'skills') : home ? join(home, '.claude', 'skills') : null;
+  const read = (ctx.state.agent?.kind === 'claude' ? [claude] : [home ? join(home, '.agents', 'skills') : null]).filter(Boolean);
+  return { dir, version, read };
+}
 function startJob(ctx, job, role, cwd, prompt, command = null, extraEnv = {}) {
   const id = `${job.issue}-${role}-${ctx.now().toString(36)}-${randomUUID().slice(0, 6)}`;
   ctx.fs.mkdirSync(ctx.dirs.logs, { recursive: true, mode: 0o700 });
@@ -900,7 +911,7 @@ function startJob(ctx, job, role, cwd, prompt, command = null, extraEnv = {}) {
   const { checkCpus, ...priority } = ctx.ports.machine?.priority?.(role) ?? {};
   return ctx.jobs.start({ id, dir: ctx.dirs.logs, cwd, command: run.command, args: run.args, input: typeof prompt === 'function' ? prompt(result) : prompt,
     env: { ...pddOnPath(ctx, jobEnvironment(ctx.ports.env ?? process.env)), ...(Number.isSafeInteger(checkCpus) ? { PDD_CHECK_CPUS: String(checkCpus) } : {}), ...extraEnv },
-    ...(Object.keys(priority).length ? { priority } : {}), ...(SHELL_ROLES.has(role) ? { pddCheck: { version: engineVersion(ctx), cli: join(ctx.dirs.bin, 'pdd') } } : {}),
+    ...(Object.keys(priority).length ? { priority } : {}), ...(SHELL_ROLES.has(role) ? { pddCheck: { version: engineVersion(ctx), cli: join(ctx.dirs.bin, 'pdd'), skills: skillsCheck(ctx) } } : {}),
     issue: job.issue, role, branch: job.branch, head: job.head, ...(command ? {} : { hung: HUNG }) });
 }
 async function checkout(ctx, job, name) {
@@ -3460,7 +3471,7 @@ async function sweepFiles(ctx) {
 
 // ---- Status (local files only) --------------------------------------------------------------------------
 // #3177: the wrapper's note when the agent's shell finds another pdd than the engine's.
-const pddWords = (fs, part) => { const line = readJson(fs, pddCheckFile(part.log ?? ''), null)?.line; return named(line) ? `; ${oneLine(line, 300)}` : ''; };
+const pddWords = (fs, part) => [pddCheckFile, skillsCheckFile].map(file => readJson(fs, file(part.log ?? ''), null)?.line).filter(named).map(line => `; ${oneLine(line, 300)}`).join('');
 const runtimeWords = job => runtimeWaiting(job) ? `; Runtime: waits for the interpreter maintenance since ${utcClock(job.runtimeWait.maintenance)}${job.runtimeWait.until ? ` (until ${utcClock(job.runtimeWait.until)})` : ''}; no slot`
   : runtimeCurrent(job) && job.runtimeWait.state === 'sent' ? '; Runtime: the check that was not sent runs again' : '';
 export function coreStatus({ state, settings, sources = {}, guard = null }, ports) {
