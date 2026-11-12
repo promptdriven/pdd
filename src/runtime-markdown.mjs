@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-markdown.prompt.md (sha256: d7b0956dc0634d345ff82c8affb24cbd8f863f70012b8c65cab71df07f342c01).
+// Generated from prompts/cli/runtime-markdown.prompt.md (sha256: 49f404e3b5ad6e61ca380f4ec5b73a8c86b95a3acc51b1b1c9bb2984ed4f50fe).
 export function markdownDefinitions(text) {
   const definitions = new Map();
   for (const match of text.matchAll(/^ {0,3}\[([^\]\n]+)\]:[ \t]*(?:<([^>\n]+)>|(\S+))/gm)) {
@@ -8,11 +8,22 @@ export function markdownDefinitions(text) {
   return definitions;
 }
 
+function markdownEscaped(text, index) {
+  let start = index;
+  while (start > 0 && text[start - 1] === '\\') start--;
+  return (index - start) % 2 === 1;
+}
+
 // Return local destinations without treating link labels or reference definitions as file paths.
 export function markdownLinks(text, definitions, imagesOnly = false) {
   const paths = [];
-  for (const match of text.matchAll(/(!?)\[[^\]\n]*\]\([ \t]*/g)) {
-    if (imagesOnly && !match[1]) continue;
+  const inline = /(!?)\[[^\]\n]*\]\([ \t]*/g;
+  for (let match; (match = inline.exec(text));) {
+    if (markdownEscaped(text, match.index + match[1].length)) {
+      inline.lastIndex = match.index + match[1].length + 1;
+      continue;
+    }
+    if (imagesOnly && (!match[1] || markdownEscaped(text, match.index))) continue;
     let index = match.index + match[0].length, path = '', depth = 0;
     if (text[index] === '<') {
       const end = text.indexOf('>', index + 1);
@@ -29,8 +40,13 @@ export function markdownLinks(text, definitions, imagesOnly = false) {
     }
     if (path) paths.push(path);
   }
-  for (const match of text.matchAll(/(!?)\[([^\]\n]+)\](?:\[([^\]\n]*)\])?/g)) {
-    if (imagesOnly && !match[1]) continue;
+  const reference = /(!?)\[([^\]\n]+)\](?:\[([^\]\n]*)\])?/g;
+  for (let match; (match = reference.exec(text));) {
+    if (markdownEscaped(text, match.index + match[1].length)) {
+      reference.lastIndex = match.index + match[1].length + 1;
+      continue;
+    }
+    if (imagesOnly && (!match[1] || markdownEscaped(text, match.index))) continue;
     const following = text[match.index + match[0].length];
     if (following === '(' || following === ':') continue;
     const target = definitions.get((match[3] || match[2]).trim().replace(/\s+/g, ' ').toLowerCase());
@@ -62,7 +78,7 @@ function markdownContainerLine(line, containers) {
 export function markdownSectionText(text) {
   const parts = [], inline = /`+|<!--|</g;
   const opaque = /<(?:[A-Za-z][A-Za-z0-9-]*(?:[ \t\r\n]+[A-Za-z_:][A-Za-z0-9_.:-]*(?:[ \t\r\n]*=[ \t\r\n]*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?)*[ \t\r\n]*\/?|\/[A-Za-z][A-Za-z0-9-]*[ \t\r\n]*|[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\x00-\x20<>]*|[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*)>/y;
-  let containers = [], fence = null, comment = false, copied = 0, paragraph = false;
+  let containers = [], fence = null, comment = false, indented = false, copied = 0, paragraph = false;
   let scopeStart = null, scopeEnd = 0;
   const mask = (start, end) => {
     parts.push(text.slice(copied, start), text.slice(start, end).replace(/[^\r\n]/g, ' '));
@@ -132,11 +148,11 @@ export function markdownSectionText(text) {
           || (matched < containers.length && containers[matched] !== '>')));
       // Lazy paragraph continuation keeps its parent containers available for a
       // later indented fence. Code itself never permits lazy continuation.
-      const lazy = matched < containers.length && !fence && !comment && paragraph && line.trim() && !startsBlock;
+      const lazy = matched < containers.length && !fence && !comment && !indented && paragraph && line.trim() && !startsBlock;
       const boundary = !line.trim() || startsBlock || /^ {0,3}(?:=+|-+) *$/.test(line)
         || (!lazy && matched < containers.length);
       if (boundary) flush();
-      if (!lazy && matched < containers.length) { fence = null; comment = false; paragraph = false; }
+      if (!lazy && matched < containers.length) { fence = null; comment = false; indented = false; paragraph = false; }
       if (!lazy) containers = containers.slice(0, matched);
       if (fence) {
         mask(start, end);
@@ -153,6 +169,12 @@ export function markdownSectionText(text) {
         flush();
         continue;
       }
+      // Code starts only at a leaf boundary. Its indentation belongs to the
+      // existing container; markup inside it cannot open another container.
+      if ((indented && !line.trim()) || (!paragraph && /^ {4}/.test(line))) {
+        indented = true; mask(start, end); continue;
+      }
+      indented = false;
       // Start containers only outside code; a list's continuation width belongs
       // to its item, so a sibling marker or dedent ends an unclosed example.
       for (; !lazy;) {
@@ -165,6 +187,9 @@ export function markdownSectionText(text) {
         const padding = rest.trim() && list[3].length <= 4 ? list[3].length : 1;
         const indent = list[1].length + list[2].length + padding;
         containers.push(indent); line = line.slice(indent); paragraph = false;
+      }
+      if (!paragraph && /^ {4}/.test(line)) {
+        indented = true; mask(start, end); continue;
       }
       const opening = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
       if (!lazy && opening && !(opening[1][0] === '`' && opening[2].includes('`'))) {
