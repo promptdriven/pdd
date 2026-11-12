@@ -1,6 +1,6 @@
 # CLI reference
 
-This page lists every command of pdd 0.1.28, as `pdd --help` shows it. A test (`test/docs-commands.test.mjs`) checks that each command form of the help is on this page.
+This page lists every command of pdd 0.1.29, as `pdd --help` shows it. A test (`test/docs-commands.test.mjs`) checks that each command form of the help is on this page.
 
 You need the pdd command only for runs with PRs, for `pdd test`, `pdd lint`, `pdd simulate` and `pdd approve`. Install the skills with `npx skills add promptdriven/pdd` (add `-g` for all your projects), and set up a repo with the `pdd-setup` skill in your agent. For simulations that your agent drives, use the Try tools in `pdd mcp`. Then use a PDD skill: `pdd-feature`, `pdd-bug`, `pdd-small-change`, `pdd-product` or `pdd-prompting`. Call a skill with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code (or ask for it by name). See [Install](USAGE.md#2-install).
 
@@ -182,6 +182,7 @@ Autopilot opens no chat and needs no Herdr.
 | `pdd autopilot start [--runs N] [--checks N] [--label NAME] [--mode auto\|observe\|off] [--report file\|draft\|off] [--decisions ask\|decide] [--intake off\|shadow] [--share PERCENT]` | Run doctor, check the sign-ins, start the user timer and run the first tick now. The timer runs a tick every 10 minutes. `--label NAME` sets the opt-in label, for example `pdd:autopilot`: Autopilot takes only the issues with this label. `--mode`, `--report`, `--decisions` and `--intake` set this machine's mode, report mode, [decision mode](#core-engine) and [intake mode](#intake-cards-shadow) for this repo. These machine values win over `pdd.json`, and a later start without them keeps them. The report mode is `draft` unless you choose `--report file`. `--share PERCENT` (1 to 100, default 50) saves the part of this machine's CPU and memory that Autopilot may use; a later start without it keeps it (see [the machine guard](#core-engine)). `--runs N` and `--checks N` save this machine's run and heavy-check limits; a start without them removes them |
 | `pdd autopilot stop` | Save this repo as disabled on this machine, stop its timer and its intake card jobs, and let the current step finish |
 | `pdd autopilot audit RUN PR` | Audit a confirmed automatic merge once with a fresh configured agent. Save OK, CONCERN or BAD and the separate revert recommendation with the run. Post the evidence once on the issue. BAD opens a revert PR only when recommended; otherwise it keeps the merge and reopens the issue with the missing parts. One decision alert states the recommendation and choices. Unknown external outcomes require inspection before any retry. |
+| `pdd autopilot check-base RUN PR` | Check the saved automatic base, PR target, current default branch and newest release before a merge or after it. This command reads only. |
 | `pdd autopilot status [--all] [--json]` | Show this machine's Autopilot for this repo: enabled or disabled, the timer, the next tick, the jobs, an [alert](#alerts) that was not delivered and the last tick. `--all` lists every repository with Autopilot on this machine, from any folder. `--json` prints the [local cost report](#local-issue-costs) |
 | `pdd autopilot add N...` | Create the `pdd:autopilot` label when it is missing and add it to each named issue of this repository. Use it to choose the issues that Autopilot may take |
 | `pdd autopilot release ISSUE` | Release this machine's claim and remove `pdd:working` and `pdd:stuck`; keep the run folder, branch and PRs |
@@ -699,7 +700,7 @@ The agent runs these from the run's worktree. pdd finds the run from that folder
 |---|---|
 | `pdd`, `pdd --help`, `pdd -h`, `pdd help` | Show the commands and the full paths of the installed Prompting guide and RUNBOOK |
 | `pdd help prompting` | Show how to write a prompt, a Story and its test, which commands check them, and the full paths of the Prompting guide and RUNBOOK |
-| `pdd --version` | Print the version, `0.1.28`. When the PDD skills that your agent finds are older, also print the update command on stderr |
+| `pdd --version` | Print the version, `0.1.29`. When the PDD skills that your agent finds are older, also print the update command on stderr |
 | `pdd -V` | Same version and local diagnostics as `pdd --version` |
 | `pdd -VV` | Print the local CLI version, the interpreter's full build identifier and its supported interface, test and app-map format IDs. Use existing gh sign-in without prompting; unavailable metadata prints `PDD interpreter: unknown` and exits 0 |
 | `pdd completion bash\|zsh` | Print a shell completion script. It does not change your shell files |
