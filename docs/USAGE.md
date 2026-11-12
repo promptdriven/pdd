@@ -171,7 +171,7 @@ Where the skills go:
 
 `pdd setup` installs missing skills in user folders and says where. It also updates eligible marked copies there. A complete copy installed by `npx skills` needs no extra copy. When those skills are older than this pdd, or differ from its skills, `pdd setup` says so and prints the command that updates them: `npx skills add promptdriven/pdd -g -a codex -a claude-code -y` (without `-g` for a copy in your project). `pdd --version` prints the same line when your skills are older. pdd never copies the skills into your repo.
 
-Each copy that pdd makes has a marker file, `.pdd-skill.json`. `pdd setup` replaces a marked copy when its version is older, when the same version has different files, or when its marker is invalid. It keeps a copy with a newer marker version. It also removes a marked copy of `pdd-autopilot`, `pdd-check` or `pdd-merge`, because pdd no longer ships these skills. It never touches a copy without the marker, or a symlink, for example an `npx skills` install.
+Each copy that pdd makes has a marker file, `.pdd-skill.json`. `pdd setup` replaces a marked copy when its version is older, when the same version has different files, or when its marker is invalid. It keeps a copy with a newer marker version. It also removes a marked copy of `pdd-autopilot`, `pdd-check` or `pdd-merge`, because pdd does not ship these skills. It never touches a copy without the marker, or a symlink, for example an `npx skills` install.
 
 `npx skills add promptdriven/pdd --skill pdd-prompting` installs one skill. `npx skills list` shows what you have. The `pdd-skills:` line at the top of each `SKILL.md` shows the version of that skill, for example `pdd-skills: 0.1.29`.
 
