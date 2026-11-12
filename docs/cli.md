@@ -609,8 +609,8 @@ Changed criterion text and other malformed test rules still refuse the test.
 | `pdd test [PATH\|STORY...] [--lf] [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]` | Reuse complete unchanged passes from `.pdd/cache/test/`. `--lf` selects last-known failures, or the normal scope when none are recorded. `--cache-clear` discards the cache while retaining operand scope and takes precedence over `--lf`. Check Stories on the PDD interpreter with your gh login. With no STORY, test every Story. Send your Git files and wait for the checks, with one progress line every 30 s. Then print one table with a report link for each test, one `Prompt tests` line for each Story and, with two or more Stories, the overall line |
 | `pdd test --read [BATCH\|CALL_ID] [--json] [--timeout MIN]` | Read saved results; a normal Check held for lint may continue its original checks. Other reads send no work |
 | `pdd test --retry BATCH [--json] [--details] [--timeout MIN]` | Retry only confirmed unstarted checks with the saved source and call caps. Keeps completed, running and unknown jobs; changed source requires a fresh selected check |
-| `pdd test --fill-hash` | Fill draft interface hashes and remove redundant `"kind": "full"` from drafts. Approved prompts stay unchanged. No network |
-| `pdd test --fill-hash --compact` | Fill draft hashes and remove interface JSON formatting whitespace. Remove redundant `"kind": "full"` from drafts; preserve other values, strings, number spellings and prose. Approved and statusless files stay unchanged. No network |
+| `pdd test --fill-hash [PATH\|STORY...]` | Fill draft interface hashes and remove redundant `"kind": "full"` from drafts. With selections, fill only the selected work and required prompt dependencies; leave unrelated prompts unchanged. An explicit `.prompt.md` path works without tests. With no selection, inspect all Git-visible prompts. Approved prompts stay unchanged. No network |
+| `pdd test --fill-hash --compact` | With no operands, fill draft hashes and remove interface JSON formatting whitespace. Remove redundant `"kind": "full"` from drafts; preserve other values, strings, number spellings and prose. Approved and statusless files stay unchanged. No network |
 | `pdd test --explain-bindings [STORY...] [--json]` | Explain each selected resource edge, fixture candidate, mismatch cause and repair. Local reads only; no sign-in or interpreter call |
 | `pdd test --files [STORY...] [--app-map PATH] [--json]` | List the exact selected upload manifest and byte sizes. No network; `--app-map` previews the Simulator's app map |
 | `pdd lint [STORY...] [--json] [--timeout MIN] [--max-calls N]` | Print local SVG layout warnings, then the server checks the format of the prompts, Stories and tests only, with 0 AI calls, and requests complete diagnostics and prints the problems the server reports. Requires network access; use it before a real check |
@@ -634,8 +634,9 @@ Run hash filling, local source preflight and the prompt check in one shell call:
 pdd test --fill-hash && pdd test --files STORY && pdd test STORY
 ```
 
-Replace STORY with the selected Story name, or omit it from both commands to
-check all Stories. Each command must succeed before the next starts. Hash
+Replace STORY with the selected Story name. Use `pdd test --fill-hash STORY`
+to fill only that Story and its required prompt dependencies; omit STORY to fill
+all Git-visible prompts. Each command must succeed before the next starts. Hash
 filling and `--files` are local; the final test performs interpreter lint before
 sending checks. Do not run `pdd lint` immediately before `pdd test`. Use standalone
 lint when you want only format/admission diagnostics without a behavioral check.
