@@ -1,4 +1,4 @@
-// Generated from prompts/cli/codex-limits.prompt.md (sha256: 2d6754461572f93dc5b92b6987ec7b8f492feb09c30f85664c0f7b2d01525f19).
+// Generated from prompts/cli/codex-limits.prompt.md (sha256: c0d18fbb358f541b7220fe8cffefe72bb26683dff4d475fd80d2fdb9343767d4).
 import { spawn } from 'node:child_process';
 const unknown = () => ({ state: 'unknown', resetAt: null, usedPercent: null });
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -17,7 +17,9 @@ export function parseCodexLimits(reply) {
     resetAt: resets.length && resets.every(row => row.resetsAt != null) ? Math.max(...resets.map(row => row.resetsAt * 1000)) : null,
     usedPercent: windows.length ? Math.max(...windows.map(row => row.usedPercent)) : null };
 }
-export async function readCodexLimits({ command = 'codex', cwd, env = process.env } = {}, ports = {}) {
+const HEALTH_CLIENT = { name: 'pdd_health', title: 'PDD health', version: '1' };
+export async function readCodexRateLimitsReply({ command = 'codex', cwd, env = process.env, clientInfo = HEALTH_CLIENT } = {}, ports = {}) {
+  const failed = reason => ({ ok: false, reason });
   return new Promise(resolve => {
     let child, done = false, buffer = '', size = 0, initialized = false, timer;
     const finish = (value, closed = false) => {
@@ -37,15 +39,15 @@ export async function readCodexLimits({ command = 'codex', cwd, env = process.en
       child.stdin.end(); child.kill('SIGTERM');
     };
     const send = value => child.stdin.write(JSON.stringify(value) + '\n');
-    timer = setTimeout(() => finish(unknown()), 10_000);
+    timer = setTimeout(() => finish(failed('timeout')), 10_000);
     try {
       child = (ports.spawn ?? spawn)(command, ['app-server', '--listen', 'stdio://'], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], shell: false });
-      child.on('error', () => finish(unknown()));
-      child.on('close', () => finish(unknown(), true));
-      child.stdin.on('error', () => finish(unknown()));
+      child.on('error', () => finish(failed('spawn')));
+      child.on('close', () => finish(failed('exit'), true));
+      child.stdin.on('error', () => finish(failed('exit')));
       const data = chunk => {
         size += chunk.length;
-        if (size > 1024 * 1024) { finish(unknown()); return false; }
+        if (size > 1024 * 1024) { finish(failed('output')); return false; }
         return !done;
       };
       child.stderr.on('data', data);
@@ -55,16 +57,21 @@ export async function readCodexLimits({ command = 'codex', cwd, env = process.en
         let end;
         while (!done && (end = buffer.indexOf('\n')) !== -1) {
           const line = buffer.slice(0, end); buffer = buffer.slice(end + 1);
-          let row; try { row = JSON.parse(line); } catch { finish(unknown()); return; }
-          if (!object(row)) { finish(unknown()); return; }
+          let row; try { row = JSON.parse(line); } catch { finish(failed('protocol')); return; }
+          if (!object(row)) { finish(failed('protocol')); return; }
           if (row.id === 1 && !initialized) {
-            if (row.error || !object(row.result)) { finish(unknown()); return; }
+            if (row.error) { finish(failed('error')); return; }
+            if (!object(row.result)) { finish(failed('protocol')); return; }
             initialized = true;
             send({ method: 'initialized' }); send({ method: 'account/rateLimits/read', id: 2 });
-          } else if (row.id === 2 && initialized) finish(row.error ? unknown() : parseCodexLimits(row.result));
+          } else if (row.id === 2 && initialized) finish(row.error ? failed('error') : { ok: true, reply: row.result });
         }
       });
-      send({ method: 'initialize', id: 1, params: { clientInfo: { name: 'pdd_health', title: 'PDD health', version: '1' } } });
-    } catch { finish(unknown()); }
+      send({ method: 'initialize', id: 1, params: { clientInfo } });
+    } catch { finish(failed('spawn')); }
   });
+}
+export async function readCodexLimits({ command = 'codex', cwd, env = process.env } = {}, ports = {}) {
+  const read = await readCodexRateLimitsReply({ command, cwd, env }, ports);
+  return read.ok ? parseCodexLimits(read.reply) : unknown();
 }
