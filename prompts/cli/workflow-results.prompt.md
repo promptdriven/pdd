@@ -166,6 +166,12 @@ No new cryptographic guarantee, receipt-policy engine or global gate is added.
 There is no required Node producer. The reviewed profile names the original
 `reportFormat` and its interpretation. Support `junit-xml`, `tap13` and structured
 `json` originals, as well as optional `pdd.native-node-report.v1` captures.
+An explicitly associated `before` original reads its selected source at the retained before commit and remains historical evidence; it cannot establish current Story proof or satisfy a gate. Preserve its original bytes and stage.
+
+For Node events, retain every original event. A Node file wrapper enqueue is not
+an unfinished test when it names the same absolute file as its relative `file`,
+has nesting 0 and location 1:1, has a matching dequeue, and the same file has a
+separate terminal test event. Match every other enqueue one-to-one with a dequeue and terminal event; unmatched or duplicate events and missing test results remain incomplete.
 For structured JSON, the profile's `reader` gives JSON Pointers for the report
 identity/versions, source references, occurrence array and each row's ID,
 selection, start, terminal outcome and skip reason, plus explicit outcome-value

@@ -350,7 +350,32 @@ an admitted Runtime check; a native failure does not prove the prompt failed or
 that the bug is code-only. Record an unavailable Runtime verdict as such. Never
 omit criteria to manufacture a full check or derive expected values from code.
 
+For a workflow Story, add a `## Native validation` section with one link to the
+owning prompt's `#native-validation-profile-ID` anchor. The profile inventories
+required native test identities and maps each Story criterion to them. See the
+[replay profile](../examples/native-replay/replay.prompt.md) and the
+[native evidence contract](../prompts/cli/workflow-results.prompt.md#native-profile-and-criterion-assessment-draft)
+for the declaration and original report requirements. In this example,
+`node examples/native-replay/capture.mjs /tmp/pdd-replay` runs the Node test and
+retains its events and source, selection and execution records in that directory.
+From the run worktree, associate the current workspace with the selected paths:
+
+```sh
+pdd workflow evidence-associate ISSUE --workspace . --stage current --test examples/native-replay/replay.mjs examples/native-replay/count-words.mjs examples/native-replay/cases.json examples/native-replay/capture.mjs examples/native-replay/capture.prompt.md test/native-replay-recipe-3160.test.mjs examples/native-replay/replay.prompt.md
+pdd workflow evidence ISSUE --summary /tmp/pdd-replay/import.json
+```
+
+Use the actual issue number. Capture and association must refer to the same
+unchanged source. For a before check, run the capture on the before source with
+`before` as its second argument, then associate that source with `--stage before
+--commit SHA` and the same paths. Preserve those originals separately from the
+current capture. For another project, adapt the producer to its own real runner
+and profile; preserve the original observations and process outcome.
+Associate their workspace and stage with `pdd workflow evidence-associate`, then
+import the originals with `pdd workflow evidence --summary`; `pdd lint STORY`
+shows the resulting criterion assessment. A missing, stale, incomplete or
+unreviewed profile is not a pass. The Story and profile must be approved before
+their evidence can support the manual PR gate.
+
 Native evidence does not create an automatic-check-pass or waive Story, strict,
-PR or required human approvals. Existing workflow gate rules still apply. This
-recipe supplies authoring and native execution; it does not itself advance a
-gate or establish the installed capability for a parked replay route.
+PR or required human approvals. Existing workflow gate rules still apply.

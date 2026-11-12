@@ -1,0 +1,46 @@
+import './test-home.mjs';
+import assert from 'node:assert/strict';
+import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join,dirname,resolve} from 'node:path';
+import {execFileSync,spawnSync} from 'node:child_process';
+import {startRun,stepDone,approveRun} from '../../src/workflow-runner.mjs';
+import {fakeHerdr} from './fake-herdr.mjs';
+export const packageRoot=resolve(import.meta.dirname,'../..');
+export const git=(root,...args)=>execFileSync('git',args,{cwd:root,encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
+export const put=(root,path,value)=>{mkdirSync(dirname(join(root,path)),{recursive:true});writeFileSync(join(root,path),typeof value==='string'?value:JSON.stringify(value));};
+export async function nativeFixture(t,{cli=process.env.PDD_NATIVE_CLI||join(packageRoot,'bin/pdd.mjs'),workflow='small-change',mixed=false}={}) {
+  const parent=mkdtempSync(join(tmpdir(),'pdd-native-cli-'));t.after(()=>rmSync(parent,{recursive:true,force:true}));
+  const source=join(parent,'source'),home=join(parent,'home');mkdirSync(source);mkdirSync(home);
+  git(source,'init','-q','-b','main');git(source,'config','user.name','Native fixture');git(source,'config','user.email','fixture@example.invalid');git(source,'remote','add','origin','https://github.com/example/project.git');
+  const storyPath='user_stories/native.md',promptPath='prompts/native.prompt.md',testPath='test/native.mjs';
+  const a=`${testPath}::required A@1:1`,b=`${testPath}::required B@2:1`;
+  const reader={rows:'/rows',fields:Object.fromEntries(['producer','producerVersion','runner','runnerVersion','runtimeVersion','capture','complete','exitCode','source','gates','prerequisites'].map(k=>[k,'/'+k]).concat(['occurrenceId','testId','selected','started','outcome','skipReason'].map(k=>[k,'/'+k]))),outcomes:{ok:'passed',skip:'skipped',fail:'failed'}};
+  const profile={schema:'pdd.native-profile.v1',profileId:'native',reportFormat:'json',requiredIds:[a,b],requiredGates:[],fixtures:[],mappings:[{storyPath,criterionId:'AC1',criterionText:'Both native effects work.',nativeIds:[a,b]}],sourcePaths:['source.mjs'],testPaths:[testPath],reader};
+  const prompt=()=>`# Native module\n\n<a id="native-validation-profile-native"></a>\n<details><summary>Native validation profile: native</summary>\n\n\x60\x60\x60json\n${JSON.stringify(profile)}\n\x60\x60\x60\n</details>\n`;
+  put(source,storyPath,'# Native\n\n## Acceptance criteria\n\n1. Both native effects work.\n\n## Native validation\n\n[Owner](../prompts/native.prompt.md#native-validation-profile-native)\n');
+  put(source,promptPath,'# Placeholder\n');put(source,testPath,'test("required A",()=>{});\ntest("required B",()=>{});\n');put(source,'source.mjs','export const value=1;\n');
+  if(mixed) { put(source,'user_stories/modeled.md','# Modeled\n\n## Acceptance criteria\n\n1. Modeled value.\n'); put(source,'test/modeled.json',{schema_version:'prompt-runtime.program-scenario.v1',story_path:'user_stories/modeled.md',criteria:[{id:'AC1',text:'Modeled value.'}],initial_world:{},steps:[{step_id:'one',entry_path:'prompts/modeled.prompt.md',operation:'run',input:{},checks:[]}]}); put(source,'prompts/modeled.prompt.md','# Modeled\n'); }
+  git(source,'add','.');git(source,'commit','-qm','native fixture');git(source,'update-ref','refs/remotes/origin/main',git(source,'rev-parse','HEAD'));
+  const env={...process.env,HOME:home,XDG_CONFIG_HOME:join(home,'.config'),PDD_SUITE_QUEUE:join(parent,'suite-queue'),PDD_STATE_DIR:join(parent,'runtime'),PDD_AGENT_SESSION:'1'};
+  const herdr=fakeHerdr();
+  const ports={env,layoutDirectory:join(parent,'layout'),herdr:herdr.herdr,isTTY:false,findNativeSessions:stage=>herdr.findNativeSessions(stage),execFile:async(file,args,options)=>{
+    if(file==='git'&&args[0]==='fetch')return {stdout:''};
+    if(file==='git'&&['push','ls-remote'].includes(args[0]))throw Error('Forbidden fixture publication; install explicit local command fakes.');
+    if(file==='gh'&&args[0]==='repo')return {stdout:JSON.stringify({nameWithOwner:'example/project',defaultBranchRef:{name:'main'},url:'https://github.com/example/project'})};
+    if(file==='gh'&&args[0]==='api')return {stdout:JSON.stringify({number:17,title:'Native fixture',body:'Native fixture only.',html_url:'https://github.com/example/project/issues/17'})};
+    if(file==='gh')throw Error(`Forbidden fixture external call: ${args.join(' ')}`);
+    const result=spawnSync(file,args,{cwd:options.cwd,encoding:'utf8',maxBuffer:8*1024*1024});return {stdout:result.stdout,stderr:result.stderr,code:result.status};
+  }};
+  const started=await startRun({name:workflow,issue:'17',agent:'codex',cwd:source,packageRoot},ports);assert.equal(started.exitCode,0,started.message);
+  const commonDir=join(source,'.git'),runDir=join(commonDir,'pdd/runs/17');
+  const readRun=()=>JSON.parse(readFileSync(join(runDir,'status.json'),'utf8'));
+  const root=readRun().root;put(root,promptPath,prompt());put(root,storyPath,readFileSync(join(root,storyPath),'utf8')+'\n');git(root,'add',promptPath,storyPath);
+  for(const step of workflow==='feature'?['understand','visual','prompt-story']:['scope']) {
+    const shown=await stepDone({step,summary:'Synthetic fixture review.',cwd:root},ports);assert.equal(shown.exitCode,0,shown.message);
+  }
+  const approved=await approveRun({ref:'17',said:'Approve synthetic fixture requirements for this local test.',cwd:root,packageRoot},ports);assert.equal(approved.exitCode,0,approved.message);
+  const commandAt=(entry,...args)=>spawnSync(process.execPath,[entry,...args],{cwd:root,env,encoding:'utf8',maxBuffer:8*1024*1024});
+  const command=(...args)=>commandAt(cli,...args);
+  return {parent,root,home,env,ports,source,runDir,readRun,command,commandAt,profile,prompt,storyPath,promptPath,testPath,a,b};
+}

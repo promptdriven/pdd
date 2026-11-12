@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {execFileSync} from 'node:child_process';
+import {execFileSync,spawnSync} from 'node:child_process';
 import {prepareNativeEvidence,readNativeContext,assessNativeEvidence} from '../src/workflow-results.mjs';
 import {captureSource,proseSha256} from '../src/runtime-preflight.mjs';
 import {recordPromptApproval} from '../src/approval-policy.mjs';
@@ -181,4 +181,46 @@ test('contradictory report totals, duplicate plans and truncated diagnostics can
     tap.save('report',original);const result=prepareNativeEvidence(tap,{workspace:tap.workspace}).assessment;
     assert.equal(result.receiptState,'partial');assert.equal(result.profileNativeProof,'none');
   }
+});
+
+test('real Node capture supports the replay Story and rejects a missing test outcome', async t => {
+  const f=await fixture(t), sourceRoot=process.cwd();
+  const paths=['examples/native-replay/replay.mjs','examples/native-replay/count-words.mjs','examples/native-replay/cases.json','examples/native-replay/capture.mjs','examples/native-replay/capture.prompt.md','test/native-replay-recipe-3160.test.mjs','examples/native-replay/replay.prompt.md','user_stories/native-replay-recipe-3160.md'];
+  for(const path of paths) { mkdirSync(join(f.root,path,'..'),{recursive:true}); writeFileSync(join(f.root,path),readFileSync(join(sourceRoot,path))); }
+  git(f.root,'add','.');
+  const prompt=readFileSync(join(f.root,'examples/native-replay/replay.prompt.md'),'utf8');
+  await recordPromptApproval({commonDir:join(f.root,'.git'),evidence:{id:'replay-review',route:'terminal',actor:{kind:'terminal',id:'test'},at:2,words:'Review example profile.',prompts:[{path:'examples/native-replay/replay.prompt.md',proseSha256:proseSha256(prompt)}]}});
+  const originals=join(f.root,'capture');
+  const env={...process.env}; delete env.NODE_TEST_CONTEXT;
+  execFileSync(process.execPath,[join(sourceRoot,'examples/native-replay/capture.mjs'),originals],{cwd:f.root,env});
+  const selectors={root:f.root,runDir:f.runDir,runId:f.runId,profileId:'replay',storyPath:'user_stories/native-replay-recipe-3160.md',summaryFile:join(originals,'import.json')};
+  const first=prepareNativeEvidence(selectors,{workspace:f.workspace});
+  assert.equal(first.assessment.storyNativeProof,'qualified-external',JSON.stringify(first.assessment));
+  const report=JSON.parse(readFileSync(join(originals,'report.json')));
+  const name='native recipe executes the public function and detects return and error controls';
+  for(const condition of ['missing terminal','duplicate enqueue','missing dequeue','unexpected terminal']) {
+    const altered=structuredClone(report);
+    if(condition==='unexpected terminal') altered.events.push(structuredClone(altered.events.find(event=>event.type==='test:pass'&&event.data.name===name)));
+    else if(condition==='duplicate enqueue') altered.events.push(structuredClone(altered.events.find(event=>event.type==='test:enqueue'&&event.data.name===name)));
+    else altered.events=altered.events.filter(event=>!(event.type===(condition==='missing terminal'?'test:pass':'test:dequeue')&&event.data.name===name));
+    writeFileSync(join(originals,'report.json'),JSON.stringify(altered));
+    assert.equal(prepareNativeEvidence(selectors,{workspace:f.workspace}).assessment.storyNativeProof,'none',condition);
+  }
+});
+
+test('before capture retains the real failing assertion and exits nonzero', async t => {
+  const f=await fixture(t), sourceRoot=process.cwd();
+  const paths=['examples/native-replay/replay.mjs','examples/native-replay/count-words.mjs','examples/native-replay/cases.json','examples/native-replay/capture.mjs','examples/native-replay/capture.prompt.md','test/native-replay-recipe-3160.test.mjs','examples/native-replay/replay.prompt.md'];
+  for(const path of paths) { mkdirSync(join(f.root,path,'..'),{recursive:true}); writeFileSync(join(f.root,path),readFileSync(join(sourceRoot,path))); }
+  writeFileSync(join(f.root,'examples/native-replay/count-words.mjs'),"export function countWords() { return 999; }\n");
+  git(f.root,'add','.');
+  const directory=join(f.root,'before-capture'),env={...process.env}; delete env.NODE_TEST_CONTEXT;
+  const result=spawnSync(process.execPath,[join(sourceRoot,'examples/native-replay/capture.mjs'),directory,'before'],{cwd:f.root,env,encoding:'utf8'});
+  assert.equal(result.status,1,result.stderr);
+  const report=JSON.parse(readFileSync(join(directory,'report.json')));
+  const failure=report.events.find(event=>event.type==='test:fail');
+  assert.ok(failure?.original?.details?.error,JSON.stringify(failure));
+  const detail=JSON.stringify(failure.original.details.error);
+  assert.match(detail,/AssertionError/); assert.match(detail,/\"actual\":1/); assert.match(detail,/\"expected\":0/);
+  assert.equal(JSON.parse(readFileSync(join(directory,'execution.json'))).exitCode,1);
 });

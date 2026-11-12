@@ -19,7 +19,7 @@ When the person asks you to report a problem with pdd itself, follow
 
 | File | What it holds |
 |---|---|
-| `prompts/<job>.prompt.md` | The program in plain English, then `## Dependencies`, then one Runtime interface block. |
+| `prompts/<job>.prompt.md` | The program in plain English, then `## Dependencies`, then a Runtime interface block when it has a truthful entry. A native verification-command contract without one records the gap. |
 | `user_stories/<story>.md` | One story: first one line "As a …, I want …, so that …" in the words of the issue (the PR shows it as the user story), then a numbered `## Acceptance criteria` list. pdd skips index files: `PLAN.md`, `README.md` and any file with no `## Acceptance criteria` heading. |
 | `tests/<story>.json` | The test for that story. pdd finds it by its name and folder: `<story>.json` with a folder named `tests` or `test` anywhere in its path, not only as the direct parent (`tests/`, `test/runtime/`, `runtime/tests/`). pdd does not look inside other JSON files to find tests, and a test can have any size up to the upload limit (section 1). Every `.json` file in a `tests` or `test` folder named `<story>.json` or `<story>.<word>.json` is a test of that story, so give fixtures and other data files other names. If the repo's own tests are in `tests/` or `test/`, use `tests/runtime/` or `test/runtime/`. |
 
@@ -52,7 +52,7 @@ Add a second file only for a case that needs a different starting world. Name it
 prompt. Two prompts must never state the same rule. A command-line program has one program prompt (section 6).
 A helper module can have its own prompt. Then the program prompt calls it (section 7) and does not repeat its rules.
 
-**The prompt** ends with `<details><summary>Runtime interface</summary>`, a ```` ```json ```` block and `</details>`.
+**A prompt with a truthful Runtime entry** ends with `<details><summary>Runtime interface</summary>`, a ```` ```json ```` block and `</details>`.
 The block of Harbor Coffee's `place_order` (schemas cut):
 ```json
 {"status": "draft", "prose_sha256": "",

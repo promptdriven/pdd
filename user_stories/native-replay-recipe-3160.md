@@ -16,3 +16,7 @@ chosen before execution. The command's [contract](../examples/native-replay/repl
 does not alter the target function's contract or its Runtime interface.
 
 The fixture is synthetic; it does not reproduce either sandbox issue.
+
+## Native validation
+
+[Replay owner](../examples/native-replay/replay.prompt.md#native-validation-profile-replay)

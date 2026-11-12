@@ -24,13 +24,13 @@ test('native recipe executes the public function and detects return and error co
     ['missing error', 'export function countWords() { return 2; }', 'non-string'],
     ['unexpected error', "export function countWords() { throw new Error('unexpected'); }", 'two-words']
   ]) {
-    await t.test(name, () => {
+    {
       const file = join(dir, name.replaceAll(' ', '-') + '.mjs');
       writeFileSync(file, source);
       const result = run(cases, file);
       assert.equal(result.status, 1, name);
       assert.match(result.stdout, new RegExp(`FAIL ${failed}`), name);
-    });
+    }
   }
   const missing = join(dir, 'missing.mjs'); writeFileSync(missing, 'export const other = 1;');
   const result = run(cases, missing);

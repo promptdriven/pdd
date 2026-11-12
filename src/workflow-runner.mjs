@@ -17,7 +17,7 @@ import { constants, openSync, closeSync, fsyncSync, unlinkSync, existsSync, lsta
 
 import * as nativeDeliveryFiles from 'node:fs';
 import { homedir, hostname, tmpdir } from 'node:os';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -30,13 +30,13 @@ import { armSavedWorkerCompletion } from './workflow-worker-completion.mjs';
 import { startChat, sendToChat, herdrCommand, chatSession, chatHealth, openChat, rebuildClosedChat, assertRestartCaller, restartChat, validSessionId, closeFinishedChats, finishedChats, finishedAt, paneUsage, ensurePaneBudget, countReasons, mergeReasonCounts, reasonWords, expandHome, homeVariable, isFolder, observeLifecycle, applyLifecycle, launchAnchor, sessionEvidenceDue, ownSession, observedSession, START_GRACE_MS, removeStaleLoginFiles } from './workflow-chat.mjs';
 import { samePath } from './workflow-herdr-layout.mjs';
 import { workflowAgentEntry } from './workflow-agents.mjs';
-import { captureSource, findTests, gitFiles, interfaceBlocks, interfaceSchemaProblems, isStoryPath, proseSha256 } from './runtime-preflight.mjs';
+import { captureSource, findTests, gitFiles, interfaceBlocks, interfaceSchemaProblems, isStoryPath, proseSha256, sourceFilePort } from './runtime-preflight.mjs';
 import { storyLines, PROMPT_TESTS_LABEL, PROMPT_TESTS_WORDS } from './runtime-output.mjs';
 import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
 import { causeText } from './runtime-output.mjs';
 import { approvalRecords, preparePrEvidence } from './workflow-pr-evidence.mjs';
 import { validateProofRecord } from './workflow-prove.mjs';
-import { readRunResults, resultLines, usableResult, noResultLine, NO_VERDICT, prepareNativeEvidence, savedCheckCause, savedLostCheck } from './workflow-results.mjs';
+import { readRunResults, resultLines, usableResult, noResultLine, NO_VERDICT, prepareNativeEvidence, assessNativeEvidence, savedCheckCause, savedLostCheck } from './workflow-results.mjs';
 import { collectTestInventory } from './workflow-inventory.mjs';
 import {readSmallChangeChecklist} from './workflow-small-change.mjs';
 import {adoptReplayCorpus,REPLAY_POLICY,sourceFingerprint as gitFingerprint,pinReplayVectors,pinRunAnchor,readReplayEvidence,readFormalEvidence,formatFormalEvidence,formatReplayEvidence} from './workflow-replay.mjs';
@@ -1132,6 +1132,41 @@ function sameStoryTests(run,frozen,tests) {
     if (typeof then !== 'string' || then !== now) throw Error(`${path} is not a current test of the same Story at that commit.`);
   }
 }
+function sameNativeStorySelection(run, frozen, tests, p) {
+  const current = new Set(gitFiles(run.root)), historical = new Set(gitFiles(frozen));
+  const approvals = readPromptApprovals({commonDir:run.commonDir}, p);
+  const stories = (storyCoverage(run)?.fingerprint.stories ?? []).filter(row=>row.criteria.length).map(row=>row.path);
+  const candidates = [];
+  const selection = (root, visible, story) => {
+    const files=sourceFilePort(root,visible);
+    if (!visible.has(story)) throw Error('Native Story is unavailable.');
+    const body=files.read({path:story}).content;
+    const section=/^## Native validation\s*\n([\s\S]*?)(?=^## |$(?![\s\S]))/m.exec(body)?.[1] ?? '';
+    const links=[...section.matchAll(/\[[^\]]*\]\(([^)\s]+)#native-validation-profile-([^)\s]+)\)/g)];
+    if(links.length!==1)throw Error('Native Story owner is missing or ambiguous.');
+    const owner=relative(root,resolve(root,dirname(story),links[0][1])).split('\\').join('/');
+    evidenceTests([owner]);
+    if(!visible.has(owner))throw Error('Native profile owner is unavailable.');
+    const text=files.read({path:owner}).content;
+    const blocks=[...text.matchAll(/<details\b[^>]*>\s*<summary>\s*Native validation profile:\s*([^<]+)<\/summary>([\s\S]*?)<\/details>/g)].filter(row=>row[1].trim()===links[0][2]);
+    if(blocks.length!==1)throw Error('Native profile is missing or ambiguous.');
+    const json=[...blocks[0][2].matchAll(/```json\s*\n([\s\S]*?)\n```/g)];
+    if(json.length!==1)throw Error('Native profile is missing or ambiguous.');
+    const profile=JSON.parse(json[0][1]);
+    if(profile.schema!=='pdd.native-profile.v1'||profile.profileId!==links[0][2]||!Array.isArray(profile.sourcePaths)||!Array.isArray(profile.testPaths)||!Array.isArray(profile.mappings)||!profile.mappings.some(row=>row.storyPath===story))throw Error('Native profile does not own the Story.');
+    const paths=evidenceTests([...new Set([...profile.sourcePaths,...profile.testPaths,owner])]);
+    if(paths.some(path=>!visible.has(path)))throw Error('Native selected source is unavailable.');
+    return {owner,id:profile.profileId,paths,text};
+  };
+  for(const story of stories) try {
+    const now=selection(run.root,current,story), then=selection(frozen,historical,story);
+    const decision=(run.decisions??[]).find(row=>row.decision==='approve'&&row.evidence?.id===storyCoverage(run)?.evidenceId);
+    const event=approvals.find(row=>row.id===decision?.evidence?.id && sameFact(row,decision.evidence));
+    const approved=event?.prompts?.some(row=>row.path===now.owner&&row.proseSha256===proseSha256(now.text));
+    if(approved&&now.owner===then.owner&&now.id===then.id&&selectionEqual(now.paths,then.paths)&&selectionEqual(now.paths,tests))candidates.push(story);
+  } catch { /* A malformed or unrelated profile is not authority. */ }
+  if(candidates.length!==1)throw Error('Native selection does not identify one approved current Story and matching historical profile.');
+}
 function checkedAssociation(run,a,capture=captureSource) {
   if (a.runId !== run.runId || a.repo !== run.repo || !['current','pr1','before'].includes(a.stage)
     || !/^[a-f0-9]{64}$/.test(a.source_sha256 ?? '') || realpathSync(a.workspaceRoot) !== a.workspaceRoot
@@ -1223,7 +1258,7 @@ async function associateEvidenceWorkspaceCommand({ref,workspace,stage,tests,comm
     }
     const selection=evidenceTests(tests),head=stage==='pr1'?ownedPr1Head(run):stage==='before'?commit:null;
     const root=stage==='current'?owned.toplevel:await retainPr1Source(run,head,p,stage);
-    if(stage==='before'){try{sameStoryTests(run,root,selection);}catch(error){throw Error(`${error.message} Register only an earlier result of the same Story.`);}}
+    if(stage==='before'){try{sameStoryTests(run,root,selection);}catch(error){try{sameNativeStorySelection(run,root,selection,p);}catch{throw Error(`${error.message} Register only an earlier result of the same Story.`);}}}
     const captured=selectedCapture(root,selection);
     if(stage==='current' && selectedCapture(producer.toplevel,selection).sha256!==captured.sha256)throw Error('The producer source does not match the current authored selection.');
     const association={runId:run.runId,repo:run.repo,workspaceRoot:producer.toplevel,stage,sourceAnchor:{root,head},tests:selection,
@@ -2357,7 +2392,7 @@ async function normalCodeReview(run, area, p) {
   }
   const contents = await worktreeContents(run, p);
   const check = fullCheckPass({ root: run.root, since: run.promptReturn?.at ?? run.startedAt ?? 0, tests: contents.tests, stories: (run.storyApproval?.fingerprint.stories??[]).filter(story=>story.criteria.length).map(story=>story.path), prompts: snapshot.map(row => row.path) }, p);
-  if (!check.pass) return fail(['The prompt check did not pass in full on the current files. No code approval was recorded or source synchronized.',
+  if (!check.pass && !await nativePromptGate(run, p, check)) return fail(['The prompt check did not pass in full on the current files. No code approval was recorded or source synchronized.',
     ...check.problems.slice(0, 20).map(problem => `Not passed (${problem.kind}): ${problem.path}: ${problem.detail}`),
     'Repair and check again, then run pdd workflow done check.'].join('\n'));
   return null;
@@ -2369,6 +2404,12 @@ async function normalPromptGate(run, area, step, p, lines, contents, packageRoot
   const paths = run.gate.promptSnapshot.map(row => row.path);
   const check = fullCheckPass({ root: run.root, since: run.promptReturn?.at ?? run.startedAt ?? 0, tests: contents.tests, stories: (storyCoverage(run)?.fingerprint.stories??[]).filter(story=>story.criteria.length).map(story=>story.path), prompts: paths }, p);
   if (check.pass) return automaticPr1(run, area, step, p, lines, check, packageRoot);
+  const native = await nativePromptGate(run, p, check);
+  if (native) {
+    const gateId = run.gate.id;
+    commitRun(run, p, latest => { if (latest.gate?.id === gateId) latest.gate.nativeApproval = true; });
+    return done([...lines, `pdd recorded ${step}. Current native evidence supports the Story; a separate approval is required to open ${prLabel(run, area)}.`, ...native, approvalGuide(run, p.pdd)].join('\n'));
+  }
   // A typed summary cannot replace pdd's saved check results.
   if (!check.tests.length) lines.push('pdd has no saved check result of its own for this run. Run the check; do not ask the person to approve.');
   const shown = check.problems.slice(0, 20).map(problem => `Not passed (${problem.kind}): ${problem.path}: ${problem.detail}`);
@@ -2378,6 +2419,27 @@ async function normalPromptGate(run, area, step, p, lines, contents, packageRoot
     verdictOnly ? 'No verdict: this is not a failed check. Follow RUNBOOK §11 for no verdict: tell the person the cause and pdd\'s next step. Do not ask them to approve, and never send the same check again on your own.'
       : `Do not ask the person to approve. Repair and check again, then run: ${p.pdd} workflow done check --summary "one line". After 2 fix rounds for the same ✗, stop with the evidence. When the fix needs a Story or expected-value change, propose it and run done again: pdd then shows the Story card with the change, for the person.`,
     ].join('\n'));
+}
+// Native proof is assessed again from retained originals and current source, not a saved summary.
+async function nativePromptGate(run, p, check) {
+  const stories = new Set((storyCoverage(run)?.fingerprint.stories ?? []).filter(row => row.criteria.length).map(row => row.path));
+  const proven = new Map(), owners = new Set(), lines = [];
+  const seen = new Set();
+  for (const entry of [...(run.evidence ?? [])].reverse()) {
+    const record = entry.native;
+    if (!record || !stories.has(record.storyPath)) continue;
+    const key = `${record.profileId}\0${record.storyPath}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const assessment = await assessNativeEvidence({root:run.root, runDir:run.runDir, runId:run.runId, profileId:record.profileId, storyPath:record.storyPath}, {env:p.env, workspace:input=>readEvidenceEligibility(input,p)});
+    if (assessment.identity.stage !== 'current' || assessment.sourceState !== 'current' || assessment.profileState !== 'complete' || !['pdd-observed','qualified-external'].includes(assessment.storyNativeProof)) continue;
+    proven.set(record.storyPath, assessment); owners.add(assessment.identity.profilePrompt);
+  }
+  const nativeStories = check.problems.filter(problem => problem.kind === 'missing' && problem.detail === 'Story has no scenario test for its criteria');
+  if (!nativeStories.length || nativeStories.some(problem => !proven.has(problem.path))) return null;
+  if (check.problems.some(problem => !(nativeStories.includes(problem) || problem.kind === 'prompt-not-checked' && owners.has(problem.path)))) return null;
+  for (const problem of nativeStories) lines.push(`Native evidence: ${problem.path}: ${proven.get(problem.path).storyNativeProof}; all criteria supported.`);
+  return lines;
 }
 // The coordinator supplies custody, never approval words or a model verdict.
 function automaticPr1Scope(run, p, packageRoot) {
@@ -3566,6 +3628,14 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
     const changed=await codeEntryFailure(run,p);
     if (changed) return fail(changed);
   }
+  if (beforePr && normal && run.gate?.nativeApproval && !run.gate.storyChanges?.length) {
+    const changed = await changedStoryGate(run, area, 'check', p, [], approvalSnapshot);
+    if (changed) return changed;
+    const contents = await worktreeContents(run, p);
+    const check = fullCheckPass({root:run.root, since:run.promptReturn?.at ?? run.startedAt ?? 0, tests:contents.tests,
+      stories:(storyCoverage(run)?.fingerprint.stories ?? []).filter(row=>row.criteria.length).map(row=>row.path), prompts:approvalSnapshot.map(row=>row.path)}, p);
+    if (!await nativePromptGate(run, p, check)) return fail('Native evidence is no longer current or other prompt checks are incomplete. Run done check again; no approval was recorded.');
+  }
   let saved, pendingCodeApproval;
   try {
     if (askCode && !beforePr && run.gate) pendingCodeApproval=await saveGateApproval(run,area,record,edits,p,approvalSnapshot,true);
@@ -3593,7 +3663,7 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
     // Try before PR 1 (#13): the approval opens the area's PR; the code question comes after it.
     const refreshed = normal && run.storyApproval && storyGateIndex(run) >= 0 ? { gateId: saved?.gateId ?? selectedGate?.id ?? null, evidenceId: saved?.evidence?.id ?? null, at: invocationAt,
       fingerprint: reviewedStory ?? storyFingerprint({ root: run.root, changed: await changedFiles(run, p) }), prompts: (approvalSnapshot ?? []).map(row => row.path) } : null;
-    if (refreshed) {
+    if (refreshed && (!run.gate?.nativeApproval || run.gate.storyChanges?.length)) {
       commitRun(run, p, latest => {
         latest.storyApproval = refreshed;
         if (through !== undefined) latest.through = through;
