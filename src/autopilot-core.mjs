@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 019256a14bb7bcfcae31a609b19aed95b094c3ceb7315687f216e67530183a3e).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 2ea620b6c6a5f33b5d2d7b5ccf2f130ba6288fb1a7f04ed12481ecc38b8f025d).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1078,7 +1078,7 @@ async function ciState(ctx, head, job) {
   // The CI picture: each check's name, state and change time. Pending CI is progress only while this changes.
   const sig = [...(runs?.check_runs ?? []).map(r => `${r.name}:${r.status}:${r.conclusion}:${r.completed_at ?? r.started_at ?? ''}`), ...(status?.statuses ?? []).map(x => `${x.context}:${x.state}:${x.updated_at ?? ''}`)].sort().join('|');
   if (checks.length && !job.ciSeen) { job.ciSeen = true; ctx.saveJob(job); }
-  if (failed.length) return { state: 'red', failed, failedRuns, sig };
+  if (failed.length) return { state: 'red', failed, failedRuns, running: checks.filter(c => !c.done).map(c => c.name), sig };
   // "CI: none" only for a repository with no CI at all (no head of this job ever had a check, and the base has no
   // workflow file), never because a new head has no run yet.
   if (!checks.length) return !job.ciSeen && !await repoHasCi(ctx, job) && ctx.now() - (job.prAt ?? ctx.now()) >= NO_CI_AFTER ? { state: 'none', sig } : { state: 'pending', pending: [], sig };

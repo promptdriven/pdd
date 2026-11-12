@@ -18,17 +18,21 @@ cannot be read.
 
 `ciVsBase(ctx, job, ci)` takes a red `ci` from the core's `ciState`: `failed` (the
 names of the failed check runs and commit statuses), `failedRuns` (`{id, name, app}`
-of each failed check run, `app` is the app slug) and `sig`. It returns a CI result
-for the merge check.
+of each failed check run, `app` is the app slug), `running` (the names of the head's
+checks that are not completed yet) and `sig`. It returns a CI result for the merge
+check.
 
 1. **Rerun once (B1).** Each failed check run whose name has no rerun at this head
    gets one: `POST repos/REPO/actions/jobs/ID/rerun` when `app` is
-   `github-actions`, else `POST repos/REPO/check-runs/ID/rerequest`. The job saves
-   `ciRerun {head, names, asked}`: `names` are the check names that had their one
-   rerun at this head (a new head starts empty), `asked` the run ids that were
-   rerun, each with its time. A commit status, a run without a safe integer `id`,
-   and a rerun call that returns a status of 300 or more get no rerun; they go to
-   step 2 at once.
+   `github-actions`, else `POST repos/REPO/check-runs/ID/rerequest`. While another
+   check of the head still runs (`running` is not empty) and such a rerun is still
+   due, the result is pending and no rerun is asked yet: GitHub refuses a job rerun
+   while its workflow run still runs (review R1, S2). The job saves `ciRerun {head,
+   names, asked}`: `names` are the check names that had their one rerun at this head
+   (a new head starts empty), each added only after a 2xx answer; `asked` the run ids
+   that were rerun, each with its time. A commit status, a run without a safe integer
+   `id`, and a rerun call that returns a status of 300 or more get no rerun in this
+   call; they go to step 2 at once.
 2. **Wait for the rerun.** The result is pending while a rerun was asked in this
    call, or while the failed run of a name is still an asked run (GitHub does not
    show the new run yet), for at most the quiet period (`ctx.quiet`) after the ask:
@@ -37,9 +41,12 @@ for the merge check.
    red.
 3. **Compare with the base tip (B2).** The base tip is `origin/BASE` after a fetch.
    For each failed name, the check runs and commit statuses of the tip decide (one
-   read per tip and tick): a completed run or a status of that name that is not good
-   (good: `success`, `neutral`, `skipped`) is red; one that is not completed is
-   pending; otherwise (good, or no run of that name) it is green.
+   read per tip and tick; a merge in this tick reads the tip again): a completed run
+   or a status of that name that failed is red; one that is not completed, or that
+   ended with no result (`cancelled`, `stale`, `action_required`: review R1, S4), is
+   pending; otherwise (good: `success`, `neutral`, `skipped`, or no run of that name)
+   it is green. So a run that someone cancelled on the tip is never base-red and
+   files no main-red issue.
    - Any name pending on the tip: `{...ci, state: 'pending', pending: NAMES, sig:
      'SIG|base:TIP'}`. No repair.
    - Names that are not red on the tip are the PR's own red: `{...ci, state: 'red',
@@ -94,9 +101,10 @@ are, the suite wins (it names the tests).
 - Another red finding (`reds` is not empty, or the suite is the PR's own red): no
   hold. The base-red part adds no red line, so the repair gets only the PR's own
   findings; it comes back as `{state: 'base-red'}` (a suite) or is left out (a CI).
-- The review is not `pass` yet, or the job's suite or the replay run (`vectors`) is
-  still `running`: no hold yet; the merge check waits as usual and the job keeps its
-  slot.
+- The review is not `pass` yet, the job's suite or the replay run (`vectors`) is
+  still `running`, or a CI check is still pending (review R1, S1): no hold yet; the
+  merge check waits as usual and the job keeps its slot. So a CI red of the PR's own
+  that comes later still gets its repair.
 - Else the job enters the base-red state and the result is `'wait'`: it leaves the
   merge lane (`tools.leaveLane`), saves `baseRed {what, sha, tip, names, tail,
   fingerprint, since, report}` (`tip` is the base tip at entry, `report` is the
@@ -110,10 +118,17 @@ each tick:
   ends a job. A null `report` is filed again.
 - Read the base tip (fetch) and, with a report, the main-red issue (a deleted or
   moved issue, status 404 or 410, counts as closed; another failed read is a tick
-  error and the job waits). When the tip is
+  error and the job waits). A closed report while another open issue has the same
+  marker (for example the first issue of a two-machine race, after this machine's
+  duplicate was closed): the report becomes that open issue and the job waits on.
+  When the tip is
   not `baseRed.tip` and the issue is closed (or there is no report): clear `baseRed`
   and `ciRerun` and refresh the PR onto the base (`tools.refreshBase`). CI and the
-  suite run again on the new head; a red again compares again.
+  suite run again on the new head; a red again compares again. When the issue is
+  closed and the tip did not move (a person closed it, for example as flaky): clear
+  `baseRed` and run the red check once more at the same head (review R1, S3): a CI
+  red clears `ciRerun` (one more rerun), a suite red clears `suite`. A red again
+  compares again; then a new main-red issue names the closed one.
 - After the quiet period in the base-red state, one `stuck` alert through
   `ctx.ports.alert` (`baseRed.alerted`), as the merge lane's wait alert.
 
@@ -133,13 +148,25 @@ in ISO form), else the empty string.
 - **Fingerprint**: the first 16 hex digits of the SHA-256 of `WHAT` and the sorted
   names, one per line (never the commit), so the same failure on a later base commit
   is the same issue. **Marker**: `<!-- pdd:autopilot-core:base-red:FINGERPRINT -->`.
-- **Dedup**: first read `issues?state=all&labels=pdd:main-red&per_page=100` (at most
+- **This machine first** (review R1): the machine record `ROOT/main-red/FINGERPRINT.json`
+  (`{number, at}`) is written right after a post or a match. When it names an issue
+  that is open (`GET repos/REPO/issues/N`, a consistent read), that issue is the
+  result (`found: true`) and the list is not read: GitHub's label list can lag a
+  write, so several jobs that turn base-red in one tick would each file an issue.
+- **Dedup**: then read `issues?state=all&labels=pdd:main-red&per_page=100` (at most
   5 pages) and look at the issues (not PRs) whose body has the marker. Only an **open**
-  match is the result (`found: true`); nothing is posted. So a second job with the
-  same base-red files no second issue. A closed match, of any age, means that the
+  match is the result (`found: true`), the one with the lowest number; nothing is
+  posted. So a second job with the same base-red files no second issue. A closed match, of any age, means that the
   same red came back after its issue was closed: a new red event. It files a new
   issue, and `earlier` is the number of the newest closed match (the highest
   number). So no job waits on a closed issue while nobody works on the new red.
+- **Two machines at once** (review R1): both can read no open match and both post.
+  After its post, a machine reads the open matches again. When an open match has a
+  lower number than its own new issue, it closes its own issue (`state: closed`,
+  `state_reason: not_planned`) with one comment "Duplicate of #N." and the result is
+  #N (`found: true`). A failed close or comment only warns; the result is still #N.
+  A machine whose read did not show the other issue yet keeps its own; the wait (below)
+  corrects it later.
 - **New issue**: title `Main is red: NAME` (the test or check name, `(and N more)`
   for the others, at most 200 characters, public text). Labels: `pdd:main-red` and,
   only in auto mode when `settings.label` is set, that label, so Autopilot takes the
@@ -162,7 +189,10 @@ null), in log order, at most `limit` entries. It has the shape of the core's
 
 - **TAP** (node --test): a line `not ok N - NAME` at any depth (a subtest is
   indented). The `location: 'FILE:LINE:COL'` line in the next 12 lines gives its
-  file. An `ok N` line ends the look for a location.
+  file. The failure stays open until its location line, the next `ok N` or `not ok
+  N` line, or 12 lines; only then does it join the list (by the one-test rule below).
+  So two failures with one name in two files are two tests (review R1, P2: else a
+  new failure in a second file hid behind a base failure in the first).
 - **Spec reporter**: a line `✖ NAME (DURATION)` at any depth; a `test at
   FILE:LINE:COL` line right before it (the failure summary) gives its file. The
   summary header `✖ failing tests:` is not a test. Color codes are removed first.
@@ -173,10 +203,12 @@ null), in log order, at most `limit` entries. It has the shape of the core's
   reporter's summary repeats no test.
 
 The engine reads the job's suite log and the base suite log in 1 MB parts, whole lines
-only, so a long log never sits in memory at once. It calls `failingTests` with a limit
-of 51 for each part and joins the parts with the same rule; more than 50 tests sets
-`more`. Every `ROOT/` and `file://ROOT/` (the checkout root) goes from names and
-files, so one test in two checkouts is one test.
+only, so a long log never sits in memory at once. It keeps only the lines that
+`failingTests` reads (`not ok`, `location:`, `test at`, `✖`, each cut to 4,000
+characters, and each `ok N` line as a short `ok` line) and calls `failingTests` once
+on them with a limit of 51; more than 50 tests sets `more`. Every `ROOT/` and
+`file://ROOT/` (the checkout root) goes from names and files, so one test in two
+checkouts is one test.
 
 ## The base suite record
 

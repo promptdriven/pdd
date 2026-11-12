@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { coreWorld } from './helpers/core-world.mjs';
 import { coreStatus } from '../src/autopilot-core.mjs';
-import { failingTests, sameTest, baseRedFingerprint, mainRedRoute, MAIN_RED_LABEL } from '../src/autopilot-base-red.mjs';
+import { failingTests, sameTest, baseRedFingerprint, mainRedRoute, fileMainRed, baseRedWait, ciVsBase, MAIN_RED_LABEL } from '../src/autopilot-base-red.mjs';
 
 // Expected results come from issue #3181, chaos row B7, ticket T03 and the group 3 design (section B).
 const MIN = 60 * 1000;
@@ -49,6 +49,74 @@ test('failing tests: the real node:test output of a run, with the TAP and the sp
   const spec = run('spec');
   assert.deepEqual(failingTests(spec.stdout).map(x => x.name), ['fails on main', 'child', 'parent']);
   assert.match(failingTests(spec.stdout)[0].file, /a\.test\.mjs$/, 'the failure summary names the file');
+});
+
+// Review R1 (P2): one test name in two files is two failures, also in real node --test output.
+const tapFailure = (cwd, n, name, file) => `not ok ${n} - ${name}\n  ---\n  duration_ms: 1.5\n  type: 'test'\n  location: '${cwd}/${file}:1:1'\n  failureType: 'testCodeFailure'\n  ...\n`;
+test('R1 failing tests: one test name failing in two files is two tests (real node --test TAP output)', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'pdd-base-red-two-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  for (const file of ['a.test.mjs', 'b.test.mjs']) writeFileSync(join(dir, file), "import test from 'node:test';\ntest('saves the value', () => { throw Error('bad'); });\n");
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !['NODE_OPTIONS', 'NODE_TEST_CONTEXT'].includes(key)));
+  const run = spawnSync(process.execPath, ['--test', '--test-reporter=tap', 'a.test.mjs', 'b.test.mjs'], { cwd: dir, env, encoding: 'utf8' });
+  assert.equal(run.status, 1);
+  const found = failingTests(run.stdout);
+  assert.deepEqual(found.map(x => x.name), ['saves the value', 'saves the value']);
+  assert.deepEqual(found.map(x => x.file.split('/').pop()), ['a.test.mjs', 'b.test.mjs']);
+});
+
+test('R1 a new failure with the same name as a base failure, in another file, is the PR\'s own red: a repair', async t => {
+  const w = await coreWorld(t);
+  w.issue(17); await w.tick(); w.build(17); await w.tick(); w.review(17, 'PASS');
+  const head = w.job(17, 'suite');
+  w.say(17, 'suite', tapFailure(head.cwd, 1, 'saves the value', 'test/a.test.mjs') + tapFailure(head.cwd, 2, 'saves the value', 'test/b.test.mjs'));
+  w.suite(17, 1); await w.tick();
+  const base = w.job('base', 'suite');
+  w.say('base', 'suite', tapFailure(base.cwd, 1, 'saves the value', 'test/a.test.mjs')); w.finish('base', 'suite', { code: 1 }); await w.tick();
+  const repair = w.job(17, 'repair');
+  assert.ok(repair, 'the failure in test/b.test.mjs is not on the base');
+  assert.match(repair.input, /Failing tests from this change: saves the value \(test\/b\.test\.mjs\)\./);
+  assert.match(repair.input, /Also red on the base \([0-9a-f]{7}\), not from this change: saves the value \(test\/a\.test\.mjs\)\./);
+  assert.equal(jobFile(w, 17).baseRed, undefined); assert.equal(mainRed(w).length, 0);
+});
+
+// Review R1: two machines see no open main-red issue at once and both post. A small GitHub fake, both reads first.
+function issueFake() {
+  const issues = [], comments = [];
+  const gh = {
+    call: async (method, path) => ({ status: 200, value: issues.map(x => ({ ...x })), next: null }),
+    ok: async (method, path, value) => {
+      let m;
+      if (method === 'POST' && /\/issues$/.test(path)) { const row = { ...value, number: issues.length + 1, state: 'open' }; issues.push(row); return row; }
+      if (method === 'POST' && (m = /\/issues\/(\d+)\/comments$/.exec(path))) { comments.push({ issue: Number(m[1]), body: value.body }); return { id: comments.length }; }
+      if (method === 'PATCH' && (m = /\/issues\/(\d+)$/.exec(path))) { Object.assign(issues[Number(m[1]) - 1], value); return issues[Number(m[1]) - 1]; }
+      throw Error(`unexpected ${method} ${path}`);
+    } };
+  return { issues, comments, gh };
+}
+test('R1 two machines at once: both post, the newer issue closes as a duplicate of the older one, and both use the older one', async () => {
+  const { issues, comments, gh } = issueFake();
+  const ctx = { repo: 'acme/widgets', settings: { mode: 'auto' }, state: { baseBranch: 'main' }, publicBody: x => x, gh, now: () => 0, warn: () => {} };
+  const red = { what: 'ci', sha: 'a'.repeat(40), names: ['tests'] };
+  const results = await Promise.all([fileMainRed(ctx, { pr: 100, issue: 17 }, red), fileMainRed(ctx, { pr: 101, issue: 18 }, red)]);
+  assert.deepEqual(results.map(r => r.number), [1, 1]);
+  assert.deepEqual(issues.map(i => [i.number, i.state]), [[1, 'open'], [2, 'closed']]);
+  assert.equal(issues[1].state_reason, 'not_planned');
+  assert.deepEqual(comments, [{ issue: 2, body: 'Duplicate of #1.' }]);
+});
+
+test('R1 a job whose own issue closed as a duplicate waits on the open issue with the same marker when the base moves', async () => {
+  const { issues, gh } = issueFake();
+  const fingerprint = baseRedFingerprint('ci', ['tests']), body = `x\n<!-- pdd:autopilot-core:base-red:${fingerprint} -->`;
+  issues.push({ number: 1, state: 'open', body }, { number: 2, state: 'closed', body });
+  gh.call = async (method, path) => /\/issues\/2$/.test(path) ? { status: 200, value: { number: 2, state: 'closed' } } : { status: 200, value: issues.map(x => ({ ...x })), next: null };
+  let refreshed = 0, saved = 0;
+  const ctx = { repo: 'acme/widgets', settings: { mode: 'auto' }, state: { baseBranch: 'main' }, publicBody: x => x, gh, now: () => 1000, quiet: 45 * MIN, warn: () => {}, ports: {},
+    git: async args => args[0] === 'rev-parse' ? 'b'.repeat(40) : '', saveJob: () => { saved++; } };
+  const job = { issue: 18, pr: 101, phase: 'pr', baseRed: { what: 'ci', sha: 'a'.repeat(40), tip: 'a'.repeat(40), names: ['tests'], fingerprint, since: 900, report: { number: 2, ref: 'acme/widgets#2', found: false } } };
+  await baseRedWait(ctx, job, { refreshBase: async () => { refreshed++; } });
+  assert.equal(refreshed, 0, 'the red is not fixed: issue #1 is open');
+  assert.equal(job.baseRed.report.number, 1); assert.ok(saved > 0);
 });
 
 test('fingerprint: what and the names in any order, never the commit; the main-red issue goes to the work repository', () => {
@@ -323,4 +391,118 @@ test('stopChecks stops the base suite only when no other job waits for it, and r
   w.github.unlabel(18, 'pdd:working'); await w.tick();
   assert.equal(w.stopped.includes(base.id), true);
   assert.equal(existsSync(record), false);
+});
+
+// Review R1 (Claude). Expected results from the review items and the group lead's fixes.
+test('R1 several jobs turn base-red in one tick while the main-red label list lags: one issue (the machine record)', async t => {
+  const w = await coreWorld(t);
+  w.issue(17); w.issue(18); await w.tick();
+  w.build(17); w.build(18); await w.tick();
+  for (const n of [17, 18]) { w.review(n, 'PASS'); w.say(n, 'suite', 'not ok 1 - validation saves full output\n# fail 1'); w.suite(n, 1); }
+  await w.tick();
+  w.say('base', 'suite', 'not ok 1 - validation saves full output\n# fail 1'); w.finish('base', 'suite', { code: 1 });
+  // The lag: an issue made in this tick is not in the label list yet.
+  const fresh = new Set(), real = w.ports();
+  const gh = async (args, options) => {
+    const r = await real.gh(args, options), ep = args.find(x => /^repos\//.test(String(x))) ?? '', method = args.includes('--method') ? args[args.indexOf('--method') + 1] : 'GET';
+    if (method === 'POST' && /\/issues$/.test(ep)) fresh.add(JSON.parse(r.stdout.split('\r\n\r\n')[1]).number);
+    if (method === 'GET' && /\/issues\?state=all&labels=pdd%3Amain-red/.test(ep)) {
+      const [head, body] = r.stdout.split('\r\n\r\n');
+      return { ...r, stdout: `${head}\r\n\r\n${JSON.stringify(JSON.parse(body).filter(row => !fresh.has(row.number)))}` };
+    }
+    return r;
+  };
+  await w.tick({ gh });
+  assert.equal(mainRed(w).length, 1, 'one main-red issue for one failure');
+  assert.equal(jobFile(w, 17).baseRed.report.number, jobFile(w, 18).baseRed.report.number);
+  const number = mainRed(w)[0].number;
+  assert.deepEqual(JSON.parse(readFileSync(join(w.root, 'main-red', `${jobFile(w, 17).baseRed.fingerprint}.json`), 'utf8')).number, number);
+});
+
+test('R1 S2 a check fails while another check of the head still runs: no rerun ask yet; it is asked once the run completes', async t => {
+  const w = await coreWorld(t);
+  w.github.rerunnable = true;
+  w.issue(17); await w.tick();
+  const { head } = w.build(17, { checks: false });
+  w.github.setRun(head, { name: 'install-smoke', conclusion: 'failure' });
+  w.github.setRun(head, { name: 'tests', status: 'in_progress' });
+  // GitHub refuses a job rerun while its workflow run still runs.
+  const real = w.ports(), refused = [];
+  const gh = async (args, options) => {
+    const ep = args.find(x => /^repos\//.test(String(x))) ?? '';
+    if (/\/actions\/jobs\/\d+\/rerun$/.test(ep) && (w.github.checks.get(head) ?? []).some(r => r.status !== 'completed')) {
+      refused.push(ep); return { code: 1, stdout: 'HTTP/2.0 403 Forbidden\r\n\r\n{"message":"This workflow run is not completed"}', stderr: 'gh: HTTP 403\n' };
+    }
+    return real.gh(args, options);
+  };
+  await w.tick({ gh });
+  assert.deepEqual(refused, [], 'no rerun ask while the other check runs');
+  assert.equal(w.started.filter(j => j.role === 'repair').length, 0);
+  w.github.setRun(head, { name: 'tests', conclusion: 'success' });
+  await w.tick({ gh });
+  assert.equal(w.github.reruns.length, 1, 'the one rerun is asked once the run completes');
+  assert.equal(w.started.filter(j => j.role === 'repair').length, 0);
+});
+
+test('R1 S1 a base-red suite while a CI check still runs is no hold yet; that check then fails on its own: a repair', async t => {
+  const w = await coreWorld(t);
+  w.issue(17); await w.tick();
+  const { head } = w.build(17, { checks: false });
+  w.github.setRun(head, { name: 'lint', status: 'in_progress' });
+  await w.tick();
+  w.review(17, 'PASS'); w.say(17, 'suite', 'not ok 1 - X'); w.suite(17, 1); await w.tick();
+  w.say('base', 'suite', 'not ok 1 - X'); w.finish('base', 'suite', { code: 1 }); await w.tick();
+  assert.equal(jobFile(w, 17).baseRed, undefined, 'lint still runs: no hold yet');
+  assert.equal(mainRed(w).length, 0);
+  w.github.setRun(head, { name: 'lint', conclusion: 'failure' });   // the PR's own red: lint has no run on the base
+  await w.tick(); await w.tick();
+  assert.equal(w.started.filter(j => j.role === 'repair').length, 1, 'the PR\'s own lint red gets a repair');
+  assert.match(w.job(17, 'repair').input, /CI check lint failed/);
+});
+
+test('R1 S3 the main-red issue closed with no base move: the red check runs once more at the same head; green merges', async t => {
+  const w = await coreWorld(t);
+  w.github.rerunnable = true;
+  w.github.setRun(tipOf(w), { conclusion: 'failure' });
+  w.issue(17); await w.tick();
+  const { pr, head } = w.build(17, { checks: false });
+  w.github.setRun(head, { conclusion: 'failure' }); await w.tick();
+  w.github.setRun(head, { conclusion: 'failure' }); w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
+  const [filed] = mainRed(w);
+  assert.ok(jobFile(w, 17).baseRed);
+  w.github.close(filed.number);                  // closed as flaky; the base does not move
+  await w.tick();
+  assert.equal(jobFile(w, 17).baseRed, undefined); assert.equal(jobFile(w, 17).head, head, 'the same head');
+  await w.tick();
+  assert.equal(w.github.reruns.length, 2, 'one more rerun at the same head');
+  w.github.setRun(head, { conclusion: 'success' }); await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number]);
+  assert.equal(w.started.filter(j => j.role === 'repair').length, 0);
+});
+
+test('R1 S4 a cancelled, stale or action_required run on the base tip is no result: wait, never base-red; a red one then is', async t => {
+  for (const conclusion of ['cancelled', 'stale', 'action_required']) {
+    const w = await coreWorld(t);
+    w.github.setRun(tipOf(w), { conclusion });
+    w.issue(17); await w.tick();
+    const { head } = w.build(17, { checks: false });
+    w.github.setRun(head, { conclusion: 'failure' }); await w.tick();
+    w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
+    assert.equal(jobFile(w, 17).baseRed, undefined, conclusion); assert.equal(mainRed(w).length, 0, conclusion);
+    assert.equal(w.started.filter(j => j.role === 'repair').length, 0, `${conclusion}: wait, no repair`);
+    w.github.setRun(tipOf(w), { conclusion: 'failure' }); await w.tick();
+    assert.ok(jobFile(w, 17).baseRed, `${conclusion}, then red on the tip: base-red`);
+  }
+});
+
+test('R1 P3 a merge in this tick moves the base: the next compare reads the base tip again', async () => {
+  const tips = ['a'.repeat(40), 'b'.repeat(40)], reads = [];
+  const ctx = { repo: 'acme/widgets', state: { baseBranch: 'main' }, counts: { merged: 0 }, quiet: 45 * MIN, now: () => 0, saveJob: () => {},
+    git: async args => args[0] === 'rev-parse' ? tips[ctx.counts.merged] : '',
+    gh: { call: async () => ({ status: 404 }), ok: async (method, path) => { reads.push(path); return /check-runs/.test(path) ? { check_runs: [{ name: 'ci', status: 'completed', conclusion: 'failure' }] } : { statuses: [] }; } } };
+  const red = job => ciVsBase(ctx, job, { state: 'red', failed: ['ci'], failedRuns: [], running: [], sig: 's' });
+  assert.equal((await red({ head: 'c'.repeat(40) })).baseRed.sha, tips[0]);
+  ctx.counts.merged = 1;
+  assert.equal((await red({ head: 'd'.repeat(40) })).baseRed.sha, tips[1]);
+  assert.ok(reads.some(path => path.includes(tips[1])), 'the new tip\'s checks are read');
 });

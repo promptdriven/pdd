@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-base-red.prompt.md (sha256: 31592681d27b0f25f8452b95407e31f6ea8cae041147240f6108a0913423290d).
+// Generated from prompts/cli/autopilot-base-red.prompt.md (sha256: a133c56b2c1911db2a56086593727470ce8eb22d55cb33d868661fffb3e21571).
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
@@ -7,7 +7,7 @@ import { redactSecrets } from './secret-redaction.mjs';
 export const MAIN_RED_LABEL = 'pdd:main-red';
 export const BASE_RED_MARKER = 'pdd:autopilot-core:base-red';
 const MIN = 60 * 1000, DAY = 24 * 60 * MIN, RECENT = 14 * DAY, MAX_NAMES = 50, ISSUE_NAMES = 20, TAIL_LINES = 30, KEEP_RECORDS = 50;
-const GOOD = ['success', 'neutral', 'skipped'];
+const GOOD = ['success', 'neutral', 'skipped'], NO_RESULT = ['cancelled', 'stale', 'action_required'];
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const short = sha => String(sha ?? '').slice(0, 7);
 const oneLine = (value, max = 300) => String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
@@ -42,28 +42,38 @@ function addTest(found, limit, name, file) {
   found.push(test);
   return test;
 }
+// A TAP failure stays open until its location line, the next test line or 12 lines: only then does it join the list,
+// so two failures with one name in two files stay two tests (review R1, P2).
+const OK = /^\s*ok \d+ /;
 export function failingTests(text, limit = MAX_NAMES) {
   const found = [];
-  let last = null, look = 0, at = null;
+  let open = null, look = 0, at = null;
+  const close = () => { if (open) addTest(found, limit, open.name, open.file); open = null; look = 0; };
   for (const raw of String(text ?? '').split('\n')) {
     const line = raw.replace(/\r$/, '').replace(ANSI, '');
     let m;
-    if (/^\s*ok \d+ /.test(line)) { last = null; look = 0; at = null; continue; }
-    if ((m = NOT_OK.exec(line))) { last = DIRECTIVE.test(m[1]) ? null : addTest(found, limit, m[1], null); look = last ? 12 : 0; at = null; continue; }
-    if (look > 0) { look--; if ((m = LOCATION.exec(line)) && last && !last.file) { last.file = m[1]; look = 0; } continue; }
+    if (OK.test(line)) { close(); at = null; continue; }
+    if ((m = NOT_OK.exec(line))) { close(); at = null; if (!DIRECTIVE.test(m[1])) { open = { name: m[1], file: null }; look = 12; } continue; }
+    if (open) { if ((m = LOCATION.exec(line))) { open.file = m[1]; close(); continue; } if (--look <= 0) close(); continue; }
     if ((m = SPEC_AT.exec(line))) { at = m[1]; continue; }
     if ((m = SPEC.exec(line))) { if (!m[2] && m[1].trim() !== 'failing tests:') addTest(found, limit, m[1], at); at = null; }
   }
+  close();
   return found;
 }
 // A log in 1 MB parts, whole lines only (an over-long line without an end is dropped), so it never sits in memory at
-// once. The checkout root goes from names and files, so one test in two checkouts is one test. `more`: over 50.
+// once. Only the lines that failingTests reads stay (an `ok` line as a short one), and it reads them once, so no test
+// line is cut from its location line. The checkout root goes from names and files, so one test in two checkouts is
+// one test. `more`: over 50.
+const KEPT = /^\s*(?:not ok \d+ - |location: '|test at |\u2716 )/;
 function readFailing(fs, file, root) {
   if (!file) return null;
-  const tests = [], decoder = new StringDecoder('utf8');
+  const kept = [], decoder = new StringDecoder('utf8');
   let carry = '', skipping = false, fd;
   const local = value => value && typeof root === 'string' && root.length > 1 ? value.split(`file://${root}/`).join('').split(`${root}/`).join('') : value;
-  const take = text => { for (const t of failingTests(text, MAX_NAMES + 1)) addTest(tests, MAX_NAMES + 1, local(t.name), local(t.file)); };
+  const take = text => {
+    for (const raw of text.split('\n')) { const line = raw.replace(/\r$/, '').replace(ANSI, ''); if (KEPT.test(line)) kept.push(line.slice(0, 4000)); else if (OK.test(line)) kept.push('ok 0 -'); }
+  };
   try {
     fd = fs.openSync(file, 'r');
     const buffer = Buffer.alloc(1024 * 1024);
@@ -77,6 +87,8 @@ function readFailing(fs, file, root) {
     }
     if (!skipping) take(carry + decoder.end());
   } catch { return null; } finally { if (fd !== undefined) try { fs.closeSync(fd); } catch { /* Closed. */ } }
+  const tests = [];
+  for (const t of failingTests(kept.join('\n'), MAX_NAMES + 1)) addTest(tests, MAX_NAMES + 1, local(t.name), local(t.file));
   return { tests: tests.slice(0, MAX_NAMES), more: tests.length > MAX_NAMES };
 }
 const testText = t => `${t.name}${t.file ? ` (${t.file})` : ''}`;
@@ -96,9 +108,10 @@ export function baseRedStatus(job) {
   return baseRedWaiting(job) ? `; main is red (${nameOf(job.baseRed)}) since ${new Date(job.baseRed.since).toISOString()}; no slot` : '';
 }
 
-// The base tip after one fetch per tick.
+// The base tip after one fetch per tick; a merge in this tick (the core's count) moves the base, so it reads again.
 function baseTip(ctx) {
-  const base = ctx.state.baseBranch;
+  const base = ctx.state.baseBranch, merges = ctx.counts?.merged ?? 0;
+  if (ctx.baseRedTipMerges !== merges) { ctx.baseRedTip = null; ctx.baseRedTipMerges = merges; }
   return ctx.baseRedTip ??= ctx.git(['fetch', '-q', 'origin', base]).then(() => ctx.git(['rev-parse', `origin/${base}`]));
 }
 
@@ -108,7 +121,8 @@ function tipChecks(ctx, tip) {
   if (!ctx.baseRedChecks.has(tip)) ctx.baseRedChecks.set(tip, (async () => {
     const runs = await ctx.gh.ok('GET', `repos/${ctx.repo}/commits/${tip}/check-runs?per_page=100`);
     const status = await ctx.gh.ok('GET', `repos/${ctx.repo}/commits/${tip}/status`);
-    return [...(runs?.check_runs ?? []).map(r => ({ name: r.name, done: r.status === 'completed', good: GOOD.includes(r.conclusion) })),
+    // A run with no result (cancelled, stale, action_required) is no red: it counts as not done (review R1, S4).
+    return [...(runs?.check_runs ?? []).map(r => ({ name: r.name, done: r.status === 'completed' && !NO_RESULT.includes(r.conclusion), good: GOOD.includes(r.conclusion) })),
       ...(status?.statuses ?? []).map(s => ({ name: s.context, done: s.state !== 'pending', good: s.state === 'success' }))];
   })());
   return ctx.baseRedChecks.get(tip);
@@ -116,13 +130,13 @@ function tipChecks(ctx, tip) {
 export async function ciVsBase(ctx, job, ci) {
   const now = ctx.now(), runs = Array.isArray(ci?.failedRuns) ? ci.failedRuns : [];
   const rerun = job.ciRerun?.head === job.head ? { names: [], asked: [], ...job.ciRerun } : { head: job.head, names: [], asked: [] }, asked = [];
-  for (const run of runs) {
-    if (rerun.names.includes(run.name)) continue;
-    rerun.names = [...rerun.names, run.name];
-    if (!Number.isSafeInteger(run.id)) continue;
+  const due = runs.filter(run => !rerun.names.includes(run.name) && Number.isSafeInteger(run.id)), running = Array.isArray(ci?.running) ? ci.running : [];
+  // GitHub refuses a job rerun while its workflow run still runs (review R1, S2): wait for the other checks first.
+  if (due.length && running.length) return { ...ci, state: 'pending', pending: running, sig: `${ci.sig}|rerun-due:${due.map(run => run.name).join(',')}` };
+  for (const run of due) {
     const endpoint = run.app === 'github-actions' ? `repos/${ctx.repo}/actions/jobs/${run.id}/rerun` : `repos/${ctx.repo}/check-runs/${run.id}/rerequest`;
     const r = await ctx.gh.call('POST', endpoint).catch(() => ({ status: 0 }));
-    if (r.status >= 200 && r.status < 300) { rerun.asked = [...rerun.asked, { id: run.id, name: run.name, at: now }].slice(-20); asked.push(run.name); }
+    if (r.status >= 200 && r.status < 300) { rerun.names = [...rerun.names, run.name]; rerun.asked = [...rerun.asked, { id: run.id, name: run.name, at: now }].slice(-20); asked.push(run.name); }
   }
   job.ciRerun = rerun; ctx.saveJob(job);
   // GitHub may show the old run for a while after the ask; at most for the quiet period.
@@ -241,7 +255,7 @@ export async function suiteVsBase(ctx, job, { ci = null, review = null, suite, v
     suite = { state: 'base-red', head: suite.head, text: suite.text };
   }
   // The hold: only when the base-red part is the only red, and nothing else of the job still runs.
-  if (!red || reds.length || review?.state !== 'pass' || suite?.state === 'running' || vectors?.state === 'running') return suite;
+  if (!red || reds.length || review?.state !== 'pass' || suite?.state === 'running' || vectors?.state === 'running' || ci?.state === 'pending') return suite;
   await tools.leaveLane(ctx, job);
   const tip = red.what === 'ci' ? red.sha : await baseTip(ctx), names = (red.names ?? []).slice(0, MAX_NAMES);
   job.lane = null;
@@ -262,7 +276,19 @@ export async function baseRedWait(ctx, job, tools) {
   // A deleted or moved issue (404, 410) counts as closed.
   const read = red.report ? await ctx.gh.call('GET', `repos/${ctx.repo}/issues/${red.report.number}`) : null;
   if (read && read.status !== 200 && ![404, 410].includes(read.status)) throw Object.assign(Error(`GitHub GET issue returned ${read.status || 'no reply'}`), { code: 'github' });
-  const open = read?.status === 200 && read.value?.state !== 'closed';
+  let open = read?.status === 200 && read.value?.state !== 'closed';
+  // A closed report while another open issue has the marker (the first issue of a two-machine race): wait on that one.
+  if (!open && red.report && red.fingerprint) {
+    const other = (await markerIssues(ctx, markerOf(red.fingerprint))).open;
+    if (other && other !== red.report.number) { red.report = issueRef(ctx, other, true); ctx.saveJob(job); open = true; }
+  }
+  // Closed with no base move (a person closed it, for example as flaky): run the red check once more at this head.
+  if (!open && red.report && tip === red.tip) {
+    delete job.baseRed;
+    if (red.what === 'ci') delete job.ciRerun; else job.suite = null;
+    job.progress = { sig: null, at: ctx.now(), running: false }; ctx.saveJob(job);
+    return;
+  }
   if (tip !== red.tip && !open) {
     const rerun = job.ciRerun;
     delete job.baseRed; delete job.ciRerun;
@@ -281,20 +307,35 @@ export async function baseRedWait(ctx, job, tools) {
 }
 
 // ---- The main-red issue ---------------------------------------------------------------------------------
-export async function fileMainRed(ctx, job, red) {
-  if (mainRedRoute(ctx.settings) !== 'file') return null;
-  const names = Array.isArray(red?.names) ? red.names : [], fingerprint = red.fingerprint ?? baseRedFingerprint(red.what, names), marker = markerOf(fingerprint);
-  // Only an open match dedups. A closed match of any age is the same red come back: a new issue that names it.
-  let endpoint = `repos/${ctx.repo}/issues?state=all&labels=${encodeURIComponent(MAIN_RED_LABEL)}&per_page=100`, earlier = null;
+// The issues with one marker: the lowest open number, and the highest closed one.
+async function markerIssues(ctx, marker) {
+  let endpoint = `repos/${ctx.repo}/issues?state=all&labels=${encodeURIComponent(MAIN_RED_LABEL)}&per_page=100`, open = null, earlier = null;
   for (let page = 0; endpoint && page < 5; page++) {
     const r = await ctx.gh.call('GET', endpoint);
     if (r.status !== 200 || !Array.isArray(r.value)) throw Error(`GitHub GET issues returned ${r.status || 'no reply'}`);
-    const same = r.value.filter(row => !row.pull_request && Number.isSafeInteger(row.number) && String(row.body ?? '').includes(marker));
-    const hit = same.find(row => row.state === 'open');
-    if (hit) return { number: hit.number, ref: `${ctx.repo}#${hit.number}`, found: true, earlier: null };
-    for (const row of same) earlier = Math.max(earlier ?? 0, row.number);
+    for (const row of r.value.filter(row => !row.pull_request && Number.isSafeInteger(row.number) && String(row.body ?? '').includes(marker)))
+      if (row.state === 'open') open = Math.min(open ?? Infinity, row.number); else earlier = Math.max(earlier ?? 0, row.number);
     endpoint = r.next;
   }
+  return { open, earlier };
+}
+const issueRef = (ctx, number, found, earlier = null) => ({ number, ref: `${ctx.repo}#${number}`, found, earlier });
+export async function fileMainRed(ctx, job, red) {
+  if (mainRedRoute(ctx.settings) !== 'file') return null;
+  const names = Array.isArray(red?.names) ? red.names : [], fingerprint = red.fingerprint ?? baseRedFingerprint(red.what, names), marker = markerOf(fingerprint);
+  // This machine first: the label list can lag a write, so jobs that turn base-red in one tick find the issue that
+  // an earlier job posted in the machine record (a read by number is consistent).
+  const record = join(ctx.root ?? '', 'main-red', `${fingerprint}.json`), remember = number => { try { if (ctx.root) save(ctx.fs, record, { number, at: ctx.now() }); } catch (error) { ctx.warn(`Autopilot core could not save the main-red record: ${error.message}`); } return number; };
+  const mine = ctx.root ? readJson(ctx.fs, record) : null;
+  let closedMine = null;
+  if (Number.isSafeInteger(mine?.number)) {
+    const r = await ctx.gh.call('GET', `repos/${ctx.repo}/issues/${mine.number}`);
+    if (r.status === 200 && r.value?.state === 'open' && String(r.value?.body ?? '').includes(marker)) return issueRef(ctx, mine.number, true);
+    if (r.status === 200 && r.value?.state === 'closed') closedMine = mine.number;
+  }
+  // Only an open match dedups. A closed match of any age is the same red come back: a new issue that names it.
+  const seen = await markerIssues(ctx, marker), earlier = Math.max(seen.earlier ?? 0, closedMine ?? 0) || null;
+  if (seen.open) return issueRef(ctx, remember(seen.open), true);
   const base = ctx.state.baseBranch, ci = red.what === 'ci';
   const title = oneLine(ctx.publicBody(`Main is red: ${names.length ? `${names[0]}${names.length > 1 ? ` (and ${names.length - 1} more)` : ''}` : ci ? 'a CI check' : 'the full test suite'}`), 200);
   const listed = (Array.isArray(red.tests) ? red.tests.map(testText) : names).slice(0, ISSUE_NAMES).map(name => `  - ${oneLine(name, 300)}`);
@@ -309,7 +350,18 @@ export async function fileMainRed(ctx, job, red) {
   // The opt-in label only in auto mode, so that Autopilot takes the issue as its own work; observe mode builds nothing.
   const labels = [MAIN_RED_LABEL, ...(ctx.settings.mode === 'auto' && ctx.settings.label ? [ctx.settings.label] : [])];
   const issue = await ctx.gh.ok('POST', `repos/${ctx.repo}/issues`, { title, body: ctx.publicBody(body), labels });
-  return { number: issue.number, ref: `${ctx.repo}#${issue.number}`, found: false, earlier };
+  // Two machines at once (review R1): both read no open match and both post. The lowest number stays; the newer one,
+  // when this machine made it, closes as a duplicate. A machine that does not see the other one yet keeps its own; the
+  // wait corrects it.
+  const again = await markerIssues(ctx, marker).catch(error => { ctx.warn(`Autopilot core could not read the main-red issues again: ${error.message}`); return null; });
+  if (again?.open && again.open < issue.number) {
+    try {
+      await ctx.gh.ok('POST', `repos/${ctx.repo}/issues/${issue.number}/comments`, { body: ctx.publicBody(`Duplicate of #${again.open}.`) });
+      await ctx.gh.ok('PATCH', `repos/${ctx.repo}/issues/${issue.number}`, { state: 'closed', state_reason: 'not_planned' });
+    } catch (error) { ctx.warn(`Autopilot core could not close the duplicate main-red issue #${issue.number}: ${error.message}`); }
+    return issueRef(ctx, remember(again.open), true, earlier);
+  }
+  return issueRef(ctx, remember(issue.number), false, earlier);
 }
 
 // ---- Stop (with the core's stopChecks) ------------------------------------------------------------------
