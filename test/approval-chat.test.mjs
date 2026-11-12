@@ -12,7 +12,7 @@ import { runApprove } from '../src/prompt-approve.mjs';
 import { proseSha256 } from '../src/runtime-seam.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
 import { preparePrEvidence } from '../src/workflow-pr-evidence.mjs';
-import { PLACE, harbor, sink } from './runtime-fake.mjs';
+import { PLACE, harbor, sink } from './helpers/runtime-fake.mjs';
 
 // These native assertions are deliberately red on alpha; no missing imports/new implementation APIs.
 test('CHAT2755 standalone said approves exact current prose without a terminal', async t => {

@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process';
 import { headerPrompts, headerEntries, headerHashState, promptHeaderHash, promptClaims, resolveOwners, findOwners } from '../src/file-owner.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { runApprove } from '../src/prompt-approve.mjs';
-import { PLACE, harbor, sink } from './runtime-fake.mjs';
+import { PLACE, harbor, sink } from './helpers/runtime-fake.mjs';
 
 const HEX = 'a'.repeat(64), CUT = '// Generated from prompts/cut.prompt.md';
 const capture = () => ({ text: '', write(value) { this.text += value; } });

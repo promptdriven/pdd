@@ -539,7 +539,7 @@ test('SEAM4: Try CLI launcher names stable pdd-owned src/try-doors.mjs entry', a
   const { pathToFileURL } = await import('node:url');
   const { Readable } = await import('node:stream');
   const { rmSync, writeFileSync } = await import('node:fs');
-  const { harbor, fakeRuntime, portsFor, PLACE } = await import('./runtime-fake.mjs');
+  const { harbor, fakeRuntime, portsFor, PLACE } = await import('./helpers/runtime-fake.mjs');
   const seam = await import('../src/runtime-seam.mjs');
   const stableEntry = await import('../src/try-doors.mjs');
   assert.equal(stableEntry.runShim, seam.runShim);
@@ -1602,7 +1602,7 @@ test('SEAM10 (R2-4): workflow base SHA is observed inside runBatch after discove
 test('SEAM11 (M2-2): src/runtime has no hardcoded client version literal; seam supplies package.json version and direct callers get null', async t => {
   const seam = await import('../src/runtime-seam.mjs');
   const directClient = await import('../src/runtime/runtime-client.mjs');
-  const { harbor, fakeRuntime, portsFor } = await import('./runtime-fake.mjs');
+  const { harbor, fakeRuntime, portsFor } = await import('./helpers/runtime-fake.mjs');
 
   for (const rel of walk('src/runtime')) {
     const src = readFileSync(join(root, rel), 'utf8');
@@ -1750,7 +1750,7 @@ test('SEAM13 (WEAKER DEFAULTS): agent-project has no localEvidenceEligibility fa
     exitFor: hostExit.exitFor,
     exitCodeFor: hostExit.exitCodeFor,
   };
-  const { harbor, fakeRuntime, portsFor } = await import('./runtime-fake.mjs');
+  const { harbor, fakeRuntime, portsFor } = await import('./helpers/runtime-fake.mjs');
 
   const agentProjectSrc = readFileSync(join(root, 'src/runtime/agent-project.mjs'), 'utf8');
   assert.ok(!agentProjectSrc.includes('localEvidenceEligibility'), 'agent-project.mjs must not keep localEvidenceEligibility');
@@ -2554,7 +2554,7 @@ test('SEAM19: selectTests rethrows numeric source-boundary exit codes', async ()
 test('SEAM20: whyNoTests preserves workspace preflight errors through the compatibility seam', async t => {
   const { writeFileSync } = await import('node:fs');
   const { join } = await import('node:path');
-  const { harbor } = await import('./runtime-fake.mjs');
+  const { harbor } = await import('./helpers/runtime-fake.mjs');
   const seam = await import('../src/runtime-seam.mjs');
   const setup = harbor(t, repo => writeFileSync(join(repo, 'pdd-workspace.json'), '{invalid json'));
 
@@ -2562,4 +2562,13 @@ test('SEAM20: whyNoTests preserves workspace preflight errors through the compat
     () => seam.whyNoTests(setup.repo, ['prompts/place_order.prompt.md'], { untested: [], orphans: [] }),
     error => error instanceof seam.PreflightError && error.exitCode === 4 && error.code === 'workspace-config-invalid',
   );
+});
+
+test('SEAM21: no file under test/ outside test/runtime-package/ and test/runtime-seam.test.mjs imports or addresses src/runtime/', () => {
+  const files = walk('test').filter(rel => !rel.startsWith('test/runtime-package/') && rel !== 'test/runtime-seam.test.mjs');
+  assert.ok(files.length >= 200, `expected full staying test/ file scan, got ${files.length}`);
+  const violations = files.flatMap(rel => findSeamViolations(rel, readFileSync(join(root, rel), 'utf8')));
+  assert.deepEqual(violations, [], `Staying test/ files must route through src/runtime-seam.mjs instead of src/runtime/:\n${violations.join('\n')}`);
+  assert.ok(findSeamViolations('test/example.test.mjs', "import { runCheck } from '../src/runtime/runtime-client.mjs';\n").length > 0);
+  assert.ok(findSeamViolations('test/helpers/example.mjs', "const m = await import('../../src/runtime/index.mjs');\n").length > 0);
 });
