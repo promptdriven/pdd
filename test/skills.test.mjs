@@ -90,7 +90,9 @@ test('SKILLS4: workflow skills have version 2 areas, one step file per step, and
     assert.ok(skillBytes <= (SKILL_LIMITS[name] ?? SKILL_LIMIT), `${name}/SKILL.md is ${skillBytes} bytes`);
     // The total is for information only: no one agent loads every file.
     t.diagnostic(`${name}: ${filesUnder(join(skills, name)).reduce((sum, file) => sum + statSync(file).size, 0)} bytes in all`);
-    assert.deepEqual(readdirSync(join(skills, name)).sort(), ['SKILL.md', 'steps', 'workflow.json']);
+    assert.deepEqual(readdirSync(join(skills, name)).sort(), name === 'pdd-bug'
+      ? ['SKILL.md', 'bug-cause.md', 'steps', 'workflow.json']
+      : ['SKILL.md', 'steps', 'workflow.json']);
   }
 });
 
