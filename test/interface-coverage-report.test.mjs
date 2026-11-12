@@ -44,7 +44,7 @@ for(const route of ['embedded','dependency','import','refresh','extend']) {
   test('3130 integration: JSON formatting needs review without changing authored fields: '+route,t=>{
     let text=prose,args=[];
     if(route==='embedded') text+=fence(original);
-    if(route==='dependency') text=text.replace('## Dependencies\n\nNone.','## Dependencies\n\n[Interface](../contracts/interface.json).');
+    if(route==='dependency') text=text.replace('## Dependencies\n\nNone.','## Dependencies\n\n- [Interface](../contracts/interface.json): required contract context.');
     if(route==='import') args=['--contract','contracts/interface.json'];
     if(route==='refresh'||route==='extend') {text+=block(original);args=['--'+route];if(route==='extend') args.push('--contract','contracts/add.json');}
     const f=setup(t,text,{'contracts/interface.json':original,'contracts/add.json':{entries:[extra]}}),r=draft(f,args);
@@ -169,23 +169,121 @@ test('3130 integration: a scalar type requirement cannot borrow the first of sev
 });
 
 
-for (const context of ['fragment', 'cycle']) test('integration 013: person approval exposes unavailable coverage context: '+context, async t => {
-  const dependency='[Meaning](../contracts/meaning.md'+(context==='fragment'?'#rules':'')+').';
+test('integration 013: person approval reads one declared Markdown fragment, not its sibling section', async t => {
   const value={...original,status:'draft',prose_sha256:''};
-  const text=prose.replace('## Dependencies\n\nNone.','## Dependencies\n\n'+dependency)+block(value);
-  const meaning='# Meaning\n\n## Rules\n\nRetain the exact formatter contract.\n'
-    +(context==='cycle'?'\n## Dependencies\n\n[Formatter](../'+PLACE+').\n':'');
+  const text=prose.replace('## Dependencies\n\nNone.','## Dependencies\n\n- [Meaning](../contracts/meaning.md#rules): required coverage context.\n\nNavigation only: [Missing](../contracts/meaning.md#missing).\n\nProtocol authority: [External](https://example.test/reference).\nOnly this protocol is required.')+block(value);
+  const meaning='# Meaning\n\n## Rules\n\nRetain the exact formatter contract.\n\n## Other\n\nDo not include this unrelated sentence.\n';
   const f=setup(t,text,{'contracts/meaning.md':meaning});
   const stdout=sink(),stderr=sink();
-  const code=await runApprove({cwd:f.repo,words:[PLACE],said:'Accept the authored contract with the shown coverage gap.'},
+  const code=await runApprove({cwd:f.repo,words:[PLACE],said:'Accept the authored contract with the shown coverage questions.'},
     {stdout,stderr,interactive:false});
   assert.equal(code,0,stderr.text);
-  assert.ok(stdout.text.includes('coverage-context-unavailable'));
-  assert.ok(stdout.text.includes('/dependencies'));
+  assert.ok(stdout.text.includes('Retain the exact formatter contract.'));
+  assert.ok(stdout.text.includes('(contracts/meaning.md#rules)'));
+  assert.equal(stdout.text.includes('Do not include this unrelated sentence.'),false);
   const after=JSON.parse(interfaceBlocks(readFileSync(join(f.repo,PLACE),'utf8'))[0][1]);
   assert.equal(after.status,'approved');
   assert.deepEqual(after.entries,value.entries);
   assert.equal(JSON.parse(readFileSync(join(f.repo,'.git/pdd/approvals.json'),'utf8')).approvals.length,1);
+});
+
+test('integration 013: a same-file declared Markdown fragment has selected context', async t => {
+  const value={...original,status:'draft',prose_sha256:''};
+  const text=prose.replace('## Dependencies\n\nNone.','## Dependencies\n\n- [Rules](#rules): required coverage context.')
+    +'\n## Rules\n\nRetain the local formatter rule.\n'+block(value);
+  const f=setup(t,text),stdout=sink(),stderr=sink();
+  const code=await runApprove({cwd:f.repo,words:[PLACE],said:'Accept the authored contract with the shown coverage questions.'},
+    {stdout,stderr,interactive:false});
+  assert.equal(code,0,stderr.text);
+  assert.ok(stdout.text.includes(`(${PLACE}#rules)`));
+});
+
+test('integration 013: star list records declare required Markdown context', async t => {
+  const value={...original,status:'draft',prose_sha256:''};
+  const text=prose.replace('## Dependencies\n\nNone.','## Dependencies\n\n* [Rules](../contracts/meaning.md#rules): coverage context.')+block(value);
+  const meaning='# Meaning\n\n## Rules\n\nRetain the star-list formatter rule.\n';
+  const f=setup(t,text,{'contracts/meaning.md':meaning}),stdout=sink(),stderr=sink();
+  const code=await runApprove({cwd:f.repo,words:[PLACE],said:'Accept the authored contract with the shown coverage questions.'},
+    {stdout,stderr,interactive:false});
+  assert.equal(code,0,stderr.text);
+  assert.ok(stdout.text.includes('Retain the star-list formatter rule.'));
+});
+
+test('integration 013: negated dependency markers do not hide or load context', async t => {
+  const value={...original,status:'draft',prose_sha256:''};
+  const text=prose.replace('## Dependencies\n\nNone.','## Dependencies\n\nNot required: [Retired](../contracts/missing.md).\n\nThis is not navigation-only. Required: [Rules](../contracts/meaning.md#rules).')+block(value);
+  const meaning='# Meaning\n\n## Rules\n\nRetain the explicitly required rule.\n';
+  const f=setup(t,text,{'contracts/meaning.md':meaning}),stdout=sink(),stderr=sink();
+  const code=await runApprove({cwd:f.repo,words:[PLACE],said:'Accept the authored contract with the shown coverage questions.'},
+    {stdout,stderr,interactive:false});
+  assert.equal(code,0,stderr.text);
+  assert.ok(stdout.text.includes('Retain the explicitly required rule.'));
+});
+
+test('integration 013: a normalized section title selects the pure required reader context', async t => {
+  const value={...original,status:'draft',prose_sha256:''};
+  const text=prose.replace('## Dependencies\n\nNone.','## Dependencies\n\n- [Reader](../contracts/product.md#product-composition-readers-and-journey-progress-808): required coverage context.')+block(value);
+  const product='# Product\n\n## Dependencies\n\n[Loop](../'+PLACE+').\n\n## Product composition readers and journey progress (#808)\n\nUse the pure reader.\n';
+  const f=setup(t,text,{'contracts/product.md':product}),stdout=sink(),stderr=sink();
+  const code=await runApprove({cwd:f.repo,words:[PLACE],said:'Accept the authored contract with the shown coverage questions.'},
+    {stdout,stderr,interactive:false});
+  assert.equal(code,0,stderr.text);
+  assert.ok(stdout.text.includes('(contracts/product.md#product-composition-readers-and-journey-progress-808)'));
+  assert.ok(stdout.text.includes('Use the pure reader.'));
+});
+
+test('integration 013: an explicit anchor immediately before a heading selects that heading', async t => {
+  const value={...original,status:'draft',prose_sha256:''};
+  const text=prose.replace('## Dependencies\n\nNone.','## Dependencies\n\n- [Reader](../contracts/reader.md#stable-reader): required coverage context.')+block(value);
+  const reader='# Reader\n\n<a id="stable-reader"></a>\n### Stable reader\n\nUse this exact reader.\n\n### Other\n\nDo not include this text.\n';
+  const f=setup(t,text,{'contracts/reader.md':reader}),stdout=sink(),stderr=sink();
+  const code=await runApprove({cwd:f.repo,words:[PLACE],said:'Accept the authored contract with the shown coverage questions.'},
+    {stdout,stderr,interactive:false});
+  assert.equal(code,0,stderr.text);
+  assert.ok(stdout.text.includes('Use this exact reader.'));
+  assert.equal(stdout.text.includes('Do not include this text.'),false);
+});
+
+for (const [name,reader] of [
+  ['duplicate explicit anchor','# Reader\n\n<a id="stable-reader"></a>\n### First\n\nOne.\n\n<a id="stable-reader"></a>\n### Second\n\nTwo.\n'],
+  ['fenced explicit anchor','# Reader\n\n```html\n<a id="stable-reader"></a>\n```\n\n### Other\n\nNo matching reader.\n'],
+]) test('integration 013: unavailable explicit Markdown anchor stays visible: '+name, async t => {
+  const value={...original,status:'draft',prose_sha256:''};
+  const text=prose.replace('## Dependencies\n\nNone.','## Dependencies\n\n- [Reader](../contracts/reader.md#stable-reader): required coverage context.')+block(value);
+  const f=setup(t,text,{'contracts/reader.md':reader}),stdout=sink(),stderr=sink();
+  const code=await runApprove({cwd:f.repo,words:[PLACE]},
+    {stdout,stderr,interactive:true,stdin:Readable.from(['n\n'])});
+  assert.equal(code,1,stderr.text);
+  assert.match(stdout.text,/coverage-context-unavailable: \/dependencies/);
+});
+
+for (const [name,meaning] of [
+  ['empty fragment','# Meaning\n\n## Rules\n\nThis must not become whole-file context.\n'],
+  ['missing fragment','# Meaning\n\n## Other\n\nNo matching section.\n'],
+  ['ambiguous fragment','# Meaning\n\n## Rules\n\nFirst.\n\n## Rules\n\nSecond.\n'],
+]) test('integration 013: person approval keeps unavailable Markdown context visible: '+name, async t => {
+  const value={...original,status:'draft',prose_sha256:''};
+  const fragment=name==='empty fragment' ? '' : 'rules';
+  const text=prose.replace('## Dependencies\n\nNone.',`## Dependencies\n\n- [Meaning](../contracts/meaning.md#${fragment}): required coverage context.`)+block(value);
+  const f=setup(t,text,{'contracts/meaning.md':meaning}),stdout=sink(),stderr=sink();
+  const code=await runApprove({cwd:f.repo,words:[PLACE]},
+    {stdout,stderr,interactive:true,stdin:Readable.from(['n\n'])});
+  assert.equal(code,1,stderr.text);
+  assert.match(stdout.text,/coverage-context-unavailable: \/dependencies/);
+  const after=JSON.parse(interfaceBlocks(readFileSync(join(f.repo,PLACE),'utf8'))[0][1]);
+  assert.equal(after.status,'draft');
+  assert.equal(existsSync(join(f.repo,'.git/pdd/approvals.json')),false);
+});
+
+test('integration 013: a declared context cycle remains unavailable', async t => {
+  const value={...original,status:'draft',prose_sha256:''};
+  const text=prose.replace('## Dependencies\n\nNone.','## Dependencies\n\n- [Meaning](../contracts/meaning.md): required coverage context.')+block(value);
+  const meaning='# Meaning\n\n## Dependencies\n\n- [Formatter](../'+PLACE+'): required coverage context.\n';
+  const f=setup(t,text,{'contracts/meaning.md':meaning}),stdout=sink(),stderr=sink();
+  const code=await runApprove({cwd:f.repo,words:[PLACE]},
+    {stdout,stderr,interactive:true,stdin:Readable.from(['n\n'])});
+  assert.equal(code,1,stderr.text);
+  assert.match(stdout.text,/coverage-context-unavailable: \/dependencies/);
 });
 
 for(const malformed of [false,true]) test('example list coverage completes and preserves supported sentences: '+(malformed?'malformed':'valid'),t=>{

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/interface-draft.prompt.md (sha256: 964f1155c78fd45cc69ef93e07685273f47996db6c3217122018fa29948f685e).
+// Generated from prompts/cli/interface-draft.prompt.md (sha256: 2e06ce27b5f76efcd34f62f46d5f697c171b60e14a67a85509afe12d98bf4224).
 import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, linkSync, renameSync, rmSync, openSync, closeSync, fstatSync, chmodSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { basename, dirname, join, relative, resolve } from 'node:path';
@@ -381,23 +381,73 @@ function extendBody(body,previous,iface) {
   if(!isDeepStrictEqual(JSON.parse(next),iface)) throw declarationError('/','Cannot preserve the existing declaration bytes safely.');
   return next;
 }
+const markdownFragment = title => title.toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu,'').replace(/\s+/g,'-');
+function markdownSection(text, requested) {
+  let fragment;
+  try { fragment=decodeURIComponent(requested); }
+  catch { throw declarationError('/dependencies','Required context has an invalid Markdown fragment: '+requested); }
+  if(!fragment) throw declarationError('/dependencies','Required context needs a stable Markdown fragment.');
+  const headings=[], anchors=[], lines=text.split(/\n/); let offset=0,fence=null;
+  for(const raw of lines) {
+    const line=raw.endsWith('\r') ? raw.slice(0,-1) : raw;
+    const marker=/^ {0,3}(\x60{3,}|~{3,})(.*)$/.exec(line);
+    if(fence) {
+      if(marker && marker[1][0]===fence.char && marker[1].length>=fence.length && !marker[2].trim()) fence=null;
+      offset+=raw.length+1;continue;
+    }
+    if(marker) { fence={char:marker[1][0],length:marker[1].length};offset+=raw.length+1;continue; }
+    for(const match of line.matchAll(/<a\b[^>]*\bid=(["'])([^"']+)\1[^>]*>\s*(?:<\/a>)?/gi)) anchors.push({anchor:match[2],end:offset+match.index+match[0].length});
+    const heading=/^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*$/.exec(line);
+    if(heading) {
+      const title=heading[2].replace(/[ \t]+#+[ \t]*$/,'');
+      headings.push({level:heading[1].length,anchor:markdownFragment(title),start:offset});
+    }
+    offset+=raw.length+1;
+  }
+  const matches=headings.filter(heading=>heading.anchor===fragment);
+  for(const alias of anchors.filter(alias=>alias.anchor===fragment)) {
+    const heading=headings.find(heading=>heading.start>=alias.end);
+    if(heading && !text.slice(alias.end,heading.start).trim()) matches.push(heading);
+  }
+  const selected=[...new Set(matches)];
+  if(!selected.length) throw declarationError('/dependencies','Required context has no Markdown heading for fragment: '+fragment);
+  if(selected.length!==1) throw declarationError('/dependencies','Required context has an ambiguous Markdown fragment: '+fragment);
+  const heading=selected[0],after=headings.find(item=>item.start>heading.start && item.level<=heading.level);
+  return {anchor:fragment,text:text.slice(heading.start,after?.start)};
+}
+const negatedMarker=(text,marker) => new RegExp('\\bnot(?:\\s+\\w+){0,2}\\s+'+marker+'\\b','i').test(text);
+function declaredDependencyLinks(section) {
+  const declarations=section.split(/\n(?= {0,3}[-*+] )|\n{2,}/);
+  return declarations.flatMap(declaration => {
+    if(/\bnavigation[- ]only\b/i.test(declaration) && !negatedMarker(declaration,'navigation[- ]only')) return [];
+    const links=[...declaration.matchAll(/\[([^\]]*)\]\(([^)\s]+)\)/g)];
+    if(/^\s*[-*+]\s+/.test(declaration)) return links;
+    return links.filter(link => {
+      const start=declaration.lastIndexOf('\n',link.index)+1,end=declaration.indexOf('\n',link.index);
+      const line=declaration.slice(start,end < 0 ? declaration.length : end);
+      return /\brequired\b/i.test(line) && !negatedMarker(line,'required');
+    });
+  });
+}
 // Load only declared context. JSON declarations are data, never prose coverage.
 function draftSources(root,path,text) {
   const files=sourceFilePort(root), sources=[], visiting=new Set(), loaded=new Set();
-  function load(path,text) {
-    if(visiting.has(path)) throw declarationError('/dependencies','Required context contains a cycle: '+path);
-    if(loaded.has(path)) return;
-    visiting.add(path);
-    const context=interfaceBlocks(text).reduce((prose,block)=>prose.replace(block[0],''),text);
-    sources.push({path,text:context});
+  function load(path,text,fragment) {
+    const identity=fragment === undefined ? path : path+'#'+fragment;
+    if(visiting.has(identity)) throw declarationError('/dependencies','Required context contains a cycle: '+identity);
+    if(loaded.has(identity)) return;
+    visiting.add(identity);
+    const selected=fragment === undefined ? null : markdownSection(text,fragment);
+    const context=interfaceBlocks(selected ? selected.text : text).reduce((prose,block)=>prose.replace(block[0],''),selected ? selected.text : text);
+    sources.push({path:identity,text:context});
     const section=/^## Dependencies\s*\n([\s\S]*?)(?=^## |$(?![\s\S]))/m.exec(context)?.[1] ?? '';
-    for(const link of section.matchAll(/\[([^\]]*)\]\(([^)\s]+)\)/g)) {
-      if(/^[a-z]+:|^\//i.test(link[2])) throw declarationError('/dependencies','Required context must name a local workspace file.');
-      const target=relative(root,resolve(root,join(path,'..'),link[2].split('#')[0])).split('\\').join('/');
-      if(link[2].includes('#')) throw declarationError('/dependencies','Select required context without a fragment for local drafting.');
-      load(target,files.read({path:target}).content);
+    for(const link of declaredDependencyLinks(section)) {
+      const reference=link[2],at=reference.indexOf('#'),file=at<0 ? reference : reference.slice(0,at),targetFragment=at<0 ? undefined : reference.slice(at+1);
+      if(/^[a-z]+:|^\//i.test(file || reference)) throw declarationError('/dependencies','Required context must name a local workspace file.');
+      const target=file ? relative(root,resolve(root,join(path,'..'),file)).split('\\').join('/') : path;
+      load(target,files.read({path:target}).content,targetFragment);
     }
-    visiting.delete(path);loaded.add(path);
+    visiting.delete(identity);loaded.add(identity);
   }
   load(path,text);
   return sources;

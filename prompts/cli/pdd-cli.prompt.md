@@ -72,11 +72,8 @@ issue number. Pass prepare `{command:"prepare",cwd,issue}`; pass complete
 `{command:"complete",cwd,stdin}` with the exact UTF-8 stdin payload. The intake
 owner validates JSON. No command wakes an Autopilot coordinator: Autopilot has no coordinator chat.
 Print the intake message once to stdout on exitCode 0, stderr otherwise, and
-return its exitCode unchanged. Treat a launcher import or call throw, or a malformed launcher result, as unknown.
-On busy or unknown, write a separate finite warning to stderr that reconciliation
-was not confirmed; preserve the original intake message, stream and exit code.
-Do not change the JSON, retry automatically or claim a wake. A finite throw returns 1 with one safe
-line and no automatic retry. No route silently chooses or calls an AI model.
+return its exitCode unchanged. A finite intake import or call throw returns 1 with one
+safe line and no automatic retry. No route silently chooses or calls an AI model.
 Preserve every existing evidence-associate route and --test text-list behavior.
 
 Dispatch `workflow-suite` through the workflow runner's `runSuite` with cwd,
@@ -296,11 +293,980 @@ cwd and env/stdout/stderr; return its exit code. Do not do runtime authenticatio
 slot admission, skill discovery or PATH probing here. A thrown error prints one
 finite local cause and returns 5. Catalog owns all syntax.
 
+The `autopilotLauncher` Runtime resource below models only this CLI dispatch and
+its `{exitCode,message}` reply. It does not model or test the launcher's native
+timer, process, state, or network behavior; that behavior remains in the child
+prompt's native dependency context.
+
+Runtime `autopilotLauncher.runAutopilotLauncher` binds the injected
+`dependencies.autopilotLauncher.runAutopilotLauncher` callback or the existing
+default module. It forwards the constructed dispatch input, including Runtime's
+closed environment projection, unchanged and returns its `{exitCode,message}`
+reply.
+
 <details>
 <summary>Runtime interface</summary>
 
 ```json
-<details>
+{
+  "kind": "partial",
+  "status": "draft",
+  "prose_sha256": "c34f86b7205d9733923798ee460d92da29ec8f55c26a5619a6abc1833c155813",
+  "entries": [
+    {
+      "operation": "runPdd",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "argv": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "env": {
+            "type": "object",
+            "properties": {
+              "HOME": {
+                "type": "string"
+              },
+              "PATH": {
+                "type": "string"
+              },
+              "CODEX_HOME": {
+                "type": "string"
+              },
+              "CLAUDE_CONFIG_DIR": {
+                "type": "string"
+              },
+              "PDD_RUNTIME_URL": {
+                "type": "string"
+              }
+            },
+            "required": [],
+            "additionalProperties": false
+          },
+          "packageRoot": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "argv"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "exit_code": {
+            "type": "integer"
+          },
+          "stdout": {
+            "type": "string"
+          },
+          "stderr": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "exit_code",
+          "stdout",
+          "stderr"
+        ],
+        "additionalProperties": false
+      },
+      "errors": []
+    }
+  ],
+  "calls": [
+    {
+      "operation": "runDetailedVersion",
+      "target": "prompts/cli/interpreter-version.prompt.md",
+      "target_operation": "runDetailedVersion",
+      "max_calls": 1
+    }
+  ],
+  "resources": [
+    {
+      "name": "dispatch",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "prove",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "ref": {
+                "type": "string"
+              },
+              "test": {
+                "type": "string"
+              },
+              "expect": {
+                "type": "string"
+              },
+              "cwd": {
+                "type": "string"
+              },
+              "timeoutMinutes": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 120
+              }
+            },
+            "required": [
+              "ref",
+              "test",
+              "expect",
+              "cwd"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "exitCode": {
+                "type": "integer"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "exitCode",
+              "message"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "requestUptake",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "requestId": {
+                "type": "string"
+              },
+              "summary": {
+                "type": "string"
+              },
+              "cwd": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "requestId",
+              "summary",
+              "cwd"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "exitCode": {
+                "type": "integer"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "exitCode",
+              "message"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "startRun",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "input": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "issue": {
+                    "type": "string"
+                  },
+                  "agent": {
+                    "type": "string",
+                    "enum": [
+                      "codex",
+                      "claude"
+                    ]
+                  },
+                  "cwd": {
+                    "type": "string"
+                  },
+                  "packageRoot": {
+                    "type": "string"
+                  },
+                  "base": {
+                    "type": "string"
+                  },
+                  "adoptCorpus": {
+                    "type": "string"
+                  },
+                  "draft": {
+                    "type": "boolean"
+                  },
+                  "origin": {
+                    "type": "string",
+                    "enum": [
+                      "manual",
+                      "autopilot",
+                      "unknown"
+                    ]
+                  },
+                  "decisionId": {
+                    "type": "string"
+                  },
+                  "outcome": {
+                    "type": "string",
+                    "enum": [
+                      "code",
+                      "prompt-only"
+                    ]
+                  }
+                },
+                "required": [
+                  "name",
+                  "issue",
+                  "agent",
+                  "cwd",
+                  "packageRoot"
+                ],
+                "additionalProperties": false
+              },
+              "env": {
+                "type": "object",
+                "properties": {
+                  "HOME": {
+                    "type": "string"
+                  },
+                  "PATH": {
+                    "type": "string"
+                  },
+                  "CODEX_HOME": {
+                    "type": "string"
+                  },
+                  "CLAUDE_CONFIG_DIR": {
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "input",
+              "env"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "exitCode": {
+                "type": "integer"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "exitCode",
+              "message"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "agents",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "checkWorkflowAgents",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "cwd": {
+                "type": "string"
+              },
+              "env": {
+                "type": "object",
+                "properties": {
+                  "HOME": {
+                    "type": "string"
+                  },
+                  "PATH": {
+                    "type": "string"
+                  },
+                  "CODEX_HOME": {
+                    "type": "string"
+                  },
+                  "CLAUDE_CONFIG_DIR": {
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              },
+              "requested": {
+                "type": "string",
+                "enum": [
+                  "codex",
+                  "claude"
+                ]
+              }
+            },
+            "required": [
+              "cwd",
+              "env"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "ok": {
+                "type": "boolean"
+              },
+              "agent": {
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "codex",
+                      "claude",
+                      "gemini",
+                      "agy"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "message": {
+                "type": "string"
+              },
+              "hint": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "ok",
+              "agent",
+              "message"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "diagnostics",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "pathDiagnostic",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "packageRoot": {
+                "type": "string"
+              },
+              "cwd": {
+                "type": "string"
+              },
+              "env": {
+                "type": "object",
+                "properties": {
+                  "HOME": {
+                    "type": "string"
+                  },
+                  "PATH": {
+                    "type": "string"
+                  },
+                  "CODEX_HOME": {
+                    "type": "string"
+                  },
+                  "CLAUDE_CONFIG_DIR": {
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "setup",
+                  "version",
+                  "workflow"
+                ]
+              }
+            },
+            "required": [
+              "packageRoot",
+              "cwd",
+              "env",
+              "mode"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "lines": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "lines"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "setup",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "setupSkills",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "packageRoot": {
+                "type": "string"
+              },
+              "cwd": {
+                "type": "string"
+              },
+              "home": {
+                "type": "string"
+              },
+              "claudeConfigDir": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "packageRoot",
+              "cwd",
+              "home"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "results": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "agent": {
+                      "type": "string"
+                    },
+                    "root": {
+                      "type": "string"
+                    },
+                    "found": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "stale": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "staleSkills": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "version": {
+                            "oneOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "state": {
+                            "type": "string",
+                            "enum": [
+                              "older",
+                              "differs"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "version",
+                          "state"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "installed": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "updated": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "agent",
+                    "root",
+                    "found",
+                    "stale",
+                    "installed",
+                    "updated"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "results"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "setupProject",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "cwd": {
+                "type": "string"
+              },
+              "packageRoot": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "cwd",
+              "packageRoot"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "file": {
+                "type": "string"
+              },
+              "changed": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "file",
+              "changed"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "setupAgentMcp",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "env": {
+                "type": "object",
+                "properties": {
+                  "HOME": {
+                    "type": "string"
+                  },
+                  "PATH": {
+                    "type": "string"
+                  },
+                  "CODEX_HOME": {
+                    "type": "string"
+                  },
+                  "CLAUDE_CONFIG_DIR": {
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              },
+              "packageRoot": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "env",
+              "packageRoot"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "exitCode": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "exitCode"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "package",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "readVersion",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "packageRoot": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "packageRoot"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "ok": {
+                "type": "boolean"
+              },
+              "version": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "ok",
+              "version"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "skills",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "findSkills",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "packageRoot": {
+                "type": "string"
+              },
+              "cwd": {
+                "type": "string"
+              },
+              "home": {
+                "type": "string"
+              },
+              "claudeConfigDir": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "packageRoot",
+              "cwd",
+              "home"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "results": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "agent": {
+                      "type": "string"
+                    },
+                    "root": {
+                      "type": "string"
+                    },
+                    "found": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "stale": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "staleSkills": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "version": {
+                            "oneOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "state": {
+                            "type": "string",
+                            "enum": [
+                              "older",
+                              "differs"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "version",
+                          "state"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "installed": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "updated": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "agent",
+                    "root",
+                    "found",
+                    "stale",
+                    "installed",
+                    "updated"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "results"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "autopilotLauncher",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "runAutopilotLauncher",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
+                "enum": [
+                  "doctor",
+                  "audit",
+                  "check-base",
+                  "start",
+                  "stop",
+                  "status",
+                  "add",
+                  "release",
+                  "report",
+                  "intake"
+                ]
+              },
+              "issues": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "runs": {
+                "type": "string"
+              },
+              "checks": {
+                "type": "string"
+              },
+              "engine": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "share": {
+                "type": "string"
+              },
+              "mode": {
+                "type": "string"
+              },
+              "report": {
+                "type": "string"
+              },
+              "decisions": {
+                "type": "string"
+              },
+              "intake": {
+                "type": "string"
+              },
+              "all": {
+                "type": "boolean"
+              },
+              "json": {
+                "type": "boolean"
+              },
+              "cwd": {
+                "type": "string"
+              },
+              "packageRoot": {
+                "type": "string"
+              },
+              "env": {
+                "type": "object",
+                "properties": {
+                  "HOME": {
+                    "type": "string"
+                  },
+                  "PATH": {
+                    "type": "string"
+                  },
+                  "CODEX_HOME": {
+                    "type": "string"
+                  },
+                  "CLAUDE_CONFIG_DIR": {
+                    "type": "string"
+                  },
+                  "PDD_RUNTIME_URL": {
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "command",
+              "issues",
+              "cwd",
+              "packageRoot",
+              "env"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "exitCode": {
+                "type": "integer"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "exitCode",
+              "message"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  ],
+  "limits": {
+    "max_steps": 10,
+    "max_model_calls": 12
+  },
+  "conventions": []
+}
 ```
 
 </details>

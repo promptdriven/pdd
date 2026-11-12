@@ -71,8 +71,8 @@ Number settings that a person may choose (for example `COLUMNS`, `LINES`, `HISTS
 - Load the [Prompting guide](../../docs/prompting-guide.md) for authoring and generation.
 - [Named local agents](agent-config.prompt.md) owns `loadAgentDefinitions` and the agents.json format, validation and `~` expansion; this module only selects an entry by name.
 - [Agent adapters](agent-adapters.prompt.md) owns the reusable `runAgentProcess` native process boundary, including closed input, process cleanup, bounded output, executableMissing evidence and the shared parseAgentAuthStatus credential-status rules. This module supplies only status commands, the caller environment and the probe bounds; it does not use Try discovery or invoke the model adapter.
-- The [CLI](pdd-cli.prompt.md) and [runner](workflow-runner.prompt.md) own setup/startup dispatch and all subsequent effects. A refused readiness result must not be interpreted as a started workflow. They do not infer readiness themselves.
-- Native command reference: [Claude Code CLI](https://code.claude.com/docs/en/cli-reference). Commands and accepted readiness facts are specified above so generation does not depend on a live documentation fetch.
+- The [CLI](pdd-cli.prompt.md#setup-and-workflow-admission) and [runner](workflow-runner.prompt.md#commands) own setup/startup dispatch and all subsequent effects. A refused readiness result must not be interpreted as a started workflow. They do not infer readiness themselves.
+- Navigation only: [Claude Code CLI](https://code.claude.com/docs/en/cli-reference). Commands and accepted readiness facts are specified above so generation does not depend on a live documentation fetch.
 
 <details>
 <summary>Runtime interface</summary>
