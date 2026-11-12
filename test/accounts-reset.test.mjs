@@ -1,7 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PassThrough } from 'node:stream';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { runReset } from '../src/accounts-reset.mjs';
+import { updatePool, readLog } from '../src/accounts-store.mjs';
+import { saveUsage, loadUsage } from '../src/accounts-usage.mjs';
+import { loginReadiness } from '../src/accounts-pick.mjs';
 
 // 14:05 PT on Nov 11, 2026. Every port is a fake: no test reaches Codex.
 const NOW = Date.UTC(2026, 10, 11, 22, 5), H = 3600000;
@@ -150,4 +156,37 @@ test('a closed output before the question gives one line and spends nothing', as
   const t = terminal('work3\n'), f = fakes();
   assert.deepEqual(await run({ ...t, stdout: { write: () => { throw Error('EPIPE'); } } }, f.ports), { exitCode: 1, message: 'pdd accounts reset failed. No reset was used.' });
   assert.equal(ports(f.calls).includes('consumeReset'), false);
+});
+
+test('the default ports work with the real pool store and usage cache on a temp HOME', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'pdd-reset-ports-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const env = { HOME: home };
+  const pool = { name: 'work3', provider: 'codex', home: join(home, 'codex', 'work3'), reset: 'ask', addedAt: '2026-11-11T20:00:00.000Z' };
+  await updatePool({ env }, current => ({ ...current, logins: [pool, { ...pool, name: 'cx5', home: join(home, 'codex', 'cx5'), reset: 'never' },
+    { ...pool, name: 'work4', home: join(home, 'codex', 'work4'), reset: 'auto' }] }));
+  const week = { usedPercent: 100, resetsAt: NOW + 54 * H + 3 * 60000 };
+  await saveUsage({ env }, {
+    work3: { state: 'ok', plan: 'pro', week, fiveHour: null, readAt: NOW - 60000, limitedUntil: week.resetsAt, limitReason: 'limit', resets: { left: 3, expiresAt: null }, note: '' },
+    cx5: { state: 'ok', plan: 'team', week: { usedPercent: 20, resetsAt: NOW + 3 * 24 * H }, fiveHour: null, readAt: NOW - 60000, note: '' },
+    work4: { state: 'unknown', plan: null, week: null, fiveHour: null, readAt: NOW - 60000, limitedUntil: NOW + 30 * H, limitReason: 'limit', note: 'usage read failed' },
+  });
+  const seen = [], ports = { now: () => NOW, timeZone: 'America/Los_Angeles', consumeReset: login => { seen.push(login.name); return { outcome: 'reset' }; }, notify: text => seen.push(text) };
+  assert.deepEqual(await runReset({ name: 'work3', env, ...terminal('work3\n') }, ports),
+    { exitCode: 0, message: 'You used a reset on work3 at 14:05 PT: its week would reset in 2 days 6 hours; 2 resets left' }, 'facts come from the real cache');
+  assert.deepEqual(seen, ['work3', 'A person at a terminal used a reset on work3 at 14:05 PT: its week would reset in 2 days 6 hours; 2 resets left']);
+  assert.deepEqual(await readLog({ env, name: 'work3' }), [{ at: '2026-11-11T22:05:00.000Z', action: 'reset', login: 'work3', detail: 'used by a person at a terminal' }]);
+  const cache = await loadUsage({ env });
+  assert.deepEqual([cache.work3.readAt, cache.work3.limitedUntil, cache.work3.limitReason], [null, null, null], 'the old 100% row and its limit are not trusted');
+  assert.equal(loginReadiness({ name: 'work3', provider: 'codex' }, cache.work3, NOW).reason, 'stale', 'the next pick reads work3 again');
+  assert.equal(cache.cx5.readAt, NOW - 60000, 'other rows stay');
+  assert.deepEqual(await runReset({ name: 'work3', env, ...terminal('work3\n') }, ports),
+    { exitCode: 2, message: 'work3 used a reset less than 24 hours ago. pdd allows one reset per login per day. No reset was used.' }, 'the real log blocks a second reset');
+  assert.equal((await runReset({ name: 'cx5', env, ...terminal('cx5\n') }, ports)).exitCode, 2, 'the real pool row says never');
+  assert.equal((await runReset({ name: 'work9', env, ...terminal('work9\n') }, ports)).message, 'No login named work9 in this pool. See pdd accounts list. No reset was used.');
+  assert.deepEqual(seen.filter(item => item === 'work3'), ['work3'], 'the fake reset ran once');
+  assert.equal((await runReset({ name: 'work4', env, ...terminal('work4\n') }, ports)).message, 'You used a reset on work4 at 14:05 PT');
+  const after = (await loadUsage({ env })).work4;
+  assert.deepEqual([after.readAt, after.limitedUntil, after.limitReason], [null, null, null], 'an old limit on a row that is not ok goes too');
+  assert.equal(loginReadiness({ name: 'work4', provider: 'codex' }, after, NOW).reason, 'stale');
 });

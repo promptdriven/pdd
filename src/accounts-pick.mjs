@@ -1,4 +1,4 @@
-// Generated from prompts/cli/accounts-pick.prompt.md (sha256: 56e687e44427f9463bae28b062afc54ac732d4d5d5a1cd4422e9a9309dd9f329).
+// Generated from prompts/cli/accounts-pick.prompt.md (sha256: 5badf2b4ba731d2475d700836f1fd1d1b2fa41f22ec4b57e0944d51a4041cb2b).
 export const STALE_MS = 600000, DAY_MS = 86400000, BACK_SOON_MS = 7200000;
 const HOUR_MS = 3600000, MINUTE_MS = 60000;
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -7,7 +7,7 @@ const own = (map, key) => object(map) && Object.hasOwn(map, key) ? map[key] : un
 const list = value => Array.isArray(value) ? value : [];
 const loginsOf = value => list(value).filter(login => object(login) && typeof login.name === 'string');
 const stopLine = value => finite(value) && value > 0 && value <= 100 ? value : 97;
-const result = (reason, until = null) => ({ ready: reason === 'ready', reason, until });
+const result = (reason, until = null) => ({ ready: reason === 'ready' || reason === 'renews', reason, until });
 
 // One window: absent (no limit), malformed, or { used, resetsAt } with resetsAt null when unknown.
 function windowOf(value) {
@@ -18,11 +18,15 @@ function windowOf(value) {
 
 export function loginReadiness(login, usageRow, now) {
   if (login?.paused === true) return result('paused');
-  if (!object(usageRow)) return result('stale');
-  const limitedUntil = finite(usageRow.limitedUntil) && usageRow.limitedUntil > now ? usageRow.limitedUntil : null;
+  const limitedUntil = object(usageRow) && finite(usageRow.limitedUntil) && usageRow.limitedUntil > now ? usageRow.limitedUntil : null;
   const limitedOr = other => limitedUntil === null ? result(other) : result('limited', limitedUntil);
+  // Claude has no usage read: only a limit that a step saw stops it.
+  if (login?.provider === 'claude') return limitedOr('ready');
+  if (!object(usageRow)) return result('stale');
   const fresh = finite(usageRow.readAt) && now - usageRow.readAt <= STALE_MS;
   if (!fresh) return limitedOr('stale');
+  // A full local login renews itself at the next step; an access copy cannot.
+  if (usageRow.state === 'expired' && usageRow.kind === 'full') return limitedOr('renews');
   if (['no-login', 'needs-sign-in', 'expired'].includes(usageRow.state)) return result(usageRow.state);
   const week = windowOf(usageRow.week), fiveHour = windowOf(usageRow.fiveHour);
   if (usageRow.state !== 'ok' || week.malformed || fiveHour.malformed) return limitedOr('unknown');
@@ -107,9 +111,11 @@ export function resetDecision({ logins, usage, now, workWaiting, resets, usedTod
   const decision = (action, reason, login = null, until = null, text = '') => ({ action, login, until, reason, text });
   if (!Number.isSafeInteger(workWaiting) || workWaiting < 1) return decision('none', 'no-work');
   const rows = readinessRows(logins, usage, now);
-  for (const reason of ['ready', 'stale', 'unknown']) {
+  const ready = rows.find(item => item.readiness.ready);
+  if (ready) return decision('none', 'quota', ready.login);
+  for (const reason of ['stale', 'unknown']) {
     const row = rows.find(item => item.readiness.reason === reason);
-    if (row) return decision('none', reason === 'ready' ? 'quota' : reason, row.login);
+    if (row) return decision('none', reason, row.login);
   }
   const back = soonest(rows.filter(row => ['week', 'five-hour', 'limited'].includes(row.readiness.reason)));
   const wait = reason => decision('wait', reason, back?.login ?? null, back?.readiness.until ?? null);

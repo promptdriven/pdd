@@ -16,17 +16,19 @@ call it.
 ## Inputs
 
 - **Login row**: a row of the pool file. This module reads only `name`,
-  `paused`, `reset` and `stop` (`stop.week`, `stop.fiveHour`). It ignores other
-  fields. A list entry that is not an object with a string `name` is not a login:
+  `provider`, `paused`, `reset` and `stop` (`stop.week`, `stop.fiveHour`). It
+  ignores other fields. A list entry that is not an object with a string `name` is not a login:
   every function leaves it out (also from counts).
 - **Stop line**: `stop.week` and `stop.fiveHour` in percent. A finite number
   above 0 and at most 100 is used. Any other value (absent, null, text, 0, 150)
   is 97.
 - **Usage rows**: `usage` is an object keyed by login name. Use only own
   properties (a login can be named `constructor`). A missing or non-object
-  `usage` is `{}`. A usage row has `state`, `week`, `fiveHour`, `readAt` and
-  `limitedUntil` (epoch milliseconds). A row that is absent, null or not an
-  object is a missing row.
+  `usage` is `{}`. A usage row has `state`, `kind`, `week`, `fiveHour`,
+  `readAt` and `limitedUntil` (epoch milliseconds). `kind` is `full` (the
+  folder holds a full login with a refresh token; this machine's Codex renews
+  it), `access` (an access-only copy; it never renews here) or null (not known).
+  A row that is absent, null or not an object is a missing row.
 - **Fresh**: `readAt` is a finite number and `now - readAt` is at most 600000
   (10 minutes). A row read exactly 10 minutes ago is fresh.
 - **Window**: `week` or `fiveHour`. An absent or null window has no limit (some
@@ -40,37 +42,45 @@ call it.
 ## Readiness
 
 `loginReadiness(login, usageRow, now)` returns a new object
-`{ ready, reason, until }`. `ready` is true only for reason `ready`. `until` is
-the epoch milliseconds when the login comes back by itself, or null. The first
-row that matches wins:
+`{ ready, reason, until }`. `ready` is true only for the reasons `ready` and
+`renews`. `until` is the epoch milliseconds when the login comes back by itself,
+or null. The first row that matches wins:
 
 | # | When | reason | until |
 |---|---|---|---|
 | 1 | `login.paused === true` | `paused` | null |
-| 2 | missing usage row | `stale` | null |
-| 3 | row not fresh, limited until is set | `limited` | `limitedUntil` |
-| 4 | row not fresh | `stale` | null |
-| 5 | `state` is `no-login`, `needs-sign-in` or `expired` | the same word | null |
-| 6 | `state` is not `ok`, or a present window is malformed | `limited` when limited until is set, else `unknown` | `limitedUntil` or null |
-| 7 | a blocked window has a known `resetsAt` at or before `now` | `limited` when limited until is set, else `stale` | `limitedUntil` or null |
-| 8 | the week window is blocked | `week` | see below |
-| 9 | the 5-hour window is blocked | `five-hour` | see below |
-| 10 | limited until is set | `limited` | `limitedUntil` |
-| 11 | otherwise | `ready` | null |
+| 2 | `login.provider === 'claude'` | `limited` when limited until is set (a row of any age), else `ready` | `limitedUntil` or null |
+| 3 | missing usage row | `stale` | null |
+| 4 | row not fresh, limited until is set | `limited` | `limitedUntil` |
+| 5 | row not fresh | `stale` | null |
+| 6 | `state` is `expired` and `kind` is `full` | `limited` when limited until is set, else `renews` | `limitedUntil` or null |
+| 7 | `state` is `no-login`, `needs-sign-in` or `expired` | the same word | null |
+| 8 | `state` is not `ok`, or a present window is malformed | `limited` when limited until is set, else `unknown` | `limitedUntil` or null |
+| 9 | a blocked window has a known `resetsAt` at or before `now` | `limited` when limited until is set, else `stale` | `limitedUntil` or null |
+| 10 | the week window is blocked | `week` | see below |
+| 11 | the 5-hour window is blocked | `five-hour` | see below |
+| 12 | limited until is set | `limited` | `limitedUntil` |
+| 13 | otherwise | `ready` | null |
 
-For rows 8 and 9, `until` is the latest of the blocked windows' `resetsAt` and,
+For rows 10 and 11, `until` is the latest of the blocked windows' `resetsAt` and,
 when set, `limitedUntil`. It is null when a blocked window has an unknown
 `resetsAt`. When both windows are blocked, the reason is `week`.
 
 Why this order:
-- A stale row is not trusted (row 4): the caller reads the login again and
+- A Claude login has no usage read (its usage row, when there is one, has state
+  `unknown` and kind null). Only a limit that a step saw stops it (row 2).
+- A stale row is not trusted (row 5): the caller reads the login again and
   then asks again. pdd never guesses from old numbers.
 - A limit that a step or a read saw holds until its time, even when the row is
-  old (row 3). A new read cannot make that login usable sooner.
-- A blocked window whose reset time has passed (row 7) has probably reset. A
+  old (row 4). A new read cannot make that login usable sooner.
+- A full local login whose access token ended is usable (row 6): its own Codex
+  renews it at the next step on this machine, which is its refresher. Its usage
+  is not known, because the read never refreshes. An access copy whose access
+  ended cannot renew here, so it stays `expired` (row 7).
+- A blocked window whose reset time has passed (row 9) has probably reset. A
   past reset time alone never proves that, so the caller reads again.
-- `no-login`, `needs-sign-in` and `expired` need a person or a refresh. They
-  never come back by themselves, so `until` is null.
+- `no-login`, `needs-sign-in` and `expired` (row 7) need a person or another
+  refresher. They never come back by themselves, so `until` is null.
 
 ## Pick and summary
 
@@ -123,8 +133,8 @@ Output fields:
   to the owner), or `reset` (use one reset on `login` now; after a reset that
   succeeds, send the owner notice in `text`).
 - `login`: a login row (the same object that the caller gave) or null. For
-  `none` with `quota`, `stale` or `unknown` it is the first login in order with
-  that readiness; for `no-work` it is null. For `wait` it is back first (below),
+  `none` with `quota` it is the first ready login in order; with `stale` or
+  `unknown`, the first login in order with that reason; for `no-work` it is null. For `wait` it is back first (below),
   or null. For `ask` and `reset` it is the chosen login.
 - `until`: epoch milliseconds or null. For `none` it is null. For `wait` it is
   back first's `until`, or null. For `ask` and `reset` it is the chosen login's
@@ -146,7 +156,7 @@ run in this order. The first one that stops gives the result:
 | Step | Plan rule | Check | Result when it stops |
 |---|---|---|---|
 | 1 | 1. work waits | `workWaiting` is work | `none`, `no-work` |
-| 2 | 2. no other quota | no login is ready | `none`, `quota` |
+| 2 | 2. no other quota | no login is ready (reason `ready` or `renews`) | `none`, `quota` |
 | 3 | 2 | no login is `stale` (read it again first) | `none`, `stale` |
 | 4 | 2 | no login is `unknown` (it may have quota) | `none`, `unknown` |
 | 5 | setting | some login allows a reset | `wait`, `not-allowed` |

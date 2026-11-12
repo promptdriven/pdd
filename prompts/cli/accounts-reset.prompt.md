@@ -80,10 +80,11 @@ The second line ends with one space and no newline.
   `appendLog` throws, keep the exit code and add one sentence to the message:
   `. The local log could not be written.` after the notice (it has no period),
   or ` The local log could not be written.` after the unclear message.
-- **Forget**: `await ports.forgetUsage(name)` removes the login's cached usage
-  row, so the next pick reads the login again instead of trusting the old 100%.
-  Without this, Autopilot can see the old row and spend a reset on another
-  login. A throw here changes nothing else.
+- **Forget**: `await ports.forgetUsage(name)` marks the login's cached usage
+  row as not read and not limited, so the next pick reads the login again
+  instead of trusting the old 100% or the old limit. Without this, Autopilot can
+  see the old row and spend a reset on another login. A throw here changes
+  nothing else.
 - **Owner notice**: `resetNoticeText` from [the pick rules](accounts-pick.prompt.md#reset-texts)
   with `until` = the cached usage row's `week.resetsAt` and `left` = its
   `resets.left` (each only when it is a finite number). Read the row with
@@ -105,7 +106,7 @@ All outside effects are ports. Tests give fakes for every one of them.
 | `readLog(name)` | `readLog({ env, name })` from `./accounts-store.mjs` |
 | `appendLog(row)` | `appendLog({ env }, row)` from `./accounts-store.mjs` |
 | `readUsage(name)` | the own property NAME of `loadUsage({ env })` from `./accounts-usage.mjs`, else null |
-| `forgetUsage(name)` | `loadUsage({ env })`, delete own property NAME, `saveUsage({ env }, rows)` from `./accounts-usage.mjs` |
+| `forgetUsage(name)` | from `./accounts-usage.mjs`: when `loadUsage({ env })` has an own row NAME, `saveUsage({ env }, { NAME: { ...row, state: 'ok', readAt: null, limitedUntil: null, limitReason: null, note: 'a reset was used; read it again' } })`. `saveUsage` merges rows into the cache (it keeps other rows), so a delete cannot remove a row. It keeps an old limit for a row whose state is not `ok`, so the row is saved with state `ok`. A row without `readAt` is stale, so its state is never trusted. |
 | `notify(text)` | none (no alert channel without a repository yet) |
 | `consumeReset(login)` | none (see below) |
 

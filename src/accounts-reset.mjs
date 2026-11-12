@@ -1,4 +1,4 @@
-// Generated from prompts/cli/accounts-reset.prompt.md (sha256: e2c5348fa2b68324ab593a9608da16ac07b269f4e4353c0d61cc51b52f9930b2).
+// Generated from prompts/cli/accounts-reset.prompt.md (sha256: 0695faeccbfd1a19fa852ab1c4607df25620f460c1059a7c7a8854ccf5de0d68).
 import { createInterface } from 'node:readline';
 import { approvalActor } from './approval-policy.mjs';
 import { resetNoticeText, usedTodayFromLog } from './accounts-pick.mjs';
@@ -22,12 +22,12 @@ function defaultPorts(env) {
     readLog: async name => (await store()).readLog({ env, name }),
     appendLog: async row => (await store()).appendLog({ env }, row),
     readUsage: async name => ownRow(await (await usage()).loadUsage({ env }), name),
+    // saveUsage merges rows and keeps an old limit unless the state is ok; no readAt makes the row stale.
     forgetUsage: async name => {
       const { loadUsage, saveUsage } = await usage();
-      const rows = await loadUsage({ env });
-      if (!object(rows) || !Object.hasOwn(rows, name)) return;
-      delete rows[name];
-      await saveUsage({ env }, rows);
+      const row = ownRow(await loadUsage({ env }), name);
+      if (!object(row)) return;
+      await saveUsage({ env }, { [name]: { ...row, state: 'ok', readAt: null, limitedUntil: null, limitReason: null, note: 'a reset was used; read it again' } });
     },
   };
 }

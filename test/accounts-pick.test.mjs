@@ -37,6 +37,37 @@ test('readiness: states that need a person never come back by themselves; a bad 
   assert.deepEqual(loginReadiness(login('cx5'), row({ state: 'unknown', limitedUntil: NOW + H }), NOW), { ready: false, reason: 'limited', until: NOW + H });
 });
 
+test('readiness: a full local login whose access ended renews itself; an access copy whose access ended does not', () => {
+  const ended = extra => row({ state: 'expired', week: null, fiveHour: null, accessExpiresAt: NOW - H, ...extra });
+  assert.deepEqual(loginReadiness(login('cx5'), ended({ kind: 'full' }), NOW), { ready: true, reason: 'renews', until: null });
+  assert.deepEqual(loginReadiness(login('work1'), ended({ kind: 'access' }), NOW), { ready: false, reason: 'expired', until: null });
+  assert.deepEqual(loginReadiness(login('work1'), ended({ kind: null }), NOW), { ready: false, reason: 'expired', until: null });
+  assert.deepEqual(loginReadiness(login('cx5'), ended({ kind: 'full', limitedUntil: NOW + 2 * H }), NOW), { ready: false, reason: 'limited', until: NOW + 2 * H });
+  assert.equal(loginReadiness(login('cx5'), ended({ kind: 'full', readAt: NOW - H }), NOW).reason, 'stale', 'an old row is read again first');
+  assert.equal(loginReadiness(login('cx5', { paused: true }), ended({ kind: 'full' }), NOW).reason, 'paused');
+});
+
+test('pick and summary: a login that renews itself is used and counted as ready', () => {
+  const logins = [login('cx5'), login('cx6')];
+  const usage = { cx5: weekOut(2 * DAY), cx6: row({ state: 'expired', kind: 'full', week: null, fiveHour: null }) };
+  const picked = pickLogin({ logins, usage, now: NOW });
+  assert.deepEqual([picked.login.name, picked.readiness], ['cx6', { ready: true, reason: 'renews', until: null }]);
+  assert.deepEqual(poolSummary({ logins, usage, now: NOW }), { ready: 1, total: 2, next: 'cx6', nextFree: { name: 'cx5', at: NOW + 2 * DAY } });
+});
+
+test('readiness: a Claude login has no usage read; only a limit that a step saw stops it', () => {
+  const claude = (extra = {}) => login('cl1', { provider: 'claude', home: '/fake/claude/cl1', ...extra });
+  const unread = extra => ({ state: 'unknown', kind: null, plan: null, week: null, fiveHour: null, accessExpiresAt: null, readAt: null, limitedUntil: null, limitReason: null, note: '', ...extra });
+  assert.deepEqual(loginReadiness(claude(), undefined, NOW), { ready: true, reason: 'ready', until: null });
+  assert.deepEqual(loginReadiness(claude(), unread(), NOW), { ready: true, reason: 'ready', until: null });
+  assert.deepEqual(loginReadiness(claude(), unread({ readAt: NOW - 5 * H }), NOW), { ready: true, reason: 'ready', until: null });
+  assert.deepEqual(loginReadiness(claude(), unread({ limitedUntil: NOW + 3 * H, limitReason: 'limit' }), NOW), { ready: false, reason: 'limited', until: NOW + 3 * H });
+  assert.deepEqual(loginReadiness(claude(), unread({ limitedUntil: NOW - 1 }), NOW), { ready: true, reason: 'ready', until: null });
+  assert.deepEqual(loginReadiness(claude({ paused: true }), unread(), NOW), { ready: false, reason: 'paused', until: null });
+  const logins = [claude(), login('cl2', { provider: 'claude' })];
+  assert.equal(pickLogin({ logins, usage: { cl1: unread({ limitedUntil: NOW + H }) }, now: NOW }).login.name, 'cl2');
+});
+
 test('readiness: the stop lines of the login row decide week and five-hour limits', () => {
   assert.deepEqual(loginReadiness(login('cx5'), row({ week: win(97, NOW + 2 * DAY) }), NOW), { ready: false, reason: 'week', until: NOW + 2 * DAY });
   assert.equal(loginReadiness(login('cx5'), row({ week: win(96.9, NOW + 2 * DAY) }), NOW).reason, 'ready');
@@ -119,6 +150,9 @@ test('rule 2: another login with quota means no reset; an old or unknown row is 
   assert.equal(decide({ logins, resets, usage: { work3: weekOut(WEEK_IN), cx5: row({ readAt: NOW - H }) } }).reason, 'stale');
   assert.equal(decide({ logins, resets, usage: { work3: weekOut(WEEK_IN), cx5: row({ state: 'unknown' }) } }).reason, 'unknown');
   assert.equal(decide({ logins, resets, usage: { work3: weekOut(WEEK_IN), cx5: row({ state: 'needs-sign-in' }) } }).action, 'reset', 'a login that needs a person is out');
+  assert.deepEqual(decide({ logins, resets, usage: { work3: weekOut(WEEK_IN), cx5: row({ state: 'expired', kind: 'full' }) } }),
+    { action: 'none', login: logins[1], until: null, reason: 'quota', text: '' }, 'a login that renews itself has quota');
+  assert.equal(decide({ logins, resets, usage: { work3: weekOut(WEEK_IN), cx5: row({ state: 'expired', kind: 'access' }) } }).action, 'reset', 'an ended access copy is out');
 });
 
 test('rule 3: never a reset for a 5-hour limit', () => {
