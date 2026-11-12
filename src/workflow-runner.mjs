@@ -2890,7 +2890,7 @@ async function stepDoneCommand({ step, summary, skipped, cwd, packageRoot = PACK
   if (run.workflow === 'bug' && step === 'reproduce' && reason === null) {
     try {
       const note = join(run.runDir, 'reproduce.md');
-      let text = record.summary;
+      let text = summary;
       try {
         if (!lstatSync(note).isFile()) throw Object.assign(Error('reproduce.md must be a regular file.'), { code: 'bug-cause-invalid' });
         text = readFileSync(note, 'utf8');

@@ -29,6 +29,32 @@ test('2841: reproduce persists cause and publishes its fixed lines from the save
   assert.ok(e.lines.every(x=>!x.includes('edited later')));
 });
 
+test('2841: summary fallback preserves exact whitespace in saved and published relation evidence', async t => {
+ const {writeRun}=await import('../src/workflow-runs.mjs');
+ const f=await fixture(t,{name:'bug'});await f.run();const run=f.record();
+ run.areas=[{name:'story',steps:['reproduce'],optional:[],gate:'pr'}];run.area=0;run.gate=null;writeRun(run,f.ports);
+ writeFileSync(join(run.root,'value.mjs'),'export const value = 2;\n');f.git(run.root,'add','.');f.git(run.root,'commit','-qm','change');
+ const row={...relation(),quote:'Value  is fixed.'};
+ const summary=text([row]);
+ const p=f.agentPorts({issues:{read:async()=>({json:JSON.stringify({...issue(),body:'Value  is fixed.'})})}});
+ const r=await stepDone({step:'reproduce',summary,cwd:run.root},p);
+ assert.equal(r.exitCode,0,r.message);
+ const saved=f.record().done.reproduce;
+ assert.deepEqual(saved.bugCause.relations,[row]);
+ assert.equal(saved.bugCause.relationsLine,'Relations: '+JSON.stringify([row]));
+ assert.ok(f.prs[0].body.includes('Relations: `'+JSON.stringify([row])+'`'));
+ assert.ok(saved.summary.includes('Value is fixed.'));
+});
+
+test('2841: summary fallback refuses a quote absent from the literal evidence',async t=>{
+ const f=await fixture(t,{name:'bug'});await f.run();const run=f.record();
+ const row={...relation(),quote:'Value  is fixed.'};
+ const p=f.agentPorts({issues:{read:async()=>({json:JSON.stringify(issue())})}});
+ const r=await stepDone({step:'reproduce',summary:text([row]),cwd:run.root},p);
+ assert.notEqual(r.exitCode,0);assert.match(r.message,/Quote not found/);
+ assert.equal(f.record().done.reproduce,undefined);
+});
+
 test('2841: no cause keeps legacy completion and a symlinked reproduce note is refused',async t=>{
  const f=await fixture(t,{name:'bug'});await f.run();const run=f.record();
  assert.equal((await stepDone({step:'reproduce',summary:'Could not reproduce',cwd:run.root},f.agentPorts())).exitCode,0);
