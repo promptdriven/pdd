@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: fcb75cca658782f7cff47a4c152c235a157af73fb4d478f03f9d6fa3e87924c0).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 8e86e6184c2b5fc7249f72986e244daf98d3b397bf7234b424b97f2534f08424).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
@@ -1548,6 +1548,56 @@ function nativeSourceIdentity(context, rows) {
   catch { return {tests,sha256:null}; }
 }
 
+// The saved local-layout contract is deliberately distinct from legacy native-only batches.
+function localLayoutResult(batch, summary) {
+  const keys = (value, names) => value && typeof value === 'object' && !Array.isArray(value)
+    && isDeepStrictEqual(Object.keys(value).sort(), names.split(' ').sort());
+  const paths = values => Array.isArray(values) && values.every(path => typeof path === 'string' && path.length
+    && !/^[a-zA-Z]:|^[\\/]|[\\\x00-\x1f\x7f]/.test(path) && path.split('/').every(part => part && part !== '.' && part !== '..' && part !== '.git'))
+    && isDeepStrictEqual(values, [...new Set(values)].sort());
+  if (!keys(batch, 'version batch root created_at intent local_only source_sha256 local_scope summary_line exit_code warnings problems rows lint')
+    || batch.version !== 1 || !BATCH.test(batch.batch) || typeof batch.root !== 'string' || !batch.root.startsWith('/')
+    || typeof batch.created_at !== 'string' || !Number.isFinite(Date.parse(batch.created_at))
+    || batch.intent !== 'lint-only' || batch.local_only !== true || batch.source_sha256 !== null
+    || !keys(batch.local_scope, 'tests prompts') || !paths(batch.local_scope.tests) || !paths(batch.local_scope.prompts)
+    || typeof batch.summary_line !== 'string' || ![0, 4].includes(batch.exit_code)
+    || !Array.isArray(batch.warnings) || !batch.warnings.every(item => typeof item === 'string')
+    || !Array.isArray(batch.problems) || !batch.problems.every(item => (keys(item, 'code path message') || keys(item, 'code path message section')) && Object.values(item).every(value => typeof value === 'string'))
+    || !Array.isArray(batch.rows) || batch.rows.length || !keys(batch.lint, 'state lint_state reason request_ids')
+    || batch.lint.state !== 'partial' || batch.lint.lint_state !== 'partial'
+    || !isDeepStrictEqual(batch.lint.reason, {code:'local-only',message:'checked SVG layout only; prompts not checked'})
+    || !Array.isArray(batch.lint.request_ids) || batch.lint.request_ids.length) return null;
+  const result = {batch:batch.batch,repo:batch.root,exit_code:batch.exit_code,state:'partial',lint_state:'partial',reason:batch.lint.reason,
+    local_only:true,local_scope:batch.local_scope,summary_line:batch.summary_line,warnings:batch.warnings,problems:batch.problems,rows:[],report_url:null};
+  return isDeepStrictEqual(summary, result) ? result : {...result,exit_code:2,
+    summary_line:'Local lint result not saved (the local save did not finish). partial (local-only).'};
+}
+
+function printLocalLayout(context, result) {
+  if (result.exit_code === 2) line(context.ports.stderr,'Could not save local lint result. Run a fresh pdd lint --local after fixing the state folder.');
+  line(context.ports.stdout, context.json ? JSON.stringify(result) : [...result.problems.map(item => `${item.code}: ${item.message}`), ...result.warnings, result.summary_line].join('\n'));
+  return result.exit_code;
+}
+
+function saveLocalLayout(context, {root, tests, prompts, warnings, problems, summary}) {
+  const store = stateFor(context.ports.env,root), now = context.ports.now(), batch = batchId(now,context.ports.randomUUID);
+  try {
+    const record = {version:1,batch,root,created_at:new Date(now).toISOString(),intent:'lint-only',local_only:true,source_sha256:null,
+      local_scope:{tests:[...new Set(tests)].sort(),prompts:[...new Set(prompts)].sort()},summary_line:summary,exit_code:problems.length ? 4 : 0,
+      warnings,problems,rows:[],lint:{state:'partial',lint_state:'partial',reason:resultOutcome({state:'partial',note:{code:'local-only',message:'checked SVG layout only; prompts not checked'}}).reason,request_ids:[]}};
+    const projection = localLayoutResult(record,null);
+    if (!projection) throw new Error('Local lint record cannot satisfy the saved result contract, including safe inspected scope.');
+    const result = {...projection,exit_code:record.exit_code,summary_line:record.summary_line};
+    const folder = join(store.folder('batches'),batch);
+    // Exclusive creation keeps every previous batch intact even if the ordinary ID collides.
+    mkdirSync(folder,{mode:0o700});
+    store.write(join(folder,'batch.json'),record);
+    store.saveRepo(root,{...store.repo(root),last_batch:batch});
+    store.write(join(folder,'summary.json'),result);
+    return result;
+  } catch (error) { throw new Stop(2,`Could not save local lint result in PDD_STATE_DIR: ${error.message}`); }
+}
+
 // Local omissions are evidence too; recording them needs no owner token or job.
 function saveLocalNativeResult(context, rows, intent, problems = []) {
   const startedAt = context.ports.now(), batch = batchId(startedAt, context.ports.randomUUID);
@@ -2608,10 +2658,17 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
   const timeout = options['--timeout'] === undefined ? quiet ? AGENT_WAIT_MIN : null : Number(options['--timeout']);
   context.deadline ??= timeout === null ? Infinity : ports.now() + timeout * 60_000;
   context.timeoutMin = timeout; context.agentLimit = false;
-  const name = batchWord ?? store.repo(root).last_batch;
+  const name = batchWord ?? store.read(join(store.dir,'repos',`${store.repoKey(root)}.json`))?.last_batch;
   if (!name || !BATCH.test(name)) throw new Stop(2, name ? 'BATCH looks like 20261027-092747-k3f9.' : 'No saved check for this repository. Run pdd test first.');
   context.folder = join(store.dir, 'batches', name);
   if (!statOrNull(join(context.folder, 'batch.json'))) throw new Stop(2, `No saved batch ${name}.`);
+  const local = localLayoutResult(store.read(join(context.folder,'batch.json')),store.read(join(context.folder,'summary.json')));
+  if (local) {
+    if (local.repo !== root) throw new Stop(2,'This saved batch belongs to a different repository.');
+    context.localLayout = local;
+    if (quiet) return local.rows;
+    return printLocalLayout(context,local);
+  }
   await ownBatch(context, name);
   const saved = store.read(join(context.folder, 'batch.json'));
   if (!saved) throw new Stop(2, `No saved batch ${name}.`);
@@ -2758,6 +2815,10 @@ async function runRetry(context, name, options) {
   const timeout = options['--timeout'] === undefined ? AGENT_WAIT_MIN : Number(options['--timeout']);
   context.deadline = ports.now() + timeout * 60_000;
   const rows = await runRead(context, name, true, options);
+  if (context.localLayout) {
+    line(ports.stderr,'For new evidence, run a fresh pdd lint --local.');
+    return () => printLocalLayout(context,context.localLayout);
+  }
   if (context.intent !== undefined && context.intent !== 'check') throw new Stop(2, 'The saved batch has no Check intent. Start a fresh selected pdd test.');
   if (context.localOnly) return () => printResult(context, rows);
   if (context.interrupted || ports.now() >= context.deadline) return () => printResult(context, rows);
@@ -3005,17 +3066,18 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
       if (options['--local'] !== true || options['--lint'] !== true || Object.keys(options).some(name => !['--lint', '--local', '--json'].includes(name))) throw new Stop(2, '--local requires --lint and accepts only Story words and --json.');
       try {
         const root = repoRoot(cwd), workspace=loadRuntimeWorkspace({root}), files = gitFiles(root).filter(path=>allowsRuntimePath(workspace,path));
-        let promptPaths;
+        let promptPaths, tests = [];
         if (words.length) {
           const { found, normalized } = localSetup(cwd, words), selected = select(found, normalized, root);
-          promptPaths = ports.captureSource(root, { tests: selected.filter(test => !test.error).map(test => test.path), appMap: null }).files.map(file => file.path).filter(path => path.endsWith('.prompt.md'));
+          tests = selected.filter(test => !test.error).map(test => test.path);
+          promptPaths = ports.captureSource(root, { tests, appMap: null }).files.map(file => file.path).filter(path => path.endsWith('.prompt.md'));
         }
         // Interface findings refuse only a repository-wide local lint; a selected one gives advice only.
         const problems = words.length ? [] : interfaceFindings({root,paths:promptPaths}).filter(localInterfaceProblem);
         const advice = formatAdvice(root, new Set(gitFiles(root)), promptPaths ?? files.filter(path => path.endsWith('.prompt.md')), workspace);
         const warnings = [...advice, ...lintSvgLayouts({ root, files, promptPaths })], summary = `partial: checked SVG layout only; prompts not checked (local-only). ${warnings.length} warnings. 0 AI calls. No checks were sent.`;
-        line(ports.stdout, context.json ? JSON.stringify({ repo: root, exit_code: problems.length ? 4 : 0, state: problems.length ? 'refused' : 'partial', lint_state: 'partial', ...resultOutcome({state:'partial',note:{code:'local-only',message:'checked SVG layout only; prompts not checked'}}), rows: [], problems, warnings, summary_line: summary }) : [...problems.map(item => `${item.code}: ${item.message}`), ...warnings, summary].join('\n'));
-        return problems.length ? 4 : 0;
+        const result = saveLocalLayout(context,{root,tests,prompts:promptPaths ?? files.filter(path => path.endsWith('.prompt.md')),warnings,problems,summary});
+        return printLocalLayout(context,result);
       } catch (error) { throw new Stop(2, error.message); }
     }
     const modes = ['--read', '--retry', '--fill-hash', '--files', '--explain-bindings', '--request', '--lint'].filter(name => options[name] !== undefined);
