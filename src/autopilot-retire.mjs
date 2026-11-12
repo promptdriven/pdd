@@ -118,7 +118,7 @@ export function parseProcesses(text) {
 async function stopOldProcesses(ctx) {
   const { ports, self } = ctx, list = async () => {
     const rows = parseProcesses(await ports.processes());
-    return Array.isArray(rows) && rows.some(row => self.has(row.pid)) ? rows : null;
+    return Array.isArray(rows) && rows.some(row => row.pid === process.pid) ? rows : null;
   };
   const first = await list();
   // A selected root can leave its group or later become parentless. Capture its

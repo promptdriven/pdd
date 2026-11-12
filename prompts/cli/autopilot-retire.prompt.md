@@ -37,7 +37,7 @@ Export:
 - `procTable(fs, root = '/proc')`: the same rows as text, read from Linux `/proc` (`cmdline`, `status` uid, and ppid,
   process group, start identity and rss pages from `stat`), for a machine without `ps`; only a PID confirmed gone during reads is skipped. An unreadable live row or a missing uid or start identity makes the inventory unavailable.
 - The live workers step reads the global process table while this launcher is running. The table must include this
-  launcher process; otherwise it is unavailable and the step stays unfinished. No selected old workers is a valid
+  launcher's PID; otherwise it is unavailable and the step stays unfinished. No selected old workers is a valid
   no-op when the launcher row proves the table is complete.
 - `moveLine(state, journal)` and `moveToCore({state, stateFile, repoEngine}, ports)`.
 
