@@ -15,6 +15,7 @@ const routes = {
   'invalid-proof': [core, 'PR proof rejects'],
   'new-head': [core, 'D1 base refresh'],
   'behavioral-repair': [core, 'long suite failure|repair finding references'],
+  'mechanical-repair': [core, 'mechanical red-check recovery|Q3 an agent conflict'],
   'missing-regression': [formal, 'bounded proof gate'],
   'nonbehavioral-repair': [core, 'nonbehavioral repair reason'],
   'attention': [core, 'attention snapshot|R5 should-fix'],

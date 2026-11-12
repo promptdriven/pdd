@@ -29,6 +29,11 @@
       "expect": "The fresh reviewer checks the case and records its path, command, result and failing reproduction before the repaired head can pass."
     },
     {
+      "id": "mechanical-repair",
+      "given": "Review, suite or CI finds a defect after a mechanical package merge; its recovery needs a new regression file outside the former conflict hunks.",
+      "expect": "The recovery brief permits the regression under the repair ownership rules, retains the finding for fresh proof, and counts the added file against the repair budget. Unresolved conflicts keep their hunk-only restrictions."
+    },
+    {
       "id": "missing-regression",
       "given": "A repaired behavioral finding has no tracked case, passing command or failing reproduction, including when the finding repeats.",
       "expect": "The reviewer cannot pass the repaired head."

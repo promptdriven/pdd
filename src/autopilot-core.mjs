@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 68fcf699ed874a0e8d42288c08f178b84689b40af15ffc243ec1b7866d8188ae).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 208a109bdb7dba3c948413ea73b5e84d79ae9941473d23a8455040730c62af8b).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -485,9 +485,9 @@ Before you exit, write this JSON file: ${result}
 {"verdict":"PASS" or "FAIL","head":"${job.head}","summary":"<one paragraph>","mustFix":["<each required fix>"],"proof":{"head":"${job.head}","checks":[{"command":"<executed command>","result":"pass"}],"behavior":{"result":"pass or not-applicable","detail":"<exercise or reason>"},"regressions":[{"finding":"<supplied finding>","path":"<tracked case>","command":"<executed command>","result":"pass","before":"<failing reproduction>"}]}}. Use the supplied reference or full finding text in finding; for shared evidence use a nonempty findings array or findings: "all" instead of finding. Use "all" only when findings were supplied and the evidence record covers every supplied finding at this head; verify each finding's regression. Every R reference must be supplied and every finding covered; extra full-text evidence is allowed. For a finding without changed public behavior, a regression can instead be {"finding":"<finding>","result":"not-applicable","reason":"<reason>"}. A FAIL names at least one required fix. Start each item with its severity and its place: "P1 file:line ..." (wrong behavior or unsafe), "P2 file:line ..." (must be fixed before the merge) or "P3 file:line ..." (a follow-up that does not block the merge). One item per finding. A PASS lists only P3 items: any other item blocks the merge.
 `;
 
-const conflictPrompt = (ctx, job, info, result) => `You are an Autopilot core conflict job for ${ctx.repo}, issue #${job.issue}, PR #${job.pr} on branch ${job.branch}.
+const conflictPrompt = (ctx, job, info, result) => info.reds?.length ? repairPrompt(ctx, job, info.reds, result) : `You are an Autopilot core conflict job for ${ctx.repo}, issue #${job.issue}, PR #${job.pr} on branch ${job.branch}.
 Work only in this folder: ${job.worktree}. The base origin/${ctx.state.baseBranch} moved, and merging it into ${job.branch} conflicts in: ${info.files.join(', ')}.
-${info.reds?.length ? `A mechanical merge of the base gave red checks:\n${info.reds.map(red => `- ${red}`).join('\n')}\n` : ''}The conflict hunks (ours = the PR, base, theirs = the base branch):
+The conflict hunks (ours = the PR, base, theirs = the base branch):
 ${info.hunks || '(see git merge)'}
 
 Merge origin/${ctx.state.baseBranch} into ${job.branch} (git fetch origin ${ctx.state.baseBranch} && git merge origin/${ctx.state.baseBranch}), resolve only these conflicts, commit and push to the same branch. Change only lines inside the conflict hunks; add no files; run the focused tests. Do not wait for CI and do not run the full test suite. Autopilot runs both after you finish. For an add/add of one new path, make one file from both; if the two specs disagree, stop and say so with the result {"outcome":"failed","kind":"job","code":"duplicate-design","cause":"<both specs and how they disagree>"}. Do not open a new PR, never force-push, never close the issue.

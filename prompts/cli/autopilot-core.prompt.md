@@ -656,7 +656,12 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    3-way (union of keys, a key changed on both sides is not mechanical, arrays that
    both sides only extend keep both additions). The fixed merge is committed and
    pushed; the suite and CI run on it; red checks on that head start an agent update
-   instead of a repair. Anything else (the same lines edited on both sides, an add/add
+   instead of a repair. That update receives the Repair brief and build rules,
+   including the regression requirement above: it may add regression files and change
+   tests or owned behavior outside the former conflict hunks as needed for the red
+   findings. The hunk-only and no-new-files restrictions below do not apply to this
+   red-check recovery; the existing repair-budget comparison still applies to its
+   resulting changes. Anything else (the same lines edited on both sides, an add/add
    of one path, a missing side, binary) is an **agent conflict update** outside the
    lane: leave the lane, count `conflictExits`, start a `conflict` job in the job
    worktree with the three-sided hunks and the rules (merge the base, change only lines

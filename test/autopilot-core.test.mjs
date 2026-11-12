@@ -2359,6 +2359,7 @@ test('Q3 an agent conflict gets a fresh review after a base update outside the l
   const fix = w.job(17, 'conflict');
   assert.ok(fix, 'an agent conflict job'); assert.equal(w.job(17, 'repair'), undefined);
   assert.match(fix.input, /conflicts in: list\.txt/); assert.match(fix.input, /<<<<<<< HEAD[\s\S]*beta from the PR[\s\S]*beta from the base/);
+  assert.match(fix.input, /Change only lines inside the conflict hunks; add no files/);
   assert.ok(!pr.labels.includes('pdd:merge-lane'), 'the PR left the lane');
   // The agent merges the base and keeps both lines inside the hunk.
   const cwd = fix.cwd; w.git(cwd, 'fetch', '-q', 'origin', 'main');
@@ -3315,6 +3316,44 @@ test('mechanical head review finding is supplied to the next reviewer', async t 
   w.review(17, 'FAIL', ['P2 src/a.js:3 lost behavior']); await w.tick();
   assert.match(w.job(17, 'conflict').input, /lost behavior/);
   assert.ok(jobFile(w, 17).repairFindings.includes('P2 src/a.js:3 lost behavior'));
+});
+
+for (const red of ['review', 'suite', 'CI']) test(`mechanical red-check recovery permits regression work after ${red} failure`, async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.baseCommit('package.json', '{"name":"x"}\n');
+  w.issue(17); await w.tick();
+  editIn(w, 17, 'package.json', '{"name":"x","repository":"pr"}\n');
+  w.build(17); await greenLane(w, 17);
+  w.baseCommit('package.json', '{"name":"x","keywords":["base"]}\n');
+  await w.tick();
+  const mechanical = jobFile(w, 17);
+  assert.ok(mechanical.mechanical);
+  await w.tick();
+  w.github.setChecks(mechanical.head, red === 'CI' ? 'failure' : 'success');
+  w.suite(17, red === 'suite' ? 1 : 0);
+  w.review(17, red === 'review' ? 'FAIL' : 'PASS', red === 'review' ? ['P2 src/a.js:3 lost behavior'] : []);
+  await w.tick();
+  const fix = w.job(17, 'conflict'), pending = jobFile(w, 17);
+  assert.ok(fix, 'a red mechanical head uses the conflict recovery route');
+  assert.match(fix.input, /For each finding that changes public behavior retain a tracked regression case/);
+  assert.match(fix.input, /failing old-code or planted reproduction/);
+  assert.match(fix.input, /change the owning prompt first/);
+  assert.match(fix.input, /update the "Runtime:" and "Evidence:" lines/);
+  assert.doesNotMatch(fix.input, /Change only lines inside the conflict hunks|add no files/);
+  assert.ok(pending.repairFindings.length, 'the red findings survive recovery');
+  assert.equal(pending.repairs, 0, 'dispatch itself is a base update');
+
+  // Adding a regression outside package.json is allowed, but still uses a repair.
+  editIn(w, 17, 'test/merge-regression.test.mjs', 'import assert from "node:assert/strict";\nimport { readFileSync } from "node:fs";\nassert.equal(JSON.parse(readFileSync("package.json")).repository, "pr");\n');
+  w.git(fix.cwd, 'add', '.'); w.git(fix.cwd, 'commit', '-qm', 'retain merge regression');
+  w.build(17, { role: 'conflict', write: false }); await w.tick();
+  const repaired = jobFile(w, 17), review = w.job(17, 'review');
+  assert.equal(repaired.repairs, 1, 'the added regression uses the existing repair budget');
+  assert.notEqual(review.head, mechanical.head);
+  assert.equal(w.git(fix.cwd, 'ls-files', 'test/merge-regression.test.mjs'), 'test/merge-regression.test.mjs');
+  for (const finding of pending.repairFindings) assert.ok(review.input.includes(JSON.stringify(finding)), 'fresh proof covers the original finding');
+  assert.match(review.input, /verify its regression case is tracked at this head/);
+  assert.equal(w.github.merges.length, 0, 'the repaired head still needs fresh proof');
 });
 
 test('nonbehavioral repair reason is accepted and missing regression is rejected', async t => {
