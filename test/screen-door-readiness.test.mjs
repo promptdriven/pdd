@@ -114,6 +114,44 @@ test('Screen readiness public CLI regression: synthetic door protocol and actual
     page = door({ content: markup }); const result = await run();
     assert.equal(result.exit, 1, result.stderr || result.stdout); assert.equal(result.report.rows.find(row => row.part === '“READY”').status, status);
   });
+  for (const [effect, css] of [
+    ['filter', 'filter:opacity(0)'],
+    ['clip-path', 'clip-path:inset(100%)'],
+    ['clip', 'position:absolute;clip:rect(0px,0px,0px,0px)'],
+    ['mask', 'mask-image:linear-gradient(transparent,transparent)'],
+  ]) for (const [target, selector] of [['iframe host', 'iframe'], ['outer ancestor', '#frame']]) {
+    await t.test(`AC6 ${target} applied ${effect} cannot produce a passing drawing verdict`, async () => {
+      page = door({ script: `document.querySelector(${JSON.stringify(selector)}).style.cssText+=${JSON.stringify(';' + css)};` });
+      const result = await run();
+      assert.equal(result.exit, 5, result.stderr || result.stdout);
+      assert.equal(result.stdout, '');
+      assert.equal(result.stderr, 'Screen comparison: Unsupported applied clip-path, clip, mask or filter; visible parts cannot be established.\n');
+    });
+  }
+  for (const [target, selector, css] of [
+    ['body ancestor', 'body', 'filter:opacity(0)'],
+    ['root ancestor', 'html', 'mask-image:linear-gradient(transparent,transparent)'],
+  ]) await t.test(`AC6 ${target} applied effect cannot produce a passing drawing verdict`, async () => {
+    page = door({ script: `document.querySelector(${JSON.stringify(selector)}).style.cssText+=${JSON.stringify(';' + css)};` });
+    const result = await run();
+    assert.equal(result.exit, 5, result.stderr || result.stdout);
+    assert.equal(result.stdout, '');
+    assert.equal(result.stderr, 'Screen comparison: Unsupported applied clip-path, clip, mask or filter; visible parts cannot be established.\n');
+  });
+  for (const [target, selector] of [['iframe host', 'iframe'], ['outer ancestor', '#frame']]) {
+    for (const hidden of ['opacity:0', 'visibility:hidden']) await t.test(`AC6 ${target} ${hidden} stays hidden before unsupported effects`, async () => {
+      page = door({ script: `document.querySelector(${JSON.stringify(selector)}).style.cssText+=${JSON.stringify(';' + hidden + ';filter:opacity(0);clip-path:inset(100%)')};` });
+      const result = await run();
+      assert.equal(result.exit, 1, result.stderr || result.stdout);
+      assert.equal(result.stderr, '');
+      assert.equal(result.report.passed, false);
+      assert.ok(result.report.rows.every(row => row.status === 'hidden'));
+    });
+  }
+  await t.test('AC5 shell overflow and page scroll do not clip app-local visibility', async () => {
+    page = door({ script: "const frame=document.querySelector('#frame');frame.style.cssText+=';overflow:hidden;height:10px';document.body.style.height='2000px';scrollTo(0,1000);" });
+    passing(await run());
+  });
   for (const [name, changes] of [
     ['missing', { kind: 'shadow', script: "document.getElementById('apphost').remove()" }],
     ['ambiguous', { extra: '<div data-pdd-app-frame="shadow"></div>' }],

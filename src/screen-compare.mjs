@@ -260,9 +260,11 @@ function snapshot(reference, scope = globalThis.document, referenceViewport, sel
       || ['input', 'textarea', 'select'].includes(el.localName) && (style.appearance !== 'none' || !!controlValue(el) && textPaint(style));
   };
   const visible = (el, box, kind) => {
+    const effects = [];
     if (selected && !shadow) for (let outer = host; outer; outer = outer.parentElement) {
       const style = outer.ownerDocument.defaultView.getComputedStyle(outer);
       if (style.display === 'none' || ['hidden', 'collapse'].includes(style.visibility) || Number(style.opacity) === 0 || style.contentVisibility === 'hidden') return false;
+      if (style.clipPath !== 'none' || !['auto', 'rect(auto, auto, auto, auto)'].includes(style.clip) || style.maskImage !== 'none' || style.filter !== 'none') effects.push(outer);
     }
     const style = getComputedStyle(el), svg = el.namespaceURI === 'http://www.w3.org/2000/svg';
     const degenerate = svg && svgPaint.has(el.localName) && !(box.width > 0 && box.height > 0);
@@ -273,7 +275,7 @@ function snapshot(reference, scope = globalThis.document, referenceViewport, sel
     const margin = matrix ? stroke * Math.max(1, Math.abs(matrix.a) + Math.abs(matrix.c), Math.abs(matrix.b) + Math.abs(matrix.d)) : stroke;
     const probe = degenerate ? { left: box.left - margin, right: box.right + margin, top: box.top - margin, bottom: box.bottom + margin, width: box.width + 2 * margin, height: box.height + 2 * margin } : box;
     if (!(probe.width > 0 && probe.height > 0 && probe.right > left && probe.bottom > top && probe.left < right && probe.top < bottom)) return false;
-    const intersection = { left: Math.max(left, probe.left), top: Math.max(top, probe.top), right: Math.min(right, probe.right), bottom: Math.min(bottom, probe.bottom) }, effects = [];
+    const intersection = { left: Math.max(left, probe.left), top: Math.max(top, probe.top), right: Math.min(right, probe.right), bottom: Math.min(bottom, probe.bottom) };
     for (let parent = el; parent; parent = parent.parentElement || (shadow && parent.getRootNode() === scope ? host : null)) {
       const style = getComputedStyle(parent);
       if (style.display === 'none' || ['hidden', 'collapse'].includes(style.visibility) || Number(style.opacity) === 0 || style.contentVisibility === 'hidden') return false;
