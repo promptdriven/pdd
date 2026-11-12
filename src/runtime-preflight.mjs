@@ -1,9 +1,10 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: f3d567124b7719c1492d3111bb041ff75a389957f91c5bf77965020e43c2c2ab).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 5cb946d3218aef1ffeba17b676220ea091bf5e72a272debcc11a62c11342169f).
 import { markdownLinks, markdownDefinitions, markdownSectionText } from './runtime-markdown.mjs';
 import { buildBindingPlan, runtimeBoundary } from './runtime-binding-plan.mjs';
+import { promptClaims, resolveOwners } from './file-owner.mjs';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
 import { basename, join, posix, isAbsolute } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { expandSource } from './contract-refs.mjs';
@@ -1912,4 +1913,283 @@ export function sharedSourceFiles(root, visible) {
 export function otherFiles(files, found) {
   const known = new Set([...found.tests.map(test => test.path), ...found.stories.map(story => story.path)]);
   return files.filter(file => !file.path.endsWith('.prompt.md') && !known.has(file.path));
+}
+
+const MISPLACED_TEST_OR_CI = /^(?:tests?|__tests__|\.github)\/|(?:^|\/)(?:[^/]+\.(?:test|spec)\.[A-Za-z0-9]+|test_[^/]+\.[A-Za-z0-9]+|[^/]+_test\.[A-Za-z0-9]+)$/i;
+const MISPLACED_CONFIG = /(?:^|\/)(?:package(?:-lock)?\.json|pdd\.json|tsconfig(?:\.[^/]+)?\.json|jsconfig\.json)$/i;
+const NON_CODE_ASSET = /(?:^|\/)\.[^/]+$|\.(?:json|jsonl|ndjson|ya?ml|toml|ini|cfg|conf|lock|md|txt|csv|tsv|xml|svg|png|jpe?g|gif|webp|ico|pdf|woff2?)$/i;
+const HEADER_COMMENT = /^\s*(?:\/\/+|#+|--|;+|\/\*+|\*+|<!--|"""|''')?\s*Generated from (\S+\.prompt\.md)(?: \(sha256: ([a-f0-9]{64})\))?\.?\s*(?:\*\/|-->|"""|''')?\s*$/;
+const EXCUSE_CLAUSE = /(?:^|;\s*)(?:(TODO|FIXME|HACK|XXX)(?:\([^)\r\n]*\))?(?=$|[\s:—–-])|(todo|fixme|hack)(?:\([^)\r\n]*\))?\s*[:—–-])/;
+const STORY_STEP_LIMIT = 15;
+
+function readRegularPrefix(root, path, limit) {
+  const stat = statOf(join(root, path));
+  if (!stat?.isFile()) return null;
+  let fd;
+  try { fd = openSync(join(root, path), constants.O_RDONLY | constants.O_NOFOLLOW); }
+  catch (error) {
+    if (['ENOENT', 'ENOTDIR', 'ELOOP'].includes(error.code)) return null;
+    if (['EACCES', 'EPERM', 'EISDIR'].includes(error.code)) return false;
+    throw error;
+  }
+  try {
+    const buffer = Buffer.alloc(Math.min(limit, Number(fstatSync(fd).size) + 1));
+    let total = 0;
+    while (total < buffer.length) {
+      const count = readSync(fd, buffer, total, buffer.length - total, total);
+      if (!count) break;
+      total += count;
+    }
+    return buffer.subarray(0, total);
+  } finally { closeSync(fd); }
+}
+
+function readOnlyConfigMention(promptText, configPath) {
+  const lines = promptText.split(/\r?\n/);
+  let at = 0;
+  while (at < lines.length && !lines[at].trim()) at++;
+  if (/^# /.test(lines[at] ?? '')) { at++; while (at < lines.length && !lines[at].trim()) at++; }
+  const paragraph = [];
+  while (at < lines.length && lines[at].trim() && !/^\s*(?:#|```|~~~)/.test(lines[at])) paragraph.push(lines[at++].trim());
+  const opening = paragraph.join(' ');
+  const escaped = configPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`\\b(?:reads?|loads?|parses?|inspects?|from)\\s+(?:[^.;!?]{0,40}?\\s+)?\`?${escaped}\`?`, 'i').test(opening);
+}
+
+function scanExcuseComments(source, filePath) {
+  if (!source || source.includes('\0')) return [];
+  const hashComments = /\.(?:py|pyw|sh|bash|zsh|ksh|rb|pl|pm|r|jl|tcl|awk|sed|mk)$/i.test(filePath)
+    || /(?:^|\/)(?:Makefile|Dockerfile|Containerfile|Justfile)$/i.test(filePath);
+  const dashComments = /\.(?:sql|lua|hs|elm|ada)$/i.test(filePath);
+  const slashComments = !hashComments && !dashComments;
+  const hits = [];
+  const checkComment = (rawLine, body, lineNumber) => {
+    if (HEADER_COMMENT.test(rawLine)) return;
+    if (!EXCUSE_CLAUSE.test(body.trim())) return;
+    hits.push({ line: lineNumber, text: rawLine.trim().replace(/\s+/g, ' ').slice(0, 160) });
+  };
+  let i = 0, line = 1, canStartRegex = true;
+  const templateBraces = [];
+  if (source.startsWith('#!')) {
+    const end = source.indexOf('\n');
+    if (end < 0) return [];
+    i = end + 1; line = 2;
+  }
+  const consumeTemplateBody = () => {
+    while (i < source.length) {
+      const ch = source[i];
+      if (ch === '\\') { if (source[i + 1] === '\n') line++; i += 2; continue; }
+      if (ch === '\n') { line++; i++; continue; }
+      if (ch === '`') { i++; canStartRegex = false; return; }
+      if (ch === '$' && source[i + 1] === '{') { i += 2; templateBraces.push(0); canStartRegex = true; return; }
+      i++;
+    }
+  };
+  while (i < source.length) {
+    const ch = source[i], next = source[i + 1];
+    if (ch === '\n') { line++; i++; continue; }
+    if (ch === ' ' || ch === '\t' || ch === '\r') { i++; continue; }
+    if (hashComments && (source.startsWith('"""', i) || source.startsWith("'''", i))) {
+      const quote = source.slice(i, i + 3); i += 3;
+      while (i < source.length && !source.startsWith(quote, i)) {
+        if (source[i] === '\\') { if (source[i + 1] === '\n') line++; i += 2; continue; }
+        if (source[i] === '\n') line++;
+        i++;
+      }
+      i = Math.min(source.length, i + 3);
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      const quote = ch; i++;
+      while (i < source.length && source[i] !== quote) {
+        if (source[i] === '\\') { if (source[i + 1] === '\n') line++; i += 2; continue; }
+        if (source[i] === '\n') { line++; if (!hashComments) { i++; break; } }
+        i++;
+      }
+      if (source[i] === quote) i++;
+      canStartRegex = false;
+      continue;
+    }
+    if (slashComments && ch === '`') {
+      i++; consumeTemplateBody(); continue;
+    }
+    if ((slashComments && ch === '/' && next === '/') || (hashComments && ch === '#') || (dashComments && ch === '-' && next === '-')) {
+      const prefixLen = ch === '#' ? 1 : 2;
+      let end = source.indexOf('\n', i);
+      if (end < 0) end = source.length;
+      const raw = source.slice(i, end).replace(/\r$/, '');
+      const body = raw.slice(prefixLen).replace(/^[/#-]+/, '');
+      checkComment(raw, body, line);
+      i = end;
+      continue;
+    }
+    if (slashComments && ch === '/' && next === '*') {
+      const close = source.indexOf('*/', i + 2);
+      const end = close < 0 ? source.length : close + 2;
+      const parts = source.slice(i, end).split('\n');
+      parts.forEach((part, offset) => {
+        const clean = part.replace(/\r$/, '');
+        const body = clean.replace(/^\s*\/\*+\s?/, '').replace(/\s?\*+\/\s*$/, '').replace(/^\s*\*+\s?/, '');
+        if (body.trim()) checkComment(clean, body, line + offset);
+      });
+      line += parts.length - 1;
+      i = end;
+      continue;
+    }
+    if (slashComments && ch === '/' && canStartRegex) {
+      let j = i + 1, inClass = false, closed = false;
+      while (j < source.length && source[j] !== '\n') {
+        if (source[j] === '\\') { j += 2; continue; }
+        if (source[j] === '[') inClass = true;
+        else if (source[j] === ']') inClass = false;
+        else if (source[j] === '/' && !inClass) { closed = true; j++; break; }
+        j++;
+      }
+      if (closed) {
+        while (j < source.length && /[A-Za-z]/.test(source[j])) j++;
+        i = j; canStartRegex = false; continue;
+      }
+    }
+    if (slashComments && templateBraces.length) {
+      if (ch === '{') templateBraces[templateBraces.length - 1]++;
+      else if (ch === '}') {
+        if (templateBraces[templateBraces.length - 1] === 0) {
+          templateBraces.pop(); i++; consumeTemplateBody(); continue;
+        }
+        templateBraces[templateBraces.length - 1]--;
+      }
+    }
+    if (/[A-Za-z_$]/.test(ch)) {
+      let j = i + 1;
+      while (j < source.length && /[A-Za-z0-9_$]/.test(source[j])) j++;
+      const word = source.slice(i, j);
+      canStartRegex = /^(?:return|throw|case|delete|void|typeof|instanceof|in|of|new|yield|await|else|do)$/.test(word);
+      i = j;
+      continue;
+    }
+    if (/[0-9]/.test(ch)) {
+      let j = i + 1;
+      while (j < source.length && /[0-9A-Za-z_.]/.test(source[j])) j++;
+      canStartRegex = false; i = j; continue;
+    }
+    canStartRegex = !/[)\]]/.test(ch);
+    i++;
+  }
+  return hits;
+}
+
+export function lintLocalHygiene({ root, files = gitFiles(root), promptPaths, tests, workspace = loadRuntimeWorkspace({ root }) } = {}) {
+  const policy = boundedWorkspace(root, workspace);
+  const allowedFiles = [...new Set(files)].filter(path => allowsRuntimePath(policy, path)).sort();
+  const excluded = promptPaths === undefined ? fixtureProjectRoots(root, allowedFiles) : [];
+  const scopedFiles = outsideFixtureProjects(allowedFiles, excluded);
+  const visibleSet = new Set(promptPaths === undefined ? scopedFiles : allowedFiles);
+  const inspectedPrompts = [...new Set((promptPaths ?? scopedFiles.filter(path => path.endsWith('.prompt.md')))
+    .filter(path => visibleSet.has(path) && path.endsWith('.prompt.md')))].sort();
+  const inspectedSet = new Set(inspectedPrompts);
+
+  let linkedPort;
+  const readSafeText = path => {
+    const stat = statOf(join(root, path));
+    if (!stat || Number(stat.size) > LIMITS.bytes) return null;
+    try { return stat.isSymbolicLink() ? (linkedPort ??= sourceFilePort(root, visibleSet, policy)).read({ path }).content : readText(root, path); }
+    catch { return null; }
+  };
+
+  const allPromptPaths = [...visibleSet].filter(path => path.endsWith('.prompt.md')).sort();
+  const promptTexts = new Map();
+  const extraClaims = [];
+  for (const prompt of allPromptPaths) {
+    const text = readSafeText(prompt);
+    if (typeof text !== 'string') continue;
+    promptTexts.set(prompt, text);
+    if (inspectedSet.has(prompt)) for (const claim of promptClaims(prompt, text)) {
+      if (allowsRuntimePath(policy, claim) && !claim.endsWith('.md')) extraClaims.push(claim);
+    }
+  }
+
+  const candidatePaths = [...new Set([...[...visibleSet].filter(path => !path.endsWith('.md')), ...extraClaims])].sort();
+  const rawBindings = visibleSet.has('pdd-bindings.json') ? readRegularPrefix(root, 'pdd-bindings.json', 65_536) : null;
+  const bindings = rawBindings ? rawBindings.toString('utf8') : rawBindings;
+  const heads = candidatePaths.map(path => ({ path, content: readRegularPrefix(root, path, 4097) }));
+  const prompts = [...promptTexts.entries()].map(([path, content]) => ({ path, content }));
+  const resolved = resolveOwners({ paths: candidatePaths, bindings, heads, prompts });
+
+  const productionCodeByPrompt = new Map(), rawRowsByPrompt = new Map(), codeRowMap = new Map();
+  for (const row of resolved.files) {
+    const validOwners = row.owners.filter(prompt => promptTexts.has(prompt));
+    if (!validOwners.length) continue;
+    const isMisplacedTest = MISPLACED_TEST_OR_CI.test(row.path);
+    const isConfig = MISPLACED_CONFIG.test(row.path);
+    const isCode = !isMisplacedTest && !isConfig && !NON_CODE_ASSET.test(row.path);
+    const stat = isCode ? statOf(join(root, row.path)) : null;
+    for (const owner of validOwners) {
+      if (!rawRowsByPrompt.has(owner)) rawRowsByPrompt.set(owner, []);
+      rawRowsByPrompt.get(owner).push(row);
+      if (isCode && stat?.isFile()) {
+        if (!productionCodeByPrompt.has(owner)) productionCodeByPrompt.set(owner, []);
+        productionCodeByPrompt.get(owner).push({ path: row.path, bytes: Number(stat.size) });
+      }
+    }
+    if (isCode && stat?.isFile() && validOwners.some(owner => inspectedSet.has(owner))) {
+      codeRowMap.set(row.path, [...new Set(validOwners)].sort());
+    }
+  }
+
+  const warnings = [];
+  for (const prompt of inspectedPrompts) {
+    const promptText = promptTexts.get(prompt);
+    if (typeof promptText !== 'string') continue;
+    const ownedCode = (productionCodeByPrompt.get(prompt) ?? []).sort((a, b) => a.path.localeCompare(b.path));
+    const misplaced = [];
+    for (const row of rawRowsByPrompt.get(prompt) ?? []) {
+      if (MISPLACED_TEST_OR_CI.test(row.path)) misplaced.push(row.path);
+      else if (MISPLACED_CONFIG.test(row.path)) {
+        if (row.source === 'prose' && ownedCode.length > 0 && readOnlyConfigMention(promptText, row.path)) continue;
+        misplaced.push(row.path);
+      }
+    }
+    if (misplaced.length) {
+      const uniqueTargets = [...new Set(misplaced)].sort();
+      warnings.push(`Warning: misplaced prompt owner: ${prompt} claims ${uniqueTargets.join(', ')}. Prompts own production modules, not test suites, CI workflows or repository config files.`);
+    }
+    if (ownedCode.length) {
+      const proseBytes = Buffer.byteLength(promptText.replace(INTERFACE, ''), 'utf8');
+      const codeBytes = ownedCode.reduce((sum, item) => sum + item.bytes, 0);
+      if (proseBytes > codeBytes) {
+        warnings.push(`Warning: oversized prompt: ${prompt} has ${proseBytes} prose bytes vs ${codeBytes} code bytes (${ownedCode.map(item => item.path).join(', ')}). Keep the behavior contract smaller than its generated code.`);
+      }
+    }
+  }
+
+  const inspectedTests = tests === undefined
+    ? discoverTests(root, scopedFiles, false, policy, true).tests
+    : tests.map(entry => {
+      if (typeof entry !== 'string') return entry;
+      const clean = entry.replace(/^\.\//, '');
+      if (!visibleSet.has(clean)) return null;
+      const raw = readSafeText(clean);
+      if (!raw) return null;
+      try { const doc = JSON.parse(raw); return { path: clean, storyPath: typeof doc?.story_path === 'string' ? doc.story_path : null, doc }; }
+      catch { return null; }
+    }).filter(Boolean);
+
+  for (const testEntry of [...inspectedTests].sort((a, b) => String(a?.path ?? '').localeCompare(String(b?.path ?? '')))) {
+    const steps = Array.isArray(testEntry?.doc?.steps) ? testEntry.doc.steps.length : 0;
+    if (steps > STORY_STEP_LIMIT) {
+      const storyLabel = testEntry.storyPath ?? (typeof testEntry.doc?.story_path === 'string' ? testEntry.doc.story_path : testEntry.path);
+      warnings.push(`Warning: oversized Story: ${storyLabel} (${testEntry.path}) has ${steps} scenario steps (limit: ${STORY_STEP_LIMIT}). Keep Story scenarios focused on behavior boundaries and move long step sequences to code tests.`);
+    }
+  }
+
+  for (const filePath of [...codeRowMap.keys()].sort()) {
+    const sourceText = readSafeText(filePath);
+    if (typeof sourceText !== 'string') continue;
+    const owners = codeRowMap.get(filePath);
+    for (const hit of scanExcuseComments(sourceText, filePath)) {
+      warnings.push(`Warning: excuse comment in ${filePath}:${hit.line} (owned by ${owners.join(', ')}): ${hit.text}`);
+    }
+  }
+
+  return warnings;
 }

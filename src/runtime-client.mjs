@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 37ad530ce7c49f63b5cb2145c8246173f8600afd95fc8846209f19e6d7a43e77).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 9a3fc492621c2c7d6bfa9c1e1c47bcd499921dc1c0243718fb957837e76f12c5).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
@@ -21,7 +21,7 @@ import { chmodSync, closeSync, constants, fstatSync, fsyncSync, lstatSync, linkS
 import { isDeepStrictEqual } from 'node:util';
 import { homedir, hostname } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
-import { DRAFT_SERVER_TEXT, NO_TESTS, PreflightError, TEST_SCHEMA, captureSource, scenarioShapeRefusal, checkInput, expectedTestPath, fillHashes, sharedSourceFiles, whyNoTests, findTests, formatSize, gitFiles, otherFiles,
+import { DRAFT_SERVER_TEXT, NO_TESTS, PreflightError, TEST_SCHEMA, captureSource, scenarioShapeRefusal, checkInput, expectedTestPath, fillHashes, lintLocalHygiene, sharedSourceFiles, whyNoTests, findTests, formatSize, gitFiles, otherFiles,
   discoveryRefusal, preflight, interfaceBlocks, executableInterfaceText, readPrompt, formatWarningLines, schemaKeywordWarningLines, selectTests, sourceFilePort, sha256, STALE_HINT, staleHint } from './runtime-preflight.mjs';
 import { catalogRecords, compareCopies } from './contract-refs.mjs';
 import { askApproval, lineReader, promptPath } from './prompt-approve.mjs';
@@ -3155,16 +3155,18 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
       if (options['--local'] !== true || options['--lint'] !== true || Object.keys(options).some(name => !['--lint', '--local', '--json'].includes(name))) throw new Stop(2, '--local requires --lint and accepts only Story words and --json.');
       try {
         const root = repoRoot(cwd), workspace=loadRuntimeWorkspace({root}), files = gitFiles(root).filter(path=>allowsRuntimePath(workspace,path));
-        let promptPaths, tests = [];
+        let promptPaths, selectedTests, tests = [];
         if (words.length) {
           const { found, normalized } = localSetup(cwd, words), selected = select(found, normalized, root);
+          selectedTests = selected;
           tests = selected.filter(test => !test.error).map(test => test.path);
           promptPaths = ports.captureSource(root, { tests, appMap: null }).files.map(file => file.path).filter(path => path.endsWith('.prompt.md'));
         }
         // Interface findings refuse only a repository-wide local lint; a selected one gives advice only.
         const problems = words.length ? [] : interfaceFindings({root,paths:promptPaths}).filter(localInterfaceProblem);
         const advice = formatAdvice(root, new Set(gitFiles(root)), promptPaths ?? files.filter(path => path.endsWith('.prompt.md')), workspace);
-        const warnings = [...advice, ...lintSvgLayouts({ root, files, promptPaths })], summary = `partial: checked SVG layout only; prompts not checked (local-only). ${warnings.length} warnings. 0 AI calls. No checks were sent.`;
+        const hygiene = lintLocalHygiene({ root, files, promptPaths, tests: selectedTests, workspace });
+        const warnings = [...advice, ...lintSvgLayouts({ root, files, promptPaths }), ...hygiene], summary = `partial: checked SVG layout only; prompts not checked (local-only). ${warnings.length} warnings. 0 AI calls. No checks were sent.`;
         const result = saveLocalLayout(context,{root,tests,prompts:promptPaths ?? files.filter(path => path.endsWith('.prompt.md')),warnings,problems,summary});
         return printLocalLayout(context,result);
       } catch (error) { throw new Stop(2, error.message); }
