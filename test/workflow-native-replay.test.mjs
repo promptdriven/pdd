@@ -116,11 +116,15 @@ test('returning to prompt space publishes a native case whose owner has no Runti
 });
 
 test('native publication cannot replace a base Runtime case or a declared Runtime operation', async t => {
-  for (const mode of ['replace-base','declared-operation','changed-program','failed-runtime']) await t.test(mode,async t=>{
+  for (const mode of ['replace-base','declared-operation','changed-program','failed-runtime','malformed-case','empty-case','unknown-schema','unrelated-missing']) await t.test(mode,async t=>{
     const f=await fixture(t,{name:'feature',agent:'codex'}), harbor=join(packageRoot,'test','fixtures','harbor');
-    if(['replace-base','failed-runtime'].includes(mode)) {
+    if(['replace-base','failed-runtime','unrelated-missing'].includes(mode)) {
       for(const dir of ['prompts','user_stories','tests'])mkdirSync(join(f.source,dir),{recursive:true});
-      for(const path of ['prompts/place_order.prompt.md','user_stories/place-order.md','tests/place-order.json'])cpSync(join(harbor,path),join(f.source,path));
+      if(mode==='unrelated-missing') {
+        const unrelated=JSON.parse(readFileSync(join(harbor,'tests/place-order.json'),'utf8'));
+        unrelated.story_path='user_stories/unrelated.md';unrelated.steps.forEach(step=>{step.entry_path='prompts/unrelated.prompt.md';});
+        writeFileSync(join(f.source,'tests/unrelated.json'),JSON.stringify(unrelated));
+      } else for(const path of ['prompts/place_order.prompt.md','user_stories/place-order.md','tests/place-order.json'])cpSync(join(harbor,path),join(f.source,path));
       f.git(f.source,'add','.');f.git(f.source,'commit','-qm','Existing Runtime case');f.git(f.source,'update-ref','refs/remotes/origin/main',f.git(f.source,'rev-parse','HEAD'));
     }
     const started=await startRun({name:'feature',issue:'17',agent:'codex',cwd:f.source,packageRoot},f.ports);assert.equal(started.exitCode,0,started.message);
@@ -130,8 +134,12 @@ test('native publication cannot replace a base Runtime case or a declared Runtim
     for(const path of ['prompts/place_order.prompt.md','user_stories/place-order.md'])cpSync(join(harbor,path),join(root,path));
     const doc=JSON.parse(readFileSync(join(harbor,'tests/place-order.json')));doc.schema_version='pdd.native-scenario.v1';
     doc.steps.forEach(step=>{if(mode!=='declared-operation')step.operation='nativePlaceOrder';step.runtime_reason='Native filesystem effects require this boundary.';});
-    writeFileSync(join(root,mode==='failed-runtime'?'tests/native.json':'tests/place-order.json'),JSON.stringify(doc));
+    writeFileSync(join(root,['failed-runtime','unrelated-missing'].includes(mode)?'tests/native.json':'tests/place-order.json'),JSON.stringify(doc));
     if(mode==='changed-program')cpSync(join(harbor,'tests/place-order.json'),join(root,'tests/program.json'));
+    if(mode==='malformed-case')writeFileSync(join(root,'tests/place-order.bad.json'),'{');
+    if(mode==='empty-case')writeFileSync(join(root,'tests/place-order.bad.json'),JSON.stringify({...doc,steps:[]}));
+    if(mode==='unknown-schema')writeFileSync(join(root,'tests/place-order.bad.json'),JSON.stringify({...doc,schema_version:'pdd.native-scenario.v2'}));
+    if(mode==='unrelated-missing')writeFileSync(join(root,'config.json'),JSON.stringify({schema_version:'application.v2',enabled:true}));
     f.git(root,'add','.');f.git(root,'commit','-qm','Native cases');
     assert.equal((await done('prompt-story')).exitCode,0);f.tick();
     assert.equal((await approveRun({ref:'17',cwd:root,said:'I approve these cases.'},f.agentPorts())).exitCode,0);
@@ -142,7 +150,18 @@ test('native publication cannot replace a base Runtime case or a declared Runtim
       writeFileSync(join(folder,'batch.json'),JSON.stringify({batch,root,created_at:'2026-10-27T18:00:00.000Z',intent:'check',source_sha256:'f'.repeat(64),rows:[row]}));
       writeFileSync(join(folder,'summary.json'),JSON.stringify({batch,repo:root,source_sha256:'f'.repeat(64),rows:[row]}));
     }
-    const out=await done('check');assert.doesNotMatch(out.message,/Native approval covers only/);assert.equal(f.prs.length,0);
+    const out=await done('check');
+    if(mode==='unrelated-missing') {
+      assert.match(out.message,/Native approval covers only tests\/native.json/);
+      f.tick();assert.equal((await approveRun({ref:'17',cwd:root,said:'I approve publication.'},f.agentPorts())).exitCode,0);
+      assert.equal(f.prs.length,1);return;
+    }
+    assert.doesNotMatch(out.message,/Native approval covers only/);assert.equal(f.prs.length,0);
+    assert.notEqual(f.record().gate.nativeApproval,true);
+    if(mode==='malformed-case') {
+      f.tick();await approveRun({ref:'17',cwd:root,said:'I approve publication.'},f.agentPorts());
+      assert.equal(f.prs.length,0);
+    }
     if(mode==='failed-runtime')assert.match(out.message,/Not passed \(failed\): tests\/place-order.json/);
   });
 });

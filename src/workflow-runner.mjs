@@ -2371,6 +2371,9 @@ async function nativePublicationEligible(run, contents, check, p) {
     if (docs.some(doc=>doc.schema_version!=='pdd.native-scenario.v1' || typeof doc.story_path!=='string' || !doc.story_path || !Array.isArray(doc.steps) || !doc.steps.length)) return false;
     if (pinReplayVectors(run.root,paths).outcome) return false;
     const changed=await changedFiles(run,p,true);
+    if (check.problems.some(problem=>changed.includes(problem.path) && !paths.includes(problem.path) && ['missing','no-verdict'].includes(problem.kind))) return false;
+    const inventory=await scenarioInventory(run,p,changed);
+    if (inventory.length!==paths.length || inventory.some(path=>!paths.includes(path))) return false;
     const anchor=pinRunAnchor(run.root,{paths,commit:run.baseSha,changed,scenarios:paths,codeSpace:true});
     if (anchor.outcome === 'blocked' && !anchor.reason?.startsWith('No approved original-vector anchor:')) return false;
     const linkedRuntime=anchor.vectors.filter(vector=>vector.base && vector.snapshot?.schema_version === 'prompt-runtime.program-scenario.v1');
