@@ -18,6 +18,12 @@ for (const key of [
   'PDD_SUITE_QUEUE', 'PDD_VM_SUITE_LOCK', 'SUITE',
 ]) delete process.env[key];
 
+// Native tests and their children must never join the caller's live sessions.
+// Tests can install their own synthetic selectors after this bootstrap.
+for (const key of Object.keys(process.env)) {
+  if (/^(?:HERDR_|PDD_AGENT_SESSION$|PDD_AUTOPILOT_CONTEXT$|CLAUDECODE$|CLAUDE_CODE_|CLAUDE_PID$|CODEX_THREAD_ID$|CODEX_SANDBOX)/.test(key)) delete process.env[key];
+}
+
 // userInfo bypasses HOME and reads the account database. A caught lookup still
 // fails the process; tests of this fallback must supply the existing userInfo port.
 let accountHomeRead = false;
