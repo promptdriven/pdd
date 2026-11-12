@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {appendFileSync,mkdirSync,readFileSync,readdirSync,renameSync,symlinkSync,unlinkSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
-import {randomUUID} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
 import {captureSource} from '../src/runtime-preflight.mjs';
 import {readRunResults} from '../src/workflow-results.mjs';
 import {fullCheckPass} from '../src/workflow-story-card.mjs';
@@ -14,6 +14,8 @@ const c='test/runtime/C.json';
 const file=(setup,id,name='batch.json')=>join(setup.state,'batches',id,name);
 const read=(setup,id,name)=>JSON.parse(readFileSync(file(setup,id,name),'utf8'));
 const write=(setup,id,value,name)=>writeFileSync(file(setup,id,name),JSON.stringify(value));
+// A synthetic historical POST must retain its independent per-test dispatch identity.
+const claim=(setup,saved,row,index,id)=>write(setup,saved.batch,{id,restart:index>0},`${createHash('sha256').update(row.test).digest('hex')}.${index}.dispatch.json`);
 const saveBytes=(setup,id)=>Object.fromEntries(readdirSync(join(setup.state,'batches',id)).map(name=>[name,readFileSync(file(setup,id,name),'utf8')]));
 async function original(t,{full=false,fail=true}={}) {
   const setup=affectedFixture(t),fake=await affectedRuntime(t,setup,{fail:fail?[c]:[]});
@@ -26,7 +28,7 @@ test('3146 original-failure-separate: selected batch keeps original failed recei
   const originalRow=saved.rows.find(row=>row.test===c),oldId=originalRow.request_ids[0];
   // Map the approved symbolic batch name to the real native batch ID; preserve its exact receipt identity and time.
   const receipt=read(setup,saved.batch,`${oldId}.json`);receipt.id=receipt.requestId=data.given.saved_C.request_id;
-  write(setup,saved.batch,receipt,`${receipt.id}.json`);originalRow.request_ids=[receipt.id];saved.created_at=data.given.saved_C.created_at;write(setup,saved.batch,saved);
+  write(setup,saved.batch,receipt,`${receipt.id}.json`);originalRow.request_ids=[receipt.id];claim(setup,saved,originalRow,0,receipt.id);saved.created_at=data.given.saved_C.created_at;write(setup,saved.batch,saved);
   const bytes=saveBytes(setup,saved.batch),offset=checks(fake).length;setup.change('docs/shared.md');
   const selected=await check(setup,fake,{advance:2000});assert.equal(selected.code,0,selected.ports.stderr.text);
   assert.deepEqual(selected.output.rows.map(row=>row.test),data.expected.batch_rows_tests);
@@ -44,7 +46,7 @@ test('3146 older-failure-not-lost and all-original-attempts preserve every origi
   const originalReceipt=read(setup,saved.batch,`${old}.json`),newReceipt=structuredClone(originalReceipt);newReceipt.id=newReceipt.requestId=passed;newReceipt.state='passed';newReceipt.result.outcome='Pass';newReceipt.result.exitCode=0;newReceipt.result.why='All checked criteria passed.';
   for(const sample of newReceipt.result.report.samples)for(const step of sample.steps)for(const check of step.checks){check.actual=check.expected;check.passed=true;}
   for(const criterion of newReceipt.result.report.criterion_results)criterion.status='passed';
-  write(setup,saved.batch,newReceipt,`${passed}.json`);saved.rows[0].request_ids.push(passed);saved.rows[0].state='passed';write(setup,saved.batch,saved);
+  write(setup,saved.batch,newReceipt,`${passed}.json`);saved.rows[0].request_ids.push(passed);claim(setup,saved,saved.rows[0],1,passed);saved.rows[0].state='passed';write(setup,saved.batch,saved);
   // A later local placeholder is a distinct observation; it cannot replace the two sent receipts.
   const local={...structuredClone(saved),batch:'20261028-162747-abcd',created_at:'2026-10-28T16:27:47Z'};local.rows[0]={...local.rows[0],request_ids:[],unsent:true,state:'not run',reason:{code:'no-server-verdict',message:'Local placeholder.'}};
   put(setup.state,`batches/${local.batch}/batch.json`,local);setup.change('docs/shared.md');const offset=checks(fake).length;
@@ -63,7 +65,7 @@ test('3146 canonical-nonpass-outcomes uses original receipt outcomes and reason 
     else if(state==='not_run'){receipt.result.outcome='NotRun';receipt.result.refusals=[{code:'not-run-fixture',message:'Not run.',retryable:true}];receipt.dispatch='not_started';}
     else if(state==='refused'){receipt.result.refusals=[{code:'fixture-refused',message:'Fixture refused.'}];receipt.result.outcome='Inconclusive';}
     else if(state==='unknown')receipt.result.outcome='Inconclusive';
-    write(setup,saved.batch,receipt,`${id}.json`);row.request_ids.push(id);
+    write(setup,saved.batch,receipt,`${id}.json`);row.request_ids.push(id);claim(setup,saved,row,row.request_ids.length-1,id);
   }
   write(setup,saved.batch,saved);setup.change('docs/shared.md');const result=await check(setup,fake,{advance:1000});assert.equal(result.code,0);
   const byId=new Map(result.output.baseline_report.observations.map(row=>[row.request_id,row]));
@@ -239,4 +241,97 @@ test('3146 accepted symlinked state ancestors retain baseline history while link
       assert.deepEqual(result.output.baseline_report.observations,[]);assert.deepEqual(result.output.baseline_report.missing_tests,[c]);assert.equal(result.output.baseline_report.availability,'partial');
     }
   });
+});
+
+test('3146 a receipt outside its original producer selection cannot invent a C pass',async t=>{
+  const setup=affectedFixture(t),fake=await affectedRuntime(t,setup,{fail:[c]});
+  const failure=await check(setup,fake,{words:['C'],options:{'--json':true}});assert.equal(failure.code,1);
+  const failed=batch(setup,failure.output.batch),oldId=failed.rows[0].request_ids[0];
+  const seed=await check(setup,fake,{words:['A'],options:{'--json':true},advance:1000});assert.equal(seed.code,0);
+  const saved=batch(setup,seed.output.batch);saved.rows[0].test=c;saved.rows[0].story_path='user_stories/C.md';write(setup,saved.batch,saved);
+  const offset=checks(fake).length;setup.change('prompts/B.prompt.md');
+  const result=await check(setup,fake,{advance:2000});assert.equal(result.code,0,result.ports.stderr.text);
+  const report=result.output.baseline_report;
+  assert.equal(report.observations.some(row=>row.test===c&&row.state==='passed'),false,'3146_FOREIGN_SELECTION_PASS: an A-only receipt was attributed as a C pass');
+  assert.ok(report.observations.some(row=>row.test===c&&row.request_id===oldId&&row.state==='failed'),'readable original C failure must survive corrupt neighboring history');
+  assert.equal(report.availability,'partial');assert.ok(report.warnings.length>0);
+  assert.deepEqual(checks(fake).slice(offset).map(row=>row.request.scenario),['test/runtime/B.json']);
+});
+
+test('3146 contradictory producer rows, snapshots, requests and receipt source identity supply no pass',async t=>{
+  for(const variant of ['row Story','row basename','outside manifest','snapshot Story','snapshot source hash','duplicate snapshot','duplicate row','shared request','request from A','crossed requests','receipt source hash','receipt projected source','receipt execution entry'])await t.test(variant,async t=>{
+    const {setup,fake,saved}=await original(t,{full:true,fail:false}),row=saved.rows.find(row=>row.test===c),id=row.request_ids[0];
+    const a=saved.rows.find(row=>row.test==='test/runtime/A.json'),snapshot=saved.contract_snapshots.find(story=>story.story_path==='user_stories/C.md');
+    if(variant==='row Story')row.story_path='user_stories/A.md';
+    if(variant==='row basename')row.story='A';
+    if(variant==='outside manifest')saved.files=saved.files.filter(path=>path!==c);
+    if(variant==='snapshot Story')snapshot.story_path='user_stories/A.md';
+    if(variant==='snapshot source hash')snapshot.files.find(file=>file.path===c).sha256='a'.repeat(64);
+    if(variant==='duplicate snapshot')saved.contract_snapshots.push(structuredClone(snapshot));
+    if(variant==='duplicate row')saved.rows.push(structuredClone(row));
+    if(variant==='shared request')a.request_ids.push(id);
+    if(variant==='request from A'){row.request_ids=[a.request_ids[0]];a.request_ids=[];}
+    if(variant==='crossed requests'){
+      const own=row.request_ids;row.request_ids=a.request_ids;a.request_ids=own;
+      // This protocol variant gives only a whole-batch hash, so claims must bind the Check IDs.
+      for(const requestId of [...row.request_ids,...a.request_ids]){const raw=read(setup,saved.batch,`${requestId}.json`);delete raw.result.report.call_depth;write(setup,saved.batch,raw,`${requestId}.json`);}
+    }
+    const receipt=read(setup,saved.batch,`${id}.json`);
+    if(variant==='receipt source hash')receipt.source_sha256='a'.repeat(64);
+    if(variant==='receipt projected source')receipt.result.report.projected_context_bindings=[{prompt_path:'prompts/C.prompt.md',prompt_sha256:'a'.repeat(64),context_blobs:[]}];
+    if(variant==='receipt execution entry')receipt.result.report.call_depth[0].entry_path='prompts/A.prompt.md';
+    write(setup,saved.batch,receipt,`${id}.json`);write(setup,saved.batch,saved);
+    setup.change('docs/shared.md');const result=await check(setup,fake,{advance:2000});assert.equal(result.code,0,result.ports.stderr.text);
+    const report=result.output.baseline_report;
+    assert.equal(report.observations.some(observation=>observation.test===c&&observation.state==='passed'),false,`3146_INCONSISTENT_HISTORY_PASS: ${variant}`);
+    assert.equal(report.availability,'partial');assert.ok(report.warnings.length>0);
+  });
+});
+
+test('3146 generic scenario report names retain correctly bound original source evidence',async t=>{
+  const {setup,fake,saved}=await original(t,{fail:false}),row=saved.rows[0],id=row.request_ids[0],receipt=read(setup,saved.batch,`${id}.json`);
+  assert.equal(receipt.result.report.scenario,'scenario.json');assert.equal(receipt.source_sha256,saved.source_sha256);
+  const snapshot=saved.contract_snapshots[0];
+  receipt.result.report.projected_context_bindings=[{prompt_path:'prompts/C.prompt.md',prompt_sha256:snapshot.files.find(file=>file.path==='prompts/C.prompt.md').sha256,context_blobs:[]}];
+  write(setup,saved.batch,receipt,`${id}.json`);setup.change('docs/shared.md');
+  const result=await check(setup,fake,{advance:1000});assert.equal(result.code,0,result.ports.stderr.text);
+  const observation=result.output.baseline_report.observations.find(row=>row.request_id===id);
+  assert.equal(observation?.state,'passed');assert.equal(observation?.story_path,'user_stories/C.md');assert.equal(result.output.baseline_report.availability,'available');
+});
+
+test('3146 malformed retained identity is partial history and cannot block selected execution',async t=>{
+  for(const variant of ['null snapshot file','invalid capability file','invalid execution metadata','corrupt dispatch claim','missing original selection tests'])await t.test(variant,async t=>{
+    const {setup,fake,saved}=await original(t,{fail:false}),row=saved.rows[0],id=row.request_ids[0];
+    if(variant==='null snapshot file')saved.contract_snapshots[0].files.push(null);
+    if(variant==='missing original selection tests')saved.source_selection={exclude_fixture_projects:false};
+    if(variant==='corrupt dispatch claim')claim(setup,saved,row,0,'invalid');
+    if(variant==='invalid execution metadata'){const receipt=read(setup,saved.batch,`${id}.json`);receipt.result.report.call_depth={unexpected:true};write(setup,saved.batch,receipt,`${id}.json`);}
+    if(variant==='invalid capability file'){const lintId=saved.lint.request_ids.at(-1),receipt=read(setup,saved.batch,`${lintId}.json`);receipt.result.capabilities[0].report.source.files.push(null);write(setup,saved.batch,receipt,`${lintId}.json`);}
+    write(setup,saved.batch,saved);setup.change('docs/shared.md');
+    const result=await check(setup,fake,{advance:1000});assert.equal(result.code,0,result.ports.stderr.text);
+    assert.deepEqual(result.output.baseline_report.observations,[]);assert.equal(result.output.baseline_report.availability,'partial');assert.ok(result.output.baseline_report.warnings.length>0);
+    assert.deepEqual(result.output.rows.map(row=>row.test),setup.selected);
+  });
+});
+
+test('3146 legacy raw failures remain visible with explicit missing binding diagnostics',async t=>{
+  const {setup,fake,saved}=await original(t),row=saved.rows[0],id=row.request_ids[0],receipt=read(setup,saved.batch,`${id}.json`);
+  delete saved.source_selection;delete saved.contract_snapshots;delete saved.source_sha256;delete saved.lint;
+  delete receipt.source_sha256;delete receipt.result.report.call_depth;
+  write(setup,saved.batch,receipt,`${id}.json`);write(setup,saved.batch,saved);
+  for(const name of readdirSync(join(setup.state,'batches',saved.batch)))if(name.endsWith('.dispatch.json'))unlinkSync(file(setup,saved.batch,name));
+  setup.change('docs/shared.md');const result=await check(setup,fake,{advance:1000});assert.equal(result.code,0,result.ports.stderr.text);
+  const report=result.output.baseline_report;assert.equal(report.availability,'partial');assert.ok(report.warnings.length>0);
+  const observation=report.observations.find(row=>row.request_id===id);assert.equal(observation?.state,'failed');assert.equal(observation?.currentness,'unavailable');
+});
+
+test('3146 separately identified unsent local evidence stays local outside the uploaded selection',async t=>{
+  const setup=affectedFixture(t),fake=await affectedRuntime(t,setup),seed=await check(setup,fake,{words:['A'],options:{'--json':true}});assert.equal(seed.code,0);
+  const saved=batch(setup,seed.output.batch);
+  saved.rows.push({test:c,story:'C',story_path:'user_stories/C.md',request_ids:[],unsent:true,state:'not run',reason:{code:'no-server-verdict',message:'Local test was not sent.'}});
+  write(setup,saved.batch,saved);setup.change('prompts/B.prompt.md');
+  const offset=checks(fake).length,result=await check(setup,fake,{advance:1000});assert.equal(result.code,0,result.ports.stderr.text);
+  const observation=result.output.baseline_report.observations.find(row=>row.test===c);
+  assert.equal(observation?.evidence_kind,'local');assert.equal(observation?.request_id,null);assert.equal(observation?.state,'not run');
+  assert.equal(checks(fake).slice(offset).some(row=>row.request.scenario===c),false);
 });

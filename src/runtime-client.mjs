@@ -276,8 +276,8 @@ async function readBaselineReport(context, plan, identity) {
       if (!saved.origin || !saved.login || saved.user_id == null) { partial=true;warn('Some saved Check batches lack runtime/account identity.'); }
       continue;
     }
-    const tests = saved.source_selection?.tests ?? [...new Set(saved.rows.map(row=>row?.test))];
-    if (!Array.isArray(tests) || tests.some(path=>typeof path !== 'string' || !path || path.startsWith('/') || path.split('/').some(part=>part === '..') || path.includes('\\'))) {
+    const tests = saved.source_selection == null ? [...new Set(saved.rows.filter(row=>!row?.unsent).map(row=>row?.test))] : saved.source_selection.tests;
+    if (!Array.isArray(tests) || new Set(tests).size !== tests.length || tests.some(path=>typeof path !== 'string' || !path || path.startsWith('/') || path.split('/').some(part=>part === '..') || path.includes('\\'))) {
       partial=true;warn('Some saved Check batches lack a safe original selection.');continue;
     }
     let admission;
@@ -286,13 +286,14 @@ async function readBaselineReport(context, plan, identity) {
     const sameRoot = await real(saved.root) === await real(root);
     if (admission?.state !== 'eligible' && (!sameRoot || saved.association)) { partial=true;warn('Some saved Check history was not admitted by workspace ownership.');continue; }
     const stage = admission?.state === 'eligible' ? admission.stage : sameRoot && !saved.association ? 'current' : 'unavailable';
-    let currentness = 'unavailable';
+    let currentness = 'unavailable', originalSource = null;
     if (/^[a-f0-9]{64}$/.test(saved.source_sha256 ?? '')) {
       try {
         const sourceRoot = admission?.sourceAnchor?.root ?? root;
         const selection = {tests,appMap:null,...(saved.source_selection ? {excludeFixtureProjects:saved.source_selection.exclude_fixture_projects === true} : saved.exclude_fixture_projects ? {excludeFixtureProjects:true} : {})};
         const original = await capture(sourceRoot,selection);
         currentness = original.sha256 === saved.source_sha256 ? 'current' : 'stale';
+        if (currentness === 'current') originalSource = original;
         if (saved.native_source) {
           const native = await capture(sourceRoot,{...selection,tests:saved.native_source.tests});
           if (saved.native_source.sha256 && native.sha256 !== saved.native_source.sha256) currentness='stale';
@@ -301,11 +302,68 @@ async function readBaselineReport(context, plan, identity) {
       } catch { partial=true;warn('Some original-batch source selections are unavailable.'); }
     }
     const created_at = typeof saved.created_at === 'string' && Number.isFinite(Date.parse(saved.created_at)) ? saved.created_at : null;
+    const snapshots = Array.isArray(saved.contract_snapshots) ? saved.contract_snapshots : [];
+    const manifest = Array.isArray(saved.files) ? new Set(saved.files) : null;
+    const claims = new Map();
+    let claimFiles = 0, claimsUnavailable = false;
+    try {
+      for (const file of await files.list(folder)) {
+        const match = /^([a-f0-9]{64})\.[0-9]+\.dispatch\.json$/.exec(file);
+        if (!match) continue;
+        claimFiles++;
+        try {
+          const claim = await read(join(folder,file));
+          if (!UUID.test(claim?.id ?? '')) throw Error('invalid dispatch claim');
+          claims.set(claim.id,[...(claims.get(claim.id) ?? []),match[1]]);
+        } catch { partial=true;warn('Some original Check dispatch identities are unavailable.'); }
+      }
+    } catch { claimsUnavailable=true;partial=true;warn('Original Check dispatch identities are unavailable.'); }
+    let capabilities = null;
+    const lintId = Array.isArray(saved.lint?.request_ids) ? saved.lint.request_ids.at(-1) : null;
+    if (UUID.test(lintId ?? '')) {
+      try {
+        const lint = await read(join(folder,`${lintId}.json`));
+        if (!sameJob(lint,lintId,'lint') || lint.source_sha256 != null && saved.source_sha256 != null && lint.source_sha256 !== saved.source_sha256) throw Error('mismatched original lint');
+        if (Array.isArray(lint.result?.capabilities)) capabilities = lint.result.capabilities;
+      } catch { partial=true;warn('Some original Check source manifests are unavailable or mismatched.'); }
+    }
+    const inconsistent = () => { partial=true;warn('Some saved Check rows contradict their original selection, Story, source or request identity.'); };
     for (const row of saved.rows) {
       if (!row || !wanted.has(row.test)) continue;
       const story_path = row.story_path ?? (Array.isArray(saved.contract_snapshots) ? saved.contract_snapshots : []).find(story=>Array.isArray(story?.tests) && story.tests.includes(row.test))?.story_path
         ?? (typeof row.story === 'string' && row.story.endsWith('.md') ? row.story : (()=>{const paths=[...new Set((Array.isArray(saved.files)?saved.files:[]).filter(path=>typeof path==='string' && path.endsWith('.md') && basename(path,'.md')===row.story))];return paths.length===1?paths[0]:null;})());
       if (typeof story_path !== 'string' || !story_path || story_path.startsWith('/') || story_path.includes('\\') || story_path.split('/').some(part=>!part || part==='.' || part==='..') || !Array.isArray(row.request_ids)) { partial=true;warn('Some saved Check rows lack original Story or request identity.');continue; }
+      const ownSnapshots = snapshots.filter(story=>Array.isArray(story?.tests) && story.tests.includes(row.test));
+      const snapshot = ownSnapshots[0];
+      const sent = row.request_ids.length > 0;
+      if (sent && !validSavedCheck(row)) { inconsistent();continue; }
+      const originalFootprint = originalSource?.stories?.find(story=>story.tests?.includes(row.test));
+      const duplicate = saved.rows.filter(other=>other?.test === row.test).length !== 1;
+      const storyName = typeof row.story === 'string' ? row.story : null;
+      const storyConflict = storyName && (storyName.endsWith('.md') ? storyName !== story_path : storyName !== basename(story_path,'.md'));
+      const invalidSnapshot = ownSnapshots.length > 1 || (snapshot && (snapshot.story_path !== story_path
+        || !Array.isArray(snapshot.files) || !snapshot.files.some(file=>file?.path === row.test)
+        || !snapshot.files.some(file=>file?.path === story_path)
+        || snapshot.files.some(file=>!file || typeof file.path !== 'string' || !/^[a-f0-9]{64}$/.test(file.sha256 ?? '') || manifest && !manifest.has(file.path))
+        || new Set(snapshot.files.map(file=>file?.path)).size !== snapshot.files.length));
+      const capabilityEntries = capabilities?.filter(item=>item?.path === row.test);
+      const capability = capabilityEntries?.[0]?.report;
+      const snapshotFiles = new Map((Array.isArray(snapshot?.files) ? snapshot.files : originalFootprint?.files ?? []).filter(isObject).map(file=>[file.path,file.sha256]));
+      const capabilityConflict = sent && capabilities && (capabilityEntries.length !== 1
+        || !Array.isArray(capability?.source?.files) || capability.source.scenario_sha256 !== snapshotFiles.get(row.test)
+        || capability.source.files.some(file=>!isObject(file) || !/^[a-f0-9]{64}$/.test(file.sha256 ?? '') || snapshotFiles.has(file.path) && snapshotFiles.get(file.path) !== file.sha256)
+        || !capability.source.files.some(file=>file?.path === story_path && file.sha256 === snapshotFiles.get(story_path))
+        || !Array.isArray(capability.operations) || capability.operations.some(operation=>!(row.steps ?? []).some(step=>step.step_id === operation?.selection?.step_id
+          && step.entry_path === operation.selection.prompt_path && step.operation === operation.selection.operation)));
+      if (duplicate || storyConflict || invalidSnapshot || capabilityConflict
+        || sent && (row.unsent || !tests.includes(row.test) || manifest && (!manifest.has(row.test) || !manifest.has(story_path)))
+        || originalFootprint && (originalFootprint.story_path !== story_path || snapshot && !isDeepStrictEqual(snapshot,originalFootprint))) {
+        inconsistent();continue;
+      }
+      // A legacy receipt without a snapshot can still retain a readable nonpass.
+      // It cannot supply positive evidence without the original Story association.
+      const boundStory = !!snapshot || originalFootprint?.story_path === story_path;
+      if (sent && (!boundStory || !manifest)) { partial=true;warn('Some legacy Check history lacks original Story/source binding.'); }
       const retain = (view,request_id,evidence_kind,report_url) => observations.push({story_path,test:row.test,batch:name,request_id,evidence_kind,
         ...resultOutcome(view),created_at,report_url,source_sha256:typeof saved.source_sha256 === 'string' ? saved.source_sha256 : null,
         currentness,currentness_scope:'original-batch',stage:['current','pr1','before'].includes(stage)?stage:'unavailable'});
@@ -316,9 +374,29 @@ async function readBaselineReport(context, plan, identity) {
       for (const id of [...new Set(row.request_ids)]) {
         try {
           if (!UUID.test(id)) throw Error('invalid request identity');
+          if (saved.rows.filter(other=>Array.isArray(other?.request_ids) && other.request_ids.includes(id)).length !== 1
+            || claimsUnavailable || claimFiles > 0 && !claims.has(id)
+            || claims.has(id) && (claims.get(id).length !== 1 || claims.get(id)[0] !== sha256(Buffer.from(row.test)))) {
+            inconsistent();continue;
+          }
+          if (!claims.has(id)) { partial=true;warn('Some legacy Check receipts lack original dispatch ownership.'); }
           const originals = [];
           const admit = answer => {
             if (!sameJob(answer,id,'check')) { partial=true;warn('Some original Check receipts are missing, corrupt or mismatched.');return; }
+            const report = answer.result?.report;
+            const sourceMismatch = answer.source_sha256 != null && saved.source_sha256 != null && answer.source_sha256 !== saved.source_sha256;
+            const files = new Map((Array.isArray(snapshot?.files) ? snapshot.files : originalFootprint?.files ?? []).filter(isObject).map(file=>[file.path,file.sha256]));
+            const projectedMismatch = Array.isArray(report?.projected_context_bindings) && report.projected_context_bindings.some(binding=>
+              !isObject(binding) || files.get(binding.prompt_path) !== binding.prompt_sha256 || !Array.isArray(binding.context_blobs) || binding.context_blobs.some(blob=>!isObject(blob) || files.get(blob.path) !== blob.sha256));
+            const executionMismatch = Array.isArray(report?.call_depth) && report.call_depth.some(step=>
+              !(row.steps ?? []).some(original=>original.step_id === step?.step_id && original.entry_path === step?.entry_path && original.operation === step?.operation));
+            const malformedIdentity = isObject(report) && (Object.hasOwn(report,'projected_context_bindings') && !Array.isArray(report.projected_context_bindings)
+              || Object.hasOwn(report,'call_depth') && !Array.isArray(report.call_depth));
+            if (sourceMismatch || projectedMismatch || executionMismatch || malformedIdentity) { inconsistent();return; }
+            if (answer.source_sha256 == null || saved.source_sha256 == null) {
+              partial=true;warn('Some legacy Check receipts lack a bound original source hash.');
+            }
+            if ((!boundStory || !manifest || saved.source_sha256 == null || !claims.has(id) && !Array.isArray(report?.call_depth)) && resultOutcome(projectAnswer(answer,{test:row.test,steps:row.steps??[]})).state === 'passed') return;
             if (!originals.some(previous=>isDeepStrictEqual(previous,answer))) originals.push(answer);
           };
           try {
@@ -3445,6 +3523,37 @@ async function finishTestAttempts(cache, rows, capture) {
   });
 }
 
+// Bind planning to the Git comparison and the exact permitted classification inputs.
+// Git's binary diff also preserves link spelling and non-UTF-8 implementation bytes.
+// The source reader admits each working path before Git reads its raw bytes.
+function affectedPlanningAuthority(root, found, base, ports) {
+  const git = args => {
+    if (ports.checkPlanPorts?.git) return ports.checkPlanPorts.git(root,args);
+    const result = spawnSync('git',args,{cwd:root,stdio:['ignore','pipe','pipe'],maxBuffer:512*1024*1024});
+    if (result.status !== 0 && !(args.includes('--no-index') && result.status === 1)) throw Error('comparison unavailable');
+    return result.stdout;
+  };
+  const permitted = path => allowsRuntimePath(found.workspace,path)
+    && !(found.excludedFixtureProjects ?? []).some(prefix=>path === prefix || path.startsWith(`${prefix}/`));
+  try {
+    const revision = String(git(['rev-parse',`${base}^{tree}`])).trim();
+    const tracked = String(git(['diff','--name-only','-z','--no-renames',base,'--'])).split('\0').filter(permitted).filter(Boolean).sort();
+    const untracked = String(git(['ls-files','--others','--exclude-standard','-z'])).split('\0').filter(permitted).filter(Boolean).sort();
+    // Validate working paths through the source authority before Git reads bytes.
+    const source = sourceFilePort(root,found.visible,found.workspace);
+    const content = [...new Set([...tracked,...untracked])].map(path=>{
+      try { return [path,sha256(Buffer.from(source.read({path}).content))]; }
+      catch { return [path,null]; }
+    });
+    const readable = new Set(content.filter(([,hash])=>hash !== null).map(([path])=>path));
+    const paths = tracked.filter(path=>readable.has(path));
+    const diff = paths.length ? sha256(Buffer.from(git(['diff','--no-ext-diff','--no-textconv','--no-renames','--binary',base,'--',...paths.map(path=>`:(literal)${path}`)]))) : null;
+    const added = untracked.filter(path=>readable.has(path)).map(path=>[path,sha256(Buffer.from(git([
+      'diff','--no-index','--no-ext-diff','--no-textconv','--binary','--','/dev/null',path])))]);
+    return {revision,tracked,untracked,content,diff,added};
+  } catch { return {unavailable:true}; }
+}
+
 async function runBatch(context, cwd, words, options, setRelease) {
   const { ports } = context;
   const origin = runtimeOrigin(ports.env);
@@ -3464,8 +3573,10 @@ async function runBatch(context, cwd, words, options, setRelease) {
   // Discovery is part of selection authority, including complete sibling variants.
   // Recheck after captures too: a capture can observe a newly created test that
   // was absent from the discovery result passed to the planner.
-  const discoveryScope = current => ({tests:current.tests,visible:current.discoveryVisible ?? current.visible,workspace:current.workspace});
+  const discoveryScope = current => ({tests:current.tests,visible:current.discoveryVisible ?? current.visible,workspace:current.workspace,
+    authority:affected ? affectedPlanningAuthority(root,current,base,ports) : null});
   const initialDiscovery = discoveryScope(found);
+  if (affected && initialDiscovery.authority.unavailable) context.forceAffectedFull = true;
   let discoveryChanged = false, cache = null;
   const discover = () => {
     const current = localSetup(cwd, words);

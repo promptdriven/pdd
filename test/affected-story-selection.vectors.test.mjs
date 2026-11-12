@@ -241,3 +241,57 @@ test('3146 git-scope-and-no-target: unavailable Git and rename coverage remain c
     assert.deepEqual(sorted(checks(fake).map(row=>row.request.scenario)),sorted(data.expected.no_established_target_checks));
   });
 });
+
+test('3146 late classification bytes cannot omit a newly affected implementation owner',async t=>{
+  for(const variant of ['new changed path','untracked owner','same changed paths, new owner','same changed paths, unknown owner','dependency edge','safe-link spelling','global inventory'])await t.test(variant,async t=>{
+    const setup=affectedFixture(t);
+    put(setup.repo,'src/owned.mjs','// Generated from prompts/A.prompt.md.\nexport const value=1;\n');
+    put(setup.repo,'src/C.mjs','// Generated from prompts/C.prompt.md.\nexport const value=1;\n');
+    commit(setup.repo);setup.change('docs/shared.md');
+    if(variant==='untracked owner')put(setup.repo,'src/untracked.mjs','// Generated from prompts/A.prompt.md.\nexport const value=2;\n');
+    if(variant.startsWith('same changed'))put(setup.repo,'src/owned.mjs','// Generated from prompts/A.prompt.md.\nexport const value=2;\n');
+    let sawSelected=false,plansAfterSelected=0,changed=false;
+    const fake=await affectedRuntime(t,setup),result=await check(setup,fake,{cache:true,extra:{captureSource(root,selection){
+      const captured=captureSource(root,selection),selectedCapture=selection.tests?.length===3;
+      if(sawSelected&&!selectedCapture)plansAfterSelected++;
+      if(plansAfterSelected===2&&!changed){
+        assert.equal(checks(fake).length,0,'late planning change must precede every paid Check');changed=true;
+        if(variant==='untracked owner')put(root,'src/untracked.mjs','// Generated from prompts/C.prompt.md.\nexport const value=2;\n');
+        if(variant==='new changed path')appendFileSync(join(root,'src/C.mjs'),'export const changed=2;\n');
+        if(variant==='same changed paths, new owner')put(root,'src/owned.mjs','// Generated from prompts/C.prompt.md.\nexport const value=2;\n');
+        if(variant==='same changed paths, unknown owner')put(root,'src/owned.mjs','export const value=2;\n');
+        if(variant==='dependency edge')put(root,'docs/shared.md','Shared changed dependency.\n\n## Dependencies\n\n[C](../prompts/C.prompt.md)\n');
+        if(variant==='safe-link spelling'){const bytes=readFileSync(join(root,'docs/shared.md'));put(root,'docs/new-target.md',bytes.toString());unlinkSync(join(root,'docs/shared.md'));symlinkSync('new-target.md',join(root,'docs/shared.md'));}
+        if(variant==='global inventory')put(root,'pdd-bindings.json',{schema_version:'pdd.bindings.v1',modules:[]});
+      }
+      if(selectedCapture)sawSelected=true;return captured;
+    }}});
+    assert.equal(changed,true);assert.equal(result.code,0,result.ports.stderr.text);
+    assert.ok(checks(fake).some(row=>row.request.scenario==='test/runtime/C.json'),'3146_LATE_OWNER_OMITTED: late implementation or dependency change omitted genuinely affected C');
+    assert.deepEqual(sorted(checks(fake).map(row=>row.request.scenario)),sorted(setup.tests));
+    assert.deepEqual(result.output.check_selection.baseline_tests,[]);
+    const cache=JSON.parse(readFileSync(join(setup.repo,'.pdd/cache/test/stories.json'),'utf8'));
+    assert.deepEqual(cache.latest_identity.in_progress,[]);
+  });
+});
+
+test('3146 continuously changing ownership bytes stop before authentication or paid work',async t=>{
+  const setup=affectedFixture(t);put(setup.repo,'src/owned.mjs','// Generated from prompts/A.prompt.md.\nexport const value=1;\n');commit(setup.repo);
+  setup.change('docs/shared.md');setup.change('src/owned.mjs');let captures=0;
+  const fake=await affectedRuntime(t,setup),result=await check(setup,fake,{cache:true,extra:{captureSource(root,selection){
+    const captured=captureSource(root,selection);captures++;assert.ok(captures<10,'ownership drift must terminate');
+    appendFileSync(join(root,'src/owned.mjs'),`export const drift${captures}=${captures};\n`);return captured;
+  }}});
+  assert.equal(result.code,4,result.ports.stderr.text);assert.equal(fake.posts.length,0);assert.equal(result.clock.gh.length,0);
+  assert.match(result.ports.stderr.text,/Source selection kept changing during planning/);
+});
+
+test('3146 unavailable planning identity keeps complete conservative dispatch',async t=>{
+  const setup=affectedFixture(t);setup.change('docs/shared.md');
+  const fake=await affectedRuntime(t,setup),result=await check(setup,fake,{extra:{checkPlanPorts:{git(root,args){
+    if(args[0]==='rev-parse')throw Error('Controlled unavailable comparison identity');return git(root,...args);
+  }}}});
+  assert.equal(result.code,0,result.ports.stderr.text);
+  assert.deepEqual(sorted(checks(fake).map(row=>row.request.scenario)),sorted(setup.tests));
+  assert.deepEqual(result.output.check_selection.baseline_tests,[]);
+});

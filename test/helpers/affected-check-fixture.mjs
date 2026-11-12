@@ -40,7 +40,12 @@ export async function affectedRuntime(t,setup,{fail=[],answer}={}) {
     if(entry.command==='check'){
       const test=JSON.parse(readFileSync(join(setup.repo,entry.request.scenario),'utf8'));
       const passed=!fail.includes(entry.request.scenario),checks=test.steps.flatMap(step=>step.checks).map(check=>({...check,expected:check.value,actual:passed?check.value:'fixture failure',passed}));
-      return {status:200,json:f.check(entry.request.requestId,passed?'passed':'failed',checks)};
+      const receipt=f.check(entry.request.requestId,passed?'passed':'failed',checks);
+      // Real Check replies bind the uploaded archive here; report.scenario is generic.
+      receipt.source_sha256=entry.request.source_sha256;
+      receipt.result.report.scenario='scenario.json';
+      receipt.result.report.call_depth=test.steps.map(step=>({step_id:step.step_id,entry_path:step.entry_path,operation:step.operation}));
+      return {status:200,json:receipt};
     }
     return f.normal(entry);
   });
