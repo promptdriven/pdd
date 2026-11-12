@@ -55,6 +55,7 @@ Load each owner module only when the exported function (or its slice loader) is 
 | `src/runtime/runtime-slots.mjs` | `runJobs` | `await import('./runtime-slots.mjs')` when called |
 | `src/runtime/interface-draft.mjs` | `loadInterfaceDraft`, `runAutomaticApproval`, `runInterfaceDraft` | `await import('./interface-draft.mjs')` when called (`loadInterfaceDraft` resolves to `{ contractCoverage, coverageView, missingInterfaces }`) |
 | `src/runtime/agent-chat.mjs` | `createAgentBridge` | `await import('./agent-chat.mjs')` when called |
+| `src/runtime/agent-ask.mjs` | `askAgent` | `await import('./agent-ask.mjs')` when called |
 | `src/runtime/runtime-workspace-migration.mjs` | `migrateRuntimeWorkspace` | `await import('./runtime-workspace-migration.mjs')` when called |
 | `src/runtime/try-mcp.mjs` | `createTryTools`, `runMcp` | `createTryTools` loads synchronously on first call via `createRequire(import.meta.url)`; `runMcp` uses `await import('./try-mcp.mjs')` |
 | `src/runtime/try-doors.mjs` | `openCli`, `runShim`, `saveLast` | `await import('./try-doors.mjs')` when called |
@@ -76,7 +77,7 @@ Load each owner module only when the exported function (or its slice loader) is 
 - [Runtime slots](runtime-slots.prompt.md): required generation context for `runJobs`.
 - [Shared contracts](contracts.prompt.md): required generation context for `runContracts`.
 - [Interface drafting](interface-draft.prompt.md): required generation context for `contractCoverage`, `coverageView`, `missingInterfaces`, `runAutomaticApproval`, and `runInterfaceDraft`.
-- [Agent chat](agent-chat.prompt.md), [Try guide](agent-guide.prompt.md), and [Project facts](agent-project.prompt.md): required generation context for `buildProjectCard`, `createAgentBridge`, `createTryGuide`, and `readAgentScenarios`.
+- [Agent chat](agent-chat.prompt.md), [Simulator agent turn](agent-ask.prompt.md), [Try guide](agent-guide.prompt.md), and [Project facts](agent-project.prompt.md): required generation context for `askAgent`, `buildProjectCard`, `createAgentBridge`, `createTryGuide`, and `readAgentScenarios`.
 - [Workspace migration](runtime-workspace-migration.prompt.md): required generation context for `migrateRuntimeWorkspace`.
 - [Try MCP server](try-mcp.prompt.md): required generation context for `createTryTools` and `runMcp`.
 - [Try doors](try-doors.prompt.md) and [Try HTTP server](try-http.prompt.md): required generation context for `openCli`, `openServe`, `runShim`, `saveLast`, and `tryLauncherUrl` forwarding.
@@ -85,6 +86,6 @@ Load each owner module only when the exported function (or its slice loader) is 
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"native-only","status":"draft","prose_sha256": "b8ac5b3e00534fae6105df5d39463534093747c9ec0dc4767114a44f7b67dd2b","reason":"Exposes live JavaScript ESM static and deferred dynamic-import bindings across src/runtime/ submodules, which bound Runtime ports cannot fake."}
+{"kind":"native-only","status":"draft","prose_sha256": "aec0687e5c7573a95aa3c187b412dee5eb994b22464ff0372c8c20309e08bf1e","reason":"Exposes live JavaScript ESM static and deferred dynamic-import bindings across src/runtime/ submodules, which bound Runtime ports cannot fake."}
 ```
 </details>

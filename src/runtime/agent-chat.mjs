@@ -1,7 +1,8 @@
 import {loadRuntimeWorkspace} from './runtime-workspace.mjs';
 import {captureSource} from './runtime-preflight.mjs';
-// Generated from prompts/cli/agent-chat.prompt.md (sha256: a940af8aeb38d5f91e1e90ef1f4d09d8880cc6bde0bcdb1b1477f6e9910bd8f0).
+// Generated from prompts/cli/agent-chat.prompt.md (sha256: 46235fe5452f24bdf42551bb34e6b5837b69874c3764d1f63dde2da9b105c145).
 import {createTryGuide} from './agent-guide.mjs';
+import {askAgent} from './agent-ask.mjs';
 import {cleanText} from './runtime-output.mjs';
 const object=x=>x!==null&&typeof x==='object'&&!Array.isArray(x);
 const unboundPortError=message=>Object.assign(new Error(message),{unboundPort:true});
@@ -30,7 +31,8 @@ export async function createAgentBridge(context,test,tryId,options={},link,seamP
  const definitions=context.agentDefinitions??loadDefinitions({cwd:context.root,env:ports.env});
  if(!definitions.length)throw Error('No agents are configured. Add an agent or enable defaults in agents.json.');
  const discover=context.ports?.discoverAgents??context.ports?.agents?.list??seamPorts.discoverAgents??seamPorts.agents?.list;
- const ask=context.ports?.askAgent??context.ports?.agents?.ask??seamPorts.askAgent??seamPorts.agents?.ask;
+ const runPort=context.ports?.runAgentProcess??context.ports?.agents?.run??seamPorts.runAgentProcess??seamPorts.agents?.run;
+ const ask=context.ports?.askAgent??context.ports?.agents?.ask??seamPorts.askAgent??seamPorts.agents?.ask??(typeof runPort==='function'?input=>askAgent(input,{run:runPort}):undefined);
  if(typeof discover!=='function'||typeof ask!=='function')throw unboundPortError('Agent adapter ports (discoverAgents, askAgent) are not bound.');
  const known=id=>definitions.some(d=>d.id===id),byChoice=value=>definitions.find(d=>d.name===value)??definitions.find(d=>['codex','claude','gemini'].includes(d.id)&&d.id===value);
  const explicit=options['--agent']!==undefined?byChoice(options['--agent']):null;

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: f8538907eaa300096422c9134900142d978561f9acdefc583ffa0d5c07ee73da).
+// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 8e5cc04b12975b91b1b24e768144e32ee1cd94f4f984a5cf6fc3c403219ddc89).
 import { readFileSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -17,6 +17,7 @@ import {
   allowsRuntimePath,
   applyPendingCase as rawApplyPendingCase,
   applyPendingCaseWithHandoff as rawApplyPendingCaseWithHandoff,
+  askAgent as runtimeAskAgent,
   buildAgentInput,
   buildCheckPlan as runtimeBuildCheckPlan,
   buildProjectCard as runtimeBuildProjectCard,
@@ -576,6 +577,12 @@ export async function runCheck(input = {}, ports = {}) {
   );
 }
 
+export async function askAgent(input = {}, ports = {}) {
+  const explicitRun = input?.run ?? ports.run ?? ports.runAgentProcess ?? ports.agents?.run;
+  const run = explicitRun ?? (await import('./agent-adapters.mjs')).runAgentProcess;
+  return runtimeAskAgent({ ...input, run }, ports);
+}
+
 export async function runTry(input = {}, ports = {}) {
   const [
     ,
@@ -591,13 +598,14 @@ export async function runTry(input = {}, ports = {}) {
     import('./prompt-approve.mjs'),
   ]);
   const defaultDiscoverAgents = async (...args) => (await import('./agent-adapters.mjs')).discoverAgents(...args);
-  const defaultAskAgent = async (...args) => (await import('./agent-adapters.mjs')).askAgent(...args);
+  const defaultAskAgent = async (turnInput, ...rest) => askAgent(turnInput, ...rest);
   const defaultAgentBridge = (context, test, tryId, opts, link) =>
     createAgentBridge(context, test, tryId, opts, link, {
       redaction: ports.redaction ?? seamRedaction(ports),
       redactSecrets: ports.redactSecrets,
       loadAgentDefinitions: ports.loadAgentDefinitions ?? ports.agents?.loadDefinitions ?? loadAgentDefinitions,
       discoverAgents: ports.discoverAgents ?? ports.agents?.list,
+      runAgentProcess: ports.runAgentProcess ?? ports.agents?.run,
       askAgent: ports.askAgent ?? ports.agents?.ask,
       evidenceEligibility: ports.evidenceEligibility ?? ports.readEvidenceEligibility ?? readEvidenceEligibility,
       guidePorts: ports.guidePorts,
@@ -623,12 +631,15 @@ export async function runTry(input = {}, ports = {}) {
 }
 
 export async function createAgentBridge(context, test, tryId, options, link, seamPorts = {}) {
-  const [, { loadAgentDefinitions }, { askAgent, discoverAgents }, { readEvidenceEligibility }] = await Promise.all([
+  const [, { loadAgentDefinitions }, { discoverAgents, runAgentProcess }, { readEvidenceEligibility }] = await Promise.all([
     import('./secret-redaction.mjs'),
     import('./agent-config.mjs'),
     import('./agent-adapters.mjs'),
     import('./workflow-runner.mjs'),
   ]);
+  const boundRun = seamPorts.runAgentProcess ?? seamPorts.agents?.run ?? runAgentProcess;
+  const defaultAsk = turnInput =>
+    runtimeAskAgent({ ...turnInput, run: turnInput?.run ?? boundRun }, seamPorts);
   return runtimeCreateAgentBridge(
     context,
     test,
@@ -640,7 +651,8 @@ export async function createAgentBridge(context, test, tryId, options, link, sea
         loadAgentDefinitions:
           seamPorts.loadAgentDefinitions ?? seamPorts.agents?.loadDefinitions ?? loadAgentDefinitions,
         discoverAgents: seamPorts.discoverAgents ?? seamPorts.agents?.list ?? discoverAgents,
-        askAgent: seamPorts.askAgent ?? seamPorts.agents?.ask ?? askAgent,
+        runAgentProcess: boundRun,
+        askAgent: seamPorts.askAgent ?? seamPorts.agents?.ask ?? defaultAsk,
         redaction: seamRedaction(seamPorts),
       }),
     ),

@@ -142,7 +142,7 @@ test('keep-list: schema ids, host, setting, folder, block label and gate text st
   assert.equal(runtimeOrigin({ PDD_RUNTIME_URL: 'https://other.example' }), 'https://other.example');
   // The folder ~/.pdd/runtime, in each module that builds it.
   for (const [file, words] of [['runtime/runtime-client.mjs', '\'.pdd\', \'runtime\''], ['runtime/runtime-slots.mjs', '\'.pdd\', \'runtime\''],
-    ['runtime/agent-project.mjs', '\'.pdd/runtime\''], ['agent-adapters.mjs', '\'.pdd\',\'runtime\'']]) assert.ok(sourceOf(file).includes(words), file);
+    ['runtime/agent-project.mjs', '\'.pdd/runtime\''], ['runtime/agent-ask.mjs', '\'.pdd\',\'runtime\'']]) assert.ok(sourceOf(file).includes(words), file);
   // The block label: pdd finds a `Runtime interface` block, and its messages name the block.
   const block = label => `# A prompt\n\n<details><summary>${label}</summary>\n\n\`\`\`json\n{"status": "draft"}\n\`\`\`\n</details>\n`;
   assert.equal(interfaceBlocks(block('Runtime interface')).length, 1);

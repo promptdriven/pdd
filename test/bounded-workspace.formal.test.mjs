@@ -11,7 +11,7 @@ import {createHash} from 'node:crypto';
 import {syncBuiltinESMExports} from 'node:module';
 import {loadRuntimeWorkspace, allowsRuntimePath, requireRuntimePath} from '../src/runtime/runtime-workspace.mjs';
 import {captureSource, fillHashes, createStrictSourceAccess} from '../src/runtime-seam.mjs';
-import {askAgent} from '../src/agent-adapters.mjs';
+import {askAgent} from '../src/runtime-seam.mjs';
 import {saveDoorCase, acquireCaseWriteOwnership, applyPendingCase} from '../src/runtime-seam.mjs';
 import {migrateRuntimeWorkspace, runTry} from '../src/runtime-seam.mjs';
 import {associateEvidenceWorkspace, readEvidenceEligibility} from '../src/workflow-runner.mjs';

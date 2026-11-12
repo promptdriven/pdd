@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-entry.prompt.md (sha256: 35601a36a25c10726ab55b4b7c383192f1f23d299a72d08798834eddbdc2e087).
+// Generated from prompts/cli/runtime-entry.prompt.md (sha256: 0d3af7b266693c3ca1fc7a16abd42717184494059a58286bcc1fb9813cc142f7).
 import { createRequire } from 'node:module';
 
 const req = createRequire(import.meta.url);
@@ -521,6 +521,11 @@ export async function runDoorCall(descriptor, input, ports) {
 export async function readTryOwner(input, ports) {
   const { readTryOwner: read } = await import('./runtime-client.mjs');
   return read(input, ports);
+}
+
+export async function askAgent(input, ports) {
+  const { askAgent: ask } = await import('./agent-ask.mjs');
+  return ask(input, ports);
 }
 
 export async function createAgentBridge(context, test, tryId, options, link, seamPorts) {
