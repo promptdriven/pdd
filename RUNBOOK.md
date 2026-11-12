@@ -483,6 +483,17 @@ pdd test --screen http://127.0.0.1:8080/ --drawing prompts/views/active__stacked
 
 This uses installed headless Chrome/Chromium at the SVG viewport, no AI or interpreter calls. Set `PDD_CHROME_PATH` if the executable is not found. It checks every visible text occurrence and id, including numeric values, against the real page; metadata, hidden and context-only SVG subtrees are excluded. It requires visible page parts, center positions within 15% of each viewport dimension, and the same spatial order for separated parts. Arrange the named state and its dynamic values before comparing. This parts comparison does not certify pixel equivalence; retain any stricter accepted measured/exact comparator and tolerance. Text matches require effective visible glyph paint and literal displayed control labels; password and other nondisplayed stored values never supply labels. Applied clips, masks, filters and unsupported text paint or native formatting leave visibility unproved and return an error. Arbitrary overlay occlusion, colors and typography require separate verification.
 
+For a Simulator Screen door, the comparator waits up to 10 seconds after page
+load for its readiness protocol, app fonts and layout. It reads only the marked
+same-origin iframe or open shadow app surface in local coordinates. It never
+clicks Open or sends an action. Exit 6 (`screen-not-ready`) gives state, reason
+and recovery guidance without a drawing table. An unopened app requires a
+deliberate open, which can spend AI calls; a legacy viewer requires an update.
+Keep a not-ready result distinct from a drawing mismatch and rerun after the
+named prerequisite is satisfied. JSON has `drawing`, `url`, `outcome` (`not-ready`),
+`code` (`screen-not-ready`), `state`, `reason`, `message` and `exit_code` (6),
+without comparison `rows` or `passed`.
+
 Verification must put a **Screen vs drawing** table in `verify.md` and in the body of the code PR (code space):
 
 | Part | Drawing | Screen | Result |
