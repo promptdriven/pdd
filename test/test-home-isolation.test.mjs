@@ -172,8 +172,8 @@ test('home cleanup also runs after a failed native test', t => {
 // Exercise the same native fixture entrypoints on the old checkout for the
 // control. Expected caller bytes come from the isolation contract, not pdd output.
 for (const [file, pattern] of [
-  ['metrics-selector.integration.test.mjs', '^selector captures'],
-  ['metrics-composition.integration.test.mjs', '^composed launcher'],
+  ['metrics-selector.integration.test.mjs', '^real CLI export backfills'],
+  ['metrics-composition.integration.test.mjs', '^composed storage'],
   ['autopilot-runtime-outage.test.mjs', '^real path:|^real pdd test:'],
   ['workspace-evidence-counting.test.mjs', '^2899/2956: owned'],
   ['workflow-step-results-2922.test.mjs', '^2922 AC'],

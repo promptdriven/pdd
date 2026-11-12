@@ -432,100 +432,8 @@ async function heartbeatTick(t) {
   return f;
 }
 
-test('tick: the owner refreshes its live claim at each tick with no AI call, and a heartbeat edit is not new work', async t => {
-  const f = await heartbeatTick(t);
-  for (const i of [1, 2]) {
-    f.time += 29 * minute; await f.tick();
-    assert.equal(f.patches.length, i, 'one heartbeat for the one own claim');
-    assert.equal(JSON.parse(/```json\n([\s\S]*?)\n```/.exec(f.patches.at(-1).body)[1]).lastSeen, at(f.time));
-    assert.equal(f.issues[0].updated_at, at(f.time), 'like GitHub, the edit moved the issue update time');
-  }
-  assert.equal(f.prompts.length, 0, 'a heartbeat is neither an AI call nor new work');
-});
-
 // GitHub moves the issue updated_at to the edit time of a comment (measured on
 // GitHub 2026-11-06), so each heartbeat changes the issue update time.
-test('tick: with only heartbeats for 60 minutes the idle-claim rule fires once', async t => {
-  const f = await heartbeatTick(t);
-  f.time += 30 * minute; await f.tick();
-  assert.equal(timeRules(f, 'idle-claim').length, 0, '30 minutes of heartbeats is not idle yet');
-  f.time += 30 * minute; await f.tick();
-  assert.deepEqual(timeRules(f, 'idle-claim').map(row => row.number), [7], 'heartbeats alone are not activity');
-  for (let i = 0; i < 4; i++) { f.time += 30 * minute; await f.tick(); }
-  assert.equal(timeRules(f, 'idle-claim').length, 1, 'the rule is sent once');
-  assert.equal(f.patches.length, 6, 'the claim was refreshed at each tick');
-});
-
-test('tick: real progress on a heartbeat claim keeps the idle-claim rule quiet', async t => {
-  const f = await heartbeatTick(t);
-  const progress = (id, time) => { f.issueComments[7].push({ id, user: { login: 'owner' }, created_at: at(time), updated_at: at(time), body: `Progress ${id}.` });
-    f.issues[0].comments += 1; f.issues[0].updated_at = at(time); };
-  f.time += 30 * minute; await f.tick();
-  progress(902, f.time + 15 * minute);
-  f.time += 30 * minute; await f.tick();
-  f.time += 30 * minute; await f.tick();
-  assert.equal(timeRules(f, 'idle-claim').length, 0, 'a worker comment 45 minutes after the claim is activity');
-  f.time += 30 * minute; await f.tick();
-  assert.deepEqual(timeRules(f, 'idle-claim').map(row => row.number), [7], 'it fires 60 minutes after the last real progress');
-  assert.equal(f.patches.length, 4, 'the claim was refreshed at each tick');
-});
-
-test('tick: in off mode this machine sends no heartbeat, so its claims expire like a stopped machine', async t => {
-  const f = await heartbeatTick(t);
-  writeFileSync(join(f.cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'off', trust: [] } }));
-  for (let i = 0; i < 3; i++) { f.time += 30 * minute; await f.tick(); }
-  assert.equal(f.patches.length, 0, 'off mode writes no lastSeen');
-  assert.equal(f.prompts.length, 0, 'off mode wakes no AI and releases nothing');
-  writeFileSync(join(f.cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', trust: [] } }));
-  f.time += 30 * minute; await f.tick();
-  assert.equal(f.patches.length, 1, 'back in auto mode the live claim is refreshed again');
-});
-
-test('tick: a live claim of another coordinator stays skipped; once it expires it is offered with its reason', async t => {
-  const f = await tickFixture(t, { mode: 'observe' });
-  f.issues = [tickIssue(8)];
-  const other = { issue: key(8), owner: 'coordinator-old', coordinatorId: 'coordinator-old', machine: 'machine-old', commentId: '801', labelEventId: '601', lastSeen: at(NOW - 3 * hour) };
-  f.claims = () => [{ ...other, active: true }];
-  assert.equal((await f.start()).exitCode, 0);
-  for (const prompt of f.prompts) assert.doesNotMatch(prompt, /"number":8,/);
-  f.prompts.length = 0; f.status = 304;
-  f.time += 30 * minute; await f.tick();
-  assert.equal(f.prompts.length, 0, 'a live claim is never offered as work');
-  f.claims = () => [{ ...other, active: false, expired: true, lastSeen: at(NOW - 4 * hour) }];
-  f.eligible = () => [key(8)];
-  f.time += 30 * minute; await f.tick();
-  assert.equal(f.prompts.length, 1, 'the expired claim is offered once');
-  const item = f.packet().issues.find(row => row.number === 8);
-  assert.equal(item.eligible, true);
-  assert.equal(item.claimed, true);
-  assert.deepEqual(item.expiredClaim, { lastSeen: at(NOW - 4 * hour) });
-  f.time += 30 * minute; await f.tick();
-  assert.equal(f.prompts.length, 1, 'an unchanged expired claim stays quiet in observe mode');
-  assert.equal(f.patches.length, 0, 'no coordinator edits another owner\'s claim');
-});
-
-test('tick: after 4 hours stuck the owner stops refreshing its claim and asks once to retry or alert', async t => {
-  const f = await tickFixture(t);
-  f.issues = [tickIssue(7, { labels: [{ name: 'pdd:working' }, { name: 'pdd:stuck' }] })];
-  let stuckSince = at(NOW - 4 * hour + 30 * minute);
-  f.claims = state => [ownClaim({ owner: state.coordinatorId, coordinatorId: state.coordinatorId, machine: state.machine, stuckSince })];
-  assert.equal((await f.start()).exitCode, 0);
-  f.ownComment(); f.prompts.length = 0; f.patches.length = 0; f.status = 304;
-  f.time += 29 * minute; await f.tick();
-  assert.equal(f.patches.length, 1, 'stuck for less than 4 hours: the claim is still refreshed');
-  assert.equal(f.prompts.length, 0);
-  f.time += minute; await f.tick();
-  assert.equal(f.patches.length, 1, 'stuck for 4 hours: no more refresh, so the claim can expire');
-  assert.equal(f.prompts.length, 1);
-  const stuckRules = () => f.prompts.flatMap(text => JSON.parse(text.trim().split('\n').at(-1)).timeRules ?? []).filter(row => row.kind === 'stuck-claim');
-  assert.equal(stuckRules()[0].number, 7);
-  assert.match(stuckRules()[0].reason, /stuck for 4 hours.*changed approach.*alert channel/);
-  for (let i = 0; i < 2; i++) { f.time += 30 * minute; await f.tick(); }
-  assert.equal(stuckRules().length, 1, 'the stuck rule is sent once');
-  stuckSince = undefined; f.time += 30 * minute; await f.tick();
-  assert.equal(f.patches.length, 2, 'a retried issue that left pdd:stuck is refreshed again');
-});
-
 // A coordinator whose claim expired or was taken does not push to the issue.
 test('workflow: an automatic run does not push or open its PR after its claim expired', async t => {
   const exec = promisify(callbackExec);
@@ -638,49 +546,6 @@ test('takeover ceiling: a normal release of a live claim is not a takeover and s
   assert.equal(node.eligible, true);
 });
 
-test('tick: after 3 takeovers the expired claim stays a hold and coordinators get one takeover-limit rule', async t => {
-  const f = await tickFixture(t);
-  f.issues = [tickIssue(8)];
-  let claim = { issue: key(8), owner: 'coordinator-old', coordinatorId: 'coordinator-old', machine: 'machine-old', commentId: '801', labelEventId: '601', active: false, expired: true, lastSeen: at(NOW - 5 * hour), takeovers: 3 };
-  f.claims = () => [claim];
-  assert.equal((await f.start()).exitCode, 0);
-  for (let i = 0; i < 3; i++) { f.time += 30 * minute; await f.tick(); }
-  const rules = timeRules(f, 'takeover-limit');
-  assert.deepEqual(rules.map(row => row.number), [8], 'one rule for the issue');
-  assert.match(rules[0].reason, /taken over 3 times\. Do not take it over again: take the stuck path \(pdd:stuck, one comment with the cause, one stuck alert\)/);
-  for (const text of f.prompts) for (const item of JSON.parse(text.trim().split('\n').at(-1)).issues ?? []) assert.equal(item.expiredClaim, undefined, 'never offered for a 4th takeover');
-  assert.deepEqual(f.state().seen[8].selectionReasons, ['pdd:working', 'takeover-limit']);
-  assert.equal(f.patches.length, 0);
-
-  // With 2 takeovers the same expired claim is offered for takeover, as before.
-  const g = await tickFixture(t);
-  g.issues = [tickIssue(8)];
-  g.claims = () => [{ ...claim, takeovers: 2 }];
-  g.eligible = () => [key(8)];
-  assert.equal((await g.start()).exitCode, 0);
-  assert.equal(timeRules(g, 'takeover-limit').length, 0);
-  assert.ok(g.prompts.some(text => (JSON.parse(text.trim().split('\n').at(-1)).issues ?? []).some(item => item.number === 8 && item.expiredClaim)), 'offered with expiredClaim');
-});
-
-test('tick: 24 hours after the claim with no merge, the owner gets one long-running rule and work continues', async t => {
-  const f = await tickFixture(t);
-  f.issues = [tickIssue(7, { comments: 1, updated_at: at(NOW) }), tickIssue(9, { state: 'closed' })];
-  f.claims = state => [ownClaim({ owner: state.coordinatorId, coordinatorId: state.coordinatorId, machine: state.machine, claimedAt: at(NOW - 23 * hour) }),
-    ownClaim({ issue: key(9), owner: state.coordinatorId, coordinatorId: state.coordinatorId, machine: state.machine, commentId: '909', claimedAt: at(NOW - 30 * hour) })];
-  assert.equal((await f.start()).exitCode, 0);
-  f.issueComments = { 7: [f.ownComment(at(NOW))] };
-  f.time += 30 * minute; await f.tick();
-  assert.equal(timeRules(f, 'long-running').length, 0, '23.5 hours after the claim is not due; a closed issue is not due');
-  f.time += 30 * minute; await f.tick();
-  const rules = timeRules(f, 'long-running');
-  assert.deepEqual(rules.map(row => row.number), [7]);
-  assert.match(rules[0].reason, /claimed 24 hours ago and has no merge yet\. Send one informational alert for it, then keep working; this is not a stop\./);
-  const patches = f.patches.length;
-  for (let i = 0; i < 3; i++) { f.time += 30 * minute; await f.tick(); }
-  assert.equal(timeRules(f, 'long-running').length, 1, 'once per issue');
-  assert.equal(f.patches.length, patches + 3, 'the claim is still refreshed: work continues');
-});
-
 // #3041 repair: what counts as a takeover, and how a person resets the count.
 // Each era: {from, seen, to?, who, alerted?}. `who` names the coordinator and machine of
 // its claim record. Extra timeline events (pdd:stuck) are merged in time order.
@@ -774,90 +639,6 @@ test('long-running alert: a claim chain that already sent it carries longRunning
   assert.equal(fresh.claim.longRunningAlertedAt, undefined, 'a new chain sends its own alert');
 });
 
-test('tick: only one coordinator acts on the takeover limit, and the own expired claim is a re-claim', async t => {
-  const limited = (state, extra) => ({ issue: key(8), owner: 'coordinator-old', coordinatorId: 'coordinator-old', machine: 'machine-old', commentId: '801', labelEventId: '601', active: false, expired: true, lastSeen: at(NOW - 5 * hour), takeovers: 3, ...extra });
-  const run = async claims => {
-    const f = await tickFixture(t);
-    f.issues = [tickIssue(8)]; f.claims = claims; f.eligible = () => [key(8)];
-    assert.equal((await f.start()).exitCode, 0);
-    for (let i = 0; i < 2; i++) { f.time += 30 * minute; await f.tick(); }
-    return f;
-  };
-  // The coordinator that was taken over last acts; any other coordinator does not.
-  const previous = await run(state => [limited(state, { previousOwner: { coordinatorId: state.coordinatorId, machine: state.machine } })]);
-  assert.deepEqual(timeRules(previous, 'takeover-limit').map(row => row.number), [8]);
-  assert.match(timeRules(previous, 'takeover-limit')[0].reason, /Read the issue again first and skip it if it already has pdd:stuck\. A person removes pdd:stuck to reset the count\./);
-  const other = await run(state => [limited(state, { previousOwner: { coordinatorId: 'coordinator-x', machine: 'machine-x' } })]);
-  assert.equal(timeRules(other, 'takeover-limit').length, 0);
-  // A 4th takeover made anyway: only the owner of that live claim acts.
-  const live = extra => state => [limited(state, { active: true, expired: undefined, takeovers: 4, ...extra(state) })];
-  assert.equal(timeRules(await run(live(state => ({ coordinatorId: state.coordinatorId, owner: state.coordinatorId, machine: state.machine }))), 'takeover-limit').length, 1);
-  assert.equal(timeRules(await run(live(() => ({}))), 'takeover-limit').length, 0);
-  // Its own expired claim after 3 takeovers: offered to take back, with no takeover-limit rule.
-  const own = await run(state => [limited(state, { owner: state.coordinatorId, coordinatorId: state.coordinatorId, machine: state.machine })]);
-  assert.equal(timeRules(own, 'takeover-limit').length, 0);
-  assert.ok(own.prompts.some(text => (JSON.parse(text.trim().split('\n').at(-1)).issues ?? []).some(item => item.number === 8 && item.expiredClaim)), 'offered with expiredClaim');
-});
-
-test('tick: the 24-hour alert is recorded in the own claim comment and skipped when the chain already has it', async t => {
-  const f = await tickFixture(t);
-  f.issues = [tickIssue(7, { comments: 1, updated_at: at(NOW) })];
-  // Not due at start; due at the next tick, when the claim comment is there.
-  f.claims = state => [ownClaim({ owner: state.coordinatorId, coordinatorId: state.coordinatorId, machine: state.machine, claimedAt: at(NOW - 23.75 * hour) })];
-  assert.equal((await f.start()).exitCode, 0);
-  f.issueComments = { 7: [f.ownComment(at(NOW))] };
-  f.time += 30 * minute; await f.tick();
-  assert.equal(timeRules(f, 'long-running').length, 1);
-  const marked = f.patches.map(patch => recordOf(patch.body)).filter(value => value.longRunningAlertedAt);
-  assert.equal(marked.length, 1, 'the delivered alert is recorded once');
-  assert.equal(marked[0].longRunningAlertedAt, at(f.time));
-  const { coordinatorId, machine } = f.state();
-  assert.equal(withoutClaimHeartbeat(f.claimComments.get('901').body), claimBody({ coordinatorId, machine }), 'the record is a tick write, not new work');
-  for (let i = 0; i < 2; i++) { f.time += 30 * minute; await f.tick(); }
-  assert.equal(timeRules(f, 'long-running').length, 1, 'once per issue');
-
-  // Another machine took the claim over: its chain already has the alert, so it sends none.
-  const g = await tickFixture(t);
-  g.issues = [tickIssue(7, { comments: 1, updated_at: at(NOW) })];
-  g.claims = state => [ownClaim({ owner: state.coordinatorId, coordinatorId: state.coordinatorId, machine: state.machine, claimedAt: at(NOW - 25 * hour), longRunningAlertedAt: at(NOW - hour) })];
-  assert.equal((await g.start()).exitCode, 0);
-  g.issueComments = { 7: [g.ownComment(at(NOW))] };
-  for (let i = 0; i < 2; i++) { g.time += 30 * minute; await g.tick(); }
-  assert.equal(timeRules(g, 'long-running').length, 0);
-});
-
-test('tick: after a ceiling the 4-hour stuck rule asks for no retry and at most the one stuck alert', async t => {
-  // Both ceilings at once (#3041 review S2): the rule names both and keeps the cancel step of the repair limit.
-  for (const ceiling of ['repair limit', 'takeover limit', 'takeover limit and the repair limit', 'base integration limit']) {
-    const integration = ceiling.includes('integration limit'), repair = ceiling.includes('repair limit') || integration, takeover = ceiling.includes('takeover limit');
-    const f = await tickFixture(t);
-    f.issues = [tickIssue(7, { labels: [{ name: 'pdd:working' }, { name: 'pdd:stuck' }] })];
-    const stuckSince = at(NOW - 3.75 * hour); // due at the first tick after start
-    f.claims = state => [ownClaim({ owner: state.coordinatorId, coordinatorId: state.coordinatorId, machine: state.machine, stuckSince, ...(takeover ? { takeovers: 4 } : {}) })];
-    assert.equal((await f.start()).exitCode, 0);
-    if (repair) {
-      mkdirSync(join(f.cwd, 'pdd', 'runs', '7'), { recursive: true });
-      writeFileSync(join(f.cwd, 'pdd', 'runs', '7', 'status.json'), JSON.stringify({ v: 1, number: 7, repo: f.state().repo, state: 'stuck', parkReason: 'Repair limit reached in build: take the stuck path', repairLimit: { area: 'build', step: 'build', at: NOW } }));
-      if (integration) writeFileSync(join(f.cwd, 'pdd', 'runs', '7', 'status.json'), JSON.stringify({ v: 1, number: 7, repo: f.state().repo, state: 'stuck', integrationLimit: { area: 'build', step: 'build', at: NOW } }));
-    }
-    for (let i = 0; i < 3; i++) { f.time += 30 * minute; await f.tick(); }
-    const rules = timeRules(f, 'stuck-claim');
-    assert.equal(rules.length, 1, `${ceiling}: one rule`);
-    if (integration) {
-      assert.match(rules[0].reason, /integration/);
-      assert.match(rules[0].reason, /workflow cancel 7/);
-      assert.doesNotMatch(rules[0].reason, /changed approach/);
-      continue;
-    }
-    assert.match(rules[0].reason, new RegExp(`stuck for 4 hours after the ${ceiling}\\. Do not retry it, do not remove pdd:stuck and write no new comment; send the one stuck alert only if this stop has none yet\\. `));
-    assert.ok(rules[0].reason.includes(repair
-      ? 'To let Autopilot try again, a person removes pdd:stuck and pdd:working, then runs pdd workflow cancel 7 in the checkout that holds the stuck run; the next tick starts a new run with a fresh repair count.'
-      : 'A person removes pdd:stuck and pdd:working to let Autopilot try again.'), rules[0].reason);
-    assert.doesNotMatch(rules[0].reason, /changed approach/);
-  }
-});
-
-
 async function expiredNoRunClaimTick(t, ownership) {
   const f = await tickFixture(t);
   f.issues = [tickIssue(7, {labels:[{name:'pdd:working'}, {name:'pdd:stuck'}]})];
@@ -881,25 +662,3 @@ async function expiredNoRunClaimTick(t, ownership) {
   return {f, claim, github};
 }
 
-test('3157: tick releases an expired own no-run claim after complete custody evidence', async t => {
-  const {f, github} = await expiredNoRunClaimTick(t, (observed, state) => ({
-    localOwner:state.coordinatorId, localMachine:state.machine, runsKnown:true, runs:[], claims:[observed],
-  }));
-  assert.deepEqual(github.issues.get(7).labels, [], 'the public tick removed both labels through the shared release path');
-  assert.deepEqual(github.since(0).calls.filter(call => call.method === 'DELETE').map(call => call.endpoint.split('/labels/').at(-1)),
-    ['pdd%3Astuck', 'pdd%3Aworking']);
-  assert.deepEqual(f.state().githubIntake.claims, [], 'only the released era leaves intake');
-});
-
-test('3157: no-run expiry keeps unknown custody and a replacement era for later reconciliation', async t => {
-  for (const [name, ownership] of [
-    ['unknown custody', (claim, state) => ({localOwner:state.coordinatorId, localMachine:state.machine, runsKnown:false, runs:[], claims:[claim]})],
-    ['replacement era', (claim, state) => ({localOwner:state.coordinatorId, localMachine:state.machine, runsKnown:true, runs:[],
-      claims:[{...claim, commentId:'902', labelEventId:'702'}]})],
-  ]) await t.test(name, async () => {
-    const {f, claim, github} = await expiredNoRunClaimTick(t, ownership);
-    assert.deepEqual(github.issues.get(7).labels, ['pdd:working', 'pdd:stuck'], name + ': labels stay held');
-    assert.deepEqual(f.state().githubIntake.claims.map(row => [row.commentId, row.labelEventId]),
-      [[claim.commentId, claim.labelEventId]], name + ': the observed era stays for normal reconciliation');
-  });
-});

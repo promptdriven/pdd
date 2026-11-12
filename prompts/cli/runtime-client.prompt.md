@@ -363,7 +363,7 @@ Export `checkRuntimeHealth({env}, ports)` for the [Autopilot launcher](autopilot
 | HTTP 401 or 403, or no gh token (then nothing is sent) | `access`; `fix` says to run `gh auth status` and sign in again with `gh auth login`, or to ask the PDD team for interpreter access |
 | an invalid `PDD_RUNTIME_URL` origin (nothing is sent), a 3xx redirect (not followed), a 200 or 404 that is not a JSON object such as an HTML page or an empty body, or any other status | `access`; `fix` says to check `PDD_RUNTIME_URL` |
 
-`detail` is a short text such as `HTTP 503`, `not reached`, `no answer`, `maintenance`, `no gh sign-in` or `HTTP 401: The interpreter did not accept the gh login`; neither `detail` nor `fix` ever holds the token.
+`detail` is a short text such as `HTTP 503`, `not reached`, `no answer`, `maintenance`, `no gh sign-in` or `HTTP 401: The interpreter did not accept the gh login`; neither `detail` nor `fix` ever holds the token. For a future `maintenance.until` the result also has `until` (that time as an ISO string) and `reason` (the maintenance reason as clean text, or null), so a caller such as the [Autopilot core](autopilot-core.prompt.md) can wait for the end and name it (#3241).
 
 ## `pdd test`
 
@@ -1269,11 +1269,25 @@ If owner metadata refuses a saved Try with session-stopped, read that same owner
 
 ## Read saved Story evidence locally
 
-Export module function `savedStoryEvidence({root, comparisonRoot=root}, ports={})`,
+Export module function `savedStoryEvidence({root, comparisonRoot=root, withTests=false}, ports={})`,
 returning `{stories, warnings}`. Each Story row is
 `{story, pass, current, result, at}`: repository-relative Story path, Boolean
 pass/current, `result` equal to "✓" for pass and "no verdict" otherwise, and
-Unix epoch milliseconds `at`. This read-only capability never resolves runtime
+Unix epoch milliseconds `at`. With `withTests: true` each row also has `tests`: the
+sorted repository-relative test paths of that Story that its batch selected (for a
+pass, every one of them was sent), so a caller can bind a pass to the exact tests that
+it checked; `sent` (false for a row whose tests were never sent, for example refused
+before execution or interrupted; such a row is listed too, with `pass` false); `failed`,
+the number of failed checks in the answers of its tests (a failed check counts also
+when the answer has no verdict) and `failedSteps`, their step ids (at most 10);
+`refusals`, the refusal codes of its batch rows and answers; `states`, the batch row
+states (for example `refused`, `not_run`, `unknown`); `codes`, the row reason codes
+(for example `interrupted`, `server-busy`, `graph-provider-failure`); and `advice`, the
+fix texts that pdd saved for it (at most 3, each at most 800 characters): each batch
+warning that starts with `Warning: TEST ` for one of its tests and names one of its
+refusal codes, and each refusal `fix`. Two more options read other folders: `anyRoot: true` reads batches of any
+root (each compared with `comparisonRoot`), and `limit: N` reads only the newest N batch
+folders. Without these options the rows are exactly as above. This read-only capability never resolves runtime
 configuration, signs in, calls a service, creates a directory, writes saved state
 or dispatches work. Use the injected `env` for the existing state-directory
 selection. The optional raw ports are `readFile(path)` returning UTF-8 text,
@@ -1345,6 +1359,39 @@ verification. root identifies saved records when comparisonRoot names a merged
 run's current base. Missing state is empty. Malformed or unreadable
 records produce finite warnings and no invented pass, while unrelated readable
 batches remain usable. Do not recover by a network read or change saved caches.
+
+## Read the Story checks that can be sent again
+
+Export module function `resendableStoryChecks({root, since=0}, ports={})` for the
+[Autopilot core](autopilot-core.prompt.md) (#3241, rule B5). It returns `{stories,
+neverSent, noVerdict, failed, maintenance}`: sorted repository-relative Story paths of
+`root` whose latest saved check can be sent once more (`stories` = `neverSent` and
+`noVerdict` together), the Stories whose latest check has a failed check (never sent
+again), and whether the note of a never-sent check names maintenance. It reads like
+`savedStoryEvidence`: the same state directory from the injected `env`, the canonical
+root match, the same optional `readFile`, `readDir` and `realpath` ports, and no
+sign-in, service call, directory creation or write.
+
+- Only batches with `intent: "check"` count, and with `since` above 0 only those
+  whose `created_at` is at or after `since` (Unix epoch milliseconds). A batch that
+  cannot be read or parsed is skipped with no warning.
+- Batches are read in name order; a later batch that has rows of a Story replaces
+  the earlier state of that Story.
+- Each row is one of these. **Never sent**: no request ID, the recovery state
+  `not_run`, no refusal, no `unsent` mark (a local discovery refusal or a native-only
+  row) and no note with the code `blocked` (an access gate): held in maintenance,
+  busy, or stopped before sending. **Passed** or **failed** by its recovery state.
+  Else a sent row reads the saved answer of its latest request ID in the batch folder
+  (`ID.json`, the same projection as `savedStoryEvidence`): a `failed` answer, or any
+  failed check in it, is **failed**; an `unknown` answer with no failed check (for
+  example `graph-provider-failure`, an AI provider failure) is **no verdict**. Any
+  other row (a refusal, an open or unsaved answer) is **other**.
+- A Story in one batch is failed when one of its rows failed; else other when one is
+  other; else never sent when one was never sent; else no verdict when one has no
+  verdict; else passed. Only never sent and no verdict are listed in `stories`.
+- A Story is named as `savedStoryEvidence` names it: a row Story that is a `.md`
+  path, else the unique captured `.md` file of the batch with that base name; a row
+  whose Story cannot be named is skipped.
 
 ## Check scope plan
 
