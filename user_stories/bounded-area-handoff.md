@@ -20,7 +20,7 @@ The per-item and aggregate limits count UTF-8 bytes, not characters or tokens. E
 
 Owner: [workflow runner](../prompts/cli/workflow-runner.prompt.md#bounded-earlier-area-summaries). Cases: [native/manual case manifest](../test/authoring-guidance/bounded-area-handoff-cases.json).
 
-The existing partial Runtime interface does not expose area-chat brief creation. This manifest is not an executable Runtime scenario. Prompt tests: NOT RUN. Native/manual cases: NOT RUN. Implementation has not changed. Native tests must call the real approval/open recovery boundary with temporary run storage and injected Herdr/program ports, inspect the delivered start brief, and compare the saved ledger. Manual review must check that recovery advice identifies full failures, decisions and report paths. No model-token, latency or cost savings are proved.
+The existing partial Runtime interface does not expose area-chat brief creation. The manifest is native/manual case input, not an executable Runtime scenario. Follow the [native verification method](../test/helpers/bounded-area-handoff.md) to check the real approval/open recovery boundary, saved briefs and ledger with temporary storage and injected external ports. Independently review whether the recovery advice identifies full failures, decisions and report paths. The manifest's "NOT RUN" field is authored-case metadata; actual execution results belong in external run evidence. Native boundary checks do not establish a hosted interpreter pass, real-agent evidence retrieval, or model-token, latency or cost savings.
 
 ## Recovery fallback
 
