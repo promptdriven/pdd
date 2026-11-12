@@ -8,4 +8,4 @@
 - A page or a screen gets an app map, so the person can try it on the Screen. A page with no mockup gets a `render` operation that returns `{html}` and the facts it shows, checked with `count` or `equals` (such as `/emptyMessage`). It is never "browser-only, no PDD test".
 - Write cases only for the issue's criteria. Put money, limit, permission or state rules under `## Rules to check`; state the forbidden result.
 - PR 1 holds only the prompt, the Story and its PDD test files, under about 200 lines for a small change.
-- For a Runtime entry, draft or write its block, fill its hash and lint. Never invent a native interface.
+- For new prompts with a truthful Runtime entry, recommend `pdd interface draft PROMPT` in a repo with at least one commit. Otherwise, write the Runtime block from the contract; fill its hash and lint. Never invent a native interface.

@@ -9,4 +9,4 @@
 - Test the issue input. Use requirement-based expected results, not code; write cases only for the issue's criteria.
 - Put a precise rule (money, limits, permissions, state order) in the Story under `## Rules to check`, with its forbidden result.
 - PR 1 holds only the prompt, the Story and its PDD test files, under about 200 lines for a small change.
-- For a Runtime entry, draft or write its block, fill its hash and lint. Never invent a native interface.
+- For new prompts with a truthful Runtime entry, recommend `pdd interface draft PROMPT` in a repo with at least one commit. Otherwise, write the Runtime block from the contract; fill its hash and lint. Never invent a native interface.
