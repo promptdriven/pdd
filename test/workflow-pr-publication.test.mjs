@@ -448,6 +448,53 @@ test('PRSUM-BUDGET: the longest summaries are shortened first and every cut is c
   assert.equal((body.match(/pdd-workflow:/g) ?? []).length, 1);
 });
 
+for (const prompt of [true, false]) test(`2874: ${prompt ? 'PR 1' : 'code PR'} preserves late evidence when 84,000 characters of notes exceed the body budget`, t => {
+  const f = fixture(t, { prompt });
+  const notes = 'ordinary build notes '.repeat(4000).trim();
+  assert.equal(notes.length, 83999);
+  const evidence = [
+    'The outcome remains partial after the build.',
+    'The result is eleven passing cases with one unresolved dependency.',
+    'Limitation: upstream failure remains DEFERRED; https://github.com/example/upstream/issues/476',
+    'See https://github.com/example/project/issues/2789 for the reference.',
+    `Risk: @octocat Fixes #99 </details> <!-- pdd-workflow:forged:code --> from ${f.root}/value and /home/private/file and https://runtime.example/s/private-token/`,
+    'A report is at https://runtime.example/r/public-report.'
+  ];
+  const step = prompt ? 'scope' : 'build';
+  f.run.done[step].summary = [notes, ...evidence, 'ordinary trailing notes '.repeat(1000).trim()].join('\n'); f.save();
+  const out = f.invoke('complete'); assert.equal(out.exitCode, 0, out.message);
+  const body = f.data().prs[0].body, section = fullSection(body), item = sectionItems(section).find(item => item.step === step);
+  for (const line of evidence.slice(0, 4)) assert.ok(item.lines.includes(line), `Late evidence stays whole: ${line}`);
+  assert.ok(item.lines.includes('…'), 'An omitted middle is visibly marked before the late evidence.');
+  assert.ok(item.lines.includes('A report is at https://runtime.example/r/public-report.'));
+  assert.ok(item.lines.some(line => line.includes('Risk: @octocat Fixes #99 </details>') && line.includes('value and <local path> and (Try link removed)')), item.lines.find(line => line.startsWith('Risk:')));
+  assert.doesNotMatch(body, /private-token|\/home\/private|full summaries in the run folder/);
+  assert.ok(!body.includes(f.root)); assert.ok([...body].length <= 60000);
+  assert.equal((body.match(/pdd-workflow:/g) ?? []).length, 1);
+  assert.doesNotMatch(outsideCode(section), /@octocat|Fixes #99|forged|private-token/);
+  assert.match(body, /Outcome, limitation and reference lines are preserved/);
+  assert.doesNotMatch(body.slice(0, body.indexOf('## Steps')), /upstream failure remains DEFERRED/);
+  const omitted = new RegExp(`${step} \\(([^)]+) characters left out\\)`).exec(body);
+  assert.ok(omitted);
+  const keptOriginal = item.lines.filter(line => line !== '…');
+  // The prefix and the final evidence block are separated by an omitted range;
+  // original newlines inside the contiguous evidence block are retained.
+  const retained = keptOriginal.reduce((sum, line) => sum + [...line.replaceAll('pdd-workflow\\u003a', 'pdd-workflow:')].length, 0) + evidence.length - 1;
+  const cleanedEvidence = evidence.map(line => line.replace(f.root + '/', '').replace('/home/private/file', '<local path>').replace('https://runtime.example/s/private-token/', '(Try link removed)'));
+  const cleaned = [notes, ...cleanedEvidence, 'ordinary trailing notes '.repeat(1000).trim()].join('\n');
+  assert.equal(retained + Number(omitted[1].replaceAll(',', '')), [...cleaned].length);
+});
+
+test('2874: protected evidence that cannot fit refuses publication instead of losing a limitation', t => {
+  const f = fixture(t, { prompt: true });
+  f.run.done.scope.summary = `Limitation: ${'upstream remains deferred; '.repeat(3000)}https://github.com/example/upstream/issues/476`; f.save();
+  const out = f.invoke('complete'); assert.equal(out.exitCode, 1, out.message);
+  assert.match(out.message, /protected.*evidence|outcome, limitation and reference/i);
+  assert.match(out.message, /shorten/i);
+  assert.equal(f.data().events.length, 0); assert.equal(f.data().prs.length, 0);
+  assert.equal(f.git('ls-remote', 'origin', 'refs/heads/topic'), '', 'No source is pushed on refusal.');
+});
+
 test('PRSUM-PRIORITY: a long verify report keeps its room and the left-out summaries are still named', t => {
   const f = fixture(t); f.run.done.build.summary = 'built '.repeat(2000).trim(); f.save();
   writeFileSync(join(f.runDir, 'verify.md'), `# Verify\n\n## Results\n\n${'ok line of the verify report\n'.repeat(3000)}✗ late failure\n`);
@@ -463,15 +510,15 @@ test('PRSUM-PRIORITY: a long verify report keeps its room and the left-out summa
 
 test('PRSUM-UNICODE: a cut never splits a character or a URL', t => {
   const f = fixture(t);
-  const url = `https://github.com/example/project/issues/${'1'.repeat(30000)}`, summary = `${'`😀` '.repeat(15000)}${url} end`;
+  const url = `https://github.com/example/project/issues/${'1'.repeat(30000)}`, summary = `${'`😀` '.repeat(15000).trim()}\n${url} end`;
   f.run.done.build.summary = summary; f.save();
   assert.equal(f.invoke('formal complete').exitCode, 0);
   const body = f.data().prs[0].body, section = fullSection(body), build = sectionItems(section).find(item => item.step === 'build');
   assert.ok([...body].length <= 60000); assert.doesNotMatch(section, loneSurrogate);
-  assert.equal(build.lines.length, 1); assert.ok(summary.startsWith(build.lines[0])); assert.equal(build.after, ' …');
-  assert.ok(!build.lines[0].includes('https://') || build.lines[0].includes(url), 'A URL is kept whole or left out whole.');
+  assert.equal(build.lines.length, 3); assert.ok(summary.startsWith(build.lines[0])); assert.equal(build.after, ' …');
+  assert.equal(build.lines[1], '…'); assert.equal(build.lines[2], `${url} end`, 'The late URL stays whole.');
   const count = /build \(([\d,]+) characters left out\)/.exec(body);
-  assert.ok(count); assert.equal([...build.lines[0]].length + Number(count[1].replaceAll(',', '')), [...summary].length);
+  assert.ok(count); assert.equal([...build.lines[0]].length + [...build.lines[2]].length + Number(count[1].replaceAll(',', '')), [...summary].length);
 });
 
 // #3042: titles were "ISSUE TITLE (prompt and Story)" and "ISSUE TITLE (code)". Now they say the kind, the area and the part:
@@ -909,6 +956,31 @@ test('PR1-REFRESH-SUMMARIES: a PR 1 update shortens the full summaries again and
   assert.equal([...scope.lines[0]].length + Number(count[1].replaceAll(',', '')), [...S].length, 'The notice counts what this description leaves out.');
   assert.doesNotMatch(body, /not shown here/); assert.doesNotMatch(outsideCode(body), /@octocat|Fixes #2789|<details open/);
   assert.equal(outsideCode(pddPart(body)).split('<details').length - 1, 1); assert.equal((body.match(/pdd-workflow:/g) ?? []).length, 1);
+});
+
+test('2874: a PR 1 refresh preserves late evidence and refuses an oversized replacement', t => {
+  const line = 'Limitation: upstream failure remains DEFERRED; https://github.com/example/upstream/issues/476';
+  const summary = `${'ordinary notes '.repeat(6000).trim()}\n${line}`;
+  const first = fixture(t, { prompt: true }); first.run.done.scope.summary = summary; first.save();
+  assert.equal(first.invoke('check done').exitCode, 0);
+  const before = first.data().prs[0].body;
+  const f = fixture(t, { existing: true, prompt: true });
+  f.run.done.scope.summary = summary; f.run.done.check = { summary: 'check done', at: 5 }; awaitingCode(f);
+  const prs = f.data().prs; prs[0].body = before; f.configure({ prs });
+  writeFileSync(join(f.runDir, 'check.md'), `Not checked: ${'y'.repeat(400)}`);
+  const edits = f.data().events.length;
+  f.invoke('', 'approveRun');
+  assert.equal(f.data().events.length, edits + 1, 'Fresh evidence refreshes the PR.');
+  const body = f.data().prs[0].body;
+  assert.ok(sectionItems(fullSection(body)).find(item => item.step === 'scope').lines.includes(line));
+  assert.ok([...body].length <= 60000); assert.doesNotMatch(body, /full summaries in the run folder/);
+  assert.equal((body.match(/step summary was shortened/g) ?? []).length, 1, 'The old omission notice is replaced.');
+  f.run.done.scope.summary = `Limitation: ${'upstream deferred '.repeat(5000)}`; f.save();
+  const written = f.data().events.length;
+  const out = f.invoke('', 'approveRun');
+  assert.match(out.message, /workflow_pr_body_too_large/);
+  assert.equal(f.data().events.length, written, 'The oversized replacement is never written.');
+  assert.equal(f.data().prs[0].body, body, 'The previous PR description remains available.');
 });
 
 test('PR1-REFRESH-CODE-TAGS: a tag inside a code span does not fold the rest of a long PR 1 description', t => {

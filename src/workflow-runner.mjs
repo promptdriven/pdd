@@ -1511,7 +1511,7 @@ function publicationFit(lines, approvals, room, env) {
 // The Steps overview cuts each summary to a short line; it is never the only copy that a reviewer can read. Below it, one
 // closed block keeps every whole summary as inert code spans: no summary line starts a body line, so its labels, HTML,
 // mentions and markers stay text. The block has the lowest priority in the body budget. When it does not fit, the longest
-// summaries are shortened first, each cut shows " …", and one line names each shortened step and what was left out.
+// ordinary prefixes are shortened first; complete protected evidence lines survive with visible gaps and omission counts.
 const AGENT_NOTE = 'Agent note — not checked by pdd';
 const FULL_SUMMARIES = '<details><summary>Full step summaries</summary>', SLOT = '\u0000';
 function codeSpan(line) {
@@ -1530,6 +1530,31 @@ function summaryStart(text, size) {
   else if (/\S/.test(points[size])) kept = kept.replace(/\s+\S*$/, '');
   return kept.trimEnd();
 }
+// Detect evidence anywhere in a sanitized line, before inert Markdown rendering.
+const summaryEvidence = line => /https?:\/\/\S+|\b(?:outcome|results?|limitations?|risks?|deferred|blocked|failures?|failed|failing|unresolved)\b|✗/i.test(line);
+function summaryExcerpt(text, size) {
+  const prefix = summaryStart(text, size), ranges = prefix ? [[0, prefix.length]] : [];
+  let offset = 0;
+  for (const line of text.split('\n')) {
+    if (summaryEvidence(line)) ranges.push([offset, offset + line.length]);
+    offset += line.length + 1;
+  }
+  // Prefix and protected lines may overlap. Adjacent lines retain their original newline.
+  const merged = [];
+  for (const [start, end] of ranges.sort((a, b) => a[0] - b[0])) {
+    const last = merged.at(-1);
+    if (last && (start <= last[1] || text.slice(last[1], start) === '\n')) last[1] = Math.max(last[1], end);
+    else merged.push([start, end]);
+  }
+  let retained = 0, end = 0;
+  const lines = [];
+  for (const [start, stop] of merged) {
+    if (start > end) lines.push('…');
+    const part = text.slice(start, stop);
+    retained += characters(part); lines.push(...part.split('\n').filter(Boolean)); end = stop;
+  }
+  return { lines, left: characters(text) - retained };
+}
 const SHORTENED = /^_\d+ step summar(?:y was|ies were) shortened to fit the PR size limit: .*\._$/;
 // The steps of one PR area (those since the previous PR) and their whole summaries after the PR cleaning.
 function prSteps(run, area) {
@@ -1539,11 +1564,12 @@ function prSteps(run, area) {
 const noteRuntime = text => String(text).replace(LINE_PATTERN, match => `Saved runtime receipt (unverified in this agent note): ${match}`);
 const cleanSummary = (run, step) => hideLocalPaths(redactTry(noteRuntime(withoutForgedMachineLines(run.done[step].summary))), run);
 // render(section) is the whole body with that block; the block takes the room that is left: whole when it fits, else one
-// common length for the longest summaries, as large as the search finds within the limit.
+// common prefix length for ordinary notes, with protected evidence retained at every size.
 function withSummaries(steps, texts, render, limit) {
   const fits = size => characters(render(fullSummaries(steps, texts, size))) <= limit;
   let low = 0, high = Object.values(texts).reduce((most, text) => Math.max(most, characters(text)), 0);
   if (fits(Infinity)) return render(fullSummaries(steps, texts, Infinity));
+  if (!fits(0)) throw Object.assign(Error('The protected outcome, limitation and reference evidence exceeds the PR description budget. Shorten the notes while retaining that evidence, then retry.'), { code: 'workflow_pr_body_too_large' });
   while (high - low > 1) { const middle = Math.floor((low + high) / 2); if (fits(middle)) low = middle; else high = middle; }
   return render(fullSummaries(steps, texts, low));
 }
@@ -1552,11 +1578,11 @@ function fullSummaries(steps, texts, size) {
   const shortened = [];
   const items = steps.map(step => {
     if (!texts[step]) return `- **${step}**: done`;
-    const kept = summaryStart(texts[step], size), left = characters(texts[step]) - characters(kept);
+    const { lines, left } = summaryExcerpt(texts[step], size);
     if (left) shortened.push(`${step} (${left.toLocaleString('en-US')} characters left out)`);
-    return `- **${step}**: ${AGENT_NOTE}: ${kept.split('\n').filter(Boolean).map(codeSpan).join('<br>')}${left ? `${kept ? ' ' : ''}…` : ''}`;
+    return `- **${step}**: ${AGENT_NOTE}: ${lines.map(codeSpan).join('<br>')}${left ? `${lines.length ? ' ' : ''}…` : ''}`;
   });
-  const notice = shortened.length ? [`_${shortened.length} step ${shortened.length === 1 ? 'summary was' : 'summaries were'} shortened to fit the PR size limit: ${listed(shortened)}. The PR author has the full summaries in the run folder._`, ''] : [];
+  const notice = shortened.length ? [`_${shortened.length} step ${shortened.length === 1 ? 'summary was' : 'summaries were'} shortened to fit the PR size limit: ${listed(shortened)}. Outcome, limitation and reference lines are preserved; gaps are marked with …._`, ''] : [];
   return [...notice, FULL_SUMMARIES, '', ...items, '', '</details>'];
 }
 function publicationRuntime(run, env, stage = 'current') {
@@ -1870,7 +1896,7 @@ function prBody(run, area, env, drafts = [], tests = true, evidence, readable = 
     ...(text !== null ? ['', '## Verify', '', text] : []), ''].join('\n'), run);
   const approvalLines = (evidence.approvalLines ?? []).map(line => hideLocalPaths(redactTry(line), run));
   const notes = readable?.notes ?? [], budget = BODY_BUDGET - (readable ? characters(readablePrBody(readable.text, notes.join('\n'))) + 2 : 0);
-  // Room for the full summaries with every summary left out comes first, so a cut is never silent. The top evidence,
+  // Room for protected summary evidence and the omission notice comes first. The top evidence,
   // approvals and verify.md then fit as before, and the full summaries get the room that is left.
   const least = fullSummaries(steps, full, 0);
   const { lifted, approvals } = publicationFit(preparedLines, approvalLines, Math.max(0, budget - 200 - (verify === null ? 0 : 1000) - characters(body(null, [], [], least))), env);
