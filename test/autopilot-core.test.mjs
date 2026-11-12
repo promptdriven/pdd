@@ -3802,9 +3802,12 @@ test('local cleanup keeps the job record and worktree when process cleanup canno
   const w = await coreWorld(t, { settings: { runs: 1 } });
   w.issue(17); await w.tick();
   const before = jobFile(w, 17);
-  w.jobs.cleanup = async () => ({ confirmed: false });
+  let attempts = 0;
+  w.jobs.read = () => { throw Error('status read unavailable'); };
+  w.jobs.cleanup = async () => { attempts++; return { confirmed: false }; };
   w.github.label(17, 'pdd:stuck');
   await w.tick();
+  assert.ok(attempts > 0, 'a failed status read still reaches the cleanup proof port');
   assert.ok(jobFile(w, 17), 'the retry record stays');
   assert.equal(existsSync(before.worktree), true, 'the worktree stays with the uncertain process ownership');
 });
