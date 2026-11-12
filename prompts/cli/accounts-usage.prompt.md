@@ -39,17 +39,20 @@ milliseconds.
 | Field | Value |
 |---|---|
 | `state` | `ok`, `expired`, `no-login`, `needs-sign-in` or `unknown`. A read writes all but `needs-sign-in`, which other callers (Autopilot) record. |
+| `kind` | `full` or `access` from the login facts state, else null. A `full` login renews itself on this machine at its next step, so a pick can use a `full` login in state `expired`; an `access` copy cannot renew. |
 | `plan` | The bucket's `planType` when it is a non-empty string, else null. |
 | `week` | `{usedPercent, resetsAt}` of the 10080-minute window, or null. |
 | `fiveHour` | `{usedPercent, resetsAt}` of the 300-minute window, or null. |
 | `accessExpiresAt` | From the login facts, or null. |
 | `readAt` | When this row was made, or null for a row that no read made. |
 | `limitedUntil` | When the limit ends, or null. |
-| `limitReason` | `limit`, `credits` or null. `limitReason` set with `limitedUntil` null means limited with an unknown end: only a later read clears it. |
+| `limitReason` | `limit`, `credits`, `needs-sign-in`, `stale-copy` or null. A read sets only `limit` and `credits`; Autopilot marks the others after a step. `limitReason` set with `limitedUntil` null means limited with an unknown end: only a later read clears it. |
 | `resets` | Always null from a read (see [read the reply](#read-the-reply)). A cached `{left, expiresAt}` passes the row filter. |
 | `note` | `""` for `ok`; else a few safe words that say why. |
 
 A row that is not `ok` has `plan`, `week`, `fiveHour` and `resets` null.
+`kind` is set on every row whose facts state is `full` or `access`, also when
+the row is not `ok` (for example `expired` without a read).
 
 ## Read one login
 
@@ -160,13 +163,16 @@ and a read rebuilds it.
   `limitedUntil` and `limitReason` when the cached `limitReason` is set and its
   `limitedUntil` is null or later than the new `readAt` (or the new `readAt` is
   null). A failed read is no proof that a limit ended. An `ok` row replaces
-  them. `rows` that is not a non-array object rejects with
+  them, except an active `needs-sign-in` mark (same time test): a good usage
+  read proves only that the access token works, not the refresh token that
+  failed in the step, so the mark stays until its time ends. `rows` that is not a non-array object rejects with
   `TypeError('rows must be an object of usage rows by login name.')` before any
   file access.
 - `markLimited` rejects with a `TypeError` unless `name` is a non-empty string,
-  `untilMs` a finite non-negative number or null, and `reason` `limit` or
-  `credits`. It sets `limitedUntil` and `limitReason` on the cached row, or on a
-  new row (`unknown`, `readAt` null, note `not read yet`) when there is none.
+  `untilMs` a finite non-negative number or null, and `reason` one of `limit`,
+  `credits`, `needs-sign-in` and `stale-copy` (the caller picks the time). It
+  sets `limitedUntil` and `limitReason` on the cached row, or on a new row
+  (`unknown`, `kind` null, `readAt` null, note `not read yet`) when there is none.
 
 Every write runs under the lock file `<state>/usage.json.lock` (exclusive
 create). A lock whose modification time is more than 30 seconds old is stale and

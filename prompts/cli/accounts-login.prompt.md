@@ -8,28 +8,34 @@ password: a refresh token that leaks or gets used twice can end the login for
 every machine that has it. So this module answers with facts only, and the one
 copy that it writes holds no refresh token.
 
-It never returns, logs or saves a token, an account id or an email. It never
-writes into, moves, renames or deletes anything in the login folder. It never
-refreshes a login, signs in or signs out, and it starts no program.
+It never logs or saves a token, an account id or an email, and it returns one
+only from `readLoginForUpload` (below). It changes the login folder only in
+`makeAccessOnly`, and only when the caller proves that the file is still the
+one that it uploaded. It never refreshes a login, signs in or signs out, and it
+starts no program.
 
 ## Exports
 
 - async `codexLoginFacts(home, ports = {})` returns a fresh object with exactly
   `{state, accessExpiresAt, accountKey}`.
 - async `withAccessOnlyHome(home, fn, ports = {})` returns what `fn` returns.
+- async `readLoginForUpload(home, ports = {})` returns exactly
+  `{text, sha256, facts}`.
+- async `makeAccessOnly(home, expectedSha256, ports = {})` returns exactly
+  `{changed, reason}`.
 
 `home` is the login folder (`CODEX_HOME`). It must be a non-empty absolute path
-string; otherwise both exports reject with `TypeError('A login folder must be an
-absolute path.')` before any file access, so a relative path never reads an
+string; otherwise every export rejects with `TypeError('A login folder must be
+an absolute path.')` before any file access, so a relative path never reads an
 `auth.json` from the working folder.
 
 Ports (each optional): `fs` overrides single functions of `node:fs/promises`
-(`open`, `mkdtemp`, `chmod`, `writeFile`, `rm`); `tmpdir` is the base folder
-for the temporary home (default `os.tmpdir()`).
+(`open`, `lstat`, `mkdtemp`, `chmod`, `writeFile`, `rename`, `rm`); `tmpdir`
+is the base folder for the temporary home (default `os.tmpdir()`).
 
 ## Reading the login file
 
-Both exports read `<home>/auth.json` the same way:
+Every export reads `<home>/auth.json` the same way:
 
 1. Open it read-only and non-blocking (`O_RDONLY | O_NONBLOCK`), so that a
    named pipe in its place cannot hang the read. A missing file or folder
@@ -53,7 +59,17 @@ Both exports read `<home>/auth.json` the same way:
 |---|---|
 | `state` | `full` when `refresh_token` is non-empty (the login renews itself); `access` when it is empty (an access-only copy that something else renews); `none`; or `unreadable`. |
 | `accessExpiresAt` | Epoch milliseconds: the `exp` claim (Unix seconds) of the access token × 1000. Null when the state is `none` or `unreadable`, or the token's payload (its second dot-separated part, base64url JSON) does not decode to an object with a finite, non-negative numeric `exp` whose milliseconds fit a Date (at most 8.64e15). |
-| `accountKey` | The first 16 lower-case hex characters of the SHA-256 of `tokens.account_id` (UTF-8). It lets the caller refuse the same account twice without keeping the id. Null when `account_id` is not a non-empty string, or the state is `none` or `unreadable`. |
+| `accountKey` | The first 16 lower-case hex characters of a SHA-256 (UTF-8) that names one person in one ChatGPT account (see below). It lets the caller refuse the same login twice without keeping the ids. Null when `tokens.account_id` is not a string with non-blank text, or the state is `none` or `unreadable`. |
+
+The account id alone is not enough: every member of a Team or Business
+workspace has the same `account_id`, so two people's logins would look like one.
+The user id tells them apart. It comes from the `id_token` payload (decoded like
+the access token): the first of `["https://api.openai.com/auth"].chatgpt_user_id`,
+`["https://api.openai.com/auth"].user_id` and the top-level `sub` that is a string
+with non-blank text. This is the claim order of the PDD login server. Both ids
+are trimmed. The hashed text is `account_id + "\n" + user id`, or `account_id`
+alone when there is no user id (an `id_token` that is missing or does not
+decode has none).
 
 `codexLoginFacts` never rejects for any file content or read failure; only the
 `home` check rejects.
@@ -96,6 +112,47 @@ Outcome precedence, first match wins:
 
 A process that is killed while `fn` runs can leave the folder; it is 0700 and
 holds no refresh token.
+
+## Login text for an upload
+
+`readLoginForUpload` is the only function that returns a login's text. The
+caller sends it once as the upload body to the login server and never logs,
+saves or shows it. It reads the file as above. For `none` or `unreadable` it
+rejects with the same `PDD_NO_LOGIN` error as `withAccessOnlyHome`. Otherwise
+`text` is the file's bytes as UTF-8, `sha256` the lower-case hex SHA-256 of those
+bytes, and `facts` the facts of that text.
+
+## Make the local file access-only
+
+After a confirmed upload the server is the login's only refresher, so the local
+file must stop renewing. `makeAccessOnly` rewrites `<home>/auth.json` with
+`tokens.refresh_token` = "" and every other field unchanged, but only when the
+file still has the bytes that the caller uploaded. If Codex renewed the file in
+between, the uploaded refresh token is already spent and the local file must
+stay as it is. `expectedSha256` must be 64 lower-case hex characters, else it
+rejects with `TypeError('expectedSha256 must be a SHA-256 hex digest.')` before
+any file access.
+
+First match wins:
+
+| Case | Result |
+|---|---|
+| `auth.json` is a symbolic link (`lstat`) | `{changed: false, reason: 'link'}`. A rename would cut the link from its target. |
+| The read gives `none` or `unreadable` | `{changed: false, reason: 'no-login'}` |
+| The bytes' SHA-256 differs from `expectedSha256` | `{changed: false, reason: 'bytes-changed'}` |
+| `refresh_token` is already "" | `{changed: false, reason: 'already-access'}` |
+| Otherwise | Rewrite (below), then `{changed: true, reason: 'rewritten'}`. |
+
+Rewrite: write the new JSON (2-space indent and a newline) to a new file
+`<home>/.auth.json.pdd-<16 random hex>.tmp` (exclusive create, mode 0600) and
+sync it. Then read `auth.json` again; when its SHA-256 no longer matches, remove
+the temporary file and return `{changed: false, reason: 'bytes-changed'}`. Else
+rename the temporary file over `auth.json`. The rename is atomic, so a reader
+sees the old file or the new one, never a part. A failure in these steps removes
+the temporary file, leaves `auth.json` as it was and rejects with an `Error`
+with `code` `PDD_ACCESS_ONLY_FAILED` and the message
+`Could not make the login file access-only.` A renewal that lands between the
+second read and the rename can still be lost; the window is a few milliseconds.
 
 ## Dependencies
 

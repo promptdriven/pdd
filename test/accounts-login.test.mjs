@@ -6,7 +6,7 @@ import * as fsp from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { codexLoginFacts, withAccessOnlyHome } from '../src/accounts-login.mjs';
+import { codexLoginFacts, makeAccessOnly, readLoginForUpload, withAccessOnlyHome } from '../src/accounts-login.mjs';
 
 // Fake logins only. Every secret below is made up for this test.
 const b64 = value => Buffer.from(JSON.stringify(value)).toString('base64url');
@@ -169,4 +169,94 @@ test('a named pipe in place of the login file is unreadable at once, not a hang'
   const result = await Promise.race([codexLoginFacts(dir), new Promise(resolve => { timer = setTimeout(() => resolve('hang'), 2_000); })]);
   clearTimeout(timer);
   assert.deepEqual(result, { state: 'unreadable', accessExpiresAt: null, accountKey: null });
+});
+
+const keyOf = text => createHash('sha256').update(text).digest('hex').slice(0, 16);
+const AUTH = 'https://api.openai.com/auth';
+
+test('Team members who share one account id get two keys; the user id follows the server claim order', async t => {
+  const user = (claims, account = FAKE.account) => login({ account_id: account, id_token: jwt(claims) });
+  const keyFor = async content => (await codexLoginFacts(home(t, content))).accountKey;
+  const first = await keyFor(user({ [AUTH]: { chatgpt_user_id: 'user-fake-aaaa' } }));
+  const second = await keyFor(user({ [AUTH]: { chatgpt_user_id: 'user-fake-bbbb' } }));
+  assert.notEqual(first, second);
+  assert.equal(first, keyOf(`${FAKE.account}\nuser-fake-aaaa`));
+  assert.equal(await keyFor(user({ [AUTH]: { chatgpt_user_id: 'user-fake-aaaa', user_id: 'other' }, sub: 'sub-x' })), first, 'chatgpt_user_id wins');
+  assert.equal(await keyFor(user({ [AUTH]: { chatgpt_user_id: '  ', user_id: 'user-fake-cccc' }, sub: 'sub-x' })), keyOf(`${FAKE.account}\nuser-fake-cccc`), 'then user_id');
+  assert.equal(await keyFor(user({ [AUTH]: { chatgpt_user_id: 7 }, sub: ' sub-fake-dddd ' })), keyOf(`${FAKE.account}\nsub-fake-dddd`), 'then sub, trimmed');
+  assert.equal(await keyFor(user({ [AUTH]: {} }, `  ${FAKE.account} `)), keyOf(FAKE.account), 'no user id: account id alone');
+  assert.equal(await keyFor(login({ id_token: 'not-a-jwt' })), keyOf(FAKE.account));
+  assert.equal(await keyFor(login({ id_token: undefined })), keyOf(FAKE.account));
+  assert.equal(await keyFor(login({ account_id: '   ' })), null);
+});
+
+test('the upload read gives the exact login text, its hash and facts; no login is refused', async t => {
+  const content = JSON.stringify(login(), null, 2) + '\n';
+  const dir = home(t, content);
+  const upload = await readLoginForUpload(dir);
+  assert.deepEqual(Object.keys(upload).sort(), ['facts', 'sha256', 'text']);
+  assert.equal(upload.text, content);
+  assert.equal(upload.sha256, createHash('sha256').update(content).digest('hex'));
+  assert.deepEqual(upload.facts, await codexLoginFacts(dir));
+  for (const [dir2, state] of [[home(t), 'none'], [home(t, '{bad'), 'unreadable']])
+    await assert.rejects(readLoginForUpload(dir2), { code: 'PDD_NO_LOGIN', state });
+  await assert.rejects(readLoginForUpload('relative'), { name: 'TypeError' });
+});
+
+test('make access-only rewrites the file in place with an empty refresh token and keeps every other field', async t => {
+  const original = login({}, { unknown_field: 'kept' });
+  const dir = home(t, JSON.stringify(original));
+  const { sha256 } = await readLoginForUpload(dir);
+  assert.deepEqual(await makeAccessOnly(dir, sha256), { changed: true, reason: 'rewritten' });
+  const after = JSON.parse(readFileSync(join(dir, 'auth.json'), 'utf8'));
+  assert.deepEqual(after, { ...original, tokens: { ...original.tokens, refresh_token: '' } });
+  assert.equal(statSync(join(dir, 'auth.json')).mode & 0o777, 0o600);
+  assert.deepEqual(readdirSync(dir), ['auth.json'], 'no temporary file is left');
+  assert.equal((await codexLoginFacts(dir)).state, 'access');
+  const again = await readLoginForUpload(dir);
+  assert.deepEqual(await makeAccessOnly(dir, again.sha256), { changed: false, reason: 'already-access' });
+});
+
+test('make access-only leaves the file alone when its bytes changed, it is a link, or there is no login', async t => {
+  const dir = home(t, login());
+  const { sha256 } = await readLoginForUpload(dir);
+  const renewed = JSON.stringify(login({ refresh_token: 'rt-fake-renewed' }));
+  writeFileSync(join(dir, 'auth.json'), renewed);
+  assert.deepEqual(await makeAccessOnly(dir, sha256), { changed: false, reason: 'bytes-changed' });
+  assert.equal(readFileSync(join(dir, 'auth.json'), 'utf8'), renewed);
+  const target = home(t, login());
+  const linked = home(t);
+  symlinkSync(join(target, 'auth.json'), join(linked, 'auth.json'));
+  const before = readFileSync(join(target, 'auth.json'), 'utf8');
+  assert.deepEqual(await makeAccessOnly(linked, (await readLoginForUpload(linked)).sha256), { changed: false, reason: 'link' });
+  assert.equal(readFileSync(join(target, 'auth.json'), 'utf8'), before);
+  assert.deepEqual(await makeAccessOnly(home(t), sha256), { changed: false, reason: 'no-login' });
+  let opened = 0;
+  const ports = { fs: { open: async (...args) => { opened++; return fsp.open(...args); }, lstat: async (...args) => { opened++; return fsp.lstat(...args); } } };
+  for (const bad of ['', 'ABC', sha256.toUpperCase(), null])
+    await assert.rejects(makeAccessOnly(dir, bad, ports), { name: 'TypeError', message: 'expectedSha256 must be a SHA-256 hex digest.' });
+  assert.equal(opened, 0);
+});
+
+test('a renewal between the check and the rename wins; a failed write leaves the file and no temporary file', async t => {
+  const dir = home(t, login());
+  const file = join(dir, 'auth.json');
+  const { sha256 } = await readLoginForUpload(dir);
+  const renewed = JSON.stringify(login({ refresh_token: 'rt-fake-renewed' }));
+  let reads = 0;
+  const open = async (path, flags, mode) => {
+    if (path === file && ++reads === 2) writeFileSync(file, renewed);
+    return fsp.open(path, flags, mode);
+  };
+  assert.deepEqual(await makeAccessOnly(dir, sha256, { fs: { open } }), { changed: false, reason: 'bytes-changed' });
+  assert.equal(readFileSync(file, 'utf8'), renewed);
+  assert.deepEqual(readdirSync(dir), ['auth.json']);
+  const current = (await readLoginForUpload(dir)).sha256;
+  for (const fs of [{ rename: async () => { throw new Error('disk'); } }, { open: async (path, flags, mode) => {
+    if (flags === 'wx') throw new Error('disk'); return fsp.open(path, flags, mode);
+  } }]) {
+    await assert.rejects(makeAccessOnly(dir, current, { fs }), { code: 'PDD_ACCESS_ONLY_FAILED', message: 'Could not make the login file access-only.' });
+    assert.equal(readFileSync(file, 'utf8'), renewed);
+    assert.deepEqual(readdirSync(dir), ['auth.json']);
+  }
 });

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/accounts-usage.prompt.md (sha256: de4d01f42f1812ba4009adc02250ba4f037ac51c3610b8a13303a72a0f74621b).
+// Generated from prompts/cli/accounts-usage.prompt.md (sha256: 1f7f5aedbda1fda760e770824f5ba4e6f8252eaf921563ed9d650305dc52760e).
 import * as realFs from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { homedir } from 'node:os';
@@ -8,7 +8,8 @@ import { readCodexRateLimitsReply } from './codex-limits.mjs';
 
 const ACCESS_MARGIN_MS = 10 * 60 * 1000;
 const STATES = new Set(['ok', 'expired', 'no-login', 'needs-sign-in', 'unknown']);
-const REASONS = new Set(['limit', 'credits']);
+const REASONS = new Set(['limit', 'credits', 'needs-sign-in', 'stale-copy']);
+const KINDS = new Set(['full', 'access']);
 const CREDIT_TYPES = new Set(['workspace_owner_credits_depleted', 'workspace_member_credits_depleted']);
 const CLIENT = { name: 'pdd_accounts', title: 'PDD accounts', version: '1' };
 const TRANSPORT_NOTES = {
@@ -27,17 +28,21 @@ const finite = value => typeof value === 'number' && Number.isFinite(value);
 const clock = now => typeof now === 'function' ? now : finite(now) ? () => now : Date.now;
 
 function row(state, fields = {}) {
-  return { state, plan: null, week: null, fiveHour: null, accessExpiresAt: null, readAt: null,
+  return { state, kind: null, plan: null, week: null, fiveHour: null, accessExpiresAt: null, readAt: null,
     limitedUntil: null, limitReason: null, resets: null, note: '', ...fields };
 }
+
+const kindOf = facts => KINDS.has(facts?.state) ? facts.state : null;
 
 // The facts checks, shared by the first look and the copied file.
 function factsRow(facts, nowMs) {
   if (facts.state === 'none') return row('no-login', { note: 'no Codex login in this folder' });
   if (facts.state === 'unreadable') return row('unknown', { note: 'login file is unreadable' });
-  if (facts.accessExpiresAt == null) return row('unknown', { note: 'access end is unknown; not read' });
+  const kind = kindOf(facts);
+  if (facts.accessExpiresAt == null) return row('unknown', { kind, note: 'access end is unknown; not read' });
+  // A full login keeps state expired here: its own Codex renews it at its next step (kind says so).
   if (facts.accessExpiresAt <= nowMs + ACCESS_MARGIN_MS)
-    return row('expired', { accessExpiresAt: facts.accessExpiresAt, note: 'access ended; this read never refreshes' });
+    return row('expired', { kind, accessExpiresAt: facts.accessExpiresAt, note: 'access ended; this read never refreshes' });
   return null;
 }
 
@@ -82,7 +87,8 @@ async function readCodex(login, { env, now, command }, ports) {
   if (typeof login.home !== 'string' || login.home === '' || !isAbsolute(login.home))
     return row('unknown', { note: 'login folder is not an absolute path' });
   const loginPorts = { fs: ports.fs, tmpdir: ports.tmpdir };
-  const early = factsRow(await codexLoginFacts(login.home, loginPorts), now());
+  const first = await codexLoginFacts(login.home, loginPorts);
+  const early = factsRow(first, now());
   if (early) return early;
   try {
     return await withAccessOnlyHome(login.home, async (tempHome, copied) => {
@@ -91,12 +97,12 @@ async function readCodex(login, { env, now, command }, ports) {
       const read = await readCodexRateLimitsReply({ command, cwd: tempHome, env: childEnv(env, tempHome), clientInfo: CLIENT },
         { spawn: ports.spawn });
       const result = read.ok ? usageFromReply(read.reply) : row('unknown', { note: TRANSPORT_NOTES[read.reason] ?? 'usage read failed' });
-      return { ...result, accessExpiresAt: copied.accessExpiresAt };
+      return { ...result, kind: kindOf(copied), accessExpiresAt: copied.accessExpiresAt };
     }, loginPorts);
   } catch (error) {
     if (error?.code === 'PDD_NO_LOGIN') return factsRow({ state: error.state, accessExpiresAt: null }, now()) ?? row('unknown', { note: 'login file is unreadable' });
-    if (error?.code === 'PDD_TEMP_HOME_LEFT') return row('unknown', { note: `temporary login folder not removed: ${error.path}` });
-    return row('unknown', { note: 'temporary login folder failed' });
+    if (error?.code === 'PDD_TEMP_HOME_LEFT') return row('unknown', { kind: kindOf(first), note: `temporary login folder not removed: ${error.path}` });
+    return row('unknown', { kind: kindOf(first), note: 'temporary login folder failed' });
   }
 }
 
@@ -144,6 +150,7 @@ function cleanRow(value) {
   const r = object(value) ? value : {};
   return {
     state: STATES.has(r.state) ? r.state : 'unknown',
+    kind: KINDS.has(r.kind) ? r.kind : null,
     plan: typeof r.plan === 'string' ? r.plan : null,
     week: windowOf(r.week), fiveHour: windowOf(r.fiveHour),
     accessExpiresAt: time(r.accessExpiresAt), readAt: time(r.readAt), limitedUntil: time(r.limitedUntil),
@@ -224,7 +231,10 @@ export async function saveUsage({ env = process.env } = {}, rows, ports = {}) {
     const saved = [];
     for (const [name, value] of Object.entries(rows)) {
       const next = cleanRow(value), old = cached.get(name);
-      if (next.state !== 'ok' && activeLimit(old, next)) { next.limitedUntil = old.limitedUntil; next.limitReason = old.limitReason; }
+      // A good read proves the access token, not a refresh token that failed in a step.
+      if ((next.state !== 'ok' || old?.limitReason === 'needs-sign-in') && activeLimit(old, next)) {
+        next.limitedUntil = old.limitedUntil; next.limitReason = old.limitReason;
+      }
       cached.set(name, next); saved.push([name, { ...next }]);
     }
     return Object.fromEntries(saved);
@@ -234,7 +244,7 @@ export async function saveUsage({ env = process.env } = {}, rows, ports = {}) {
 export async function markLimited({ env = process.env } = {}, name, untilMs, reason, ports = {}) {
   if (typeof name !== 'string' || name === '') throw new TypeError('name must be a login name.');
   if (untilMs !== null && !(finite(untilMs) && untilMs >= 0)) throw new TypeError('untilMs must be epoch milliseconds or null.');
-  if (!REASONS.has(reason)) throw new TypeError('reason must be limit or credits.');
+  if (!REASONS.has(reason)) throw new TypeError('reason must be limit, credits, needs-sign-in or stale-copy.');
   return updateCache(env, cached => {
     const next = cached.get(name) ?? row('unknown', { note: 'not read yet' });
     next.limitedUntil = untilMs; next.limitReason = reason;

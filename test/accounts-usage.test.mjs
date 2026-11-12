@@ -36,7 +36,7 @@ function codexLogin(t, name, { exp = S(DAY), refresh = FAKE.refresh, file } = {}
 const windowRow = (usedPercent, mins, resetsAt) => ({ usedPercent, windowDurationMins: mins, resetsAt });
 const teamReply = { accountId: FAKE.account, rateLimits: { planType: 'team', primary: windowRow(31, 300, S(3600)), secondary: windowRow(39, 10080, S(5 * DAY)),
   credits: { hasCredits: true, unlimited: false, balance: '17' } } };
-const empty = { state: 'unknown', plan: null, week: null, fiveHour: null, accessExpiresAt: null, readAt: NOW, limitedUntil: null, limitReason: null, resets: null, note: '' };
+const empty = { state: 'unknown', kind: null, plan: null, week: null, fiveHour: null, accessExpiresAt: null, readAt: NOW, limitedUntil: null, limitReason: null, resets: null, note: '' };
 
 // A fake `codex app-server`. It records each start and, at start, what the temp home holds.
 function fakeCodex({ reply = teamReply, mode = 'ok', delay = 0 } = {}) {
@@ -81,7 +81,7 @@ test('a read gives week, 5-hour, plan and access end from an access-only home, a
   const codex = fakeCodex();
   const env = { PATH: '/fake/bin', HOME: '/fake/home', OPENAI_API_KEY: FAKE.apiKey, CODEX_API_KEY: FAKE.apiKey, CODEX_ACCESS_TOKEN: FAKE.apiKey, CODEX_HOME: cx5.home };
   const result = await readLoginUsage(cx5, { env, now: NOW, command: '/fake/codex' }, { spawn: codex.spawn, tmpdir: base });
-  assert.deepEqual(result, { state: 'ok', plan: 'team', week: { usedPercent: 39, resetsAt: S(5 * DAY) * 1000 },
+  assert.deepEqual(result, { state: 'ok', kind: 'full', plan: 'team', week: { usedPercent: 39, resetsAt: S(5 * DAY) * 1000 },
     fiveHour: { usedPercent: 31, resetsAt: S(3600) * 1000 }, accessExpiresAt: S(DAY) * 1000, readAt: NOW,
     limitedUntil: null, limitReason: null, resets: null, note: '' });
   assert.equal(codex.starts.length, 1);
@@ -136,17 +136,28 @@ test('an access token that ends within 10 minutes is not read, and other logins 
   const read = (login, now = NOW) => readLoginUsage(login, { now }, { spawn: codex.spawn });
   for (const exp of [S(-60), S(9 * 60), S(10 * 60)]) {
     assert.deepEqual(await read(codexLogin(t, 'cx2', { exp })),
-      { ...empty, state: 'expired', accessExpiresAt: exp * 1000, note: 'access ended; this read never refreshes' });
+      { ...empty, state: 'expired', kind: 'full', accessExpiresAt: exp * 1000, note: 'access ended; this read never refreshes' });
   }
   assert.deepEqual(await read(codexLogin(t, 'cx3', { file: null })), { ...empty, state: 'no-login', note: 'no Codex login in this folder' });
   assert.deepEqual(await read(codexLogin(t, 'cx3', { file: '{bad' })), { ...empty, note: 'login file is unreadable' });
   assert.deepEqual(await read(codexLogin(t, 'cx3', { file: authFile(0).replace(/"access_token":"[^"]*"/, '"access_token":"opaque"') })),
-    { ...empty, note: 'access end is unknown; not read' });
+    { ...empty, kind: 'full', note: 'access end is unknown; not read' });
   assert.deepEqual(await read({ name: 'c1', provider: 'claude', home: '/fake/claude' }), { ...empty, note: 'usage read is only for codex logins' });
   assert.deepEqual(await read({ name: 'cx4', provider: 'codex', home: 'relative/cx4' }), { ...empty, note: 'login folder is not an absolute path' });
   assert.equal(codex.starts.length, 0);
   await read(codexLogin(t, 'cx2', { exp: S(10 * 60 + 1) }));
   assert.equal(codex.starts.length, 1, 'just past the margin is read');
+});
+
+test('every row says whether the login is full or an access copy, also when it is not read', async t => {
+  const codex = fakeCodex();
+  const read = login => readLoginUsage(login, { now: NOW }, { spawn: codex.spawn });
+  assert.equal((await read(codexLogin(t, 'w1', { refresh: '' }))).kind, 'access');
+  const ended = await read(codexLogin(t, 'w2', { refresh: '', exp: S(60) }));
+  assert.deepEqual([ended.state, ended.kind], ['expired', 'access']);
+  const full = await read(codexLogin(t, 'cx1', { exp: S(-DAY) }));
+  assert.deepEqual([full.state, full.kind], ['expired', 'full'], 'a full login whose access ended is still expired here, with kind full');
+  assert.equal(codex.starts.length, 1);
 });
 
 test('a login file that changes to an ending token between the two reads is not read', async t => {
@@ -158,7 +169,7 @@ test('a login file that changes to an ending token between the two reads is not 
     return fsp.open(path, flags);
   };
   const result = await readLoginUsage(cx6, { now: NOW }, { spawn: codex.spawn, fs: { open } });
-  assert.deepEqual(result, { ...empty, state: 'expired', accessExpiresAt: S(60) * 1000, note: 'access ended; this read never refreshes' });
+  assert.deepEqual(result, { ...empty, state: 'expired', kind: 'full', accessExpiresAt: S(60) * 1000, note: 'access ended; this read never refreshes' });
   assert.equal(codex.starts.length, 0);
 });
 
@@ -220,7 +231,7 @@ test('a bad reply or a failed read is unknown with a safe note, never a throw, a
   ];
   for (const [options, note] of cases) {
     const result = await readLoginUsage(codexLogin(t, 'cx1'), { now: NOW }, { spawn: fakeCodex(options).spawn, tmpdir: base });
-    assert.deepEqual(result, { ...empty, accessExpiresAt: S(DAY) * 1000, note }, note);
+    assert.deepEqual(result, { ...empty, kind: 'full', accessExpiresAt: S(DAY) * 1000, note }, note);
     assert.equal(JSON.stringify(result).includes('fake-private'), false);
     assert.deepEqual(readdirSync(base), [], `${note}: temp home removed`);
   }
@@ -238,7 +249,7 @@ test('a read that times out is unknown and its temp home is removed', async t =>
   await spawned;
   await setImmediate();
   t.mock.timers.tick(10_000);
-  assert.deepEqual(await pending, { ...empty, accessExpiresAt: S(DAY) * 1000, note: 'usage read timed out' });
+  assert.deepEqual(await pending, { ...empty, kind: 'full', accessExpiresAt: S(DAY) * 1000, note: 'usage read timed out' });
   assert.deepEqual(readdirSync(base), []);
 });
 
@@ -247,7 +258,7 @@ test('a temp home that cannot be removed is named in the note', async t => {
   const result = await readLoginUsage(codexLogin(t, 'cx1'), { now: NOW },
     { spawn: fakeCodex().spawn, tmpdir: base, fs: { rm: async () => { throw new Error('busy'); } } });
   const [left] = readdirSync(base);
-  assert.deepEqual(result, { ...empty, note: `temporary login folder not removed: ${join(base, left)}` });
+  assert.deepEqual(result, { ...empty, kind: 'full', note: `temporary login folder not removed: ${join(base, left)}` });
 });
 
 test('a native fake codex program sees only an access-only home and the three read-only methods', async t => {
@@ -314,7 +325,7 @@ test('reading many logins without save writes nothing; bad input throws before a
 test('the cache keeps the section 4 shape, keeps other names, drops foreign fields and uses XDG_STATE_HOME', async t => {
   const xdg = folder(t, 'pdd-usage-xdg-');
   const env = { HOME: '/nonexistent-home', XDG_STATE_HOME: xdg };
-  const cx5 = { state: 'ok', plan: 'team', week: { usedPercent: 39, resetsAt: 1763412540000 }, fiveHour: { usedPercent: 31, resetsAt: 1762916000000 },
+  const cx5 = { state: 'ok', kind: 'full', plan: 'team', week: { usedPercent: 39, resetsAt: 1763412540000 }, fiveHour: { usedPercent: 31, resetsAt: 1762916000000 },
     accessExpiresAt: 1763764380000, readAt: 1762905000000, limitedUntil: null, limitReason: null, resets: null, note: '' };
   assert.deepEqual(await saveUsage({ env }, { cx5 }), { cx5 });
   const file = join(xdg, 'pdd', 'accounts', 'usage.json');
@@ -357,8 +368,22 @@ test('a limit from a step stays until a good read; a failed read never clears it
   assert.equal((await saveUsage({ env }, { work3: { ...failed, readAt: NOW + 9e9 } })).work3.limitReason, 'credits', 'an unknown end stays');
   await markLimited({ env }, 'work3', NOW - 1, 'limit');
   assert.equal((await saveUsage({ env }, { work3: failed })).work3.limitReason, null, 'an ended limit is not kept');
+  for (const reason of ['needs-sign-in', 'stale-copy'])
+    assert.equal((await markLimited({ env }, 'cx2', until, reason)).limitReason, reason);
   for (const args of [['', 1, 'limit'], ['work3', -1, 'limit'], ['work3', NaN, 'limit'], ['work3', 1, 'reset'], ['work3', undefined, 'limit']])
     await assert.rejects(markLimited({ env }, ...args), { name: 'TypeError' });
+});
+
+test('a good read clears limit, credits and stale-copy marks, but an active needs-sign-in mark stays until it ends', async t => {
+  const env = { XDG_STATE_HOME: folder(t, 'pdd-usage-xdg-') };
+  const good = { ...empty, state: 'ok', kind: 'full' };
+  for (const reason of ['limit', 'credits', 'stale-copy']) {
+    await markLimited({ env }, 'cx1', NOW + 600_000, reason);
+    assert.equal((await saveUsage({ env }, { cx1: good })).cx1.limitReason, null, reason);
+  }
+  await markLimited({ env }, 'cx1', NOW + 3_600_000, 'needs-sign-in');
+  assert.deepEqual((await saveUsage({ env }, { cx1: good })).cx1, { ...good, limitedUntil: NOW + 3_600_000, limitReason: 'needs-sign-in' });
+  assert.equal((await saveUsage({ env }, { cx1: { ...good, readAt: NOW + 3_600_001 } })).cx1.limitReason, null, 'an ended mark is cleared');
 });
 
 test('the cache lock: a stale lock is taken over; a held lock refuses after 100 tries and changes nothing', async t => {
