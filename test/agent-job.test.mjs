@@ -520,7 +520,12 @@ test('a cwd-read failure keeps only a same-identity live process in custody', { 
   });
   await run('a process rechecked as a zombie no longer holds cleanup', 'Z', true);
   await run('the same identity rechecked as live still holds cleanup', 'S', false);
-  await run('a live candidate in a provably older session does not hold cleanup', 'S', true, true);
+  // The older-session exclusion is Linux-only; Darwin has no such proof.
+  if (process.platform === 'linux') {
+    await run('a live candidate in a provably older Linux session does not hold cleanup', 'S', true, true);
+  } else {
+    await run('an unreadable candidate stays held without Linux session proof', 'S', false, true);
+  }
 });
 
 test('a persistent source cwd is not custody without an explicit disposable root', async t => {
