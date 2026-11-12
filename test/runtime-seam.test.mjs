@@ -2100,3 +2100,83 @@ test('SEAM16 (S2): workflow-worker-completion keeps top-level await (exit 13 on 
     `a module reachable from createRequire has top-level await or failed synchronous load:\n${probe.stderr}`,
   );
 });
+
+test('SEAM17 (S3): stateless header reader in runtime-check-plan matches file-owner headerPrompts across corpus, and index constants match canonical owners', async () => {
+  const { defaultHeaderPrompts } = await import('../src/runtime/runtime-check-plan.mjs');
+  const { headerPrompts } = await import('../src/file-owner.mjs');
+  const index = await import('../src/runtime/index.mjs');
+  const seam = await import('../src/runtime-seam.mjs');
+
+  assert.deepEqual(index.LIMITS, index.runtimePreflightSlice().LIMITS);
+  assert.deepEqual(index.PROMPT_TESTS_LABEL, seam.PROMPT_TESTS_LABEL);
+  assert.deepEqual(index.PROMPT_TESTS_WORDS, seam.PROMPT_TESTS_WORDS);
+
+  const prefixes = ['', '//', '///', '  // ', '\t#', '##', '--', ';', ';;', '/*', '/**', ' *', '<!--', '"""', "'''", 'rem ', '% ', '// prefix '];
+  const suffixes = ['', '.', ' */', '. */', ' -->', '. -->', ' """', " '''", '   ', ' */ trailing'];
+  const goodHash = 'a'.repeat(64);
+  const hashes = [
+    '',
+    ` (sha256: ${goodHash})`,
+    ` (sha256: ${'0123456789abcdef'.repeat(4)})`,
+    ` (sha256: ${'a'.repeat(63)})`,
+    ` (sha256: ${'a'.repeat(65)})`,
+    ` (sha256: ${'A'.repeat(64)})`,
+    ` (sha256: ${'g'.repeat(64)})`,
+  ];
+  const paths = [
+    'prompts/a.prompt.md',
+    'a.prompt.md',
+    'prompts/cli/runtime-check-plan.prompt.md',
+    '/abs/a.prompt.md',
+    './a.prompt.md',
+    '../a.prompt.md',
+    'prompts//a.prompt.md',
+    'prompts/.git/a.prompt.md',
+    'prompts/.Git/a.prompt.md',
+    'prompts\\a.prompt.md',
+    'prompts/a.md',
+    'prompts/a\x00.prompt.md',
+    'prompts/a\x7f.prompt.md',
+    `${'p'.repeat(990)}.prompt.md`,
+    `${'p'.repeat(991)}.prompt.md`,
+  ];
+
+  let checked = 0;
+  for (const sample of [null, undefined, false, '', Buffer.alloc(0), '\uFEFF// Generated from prompts/a.prompt.md\n']) {
+    assert.deepEqual(defaultHeaderPrompts(sample), headerPrompts(sample));
+    checked += 1;
+  }
+
+  for (const pre of prefixes) {
+    for (const p of paths) {
+      for (const h of hashes) {
+        const sfx = suffixes[(checked + p.length) % suffixes.length];
+        const line = `${pre}${pre && !pre.endsWith(' ') ? ' ' : ''}Generated from ${p}${h}${sfx}`;
+        for (const eol of ['\n', '\r\n']) {
+          const doc = `${line}${eol}export const x = 1;${eol}`;
+          assert.deepEqual(defaultHeaderPrompts(doc), headerPrompts(doc), `mismatch on: ${JSON.stringify(doc)}`);
+          checked += 1;
+        }
+      }
+    }
+  }
+
+  // Line-length edges around LINE = 1100 and byte-window edges around HEAD = 4096 (including multi-byte UTF-8 and Buffers).
+  const targetHeader = '// Generated from prompts/edge.prompt.md';
+  for (const padLen of [1050, 1058, 1059, 1060, 1061, 1062, 1100, 1101]) {
+    const padded = `${' '.repeat(Math.max(0, padLen - targetHeader.length))}${targetHeader}\n`;
+    assert.deepEqual(defaultHeaderPrompts(padded), headerPrompts(padded));
+    checked += 1;
+  }
+  for (const totalBeforeEnd of [4090, 4094, 4095, 4096, 4097, 4098, 4100]) {
+    const fillerLen = Math.max(0, totalBeforeEnd - Buffer.byteLength(targetHeader) - 1);
+    const asciiDoc = `${'// ' + 'x'.repeat(Math.max(0, fillerLen - 3))}\n${targetHeader}\n// after\n`;
+    const utf8Doc = `${'// ' + 'é'.repeat(Math.max(0, Math.floor((fillerLen - 3) / 2)))}\n${targetHeader}\n`;
+    const dupDoc = `// Generated from prompts/first.prompt.md\r\n// Generated from prompts/second.prompt.md\r\n// Generated from prompts/first.prompt.md\r\n${asciiDoc}`;
+    for (const candidate of [asciiDoc, Buffer.from(asciiDoc, 'utf8'), utf8Doc, Buffer.from(utf8Doc, 'utf8'), dupDoc]) {
+      assert.deepEqual(defaultHeaderPrompts(candidate), headerPrompts(candidate));
+      checked += 1;
+    }
+  }
+  assert.ok(checked > 3500, `expected >3500 corpus checks, ran ${checked}`);
+});

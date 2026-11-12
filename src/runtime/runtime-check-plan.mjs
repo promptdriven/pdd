@@ -11,7 +11,7 @@ const bytesOf = content => typeof content === 'string' ? Buffer.from(content, 'u
 const decode = (content, limit) => content ? new TextDecoder().decode(bytesOf(content).subarray(0, limit)) : '';
 const canonicalHeaderPath = value => typeof value === 'string' && value.trim().length > 0 && value.length <= 1000 && !isAbsolute(value)
   && !/[\\\x00-\x1f\x7f]/.test(value) && !value.split('/').some(part => !part || part === '.' || part === '..' || part.toLowerCase() === '.git');
-function defaultHeaderPrompts(content) {
+export function defaultHeaderPrompts(content) {
   if (!content) return [];
   const bytes = bytesOf(content), lines = decode(bytes, HEAD).split(/\r?\n/), seen = new Set();
   if (bytes.length > HEAD) lines.pop();
