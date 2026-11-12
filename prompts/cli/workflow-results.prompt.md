@@ -1,18 +1,29 @@
 # pdd's own results for a run
 
+## Affected report metadata (draft)
+
+When a saved Check batch has `check_selection` or `baseline_report`, carry these
+unaltered snapshots into its result record as `checkSelection` and
+`baselineReport`. Their contracts are owned by
+[runtime client](runtime-client.prompt.md#check-scope-plan) and
+[check planning](runtime-check-plan.prompt.md#affected-selection-and-saved-baseline-projection-draft).
+They are historical/selection metadata, never current result states or gate
+evidence. Preserve newest-batch selection, `usableResult`, currentness and every
+existing blocking decision. This reader does not refresh history or run checks.
+
 Own `src/workflow-results.mjs`. A person and a checker must tell which results pdd recorded and which ones an agent typed (#2904). This module reads pdd's own saved results for one workflow run. It reads files only: it never runs a test, calls the interpreter, changes a file or stops a command.
 
 Export `readRunResults({root, runDir, runId, since, baseBranch}, {env, capture, git, workspace})`. It returns a list, in this order, of what it finds:
 
 - `pdd test`: the newest saved check batch (`intent` `check`) in the runtime state folder (`PDD_STATE_DIR`, else `~/.pdd/runtime`, then `batches/<BATCH>/`) whose original batch is admitted by the supplied canonical `ports.workspace` read binding (same-root or associated original, retaining original producer and stage) and whose `created_at` is at or after `since` (epoch ms). Its result is the `summary_line` of its `summary.json` and each distinct per-Story `summary_line` (else `result not saved (the check did not finish)`). For an associated original, determine `source` compatibility against the returned original stage and `sourceAnchor`, using the owner's exact source readers for the full selected tests; a matching saved source gives `current` at that stage, a mismatch gives `changed`, and an unavailable anchor gives `unknown`. Keep that original stage/anchor with the result. For ordinary same-root/current evidence, retain `capture(root, {tests, appMap: null})`: matching the batch's `source_sha256` gives `current`, a difference gives `changed`, else `unknown`, with no new run or association. A compatible frozen PR 1 result remains historical PR 1 evidence, never current-code proof. `engine` is the first known row `engine_sha` (12 characters) and `model` the first known `requested_model`, when known. A cached row (a pass that `pdd test` reused) keeps its identity only in `cache_identity`: when no row has a known direct value, use the first known `cache_identity.engine_sha` or `cache_identity.requested_model` of a row whose `cache_identity` is an object, and set `engineCached` or `modelCached` to true. A value is known when it is a nonblank string other than `unknown`. `requests` keeps every row's `request_ids` and `reports` every row's `report_url` (http or https), each once and with no cap, so a reader can trace the result to every saved report. It also keeps `sourceSha256` (the batch's full `source_sha256`, else null) and `tests` (the sorted complete selected test paths), so status can check the source again later.
-- `pdd lint`: the newest saved lint batch (`intent` `lint-only`) under the same rules. Its result is `Lint: N of M tests pass. 0 AI calls.` when the lint ended, else `Lint: result unknown (the lint did not finish).` `requests` keeps the batch's `lint.request_ids`.
+- `pdd lint`: the newest saved lint batch (`intent` `lint-only`) under the same rules. The [saved local-layout record](#saved-local-layout-record) owns the new local SVG record's discrimination, completion and returned fields; preserve it even with zero rows. Other lint batches retain `Lint: N of M tests pass. 0 AI calls.` when lint ended, else `Lint: result unknown (the lint did not finish).` `requests` keeps the batch's `lint.request_ids`. Legacy native-only local batches retain their existing interpretation.
 - `pdd workflow prove`: `<runDir>/old-code-proof.json` when the file exists, with the file time. pdd judges it with the PR renderer's own `judgeOldCodeProof` ([PR evidence](workflow-pr-evidence.prompt.md)), passing `runId`, `since` as `startedAt`, `git rev-parse --verify HEAD^{commit}` in `root` as the head and `git merge-base HEAD refs/remotes/origin/<baseBranch>` as the base (empty when `baseBranch` is unknown or the read fails; pdd does not fetch here). Its `line` is the result and its `status` gives `state`: `current` for an outcome, else `unavailable` or `stale`. So a step record and a PR top always say the same thing about a proof, a base that cannot be read is never current, and a missing file gives no result. None of these stops a command.
 
 Before asking the canonical read-only `workspace` binding to admit a saved batch, exclude batches whose `created_at` is invalid or older than `since`, and batches whose intent is neither `check` nor `lint-only`. Every remaining candidate, including an alternate producer, still receives full canonical admission; do not reject it merely for a different root. Keep newest selection and existing tie behavior, source states, original stage and anchor, and ordinary same-root changed/unknown fallback. This ordering avoids repeated expensive workspace inventories for unrelated historical batches: thousands of old batches can each cause an inventory of many runs. It introduces no cross-command cache or new eligibility rule.
 
 Skip unreadable, foreign, malformed or older records without a warning. Batch names match `YYYYMMDD-HHMMSS-xxxx`. Clean each shown value to one line, and write `pdd-workflow:` inside it as `pdd-workflow\u003a`, so saved text never makes an ownership marker.
 
-Export `resultLines(results, {kinds})`. Each result becomes one line that starts with `pdd result: `: `pdd result: KIND (batch B, ISO time, source S, engine E[ (cached)], model M[ (cached)], requests R…, head H): RESULT[; STORY LINE…][; Report: URL (report links expire after 7 days)…]`, leaving out unknown facts. For an associated result, render its original stage beside source; label `pr1` as `PR 1 (historical)` and `before` as `before the fix (historical)`, even when its frozen source is compatible. Never describe that result as a current-code pass. A line shows at most the first 10 requests and the first 10 report links; when there are more, it ends with `; K more requests and L more reports not shown (all in the run record)` (singular for one; naming only the kinds that have more), so nothing is dropped in silence. Export `usableResult(result)`: false only for a prove result that is not `current`. `kinds` limits the kinds shown. With nothing to show, the one line is `noResultLine(kinds)`: `pdd result: none. pdd has no pdd test, pdd lint or pdd workflow prove result of its own for this run (pdd:no-verdict).`, naming only the selected kinds. Also export `PDD_RESULT` (`pdd result`) and `NO_VERDICT` (`pdd:no-verdict`).
+Export `resultLines(results, {kinds})`. Each result becomes one line that starts with `pdd result: `: `pdd result: KIND (batch B, ISO time, source S, engine E[ (cached)], model M[ (cached)], requests R…, head H): RESULT[; STORY LINE…][; Report: URL (report links expire after 7 days)…]`, leaving out unknown facts. For an associated result, render its original stage beside source; label `pr1` as `PR 1 (historical)` and `before` as `before the fix (historical)`, even when its frozen source is compatible. Never describe that result as a current-code pass. A line shows at most the first 10 requests and the first 10 report links; when there are more, it ends with `; K more requests and L more reports not shown (all in the run record)` (singular for one; naming only the kinds that have more), so nothing is dropped in silence. Export `usableResult(result)` under the single [result eligibility rule](#named-result-evidence). `kinds` limits the kinds shown. With nothing to show, the one line is `noResultLine(kinds)`: `pdd result: none. pdd has no pdd test, pdd lint or pdd workflow prove result of its own for this run (pdd:no-verdict).`, naming only the selected kinds. Also export `PDD_RESULT` (`pdd result`) and `NO_VERDICT` (`pdd:no-verdict`).
 
 Export `checkCause(rows)` and `savedCheckCause(batch, {env})`: why a saved check has no verdict, so a run waits for the interpreter only for a service cause (#3039). `savedCheckCause` reads `batches/<BATCH>/summary.json` rows, else `batch.json` rows, in the same state folder. A name that is not a batch gives `none`. A named batch whose rows cannot be read gives `unknown`, and so does a check whose `batch.json` still has a `ready`, `waiting`, `sending`, `queued` or `running` row, or a `summary.json` whose row states differ from the `batch.json` rows of the same test and Story (an interrupted `pdd test --retry` left the old summary). It reads files only. `checkCause` first normalizes legacy and public states through the canonical result outcome projection, retaining refusal, reason, provider and unsent facts. `not_run` and `not run` have the same classification; `unknown` and `partial` have the same classification. An explicit `broken-test` reason or an unsent file-rule refusal is issue work, even under `not run`. Named access outcomes retain the access route. Unknown dispatch remains unknown unless an explicit provider failure establishes a service cause. It judges the rows that did not pass:
 
@@ -444,6 +455,107 @@ Validate saved row records before selecting the newest batch. A null, scalar or 
 
 Export `savedLostCheck(batch,{env,root})`. Read only the named check batch and its summary from the existing runtime state folder. Return null for missing, malformed, foreign-root, non-check, active (ready/waiting/sending/queued/running) or verdict-only batches. Return `{batch,sourceSha256,tests,maxCalls,cost}` for a stopped unknown/partial check. `tests` contains only lost-verdict rows, unique in saved order; do not include passed, failed, refused or unstarted rows. Require safe relative test paths, a source hash and original integer call caps from 1 through 1000. `maxCalls` is the smallest selected cap, so a resend cannot raise any cap. `cost` is `{calls,knownCalls}`: calls is the total from summary rows when every row has finite nonnegative numeric calls, else null; knownCalls sums known calls (including known_calls for unknown usage). Unknown cost is never zero by inference. Preserve the old receipt; no interpreter or file writes.
 
+## Saved local-layout record
+
+This shared evidence contract owns the storage shape and reader projection for
+new SVG local lint records. The Runtime client owns their creation and save
+process. They use the existing version 1 batch route, not a new result store.
+A record is this new local-layout type only when `version: 1`,
+`intent: "lint-only"`, `local_only: true`, a well-formed `local_scope` below,
+and `lint.state: "partial"`, `lint.lint_state: "partial"` and
+`lint.reason.code: "local-only"` all agree. `local_only` alone also occurs in
+older native-only evidence and must not reclassify it as SVG-only.
+
+The following values define the complete new record shape once. `B` is the
+ordinary `YYYYMMDD-HHMMSS-xxxx` batch name; `R` is the canonical absolute
+repository root; `T` is its creation time as an ISO timestamp. `E` is the original
+local lint exit (0 for completed advisory inspection or 4 for existing default
+interface refusals). `S` is the original local partial summary line, including
+its warning count, zero AI calls and no checks sent. `W` is the original ordered
+warning-string array; `P` is the original interface-findings array, each
+`{code,path,message}` with optional `section`, all strings. Preserve the original
+finding values and optional section; do not replace them with a server verdict.
+`Q` is `{code:"local-only",message:"checked SVG layout only; prompts not checked"}`,
+using runtime-outcome's public reason shape. `L` is `{tests,prompts}`, both sorted
+unique arrays of safe repository-relative paths: actual selected test paths and
+actual inspected prompt paths. A repository prompt scan has `tests: []`.
+
+| File | Required fields and placement |
+| --- | --- |
+| `batches/B/batch.json` | Exactly `version:1`, `batch:B`, `root:R`, `created_at:T`, `intent:"lint-only"`, `local_only:true`, `source_sha256:null`, `local_scope:L`, `summary_line:S`, `exit_code:E`, `warnings:W`, `problems:P`, `rows:[]`, and `lint:{state:"partial",lint_state:"partial",reason:Q,request_ids:[]}`. No authenticated owner, Runtime origin, request/model/engine identity or server receipt is invented. The null source identity establishes no source-currentness claim. |
+| `batches/B/summary.json` and completed immediate/saved-read JSON | Exactly `batch:B`, `repo:R`, `exit_code:E`, `state:"partial"`, `lint_state:"partial"`, `reason:Q`, `local_only:true`, `local_scope:L`, `summary_line:S`, `warnings:W`, `problems:P`, `rows:[]`, `report_url:null`. |
+
+Selected Stories still use the current empty local advisory rows; selected test
+scope lives in `L.tests`. Never create a passing row for an inspected prompt.
+
+A readable valid new batch remains a candidate under ordinary root/time and
+canonical workspace admission, newest selection and tie rules. Its matching
+complete summary is the completion boundary: every summary field above must
+agree with its batch counterpart (including lint metadata, root and batch).
+A missing, unreadable, malformed or mismatched summary means **incomplete local
+save**, not completed lint. Keep that newer local candidate selected rather
+than substituting an older hosted pass. Its public projection uses the same
+summary shape from batch facts, but `exit_code:2` and
+`summary_line:"Local lint result not saved (the local save did not finish). partial (local-only)."`.
+Both complete and incomplete projections remain partial/local-only and
+ineligible. A malformed batch retains the existing malformed-candidate rule;
+never manufacture its absent required facts. Reading does not repair either file.
+
+For this type, `readRunResults` returns `kind:"pdd lint"`, `batch:B`, `at` from
+`T` in epoch milliseconds, `localOnly` from `local_only`, `localScope` from
+`local_scope`, `tests` from `L.tests`, and `exitCode`, `state`, `reason`, `warnings`,
+`problems` and `summary` from the public projection's `exit_code`, `state`,
+`reason`, `warnings`, `problems` and `summary_line`. `states:[]` and `requests:[]`
+retain the empty local rows/request list. Do not synthesize count-based success
+or engine/model/report facts. Supply the full `L.tests` to the existing workspace
+admission binding; retain its root/stage checks and same-root changed/unknown
+fallback. Null source identity remains unknown, never current proof.
+`resultLines` shows that summary, warning/finding facts and actual scope (selected
+tests or repository scan, plus inspected prompt paths), under its existing
+one-line cleaning rules. Incomplete saves retain the explicit not-saved message.
+
+## Named result evidence
+
+Load runtime-outcome's public vocabulary for saved lint and check rows. Include
+its public state and reason codes in pdd result lines, including when the saved
+summary is absent. Each saved check/lint result includes
+`states` in original saved row order. Each row has `test` from that saved row and
+the canonical `{state, reason}` public projection. Retain these optional saved
+fields on that same row, without replacing the canonical state or short reason:
+
+- `refusals`: when the saved value is an array, retain its non-null, non-array
+  object records in order, including duplicates, all fields and nested values.
+  Retain an explicitly empty array. Ignore non-record elements; omit this field
+  when its saved value is absent or is not an array.
+- `compatibility` and `binding_plan`: retain each when its saved value is a
+  non-null, non-array object, with all fields and nested values unchanged;
+  otherwise omit it. Compatibility retains the outcome owner's association,
+  state, issue and original reported evidence. The saved binding plan retains
+  its edge identities, candidate causes and repair instructions as evidence.
+
+These fields are retained JSON records, not fresh judgments. Never derive a
+missing field from another row, the short reason, a summary, or diagnostic text.
+Do not recheck compatibility, repair bindings or infer a new result state. The
+consumer owns how this evidence affects its existing hold policy. Legacy rows
+keep only their available fields; optional evidence never supplies a full pass.
+
+`usableResult(result)` has this single ordered rule:
+
+1. Return false for a local-only lint result (`kind: "pdd lint"` and
+   `localOnly: true`), a top-level `state: "partial"`, or any public `states` row
+   with `state: "partial"`. The first two guards apply even with empty states.
+2. For `kind: "native evidence"`, return true only when
+   `assessment.identity.stage` is not `pr1` and `assessment.storyNativeProof` is
+   `pdd-observed` or `qualified-external`. Retain that existing native eligibility
+   route; generic visibility does not establish native proof.
+3. For `kind: "pdd workflow prove"`, return true only for `state: "current"`.
+4. Otherwise retain true.
+
+Keep partial results visible, without a full-pass claim. Suppress a saved pass
+mark when its own rows do not all pass. A newer local partial or incomplete lint
+result stays selected over an older hosted pass. Visibility is not gate
+eligibility. Keep existing source and identity checks.
+
 ## Dependencies
 
 - [Check planning](runtime-check-plan.prompt.md): required for saved target and
@@ -482,7 +594,7 @@ Export `savedLostCheck(batch,{env,root})`. Read only the named check batch and i
 ```json
 {
   "kind":"partial","status":"approved",
-  "prose_sha256":"b682e9b16c24a48cde25434cb6afba90ef3da9cf84a57d3d63f4f2d4b50a9658",
+  "prose_sha256":"ad265a764b3c5032824576fea013a78582e168d2c3f46dfd7b88499bbd649881",
   "entries": [{"operation":"assessNativeEvidence","input_schema":{"type":"object","properties":{"root":{"type":"string"},"runDir":{"type":"string"},"runId":{"type":"string"},"profileId":{"type":"string"},"storyPath":{"type":"string"}},"required":["root","runDir","runId","profileId","storyPath"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"profileId":{"type":"string"},"profileState":{"type":"string"},"sourceState":{"type":"string"},"receiptState":{"type":"string"},"origin":{"type":"string"},"requiresReview":{"type":"boolean"},"requiredIds":{"type":"array","items":{"type":"string"}},"missingIds":{"type":"array","items":{"type":"string"}},"failedIds":{"type":"array","items":{"type":"string"}},"skippedIds":{"type":"array","items":{"type":"string"}},"unknownIds":{"type":"array","items":{"type":"string"}},"unexecutedGates":{"type":"array","items":{"type":"string"}},"prerequisiteProblems":{"type":"array","items":{"type":"string"}},"optionalSkippedIds":{"type":"array","items":{"type":"string"}},"duplicateIds":{"type":"array","items":{"type":"string"}},"occurrenceCount":{"oneOf":[{"type":"integer","minimum":0},{"type":"null"}]},"uniqueIdCount":{"oneOf":[{"type":"integer","minimum":0},{"type":"null"}]},"observations":{"type":"array","items":{"type":"object","properties":{"occurrenceId":{"type":"string"},"testId":{"type":"string"},"selected":{"oneOf":[{"type":"boolean"},{"type":"null"}]},"started":{"oneOf":[{"type":"boolean"},{"type":"null"}]},"outcome":{"type":"string"},"skipReason":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["occurrenceId","testId","selected","started","outcome","skipReason"],"additionalProperties":false}},"identity":{"type":"object","properties":{"sourceId":{"type":"string"},"implementationId":{"type":"string"},"testsId":{"type":"string"},"requirementsId":{"type":"string"},"profilePrompt":{"type":"string"},"profileApproval":{"type":"string"},"originalRef":{"type":"string"},"verificationRef":{"type":"string"},"producer":{"type":"string"},"producerVersion":{"type":"string"},"reportFormat":{"type":"string"},"runnerVersion":{"type":"string"},"runtimeVersion":{"type":"string"},"stage":{"type":"string"},"sourceRef":{"type":"string"}},"required":["sourceId","implementationId","testsId","requirementsId","profilePrompt","profileApproval","originalRef","verificationRef","producer","producerVersion","reportFormat","runnerVersion","runtimeVersion","stage","sourceRef"],"additionalProperties":false},"criteria":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"},"state":{"type":"string"},"nativeIds":{"type":"array","items":{"type":"string"}},"reason":{"type":"string"}},"required":["id","text","state","nativeIds","reason"],"additionalProperties":false}},"comparison":{"type":"object","properties":{"state":{"type":"string"},"reason":{"type":"string"},"lostIds":{"type":"array","items":{"type":"string"}},"changes":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"before":{"type":"string"},"after":{"type":"string"}},"required":["id","before","after"],"additionalProperties":false}}},"required":["state","reason","lostIds","changes"],"additionalProperties":false},"limits":{"type":"array","items":{"type":"string"}},"profileNativeProof":{"type":"string"},"storyNativeProof":{"type":"string"},"gates":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"outcome":{"type":"string"}},"required":["id","outcome"],"additionalProperties":false}},"prerequisites":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"expectedArtifactId":{"type":"string"},"artifactId":{"type":"string"},"state":{"type":"string"},"verificationRef":{"type":"string"}},"required":["id","expectedArtifactId","artifactId","state","verificationRef"],"additionalProperties":false}}},"required":["profileId","profileState","sourceState","receiptState","origin","profileNativeProof","requiresReview","requiredIds","missingIds","failedIds","skippedIds","unknownIds","unexecutedGates","prerequisiteProblems","optionalSkippedIds","duplicateIds","occurrenceCount","uniqueIdCount","observations","identity","criteria","comparison","limits","storyNativeProof","gates","prerequisites"],"additionalProperties":false},"errors":[]}],
   "calls": [],
   "resources": [{"name":"native","kind":"port","access":"read","operations":[{"name":"read_context","access":"read","arguments_schema":{"type":"object","properties":{"root":{"type":"string"},"runDir":{"type":"string"},"runId":{"type":"string"},"profileId":{"type":"string"},"storyPath":{"type":"string"}},"required":["root","runDir","runId","profileId","storyPath"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"content":{"type":"string"}},"required":["content"],"additionalProperties":false}}]}],
@@ -491,12 +603,3 @@ Export `savedLostCheck(batch,{env,root})`. Read only the named check batch and i
 }
 ```
 </details>
-
-## Named result evidence
-
-Load runtime-outcome's public vocabulary for saved lint and check rows. Include
-its public state and reason codes in pdd result lines, including when the saved
-summary is absent. Keep partial results visible as evidence, but `usableResult` returns false when
-its public `states` array contains partial. Each saved check/lint result includes
-`states: [{test, state, reason}]` from the public projection. It cannot establish
-a full pass. Suppress a saved pass mark when its own rows do not all pass. Keep existing source and identity checks.

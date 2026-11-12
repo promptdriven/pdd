@@ -1,5 +1,5 @@
 import { bindingRefusals } from './runtime-binding-plan.mjs';
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: 38bc4350976ee3727e31a844380231994578f2126530dde2878dca72ae54d3bd).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: 249d228ae191d88d5ae0fa234a339198f5475fa0b2ef9f033d2a551d98a07953).
 import { hasProgress, outcomeFor, outcomeText, progressText, resultOutcome, PROVIDER_TEXT } from './runtime-outcome.mjs';
 export const OPEN_STATES = new Set(['queued', 'running', 'sent']);
 
@@ -83,6 +83,67 @@ export const refusalView = (item, secrets = []) => ({
   where: cleanText(item?.where, secrets) || [item?.file, item?.at].map(part => cleanText(part, secrets)).filter(Boolean).join(' ') || null,
   cause: cleanText(item?.cause, secrets) || null });
 
+// Attribute only direct authored references backed by this sample's raw error.
+function predecessorErrors(refusal, report, steps, secrets) {
+  if (typeof refusal?.section !== 'string') return [];
+  const anchor = /^samples\[(\d+)\]\.steps\[(\d+)\]$/.exec(refusal?.section);
+  if (!anchor || !Array.isArray(steps) || !Array.isArray(report?.samples)) return [];
+  const sampleIndex = Number(anchor[1]), index = Number(anchor[2]);
+  if (!Number.isSafeInteger(sampleIndex) || !Number.isSafeInteger(index)) return [];
+  const reported = report.samples[sampleIndex]?.steps, dependent = steps[index];
+  if (!Array.isArray(reported) || !isObjectLike(dependent) || !Object.hasOwn(dependent, 'input')) return [];
+  // A relative location can corroborate this anchor, but cannot select a sample.
+  for (const location of [refusal.at, refusal.field, refusal.where]) {
+    if (location == null) continue;
+    if (typeof location !== 'string') return [];
+    let conflict = false;
+    const remainder = location.replace(/(?:samples\[(\d+)\]\.)?steps\[(\d+)\]/g, (text, sample, step) => {
+      if (Number(step) !== index || sample !== undefined && Number(sample) !== sampleIndex) conflict = true;
+      return '';
+    });
+    if (conflict || /\b(?:samples|steps)\[/.test(remainder)) return [];
+  }
+  const safe = (value, pointers = false) => {
+    let text = String(value ?? '').replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '').replace(/[\x00-\x1f\x7f-\x9f]/g, '');
+    for (const secret of secrets) if (secret) text = text.split(secret).join('[secret]');
+    text = text.replace(TOKENS, '[secret]');
+    // Pointer spaces name members. Host paths in identities/codes need no word delimiter.
+    return pointers ? text : text.replace(/\/(?:home|Users|srv|var|tmp|private|opt|mnt|workspace|usr|etc)\/[^\s"'<>)\]]*/g, '<server path>').trim();
+  };
+  const identity = value => typeof value === 'string' && value.trim() && safe(value)
+    && !/^(?:\[(?:secret|redacted)\]|<(?:secret|redacted|server path)>|redacted|\*+)$/i.test(safe(value));
+  const id = dependent.step_id;
+  if (!identity(id) || steps.filter(step => step?.step_id === id).length !== 1) return [];
+  if (reported[index] !== undefined && reported[index]?.step_id !== id) return [];
+  if (reported.some((step, at) => step?.step_id === id && at !== index)) return [];
+  const facts = [];
+  const pending = [{ value: dependent.input, path: '' }];
+  while (pending.length) {
+    const { value, path } = pending.pop();
+    if (!value || typeof value !== 'object') continue;
+    const ref = value.$step_result;
+    if (isObjectLike(value) && Object.keys(value).length === 1 && isObjectLike(ref)
+      && Object.keys(ref).length === 2 && Object.hasOwn(ref, 'step_id') && Object.hasOwn(ref, 'path')
+      && typeof ref.path === 'string' && identity(ref.step_id)) {
+      const authored = steps.map((step, at) => ({ step, at })).filter(({ step }) => step?.step_id === ref.step_id);
+      const matches = reported.filter(step => step?.step_id === ref.step_id);
+      if (authored.length !== 1 || authored[0].at >= index || matches.length !== 1) continue;
+      const predecessor = matches[0];
+      if (predecessor.result != null || !identity(predecessor.error?.code)) continue;
+      facts.push({ step_id: safe(id), input_path: safe(path, true), predecessor_step_id: safe(ref.step_id),
+        result_path: safe(ref.path, true), error_code: safe(predecessor.error.code) });
+      continue;
+    }
+    const children = Object.entries(value);
+    // Reverse stack insertion keeps authored object/array traversal order.
+    for (let at = children.length - 1; at >= 0; at--) {
+      const [key, item] = children[at];
+      pending.push({ value: item, path: `${path}/${key.replaceAll('~', '~0').replaceAll('/', '~1')}` });
+    }
+  }
+  return facts;
+}
+
 // The parts of a server answer that pdd shows.
 export function projectAnswer(answer, { origin, secrets = [], steps: authoredSteps = [], criterionTexts = {}, test, sourceFiles, capacityUncertain = false } = {}) {
   const result = answer?.result ?? null, report = result?.report ?? null, time_limit = stepTimeLimit(answer, { steps: authoredSteps, secrets });
@@ -132,7 +193,12 @@ export function projectAnswer(answer, { origin, secrets = [], steps: authoredSte
       normal_result: Object.prototype.hasOwnProperty.call(step ?? {}, 'result') && !step?.error, ...(diagnosis ? { diagnosis } : {}) };
   });
   // prompt-runtime #379 adds reason, fix, file, at, where and cause to each refusal; the live server may not send them yet.
-  const refusals = (Array.isArray(result?.refusals) ? result.refusals : []).map(item => refusalView(item, secrets));
+  const refusals = (Array.isArray(result?.refusals) ? result.refusals : []).map(item => {
+    const view = refusalView(item, secrets);
+    const facts = answer?.command === 'check' && ['passed', 'failed', 'refused'].includes(answer?.state)
+      ? predecessorErrors(item, report, authoredSteps, secrets) : [];
+    return { ...view, ...(facts.length ? { dependency_errors: facts } : {}) };
+  });
   const usage = answer?.usage ?? {};
   const accountingSurfaces = [answer, usage, result, report].filter(isObjectLike);
   const accountingValues = key => accountingSurfaces.filter(surface => Object.hasOwn(surface, key)).map(surface => nonNegativeInt(surface[key]));
@@ -207,7 +273,8 @@ export function jsonRow(row) {
   return { story: row.story, title: row.title, test: row.test, ...(row.native_only?.length ? {native_only:row.native_only} : {}), ...resultOutcome(row), ...(row.unsent ? {unsent:true} : {}), ...(row.not_checked?.length ? {not_checked:row.not_checked} : {}), ...(row.binding_plan ? {binding_plan:row.binding_plan,binding_diagnostics:bindingRefusals(row.binding_plan,row.compatibility)} : {}), ...(row.compatibility ? { compatibility: row.compatibility, client_advice: row.client_advice } : {}), criterion_coverage: criterionCoverage(row), ...(row.progress ? { progress: row.progress } : {}), ...(row.ahead !== undefined && row.ahead !== null ? { ahead: row.ahead } : {}), checks: row.checks ?? null, criteria: row.criteria ?? null,
     failed_checks: publicChecks(row.failed_checks), refusals: (row.refusals ?? []).map(item => ({ code: item.code, ...(item.path ? { path: item.path } : {}), field: item.field ?? null, section: item.section ?? null,
       message: item.message ?? null, engine_message: item.engine_message ?? null, hint: item.hint ?? null, reason: item.reason ?? null, fix: item.fix ?? null,
-      where: item.where ?? null, cause: item.cause ?? null })), calls: sentRow(row) ? row.calls ?? 'unknown' : 0,
+      where: item.where ?? null, cause: item.cause ?? null,
+      ...(item.dependency_errors?.length ? { dependency_errors: item.dependency_errors } : {}) })), calls: sentRow(row) ? row.calls ?? 'unknown' : 0,
     seconds: round(row.seconds), requested_model: row.requested_model ?? null, report_url: row.report_url ?? null,
     ...(row.accounting_complete !== undefined ? { known_calls: row.known_calls ?? null, unknown_calls: row.unknown_calls ?? 0, accounting_complete: row.accounting_complete } : {}),
     request_id: row.request_ids?.at(-1) ?? null, draft: !!row.draft, busy: !!row.busy, can_retry: !!row.can_retry, time_limit: row.time_limit ?? null,
@@ -316,6 +383,7 @@ function refusalLines(item, serverNext = false) {
     : [`  ${[item.code, item.section, item.message].filter(Boolean).join('  ')}`];
   if (!item.reason && item.engine_message && item.engine_message !== item.code && item.engine_message !== item.message) lines.push(`  engine: ${item.engine_message}`);
   if (item.hint && !serverNext) lines.push(`  ${item.hint}`);
+  for (const fact of item.dependency_errors ?? []) lines.push(`  Dependency: step ${JSON.stringify(fact.step_id)} input ${JSON.stringify(fact.input_path)} references step ${JSON.stringify(fact.predecessor_step_id)} result ${JSON.stringify(fact.result_path)}; that step reported error code ${JSON.stringify(fact.error_code)}.`);
   return lines;
 }
 

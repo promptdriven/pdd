@@ -218,7 +218,7 @@ Read that output before you merge. Passing tests are useful evidence. They are n
 | For one project (commit it) | `.agents/skills/` in the repo | `.claude/skills/` in the repo |
 | For you, in all projects | `~/.agents/skills/` | `~/.claude/skills/` |
 
-If you set `CLAUDE_CONFIG_DIR`, Claude Code reads `$CLAUDE_CONFIG_DIR/skills/` for you, too.
+When `CLAUDE_CONFIG_DIR` is an absolute path, pdd uses `$CLAUDE_CONFIG_DIR/skills/` as the Claude user skills folder.
 
 `pdd workflow run NAME` and `pdd workflow list` look for a folder `pdd-NAME` with a `workflow.json`, in this order. The first eligible one found wins; only a project copy can override a bundled workflow.
 
@@ -230,7 +230,7 @@ If you set `CLAUDE_CONFIG_DIR`, Claude Code reads `$CLAUDE_CONFIG_DIR/skills/` f
 
 The project is the top folder of the Git repo of your current folder. Put your copy where your agent reads it too, or in both folders of a level.
 
-`npx skills add promptdriven/pdd` installs the ten PDD skills at the project level, or at the "for you" level with `-g`. `pdd setup` copies them to the "for you" level only when they are missing: `~/.agents/skills/` for Codex, and `~/.claude/skills/` (or `$CLAUDE_CONFIG_DIR/skills/`) for Claude Code. After an update of the pdd command, `pdd setup` replaces an older copy that has its `.pdd-skill.json` marker. It never touches a copy without the marker, or a symlink. Do not edit these installed folders: an update replaces them.
+`npx skills add promptdriven/pdd` installs the ten PDD skills at the project level, or at the "for you" level with `-g`. `pdd setup` copies them to the "for you" level only when they are missing: `~/.agents/skills/` for Codex, and `~/.claude/skills/` (or `$CLAUDE_CONFIG_DIR/skills/` when it is an absolute path) for Claude Code. `pdd setup` replaces marked user copies when older, when the same version has different files, or when the marker is invalid. A newer marker version is kept. It never touches a copy without the marker, or a symlink. Do not edit these installed folders: an update replaces them.
 
 Give your workflow a new name. A project copy with the same name as a PDD skill (for example `pdd-bug`) works only in Codex:
 

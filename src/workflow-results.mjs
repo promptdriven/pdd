@@ -1,4 +1,5 @@
-// Generated from prompts/cli/workflow-results.prompt.md (sha256: c2adffeb6681997d61033f6e01258d164964bbbde74f03a2ee4b73618f1bfb64).
+// Generated from prompts/cli/workflow-results.prompt.md (sha256: f39c0e8c7c72058393411296f0630401ca571c6b954fdd5c9b89e9c9414d8b93).
+import { isDeepStrictEqual } from 'node:util';
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -69,14 +70,57 @@ function identity(rows) {
   const [model, modelCached] = pick(rows.map(row => row?.requested_model), cached.map(value => value.requested_model), 80);
   return { engine, model, ...(engineCached ? { engineCached } : {}), ...(modelCached ? { modelCached } : {}) };
 }
+// The saved local-layout contract is deliberately distinct from legacy native-only batches.
+function localLayoutResult(batch, summary) {
+  const keys = (value, names) => value && typeof value === 'object' && !Array.isArray(value)
+    && isDeepStrictEqual(Object.keys(value).sort(), names.split(' ').sort());
+  const paths = values => Array.isArray(values) && values.every(path => typeof path === 'string' && path.length
+    && !/^[a-zA-Z]:|^[\\/]|[\\\x00-\x1f\x7f]/.test(path) && path.split('/').every(part => part && part !== '.' && part !== '..' && part !== '.git'))
+    && isDeepStrictEqual(values, [...new Set(values)].sort());
+  if (!keys(batch, 'version batch root created_at intent local_only source_sha256 local_scope summary_line exit_code warnings problems rows lint')
+    || batch.version !== 1 || !BATCH.test(batch.batch) || typeof batch.root !== 'string' || !batch.root.startsWith('/')
+    || typeof batch.created_at !== 'string' || !Number.isFinite(Date.parse(batch.created_at))
+    || batch.intent !== 'lint-only' || batch.local_only !== true || batch.source_sha256 !== null
+    || !keys(batch.local_scope, 'tests prompts') || !paths(batch.local_scope.tests) || !paths(batch.local_scope.prompts)
+    || typeof batch.summary_line !== 'string' || ![0, 4].includes(batch.exit_code)
+    || !Array.isArray(batch.warnings) || !batch.warnings.every(item => typeof item === 'string')
+    || !Array.isArray(batch.problems) || !batch.problems.every(item => (keys(item, 'code path message') || keys(item, 'code path message section')) && Object.values(item).every(value => typeof value === 'string'))
+    || !Array.isArray(batch.rows) || batch.rows.length || !keys(batch.lint, 'state lint_state reason request_ids')
+    || batch.lint.state !== 'partial' || batch.lint.lint_state !== 'partial'
+    || !isDeepStrictEqual(batch.lint.reason, {code:'local-only',message:'checked SVG layout only; prompts not checked'})
+    || !Array.isArray(batch.lint.request_ids) || batch.lint.request_ids.length) return null;
+  const result = {batch:batch.batch,repo:batch.root,exit_code:batch.exit_code,state:'partial',lint_state:'partial',reason:batch.lint.reason,
+    local_only:true,local_scope:batch.local_scope,summary_line:batch.summary_line,warnings:batch.warnings,problems:batch.problems,rows:[],report_url:null};
+  return isDeepStrictEqual(summary, result) ? result : {...result,exit_code:2,
+    summary_line:'Local lint result not saved (the local save did not finish). partial (local-only).'};
+}
+
 // A prove result that is not current is shown, but it is never pdd's proof.
 const STAGE_LABEL = {pr1:'PR 1 (historical)',before:'before the fix (historical)'};
-export const usableResult = result => result.states?.some(row => row.state === 'partial') ? false : result.kind === 'native evidence' ? result.assessment?.identity?.stage !== 'pr1' && result.assessment?.storyNativeProof !== 'none' && ['pdd-observed','qualified-external'].includes(result.assessment?.storyNativeProof) : result.kind !== 'pdd workflow prove' || result.state === 'current';
+export const usableResult = result => result.kind === 'pdd lint' && result.localOnly === true || result.state === 'partial' || result.states?.some(row => row.state === 'partial') ? false : result.kind === 'native evidence' ? result.assessment?.identity?.stage !== 'pr1' && result.assessment?.storyNativeProof !== 'none' && ['pdd-observed','qualified-external'].includes(result.assessment?.storyNativeProof) : result.kind !== 'pdd workflow prove' || result.state === 'current';
 
+const AFFECTED_DISCLAIMER = 'Affected checks only; this is not a full workflow pass. Required full-pass gates still apply.';
+function savedCheckScope(batch) {
+  const scope = checkPlanResults(batch.check_plan,batch.rows);
+  if (scope && batch.check_selection?.mode === 'affected' && scope.baseline.unresolved.length && !batch.check_plan.prerequisites?.length) {
+    const selected = scope.target.failures.length ? `Repair target failures: ${scope.target.failures.join(', ')}. `
+      : scope.target.unresolved.length ? `Read the saved batch for unresolved selected checks: ${scope.target.unresolved.join(', ')}. ` : '';
+    scope.guidance = `${selected}Omitted baseline work: ${scope.baseline.unresolved.join(', ')}. Historical observations are separate; run a full check for required full-pass gates.`;
+  }
+  return scope;
+}
 function runtimeEvidence(batch, summary) {
   const coverage = batch.coverage ?? summary?.coverage;
   const nativeOnly = batch.rows.filter(row => Array.isArray(row?.native_only) && row.native_only.length).map(row => ({test:row.test,state:row.state,prompts:row.native_only.filter(item => item && typeof item.path === 'string' && typeof item.reason === 'string').map(item => ({path:item.path,reason:item.reason}))}));
-  return {...(batch.check_plan ? {checkPlan:batch.check_plan,checkScope:checkPlanResults(batch.check_plan,batch.rows)} : {}), ...(coverage ? {coverage} : {}), ...(nativeOnly.length ? {nativeOnly} : {})};
+  return {...(batch.check_selection ? {checkSelection:batch.check_selection} : {}), ...(batch.baseline_report ? {baselineReport:batch.baseline_report} : {}), ...(batch.check_plan ? {checkPlan:batch.check_plan,checkScope:savedCheckScope(batch)} : {}), ...(coverage ? {coverage} : {}), ...(nativeOnly.length ? {nativeOnly} : {})};
+}
+
+// Preserve saved details on their own row; their consumer decides what they mean.
+function savedResultState(row) {
+  return {test: row.test, ...resultOutcome(row),
+    ...(Array.isArray(row.refusals) ? {refusals: row.refusals.filter(object)} : {}),
+    ...(object(row.compatibility) ? {compatibility: row.compatibility} : {}),
+    ...(object(row.binding_plan) ? {binding_plan: row.binding_plan} : {})};
 }
 
 // pdd's own saved results for one run: the newest `pdd test` check batch, the newest `pdd lint` batch (both from the
@@ -94,9 +138,11 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
     let at;
     try { at = Date.parse(batch.created_at); } catch { continue; }
     if (!Number.isFinite(at) || at < since || (batch.intent !== 'check' && batch.intent !== 'lint-only')) continue;
+    const localLayout = batch.intent === 'lint-only' && batch.local_only === true && Object.hasOwn(batch,'local_scope');
+    if (localLayout && !localLayoutResult(batch, null)) continue;
     let association=null;
     if(workspace) {
-      try { association=workspace({root,producerRoot:batch.root,tests:[...new Set(batch.rows.map(row=>row?.test))],source_sha256:batch.source_sha256,runId:batch.association?.runId??null,stage:batch.association?.stage??null}); } catch { continue; }
+      try { association=workspace({root,producerRoot:batch.root,tests:localLayout ? batch.local_scope.tests : [...new Set(batch.rows.map(row=>row?.test))],source_sha256:batch.source_sha256,runId:batch.association?.runId??null,stage:batch.association?.stage??null}); } catch { continue; }
       if(association?.state!=='eligible') {
         // Ordinary same-worktree history remains readable when its source has
         // drifted or its legacy source identity is unavailable. It retains the
@@ -125,7 +171,7 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
       catch { freshness.push('unknown'); }
     }
     source = freshness.includes('changed') ? 'changed' : freshness.includes('unknown') ? 'unknown' : 'current';
-    const states = batch.rows.map(row => ({ test: row.test, ...resultOutcome(row) }));
+    const states = batch.rows.map(savedResultState);
     const stateEvidence = batch.rows.map(row => text(`${row.test}: ${outcomeText(row)}`)).join('; ');
     const incomplete = states.some(row => row.state !== 'passed');
     const recorded = text(summary?.summary_line);
@@ -144,13 +190,20 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
       ...(check.association?.runId?{producerRoot:batch.root,association:{runId:check.association.runId,repo:check.association.repo,
         workspaceRoot:check.association.producerRoot,tests:check.association.tests,source_sha256:check.association.source_sha256,
         stage:check.association.stage,sourceAnchor:check.association.sourceAnchor}}:{}),
-      ...(check.association?{stage:check.association.stage,sourceAnchor:check.association.sourceAnchor}:{}),states, summary: [safeSummary || 'result not saved (the check did not finish)', stateEvidence, ...checkPlanResultLines(checkPlanResults(batch.check_plan,batch.rows))].filter(Boolean).join('; '), stories,
+      ...(check.association?{stage:check.association.stage,sourceAnchor:check.association.sourceAnchor}:{}),states, summary: [safeSummary || 'result not saved (the check did not finish)', stateEvidence, ...checkPlanResultLines(savedCheckScope(batch)), ...(batch.check_selection?.mode === 'affected' ? [AFFECTED_DISCLAIMER] : [])].filter(Boolean).join('; '), stories,
       ...identity(batch.rows) });
   }
   if (lint) {
-    const rows = lint.batch.rows.filter(row => row && typeof row === 'object');
-    const passing = rows.filter(row => row.state === 'passed').length;
-    results.push({ kind: 'pdd lint', batch: lint.name, at: lint.at, ...runtimeEvidence(lint.batch,readJson(join(directory,lint.name,'summary.json'))), ...(lint.association?{stage:lint.association.stage,sourceAnchor:lint.association.sourceAnchor}:{}),requests: requestsOf([lint.batch.lint]), states: rows.map(row => ({ test: row.test, ...resultOutcome(row) })), summary: [`Lint: ${passing} of ${rows.length} tests pass. 0 AI calls.`, ...rows.map(row => text(`${row.test}: ${outcomeText(row)}`))].join(' ') });
+    const local = localLayoutResult(lint.batch,readJson(join(directory,lint.name,'summary.json')));
+    if (local) results.push({kind:'pdd lint',batch:lint.name,at:lint.at,source:'unknown',sourceSha256:null,
+      ...(lint.association?{stage:lint.association.stage,sourceAnchor:lint.association.sourceAnchor}:{}),
+      localOnly:true,localScope:local.local_scope,tests:local.local_scope.tests,exitCode:local.exit_code,state:local.state,reason:local.reason,
+      warnings:local.warnings,problems:local.problems,summary:text(local.summary_line,2000),states:[],requests:[]});
+    else {
+      const rows = lint.batch.rows.filter(row => row && typeof row === 'object');
+      const passing = rows.filter(row => row.state === 'passed').length;
+      results.push({ kind: 'pdd lint', batch: lint.name, at: lint.at, ...runtimeEvidence(lint.batch,readJson(join(directory,lint.name,'summary.json'))), ...(lint.association?{stage:lint.association.stage,sourceAnchor:lint.association.sourceAnchor}:{}),requests: requestsOf([lint.batch.lint]), states: rows.map(savedResultState), summary: [`Lint: ${passing} of ${rows.length} tests pass. 0 AI calls.`, ...rows.map(row => text(`${row.test}: ${outcomeText(row)}`))].join(' ') });
+    }
   }
   if (runDir) {
     const proof = proveResult(join(runDir, 'old-code-proof.json'), { runId, since, root, baseBranch }, git);
@@ -267,6 +320,8 @@ export function resultLines(results, { kinds = null } = {}) {
       result.requests?.length && `request${result.requests.length > 1 ? 's' : ''} ${result.requests.slice(0, SHOWN).join(' ')}`,
       result.headSha && `head ${result.headSha.slice(0, 7)}`].filter(Boolean).join(', ');
     return `${PDD_RESULT}: ${result.kind} (${facts}): ${[result.summary, ...(result.stories ?? []).filter(line => line !== result.summary),
+      ...(result.localOnly && result.localScope ? [text(`Scope: ${result.localScope.tests.length ? `tests ${result.localScope.tests.join(', ')}` : 'repository scan'}; prompts ${result.localScope.prompts.join(', ') || '(none)'}`, 2000),
+        ...(result.warnings ?? []).map(value => text(value,2000)), ...(result.problems ?? []).map(item => text(`${item.code}: ${item.path}${item.section ? ` ${item.section}` : ''}: ${item.message}`,2000))] : []),
       ...(result.coverage?.runtime ? [`Runtime coverage: ${result.coverage.runtime.checkable} of ${result.coverage.runtime.total} prompts checkable, ${result.coverage.runtime.native_only} native-only`] : []),
       ...(result.nativeOnly ?? []).flatMap(row => row.prompts.map(prompt => text(`${row.test} ${row.state}: ${prompt.path}: ${prompt.reason}`,2000))),
       ...(result.reports ?? []).slice(0, SHOWN).map(url => `Report: ${url} (report links expire after 7 days)`), ...more(result)].join('; ')}`;

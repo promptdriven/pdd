@@ -4,6 +4,9 @@ Own `src/runtime-markdown.mjs`. Share the existing runtime source discovery
 parser with Story boundary parsing. Preserve destination ordering and spelling,
 inline angle destinations, escaped characters and balanced parentheses, and
 inline optional titles. Link labels are not paths.
+For ordinary non-angle inline destinations, a backslash followed by a character
+consumes the backslash and retains that character in the returned destination.
+Angle destinations and reference-definition destinations retain their raw spelling.
 
 Export `markdownDefinitions(text)`: return a Map of reference labels to raw
 destinations from Markdown reference definitions. Normalize labels by trimming,
@@ -13,10 +16,16 @@ destinations and ordinary non-whitespace destinations.
 Export `markdownLinks(text,definitions,imagesOnly=false)`: return destination
 strings for inline links followed by full, collapsed and shortcut reference
 links resolved from the supplied Map. With imagesOnly, return only image uses.
+An opening `[` creates a link use only when unescaped. A punctuation character
+is escaped exactly when immediately preceded by an odd run of backslashes. An
+image additionally needs an adjacent unescaped `!` before its unescaped `[`.
+An escaped `!` can leave an ordinary link. Apply these opening-marker rules to
+inline, full, collapsed and shortcut reference uses.
 Do not treat definitions as uses. Unresolved references return no destination;
 strict declaration callers must refuse them rather than accept partial scope.
 Export `markdownSectionText(text)`: return a prose view with offsets and newlines
-preserved. Mask code spans, backtick/tilde fences and HTML comments. A code span
+preserved. Replace masked characters with spaces, keeping CR and LF unchanged.
+Mask code spans, backtick/tilde fences and HTML comments. A code span
 closes with a backtick run of exactly its opening length in the same leaf block;
 an unmatched opener retains prose. Escaped openers do not start spans; backslashes
 inside spans do not prevent closing. Paragraphs, headings, HTML block starts and
@@ -31,9 +40,35 @@ cannot contain a backtick. Shorter and different closing markers stay inside the
 example. Preserve quote/list container continuation, indentation and paragraph
 boundaries when finding fences; an unclosed fence masks the rest of its
 container. Tabs count to four-column stops for indentation only. These masks
-also exclude reference definitions inside examples and comments. Callers own
-section selection, syntax admission and path safety. Do no I/O and do not rewrite
-captured source bytes.
+also exclude reference definitions inside examples and comments.
+
+Mask indented code at a leaf block boundary when content has at least four
+columns of indentation relative to its quote/list container. Tabs advance to
+four-column stops. An indented code block cannot interrupt a paragraph: an
+indented paragraph continuation remains prose. Blank lines can continue a code
+block; a nonblank line below the required indentation ends it. Container exits
+end its scope; code lines cannot use lazy container continuation.
+
+Callers own section selection, syntax admission and path safety. Do no I/O and
+do not rewrite captured source bytes.
+
+## Runtime transport
+
+Keep the native exported signatures and return types above. The Runtime uses
+JSON object envelopes for these same three operations; no native wrapper is added:
+
+| Operation | Input | Result |
+|---|---|---|
+| `markdownSectionText` | required string `text` | required string `text`, the returned prose view |
+| `markdownDefinitions` | required string `text` | required `definitions`, the returned Map as ordered rows |
+| `markdownLinks` | required string `text` and `definitions`; optional Boolean `imagesOnly`, default false | required `destinations`, the returned ordered string array |
+
+Every envelope has exactly the listed fields. Each definitions row has exactly
+string `label` and `destination`; labels are unique. Rows preserve Map insertion
+order and exact keys and values. Decode input rows as the supplied Map, without
+normalizing its keys. The transport performs no implicit masking or section
+selection: callers can pass the prose view to either scanner. These operations
+have no resources, child calls or persistent state.
 
 ## Dependencies
 
@@ -42,6 +77,6 @@ None.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"523fd4233bf4dd963e1304a420a2b00d2dbab7c5ec7e961717d6b08d43a0edc9","entries":[],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
+{"status":"approved","prose_sha256":"67085b0d949a3930e252ad52d3d48b2e8f7b9028ddf60a81abdb1f94d50361ac","entries":[{"operation":"markdownSectionText","input_schema":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false},"errors":[]},{"operation":"markdownDefinitions","input_schema":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"definitions":{"type":"array","items":{"type":"object","properties":{"label":{"type":"string"},"destination":{"type":"string"}},"required":["label","destination"],"additionalProperties":false}}},"required":["definitions"],"additionalProperties":false},"errors":[]},{"operation":"markdownLinks","input_schema":{"type":"object","properties":{"text":{"type":"string"},"definitions":{"type":"array","items":{"type":"object","properties":{"label":{"type":"string"},"destination":{"type":"string"}},"required":["label","destination"],"additionalProperties":false}},"imagesOnly":{"type":"boolean","default":false}},"required":["text","definitions"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"destinations":{"type":"array","items":{"type":"string"}}},"required":["destinations"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
 ```
 </details>

@@ -873,7 +873,7 @@ registerHooks({
 
   // Every route local in PUBLIC_COMMAND_ROUTES must map to a probed switch arm.
   const coveredLocals = new Set([
-    'help', 'version', 'completion', 'setup', 'project-files', 'file-owner', 'interface-draft', 'prompt-approve',
+    'help', 'version', 'version-detailed', 'completion', 'setup', 'project-files', 'file-owner', 'interface-draft', 'prompt-approve',
     'runtime-check', 'runtime-try', 'contracts', 'contracts-sync', 'runtime-jobs', 'mcp', 'metrics',
     'issue-dependency-graph', 'dependencies-prepare', 'dependencies-complete',
     'product-status', 'product-next', 'product-start',
@@ -2404,11 +2404,13 @@ test('SEAM18 (M3-1, M3-2, M3-3): section 4.1 API keeps zero-static-import lazy l
   // seam.lint({ root, local: true }) binds lintSvgLayouts and selection ports (whereas index.lint throws unboundPort).
   const tmp = mkdtempSync(join(tmpdir(), 'pdd-seam18-'));
   t.after(() => rmSync(tmp, { recursive: true, force: true }));
-  mkdirSync(join(tmp, 'prompts/ui/views'), { recursive: true });
-  mkdirSync(join(tmp, 'user_stories'), { recursive: true });
-  mkdirSync(join(tmp, 'tests'), { recursive: true });
+  const cardRepo = join(tmp, 'repo'), cardHome = join(tmp, 'home'), cardState = join(tmp, 'state');
+  mkdirSync(cardHome, { recursive: true });
+  mkdirSync(join(cardRepo, 'prompts/ui/views'), { recursive: true });
+  mkdirSync(join(cardRepo, 'user_stories'), { recursive: true });
+  mkdirSync(join(cardRepo, 'tests'), { recursive: true });
   writeFileSync(
-    join(tmp, 'prompts/ui/views/card__stacked.ui.svg'),
+    join(cardRepo, 'prompts/ui/views/card__stacked.ui.svg'),
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 40"><title>Card</title><desc>Card</desc><g id="unmentioned-card-box"><text x="10" y="20">Hello</text></g></svg>\n',
   );
   const rawPrompt = [
@@ -2433,10 +2435,10 @@ test('SEAM18 (M3-1, M3-2, M3-3): section 4.1 API keeps zero-static-import lazy l
     prose_sha256: seam.format.proseSha256(rawPrompt),
   });
   assert.ok(filledPrompt);
-  writeFileSync(join(tmp, 'prompts/ui/card.prompt.md'), filledPrompt);
-  writeFileSync(join(tmp, 'user_stories/card.md'), '# Card\n\n## Acceptance criteria\n\n1. Shows Hello.\n');
+  writeFileSync(join(cardRepo, 'prompts/ui/card.prompt.md'), filledPrompt);
+  writeFileSync(join(cardRepo, 'user_stories/card.md'), '# Card\n\n## Acceptance criteria\n\n1. Shows Hello.\n');
   writeFileSync(
-    join(tmp, 'tests/card.json'),
+    join(cardRepo, 'tests/card.json'),
     JSON.stringify({
       schema_version: 'prompt-runtime.program-scenario.v1',
       story_path: 'user_stories/card.md',
@@ -2453,15 +2455,15 @@ test('SEAM18 (M3-1, M3-2, M3-3): section 4.1 API keeps zero-static-import lazy l
       ],
     }) + '\n',
   );
-  execFileSync('git', ['init', '-q'], { cwd: tmp });
-  execFileSync('git', ['add', '.'], { cwd: tmp });
+  execFileSync('git', ['init', '-q'], { cwd: cardRepo });
+  execFileSync('git', ['add', '.'], { cwd: cardRepo });
 
-  await assert.rejects(() => index.lint({ root: tmp, local: true }), err => hasControlledDiagnostic(err));
+  await assert.rejects(() => index.lint({ root: cardRepo, local: true }), err => hasControlledDiagnostic(err));
   let lintOut = '';
   const lintErr = { write() {} };
   const lintCode = await seam.lint(
-    { root: tmp, local: true, options: { '--json': true } },
-    { stdout: { write: s => { lintOut += s; } }, stderr: lintErr, env: { ...process.env, HOME: tmp } },
+    { root: cardRepo, local: true, options: { '--json': true } },
+    { stdout: { write: s => { lintOut += s; } }, stderr: lintErr, env: { ...process.env, HOME: cardHome, PDD_STATE_DIR: cardState } },
   );
   assert.equal(lintCode, 0);
   const lintReport = JSON.parse(lintOut);
@@ -2472,25 +2474,25 @@ test('SEAM18 (M3-1, M3-2, M3-3): section 4.1 API keeps zero-static-import lazy l
 
   let filesOut = '';
   const filesCode = await seam.local(
-    { root: tmp, what: 'files' },
-    { stdout: { write: s => { filesOut += s; } }, stderr: lintErr, env: { ...process.env, HOME: tmp } },
+    { root: cardRepo, what: 'files' },
+    { stdout: { write: s => { filesOut += s; } }, stderr: lintErr, env: { ...process.env, HOME: cardHome, PDD_STATE_DIR: cardState } },
   );
   assert.equal(filesCode, 0);
   assert.ok(filesOut.includes('prompts/ui/card.prompt.md'));
 
   let jobsOut = '';
   const jobsCode = await seam.jobs(
-    { env: { HOME: tmp, PDD_STATE_DIR: join(tmp, 'state') } },
+    { env: { HOME: cardHome, PDD_STATE_DIR: cardState } },
     { stdout: { write: s => { jobsOut += s; } }, stderr: lintErr },
   );
   assert.equal(jobsCode, 0);
   assert.ok(jobsOut.length > 0);
 
-  const snap = seam.source.identity({ root: tmp, tests: [{ path: 'tests/card.json' }] });
+  const snap = seam.source.identity({ root: cardRepo, tests: [{ path: 'tests/card.json' }] });
   assert.equal(snap.stories.length, 1);
   assert.equal(snap.stories[0].story_path, 'user_stories/card.md');
 
-  const savedRes = await seam.saved.results({ root: tmp });
+  const savedRes = await seam.saved.results({ root: cardRepo }, { env: { ...process.env, HOME: cardHome, PDD_STATE_DIR: cardState } });
   assert.ok(Array.isArray(savedRes.stories));
 
   const sampleRows = [{ story: 'card', state: 'passed' }];

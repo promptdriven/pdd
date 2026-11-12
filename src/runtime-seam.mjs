@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 07aa88582c60616e29bbcf498d74e57df3640f12d3357dc421b94d67bc48fecf).
+// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 21bb7148cfb471ef967baa91fa92348953c744c1cdd82f0ee78114d0fafcbb91).
 import { readFileSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -18,6 +18,7 @@ import {
   applyPendingCase as rawApplyPendingCase,
   applyPendingCaseWithHandoff as rawApplyPendingCaseWithHandoff,
   askAgent as runtimeAskAgent,
+  baselineReport,
   buildAgentInput,
   buildCheckPlan as runtimeBuildCheckPlan,
   buildProjectCard as runtimeBuildProjectCard,
@@ -112,6 +113,7 @@ import {
   savedStoryEvidence as rawSavedStoryEvidence,
   scenarioShapeRefusal,
   schemaKeywordWarningLines,
+  selectCheckTests,
   selectJourneys as rawSelectJourneys,
   sha256,
   sharedSourceFiles,
@@ -852,7 +854,9 @@ const LOCAL_WHAT_FLAGS = Object.freeze({
 const SIMULATE_MODES = new Set(['open', 'cli', 'serve', 'save-last', 'stop']);
 
 export async function check(input = {}, ports = {}) {
-  return runCheck(buildCheckInput(input, { defaultCache: true }), ports);
+  const extraOptions =
+    input?.affected === true && input?.options?.['--affected'] === undefined ? { '--affected': true } : {};
+  return runCheck(buildCheckInput(input, { defaultCache: true, extraOptions }), ports);
 }
 
 export async function lint(input = {}, ports = {}) {
@@ -1042,6 +1046,7 @@ export {
   TEST_SCHEMA,
   acquireRuntimeBatchLock,
   allowsRuntimePath,
+  baselineReport,
   buildAgentInput,
   causeText,
   checkInput,
@@ -1099,6 +1104,7 @@ export {
   runtimeWorkspaceSlice,
   scenarioShapeRefusal,
   schemaKeywordWarningLines,
+  selectCheckTests,
   sha256,
   sharedSourceFiles,
   sinceText,

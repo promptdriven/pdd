@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-entry.prompt.md (sha256: 410fd18a13bf0c6805631af18b1d15481737e02661ad6177b1377c7aca007a84).
+// Generated from prompts/cli/runtime-entry.prompt.md (sha256: 4ee8da83ca6ebf98cd3446e7482db398ebb2d933b12ac1768e4a51803d2dca6d).
 import { createRequire } from 'node:module';
 import { isDeepStrictEqual } from 'node:util';
 
@@ -333,6 +333,10 @@ export function buildAgentInput(...args) {
   return runtimeAgentPacketSlice().buildAgentInput(...args);
 }
 
+export function baselineReport(input) {
+  return runtimeCheckPlanSlice().baselineReport(input);
+}
+
 export function buildCheckPlan(input, ports) {
   return runtimeCheckPlanSlice().buildCheckPlan(input, ports);
 }
@@ -343,6 +347,10 @@ export function checkPlanResults(plan, rows) {
 
 export function checkPlanResultLines(result) {
   return runtimeCheckPlanSlice().checkPlanResultLines(result);
+}
+
+export function selectCheckTests(plan, options) {
+  return runtimeCheckPlanSlice().selectCheckTests(plan, options);
 }
 
 let productCompositionModule = null;
@@ -583,7 +591,9 @@ const LOCAL_WHAT_FLAGS = Object.freeze({
 const SIMULATE_MODES = new Set(['open', 'cli', 'serve', 'save-last', 'stop']);
 
 export async function check(input = {}, ports) {
-  return runCheck(buildCheckInput(input, { defaultCache: true }), ports);
+  const extraOptions =
+    input?.affected === true && input?.options?.['--affected'] === undefined ? { '--affected': true } : {};
+  return runCheck(buildCheckInput(input, { defaultCache: true, extraOptions }), ports);
 }
 
 export async function lint(input = {}, ports) {

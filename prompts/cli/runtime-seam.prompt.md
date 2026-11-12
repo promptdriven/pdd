@@ -44,7 +44,7 @@ Expose every public binding and scoped slice loader of [`src/runtime/index.mjs`]
 - `DRAFT_SERVER_TEXT`, `LIMITS`, `NO_TESTS`, `PreflightError`, `STALE_HINT`, `TEST_SCHEMA`, `captureSource`, `checkInput`, `createStrictSourceAccess`, `defaultMaxCalls`, `discoveryRefusal`, `discoveryVisibleFiles`, `executableInterfaceText`, `expectedTestPath`, `fillHashes`, `findTests`, `formatSize`, `formatWarningLines`, `gitFiles`, `hasAcceptance`, `hasPromptInterface`, `interfaceBlocks`, `interfaceFormatWarnings`, `interfaceKindProblems`, `interfaceSchemaProblems`, `isSecretPath`, `isStoryPath`, `matchTests`, `numberWarnings`, `orphanSummary`, `otherFiles`, `preflight`, `promptRefusal`, `promptSchemaRefusals`, `proseSha256`, `readPrompt`, `scenarioShapeRefusal`, `schemaKeywordWarningLines`, `selectTests`, `sha256`, `sharedSourceFiles`, `sourceFilePort`, `staleHint`, `storyCriteria`, `tarFiles`, `whyNoTests`
 - `OPEN_STATES`, `PROMPT_TESTS_LABEL`, `PROMPT_TESTS_WORDS`, `PROVIDER_TEXT`, `causeText`, `cleanText`, `coverageText`, `exitCodeFor`, `jsonRow`, `progressTicker`, `projectAnswer`, `refusalView`, `renderJson`, `renderText`, `sinceText`, `stepTimeLimit`, `storyLines`, `summaryLine`, `tryUsage`, `tryUsageHeaders`, `tryUsageLine`, `validLink`
 - `CHECK_STATES`, `COMMAND_EXIT_CODE`, `STATE_EXIT_CODES`, `exitFor`, `hasProgress`, `outcomeDone`, `outcomeExitCode`, `outcomeFor`, `outcomeOverall`, `outcomeText`, `progressText`, `resultOutcome`, `resultOverall`
-- `buildCheckPlan`, `checkPlanResultLines`, `checkPlanResults`
+- `baselineReport`, `buildCheckPlan`, `checkPlanResultLines`, `checkPlanResults`, `selectCheckTests`
 - `composeProductTry`, `productTapCallBound`, `selectJourneys`
 - `allowsRuntimePath`, `loadRuntimeWorkspace`, `requireRuntimePath`
 - `exactIntegerLeaves`, `jsonSafe`, `parseScenarioJson`, `stringifyScenarioJson`, `withExactIntegers`
@@ -75,6 +75,6 @@ The seam holds no mutable request state and loads zero additional pdd or Runtime
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"native-only","status":"draft","prose_sha256": "e1880370f84169b7c30ebbeacce7c7dbcf3b982142e58f7c455e9ed0aa3f0710","reason":"Re-exports live JavaScript ESM module bindings from src/runtime/index.mjs as pdd's sole import seam, which bound Runtime ports cannot fake."}
+{"kind":"native-only","status":"draft","prose_sha256": "f1375950168fdff6c5bd41e3a223127400bc9c9c2a63df0ed2cb0059de49548e","reason":"Re-exports live JavaScript ESM module bindings from src/runtime/index.mjs as pdd's sole import seam, which bound Runtime ports cannot fake."}
 ```
 </details>

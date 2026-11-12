@@ -184,3 +184,10 @@ Paired Runtime source branch: `feature/808-product-step-labels`. Its proposed AP
 ## Open a simulation naturally (#812)
 
 1. [Open my program the way I use it](simulate-program-kind.md) — [native cases](../test/simulate-kind.test.mjs), replay and bounded selection cases, plus the Story-gate case in [workflow runner](../test/workflow-runner.test.mjs).
+
+## Affected checks and baseline obligations (#3146, draft for review)
+
+1. [Check every affected Story](affected-story-selection.md). Test: `test/runtime/affected-story-selection.json`. Prompt tests: NOT RUN; supplied-role selection only. Native acceptance: `test/affected-checks/affected-story-selection-cases.json`.
+2. [Read saved baseline obligations separately](affected-baseline-report.md). Test: `test/runtime/affected-baseline-report.json`. Prompt tests: NOT RUN; supplied-observation report only. Native acceptance: `test/affected-checks/affected-baseline-report-cases.json`.
+
+Proposed command status follows selected target results; a target pass can exit 0 while saved baseline failures still block the unchanged full-pass gates. This convention requires person review. No implementation, approval, hosted check or native pass is claimed.

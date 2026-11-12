@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 1307a640660a0a3a4ec2b76247dfc508de0bb246fb7d6ce08272abca8bc11b45).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: d287a2145cfefb09ab909626d4ea7ea000056ec6936cf5622b10d1204f890669).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -119,18 +119,20 @@ const routes = [
     form('pdd', 'Show local commands.'), form('pdd --help', 'Show local commands.'),
     form('pdd -h', 'Show local commands.'), form('pdd help', 'Show local commands.'),
     form('pdd help prompting', 'Show how to write prompts, Stories and tests, and where the guide is.') ] },
-  { id: 'version', prefix: ['--version'], local: 'version', operands: [], options: [],
-    forms: [form('pdd --version', 'Show this package version.')] },
+  { id: 'version', prefix: ['--version'], quiet: ['-V'], local: 'version', operands: [], options: [],
+    forms: [form('pdd --version', 'Show this package version.'), form('pdd -V', 'Show this package version.')] },
+  { id: 'version.detailed', prefix: ['-VV'], local: 'version-detailed', operands: [], options: [],
+    forms: [form('pdd -VV', 'Show this package version and the interpreter build and supported formats; unknown when unavailable. Uses existing gh sign-in, with no AI call.')] },
   { id: 'completion', prefix: ['completion'], local: 'completion', operands: [{ name: 'shell', type: 'choice:bash,zsh' }], options: [],
     forms: [form('pdd completion bash|zsh', 'Print local shell completion.')] },
   { id: 'workflow.list', prefix: ['workflow', 'list'], local: 'workflow-list', operands: [], options: [{ name: '--json', kind: 'flag' }],
     forms: [form('pdd workflow list [--json]', 'List the bundled workflows with their areas and gates.')] },
   // A removed word runs nothing: the parser refuses it with one line that names the route's prefix.
   { id: 'check', prefix: [test], local: 'runtime-check', removed: ['check'], operands: [{ name: 'story', type: 'text', optional: true, repeat: true }],
-    options: [{name:'--journeys',kind:'flag'}, { name: '--lf', kind: 'flag' }, { name: '--cache-clear', kind: 'flag' }, { name: '--json', kind: 'flag' }, { name: '--details', kind: 'flag' }, { name: '--timeout', kind: 'integer', min: 1, max: 120 },
+    options: [{name:'--affected',kind:'flag'}, {name:'--journeys',kind:'flag'}, { name: '--lf', kind: 'flag' }, { name: '--cache-clear', kind: 'flag' }, { name: '--json', kind: 'flag' }, { name: '--details', kind: 'flag' }, { name: '--timeout', kind: 'integer', min: 1, max: 120 },
       { name: '--max-calls', kind: 'integer', min: 1, max: 1000 }, { name: '--read', kind: 'flag' }, { name: '--retry', kind: 'text' }, { name: '--fill-hash', kind: 'flag' }, { name: '--compact', kind: 'flag' },
       { name: '--explain-bindings', kind: 'flag' }, { name: '--files', kind: 'flag' }, { name: '--app-map', kind: 'text' }, { name: '--lint', kind: 'flag', hidden: true }, { name: '--local', kind: 'flag', hidden: true }, { name: '--screen', kind: 'text' }, { name: '--drawing', kind: 'text' }, { name: '--request', kind: 'uuid', hidden: true }],
-    forms: [form(`pdd ${test} --journeys [JOURNEY] [--max-calls N]`, 'Check all root product journeys or one journey.'),form(`pdd ${test} [PATH|STORY...] [--lf] [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]`, 'Check stories on the PDD interpreter with your gh login: reuses unchanged passing Stories from .pdd/cache/test/; --lf selects previous failures in scope or uses the normal selection when none match, --cache-clear clears the cache and sends the selected Stories again (the interpreter may reuse saved answers); sends selected PATH or STORY dependencies (every Story when you name none), waits for every check (no default limit in any shell; --timeout MIN sets the limit) with a progress line every 30 s, then prints one table with report links. Defaults to 12 calls per step, at least 18 and at most 1000; --max-calls accepts 1 to 1000.'),
+    forms: [form(`pdd ${test} --affected [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]`, 'Check every affected Story with conservative full fallback and a separate historical baseline report; required full-pass gates still apply.'),form(`pdd ${test} --journeys [JOURNEY] [--max-calls N]`, 'Check all root product journeys or one journey.'),form(`pdd ${test} [PATH|STORY...] [--lf] [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]`, 'Check stories on the PDD interpreter with your gh login: reuses unchanged passing Stories from .pdd/cache/test/; --lf selects previous failures in scope or uses the normal selection when none match, --cache-clear clears the cache and sends the selected Stories again (the interpreter may reuse saved answers); sends selected PATH or STORY dependencies (every Story when you name none), waits for every check (no default limit in any shell; --timeout MIN sets the limit) with a progress line every 30 s, then prints one table with report links. Defaults to 12 calls per step, at least 18 and at most 1000; --max-calls accepts 1 to 1000.'),
       form(`pdd ${test} --read [BATCH|CALL_ID] [--json] [--timeout MIN]`, 'Read saved results; a normal Check held for lint may continue its original checks. Other reads send no work.'),
       form(`pdd ${test} --retry BATCH [--json] [--details] [--timeout MIN]`, 'Retry only confirmed unstarted checks from a saved batch, with the same source and call caps; preserve completed and uncertain runs.'),
       form(`pdd ${test} --fill-hash`, 'Fill prose_sha256 of draft runtime interfaces; no network.'),
