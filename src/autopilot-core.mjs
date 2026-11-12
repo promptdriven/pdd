@@ -830,12 +830,19 @@ function legacyCustodyRoot(ctx, job, part) {
 }
 async function cleanupPart(ctx, job, part) {
   if (!part || !ctx.jobs.cleanup) return false;
+  let state = null;
   try {
-    const state = ctx.jobs.read(part).state;
-    if (state === 'running' && (!ctx.jobs.snapshot || ctx.jobs.snapshot(part) === null)) return false;
+    state = ctx.jobs.read(part)?.state ?? null;
+  } catch { /* Cleanup has its own process proof and may still recover a saved part. */ }
+  if (state === 'running') {
+    let snapshot = null;
+    try { snapshot = ctx.jobs.snapshot?.(part) ?? null; } catch { /* Cleanup still decides from its saved identities. */ }
+    if (!snapshot) return false;
+  }
+  try {
     ctx.saveJob(job);
     const root = legacyCustodyRoot(ctx, job, part), result = root
-      ? await ctx.jobs.cleanup(part, { legacyCustodyRoot: root }) : await ctx.jobs.cleanup(part);
+      ? await ctx.jobs.cleanup(part, { legacyCustodyRoot: root, legacyStartedAt: job.started }) : await ctx.jobs.cleanup(part);
     if (result?.legacy) {
       job.legacyCleanup ??= [];
       if (!job.legacyCleanup.some(row => row.id === part.id)) {

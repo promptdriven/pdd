@@ -1572,9 +1572,12 @@ step wait, never an END ([Stop owners](#stop-owners)). It stops the job's proces
 7. Only then clean up locally (below). Record `ended`.
 
 Local cleanup, after END, a merge, a hand-over or a person's stop: first capture and
-stop the build, review, suite, vector and active Runtime replay processes, then confirm that every saved process identity is gone. If
-the inventory fails, ownership is uncertain, or a saved process remains, keep the job
-record and every worktree for retry; do not remove logs, branch or history. Only after
+stop the build, review, suite, vector and active Runtime replay processes, then confirm
+that every saved process identity is gone. If a status read fails, keep the saved part
+and still ask the job runner's cleanup port for proof. The failed read is not proof of
+cleanup and does not prevent an independent cleanup attempt. Keep the job record and
+every worktree for retry if cleanup cannot confirm every saved identity, the inventory
+is incomplete, or ownership is uncertain. Do not remove logs, branch or history. Only after
 confirmed cleanup, remove every `worktrees/N…` folder of the issue (as in intake); remove every
 `logs/N-…` file except the `.log` files that the END comment and the history name;
 append the history line. Each step has its own error boundary and only warns.
