@@ -446,38 +446,35 @@ test('an unrecorded helper with a deleted worktree cwd stays held without a sign
   assert.equal((await cleanupAgentJob(job)).confirmed, true, 'a complete scan resolves the exited suspect and keeps its history');
 });
 
-test('a clean direct exit keeps cleanup confirmation when no process uses its worktree', async t => {
-  const dir = folder(t);
-  const job = startAgentJob({ id: 'clean-exit', dir, cwd: dir, custodyRoot: dir, command: process.execPath, args: ['-e', 'process.exit(0)'], input: '', env: { PATH: process.env.PATH } });
-  const savedWrapper = () => {
-    try { return JSON.parse(readFileSync(`${job.token}.processes.json`, 'utf8')).find(row => row.pid === job.pid); }
-    catch { return null; }
-  };
-  await until(() => existsSync(job.exit) && savedWrapper());
-  const identity = savedWrapper();
-  const wrapperEnded = () => {
-    try { process.kill(job.pid, 0); } catch (error) { return error.code === 'ESRCH'; }
-    if (!['darwin', 'linux'].includes(process.platform)) return false;
-    const row = spawnSync('ps', ['-ww', '-o', 'pid=,stat=,lstart=', '-p', String(job.pid)], { encoding: 'utf8', timeout: 2000,
-      env: { PATH: process.env.PATH, LC_ALL: 'C' } });
-    const match = row?.status === 0 && /^\s*(\d+)\s+(\S+)\s+((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) .{20})\s*$/.exec(String(row.stdout));
-    return Boolean(match) && (match[2].startsWith('Z') || match[3].trim() !== identity.start);
-  };
-  await until(wrapperEnded);
-  assert.equal(existsSync(`${job.token}.processes.error`), false);
-  const result = await cleanupAgentJob(job);
+test('a clean exited job keeps cleanup confirmation with a complete readable inventory', async t => {
+  const dir = folder(t), root = join(dir, 'owned-worktree'), token = join(dir, 'clean-exit.spec.json');
+  mkdirSync(root);
+  const exit = join(dir, 'clean-exit.exit.json'), boundary = Date.now() - 1000;
+  const wrapper = custodyRow(900080, '@wrapper', 'node clean exit wrapper');
+  const job = { pid: wrapper.pid, token, exit, custodyBoundary: boundary };
+  writeFileSync(token, JSON.stringify({ command: 'node', args: [], cwd: root, log: join(dir, 'job.log'),
+    exit, custodyRoot: root, custodyBoundary: boundary }));
+  writeFileSync(exit, JSON.stringify({ code: 0, signal: null, at: Date.now() }));
+  writeFileSync(token + '.processes.json', JSON.stringify([wrapper]));
+  assert.equal(readAgentJob(job, { alive: () => false }).state, 'exited');
+
+  // The complete injected table has only the caller, whose cwd is readable outside the root.
+  const rows = [cleanCallerRow()], signals = [];
+  const result = await cleanupAgentJob(job, { alive: () => false, list: () => rows,
+    cwd: () => process.cwd(), kill: (...args) => signals.push(args) });
   if (result.confirmed !== true) {
     let custody = null;
-    try { custody = JSON.parse(readFileSync(`${job.token}.processes.custody.json`, 'utf8')); } catch {}
+    try { custody = JSON.parse(readFileSync(token + '.processes.custody.json', 'utf8')); } catch {}
     const latest = Array.isArray(custody?.observations) ? custody.observations.at(-1) : null;
     assert.fail(JSON.stringify({
       cleanup: { confirmed: result.confirmed === true, stopped: result.stopped, killed: result.killed, remaining: result.remaining },
-      savedBoundary: Number.isFinite(job.custodyBoundary) ? job.custodyBoundary : null,
+      savedBoundary: boundary,
       latestCustody: latest ? { reason: latest.reason, identities: Array.isArray(latest.identities)
         ? latest.identities.map(row => ({ pid: row.pid, start: row.start })) : [] } : null,
     }));
   }
   assert.equal(result.confirmed, true);
+  assert.deepEqual(signals, [], 'a completed job has no process to signal');
 });
 
 test('a cwd-read failure keeps only a same-identity live process in custody', { skip: !['darwin', 'linux'].includes(process.platform) }, async t => {
@@ -698,9 +695,17 @@ test('a readable old process in the root and unreadable unknown-time process bot
   ]) {
     await t.test(name, async t => {
       const f = custodyFixture(t, custodyRow(900055, '@ended-suspect', 'node ended'), CUSTODY_BOUNDARY);
+      const signals = [];
       const proof = await cleanupAgentJob(f.job, { alive: () => false, list: () => [cleanCallerRow(), suspect],
-        cwd: pid => cwd(pid) ?? f.dir, kill: () => assert.fail('cwd evidence never signals') });
+        cwd: pid => cwd(pid) ?? f.dir, spawnSync: () => ({ status: 1, stdout: '' }),
+        kill: (...args) => signals.push(args) });
       assert.equal(proof.confirmed, false);
+      assert.deepEqual(signals, [], 'uncertain cwd ownership never authorizes a signal');
+      if (name === 'unreadable unknown-time') {
+        const record = JSON.parse(readFileSync(f.token + '.processes.custody.json', 'utf8'));
+        assert.ok(record.observations.at(-1).identities.some(row => row.pid === suspect.pid && row.start === suspect.start),
+          'the exact unresolved process identity remains in custody');
+      }
     });
   }
 });
