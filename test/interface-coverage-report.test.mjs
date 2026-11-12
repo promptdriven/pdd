@@ -258,6 +258,7 @@ test('integration 013: an explicit anchor immediately before a heading selects t
 for (const [name,reader] of [
   ['duplicate explicit anchor','# Reader\n\n<a id="stable-reader"></a>\n### First\n\nOne.\n\n<a id="stable-reader"></a>\n### Second\n\nTwo.\n'],
   ['fenced explicit anchor','# Reader\n\n```html\n<a id="stable-reader"></a>\n```\n\n### Other\n\nNo matching reader.\n'],
+  ['data-id is not an explicit anchor','# Reader\n\n<a data-id="stable-reader"></a>\n### Different reader heading\n\nNo matching reader.\n'],
 ]) test('integration 013: unavailable explicit Markdown anchor stays visible: '+name, async t => {
   const value={...original,status:'draft',prose_sha256:''};
   const text=prose.replace('## Dependencies\n\nNone.','## Dependencies\n\n- [Reader](../contracts/reader.md#stable-reader): required coverage context.')+block(value);

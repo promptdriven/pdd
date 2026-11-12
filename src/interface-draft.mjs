@@ -382,6 +382,37 @@ function extendBody(body,previous,iface) {
   return next;
 }
 const markdownFragment = title => title.toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu,'').replace(/\s+/g,'-');
+function explicitAnchorId(attributes) {
+  let at=0;
+  while(at<attributes.length) {
+    const space=/^[\t\n\f\r ]+/.exec(attributes.slice(at));
+    if(!space) return null;
+    at+=space[0].length;
+    const name=/^[^\t\n\f\r />=]+/.exec(attributes.slice(at));
+    if(!name) return null;
+    at+=name[0].length;
+    const gap=/^[\t\n\f\r ]*/.exec(attributes.slice(at))[0];
+    at+=gap.length;
+    let value=null,quoted=false;
+    if(attributes[at]==='=') {
+      at++;
+      const beforeValue=/^[\t\n\f\r ]*/.exec(attributes.slice(at))[0];
+      at+=beforeValue.length;
+      const quote=attributes[at];
+      if(quote==='"'||quote==="'") {
+        const end=attributes.indexOf(quote,at+1);
+        if(end<0) return null;
+        value=attributes.slice(at+1,end);quoted=true;at=end+1;
+      } else {
+        const bare=/^[^\t\n\f\r "'=<>`]+/.exec(attributes.slice(at));
+        if(!bare) return null;
+        value=bare[0];at+=bare[0].length;
+      }
+    }
+    if(name[0].toLowerCase()==='id'&&quoted&&value) return value;
+  }
+  return null;
+}
 function markdownSection(text, requested) {
   let fragment;
   try { fragment=decodeURIComponent(requested); }
@@ -396,7 +427,10 @@ function markdownSection(text, requested) {
       offset+=raw.length+1;continue;
     }
     if(marker) { fence={char:marker[1][0],length:marker[1].length};offset+=raw.length+1;continue; }
-    for(const match of line.matchAll(/<a\b[^>]*\bid=(["'])([^"']+)\1[^>]*>\s*(?:<\/a>)?/gi)) anchors.push({anchor:match[2],end:offset+match.index+match[0].length});
+    for(const match of line.matchAll(/<a\b([^>]*)>\s*(?:<\/a>)?/gi)) {
+      const anchor=explicitAnchorId(match[1]);
+      if(anchor) anchors.push({anchor,end:offset+match.index+match[0].length});
+    }
     const heading=/^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*$/.exec(line);
     if(heading) {
       const title=heading[2].replace(/[ \t]+#+[ \t]*$/,'');
