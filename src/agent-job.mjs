@@ -1,9 +1,9 @@
 import { execFile, spawn, spawnSync } from 'node:child_process';
-import { accessSync, closeSync, constants, fstatSync, openSync, readFileSync, readSync, renameSync, statSync, writeFileSync, writeSync } from 'node:fs';
+import { accessSync, closeSync, constants, fstatSync, openSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { setPriority } from 'node:os';
-import { join, resolve } from 'node:path';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { descendants, parseProcessTable, terminateCaptured } from './process-lifecycle.mjs';
+import { descendants, parseProcessTable, sameProcess, terminateCaptured } from './process-lifecycle.mjs';
 
 const self = fileURLToPath(import.meta.url), GRACE_MS = 2000;
 const SESSION_KEYS = /^(?:CLAUDECODE$|CLAUDE_CODE_|CLAUDE_PID$|CODEX_THREAD_ID$|CODEX_SANDBOX|HERDR_|PDD_AGENT_SESSION$|PDD_AUTOPILOT_CONTEXT$)/;
@@ -11,6 +11,7 @@ const readJson = file => { try { return JSON.parse(readFileSync(file, 'utf8')); 
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const startIdentity = value => typeof value === 'string' && /^(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) [A-Z][a-z]{2} (?: [1-9]|[12]\d|3[01]) \d{2}:\d{2}:\d{2} \d{4}|@\S+)$/.test(value);
 const processIdentity = row => Number.isSafeInteger(row?.pid) && row.pid > 0 && startIdentity(row.start) && typeof row.args === 'string' && row.args.trim().length > 0;
+const sameIdentity = (saved, current) => saved?.pid === current?.pid && saved?.start === current?.start;
 const processManifest = rows => Array.isArray(rows) && rows.length > 0 && rows.every(processIdentity);
 function writeAtomic(file, text) {
   const temp = `${file}.${process.pid}.tmp`;
@@ -32,12 +33,12 @@ export function jobEnvironment(env = {}) {
 // The hung-command watch settings: after (ms of log silence), every (ms between rounds), cpu (seconds of growth).
 const hungSettings = value => object(value) && [value.after, value.every].every(n => Number.isFinite(n) && n > 0) && Number.isFinite(value.cpu) && value.cpu >= 0
   ? { after: value.after, every: value.every, cpu: value.cpu } : null;
-export function startAgentJob({ id, dir, cwd, command, args = [], input = '', env = {}, priority = null, pddCheck = null, hung = null }, ports = {}) {
+export function startAgentJob({ id, dir, cwd, command, args = [], input = '', env = {}, priority = null, pddCheck = null, hung = null, custodyRoot = null }, ports = {}) {
   if (!/^[A-Za-z0-9._-]+$/.test(String(id))) throw Error('Invalid job id');
-  const base = join(resolve(dir), id), now = ports.now ?? Date.now, watch = hungSettings(hung);
+  const base = join(resolve(dir), id), now = ports.now ?? Date.now, watch = hungSettings(hung), custody = typeof custodyRoot === 'string' && custodyRoot ? resolve(custodyRoot) : null;
   const job = { id, token: `${base}.spec.json`, log: `${base}.log`, exit: `${base}.exit.json`, result: `${base}.result.json`, input: `${base}.input`, hangs: `${base}.hangs.json` };
   writeFileSync(job.input, input, { mode: 0o600 });
-  writeAtomic(job.token, JSON.stringify({ command, args, cwd, input: job.input, log: job.log, exit: job.exit, hangs: job.hangs, ...(priority ? { priority } : {}), ...(pddCheck ? { pddCheck } : {}), ...(watch ? { hung: watch } : {}) }));
+  writeAtomic(job.token, JSON.stringify({ command, args, cwd, input: job.input, log: job.log, exit: job.exit, hangs: job.hangs, ...(priority ? { priority } : {}), ...(pddCheck ? { pddCheck } : {}), ...(watch ? { hung: watch } : {}), ...(custody ? { custodyRoot: custody } : {}) }));
   const child = (ports.spawn ?? spawn)(process.execPath, [self, '--wrapper', job.token], { cwd, env, detached: true, stdio: 'ignore' });
   // A spawn that fails later (a cwd that is gone, EAGAIN, ENOMEM) is an exit with code 127, never an uncaught error.
   child.on?.('error', error => { try { writeAtomic(job.exit, JSON.stringify({ code: 127, signal: null, at: now(), error: String(error.code ?? error.message) })); } catch { /* The job reads as dead. */ } });
@@ -98,18 +99,181 @@ export function stopAgentJob(job, ports = {}) {
   return true;
 }
 
-function lifecycleRows(ports = {}) {
+function lifecycleRows(ports = {}, withUid = false) {
+  if (withUid && ports.list) {
+    let rows; try { rows = ports.list(ports); } catch { return null; }
+    return Array.isArray(rows) && rows.some(row => row.pid === process.pid)
+      && rows.every(row => processIdentity(row) && Number.isSafeInteger(row.uid)) ? rows : null;
+  }
+  if (withUid) {
+    const owned = (ports.spawnSync ?? spawnSync)('ps', ['-A', '-ww', '-o', 'pid=', '-o', 'ppid=', '-o', 'pgid=', '-o', 'rss=', '-o', 'uid=', '-o', 'state=', '-o', 'lstart=', '-o', 'command='],
+      { encoding: 'utf8', timeout: 5000, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, LC_ALL: 'C' } });
+    if (owned?.status !== 0) return null;
+    const matches = String(owned.stdout).split('\n').filter(line => line.trim()).map(line => /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(-?\d+)\s+(\S+)\s+((?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) .{20})|@\S+)\s+(.*)$/.exec(line));
+    if (matches.some(match => !match)) return null;
+    const rows = matches.map(match => ({ pid: Number(match[1]), ppid: Number(match[2]), pgid: Number(match[3]), rss: Number(match[4]), uid: Number(match[5]), state: match[6], start: match[7].trim(), args: match[8] }));
+    return rows.some(row => row.pid === process.pid) && rows.every(row => processIdentity(row) && Number.isSafeInteger(row.uid)) ? rows : null;
+  }
   const table = (ports.spawnSync ?? spawnSync)('ps', ['-A', '-ww', '-o', 'pid=', '-o', 'ppid=', '-o', 'pgid=', '-o', 'rss=', '-o', 'lstart=', '-o', 'command='],
     { encoding: 'utf8', timeout: 5000, env: { ...process.env, LC_ALL: 'C' } });
   return table?.status === 0 ? parseProcessTable(table.stdout) : null;
+}
+
+function markProcessUncertain(job, reason) {
+  job.processesUncertain = true;
+  try { writeFileSync(`${job.token}.processes.error`, `${reason}\n`, { mode: 0o600 }); } catch {}
+  return null;
+}
+
+const custodyFile = token => `${token}.processes.custody.json`;
+const validCustodyRecord = value => object(value) && value.schema === 1 && typeof value.root === 'string'
+  && Array.isArray(value.observations) && value.observations.length > 0
+  && value.observations.every(row => object(row) && typeof row.reason === 'string' && processManifest(row.identities))
+  && (value.resolution === null || object(value.resolution)) && (value.legacy === undefined || value.legacy === true);
+function markCustodyUncertain(job, finding, legacy = false) {
+  if (!finding || !Array.isArray(finding.identities) || !processManifest(finding.identities)) return markProcessUncertain(job, finding?.reason ?? 'custody identity unavailable');
+  const file = custodyFile(job.token), previous = readJson(file);
+  if (previous !== undefined && !validCustodyRecord(previous)) return markProcessUncertain(job, 'custody record invalid');
+  const record = previous ?? { schema: 1, root: finding.root, observations: [], resolution: null, ...(legacy ? { legacy: true } : {}) };
+  if (record.root !== finding.root) return markProcessUncertain(job, 'custody root changed');
+  if (legacy && record.legacy !== true) return markProcessUncertain(job, 'custody record mode changed');
+  const byIdentity = new Map();
+  for (const row of finding.identities) byIdentity.set(`${row.pid}:${row.start}`, byIdentity.get(`${row.pid}:${row.start}`) ?? row);
+  record.observations.push({ at: Date.now(), reason: finding.reason, identities: [...byIdentity.values()] });
+  record.resolution = null;
+  try { writeAtomic(file, JSON.stringify(record)); } catch { return markProcessUncertain(job, 'custody record write failed'); }
+  return record;
+}
+
+function worktreeCwds(rows, uid, ports = {}) {
+  if (typeof ports.cwd === 'function') {
+    const found = new Map();
+    for (const row of rows) try {
+      const path = ports.cwd(row.pid, uid, row);
+      if (typeof path === 'string') found.set(row.pid, path);
+    } catch { /* Re-read this identity below. */ }
+    return found;
+  }
+  if (process.platform === 'linux') {
+    const found = new Map();
+    for (const row of rows) try { found.set(row.pid, readlinkSync(`/proc/${row.pid}/cwd`)); } catch { /* Re-read this identity below. */ }
+    return found;
+  }
+  if (process.platform !== 'darwin') return null;
+  const listed = (ports.spawnSync ?? spawnSync)('lsof', ['-n', '-a', '-u', String(uid), '-d', 'cwd', '-Fpn'], { encoding: 'utf8', timeout: 5000, maxBuffer: 64 * 1024 * 1024 });
+  if (listed.status !== 0) return null;
+  const found = new Map(); let pid = null;
+  for (const line of String(listed.stdout).split('\n')) {
+    const process = /^p(\d+)$/.exec(line);
+    if (process) { pid = Number(process[1]); continue; }
+    if (pid && line.startsWith('n')) found.set(pid, line.slice(1));
+  }
+  return found;
+}
+
+// A process can retain a deleted directory as cwd. Resolve the nearest existing
+// parent too, so a macOS /tmp alias still compares with its physical path.
+function canonicalCwd(path) {
+  const suffix = [];
+  for (let current = path, depth = 0; depth < 100; depth++) {
+    try { return join(realpathSync(current), ...suffix); } catch { /* Try its parent. */ }
+    const parent = dirname(current);
+    if (parent === current) return null;
+    suffix.unshift(basename(current)); current = parent;
+  }
+  return null;
+}
+
+// An explicit custody-root match can only retain the disposable worktree. It never
+// proves ownership and is never used to send a signal. The direct child has exited,
+// so an unsaved matching process is the late detached-helper case that the periodic
+// descendant snapshots can miss.
+function worktreeCustody(job, custodyRoot, ports = {}, retained = [], legacy = false) {
+  if (!['darwin', 'linux'].includes(process.platform)) return { reason: 'cwd custody is unsupported', root: null, identities: null };
+  const manifest = readJson(`${job.token}.processes.json`);
+  if (legacy ? manifest !== undefined : !processManifest(manifest)) return { reason: 'manifest invalid', root: null, identities: null };
+  const saved = legacy ? [] : manifest;
+  const requested = resolve(custodyRoot);
+  let root; try { root = realpathSync(requested); } catch { return { reason: 'worktree unavailable', root: null, identities: null }; }
+  const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+  if (!Number.isSafeInteger(uid) || uid < 0) return { reason: 'current-user identity unavailable', root, identities: null };
+  const rows = lifecycleRows(ports, true);
+  if (!Array.isArray(rows)) return { reason: 'worktree inventory unavailable', root, identities: null };
+  if (legacy) {
+    const wrapper = rows.find(row => row.pid === job.pid && !String(row.state ?? '').startsWith('Z') && String(row.args).includes(job.token));
+    if (wrapper) return { reason: 'legacy wrapper still runs this spec', root, identities: [wrapper] };
+  }
+  const stillKnown = retained.filter(known => rows.some(row => sameIdentity(known, row) && !String(row.state ?? '').startsWith('Z')));
+  const group = legacy ? rows.filter(row => row.pgid === job.pid && !String(row.state ?? '').startsWith('Z')) : [];
+  const candidates = rows.filter(row => (legacy || row.pid !== job.pid) && row.uid === uid && !String(row.state ?? '').startsWith('Z') && !saved.some(known => sameProcess(known, row)));
+  const cwds = worktreeCwds(candidates, uid, ports);
+  if (!(cwds instanceof Map)) return { reason: 'worktree cwd evidence unavailable', root, identities: null };
+  let latest = null, reason = null; const identities = [];
+  for (const row of candidates) {
+    const current = cwds.get(row.pid);
+    if (current === undefined) {
+      latest ??= lifecycleRows(ports, true);
+      if (!Array.isArray(latest)) return { reason: 'worktree inventory unavailable', root, identities: null };
+      if (latest.some(now => sameIdentity(row, now))) { identities.push(row); reason ??= 'cwd evidence unavailable for a live process'; }
+      continue;
+    }
+    const deleted = / \(deleted\)$/.test(String(current)), path = String(current).replace(/ \(deleted\)$/, ''), actual = canonicalCwd(path);
+    if (actual && (actual === root || actual.startsWith(root + sep))) { identities.push(row); reason ??= 'unsaved process uses worktree'; }
+    else if (!actual && deleted && (path === requested || path.startsWith(requested + sep))) { identities.push(row); reason ??= 'deleted process cwd uses worktree'; }
+    else if (!actual && deleted) return { reason: 'worktree cwd could not be canonicalized', root, identities: null };
+  }
+  for (const row of group) if (!identities.some(known => sameIdentity(known, row))) { identities.push(row); reason ??= 'legacy wrapper process group remains'; }
+  for (const row of stillKnown) if (!identities.some(known => sameIdentity(known, row))) { identities.push(row); reason ??= 'a recorded custody process remains'; }
+  return identities.length ? { reason, root, identities } : null;
+}
+
+const validExitRecord = value => object(value) && (Number.isSafeInteger(value.code) || value.code === null)
+  && (value.signal === null || typeof value.signal === 'string') && Number.isFinite(value.at);
+function legacyCleanupResult() {
+  return { confirmed: true, stopped: 0, killed: 0, remaining: 0,
+    legacy: 'No 0.1.28 descendant manifest was available; a complete checkout and old-group scan found no live process.' };
+}
+function cleanupLegacyAgentJob(job, ports, manifest, errorFile, custodyPath) {
+  const rootPath = ports.legacyCustodyRoot;
+  if (!(Number.isSafeInteger(job?.pid) && job.pid > 0) || typeof rootPath !== 'string' || !rootPath
+      || manifest !== undefined || job.processes !== undefined && job.processes !== null) return null;
+  const spec = readJson(job.token);
+  if (!object(spec) || Object.hasOwn(spec, 'custodyRoot') || typeof spec.cwd !== 'string'
+      || typeof spec.exit !== 'string' || typeof job.exit !== 'string' || spec.exit !== job.exit
+      || !Array.isArray(spec.args) || typeof spec.command !== 'string' || !validExitRecord(readJson(spec.exit))) return null;
+  let root;
+  try {
+    root = realpathSync(rootPath);
+    if (realpathSync(spec.cwd) !== root) return null;
+  } catch { return null; }
+  const custody = readJson(custodyPath);
+  if (custody !== undefined && (!validCustodyRecord(custody) || custody.legacy !== true || custody.root !== root)) return null;
+  if (custody?.resolution) return legacyCleanupResult();
+  const retained = custody?.observations.flatMap(row => row.identities) ?? [];
+  const finding = worktreeCustody(job, root, ports, retained, true);
+  if (!finding) {
+    if (custody) {
+      const resolved = { ...custody, resolution: { at: Date.now(), completeProcessTable: true, completeCwdInventory: true,
+        recordedIdentitiesGone: true, unsavedProcessesInRoot: 0, manifestConfirmed: false, legacyGroupScanned: true } };
+      try { writeAtomic(custodyPath, JSON.stringify(resolved)); } catch { return null; }
+    }
+    // A missing old manifest limits what can be proven. The caller may finish local
+    // removal only with this explicit bounded result; it never authorizes a signal.
+    return legacyCleanupResult();
+  }
+  if (Array.isArray(finding.identities) && processManifest(finding.identities)) {
+    const record = markCustodyUncertain(job, finding, true);
+    if (record && !readJson(errorFile)) return { confirmed: false, stopped: 0, killed: 0, remaining: finding.identities.length };
+  }
+  return null;
 }
 
 // Save the tree while its parent links still exist. A later stop can then find a
 // helper that reparented itself after its direct agent exited.
 export function snapshotAgentJob(job, ports = {}) {
   if (!(Number.isSafeInteger(job?.pid) && job.pid > 0)) return null;
-  const manifestFile = `${job.token}.processes.json`, errorFile = `${job.token}.processes.error`;
-  const uncertain = reason => { job.processesUncertain = true; try { writeFileSync(errorFile, `${reason}\n`, { mode: 0o600 }); } catch {} return null; };
+  const manifestFile = `${job.token}.processes.json`;
+  const uncertain = reason => markProcessUncertain(job, reason);
   const savedManifest = readJson(manifestFile);
   if ((savedManifest !== undefined && !processManifest(savedManifest)) || (Array.isArray(job.processes) && !processManifest(job.processes))) return uncertain('manifest invalid');
   const saved = [...(savedManifest ?? []), ...(Array.isArray(job.processes) ? job.processes : [])];
@@ -135,17 +299,43 @@ export function snapshotAgentJob(job, ports = {}) {
 export async function cleanupAgentJob(job, ports = {}) {
   const manifestFile = typeof job?.token === 'string' ? `${job.token}.processes.json` : null;
   const errorFile = typeof job?.token === 'string' ? `${job.token}.processes.error` : null;
+  const custodyPath = typeof job?.token === 'string' ? custodyFile(job.token) : null;
   const manifest = manifestFile ? readJson(manifestFile) : null;
   if (manifest !== undefined && !processManifest(manifest)) {
     try { writeFileSync(errorFile, 'manifest invalid\n', { mode: 0o600 }); } catch {}
     return { confirmed: false, stopped: 0, killed: 0, remaining: 0 };
   }
   if (job?.processesUncertain || errorFile && (() => { try { readFileSync(errorFile); return true; } catch { return false; } })()) return { confirmed: false, stopped: 0, killed: 0, remaining: 0 };
+  const custody = custodyPath ? readJson(custodyPath) : undefined;
+  if (custody !== undefined && !validCustodyRecord(custody)) return { confirmed: false, stopped: 0, killed: 0, remaining: 0 };
   const saved = Array.isArray(job?.processes) ? job.processes : Array.isArray(manifest) ? manifest : null;
-  if (!processManifest(saved)) return { confirmed: false, stopped: 0, killed: 0, remaining: 0 };
+  if (!processManifest(saved)) {
+    const legacy = cleanupLegacyAgentJob(job, ports, manifest, errorFile, custodyPath);
+    return legacy ?? { confirmed: false, stopped: 0, killed: 0, remaining: 0 };
+  }
   stopAgentJob(job, ports);
-  return terminateCaptured(saved, { list: async () => (ports.list ?? lifecycleRows)(ports), signal: ports.kill ?? process.kill,
+  const result = await terminateCaptured(saved, { list: async () => (ports.list ?? lifecycleRows)(ports), signal: ports.kill ?? process.kill,
     sleep: ports.sleep, grace: ports.grace ?? GRACE_MS, poll: ports.poll });
+  if (!result.confirmed || !custody || custody.resolution) return result;
+  if (!['darwin', 'linux'].includes(process.platform) || (ports.alive ?? nativeAlive)(job.pid, job.token))
+    return { ...result, confirmed: false, remaining: Math.max(result.remaining, 1) };
+  const spec = readJson(job.token);
+  let currentRoot = null;
+  if (object(spec) && typeof spec.custodyRoot === 'string') try { currentRoot = realpathSync(spec.custodyRoot); } catch {}
+  if (currentRoot !== custody.root) return { ...result, confirmed: false, remaining: Math.max(result.remaining, 1) };
+  const retained = custody.observations.flatMap(row => row.identities), finding = worktreeCustody(job, custody.root, ports, retained);
+  if (!finding) {
+    const resolved = { ...custody, resolution: { at: Date.now(), completeProcessTable: true, completeCwdInventory: true,
+      recordedIdentitiesGone: true, unsavedProcessesInRoot: 0, manifestConfirmed: true } };
+    try { writeAtomic(custodyPath, JSON.stringify(resolved)); } catch { return { ...result, confirmed: false, remaining: Math.max(result.remaining, 1) }; }
+    return result;
+  }
+  if (Array.isArray(finding.identities) && processManifest(finding.identities)) {
+    const updated = { ...custody, observations: [...custody.observations, { at: Date.now(), reason: finding.reason, identities: finding.identities }] };
+    try { writeAtomic(custodyPath, JSON.stringify(updated)); } catch { /* Keep the previous uncertainty record. */ }
+    return { ...result, confirmed: false, remaining: Math.max(result.remaining, finding.identities.length) };
+  }
+  return { ...result, confirmed: false, remaining: Math.max(result.remaining, 1) };
 }
 
 // The hung-command watch (agent jobs only). An agent waits for each command it runs, and its log is silent meanwhile.
@@ -332,7 +522,17 @@ function wrap(specFile) {
   if (object(spec.hung) && typeof spec.hangs === 'string') watchHung(spec, child.pid, out);
   // A group stop can reach the child before the wrapper's own handler runs: a child killed by a stop signal is that
   // stop, so the whole group still ends after the grace time (no process that ignores SIGTERM is left behind).
-  child.on('exit', (code, signal) => exited(code, signal));
+  child.on('exit', (code, signal) => {
+    // `cwd` is only where this command runs. A caller must explicitly name a
+    // disposable root before an unrelated process can retain its cleanup.
+    if (['darwin', 'linux'].includes(process.platform) && typeof spec.custodyRoot === 'string' && spec.custodyRoot) {
+      const job = { pid: process.pid, token: specFile };
+      snapshotAgentJob(job);
+      const finding = worktreeCustody(job, spec.custodyRoot);
+      if (finding) markCustodyUncertain(job, finding);
+    }
+    exited(code, signal);
+  });
   if (spec.pddCheck) { checkSkills(spec, out); checkShellPdd(spec, out); }
 }
 

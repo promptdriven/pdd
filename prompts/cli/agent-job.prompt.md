@@ -13,7 +13,8 @@ The tick that starts a job exits within seconds; the job runs for up to hours. A
 later tick, or a tick after a restart, must learn the outcome without a parent
 process. So the job leaves its whole state in files next to each other: a spec, an
 input, a log, an exit record and the agent's result. A dead process with no exit
-record is simply dead. There is no "uncertain custody" state.
+record is dead. Cleanup may stay unconfirmed while saved process or custody evidence
+is uncertain; those records let a later tick retry without a live controller.
 
 ## Public contract
 
@@ -31,7 +32,7 @@ record is simply dead. There is no "uncertain custody" state.
   caller's own agent, Herdr or coordinator session: `CLAUDECODE`, `CLAUDE_CODE_*`,
   `CLAUDE_PID`, `CODEX_THREAD_ID`, `CODEX_SANDBOX*`, `HERDR_*`, `PDD_AGENT_SESSION`
   and `PDD_AUTOPILOT_CONTEXT`. Account settings such as `CODEX_HOME` stay.
-- `startAgentJob({id, dir, cwd, command, args, input, env, hung}, ports)` writes
+- `startAgentJob({id, dir, cwd, command, args, input, env, hung, custodyRoot}, ports)` writes
   `dir/ID.input` (the prompt, mode 0600) and `dir/ID.spec.json`, then starts
   `node src/agent-job.mjs --wrapper SPEC` detached in its own process group, with
   `env` and no inherited stdio, and returns at once with
@@ -44,6 +45,9 @@ record is simply dead. There is no "uncertain custody" state.
   `hung` is optional: `{after, every, cpu}` (milliseconds, milliseconds, CPU seconds),
   saved in the spec; it turns on the hung-command watch below. The core passes it for
   agent jobs only (15 minutes, 30 s, 2 s), never for a plain command such as the suite.
+  `custodyRoot` is optional. Only a caller that will remove a known disposable
+  worktree passes its root; the runner records its absolute path. `cwd` alone is
+  never a custody root: a job may run in a person's persistent source tree.
 - `startAgentJob` also takes `priority` (`{nice, qos, cpus, taskset}` from the
   [machine guard](machine-guard.prompt.md)) and saves it in the spec. Every job
   runs at the lowest priority (#3231), the child and not the wrapper: the wrapper only
@@ -96,20 +100,73 @@ record is simply dead. There is no "uncertain custody" state.
   else the stop signal; best effort), and then sends SIGKILL to the whole group, itself
   last. A failed exit-record write or descriptor close never skips that SIGKILL. A
   process that treats the first SIGTERM as "stop gracefully" and waits never survives
-  as an orphan. A process that left the group (its own `setsid`) is captured while
-  the wrapper is live. `snapshotAgentJob(job)` saves the wrapper and every live
-  descendant as PID/start/command identities on `job.processes`. `cleanupAgentJob(job)`
-  captures again, asks the wrapper to stop, then terminates only saved identities that
-  still match. It returns cleanup proof. A reused PID is never signalled; an unreadable
+  as an orphan. A process that left the group (its own `setsid`) can be captured while
+  the wrapper is live, but descendant samples are not a complete ownership boundary.
+  `snapshotAgentJob(job)` saves the wrapper and every live descendant as
+  PID/start/command identities on `job.processes`. `cleanupAgentJob(job)` captures
+  again, asks the wrapper to stop, then terminates only saved identities that still
+  match. It returns cleanup proof. A reused PID is never signalled; an unreadable
   inventory or a remaining saved identity is unconfirmed. Each live `readAgentJob`
   refreshes this saved snapshot on the job record and in `TOKEN.processes.json`, so it
-  survives a tick that returns while the job runs. The wrapper snapshots once immediately after it starts its direct child, once more before the first 250 ms round, and then refreshes the same
-  cumulative manifest every 250 ms while its child runs. Older PID/start identities
-  stay until cleanup, even when a helper reparents. A manifest write or inventory
-  failure, or a malformed prior manifest, leaves a durable uncertainty marker and cleanup then retains the job.
-  That marker stays for the job token even if a later snapshot succeeds: the failed
-  sample could have missed a detached helper. A captured live descendant without a
-  valid identity is an inventory failure, never a row to discard.
+  survives a tick that returns while the job runs. The wrapper snapshots once
+  immediately after it starts its direct child, once more before the first 250 ms
+  round, and then refreshes the same cumulative manifest every 250 ms while its child
+  runs. Older PID/start identities stay until cleanup, even when a helper reparents.
+  A manifest write or inventory failure, or a malformed prior manifest, leaves a
+  durable uncertainty marker and cleanup then retains the job. That marker stays for
+  the job token even if a later snapshot succeeds: the failed sample could have
+  missed a detached helper. A captured live descendant without a valid identity is an
+  inventory failure, never a row to discard.
+
+  When the direct child exits, before the wrapper records that exit, the wrapper also
+  reads the current user's process table only when the saved spec has an explicit
+  `custodyRoot`, and looks only for **unsaved** processes whose current working
+  directory is that exact disposable worktree or a directory below it. `cwd` never
+  enables this scan. On
+  Linux it reads `/proc/PID/cwd`; on macOS it reads `lsof` cwd records. A complete
+  inventory that finds a matching process, or a same-user process whose cwd cannot be
+  read while its identity remains, writes a separate durable custody finding with the
+  process identities and root. An incomplete process table, unavailable current-user
+  identity or unavailable cwd inventory writes the general uncertainty marker; a later
+  cwd scan cannot clear that marker. Cwd evidence is only a reason to retain the job
+  and worktree: it never authorizes a signal to that process.
+
+  Cleanup can resolve a custody finding only after it confirms that the saved manifest
+  identities are gone, reads a fresh complete process table and cwd inventory, sees
+  every recorded suspect identity has ended, and finds no unsaved same-user process in
+  the root. A pid with a different start identity is a reused pid. Cleanup records the
+  resolution beside the original finding and keeps its history. An incomplete read or
+  a live suspect keeps cleanup unconfirmed. A suspect that changes cwd outside the
+  root remains held until that same pid and start identity ends; an empty root scan
+  alone does not resolve it. Cwd evidence never authorizes a signal to a suspect.
+
+  A core job from 0.1.28 may have no process manifest. Core may request a bounded
+  legacy scan only by passing `ports.legacyCustodyRoot` for a verified core-owned
+  disposable checkout, after it matches the old spec's cwd and exit path to that
+  checkout and confirms a well-formed exit record.
+  The scan requires a complete current-user process table with this reader, proves the
+  saved wrapper PID no longer runs this spec, checks the checkout's cwd inventory, and
+  checks for surviving members of the wrapper's original process group. Any matching
+  process is retained by PID/start identity; an incomplete read stays unconfirmed.
+  This path sends no signals. A clear scan permits core to finish removing that checkout,
+  but it cannot recover the old manifest: a helper that changed cwd and left the wrapper's
+  group before any observation remains outside this historical proof. Report this limited
+  legacy clearance as such; do not call it complete historical descendant custody. A
+  source tree, shared folder or arbitrary cwd never qualifies.
+
+  This check catches a late detached helper that still uses the worktree. It
+  canonicalizes `/tmp` aliases and a deleted cwd through its nearest existing parent.
+  It does not prove that no escaped helper exists, and cannot identify a helper that
+  changed to a directory outside the worktree before the first complete scan. A caller
+  must not pass a persistent source root as `custodyRoot`; a person's shell there must
+  not retain an unrelated job. The cwd custody check runs on Linux and macOS only.
+  Other platforms keep the existing manifest behavior rather than making every clean
+  exit unconfirmed because there is no portable cwd reader.
+  The complete process table includes the current reader's PID. `ports.list` supplies
+  a scripted table in native tests; each row has a positive PID, start identity, command,
+  numeric UID and process state. `ports.cwd(pid, uid, row)` supplies one cwd or throws.
+  Native Linux reads `/proc/PID/cwd`; macOS reads `lsof` cwd records. `ports.spawnSync`
+  supplies the process-table and `lsof` programs.
   An existing malformed or empty manifest, including an entry without a positive PID,
   a nonblank emitted PID-start identity or a nonblank command, is unconfirmed even
   when an in-memory snapshot exists: it can have missed a later detached helper.
@@ -180,11 +237,13 @@ record is simply dead. There is no "uncertain custody" state.
 - `snapshotAgentJob(job, ports)` returns and saves live wrapper descendants. It
   validates the durable manifest first. When a complete process table no longer has
   the wrapper but that manifest is valid, it returns the saved manifest unchanged:
-  an exited wrapper cannot add descendants. A missing or malformed manifest, or an
-  unreadable inventory while the wrapper is present, returns null and leaves cleanup
-  unconfirmed. `cleanupAgentJob(job, ports)`
-  returns `{confirmed, stopped, killed, remaining}`. Core must retain its local job
-  record and worktree when `confirmed` is false.
+  an exited wrapper cannot add descendants. A missing or malformed manifest returns
+  null for a normal current job. An unreadable inventory while the wrapper is present
+  also returns null. The post-child-exit cwd check is a separate conservative custody
+  check, not a complete descendant inventory. `cleanupAgentJob(job, ports)` returns
+  `{confirmed, stopped, killed, remaining}` and adds `legacy` when it used the bounded
+  0.1.28 scan. Core must retain its local job record and worktree when `confirmed` is
+  false, and save the `legacy` limit when it is true.
 
 Default `alive(pid, token)` is true only when signal 0 reaches `pid` and the
 whole C-locale process command line (`LC_ALL=C ps -ww -o command= -p PID`) contains

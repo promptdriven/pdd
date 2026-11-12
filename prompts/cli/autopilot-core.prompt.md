@@ -539,6 +539,23 @@ it, and a `pdd` stop files one report.
 
 ## Jobs
 
+Every core job uses its disposable checkout path as both cwd and custodyRoot. Build,
+repair, conflict and Runtime jobs use the issue's worktree. Review, suite and vector
+jobs use their fresh named checkout. This explicit root lets the job runner retain a
+late helper that still uses that checkout. A cwd alone is not ownership evidence.
+Never pass a shared source root. Intake uses a persistent directory and is outside
+this core job rule.
+
+For a saved 0.1.28 job with no custodyRoot or process manifest, cleanup may use only
+the exact disposable checkout proved by the saved issue, role, spec cwd and this
+machine's core worktrees directory. Require its exit record, a complete process table
+that proves the old wrapper is gone, and complete cwd and old process-group scans.
+Keep any found process by identity and retry; never signal it from this legacy scan.
+A clear bounded scan permits cleanup, but record that historical descendant custody
+was unavailable in the job record, history and warning. It cannot prove that an
+unobserved helper did not escape both scans.
+Do not use a source root, shared folder or an arbitrary spec cwd as a fallback.
+
 Every job starts with `ports.machine.priority(role)` of the machine guard as its
 `priority` (nice 19; macOS utility QoS; on Linux a CPU list of Autopilot's share for
 agent roles) and that share of the cores as `PDD_CHECK_CPUS` in its environment; with no

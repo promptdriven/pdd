@@ -1,13 +1,14 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync, mkdirSync, chmodSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync, mkdirSync, chmodSync, realpathSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { agentCommand, jobEnvironment, startAgentJob, readAgentJob, stopAgentJob, snapshotAgentJob, cleanupAgentJob, agentJobCpu, agentJobHangs, jobStopper, hungRound } from '../src/agent-job.mjs';
 
-const folder = t => { const dir = mkdtempSync(join(tmpdir(), 'pdd-agent-job-')); t.after(() => rmSync(dir, { recursive: true, force: true })); return dir; };
+const folderAt = (t, prefix) => { const dir = mkdtempSync(prefix); t.after(() => rmSync(dir, { recursive: true, force: true })); return dir; };
+const folder = t => folderAt(t, join(tmpdir(), 'pdd-agent-job-'));
 const fakePs = (dir, body) => {
   const bin = join(dir, 'bin'), file = join(bin, 'ps');
   mkdirSync(bin, { recursive: true }); writeFileSync(file, `#!/bin/sh\n${body}\n`); chmodSync(file, 0o755);
@@ -213,6 +214,26 @@ test('a vanished wrapper keeps a valid saved manifest; missing or invalid manife
   assert.ok(existsSync(`${invalid}.processes.error`));
 });
 
+test('an active 0.1.28 wrapper can be snapshotted after upgrade, but an exited one needs a core-validated legacy scan', async t => {
+  const dir = folder(t), token = join(dir, 'legacy.spec.json'), caller = { pid: process.pid, ppid: 1, pgid: process.pid, rss: 1, start: '@caller', args: 'node test' };
+  writeFileSync(token, JSON.stringify({ command: 'node', args: [], cwd: dir, input: join(dir, 'legacy.input'), log: join(dir, 'legacy.log'), exit: join(dir, 'legacy.exit.json') }));
+  let live = true;
+  const wrapper = { pid: 7001, ppid: 1, pgid: 7001, rss: 1, start: '@legacy-wrapper', args: `node wrapper ${token}` };
+  const child = { pid: 7002, ppid: 7001, pgid: 7002, rss: 1, start: '@legacy-child', args: 'node legacy agent' };
+  const rows = () => live ? [caller, wrapper, child] : [caller], job = { pid: wrapper.pid, token, log: join(dir, 'legacy.log'), exit: join(dir, 'legacy.exit.json'), result: join(dir, 'legacy.result.json') };
+  const saved = snapshotAgentJob(job, { list: rows });
+  assert.deepEqual(saved.map(row => row.pid), [7001, 7002]);
+  assert.equal(JSON.parse(readFileSync(token, 'utf8')).custodyRoot, undefined, 'the old spec is not upgraded by guessing a root');
+  const signals = [], proof = await cleanupAgentJob(job, { alive: () => false, list: rows, kill: (pid, signal) => { signals.push([pid, signal]); if (signal === 'SIGTERM') live = false; }, sleep: async () => {}, grace: 1, poll: 1 });
+  assert.equal(proof.confirmed, true, 'the post-upgrade snapshot supplies stable identities for the live old wrapper');
+  assert.deepEqual(signals.map(([pid]) => pid).sort(), [7001, 7002]);
+
+  const missing = join(dir, 'legacy-exited.spec.json');
+  writeFileSync(missing, JSON.stringify({ command: 'node', args: [], cwd: dir }));
+  const noSnapshot = await cleanupAgentJob({ pid: 7003, token: missing }, { alive: () => false, list: () => [caller], kill: () => assert.fail('a missing legacy manifest supplies no signal identity') });
+  assert.equal(noSnapshot.confirmed, false, 'an exited old wrapper with no manifest stays unconfirmed');
+});
+
 test('cleanup accepts a valid saved manifest after its wrapper exited, but rejects a corrupt or malformed manifest', async t => {
   const dir = folder(t), token = join(dir, 'job.spec.json'), row = { pid: 501, ppid: 1, pgid: 501, rss: 1, start: 'Mon Nov 11 10:00:00 2026', args: 'node wrapper job.spec.json' };
   writeFileSync(`${token}.processes.json`, JSON.stringify([row]));
@@ -261,6 +282,80 @@ test('the wrapper saves a detached helper before its direct agent exits', async 
   assert.ok(saved.some(row => row.pid === helper), 'the helper survives its direct parent and stays in the manifest');
 });
 
+const LATE_DETACHED_HELPER = `
+const { spawn } = require('child_process'), fs = require('fs');
+setTimeout(() => {
+  const helper = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' });
+  helper.unref(); fs.writeFileSync(process.env.HELPER_PID, String(helper.pid)); process.exit(0);
+}, 80);`;
+test('a late detached helper retains a /tmp worktree without a cwd-based signal', { skip: !['darwin', 'linux'].includes(process.platform) }, async t => {
+  const dir = folderAt(t, '/tmp/pdd-agent-job-late-'), mark = join(dir, 'late-helper.pid');
+  const job = startAgentJob({ id: 'late-detached-helper', dir, cwd: dir, custodyRoot: dir, command: process.execPath, args: ['-e', LATE_DETACHED_HELPER], input: '', env: { PATH: process.env.PATH, HELPER_PID: mark } });
+  assert.equal(JSON.parse(readFileSync(job.token, 'utf8')).custodyRoot, dir);
+  const helper = Number(await until(() => existsSync(mark) && readFileSync(mark, 'utf8')));
+  t.after(() => { try { process.kill(helper, 'SIGKILL'); } catch {} });
+  await until(() => existsSync(job.exit));
+  assert.ok(existsSync(`${job.token}.processes.custody.json`), 'late custody evidence must retain the job');
+  assert.equal(existsSync(`${job.token}.processes.error`), false, 'a complete custody finding is distinct from an incomplete manifest');
+  await until(() => !alive(job.pid));
+  const signals = [], proof = await cleanupAgentJob(job, { kill: (...args) => signals.push(args) });
+  assert.equal(proof.confirmed, false);
+  assert.deepEqual(signals, [], 'cwd evidence never authorizes a signal');
+  assert.ok(alive(helper), 'the unknown helper stays untouched until evidence shows it ended');
+  const first = JSON.parse(readFileSync(`${job.token}.processes.custody.json`, 'utf8'));
+  assert.equal(first.resolution, null);
+  assert.ok(first.observations.some(row => row.identities.some(identity => identity.pid === helper)));
+  try { process.kill(helper, 'SIGKILL'); } catch {}
+  await until(() => ended(helper));
+  const recovered = await cleanupAgentJob(job);
+  assert.equal(recovered.confirmed, true, 'a fresh complete inventory can resolve an exited suspect');
+  const history = JSON.parse(readFileSync(`${job.token}.processes.custody.json`, 'utf8'));
+  assert.ok(history.observations.length >= first.observations.length, 'resolution keeps the original finding');
+  assert.equal(history.resolution.recordedIdentitiesGone, true);
+});
+
+const LATE_DETACHED_DELETED_CWD = `
+const { spawn } = require('child_process'), fs = require('fs');
+setTimeout(() => {
+  const helper = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { cwd: process.env.HELPER_CWD, detached: true, stdio: 'ignore' });
+  helper.unref(); fs.writeFileSync(process.env.HELPER_PID, String(helper.pid));
+  setTimeout(() => process.exit(0), 130);
+}, 50);`;
+test('a deleted /tmp worktree descendant retains custody through its canonical parent', { skip: !['darwin', 'linux'].includes(process.platform) }, async t => {
+  const dir = folderAt(t, '/tmp/pdd-agent-job-deleted-'), nested = join(dir, 'deleted-cwd'), mark = join(dir, 'deleted-helper.pid');
+  mkdirSync(nested);
+  const job = startAgentJob({ id: 'deleted-cwd-helper', dir, cwd: dir, custodyRoot: dir, command: process.execPath, args: ['-e', LATE_DETACHED_DELETED_CWD], input: '', env: { PATH: process.env.PATH, HELPER_CWD: nested, HELPER_PID: mark } });
+  const helper = Number(await until(() => existsSync(mark) && readFileSync(mark, 'utf8')));
+  t.after(() => { try { process.kill(helper, 'SIGKILL'); } catch {} });
+  rmSync(nested, { recursive: true, force: true }); assert.equal(existsSync(nested), false);
+  await until(() => existsSync(job.exit));
+  assert.ok(existsSync(`${job.token}.processes.custody.json`), 'deleted cwd custody evidence must retain the job');
+  await until(() => !alive(job.pid));
+  const signals = [], proof = await cleanupAgentJob(job, { kill: (...args) => signals.push(args) });
+  assert.equal(proof.confirmed, false); assert.deepEqual(signals, []);
+  assert.ok(alive(helper));
+  try { process.kill(helper, 'SIGKILL'); } catch {}
+  await until(() => ended(helper));
+  assert.equal((await cleanupAgentJob(job)).confirmed, true, 'the deleted cwd finding resolves after its identity ends');
+});
+
+test('a clean direct exit keeps cleanup confirmation when no process uses its worktree', async t => {
+  const dir = folder(t);
+  const job = startAgentJob({ id: 'clean-exit', dir, cwd: dir, custodyRoot: dir, command: process.execPath, args: ['-e', 'process.exit(0)'], input: '', env: { PATH: process.env.PATH } });
+  await until(() => existsSync(job.exit));
+  assert.equal(existsSync(`${job.token}.processes.error`), false);
+  assert.equal((await cleanupAgentJob(job)).confirmed, true);
+});
+
+test('a persistent source cwd is not custody without an explicit disposable root', async t => {
+  const dir = folder(t);
+  const job = startAgentJob({ id: 'source-cwd', dir, cwd: process.cwd(), command: process.execPath, args: ['-e', 'process.exit(0)'], input: '', env: { PATH: process.env.PATH } });
+  await until(() => existsSync(job.exit));
+  assert.equal(JSON.parse(readFileSync(job.token, 'utf8')).custodyRoot, undefined);
+  assert.equal(existsSync(`${job.token}.processes.error`), false);
+  assert.equal((await cleanupAgentJob(job)).confirmed, true);
+});
+
 // STOPS-0129 (#3238 A1): the wrapper stops a command that the agent waits on when the log is silent and the command
 // makes almost no CPU; the agent sees the command fail and goes on. A helper that was there at the first output stays.
 const HUNG_AGENT = `
@@ -279,6 +374,102 @@ setTimeout(() => {
   });
 }, 600);`;
 const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
+const ended = pid => {
+  try { process.kill(pid, 0); } catch { return true; }
+  const row = spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' });
+  return row.status !== 0 || /^\s*Z/.test(row.stdout);
+};
+
+const custodyRow = (pid, start, args, uid = process.getuid()) => ({ pid, ppid: 1, pgid: pid, rss: 1, uid, state: 'S', start, args });
+function custodyFixture(t, suspect) {
+  const dir = folder(t), token = join(dir, 'owned.spec.json'), captured = custodyRow(900001, '@ended', 'ended saved agent');
+  writeFileSync(token, JSON.stringify({ custodyRoot: dir }));
+  writeFileSync(`${token}.processes.json`, JSON.stringify([captured]));
+  writeFileSync(`${token}.processes.custody.json`, JSON.stringify({ schema: 1, root: realpathSync(dir),
+    observations: [{ at: 1, reason: 'unsaved process uses worktree', identities: [suspect] }], resolution: null }));
+  return { dir, token, job: { pid: 900002, token } };
+}
+const cleanCallerRow = () => custodyRow(process.pid, '@caller', 'node cleanup caller');
+
+function legacyFixture(t, rootName = '17-review') {
+  const dir = folder(t), root = join(dir, rootName), token = join(dir, '17-review-job.spec.json'), exit = join(dir, '17-review-job.exit.json');
+  mkdirSync(root, { recursive: true });
+  writeFileSync(token, JSON.stringify({ command: 'node', args: [], cwd: root, input: join(dir, 'job.input'), log: join(dir, '17-review-job.log'), exit }));
+  writeFileSync(exit, JSON.stringify({ code: 0, signal: null, at: Date.now() }));
+  return { dir, root, token, job: { id: '17-review-job', role: 'review', issue: 17, pid: 900006, token, exit, log: join(dir, '17-review-job.log') } };
+}
+
+test('a legacy core job can finish only after a complete checkout and old-group scan, with its limit returned', { skip: !['darwin', 'linux'].includes(process.platform) }, async t => {
+  const f = legacyFixture(t), rows = [cleanCallerRow()], signals = [];
+  const proof = await cleanupAgentJob(f.job, { legacyCustodyRoot: f.root, list: () => rows, cwd: () => '/outside/core-worktree', kill: (...args) => signals.push(args) });
+  assert.equal(proof.confirmed, true);
+  assert.match(proof.legacy, /no 0\.1\.28 descendant manifest/);
+  assert.deepEqual(signals, [], 'legacy clearance never signals a process');
+});
+
+test('a legacy process-group member stays held by identity after leaving the checkout, then resolves after exit', { skip: !['darwin', 'linux'].includes(process.platform) }, async t => {
+  const f = legacyFixture(t), suspect = custodyRow(900007, '@legacy-helper', 'node legacy helper'), signals = [];
+  suspect.pgid = f.job.pid;
+  let rows = [cleanCallerRow(), suspect];
+  const ports = { legacyCustodyRoot: f.root, list: () => rows, cwd: () => '/outside/core-worktree', kill: (...args) => signals.push(args) };
+  const held = await cleanupAgentJob(f.job, ports);
+  assert.equal(held.confirmed, false);
+  const first = JSON.parse(readFileSync(`${f.token}.processes.custody.json`, 'utf8'));
+  assert.equal(first.legacy, true);
+  assert.ok(first.observations.some(row => row.identities.some(identity => identity.pid === suspect.pid)));
+  suspect.pgid = 1;
+  rows = [cleanCallerRow(), suspect];
+  assert.equal((await cleanupAgentJob(f.job, ports)).confirmed, false, 'a recorded live helper stays held outside the root and group');
+  rows = [cleanCallerRow()];
+  const recovered = await cleanupAgentJob(f.job, ports);
+  assert.equal(recovered.confirmed, true);
+  assert.equal(JSON.parse(readFileSync(`${f.token}.processes.custody.json`, 'utf8')).resolution.manifestConfirmed, false);
+  assert.deepEqual(signals, [], 'the legacy process is never signalled');
+});
+
+test('an incomplete legacy process table remains retryable and a current wrapper blocks clearance', { skip: !['darwin', 'linux'].includes(process.platform) }, async t => {
+  const f = legacyFixture(t), caller = cleanCallerRow();
+  let rows = [];
+  const ports = { legacyCustodyRoot: f.root, list: () => rows, cwd: () => '/outside/core-worktree', kill: () => assert.fail('legacy scan never signals') };
+  assert.equal((await cleanupAgentJob(f.job, ports)).confirmed, false, 'a table without this reader is incomplete');
+  rows = [caller, custodyRow(f.job.pid, '@live-wrapper', `node src/agent-job.mjs --wrapper ${f.token}`)];
+  assert.equal((await cleanupAgentJob(f.job, ports)).confirmed, false, 'an exact live wrapper identity cannot be finalized');
+  rows = [caller];
+  assert.equal((await cleanupAgentJob(f.job, ports)).confirmed, true, 'a later complete scan can finish the old job');
+});
+
+test('custody resolution keeps a live suspect held after it moves outside the root', { skip: !['darwin', 'linux'].includes(process.platform) }, async t => {
+  const suspect = custodyRow(900003, '@old-suspect', 'node detached helper'), f = custodyFixture(t, suspect), rows = [cleanCallerRow(), suspect];
+  const signals = [], proof = await cleanupAgentJob(f.job, { alive: () => false, list: () => rows,
+    cwd: pid => pid === suspect.pid ? '/outside/worktree' : process.cwd(), kill: (...args) => signals.push(args) });
+  assert.equal(proof.confirmed, false, 'the same pid/start identity remains held outside the scanned root');
+  assert.deepEqual(signals, [], 'checking a suspect identity never signals it');
+  const record = JSON.parse(readFileSync(`${f.token}.processes.custody.json`, 'utf8'));
+  assert.equal(record.resolution, null);
+  assert.ok(record.observations.length > 1, 'the latest held identity is retained as history');
+});
+
+test('custody resolution treats a different start identity as pid reuse', { skip: !['darwin', 'linux'].includes(process.platform) }, async t => {
+  const suspect = custodyRow(900004, '@old-suspect', 'node detached helper'), reused = custodyRow(suspect.pid, '@reused-pid', 'node unrelated');
+  const f = custodyFixture(t, suspect), rows = [cleanCallerRow(), reused];
+  const proof = await cleanupAgentJob(f.job, { alive: () => false, list: () => rows,
+    cwd: pid => pid === reused.pid ? '/outside/worktree' : process.cwd(), kill: () => assert.fail('no process is eligible for a signal') });
+  assert.equal(proof.confirmed, true);
+  const record = JSON.parse(readFileSync(`${f.token}.processes.custody.json`, 'utf8'));
+  assert.equal(record.resolution.recordedIdentitiesGone, true);
+});
+
+test('an incomplete custody process table keeps uncertainty until a complete retry', { skip: !['darwin', 'linux'].includes(process.platform) }, async t => {
+  const suspect = custodyRow(900005, '@suspect', 'node detached helper'), f = custodyFixture(t, suspect), caller = cleanCallerRow();
+  let reads = 0;
+  const ports = { alive: () => false, list: () => ++reads === 2 ? [] : [caller], cwd: () => process.cwd(), kill: () => assert.fail('no process is eligible for a signal') };
+  const first = await cleanupAgentJob(f.job, ports);
+  assert.equal(first.confirmed, false, 'a table without the current caller is incomplete');
+  assert.equal(JSON.parse(readFileSync(`${f.token}.processes.custody.json`, 'utf8')).resolution, null);
+  const second = await cleanupAgentJob(f.job, ports);
+  assert.equal(second.confirmed, true, 'a later complete table can resolve the exited identity');
+  assert.equal(JSON.parse(readFileSync(`${f.token}.processes.custody.json`, 'utf8')).resolution.completeProcessTable, true);
+});
 
 test('the hung-command watch stops only the silent command; the agent goes on and a helper stays (STOPS-0129)', async t => {
   const dir = folder(t), helperPid = join(dir, 'helper.pid'), commandPid = join(dir, 'command.pid'), result = join(dir, 'r.json');

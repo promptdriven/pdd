@@ -46,6 +46,7 @@ test('easy issue: claim, build, review, suite, CI and base check lead to one mer
   assert.match(build.input, /npm test/); assert.match(build.input, /ONE PR/); assert.match(build.input, /Runtime: not run/);
   assert.match(build.input, /never merge/i); assert.match(build.input, new RegExp(build.result.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   assert.equal(build.cwd.includes('worktrees'), true);
+  assert.equal(build.custodyRoot, build.cwd, 'the job runner gets the exact disposable worktree as its custody root');
   assert.equal(w.git(build.cwd, 'rev-parse', '--abbrev-ref', 'HEAD'), build.branch);
 
   const { pr, head } = w.build(17);
@@ -53,6 +54,7 @@ test('easy issue: claim, build, review, suite, CI and base check lead to one mer
   const review = w.job(17, 'review'), suite = w.job(17, 'suite');
   assert.ok(review && suite, 'review and suite jobs start for the PR head');
   assert.equal(review.head, head); assert.equal(suite.head, head);
+  assert.equal(review.custodyRoot, review.cwd); assert.equal(suite.custodyRoot, suite.cwd);
   assert.match(review.input, /did not write/); assert.match(review.input, new RegExp(`#${pr.number}`));
   assert.deepEqual(suite.args.slice(-5), ['suite', '--command', 'npm test', '--timeout', '0']);
   assert.equal(w.git(suite.cwd, 'rev-parse', 'HEAD'), head);
@@ -3805,4 +3807,52 @@ test('local cleanup keeps the job record and worktree when process cleanup canno
   await w.tick();
   assert.ok(jobFile(w, 17), 'the retry record stays');
   assert.equal(existsSync(before.worktree), true, 'the worktree stays with the uncertain process ownership');
+});
+
+test('legacy cleanup accepts only the exact core checkout and records its missing descendant history', { skip: !['darwin', 'linux'].includes(process.platform) }, async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); await w.tick();
+  const build = w.job(17, 'build');
+  w.finish(17, 'build');
+  delete build.custodyRoot;
+  const saved = jobFile(w, 17); delete saved.agent.custodyRoot;
+  writeFileSync(join(w.root, 'jobs', '17.json'), JSON.stringify(saved));
+  writeFileSync(build.token, JSON.stringify({ command: 'codex', args: [], cwd: build.cwd, input: build.input, log: build.log, exit: build.exit }));
+  const { cleanupAgentJob } = await import('../src/agent-job.mjs');
+  const caller = { pid: process.pid, ppid: 1, pgid: process.pid, rss: 1, uid: process.getuid(), state: 'S', start: '@caller', args: 'node --test' };
+  const supplied = [], warnings = [];
+  w.jobs.cleanup = (part, options = {}) => {
+    supplied.push(options.legacyCustodyRoot ?? null);
+    return cleanupAgentJob(part, { ...options, list: () => [caller], cwd: () => '/outside/core-worktree', kill: () => assert.fail('legacy cleanup sends no signal') });
+  };
+  await w.tick({ warn: message => warnings.push(message) });
+  assert.ok(supplied.length > 0);
+  assert.ok(supplied.every(root => root === build.cwd), 'core supplies only the exact issue checkout');
+  assert.equal(jobFile(w, 17), null, 'a clear bounded legacy scan permits normal final cleanup');
+  assert.equal(existsSync(build.cwd), false);
+  const history = readFileSync(join(w.root, 'history.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line)).at(-1);
+  assert.match(history.legacyCleanup[0].limitation, /descendant manifest/);
+  assert.ok(warnings.some(message => /legacy.*manifest/.test(message)));
+});
+
+test('legacy cleanup does not use a source checkout as a fallback root', { skip: !['darwin', 'linux'].includes(process.platform) }, async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); await w.tick();
+  const build = w.job(17, 'build');
+  w.finish(17, 'build');
+  delete build.custodyRoot;
+  const saved = jobFile(w, 17); delete saved.agent.custodyRoot;
+  writeFileSync(join(w.root, 'jobs', '17.json'), JSON.stringify(saved));
+  writeFileSync(build.token, JSON.stringify({ command: 'codex', args: [], cwd: w.cwd, input: build.input, log: build.log, exit: build.exit }));
+  const { cleanupAgentJob } = await import('../src/agent-job.mjs');
+  const caller = { pid: process.pid, ppid: 1, pgid: process.pid, rss: 1, uid: process.getuid(), state: 'S', start: '@caller', args: 'node --test' };
+  const supplied = [];
+  w.jobs.cleanup = (part, options = {}) => {
+    supplied.push(options.legacyCustodyRoot ?? null);
+    return cleanupAgentJob(part, { ...options, list: () => [caller], cwd: () => '/outside/source', kill: () => assert.fail('no process is eligible for a signal') });
+  };
+  await w.tick();
+  assert.ok(supplied.every(root => root === null), 'the source checkout is never handed to the legacy scanner');
+  assert.ok(jobFile(w, 17), 'without a proven core checkout, local cleanup stays pending');
+  assert.equal(existsSync(build.cwd), true);
 });

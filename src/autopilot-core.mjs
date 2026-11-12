@@ -1,5 +1,5 @@
 import * as nativeFs from 'node:fs';
-import { join, dirname, basename } from 'node:path';
+import { join, dirname, basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, createHash } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
@@ -805,13 +805,46 @@ function newStreamLines(ctx, part, watch) {
 }
 const hash8 = text => createHash('sha256').update(text).digest('hex').slice(0, 16);
 const AGO = ms => ms >= HOUR ? `${Math.floor(ms / HOUR)} h ${Math.round(ms % HOUR / MIN)} min` : `${Math.round(ms / MIN)} min`;
+const LEGACY_WORKTREE_ROLES = new Set(['build', 'repair', 'conflict', 'runtime']);
+const LEGACY_CHECKOUT_ROLES = new Set(['review', 'suite', 'vectors']);
+function legacyCustodyRoot(ctx, job, part) {
+  if (!Number.isSafeInteger(job?.issue) || part?.issue !== job.issue || !Number.isSafeInteger(part.pid) || part.pid < 1
+      || ![...LEGACY_WORKTREE_ROLES, ...LEGACY_CHECKOUT_ROLES].includes(part.role)
+      || typeof part.id !== 'string' || typeof part.token !== 'string' || typeof part.exit !== 'string' || typeof part.log !== 'string') return null;
+  const id = basename(part.token).replace(/\.spec\.json$/, ''), logs = resolve(ctx.dirs.logs), worktrees = resolve(ctx.dirs.worktrees);
+  if (id !== part.id || !id.startsWith(`${job.issue}-${part.role}-`) || resolve(dirname(part.token)) !== logs) return null;
+  const expected = LEGACY_WORKTREE_ROLES.has(part.role) ? job.worktree
+    : part.role === 'review' ? join(ctx.dirs.worktrees, `${job.issue}-review`)
+      : part.role === 'suite' ? job.suite?.cwd ?? join(ctx.dirs.worktrees, `${job.issue}-suite`)
+        : job.vectors?.cwd ?? join(ctx.dirs.worktrees, `${job.issue}-vectors`);
+  const expectedName = LEGACY_WORKTREE_ROLES.has(part.role) ? String(job.issue) : `${job.issue}-${part.role}`;
+  if (typeof expected !== 'string' || basename(expected) !== expectedName || resolve(expected) !== resolve(join(ctx.dirs.worktrees, expectedName))) return null;
+  const spec = readJson(ctx.fs, part.token, null);
+  if (!object(spec) || Object.prototype.hasOwnProperty.call(spec, 'custodyRoot') || resolve(spec.cwd ?? '') !== resolve(expected)
+      || spec.exit !== part.exit || spec.log !== part.log || !Array.isArray(spec.args) || typeof spec.command !== 'string') return null;
+  try {
+    const root = ctx.fs.realpathSync(expected), owner = ctx.fs.realpathSync(ctx.dirs.worktrees);
+    if (dirname(root) !== owner || basename(root) !== basename(expected)) return null;
+    return root;
+  } catch { return null; }
+}
 async function cleanupPart(ctx, job, part) {
   if (!part || !ctx.jobs.cleanup) return false;
   try {
     const state = ctx.jobs.read(part).state;
     if (state === 'running' && (!ctx.jobs.snapshot || ctx.jobs.snapshot(part) === null)) return false;
     ctx.saveJob(job);
-    return (await ctx.jobs.cleanup(part))?.confirmed === true;
+    const root = legacyCustodyRoot(ctx, job, part), result = root
+      ? await ctx.jobs.cleanup(part, { legacyCustodyRoot: root }) : await ctx.jobs.cleanup(part);
+    if (result?.legacy) {
+      job.legacyCleanup ??= [];
+      if (!job.legacyCleanup.some(row => row.id === part.id)) {
+        job.legacyCleanup.push({ id: part.id, role: part.role, limitation: result.legacy });
+        ctx.saveJob(job);
+      }
+      ctx.warn(`Autopilot core cleanup of #${job.issue} (${part.role}): ${result.legacy}`);
+    }
+    return result?.confirmed === true;
   } catch { return false; }
 }
 // The rule. Returns { state: 'running' } (go on), { state: 'quiet' } (T1: stopped), { state: 'cleanup' } (retry
@@ -923,7 +956,7 @@ function startJob(ctx, job, role, cwd, prompt, command = null, extraEnv = {}) {
   // #3231: the machine guard's priority (nice, macOS QoS, a Linux CPU list for agent roles) and Autopilot's CPU share
   // as PDD_CHECK_CPUS for every role.
   const { checkCpus, ...priority } = ctx.ports.machine?.priority?.(role) ?? {};
-  return ctx.jobs.start({ id, dir: ctx.dirs.logs, cwd, command: run.command, args: run.args, input: typeof prompt === 'function' ? prompt(result) : prompt,
+  return ctx.jobs.start({ id, dir: ctx.dirs.logs, cwd, custodyRoot: cwd, command: run.command, args: run.args, input: typeof prompt === 'function' ? prompt(result) : prompt,
     env: { ...pddOnPath(ctx, jobEnvironment(ctx.ports.env ?? process.env)), ...(Number.isSafeInteger(checkCpus) ? { PDD_CHECK_CPUS: String(checkCpus) } : {}), ...extraEnv },
     ...(Object.keys(priority).length ? { priority } : {}), ...(SHELL_ROLES.has(role) ? { pddCheck: { version: engineVersion(ctx), cli: join(ctx.dirs.bin, 'pdd'), skills: skillsCheck(ctx) } } : {}),
     issue: job.issue, role, branch: job.branch, head: job.head, ...(command ? {} : { hung: HUNG }) });
@@ -3398,6 +3431,7 @@ async function finishLocal(ctx, job, outcome, text) {
     for (const name of list(ctx.dirs.logs).filter(name => !name.endsWith('.log') && !/-evidence-[0-9a-f]+\.json$/.test(name))) await step('logs', () => ctx.fs.rmSync(join(ctx.dirs.logs, name), { force: true }));
     await step('history', () => appendHistory(ctx, { at: ctx.now(), issue: job.issue, outcome, text: oneLine(text), pr: job.pr ?? null, log: job.agent?.log ?? null, evidence: honestEvidence(job) ?? null,
       ...(job.runtimeOriginal ? { runtimeOriginal: job.runtimeOriginal } : {}),
+      ...(job.legacyCleanup?.length ? { legacyCleanup: job.legacyCleanup } : {}),
       ...(job.end?.cause?.ask ? { ask: job.end.cause.ask } : {}), ...(job.decided ? { decided: oneLine(job.decided.question, 300) } : {}),
       ...(outcome === 'released' && job.end?.cause?.counted ? { noResult: true } : {}), ...(outcome === 'ended' ? { reset: true } : {}), ...(job.end?.cause?.owner ? { owner: job.end.cause.owner } : {}) }));
   } finally {
