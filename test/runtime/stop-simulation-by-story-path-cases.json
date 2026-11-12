@@ -1,0 +1,43 @@
+{
+  "kind": "native-draft-cases",
+  "status": "draft; expectations await person review",
+  "story_path": "user_stories/stop-simulation-by-story-path.md",
+  "owner_prompt": "prompts/cli/runtime-client.prompt.md",
+  "public_boundary": "src/runtime-client.mjs: module function runTry({words, options, cwd}, ports)",
+  "runtime_check": "BLOCKED",
+  "runtime_reason": "The owning prompt has no Runtime interface. Native Git repository lookup and private saved-state reads/writes are unbound. This inventory is not a prompt-runtime.program-scenario.v1 scenario. No check-only API is proposed.",
+  "native_replay": "NOT RUN; replay must exercise the real public boundary with isolated Git/state and deterministic injected transport",
+  "authority": ["https://github.com/promptdriven/pdd/issues/2757"],
+  "criteria": [
+    {"id": "AC1", "text": "After I start a simulation with `pdd simulate user_stories/rehearsal/control-panel.md`, `pdd simulate --stop user_stories/rehearsal/control-panel.md` stops that saved simulation, prints `The Try link for \"Control panel rehearsal\" is stopped.`, and exits 0."},
+    {"id": "AC2", "text": "For the same saved simulation, `pdd simulate --stop control-panel` also stops it, prints the same confirmation, and exits 0."},
+    {"id": "AC3", "text": "The saved test path `tests/rehearsal/control-panel.json` and test name `control-panel` still identify the simulation. A stop also works on a branch where the original Story file is absent. With one saved simulation, `pdd simulate --stop` still stops it."},
+    {"id": "AC4", "text": "A stop removes only the selected saved simulation after the service confirms the stop. A DELETE response of 404 or 410 also counts as confirmation. An unconfirmed stop keeps the saved record and returns a nonzero exit. An unknown or ambiguous selector stops nothing and exits 2."}
+  ],
+  "setup": {
+    "synthetic": true,
+    "isolation": "Each case gets a fresh temporary Git repository and external private state directory. No recovered project inputs, credentials or live sessions.",
+    "selected_record_key": "tests/rehearsal/control-panel.json",
+    "selected_record": {"story": "control-panel", "storyPath": "user_stories/rehearsal/control-panel.md", "title": "Control panel rehearsal", "id": "11111111-1111-4111-8111-111111111111"},
+    "ports": {
+      "fetch": "Deterministic DELETE and GET replies; collect methods, paths and request IDs. No hosted requests.",
+      "gh": "Fixed synthetic token and account replies, held in memory only.",
+      "now_sleep_randomUUID": "Fixed clock, immediate deterministic waits and distinct fixed UUIDs.",
+      "stdout_stderr": "Captured streams; each emitted line ends with a newline.",
+      "native_effects": "Real temporary Git root lookup and private state reads/writes. These effects are not interpreter bindings."
+    },
+    "default_stop_reply": "DELETE accepts a stop job; GET confirms that job passed",
+    "expected_stdout": "The Try link for \"Control panel rehearsal\" is stopped.\n"
+  },
+  "cases": [
+    {"id": "saved-story-path", "criterion_ids": ["AC1", "AC4"], "words": ["user_stories/rehearsal/control-panel.md"], "options": {"--stop": true}, "other_saved_record": "tests/other.json", "expected": {"exit_code": 0, "selected_deletes": 1, "stop_job_read": true, "uuid_request_header": true, "selected_record_removed": true, "other_record_unchanged": true, "stdout_from_setup": true}},
+    {"id": "short-story-name", "criterion_ids": ["AC2", "AC4"], "words": ["control-panel"], "options": {"--stop": true}, "expected": {"exit_code": 0, "selected_deletes": 1, "stop_job_read": true, "selected_record_removed": true, "stdout_from_setup": true}},
+    {"id": "existing-test-selectors", "criterion_ids": ["AC3", "AC4"], "repeat_with_fresh_state": [["tests/rehearsal/control-panel.json"], ["control-panel"], []], "options": {"--stop": true}, "expected_each": {"exit_code": 0, "selected_deletes": 1, "selected_record_removed": true, "stdout_from_setup": true}},
+    {"id": "test-basename-distinct-from-story-name", "criterion_ids": ["AC3", "AC4"], "words": ["control-panel"], "options": {"--stop": true}, "record_override": {"story": "different-story", "storyPath": "user_stories/rehearsal/different-story.md"}, "expected": {"exit_code": 0, "selected_deletes": 1, "selected_record_removed": true, "stdout_from_setup": true}},
+    {"id": "story-absent-on-current-branch", "criterion_ids": ["AC1", "AC3", "AC4"], "given": "Current branch has no original Story or test file; saved record remains", "repeat_with_fresh_state": [["user_stories/rehearsal/control-panel.md"], ["control-panel"]], "options": {"--stop": true}, "expected_each": {"exit_code": 0, "selected_deletes": 1, "selected_record_removed": true, "stdout_from_setup": true}},
+    {"id": "delete-already-gone", "criterion_ids": ["AC1", "AC4"], "words": ["user_stories/rehearsal/control-panel.md"], "options": {"--stop": true}, "repeat_with_fresh_state_delete_status": [404, 410], "expected_each": {"exit_code": 0, "selected_deletes": 1, "selected_record_removed": true, "stdout_from_setup": true}},
+    {"id": "unconfirmed-stop", "criterion_ids": ["AC4"], "words": ["user_stories/rehearsal/control-panel.md"], "options": {"--stop": true}, "given": "DELETE accepts a stop job; its terminal result does not confirm success", "expected": {"exit_code_nonzero": true, "selected_record_unchanged": true, "success_confirmation_absent": true}},
+    {"id": "unknown-selector", "criterion_ids": ["AC4"], "words": ["missing-story"], "options": {"--stop": true}, "expected": {"exit_code": 2, "runtime_requests": 0, "authentication_calls": 0, "all_saved_records_unchanged": true}},
+    {"id": "ambiguous-short-name", "criterion_ids": ["AC4"], "words": ["control-panel"], "options": {"--stop": true}, "given": "Two distinct saved records have the same short Story name", "expected": {"exit_code": 2, "runtime_requests": 0, "authentication_calls": 0, "all_saved_records_unchanged": true}}
+  ]
+}
