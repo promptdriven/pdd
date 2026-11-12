@@ -9,6 +9,7 @@ Start with the [README](../README.md).
 - [Interpreter boundaries](runtime-boundaries.md): offline review, server lint, native factory bindings and call-accounting evidence.
 - [CLI reference](cli.md): every command, and how to run from a source checkout.
 - [A GitHub App token for Autopilot](autopilot-github-app-token.md): a design note for a team that wants Autopilot to have its own GitHub limit.
+- [Autopilot supervision discussion plan](autopilot-supervision-plan.md): proposed recovery scope, open decisions and acceptance sequence; implementation requires agreement.
 - [Report a problem](ISSUES.md): how you or your agent files a clear issue about pdd.
 - [Prompting guide](prompting-guide.md): the method. The [pdd-prompting skill](../skills/pdd-prompting/SKILL.md) has the same text in `guide.md`.
 
