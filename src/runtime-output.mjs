@@ -1,5 +1,5 @@
 import { bindingRefusals } from './runtime-binding-plan.mjs';
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: 03d5e1eef28098b82010fb7c1acf7c0823a9d7873cf859b531728b595feaf887).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: ffcdf87a9c3b8b4a5529f8717e1962fe82bc07ade2374e653b6de586a3ccc0c6).
 import { hasProgress, outcomeExitCode, outcomeFor, outcomeText, progressText, resultOutcome, PROVIDER_TEXT } from './runtime-outcome.mjs';
 export const OPEN_STATES = new Set(['queued', 'running', 'sent']);
 
@@ -328,7 +328,7 @@ export function summaryLine(rows, story = null) {
   const mark = rows.some(row => row.state === 'failed') ? '✗'
     : rows.length && rows.every(row => row.state === 'passed') ? '✓'
     : rows.some(row => OPEN_STATES.has(row.state)) ? 'running ·'
-    : rows.some(row => row.busy && row.state === 'not_run') && rows.every(row => row.state === 'passed' || (row.busy && row.state === 'not_run')) ? 'busy ·' : 'no verdict ·';
+    : rows.some(row => row.busy && ['not_run', 'not run'].includes(row.state)) && rows.every(row => row.state === 'passed' || (row.busy && ['not_run', 'not run'].includes(row.state))) ? 'busy ·' : 'no verdict ·';
   const rerunShare = rerunCalls ? `${rerunCalls} for reruns` : '';
   const usage = known.length ? `${count(calls, 'AI call')}${rerunShare ? ` (${rerunShare})` : ''}` : rerunShare || count(calls, 'AI call');
   const skipped = rows.some(row => row.cached) ? [count(new Set(rows.filter(row => row.cached).map(row => row.story_path ?? row.story)).size, 'Story').replace('Storys', 'Stories') + ' skipped'] : [];

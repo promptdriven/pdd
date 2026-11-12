@@ -5,7 +5,7 @@ Use Node 22.16 or newer and a fresh checkout. No installation or model service i
 ```sh
 node --version
 node --test test/metrics*.test.mjs
-node --test test/autopilot-review-wake.vectors.test.mjs test/autopilot-wake.formal.test.mjs test/workflow-concurrent-progress.*.test.mjs
+node --test test/workflow-concurrent-progress.*.test.mjs
 ```
 
 The tests create disposable Git repositories and controlled GitHub, Herdr and native session metadata fixtures. They exercise the real CLI process for report, export/import, metadata parsing and retained journal recovery after process exit. Native workflow library consumers exercise selector decisions, launch delivery outcomes, exact session matching and terminal code publication. Fixtures supply external observations; they do not establish a real worker start, hosted checker verdict or live publication.

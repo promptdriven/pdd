@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-setup.prompt.md (sha256: 37195d39837196bbf574fe3fb24de8fab1765a62ffcb084e39ba94e67ccc22fe).
+// Generated from prompts/cli/workflow-setup.prompt.md (sha256: de05e8c99a084cdad7e5db5e40b5cef19c6e8500650b56ef84abfbe681eef9d3).
 import { checkWorkflowAgents } from './workflow-agents.mjs';
 
 const recovery = 'Agent sign-in could not be checked. Run codex login status or claude auth status.';
