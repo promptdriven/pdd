@@ -3,7 +3,8 @@
 Own the native test environment in `test/helpers/test-home.mjs` and its use by
 `package.json`, test entrypoints and shared fixtures. This is a test harness
 contract. Preserve production path rules, public commands, fixture fakes and
-existing behavioral expectations.
+existing behavioral expectations. The package distribution identity follows
+the safe package updates policy; preserve the test harness when applying it.
 
 Before a test can use a default home path, give its process a fresh temporary
 HOME. This includes `os.homedir()` fallbacks when an injected environment omits
@@ -72,6 +73,7 @@ Do not import operational captures as fixtures.
 
 ## Dependencies
 
+- [PATH diagnostic](../cli/path-diagnostic.prompt.md): its Safe package updates section is the authoritative package distribution identity for authoring changes to `package.json`.
 - [Workflow state](../cli/workflow-runs.prompt.md), [interpreter client](../cli/runtime-client.prompt.md), [skills](../cli/skills-install.prompt.md) and [Herdr layout](../cli/workflow-herdr-layout.prompt.md): required path-selection context for authoring and native verification.
 - [Prompting guide](../../docs/prompting-guide.md): required authoring context.
 
@@ -83,7 +85,7 @@ no interpreter operation and makes no model or live service calls.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"35f830d16449e7f44e261cfad857f187c79cca5d13db236d0b9a58c7f534602e","entries":[],"calls":[],"resources":[],"limits":{"max_steps":1,"max_model_calls":1},"conventions":[]}
+{"status":"draft","prose_sha256":"c64a423c3631db6414e3f288ae87cd47bc2fb6565990c7fe51c2b156b9ec9838","entries":[],"calls":[],"resources":[],"limits":{"max_steps":1,"max_model_calls":1},"conventions":[]}
 ```
 
 </details>

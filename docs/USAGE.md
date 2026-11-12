@@ -74,6 +74,12 @@ This is the standard skills installer. It needs only Node.js. [Section 4](#4-the
 
 You need the pdd command only for runs on GitHub issues ([section 6](#6-run-a-workflow-on-a-github-issue)) and for `pdd test`, `pdd lint`, `pdd simulate` and `pdd approve` ([section 7](#7-check-prompts-on-the-pdd-interpreter)).
 
+If your global install uses the old npm name `pdd`, migrate before installing so two packages cannot own the command:
+
+```sh
+npm uninstall -g pdd && npm install -g github:promptdriven/pdd
+```
+
 ```sh
 npm install -g github:promptdriven/pdd
 "$(npm prefix -g)/bin/pdd" --version  # reports PATH conflicts without changing files
@@ -87,7 +93,7 @@ Important:
 
 - Always install and update with the full `github:promptdriven/pdd` line.
 - Do not run `npm install -g pdd`. That installs a different, unrelated package from the npm registry.
-- Do not run `npm update -g`. npm thinks that the unrelated registry package is a newer version of PDD, and it would replace your pdd with it. You can see this with `npm outdated -g`.
+- The package name is `@promptdriven/pdd`; the command stays `pdd`. Until the scoped package is published, do not use `npm update -g` to update pdd. With the old name `pdd`, that command can replace it with the unrelated registry package. Setup and `pdd autopilot doctor` show the migration or safe update command without changing installed packages.
 - If npm says `EACCES` (permission denied), your global npm folder belongs to root. Use a Node version manager, or set your own npm prefix. Do not use `sudo`.
 
 ### 2.3 Start Autopilot on your repository
@@ -621,7 +627,7 @@ This is a pre-release. These limits are known today:
 | `pdd test` says that your login is not on the invite list | Ask the PDD team to add your GitHub login. |
 | `pdd approve is for a person at a terminal` | In strict mode, run the approval yourself in a normal terminal. In easy mode, your agent can record your actual chat approval with --said. |
 | PR 1 says `Draft prompts: …` | Approve the ready gate and its drafts together, or approve one prompt at a time in a terminal. See [approval commands](cli.md#record-a-chat-approval). |
-| `npm outdated -g` shows `pdd` 0.4.14 | That is the unrelated registry package. Ignore it. Do not run `npm update -g`. |
+| `npm outdated -g` shows `pdd` 0.4.14 | That is the unrelated registry package. Migrate with `npm uninstall -g pdd && npm install -g github:promptdriven/pdd`. |
 
 ## 14. Report a problem
 

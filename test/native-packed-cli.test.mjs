@@ -11,7 +11,7 @@ test('isolated npm-packed install selects native Story and preserves unverified 
   const env={...process.env,HOME:home,npm_config_cache:cache};
   const packed=JSON.parse(execFileSync('npm',['pack','--json','--pack-destination',directory],{cwd:packageRoot,env,encoding:'utf8',maxBuffer:8*1024*1024}))[0];
   execFileSync('npm',['install','--prefix',prefix,'--ignore-scripts','--no-audit','--no-fund','--offline',join(directory,packed.filename)],{env,encoding:'utf8',stdio:['ignore','pipe','pipe']});
-  const f=await nativeFixture(t,{cli:join(prefix,'node_modules/pdd/bin/pdd.mjs')});
+  const f=await nativeFixture(t,{cli:join(prefix,'node_modules/@promptdriven/pdd/bin/pdd.mjs')});
   const result=f.command('lint','native','--json');assert.equal(result.status,1,result.stdout+result.stderr);
   assert.equal(JSON.parse(result.stdout).native_assessments[0].assessment.storyNativeProof,'none');
   put(f.parent,'report','TAP version 13\nok 1 - required A\n1..1\n');

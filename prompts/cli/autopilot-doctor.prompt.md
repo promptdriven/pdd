@@ -52,6 +52,10 @@ Check these boundaries in order and continue after failures:
   advertises autopilot. A different install warns even at the same
   version; include its path and safe version. Fix with an absolute Node plus
   this CLI doctor command, so source checkouts work too.
+- After PATH, call the required package update diagnostic with packageRoot and
+  the same injected files port. For a non-`none` kind, add a `package-update`
+  WARN with its detail and fix. This is advisory, does not change exit status,
+  and never runs npm or changes packages. See the package policy dependency.
 - Node >=22.20.0; Git present; Git checkout and GitHub origin; gh signed in;
   repo viewerPermission is ADMIN, MAINTAIN or WRITE and at least one merge method
   is enabled. Missing tools, gh auth or write permission warn. Read effective
@@ -108,6 +112,8 @@ Check these boundaries in order and continue after failures:
 
 ## Dependencies
 
+- [Package update policy](path-diagnostic.prompt.md#safe-package-updates): required package-name migration, safe GitHub update commands and read-only metadata diagnostic.
+
 - [Secret redaction](secret-redaction.prompt.md): register invocation secrets and
   gh/Gemini credentials read here in the in-memory value inventory.
 
@@ -136,8 +142,8 @@ Do not use a GitHub ledger that writes reads to disk. Do not mutate arrays retur
 ```json
 {
   "kind": "partial",
-  "status": "approved",
-  "prose_sha256": "18dae0f1a37855d569abe401be94c190e22b505c46127437f79e3ef7f04040fd",
+  "status": "draft",
+  "prose_sha256": "69d1c2aeed663731c0e4dddad921721515694d48e963fc74b62241410187516e",
   "entries": [
     {
       "operation": "runAutopilotDoctor",

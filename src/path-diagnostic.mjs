@@ -1,4 +1,4 @@
-// Generated from prompts/cli/path-diagnostic.prompt.md (sha256: 9b8faed5c5dd1d1911c3237af02ef1a32d2e830d86ee6cb1aabeb80b40216a1e).
+// Generated from prompts/cli/path-diagnostic.prompt.md (sha256: 51b668d5f529984645e99c672f8a925283c8919c866aa256d7b1a8279b8e19df).
 import { spawnSync } from 'node:child_process';
 import { accessSync, constants, readFileSync, realpathSync, statSync } from 'node:fs';
 import { basename, delimiter, dirname, join, resolve } from 'node:path';
@@ -19,15 +19,42 @@ function candidates(cwd, env) {
   return [...new Set(listed)].filter(executable);
 }
 
+// npm does not reliably keep GitHub provenance; show distribution advice by package identity.
+export function packageInstallDiagnostic({ packageRoot }, ports = {}) {
+  const read = path => {
+    try { return JSON.parse((ports.files?.readFileSync ?? readFileSync)(path, 'utf8')); }
+    catch { return null; }
+  };
+  const name = read(join(packageRoot, 'package.json'))?.name;
+  const scoped = name === '@promptdriven/pdd';
+  const installedScope = basename(packageRoot) === 'pdd' && basename(dirname(packageRoot)) === '@promptdriven'
+    && basename(dirname(dirname(packageRoot))) === 'node_modules';
+  const legacy = name === 'pdd' || scoped && installedScope
+    && read(join(dirname(dirname(packageRoot)), 'pdd', 'package.json'))?.name === 'pdd';
+  if (legacy) return {
+    kind: 'legacy',
+    detail: 'The old npm package name pdd can be replaced by an unrelated package with npm update -g. Both package names can compete for the pdd command. Remove the old name before installing the scoped package.',
+    fix: 'npm uninstall -g pdd && npm install -g github:promptdriven/pdd'
+  };
+  if (scoped) return {
+    kind: 'github',
+    detail: 'pdd is distributed from GitHub. Until @promptdriven/pdd is published, do not use npm update -g for pdd.',
+    fix: 'npm install -g github:promptdriven/pdd'
+  };
+  return { kind: 'none', detail: '', fix: '' };
+}
+
 // Only --version probes another executable; the guard prevents another copy of this pdd from probing back.
 export function pathDiagnostic({ packageRoot, cwd, env, mode }) {
   if (env.PDD_PATH_PROBE === '1') return [];
+  const update = mode === 'setup' ? packageInstallDiagnostic({ packageRoot }) : null;
+  const updateLines = update && update.kind !== 'none' ? [`${update.detail} Update with: ${update.fix}`] : [];
   let version, running;
   try {
     version = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')).version;
     running = resolve(packageRoot, 'bin/pdd.mjs');
-    if (typeof version !== 'string' || !version || !executable(running)) return [];
-  } catch { return []; }
+    if (typeof version !== 'string' || !version || !executable(running)) return updateLines;
+  } catch { return updateLines; }
   const paths = candidates(cwd, env), current = identity(running), selected = paths[0];
   const isAlpha = path => current !== null && identity(path) === current;
   const shadowed = selected && !isAlpha(selected);
@@ -51,5 +78,5 @@ export function pathDiagnostic({ packageRoot, cwd, env, mode }) {
     const alpha = paths.find(path => basename(path) === 'pdd' && isAlpha(path));
     if (alpha) lines.push(`After environment activation, run: export PATH=${quote(dirname(alpha))}:"$PATH"; hash -r`);
   }
-  return lines;
+  return [...lines, ...updateLines];
 }

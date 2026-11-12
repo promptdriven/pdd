@@ -1,0 +1,265 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/safe-package-update.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "`pdd setup` and `pdd autopilot doctor` warn about the old npm name `pdd` and show `npm uninstall -g pdd && npm install -g github:promptdriven/pdd`, without changing installed packages."
+    },
+    {
+      "id": "AC2",
+      "text": "With the scoped GitHub distribution and no old package, setup and doctor warn against `npm update -g` for pdd and show `npm install -g github:promptdriven/pdd`."
+    },
+    {
+      "id": "AC3",
+      "text": "An installed scoped package also detects the old global package beside it and shows the migration command; a source checkout does not mistake a project-local pdd folder for a global install."
+    },
+    {
+      "id": "AC4",
+      "text": "Missing or malformed package metadata does not stop setup or doctor or produce a false legacy migration warning."
+    }
+  ],
+  "initial_world": {
+    "reads": 0
+  },
+  "simulation": {
+    "files.readFileSync": {
+      "action": "fixture.lookup",
+      "world_pointer": "/reads",
+      "cases": [
+        {
+          "args": {
+            "path": "/old/package.json"
+          },
+          "call_index": 1,
+          "result": {
+            "found": true,
+            "text": "{\"name\": \"pdd\"}"
+          }
+        },
+        {
+          "args": {
+            "path": "/global/node_modules/@promptdriven/pdd/package.json"
+          },
+          "call_index": 2,
+          "result": {
+            "found": true,
+            "text": "{\"name\": \"@promptdriven/pdd\"}"
+          }
+        },
+        {
+          "args": {
+            "path": "/global/node_modules/pdd/package.json"
+          },
+          "call_index": 3,
+          "result": {
+            "found": false,
+            "text": ""
+          }
+        },
+        {
+          "args": {
+            "path": "/both/node_modules/@promptdriven/pdd/package.json"
+          },
+          "call_index": 4,
+          "result": {
+            "found": true,
+            "text": "{\"name\": \"@promptdriven/pdd\"}"
+          }
+        },
+        {
+          "args": {
+            "path": "/both/node_modules/pdd/package.json"
+          },
+          "call_index": 5,
+          "result": {
+            "found": true,
+            "text": "{\"name\": \"pdd\"}"
+          }
+        },
+        {
+          "args": {
+            "path": "/source/package.json"
+          },
+          "call_index": 6,
+          "result": {
+            "found": true,
+            "text": "{\"name\": \"@promptdriven/pdd\"}"
+          }
+        },
+        {
+          "args": {
+            "path": "/missing/package.json"
+          },
+          "call_index": 7,
+          "result": {
+            "found": false,
+            "text": ""
+          }
+        },
+        {
+          "args": {
+            "path": "/broken/package.json"
+          },
+          "call_index": 8,
+          "result": {
+            "found": true,
+            "text": "{broken"
+          }
+        }
+      ],
+      "result_template": {
+        "found": false,
+        "text": ""
+      },
+      "result_value_pointer": ""
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "old-name",
+      "entry_path": "prompts/cli/path-diagnostic.prompt.md",
+      "operation": "packageInstallDiagnostic",
+      "input": {
+        "packageRoot": "/old"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/kind",
+          "op": "equals",
+          "value": "legacy"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/fix",
+          "op": "equals",
+          "value": "npm uninstall -g pdd && npm install -g github:promptdriven/pdd"
+        }
+      ]
+    },
+    {
+      "step_id": "scoped",
+      "entry_path": "prompts/cli/path-diagnostic.prompt.md",
+      "operation": "packageInstallDiagnostic",
+      "input": {
+        "packageRoot": "/global/node_modules/@promptdriven/pdd"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/kind",
+          "op": "equals",
+          "value": "github"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/fix",
+          "op": "equals",
+          "value": "npm install -g github:promptdriven/pdd"
+        }
+      ]
+    },
+    {
+      "step_id": "both-names",
+      "entry_path": "prompts/cli/path-diagnostic.prompt.md",
+      "operation": "packageInstallDiagnostic",
+      "input": {
+        "packageRoot": "/both/node_modules/@promptdriven/pdd"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/kind",
+          "op": "equals",
+          "value": "legacy"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/fix",
+          "op": "equals",
+          "value": "npm uninstall -g pdd && npm install -g github:promptdriven/pdd"
+        }
+      ]
+    },
+    {
+      "step_id": "source-local",
+      "entry_path": "prompts/cli/path-diagnostic.prompt.md",
+      "operation": "packageInstallDiagnostic",
+      "input": {
+        "packageRoot": "/source"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/kind",
+          "op": "equals",
+          "value": "github"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/fix",
+          "op": "equals",
+          "value": "npm install -g github:promptdriven/pdd"
+        }
+      ]
+    },
+    {
+      "step_id": "missing",
+      "entry_path": "prompts/cli/path-diagnostic.prompt.md",
+      "operation": "packageInstallDiagnostic",
+      "input": {
+        "packageRoot": "/missing"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/kind",
+          "op": "equals",
+          "value": "none"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/fix",
+          "op": "equals",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "step_id": "malformed",
+      "entry_path": "prompts/cli/path-diagnostic.prompt.md",
+      "operation": "packageInstallDiagnostic",
+      "input": {
+        "packageRoot": "/broken"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/kind",
+          "op": "equals",
+          "value": "none"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/fix",
+          "op": "equals",
+          "value": ""
+        }
+      ]
+    }
+  ]
+}
