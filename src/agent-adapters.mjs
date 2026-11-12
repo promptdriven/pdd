@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-adapters.prompt.md (sha256: f778e52a2317b125f122cd9765b1d20c7657231e5b1d6e1c3cbaf7d6f5f58f98).
+// Generated from prompts/cli/agent-adapters.prompt.md (sha256: 0ed934304d1e0ba6a19b1559a03495691e9c6821c708fcafc469207fb34f18b1).
 import { spawn } from 'node:child_process';
 import { lstatSync, statSync } from 'node:fs';
 import { delimiter, resolve, isAbsolute } from 'node:path';

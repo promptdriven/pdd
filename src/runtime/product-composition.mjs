@@ -1,4 +1,4 @@
-// Generated from prompts/cli/product-composition.prompt.md (sha256: d185f5b1c6ad1a7ccfddc7390824ac2f4bee798e195047078a408961adde8b88).
+// Generated from prompts/cli/product-composition.prompt.md (sha256: ec03402c9b8dfb9b90cfc0825a9c79425bb1c45371339285953cbf388b38e27e).
 import { basename, join } from 'node:path';
 import { checkInput, interfaceBlocks, PreflightError } from './runtime-preflight.mjs';
 import { expandSource, isJsonNumber, jsonNumberIdentity, parseJsonValue, stringifyJsonValue } from './contract-refs.mjs';
@@ -198,7 +198,7 @@ export function selectJourneys(tests, selector, ports = {}) {
 
 export function composeProductTry({ root, parts, journey, testPath }, ports) {
   if (typeof ports?.parseProductDocuments !== 'function' || typeof ports?.parseProductWorldWriters !== 'function') {
-    throw new Error('Product composition ports (parseProductDocuments, parseProductWorldWriters) are not bound.');
+    throw Object.assign(new Error('Product composition ports (parseProductDocuments, parseProductWorldWriters) are not bound.'), { unboundPort: true });
   }
   const cached = new Map();
   const read = (path, optional = false) => {
@@ -303,6 +303,7 @@ export function composeProductTry({ root, parts, journey, testPath }, ports) {
     return { appMapPath, seedPath, files: [{ path: appMapPath, content: stringifyJsonValue(joined.map) }, { path: seedPath, content: stringifyJsonValue(world) }],
       product_parts, parts: selected, journey: journey ?? null, tapOperations: joined.tapOperations, labels: joined.labels };
   } catch (error) {
+    if (error?.unboundPort) throw error;
     if (error.exitCode || ['invalid-product', 'invalid-journey', 'world-writer-conflict', 'invalid-product-map', 'unsupported-product-router'].includes(error.code) || /^(?:contract-|seed-)/.test(error.code ?? '')) throw error;
     badMap(`Cannot compose this product Try: ${error.message}`);
   }

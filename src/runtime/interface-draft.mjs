@@ -1,4 +1,4 @@
-// Generated from prompts/cli/interface-draft.prompt.md (sha256: 371fcbf70a2d90d0221fade0d941e6b3caee93402e2bedded03e5e91cde2aa4b).
+// Generated from prompts/cli/interface-draft.prompt.md (sha256: 434e655b8e1e3a9dc65ff1971c49b461c1da726f9a47a10ed8d1f6b2e129a231).
 import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, linkSync, renameSync, rmSync, openSync, closeSync, fstatSync, chmodSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { basename, dirname, join, relative, resolve } from 'node:path';
@@ -600,8 +600,8 @@ function expandedInterface(path,iface,files) {
   const candidate='<details><summary>Runtime interface</summary>\n\n```json\n'+JSON.stringify(iface)+'\n```\n</details>';
   return JSON.parse(interfaceBlocks(expandSource({path,text:candidate,format:'prompt'},files).text)[0][1]);
 }
-function inferInterface(root,path,text,sources) {
-  const files=sourceFilePort(root);
+function inferInterface(root,path,text,sources,visible=new Set(gitFiles(root)),workspace=loadRuntimeWorkspace({root})) {
+  const files=sourceFilePort(root,visible,workspace);
   const declarations=sources.filter(source=>!source.path.endsWith('.prompt.md') || source.path===path).flatMap(source=>jsonDeclarations(source.text));
   const candidates=declarations.filter(value=>Array.isArray(value.entries) && value.entries.length
     && value.entries.every(entry=>typeof entry?.operation==='string'));
@@ -621,7 +621,7 @@ function inferInterface(root,path,text,sources) {
     const operations=[...named,...[...text.matchAll(/\b(?:Export|export|exports)\s+(?:(?:async|module|function)\s+)*`?([A-Za-z_$][\w$]*)\s*\(/g)].map(match=>match[1])];
     // An explicitly owned source file can add clear exported function names, never schemas.
     const own=/`(src\/[\w./-]+\.[cm]js)`/.exec(text)?.[1];
-    if(own) {
+    if(own && visible.has(own) && allowsRuntimePath(workspace,own)) {
       const code=files.read({path:own}).content;
       for(const match of code.matchAll(/^export\s+(?:async\s+)?function\s+([\w$]+)\s*\(/gm)) operations.push(match[1]);
     }
@@ -670,7 +670,7 @@ export async function runInterfaceDraft({words=[],all=false,json=false,cwd=proce
         if(!block && /<summary[^>]*>\s*(?:<strong[^>]*>\s*)?Runtime\s+interface/i.test(text)) throw Error('The Runtime interface block is malformed. Fix it before drafting.');
         const previous=block ? JSON.parse(block[1]) : null;
         const sources=draftSources(root,path,text);
-        const inference=!extend && !supplied && !refresh ? inferInterface(root,path,text,sources) : null;
+        const inference=!extend && !supplied && !refresh ? inferInterface(root,path,text,sources,visible,workspace) : null;
         const iface=extend ? extendContract(previous,supplied) : {...(supplied ?? (refresh ? previous : inference.iface))};
         iface.status='draft';iface.prose_sha256='';
         if(iface.kind==='full') delete iface.kind;
@@ -831,5 +831,5 @@ export async function runAutomaticApproval({path,root,tests},ports={}) {
     } catch(error) {writeFileSync(file,text);throw error;}
     stdout.write(`Approved ${path}. Approval route: automatic-check-pass.\n`);
     return 0;
-  } catch(error) {stderr.write(`${error.message}\n`);return 4;}
+  } catch(error) {if(error?.unboundPort) throw error;stderr.write(`${error.message}\n`);return 4;}
 }

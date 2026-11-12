@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-workspace-migration.prompt.md (sha256: 735c905d0348934c9a37b0449ef9bb925fb440a85db967ea311b83554a111934).
+// Generated from prompts/cli/runtime-workspace-migration.prompt.md (sha256: 0dc120dccecf8d7582c6fb24c0b6e47e900e3ab4c785d5ae0312e4fb0b0b9a38).
 // Implements prompts/cli/runtime-workspace-migration.prompt.md.
 import {realpathSync} from 'node:fs';
 import {createHash} from 'node:crypto';

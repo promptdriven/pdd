@@ -1,6 +1,6 @@
 # Use a Try session from a terminal or HTTP client
 
-Own src/try-doors.mjs. Provide one generic adapter around the owner's saved Try. Preserve argv strings, program
+Own `src/runtime/try-doors.mjs` (the host launcher shim outside `src/runtime/` is owned by the Runtime seam). Provide one generic adapter around the owner's saved Try. Preserve argv strings, program
 streams and saved session identity. Do not interpret commands, execute a project binary, or generate project logic.
 
 `openCli(context, test, sessionId, options)` selects the first distinct CLI entry used by the Story's tests; refuse

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/try-doors.prompt.md (sha256: 725417f3720ef4c42b055cf5589094f4b20a970f835fdeaf2fec0d77b02232f2).
+// Generated from prompts/cli/try-doors.prompt.md (sha256: a7f657473a8a63a20e48ec6b5e52261695af9226d6bb3290a00c23f217975763).
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { accessSync, chmodSync, closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';

@@ -1,8 +1,8 @@
 # Runtime package entry
 
-Own `src/runtime/index.mjs`. It is the single public entry of `src/runtime/`, exposing the Runtime package contract (`lint`, `check`, `read`, `retry`, `simulate`, `jobs`, `health`, `mcp`, `local`, `draftInterfaces`, `contracts`, `exactValue`, `format`, `source`, `saved`, `workspace`, `render`, `causeText`, `cleanText`, `version`) together with the compatibility helpers, slice loaders, and constants consumed by pdd through [`src/runtime-seam.mjs`](runtime-seam.prompt.md).
+Own `src/runtime/index.mjs`. It is the single public entry of `src/runtime/`, exposing the Runtime package contract (`lint`, `check`, `read`, `retry`, `simulate`, `jobs`, `health`, `mcp`, `local`, `draftInterfaces`, `contracts`, `exactValue`, `format`, `source`, `saved`, `workspace`, `render`, `causeText`, `cleanText`, `version`) together with the compatibility helpers, slice loaders, and constants consumed by host callers and compatibility seams.
 
-No module under `src/runtime/` may import or address any relative path outside `src/runtime/`, and `src/runtime/index.mjs` itself has zero static `src/runtime/` submodule imports (importing only Node built-ins). Caller metadata (`client.version`, `client.commands`, `workflow.base_sha`) and host-owned capabilities (file-owner headers, approvals, local agent launchers, workflow evidence eligibility, native Story assessment, product Markdown document and world-writer parsers, SVG layout advisory, and screen comparison) arrive exclusively through request fields and `ports`. Direct `src/runtime/` functions require their host ports (failing with a descriptive unbound-port error when a required host capability is omitted); [`src/runtime-seam.mjs`](runtime-seam.prompt.md) is the compatible entry for pdd code and tests, supplying every host port with pdd's behavior.
+No module under `src/runtime/` may import or address any relative path outside `src/runtime/`, and `src/runtime/index.mjs` itself has zero static `src/runtime/` submodule imports (importing only Node built-ins). Caller metadata (`client.version`, `client.commands`, `workflow.base_sha`) and host-owned capabilities (file-owner headers, approvals, local agent launchers, workflow evidence eligibility, native Story assessment, product Markdown document and world-writer parsers, SVG layout advisory, and screen comparison) arrive exclusively through request fields and `ports`. Direct `src/runtime/` functions require their host ports (failing with a descriptive unbound-port error when a required host capability is omitted); host compatibility seams supply default host ports for CLI callers and tests.
 
 ## Public contract
 
@@ -39,28 +39,28 @@ Expose these thin wrappers over the underlying owner functions with zero behavio
 
 Expose these pure constants directly without loading any submodule (identical to their owner modules):
 
-- `LIMITS`: frozen `{ bytes: 10_485_760, files: 10_000 }` (`src/runtime/runtime-preflight.mjs`).
-- `TEST_SCHEMA`: `'prompt-runtime.program-scenario.v1'` (`src/runtime/runtime-preflight.mjs`).
-- `DRAFT_SERVER_TEXT`: `'The server does not run draft prompts yet. Approve the prompt first, or wait for the server update.'` (`src/runtime/runtime-preflight.mjs`).
-- `STALE_HINT`: `'the text changed after approval: set status to draft, run pdd test --fill-hash, ask the person'` (`src/runtime/runtime-preflight.mjs`), and `staleHint`: `` `pdd: ${STALE_HINT}.` ``.
-- `PROVIDER_TEXT`: `'the AI provider failed during the run. It is not a failed check. Do not send it again yet.'` (`src/runtime/runtime-outcome.mjs`).
-- `CHECK_STATES`: frozen `['waiting', 'sent', 'passed', 'failed', 'refused', 'partial', 'not run']` (`src/runtime/runtime-outcome.mjs`).
-- `OPEN_STATES`: `new Set(['queued', 'running', 'sent'])` (`src/runtime/runtime-output.mjs`).
+- `LIMITS`: frozen `{ bytes: 10_485_760, files: 10_000 }` (`runtime-preflight.mjs`).
+- `TEST_SCHEMA`: `'prompt-runtime.program-scenario.v1'` (`runtime-preflight.mjs`).
+- `DRAFT_SERVER_TEXT`: `'The server does not run draft prompts yet. Approve the prompt first, or wait for the server update.'` (`runtime-preflight.mjs`).
+- `STALE_HINT`: `'the text changed after approval: set status to draft, run pdd test --fill-hash, ask the person'` (`runtime-preflight.mjs`), and `staleHint`: `` `pdd: ${STALE_HINT}.` ``.
+- `PROVIDER_TEXT`: `'the AI provider failed during the run. It is not a failed check. Do not send it again yet.'` (`runtime-outcome.mjs`).
+- `CHECK_STATES`: frozen `['waiting', 'sent', 'passed', 'failed', 'refused', 'partial', 'not run']` (`runtime-outcome.mjs`).
+- `OPEN_STATES`: `new Set(['queued', 'running', 'sent'])` (`runtime-output.mjs`).
 
-PDD file-name test selection (`isStoryPath`, `hasAcceptance`, `expectedTestPath`, `matchTests`, `orphanSummary`, `selectTests`, `whyNoTests`, `NO_TESTS`), PDD state-to-exit mapping (`STATE_EXIT_CODES`, `COMMAND_EXIT_CODE`, `exitFor`, `outcomeExitCode`, `exitCodeFor`), and PDD PR paste-line words (`PROMPT_TESTS_LABEL`, `PROMPT_TESTS_WORDS`) live outside `src/runtime/` in [`src/test-selection.mjs`](test-selection.prompt.md), [`src/runtime-exit.mjs`](runtime-exit.prompt.md), and [`src/prompt-tests-words.mjs`](prompt-tests-words.prompt.md); `src/runtime/` functions receive them as ports.
+PDD file-name test selection (`isStoryPath`, `hasAcceptance`, `expectedTestPath`, `matchTests`, `orphanSummary`, `selectTests`, `whyNoTests`, `NO_TESTS`), PDD state-to-exit mapping (`STATE_EXIT_CODES`, `COMMAND_EXIT_CODE`, `exitFor`, `outcomeExitCode`, `exitCodeFor`), and PDD PR paste-line words (`PROMPT_TESTS_LABEL`, `PROMPT_TESTS_WORDS`) live in the host caller outside `src/runtime/`; `src/runtime/` functions receive them as injected ports.
 
 Expose these synchronous slice loaders (each loading and caching only its target owner module via `createRequire(import.meta.url)` on first call):
 
 | Slice loader | Target owner module |
 |---|---|
-| `runtimeScenarioJsonSlice()` | `src/runtime/scenario-json.mjs` |
-| `runtimeWorkspaceSlice()` | `src/runtime/runtime-workspace.mjs` |
-| `runtimeOutcomeSlice()` | `src/runtime/runtime-outcome.mjs` |
-| `runtimeOutputSlice()` | `src/runtime/runtime-output.mjs` |
-| `runtimePreflightSlice()` | `src/runtime/runtime-preflight.mjs` |
-| `runtimeAgentPacketSlice()` | `src/runtime/agent-packet.mjs` |
-| `runtimeCheckPlanSlice()` | `src/runtime/runtime-check-plan.mjs` |
-| `runtimeClientSlice()` | `src/runtime/runtime-client.mjs` |
+| `runtimeScenarioJsonSlice()` | `scenario-json.mjs` |
+| `runtimeWorkspaceSlice()` | `runtime-workspace.mjs` |
+| `runtimeOutcomeSlice()` | `runtime-outcome.mjs` |
+| `runtimeOutputSlice()` | `runtime-output.mjs` |
+| `runtimePreflightSlice()` | `runtime-preflight.mjs` |
+| `runtimeAgentPacketSlice()` | `agent-packet.mjs` |
+| `runtimeCheckPlanSlice()` | `runtime-check-plan.mjs` |
+| `runtimeClientSlice()` | `runtime-client.mjs` |
 
 ### Leaf and command exports
 
@@ -68,28 +68,28 @@ Load each owner module only when the exported function (or its slice loader) is 
 
 | Owner module | Exported bindings | Loading rule |
 |---|---|---|
-| `src/runtime/scenario-json.mjs` | `exactIntegerLeaves`, `exactValue`, `jsonSafe`, `parseScenarioJson`, `roundedNumberTokens`, `stringifyScenarioJson`, `withExactIntegers` | Load synchronously on first call via `runtimeScenarioJsonSlice()` |
-| `src/runtime/runtime-workspace.mjs` | `allowsRuntimePath`, `loadRuntimeWorkspace`, `requireRuntimePath` | Load synchronously on first call via `runtimeWorkspaceSlice()` |
-| `src/runtime/runtime-outcome.mjs` | `CHECK_STATES`, `PROVIDER_TEXT`, `hasProgress`, `outcomeDone`, `outcomeFor`, `outcomeOverall`, `outcomeText`, `progressText`, `resultOutcome`, `resultOverall` | Constants immediate; functions load synchronously on first call via `runtimeOutcomeSlice()` |
-| `src/runtime/runtime-output.mjs` | `OPEN_STATES`, `PROVIDER_TEXT`, `causeText`, `cleanText`, `coverageText`, `jsonRow`, `progressTicker`, `projectAnswer`, `refusalView`, `renderJson`, `renderText`, `sinceText`, `stepTimeLimit`, `storyLines`, `summaryLine`, `tryUsage`, `tryUsageHeaders`, `tryUsageLine`, `validLink` | Constants immediate; functions load synchronously on first call via `runtimeOutputSlice()` |
-| `src/runtime/runtime-preflight.mjs` | `DRAFT_SERVER_TEXT`, `LIMITS`, `PreflightError`, `STALE_HINT`, `TEST_SCHEMA`, `captureSource`, `checkInput`, `createStrictSourceAccess`, `defaultMaxCalls`, `discoveryRefusal`, `discoveryVisibleFiles`, `exactNumberSpelling`, `executableInterfaceText`, `fillHashes`, `findTests`, `formatSize`, `formatWarningLines`, `gitFiles`, `hasPromptInterface`, `interfaceBlocks`, `interfaceFormatWarnings`, `interfaceKindProblems`, `interfaceSchemaProblems`, `isSecretPath`, `numberWarnings`, `otherFiles`, `preflight`, `promptRefusal`, `promptSchemaRefusals`, `proseSha256`, `readPrompt`, `scenarioShapeRefusal`, `schemaKeywordWarningLines`, `sha256`, `sharedSourceFiles`, `sourceFilePort`, `staleHint`, `storyCriteria`, `tarFiles` | Constants immediate; `PreflightError` forwards constructor and `Symbol.hasInstance` lazily; functions load synchronously on first call via `runtimePreflightSlice()` |
-| `src/runtime/agent-packet.mjs` | `buildAgentInput` | Load synchronously on first call via `runtimeAgentPacketSlice()` |
-| `src/runtime/runtime-check-plan.mjs` | `baselineReport`, `buildCheckPlan`, `checkPlanResultLines`, `checkPlanResults`, `selectCheckTests` | Load synchronously on first call via `runtimeCheckPlanSlice()` |
-| `src/runtime/product-composition.mjs` | `composeProductTry`, `productTapCallBound`, `selectJourneys` | Load synchronously on first call via `createRequire(import.meta.url)` |
-| `src/runtime/agent-guide.mjs` | `createTryGuide` | Load synchronously on first call via `createRequire(import.meta.url)` |
-| `src/runtime/agent-project.mjs` | `buildProjectCard`, `readAgentScenarios` | Load synchronously on first call via `createRequire(import.meta.url)` |
-| `src/runtime/contracts.mjs` | `runContracts` | Load synchronously on first call via `createRequire(import.meta.url)` |
-| `src/runtime/runtime-slots.mjs` | `runJobs` | `await import('./runtime-slots.mjs')` when called |
-| `src/runtime/interface-draft.mjs` | `loadInterfaceDraft`, `runAutomaticApproval`, `runInterfaceDraft` | `await import('./interface-draft.mjs')` when called (`loadInterfaceDraft` resolves to `{ contractCoverage, coverageView, missingInterfaces }`) |
-| `src/runtime/agent-chat.mjs` | `createAgentBridge` | `await import('./agent-chat.mjs')` when called |
-| `src/runtime/agent-ask.mjs` | `askAgent` | `await import('./agent-ask.mjs')` when called |
-| `src/runtime/runtime-workspace-migration.mjs` | `migrateRuntimeWorkspace` | `await import('./runtime-workspace-migration.mjs')` when called |
-| `src/runtime/try-mcp.mjs` | `createTryTools`, `runMcp` | `createTryTools` loads synchronously on first call via `createRequire(import.meta.url)`; `runMcp` uses `await import('./try-mcp.mjs')` |
-| `src/runtime/try-doors.mjs` | `openCli`, `runShim`, `saveLast` | `await import('./try-doors.mjs')` when called |
-| `src/runtime/try-http.mjs` | `openServe` | `await import('./try-http.mjs')` when called |
-| `src/runtime/runtime-client.mjs` | `acquireCaseWriteOwnership`, `acquireRuntimeBatchLock`, `applyPendingCase`, `applyPendingCaseWithHandoff`, `checkRuntimeHealth`, `createSavedStoryEvidenceReader`, `defaultLineReader`, `loadRuntimeClient`, `readContractHistory`, `readTryOwner`, `resendableStoryChecks`, `runCheck`, `runDoorCall`, `runTry`, `runtimeOrigin`, `runtimeWorkspaceMigrationStore`, `saveDoorCase`, `saveDoorCaseResult`, `savedStoryEvidence` | Synchronous helpers (`createSavedStoryEvidenceReader`, `defaultLineReader`, `readContractHistory`, `runtimeOrigin`, `runtimeWorkspaceMigrationStore`, `saveDoorCase`, `saveDoorCaseResult`) load on first call via `runtimeClientSlice()`; async entries use `await import('./runtime-client.mjs')` (`loadRuntimeClient` resolves to `{ DEFAULT_RUNTIME_URL, checkRuntimeHealth, runtimeOrigin }`, keeping `DEFAULT_RUNTIME_URL` defined in `src/runtime/runtime-client.mjs` alone) |
+| `scenario-json.mjs` | `exactIntegerLeaves`, `exactValue`, `jsonSafe`, `parseScenarioJson`, `roundedNumberTokens`, `stringifyScenarioJson`, `withExactIntegers` | Load synchronously on first call via `runtimeScenarioJsonSlice()` |
+| `runtime-workspace.mjs` | `allowsRuntimePath`, `loadRuntimeWorkspace`, `requireRuntimePath` | Load synchronously on first call via `runtimeWorkspaceSlice()` |
+| `runtime-outcome.mjs` | `CHECK_STATES`, `PROVIDER_TEXT`, `hasProgress`, `outcomeDone`, `outcomeFor`, `outcomeOverall`, `outcomeText`, `progressText`, `resultOutcome`, `resultOverall` | Constants immediate; functions load synchronously on first call via `runtimeOutcomeSlice()` |
+| `runtime-output.mjs` | `OPEN_STATES`, `PROVIDER_TEXT`, `causeText`, `cleanText`, `coverageText`, `jsonRow`, `progressTicker`, `projectAnswer`, `refusalView`, `renderJson`, `renderText`, `sinceText`, `stepTimeLimit`, `storyLines`, `summaryLine`, `tryUsage`, `tryUsageHeaders`, `tryUsageLine`, `validLink` | Constants immediate; functions load synchronously on first call via `runtimeOutputSlice()` |
+| `runtime-preflight.mjs` | `DRAFT_SERVER_TEXT`, `LIMITS`, `PreflightError`, `STALE_HINT`, `TEST_SCHEMA`, `captureSource`, `checkInput`, `createStrictSourceAccess`, `defaultMaxCalls`, `discoveryRefusal`, `discoveryVisibleFiles`, `exactNumberSpelling`, `executableInterfaceText`, `fillHashes`, `findTests`, `formatSize`, `formatWarningLines`, `gitFiles`, `hasPromptInterface`, `interfaceBlocks`, `interfaceFormatWarnings`, `interfaceKindProblems`, `interfaceSchemaProblems`, `isSecretPath`, `numberWarnings`, `otherFiles`, `preflight`, `promptRefusal`, `promptSchemaRefusals`, `proseSha256`, `readPrompt`, `scenarioShapeRefusal`, `schemaKeywordWarningLines`, `sha256`, `sharedSourceFiles`, `sourceFilePort`, `staleHint`, `storyCriteria`, `tarFiles` | Constants immediate; `PreflightError` forwards constructor and `Symbol.hasInstance` lazily; functions load synchronously on first call via `runtimePreflightSlice()` |
+| `agent-packet.mjs` | `buildAgentInput` | Load synchronously on first call via `runtimeAgentPacketSlice()` |
+| `runtime-check-plan.mjs` | `baselineReport`, `buildCheckPlan`, `checkPlanResultLines`, `checkPlanResults`, `selectCheckTests` | Load synchronously on first call via `runtimeCheckPlanSlice()` |
+| `product-composition.mjs` | `composeProductTry`, `productTapCallBound`, `selectJourneys` | Load synchronously on first call via `createRequire(import.meta.url)` |
+| `agent-guide.mjs` | `createTryGuide` | Load synchronously on first call via `createRequire(import.meta.url)` |
+| `agent-project.mjs` | `buildProjectCard`, `readAgentScenarios` | Load synchronously on first call via `createRequire(import.meta.url)` |
+| `contracts.mjs` | `runContracts` | Load synchronously on first call via `createRequire(import.meta.url)` |
+| `runtime-slots.mjs` | `runJobs` | `await import('./runtime-slots.mjs')` when called |
+| `interface-draft.mjs` | `loadInterfaceDraft`, `runAutomaticApproval`, `runInterfaceDraft` | `await import('./interface-draft.mjs')` when called (`loadInterfaceDraft` resolves to `{ contractCoverage, coverageView, missingInterfaces }`) |
+| `agent-chat.mjs` | `createAgentBridge` | `await import('./agent-chat.mjs')` when called |
+| `agent-ask.mjs` | `askAgent` | `await import('./agent-ask.mjs')` when called |
+| `runtime-workspace-migration.mjs` | `migrateRuntimeWorkspace` | `await import('./runtime-workspace-migration.mjs')` when called |
+| `try-mcp.mjs` | `createTryTools`, `runMcp` | `createTryTools` loads synchronously on first call via `createRequire(import.meta.url)`; `runMcp` uses `await import('./try-mcp.mjs')` |
+| `try-doors.mjs` | `openCli`, `runShim`, `saveLast` | `await import('./try-doors.mjs')` when called |
+| `try-http.mjs` | `openServe` | `await import('./try-http.mjs')` when called |
+| `runtime-client.mjs` | `acquireCaseWriteOwnership`, `acquireRuntimeBatchLock`, `applyPendingCase`, `applyPendingCaseWithHandoff`, `checkRuntimeHealth`, `createSavedStoryEvidenceReader`, `defaultLineReader`, `loadRuntimeClient`, `readContractHistory`, `readTryOwner`, `resendableStoryChecks`, `runCheck`, `runDoorCall`, `runTry`, `runtimeOrigin`, `runtimeWorkspaceMigrationStore`, `saveDoorCase`, `saveDoorCaseResult`, `savedStoryEvidence` | Synchronous helpers (`createSavedStoryEvidenceReader`, `defaultLineReader`, `readContractHistory`, `runtimeOrigin`, `runtimeWorkspaceMigrationStore`, `saveDoorCase`, `saveDoorCaseResult`) load on first call via `runtimeClientSlice()`; async entries use `await import('./runtime-client.mjs')` (`loadRuntimeClient` resolves to `{ DEFAULT_RUNTIME_URL, checkRuntimeHealth, runtimeOrigin }`, keeping `DEFAULT_RUNTIME_URL` defined in `runtime-client.mjs` alone) |
 
-`runTry(input, ports)` forwards `ports.tryLauncherUrl` to `openCli` when supplied so the host CLI can pin a stable launcher module URL outside `src/runtime/`; when omitted, `openCli` falls back to `src/runtime/try-doors.mjs`.
+`runTry(input, ports)` forwards `ports.tryLauncherUrl` to `openCli` when supplied so the host CLI can pin a stable launcher module URL outside `src/runtime/`; when omitted, `openCli` falls back to `try-doors.mjs`.
 
 ## Dependencies
 
@@ -113,6 +113,6 @@ Load each owner module only when the exported function (or its slice loader) is 
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"native-only","status":"draft","prose_sha256": "a5545ec818b2deb918c91f91ffb9f40f337c7f0380b1f3abcd8bf11120bcb1be","reason":"Exposes live JavaScript ESM static and deferred dynamic-import bindings across src/runtime/ submodules, which bound Runtime ports cannot fake."}
+{"kind":"native-only","status":"draft","prose_sha256": "777c3a9247d5359ff767eedf9ba0358f79064f8e1bac6d62a4404f64f5145771","reason":"Exposes live JavaScript ESM static and deferred dynamic-import bindings across src/runtime/ submodules, which bound Runtime ports cannot fake."}
 ```
 </details>

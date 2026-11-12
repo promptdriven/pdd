@@ -78,6 +78,25 @@ test('LEAD one terminal answer lists and approves gate and both draft hashes',as
  for(const path of selected){const text=fs.readFileSync(join(r.root,path),'utf8');assert.match(text,/"status": "approved"/);assert.ok(display.join('\n').includes(path));assert.ok(display.join('\n').includes(proseSha256(text)));}
  const saved=readJournal(r.root);assert.equal(saved.approvals.length,1);assert.equal(saved.approvals[0].prompts.length,2);assert.equal(saved.approvals[0].route,'terminal');
 });
+function referencedGatePrompt(root,path,schema){
+ const file=join(root,path),text=fs.readFileSync(file,'utf8'),match=text.match(/```json\n([\s\S]*?)\n```/);assert.ok(match,'fixture prompt has one interface');
+ const iface=JSON.parse(match[1]);fs.mkdirSync(join(root,'contracts'),{recursive:true});fs.writeFileSync(join(root,'contracts/input.json'),JSON.stringify({customerName:schema.properties.customerName}));
+ iface.entries[0].input_schema.properties.customerName={$contract:'contracts/input.json#/customerName'};fs.writeFileSync(file,text.replace(match[1],JSON.stringify(iface)));
+}
+test('2919 workflow gate approves an expanded contract reference and preserves its authored bytes',async t=>{
+ const {f,r,selected}=await ready(t),path=selected[0],before=fs.readFileSync(join(r.root,path),'utf8'),iface=JSON.parse(before.match(/```json\n([\s\S]*?)\n```/)[1]);
+ referencedGatePrompt(r.root,path,iface.entries[0].input_schema);
+ const shown=await stepDone({step:'prompt-story',summary:'Show the referenced contract',cwd:r.root},f.agentPorts());assert.equal(shown.exitCode,0,shown.message);f.herdr.idle();
+ const out=await approveRun({ref:'17',cwd:r.root,said:'approve the referenced contract'},f.agentPorts());assert.equal(out.exitCode,0,out.message);
+ const approved=fs.readFileSync(join(r.root,path),'utf8');assert.match(approved,/"\$contract":"contracts\/input\.json#\/customerName"/);assert.match(approved,/"status":"approved"/);
+});
+test('2919 workflow gate refuses an invalid expanded contract reference before approval',async t=>{
+ const {f,r,selected}=await ready(t),path=selected[0],text=fs.readFileSync(join(r.root,path),'utf8'),iface=JSON.parse(text.match(/```json\n([\s\S]*?)\n```/)[1]),invalid=structuredClone(iface.entries[0].input_schema);
+ invalid.properties.customerName.type='not-a-schema-type';referencedGatePrompt(r.root,path,invalid);
+ const shown=await stepDone({step:'prompt-story',summary:'Show the invalid referenced contract',cwd:r.root},f.agentPorts());assert.equal(shown.exitCode,0,shown.message);f.herdr.idle();
+ const out=await approveRun({ref:'17',cwd:r.root,said:'approve the invalid referenced contract'},f.agentPorts());assert.equal(out.exitCode,1);assert.match(out.message,/graph-schema-type-invalid/);
+ assert.match(fs.readFileSync(join(r.root,path),'utf8'),/"status":"draft"/);assert.equal(fs.existsSync(journal(r.root)),false);
+});
 for(const bad of ['malformed','symlink'])test(`LEAD preservation ${bad} selected prompt never mutates another draft`,async t=>{
  const {f,r,selected}=await ready(t),good=fs.readFileSync(join(r.root,selected[0]),'utf8'),target=join(r.root,selected[1]);
  if(bad==='malformed')fs.writeFileSync(target,'<details><summary>Runtime interface</summary>\n```json\n{broken}\n```\n</details>\n');

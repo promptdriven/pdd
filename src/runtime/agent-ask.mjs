@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-ask.prompt.md (sha256: 6b92a0c6511f9ab3021f09cc2fa3f5a227247d033732dcc71acf9ad53afce0d9).
+// Generated from prompts/cli/agent-ask.prompt.md (sha256: 021b3b80bebd4fb2786cf40bb0bcc94eb8bb6a029aa014bfed309104a7906517).
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync, chmodSync, mkdirSync, lstatSync, openSync, fstatSync, closeSync, fchmodSync, constants } from 'node:fs';
 import { tmpdir } from 'node:os';

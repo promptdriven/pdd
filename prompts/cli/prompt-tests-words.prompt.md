@@ -13,11 +13,11 @@ None.
 
 ## Caller navigation
 
-[`src/workflow-runner.mjs`](workflow-runner.prompt.md#prompt-tests-lines) and [`src/workflow-view.mjs`](workflow-view.prompt.md) import these constants to parse and normalize PR evidence lines; [`src/runtime-seam.mjs`](runtime-seam.prompt.md) re-exports them and supplies `PROMPT_TESTS_LABEL` as `promptTestsLabel` to [`src/runtime/runtime-output.mjs`](runtime-output.prompt.md#prompt-tests-line) and [`src/runtime/runtime-client.mjs`](runtime-client.prompt.md).
+[Workflow runner](workflow-runner.prompt.md#prompt-tests-lines) and [Workflow view](workflow-view.prompt.md) import these constants to parse and normalize PR evidence lines; [PDD to Runtime seam](runtime-seam.prompt.md) re-exports them and supplies `PROMPT_TESTS_LABEL` as `promptTestsLabel` to [Runtime output](runtime-output.prompt.md#prompt-tests-line) and [Runtime client](runtime-client.prompt.md).
 
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"native-only","status":"draft","prose_sha256":"221edf3350be3e0713f6ae26221ebb81b75242c69ba9f85cc4a08c2d7388373e","reason":"Exports pure JavaScript string constants for PDD PR evidence labels and regular-expression patterns with no callable Runtime entry."}
+{"kind":"native-only","status":"draft","prose_sha256":"a4da9db9ae844f1cbd7882096924dc35ac82fde431c06056131d67465e46e184","reason":"Exports pure JavaScript string constants for PDD PR evidence labels and regular-expression patterns with no callable Runtime entry."}
 ```
 </details>

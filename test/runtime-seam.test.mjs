@@ -2563,3 +2563,139 @@ test('SEAM20: whyNoTests preserves workspace preflight errors through the compat
     error => error instanceof seam.PreflightError && error.exitCode === 4 && error.code === 'workspace-config-invalid',
   );
 });
+
+test('SEAM21: repo prompt dependency graph has zero cycles and modified Runtime prompts link no host PDD prompts', async () => {
+  const seam = await import('../src/runtime-seam.mjs');
+  const { contractCoverage } = await seam.loadInterfaceDraft();
+  const dummyIface = { status: 'draft', prose_sha256: '', entries: [], calls: [], resources: [], limits: { max_steps: 1, max_model_calls: 1 } };
+  const prompts = [...seam.discoveryVisibleFiles({ root, excludeFixtureProjects: true })].filter(p => p.endsWith('.prompt.md')).sort();
+  const cycles = [];
+  for (const path of prompts) {
+    try {
+      contractCoverage({ root, path, iface: dummyIface });
+    } catch (error) {
+      if (String(error?.message ?? '').includes('cycle')) cycles.push(`${path}: ${error.message}`);
+    }
+  }
+  assert.deepEqual(cycles, []);
+
+  const runtimeModuleNames = walk('src/runtime')
+    .filter(p => p.endsWith('.mjs'))
+    .map(p => p.replace(/^src\/runtime\//, '').replace(/\.mjs$/, ''));
+  const runtimePrompts = new Set(runtimeModuleNames.map(n => (n === 'index' ? 'prompts/cli/runtime-entry.prompt.md' : `prompts/cli/${n}.prompt.md`)));
+  const splitRuntimePrompts = [
+    'prompts/cli/agent-ask.prompt.md',
+    'prompts/cli/agent-chat.prompt.md',
+    'prompts/cli/agent-guide.prompt.md',
+    'prompts/cli/agent-project.prompt.md',
+    'prompts/cli/contracts.prompt.md',
+    'prompts/cli/interface-draft.prompt.md',
+    'prompts/cli/product-composition.prompt.md',
+    'prompts/cli/runtime-client.prompt.md',
+    'prompts/cli/runtime-entry.prompt.md',
+    'prompts/cli/runtime-outcome.prompt.md',
+    'prompts/cli/runtime-output.prompt.md',
+    'prompts/cli/runtime-preflight.prompt.md',
+    'prompts/cli/runtime-slots.prompt.md',
+    'prompts/cli/runtime-workspace-migration.prompt.md',
+    'prompts/cli/try-doors.prompt.md',
+  ];
+  const inwardLinks = [];
+  for (const promptPath of splitRuntimePrompts) {
+    const text = readFileSync(join(root, promptPath), 'utf8');
+    for (const match of text.matchAll(/\[[^\]]*\]\(([^)\s]+\.prompt\.md[^)\s]*)\)/g)) {
+      const raw = match[1];
+      if (/^https?:\/\//i.test(raw)) continue;
+      const target = raw.split('#')[0];
+      const resolved = posix.normalize(posix.join(posix.dirname(promptPath), target));
+      if (!runtimePrompts.has(resolved)) inwardLinks.push(`${promptPath} -> ${resolved}`);
+    }
+  }
+  assert.deepEqual(inwardLinks, []);
+});
+
+test('SEAM22: draftInterfaces succeeds when prompt prose names a moved src/<name>.mjs path', async t => {
+  const { mkdirSync, writeFileSync } = await import('node:fs');
+  const { harbor } = await import('./runtime-fake.mjs');
+  const seam = await import('../src/runtime-seam.mjs');
+  const setup = harbor(t, repo => {
+    mkdirSync(join(repo, 'src/runtime'), { recursive: true });
+    writeFileSync(join(repo, 'src/runtime/moved-leaf.mjs'), 'export function scoreOrder(input) { return input; }\n');
+    writeFileSync(
+      join(repo, 'prompts/moved-leaf.prompt.md'),
+      '# Moved leaf\n\nOwn `src/moved-leaf.mjs`. Export `scoreOrder(input)` returning the order score.\n',
+    );
+  });
+  let out = '';
+  const code = await seam.draftInterfaces(
+    { cwd: setup.repo, paths: ['prompts/moved-leaf.prompt.md'], json: true },
+    { stdout: { write: chunk => { out += chunk; } }, stderr: { write: () => {} } },
+  );
+  const parsed = JSON.parse(out);
+  const rows = parsed.rows ?? parsed;
+  const row = rows.find(item => item.path === 'prompts/moved-leaf.prompt.md');
+  assert.ok(row, `expected row for moved-leaf prompt, got ${out}`);
+  assert.equal(row.state, 'drafted', JSON.stringify(row));
+  assert.notEqual(code, 2);
+});
+
+test('SEAM23: unbound-port errors propagate with unboundPort: true across product composition, screen check, and automatic approval', async t => {
+  const runtime = await import('../src/runtime/index.mjs');
+  const { composeProductTry } = await import('../src/runtime/product-composition.mjs');
+  const { runAutomaticApproval } = await import('../src/runtime/interface-draft.mjs');
+
+  assert.throws(
+    () => composeProductTry({ root: '/repo' }, {}),
+    error => hasControlledDiagnostic(error) && error.unboundPort === true,
+  );
+
+  assert.throws(
+    () => composeProductTry(
+      { root: '/repo', parts: ['shop'], journey: 'user_stories/journeys/j1.md' },
+      {
+        parseProductDocuments: () => {
+          throw Object.assign(new Error('inner unbound port'), { unboundPort: true });
+        },
+        parseProductWorldWriters: () => [],
+        statFile: () => ({ exists: true, is_symlink: false, size: 10 }),
+        readFile: () => '',
+      },
+    ),
+    error => hasControlledDiagnostic(error) && error.unboundPort === true && !error.code,
+  );
+
+  await assert.rejects(
+    () => runtime.runCheck(
+      { cwd: root, words: [], options: { '--screen': 'http://127.0.0.1:9', '--drawing': 'drawing.svg' } },
+      { stdout: { write: () => {} }, stderr: { write: () => {} } },
+    ),
+    error => hasControlledDiagnostic(error) && error.unboundPort === true,
+  );
+
+  let approvalErr = '';
+  const missingApprovalCode = await runAutomaticApproval(
+    { path: 'prompts/place_order.prompt.md', root, tests: 'npm test' },
+    { stdout: { write: () => {} }, stderr: { write: chunk => { approvalErr += chunk; } } },
+  );
+  assert.equal(missingApprovalCode, 4);
+  assert.ok(approvalErr.trim().length > 0);
+
+  await assert.rejects(
+    () => runAutomaticApproval(
+      { path: 'prompts/place_order.prompt.md', root, tests: 'npm test' },
+      {
+        stdout: { write: () => {} },
+        stderr: { write: () => {} },
+        readApprovalPolicy: () => {
+          throw Object.assign(new Error('downstream port unbound'), { unboundPort: true });
+        },
+        approvalActor: () => 'tester',
+        recordPromptApproval: async () => {},
+        readPromptApprovals: () => ({ approvals: [] }),
+        approvePromptText: text => text,
+        promptPath: () => 'prompts/place_order.prompt.md',
+      },
+    ),
+    error => hasControlledDiagnostic(error) && error.unboundPort === true,
+  );
+});
