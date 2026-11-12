@@ -1,7 +1,7 @@
 # PDD Architecture Map
 
 In `pdd`, prompts are the source of truth and code follows them.
-Every behavior prompt in `prompts/` declares the files it owns in its `claims:` frontmatter.
+Module ownership comes from `pdd-bindings.json` (`modules`), a `Generated from <prompt.md> (sha256: ...)` header in the owned file's first 4 KiB, or an opening-sentence prose claim (`Own src/foo.mjs.`).
 Run `node bin/pdd.mjs owner <path>` before you edit any file to see which prompt owns it.
 Check the shared helpers table below before you write any file, GitHub, secret, or state helper.
 
@@ -14,7 +14,7 @@ flowchart TD
   end
 
   subgraph D2["2. Preflight, Lint and Contracts"]
-    LINT["runtime-preflight.mjs, contracts.mjs<br/>runtime-bindings.mjs, project-files.mjs"]
+    LINT["runtime-preflight.mjs, contracts.mjs<br/>runtime-binding-plan.mjs, project-files.mjs"]
   end
 
   subgraph D3["3. Runtime Client and Native Replay"]
@@ -49,9 +49,9 @@ flowchart TD
 ### Domain Guide
 
 1. **CLI & Routing** (`bin/pdd.mjs`, `pdd-cli.mjs`, `command-catalog.mjs`, `argument-parser.mjs`, `completion.mjs`, `skills-install.mjs`, `project-setup.mjs`, `agent-mcp-setup.mjs`, `interpreter-version.mjs`)
-   Parses command flags, routes public commands, prints help, and installs skills or project settings.
+   Parses command flags, routes public commands, prints help, checks `$PATH` shadowing, and installs skills or project settings.
 2. **Preflight, Lint & Contracts** (`runtime-preflight.mjs`, `runtime-markdown.mjs`, `contracts.mjs`, `contract-refs.mjs`, `interface-draft.mjs`, `prompt-approve.mjs`, `runtime-bindings.mjs`, `runtime-binding-plan.mjs`, `project-files.mjs`, `svg-layout.mjs`)
-   Parses prompts, validates `pdd-interface` blocks, checks approvals, resolves bindings, and checks SVG or JSON contracts.
+   Parses prompts, validates `<details><summary>Runtime interface</summary>` JSON blocks, checks approvals, resolves ```` ```pdd-boundary ```` plans and bindings, and checks SVG or JSON contracts.
 3. **Runtime Client & Native Replay** (`runtime-client.mjs`, `runtime-check-plan.mjs`, `runtime-outcome.mjs`, `runtime-output.mjs`, `runtime-slots.mjs`, `runtime-lint-receipt.mjs`, `try-doors.mjs`, `try-http.mjs`, `try-mcp.mjs`, `screen-compare.mjs`, `agent-chat.mjs`, `product.mjs`, `product-composition.mjs`)
    Runs `pdd test`, `pdd lint`, `pdd simulate`, `pdd try`, `pdd chat`, and multi-part `pdd product` checks.
 4. **Workflow Gates & Runs** (`workflow-runner.mjs`, `workflow-runs.mjs`, `workflow-worktree.mjs`, `workflow-chat.mjs`, `workflow-story-card.mjs`, `workflow-replay.mjs`, `workflow-results.mjs`, `workflow-prove.mjs`, `workflow-pr-body.mjs`, `workflow-pr-evidence.mjs`, `workflow-github.mjs`, `workflow-view.mjs`, `workflow-inventory.mjs`)
@@ -65,15 +65,17 @@ flowchart TD
 
 | Path | What Belongs Here | Rule |
 | :--- | :--- | :--- |
-| `prompts/cli/*.prompt.md` | Module behavior specs and Runtime `pdd-interface` contracts. | Declare owned files in `claims:`. Keep prose clear and free of code details. |
-| `src/*.mjs` | ESM modules using `node:*` built-in packages only. | Follow the owning prompt in `prompts/cli/`. Reuse helpers from Domain 6. |
+| `prompts/cli/*.prompt.md` | Module behavior specs and `<details><summary>Runtime interface</summary>` (`json` code fence) blocks. | Record owned files in `pdd-bindings.json` or `Generated from` headers (opening-sentence prose claims are fallback). Keep prose clear and free of code details. |
+| `src/*.mjs` | ESM modules using `node:*` built-in packages only. | Include the `Generated from <prompt.md> (sha256: ...)` header and reuse helpers from Domain 6. |
 | `bin/pdd.mjs` | Thin CLI entry script. | Keep startup minimal and delegate routing to `src/pdd-cli.mjs`. |
-| `user_stories/*.md` | Human-readable product Stories with `## Acceptance criteria`. | Describe user outcomes, not helper unit checks. Add a ````pdd-boundary` block when linking docs. |
-| `test/runtime/*.json` | Paid Runtime scenario fixtures paired with `user_stories/<slug>.md`. | Reserve for user-facing Story checks that exercise a Runtime `pdd-interface`. |
+| `user_stories/*.md` | Human-readable product Stories with `## Acceptance criteria`. | Describe user outcomes, not helper unit checks. Add a ```` ```pdd-boundary ```` block (`src/runtime-binding-plan.mjs`) when linking docs. |
+| `test/runtime/*.json` | Paid Runtime scenario fixtures paired with `user_stories/<slug>.md`. | Reserve for user-facing Story checks that exercise a prompt's Runtime interface. |
 | `test/*.test.mjs` | Fast deterministic `node:test` suites and regression checks. | Put helper checks, parser vectors, edge cases, and state rules here. Run with `test/helpers/test-home.mjs`. |
 | `skills/<name>/SKILL.md` | Agent workflow playbooks (`pdd-prompting`, `pdd-feature`, `pdd-bug`, `pdd-small-change`, `pdd-product`, `pdd-setup`, `pdd-graph`). | Keep steps short and aligned with `docs/cli.md`. |
 | `docs/*.md` | User-facing reference guides (`cli.md`, `prompting-guide.md`, `replay-evidence.md`). | Write for a first-time reader in the present tense. Do not add version history notes. |
-| `~/.pdd/` (outside git) | Local workflow runs, GitHub ETag caches, cost ledgers, and Autopilot state. | Never commit runtime state, logs, receipts, or evidence JSON to a git repository. |
+| `<git-common-dir>/pdd/` (outside git) | Per-repo workflow `runs/<N>/`, prompt `approvals.json`, and `metrics/` transactions. | Never commit local state, logs, receipts, or evidence JSON to a git repository. |
+| `~/.pdd/runtime/` (`$PDD_STATE_DIR`) | Local Runtime client `batches/`, `slots/`, `tries/`, and `agent-chat.log`. | Isolate in tests via `test/helpers/test-home.mjs`. |
+| `~/.local/state/pdd/` | Cross-worktree `runs.json` index and `autopilot/` state (Autopilot runs, GitHub call ledgers, and ETag caches). | Isolate in tests via `test/helpers/test-home.mjs`. |
 
 ## Canonical Shared Helpers (Reuse, Do Not Duplicate)
 
@@ -81,33 +83,33 @@ Import these existing helpers instead of writing private copies inside feature m
 
 | Need | Canonical Module | Exported Functions to Reuse |
 | :--- | :--- | :--- |
-| **Secret redaction** | `src/secret-redaction.mjs` | `redactSecrets(text, extra)`, `rememberSecrets(values)`, `redactingValues(extra)`, `knownSecretValues()` |
-| **GitHub API calls, pagination & budget** | `src/github-calls.mjs` | `githubCall(spec, run)`, `githubListItems(spec, runPage)`, `githubEtagCache()`, `githubBudget()`, `githubFloorGuard()`, `countGithubCalls()` |
-| **File & prompt ownership lookup** | `src/file-owner.mjs` | `resolveOwners(root, paths)`, `findOwners(root, paths)`, `promptClaims(root)`, `headerPrompts(root)` |
-| **Workflow run state, atomic writes & Git root** | `src/workflow-runs.mjs` | `readRun(dir)`, `writeRun(dir, run)`, `updateRun(dir, fn)`, `resolveRun(opts)`, `stateDirFor(repo)`, `gitContext(cwd)` |
-| **Run, batch & mode file locks** | `src/workflow-runner.mjs`, `src/autopilot-launcher.mjs`, `src/runtime-client.mjs` | `acquireRunLock(...)`, `withAutopilotModeLock(...)`, `acquireRuntimeBatchLock(...)` |
-| **Exact JSON parse & stringify (64-bit safe)** | `src/scenario-json.mjs` | `parseScenarioJson(text)`, `stringifyScenarioJson(value)`, `jsonSafe(value)`, `withExactIntegers(value)` |
-| **Prompt reading, interface blocks & SHA-256** | `src/runtime-preflight.mjs` | `readPrompt(path)`, `interfaceBlocks(markdown)`, `proseSha256(text)`, `sha256(bytes)`, `preflight(opts)` |
-| **Path refusal & symlink diagnostics** | `src/path-diagnostic.mjs` | `pathDiagnostic(targetPath, opts)` |
-| **Token, Runtime & GitHub cost ledger** | `src/cost-ledger.mjs` | `captureCosts(...)`, `applyCostMeasurement(...)`, `recordCostGithub(...)`, `costReport(...)`, `costStatusLines(...)` |
-| **Prompt approvals & policy** | `src/approval-policy.mjs` | `readApprovalPolicy(root)`, `readPromptApprovals(root)`, `recordPromptApproval(root, entry)`, `approvalActor(env)` |
-| **Saved native session & approval evidence** | `src/approval-evidence.mjs` | `readApprovalEvidence(opts)`, `findNativeSessions(opts)` |
-| **Bounded workspace & path guards** | `src/runtime-workspace.mjs` | `loadRuntimeWorkspace(root)`, `allowsRuntimePath(ws, target)`, `requireRuntimePath(ws, target)` |
-| **Agent CLI discovery, auth & stdin packets** | `src/agent-adapters.mjs`, `src/agent-packet.mjs` | `discoverAgents(opts)`, `parseAgentAuthStatus(...)`, `runAgentProcess(...)`, `askAgent(...)`, `buildAgentInput(...)` |
-| **Machine CPU/RAM checks & shared suite queue** | `src/machine-resources.mjs`, `src/test-suite-queue.mjs` | `readMachineResources()`, `runTestSuite(opts)`, `calculateCheckCapacity(...)`, `readCheckStatus(...)` |
-| **Metrics event log & snapshots** | `src/metrics-store.mjs` | `appendEvents(...)`, `readEvents(...)`, `exportMetrics(...)`, `importMetrics(...)`, `validateSnapshot(...)` |
+| **Secret redaction** | `src/secret-redaction.mjs` | `redactSecrets(value, secrets = [])`, `rememberSecrets(...values)`, `redactingValues(emit, secrets)`, `knownSecretValues(env = process.env, secrets = [])` |
+| **GitHub API calls, HTTP replies & budget** | `src/github-calls.mjs` | `githubCall(args = [])`, `githubReply(text)`, `githubListArgs(pick = '.')`, `githubListItems(stdout)`, `githubEtagCache({ root, repository, fs, now })`, `githubBudget({ usage, share, floor })`, `githubFloorGuard({ floor, entries, now } = {})`, `countGithubCalls(exec, { ledger, purpose, now } = {})` |
+| **File & prompt ownership lookup** | `src/file-owner.mjs` | `resolveOwners({ paths, bindings, heads, prompts } = {})`, `findOwners({ root, paths = [] }, ports = {})`, `promptClaims(promptPath, content)`, `headerPrompts(content)` |
+| **Workflow run state, atomic writes & Git root** | `src/workflow-runs.mjs` | `readRun(runDir)`, `writeRun(run, ports = {})`, `updateRun(runDir, update, ports = {})`, `resolveRun(ref, { cwd }, ports = {})`, `stateDirFor(ports = {})`, `gitContext(cwd, ports = {})` |
+| **Run, batch & mode file locks** | `src/workflow-runner.mjs`, `src/autopilot-launcher.mjs`, `src/runtime-client.mjs` | `acquireRunLock(runDir, filename = 'chat-replacement.lock')`, `withAutopilotModeLock({ cwd, env }, action, ports = {})`, `acquireRuntimeBatchLock(folder, { onWarning } = {})` |
+| **Exact JSON parse & stringify (64-bit safe)** | `src/scenario-json.mjs` | `parseScenarioJson(text)`, `stringifyScenarioJson(value, space)`, `jsonSafe(value)`, `withExactIntegers(value, leaves)`, `exactIntegerLeaves(value)` |
+| **Prompt reading, interface blocks & SHA-256** | `src/runtime-preflight.mjs` | `readPrompt(root, visible, path, workspace)`, `interfaceBlocks(text)`, `proseSha256(text)`, `sha256(bytes)`, `preflight({ root, found, selected, workspace })` |
+| **`$PATH` command shadowing diagnostic** | `src/path-diagnostic.mjs` | `pathDiagnostic({ packageRoot, cwd, env, mode })` *(diagnoses `$PATH` shadowing of `pdd`, e.g. Conda reordering `PATH`)* |
+| **Token, Runtime & GitHub cost ledger** | `src/cost-ledger.mjs` | `captureCosts(before, run, ports = {})`, `applyCostMeasurement(run, input, at)`, `recordCostGithub(runDir, entry, { fs } = {})`, `costReport(runs, now)`, `costStatusLines(report)` |
+| **Prompt approvals & policy** | `src/approval-policy.mjs` | `readApprovalPolicy({ root }, ports = {})`, `readPromptApprovals({ commonDir }, ports = {})`, `recordPromptApproval({ commonDir, evidence }, ports = {})`, `approvalActor(env = process.env)` |
+| **Saved native session & approval evidence** | `src/approval-evidence.mjs` | `readApprovalEvidence(request, ports = {})`, `findNativeSessions(stage, ports = {})` |
+| **Bounded workspace & path guards** | `src/runtime-workspace.mjs` | `loadRuntimeWorkspace({ root }, files)`, `allowsRuntimePath(policy, path)`, `requireRuntimePath(policy, { path, from, chain, role })` |
+| **Agent CLI discovery, auth & stdin packets** | `src/agent-adapters.mjs`, `src/agent-packet.mjs` | `discoverAgents({ cwd, env, run, definitions } = {})`, `parseAgentAuthStatus({ agent, result } = {})`, `runAgentProcess(command, args, options = {})`, `askAgent(options = {})`, `buildAgentInput({ context, entries, supportsApply, supportsRun } = {})` |
+| **Machine CPU/RAM checks & shared suite queue** | `src/machine-resources.mjs`, `src/test-suite-queue.mjs` | `readMachineResources({ cwd } = {}, ports = {})`, `runTestSuite({ cwd, command, timeout, env }, ports = {})`, `calculateCheckCapacity({ checks, runs } = {}, ports = {})`, `readCheckStatus({ env = process.env, checks, runs }, ports = {})` |
+| **Metrics event log & snapshots** | `src/metrics-store.mjs` | `appendEvents({ root, events }, ports = {})`, `readEvents({ root }, ports = {})`, `exportMetrics({ root, metadata }, ports = {})`, `importMetrics({ root, bundle }, ports = {})`, `validateSnapshot(s, repository)` |
 
-> **State file rule:** Do not add another private temp-file `writeFileSync` + `renameSync` helper, private `JSON.parse(readFileSync(...))` wrapper, or local `gh api --include` header parser. Reuse `writeRun` / `updateRun` for workflow state, `parseScenarioJson` / `stringifyScenarioJson` for exact JSON, `sha256` from `src/runtime-preflight.mjs`, and `githubCall` / `githubListItems` from `src/github-calls.mjs`.
+> **State file rule:** Do not add another private temp-file `writeFileSync` + `renameSync` helper, private `JSON.parse(readFileSync(...))` wrapper, or local `gh api --include` header parser. Reuse `writeRun` / `updateRun` for workflow state, `parseScenarioJson` / `stringifyScenarioJson` for exact JSON, `sha256` from `src/runtime-preflight.mjs`, and `githubReply` / `githubListArgs` / `githubListItems` from `src/github-calls.mjs`.
 
 ## Layering and Test Boundaries
 
 Keep dependencies flowing downward toward Domain 6 (`Shared Foundations`):
 
-- **Domain 6 stays leaf-level.** Modules in Shared Foundations (`secret-redaction.mjs`, `github-calls.mjs`, `file-owner.mjs`, `scenario-json.mjs`, `path-diagnostic.mjs`) must not import CLI routers, workflow runners, or Autopilot modules.
+- **Domain 6 stays mostly leaf-level.** Pure foundation modules (`secret-redaction.mjs`, `scenario-json.mjs`, `path-diagnostic.mjs`, `cost-ledger.mjs`, `approval-policy.mjs`, `runtime-workspace.mjs`, `metrics-store.mjs`) do not import higher domains; the narrow exceptions are `file-owner.mjs` and `agent-adapters.mjs` importing prompt/file helpers from `runtime-preflight.mjs` (Domain 2), and `test-suite-queue.mjs` importing `validation-evidence.mjs` and dynamically importing `acquireRunLock` from `workflow-runner.mjs` (Domain 4). Do not add new upward imports into Domain 6.
 - **Domain 2 stays local and fast.** Preflight, lint, and contract checks (`runtime-preflight.mjs`, `contracts.mjs`, `runtime-bindings.mjs`) inspect repo files without paid network calls.
 - **Paid Runtime Story vs. Native Unit Test:**
-  - Create a `user_stories/<slug>.md` + `test/runtime/<slug>.json` pair only for real user-facing product behavior that exercises an entry prompt's `pdd-interface`.
-  - Always add a ````pdd-boundary` block in a Story when linking `AGENTS.md`, `RUNBOOK.md`, or reference docs so `pdd test` checks only the Story's own prompt closure.
+  - Create a `user_stories/<slug>.md` + `test/runtime/<slug>.json` pair only for real user-facing product behavior that exercises an entry prompt's Runtime interface.
+  - Always add a ```` ```pdd-boundary ```` block in a Story when linking `AGENTS.md`, `RUNBOOK.md`, or reference docs so `pdd test` checks only the Story's own prompt closure.
   - Put parser edge cases, JSON field checks, state-file locks, and shared helper rules in fast native `test/*.test.mjs` files instead of separate micro-Stories.
 
 ## Before You Open a Pull Request
