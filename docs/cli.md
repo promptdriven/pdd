@@ -784,6 +784,23 @@ An explicitly selected Story with a `Native validation` owner link is assessed f
 
 For a built screen, serve the app in the state shown by its drawing and run, for example, `pdd test --screen http://127.0.0.1:8080/ --drawing prompts/views/active__stacked.ui.svg`. Set `PDD_CHROME_PATH` to a Chrome/Chromium executable when discovery needs help. The command checks every visible text occurrence and id, including numeric values, at the SVG viewport; metadata, hidden and context-only drawing regions are excluded. It accepts center differences of at most 15% per viewport axis and requires the same spatial order of separated parts. It prints a `Screen vs drawing` table for the code PR; retain any stricter accepted visual comparator. Exit codes are 0 for pass, 1 for mismatch, 2 for invalid input and 5 when browser/navigation execution fails. `--screen` requires `--drawing`, accepts only `--json` alongside them and takes no Story names. JSON includes the comparison rows and `exit_code`.
 
+For a supported Simulator Screen viewer, comparison waits up to 10 seconds after
+page load for readiness, app fonts and layout. It inspects only the marked
+same-origin app iframe or open shadow surface, using the app's local viewport.
+Shell labels and offsets do not participate. Comparison never opens the app,
+clicks controls or sends an action. If the app is not open, deliberately open it
+before rerunning; opening can spend AI calls.
+
+Exit 6 means the Screen is not ready, rather than a drawing mismatch. Text gives
+the state, reason and next step without a parts table. JSON contains exactly
+`drawing`, `url`, `outcome` (`not-ready`), `code` (`screen-not-ready`), `state`,
+`reason`, `message` and `exit_code` (6), without `rows` or `passed`. Reasons include
+`timeout`, `not-open`, `state-read-failed`, `render-failed`, `action-unknown`,
+`surface-unavailable` and `viewer-update-required`. An old or unsupported viewer
+must be updated before comparison. An unknown action needs read-only state
+reconciliation; the comparator never sends it again. Ordinary page reports and
+exit codes remain as described above.
+
 See [Check prompts on the PDD interpreter](USAGE.md#7-check-prompts-on-the-pdd-interpreter) for the exit codes, `pdd test --help`, `pdd lint --help` and `pdd simulate --help` for the options, and `RUNBOOK.md` for the file formats.
 
 The Simulator's agent fills the fields directly when supported. It runs the action only when you explicitly ask, in your own words; otherwise you press Run. Actions use the simulation budget. Older pages keep manual Fill fields and Run.
