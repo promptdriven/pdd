@@ -166,6 +166,54 @@ test('3146 source drift restarts conservative planning before dispatch and inclu
   assert.deepEqual(result.output.check_selection.baseline_tests,[]);assert.match(result.ports.stderr.text,/checking every Story conservatively before any paid Check/);
 });
 
+test('3146 newly discovered variants during capture are selected before any paid dispatch',async t=>{
+  for(const phase of ['first planning capture','selected capture','last planning capture','post-cache planning capture'])await t.test(phase,async t=>{
+    const setup=affectedFixture(t);setup.change('docs/shared.md');
+    const added='test/runtime/A.new.json';let changed=false,sawSelectedCapture=false,captures=0,plansAfterSelected=0;
+    const fake=await affectedRuntime(t,setup),result=await check(setup,fake,{cache:true,extra:{captureSource(root,selection){
+      captures++;
+      const captured=captureSource(root,selection),selectedCapture=selection.tests?.length===3;
+      if(sawSelectedCapture && !selectedCapture)plansAfterSelected++;
+      const changeNow=phase==='first planning capture'?captures===1:phase==='selected capture'?selectedCapture:
+        phase==='post-cache planning capture'?plansAfterSelected===2:sawSelectedCapture;
+      if(changeNow && !changed){
+        assert.equal(checks(fake).length,0,'discovery must stabilize before any Check');
+        changed=true;put(setup.repo,added,JSON.parse(readFileSync(join(setup.repo,'test/runtime/A.json'),'utf8')));
+      }
+      if(selectedCapture)sawSelectedCapture=true;
+      return captured;
+    }}});
+    assert.equal(changed,true,phase);assert.equal(result.code,0,result.ports.stderr.text);
+    const expected=sorted([...setup.tests,added]);
+    assert.ok(checks(fake).some(row=>row.request.scenario===added),'Check dispatch must include the newly discovered A variant');
+    assert.deepEqual(sorted(checks(fake).map(row=>row.request.scenario)),expected);
+    assert.deepEqual(sorted(result.output.check_selection.tests),expected);
+    assert.deepEqual(result.output.check_selection.baseline_tests,[]);
+    assert.deepEqual(sorted(result.output.rows.map(row=>row.test)),expected);
+    const saved=batch(setup,result.output.batch);
+    assert.deepEqual(sorted(saved.source_selection.tests),expected);
+    assert.equal(saved.source_selection.exclude_fixture_projects,true);
+    assert.deepEqual(sorted(saved.check_plan.stories.find(row=>row.story_path==='user_stories/A.md').tests),sorted(['test/runtime/A.json','test/runtime/A.recorded.json',added]));
+    const cache=JSON.parse(readFileSync(join(setup.repo,'.pdd/cache/test/stories.json'),'utf8'));
+    assert.deepEqual(cache.latest_identity.in_progress,[]);
+  });
+});
+
+test('3146 repeatedly changing discovery stops locally instead of looping or dispatching stale membership',async t=>{
+  const setup=affectedFixture(t);setup.change('docs/shared.md');let captures=0;
+  const fake=await affectedRuntime(t,setup),result=await check(setup,fake,{cache:true,extra:{captureSource(root,selection){
+    const captured=captureSource(root,selection);
+    captures++;
+    assert.ok(captures<10,'planning must terminate under repeated discovery drift');
+    put(setup.repo,`test/runtime/A.new${captures}.json`,JSON.parse(readFileSync(join(setup.repo,'test/runtime/A.json'),'utf8')));
+    return captured;
+  }}});
+  assert.equal(result.code,4,result.ports.stderr.text);
+  assert.match(result.ports.stderr.text,/Source selection kept changing during planning/);
+  assert.equal(fake.posts.length,0);assert.equal(result.clock.gh.length,0);
+  assert.equal(existsSync(join(setup.repo,'.pdd/cache/test/stories.json')),false);
+});
+
 
 test('3146 staged-unstaged-untracked-saved-base: real untracked closure and committed saved-base changes remain selected',async t=>{
   const data=vector('staged-unstaged-untracked-saved-base');

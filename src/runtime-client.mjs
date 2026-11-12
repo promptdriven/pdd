@@ -3461,11 +3461,36 @@ async function runBatch(context, cwd, words, options, setRelease) {
   });
   const base = runs.length === 1 && /^[a-f0-9]{40}$/.test(runs[0].baseSha ?? '') ? runs[0].baseSha : 'HEAD';
   const planningPorts = {capture:ports.captureSource,...ports.checkPlanPorts};
+  // Discovery is part of selection authority, including complete sibling variants.
+  // Recheck after captures too: a capture can observe a newly created test that
+  // was absent from the discovery result passed to the planner.
+  const discoveryScope = current => ({tests:current.tests,visible:current.discoveryVisible ?? current.visible,workspace:current.workspace});
+  const initialDiscovery = discoveryScope(found);
+  let discoveryChanged = false, cache = null;
+  const discover = () => {
+    const current = localSetup(cwd, words);
+    discoveryChanged ||= !isDeepStrictEqual(initialDiscovery,discoveryScope(current.found));
+    return current;
+  };
   const planFor = rows => {
-    const plan = buildCheckPlan({root,found,selected:inventory,rows,full:true,base,affected:!context.forceAffectedFull},planningPorts);
+    const current = discover();
+    const plan = buildCheckPlan({root,found:current.found,selected:select(current.found,current.normalized,root),rows,full:true,base,affected:!context.forceAffectedFull},planningPorts);
+    discover();
     return context.forceAffectedFull ? {...plan,stories:plan.stories.map(story=>({...story,role:'target',reason:'conservative: source selection changed during planning'}))} : plan;
   };
-  const restartConservatively = () => {
+  const restartConservatively = async () => {
+    // A late discovery change can follow provisional cache admission. Retire
+    // only this attempt's mark, leaving its invalidations and other owners intact.
+    if (cache?.mark) await cacheTransaction(cache, data => {
+      if (data.latest_identity?.in_progress) {
+        data.latest_identity.in_progress = data.latest_identity.in_progress.filter(mark=>mark.token!==cache.mark.token);
+        Object.assign(data.latest_identity,{clean:false,conflict:true});
+      }
+    });
+    if (context.testCache === cache) context.testCache = null;
+    if ((context.affectedPlanningRestarts ?? 0) >= 3)
+      throw new Stop(4,'Source selection kept changing during planning. No checks were sent. Run a fresh pdd test --affected once local source is stable.');
+    context.affectedPlanningRestarts = (context.affectedPlanningRestarts ?? 0) + 1;
     context.forceAffectedFull = true;
     line(ports.stderr,'Source selection changed during planning; checking every Story conservatively before any paid Check.');
     return runBatch(context,cwd,words,options,setRelease);
@@ -3473,16 +3498,19 @@ async function runBatch(context, cwd, words, options, setRelease) {
   let classification;
   if (affected) {
     classification = planFor([]);
+    if (discoveryChanged) return restartConservatively();
     // Re-read local membership before any dispatch preflight or cache mutation.
     const revalidated = planFor([]);
     const first = selectCheckTests(classification,{affected:true}), second = selectCheckTests(revalidated,{affected:true});
     classification = revalidated;
-    if (!isDeepStrictEqual(first.tests,second.tests)) return restartConservatively();
+    if (discoveryChanged || !isDeepStrictEqual(first.tests,second.tests)) return restartConservatively();
     context.checkSelection = selectCheckTests(classification,{affected:true});
     selected = inventory.filter(test=>context.checkSelection.tests.includes(test.path));
     context.baselineReport = await readBaselineReport(context,classification,ports.baselineIdentity ?? null);
+    discover();
+    if (discoveryChanged) return restartConservatively();
   }
-  const cache = context.cacheEnabled ? await openTestCache(context, root, !!options['--cache-clear'], found.visible) : null;
+  cache = context.cacheEnabled ? await openTestCache(context, root, !!options['--cache-clear'], found.visible) : null;
   if (cache && !cache.disabled && options['--lf'] && !options['--cache-clear'] && cache.history) {
     const failures = selected.filter(test => cache.failed[test.storyPath] === true);
     if (failures.length) selected = failures;
@@ -3507,8 +3535,10 @@ async function runBatch(context, cwd, words, options, setRelease) {
   context.checkPlan = affected ? planFor(rows) : buildCheckPlan({root,found,selected,rows,full:words.length === 0,base},planningPorts);
   if (affected) {
     const finalSelection = selectCheckTests(context.checkPlan,{affected:true});
-    if (!isDeepStrictEqual(finalSelection.tests,context.checkSelection.tests)) return restartConservatively();
+    if (discoveryChanged || !isDeepStrictEqual(finalSelection.tests,context.checkSelection.tests)) return restartConservatively();
     context.baselineReport = await readBaselineReport(context, context.checkPlan, ports.baselineIdentity ?? null);
+    discover();
+    if (discoveryChanged) return restartConservatively();
   }
   for (const value of checkPlanLines(context.checkPlan)) line(ports.stderr, value);
   if (!words.length && context.checkPlan.prerequisites.length) {
@@ -3535,13 +3565,19 @@ async function runBatch(context, cwd, words, options, setRelease) {
     if (cache) await beginTestAttempts(cache,rows,null,options,origin);
     return printResult(context,rows);
   }
-  if (affected && !isDeepStrictEqual(selectCheckTests(planFor([]),{affected:true}).tests,context.checkSelection.tests)) return restartConservatively();
+  if (affected) {
+    const validated = selectCheckTests(planFor([]),{affected:true});
+    if (discoveryChanged || !isDeepStrictEqual(validated.tests,context.checkSelection.tests)) return restartConservatively();
+  }
   context.sourceSelection = {tests:sentTests(rows),exclude_fixture_projects:words.length === 0};
   context.warnings.push(...(capture.warnings ?? []));
   if (cache) await beginTestAttempts(cache, rows, capture, options, origin);
   context.testCache = cache;
   const fresh = rows.filter(row => !row.cached);
-  if (!fresh.some(row => row.state === 'ready')) return printResult(context, rows);
+  if (!fresh.some(row => row.state === 'ready')) {
+    if (affected) { discover(); if (discoveryChanged) return restartConservatively(); }
+    return printResult(context, rows);
+  }
   context.otherNote = otherNote(otherFiles(capture.files, found).length);
   let identity;
   try { identity = signIn(ports.gh, context.store); }
@@ -3554,7 +3590,11 @@ async function runBatch(context, cwd, words, options, setRelease) {
     });
     throw error;
   }
-  if (affected) context.baselineReport = await readBaselineReport(context, context.checkPlan, identity);
+  if (affected) {
+    context.baselineReport = await readBaselineReport(context, context.checkPlan, identity);
+    const validated = selectCheckTests(planFor([]),{affected:true});
+    if (discoveryChanged || !isDeepStrictEqual(validated.tests,context.checkSelection.tests)) return restartConservatively();
+  }
   const startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
   const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   Object.assign(context, { capture, identity, batch, startedAt, deadline: Infinity, rows,
