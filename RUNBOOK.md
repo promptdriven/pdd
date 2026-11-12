@@ -776,7 +776,7 @@ the Story's "As a …" line, §2), the changed files and their +/− counts itse
 green" in a summary stays your words. In the PR title and description your words cannot close an issue: pdd breaks
 each closing keyword (fix, close, resolve and their forms) in the title, the summary, the cases, the file notes and
 verify.md, so only pdd's `Closes #N` closes one. Code spans and code blocks stay as you wrote them (GitHub reads no
-reference there). A commit message can close an issue, so do not write "Fixes #N" in one. Outside `pdd workflow` (including integration or release PRs into `main`), write one `Closes #N` line per completed issue in the PR body, and `Refs #N` for any partial issue. In the readable part your
+reference there). A commit message can close an issue, so do not write "Fixes #N" in one. Outside a workflow run (including integration or release PRs into `main`), write one `Closes #N` line per completed issue in the PR body, and `Refs #N` for any partial issue. In the readable part your
 words also cannot add a link or a mention. Separate the cells of a `Case:` line with `|`; put a value that has a `|`
 in a code span. Do not paste logs, warnings or full paths of this computer (`/Users/…`). PR 1 cannot merge while a
 prompt in it is still draft.
