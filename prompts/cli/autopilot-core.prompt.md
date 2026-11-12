@@ -410,6 +410,8 @@ any other pdd (for example an older global install).
   later reviewer; a repeated finding requires this evidence too. Carry red findings
   through every remediation route, including an agent update after red checks on a
   mechanical head, so later reviewers receive the findings and demand this proof.
+  Supply each full retained finding with its stable, append-order reference `R1`,
+  `R2`, and so on, to every later reviewer; keep the full findings for context.
 - **Review** (in `worktrees/N-review`, a detached checkout of the head): a fresh agent
   that did not write the change. It gets the base owner table of the PR's changed files
   and the R5 hints (below), and checks the issue fit; (2) Path and (3) Tests with the
@@ -427,7 +429,14 @@ any other pdd (for example an older global install).
   result `pass`; `behavior {result, detail}` has result `pass` for a real app or Try
   exercise and describes it, or `not-applicable` with a nonblank reason; and
   `regressions` contains `{finding, path, command, result, before}` for every supplied
-  repair finding. For a behavioral finding each field is nonblank, result is `pass`, and `before`
+  repair finding. `finding` may be its supplied reference or its full text. A supplied stable reference
+  takes precedence when it also equals another finding's full text. A single
+  evidence record may instead use a nonempty `findings` array of those references
+  or full texts to cover several findings. Alternatively, `findings: "all"` covers every
+  supplied finding at the reviewed head and is valid only when at least one finding was
+  supplied. The reviewer verifies each finding and uses this marker only when the
+  evidence record covers all of them. Extra full-text evidence is allowed;
+  reject unknown `R` references, malformed fields and incomplete coverage. For a behavioral finding each field is nonblank, result is `pass`, and `before`
   records the failing old-code or planted reproduction. For a finding without changed
   public behavior, `result` may be `not-applicable` with a nonblank `reason` instead
   of path, command and before. The reviewer judges that reason against the finding. The fresh reviewer verifies the case is

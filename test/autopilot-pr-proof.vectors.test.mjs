@@ -14,10 +14,10 @@ const routes = {
   'not-applicable': [core, 'PR proof rejects'],
   'invalid-proof': [core, 'PR proof rejects'],
   'new-head': [core, 'D1 base refresh'],
-  'behavioral-repair': [formal, 'bounded proof gate'],
+  'behavioral-repair': [core, 'long suite failure|repair finding references'],
   'missing-regression': [formal, 'bounded proof gate'],
   'nonbehavioral-repair': [core, 'nonbehavioral repair reason'],
-  'attention': [core, 'attention snapshot'],
+  'attention': [core, 'attention snapshot|R5 should-fix'],
   'authority': [core, 'N1b a strict repository'],
 };
 for (const entry of cases.cases) test(`native case ${entry.id}`, () => {

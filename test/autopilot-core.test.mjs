@@ -668,6 +668,15 @@ test('R5 should-fix: a cleared tool error, a dead suite, a restart, a partial cl
   assert.equal(existsSync(join(w.root, 'jobs', '17.json')), false);
   assert.equal(alerts.length, 1); assert.equal(alerts[0].issue, 17); assert.match(alerts[0].text, /could not finish/);
   assert.match(readFileSync(join(w.root, 'history.jsonl'), 'utf8'), /"outcome":"abandoned"/);
+  assert.match(coreStatus({ state: w.state, settings: w.settings }, { root: w.root, now: w.now }), /Blocked jobs: 1/);
+  const history = join(w.root, 'history.jsonl');
+  const abandoned = readFileSync(history, 'utf8');
+  mkdirSync(join(w.root, 'jobs'), { recursive: true });
+  writeFileSync(join(w.root, 'jobs', '17.json'), JSON.stringify({ issue: 17, phase: 'build' }));
+  assert.match(coreStatus({ state: w.state, settings: w.settings }, { root: w.root, now: w.now }), /Blocked jobs: 0/);
+  rmSync(join(w.root, 'jobs', '17.json'));
+  writeFileSync(history, abandoned + JSON.stringify({ issue: 17, outcome: 'merged', at: w.now(), text: 'done' }) + '\n');
+  assert.match(coreStatus({ state: w.state, settings: w.settings }, { root: w.root, now: w.now }), /Blocked jobs: 0/);
 });
 
 // ---- Review 2 regressions (each failed on cdb09e95a) ----------------------------------------------------
@@ -3411,4 +3420,46 @@ test('CI requires a successful check or status in auto and observe modes', async
     assert.equal(mode === 'auto' ? w.github.merges.includes(pr.number) : w.labels(17).includes('pdd:would-merge'), example.green, example.name);
     if (!example.green) assert.ok(!pr.comments.some(c => /CI: green/.test(c.body)), 'no published green CI claim');
   });
+});
+
+test('repair finding references cover long and accumulated findings with bounded proof', async t => {
+  const examples = [
+    { findings: ['R2', 'second finding'], references: ['R1', 'R2'], merged: true },
+    { findings: 1100, references: 'all', merged: true },
+    { findings: 50, references: Array.from({ length: 50 }, (_, i) => `R${i + 1}`), merged: true },
+    { findings: 50, references: ['R1'], merged: false },
+    { findings: 50, references: ['R1', 'R999'], merged: false },
+    { findings: 0, references: 'all', merged: false },
+    { findings: 1100, references: 'all', result: 'fail', merged: false },
+    { findings: 1100, references: 'all', before: '', merged: false },
+  ];
+  for (const example of examples) {
+    const w = await coreWorld(t, { settings: { runs: 1, repairs: 0 } });
+    w.issue(17); await w.tick(); w.build(17); await w.tick();
+    const review = w.job(17, 'review'), path = join(w.root, 'jobs', '17.json');
+    const saved = JSON.parse(readFileSync(path, 'utf8'));
+    saved.repairFindings = Array.isArray(example.findings) ? example.findings : Array.from({ length: example.findings }, (_, i) => i ? `finding ${i + 1}` : 'suite failure ' + 'x'.repeat(8000));
+    writeFileSync(path, JSON.stringify(saved));
+    const proof = { head: review.head, checks: [{ command: 'node --test', result: 'pass' }], behavior: { result: 'not-applicable', detail: 'no app' }, regressions: [{ findings: example.references, path: 'test/regression.mjs', command: 'node --test', result: example.result ?? 'pass', before: example.before ?? 'failed on old code' }] };
+    assert.ok(JSON.stringify(proof).length < 6000);
+    w.finish(17, 'review', { result: { verdict: 'PASS', head: review.head, summary: 'Reviewed', mustFix: [], proof } });
+    w.suite(17, 0); await w.tick(); await w.tick();
+    assert.equal(w.github.merges.length, example.merged ? 1 : 0, JSON.stringify(example));
+  }
+});
+
+test('long suite failure reaches a repaired merge using its reviewer reference', async t => {
+  const w = await coreWorld(t);
+  w.issue(17); await w.tick(); const first = w.build(17); await w.tick();
+  writeFileSync(w.job(17, 'suite').log, 'failure details ' + 'x'.repeat(9000));
+  w.review(17, 'PASS'); w.suite(17, 1); await w.tick();
+  assert.ok(jobFile(w, 17).repairFindings[0].length > 6000);
+  w.build(17, { role: 'repair' }); await w.tick();
+  const review = w.job(17, 'review');
+  const proof = { head: review.head, checks: [{ command: 'node --test', result: 'pass' }], behavior: { result: 'not-applicable', detail: 'no app' }, regressions: [{ finding: 'R1', path: 'test/regression.mjs', command: 'node --test', result: 'pass', before: 'failed on old code' }] };
+  w.finish(17, 'review', { result: { verdict: 'PASS', head: review.head, summary: 'Reviewed', mustFix: [], proof } });
+  w.suite(17, 0); await w.tick(); await w.tick();
+  assert.deepEqual(w.github.merges, [first.pr.number]);
+  assert.match(review.input, /"reference":"R1"/);
+  assert.match(review.input, /failure details x{100}/);
 });

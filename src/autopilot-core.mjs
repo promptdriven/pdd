@@ -470,7 +470,7 @@ ${workRules(ctx, job)}
 
 ${RESULT_RULES(result)}
 `;
-const reviewPrompt = (ctx, job, result) => `Review model: same-family (configured agent). Repair findings requiring regression proof: ${JSON.stringify(job.repairFindings ?? [])}.
+const reviewPrompt = (ctx, job, result) => `Review model: same-family (configured agent). Repair findings requiring regression proof (stable references and full text): ${JSON.stringify((job.repairFindings ?? []).map((finding, i) => ({ reference: `R${i + 1}`, finding })))}.
 You are a fresh reviewer for an Autopilot core job in ${ctx.repo}. You did not write this change.
 Review PR #${job.pr} (https://github.com/${ctx.repo}/pull/${job.pr}) at head ${job.head} for issue #${job.issue}. This folder is a clean checkout of that head.
 
@@ -482,7 +482,7 @@ ${job.paths?.owners ?? '(not read)'}${job.paths?.hints?.length ? `\nHints (promp
 Check: (1) the change does what the issue asks; (2) Path: the Path lines match the owner table. You may dispute the table only when you name a binding, header or prompt line that it missed. For a and c: the prompt states the issue's behavior in words that trace to the issue, not to the code, and the code agrees with it. For b: the quoted line really requires the fixed behavior, or the diff keeps the contract. For d: each changed value that a prompt states agrees with that prompt at this head. These are must-fixes: a new prompt for a non-code file; a binding or header added for an unowned file on the base; owned code that disagrees with its prompt. Do not ask for a new prompt for an unowned file. Do not judge commit order. (3) Tests: when the change alters a result through the public surface, a test checks it and fails on base, and no test was weakened. To make a missing test a must-fix, name the surface and the result that changed. Do not ask for a test that only copies a value from the diff. (4) the PR body has one honest Runtime line, and a Runtime FAIL line in the PR body means your verdict is FAIL; (5) no unrelated change, secret or unsafe effect.
 Read the change with: git fetch origin ${ctx.state.baseBranch} && git diff origin/${ctx.state.baseBranch}...HEAD. Install and build as needed, run focused tests and the affected public action, and exercise the real app or Try when applicable. Record the actual commands and results. For every repair finding, verify its regression case is tracked at this head, rerun its command and its failing old-code or planted reproduction. Only a finding without changed public behavior may use not-applicable with a reason. Do not run the full suite; it runs separately. Do not edit files, commit, push, comment, approve or merge.
 Before you exit, write this JSON file: ${result}
-{"verdict":"PASS" or "FAIL","head":"${job.head}","summary":"<one paragraph>","mustFix":["<each required fix>"],"proof":{"head":"${job.head}","checks":[{"command":"<executed command>","result":"pass"}],"behavior":{"result":"pass or not-applicable","detail":"<exercise or reason>"},"regressions":[{"finding":"<supplied finding>","path":"<tracked case>","command":"<executed command>","result":"pass","before":"<failing reproduction>"}]}}. For a finding without changed public behavior, a regression can instead be {"finding":"<finding>","result":"not-applicable","reason":"<reason>"}. A FAIL names at least one required fix. Start each item with its severity and its place: "P1 file:line ..." (wrong behavior or unsafe), "P2 file:line ..." (must be fixed before the merge) or "P3 file:line ..." (a follow-up that does not block the merge). One item per finding. A PASS lists only P3 items: any other item blocks the merge.
+{"verdict":"PASS" or "FAIL","head":"${job.head}","summary":"<one paragraph>","mustFix":["<each required fix>"],"proof":{"head":"${job.head}","checks":[{"command":"<executed command>","result":"pass"}],"behavior":{"result":"pass or not-applicable","detail":"<exercise or reason>"},"regressions":[{"finding":"<supplied finding>","path":"<tracked case>","command":"<executed command>","result":"pass","before":"<failing reproduction>"}]}}. Use the supplied reference or full finding text in finding; for shared evidence use a nonempty findings array or findings: "all" instead of finding. Use "all" only when findings were supplied and the evidence record covers every supplied finding at this head; verify each finding's regression. Every R reference must be supplied and every finding covered; extra full-text evidence is allowed. For a finding without changed public behavior, a regression can instead be {"finding":"<finding>","result":"not-applicable","reason":"<reason>"}. A FAIL names at least one required fix. Start each item with its severity and its place: "P1 file:line ..." (wrong behavior or unsafe), "P2 file:line ..." (must be fixed before the merge) or "P3 file:line ..." (a follow-up that does not block the merge). One item per finding. A PASS lists only P3 items: any other item blocks the merge.
 `;
 
 const conflictPrompt = (ctx, job, info, result) => `You are an Autopilot core conflict job for ${ctx.repo}, issue #${job.issue}, PR #${job.pr} on branch ${job.branch}.
@@ -990,7 +990,25 @@ async function ciState(ctx, head, job) {
 }
 const validReviewProof = (proof, job) => {
   const nonblank = value => typeof value === 'string' && value.trim().length > 0;
-  return object(proof) && JSON.stringify(proof).length <= 6000 && proof.head === job.head && Array.isArray(proof.checks) && proof.checks.length > 0 && proof.checks.every(c => object(c) && nonblank(c.command) && c.result === 'pass') && object(proof.behavior) && ['pass', 'not-applicable'].includes(proof.behavior.result) && nonblank(proof.behavior.detail) && Array.isArray(proof.regressions) && proof.regressions.every(x => object(x) && nonblank(x.finding) && (x.result === 'not-applicable' ? nonblank(x.reason) : x.result === 'pass' && ['path', 'command', 'before'].every(k => nonblank(x[k])))) && (job.repairFindings ?? []).every(f => proof.regressions.some(x => x.finding === f));
+  const findings = job.repairFindings ?? [];
+  const resolve = ref => {
+    const reference = findings.findIndex((_, i) => ref === `R${i + 1}`);
+    return reference === -1 ? findings.indexOf(ref) : reference;
+  };
+  if (!object(proof) || JSON.stringify(proof).length > 6000 || proof.head !== job.head || !Array.isArray(proof.checks) || !proof.checks.length || !proof.checks.every(c => object(c) && nonblank(c.command) && c.result === 'pass') || !object(proof.behavior) || !['pass', 'not-applicable'].includes(proof.behavior.result) || !nonblank(proof.behavior.detail) || !Array.isArray(proof.regressions)) return false;
+  const covered = new Set();
+  let coversAll = false;
+  for (const entry of proof.regressions) {
+    if (!object(entry)) return false;
+    const all = entry.findings === "all" && findings.length > 0;
+    const refs = all ? [] : entry.findings === undefined ? [entry.finding] : entry.findings;
+    if (!Array.isArray(refs) || (!all && !refs.length) || !refs.every(ref => nonblank(ref) && (resolve(ref) !== -1 || !/^R[0-9]+$/.test(ref)))) return false;
+    if (entry.findings !== undefined && entry.finding !== undefined) return false;
+    if (!(entry.result === 'not-applicable' ? nonblank(entry.reason) : entry.result === 'pass' && ['path', 'command', 'before'].every(k => nonblank(entry[k])))) return false;
+    if (all) coversAll = true;
+    for (const ref of refs) if (resolve(ref) !== -1) covered.add(resolve(ref));
+  }
+  return coversAll || findings.every((_, i) => covered.has(i));
 };
 async function reviewState(ctx, job) {
   if (!job.review || job.review.head !== job.head || job.review.retry || !job.review.agent && !job.review.verdict) {
@@ -2063,7 +2081,7 @@ export function coreStatus({ state, settings, sources = {} }, ports) {
     classified.add(row.issue);
     if (row.outcome === 'needs-person') categories['Open decisions'].push(`#${row.issue}: ${oneLine(row.question || row.text, 160)}`);
     else if (row.outcome === 'would-merge' && row.review?.head === row.head && row.review.verdict === 'PASS' && !row.review.kept && !row.review.scoped && validReviewProof(row.review.proof, row) && row.suite?.head === row.head && row.suite.result === 'pass' && row.ci?.head === row.head && row.ci.state === 'green') categories['Ready merges'].push(`#${row.issue}: ${oneLine(row.text, 160)}`);
-    else if (row.outcome === 'ended') categories['Blocked jobs'].push(`#${row.issue}: ${oneLine(row.text, 160)}`);
+    else if (['ended', 'abandoned'].includes(row.outcome)) categories['Blocked jobs'].push(`#${row.issue}: ${oneLine(row.text, 160)}`);
   }
   lines.push('Attention (saved snapshot):');
   for (const [label, items] of Object.entries(categories)) { lines.push(`${label}: ${items.length}`, ...items.slice(0, 5)); if (items.length > 5) lines.push(`  and ${items.length - 5} more`); }
