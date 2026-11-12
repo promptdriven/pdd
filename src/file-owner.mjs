@@ -1,4 +1,4 @@
-// Generated from prompts/cli/file-owner.prompt.md (sha256: e2da2bbb20ca838e010e6e7ba8a7a947e6f41bc61fc41e6c0b510ddff03d4d69).
+// Generated from prompts/cli/file-owner.prompt.md (sha256: 4263fd21a5218625f98dbbd847dd4845b858747ac9d0be3952793fb17015ab3e).
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { closeSync, fstatSync, openSync, readSync, realpathSync } from 'node:fs';
@@ -40,7 +40,7 @@ export function promptHeaderHash(content) {
   return sha256(Buffer.from(behavior + text.slice(at), 'utf8'));
 }
 
-// The whole-file form is accepted as current through pdd 0.1.28 only (legacy: true).
+// The whole-file form remains accepted for compatibility and reports legacy: true.
 export function headerHashState(hash, promptContent) {
   if (promptContent === null || promptContent === undefined || promptContent === false) return { expected: null, state: 'unknown', legacy: false };
   const expected = promptHeaderHash(promptContent);

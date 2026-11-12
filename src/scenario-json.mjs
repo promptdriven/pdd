@@ -1,4 +1,4 @@
-// Generated from prompts/cli/scenario-json.prompt.md (sha256: 80fefc699838e7c089f836758490d434534a92498fef604139af902f20cd0bbf).
+// Generated from prompts/cli/scenario-json.prompt.md (sha256: 8401a10c681ff2ebb633b6021077daf1b5a1ef923ea40eed6c4be2b4b06722d7).
 // Exact whole numbers in Runtime scenario files: read, write and compare without rounding.
 
 const EXACT_INTEGER = /^-?(?:0|[1-9][0-9]*)$/;

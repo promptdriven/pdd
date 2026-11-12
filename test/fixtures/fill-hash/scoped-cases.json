@@ -66,6 +66,25 @@
       "exit_code": 0
     },
     {
+      "id": "contract-ref-and-symlink",
+      "criteria": [
+        "AC1"
+      ],
+      "words": [
+        "a"
+      ],
+      "setup": "Create contracts/real-shapes.json and tracked symlink contracts/shapes.json -> real-shapes.json; set prompts/a.prompt.md result_schema to {\"$contract\":\"contracts/shapes.json#/okResult\"}.",
+      "expected_filled": [
+        "prompts/a.prompt.md",
+        "prompts/shared.prompt.md"
+      ],
+      "unchanged": [
+        "prompts/b.prompt.md",
+        "prompts/unrelated.prompt.md"
+      ],
+      "exit_code": 0
+    },
+    {
       "id": "union-subdirectory",
       "criteria": [
         "AC1",
@@ -132,6 +151,19 @@
         "a",
         "missing"
       ],
+      "expected_writes": 0,
+      "exit_code": 2
+    },
+    {
+      "id": "unknown-lists-untested",
+      "criteria": [
+        "AC3"
+      ],
+      "words": [
+        "missing"
+      ],
+      "setup": "Add tracked Story untested without its test.",
+      "stderr_includes": "untested  no test (expected tests/untested.json)",
       "expected_writes": 0,
       "exit_code": 2
     },

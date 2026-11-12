@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 189ff3ca91d3eff4caee3ee6185928dd800201e1d4f51c8f87f5dc951bd4c337).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: bfb299b3e20bcd0748b68466e8db12c6a1898690654d8cd228a4c159b5b3ede3).
 import { markdownLinks, markdownDefinitions, markdownSectionText } from './runtime-markdown.mjs';
 import { buildBindingPlan, runtimeBoundary } from './runtime-binding-plan.mjs';
 import { createHash } from 'node:crypto';
@@ -302,6 +302,13 @@ const INTERPRETER_INTEGERS = { min: -(2n ** 53n - 1n), max: 2n ** 53n - 1n, text
 const outsideInterpreter = value => typeof value === 'bigint' && (value < INTERPRETER_INTEGERS.min || value > INTERPRETER_INTEGERS.max);
 // The interpreter's section of a test value: keys joined by ".", indexes as [N] (steps[10].input.seconds).
 const interpreterSection = path => path.reduce((text, part) => typeof part === 'number' ? `${text}[${part}]` : text ? `${text}.${part}` : String(part), '');
+// The exact Number spelling that the interpreter admits: a token with an exponent, so it is no integer literal, that
+// reads back as exactly this Number. String(n) has an exponent only from 1e21; below that (2^53 <= n < 1e21) it is plain
+// digits, which the interpreter refuses and which, as an integer literal, may even name another whole number.
+export function exactNumberSpelling(n) {
+  const text = /e/i.test(String(n)) ? String(n) : n.toExponential();
+  return Number(text) === n ? text : null;
+}
 // Advice only: the interpreter is the one place that refuses; the test is still sent.
 function interpreterIntegerWarning(doc, path) {
   let found = null;
@@ -313,9 +320,8 @@ function interpreterIntegerWarning(doc, path) {
   };
   visit(doc, []);
   if (!found) return null;
-  const section = interpreterSection(found.path), nearest = Number(found.value);
-  const spelling = Number.isFinite(nearest) && BigInt(nearest) === found.value
-    ? `If the parameter takes a Number, write its exact Number spelling ${String(nearest)}; the interpreter accepts it. ` : 'No JavaScript Number holds this value. ';
+  const section = interpreterSection(found.path), nearest = Number(found.value), exact = Number.isFinite(nearest) && BigInt(nearest) === found.value ? exactNumberSpelling(nearest) : null;
+  const spelling = exact ? `If the parameter takes a Number, write its exact Number spelling ${exact}; the interpreter accepts it. ` : 'No JavaScript Number holds this value. ';
   return `Warning: ${path} scenario-integer-out-of-range: ${section} is ${found.value}, outside the PDD interpreter's integer range ${INTERPRETER_INTEGERS.text}, `
     + 'so the interpreter refuses this test before execution (0 AI calls). ' + spelling
     + "Check the exact value in the repository's own vector test (RUNBOOK §17); do not change the input type or the expected value to fit the interpreter.";
@@ -1869,7 +1875,8 @@ export function prepareHashSelection({ root, cwd, words }, { capture = captureSo
   const selection = testWords.length ? selectTests(found, testWords) : {selected:[],unknown:[],untested:[]};
   if (selection.untested.length) throw new PreflightError(2, selection.untested.join('\n'));
   if (selection.unknown.length) {
-    const stories = found.tests.map(test => `  ${test.story}  ${test.path}${test.title && test.title !== test.story ? `  (${test.title})` : ''}`);
+    const stories = [...found.tests.map(test => `  ${test.story}  ${test.path}${test.title && test.title !== test.story ? `  (${test.title})` : ''}`),
+      ...(found.untested ?? []).map(item => `  ${item.story}  no test (expected ${expectedTestPath(item.storyPath)})`)];
     throw new PreflightError(2, [`Unknown story ${selection.unknown.map(word => JSON.stringify(word)).join(', ')}. Stories:`, ...stories].join('\n'));
   }
   for (const test of selection.selected) {
@@ -1878,7 +1885,7 @@ export function prepareHashSelection({ root, cwd, words }, { capture = captureSo
   }
   const captured = capture(root,{tests:[...selection.selected.map(test => test.path),...promptTargets],appMap:null,workspace});
   const inventory = captured.files.map(file => typeof file === 'string' ? file : file.path);
-  return { files: inventory, targets: [...new Set(inventory.filter(path => path.endsWith('.prompt.md')))] };
+  return { files: [...new Set([...files, ...inventory])], targets: [...new Set(inventory.filter(path => path.endsWith('.prompt.md')))] };
 }
 
 function captureWithPolicy(root, { attempts = 3, ...selection } = {}, strict = false) {

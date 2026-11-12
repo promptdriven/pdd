@@ -40,15 +40,15 @@ The Runtime client passes runtime-preflight’s captureSource(root,{tests,attemp
 
 - [Shared contract references](contract-refs.prompt.md): required generation/runtime context for expandSource and the native lossless JSON codec bindings; adapt files.stat/read to the same capture attempt’s safe readers.
 
-- [Product reader](product.prompt.md): authoritative pure parseProductDocuments, parseProductWorldWriters and exact Story ID matching.
+- [Product reader](product.prompt.md#product-composition-readers-and-journey-progress-808): authoritative pure parseProductDocuments, parseProductWorldWriters and exact Story ID matching.
 - [Preflight](runtime-preflight.prompt.md): authoritative discovery, schema, safety and capture helpers.
 
 <details><summary>Runtime interface</summary>
 
 ```json
 {
-  "status": "draft",
-  "prose_sha256": "3f009afef4de00831d7f35b3215fce80ca68f836c32579187fd3da0ac95ff955",
+  "status": "approved",
+  "prose_sha256": "31a6bf876c3ac1d6282b43a86aadc2c5b6c713a0186624dcbd2959fbd4b5f941",
   "entries": [
     {
       "operation": "composeProductTry",

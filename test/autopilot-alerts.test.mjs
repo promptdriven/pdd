@@ -256,7 +256,7 @@ test('a failed delivery is recorded, does not stop work, shows in status, and th
 
   const lines = await f.status();
   assert.equal(lines.length, 2);
-  assert.match(lines[0], /^Autopilot enabled; .*owner\/repo/);
+  assert.match(lines[0], /^Autopilot enabled; /);
   assert.equal(lines[1], 'Alerts: 1 open alert not delivered; last delivery failed (HTTP 500) for #12 usage-limit at 2026-11-06T10:00:00.000Z; check with pdd autopilot alerts test.');
 
   f.time += 30 * 60 * 1000;

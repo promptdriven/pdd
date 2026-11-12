@@ -23,14 +23,14 @@ const put = (root, path, text) => {
   writeFileSync(join(root, path), text);
 };
 
-function prompt(name, dependencies = [], status = 'draft') {
+function prompt(name, dependencies = [], status = 'draft', resultSchema = { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false }) {
   const interfaceValue = {
     status,
     prose_sha256: '',
     entries: [{
       operation: name,
       input_schema: { type: 'object', properties: {}, additionalProperties: false },
-      result_schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false },
+      result_schema: resultSchema,
       errors: [],
     }],
     calls: [],
@@ -70,7 +70,11 @@ function setup(t, vector) {
   const bDependencies = ['shared.prompt.md'];
   if (vector.id === 'unavailable-dependency') bDependencies.push('missing.prompt.md');
   if (vector.id === 'workspace-excluded-dependency') bDependencies.push('excluded.prompt.md');
-  put(repo, paths.A, prompt('a', ['shared.prompt.md']));
+  if (vector.id === 'contract-ref-and-symlink') {
+    put(repo, 'contracts/real-shapes.json', '{"okResult":{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"],"additionalProperties":false}}\n');
+    symlinkSync('real-shapes.json', join(repo, 'contracts/shapes.json'));
+    put(repo, paths.A, prompt('a', ['shared.prompt.md'], 'draft', { $contract: 'contracts/shapes.json#/okResult' }));
+  } else put(repo, paths.A, prompt('a', ['shared.prompt.md']));
   put(repo, paths.B, prompt('b', bDependencies, vector.id === 'partial-refusal' ? 'invalid' : 'draft'));
   put(repo, paths.shared, prompt('shared'));
   put(repo, paths.unrelated, prompt('unrelated'));
@@ -85,14 +89,14 @@ function setup(t, vector) {
     put(repo, paths.testA, scenario('a', paths.storyA, paths.A));
     put(repo, paths.testB, scenario('b', paths.storyB, paths.B));
   }
-  if (vector.id === 'untested-mixed') put(repo, 'user_stories/untested.md', story('untested'));
+  if (['untested-mixed', 'unknown-lists-untested'].includes(vector.id)) put(repo, 'user_stories/untested.md', story('untested'));
   if (vector.id === 'malformed-selected') put(repo, paths.testB, '{');
 
   git(repo, 'init', '-q');
   git(repo, 'add', '-A');
   git(repo, '-c', 'user.email=test@example.com', '-c', 'user.name=Test', 'commit', '-qm', 'initial');
   const before = new Map();
-  for (const path of [paths.A, paths.B, paths.shared, paths.unrelated, 'prompts/excluded.prompt.md']) {
+  for (const path of [paths.A, paths.B, paths.shared, paths.unrelated, 'prompts/excluded.prompt.md', 'contracts/real-shapes.json']) {
     try { before.set(path, readFileSync(join(repo, path), 'utf8')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
   return { repo, home, before };
@@ -139,6 +143,7 @@ test('2935: scoped fill-hash replays its native cases without network or authent
     assert.equal(result.code, vector.exit_code, `${vector.id}: ${result.stdout}${result.stderr}`);
     assert.deepEqual(result.calls, { fetch: 0, gh: 0 }, `${vector.id}: local only`);
     if (vector.exit_code !== 0) assert.ok(result.stdout || result.stderr, `${vector.id}: refusal is reported`);
+    if (vector.stderr_includes) assert.ok(result.stderr.includes(vector.stderr_includes), `${vector.id}: stderr includes ${vector.stderr_includes} (got: ${result.stderr})`);
     if (vector.stdout_each) for (const path of vector.expected_filled) {
       assert.ok(result.stdout.includes(vector.stdout_each.replace('PATH', path)), `${vector.id}: reports ${path}`);
     }
