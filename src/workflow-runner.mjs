@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 735cce86b6758d8f4981921304db1245e650784b36a2297af5f7b80d5e9670be).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 9be0ba959bf0733242627e526f1a48bf59d29bc60aea43fb55cd34e8d09377f8).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -279,7 +279,7 @@ async function changedFiles(run, p, strict = false) {
     return [...new Set([...tracked, ...untracked].filter(Boolean))];
   } catch (error) { if (strict) throw error; return []; }
 }
-const isScenario = text => JSON.parse(text)?.schema_version === 'prompt-runtime.program-scenario.v1';
+const isScenario = text => ['prompt-runtime.program-scenario.v1','pdd.native-scenario.v1'].includes(JSON.parse(text)?.schema_version);
 async function scenarioInventory(run, p, changed) {
   const paths = [];
   const saved=new Set(run.replayBaseline?.vectors?.map(vector=>vector.path)??[]);
@@ -414,7 +414,7 @@ function automaticPromptReturn(run,p) {
 const storyGateIndex = run => run.areas.some(area => area.before === 'approve') ? run.areas.findIndex(area => area.gate === 'approve') : -1;
 const atStoryGate = run => Boolean(run.gate) && !ended(run) && (run.gate.kind === 'approve' && run.area >= 0 && run.area === storyGateIndex(run)
   || run.gate.kind === 'approve-pr' && Boolean(run.gate.storyChanges?.length));
-const storyApprovalGate = (run,area) => area?.gate==='approve' || Boolean(run.gate?.storyChanges?.length);
+const storyApprovalGate = (run,area) => area?.gate==='approve' || Boolean(run.gate?.storyChanges?.length || run.gate?.nativeApproval);
 // Lines changed in each changed prompt against the run base; an untracked prompt counts all its lines as added.
 async function promptLineCounts(run, p, changed) {
   const counts = new Map();
@@ -2362,6 +2362,35 @@ async function normalCodeReview(run, area, p) {
     'Repair and check again, then run pdd workflow done check.'].join('\n'));
   return null;
 }
+async function nativePublicationEligible(run, contents, check, p) {
+  try {
+    if (!check.problems.length || check.problems.some(problem => problem.kind === 'failed')) return false;
+    const paths=contents.tests;
+    if (!paths.length) return false;
+    const docs=paths.map(path=>JSON.parse(readFileSync(join(run.root,path),'utf8')));
+    if (docs.some(doc=>doc.schema_version!=='pdd.native-scenario.v1' || typeof doc.story_path!=='string' || !doc.story_path || !Array.isArray(doc.steps) || !doc.steps.length)) return false;
+    if (pinReplayVectors(run.root,paths).outcome) return false;
+    const changed=await changedFiles(run,p,true);
+    const anchor=pinRunAnchor(run.root,{paths,commit:run.baseSha,changed,scenarios:paths,codeSpace:true});
+    if (anchor.outcome === 'blocked' && !anchor.reason?.startsWith('No approved original-vector anchor:')) return false;
+    const linkedRuntime=anchor.vectors.filter(vector=>vector.base && vector.snapshot?.schema_version === 'prompt-runtime.program-scenario.v1');
+    if (linkedRuntime.some(vector=>!check.tests.some(row=>row.path===vector.path && row.state==='passed') || check.problems.some(problem=>problem.path===vector.path))) return false;
+    const stories=new Set(docs.map(doc=>doc.story_path)), owners=new Set(docs.flatMap(doc=>doc.steps.map(step=>step.entry_path)));
+    if ((run.gate?.promptSnapshot??[]).some(row=>!owners.has(row.path))) return false;
+    if ((run.storyApproval?.fingerprint?.stories??[]).some(story=>story.criteria.length && !stories.has(story.path))) return false;
+    if (!docs.every(doc=>doc.steps.every(step=> {
+      if (typeof step.entry_path!=='string' || !step.entry_path.endsWith('.prompt.md') || !existsSync(join(run.root,step.entry_path)) || typeof step.runtime_reason!=='string' || !step.runtime_reason.trim()) return false;
+      const prompt=readFileSync(join(run.root,step.entry_path),'utf8'), blocks=interfaceBlocks(prompt);
+      const declarations=[...prompt.matchAll(/<summary\b[^>]*>\s*(?:<strong\b[^>]*>\s*)?Runtime\s+interface\b/gi)];
+      if (declarations.length !== blocks.length) return false;
+      if (!blocks.length) return true;
+      if (blocks.length!==1) return false;
+      const iface=JSON.parse(blocks[0][1]);
+      return !Array.isArray(iface.entries) || !iface.entries.some(entry=>entry.operation===step.operation);
+    }) && existsSync(join(run.root,doc.story_path)))) return false;
+    return !check.problems.some(problem=> !['missing','no-verdict','prompt-not-checked'].includes(problem.kind));
+  } catch { return false; }
+}
 async function normalPromptGate(run, area, step, p, lines, contents, packageRoot) {
   if (!storyCoverage(run)?.fingerprint || !Array.isArray(run.gate?.promptSnapshot)) return null;
   const changed = await changedStoryGate(run, area, step, p, lines);
@@ -2369,6 +2398,11 @@ async function normalPromptGate(run, area, step, p, lines, contents, packageRoot
   const paths = run.gate.promptSnapshot.map(row => row.path);
   const check = fullCheckPass({ root: run.root, since: run.promptReturn?.at ?? run.startedAt ?? 0, tests: contents.tests, stories: (storyCoverage(run)?.fingerprint.stories??[]).filter(story=>story.criteria.length).map(story=>story.path), prompts: paths }, p);
   if (check.pass) return automaticPr1(run, area, step, p, lines, check, packageRoot);
+  if (await nativePublicationEligible(run, contents, check, p)) {
+    const contract=await storyContract(run,p), paths=await storyContractPaths(run,p), snapshot=storyFingerprint({root:run.root,changed:await changedFiles(run,p)}), gateId=run.gate.id;
+    commitRun(run,p,latest=>{if(latest.gate?.id===gateId){latest.gate.nativeApproval=true;latest.gate.nativeSource=gitFingerprint(run.root);latest.gate.storyContract=contract;latest.gate.storyPaths=paths;latest.gate.storySnapshot=snapshot;}});
+    return done([...lines,`Native approval covers only ${contents.tests.join(', ')}; the repository-wide Runtime check did not pass. Explicit approval is required before publication.`, ...check.problems.slice(0,20).map(problem=>`Not passed (${problem.kind}): ${problem.path}: ${problem.detail}`),await cardText(run,p),approvalGuide(run,p.pdd)].join('\n'));
+  }
   // A typed summary cannot replace pdd's saved check results.
   if (!check.tests.length) lines.push('pdd has no saved check result of its own for this run. Run the check; do not ask the person to approve.');
   const shown = check.problems.slice(0, 20).map(problem => `Not passed (${problem.kind}): ${problem.path}: ${problem.detail}`);
@@ -3442,6 +3476,11 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
   if (ended(run) && !(askCode && run.gate?.kind === 'ask-code')) return fail(`The run for ${run.repo}#${run.number} is ${run.state}. There is nothing to approve.`);
   if (area.gate === 'pr' && !askCode && !beforePr) return fail(`Nothing to approve for #${run.number}: the ${area.name} area ends with ${prLabel(run, area)}, which pdd opens after its last step.${prOf(run, area.name) ? ` ${prLabel(run, area) === 'the PR' ? 'PR' : prLabel(run, area)}: ${prOf(run, area.name).url}` : ''}`);
   const approvalRecorded=protectProgress(run,p,{approval:true});
+  if (run.gate?.nativeApproval) {
+    const contents=await worktreeContents(run,p), snapshot=run.gate.promptSnapshot ?? [];
+    const check=fullCheckPass({root:run.root,since:run.promptReturn?.at ?? run.startedAt ?? 0,tests:contents.tests,stories:(run.storyApproval?.fingerprint.stories??[]).filter(story=>story.criteria.length).map(story=>story.path),prompts:snapshot.map(row=>row.path)},p);
+    if (!run.gate.nativeSource || gitFingerprint(run.root)!==run.gate.nativeSource || !await nativePublicationEligible(run,contents,check,p)) return fail('Native cases or check scope changed; show the approval gate again.');
+  }
   const invocationAt=p.now();
   const missing = missingHome(run, p.env);
   if (missing) return fail(missing);
@@ -3544,7 +3583,7 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
   p.inspectProgress();
   let approvalSnapshot = run.gate?.promptSnapshot;
   try {
-    if (area.gate === 'approve' && run.gate && (!run.gate.storyContract || await storyContract(run,p) !== run.gate.storyContract)) return fail('The Story or scenario contract changed. Show the gate again with done and ask the person again.');
+    if ((area.gate === 'approve' || run.gate?.nativeApproval) && run.gate && (!run.gate.storyContract || await storyContract(run,p) !== run.gate.storyContract)) return fail('The Story or scenario contract changed. Show the gate again with done and ask the person again.');
     if (approvalSnapshot) {
       const current = await gatePromptSnapshot(run, p);
       if (!samePromptReview(current, approvalSnapshot)) return fail('The selected prompts changed. Show the gate again and ask the person again.');
@@ -3597,12 +3636,12 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
       commitRun(run, p, latest => {
         latest.storyApproval = refreshed;
         if (through !== undefined) latest.through = through;
-        latest.gate = { ...latest.gate, id: p.randomUUID(), storySnapshot: refreshed.fingerprint };
+        latest.gate = { ...latest.gate, id: selectedGate?.nativeApproval ? latest.gate.id : p.randomUUID(), storySnapshot: refreshed.fingerprint };
         delete latest.gate.storyChanges;
         if (equalFact(latest.question, selectedQuestion)) latest.question = null;
       });
       approvalRecorded();
-      return normalPromptGate(run, area, 'check', p, [...carried, `Recorded the Story approval.${said}`], await worktreeContents(run, p), packageRoot);
+      if (!selectedGate?.nativeApproval) return normalPromptGate(run, area, 'check', p, [...carried, `Recorded the Story approval.${said}`], await worktreeContents(run, p), packageRoot);
     }
     const lines = [], failed = await publishAreaPr(run, area, p, lines, approvalRetry(run, p.pdd));
     if (failed) return failed;
@@ -4914,7 +4953,7 @@ function storyContractHash(run, texts) {
   for (const [path,text] of texts) {
     if (isStoryPath(path)) facts.push([path,text]);
     else {
-      try {if(isScenario(text))facts.push([path,canonical(JSON.parse(text))]);} catch {
+      try {if(isScenario(text))facts.push([path,JSON.parse(text).schema_version === 'pdd.native-scenario.v1' ? text : canonical(JSON.parse(text))]);} catch {
         if(run.replayBaseline?.vectors?.some(v=>v.path===path))facts.push([path,text]);
       }
     }

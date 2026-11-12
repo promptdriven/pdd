@@ -1,0 +1,792 @@
+{
+  "schema_version": "pdd.native-scenario.v1",
+  "story_path": "user_stories/native-case-replay-3124.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Native cases appear with the Story for approval and are pinned at prompt publication with their original values and identities."
+    },
+    {
+      "id": "AC2",
+      "text": "A frozen empty anchor cannot pass in code space; returning to prompt space, approving and publishing cases creates a new anchor before code resumes."
+    },
+    {
+      "id": "AC3",
+      "text": "A replay passes only with every approved case executed on its native public boundary, current source identity and a semantic assertion-failure control."
+    },
+    {
+      "id": "AC4",
+      "text": "Native cases do not claim a Runtime pass or authorize an automatic full-check pass. An explicit approval is required for publication when no Runtime verdict exists."
+    }
+  ],
+  "steps": [
+    {
+      "step_id": "pin-native-case",
+      "entry_path": "prompts/cli/workflow-replay.prompt.md",
+      "operation": "pinReplayVectors",
+      "input": {
+        "root": ".",
+        "paths": [
+          "tests/approved.json"
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/vectors/0/path",
+          "op": "equals",
+          "value": "tests/approved.json"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/vectors/0/sha256",
+          "op": "equals",
+          "value": "7e4782c22629f515b9da3f445712a3cc8bff5dde234ca943bb9dc5cce6e52ff5"
+        }
+      ],
+      "runtime_reason": "The owning prompt has no declared faithful Runtime entry for this public operation."
+    },
+    {
+      "step_id": "empty-anchor",
+      "entry_path": "prompts/cli/workflow-replay.prompt.md",
+      "operation": "readReplayEvidence",
+      "input": {
+        "run": {
+          "root": ".",
+          "runDir": ".git/run",
+          "runId": "test",
+          "replayBaseline": {
+            "schema_version": "pdd.replay-vectors.v1",
+            "vectors": [],
+            "outcome": "not_replayed",
+            "reason": "The approved prompt area has no original scenario vectors."
+          }
+        },
+        "paths": [
+          "tests/approved.json"
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/outcome",
+          "op": "equals",
+          "value": "not_replayed"
+        }
+      ],
+      "runtime_reason": "The owning prompt has no declared faithful Runtime entry for this public operation."
+    },
+    {
+      "step_id": "missing-record",
+      "entry_path": "prompts/cli/workflow-replay.prompt.md",
+      "operation": "readReplayEvidence",
+      "input": {
+        "run": {
+          "root": ".",
+          "runDir": "missing",
+          "runId": "test",
+          "replayBaseline": {
+            "schema_version": "pdd.replay-vectors.v1",
+            "vectors": [
+              {
+                "path": "tests/approved.json",
+                "sha256": "7e4782c22629f515b9da3f445712a3cc8bff5dde234ca943bb9dc5cce6e52ff5",
+                "steps": [
+                  {
+                    "vector": "tests/approved.json",
+                    "step_id": "request",
+                    "entry_path": "prompts/example.prompt.md",
+                    "operation": "example CLI"
+                  }
+                ],
+                "checks": [
+                  {
+                    "vector": "tests/approved.json",
+                    "step_id": "request",
+                    "entry_path": "prompts/example.prompt.md",
+                    "operation": "example CLI",
+                    "check_index": 0,
+                    "criterion_id": "AC1",
+                    "target": "result",
+                    "path": "/value",
+                    "op": "equals"
+                  }
+                ],
+                "snapshot": {
+                  "schema_version": "pdd.native-scenario.v1",
+                  "story_path": "user_stories/example.md",
+                  "criteria": [
+                    {
+                      "id": "AC1"
+                    }
+                  ],
+                  "steps": [
+                    {
+                      "step_id": "request",
+                      "entry_path": "prompts/example.prompt.md",
+                      "operation": "example CLI",
+                      "runtime_reason": "Native case route.",
+                      "input": {
+                        "value": 4
+                      },
+                      "checks": [
+                        {
+                          "criterion_id": "AC1",
+                          "target": "result",
+                          "path": "/value",
+                          "op": "equals",
+                          "value": 4
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        "paths": [
+          "tests/approved.json"
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/outcome",
+          "op": "equals",
+          "value": "blocked"
+        }
+      ],
+      "runtime_reason": "The owning prompt has no declared faithful Runtime entry for this public operation."
+    },
+    {
+      "step_id": "current-identity-and-semantic-control",
+      "entry_path": "prompts/cli/workflow-replay.prompt.md",
+      "operation": "readReplayEvidence",
+      "input": {
+        "run": {
+          "root": ".",
+          "runDir": ".git/run",
+          "runId": "test",
+          "replayBaseline": {
+            "schema_version": "pdd.replay-vectors.v1",
+            "vectors": [
+              {
+                "path": "tests/approved.json",
+                "sha256": "7e4782c22629f515b9da3f445712a3cc8bff5dde234ca943bb9dc5cce6e52ff5",
+                "steps": [
+                  {
+                    "vector": "tests/approved.json",
+                    "step_id": "request",
+                    "entry_path": "prompts/example.prompt.md",
+                    "operation": "example CLI"
+                  }
+                ],
+                "checks": [
+                  {
+                    "vector": "tests/approved.json",
+                    "step_id": "request",
+                    "entry_path": "prompts/example.prompt.md",
+                    "operation": "example CLI",
+                    "check_index": 0,
+                    "criterion_id": "AC1",
+                    "target": "result",
+                    "path": "/value",
+                    "op": "equals"
+                  }
+                ],
+                "snapshot": {
+                  "schema_version": "pdd.native-scenario.v1",
+                  "story_path": "user_stories/example.md",
+                  "criteria": [
+                    {
+                      "id": "AC1"
+                    }
+                  ],
+                  "steps": [
+                    {
+                      "step_id": "request",
+                      "entry_path": "prompts/example.prompt.md",
+                      "operation": "example CLI",
+                      "runtime_reason": "Native case route.",
+                      "input": {
+                        "value": 4
+                      },
+                      "checks": [
+                        {
+                          "criterion_id": "AC1",
+                          "target": "result",
+                          "path": "/value",
+                          "op": "equals",
+                          "value": 4
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        "paths": [
+          "tests/approved.json"
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/outcome",
+          "op": "equals",
+          "value": "pass"
+        }
+      ],
+      "runtime_reason": "The owning prompt has no declared faithful Runtime entry for this public operation."
+    },
+    {
+      "step_id": "no-runtime-check",
+      "entry_path": "prompts/cli/workflow-story-card.prompt.md",
+      "operation": "fullCheckPass",
+      "input": {
+        "options": {
+          "root": ".",
+          "tests": [
+            "tests/approved.json"
+          ]
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/pass",
+          "op": "equals",
+          "value": false
+        }
+      ],
+      "runtime_reason": "The owning prompt has no declared faithful Runtime entry for this public operation."
+    },
+    {
+      "step_id": "recover-open",
+      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "operation": "openRun",
+      "input": {
+        "ref": "17",
+        "area": "prompt-pr",
+        "cwd": "."
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "runtime_reason": "The owning prompt has no declared faithful Runtime entry for this public operation."
+    },
+    {
+      "step_id": "recover-recheck",
+      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "operation": "stepDone",
+      "input": {
+        "step": "check",
+        "summary": "check",
+        "cwd": "."
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/message",
+          "op": "contains",
+          "value": "Story or expected contract changed"
+        }
+      ],
+      "runtime_reason": "The owning prompt has no declared faithful Runtime entry for this public operation."
+    },
+    {
+      "step_id": "recover-story",
+      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "operation": "stepDone",
+      "input": {
+        "step": "prompt-story",
+        "summary": "prompt-story",
+        "cwd": "."
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "runtime_reason": "The owning prompt has no declared faithful Runtime entry for this public operation."
+    },
+    {
+      "step_id": "recover-approve-story",
+      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "operation": "approveRun",
+      "input": {
+        "ref": "17",
+        "cwd": ".",
+        "said": "I approve the changed native case."
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "runtime_reason": "The owning prompt has no declared faithful Runtime entry for this public operation."
+    },
+    {
+      "step_id": "recover-check",
+      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "operation": "stepDone",
+      "input": {
+        "step": "check",
+        "summary": "check",
+        "cwd": "."
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/message",
+          "op": "contains",
+          "value": "Native approval covers only"
+        }
+      ],
+      "runtime_reason": "The owning prompt has no declared faithful Runtime entry for this public operation."
+    },
+    {
+      "step_id": "recover-publish",
+      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "operation": "approveRun",
+      "input": {
+        "ref": "17",
+        "cwd": ".",
+        "said": "I approve publishing these native cases."
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/replayBaseline/vectors/0/snapshot/steps/0/checks/0/value",
+          "op": "equals",
+          "value": 901
+        }
+      ],
+      "runtime_reason": "The owning prompt has no declared faithful Runtime entry for this public operation."
+    },
+    {
+      "step_id": "recover-code",
+      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "operation": "approveRun",
+      "input": {
+        "ref": "17",
+        "cwd": ".",
+        "said": "Proceed with code."
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/activeAreaName",
+          "op": "equals",
+          "value": "code"
+        }
+      ],
+      "runtime_reason": "The owning prompt has no declared faithful Runtime entry for this public operation."
+    }
+  ],
+  "initial_world": {
+    "files": {
+      "tests/approved.json": {
+        "schema_version": "pdd.native-scenario.v1",
+        "story_path": "user_stories/example.md",
+        "criteria": [
+          {
+            "id": "AC1"
+          }
+        ],
+        "steps": [
+          {
+            "step_id": "request",
+            "entry_path": "prompts/example.prompt.md",
+            "operation": "example CLI",
+            "runtime_reason": "Native case route.",
+            "input": {
+              "value": 4
+            },
+            "checks": [
+              {
+                "criterion_id": "AC1",
+                "target": "result",
+                "path": "/value",
+                "op": "equals",
+                "value": 4
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "replay_record": {
+      "document": {
+        "schema_version": "pdd.replay-evidence.v1",
+        "run_id": "test",
+        "source": {
+          "kind": "git-content-v1",
+          "sha256": ""
+        },
+        "vectors": [
+          {
+            "path": "tests/approved.json",
+            "sha256": "7e4782c22629f515b9da3f445712a3cc8bff5dde234ca943bb9dc5cce6e52ff5"
+          }
+        ],
+        "checks": [
+          {
+            "vector": "tests/approved.json",
+            "step_id": "request",
+            "entry_path": "prompts/example.prompt.md",
+            "operation": "example CLI",
+            "check_index": 0,
+            "criterion_id": "AC1",
+            "target": "result",
+            "path": "/value",
+            "op": "equals",
+            "outcome": "pass"
+          }
+        ],
+        "operations": [
+          {
+            "vector": "tests/approved.json",
+            "step_id": "request",
+            "entry_path": "prompts/example.prompt.md",
+            "operation": "example CLI",
+            "executed": true,
+            "outcome": "returned",
+            "boundary": {
+              "kind": "command",
+              "name": "example CLI"
+            },
+            "command": "synthetic test",
+            "exit_code": 0
+          }
+        ],
+        "counts": {
+          "total": 1,
+          "pass": 1,
+          "fail": 0,
+          "blocked": 0,
+          "not_replayed": 0
+        },
+        "mutation": {
+          "kind": "semantic",
+          "description": "change value",
+          "command": "synthetic control",
+          "exit_code": 1,
+          "outcome": "assertion_failure",
+          "failed_checks": [
+            {
+              "vector": "tests/approved.json",
+              "step_id": "request",
+              "check_index": 0
+            }
+          ]
+        },
+        "formal": {
+          "result": "not_applicable",
+          "scope": "display",
+          "reason": "plain wording",
+          "control_outcome": "not_run"
+        }
+      },
+      "bind_source_sha256": "sourceFingerprint of the fixture repository immediately before writing the record"
+    },
+    "recovery": {
+      "fixture": "prepared bug workflow in code space with a frozen empty anchor",
+      "setup_actions": [
+        {
+          "after_step": "recover-open",
+          "path": "tests/place-order.json",
+          "document": {
+            "schema_version": "pdd.native-scenario.v1",
+            "story_path": "user_stories/place-order.md",
+            "criteria": [
+              {
+                "id": "AC1",
+                "text": "An order of 2 Espresso S and 1 Blueberry Muffin L has a total of 900 cents ($9.00)."
+              },
+              {
+                "id": "AC2",
+                "text": "The order keeps the name \"Sam\" and the pickup time \"08:30\"."
+              },
+              {
+                "id": "AC3",
+                "text": "The order lists 2 Espresso S at 275 cents each, then 1 Blueberry Muffin L at 350 cents."
+              }
+            ],
+            "initial_world": {},
+            "simulation": {},
+            "context": [],
+            "steps": [
+              {
+                "step_id": "sam-orders-espressos-and-a-muffin",
+                "entry_path": "prompts/place_order.prompt.md",
+                "operation": "nativePlaceOrder",
+                "input": {
+                  "customerName": "Sam",
+                  "pickupAt": "08:30",
+                  "items": [
+                    {
+                      "itemId": "espresso",
+                      "size": "S",
+                      "quantity": 2
+                    },
+                    {
+                      "itemId": "muffin",
+                      "size": "L",
+                      "quantity": 1
+                    }
+                  ]
+                },
+                "checks": [
+                  {
+                    "criterion_id": "AC1",
+                    "target": "result",
+                    "path": "/totalCents",
+                    "op": "equals",
+                    "value": 901
+                  },
+                  {
+                    "criterion_id": "AC2",
+                    "target": "result",
+                    "path": "/customerName",
+                    "op": "equals",
+                    "value": "Sam"
+                  },
+                  {
+                    "criterion_id": "AC2",
+                    "target": "result",
+                    "path": "/pickupAt",
+                    "op": "equals",
+                    "value": "08:30"
+                  },
+                  {
+                    "criterion_id": "AC3",
+                    "target": "result",
+                    "path": "/items/0/itemId",
+                    "op": "equals",
+                    "value": "espresso"
+                  },
+                  {
+                    "criterion_id": "AC3",
+                    "target": "result",
+                    "path": "/items/0/size",
+                    "op": "equals",
+                    "value": "S"
+                  },
+                  {
+                    "criterion_id": "AC3",
+                    "target": "result",
+                    "path": "/items/0/quantity",
+                    "op": "equals",
+                    "value": 2
+                  },
+                  {
+                    "criterion_id": "AC3",
+                    "target": "result",
+                    "path": "/items/0/unitPriceCents",
+                    "op": "equals",
+                    "value": 275
+                  },
+                  {
+                    "criterion_id": "AC3",
+                    "target": "result",
+                    "path": "/items/1/itemId",
+                    "op": "equals",
+                    "value": "muffin"
+                  },
+                  {
+                    "criterion_id": "AC3",
+                    "target": "result",
+                    "path": "/items/1/size",
+                    "op": "equals",
+                    "value": "L"
+                  },
+                  {
+                    "criterion_id": "AC3",
+                    "target": "result",
+                    "path": "/items/1/unitPriceCents",
+                    "op": "equals",
+                    "value": 350
+                  }
+                ],
+                "runtime_reason": "Native case route."
+              }
+            ]
+          },
+          "expected_document": {
+            "schema_version": "pdd.native-scenario.v1",
+            "story_path": "user_stories/place-order.md",
+            "criteria": [
+              {
+                "id": "AC1",
+                "text": "An order of 2 Espresso S and 1 Blueberry Muffin L has a total of 900 cents ($9.00)."
+              },
+              {
+                "id": "AC2",
+                "text": "The order keeps the name \"Sam\" and the pickup time \"08:30\"."
+              },
+              {
+                "id": "AC3",
+                "text": "The order lists 2 Espresso S at 275 cents each, then 1 Blueberry Muffin L at 350 cents."
+              }
+            ],
+            "initial_world": {},
+            "simulation": {},
+            "context": [],
+            "steps": [
+              {
+                "step_id": "sam-orders-espressos-and-a-muffin",
+                "entry_path": "prompts/place_order.prompt.md",
+                "operation": "nativePlaceOrder",
+                "input": {
+                  "customerName": "Sam",
+                  "pickupAt": "08:30",
+                  "items": [
+                    {
+                      "itemId": "espresso",
+                      "size": "S",
+                      "quantity": 2
+                    },
+                    {
+                      "itemId": "muffin",
+                      "size": "L",
+                      "quantity": 1
+                    }
+                  ]
+                },
+                "checks": [
+                  {
+                    "criterion_id": "AC1",
+                    "target": "result",
+                    "path": "/totalCents",
+                    "op": "equals",
+                    "value": 901
+                  },
+                  {
+                    "criterion_id": "AC2",
+                    "target": "result",
+                    "path": "/customerName",
+                    "op": "equals",
+                    "value": "Sam"
+                  },
+                  {
+                    "criterion_id": "AC2",
+                    "target": "result",
+                    "path": "/pickupAt",
+                    "op": "equals",
+                    "value": "08:30"
+                  },
+                  {
+                    "criterion_id": "AC3",
+                    "target": "result",
+                    "path": "/items/0/itemId",
+                    "op": "equals",
+                    "value": "espresso"
+                  },
+                  {
+                    "criterion_id": "AC3",
+                    "target": "result",
+                    "path": "/items/0/size",
+                    "op": "equals",
+                    "value": "S"
+                  },
+                  {
+                    "criterion_id": "AC3",
+                    "target": "result",
+                    "path": "/items/0/quantity",
+                    "op": "equals",
+                    "value": 2
+                  },
+                  {
+                    "criterion_id": "AC3",
+                    "target": "result",
+                    "path": "/items/0/unitPriceCents",
+                    "op": "equals",
+                    "value": 275
+                  },
+                  {
+                    "criterion_id": "AC3",
+                    "target": "result",
+                    "path": "/items/1/itemId",
+                    "op": "equals",
+                    "value": "muffin"
+                  },
+                  {
+                    "criterion_id": "AC3",
+                    "target": "result",
+                    "path": "/items/1/size",
+                    "op": "equals",
+                    "value": "L"
+                  },
+                  {
+                    "criterion_id": "AC3",
+                    "target": "result",
+                    "path": "/items/1/unitPriceCents",
+                    "op": "equals",
+                    "value": 350
+                  }
+                ],
+                "runtime_reason": "Native case route."
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}
