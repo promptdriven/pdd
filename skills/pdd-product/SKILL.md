@@ -2,7 +2,7 @@
 name: pdd-product
 description: Use when a person wants to build a whole product from one sentence and needs a story map, parts, shared contracts and a plan of feature runs.
 metadata:
-  pdd-skills: 0.1.28
+  pdd-skills: 0.1.29
 ---
 
 # PDD product
@@ -12,8 +12,8 @@ Start with the person's sentence. Find or make its product issue, for example
 `pdd workflow run product ISSUE`. This workflow makes and tracks the plan.
 Normal feature runs build the parts.
 
-1. map: understand, map → gate: approve
-2. plan: parts, contracts, plan → gate: pr
+1. map: steps/understand.md, steps/map.md → gate: approve
+2. plan: steps/parts.md, steps/contracts.md, steps/plan.md → gate: pr
 
 ## Rules
 
