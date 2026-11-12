@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-story-card.prompt.md (sha256: e1d964dd121794050a4572ce181cf7c59a55514dfd731f5433e620af4de2d4f7).
+// Generated from prompts/cli/workflow-story-card.prompt.md (sha256: fa4c01ebbf25e1c4809e3785be86576f91d8061dc81d8c7fafec20b74bf07c31).
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -49,7 +49,7 @@ function readScenario(root, path) {
   if (text === null) return { path, text: null, doc: null };
   try {
     const doc = parseScenarioJson(text);
-    return { path, text, doc: doc?.schema_version === SCENARIO ? doc : undefined };
+    return { path, text, doc: [SCENARIO,'pdd.native-scenario.v1'].includes(doc?.schema_version) ? doc : undefined };
   } catch { return { path, text, doc: null }; }
 }
 // The run's changed test files: every changed scenario, and a changed JSON file in a test folder that does not parse.

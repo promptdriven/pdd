@@ -8,6 +8,10 @@ Export REPLAY_POLICY (`pdd.replay-evidence.v1`), sourceFingerprint(root), pinRep
 pinRunAnchor(root, options), readReplayEvidence(run, paths?), readFormalEvidence(run), formalStatusText(formal), formatReplayEvidence(result, options?),
 and adoptReplayCorpus(root, declarationPath, ports). The runner owns policy opt-in and publication.
 
+## Native case documents
+
+A prompt-space case document may use `pdd.native-scenario.v1` when no faithful Runtime operation is established. It has the same `story_path`, `criteria`, `steps`, step and check fields as a program scenario for anchoring and replay; `entry_path` names the owning prose prompt and `operation` names the real native public boundary, not a Runtime operation. Each step also has a nonblank `runtime_reason` explaining why no faithful Runtime operation exists for that operation. Its cases and expected values must be reviewed and approved in prompt space. Apply the same identity, bounds, source, execution and semantic mutation requirements as other anchored scenarios. Changed native case bytes block replay, and an executed native operation must name the approved operation as its public boundary. A native document is not an interpreter check and gives no Runtime pass. A frozen empty anchor cannot be repaired in code space: return to prompt space, approve and publish the cases, then re-enter code and repeat verification. Ordinary native tests alone are not approved cases.
+
 ## Original identities
 
 sourceFingerprint returns the SHA256 of the JSON-encoded sorted Git-visible path tuples, or null on unreadable
@@ -22,7 +26,7 @@ a vector without one has no such field,
 or an explicit blocked anchor with a reason. No paths or no checks is not_replayed. Paths must be unique,
 Git-visible, canonical repo-relative regular files with no symlink ancestors or hardlinks; refuse missing,
 empty, unreadable or malformed scenarios. Limit200files,10MiB aggregate vector bytes,2MiB per file and10000
-steps/checks. Each scenario uses prompt-runtime.program-scenario.v1, unique nonempty step_id, entry_path and
+steps/checks. Each scenario uses prompt-runtime.program-scenario.v1 or pdd.native-scenario.v1, unique nonempty step_id, entry_path and
 operation, and nonempty checks. A check identity is vector path, step_id and zero-based check_index, plus the
 original entry_path, operation, criterion_id, target, JSON path and assertion op. Supported targets are result,
 error, world and calls. Preserve every original identity; do not substitute generated fixtures or expected values.
@@ -33,12 +37,12 @@ pinRunAnchor(root, {paths, commit, changed, scenarios, codeSpace}) builds a run'
 `paths` are the run's changed scenario files, pinned as pinReplayVectors pins them. `commit` is the run's full
 base commit, `changed` the run's changed paths against it, and `scenarios` the current changed scenario files.
 A file on the base branch counts as approved. Also anchor each base scenario that belongs to the run's changed
-area. Read the base with local Git only: one `git grep -F` for the schema name in `*.json`, one `ls-tree`, one
+area. Read the base with local Git only: one `git grep -F` for both scenario schema names in `*.json`, one `ls-tree`, one
 `git cat-file --batch`; never gh, a model or the worktree copy of a base file. Ignore user Git color
 settings when parsing Git output; the scenario search must emit no color codes.
 
 A base scenario is a regular `.json` blob of at most 10 MiB, found by that search, whose parsed schema_version is
-prompt-runtime.program-scenario.v1; skip other and unparsable JSON. Search matches over 10 MiB are not read;
+prompt-runtime.program-scenario.v1 or pdd.native-scenario.v1; skip other and unparsable JSON. Search matches over 10 MiB are not read;
 report each path, byte size and limit in the base note and the PR Anchor line, even when other files are
 selected. Never silently omit them. Its links are its story_path, every step
 entry_path and its entry_paths. The changed area is every changed path, the links of each changed scenario
@@ -89,7 +93,7 @@ Use `git cat-file --batch` for immutable blob reads rather than per-file process
 Refuse a `.git` path segment in any letter case, including `.GIT`, in all
 selected paths and temporary-view tree entries before writing them into the view.
 
-A declaration is version `pdd.replay-adoption.v1`, with `repository` (canonical
+Corpus adoption selects Runtime program scenarios; native case documents use prompt-space approval and publication. A declaration is version `pdd.replay-adoption.v1`, with `repository` (canonical
 owner/repo), `commit` (full immutable commit ID), nonempty unique repo-relative
 `prompts` (entry prompt paths), nonempty unique canonical repo-relative `scenarios`
 (at most 200 paths, the asserted complete inventory), and `approval {kind:"external-human-assertion",
@@ -385,8 +389,8 @@ A present base `pdd.json` must be a regular readable blob within the 10 MiB read
 
 ```json
 {
-  "status": "approved",
-  "prose_sha256": "5177102bd022915a457a31ad9c1f3665edb83147605edaa2ff8426c2564b1118",
+  "status": "draft",
+  "prose_sha256": "6c6fc81aec2337eea457865facd663b903055a5e62b737de58ce2a7267d48fb1",
   "entries": [
     {
       "operation": "adoptReplayCorpus",

@@ -362,3 +362,7 @@ truth. Adoption proves content identity only. Agents still execute the original
 cases and record public operations, mutation controls and formal results.
 
 The declaration parent folder is resolved with realpath, so symlinked ancestors (including macOS temporary folders) are supported. The final declaration must remain a regular single-link file; final symlinks and hardlinks are refused. Scratch folders also use their real paths. Native refusals include a bounded cleaned cause without private absolute paths, credentials or Simulate URLs.
+
+## Native case documents
+
+`pdd.native-scenario.v1` documents use the Story, criteria, step and check fields of a program scenario. Each `entry_path` names its owning prose prompt; `operation` is the actual native public-boundary name, not an interpreter operation. The manifest's executed boundary name must match it. Cases are approved and published in prompt space and their exact bytes are frozen: changed native bytes block replay. Replay every check, record the source fingerprint and demonstrate a semantic assertion-failure control. PDD validates the record, not execution or equivalence. `pdd test` may refuse this separate schema; that is no Runtime verdict. See RUNBOOK §17 for returning a run with an empty anchor to prompt space and the explicit approval conditions.

@@ -2,6 +2,8 @@
 
 Own `src/workflow-story-card.mjs`. It reads one run's real files and pdd's own saved check results. It never calls GitHub, Herdr, the PDD interpreter or a model, and it never writes a file. The [workflow runner](workflow-runner.prompt.md#normal-run-gates) decides when the card shows and what the gates do with the results of this module.
 
+Native case documents (`pdd.native-scenario.v1`) participate in the card and Story fingerprint exactly as program scenarios. Their native boundary is not an interpreter operation; their presence never supplies a full Runtime check pass.
+
 ## The card
 
 `storyCard({run, root, changed, prompts, results, changes, through})` returns the card as one text: plain lines, no colors and no Markdown headings. The same files and inputs always give the same text. `changed` is the list of repository-relative paths that the run changes against its base (the runner reads it from Git). `prompts` is one row `{path, added, removed}` for each changed `*.prompt.md`. `results` is an optional list of `Prompt tests` lines. `changes` is an optional list of change lines from `fingerprintChanges`. `through` is `code`, `prompt-pr` or absent.

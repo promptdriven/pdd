@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-replay.prompt.md (sha256: 9f6fe653f29c7e26cd9034ee2f92e22038af0f8b2c0a77436124e7cacfc2ca8a).
+// Generated from prompts/cli/workflow-replay.prompt.md (sha256: f1467cc9e9eb9547a382c9c584f8d01eb492dd19a1441072d0b5316480e01c05).
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -74,10 +74,12 @@ function vectorFile(root, path, visible) {
 function scenario(path, bytes) {
   // Exact whole numbers above 2^53 keep their digits beside the ordinary JSON snapshot.
   const exact = parseScenarioJson(new TextDecoder('utf-8',{fatal:true}).decode(bytes)), doc = jsonSafe(exact), leaves = exactIntegerLeaves(exact);
-  requireThat(object(doc) && doc.schema_version === 'prompt-runtime.program-scenario.v1' && Array.isArray(doc.steps) && doc.steps.length > 0 && doc.steps.length <= MAX, 'Original vectors need nonempty versioned scenario steps.');
+  requireThat(object(doc) && ['prompt-runtime.program-scenario.v1','pdd.native-scenario.v1'].includes(doc.schema_version) && Array.isArray(doc.steps) && doc.steps.length > 0 && doc.steps.length <= MAX, 'Original vectors need nonempty versioned scenario steps.');
+  if (doc.schema_version === 'pdd.native-scenario.v1') requireThat(text(doc.story_path) && Array.isArray(doc.criteria) && doc.criteria.length > 0, 'Native cases need a Story and criteria.');
   const seen = new Set(), steps = [], checks = [];
   for (const step of doc.steps) {
     requireThat(object(step) && text(step.step_id) && !seen.has(step.step_id) && text(step.entry_path) && text(step.operation), 'Original step identities must be complete and unique.');
+    if (doc.schema_version === 'pdd.native-scenario.v1') requireThat(text(step.runtime_reason), 'Each native step needs a nonblank Runtime reason.');
     seen.add(step.step_id);
     requireThat(Array.isArray(step.checks) && step.checks.length > 0 && step.checks.length <= MAX, 'Every original step needs assertion checks.');
     const base = {vector:path,step_id:step.step_id,entry_path:step.entry_path,operation:step.operation}; steps.push(base);
@@ -364,7 +366,7 @@ function baseSelection(bytes,commit) {
 function baseScenarios(root,commit,changed,scenarios,codeSpace) {
   // Read only JSON blobs that name the scenario schema, so large unrelated JSON stays unread.
   let named;const changedSet=new Set(changed);
-  try {named=new Set(localGit(root,'grep','--no-color','-l','-z','-F','-e','prompt-runtime.program-scenario.v1',commit,'--','*.json').toString('utf8').split('\0').filter(Boolean).map(name=>name.slice(commit.length+1)));}
+  try {named=new Set(localGit(root,'grep','--no-color','-l','-z','-F','-e','prompt-runtime.program-scenario.v1','-e','pdd.native-scenario.v1',commit,'--','*.json').toString('utf8').split('\0').filter(Boolean).map(name=>name.slice(commit.length+1)));}
   catch(error) {if(error.status!==1)throw Error('The base scenario search failed.');named=new Set();}
   const inventory=localGit(root,'ls-tree','-r','-t','-l','-z','--full-tree',commit).toString('utf8').split('\0').filter(Boolean).map(row=>{
     const match=/^(\d+) (\w+) ([a-f0-9]+) +(-|\d+)\t([\s\S]+)$/.exec(row);
@@ -377,7 +379,7 @@ function baseScenarios(root,commit,changed,scenarios,codeSpace) {
   const oversized=rows.filter(row=>named.has(row.path)&&row.size>10*1024*1024);
   const readable=rows.filter(row=>row.size<=10*1024*1024);
   const blobs=batchBlobs(root,readable),docs=new Map(),select=baseSelection(blobs.get('pdd.json'),commit);
-  for(const row of readable){try{const doc=parse(blobs.get(row.path));if(object(doc)&&doc.schema_version==='prompt-runtime.program-scenario.v1')docs.set(row.path,doc);}catch{/* Not a scenario. */}}
+  for(const row of readable){try{const doc=parse(blobs.get(row.path));if(object(doc)&&['prompt-runtime.program-scenario.v1','pdd.native-scenario.v1'].includes(doc.schema_version))docs.set(row.path,doc);}catch{/* Not a scenario. */}}
   const bindings=bindingLinks(blobs.get('pdd-bindings.json')),area=new Set(changed);
   const linkAll=doc=>{if(object(doc))for(const link of scenarioLinks(doc))area.add(link);};
   for(const path of changed){if(docs.has(path))linkAll(docs.get(path));for(const link of bindings.links.get(path)??[])area.add(link);}
@@ -569,6 +571,7 @@ function replayRecord(run, paths) {
     for(const path of new Set([...originals.keys(),...(paths??[])])) {
       const saved=originals.get(path), pinned=pinReplayVectors(run.root,[path]), vector=pinned.vectors[0];
       if(pinned.outcome) {
+        if(saved?.snapshot?.schema_version === 'pdd.native-scenario.v1') return {...result,outcome:'blocked',reason:'Approved native case bytes changed or are unavailable; return to prompt space.'};
         result.warnings.push({vector:path,reason:pinned.reason});
         // A removed vector no longer participates; an existing invalid file remains unproved.
         let missing=false;
@@ -576,6 +579,7 @@ function replayRecord(run, paths) {
         if(missing && saved?.snapshot)for(const change of valueChanges(exactSnapshot(saved),undefined))result.warnings.push({vector:path,...change});
         continue;
       }
+      if (saved?.snapshot?.schema_version === 'pdd.native-scenario.v1' && saved.sha256 !== vector.sha256) return {...result,outcome:'blocked',reason:'Approved native case bytes changed; return to prompt space.'};
       current.vectors.push(vector);
       if(!saved || saved.sha256!==vector.sha256) {
         if(saved && !saved.snapshot)result.warnings.push({vector:path,reason:`SHA256 ${saved.sha256} -> ${vector.sha256}; original values unavailable.`});
@@ -619,6 +623,7 @@ function replayRecord(run, paths) {
       requireThat(object(row), 'Invalid public-operation row.');const original=expectedSteps.get(stepKey(row));
       requireThat(original && !operations.has(stepKey(row)) && ['entry_path','operation'].every(k=>row[k]===original[k]), 'A public operation is unknown, duplicated or substituted.');
       requireThat(typeof row.executed === 'boolean' && ['returned','expected_error','crash','not_run'].includes(row.outcome), 'Public execution flags/outcomes must be typed.');
+      if (row.executed && current.vectors.find(v=>v.path===row.vector)?.snapshot?.schema_version === 'pdd.native-scenario.v1') requireThat(row.boundary?.name === original.operation, 'Native public boundary does not match the approved operation.');
       if (row.executed) requireThat(row.outcome !== 'not_run' && object(row.boundary) && ['function','command','route'].includes(row.boundary.kind) && text(row.boundary.name) && text(row.command) && exit(row.exit_code), 'Executed operations need a real public-boundary identity and command/exit record.');
       else requireThat(row.outcome === 'not_run' && row.exit_code === null, 'An unexecuted operation cannot claim completion.');
       operations.set(stepKey(row),row);
