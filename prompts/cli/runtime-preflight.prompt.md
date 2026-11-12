@@ -1,6 +1,6 @@
 # Runtime preflight
 
-Own `src/runtime-preflight.mjs`. It does all local work for `pdd test` and `pdd simulate` before anything goes to the PDD runtime: it finds the files, the tests and the stories, checks each test, computes the prose hash, fills draft hashes and builds the source tar. It makes no network call and never reads a token.
+Own `src/runtime/runtime-preflight.mjs`. It does all local work for `pdd test` and `pdd simulate` before anything goes to the PDD runtime: it finds the files, the tests and the stories, checks each test, computes the prose hash, fills draft hashes and builds the source tar. It makes no network call and never reads a token.
 
 ## Shared authored-file reader
 
@@ -44,9 +44,9 @@ Hash filling checks allowed draft targets and required reference inputs before r
 ## Files
 
 - Git files = `git ls-files -z -co --exclude-standard` in the repo root, unique and sorted. A deleted tracked file is skipped. This lookup is noninteractive: explicitly ignore stdin and retain captured stdout and stderr. Its helpers and descendants must not retain the caller's stdin after pdd exits; this defensive isolation leaves discovery results and errors unchanged.
-- A test is found by its name and folder, never by its content: the [test name rule](test-selection.prompt.md#test-name-rule). Discovery opens no `*.json` file to decide what is a test, so no size and no byte position can hide a test. After matching and workspace eligibility, read each matched test in full, at any size. A matched test that is not valid JSON fails rule P1 with its path. pdd has no size limit for one test file; the only size limit is the [upload limit](#source-capture) when the test is sent.
-- Story path and acceptance-heading classification (`isStoryPath`, `hasAcceptance`) belong to [test selection](test-selection.prompt.md#test-name-rule). A Story's name is the file name without `.md`, and its title is its first `# ` line. Discovery follows the [bounded-read rules](#source-capture). A title fallback for a linked Story uses the checked final target and its byte size, with the same identity-bound read as other source. An oversized fallback retains the filename title. A test's title is the title of the Story that the [test name rule](test-selection.prompt.md#test-name-rule) matched, else that Story's name.
-- Empty-repository reasons (`NO_TESTS`, `whyNoTests`) and selector-word resolution (`selectTests`) belong to [test selection](test-selection.prompt.md). Export `discoveryVisibleFiles({ root, files = gitFiles(root), workspace, excludeFixtureProjects = false })` so name-level prompt discovery can read workspace-eligible Git-visible regular files outside nested fixture projects without test-selection ports.
+- A test is found by its name and folder, never by its content: the injected Story/test name-matching ports (`#test-name-rule` below). Discovery opens no `*.json` file to decide what is a test, so no size and no byte position can hide a test. After matching and workspace eligibility, read each matched test in full, at any size. A matched test that is not valid JSON fails rule P1 with its path. pdd has no size limit for one test file; the only size limit is the [upload limit](#source-capture) when the test is sent.
+- Story path and acceptance-heading classification (`isStoryPath`, `hasAcceptance`) come from injected `ports.isStoryPath` and `ports.hasAcceptance`. A Story's name is the file name without `.md`, and its title is its first `# ` line. Discovery follows the [bounded-read rules](#source-capture). A title fallback for a linked Story uses the checked final target and its byte size, with the same identity-bound read as other source. An oversized fallback retains the filename title. A test's title is the title of the Story that `ports.matchTests` matched, else that Story's name.
+- Empty-repository reasons (`NO_TESTS`, `whyNoTests`) and selector-word resolution (`selectTests`) belong to the host test-selection caller. Export `discoveryVisibleFiles({ root, files = gitFiles(root), workspace, excludeFixtureProjects = false })` so name-level prompt discovery can read workspace-eligible Git-visible regular files outside nested fixture projects without test-selection ports.
 
 
 
@@ -68,13 +68,13 @@ fixture project is present. Do not remove or modify fixture files.
 
 ## Native Story discovery (draft)
 
-Discover `## Native validation` sections from already bounded Story reads in `findTests` and expose `nativeSelections` (`{storyPath, story, section}`) beside Runtime tests; selector matching and `#native-validation-profile-PROFILE_ID` link resolution belong to [`selectTests`](test-selection.prompt.md#selector-words-and-native-story-descriptors), which captures `{tests: [storyPath, promptPath]}` through its `captureSource` port. Native profile syntax, admission and judgment belong to the shared result reader called by the client; preflight does not assess or import evidence.
+Discover `## Native validation` sections from already bounded Story reads in `findTests` and expose `nativeSelections` (`{storyPath, story, section}`) beside Runtime tests; selector matching and `#native-validation-profile-PROFILE_ID` link resolution belong to the caller's `selectTests` helper, which captures `{tests: [storyPath, promptPath]}` through its `captureSource` port. Native profile syntax, admission and judgment belong to the shared result reader called by the client; preflight does not assess or import evidence.
 
 <a id="test-name-rule"></a>
 <details>
 <summary>Required rules: test discovery over the test name rule</summary>
 
-Story/test name pairing (`isStoryPath`, `hasAcceptance`, `expectedTestPath`, `matchTests`, `orphanSummary`) is owned by [test selection](test-selection.prompt.md#test-name-rule) and injected into `findTests(input, ports)`, `captureSource(root, options, ports)`, and `createStrictSourceAccess(root, workspace, ports)` as `{isStoryPath, hasAcceptance, matchTests, orphanSummary}` (throwing a descriptive unbound-port `Error` when omitted).
+Story/test name pairing (`isStoryPath`, `hasAcceptance`, `expectedTestPath`, `matchTests`, `orphanSummary`) is injected by the caller into `findTests(input, ports)`, `captureSource(root, options, ports)`, and `createStrictSourceAccess(root, workspace, ports)` as `{isStoryPath, hasAcceptance, matchTests, orphanSummary}` (throwing a descriptive unbound-port `Error` when omitted).
 
 `findTests` returns `{visible, tests, stories, warnings, untested, orphans}`. Each test has `path`, `files`, `story`, `storyPath`, `storyPaths` and `title` from the Story file that `ports.matchTests` matched (not from `story_path` inside the file), and its parsed `doc` or an `error` sentence that names the file: a conflict, invalid JSON (`<test> is not valid JSON: <reason>`), a file it cannot read (`<test> cannot be read: <code>.`), or a file over the upload limit, which is not read (`<test> is <size>. The upload limit is 10 MB, so pdd cannot send it.`). One test's error never stops discovery of the others. `untested` and `orphans` come from `ports.matchTests` (with `untested` filtered to Stories accepted by `ports.hasAcceptance`); warnings list skipped fixture projects, Story warnings, conflicts, Stories with no test, and `ports.orphanSummary(orphans)` when orphans exist. Module function `discoveryRefusal(test)` returns the refusal that discovery alone proves (P1 with the `error` sentence, or the P2 `story_path` mismatch), else null.
 
@@ -116,7 +116,7 @@ F1–F2 are local format advice, never refusals: report each one as a non-blocki
 A broken step or check shape uses the engine code (`missing-steps`, `invalid-step`, `invalid-check`, `unknown-criterion`, `invalid-criterion`). A step may name a `model` (as the live engine eae2202a allows); a model that is not a nonblank string is `invalid-step-model`. pdd is never stricter than the live engine.
 - Default `max_calls` for a test: 12 for each step, at least 18, at most 1000. This is a ceiling, not a charge; steps that use saved data or prompt calls need room for their whole call graph. A refusal has `code`, `section` (engine style, for example `steps[0].input.items[0].quantity`), `message`, an optional `hint` and the 1-based `step`.
 
-- P7: drafts may run. A `draft` with a current hash passes, and its row is marked `draft`. A status that is neither `draft` nor `approved` is `interface-unapproved`. Stale hints: approved = `pdd: the text changed after approval: set status to draft, run pdd test --fill-hash, ask the person.`; draft = `pdd: <path> is a draft whose text changed after its hash was filled. Run pdd test --fill-hash.` Preflight never sets `approved`; only [pdd approve](prompt-approve.prompt.md) does, after a person's `y` in a terminal.
+- P7: drafts may run. A `draft` with a current hash passes, and its row is marked `draft`. A status that is neither `draft` nor `approved` is `interface-unapproved`. Stale hints: approved = `pdd: the text changed after approval: set status to draft, run pdd test --fill-hash, ask the person.`; draft = `pdd: <path> is a draft whose text changed after its hash was filled. Run pdd test --fill-hash.` Preflight never sets `approved`; only the host approval command does, after a person's `y` in a terminal.
 - Runtime interface limits admission (after P7, before upload, for the entry prompt and every prompt it calls): `limits` must be an object with exactly `max_steps` and `max_model_calls`. Both values must be integer JSON literals of at least 1; neither has an upper bound. Zero is invalid even for a pure operation. Reject missing/extra keys, null, arrays, strings, booleans, fractional numbers and decimal/exponent spellings such as `1.0` and `1e0`. Preserve the original number tokens from a read prompt so JavaScript rounding cannot turn a rejected decimal into an integer or impose a new upper cap on a valid large integer. For the exported `interfaceSchemaProblems(iface)` when given an object directly, use its integer numeric values (the JSON representation that object supplies).
   An absent `limits` field is `invalid-interface` at `/limits`. A present invalid limits value or field is `invalid-limits`, with a JSON pointer to the limits object or the specific missing/extra/invalid field. Explain the exact two-key shape or the positive-integer rule and provide a separate fix hint naming the required keys or field and minimum 1. For a missing field, explicitly say it is missing. For an absent limits object, tell the person to add `"limits": {"max_steps": 1, "max_model_calls": 1}`. For an extra key, tell the person to remove that named key. Retain the offending prompt path when converting these problems into preflight refusals. Do not rewrite a limit, change expectations, approve a prompt, contact the runtime or read authentication. Keep all existing schema/hash/input rules and discovery/capture behavior.
 - Schema rules (after P7, for the entry prompt and the prompts it calls; real-user web test, issue 1): check the engine's executable schema subset (`graph_runtime_protocol.py` `_validate_schema_node`, eae2202a) on every `entries[].input_schema` and `result_schema` (any root type) and every `resources[].operations[].arguments_schema` and `result_schema` (an object root). Report ALL problems at once, each with the engine code, the JSON pointer into the interface (`/entries/0/input_schema/properties/read`) and the rule in words:
@@ -216,7 +216,7 @@ files. Capture additionally checks its attempt's observations and retries.
 <details>
 <summary>Required interface reference: scoped strict source access</summary>
 
-For native callers with a stricter boundary, `src/runtime-preflight.mjs` exports
+For native callers with a stricter boundary, `src/runtime/runtime-preflight.mjs` exports
 module function `createStrictSourceAccess(root)`. `root` is the repository-root
 path string. It returns an object with these synchronous bound methods:
 
@@ -440,9 +440,8 @@ fallback Story prevents interface projection in the combined upload.
 - [References](contract-refs.prompt.md): required generation and verification
   context for synchronous expansion and provenance; native adapters preserve
   this module's privacy, snapshot and capture rules.
-- [Test selection](test-selection.prompt.md#test-name-rule): caller context for the injected `{isStoryPath, hasAcceptance, matchTests, orphanSummary}` ports used by `findTests`, `captureSource`, and `createStrictSourceAccess`.
 
-Read the full [Prompting guide](../../docs/prompting-guide.md) before you change this prompt. Follow the [alpha boundary](public-boundary.prompt.md).
+Read the full [Prompting guide](../../docs/prompting-guide.md) before you change this prompt.
 
 ## Caller navigation
 

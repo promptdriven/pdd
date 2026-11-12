@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: cea27bfc382c68611970f14c504539f95bf152b6214c7f338c20f85945768480).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 237af97ca062fa0d03035c4fbb158fcd709f7dc682fb756b70b037a945a029ed).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -58,9 +58,9 @@ import { collectTestInventory } from './workflow-inventory.mjs';
 import {readSmallChangeChecklist} from './workflow-small-change.mjs';
 import {adoptReplayCorpus,REPLAY_POLICY,sourceFingerprint as gitFingerprint,pinReplayVectors,pinRunAnchor,readReplayEvidence,readFormalEvidence,formatFormalEvidence,formatReplayEvidence} from './workflow-replay.mjs';
 
-const { captureSource, findTests, gitFiles, interfaceBlocks } = runtimePreflightSlice();
+const { captureSource, findTests, gitFiles, interfaceBlocks, promptSchemaRefusals, readPrompt } = runtimePreflightSlice();
 runtimeOutputSlice();
-const { interfaceProblems, proseSha256 } = format;
+const { proseSha256 } = format;
 import { DETAILS_OPEN, TOP_NOTE, balancedDetails, closingInert, detailsOf, pr1Order, prArea, prStatus, readPrFields, readableNextLines, readablePrBody, readablePrTitle, readablePrTop, sameReadableTop, userStory } from './workflow-pr-body.mjs';
 import { nativeGithubCounter } from './github-calls.mjs';
 import { storyCard, storyFingerprint, fingerprintChanges, fullCheckPass } from './workflow-story-card.mjs';
@@ -3352,6 +3352,7 @@ async function approveGatePrompts(run, p, snapshot = null) {
   const fs = p.fs ?? { lstatSync, realpathSync, readFileSync, writeFileSync };
   snapshot ??= await gatePromptSnapshot(run, p);
   const paths = snapshot.map(row => row.path);
+  const visible = new Set(gitFiles(run.root));
   const edits = [];
   for (const path of paths) {
     const file = join(run.root, path);
@@ -3363,8 +3364,10 @@ async function approveGatePrompts(run, p, snapshot = null) {
     if (blocks.length !== 1) throw Error(`${path} must have one Runtime interface block.`);
     let iface;
     try { iface = JSON.parse(blocks[0][1]); } catch { throw Error(`${path} has invalid Runtime interface JSON.`); }
-    const problems = interfaceProblems(iface);
-    if (problems.length) throw Error(`${path}: ${problems.map(item => `${item.code} ${item.pointer} ${item.rule}`).join('; ')}`);
+    let prompt, problems;
+    try { prompt = readPrompt(run.root, visible, path); problems = promptSchemaRefusals(run.root, { visible }, prompt, new Map([[path, prompt]])); }
+    catch (error) { throw Error(`${path}: ${error.message}`); }
+    if (problems.length) throw Error(`${path}: ${problems.map(item => `${item.code} ${item.section} ${item.message}`).join('; ')}`);
     const hash = proseSha256(text);
     if (iface.status === 'approved' && iface.prose_sha256 === hash) continue;
     if (!['draft','approved'].includes(iface.status)) throw Error(`${path} has an invalid approval status.`);

@@ -1,6 +1,6 @@
 # Local shared-contract commands
 
-Own `src/contracts.mjs`. Module function
+Own `src/runtime/contracts.mjs`. Module function
 `runContracts({words,options,cwd}, ports={})` (reading `{env,stdout,stderr}` from `ports`) returns an exit code.
 `words: []` lists contracts; `words: ['sync']` previews migration;
 `options['--write'] === true` applies it. Syntax belongs to the command catalog.
@@ -10,7 +10,7 @@ authenticate, reserve a runtime slot, upload, lint remotely or call a model.
 Find the Git root as preflight does. Read Git-visible Markdown/JSON files under
 `contracts/`, prompts and discovered scenarios using preflight's bounded native
 reads. Do not follow symlinks or secret paths, including during writes. Bind
-`access = createStrictSourceAccess(root)` from `src/runtime-preflight.mjs`, using
+`access = createStrictSourceAccess(root)` from preflight, using
 its [scoped strict source access](runtime-preflight.prompt.md#scoped-strict-source-access)
 contract. Use `access.sourceFilePort(visible)` for catalog, prompt, expansion and
 original-byte checks, `access.findTests({files})` for discovery, and

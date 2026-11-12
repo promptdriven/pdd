@@ -1,5 +1,5 @@
 import {loadRuntimeWorkspace,allowsRuntimePath} from './runtime-workspace.mjs';
-// Generated from prompts/cli/contracts.prompt.md (sha256: 0a93646662daf3691ab41bc161cef5b413d2a9ba9f0c1da5748e1b7c5131a8d0).
+// Generated from prompts/cli/contracts.prompt.md (sha256: cf5871b996696fe6a67c650e008cc651c150441ecd6d21c15645302f8a1d4954).
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fchmodSync, fstatSync, lstatSync, openSync, renameSync, unlinkSync, writeSync } from 'node:fs';

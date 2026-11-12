@@ -1,7 +1,7 @@
 import {redactSecrets as fallbackRedactSecrets} from './secret-redaction.mjs';
 import {loadRuntimeWorkspace,allowsRuntimePath} from './runtime-workspace.mjs';
 import {captureSource} from './runtime-preflight.mjs';
-// Generated from prompts/cli/agent-guide.prompt.md (sha256: 93a631df6d9672a3ccea80de80960158b74035c50fa30fba6a0f520abe49398d).
+// Generated from prompts/cli/agent-guide.prompt.md (sha256: 8b3024d051bee0b88ae26f12617d0a2e0231c39c70a27cf10e242da88eb3c89d).
 import {createHash} from 'node:crypto';
 import {buildProjectCard,readAgentScenarios} from './agent-project.mjs';
 import {createRunJudge,compareExpectation} from './agent-judge.mjs';

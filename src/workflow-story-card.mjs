@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-story-card.prompt.md (sha256: 9e687c2383018694f2ce90e037bf102b09714c359de2e267324481d9223b6e89).
+// Generated from prompts/cli/workflow-story-card.prompt.md (sha256: 87dce0fcc0846f33d62d11a8f3c9ebd4d447a66653ac1175094ad7f354eef501).
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';

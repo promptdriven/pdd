@@ -66,7 +66,7 @@ Return `{pass, tests, problems}`. `tests` is one row `{path, batch, state}` for 
 
 ## Dependencies
 
-- [PDD to Runtime seam](runtime-seam.prompt.md) and [Runtime preflight](runtime-preflight.prompt.md): `source.identity` (`captureSource`) and `findTests`.
+- [Runtime preflight](runtime-preflight.prompt.md): `source.identity` (`captureSource`) and `findTests`.
 - [Workflow results](workflow-results.prompt.md): the batch folder and name rule for pdd's own results.
 - [Exact scenario numbers](scenario-json.prompt.md): `format.parseScenario` and `format.stringifyScenario` for test values.
 - RUNBOOK §2 (Story, test and prompt files), §4 (expected values) and §11 (what an agent may fix).

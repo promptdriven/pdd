@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 727684673db6fae17817b47bed2fdabc4daca10bf0f8268057f9c857ea5028cd).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: ccf9c53bce44171862d5d12f956d0d67b294e348f258d1ce44f5118bc0eafffd).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
@@ -3180,7 +3180,7 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
     if (options['--screen'] !== undefined || options['--drawing'] !== undefined) {
       if (!options['--screen'] || !options['--drawing'] || words.length || Object.keys(options).some(name => !['--screen', '--drawing', '--json'].includes(name))) throw new Stop(2, 'Use pdd test --screen URL --drawing PATH [--json], without other options or Stories.');
       if (typeof ports.compareScreen !== 'function' || (!context.json && typeof ports.formatScreenComparison !== 'function')) {
-        throw new Error('Screen comparison ports (compareScreen, formatScreenComparison) are not bound.');
+        throw unboundPortError('Screen comparison ports (compareScreen, formatScreenComparison) are not bound.');
       }
       try {
         const report = await ports.compareScreen({ url: options['--screen'], drawingPath: options['--drawing'], cwd, chromePath: ports.env.PDD_CHROME_PATH }, { env: ports.env, browser: givenPorts.screenBrowser });

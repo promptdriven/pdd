@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-entry.prompt.md (sha256: dd0a0edd17645fc4baad05bef01261fd7146802a86bb82781c60043385dff665).
+// Generated from prompts/cli/runtime-entry.prompt.md (sha256: f75d073eea022ff07abfe554acdad7cc24fdda45d1b1c32e5cb5eec584fb53a8).
 import { createRequire } from 'node:module';
 import { isDeepStrictEqual } from 'node:util';
 

@@ -1,6 +1,6 @@
 # Own-agent adapters
 
-Own `src/agent-adapters.mjs`: PDD's local agent CLI discovery, shared credential-status interpretation, and direct subprocess runner (`agents.list` and `agents.run`). Simulator chat turns (`askAgent`, response parsing, fill validation, and temporary read-only overlays) live in [`src/runtime/agent-ask.mjs`](agent-ask.prompt.md).
+Own `src/agent-adapters.mjs`: PDD's local agent CLI discovery, shared credential-status interpretation, and direct subprocess runner (`agents.list` and `agents.run`). Simulator chat turns (`askAgent`, response parsing, fill validation, and temporary read-only overlays) live in [Simulator agent turn](agent-ask.prompt.md).
 
 Export asynchronous `discoverAgents({cwd,env,run,definitions,workspace})`, pure `parseAgentAuthStatus({agent,result})`, and `runAgentProcess(command,args,{cwd,env,input='',signal,timeoutMs=120000,maxBytes=131072})`. `run(command,args,{cwd,env,input,signal,timeoutMs,maxBytes})` is a direct subprocess port without a shell returning `{code,stdout,stderr}`, with `runAgentProcess` as its default implementation; cancellation sends `SIGTERM` to the process group (falling back to the child) followed by `SIGKILL` after 500 ms, and enforces `timeoutMs` (`timeout`) and `maxBytes` (`output limit`).
 
@@ -22,9 +22,9 @@ The native process port classifies `ENOENT` conservatively with Boolean `error.e
 
 ## Dependencies
 
-- [Workspace authority](runtime-workspace.prompt.md): required generation/runtime context for bounded-workspace discovery refusal via [`src/runtime-seam.mjs`](runtime-seam.prompt.md).
+- [Workspace authority](runtime-workspace.prompt.md): required generation/runtime context for bounded-workspace discovery refusal.
 - [Local agent configuration](agent-config.prompt.md): required generation context for `loadAgentDefinitions`.
 
 ## Caller navigation
 
-[`src/runtime-seam.mjs`](runtime-seam.prompt.md) binds `discoverAgents` and `runAgentProcess` as the host agent ports for [`src/runtime/agent-chat.mjs`](agent-chat.prompt.md) and [`src/runtime/agent-ask.mjs`](agent-ask.prompt.md).
+[PDD to Runtime seam](runtime-seam.prompt.md) binds `discoverAgents` and `runAgentProcess` as the host agent ports for [Agent chat](agent-chat.prompt.md) and [Simulator agent turn](agent-ask.prompt.md).

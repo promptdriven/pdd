@@ -1,6 +1,6 @@
 # Compose a product Try
 
-Own `src/product-composition.mjs`. Export synchronous `composeProductTry({root,parts,journey,testPath}, ports)` and `selectJourneys(tests, selector, ports)`. These are ordinary public module operations used by the Runtime client, not a second CLI or upload archive. Preserve standalone test and Simulator, product startup/status, source privacy and caller files.
+Own `src/runtime/product-composition.mjs`. Export synchronous `composeProductTry({root,parts,journey,testPath}, ports)` and `selectJourneys(tests, selector, ports)`. These are ordinary public module operations used by the Runtime client, not a second CLI or upload archive. Preserve standalone test and Simulator, product startup/status, source privacy and caller files.
 
 ## Assembly and setup boundaries
 
@@ -40,8 +40,6 @@ The Runtime client passes runtime-preflight’s captureSource(root,{tests,attemp
 
 - [Shared contract references](contract-refs.prompt.md): required generation/runtime context for expandSource and the native lossless JSON codec bindings; adapt files.stat/read to the same capture attempt’s safe readers.
 
-- [Product reader](product.prompt.md#product-composition-readers-and-journey-progress-808): caller context for the injected `parseProductDocuments` and `parseProductWorldWriters` ports and exact Story ID matching.
-- [Test selection](test-selection.prompt.md): caller context for the injected `selectTests` port used by `selectJourneys` and `composeProductTry`.
 - [Preflight](runtime-preflight.prompt.md): authoritative discovery, schema, safety and capture helpers.
 
 <details><summary>Runtime interface</summary>
@@ -49,7 +47,7 @@ The Runtime client passes runtime-preflight’s captureSource(root,{tests,attemp
 ```json
 {
   "status": "draft",
-  "prose_sha256": "c4e05f76b10f416dab22617f614a8b19a5ddb5449771dd719b266a5e95557c3a",
+  "prose_sha256": "90d8c8b26895978ee778c156bbad5e0cd4c4e1d4aa5849719d81f0e4d508a15e",
   "entries": [
     {
       "operation": "composeProductTry",

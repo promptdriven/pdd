@@ -1,3 +1,4 @@
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: c6693d25ba5b18bcd4732a258083dfbdc3d5aa8392769b6055e792efebe73088).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -710,7 +711,7 @@ const logSig = seen => `${seen?.log?.size ?? '-'}:${seen?.log?.mtime ?? '-'}`;
 //   age, the process stops and the job ends as a no-result (ceiling) with one alert. The age counts from the process
 //   start, without sleep gaps; nothing resets it.
 const NOTE_HOURS = 3, CPU_STEP = 10, SEEN_LIMIT = 200_000, READ_LIMIT = 8 * 1024 * 1024;
-const NEUTRAL_TOOLS = new Set(['wait', 'wait_agent', 'sleep', 'list_agents']);
+const NEUTRAL_TOOLS = new Set(['wait', 'wait_5_seconds', 'wait_agent', 'sleep', 'list_agents']);
 function processAge(ctx, job, part, at = ctx.now()) {
   const started = part?.started ?? job.started;
   const slept = (job.gaps ?? []).filter(g => g.to > started && g.from < at).reduce((sum, g) => sum + Math.min(g.to, at) - Math.max(g.from, started), 0);
@@ -771,6 +772,12 @@ function streamItems(line, role) {
     if (['reasoning', 'agent_message'].includes(type)) return [];
     tool(item.tool ?? item.name ?? (type === 'command_execution' ? '' : type), `${type}|${JSON.stringify(item)}`, object(item.arguments) ? { ...item.arguments, command: item.command ?? item.arguments.command } : item);
     out(output); if (result !== undefined) out(typeof result === 'string' ? result : JSON.stringify(result));
+    return items;
+  }
+  if (event.event === 'step_update' && event.step_update?.step_type === 'tool' && event.step_update?.state === 'DONE') {
+    const step = event.step_update, params = object(step.tool_info?.parameters) ? step.tool_info.parameters : {};
+    tool(step.tool_name, `${step.tool_name}|${JSON.stringify(params)}`, { ...params, command: params.command ?? params.CommandLine });
+    if (step.tool_info?.output !== undefined) out(step.tool_info.output);
     return items;
   }
   for (const part of Array.isArray(event.message?.content) ? event.message.content : []) {
@@ -943,7 +950,7 @@ function pddOnPath(ctx, env) {
 // #3177: the agent roles run commands in a shell; their wrapper checks which pdd that shell finds.
 const SHELL_ROLES = new Set(['build', 'repair', 'conflict', 'review']);
 const engineVersion = ctx => ctx.ports.version ?? readJson(ctx.fs, join(PACKAGE_ROOT, 'package.json'), {})?.version ?? null;
-// The skills folders that the agent's tools load by default (as pdd setup installs them): Codex ~/.agents/skills,
+// The skills folders that the agent's tools load by default (as pdd setup installs them): Codex and agy ~/.agents/skills,
 // Claude $CLAUDE_CONFIG_DIR/skills (absolute) else ~/.claude/skills; and the engine's own skills version.
 function skillsCheck(ctx) {
   const env = ctx.ports.env ?? process.env, home = env.HOME, dir = join(PACKAGE_ROOT, 'skills');
@@ -1070,7 +1077,7 @@ async function intake(ctx, rows) {
   const busy = jobs.filter(holdsSlot).length;
   let free = settings.runs - busy, tries = 0;
   if (free <= 0) return null;
-  if (!['codex', 'claude'].includes(state.agent?.kind)) return 'intake held: the core engine needs a Codex or Claude agent; run pdd autopilot start from a signed-in Codex or Claude';
+  if (!['codex', 'claude', 'agy'].includes(state.agent?.kind)) return 'intake held: the core engine needs a Codex, Claude or agy agent; run pdd autopilot start from a signed-in Codex, Claude or agy';
   // The launcher asks for an opt-in label: with none, no issue is claimed (a start without a label starts nothing).
   if (settings.labelRequired && !settings.label) return 'intake held: no opt-in label; run pdd autopilot start --label pdd:autopilot and mark issues with pdd autopilot add N';
   // The machine pause: no new job starts until it ends; then intake goes on as usual.
