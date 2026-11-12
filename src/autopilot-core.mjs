@@ -1,11 +1,10 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 9309fe9eb10a44da7025e3c25acb51ef76b1b634298c07b98d8cc46c9afcf074).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, createHash } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import { createDependencyReadPorts, refreshClaimHeartbeat, takeoverLimited } from './issue-dependencies-github.mjs';
-import { jobEnvironment, startAgentJob, readAgentJob, stopAgentJob, agentCommand, agentJobCpu, agentJobHangs, pddCheckFile, skillsCheckFile } from './agent-job.mjs';
+import { jobEnvironment, startAgentJob, readAgentJob, snapshotAgentJob, cleanupAgentJob, agentCommand, agentJobCpu, agentJobHangs, pddCheckFile, skillsCheckFile } from './agent-job.mjs';
 import { fileReport, listReportDrafts, reportKind } from './autopilot-reports.mjs';
 import { checkAutopilotBase } from './autopilot-base.mjs';
 import { redactSecrets } from './secret-redaction.mjs';
@@ -250,7 +249,7 @@ function githubApi(ports) {
 // ---- The tick context -----------------------------------------------------------------------------------
 function context({ state, settings, budget }, ports) {
   const fs = ports.fs ?? nativeFs, now = ports.now ?? Date.now, root = ports.root, dirs = folders(root), repo = state.repo;
-  const gh = githubApi(ports), jobs = ports.jobs ?? { start: startAgentJob, read: readAgentJob, stop: stopAgentJob, cpu: agentJobCpu, hangs: agentJobHangs };
+  const gh = githubApi(ports), jobs = ports.jobs ?? { start: startAgentJob, read: readAgentJob, snapshot: snapshotAgentJob, cleanup: cleanupAgentJob, cpu: agentJobCpu, hangs: agentJobHangs };
   const git = async (args, cwd = state.cwd) => { const r = await ports.git(args, { cwd }); if (r.code !== 0) throw Object.assign(Error(`git ${args[0]} failed: ${oneLine(r.stderr, 200)}`), { code: 'git' }); return String(r.stdout ?? '').trim(); };
   const execFile = (file, args, options = {}) => file === 'gh' ? ports.gh(args, options) : ports.git(args, options);
   let reader;
@@ -806,7 +805,17 @@ function newStreamLines(ctx, part, watch) {
 }
 const hash8 = text => createHash('sha256').update(text).digest('hex').slice(0, 16);
 const AGO = ms => ms >= HOUR ? `${Math.floor(ms / HOUR)} h ${Math.round(ms % HOUR / MIN)} min` : `${Math.round(ms / MIN)} min`;
-// The rule. Returns { state: 'running' } (go on), { state: 'quiet' } (T1: stopped) or { state: 'ceiling', cause }.
+async function cleanupPart(ctx, job, part) {
+  if (!part || !ctx.jobs.cleanup) return false;
+  try {
+    const state = ctx.jobs.read(part).state;
+    if (state === 'running' && (!ctx.jobs.snapshot || ctx.jobs.snapshot(part) === null)) return false;
+    ctx.saveJob(job);
+    return (await ctx.jobs.cleanup(part))?.confirmed === true;
+  } catch { return false; }
+}
+// The rule. Returns { state: 'running' } (go on), { state: 'quiet' } (T1: stopped), { state: 'cleanup' } (retry
+// cleanup before replacing this part) or { state: 'ceiling', cause }.
 async function watchProcess(ctx, job, part, role, cwd = null) {
   const now = ctx.now(), first = !part.watch;
   const w = part.watch ??= { offset: 0, at: part.started ?? now, last: null, cpu: {}, counts: { commits: 0, states: 0, items: 0 }, marks: [] };
@@ -856,7 +865,8 @@ async function watchProcess(ctx, job, part, role, cwd = null) {
     try { await (ctx.ports.alert ?? (async () => {}))({ issue: job.issue, ...a }); } catch (error) { ctx.warn(`Autopilot core alert failed: ${error.message}`); }
   };
   if (age >= limit) {
-    ctx.jobs.stop(part); w.stopped = 'backstop';
+    if (!await cleanupPart(ctx, job, part)) return { state: 'cleanup' };
+    w.stopped = 'backstop';
     const longest = longestSuccess(ctx, role), text = `the ${label} ran ${Math.round(limit / HOUR)} h (its limit: the larger of autopilot.maxJobHours and 4 times the longest successful ${role} here${longest ? `, ${AGO(longest)}` : ''}) with no result`;
     if (cwd) try {
       const status = await ctx.git(['status', '--porcelain'], cwd).catch(() => ''), diff = await ctx.git(['diff', 'HEAD'], cwd).catch(() => '');
@@ -872,7 +882,10 @@ async function watchProcess(ctx, job, part, role, cwd = null) {
     await alert(`note:${part.id}`, { kind: 'long-running', text: `Autopilot core: the ${label} of #${job.issue} runs for ${AGO(age)}. In the last hour: ${recent('commits')} new commit(s), ${recent('states')} new file state(s), ${recent('items')} new stream item(s). Log: ${basename(part.log)} on this machine.`,
       tried: `It still makes new things (last: ${w.last ?? 'none'}, ${AGO(now - w.at)} ago).`, need: `This job goes on (it stops at ${Math.round(limit / HOUR)} h). To stop it, remove pdd:working or add pdd:stuck.` });
   }
-  if (now - w.at >= ctx.quiet) { ctx.jobs.stop(part); w.stopped = 'quiet'; ctx.saveJob(job); return { state: 'quiet' }; }
+  if (now - w.at >= ctx.quiet) {
+    if (!await cleanupPart(ctx, job, part)) return { state: 'cleanup' };
+    w.stopped = 'quiet'; ctx.saveJob(job); return { state: 'quiet' };
+  }
   ctx.saveJob(job);
   return { state: 'running' };
 }
@@ -1232,6 +1245,7 @@ async function ciState(ctx, head, job) {
 }
 async function reviewState(ctx, job, prBody = '') {
   if (!job.review || job.review.head !== job.head || job.review.retry || !job.review.agent && !job.review.verdict) {
+    if (job.review?.agent && !await cleanupPart(ctx, job, job.review.agent)) return { state: 'running' };
     // A scoped check (debate B R2) is a short review of one part; a fresh review reads the whole PR.
     const cwd = await checkout(ctx, job, 'review'), scoped = job.review?.head === job.head ? job.review.scoped : null;
     const linked = scoped ? '(none)' : await linkedIssues(ctx, job, prBody, await changedFiles(ctx, job, job.head));
@@ -1385,7 +1399,11 @@ async function suiteState(ctx, job) {
     const command = queuedCommand(ctx, cwd, ctx.settings.testCommand);
     job.suite = { head: job.head, cwd, restarts, deaths, quiets, agent: startJob(ctx, job, 'suite', cwd, '', command, { CI: 'true' }) }; ctx.saveJob(job); return { state: 'running' };
   };
-  if (!job.suite || job.suite.head !== job.head) return start(await checkout(ctx, job, 'suite'));
+  const replace = async (cwdOf, restarts = 0, deaths = 0, quiets = 0) => {
+    if (job.suite?.agent && !await cleanupPart(ctx, job, job.suite.agent)) return { state: 'running' };
+    return start(await cwdOf(), restarts, deaths, quiets);
+  };
+  if (!job.suite || job.suite.head !== job.head) return replace(() => checkout(ctx, job, 'suite'));
   const seen = ctx.jobs.read(job.suite.agent);
   if (seen.state === 'running') {
     // The process rule: a suite that prints nothing new is a runner failure (retried); nothing new 3 times, or 3
@@ -1397,7 +1415,7 @@ async function suiteState(ctx, job) {
     const hang = await suiteHang(ctx, job);
     if (hang) return { state: 'hung', hang };
     const quiets = (job.suite.quiets ?? 0) + 1, restarts = job.suite.restarts ?? 0;
-    if (restarts < 2) return start(job.suite.cwd ?? await checkout(ctx, job, 'suite'), restarts + 1, job.suite.deaths ?? 0, quiets);
+    if (restarts < 2) return replace(() => job.suite.cwd ?? checkout(ctx, job, 'suite'), restarts + 1, job.suite.deaths ?? 0, quiets);
     return { state: 'broken', dead: true, text: `${quietText(ctx, 'full test suite')} for head ${short(job.head)} (3 tries). Log: ${basename(job.suite.agent.log)} on this machine` };
   }
   if (seen.exit?.code === 0) { recordSuccess(ctx, job, job.suite.agent, 'suite', seen); return { state: 'pass' }; }
@@ -1409,7 +1427,7 @@ async function suiteState(ctx, job) {
   if (seen.state === 'dead' || seen.exit?.signal || [86, 127].includes(seen.exit?.code) || SUITE_RUNNER.test(log) || !log.trim()) {
     // "Died 3 times" counts every try of this suite run.
     const deaths = (job.suite.deaths ?? 0) + (seen.state === 'dead' ? 1 : 0);
-    if ((job.suite.restarts ?? 0) < 2) return start(job.suite.cwd ?? await checkout(ctx, job, 'suite'), (job.suite.restarts ?? 0) + 1, deaths, job.suite.quiets ?? 0);
+    if ((job.suite.restarts ?? 0) < 2) return replace(() => job.suite.cwd ?? checkout(ctx, job, 'suite'), (job.suite.restarts ?? 0) + 1, deaths, job.suite.quiets ?? 0);
     return { state: 'broken', dead: deaths + (job.suite.quiets ?? 0) >= 3, text: `the full test suite runner failed for head ${short(job.head)} (${seen.state === 'dead' ? 'the run died' : seen.exit?.signal ? `killed by ${seen.exit.signal}` : `exit ${seen.exit?.code}`}, 3 tries). Log: ${basename(job.suite.agent.log)} on this machine` };
   }
   recordSuccess(ctx, job, job.suite.agent, 'suite', seen);
@@ -1790,9 +1808,10 @@ async function vectorsState(ctx, job) {
   const save = value => { job.vectors = { ...value, schema: 4 }; ctx.saveJob(job); return job.vectors; };
   const start = (vectors, restarts) => save({ ...vectors, state: 'running', restarts,
     agent: startJob(ctx, job, 'vectors', vectors.cwd, '', queuedCommand(ctx, vectors.cwd, vectors.command), { CI: 'true' }) });
-  // A new head, or a record of an older build, starts again (an older run that still goes is stopped first).
+  // A new head, or a record of an older build, starts again. Its running predecessor stays saved until cleanup proves
+  // that its captured process tree is gone; otherwise the next tick retries the same record.
   if (!job.vectors || job.vectors.head !== job.head || job.vectors.schema !== 4) {
-    if (job.vectors?.state === 'running' && job.vectors.agent) ctx.jobs.stop(job.vectors.agent);
+    if (job.vectors?.agent && !await cleanupPart(ctx, job, job.vectors.agent)) return job.vectors;
     const files = await evidenceFiles(ctx, job);
     if (!HEAD_KINDS.some(kind => files[kind].length)) return save({ head: job.head, files, skipped: [], state: 'none' });
     const cwd = await checkout(ctx, job, 'vectors'), { run, skipped } = replayPlan(ctx, cwd, files), count = HEAD_KINDS.reduce((n, kind) => n + run[kind].length, 0);
@@ -1815,20 +1834,23 @@ async function vectorsState(ctx, job) {
   }
   if (job.vectors.state !== 'running') return job.vectors;
   const seen = ctx.jobs.read(job.vectors.agent);
-  let stopped = null;
+  let stopped = false;
   if (seen.state === 'running') {
     const watch = await watchProcess(ctx, job, job.vectors.agent, 'vectors');
     if (watch.state === 'ceiling') return { state: 'ceiling', cause: watch.cause };
     if (watch.state !== 'quiet') return job.vectors;
-    stopped = `nothing new for ${ctx.settings.quietMinutes} minutes`;
+    stopped = true;
   }
   const log = replayLog(ctx.fs, job.vectors.agent.log, job.vectors.nonce), kinds = RUN_KINDS.filter(kind => job.vectors.files[kind]?.length);
   // Each file shows its own result; a file with no marker is a runner failure (the run did not reach or finish it).
   const lost = kinds.flatMap(kind => job.vectors.files[kind].filter((file, i) => !log.files[kind][i]));
-  const why = stopped ?? (seen.state === 'dead' ? 'the run died' : seen.exit?.signal ? `killed by ${seen.exit.signal}` : [86, 127].includes(seen.exit?.code) ? `exit ${seen.exit.code}`
-    : log.runner ? 'a runner failure of the suite queue' : lost.length ? `no result for ${someFiles(lost)} (exit ${seen.exit?.code ?? 'unknown'})` : null);
+  const why = stopped ? `nothing new for ${ctx.settings.quietMinutes} minutes` : seen.state === 'dead' ? 'the run died' : seen.exit?.signal ? `killed by ${seen.exit.signal}` : [86, 127].includes(seen.exit?.code) ? `exit ${seen.exit.code}`
+    : log.runner ? 'a runner failure of the suite queue' : lost.length ? `no result for ${someFiles(lost)} (exit ${seen.exit?.code ?? 'unknown'})` : null;
   if (why) {
-    if ((job.vectors.restarts ?? 0) < 2) return start(job.vectors, (job.vectors.restarts ?? 0) + 1);
+    if ((job.vectors.restarts ?? 0) < 2) {
+      if (!stopped && !await cleanupPart(ctx, job, job.vectors.agent)) return job.vectors;
+      return start(job.vectors, (job.vectors.restarts ?? 0) + 1);
+    }
     return save({ ...job.vectors, state: 'not-run', reason: `the run gave no result (${why}, 3 tries); log ${basename(job.vectors.agent.log)} on this machine` });
   }
   recordSuccess(ctx, job, job.vectors.agent, 'vectors', seen);
@@ -1982,7 +2004,11 @@ async function writeEvidenceBlock(ctx, job) {
   if (next !== body) await ctx.gh.ok('PATCH', `repos/${ctx.repo}/pulls/${job.pr}`, { body: next });
 }
 
-function stopChecks(ctx, job) { for (const part of [job.agent, job.review?.agent, job.suite?.agent, job.vectors?.agent]) if (part) ctx.jobs.stop(part); }
+async function stopChecks(ctx, job) {
+  const parts = [job.agent, job.review?.agent, job.suite?.agent, job.vectors?.agent, job.runtimeWait?.agent].filter(Boolean);
+  for (const part of parts) if (!await cleanupPart(ctx, job, part)) return false;
+  return true;
+}
 
 async function mergeCheck(ctx, job) {
   const { gh, repo, state, settings } = ctx;
@@ -2027,7 +2053,7 @@ async function mergeCheck(ctx, job) {
   // makes sense when a merge would follow) and lists the prompts in its would-merge note.
   const gate = await promptGate(ctx, job), drafts = gate.problems;
   if (drafts.length && ctx.settings.mode === 'auto' && gate.strict) {
-    stopChecks(ctx, job);
+    await stopChecks(ctx, job);
     return end(ctx, job, { kind: 'job', component: 'autopilot-core', code: 'needs-person', text: 'the prompt changes need a person\'s approval', keepPr: true,
       question: `PR #${job.pr} changes prompts that need a person's approval in this repository (strict_approvals): ${drafts.join('; ')}. Please approve the PR on GitHub (or approve each prompt with pdd approve on its branch and push), then remove pdd:needs-decision: Autopilot checks the same PR again, with no new build. To give up on it, close the PR.` });
   }
@@ -2046,13 +2072,13 @@ async function mergeCheck(ctx, job) {
   if (!reds.length) {
     // One backstop end per job: a reviewer at its backstop ends the job before the suite is read.
     review = await reviewState(ctx, job, pr.body);
-    if (review.state === 'ceiling') { stopChecks(ctx, job); return end(ctx, job, review.cause); }
+    if (review.state === 'ceiling') { await stopChecks(ctx, job); return end(ctx, job, review.cause); }
     suite = await suiteState(ctx, job);
-    if (suite.state === 'ceiling') { stopChecks(ctx, job); return end(ctx, job, suite.cause); }
+    if (suite.state === 'ceiling') { await stopChecks(ctx, job); return end(ctx, job, suite.cause); }
     if (suite.state === 'hung') return issueStop(ctx, job, suite.hang);
     // T04: the engine's own run of the changed replay and formal files, and the Evidence claims against it.
     vectors = await vectorsState(ctx, job);
-    if (vectors.state === 'ceiling') { stopChecks(ctx, job); return end(ctx, job, vectors.cause); }
+    if (vectors.state === 'ceiling') { await stopChecks(ctx, job); return end(ctx, job, vectors.cause); }
     reds.push(...engineEvidenceReds(ctx, job, pr.body));
     if (Object.keys(uncheckedOf(job)).length && !job.vectorsReport) {
       const filed = await report(ctx, job, { kind: 'pdd', component: 'autopilot-core', code: 'replay-not-run', shipped: true,
@@ -2068,7 +2094,7 @@ async function mergeCheck(ctx, job) {
     }
     if (review.state === 'fail' && review.decision && asking(ctx) && !job.answer) {
       const item = review.decision.items[0].replace(DECISION_ITEM, '').replace(/^\W+/, '');
-      stopChecks(ctx, job);
+      await stopChecks(ctx, job);
       return end(ctx, job, { kind: 'job', component: 'review', code: 'needs-person', text: 'the change makes a choice that the issue did not make', decision: true, ask: 'choice',
         question: review.decision.question ?? `The review found a choice that issue #${job.issue} did not make: ${oneLine(item, 600)}. Which option do you want?` });
     }
@@ -2096,7 +2122,7 @@ async function mergeCheck(ctx, job) {
   // end), so it never holds a slot for good.
   if (ci.sig !== job.ci?.sig || job.ci?.head !== job.head) job.ci = { head: job.head, sig: ci.sig, at: ctx.now() };
   if (ci.state === 'pending' && !ci.notStarted && ctx.now() - job.ci.at >= ctx.ciStuck) {
-    stopChecks(ctx, job);
+    await stopChecks(ctx, job);
     return end(ctx, job, cause('job', 'checks-stuck', `CI stayed pending with no change for ${Math.round((ctx.now() - job.ci.at) / HOUR)} hours${ci.pending?.length ? ` (${ci.pending.join(', ')})` : ''}`, { noResult: true, owner: 'service' }));
   }
   // Something still runs (CI that still changes, a reviewer or a suite process): wait, and the quiet clock restarts.
@@ -2115,6 +2141,7 @@ async function mergeCheck(ctx, job) {
   const conflict = await laneConflict(ctx, job);
   if (conflict?.agent) return conflictFix(ctx, job, conflict.agent);
   if (conflict?.mechanical) {
+    if (!await stopChecks(ctx, job)) return;
     Object.assign(job, { head: conflict.mechanical.head, prAt: ctx.now(), suite: null, mechanical: conflict.mechanical, progress: { sig: null, at: ctx.now(), running: false },
       review: job.review?.verdict === 'PASS' ? { ...job.review, head: conflict.mechanical.head, kept: 'mechanical' } : null });
     job.lane.refreshed = true; ctx.saveJob(job); return;
@@ -2523,7 +2550,7 @@ async function laneConflict(ctx, job) {
 // the conflict files and its file set stay the same. C3: the 3rd conflict exit ends the job; C2: at the 2nd, the PR
 // reserves its conflict files for an hour.
 async function conflictFix(ctx, job, info) {
-  stopChecks(ctx, job);
+  if (!await stopChecks(ctx, job)) return;
   await leaveLane(ctx, job);
   job.conflictExits = (job.conflictExits ?? 0) + 1;
   noteCut(job, 'conflict hunks', info.cut ?? 0);
@@ -2808,7 +2835,7 @@ function repairStop(ctx, job, findings) {
   return stop;
 }
 async function repairOrEnd(ctx, job, reds, findings = reds) {
-  stopChecks(ctx, job);
+  if (!await stopChecks(ctx, job)) return;
   await leaveLane(ctx, job);
   job.lane = null;
   const stop = repairStop(ctx, job, findings);
@@ -2827,6 +2854,7 @@ async function repairOrEnd(ctx, job, reds, findings = reds) {
 // R2 a scoped check when the base changed a line within 10 lines of a PR hunk, or a prompt that owns a file of the PR;
 // R3 a fresh review for any other change of F. A clean merge here is never a repair.
 async function refreshBase(ctx, job) {
+  if (!await stopChecks(ctx, job)) return;
   const base = ctx.state.baseBranch, cwd = job.worktree, tip = `origin/${base}`;
   await ctx.git(['fetch', '-q', 'origin', base], cwd);
   await ctx.git(['reset', '-q', '--hard', job.head], cwd);
@@ -3020,7 +3048,7 @@ const stopReport = (ctx, job, code, text, step) => report(ctx, job, { kind: 'pdd
 // A quiet merge check step (phase pr): the job keeps its PR, claim and slot and tries again after a backoff of 15
 // minutes x 2^(count-1), at most 8 hours. A pdd stop files one report and counts toward the machine pause.
 async function stepStop(ctx, job, error = null) {
-  stopChecks(ctx, job);
+  await stopChecks(ctx, job);
   // A waiting PR does not hold the repository's merge lane; it enters it again after the wait.
   try { await leaveLane(ctx, job); job.lane = null; } catch (failure) { ctx.warn(`Autopilot core could not leave the merge lane for #${job.issue}: ${failure.message}`); }
   const last = error ? safeLine(error.message) : job.lastError ?? null, owner = last && SERVICE_ERROR.test(last) ? 'service' : 'pdd';
@@ -3151,7 +3179,7 @@ async function report(ctx, job, why, step) {
 // Another machine holds the claim: stop locally, change nothing on its issue, and leave this machine's own open PR
 // as a draft with a note. One try only; the other machine's work is never touched.
 async function handOver(ctx, job, text) {
-  stopChecks(ctx, job);
+  await stopChecks(ctx, job);
   try { await leaveLane(ctx, job); } catch (error) { ctx.warn(`Autopilot core could not leave the merge lane for #${job.issue}: ${error.message}`); }
   await draftOwnPr(ctx, job, text);
   return finishLocal(ctx, job, 'handed-over', text);
@@ -3230,7 +3258,7 @@ async function end(ctx, job, why) {
     }
   }
   Object.assign(job, { phase: 'ending', end: job.end ?? { cause: why, at: ctx.now() } }); ctx.saveJob(job);
-  try { stopChecks(ctx, job); } catch (error) { ctx.warn(`Autopilot core could not stop the processes of #${job.issue}: ${error.message}`); }
+  try { await stopChecks(ctx, job); } catch (error) { ctx.warn(`Autopilot core could not stop the processes of #${job.issue}: ${error.message}`); }
   return continueEnd(ctx, job);
 }
 async function continueEnd(ctx, job) {
@@ -3354,11 +3382,14 @@ async function continueEnd(ctx, job) {
 // Local cleanup: the worktrees go only after the GitHub outcome is confirmed. Every per-issue file of this engine
 // goes too, except the job logs that the END comment and history name. The branch stays unless merged.
 async function finishLocal(ctx, job, outcome, text) {
-  // Each step has its own error boundary; the job file goes last in all cases, so a failed step never keeps a job.
+  // An uncertain process inventory is different from an ordinary cleanup failure: it
+  // retains the record and worktree so the next tick can prove ownership again.
   const step = async (name, action) => { try { await action(); } catch (error) { ctx.warn(`Autopilot core cleanup of #${job.issue} (${name}): ${error.message}`); } };
+  let confirmed = false;
   try {
     ctx.skip.add(job.issue);
-    await step('processes', () => stopChecks(ctx, job));
+    if (!await stopChecks(ctx, job)) { ctx.warn(`Autopilot core cleanup of #${job.issue} (processes): cleanup is not confirmed; retained for retry`); return; }
+    confirmed = true;
     const mine = name => name === String(job.issue) || name.startsWith(`${job.issue}-`) || name.startsWith(`${job.issue}.`);
     const list = dir => { try { return ctx.fs.readdirSync(dir).filter(mine); } catch { return []; } };
     for (const path of new Set([job.worktree, ...list(ctx.dirs.worktrees).map(name => join(ctx.dirs.worktrees, name))]))
@@ -3370,7 +3401,7 @@ async function finishLocal(ctx, job, outcome, text) {
       ...(job.end?.cause?.ask ? { ask: job.end.cause.ask } : {}), ...(job.decided ? { decided: oneLine(job.decided.question, 300) } : {}),
       ...(outcome === 'released' && job.end?.cause?.counted ? { noResult: true } : {}), ...(outcome === 'ended' ? { reset: true } : {}), ...(job.end?.cause?.owner ? { owner: job.end.cause.owner } : {}) }));
   } finally {
-    try { ctx.fs.rmSync(join(ctx.dirs.jobs, `${job.issue}.json`), { force: true }); }
+    if (confirmed) try { ctx.fs.rmSync(join(ctx.dirs.jobs, `${job.issue}.json`), { force: true }); }
     catch (error) { nativeFs.rmSync(join(ctx.dirs.jobs, `${job.issue}.json`), { force: true }); ctx.warn(`Autopilot core job file of #${job.issue}: ${error.message}`); }
   }
 }

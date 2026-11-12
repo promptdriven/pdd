@@ -1,4 +1,3 @@
-// Generated from prompts/cli/autopilot-retire.prompt.md (sha256: 4fd78683bc360ef25f74ab2735d4932765f7d65644d1893d336bc00b9d4a0ce9).
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -10,7 +9,7 @@ import { createHash } from 'node:crypto';
 import { moveToCore, movedState, engineBefore, oldProcessOf, parseProcesses, procTable, claimRecord, RETIRED_NOTE, MAX_DEFERS, FULL_ENGINE_REMOVED } from '../src/autopilot-retire.mjs';
 import { coreWorld } from './helpers/core-world.mjs';
 
-const REPO = 'acme/widgets', ME = { coordinatorId: 'coord-a', machine: 'host-a' }, OTHER = { coordinatorId: 'coord-b', machine: 'host-b' };
+const REPO = 'acme/widgets', UID = 501, ME = { coordinatorId: 'coord-a', machine: 'host-a' }, OTHER = { coordinatorId: 'coord-b', machine: 'host-b' };
 const claimBody = (who, labelEventId) => `Autopilot claim.\n\n\`\`\`json\n${JSON.stringify({ repository: REPO, ...who, labelEventId: String(labelEventId), lastSeen: '' })}\n\`\`\``;
 
 // A small GitHub: issues with labels, comments and label events; PRs with a state and comments. Every write is kept.
@@ -50,7 +49,7 @@ function fakeGithub() {
   return g;
 }
 
-const run = (number, who, { state = 'running', prs = [] } = {}) => ({ number, repo: REPO, state, runId: `run-${number}`, sourceRoot: '/repo',
+const run = (number, who, { state = 'running', prs = [], runDir = `/repo/.git/pdd/runs/${number}` } = {}) => ({ number, repo: REPO, state, runId: `run-${number}`, sourceRoot: '/repo', root: `/repo.pdd-worktrees/${number}`, runDir,
   automaticOrigin: { repository: REPO, ...who, claim: { commentId: 'unknown', labelEventId: 'unknown' } }, pr: prs.map(number => ({ number })) });
 
 // The machine of the old full engine: a coordinator pane, 2 live runs with claims, PR 1 and PR 2, a cancelled run's
@@ -59,18 +58,18 @@ function fullWorld() {
   const g = fakeGithub(), w = { g, herdrCalls: [], cancelled: [], released: [], signals: [], saves: [], now: 1_000_000 };
   const a = g.claim(11, ME), b = g.claim(12, ME, { labels: ['pdd:needs-decision', 'pdd:stuck', 'area:docs'] }), c = g.claim(13, OTHER);
   g.pull(21); g.pull(22); g.pull(23, { state: 'closed' }); g.pull(31);
-  w.runs = [run(11, ME, { prs: [21] }), run(12, ME, { prs: [22] }), run(9, ME, { state: 'cancelled', prs: [23] }), run(13, OTHER, { prs: [31] })];
+  w.runs = [run(11, ME, { prs: [21] }), run(12, ME, { prs: [22] }), run(9, ME, { state: 'cancelled', prs: [23], runDir: '/repo/.git/pdd/runs/9-cancelled-abcd1234' }), run(13, OTHER, { prs: [31] })];
   w.runs[0].automaticOrigin.claim = { commentId: String(a.comments[0].id), labelEventId: String(a.timeline[0].id) };
   w.runs[1].automaticOrigin.claim = { commentId: String(b.comments[0].id), labelEventId: String(b.timeline[0].id) };
   w.claimC = c.comments[0].id;
   w.panes = new Map([['pane-1', { pane_id: 'pane-1', workspace_id: 'ws-1', cwd: '/repo', agent: 'codex', agent_status: 'idle' }]]);
   w.procs = [
-    { pid: 501, ppid: 1, pgid: 501, rss: 51200, args: `node /pkg/src/workflow-worker-completion.mjs ${JSON.stringify({ runId: 'r1', runDir: '/repo/.git/pdd/runs/11', sourceRoot: '/repo' })}` },
-    { pid: 502, ppid: 1, pgid: 502, rss: 51200, args: `node /pkg/src/workflow-worker-completion.mjs ${JSON.stringify({ runId: 'r0', runDir: '/repo/.git/pdd/runs/9-cancelled-abcd1234', sourceRoot: '/repo' })}`, stubborn: true },
-    { pid: 503, ppid: 1, pgid: 503, rss: 1024, args: `node /pkg/src/autopilot-launcher.mjs --coordinator-idle ${JSON.stringify({ stateFile: '/state/a.json', paneId: 'pane-1' })}` },
-    { pid: 601, ppid: 1, pgid: 601, rss: 51200, args: `node /pkg/src/workflow-worker-completion.mjs ${JSON.stringify({ runId: 'x', runDir: '/other/.git/pdd/runs/3', sourceRoot: '/other' })}` },
-    { pid: 602, ppid: 1, pgid: 602, rss: 2048, args: 'node /pkg/src/autopilot-launcher.mjs --start-scan-wait {"stateFile":"/state/a.json"}' },
-    { pid: 603, ppid: 1, pgid: 603, rss: 2048, args: 'vim notes.txt' },
+    { pid: 501, ppid: 1, pgid: 501, rss: 51200, start: 'Mon Nov 11 10:00:01 2026', args: `node /pkg/src/workflow-worker-completion.mjs ${JSON.stringify({ runId: 'r1', runDir: '/repo/.git/pdd/runs/11', sourceRoot: '/repo' })}` },
+    { pid: 502, ppid: 1, pgid: 502, rss: 51200, start: 'Mon Nov 11 10:00:02 2026', args: `node /pkg/src/workflow-worker-completion.mjs ${JSON.stringify({ runId: 'r0', runDir: '/repo/.git/pdd/runs/9-cancelled-abcd1234', sourceRoot: '/repo' })}`, stubborn: true },
+    { pid: 503, ppid: 1, pgid: 503, rss: 1024, start: 'Mon Nov 11 10:00:03 2026', args: `node /pkg/src/autopilot-launcher.mjs --coordinator-idle ${JSON.stringify({ stateFile: '/state/a.json', paneId: 'pane-1' })}` },
+    { pid: 601, ppid: 1, pgid: 601, rss: 51200, start: 'Mon Nov 11 10:00:04 2026', args: `node /pkg/src/workflow-worker-completion.mjs ${JSON.stringify({ runId: 'x', runDir: '/other/.git/pdd/runs/3', sourceRoot: '/other' })}` },
+    { pid: 602, ppid: 1, pgid: 602, rss: 2048, start: 'Mon Nov 11 10:00:05 2026', args: 'node /pkg/src/autopilot-launcher.mjs --start-scan-wait {"stateFile":"/state/a.json"}' },
+    { pid: 603, ppid: 1, pgid: 603, rss: 2048, start: 'Mon Nov 11 10:00:06 2026', args: 'vim notes.txt' },
   ];
   w.state = { repo: REPO, cwd: '/repo', ...ME, paneId: 'pane-1', workspaceId: 'ws-1', agent: { kind: 'codex', id: 'codex' }, ownerLaunch: { profile: { agent: { id: 'codex', kind: 'codex' } } },
     githubIntake: { claims: [{ issue: `https://github.com/${REPO}/issues/11`, ...ME, owner: ME.coordinatorId }] }, parking: { a: 1 }, recipeDelivered: true, enabled: true };
@@ -90,7 +89,9 @@ function fullWorld() {
     cancelRun: async r => { w.cancelled.push(r.number); r.state = 'cancelled'; return { exitCode: 0, message: 'Cancelled.' }; },
     releaseLocal: async r => { w.released.push(r.number); return { state: 'released' }; },
     releaseSlots: async () => true,
-    processes: async () => w.procs.map(p => `${p.pid} ${p.ppid} ${p.pgid} ${p.rss} ${p.args}`).join('\n'),
+    processes: async () => w.procs.map(p => `${p.pid} ${p.ppid} ${p.pgid} ${p.rss} ${p.uid ?? UID} ${p.start} ${p.args}`).join('\n'),
+    uid: UID,
+    cwdOf: async pid => w.procs.find(p => p.pid === pid)?.cwd ?? '/other',
     signal: (target, name) => { w.signals.push([target, name]); const pid = Math.abs(target), at = w.procs.findIndex(p => p.pid === pid); if (at >= 0 && (name === 'SIGKILL' || !w.procs[at].stubborn)) w.procs.splice(at, 1); },
     sleep: async () => {},
   };
@@ -118,7 +119,7 @@ test('M1 the first tick moves a full-engine machine: claims, runs, pane, one not
   assert.equal(w.g.pulls.get(23).comments.length, 0);
   // The old workers of this repository stop: TERM to each process group, KILL for the one that stays. Others stay.
   assert.deepEqual(w.procs.map(p => p.pid), [601, 602, 603]);
-  assert.deepEqual(w.signals, [[-501, 'SIGTERM'], [-502, 'SIGTERM'], [-503, 'SIGTERM'], [-502, 'SIGKILL']]);
+  assert.deepEqual(w.signals, [[501, 'SIGTERM'], [502, 'SIGTERM'], [503, 'SIGTERM'], [502, 'SIGKILL']]);
   assert.equal(result.message, `Autopilot moved this machine to the core engine for ${REPO}: closed 1 coordinator chat(s), cancelled 2 old run(s), released 2 claim(s), left 2 PR note(s), stopped 3 old worker process(es) (101 MB).`);
   assert.ok(Number.isFinite(result.journal.done));
   // The saved state: engine core, the journal, no full-engine key; the coordinator's launch profile stays.
@@ -314,13 +315,50 @@ test('M7 a machine that already ran the core engine: no claim search and no PR r
   const w = fullWorld();
   w.runs = []; w.state = { ...w.state, engine: 'core', paneId: undefined, githubIntake: undefined };
   const result = await w.move();
-  assert.equal(result.done, true); assert.match(result.message, /released 0 claim\(s\), left 0 PR note\(s\), stopped 3 old worker process\(es\) \(101 MB\)\.$/);
+  assert.equal(result.done, true); assert.match(result.message, /released 0 claim\(s\), left 0 PR note\(s\), stopped 1 old worker process\(es\) \(1 MB\)\.$/);
   assert.deepEqual(w.g.writes, []); assert.equal(w.g.issues.get(11).comments.length, 1, 'the core never loses a claim');
-  assert.deepEqual(w.procs.map(p => p.pid), [601, 602, 603]);
+  assert.deepEqual(w.procs.map(p => p.pid), [501, 502, 601, 602, 603]);
   const busy = fullWorld();
   busy.runs = []; busy.state = { ...busy.state, engine: 'core', paneId: undefined };
-  busy.procs = [];
+  busy.procs = [{ pid: 700, ppid: 1, pgid: 700, rss: 1, start: 'Mon Nov 11 10:00:07 2026', args: 'node unrelated', cwd: '/other' }];
   assert.equal((await busy.move()).message, '', 'nothing found and the engine was core: no line');
+});
+
+test('retirement leaves a current-user manual helper in a cancelled worktree, and does not inspect another user', async () => {
+  const w = fullWorld(), cwdReads = [];
+  for (const item of w.runs) item.state = 'cancelled';
+  w.procs = [
+    { pid: 800, ppid: 1, pgid: 800, rss: 1, uid: 502, start: 'Mon Nov 11 10:01:00 2026', args: 'node unrelated', cwd: '/repo.pdd-worktrees/11' },
+    { pid: 801, ppid: 1, pgid: 801, rss: 1, uid: UID, start: 'Mon Nov 11 10:01:01 2026', args: 'node helper', cwd: '/repo.pdd-worktrees/11' },
+    { pid: 802, ppid: 1, pgid: 802, rss: 1, uid: UID, start: 'Mon Nov 11 10:01:02 2026', args: 'node helper', cwd: '/repo.pdd-worktrees/active' }
+  ];
+  w.ports.cwdOf = async pid => { cwdReads.push(pid); return w.procs.find(row => row.pid === pid)?.cwd ?? null; };
+  const journal = { wasFull: false, steps: { pane: 1, runs: 1, claims: 1, notes: 1, slots: 1 }, counts: {}, defers: 0 };
+  const result = await w.move({ ...w.state, retiredFull: journal });
+  assert.equal(result.done, false); assert.match(result.message, /ownership is ambiguous/);
+  assert.deepEqual(w.procs.map(row => row.pid), [800, 801, 802]); assert.deepEqual(w.signals, []); assert.deepEqual(cwdReads, [801]);
+  const completed = fullWorld();
+  for (const item of completed.runs) item.state = 'completed';
+  completed.procs = [{ pid: 804, ppid: 1, pgid: 804, rss: 1, uid: UID, start: 'Mon Nov 11 10:01:04 2026', args: 'node helper', cwd: '/repo.pdd-worktrees/11' }];
+  const held = await completed.move({ ...completed.state, retiredFull: journal });
+  assert.equal(held.done, false); assert.match(held.message, /ownership is ambiguous/, 'a recorded completed run root is still protected');
+});
+
+test('retirement accepts a parentless process that exits before cwd evidence, but retains one whose cwd is unreadable', async () => {
+  const setup = () => {
+    const w = fullWorld();
+    for (const item of w.runs) item.state = 'cancelled';
+    w.procs = [{ pid: 801, ppid: 1, pgid: 801, rss: 1, uid: UID, start: 'Mon Nov 11 10:01:01 2026', args: 'node helper' }];
+    return w;
+  };
+  const gone = setup();
+  gone.ports.cwdOf = async pid => { gone.procs = gone.procs.filter(row => row.pid !== pid); return null; };
+  const journal = { wasFull: false, steps: { pane: 1, runs: 1, claims: 1, notes: 1, slots: 1 }, counts: {}, defers: 0 };
+  assert.equal((await gone.move({ ...gone.state, retiredFull: journal })).done, true);
+  const unreadable = setup();
+  unreadable.ports.cwdOf = async () => { unreadable.procs[0].args = 'node changed-command'; return null; };
+  const held = await unreadable.move({ ...unreadable.state, retiredFull: journal });
+  assert.equal(held.done, false); assert.match(held.message, /working-directory evidence is unreadable/); assert.deepEqual(unreadable.signals, []);
 });
 
 test('M8 the engine before 0.1.29: the saved engine, else pdd.json, else full; the core keeps its own claims (hashed machine id)', () => {
@@ -335,12 +373,17 @@ test('M8 the engine before 0.1.29: the saved engine, else pdd.json, else full; t
   assert.equal(oldProcessOf(`node /x/workflow-worker-completion.mjs /tmp/identity.json`, { runsRoot: '/repo/.git/pdd/runs', stateFile: '/s.json' }), null);
   assert.equal(oldProcessOf(`node /x/autopilot-launcher.mjs --coordinator-idle {"stateFile":"/s.json"}`, { runsRoot: '/r', stateFile: '/s.json' }), 'coordinator-idle');
   assert.equal(oldProcessOf(`node /x/autopilot-launcher.mjs --start-scan-wait {"stateFile":"/s.json"}`, { runsRoot: '/r', stateFile: '/s.json' }), null);
-  assert.deepEqual(parseProcesses('  12   1  12  300 node a b\nbad row\n'), [{ pid: 12, ppid: 1, pgid: 12, rss: 300, args: 'node a b' }]);
+  assert.equal(oldProcessOf('node agent /repo.pdd-worktrees/run-7/task.mjs', { runsRoot: '/r', stateFile: '/s.json', runRoots: ['/repo.pdd-worktrees/run-7'] }), null);
+  assert.equal(oldProcessOf('node agent /repo.pdd-worktrees/run-8/task.mjs', { runsRoot: '/r', stateFile: '/s.json', runRoots: ['/repo.pdd-worktrees/run-7'] }), null);
+  assert.equal(parseProcesses('  12   1  12  300 node a b\nbad row\n'), null, 'a partial inventory is not cleanup evidence');
   // Linux without ps: /proc gives the same rows; a kernel thread (empty cmdline) and a process that ended are skipped.
-  const proc = { '/proc/7/cmdline': 'node\0/x/workflow-worker-completion.mjs\0{"runDir":"/r/7"}\0', '/proc/7/stat': '7 (node (w)) S 1 7 7 0 -1 0 0 0 0 0 1 2 0 0 20 0 1 0 100 9000 25 0',
-    '/proc/2/cmdline': '', '/proc/2/stat': '2 (kthreadd) S 0 0 0' };
-  const fs = { readdirSync: () => ['7', '2', '9', 'self'], readFileSync: path => { if (!(path in proc)) throw Object.assign(Error('gone'), { code: 'ENOENT' }); return proc[path]; } };
-  assert.deepEqual(parseProcesses(procTable(fs)), [{ pid: 7, ppid: 1, pgid: 7, rss: 100, args: 'node /x/workflow-worker-completion.mjs {"runDir":"/r/7"}' }]);
+  const proc = { '/proc/7/cmdline': 'node\0/x/workflow-worker-completion.mjs\0{"runDir":"/r/7"}\0', '/proc/7/stat': '7 (node (w)) S 1 7 7 0 -1 0 0 0 0 0 1 2 0 0 20 0 1 0 100 9000 25 0', '/proc/7/status': 'Name:\tnode\nUid:\t501\t501\t501\t501\n' };
+  const fs = { readdirSync: () => ['7', '9', 'self'], readFileSync: path => { if (!(path in proc)) throw Object.assign(Error('gone'), { code: 'ENOENT' }); return proc[path]; } };
+  assert.deepEqual(parseProcesses(procTable(fs)), [{ pid: 7, ppid: 1, pgid: 7, rss: 100, uid: 501, start: '@100', args: 'node /x/workflow-worker-completion.mjs {"runDir":"/r/7"}' }]);
+  const live = { readdirSync: () => ['7'], readFileSync: path => path.endsWith('/status') ? (() => { throw Object.assign(Error('denied'), { code: 'EACCES' }); })() : proc[path] };
+  assert.throws(() => procTable(live), /denied/, 'an unreadable live process makes the inventory unavailable');
+  const noUid = { readdirSync: () => ['7'], readFileSync: path => path.endsWith('/status') ? 'Name:\tnode\n' : proc[path] };
+  assert.throws(() => procTable(noUid), /stable identity/, 'a live row without uid is not omitted');
   assert.match(FULL_ENGINE_REMOVED, /full Autopilot engine is removed/);
 });
 
@@ -359,18 +402,22 @@ setInterval(() => {}, 1000);\n`);
   const mine = [start(join(runsRoot, '7')), start(join(runsRoot, '8'), { STUBBORN: '1' }), start(join(runsRoot, '9'), { CHILD: '1' })];
   const other = start(join(dir, 'other', '.git', 'pdd', 'runs', '7'));
   t.after(() => { for (const pid of [...mine, other]) { try { process.kill(-pid, 'SIGKILL'); } catch { /* gone */ } } });
-  const ps = () => spawnSync('ps', ['-A', '-ww', '-o', 'pid=', '-o', 'ppid=', '-o', 'pgid=', '-o', 'rss=', '-o', 'args='], { encoding: 'utf8' }).stdout;
+  const ps = () => spawnSync('ps', ['-A', '-ww', '-o', 'pid=', '-o', 'ppid=', '-o', 'pgid=', '-o', 'rss=', '-o', 'lstart=', '-o', 'args='], { encoding: 'utf8' }).stdout;
   const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
   for (let i = 0; i < 100 && !parseProcesses(ps()).some(p => p.pgid === mine[2] && p.pid !== mine[2]); i++) await new Promise(r => setTimeout(r, 50));
   const child = parseProcesses(ps()).find(p => p.pgid === mine[2] && p.pid !== mine[2])?.pid;
   assert.ok(child, 'the waiting child runs');
   const journal = { wasFull: false, steps: { pane: 1, runs: 1, claims: 1, notes: 1, slots: 1 }, counts: {}, defers: 0 };
+  const signals = [];
   const result = await moveToCore({ state: { repo: REPO, cwd: join(dir, 'repo'), ...ME, retiredFull: journal }, stateFile: join(dir, 's.json') }, {
     commonDir: join(dir, 'repo', '.git'), save: () => {}, gh: async () => assert.fail('no GitHub call'), processes: async () => ps(),
-    signal: (pid, name) => { try { process.kill(pid, name); } catch { /* gone */ } }, sleep: ms => new Promise(r => setTimeout(r, ms)),
+    listRuns: async () => mine.map((pid, index) => ({ repo: REPO, state: 'cancelled', root: join(dir, 'repo.pdd-worktrees', String(index + 7)), runDir: join(runsRoot, String(index + 7)), automaticOrigin: { machine: ME.machine } })),
+    cwdOf: async () => join(dir, 'other'),
+    signal: (pid, name) => { signals.push([pid, name]); try { process.kill(pid, name); } catch { /* gone */ } }, sleep: ms => new Promise(r => setTimeout(r, ms)),
   });
   assert.equal(result.done, true);
-  assert.equal(result.journal.counts.workers, 3); assert.equal(result.journal.counts.killed, 1);
+  assert.equal(result.journal.counts.workers, 4); assert.equal(result.journal.counts.killed, 1);
+  assert.ok(signals.some(([pid, name]) => pid === child && name === 'SIGTERM'), 'the captured descendant is stopped by PID');
   for (let i = 0; i < 40 && [...mine, child].some(alive); i++) await new Promise(r => setTimeout(r, 50));
   assert.deepEqual([...mine, child].filter(alive), [], 'no worker of this repository is left');
   assert.ok(alive(other), 'the other repository keeps its worker');
@@ -397,7 +444,7 @@ test('M10 a full-engine state moves at its first tick without a timer call; the 
       if (command !== 'git') assert.fail(`unexpected program ${command}`);
       const r = spawnSync('git', args, { cwd: options.cwd ?? cwd, encoding: 'utf8' }); return { code: r.status, stdout: r.stdout, stderr: r.stderr };
     },
-    movePorts: { processes: async () => '', releaseSlots: async () => false },
+    movePorts: { processes: async () => '700 1 700 1 501 Mon Nov 11 10:00:07 2026 node unrelated', releaseSlots: async () => false },
     corePorts: { jobs: w.jobs, checkBase: async () => ({ exitCode: 0, message: 'ok' }), agentReady: async () => true } };
   const first = await tickAutopilot(stateFile, ports);
   assert.match(first.message, /Autopilot core: 1 started/, first.message);
@@ -485,7 +532,7 @@ test('M12 launchd: start writes StartInterval 600 and only start calls launchctl
   const ports = { stateRoot, now: w.now, machineGuard: w.machineGuard, env: { HOME: home, PATH: process.env.PATH }, platform: 'darwin', uid: 501, warn: () => {}, notice: () => {}, run, selectAgent: agent,
     doctorPorts: { run: async (command, args, options) => command === 'git' ? run(command, args, options) : { code: 0, stdout: '', stderr: '' }, selectAgent: agent },
     herdr: async () => { phase.herdr = true; throw Object.assign(Error('gone'), { code: 'agent_not_found' }); },
-    movePorts: { processes: async () => '', releaseSlots: async () => false },
+    movePorts: { processes: async () => '700 1 700 1 501 Mon Nov 11 10:00:07 2026 node unrelated', releaseSlots: async () => false },
     corePorts: { jobs: w.jobs, checkBase: async () => ({ exitCode: 0, message: 'ok' }), agentReady: async () => true } };
   // The tick inside start: every launchctl call must come before it.
   const started = await runAutopilotLauncher({ command: 'start', cwd, packageRoot: join(w.dir, 'pkg'), env: ports.env, issues: [] }, { ...ports, run: async (command, args, options) => {

@@ -85,6 +85,11 @@ Runtime step (role `runtime`, like the suite: no P1, P2 or P3). Each tick, for e
   queue admitted it), each tick counts as new. Only the queue time is exempt: before the
   queue (`npm ci`, the start of the suite command) and after the admission, T1 applies as
   usual. The note and the backstop count from the process start. **End:** nothing new for `quietMinutes` (at least 2 ticks) stops the process.
+  Before every stop, snapshot the live identity and save the job, then use the headless
+  job runner cleanup. A quiet retry or a replacement for a new head starts only after
+  cleanup confirms every saved identity is gone. If it cannot confirm, retain the old
+  part record and retry cleanup on a later tick. The same proof is required before a
+  repair, conflict update, base refresh or mechanical head change clears a saved part.
   Build, repair or conflict with no valid result: `no-result` ("the ROLE agent made nothing
   new for N minutes (no new commit, file state, tool call, output line or CPU use)"). A
   reviewer: no verdict (one retry, then `no-result`). A suite: a runner failure, started
@@ -1154,7 +1159,11 @@ runs until its end):
    the head, summary and must-fix list.
    **The engine's own replay and formal run (T04):** with the review and the suite, at the
    final head (once per head, saved as `vectors`; a repair clears it, so a repair at the
-   same head runs it again, like the suite). The set is complete: each changed
+   same head runs it again, like the suite). Before a new head or schema replaces a
+   running saved replay run, snapshot its live process identity and save the job, then
+   use the headless job runner's cleanup. Replace it only after that cleanup confirms
+   every saved process is gone. If the snapshot or cleanup cannot confirm ownership,
+   keep the old `vectors` record and retry it on a later tick. The set is complete: each changed
    `*.vectors.test.*` and `*.formal.test.*` file, and each `*.vectors.test.*` file that
    names any changed scenario file (a changed `.json` under a `test`, `tests`, `runtime`
    or `vectors` folder, by its base name: `git grep -z -l -F` at the head, 100 names per
@@ -1545,11 +1554,14 @@ step wait, never an END ([Stop owners](#stop-owners)). It stops the job's proces
    next tick; after 3 failed tries the note is skipped with a warning.
 7. Only then clean up locally (below). Record `ended`.
 
-Local cleanup, after END, a merge, a hand-over or a person's stop: stop the job's
-processes; remove every `worktrees/N…` folder of the issue (as in intake); remove every
+Local cleanup, after END, a merge, a hand-over or a person's stop: first capture and
+stop the build, review, suite, vector and active Runtime replay processes, then confirm that every saved process identity is gone. If
+the inventory fails, ownership is uncertain, or a saved process remains, keep the job
+record and every worktree for retry; do not remove logs, branch or history. Only after
+confirmed cleanup, remove every `worktrees/N…` folder of the issue (as in intake); remove every
 `logs/N-…` file except the `.log` files that the END comment and the history name;
 append the history line. Each step has its own error boundary and only warns.
-`jobs/N.json` goes last in a `finally`, so a failed step never keeps the job. A merge also deletes the local branch; other outcomes keep it, because the
+`jobs/N.json` goes last only after cleanup is confirmed. A merge also deletes the local branch; other outcomes keep it, because the
 agent's commits may exist only there.
 
 ## Status
@@ -1609,14 +1621,16 @@ REST calls use `gh api --include --method M ENDPOINT [--input -]`. Also `now()`,
 room check and the job runner's default priority), `untestedStories(tree)` (default
 `findTests` of the preflight), `runtimeHealth()` (default `checkRuntimeHealth({env})`) and `resendChecks({root, since})`
 (default `resendableStoryChecks` with `env`) of the runtime client, and the replaceable `jobs`
-(`start`, `read`, `stop`, `cpu`, `hangs`), `owners(numbers)`, `heartbeat(job)` and `checkBase(input)`
+(`start`, `read`, `snapshot(part)`, `cleanup(part)`, `cpu`, `hangs`). `snapshot(part)`
+captures the live process identities in the saved part record. `cleanup(part)` stops only
+those captured identities and returns `{confirmed}`. `owners(numbers)`, `heartbeat(job)` and `checkBase(input)`
 with the native defaults named above.
 
 ## Dependencies
 
 - [File owner lookup](file-owner.prompt.md): required for `findOwners`, `resolveOwners`
   and `promptHeaderHash` (M-a derived prompt headers).
-- [Headless job runner](agent-job.prompt.md): required for job start, outcome and stop.
+- [Headless job runner](agent-job.prompt.md): required for job start, outcome, capture and cleanup.
 - [Machine guard](machine-guard.prompt.md): required for `slotCount` (the slots) and
   `GUARD` (the cleanup limits).
 - [GitHub dependency reader](issue-dependencies-github.prompt.md): required for the

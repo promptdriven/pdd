@@ -155,6 +155,10 @@ export async function coreWorld(t, { repository = 'acme/widgets', settings = {},
       result: existsSync(job.result) ? JSON.parse(readFileSync(job.result, 'utf8')) : null,
       log: existsSync(job.log) ? { size: statSync(job.log).size, mtime: statSync(job.log).mtimeMs } : null }),
     stop: job => { const was = w.alive.delete(job.pid); if (was) w.stopped.push(job.id); return was; },
+    snapshot: job => {
+      job.processes = [{ pid: job.pid, start: String(job.started), command: `scripted ${job.id}` }]; return job.processes;
+    },
+    cleanup: async job => { w.jobs.stop(job); return { confirmed: !w.alive.has(job.pid) }; },
     // CPU seconds by child pid, as agentJobCpu gives them; null when the test sets none.
     cpu: job => w.cpu.get(job.pid) ?? null,
     // The wrapper's hung-command records (agentJobHangs); w.hang adds one.

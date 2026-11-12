@@ -190,10 +190,12 @@ launcher gives it these ports:
   the tick leaves no background work behind. `releaseLocal(run)`: `releaseIssueClaim` of the
   [worktree allocator](workflow-worktree.prompt.md) for the run's local issue allocation.
 - `releaseSlots()`: `releaseCheckCapacity` of the [shared queue](test-suite-queue.prompt.md) for this state file.
-- `processes()`: one local read of this machine's process table (`ps -A -ww -o pid= -o ppid= -o pgid= -o rss= -o
-  args=`; on Linux without `ps`, `procTable` of the move owner reads `/proc`); `signal(pid, name)`: `process.kill`, where an ended process is no error; `sleep(ms)`.
+- `processes()`: one local read of this machine's process table (`ps -A -ww -o pid= -o ppid= -o pgid= -o rss= -o uid= -o
+  lstart= -o args=`; on Linux without `ps`, `procTable` of the move owner reads `/proc`); `signal(pid, name)`: `process.kill`, where an ended process is no error; `sleep(ms)`.
 - `commonDir`: the real path of this checkout's Git common folder; `coreJobs()`: the issue numbers of the core's job
-  files; `save(journal)`: saves `retiredFull` in the state file under the admission lock; `samePath`; `now`.
+  files; `cwdOf(pid)`: exact local process working-directory evidence (`/proc/PID/cwd` on Linux or `lsof` on macOS),
+  null where it cannot be read. The worker move asks it only for rows owned by `process.getuid()` and rechecks a null
+  result against the same PID/start/command identity; `save(journal)`: saves `retiredFull` in the state file under the admission lock; `samePath`; `now`.
   Tests may replace any of them with `ports.movePorts`, or the whole step with `ports.moveToCore`.
 
 When the move is complete, save `movedState` of the move owner (engine core, the journal with its line, no

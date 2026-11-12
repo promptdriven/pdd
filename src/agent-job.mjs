@@ -1,14 +1,17 @@
-// Generated from prompts/cli/agent-job.prompt.md (sha256: 9cb83637b33fbb251a6badf4adf8930ae0ae04ca70faf9f394691c686a3b003c).
 import { execFile, spawn, spawnSync } from 'node:child_process';
 import { accessSync, closeSync, constants, fstatSync, openSync, readFileSync, readSync, renameSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { setPriority } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { descendants, parseProcessTable, terminateCaptured } from './process-lifecycle.mjs';
 
 const self = fileURLToPath(import.meta.url), GRACE_MS = 2000;
 const SESSION_KEYS = /^(?:CLAUDECODE$|CLAUDE_CODE_|CLAUDE_PID$|CODEX_THREAD_ID$|CODEX_SANDBOX|HERDR_|PDD_AGENT_SESSION$|PDD_AUTOPILOT_CONTEXT$)/;
 const readJson = file => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch (error) { if (error.code === 'ENOENT') return undefined; return 'invalid'; } };
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+const startIdentity = value => typeof value === 'string' && /^(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) [A-Z][a-z]{2} (?: [1-9]|[12]\d|3[01]) \d{2}:\d{2}:\d{2} \d{4}|@\S+)$/.test(value);
+const processIdentity = row => Number.isSafeInteger(row?.pid) && row.pid > 0 && startIdentity(row.start) && typeof row.args === 'string' && row.args.trim().length > 0;
+const processManifest = rows => Array.isArray(rows) && rows.length > 0 && rows.every(processIdentity);
 function writeAtomic(file, text) {
   const temp = `${file}.${process.pid}.tmp`;
   writeFileSync(temp, text, { mode: 0o600 }); renameSync(temp, file);
@@ -51,6 +54,7 @@ function nativeAlive(pid, token) {
 export function readAgentJob(job, ports = {}) {
   if (!object(job)) return { state: 'dead', exit: null, result: null, log: null };
   const alive = Number.isSafeInteger(job?.pid) && job.pid > 0 && (ports.alive ?? nativeAlive)(job.pid, job.token);
+  if (alive) snapshotAgentJob(job, ports);
   const exit = readJson(job.exit), result = readJson(job.result);
   // The log's size and change time show progress while the job runs.
   let log = null;
@@ -92,6 +96,56 @@ export function stopAgentJob(job, ports = {}) {
   if (!(Number.isSafeInteger(job?.pid) && job.pid > 0 && (ports.alive ?? nativeAlive)(job.pid, job.token))) return false;
   try { (ports.kill ?? process.kill)(-job.pid, 'SIGTERM'); } catch { try { (ports.kill ?? process.kill)(job.pid, 'SIGTERM'); } catch { return false; } }
   return true;
+}
+
+function lifecycleRows(ports = {}) {
+  const table = (ports.spawnSync ?? spawnSync)('ps', ['-A', '-ww', '-o', 'pid=', '-o', 'ppid=', '-o', 'pgid=', '-o', 'rss=', '-o', 'lstart=', '-o', 'command='],
+    { encoding: 'utf8', timeout: 5000, env: { ...process.env, LC_ALL: 'C' } });
+  return table?.status === 0 ? parseProcessTable(table.stdout) : null;
+}
+
+// Save the tree while its parent links still exist. A later stop can then find a
+// helper that reparented itself after its direct agent exited.
+export function snapshotAgentJob(job, ports = {}) {
+  if (!(Number.isSafeInteger(job?.pid) && job.pid > 0)) return null;
+  const manifestFile = `${job.token}.processes.json`, errorFile = `${job.token}.processes.error`;
+  const uncertain = reason => { job.processesUncertain = true; try { writeFileSync(errorFile, `${reason}\n`, { mode: 0o600 }); } catch {} return null; };
+  const savedManifest = readJson(manifestFile);
+  if ((savedManifest !== undefined && !processManifest(savedManifest)) || (Array.isArray(job.processes) && !processManifest(job.processes))) return uncertain('manifest invalid');
+  const saved = [...(savedManifest ?? []), ...(Array.isArray(job.processes) ? job.processes : [])];
+  if (saved.length && !processManifest(saved)) return uncertain('manifest invalid');
+  let rows; try { rows = (ports.list ?? lifecycleRows)(ports); } catch { return uncertain('inventory unavailable'); }
+  if (!Array.isArray(rows)) return uncertain('inventory unavailable');
+  const root = rows.find(row => row.pid === job.pid && String(row.args).includes(job.token));
+  if (!root) {
+    if (saved.length) { job.processes = saved; return saved; }
+    return uncertain('wrapper identity unavailable');
+  }
+  const current = descendants(rows, [root]);
+  if (current.incomplete) return uncertain('incomplete inventory');
+  if (!current.every(processIdentity)) return uncertain('process identity invalid');
+  const byIdentity = new Map();
+  for (const row of [...saved, ...current]) if (processIdentity(row)) byIdentity.set(`${row.pid}:${row.start}`, byIdentity.get(`${row.pid}:${row.start}`) ?? row);
+  job.processes = [...byIdentity.values()];
+  try { writeAtomic(manifestFile, JSON.stringify(job.processes)); }
+  catch { uncertain('manifest write failed'); }
+  return job.processes;
+}
+
+export async function cleanupAgentJob(job, ports = {}) {
+  const manifestFile = typeof job?.token === 'string' ? `${job.token}.processes.json` : null;
+  const errorFile = typeof job?.token === 'string' ? `${job.token}.processes.error` : null;
+  const manifest = manifestFile ? readJson(manifestFile) : null;
+  if (manifest !== undefined && !processManifest(manifest)) {
+    try { writeFileSync(errorFile, 'manifest invalid\n', { mode: 0o600 }); } catch {}
+    return { confirmed: false, stopped: 0, killed: 0, remaining: 0 };
+  }
+  if (job?.processesUncertain || errorFile && (() => { try { readFileSync(errorFile); return true; } catch { return false; } })()) return { confirmed: false, stopped: 0, killed: 0, remaining: 0 };
+  const saved = Array.isArray(job?.processes) ? job.processes : Array.isArray(manifest) ? manifest : null;
+  if (!processManifest(saved)) return { confirmed: false, stopped: 0, killed: 0, remaining: 0 };
+  stopAgentJob(job, ports);
+  return terminateCaptured(saved, { list: async () => (ports.list ?? lifecycleRows)(ports), signal: ports.kill ?? process.kill,
+    sleep: ports.sleep, grace: ports.grace ?? GRACE_MS, poll: ports.poll });
 }
 
 // The hung-command watch (agent jobs only). An agent waits for each command it runs, and its log is silent meanwhile.
@@ -258,6 +312,10 @@ export function jobStopper({ killGroup, setTimer, writeExit, exit, now = Date.no
 // The detached wrapper: it owns the agent process and records how it ended.
 function wrap(specFile) {
   const spec = JSON.parse(readFileSync(specFile, 'utf8'));
+  const snapshot = () => snapshotAgentJob({ pid: process.pid, token: specFile });
+  snapshot();
+  const earlySnapshot = setTimeout(snapshot, 25); earlySnapshot.unref();
+  setInterval(snapshot, 250).unref();
   lowerPriority(spec);
   const stdin = openSync(spec.input, 'r'), out = openSync(spec.log, 'a', 0o600);
   let child;
@@ -268,7 +326,7 @@ function wrap(specFile) {
     exit: () => process.exit(0) });
   for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(signal, () => stop(signal));
   const run = jobCommand(spec);
-  try { child = spawn(run.command, run.args, { cwd: spec.cwd, env: process.env, stdio: [stdin, out, out] }); }
+  try { child = spawn(run.command, run.args, { cwd: spec.cwd, env: process.env, stdio: [stdin, out, out] }); snapshot(); }
   catch (error) { writeFileSync(out, `agent-job: ${error.message}\n`); finish(127, null); return; }
   child.on('error', error => { try { writeFileSync(out, `agent-job: ${error.message}\n`); } catch {} finish(127, null); });
   if (object(spec.hung) && typeof spec.hangs === 'string') watchHung(spec, child.pid, out);

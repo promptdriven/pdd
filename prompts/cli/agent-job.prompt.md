@@ -96,7 +96,24 @@ record is simply dead. There is no "uncertain custody" state.
   else the stop signal; best effort), and then sends SIGKILL to the whole group, itself
   last. A failed exit-record write or descriptor close never skips that SIGKILL. A
   process that treats the first SIGTERM as "stop gracefully" and waits never survives
-  as an orphan. A process that left the group (its own `setsid`) is out of reach.
+  as an orphan. A process that left the group (its own `setsid`) is captured while
+  the wrapper is live. `snapshotAgentJob(job)` saves the wrapper and every live
+  descendant as PID/start/command identities on `job.processes`. `cleanupAgentJob(job)`
+  captures again, asks the wrapper to stop, then terminates only saved identities that
+  still match. It returns cleanup proof. A reused PID is never signalled; an unreadable
+  inventory or a remaining saved identity is unconfirmed. Each live `readAgentJob`
+  refreshes this saved snapshot on the job record and in `TOKEN.processes.json`, so it
+  survives a tick that returns while the job runs. The wrapper snapshots once immediately after it starts its direct child, once more before the first 250 ms round, and then refreshes the same
+  cumulative manifest every 250 ms while its child runs. Older PID/start identities
+  stay until cleanup, even when a helper reparents. A manifest write or inventory
+  failure, or a malformed prior manifest, leaves a durable uncertainty marker and cleanup then retains the job.
+  That marker stays for the job token even if a later snapshot succeeds: the failed
+  sample could have missed a detached helper. A captured live descendant without a
+  valid identity is an inventory failure, never a row to discard.
+  An existing malformed or empty manifest, including an entry without a positive PID,
+  a nonblank emitted PID-start identity or a nonblank command, is unconfirmed even
+  when an in-memory snapshot exists: it can have missed a later detached helper.
+  Cleanup uses that saved snapshot and never relies on a new one after the wrapper exited.
 - **The hung-command watch** (only with `hung`). An agent waits for each command that it
   runs; a command that does nothing (a stalled `npm install`, a test that waits forever)
   keeps the whole job silent until the core's quiet rule stops the job. So the wrapper
@@ -141,7 +158,8 @@ record is simply dead. There is no "uncertain custody" state.
   timers.
 - `agentJobHangs(job)` returns the parsed hang list of `job.hangs` (only the objects in
   it), or `[]` when the file is absent, unreadable or not a list.
-- `readAgentJob(job, ports)` returns `{state, exit, result, log}`; a missing job record
+- `readAgentJob(job, ports)` refreshes the durable descendant manifest while the wrapper
+  is live, then returns `{state, exit, result, log}`; a missing job record
   is `dead`:
   - `state` is `running` when `ports.alive(pid, token)` is true; else `exited` when
     the exit record parses; else `dead`.
@@ -159,6 +177,14 @@ record is simply dead. There is no "uncertain custody" state.
   true only when the job was alive; it returns false and sends nothing otherwise. The
   wrapper, the group leader, then ends the group (above): after the 2 s grace no
   process of the group is left.
+- `snapshotAgentJob(job, ports)` returns and saves live wrapper descendants. It
+  validates the durable manifest first. When a complete process table no longer has
+  the wrapper but that manifest is valid, it returns the saved manifest unchanged:
+  an exited wrapper cannot add descendants. A missing or malformed manifest, or an
+  unreadable inventory while the wrapper is present, returns null and leaves cleanup
+  unconfirmed. `cleanupAgentJob(job, ports)`
+  returns `{confirmed, stopped, killed, remaining}`. Core must retain its local job
+  record and worktree when `confirmed` is false.
 
 Default `alive(pid, token)` is true only when signal 0 reaches `pid` and the
 whole C-locale process command line (`LC_ALL=C ps -ww -o command= -p PID`) contains
@@ -166,6 +192,9 @@ whole C-locale process command line (`LC_ALL=C ps -ww -o command= -p PID`) conta
 it never counts as the job and is never stopped.
 
 ## Dependencies
+
+- [Process lifecycle](process-lifecycle.prompt.md): required native process-table, identity and captured-tree
+  termination context for snapshots and cleanup. This prompt owns when an agent job captures or cleans up that tree.
 
 Node child_process, fs and path supply native effects. Native tests cover this module
 with scripted agents; no real agent is called.

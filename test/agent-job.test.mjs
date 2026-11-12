@@ -5,7 +5,7 @@ import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync, mkdirSync
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { agentCommand, jobEnvironment, startAgentJob, readAgentJob, stopAgentJob, agentJobCpu, agentJobHangs, jobStopper, hungRound } from '../src/agent-job.mjs';
+import { agentCommand, jobEnvironment, startAgentJob, readAgentJob, stopAgentJob, snapshotAgentJob, cleanupAgentJob, agentJobCpu, agentJobHangs, jobStopper, hungRound } from '../src/agent-job.mjs';
 
 const folder = t => { const dir = mkdtempSync(join(tmpdir(), 'pdd-agent-job-')); t.after(() => rmSync(dir, { recursive: true, force: true })); return dir; };
 const fakePs = (dir, body) => {
@@ -182,6 +182,83 @@ test('agentJobCpu sums the tree under the wrapper by parent pid, without the wra
   assert.deepEqual(calls, [['ps', '-A', '-o', 'pid=,ppid=,time=']]);
   assert.equal(agentJobCpu({ pid: 100 }, { spawnSync: () => ({ status: 1, stdout: '' }) }), null);
   assert.equal(agentJobCpu({}, { spawnSync: () => { throw Error('not called'); } }), null);
+});
+
+test('snapshotAgentJob retains a separate-group helper while its wrapper is live', () => {
+  const job = { pid: 100, token: '/state/one.spec.json' };
+  const table = [
+    '100 1 100 1 Mon Nov 11 10:00:00 2026 node wrapper /state/one.spec.json',
+    '101 100 101 1 Mon Nov 11 10:00:01 2026 node mcp /worktree',
+    '102 101 101 1 Mon Nov 11 10:00:02 2026 node helper /worktree',
+    '200 1 200 1 Mon Nov 11 10:00:03 2026 node other'
+  ].join('\n');
+  assert.deepEqual(snapshotAgentJob(job, { spawnSync: () => ({ status: 0, stdout: table }) }).map(row => row.pid), [100, 101, 102]);
+});
+
+test('a vanished wrapper keeps a valid saved manifest; missing or invalid manifests stay uncertain', t => {
+  const dir = folder(t), token = join(dir, 'exit.spec.json'), row = { pid: 501, ppid: 1, pgid: 501, rss: 1, start: 'Mon Nov 11 10:00:00 2026', args: 'node wrapper exit.spec.json' };
+  writeFileSync(`${token}.processes.json`, JSON.stringify([row]));
+  const job = { pid: 501, token };
+  assert.deepEqual(snapshotAgentJob(job, { list: () => [] }), [row]);
+  assert.equal(job.processesUncertain, undefined);
+  assert.equal(existsSync(`${token}.processes.error`), false);
+
+  const missing = join(dir, 'missing.spec.json');
+  assert.equal(snapshotAgentJob({ pid: 502, token: missing }, { list: () => [] }), null);
+  assert.ok(existsSync(`${missing}.processes.error`));
+
+  const invalid = join(dir, 'invalid.spec.json');
+  writeFileSync(`${invalid}.processes.json`, '{broken');
+  assert.equal(snapshotAgentJob({ pid: 503, token: invalid }, { list: () => [] }), null);
+  assert.ok(existsSync(`${invalid}.processes.error`));
+});
+
+test('cleanup accepts a valid saved manifest after its wrapper exited, but rejects a corrupt or malformed manifest', async t => {
+  const dir = folder(t), token = join(dir, 'job.spec.json'), row = { pid: 501, ppid: 1, pgid: 501, rss: 1, start: 'Mon Nov 11 10:00:00 2026', args: 'node wrapper job.spec.json' };
+  writeFileSync(`${token}.processes.json`, JSON.stringify([row]));
+  const gone = await cleanupAgentJob({ pid: 501, token }, { alive: () => false, list: () => [], kill: () => assert.fail('no signal') });
+  assert.equal(gone.confirmed, true);
+  writeFileSync(`${token}.processes.json`, '{broken');
+  const corrupt = await cleanupAgentJob({ pid: 501, token, processes: [row] }, { alive: () => false, list: () => [] });
+  assert.equal(corrupt.confirmed, false); assert.ok(existsSync(`${token}.processes.error`));
+  for (const manifest of ['[]', '[{}]', JSON.stringify([{ ...row, start: '   ' }]), JSON.stringify([{ ...row, args: '   ' }]), JSON.stringify([{ ...row, start: 'not a process start' }])]) {
+    writeFileSync(`${token}.processes.json`, manifest);
+    assert.equal((await cleanupAgentJob({ pid: 501, token, processes: [row] }, { alive: () => false, list: () => [] })).confirmed, false);
+  }
+  rmSync(`${token}.processes.json`);
+  assert.equal((await cleanupAgentJob({ pid: 501, token, processes: [{}] }, { alive: () => false, list: () => [] })).confirmed, false);
+});
+
+test('a snapshot failure stays uncertain after a later valid process inventory', async t => {
+  const dir = folder(t), token = join(dir, 'job.spec.json'), job = { pid: 501, token };
+  const row = { pid: 501, ppid: 1, pgid: 501, rss: 1, start: 'Mon Nov 11 10:00:00 2026', args: `node wrapper ${token}` };
+  assert.equal(snapshotAgentJob(job, { list: () => null }), null);
+  assert.deepEqual(snapshotAgentJob(job, { list: () => [row] }).map(part => part.pid), [501]);
+  assert.equal(job.processesUncertain, true);
+  assert.equal((await cleanupAgentJob(job, { alive: () => false, list: () => [] })).confirmed, false);
+});
+
+test('a captured descendant without an identity makes the snapshot uncertain', async t => {
+  const dir = folder(t), token = join(dir, 'job.spec.json'), job = { pid: 501, token };
+  const root = { pid: 501, ppid: 1, pgid: 501, rss: 1, start: 'Mon Nov 11 10:00:00 2026', args: `node wrapper ${token}` };
+  const missingCommand = { pid: 502, ppid: 501, pgid: 501, rss: 1, start: 'Mon Nov 11 10:00:01 2026', args: '   ' };
+  assert.equal(snapshotAgentJob(job, { list: () => [root, missingCommand] }), null);
+  assert.equal((await cleanupAgentJob(job, { alive: () => false, list: () => [] })).confirmed, false);
+});
+
+const DETACHED_HELPER = `
+const { spawn } = require('child_process'), fs = require('fs');
+const helper = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' });
+helper.unref(); fs.writeFileSync(process.env.HELPER_PID, String(helper.pid));
+setTimeout(() => process.exit(0), 80);`;
+test('the wrapper saves a detached helper before its direct agent exits', async t => {
+  const dir = folder(t), mark = join(dir, 'helper.pid');
+  const job = startAgentJob({ id: 'detached-helper', dir, cwd: dir, command: process.execPath, args: ['-e', DETACHED_HELPER], input: '', env: { PATH: process.env.PATH, HELPER_PID: mark } });
+  const helper = Number(await until(() => existsSync(mark) && readFileSync(mark, 'utf8')));
+  t.after(() => { try { process.kill(helper, 'SIGKILL'); } catch {} });
+  await until(() => existsSync(job.exit));
+  const saved = JSON.parse(readFileSync(`${job.token}.processes.json`, 'utf8'));
+  assert.ok(saved.some(row => row.pid === helper), 'the helper survives its direct parent and stays in the manifest');
 });
 
 // STOPS-0129 (#3238 A1): the wrapper stops a command that the agent waits on when the log is silent and the command

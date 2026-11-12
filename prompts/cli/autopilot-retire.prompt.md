@@ -24,14 +24,18 @@ Export:
   exists and no `launchProfile` is saved, it becomes `launchProfile`, so a later start verifies the same agent sign-in.
 - `claimRecord(body)`: the claim record of a comment (a JSON object with nonblank `repository`, `coordinatorId`,
   `machine` and `labelEventId`, in a code block or as the whole body), else null.
-- `oldProcessOf(args, {runsRoot, stateFile})`: `worker` for a command line that runs `workflow-worker-completion.mjs`
-  with a JSON identity whose `runDir` is inside `runsRoot` (`COMMON_DIR/pdd/runs/`); `coordinator-idle` for one that
+- `oldProcessOf(args, {runsRoot, stateFile, runDirs})`: `worker` for a command line that runs `workflow-worker-completion.mjs`
+  with a JSON identity whose `runDir` is inside `runsRoot` (`COMMON_DIR/pdd/runs/`) and, when recorded run directories
+  are supplied, exactly equals one of them; `coordinator-idle` for one that
   runs `autopilot-launcher.mjs --coordinator-idle` with a JSON identity whose `stateFile` is this state file; else
   null. An identity that is a file path, or JSON that does not parse, is not ours. A start follow-up
-  (`--start-scan-wait`) is never stopped.
-- `parseProcesses(text)`: the `ps` rows `{pid, ppid, pgid, rss, args}` (rss in KiB); other lines are skipped.
-- `procTable(fs, root = '/proc')`: the same rows as text, read from Linux `/proc` (`cmdline`, and ppid, process group
-  and rss pages from `stat`), for a machine without `ps`; a process that ends while it is read is skipped.
+  (`--start-scan-wait`) is never stopped. A repository path, another run, an active run, a core worktree
+  and a manual command are never enough.
+- `parseProcesses(text)`: the `ps` rows `{pid, ppid, pgid, rss, uid, start, args}` (rss in KiB). `uid` can be null only
+  for a legacy test adapter; a null uid never gets a cwd probe. It returns null when any nonblank row is malformed,
+  rather than treating a partial inventory as cleanup evidence.
+- `procTable(fs, root = '/proc')`: the same rows as text, read from Linux `/proc` (`cmdline`, `status` uid, and ppid,
+  process group, start identity and rss pages from `stat`), for a machine without `ps`; only a PID confirmed gone during reads is skipped. An unreadable live row or a missing uid or start identity makes the inventory unavailable.
 - `moveLine(state, journal)` and `moveToCore({state, stateFile, repoEngine}, ports)`.
 
 ## The journal and the steps
@@ -82,10 +86,18 @@ next tick in the same way, without a count.
    has no comment with the hidden marker `<!-- pdd:autopilot-retired-full -->`, post `RETIRED_NOTE` with the marker.
    So each PR gets the note at most once, also when the step runs again. PRs stay open; branches stay.
 5. **slots**: `ports.releaseSlots()` releases this state's check-capacity snapshot.
-6. **workers**: from `ports.processes()`, the processes of `oldProcessOf` other than this process and its parent.
-   Send each one `SIGTERM`, to its whole process group when it leads one (its `herdr agent wait` children end too).
+6. **workers**: from `ports.processes()`, the processes of `oldProcessOf` other than this process and its parent,
+   plus descendants that were still linked to those selected processes. The selector receives only exact run directories
+   and root paths from this machine's recorded ended old runs (cancelled or completed). It never selects by executable name. For a current-user
+   parentless process (PID 1 or a parent missing from the inventory), cwd under one of those exact ended-run roots proves only that it can be a manual command:
+   leave that process untouched and the step unfinished unless its command already has a recorded worker or coordinator
+   identity. Do not read working directories of other users' processes. If that process exits before its cwd read, it is
+   already gone; if it remains with the same PID and start identity, even if its command changed, and cwd is unreadable, leave the step unfinished. Each selected PID is re-read before TERM and KILL and must retain
+   its start identity and command. The native `ps` and Linux `/proc` adapters both provide this stable identity. A failed inventory leaves this step unfinished for
+   retry; it does not remove any retained run worktree.
+   Send each captured process PID `SIGTERM` (captured descendants include `herdr agent wait` children).
    Wait up to 5 seconds, reading the process table every 250 ms; a process whose pid still shows the same command
-   line gets `SIGKILL` (group or pid, as before). Count the stopped processes, the killed ones and their memory.
+   line gets `SIGKILL` by PID. Count the stopped processes, the killed ones and their memory.
 
 The move is done after the last step. Its message is the one line `Autopilot moved this machine to the core engine for
 REPO: closed N coordinator chat(s), cancelled N old run(s), released N claim(s), left N PR note(s), stopped N old
@@ -96,7 +108,8 @@ A machine that did not run the full engine and where nothing was found gets an e
 
 `now`, `gh(args, options)` (a `gh api --include` reply with the HTTP status), `herdr(args)` (a reply, or an error with
 its Herdr code), `listRuns(cancelled)`, `cancelRun(run)`, `releaseLocal(run)`, `releaseSlots()`, `processes()`,
-`signal(target, name)`, `sleep(ms)`, `samePath(a, b)`, `commonDir`, `coreJobs()` and `save(journal)`. `save` may be
+`signal(target, name)`, `sleep(ms)`, `cwdOf(pid)` (the exact local working directory, or null when unavailable),
+`uid` (the current numeric user id), `samePath(a, b)`, `commonDir`, `coreJobs()` and `save(journal)`. `save` may be
 async and the move awaits it. The launcher supplies the native ones.
 
 ## Dependencies
@@ -106,3 +119,5 @@ async and the move awaits it. The launcher supplies the native ones.
 - [Workflow runner](workflow-runner.prompt.md#commands): required native generation and verification context for `cancelRun`.
 - [GitHub dependency reader](issue-dependencies-github.prompt.md): required verification context for the claim comment
   record and the winning label event.
+- [Process lifecycle](process-lifecycle.prompt.md): required native process identity and captured-tree termination
+  context for retired workers. This prompt owns which old workers are eligible for cleanup.

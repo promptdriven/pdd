@@ -1,5 +1,5 @@
-// Generated from prompts/cli/autopilot-retire.prompt.md (sha256: 4fd78683bc360ef25f74ab2735d4932765f7d65644d1893d336bc00b9d4a0ce9).
 import { sep, join } from 'node:path';
+import { descendants, sameProcess, terminateCaptured } from './process-lifecycle.mjs';
 
 // The move of a machine from the removed full engine to the core engine. Each step is idempotent and saved in the
 // state's step journal (`retiredFull`), so a failed step goes on at the next tick and a done step never runs again.
@@ -73,54 +73,78 @@ export function claimRecord(body) {
 
 // The identity of a stoppable old process of this repository, read from its command line, or null.
 // A completion worker names its run folder; a coordinator idle helper names this repository's state file.
-export function oldProcessOf(args, { runsRoot, stateFile }) {
+export function oldProcessOf(args, { runsRoot, stateFile, runDirs = null }) {
   const text = String(args ?? '');
   const json = after => { const at = text.indexOf(after); if (at < 0) return null; try { return JSON.parse(text.slice(at + after.length).trim()); } catch { return null; } };
   if (/[\\/]workflow-worker-completion\.mjs /.test(text)) {
     const identity = json('workflow-worker-completion.mjs ');
-    return identity && named(identity.runDir) && identity.runDir.startsWith(runsRoot + sep) ? 'worker' : null;
+    return identity && named(identity.runDir) && identity.runDir.startsWith(runsRoot + sep)
+      && (!Array.isArray(runDirs) || runDirs.includes(identity.runDir)) ? 'worker' : null;
   }
   if (/[\\/]autopilot-launcher\.mjs --coordinator-idle /.test(text)) {
     const identity = json('--coordinator-idle ');
     return identity && identity.stateFile === stateFile ? 'coordinator-idle' : null;
   }
+  // A worktree path can belong to a person's shell or editor. It is evidence to
+  // retain the move for review, never evidence to signal that process.
   return null;
 }
 
-// The same rows from Linux /proc, for a machine without ps (a small container image): pid, ppid, pgid, rss (KiB), args.
+// The same rows from Linux /proc, for a machine without ps (a small container image): pid, ppid, pgid, rss, uid, start identity and args.
 export function procTable(fs, root = '/proc') {
-  const rows = [];
+  const rows = [], gone = error => ['ENOENT', 'ESRCH'].includes(error?.code);
   for (const name of fs.readdirSync(root).filter(name => /^\d+$/.test(name))) {
     try {
       const args = fs.readFileSync(`${root}/${name}/cmdline`, 'utf8').split('\0').filter(Boolean).join(' ');
       const stat = fs.readFileSync(`${root}/${name}/stat`, 'utf8'), fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
-      if (args) rows.push(`${name} ${fields[1]} ${fields[2]} ${Number(fields[21]) * 4} ${args}`);
-    } catch { /* The process ended while it was read. */ }
+      const uid = /^Uid:\s*(\d+)/m.exec(fs.readFileSync(`${root}/${name}/status`, 'utf8'))?.[1];
+      const rss = Number(fields[21]) * 4;
+      if (!uid || !/^\d+$/.test(fields[19] ?? '') || !/^\d+$/.test(fields[1] ?? '') || !/^\d+$/.test(fields[2] ?? '') || !Number.isFinite(rss)) throw Error(`process ${name} has no stable identity`);
+      rows.push(`${name} ${fields[1]} ${fields[2]} ${rss} ${uid} @${fields[19]} ${args}`);
+    } catch (error) { if (gone(error)) continue; throw error; }
   }
   return rows.join('\n');
 }
 // ps rows: pid, ppid, pgid, rss (KiB) and the command line.
 export function parseProcesses(text) {
-  return String(text ?? '').split('\n').map(row => /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(.*)$/.exec(row)).filter(Boolean)
-    .map(m => ({ pid: Number(m[1]), ppid: Number(m[2]), pgid: Number(m[3]), rss: Number(m[4]), args: m[5] }));
+  const lines = String(text ?? '').split('\n').filter(row => row.trim());
+  const matches = lines.map(row => /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(?:(-?\d+)\s+)?((?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) .{20})|@\S+)\s+(.*)$/.exec(row));
+  if (matches.some(match => !match)) return null;
+  const rows = matches.map(m => ({ pid: Number(m[1]), ppid: Number(m[2]), pgid: Number(m[3]), rss: Number(m[4]), uid: m[5] === undefined ? null : Number(m[5]), start: m[6].trim(), args: m[7] }));
+  return rows.every(row => Number.isSafeInteger(row.pid) && row.pid > 0 && Number.isSafeInteger(row.ppid) && Number.isSafeInteger(row.pgid) && Number.isFinite(row.rss)) ? rows : null;
 }
 
-// Stop the old completion workers and coordinator helpers of this repository: look at each process first, then TERM
-// (its whole group when it leads one, so its waits end too), then KILL what is still the same process.
+// Stop selected old workers and coordinators: capture their descendants, then TERM and KILL only matching PIDs.
 async function stopOldProcesses(ctx) {
   const { ports, self } = ctx, list = async () => parseProcesses(await ports.processes());
-  const mine = rows => rows.filter(row => !self.has(row.pid) && oldProcessOf(row.args, ctx.match));
-  const found = mine(await list());
-  const target = row => row.pgid === row.pid && !self.has(row.pgid) ? -row.pid : row.pid;
-  for (const row of found) ports.signal(target(row), 'SIGTERM');
-  let left = found;
-  for (let waited = 0; left.length && waited < TERM_WAIT_MS; waited += 250) {
-    await ports.sleep(250);
-    const now = new Map((await list()).map(row => [row.pid, row]));
-    left = left.filter(row => now.get(row.pid)?.args === row.args);
+  const first = await list();
+  // A selected root can leave its group or later become parentless. Capture its
+  // descendants now, while the parent links still prove that ownership.
+  if (!Array.isArray(first) || !first.length) throw Error('old process inventory is unreadable');
+  const roots = [], pids = new Set(first.map(row => row.pid)), uid = Number.isSafeInteger(ports.uid) ? ports.uid : typeof process.getuid === 'function' ? process.getuid() : null;
+  for (const row of first) {
+    if (self.has(row.pid)) continue;
+    if (oldProcessOf(row.args, ctx.match)) { roots.push(row); continue; }
+    // CWD detects an ambiguous helper that already lost its parent. Do not inspect
+    // other users, or ordinary child processes that the captured tree already covers.
+    if (!ctx.match.runRoots.length || (row.ppid !== 1 && pids.has(row.ppid)) || row.uid !== uid) continue;
+    if (typeof ports.cwdOf !== 'function') throw Error('old process inventory has no working-directory evidence');
+    let cwd = null; try { cwd = await ports.cwdOf(row.pid); } catch { /* Re-read below: it may have exited. */ }
+    if (typeof cwd === 'string') {
+      if (ctx.match.runRoots.some(root => cwd === root || cwd.startsWith(root + sep)))
+        throw Error('old process ownership is ambiguous');
+      continue;
+    }
+    const latest = await list();
+    if (!Array.isArray(latest)) throw Error('old process inventory is unreadable');
+    if (latest.some(current => current.pid === row.pid && current.start === row.start)) throw Error('old process working-directory evidence is unreadable');
   }
-  for (const row of left) ports.signal(target(row), 'SIGKILL');
-  return { stopped: found.length, killed: left.length, rssKb: found.reduce((sum, row) => sum + row.rss, 0) };
+  const captured = descendants(first, roots);
+  const found = captured.filter(row => !self.has(row.pid));
+  if (captured.incomplete || found.some(row => !row.start)) throw Error('old process inventory has no start identity');
+  const proof = await terminateCaptured(found, { list, signal: ports.signal, sleep: ports.sleep, grace: TERM_WAIT_MS, poll: 250 });
+  if (!proof.confirmed) throw Error('old process cleanup is not confirmed');
+  return { stopped: proof.stopped, killed: proof.killed, rssKb: found.reduce((sum, row) => sum + row.rss, 0) };
 }
 
 // Close the old coordinator chat when Herdr shows that its pane is still this repository's coordinator.
@@ -278,7 +302,7 @@ export async function moveToCore({ state, stateFile, repoEngine = null }, ports)
   journal.steps ??= {}; journal.counts ??= {}; journal.defers ??= 0;
   if (moved({ retiredFull: journal })) return { done: true, journal, message: '' };
   const ctx = { state, ports, gh: github(ports.gh), self: new Set([process.pid, process.ppid]),
-    match: { runsRoot: join(ports.commonDir ?? '/nonexistent', 'pdd', 'runs'), stateFile } };
+    match: { runsRoot: join(ports.commonDir ?? '/nonexistent', 'pdd', 'runs'), stateFile, runRoots: [], runDirs: [] } };
   // The launcher's save takes its admission lock asynchronously. Each save must finish before the next state change:
   // otherwise an older journal can overwrite the final moved state after this function returns.
   const save = async () => {
@@ -319,7 +343,12 @@ export async function moveToCore({ state, stateFile, repoEngine = null }, ports)
     claims: async () => { journal.counts.claims = (await releaseClaims(ctx, journal)).claims; },
     notes: async () => { journal.counts.notes = (await notePrs(ctx)).notes; },
     slots: async () => { journal.counts.slots = (await ports.releaseSlots()) ? 1 : 0; },
-    workers: async () => { const r = await stopOldProcesses(ctx); journal.counts.workers = r.stopped; journal.counts.killed = r.killed; journal.counts.rssKb = r.rssKb; },
+    workers: async () => {
+      const runs = ownRuns(await ports.listRuns(true), state).filter(ended);
+      ctx.match.runRoots = [...new Set(runs.map(run => run.root).filter(named))];
+      ctx.match.runDirs = [...new Set(runs.map(run => run.runDir).filter(named))];
+      const r = await stopOldProcesses(ctx); journal.counts.workers = r.stopped; journal.counts.killed = r.killed; journal.counts.rssKb = r.rssKb;
+    },
   };
   for (const step of MOVE_STEPS) {
     if (journal.steps[step]) continue;

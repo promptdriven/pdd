@@ -1,4 +1,3 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 870d872340025b29542e47f34802bcb932220c2bae5284b7542c8de469dc6a26).
 import {runAutopilotDoctor, resolveAutopilotAgent} from './autopilot-doctor.mjs';
 import {releaseRunClaim, cancelRun, acquireRunLock} from './workflow-runner.mjs';
 import { releaseCheckCapacity } from './test-suite-queue.mjs';
@@ -448,8 +447,17 @@ async function moveTick(stateFile, state, p, ports) {
     releaseSlots: () => releaseCheckCapacity({ env: p.env, owner: stateFile }, p.checkCapacityPorts ?? p),
     // A local read of this machine's process table (no agent, Git or GitHub call); Linux without ps reads /proc.
     processes: async () => {
-      try { return (await promisify(execFile)('ps', ['-A', '-ww', '-o', 'pid=', '-o', 'ppid=', '-o', 'pgid=', '-o', 'rss=', '-o', 'args='], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 30000 })).stdout; }
+      try { return (await promisify(execFile)('ps', ['-A', '-ww', '-o', 'pid=', '-o', 'ppid=', '-o', 'pgid=', '-o', 'rss=', '-o', 'uid=', '-o', 'lstart=', '-o', 'args='], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 30000, env: { ...process.env, LC_ALL: 'C' } })).stdout; }
       catch (error) { if (error.code === 'ENOENT' && process.platform === 'linux') return procTable(nativeFs); throw error; }
+    },
+    uid: typeof process.getuid === 'function' ? process.getuid() : null,
+    cwdOf: async pid => {
+      if (process.platform === 'linux') try { return realpathSync(`/proc/${pid}/cwd`); } catch { return null; }
+      if (process.platform === 'darwin') {
+        const text = (await promisify(execFile)('lsof', ['-a', '-p', String(pid), '-d', 'cwd', '-Fn'], { encoding: 'utf8', timeout: 5000 })).stdout;
+        return /^n(.+)$/m.exec(text)?.[1] ?? null;
+      }
+      return null;
     },
     signal: (pid, name) => { try { process.kill(pid, name); } catch { /* It ended already. */ } },
     sleep: ms => new Promise(done => setTimeout(done, ms)),

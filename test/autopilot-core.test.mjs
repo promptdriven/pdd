@@ -993,7 +993,9 @@ test('R7 a job file with no agent record, or one whose advance keeps failing, en
   const v = await coreWorld(t, { settings: { runs: 1, quietMinutes: 60 } });
   v.issue(17); v.issue(18);
   await v.tick();
-  const broken = { ...v.jobs, read: () => { throw Error('broken job record'); } };
+  const broken = { ...v.jobs, read: () => { throw Error('broken job record'); }, cleanup: async part => {
+    v.jobs.stop(part); return { confirmed: !v.alive.has(part.pid) };
+  } };
   const beats = [];
   const heartbeat = async job => { if (job.issue === 17) beats.push(v.now()); return { state: 'refreshed' }; };
   for (let i = 0; i < 6; i++) { v.advance(20 * MIN); await v.tick({ jobs: broken, heartbeat }); }
@@ -3661,4 +3663,146 @@ test('Y10 (T01, T04) the real saved-check reader finds no check for a changed St
   writeIn(v.job(17, 'build').cwd, 'test/runtime/workflow-prove.json', '{"cases": [1, 2]}\n');
   v.build(17); await v.tick(); v.review(17, 'PASS'); v.suite(17, 0); await v.tick();
   assert.ok(v.job(17, 'vectors')?.args.at(-3).includes("/test/workflow-prove.vectors.test.mjs'"), 'the linked replay runs');
+});
+
+test('a replacement vector run waits for confirmed cleanup of its saved process identity', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  const file = 'test/replay.vectors.test.mjs';
+  w.baseCommit(file, "import test from 'node:test';\ntest('replay', () => {});\n");
+  w.issue(17); await w.tick();
+  const build = w.job(17, 'build');
+  writeIn(build.cwd, file, "import test from 'node:test';\ntest('replay at the first head', () => {});\n");
+  const { pr } = w.build(17, { result: { promptChanged: false } });
+  await w.tick(); w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
+  const old = w.job(17, 'vectors');
+  assert.ok(old, 'the first head has a running replay');
+
+  writeIn(build.cwd, file, "import test from 'node:test';\ntest('replay at the replacement head', () => {});\n");
+  w.git(build.cwd, 'add', file); w.git(build.cwd, 'commit', '-qm', 'new replay head'); w.git(build.cwd, 'push', '-q', 'origin', `HEAD:${build.branch}`);
+  const head = w.git(build.cwd, 'rev-parse', 'HEAD');
+  w.github.setChecks(head);
+  const record = jobFile(w, 17);
+  Object.assign(record, { head, agentHead: head, review: { ...record.review, head }, suite: { ...record.suite, head } });
+  writeFileSync(join(w.root, 'jobs', '17.json'), JSON.stringify(record));
+
+  const snapshots = [], cleanups = [];
+  w.jobs.snapshot = part => { snapshots.push(part.pid); part.processes = [{ pid: part.pid, start: 'saved-start', command: 'saved command' }]; return part.processes; };
+  w.jobs.cleanup = async part => { cleanups.push(part.pid); return { confirmed: false }; };
+  await w.tick();
+  assert.equal(jobFile(w, 17).vectors.agent.pid, old.pid, 'an uncertain cleanup retains the old process record');
+  assert.equal(w.started.filter(part => part.role === 'vectors').length, 1, 'it does not start a replacement');
+  assert.deepEqual(snapshots, [old.pid]); assert.deepEqual(cleanups, [old.pid]);
+
+  w.jobs.cleanup = async part => { cleanups.push(part.pid); w.jobs.stop(part); return { confirmed: true }; };
+  await w.tick();
+  assert.equal(w.started.filter(part => part.role === 'vectors').length, 2, 'confirmed cleanup permits the replacement');
+  assert.notEqual(jobFile(w, 17).vectors.agent.pid, old.pid);
+  assert.deepEqual(cleanups, [old.pid, old.pid]);
+});
+
+test('quiet review and suite retries retain their process records until cleanup is confirmed', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1, quietMinutes: 20 } });
+  w.issue(17); await w.tick();
+  w.build(17, { result: { promptChanged: false } }); await w.tick();
+  const review = w.job(17, 'review'), suite = w.job(17, 'suite');
+  const snapshots = [], cleanups = [];
+  w.jobs.snapshot = part => { snapshots.push(part.pid); part.processes = [{ pid: part.pid, start: 'saved-start', command: 'saved command' }]; return part.processes; };
+  w.jobs.cleanup = async part => { cleanups.push(part.pid); return { confirmed: false }; };
+  w.advance(10 * MIN); await w.tick();
+  w.advance(20 * MIN); await w.tick();
+  w.advance(20 * MIN); await w.tick();
+  const retained = jobFile(w, 17);
+  assert.equal(retained.review.agent.pid, review.pid, 'the quiet reviewer record remains');
+  assert.equal(retained.suite.agent.pid, suite.pid, 'the quiet suite record remains');
+  assert.equal(w.started.filter(part => part.role === 'review').length, 1, 'no replacement reviewer starts');
+  assert.equal(w.started.filter(part => part.role === 'suite').length, 1, 'no replacement suite starts');
+  assert.deepEqual([...new Set(snapshots)].sort((a, b) => a - b), [review.pid, suite.pid]);
+  assert.deepEqual([...new Set(cleanups)].sort((a, b) => a - b), [review.pid, suite.pid]);
+});
+
+test('a changed head retains active review and suite records until cleanup is confirmed', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); await w.tick();
+  w.build(17, { result: { promptChanged: false } }); await w.tick();
+  const review = w.job(17, 'review'), suite = w.job(17, 'suite');
+  const retainedFile = join(suite.cwd, 'retained-after-uncertain-cleanup');
+  writeFileSync(retainedFile, 'keep this checkout');
+  const record = jobFile(w, 17);
+  record.review.head = 'old-review-head'; record.suite.head = 'old-suite-head';
+  writeFileSync(join(w.root, 'jobs', '17.json'), JSON.stringify(record));
+  const cleanups = [];
+  w.jobs.snapshot = part => { part.processes = [{ pid: part.pid, start: 'saved-start', command: 'saved command' }]; return part.processes; };
+  w.jobs.cleanup = async part => { cleanups.push(part.pid); return { confirmed: false }; };
+  await w.tick();
+  const retained = jobFile(w, 17);
+  assert.equal(retained.review.agent.pid, review.pid);
+  assert.equal(retained.suite.agent.pid, suite.pid);
+  assert.equal(w.started.filter(part => part.role === 'review').length, 1);
+  assert.equal(w.started.filter(part => part.role === 'suite').length, 1);
+  assert.equal(existsSync(retainedFile), true, 'the old suite checkout remains');
+  assert.deepEqual(cleanups.sort((a, b) => a - b), [review.pid, suite.pid]);
+});
+
+test('a failed cleanup retains active checks instead of starting a repair', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); await w.tick();
+  const { head } = w.build(17, { result: { promptChanged: false } }); await w.tick();
+  const review = w.job(17, 'review'), suite = w.job(17, 'suite');
+  w.jobs.snapshot = part => { part.processes = [{ pid: part.pid, start: 'saved-start', command: 'saved command' }]; return part.processes; };
+  w.jobs.cleanup = async () => ({ confirmed: false });
+  w.github.setChecks(head, 'failure');
+  await w.tick();
+  const retained = jobFile(w, 17);
+  assert.equal(retained.review.agent.pid, review.pid);
+  assert.equal(retained.suite.agent.pid, suite.pid);
+  assert.equal(w.started.filter(part => part.role === 'repair').length, 0);
+});
+
+test('a failed cleanup retains active checks instead of starting a conflict agent', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); await w.tick();
+  const { head } = w.build(17, { result: { promptChanged: false } }); await w.tick();
+  const review = w.job(17, 'review'), suite = w.job(17, 'suite');
+  const record = jobFile(w, 17);
+  record.mechanical = { head, files: ['change-17.txt'] };
+  writeFileSync(join(w.root, 'jobs', '17.json'), JSON.stringify(record));
+  w.jobs.snapshot = part => { part.processes = [{ pid: part.pid, start: 'saved-start', command: 'saved command' }]; return part.processes; };
+  w.jobs.cleanup = async () => ({ confirmed: false });
+  w.github.setChecks(head, 'failure');
+  await w.tick();
+  const retained = jobFile(w, 17);
+  assert.equal(retained.review.agent.pid, review.pid);
+  assert.equal(retained.suite.agent.pid, suite.pid);
+  assert.equal(w.started.filter(part => part.role === 'conflict').length, 0);
+});
+
+test('a failed cleanup retains active checks before a base refresh changes the head', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); await w.tick();
+  const { head } = w.build(17, { result: { promptChanged: false } }); await w.tick();
+  const review = w.job(17, 'review'), suite = w.job(17, 'suite');
+  w.suite(17, 0);
+  const record = jobFile(w, 17);
+  Object.assign(record.review, { verdict: 'PASS', mustFix: [] });
+  writeFileSync(join(w.root, 'jobs', '17.json'), JSON.stringify(record));
+  w.baseCommit('other.txt', 'base moved\n');
+  w.jobs.snapshot = part => { part.processes = [{ pid: part.pid, start: 'saved-start', command: 'saved command' }]; return part.processes; };
+  w.jobs.cleanup = async part => part.role === 'build' ? { confirmed: true } : { confirmed: false };
+  await w.tick();
+  const retained = jobFile(w, 17);
+  assert.equal(retained.head, head);
+  assert.equal(retained.review.agent.pid, review.pid);
+  assert.equal(retained.suite.agent.pid, suite.pid);
+  assert.equal(w.started.filter(part => part.role === 'suite').length, 1);
+});
+
+test('local cleanup keeps the job record and worktree when process cleanup cannot be proved', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); await w.tick();
+  const before = jobFile(w, 17);
+  w.jobs.cleanup = async () => ({ confirmed: false });
+  w.github.label(17, 'pdd:stuck');
+  await w.tick();
+  assert.ok(jobFile(w, 17), 'the retry record stays');
+  assert.equal(existsSync(before.worktree), true, 'the worktree stays with the uncertain process ownership');
 });
