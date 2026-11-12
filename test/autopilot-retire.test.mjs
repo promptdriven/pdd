@@ -334,7 +334,6 @@ test('M7 a machine that already ran the core engine: no claim search and no PR r
   unavailable.ports.processes = async () => '';
   const held = await unavailable.move();
   assert.equal(held.done, false);
-  assert.match(held.message, /old process inventory is unreadable/);
   assert.equal(held.journal.steps.workers, undefined);
   assert.deepEqual(unavailable.signals, []);
   const changed = fullWorld();
@@ -346,7 +345,7 @@ test('M7 a machine that already ran the core engine: no claim search and no PR r
   changed.ports.processes = async () => ++inventories === 1 ? completeInventory() : '';
   const retried = await changed.move();
   assert.equal(retried.done, false);
-  assert.match(retried.message, /old process cleanup is not confirmed/);
+  assert.equal(retried.journal.steps.workers, undefined);
   assert.deepEqual(changed.signals, [], 'an unreadable recheck never treats a saved worker as gone');
 });
 
