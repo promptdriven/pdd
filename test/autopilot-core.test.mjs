@@ -121,6 +121,56 @@ test('claim race between two machines: one machine starts, the loser starts noth
   assert.equal([...a.started, ...b.started].filter(job => job.issue === 17).length, 1, 'no second start later');
 });
 
+test('two repositories competing for one shared slot deny and roll back the slower preparation', async t => {
+  const a = await coreWorld(t, { repository: 'acme/alpha', settings: { runs: 2 }, machine: 'alpha' });
+  const b = await coreWorld(t, { repository: 'acme/beta', settings: { runs: 2 }, machine: 'beta' });
+  a.issue(17, { title: 'Change src/slow.mjs' }); b.issue(17);
+  const roots = [a.root, b.root];
+  let locked = false, resumeSlow, reachedSlow;
+  const slow = new Promise(resolve => { resumeSlow = resolve; });
+  const reached = new Promise(resolve => { reachedSlow = resolve; });
+  const admissions = [];
+  const machine = () => {
+    const port = {
+      reserve: async () => {
+        if (locked) return null;
+        locked = true;
+        const used = roots.reduce((total, root) => total + busySlots(root), 0);
+        admissions.push(used);
+        port.room = used < 1 ? { ok: true, reason: null, free: 1 - used } : { ok: false, reason: 'the only shared slot is busy', free: 0 };
+        return () => { locked = false; };
+      },
+    };
+    return port;
+  };
+  const originalGit = a.ports().git;
+  let paused = false;
+  const slowGit = async (args, options) => {
+    if (!paused && args[0] === 'log' && String(options?.cwd ?? '').includes('/worktrees/17')) {
+      paused = true;
+      reachedSlow();
+      await slow;
+    }
+    return originalGit(args, options);
+  };
+  const first = a.tick({ git: slowGit, machine: machine() });
+  await reached;
+  assert.ok(a.labels(17).includes('pdd:working'), 'the slow repository has a claim while it prepares');
+  assert.equal(locked, false, 'pre-admission preparation holds no shared lock');
+  await b.tick({ machine: machine() });
+  assert.ok(b.job(17, 'build'), 'the faster repository takes the one slot');
+  assert.equal(locked, false, 'the admitted repository releases the short lock');
+  resumeSlow();
+  const held = await first;
+  assert.match(held.message, /only shared slot is busy/);
+  assert.equal(a.job(17), undefined, 'the slower repository saves no job');
+  assert.deepEqual(a.labels(17), [], 'the slower repository releases its claim');
+  assert.equal(claimComments(a, 17).length, 0, 'the slower repository removes its claim comment');
+  assert.equal(existsSync(join(a.root, 'worktrees', '17')), false, 'the slower repository removes its worktree');
+  assert.equal(busySlots(roots[0]) + busySlots(roots[1]), 1, 'the shared room never admits a second job');
+  assert.deepEqual(admissions, [0, 1], 'the final admission checks see the job saved by the other repository');
+});
+
 test('machine admission lets another repository start while slow intake preparation runs, without over-admitting', async t => {
   const a = await coreWorld(t, { repository: 'acme/alpha', settings: { runs: 2 }, machine: 'alpha' });
   const b = await coreWorld(t, { repository: 'acme/beta', settings: { runs: 2 }, machine: 'beta' });
