@@ -779,8 +779,8 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    check for this tick (the base suite runs, or the job just entered the base-red
    state); else its result is the suite (a `base-red` suite adds no red line). The
    core gives it `BASE_RED_TOOLS` (`startJob`, `queuedCommand`, `watchProcess`,
-   `readTail`, `removeTree`, `refreshBase`, `leaveLane` and `runnerLine`, the suite
-   runner lines). Stopping a job's checks (`stopChecks`) also runs `stopBaseSuite`. With no red finding yet, start the review and
+   `readTail`, `removeTree`, `refreshBase`, `leaveLane`, `runnerLine`, the suite
+   runner lines, and `failingTests`). Stopping a job's checks (`stopChecks`) also runs `stopBaseSuite`. With no red finding yet, start the review and
    the suite for this head when missing; CI may still be pending. A reviewer that
    twice gives no valid verdict for the head ends as `no-result`; no test command
    ends `no-test-command`; a broken suite ends `suite-broken`. The tick posts each verdict once as a PR comment with
@@ -907,9 +907,20 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    same round; and a full suite that is still running gives the failed tests that its
    log already shows (`failingTests` of a bounded log tail) as one more red line: "The
    full test suite (still running at head H) already shows failed tests: TEST (FILE), …".
-   A red suite's line names its failed tests the same way. `failingTests(text, limit=20)`
-   is exported: `[{name, file}]` from TAP `not ok N - NAME` lines at any depth (with the
-   `location:` line that follows) and spec-reporter `✖ NAME` lines, each name once. The
+   A red suite's line names its failed tests the same way. With a base-suite record of
+   this machine for the job's merge base, the still-running line names only the tests
+   that are not red there and adds "Also red on the base (SHA7), not from this change:
+   TEST (FILE), …"; with no such test left there is no line (`baseRedPartial` of the
+   [base-red owner](autopilot-base-red.prompt.md)), so a base red never comes back as a
+   repeated finding. `failingTests(text, limit=20)` is exported, the one parser of failed
+   tests (the base-red owner gets it through `BASE_RED_TOOLS`): `[{name, file}]` in log
+   order, each test once (the same name with the same file, or with no file on one side;
+   the known file stays). TAP `not ok N - NAME` lines at any depth: a failure stays open
+   until its `location:` line, the next `ok` or `not ok` line or 12 lines, so one name in
+   two files is two tests; a `# TODO` or `# SKIP` directive is no failure; `\#` and `\\`
+   unescape. Spec-reporter `✖ NAME (DURATION)` lines at any depth, after color codes go:
+   the summary's `test at FILE:LINE:COL` line before it gives the file; a TODO or SKIP
+   line and the `✖ failing tests:` header are no test. The
    **repair budget** (option B): repairs go on
    while they make progress. The findings of a round are each review must-fix (P1 and P2)
    and each other red line. Two findings are the same when they name the same `file:line`
@@ -1156,7 +1167,8 @@ with the native defaults named above.
 - [Automatic base](autopilot-base.prompt.md): required for `checkAutopilotBase`.
 - [Report owner](autopilot-reports.prompt.md): required for `fileReport` and drafts.
 - [Base-red owner](autopilot-base-red.prompt.md): required for `ciVsBase`,
-  `suiteVsBase`, `baseRedWait`, `baseRedWaiting`, `baseRedStatus` and `stopBaseSuite`.
+  `suiteVsBase`, `baseRedWait`, `baseRedWaiting`, `baseRedStatus`, `stopBaseSuite` and
+  `baseRedPartial`.
 - [Shared full-suite queue](test-suite-queue.prompt.md): required context for the
   `pdd workflow suite` job.
 - [Secret redaction](secret-redaction.prompt.md): required for suite log tails.

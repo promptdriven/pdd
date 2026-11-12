@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-base-red.prompt.md (sha256: a133c56b2c1911db2a56086593727470ce8eb22d55cb33d868661fffb3e21571).
+// Generated from prompts/cli/autopilot-base-red.prompt.md (sha256: d9b16b587a5927212d206aa506d7182ac48222bdb9457efd21caa507757d016e).
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
@@ -23,14 +23,10 @@ function save(fs, file, value) {
 // file only). Change only this function.
 export const mainRedRoute = (settings = {}) => (void settings, 'file');
 
-// ---- Failing test names ---------------------------------------------------------------------------------
-// The shape of the core's failingTests (#3227 fix 4), so a later swap is one import: [{name, file}] at any depth.
-// node --test TAP: `not ok N - NAME` (its `location:` line gives the file); the spec reporter: `✖ NAME (DURATION)`
-// (a `test at FILE:L:C` line before it in the summary gives the file). A TODO or SKIP directive is no failure. One
-// test is one entry: the same name with the same file, or with no file on one side.
-const ANSI = /\x1b\[[0-9;]*m/g;
-const NOT_OK = /^\s*not ok \d+ - (.*)$/, SPEC = /^\s*\u2716 (.*?)(?: \([\d.]+m?s\))?(\s+#\s*(?:todo|skip)\b.*)?$/i, SPEC_AT = /^\s*test at (.+?):\d+:\d+\s*$/;
-const LOCATION = /^\s*location: '(.+?):\d+:\d+'\s*$/, DIRECTIVE = /\s#\s*(?:todo|skip)\b/i;
+// ---- Failing tests --------------------------------------------------------------------------------------
+// The one parser is the core's failingTests (#3227 fix 4), given as tools.failingTests. One test is one entry: the same
+// name with the same file, or with no file on one side.
+const ANSI = /\x1b\[[0-9;]*m/g, OK = /^\s*ok \d+ /;
 export const sameTest = (a, b) => a.name === b.name && (!a.file || !b.file || a.file === b.file);
 function addTest(found, limit, name, file) {
   name = String(name ?? '').trim().slice(0, 200);
@@ -42,35 +38,16 @@ function addTest(found, limit, name, file) {
   found.push(test);
   return test;
 }
-// A TAP failure stays open until its location line, the next test line or 12 lines: only then does it join the list,
-// so two failures with one name in two files stay two tests (review R1, P2).
-const OK = /^\s*ok \d+ /;
-export function failingTests(text, limit = MAX_NAMES) {
-  const found = [];
-  let open = null, look = 0, at = null;
-  const close = () => { if (open) addTest(found, limit, open.name, open.file); open = null; look = 0; };
-  for (const raw of String(text ?? '').split('\n')) {
-    const line = raw.replace(/\r$/, '').replace(ANSI, '');
-    let m;
-    if (OK.test(line)) { close(); at = null; continue; }
-    if ((m = NOT_OK.exec(line))) { close(); at = null; if (!DIRECTIVE.test(m[1])) { open = { name: m[1], file: null }; look = 12; } continue; }
-    if (open) { if ((m = LOCATION.exec(line))) { open.file = m[1]; close(); continue; } if (--look <= 0) close(); continue; }
-    if ((m = SPEC_AT.exec(line))) { at = m[1]; continue; }
-    if ((m = SPEC.exec(line))) { if (!m[2] && m[1].trim() !== 'failing tests:') addTest(found, limit, m[1], at); at = null; }
-  }
-  close();
-  return found;
-}
+const localTo = root => value => value && typeof root === 'string' && root.length > 1 ? value.split(`file://${root}/`).join('').split(`${root}/`).join('') : value;
 // A log in 1 MB parts, whole lines only (an over-long line without an end is dropped), so it never sits in memory at
 // once. Only the lines that failingTests reads stay (an `ok` line as a short one), and it reads them once, so no test
 // line is cut from its location line. The checkout root goes from names and files, so one test in two checkouts is
 // one test. `more`: over 50.
 const KEPT = /^\s*(?:not ok \d+ - |location: '|test at |\u2716 )/;
-function readFailing(fs, file, root) {
-  if (!file) return null;
-  const kept = [], decoder = new StringDecoder('utf8');
+function readFailing(fs, file, root, parse) {
+  if (!file || typeof parse !== 'function') return null;
+  const kept = [], decoder = new StringDecoder('utf8'), local = localTo(root);
   let carry = '', skipping = false, fd;
-  const local = value => value && typeof root === 'string' && root.length > 1 ? value.split(`file://${root}/`).join('').split(`${root}/`).join('') : value;
   const take = text => {
     for (const raw of text.split('\n')) { const line = raw.replace(/\r$/, '').replace(ANSI, ''); if (KEPT.test(line)) kept.push(line.slice(0, 4000)); else if (OK.test(line)) kept.push('ok 0 -'); }
   };
@@ -88,7 +65,7 @@ function readFailing(fs, file, root) {
     if (!skipping) take(carry + decoder.end());
   } catch { return null; } finally { if (fd !== undefined) try { fs.closeSync(fd); } catch { /* Closed. */ } }
   const tests = [];
-  for (const t of failingTests(kept.join('\n'), MAX_NAMES + 1)) addTest(tests, MAX_NAMES + 1, local(t.name), local(t.file));
+  for (const t of parse(kept.join('\n'), MAX_NAMES + 1)) addTest(tests, MAX_NAMES + 1, local(t.name), local(t.file));
   return { tests: tests.slice(0, MAX_NAMES), more: tests.length > MAX_NAMES };
 }
 const testText = t => `${t.name}${t.file ? ` (${t.file})` : ''}`;
@@ -223,7 +200,7 @@ async function baseSuite(ctx, job, sha, tools) {
   const log = tools.readTail(ctx.fs, rec.agent.log);
   if (seen.state === 'dead' || seen.exit?.signal || [86, 127].includes(seen.exit?.code) || tools.runnerLine.test(log) || !log.trim())
     return again(ctx, job, rec, tools, { deaths: seen.state === 'dead' ? 1 : 0, why: seen.state === 'dead' ? 'the run died' : seen.exit?.signal ? `killed by ${seen.exit.signal}` : `exit ${seen.exit?.code}` });
-  const found = readFailing(ctx.fs, rec.agent.log, rec.cwd) ?? { tests: [], more: false };
+  const found = readFailing(ctx.fs, rec.agent.log, rec.cwd, tools.failingTests) ?? { tests: [], more: false };
   return finish(ctx, rec, 'fail', tools, { tests: found.tests, more: found.more, tail: redactedTail(log) });
 }
 async function mergeBase(ctx, job) {
@@ -242,11 +219,12 @@ export async function suiteVsBase(ctx, job, { ci = null, review = null, suite, v
     }
     if (job.baseSuite) { delete job.baseSuite; ctx.saveJob(job); }
     if (base.state !== 'fail') return suite;
-    const head = readFailing(ctx.fs, job.suite?.agent?.log, job.suite?.cwd), onBase = (Array.isArray(base.tests) ? base.tests : []).filter(t => object(t) && typeof t.name === 'string');
+    const head = readFailing(ctx.fs, job.suite?.agent?.log, job.suite?.cwd, tools.failingTests), onBase = (Array.isArray(base.tests) ? base.tests : []).filter(t => object(t) && typeof t.name === 'string');
     const known = side => Boolean(side?.tests?.length) && !side.more, red0 = t => onBase.some(b => sameTest(t, b));
     const fresh = known(head) && known({ tests: onBase, more: base.more }) ? head.tests.filter(t => !red0(t)) : [];
     if (fresh.length) {
-      const also = head.tests.filter(red0), [first, ...rest] = String(suite.text ?? '').split('\n');
+      // The core's first line lists every failed test: it loses that list, so it names no base test.
+      const also = head.tests.filter(red0), [line, ...rest] = String(suite.text ?? '').split('\n'), first = line.replace(/^(.*?\(exit [^)]*\)): .*?(\. Log: )/, '$1$2');
       return { ...suite, text: [first, `Failing tests from this change: ${fresh.map(testText).join('; ')}.`,
         ...(also.length ? [`Also red on the base (${short(sha)}), not from this change: ${also.map(testText).join('; ')}.`] : []), ...rest].join('\n') };
     }
@@ -264,6 +242,18 @@ export async function suiteVsBase(ctx, job, { ci = null, review = null, suite, v
   job.baseRed.report = await fileMainRed(ctx, job, job.baseRed).catch(error => { ctx.warn(`Autopilot core could not file the main-red issue for #${job.issue}: ${error.message}`); return null; });
   ctx.saveJob(job);
   return 'wait';
+}
+
+// The core's still-running suite line (#3227 fix 4): which of its tests this machine's base suite record for the
+// merge base also has. With no such record, every test is the job's own.
+export async function baseRedPartial(ctx, job, partial) {
+  const all = Array.isArray(partial) ? partial : [];
+  if (!all.length || mainRedJob(job)) return { own: all, onBase: [], sha: null };
+  let sha;
+  try { sha = await mergeBase(ctx, job); } catch (error) { ctx.warn(`Autopilot core could not read the merge base of #${job.issue}: ${error.message}`); return { own: all, onBase: [], sha: null }; }
+  const rec = readJson(ctx.fs, recordFile(ctx, sha)), base = rec?.state === 'fail' && Array.isArray(rec.tests) ? rec.tests.filter(t => object(t) && typeof t.name === 'string') : [];
+  const local = localTo(job.suite?.cwd), onBase = all.filter(t => base.some(b => sameTest({ name: local(t.name), file: local(t.file) }, b)));
+  return { own: all.filter(t => !onBase.includes(t)), onBase, sha };
 }
 
 // ---- The base-red wait ----------------------------------------------------------------------------------
