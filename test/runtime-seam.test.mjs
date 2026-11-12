@@ -547,6 +547,8 @@ const RECORDED_BASE_ENTRIES = {
   'cli:owner': [0,1,5,8,24,25,26,29,48,49,53,55,60,61,62,63,65,66,68,69,76,77,90],
   'cli:interface-draft': [0,1,5,8,24,25,26,31,48,49,53,55,60,61,62,63,65,66,68,69,76,77,90],
   'cli:approve': [0,1,5,7,8,24,25,26,48,49,53,54,55,60,61,62,63,65,66,68,69,76,77,90],
+  'cli:approve-automatic': [0,1,5,6,7,8,10,12,16,19,22,24,25,26,28,29,30,31,32,34,37,38,39,40,41,42,44,45,47,48,49,50,51,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,94,95],
+  'cli:approve-automatic-tests': [0,1,5,6,7,8,10,12,16,19,22,24,25,26,28,29,30,31,32,34,37,38,39,40,41,42,44,45,47,48,49,50,51,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,94,95],
   'cli:test': [0,1,5,6,7,8,10,12,16,19,22,24,25,26,28,29,30,31,32,34,37,38,39,40,41,42,44,45,47,48,49,50,51,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,94,95],
   'cli:lint': [0,1,5,6,7,8,10,12,16,19,22,24,25,26,28,29,30,31,32,34,37,38,39,40,41,42,44,45,47,48,49,50,51,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,94,95],
   'cli:simulate': [0,1,5,6,7,8,10,12,16,19,22,24,25,26,28,29,30,31,32,34,37,38,39,40,41,42,44,45,47,48,49,50,51,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,94,95],
@@ -654,6 +656,7 @@ registerHooks({
     'src/issue-sort-github.mjs <-> src/issue-sort.mjs',
     'src/issue-mixed.mjs <-> src/issue-sort-github.mjs <-> src/issue-sort.mjs',
     'src/runtime/runtime-client.mjs <-> src/runtime/runtime-slots.mjs',
+    'src/runtime/interface-draft.mjs <-> src/runtime/runtime-bindings.mjs <-> src/runtime/runtime-client.mjs <-> src/runtime/runtime-slots.mjs',
     'src/toml-string.mjs <-> src/workflow-herdr-layout.mjs',
   ]);
 
@@ -714,6 +717,7 @@ registerHooks({
   assert.deepEqual(novelStaticCycles, [], `unexpected new static import cycle: ${novelStaticCycles.join('; ')}`);
 
   const ASYNC_SEAM_BRIDGE_PROBES = new Set([
+    'cli:approve-automatic', 'cli:approve-automatic-tests',
     'cli:test', 'cli:lint', 'cli:simulate', 'cli:contracts', 'cli:contracts-sync',
     'cli:jobs', 'cli:mcp', 'child:try-doors-launcher',
   ]);
@@ -801,6 +805,8 @@ registerHooks({
     ['cli:owner', [bin, 'owner', 'prompts/a.prompt.md', '--json'], repo],
     ['cli:interface-draft', [bin, 'interface', 'draft', 'prompts/a.prompt.md', '--json'], repo],
     ['cli:approve', [bin, 'approve', 'prompts/missing.prompt.md', '--said', 'ok'], repo],
+    ['cli:approve-automatic', [bin, 'approve', 'prompts/a.prompt.md', '--automatic'], repo],
+    ['cli:approve-automatic-tests', [bin, 'approve', 'prompts/a.prompt.md', '--automatic', '--tests', 'npm test'], repo],
     ['cli:test', [bin, 'test', 'a'], repo],
     ['cli:lint', [bin, 'lint', '--local'], repo],
     ['cli:simulate', [bin, 'simulate', '--stop', 'a'], repo],
@@ -863,26 +869,69 @@ registerHooks({
   }
 
   // Guarded load failures must not escape try/catch, and light/leaf entries must not depend on unrelated leaves.
-  const runWithRejectedModule = (rejectSuffix, entryArgs) => {
-    const loader = `export async function resolve(s, c, n) { const r = await n(s, c); if (r.url.endsWith(${JSON.stringify(rejectSuffix)})) throw new Error('REVIEW_LOAD_FAILURE'); return r; }`;
-    const reg = `import { register } from 'node:module'; register(${JSON.stringify(`data:text/javascript,${encodeURIComponent(loader)}`)});`;
-    return spawnSync(process.execPath, ['--import', `data:text/javascript,${encodeURIComponent(reg)}`, ...entryArgs], {
-      cwd: nonGit,
+  const runWithRejectedModule = (rejectSuffix, entryArgs, cwd = nonGit) => {
+    const hook = `import { registerHooks } from 'node:module'; registerHooks({ resolve(s, c, n) { const r = n(s, c); if (r.url && r.url.endsWith(${JSON.stringify(rejectSuffix)})) throw new Error('REVIEW_LOAD_FAILURE'); return r; } });`;
+    return spawnSync(process.execPath, ['--import', `data:text/javascript,${encodeURIComponent(hook)}`, ...entryArgs], {
+      cwd,
+      env: {
+        PATH: `${fakeBin}:/usr/bin:/bin`,
+        HOME: home,
+        PDD_STATE_DIR: stateDir,
+        PDD_RUNTIME_URL: 'http://127.0.0.1:9',
+      },
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
     });
   };
 
   assert.equal(runWithRejectedModule('/runtime-client.mjs', [bin, '--help']).status, 0);
-  const mcpFail = runWithRejectedModule('/runtime-client.mjs', [bin, 'mcp']);
-  assert.equal(mcpFail.status, 1);
-  assert.equal(mcpFail.stderr.trim(), 'pdd mcp could not start. Reason: REVIEW_LOAD_FAILURE');
-  const jobsFail = runWithRejectedModule('/runtime-client.mjs', [bin, 'jobs']);
-  assert.equal(jobsFail.status, 5);
-  assert.equal(jobsFail.stderr.trim(), 'Local interpreter jobs could not be read. Reason: REVIEW_LOAD_FAILURE');
-  const contractsFail = runWithRejectedModule('/runtime-client.mjs', [bin, 'contracts']);
-  assert.equal(contractsFail.status, 5);
-  assert.equal(contractsFail.stderr.trim(), 'Local contracts could not be read. Reason: REVIEW_LOAD_FAILURE');
+
+  for (const suffix of ['/workflow-runner.mjs', '/product.mjs', '/screen-compare.mjs', '/runtime-client.mjs']) {
+    for (const extraArgs of [['--automatic', '--tests', 'node --test x.mjs'], ['--automatic']]) {
+      const approveFail = runWithRejectedModule(suffix, [bin, 'approve', 'prompts/a.prompt.md', ...extraArgs], repo);
+      assert.equal(approveFail.status, 4, `approve ${extraArgs.join(' ')} (${suffix}) expected exit 4, got ${approveFail.status}: ${approveFail.stderr}`);
+      assert.equal(approveFail.stdout, '');
+      assert.equal(approveFail.stderr, 'REVIEW_LOAD_FAILURE\n');
+    }
+  }
+
+  for (const [cmdArgs, suffix] of [
+    [['test', 'a'], '/workflow-runner.mjs'],
+    [['simulate', '--stop', 'a'], '/prompt-approve.mjs'],
+  ]) {
+    const checkOrTryFail = runWithRejectedModule(suffix, [bin, ...cmdArgs], repo);
+    assert.equal(checkOrTryFail.status, 3);
+    assert.equal(
+      checkOrTryFail.stderr.trim(),
+      'pdd stopped with an internal error. If it sent checks, read them with pdd test --read. Do not send them again. Reason: REVIEW_LOAD_FAILURE',
+    );
+  }
+
+  for (const suffix of ['/runtime-client.mjs', '/workflow-runner.mjs']) {
+    const mcpFail = runWithRejectedModule(suffix, [bin, 'mcp']);
+    assert.equal(mcpFail.status, 1);
+    assert.equal(mcpFail.stderr.trim(), 'pdd mcp could not start. Reason: REVIEW_LOAD_FAILURE');
+  }
+  for (const suffix of ['/runtime-client.mjs', '/product.mjs']) {
+    const jobsFail = runWithRejectedModule(suffix, [bin, 'jobs']);
+    assert.equal(jobsFail.status, 5);
+    assert.equal(jobsFail.stderr.trim(), 'Local interpreter jobs could not be read. Reason: REVIEW_LOAD_FAILURE');
+    const contractsFail = runWithRejectedModule(suffix, [bin, 'contracts']);
+    assert.equal(contractsFail.status, 5);
+    assert.equal(contractsFail.stderr.trim(), 'Local contracts could not be read. Reason: REVIEW_LOAD_FAILURE');
+  }
+  const setupFail = runWithRejectedModule('/interface-draft.mjs', [bin, 'setup', '--yes'], repo);
+  assert.equal(setupFail.status, 1);
+  assert.match(setupFail.stderr, /Interface drafts: REVIEW_LOAD_FAILURE/);
+
+  const launcherFailScript = 'import(process.argv[1]).then(async ({ runShim }) => { process.exitCode = await runShim(process.argv[2], process.argv.slice(3)); }).catch(() => { process.stderr.write("pdd: The installed adapter could not load. Run pdd simulate STORY --cli again.\\n"); process.exitCode = 125; });';
+  const launcherFail = runWithRejectedModule(
+    '/product.mjs',
+    ['--input-type=commonjs', '-e', launcherFailScript, '--', pathToFileURL(join(root, 'src/try-doors.mjs')).href, join(scratch, 'missing.door.json')],
+  );
+  assert.equal(launcherFail.status, 125);
+  assert.equal(launcherFail.stderr, 'pdd: The installed adapter could not load. Run pdd simulate STORY --cli again.\n');
+
   assert.equal(
     runWithRejectedModule('/runtime-output.mjs', ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(root, 'src/svg-layout.mjs')).href)})`]).status,
     0,

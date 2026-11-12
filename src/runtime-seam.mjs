@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: e9521f17fc55c11a3a5dc1c8d51e9ca3f69aa14e772add31dd31fd8c87e1c3f6).
+// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 9bce6f46642e858a5299462da83187575c2bbf1600c6a24c0d58016744570001).
 import { realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -170,45 +170,64 @@ export async function loadRuntimeClient() {
 }
 
 export async function runAutomaticApproval(input = {}, ports = {}) {
-  const [
-    { approvalActor, readApprovalPolicy, readPromptApprovals, recordPromptApproval },
-    { approvePromptText, promptPath },
-    ,
-    { headerPrompts },
-    { readEvidenceEligibility },
-    { allRuns },
-    { lintSvgLayouts },
-  ] = await Promise.all([
-    import('./approval-policy.mjs'),
-    import('./prompt-approve.mjs'),
-    import('./secret-redaction.mjs'),
-    import('./file-owner.mjs'),
-    import('./workflow-runner.mjs'),
-    import('./workflow-runs.mjs'),
-    import('./svg-layout.mjs'),
-  ]);
-  const env = ports.env ?? process.env;
-  const client = ports.client ?? (input?.client ? { ...input.client, version: input.client.version ?? clientVersion() } : { version: clientVersion() });
-  const explicitWorkflow = ports.workflow ?? input?.workflow;
-  return runtimeRunAutomaticApproval(
-    input,
-    withPortDefaults(withEligibilityDefault(ports, readEvidenceEligibility), {
-      approvalActor,
-      readApprovalPolicy,
-      readPromptApprovals,
-      recordPromptApproval,
-      approvePromptText,
-      promptPath,
-      headerPrompts,
-      allRuns,
-      workflowBaseSha: ({ root, env: runEnv }) =>
-        resolveWorkflowBaseSha({ root, env: runEnv ?? env, allRunsPort: ports.allRuns ?? allRuns }),
-      lintSvgLayouts,
-      client,
-      ...(explicitWorkflow !== undefined ? { workflow: explicitWorkflow } : {}),
-      redaction: seamRedaction(ports),
-    }),
-  );
+  const stderr = ports.stderr ?? process.stderr;
+  try {
+    const [
+      { approvalActor, readApprovalPolicy, readPromptApprovals, recordPromptApproval },
+      { approvePromptText, promptPath },
+      ,
+      ,
+      { headerPrompts },
+      { readEvidenceEligibility },
+      { allRuns },
+      { assessNativeEvidence, resultLines, usableResult },
+      ,
+      { lintSvgLayouts },
+      { compareScreen, formatScreenComparison },
+    ] = await Promise.all([
+      import('./approval-policy.mjs'),
+      import('./prompt-approve.mjs'),
+      import('./product.mjs'),
+      import('./secret-redaction.mjs'),
+      import('./file-owner.mjs'),
+      import('./workflow-runner.mjs'),
+      import('./workflow-runs.mjs'),
+      import('./workflow-results.mjs'),
+      import('./agent-config.mjs'),
+      import('./svg-layout.mjs'),
+      import('./screen-compare.mjs'),
+    ]);
+    const env = ports.env ?? process.env;
+    const client = ports.client ?? (input?.client ? { ...input.client, version: input.client.version ?? clientVersion() } : { version: clientVersion() });
+    const explicitWorkflow = ports.workflow ?? input?.workflow;
+    return await runtimeRunAutomaticApproval(
+      input,
+      withPortDefaults(withEligibilityDefault(ports, readEvidenceEligibility), {
+        approvalActor,
+        readApprovalPolicy,
+        readPromptApprovals,
+        recordPromptApproval,
+        approvePromptText,
+        promptPath,
+        headerPrompts,
+        allRuns,
+        workflowBaseSha: ({ root, env: runEnv }) =>
+          resolveWorkflowBaseSha({ root, env: runEnv ?? env, allRunsPort: ports.allRuns ?? allRuns }),
+        assessNativeEvidence,
+        usableResult,
+        resultLines,
+        lintSvgLayouts,
+        compareScreen,
+        formatScreenComparison,
+        client,
+        ...(explicitWorkflow !== undefined ? { workflow: explicitWorkflow } : {}),
+        redaction: seamRedaction(ports),
+      }),
+    );
+  } catch (error) {
+    stderr.write(`${error?.message || 'Approval failed.'}\n`);
+    return 4;
+  }
 }
 
 export async function runCheck(input = {}, ports = {}) {
