@@ -50,14 +50,14 @@ function denySave(t, directory, record) {
 function partialWrite(fixture, target) {
   const preload = join(fixture.env.HOME, 'partial-write.mjs');
   writeFileSync(preload, `import fs from 'node:fs';
-import { dirname, basename } from 'node:path';
+import { dirname, basename, join } from 'node:path';
 import { syncBuiltinESMExports } from 'node:module';
 const original = fs.writeFileSync, root = ${JSON.stringify(fixture.repo)}, target = ${JSON.stringify(target)};
 let fired = false;
 fs.writeFileSync = (path, data, ...args) => {
   const selected = target === 'provenance'
-    ? dirname(String(path)) === root + '/.pdd' && basename(String(path)) !== '.gitignore'
-    : String(path) === root + '/' + target;
+    ? dirname(String(path)) === join(root, '.pdd') && basename(String(path)) !== '.gitignore'
+    : String(path) === join(root, target) || (basename(String(path)) === 'next' && dirname(dirname(String(path))) === dirname(join(root, target)) && basename(dirname(String(path))).startsWith('.pdd-' + basename(target).slice(0,32) + '-'));
   if (selected && !fired) {
     fired = true;
     original(path, Buffer.from(data).subarray(0, 16), ...args);
@@ -203,4 +203,158 @@ test('successful provenance update preserves existing record permissions', t => 
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.equal(statSync(record).mode & 0o777, 0o640, 'SAVE_CHANGED_PRIOR_RECORD_MODE');
   assert.deepEqual(Object.keys(JSON.parse(readFileSync(record, 'utf8'))).sort(), ['prompts/first.prompt.md', 'prompts/second.prompt.md']);
+});
+
+function limitedDraft(t, fixture, args, size) {
+  const available = spawnSync('prlimit', ['--version'], { encoding: 'utf8' });
+  if (available.error?.code === 'ENOENT') { t.skip('prlimit is unavailable on this system.'); return; }
+  assert.ifError(available.error);
+  assert.equal(available.status, 0, available.stderr);
+  const preload = join(fixture.env.HOME, 'handle-sigxfsz.mjs');
+  writeFileSync(preload, "process.on('SIGXFSZ', () => {});\n");
+  const result = spawnSync('prlimit', [`--fsize=${size}:${size}`, '--', process.execPath, '--import', preload,
+    cli, 'interface', 'draft', ...args, '--json'], { cwd: fixture.repo, env: fixture.env, encoding: 'utf8' });
+  assert.ifError(result.error);
+  assert.equal(result.signal, null, result.stdout + result.stderr);
+  return result;
+}
+
+test('persistent native file-size failure leaves approved prompt bytes intact (AC2)', t => {
+  const fixture = project(t, { 'prompts/percent.prompt.md': raw, 'contracts/add.json': JSON.stringify(addition) });
+  assert.ok(Buffer.byteLength(raw) > 1024, 'The original must exceed the native write limit.');
+  const result = limitedDraft(t, fixture, ['prompts/percent.prompt.md', '--extend', '--contract', 'contracts/add.json'], 1024);
+  if (!result) return;
+  assert.equal(result.status, 4, result.stdout + result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.rows[0].state, 'refused');
+  assert.equal(readFileSync(join(fixture.repo, 'prompts/percent.prompt.md'), 'utf8'), raw, 'PERSISTENT_EFBIG_MUTATED_APPROVED_PROMPT');
+  assert.equal(report.rows[0].problems[0].code, 'EFBIG');
+  assert.equal(existsSync(join(fixture.repo, '.pdd/interface-drafts.json')), false);
+  assert.deepEqual(readdirSync(join(fixture.repo, 'prompts')), ['percent.prompt.md']);
+});
+
+test('persistent native provenance failure restores every prompt without rewriting originals (AC1, AC2)', t => {
+  // Keep each replacement below the limit so this reaches metadata persistence.
+  const declared = '# Draft\n\n```json\n' + raw.match(/```json\n([\s\S]*?)\n```/)[1] + '\n```\n';
+  const files = { 'prompts/first.prompt.md': declared, 'prompts/second.prompt.md': declared, 'prompts/seed.prompt.md': prose };
+  const fixture = project(t, files);
+  const seed = draft(fixture, ['prompts/seed.prompt.md']);
+  assert.equal(seed.status, 0, seed.stdout + seed.stderr);
+  const seedPrompt = readFileSync(join(fixture.repo, 'prompts/seed.prompt.md'));
+  const directory = join(fixture.repo, '.pdd'), record = join(directory, 'interface-drafts.json');
+  const saved = JSON.parse(readFileSync(record, 'utf8'));
+  saved.unrelated = { retained: 'x'.repeat(12000) };
+  writeFileSync(record, JSON.stringify(saved)); chmodSync(record, 0o640);
+  const before = readFileSync(record);
+  const result = limitedDraft(t, fixture, ['--all'], 4096);
+  if (!result) return;
+  assert.equal(result.status, 2, result.stdout + result.stderr);
+  assert.match(result.stderr, /EFBIG/);
+  for (const path of ['prompts/first.prompt.md', 'prompts/second.prompt.md']) {
+    assert.equal(readFileSync(join(fixture.repo, path), 'utf8'), declared, 'PERSISTENT_PROVENANCE_FAILURE_MUTATED_PROMPT');
+  }
+  assert.deepEqual(readFileSync(join(fixture.repo, 'prompts/seed.prompt.md')), seedPrompt);
+  assert.deepEqual(readFileSync(record), before, 'PERSISTENT_PROVENANCE_FAILURE_CHANGED_PRIOR_RECORDS');
+  assert.equal(statSync(record).mode & 0o777, 0o640);
+  assert.deepEqual(readdirSync(directory).sort(), ['.gitignore', 'interface-drafts.json']);
+  assert.deepEqual(readdirSync(join(fixture.repo, 'prompts')).sort(), ['first.prompt.md', 'second.prompt.md', 'seed.prompt.md']);
+});
+
+test('persistent ENOSPC after shared provenance failure restores all original files (AC1, AC2)', t => {
+  const fixture = project(t, { 'prompts/first.prompt.md': prose, 'prompts/second.prompt.md': prose, 'prompts/seed.prompt.md': prose });
+  const seed = draft(fixture, ['prompts/seed.prompt.md']);
+  assert.equal(seed.status, 0, seed.stdout + seed.stderr);
+  const directory = join(fixture.repo, '.pdd'), record = join(directory, 'interface-drafts.json');
+  const before = readFileSync(record), seedPrompt = readFileSync(join(fixture.repo, 'prompts/seed.prompt.md'));
+  const preload = join(fixture.env.HOME, 'persistent-enospc.mjs');
+  writeFileSync(preload, `import fs from 'node:fs';
+import { basename, dirname } from 'node:path';
+import { syncBuiltinESMExports } from 'node:module';
+const original = fs.writeFileSync, directory = ${JSON.stringify(directory)};
+let full = false;
+fs.writeFileSync = (path, data, ...args) => {
+  if (!full && dirname(String(path)) === directory && basename(String(path)).startsWith('interface-drafts-')) {
+    full = true;
+    original(path, Buffer.from(data).subarray(0, 16), ...args);
+  }
+  if (full) throw Object.assign(new Error('ENOSPC: persistent data-write refusal'), { code: 'ENOSPC' });
+  return original(path, data, ...args);
+};
+syncBuiltinESMExports();
+`);
+  const result = draft(fixture, ['--all'], preload);
+  assert.equal(result.status, 2, result.stdout + result.stderr);
+  assert.match(result.stderr, /ENOSPC: persistent data-write refusal/);
+  for (const path of ['prompts/first.prompt.md', 'prompts/second.prompt.md']) {
+    assert.equal(readFileSync(join(fixture.repo, path), 'utf8'), prose, 'PERSISTENT_ENOSPC_ROLLBACK_MUTATED_PROMPT');
+  }
+  assert.deepEqual(readFileSync(join(fixture.repo, 'prompts/seed.prompt.md')), seedPrompt);
+  assert.deepEqual(readFileSync(record), before);
+  assert.deepEqual(readdirSync(directory).sort(), ['.gitignore', 'interface-drafts.json']);
+  assert.deepEqual(readdirSync(join(fixture.repo, 'prompts')).sort(), ['first.prompt.md', 'second.prompt.md', 'seed.prompt.md']);
+});
+
+test('private provenance and prompt staging are restrictive before the first data write completes', t => {
+  const fixture = project(t, { 'prompts/percent.prompt.md': raw, 'prompts/other.prompt.md': prose, 'contracts/add.json': JSON.stringify(addition) });
+  const seed = draft(fixture, ['prompts/other.prompt.md']);
+  assert.equal(seed.status, 0, seed.stdout + seed.stderr);
+  const directory = join(fixture.repo, '.pdd'), record = join(directory, 'interface-drafts.json');
+  chmodSync(directory, 0o755); chmodSync(record, 0o600);
+  chmodSync(join(fixture.repo, 'prompts/percent.prompt.md'), 0o600);
+  const preload = join(fixture.env.HOME, 'observe-private-staging.mjs');
+  writeFileSync(preload, `import fs from 'node:fs';
+import { basename, dirname, join } from 'node:path';
+import { syncBuiltinESMExports } from 'node:module';
+process.umask(0o022);
+const original = fs.writeFileSync, directory = ${JSON.stringify(directory)};
+fs.writeFileSync = (path, ...args) => {
+  const result = original(path, ...args);
+  const file = String(path);
+  if (dirname(file) === directory && basename(file).startsWith('interface-drafts-') && file.endsWith('.tmp')) {
+    process.stderr.write('PROVENANCE_TEMP_MODE ' + (fs.statSync(file).mode & 0o777) + '\\n');
+  }
+  if (basename(file) === 'next' && basename(dirname(file)).startsWith('.pdd-percent.prompt.md-')) {
+    process.stderr.write('PROMPT_TEMP_MODE ' + (fs.statSync(file).mode & 0o777) + '\\n');
+    process.stderr.write('PROMPT_BACKUP_MODE ' + (fs.statSync(join(dirname(file), 'original')).mode & 0o777) + '\\n');
+    process.stderr.write('PROMPT_STAGE_DIRECTORY_MODE ' + (fs.statSync(dirname(file)).mode & 0o777) + '\\n');
+  }
+  return result;
+};
+syncBuiltinESMExports();
+`);
+  const result = draft(fixture, ['prompts/percent.prompt.md', '--extend', '--contract', 'contracts/add.json'], preload);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stderr, /PROVENANCE_TEMP_MODE 384\n/, 'PROVENANCE_TEMP_WIDENS_PRIVATE_MODE');
+  assert.match(result.stderr, /PROMPT_TEMP_MODE 384\n/);
+  assert.match(result.stderr, /PROMPT_BACKUP_MODE 384\n/);
+  assert.match(result.stderr, /PROMPT_STAGE_DIRECTORY_MODE 448\n/);
+  assert.equal(statSync(record).mode & 0o777, 0o600);
+  assert.equal(statSync(join(fixture.repo, 'prompts/percent.prompt.md')).mode & 0o777, 0o600);
+  assert.deepEqual(readdirSync(directory).sort(), ['.gitignore', 'interface-drafts.json']);
+  assert.deepEqual(readdirSync(join(fixture.repo, 'prompts')).sort(), ['other.prompt.md', 'percent.prompt.md']);
+});
+
+test('read-only prompt refusal preserves independent writable prompt and its permissions (AC3)', t => {
+  const failed = 'prompts/a-read-only.prompt.md', valid = 'prompts/percent.prompt.md';
+  const fixture = project(t, { [failed]: prose, [valid]: prose });
+  const refused = join(fixture.repo, failed), writable = join(fixture.repo, valid);
+  chmodSync(refused, 0o444); chmodSync(writable, 0o640);
+  try {
+    let denied = false;
+    try { closeSync(openSync(refused, 'r+')); }
+    catch (error) { if (!['EACCES', 'EPERM'].includes(error.code)) throw error; denied = true; }
+    if (!denied) { t.skip('This account or filesystem bypasses write permissions.'); return; }
+    const result = draft(fixture, ['--all']);
+    assert.equal(result.status, 4, result.stdout + result.stderr);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.rows.find(row => row.path === failed).state, 'refused');
+    assert.match(report.rows.find(row => row.path === failed).problems[0].code, /EACCES|EPERM/);
+    assert.equal(report.rows.find(row => row.path === valid).state, 'drafted');
+    assert.equal(readFileSync(refused, 'utf8'), prose);
+    assert.equal(statSync(refused).mode & 0o777, 0o444);
+    assert.notEqual(readFileSync(writable, 'utf8'), prose);
+    assert.equal(statSync(writable).mode & 0o777, 0o640);
+    assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(fixture.repo, '.pdd/interface-drafts.json'), 'utf8'))), [valid]);
+    assert.deepEqual(readdirSync(join(fixture.repo, 'prompts')).sort(), ['a-read-only.prompt.md', 'percent.prompt.md']);
+  } finally { chmodSync(refused, 0o644); }
 });

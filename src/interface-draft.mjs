@@ -1,7 +1,7 @@
 // Generated from prompts/cli/interface-draft.prompt.md (sha256: 964f1155c78fd45cc69ef93e07685273f47996db6c3217122018fa29948f685e).
-import { readFileSync, writeFileSync, mkdirSync, renameSync, rmSync, openSync, closeSync, fstatSync, chmodSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, linkSync, renameSync, rmSync, openSync, closeSync, fstatSync, chmodSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { join, relative, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { isDeepStrictEqual } from 'node:util';
 import { expandSource } from './contract-refs.mjs';
@@ -65,7 +65,7 @@ function saveDrafts(root, records) {
   } catch(error) { if(error.code!=='ENOENT') throw error; }
   const temporary=join(root,'.pdd',`interface-drafts-${randomUUID()}.tmp`);
   try {
-    writeFileSync(temporary,JSON.stringify(records,null,2)+'\n',{flag:'wx'});
+    writeFileSync(temporary,JSON.stringify(records,null,2)+'\n',{flag:'wx',mode:mode===undefined ? 0o600 : mode & 0o600});
     if(mode!==undefined) chmodSync(temporary,mode);
     renameSync(temporary,metadataFile(root));
   } catch(error) {
@@ -75,13 +75,37 @@ function saveDrafts(root, records) {
     throw error;
   }
 }
+function replaceDraftPrompt(root, path, next) {
+  const file=join(root,path),descriptor=openSync(file,'r+');
+  let mode;
+  try { mode=fstatSync(descriptor).mode & 0o777; }
+  finally { closeSync(descriptor); }
+  const directory=mkdtempSync(join(dirname(file),`.pdd-${basename(file).slice(0,32)}-`));
+  const backup=join(directory,'original'),staged=join(directory,'next');
+  try {
+    // Retain the original inode: recovery must not need another content write.
+    linkSync(file,backup);
+    writeFileSync(staged,next,{flag:'wx',mode:mode & 0o600});
+    chmodSync(staged,mode);
+    renameSync(staged,file);
+    return {path,directory,backup};
+  } catch(error) {
+    try { rmSync(directory,{recursive:true,force:true}); }
+    catch(cleanup) { throw new Error(`${error.message}\nCannot remove temporary draft for ${path}: ${cleanup.message}`,{cause:error}); }
+    throw error;
+  }
+}
 function restoreDraftPrompts(root, changes, error) {
   const failures=[];
-  for(const {path,original} of [...changes].reverse()) {
+  for(const {path,directory,backup} of [...changes].reverse()) {
     try {
-      const file=join(root,path);
-      if(!readFileSync(file).equals(original)) writeFileSync(file,original);
-    } catch(rollback) { failures.push(`Cannot restore ${path}: ${rollback.message}`); }
+      renameSync(backup,join(root,path));
+    } catch(rollback) {
+      // Leave the retained original available if restoration itself is refused.
+      failures.push(`Cannot restore ${path}: ${rollback.message}`);continue;
+    }
+    try { rmSync(directory,{recursive:true,force:true}); }
+    catch(cleanup) { failures.push(`Cannot remove temporary draft for ${path}: ${cleanup.message}`); }
   }
   return failures.length ? new Error([error.message,...failures].join('\n'),{cause:error}) : error;
 }
@@ -583,9 +607,7 @@ export async function runInterfaceDraft({words=[],all=false,json=false,cwd=proce
         iface.prose_sha256=proseSha256(render());
         const next=render();
         const record={head:git(root,['rev-parse','HEAD']).trim(),original_sha256:sha256(text),prose_sha256:iface.prose_sha256,interface_sha256:sha256(JSON.stringify(iface)),...(block ? {mode:extend?'extend':'refresh',...(extend ? {extension_before:block[1]} : {})} : inferredBudget ? {mode:'prose'} : {})};
-        const change={path,original:readFileSync(join(root,path))};
-        try { writeFileSync(join(root,path),next); }
-        catch(error) { throw restoreDraftPrompts(root,[change],error); }
+        const change=replaceDraftPrompt(root,path,next);
         records[path]=record;
         changes.push(change);
         rows.push({path,state:'drafted',prose_coverage:coverage,...(extend ? {approval_scope:'whole-interface',approval_note:'The Runtime interface has one global status; mixed approval status is unavailable. The whole interface needs re-approval.',interface_diff:{before:block[1],after:interfaceBlocks(next)[0][1],unchanged:preservedPointers(previous,iface)}} : {}),...(inferredBudget ? {draft_budget:{source:'command-default',limits:iface.limits}} : {}),...(questions.length ? {questions,next_step:recovery(path)} : {})});
@@ -594,6 +616,10 @@ export async function runInterfaceDraft({words=[],all=false,json=false,cwd=proce
     if(changes.length) {
       try { saveDrafts(root,records); }
       catch(error) { throw restoreDraftPrompts(root,changes,error); }
+      for(const {path,directory} of changes) {
+        try { rmSync(directory,{recursive:true,force:true}); }
+        catch(cleanup) { stderr.write(`Draft saved; cannot remove temporary draft for ${path}: ${cleanup.message}\n`); }
+      }
     }
     for(const row of rows) {
       row.problems ??= interfaceFindings({root,paths:[row.path]});
