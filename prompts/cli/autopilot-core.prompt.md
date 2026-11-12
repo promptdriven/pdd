@@ -1250,8 +1250,14 @@ runs until its end):
    log already shows (`failingTests` of a bounded log tail) as one more red line: "The
    full test suite (still running at head H) already shows failed tests: TEST (FILE), …".
    A red suite's line names its failed tests the same way. `failingTests(text, limit=20)`
-   is exported: `[{name, file}]` from TAP `not ok N - NAME` lines at any depth (with the
-   `location:` line that follows) and spec-reporter `✖ NAME` lines, each name once. The
+   is exported, the one parser of failed tests (group 3 uses it too): `[{name, file}]` in
+   log order, each test once (the same name with the same file, or with no file on one
+   side; the known file stays). TAP `not ok N - NAME` lines at any depth: a failure stays
+   open until its `location:` line, the next `ok` or `not ok` line or 12 lines, so one name
+   in two files is two tests; a `# TODO` or `# SKIP` directive is no failure; `\#` and `\\`
+   unescape. Spec-reporter `✖ NAME (DURATION)` lines at any depth, after color codes go:
+   the summary's `test at FILE:LINE:COL` line before it gives the file; a TODO or SKIP
+   line and the `✖ failing tests:` header are no test. The
    **repair budget** (option B): repairs go on
    while they make progress. The findings of a round are each review must-fix (P1 and P2)
    and each other red line. Two findings are the same when they name the same `file:line`

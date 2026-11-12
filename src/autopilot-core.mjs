@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 757872475d5156b251599e4afaa75efdaecd408065709e6a91aa95418c2a1997).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 75097f5f07057f57f4c436e9721ed58a105ffafddd0f0a5d2e3dd8daa6aa5d84).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1238,17 +1238,35 @@ async function reviewState(ctx, job, prBody = '') {
 // The runner lines of the suite queue and the dependency install: a failure of the runner, not a test result.
 // A runner line starts with its phrase; a failing test that quotes one (in an indented TAP line) is a test failure.
 const SUITE_RUNNER = /^(?:Shared test suite queue failed|Test suite execution timeout|Test suite could not start|Test suite ended by SIG|Test suite descendants could not be confirmed|Supply a suite command|Autopilot core: dependency install failed)/m;
-// #3227 fix 4: the failed tests that a test log shows (also a partial log): node --test TAP "not ok N - NAME" lines at
-// any depth, with the location line that follows, and spec-reporter "✖ NAME" lines; each name once, at most `limit`.
+// #3227 fix 4: the failed tests that a test log shows (also a partial log), each test once, at most `limit`, in log
+// order. node --test TAP "not ok N - NAME" lines at any depth: a failure stays open until its location line, the next
+// test line or 12 lines, so one name in two files is two tests; a TODO or SKIP directive is no failure; "\#" and "\\"
+// unescape. Spec-reporter "✖ NAME (DURATION)" lines at any depth, without color codes; the summary's "test at FILE"
+// line gives the file. One test: the same name with the same file, or with no file on one side (the known file stays).
 export function failingTests(text, limit = 20) {
-  const found = [], lines = String(text ?? '').split('\n');
-  for (let i = 0; i < lines.length && found.length < limit; i++) {
-    const tap = /^\s*not ok \d+ - (.+?)\s*(?:#.*)?$/.exec(lines[i]), spec = /^\s*\u2716\s+(.+?)(?:\s+\(\d+(?:\.\d+)?m?s\))?\s*$/.exec(lines[i]);
-    const name = oneLine((tap ?? spec)?.[1], 200);
-    if (!name || found.some(f => f.name === name) || /^(?:failing tests|tests? failed):?$/i.test(name)) continue;
-    const file = tap ? lines.slice(i + 1, i + 12).map(line => /location: '([^']+?):\d+:\d+'/.exec(line)?.[1]).find(Boolean) ?? null : null;
-    found.push({ name, file });
+  const found = [];
+  let open = null, look = 0, at = null;
+  const add = (raw, file) => {
+    const name = oneLine(raw, 200);
+    if (!name || /^(?:failing tests|tests? failed):?$/i.test(name)) return;
+    const same = found.find(f => f.name === name && (!f.file || !file || f.file === file));
+    if (same) same.file ??= file ?? null; else if (found.length < limit) found.push({ name, file: file ?? null });
+  };
+  const close = () => { if (open) add(open.name, open.file); open = null; look = 0; };
+  for (const raw of String(text ?? '').split('\n')) {
+    const line = raw.replace(/\r$/, '').replace(/\x1b\[[0-9;]*m/g, '');
+    let m;
+    if (/^\s*ok \d+ /.test(line)) { close(); at = null; continue; }
+    if ((m = /^\s*not ok \d+ - (.*)$/.exec(line))) {
+      close(); at = null;
+      if (!/(?<!\\)#\s*(?:todo|skip)\b/i.test(m[1])) { open = { name: m[1].replace(/\s+(?<!\\)#.*$/, '').replace(/\\([#\\])/g, '$1'), file: null }; look = 12; }
+      continue;
+    }
+    if (open) { if ((m = /^\s*location: '(.+?):\d+:\d+'/.exec(line))) { open.file = m[1]; close(); } else if (--look <= 0) close(); continue; }
+    if ((m = /^\s*test at (.+?):\d+:\d+\s*$/.exec(line))) { at = m[1]; continue; }
+    if ((m = /^\s*✖\s+(.+?)(?:\s+\(\d+(?:\.\d+)?m?s\))?(\s+#\s*(?:todo|skip)\b.*)?\s*$/i.exec(line))) { if (!m[2]) add(m[1], at); at = null; }
   }
+  close();
   return found;
 }
 const testList = list => list.map(f => `${f.name}${f.file ? ` (${basename(f.file)})` : ''}`).join('; ');

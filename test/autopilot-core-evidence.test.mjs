@@ -1617,3 +1617,26 @@ test('E82 (trial B5) a prompt with no Runtime interface block needs no approval:
   await finishChecks(w); await w.tick();
   assert.deepEqual(w.github.merges, [pr.number], w.job(17, 'repair')?.input);
 });
+
+// Group 3 (#3181, lead Nov 12): one failed-test parser, the core's, fixed in place (from pdd/0130-g3-basered
+// 17ce82685). The expected results come from real node --test output.
+test('E83 (#3227 fix 4, group 3 fix) failingTests on real node --test output: TAP, spec and colored spec; nested, two files with one name, TODO, SKIP, a # in a name', async t => {
+  const { failingTests } = await import('../src/autopilot-core.mjs');
+  const { mkdtempSync, rmSync } = await import('node:fs'), { tmpdir } = await import('node:os'), { spawnSync } = await import('node:child_process');
+  const many = Array.from({ length: 60 }, (_, i) => `not ok ${i + 1} - test ${i}`).join('\n');
+  assert.equal(failingTests(many).length, 20, 'the limit is 20 by default'); assert.equal(failingTests(many, 50).length, 50); assert.equal(failingTests(many, 10)[9].name, 'test 9');
+  const dir = mkdtempSync(join(tmpdir(), 'pdd-core-parsers-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  writeFileSync(join(dir, 'a.test.mjs'), ["import test from 'node:test';", "test('passes', () => {});", "test('saves the value', () => { throw new Error('a'); });",
+    "test('parent', async t => { await t.test('child fails', () => { throw new Error('c'); }); await t.test('child ok', () => {}); });",
+    "test('later', { todo: true }, () => { throw new Error('todo'); });", "test('skipped one', { skip: true }, () => {});", "test('name with # hash', () => { throw new Error('h'); });", ''].join('\n'));
+  writeFileSync(join(dir, 'b.test.mjs'), "import test from 'node:test';\ntest('saves the value', () => { throw new Error('b'); });\n");
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !['NODE_OPTIONS', 'NODE_TEST_CONTEXT', 'NO_COLOR', 'FORCE_COLOR'].includes(key)));
+  const run = (reporter, color) => spawnSync(process.execPath, ['--test', `--test-reporter=${reporter}`, 'a.test.mjs', 'b.test.mjs'], { cwd: dir, encoding: 'utf8', env: { ...env, ...(color ? { FORCE_COLOR: '1' } : { NO_COLOR: '1' }) } }).stdout;
+  const short = list => list.map(f => `${f.name} [${f.file ? f.file.split('/').pop() : '-'}]`);
+  assert.deepEqual(short(failingTests(run('tap'), 50)), ['saves the value [a.test.mjs]', 'child fails [a.test.mjs]', 'parent [a.test.mjs]', 'name with # hash [a.test.mjs]', 'saves the value [b.test.mjs]']);
+  const spec = ['saves the value [a.test.mjs]', 'child fails [a.test.mjs]', 'parent [-]', 'name with # hash [a.test.mjs]', 'saves the value [b.test.mjs]'];
+  assert.deepEqual(short(failingTests(run('spec'), 50)), spec, 'the spec summary gives the files; parent has no "test at" line');
+  assert.match(run('spec', true), /\x1b\[/, 'the colored run has color codes');
+  assert.deepEqual(short(failingTests(run('spec', true), 50)), spec);
+});
