@@ -453,7 +453,8 @@ const negatedMarker=(text,marker) => new RegExp('\\bnot(?:\\s+\\w+){0,2}\\s+'+ma
 function declaredDependencyLinks(section) {
   const declarations=section.split(/\n(?= {0,3}[-*+] )|\n{2,}/);
   return declarations.flatMap(declaration => {
-    if(/\bnavigation[- ]only\b/i.test(declaration) && !negatedMarker(declaration,'navigation[- ]only')) return [];
+    const markerText=declaration.replace(/\[([^\]]*)\]\([^)]*\)/g,'$1');
+    if(/\bnavigation[- ]only\b/i.test(markerText) && !negatedMarker(markerText,'navigation[- ]only')) return [];
     const links=[...declaration.matchAll(/\[([^\]]*)\]\(([^)\s]+)\)/g)];
     if(/^\s*[-*+]\s+/.test(declaration)) return links;
     return links.filter(link => {
