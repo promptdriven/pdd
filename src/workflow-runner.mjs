@@ -27,6 +27,25 @@ import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, reconcileWo
 import { allocateIssueWorktree, releaseIssueClaim } from './workflow-worktree.mjs';
 import { allRuns, currentChat, gitContext, listRuns, readRun, readRunOwnership, resolveRun, runDirFor, runForWorktree, updateRun, updateRunCosts, writeRun } from './workflow-runs.mjs';
 import { armSavedWorkerCompletion } from './workflow-worker-completion.mjs';
+import {
+  ANCHOR_FOLDER,
+  askArea,
+  associationKey,
+  beforeHead,
+  canonical,
+  checkedAssociation,
+  commitSha,
+  evidenceTests,
+  frozenRoot,
+  oneLine,
+  ownedPr1Head,
+  prOf,
+  readEvidenceEligibility,
+  sameFact,
+  selectedCapture,
+  selectionEqual,
+} from './workflow-eligibility.mjs';
+export { readEvidenceEligibility };
 import { startChat, sendToChat, herdrCommand, chatSession, chatHealth, openChat, rebuildClosedChat, assertRestartCaller, restartChat, validSessionId, closeFinishedChats, finishedChats, finishedAt, paneUsage, ensurePaneBudget, countReasons, mergeReasonCounts, reasonWords, expandHome, homeVariable, isFolder, observeLifecycle, applyLifecycle, launchAnchor, sessionEvidenceDue, ownSession, observedSession, START_GRACE_MS, removeStaleLoginFiles } from './workflow-chat.mjs';
 import { samePath } from './workflow-herdr-layout.mjs';
 import { workflowAgentEntry } from './workflow-agents.mjs';
@@ -67,7 +86,6 @@ function execute(file, args, { cwd, input, ...options } = {}) {
   });
 }
 const shell = value => /^[A-Za-z0-9_@%+=:,./-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
-const oneLine = value => String(value ?? '').replace(/\s+/g, ' ').trim();
 // A chat failure as `code: reason` from the first message line, with the code only once; a bare code when there are no other words.
 const firstLine = value => oneLine(String(value ?? '').split('\n')[0]);
 const failureReason = error => {
@@ -230,10 +248,6 @@ function protectProgress(run,p,{approval=false,validate}={}) {
 }
 const sameGate = (current, selected) => (!current || !selected) ? current === selected : ['area','kind','at'].every(key=>current[key]===selected[key]) && (!selected.id || current.id===selected.id);
 const equalFact = (a,b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
-// The same saved record regardless of key order.
-const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object'
-  ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
-const sameFact = (a,b) => JSON.stringify(canonical(a ?? null)) === JSON.stringify(canonical(b ?? null));
 const lastChat = (run, area) => [...(run.chats ?? [])].reverse().find(chat => chat.area === area);
 // The chat identity and lifecycle fields that one observation may change.
 const CHAT_OBSERVATION = ['workspaceId', 'repoWorkspaceId', 'tabId', 'paneId', 'terminalId', 'session', 'startedAt', 'messageFile', 'resumedAt', 'startUnconfirmed', 'state', 'evidence', 'code', 'closed', 'openedAt', 'endedAt', 'launchProfile', 'herdrAgentName', 'namingError', 'idleSince', 'idleAnchor', 'continueAnchor'];
@@ -480,8 +494,6 @@ PDD_SAID
 Choose a quoted delimiter absent as a whole payload line. Or the person can use terminal y/N: pdd workflow approve ${run.number} in a normal terminal.`;
 const approvalRetry = (run, prefix) => `The saved approval remains usable for this same gate. Retry with its exact recorded words; no new approval is needed. ${approvalGuide(run, prefix).replace('Show the gate and ask the person. One approval covers the gate and all its selected draft prompts. Relay their exact later words with:', 'Use the saved words with:')}`;
 const codeLater = run => `To make the code PR later, tell your agent, or run pdd workflow approve ${run.number} in a terminal.`;
-const prOf = (run, name) => (run.pr ?? []).find(pr => pr.stage === name) ?? null;
-const askArea = run => run.areas.find(area => area.then === 'ask-code') ?? null;
 // PR 1 is the ask-code area's prompt PR and PR 2 the code PR; a one-PR workflow says "the PR".
 const prLabel = (run, area) => !askArea(run) ? 'the PR' : area.then === 'ask-code' ? 'PR 1' : 'PR 2';
 
@@ -1097,33 +1109,6 @@ export function matchesSource(record, root, fingerprint, capture = captureSource
   }
   return false;
 }
-// Registration authority is independent of receipt content and source equality.
-const evidenceTests = tests => {
-  if (!Array.isArray(tests) || !tests.length || tests.some(path => typeof path !== 'string' || !path || /[\\\x00-\x1f\x7f]/.test(path)
-    || path.startsWith('/') || /^[A-Za-z]:/.test(path) || path.split('/').some(part => !part || part === '.' || part === '..' || part.toLowerCase() === '.git'))
-    || new Set(tests).size !== tests.length) throw Error('Select nonempty unique safe authored-relative test paths.');
-  return [...tests].sort();
-};
-const selectionEqual = (a,b) => sameFact(evidenceTests(a),evidenceTests(b));
-const associationKey = a => JSON.stringify([a.workspaceRoot,evidenceTests(a.tests),a.source_sha256]);
-function ownedPr1Head(run) {
-  const area = askArea(run), pr = area && prOf(run,area.name);
-  if (!pr || !Number.isSafeInteger(pr.number) || pr.url !== `https://github.com/${run.repo}/pull/${pr.number}` || !commitSha(pr.publishedHeadSha))
-    throw Error('The owned recorded PR 1 head is missing or unavailable.');
-  return pr.publishedHeadSha;
-}
-function selectedCapture(root,tests,capture=captureSource) {
-  const visible=new Set(gitFiles(root));
-  if(tests.some(path=>!visible.has(path)))throw Error('A selected authored source is missing or unavailable.');
-  return capture(root,{tests,appMap:null});
-}
-const ANCHOR_FOLDER = {pr1:'evidence-pr1',before:'evidence-before'};
-function frozenRoot(run,head,stage='pr1') { return join(realpathSync(run.runDir),ANCHOR_FOLDER[stage],head); }
-// The before stage names its historical source by an explicit full commit id: the caller's reconstruction provenance.
-function beforeHead(a) {
-  if (!commitSha(a.sourceAnchor?.head) || a.sourceAnchor.head !== a.sourceAnchor.head.toLowerCase()) throw Error('The registered before commit is missing or invalid.');
-  return a.sourceAnchor.head;
-}
 // Same Story: every selected test at the historical commit is a current test of the run with the same story_path.
 function sameStoryTests(run,frozen,tests) {
   const current=new Set(gitFiles(run.root));
@@ -1132,21 +1117,6 @@ function sameStoryTests(run,frozen,tests) {
     try { then=JSON.parse(readFileSync(join(frozen,path),'utf8')).story_path; now=current.has(path)?JSON.parse(readFileSync(join(run.root,path),'utf8')).story_path:undefined; } catch { then=undefined; }
     if (typeof then !== 'string' || then !== now) throw Error(`${path} is not a current test of the same Story at that commit.`);
   }
-}
-function checkedAssociation(run,a,capture=captureSource) {
-  if (a.runId !== run.runId || a.repo !== run.repo || !['current','pr1','before'].includes(a.stage)
-    || !/^[a-f0-9]{64}$/.test(a.source_sha256 ?? '') || realpathSync(a.workspaceRoot) !== a.workspaceRoot
-    || a.registration?.operation !== 'evidence-associate' || !Number.isFinite(a.registration.at)
-    || a.registration.cwd !== realpathSync(run.root)) throw Error('The evidence association has a different run, owner, producer or registration.');
-  evidenceTests(a.tests);
-  const head = a.stage === 'pr1' ? ownedPr1Head(run) : a.stage === 'before' ? beforeHead(a) : null;
-  const root = a.stage === 'current' ? realpathSync(run.root) : frozenRoot(run,head,a.stage);
-  if (a.sourceAnchor?.root !== root || a.sourceAnchor?.head !== head || realpathSync(root) !== root)
-    throw Error('The registered stage source anchor is missing, changed or unrelated.');
-  if (selectedCapture(root,a.tests,capture).sha256 !== a.source_sha256) throw Error('The registered stage source has changed or is unavailable.');
-  if (a.stage === 'current' && selectedCapture(a.workspaceRoot,a.tests,capture).sha256 !== a.source_sha256)
-    throw Error('The producer selected source has changed or is unavailable.');
-  return root;
 }
 // One eligibility rule for import, status/Story counts and prepared PR lines.
 function eligibleEvidence(run,record,{stage='current',root=run.root,fingerprint=null,capture=captureSource}={}) {
@@ -1894,7 +1864,6 @@ function prTitle(issueTitle, suffix) {
   return `${kept.trimEnd()} …${suffix}`;
 }
 
-const commitSha = value => /^(?:[a-f\d]{40}|[a-f\d]{64})$/i.test(value);
 // Updates use the same publication owner's identity checks as initial creation.
 // Local source supplies an expected intent, never authority for the saved head.
 async function readPublishedPr1(run, pr, p) {
@@ -5760,43 +5729,6 @@ export const runStatus=saveGuard(async(options,ports)=>{
 export const openRun=saveGuard(openRunCommand);
 
 export const showStoryCard=saveGuard(showStoryCardCommand);
-
-// Canonical, read-only association admission for native workspace consumers.
-// The existing registered authority above remains the only permission rule.
-export function readEvidenceEligibility({root,producerRoot,tests,source_sha256,runId=null,stage=null},ports={}){
-  const canonical=ports.realpath??realpathSync,capture=ports.captureSource??captureSource;
-  let result={state:'unavailable',reason:'source or ownership unavailable',runId:null,repo:null,producerRoot:null,tests:[],stage:null,sourceAnchor:null,source_sha256:source_sha256??null};
-  try{
-    root=canonical(root);producerRoot=canonical(producerRoot);tests=evidenceTests(tests);
-    result={...result,producerRoot,tests};
-    if(!/^[a-f0-9]{64}$/.test(source_sha256??''))return{...result,state:'ineligible',reason:'original selected source identity is missing'};
-    const runs=(ports.allRuns??allRuns)({cancelled:true},ports);
-    // Only the consumer's owned source/run may authorize an alternate producer.
-    const candidates=[];
-    for(const run of runs){
-      if(!run||typeof run.root!=='string'||canonical(run.root)!==root)continue;
-      for(const association of run.evidenceAssociations??[]){
-        if(association.workspaceRoot===producerRoot&&selectionEqual(association.tests,tests)&&association.source_sha256===source_sha256)candidates.push({run,association});
-      }
-    }
-    if(candidates.length){
-      if(candidates.length!==1)return{...result,state:'ineligible',reason:'workspace association is ambiguous'};
-      const {run,association:a}=candidates[0];
-      if(runId!==null&&runId!==run.runId||stage!==null&&stage!==a.stage)return{...result,state:'ineligible',reason:'saved run or stage disagrees with the owned association'};
-      // Before-the-fix evidence is historical: only a caller that names that stage may read it.
-      if(a.stage==='before'&&stage!=='before')return{...result,state:'ineligible',reason:'before-the-fix evidence is historical; it is read only through its registered import'};
-      const inspect=ports.inspectRepository??(path=>{const git=spawnSync('git',['rev-parse','--path-format=absolute','--git-common-dir'],{cwd:path,encoding:'utf8'});if(git.status!==0)throw Error('repository ownership unavailable');return canonical(git.stdout.trim());});
-      const common=inspect(root);
-      if(canonical(run.commonDir)!==common||canonical(run.runDir)!==canonical(runDirFor(common,run.number))||typeof run.repo!=='string'||!run.runId)return{...result,state:'ineligible',reason:'run ownership is missing or contradictory'};
-      checkedAssociation(run,a,capture);
-      return{state:'eligible',reason:null,runId:run.runId,repo:run.repo,producerRoot,tests,stage:a.stage,sourceAnchor:{...a.sourceAnchor},source_sha256};
-    }
-    if(runId!==null||stage!==null&&stage!=='current')return{...result,state:'ineligible',reason:'saved run/stage has no matching owned association'};
-    if(root!==producerRoot)return{...result,state:'ineligible',reason:'alternate producer has no owned workspace association'};
-    if(capture(root,{tests,appMap:null}).sha256!==source_sha256)return{...result,state:'ineligible',reason:'the exact selected source has changed'};
-    return{state:'eligible',reason:null,runId:null,repo:null,producerRoot,tests,stage:'current',sourceAnchor:{root,head:null},source_sha256};
-  }catch(error){return{...result,reason:oneLine(error.message??error)};}
-}
 
 // An explicit full-suite command uses the machine queue, never the run mutation lock.
 export function runSuite(input, ports = {}) { return runTestSuite(input, ports); }

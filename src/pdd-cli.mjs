@@ -357,7 +357,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       catch (error) { line(stderr, `Local interpreter jobs could not be read.${reason(error)}`); return 5; }
     case 'contracts': case 'contracts-sync':
       try {
-        const commands = contracts ?? await import('./runtime-seam.mjs');
+        const commands = contracts ?? (await Promise.all([import('./runtime-seam.mjs'), import('./product.mjs'), import('./workflow-runner.mjs')]))[0];
         return await commands.runContracts({ words: plan.local === 'contracts-sync' ? ['sync'] : [], options: { ...plan.options }, cwd }, { env, stdout, stderr });
       } catch (error) { line(stderr, `Local contracts could not be read.${reason(error)}`); return 5; }
     case 'runtime-check':

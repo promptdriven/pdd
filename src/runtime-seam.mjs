@@ -1,5 +1,5 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 04c614c950215f4788722f73ab96951ac956e6215615b2cce8bc7eba44097462).
-import { realpathSync } from 'node:fs';
+// Generated from prompts/cli/runtime-seam.prompt.md (sha256: d1888bff7642891580638f0f5485f88e1c43f15e87a0f47a909b21f810689f4d).
+import { readFileSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -35,7 +35,7 @@ const TRY_LAUNCHER_URL = pathToFileURL(join(dirname(fileURLToPath(import.meta.ur
 
 let cachedVersion = null;
 function clientVersion() {
-  return (cachedVersion ??= req('../package.json').version);
+  return (cachedVersion ??= JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version);
 }
 
 let cachedRedaction = null;
@@ -109,13 +109,13 @@ export function runtimeClientSlice() {
 }
 
 export function composeProductTry(input, ports = {}) {
-  const { parseProductDocuments, parseProductWorldWriters } = req('./product.mjs');
+  const { parseProductDocuments, parseProductWorldWriters } = req('./product-documents.mjs');
   return runtimeComposeProductTry(input, withPortDefaults(ports, { parseProductDocuments, parseProductWorldWriters }));
 }
 
 export function createTryGuide(options = {}) {
   const givenPorts = options.ports ?? {};
-  const lazyEligibility = (...args) => req('./workflow-runner.mjs').readEvidenceEligibility(...args);
+  const lazyEligibility = (...args) => req('./workflow-eligibility.mjs').readEvidenceEligibility(...args);
   return runtimeCreateTryGuide({
     ...options,
     ports: withPortDefaults(withEligibilityDefault(givenPorts, lazyEligibility), {
@@ -125,19 +125,18 @@ export function createTryGuide(options = {}) {
 }
 
 export function buildProjectCard(input = {}) {
-  const lazyEligibility = (...args) => req('./workflow-runner.mjs').readEvidenceEligibility(...args);
+  const lazyEligibility = (...args) => req('./workflow-eligibility.mjs').readEvidenceEligibility(...args);
   return runtimeBuildProjectCard(withEligibilityDefault(input, lazyEligibility));
 }
 
 export function readContractHistory(input, ports = {}) {
-  const lazyEligibility = (...args) => req('./workflow-runner.mjs').readEvidenceEligibility(...args);
+  const lazyEligibility = (...args) => req('./workflow-eligibility.mjs').readEvidenceEligibility(...args);
   return runtimeReadContractHistory(input, withEligibilityDefault(ports, lazyEligibility));
 }
 
 export function runContracts(input, ports = {}) {
   runtimeClientSlice();
-  req('./product.mjs');
-  const lazyEligibility = (...args) => req('./workflow-runner.mjs').readEvidenceEligibility(...args);
+  const lazyEligibility = (...args) => req('./workflow-eligibility.mjs').readEvidenceEligibility(...args);
   return runtimeRunContracts(input, withEligibilityDefault(ports, lazyEligibility));
 }
 
@@ -396,9 +395,9 @@ export async function readTryOwner(input = {}, ports = {}) {
 }
 
 export function createTryTools(input, ports = {}) {
-  const lazyEligibility = (...args) => req('./workflow-runner.mjs').readEvidenceEligibility(...args);
-  const lazyParseProductDocuments = (...args) => req('./product.mjs').parseProductDocuments(...args);
-  const lazyParseProductWorldWriters = (...args) => req('./product.mjs').parseProductWorldWriters(...args);
+  const lazyEligibility = (...args) => req('./workflow-eligibility.mjs').readEvidenceEligibility(...args);
+  const lazyParseProductDocuments = (...args) => req('./product-documents.mjs').parseProductDocuments(...args);
+  const lazyParseProductWorldWriters = (...args) => req('./product-documents.mjs').parseProductWorldWriters(...args);
   return runtimeCreateTryTools(
     input,
     withPortDefaults(withEligibilityDefault(ports, lazyEligibility), {

@@ -808,7 +808,9 @@ registerHooks({
         rel === 'src/runtime-seam.mjs' ||
         rel === 'src/runtime/index.mjs' ||
         rel === 'src/runtime/secret-redaction.mjs' ||
-        rel === 'src/secret-redaction.mjs'
+        rel === 'src/secret-redaction.mjs' ||
+        rel === 'src/product-documents.mjs' ||
+        rel === 'src/workflow-eligibility.mjs'
       ) continue;
       if (rel.startsWith('src/runtime/')) rel = `src/${rel.slice('src/runtime/'.length)}`;
       out.add(rel);
@@ -2003,4 +2005,98 @@ test('SEAM15 (R2b-2): src/runtime-seam.mjs supports base standalone call forms w
   assert.equal(stderr, '');
   const report = JSON.parse(stdout);
   assert.equal(report.passed, true);
+});
+
+test('SEAM16 (S2): workflow-worker-completion keeps top-level await (exit 13 on unsettled drain) and no createRequire graph reaches top-level await', async t => {
+  const { spawnSync } = await import('node:child_process');
+  const { mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { dirname, resolve } = await import('node:path');
+  const { pathToFileURL } = await import('node:url');
+
+  // 1. workflow-worker-completion.mjs retains its top-level await and exits 13 when waitForWorkerCompletion stays unsettled at drain.
+  const workerSrc = readFileSync(join(root, 'src/workflow-worker-completion.mjs'), 'utf8');
+  assert.match(workerSrc, /\bawait\s+waitForWorkerCompletion\s*\(\s*identity\s*\)\s*;/);
+
+  const tmp = mkdtempSync(join(tmpdir(), 'pdd-s2-'));
+  t.after(() => rmSync(tmp, { recursive: true, force: true }));
+  const unsettledHook = join(tmp, 'unsettled-exec.mjs');
+  writeFileSync(
+    unsettledHook,
+    "import { registerHooks } from 'node:module';\n" +
+      "registerHooks({ load(url, ctx, next) {\n" +
+      "  if (url.endsWith('/src/workflow-worker-completion.mjs')) {\n" +
+      "    const res = next(url, ctx);\n" +
+      "    const src = String(res.source).replace('const exec = promisify(execFile);', 'const exec = () => new Promise(() => {});');\n" +
+      "    return { ...res, source: src };\n" +
+      "  }\n" +
+      "  return next(url, ctx);\n" +
+      "} });\n",
+  );
+  const workerRun = spawnSync(
+    process.execPath,
+    [
+      '--import',
+      pathToFileURL(unsettledHook).href,
+      join(root, 'src/workflow-worker-completion.mjs'),
+      JSON.stringify({ runId: 'r1', number: 1, sourceRoot: tmp, runDir: tmp, area: 'plan', paneId: '%1', startAnchor: 0, coordinatorPaneId: '%2' }),
+    ],
+    { cwd: root, encoding: 'utf8', timeout: 8000 },
+  );
+  assert.equal(workerRun.status, 13, `expected unsettled top-level await exit 13, got ${workerRun.status} (${workerRun.stderr})`);
+
+  // 2. Every module that uses createRequire in src/ has zero top-level await anywhere in its reachable require() graphs.
+  const requireHosts = walk('src').filter(rel => readFileSync(join(root, rel), 'utf8').includes('createRequire'));
+  assert.ok(requireHosts.length > 0, 'expected at least one createRequire host in src/');
+
+  const targets = [];
+  for (const hostRel of requireHosts) {
+    const hostAbs = join(root, hostRel);
+    const src = readFileSync(hostAbs, 'utf8');
+    for (const m of src.matchAll(/\breq\(\s*(['"`])([^'"`]+)\1\s*\)/g)) {
+      const spec = m[2];
+      if (spec.startsWith('.')) {
+        targets.push({ hostRel, targetAbs: resolve(dirname(hostAbs), spec) });
+      }
+    }
+  }
+  assert.ok(targets.length > 0, 'expected static req(...) targets to inspect');
+
+  // Walk transitive static ESM imports from every req(...) target and verify createRequire succeeds on every reachable module in a fresh process.
+  const reachable = new Set();
+  const queue = targets.map(item => item.targetAbs);
+  while (queue.length) {
+    const abs = queue.pop();
+    if (reachable.has(abs)) continue;
+    reachable.add(abs);
+    if (!abs.endsWith('.mjs')) continue;
+    const clean = stripCommentsPreservingLines(readFileSync(abs, 'utf8'));
+    const staticRe = /\b(?:import|export)\s+(?:[^'"]*?\bfrom\s*)?(['"])([^'"]+)\1/g;
+    let m;
+    while ((m = staticRe.exec(clean)) !== null) {
+      const spec = decodeJsEscapes(m[2]);
+      if (spec.startsWith('.')) {
+        const nextAbs = resolve(dirname(abs), spec);
+        if (!reachable.has(nextAbs)) queue.push(nextAbs);
+      }
+    }
+  }
+
+  const probe = spawnSync(
+    process.execPath,
+    [
+      '-e',
+      "const { createRequire } = require('node:module');\n" +
+        "const req = createRequire(process.argv[1]);\n" +
+        "for (const target of JSON.parse(process.argv[2])) req(target);\n",
+      join(root, 'src/runtime-seam.mjs'),
+      JSON.stringify([...reachable]),
+    ],
+    { cwd: root, encoding: 'utf8', timeout: 8000 },
+  );
+  assert.equal(
+    probe.status,
+    0,
+    `a module reachable from createRequire has top-level await or failed synchronous load:\n${probe.stderr}`,
+  );
 });
