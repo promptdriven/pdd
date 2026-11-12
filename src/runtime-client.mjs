@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 5f5bd73bd36bf4e77944ff21fb638f53ddabbf670593690725c4d42c0550ee5b).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 37ad530ce7c49f63b5cb2145c8246173f8600afd95fc8846209f19e6d7a43e77).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
@@ -3142,7 +3142,14 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
         const exitCode = report.passed ? 0 : 1;
         line(ports.stdout, context.json ? JSON.stringify({ ...report, exit_code: exitCode }) : formatScreenComparison(report));
         return exitCode;
-      } catch (error) { throw new Stop(error.exitCode === 2 ? 2 : 5, `Screen comparison: ${causeText(error.message) || 'browser execution failed'}`); }
+      } catch (error) {
+        if (error.code === 'screen-not-ready' && error.exitCode === 6) {
+          const result = { drawing: resolve(cwd, options['--drawing']), url: new URL(options['--screen']).href, outcome: 'not-ready', code: error.code, state: error.state, reason: error.reason, message: error.message, exit_code: 6 };
+          line(ports.stdout, context.json ? JSON.stringify(result) : `Screen not ready (${result.state}; ${result.reason}): ${result.message}`);
+          return 6;
+        }
+        throw new Stop(error.exitCode === 2 ? 2 : 5, `Screen comparison: ${causeText(error.message) || 'browser execution failed'}`);
+      }
     }
     if (options['--local'] !== undefined) {
       if (options['--local'] !== true || options['--lint'] !== true || Object.keys(options).some(name => !['--lint', '--local', '--json'].includes(name))) throw new Stop(2, '--local requires --lint and accepts only Story words and --json.');
