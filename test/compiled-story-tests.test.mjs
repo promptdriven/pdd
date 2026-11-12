@@ -70,3 +70,36 @@ test('native-only declarations stay not run with reason and do not execute',()=>
  const {out,data}=outcome(root); assert.notEqual(out.status,0); assert.equal(data.stories[0].status,'not run');
  assert.match(JSON.stringify(data),/hardware port requires a physical device/); assert.equal(existsSync(join(root,'EXECUTED')),false);
 });
+
+function selected(cwd, ...words) {
+ return spawnSync(process.execPath,[bin,'test','--target','code',...words,'--json'],{cwd,encoding:'utf8'});
+}
+test('step simulation overrides cannot execute the CLI',()=>{
+ const app="import {writeFileSync} from 'node:fs';writeFileSync('EXECUTED','yes');process.stdout.write('hello\\n');";
+ const blocked=project({app,change:d=>{d.steps[0].simulation_overrides={anything:{action:'fixture'}};}});
+ const out=selected(blocked,'demo'); assert.equal(out.status,1); assert.match(out.stdout,/not run/i); assert.match(out.stdout,/simulation/i); assert.equal(existsSync(join(blocked,'EXECUTED')),false);
+ const empty=project({change:d=>{d.steps[0].simulation_overrides={};}}); assert.equal(selected(empty,'demo').status,0);
+});
+test('directory selections include untested Stories once',()=>{
+ const root=project(); mkdirSync(join(root,'user_stories/scope')); writeFileSync(join(root,'user_stories/scope/missing.md'),'# Missing\n\n## Acceptance criteria\n\n1. Missing.\n');
+ for(const selectors of [['.'],['user_stories/'],['user_stories/scope'],['.','user_stories/','demo']]) {
+  const out=selected(root,...selectors); assert.equal(out.status,1, out.stderr); const report=JSON.parse(out.stdout); assert.equal(report.stories.filter(s=>s.story==='user_stories/scope/missing.md').length,1); assert.equal(report.stories.find(s=>s.story==='user_stories/scope/missing.md').status,'not run');
+ }
+ assert.equal(selected(root,'user_stories/scope/missing.md').status,2);
+});
+test('selection paths resolve from nested invocation directory and stay bounded',()=>{
+ const root=project(); mkdirSync(join(root,'scope/tests'),{recursive:true}); mkdirSync(join(root,'scope-extra/tests'),{recursive:true});
+ const original=JSON.parse(readFileSync(join(root,'tests/demo.json'),'utf8'));
+ for(const name of ['scope','scope-extra']) {const doc={...original,story_path:`user_stories/${name}.md`};writeFileSync(join(root,`user_stories/${name}.md`),'# Story\n\n## Acceptance criteria\n\n1. A result.\n');writeFileSync(join(root,`${name}/tests/${name}.json`),JSON.stringify(doc));}
+ for(const selector of ['.','tests/scope.json']) {const out=selected(join(root,'scope'),selector);assert.equal(out.status,0,out.stderr);const stories=JSON.parse(out.stdout).stories;assert.deepEqual(stories.map(s=>s.story),['user_stories/scope.md']);}
+ assert.equal(selected(join(root,'scope'),'demo').status,0);
+ assert.equal(selected(join(root,'scope'),'/').status,2);
+ assert.equal(selected(join(root,'scope'),'../../').status,2);
+});
+test('missing paths from a nested directory do not select root Stories',()=>{
+ const root=project(); mkdirSync(join(root,'scope'));
+ for(const selector of ['tests/demo.json','./user_stories/demo.md']) {
+  const out=selected(join(root,'scope'),selector);
+  assert.equal(out.status,2, `selector ${selector} unexpectedly selected a Story: ${out.stdout}`);
+ }
+});

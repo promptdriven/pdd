@@ -1,7 +1,7 @@
-// Generated from prompts/cli/compiled-test.prompt.md (sha256: e0060fec0b5881c698977df33259205a155eaeacf56600544f4e21ffdbae0968).
+// Generated from prompts/cli/compiled-test.prompt.md (sha256: 46c341023a349041f6f0d238c5ce51e201f9512a8d2ea23b91f75d11f9ec2f60).
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, writeFileSync, lstatSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, writeFileSync, lstatSync, statSync, realpathSync } from 'node:fs';
+import { join, resolve, relative, sep } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { findTests, selectTests, readPrompt, scenarioShapeRefusal, storyCriteria, checkInput, createStrictSourceAccess, preflight } from './runtime-preflight.mjs';
 
@@ -11,6 +11,8 @@ const commandWords = command => {
 };
 const unrun = (step, reason) => ({step_id:step?.step_id, status:'not run', reason});
 function execute(step, doc, found, root, ports) {
+  if (step.simulation_overrides && Object.keys(step.simulation_overrides).length)
+    return unrun(step, 'Step simulation overrides are not supported.');
   if (doc.simulation && Object.keys(doc.simulation).length || doc.initial_world && Object.keys(doc.initial_world).length)
     return unrun(step, 'Scenario world and port simulation are not supported.');
   let prompt;
@@ -34,16 +36,29 @@ function execute(step, doc, found, root, ports) {
   return {step_id:step.step_id,status:checks.every(c => c.status === 'passed') ? 'passed':'failed',checks};
 }
 export async function runCompiledTest({root, words, json}, {stdout, stderr, spawn = spawnSync} = {}) {
+  const cwd = root;
   const top = spawn('git',['rev-parse','--show-toplevel'],{cwd:root,encoding:'utf8'});
   if (top.status !== 0 || !top.stdout?.trim()) { stderr.write('No Git project root is available.\n'); return 2; }
   root = top.stdout.trim();
-  const found = findTests({root, excludeFixtureProjects:true}), selection = selectTests(found, words);
-  if (selection.unknown.length || selection.untested.length || (!selection.selected.length && (words.length || !found.untested.length))) { stderr.write(`No selected Story tests: ${[...selection.unknown,...selection.untested].join(', ')}\n`); return 2; }
+  const found = findTests({root, excludeFixtureProjects:true});
+  const directories = new Set();
+  const normalized = words.map(word => {
+    const path = resolve(realpathSync(cwd), word), rel = relative(realpathSync(root), path).split(sep).join('/');
+    const inside = rel !== '..' && !rel.startsWith('../');
+    let directory = false;
+    try { directory = inside && statSync(path).isDirectory(); } catch {}
+    if (directory) directories.add(rel || '.');
+    return word.includes('/') || found.visible.has(rel) || directory ? (rel || '.') : word;
+  });
+  const missing = (found.untested ?? []).filter(item => !words.length || [...directories].some(dir => dir === '.' || item.storyPath.startsWith(dir.replace(/\/$/, '') + '/')));
+  const selection = selectTests(found, normalized);
+  selection.unknown = selection.unknown.filter(word => !directories.has(word) || !missing.some(item => word === '.' || item.storyPath.startsWith(word.replace(/\/$/, '') + '/')));
+  if (selection.unknown.length || selection.untested.length || (!selection.selected.length && !missing.length)) { stderr.write(`No selected Story tests: ${[...selection.unknown,...selection.untested].join(', ')}\n`); return 2; }
   const git = spawn('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}), commit = git.status === 0 ? git.stdout.trim() : null;
   const state = spawn('git',['status','--porcelain','--untracked-files=normal'],{cwd:root,encoding:'utf8'}), dirty = state.status === 0 ? !!state.stdout.trim() : null;
   const source = createStrictSourceAccess(root, found.workspace).sourceFilePort(found.visible);
   const groups = new Map();
-  if (!words.length) for (const item of found.untested) groups.set(item.storyPath, [unrun({step_id:item.storyPath}, item.line)]);
+  for (const item of missing) groups.set(item.storyPath, [unrun({step_id:item.storyPath}, item.line)]);
   for (const test of selection.selected) {
     const story = test.storyPath ?? test.path, steps = groups.get(story) ?? [];
     let refusal = test.error || scenarioShapeRefusal(test.doc,test.path);

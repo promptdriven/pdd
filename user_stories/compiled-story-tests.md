@@ -13,3 +13,9 @@ As a developer, I want to run my Story's approved cases on its real command-line
 A step with an unsupported input, entry binding, expected error or check never
 passes, and its Story never passes. A Story with an omitted or changed acceptance
 criterion never passes.
+
+Directory selections report untested descendant Stories as not run, even if no
+scenario exists there; explicit untested Story names remain command errors.
+Selections use the invocation directory, stay within selected directory bounds,
+and do not duplicate Stories across selectors. A nonempty step simulation override
+is unsupported and cannot execute the command; an empty override is harmless.
