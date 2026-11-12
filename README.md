@@ -326,6 +326,7 @@ Follow [docs/ISSUES.md](docs/ISSUES.md). Your agent can follow it too, so you ca
 
 - [Documentation](docs/index.md): the [usage guide](docs/USAGE.md), [workflows](docs/workflows.md), the [CLI reference](docs/cli.md) and the [Prompting guide](docs/prompting-guide.md).
 - [RUNBOOK.md](RUNBOOK.md): how to write prompts and tests that the PDD interpreter can check.
+- [How pdd keeps your logins safe](docs/accounts.md): what `pdd accounts` stores, reads and sends.
 - [The skills](skills/).
 - [Release notes](https://github.com/promptdriven/pdd/releases/tag/alpha-v0.1.19).
 - [Contributing](CONTRIBUTING.md).
