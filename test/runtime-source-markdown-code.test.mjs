@@ -41,6 +41,15 @@ function repositoryTests(row) {
   assert.ok(selected.length > 0, 'exercise the real repository source selection');
   return selected;
 }
+const unavailableScenario = 'test/runtime/gemini-session-recovery.json';
+function availableRepositoryTests(selected) {
+  // Native vectors cover this Story's operations, which have no Runtime interface.
+  // These checks exercise Markdown source selection over the remaining scenarios.
+  assert.ok(selected.includes(unavailableScenario));
+  assert.throws(() => captureSource(root, {tests: [unavailableScenario]}), error =>
+    error.exitCode === 4 && error.message.includes('prompts/cli/approval-evidence.prompt.md: interface-unavailable'));
+  return selected.filter(path => path !== unavailableScenario);
+}
 function offline(home) {
   const calls = { gh: 0, fetch: 0 };
   const { ports } = portsFor({ HOME: home, PDD_RUNTIME_URL: 'http://127.0.0.1:9' }, {
@@ -76,7 +85,7 @@ for (const row of fixture.cases) test(`SOURCE-MARKDOWN: ${row.id}`, async t => {
 test('SOURCE-MARKDOWN: actual repository source captures the real guides without editing their bytes', () => {
   const row = fixture.repository_cases.find(row => row.id === 'actual-repository-capture');
   const originals = new Map(row.required_files.map(path => [path, readFileSync(join(root, path))]));
-  const tests = repositoryTests(row);
+  const tests = availableRepositoryTests(repositoryTests(row));
   const ordinary = captureExpected(root, { tests });
   assert.ok(ordinary.files.some(file => file.path === 'docs/prompting-guide.md'), 'ordinary actual source reaches the real guide');
   // Explicit include metadata reaches both real guide files without editing the repository.
@@ -92,7 +101,7 @@ test('SOURCE-MARKDOWN: actual repository source captures the real guides without
 
 test('SOURCE-MARKDOWN: pdd lint --local on actual repository selected source makes no network calls', async t => {
   const row = fixture.repository_cases.find(row => row.id === 'actual-repository-local-lint');
-  const selected = repositoryTests(row);
+  const selected = availableRepositoryTests(repositoryTests(row));
   const { ports, calls } = offline(temp(t));
   assert.equal(await runCheck({ cwd: root, words: selected, options: row.options }, ports), row.expected_exit_code, ports.stderr.text);
   assert.deepEqual(calls, { gh: row.expected_auth_calls, fetch: row.expected_network_calls });

@@ -99,11 +99,18 @@ for (const newSession of [false, true]) test(`2905: conflicting saved layout ID 
   assert.deepEqual(f.herdr.workspaces, inventory.workspaces);
 });
 
-for (const newSession of [false, true]) test(`2905: closed workspace without a resumable session starts the area once (${newSession})`, async t => {
+for (const newSession of [false, true]) test(`2905: closed workspace without a resumable session requires an explicit fresh choice (${newSession})`, async t => {
   const {f, run, chat} = await closed(t, 'gemini');
   chat.session = null;
+  f.ports.findNativeSessions = async () => [];
   save(f, run);
-  const result = await open(f, {newSession});
+  let result = await open(f, {newSession});
+  if (!newSession) {
+    assert.equal(result.exitCode, 1);
+    assert.match(result.message, /cannot recover.*pdd workflow open 17 --new/);
+    assert.equal(launches(f).length, 0);
+    result = await open(f, {newSession: true});
+  }
   assert.equal(result.exitCode, 0, result.message);
   const next = f.record().chats.at(-1), command = launches(f)[0][3];
   assert.notEqual(next.workspaceId, chat.workspaceId);
