@@ -652,8 +652,11 @@ the evidence record.
   comment: only the core's fresh reviewer gives one. **Approval (auto and observe
   mode):** observe mode does everything that auto mode does except the merge, so the
   operator's start is the approval of the job's prompt changes in both. For each changed
-  `*.prompt.md`, after its checks pass, the job runs `printf '%s' 'WORDS' | pdd approve
-  PROMPT --said -` with WORDS exactly `Operator action: pdd autopilot start --engine
+  `*.prompt.md` that has a Runtime interface block, after its checks pass, the job runs
+  `printf '%s' 'WORDS' | pdd approve PROMPT --said -` (trial B5: a prompt with no
+  interface block needs no approval, as the prompt gate says; the rule says "A prompt
+  with no Runtime interface block needs no approval: do not run pdd approve for it, and
+  do not invent an interface.") with WORDS exactly `Operator action: pdd autopilot start --engine
   core in MODE mode for REPO on MACHINE-ID at TIME` (MODE is the real mode, `auto` or
   `observe`, because the words must be true; the machine id, never the host; TIME =
   `state.startedAt`, else `state.activatedAt`) and commits the result in the PR. The
