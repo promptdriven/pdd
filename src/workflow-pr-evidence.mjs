@@ -1,12 +1,12 @@
-// Generated from prompts/cli/workflow-pr-evidence.prompt.md (sha256: 2022a5616e82a5209b4922f9e9574ca4f117049e4b4703fffe253a7c58fa0db6).
+// Generated from prompts/cli/workflow-pr-evidence.prompt.md (sha256: 8f5b39f477c730e6b397c0df691efb21cb924a1461b8286d1699128d3b449f77).
 import { execFile } from 'node:child_process';
 import { lstatSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { formatProof, validateProofRecord } from './workflow-prove.mjs';
 
-function safeValue(value) {
-  let content = JSON.stringify(String(value)).slice(1,-1).replace(/[\u007f-\u009f\u2028\u2029]/g, char => '\\u'+char.charCodeAt(0).toString(16).padStart(4,'0')).replaceAll('pdd-workflow:', 'pdd-workflow\\u003a');
+function safeValue(value, literal = false) {
+  let content = (literal ? String(value).replace(/[\u0000-\u001f]/g, char => '\\u'+char.charCodeAt(0).toString(16).padStart(4,'0')) : JSON.stringify(String(value)).slice(1,-1)).replace(/[\u007f-\u009f\u2028\u2029]/g, char => '\\u'+char.charCodeAt(0).toString(16).padStart(4,'0')).replaceAll('pdd-workflow:', 'pdd-workflow\\u003a');
   let fenceLength = 1;
   for (const run of content.matchAll(/`+/g)) fenceLength = Math.max(fenceLength, run[0].length + 1);
   const fence = '`'.repeat(fenceLength);
@@ -130,6 +130,13 @@ export async function preparePrEvidence({ run, isCode }, ports = {}) {
       ({ line, status: proofStatus } = judgeOldCodeProof(saved, { runId: run.runId, startedAt: run.startedAt, headSha: head.error ? '' : head.headSha, baseSha: head.error ? '' : head.baseSha }));
     } catch { /* Publication retains an explicit unavailable result. */ }
     lines.push(line);
+  }
+  if (run.workflow === 'bug' && run.bugCause) {
+    for (const [label, key] of [['Cause:', 'causeLine'], ['Relations:', 'relationsLine']]) {
+      const line = run.bugCause[key];
+      if (typeof line === 'string' && line.startsWith(label)) lines.push(`${label} ${safeValue(line.slice(label.length).trim(), true)}`);
+    }
+    lines.push('Cause and relation choices are agent notes; pdd checked quote presence only.');
   }
   lines.push(...labels.flatMap(label => [...grouped.get(label)].map(row => `Agent note — not checked by pdd: ${row.line}`)));
   const issueReference = `${grouped.get('Not fixed yet:').size ? 'Refs' : isCode ? 'Closes' : 'Part of'} #${run.number}`;

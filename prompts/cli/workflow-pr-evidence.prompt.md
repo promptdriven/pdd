@@ -35,7 +35,13 @@ Every dynamic value, including actor, timestamp, route, path/hash and words, is 
 
 Also export `approvalRecords(run)`: the same approval rows that `approvalLines` renders, each once and oldest first (gate decisions with their evidence, legacy decisions as `{route, at, words}`, then the matching prompt approvals), as plain objects. The runner's [readable PR part](workflow-pr-body.prompt.md) reads their route, time and words for its one approval line; `preparePrEvidence` keeps its exact return shape.
 
+## Recorded bug cause
+
+For a bug run with `run.bugCause` from the completed reproduce record, prepend its `causeLine` and `relationsLine` to the ordinary agent notes, rendering each payload in an adaptive code span while preserving literal quotes and backslashes, so the displayed canonical lines match the saved content. Encode control characters and ownership-marker colons as in the existing safe-value rule; choose a fence longer than every backtick run and pad edge backticks. Keep literal `Cause:` and `Relations:` labels. Add `Cause and relation choices are agent notes; pdd checked quote presence only.` Do not read these labels from notes or summaries at publication, infer relations, reapply links or promote these choices to proof. Legacy records and other workflows add nothing. The runner supplies this saved record on creation and update of PR 1 and code PRs.
+
 ## Dependencies
+
+- [Bug cause recording](workflow-bug-cause.prompt.md): required generation and verification context for the saved record shape and provenance.
 
 - [Run records](workflow-runs.prompt.md): required authoring/generation/native-production/verification/testing context for saved approval decisions, including optional legacy-compatible gateAt and gateId; this renderer accepts supplied facts and never duplicates run storage policy.
 
@@ -50,7 +56,7 @@ Also export `approvalRecords(run)`: the same approval rows that `approvalLines` 
 ```json
 {
   "status": "approved",
-  "prose_sha256": "9fcbb417378d37f73db33ea48acb055bb48adb44fd99c6a99ec1c2523e544d33",
+  "prose_sha256": "c6d61a73e1d44c7b6626d3469d158085053001f4dc44723637a94094646bedad",
   "entries": [
     {
       "operation": "preparePrEvidence",
@@ -296,6 +302,70 @@ Also export `approvalRecords(run)`: the same approval rows that `approvalLines` 
                   ],
                   "additionalProperties": false
                 }
+              },
+              "bugCause": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string"
+                  },
+                  "function": {
+                    "type": "string"
+                  },
+                  "flaw": {
+                    "type": "string"
+                  },
+                  "class": {
+                    "type": "string"
+                  },
+                  "relations": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "issue": {
+                          "type": "integer"
+                        },
+                        "kind": {
+                          "type": "string"
+                        },
+                        "source": {
+                          "type": "string"
+                        },
+                        "quote": {
+                          "type": "string"
+                        },
+                        "link": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "issue",
+                        "kind",
+                        "source",
+                        "quote",
+                        "link"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "causeLine": {
+                    "type": "string"
+                  },
+                  "relationsLine": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "file",
+                  "function",
+                  "flaw",
+                  "class",
+                  "relations",
+                  "causeLine",
+                  "relationsLine"
+                ],
+                "additionalProperties": false
               }
             },
             "required": [
@@ -323,7 +393,12 @@ Also export `approvalRecords(run)`: the same approval rows that `approvalLines` 
       "result_schema": {
         "type": "object",
         "properties": {
-          "approvalLines": {"type": "array", "items": {"type": "string"}},
+          "approvalLines": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "lines": {
             "type": "array",
             "items": {
