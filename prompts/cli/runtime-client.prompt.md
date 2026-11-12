@@ -413,6 +413,17 @@ Ordinary `--lint` runs the same advisory on its selected captured prompts before
 
 `--screen URL --drawing PATH [--json]` is a separate local Check mode with no Story operand, gh sign-in, runtime call, saved batch or AI call. Reject all other options/modes, an orphan `--drawing`, or a missing drawing option with exit 2 before side effects. Call [screen comparison](screen-compare.prompt.md) with `cwd`, URL and drawing path; pass `PDD_CHROME_PATH` from the injected environment when present. Text prints its `Screen vs drawing` Markdown table and summary, JSON prints the returned report plus `exit_code`. Exit 0 when all parts pass, 1 for a comparison failure, 2 for invalid input and 5 for unavailable browser, navigation or execution failure. An error must not print a passing table. Keep stdout valid JSON in JSON mode and diagnostics on stderr. These local modes return before runtime address/state/authentication setup.
 
+For the screen comparator's `screen-not-ready` outcome, preserve its
+`state`, `reason`, and actionable `message` and return exit 6. This is a distinct
+local result, not a failed drawing comparison or unavailable browser. Text prints
+`Screen not ready (<state>; <reason>): <message>` without a parts table. JSON
+prints exactly `{drawing, url, outcome:"not-ready", code:"screen-not-ready",
+state, reason, message, exit_code:6}`; `drawing` is the resolved reference path
+and `url` is the requested URL, as for ordinary screen reports. It has no `rows`
+or `passed` field. Keep stdout valid JSON and retain ordinary pass/mismatch
+reports and invalid-input/execution errors. The comparator owns detection,
+waiting, selected app surface and the no-action rule.
+
 For explicit complete lint, print every canonical diagnostic from `result.problems` (or the kept report's problems on older servers), preserving file, section, severity, JSON pointer and plain reason/fix. Merge legacy `program.refused_prompts` without duplicating the same code/file/section. A selected test's confirmed `result.tests` refusal also refuses that row, including Story/criterion mismatches even when prompt admission passed. Unselected tests or diagnostics remain visible without overriding selected rows. Preserve unknown and transport rules; complete lint is zero AI calls, never a check.
 
 For lint-only JSON, `lint_state` summarizes selected outcomes under the Outcome contract below. Keep every returned diagnostic in `problems`, including unselected refusals.

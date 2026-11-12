@@ -20,9 +20,81 @@ Compare matched parts' normalized center coordinates: each axis may differ by at
 
 Keep one table row per required id/text occurrence in stable reference order, including failed parts. State viewport and reference path in the report. This checks parts, text, approximate regions and order; it does not certify colors, typography or pixel equivalence. The caller must arrange the named reference state and dynamic values before invoking it; never drop unmatched words or numbers as “samples” to manufacture a pass.
 
+## Supported Simulator Screen doors
+
+This section defines behavioral refinement for issue 3038 under the reviewed
+Screen readiness Story. Existing reference, visibility, label ownership, geometry,
+ordering, input and execution-error rules remain required within the selected app
+surface.
+
+Recognize the versioned Screen door by `data-pdd-screen-door="1"` on the top-level
+`document.documentElement`. Its producer contract is the Runtime
+[Screen comparison protocol](https://github.com/promptdriven/prompt-runtime/blob/main/prompts/server/web/try/door-screen.prompt.md#screen-comparison-protocol).
+A recognized door must not fall back to comparing its shell. Ordinary pages
+continue to use their top-level document; do not recursively search unrelated
+iframes, nested frames or arbitrary shadow roots.
+
+After successful page load, start one 10,000 ms monotonic readiness deadline,
+including app fonts and layout settling. Elapsed time greater than or equal to
+10,000 ms is timeout; readiness must complete strictly before that boundary.
+This is inside the existing 60,000 ms
+whole-browser limit, not an extension or a reset of it. Observe the root's
+`data-pdd-screen-state` and the selected app surface without activating controls
+or issuing app actions. `loading` waits; `not-open` and `error` stop immediately.
+Busy actions stay loading; an unknown action result is an error even when an
+older frame remains painted. An observed ready surface must still be current
+when captured. Never convert an expired readiness deadline to a drawing mismatch.
+An earlier browser/navigation/execution failure keeps its existing error category.
+
+| Observation | `state` | `reason` in the not-ready error |
+| --- | --- | --- |
+| Readiness or app settling has not completed by the deadline | Last valid `loading` or `ready` | `timeout` |
+| Initial open is required | `not-open` | `not-open` |
+| Door publishes error | `error` | Its `data-pdd-screen-reason`: `state-read-failed`, `render-failed` or `action-unknown` |
+| Unsupported protocol version, missing/invalid state, or invalid error reason | `unknown` | `viewer-update-required` |
+| Ready without exactly one usable selected app surface | `ready` | `surface-unavailable` |
+| Legacy door without version 1 | `unknown` | `viewer-update-required` |
+
+Legacy identification requires the existing inert shell fingerprint together:
+root `data-try-session`, a `<base>` whose resolved path is `/__pdd/screen/`, and
+a same-origin `door-screen.js` script resolved beneath that prefix. Root door
+identity with any unsupported version also requires a viewer update. Do not
+identify doors from status words, page title, URL alone or a lone iframe.
+
+The producer marks exactly one current iframe `data-pdd-app-frame="html"`, or
+one current open shadow host `data-pdd-app-frame="shadow"`, beneath `#frame`.
+Inspect only that iframe's same-origin content document or that host's open
+shadow root. Exclude shell labels, ids, status, buttons and all other documents.
+An inaccessible, detached, missing or ambiguous marked surface is unavailable,
+not an empty app. Wait for that document's fonts and two animation frames within
+the readiness deadline, then recheck door state and surface identity before
+capturing. Do not bypass cross-origin isolation or change app state.
+
+Use the app's own CSS-pixel viewport for visibility and normalized centers:
+iframe content-window viewport for HTML; marked host's local content area for
+SVG/text/grid. Translate shell offsets out, account for renderer scaling, and
+normalize each axis by the selected app viewport's positive width/height. The
+reference remains measured at its drawing viewport. Shell chrome height, padding
+and page scroll must not move app parts into different regions or make app text
+satisfy a label. Report viewport continues to describe the drawing viewport.
+Preserve actual app visibility, unsupported-visibility errors, occurrence identity,
+label ownership, unique ids, region tolerance and order checks. Ready app
+mismatches retain their ordinary failed rows.
+
+A not-ready outcome throws an Error with `code: "screen-not-ready"`, `exitCode: 6`,
+`state` and `reason` from the table, plus an actionable plain `message`. It returns
+no comparison report and no missing-part rows. `not-open` explains that the person
+must deliberately open the app before rerunning and that opening can spend AI
+calls. `viewer-update-required` names the Screen viewer update prerequisite;
+`timeout` names the 10-second ready wait; unknown-action guidance requests
+read-only reconciliation, never another automatic send. Never click Open, key,
+submit, invoke app targets, send POST, or spend model calls to make a comparison
+ready. Existing action lookup/recovery belongs to the door, not this module.
+
 ## Dependencies
 
 - [Screen rules](../../RUNBOOK.md#13-give-your-app-a-screen-app-map): generation and verification context.
+- [Runtime Screen protocol](https://github.com/promptdriven/prompt-runtime/blob/main/prompts/server/web/try/door-screen.prompt.md#screen-comparison-protocol): canonical producer contract required for coordinated generation and verification of recognized doors. Supply the paired Runtime prompt and its required renderer context explicitly; ordinary local upload discovery does not fetch external links. Without that context, cross-repository protocol verification remains incomplete.
 
 ## Caller navigation
 
