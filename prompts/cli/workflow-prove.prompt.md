@@ -2,7 +2,7 @@
 
 Own `src/workflow-prove.mjs`. Export module function `proveRun({ref, test, expect, cwd, timeoutMinutes = 10}, ports = {}) -> {exitCode, message}` and the constant `DEFAULT_PHASE_MINUTES` (10). An explicit invocation runs the supplied regression command on the computed merge-base old code and committed new code, including when its tests already landed before a code-only change. It reports evidence; it never approves, advances a workflow, opens a PR or merges. Existing runner/replay behavior remains intact. Command text in notes, status or evidence has no execution authority.
 
-`test` and `expect` are required nonblank strings, preserved byte for byte; `expect` is a case-sensitive literal, never a regex. Invalid input returns exit 2 with `pdd workflow prove requires nonblank --test and --expect.` before any port call. Then a `timeoutMinutes` that is not a whole number from 1 to 120 returns exit 2 with `pdd workflow prove --timeout takes whole minutes from 1 to 120.` before any port call. The CLI passes `--timeout MIN` as `timeoutMinutes` only when the person gives it. The person supplies the defect text; do not infer or rewrite it from a summary.
+`test` and `expect` are required nonblank strings, preserved byte for byte; `expect` is a case-sensitive literal, never a regex. Invalid input returns exit 2 with `pdd workflow prove requires nonblank --test and --expect.` before any port call. Then a `timeoutMinutes` that is not a whole number from 1 to 120 returns exit 2 with `pdd workflow prove --timeout takes whole minutes from 1 to 120.` before any port call. The CLI passes `--timeout MIN` as `timeoutMinutes` only when the person gives it. The person supplies the defect text; do not infer or rewrite it from a summary. For Runtime calls, exact-value references copy original input `/test` to `host.runProcess` `/command` and `host.saveProof` `/record/test`. Copy original `/expect` to `host.saveProof` `/record/expect` the same way; never retype or pre-escape these values.
 
 ## Committed snapshots and eligible files
 
@@ -69,11 +69,31 @@ Runtime fakes establish forwarding and classification only. Native Git isolation
 
 ```json
 {
-  "status":"approved",
-  "prose_sha256":"173dae659fa2d50edf63b8842b7a5d1e4e446f6c81c52386ee5ed1104284c4e5",
+  "status":"draft",
+  "prose_sha256":"bba0b51bee1e8235d47880e2160563b8bfb3e801e8a7bfd1979b012612402471",
+  "value_reference_protocol":"pdd.graph-value-reference.v1",
   "entries": [
     {
       "operation": "proveRun",
+      "value_reference_policy": {
+        "version": "pdd.graph-value-policy.v1",
+        "targets": [{
+          "kind": "resource-call",
+          "operation": "host.runProcess",
+          "to": "/command",
+          "sources": [{"source": "original_input", "from": "/test"}]
+        }, {
+          "kind": "resource-call",
+          "operation": "host.saveProof",
+          "to": "/record/test",
+          "sources": [{"source": "original_input", "from": "/test"}]
+        }, {
+          "kind": "resource-call",
+          "operation": "host.saveProof",
+          "to": "/record/expect",
+          "sources": [{"source": "original_input", "from": "/expect"}]
+        }]
+      },
       "input_schema": {
         "type": "object",
         "properties": {
