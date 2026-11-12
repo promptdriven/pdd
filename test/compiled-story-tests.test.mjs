@@ -1,9 +1,9 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, symlinkSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { findTests, preflight, proseSha256 } from '../src/runtime-preflight.mjs';
+import { captureSource, executableInterfaceText, findTests, interfaceBlocks, preflight, proseSha256 } from '../src/runtime-preflight.mjs';
 const bin = join(process.cwd(), 'bin/pdd.mjs');
 const roots = [];
 after(() => { for (const root of roots) rmSync(root,{recursive:true,force:true}); });
@@ -33,11 +33,14 @@ test('bounded unsupported bindings and checks never pass',()=>{const cases=[
  {change:d=>{d.steps[0].checks=[];}}, {change:d=>{d.steps[0].input.argv=[3];}}
  ];for(const spec of cases){const {out,data}=outcome(project(spec));assert.notEqual(out.status,0,JSON.stringify(spec));assert.notEqual(data.stories[0].status,'passed',JSON.stringify(spec));assert.ok(data.stories[0].steps.every(step=>step.status!=='passed'),JSON.stringify(spec));}});
 
-test('lint preflight names tested entries missing implementation',()=>{
+test('lint preflight names tested CLI entries missing implementation without warning on non-CLI entries',()=>{
  const missing=project({implementation:null});
  const path=join(missing,'prompts/app.prompt.md');
  writeFileSync(path,readFileSync(path,'utf8').replace('\"implementation\":null,',''));
- for(const [root,expectWarning] of [[missing,true],[project(),false]]) {
+ const nonCli=project({implementation:null,interfaceChange:iface=>{iface.conventions=[];}});
+ const nonCliPath=join(nonCli,'prompts/app.prompt.md');
+ writeFileSync(nonCliPath,readFileSync(nonCliPath,'utf8').replace('\"implementation\":null,',''));
+ for(const [root,expectWarning] of [[missing,true],[project(),false],[nonCli,false]]) {
   const found=findTests({root}); const result=preflight({root,found,selected:found.tests});
   const warnings=result.warnings.filter(line=>line.includes('has no implementation declaration'));
   if(expectWarning) assert.deepEqual(warnings,['Warning: prompts/app.prompt.md entry main has no implementation declaration.']);
@@ -190,4 +193,52 @@ test('preserves 64-bit integers above 2^53 in scenario JSON and CLI streams',()=
  assert.equal(failText.status,1);
  assert.match(failText.stdout,/expected 9007199254740993, actual 0/);
  assert.match(readFileSync(join(root,'.pdd/code-test/latest.json'),'utf8'),/"expected": 9007199254740993/);
+});
+
+test('two consecutive runs in a clean repo without root .gitignore both report clean and reject .pdd/.gitignore symlink',()=>{
+ const root=project();
+ assert.equal(existsSync(join(root,'.gitignore')),false);
+ const first=outcome(root);
+ assert.equal(first.out.status,0,first.out.stderr);
+ assert.equal(first.data.dirty,false);
+ assert.equal(readFileSync(join(root,'.pdd/.gitignore'),'utf8'),'*\n');
+ const second=outcome(root);
+ assert.equal(second.out.status,0,second.out.stderr);
+ assert.equal(second.data.dirty,false);
+ const secondText=spawnSync(process.execPath,[bin,'test','--target','code','demo'],{cwd:root,encoding:'utf8',env:{...process.env,GH_TOKEN:'',GITHUB_TOKEN:'',PDD_RUNTIME_URL:'http://127.0.0.1:1'}});
+ assert.equal(secondText.status,0,secondText.stderr);
+ assert.match(secondText.stdout,/^PASSED\s+user_stories\/demo\.md\s+[0-9a-f]{40}\s+clean$/m);
+ const guard=join(root,'OUTSIDE_IGNORE'); writeFileSync(guard,'keep\n');
+ unlinkSync(join(root,'.pdd/.gitignore'));
+ symlinkSync(guard,join(root,'.pdd/.gitignore'));
+ const blocked=spawnSync(process.execPath,[bin,'test','--target','code','demo'],{cwd:root,encoding:'utf8'});
+ assert.equal(blocked.status,1);
+ assert.match(blocked.stderr,/Code test result path is a symbolic link/);
+ assert.equal(readFileSync(guard,'utf8'),'keep\n');
+});
+
+test('interface draft admits entries[].implementation and executableInterfaceText strips it while preserving exact integer tokens',()=>{
+ const root=project();
+ const existing=JSON.parse(interfaceBlocks(readFileSync(join(root,'prompts/app.prompt.md'),'utf8'))[0][1]);
+ writeFileSync(join(root,'prompts/fresh.prompt.md'),'# fresh\n\nRun fresh CLI.\n');
+ const contract={...existing,entries:[{...existing.entries[0],operation:'fresh',implementation:{kind:'cli',command:'node app.mjs'}}]};
+ writeFileSync(join(root,'contract.json'),JSON.stringify(contract,null,2).replace('"max_steps": 4','"max_steps": 9007199254740993'));
+ const drafted=spawnSync(process.execPath,[bin,'interface','draft','prompts/fresh.prompt.md','--contract','contract.json','--json'],{cwd:root,encoding:'utf8'});
+ assert.equal(drafted.status,0,drafted.stderr+drafted.stdout);
+ const refreshed=spawnSync(process.execPath,[bin,'interface','draft','prompts/fresh.prompt.md','--refresh','--json'],{cwd:root,encoding:'utf8'});
+ assert.equal(refreshed.status,0,refreshed.stderr+refreshed.stdout);
+ const badContract={...contract,entries:[{...contract.entries[0],implementation:{kind:'cli',command:'node app.mjs; rm -rf /'}}]};
+ writeFileSync(join(root,'bad-contract.json'),JSON.stringify(badContract));
+ const rejected=spawnSync(process.execPath,[bin,'interface','draft','prompts/fresh.prompt.md','--refresh','--contract','bad-contract.json','--json'],{cwd:root,encoding:'utf8'});
+ assert.equal(rejected.status,4);
+ assert.match(rejected.stdout+rejected.stderr,/\/entries\/0\/implementation/);
+ const promptWithLargeInt=readFileSync(join(root,'prompts/app.prompt.md'),'utf8').replace('"max_steps":4','"max_steps":9007199254740993');
+ writeFileSync(join(root,'prompts/app.prompt.md'),promptWithLargeInt);
+ const projected=executableInterfaceText(promptWithLargeInt);
+ assert.doesNotMatch(projected,/"implementation"/);
+ assert.match(projected,/"max_steps":9007199254740993/);
+ const captured=captureSource(root,{tests:['tests/demo.json']});
+ const uploaded=captured.sources.find(file=>file.path==='prompts/app.prompt.md').bytes.toString('utf8');
+ assert.doesNotMatch(uploaded,/"implementation"/);
+ assert.match(uploaded,/"max_steps":9007199254740993/);
 });

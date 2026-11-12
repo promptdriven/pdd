@@ -1,4 +1,4 @@
-// Generated from prompts/cli/compiled-test.prompt.md (sha256: e943f97cf4b472bd0c58f293f97cdeb01a4152a861ef2bfff4cf1555a35884ca).
+// Generated from prompts/cli/compiled-test.prompt.md (sha256: 217f4e51e6117e71e51c54558158a2eab822cdb03da04ee43436b4afb213862e).
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, lstatSync, statSync, realpathSync } from 'node:fs';
 import { join, resolve, relative, sep } from 'node:path';
@@ -100,11 +100,13 @@ export async function runCompiledTest({root, words, json}, {stdout, stderr, spaw
     return {story, status:steps.some(s=>s.status==='failed')?'failed':steps.every(s=>s.status==='passed')?'passed':'not run',steps};
   });
   const report = {target:'code',commit,dirty,ai_calls:0,stories};
-  for (const path of [join(root,'.pdd'),join(root,'.pdd','code-test'),join(root,'.pdd','code-test','latest.json')]) {
+  for (const path of [join(root,'.pdd'),join(root,'.pdd','.gitignore'),join(root,'.pdd','code-test'),join(root,'.pdd','code-test','latest.json')]) {
     try { if (lstatSync(path).isSymbolicLink()) { stderr.write('Code test result path is a symbolic link.\n'); return 1; } }
     catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
-  mkdirSync(join(root,'.pdd','code-test'),{recursive:true}); writeFileSync(join(root,'.pdd','code-test','latest.json'),stringifyScenarioJson(report,2)+'\n');
+  mkdirSync(join(root,'.pdd','code-test'),{recursive:true});
+  try { writeFileSync(join(root,'.pdd','.gitignore'),'*\n',{flag:'wx'}); } catch (error) { if (error.code !== 'EEXIST') throw error; }
+  writeFileSync(join(root,'.pdd','code-test','latest.json'),stringifyScenarioJson(report,2)+'\n');
   if(json) stdout.write(stringifyScenarioJson(report)+'\n'); else for(const row of stories) { stdout.write(`${row.status.toUpperCase()}  ${row.story}  ${commit ?? 'commit unknown'}  ${dirty === null ? 'dirty unknown' : dirty ? 'dirty' : 'clean'}\n`); for(const {scenario, step} of groups.get(row.story) ?? []) { if(step.reason) stdout.write(`  ${step.step_id}: not run: ${step.reason}\n`); for(const check of step.checks ?? []) if(check.status === 'failed') stdout.write(`  ${scenario} · step ${step.step_id} · ${check.criterion_id} ${check.path}: expected ${stringifyScenarioJson(check.expected)}, actual ${stringifyScenarioJson(check.actual)}\n`); } }
   return commit && stories.every(row=>row.status==='passed') ? 0 : 1;
 }

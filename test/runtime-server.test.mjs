@@ -45,7 +45,7 @@ test('RUNTIME-SERVER1: one lint, then every check is sent before the first answe
   assert.match(result.err, /1 is not prompt, story or test files/);
   assert.equal((result.out + result.err).split('not prompt, story or test files').length, 2);
   const json = await check(harbor(t), await fakeRuntime(t, (entry, f) => f.normal(entry)), [], { '--json': true });
-  assert.deepEqual(json.json.warnings, ['Warning: prompts/place_order.prompt.md entry place_order has no implementation declaration.']);
+  assert.deepEqual(json.json.warnings, []);
   assert.match(result.out, /^Place a coffee order +tests\/place-order\.json +passed +1\/1 +2\.0 s$/m);
   assert.deepEqual(result.out.split('\n').slice(3, 6), ['Prompt tests (place-order): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call',
     'Prompt tests (unknown-item): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call', 'Prompt tests: ✓ 2 of 2 criteria · 2/2 checks · 2 AI calls']);
@@ -1192,26 +1192,41 @@ test('RUNTIME-UPDATE1: code update-required (any status, top level or error.code
   assert.ok(reading.err.includes(said.json.message), reading.err);
 });
 
-// Wrong: agents import pdd's source for a lint, or a lint runs pdd's local copy of the engine rules.
-test('RUNTIME-LINT: selected preflight warnings appear in JSON and text', async t => {
-  const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
+test('RUNTIME-LINT: CLI missing-implementation warning is scoped to CLI entries without leaking local preflight rules', async t => {
+  const nonCli = harbor(t), fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
   const warning = 'Warning: prompts/place_order.prompt.md entry place_order has no implementation declaration.';
-  const json = await check(setup, fake, [], { '--lint': true, '--json': true });
+  const cleanNonCli = await check(nonCli, fake, [], { '--lint': true, '--json': true });
+  assert.equal(cleanNonCli.code, 0);
+  assert.deepEqual(cleanNonCli.json.warnings, []);
+  const cliConventions = '"conventions": [{"path":"/entries/0/input_schema","convention":"cli"},{"path":"/entries/0/result_schema","convention":"cli"}]';
+  const cliMissing = harbor(t, repo => {
+    const path = join(repo, PLACE);
+    writeFileSync(path, readFileSync(path, 'utf8').replace('"conventions": []', cliConventions));
+    const scenario = join(repo, 'tests/place-order.json');
+    writeFileSync(scenario, readFileSync(scenario, 'utf8').replace('"quantity": 2', '"quantity": 9007199254740993'));
+  });
+  const json = await check(cliMissing, fake, [], { '--lint': true, '--json': true });
   assert.equal(json.code, 0);
-  assert.equal(json.json.warnings.filter(text => text === warning).length, 1);
-  const plain = await check(setup, fake, ['place-order'], { '--lint': true });
+  assert.deepEqual(json.json.warnings, [warning]);
+  const plain = await check(cliMissing, fake, ['place-order'], { '--lint': true });
   assert.equal(plain.code, 0);
   assert.ok((plain.out + plain.err).includes(warning));
-  assert.deepEqual(fake.posts.map(post => post.command), ['lint', 'lint']);
+  assert.doesNotMatch(plain.out + plain.err, /scenario-integer-out-of-range/);
   const implemented = harbor(t, repo => {
     const path = join(repo, PLACE);
-    writeFileSync(path, readFileSync(path, 'utf8').replace('"operation": "place_order",', '"operation": "place_order",\n      "implementation": {"kind":"cli","command":"node app.mjs"},'));
+    writeFileSync(path, readFileSync(path, 'utf8')
+      .replace('"operation": "place_order",', '"operation": "place_order",\n      "implementation": {"kind":"cli","command":"node app.mjs"},')
+      .replace('"conventions": []', cliConventions));
   });
   const withImplementation = await check(implemented, fake, ['place-order'], { '--lint': true, '--json': true });
   assert.equal(withImplementation.code, 0);
-  assert.equal(withImplementation.json.warnings.includes(warning), false);
+  assert.deepEqual(withImplementation.json.warnings, []);
+  const uploaded = spawnSync('tar', ['-xOf', '-', PLACE], { input: fake.posts.at(-1).tar, encoding: 'utf8' });
+  assert.equal(uploaded.status, 0);
+  assert.doesNotMatch(uploaded.stdout, /"implementation"/);
 });
 
+// Wrong: agents import pdd's source for a lint, or a lint runs pdd's local copy of the engine rules.
 test('RUNTIME-LINT1: pdd lint sends one lint and no checks, prints every server problem, and skips the local rules', async t => {
   const setup = harbor(t, repo => {
     const file = join(repo, 'tests/place-order.json'), doc = JSON.parse(readFileSync(file, 'utf8'));

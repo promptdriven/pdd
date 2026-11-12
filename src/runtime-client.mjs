@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 37ad530ce7c49f63b5cb2145c8246173f8600afd95fc8846209f19e6d7a43e77).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 6b697d1c0d9cb5d27eb50493faff06e155a2fd534405e72d05a51e40a06d25fd).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
@@ -22,7 +22,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { homedir, hostname } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { DRAFT_SERVER_TEXT, NO_TESTS, PreflightError, TEST_SCHEMA, captureSource, scenarioShapeRefusal, checkInput, expectedTestPath, fillHashes, sharedSourceFiles, whyNoTests, findTests, formatSize, gitFiles, otherFiles,
-  discoveryRefusal, preflight, interfaceBlocks, executableInterfaceText, readPrompt, formatWarningLines, schemaKeywordWarningLines, selectTests, sourceFilePort, sha256, STALE_HINT, staleHint } from './runtime-preflight.mjs';
+  discoveryRefusal, preflight, interfaceBlocks, executableInterfaceText, readPrompt, formatWarningLines, schemaKeywordWarningLines, missingCliImplementationWarnings, selectTests, sourceFilePort, sha256, STALE_HINT, staleHint } from './runtime-preflight.mjs';
 import { catalogRecords, compareCopies } from './contract-refs.mjs';
 import { askApproval, lineReader, promptPath } from './prompt-approve.mjs';
 import { OPEN_STATES, causeText, cleanText, exitCodeFor, progressTicker, projectAnswer, refusalView, renderJson, renderText, summaryLine, stepTimeLimit, tryUsage, validLink, coverageText } from './runtime-output.mjs';
@@ -2374,6 +2374,10 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   try { selected = select(found, normalized, root); }
   catch (error) { if (error instanceof Stop && advice.length) error.message = [error.message, ...advice].join('\n'); throw error; }
   if (!paths) { advice.push(...formatAdvice(root, found.visible, entryPaths(selected), found.workspace)); found.warnings.push(...advice); }
+  for (const warning of missingCliImplementationWarnings({ root, found, selected })) {
+    if (!advice.includes(warning)) advice.push(warning);
+    if (!found.warnings.includes(warning)) found.warnings.push(warning);
+  }
   context.coverage = bindingCoverage({ root, found, selected, includeRuntime:true });
   // A test that the test name rule cannot use is refused here and never sent; the other tests are linted.
   const rows = selected.map(test => ({ test: test.path, story: test.story, title: test.title, state: 'ready', phase: 'lint',
@@ -2381,15 +2385,12 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
     criterion_texts: Object.fromEntries((Array.isArray(test.doc?.criteria) ? test.doc.criteria : []).filter(isObject).map(item => [item.id, item.text])),
     ...(discoveryRefusal(test) ? { state: 'refused', phase: 'local', unsent:true, refusals: [discoveryRefusal(test)], steps: [] } : {}) }));
   context.rows = rows;
-  const checked = preflight({root,found,selected});
-  found.warnings = [...new Set([...found.warnings, ...checked.warnings])];
-  context.warnings = found.warnings;
-  const nativeRows = new Map(checked.rows.filter(row => row.native_only?.length).map(row => [row.test,row]));
+  const nativeRows = new Map(preflight({root,found,selected}).rows.filter(row => row.native_only?.length).map(row => [row.test,row]));
   for (const row of rows) {
     const native = nativeRows.get(row.test);
     if (native) Object.assign(row,{state:native.refusals.length ? 'refused' : 'not_run',refusals:native.refusals,phase:'local',native_only:native.native_only,unsent:true,note:{code:'native-only',message:native.native_only.map(item => `${item.path}: ${item.reason}`).join('; ')}});
   }
-  if (!findings.length && rows.every(row => row.native_only?.length)) { saveLocalNativeResult(context, rows, 'lint-only'); return printLintResult(context,rows,[],found.warnings); }
+  if (!findings.length && rows.every(row => row.native_only?.length)) { saveLocalNativeResult(context, rows, 'lint-only'); return printLintResult(context,rows,[],advice); }
   const local = row => row.phase === 'local';
   const {promptSchemaRefusals} = await import('./runtime-preflight.mjs');
   const prompts = new Map();
