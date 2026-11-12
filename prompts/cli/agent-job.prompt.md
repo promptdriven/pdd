@@ -103,8 +103,12 @@ is uncertain; those records let a later tick retry without a live controller.
   as an orphan. A process that left the group (its own `setsid`) can be captured while
   the wrapper is live, but descendant samples are not a complete ownership boundary.
   `snapshotAgentJob(job)` saves the wrapper and every live descendant as
-  PID/start/command identities on `job.processes`. `cleanupAgentJob(job)` captures
-  again, asks the wrapper to stop, then terminates saved identities that still match.
+  PID/start/command identities on `job.processes`. Before it signals a live wrapper,
+  `cleanupAgentJob(job)` verifies the job token and takes a fresh descendant snapshot.
+  It then asks the wrapper to stop, reads a fresh process table and terminates only
+  saved identities that still match. If that snapshot is incomplete, cleanup keeps the
+  job and sends no group signal. If the wrapper already exited, cleanup uses the saved
+  manifest because no live parent remains to walk.
   The wrapper starts detached, so its PID is also the dedicated job process-group ID.
   Only a live wrapper whose command still contains this job's token authorizes the
   group SIGTERM. Its handler sends the same group SIGTERM, waits 2 s, then sends the
@@ -124,6 +128,18 @@ is uncertain; those records let a later tick retry without a live controller.
   the job token even if a later snapshot succeeds: the failed sample could have
   missed a detached helper. A captured live descendant without a valid identity is an
   inventory failure, never a row to discard.
+
+  A cleanup-only fresh snapshot is different from periodic sampling. If the process
+  table, wrapper row or descendant inventory is unavailable or incomplete before any
+  cleanup signal, it appends a retryable attempt to `TOKEN.processes.cleanup-snapshot.json`,
+  keeps the job and sends no signal. It does not write or clear the permanent
+  `TOKEN.processes.error` marker. A later cleanup retry may resolve those attempts
+  only while the same PID still verifies this job token; if an attempt recorded the
+  wrapper's PID/start identity, the complete snapshot must find that same identity.
+  A successful complete snapshot appends its resolution and retains prior attempt
+  history. If the wrapper exits or its token no longer matches first, cleanup stays
+  unconfirmed. A malformed manifest or failed manifest write, and an ordinary
+  non-cleanup snapshot failure, keep the permanent uncertainty marker.
 
   When the direct child exits, before the wrapper records that exit, the wrapper also
   reads the current user's process table only when the saved spec has an explicit
@@ -146,6 +162,17 @@ is uncertain; those records let a later tick retry without a live controller.
   cwd scan cannot clear that marker. Cwd evidence is only a reason to retain the job
   and worktree: it never authorizes a signal to that process.
 
+  If a cwd read fails for an initially live row, re-read the process table before
+  retaining it. Keep the finding only while the same PID/start identity is still
+  non-zombie. A zombie or changed identity is no longer that live candidate; a current
+  same-identity live row with unknown age stays uncertain.
+
+  On Linux, an unreadable cwd also does not retain a process in a session whose leader
+  is proven older than the custody boundary. The detached wrapper starts a new session,
+  so a process in an older session cannot descend from it. Re-read the candidate
+  PID/start/session and the session leader before using this proof. If either identity
+  is unavailable, or the leader is not proven older, keep the process uncertain.
+
   Cleanup can resolve a custody finding only after it confirms that the saved manifest
   identities are gone, reads a fresh complete process table and cwd inventory, sees
   every recorded suspect identity has ended, and finds no unsaved same-user process in
@@ -160,7 +187,9 @@ is uncertain; those records let a later tick retry without a live controller.
   a marker; a finding after a resolution appends to it and reopens it. A shutdown-time
   error marker or an incomplete fresh scan is unconfirmed.
 
-  A core job from 0.1.28 may have no process manifest. Core may request a bounded
+  A core job from 0.1.28 may have no process manifest. If its wrapper is still live,
+  cleanup first snapshots the wrapper and its current descendants. For an exited job
+  without a manifest, core may request a bounded
   legacy scan only by passing `ports.legacyCustodyRoot` for a verified core-owned
   disposable checkout, after it matches the old spec's cwd and exit path to that
   checkout and confirms a well-formed exit record.
@@ -174,6 +203,8 @@ is uncertain; those records let a later tick retry without a live controller.
   any previously recorded identity remain held regardless of age. Without a safe
   boundary, an unreadable candidate stays uncertain. Any matching process
   is retained by PID/start identity; an incomplete read stays unconfirmed.
+  A prior resolution records one complete scan. Each later cleanup retry scans again;
+  a new finding reopens the custody record and keeps the checkout.
   This path sends no signals. A clear scan permits core to finish removing that checkout,
   but it cannot recover the old manifest: a helper that changed cwd and left the wrapper's
   group before any observation remains outside this historical proof. Report this limited

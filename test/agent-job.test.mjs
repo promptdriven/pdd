@@ -2,7 +2,7 @@ import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync, mkdirSync, chmodSync, realpathSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { agentCommand, jobEnvironment, startAgentJob, readAgentJob, stopAgentJob, snapshotAgentJob, cleanupAgentJob, agentJobCpu, agentJobHangs, jobStopper, hungRound } from '../src/agent-job.mjs';
@@ -196,6 +196,42 @@ test('snapshotAgentJob retains a separate-group helper while its wrapper is live
   assert.deepEqual(snapshotAgentJob(job, { spawnSync: () => ({ status: 0, stdout: table }) }).map(row => row.pid), [100, 101, 102]);
 });
 
+test('cleanup snapshots a live legacy wrapper before stopping its separate-group helper', async t => {
+  const dir = folder(t), token = join(dir, 'live-legacy.spec.json'), exit = join(dir, 'live-legacy.exit.json');
+  writeFileSync(token, JSON.stringify({ command: 'node', args: [], cwd: dir, log: join(dir, 'live.log'), exit }));
+  const caller = { pid: process.pid, ppid: 1, pgid: process.pid, rss: 1, start: '@caller', args: 'node test caller' };
+  const wrapper = { pid: 70011, ppid: 1, pgid: 70011, rss: 1, start: '@live-wrapper', args: `node --wrapper ${token}` };
+  const agent = { pid: 70012, ppid: wrapper.pid, pgid: wrapper.pid, rss: 1, start: '@live-agent', args: 'node agent' };
+  const helper = { pid: 70013, ppid: agent.pid, pgid: 70013, rss: 1, start: '@separate-helper', args: 'node mcp helper' };
+  let rows = [caller, wrapper, agent, helper];
+  const table = () => rows.map(row => `${row.pid} ${row.ppid} ${row.pgid} ${row.rss} ${row.start} ${row.args}`).join('\n');
+  const signals = [], job = { pid: wrapper.pid, token, exit, log: join(dir, 'live.log') };
+  const proof = await cleanupAgentJob(job, { alive: () => true, spawnSync: () => ({ status: 0, stdout: table() }), list: () => rows,
+    kill: (pid, signal) => {
+      signals.push([pid, signal]);
+      if (pid === -wrapper.pid) rows = [caller, helper];
+      else if (pid === helper.pid && signal === 'SIGTERM') rows = [caller];
+    }, sleep: async () => {}, grace: 1, poll: 1 });
+  assert.equal(proof.confirmed, true);
+  assert.ok(JSON.parse(readFileSync(`${token}.processes.json`, 'utf8')).some(row => row.pid === helper.pid));
+  assert.deepEqual(signals, [[-wrapper.pid, 'SIGTERM'], [helper.pid, 'SIGTERM']]);
+  await t.test('an incomplete fresh snapshot leaves the live wrapper untouched', async t => {
+    const missingDir = folder(t), missingToken = join(missingDir, 'missing-wrapper.spec.json'), missingExit = join(missingDir, 'missing-wrapper.exit.json');
+    writeFileSync(missingToken, JSON.stringify({ command: 'node', args: [], cwd: missingDir, log: join(missingDir, 'missing.log'), exit: missingExit }));
+    const stale = { pid: 70021, ppid: 1, pgid: 70021, rss: 1, start: '@stale-wrapper', args: `node --wrapper ${missingToken}` };
+    writeFileSync(`${missingToken}.processes.json`, JSON.stringify([stale]));
+    const onlyCaller = { pid: process.pid, ppid: 1, pgid: process.pid, rss: 1, start: '@caller', args: 'node test caller' };
+    const text = `${onlyCaller.pid} ${onlyCaller.ppid} ${onlyCaller.pgid} ${onlyCaller.rss} ${onlyCaller.start} ${onlyCaller.args}`;
+    const missingSignals = [], result = await cleanupAgentJob({ pid: stale.pid, token: missingToken }, {
+      alive: () => true, spawnSync: () => ({ status: 0, stdout: text }), list: () => [onlyCaller],
+      kill: (...args) => missingSignals.push(args) });
+    assert.equal(result.confirmed, false);
+    assert.deepEqual(missingSignals, []);
+    assert.equal(existsSync(`${missingToken}.processes.error`), false);
+    assert.equal(JSON.parse(readFileSync(`${missingToken}.processes.cleanup-snapshot.json`, 'utf8')).resolutions.length, 0);
+  });
+});
+
 test('a vanished wrapper keeps a valid saved manifest; missing or invalid manifests stay uncertain', t => {
   const dir = folder(t), token = join(dir, 'exit.spec.json'), row = { pid: 501, ppid: 1, pgid: 501, rss: 1, start: 'Mon Nov 11 10:00:00 2026', args: 'node wrapper exit.spec.json' };
   writeFileSync(`${token}.processes.json`, JSON.stringify([row]));
@@ -259,6 +295,73 @@ test('a snapshot failure stays uncertain after a later valid process inventory',
   assert.equal((await cleanupAgentJob(job, { alive: () => false, list: () => [] })).confirmed, false);
 });
 
+test('a failed cleanup snapshot can retry only with the same live wrapper identity', async t => {
+  const dir = folder(t), token = join(dir, 'retry-cleanup.spec.json'), signals = [];
+  const job = { pid: 70031, token }, wrapper = custodyRow(job.pid, '@cleanup-wrapper', `node --wrapper ${token}`);
+  const agent = custodyRow(70032, '@cleanup-agent', 'node agent', process.getuid()); agent.ppid = wrapper.pid;
+  const savedManifest = [wrapper, agent];
+  writeFileSync(`${token}.processes.json`, JSON.stringify(savedManifest));
+  let rows = null;
+  const ports = { alive: () => true, list: () => rows, kill: (pid, signal) => {
+    signals.push([pid, signal]);
+    if (pid === -job.pid && signal === 'SIGTERM') rows = [agent];
+    else if (pid === agent.pid && signal === 'SIGTERM') rows = [];
+  }, sleep: async () => {}, grace: 1, poll: 1 };
+
+  const first = await cleanupAgentJob(job, ports);
+  assert.equal(first.confirmed, false);
+  assert.equal(existsSync(`${token}.processes.error`), false, 'a cleanup-only snapshot failure does not become a permanent sample error');
+  assert.deepEqual(signals, []);
+  assert.deepEqual(JSON.parse(readFileSync(`${token}.processes.json`, 'utf8')), savedManifest,
+    'the saved process identities survive an incomplete cleanup capture');
+  const failed = JSON.parse(readFileSync(`${token}.processes.cleanup-snapshot.json`, 'utf8'));
+  assert.equal(failed.attempts.length, 1);
+  assert.equal(failed.resolutions.length, 0);
+  assert.equal(failed.attempts[0].wrapper.pid, wrapper.pid);
+  assert.equal(failed.attempts[0].wrapper.start, wrapper.start);
+
+  rows = [wrapper, agent];
+  const proof = await cleanupAgentJob(job, ports);
+  assert.equal(proof.confirmed, true);
+  assert.deepEqual(signals, [[-job.pid, 'SIGTERM'], [agent.pid, 'SIGTERM']]);
+  assert.deepEqual(JSON.parse(readFileSync(`${token}.processes.json`, 'utf8')), savedManifest,
+    'the valid retry confirms the same saved process identities before cleanup');
+  const recovered = JSON.parse(readFileSync(`${token}.processes.cleanup-snapshot.json`, 'utf8'));
+  assert.equal(recovered.attempts.length, 1, 'the failed attempt stays in the record');
+  assert.equal(recovered.resolutions.length, 1);
+  assert.equal(recovered.resolutions[0].attempt, 1);
+});
+
+test('cleanup keeps an incomplete snapshot pending after the wrapper exits or its PID is reused', async t => {
+  await t.test('the wrapper exits before a complete retry', async t => {
+    const dir = folder(t), token = join(dir, 'retry-exit.spec.json'), signals = [];
+    const job = { pid: 70041, token }, ports = { alive: () => true, list: () => null, kill: (...args) => signals.push(args) };
+    assert.equal((await cleanupAgentJob(job, ports)).confirmed, false);
+    const proof = await cleanupAgentJob(job, { ...ports, alive: () => false });
+    assert.equal(proof.confirmed, false);
+    assert.deepEqual(signals, []);
+    assert.equal(JSON.parse(readFileSync(`${token}.processes.cleanup-snapshot.json`, 'utf8')).resolutions.length, 0);
+  });
+
+  await t.test('the same PID now names a different wrapper identity', async t => {
+    const dir = folder(t), token = join(dir, 'retry-reuse.spec.json'), signals = [];
+    const job = { pid: 70051, token }, original = custodyRow(job.pid, '@original-wrapper', `node --wrapper ${token}`);
+    const invalidChild = custodyRow(70052, '@bad-child', '   '); invalidChild.ppid = original.pid;
+    const replacement = custodyRow(job.pid, '@replacement-wrapper', `node --wrapper ${token}`);
+    const child = custodyRow(70053, '@replacement-agent', 'node agent'); child.ppid = replacement.pid;
+    let rows = [original, invalidChild];
+    const ports = { alive: () => true, list: () => rows, kill: (...args) => signals.push(args) };
+    assert.equal((await cleanupAgentJob(job, ports)).confirmed, false);
+    assert.equal(existsSync(`${token}.processes.error`), false);
+    rows = [replacement, child];
+    assert.equal((await cleanupAgentJob(job, ports)).confirmed, false);
+    assert.deepEqual(signals, []);
+    const retry = JSON.parse(readFileSync(`${token}.processes.cleanup-snapshot.json`, 'utf8'));
+    assert.equal(retry.resolutions.length, 0);
+    assert.equal(retry.attempts[0].wrapper.start, original.start);
+  });
+});
+
 test('a captured descendant without an identity makes the snapshot uncertain', async t => {
   const dir = folder(t), token = join(dir, 'job.spec.json'), job = { pid: 501, token };
   const root = { pid: 501, ppid: 1, pgid: 501, rss: 1, start: 'Mon Nov 11 10:00:00 2026', args: `node wrapper ${token}` };
@@ -316,37 +419,111 @@ test('a late unsampled detached helper retains a /tmp worktree without a cwd-bas
   assert.equal(history.resolution.recordedIdentitiesGone, true);
 });
 
-const LATE_DETACHED_DELETED_CWD = `
-const { spawn } = require('child_process'), fs = require('fs');
-setTimeout(() => {
-  const helper = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { cwd: process.env.HELPER_CWD, detached: true, stdio: 'ignore' });
-  helper.unref(); fs.writeFileSync(process.env.HELPER_PID, String(helper.pid));
-  setTimeout(() => process.exit(0), 130);
-}, 50);`;
-test('a deleted /tmp worktree descendant retains custody through its canonical parent', { skip: !['darwin', 'linux'].includes(process.platform) }, async t => {
-  const dir = folderAt(t, '/tmp/pdd-agent-job-deleted-'), nested = join(dir, 'deleted-cwd'), mark = join(dir, 'deleted-helper.pid');
-  mkdirSync(nested);
-  const job = startAgentJob({ id: 'deleted-cwd-helper', dir, cwd: dir, custodyRoot: dir, command: process.execPath, args: ['-e', LATE_DETACHED_DELETED_CWD], input: '', env: { PATH: process.env.PATH, HELPER_CWD: nested, HELPER_PID: mark } });
-  const helper = Number(await until(() => existsSync(mark) && readFileSync(mark, 'utf8')));
-  t.after(() => { try { process.kill(helper, 'SIGKILL'); } catch {} });
-  rmSync(nested, { recursive: true, force: true }); assert.equal(existsSync(nested), false);
-  await until(() => existsSync(job.exit));
-  assert.ok(existsSync(`${job.token}.processes.custody.json`), 'deleted cwd custody evidence must retain the job');
-  await until(() => !alive(job.pid));
-  const signals = [], proof = await cleanupAgentJob(job, { kill: (...args) => signals.push(args) });
-  assert.equal(proof.confirmed, false); assert.deepEqual(signals, []);
-  assert.ok(alive(helper));
-  try { process.kill(helper, 'SIGKILL'); } catch {}
-  await until(() => ended(helper));
-  assert.equal((await cleanupAgentJob(job)).confirmed, true, 'the deleted cwd finding resolves after its identity ends');
+test('an unrecorded helper with a deleted worktree cwd stays held without a signal', { skip: !['darwin', 'linux'].includes(process.platform) }, async t => {
+  const dir = folderAt(t, '/tmp/pdd-agent-job-deleted-');
+  const job = startAgentJob({ id: 'deleted-cwd', dir, cwd: dir, custodyRoot: dir,
+    command: process.execPath, args: ['-e', 'process.exit(0)'], input: '', env: { PATH: process.env.PATH } });
+  await until(() => existsSync(job.exit) && !alive(job.pid));
+
+  const nested = join(dir, 'deleted-cwd'); mkdirSync(nested);
+  const helper = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { cwd: nested, detached: true, stdio: 'ignore' });
+  helper.unref();
+  t.after(() => { try { process.kill(helper.pid, 'SIGKILL'); } catch {} });
+  await until(() => alive(helper.pid));
+  assert.equal(JSON.parse(readFileSync(`${job.token}.processes.json`, 'utf8')).some(row => row.pid === helper.pid), false,
+    'the helper starts after the wrapper has finished and is absent from its manifest');
+  rmSync(nested, { recursive: true, force: true });
+  assert.equal(existsSync(nested), false);
+
+  const held = await cleanupAgentJob(job);
+  assert.equal(held.confirmed, false);
+  assert.ok(alive(helper.pid), 'cwd evidence retains the job but does not signal this unrecorded helper');
+  const retained = JSON.parse(readFileSync(`${job.token}.processes.custody.json`, 'utf8'));
+  assert.ok(retained.observations.at(-1).identities.some(row => row.pid === helper.pid));
+
+  try { process.kill(helper.pid, 'SIGKILL'); } catch {}
+  await until(() => ended(helper.pid));
+  assert.equal((await cleanupAgentJob(job)).confirmed, true, 'a complete scan resolves the exited suspect and keeps its history');
 });
 
 test('a clean direct exit keeps cleanup confirmation when no process uses its worktree', async t => {
   const dir = folder(t);
   const job = startAgentJob({ id: 'clean-exit', dir, cwd: dir, custodyRoot: dir, command: process.execPath, args: ['-e', 'process.exit(0)'], input: '', env: { PATH: process.env.PATH } });
-  await until(() => existsSync(job.exit));
+  const savedWrapper = () => {
+    try { return JSON.parse(readFileSync(`${job.token}.processes.json`, 'utf8')).find(row => row.pid === job.pid); }
+    catch { return null; }
+  };
+  await until(() => existsSync(job.exit) && savedWrapper());
+  const identity = savedWrapper();
+  const wrapperEnded = () => {
+    try { process.kill(job.pid, 0); } catch (error) { return error.code === 'ESRCH'; }
+    if (!['darwin', 'linux'].includes(process.platform)) return false;
+    const row = spawnSync('ps', ['-ww', '-o', 'pid=,stat=,lstart=', '-p', String(job.pid)], { encoding: 'utf8', timeout: 2000,
+      env: { PATH: process.env.PATH, LC_ALL: 'C' } });
+    const match = row?.status === 0 && /^\s*(\d+)\s+(\S+)\s+((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) .{20})\s*$/.exec(String(row.stdout));
+    return Boolean(match) && (match[2].startsWith('Z') || match[3].trim() !== identity.start);
+  };
+  await until(wrapperEnded);
   assert.equal(existsSync(`${job.token}.processes.error`), false);
-  assert.equal((await cleanupAgentJob(job)).confirmed, true);
+  const result = await cleanupAgentJob(job);
+  if (result.confirmed !== true) {
+    let custody = null;
+    try { custody = JSON.parse(readFileSync(`${job.token}.processes.custody.json`, 'utf8')); } catch {}
+    const latest = Array.isArray(custody?.observations) ? custody.observations.at(-1) : null;
+    assert.fail(JSON.stringify({
+      cleanup: { confirmed: result.confirmed === true, stopped: result.stopped, killed: result.killed, remaining: result.remaining },
+      savedBoundary: Number.isFinite(job.custodyBoundary) ? job.custodyBoundary : null,
+      latestCustody: latest ? { reason: latest.reason, identities: Array.isArray(latest.identities)
+        ? latest.identities.map(row => ({ pid: row.pid, start: row.start })) : [] } : null,
+    }));
+  }
+  assert.equal(result.confirmed, true);
+});
+
+test('a cwd-read failure keeps only a same-identity live process in custody', { skip: !['darwin', 'linux'].includes(process.platform) }, async t => {
+  const lstart = at => {
+    const date = new Date(at), days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'], months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const two = value => String(value).padStart(2, '0');
+    return `${days[date.getDay()]} ${months[date.getMonth()]} ${String(date.getDate()).padStart(2, ' ')} ${two(date.getHours())}:${two(date.getMinutes())}:${two(date.getSeconds())} ${date.getFullYear()}`;
+  };
+  const run = async (name, nextState, expected, olderSession = false) => t.test(name, async t => {
+    const dir = folder(t), token = join(dir, 'cwd-recheck.spec.json'), boundary = Date.now();
+    const wrapper = custodyRow(70061, '@wrapper', `node --wrapper ${token}`);
+    const suspect = custodyRow(70062, lstart(boundary), 'node candidate');
+    const session = olderSession ? { id: 70070, start: lstart(boundary - 60_000) } : null;
+    const caller = custodyRow(process.pid, '@caller', 'node test caller');
+    writeFileSync(token, JSON.stringify({ command: 'node', args: [], cwd: dir, log: join(dir, 'job.log'),
+      exit: join(dir, 'job.exit.json'), custodyRoot: dir, custodyBoundary: boundary }));
+    writeFileSync(`${token}.processes.json`, JSON.stringify([wrapper]));
+    let rows = [caller, suspect]; const signals = [];
+    const ports = { alive: () => false, list: () => rows,
+      cwd: pid => {
+        if (pid === suspect.pid) {
+          if (nextState === 'Z') rows = [caller, { ...suspect, state: 'Z' }];
+          const error = Error('synthetic cwd read failure'); error.code = 'EACCES'; throw error;
+        }
+        return '/outside/core-worktree';
+      }, spawnSync: (_command, args) => {
+        if (!session) return { status: 1, stdout: '' };
+        const selected = Number(args[args.indexOf('-p') + 1]);
+        if (selected === suspect.pid) return { status: 0, stdout: `${suspect.pid} ${session.id} ${suspect.uid} S ${suspect.start}\n` };
+        if (selected === session.id) return { status: 0, stdout: `${session.id} ${session.id} 0 Ss ${session.start}\n` };
+        return { status: 1, stdout: '' };
+      }, kill: (...args) => signals.push(args) };
+    const result = await cleanupAgentJob({ pid: wrapper.pid, token }, ports);
+    assert.equal(result.confirmed, expected);
+    assert.deepEqual(signals, []);
+    if (expected) {
+      assert.equal(existsSync(`${token}.processes.custody.json`), false);
+      assert.equal(existsSync(`${token}.processes.error`), false);
+    } else {
+      const record = JSON.parse(readFileSync(`${token}.processes.custody.json`, 'utf8'));
+      assert.ok(record.observations.at(-1).identities.some(row => row.pid === suspect.pid && row.start === suspect.start));
+    }
+  });
+  await run('a process rechecked as a zombie no longer holds cleanup', 'Z', true);
+  await run('the same identity rechecked as live still holds cleanup', 'S', false);
+  await run('a live candidate in a provably older session does not hold cleanup', 'S', true, true);
 });
 
 test('a persistent source cwd is not custody without an explicit disposable root', async t => {
@@ -427,6 +604,26 @@ test('a legacy process-group member stays held by identity after leaving the che
   assert.equal(recovered.confirmed, true);
   assert.equal(JSON.parse(readFileSync(`${f.token}.processes.custody.json`, 'utf8')).resolution.manifestConfirmed, false);
   assert.deepEqual(signals, [], 'the legacy process is never signalled');
+});
+
+test('legacy cleanup reopens a resolved record when a new process enters the checkout', { skip: !['darwin', 'linux'].includes(process.platform) }, async t => {
+  const f = legacyFixture(t), first = custodyRow(900009, '@legacy-first', 'node first helper');
+  let late = null, rows = [cleanCallerRow(), first];
+  const ports = { legacyCustodyRoot: f.root, list: () => rows,
+    cwd: pid => pid === first.pid || pid === late?.pid ? f.root : '/outside/core-worktree',
+    kill: () => assert.fail('legacy cleanup never signals a process') };
+  assert.equal((await cleanupAgentJob(f.job, ports)).confirmed, false, 'the first in-root helper is retained');
+  rows = [cleanCallerRow()];
+  assert.equal((await cleanupAgentJob(f.job, ports)).confirmed, true, 'a complete later scan resolves the exited helper');
+  const resolved = JSON.parse(readFileSync(`${f.token}.processes.custody.json`, 'utf8'));
+  assert.ok(resolved.resolution);
+
+  late = custodyRow(900010, 'Wed Nov 11 10:01:00 2026', 'node late helper');
+  rows = [cleanCallerRow(), late];
+  assert.equal((await cleanupAgentJob(f.job, ports)).confirmed, false, 'a later process must invalidate the old resolution');
+  const reopened = JSON.parse(readFileSync(`${f.token}.processes.custody.json`, 'utf8'));
+  assert.equal(reopened.resolution, null);
+  assert.ok(reopened.observations.at(-1).identities.some(identity => identity.pid === late.pid));
 });
 
 test('an incomplete legacy process table remains retryable and a current wrapper blocks clearance', { skip: !['darwin', 'linux'].includes(process.platform) }, async t => {

@@ -10,6 +10,7 @@ import { promptHeaderHash } from '../src/file-owner.mjs';
 import { coreWorld } from './helpers/core-world.mjs';
 import { autopilotEngine, busySlots, coreSettings, failingTests, readyIssues, coreStatus, tickCore } from '../src/autopilot-core.mjs';
 import { listReportDrafts, sendReportDraft } from '../src/autopilot-reports.mjs';
+import { cleanupAgentJob } from '../src/agent-job.mjs';
 
 const MIN = 60 * 1000, HOUR = 60 * MIN;
 const endComments = (w, n) => w.comments(n).filter(body => body.includes('<!-- pdd:autopilot-core:end:'));
@@ -3687,13 +3688,12 @@ test('a replacement vector run waits for confirmed cleanup of its saved process 
   Object.assign(record, { head, agentHead: head, review: { ...record.review, head }, suite: { ...record.suite, head } });
   writeFileSync(join(w.root, 'jobs', '17.json'), JSON.stringify(record));
 
-  const snapshots = [], cleanups = [];
-  w.jobs.snapshot = part => { snapshots.push(part.pid); part.processes = [{ pid: part.pid, start: 'saved-start', command: 'saved command' }]; return part.processes; };
+  const cleanups = [];
   w.jobs.cleanup = async part => { cleanups.push(part.pid); return { confirmed: false }; };
   await w.tick();
   assert.equal(jobFile(w, 17).vectors.agent.pid, old.pid, 'an uncertain cleanup retains the old process record');
   assert.equal(w.started.filter(part => part.role === 'vectors').length, 1, 'it does not start a replacement');
-  assert.deepEqual(snapshots, [old.pid]); assert.deepEqual(cleanups, [old.pid]);
+  assert.deepEqual(cleanups, [old.pid]);
 
   w.jobs.cleanup = async part => { cleanups.push(part.pid); w.jobs.stop(part); return { confirmed: true }; };
   await w.tick();
@@ -3707,8 +3707,7 @@ test('quiet review and suite retries retain their process records until cleanup 
   w.issue(17); await w.tick();
   w.build(17, { result: { promptChanged: false } }); await w.tick();
   const review = w.job(17, 'review'), suite = w.job(17, 'suite');
-  const snapshots = [], cleanups = [];
-  w.jobs.snapshot = part => { snapshots.push(part.pid); part.processes = [{ pid: part.pid, start: 'saved-start', command: 'saved command' }]; return part.processes; };
+  const cleanups = [];
   w.jobs.cleanup = async part => { cleanups.push(part.pid); return { confirmed: false }; };
   w.advance(10 * MIN); await w.tick();
   w.advance(20 * MIN); await w.tick();
@@ -3718,7 +3717,6 @@ test('quiet review and suite retries retain their process records until cleanup 
   assert.equal(retained.suite.agent.pid, suite.pid, 'the quiet suite record remains');
   assert.equal(w.started.filter(part => part.role === 'review').length, 1, 'no replacement reviewer starts');
   assert.equal(w.started.filter(part => part.role === 'suite').length, 1, 'no replacement suite starts');
-  assert.deepEqual([...new Set(snapshots)].sort((a, b) => a - b), [review.pid, suite.pid]);
   assert.deepEqual([...new Set(cleanups)].sort((a, b) => a - b), [review.pid, suite.pid]);
 });
 
@@ -3733,7 +3731,6 @@ test('a changed head retains active review and suite records until cleanup is co
   record.review.head = 'old-review-head'; record.suite.head = 'old-suite-head';
   writeFileSync(join(w.root, 'jobs', '17.json'), JSON.stringify(record));
   const cleanups = [];
-  w.jobs.snapshot = part => { part.processes = [{ pid: part.pid, start: 'saved-start', command: 'saved command' }]; return part.processes; };
   w.jobs.cleanup = async part => { cleanups.push(part.pid); return { confirmed: false }; };
   await w.tick();
   const retained = jobFile(w, 17);
@@ -3750,7 +3747,6 @@ test('a failed cleanup retains active checks instead of starting a repair', asyn
   w.issue(17); await w.tick();
   const { head } = w.build(17, { result: { promptChanged: false } }); await w.tick();
   const review = w.job(17, 'review'), suite = w.job(17, 'suite');
-  w.jobs.snapshot = part => { part.processes = [{ pid: part.pid, start: 'saved-start', command: 'saved command' }]; return part.processes; };
   w.jobs.cleanup = async () => ({ confirmed: false });
   w.github.setChecks(head, 'failure');
   await w.tick();
@@ -3768,7 +3764,6 @@ test('a failed cleanup retains active checks instead of starting a conflict agen
   const record = jobFile(w, 17);
   record.mechanical = { head, files: ['change-17.txt'] };
   writeFileSync(join(w.root, 'jobs', '17.json'), JSON.stringify(record));
-  w.jobs.snapshot = part => { part.processes = [{ pid: part.pid, start: 'saved-start', command: 'saved command' }]; return part.processes; };
   w.jobs.cleanup = async () => ({ confirmed: false });
   w.github.setChecks(head, 'failure');
   await w.tick();
@@ -3788,7 +3783,6 @@ test('a failed cleanup retains active checks before a base refresh changes the h
   Object.assign(record.review, { verdict: 'PASS', mustFix: [] });
   writeFileSync(join(w.root, 'jobs', '17.json'), JSON.stringify(record));
   w.baseCommit('other.txt', 'base moved\n');
-  w.jobs.snapshot = part => { part.processes = [{ pid: part.pid, start: 'saved-start', command: 'saved command' }]; return part.processes; };
   w.jobs.cleanup = async part => part.role === 'build' ? { confirmed: true } : { confirmed: false };
   await w.tick();
   const retained = jobFile(w, 17);
@@ -3798,18 +3792,61 @@ test('a failed cleanup retains active checks before a base refresh changes the h
   assert.equal(w.started.filter(part => part.role === 'suite').length, 1);
 });
 
-test('local cleanup keeps the job record and worktree when process cleanup cannot be proved', async t => {
+test('local cleanup leaves process proof to its cleanup port and retains the job on an uncertain result', async t => {
   const w = await coreWorld(t, { settings: { runs: 1 } });
   w.issue(17); await w.tick();
   const before = jobFile(w, 17);
-  let attempts = 0;
-  w.jobs.read = () => { throw Error('status read unavailable'); };
-  w.jobs.cleanup = async () => { attempts++; return { confirmed: false }; };
+  const events = []; let attempts = 0, savedBeforeCleanup = false;
+  w.jobs.read = () => { events.push('read'); return { state: 'running' }; };
+  w.jobs.snapshot = () => { events.push('snapshot'); throw Error('separate snapshot must not run here'); };
+  w.jobs.cleanup = async part => { events.push('cleanup'); attempts++; savedBeforeCleanup = jobFile(w, 17)?.agent?.pid === part.pid; return { confirmed: false }; };
   w.github.label(17, 'pdd:stuck');
   await w.tick();
-  assert.ok(attempts > 0, 'a failed status read still reaches the cleanup proof port');
+  assert.ok(attempts > 0, 'cleanup reaches its proof port');
+  assert.equal(events[0], 'cleanup', 'the cleanup port owns the proof path');
+  assert.equal(events.includes('snapshot'), false, 'the core does not take a separate snapshot');
+  assert.equal(savedBeforeCleanup, true, 'the core job record is saved before cleanup effects');
   assert.ok(jobFile(w, 17), 'the retry record stays');
   assert.equal(existsSync(before.worktree), true, 'the worktree stays with the uncertain process ownership');
+});
+
+test('core cleanup retries a failed pre-signal capture through the job cleanup port', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); await w.tick();
+  const part = w.job(17, 'build'), signals = [];
+  const wrapper = { pid: part.pid, ppid: 1, pgid: part.pid, rss: 1, start: `@wrapper-${part.pid}`, args: `node --wrapper ${part.token}` };
+  const agent = { pid: part.pid + 10000, ppid: part.pid, pgid: part.pid, rss: 1, start: `@agent-${part.pid}`, args: 'node agent' };
+  let rows = null, cleanupCalls = 0, retryHistory = null;
+  w.jobs.read = () => ({ state: 'running' });
+  w.jobs.snapshot = () => assert.fail('core cleanup delegates capture to its cleanup port');
+  w.jobs.cleanup = async savedPart => {
+    cleanupCalls++;
+    assert.equal(jobFile(w, 17)?.agent?.pid, savedPart.pid, 'the core job is durable before cleanup begins');
+    const proof = await cleanupAgentJob(savedPart, { alive: pid => w.alive.has(pid), list: () => rows,
+      kill: (pid, signal) => {
+        signals.push([pid, signal]);
+        if (pid === -savedPart.pid && signal === 'SIGTERM') { w.alive.delete(savedPart.pid); rows = [agent]; }
+        else if (pid === agent.pid && signal === 'SIGTERM') rows = [];
+      }, sleep: async () => {}, grace: 1, poll: 1 });
+    const path = `${savedPart.token}.processes.cleanup-snapshot.json`;
+    if (existsSync(path)) retryHistory = JSON.parse(readFileSync(path, 'utf8'));
+    return proof;
+  };
+  w.github.label(17, 'pdd:stuck');
+  await w.tick();
+  assert.equal(cleanupCalls, 1);
+  assert.deepEqual(signals, []);
+  assert.ok(jobFile(w, 17));
+  assert.equal(existsSync(`${part.token}.processes.error`), false);
+  assert.equal(JSON.parse(readFileSync(`${part.token}.processes.cleanup-snapshot.json`, 'utf8')).resolutions.length, 0);
+
+  rows = [wrapper, agent];
+  await w.tick();
+  assert.equal(cleanupCalls, 2);
+  assert.deepEqual(signals, [[-part.pid, 'SIGTERM'], [agent.pid, 'SIGTERM']]);
+  assert.equal(existsSync(join(w.root, 'jobs', '17.json')), false, 'confirmed cleanup lets core finish local removal');
+  assert.equal(retryHistory.attempts.length, 1);
+  assert.equal(retryHistory.resolutions.length, 1);
 });
 
 test('legacy cleanup accepts only the exact core checkout and records its missing descendant history', { skip: !['darwin', 'linux'].includes(process.platform) }, async t => {

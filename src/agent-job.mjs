@@ -1,3 +1,4 @@
+// Generated from prompts/cli/agent-job.prompt.md (sha256: e9ca204deb7286f4ee34a14bb773fdb09c5444336be69af93b0b8c0464801f3f).
 import { execFile, spawn, spawnSync } from 'node:child_process';
 import { accessSync, closeSync, constants, fstatSync, openSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { setPriority } from 'node:os';
@@ -128,6 +129,47 @@ function markProcessUncertain(job, reason) {
   return null;
 }
 
+const cleanupSnapshotFile = token => `${token}.processes.cleanup-snapshot.json`;
+const validCleanupSnapshotRecord = value => object(value) && value.schema === 1 && Number.isSafeInteger(value.pid) && value.pid > 0
+  && typeof value.token === 'string' && Array.isArray(value.attempts) && value.attempts.length > 0
+  && value.attempts.every(row => object(row) && Number.isFinite(row.at) && typeof row.reason === 'string'
+    && (row.wrapper === null || processIdentity(row.wrapper) && row.wrapper.pid === value.pid))
+  && Array.isArray(value.resolutions) && value.resolutions.every(row => object(row) && Number.isFinite(row.at)
+    && Number.isSafeInteger(row.attempt) && row.attempt > 0 && row.attempt <= value.attempts.length
+    && (row.wrapper === null || processIdentity(row.wrapper) && row.wrapper.pid === value.pid));
+const resolvedCleanupAttempts = record => Math.max(0, ...record.resolutions.map(row => row.attempt));
+const cleanupSnapshotPending = record => record.attempts.length > resolvedCleanupAttempts(record);
+
+function cleanupSnapshotRecord(job) {
+  const value = readJson(cleanupSnapshotFile(job.token));
+  if (value === undefined) return { record: null, valid: true };
+  return validCleanupSnapshotRecord(value) && value.pid === job.pid && value.token === job.token
+    ? { record: value, valid: true } : { record: null, valid: false };
+}
+
+function recordCleanupSnapshotFailure(job, reason, wrapper = null) {
+  const file = cleanupSnapshotFile(job.token), previous = readJson(file);
+  if (previous !== undefined && (!validCleanupSnapshotRecord(previous) || previous.pid !== job.pid || previous.token !== job.token))
+    return markProcessUncertain(job, 'cleanup snapshot history invalid');
+  const record = previous ?? { schema: 1, pid: job.pid, token: job.token, attempts: [], resolutions: [] };
+  const known = wrapper && processIdentity(wrapper) && wrapper.pid === job.pid ? { pid: wrapper.pid, start: wrapper.start, args: wrapper.args } : null;
+  record.attempts.push({ at: Date.now(), reason, wrapper: known });
+  try { writeAtomic(file, JSON.stringify(record)); }
+  catch { return markProcessUncertain(job, 'cleanup snapshot history write failed'); }
+  return null;
+}
+
+function cleanupSnapshotMatches(record, wrapper) {
+  return record.attempts.slice(resolvedCleanupAttempts(record)).every(attempt => !attempt.wrapper || sameIdentity(attempt.wrapper, wrapper));
+}
+
+function resolveCleanupSnapshot(job, record, wrapper) {
+  const resolved = { ...record, resolutions: [...record.resolutions,
+    { at: Date.now(), attempt: record.attempts.length, wrapper: { pid: wrapper.pid, start: wrapper.start, args: wrapper.args } }] };
+  try { writeAtomic(cleanupSnapshotFile(job.token), JSON.stringify(resolved)); } catch { return null; }
+  return resolved;
+}
+
 const custodyFile = token => `${token}.processes.custody.json`;
 const validCustodyRecord = value => object(value) && value.schema === 1 && typeof value.root === 'string'
   && Array.isArray(value.observations) && value.observations.length > 0
@@ -196,6 +238,25 @@ function startsBeforeBoundary(row, boundary) {
   return Number.isFinite(start) && Math.floor(start / 1000) < Math.floor(boundary / 1000);
 }
 
+// The wrapper is detached into a new POSIX session. A candidate whose current
+// session leader predates that boundary cannot be its descendant. Missing or
+// changing PID/start/session evidence stays uncertain.
+function inOlderLinuxSession(row, job, boundary, ports = {}) {
+  if (process.platform !== 'linux' || !Number.isFinite(boundary)) return false;
+  const read = pid => {
+    const result = (ports.spawnSync ?? spawnSync)('ps', ['-ww', '-p', String(pid), '-o', 'pid=,sid=,uid=,state=,lstart='],
+      { encoding: 'utf8', timeout: 2000, env: { ...process.env, LC_ALL: 'C' } });
+    if (result?.status !== 0) return null;
+    const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) .{20})\s*$/.exec(String(result.stdout));
+    return match ? { pid: Number(match[1]), sid: Number(match[2]), uid: Number(match[3]), state: match[4], start: match[5].trim() } : null;
+  };
+  const current = read(row.pid);
+  if (!current || current.pid !== row.pid || current.uid !== row.uid || current.start !== row.start
+      || String(current.state).startsWith('Z') || !Number.isSafeInteger(current.sid) || current.sid <= 0 || current.sid === job.pid) return false;
+  const leader = read(current.sid);
+  return Boolean(leader && leader.pid === current.sid && leader.sid === current.sid && startsBeforeBoundary(leader, boundary));
+}
+
 // An explicit custody-root match can only retain the disposable worktree. It never
 // proves ownership and is never used to send a signal. The direct child has exited,
 // so an unsaved matching process is the late detached-helper case that the periodic
@@ -229,7 +290,11 @@ function worktreeCustody(job, custodyRoot, ports = {}, retained = [], legacy = f
     if (current === undefined) {
       latest ??= lifecycleRows(ports, true);
       if (!Array.isArray(latest)) return { reason: 'worktree inventory unavailable', root, identities: null };
-      if (latest.some(now => sameIdentity(row, now)) && !startsBeforeBoundary(row, boundary)) { identities.push(row); reason ??= 'cwd evidence unavailable for a live process'; }
+      const current = latest.find(now => sameIdentity(row, now));
+      if (current && !String(current.state ?? '').startsWith('Z') && !startsBeforeBoundary(row, boundary)
+          && !inOlderLinuxSession(row, job, boundary, ports)) {
+        identities.push(row); reason ??= 'cwd evidence unavailable for a live process';
+      }
       continue;
     }
     const deleted = / \(deleted\)$/.test(String(current)), path = String(current).replace(/ \(deleted\)$/, ''), actual = canonicalCwd(path);
@@ -263,7 +328,6 @@ function cleanupLegacyAgentJob(job, ports, manifest, errorFile, custodyPath) {
   } catch { return null; }
   const custody = readJson(custodyPath);
   if (custody !== undefined && (!validCustodyRecord(custody) || custody.legacy !== true || custody.root !== root)) return null;
-  if (custody?.resolution) return legacyCleanupResult();
   const retained = custody?.observations.flatMap(row => row.identities) ?? [];
   // Core supplies this only when it saved a job-level time before every part
   // spawn. A part's post-spawn `started` time is not a safe boundary.
@@ -288,24 +352,28 @@ function cleanupLegacyAgentJob(job, ports, manifest, errorFile, custodyPath) {
 
 // Save the tree while its parent links still exist. A later stop can then find a
 // helper that reparented itself after its direct agent exited.
-export function snapshotAgentJob(job, ports = {}) {
+export function snapshotAgentJob(job, ports = {}, { requireWrapper = false, cleanupSnapshot = false } = {}) {
   if (!(Number.isSafeInteger(job?.pid) && job.pid > 0)) return null;
   const manifestFile = `${job.token}.processes.json`;
-  const uncertain = reason => markProcessUncertain(job, reason);
+  const retryable = new Set(['inventory unavailable', 'live wrapper identity unavailable', 'incomplete inventory', 'process identity invalid']);
   const savedManifest = readJson(manifestFile);
-  if ((savedManifest !== undefined && !processManifest(savedManifest)) || (Array.isArray(job.processes) && !processManifest(job.processes))) return uncertain('manifest invalid');
+  if ((savedManifest !== undefined && !processManifest(savedManifest)) || (Array.isArray(job.processes) && !processManifest(job.processes))) return markProcessUncertain(job, 'manifest invalid');
   const saved = [...(savedManifest ?? []), ...(Array.isArray(job.processes) ? job.processes : [])];
-  if (saved.length && !processManifest(saved)) return uncertain('manifest invalid');
+  if (saved.length && !processManifest(saved)) return markProcessUncertain(job, 'manifest invalid');
+  const previousRoot = saved.find(row => row.pid === job.pid && String(row.args).includes(job.token)) ?? null;
+  const uncertain = (reason, wrapper = previousRoot) => cleanupSnapshot && retryable.has(reason)
+    ? recordCleanupSnapshotFailure(job, reason, wrapper) : markProcessUncertain(job, reason);
   let rows; try { rows = (ports.list ?? lifecycleRows)(ports); } catch { return uncertain('inventory unavailable'); }
   if (!Array.isArray(rows)) return uncertain('inventory unavailable');
   const root = rows.find(row => row.pid === job.pid && String(row.args).includes(job.token));
   if (!root) {
+    if (requireWrapper) return uncertain('live wrapper identity unavailable');
     if (saved.length) { job.processes = saved; return saved; }
     return uncertain('wrapper identity unavailable');
   }
   const current = descendants(rows, [root]);
-  if (current.incomplete) return uncertain('incomplete inventory');
-  if (!current.every(processIdentity)) return uncertain('process identity invalid');
+  if (current.incomplete) return uncertain('incomplete inventory', root);
+  if (!current.every(processIdentity)) return uncertain('process identity invalid', root);
   const byIdentity = new Map();
   for (const row of [...saved, ...current]) if (processIdentity(row)) byIdentity.set(`${row.pid}:${row.start}`, byIdentity.get(`${row.pid}:${row.start}`) ?? row);
   job.processes = [...byIdentity.values()];
@@ -326,7 +394,33 @@ export async function cleanupAgentJob(job, ports = {}) {
   if (job?.processesUncertain || errorFile && (() => { try { readFileSync(errorFile); return true; } catch { return false; } })()) return { confirmed: false, stopped: 0, killed: 0, remaining: 0 };
   const custody = custodyPath ? readJson(custodyPath) : undefined;
   if (custody !== undefined && !validCustodyRecord(custody)) return { confirmed: false, stopped: 0, killed: 0, remaining: 0 };
-  const saved = Array.isArray(job?.processes) ? job.processes : Array.isArray(manifest) ? manifest : null;
+  const snapshotState = typeof job?.token === 'string' && Number.isSafeInteger(job?.pid)
+    ? cleanupSnapshotRecord(job) : { record: null, valid: true };
+  if (!snapshotState.valid) {
+    markProcessUncertain(job, 'cleanup snapshot history invalid');
+    return { confirmed: false, stopped: 0, killed: 0, remaining: 0 };
+  }
+  const retryRecord = snapshotState.record;
+  const retryPending = retryRecord && cleanupSnapshotPending(retryRecord);
+  let saved = Array.isArray(job?.processes) ? job.processes : Array.isArray(manifest) ? manifest : null;
+  const live = (ports.alive ?? nativeAlive)(job.pid, job.token);
+  if (retryPending && !live) return { confirmed: false, stopped: 0, killed: 0, remaining: saved?.length ?? 1 };
+  if (live) {
+    const fresh = snapshotAgentJob(job, ports, { requireWrapper: true, cleanupSnapshot: true });
+    const error = errorFile && (() => { try { readFileSync(errorFile); return true; } catch { return false; } })();
+    if (!processManifest(fresh) || job.processesUncertain || error)
+      return { confirmed: false, stopped: 0, killed: 0, remaining: saved?.length ?? 1 };
+    saved = fresh;
+    if (retryPending) {
+      const wrapper = fresh.find(row => row.pid === job.pid && String(row.args).includes(job.token));
+      if (!wrapper || !cleanupSnapshotMatches(retryRecord, wrapper))
+        return { confirmed: false, stopped: 0, killed: 0, remaining: saved.length };
+      if (!resolveCleanupSnapshot(job, retryRecord, wrapper)) {
+        markProcessUncertain(job, 'cleanup snapshot history resolution failed');
+        return { confirmed: false, stopped: 0, killed: 0, remaining: saved.length };
+      }
+    }
+  }
   if (!processManifest(saved)) {
     const legacy = cleanupLegacyAgentJob(job, ports, manifest, errorFile, custodyPath);
     return legacy ?? { confirmed: false, stopped: 0, killed: 0, remaining: 0 };

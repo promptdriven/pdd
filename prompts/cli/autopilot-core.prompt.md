@@ -85,8 +85,9 @@ Runtime step (role `runtime`, like the suite: no P1, P2 or P3). Each tick, for e
   queue admitted it), each tick counts as new. Only the queue time is exempt: before the
   queue (`npm ci`, the start of the suite command) and after the admission, T1 applies as
   usual. The note and the backstop count from the process start. **End:** nothing new for `quietMinutes` (at least 2 ticks) stops the process.
-  Before every stop, snapshot the live identity and save the job, then use the headless
-  job runner cleanup. A quiet retry or a replacement for a new head starts only after
+  Before every stop, save the job and use the headless job runner cleanup. That cleanup
+  owns its fresh live-process capture and any stop; a separate status read or snapshot
+  is not cleanup proof. A quiet retry or a replacement for a new head starts only after
   cleanup confirms every saved identity is gone. If it cannot confirm, retain the old
   part record and retry cleanup on a later tick. The same proof is required before a
   repair, conflict update, base refresh or mechanical head change clears a saved part.
@@ -1644,9 +1645,9 @@ REST calls use `gh api --include --method M ENDPOINT [--input -]`. Also `now()`,
 room check and the job runner's default priority), `untestedStories(tree)` (default
 `findTests` of the preflight), `runtimeHealth()` (default `checkRuntimeHealth({env})`) and `resendChecks({root, since})`
 (default `resendableStoryChecks` with `env`) of the runtime client, and the replaceable `jobs`
-(`start`, `read`, `snapshot(part)`, `cleanup(part)`, `cpu`, `hangs`). `snapshot(part)`
-captures the live process identities in the saved part record. `cleanup(part)` stops only
-those captured identities and returns `{confirmed}`. `owners(numbers)`, `heartbeat(job)` and `checkBase(input)`
+(`start`, `read`, `snapshot(part)`, `cleanup(part)`, `cpu`, `hangs`). `cleanup(part)` owns
+the fresh process capture and stop, and returns `{confirmed}`. A separate status read or
+snapshot is not cleanup proof. `owners(numbers)`, `heartbeat(job)` and `checkBase(input)`
 with the native defaults named above.
 
 ## Dependencies
