@@ -14,11 +14,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  public:
-    # main and alpha require this check name; the offline Node suite owns that gate.
-    name: tests
+  test-shards:
+    name: test-shard (${{ matrix.shard }}/8)
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -38,7 +41,7 @@ jobs:
       - name: Run offline tests
         run: |
           set +e
-          npm test 2>&1 | tee "$RUNNER_TEMP/tests.tap"
+          node --import ./test/helpers/test-home.mjs --test --test-shard=${{ matrix.shard }}/8 test/*.test.mjs 2>&1 | tee "$RUNNER_TEMP/tests.tap"
           result=${PIPESTATUS[0]}
           exit "$result"
       - name: Summarize test counts
@@ -61,6 +64,18 @@ jobs:
           NODE
       - run: node bin/pdd.mjs --help
       - run: npm pack --ignore-scripts --dry-run
+
+  public:
+    # main and alpha require this check name; every offline test shard must pass.
+    name: tests
+    if: ${{ always() }}
+    needs: test-shards
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every test shard to pass
+        env:
+          SHARD_RESULT: ${{ needs.test-shards.result }}
+        run: test "$SHARD_RESULT" = success
 
   install-smoke:
     name: install-smoke
