@@ -25,7 +25,7 @@ None. File, issue and link effects use the three injectable ports declared below
 
 ```json
 {
-  "status": "draft",
+  "status": "approved",
   "prose_sha256": "c85acc6fa1b652338a39461c52dcb275f6c5dc9c60712248e5bf3c6c7429d233",
   "entries": [
     {

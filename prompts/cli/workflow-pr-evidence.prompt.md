@@ -55,7 +55,7 @@ For a bug run with `run.bugCause` from the completed reproduce record, prepend i
 
 ```json
 {
-  "status": "draft",
+  "status": "approved",
   "prose_sha256": "c6d61a73e1d44c7b6626d3469d158085053001f4dc44723637a94094646bedad",
   "entries": [
     {

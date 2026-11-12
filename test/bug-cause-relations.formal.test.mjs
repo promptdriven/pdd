@@ -54,6 +54,22 @@ test('bounded Story rules: 160 relation combinations and all quotes before write
   assert.equal(writes.length, 0);
 });
 
+test('issue #2841: malformed relation kinds are rejected before any link writes', async () => {
+  for (const kind of [['needs'], ['related'], [], ['needs', 'related'], null, 1, false, {}]) {
+    const writes = [];
+    const rows = [
+      { issue: 18, kind: 'needs', link: 'blocked by', source: 'issue:18', quote: 'present' },
+      { issue: 19, kind, link: kind?.[0] === 'related' ? 'none' : 'blocked by', source: 'issue:19', quote: 'present' }
+    ];
+    await assert.rejects(recordBugCause({ text: `Cause: value.mjs#value · Flaw: Fixed. · Class: value\nRelations: ${JSON.stringify(rows)}`, repository: 'owner/repo', number: 17, root: '/repo' }, {
+      code: { read: async () => ({ content: 'value' }) },
+      issues: { read: async ({ number }) => ({ json: JSON.stringify({ number, state: 'open', title: 'present', body: '' }) }) },
+      links: { ensure: async args => { writes.push(args); return { ok: true }; } }
+    }), { code: 'bug-cause-invalid' }, JSON.stringify(kind));
+    assert.deepEqual(writes, [], JSON.stringify(kind));
+  }
+});
+
 test('bounded check detects a planted missing quote check', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'pdd-2841-control-'));
   try {

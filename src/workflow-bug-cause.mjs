@@ -85,7 +85,7 @@ export async function recordBugCause({ text, repository, number, root }, supplie
   const seen = new Set(), allowed = { needs: ['blocked by'], 'same cause': ['none', 'blocked by'], 'same class': ['none', 'sub-issue'], duplicate: ['duplicate'], related: ['none'] };
   for (const row of selected) {
     if (!row || typeof row !== 'object' || Array.isArray(row) || Object.keys(row).sort().join(',') !== 'issue,kind,link,quote,source'
-      || !positive(row.issue) || row.issue === number || seen.has(row.issue) || !Object.hasOwn(allowed,row.kind) || !allowed[row.kind].includes(row.link)
+      || !positive(row.issue) || row.issue === number || seen.has(row.issue) || typeof row.kind !== 'string' || !Object.hasOwn(allowed,row.kind) || !allowed[row.kind].includes(row.link)
       || typeof row.quote !== 'string' || !row.quote.trim() || row.quote.length > 1000 || typeof row.source !== 'string') throw invalid('Invalid, repeated or incompatible issue relation.');
     seen.add(row.issue);
     let target;
