@@ -8,13 +8,12 @@ if (major < 22) {
   process.exitCode = 1;
 } else {
   import('../src/pdd-cli.mjs').then(async ({ runPdd }) => {
-    const { releaseNotice } = await import('../src/release-notice.mjs');
-    const { readFile } = await import('node:fs/promises');
-    try {
+    process.exitCode = await runPdd(process.argv.slice(2), { releaseNotice: async () => {
+      const { releaseNotice } = await import('../src/release-notice.mjs');
+      const { readFile } = await import('node:fs/promises');
       const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
       const { notice } = await releaseNotice({ version: pkg.version, ci: process.env.CI });
       if (notice) process.stderr.write(notice);
-    } catch {}
-    process.exitCode = await runPdd(process.argv.slice(2));
+    } });
   });
 }

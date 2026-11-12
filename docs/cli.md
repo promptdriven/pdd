@@ -4,7 +4,7 @@ This page lists every command of pdd 0.1.28, as `pdd --help` shows it. A test (`
 
 You need the pdd command only for runs with PRs, for `pdd test`, `pdd lint`, `pdd simulate` and `pdd approve`. Install the skills with `npx skills add promptdriven/pdd` (add `-g` for all your projects), and set up a repo with the `pdd-setup` skill in your agent. For simulations that your agent drives, use the Try tools in `pdd mcp`. Then use a PDD skill: `pdd-feature`, `pdd-bug`, `pdd-small-change`, `pdd-product` or `pdd-prompting`. Call a skill with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code (or ask for it by name). See [Install](USAGE.md#2-install).
 
-Outside CI, pdd checks GitHub for a newer stable release before each command and prints the update command to stderr when one is available. The check is best effort; pdd never installs an update automatically.
+Outside CI, pdd checks GitHub for a newer stable release before eligible parsed commands and prints the update command to stderr when one is available. Help, completion, workflow list and view, and test commands skip the check. The check is best effort; pdd never installs an update automatically.
 
 Typing `pdd check` or `pdd try` runs nothing and prints the name of the command to use.
 

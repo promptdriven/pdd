@@ -16,4 +16,4 @@ Load the local public `runPdd`, pass process.argv.slice(2), and assign the retur
 
 Read the entire [Prompting guide](../../docs/prompting-guide.md) before authoring prompts or Stories. Follow [public alpha boundary](public-boundary.prompt.md) for scope and the shared local command contract.
 
-After the Node check, ask the [release notice](release-notice.prompt.md) for a notice before running each command. Write a nonempty notice to stderr; the notice must not change command stdout or exit status. CI skips the check. Never install or update pdd automatically.
+After the Node check, supply the dispatcher a best-effort callback that asks the [release notice](release-notice.prompt.md) for a notice. Write a nonempty notice to stderr; the notice must not change command stdout or exit status. The dispatcher selects eligible commands after parsing. CI skips the check. Never install or update pdd automatically.

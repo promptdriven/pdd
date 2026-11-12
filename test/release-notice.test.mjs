@@ -2,6 +2,7 @@ import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { releaseNotice } from '../src/release-notice.mjs';
+import { runPdd } from '../src/pdd-cli.mjs';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -41,8 +42,26 @@ test('the actual entry prints one notice without changing command stdout or exit
     const workflow = spawnSync(process.execPath, [resolve('bin/pdd.mjs'), 'workflow', '--help'], { encoding: 'utf8', env: { ...env, CI: 'true' }, timeout: 5000 });
     assert.equal(workflow.status, 0);
     assert.doesNotMatch(workflow.stderr, /update available/);
-    assert.equal(readFileSync(marker, 'utf8'), 'fetch\nfetch\n');
+    const ciVersion = spawnSync(process.execPath, [resolve('bin/pdd.mjs'), '--version'], { encoding: 'utf8', env: { ...env, CI: 'true' }, timeout: 5000 });
+    assert.equal(ciVersion.status, 0);
+    assert.equal(ciVersion.stdout, version + '\n');
+    assert.doesNotMatch(ciVersion.stderr, /update available/);
+    const invalid = spawnSync(process.execPath, [resolve('bin/pdd.mjs'), 'check', '--fill-hash'], { encoding: 'utf8', env, timeout: 5000 });
+    assert.equal(invalid.status, 2);
+    assert.equal(readFileSync(marker, 'utf8'), 'fetch\n');
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('dispatcher selects notice after parsing and ignores notice failures', async () => {
+  let calls = 0;
+  const stream = () => ({ text: '', write(chunk) { this.text += chunk; } });
+  const run = argv => runPdd(argv, { stdout: stream(), stderr: stream(), pathDiagnostic: () => [],
+    releaseNotice: async () => { calls++; throw new Error('offline'); } });
+  assert.equal(await run(['--help']), 0);
+  assert.equal(await run(['check', '--fill-hash']), 2);
+  assert.equal(calls, 0);
+  assert.equal(await run(['--version']), 0);
+  assert.equal(calls, 1);
 });
 
 test('native lookup stays silent when offline or aborted', async () => {
