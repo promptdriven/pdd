@@ -37,3 +37,5 @@ Machine-read words keep `check` and `try`, because servers, saved files and scri
 The package may include a licensed, attributed vendored public TOML parser under `src/vendor/` for safe config validation. It requires no npm install or registry access at runtime.
 
 The local metrics routes dispatch to the metrics command; they require no interpreter call.
+
+The executable may perform the best-effort public release lookup specified by [release notice](release-notice.prompt.md) for eligible parsed commands as selected by the [dispatcher](pdd-cli.prompt.md); it sends no token and does not change the command result.
