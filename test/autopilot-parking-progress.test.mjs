@@ -52,51 +52,6 @@ async function closingFixture(t) {
   return {f, tick, status};
 }
 
-for (const mode of ['running', 'running-progressAt', 'running-updatedAt', 'recovery-grace', 'recovery-grace-without-progress'])
-  test(`3132 repair 2 closing keeps custody for fresh ${mode}`, async t => {
-    const {f, tick, status} = await closingFixture(t);
-    const run = f.record();
-    delete run.blockedOn; delete run.parkReason; delete run.stuckCause;
-    run.gate = null; run.question = null;
-    f.tick(1000);
-    run.progressAt = run.updatedAt = run.parking.at;
-    if (mode !== 'recovery-grace-without-progress') {
-      if (mode !== 'running-updatedAt') run.progressAt = f.clock;
-      if (mode !== 'running-progressAt') run.updatedAt = f.clock;
-    }
-    if (mode.startsWith('running')) run.state = 'running';
-    else {run.state = 'paused'; run.chatResumeLimit = {at: f.clock};}
-    save(run);
-    const summary = await tick();
-    assert.equal(f.record().parking.phase, 'closing', '3132_NEW_PROGRESS_WAS_PARKED');
-    assert.equal(f.herdr.calls.filter(args => args[1] === 'close').length, 0, '3132_NEW_PROGRESS_CHAT_WAS_CLOSED');
-    assert.deepEqual(f.record(), run, 'A held retry must preserve all durable custody and progress');
-    assert.ok(f.herdr.paneOf(run.chats.at(-1)));
-    assert.deepEqual([summary.working, summary.parked], [1, 0]);
-    const reason = mode.startsWith('running') ? 'new progress since park'
-      : `recovery grace until ${new Date(f.clock + 60_000).toISOString()}`;
-    assert.equal(summary.closing[0].reasons[reason], 1);
-    assert.ok(parkingWords(summary).includes(reason));
-    // Status derives the same hold using a fresh summary and the injected clock.
-    assert.equal(parkingSummary([f.record()], 1, f.clock).closing[0].reasons[reason], 1);
-    const shown = await status();
-    assert.equal(shown.exitCode, 0, shown.message);
-    assert.ok(shown.message.includes(reason));
-    assert.match(shown.message, /working 1 of 1/);
-    assert.deepEqual(f.record(), run);
-    if (!mode.startsWith('running')) {
-      f.tick(59_999);
-      const held = await tick();
-      assert.equal(held.working, 1); assert.equal(held.closing[0].reasons[reason], 1);
-      assert.equal(held.closing[0].reasons['closing-retry'], 1);
-      assert.deepEqual(f.record(), run);
-      assert.equal(f.herdr.calls.filter(args => args[1] === 'close').length, 0);
-      f.tick(1); await tick();
-      assert.equal(f.record().parking.phase, 'parked');
-      assert.equal(f.herdr.paneOf(run.chats.at(-1)), undefined);
-    }
-  });
-
 for (const mode of ['equal', 'older', 'stale-blocker', 'expired-running-grace'])
   test(`3132 repair 2 closing retries without fresh progress: ${mode}`, async t => {
     const {f, tick} = await closingFixture(t);

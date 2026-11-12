@@ -65,7 +65,7 @@ test('draft reads declared shared contracts and expands schema references for li
     writeFileSync(join(repo,'contracts/shapes.json'),JSON.stringify({order:iface.entries[0].input_schema}));
     iface.entries[0].input_schema={$contract:'contracts/shapes.json#/order'};
     writeFileSync(join(repo,'contracts/interface.json'),JSON.stringify(iface));
-    writeFileSync(file,text.replace(block[0],'').replace('## Dependencies','## Dependencies\n\n[Interface](../contracts/interface.json).\n[Shapes](../contracts/shapes.json).'));
+    writeFileSync(file,text.replace(block[0],'').replace('## Dependencies','## Dependencies\n\n- [Interface](../contracts/interface.json): required contract context.\n- [Shapes](../contracts/shapes.json): required schema context.'));
   });
   // Harbor's prompt is one directory deep, so dependency paths are relative to it.
   const file=join(setup.repo,PLACE);

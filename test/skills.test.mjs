@@ -18,9 +18,9 @@ const AREAS = {
   'pdd-feature': [['story', ['understand', 'visual', 'prompt-story'], ['visual'], 'approve'],
     ['prompt-pr', ['check', 'try'], ['try'], 'pr', 'ask-code', 'approve'], ['code', ['build', 'verify', 'formal', 'review'], [], 'pr']],
 };
-// #2890: the Autopilot skills. Each workflow skill also has steps/autopilot.md: instructions, not a workflow step.
-const AUTOPILOT_SKILLS = ['pdd-autopilot', 'pdd-check', 'pdd-merge'];
-const ALL_SKILLS = ['pdd-prompting', 'pdd-setup', 'pdd-product', 'pdd-graph', ...AUTOPILOT_SKILLS, ...Object.keys(AREAS)];
+const ALL_SKILLS = ['pdd-prompting', 'pdd-setup', 'pdd-product', 'pdd-graph', ...Object.keys(AREAS)];
+// Skills that the package does not ship. pdd setup removes their pdd-owned copies.
+const RETIRED_SKILLS = ['pdd-autopilot', 'pdd-check', 'pdd-merge'];
 // 0.1.7: the size that counts is what one agent loads. The main chat loads SKILL.md; each subagent loads one step file
 // and the RUNBOOK sections it points to. prompt-story alone also loads the 16 KB guide, and it carries the most real-run rules
 // (1.6 KB since the round-2 cli test: a CLI has one program prompt).
@@ -51,10 +51,11 @@ test('SKILLS1: each new skill has standard frontmatter that names its own folder
 });
 
 // Wrong: the skill copy of the guide drifts from docs/prompting-guide.md.
-test('SKILLS2: pdd-prompting guide.md and RUNBOOK.md equal the canonical files byte for byte', () => {
+test('SKILLS2: pdd-prompting guide.md, story-guide.md and RUNBOOK.md equal the canonical files byte for byte', () => {
   assert.deepEqual(readFileSync(join(skills, 'pdd-prompting/guide.md')), readFileSync(join(root, 'docs/prompting-guide.md')));
+  assert.deepEqual(readFileSync(join(skills, 'pdd-prompting/story-guide.md')), readFileSync(join(root, 'docs/story-guide.md')));
   assert.deepEqual(readFileSync(join(skills, 'pdd-prompting/RUNBOOK.md')), readFileSync(join(root, 'RUNBOOK.md')));
-  assert.deepEqual(readdirSync(join(skills, 'pdd-prompting')).sort(), ['RUNBOOK.md', 'SKILL.md', 'guide.md', 'review.md', 'verification-recipe.md', 'verification-setup.md']);
+  assert.deepEqual(readdirSync(join(skills, 'pdd-prompting')).sort(), ['RUNBOOK.md', 'SKILL.md', 'autopilot-job-rules.md', 'guide.md', 'review.md', 'story-guide.md', 'verification-recipe.md', 'verification-setup.md']);
 });
 
 // Wrong: the core page grows past one page or loses the core rules that pdd session inlines.
@@ -72,9 +73,7 @@ test('SKILLS4: workflow skills have version 2 areas, one step file per step, and
     const definition = JSON.parse(read(`${name}/workflow.json`));
     assert.deepEqual(definition, { version: 2, areas: areas.map(([area, steps, optional, gate, then, before]) => ({ name: area, steps, optional, gate, ...(before ? { before } : {}), ...(then ? { then } : {}), ...(area === 'code' ? {replay_evidence:'pdd.replay-evidence.v1'} : {}) })) });
     const steps = [...new Set(areas.flatMap(([, list]) => list))];
-    assert.ok(!steps.includes('autopilot'), `${name}: autopilot is not a workflow step`);
-    assert.deepEqual(readdirSync(join(skills, name, 'steps')).sort(), [...steps, 'autopilot'].map(step => `${step}.md`).sort(), name);
-    assert.ok(statSync(join(skills, name, 'steps/autopilot.md')).size <= SKILL_LIMIT, `${name}/steps/autopilot.md`);
+    assert.deepEqual(readdirSync(join(skills, name, 'steps')).sort(), steps.map(step => `${step}.md`).sort(), name);
     for (const step of steps) {
       const lines = read(`${name}/steps/${step}.md`).trimEnd().split('\n');
       assert.ok(lines.length <= 15, `${name}/${step} has ${lines.length} lines`);
@@ -83,7 +82,8 @@ test('SKILLS4: workflow skills have version 2 areas, one step file per step, and
     }
     const { body } = frontmatter(read(`${name}/SKILL.md`));
     for (const [area, list, optional, gate, , before] of areas) {
-      const shown = list.map(step => optional.includes(step) ? `${step}?` : step).join(', ');
+      // #3227 battle N3: agents read a bare step name ("story: understand") as a file name, so each step is its real path.
+      const shown = list.map(step => `steps/${step}.md${optional.includes(step) ? ' (optional)' : ''}`).join(', ');
       assert.ok(body.includes(`${area}: ${shown} → ${before ? `${before}, then ` : ''}gate: ${gate}`), `${name} lists ${area}`);
     }
     const skillBytes = statSync(join(skills, name, 'SKILL.md')).size;
@@ -91,6 +91,15 @@ test('SKILLS4: workflow skills have version 2 areas, one step file per step, and
     // The total is for information only: no one agent loads every file.
     t.diagnostic(`${name}: ${filesUnder(join(skills, name)).reduce((sum, file) => sum + statSync(file).size, 0)} bytes in all`);
     assert.deepEqual(readdirSync(join(skills, name)).sort(), ['SKILL.md', 'steps', 'workflow.json']);
+  }
+});
+
+// Wrong (#3227 battle N3): a SKILL.md names a step file that does not exist, so the agent's read fails and the rest of
+// its command (often the RUNBOOK read) never runs.
+test('SKILLS4b: every steps/NAME.md that a SKILL.md names exists', () => {
+  for (const name of ALL_SKILLS) {
+    const named = [...read(`${name}/SKILL.md`).matchAll(/\bsteps\/([a-z0-9-]+\.md)/g)].map(m => m[1]);
+    for (const file of named) assert.ok(existsSync(join(skills, name, 'steps', file)), `${name}/SKILL.md names steps/${file}`);
   }
 });
 
@@ -135,7 +144,7 @@ test('SKILLS7: pdd-setup states one marked block of at most 10 lines that names 
   const block = lines.slice(lines.indexOf('<!-- pdd:start -->'), lines.indexOf('<!-- pdd:end -->') + 1);
   assert.ok(block.length >= 3 && block.length <= 10, `${block.length} lines`);
   // Codex calls a skill with $name, Claude Code with /name.
-  for (const word of ['Skills: pdd-prompting (the Prompting guide), pdd-feature, pdd-bug, pdd-small-change, pdd-product, pdd-setup, pdd-graph, pdd-autopilot, pdd-check and pdd-merge. Call one with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code, or just ask for it by name.', 'pdd workflow run NAME ISSUE', 'RUNBOOK.md'])
+  for (const word of ['Skills: pdd-prompting (the Prompting guide), pdd-feature, pdd-bug, pdd-small-change, pdd-product, pdd-setup and pdd-graph. Call one with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code, or just ask for it by name.', 'pdd workflow run NAME ISSUE', 'RUNBOOK.md'])
     assert.ok(block.join('\n').includes(word), word);
   assert.equal(lines.filter(line => line === '<!-- pdd:start -->').length, 1);
   assert.ok(Buffer.byteLength(text) <= 3584);
@@ -702,218 +711,15 @@ test('SKILLS50: approval instructions reject automatic chat authority and lexica
   assert.doesNotMatch(book, /optional native Herdr area-chat evidence work/);
 });
 
-// #2890: Autopilot skills. These check the written contract only; they do not prove that an agent follows it.
-const WORKFLOWS = Object.keys(AREAS);
-const has = (path, ...phrases) => { const text = path === 'pdd-merge/SKILL.md' || path === 'pdd-autopilot/SKILL.md' ? read('pdd-autopilot/steps/handoff.md') + '\n' + read(path) : read(path); for (const phrase of phrases) assert.ok(text.includes(phrase), `${path}: ${phrase}`); return text; };
-const TRUST_RULE = 'trusted = the repo owner + write access + people added with `pdd autopilot trust`';
-
-// Wrong: a new skill is too big for one agent to load, or carries a version that pdd setup calls stale.
-test('AUTOPILOT1: the Autopilot skills fit their byte limits and carry the package version', () => {
-  const version = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
-  for (const name of AUTOPILOT_SKILLS) {
-    assert.ok(statSync(join(skills, name, 'SKILL.md')).size <= SKILL_LIMIT, name);
-    assert.deepEqual(readdirSync(join(skills, name)).sort(), name === 'pdd-autopilot' ? ['SKILL.md', 'steps'] : ['SKILL.md'], name);
-    if (name === 'pdd-autopilot') assert.deepEqual(readdirSync(join(skills, name, 'steps')).sort(), ['dependencies.md', 'handoff.md', 'sort.md']);
-    assert.match(read(`${name}/SKILL.md`), new RegExp(`\\nmetadata:\\n  pdd-skills: ${version.replaceAll('.', '\\.')}\\n`), name);
-  }
+// #3242: the package no longer ships the old coordinator skills.
+test('SKILLS51: retired coordinator skills are not shipped', () => {
+  for (const name of RETIRED_SKILLS) assert.equal(existsSync(join(skills, name)), false, name);
 });
 
-// Wrong: Autopilot text changes the person-led path, or a workflow skill never points to its Autopilot instructions.
-test('AUTOPILOT2: observe and auto use steps/autopilot.md', () => {
-  for (const name of WORKFLOWS) {
-    has(`${name}/SKILL.md`, '- If Autopilot is `observe` or `auto`, read `steps/autopilot.md` first.', 'A person decides expected values.');
-    has(`${name}/steps/autopilot.md`, 'only when `autopilot.mode` in the root `pdd.json` is `observe` or `auto`', 'With `off` or no value, SKILL.md applies as written.',
-      'A fresh pdd-check checks', 'its PASS is checker evidence, not approval', 'Optional steps: do not ask.', 'Merge: pdd-merge, not a person.');
-  }
-  has('pdd-autopilot/SKILL.md', 'If `autopilot.mode` is absent or `off`, do nothing; a person leads.', '`observe`: do all the work; a person merges.');
-  has('pdd-merge/SKILL.md', 'If `autopilot.mode` is absent or `off`, a person merges as RUNBOOK §2 says.', '`observe`: when all the conditions below are true, write one PR comment "Would merge" with the facts; a person merges.');
-});
-
-// Wrong: an outside author's text reaches the agent, or an outside author's PR merges without a trusted person.
-test('AUTOPILOT3: the trust rule is verbatim, the agent reads only trusted text, and outside authors get a draft PR', () => {
-  has('pdd-autopilot/SKILL.md', TRUST_RULE, "Read only trusted people's text: the issue body and comments.",
-    'On a public repo, do not read an issue from another author until a trusted person comments on it.');
-  has('pdd-check/SKILL.md', "Read only trusted people's text");
-  has('pdd-merge/SKILL.md', 'an issue from a person who is not trusted (pdd-autopilot) gets a draft PR, and a trusted person merges it.');
-});
-
-// Wrong: the builder checks its own work, or a verdict does not say who checked which head.
-test('AUTOPILOT4: the checker is fresh, prefers another family, labels a same-family check, and binds the verdict to the head', () => {
-  has('pdd-check/SKILL.md', 'You are a fresh checker. You did not build this PR', 'use another AI family that is installed and signed in',
-    'use a fresh session of the builder\'s family and label it `checker_mode: same-family`', '`verdict` (PASS, FAIL or NOT SURE)', '`head` (the SHA you checked)',
-    '`risk` (1-5, before merge)', '`family`, `session`, `checker_mode`', 'Never send a failed check again on your own.',
-    'read the issue first and write 3 input → result pairs from it', 'Each expected value comes from an issue quote or the old behavior.',
-    'For a screen change, take before and after screenshots', 'reruns each merged PR on main and gives its own risk 1-5',
-    'A new test value needs no person when you (blind, from the Story, with a named rule) and the runtime agree; else it is a note.',
-    'A saved `pdd test` result for the new and the old prompt counts only when it matches the Story, the test cases and the prompt source at this head, and it was a fresh run (not cached).',
-    'Else run `CI=1 pdd test <story> --cache-clear --json` once. A result you cannot check is not a fresh pass.',
-    'PR 2 (code): read the issue, the PR 1 Story (open or merged) and the diff.',
-    'Both PRs: the full suite is green on the head, with no new skip or only.', 'If no other family is available, say so; do not claim this review.');
-});
-
-// Wrong: a PASS for an old head merges new code, or the merge is not pinned to the head that was checked.
-test('AUTOPILOT5: merge needs a PASS for the current head or an equal patch-id with a green suite on the exact head', () => {
-  assert.doesNotMatch(read('pdd-check/SKILL.md'), /sample/i, 'every merged PR gets the after-merge rerun');
-  const text = has('pdd-merge/SKILL.md', 'a fresh checker PASS (pdd-check) is for the current head.', 'the full suite is green on the exact merge head, for PR 1 and the code PR.',
-    'A PASS for another head counts only when `git patch-id` of both heads is equal and the full suite is green on the exact current head.',
-    'A conflict fix or any other change gives a new patch-id and needs a fresh PASS;',
-    'at least one check ran, and all required checks are green on that head. A missing, pending or failed check: wait, do not merge;',
-    '`gh pr merge PR --merge --match-head-commit <sha>`', 'Never use `--auto`.', 'A changed head stops', 'A failed comment stops.', 'Read the merged state back.',
-    'no question to a person is open.', 'with "Fixed in #PR"');
-  assert.ok(text.indexOf('Check the head again') < text.indexOf('gh pr merge'));
-});
-
-// Wrong (B8, R4): a risky PR, a split verdict or a change to the gate code merges on one checker.
-test('AUTOPILOT6: risk 4-5, a split verdict or a change to check, merge or approval code needs a second fresh checker', () => {
-  has('pdd-check/SKILL.md', 'A second fresh checker must agree when the risk is 4-5, when two verdicts split, or when the PR changes check, merge or approval code.',
-    'Use the other family when it is installed and signed in; else a second fresh session of the same family, labeled `checker_mode: same-family`.');
-  has('pdd-merge/SKILL.md', 'a second fresh checker agreed when pdd-check asks for one (risk 4-5, a split verdict, or a change to check, merge or approval code);');
-});
-
-// Wrong: auto mode merges without the RUNBOOK request rule, edits approval fields, or merges after strict mode refuses.
-test('AUTOPILOT7: explicit operator choice or standing delegation authorizes covered work; checker evidence remains separate', () => {
-  const rule = "An agent may merge only after the person's explicit chat request";
-  assert.ok(readFileSync(join(root, 'RUNBOOK.md'), 'utf8').includes(rule), 'RUNBOOK.md merge authorization');
-  has('pdd-merge/SKILL.md', 'An operator’s explicit auto setup and start, or an applicable standing delegation, supplies it for eligible work; a configuration read alone does not.',
-    'A checker PASS is separate evidence, never approval words.', '`pdd workflow approve N --said -`', 'Strict mode requires the person terminal; never bypass it or edit approval fields.',
-    'Post one PR comment identifying the person’s actual explicit merge authorization without fabricating a quotation.');
-  has('pdd-autopilot/steps/handoff.md', 'The person’s explicit choice of auto and start establishes the chosen automatic work',
-    'commands and attribution, without presenting a coordinator summary as a quotation.');
-});
-
-// Wrong: a run never ends, retries forever, resends a failed check or spends past --max-calls.
-test('AUTOPILOT8: outcomes, the owner note, retries and the money limits', () => {
-  has('pdd-autopilot/SKILL.md', 'Outcomes: merged, dropped, stuck, or one question.', 'a note of at most 30 words',
-    'Retry a call at most 3 times, only for HTTP 408, 429, 5xx or a network error.', 'Never send a failed check again.',
-    'Keep `--max-calls` and strict mode.', 'Stop with one comment if it is not a bug, has no repro or someone else owns it.',
-    'ask one question on the issue; that issue waits and the others go on.', 'for a Story, use pdd-prompting.',
-    'Write each decision on the issue or PR.', 'After a restart, read the issue and PR first and do not redo finished steps.',
-    'add the `pdd:stuck` label, write one comment with the cause, and take the next issue.', '60 minutes', '30M tokens');
-  has('pdd-merge/SKILL.md', 'If PR 1 has a PASS but no runtime verdict, it merges; add the `pdd:no-verdict` label to the PR.',
-    'A PR with no checker verdict (the checker could not run or gave none): add the `pdd:no-verdict` label, do not merge, and take the next issue.');
-  const merge = read('pdd-merge/SKILL.md');
-  assert.ok(merge.indexOf('A PR with no checker verdict') < merge.indexOf('Apply all [$pdd-autopilot merge conditions]'), 'no checker verdict is handled before the PASS gate');
-  for (const name of WORKFLOWS) has(`${name}/steps/autopilot.md`, '`--max-calls`, strict mode, and never sending a failed check again.');
-});
-
-// Wrong (B7b, D45b): new words or a screen change stop the run, or merge with no list for a look before the release.
-test('AUTOPILOT9: the merge line lists new user-visible words and screen changes, and they do not stop the merge', () => {
-  has('pdd-merge/SKILL.md', 'It lists the new words that users see (command names, help text, error messages) and each screen change, with its screenshot path and one line on what changed, so a person can look at them before a release. These do not stop the merge.');
-  for (const name of WORKFLOWS) has(`${name}/steps/autopilot.md`, 'New words that users see go in its merge line; they do not stop the run.');
-});
-
-// Wrong: one team's process ships to every pdd user.
-test('AUTOPILOT10: the Autopilot text holds no team process, times, machines or decision ids', () => {
-  const files = [...AUTOPILOT_SKILLS.map(name => `${name}/SKILL.md`), ...WORKFLOWS.map(name => `${name}/steps/autopilot.md`)];
-  for (const file of files) {
-    const text = read(file);
-    assert.doesNotMatch(text, /\b\d{1,2}:\d{2}\b/, `${file}: a clock time`);
-    assert.doesNotMatch(text, /daily review|review[- ]prep|agenda|ledger|trail file|kickoff|lane|pdd-vm|\bcx\d|Serhan|master|NEW-WORDS|\b[BDFR]\d{1,2}[ab]?\b|\/loop|cron/i, file);
-  }
-});
-
-// Wrong (two machines on one repo): both work on one issue, or a dead claim blocks the issue forever (#3032).
-test('AUTOPILOT12: claim remains until removed or expired and competing coordinators back off', () => {
-  has('pdd-autopilot/SKILL.md', 'add the `pdd:working` label and one short comment that names this machine and coordinator ID.',
-    'If coordinators race, the earlier label event wins.', 'Skip an issue with a live claim.',
-    'The claim keeps Autopilot ownership until it is removed or expires, even while the run is paused.', 'Remove the label when the run ends.',
-    'A claim with no `lastSeen` update for 4 hours is expired.', 'Stop work on that issue and do not push to it.',
-    // A coordinator that lost its claim must not end the new owner's claim era (#3032).
-    'Only the owner of the current live claim removes it', 'Do not remove `pdd:working`, also when your run ends');
-});
-
-// Wrong: a fixed run count or an extra admission cap based on shared files.
-test('AUTOPILOT13: runs use the optional working cap without a shared-file admission cap', () => {
-  const text = has('pdd-autopilot/SKILL.md', 'There is no fixed number of runs;');
-  assert.doesNotMatch(text, /(?:at most\s+\d+\s+runs?[^.]*prompt file|skip a\s+\d+(?:st|nd|rd|th))/i);
-  assert.match(text, /`--runs N` sets (?:an optional|a) cap/);
-  assert.doesNotMatch(text, /max_runs|at most 3 runs/i);
-});
-
-// Wrong: old backlog starts by itself, a new repo starts without a way to run its app, or code waits on every repo.
-// Wrong (user repo with no GitHub release): `auto` waits after PR 1 for a "code now" that never comes.
-test('AUTOPILOT14: bounded startup, all backlog, and in auto the code PR right after PR 1 in every repo', () => {
-  const text = has('pdd-autopilot/SKILL.md', 'Run only documented bounded startup before dependency review and selection.',
-    'After selection, use the available recipe to build, verify and test the chosen path or Story.', 'Include old and new backlog;',
-    '`pdd autopilot start` runs a tick with no AI that starts this skill only when there is work.',
-    'One code PR per prompt file closes every issue that waits on it.');
-  assert.match(text, /verification-setup\.md.*find or create and keep the repo’s start-up recipe/);
-  assert.ok(text.indexOf('start-up recipe') < text.indexOf('Ready:'));
+// Wrong: a repository check starts real work before selection, or the recipe runs before install and tests.
+test('SKILLS52: verification setup runs bounded readiness before selection and the recipe after it', () => {
   const setup = read('pdd-prompting/verification-setup.md');
   assert.match(setup, /Before selecting issues, run documented bounded repository readiness commands, or use the installed CLI readiness already checked when applicable/);
   assert.match(setup, /After selection, run the applicable install\/build and relevant tests, then run the recipe and the Story's action/);
   assert.match(setup, /Report any unavailable or inapplicable step and its reason/);
-  // The rule line names `auto` first: no release condition and no "code now" wait there; only `observe` keeps them.
-  for (const file of ['pdd-autopilot/SKILL.md', 'pdd-bug/steps/autopilot.md', 'pdd-feature/steps/autopilot.md']) {
-    const rule = read(file).split('\n').find(line => line.includes('code PR') || line.startsWith('- Code PR:'));
-    assert.ok(rule && rule.includes('as soon as PR 1 is open'), file);
-    const auto = rule.indexOf('`auto`'), observe = rule.indexOf('`observe`');
-    assert.ok(auto >= 0 && observe > auto, `${file}: ${rule}`);
-    assert.doesNotMatch(rule.slice(auto, observe), /release|code now/, file);
-    assert.match(rule.slice(observe), /"code now"/, file);
-    // In `observe`, a repo with a release still starts the code PR at once.
-    assert.match(rule.slice(observe), /release/, file);
-  }
-  for (const name of ['pdd-bug', 'pdd-feature']) has(`${name}/steps/autopilot.md`, 'stacked on PR 1; do not wait for PR 1 to merge.');
-});
-
-// Wrong: the skills read another pdd.json shape than the switch writes, or the Autopilot states live only in comment text.
-test('AUTOPILOT15: the skills read autopilot.mode and autopilot.trust, and apply the pdd: states as real GitHub labels', () => {
-  has('pdd-autopilot/SKILL.md', '`{"autopilot":{"mode":"off|observe|auto","trust":[...]}}`',
-    'GitHub labels `pdd:working`, `pdd:stuck`, `pdd:no-verdict`, `pdd:code-pending`: add with `gh issue edit N --add-label NAME` (or `gh pr edit`); create a missing one with `gh label create NAME`.');
-  for (const file of [...AUTOPILOT_SKILLS.map(name => `${name}/SKILL.md`), ...WORKFLOWS.map(name => `${name}/steps/autopilot.md`)]) {
-    const text = read(file);
-    assert.doesNotMatch(text, /`autopilot` (?:is|in)\b/, `${file}: read autopilot.mode, not autopilot`);
-    for (const [label] of text.matchAll(/`pdd:[a-z-]+`/g)) assert.ok(['`pdd:working`', '`pdd:stuck`', '`pdd:no-verdict`', '`pdd:code-pending`'].includes(label), `${file}: ${label}`);
-  }
-  has('pdd-merge/SKILL.md', 'add the `pdd:code-pending` label to the issue', 'Remove the `pdd:working` label.');
-});
-
-// Wrong (checker FAIL on 0b027c35): a bearer Simulator link in a PR, a person-decided new value with no D40 path,
-// unnamed RUNBOOK overrides, no cost note, or a feature PR 1 with no verdict line.
-test('AUTOPILOT16: the In Autopilot blocks keep links private, use the runtime-and-checker value rule and name the RUNBOOK rules they change', () => {
-  for (const name of WORKFLOWS) {
-    const text = has(`${name}/steps/autopilot.md`, 'Never put a Simulator link in a PR, issue or file.',
-      'A new test value needs no person when the runtime and the checker (blind, from the Story, with a named rule) agree. Else it is a note on the PR.',
-      'Cost (RUNBOOK "AI calls"): write the likely check cost on the issue or PR, and do not wait.', 'Gates (§2)', 'Expected values (§4)', '(§11', 'Skip', '(§12)');
-    assert.doesNotMatch(text, /may carry the Simulator|trusted person wrote/, name);
-  }
-  has('pdd-bug/steps/autopilot.md', 'put the verdict line (§14) and the full Story paths in the PR 1 body.');
-  has('pdd-feature/steps/autopilot.md', "put the checker's verdict line, the plan list and the full Story paths in the PR 1 body.");
-  has('pdd-small-change/steps/autopilot.md', "put the scope and the checker's verdict line in the PR body.");
-});
-
-// Wrong (checker FAIL on f881d398): a PR 1 whose new native tests are red for the missing behavior merges alone and
-// leaves main red, or the pair can never merge because the code area waits for PR 1.
-test('AUTOPILOT17: a red-test PR 1 merges only together with its code PR, at the exact code head with a green suite', () => {
-  has('pdd-check/SKILL.md', 'One exception: new native tests in PR 1 may be red only for the missing behavior. Say so in the verdict; then PR 1 merges only together with its code PR.');
-  const text = has('pdd-merge/SKILL.md', "Red pair: if PR 1's new native tests are red only for the missing behavior, never merge PR 1 alone.",
-    "When both PRs have a PASS, set the code PR's base to PR 1's base (`gh pr edit CODE --base BASE`); merge the code PR, which carries PR 1, once the full suite is green on its exact head;",
-    '`gh pr merge PR --merge --match-head-commit <sha>`');
-  assert.ok(text.indexOf('Red pair') < text.indexOf('gh pr merge PR'));
-  for (const name of ['pdd-bug', 'pdd-feature']) assert.doesNotMatch(read(`${name}/steps/autopilot.md`), /after PR 1 merges/, name);
-});
-
-// Wrong (#3041): an Autopilot run repairs forever, two machines pass one issue back and forth, or a long run
-// goes unseen; or the manual repair rule changes with it.
-test('AUTOPILOT18: per-issue ceilings: 5 repair rounds in one area, no 4th takeover, one alert after 24 hours', () => {
-  for (const name of WORKFLOWS) has(`${name}/steps/autopilot.md`, 'Keep repairing while a useful correction is available',
-    'for at most 5 repair rounds in one area', 'pdd refuses a 6th', 'take the stuck path: `pdd:stuck`, one comment with the cause, one `stuck` alert. Keep its claim and progress');
-  for (const name of ['pdd-bug', 'pdd-feature']) has(`${name}/SKILL.md`, 'allow 2 repairs after initial review');
-  has('pdd-autopilot/steps/handoff.md', 'One area of an Autopilot run has at most 5 repair rounds',
-    'After 3 takeovers of one issue, do not take it over again', '`takeover-limit` rule. Take the stuck path (step 8); keep the claim and progress.',
-    'Send one `stuck` alert.', '24 hours after the claim with no merge, the tick sends one `long-running` rule. Send one informational alert for that issue and keep working; it is not a stop.');
-});
-
-// Wrong (#3041 repair): a ceiling stops a healthy run (a PR-open retry counted as a repair, a machine
-// that takes back its own claim counted as a takeover), or nobody can let Autopilot continue after it.
-test('AUTOPILOT19: ceilings count only real loops, ask for no retry after the limit, and a person can reset them', () => {
-  for (const name of WORKFLOWS) has(`${name}/steps/autopilot.md`, '(a round is a return to an earlier step that clears later steps; a retry of the same step is not one)');
-  has('pdd-autopilot/steps/handoff.md', 'a retry after a failed PR open, claim check or push is not one',
-    'After the refusal, pdd marks the run stuck and refuses every later `done` of it.',
-    'add it again at once (within 10 minutes)', 'Taking back your own expired claim (same coordinator ID and machine) is not a takeover.',
-    'The count starts again at 0 when a person removes `pdd:stuck` at the limit', 'Read the issue again first; skip it if it already has `pdd:stuck`.',
-    'After the repair or takeover limit, the rule says so: do not retry, do not remove `pdd:stuck`, write no new comment and send no second alert.',
-    'Only a person lets Autopilot try again. After the repair limit, they remove `pdd:stuck` and `pdd:working`, then run `pdd workflow cancel N` in the checkout that holds the stuck run; the next tick starts a new run with a fresh repair count.',
-    'The tick records it in your claim comment, so a later owner of the issue does not send it again.');
 });

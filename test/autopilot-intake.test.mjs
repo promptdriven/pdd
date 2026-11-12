@@ -264,11 +264,11 @@ test('autopilot-intake-shadow: start --intake saves the machine mode, the tick u
   const { spawnSync } = await import('node:child_process');
   const w = await coreWorld(t);
   writeFileSync(join(w.cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', trust: [], testCommand: 'npm test', runs: 1 } }));
-  w.issue(41);
+  w.issue(41, { labels: ['pdd:autopilot'] });
   const cwd = w.git(w.cwd, 'rev-parse', '--show-toplevel'), stateRoot = join(w.dir, 'state');
   const stateFile = join(stateRoot, `${createHash('sha256').update(cwd).digest('hex').slice(0, 20)}.json`);
   mkdirSync(stateRoot, { recursive: true });
-  const saved = { enabled: true, cwd, repo: 'acme/widgets', defaultBranch: 'main', coordinatorId: 'coord-a', machine: 'machine-a', engine: 'core',
+  const saved = { enabled: true, cwd, repo: 'acme/widgets', defaultBranch: 'main', coordinatorId: 'coord-a', machine: 'machine-a', engine: 'core', label: 'pdd:autopilot',
     agent: { id: 'codex', kind: 'codex', command: 'codex' }, packageRoot: join(w.dir, 'pkg') };
   writeFileSync(stateFile, JSON.stringify(saved));
   const ports = { stateRoot, now: w.now, env: { HOME: process.env.HOME, PATH: process.env.PATH }, timer: async () => true, warn: () => {},
@@ -277,9 +277,9 @@ test('autopilot-intake-shadow: start --intake saves the machine mode, the tick u
       if (command !== 'git') assert.fail(`unexpected program ${command}`);
       const r = spawnSync('git', args, { cwd: options.cwd ?? cwd, encoding: 'utf8' }); return { code: r.status, stdout: r.stdout, stderr: r.stderr };
     },
-    corePorts: { jobs: w.jobs, checkBase: async () => ({ exitCode: 0, message: 'ok' }), agentReady: async () => true, reportRoot: w.reportRoot } };
+    machineGuard: w.machineGuard, corePorts: { jobs: w.jobs, checkBase: async () => ({ exitCode: 0, message: 'ok' }), agentReady: async () => true, reportRoot: w.reportRoot } };
   await tickAutopilot(stateFile, ports);
-  w.issue(42);
+  w.issue(42, { labels: ['pdd:autopilot'] });
   await tickAutopilot(stateFile, ports);
   assert.equal(intakeJobs(w).length, 0, 'no saved intake mode: off, also with an issue that could get a card');
   writeFileSync(stateFile, JSON.stringify({ ...JSON.parse(readFileSync(stateFile, 'utf8')), intake: 'shadow' }));
@@ -294,7 +294,7 @@ test('autopilot-intake-shadow: start --intake saves the machine mode, the tick u
   assert.equal(json.intake, 'shadow'); assert.equal(json.repository, 'acme/widgets'); assert.ok(json.cards.some(c => c.issue === 42 && c.card.class === 'ready'));
   assert.ok(json.diff.some(r => r.kind === 'would-pick' && r.issues.includes(42)));
   // Core mode off: the launcher stops the card jobs that still run (the core tick does not run at all).
-  w.issue(43); await tickAutopilot(stateFile, ports);
+  w.issue(43, { labels: ['pdd:autopilot'] }); await tickAutopilot(stateFile, ports);
   const running = intakeJobs(w).find(j => j.issue === 43);
   assert.ok(running && w.alive.has(running.pid));
   writeFileSync(stateFile, JSON.stringify({ ...JSON.parse(readFileSync(stateFile, 'utf8')), mode: 'off' }));

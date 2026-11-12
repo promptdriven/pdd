@@ -1,7 +1,10 @@
-// Generated from prompts/cli/try-mcp.prompt.md (sha256: 633585cf8b86f56ae25a40bf2b7856d3b6e1f81028c01f3244474f8b609d524a).
+// Generated from prompts/cli/try-mcp.prompt.md (sha256: e328d3c2c00b49291d2fc14650035514fe885f4ab03de25621753c6e4ff12134).
 import { createInterface } from 'node:readline';
+import { createRequire } from 'node:module';
 import { readTryOwner, runDoorCall, saveDoorCase, applyPendingCaseWithHandoff } from './runtime-client.mjs';
 import { createRunJudge } from './agent-judge.mjs';
+
+const packageVersion = createRequire(import.meta.url)('../package.json').version;
 
 const object = x => x !== null && typeof x === 'object' && !Array.isArray(x);
 const text = x => typeof x === 'string' && x.length > 0;
@@ -133,7 +136,7 @@ export async function runMcp({ cwd = process.cwd(), words = [], env } = {}, port
     if (msg.method === 'initialize') {
       if (!object(msg.params) || typeof msg.params.protocolVersion !== 'string' || !object(msg.params.capabilities) || !object(msg.params.clientInfo)) return error(id, -32602, 'Invalid initialize parameters');
       const versions = ['2025-06-18', '2025-03-26', '2024-11-05'];
-      return { jsonrpc: '2.0', id, result: { protocolVersion: versions.includes(msg.params.protocolVersion) ? msg.params.protocolVersion : versions[0], capabilities: { tools: {} }, serverInfo: { name: 'pdd-try', version: '0.1.28' } } };
+      return { jsonrpc: '2.0', id, result: { protocolVersion: versions.includes(msg.params.protocolVersion) ? msg.params.protocolVersion : versions[0], capabilities: { tools: {} }, serverInfo: { name: 'pdd-try', version: packageVersion } } };
     }
     if (msg.method === 'ping' || msg.method === 'tools/list') {
       if (msg.params !== undefined && !object(msg.params)) return error(id, -32602, 'Parameters must be an object');
