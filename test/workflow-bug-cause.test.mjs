@@ -107,6 +107,20 @@ test('2841: native code reader rejects symlinks and untracked evidence without o
  await assert.rejects(recordBugCause({...input,text:text([]).replace('value.mjs#','untracked.mjs#')},{execFile:f.ports.execFile}),{code:'bug-cause-unavailable'});
 });
 
+for (const path of ['*.mjs', ':(glob)*.mjs']) for (const evidence of ['cause','relation']) test(`2841: native reader treats ${path} as a literal Git path in ${evidence}`, async t => {
+ const {recordBugCause}=await api();const f=await fixture(t,{name:'bug'});await f.run();const run=f.record();
+ writeFileSync(join(run.root,path),'export const value = 1;');
+ let writes=0;
+ const supplied={execFile:f.ports.execFile,issues:{read:async()=>({json:JSON.stringify(issue())})},links:{ensure:async()=>{writes++;return {ok:true};}}};
+ const input={repository:'example/project',number:17,root:run.root};
+ const row={...relation('needs','blocked by'),source:`code:${path}`,quote:'value = 1'};
+ const note=evidence==='cause'?text([relation('needs','blocked by')]).replace('value.mjs#',`${path}#`):text([row]);
+ await assert.rejects(recordBugCause({...input,text:note},supplied),{code:'bug-cause-unavailable'});
+ assert.equal(writes,0);
+ f.git(run.root,'--literal-pathspecs','add','--',path);
+ assert.ok((await recordBugCause({...input,text:text([{...row,link:'none',kind:'related'}]).replace('value.mjs#',`${path}#`)},supplied)).json);
+});
+
 test('2841: PR evidence preserves literal relation JSON inside safe code spans',async()=>{
  const {recordBugCause}=await api();const saved=JSON.parse((await recordBugCause({text:text([relation()]),repository:'a/b',number:17,root:'/repo'},ports())).json);
  const run={workflow:'bug',bugCause:saved,steps:[],number:17};

@@ -39,7 +39,7 @@ function nativePorts(root, supplied) {
       const canonical = realpathSync(root); let cursor = canonical;
       for (const part of path.split('/')) { cursor = join(cursor, part); if (lstatSync(cursor).isSymbolicLink()) throw invalid('Code evidence cannot use symlinks.'); }
       if (!lstatSync(cursor).isFile()) throw invalid('Code evidence must be a regular file.');
-      await command('git', ['ls-files', '--error-unmatch', '--', path]);
+      await command('git', ['--literal-pathspecs', 'ls-files', '--error-unmatch', '--', path]);
       return { content: readFileSync(cursor, 'utf8') };
     } },
     issues: { read: async ({ repository, number }) => ({ json: await command('gh', ['api', `repos/${repository}/issues/${number}`]) }) },
