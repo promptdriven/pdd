@@ -1,10 +1,10 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: a2f38067c5398c95bff5d3f362a3d0cdd2c9dce57d9e4784575aea6509496f0d).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 189ff3ca91d3eff4caee3ee6185928dd800201e1d4f51c8f87f5dc951bd4c337).
 import { markdownLinks, markdownDefinitions, markdownSectionText } from './runtime-markdown.mjs';
 import { buildBindingPlan, runtimeBoundary } from './runtime-binding-plan.mjs';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
-import { basename, join, posix, isAbsolute } from 'node:path';
+import { basename, join, posix, isAbsolute, relative, resolve, sep } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { expandSource } from './contract-refs.mjs';
 import { exactValue, parseScenarioJson, roundedNumberTokens, stringifyScenarioJson } from './scenario-json.mjs';
@@ -1152,11 +1152,13 @@ function omitFullKind(body) {
 }
 
 // --fill-hash: fill draft hashes, omit full kind; optionally compact drafts.
-export function fillHashes({ root, files = gitFiles(root), compact = false,workspace=loadRuntimeWorkspace({root}) }) {
+export function fillHashes({ root, files = gitFiles(root), targets, compact = false,workspace=loadRuntimeWorkspace({root}) }) {
   workspace=boundedWorkspace(root,workspace);
   const result = { filled: [], current: [], refused: [], stale: [], warnings: [] };
   if (compact === true) result.compacted = [];
-  for (const path of files) {
+  const targetSet = targets === undefined ? null : new Set(targets);
+  const candidates = targetSet ? files.filter(path => targetSet.has(path)) : files;
+  for (const path of candidates) {
     if (!allowsRuntimePath(workspace,path) || !path.endsWith('.prompt.md') || !statOf(join(root, path))?.isFile()) continue;
     let text;try{text=filePort(root,new Set(files),true,workspace).read({path}).content;}catch(error){result.refused.push({path,message:error.message});continue;}
     const blocks = interfaceBlocks(text);
@@ -1849,6 +1851,34 @@ function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadR
 // Rebuild the selection on each attempt, including metadata and newly declared dependencies.
 export function captureSource(root, { attempts = 3, ...selection } = {}) {
   return captureWithPolicy(root, { attempts, ...selection });
+}
+
+// Resolve a scoped hash request before mutation. Capture remains the one owner
+// of source closure, availability, workspace and reference validation.
+export function prepareHashSelection({ root, cwd, words }, { capture = captureSource } = {}) {
+  const files = gitFiles(root), visible = new Set(files), workspace = loadRuntimeWorkspace({root});
+  const realRoot = realpathSync(root), realCwd = realpathSync(cwd);
+  const normalized = words.map(word => {
+    const candidate = relative(realRoot, resolve(realCwd, word)).split(sep).join('/');
+    return visible.has(candidate) || (!candidate.startsWith('../') && candidate !== '..' && statOf(resolve(realCwd, word))?.isDirectory()) ? (candidate || '.') : word;
+  });
+  for (const path of normalized) if (visible.has(path)) requireRuntimePath(workspace,{path,from:'Selected source'});
+  const found = findTests({root,files,workspace,excludeFixtureProjects:false});
+  const promptTargets = normalized.filter(path => visible.has(path) && path.endsWith('.prompt.md'));
+  const testWords = normalized.filter(path => !promptTargets.includes(path));
+  const selection = testWords.length ? selectTests(found, testWords) : {selected:[],unknown:[],untested:[]};
+  if (selection.untested.length) throw new PreflightError(2, selection.untested.join('\n'));
+  if (selection.unknown.length) {
+    const stories = found.tests.map(test => `  ${test.story}  ${test.path}${test.title && test.title !== test.story ? `  (${test.title})` : ''}`);
+    throw new PreflightError(2, [`Unknown story ${selection.unknown.map(word => JSON.stringify(word)).join(', ')}. Stories:`, ...stories].join('\n'));
+  }
+  for (const test of selection.selected) {
+    const problem = discoveryRefusal(test);
+    if (problem) throw new PreflightError(4, problem.message);
+  }
+  const captured = capture(root,{tests:[...selection.selected.map(test => test.path),...promptTargets],appMap:null,workspace});
+  const inventory = captured.files.map(file => typeof file === 'string' ? file : file.path);
+  return { files: inventory, targets: [...new Set(inventory.filter(path => path.endsWith('.prompt.md')))] };
 }
 
 function captureWithPolicy(root, { attempts = 3, ...selection } = {}, strict = false) {
