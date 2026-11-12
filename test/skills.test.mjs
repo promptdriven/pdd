@@ -711,14 +711,9 @@ test('SKILLS50: approval instructions reject automatic chat authority and lexica
   assert.doesNotMatch(book, /optional native Herdr area-chat evidence work/);
 });
 
-// #3242: the old coordinator skills are gone. A skill that still sends the agent to them, or to a steps/autopilot.md
-// overlay, gives a new user dead instructions that tell the agent to claim issues and merge by itself.
-test('SKILLS51: no skill names a retired skill or a steps/autopilot.md overlay', () => {
+// #3242: the package no longer ships the old coordinator skills.
+test('SKILLS51: retired coordinator skills are not shipped', () => {
   for (const name of RETIRED_SKILLS) assert.equal(existsSync(join(skills, name)), false, name);
-  for (const name of readdirSync(skills)) for (const file of filesUnder(join(skills, name)).filter(file => file.endsWith('.md'))) {
-    const text = readFileSync(file, 'utf8');
-    for (const retired of [...RETIRED_SKILLS, 'steps/autopilot.md']) assert.equal(text.includes(retired), false, `${file} names ${retired}`);
-  }
 });
 
 // Wrong: a repository check starts real work before selection, or the recipe runs before install and tests.
