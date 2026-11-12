@@ -115,7 +115,7 @@ approval keeps the headers of the prompt current.
 | `state` | Meaning |
 |---|---|
 | `current` | The hash is the prompt's header hash. |
-| `current` with `legacy: true` | The hash is the SHA-256 of the whole prompt file. pdd 0.1.28 accepts this form as current. Write the expected hash instead. |
+| `current` with `legacy: true` | The hash is the SHA-256 of the whole prompt file. pdd accepts this form for compatibility and marks it `legacy: true`. Write the expected hash for a canonical header. |
 | `stale` | The prompt changed after the header was written. Check that the file follows the prompt, then write the expected hash. |
 | `none` | The header has no hash. |
 | `unknown` | The named prompt is not available. |
