@@ -104,8 +104,15 @@ is uncertain; those records let a later tick retry without a live controller.
   the wrapper is live, but descendant samples are not a complete ownership boundary.
   `snapshotAgentJob(job)` saves the wrapper and every live descendant as
   PID/start/command identities on `job.processes`. `cleanupAgentJob(job)` captures
-  again, asks the wrapper to stop, then terminates only saved identities that still
-  match. It returns cleanup proof. A reused PID is never signalled; an unreadable
+  again, asks the wrapper to stop, then terminates saved identities that still match.
+  The wrapper starts detached, so its PID is also the dedicated job process-group ID.
+  Only a live wrapper whose command still contains this job's token authorizes the
+  group SIGTERM. Its handler sends the same group SIGTERM, waits 2 s, then sends the
+  group SIGKILL. This group ownership is separate from cwd custody evidence. Cleanup
+  also signals saved PID/start/command identities individually, including helpers that
+  left the group. Cwd-only suspect identities never authorize a signal. A reused
+  wrapper PID fails the live-token check and is never group-signalled. It returns
+  cleanup proof. An unreadable
   inventory or a remaining saved identity is unconfirmed. Each live `readAgentJob`
   refreshes this saved snapshot on the job record and in `TOKEN.processes.json`, so it
   survives a tick that returns while the job runs. The wrapper snapshots once
@@ -124,9 +131,17 @@ is uncertain; those records let a later tick retry without a live controller.
   directory is that exact disposable worktree or a directory below it. `cwd` never
   enables this scan. On
   Linux it reads `/proc/PID/cwd`; on macOS it reads `lsof` cwd records. A complete
-  inventory that finds a matching process, or a same-user process whose cwd cannot be
-  read while its identity remains, writes a separate durable custody finding with the
-  process identities and root. An incomplete process table, unavailable current-user
+  inventory that finds a matching process writes a separate durable custody finding
+  with the process identities and root. Before it writes the spec or spawns a new
+  wrapper, `startAgentJob` saves a custody boundary timestamp in that spec; its
+  post-spawn `started` value is never a boundary. A same-user process whose cwd cannot
+  be read is retained unless its parseable `ps lstart` second is strictly before that
+  boundary's whole-second floor. A same-second process, or one with an unknown or
+  unparsable start, stays uncertain. A process proven older cannot be its descendant,
+  so its unreadable cwd alone is not a custody finding. This age rule never discards a
+  previously recorded identity, and a readable cwd match under the root stays held
+  regardless of age. A reused wrapper PID is scanned like any other candidate unless
+  it has the exact saved PID/start identity. An incomplete process table, unavailable current-user
   identity or unavailable cwd inventory writes the general uncertainty marker; a later
   cwd scan cannot clear that marker. Cwd evidence is only a reason to retain the job
   and worktree: it never authorizes a signal to that process.
@@ -139,6 +154,11 @@ is uncertain; those records let a later tick retry without a live controller.
   a live suspect keeps cleanup unconfirmed. A suspect that changes cwd outside the
   root remains held until that same pid and start identity ends; an empty root scan
   alone does not resolve it. Cwd evidence never authorizes a signal to a suspect.
+  After it terminates saved identities, cleanup rereads the durable custody and error
+  files, confirms the wrapper is gone, and repeats the exact-root scan even when no
+  custody marker existed at entry or a prior marker was resolved. A new finding creates
+  a marker; a finding after a resolution appends to it and reopens it. A shutdown-time
+  error marker or an incomplete fresh scan is unconfirmed.
 
   A core job from 0.1.28 may have no process manifest. Core may request a bounded
   legacy scan only by passing `ports.legacyCustodyRoot` for a verified core-owned
@@ -146,8 +166,14 @@ is uncertain; those records let a later tick retry without a live controller.
   checkout and confirms a well-formed exit record.
   The scan requires a complete current-user process table with this reader, proves the
   saved wrapper PID no longer runs this spec, checks the checkout's cwd inventory, and
-  checks for surviving members of the wrapper's original process group. Any matching
-  process is retained by PID/start identity; an incomplete read stays unconfirmed.
+  checks for surviving members of the wrapper's original process group. Core may pass
+  a saved pre-spawn job boundary only when it is known to predate every part spawn;
+  it must not guess from a part's post-spawn `started` time. That boundary rules out
+  only an unreadable process whose parseable `ps lstart` second is strictly older.
+  A same-second, missing or unparsable time stays uncertain. A readable cwd match and
+  any previously recorded identity remain held regardless of age. Without a safe
+  boundary, an unreadable candidate stays uncertain. Any matching process
+  is retained by PID/start identity; an incomplete read stays unconfirmed.
   This path sends no signals. A clear scan permits core to finish removing that checkout,
   but it cannot recover the old manifest: a helper that changed cwd and left the wrapper's
   group before any observation remains outside this historical proof. Report this limited

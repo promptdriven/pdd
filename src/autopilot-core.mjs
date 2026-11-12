@@ -841,8 +841,9 @@ async function cleanupPart(ctx, job, part) {
   }
   try {
     ctx.saveJob(job);
-    const root = legacyCustodyRoot(ctx, job, part), result = root
-      ? await ctx.jobs.cleanup(part, { legacyCustodyRoot: root, legacyStartedAt: job.started }) : await ctx.jobs.cleanup(part);
+    const root = legacyCustodyRoot(ctx, job, part), options = root ? { legacyCustodyRoot: root,
+      ...(Number.isFinite(job.started) ? { legacyCustodyBoundary: job.started } : {}) } : null;
+    const result = options ? await ctx.jobs.cleanup(part, options) : await ctx.jobs.cleanup(part);
     if (result?.legacy) {
       job.legacyCleanup ??= [];
       if (!job.legacyCleanup.some(row => row.id === part.id)) {

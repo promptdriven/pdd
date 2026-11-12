@@ -548,7 +548,10 @@ this core job rule.
 
 For a saved 0.1.28 job with no custodyRoot or process manifest, cleanup may use only
 the exact disposable checkout proved by the saved issue, role, spec cwd and this
-machine's core worktrees directory. Require its exit record, a complete process table
+machine's core worktrees directory. Pass the saved outer core job start as the legacy
+custody boundary only when it is a finite epoch-millisecond value; it predates every
+part spawn. Otherwise omit the boundary, and keep unreadable processes uncertain.
+Require the exit record, a complete process table
 that proves the old wrapper is gone, and complete cwd and old process-group scans.
 Keep any found process by identity and retry; never signal it from this legacy scan.
 A clear bounded scan permits cleanup, but record that historical descendant custody

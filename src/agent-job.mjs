@@ -38,12 +38,15 @@ export function startAgentJob({ id, dir, cwd, command, args = [], input = '', en
   const base = join(resolve(dir), id), now = ports.now ?? Date.now, watch = hungSettings(hung), custody = typeof custodyRoot === 'string' && custodyRoot ? resolve(custodyRoot) : null;
   const job = { id, token: `${base}.spec.json`, log: `${base}.log`, exit: `${base}.exit.json`, result: `${base}.result.json`, input: `${base}.input`, hangs: `${base}.hangs.json` };
   writeFileSync(job.input, input, { mode: 0o600 });
-  writeAtomic(job.token, JSON.stringify({ command, args, cwd, input: job.input, log: job.log, exit: job.exit, hangs: job.hangs, ...(priority ? { priority } : {}), ...(pddCheck ? { pddCheck } : {}), ...(watch ? { hung: watch } : {}), ...(custody ? { custodyRoot: custody } : {}) }));
+  // This boundary precedes the spec and wrapper spawn. `started`, sampled after
+  // spawn, would not safely exclude an already-running descendant.
+  const custodyBoundary = custody ? now() : null;
+  writeAtomic(job.token, JSON.stringify({ command, args, cwd, input: job.input, log: job.log, exit: job.exit, hangs: job.hangs, ...(priority ? { priority } : {}), ...(pddCheck ? { pddCheck } : {}), ...(watch ? { hung: watch } : {}), ...(custody ? { custodyRoot: custody, custodyBoundary } : {}) }));
   const child = (ports.spawn ?? spawn)(process.execPath, [self, '--wrapper', job.token], { cwd, env, detached: true, stdio: 'ignore' });
   // A spawn that fails later (a cwd that is gone, EAGAIN, ENOMEM) is an exit with code 127, never an uncaught error.
   child.on?.('error', error => { try { writeAtomic(job.exit, JSON.stringify({ code: 127, signal: null, at: now(), error: String(error.code ?? error.message) })); } catch { /* The job reads as dead. */ } });
   child.unref?.();
-  return { ...job, pid: child.pid, started: now() };
+  return { ...job, pid: child.pid, started: now(), ...(custodyBoundary !== null ? { custodyBoundary } : {}) };
 }
 
 function nativeAlive(pid, token) {
@@ -184,11 +187,20 @@ function canonicalCwd(path) {
   return null;
 }
 
+// `ps lstart` has whole-second precision. A candidate is definitely older only
+// when its start second is before the boundary's second; equal seconds stay
+// conservative. Unknown or synthetic starts never prove this relationship.
+function startsBeforeBoundary(row, boundary) {
+  if (!Number.isFinite(boundary) || !/^\w{3} \w{3} (?: [1-9]|[12]\d|3[01]) \d{2}:\d{2}:\d{2} \d{4}$/.test(String(row?.start))) return false;
+  const start = Date.parse(row.start);
+  return Number.isFinite(start) && Math.floor(start / 1000) < Math.floor(boundary / 1000);
+}
+
 // An explicit custody-root match can only retain the disposable worktree. It never
 // proves ownership and is never used to send a signal. The direct child has exited,
 // so an unsaved matching process is the late detached-helper case that the periodic
 // descendant snapshots can miss.
-function worktreeCustody(job, custodyRoot, ports = {}, retained = [], legacy = false) {
+function worktreeCustody(job, custodyRoot, ports = {}, retained = [], legacy = false, boundary = null) {
   if (!['darwin', 'linux'].includes(process.platform)) return { reason: 'cwd custody is unsupported', root: null, identities: null };
   const manifest = readJson(`${job.token}.processes.json`);
   if (legacy ? manifest !== undefined : !processManifest(manifest)) return { reason: 'manifest invalid', root: null, identities: null };
@@ -203,9 +215,12 @@ function worktreeCustody(job, custodyRoot, ports = {}, retained = [], legacy = f
     const wrapper = rows.find(row => row.pid === job.pid && !String(row.state ?? '').startsWith('Z') && String(row.args).includes(job.token));
     if (wrapper) return { reason: 'legacy wrapper still runs this spec', root, identities: [wrapper] };
   }
-  const stillKnown = retained.filter(known => rows.some(row => sameIdentity(known, row) && !String(row.state ?? '').startsWith('Z')));
+  const observed = [...saved, ...retained];
+  const stillKnown = observed.filter(known => rows.some(row => sameIdentity(known, row) && !String(row.state ?? '').startsWith('Z')));
   const group = legacy ? rows.filter(row => row.pgid === job.pid && !String(row.state ?? '').startsWith('Z')) : [];
-  const candidates = rows.filter(row => (legacy || row.pid !== job.pid) && row.uid === uid && !String(row.state ?? '').startsWith('Z') && !saved.some(known => sameProcess(known, row)));
+  // A wrapper PID can be reused. Exclude only a saved PID/start identity; an
+  // observed identity remains held below even when its command text changed.
+  const candidates = rows.filter(row => row.uid === uid && !String(row.state ?? '').startsWith('Z') && !observed.some(known => sameIdentity(known, row)));
   const cwds = worktreeCwds(candidates, uid, ports);
   if (!(cwds instanceof Map)) return { reason: 'worktree cwd evidence unavailable', root, identities: null };
   let latest = null, reason = null; const identities = [];
@@ -214,7 +229,7 @@ function worktreeCustody(job, custodyRoot, ports = {}, retained = [], legacy = f
     if (current === undefined) {
       latest ??= lifecycleRows(ports, true);
       if (!Array.isArray(latest)) return { reason: 'worktree inventory unavailable', root, identities: null };
-      if (latest.some(now => sameIdentity(row, now))) { identities.push(row); reason ??= 'cwd evidence unavailable for a live process'; }
+      if (latest.some(now => sameIdentity(row, now)) && !startsBeforeBoundary(row, boundary)) { identities.push(row); reason ??= 'cwd evidence unavailable for a live process'; }
       continue;
     }
     const deleted = / \(deleted\)$/.test(String(current)), path = String(current).replace(/ \(deleted\)$/, ''), actual = canonicalCwd(path);
@@ -250,7 +265,10 @@ function cleanupLegacyAgentJob(job, ports, manifest, errorFile, custodyPath) {
   if (custody !== undefined && (!validCustodyRecord(custody) || custody.legacy !== true || custody.root !== root)) return null;
   if (custody?.resolution) return legacyCleanupResult();
   const retained = custody?.observations.flatMap(row => row.identities) ?? [];
-  const finding = worktreeCustody(job, root, ports, retained, true);
+  // Core supplies this only when it saved a job-level time before every part
+  // spawn. A part's post-spawn `started` time is not a safe boundary.
+  const boundary = Number.isFinite(ports.legacyCustodyBoundary) ? ports.legacyCustodyBoundary : null;
+  const finding = worktreeCustody(job, root, ports, retained, true, boundary);
   if (!finding) {
     if (custody) {
       const resolved = { ...custody, resolution: { at: Date.now(), completeProcessTable: true, completeCwdInventory: true,
@@ -316,23 +334,38 @@ export async function cleanupAgentJob(job, ports = {}) {
   stopAgentJob(job, ports);
   const result = await terminateCaptured(saved, { list: async () => (ports.list ?? lifecycleRows)(ports), signal: ports.kill ?? process.kill,
     sleep: ports.sleep, grace: ports.grace ?? GRACE_MS, poll: ports.poll });
-  if (!result.confirmed || !custody || custody.resolution) return result;
+  // The wrapper can write custody or an error while its group shuts down. Read
+  // again before reporting a clean result so that marker is not missed.
+  if (errorFile && (() => { try { readFileSync(errorFile); return true; } catch { return false; } })())
+    return { ...result, confirmed: false, remaining: Math.max(result.remaining, 1) };
+  const currentCustody = custodyPath ? readJson(custodyPath) : undefined;
+  if (currentCustody !== undefined && !validCustodyRecord(currentCustody))
+    return { ...result, confirmed: false, remaining: Math.max(result.remaining, 1) };
+  if (!result.confirmed) return result;
+  const spec = readJson(job.token);
+  const hasCustodyRoot = object(spec) && typeof spec.custodyRoot === 'string' && spec.custodyRoot;
+  if (!hasCustodyRoot) return currentCustody ? { ...result, confirmed: false, remaining: Math.max(result.remaining, 1) } : result;
   if (!['darwin', 'linux'].includes(process.platform) || (ports.alive ?? nativeAlive)(job.pid, job.token))
     return { ...result, confirmed: false, remaining: Math.max(result.remaining, 1) };
-  const spec = readJson(job.token);
   let currentRoot = null;
-  if (object(spec) && typeof spec.custodyRoot === 'string') try { currentRoot = realpathSync(spec.custodyRoot); } catch {}
-  if (currentRoot !== custody.root) return { ...result, confirmed: false, remaining: Math.max(result.remaining, 1) };
-  const retained = custody.observations.flatMap(row => row.identities), finding = worktreeCustody(job, custody.root, ports, retained);
+  try { currentRoot = realpathSync(spec.custodyRoot); } catch {}
+  if (!currentRoot || currentCustody && currentRoot !== currentCustody.root)
+    return { ...result, confirmed: false, remaining: Math.max(result.remaining, 1) };
+  const retained = currentCustody?.observations.flatMap(row => row.identities) ?? [], boundary = Number.isFinite(spec?.custodyBoundary) ? spec.custodyBoundary : null;
+  const finding = worktreeCustody(job, currentRoot, ports, retained, false, boundary);
   if (!finding) {
-    const resolved = { ...custody, resolution: { at: Date.now(), completeProcessTable: true, completeCwdInventory: true,
+    if (!currentCustody || currentCustody.resolution) return result;
+    const resolved = { ...currentCustody, resolution: { at: Date.now(), completeProcessTable: true, completeCwdInventory: true,
       recordedIdentitiesGone: true, unsavedProcessesInRoot: 0, manifestConfirmed: true } };
     try { writeAtomic(custodyPath, JSON.stringify(resolved)); } catch { return { ...result, confirmed: false, remaining: Math.max(result.remaining, 1) }; }
     return result;
   }
   if (Array.isArray(finding.identities) && processManifest(finding.identities)) {
-    const updated = { ...custody, observations: [...custody.observations, { at: Date.now(), reason: finding.reason, identities: finding.identities }] };
-    try { writeAtomic(custodyPath, JSON.stringify(updated)); } catch { /* Keep the previous uncertainty record. */ }
+    if (!currentCustody) markCustodyUncertain(job, finding);
+    else {
+      const updated = { ...currentCustody, observations: [...currentCustody.observations, { at: Date.now(), reason: finding.reason, identities: finding.identities }], resolution: null };
+      try { writeAtomic(custodyPath, JSON.stringify(updated)); } catch { /* Keep the previous uncertainty record. */ }
+    }
     return { ...result, confirmed: false, remaining: Math.max(result.remaining, finding.identities.length) };
   }
   return { ...result, confirmed: false, remaining: Math.max(result.remaining, 1) };
@@ -528,7 +561,8 @@ function wrap(specFile) {
     if (['darwin', 'linux'].includes(process.platform) && typeof spec.custodyRoot === 'string' && spec.custodyRoot) {
       const job = { pid: process.pid, token: specFile };
       snapshotAgentJob(job);
-      const finding = worktreeCustody(job, spec.custodyRoot);
+      const boundary = Number.isFinite(spec.custodyBoundary) ? spec.custodyBoundary : null;
+      const finding = worktreeCustody(job, spec.custodyRoot, {}, [], false, boundary);
       if (finding) markCustodyUncertain(job, finding);
     }
     exited(code, signal);

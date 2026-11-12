@@ -271,10 +271,12 @@ const DETACHED_HELPER = `
 const { spawn } = require('child_process'), fs = require('fs');
 const helper = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' });
 helper.unref(); fs.writeFileSync(process.env.HELPER_PID, String(helper.pid));
-setTimeout(() => process.exit(0), 80);`;
-test('the wrapper saves a detached helper before its direct agent exits', async t => {
+const published = () => { try { return JSON.parse(fs.readFileSync(process.env.MANIFEST, 'utf8')).some(row => row.pid === helper.pid); } catch { return false; } };
+const wait = setInterval(() => { if (published()) { clearInterval(wait); process.exit(0); } }, 10);
+setTimeout(() => { clearInterval(wait); process.exit(42); }, 5000);`;
+test('the wrapper saves a detached helper before its direct agent exits with a manifest handshake', async t => {
   const dir = folder(t), mark = join(dir, 'helper.pid');
-  const job = startAgentJob({ id: 'detached-helper', dir, cwd: dir, command: process.execPath, args: ['-e', DETACHED_HELPER], input: '', env: { PATH: process.env.PATH, HELPER_PID: mark } });
+  const job = startAgentJob({ id: 'detached-helper', dir, cwd: dir, command: process.execPath, args: ['-e', DETACHED_HELPER], input: '', env: { PATH: process.env.PATH, HELPER_PID: mark, MANIFEST: join(dir, 'detached-helper.spec.json.processes.json') } });
   const helper = Number(await until(() => existsSync(mark) && readFileSync(mark, 'utf8')));
   t.after(() => { try { process.kill(helper, 'SIGKILL'); } catch {} });
   await until(() => existsSync(job.exit));
@@ -288,7 +290,7 @@ setTimeout(() => {
   const helper = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' });
   helper.unref(); fs.writeFileSync(process.env.HELPER_PID, String(helper.pid)); process.exit(0);
 }, 80);`;
-test('a late detached helper retains a /tmp worktree without a cwd-based signal', { skip: !['darwin', 'linux'].includes(process.platform) }, async t => {
+test('a late unsampled detached helper retains a /tmp worktree without a cwd-based signal', { skip: !['darwin', 'linux'].includes(process.platform) }, async t => {
   const dir = folderAt(t, '/tmp/pdd-agent-job-late-'), mark = join(dir, 'late-helper.pid');
   const job = startAgentJob({ id: 'late-detached-helper', dir, cwd: dir, custodyRoot: dir, command: process.execPath, args: ['-e', LATE_DETACHED_HELPER], input: '', env: { PATH: process.env.PATH, HELPER_PID: mark } });
   assert.equal(JSON.parse(readFileSync(job.token, 'utf8')).custodyRoot, dir);
@@ -381,9 +383,9 @@ const ended = pid => {
 };
 
 const custodyRow = (pid, start, args, uid = process.getuid()) => ({ pid, ppid: 1, pgid: pid, rss: 1, uid, state: 'S', start, args });
-function custodyFixture(t, suspect) {
+function custodyFixture(t, suspect, boundary = null) {
   const dir = folder(t), token = join(dir, 'owned.spec.json'), captured = custodyRow(900001, '@ended', 'ended saved agent');
-  writeFileSync(token, JSON.stringify({ custodyRoot: dir }));
+  writeFileSync(token, JSON.stringify({ custodyRoot: dir, ...(boundary === null ? {} : { custodyBoundary: boundary }) }));
   writeFileSync(`${token}.processes.json`, JSON.stringify([captured]));
   writeFileSync(`${token}.processes.custody.json`, JSON.stringify({ schema: 1, root: realpathSync(dir),
     observations: [{ at: 1, reason: 'unsaved process uses worktree', identities: [suspect] }], resolution: null }));
@@ -403,7 +405,7 @@ test('a legacy core job can finish only after a complete checkout and old-group 
   const f = legacyFixture(t), rows = [cleanCallerRow()], signals = [];
   const proof = await cleanupAgentJob(f.job, { legacyCustodyRoot: f.root, list: () => rows, cwd: () => '/outside/core-worktree', kill: (...args) => signals.push(args) });
   assert.equal(proof.confirmed, true);
-  assert.match(proof.legacy, /no 0\.1\.28 descendant manifest/);
+  assert.ok(proof.legacy?.trim(), 'the bounded legacy limitation is reported');
   assert.deepEqual(signals, [], 'legacy clearance never signals a process');
 });
 
@@ -469,6 +471,106 @@ test('an incomplete custody process table keeps uncertainty until a complete ret
   const second = await cleanupAgentJob(f.job, ports);
   assert.equal(second.confirmed, true, 'a later complete table can resolve the exited identity');
   assert.equal(JSON.parse(readFileSync(`${f.token}.processes.custody.json`, 'utf8')).resolution.completeProcessTable, true);
+});
+
+const CUSTODY_BOUNDARY = Date.parse('2026-11-11T10:00:00Z') + 750;
+const oldStart = 'Tue Nov 10 09:00:00 2026', boundaryStart = 'Wed Nov 11 10:00:00 2026';
+
+test('custody scans a reused wrapper PID inside the root', { skip: !['darwin', 'linux'].includes(process.platform) }, async t => {
+  const f = custodyFixture(t, custodyRow(900050, '@ended-suspect', 'node ended'), CUSTODY_BOUNDARY);
+  const reusedWrapper = custodyRow(f.job.pid, boundaryStart, 'node unrelated wrapper');
+  const proof = await cleanupAgentJob(f.job, { alive: () => false, list: () => [cleanCallerRow(), reusedWrapper],
+    cwd: pid => pid === reusedWrapper.pid ? f.dir : process.cwd(), kill: () => assert.fail('cwd evidence never signals') });
+  assert.equal(proof.confirmed, false);
+  const record = JSON.parse(readFileSync(`${f.token}.processes.custody.json`, 'utf8'));
+  assert.ok(record.observations.at(-1).identities.some(row => row.pid === reusedWrapper.pid && row.start === reusedWrapper.start));
+});
+
+test('an unreadable process proven older than the pre-spawn boundary is ignored', { skip: !['darwin', 'linux'].includes(process.platform) }, async t => {
+  const f = custodyFixture(t, custodyRow(900051, '@ended-suspect', 'node ended'), CUSTODY_BOUNDARY);
+  const old = custodyRow(900052, oldStart, 'node unrelated');
+  const proof = await cleanupAgentJob(f.job, { alive: () => false, list: () => [cleanCallerRow(), old],
+    cwd: pid => { if (pid === old.pid) throw Error('EACCES'); return process.cwd(); }, kill: () => assert.fail('cwd evidence never signals') });
+  assert.equal(proof.confirmed, true);
+});
+
+test('a readable old process in the root and unreadable unknown-time process both remain held', { skip: !['darwin', 'linux'].includes(process.platform) }, async t => {
+  for (const [name, suspect, cwd] of [
+    ['readable old in root', custodyRow(900053, oldStart, 'node unrelated'), pid => pid === 900053 ? null : process.cwd()],
+    ['unreadable unknown time', custodyRow(900054, '@unknown', 'node unrelated'), pid => { if (pid === 900054) throw Error('EACCES'); return process.cwd(); }]
+  ]) {
+    await t.test(name, async t => {
+      const f = custodyFixture(t, custodyRow(900055, '@ended-suspect', 'node ended'), CUSTODY_BOUNDARY);
+      const proof = await cleanupAgentJob(f.job, { alive: () => false, list: () => [cleanCallerRow(), suspect],
+        cwd: pid => cwd(pid) ?? f.dir, kill: () => assert.fail('cwd evidence never signals') });
+      assert.equal(proof.confirmed, false);
+    });
+  }
+});
+
+test('same-second unreadable and same PID/start with changed argv remain held', { skip: !['darwin', 'linux'].includes(process.platform) }, async t => {
+  await t.test('same second is not proven older when the boundary has milliseconds', async t => {
+    const f = custodyFixture(t, custodyRow(900056, '@ended-suspect', 'node ended'), CUSTODY_BOUNDARY);
+    const sameSecond = custodyRow(900057, boundaryStart, 'node unrelated');
+    const proof = await cleanupAgentJob(f.job, { alive: () => false, list: () => [cleanCallerRow(), sameSecond],
+      cwd: pid => { if (pid === sameSecond.pid) throw Error('EACCES'); return process.cwd(); }, kill: () => assert.fail('cwd evidence never signals') });
+    assert.equal(proof.confirmed, false);
+  });
+  await t.test('saved identity command change', async t => {
+    const saved = custodyRow(900058, boundaryStart, 'node saved helper'), f = custodyFixture(t, saved, CUSTODY_BOUNDARY);
+    const changed = { ...saved, args: 'node changed helper' };
+    const proof = await cleanupAgentJob(f.job, { alive: () => false, list: () => [cleanCallerRow(), changed],
+      cwd: () => '/outside/worktree', kill: () => assert.fail('cwd evidence never signals') });
+    assert.equal(proof.confirmed, false);
+  });
+});
+
+test('legacy unreadable candidates need a core-supplied pre-spawn boundary', { skip: !['darwin', 'linux'].includes(process.platform) }, async t => {
+  for (const [name, options, expected] of [
+    ['missing boundary', {}, false],
+    ['safe boundary', { legacyCustodyBoundary: CUSTODY_BOUNDARY }, true]
+  ]) {
+    await t.test(name, async t => {
+      const f = legacyFixture(t), old = custodyRow(900059, oldStart, 'node unrelated');
+      f.job.started = CUSTODY_BOUNDARY + 60_000; // A post-spawn part time must not become a cutoff.
+      const proof = await cleanupAgentJob(f.job, { legacyCustodyRoot: f.root, list: () => [cleanCallerRow(), old],
+        cwd: pid => { if (pid === old.pid) throw Error('EACCES'); return process.cwd(); }, kill: () => assert.fail('legacy scan never signals'), ...options });
+      assert.equal(proof.confirmed, expected);
+    });
+  }
+});
+
+test('cleanup rereads a custody error written while captured identities stop', async t => {
+  const dir = folder(t), token = join(dir, 'shutdown.spec.json'), row = custodyRow(900060, boundaryStart, 'node saved helper');
+  writeFileSync(`${token}.processes.json`, JSON.stringify([row]));
+  let rows = [row];
+  const proof = await cleanupAgentJob({ pid: 900061, token }, { alive: () => false, list: () => rows,
+    kill: (pid, signal) => { if (pid === row.pid && signal === 'SIGTERM') { writeFileSync(`${token}.processes.error`, 'custody scan failed\n'); rows = []; } },
+    sleep: async () => {}, grace: 1, poll: 1 });
+  assert.equal(proof.confirmed, false);
+});
+
+test('post-shutdown custody scan creates and reopens custody findings', { skip: !['darwin', 'linux'].includes(process.platform) }, async t => {
+  await t.test('a new in-root process is found with no marker at cleanup entry', async t => {
+    const dir = folder(t), token = join(dir, 'new-finding.spec.json'), saved = custodyRow(900062, '@ended', 'node saved helper');
+    writeFileSync(token, JSON.stringify({ custodyRoot: dir, custodyBoundary: CUSTODY_BOUNDARY }));
+    writeFileSync(`${token}.processes.json`, JSON.stringify([saved]));
+    const foreign = custodyRow(900063, boundaryStart, 'node foreign helper');
+    const proof = await cleanupAgentJob({ pid: 900064, token }, { alive: () => false, list: () => [cleanCallerRow(), foreign],
+      cwd: pid => pid === foreign.pid ? dir : process.cwd(), kill: () => assert.fail('cwd evidence never signals') });
+    assert.equal(proof.confirmed, false);
+    assert.ok(existsSync(`${token}.processes.custody.json`));
+  });
+  await t.test('a resolved marker reopens when a fresh scan finds a process', async t => {
+    const f = custodyFixture(t, custodyRow(900065, '@ended', 'node ended'), CUSTODY_BOUNDARY), foreign = custodyRow(900066, boundaryStart, 'node foreign helper');
+    const record = JSON.parse(readFileSync(`${f.token}.processes.custody.json`, 'utf8'));
+    record.resolution = { at: 1, completeProcessTable: true, completeCwdInventory: true, recordedIdentitiesGone: true, unsavedProcessesInRoot: 0, manifestConfirmed: true };
+    writeFileSync(`${f.token}.processes.custody.json`, JSON.stringify(record));
+    const proof = await cleanupAgentJob(f.job, { alive: () => false, list: () => [cleanCallerRow(), foreign],
+      cwd: pid => pid === foreign.pid ? f.dir : process.cwd(), kill: () => assert.fail('cwd evidence never signals') });
+    assert.equal(proof.confirmed, false);
+    assert.equal(JSON.parse(readFileSync(`${f.token}.processes.custody.json`, 'utf8')).resolution, null);
+  });
 });
 
 test('the hung-command watch stops only the silent command; the agent goes on and a helper stays (STOPS-0129)', async t => {

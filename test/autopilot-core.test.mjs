@@ -3825,17 +3825,44 @@ test('legacy cleanup accepts only the exact core checkout and records its missin
   const caller = { pid: process.pid, ppid: 1, pgid: process.pid, rss: 1, uid: process.getuid(), state: 'S', start: '@caller', args: 'node --test' };
   const supplied = [], warnings = [];
   w.jobs.cleanup = (part, options = {}) => {
-    supplied.push(options.legacyCustodyRoot ?? null);
+    supplied.push({ root: options.legacyCustodyRoot ?? null, boundary: options.legacyCustodyBoundary });
     return cleanupAgentJob(part, { ...options, list: () => [caller], cwd: () => '/outside/core-worktree', kill: () => assert.fail('legacy cleanup sends no signal') });
   };
   await w.tick({ warn: message => warnings.push(message) });
   assert.ok(supplied.length > 0);
-  assert.ok(supplied.every(root => root === build.cwd), 'core supplies only the exact issue checkout');
+  assert.ok(supplied.every(row => row.root === build.cwd), 'core supplies only the exact issue checkout');
+  assert.ok(supplied.every(row => row.boundary === saved.started), 'core supplies the saved job start that predates its parts');
   assert.equal(jobFile(w, 17), null, 'a clear bounded legacy scan permits normal final cleanup');
   assert.equal(existsSync(build.cwd), false);
   const history = readFileSync(join(w.root, 'history.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line)).at(-1);
   assert.ok(typeof history.legacyCleanup[0].limitation === 'string' && history.legacyCleanup[0].limitation.trim());
   assert.ok(warnings.some(message => typeof message === 'string' && message.trim()));
+});
+
+test('legacy cleanup omits an unproven age boundary and retains unreadable processes', { skip: !['darwin', 'linux'].includes(process.platform) }, async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); await w.tick();
+  const build = w.job(17, 'build');
+  w.finish(17, 'build');
+  delete build.custodyRoot;
+  const saved = jobFile(w, 17); delete saved.started; delete saved.agent.custodyRoot;
+  writeFileSync(join(w.root, 'jobs', '17.json'), JSON.stringify(saved));
+  writeFileSync(build.token, JSON.stringify({ command: 'codex', args: [], cwd: build.cwd, input: build.input, log: build.log, exit: build.exit }));
+  const { cleanupAgentJob } = await import('../src/agent-job.mjs');
+  const caller = { pid: process.pid, ppid: 1, pgid: process.pid, rss: 1, uid: process.getuid(), state: 'S', start: '@caller', args: 'node --test' };
+  const unreadable = { pid: 900071, ppid: 1, pgid: 900071, rss: 1, uid: process.getuid(), state: 'S', start: 'Tue Nov 10 09:00:00 2026', args: 'node unrelated' };
+  let supplied;
+  w.jobs.cleanup = (part, options = {}) => {
+    supplied = options;
+    return cleanupAgentJob(part, { ...options, alive: () => false, list: () => [caller, unreadable],
+      cwd: pid => { if (pid === unreadable.pid) throw Error('EACCES'); return '/outside/core-worktree'; },
+      kill: () => assert.fail('legacy cleanup sends no signal') });
+  };
+  await w.tick();
+  assert.equal(supplied?.legacyCustodyRoot, build.cwd);
+  assert.equal(Object.hasOwn(supplied, 'legacyCustodyBoundary'), false, 'a part timestamp is not used as a substitute');
+  assert.ok(jobFile(w, 17), 'the checkout stays while the unreadable process has no proven age relationship');
+  assert.equal(existsSync(build.cwd), true);
 });
 
 test('legacy cleanup does not use a source checkout as a fallback root', { skip: !['darwin', 'linux'].includes(process.platform) }, async t => {
