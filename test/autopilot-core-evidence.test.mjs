@@ -1093,6 +1093,7 @@ test('E58 (#3227 fix 4) a red suite names its failed tests', async t => {
   w.build(17, { body: `Fixes #17.\n\n${NOT_RUN}`, result: { promptChanged: false } }); await w.tick();
   appendFileSync(w.job(17, 'suite').log, "not ok 7 - N3: merged former draft PR1\n  ---\n  location: '/w/test/draft.vectors.test.mjs:40:3'\n# fail 1\n");
   w.review(17, 'PASS'); w.suite(17, 1); await w.tick();
+  w.finish('base', 'suite', { code: 0 }); await w.tick();   // #3181: the base suite at the merge base passes, so the red is the PR's own
   assert.match(w.job(17, 'repair')?.input ?? '', /The full test suite failed for head [0-9a-f]{7} \(exit 1\): N3: merged former draft PR1 \(draft\.vectors\.test\.mjs\)\./);
 });
 

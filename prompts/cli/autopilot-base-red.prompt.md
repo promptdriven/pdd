@@ -80,16 +80,17 @@ the CI is `base-red` (the hold, below).
 4. Base `pass` or `broken`: the suite result comes back unchanged (the PR's own red,
    as before the compare).
 5. Base `fail`: the head's failing tests come from the job's suite log, the base's
-   from the record (`failingTests`, below). A head test also fails on the base when
+   from the record (read with the core's parser, below). A head test also fails on the base when
    the base has a test with the same name and the same file, or with no file on one
    side (`sameTest`).
    - A side with no failing test, or with more than 50: every failure counts as
      base-red.
-   - Head tests that do not fail on the base are the PR's own red: `{...suite, text}`
-     with two lines after the first line of `suite.text`: "Failing tests from this
-     change: TESTS." and, when some head tests also fail on the base, "Also red on
-     the base (SHA7), not from this change: TESTS." (each test as `NAME (FILE)`, or
-     `NAME` with no file). So the repair does not chase them.
+   - Head tests that do not fail on the base are the PR's own red: `{...suite, text}`.
+     The first line of `suite.text` loses the core's list of failed tests (the text
+     from `: ` up to `. Log:`), so it names no base test, and two lines follow it:
+     "Failing tests from this change: TESTS." and, when some head tests also fail on
+     the base, "Also red on the base (SHA7), not from this change: TESTS." (each test
+     as `NAME (FILE)`, or `NAME` with no file). So the repair does not chase them.
    - No new head test: the suite is base-red: `{state: 'base-red'}` with `{what:
      'suite', sha: BASE COMMIT, names, tests: THE HEAD TESTS, tail: THE BASE TAIL}`.
 
@@ -183,39 +184,34 @@ in ISO form), else the empty string.
 
 ## Failing tests
 
-`failingTests(text, limit = 50)` returns `[{name, file}]` (`file` is a string or
-null), in log order, at most `limit` entries. It has the shape of the core's
-`failingTests` of #3227 fix 4, so that one can replace it with one import.
+The one parser of failed tests is the core's `failingTests(text, limit)` (#3227 fix 4;
+its rules are in the [core](autopilot-core.prompt.md), merge check step 4), which
+returns `[{name, file}]`. This module has no parser of its own: it gets it as
+`tools.failingTests` and calls it with a limit of 51. One test is one entry
+(`sameTest(a, b)`): the same name with the same file, or with no file on one side.
 
-- **TAP** (node --test): a line `not ok N - NAME` at any depth (a subtest is
-  indented). The `location: 'FILE:LINE:COL'` line in the next 12 lines gives its
-  file. The failure stays open until its location line, the next `ok N` or `not ok
-  N` line, or 12 lines; only then does it join the list (by the one-test rule below).
-  So two failures with one name in two files are two tests (review R1, P2: else a
-  new failure in a second file hid behind a base failure in the first).
-- **Spec reporter**: a line `✖ NAME (DURATION)` at any depth; a `test at
-  FILE:LINE:COL` line right before it (the failure summary) gives its file. The
-  summary header `✖ failing tests:` is not a test. Color codes are removed first.
-- A line with a `# TODO` or `# SKIP` directive is not a failure. NAME is trimmed and
-  cut to 200 characters; a blank NAME does not count.
-- One test is one entry (`sameTest`): the same name with the same file, or with no
-  file on one side (then the entry keeps the file that is known). So the spec
-  reporter's summary repeats no test.
+The module reads the job's suite log and the base suite log in 1 MB parts, whole lines
+only, so a long log never sits in memory at once. It keeps only the lines that the
+parser reads (`not ok`, `location:`, `test at`, `✖`, each cut to 4,000 characters, and
+each `ok N` line as a short `ok` line) and parses them once; more than 50 tests sets
+`more`. Every `ROOT/` and `file://ROOT/` (the checkout root) goes from names and
+files, so one test in two checkouts is one test.
 
-The engine reads the job's suite log and the base suite log in 1 MB parts, whole lines
-only, so a long log never sits in memory at once. It keeps only the lines that
-`failingTests` reads (`not ok`, `location:`, `test at`, `✖`, each cut to 4,000
-characters, and each `ok N` line as a short `ok` line) and calls `failingTests` once
-on them with a limit of 51; more than 50 tests sets `more`. Every `ROOT/` and
-`file://ROOT/` (the checkout root) goes from names and files, so one test in two
-checkouts is one test.
+`baseRedPartial(ctx, job, partial)` serves the core's still-running suite line:
+`partial` is the parser's list from the job's running suite log. It returns `{own,
+onBase, sha}`: `sha` is the merge base of the job head (`git merge-base origin/BASE
+HEAD`, the fetched tip of this tick); when this machine has a base-suite record in
+state `fail` for it, `onBase` are the tests of `partial` that the record has
+(`sameTest`, after the root of `job.suite.cwd` goes from their files) and `own` the
+others; with no such record, or for a main-red job, `own` is all of `partial`. A
+failed Git read gives `own` all of `partial` and only warns.
 
 ## The base suite record
 
 `ROOT/base-suite/SHA.json` (`ROOT` is `ctx.root`, mode 0600, written atomically):
 `{sha, state, tests, more, tail, text, at, cwd, agent, restarts, deaths, quiets}`.
 `state` is `running`, `pass`, `fail` or `broken`; `tests` (`[{name, file}]`, at most
-50) and `more` come from `failingTests`; `tail` is the redacted last 30 lines of its log; `text` says why a
+50) and `more` come from the core's parser; `tail` is the redacted last 30 lines of its log; `text` says why a
 broken run is broken; `at` is the last change. A record that cannot be read counts as
 missing.
 
@@ -242,14 +238,14 @@ again. It clears `job.baseSuite`. It never throws.
 ## Public contract
 
 Exports: `ciVsBase`, `suiteVsBase`, `baseRedWait`, `baseRedWaiting`,
-`baseRedStatus`, `stopBaseSuite`, `fileMainRed`, `failingTests`, `sameTest(a, b)`,
+`baseRedStatus`, `stopBaseSuite`, `fileMainRed`, `baseRedPartial`, `sameTest(a, b)`,
 `baseRedFingerprint(what, names)`, `mainRedRoute(settings)`, `MAIN_RED_LABEL`
 (`pdd:main-red`) and `BASE_RED_MARKER` (`pdd:autopilot-core:base-red`).
 
 Ports come from the core: `ctx` (`gh {call, ok}`, `git`, `fs`, `now`, `root`, `dirs`,
 `repo`, `state`, `settings`, `jobs`, `quiet`, `saveJob`, `publicBody`, `warn`,
 `ports.alert`) and `tools` (`startJob`, `queuedCommand`, `watchProcess`, `readTail`,
-`removeTree`, `refreshBase`, `leaveLane`, `runnerLine`).
+`removeTree`, `refreshBase`, `leaveLane`, `runnerLine`, `failingTests`).
 
 ## Dependencies
 

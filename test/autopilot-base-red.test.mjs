@@ -1,13 +1,13 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdtempSync, rmSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { coreWorld } from './helpers/core-world.mjs';
-import { coreStatus } from '../src/autopilot-core.mjs';
-import { failingTests, sameTest, baseRedFingerprint, mainRedRoute, fileMainRed, baseRedWait, ciVsBase, MAIN_RED_LABEL } from '../src/autopilot-base-red.mjs';
+import { coreStatus, failingTests } from '../src/autopilot-core.mjs';
+import { sameTest, baseRedFingerprint, mainRedRoute, fileMainRed, baseRedWait, ciVsBase, MAIN_RED_LABEL } from '../src/autopilot-base-red.mjs';
 
 // Expected results come from issue #3181, chaos row B7, ticket T03 and the group 3 design (section B).
 const MIN = 60 * 1000;
@@ -30,7 +30,7 @@ test('failing tests: TAP and spec lines at any depth, with the file when the log
     '\x1b[31m✖ top fails \x1b[90m(0.48ms)\x1b[39m', '  Error: x'].join('\n');
   assert.deepEqual(failingTests(spec), [{ name: 'top fails', file: 'test/a.test.mjs' }, { name: 'child fails', file: null }, { name: 'parent', file: null }]);
   const many = Array.from({ length: 60 }, (_, i) => `not ok ${i + 1} - test ${i}`).join('\n');
-  assert.equal(failingTests(many).length, 50, 'the limit is 50 by default'); assert.equal(failingTests(many, 10).length, 10); assert.equal(failingTests(many, 10)[9].name, 'test 9');
+  assert.equal(failingTests(many).length, 20, 'the core\'s limit is 20 by default'); assert.equal(failingTests(many, 50).length, 50); assert.equal(failingTests(many, 10)[9].name, 'test 9');
   assert.deepEqual(failingTests(''), []);
   assert.equal(sameTest({ name: 'a', file: 'x' }, { name: 'a', file: null }), true); assert.equal(sameTest({ name: 'a', file: 'x' }, { name: 'a', file: 'y' }), false);
 });
@@ -117,6 +117,26 @@ test('R1 a job whose own issue closed as a duplicate waits on the open issue wit
   await baseRedWait(ctx, job, { refreshBase: async () => { refreshed++; } });
   assert.equal(refreshed, 0, 'the red is not fixed: issue #1 is open');
   assert.equal(job.baseRed.report.number, 1); assert.ok(saved > 0);
+});
+
+// One parser (group lead, Nov 12): the core's failingTests. Before its fix it differed from the module's copy on each
+// of these real node --test outputs; the expected results come from the outputs themselves.
+test('the core parser on real node --test output: TAP, spec and spec with color; nested, two files with one name, TODO, SKIP, a # in a name', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'pdd-base-red-parsers-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  writeFileSync(join(dir, 'a.test.mjs'), ["import test from 'node:test';", "test('passes', () => {});", "test('saves the value', () => { throw new Error('a'); });",
+    "test('parent', async t => { await t.test('child fails', () => { throw new Error('c'); }); await t.test('child ok', () => {}); });",
+    "test('later', { todo: true }, () => { throw new Error('todo'); });", "test('skipped one', { skip: true }, () => {});", "test('name with # hash', () => { throw new Error('h'); });", ''].join('\n'));
+  writeFileSync(join(dir, 'b.test.mjs'), "import test from 'node:test';\ntest('saves the value', () => { throw new Error('b'); });\n");
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !['NODE_OPTIONS', 'NODE_TEST_CONTEXT', 'NO_COLOR', 'FORCE_COLOR'].includes(key)));
+  const run = (reporter, color) => spawnSync(process.execPath, ['--test', `--test-reporter=${reporter}`, 'a.test.mjs', 'b.test.mjs'], { cwd: dir, encoding: 'utf8', env: { ...env, ...(color ? { FORCE_COLOR: '1' } : { NO_COLOR: '1' }) } }).stdout;
+  const short = list => list.map(f => `${f.name} [${f.file ? f.file.split('/').pop() : '-'}]`);
+  const names = ['saves the value [a.test.mjs]', 'child fails [a.test.mjs]', 'parent [a.test.mjs]', 'name with # hash [a.test.mjs]', 'saves the value [b.test.mjs]'];
+  assert.deepEqual(short(failingTests(run('tap'), 50)), names);
+  const spec = ['saves the value [a.test.mjs]', 'child fails [a.test.mjs]', 'parent [-]', 'name with # hash [a.test.mjs]', 'saves the value [b.test.mjs]'];
+  assert.deepEqual(short(failingTests(run('spec'), 50)), spec, 'the spec summary gives the files; parent has no "test at" line');
+  assert.match(run('spec', true), /\x1b\[/, 'the colored run has color codes');
+  assert.deepEqual(short(failingTests(run('spec', true), 50)), spec);
 });
 
 test('fingerprint: what and the names in any order, never the commit; the main-red issue goes to the work repository', () => {
@@ -309,7 +329,7 @@ test('B3 a suite fails with X and Y and the base fails only X: one repair whose 
   await w.tick();
   const repair = w.job(17, 'repair');
   assert.ok(repair);
-  assert.match(repair.input, /The full test suite failed for head [0-9a-f]{7}/);
+  assert.match(repair.input, /The full test suite failed for head [0-9a-f]{7} \(exit 1\)\. Log: /, 'the first line lists no base test');
   assert.match(repair.input, /Failing tests from this change: Y saves the file\./);
   assert.match(repair.input, /Also red on the base \([0-9a-f]{7}\), not from this change: X keeps the value\./);
   assert.equal(mainRed(w).length, 0);
@@ -505,4 +525,26 @@ test('R1 P3 a merge in this tick moves the base: the next compare reads the base
   ctx.counts.merged = 1;
   assert.equal((await red({ head: 'd'.repeat(40) })).baseRed.sha, tips[1]);
   assert.ok(reads.some(path => path.includes(tips[1])), 'the new tip\'s checks are read');
+});
+
+// The core's still-running suite line (#3227 fix 4) with this machine's base-suite record for the merge base.
+test('a still-running suite line names only the tests that the base record does not have; all of them on the base: no line', async t => {
+  const run = async (headLines, baseTests) => {
+    const w = await coreWorld(t);
+    w.issue(17); await w.tick(); w.build(17); await w.tick();
+    const sha = tipOf(w);
+    mkdirSync(join(w.root, 'base-suite'), { recursive: true });
+    writeFileSync(join(w.root, 'base-suite', `${sha}.json`), JSON.stringify({ sha, state: 'fail', tests: baseTests, more: false, tail: '', text: '', at: w.now() }));
+    const suite = w.job(17, 'suite');
+    w.say(17, 'suite', headLines(suite.cwd));
+    w.review(17, 'FAIL', ['P2 change-17.txt:1 the value is wrong']); await w.tick();
+    return { w, repair: w.job(17, 'repair'), sha };
+  };
+  let { repair, sha } = await run(cwd => tapFailure(cwd, 1, 'X keeps the value', 'test/x.test.mjs') + tapFailure(cwd, 2, 'Y saves the file', 'test/y.test.mjs'),
+    [{ name: 'X keeps the value', file: 'test/x.test.mjs' }]);
+  assert.match(repair.input, new RegExp(`already shows failed tests: Y saves the file \\(y\\.test\\.mjs\\)\\. Also red on the base \\(${sha.slice(0, 7)}\\), not from this change: X keeps the value \\(x\\.test\\.mjs\\)\\.`));
+  ({ repair } = await run(cwd => tapFailure(cwd, 1, 'X keeps the value', 'test/x.test.mjs'), [{ name: 'X keeps the value', file: 'test/x.test.mjs' }]));
+  assert.match(repair.input, /the value is wrong/); assert.doesNotMatch(repair.input, /already shows failed tests/);
+  ({ repair } = await run(cwd => tapFailure(cwd, 1, 'X keeps the value', 'test/x.test.mjs'), [{ name: 'X keeps the value', file: 'test/other.test.mjs' }]));
+  assert.match(repair.input, /already shows failed tests: X keeps the value \(x\.test\.mjs\)\./, 'another file is another test');
 });
