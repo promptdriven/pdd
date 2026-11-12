@@ -3253,7 +3253,9 @@ async function draftDescription(run, pr1, drafts, p) {
     remember();
     return [`pdd updated the PR 1 description: ${drafts.length ? `draft prompts left: ${drafts.join(', ')}` : 'no draft prompts are left'}.`];
   } catch (error) {
-    if(error?.code==='workflow_progress_refused')throw error; return [`warning: pdd could not update the PR 1 description (${error.code ?? 'error'}). ${run.publicationPending ? 'No source was pushed.' : 'The PR retains its previous evidence; after a source push it stays publication-pending.'}`]; }
+    if(error?.code==='workflow_progress_refused')throw error;
+    const advice = error?.code === 'workflow_pr_body_too_large' ? ' Shorten the notes while retaining outcome, limitation and reference evidence, then retry.' : '';
+    return [`warning: pdd could not update the PR 1 description (${error.code ?? 'error'}).${advice} ${run.publicationPending ? 'No source was pushed.' : 'The PR retains its previous evidence; after a source push it stays publication-pending.'}`]; }
 }
 
 // A terminal in the run's own chat pane (Herdr session pdd) belongs to the chat; a person's other Herdr tab does not.

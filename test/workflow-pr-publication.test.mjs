@@ -1013,6 +1013,7 @@ test('2874: a PR 1 refresh preserves late evidence and refuses an oversized repl
   const written = f.data().events.length;
   const out = f.invoke('', 'approveRun');
   assert.match(out.message, /workflow_pr_body_too_large/);
+  assert.match(out.message, /shorten the notes while retaining outcome, limitation and reference evidence/i);
   assert.equal(f.data().events.length, written, 'The oversized replacement is never written.');
   assert.equal(f.data().prs[0].body, body, 'The previous PR description remains available.');
 });
