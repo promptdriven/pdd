@@ -1,0 +1,247 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/affected-story-selection.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "With changes that affect Stories A and B, `pdd test --affected` selects all their test variants and criteria, and sends no Check for known unrelated Story C."
+    },
+    {
+      "id": "AC2",
+      "text": "When change scope, ownership or a required dependency relationship is uncertain, affected selection conservatively keeps all Stories that might be affected; with no established target it keeps the full inventory."
+    },
+    {
+      "id": "AC3",
+      "text": "Ordinary full and named checks keep their current selection, cache, call limits and recovery behavior. Affected mode accepts no Story operands or `--lf`; rejected combinations have no execution effects."
+    }
+  ],
+  "initial_world": {},
+  "simulation": {},
+  "context": [],
+  "steps": [
+    {
+      "step_id": "all-target-variants",
+      "entry_path": "prompts/cli/runtime-check-plan.prompt.md",
+      "operation": "selectCheckTests",
+      "input": {
+        "plan": {
+          "schema_version": "pdd.check-plan.v1",
+          "stories": [
+            {
+              "role": "target",
+              "tests": [
+                "test/runtime/A.json",
+                "test/runtime/A.recorded.json",
+                "test/runtime/A.json"
+              ]
+            },
+            {
+              "role": "target",
+              "tests": [
+                "test/runtime/B.json"
+              ]
+            },
+            {
+              "role": "baseline",
+              "tests": [
+                "test/runtime/C.json"
+              ]
+            }
+          ]
+        },
+        "affected": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/tests",
+          "op": "equals",
+          "value": [
+            "test/runtime/A.json",
+            "test/runtime/A.recorded.json",
+            "test/runtime/B.json"
+          ]
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/baseline_tests",
+          "op": "equals",
+          "value": [
+            "test/runtime/C.json"
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "conservative-targets",
+      "entry_path": "prompts/cli/runtime-check-plan.prompt.md",
+      "operation": "selectCheckTests",
+      "input": {
+        "plan": {
+          "schema_version": "pdd.check-plan.v1",
+          "stories": [
+            {
+              "role": "target",
+              "tests": [
+                "test/runtime/A.json",
+                "test/runtime/A.recorded.json"
+              ]
+            },
+            {
+              "role": "target",
+              "tests": [
+                "test/runtime/B.json"
+              ]
+            },
+            {
+              "role": "target",
+              "tests": [
+                "test/runtime/C.json"
+              ]
+            }
+          ]
+        },
+        "affected": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/tests",
+          "op": "equals",
+          "value": [
+            "test/runtime/A.json",
+            "test/runtime/A.recorded.json",
+            "test/runtime/B.json",
+            "test/runtime/C.json"
+          ]
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/baseline_tests",
+          "op": "equals",
+          "value": []
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "no-target-fallback",
+      "entry_path": "prompts/cli/runtime-check-plan.prompt.md",
+      "operation": "selectCheckTests",
+      "input": {
+        "plan": {
+          "schema_version": "pdd.check-plan.v1",
+          "stories": [
+            {
+              "role": "baseline",
+              "tests": [
+                "test/runtime/A.json",
+                "test/runtime/A.recorded.json"
+              ]
+            },
+            {
+              "role": "baseline",
+              "tests": [
+                "test/runtime/B.json"
+              ]
+            },
+            {
+              "role": "baseline",
+              "tests": [
+                "test/runtime/C.json"
+              ]
+            }
+          ]
+        },
+        "affected": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/tests",
+          "op": "equals",
+          "value": [
+            "test/runtime/A.json",
+            "test/runtime/A.recorded.json",
+            "test/runtime/B.json",
+            "test/runtime/C.json"
+          ]
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/baseline_tests",
+          "op": "equals",
+          "value": []
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "ordinary-full-default",
+      "entry_path": "prompts/cli/runtime-check-plan.prompt.md",
+      "operation": "selectCheckTests",
+      "input": {
+        "plan": {
+          "schema_version": "pdd.check-plan.v1",
+          "stories": [
+            {
+              "role": "target",
+              "tests": [
+                "test/runtime/A.json",
+                "test/runtime/A.recorded.json"
+              ]
+            },
+            {
+              "role": "target",
+              "tests": [
+                "test/runtime/B.json"
+              ]
+            },
+            {
+              "role": "baseline",
+              "tests": [
+                "test/runtime/C.json"
+              ]
+            }
+          ]
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/mode",
+          "op": "equals",
+          "value": "full"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/tests",
+          "op": "equals",
+          "value": [
+            "test/runtime/A.json",
+            "test/runtime/A.recorded.json",
+            "test/runtime/B.json",
+            "test/runtime/C.json"
+          ]
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/baseline_tests",
+          "op": "equals",
+          "value": []
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

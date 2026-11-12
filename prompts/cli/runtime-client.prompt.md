@@ -1348,6 +1348,72 @@ batches remain usable. Do not recover by a network read or change saved caches.
 
 ## Check scope plan
 
+### Affected checks and historical baseline report (draft)
+
+`pdd test --affected` is an explicit ordinary-check mode with no operands. Allow
+only `--json`, `--details`, `--timeout`, `--max-calls` and `--cache-clear` beside
+it. Reject other combinations, including `--lf`, journeys, files, bindings,
+lint, read/retry, request, hash and screen modes, with exit 2 before state writes,
+sign-in or network effects. Ordinary full and named selections remain unchanged.
+No new comparison flag is introduced: use the existing unique saved-run base or
+HEAD. A committed no-run change with no working changes falls back to all Stories.
+
+Discover the ordinary full inventory and obtain the planning owner's complete
+classification first. Use its `selectCheckTests` for actual dispatch selection.
+Apply dispatch preflight, capture, lint, cache attempts and all call/admission
+bounds only to that selection. Keep every selected Story variant and criterion.
+`--cache-clear` clears the ordinary cache and sends the affected selection again;
+all existing cache age/identity/CI/declaration and restart rules still apply.
+An identity-change second phase cannot add an omitted baseline. Never widen a
+saved read/retry, or recompute its affected scope from later edits.
+
+Persist `check_selection:{mode,tests,baseline_tests}` alongside the full
+`check_plan` and the exact selected `source_selection`. This metadata records
+selection, not execution or proof. Current batch rows contain selected tests
+only; omitted baselines never acquire synthetic rows, passes, calls or receipts.
+Keep `check_scope`'s missing-row semantics. Its baseline unresolved guidance in
+affected mode must identify omitted work, not imply that this batch has a pending
+baseline request to read.
+
+Build `baseline_report` through the planning owner's projection, using locally
+saved Check history only. Scan every available eligible batch, not only the
+newest batch and not the pass-only Story summary. Reuse `readEvidenceEligibility`,
+saved Check row/receipt validation and source-capture authorities. Filter by the
+actual original producer/selection/stage and known runtime/account identity;
+unknown identity supplies unavailable evidence, never a guessed account. Do not
+sign in, GET receipts or POST checks solely to populate this report. Read raw
+files/directories and capture hashes through injected ports with native defaults.
+Retain every available original failed Check receipt, including an older failed
+attempt after a later passing receipt. Use a matching-ID Check receipt for sent
+outcomes; never trust a saved passed label alone. Local unsent problems may appear
+as local observations, never execution or success, and cannot erase sent history.
+Retain failed/refused/partial/not-run distinctions through canonical outcomes.
+Sort observations by original batch time (unknown last), batch ID, test path and
+request ID; preserve distinct original attempts. Missing/corrupt/ineligible
+records cannot attest a pass. Mark partial/unavailable history and finite warnings
+without hiding other readable failures. Missing state gives empty history.
+
+Compare each observation with its complete original source selection/hash under
+the existing eligibility/stage authority: equal is current, different is stale,
+and missing/unreadable identity is unavailable. Historical PR 1/before evidence
+keeps that qualifier in its stage and cannot attest current-code proof. Validate
+and redact original report links as usual. Never infer baseline age or owner.
+Save the report snapshot in batch.json and summary.json; JSON exposes the same
+field. Text lists baseline paths, original outcomes/batch/time/report and
+currentness with the original-batch scope. Explicitly label this historical or
+omitted evidence, not work performed in this invocation. Saved batch reads and
+retries preserve that snapshot rather than refreshing history or paying for a
+baseline rerun. No saved original is rewritten or deleted to assemble a report.
+
+**Proposed exit contract for person review:** affected command status follows
+the existing named-selection convention, based only on its selected target
+results. A target pass can exit 0 beside a saved baseline failure. Always state
+`Affected checks only; this is not a full workflow pass. Required full-pass gates still apply.`
+This adds no failure waiver: `fullCheckPass`, Story/approval/publication/code/merge
+gates, strict approval and repository-required native full-suite checks remain
+unchanged and blocking, including failed, missing and stale baseline evidence.
+The baseline snapshot itself is never submitted as current gate evidence.
+
 Before normal Check dispatch, build the local plan owned by
 [check planning](runtime-check-plan.prompt.md), using the unique same-worktree
 workflow run's baseSha when available. Print its text to stderr once before

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-results.prompt.md (sha256: 287344db8e7c6320fab3f1fd61917e85c5f083b04d600d064ca0140ee41cbaa9).
+// Generated from prompts/cli/workflow-results.prompt.md (sha256: f39c0e8c7c72058393411296f0630401ca571c6b954fdd5c9b89e9c9414d8b93).
 import { isDeepStrictEqual } from 'node:util';
 import {checkPlanResults,checkPlanResultLines} from './runtime-check-plan.mjs';
 import { outcomeText, resultOutcome } from './runtime-outcome.mjs';
@@ -96,10 +96,20 @@ function localLayoutResult(batch, summary) {
 const STAGE_LABEL = {pr1:'PR 1 (historical)',before:'before the fix (historical)'};
 export const usableResult = result => result.kind === 'pdd lint' && result.localOnly === true || result.state === 'partial' || result.states?.some(row => row.state === 'partial') ? false : result.kind === 'native evidence' ? result.assessment?.identity?.stage !== 'pr1' && result.assessment?.storyNativeProof !== 'none' && ['pdd-observed','qualified-external'].includes(result.assessment?.storyNativeProof) : result.kind !== 'pdd workflow prove' || result.state === 'current';
 
+const AFFECTED_DISCLAIMER = 'Affected checks only; this is not a full workflow pass. Required full-pass gates still apply.';
+function savedCheckScope(batch) {
+  const scope = checkPlanResults(batch.check_plan,batch.rows);
+  if (scope && batch.check_selection?.mode === 'affected' && scope.baseline.unresolved.length && !batch.check_plan.prerequisites?.length) {
+    const selected = scope.target.failures.length ? `Repair target failures: ${scope.target.failures.join(', ')}. `
+      : scope.target.unresolved.length ? `Read the saved batch for unresolved selected checks: ${scope.target.unresolved.join(', ')}. ` : '';
+    scope.guidance = `${selected}Omitted baseline work: ${scope.baseline.unresolved.join(', ')}. Historical observations are separate; run a full check for required full-pass gates.`;
+  }
+  return scope;
+}
 function runtimeEvidence(batch, summary) {
   const coverage = batch.coverage ?? summary?.coverage;
   const nativeOnly = batch.rows.filter(row => Array.isArray(row?.native_only) && row.native_only.length).map(row => ({test:row.test,state:row.state,prompts:row.native_only.filter(item => item && typeof item.path === 'string' && typeof item.reason === 'string').map(item => ({path:item.path,reason:item.reason}))}));
-  return {...(batch.check_plan ? {checkPlan:batch.check_plan,checkScope:checkPlanResults(batch.check_plan,batch.rows)} : {}), ...(coverage ? {coverage} : {}), ...(nativeOnly.length ? {nativeOnly} : {})};
+  return {...(batch.check_selection ? {checkSelection:batch.check_selection} : {}), ...(batch.baseline_report ? {baselineReport:batch.baseline_report} : {}), ...(batch.check_plan ? {checkPlan:batch.check_plan,checkScope:savedCheckScope(batch)} : {}), ...(coverage ? {coverage} : {}), ...(nativeOnly.length ? {nativeOnly} : {})};
 }
 
 // Preserve saved details on their own row; their consumer decides what they mean.
@@ -177,7 +187,7 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
       ...(check.association?.runId?{producerRoot:batch.root,association:{runId:check.association.runId,repo:check.association.repo,
         workspaceRoot:check.association.producerRoot,tests:check.association.tests,source_sha256:check.association.source_sha256,
         stage:check.association.stage,sourceAnchor:check.association.sourceAnchor}}:{}),
-      ...(check.association?{stage:check.association.stage,sourceAnchor:check.association.sourceAnchor}:{}),states, summary: [safeSummary || 'result not saved (the check did not finish)', stateEvidence, ...checkPlanResultLines(checkPlanResults(batch.check_plan,batch.rows))].filter(Boolean).join('; '), stories,
+      ...(check.association?{stage:check.association.stage,sourceAnchor:check.association.sourceAnchor}:{}),states, summary: [safeSummary || 'result not saved (the check did not finish)', stateEvidence, ...checkPlanResultLines(savedCheckScope(batch)), ...(batch.check_selection?.mode === 'affected' ? [AFFECTED_DISCLAIMER] : [])].filter(Boolean).join('; '), stories,
       ...identity(batch.rows) });
   }
   if (lint) {
