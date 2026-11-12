@@ -45,7 +45,7 @@ test('RUNTIME-SERVER1: one lint, then every check is sent before the first answe
   assert.match(result.err, /1 is not prompt, story or test files/);
   assert.equal((result.out + result.err).split('not prompt, story or test files').length, 2);
   const json = await check(harbor(t), await fakeRuntime(t, (entry, f) => f.normal(entry)), [], { '--json': true });
-  assert.deepEqual(json.json.warnings, []);
+  assert.deepEqual(json.json.warnings, ['Warning: prompts/place_order.prompt.md entry place_order has no implementation declaration.']);
   assert.match(result.out, /^Place a coffee order +tests\/place-order\.json +passed +1\/1 +2\.0 s$/m);
   assert.deepEqual(result.out.split('\n').slice(3, 6), ['Prompt tests (place-order): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call',
     'Prompt tests (unknown-item): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call', 'Prompt tests: ✓ 2 of 2 criteria · 2/2 checks · 2 AI calls']);
