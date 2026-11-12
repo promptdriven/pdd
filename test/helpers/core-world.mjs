@@ -196,7 +196,7 @@ export async function coreWorld(t, { repository = 'acme/widgets', settings = {},
   };
   w.review = (issue, verdict, mustFix = []) => {
     const job = w.job(issue, 'review');
-    w.finish(issue, 'review', { result: { verdict, head: job.head, summary: `Review ${verdict}`, mustFix } });
+    w.finish(issue, 'review', { result: { verdict, head: job.head, summary: `Review ${verdict}`, mustFix, proof: { head: job.head, checks: [{ command: 'node --test', result: 'pass' }], behavior: { result: 'not-applicable', detail: 'fixture' }, regressions: (JSON.parse(readFileSync(join(w.root, 'jobs', `${issue}.json`), 'utf8')).repairFindings ?? []).map(finding => ({ finding, result: 'not-applicable', reason: 'fixture' })) } } });
   };
   w.suite = (issue, code = 0) => w.finish(issue, 'suite', { code });
   w.issue = (n, extra = {}) => w.github.add(n, { created: w.now() - (1000 - n) * 60000, updated: w.now() - 60000, ...extra });

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 9464ac474b570f1f80dcbf651e21021a92c1aba2f1691c97f442a0ed36febeab).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 68fcf699ed874a0e8d42288c08f178b84689b40af15ffc243ec1b7866d8188ae).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -462,7 +462,7 @@ const repairPrompt = (ctx, job, reds, result) => `You are an Autopilot core repa
 Work only in this folder: ${job.worktree}. The checks of head ${job.head} are red:
 ${reds.map(red => `- ${red}`).join('\n')}
 
-Fix these causes on the same branch and push to it. Do not open a new PR. If the result of \`pdd test\` or of the tests changes, update the "Runtime:" and "Evidence:" lines in the PR body. The logs of this issue's jobs are in ${ctx.dirs.logs}.
+For each finding that changes public behavior retain a tracked regression case, run it, and report its path, command, passing result and failing old-code or planted reproduction. For a finding without changed public behavior report a nonblank reason a regression is not applicable. Fix these causes on the same branch and push to it. Do not open a new PR. If the result of \`pdd test\` or of the tests changes, update the "Runtime:" and "Evidence:" lines in the PR body. The logs of this issue's jobs are in ${ctx.dirs.logs}.
 
 ${issueText(job)}
 
@@ -470,7 +470,8 @@ ${workRules(ctx, job)}
 
 ${RESULT_RULES(result)}
 `;
-const reviewPrompt = (ctx, job, result) => `You are a fresh reviewer for an Autopilot core job in ${ctx.repo}. You did not write this change.
+const reviewPrompt = (ctx, job, result) => `Review model: same-family (configured agent). Repair findings requiring regression proof: ${JSON.stringify(job.repairFindings ?? [])}.
+You are a fresh reviewer for an Autopilot core job in ${ctx.repo}. You did not write this change.
 Review PR #${job.pr} (https://github.com/${ctx.repo}/pull/${job.pr}) at head ${job.head} for issue #${job.issue}. This folder is a clean checkout of that head.
 
 ${issueText(job)}
@@ -479,18 +480,11 @@ Owner table of the changed files (on the base):
 ${job.paths?.owners ?? '(not read)'}${job.paths?.hints?.length ? `\nHints (prompts that mention a changed unowned file; check that the changed values agree): ${job.paths.hints.join('; ')}` : ''}
 
 Check: (1) the change does what the issue asks; (2) Path: the Path lines match the owner table. You may dispute the table only when you name a binding, header or prompt line that it missed. For a and c: the prompt states the issue's behavior in words that trace to the issue, not to the code, and the code agrees with it. For b: the quoted line really requires the fixed behavior, or the diff keeps the contract. For d: each changed value that a prompt states agrees with that prompt at this head. These are must-fixes: a new prompt for a non-code file; a binding or header added for an unowned file on the base; owned code that disagrees with its prompt. Do not ask for a new prompt for an unowned file. Do not judge commit order. (3) Tests: when the change alters a result through the public surface, a test checks it and fails on base, and no test was weakened. To make a missing test a must-fix, name the surface and the result that changed. Do not ask for a test that only copies a value from the diff. (4) the PR body has one honest Runtime line, and a Runtime FAIL line in the PR body means your verdict is FAIL; (5) no unrelated change, secret or unsafe effect.
-Read the change with: git fetch origin ${ctx.state.baseBranch} && git diff origin/${ctx.state.baseBranch}...HEAD. You may run focused tests. Do not edit files, commit, push, comment, approve or merge.
+Read the change with: git fetch origin ${ctx.state.baseBranch} && git diff origin/${ctx.state.baseBranch}...HEAD. Install and build as needed, run focused tests and the affected public action, and exercise the real app or Try when applicable. Record the actual commands and results. For every repair finding, verify its regression case is tracked at this head, rerun its command and its failing old-code or planted reproduction. Only a finding without changed public behavior may use not-applicable with a reason. Do not run the full suite; it runs separately. Do not edit files, commit, push, comment, approve or merge.
 Before you exit, write this JSON file: ${result}
-{"verdict":"PASS" or "FAIL","head":"${job.head}","summary":"<one paragraph>","mustFix":["<each required fix>"]}. A FAIL names at least one required fix. Start each item with its severity and its place: "P1 file:line ..." (wrong behavior or unsafe), "P2 file:line ..." (must be fixed before the merge) or "P3 file:line ..." (a follow-up that does not block the merge). One item per finding. A PASS lists only P3 items: any other item blocks the merge.
+{"verdict":"PASS" or "FAIL","head":"${job.head}","summary":"<one paragraph>","mustFix":["<each required fix>"],"proof":{"head":"${job.head}","checks":[{"command":"<executed command>","result":"pass"}],"behavior":{"result":"pass or not-applicable","detail":"<exercise or reason>"},"regressions":[{"finding":"<supplied finding>","path":"<tracked case>","command":"<executed command>","result":"pass","before":"<failing reproduction>"}]}}. For a finding without changed public behavior, a regression can instead be {"finding":"<finding>","result":"not-applicable","reason":"<reason>"}. A FAIL names at least one required fix. Start each item with its severity and its place: "P1 file:line ..." (wrong behavior or unsafe), "P2 file:line ..." (must be fixed before the merge) or "P3 file:line ..." (a follow-up that does not block the merge). One item per finding. A PASS lists only P3 items: any other item blocks the merge.
 `;
 
-const scopedPrompt = (ctx, job, scoped, result) => `You are a short scoped check for an Autopilot core job in ${ctx.repo}. You did not write this change.
-PR #${job.pr} at head ${job.head} for issue #${job.issue} passed a full review before the base moved. This folder is a clean checkout of the head.
-The base moved: ${scoped.reason}. Read only this part: ${scoped.detail}
-Answer one question: does the result keep both changes (the PR's and the base's) and break neither? Read with: git fetch origin ${ctx.state.baseBranch} && git diff origin/${ctx.state.baseBranch}...HEAD -- ${(scoped.files ?? []).join(' ')}. You may run focused tests. Do not edit files, commit, push, comment, approve or merge.
-Before you exit, write this JSON file: ${result}
-{"verdict":"PASS" or "FAIL","head":"${job.head}","summary":"<one paragraph>","mustFix":["<each required fix>"]}. A FAIL names at least one required fix. Start each item with "P1 file:line ..." or "P2 file:line ..." (must be fixed) or "P3 file:line ..." (a follow-up). A PASS lists only P3 items: any other item blocks the merge.
-`;
 const conflictPrompt = (ctx, job, info, result) => `You are an Autopilot core conflict job for ${ctx.repo}, issue #${job.issue}, PR #${job.pr} on branch ${job.branch}.
 Work only in this folder: ${job.worktree}. The base origin/${ctx.state.baseBranch} moved, and merging it into ${job.branch} conflicts in: ${info.files.join(', ')}.
 ${info.reds?.length ? `A mechanical merge of the base gave red checks:\n${info.reds.map(red => `- ${red}`).join('\n')}\n` : ''}The conflict hunks (ours = the PR, base, theirs = the base branch):
@@ -994,14 +988,18 @@ async function ciState(ctx, head, job) {
   if (!checks.length) return !job.ciSeen && !await repoHasCi(ctx, job) && ctx.now() - (job.prAt ?? ctx.now()) >= NO_CI_AFTER ? { state: 'none', sig } : { state: 'pending', pending: [], sig };
   return checks.some(c => !c.done) ? { state: 'pending', pending: checks.filter(c => !c.done).map(c => c.name), sig } : { state: 'green', count: checks.length, sig };
 }
+const validReviewProof = (proof, job) => {
+  const nonblank = value => typeof value === 'string' && value.trim().length > 0;
+  return object(proof) && JSON.stringify(proof).length <= 6000 && proof.head === job.head && Array.isArray(proof.checks) && proof.checks.length > 0 && proof.checks.every(c => object(c) && nonblank(c.command) && c.result === 'pass') && object(proof.behavior) && ['pass', 'not-applicable'].includes(proof.behavior.result) && nonblank(proof.behavior.detail) && Array.isArray(proof.regressions) && proof.regressions.every(x => object(x) && nonblank(x.finding) && (x.result === 'not-applicable' ? nonblank(x.reason) : x.result === 'pass' && ['path', 'command', 'before'].every(k => nonblank(x[k])))) && (job.repairFindings ?? []).every(f => proof.regressions.some(x => x.finding === f));
+};
 async function reviewState(ctx, job) {
   if (!job.review || job.review.head !== job.head || job.review.retry || !job.review.agent && !job.review.verdict) {
-    // A scoped check (debate B R2) is a short review of one part; a fresh review reads the whole PR.
-    const cwd = await checkout(ctx, job, 'review'), scoped = job.review?.head === job.head ? job.review.scoped : null;
-    job.review = { head: job.head, attempts: (job.review?.head === job.head ? job.review.attempts ?? 0 : 0) + 1, ...(scoped ? { scoped } : {}),
-      agent: startJob(ctx, job, 'review', cwd, result => scoped ? scopedPrompt(ctx, job, scoped, result) : reviewPrompt(ctx, job, result)) };
+    // Every head gets a fresh full review.
+    const cwd = await checkout(ctx, job, 'review');
+    job.review = { head: job.head, attempts: (job.review?.head === job.head ? job.review.attempts ?? 0 : 0) + 1, agent: startJob(ctx, job, 'review', cwd, result => reviewPrompt(ctx, job, result)) };
     ctx.saveJob(job); return { state: 'running' };
   }
+  if (job.review.verdict === 'PASS' && (job.review.kept || job.review.scoped || !validReviewProof(job.review.proof, job))) { job.review = null; return reviewState(ctx, job); }
   if (job.review.verdict) return { state: job.review.verdict === 'PASS' ? 'pass' : 'fail', mustFix: job.review.mustFix };
   const seen = ctx.jobs.read(job.review.agent);
   const r = seen.result;
@@ -1024,11 +1022,13 @@ async function reviewState(ctx, job) {
   const raw = Array.isArray(r.mustFix) ? r.mustFix : r.mustFix === undefined || r.mustFix === null ? [] : [r.mustFix];
   const all = raw.map(item => oneLine(typeof item === 'string' ? item : JSON.stringify(item), 500)).filter(Boolean);
   const followUps = all.filter(isFollowUp).slice(0, 20), mustFix = all.filter(item => !isFollowUp(item)).slice(0, 20);
+  const proof = r.proof, validProof = validReviewProof(proof, job);
+  if (!validProof) mustFix.push(object(proof) && JSON.stringify(proof).length > 6000 ? 'P2 review proof: provide concise complete evidence or links within 6000 characters' : 'P2 review proof: missing, stale, failed or incomplete evidence');
   const verdict = !mustFix.length && (r.verdict === 'PASS' || followUps.length) ? 'PASS' : 'FAIL';
-  await ctx.comment(job.pr, [`Review: ${verdict} for head ${job.head} (a fresh Autopilot reviewer that did not write the change).`, '',
-    oneLine(r.summary, 2000), ...(mustFix.length ? ['', 'Must fix:', ...mustFix.map(item => `- ${item}`)] : []),
+  await ctx.comment(job.pr, [`Review: ${verdict} for head ${job.head} (a fresh Autopilot reviewer that did not write the change).`, 'Review model: same-family (configured agent).', '',
+    oneLine(r.summary, 2000), ...(object(proof) && JSON.stringify(proof).length <= 6000 ? ['', `Proof: ${JSON.stringify(proof)}`] : []), ...(mustFix.length ? ['', 'Must fix:', ...mustFix.map(item => `- ${item}`)] : []),
     ...(followUps.length ? ['', 'Follow-ups (P3, they do not block the merge):', ...followUps.map(item => `- ${item}`)] : []), '', `<!-- pdd:autopilot-core:review:${job.head} -->`].join('\n'));
-  Object.assign(job.review, { verdict, mustFix, followUps }); ctx.saveJob(job); ctx.produced();
+  Object.assign(job.review, { verdict, mustFix, followUps, proof }); ctx.saveJob(job); ctx.produced();
   if (followUps.length) await recordFollowUps(ctx, job, followUps).catch(error => ctx.warn(`Autopilot core could not record the follow-ups of #${job.issue}: ${error.message}`));
   return { state: verdict === 'PASS' ? 'pass' : 'fail', mustFix };
 }
@@ -1057,7 +1057,7 @@ async function suiteState(ctx, job) {
     if (restarts < 2) return start(job.suite.cwd ?? await checkout(ctx, job, 'suite'), restarts + 1, job.suite.deaths ?? 0, quiets);
     return { state: 'broken', dead: true, text: `${quietText(ctx, 'full test suite')} for head ${short(job.head)} (3 tries). Log: ${basename(job.suite.agent.log)} on this machine` };
   }
-  if (seen.exit?.code === 0) { recordSuccess(ctx, job, job.suite.agent, 'suite', seen); return { state: 'pass' }; }
+  if (seen.exit?.code === 0) { recordSuccess(ctx, job, job.suite.agent, 'suite', seen); job.suite.result = 'pass'; ctx.saveJob(job); return { state: 'pass' }; }
   let log = '';
   try { log = ctx.fs.readFileSync(job.suite.agent.log, 'utf8'); } catch { /* No log. */ }
   const tail = redactSecrets(log.split('\n').slice(-15).join('\n'));
@@ -1117,11 +1117,12 @@ async function mergeCheck(ctx, job) {
   const ci = reds.length ? null : await ciState(ctx, job.head, job);
   // GitHub runs no pull_request workflow while a PR conflicts with its base, so a head with no check at all may be a
   // conflict: then the agent conflict update starts (debate B, outside the lane), not a 6-hour CI wait.
-  if (ci?.state === 'pending' && !ci.pending?.length) {
+  if ((ci?.state === 'pending' && !ci.pending?.length) || ci?.state === 'none') {
     await ctx.git(['fetch', '-q', 'origin', state.baseBranch], job.worktree).catch(() => {});
     const tree = await ctx.ports.git(['merge-tree', '--write-tree', '--name-only', '--no-messages', `origin/${state.baseBranch}`, job.head], { cwd: job.worktree });
     if (tree.code === 1) return conflictFix(ctx, job, { files: String(tree.stdout ?? '').split('\n').slice(1).map(line => line.trim()).filter(Boolean), hunks: '' });
   }
+  if (ci?.state === 'none') { stopChecks(ctx, job); return end(ctx, job, cause('job', 'no-ci', 'no CI check or status appeared for the PR head')); }
   if (ci?.state === 'red') reds.push(`CI check ${ci.failed.join(', ')} failed for head ${short(job.head)}.`);
   let review, suite;
   if (!reds.length) {
@@ -1139,10 +1140,13 @@ async function mergeCheck(ctx, job) {
   // Red checks on a head that a mechanical lane merge made are a conflict for an agent, not a repair (debate B 5.4).
   // The repair budget compares single findings: each review must-fix, and each other red line.
   const findings = reds.flatMap(red => red.startsWith('Review FAIL') && review?.mustFix?.length ? review.mustFix : [red]);
-  if (reds.length) return job.mechanical?.head === job.head ? conflictFix(ctx, job, { files: job.mechanical.files, reds }) : repairOrEnd(ctx, job, reds, findings);
+  if (reds.length) {
+    if (job.mechanical?.head === job.head) { job.repairFindings = [...new Set([...(job.repairFindings ?? []), ...findings])]; return conflictFix(ctx, job, { files: job.mechanical.files, reds }); }
+    return repairOrEnd(ctx, job, reds, findings);
+  }
   // Pending CI waits while its picture changes, and at most ciStuckMinutes with no change: then it is stuck (a no-result
   // end), so it never holds a slot for good.
-  if (ci.sig !== job.ci?.sig || job.ci?.head !== job.head) job.ci = { head: job.head, sig: ci.sig, at: ctx.now() };
+  if (ci.sig !== job.ci?.sig || job.ci?.head !== job.head) job.ci = { head: job.head, sig: ci.sig, state: ci.state, at: ctx.now() };
   if (ci.state === 'pending' && ctx.now() - job.ci.at >= ctx.ciStuck) {
     stopChecks(ctx, job);
     return end(ctx, job, cause('job', 'checks-stuck', `CI stayed pending with no change for ${Math.round((ctx.now() - job.ci.at) / HOUR)} hours${ci.pending?.length ? ` (${ci.pending.join(', ')})` : ''}`, { noResult: true }));
@@ -1150,7 +1154,7 @@ async function mergeCheck(ctx, job) {
   // Something still runs (CI that still changes, a reviewer or a suite process): wait, and the quiet clock restarts.
   noteProgress(ctx, job, [job.head, ci.state, ci.sig, review.state, suite.state, logSig(job.review?.agent && ctx.jobs.read(job.review.agent))].join('|'),
     ci.state === 'pending' || review.state === 'running' || suite.state === 'running');
-  if (!['green', 'none'].includes(ci.state) || review.state !== 'pass' || suite.state !== 'pass') { delete job.lastError; delete job.lastErrorTool; ctx.saveJob(job); return; }
+  if (ci.state !== 'green' || review.state !== 'pass' || suite.state !== 'pass') { delete job.lastError; delete job.lastErrorTool; ctx.saveJob(job); return; }
   // The merge lane: one PR per repository in the final step. Other green PRs wait in claim order with their reviews.
   if (await enterLane(ctx, job) !== 'final') return;
   // L2: the exact conflict check. A conflict never goes to repairOrEnd: mechanical hunks are fixed in the lane, other
@@ -1159,7 +1163,7 @@ async function mergeCheck(ctx, job) {
   if (conflict?.agent) return conflictFix(ctx, job, conflict.agent);
   if (conflict?.mechanical) {
     Object.assign(job, { head: conflict.mechanical.head, prAt: ctx.now(), suite: null, mechanical: conflict.mechanical, progress: { sig: null, at: ctx.now(), running: false },
-      review: job.review?.verdict === 'PASS' ? { ...job.review, head: conflict.mechanical.head, kept: 'mechanical' } : null });
+      review: null });
     job.lane.refreshed = true; ctx.saveJob(job); return;
   }
   // L3/L4: the head must contain the current base tip, so that what merges is what was tested. A base move after the
@@ -1186,8 +1190,8 @@ async function mergeCheck(ctx, job) {
     const runtimeLine = runtimeVerdicts(pr.body)[0]?.line ?? 'Runtime: no line (no prompt changed)';
     job.evidence = parseEvidence(pr.body) ?? job.evidence ?? null;
     await ctx.comment(job.pr, [observe ? `Autopilot would merge this PR (observe mode): every check passed for head ${job.head}. It stays open and ready for review; Autopilot does not merge it.` : `Autopilot merge check passed for head ${job.head}.`, '',
-      `- CI: ${ci.state === 'none' ? `none (no check run or status ${NO_CI_AFTER / MIN} minutes after the PR)` : `green (${ci.count} check(s))`}`,
-      '- Full test suite: pass', job.review?.kept === 'mechanical' ? '- Review: PASS (kept: the lane fixed only mechanical conflict hunks)' : job.review?.kept ? '- Review: PASS (kept after a clean base refresh, same change)' : job.review?.scoped ? `- Review: PASS (a scoped check after ${job.review.scoped.reason}, on top of the earlier full review)` : '- Review: PASS from a fresh reviewer', `- ${runtimeLine}`, `- ${evidenceText(job.evidence)}`, `- Base: ${oneLine(base.message)}`,
+      `- CI: green (${ci.count} check(s))`,
+      '- Full test suite: pass', '- Review: PASS from a fresh reviewer', `- ${runtimeLine}`, `- ${evidenceText(job.evidence)}`, `- Base: ${oneLine(base.message)}`,
       `- Merge lane: final step${job.lane?.waited ? ` after ${Math.round(job.lane.waited / MIN)} minutes in the queue` : ''}`,
       ...(drafts.length ? [`- Prompts not approved (observe mode does not approve): ${drafts.join('; ')}`] : []), '',
       `<!-- pdd:autopilot-core:${observe ? 'would-merge' : 'merge'}:${job.head} -->`].join('\n'));
@@ -1423,8 +1427,7 @@ async function conflictFix(ctx, job, info) {
   job.agent = startJob(ctx, job, 'conflict', job.worktree, result => conflictPrompt(ctx, job, info, result));
   ctx.saveJob(job);
 }
-// After a conflict update: a base update keeps the repair budget; the review is kept (same F), scoped (F changed only in
-// the conflict files) or fresh (a change outside them, which also uses a repair).
+// A conflict update keeps the repair budget unless it changes lines outside the conflict files.
 async function afterConflict(ctx, job) {
   const c = job.conflict, base = `origin/${ctx.state.baseBranch}`;
   delete job.conflict;
@@ -1434,7 +1437,7 @@ async function afterConflict(ctx, job) {
     if (job.repairs > ctx.settings.repairs) return 'end';
     return 'repair';
   }
-  job.review = !c.review ? null : now.fingerprint === c.full ? { ...c.review, head: job.head, kept: true } : { head: job.head, scoped: { reason: 'a conflict update', detail: `the former conflict hunks in ${c.files.join(', ')}`, files: c.files } };
+  job.review = null;
   return 'base-update';
 }
 // The files that other PRs reserved (C2), from this machine's jobs and the claim records of other core PRs.
@@ -1629,14 +1632,12 @@ async function repairOrEnd(ctx, job, reds, findings = reds) {
   job.lane = null;
   const stop = repairStop(ctx, job, findings);
   if (stop) return end(ctx, job, cause('job', 'checks-red', `the repairs stopped because ${stop}. The PR checks after ${job.repairs} repair(s): ${reds.join(' ')}`));
+  job.repairFindings = [...new Set([...(job.repairFindings ?? []), ...findings])];
   Object.assign(job, { phase: 'running', role: 'repair', repairs: job.repairs + 1, review: null, suite: null, progress: { sig: null, at: ctx.now(), running: false } });
   job.agent = startJob(ctx, job, 'repair', job.worktree, result => repairPrompt(ctx, job, reds, result));
   ctx.saveJob(job); ctx.counts.repairs++;
 }
-// The base moved after the checks (L3): merge the base tip into the job branch natively, push, and run the suite and CI
-// on that exact head. Review keep (debate B 5.5): R1 keep when the PR's changed lines (F) and file set are the same;
-// R2 a scoped check when the base changed a line within 10 lines of a PR hunk, or a prompt that owns a file of the PR;
-// R3 a fresh review for any other change of F. A clean merge here is never a repair.
+// Merge the base tip into the branch; the new head needs fresh checks and review.
 async function refreshBase(ctx, job) {
   const base = ctx.state.baseBranch, cwd = job.worktree, tip = `origin/${base}`;
   await ctx.git(['fetch', '-q', 'origin', base], cwd);
@@ -1649,25 +1650,10 @@ async function refreshBase(ctx, job) {
     return conflictFix(ctx, job, { files, hunks: '' });
   }
   await ctx.git(['push', '-q', 'origin', `HEAD:${job.branch}`], cwd);
-  const head = await ctx.git(['rev-parse', 'HEAD'], cwd), old = job.head, after = await changeOf(ctx, cwd, tip, head).catch(() => null);
-  let review = null;
-  if (job.review?.verdict === 'PASS' && job.review.head === old && before && after && before.fingerprint === after.fingerprint && sameList(before.files, after.files)) {
-    const scoped = await nearChange(ctx, job, cwd, mergeBase, tip, before).catch(() => ({ reason: 'a base change that could not be read', detail: before.files.join(', '), files: before.files }));
-    review = scoped ? { head, scoped } : { ...job.review, head, kept: true, keptFrom: old };
-  }
-  Object.assign(job, { head, prAt: ctx.now(), suite: null, mechanical: null, progress: { sig: null, at: ctx.now(), running: false }, review,
-    refreshes: (job.refreshes ?? 0) + 1, cleanRefreshes: (job.cleanRefreshes ?? 0) + (review?.kept ? 1 : 0) });
+  const head = await ctx.git(['rev-parse', 'HEAD'], cwd);
+  Object.assign(job, { head, prAt: ctx.now(), suite: null, mechanical: null, progress: { sig: null, at: ctx.now(), running: false }, review: null,
+    refreshes: (job.refreshes ?? 0) + 1 });
   delete job.lastError; delete job.lastErrorTool; ctx.saveJob(job);
-}
-// R2: a base change near the PR (a changed line within 10 lines of a PR hunk) or in a prompt that owns a PR file.
-async function nearChange(ctx, job, cwd, mergeBase, tip, pr) {
-  const theirs = changedLines(await ctx.git(['diff', '-U0', '--no-color', '--no-ext-diff', `${mergeBase}..${tip}`, '--', ...pr.files], cwd));
-  const near = pr.hunks.filter(a => theirs.hunks.some(b => b.path === a.path && b.start <= a.start + Math.max(a.length, 1) + 10 && a.start <= b.start + Math.max(b.length, 1) + 10));
-  if (near.length) return { reason: 'a base change near the PR\'s lines', detail: `the lines near ${[...new Set(near.map(h => `${h.path}:${h.start}`))].join(', ')}`, files: [...new Set(near.map(h => h.path))] };
-  const baseRoot = await treeAt(ctx, job, 'base', await ctx.git(['rev-parse', tip], cwd)), owners = ownerTable(ctx.fs, baseRoot, treeFiles(baseRoot));
-  const moved = new Set((await ctx.git(['diff', '--name-only', `${mergeBase}..${tip}`], cwd)).split('\n').filter(Boolean));
-  const owning = pr.files.filter(file => owners.get(file) && moved.has(owners.get(file).prompt));
-  return owning.length ? { reason: 'a base change of a prompt that owns a PR file', detail: owning.map(file => `${file} (owned by ${owners.get(file).prompt})`).join(', '), files: owning } : null;
 }
 async function finishMerge(ctx, job, read = null) {
   const { gh, repo } = ctx;
@@ -1901,7 +1887,7 @@ async function finishLocal(ctx, job, outcome, text) {
     if (outcome === 'merged') await step('branch', () => ctx.git(['branch', '-D', job.branch]));
     for (const name of list(ctx.dirs.logs).filter(name => !name.endsWith('.log'))) await step('logs', () => ctx.fs.rmSync(join(ctx.dirs.logs, name), { force: true }));
     await step('history', () => appendHistory(ctx, { at: ctx.now(), issue: job.issue, outcome, text: oneLine(text), pr: job.pr ?? null, log: job.agent?.log ?? null, evidence: job.evidence ?? null,
-      ...(outcome === 'released' && job.end?.cause?.counted ? { noResult: true } : {}), ...(outcome === 'ended' ? { reset: true } : {}) }));
+      head: job.head ?? null, review: job.review ?? null, repairFindings: job.repairFindings ?? [], suite: job.suite ? { head: job.suite.head, result: job.suite.result } : null, ci: job.ci ?? null, cause: job.end?.cause?.code ?? null, question: job.end?.cause?.question ?? null, ...(outcome === 'released' && job.end?.cause?.counted ? { noResult: true } : {}), ...(outcome === 'ended' ? { reset: true } : {}) }));
   } finally {
     try { ctx.fs.rmSync(join(ctx.dirs.jobs, `${job.issue}.json`), { force: true }); }
     catch (error) { nativeFs.rmSync(join(ctx.dirs.jobs, `${job.issue}.json`), { force: true }); ctx.warn(`Autopilot core job file of #${job.issue}: ${error.message}`); }
@@ -2062,6 +2048,25 @@ export function coreStatus({ state, settings, sources = {} }, ports) {
   }
   const history = readHistory(fs, ports.root, Infinity).filter(row => typeof row.outcome === 'string').slice(0, 5);
   if (history.length) lines.push('Last results:', ...history.map(row => `#${row.issue} ${row.outcome} ${new Date(row.at).toISOString()}: ${row.text}`));
+  const categories = { 'Ready merges': [], 'Open decisions': [], 'Blocked jobs': [] };
+  const classified = new Set();
+  for (const job of jobs) {
+    let category, reason;
+    if (job.phase === 'ending' && job.end?.cause?.code !== 'needs-person' && job.end?.cause?.text) { category = 'Blocked jobs'; reason = job.end.cause.text; }
+    else if (job.phase === 'ending' && job.end?.cause?.code === 'needs-person') { category = 'Open decisions'; reason = job.end.cause.question || job.end.cause.text; }
+    else if (job.phase === 'pr' && job.review?.head === job.head && job.review.verdict === 'PASS' && !job.review.kept && !job.review.scoped && validReviewProof(job.review.proof, job) && job.suite?.head === job.head && job.suite.result === 'pass' && job.ci?.head === job.head && job.ci.state === 'green') { category = 'Ready merges'; reason = `PR #${job.pr} checks passed`; }
+    if (category) { classified.add(job.issue); categories[category].push(`#${job.issue}: ${oneLine(reason, 160)}`); }
+  }
+  for (const job of jobs) classified.add(job.issue);
+  for (const row of readHistory(fs, ports.root, Infinity)) {
+    if (!row.outcome || classified.has(row.issue)) continue;
+    classified.add(row.issue);
+    if (row.outcome === 'needs-person') categories['Open decisions'].push(`#${row.issue}: ${oneLine(row.question || row.text, 160)}`);
+    else if (row.outcome === 'would-merge' && row.review?.head === row.head && row.review.verdict === 'PASS' && !row.review.kept && !row.review.scoped && validReviewProof(row.review.proof, row) && row.suite?.head === row.head && row.suite.result === 'pass' && row.ci?.head === row.head && row.ci.state === 'green') categories['Ready merges'].push(`#${row.issue}: ${oneLine(row.text, 160)}`);
+    else if (row.outcome === 'ended') categories['Blocked jobs'].push(`#${row.issue}: ${oneLine(row.text, 160)}`);
+  }
+  lines.push('Attention (saved snapshot):');
+  for (const [label, items] of Object.entries(categories)) { lines.push(`${label}: ${items.length}`, ...items.slice(0, 5)); if (items.length > 5) lines.push(`  and ${items.length - 5} more`); }
   const drafts = ports.reportRoot ? listReportDrafts({ root: ports.reportRoot }, { fs }).length : 0;
   if (drafts) lines.push(`Reports: ${drafts} local draft(s); run pdd autopilot report to list or send them.`);
   return lines.join('\n');

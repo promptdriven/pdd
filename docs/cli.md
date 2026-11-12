@@ -1525,7 +1525,7 @@ Each tick, without AI calls:
    result ends. A job with a PR goes to the merge check.
 4. Merge check: the PR head is the job's head, CI is green for that head, the
    full test suite passes for that head, a fresh reviewer agent that did not write
-   the change gives PASS for that head (the tick posts the verdict on the PR), every
+   the change gives PASS with head-specific test, real behavior and repair regression proof (the tick posts the verdict on the PR), every
    `Runtime:` line of the PR says `PASS` or `not run (…)`, the head contains the
    current base tip, and the base check passes. Then
    `gh pr merge --merge --match-head-commit HEAD` merges it, and the issue closes.
@@ -1548,13 +1548,10 @@ Each tick, without AI calls:
    again and merges. Mechanical conflicts (derived hash headers, the same insert on
    both sides, adjacent hunks, JSON keys) are fixed in the lane; other conflicts go
    to a small agent update outside the lane that does not use a repair, and that PR
-   goes first when it comes back. A PR ends after its 3rd conflict. The review stays
-   when the PR's changed lines stay the same; a base change near those lines, or in a
-   prompt that owns one of its files, gets a short scoped check. Each job writes its
-   changed files into its claim, and the next job's brief lists them. `pdd autopilot status` shows each PR's place in the lane. When the base moved, Autopilot merges the base into the
+   goes first when it comes back. A PR ends after its 3rd conflict. Every changed head gets a fresh full review and proof. Each job writes its
+   changed files into its claim, and the next job's brief lists them. `pdd autopilot status` shows each PR's place in the lane and a local saved snapshot of ready merges, open decisions and blocked jobs, with up to five issues per category. When the base moved, Autopilot merges the base into the
    PR branch itself and checks the new head again: the full suite and CI run again,
-   and the PASS review is kept only when the merge was clean and the PR's own change
-   is the same. A merge conflict starts a repair.
+   and a fresh review checks that head. A merge conflict starts a repair.
 5. Fill free slots: claim the oldest ready issue with `pdd:working` and a claim
    comment, make a worktree and start one headless job. The job runs the same pdd
    as the tick (it goes first on the job's `PATH`). It makes one PR with prompt,
@@ -1607,12 +1604,11 @@ GitHub issue dependency, or a hidden marker in the comment when the report is in
 another repository) and is ready again when the report closes. If the same
 problem comes back after its report closed, the issue gets `pdd:stuck`. An open PR
 of an ended job stays open as a draft, with the cause in a PR comment. A PR whose
-head has no CI check 10 minutes after it was opened merges on the full suite and
-the fresh review alone (its merge comment says `CI: none`) only in a repository with
-no PR CI: no workflow that runs on `pull_request`, `pull_request_target` or a push to
-the PR branch, and no required status checks. A workflow that runs only on
-`repository_dispatch`, a schedule or pushes to other branches is not PR CI. A new head
-of a repository with PR CI always waits for its CI. To stop a running job, close the issue, assign it or add
+head has no CI check 10 minutes after it was opened ends with `no-ci` when the
+job has never seen a check and the repository has no applicable PR workflow or
+required status checks. A new head of a repository with PR CI waits for its CI;
+pending checks follow the CI progress and stuck rules. A green check or status on
+the exact head is required to merge or report would-merge. To stop a running job, close the issue, assign it or add
 `pdd:stuck`. After three jobs in a row end with no result, Autopilot pauses new
 jobs on this machine for 1 hour and sends one alert ("Autopilot paused new jobs for
 1 h: the agent ended 3 jobs with no result. Check sign-in and limits."). Jobs that

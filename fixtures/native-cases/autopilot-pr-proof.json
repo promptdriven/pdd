@@ -1,0 +1,57 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "purpose": "Native acceptance vectors for Autopilot core PR proof; not a Runtime program scenario because the core prompt has no Runtime interface.",
+  "story_path": "user_stories/autopilot-pr-proof.md",
+  "cases": [
+    {
+      "id": "initial-merge",
+      "given": "A current-head independent review records a passing executed check and a real behavior exercise; CI and suite pass and authority gates permit merge.",
+      "expect": "The review comment includes the head and proof, and the current head can merge."
+    },
+    {
+      "id": "not-applicable",
+      "given": "The reviewer supplies a passing executed check and an explicit reason no real app or Try exercise applies.",
+      "expect": "The behavior evidence is accepted and the reason appears in the review comment."
+    },
+    {
+      "id": "invalid-proof",
+      "given": "A reviewer says PASS with missing proof, wrong head, empty checks, failed check, malformed behavior or missing reason.",
+      "expect": "The review cannot pass and the PR cannot merge."
+    },
+    {
+      "id": "new-head",
+      "given": "A reviewed PR gets a new head through a base refresh, mechanical conflict fix or other commit.",
+      "expect": "The old proof cannot pass the new head; a fresh independent review and fresh CI and suite are required."
+    },
+    {
+      "id": "behavioral-repair",
+      "given": "A check finds a behavioral defect; the repair adds a tracked regression case whose check passes and whose old-code or planted reproduction fails.",
+      "expect": "The fresh reviewer checks the case and records its path, command, result and failing reproduction before the repaired head can pass."
+    },
+    {
+      "id": "missing-regression",
+      "given": "A repaired behavioral finding has no tracked case, passing command or failing reproduction, including when the finding repeats.",
+      "expect": "The reviewer cannot pass the repaired head."
+    },
+    {
+      "id": "nonbehavioral-repair",
+      "given": "A repair corrects approval metadata without changing public behavior and explains why a regression check is not applicable.",
+      "expect": "The reviewer can accept that reason without a spurious regression test."
+    },
+    {
+      "id": "attention",
+      "given": "Saved local jobs include ready merges, open decisions and failures, with more than five of one category.",
+      "expect": "Status gives category counts and at most five issue lines per category with the remainder count, reads local records only and writes nothing."
+    },
+    {
+      "id": "authority",
+      "given": "Proof and checks pass but trust, strict approval or other existing merge authority is absent.",
+      "expect": "The PR does not merge."
+    }
+  ],
+  "native_suites": [
+    "test/autopilot-pr-proof.vectors.test.mjs",
+    "test/autopilot-core.test.mjs",
+    "test/autopilot-pr-proof.formal.test.mjs"
+  ]
+}

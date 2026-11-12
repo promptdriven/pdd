@@ -497,7 +497,7 @@ test('Runtime END without a filed report (draft) and job causes keep pdd:stuck; 
   assert.deepEqual(await readyIssues({ state: w.state, settings: w.settings }, w.ports()), [], 'report issues wait for the self-fix lane');
 });
 
-test('zero CI checks count as "CI: none" 10 minutes after the PR; pending checks still wait', async t => {
+test('zero CI checks end no-ci after 10 minutes; pending checks still wait', async t => {
   const w = await coreWorld(t);
   w.issue(17); w.issue(18);
   await w.tick();
@@ -508,9 +508,10 @@ test('zero CI checks count as "CI: none" 10 minutes after the PR; pending checks
   await w.tick();
   assert.equal(w.github.merges.length, 0, 'before 10 minutes a PR with no checks waits');
   w.advance(11 * MIN); await w.tick();
-  assert.deepEqual(w.github.merges, [none.pr.number]);
-  assert.ok(none.pr.comments.some(c => /CI: none/.test(c.body) && c.body.includes(none.head)), 'the merge comment says CI: none');
-  assert.ok(!pending.pr.comments.some(c => /CI: none/.test(c.body)));
+  assert.deepEqual(w.github.merges, []);
+  assert.match(endComments(w, 17).join(' '), /no-ci/);
+  assert.equal(w.started.filter(j => j.role === 'repair').length, 0);
+  assert.ok(!pending.pr.comments.some(c => /no-ci/.test(c.body)));
 });
 
 test('END with an open PR leaves it open as a draft and comments the cause on the PR', async t => {
@@ -816,7 +817,8 @@ test('R13 base drift: a PR behind the base is refreshed natively without a repai
   assert.notEqual(job.head, first.head); assert.equal(job.repairs, 0, 'a refresh is not a repair');
   await w.tick();
   assert.equal(first.pr.head, job.head, 'the refreshed head is pushed to the PR branch');
-  assert.equal(w.started.filter(j => j.role === 'review').length, 1, 'a clean refresh with the same change keeps the review (D1)');
+  assert.equal(w.started.filter(j => j.role === 'review').length, 2, 'a clean refresh requires a fresh review');
+  w.review(17, 'PASS');
   assert.equal(w.job(17, 'suite').head, job.head, 'the suite runs again for the new head');
   w.github.setChecks(job.head); w.suite(17, 0); await w.tick();
   assert.deepEqual(w.github.merges, [first.pr.number]);
@@ -1521,7 +1523,7 @@ test('C4 a partial claim removes pdd:working only when the winning label event i
 });
 
 // ---- Decision 2 (#3175): keep the review after a clean base refresh with the same change -------------------
-test('D1 base refresh: a clean merge with the same change keeps the PASS review; a changed diff reviews again; a conflict starts a repair', async t => {
+test('D1 base refresh: every clean merge requires a fresh review; a conflict starts an update', async t => {
   const lines = edit => Array.from({ length: 12 }, (_, i) => (edit[i + 1] ?? `line ${i + 1}`)).join('\n') + '\n';
   const world = async () => {
     const w = await coreWorld(t, { settings: { runs: 1 } });
@@ -1538,26 +1540,26 @@ test('D1 base refresh: a clean merge with the same change keeps the PASS review;
   w.baseCommit('other.txt', 'base moved\n');
   await w.tick();
   let saved = job(w);
-  assert.notEqual(saved.head, built.head); assert.equal(saved.review.kept, true);
+  assert.notEqual(saved.head, built.head); assert.equal(saved.review, null);
   await w.tick();
-  assert.equal(w.started.filter(j => j.role === 'review').length, 1, 'no new review');
+  assert.equal(w.started.filter(j => j.role === 'review').length, 2, 'fresh review'); w.review(17, 'PASS');
   assert.equal(w.job(17, 'suite').head, saved.head, 'the full suite runs again on the new head');
   w.suite(17, 0); await w.tick();
   assert.equal(w.github.merges.length, 0, 'CI must pass on the new head first');
   w.github.setChecks(saved.head); await w.tick();
   assert.deepEqual(w.github.merges, [built.pr.number]);
-  assert.match(mergeComment(built.pr), /^- Review: PASS \(kept after a clean base refresh, same change\)$/m);
+  assert.match(mergeComment(built.pr), /^- Review: PASS from a fresh reviewer$/m);
   // 2. The base changes a line near the PR's change (within 10 lines): the merge is clean and the PR's lines are the
   // same, so a scoped check (debate B R2) runs, not a fresh full review.
   ({ w, built } = await world());
   w.baseCommit('notes.txt', lines({ 5: 'line 5 changed on the base' }));
   await w.tick();
   saved = job(w);
-  assert.match(saved.review?.scoped?.reason ?? '', /near the PR's lines/);
+  assert.equal(saved.review, null);
   await w.tick();
-  assert.equal(w.job(17, 'review').head, saved.head); assert.match(w.job(17, 'review').input, /short scoped check/);
+  assert.equal(w.job(17, 'review').head, saved.head); assert.match(w.job(17, 'review').input, /fresh reviewer/);
   w.github.setChecks(saved.head); w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
-  assert.match(mergeComment(built.pr), /^- Review: PASS \(a scoped check after a base change near the PR's lines, on top of the earlier full review\)$/m);
+  assert.match(mergeComment(built.pr), /^- Review: PASS from a fresh reviewer$/m);
   // 3. The base changes the same line: a conflict is an agent conflict update (debate B), not a repair.
   ({ w } = await world());
   w.baseCommit('notes.txt', lines({ 2: 'line 2 changed on the base' }));
@@ -1866,7 +1868,7 @@ test('K4 debate B removed the refresh caps: 8 base moves never end the PR; it le
   assert.equal(w.started.filter(j => j.role === 'review').length, 1, 'the review is kept on every clean refresh');
 });
 
-test('K5 (debate B) a base change in a file of the PR, far from its lines, keeps the review', async t => {
+test('K5 a distant base change in a PR file requires a fresh review', async t => {
   const lines = edit => Array.from({ length: 30 }, (_, i) => (edit[i + 1] ?? `  step ${i + 1};`)).join('\n') + '\n';
   const w = await coreWorld(t, { settings: { runs: 1 } });
   w.baseCommit('calc.js', lines({ 1: 'function total(x) {', 30: '}' }));
@@ -1877,9 +1879,9 @@ test('K5 (debate B) a base change in a file of the PR, far from its lines, keeps
   w.baseCommit('calc.js', lines({ 1: 'function total(x) {', 3: '  if (x > 0) return 0; // base: early return', 30: '}' }));
   await w.tick();
   const job = jobFile(w, 17);
-  assert.equal(job.review?.kept, true, 'debate B R1: the PR\'s changed lines are the same and the base change is 22 lines away: keep');
+  assert.equal(job.review, null);
   await w.tick();
-  assert.equal(w.started.filter(j => j.role === 'review').length, 1);
+  assert.equal(w.started.filter(j => j.role === 'review').length, 2);
 });
 
 test('K6 evidence that contradicts itself or the Runtime line is red', async t => {
@@ -1946,7 +1948,7 @@ const greenPr = async (w, n, edit) => {
   return w.build(n);
 };
 
-test('L1 two green PRs on different files go through one lane in claim order; the second waits, then keeps its review', async t => {
+test('L1 two green PRs on different files go through one lane in claim order and review refreshed heads', async t => {
   const w = await coreWorld(t, { settings: { runs: 2 } }); w.github.mergeMovesBase = true;
   w.issue(17); w.issue(18); await w.tick();
   const a = await greenPr(w, 17), b = await greenPr(w, 18); await w.tick();
@@ -1955,18 +1957,18 @@ test('L1 two green PRs on different files go through one lane in claim order; th
   await w.tick();                                    // #17 (older claim) takes the lane and refreshes; #18 waits
   assert.ok(laneLabel(a.pr) && !laneLabel(b.pr));
   assert.match(coreStatus({ state: w.state, settings: w.settings }, { root: w.root, now: w.now }), new RegExp(`#18 PR #${b.pr.number} at \\w+: review PASS.*merge lane: waiting for PR #${a.pr.number}`));
-  await w.tick(); let job = jobFile(w, 17); w.github.setChecks(job.head); w.suite(17, 0);
+  await w.tick(); let job = jobFile(w, 17); w.github.setChecks(job.head); w.suite(17, 0); w.review(17, 'PASS');
   w.advance(10 * MIN); await w.tick();               // #17 merges; #18 takes the lane at once and refreshes (no shared file)
   assert.deepEqual(w.github.merges, [a.pr.number]);
   job = jobFile(w, 18);
-  assert.equal(job.lane.state, 'final'); assert.equal(job.review.kept, true); assert.ok(laneLabel(b.pr));
-  await w.tick(); job = jobFile(w, 18); w.github.setChecks(job.head); w.suite(18, 0); await w.tick();
+  assert.equal(job.lane.state, 'final'); assert.equal(job.review, null); assert.ok(laneLabel(b.pr));
+  await w.tick(); job = jobFile(w, 18); w.github.setChecks(job.head); w.suite(18, 0); w.review(18, 'PASS'); await w.tick();
   assert.deepEqual(w.github.merges, [a.pr.number, b.pr.number]);
-  assert.equal(w.started.filter(j => j.role === 'review').length, 2, 'one review each: none lost');
-  assert.match(mergeComment(b.pr), /- Review: PASS \(kept after a clean base refresh, same change\)/); assert.match(mergeComment(b.pr), /- Merge lane: final step after \d+ minutes in the queue/);
+  assert.equal(w.started.filter(j => j.role === 'review').length, 4, 'each changed head gets a review');
+  assert.match(mergeComment(b.pr), /- Review: PASS from a fresh reviewer/); assert.match(mergeComment(b.pr), /- Merge lane: final step after \d+ minutes in the queue/);
 });
 
-test('L1b two green PRs on the same file, 6 lines apart, merge in order; the second gets a scoped check and nothing ends', async t => {
+test('L1b two green PRs on the same file merge in order with fresh review', async t => {
   const lines = edit => Array.from({ length: 20 }, (_, i) => (edit[i + 1] ?? `line ${i + 1}`)).join('\n') + '\n';
   const w = await coreWorld(t, { settings: { runs: 2 } }); w.github.mergeMovesBase = true;
   w.baseCommit('list.txt', lines({}));
@@ -1975,13 +1977,13 @@ test('L1b two green PRs on the same file, 6 lines apart, merge in order; the sec
   const b = await greenPr(w, 18, cwd => writeFileSync(join(cwd, 'list.txt'), lines({ 8: 'item from #18' })));
   await w.tick(); w.review(17, 'PASS'); w.suite(17, 0); w.review(18, 'PASS'); w.suite(18, 0); await w.tick();
   assert.deepEqual(w.github.merges, [a.pr.number]);
-  assert.match(jobFile(w, 18).review?.scoped?.reason ?? '', /near the PR's lines/, 'a base change within 10 lines: a scoped check');
+  assert.equal(jobFile(w, 18).review, null);
   await w.tick(); const job = jobFile(w, 18); w.github.setChecks(job.head); w.review(18, 'PASS'); w.suite(18, 0); await w.tick();
   assert.deepEqual(w.github.merges, [a.pr.number, b.pr.number]); assert.equal(endComments(w, 18).length, 0);
   assert.equal(w.started.filter(j => j.role === 'review').length, 3);
 });
 
-test('L2 a push to main during the final step only reruns the suite and CI; the PR keeps the lane and its review', async t => {
+test('L2 base pushes during the final step rerun all checks and retain the lane', async t => {
   const w = await coreWorld(t, { settings: { runs: 1 } });
   w.issue(17); await w.tick();
   const { pr } = await greenPr(w, 17); await w.tick(); w.review(17, 'PASS'); w.suite(17, 0);
@@ -1989,11 +1991,11 @@ test('L2 a push to main during the final step only reruns the suite and CI; the 
   await w.tick();                                    // final step: refresh
   assert.ok(laneLabel(pr));
   await w.tick(); let job = jobFile(w, 17); w.github.setChecks(job.head);
-  w.baseCommit('person-2.txt', 'a person pushed again\n'); w.suite(17, 0);
+  w.baseCommit('person-2.txt', 'a person pushed again\n'); w.suite(17, 0); w.review(17, 'PASS');
   await w.tick();                                    // the base moved again: refresh again, still in the lane
-  assert.ok(laneLabel(pr)); job = jobFile(w, 17); assert.equal(job.review.kept, true); assert.equal(job.lane.state, 'final');
-  await w.tick(); job = jobFile(w, 17); w.github.setChecks(job.head); w.suite(17, 0); await w.tick();
-  assert.deepEqual(w.github.merges, [pr.number]); assert.equal(w.started.filter(j => j.role === 'review').length, 1);
+  assert.ok(laneLabel(pr)); job = jobFile(w, 17); assert.equal(job.review, null); assert.equal(job.lane.state, 'final');
+  await w.tick(); job = jobFile(w, 17); w.github.setChecks(job.head); w.suite(17, 0); w.review(17, 'PASS'); await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number]); assert.equal(w.started.filter(j => j.role === 'review').length, 3);
   assert.equal(w.started.filter(j => j.role === 'suite').length, 3, 'the suite ran again for each new head');
 });
 
@@ -2279,9 +2281,9 @@ test('Q2 mechanical conflicts are fixed in the lane with no agent and no repair:
   const pkg = JSON.parse(w.git(job.worktree, 'show', `${job.head}:package.json`));
   assert.equal(pkg.repository, 'acme/widgets'); assert.deepEqual(pkg.keywords, ['money']);
   assert.equal(w.git(job.worktree, 'show', `${job.head}:CHANGELOG.md`).match(/## Unreleased/g).length, 1, 'M-b: one copy of an identical insert');
-  await w.tick(); w.github.setChecks(job.head); w.suite(17, 0); await w.tick();
-  assert.deepEqual(w.github.merges, [pr.number]); assert.match(mergeComment(pr), /Review: PASS \(kept: the lane fixed only mechanical conflict hunks\)/);
-  assert.equal(w.started.filter(j => j.role === 'review').length, 1);
+  await w.tick(); w.github.setChecks(job.head); w.suite(17, 0); w.review(17, 'PASS'); await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number]); assert.match(mergeComment(pr), /Review: PASS from a fresh reviewer/);
+  assert.equal(w.started.filter(j => j.role === 'review').length, 2);
 });
 
 test('Q2b M-a: a conflict only in a derived hash header is fixed by recomputing it from the merged prompt', async t => {
@@ -2305,7 +2307,7 @@ test('Q2b M-a: a conflict only in a derived hash header is fixed by recomputing 
   assert.match(w.git(job.worktree, 'show', `${job.head}:src/x.js`), new RegExp(`sha256: ${sha(merged)}`), 'the header is recomputed from the merged prompt');
 });
 
-test('Q3 an agent conflict is a base update outside the lane (not a repair); a change inside the conflict file gets a scoped check, then it merges', async t => {
+test('Q3 an agent conflict gets a fresh review after a base update outside the lane', async t => {
   const w = await coreWorld(t, { settings: { runs: 1 } }); w.github.mergeMovesBase = true;
   w.baseCommit('list.txt', 'alpha\nbeta\ngamma\n');
   w.issue(17); await w.tick();
@@ -2324,9 +2326,9 @@ test('Q3 an agent conflict is a base update outside the lane (not a repair); a c
   w.build(17, { role: 'conflict', write: false }); await w.tick();
   const job = jobFile(w, 17);
   assert.equal(job.repairs, 0, 'a base update, not a repair'); assert.equal(job.lanePriority, true);
-  assert.match(w.job(17, 'review').input, /short scoped check[\s\S]*the former conflict hunks in list\.txt/);
+  assert.match(w.job(17, 'review').input, /fresh reviewer/);
   w.review(17, 'PASS'); w.suite(17, 0); w.github.setChecks(job.head); await w.tick(); await w.tick();
-  assert.deepEqual(w.github.merges, [pr.number]); assert.match(mergeComment(pr), /a scoped check after a conflict update/);
+  assert.deepEqual(w.github.merges, [pr.number]); assert.match(mergeComment(pr), /Review: PASS from a fresh reviewer/);
 });
 
 test('Q4 anti-chase: the 2nd conflict exit reserves the files in the claim record, the 3rd ends the job (base-moving)', async t => {
@@ -2351,7 +2353,7 @@ test('Q4 anti-chase: the 2nd conflict exit reserves the files in the claim recor
   assert.match(endComments(w, 17)[0] ?? '', /Cause: job \/ base-moving/); assert.match(endComments(w, 17)[0], /3rd time/);
 });
 
-test('Q5 review keep by changed lines: a base change far from the PR keeps the review; near it (10 lines) or in an owning prompt is a scoped check', async t => {
+test('Q5 every clean base refresh requires a fresh review', async t => {
   const lines = edit => Array.from({ length: 40 }, (_, i) => (edit[i + 1] ?? `line ${i + 1}`)).join('\n') + '\n';
   for (const [name, baseEdit, scoped] of [['far', w => w.baseCommit('calc.js', lines({ 3: 'base change far away' })), false],
     ['near', w => w.baseCommit('calc.js', lines({ 30: 'base change near the PR' })), /near the PR's lines/],
@@ -2365,8 +2367,7 @@ test('Q5 review keep by changed lines: a base change far from the PR keeps the r
     baseEdit(w);
     await w.tick();
     const job = jobFile(w, 17);
-    if (!scoped) assert.equal(job.review?.kept, true, name);
-    else { assert.match(job.review?.scoped?.reason ?? '', scoped, name); await w.tick(); assert.match(w.job(17, 'review').input, /short scoped check/, name); }
+    assert.equal(job.review, null, name); await w.tick(); assert.match(w.job(17, 'review').input, /fresh reviewer/, name);
   }
 });
 
@@ -2379,12 +2380,12 @@ test('Q6 people moving the base during the final step: at most 2 rechecks, then 
     v.baseCommit(`person-${i}.txt`, `${i}\n`);
     await v.tick();                                  // the final step: a refresh, or a recheck
     leaves.push(jobFile(v, 17)?.lane?.state ?? 'out');
-    await v.tick(); const job = jobFile(v, 17); v.github.setChecks(job.head); if (v.job(17, 'suite') && v.alive.has(v.job(17, 'suite').pid)) v.suite(17, 0);
+    await v.tick(); const job = jobFile(v, 17); v.github.setChecks(job.head); if (v.job(17, 'suite') && v.alive.has(v.job(17, 'suite').pid)) v.suite(17, 0); if (v.job(17, 'review') && v.alive.has(v.job(17, 'review').pid)) v.review(17, 'PASS');
   }
   const job = jobFile(v, 17);
   assert.ok(job, 'not ended'); assert.equal(job.lanePriority, true, 'it left the lane once and goes first'); assert.equal(job.conflictExits ?? 0, 0, 'rechecks never count as conflict exits');
   assert.deepEqual(leaves, ['final', 'final', 'final', 'out'], 'the 3rd recheck of one lane entry leaves the lane');
-  assert.equal(v.started.filter(j => j.role === 'review').length, 1, 'the review is kept');
+  assert.ok(v.started.filter(j => j.role === 'review').length > 1, 'each refreshed head gets a review');
 });
 
 test('Q7 C1 a PR back from a conflict update goes first in the lane; C2 a reservation keeps other PRs with those files out', async t => {
@@ -2821,7 +2822,7 @@ test('W8 a reviewer in the merge lane whose log keeps growing ends at its backst
   w.baseCommit('notes.txt', lines({ 5: 'line 5 changed on the base' }));
   await w.tick(); await w.tick();
   const review = w.job(17, 'review');
-  assert.match(review.input, /short scoped check/); assert.ok(pr.labels.includes('pdd:merge-lane'), 'the scoped check runs in the final step');
+  assert.match(review.input, /fresh reviewer/); assert.ok(pr.labels.includes('pdd:merge-lane'), 'the fresh review runs in the final step');
   const alerts = [];
   for (let i = 0; i < 8 && !w.stopped.includes(review.id); i++) { w.advance(30 * MIN); w.progress(17, 'review'); await w.tick({ alert: async a => alerts.push(a.text) }); }
   assert.ok(w.stopped.includes(review.id));
@@ -2903,7 +2904,7 @@ test('X1 (R11-1) fail closed: a FAIL whose list is a string, empty or missing ne
     w.issue(17); await w.tick();
     const { pr } = w.build(17); await w.tick();
     const review = w.job(17, 'review');
-    w.finish(17, 'review', { result: { verdict: 'FAIL', head: review.head, summary: 'One real bug.', ...(mustFix === undefined ? {} : { mustFix }) } });
+    w.finish(17, 'review', { result: { verdict: 'FAIL', head: review.head, summary: 'One real bug.', proof: { head: review.head, checks: [{ command: 'test', result: 'pass' }], behavior: { result: 'not-applicable', detail: 'fixture' }, regressions: [] }, ...(mustFix === undefined ? {} : { mustFix }) } });
     w.suite(17, 0); await w.tick();
     assert.equal(w.github.merges.length, 0, label);
     assert.ok(pr.comments.some(c => /^Review: FAIL/.test(c.body)), label); assert.ok(!pr.comments.some(c => /^Review: PASS/.test(c.body)), label);
@@ -2939,7 +2940,7 @@ test('X2 (R11-2) a suite that waits in the machine suite queue is not quiet; T1 
   void pr;
 });
 
-test('X3 (R11-5) CI counts only when a workflow can run on the PR head: a dispatch-only file merges with "CI: none"; on: pull_request with no run waits', async t => {
+test('X3 (R11-5) CI counts only when a workflow can run on the PR head: a dispatch-only file ends no-ci; on: pull_request with no run waits', async t => {
   const { workflowRunsOnPr } = await import('../src/autopilot-core.mjs');
   const b = 'pdd/core-17-ab12';
   for (const [text, want] of [
@@ -2954,7 +2955,7 @@ test('X3 (R11-5) CI counts only when a workflow can run on the PR head: a dispat
   w.issue(17); await w.tick();
   const { pr } = w.build(17, { checks: false }); await w.tick(); w.review(17, 'PASS'); w.suite(17, 0);
   w.advance(11 * MIN); await w.tick(); await w.tick();
-  assert.deepEqual(w.github.merges, [pr.number]); assert.match(mergeComment(pr), /- CI: none/);
+  assert.deepEqual(w.github.merges, []); assert.match(endComments(w, 17).join(' '), /no-ci/);
   const v = await coreWorld(t, { settings: { runs: 1 } });
   v.baseCommit('.github/workflows/ci.yml', 'on:\n  pull_request:\njobs:\n  test:\n    runs-on: ubuntu-latest\n');
   v.issue(17); await v.tick();
@@ -3127,7 +3128,7 @@ async function reviewOnce(t, result) {
   w.issue(17); await w.tick();
   const { pr } = w.build(17); await w.tick();
   const review = w.job(17, 'review');
-  w.finish(17, 'review', { result: { head: review.head, summary: 'Reviewed.', ...result } });
+  w.finish(17, 'review', { result: { head: review.head, summary: 'Reviewed.', proof: { head: review.head, checks: [{ command: 'test', result: 'pass' }], behavior: { result: 'not-applicable', detail: 'fixture' }, regressions: [] }, ...result } });
   w.suite(17, 0); await w.tick(); await w.tick();
   return { w, pr, merged: w.github.merges.length > 0, comment: (pr.comments.map(c => c.body).find(body => /^Review: /.test(body)) ?? '').split('\n')[0] };
 }
@@ -3166,13 +3167,13 @@ test('Z2 (R12-2) PR CI filters: types without opened/synchronize/reopened and pa
     ['name: no trigger\njobs:\n  x:\n    runs-on: ubuntu-latest\n', docs, true], ['on: {pull_request:\n  {branches: [main]}}\n', docs, true],
   ]) assert.equal(workflowRunsOnPr(text, b, 'main', files), want, `${text} ${files}`);
   assert.equal(workflowTriggers('jobs:\n  x: {}\n'), null);
-  // A docs-only PR in a repository whose only PR CI watches src/: "CI: none" and a merge (not a 6-hour wait).
+  // A docs-only PR whose only CI watches src/ ends no-ci after 10 minutes.
   const w = await coreWorld(t, { settings: { runs: 1 } });
   w.baseCommit('.github/workflows/ci.yml', 'on:\n  pull_request:\n    paths: ["src/**"]\njobs:\n  x:\n    runs-on: ubuntu-latest\n');
   w.issue(17); await w.tick();
   const { pr } = w.build(17, { checks: false }); await w.tick(); w.review(17, 'PASS'); w.suite(17, 0);
   w.advance(11 * MIN); await w.tick(); await w.tick();
-  assert.deepEqual(w.github.merges, [pr.number]); assert.match(mergeComment(pr), /- CI: none/);
+  assert.deepEqual(w.github.merges, []); assert.match(endComments(w, 17).join(' '), /no-ci/);
   // More than 50 workflow files count as CI: a head with no run waits.
   const v = await coreWorld(t, { settings: { runs: 1 } });
   const seed = join(v.dir, 'seed51'); v.git(v.dir, 'clone', '-q', v.remote, seed); mkdirSync(join(seed, '.github', 'workflows'), { recursive: true });
@@ -3220,4 +3221,138 @@ test('Z5 (R12 should-fix 7) two short findings at nearby lines that share one wo
   await reviewRound(w, 17, ['P2 src/a.js:12 the error message is wrong']);
   assert.equal(endComments(w, 17).length, 0);
   assert.equal(w.started.filter(job => job.role === 'repair').length, 2);
+});
+
+test('PR proof rejects missing, stale and failed evidence and accepts a real check', async t => {
+  for (const proof of [null, { head: 'stale', checks: [], behavior: {}, regressions: [] }, { head: 'HEAD', checks: [{ command: 'test', result: 'fail' }], behavior: { result: 'pass', detail: 'app' }, regressions: [] }]) {
+    const result = await reviewOnce(t, { verdict: 'PASS', mustFix: [], proof });
+    assert.equal(result.merged, false);
+    assert.match(result.comment, /FAIL/);
+  }
+  const result = await reviewOnce(t, { verdict: 'PASS', mustFix: [] });
+  assert.equal(result.merged, true);
+  assert.match(result.pr.comments.find(c => /^Review: PASS/.test(c.body)).body, /Proof:.*not-applicable/);
+});
+
+test('legacy saved review PASS without proof starts a fresh review', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); await w.tick(); w.build(17); await w.tick();
+  const path = join(w.root, 'jobs', '17.json');
+  const saved = JSON.parse(readFileSync(path, 'utf8'));
+  saved.review = { head: saved.head, verdict: 'PASS', mustFix: [] };
+  writeFileSync(path, JSON.stringify(saved));
+  w.suite(17, 0); await w.tick();
+  assert.equal(w.github.merges.length, 0);
+  assert.equal(w.started.filter(j => j.issue === 17 && j.role === 'review').length, 2);
+});
+
+test('attention snapshot bounds saved local decisions and suppresses stale outcomes', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  mkdirSync(w.root, { recursive: true });
+  const rows = Array.from({ length: 7 }, (_, i) => ({ at: w.now() + i, issue: i + 1, outcome: 'needs-person', text: `decision ${i + 1}` }));
+  rows.push({ at: w.now() + 8, issue: 1, outcome: 'merged', text: 'done' });
+  writeFileSync(join(w.root, 'history.jsonl'), rows.map(JSON.stringify).join('\n') + '\n');
+  const before = readFileSync(join(w.root, 'history.jsonl'), 'utf8');
+  const status = coreStatus({ state: w.state, settings: w.settings }, { root: w.root, now: w.now });
+  assert.match(status, /Attention \(saved snapshot\):/);
+  assert.match(status, /Open decisions: 6/);
+  assert.match(status, /and 1 more/);
+  assert.doesNotMatch(status, /#1: decision/);
+  assert.equal(readFileSync(join(w.root, 'history.jsonl'), 'utf8'), before);
+});
+
+test('mechanical head review finding is supplied to the next reviewer', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.baseCommit('package.json', '{"name":"x"}\n');
+  w.issue(17); await w.tick();
+  editIn(w, 17, 'package.json', '{"name":"x","repository":"pr"}\n');
+  w.build(17); await greenLane(w, 17);
+  w.baseCommit('package.json', '{"name":"x","keywords":["base"]}\n');
+  await w.tick(); const mechanical = jobFile(w, 17);
+  assert.ok(mechanical.mechanical);
+  await w.tick(); w.github.setChecks(mechanical.head); w.suite(17, 0);
+  w.review(17, 'FAIL', ['P2 src/a.js:3 lost behavior']); await w.tick();
+  assert.match(w.job(17, 'conflict').input, /lost behavior/);
+  assert.ok(jobFile(w, 17).repairFindings.includes('P2 src/a.js:3 lost behavior'));
+});
+
+test('nonbehavioral repair reason is accepted and missing regression is rejected', async t => {
+  for (const applicable of [true, false]) {
+    const w = await coreWorld(t, { settings: { runs: 1 } });
+    w.issue(17); await w.tick(); w.build(17); await w.tick();
+    const review = w.job(17, 'review'), path = join(w.root, 'jobs', '17.json');
+    const saved = JSON.parse(readFileSync(path, 'utf8')), finding = 'approval metadata';
+    saved.repairFindings = [finding]; writeFileSync(path, JSON.stringify(saved));
+    const proof = { head: review.head, checks: [{ command: 'node --test', result: 'pass' }], behavior: { result: 'not-applicable', detail: 'no app' }, regressions: applicable ? [{ finding, result: 'not-applicable', reason: 'no public behavior changed' }] : [] };
+    w.finish(17, 'review', { result: { verdict: 'PASS', head: review.head, summary: 'Reviewed', mustFix: [], proof } });
+    w.suite(17, 0); await w.tick(); await w.tick();
+    assert.equal(w.github.merges.length, applicable ? 1 : 0);
+  }
+});
+
+test('attention excludes legacy and invalid saved review PASS', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); await w.tick(); w.build(17); await w.tick();
+  const path = join(w.root, 'jobs', '17.json'), saved = JSON.parse(readFileSync(path, 'utf8'));
+  const valid = { head: saved.head, checks: [{ command: 'test', result: 'pass' }], behavior: { result: 'not-applicable', detail: 'no app' }, regressions: [] };
+  saved.suite = { head: saved.head, result: 'pass' }; saved.ci = { head: saved.head, state: 'green' };
+  for (const review of [
+    { head: saved.head, verdict: 'PASS' },
+    { head: saved.head, verdict: 'PASS', proof: { ...valid, head: 'stale' } },
+    { head: saved.head, verdict: 'PASS', proof: valid, kept: true },
+    { head: saved.head, verdict: 'PASS', proof: valid, scoped: {} },
+  ]) {
+    saved.review = review; writeFileSync(path, JSON.stringify(saved));
+    assert.match(coreStatus({ state: w.state, settings: w.settings }, { root: w.root, now: w.now }), /Ready merges: 0/);
+  }
+  saved.review = { head: saved.head, verdict: 'PASS', proof: valid }; writeFileSync(path, JSON.stringify(saved));
+  assert.match(coreStatus({ state: w.state, settings: w.settings }, { root: w.root, now: w.now }), /Ready merges: 1/);
+});
+
+test('current head review records a real behavior exercise and merges', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.issue(17); await w.tick(); const { pr } = w.build(17); await w.tick();
+  const review = w.job(17, 'review');
+  const proof = { head: review.head, checks: [{ command: 'node --test', result: 'pass' }], behavior: { result: 'pass', detail: 'ran public action' }, regressions: [] };
+  w.finish(17, 'review', { result: { verdict: 'PASS', head: review.head, summary: 'Reviewed', mustFix: [], proof } });
+  w.suite(17, 0); await w.tick(); await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number]);
+  const comment = pr.comments.find(c => /^Review: PASS/.test(c.body)).body;
+  assert.match(comment, /ran public action/);
+  assert.match(comment, /Review model: same-family/);
+});
+
+
+test('review proof must fit whole in the public comment, including regression evidence', async t => {
+  for (const size of [6000, 6001]) {
+    const w = await coreWorld(t, { settings: { runs: 1, repairs: 0 } });
+    w.issue(17); await w.tick(); const { pr } = w.build(17); await w.tick();
+    const review = w.job(17, 'review');
+    const proof = { head: review.head, checks: [{ command: 'node --test', result: 'pass' }], behavior: { result: 'pass', detail: '' }, regressions: [{ finding: 'P2 fixed regression', result: 'pass', path: 'test/regression.test.mjs', command: 'node --test test/regression.test.mjs', before: 'failed before repair' }] };
+    proof.behavior.detail = 'x'.repeat(size - JSON.stringify(proof).length);
+    assert.equal(JSON.stringify(proof).length, size);
+    w.finish(17, 'review', { result: { verdict: 'PASS', head: review.head, summary: 'Reviewed', mustFix: [], proof } });
+    w.suite(17, 0); await w.tick(); await w.tick();
+    const comment = pr.comments.find(c => /^Review: /.test(c.body)).body;
+    if (size === 6000) {
+      assert.match(comment, /^Review: PASS/);
+      assert.ok(comment.includes(`Proof: ${JSON.stringify(proof)}`));
+      assert.deepEqual(w.github.merges, [pr.number]);
+    } else {
+      assert.match(comment, /^Review: FAIL/);
+      assert.match(comment, /concise complete evidence or links/);
+      assert.deepEqual(w.github.merges, []);
+    }
+  }
+});
+
+
+test('observe mode refuses would-merge when the repository has no CI', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1, mode: 'observe' } });
+  w.issue(17); await w.tick(); const { pr } = w.build(17, { checks: false }); await w.tick();
+  w.review(17, 'PASS'); w.suite(17, 0); w.advance(11 * MIN); await w.tick(); await w.tick();
+  assert.deepEqual(w.github.merges, []);
+  assert.ok(!pr.comments.some(c => /would-merge/.test(c.body)));
+  assert.match(endComments(w, 17).join(' '), /no-ci/);
+  assert.equal(w.started.filter(j => j.role === 'repair').length, 0);
 });

@@ -45,7 +45,7 @@ The launcher passes `ports.root`, one folder for this repository on this machine
 It holds `jobs/N.json` (one file per issue in progress), `logs/` (job inputs,
 logs, exit records and result files), `worktrees/` (`N` for the job branch,
 `N-review` and `N-suite` for clean checkouts of the PR head), `history.jsonl`
-(one line per finished job: time, issue, outcome, text, PR, log; and strike lines,
+(one line per finished job: time, issue, outcome, text, PR, log, cause code and question when present, and head and proof for a would-merge result; and strike lines,
 below) and `core.json` (the machine pause and the pending no-result). The job file and the GitHub labels are the whole state; a
 restart reads them again. A job file has `issue`, `title`, `url`, `body`,
 `branch`, `worktree`, `claim {commentId, labelEventId, lastSeen}`, `phase`
@@ -402,7 +402,14 @@ any other pdd (for example an older global install).
   with the PR's Runtime line (PASS or not run).
 - **Repair** (same worktree and branch): the red findings, the job log folder, then
   the build rules; push to the same branch, no new PR, and update the `Runtime:` and
-  `Evidence:` lines when they change.
+  `Evidence:` lines when they change. For each behavioral finding retain a tracked regression case
+  in the PR and report its path, check command, passing result and failing result on
+  the old code or a deliberately planted reproduction. For a finding with no changed
+  public behavior, such as an approval metadata correction, give a nonblank reason
+  that a regression check is not applicable. Supply those findings to each
+  later reviewer; a repeated finding requires this evidence too. Carry red findings
+  through every remediation route, including an agent update after red checks on a
+  mechanical head, so later reviewers receive the findings and demand this proof.
 - **Review** (in `worktrees/N-review`, a detached checkout of the head): a fresh agent
   that did not write the change. It gets the base owner table of the PR's changed files
   and the R5 hints (below), and checks the issue fit; (2) Path and (3) Tests with the
@@ -413,15 +420,35 @@ any other pdd (for example an older global install).
   unowned file of the base, owned code that disagrees with its prompt; never a new
   prompt for an unowned file; never commit order; a missing test is a must-fix only
   with the surface and the result named; no test that only copies a value from the
-  diff); an honest Runtime line and no unrelated or unsafe change. A Runtime FAIL line in the PR body means a FAIL verdict. It writes no files and makes no GitHub write. Its
-  result is `{verdict: PASS|FAIL, head, summary, mustFix[]}`. Each must-fix item starts
+  diff); an honest Runtime line and no unrelated or unsafe change. A Runtime FAIL line in the PR body means a FAIL verdict. It changes no repository files and makes no GitHub write. Its
+  result is `{verdict: PASS|FAIL, head, summary, mustFix[], proof}`. A PASS requires
+  `proof {head, checks, behavior, regressions}`: `head` equals the exact reviewed
+  head; `checks` is a nonempty array of `{command, result}` with nonblank command and
+  result `pass`; `behavior {result, detail}` has result `pass` for a real app or Try
+  exercise and describes it, or `not-applicable` with a nonblank reason; and
+  `regressions` contains `{finding, path, command, result, before}` for every supplied
+  repair finding. For a behavioral finding each field is nonblank, result is `pass`, and `before`
+  records the failing old-code or planted reproduction. For a finding without changed
+  public behavior, `result` may be `not-applicable` with a nonblank `reason` instead
+  of path, command and before. The reviewer judges that reason against the finding. The fresh reviewer verifies the case is
+  tracked at the reviewed head and actually runs its command. An empty regressions
+  array is valid only when no repair findings were supplied. Missing, malformed,
+  failed, stale or incomplete proof cannot PASS, even if the verdict says PASS.
+  Admit proof only when its complete `JSON.stringify` serialization fits the 6,000
+  character proof allocation in the public review comment. Oversized proof cannot
+  PASS; request concise complete evidence or links. Publish accepted proof whole,
+  without truncating its JSON, subject to the public secret-redaction policy below.
+  The reviewer executes checks and records their actual results; a claim without an
+  executed check is not proof. Prefer an independently configured different model
+  family when available; otherwise use the configured agent and label the review
+  same-family. This preference never weakens independence or blocks a review. Each must-fix item starts
   with its severity and place: `P1 file:line …` (wrong behavior or unsafe), `P2 file:line …`
   (fix before the merge) or `P3 file:line …` (a follow-up); a PASS lists only P3 items
-  (the scoped check is asked the same). **Fail closed:** an item is a follow-up only when
+  **Fail closed:** an item is a follow-up only when
   it starts with P3 and names no P1 or P2 anywhere; every other item blocks, also in a
   PASS (a numbered, a "Severity P2:" or an untagged item, or "P3/P1"). The split comes
   before each list is cut to 20 items, so no blocking item is lost. The verdict is PASS
-  only when no item blocks and the reviewer said PASS or listed at least one follow-up. A
+  only when proof is valid, no item blocks and the reviewer said PASS or listed at least one follow-up. A
   string `mustFix` is one item; a missing or empty list is none, and a FAIL with no item
   stays a FAIL (its red line says "see the review comment on the PR"); a verdict that is
   not exactly PASS or FAIL is no verdict. The tick lists them as follow-ups in the review comment,
@@ -557,7 +584,9 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    the suite for this head when missing; CI may still be pending. A reviewer that
    twice gives no valid verdict for the head ends as `no-result`; no test command
    ends `no-test-command`; a broken suite ends `suite-broken`. The tick posts each verdict once as a PR comment with
-   the head, summary and must-fix list.
+   the head, summary, must-fix list and proof (including commands, results, real-behavior
+   exercise or reason, and regression evidence). Apply the public-text safety and size
+   limit below to this evidence.
 4. Any red finding: stop the other checks. The **repair budget** (option B): repairs go on
    while they make progress. The findings of a round are each review must-fix (P1 and P2)
    and each other red line. Two findings are the same when they name the same `file:line`
@@ -572,29 +601,17 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    ones goes on (the #2574 pattern: each repair fixes the last P2 and the reviewer finds a
    new P2), to a PASS or the cap. Else start one repair job, count it and start its quiet
    clock. The job saves the last 8 rounds (`rounds`).
-5. Wait while CI, review or suite is not green. CI is green when the head has at
-   least one check and none is pending. CI is `none` (the full suite and the fresh
-   review decide alone) only in a repository with no PR CI: no head of this job ever had a
-   check (`ciSeen`), no workflow file of the base tip can run on the PR head
-   (`workflowRunsOnPr`: its `on:` has `pull_request` or `pull_request_target` whose branch
-   filter admits the base, whose `types` (when given) include opened, synchronize or
-   reopened, and whose `paths` / `paths-ignore` admit one of the PR's changed files (`git
-   diff --name-only origin/BASE...HEAD`); or `push` whose branch and path filters admit the
-   job branch and the changed files; GitHub's globs `*`, `**`, `?` and `!`; a workflow with
-   only `repository_dispatch`, a schedule, a release, closed PRs, other paths, tags or
-   pushes to other branches, such as the PDD App's dispatch file, is no PR CI), and no
-   required status checks on the base. The workflow files come from `git show
-   origin/BASE:.github/workflows/NAME` after one fetch per tick (no API call). The safe side
-   counts as CI: a read error, a file whose `on:` the reader cannot read (no `on:`, a
-   flow map over several lines), and more than 50 workflow files. And 10 minutes passed
-   since `prAt`. **A head with no check at all may be a conflict** (GitHub runs no
-   `pull_request` workflow while the PR conflicts with its base): then the tick fetches the
-   base and runs `git merge-tree --write-tree --name-only --no-messages origin/BASE HEAD` in
-   the job worktree; exit 1 (a conflict) starts the agent conflict update (`conflictFix`,
-   debate B, outside the lane, with the conflicting file names), not a CI wait. A new head that has no run yet (for example after a
-   refresh) waits for its CI. A pending check still waits, as long as it takes; save `progress`
-   first.
-6. **Merge lane** (one final step per repository). A green PR (CI green or none,
+5. Wait while CI, review or suite is not green. CI is green only when the exact
+   head has at least one passing check or status and none is pending or failed. A
+   head with no check may be a conflict: fetch the base and run `git merge-tree
+   --write-tree --name-only --no-messages origin/BASE HEAD` in the job worktree;
+   exit 1 starts the agent conflict update (`conflictFix`) outside the lane. Otherwise
+   END with code `no-ci` only when this job has never seen a check, the repository
+   has no applicable PR CI or required status checks, and at least 10 minutes have
+   passed since the PR opened. A head awaiting an applicable check and a pending
+   actual check continue to wait under the existing CI progress and stuck rules.
+   Neither merge nor would-merge is allowed without green CI.
+6. **Merge lane** (one final step per repository). A green PR (CI green,
    review PASS, suite pass) enters the lane. The lane is the label `pdd:merge-lane` on
    one open PR, shared by every machine through GitHub (`issues?state=open&labels=…`,
    PRs only). Any machine clears a stale holder (a closed or merged PR, or a core issue
@@ -623,8 +640,7 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    --name-only --no-messages origin/BASE HEAD`. Exit 0 is clean; any code other than 0
    or 1 leaves the decision to the refresh merge. On exit 1, merge with
    `merge.conflictStyle=diff3` in the job worktree and classify each conflicted file. A
-   conflict never goes to a repair. Mechanical (fixed in the lane, no agent, the review
-   kept as `mechanical`, never a repair): M-a a hunk that differs only in derived
+   conflict never goes to a repair. Mechanical (fixed in the lane, no agent, the review rerun for the resulting head, never a repair): M-a a hunk that differs only in derived
    `Generated from P (sha256: …)` header lines (the header is then recomputed from the
    merged prompt P); M-b pure inserts (one copy of identical text, else the base side
    first); M-c adjacent hunks that do not overlap (both applied); M-d a JSON file merged
@@ -648,24 +664,15 @@ Phase `pr` has no deadline; it ends only when it is quiet. Each tick, in order:
    again. A base move after the first refresh of one lane entry (a person's merge) is
    a recheck: at the 3rd recheck the PR leaves the lane with no penalty and goes first
    again (L4); rechecks never count as conflict exits. There is no other refresh cap.
-   **Review keep (debate B 5.5)**: F is the SHA-256 of the `+` and `-` lines of `git
-   diff -U0` from the merge base (without derived header lines), in path order. R1:
-   the same F and file set before and after keeps the PASS review (`kept`). R2: a scoped
-   check (`review.scoped {reason, detail, files}`: a short reviewer that reads only that
-   part and answers "does the result keep both changes and break neither?") when the
-   base changed a line within 10 lines of a PR hunk, or a prompt that owns a file of the
-   PR, or after a conflict update that changed F only in the conflict files. R3: a
-   fresh full review for any other change of F.
+   Every changed head requires a fresh independent full review and fresh proof,
+   including a clean refresh, a mechanical conflict fix and an agent conflict update.
+   Earlier review evidence may provide context but cannot authorize the new head.
    Run `checkAutopilotBase` of the [automatic base](autopilot-base.prompt.md). A
    read failure ("could not verify", "unavailable", "retry") waits; another
    refusal ends `base-check`.
 8. Read the winning claim again: another live owner means hand-over and no merge; a
-   claim that is not confirmed as this job's waits. Post one merge comment on the PR for this head: `CI: green (N check(s))` or
-   `CI: none (…)`, the suite, the lane (`Merge lane: final step`, with the queue
-   minutes when it waited), the review (`Review: PASS from a fresh reviewer`,
-   `Review: PASS (kept after a clean base refresh, same change)`, `Review: PASS (kept:
-   the lane fixed only mechanical conflict hunks)` or `Review: PASS (a scoped check
-   after REASON, on top of the earlier full review)`), the PR's Runtime
+   claim that is not confirmed as this job's waits. Post one merge comment on the PR for this head: `CI: green (N check(s))`, the suite, the lane (`Merge lane: final step`, with the queue
+   minutes when it waited), the review (`Review: PASS from a fresh reviewer`), the PR's Runtime
    line, the parsed evidence
    (`Evidence: runtime=pass (11/11); …` in the fixed key order, or `Evidence: none`)
    and the base check,
@@ -746,7 +753,18 @@ files only: the engine line (mode, repository, folder, base, agent), the slot li
 (`B of R slots busy`, no-progress limit, repairs, report mode, opt-in label), the pause
 line (`New jobs paused until TIME (H h): …` or `No pause: N no-result end(s) in a row …`), one line per job (`#N build running 12m (log …)`, `#N PR #P at SHA: review …,
 suite …`, with `; merge lane: final step` or `; merge lane: waiting for PR #P since TIME`, `#N ending: …`), the last 5 results (`#N ended TIME: cause`; strike lines are not results) and the count
-of local report drafts.
+of local report drafts. Add an attention summary from these saved local records only:
+counts and at most five issue lines each for ready merges, open decisions and blocked
+jobs, labeled as a saved snapshot. Save the CI state with its head in the job so a
+ready claim can be conservative. Ready means a saved PR job with current-head review
+PASS, suite pass and green CI, or the latest saved observe `would-merge` result for
+which the recorded head and proof establish those checks; open decisions are saved
+needs-person outcomes; blocked
+jobs are saved failures. Include the latest finished result per issue when no active
+job exists, suppressing older decisions and failures after a newer successful result
+or while an active job exists. Show issue number and a short reason, and show the remaining count when
+more than five. A job appears in at most one category, with blocked taking precedence,
+then open decisions, then ready. Do not query GitHub or write state for status.
 
 ## Text on GitHub
 
