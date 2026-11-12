@@ -205,6 +205,17 @@ function withPortDefaults(ports = {}, defaults = {}) {
   return merged;
 }
 
+function loadPreflightWorkspacePolicy(input) {
+  try {
+    return loadRuntimeWorkspace(input);
+  } catch (error) {
+    if (error?.code?.startsWith('workspace-')) {
+      throw Object.assign(new PreflightError(4, error.message), { code: error.code });
+    }
+    throw error;
+  }
+}
+
 function seamSelectionPorts(ports = {}) {
   const sel = hostSelection();
   return withPortDefaults(ports, {
@@ -302,7 +313,7 @@ export function whyNoTests(root, visible, found, ports = {}) {
     visible,
     found,
     withPortDefaults(ports, {
-      allowsPath: (r, p) => allowsRuntimePath(loadRuntimeWorkspace({ root: r }), p),
+      allowsPath: (r, p) => allowsRuntimePath(loadPreflightWorkspacePolicy({ root: r }), p),
       hasInterfaceBlock: hasPromptInterface,
       discoverTests: (r, files) => findTests({ root: r, files }),
     }),

@@ -156,7 +156,7 @@ export function selectTests(found, words = [], { native = false, captureSource }
       return { storyPath: item.storyPath, promptPath, profileId: links[0][2], sourceReferences: captured.files };
     } catch (error) {
       // Workspace/source boundary and unbound-port failures retain their ordinary throw.
-      if (error?.unboundPort || error?.name === 'PreflightError') throw error;
+      if (error?.unboundPort || error?.name === 'PreflightError' || typeof error?.exitCode === 'number') throw error;
       return { storyPath: item.storyPath, promptPath, profileId: links[0][2], reason: error.message };
     }
   });

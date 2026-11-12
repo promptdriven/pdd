@@ -2526,3 +2526,36 @@ test('SEAM18 (M3-1, M3-2, M3-3): section 4.1 API keeps zero-static-import lazy l
   assert.equal(seam.format.setInterfaceStatus('# No block\n', { status: 'approved' }), null);
   assert.equal(seam.format.setInterfaceStatus(filledPrompt, { status: 123 }), null);
 });
+
+test('SEAM19: selectTests rethrows numeric source-boundary exit codes', async () => {
+  const seam = await import('../src/runtime-seam.mjs');
+  const boundary = Object.assign(new Error('workspace boundary'), { exitCode: 4, code: 'workspace-config-unsafe' });
+  const found = {
+    root: '/repo',
+    tests: [],
+    nativeSelections: [{
+      storyPath: 'user_stories/order.md',
+      story: 'order',
+      section: '[Owner](../prompts/order.prompt.md#native-validation-profile-order)',
+    }],
+    untested: [],
+  };
+
+  assert.throws(
+    () => seam.selectTests(found, ['order'], { native: true, captureSource: () => { throw boundary; } }),
+    error => error === boundary,
+  );
+});
+
+test('SEAM20: whyNoTests preserves workspace preflight errors through the compatibility seam', async t => {
+  const { writeFileSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { harbor } = await import('./runtime-fake.mjs');
+  const seam = await import('../src/runtime-seam.mjs');
+  const setup = harbor(t, repo => writeFileSync(join(repo, 'pdd-workspace.json'), '{invalid json'));
+
+  assert.throws(
+    () => seam.whyNoTests(setup.repo, ['prompts/place_order.prompt.md'], { untested: [], orphans: [] }),
+    error => error instanceof seam.PreflightError && error.exitCode === 4 && error.code === 'workspace-config-invalid',
+  );
+});
