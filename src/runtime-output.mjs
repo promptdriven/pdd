@@ -328,7 +328,7 @@ export function summaryLine(rows, story = null) {
   const mark = rows.some(row => row.state === 'failed') ? '✗'
     : rows.length && rows.every(row => row.state === 'passed') ? '✓'
     : rows.some(row => OPEN_STATES.has(row.state)) ? 'running ·'
-    : rows.some(row => row.busy && row.state === 'not_run') && rows.every(row => row.state === 'passed' || (row.busy && row.state === 'not_run')) ? 'busy ·' : 'no verdict ·';
+    : rows.some(row => row.busy && ['not_run', 'not run'].includes(row.state)) && rows.every(row => row.state === 'passed' || (row.busy && ['not_run', 'not run'].includes(row.state))) ? 'busy ·' : 'no verdict ·';
   const rerunShare = rerunCalls ? `${rerunCalls} for reruns` : '';
   const usage = known.length ? `${count(calls, 'AI call')}${rerunShare ? ` (${rerunShare})` : ''}` : rerunShare || count(calls, 'AI call');
   const skipped = rows.some(row => row.cached) ? [count(new Set(rows.filter(row => row.cached).map(row => row.story_path ?? row.story)).size, 'Story').replace('Storys', 'Stories') + ' skipped'] : [];
