@@ -27,9 +27,12 @@ Screen readiness Story. Existing reference, visibility, label ownership, geometr
 ordering, input and execution-error rules remain required within the selected app
 surface.
 
+This section fully defines the public wire format and consumer interpretation.
+Compatible producers must supply it; producer prompts own when and how they
+publish it.
+
 Recognize the versioned Screen door by `data-pdd-screen-door="1"` on the top-level
-`document.documentElement`. Its producer contract is the Runtime
-[Screen comparison protocol](https://github.com/promptdriven/prompt-runtime/blob/main/prompts/server/web/try/door-screen.prompt.md#screen-comparison-protocol).
+`document.documentElement`.
 A recognized door must not fall back to comparing its shell. Ordinary pages
 continue to use their top-level document; do not recursively search unrelated
 iframes, nested frames or arbitrary shadow roots.
@@ -93,8 +96,7 @@ ready. Existing action lookup/recovery belongs to the door, not this module.
 
 ## Dependencies
 
-- [Screen rules](../../RUNBOOK.md#13-give-your-app-a-screen-app-map): generation and verification context.
-- [Runtime Screen protocol](https://github.com/promptdriven/prompt-runtime/blob/main/prompts/server/web/try/door-screen.prompt.md#screen-comparison-protocol): canonical producer contract required for coordinated generation and verification of recognized doors. Supply the paired Runtime prompt and its required renderer context explicitly; ordinary local upload discovery does not fetch external links. Without that context, cross-repository protocol verification remains incomplete.
+- [Screen rules](../../RUNBOOK.md#13-give-your-app-a-screen-app-map): required packaged generation and verification context for drawing fidelity and local screen comparison. Its other links are navigation-only for this module's wire contract.
 
 ## Caller navigation
 
