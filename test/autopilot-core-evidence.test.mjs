@@ -1067,7 +1067,8 @@ test('E56 (#3227 fix 4) failingTests reads TAP at any depth (with the location) 
   const { failingTests } = await import('../src/autopilot-core.mjs');
   const log = ["TAP version 13", "    not ok 1 - inner case", "      ---", "      location: '/w/test/a.test.mjs:3:1'", "      ...",
     "not ok 1 - outer suite", "  ---", "  location: '/w/test/a.test.mjs:1:1'", "ok 2 - fine", "  ✖ spec failure (12.5ms)", "not ok 3 - inner case", "# fail 2"].join('\n');
-  assert.deepEqual(failingTests(log), [{ name: 'inner case', file: '/w/test/a.test.mjs' }, { name: 'outer suite', file: '/w/test/a.test.mjs' }, { name: 'spec failure', file: null }]);
+  assert.deepEqual(failingTests(log), [{ name: 'inner case', file: '/w/test/a.test.mjs' }, { name: 'outer suite', file: '/w/test/a.test.mjs' }],
+    'a spec-looking line without its summary does not add an unproved failure');
   assert.equal(failingTests(Array.from({ length: 40 }, (_, i) => `not ok ${i} - t${i}`).join('\n')).length, 20);
 });
 
@@ -1539,6 +1540,33 @@ test('E77 (B1, Serhan D3) a changed shared prompt checks every Story that reache
   assert.ok(record.notCovered.some(item => /^Runtime: not run \(13 Stories reach .*; checked 2\): user_stories\/c0\.md/.test(item)), JSON.stringify(record.notCovered));
 });
 
+test('E79 (B1, Serhan D3) a same-head repair still checks the 501st consumer', async t => {
+  const consumers = Array.from({ length: 501 }, (_, i) => `user_stories/c${i}.md`);
+  const rows = [
+    { story: STORY, pass: true, current: true, at: 1000 },
+    ...consumers.slice(0, 500).map(story => ({ story, pass: true, current: true, at: 1000 })),
+  ];
+  const footprints = Object.fromEntries(consumers.map(story => [story, [PROMPT]]));
+  let { w, pr, head } = await consumerWorld(t, 'Runtime: PASS', rows, footprints);
+  assert.ok(w.job(17, 'repair'), 'the first check finds the untested 501st consumer');
+  const statePath = join(w.root, 'jobs', '17.json');
+  const saved = JSON.parse(readFileSync(statePath, 'utf8'));
+  saved.reach = { head, key: PROMPT, stories: consumers.slice(0, 500), error: null };
+  writeFileSync(statePath, JSON.stringify(saved));
+  const body = `Fixes #17.\n\nRuntime: PASS\nPath: a — ${PROMPT} — ${PROMPT} — prompt changed — Test: done check`;
+
+  const repair = w.build(17, { role: 'repair', body, write: false, add: false });
+  assert.equal(repair.head, head, 'the repair keeps the same head');
+  await w.tick();
+  const review = w.job(17, 'review'), suite = w.job(17, 'suite');
+  if (review && suite) {
+    w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
+  }
+  assert.equal(pr.merged, false, 'an unchanged same-head retry cannot hide an unchecked consumer');
+  assert.equal(w.github.merges.length, 0);
+  assert.ok(w.job(17, 'repair'), 'the 501st consumer remains open');
+});
+
 test('E78 (B1) on pdd itself, the consumers of a change to runtime-client.prompt.md are read in under 60 s, transitive call targets included', async t => {
   const { storyReach } = await import('../src/autopilot-core.mjs');
   const { findTests } = await import('../src/runtime-preflight.mjs');
@@ -1629,14 +1657,44 @@ test('E83 (#3227 fix 4, group 3 fix) failingTests on real node --test output: TA
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   writeFileSync(join(dir, 'a.test.mjs'), ["import test from 'node:test';", "test('passes', () => {});", "test('saves the value', () => { throw new Error('a'); });",
     "test('parent', async t => { await t.test('child fails', () => { throw new Error('c'); }); await t.test('child ok', () => {}); });",
-    "test('later', { todo: true }, () => { throw new Error('todo'); });", "test('skipped one', { skip: true }, () => {});", "test('name with # hash', () => { throw new Error('h'); });", ''].join('\n'));
+    "test('later', { todo: 'TODO because (later)' }, () => { throw new Error('todo'); });", "test('skipped one', { skip: true }, () => {});", "test('name with # hash', () => { throw new Error('h'); });",
+    "test('new # TODO handling', () => { throw new Error('directive-like name'); });", ''].join('\n'));
   writeFileSync(join(dir, 'b.test.mjs'), "import test from 'node:test';\ntest('saves the value', () => { throw new Error('b'); });\n");
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !['NODE_OPTIONS', 'NODE_TEST_CONTEXT', 'NO_COLOR', 'FORCE_COLOR'].includes(key)));
   const run = (reporter, color) => spawnSync(process.execPath, ['--test', `--test-reporter=${reporter}`, 'a.test.mjs', 'b.test.mjs'], { cwd: dir, encoding: 'utf8', env: { ...env, ...(color ? { FORCE_COLOR: '1' } : { NO_COLOR: '1' }) } }).stdout;
   const short = list => list.map(f => `${f.name} [${f.file ? f.file.split('/').pop() : '-'}]`);
-  assert.deepEqual(short(failingTests(run('tap'), 50)), ['saves the value [a.test.mjs]', 'child fails [a.test.mjs]', 'parent [a.test.mjs]', 'name with # hash [a.test.mjs]', 'saves the value [b.test.mjs]']);
-  const spec = ['saves the value [a.test.mjs]', 'child fails [a.test.mjs]', 'parent [-]', 'name with # hash [a.test.mjs]', 'saves the value [b.test.mjs]'];
+  assert.deepEqual(short(failingTests(run('tap'), 50)), ['saves the value [a.test.mjs]', 'child fails [a.test.mjs]', 'parent [a.test.mjs]', 'name with # hash [a.test.mjs]', 'new # TODO handling [a.test.mjs]', 'saves the value [b.test.mjs]']);
+  const spec = ['saves the value [a.test.mjs]', 'child fails [a.test.mjs]', 'parent [-]', 'name with # hash [a.test.mjs]', 'new # TODO handling [a.test.mjs]', 'saves the value [b.test.mjs]'];
   assert.deepEqual(short(failingTests(run('spec'), 50)), spec, 'the spec summary gives the files; parent has no "test at" line');
   assert.match(run('spec', true), /\x1b\[/, 'the colored run has color codes');
   assert.deepEqual(short(failingTests(run('spec', true), 50)), spec);
+});
+
+test('E84 spec failures use summary counts when test names or free-text TODO reasons look like durations', async t => {
+  const { failingTests } = await import('../src/autopilot-core.mjs');
+  const { mkdtempSync, rmSync } = await import('node:fs'), { tmpdir } = await import('node:os'), { spawnSync } = await import('node:child_process');
+  const dir = mkdtempSync(join(tmpdir(), 'pdd-core-spec-edge-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !['NODE_OPTIONS', 'NODE_TEST_CONTEXT', 'NO_COLOR', 'FORCE_COLOR'].includes(key)));
+  const run = (...files) => spawnSync(process.execPath, ['--test', '--test-reporter=spec', ...files], { cwd: dir, encoding: 'utf8', env: { ...env, NO_COLOR: '1' } });
+
+  writeFileSync(join(dir, 'duration-name.test.mjs'), "import test from 'node:test';\ntest('slow (5ms) # TODO handling', () => { throw new Error('boom'); });\n");
+  const namedFailure = run('duration-name.test.mjs');
+  assert.equal(namedFailure.status, 1);
+  assert.deepEqual(failingTests(namedFailure.stdout), [{ name: 'slow (5ms) # TODO handling', file: 'duration-name.test.mjs' }]);
+
+  writeFileSync(join(dir, 'todo.test.mjs'), "import test from 'node:test';\ntest('flaky timer', { todo: 'budget ends (5ms)' }, () => { throw new Error('todo'); });\n");
+  const todoOnly = run('todo.test.mjs');
+  assert.equal(todoOnly.status, 0);
+  assert.deepEqual(failingTests(todoOnly.stdout), []);
+
+  writeFileSync(join(dir, 'a.test.mjs'), ["import test from 'node:test';",
+    "test('slow (5ms) # TODO handling', () => { throw new Error('boom'); });",
+    "test('flaky timer', { todo: 'budget ends (5ms)' }, () => { throw new Error('todo'); });",
+    "test('later', { todo: 'because (later)' }, () => { throw new Error('todo'); });", ''].join('\n'));
+  writeFileSync(join(dir, 'b.test.mjs'), "import test from 'node:test';\ntest('real bug', () => { throw new Error('boom'); });\n");
+  const mixed = failingTests(run('a.test.mjs', 'b.test.mjs').stdout, 50);
+  assert.equal(mixed.find(row => row.name === 'real bug')?.file, 'b.test.mjs', 'a TODO row does not leave stale file attribution');
+  assert.equal(mixed.some(row => row.name.includes('flaky timer')), false, 'a TODO reason with a duration is not named as a failure');
+  assert.ok(mixed.some(row => row.file === null && /failed test.*unclear names/.test(row.name)), 'the confirmed failure count stays visible when a name is ambiguous');
 });

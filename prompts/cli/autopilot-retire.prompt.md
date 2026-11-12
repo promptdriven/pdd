@@ -39,15 +39,17 @@ Export:
 `moveToCore` reads the journal `state.retiredFull` (or a new one) and returns `{done, journal, message}`. The journal
 keeps `startedAt`, `wasFull` (`engineBefore` is full), `steps` (step name → time done), `counts`, `defers`, `claims`
 (the claims that the runs step found), `forced`, `warnings` and `lastError`. A complete journal returns `{done: true,
-message: ''}` with no read or write. Each step runs only when it is not done; after it, the journal is saved with
-`ports.save(journal)`. A failed step saves `lastError` (`STEP: one line`) and returns done false with `Autopilot could
-not finish the move to the core engine (LAST_ERROR); the next tick goes on from this step. No new work starts.` So a
-failed step goes on at the next tick, and a done step never runs again.
+message: ''}` with no read or write. Each step runs only when it is not done; after it, the move awaits
+`ports.save(journal)` before it starts another step or returns. A failed step saves `lastError` (`STEP: one line`) and
+returns done false with `Autopilot could not finish the move to the core engine (LAST_ERROR); the next tick goes on
+from this step. No new work starts.` A failed journal save returns done false with `Autopilot could not save the move
+journal (save: ERROR); the next tick retries. No new work starts.` It never leaves a save running after it returns.
+So a failed step goes on at the next tick, and a done step never runs again.
 
 **Merge hold.** Before the first step of a machine that ran the full engine, the move reads which old work is busy:
 a live run of this machine with a merged PR (its post-merge steps may be open), and the old coordinator chat when Herdr
-shows its saved pane `working`. While something is busy and `defers` is below 6, add 1 to `defers`, save, and return
-done false with `Autopilot waits to move this machine to the core engine: WHAT (tick N of 6); no new work starts.` On
+shows its saved pane `working`. While something is busy and `defers` is below 6, add 1 to `defers`, await its save,
+and return done false with `Autopilot waits to move this machine to the core engine: WHAT (tick N of 6); no new work starts.` On
 the 7th tick the move goes on and saves what was busy in `forced`; the line names it. A read failure here waits for the
 next tick in the same way, without a count.
 
@@ -86,8 +88,8 @@ A machine that did not run the full engine and where nothing was found gets an e
 
 `now`, `gh(args, options)` (a `gh api --include` reply with the HTTP status), `herdr(args)` (a reply, or an error with
 its Herdr code), `listRuns(cancelled)`, `cancelRun(run)`, `releaseLocal(run)`, `releaseSlots()`, `processes()`,
-`signal(target, name)`, `sleep(ms)`, `samePath(a, b)`, `commonDir`, `coreJobs()` and `save(journal)`. The launcher
-supplies the native ones.
+`signal(target, name)`, `sleep(ms)`, `samePath(a, b)`, `commonDir`, `coreJobs()` and `save(journal)`. `save` may be
+async and the move awaits it. The launcher supplies the native ones.
 
 ## Dependencies
 

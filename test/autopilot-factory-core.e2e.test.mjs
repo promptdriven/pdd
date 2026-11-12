@@ -1,4 +1,4 @@
-// Generated from prompts/test/autopilot-factory.prompt.md (sha256: 61d3de537d4efddcdaf86f230341acde843c248eb8f33933e44d71eee27dd249).
+// Generated from prompts/test/autopilot-factory.prompt.md (sha256: 447fb20ca2b7b8b2bdee739a1d5a88a2f6a2e9e318bf00b52680a1f2ac4d69e8).
 // The core factory: each user path of Autopilot end to end through the real launcher (start, tick, status, add,
 // stop) and the real core tick, with real Git (a bare origin and clones), a fake GitHub and scripted agent jobs.
 import './helpers/test-home.mjs';
@@ -16,22 +16,23 @@ const agent = async () => ({ id: 'codex', kind: 'codex', command: 'codex' });
 const endComments = (w, n) => w.comments(n).filter(body => body.includes('<!-- pdd:autopilot-core:end:'));
 
 // A person's repository and this machine: pdd.json in the checkout, a package root, a state folder and the timer.
-async function factory(t, autopilot = {}) {
-  const w = await coreWorld(t);
+async function factory(t, autopilot = {}, { stateRoot: sharedStateRoot, repository = 'acme/widgets' } = {}) {
+  const w = await coreWorld(t, { repository });
   writeFileSync(join(w.cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', trust: [], testCommand: 'npm test', report: 'draft', ...autopilot } }));
   mkdirSync(join(w.dir, 'pkg'), { recursive: true }); writeFileSync(join(w.dir, 'pkg', 'package.json'), JSON.stringify({ version: '0.1.29' }));
   const home = join(w.dir, 'home'); mkdirSync(home, { recursive: true });
-  const cwd = w.git(w.cwd, 'rev-parse', '--show-toplevel'), stateRoot = join(w.dir, 'state');
+  const cwd = w.git(w.cwd, 'rev-parse', '--show-toplevel'), stateRoot = sharedStateRoot ?? join(w.dir, 'state');
   const stateFile = join(stateRoot, `${createHash('sha256').update(cwd).digest('hex').slice(0, 20)}.json`);
   const f = { w, cwd, stateFile, timer: [], programs: [], active: false };
   const run = async (command, args, options = {}) => {
     f.programs.push(command);
-    if (command === 'gh' && args[0] === 'repo') return { code: 0, stdout: JSON.stringify({ nameWithOwner: 'acme/widgets', defaultBranchRef: { name: 'main' } }), stderr: '' };
+    if (command === 'gh' && args[0] === 'repo') return { code: 0, stdout: JSON.stringify({ nameWithOwner: repository, defaultBranchRef: { name: 'main' } }), stderr: '' };
     if (command === 'gh' && args[0] === 'auth') return { code: 0, stdout: '', stderr: '' };
     // The label itself (pdd autopilot add creates it when it is missing).
-    if (command === 'gh' && args.includes('repos/acme/widgets/labels')) return { code: 0, stdout: '{}', stderr: '' };
+    const repoPath = `repos/${repository.toLowerCase()}`;
+    if (command === 'gh' && args.includes(`${repoPath}/labels`)) return { code: 0, stdout: '{}', stderr: '' };
     // pdd autopilot add sends the label as a form field (-f labels[]=NAME).
-    const labelled = command === 'gh' && /^repos\/acme\/widgets\/issues\/(\d+)\/labels$/.exec(args.find(arg => String(arg).startsWith('repos/')) ?? '');
+    const labelled = command === 'gh' && new RegExp(`^${repoPath}/issues/(\\d+)/labels$`).exec(args.find(arg => String(arg).startsWith('repos/')) ?? '');
     if (labelled && args.includes('-f')) { w.github.label(Number(labelled[1]), args[args.indexOf('-f') + 1].replace(/^labels\[\]=/, '')); return { code: 0, stdout: '[]', stderr: '' }; }
     if (command === 'gh') return w.gh(args, options);
     if (command === 'git') { const r = spawnSync('git', args, { cwd: options.cwd ?? cwd, encoding: 'utf8' }); return { code: r.status, stdout: r.stdout, stderr: r.stderr }; }
@@ -39,6 +40,11 @@ async function factory(t, autopilot = {}) {
     return { code: 0, stdout: '', stderr: '' };
   };
   f.ports = { stateRoot, now: w.now, env: { HOME: home, PATH: process.env.PATH }, warn: () => {}, notice: () => {}, run, selectAgent: agent,
+    machineGuard: async ({ jobs = 0, runs } = {}) => {
+      const guard = await w.machineGuard({ runs });
+      const slots = Number.isSafeInteger(runs) ? runs : guard.auto;
+      return { ...guard, slots, room: { ...guard.room, free: Math.max(0, slots - jobs) } };
+    },
     timer: async action => { if (action === 'status') return f.active; f.timer.push(action); f.active = action === 'start'; return f.active; },
     doctorPorts: { run: async (command, args, options) => command === 'git' ? run(command, args, options) : { code: 0, stdout: '', stderr: '' }, selectAgent: agent },
     movePorts: { processes: async () => '', releaseSlots: async () => false },
@@ -50,6 +56,7 @@ async function factory(t, autopilot = {}) {
   f.add = (...issues) => call('add', { issues: issues.map(String) });
   f.tick = async () => { w.advance(10 * MIN); return tickAutopilot(stateFile, f.ports); };
   f.state = () => JSON.parse(readFileSync(stateFile, 'utf8'));
+  f.stateRoot = stateRoot;
   return f;
 }
 
@@ -189,4 +196,30 @@ test('core factory 7: stop disables the timer and every later tick; a person who
   assert.equal((await f.tick()).message, 'Autopilot stopped.');
   assert.equal(w.started.length, before, 'a stopped machine starts no job');
   assert.match((await f.status()).message, /^Autopilot disabled; timer inactive/);
+});
+
+test('core factory 8: repository ticks share one machine slot under concurrent admission', async t => {
+  const first = await factory(t, { label: 'pdd:autopilot' }, { repository: 'acme/first' });
+  const second = await factory(t, { label: 'pdd:autopilot' }, { stateRoot: first.stateRoot, repository: 'acme/second' });
+  first.w.issue(17, { labels: ['pdd:autopilot'] });
+  second.w.issue(17, { labels: ['pdd:autopilot'] });
+
+  let guardCalls = 0, releaseTogether;
+  const together = new Promise(resolve => { releaseTogether = resolve; });
+  const seenJobs = [];
+  const machineGuard = async ({ jobs = 0 } = {}) => {
+    seenJobs.push(jobs);
+    if (++guardCalls === 2) releaseTogether();
+    else await Promise.race([together, new Promise(resolve => setTimeout(resolve, 500))]);
+    return { klass: 'server', auto: 1, slots: 1, source: 'automatic', room: { ok: true, reason: null, free: Math.max(0, 1 - jobs) },
+      priority: () => ({}), line: 'Machine: one slot (test)' };
+  };
+  first.ports.machineGuard = machineGuard;
+  second.ports.machineGuard = machineGuard;
+
+  const started = await Promise.all([first.start(), second.start()]);
+  assert.deepEqual(started.map(result => result.exitCode), [0, 0]);
+  const builds = [...first.w.started, ...second.w.started].filter(job => job.role === 'build');
+  assert.equal(builds.length, 1, 'only one repository starts a build in the one shared machine slot');
+  assert.deepEqual([...seenJobs].sort(), [0, 1], 'the later guard snapshot includes the admitted job');
 });

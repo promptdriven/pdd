@@ -9,7 +9,8 @@ below, and the one-time [move from the removed full engine](#the-move-from-the-f
 merge, quota-reset or interactive route of its own. Preserve existing setup, workflow and interpreter behavior.
 
 `runAutopilotLauncher` accepts command doctor, start, stop, status, add, release, report or intake, cwd, packageRoot,
-env, issues (argv operands), and optional runs, checks, engine, label, mode, report, decisions, intake, all and json. Return
+env, issues (argv operands), and optional runs, checks, engine, label, share, mode, report, decisions, intake, all and
+json. Return
 `{exitCode, message}`; the CLI owns streams. Outside programs, timer installation, clock and state I/O are injectable
 ports; native defaults implement them on macOS and Linux. Tests may inject `checkCapacityPorts` for the shared queue.
 
@@ -125,7 +126,13 @@ A tick:
 4. Saves a missing `coordinatorId` (a random UUID) and `machine` (the host name) under the admission lock.
 5. Runs [the move](#the-move-from-the-full-engine) while the state has no complete move journal. Until the move is
    complete, the tick returns the move's message and starts no core work.
-6. Runs the core tick and returns its result.
+6. Takes the machine admission lock at `ROOT/autopilot-machine-admission.lock`, where ROOT is the shared state
+   folder beside every repository's state file. It holds this lock while it reads the machine guard and runs
+   `tickCore` through the point where any new job record is saved and agent is started. This serializes the shared
+   room check and job admission across repositories; two ticks cannot use the same free machine slot. It then saves
+   this repository's tick result under its repository admission lock and releases the machine lock. If it cannot get
+   the machine lock within 5 seconds, it starts no core work and returns a deferred tick result; the next timer tick
+   retries. This lock is separate from the repository admission lock used by start, stop, release and state saves.
 7. At the end, saves the tick's ETag cache, compacts the GitHub ledger to its last 2 hours and removes the lock.
 
 The core tick reads the core settings from this checkout's `pdd.json` and replaces label, mode and report with the
@@ -142,7 +149,9 @@ the core's cause, tried and need, the core state folder, the report folder and `
 interval). Before the core tick, the [machine guard](machine-guard.prompt.md) reads this machine once
 (`readMachineGuard({cwd, runs: state.runs, repoRuns: pdd.json autopilot.runs, share: state.share, jobs})`, where
 `jobs` is the sum of the core's `busySlots` over the core folder of every enabled state file beside this one: the
-share is for the whole machine, every repository; tests replace it with `ports.machineGuard`, #3231). The core
+share is for the whole machine, every repository; tests replace it with `ports.machineGuard`, #3231). The machine
+admission lock is acquired before this snapshot and remains held until `tickCore` has saved and started any new jobs,
+so the snapshot stays current while the core makes its admission decision. The core
 settings come from `readCoreSettings(cwd, fs, {auto, runs: state.runs})`, so this machine's `start --runs N` reaches
 the core and a machine without it gets its automatic slots; the core gets the guard as its `machine` port (the room
 check and each job's priority). Tests may replace core ports with `ports.corePorts`. Afterwards, under the admission lock and only while

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/machine-resources.prompt.md (sha256: 9bd70397290ec4f6da93d360f8ce25237da90c79703e21369cd0debf70bafab0).
+// Generated from prompts/cli/machine-resources.prompt.md (sha256: 9a0d9394d184fd41f0ef3712c333fabf1b78f274507cc8e6fd0b3e57b8a84893).
 import * as files from 'node:fs';
 import { readFileSync, statfsSync } from 'node:fs';
 import { join, isAbsolute } from 'node:path';
@@ -48,10 +48,13 @@ const run = (ports, name, file, args) => String((ports[name] ?? (() => spawnSync
 // The CPU and memory that all Autopilot jobs on this machine use now (#3231, every repository): each job wrapper
 // (agent-job.mjs --wrapper) and its process tree, from one process table read. rss in bytes, cores = %CPU / 100.
 export function readAutopilotUse(ports = {}) {
-  const table = (ports.spawnSync ?? spawnSync)('ps', ['-A', '-o', 'pid=,ppid=,rss=,pcpu=,command='], { encoding: 'utf8', timeout: 5000 });
+  const env = { ...(ports.env ?? process.env), LC_ALL: 'C', LANG: 'C', LC_NUMERIC: 'C' };
+  const table = (ports.spawnSync ?? spawnSync)('ps', ['-A', '-ww', '-o', 'pid=,ppid=,rss=,pcpu=,command='], { encoding: 'utf8', timeout: 5000, env });
   if (table.status !== 0) return null;
-  const rows = String(table.stdout).split('\n').map(line => /^\s*(\d+)\s+(\d+)\s+(\d+)\s+([\d.]+)\s+(.*)$/.exec(line)).filter(Boolean)
+  const output = String(table.stdout ?? '');
+  const rows = output.split('\n').map(line => /^\s*(\d+)\s+(\d+)\s+(\d+)\s+([\d.]+)\s+(.*)$/.exec(line)).filter(Boolean)
     .map(([, pid, ppid, rss, cpu, command]) => ({ pid: Number(pid), ppid: Number(ppid), rss: Number(rss) * 1024, cpu: Number(cpu) / 100, command }));
+  if (!rows.length) return null;
   const children = new Map();
   for (const row of rows) children.set(row.ppid, [...(children.get(row.ppid) ?? []), row]);
   const wrappers = rows.filter(row => /agent-job\.mjs\s+--wrapper\s/.test(row.command)), seen = new Set();
@@ -79,7 +82,8 @@ async function cgroupLimits(read) {
     const dir = join('/sys/fs/cgroup', ...parts.slice(0, depth)), text = async name => { try { return String(await read(join(dir, name))).trim(); } catch { return null; } };
     const [quota, period] = (await text('cpu.max') ?? 'max').split(/\s+/);
     if (quota !== 'max' && Number(quota) > 0 && Number(period) > 0) cpus = Math.min(cpus ?? Infinity, Number(quota) / Number(period));
-    const limits = [await text('memory.max'), await text('memory.high')].filter(v => v && v !== 'max').map(Number).filter(v => Number.isFinite(v) && v >= 0);
+    const ownTimer = depth === parts.length && /^pdd-autopilot-.+\.service$/.test(parts.at(-1) ?? '');
+    const limits = [await text('memory.max'), ...(ownTimer ? [] : [await text('memory.high')])].filter(v => v && v !== 'max').map(Number).filter(v => Number.isFinite(v) && v >= 0);
     const used = Number(await text('memory.current'));
     if (limits.length) memoryMax = Math.min(memoryMax ?? Infinity, ...limits);
     if (limits.length && Number.isFinite(used)) memoryFree = Math.min(memoryFree ?? Infinity, Math.max(0, Math.min(...limits) - used));

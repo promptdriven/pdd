@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 2784fd3aeb5cbfaaa8a867e8c7dc419cee2716689eea110d7d154d2dc21d527f).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: ac47273e0fa517855f16da98c3be3e2b89d08086ccb500914de8c39039950f28).
 import {runAutopilotDoctor, resolveAutopilotAgent} from './autopilot-doctor.mjs';
 import {releaseRunClaim, cancelRun, acquireRunLock} from './workflow-runner.mjs';
 import { releaseCheckCapacity } from './test-suite-queue.mjs';
@@ -272,6 +272,10 @@ async function claimAdmission(state, p, wait = lockWait(p)) {
   const dir = await admissionDirectory(state, p);
   return waitForLock(() => acquireRunLock(dir, 'autopilot-admission.lock'), p, wait);
 }
+async function claimMachineAdmission(stateFile, p, wait = lockWait(p)) {
+  const dir = dirname(stateFile);
+  return waitForLock(() => acquireRunLock(dir, 'autopilot-machine-admission.lock'), p, wait);
+}
 
 export async function tickAutopilot(stateFile, ports = {}) { return runTick(stateFile, ports); }
 
@@ -351,6 +355,12 @@ function shareOption(command, input, state) {
   return null;
 }
 async function coreTick(stateFile, state, p, ports) {
+  const releaseMachine = await claimMachineAdmission(stateFile, p);
+  if (!releaseMachine) return ok('Autopilot machine admission is busy; the next tick will retry.');
+  try { return await runCoreTick(stateFile, state, p, ports); }
+  finally { releaseMachine(); }
+}
+async function runCoreTick(stateFile, state, p, ports) {
   const guard = await coreGuard(state, p, ports, stateFile);
   const core = readCoreSettings(state.cwd, undefined, { auto: guard.auto, runs: state.runs });
   if (machineLabel(state)) core.label = machineLabel(state);

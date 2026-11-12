@@ -94,8 +94,12 @@ test('the machine-wide use reader sums every Autopilot job tree once, of any rep
     '  201   200 2097152 300.0 npm test',
     '  300     1 999999 400.0 node my-own-app.js',
   ].join('\n');
-  assert.deepEqual(readAutopilotUse({ spawnSync: () => ({ status: 0, stdout: ps }) }), { processes: 5, wrappers: 2, rss: (20480 + 307200 + 102400 + 20480 + 2097152) * 1024, cores: 5.31 });
+  let call;
+  assert.deepEqual(readAutopilotUse({ env: { LANG: 'de_DE.UTF-8', LC_ALL: 'de_DE.UTF-8' }, spawnSync: (...args) => { call = args; return { status: 0, stdout: ps }; } }), { processes: 5, wrappers: 2, rss: (20480 + 307200 + 102400 + 20480 + 2097152) * 1024, cores: 5.31 });
+  assert.deepEqual(call[1], ['-A', '-ww', '-o', 'pid=,ppid=,rss=,pcpu=,command=']);
+  assert.deepEqual([call[2].env.LC_ALL, call[2].env.LANG, call[2].env.LC_NUMERIC], ['C', 'C', 'C']);
   assert.equal(readAutopilotUse({ spawnSync: () => ({ status: 1, stdout: '' }) }), null);
+  assert.equal(readAutopilotUse({ spawnSync: () => ({ status: 0, stdout: '  100     1  20480   0,5 node /pkg/src/agent-job.mjs --wrapper /a/job.json' }) }), null, 'a table that cannot be parsed never reports a healthy zero');
 });
 
 test('T3 priority: nice 19 everywhere, macOS utility QoS through taskpolicy, Linux pins agent roles to the share', () => {
@@ -169,6 +173,17 @@ test('T8 readers: the macOS pressure level and cgroup v2 limits', async () => {
   assert.deepEqual(limited.cgroup, { cpus: 2, memoryMax: 3 * GiB, memoryFree: 2 * GiB }, 'the lowest quota, limit and room of all levels');
   const open = await readMachineResources({ cwd: '/' }, tree({ '/proc/meminfo': base['/proc/meminfo'], '/proc/self/cgroup': '0::/\n', '/sys/fs/cgroup/cpu.max': 'max 100000' }));
   assert.deepEqual(open.cgroup, { cpus: null, memoryMax: null, memoryFree: null });
+  const ownTimer = await readMachineResources({ cwd: '/' }, tree({
+    '/proc/meminfo': 'MemTotal: 8388608 kB\nMemAvailable: 7340032 kB\n',
+    '/proc/self/cgroup': '0::/user.slice/user-1000.slice/user@1000.service/app.slice/pdd-autopilot-abc.service\n',
+    '/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice/pdd-autopilot-abc.service/cpu.max': 'max 100000',
+    '/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice/pdd-autopilot-abc.service/memory.max': 'max',
+    '/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice/pdd-autopilot-abc.service/memory.high': String(4 * GiB),
+    '/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice/pdd-autopilot-abc.service/memory.current': String(50 * 1024 ** 2),
+  }));
+  assert.deepEqual(ownTimer.cgroup, { cpus: null, memoryMax: null, memoryFree: null }, 'the timer service share is not a second cgroup limit');
+  const guard = await readMachineGuard({ cwd: '/', share: 50, jobs: 0 }, { machineResources: async () => ({ ...ownTimer, disk: { available: 20 * GiB, total: 30 * GiB }, check: { cpuIds: ids(4), platform: 'linux', taskset: null } }), autopilotUse: async () => ({ rss: 0, cores: 0 }) });
+  assert.deepEqual([guard.slots, guard.room.ok], [1, true], 'an idle 8 GiB timer host still admits its one 50% slot');
   const legacy = await readMachineResources({ cwd: '/' }, { ...tree(base), includeGuard: false });
   assert.equal(legacy.cgroup, undefined, 'without includeGuard the observation is as before'); assert.equal(legacy.pressure.level, undefined);
 });

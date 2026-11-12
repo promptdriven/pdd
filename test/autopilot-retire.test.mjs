@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-retire.prompt.md (sha256: 93aa7aa7f4bdc5c1dc37a934451f948f9aff35a75245cf916a93b3a3bb32f69e).
+// Generated from prompts/cli/autopilot-retire.prompt.md (sha256: c03cbcc1c4b6011174c523d9c405b2357692adf1eec5c3bc7c7cf84d3fd78989).
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -130,6 +130,34 @@ test('M1 the first tick moves a full-engine machine: claims, runs, pane, one not
   const again = await w.move(next);
   assert.equal(again.done, true); assert.equal(again.message, '');
   assert.equal(w.g.writes.length, writes); assert.equal(w.herdrCalls.length, herdr); assert.deepEqual(w.cancelled, [11, 12]);
+});
+
+test('M1a each move-journal save finishes before the next step or return; a rejected save is a deferred move', async () => {
+  const w = fullWorld();
+  let active = 0, maxActive = 0, disk = null;
+  w.ports.save = async journal => {
+    active++; maxActive = Math.max(maxActive, active);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    disk = structuredClone(journal);
+    active--;
+  };
+  const moved = await w.move();
+  // moveTick adds this line after moveToCore returns. A delayed prior save must not erase it.
+  disk = { ...moved.journal, line: moved.message };
+  assert.equal(moved.done, true, moved.message);
+  assert.equal(maxActive, 1, 'one save finishes before the next starts');
+  assert.equal(active, 0, 'the move leaves no background save');
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(disk.line, moved.message, 'no earlier journal save overwrites the moved-state line');
+
+  const failed = fullWorld();
+  let saves = 0;
+  failed.ports.save = async () => { saves++; throw Error('Timed out waiting for automatic admission; retry.'); };
+  const deferred = await failed.move();
+  assert.equal(deferred.done, false);
+  assert.equal(saves, 1);
+  assert.match(deferred.message, /could not save the move journal \(save: Timed out waiting for automatic admission; retry\.\); the next tick retries/);
+  assert.equal(deferred.journal.steps.pane, failed.now, 'the caller receives the unsaved checkpoint for diagnostics');
 });
 
 test('M2 a PR note is never written twice, also when a step runs again', async () => {

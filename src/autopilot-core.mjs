@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 75097f5f07057f57f4c436e9721ed58a105ffafddd0f0a5d2e3dd8daa6aa5d84).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 716c5cdd4d2d766dbc0ac3724f3e983052f3ef3de4bff1602910d21bc74e2438).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -74,7 +74,8 @@ function runtimeReds(body, runtime, promptChanged, prompts = []) {
   if (twice.length) reds.push(`The PR body has two Runtime lines for ${twice.join(', ')}. Keep one line for each Story.`);
   const state = runtime?.state;
   if (state && !['pass', 'not-run'].includes(state)) reds.push(`The job result says Runtime ${state}; only pass or not-run can merge, so make the Runtime check pass.`);
-  else if (state && kinds.size === 1 && !bad.length && !kinds.has(state) && !lines.some(l => l.story)) reds.push(`The job result (Runtime ${state}) and the PR body (${[...kinds][0]}) disagree.`);
+  else if (state && !bad.length && ((kinds.size === 1 && !kinds.has(state)) || (state === 'pass' && kinds.has('not-run'))))
+    reds.push(`The job result (Runtime ${state}) and the PR body's Runtime lines (${[...kinds].join(', ')}) disagree.`);
   if (!lines.length && prompts.length) reds.push(`The PR body has no Runtime line, but this PR changes ${prompts.slice(0, 10).join(', ')}. Add exactly one: "Runtime: PASS", "Runtime: FAIL (reason)" or "Runtime: not run (reason)".`);
   else if (!lines.length && promptChanged !== false) reds.push('The PR body has no Runtime line. Add exactly one: "Runtime: PASS", "Runtime: FAIL (reason)" or "Runtime: not run (reason)"; or, when no prompt changed, say so in the result ("promptChanged": false).');
   return reds;
@@ -1245,7 +1246,8 @@ const SUITE_RUNNER = /^(?:Shared test suite queue failed|Test suite execution ti
 // line gives the file. One test: the same name with the same file, or with no file on one side (the known file stays).
 export function failingTests(text, limit = 20) {
   const found = [];
-  let open = null, look = 0, at = null;
+  const specRows = [], specTreeRows = [];
+  let open = null, look = 0, specSummary = false, specSection = false, specAt = null, specFail = null, specTodo = 0, specSkipped = 0;
   const add = (raw, file) => {
     const name = oneLine(raw, 200);
     if (!name || /^(?:failing tests|tests? failed):?$/i.test(name)) return;
@@ -1256,17 +1258,47 @@ export function failingTests(text, limit = 20) {
   for (const raw of String(text ?? '').split('\n')) {
     const line = raw.replace(/\r$/, '').replace(/\x1b\[[0-9;]*m/g, '');
     let m;
-    if (/^\s*ok \d+ /.test(line)) { close(); at = null; continue; }
+    if (/^\s*ℹ\s+tests\s+\d+\s*$/.test(line)) { specSummary = true; continue; }
+    if (specSummary && (m = /^\s*ℹ\s+fail\s+(\d+)\s*$/.exec(line))) { specFail = Number(m[1]); continue; }
+    if (specSummary && (m = /^\s*ℹ\s+todo\s+(\d+)\s*$/.exec(line))) { specTodo = Number(m[1]); continue; }
+    if (specSummary && (m = /^\s*ℹ\s+skipped\s+(\d+)\s*$/.exec(line))) { specSkipped = Number(m[1]); continue; }
+    if (/^\s*✖\s+failing tests:\s*$/.test(line)) { specSection = true; specAt = null; continue; }
+    if (!specSection && (m = /^\s*✖\s+(.+?)\s*$/.exec(line))) { specTreeRows.push({ text: m[1], file: null }); continue; }
+    if (specSection) {
+      if ((m = /^\s*test at (.+?):\d+:\d+\s*$/.exec(line))) { specAt = m[1]; continue; }
+      if ((m = /^\s*✖\s+(.+?)\s*$/.exec(line))) { specRows.push({ text: m[1], file: specAt }); specAt = null; continue; }
+    }
+    if (/^\s*ok \d+ /.test(line)) { close(); continue; }
     if ((m = /^\s*not ok \d+ - (.*)$/.exec(line))) {
-      close(); at = null;
+      close();
       if (!/(?<!\\)#\s*(?:todo|skip)\b/i.test(m[1])) { open = { name: m[1].replace(/\s+(?<!\\)#.*$/, '').replace(/\\([#\\])/g, '$1'), file: null }; look = 12; }
       continue;
     }
     if (open) { if ((m = /^\s*location: '(.+?):\d+:\d+'/.exec(line))) { open.file = m[1]; close(); } else if (--look <= 0) close(); continue; }
-    if ((m = /^\s*test at (.+?):\d+:\d+\s*$/.exec(line))) { at = m[1]; continue; }
-    if ((m = /^\s*✖\s+(.+?)(?:\s+\(\d+(?:\.\d+)?m?s\))?(\s+#\s*(?:todo|skip)\b.*)?\s*$/i.exec(line))) { if (!m[2]) add(m[1], at); at = null; }
   }
   close();
+  if (specFail > 0) {
+    const named = [];
+    const rows = specTreeRows.map(row => ({ ...row })), used = new Set();
+    for (const row of specRows) {
+      const at = rows.findIndex((candidate, index) => !used.has(index) && candidate.text === row.text);
+      if (at >= 0) { rows[at].file = row.file; used.add(at); }
+      else rows.push(row);
+    }
+    for (const row of rows) {
+      const durations = [...row.text.matchAll(/\s+\(\d+(?:\.\d+)?m?s\)/gi)];
+      const hash = row.text.indexOf('#'), before = hash < 0 ? [] : durations.filter(match => match.index < hash), after = hash < 0 ? [] : durations.filter(match => match.index > hash);
+      if (hash >= 0 && before.length && after.length && (specTodo || specSkipped)) continue;
+      if (hash >= 0 && before.length && !after.length && (specTodo || specSkipped)) continue;
+      const duration = durations.at(-1);
+      if (duration) named.push({ name: row.text.slice(0, duration.index).trim(), file: row.file });
+    }
+    if (named.length <= specFail) {
+      for (const row of named) add(row.name, row.file);
+      const missing = specFail - named.length;
+      if (missing) add(`Spec output reports ${missing} failed test${missing === 1 ? '' : 's'} with unclear names; see the log`, null);
+    } else add(`Spec output reports ${specFail} failures, but its test rows do not match the summary; see the log`, null);
+  }
   return found;
 }
 const testList = list => list.map(f => `${f.name}${f.file ? ` (${basename(f.file)})` : ''}`).join('; ');
@@ -1492,12 +1524,12 @@ async function runtimeCoverage(ctx, job, claims, lines = []) {
   let consumers = [];
   if (prompts.length) {
     const key = prompts.join('\0');
-    if (job.reach?.head === head && job.reach.key === key) consumers = job.reach.stories;
+    if (job.reach?.schema === 2 && job.reach.head === head && job.reach.key === key) consumers = job.reach.stories;
     else {
       const read = evidence.reach ? await evidence.reach(prompts).catch(error => ({ stories: [], error: oneLine(error.message, 300) }))
         : { stories: Object.entries(object(evidence.footprints) ? evidence.footprints : {}).filter(([, files]) => Array.isArray(files) && files.some(file => prompts.includes(file))).map(([story]) => story) };
       consumers = (Array.isArray(read?.stories) ? read.stories : []).filter(named).sort();
-      job.reach = { head, key, stories: consumers.slice(0, 500), error: read?.error ?? null };
+      job.reach = { schema: 2, head, key, stories: consumers, error: read?.error ?? null };
     }
   }
   const consumerOnly = consumers.filter(story => !changedStories.includes(story));

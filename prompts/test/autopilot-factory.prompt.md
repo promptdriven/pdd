@@ -6,9 +6,10 @@ a named gap; never skip, todo, catch-and-pass, or change an expected outcome to 
 the candidate.
 
 Run the native CLI dispatch, workflow runner and durable stores against a disposable
-project. Use real Git commits, branches, worktrees and a local bare origin. Only
-external services and agent reasoning are fake. GitHub must retain mutations and
-reject unsupported service operations. The interpreter must support verdict, no
+project. Use real Git commits, branches, worktrees and a local bare origin. Fake
+external services, agent reasoning and machine resource observations through the
+existing `machineGuard` port; no test reads the host's live memory or capacity.
+GitHub must retain mutations and reject unsupported service operations. The interpreter must support verdict, no
 verdict, refusal and delayed completion. Scripted workers read the actual bundled
 workflow and step briefs and use public done, gate, open, resend and evidence
 commands. They must not write native approval fields or invent a runtime receipt.
@@ -41,6 +42,9 @@ are fake. The tick calls no Herdr, launchctl or systemctl. Cases:
 6. A base change that conflicts with the PR starts a conflict update (not a repair); after it the PR merges.
 7. A person who removes `pdd:working` stops that job; `pdd autopilot stop` stops the timer, and a later tick starts
    nothing; status says disabled.
+8. Two independent repository checkouts share one state folder and compete at the same time for one machine slot.
+   Only one build starts; the second tick reads the first job while holding the machine admission lock and starts no
+   build. Fix the machine guard result to one slot so the case does not depend on host memory.
 
 ## Dependencies
 

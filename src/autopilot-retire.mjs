@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-retire.prompt.md (sha256: 93aa7aa7f4bdc5c1dc37a934451f948f9aff35a75245cf916a93b3a3bb32f69e).
+// Generated from prompts/cli/autopilot-retire.prompt.md (sha256: c03cbcc1c4b6011174c523d9c405b2357692adf1eec5c3bc7c7cf84d3fd78989).
 import { sep, join } from 'node:path';
 
 // The move of a machine from the removed full engine to the core engine. Each step is idempotent and saved in the
@@ -244,13 +244,30 @@ export async function moveToCore({ state, stateFile, repoEngine = null }, ports)
   if (moved({ retiredFull: journal })) return { done: true, journal, message: '' };
   const ctx = { state, ports, gh: github(ports.gh), self: new Set([process.pid, process.ppid]),
     match: { runsRoot: join(ports.commonDir ?? '/nonexistent', 'pdd', 'runs'), stateFile } };
-  const save = () => ports.save(journal);
+  // The launcher's save takes its admission lock asynchronously. Each save must finish before the next state change:
+  // otherwise an older journal can overwrite the final moved state after this function returns.
+  const save = async () => {
+    try { await ports.save(journal); return null; }
+    catch (error) { return `save: ${oneLine(error.message)}`; }
+  };
+  const saveFailure = error => {
+    journal.lastError = error;
+    return { done: false, journal, message: `Autopilot could not save the move journal (${error}); the next tick retries. No new work starts.` };
+  };
   // A run in a merge, or a busy coordinator chat, holds the move for up to 6 ticks; then it moves with the reason.
   if (journal.wasFull && !Object.keys(journal.steps).length) {
     let busy = [];
-    try { busy = await mergeStage(ctx); } catch (error) { journal.lastError = oneLine(error.message); save(); return { done: false, journal, message: `Autopilot waits to move this machine to the core engine: ${journal.lastError}; the next tick retries.` }; }
+    try { busy = await mergeStage(ctx); }
+    catch (error) {
+      journal.lastError = oneLine(error.message);
+      const saveError = await save();
+      if (saveError) return saveFailure(saveError);
+      return { done: false, journal, message: `Autopilot waits to move this machine to the core engine: ${journal.lastError}; the next tick retries.` };
+    }
     if (busy.length && journal.defers < MAX_DEFERS) {
-      journal.defers++; save();
+      journal.defers++;
+      const saveError = await save();
+      if (saveError) return saveFailure(saveError);
       return { done: false, journal, message: `Autopilot waits to move this machine to the core engine: ${busy.join(', ')} (tick ${journal.defers} of ${MAX_DEFERS}); no new work starts.` };
     }
     if (busy.length) journal.forced = busy;
@@ -266,8 +283,15 @@ export async function moveToCore({ state, stateFile, repoEngine = null }, ports)
   for (const step of MOVE_STEPS) {
     if (journal.steps[step]) continue;
     try { await run[step](); }
-    catch (error) { journal.lastError = `${step}: ${oneLine(error.message)}`; save(); return { done: false, journal, message: `Autopilot could not finish the move to the core engine (${journal.lastError}); the next tick goes on from this step. No new work starts.` }; }
-    journal.steps[step] = now(); delete journal.lastError; save();
+    catch (error) {
+      journal.lastError = `${step}: ${oneLine(error.message)}`;
+      const saveError = await save();
+      if (saveError) return saveFailure(saveError);
+      return { done: false, journal, message: `Autopilot could not finish the move to the core engine (${journal.lastError}); the next tick goes on from this step. No new work starts.` };
+    }
+    journal.steps[step] = now(); delete journal.lastError;
+    const saveError = await save();
+    if (saveError) return saveFailure(saveError);
   }
   journal.done = now();
   const quiet = !journal.wasFull && !['panes', 'runs', 'claims', 'notes', 'workers'].some(key => journal.counts[key]);

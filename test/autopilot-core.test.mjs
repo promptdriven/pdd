@@ -707,6 +707,34 @@ test('R6 the Runtime gate is an allowlist: only PASS or "not run" lines and stat
   }
 });
 
+test('R6b a per-Story not-run result cannot be marked pass, while a truthful not-run result stays distinct', async t => {
+  const story = 'user_stories/runtime-status.md', other = 'user_stories/runtime-other.md';
+  const make = async (body, state, rows) => {
+    const w = await coreWorld(t, { settings: { runs: 1 } });
+    w.baseCommit(story, '# Runtime status\n\nThe status is reported.\n');
+    w.issue(17); await w.tick();
+    writeFileSync(join(w.job(17, 'build').cwd, story), '# Runtime status\n\nThe changed status is reported.\n');
+    w.runtimeEvidence = async () => ({ stories: rows, storyFiles: [story], tests: [], footprints: { [story]: [] } });
+    const { pr } = w.build(17, { body, runtime: { state } });
+    await w.tick();
+    return { w, pr };
+  };
+
+  const noRows = await make(`Fixes #17\n\nRuntime: not run (${story}: no saved checks)\nEvidence: runtime=not-run`, 'pass', []);
+  assert.ok(noRows.w.job(17, 'repair'), 'no saved Story check cannot be reported as an aggregate pass');
+  assert.equal(noRows.w.github.merges.length, 0);
+
+  const passRow = [{ story, pass: true, current: true, at: 1000 }];
+  const mixedPass = await make(`Fixes #17\n\nRuntime: PASS (${story}, 1/1 checks)\nRuntime: not run (${other}: no saved checks)\nEvidence: runtime=not-run`, 'pass', passRow);
+  assert.ok(mixedPass.w.job(17, 'repair'), 'one not-run Story prevents an aggregate pass');
+  assert.equal(mixedPass.w.github.merges.length, 0);
+
+  const truthfulNotRun = await make(`Fixes #17\n\nRuntime: PASS (${story}, 1/1 checks)\nRuntime: not run (${other}: no saved checks)\nEvidence: runtime=not-run`, 'not-run', passRow);
+  assert.equal(truthfulNotRun.w.job(17, 'repair'), undefined, 'a truthful partial result remains eligible for normal checks');
+  truthfulNotRun.w.review(17, 'PASS'); truthfulNotRun.w.suite(17, 0); await truthfulNotRun.w.tick();
+  assert.deepEqual(truthfulNotRun.w.github.merges, [truthfulNotRun.pr.number]);
+});
+
 test('R7 a job file with no agent record, or one whose advance keeps failing, ends and frees its slot and claim', async t => {
   const { readAgentJob } = await import('../src/agent-job.mjs');
   const w = await coreWorld(t, { settings: { runs: 1 } });

@@ -936,7 +936,9 @@ runs until its end):
    change to `prompts/cli/runtime-client.prompt.md` reads its consumers in one tick in
    under 60 s (a test checks it). The result's `runtime.state` (lower case, spaces as `-`) must be
    absent, `pass` or `not-run`, and must agree with the body when all lines have one
-   verdict; else red. A body with no
+   verdict; else red. With per-Story lines, if any Story says `not run`, the result
+   state cannot be `pass`; it must be absent or `not-run`. A not-run Story remains
+   unverified; a pass for another Story does not mark it passed. A body with no
    Runtime line is red when the change has a `*.prompt.md` (Git decides, also when the
    result says `"promptChanged": false`); with no changed prompt it is red unless the
    result says `"promptChanged": false`. **A Runtime pass must be true (T01):** every
@@ -1255,9 +1257,17 @@ runs until its end):
    side; the known file stays). TAP `not ok N - NAME` lines at any depth: a failure stays
    open until its `location:` line, the next `ok` or `not ok` line or 12 lines, so one name
    in two files is two tests; a `# TODO` or `# SKIP` directive is no failure; `\#` and `\\`
-   unescape. Spec-reporter `✖ NAME (DURATION)` lines at any depth, after color codes go:
-   the summary's `test at FILE:LINE:COL` line before it gives the file; a TODO or SKIP
-   line and the `✖ failing tests:` header are no test. The
+   unescape. Spec-reporter `✖` lines use the `ℹ fail N` and `ℹ todo N` summary and the
+   `✖ failing tests:` section. A complete summary with `fail 0` means there is no
+   spec failure, even when TODO or skipped tests have `✖` lines. A partial spec log
+   without the summary does not prove a failure. When no TODO or skipped tests ran, the
+   final duration suffix gives the test name; earlier duration-like text and `# TODO` or
+   `# SKIP` stay in the name. When TODO or skipped tests ran, report a test name only when
+   its line is clear: a reason after the duration is not a failure, while a duration-shaped
+   reason or title is ambiguous. If the summary confirms failures but their names cannot
+   be separated from TODO or skipped rows, report the failure count and say the names are
+   unclear; do not guess a test or file. The `test at FILE:LINE:COL` line before a spec row
+   gives its file. The
    **repair budget** (option B): repairs go on
    while they make progress. The findings of a round are each review must-fix (P1 and P2)
    and each other red line. Two findings are the same when they name the same `file:line`
