@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 0844f3050acb23a08e7504b116191998be01aed5397048d477938b29e8a0d3c1).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: efa11b47d709d0d891542239c439f9df2e077fe4bf32888eb744ffa204bb97b4).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -77,7 +77,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
   cwd = process.cwd(), packageRoot = PACKAGE_ROOT, env = process.env, workflowRunner, workflowAreas,
   stdin = process.stdin, confirm, mcpServer, runtimeSlots, contracts, product, productPorts, gitContext, workflowProve, provePorts,
   autopilotRegressions, autopilotRegressionsPorts = {}, issueGraph, issueGraphPorts = {}, dependencyIntake, dependencyIntakePorts = {}, autopilotLauncher, autopilotLauncherPorts = {}, workflowAgents = { checkWorkflowAgents }, workflowAgentPorts = {}, setupSkills = defaultSetupSkills,
-  setupProject = defaultSetupProject, setupAgentMcp, autopilot, autopilotPorts = {}, autopilotAlerts, autopilotAlertsPorts = {}, autopilotGithub: autopilotGithubModule, autopilotGithubPorts = {}, pathDiagnostic = defaultPathDiagnostic } = {}) {
+  setupProject = defaultSetupProject, setupAgentMcp, autopilot, autopilotPorts = {}, autopilotAlerts, autopilotAlertsPorts = {}, autopilotGithub: autopilotGithubModule, autopilotGithubPorts = {}, pathDiagnostic = defaultPathDiagnostic, accounts, accountsPorts = {} } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
@@ -163,6 +163,15 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       for (const [name, value] of Object.entries(plan.options)) { args.push(name); if (Array.isArray(value)) args.push(...value); else if (value !== true) args.push(value); }
       const { runMetrics } = await import('./metrics-command.mjs');
       return runMetrics({ argv: args, cwd, stdout, stderr });
+    }
+    case 'accounts': {
+      try {
+        const module = accounts ?? await import('./accounts-command.mjs');
+        // `accounts group create GROUP` reaches the command as action group-create with the operand GROUP.
+        const group = plan.commandId === 'accounts.group';
+        return await module.runAccounts({ action: group ? 'group-create' : plan.commandId.slice('accounts.'.length), operands: plan.operands.slice(group ? 1 : 0),
+          options: { ...plan.options }, cwd, env, stdin, stdout, stderr }, accountsPorts);
+      } catch (error) { line(stderr, `pdd accounts failed.${reason(error)}`); return 1; }
     }
     case 'help': line(stdout, plan.topic ? renderTopic(plan.topic, packageRoot) : renderHelp(plan.helpPrefix, packageRoot));return 0;
     case 'version':

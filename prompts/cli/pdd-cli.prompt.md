@@ -128,6 +128,8 @@ finite safe failure and exits 1. Do not load the launcher or remote settings.
 
 - [Metrics command](metrics-command.prompt.md): required native generation/verification context for local metrics dispatch.
 
+- [Accounts command](accounts-command.prompt.md): required native generation and verification context for `pdd accounts` dispatch.
+
 - [Issue dependency graph](issue-dependency-graph.prompt.md): required generation and verification context for graph dispatch.
 
 - [Structured dependency intake](issue-dependencies-intake.prompt.md): required generation and verification context for prepare/complete dispatch.
@@ -282,6 +284,8 @@ finite local cause and returns 5. Catalog owns all syntax.
 </details>
 
 Dispatch each metrics route to [metrics command](metrics-command.prompt.md) with the selected arguments, current cwd, stdout and stderr; return its exit code without an interpreter call. Forward optional origin, decisionId and outcome metadata alongside existing base, adoptCorpus and draft fields to startRun; these observations grant no workflow authority.
+
+Dispatch every `accounts` route to `runAccounts` of the [accounts command](accounts-command.prompt.md) with `action` (the route id after `accounts.`; route `accounts.group` gives `group-create` and drops its first operand `create`), the parsed operands and options, cwd, env, stdin, stdout and stderr, and the injected `accountsPorts`; an injected `accounts` module replaces the import. Return its exit code. A thrown error prints `pdd accounts failed.` with the finite local cause and returns 1.
 
 Dispatch `autopilot-check-base` to the Autopilot launcher with command check-base and both operands in issues, using the same reply validation and stream rules as its other commands. Do not run the remote settings warning for this command.
 

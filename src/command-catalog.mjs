@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 1307a640660a0a3a4ec2b76247dfc508de0bb246fb7d6ce08272abca8bc11b45).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 498f8cb95b490884bb84182837f5146257be8ad1a88227a202eb1a9eb4a8b39c).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -23,6 +23,27 @@ const routes = [
   { id: 'metrics.export', prefix: ['metrics', 'export'], local: 'metrics', operands: [{name:'file',type:'text'}], options: [{name:'--timezone',kind:'text'}], forms: [form('pdd metrics export FILE [--timezone IANA]', 'Export metrics for sharing.')] },
   { id: 'metrics.import', prefix: ['metrics', 'import'], local: 'metrics', operands: [{name:'file',type:'text'}], options: [], forms: [form('pdd metrics import FILE', 'Import a metrics bundle.')] },
   { id: 'metrics.record', prefix: ['metrics', 'record'], local: 'metrics', operands: [{name:'file',type:'text'}], options: [], forms: [form('pdd metrics record FILE', 'Record explicit metrics observations.')] },
+  // Login pool: one local for every form; the accounts command checks names and option combinations.
+  ...[
+    ['list', [], [{name:'--json',kind:'flag'},{name:'--no-read',kind:'flag'}], 'pdd accounts list [--json] [--no-read]', 'Show the Codex logins of this machine in pool order with read-only usage: no refresh, no sign-in, nothing spent. --no-read shows the saved usage.'],
+    ['add', [{name:'name',type:'text'}], [{name:'--provider',kind:'value',choices:['codex','claude']},{name:'--group',kind:'text'},{name:'--local',kind:'flag'}], 'pdd accounts add NAME [--provider codex|claude] [--group GROUP] [--local]', 'Make a new login folder and run the Codex sign-in in it; a person at a terminal only.'],
+    ['import', [{name:'path',type:'text',repeat:true}], [{name:'--name',kind:'text'},{name:'--provider',kind:'value',choices:['codex','claude']},{name:'--local',kind:'flag'}], 'pdd accounts import PATH... [--name NAME] [--provider codex|claude] [--local]', 'Add existing Codex login folders to the pool; pdd never copies, moves or changes a login file.'],
+    ['order', [{name:'name',type:'text',optional:true,repeat:true}], [{name:'--first',kind:'text'},{name:'--last',kind:'text'},{name:'--after',kind:'text-list'},{name:'--edit',kind:'flag'}], 'pdd accounts order [NAME...] [--first NAME | --last NAME | --after NAME NAME | --edit]', 'Show or set the order in which agent steps use the logins.'],
+    ['pause', [{name:'name',type:'text'}], [], 'pdd accounts pause NAME', 'Take a login out of the pick; it keeps its place in the order.'],
+    ['resume', [{name:'name',type:'text'}], [], 'pdd accounts resume NAME', 'Put a paused login back in the pick.'],
+    ['set', [{name:'name',type:'text'}], [{name:'--stop-week',kind:'integer',min:1,max:100},{name:'--stop-5h',kind:'integer',min:1,max:100},{name:'--reset',kind:'value',choices:['never','ask','auto']}], 'pdd accounts set NAME [--stop-week N] [--stop-5h N] [--reset never|ask|auto]', 'Show or change the stop lines (percent) and the reset setting of a login. Only a person at a terminal changes the reset setting, after typing yes.'],
+    ['remove', [{name:'name',type:'text'}], [], 'pdd accounts remove NAME', 'Forget a login. pdd never signs out and keeps every folder that it did not make; it asks before it deletes a folder that add made.'],
+    ['home', [{name:'name',type:'text'}], [], 'pdd accounts home NAME', 'Print the folder of a login, for wrappers that set CODEX_HOME.'],
+    ['log', [{name:'name',type:'text',optional:true}], [{name:'--json',kind:'flag'}], 'pdd accounts log [NAME] [--json]', 'Show the local log of pool changes; with a login server, also its log.'],
+    ['share', [{name:'name',type:'text'}], [{name:'--with',kind:'text'}], 'pdd accounts share NAME --with USER,...', 'Share a login with GitHub users through the PDD login server; each person accepts it first.'],
+    ['unshare', [{name:'name',type:'text'}], [{name:'--with',kind:'text'}], 'pdd accounts unshare NAME --with USER,...', 'Stop sharing a login with GitHub users.'],
+    ['accept', [{name:'name',type:'text'}], [], 'pdd accounts accept NAME', 'Accept a login that someone shares with you.'],
+    ['leave', [{name:'name',type:'text'}], [], 'pdd accounts leave NAME', 'Stop using a login that someone shares with you.'],
+    // `group create` is the route `accounts group` with the one choice `create`, so `pdd help accounts group` works.
+    ['group', [{name:'action',type:'choice:create'},{name:'group',type:'text'}], [{name:'--with',kind:'text'},{name:'--github',kind:'text'}], 'pdd accounts group create GROUP (--with USER,... | --github ORG[/TEAM])', 'Make a group of people for shared logins, by GitHub names or by a GitHub org or team.'],
+    ['reset', [{name:'name',type:'text'}], [], 'pdd accounts reset NAME', 'Use a Codex usage reset on a login now; a person at a terminal only.'],
+  ].map(([word, operands, options, usage, description]) => ({ id: `accounts.${word}`, prefix: ['accounts', word], local: 'accounts',
+    operands, options, forms: [form(usage, description)] })),
   { id: 'autopilot.regressions', prefix: ['autopilot', 'regressions'], local: 'autopilot-regressions', operands: [], options: [{name:'--json',kind:'flag'},{name:'--file',kind:'text'}],
     forms: [form('pdd autopilot regressions [--json] [--file PATH]', 'Read core merge history and GitHub regression evidence; optionally save a local report, without GitHub writes or reverts.')] },
   { id: 'autopilot.doctor', prefix: ['autopilot', 'doctor'], local: 'autopilot-doctor', operands: [], options: [], forms: [form('pdd autopilot doctor', 'Read-only first-start checks and fix commands; no AI call or GitHub write.')] },
