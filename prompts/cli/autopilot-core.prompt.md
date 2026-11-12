@@ -63,8 +63,10 @@ process: build, repair, conflict, review and suite. Each tick, for each running 
   to 1 MB; the size only above), so a re-run that writes the same file or an edit that flips
   back is not new; (P3) a tool call in its own stream that is not a wait (Codex `--json`
   `item.completed` with its type and fields; Claude `stream-json` `tool_use` with its name and
-  input; the tools `wait`, `wait_agent`, `sleep`, `list_agents`, a `write_stdin` with no
-  input and a `sleep N` command are waits); (P4) a tool output line (also of a wait) or a
+  input; agy `stream-json` `step_update` of `step_type` `tool` and `state` `DONE` with its
+  `tool_name` and `tool_info.parameters`; the tools `wait`, `wait_5_seconds`, `wait_agent`,
+  `sleep`, `list_agents`, a `write_stdin` with no input and a `sleep N` command are waits);
+  (P4) a tool output line (also of a wait) or a
   plain log line, after normalization: dates, clock times and durations removed; UUIDs, hex
   ids of 7 or more characters and 20 or more base64 characters with a digit and a letter
   become `X`; temp paths become `T`; digits become `N`; spaces trimmed; (P5) 10 s or more of
@@ -281,8 +283,8 @@ For each ready issue while slots are free, at most 3 claim attempts per tick:
 4. Save the job file, then start the build job (below). A start error, also one that
    the spawn reports later, ends the job as `no-result`; it never stops the tick.
 
-Intake is held, and nothing is claimed, when the saved agent is not Codex or
-Claude, when `ports.agentReady()` is false at the first ready issue (for example a
+Intake is held, and nothing is claimed, when the saved agent is not Codex, Claude or
+agy, when `ports.agentReady()` is false at the first ready issue (for example a
 Codex usage limit), or while a machine pause runs (below).
 
 **No result is a machine fault first.** An agent that exited with no result, a start

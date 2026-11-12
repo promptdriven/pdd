@@ -416,12 +416,17 @@ test('a merge check that keeps failing on GitHub ends after its quiet period wit
   assert.equal(listReportDrafts({ root: w.reportRoot })[0].fingerprint, 'pdd.autopilot-core.merge-check-tool.0.1');
 });
 
-test('an agent other than Codex or Claude holds intake without a claim', async t => {
+test('an agent other than Codex, Claude or agy holds intake without a claim; agy starts headless jobs', async t => {
   const w = await coreWorld(t);
   w.state.agent = { kind: 'gemini', command: 'gemini' };
   w.issue(17);
   const result = await w.tick();
-  assert.equal(w.started.length, 0); assert.equal(w.github.writes.length, 0); assert.match(result.message, /Codex or Claude/);
+  assert.equal(w.started.length, 0); assert.equal(w.github.writes.length, 0); assert.match(result.message, /Codex, Claude or agy/);
+  w.state.agent = { id: 'agy', kind: 'agy', command: '/opt/bin/agy' };
+  await w.tick();
+  assert.equal(w.started.length, 1);
+  assert.equal(w.started[0].command, '/opt/bin/agy');
+  assert.deepEqual(w.started[0].args, ['--input-format', 'text', '--output-format', 'stream-json', '--dangerously-skip-permissions']);
 });
 
 test('an ended job holds no slot after a restart, and END and merge remove its per-issue files', async t => {
@@ -2887,13 +2892,19 @@ test('W13 the stream parser: Claude tool calls and results, Codex items, prose a
   w.issue(17); await w.tick();
   const prose = [JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: `thinking ${Math.random()}` }], usage: { output_tokens: 5 } } }),
     JSON.stringify({ type: 'item.completed', item: { id: 'a', type: 'agent_message', text: 'I will look again' } }), JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 99 } }),
-    JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: 'sleep 60' } }] } })];
+    JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: 'sleep 60' } }] } }),
+    JSON.stringify({ event: 'step_update', step_update: { step_type: 'agent_response', state: 'DONE', text_delta: 'thinking', usage: { output_tokens: 5 } } }),
+    JSON.stringify({ event: 'step_update', step_update: { step_index: 5, step_type: 'tool', state: 'DONE', tool_name: 'wait_5_seconds', tool_info: { parameters: {} } } }),
+    JSON.stringify({ event: 'step_update', step_update: { step_index: 5, step_type: 'tool', state: 'DONE', tool_name: 'run_command', tool_info: { parameters: { CommandLine: 'sleep 60' } } } })];
   let n = 0;
   assert.equal(await ticksUntilStop(w, 17, () => { for (const line of prose) w.say(17, 'build', line.replace('5', String(n++))); }), 50, 'prose, token counts and sleep are nothing new');
   const v = await coreWorld(t, { settings: { runs: 1 } });
   v.issue(17); await v.tick();
   const words = ['alpha', 'beta', 'gamma', 'delta', 'epsilon', 'zeta', 'eta', 'theta', 'iota', 'kappa'];
   assert.equal(await ticksUntilStop(v, 17, i => v.say(17, 'build', JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', content: [{ type: 'text', text: `found ${words[i]}` }] }] } })), 10), null, 'a new tool result line is new');
+  const a = await coreWorld(t, { settings: { runs: 1 } });
+  a.issue(17); await a.tick();
+  assert.equal(await ticksUntilStop(a, 17, i => a.say(17, 'build', JSON.stringify({ event: 'step_update', step_update: { step_type: 'tool', state: 'DONE', tool_name: 'view_file', tool_info: { parameters: { Path: `/repo/${words[i]}.mjs` } } } })), 10), null, 'a new agy tool call is new');
 });
 
 // ---- Review 11 ------------------------------------------------------------------------------------------------

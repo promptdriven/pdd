@@ -1,11 +1,11 @@
-// Generated from prompts/cli/agent-job.prompt.md (sha256: 9b64f03ba1c729087c35f09abcae80b7dfd5bbb2fc223cd9dd2fecd76c863189).
+// Generated from prompts/cli/agent-job.prompt.md (sha256: 17abce0e382bfdef28f425285a4f5417c6073001ef3cd42dcdb73d7debc59d3d).
 import { spawn, spawnSync } from 'node:child_process';
 import { closeSync, openSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const self = fileURLToPath(import.meta.url);
-const SESSION_KEYS = /^(?:CLAUDECODE$|CLAUDE_CODE_|CLAUDE_PID$|CODEX_THREAD_ID$|CODEX_SANDBOX|HERDR_|PDD_AGENT_SESSION$|PDD_AUTOPILOT_CONTEXT$)/;
+const SESSION_KEYS = /^(?:ANTIGRAVITY_(?!APP_DATA_DIR$)|CLAUDECODE$|CLAUDE_CODE_|CLAUDE_PID$|CODEX_THREAD_ID$|CODEX_SANDBOX|HERDR_|PDD_AGENT_SESSION$|PDD_AUTOPILOT_CONTEXT$)/;
 const readJson = file => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch (error) { if (error.code === 'ENOENT') return undefined; return 'invalid'; } };
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 function writeAtomic(file, text) {
@@ -18,7 +18,8 @@ export function agentCommand(agent, { model } = {}) {
   if (agent?.kind === 'codex') return { command: agent.command ?? 'codex', args: ['exec', '--json', '--dangerously-bypass-approvals-and-sandbox', '-c', 'features.multi_agent=false', ...extra, '-'] };
   // Claude streams its events (stream-json) so that its log grows while it works; the core reads the result file.
   if (agent?.kind === 'claude') return { command: agent.command ?? 'claude', args: ['-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'bypassPermissions', ...extra] };
-  throw Error('Autopilot core jobs need codex or claude');
+  if (agent?.kind === 'agy') return { command: agent.command ?? 'agy', args: ['--input-format', 'text', '--output-format', 'stream-json', '--dangerously-skip-permissions', ...extra] };
+  throw Error('Autopilot core jobs need codex, claude or agy');
 }
 
 export function jobEnvironment(env = {}) {
