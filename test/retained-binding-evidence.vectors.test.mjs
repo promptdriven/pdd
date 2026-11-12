@@ -4,11 +4,9 @@ import assert from 'node:assert/strict';
 import {mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {fixture, packageRoot, matchingClaimPorts} from './helpers/workflow-runner-fixture.mjs';
-import {healthyMachine} from './helpers/healthy-machine.mjs';
-import {isolatedCheckCapacity} from './helpers/check-machine.mjs';
+import {fixture} from './helpers/workflow-runner-fixture.mjs';
 import {readRunResults} from '../src/workflow-results.mjs';
-import {tickAutopilot} from '../src/autopilot-launcher.mjs';
+import {moveToCore, movedState} from '../src/autopilot-retire.mjs';
 import {runStatus} from '../src/workflow-runner.mjs';
 
 // Native local replay. Expectations come from the approved frozen cases, not
@@ -60,76 +58,91 @@ for (const intent of vectors.reader_intents) for (const row of vectors.reader_ca
   });
 }
 
-async function parkingFixture(t) {
+const reply = (status, value) => ({code: 0, stdout: `HTTP/1.1 ${status} Test\r\n\r\n${value === undefined ? '' : JSON.stringify(value)}`});
+
+async function retirementFixture(t, row) {
   const f = await fixture(t);
+  f.ports.skipMetricsDelivery = true;
   assert.equal((await f.run()).exitCode, 0);
   assert.equal((await runStatus({ref: '17', cwd: f.source}, f.ports)).exitCode, 0);
-  f.herdr.idle();
   const run = f.record();
-  run.automaticOrigin = {repository: run.repo, coordinatorId: 'park-owner', machine: 'park-machine',
+  run.automaticOrigin = {repository: run.repo, coordinatorId: 'retire-owner', machine: 'retire-machine',
     claim: {commentId: '11', labelEventId: '12'}};
+  run.state = 'waiting';
+  run.gate = {kind: 'approve-pr', area: run.areas[run.area].name};
+  run.done.check = 'Synthetic no-verdict receipt';
+  if (row.question) run.question = {at: f.clock, ...row.question};
+  if (row.blockedOn) run.blockedOn = row.blockedOn;
   save(run);
-  f.ports.owners = matchingClaimPorts(run);
-  writeFileSync(join(f.source, 'pdd.json'), JSON.stringify({autopilot: {mode: 'auto', trust: []}}));
   const stateFile = join(f.state, 'launcher.json');
-  writeFileSync(stateFile, JSON.stringify({enabled: true, defaultBranch: 'main', baseBranch: 'main',
-    stateFile, cwd: f.source, repo: run.repo, packageRoot, runs: 1, coordinatorId: 'park-owner',
-    machine: 'park-machine', activatedAt: 1, agent: {id: 'claude', kind: 'claude', command: 'claude'},
-    environment: f.ports.env, recipeDelivered: true}));
-  const warnings = [], requests = [];
-  const herdr = async args => {
-    if (args[0] === 'pane' && args[1] === 'get') {
-      const pane = f.herdr.panes.find(pane => pane.pane_id === args[2]);
-      if (!pane) throw Object.assign(Error('pane_not_found'), {code: 'pane_not_found'});
-      return {result: {type: 'pane_info', pane: {...pane, foreground_cwd: pane.cwd, ...pane.agent}}};
-    }
-    return f.herdr.herdr(args);
+  const state = {enabled: true, engine: 'full', stateFile, cwd: f.source, repo: run.repo,
+    coordinatorId: run.automaticOrigin.coordinatorId, machine: run.automaticOrigin.machine,
+    agent: {id: 'claude', kind: 'claude', command: 'claude'}, parking: {legacy: true}, recipeDelivered: true};
+  const actions = [], saves = [], cancellations = [], releases = [];
+  const claim = {repository: state.repo, coordinatorId: state.coordinatorId, machine: state.machine, labelEventId: '12'};
+  const gh = async args => {
+    const method = args[args.indexOf('--method') + 1], endpoint = args[args.indexOf('--method') + 2];
+    actions.push({method, endpoint});
+    if (method === 'GET' && endpoint.includes('/issues?')) return reply(200, [{number: run.number}]);
+    if (method === 'GET' && endpoint.endsWith(`/issues/${run.number}/comments?per_page=100`)) return reply(200, [{id: 11, body: JSON.stringify(claim)}]);
+    if (method === 'GET' && endpoint.endsWith(`/issues/${run.number}/timeline?per_page=100`)) return reply(200, [{id: 12, event: 'labeled', label: {name: 'pdd:working'}}]);
+    if (method === 'GET' && endpoint.endsWith(`/issues/${run.number}`)) return reply(200, {labels: [{name: 'pdd:working'}]});
+    if (method === 'DELETE' && (endpoint.endsWith('/issues/comments/11') || endpoint.endsWith(`/issues/${run.number}/labels/pdd%3Aworking`))) return reply(204);
+    return reply(404, {});
   };
-  const ports = {...healthyMachine, ...f.ports, herdr,
-    checkCapacityPorts: isolatedCheckCapacity(f.base),
-    run: async (file, args, options) => ({code: 0, ...await f.ports.execFile(file, args, options)}),
-    reconcileDependencyIntake: async () => ({eligible: [], claims: [{issue: run.issue.url, active: true,
-      owner: 'park-owner', coordinatorId: 'park-owner', machine: 'park-machine', ...run.automaticOrigin.claim}],
-      groups: [], queued: [], skipped: []}),
-    refreshClaimHeartbeat: async ({at}) => ({state: 'refreshed', lastSeen: at}),
-    queryIssues: async () => ({status: 200, issues: []}), comments: async () => [],
-    runtimeHealth: async () => ({state: 'healthy', detail: 'controlled local health'}),
-    sendDigest: async () => ({exitCode: 0}), sendAlert: async () => ({exitCode: 0}),
-    blockerCleared: async () => false, warn: message => warnings.push(message)};
-  t.mock.method(globalThis, 'fetch', async (...args) => {
-    requests.push(args); assert.fail('Native local replay must not request a service');
-  });
+  const ports = {now: () => f.clock, commonDir: f.git(f.source, 'rev-parse', '--path-format=absolute', '--git-common-dir'),
+    samePath: (left, right) => left === right, coreJobs: () => new Set(), gh, herdr: f.herdr.herdr,
+    save: async journal => { saves.push(structuredClone(journal)); }, listRuns: async () => [f.record()],
+    cancelRun: async current => { cancellations.push(current.runId); current.state = 'cancelled'; save(current); return {exitCode: 0}; },
+    releaseLocal: async current => { releases.push(current.runId); return {state: 'released'}; }, releaseSlots: async () => true,
+    processes: async () => '', signal: () => assert.fail('The fixture has no old worker process.'), sleep: async () => {}};
   f.herdr.calls.length = 0;
-  return {f, stateFile, ports, warnings, requests};
+  return {f, state, stateFile, ports, actions, saves, cancellations, releases};
 }
 
 for (const row of vectors.parking_cases) {
-  test(`3135 parking: ${row.id}`, async t => {
-    const {f, stateFile, ports, warnings, requests} = await parkingFixture(t);
+  test(`3135 retirement: ${row.id}`, async t => {
+    const {f, state, stateFile, ports, actions, saves, cancellations, releases} = await retirementFixture(t, row);
     const readerCase = vectors.reader_cases.find(candidate => candidate.id === row.reader_case);
     assert.ok(readerCase, `Missing frozen reader case ${row.reader_case}`);
     const held = f.record();
-    held.state = 'waiting';
-    held.gate = {kind: 'approve-pr', area: held.areas[held.area].name};
-    held.done.check = 'Synthetic no-verdict receipt';
-    if (row.question) held.question = {at: f.clock, ...row.question};
-    if (row.blockedOn) held.blockedOn = row.blockedOn;
-    save(held);
     const folder = writeBatch({root: held.root, home: f.ports.env.HOME,
       intent: 'check', rows: readerCase.rows, at: f.clock});
     const before = filesUnder(folder);
-    assert.equal(ports.readRunResults, undefined, 'Replay must use the normal reader');
     assert.equal(readRunResults({root: held.root, since: held.startedAt ?? 0}, {env: f.ports.env})[0]?.batch, batch);
-    await tickAutopilot(stateFile, ports);
+    const first = await moveToCore({state, stateFile}, ports);
+    assert.equal(first.done, true, first.message);
     const after = f.record();
-    assert.equal(after.parking?.blocker?.kind, row.expected_blocker, '3135_BINDING_HOLD_MISCLASSIFIED');
-    if (row.preserve) assert.deepEqual(after[row.preserve], held[row.preserve]);
+    assert.equal(after.state, 'cancelled', '3135_RETIRED_RUN_NOT_CANCELLED');
+    assert.deepEqual(cancellations, [held.runId]); assert.deepEqual(releases, [held.runId]);
+    assert.ok(first.journal.cancelledRuns.includes(held.runId)); assert.ok(saves.length >= 7);
+    const moved = movedState(state, first.journal);
+    assert.equal(moved.engine, 'core'); assert.equal(moved.parking, undefined); assert.equal(moved.recipeDelivered, undefined);
     assert.deepEqual(filesUnder(folder), before, 'Parking changed the saved receipt');
-    assert.deepEqual(warnings, []);
-    assert.deepEqual(requests, []);
     assert.deepEqual(f.pushes, []); assert.deepEqual(f.prs, []); assert.deepEqual(f.edits, []);
     assert.equal(f.herdr.calls.some(args => args[0] === 'pane' && args[1] === 'run'), false);
     assert.equal(f.herdr.calls.some(args => args[0] === 'agent' && args[1] === 'prompt'), false);
+    const actionCount = actions.length;
+    const again = await moveToCore({state: moved, stateFile}, ports);
+    assert.equal(again.done, true); assert.equal(again.message, '');
+    assert.deepEqual(cancellations, [held.runId], '3135_RETIREMENT_REPEATED_CANCELLATION');
+    assert.equal(actions.length, actionCount, '3135_RETIREMENT_REPEATED_CLEANUP');
     assert.deepEqual(readFileSync(vectorPath), vectorBytes, 'Frozen cases changed');
   });
 }
+
+test('3135 retirement: a saved evidence move retries before cancelling the old run', async t => {
+  const {f, state, stateFile, ports, cancellations} = await retirementFixture(t, vectors.parking_cases[0]);
+  const held = f.record(), readerCase = vectors.reader_cases.find(candidate => candidate.id === vectors.parking_cases[0].reader_case);
+  const folder = writeBatch({root: held.root, home: f.ports.env.HOME, intent: 'check', rows: readerCase.rows, at: f.clock});
+  const before = filesUnder(folder), saveJournal = ports.save; let attempts = 0;
+  ports.save = async journal => { attempts++; if (attempts === 2) throw Error('journal unavailable'); await saveJournal(journal); };
+  const delayed = await moveToCore({state, stateFile}, ports);
+  assert.equal(delayed.done, false); assert.equal(f.record().state, 'waiting'); assert.deepEqual(cancellations, []);
+  assert.match(delayed.message, /could not save the move journal/);
+  ports.save = saveJournal;
+  const resumed = await moveToCore({state: {...state, retiredFull: delayed.journal}, stateFile}, ports);
+  assert.equal(resumed.done, true, resumed.message); assert.equal(f.record().state, 'cancelled');
+  assert.deepEqual(cancellations, [held.runId]); assert.deepEqual(filesUnder(folder), before);
+  assert.deepEqual(readFileSync(vectorPath), vectorBytes, 'Frozen cases changed');
+});
