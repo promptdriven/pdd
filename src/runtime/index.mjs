@@ -1,11 +1,26 @@
-// Generated from prompts/cli/runtime-entry.prompt.md (sha256: 443d22f5cde45b9bf07ecc3d502a24d3205d4d807712bc65bba7a224549df7e0).
+// Generated from prompts/cli/runtime-entry.prompt.md (sha256: 35601a36a25c10726ab55b4b7c383192f1f23d299a72d08798834eddbdc2e087).
 import { createRequire } from 'node:module';
 
 const req = createRequire(import.meta.url);
 
 export const LIMITS = Object.freeze({ bytes: 10_485_760, files: 10_000 });
-export const PROMPT_TESTS_LABEL = 'Prompt tests';
-export const PROMPT_TESTS_WORDS = '(?:Prompt tests|Runtime check)';
+export const TEST_SCHEMA = 'prompt-runtime.program-scenario.v1';
+export const DRAFT_SERVER_TEXT = 'The server does not run draft prompts yet. Approve the prompt first, or wait for the server update.';
+export const STALE_HINT = 'the text changed after approval: set status to draft, run pdd test --fill-hash, ask the person';
+export const staleHint = `pdd: ${STALE_HINT}.`;
+export const PROVIDER_TEXT = 'the AI provider failed during the run. It is not a failed check. Do not send it again yet.';
+export const CHECK_STATES = Object.freeze(['waiting', 'sent', 'passed', 'failed', 'refused', 'partial', 'not run']);
+export const OPEN_STATES = new Set(['queued', 'running', 'sent']);
+
+export class PreflightError extends Error {
+  constructor(exitCode, message) {
+    const Real = runtimePreflightSlice().PreflightError;
+    return new Real(exitCode, message);
+  }
+  static [Symbol.hasInstance](value) {
+    return value instanceof runtimePreflightSlice().PreflightError;
+  }
+}
 
 let scenarioJsonModule = null;
 export function runtimeScenarioJsonSlice() {
@@ -79,12 +94,36 @@ export function requireRuntimePath(...args) {
   return runtimeWorkspaceSlice().requireRuntimePath(...args);
 }
 
+export function hasProgress(...args) {
+  return runtimeOutcomeSlice().hasProgress(...args);
+}
+
+export function outcomeDone(...args) {
+  return runtimeOutcomeSlice().outcomeDone(...args);
+}
+
+export function outcomeFor(...args) {
+  return runtimeOutcomeSlice().outcomeFor(...args);
+}
+
+export function outcomeOverall(...args) {
+  return runtimeOutcomeSlice().outcomeOverall(...args);
+}
+
 export function outcomeText(...args) {
   return runtimeOutcomeSlice().outcomeText(...args);
 }
 
+export function progressText(...args) {
+  return runtimeOutcomeSlice().progressText(...args);
+}
+
 export function resultOutcome(...args) {
   return runtimeOutcomeSlice().resultOutcome(...args);
+}
+
+export function resultOverall(...args) {
+  return runtimeOutcomeSlice().resultOverall(...args);
 }
 
 export function causeText(...args) {
@@ -95,8 +134,64 @@ export function cleanText(...args) {
   return runtimeOutputSlice().cleanText(...args);
 }
 
+export function coverageText(...args) {
+  return runtimeOutputSlice().coverageText(...args);
+}
+
+export function jsonRow(...args) {
+  return runtimeOutputSlice().jsonRow(...args);
+}
+
+export function progressTicker(...args) {
+  return runtimeOutputSlice().progressTicker(...args);
+}
+
+export function projectAnswer(...args) {
+  return runtimeOutputSlice().projectAnswer(...args);
+}
+
+export function refusalView(...args) {
+  return runtimeOutputSlice().refusalView(...args);
+}
+
+export function renderJson(...args) {
+  return runtimeOutputSlice().renderJson(...args);
+}
+
+export function renderText(...args) {
+  return runtimeOutputSlice().renderText(...args);
+}
+
+export function sinceText(...args) {
+  return runtimeOutputSlice().sinceText(...args);
+}
+
+export function stepTimeLimit(...args) {
+  return runtimeOutputSlice().stepTimeLimit(...args);
+}
+
 export function storyLines(...args) {
   return runtimeOutputSlice().storyLines(...args);
+}
+
+export function summaryLine(...args) {
+  return runtimeOutputSlice().summaryLine(...args);
+}
+
+export function tryUsage(...args) {
+  return runtimeOutputSlice().tryUsage(...args);
+}
+
+export function tryUsageHeaders(...args) {
+  return runtimeOutputSlice().tryUsageHeaders(...args);
+}
+
+export function tryUsageLine(...args) {
+  return runtimeOutputSlice().tryUsageLine(...args);
+}
+
+export function validLink(...args) {
+  return runtimeOutputSlice().validLink(...args);
 }
 
 export function captureSource(...args) {
@@ -107,16 +202,60 @@ export function checkInput(...args) {
   return runtimePreflightSlice().checkInput(...args);
 }
 
+export function createStrictSourceAccess(...args) {
+  return runtimePreflightSlice().createStrictSourceAccess(...args);
+}
+
+export function defaultMaxCalls(...args) {
+  return runtimePreflightSlice().defaultMaxCalls(...args);
+}
+
+export function discoveryRefusal(...args) {
+  return runtimePreflightSlice().discoveryRefusal(...args);
+}
+
+export function discoveryVisibleFiles(...args) {
+  return runtimePreflightSlice().discoveryVisibleFiles(...args);
+}
+
+export function executableInterfaceText(...args) {
+  return runtimePreflightSlice().executableInterfaceText(...args);
+}
+
+export function fillHashes(...args) {
+  return runtimePreflightSlice().fillHashes(...args);
+}
+
 export function findTests(...args) {
   return runtimePreflightSlice().findTests(...args);
+}
+
+export function formatSize(...args) {
+  return runtimePreflightSlice().formatSize(...args);
+}
+
+export function formatWarningLines(...args) {
+  return runtimePreflightSlice().formatWarningLines(...args);
 }
 
 export function gitFiles(...args) {
   return runtimePreflightSlice().gitFiles(...args);
 }
 
+export function hasPromptInterface(...args) {
+  return runtimePreflightSlice().hasPromptInterface(...args);
+}
+
 export function interfaceBlocks(...args) {
   return runtimePreflightSlice().interfaceBlocks(...args);
+}
+
+export function interfaceFormatWarnings(...args) {
+  return runtimePreflightSlice().interfaceFormatWarnings(...args);
+}
+
+export function interfaceKindProblems(...args) {
+  return runtimePreflightSlice().interfaceKindProblems(...args);
 }
 
 export function interfaceSchemaProblems(...args) {
@@ -127,8 +266,12 @@ export function isSecretPath(...args) {
   return runtimePreflightSlice().isSecretPath(...args);
 }
 
-export function isStoryPath(...args) {
-  return runtimePreflightSlice().isStoryPath(...args);
+export function numberWarnings(...args) {
+  return runtimePreflightSlice().numberWarnings(...args);
+}
+
+export function otherFiles(...args) {
+  return runtimePreflightSlice().otherFiles(...args);
 }
 
 export function preflight(...args) {
@@ -151,12 +294,32 @@ export function readPrompt(...args) {
   return runtimePreflightSlice().readPrompt(...args);
 }
 
+export function scenarioShapeRefusal(...args) {
+  return runtimePreflightSlice().scenarioShapeRefusal(...args);
+}
+
+export function schemaKeywordWarningLines(...args) {
+  return runtimePreflightSlice().schemaKeywordWarningLines(...args);
+}
+
 export function sha256(...args) {
   return runtimePreflightSlice().sha256(...args);
 }
 
+export function sharedSourceFiles(...args) {
+  return runtimePreflightSlice().sharedSourceFiles(...args);
+}
+
 export function sourceFilePort(...args) {
   return runtimePreflightSlice().sourceFilePort(...args);
+}
+
+export function storyCriteria(...args) {
+  return runtimePreflightSlice().storyCriteria(...args);
+}
+
+export function tarFiles(...args) {
+  return runtimePreflightSlice().tarFiles(...args);
 }
 
 export function buildAgentInput(...args) {
@@ -188,8 +351,8 @@ export function productTapCallBound(map, ports) {
   return loadProductComposition().productTapCallBound(map, ports);
 }
 
-export function selectJourneys(tests, selector) {
-  return loadProductComposition().selectJourneys(tests, selector);
+export function selectJourneys(tests, selector, ports) {
+  return loadProductComposition().selectJourneys(tests, selector, ports);
 }
 
 let agentGuideModule = null;
@@ -210,8 +373,8 @@ export function buildProjectCard(input) {
   return loadAgentProject().buildProjectCard(input);
 }
 
-export function readAgentScenarios(input) {
-  return loadAgentProject().readAgentScenarios(input);
+export function readAgentScenarios(input, ports) {
+  return loadAgentProject().readAgentScenarios(input, ports);
 }
 
 export async function runJobs(input, ports) {
@@ -262,6 +425,11 @@ export async function openCli(context, test, sessionId, options) {
   return open(context, test, sessionId, options);
 }
 
+export async function openServe(context, test, sessionId, options) {
+  const { openServe: open } = await import('./try-http.mjs');
+  return open(context, test, sessionId, options);
+}
+
 export async function runShim(descriptorPath, argv, ports) {
   const { runShim: run } = await import('./try-doors.mjs');
   return run(descriptorPath, argv, ports);
@@ -270,6 +438,10 @@ export async function runShim(descriptorPath, argv, ports) {
 export async function saveLast(input) {
   const { saveLast: save } = await import('./try-doors.mjs');
   return save(input);
+}
+
+export function defaultLineReader(stdin) {
+  return runtimeClientSlice().defaultLineReader(stdin);
 }
 
 export function runtimeOrigin(env) {
@@ -297,8 +469,8 @@ export function createSavedStoryEvidenceReader(ports = {}) {
 }
 
 export async function loadRuntimeClient() {
-  const { DEFAULT_RUNTIME_URL, checkRuntimeHealth, runtimeOrigin: origin } = await import('./runtime-client.mjs');
-  return { DEFAULT_RUNTIME_URL, checkRuntimeHealth, runtimeOrigin: origin };
+  const { DEFAULT_RUNTIME_URL: defaultUrl, checkRuntimeHealth: checkHealth, runtimeOrigin: origin } = await import('./runtime-client.mjs');
+  return { DEFAULT_RUNTIME_URL: defaultUrl, checkRuntimeHealth: checkHealth, runtimeOrigin: origin };
 }
 
 export async function checkRuntimeHealth(input, ports) {

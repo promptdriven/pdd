@@ -1,6 +1,6 @@
-// Generated from prompts/cli/product-composition.prompt.md (sha256: 9f44476a35c4aa305c0b82a84a37e66a37671c654bfd7d6dc24edd4bbd786dcb).
+// Generated from prompts/cli/product-composition.prompt.md (sha256: 1a9b2fe01484cdf53cb52b3ecd50e7ba94896cf8a1e088e2cb9afebd4a122342).
 import { basename, join } from 'node:path';
-import { checkInput, interfaceBlocks, PreflightError, selectTests } from './runtime-preflight.mjs';
+import { checkInput, interfaceBlocks, PreflightError } from './runtime-preflight.mjs';
 import { expandSource, isJsonNumber, jsonNumberIdentity, parseJsonValue, stringifyJsonValue } from './contract-refs.mjs';
 
 const fail = (code, message) => { throw Object.assign(Error(message), { code }); };
@@ -177,12 +177,15 @@ function joinMaps(product, parts, maps, chain, encode, selectedParts) {
   return { map: joined, labels, tapOperations };
 }
 
-export function selectJourneys(tests, selector) {
+export function selectJourneys(tests, selector, ports = {}) {
+  if (typeof ports?.selectTests !== 'function') {
+    throw Object.assign(new Error('Product composition port (selectTests) is not bound.'), { unboundPort: true });
+  }
   const candidates = tests.filter(test => /^user_stories\/journeys\/[^/]+\.md$/.test(test.storyPath));
   if (selector === undefined) return candidates.map(test => test.testPath);
   const records = candidates.map(test => ({ ...test, path: test.testPath }));
   const exactPaths = records.filter(test => test.testPath === selector || test.storyPath === selector).map(test => test.testPath);
-  const exact = exactPaths.length ? selectTests({ tests: records }, exactPaths).selected : [];
+  const exact = exactPaths.length ? ports.selectTests({ tests: records }, exactPaths).selected : [];
   const matches = exact.length ? exact : records.filter(test => {
     const name = basename(test.storyPath, '.md');
     return name === selector || name.startsWith(`${selector}-`) || name.startsWith(`${selector}.`);
@@ -255,7 +258,7 @@ export function composeProductTry({ root, parts, journey, testPath }, ports) {
     if (journey !== undefined) {
       if (typeof testPath !== 'string' || !testPath) fail('invalid-journey', 'Choose one journey test path for this Try.');
       const raw = read(testPath), scenario = parseJsonValue(raw);
-      selectJourneys([{ testPath, storyPath: scenario.story_path }], journey);
+      selectJourneys([{ testPath, storyPath: scenario.story_path }], journey, ports);
       if (!plain(scenario.initial_world)) fail('invalid-journey', `${testPath}: initial_world must be an object.`);
       // Validate its ordinary standalone seed/reference before using only its set.
       expandSource({ path: testPath, text: raw, format: 'scenario' }, files);

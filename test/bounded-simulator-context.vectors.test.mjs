@@ -7,7 +7,7 @@ import {createAgentBridge,createTryGuide,runCheck,runTry} from '../src/runtime-s
 import {runContracts} from '../src/runtime-seam.mjs';
 import {lintSvgLayouts} from '../src/svg-layout.mjs';
 import {bindingCoverage} from '../src/runtime/runtime-bindings.mjs';
-import {findTests,sharedSourceFiles} from '../src/runtime/runtime-preflight.mjs';
+import {findTests,sharedSourceFiles} from '../src/runtime-seam.mjs';
 import {runDoorCall,readTryOwner} from '../src/runtime-seam.mjs';
 const actions={
  'private-card-and-judge-markers'(t){const f=fixture(t);write(f.root,'README.md','PRIVATE-MARKER');write(f.root,'private/prompts/x.prompt.md','PRIVATE-MARKER');write(f.root,'private/user_stories/order.md','# PRIVATE-MARKER');json(f.root,'private/tests/order.other.json',f.doc);write(f.root,'private/code.js','PRIVATE-MARKER');const scenarios=readAgentScenarios({root:f.root}),card=buildProjectCard({root:f.root,env:f.env,story:'order',entries:[{entry_path:f.prompt}],scenarios,seedTest:f.second});assert.equal(scenarios.incomplete,true);assert.equal(JSON.stringify({scenarios,card}).includes('PRIVATE-MARKER'),false);assert.equal(card.codeExists,false);assert.equal(card.saveTarget.path,f.second);},

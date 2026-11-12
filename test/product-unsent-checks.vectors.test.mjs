@@ -5,7 +5,7 @@ import { syncBuiltinESMExports } from 'node:module';
 import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import * as runtime from '../src/runtime-seam.mjs';
-import { captureSource } from '../src/runtime/runtime-preflight.mjs';
+import { captureSource } from '../src/runtime-seam.mjs';
 import { productStatus, productNext } from '../src/product.mjs';
 import { harbor, portsFor, fakeRuntime, sha } from './runtime-fake.mjs';
 

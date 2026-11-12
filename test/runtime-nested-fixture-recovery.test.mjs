@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { runCheck } from '../src/runtime-seam.mjs';
-import { captureSource } from '../src/runtime/runtime-preflight.mjs';
+import { captureSource } from '../src/runtime-seam.mjs';
 import { fakeRuntime, harbor, portsFor } from './runtime-fake.mjs';
 
 const fixture = 'test/fixtures/example';

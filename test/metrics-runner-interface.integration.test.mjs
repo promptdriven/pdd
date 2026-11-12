@@ -5,7 +5,7 @@ import {readFileSync,writeFileSync,mkdtempSync,mkdirSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
-import {interfaceBlocks,proseSha256,fillHashes} from '../src/runtime/runtime-preflight.mjs';
+import {interfaceBlocks,proseSha256,fillHashes} from '../src/runtime-seam.mjs';
 const path='prompts/cli/workflow-runner.prompt.md';
 // Pin every legacy declaration field and require the explicit partial coverage kind.
 const acceptedShapes={approved:'553ec45b71833be1c7b97cde0d888c62a14eac565907c176af509e0339f105e7',draft:'26bcd39d3f1475f9dfabadbfa868b1128891e0680d0881fac6f2115e12a87487'};

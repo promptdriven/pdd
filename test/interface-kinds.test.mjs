@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { runCheck } from '../src/runtime-seam.mjs';
 import { runApprove } from '../src/prompt-approve.mjs';
-import { interfaceBlocks, proseSha256, interfaceSchemaProblems } from '../src/runtime/runtime-preflight.mjs';
+import { interfaceBlocks, proseSha256, interfaceSchemaProblems } from '../src/runtime-seam.mjs';
 import { harbor, PLACE, sink, fakeRuntime, portsFor, storyTest } from './runtime-fake.mjs';
 
 function declaration(repo, value) {

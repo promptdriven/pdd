@@ -4,7 +4,7 @@ import { existsSync, readFileSync, writeFileSync, readdirSync, statSync } from '
 import { join } from 'node:path';
 import { runCheck } from '../src/runtime-seam.mjs';
 import { harbor, fakeRuntime, portsFor } from './runtime-fake.mjs';
-import { interfaceBlocks, proseSha256 } from '../src/runtime/runtime-preflight.mjs';
+import { interfaceBlocks, proseSha256 } from '../src/runtime-seam.mjs';
 
 const read = path => { assert.ok(existsSync(path), 'required fixture or cache metadata exists'); return JSON.parse(readFileSync(path, 'utf8')); };
 const write = (path, value) => writeFileSync(path, JSON.stringify(value, null, 2) + '\n');

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, symlinkSync, writeFileSync, unlinkSync, readFileSync, truncateSync } from 'node:fs';
 import { join } from 'node:path';
-import { captureSource, sourceFilePort } from '../src/runtime/runtime-preflight.mjs';
+import { captureSource, sourceFilePort } from '../src/runtime-seam.mjs';
 import { expandSource } from '../src/runtime/contract-refs.mjs';
 import { bindingCoverage } from '../src/runtime/runtime-bindings.mjs';
 import { runCheck } from '../src/runtime-seam.mjs';

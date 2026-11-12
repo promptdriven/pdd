@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fillHashes, interfaceBlocks, interfaceFormatWarnings, interfaceKindProblems } from '../src/runtime/runtime-preflight.mjs';
+import { fillHashes, interfaceBlocks, interfaceFormatWarnings, interfaceKindProblems } from '../src/runtime-seam.mjs';
 import { runCheck } from '../src/runtime-seam.mjs';
 import { fakeRuntime, harbor, PLACE, portsFor, sink } from './runtime-fake.mjs';
 

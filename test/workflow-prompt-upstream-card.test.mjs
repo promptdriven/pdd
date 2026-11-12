@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {openRun} from '../src/workflow-runner.mjs';
-import {fillHashes} from '../src/runtime/runtime-preflight.mjs';
+import {fillHashes} from '../src/runtime-seam.mjs';
 import {preparedCard,PROMPT,TEST,STORY} from './helpers/workflow-prompt-reentry-card-fixture.mjs';
 
 test('2897 fix 1: inherited main prompt preserves the normal Story card code choice', async t => {

@@ -1,6 +1,6 @@
 # Compose a product Try
 
-Own `src/product-composition.mjs`. Export synchronous `composeProductTry({root,parts,journey,testPath}, ports)` and `selectJourneys(tests, selector)`. These are ordinary public module operations used by the Runtime client, not a second CLI or upload archive. Preserve standalone test and Simulator, product startup/status, source privacy and caller files.
+Own `src/product-composition.mjs`. Export synchronous `composeProductTry({root,parts,journey,testPath}, ports)` and `selectJourneys(tests, selector, ports)`. These are ordinary public module operations used by the Runtime client, not a second CLI or upload archive. Preserve standalone test and Simulator, product startup/status, source privacy and caller files.
 
 ## Assembly and setup boundaries
 
@@ -26,7 +26,7 @@ Also return product_parts, in selected part order, as `{name,prompt_paths}` reco
 
 Read optional contracts/seed-world.json, starting from {} when it is absent, then each selected part's optional prompts/PART/seed.json in part order. Optional means a safe stat confirms absence; unreadable, malformed and unsafe present files still refuse. contracts/world.md is also optional: without it there is no declared writer table, while conflicting contributions from two parts still refuse. Small products need no shared contract or shared seed file. Shallow-merge top-level world keys. Parse contracts/world.md with product’s pure `parseProductWorldWriters({worldText})` through `ports.parseProductWorldWriters`: two distinct parts declaring the same top-level key as writable refuse with `world-writer-conflict`, naming key and parts, before upload. Independently of world.md declarations, two distinct selected part seed files providing the same top-level key refuse with world-writer-conflict naming that key and both parts, even when their values are equal. The base seed is not a part and may be overridden by a part. A part seed cannot overwrite a key owned by another part. A journey is an ordinary scenario whose Story lies directly under root user_stories/journeys. For a journey initial_world with $seed, the product seed layers remain contracts/seed-world.json, selected part seeds, then only the journey’s explicit initial_world.set JSON-pointer replacements, including false/null/empty values. The authored $seed is the standalone Check base, even when it names another file; it is not another product merge layer. Preserve ordinary reference/scenario validation first through contract-refs’ shared expansion, including missing/unsafe paths and cycles, then apply the explicit set to the generated merged world using contract-refs’ shared seed semantics. Never expand the original journey base and overlay that whole world onto product layers, which would erase part seeds. A literal full initial_world without $seed is also a valid ordinary scenario and provides its explicit top-level values last; do not require new seed syntax for existing journeys. Preserve explicit nulls and arrays and every own JSON key, including __proto__, without prototype mutation or inherited-key merging. Preserve JSON numeric values losslessly under contract-refs’ numerical preservation rules; ordinary JSON.parse/restringify must not silently round integers beyond the safe Number domain or other decimal/exponent values. Use contract-refs parseJsonValue(text), stringifyJsonValue(value) and isJsonNumber(value) for lossless source values, and expandSource({path,text,format:"scenario"}, files) for shared seed resolution through the same snapshot reader; do not duplicate this owner’s parser or policy. Do not merge arrays or run production rules during seeding. Serialize artifact JSON with recursively sorted object keys, compact separators and no trailing newline. Return canonical JSON text seed artifact without modifying fixtures. No journey means merged seed only.
 
-`selectJourneys` takes discovered `{testPath,storyPath}` records and returns their original test paths in discovery order. Only root user_stories/journeys/*.md qualifies. No selector returns all such tests; a selector matches a complete case-sensitive basename ID token followed by '-' or '.' or end. J1 never matches J10. Exact Story path or test path also selects. Unknown and ambiguous selectors refuse with `invalid-journey`; list candidates. Multiple tests for one unambiguous Story remain selected. Use existing test discovery and Story matching helpers; no parallel parser. `testPath` chooses the single journey scenario for a Try seed; when multiple selected tests exist require the person to choose, never pick silently.
+`selectJourneys` takes discovered `{testPath,storyPath}` records and returns their original test paths in discovery order. Only root user_stories/journeys/*.md qualifies. No selector returns all such tests; a selector matches a complete case-sensitive basename ID token followed by '-' or '.' or end. J1 never matches J10. Exact Story path or test path also selects through injected `ports.selectTests` (throwing an unbound-port `Error` when `selectTests` is omitted). Unknown and ambiguous selectors refuse with `invalid-journey`; list candidates. Multiple tests for one unambiguous Story remain selected. Use existing test discovery and Story matching helpers; no parallel parser. `testPath` chooses the single journey scenario for a Try seed; when multiple selected tests exist require the person to choose, never pick silently.
 
 ## Ports and source capture
 
@@ -41,6 +41,7 @@ The Runtime client passes runtime-preflight’s captureSource(root,{tests,attemp
 - [Shared contract references](contract-refs.prompt.md): required generation/runtime context for expandSource and the native lossless JSON codec bindings; adapt files.stat/read to the same capture attempt’s safe readers.
 
 - [Product reader](product.prompt.md): caller context for the injected `parseProductDocuments` and `parseProductWorldWriters` ports and exact Story ID matching.
+- [Test selection](test-selection.prompt.md): caller context for the injected `selectTests` port used by `selectJourneys` and `composeProductTry`.
 - [Preflight](runtime-preflight.prompt.md): authoritative discovery, schema, safety and capture helpers.
 
 <details><summary>Runtime interface</summary>
@@ -48,7 +49,7 @@ The Runtime client passes runtime-preflight’s captureSource(root,{tests,attemp
 ```json
 {
   "status": "draft",
-  "prose_sha256": "793b6c0d69d571215afca56c5fa9d755eab145f3b276abddc96d846b88e61861",
+  "prose_sha256": "a7bf6c8b8030086d2090a60937d491377f79082775daf6c580e4d38ec2b9ccb8",
   "entries": [
     {
       "operation": "composeProductTry",

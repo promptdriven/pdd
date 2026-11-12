@@ -6,7 +6,7 @@ import { Readable } from 'node:stream';
 import { runTry } from '../src/runtime-seam.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
 import { harbor, fakeRuntime, portsFor, PLACE, TOKEN } from './runtime-fake.mjs';
-import { proseSha256, fillHashes } from '../src/runtime/runtime-preflight.mjs';
+import { proseSha256, fillHashes } from '../src/runtime-seam.mjs';
 
 function clip(t, stdin = true) {
   return harbor(t, root => {

@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { cpSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runCheck } from '../src/runtime-seam.mjs';
-import { exitCodeFor, validLink } from '../src/runtime/runtime-output.mjs';
+import { exitCodeFor, validLink } from '../src/runtime-seam.mjs';
 import { PLACE, TOKEN, fakeRuntime, filesUnder, harbor, portsFor, root, sha } from './runtime-fake.mjs';
 
 async function check(setup, fake, words = [], options = {}, extra = {}) {
@@ -1034,7 +1034,7 @@ test('RUNTIME-COST1: a check plan shows bounded calls before lint', async t => {
 
 // Wrong: a check that is still running looks like a failure in the PR line (cli 12b).
 test('RUNTIME-COST2: the summary line shows running or no verdict, never a cross, until a row really fails', async () => {
-  const { summaryLine } = await import('../src/runtime/runtime-output.mjs');
+  const { summaryLine } = await import('../src/runtime-seam.mjs');
   const row = (state, extra = {}) => ({ state, phase: 'server', criteria_total: 1, calls: 1, ...extra });
   assert.match(summaryLine([row('passed'), row('running')]), /^Prompt tests: running · /);
   assert.match(summaryLine([row('passed'), row('unknown')]), /^Prompt tests: no verdict · /);

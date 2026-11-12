@@ -26,7 +26,7 @@ const {fixture}=await load('test/helpers/workflow-delivery-fixture.mjs');
 const {harbor,PLACE,sink}=await load('test/runtime-fake.mjs');
 const {runApprove}=await load('src/prompt-approve.mjs');
 const {stepDone,approveRun}=await load('src/workflow-runner.mjs');
-const {proseSha256}=await load('src/runtime/runtime-preflight.mjs');
+const {proseSha256}=await load('src/runtime-seam.mjs');
 const {preparePrEvidence}=await load('src/workflow-pr-evidence.mjs');
 const pports=extra=>({stdout:sink(),stderr:sink(),stdin:Readable.from([]),interactive:false,env:{CODEX_THREAD_ID:'synthetic-lead'},...extra});
 const draft=(repo,path=PLACE)=>{const text=fs.readFileSync(join(root,'test/fixtures/harbor',PLACE),'utf8').replace('"status": "approved"','"status": "draft"');fs.mkdirSync(join(repo,'prompts'),{recursive:true});fs.writeFileSync(join(repo,path),text);return text;};

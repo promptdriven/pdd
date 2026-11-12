@@ -5,7 +5,7 @@ import {readFileSync,writeFileSync,appendFileSync,symlinkSync} from 'node:fs';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {spawnSync} from 'node:child_process';
-import {captureSource,interfaceBlocks,proseSha256} from '../src/runtime/runtime-preflight.mjs';
+import {captureSource,interfaceBlocks,proseSha256} from '../src/runtime-seam.mjs';
 import {runCheck} from '../src/runtime-seam.mjs';
 import {harbor,portsFor,fakeRuntime,PLACE} from './runtime-fake.mjs';
 

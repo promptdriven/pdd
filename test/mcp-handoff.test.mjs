@@ -9,7 +9,7 @@ import {spawn} from 'node:child_process';
 import {harbor,fakeRuntime,portsFor,PLACE} from './runtime-fake.mjs';
 import {runMcp} from '../src/runtime-seam.mjs';
 import * as client from '../src/runtime-seam.mjs';
-import {interfaceBlocks,proseSha256} from '../src/runtime/runtime-preflight.mjs';
+import {interfaceBlocks,proseSha256} from '../src/runtime-seam.mjs';
 
 const read=path=>fs.readFileSync(path,'utf8');
 const json=path=>JSON.parse(read(path));

@@ -6,7 +6,7 @@ import { syncBuiltinESMExports } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { captureSource, findTests, sourceFilePort } from '../src/runtime/runtime-preflight.mjs';
+import { captureSource, findTests, sourceFilePort } from '../src/runtime-seam.mjs';
 import { expandSource, catalogRecords } from '../src/runtime/contract-refs.mjs';
 import { runContracts } from '../src/runtime-seam.mjs';
 

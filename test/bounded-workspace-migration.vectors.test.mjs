@@ -6,7 +6,7 @@ import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {fixture,read,write,json,cases,closed,pendingId} from './helpers/runtime-workspace-fixture.mjs';
 import {migrateRuntimeWorkspace,runTry,runShim} from '../src/runtime-seam.mjs';
-import {captureSource} from '../src/runtime/runtime-preflight.mjs';
+import {captureSource} from '../src/runtime-seam.mjs';
 import {associateEvidenceWorkspace,readEvidenceEligibility} from '../src/workflow-runner.mjs';
 import {writeRun} from '../src/workflow-runs.mjs';
 import {runtimeWorkspaceMigrationStore,saveDoorCase,acquireCaseWriteOwnership,applyPendingCase} from '../src/runtime-seam.mjs';

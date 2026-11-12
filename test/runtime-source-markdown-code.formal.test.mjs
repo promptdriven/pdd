@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { captureSource } from '../src/runtime/runtime-preflight.mjs';
+import { captureSource } from '../src/runtime-seam.mjs';
 
 // Bounded rule from runtime-preflight's Code examples contract and lead12:22:
 // code examples add no Markdown dependencies; genuine declarations still do.

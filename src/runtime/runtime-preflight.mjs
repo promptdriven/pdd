@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: a2f38067c5398c95bff5d3f362a3d0cdd2c9dce57d9e4784575aea6509496f0d).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: f6873472a2809e1c9e055179ae81d6f3aaf8f433db559863dc63ded157eccf9d).
 import { markdownLinks, markdownDefinitions, markdownSectionText } from './runtime-markdown.mjs';
 import { buildBindingPlan, runtimeBoundary } from './runtime-binding-plan.mjs';
 import { createHash } from 'node:crypto';
@@ -99,71 +99,23 @@ const readText = (root, path) => {
 };
 const storyName = path => basename(path).replace(/\.md$/, '');
 const titleOf = text => text.split('\n').find(line => line.startsWith('# '))?.slice(2).trim() || null;
+export const hasPromptInterface = (root, path) => interfaceBlocks(readText(root, path)).length > 0;
 
-// The test name rule (one owner): the tests of Story S (user_stories/**/S.md) are S.json and S.<variant>.json in a
-// folder named test or tests, at any depth. It uses names only, so no size or content can hide a test.
-const folders = path => path.split('/').slice(0, -1);
-export const isStoryPath = path => path.endsWith('.md') && folders(path).includes('user_stories') && !/^(?:plan|readme)\.md$/i.test(basename(path));
-const hasAcceptance = text => AC_HEADING.test(text);
-const isTestFolderJson = path => path.endsWith('.json') && folders(path).some(part => part === 'test' || part === 'tests');
-const byText = (a, b) => a < b ? -1 : a > b ? 1 : 0;
-const listed = items => items.length < 3 ? items.join(' and ') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`;
-export function expectedTestPath(storyPath) {
-  const parts = folders(storyPath);
-  return [...parts.slice(0, parts.lastIndexOf('user_stories')), 'tests', `${storyName(storyPath)}.json`].join('/');
-}
-// The Story names that a test file name fits: N for N.json, and each S where N is S.<variant>.
-function ownerNames(name, names) {
-  const fits = names.has(name) ? [name] : [];
-  for (let at = name.lastIndexOf('.'); at > 0; at = name.lastIndexOf('.', at - 1)) if (names.has(name.slice(0, at))) fits.push(name.slice(0, at));
-  return fits;
-}
-export function matchTests(storyPaths, files) {
-  const groups = new Map(), names = new Set();
-  for (const path of [...new Set(storyPaths)].sort(byText)) {
-    const name = storyName(path);
-    names.add(name);
-    if (!groups.has(name)) groups.set(name, { stories: [], files: new Map() });
-    groups.get(name).stories.push(path);
+function requireSelectionPorts(ports) {
+  if (
+    typeof ports?.isStoryPath !== 'function' ||
+    typeof ports?.hasAcceptance !== 'function' ||
+    typeof ports?.matchTests !== 'function' ||
+    typeof ports?.orphanSummary !== 'function'
+  ) {
+    throw Object.assign(new Error('Test selection ports (isStoryPath, hasAcceptance, matchTests, orphanSummary) are not bound.'), { unboundPort: true });
   }
-  const tests = [], untested = [], orphans = [], claimed = new Set();
-  for (const path of [...new Set(files)].sort(byText)) {
-    if (!isTestFolderJson(path)) continue;
-    const base = basename(path, '.json'), owners = ownerNames(base, names);
-    if (!owners.length) { orphans.push({ path, line: `${path} matches no Story (user_stories/**/${base}.md).` }); continue; }
-    if (owners.length > 1) {
-      // A file name that fits two Story names (tests/a.b.json with Stories a and a.b): pdd never picks one.
-      const stories = owners.flatMap(name => groups.get(name).stories).sort(byText);
-      for (const name of owners) claimed.add(name);
-      tests.push({ path, files: [path], story: base, storyPath: null, storyPaths: stories, problem: `${path} matches ${stories.length} Stories: ${listed(stories)}. Rename one.` });
-      continue;
-    }
-    const same = groups.get(owners[0]).files;
-    same.set(base, [...(same.get(base) ?? []), path]);
-  }
-  for (const [story, { stories, files: byName }] of groups) {
-    if (!byName.size) {
-      if (!claimed.has(story)) untested.push(...stories.map(storyPath => ({ story, storyPath, line: `${storyPath} has no test: expected ${expectedTestPath(storyPath)} (or ${story}.json in any test or tests folder).` })));
-      continue;
-    }
-    const entry = (found, problem) => ({ path: found[0], files: found, story, storyPath: stories.length === 1 ? stories[0] : null, storyPaths: stories, problem });
-    if (stories.length > 1) {
-      const found = [...byName.values()].flat().sort(byText);
-      tests.push(entry(found, `${listed(found)} ${found.length > 1 ? 'match' : 'matches'} ${stories.length} Stories: ${listed(stories)}. Rename one.`));
-      continue;
-    }
-    for (const [base, found] of byName) tests.push(entry(found, found.length > 1 ? `${stories[0]} has ${found.length} files named ${base}.json: ${listed(found)}. Keep one.` : null));
-  }
-  const sorted = (items, key) => items.sort((a, b) => byText(a[key], b[key]));
-  return { tests: sorted(tests, 'path'), untested: sorted(untested, 'storyPath'), orphans: sorted(orphans, 'path') };
+  return ports;
 }
-// One line for the JSON files in test folders that match no Story; `pdd test --files` and --json list each one.
-export const orphanSummary = orphans => orphans.length === 1 ? `Warning: ${orphans[0].line}`
-  : `Warning: ${orphans.length} JSON files in test folders match no Story (the tests of user_stories/**/S.md are S.json and S.<variant>.json). pdd test --files lists them.`;
 
 // Tests, stories and Git-visible regular files of one repo.
-export function findTests({ root, files = gitFiles(root), workspace, excludeFixtureProjects = false }) {
-  return discoverTests(root, files,false,workspace,excludeFixtureProjects);
+export function findTests({ root, files = gitFiles(root), workspace, excludeFixtureProjects = false }, ports = {}) {
+  return discoverTests(root, files, false, workspace, excludeFixtureProjects, ports);
 }
 
 // Identify projects by Git-visible names before inspecting any Story or test content.
@@ -193,8 +145,31 @@ function fixtureProjectRoots(root, files) {
 
 const outsideFixtureProjects = (files, roots) => files.filter(path => !roots.some(root => path.startsWith(`${root}/`)));
 
+export function discoveryVisibleFiles({ root, files = gitFiles(root), workspace = loadRuntimeWorkspace({ root }), excludeFixtureProjects = false }) {
+  const excluded = excludeFixtureProjects ? fixtureProjectRoots(root, files) : [];
+  const discoveryFiles = new Set(outsideFixtureProjects(files, excluded));
+  const policy = boundedWorkspace(root, workspace);
+  const visible = new Set();
+  let linkedFiles = policy.configured ? filePort(root, new Set(files), false, policy) : undefined;
+  for (const path of files) {
+    if (!allowsRuntimePath(policy, path)) continue;
+    let stat = statOf(join(root, path));
+    if (policy.configured || stat?.isSymbolicLink()) {
+      linkedFiles ??= sourceFilePort(root, new Set(files));
+      try {
+        const info = linkedFiles.stat({ path });
+        stat = { isFile: () => info.exists, size: BigInt(info.size) };
+      } catch { continue; }
+    }
+    if (!stat?.isFile()) continue;
+    if (discoveryFiles.has(path)) visible.add(path);
+  }
+  return visible;
+}
+
 // Git-visible regular files and Stories: discovery reads Story files, never JSON files.
-function discoverStories(root, files, strict = false, workspace=loadRuntimeWorkspace({root}), discoveryFiles = null) {
+function discoverStories(root, files, strict = false, workspace=loadRuntimeWorkspace({root}), discoveryFiles = null, ports = {}) {
+  const { isStoryPath, hasAcceptance } = requireSelectionPorts(ports);
   workspace=boundedWorkspace(root,workspace);
   const visible = new Set(), stories = [], storyFiles = [], titles = new Map(), warnings = [], linkedPaths = new Set(), sizes = new Map();
   let linkedFiles = strict||workspace.configured ? filePort(root, new Set(files), strict,workspace) : undefined;
@@ -230,10 +205,11 @@ function discoverStories(root, files, strict = false, workspace=loadRuntimeWorks
   return { visible, stories, storyFiles, titles, warnings, sizes, read };
 }
 
-function discoverTests(root, files, strict = false,workspace=loadRuntimeWorkspace({root}),excludeFixtureProjects=false) {
+function discoverTests(root, files, strict = false,workspace=loadRuntimeWorkspace({root}),excludeFixtureProjects=false,ports={}) {
+  const { matchTests, orphanSummary } = requireSelectionPorts(ports);
   const excluded = excludeFixtureProjects ? fixtureProjectRoots(root, files) : [];
   const discoveryFiles = new Set(outsideFixtureProjects(files, excluded));
-  const { visible, stories, storyFiles, titles, warnings: storyWarnings, sizes, read } = discoverStories(root, files, strict,workspace,discoveryFiles);
+  const { visible, stories, storyFiles, titles, warnings: storyWarnings, sizes, read } = discoverStories(root, files, strict,workspace,discoveryFiles,ports);
   const named = new Set(stories.map(story => story.path)), rule = matchTests(storyFiles, [...visible].filter(path => discoveryFiles.has(path)));
   rule.untested = rule.untested.filter(item => named.has(item.storyPath));
   const tests = rule.tests.map(entry => {
@@ -259,40 +235,6 @@ function discoverTests(root, files, strict = false,workspace=loadRuntimeWorkspac
   });
   const found={ root, visible, tests, stories, nativeSelections, warnings, untested: rule.untested, orphans: rule.orphans, excludedFixtureProjects: excluded, discoveryVisible: new Set([...visible].filter(path => discoveryFiles.has(path))) };
   Object.defineProperty(found,'workspace',{value:workspace});return found;
-}
-
-// STORY words, by the test name rule: a test path, a story path, a story name or a test file name.
-// Returns {selected, unknown, untested}: untested holds the line of each named Story that has no test.
-export function selectTests(found, words = [], { native = false } = {}) {
-  if (!words.length) return { selected: [...found.tests], unknown: [], untested: [] };
-  const selected = new Set(), unknown = [], untested = [], nativeSelections = new Map();
-  for (const raw of words) {
-    const word = raw.replace(/^\.\//, '');
-    const hits = found.tests.filter(test => test.path === word || test.files?.includes(word) || test.storyPath === word || test.storyPaths?.includes(word) || test.story === word
-      || word === '.' || (!word.startsWith('../') && word !== '..' && [test.path, ...(test.files ?? []), ...(test.storyPaths ?? []), test.storyPath].some(path => path?.startsWith(word.replace(/\/$/, '') + '/')))
-      || basename(test.path, '.json') === word || test.storyPaths?.some(path => storyName(path) === word));
-    const nativeHits = native ? (found.nativeSelections ?? []).filter(item => item.storyPath === word || item.story === word || word === '.' || (!word.startsWith('../') && word !== '..' && item.storyPath.startsWith(word.replace(/\/$/, '') + '/'))) : [];
-    for (const item of nativeHits) nativeSelections.set(item.storyPath, item);
-    const missing = hits.length || nativeHits.length ? [] : (found.untested ?? []).filter(item => item.storyPath === word || item.story === word);
-    if (missing.length) untested.push(...missing.map(item => item.line));
-    else if (!hits.length && !nativeHits.length) unknown.push(raw);
-    for (const hit of hits) selected.add(hit);
-  }
-  const descriptors = [...nativeSelections.values()].map(item => {
-    const links = [...item.section.matchAll(/\[[^\]]*\]\(([^)\s]+)#native-validation-profile-([^)\s]+)\)/g)];
-    if (links.length !== 1) return {storyPath:item.storyPath,profileId:null,promptPath:null,reason:'Native Story owner link is missing or ambiguous.'};
-    const promptPath = posix.normalize(posix.join(posix.dirname(item.storyPath),links[0][1]));
-    try {
-      if (!promptPath.endsWith('.prompt.md')) throw Error('Native owner must be a module prompt.');
-      const captured = captureSource(found.root,{tests:[item.storyPath,promptPath]});
-      return {storyPath:item.storyPath,promptPath,profileId:links[0][2],sourceReferences:captured.files};
-    } catch (error) {
-      // Workspace/source boundary failures retain their ordinary refusal exit.
-      if (error instanceof PreflightError) throw error;
-      return {storyPath:item.storyPath,promptPath,profileId:links[0][2],reason:error.message};
-    }
-  });
-  return { selected: found.tests.filter(test => selected.has(test)), nativeSelections:descriptors, unknown, untested };
 }
 
 const refusal = (code, section, message, extra = {}) => ({ code, section, message, ...extra });
@@ -1518,7 +1460,8 @@ function preparedText(root, visible, path, text, format,workspace) {
   }
 }
 
-function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadRuntimeWorkspace({root}),excludeFixtureProjects=tests === undefined }, strict = false) {
+function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadRuntimeWorkspace({root}),excludeFixtureProjects=tests === undefined }, strict = false, ports = {}) {
+  const { isStoryPath, matchTests } = requireSelectionPorts(ports);
   const policyBefore=JSON.stringify(loadRuntimeWorkspace({root}));workspace=boundedWorkspace(root,workspace);
   const names = gitFiles(root), visible = new Set(names), overlay = new Map(), payload = new Map(), queue = [], visited = new Set();
   const chains=new Map(),preparationReads=new Set(),referenceReads=new Set();
@@ -1646,7 +1589,7 @@ function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadR
     // The test name rule over the effective source (Git-visible files and prepared files); it opens no JSON file.
     const excluded = excludeFixtureProjects ? fixtureProjectRoots(root, names) : [];
     const discoveryNames = outsideFixtureProjects(names, excluded);
-    const onDisk = discoverStories(root,discoveryNames,strict,workspace);
+    const onDisk = discoverStories(root,discoveryNames,strict,workspace,null,ports);
     const named = matchTests(onDisk.storyFiles, outsideFixtureProjects([...onDisk.visible, ...overlay.keys()], excluded)).tests.filter(test=>!test.problem);
     const allNamed=matchTests(onDisk.storyFiles,discoveryNames).tests.flatMap(test=>(test.files??[test.path]).map(path=>({...test,path})));
     const selected = tests ?? named.map(test=>test.path);
@@ -1847,38 +1790,26 @@ function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadR
 }
 
 // Rebuild the selection on each attempt, including metadata and newly declared dependencies.
-export function captureSource(root, { attempts = 3, ...selection } = {}) {
-  return captureWithPolicy(root, { attempts, ...selection });
+export function captureSource(root, { attempts = 3, ...selection } = {}, ports = {}) {
+  return captureWithPolicy(root, { attempts, ...selection }, false, ports);
 }
 
-function captureWithPolicy(root, { attempts = 3, ...selection } = {}, strict = false) {
+function captureWithPolicy(root, { attempts = 3, ...selection } = {}, strict = false, ports = {}) {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const captured = captureOnce(root, selection, strict);
+    const captured = captureOnce(root, selection, strict, ports);
     if (captured) return captured;
   }
   throw new PreflightError(5, `The files changed while pdd read them (${attempts} times). Stop other edits, then run pdd test again.`);
 }
 
 // A bound capability keeps strict command reads isolated from source-upload reads.
-export function createStrictSourceAccess(root,workspace) {
+export function createStrictSourceAccess(root, workspace, ports = {}) {
+  requireSelectionPorts(ports);
   return {
-    sourceFilePort(visible = new Set(gitFiles(root))) { return filePort(root, visible, true,workspace); },
-    findTests({files = gitFiles(root)} = {}) { return discoverTests(root, files, true,workspace); },
-    captureSource(options = {}) { return captureWithPolicy(root, {...options,...(workspace?{workspace}:{})}, true); },
+    sourceFilePort(visible = new Set(gitFiles(root))) { return filePort(root, visible, true, workspace); },
+    findTests({ files = gitFiles(root) } = {}) { return discoverTests(root, files, true, workspace, false, ports); },
+    captureSource(options = {}) { return captureWithPolicy(root, { ...options, ...(workspace ? { workspace } : {}) }, true, ports); },
   };
-}
-
-export const NO_TESTS = 'No tests found. The test of Story user_stories/S.md is S.json in a test or tests folder. See RUNBOOK.md §2.';
-
-// Why a repo has no tests, by the test name rule (it opens no JSON file): Stories with no test, test-folder JSON
-// that matches no Story, *.prompt names, prompts with no interface.
-export function whyNoTests(root, visible, found = discoverTests(root, [...visible])) {
-  const files = [...visible].filter(path=>allowsRuntimePath(loadRuntimeWorkspace({root}),path)).sort(), why = [...(found.untested ?? []), ...(found.orphans ?? [])].map(item => item.line);
-  for (const path of files.filter(file => file.endsWith('.prompt'))) why.push(`PDD prompts must end in .prompt.md: rename ${path} to ${path}.md.`);
-  for (const path of files.filter(file => file.endsWith('.prompt.md'))) {
-    if (!interfaceBlocks(readText(root, path)).length) why.push(`${path} has no Runtime interface block. See RUNBOOK.md §2.`);
-  }
-  return why.length > 5 ? [...why.slice(0, 5), `…and ${why.length - 5} more`] : why;
 }
 
 // Source files named (in backticks) by more than one prompt: one warning line each (real-user cli issue 10).

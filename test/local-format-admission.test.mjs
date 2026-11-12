@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { interfaceBlocks, interfaceSchemaProblems } from '../src/runtime/runtime-preflight.mjs';
+import { interfaceBlocks, interfaceSchemaProblems } from '../src/runtime-seam.mjs';
 import { runCheck } from '../src/runtime-seam.mjs';
 import { fakeRuntime, harbor, PLACE, portsFor, sink } from './runtime-fake.mjs';
 

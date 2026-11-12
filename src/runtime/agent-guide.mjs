@@ -77,8 +77,8 @@ export function createTryGuide({root,env={},model,test={},features=[],secrets=[]
  function refresh(){
   const fresh=loadRuntimeWorkspace({root}),key=JSON.stringify(fresh);
   if(key!==policyKey){workspace=fresh;policyKey=key;entries=(model.entries??[]).filter(e=>allowsRuntimePath(workspace,e.entry_path)).map(e=>({...e,entry:entryId(e)}));modelStories=(Array.isArray(model.stories)?model.stories:Object.values(model.stories??{})).filter(s=>allowsRuntimePath(workspace,s.path));conversation=[];runs=[];ownCases=[];pending=null;lastContext=null;card=null;scenarios=[];judges=[];coverage=null;coverageHash=null;surfaceEvidence.clear();seen.clear();}
-  if(workspace.configured&&test.path)captureSource(root,{tests:[test.path]});
-  const found=(ports.readAgentScenarios??readAgentScenarios)({root,workspace});
+  if(workspace.configured&&test.path)(ports.captureSource??((r,o)=>captureSource(r,o,ports)))(root,{tests:[test.path]});
+  const found=(ports.readAgentScenarios??(inp=>readAgentScenarios(inp,ports)))({root,workspace});
   const permitted=(Array.isArray(found)?found:[]).filter(s=>!workspace.configured||object(s)&&allowsRuntimePath(workspace,s.path)&&allowsRuntimePath(workspace,s.doc?.story_path));
   Object.defineProperty(permitted,'incomplete',{value:!Array.isArray(found)||found.incomplete===true||permitted.length!==found.length});
   const next=normalizeScenarios(permitted);

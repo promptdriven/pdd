@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { request } from 'node:http';
-import { openServe } from '../src/runtime/try-http.mjs';
+import { openServe } from '../src/runtime-seam.mjs';
 import { fakeRuntime, harbor, portsFor, PLACE } from './runtime-fake.mjs';
 
 const object = properties => ({ type: 'object', properties, required: [], additionalProperties: false });
@@ -112,7 +112,7 @@ test('hcli-4: HTTP usage headers preserve program status/body and expose local z
 });
 
 test('hcli-4: missing or malformed usage remains unknown, including a real zero remaining allowance', async () => {
-  const { tryUsage, tryUsageHeaders } = await import('../src/runtime/runtime-output.mjs');
+  const { tryUsage, tryUsageHeaders } = await import('../src/runtime-seam.mjs');
   assert.equal(typeof tryUsage, 'function');
   assert.deepEqual(tryUsage({}), { calls: 'unknown', remaining: 'unknown', cap: 'unknown', used: 'unknown' });
   assert.equal(tryUsageHeaders(tryUsage({ usage: { calls: '2' }, result: { report: { remaining_calls: -1 } } }))['x-pdd-ai-calls'], 'unknown');

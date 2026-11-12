@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {runCheck,buildCheckPlan,checkPlanResults} from '../src/runtime-seam.mjs';
 import {readRunResults} from '../src/workflow-results.mjs';
-import {findTests,interfaceBlocks,proseSha256} from '../src/runtime/runtime-preflight.mjs';
+import {findTests,interfaceBlocks,proseSha256} from '../src/runtime-seam.mjs';
 import {harbor,fakeRuntime,portsFor,PLACE} from './runtime-fake.mjs';
 
 const git=(root,...args)=>{const r=spawnSync('git',args,{cwd:root,encoding:'utf8'});assert.equal(r.status,0,r.stderr);return r.stdout.trim();};

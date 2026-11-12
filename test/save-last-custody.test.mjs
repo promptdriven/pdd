@@ -6,7 +6,7 @@ import {createHash} from 'node:crypto';
 import {Readable} from 'node:stream';
 import {spawnSync} from 'node:child_process';
 import {fixture,closed,json,read,get,stream} from './helpers/runtime-workspace-fixture.mjs';
-import {proseSha256} from '../src/runtime/runtime-preflight.mjs';
+import {proseSha256} from '../src/runtime-seam.mjs';
 import {runShim} from '../src/runtime-seam.mjs';
 import * as client from '../src/runtime-seam.mjs';
 

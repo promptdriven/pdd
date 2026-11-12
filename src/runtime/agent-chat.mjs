@@ -19,11 +19,12 @@ function scrub(value,secrets){
  return value;
 }
 export async function createAgentBridge(context,test,tryId,options={},link,seamPorts={}){
- const workspace=loadRuntimeWorkspace({root:context.root});
- if(workspace.configured){captureSource(context.root,{tests:[test.path]});throw Error('Bounded agent connection is unavailable: native controls cannot establish packet-only context.');}
  const mergeDefined=(base={},override={})=>{const out={...base};for(const [k,v] of Object.entries(override??{}))if(v!==undefined)out[k]=v;return out;};
+ const mergedPorts=mergeDefined(seamPorts,context.ports);
+ const workspace=loadRuntimeWorkspace({root:context.root});
+ if(workspace.configured){(mergedPorts.captureSource??((r,o)=>captureSource(r,o,mergedPorts)))(context.root,{tests:[test.path]});throw Error('Bounded agent connection is unavailable: native controls cannot establish packet-only context.');}
  const guideBase=mergeDefined(seamPorts.guidePorts,context.ports?.guidePorts);
- const ports={...mergeDefined(seamPorts,context.ports),guidePorts:mergeDefined({redaction:context.ports?.redaction??seamPorts.redaction,redactSecrets:context.ports?.redactSecrets??seamPorts.redactSecrets,evidenceEligibility:context.ports?.evidenceEligibility??context.ports?.readEvidenceEligibility??seamPorts.evidenceEligibility??seamPorts.readEvidenceEligibility},guideBase)};
+ const ports={...mergedPorts,guidePorts:mergeDefined({redaction:context.ports?.redaction??seamPorts.redaction,redactSecrets:context.ports?.redactSecrets??seamPorts.redactSecrets,evidenceEligibility:context.ports?.evidenceEligibility??context.ports?.readEvidenceEligibility??seamPorts.evidenceEligibility??seamPorts.readEvidenceEligibility,isStoryPath:mergedPorts.isStoryPath,hasAcceptance:mergedPorts.hasAcceptance,matchTests:mergedPorts.matchTests,orphanSummary:mergedPorts.orphanSummary,captureSource:mergedPorts.captureSource,readAgentScenarios:mergedPorts.readAgentScenarios},guideBase)};
  const loadDefinitions=context.ports?.loadAgentDefinitions??context.ports?.agents?.loadDefinitions??seamPorts.loadAgentDefinitions??seamPorts.agents?.loadDefinitions;
  if(!context.agentDefinitions&&typeof loadDefinitions!=='function')throw unboundPortError('Agent configuration port (loadAgentDefinitions) is not bound.');
  const definitions=context.agentDefinitions??loadDefinitions({cwd:context.root,env:ports.env});

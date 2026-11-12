@@ -100,12 +100,12 @@ export function buildCheckPlan({ root, found, selected, rows, full, base = 'HEAD
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(test);
   }
-  const capture = ports.capture ?? captureSource;
+  const capture = ports.capture ?? ((r, opts) => captureSource(r, opts, ports));
   let footprints = new Map();
   try {
     const captured = capture(root,{tests:selected.map(test=>test.path),appMap:null,excludeFixtureProjects:full});
     footprints = new Map((captured.stories ?? []).map(story=>[story.story_path,story]));
-  } catch { /* Keep a broken Story from hiding other Stories' closures. */ }
+  } catch (error) { if (error?.unboundPort) throw error; /* Keep a broken Story from hiding other Stories' closures. */ }
   const stories = [...groups].map(([story_path, tests]) => {
     let closure = [], unavailable = false;
     const footprint = footprints.get(story_path);
@@ -113,7 +113,7 @@ export function buildCheckPlan({ root, found, selected, rows, full, base = 'HEAD
       if (footprint?.unavailable) unavailable = true;
       else closure = sorted((footprint?.files ?? capture(root, {tests:tests.map(test=>test.path),appMap:null,excludeFixtureProjects:full}).files).map(file=>file.path));
     }
-    catch { unavailable = true; }
+    catch (error) { if (error?.unboundPort) throw error; unavailable = true; }
     const affected = sorted((changed ?? []).filter(path => closure.includes(path) || tests.some(test=>test.path === path || test.storyPath === path))
       .concat(closure.flatMap(path=>owners.get(path) ?? [])));
     const uncertainOwner = deletionsUnavailable || unknownOwners.size > 0;

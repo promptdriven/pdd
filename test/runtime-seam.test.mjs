@@ -504,7 +504,27 @@ test('SEAM2: src/runtime-seam.mjs imports only src/runtime/index.mjs from src/ru
   assert.deepEqual([...new Set(runtimeSpecifiers)], ['./runtime/index.mjs']);
   const seam = await import('../src/runtime-seam.mjs');
   const entry = await import('../src/runtime/index.mjs');
-  assert.deepEqual(Object.keys(seam).sort(), Object.keys(entry).sort());
+  const seamOnlyHostExports = [
+    'COMMAND_EXIT_CODE',
+    'NO_TESTS',
+    'PROMPT_TESTS_LABEL',
+    'PROMPT_TESTS_WORDS',
+    'STATE_EXIT_CODES',
+    'exitCodeFor',
+    'exitFor',
+    'expectedTestPath',
+    'hasAcceptance',
+    'isStoryPath',
+    'matchTests',
+    'orphanSummary',
+    'outcomeExitCode',
+    'selectTests',
+    'whyNoTests',
+  ];
+  assert.deepEqual(Object.keys(seam).sort(), [...Object.keys(entry), ...seamOnlyHostExports].sort());
+  for (const key of seamOnlyHostExports) {
+    assert.equal(Object.hasOwn(entry, key), false, `cut host symbol ${key} must not remain on src/runtime/index.mjs`);
+  }
   for (const key of Object.keys(entry)) {
     assert.equal(typeof seam[key], typeof entry[key], `seam export ${key} must match typeof src/runtime/index.mjs`);
   }
@@ -810,7 +830,10 @@ registerHooks({
         rel === 'src/runtime/secret-redaction.mjs' ||
         rel === 'src/secret-redaction.mjs' ||
         rel === 'src/product-documents.mjs' ||
-        rel === 'src/workflow-eligibility.mjs'
+        rel === 'src/workflow-eligibility.mjs' ||
+        rel === 'src/test-selection.mjs' ||
+        rel === 'src/runtime-exit.mjs' ||
+        rel === 'src/prompt-tests-words.mjs'
       ) continue;
       if (rel.startsWith('src/runtime/')) rel = `src/${rel.slice('src/runtime/'.length)}`;
       out.add(rel);
@@ -1595,9 +1618,15 @@ test('SEAM11 (M2-2): src/runtime has no hardcoded client version literal; seam s
   assert.ok(seenSeam.length > 0 && seenSeam.every(v => v === pkgVersion), `expected seam pdd_version=${pkgVersion}, got ${JSON.stringify(seenSeam)}`);
 
   const seenDirect = [];
+  const hostSelection = await import('../src/test-selection.mjs');
+  const hostExit = await import('../src/runtime-exit.mjs');
   const directPorts = portsFor(
     { HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin },
     {
+      ...hostSelection,
+      noTestsMessage: hostSelection.NO_TESTS,
+      exitFor: hostExit.exitFor,
+      exitCodeFor: hostExit.exitCodeFor,
       cacheHash: bytes => {
         try {
           const parsed = JSON.parse(Buffer.from(bytes).toString('utf8'));
@@ -1617,7 +1646,8 @@ test('SEAM12 (MERGE-1): runtime-check-plan keeps approved prompt unchanged and d
   const { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
   const { buildCheckPlan } = await import('../src/runtime/runtime-check-plan.mjs');
-  const { findTests, interfaceBlocks, proseSha256 } = await import('../src/runtime/runtime-preflight.mjs');
+  const { findTests: rawFindTests, interfaceBlocks, proseSha256 } = await import('../src/runtime/runtime-preflight.mjs');
+  const selectionPorts = await import('../src/test-selection.mjs');
 
   const promptText = readFileSync(join(root, 'prompts/cli/runtime-check-plan.prompt.md'), 'utf8');
   const blocks = interfaceBlocks(promptText);
@@ -1670,9 +1700,9 @@ test('SEAM12 (MERGE-1): runtime-check-plan keeps approved prompt unchanged and d
 
   // Modify only src/alpha.mjs and call buildCheckPlan directly WITHOUT ports.headerPrompts.
   writeFileSync(join(repo, 'src/alpha.mjs'), '// Generated from prompts/alpha.prompt.md\nexport const alpha = x => ({ y: x + 1 });\n');
-  const found = findTests({ root: repo });
+  const found = rawFindTests({ root: repo }, selectionPorts);
   const rows = found.tests.map(test => ({ test: test.path, state: 'passed', steps: [] }));
-  const planEdited = buildCheckPlan({ root: repo, found, selected: found.tests, rows, full: true, base: 'HEAD' });
+  const planEdited = buildCheckPlan({ root: repo, found, selected: found.tests, rows, full: true, base: 'HEAD' }, selectionPorts);
   const alphaStory = planEdited.stories.find(s => s.story_path === 'user_stories/alpha.md');
   const betaStory = planEdited.stories.find(s => s.story_path === 'user_stories/beta.md');
   assert.equal(alphaStory?.role, 'target');
@@ -1681,7 +1711,7 @@ test('SEAM12 (MERGE-1): runtime-check-plan keeps approved prompt unchanged and d
 
   // Delete src/beta.mjs while src/alpha.mjs is edited: deleted implementation reads base Generated-from header.
   unlinkSync(join(repo, 'src/beta.mjs'));
-  const planDeleted = buildCheckPlan({ root: repo, found, selected: found.tests, rows, full: true, base: 'HEAD' });
+  const planDeleted = buildCheckPlan({ root: repo, found, selected: found.tests, rows, full: true, base: 'HEAD' }, selectionPorts);
   const betaDeleted = planDeleted.stories.find(s => s.story_path === 'user_stories/beta.md');
   assert.equal(betaDeleted?.role, 'target');
   assert.deepEqual(betaDeleted?.affected_paths, ['src/beta.mjs']);
@@ -1695,6 +1725,15 @@ test('SEAM13 (WEAKER DEFAULTS): agent-project has no localEvidenceEligibility fa
   const directProject = await import('../src/runtime/agent-project.mjs');
   const directComposition = await import('../src/runtime/product-composition.mjs');
   const directClient = await import('../src/runtime/runtime-client.mjs');
+  const directPreflight = await import('../src/runtime/runtime-preflight.mjs');
+  const hostSelection = await import('../src/test-selection.mjs');
+  const hostExit = await import('../src/runtime-exit.mjs');
+  const baseCutPorts = {
+    ...hostSelection,
+    noTestsMessage: hostSelection.NO_TESTS,
+    exitFor: hostExit.exitFor,
+    exitCodeFor: hostExit.exitCodeFor,
+  };
   const { harbor, fakeRuntime, portsFor } = await import('./runtime-fake.mjs');
 
   const agentProjectSrc = readFileSync(join(root, 'src/runtime/agent-project.mjs'), 'utf8');
@@ -1711,6 +1750,20 @@ test('SEAM13 (WEAKER DEFAULTS): agent-project has no localEvidenceEligibility fa
   assert.equal(directCard.latestCheck, null);
   const seamCard = seam.buildProjectCard({ root: setup.repo, env, story: 'place-order' });
   assert.notEqual(seamCard.latestCheck, null);
+
+  // Direct preflight/client calls without M3 selection or exit ports fail loudly with unbound-port Errors.
+  assert.throws(
+    () => directPreflight.findTests({ root: setup.repo }),
+    err => !(err instanceof TypeError) && /Test selection ports.*not bound/.test(err.message),
+  );
+  await assert.rejects(
+    () => directClient.runCheck({ cwd: setup.repo, words: ['place-order'], options: {} }, portsFor(env).ports),
+    err => !(err instanceof TypeError) && /Test selection ports.*not bound/.test(err.message),
+  );
+  await assert.rejects(
+    () => directClient.runCheck({ cwd: setup.repo, words: ['place-order'], options: {} }, { ...portsFor(env).ports, ...hostSelection, noTestsMessage: hostSelection.NO_TESTS }),
+    err => !(err instanceof TypeError) && /Exit code port.*not bound/.test(err.message),
+  );
 
   // Direct composeProductTry without product parser ports throws an unbound-port Error, not invalid-product-map or TypeError.
   assert.throws(
@@ -1747,7 +1800,7 @@ test('SEAM13 (WEAKER DEFAULTS): agent-project has no localEvidenceEligibility fa
   await assert.rejects(
     () => directClient.runCheck(
       { cwd: nativeRepo, words: ['native-story'], options: { '--lint': true } },
-      { env: { HOME: join(tmp, 'home'), PDD_STATE_DIR: join(tmp, 'state') }, stdout: { write() {} }, stderr: { write() {} } },
+      { ...baseCutPorts, env: { HOME: join(tmp, 'home'), PDD_STATE_DIR: join(tmp, 'state') }, stdout: { write() {} }, stderr: { write() {} } },
     ),
     err => !(err instanceof TypeError) && /Native Story assessment ports.*not bound/.test(err.message),
   );
@@ -1756,6 +1809,7 @@ test('SEAM13 (WEAKER DEFAULTS): agent-project has no localEvidenceEligibility fa
     () => directClient.runCheck(
       { cwd: nativeRepo, words: ['native-story'], options: { '--lint': true } },
       {
+        ...baseCutPorts,
         env: { HOME: join(tmp, 'home'), PDD_STATE_DIR: join(tmp, 'state') },
         stdout: { write() {} },
         stderr: { write() {} },
@@ -1771,14 +1825,14 @@ test('SEAM13 (WEAKER DEFAULTS): agent-project has no localEvidenceEligibility fa
   await assert.rejects(
     () => directClient.runCheck(
       { cwd: setup.repo, words: ['place-order'], options: { '--lint': true } },
-      portsFor(env).ports,
+      { ...portsFor(env).ports, ...baseCutPorts },
     ),
     err => !(err instanceof TypeError) && /SVG layout port \(lintSvgLayouts\) is not bound/.test(err.message),
   );
   await assert.rejects(
     () => directClient.runCheck(
       { cwd: setup.repo, words: ['place-order'], options: { '--lint': true, '--local': true } },
-      portsFor(env).ports,
+      { ...portsFor(env).ports, ...baseCutPorts },
     ),
     err => !(err instanceof TypeError) && /SVG layout port \(lintSvgLayouts\) is not bound/.test(err.message),
   );
@@ -1787,7 +1841,7 @@ test('SEAM13 (WEAKER DEFAULTS): agent-project has no localEvidenceEligibility fa
   await assert.rejects(
     () => directClient.runTry(
       { cwd: setup.repo, words: ['place-order'], options: { '--agent': 'codex' } },
-      { ...portsFor(env).ports, agentBridge: undefined },
+      { ...portsFor(env).ports, ...baseCutPorts, agentBridge: undefined },
     ),
     err => !(err instanceof TypeError) && /Agent configuration port \(loadAgentDefinitions\) is not bound/.test(err.message),
   );
@@ -1854,6 +1908,7 @@ test('SEAM13 (WEAKER DEFAULTS): agent-project has no localEvidenceEligibility fa
   const approvalPorts = portsFor(
     { HOME: approvalTrySetup.home, PDD_STATE_DIR: approvalTrySetup.state, PDD_RUNTIME_URL: approvalFake.origin },
     {
+      ...baseCutPorts,
       interactive: true,
       agentBridge: false,
       openUrl: async () => true,
@@ -2106,10 +2161,23 @@ test('SEAM17 (S3): stateless header reader in runtime-check-plan matches file-ow
   const { headerPrompts } = await import('../src/file-owner.mjs');
   const index = await import('../src/runtime/index.mjs');
   const seam = await import('../src/runtime-seam.mjs');
+  const hostSelection = await import('../src/test-selection.mjs');
+  const hostExit = await import('../src/runtime-exit.mjs');
+  const hostPromptWords = await import('../src/prompt-tests-words.mjs');
 
   assert.deepEqual(index.LIMITS, index.runtimePreflightSlice().LIMITS);
-  assert.deepEqual(index.PROMPT_TESTS_LABEL, seam.PROMPT_TESTS_LABEL);
-  assert.deepEqual(index.PROMPT_TESTS_WORDS, seam.PROMPT_TESTS_WORDS);
+  assert.deepEqual(index.TEST_SCHEMA, index.runtimePreflightSlice().TEST_SCHEMA);
+  assert.deepEqual(index.DRAFT_SERVER_TEXT, index.runtimePreflightSlice().DRAFT_SERVER_TEXT);
+  assert.deepEqual(index.STALE_HINT, index.runtimePreflightSlice().STALE_HINT);
+  assert.deepEqual(index.staleHint, index.runtimePreflightSlice().staleHint);
+  assert.deepEqual(index.PROVIDER_TEXT, index.runtimeOutcomeSlice().PROVIDER_TEXT);
+  assert.deepEqual(index.CHECK_STATES, index.runtimeOutcomeSlice().CHECK_STATES);
+  assert.deepEqual(index.OPEN_STATES, index.runtimeOutputSlice().OPEN_STATES);
+  assert.deepEqual(seam.NO_TESTS, hostSelection.NO_TESTS);
+  assert.deepEqual(seam.STATE_EXIT_CODES, hostExit.STATE_EXIT_CODES);
+  assert.deepEqual(seam.COMMAND_EXIT_CODE, hostExit.COMMAND_EXIT_CODE);
+  assert.deepEqual(seam.PROMPT_TESTS_LABEL, hostPromptWords.PROMPT_TESTS_LABEL);
+  assert.deepEqual(seam.PROMPT_TESTS_WORDS, hostPromptWords.PROMPT_TESTS_WORDS);
 
   const prefixes = ['', '//', '///', '  // ', '\t#', '##', '--', ';', ';;', '/*', '/**', ' *', '<!--', '"""', "'''", 'rem ', '% ', '// prefix '];
   const suffixes = ['', '.', ' */', '. */', ' -->', '. -->', ' """', " '''", '   ', ' */ trailing'];

@@ -2,10 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runTry } from '../src/runtime-seam.mjs';
 import { runCheck, runDoorCall } from '../src/runtime-seam.mjs';
-import { projectAnswer, renderText, exitCodeFor } from '../src/runtime/runtime-output.mjs';
+import { projectAnswer, renderText, exitCodeFor } from '../src/runtime-seam.mjs';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { proseSha256 } from '../src/runtime/runtime-preflight.mjs';
+import { proseSha256 } from '../src/runtime-seam.mjs';
 import { harbor, fakeRuntime, portsFor } from './runtime-fake.mjs';
 
 const advice = 'Make the step smaller, for example split 30 moves into 3 steps of 10.';

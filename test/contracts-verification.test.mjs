@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { runContracts } from '../src/runtime-seam.mjs';
 import { runCheck } from '../src/runtime-seam.mjs';
-import { gitFiles, interfaceBlocks } from '../src/runtime/runtime-preflight.mjs';
+import { gitFiles, interfaceBlocks } from '../src/runtime-seam.mjs';
 import { harbor, fakeRuntime, portsFor, PLACE, sink } from './runtime-fake.mjs';
 
 const ORDER='tests/place-order.json', STORY='user_stories/place-order.md', OTHER='tests/unknown-item.json', OTHER_STORY='user_stories/unknown-item.md';

@@ -4,7 +4,7 @@ import {readFileSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {nativeFixture,put} from './helpers/native-cli-fixture.mjs';
-import {captureSource} from '../src/runtime/runtime-preflight.mjs';
+import {captureSource} from '../src/runtime-seam.mjs';
 const {assessNativeEvidence,prepareNativeEvidence}=await import(process.env.PDD_FORMAL_MODULE_ROOT
   ? pathToFileURL(join(process.env.PDD_FORMAL_MODULE_ROOT,'src/workflow-results.mjs'))
   : new URL('../src/workflow-results.mjs',import.meta.url));

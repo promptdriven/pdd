@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expandSource, catalogRecords, compareCopies, planSync } from '../src/runtime/contract-refs.mjs';
-import { captureSource, interfaceBlocks } from '../src/runtime/runtime-preflight.mjs';
+import { captureSource, interfaceBlocks } from '../src/runtime-seam.mjs';
 import { readContractHistory } from '../src/runtime-seam.mjs';
 import { runContracts } from '../src/runtime-seam.mjs';
 import { harbor, PLACE, sink } from './runtime-fake.mjs';

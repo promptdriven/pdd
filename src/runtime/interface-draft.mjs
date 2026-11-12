@@ -4,12 +4,11 @@ import { join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { isDeepStrictEqual } from 'node:util';
 import { expandSource } from './contract-refs.mjs';
-import { gitFiles, findTests, readPrompt, promptRefusal, interfaceBlocks, interfaceSchemaProblems, proseSha256, sourceFilePort, sha256 } from './runtime-preflight.mjs';
+import { discoveryVisibleFiles, gitFiles, findTests, readPrompt, promptRefusal, interfaceBlocks, interfaceSchemaProblems, proseSha256, sourceFilePort, sha256 } from './runtime-preflight.mjs';
 import { loadRuntimeWorkspace, allowsRuntimePath, nativeWorkspaceFiles } from './runtime-workspace.mjs';
 
 function promptPaths(root) {
-  const found = findTests({root, excludeFixtureProjects:true});
-  return [...found.discoveryVisible].filter(path => path.endsWith('.prompt.md')).sort();
+  return [...discoveryVisibleFiles({ root, excludeFixtureProjects: true })].filter(path => path.endsWith('.prompt.md')).sort();
 }
 export function missingInterfaces(root) {
   return promptPaths(root).filter(path => !interfaceBlocks(sourceFilePort(root).read({path}).content).length);
@@ -647,7 +646,7 @@ export async function runAutomaticApproval({path,root,tests},ports={}) {
     const nativeCounts={total:count('tests'),passed:count('pass'),failed:count('fail')};
     if(!(nativeCounts.total>0) || nativeCounts.passed!==nativeCounts.total || nativeCounts.failed!==0) throw Error('The native command did not report a complete passing TAP test run.');
     if(JSON.stringify(sourceSnapshot(root))!==JSON.stringify(before)) throw Error('Source changed during native tests. No prompt was approved.');
-    const found=findTests({root,excludeFixtureProjects:true});
+    const found=ports.findTests ? ports.findTests({root,excludeFixtureProjects:true}) : findTests({root,excludeFixtureProjects:true},ports);
     // Follow calls too: every scenario that can reach the drafted contract must pass in full.
     const reaches=(entry,seen=new Set())=>{
       if(entry===path) return true;

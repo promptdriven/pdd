@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, truncateSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { captureSource, findTests, preflight, selectTests } from '../src/runtime/runtime-preflight.mjs';
+import { captureSource, findTests, preflight, selectTests } from '../src/runtime-seam.mjs';
 import { runCheck } from '../src/runtime-seam.mjs';
 import { saveDoorCase } from '../src/runtime-seam.mjs';
 import { readAgentScenarios } from '../src/runtime-seam.mjs';

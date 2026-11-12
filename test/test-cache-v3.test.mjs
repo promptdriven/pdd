@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { runCheck } from '../src/runtime-seam.mjs';
-import { interfaceBlocks, proseSha256 } from '../src/runtime/runtime-preflight.mjs';
+import { interfaceBlocks, proseSha256 } from '../src/runtime-seam.mjs';
 import { harbor, fakeRuntime, portsFor } from './runtime-fake.mjs';
 
 // Synthetic requirements from the approved design: no hosted interpreter or model.

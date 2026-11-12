@@ -150,7 +150,7 @@ function requestExample(entry, tests, port) {
 
 export async function openServe(context, test, sessionId, options) {
   const { ports, root, origin, identity } = context;
-  if(loadRuntimeWorkspace({root}).configured)captureSource(root,{tests:[test.path],appMap:context.appMap??null});
+  if(loadRuntimeWorkspace({root}).configured)(ports?.captureSource??((r,o)=>captureSource(r,o,ports)))(root,{tests:[test.path],appMap:context.appMap??null});
   const model = await context.runtime.send(`/v1/try/${sessionId}/model`, { method: 'GET' }, 30_000);
   if (model.status !== 200 || !Array.isArray(model.json?.entries)) throw problem(502, cleanText(model.json?.error?.message || 'The interpreter could not read this Try’s routes. It needs the Try doors server branch.'));
   const routes = model.json.entries.filter(e => e.http).map(entry => ({ ...entry, route: entry.http }));

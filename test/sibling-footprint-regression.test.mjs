@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs, { mkdirSync, readFileSync, writeFileSync, rmSync, truncateSync, symlinkSync } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
-import { captureSource, findTests, interfaceBlocks, gitFiles, proseSha256 } from '../src/runtime/runtime-preflight.mjs';
+import { captureSource, findTests, interfaceBlocks, gitFiles, proseSha256 } from '../src/runtime-seam.mjs';
 import { expandSource } from '../src/runtime/contract-refs.mjs';
 import { runContracts } from '../src/runtime-seam.mjs';
 import { runCheck, runTry, readContractHistory } from '../src/runtime-seam.mjs';

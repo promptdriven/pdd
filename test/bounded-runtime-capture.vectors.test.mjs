@@ -5,7 +5,7 @@ import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {syncBuiltinESMExports} from 'node:module';
 import {fixture,read,write,json,get,stream,cases} from './helpers/runtime-workspace-fixture.mjs';
-import * as preflight from '../src/runtime/runtime-preflight.mjs';
+import * as preflight from '../src/runtime-seam.mjs';
 import {runCheck} from '../src/runtime-seam.mjs';
 const refused=fn=>assert.throws(fn,e=>e.exitCode===4&&/workspace-path-outside/.test(e.message)&&!e.message.includes('PRIVATE-MARKER'));
 const capture=f=>preflight.captureSource(f.root,{tests:[f.second]});

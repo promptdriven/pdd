@@ -6,7 +6,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {prepareNativeEvidence,readNativeContext,assessNativeEvidence} from '../src/workflow-results.mjs';
-import {captureSource,proseSha256} from '../src/runtime/runtime-preflight.mjs';
+import {captureSource,proseSha256} from '../src/runtime-seam.mjs';
 import {recordPromptApproval} from '../src/approval-policy.mjs';
 const git=(root,...args)=>execFileSync('git',['-C',root,...args],{encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
 async function fixture(t,format='json') {

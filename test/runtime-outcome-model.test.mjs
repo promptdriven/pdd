@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { exitCodeFor, projectAnswer, renderJson, renderText, summaryLine } from '../src/runtime/runtime-output.mjs';
+import { exitCodeFor, projectAnswer, renderJson, renderText, summaryLine } from '../src/runtime-seam.mjs';
 import { TOKEN, ordinaryCapabilities, sha } from './runtime-fake.mjs';
 
 // Expected outcomes through the public output functions, so they are part of the contract.

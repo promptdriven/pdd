@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { fillHashes, proseSha256 } from '../src/runtime/runtime-preflight.mjs';
+import { fillHashes, proseSha256 } from '../src/runtime-seam.mjs';
 import { runCheck } from '../src/runtime-seam.mjs';
 
 const vectors = JSON.parse(readFileSync(new URL('./fixtures/fill-hash/cases.json', import.meta.url)));

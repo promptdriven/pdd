@@ -4,7 +4,7 @@ import fs, { mkdirSync, readFileSync, writeFileSync, truncateSync, readdirSync, 
 import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
 import { expandSource, catalogRecords, compareCopies, planSync } from '../src/runtime/contract-refs.mjs';
-import { captureSource, sourceFilePort, readPrompt, gitFiles, interfaceBlocks, LIMITS } from '../src/runtime/runtime-preflight.mjs';
+import { captureSource, sourceFilePort, readPrompt, gitFiles, interfaceBlocks, LIMITS } from '../src/runtime-seam.mjs';
 import { runContracts } from '../src/runtime-seam.mjs';
 import { harbor, PLACE, sink } from './runtime-fake.mjs';
 

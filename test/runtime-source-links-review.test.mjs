@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { captureSource, sourceFilePort, findTests } from '../src/runtime/runtime-preflight.mjs';
+import { captureSource, sourceFilePort, findTests } from '../src/runtime-seam.mjs';
 import { bindingCoverage } from '../src/runtime/runtime-bindings.mjs';
 import { harbor, portsFor } from './runtime-fake.mjs';
 import { runCheck } from '../src/runtime-seam.mjs';
@@ -12,7 +12,7 @@ const ORDER = 'tests/place-order.json';
 const write = (root,path,bytes) => { mkdirSync(join(root,path,'..'),{recursive:true}); writeFileSync(join(root,path),bytes); };
 const refusal = (action, reason) => assert.throws(action, error => error.exitCode === 4 && reason.test(error.message));
 function child(mode, repo, outside) {
-  const run = spawnSync(process.execPath, [fileURLToPath(new URL('./helpers/source-links-review-probe.mjs', import.meta.url)), mode, repo, new URL('../src/runtime/runtime-preflight.mjs', import.meta.url).href, outside ?? ''], {encoding:'utf8', timeout:3000, killSignal:'SIGKILL'});
+  const run = spawnSync(process.execPath, [fileURLToPath(new URL('./helpers/source-links-review-probe.mjs', import.meta.url)), mode, repo, new URL('../src/runtime-seam.mjs', import.meta.url).href, outside ?? ''], {encoding:'utf8', timeout:3000, killSignal:'SIGKILL'});
   assert.equal(run.error, undefined, `resolver must terminate before parent kills it: ${run.error}`);
   assert.equal(run.status,0,run.stderr);
   return JSON.parse(run.stdout);

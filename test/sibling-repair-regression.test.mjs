@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
-import { interfaceBlocks } from '../src/runtime/runtime-preflight.mjs';
+import { interfaceBlocks } from '../src/runtime-seam.mjs';
 import { runCheck } from '../src/runtime-seam.mjs';
 import { runContracts } from '../src/runtime-seam.mjs';
 import { harbor, fakeRuntime, portsFor, PLACE, sink } from './runtime-fake.mjs';

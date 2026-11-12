@@ -1,12 +1,12 @@
 import {loadRuntimeWorkspace,allowsRuntimePath} from './runtime-workspace.mjs';
-// Generated from prompts/cli/agent-project.prompt.md (sha256: ddbdce1aa045dc37725464420aea0578bef54b51d9ab90769637369b6643edd9).
+// Generated from prompts/cli/agent-project.prompt.md (sha256: 527fa6a9361cc7100585a595c9cab7a2a2c69019e3a87cb22baab5db165bff26).
 import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {constants,lstatSync,realpathSync,openSync,fstatSync,readSync,closeSync,readdirSync} from 'node:fs';
 import {resolve,join,relative,sep,basename,parse} from 'node:path';
 import {homedir} from 'node:os';
 import {isDeepStrictEqual} from 'node:util';
-import {isSecretPath,interfaceBlocks,storyCriteria,matchTests,isStoryPath,LIMITS,captureSource} from './runtime-preflight.mjs';
+import {isSecretPath,interfaceBlocks,storyCriteria,LIMITS,captureSource} from './runtime-preflight.mjs';
 const object=x=>x!==null&&typeof x==='object'&&!Array.isArray(x);
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const BATCH=/^\d{8}-\d{6}-[a-z0-9]{4}$/;
@@ -40,12 +40,16 @@ function listFiles(root){try{const result=spawnSync('git',['-c','core.fsmonitor=
 function canonicalRoot(root){try{return realpathSync(root);}catch{return resolve(root);}}
 function relativeJson(path,root){return typeof path==='string'&&path.endsWith('.json')&&relativeFile(path,root);}
 function relativeFile(path,root){return typeof path==='string'&&!path.includes('\\')&&!path.split('/').some(x=>!x||x==='.'||x==='..'||x==='.git')&&!isSecretPath(path)&&inside(resolve(root,path),root)&&relative(root,resolve(root,path)).split(sep).join('/')===path;}
-export function readAgentScenarios({root}){
+export function readAgentScenarios({root},ports={}){
+ if(typeof ports?.isStoryPath!=='function'||typeof ports?.matchTests!=='function'){
+  throw Object.assign(new Error('Test selection ports (isStoryPath, matchTests) are not bound.'),{unboundPort:true});
+ }
+ const {isStoryPath,matchTests}=ports,capture=ports.captureSource??((r,o)=>captureSource(r,o,ports));
  const canonical=canonicalRoot(root),workspace=loadRuntimeWorkspace({root:canonical}),listed=listFiles(canonical),records=[];let bytes=0,incomplete=listed.incomplete;
- // The test name rule (runtime-preflight): Story files and tests by name and folder; no other JSON is opened.
+ // The test name rule: Story files and tests by name and folder; no other JSON is opened.
  const safe=listed.paths.filter(path=>relativeFile(path,canonical)&&allowsRuntimePath(workspace,path));
  if(matchTests(safe.filter(isStoryPath),listed.paths).tests.some(test=>!allowsRuntimePath(workspace,test.path)))incomplete=true;
- for(const test of matchTests(safe.filter(isStoryPath),safe.filter(path=>relativeJson(path,canonical))).tests){if(workspace.configured){try{captureSource(canonical,{tests:[test.path],workspace});}catch{incomplete=true;continue;}}if(test.problem){incomplete=true;continue;}const file=read(join(canonical,test.path),LIMITS.bytes);if(!file){incomplete=true;continue;}if(bytes+Buffer.byteLength(file.text)>16777216){incomplete=true;break;}bytes+=Buffer.byteLength(file.text);let doc;try{doc=JSON.parse(file.text);}catch{incomplete=true;continue;}if(!object(doc)||doc.schema_version!=='prompt-runtime.program-scenario.v1'){incomplete=true;continue;}if(records.length===128){incomplete=true;break;}records.push({path:test.path,doc});}
+ for(const test of matchTests(safe.filter(isStoryPath),safe.filter(path=>relativeJson(path,canonical))).tests){if(workspace.configured){try{capture(canonical,{tests:[test.path],workspace});}catch(error){if(error?.unboundPort)throw error;incomplete=true;continue;}}if(test.problem){incomplete=true;continue;}const file=read(join(canonical,test.path),LIMITS.bytes);if(!file){incomplete=true;continue;}if(bytes+Buffer.byteLength(file.text)>16777216){incomplete=true;break;}bytes+=Buffer.byteLength(file.text);let doc;try{doc=JSON.parse(file.text);}catch{incomplete=true;continue;}if(!object(doc)||doc.schema_version!=='prompt-runtime.program-scenario.v1'){incomplete=true;continue;}if(records.length===128){incomplete=true;break;}records.push({path:test.path,doc});}
  Object.defineProperty(records,'incomplete',{value:incomplete});return records;
 }
 function dynamic(value){return Array.isArray(value)?value.some(dynamic):object(value)&&(Object.hasOwn(value,'$step_result')||Object.values(value).some(dynamic));}

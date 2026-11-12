@@ -6,7 +6,7 @@ import {fileURLToPath} from 'node:url';
 import {spawnSync} from 'node:child_process';
 import {harbor,storyTest,fakeRuntime,portsFor} from './runtime-fake.mjs';
 import {runCheck} from '../src/runtime-seam.mjs';
-import {captureSource,findTests,preflight,proseSha256,interfaceBlocks} from '../src/runtime/runtime-preflight.mjs';
+import {captureSource,findTests,preflight,proseSha256,interfaceBlocks} from '../src/runtime-seam.mjs';
 import {readRunResults} from '../src/workflow-results.mjs';
 
 const read=(root,path)=>JSON.parse(readFileSync(join(root,path),'utf8'));

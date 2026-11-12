@@ -2,7 +2,7 @@ import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { interfaceBlocks, checkInput, findTests } from '../src/runtime/runtime-preflight.mjs';
+import { interfaceBlocks, checkInput, findTests } from '../src/runtime-seam.mjs';
 import { loadRuntimeWorkspace } from '../src/runtime/runtime-workspace.mjs';
 import { fileURLToPath } from 'node:url';
 

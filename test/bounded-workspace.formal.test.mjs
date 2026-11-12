@@ -10,7 +10,7 @@ import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {syncBuiltinESMExports} from 'node:module';
 import {loadRuntimeWorkspace, allowsRuntimePath, requireRuntimePath} from '../src/runtime/runtime-workspace.mjs';
-import {captureSource, fillHashes, createStrictSourceAccess} from '../src/runtime/runtime-preflight.mjs';
+import {captureSource, fillHashes, createStrictSourceAccess} from '../src/runtime-seam.mjs';
 import {askAgent} from '../src/agent-adapters.mjs';
 import {saveDoorCase, acquireCaseWriteOwnership, applyPendingCase} from '../src/runtime-seam.mjs';
 import {migrateRuntimeWorkspace, runTry} from '../src/runtime-seam.mjs';

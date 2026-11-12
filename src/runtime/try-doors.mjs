@@ -82,7 +82,7 @@ function cliEntry(context, test) {
   const entries = cliEntries(context, test);
   if (entries.size !== 1) {
     if (entries.size) fail('This Story uses more than one command-line program. Choose a Story with one command-line program.');
-    const found = context.found ?? findTests({ root: context.root, files: [...context.visible] });
+    const found = context.found ?? (context.ports?.findTests ? context.ports.findTests({ root: context.root, files: [...context.visible] }) : findTests({ root: context.root, files: [...context.visible] }, context.ports));
     const names = [...new Set(found.tests.filter(candidate => {
       // Other Stories supply advice only; their missing context is independent.
       try { return cliEntries(context, candidate).size === 1; } catch { return false; }
@@ -187,6 +187,7 @@ export async function runShim(descriptorPath, argv, givenPorts = {}) {
     ports.stderr.write(`${result.stderr && !result.stderr.endsWith('\n') ? '\n' : ''}${tryUsageLine(answer.usage, { command: true })}\n`);
     return result.exit_code;
   } catch (e) {
+    if (e?.unboundPort) throw e;
     const reason = e.code === 'ENOENT' ? 'No Try session is available. Run pdd simulate STORY --cli again.'
       : e instanceof TypeError && /encoded data/.test(e.message) ? 'Piped stdin must be UTF-8 text.' : cleanText(e.message || 'The command could not run.');
     ports.stderr.write(`pdd: ${reason}\n${tryUsageLine(e.tryUsage ?? tryUsage({}), { command: true })}\n`); return WRAPPER_EXIT;
@@ -205,20 +206,20 @@ export async function saveLast({ root, store, identity, ports }) {
   checkEffectivePrompts(root,d.promptHashes ?? {[d.prompt]:d.promptHash},d.effectivePromptHashes);
   const step = { step_id: `try-${last.id}`, entry_path: d.prompt, operation: d.operation, input: last.input,
     checks: [{ criterion_id: d.criterion, target: 'result', path: '', op: 'equals', value: last.result }] };
-  captureSource(root,{tests:[d.originalPath]});
+  (ports?.captureSource ?? ((r, o) => captureSource(r, o, ports)))(root,{tests:[d.originalPath]});
   const saved={ id: last.id, name: 'Recorded terminal command', story_path: d.storyPath, original_path: d.originalPath,
     test: { schema_version: 'prompt-runtime.program-scenario.v1', story_path: d.storyPath, criteria: d.criteria, ...(Object.hasOwn(last,'inputWorld')?{initial_world:last.inputWorld}:{}), steps: [step] } };
-  const retained=saveDoorCaseResult(root,saved,{signal:ports.signal,env:ports.env});
+  const retained=saveDoorCaseResult(root,saved,{signal:ports.signal,env:ports.env,ports});
   if(retained.kind==='failure')fail(retained.message);
   const refuse=(outcome,error)=>{ports.stderr.write(`pdd: ${error?cleanText(error)+'. ':''}${outcome.message}\n`);return WRAPPER_EXIT;};
   let outcome=retained;
   if(retained.result.state==='pending'){
     let lease;
     try{
-      if(ports.caseHandoff){const handoff=await ports.caseHandoff({root,testPath:d.originalPath,signal:ports.signal});if(handoff)lease=await acquireCaseWriteOwnership({root,testPath:d.originalPath,handoff,signal:ports.signal},{env:ports.env});}
-      else if(ports.interactive){ports.stdout.write(`Close the editor for ${d.originalPath}. Hand over this closed file for the pending case apply? y/N\n`);const answers=(ports.lineReader??defaultLineReader)(ports.stdin);try{if(/^y(?:es)?$/i.test((await answers.ask()).trim()))lease=await acquireCaseWriteOwnership({root,testPath:d.originalPath,handoff:{kind:'closed-editor',testPath:d.originalPath},signal:ports.signal},{env:ports.env});}finally{answers.close();}}
-      if(lease)outcome=saveDoorCaseResult(root,saved,{writeOwnership:lease,signal:ports.signal,env:ports.env});
-    }catch(error){return refuse(retained,error.message??error);}
+      if(ports.caseHandoff){const handoff=await ports.caseHandoff({root,testPath:d.originalPath,signal:ports.signal});if(handoff)lease=await acquireCaseWriteOwnership({root,testPath:d.originalPath,handoff,signal:ports.signal},{...ports,env:ports.env});}
+      else if(ports.interactive){ports.stdout.write(`Close the editor for ${d.originalPath}. Hand over this closed file for the pending case apply? y/N\n`);const answers=(ports.lineReader??defaultLineReader)(ports.stdin);try{if(/^y(?:es)?$/i.test((await answers.ask()).trim()))lease=await acquireCaseWriteOwnership({root,testPath:d.originalPath,handoff:{kind:'closed-editor',testPath:d.originalPath},signal:ports.signal},{...ports,env:ports.env});}finally{answers.close();}}
+      if(lease)outcome=saveDoorCaseResult(root,saved,{writeOwnership:lease,signal:ports.signal,env:ports.env,ports});
+    }catch(error){if(error?.unboundPort)throw error;return refuse(retained,error.message??error);}
     finally{lease?.release();}
   }
   if(outcome.kind==='failure')fail(outcome.message);

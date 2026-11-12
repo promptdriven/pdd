@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { runCheck } from '../src/runtime-seam.mjs';
 import { renderHelp } from '../src/pdd-cli.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
-import { captureSource, interfaceBlocks, proseSha256 } from '../src/runtime/runtime-preflight.mjs';
+import { captureSource, interfaceBlocks, proseSha256 } from '../src/runtime-seam.mjs';
 import { harbor, fakeRuntime, portsFor } from './runtime-fake.mjs';
 
 const vectors = JSON.parse(readFileSync(new URL('../fixtures/native-cases/test-cache.json', import.meta.url)));

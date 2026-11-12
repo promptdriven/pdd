@@ -13,7 +13,7 @@ export async function migrateRuntimeWorkspace({root,projectionRoot,mappings,writ
   const unresolved=(id,reason,recoveryPath=null)=>{result.unresolved.push({id,reason,recoveryPath});if(write)result.state='incomplete';};
   if(!Array.isArray(mappings)||mappings.some(m=>!m||Object.keys(m).length!==2||!safe(m.from)||!safe(m.to))||new Set(mappings.map(m=>m.from)).size!==mappings.length||new Set(mappings.map(m=>m.to)).size!==mappings.length){unresolved('mappings','exact unique safe from/to file mappings are required');result.state='incomplete';return result;}
   const map=new Map(mappings.map(m=>[m.from,m.to])),policy=(ports.loadRuntimeWorkspace??loadRuntimeWorkspace)({root}),store=ports.store??runtimeWorkspaceMigrationStore({root,projectionRoot,env:ports.env});
-  const source=ports.sourceFilePort??sourceFilePort,capture=ports.captureSource??captureSource,eligibility=ports.evidenceEligibility??ports.readEvidenceEligibility??(() => ({state:'unavailable',reason:'workflow evidence eligibility port is not bound'}));
+  const source=ports.sourceFilePort??sourceFilePort,capture=ports.captureSource??((r,opts)=>captureSource(r,opts,ports)),eligibility=ports.evidenceEligibility??ports.readEvidenceEligibility??(() => ({state:'unavailable',reason:'workflow evidence eligibility port is not bound'}));
   let oldFiles,newFiles;
   try{oldFiles=source(projectionRoot,new Set((ports.gitFiles??gitFiles)(projectionRoot)));newFiles=source(root,new Set((ports.gitFiles??gitFiles)(root)));}
   catch(error){unresolved('source',error.message);result.state='incomplete';return result;}
@@ -43,7 +43,7 @@ export async function migrateRuntimeWorkspace({root,projectionRoot,mappings,writ
       const previous=store.readMapping(migrationId);const done=previous?.items?.[item.id];if(done?.state==='applied'){outcome.state='applied';continue;}
       let lease;try{
         const testPath=map.get(selected[0]),handoff=await ports.handoff?.({root,testPath,signal});
-        lease=await (ports.acquireCaseWriteOwnership??acquireCaseWriteOwnership)({root,testPath,handoff,signal},{env:ports.env,...ports.ownershipPorts});
+        lease=await (ports.acquireCaseWriteOwnership??acquireCaseWriteOwnership)({root,testPath,handoff,signal},{...ports,env:ports.env,...ports.ownershipPorts});
         const prepared={schema_version:'pdd.workspace-migration.v1',root,projectionRoot,mappings,activeItem:item.id,items:{...(previous?.items??{}),[item.id]:{state:'prepared',kind:item.kind,original:item.raw,record:item.record,selected,eligibility:owner,readCommand:outcome.readCommand}}};
         const location=store.publishMapping(migrationId,prepared);outcome.recoveryPath=location;
         await ports.fault?.('prepared',item);
@@ -51,7 +51,7 @@ export async function migrateRuntimeWorkspace({root,projectionRoot,mappings,writ
         if(item.kind==='case'){
           const retained=store.transferCase({...item,mappedStory:map.get(record.identity.original.storyPath)},testPath);
           {
-            const applied=await (ports.applyPendingCase??applyPendingCase)({root,pendingId:retained.pendingId,writeOwnership:lease,signal},{env:ports.env,...ports.casePorts});
+            const applied=await (ports.applyPendingCase??applyPendingCase)({root,pendingId:retained.pendingId,writeOwnership:lease,signal},{...ports,env:ports.env,...ports.casePorts});
             if(applied.state!=='committed'){outcome.state=applied.state;outcome.reason=applied.reason;unresolved(item.id,applied.reason,applied.recoveryPath);continue;}
           }
         }
@@ -62,9 +62,9 @@ export async function migrateRuntimeWorkspace({root,projectionRoot,mappings,writ
         const actual=store.readMapping(migrationId);
         if(actual?.items?.[item.id]?.state!=='applied')throw Error('mapping publication is uncertain; retained recovery record required');
         outcome.state='applied';
-      }catch(error){const actual=store.readMapping(migrationId);if(actual?.items?.[item.id]?.state==='applied')outcome.state='applied';else throw error;}
+      }catch(error){if(error?.unboundPort)throw error;const actual=store.readMapping(migrationId);if(actual?.items?.[item.id]?.state==='applied')outcome.state='applied';else throw error;}
       finally{lease?.release();}
-    }catch(error){outcome.state=signal?.aborted?'pending':'unavailable';outcome.reason=error.message;unresolved(item.id,error.message,outcome.recoveryPath);}
+    }catch(error){if(error?.unboundPort)throw error;outcome.state=signal?.aborted?'pending':'unavailable';outcome.reason=error.message;unresolved(item.id,error.message,outcome.recoveryPath);}
   }
   if(result.unresolved.length)result.state='incomplete';return result;
 }

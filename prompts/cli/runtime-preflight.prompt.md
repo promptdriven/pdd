@@ -44,10 +44,9 @@ Hash filling checks allowed draft targets and required reference inputs before r
 ## Files
 
 - Git files = `git ls-files -z -co --exclude-standard` in the repo root, unique and sorted. A deleted tracked file is skipped. This lookup is noninteractive: explicitly ignore stdin and retain captured stdout and stderr. Its helpers and descendants must not retain the caller's stdin after pdd exits; this defensive isolation leaves discovery results and errors unchanged.
-- A test is found by its name and folder, never by its content: the [test name rule](#test-name-rule) below. Discovery opens no `*.json` file to decide what is a test, so no size and no byte position can hide a test. After matching and workspace eligibility, read each matched test in full, at any size. A matched test that is not valid JSON fails rule P1 with its path. pdd has no size limit for one test file; the only size limit is the [upload limit](#source-capture) when the test is sent.
-- A story is a Git-visible `*.md` file in a `user_stories` folder that has a `## Acceptance` / `## Acceptance criteria` heading and is not `PLAN.md` or `README.md` (an index is skipped silently; 2048 session, 0.1.6). Its name is the file name without `.md`. Its title is its first `# ` line. A story with no test gives a warning. Discovery follows the [bounded-read rules](#source-capture). A title fallback for a linked Story uses the checked final target and its byte size, with the same identity-bound read as other source. An oversized fallback retains the filename title. A test's title is the title of the Story that the [test name rule](#test-name-rule) matched, else that Story's name.
-- No tests at all: say why, after `No tests found. The test of Story user_stories/S.md is S.json in a test or tests folder. See RUNBOOK.md §2.`, in at most 5 lines (then `…and N more`): the [test name rule](#test-name-rule) lines without the `Warning: ` prefix (each Story with no test, then each test-folder JSON file that matches no Story), each Git-visible `*.prompt` file (`PDD prompts must end in .prompt.md: rename prompts/board.prompt to prompts/board.prompt.md.`), and each `*.prompt.md` with no Runtime interface block (`prompts/x.prompt.md has no Runtime interface block. See RUNBOOK.md §2.`). This opens no JSON file. Exit 2.
-- Select tests by PATH or STORY words with the same rule: a test path (or any file of a conflict), a story path or a story name (all of that Story's tests), a test file name without `.json`, or a repository directory. Resolve relative paths from invocation cwd, including `.`; directories select bounded descendants by path components, never similarly prefixed sibling directories or outside-repository paths. A directory containing Story files selects their tests. Union multiple selections without duplicates. No word selects every test. A word that names a Story with no test stops with exit 2 and that Story's `has no test` line, never `Unknown story`. A word that names no Story and no test file is a command error that lists every Story with its test path, or `no test` and the expected path.
+- A test is found by its name and folder, never by its content: the [test name rule](test-selection.prompt.md#test-name-rule). Discovery opens no `*.json` file to decide what is a test, so no size and no byte position can hide a test. After matching and workspace eligibility, read each matched test in full, at any size. A matched test that is not valid JSON fails rule P1 with its path. pdd has no size limit for one test file; the only size limit is the [upload limit](#source-capture) when the test is sent.
+- Story path and acceptance-heading classification (`isStoryPath`, `hasAcceptance`) belong to [test selection](test-selection.prompt.md#test-name-rule). A Story's name is the file name without `.md`, and its title is its first `# ` line. Discovery follows the [bounded-read rules](#source-capture). A title fallback for a linked Story uses the checked final target and its byte size, with the same identity-bound read as other source. An oversized fallback retains the filename title. A test's title is the title of the Story that the [test name rule](test-selection.prompt.md#test-name-rule) matched, else that Story's name.
+- Empty-repository reasons (`NO_TESTS`, `whyNoTests`) and selector-word resolution (`selectTests`) belong to [test selection](test-selection.prompt.md). Export `discoveryVisibleFiles({ root, files = gitFiles(root), workspace, excludeFixtureProjects = false })` so name-level prompt discovery can read workspace-eligible Git-visible regular files outside nested fixture projects without test-selection ports.
 
 
 
@@ -67,51 +66,17 @@ references; they do not silently skip a selected fixture. Outside the excluded
 roots, preserve name conflicts, missing dependency errors, and behavior when no
 fixture project is present. Do not remove or modify fixture files.
 
-## Native Story discovery and selection (draft)
+## Native Story discovery (draft)
 
-For explicit `pdd lint` Story selection, retain ordinary name/path/directory
-resolution and expose a separate `nativeSelections` list beside Runtime tests.
-A current Story can declare `## Native validation` with a local Markdown link
-to its owning module prompt's `#native-validation-profile-PROFILE_ID` anchor.
-Resolve that link from the Story path under the same workspace/source capability.
-Read only the selected Story and its explicitly linked native owner/required
-closure. Return `{storyPath,promptPath,profileId}` and actual selected source
-references; the shared results reader interprets the declaration, review and
-evidence. A link or declaration establishes no native pass.
-
-Do not scan excluded prompts or all repository source to find a guessed mapping.
-Missing, ambiguous, unreadable or excluded owner references retain their concrete
-reason; required boundary failures keep existing refusal precedence. A native
-candidate lets explicit lint select that Story even without a Runtime scenario,
-so the client can explain native proof or missing native evidence. An undeclared
-Story keeps its existing missing-test result. Preserve ordinary Runtime discovery,
-conflicts, P1-P10, capture and exact test-selection behavior. For mixed selection,
-keep native descriptors and Runtime test rows distinct, with no duplicate Story
-selection or silent widening. Other commands keep their existing unsupported
-Runtime behavior; a native link adds no executable Runtime entry or capability.
-
-This passage owns only bounded source discovery and selector output. Native
-profile syntax/admission/judgment belongs to the shared result reader called by
-the client; preflight does not assess or import evidence. No new CLI option,
-network request, native command or authored configuration key is introduced.
+Discover `## Native validation` sections from already bounded Story reads in `findTests` and expose `nativeSelections` (`{storyPath, story, section}`) beside Runtime tests; selector matching and `#native-validation-profile-PROFILE_ID` link resolution belong to [`selectTests`](test-selection.prompt.md#selector-words-and-native-story-descriptors), which captures `{tests: [storyPath, promptPath]}` through its `captureSource` port. Native profile syntax, admission and judgment belong to the shared result reader called by the client; preflight does not assess or import evidence.
 
 <a id="test-name-rule"></a>
 <details>
-<summary>Required rules: test name rule</summary>
+<summary>Required rules: test discovery over the test name rule</summary>
 
-The tests of Story `S` (`user_stories/**/S.md`) are the Git-visible regular files `S.json` and `S.<variant>.json` in a folder named `test` or `tests`, at any depth: `tests/S.json`, `tests/runtime/S.json`, `runtime/tests/S.json` and `tests/S.empty-shop.json` all count. A *Story file* is a Git-visible `*.md` file in a `user_stories` folder that is not `PLAN.md` or `README.md`; a *test-folder JSON file* is a Git-visible `*.json` file with a folder named `test` or `tests` anywhere in its path, not only as the direct parent (`test/runtime/S.json` and `runtime/tests/S.json` both count). The rule uses paths only. A test-folder JSON file named `N.json` fits the Story name `N` and each Story name `S` where `N` is `S.<variant>`. It belongs to the one Story name it fits; it matches no Story when it fits none; it is a conflict when it fits two or more (`tests/a.b.json` with Stories `a` and `a.b`): pdd never picks one. A Story file with no acceptance heading still owns its tests (rule P4 then refuses them), but it is not a Story, so it never gets a `has no test` line. Each result is visible:
+Story/test name pairing (`isStoryPath`, `hasAcceptance`, `expectedTestPath`, `matchTests`, `orphanSummary`) is owned by [test selection](test-selection.prompt.md#test-name-rule) and injected into `findTests(input, ports)`, `captureSource(root, options, ports)`, and `createStrictSourceAccess(root, workspace, ports)` as `{isStoryPath, hasAcceptance, matchTests, orphanSummary}` (throwing a descriptive unbound-port `Error` when omitted).
 
-| Names found | Result | Line (a warning; never blocks other Stories) |
-|---|---|---|
-| A Story and its files, each file name used once | Each file is a test of the Story | none |
-| A Story with no file | The Story has no test | `Warning: <story> has no test: expected <dir>tests/S.json (or S.json in any test or tests folder).` `<dir>` is the path up to the Story's nearest `user_stories` folder, empty at the repository root. |
-| Files that belong to no Story | They match no Story | One line: for one file `Warning: <file> matches no Story (user_stories/**/N.md).`; for more, `Warning: K JSON files in test folders match no Story (the tests of user_stories/**/S.md are S.json and S.<variant>.json). pdd test --files lists them.` `pdd test --files` and every `--json` result list each file's line. |
-| One file name used by two or more files of a Story | A conflict | `Warning: <story> has N files named <name>.json: <file> and <file>. Keep one.` |
-| A file that fits two or more Story names, or two or more Story files with one name and their files | A conflict | `Warning: <file> matches N Stories: <story> and <story>. Rename one.` (with two or more files, name the files joined by `and`) |
-
-A conflict is one test entry: its `path` is the first of its files in sort order, it lists every file, and it fails rule P1 with the same sentence when it is selected, so pdd checks none of its files and never picks one. Lists are sorted; three or more items are joined with commas and a final `and`.
-
-`findTests` returns `{visible, tests, stories, warnings, untested, orphans}`. Each test has `path`, `files`, `story`, `storyPath`, `storyPaths` and `title` from the Story file that the rule matched (not from `story_path` inside the file), and its parsed `doc` or an `error` sentence that names the file: a conflict, invalid JSON (`<test> is not valid JSON: <reason>`), a file it cannot read (`<test> cannot be read: <code>.`), or a file over the upload limit, which is not read (`<test> is <size>. The upload limit is 10 MB, so pdd cannot send it.`). One test's error never stops discovery of the others. `untested` and `orphans` are the `matchTests` lists. The order of tests is the sort order of their paths; warnings list conflicts, then Stories with no test, then the files that match no Story. Module function `matchTests(storyPaths, files)` is the rule on names only: it takes Story file paths and Git-visible file paths and returns `{tests, untested, orphans}`, where each test is `{path, files, story, storyPath, storyPaths, problem}` (`problem` is the conflict sentence or null), `untested` lists `{story, storyPath, line}` and `orphans` lists `{path, line}`; `line` has no `Warning: ` prefix. Module function `expectedTestPath(storyPath)` returns the expected path of the `has no test` line. Module function `discoveryRefusal(test)` returns the refusal that discovery alone proves (P1 with the `error` sentence, or the P2 `story_path` mismatch), else null. The [agent project card](agent-project.prompt.md), source capture and Try saved cases use these functions; no other module repeats the rule.
+`findTests` returns `{visible, tests, stories, warnings, untested, orphans}`. Each test has `path`, `files`, `story`, `storyPath`, `storyPaths` and `title` from the Story file that `ports.matchTests` matched (not from `story_path` inside the file), and its parsed `doc` or an `error` sentence that names the file: a conflict, invalid JSON (`<test> is not valid JSON: <reason>`), a file it cannot read (`<test> cannot be read: <code>.`), or a file over the upload limit, which is not read (`<test> is <size>. The upload limit is 10 MB, so pdd cannot send it.`). One test's error never stops discovery of the others. `untested` and `orphans` come from `ports.matchTests` (with `untested` filtered to Stories accepted by `ports.hasAcceptance`); warnings list skipped fixture projects, Story warnings, conflicts, Stories with no test, and `ports.orphanSummary(orphans)` when orphans exist. Module function `discoveryRefusal(test)` returns the refusal that discovery alone proves (P1 with the `error` sentence, or the P2 `story_path` mismatch), else null.
 
 </details>
 
@@ -475,6 +440,7 @@ fallback Story prevents interface projection in the combined upload.
 - [References](contract-refs.prompt.md): required generation and verification
   context for synchronous expansion and provenance; native adapters preserve
   this module's privacy, snapshot and capture rules.
+- [Test selection](test-selection.prompt.md#test-name-rule): caller context for the injected `{isStoryPath, hasAcceptance, matchTests, orphanSummary}` ports used by `findTests`, `captureSource`, and `createStrictSourceAccess`.
 
 Read the full [Prompting guide](../../docs/prompting-guide.md) before you change this prompt. Follow the [alpha boundary](public-boundary.prompt.md).
 

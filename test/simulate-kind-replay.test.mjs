@@ -2,10 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { findTests, gitFiles, proseSha256 } from '../src/runtime/runtime-preflight.mjs';
+import { findTests, gitFiles, proseSha256 } from '../src/runtime-seam.mjs';
 import { runTry } from '../src/runtime-seam.mjs';
 import { openCli } from '../src/runtime-seam.mjs';
-import { openServe } from '../src/runtime/try-http.mjs';
+import { openServe } from '../src/runtime-seam.mjs';
 import { harbor, fakeRuntime, portsFor } from './runtime-fake.mjs';
 
 // Independent replays of whole-project safety and authored HTTP request examples.

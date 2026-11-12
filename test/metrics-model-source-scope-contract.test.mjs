@@ -2,7 +2,7 @@ import './helpers/test-home.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { checkInput, interfaceBlocks, interfaceSchemaProblems, proseSha256 } from '../src/runtime/runtime-preflight.mjs';
+import { checkInput, interfaceBlocks, interfaceSchemaProblems, proseSha256 } from '../src/runtime-seam.mjs';
 import { calculateMetrics } from '../src/metrics-model.mjs';
 
 const prompt = readFileSync(new URL('../prompts/cli/metrics-model.prompt.md', import.meta.url), 'utf8');

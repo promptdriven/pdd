@@ -1122,7 +1122,10 @@ pointer, but deduplication must retain the original location identity.
 
 - [Workspace authority](runtime-workspace.prompt.md): required generation/runtime/verification context for policy; native migration is invoked as a caller without loading it back into this module's required dependency closure.
 
-- [Runtime outcome](runtime-outcome.prompt.md): required for generation and tests; selected outcomes and exit policy.
+- [Runtime outcome](runtime-outcome.prompt.md): required for generation and tests; selected outcomes and overall state.
+- [PDD exit codes](runtime-exit.prompt.md): caller context for the injected `exitFor` and `exitCodeFor` ports mapping `outcomeOverall` states to CLI exit codes.
+- [Prompt tests PR words](prompt-tests-words.prompt.md): caller context for the injected `promptTestsLabel` port supplied to `runtime-output`.
+- [Test selection](test-selection.prompt.md): caller context for the injected `{isStoryPath, hasAcceptance, expectedTestPath, matchTests, orphanSummary, selectTests, whyNoTests, NO_TESTS}` ports used by discovery, source capture, selector resolution, and empty-repository guidance.
 
 - [Preflight](runtime-preflight.prompt.md#source-capture): required generation and
   verification context for source capture, advisory warnings and Story footprint

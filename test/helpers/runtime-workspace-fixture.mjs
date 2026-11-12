@@ -4,7 +4,7 @@ import {join,dirname,resolve} from 'node:path';
 import {tmpdir} from 'node:os';
 import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {proseSha256} from '../../src/runtime/runtime-preflight.mjs';
+import {proseSha256} from '../../src/runtime-seam.mjs';
 export const implementation=resolve(dirname(fileURLToPath(import.meta.url)),'../../src/runtime-seam.mjs');
 export const read=(root,path)=>fs.readFileSync(join(root,path),'utf8');
 export const write=(root,path,text)=>{fs.mkdirSync(dirname(join(root,path)),{recursive:true});fs.writeFileSync(join(root,path),text);};

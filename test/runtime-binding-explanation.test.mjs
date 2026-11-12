@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {runPdd} from '../src/pdd-cli.mjs';
 import {runCheck} from '../src/runtime-seam.mjs';
-import {captureSource,interfaceBlocks,proseSha256} from '../src/runtime/runtime-preflight.mjs';
+import {captureSource,interfaceBlocks,proseSha256} from '../src/runtime-seam.mjs';
 import {blockerFor,idleParkingBlocker,reconcileParking} from '../src/autopilot-parking.mjs';
 import {harbor,portsFor,fakeRuntime,PLACE} from './runtime-fake.mjs';
 import {mutate} from './runtime-compatibility/replay.mjs';

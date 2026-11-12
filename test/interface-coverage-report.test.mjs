@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {Readable} from 'node:stream';
 import {runApprove} from '../src/prompt-approve.mjs';
-import {interfaceBlocks} from '../src/runtime/runtime-preflight.mjs';
+import {interfaceBlocks} from '../src/runtime-seam.mjs';
 import {harbor,PLACE,sink,root} from './runtime-fake.mjs';
 
 const raw=readFileSync(new URL('./fixtures/interface-drafting/percent.prompt.md',import.meta.url),'utf8');

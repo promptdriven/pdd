@@ -12,7 +12,7 @@ import { temp, fakeRuntime, portsFor } from './runtime-fake.mjs';
 // The optional test-only module selects the old capture boundary for the
 // mutation control. It does not change production module loading or requests.
 const preflight = await import(process.env.PDD803_PREFLIGHT_MODULE
-  ? pathToFileURL(process.env.PDD803_PREFLIGHT_MODULE).href : '../src/runtime/runtime-preflight.mjs');
+  ? pathToFileURL(process.env.PDD803_PREFLIGHT_MODULE).href : '../src/runtime-seam.mjs');
 const { captureSource, interfaceBlocks, proseSha256, readPrompt, gitFiles } = preflight;
 const SUBJECT = 'prompts/subject.prompt.md', STORY = 'user_stories/echo.md', SCENARIO = 'tests/echo.json';
 const criterion = 'The selected operation returns the supplied text.';

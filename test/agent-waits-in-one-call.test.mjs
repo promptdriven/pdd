@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { runCheck } from '../src/runtime-seam.mjs';
-import { captureSource } from '../src/runtime/runtime-preflight.mjs';
+import { captureSource } from '../src/runtime-seam.mjs';
 import { PUBLIC_COMMAND_MANIFEST } from '../src/command-catalog.mjs';
 import { harbor, portsFor, PLACE, ordinaryCapabilities } from './runtime-fake.mjs';
 

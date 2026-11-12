@@ -4,7 +4,7 @@ import {readFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {nativeFixture,put} from './helpers/native-cli-fixture.mjs';
 import {prepareNativeEvidence} from '../src/workflow-results.mjs';
-import {captureSource} from '../src/runtime/runtime-preflight.mjs';
+import {captureSource} from '../src/runtime-seam.mjs';
 
 // Synthetic external runner originals and the supported synthetic workflow actor
 // exercise real CLI intake, default readers, source/approval and saved custody.

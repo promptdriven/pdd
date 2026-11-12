@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {harbor,storyTest,fakeRuntime,portsFor} from './runtime-fake.mjs';
 import {runCheck} from '../src/runtime-seam.mjs';
-import {proseSha256} from '../src/runtime/runtime-preflight.mjs';
+import {proseSha256} from '../src/runtime-seam.mjs';
 
 const nativePath='prompts/kernel.prompt.md',nativeTest='tests/kernel.json';
 const reason='cross-process filesystem locks';

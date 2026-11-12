@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { captureSource, sourceFilePort } from '../src/runtime/runtime-preflight.mjs';
+import { captureSource, sourceFilePort } from '../src/runtime-seam.mjs';
 import { harbor } from './runtime-fake.mjs';
 
 // Story: user_stories/read-in-repo-links.md, Rules to check / AC1, AC3.

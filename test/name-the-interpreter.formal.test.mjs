@@ -6,8 +6,8 @@ import { PUBLIC_COMMAND_ROUTES } from '../src/command-catalog.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { DEFAULT_RUNTIME_URL, runtimeOrigin } from '../src/runtime/runtime-client.mjs';
 import { runCheck } from '../src/runtime-seam.mjs';
-import { summaryLine } from '../src/runtime/runtime-output.mjs';
-import { TEST_SCHEMA, interfaceBlocks } from '../src/runtime/runtime-preflight.mjs';
+import { summaryLine } from '../src/runtime-seam.mjs';
+import { TEST_SCHEMA, interfaceBlocks } from '../src/runtime-seam.mjs';
 import { runtimeLines } from '../src/workflow-runner.mjs';
 import { harbor, portsFor, root, sink } from './runtime-fake.mjs';
 

@@ -2,7 +2,7 @@ import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { renderJson } from '../src/runtime/runtime-output.mjs';
+import { renderJson } from '../src/runtime-seam.mjs';
 
 // Replay the approved prompt-tests-line Story vectors on the real renderJson export (RUNBOOK §17).
 const scenario = JSON.parse(readFileSync(new URL('./runtime/prompt-tests-line.json', import.meta.url), 'utf8'));

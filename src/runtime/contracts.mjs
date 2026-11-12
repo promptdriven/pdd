@@ -22,7 +22,7 @@ export function runContracts({words = [],options = {},cwd = process.cwd()} = {},
   if (git.status!==0 || !git.stdout.trim()) { line(stderr,'pdd contracts works in a Git repository.'); return 2; }
   const root=git.stdout.trim();
   try {
-    const access=createStrictSourceAccess(root);
+    const access=createStrictSourceAccess(root,undefined,ports);
     const workspace=loadRuntimeWorkspace({root}), visible=new Set(gitFiles(root).filter(path=>allowsRuntimePath(workspace,path))), files=access.sourceFilePort(visible);
     const warnings = [];
     const readDiscovered = path => {
@@ -49,6 +49,7 @@ export function runContracts({words = [],options = {},cwd = process.cwd()} = {},
         selectedReferences.push(...captured.references);
         for (const story of captured.stories) stories.set(story.story_path,story);
       } catch (error) {
+        if (error?.unboundPort) throw error;
         const cause=finite(error); warnings.push(`${test.path}: footprint unavailable: ${cause}`);
         if (typeof test.doc?.story_path==='string') stories.set(test.doc.story_path,{story_path:test.doc.story_path,tests:[test.path],selectedUnavailable:true,unavailable:[{path:test.path,cause}]});
       }
@@ -133,5 +134,5 @@ export function runContracts({words = [],options = {},cwd = process.cwd()} = {},
     }
     if (!catalog.records.length) line(stdout,'No shared contract records found.');
     return 0;
-  } catch (error) { line(stderr,finite(error)); return error.exitCode ?? (error.code?.startsWith('contract-') || error.code==='seed-invalid' ? 4 : 5); }
+  } catch (error) { if (error?.unboundPort) throw error; line(stderr,finite(error)); return error.exitCode ?? (error.code?.startsWith('contract-') || error.code==='seed-invalid' ? 4 : 5); }
 }

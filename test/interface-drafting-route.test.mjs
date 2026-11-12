@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {runPdd} from '../src/pdd-cli.mjs';
 import {runCheck} from '../src/runtime-seam.mjs';
-import {interfaceBlocks, proseSha256, interfaceSchemaProblems, checkInput} from '../src/runtime/runtime-preflight.mjs';
+import {interfaceBlocks, proseSha256, interfaceSchemaProblems, checkInput} from '../src/runtime-seam.mjs';
 import {harbor, PLACE, sink, fakeRuntime, portsFor} from './runtime-fake.mjs';
 
 const fixture = name => readFileSync(new URL(`./fixtures/interface-drafting/${name}.prompt.md`,import.meta.url),'utf8');

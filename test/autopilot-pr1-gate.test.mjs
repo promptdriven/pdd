@@ -12,8 +12,8 @@ import {healthyMachine} from './helpers/healthy-machine.mjs';
 import {isolatedCheckCapacity} from './helpers/check-machine.mjs';
 import {approveRun, runStatus, stepDone, cancelRun, askPerson, advanceAutomaticPr1} from '../src/workflow-runner.mjs';
 import {tickAutopilot} from '../src/autopilot-launcher.mjs';
-import {captureSource} from '../src/runtime/runtime-preflight.mjs';
-import {renderJson} from '../src/runtime/runtime-output.mjs';
+import {captureSource} from '../src/runtime-seam.mjs';
+import {renderJson} from '../src/runtime-seam.mjs';
 import {readPromptApprovals} from '../src/approval-policy.mjs';
 
 const STORY = 'user_stories/place-order.md', TEST = 'tests/place-order.json', PROMPT = 'prompts/place_order.prompt.md';

@@ -10,7 +10,7 @@ import { spawnSync } from 'node:child_process';
 // All files are synthetic; the files preview makes no network or model call.
 const source = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const { captureSource, scenarioShapeRefusal, proseSha256 } =
-  await import(pathToFileURL(join(source, 'src/runtime/runtime-preflight.mjs')));
+  await import(pathToFileURL(join(source, 'src/runtime-seam.mjs')));
 const cli = join(source, 'bin/pdd.mjs');
 const empty = { type: 'object', properties: {}, required: [], additionalProperties: false };
 const object = properties => ({ type: 'object', properties, required: Object.keys(properties), additionalProperties: false });

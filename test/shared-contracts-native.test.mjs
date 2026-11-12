@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { runContracts } from '../src/runtime-seam.mjs';
 import { runCheck, runTry, runDoorCall, readContractHistory, readTryOwner } from '../src/runtime-seam.mjs';
-import { captureSource, findTests, fillHashes, gitFiles, interfaceBlocks, preflight, proseSha256, readPrompt, sourceFilePort } from '../src/runtime/runtime-preflight.mjs';
+import { captureSource, findTests, fillHashes, gitFiles, interfaceBlocks, preflight, proseSha256, readPrompt, sourceFilePort } from '../src/runtime-seam.mjs';
 import { harbor, fakeRuntime, portsFor, PLACE, sink } from './runtime-fake.mjs';
 
 const ORDER='tests/place-order.json', STORY='user_stories/place-order.md', OTHER='tests/unknown-item.json', OTHER_STORY='user_stories/unknown-item.md';

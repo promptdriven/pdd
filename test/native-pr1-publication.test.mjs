@@ -4,7 +4,7 @@ import {readFileSync,rmSync} from 'node:fs';
 import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {nativeFixture,put,git} from './helpers/native-cli-fixture.mjs';
-import {captureSource} from '../src/runtime/runtime-preflight.mjs';
+import {captureSource} from '../src/runtime-seam.mjs';
 import {prepareNativeEvidence} from '../src/workflow-results.mjs';
 const {stepDone,approveRun,readEvidenceEligibility}=await import(process.env.PDD_NATIVE_RUNNER || new URL('../src/workflow-runner.mjs',import.meta.url).href);
 

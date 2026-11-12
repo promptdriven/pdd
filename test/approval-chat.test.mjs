@@ -9,7 +9,7 @@ import { startRun, stepDone, approveRun } from '../src/workflow-runner.mjs';
 import { writeRun } from '../src/workflow-runs.mjs';
 import { Readable } from 'node:stream';
 import { runApprove } from '../src/prompt-approve.mjs';
-import { proseSha256 } from '../src/runtime/runtime-preflight.mjs';
+import { proseSha256 } from '../src/runtime-seam.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
 import { preparePrEvidence } from '../src/workflow-pr-evidence.mjs';
 import { PLACE, harbor, sink } from './runtime-fake.mjs';

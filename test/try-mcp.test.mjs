@@ -137,7 +137,7 @@ test('owner access refuses a Try recorded for another GitHub login before any ow
 test('isolated save retains actual starting world and leaves original scenario bytes intact', async t => {
   const { harbor } = await import('./runtime-fake.mjs');
   const { saveDoorCase,acquireCaseWriteOwnership } = await import('../src/runtime-seam.mjs');
-  const { findTests, selectTests } = await import('../src/runtime/runtime-preflight.mjs');
+  const { findTests, selectTests } = await import('../src/runtime-seam.mjs');
   const { readFileSync, readdirSync } = await import('node:fs');
   const { join } = await import('node:path');
   const setup = harbor(t), path = 'tests/place-order.json', original = readFileSync(join(setup.repo, path), 'utf8'), doc = JSON.parse(original);
