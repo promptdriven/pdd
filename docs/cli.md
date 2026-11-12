@@ -811,8 +811,18 @@ The agent runs these from the run's worktree. pdd finds the run from that folder
 | `pdd`, `pdd --help`, `pdd -h`, `pdd help` | Show the commands and the full paths of the installed Prompting guide and RUNBOOK |
 | `pdd help prompting` | Show how to write a prompt, a Story and its test, which commands check them, and the full paths of the Prompting guide and RUNBOOK |
 | `pdd --version` | Print the version, `0.1.28`. When the PDD skills that your agent finds are older, also print the update command on stderr |
+| `pdd -V` | Same version and local diagnostics as `pdd --version` |
+| `pdd -VV` | Print the local CLI version, the interpreter's full build identifier and its supported interface, test and app-map format IDs. Use existing gh sign-in without prompting; unavailable metadata prints `PDD interpreter: unknown` and exits 0 |
 | `pdd completion bash\|zsh` | Print a shell completion script. It does not change your shell files |
 | `pdd jobs` | List active slots and waiting interpreter jobs on this machine, including kind, PID, age and request IDs. Local and read-only; no repository, authentication or interpreter call |
+
+`pdd -VV` skips PATH and skill diagnostics. It reads the existing token with a
+two-second limit, then sends at most one `GET /v1/version` to the configured
+interpreter origin. The request and response body have one ten-second limit.
+It follows no redirects, sends no source, starts no jobs and makes no AI calls.
+Format IDs keep the interpreter's order; an empty list shows `none`, and a
+missing or unsafe list shows `unknown`. Each version flag must be one exact
+token; repeated flags, extra operands and `--verbose` are unsupported.
 
 ## Run from a source checkout
 

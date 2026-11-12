@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-results.prompt.md (sha256: c2adffeb6681997d61033f6e01258d164964bbbde74f03a2ee4b73618f1bfb64).
+// Generated from prompts/cli/workflow-results.prompt.md (sha256: bec5947c12d8b3d11c153287c0df5550f1d74936ca92185500791c18eca91b60).
 import {checkPlanResults,checkPlanResultLines} from './runtime-check-plan.mjs';
 import { outcomeText, resultOutcome } from './runtime-outcome.mjs';
 import { PROMPT_TESTS_WORDS } from './runtime-output.mjs';
@@ -76,6 +76,14 @@ function runtimeEvidence(batch, summary) {
   return {...(batch.check_plan ? {checkPlan:batch.check_plan,checkScope:checkPlanResults(batch.check_plan,batch.rows)} : {}), ...(coverage ? {coverage} : {}), ...(nativeOnly.length ? {nativeOnly} : {})};
 }
 
+// Preserve saved details on their own row; their consumer decides what they mean.
+function savedResultState(row) {
+  return {test: row.test, ...resultOutcome(row),
+    ...(Array.isArray(row.refusals) ? {refusals: row.refusals.filter(object)} : {}),
+    ...(object(row.compatibility) ? {compatibility: row.compatibility} : {}),
+    ...(object(row.binding_plan) ? {binding_plan: row.binding_plan} : {})};
+}
+
 // pdd's own saved results for one run: the newest `pdd test` check batch, the newest `pdd lint` batch (both from the
 // runtime state folder, for this worktree, made at or after the run started) and the run's `pdd workflow prove` record.
 // It reads files only. It never runs a test, calls the interpreter or changes a file.
@@ -122,7 +130,7 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
       catch { freshness.push('unknown'); }
     }
     source = freshness.includes('changed') ? 'changed' : freshness.includes('unknown') ? 'unknown' : 'current';
-    const states = batch.rows.map(row => ({ test: row.test, ...resultOutcome(row) }));
+    const states = batch.rows.map(savedResultState);
     const stateEvidence = batch.rows.map(row => text(`${row.test}: ${outcomeText(row)}`)).join('; ');
     const incomplete = states.some(row => row.state !== 'passed');
     const recorded = text(summary?.summary_line);
@@ -147,7 +155,7 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
   if (lint) {
     const rows = lint.batch.rows.filter(row => row && typeof row === 'object');
     const passing = rows.filter(row => row.state === 'passed').length;
-    results.push({ kind: 'pdd lint', batch: lint.name, at: lint.at, ...runtimeEvidence(lint.batch,readJson(join(directory,lint.name,'summary.json'))), ...(lint.association?{stage:lint.association.stage,sourceAnchor:lint.association.sourceAnchor}:{}),requests: requestsOf([lint.batch.lint]), states: rows.map(row => ({ test: row.test, ...resultOutcome(row) })), summary: [`Lint: ${passing} of ${rows.length} tests pass. 0 AI calls.`, ...rows.map(row => text(`${row.test}: ${outcomeText(row)}`))].join(' ') });
+    results.push({ kind: 'pdd lint', batch: lint.name, at: lint.at, ...runtimeEvidence(lint.batch,readJson(join(directory,lint.name,'summary.json'))), ...(lint.association?{stage:lint.association.stage,sourceAnchor:lint.association.sourceAnchor}:{}),requests: requestsOf([lint.batch.lint]), states: rows.map(savedResultState), summary: [`Lint: ${passing} of ${rows.length} tests pass. 0 AI calls.`, ...rows.map(row => text(`${row.test}: ${outcomeText(row)}`))].join(' ') });
   }
   if (runDir) {
     const proof = proveResult(join(runDir, 'old-code-proof.json'), { runId, since, root, baseBranch }, git);
