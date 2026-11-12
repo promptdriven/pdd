@@ -1,9 +1,10 @@
 import {loadRuntimeWorkspace} from './runtime-workspace.mjs';
 import {captureSource} from './runtime-preflight.mjs';
-// Generated from prompts/cli/agent-chat.prompt.md (sha256: cbd7bb7522a9629fb585ce49904d80ae5750155955f36fddc066351460d1e96b).
+// Generated from prompts/cli/agent-chat.prompt.md (sha256: a940af8aeb38d5f91e1e90ef1f4d09d8880cc6bde0bcdb1b1477f6e9910bd8f0).
 import {createTryGuide} from './agent-guide.mjs';
 import {cleanText} from './runtime-output.mjs';
 const object=x=>x!==null&&typeof x==='object'&&!Array.isArray(x);
+const unboundPortError=message=>Object.assign(new Error(message),{unboundPort:true});
 const FEATURES=['apply','progress','run_events','expect','save','run'];
 const ready=a=>['ready','available'].includes(a?.state);
 const write=(context,text)=>context.ports.stderr.write(`${cleanText(text,context.secrets)}\n`);
@@ -24,8 +25,12 @@ export async function createAgentBridge(context,test,tryId,options={},link,seamP
  const guideBase=mergeDefined(seamPorts.guidePorts,context.ports?.guidePorts);
  const ports={...mergeDefined(seamPorts,context.ports),guidePorts:mergeDefined({redaction:context.ports?.redaction??seamPorts.redaction,redactSecrets:context.ports?.redactSecrets??seamPorts.redactSecrets,evidenceEligibility:context.ports?.evidenceEligibility??context.ports?.readEvidenceEligibility??seamPorts.evidenceEligibility??seamPorts.readEvidenceEligibility},guideBase)};
  const loadDefinitions=context.ports?.loadAgentDefinitions??context.ports?.agents?.loadDefinitions??seamPorts.loadAgentDefinitions??seamPorts.agents?.loadDefinitions;
- const definitions=context.agentDefinitions??(loadDefinitions?loadDefinitions({cwd:context.root,env:ports.env}):[]);
+ if(!context.agentDefinitions&&typeof loadDefinitions!=='function')throw unboundPortError('Agent configuration port (loadAgentDefinitions) is not bound.');
+ const definitions=context.agentDefinitions??loadDefinitions({cwd:context.root,env:ports.env});
  if(!definitions.length)throw Error('No agents are configured. Add an agent or enable defaults in agents.json.');
+ const discover=context.ports?.discoverAgents??context.ports?.agents?.list??seamPorts.discoverAgents??seamPorts.agents?.list;
+ const ask=context.ports?.askAgent??context.ports?.agents?.ask??seamPorts.askAgent??seamPorts.agents?.ask;
+ if(typeof discover!=='function'||typeof ask!=='function')throw unboundPortError('Agent adapter ports (discoverAgents, askAgent) are not bound.');
  const known=id=>definitions.some(d=>d.id===id),byChoice=value=>definitions.find(d=>d.name===value)??definitions.find(d=>['codex','claude','gemini'].includes(d.id)&&d.id===value);
  const explicit=options['--agent']!==undefined?byChoice(options['--agent']):null;
  if(options['--agent']!==undefined&&!explicit)throw Error('Unknown agent name. Choose a name from agents.json or an enabled default.');
@@ -36,8 +41,6 @@ export async function createAgentBridge(context,test,tryId,options={},link,seamP
  if(!good(modelReply)||!Array.isArray(modelReply.json.entries))throw Error(`Could not read the owner’s Try model for agent chat (${why(modelReply)}). Run pdd simulate again.`);
  const model=modelReply.json,entries=model.entries.filter(e=>typeof e.entry_path==='string'&&typeof e.operation==='string'&&object(e.input_schema))
   .map(e=>({entry:`${e.entry_path}#${e.operation}`,prompt_path:e.entry_path,operation:e.operation,input_schema:e.input_schema,...Object.fromEntries(['label','name','cli','http'].filter(k=>Object.hasOwn(e,k)).map(k=>[k,e[k]]))}));
- const discover=context.ports?.discoverAgents??context.ports?.agents?.list??seamPorts.discoverAgents??seamPorts.agents?.list??(async()=>[]);
- const ask=context.ports?.askAgent??context.ports?.agents?.ask??seamPorts.askAgent??seamPorts.agents?.ask??(async()=>({say:'Agent adapter port is unavailable.',fill:null,error:{state:'error',message:'Agent adapter port is unavailable.'}}));
  const discovered=await discover({cwd:root,env:ports.env,definitions});
  let agents=definitions.map(d=>{const found=discovered.find(a=>a.id===d.id);return{id:d.id,name:d.name,state:found?.state??'error',...(typeof found?.detail==='string'?{detail:found.detail}:{})};});
  let choice=(explicit??byChoice(store.repo(root).agent_choice))?.id;
@@ -53,7 +56,7 @@ export async function createAgentBridge(context,test,tryId,options={},link,seamP
  const guide=createTryGuide({root,env:ports.env,model,test,features,secrets,ports:ports.guidePorts});
  const onSaved=record=>guide.saved(record);context.onAgentCaseSaved=onSaved;
  const ownerUrl=new URL(link);ownerUrl.hash=`agent=${connected.json.browser_key}`;
- let closed=false,task=null,tickTask=null,failed=false;const seen=new Set(),controller=new AbortController();
+ let closed=false,task=null,tickTask=null,failed=false,unboundError=null;const seen=new Set(),controller=new AbortController();
  const stop=()=>controller.abort();context.signal?.addEventListener('abort',stop,{once:true});
  if(context.signal?.aborted)stop();
  async function close(){if(closed)return;closed=true;stop();guide.close();if(context.onAgentCaseSaved===onSaved)delete context.onAgentCaseSaved;context.onAgentChatClose?.();context.signal?.removeEventListener('abort',stop);
@@ -89,9 +92,10 @@ export async function createAgentBridge(context,test,tryId,options={},link,seamP
      seen.add(message.id);task=answer(message).catch(()=>{failed=true;write(context,'Your agent could not finish this message. It will not be run again.');stop();}).finally(()=>{task=null;});
     }
    }
-   if(onTick&&!tickTask)tickTask=Promise.resolve().then(onTick).then(keep=>{if(keep===false)stop();}).catch(()=>{failed=true;write(context,'Saved Try updates could not be read. Reconnect with pdd simulate.');stop();}).finally(()=>{tickTask=null;});
+   if(onTick&&!tickTask)tickTask=Promise.resolve().then(onTick).then(keep=>{if(keep===false)stop();}).catch(err=>{if(err?.unboundPort)unboundError=err;else{failed=true;write(context,'Saved Try updates could not be read. Reconnect with pdd simulate.');}stop();}).finally(()=>{tickTask=null;});
    if(ports.now()-before<1000)await ports.sleep(1000,controller.signal);
   }}finally{await close();await task;await tickTask;}
+  if(unboundError)throw unboundError;
   return failed?5:0;
  }
  return{url:ownerUrl.href,run,close};

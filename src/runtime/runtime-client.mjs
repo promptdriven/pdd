@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 183eac18e5141a45cc686aa4658fc2ac6a0ca3b8da90074e9ad5dc6b9a559465).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: e7ac4a17fbaac59bdb4722fbc444a18876b4af6f222b3c166fd0f58f3041da51).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
@@ -24,6 +24,7 @@ import { catalogRecords, compareCopies } from './contract-refs.mjs';
 import { OPEN_STATES, causeText, cleanText, exitCodeFor, progressTicker, projectAnswer, refusalView, renderJson, renderText, summaryLine, stepTimeLimit, tryUsage, validLink, coverageText } from './runtime-output.mjs';
 
 const localInterfaceProblem = problem => ['interface-missing','interface-kind-invalid','native-reason-missing','interface-draft-incomplete'].includes(problem.code);
+const unboundPortError = message => Object.assign(new Error(message), { unboundPort: true });
 // The preflight owner's local format advice (#3206): an explicit full kind in a draft and unsupported schema
 // keywords are warnings in lint and the files preview, never refusals; the engine is the one place that refuses.
 // It reads the selected entry prompts and the prompts they call.
@@ -2097,7 +2098,8 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   context.sourceSelection = {tests:sentTests(rows),exclude_fixture_projects:words.length === 0};
   context.nativeSource = nativeSourceIdentity(context, rows);
   if (!capture) return printLintResult(context, rows, [], found.warnings);
-  const svgWarnings = (ports.lintSvgLayouts ?? (() => []))({ root, files: [...found.visible], promptPaths: capture.files.map(file => file.path).filter(path => path.endsWith('.prompt.md')) });
+  if (typeof ports.lintSvgLayouts !== 'function') throw unboundPortError('SVG layout port (lintSvgLayouts) is not bound.');
+  const svgWarnings = ports.lintSvgLayouts({ root, files: [...found.visible], promptPaths: capture.files.map(file => file.path).filter(path => path.endsWith('.prompt.md')) });
   const drift=[];
   try {
     const files=sourceFilePort(root,found.visible), sources=[];
@@ -2728,10 +2730,10 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
       if (selection.nativeSelections?.length) {
         if(selection.untested.length)throw new Stop(2,selection.untested.join('\n'));
         if(selection.unknown.length)throw new Stop(2,[`Unknown story ${selection.unknown.map(word=>JSON.stringify(cleanText(word))).join(', ')}. Stories:`,...storyList(found)].join('\n'));
-        if (typeof ports.assessNativeEvidence !== 'function' || typeof ports.usableResult !== 'function' || (!context.json && typeof ports.resultLines !== 'function')) {
-          throw new Error('Native Story assessment ports (assessNativeEvidence, usableResult, resultLines) are not bound.');
+        if (typeof ports.allRuns !== 'function' || typeof ports.assessNativeEvidence !== 'function' || typeof ports.usableResult !== 'function' || (!context.json && typeof ports.resultLines !== 'function')) {
+          throw unboundPortError('Native Story assessment ports (allRuns, assessNativeEvidence, usableResult, resultLines) are not bound.');
         }
-        const runs = (ports.allRuns ?? (() => []))({cancelled:true},{env:ports.env}).filter(run => {
+        const runs = ports.allRuns({cancelled:true},{env:ports.env}).filter(run => {
           try { return realpathSync(run.root) === realpathSync(root); } catch { return false; }
         });
         const eligibilityPort = ports.evidenceEligibility ?? ports.readEvidenceEligibility ?? (() => ({state:'unavailable',reason:'workflow evidence eligibility port is not bound'}));
@@ -2786,6 +2788,7 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
     }
     if (options['--local'] !== undefined) {
       if (options['--local'] !== true || options['--lint'] !== true || Object.keys(options).some(name => !['--lint', '--local', '--json'].includes(name))) throw new Stop(2, '--local requires --lint and accepts only Story words and --json.');
+      if (typeof ports.lintSvgLayouts !== 'function') throw unboundPortError('SVG layout port (lintSvgLayouts) is not bound.');
       try {
         const root = repoRoot(cwd), workspace=loadRuntimeWorkspace({root}), files = gitFiles(root).filter(path=>allowsRuntimePath(workspace,path));
         let promptPaths;
@@ -2796,7 +2799,7 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
         // Interface findings refuse only a repository-wide local lint; a selected one gives advice only.
         const problems = words.length ? [] : interfaceFindings({root,paths:promptPaths}).filter(localInterfaceProblem);
         const advice = formatAdvice(root, new Set(gitFiles(root)), promptPaths ?? files.filter(path => path.endsWith('.prompt.md')), workspace);
-        const warnings = [...advice, ...(ports.lintSvgLayouts ?? (() => []))({ root, files, promptPaths })], summary = `partial: checked SVG layout only; prompts not checked (local-only). ${warnings.length} warnings. 0 AI calls. No checks were sent.`;
+        const warnings = [...advice, ...ports.lintSvgLayouts({ root, files, promptPaths })], summary = `partial: checked SVG layout only; prompts not checked (local-only). ${warnings.length} warnings. 0 AI calls. No checks were sent.`;
         line(ports.stdout, context.json ? JSON.stringify({ repo: root, exit_code: problems.length ? 4 : 0, state: problems.length ? 'refused' : 'partial', lint_state: 'partial', ...resultOutcome({state:'partial',note:{code:'local-only',message:'checked SVG layout only; prompts not checked'}}), rows: [], problems, warnings, summary_line: summary }) : [...problems.map(item => `${item.code}: ${item.message}`), ...warnings, summary].join('\n'));
         return problems.length ? 4 : 0;
       } catch (error) { throw new Stop(2, error.message); }
@@ -3765,7 +3768,8 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       && (ports.stdout.isTTY === true || options['--agent'] !== undefined);
     if (context.agentConnection) {
       const loadDefinitions = ports.loadAgentDefinitions ?? ports.agents?.loadDefinitions;
-      try { context.agentDefinitions = loadDefinitions ? loadDefinitions({cwd:root,env:ports.env}) : []; }
+      if (typeof loadDefinitions !== 'function') throw unboundPortError('Agent configuration port (loadAgentDefinitions) is not bound.');
+      try { context.agentDefinitions = loadDefinitions({cwd:root,env:ports.env}); }
       catch (error) { throw new Stop(2,error.message); }
       if (!context.agentDefinitions.length) throw new Stop(2,'No agents are configured. Add an agent or enable defaults in agents.json.');
       if (options['--agent'] !== undefined && !context.agentDefinitions.some(d => d.name === options['--agent'] || (['codex','claude','gemini'].includes(d.id) && d.id === options['--agent']))) throw new Stop(2,'Unknown agent name. Choose a name from agents.json or an enabled default.');
@@ -3926,6 +3930,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     }
     return printTryProblem(context, row);
   } catch (error) {
+    if (error?.unboundPort) throw error;
     if(options['--product'] && error.code && !error.exitCode){line(ports.stderr,`${error.code}: ${cleanText(error.message)}`);return 4;}
     if (options['--cli'] || options['--serve'] !== undefined || options['--save-last']) {
       line(ports.stderr, `pdd: ${cleanText(error.message || 'The Try could not start.', context.secrets ?? [])}`);
@@ -4047,7 +4052,7 @@ async function showTry(context, test, link, options, tryId, reused = false, sess
           ? ports.agentBridge(context, test, tryId, options, link)
           : (await import('./agent-chat.mjs')).createAgentBridge(context, test, tryId, options, link, seamPorts));
       }
-      catch (error) { throw new Stop(5, cleanText(error.message || 'Your agent could not connect.', context.secrets)); }
+      catch (error) { if (error?.unboundPort) throw error; throw new Stop(5, cleanText(error.message || 'Your agent could not connect.', context.secrets)); }
     }
     if (!options['--no-open'] && await ports.openUrl(bridge?.url ?? link)) line(ports.stdout, `Try ready for "${test.title}": ${link} (open in your browser). ${ends}`);
     else {
@@ -4475,8 +4480,11 @@ async function collectApprovals(context, tryId, story, answers) {
         handled[id] = { noticed: true }; store.write(path, handled);
         continue;
       }
-      const real = realpathSync(root), prompt = typeof request.prompt_path === 'string' && ports.promptPath ? ports.promptPath(real, real, request.prompt_path) : null;
-      const result = prompt && ports.askApproval ? await ports.askApproval({ root: real, path: prompt, stdout: ports.stdout, answers, expectedHash: request.prose_sha256 })
+      if (typeof ports.promptPath !== 'function' || typeof ports.askApproval !== 'function') {
+        throw unboundPortError('Try approval ports (promptPath, askApproval) are not bound.');
+      }
+      const real = realpathSync(root), prompt = typeof request.prompt_path === 'string' ? ports.promptPath(real, real, request.prompt_path) : null;
+      const result = prompt ? await ports.askApproval({ root: real, path: prompt, stdout: ports.stdout, answers, expectedHash: request.prose_sha256 })
         : { state: 'declined', message: `not approved: ${asked} is not a Git-visible *.prompt.md file in this repository.` };
       line(ports.stdout, result.message);
       handled[id] = { state: result.state, at: new Date(ports.now()).toISOString() };

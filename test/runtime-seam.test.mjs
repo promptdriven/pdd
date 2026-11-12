@@ -1749,6 +1749,127 @@ test('SEAM13 (WEAKER DEFAULTS): agent-project has no localEvidenceEligibility fa
     ),
     err => !(err instanceof TypeError) && /Native Story assessment ports.*not bound/.test(err.message),
   );
+  // Even if assessNativeEvidence/usableResult/resultLines are supplied, missing allRuns also throws loudly instead of silently using [].
+  await assert.rejects(
+    () => directClient.runCheck(
+      { cwd: nativeRepo, words: ['native-story'], options: { '--lint': true } },
+      {
+        env: { HOME: join(tmp, 'home'), PDD_STATE_DIR: join(tmp, 'state') },
+        stdout: { write() {} },
+        stderr: { write() {} },
+        assessNativeEvidence: async () => ({ criteria: [], sourceState: 'current', identity: { stage: 'pr2' }, limits: [] }),
+        usableResult: () => true,
+        resultLines: () => [],
+      },
+    ),
+    err => !(err instanceof TypeError) && /Native Story assessment ports.*allRuns.*not bound/.test(err.message),
+  );
+
+  // S1: Direct --lint and --lint --local without lintSvgLayouts throw an unbound-port Error instead of silently returning [].
+  await assert.rejects(
+    () => directClient.runCheck(
+      { cwd: setup.repo, words: ['place-order'], options: { '--lint': true } },
+      portsFor(env).ports,
+    ),
+    err => !(err instanceof TypeError) && /SVG layout port \(lintSvgLayouts\) is not bound/.test(err.message),
+  );
+  await assert.rejects(
+    () => directClient.runCheck(
+      { cwd: setup.repo, words: ['place-order'], options: { '--lint': true, '--local': true } },
+      portsFor(env).ports,
+    ),
+    err => !(err instanceof TypeError) && /SVG layout port \(lintSvgLayouts\) is not bound/.test(err.message),
+  );
+
+  // S1: Direct connected runTry without loadAgentDefinitions throws an unbound-port Error instead of claiming no agents are configured.
+  await assert.rejects(
+    () => directClient.runTry(
+      { cwd: setup.repo, words: ['place-order'], options: { '--agent': 'codex' } },
+      { ...portsFor(env).ports, agentBridge: undefined },
+    ),
+    err => !(err instanceof TypeError) && /Agent configuration port \(loadAgentDefinitions\) is not bound/.test(err.message),
+  );
+
+  // S1: Direct createAgentBridge without loadAgentDefinitions, discoverAgents or askAgent throws an unbound-port Error before network.
+  const directAgentChat = await import('../src/runtime/agent-chat.mjs');
+  let chatNetworkCalls = 0;
+  const makeChatContext = (extraPorts = {}, preDefinitions = undefined) => ({
+    root: setup.repo,
+    origin: 'https://runtime.example',
+    identity: { token: 'gho_test' },
+    secrets: ['gho_test'],
+    agentDefinitions: preDefinitions,
+    store: { repo: () => ({}), saveRepo() {} },
+    ports: { env, now: Date.now, randomUUID: () => '11111111-1111-4111-8111-111111111111', sleep: async () => {}, stdout: { write() {} }, stderr: { write() {} }, ...extraPorts },
+    runtime: { send: async () => { chatNetworkCalls += 1; return { status: 404, json: {} }; } },
+  });
+  await assert.rejects(
+    () => directAgentChat.createAgentBridge(makeChatContext(), { path: 'tests/place-order.json' }, '11111111-1111-4111-8111-111111111111', {}, 'https://runtime.example/s/abc/'),
+    err => !(err instanceof TypeError) && /Agent configuration port \(loadAgentDefinitions\) is not bound/.test(err.message),
+  );
+  await assert.rejects(
+    () => directAgentChat.createAgentBridge(
+      makeChatContext({}, [{ id: 'codex', name: 'Codex', kind: 'codex', command: 'codex', env: {} }]),
+      { path: 'tests/place-order.json' },
+      '11111111-1111-4111-8111-111111111111',
+      {},
+      'https://runtime.example/s/abc/',
+    ),
+    err => !(err instanceof TypeError) && /Agent adapter ports \(discoverAgents, askAgent\) are not bound/.test(err.message),
+  );
+  assert.equal(chatNetworkCalls, 0, 'unbound agent chat ports must fail before network access');
+
+  // S1 (critical): Direct interactive runTry receiving a pending Try-page approval without promptPath/askApproval
+  // throws an unbound-port Error and NEVER records or posts a fake 'declined' decision to the Runtime.
+  const { Readable } = await import('node:stream');
+  const { existsSync } = await import('node:fs');
+  const approvalTrySetup = harbor(t);
+  const approvalPosts = [];
+  const approvalFake = await fakeRuntime(t, (entry, f) => {
+    if (entry.command === 'lint') return { status: 200, json: f.lint(entry.request.requestId) };
+    if (entry.command === 'try') return { status: 200, json: f.tryJob(entry.request.requestId) };
+    if (entry.method === 'GET' && entry.url.endsWith('/tests')) return { status: 200, json: { tests: [] } };
+    if (entry.method === 'GET' && entry.url.endsWith('/approvals')) {
+      return {
+        status: 200,
+        json: {
+          approvals: [{
+            id: 'req-pending-1',
+            prompt_path: 'prompts/place_order.prompt.md',
+            prose_sha256: 'a'.repeat(64),
+            requested_at: '2026-11-11T00:00:00Z',
+            state: 'pending',
+          }],
+        },
+      };
+    }
+    if (entry.method === 'POST' && entry.url.includes('/approvals/')) {
+      approvalPosts.push(entry);
+      return { status: 200, json: { ok: true } };
+    }
+    return { status: 404, json: {} };
+  });
+  const approvalPorts = portsFor(
+    { HOME: approvalTrySetup.home, PDD_STATE_DIR: approvalTrySetup.state, PDD_RUNTIME_URL: approvalFake.origin },
+    {
+      interactive: true,
+      agentBridge: false,
+      openUrl: async () => true,
+      stdin: Readable.from(['y\n']),
+      lintSvgLayouts: () => [],
+    },
+  ).ports;
+  await assert.rejects(
+    () => directClient.runTry({ cwd: approvalTrySetup.repo, words: ['place-order'], options: { '--no-open': true } }, approvalPorts),
+    err => !(err instanceof TypeError) && /Try approval ports \(promptPath, askApproval\) are not bound/.test(err.message),
+  );
+  assert.equal(approvalPosts.length, 0, 'unbound Try approval ports must never POST a fake decline to the Runtime');
+  const triesDir = join(approvalTrySetup.state, 'tries');
+  if (existsSync(triesDir)) {
+    const { readdirSync } = await import('node:fs');
+    const approvalFiles = readdirSync(triesDir).filter(f => f.endsWith('.approvals.json'));
+    assert.deepEqual(approvalFiles, [], 'unbound Try approval ports must not write declined state to .approvals.json');
+  }
 });
 
 test('SEAM14 (Should-fix 1 & 5): single shared defaultLineReader in src/runtime and base load order for agent-adapters in Try', async t => {
