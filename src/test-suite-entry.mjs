@@ -1,4 +1,4 @@
-// Generated from prompts/cli/test-suite-queue.prompt.md.
+// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: 070b1ca93b099d5339ebfc7209d9c02b18f3fea7a97dc8ad1a5d52c182ac7e08).
 // Compatibility entrypoint owned by prompts/cli/test-suite-queue.prompt.md.
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
