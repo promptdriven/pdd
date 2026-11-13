@@ -208,7 +208,7 @@ test('RUNTIME-CLI1: check and try help, option ranges and option mixes', t => {
   assert.equal(help.status, 0); assert.match(help.stdout, /pdd test --fill-hash/); assert.match(help.stdout, /pdd test --read \[BATCH\|CALL_ID\]/);
   assert.equal(lint.status, 0); assert.match(lint.stdout, /pdd lint \[STORY\.\.\.\] \[--json\] +.*sends no checks/);
   assert.match(lint.stdout, /pdd lint --local \[STORY\.\.\.\] \[--json\]/);
-  assert.match(help.stdout, /pdd test --screen URL --drawing PATH \[--json\]/);
+  assert.match(help.stdout, /pdd test --screen URL --drawing PATH \[--look\] \[--json\]/);
   for (const text of [help.stdout, lint.stdout]) assert.doesNotMatch(text, /--request|--lint|pdd test --local/);
   assert.match(pdd('simulate', '--help').stdout, /pdd simulate --stop \[STORY\]/);
   assert.doesNotMatch(pdd('completion', 'bash').stdout, /--request/);

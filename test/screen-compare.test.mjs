@@ -10,7 +10,7 @@ import { sink, temp } from './runtime-fake.mjs';
 
 const fixture = join(import.meta.dirname, 'fixtures/svg-layout/game.ui.svg');
 const svg = readFileSync(fixture, 'utf8');
-const chrome = [process.env.PDD_CHROME_PATH, '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'].find(path => { try { if (path) { accessSync(path, constants.X_OK); return true; } } catch { /* unavailable */ } return false; });
+const chrome = [process.env.PDD_CHROME_PATH, '/usr/local/bin/chromium', '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'].find(path => { try { if (path) { accessSync(path, constants.X_OK); return true; } } catch { /* unavailable */ } return false; });
 const point = (kind, value, node, x, y, extra = {}) => ({ kind, value, node, box: { x, y, width: 10, height: 10 }, visible: true, ancestors: [], region: null, ...extra });
 function setup(t, source = svg) { const cwd = temp(t); writeFileSync(join(cwd, 'screen.ui.svg'), source); return { cwd, drawingPath: 'screen.ui.svg', url: 'http://example.test/' }; }
 
@@ -407,5 +407,163 @@ test('public CLI requires literal CDATA labels, distinct occurrences and visible
     const result = await check(label, label.replace('y="40"', 'y="200"'));
     assert.equal(result.code, 1, result.stderr || result.stdout);
     assert.equal(result.report.rows.find(row => row.part === '“CDATA REQUIRED”')?.status, 'region');
+  });
+});
+
+test('public CLI --look passes styled HTML within tolerance and rejects dropped stylesheets and collapsed boxes', { skip: !chrome, timeout: 180000 }, async t => {
+  const ledgerDrawing = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 260">
+    <rect width="420" height="260" fill="#0f172a"/>
+    <g id="balance-card">
+      <rect x="16" y="24" width="388" height="68" rx="10" fill="#1e293b" stroke="#38bdf8"/>
+      <text x="32" y="64" fill="#f8fafc">BALANCE</text>
+    </g>
+    <g id="entry-list">
+      <rect x="16" y="104" width="388" height="74" rx="10" fill="#1e293b" stroke="#334155"/>
+      <text x="32" y="146" fill="#f8fafc">Coffee</text>
+    </g>
+    <g id="add-expense">
+      <rect x="16" y="194" width="168" height="42" rx="8" fill="#0284c7"/>
+      <text x="42" y="220" fill="#ffffff">Add Expense</text>
+    </g>
+  </svg>`;
+  const input = setup(t, ledgerDrawing);
+  let page = '';
+  const server = createServer((_, res) => { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); res.end(page); });
+  await new Promise(done => server.listen(0, '127.0.0.1', done));
+  t.after(() => new Promise(done => { server.closeAllConnections(); server.close(done); }));
+  const url = `http://127.0.0.1:${server.address().port}/`;
+  const runScreen = async (extraArgs = []) => {
+    const stdout = sink(), stderr = sink();
+    const code = await runPdd(['test', '--screen', url, '--drawing', input.drawingPath, ...extraArgs], {
+      cwd: input.cwd,
+      env: { ...process.env, PDD_CHROME_PATH: chrome, PDD_RUNTIME_URL: 'invalid-offline', PDD_STATE_DIR: input.cwd },
+      stdout,
+      stderr,
+      gh: () => assert.fail('screen comparison must not authenticate'),
+      fetch: () => assert.fail('screen comparison must not call the runtime'),
+    });
+    return { code, stdout: stdout.text, stderr: stderr.text };
+  };
+
+  await t.test('styled dark screen passes --look within tolerance without pixel equality', async () => {
+    page = `<!doctype html><style>
+      body { margin: 0; font-family: sans-serif; }
+      main.ledger-shell { box-sizing: border-box; min-height: 260px; padding: 26px 20px; background: #111827; color: #f8fafc; }
+      .ledger-card { box-sizing: border-box; background: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 18px 16px; }
+      #balance-card { height: 66px; border-color: #38bdf8; margin-bottom: 14px; }
+      #entry-list { height: 72px; margin-bottom: 16px; }
+      .btn-primary { display: inline-flex; align-items: center; justify-content: center; width: 164px; height: 40px; background: #0284c7; color: #ffffff; border: 0; border-radius: 8px; font-weight: 600; }
+    </style><main class="ledger-shell">
+      <section id="balance-card" class="ledger-card"><span>BALANCE</span></section>
+      <section id="entry-list" class="ledger-card"><span>Coffee</span></section>
+      <button id="add-expense" class="btn-primary" type="button">Add Expense</button>
+    </main>`;
+    const jsonRun = await runScreen(['--look', '--json']);
+    assert.equal(jsonRun.code, 0, jsonRun.stderr || jsonRun.stdout);
+    const report = JSON.parse(jsonRun.stdout);
+    assert.equal(report.passed, true, JSON.stringify(report.rows));
+    assert.equal(report.look, true);
+    assert.equal(report.rows.find(row => row.part === 'canvas')?.status, 'pass');
+    assert.equal(report.rows.find(row => row.part === '#balance-card look')?.status, 'pass');
+    assert.equal(report.rows.find(row => row.part === '#entry-list look')?.status, 'pass');
+    assert.equal(report.rows.find(row => row.part === '#add-expense look')?.status, 'pass');
+
+    const textRun = await runScreen(['--look']);
+    assert.equal(textRun.code, 0, textRun.stderr || textRun.stdout);
+    assert.match(textRun.stdout, /Parts, text, regions, order and look within tolerance; pixel equivalence is not required\./);
+  });
+
+  await t.test('unstyled HTML passes without --look and fails --look on canvas, unpainted cards and collapsed gap', async () => {
+    page = `<!doctype html><main class="ledger-shell">
+      <section id="balance-card" class="ledger-card"><h2>BALANCE</h2><p>$240.00</p></section>
+      <section id="entry-list" class="ledger-card"><h2>RECENT</h2><p>Coffee</p></section>
+      <p><button id="add-expense" class="btn-primary" type="button">Add Expense</button></p>
+    </main>`;
+    const withoutLook = await runScreen(['--json']);
+    assert.equal(withoutLook.code, 0, withoutLook.stderr || withoutLook.stdout);
+    assert.equal(JSON.parse(withoutLook.stdout).passed, true);
+
+    const withLook = await runScreen(['--look', '--json']);
+    assert.equal(withLook.code, 1, withLook.stderr || withLook.stdout);
+    const report = JSON.parse(withLook.stdout);
+    assert.equal(report.passed, false);
+    assert.equal(report.rows.find(row => row.part === 'canvas')?.status, 'look');
+    assert.equal(report.rows.find(row => row.part === '#balance-card look')?.status, 'look');
+    assert.match(report.rows.find(row => row.part === '#balance-card look')?.actual || '', /unpainted box/);
+    assert.equal(report.rows.find(row => row.part === '#entry-list look')?.status, 'look');
+    assert.match(report.rows.find(row => row.part === '#entry-list look')?.actual || '', /unpainted box/);
+    assert.equal(report.rows.find(row => row.part === '#add-expense look')?.status, 'look');
+  });
+
+  await t.test('light-mode screen that drops its stylesheet still fails --look on unpainted cards and 0px gap', async subtest => {
+    subtest.after(() => writeFileSync(join(input.cwd, input.drawingPath), ledgerDrawing));
+    const lightDrawing = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 220">
+      <rect width="420" height="220" fill="#ffffff"/>
+      <g id="balance-card">
+        <rect x="16" y="24" width="388" height="68" rx="10" fill="#f8fafc" stroke="#cbd5e1"/>
+        <text x="32" y="64" fill="#0f172a">BALANCE</text>
+      </g>
+      <g id="entry-list">
+        <rect x="16" y="104" width="388" height="68" rx="10" fill="#f8fafc" stroke="#cbd5e1"/>
+        <text x="32" y="144" fill="#0f172a">Coffee</text>
+      </g>
+    </svg>`;
+    writeFileSync(join(input.cwd, input.drawingPath), lightDrawing);
+    page = `<!doctype html><main>
+      <section id="balance-card" style="height:64px">BALANCE</section>
+      <section id="entry-list" style="height:64px">Coffee</section>
+    </main>`;
+    const result = await runScreen(['--look', '--json']);
+    assert.equal(result.code, 1, result.stderr || result.stdout);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.rows.find(row => row.part === 'canvas')?.status, 'pass');
+    assert.equal(report.rows.find(row => row.part === '#balance-card look')?.status, 'look');
+    assert.equal(report.rows.find(row => row.part === '#entry-list look')?.status, 'look');
+    assert.match(report.rows.find(row => row.part === '#entry-list look')?.actual || '', /unpainted box; gap 0px/);
+  });
+
+  await t.test('collapsed 320x14 board against 320x320 reference fails --look', async subtest => {
+    subtest.after(() => writeFileSync(join(input.cwd, input.drawingPath), ledgerDrawing));
+    const boardDrawing = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">
+      <rect width="400" height="400" fill="#0f172a"/>
+      <g id="board">
+        <rect x="40" y="40" width="320" height="320" fill="#1e293b" stroke="#38bdf8"/>
+        <text x="170" y="205" fill="#f8fafc">2048</text>
+      </g>
+    </svg>`;
+    writeFileSync(join(input.cwd, input.drawingPath), boardDrawing);
+    page = `<!doctype html><style>body{margin:0;background:#0f172a}#board{position:absolute;left:40px;top:193px;width:320px;height:14px;background:#1e293b;border:1px solid #38bdf8;color:#f8fafc;font-size:11px;line-height:14px;text-align:center}</style><div id="board">2048</div>`;
+    const withoutLook = await runScreen(['--json']);
+    assert.equal(withoutLook.code, 0, withoutLook.stderr || withoutLook.stdout);
+
+    const withLook = await runScreen(['--look', '--json']);
+    assert.equal(withLook.code, 1, withLook.stderr || withLook.stdout);
+    const report = JSON.parse(withLook.stdout);
+    assert.equal(report.passed, false);
+    assert.equal(report.rows.find(row => row.part === '#board look')?.status, 'look');
+    assert.match(report.rows.find(row => row.part === '#board look')?.actual || '', /size /);
+  });
+
+  await t.test('decorative blurred sibling elements do not break screen compare with or without --look', async () => {
+    page = `<!doctype html><style>
+      body { margin: 0; background: #111827; font-family: sans-serif; }
+      .ambient-glow { position: fixed; right: 0; top: 0; width: 160px; height: 160px; background: #38bdf8; opacity: 0.2; filter: blur(32px); pointer-events: none; }
+      main.ledger-shell { box-sizing: border-box; min-height: 260px; padding: 26px 20px; color: #f8fafc; }
+      .ledger-card { box-sizing: border-box; background: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 18px 16px; }
+      #balance-card { height: 66px; border-color: #38bdf8; margin-bottom: 14px; }
+      #entry-list { height: 72px; margin-bottom: 16px; }
+      .btn-primary { display: inline-flex; align-items: center; justify-content: center; width: 164px; height: 40px; background: #0284c7; color: #ffffff; border: 0; border-radius: 8px; font-weight: 600; }
+    </style><div class="ambient-glow"></div><main class="ledger-shell">
+      <section id="balance-card" class="ledger-card"><span>BALANCE</span></section>
+      <section id="entry-list" class="ledger-card"><span>Coffee</span></section>
+      <button id="add-expense" class="btn-primary" type="button">Add Expense</button>
+    </main>`;
+    const withoutLook = await runScreen(['--json']);
+    assert.equal(withoutLook.code, 0, withoutLook.stderr || withoutLook.stdout);
+    assert.equal(JSON.parse(withoutLook.stdout).passed, true);
+
+    const withLook = await runScreen(['--look', '--json']);
+    assert.equal(withLook.code, 0, withLook.stderr || withLook.stdout);
+    assert.equal(JSON.parse(withLook.stdout).passed, true);
   });
 });
