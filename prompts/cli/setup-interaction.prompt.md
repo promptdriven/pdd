@@ -17,7 +17,7 @@ None; this policy uses only Boolean operations.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"draft","prose_sha256":"d4f8f6b3e4d580a22ce44531e0d855f6ef6788dc26739247d9db3cbffaebac88","entries":[{"operation":"setupMayAsk","input_schema":{"type":"object","properties":{"yes":{"type":"boolean"},"stdinIsTTY":{"type":"boolean"},"stdoutIsTTY":{"type":"boolean"}},"required":[],"additionalProperties":false},"result_schema":{"type":"object","properties":{"mayAsk":{"type":"boolean"}},"required":["mayAsk"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":1,"max_model_calls":1},"conventions":["Wrap the native Boolean result as mayAsk."]}
+{"status":"draft","prose_sha256":"","entries":[{"operation":"setupMayAsk","input_schema":{"type":"object","properties":{"yes":{"type":"boolean"},"stdinIsTTY":{"type":"boolean"},"stdoutIsTTY":{"type":"boolean"}},"required":[],"additionalProperties":false},"result_schema":{"type":"object","properties":{"mayAsk":{"type":"boolean"}},"required":["mayAsk"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":1,"max_model_calls":1},"conventions":["Wrap the native Boolean result as mayAsk."]}
 ```
 
 </details>
