@@ -2,6 +2,8 @@
 
 Start with the [README](../README.md).
 
+- [Onboarding guide](ONBOARDING.md): install PDD, make a first change and contribute to PDD.
+- [PDD doctrine](prompt-driven-development-doctrine.md): the engineering principles behind prompts, tests and code.
 - [Build a whole product](build-a-whole-product.md): map a product and plan its runs.
 - [Usage guide](USAGE.md): install, the PDD skills, setup, runs, gates, checks on the PDD interpreter, clean up and fixes.
 - [Workflows in depth](workflows.md): areas, steps, gates, PR 1 and PR 2, the run folder, tests and your own workflows.
