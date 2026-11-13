@@ -1,6 +1,6 @@
 # CLI reference
 
-This page lists every command of pdd 0.1.29, as `pdd --help` shows it. A test (`test/docs-commands.test.mjs`) checks that each command form of the help is on this page.
+This page lists every command of pdd 0.1.30, as `pdd --help` shows it. A test (`test/docs-commands.test.mjs`) checks that each command form of the help is on this page.
 
 You need the pdd command only for runs with PRs, for `pdd test`, `pdd lint`, `pdd simulate` and `pdd approve`. Install the skills with `npx skills add promptdriven/pdd` (add `-g` for all your projects), and set up a repo with the `pdd-setup` skill in your agent. For simulations that your agent drives, use the Try tools in `pdd mcp`. Then use a PDD skill: `pdd-feature`, `pdd-bug`, `pdd-small-change`, `pdd-product` or `pdd-prompting`. Call a skill with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code (or ask for it by name). See [Install](USAGE.md#2-install).
 
@@ -123,7 +123,10 @@ approval keeps the headers of the prompt current.
 The text form adds one line for each header that is not plain current, with
 the expected hash. pdd never rewrites a header: a hash in a header says that
 the file follows that prompt version. The command returns 0 when it can answer, also for an uncertain
-or missing owner. It returns 2 outside a Git repository or for a PATH outside it.
+or missing owner. When a prompt claims ownership of a test file (`test/**`,
+`tests/**`, `*.test.*`, `*_test.*` or `test_*.*`), `pdd owner` writes a
+non-blocking warning on `stderr` and keeps exit code 0 and `stdout` unchanged.
+It returns 2 outside a Git repository or for a PATH outside it.
 Code replay and the `pdd test` check plan use the binding and header records
 only.
 
@@ -417,9 +420,10 @@ pdd autopilot alerts test
 
 The bot posts with the Discord API v10, with link previews off, and reads the
 message back. Only a matching readback counts as delivered. A change of line
-ends or of spaces at a line end is not a mismatch. `test` first checks
-the bot and the channel, read-only, and shows the bot name and the channel name.
-pdd never prints the token or the command output. The bot needs permission to
+ends or of spaces at a line end is not a mismatch. `set --token-command` and `test`
+check the bot and the channel, read-only, and show the bot name and the channel name.
+pdd never prints or saves the token or the command stdout; when a token command
+fails during `set` or `test`, pdd shows only scrubbed single-line stderr. The bot needs permission to
 view the channel, send messages and read message history.
 
 The core sends an alert only for a real need. It sends `stuck` when a job process
@@ -445,7 +449,7 @@ the name that Autopilot saved at its first start (this checkout's start first),
 else the host name, so a host rename does not open a new incident. An access or spending decision, a product
 decision, a stuck issue or a long-running issue is one incident per issue. A repeat call sends
 nothing for a delivered or unconfirmed alert, and sends again an alert that
-failed or had no destination. `--update` sends a new cause, a changed decision needed or the new
+failed or had no destination; a delivered `pdd autopilot alerts test` and later Autopilot ticks also retry open failed or newly configured alerts once. `--update` sends a new cause, a changed decision needed or the new
 issue list. Changing only what was tried sends nothing. `--kind recovered` sends one recovery and closes the matching
 alerts; give `"kind"` in the JSON to close only that incident. Every call and
 its delivery result are recorded in
@@ -541,6 +545,7 @@ The fresh replacement keeps the run, worktree, progress, gates and approvals, an
 - Each chat uses the sign-in of the person who runs the pdd command that starts or resumes it, not the environment of the terminal that first started the Herdr server. pdd gives the chat your own login variables and removes the ones you do not have with `env -u`. Claude Code: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`. Codex: `OPENAI_API_KEY`, `CODEX_API_KEY`, `CODEX_ACCESS_TOKEN`, `OPENAI_FEDERATION_RULE_ID`, `OPENAI_IDENTITY_TOKEN_FILE`, `OPENAI_WORKLOAD_IDENTITY_CONTEXT`, `OPENAI_BASE_URL`. Gemini: `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_GENAI_USE_GCA`, `GOOGLE_APPLICATION_CREDENTIALS`, `GOOGLE_CLOUD_PROJECT`. The base URLs are in these lists because the address goes with the key. Other variables, such as `AWS_*` for Bedrock, come from the Herdr server as they are.
 - pdd writes the login values to a one-time private file (mode 0600) in the run folder, inside your clone's `.git` folder. The chat deletes that file first, then reads the values and starts the agent. If it cannot delete the file, the agent does not start. So the values never show in the Herdr pane or in the shell history. When a file stays because pdd stopped before the chat ran, a start or status of the run deletes it only when it is at least five minutes old. Cancel deletes all login files, including newer ones.
 - When your environment has no login variable, the chat gets none and uses the login in its config folder. An example is a Codex profile with `shell_environment_policy.inherit = "core"`. The Gemini start check runs only `gemini --version`, so it does not show whether that login works.
+- Gemini shell safety dialogs can override `--yolo` and require a person even during unattended runs. When the shell safety dialog is visible, `pdd workflow status` names it and tells you how to open the chat.
 - The first message of each chat gives the full path of this pdd. The agent uses it, so another `pdd` on its PATH does not matter.
 - A Codex chat also gets `-c shell_environment_policy.set.PDD_BIN=…` and `-c shell_environment_policy.set.PDD_AGENT_SESSION="1"` for this launch only, so its commands keep both values when the Codex profile sets `inherit = "core"` or `"none"`. pdd does not change Codex settings. Limit: a `shell_environment_policy.include_only` list that leaves out a name still removes it.
 - Workflow chats have no overall time limit. `pdd workflow prove` limits each phase to 10 minutes by default; remote lint has a caller wait limit. You can close the workflow-start terminal at any time.
@@ -605,17 +610,18 @@ Changed criterion text and other malformed test rules still refuse the test.
 
 | Command | What it does |
 |---|---|
+| `pdd test --target code [STORY...] [--json]` | Run the selected Story scenarios on their declared real CLI commands, with 0 AI calls. Compare arguments, optional stdin, exit code, stdout and stderr using the same cases. Save one result per Story with the commit. Unsupported steps say `not run` with a reason and cannot pass. |
 | `pdd test --affected [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]` | Check every Story affected by local changes against the unique saved-run base or HEAD, including all variants and criteria. Uncertain scope keeps complete coverage. Read omitted baseline obligations from local original Check history in a separate historical report. Status describes selected checks only. Required full-pass gates still apply. |
 | `pdd test [PATH\|STORY...] [--lf] [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]` | Reuse complete unchanged passes from `.pdd/cache/test/`. `--lf` selects last-known failures, or the normal scope when none are recorded. `--cache-clear` discards the cache while retaining operand scope and takes precedence over `--lf`. Check Stories on the PDD interpreter with your gh login. With no STORY, test every Story. Send your Git files and wait for the checks, with one progress line every 30 s. Then print one table with a report link for each test, one `Prompt tests` line for each Story and, with two or more Stories, the overall line |
 | `pdd test --read [BATCH\|CALL_ID] [--json] [--timeout MIN]` | Read saved results; a normal Check held for lint may continue its original checks. Other reads send no work |
 | `pdd test --retry BATCH [--json] [--details] [--timeout MIN]` | Retry only confirmed unstarted checks with the saved source and call caps. Keeps completed, running and unknown jobs; changed source requires a fresh selected check |
-| `pdd test --fill-hash` | Fill draft interface hashes and remove redundant `"kind": "full"` from drafts. Approved prompts stay unchanged. No network |
-| `pdd test --fill-hash --compact` | Fill draft hashes and remove interface JSON formatting whitespace. Remove redundant `"kind": "full"` from drafts; preserve other values, strings, number spellings and prose. Approved and statusless files stay unchanged. No network |
+| `pdd test --fill-hash [PATH\|STORY...]` | Fill draft interface hashes, remove redundant `"kind": "full"` from drafts and synchronize matching scenario `criteria[].text` from `story_path`. With selections, update only the selected work and required prompt dependencies; leave unrelated files unchanged. An explicit `.prompt.md` path works without tests. With no selection, inspect all Git-visible prompts and Story scenarios. Approved prompts stay unchanged. No network |
+| `pdd test --fill-hash --compact` | With no operands, fill draft hashes and remove interface JSON formatting whitespace. Remove redundant `"kind": "full"` from drafts; preserve other values, strings, number spellings and prose. Approved and statusless files stay unchanged. No network |
 | `pdd test --explain-bindings [STORY...] [--json]` | Explain each selected resource edge, fixture candidate, mismatch cause and repair. Local reads only; no sign-in or interpreter call |
-| `pdd test --files [STORY...] [--app-map PATH] [--json]` | List the exact selected upload manifest and byte sizes. No network; `--app-map` previews the Simulator's app map |
-| `pdd lint [STORY...] [--json] [--timeout MIN] [--max-calls N]` | Print local SVG layout warnings, then the server checks the format of the prompts, Stories and tests only, with 0 AI calls, and requests complete diagnostics and prints the problems the server reports. Requires network access; use it before a real check |
-| `pdd lint --local [STORY...] [--json]` | Compare linked `.ui.svg` parts and labels with prompt prose locally; warning advice only, 0 AI calls and no network/authentication. Without Story names, inspect all Git-visible prompts, even with no PDD tests |
-| `pdd test --screen URL --drawing PATH [--json]` | Compare the real page with its `.ui.svg` layout spec in installed headless Chrome/Chromium at the SVG viewport. No AI or interpreter call; missing/hidden parts, order or region differences fail |
+| `pdd test --files [STORY...] [--app-map PATH] [--json]` | List the exact selected upload manifest, byte sizes and `source_sha256`. No network; `--app-map` previews the Simulator's app map |
+| `pdd lint [STORY...] [--json] [--timeout MIN] [--max-calls N]` | Print local SVG layout and source-hygiene warnings, then the server checks the format of the prompts, Stories and tests only, with 0 AI calls, and requests complete diagnostics and prints the problems the server reports. Requires network access; use it before a real check |
+| `pdd lint --local [STORY...] [--json]` | Compare linked `.ui.svg` parts, labels and HTML screen stylesheet links with prompt prose and check local prompt, Story and source-comment hygiene; warning advice only, 0 AI calls and no network/authentication. Without Story names, inspect all Git-visible prompts, even with no PDD tests |
+| `pdd test --screen URL --drawing PATH [--look] [--json]` | Compare the real page with its `.ui.svg` layout spec in installed headless Chrome/Chromium at the SVG viewport (`--look` also checks canvas color, painted card/section boxes, box size and spacing within tolerance, without pixel equality; `pdd test --screen URL --drawing PATH [--json]` checks parts only). No AI or interpreter call; missing/hidden parts, order, region or look differences fail |
 | `pdd interface draft [PROMPT...] [--all] [--json]` | Draft missing Runtime blocks from explicit prose or contracts and lint locally, without AI or network calls. Uncertain facts include field questions and a recovery command. |
 | `pdd interface draft PROMPT [--contract FILE] [--extend \| --refresh] [--json]` | Supply schemas and effect ports, extend an existing block, or reopen a stale block as draft. |
 | `pdd approve PROMPT --automatic --tests COMMAND` | Approve a complete draft of unchanged committed behavior after existing native tests and a complete current prompt check. Strict mode requires a person. |
@@ -623,6 +629,16 @@ Changed criterion text and other malformed test rules still refuse the test.
 | `pdd simulate [STORY] [--max-calls N] [--tab call\|screen\|terminal\|world] [--app-map PATH] [--new] [--no-open] [--no-wait] [--agent NAME]` | Automatically open a shell for command-line programs, localhost with an example request for HTTP routes, or the Simulator page for screens and typed operations. With no Story, open the whole project. |
 | `pdd simulate [STORY] --page [--new]` | Open the Simulator page explicitly |
 | `pdd simulate --stop [STORY]` | Stop the open Simulator link of a Story |
+
+For `--target code`, each tested Runtime entry declares
+`"implementation": {"kind": "cli", "command": "node bin/tip.mjs"}`. The command
+is split into words without a shell; quoted or shell-dependent command strings
+are unsupported. Cases supply string `argv` and optional UTF-8 `stdin`.
+The runner supports `equals` checks on `/exit_code`, `/stdout` and `/stderr`.
+Other checks, HTTP and call entries, and world or port simulations without a
+native bridge report `not run` with a reason. Results are saved in
+`.pdd/code-test/latest.json` with the commit and worktree dirty state; a failed
+or unrun Story makes the command nonzero.
 
 Ordinary `pdd test` reuses complete unchanged Story passes from the Git-ignored `.pdd/cache/test/` folder, showing their previous pass time and zero current AI calls. `pdd test --lf` selects the last known failures; a later attempt without a verdict keeps a failure selected until it passes. With no failures in the selected scope it uses the normal selection, including unchanged-pass reuse. Completed saved reads populate the cache after source verification, dated from the original batch start, never the later read time. `pdd test --cache-clear` discards prior local evidence and runs the normal selected scope; it takes precedence over `--lf`. It sends again and prints one stderr notice with the selected Story count; the interpreter may return a saved answer for the same key.
 
@@ -634,8 +650,9 @@ Run hash filling, local source preflight and the prompt check in one shell call:
 pdd test --fill-hash && pdd test --files STORY && pdd test STORY
 ```
 
-Replace STORY with the selected Story name, or omit it from both commands to
-check all Stories. Each command must succeed before the next starts. Hash
+Replace STORY with the selected Story name. Use `pdd test --fill-hash STORY`
+to fill only that Story and its required prompt dependencies; omit STORY to fill
+all Git-visible prompts. Each command must succeed before the next starts. Hash
 filling and `--files` are local; the final test performs interpreter lint before
 sending checks. Do not run `pdd lint` immediately before `pdd test`. Use standalone
 lint when you want only format/admission diagnostics without a behavioral check.
@@ -668,11 +685,11 @@ for the same link. Saved lint reads retain it.
 - A GitHub login that is not invited gets one line: `Your GitHub login NAME is not on the PDD interpreter invite list yet. Ask the PDD team to add you.` A GitHub account without PDD Cloud access gets the server's sign-up line (sign up at https://promptdriven.ai/login). When PDD Cloud cannot check the account, pdd says at once `PDD Cloud could not confirm your access. Try again in a minute.` A pdd that is too old gets `Please update pdd: …`. All of these exit with code 5.
 - The interpreter address is set in one place in pdd. You do not need to set it.
 
-Linked `.ui.svg` drawings specify the screen's parts, words, spatial order, ids and named state. Local lint reports unmatched controls, labels and unspecified layout regions; a generic data-field mention does not describe a score box or status bar. SVG warnings do not change the exit code. Default local lint also checks workspace interfaces. Interface findings exit 4 and name the draft command. Named Runtime Story local lint retains its SVG-only advisory; dependency prompts supply layout context. A native-only declaration needs a reason. These local checks do not certify semantic or visual agreement. `--local` belongs to `pdd lint`; it mixes only with Story names and `--json`.
+Linked `.ui.svg` drawings specify the screen's parts, words, spatial order, ids and named state. Local lint (and preliminary local checks in `pdd lint` / `pdd test`) reports unmatched controls, labels, unspecified layout regions, HTML operation screens whose app map leaves `"stylesheets": []`, and HTML screen prompts that name none of their stylesheet's CSS classes, plus local source-hygiene warnings in `pdd lint` (misplaced prompt owners including `test/**` / `tests/**` / `*.test.*`, prompts above 500 or 1,000 prose lines, Stories above 15 scenario steps or 1,000 lines, and `TODO`/`FIXME`/`HACK`/`XXX` excuse comments in prompt-owned code); a generic data-field mention does not describe a score box or status bar. Local warnings do not change the exit code. Default local lint also checks workspace interfaces. Interface findings exit 4 and name the draft command. Named Runtime Story local lint stays advisory without interface-declaration refusals; dependency prompts supply layout and ownership context. A native-only declaration needs a reason. These local checks do not certify semantic or visual agreement. `--local` belongs to `pdd lint`; it mixes only with Story names and `--json`.
 
 An explicitly selected Story with a `Native validation` owner link is assessed from its saved native evidence by `pdd lint STORY`, including `pdd lint --local STORY`. This reads no hosted service and creates no association. Missing native proof exits 1; complete current whole-Story proof exits 0. It is separate from the SVG-only advisory for Runtime Stories.
 
-For a built screen, serve the app in the state shown by its drawing and run, for example, `pdd test --screen http://127.0.0.1:8080/ --drawing prompts/views/active__stacked.ui.svg`. Set `PDD_CHROME_PATH` to a Chrome/Chromium executable when discovery needs help. The command checks every visible text occurrence and id, including numeric values, at the SVG viewport; metadata, hidden and context-only drawing regions are excluded. It accepts center differences of at most 15% per viewport axis and requires the same spatial order of separated parts. It prints a `Screen vs drawing` table for the code PR; retain any stricter accepted visual comparator. Exit codes are 0 for pass, 1 for mismatch, 2 for invalid input and 5 when browser/navigation execution fails. `--screen` requires `--drawing`, accepts only `--json` alongside them and takes no Story names. JSON includes the comparison rows and `exit_code`.
+For a built screen, serve the app in the state shown by its drawing and run, for example, `pdd test --screen http://127.0.0.1:8080/ --drawing prompts/views/active__stacked.ui.svg` (add `--look` to check main colors, painted boxes, box bounds and spacing within tolerance without pixel equality). Set `PDD_CHROME_PATH` to a Chrome/Chromium executable when discovery needs help. The command checks every visible text occurrence and id, including numeric values, at the SVG viewport; metadata, hidden and context-only drawing regions are excluded. It accepts center differences of at most 15% per viewport axis and requires the same spatial order of separated parts; `--look` appends `look` rows for the canvas color and painted card/section/control boxes so an unstyled screen fails. It prints a `Screen vs drawing` table for the code PR; retain any stricter accepted visual comparator. Exit codes are 0 for pass, 1 for mismatch, 2 for invalid input and 5 when browser/navigation execution fails. `--screen` requires `--drawing`, accepts only `--look` and `--json` alongside them and takes no Story names. JSON includes the comparison rows and `exit_code`.
 
 For a supported Simulator Screen viewer, comparison waits up to 10 seconds after
 page load for readiness, app fonts and layout. It inspects only the marked
@@ -701,14 +718,18 @@ The Simulator's agent fills the fields directly when supported. It runs the acti
 |---|---|
 | `pdd mcp` | Start the stdio MCP server for the current repository; select the Story through tool input. Your agent can open a simulation, inspect its state, run input, check the result against the Story and save a case |
 
-The tools are `try_open`, `try_state`, `try_run`, `try_check` and `try_save_case`. Use them when the person asks to try behavior. Runs count against the simulation budget and appear in the Simulator. Saved results are separate recorded cases with exact starting data. Complete missing Story coverage before `pdd test`; observations need review and are never approved expected values. MCP protocol messages use stdout; progress and diagnostics use stderr.
+The tools are `try_open`, `try_state`, `try_run`, `try_check` and `try_save_case`. `try_open` and `try_state` include `source_sha256` and `engine_sha` for the open Try. Use them when the person asks to try behavior. Runs count against the simulation budget and appear in the Simulator. Saved results are separate recorded cases with exact starting data. Complete missing Story coverage before `pdd test`; observations need review and are never approved expected values. MCP protocol messages use stdout; progress and diagnostics use stderr.
 
 ## Used by the agent
 
 | Command | What it does |
 |---|---|
-| `pdd workflow done STEP [--summary TEXT] [--skipped REASON]` | Record a finished step. `check`, `try` and `verify` also record pdd's own latest `pdd test`, `pdd lint` and `pdd workflow prove` results, or warn that pdd has none; the summary stays an agent note. `--skipped REASON` records that the step was skipped, and why. Print the next instruction: the next step, the gate, or "pdd opens the PR now". After the last step of an area with a PR gate, push the branch and open the PR when the applicable gate is satisfied. In a normal feature or bug run, a valid Story approval and a verified full saved check pass open PR 1 without another question; strict and other routes can require a separate approval gate. The bug skill still allows only 2 defect repair rounds after review. |
+| `pdd workflow done STEP [--summary TEXT] [--skipped REASON] [--no-publish]` | Record a finished step. `check`, `try` and `verify` also record pdd's own latest `pdd test`, `pdd lint` and `pdd workflow prove` results, or warn that pdd has none; the summary stays an agent note. `--skipped REASON` records that the step was skipped, and why. Print the next instruction: the next step, the gate, or "pdd opens the PR now". After the last step of an area with a PR gate, push the branch and open the PR when the applicable gate is satisfied. In a normal feature or bug run, a valid Story approval and a verified full saved check pass open PR 1 without another question; strict and other routes can require a separate approval gate. The bug skill still allows only 2 defect repair rounds after review. |
 | `pdd workflow ask QUESTION` | Show the person that the chat waits for an answer in the middle of a step. `status` then says "waiting for you" with the question |
+
+In a code PR area, `pdd workflow done review --no-publish` saves the review without committing, pushing or creating/updating a PR. The option also works in the build area of a small-change run and refuses at Story or prompt approval gates. When all steps finish, the response and status give the publication command; further done calls keep this local hold.
+
+`pdd workflow publish ISSUE` publishes the finished area's current local result using the ordinary ownership, scope, replay and Git safety checks. It preserves step summaries, evidence and timestamps, so a failed publication can be retried without recording review again. Commit the local result before asking a checker to inspect its exact head. Without the option or a saved hold, done publishes automatically as usual.
 
 The agent runs these from the run's worktree. pdd finds the run from that folder. You do not run them yourself.
 
@@ -718,7 +739,7 @@ The agent runs these from the run's worktree. pdd finds the run from that folder
 |---|---|
 | `pdd`, `pdd --help`, `pdd -h`, `pdd help` | Show the commands and the full paths of the installed Prompting guide and RUNBOOK |
 | `pdd help prompting` | Show how to write a prompt, a Story and its test, which commands check them, and the full paths of the Prompting guide and RUNBOOK |
-| `pdd --version` | Print the version, `0.1.29`. When the PDD skills that your agent finds are older, also print the update command on stderr |
+| `pdd --version` | Print the version, `0.1.30`. When the PDD skills that your agent finds are older, also print the update command on stderr |
 | `pdd -V` | Same version and local diagnostics as `pdd --version` |
 | `pdd -VV` | Print the local CLI version, the interpreter's full build identifier and its supported interface, test and app-map format IDs. Use existing gh sign-in without prompting; unavailable metadata prints `PDD interpreter: unknown` and exits 0 |
 | `pdd completion bash\|zsh` | Print a shell completion script. It does not change your shell files |
@@ -728,6 +749,7 @@ The agent runs these from the run's worktree. pdd finds the run from that folder
 two-second limit, then sends at most one `GET /v1/version` to the configured
 interpreter origin. The request and response body have one ten-second limit.
 It follows no redirects, sends no source, starts no jobs and makes no AI calls.
+When the interpreter also reports `service_sha`, `pdd -VV` prints `PDD service: <sha|unknown>` right after `PDD interpreter:`.
 Format IDs keep the interpreter's order; an empty list shows `none`, and a
 missing or unsafe list shows `unknown`. Each version flag must be one exact
 token; repeated flags, extra operands and `--verbose` are unsupported.

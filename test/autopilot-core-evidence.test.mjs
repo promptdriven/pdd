@@ -8,8 +8,8 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { listReportDrafts } from '../src/autopilot-reports.mjs';
 import { coreWorld } from './helpers/core-world.mjs';
-import { fakeRuntime, portsFor } from './runtime-fake.mjs';
-import * as runtime from '../src/runtime-client.mjs';
+import { fakeRuntime, portsFor } from './helpers/runtime-fake.mjs';
+import * as runtime from '../src/runtime-seam.mjs';
 
 const writeIn = (cwd, path, text) => { mkdirSync(join(cwd, path, '..'), { recursive: true }); writeFileSync(join(cwd, path), text); };
 const endComments = (w, n) => w.comments(n).filter(body => body.includes('<!-- pdd:autopilot-core:end:'));
@@ -1568,7 +1568,7 @@ test('E79 (B1, Serhan D3) a same-head repair still checks the 501st consumer', a
 
 test('E78 (B1) on pdd itself, the consumers of a change to runtime-client.prompt.md are read in under 60 s, transitive call targets included', async t => {
   const { storyReach } = await import('../src/autopilot-core.mjs');
-  const { findTests } = await import('../src/runtime-preflight.mjs');
+  const { findTests } = await import('../src/runtime-seam.mjs');
   const root = fileURLToPath(new URL('..', import.meta.url));
   const started = Date.now();
   const found = findTests({ root, excludeFixtureProjects: true });

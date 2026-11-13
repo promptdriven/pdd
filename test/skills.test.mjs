@@ -160,7 +160,7 @@ test('SKILLS8: after prompt work the agent runs pdd test on its own, offers pdd 
 // Wrong (0.1.3): the steps repeat RUNBOOK section 17 (two homes for one method), or the runbook copy lacks it.
 const RUNBOOK = () => readFileSync(join(skills, 'pdd-prompting/RUNBOOK.md'), 'utf8');
 // Every "section N" that a skill names, with the RUNBOOK title it must have. Add a row when a skill names a new section.
-const RUNBOOK_SECTIONS = { 11: '`pdd test`', 21: 'Fake the outside world', 2: 'The files', 3: 'Schema rules', 4: 'Expected values', 6: 'Command-line programs (`cli`)',
+const RUNBOOK_SECTIONS = { 11: '`pdd test`', 20: 'HTML checks and Simulator rendering', 21: 'Fake the outside world', 2: 'The files', 3: 'Schema rules', 4: 'Expected values', 6: 'Command-line programs (`cli`)',
   7: 'A prompt that calls another prompt', 8: 'Check paths', 9: 'Money and dates', 10: 'AI calls', 12: '`pdd simulate` and Save as test', 13: 'Give your app a screen (app map)',
   14: 'Bug workflow', 15: 'PR text', 17: 'Code space: replay evidence and the formal check', 18: 'Patterns: a pure function and a state sequence' };
 const section14 = () => RUNBOOK().slice(RUNBOOK().indexOf(`## 17. ${RUNBOOK_SECTIONS[17]}`));

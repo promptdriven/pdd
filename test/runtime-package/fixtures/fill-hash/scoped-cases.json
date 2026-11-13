@@ -1,0 +1,288 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/scoped-fill-hash.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Selecting a Story or test fills eligible interfaces it uses, including required prompt dependencies, and leaves unrelated prompt bytes unchanged."
+    },
+    {
+      "id": "AC2",
+      "text": "Multiple Story, test, path and directory selections use their union, including shared dependencies once; paths work from a subdirectory. An explicit prompt file selects it and its required prompt dependencies even without tests."
+    },
+    {
+      "id": "AC3",
+      "text": "An unknown or untested selection, malformed selected test, or unsafe or unavailable required dependency refuses before any hash is written, without falling back to all prompts."
+    },
+    {
+      "id": "AC4",
+      "text": "With no selection, hash filling works without tests and reports each changed file. Existing current, stale, refused and warning outcomes, byte preservation, ordering and exit rules remain in force."
+    },
+    {
+      "id": "AC5",
+      "text": "Compact mode still rejects operands and incompatible options before writes. Hash filling does not use authentication, network or AI."
+    }
+  ],
+  "binding": {
+    "handler": "src/runtime-client.mjs:runCheck",
+    "cli": "bin/pdd.mjs",
+    "preflight": "src/runtime-preflight.mjs:fillHashes"
+  },
+  "fixture": {
+    "setup": "Each case uses a fresh temporary Git repository with tracked draft prompts A, B, shared and unrelated. A and B each declare shared as a required dependency; separate selected Story tests reach A and B. Capture original bytes before invocation. Use a valid draft interface in each prompt; check changed hashes with the existing hash verification helper and compare every other byte exactly.",
+    "paths": {
+      "A": "prompts/a.prompt.md",
+      "B": "prompts/b.prompt.md",
+      "shared": "prompts/shared.prompt.md",
+      "unrelated": "prompts/unrelated.prompt.md",
+      "storyA": "user_stories/a.md",
+      "storyB": "user_stories/b.md",
+      "testA": "test/runtime/a.json",
+      "testB": "test/runtime/b.json"
+    }
+  },
+  "replay_rules": [
+    "Invoke the real runCheck boundary with stdout captured and gh/fetch spies; also exercise the CLI in the temporary repository. Verify exact bytes for unchanged prompts and all non-hash bytes in changed prompts. No authentication, network or AI calls.",
+    "Fixtures are expected cases, not a Runtime verdict; execute native tests after implementation. For failures assert no prompt bytes change. Retain existing status and output tests.",
+    "Treat expected_filled as set membership. Preserve the existing output group order and each result array’s existing iteration order; do not impose alphabetical order."
+  ],
+  "cases": [
+    {
+      "id": "story-closure",
+      "criteria": [
+        "AC1"
+      ],
+      "words": [
+        "a"
+      ],
+      "expected_filled": [
+        "prompts/a.prompt.md",
+        "prompts/shared.prompt.md"
+      ],
+      "unchanged": [
+        "prompts/b.prompt.md",
+        "prompts/unrelated.prompt.md"
+      ],
+      "exit_code": 0
+    },
+    {
+      "id": "contract-ref-and-symlink",
+      "criteria": [
+        "AC1"
+      ],
+      "words": [
+        "a"
+      ],
+      "setup": "Create contracts/real-shapes.json and tracked symlink contracts/shapes.json -> real-shapes.json; set prompts/a.prompt.md result_schema to {\"$contract\":\"contracts/shapes.json#/okResult\"}.",
+      "expected_filled": [
+        "prompts/a.prompt.md",
+        "prompts/shared.prompt.md"
+      ],
+      "unchanged": [
+        "prompts/b.prompt.md",
+        "prompts/unrelated.prompt.md"
+      ],
+      "exit_code": 0
+    },
+    {
+      "id": "union-subdirectory",
+      "criteria": [
+        "AC1",
+        "AC2"
+      ],
+      "cwd": "test/runtime",
+      "words": [
+        "a.json",
+        "../../user_stories/b.md"
+      ],
+      "expected_filled": [
+        "prompts/a.prompt.md",
+        "prompts/b.prompt.md",
+        "prompts/shared.prompt.md"
+      ],
+      "unchanged": [
+        "prompts/unrelated.prompt.md"
+      ],
+      "exit_code": 0
+    },
+    {
+      "id": "directory-selection",
+      "criteria": [
+        "AC2"
+      ],
+      "words": [
+        "user_stories/"
+      ],
+      "expected_filled": [
+        "prompts/a.prompt.md",
+        "prompts/b.prompt.md",
+        "prompts/shared.prompt.md"
+      ],
+      "unchanged": [
+        "prompts/unrelated.prompt.md"
+      ],
+      "exit_code": 0
+    },
+    {
+      "id": "explicit-prompt",
+      "criteria": [
+        "AC2"
+      ],
+      "words": [
+        "prompts/a.prompt.md"
+      ],
+      "without_tests": true,
+      "expected_filled": [
+        "prompts/a.prompt.md",
+        "prompts/shared.prompt.md"
+      ],
+      "unchanged": [
+        "prompts/b.prompt.md",
+        "prompts/unrelated.prompt.md"
+      ],
+      "exit_code": 0
+    },
+    {
+      "id": "unknown-mixed",
+      "criteria": [
+        "AC3"
+      ],
+      "words": [
+        "a",
+        "missing"
+      ],
+      "expected_writes": 0,
+      "exit_code": 2
+    },
+    {
+      "id": "unknown-lists-untested",
+      "criteria": [
+        "AC3"
+      ],
+      "words": [
+        "missing"
+      ],
+      "setup": "Add tracked Story untested without its test.",
+      "stderr_includes": "untested  no test (expected tests/untested.json)",
+      "expected_writes": 0,
+      "exit_code": 2
+    },
+    {
+      "id": "untested-mixed",
+      "criteria": [
+        "AC3"
+      ],
+      "words": [
+        "a",
+        "untested"
+      ],
+      "setup": "Add tracked Story untested without its test.",
+      "expected_writes": 0,
+      "exit_code": 2
+    },
+    {
+      "id": "malformed-selected",
+      "criteria": [
+        "AC3"
+      ],
+      "words": [
+        "a",
+        "b"
+      ],
+      "setup": "Replace test/runtime/b.json with the invalid JSON bytes {.",
+      "expected_writes": 0,
+      "exit_code": 4
+    },
+    {
+      "id": "unavailable-dependency",
+      "criteria": [
+        "AC3"
+      ],
+      "words": [
+        "a",
+        "b"
+      ],
+      "setup": "Add a required Markdown dependency [missing](missing.prompt.md) to prompts/b.prompt.md; do not create prompts/missing.prompt.md.",
+      "expected_writes": 0,
+      "exit_code": 4
+    },
+    {
+      "id": "workspace-excluded-dependency",
+      "criteria": [
+        "AC3"
+      ],
+      "words": [
+        "a",
+        "b"
+      ],
+      "setup": "Create and track prompts/excluded.prompt.md as a valid draft prompt. Add required Markdown dependency [excluded](excluded.prompt.md) to prompts/b.prompt.md. Create and track root pdd-workspace.json with exactly {\"allowed_paths\":[\"user_stories/\",\"test/\",\"prompts/a.prompt.md\",\"prompts/b.prompt.md\",\"prompts/shared.prompt.md\",\"prompts/unrelated.prompt.md\"]}; prompts/excluded.prompt.md exists but is outside that ceiling. Capture initial bytes after setup.",
+      "expected_writes": 0,
+      "exit_code": 4
+    },
+    {
+      "id": "unscoped-no-tests",
+      "criteria": [
+        "AC4",
+        "AC5"
+      ],
+      "words": [],
+      "without_tests": true,
+      "expected_filled": [
+        "prompts/a.prompt.md",
+        "prompts/b.prompt.md",
+        "prompts/shared.prompt.md",
+        "prompts/unrelated.prompt.md"
+      ],
+      "stdout_each": "Filled prose_sha256: PATH",
+      "exit_code": 0
+    },
+    {
+      "id": "partial-refusal",
+      "criteria": [
+        "AC4"
+      ],
+      "words": [
+        "a",
+        "b"
+      ],
+      "setup": "Keep B’s interface valid JSON and its existing calls and dependencies intact; change only its status value from \"draft\" to \"invalid\". Capture these modified initial bytes before invocation.",
+      "expected_filled": [
+        "prompts/a.prompt.md",
+        "prompts/shared.prompt.md"
+      ],
+      "unchanged": [
+        "prompts/b.prompt.md",
+        "prompts/unrelated.prompt.md"
+      ],
+      "exit_code": 4
+    },
+    {
+      "id": "compact-selection",
+      "criteria": [
+        "AC5"
+      ],
+      "words": [
+        "a"
+      ],
+      "options": {
+        "--fill-hash": true,
+        "--compact": true
+      },
+      "expected_writes": 0,
+      "exit_code": 2
+    },
+    {
+      "id": "incompatible-fill-hash-files",
+      "criteria": [
+        "AC5"
+      ],
+      "words": [],
+      "options": {
+        "--fill-hash": true,
+        "--files": true
+      },
+      "expected_writes": 0,
+      "exit_code": 2
+    }
+  ]
+}
