@@ -832,6 +832,11 @@ writes the `Runtime:` lines and one `Evidence:` line in the PR body. Autopilot c
 records. A line that the records do not support is red. The same rules, short enough for one read, are in
 `autopilot-job-rules.md` of the pdd-prompting skill; a job reads that file in full.
 
+- **Skill choice:** a fix that changes no product behavior uses `pdd-small-change`, also when the issue is written as a
+  bug. Pick `pdd-small-change` whenever every planned file takes path `d` (docs, config, CI, package metadata, lock
+  files, or test files and fixtures), and write no new Story or prompt for path `d` files. When a `pdd-small-change`
+  run changes owned code (path `a`, `b` or `c`), keep the Story test, replay and `Runtime:` evidence. Repairs keep the
+  build's chosen PDD skill.
 - **Changed** means changed against the base: `git diff --name-only origin/BASE...HEAD` (BASE is the PR's base
   branch, usually `main`). It never means changed since the previous PR head. A Story or prompt that a merge from the
   base brought in is not changed. A changed Story is a Story whose Story file or test file changed, or whose test
@@ -903,6 +908,9 @@ records. A line that the records do not support is red. The same rules, short en
 
 For the reviewer:
 
+- Non-code path `d` files (docs, config, CI settings, `package.json`, lock files, and test files or fixtures) need no
+  prompt and no Story; never ask for a new prompt or Story for them, and treat a new prompt or Story added for a
+  non-code file as a must-fix.
 - Every choice that the issue did not settle must be listed in the PR body under "Choices Autopilot made:" with its
   reason (with "(changes public behavior: ...)" when users see a change); a missing or wrong line is a P2 must-fix
   (fix the list).

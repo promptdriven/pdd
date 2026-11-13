@@ -8,6 +8,16 @@ These rules are for a job of the Autopilot core engine (`pdd autopilot start --e
 with no workflow run. It writes the `Runtime:` lines and one `Evidence:` line in the PR body. Autopilot checks each
 line against its own records. A line that the records do not support is red.
 
+## Skill choice
+
+- A fix that changes no product behavior uses `pdd-small-change`, also when the issue is written as a bug. Pick
+  `pdd-small-change` whenever every planned file takes path `d` (docs, config, CI, package metadata, lock files, or
+  test files and fixtures).
+- Write no new Story and no new prompt for a path `d` non-code file.
+- When a `pdd-small-change` run changes owned code (path `a`, `b` or `c`), include the Story test, replay and
+  `Runtime:` evidence that `pdd-bug` requires.
+- Repairs keep the build's chosen PDD skill instead of picking a different skill mid-PR.
+
 ## Changed
 
 - Changed means changed against the base: `git diff --name-only origin/BASE...HEAD`. BASE is the PR's base branch,
@@ -130,8 +140,9 @@ line against its own records. A line that the records do not support is red.
 - A Runtime PASS counts only for a changed Story (above). A PASS of another Story proves nothing for this PR.
 - A failed step inside a check with no verdict is a FAIL. When the checks did not all pass, open the report.
 - A `not run` line needs a cause from "When `not run` is allowed". A cause that pdd gives a fix for is a must-fix.
-- A config or metadata file (`package.json`, a lock file, CI settings) needs no prompt and no Story. Never ask for a
-  new prompt for it. Ask for a test only when the change alters a result that users see.
+- Non-code path `d` files (docs, config, CI settings, `package.json`, lock files, and test files or fixtures) need no
+  prompt and no Story. Never ask for a new prompt or Story for them; a new prompt or Story added for a non-code file is
+  a must-fix. Ask for a test only when the change alters a result that users see.
 - Every choice that the issue did not settle must be listed in the PR body under "Choices Autopilot made:" with its
   reason (with "(changes public behavior: ...)" when users see a change); a missing or wrong line is a P2 must-fix
   (fix the list).
