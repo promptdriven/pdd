@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { outcomeFor, proseSha256, runCheck, runTry } from '../src/runtime-seam.mjs';
+import { checkInput, interfaceBlocks, outcomeFor, proseSha256, runCheck, runTry } from '../src/runtime-seam.mjs';
 import { PLACE, fakeRuntime, harbor, ordinaryCapabilities, portsFor, sha } from './helpers/runtime-fake.mjs';
 
 const TEST_WITH_MAP = 'tests/place-order.json';
@@ -518,4 +518,41 @@ test('Formal bounded domain: outcomeFor across testVerdict x mapDeclared x hasMa
     }
   }
   assert.equal(checked, 448);
+});
+
+test('runtime-outcome.prompt.md Runtime interface schema accepts declared app-map refusal wire fields', () => {
+  const promptText = readFileSync(new URL('../prompts/cli/runtime-outcome.prompt.md', import.meta.url), 'utf8');
+  const iface = JSON.parse(interfaceBlocks(promptText)[0][1]);
+  const { input_schema, result_schema } = iface.entries[0];
+
+  for (const answer of [
+    {
+      command: 'lint',
+      state: 'refused',
+      result: {
+        problems_complete: true,
+        tests: [{ path: TEST_WITH_MAP, verdict: 'passed', problems: 0 }],
+        app_maps: [{ path: MAP_PATH, verdict: 'refused', problems: 0, error: 'lint-worker-stopped', reason: 'the lint check exceeded its limits' }],
+        problems: [],
+        refusals: [GENERIC_MAP_REFUSAL],
+        report: {
+          verdict: 'refused',
+          refusal: GENERIC_MAP_REFUSAL,
+          problems: [MAP_PROBLEM],
+          lint: {
+            complete: true,
+            capabilities_complete: true,
+            tests: [{ path: TEST_WITH_MAP, verdict: 'passed', problems: 0 }],
+            app_maps: [{ path: MAP_PATH, verdict: 'refused', errors: [{ code: MAP_PROBLEM.code, detail: MAP_PROBLEM.reason }] }],
+          },
+        },
+      },
+    },
+  ]) {
+    const input = { answer, test: TEST_WITH_MAP, steps: [{ entry_path: PLACE }], appMaps: [MAP_PATH], kind: 'lint' };
+    assert.deepEqual(checkInput(input, input_schema, 0).refusals, []);
+    const out = outcomeFor(answer, input);
+    assert.equal(out.state, 'refused');
+    assert.deepEqual(checkInput(out, result_schema, 0).refusals, []);
+  }
 });
