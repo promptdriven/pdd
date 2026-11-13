@@ -880,3 +880,81 @@ test('the hung-command watch: a job without hung and a broken setting have no wa
   assert.deepEqual(agentJobHangs({ hangs: join(dir, 'h.json') }), []);
   assert.deepEqual(agentJobHangs({}), []);
 });
+
+// #3360: privilege-separated Linux sshd / systemd PAM processes started after custodyBoundary throw EACCES on
+// /proc/<pid>/cwd yet belong to root-led or systemd sessions outside the job wrapper, so they must never jam END.
+test('3360: Linux worktreeCustody ignores EACCES /proc/<pid>/cwd on sshd and (sd-pam) started after boundary while holding unproven same-user candidates', async t => {
+  const boundary = Date.parse('2026-11-13T04:47:36Z'), afterStart = 'Fri Nov 13 04:55:10 2026', bootStart = 'Mon Nov  9 00:01:00 2026';
+  const uid = process.getuid();
+  const runCase = async (name, candidate, extraRows, psRows, expected) => t.test(name, async t => {
+    const dir = folder(t), token = join(dir, '3360.spec.json');
+    const wrapper = custodyRow(40010, 'Fri Nov 13 04:47:36 2026', `node --wrapper ${token}`, uid);
+    writeFileSync(token, JSON.stringify({ command: 'node', args: [], cwd: dir, log: join(dir, 'j.log'), exit: join(dir, 'j.exit.json'), custodyRoot: dir, custodyBoundary: boundary }));
+    writeFileSync(`${token}.processes.json`, JSON.stringify([wrapper]));
+    const caller = cleanCallerRow(), rows = [caller, ...extraRows, candidate];
+    const result = await cleanupAgentJob({ pid: wrapper.pid, token }, {
+      platform: 'linux', alive: () => false, list: () => rows,
+      cwd: pid => { if (pid === candidate.pid) { const e = Error('EACCES'); e.code = 'EACCES'; throw e; } return '/outside'; },
+      spawnSync: (_cmd, args) => {
+        const pid = Number(args[args.indexOf('-p') + 1]);
+        return psRows[pid] ? { status: 0, stdout: `${psRows[pid]}\n` } : { status: 1, stdout: '' };
+      },
+      kill: () => assert.fail('cwd custody never signals')
+    });
+    assert.equal(result.confirmed, expected);
+    assert.equal(existsSync(`${token}.processes.custody.json`), !expected);
+  });
+
+  // 1. sshd: <user>@notty in a root-led sshd [priv] session started AFTER custodyBoundary.
+  const sshdNotty = { ...custodyRow(50001, afterStart, 'sshd: serhan@notty', uid), ppid: 50000, pgid: 50000 };
+  const sshdPriv = { ...custodyRow(50000, afterStart, 'sshd: serhan [priv]', 0), ppid: 900, pgid: 50000 };
+  await runCase('sshd: <user>@notty with root session leader', sshdNotty, [sshdPriv], {
+    50001: `50001 50000 ${uid} S ${afterStart}`,
+    50000: `50000 50000 0 Ss ${afterStart}`,
+  }, true);
+
+  // 2. Interactive sshd: <user>@pts/0 that called setsid() itself under live root sshd [priv] parent.
+  const sshdPts = { ...custodyRow(50011, afterStart, 'sshd: serhan@pts/0', uid), ppid: 50010, pgid: 50011 };
+  const sshdPtsPriv = { ...custodyRow(50010, afterStart, 'sshd: serhan [priv]', 0), ppid: 900, pgid: 50010 };
+  await runCase('sshd: <user>@pts/0 after setsid() under live root sshd parent', sshdPts, [sshdPtsPriv], {
+    50011: `50011 50011 ${uid} Ss ${afterStart}`,
+    50010: `50010 50010 0 Ss ${afterStart}`,
+  }, true);
+
+  // 3. systemd (sd-pam) inside systemd --user's own session started after boundary.
+  const sdPam = { ...custodyRow(50021, afterStart, '(sd-pam)', uid), ppid: 50020, pgid: 50020 };
+  const systemdUser = { ...custodyRow(50020, afterStart, '/lib/systemd/systemd --user', uid), ppid: 1, pgid: 50020 };
+  await runCase('(sd-pam) inside systemd --user session', sdPam, [systemdUser], {
+    50021: `50021 50020 ${uid} S ${afterStart}`,
+    50020: `50020 50020 ${uid} Ss ${afterStart}`,
+  }, true);
+
+  // 4. Unproven detached same-user process started after boundary with unreadable cwd still holds cleanup conservatively.
+  const unknownUserProc = { ...custodyRow(50031, afterStart, 'node detached-mystery', uid), ppid: 1, pgid: 50031 };
+  await runCase('unproven same-user detached process stays held', unknownUserProc, [{ ...custodyRow(1, bootStart, '/sbin/init', 0), ppid: 0, pgid: 1 }], {
+    50031: `50031 50031 ${uid} Ss ${afterStart}`,
+  }, false);
+});
+
+// #3228: a child process group (detached sub-group such as MCP server or value.mjs proof runner) with a grandchild that
+// ignores SIGTERM is reaped by SIGKILL on stopAgentJob and cleanupAgentJob, leaving zero survivors.
+test('3228: stopping a job sends SIGTERM then SIGKILL to detached child process groups so SIGTERM-ignoring grandchildren never leak', async t => {
+  const dir = folder(t), groupFile = join(dir, 'subpgid'), grandFile = join(dir, 'grand.pid');
+  const stubbornGrand = `require('fs').writeFileSync(${JSON.stringify(grandFile)}, String(process.pid)); process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);`;
+  const subLeader = `const { spawn } = require('child_process'); const g = spawn(process.execPath, ['-e', ${JSON.stringify(stubbornGrand)}], { stdio: 'ignore' }); require('fs').writeFileSync(${JSON.stringify(groupFile)}, String(process.pid)); setInterval(() => {}, 1000);`;
+  const agent = `const { spawn } = require('child_process'); const s = spawn(process.execPath, ['-e', ${JSON.stringify(subLeader)}], { detached: true, stdio: 'ignore' }); s.unref(); setInterval(() => {}, 1000);`;
+  const job = startAgentJob({ id: '3228-subgroup', dir, cwd: dir, command: process.execPath, args: ['-e', agent], input: '', env: { PATH: process.env.PATH } });
+  const subPgid = Number(await until(() => existsSync(groupFile) && readFileSync(groupFile, 'utf8')));
+  const grandPid = Number(await until(() => existsSync(grandFile) && readFileSync(grandFile, 'utf8')));
+  t.after(() => { for (const target of [-subPgid, grandPid, -job.pid]) try { process.kill(target, 'SIGKILL'); } catch {} });
+  // Ensure snapshotAgentJob has captured the detached child group leader before stop.
+  await until(() => {
+    const s = snapshotAgentJob(job);
+    return Array.isArray(s) && s.some(r => r.pid === subPgid && r.pgid === subPgid);
+  });
+  assert.equal(stopAgentJob(job), true);
+  const deadGroup = pgid => { try { process.kill(-pgid, 0); return false; } catch (error) { return error.code === 'ESRCH'; } };
+  await until(() => deadGroup(job.pid) && deadGroup(subPgid) && ended(grandPid), 20000);
+  const cleanup = await cleanupAgentJob(job);
+  assert.equal(cleanup.confirmed, true);
+});

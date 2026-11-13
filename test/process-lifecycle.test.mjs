@@ -1,4 +1,4 @@
-// Generated from prompts/cli/process-lifecycle.prompt.md (sha256: ca1d227bd76f65a3347d6f057eead8bc937ef9226b566c7f0fd4fd3228c5ac70).
+// Generated from prompts/cli/process-lifecycle.prompt.md (sha256: 633979f76a75c5eafe13c915d6c0982e6f71ea2125afa24fb03a8bf80be6da83).
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { descendants, parseProcessTable, terminateCaptured } from '../src/process-lifecycle.mjs';
@@ -74,4 +74,24 @@ test('keeps a same-start process with changed command for retry', async () => {
   const signals = [], changed = { ...rows[1], args: 'node helper changed' };
   const result = await terminateCaptured([rows[1]], { list: async () => [changed], signal: (...args) => signals.push(args), sleep: async () => {}, grace: 1, poll: 1 });
   assert.equal(result.confirmed, false); assert.deepEqual(signals, []);
+});
+
+test('signals a captured child process group (-pgid) with SIGTERM then SIGKILL, even after its leader exited, and skips reused leader PIDs', async t => {
+  const leader = rows[1], stubbornGrandchild = { pid: 19, ppid: 1, pgid: leader.pgid, rss: 20, start: 'Mon Nov 11 10:00:05 2026', args: 'node value.mjs stubborn' };
+  await t.test('leader exited leaving a SIGTERM-ignoring grandchild in the group', async () => {
+    let active = [stubbornGrandchild]; const signals = [];
+    const result = await terminateCaptured([leader], { list: async () => active,
+      signal: (target, sig) => { signals.push([target, sig]); if (target === -leader.pgid && sig === 'SIGKILL') active = []; },
+      sleep: async () => {}, grace: 1, poll: 1 });
+    assert.deepEqual(result, { confirmed: true, stopped: 1, killed: 1, remaining: 0 });
+    assert.deepEqual(signals, [[-leader.pgid, 'SIGTERM'], [-leader.pgid, 'SIGKILL']]);
+  });
+  await t.test('reused leader PID is never group-signalled', async () => {
+    const reusedLeader = { ...leader, start: 'Mon Nov 11 11:30:00 2026', args: 'node other-tenant' };
+    const signals = [];
+    const result = await terminateCaptured([leader], { list: async () => [reusedLeader],
+      signal: (...args) => signals.push(args), sleep: async () => {}, grace: 1, poll: 1 });
+    assert.equal(result.confirmed, true);
+    assert.deepEqual(signals, []);
+  });
 });
