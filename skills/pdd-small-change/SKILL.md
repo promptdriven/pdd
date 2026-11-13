@@ -1,15 +1,15 @@
 ---
 name: pdd-small-change
-description: PDD small-change workflow. Use when the person asks for a small, contained change that is easy to undo, such as a typo, a config value or a small fix. Plan it, make it, verify it, one PR.
+description: PDD small-change workflow. Use when the person asks for a small, contained change that is easy to undo, or for any fix that changes no product behavior (docs, config, CI, package data or tests), also when the issue is written as a bug. Plan it, make it, verify it, one PR.
 metadata:
-  pdd-skills: 0.1.29
+  pdd-skills: 0.1.31
 ---
 
 # PDD small change
 
 Fix both: the brakes (the real defect) and the warning light (a test or check that would catch it next time). Brakes first. If the agent cannot find the defect yet, it fixes the warning light first: it adds what makes the defect visible (a failing reproducer test, a precise error, logging), so the cause becomes easy to find, and then it fixes the brakes. A warning-light-only change must say 'Not fixed yet: this helps find the cause' on the PR, and the issue stays open; it never closes the bug.
 
-Use this for a small change with a clear effect that is easy to undo. If the impact grows, suggest pdd-bug or pdd-feature.
+Use this for a small change that is easy to undo, and for every fix that touches only non-code files (docs, config, CI, metadata or tests) with no product behavior change, even when worded as a bug. If behavior impact grows, suggest pdd-bug or pdd-feature.
 
 Each area is one main chat. Read the step files that its line names.
 1. plan: steps/scope.md → gate: approve

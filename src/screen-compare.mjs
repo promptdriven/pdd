@@ -1,9 +1,10 @@
-// Generated from prompts/cli/screen-compare.prompt.md (sha256: d4cdafddcfb7d66f9307696be17a67ad581b20b90f104b8f1656711c55bd9a77).
+// Generated from prompts/cli/screen-compare.prompt.md (sha256: f047f277c4d61fb385265acf33f5664c598fd1d4cf874aed30775103897aafc7).
 import { spawn } from 'node:child_process';
 import { accessSync, constants, lstatSync, mkdtempSync, readFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
+import { evaluateScreenLook } from './screen-design-check.mjs';
 
 const failure = (message, exitCode = 2) => Object.assign(new Error(message), { exitCode });
 const normalize = text => text.replace(/\s+/g, ' ').trim();
@@ -18,7 +19,7 @@ function executable(explicit, env) {
 }
 
 // CDP's local pipe requires no package, TCP listener or downloaded browser.
-async function browserRun({ source, url, chromePath, env }) {
+async function browserRun({ source, url, chromePath, env, look = false }) {
   const profile = mkdtempSync(join(tmpdir(), 'pdd-screen-'));
   let child, session, timeout, closed = false, serial = 0, pending = new Map(), events = new Map(), documentStatus = 0, mainFrame;
   const stop = error => { for (const { reject, timer } of pending.values()) { clearTimeout(timer); reject(error); } pending.clear(); };
@@ -36,7 +37,11 @@ async function browserRun({ source, url, chromePath, env }) {
     return reply.result?.value;
   };
   try {
-    child = spawn(executable(chromePath, env), ['--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--no-first-run', '--no-default-browser-check', '--disable-background-networking', '--disable-extensions', '--remote-debugging-pipe', `--user-data-dir=${profile}`, 'about:blank'], { env, detached: process.platform !== 'win32', stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'] });
+    child = spawn(executable(chromePath, env), ['--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--no-first-run', '--no-default-browser-check', '--disable-background-networking', '--disable-extensions', '--use-mock-keychain', '--password-store=basic', '--remote-debugging-pipe', `--user-data-dir=${profile}`, 'about:blank'], { env, detached: process.platform !== 'win32', stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'] });
+    const onPipeError = error => { closed = true; stop(failure(`Chrome command pipe failed: ${error.message}`, 5)); };
+    child.stdio[3].on('error', onPipeError);
+    child.stdio[4].on('error', onPipeError);
+    child.stderr.on('error', () => {});
     child.on('error', error => { closed = true; stop(failure(`Chrome could not start: ${error.message}`, 5)); });
     child.on('exit', () => { closed = true; stop(failure('Chrome closed before the comparison finished.', 5)); });
     child.stderr.resume();
@@ -66,7 +71,7 @@ async function browserRun({ source, url, chromePath, env }) {
     const viewport = reference.viewport;
     await send('Emulation.setDeviceMetricsOverride', { width: Math.ceil(viewport.width), height: Math.ceil(viewport.height), deviceScaleFactor: 1, mobile: false });
     await evaluate('document.fonts.ready');
-    const expected = await evaluate(`(${snapshot.toString()})(true)`);
+    const expected = await evaluate(`(${snapshot.toString()})(true, undefined, undefined, undefined, ${Boolean(look)})`);
     if (expected.error) throw failure(expected.error);
     if (!expected.parts.length) throw failure('The SVG drawing has no visible required ids or text.');
     mainFrame = (await send('Page.getFrameTree')).frameTree.frame.id;
@@ -77,10 +82,10 @@ async function browserRun({ source, url, chromePath, env }) {
     try { await Promise.race([load, new Promise((_, reject) => { loadTimer = setTimeout(() => reject(failure('Page load timed out.', 5)), 15000); })]); }
     finally { clearTimeout(loadTimer); events.delete('Page.loadEventFired'); }
     if (documentStatus >= 400) throw failure(`Page navigation failed: HTTP ${documentStatus}.`, 5);
-    const actual = await evaluate(`(${capturePage.toString()})(${snapshot.toString()}, ${JSON.stringify(viewport)})`);
+    const actual = await evaluate(`(${capturePage.toString()})(${snapshot.toString()}, ${JSON.stringify(viewport)}, ${Boolean(look)})`);
     if (actual?.notReady) return actual;
     if (!actual || actual.error) throw failure(actual?.error || 'Could not inspect the page.', 5);
-    return { viewport, reference: expected.parts, actual: actual.parts };
+    return { viewport, reference: expected.parts, actual: actual.parts, referenceLook: expected.look, actualLook: actual.look };
   } finally {
     clearTimeout(timeout);
     if (child && !closed) { try { await send('Browser.close', {}, null); } catch { /* already exited or failed */ } }
@@ -98,7 +103,7 @@ async function browserRun({ source, url, chromePath, env }) {
 
 // Executes in the loaded page. Door reads never activate a control or call an
 // action endpoint. A monotonic deadline includes fonts and the final layout.
-async function capturePage(snapshot, referenceViewport) {
+async function capturePage(snapshot, referenceViewport, captureLook = false) {
   const root = document.documentElement, version = root.getAttribute('data-pdd-screen-door');
   const legacy = root.hasAttribute('data-try-session') && [...document.querySelectorAll('base[href]')].some(base => {
     try { return new URL(base.href).pathname === '/__pdd/screen/'; } catch { return false; }
@@ -112,7 +117,7 @@ async function capturePage(snapshot, referenceViewport) {
       const ready = async () => { try { await document.fonts.ready; await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))); clearTimeout(deadline); resolve(); } catch (error) { clearTimeout(deadline); reject(error); } };
       if (document.readyState === 'complete') ready(); else addEventListener('load', ready, { once: true });
     });
-    return snapshot(false);
+    return snapshot(false, undefined, undefined, undefined, captureLook);
   }
   const started = performance.now(), expired = () => performance.now() - started >= 10000;
   const observe = () => {
@@ -163,7 +168,7 @@ async function capturePage(snapshot, referenceViewport) {
       }
       if (settleError) throw settleError;
       if (settled) {
-        const result = snapshot(false, current.scope, referenceViewport, current);
+        const result = snapshot(false, current.scope, referenceViewport, current, captureLook);
         const after = observe(), latest = surface();
         if (after.reason) return notReady(after.state, after.reason);
         if (expired()) return notReady(after.state, 'timeout');
@@ -208,7 +213,7 @@ function prepareReference(source) {
   return { viewport: { width, height } };
 }
 
-function snapshot(reference, scope = globalThis.document, referenceViewport, selected) {
+function snapshot(reference, scope = globalThis.document, referenceViewport, selected, captureLook = false) {
   const document = scope.ownerDocument || scope, win = document.defaultView;
   const getComputedStyle = element => win.getComputedStyle(element);
   const host = selected?.host, shadow = scope.nodeType === Node.DOCUMENT_FRAGMENT_NODE;
@@ -225,6 +230,35 @@ function snapshot(reference, scope = globalThis.document, referenceViewport, sel
   const svgPaint = new Set(['text', 'tspan', 'textPath', 'rect', 'circle', 'ellipse', 'path', 'polygon', 'polyline', 'line']);
   const svgContainer = new Set(['svg', 'g', 'a', 'switch']);
   const transparent = color => color === 'none' || color === 'transparent' || /^rgba\([^,]+,[^,]+,[^,]+,\s*0(?:\.0+)?\s*\)$/.test(color) || /\/\s*0(?:\.0+)?\s*\)$/.test(color);
+  const emptyInset = value => {
+    const match = /^inset\(([^)]+)\)(?:\s+(?:border|padding|content|margin)-box)?$/.exec(value);
+    if (!match) return false;
+    const [offsets, ...radii] = match[1].trim().split(/\s+round\s+/);
+    if (radii.length > 1 || radii.length === 1 && !radii[0]) return false;
+    const tokens = offsets.split(/\s+/);
+    if (tokens.length < 1 || tokens.length > 4 || !tokens.every(token => /^(?:\d+(?:\.\d+)?|\.\d+)(?:%|px)$/.test(token))) return false;
+    const pct = token => token.endsWith('%') ? Number(token.slice(0, -1)) : 0;
+    const [t, r = t, b = t, l = r] = tokens.map(pct);
+    return t + b >= 100 || l + r >= 100;
+  };
+  const emptyRect = value => {
+    const match = /^rect\(([^,]+),\s*([^,]+),\s*([^,]+),\s*([^)]+)\)$/.exec(value);
+    if (!match) return false;
+    const coords = match.slice(1).map(part => {
+      const token = part.trim();
+      if (token === 'auto') return null;
+      return /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)px$/.test(token) ? Number(token.slice(0, -2)) : NaN;
+    });
+    if (coords.some(Number.isNaN)) return false;
+    const [t, r, b, l] = coords;
+    return t !== null && b !== null && b <= t || l !== null && r !== null && r <= l;
+  };
+  const collapsedClip = parent => {
+    if (parent.namespaceURI !== 'http://www.w3.org/1999/xhtml' || parent.getRootNode() !== scope) return false;
+    const effect = parent.ownerDocument.defaultView.getComputedStyle(parent);
+    if (effect.maskImage !== 'none' || effect.filter !== 'none') return false;
+    return emptyInset(effect.clipPath) || ['absolute', 'fixed'].includes(effect.position) && emptyRect(effect.clip) && (effect.clipPath === 'none' || emptyInset(effect.clipPath));
+  };
   let unsupported;
   const painted = (color, opacity) => {
     if (transparent(color) || Number(opacity) === 0) return false;
@@ -291,7 +325,11 @@ function snapshot(reference, scope = globalThis.document, referenceViewport, sel
       }
     }
     if (degenerate && !(parseFloat(style.strokeWidth) > 0 && painted(style.stroke, style.strokeOpacity))) return false;
-    if (effects.length) { unsupported = 'Unsupported applied clip-path, clip, mask or filter; visible parts cannot be established.'; return false; }
+    if (effects.length) {
+      if (!reference && effects.every(collapsedClip)) return false;
+      unsupported = 'Unsupported applied clip-path, clip, mask or filter; visible parts cannot be established.';
+      return false;
+    }
     if ((kind === 'text' || ['text', 'tspan', 'textPath'].includes(el.localName)) && !textPaint(style)) return false;
     if (svg) {
       if (svgPaint.has(el.localName)) {
@@ -385,7 +423,132 @@ function snapshot(reference, scope = globalThis.document, referenceViewport, sel
     parts.push(part);
   }
   if (unsupported) return { error: unsupported };
-  return { parts: parts.filter(part => reference || part.kind !== 'text' || !parts.some(other => other !== part && other.kind === 'text' && other.value === part.value && (!part.visible || other.visible) && other.ancestors.includes(part.node))) };
+  const filteredParts = parts.filter(part => reference || part.kind !== 'text' || !parts.some(other => other !== part && other.kind === 'text' && other.value === part.value && (!part.visible || other.visible) && other.ancestors.includes(part.node)));
+  if (!captureLook) return { parts: filteredParts };
+  const probeVisible = (el, box, kind) => {
+    const saved = unsupported;
+    const ok = visible(el, box, kind);
+    unsupported = saved;
+    return ok;
+  };
+  const scaleBox = box => referenceViewport ? {
+    x: (box.x - left) / sx * referenceViewport.width / width,
+    y: (box.y - top) / sy * referenceViewport.height / height,
+    width: box.width / sx * referenceViewport.width / width,
+    height: box.height / sy * referenceViewport.height / height,
+  } : { x: box.x, y: box.y, width: box.width, height: box.height };
+  const parseRgb = (color, opacity = 1) => {
+    if (!color || transparent(color) || !(Number(opacity) > 0)) return null;
+    if (color.startsWith('url(')) {
+      const fragment = /^url\(["']?#([^"')]+)["']?\)$/.exec(color), paint = fragment && scope.getElementById(fragment[1]);
+      if (paint && ['linearGradient', 'radialGradient'].includes(paint.localName)) {
+        for (const stop of paint.querySelectorAll('stop')) {
+          const st = getComputedStyle(stop), rgb = parseRgb(st.stopColor, st.stopOpacity);
+          if (rgb) return rgb;
+        }
+      }
+      return null;
+    }
+    const match = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)(?:[\s,/]+([\d.]+))?\s*\)$/i.exec(color);
+    if (!match) return null;
+    const alpha = (match[4] === undefined ? 1 : Number(match[4])) * Number(opacity);
+    return alpha > 0 ? [Math.round(Number(match[1])), Math.round(Number(match[2])), Math.round(Number(match[3]))] : null;
+  };
+  const rgbDist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  const vw = referenceViewport ? referenceViewport.width : width, vh = referenceViewport ? referenceViewport.height : height;
+  const shapeTag = el => svgPaint.has(el.localName) && !['text', 'tspan', 'textPath', 'line'].includes(el.localName);
+  let canvasColor = null;
+  const lookBoxes = [];
+  if (reference) {
+    const rootSvg = scope.querySelector('svg');
+    if (rootSvg) {
+      const rootStyle = getComputedStyle(rootSvg);
+      canvasColor = parseRgb(rootStyle.backgroundColor, rootStyle.opacity);
+    }
+    for (const el of elements) {
+      if (excluded(el) || el.closest('[data-context-only="true"],.context-only') || !shapeTag(el)) continue;
+      const raw = el.getBoundingClientRect();
+      if (!probeVisible(el, raw, 'id')) continue;
+      const b = scaleBox(raw);
+      if (b.width >= 0.85 * vw && b.height >= 0.85 * vh) {
+        const st = getComputedStyle(el), fill = parseRgb(st.fill, st.fillOpacity);
+        if (fill) { canvasColor = fill; break; }
+      }
+    }
+    for (const part of parts) {
+      if (part.kind !== 'id' || !part.visible) continue;
+      const el = elements[part.node], b = part.box;
+      if (!el || b.width < 24 || b.height < 16 || (b.width >= 0.85 * vw && b.height >= 0.85 * vh)) continue;
+      const shape = shapeTag(el) ? el : svgContainer.has(el.localName) ? [...el.querySelectorAll('*')].find(child => !excluded(child) && !child.closest('[data-context-only="true"],.context-only') && shapeTag(child) && probeVisible(child, child.getBoundingClientRect(), 'id') && scaleBox(child.getBoundingClientRect()).width >= 0.7 * b.width && scaleBox(child.getBoundingClientRect()).height >= 0.7 * b.height) : null;
+      if (!shape) continue;
+      const st = getComputedStyle(shape), fill = parseRgb(st.fill, st.fillOpacity), stroke = parseFloat(st.strokeWidth) > 0 ? parseRgb(st.stroke, st.strokeOpacity) : null;
+      if ((fill && (!canvasColor || rgbDist(fill, canvasColor) > 12)) || stroke !== null) lookBoxes.push({ id: part.value, box: b, fill, stroke });
+    }
+  } else {
+    let bg = null;
+    for (const rootEl of shadow ? [host] : [scope.documentElement, scope.body].filter(Boolean)) {
+      const st = getComputedStyle(rootEl), c = parseRgb(st.backgroundColor, st.opacity);
+      if (c) bg = c;
+    }
+    const container = shadow ? scope : (scope.body || scope.documentElement);
+    const topChildren = container ? [...container.children].filter(child => !excluded(child) && probeVisible(child, child.getBoundingClientRect(), 'surface')) : [];
+    if (topChildren.length === 1) {
+      const mainEl = topChildren[0], mb = scaleBox(mainEl.getBoundingClientRect()), mst = getComputedStyle(mainEl);
+      if (mainEl.namespaceURI === 'http://www.w3.org/2000/svg' && mb.width >= 0.85 * vw && mb.height >= 0.85 * vh) {
+        const mc = parseRgb(mst.backgroundColor, mst.opacity);
+        if (mc) bg = mc;
+        const backdrop = [...mainEl.querySelectorAll('*')].find(child => !excluded(child) && shapeTag(child) && probeVisible(child, child.getBoundingClientRect(), 'id') && scaleBox(child.getBoundingClientRect()).width >= 0.85 * vw && scaleBox(child.getBoundingClientRect()).height >= 0.85 * vh);
+        if (backdrop) {
+          const bst = getComputedStyle(backdrop), bf = parseRgb(bst.fill, bst.fillOpacity);
+          if (bf) bg = bf;
+        }
+      } else if (mb.width >= 0.85 * vw && mb.height >= 0.85 * vh) {
+        const mc = parseRgb(mst.backgroundColor, mst.opacity);
+        if (mc) bg = mc;
+      }
+    }
+    canvasColor = bg || [255, 255, 255];
+    const surfacePaint = target => {
+      if (target.namespaceURI === 'http://www.w3.org/2000/svg') {
+        const tb = scaleBox(target.getBoundingClientRect());
+        const shape = shapeTag(target) ? target : svgContainer.has(target.localName) ? [...target.querySelectorAll('*')].find(child => !excluded(child) && shapeTag(child) && probeVisible(child, child.getBoundingClientRect(), 'id') && scaleBox(child.getBoundingClientRect()).width >= 0.7 * tb.width && scaleBox(child.getBoundingClientRect()).height >= 0.7 * tb.height) : null;
+        if (!shape) return { fill: null, stroke: null, painted: false };
+        const st = getComputedStyle(shape), fill = parseRgb(st.fill, st.fillOpacity), stroke = parseFloat(st.strokeWidth) > 0 ? parseRgb(st.stroke, st.strokeOpacity) : null;
+        return { fill, stroke, painted: Boolean((fill && rgbDist(fill, canvasColor) > 12) || stroke !== null) };
+      }
+      const st = getComputedStyle(target), fill = parseRgb(st.backgroundColor, st.opacity);
+      let stroke = null;
+      for (const side of ['Top', 'Right', 'Bottom', 'Left']) {
+        if (!['none', 'hidden'].includes(st[`border${side}Style`]) && parseFloat(st[`border${side}Width`]) > 0) {
+          const bc = parseRgb(st[`border${side}Color`], st.opacity);
+          if (bc) { stroke = bc; break; }
+        }
+      }
+      if (!stroke && !['none', 'hidden'].includes(st.outlineStyle) && parseFloat(st.outlineWidth) > 0) stroke = parseRgb(st.outlineColor, st.opacity);
+      return { fill, stroke, painted: Boolean((fill && rgbDist(fill, canvasColor) > 12) || stroke !== null) };
+    };
+    for (const part of parts) {
+      if (part.kind !== 'id') continue;
+      const el = elements[part.node];
+      if (!el || !part.visible) {
+        lookBoxes.push({ id: part.value, visible: Boolean(part.visible), painted: false, box: part.box, fill: null, stroke: null });
+        continue;
+      }
+      let own = surfacePaint(el);
+      if (!own.painted && own.fill === null && own.stroke === null) {
+        const visChildren = [...el.children].filter(child => !excluded(child) && probeVisible(child, child.getBoundingClientRect(), 'surface'));
+        if (visChildren.length === 1) {
+          const cb = scaleBox(visChildren[0].getBoundingClientRect());
+          if (cb.width >= 0.8 * part.box.width && cb.height >= 0.8 * part.box.height) own = surfacePaint(visChildren[0]);
+        }
+      }
+      lookBoxes.push({ id: part.value, visible: true, painted: own.painted, box: part.box, fill: own.fill, stroke: own.stroke });
+    }
+  }
+  return {
+    parts: filteredParts,
+    look: { canvasColor, boxes: lookBoxes },
+  };
 }
 
 const center = box => [box.x + box.width / 2, box.y + box.height / 2];
@@ -426,7 +589,7 @@ function compareParts(reference, actual, viewport) {
   return rows;
 }
 
-export async function compareScreen({ url, drawingPath, cwd = process.cwd(), chromePath }, ports = {}) {
+export async function compareScreen({ url, drawingPath, cwd = process.cwd(), chromePath, look = false }, ports = {}) {
   let target; try { target = new URL(url); } catch { throw failure('Screen URL must be an http/https URL without credentials.'); }
   if (!['http:', 'https:'].includes(target.protocol) || target.username || target.password) throw failure('Screen URL must be an http/https URL without credentials.');
   if (typeof drawingPath !== 'string' || !drawingPath.endsWith('.ui.svg')) throw failure('Drawing must be a readable regular .ui.svg file.');
@@ -438,7 +601,7 @@ export async function compareScreen({ url, drawingPath, cwd = process.cwd(), chr
   for (const token of tokens) if (token.startsWith('<!--') && (!token.endsWith('-->') || token.slice(4, -3).includes('--') || token.slice(4, -3).endsWith('-'))) throw failure('Malformed or nested SVG comment.');
   const active = tokens.filter(token => !token.startsWith('<!--') && !token.startsWith('<![CDATA[')).join('\n');
   if (!source.trim() || /<!DOCTYPE|<!ENTITY|<\s*(?:script|foreignObject)\b|\son\w+\s*=/i.test(active)) throw failure('Empty or unsafe SVG drawing.');
-  const rendered = await (ports.browser ?? browserRun)({ source, url: target.href, chromePath, env: ports.env ?? process.env });
+  const rendered = await (ports.browser ?? browserRun)({ source, url: target.href, chromePath, env: ports.env ?? process.env, look });
   if (rendered?.notReady) {
     const { state, reason } = rendered.notReady;
     const messages = {
@@ -453,13 +616,24 @@ export async function compareScreen({ url, drawingPath, cwd = process.cwd(), chr
     throw Object.assign(failure(messages[reason] || 'The Screen is not ready.', 6), { code: 'screen-not-ready', state, reason });
   }
   if (!rendered?.reference?.length || !rendered.actual || !(rendered.viewport?.width > 0 && rendered.viewport?.height > 0)) throw failure('Browser returned no valid reference parts.', 5);
-  const rows = compareParts(rendered.reference, rendered.actual, rendered.viewport);
-  return { drawing, url: target.href, viewport: rendered.viewport, rows, passed: rows.every(row => row.status === 'pass') };
+  const partRows = compareParts(rendered.reference, rendered.actual, rendered.viewport);
+  if (!look) return { drawing, url: target.href, viewport: rendered.viewport, rows: partRows, passed: partRows.every(row => row.status === 'pass') };
+  const lookReport = evaluateScreenLook({
+    viewport: rendered.viewport,
+    reference: rendered.referenceLook ?? { canvasColor: null, boxes: [] },
+    actual: rendered.actualLook ?? { canvasColor: null, boxes: [] },
+  });
+  const rows = [...partRows, ...lookReport.rows];
+  return { drawing, url: target.href, viewport: rendered.viewport, look: true, rows, passed: rows.every(row => row.status === 'pass') };
 }
 
 export function formatScreenComparison(report) {
   const escape = value => String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/[\\`*_{}[\]()#+.!|~-]/g, '\\$&').replace(/[\r\n]+/g, ' ');
+  const hasLook = report.look === true || report.rows.some(row => row.kind === 'look');
+  const note = hasLook
+    ? 'Parts, text, regions, order and look within tolerance; pixel equivalence is not required.'
+    : 'Parts, text, regions and order; colors, typography and pixel equivalence require their separate comparator.';
   return [`Screen vs drawing (${escape(report.drawing)}, ${report.viewport.width} × ${report.viewport.height})`, '', '| Part | Kind | Expected | Actual | Status |', '| --- | --- | --- | --- | --- |',
     ...report.rows.map(row => `| ${[row.part, row.kind, row.expected, row.actual, row.status].map(escape).join(' | ')} |`), '',
-    `Screen vs drawing: ${report.passed ? 'PASS' : 'FAIL'} (${report.rows.filter(row => row.status === 'pass').length} of ${report.rows.length} parts pass). Parts, text, regions and order; colors, typography and pixel equivalence require their separate comparator.`].join('\n');
+    `Screen vs drawing: ${report.passed ? 'PASS' : 'FAIL'} (${report.rows.filter(row => row.status === 'pass').length} of ${report.rows.length} parts pass). ${note}`].join('\n');
 }
