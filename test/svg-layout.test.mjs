@@ -223,3 +223,56 @@ test('lint ignores valid comments without reconstructing markup and warns on mal
   const active = lintSvgLayouts(drawing(t, prose, '<svg><!-- harmless --><script>alert(1)</script></svg>'));
   assert.match(active[0], /unsafe/);
 });
+
+test('non-control status, explanation and negated quotes absent from SVG never warn as controls', t => {
+  const prose = [
+    '# Dialog',
+    '',
+    '## Appearance',
+    '',
+    '![Dialog](game.ui.svg)',
+    '',
+    'Alongside the "Confirm" button (`id="confirm"`), show status text "Changes stay local until confirmed."',
+    'Without controls enabled, explain "Read-only preview. Editing is locked."',
+    'No button triggers "Auto-publish" in this state.',
+    '`instructions` says "Enter confirms. Escape closes." Also explain "Drafts expire after 24 hours."'
+  ].join('\n');
+  assert.deepEqual(lintSvgLayouts(drawing(t, prose, '<svg xmlns="http://www.w3.org/2000/svg"><g id="confirm"><text>Confirm</text></g></svg>')), []);
+  assert.deepEqual(lintSvgLayouts(drawing(t, prose, '<svg xmlns="http://www.w3.org/2000/svg"></svg>')), [
+    'Warning: SVG layout game.prompt.md -> game.ui.svg: control "Confirm": prompt control absent from drawing.',
+    'Warning: SVG layout game.prompt.md -> game.ui.svg: control "confirm": prompt control absent from drawing.'
+  ]);
+});
+
+test('apostrophes, fenced HTML controls, raw HTML containers and non-control prose attributes stay bounded', t => {
+  const prose = [
+    '# Editor',
+    '',
+    '![Editor](game.ui.svg)',
+    '',
+    "Keep the requester's 'Retry' button visible when the screen's banner doesn't clear.",
+    'Render a button with class="chip primary", role="button", aria-busy=\'true\', data-testid="save-chip", and id="next-step" labeled "Next".',
+    '<div id="card-shell" class="panel">',
+    '```html',
+    '<div id="inner-box" class="stack">',
+    '  <button id="apply" value="apply-now">Apply &amp; close</button>',
+    '  <input type="hidden" id="csrf" name="csrf" value="secret-token"/>',
+    '  <input type="reset" id="clear-all" name="clear-name" value="Clear"/>',
+    '  <textarea id="notes" name="notes-body" placeholder="Write notes">Sample draft</textarea>',
+    '</div>',
+    '```',
+    '</div>'
+  ].join('\n');
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg"><g id="card-shell"><g id="apply"><text>Apply &amp; close</text></g></g></svg>';
+  assert.deepEqual(lintSvgLayouts(drawing(t, prose, svg)), [
+    'Warning: SVG layout game.prompt.md -> game.ui.svg: control "Clear": prompt control absent from drawing.',
+    'Warning: SVG layout game.prompt.md -> game.ui.svg: control "Next": prompt control absent from drawing.',
+    'Warning: SVG layout game.prompt.md -> game.ui.svg: control "Retry": prompt control absent from drawing.',
+    'Warning: SVG layout game.prompt.md -> game.ui.svg: control "apply-now": prompt control absent from drawing.',
+    'Warning: SVG layout game.prompt.md -> game.ui.svg: control "clear-all": prompt control absent from drawing.',
+    'Warning: SVG layout game.prompt.md -> game.ui.svg: control "clear-name": prompt control absent from drawing.',
+    'Warning: SVG layout game.prompt.md -> game.ui.svg: control "next-step": prompt control absent from drawing.',
+    'Warning: SVG layout game.prompt.md -> game.ui.svg: control "notes": prompt control absent from drawing.',
+    'Warning: SVG layout game.prompt.md -> game.ui.svg: control "notes-body": prompt control absent from drawing.'
+  ]);
+});
