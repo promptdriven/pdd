@@ -1,29 +1,37 @@
-# Autopilot intake cards (shadow)
+# Autopilot intake cards
 
-Own `src/autopilot-intake.mjs`. When a machine's intake mode is `shadow`, each tick
-of the [Autopilot core](autopilot-core.prompt.md) asks this module to judge, before
-any work starts, whether each open issue in scope is ready for one unattended AI
-job. The module writes local cards and a daily change file. It never writes to
-GitHub and never changes which issue the core starts. The cards exist so that
-people can score them against what really happened before any gate uses them.
+Own `src/autopilot-intake.mjs`. When a machine's intake mode is `shadow` or
+`active`, each tick of the [Autopilot core](autopilot-core.prompt.md) asks this
+module to judge whether each open issue in scope is ready for unattended AI
+work. In `shadow` mode, the module writes local cards and a daily change file,
+never writes to GitHub and never changes which issue the core starts. In `active`
+mode (#3189, #3190, #3233), ready cards feed core selection without manual
+`pdd:autopilot` hand-feeding, and `improve` cards run one bounded read-only
+codebase inspection pass per human issue state to refine the specification or
+ask a person only when a real product, money, access or contract decision remains.
 
 Why this shape: a measured study of intake designs found that a short card from
 the issue text and the titles of the other open issues was as precise as a full
 code check, found more of the good issues, and gave the same answer on a second
 run far more often, at a third of the cost. Native facts (an assignee, an open
-blocked-by link, open sub-issues, a stop label) need no AI. Agents can also judge
-wrongly, so the cards stay a shadow record until people have measured them.
+blocked-by link, open sub-issues, a stop label) need no AI.
 Issue text is written by anyone who can open an issue, so a card agent reads it
 with no tools, no write access and no repository: the card is a judgment of text,
-nothing more.
+nothing more. Only when an active card says `improve` does a second bounded
+read-only pass inspect the repository checkout, still with no GitHub token.
 
 ## Rules
 
-- Mode: `intakeMode(value)` returns `shadow` for `shadow` and `off` for any other
+- Mode: `INTAKE_MODES` has `off`, `shadow` and `active`. `intakeMode(value)`
+  returns `shadow` for `shadow`, `active` for `active`, and `off` for any other
   value. Off is the default.
-- The core's one hook is `intakeTick(ctx, rows)`, after its own start step, inside a
-  try/catch. In `shadow` with an issue list it runs one pass (`shadowIntake`). In
-  any other intake mode it only stops the card jobs that still run
+- The core calls `collectActiveIntake(ctx, rows)` before its start step when
+  intake is `active` (to collect finished card and improve jobs so promoted
+  `ready` cards are available in the same tick), and `intakeTick(ctx, rows)`
+  after its start step inside a try/catch. In `shadow` with an issue list
+  `intakeTick` runs `shadowIntake`; in `active` it runs `activeIntake` to record
+  started issues, update `would-pick.json` and start bounded card or improve
+  jobs. In `off` it only stops the card jobs that still run
   (`stopCardJobs`) and removes their job files; it creates no file and makes no
   GitHub call. A tick that ends before the hook (core mode off, the GitHub reserve)
   runs no pass; the [launcher](autopilot-launcher.prompt.md) calls `stopCardJobs`
@@ -100,8 +108,30 @@ nothing more.
   from every kept string. Kept fields: `start` (true for ready and improve),
   `reason` (500 characters), `confidence` (0 to 1, else null), `canonical` (a
   positive number, duplicates only), `suggested_links` (at most 10, `blocked-by` or
-  `duplicate-of` with a positive number), `question` (person only), `area_hint` (at
-  most 6 paths) and `reported_model`.
+  `duplicate-of` with a positive number), `question` (person only), `areas` (at
+  most 6 normalized repository paths, populated from `areas` and `area_hint`),
+  `area_hint` (aliased to `areas` for shadow compatibility), `group_with` (sorted
+  unique positive integers of related open issues sharing the same module or root
+  cause, at most 8), `size` (`small`, `medium` or `large`, else null) and
+  `reported_model`.
+- Auto-improve before asking (`#3190`, `active` mode only): when an issue's
+  current card has class `improve` and no auto-improve comment has been posted
+  since the latest trusted human comment, start at most one bounded read-only
+  repo-inspection job (`improveCommand`: Codex `exec --ignore-user-config
+  --sandbox read-only --ephemeral` in `cwd: state.cwd`, or Claude `-p --safe-mode
+  --permission-mode plan --tools "Read,Glob,Grep"` in `cwd: state.cwd`, still
+  with `cardEnvironment` stripping every GitHub token). `readImprovement` parses
+  `{outcome: "ready" | "person", reason, areas, reproduction, acceptance_criteria,
+  size, group_with, question, model}`. When `outcome` is `ready`, post one
+  structured spec-refinement comment with hidden marker
+  `<!-- pdd:autopilot-intake:improve:N:VERSION -->` and promote the saved card to
+  `ready` for the updated issue state (tracking both pre- and post-comment
+  versions and human comment digest so Autopilot never loops on its own comment).
+  When `outcome` is `person` (only for a genuine human product, money, access or
+  contract choice), post one concise question comment with
+  `<!-- pdd:autopilot-core:question:N:intake-VERSION -->`, add label
+  `pdd:needs-decision`, trigger one `decision` alert via `ports.alert`, and park
+  the card as `person` until a human replies and removes `pdd:needs-decision`.
 - Each card names the agent kind and the configured model, and a finished card its
   `seconds`. A card job that ends with no valid card, runs longer than 20 minutes
   (it is stopped) or cannot be read for 20 minutes saves an error card; the issue
@@ -109,9 +139,10 @@ nothing more.
   issue left the scope, changed version or got a native fact is stopped or dropped
   with no card. A finished card job leaves no job files: the card holds the result;
   a failed card keeps only the job log. Files in `logs/` older than 7 days go.
-- Would pick (`wouldPick(rows, cards)`): the issues in scope with a ready card for
-  their current version and no native fact; issues with `total_blocking` > 0 first,
-  then the oldest, then the lower number.
+- Would pick (`wouldPick(rows, cards, options)`): the issues in scope with a ready
+  card for their current version and no native fact; issues with `total_blocking` > 0
+  first, then issues continuing an active group, then high-clarity small or bug
+  wins, then priority labels, then oldest `created_at` and lower number.
 - Started: each pass compares the core's own job files with the last pass and
   records each newly started issue with the verdict of its card before this pass
   and whether it was in the previous would-pick list. The first pass (also after a
@@ -148,3 +179,4 @@ nothing more.
 
 - [Headless job runner](agent-job.prompt.md): required to start, read and stop card
   jobs and for the job environment.
+- [Areas](autopilot-areas.prompt.md): required to normalize card `areas` paths.

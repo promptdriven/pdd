@@ -250,22 +250,23 @@ that issue for this tick.
 
 ## Claim and start
 
-**No label, no claim.** When the settings have `labelRequired` (the launcher sets it) and no `label`, intake claims
+**No label, no claim.** When the settings have `labelRequired` (the launcher sets it), no `label`, and `intake` is not `active`, intake claims
 nothing and returns `intake held: no opt-in label; run pdd autopilot start --label pdd:autopilot and mark issues with
-pdd autopilot add N`. Jobs still advance. Without `labelRequired` (a direct `tickCore` call), no label means every
-ready issue.
+pdd autopilot add N`. Jobs still advance. Without `labelRequired` (a direct `tickCore` call) or when `intake` is `active`, no opt-in label is required.
 
-**Collisions at start (debate B 5.1, 5.2; notes and hints, never a lock).** S2: intake
+**Active intake selection, grouping and area serialization (#3189, #3190, #3233).** When `settings.intake` is `active`, `tickCore` first calls `collectActiveIntake` of [intake cards](autopilot-intake.prompt.md) so finished card and auto-improve passes update `ROOT/intake/cards/` before core selection. In `active` mode, core selection considers only ready issues whose saved intake card matches the current `issueVersion(row)` (or pre-comment auto-improved version) with `card.class === "ready"`; unvetted, `improve`, `person` and other card classes never start a build. Eligible issues are ranked with `wouldPick` (unblockers with `total_blocking > 0` first, then issues continuing an active group, then high-clarity small or bug wins, then priority labels, ahead of oldest age). When 2 to 3 small `ready` issues share a `group_with` cluster or overlapping module `areas` (`groupReadyIssues`), core claims them together into one grouped job (`job.issues = [primary, ...companions]`, `job.companions`, `job.areas`), includes all companion specs and any refined specification in `issueText`, requires `Closes #A`, `Closes #B` in the PR body and `writeEvidenceBlock`, heartbeats all member claims, and closes, marks or releases all member issues together on merge, observe `would-merge`, END or stop. Any candidate or group whose `areas` (card `areas`, named paths or `area:*` labels) overlap a running job's `areas`, changed `files`, named paths or `area:*` labels (`areasOverlap`) waits out that slot (`intake held: area busy (#M touches AREA)`) while disjoint candidates take free slots.
+
+**Collisions at start (debate B 5.1, 5.2; notes and hints, never a lock).** S2: in `off` and `shadow` intake modes, intake
 reads up to the free slots plus 4 ready issues and starts first those whose named
 paths (paths in the title and body) meet no other running job (its named paths and its
-changed files); else the oldest. A slot is never left idle for it. S3: the build brief
+changed files); else the oldest. A slot is never left idle for it unless an explicit `area:*` label collides. S3: the build brief
 lists each other running job of the repository (this machine's job files; for other
-machines the `files` of the claim records of `pdd:working` issues, at most 10, read only
+machines the `files` and `areas` of the claim records of `pdd:working` issues, at most 10, read only
 when an issue is ready) with
 "Other jobs change these files now. Change them only when the issue needs it. Keep such
 edits small and on their own lines.", and the base merges of the last 24 hours that
 touched files that the issue names. P1: at each push (once per head) the job's changed
-files are written into its claim record (`files`) with a PATCH of its own claim comment.
+files (and `areas`, when set) are written into its claim record with a PATCH of its own claim comment.
 
 For each ready issue while slots are free, at most 3 claim attempts per tick:
 

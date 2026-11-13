@@ -37,8 +37,9 @@ machine`); it never writes `pdd.json` (unlike `pdd autopilot observe`). `start -
 `state.report` the same way. `start --decisions ask|decide` saves `state.decisions` the same way: it replaces the
 core's `decisions` in the tick and status (`decisions MODE (this machine)`). `start --intake off|shadow` saves
 `state.intake`; the core tick gets `intake` from it
-(`intakeMode` of the [intake cards](autopilot-intake.prompt.md); off when none is saved). A blank label, or another
-value of `--mode`, `--report`, `--decisions` (`Use --decisions ask or --decisions decide.`) or `--intake`, returns exit
+(`intakeMode` of the [intake cards](autopilot-intake.prompt.md): `off`, `shadow` or `active`; `state.intake` wins over
+`autopilot.intake` in `pdd.json`, and `off` is the default). A blank label, or another
+value of `--mode`, `--report`, `--decisions` (`Use --decisions ask or --decisions decide.`) or `--intake` (`Use --intake off, --intake shadow or --intake active.`), returns exit
 code 2 with its usage line before any effect. `start --share PERCENT` (#3231, `shareOption`) saves `state.share`, a
 whole percent from 1 to 100: the part of this machine's CPU and memory that Autopilot may use (default 50 when none is
 saved); a later start without it keeps it, and pdd.json never sets it. Another value returns exit code 2 with `Use
@@ -64,8 +65,8 @@ the saved control revision, so a tick or start that read the old revision does n
 ## Doctor and start
 
 Dispatch doctor to [the doctor owner](autopilot-doctor.prompt.md). A start first keeps the Git-folder validation
-above, then reads only the saved state. **It asks for an opt-in label first:** when neither `--label`, the machine
-label nor `autopilot.label` in `pdd.json` names a label and the mode (the machine mode from `--mode` or saved, else
+above, then reads only the saved state. **It asks for an opt-in label first unless intake is active:** when neither `--label`, the machine
+label nor `autopilot.label` in `pdd.json` names a label, the effective intake mode (`--intake`, saved `state.intake` or `autopilot.intake` in `pdd.json`) is not `active`, and the mode (the machine mode from `--mode` or saved, else
 the core mode of `pdd.json`) is not off, return
 exit 1 with exactly `Autopilot did not start: it works only on the issues that you mark with an opt-in label. Run pdd
 autopilot start --label pdd:autopilot, then mark issues with pdd autopilot add N (or add the label on GitHub). Nothing
