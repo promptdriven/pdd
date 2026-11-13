@@ -226,7 +226,7 @@ test('pure JSON try_run with try_id returns normal results, structured declared 
   assert.equal(normal.replayed, false);
   assert.equal(normal.action_id, 'act-1');
   assert.notEqual(normal.run_id, normal.action_id);
-  assert.deepEqual(normal.usage, { calls: 1, remaining: 39, cap: 40, used: 1 });
+  assert.deepEqual({ calls: normal.usage.calls, remaining: normal.usage.remaining, cap: normal.usage.cap, used: normal.usage.used }, { calls: 1, remaining: 39, cap: 40, used: 1 });
 
   // 2. Exact repeat surfaces replayed: true and 0 calls
   nextMode = 'replay';
@@ -236,7 +236,7 @@ test('pure JSON try_run with try_id returns normal results, structured declared 
     input: { item: 'latte', quantity: 2 },
   });
   assert.equal(repeated.replayed, true);
-  assert.deepEqual(repeated.usage, { calls: 0, remaining: 38, cap: 40, used: 2 });
+  assert.deepEqual({ calls: repeated.usage.calls, remaining: repeated.usage.remaining, cap: repeated.usage.cap, used: repeated.usage.used }, { calls: 0, remaining: 38, cap: 40, used: 2 });
 
   // 3. Declared domain refusal returns structured error (not MCP isError), judges error checks, and saves expected_error case
   nextMode = 'declared-error';

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { accessSync, constants, copyFileSync, readFileSync, writeFileSync } from 'node:fs';
+import { accessSync, chmodSync, constants, copyFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { compareScreen, formatScreenComparison } from '../src/screen-compare.mjs';
 import { runCheck } from '../src/runtime-client.mjs';
@@ -408,4 +408,14 @@ test('public CLI requires literal CDATA labels, distinct occurrences and visible
     assert.equal(result.code, 1, result.stderr || result.stdout);
     assert.equal(result.report.rows.find(row => row.part === '“CDATA REQUIRED”')?.status, 'region');
   });
+});
+
+test('the browser starts with a mock keychain and basic password store, so a fresh profile never asks the OS keychain', async t => {
+  const input = setup(t), argsFile = join(input.cwd, 'chrome-args.json'), fake = join(input.cwd, 'fake-chrome');
+  writeFileSync(fake, `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(process.argv.slice(2)));\n`);
+  chmodSync(fake, 0o755);
+  await assert.rejects(compareScreen({ ...input, chromePath: fake }, { env: {} }), error => error.exitCode === 5);
+  const args = JSON.parse(readFileSync(argsFile, 'utf8'));
+  assert.ok(args.includes('--use-mock-keychain'), args.join(' '));
+  assert.ok(args.includes('--password-store=basic'), args.join(' '));
 });
