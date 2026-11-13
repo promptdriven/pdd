@@ -2,7 +2,7 @@
 name: pdd-graph
 description: Use when asked to read or open the saved PDD issue dependency graph, explain why an issue waits, or show what has no recorded blocker.
 metadata:
-  pdd-skills: 0.1.30
+  pdd-skills: 0.1.31
 ---
 
 Use the supported CLI and its saved model. Do not redraw or infer the graph with a model.
