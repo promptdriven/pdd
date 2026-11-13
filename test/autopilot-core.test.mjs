@@ -664,12 +664,17 @@ test('a merge check that keeps failing on GitHub (a 502) is a service stop after
   assert.equal(listReportDrafts({ root: w.reportRoot }).length, 0, 'and files no report');
 });
 
-test('an agent other than Codex or Claude holds intake without a claim', async t => {
+test('an agent other than Codex, Claude or agy holds intake without a claim; agy starts headless jobs', async t => {
   const w = await coreWorld(t);
   w.state.agent = { kind: 'gemini', command: 'gemini' };
   w.issue(17);
   const result = await w.tick();
-  assert.equal(w.started.length, 0); assert.equal(w.github.writes.length, 0); assert.match(result.message, /Codex or Claude/);
+  assert.equal(w.started.length, 0); assert.equal(w.github.writes.length, 0); assert.match(result.message, /Codex, Claude or agy/);
+  w.state.agent = { id: 'agy', kind: 'agy', command: '/opt/bin/agy' };
+  await w.tick();
+  assert.equal(w.started.length, 1);
+  assert.equal(w.started[0].command, '/opt/bin/agy');
+  assert.deepEqual(w.started[0].args, ['--input-format', 'text', '--output-format', 'stream-json', '--dangerously-skip-permissions']);
 });
 
 test('an ended job holds no slot after a restart, and END and merge remove its per-issue files', async t => {
@@ -2042,7 +2047,7 @@ test('I2 a changed prompt with a draft interface is red: one repair with the app
   assert.ok(repair, 'a draft interface starts a repair');
   assert.match(repair.input, /Changed prompts are not approved: prompts\/words\.prompt\.md/); assert.ok(repair.input.includes(WORDS));
   const approved = `# Words\n\nCount the words of a text.\n\n<details><summary>Runtime interface</summary>\n\n\`\`\`json\n${JSON.stringify({ status: 'approved', prose_sha256: '', operations: [] })}\n\`\`\`\n</details>\n`;
-  const { proseSha256: hash } = await import('../src/runtime-preflight.mjs');
+  const { proseSha256: hash } = await import('../src/runtime-seam.mjs');
   const text = approved.replace('"prose_sha256":""', `"prose_sha256":"${hash(approved)}"`);
   writeFileSync(join(w.job(17, 'repair').cwd, 'prompts', 'words.prompt.md'), text);
   const dir = join(w.git(w.cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir'), 'pdd'); mkdirSync(dir, { recursive: true });
@@ -2320,7 +2325,7 @@ test('L4 an exact conflict in the final step (add/add) starts an agent conflict 
 });
 
 // ---- Review 9 regressions (each failed on 5c8b7426c) -----------------------------------------------------------
-const { proseSha256 } = await import('../src/runtime-preflight.mjs');
+const { proseSha256 } = await import('../src/runtime-seam.mjs');
 const block9 = json => `<details><summary>Runtime interface</summary>\n\n\`\`\`json\n${json}\n\`\`\`\n</details>\n`;
 const approvedText = prose => {
   const text = `# Words\n\n${prose}\n\n${block9(JSON.stringify({ status: 'approved', prose_sha256: '', operations: [] }))}`;
@@ -3195,13 +3200,19 @@ test('W13 the stream parser: Claude tool calls and results, Codex items, prose a
   w.issue(17); await w.tick();
   const prose = [JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: `thinking ${Math.random()}` }], usage: { output_tokens: 5 } } }),
     JSON.stringify({ type: 'item.completed', item: { id: 'a', type: 'agent_message', text: 'I will look again' } }), JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 99 } }),
-    JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: 'sleep 60' } }] } })];
+    JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: 'sleep 60' } }] } }),
+    JSON.stringify({ event: 'step_update', step_update: { step_type: 'agent_response', state: 'DONE', text_delta: 'thinking', usage: { output_tokens: 5 } } }),
+    JSON.stringify({ event: 'step_update', step_update: { step_index: 5, step_type: 'tool', state: 'DONE', tool_name: 'wait_5_seconds', tool_info: { parameters: {} } } }),
+    JSON.stringify({ event: 'step_update', step_update: { step_index: 5, step_type: 'tool', state: 'DONE', tool_name: 'run_command', tool_info: { parameters: { CommandLine: 'sleep 60' } } } })];
   let n = 0;
   assert.equal(await ticksUntilStop(w, 17, () => { for (const line of prose) w.say(17, 'build', line.replace('5', String(n++))); }), 50, 'prose, token counts and sleep are nothing new');
   const v = await coreWorld(t, { settings: { runs: 1 } });
   v.issue(17); await v.tick();
   const words = ['alpha', 'beta', 'gamma', 'delta', 'epsilon', 'zeta', 'eta', 'theta', 'iota', 'kappa'];
   assert.equal(await ticksUntilStop(v, 17, i => v.say(17, 'build', JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', content: [{ type: 'text', text: `found ${words[i]}` }] }] } })), 10), null, 'a new tool result line is new');
+  const a = await coreWorld(t, { settings: { runs: 1 } });
+  a.issue(17); await a.tick();
+  assert.equal(await ticksUntilStop(a, 17, i => a.say(17, 'build', JSON.stringify({ event: 'step_update', step_update: { step_type: 'tool', state: 'DONE', tool_name: 'view_file', tool_info: { parameters: { Path: `/repo/${words[i]}.mjs` } } } })), 10), null, 'a new agy tool call is new');
 });
 
 // ---- Review 11 ------------------------------------------------------------------------------------------------

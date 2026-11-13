@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import { accessSync, constants, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runPdd } from '../src/pdd-cli.mjs';
-import { sink, temp } from './runtime-fake.mjs';
+import { sink, temp } from './helpers/runtime-fake.mjs';
 
 const chrome = [
   process.env.PDD_CHROME_PATH,
