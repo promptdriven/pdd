@@ -1,5 +1,5 @@
 import { bindingRefusals } from './runtime-binding-plan.mjs';
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: ffcdf87a9c3b8b4a5529f8717e1962fe82bc07ade2374e653b6de586a3ccc0c6).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: fb044fa26c8dcbe7586752ab06cf376ebed876a8ea3834f5ff8b9813504f424c).
 import { hasProgress, outcomeExitCode, outcomeFor, outcomeText, progressText, resultOutcome, PROVIDER_TEXT } from './runtime-outcome.mjs';
 export const OPEN_STATES = new Set(['queued', 'running', 'sent']);
 
@@ -171,7 +171,7 @@ export function projectAnswer(answer, { origin, secrets = [], steps: authoredSte
   const client_advice = compatibility ? advice(compatibility.issue ?? (compatibility.state === 'supported' ? 'supported'
     : [...(compatibility.reported?.operations ?? []), ...(compatibility.reported?.edges ?? [])].find(row => row.verdict === compatibility.state)?.reason_code)) : null;
   const steps = Array.isArray(report?.samples) && Array.isArray(report.samples[0]?.steps) ? report.samples[0].steps : [];
-  const nonNegativeInt = value => Number.isInteger(value) && value >= 0 ? value : undefined;
+  const nonNegativeInt = value => Number.isSafeInteger(value) && value >= 0 ? value : undefined;
   const rerunStep = item => ({
     step_id: cleanField(item.step_id, secrets) || null,
     ...(nonNegativeInt(item.runs) !== undefined ? { runs: nonNegativeInt(item.runs) } : {}),
@@ -215,11 +215,14 @@ export function projectAnswer(answer, { origin, secrets = [], steps: authoredSte
   const knownValues = accountingValues('known_calls').filter(value => value !== undefined);
   const callValues = accountingValues('calls').filter(value => value !== undefined);
   const providerValues = accountingValues('provider_calls').filter(value => value !== undefined);
-  const knownCalls = Math.max(...(knownValues.length ? knownValues : callValues), ...providerValues, 0);
+  const providerCalls = providerValues.length ? Math.max(...providerValues) : undefined;
   const unknownValues = accountingValues('unknown_calls').filter(value => value !== undefined);
   const reportedUnknown = Math.max(...unknownValues, 0);
+  const deductedTotals = [...callValues, ...providerValues].map(value => Math.max(0, value - reportedUnknown));
+  const knownCalls = knownValues.length ? Math.max(...knownValues, 0) : Math.max(...deductedTotals, 0);
   const incomplete = capacityUncertain || invalidCounter || conflictingCounters || invalidFlag || conflictingFlags || flags.includes(false)
-    || reportedUnknown > 0 || usageCalls === undefined || knownCalls > usageCalls;
+    || reportedUnknown > 0 || usageCalls === undefined || knownCalls > usageCalls
+    || (providerCalls !== undefined && providerCalls !== usageCalls);
   const unknownCalls = incomplete ? Math.max(1, reportedUnknown) : 0;
   const model = [usage.requested_model, report?.evaluation?.requested_model].find(value => typeof value === 'string' && value && value !== 'unknown');
   const results = Array.isArray(report?.criterion_results) ? report.criterion_results : [];
@@ -240,7 +243,7 @@ export function projectAnswer(answer, { origin, secrets = [], steps: authoredSte
     criteria: results.length ? { passed: results.filter(item => item?.status === 'passed').length, total: results.length } : null,
     all_checks: all, failed_checks: all.filter(check => !check.passed).map(({ passed, ...check }) => check), refusals,
     calls: !incomplete ? usageCalls : 'unknown',
-    known_calls: incomplete ? knownCalls : undefined, unknown_calls: unknownCalls, accounting_complete: !incomplete, requested_model: model ? cleanText(model, secrets) : null,
+    ...(incomplete ? { known_calls: knownCalls } : {}), unknown_calls: unknownCalls, accounting_complete: !incomplete, requested_model: model ? cleanText(model, secrets) : null,
     server_seconds: typeof usage.seconds === 'number' ? usage.seconds : null,
     report_url: validLink(answer?.report_url, origin, 'report'), why: result?.why ? cleanText(result.why, secrets) : null,
     who: result?.who ? cleanText(result.who, secrets) : null, next_step: result?.next_step ? cleanText(result.next_step, secrets) : null,

@@ -30,7 +30,7 @@ test('2655 formal: incomplete call accounting never invents a total in 135 bound
           const row = { story: 'recover-retried-check-results', test: 'accounting', phase: 'server',
             state: view.state, calls: view.calls, known_calls: view.known_calls, unknown_calls: view.unknown_calls };
           const json = renderJson({ repo: 'fixture', rows: [row], exitCode: 0 });
-          const lowerBound = known ?? (typeof calls === 'number' ? calls : 0);
+          const lowerBound = known ?? (typeof calls === 'number' ? Math.max(0, calls - (incomplete.usage.unknown_calls ?? 0)) : 0);
           const expectedUsage = `${lowerBound} AI call${lowerBound === 1 ? '' : 's'} + ${incomplete.unknown} unknown`;
           assert.equal(view.calls, 'unknown', `projection must not invent total: ${context}`);
           assert.equal(json.rows[0].calls, 'unknown', `public row must not invent total: ${context}`);
