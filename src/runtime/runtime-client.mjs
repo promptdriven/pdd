@@ -1,11 +1,11 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 7ee5fc6a1bc717c02d7be2e57cca5a4fe9f4bb1c7a74d4c58fcf625e7566bcda).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 0a7b67c396b2558a5cafa00da2fb1638887e7450c52f75a65cffd30e99743eb9).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
 import { isRecentLintReceipt } from './runtime-lint-receipt.mjs';
 import { rememberSecrets as fallbackRememberSecrets } from './secret-redaction.mjs';
 import { bindingPlanLines, bindingRefusals } from './runtime-binding-plan.mjs';
-import { buildCheckPlan, checkPlanResults, checkPlanLines, checkPlanResultLines, selectCheckTests, baselineReport } from './runtime-check-plan.mjs';
+import { buildCheckPlan, checkPlanResults, checkPlanLines, checkPlanResultLines, selectCheckTests, baselineReport, evaluateCheckBudget } from './runtime-check-plan.mjs';
 import { interfaceFindings } from './interface-draft.mjs';
 import {loadRuntimeWorkspace,allowsRuntimePath,requireRuntimePath,RuntimeWorkspaceError} from './runtime-workspace.mjs';
 import { hasProgress, outcomeDone, outcomeFor, outcomeOverall, outcomeText, progressText, resultOutcome, resultOverall } from './runtime-outcome.mjs';
@@ -86,6 +86,18 @@ function requestedCalls(raw) {
     || !Number.isSafeInteger(Number(raw)) || Number(raw) < 1 || Number(raw) > 1000)
     throw new Stop(2, '--max-calls must be a whole number from 1 to 1000, the interpreter maximum.');
   return Number(raw);
+}
+function requestedTotalCalls(raw) {
+  if (raw === undefined) return null;
+  if (!(typeof raw === 'number' || typeof raw === 'string' && /^[1-9][0-9]{0,5}$/.test(raw))
+    || !Number.isSafeInteger(Number(raw)) || Number(raw) < 1 || Number(raw) > 999999)
+    throw new Stop(2, '--max-total-calls must be a whole number from 1 to 999999.');
+  return Number(raw);
+}
+function noRestartReplacementFlag(raw) {
+  if (raw === undefined) return false;
+  if (raw !== true) throw new Stop(2, '--no-restart-replacement takes no value.');
+  return true;
 }
 const line = (stream, text) => stream.write(`${text}\n`);
 const statOrNull = path => { try { return lstatSync(path); } catch { return null; } };
@@ -1940,7 +1952,7 @@ function batchRecord(context) {
   const { batch, origin, root, identity, capture, rows, lint, warnings } = context;
   return { version: 1, batch, origin, root, check_plan: context.checkPlan ?? null, ...(context.checkSelection ? {check_selection:context.checkSelection,baseline_report:context.baselineReport} : {}), head: context.head, login: identity.login, user_id: identity.userId,
     source_sha256: capture.sha256, files: capture.files.map(file => file.path), bytes: capture.bytes, timeout_min: context.timeoutMin,
-    ...(context.singleAttempt ? {single_attempt:true} : {}),
+    ...(context.singleAttempt ? {single_attempt:true} : {}), ...(context.maxTotalCalls != null ? {max_total_calls:context.maxTotalCalls} : {}),
     source_selection: context.sourceSelection ?? {tests:sentTests(rows),exclude_fixture_projects:context.excludeFixtureProjects === true},
     native_source: context.nativeSource ?? null,
     ...(context.localOnly ? {local_only:true} : {}),
@@ -1983,6 +1995,7 @@ function adoptClaims(context, row) {
       break;
     }
     if (claim.restart) row.restart_used = true;
+    if (Number.isSafeInteger(claim.max_calls) && claim.max_calls >= 1) (row.claim_max_calls ??= {})[claim.id] = claim.max_calls;
     if (claim.reservation && !row.admitting) row.reservation = claim.reservation;
     if (!row.request_ids.includes(claim.id)) {
       row.request_ids.push(claim.id);
@@ -1991,6 +2004,143 @@ function adoptClaims(context, row) {
         note: unsent?.id === claim.id ? unsent.note : null, why: null, next_step: null, busy: false, can_retry: false });
     }
   }
+}
+function readUnresolvedPriorReservations(root, env, excludeBatch = null) {
+  const empty = { count: 0, reserved_calls: 0, batches: [] };
+  try {
+    const wanted = realish(root), dir = join(stateDirectory(env, root), 'batches');
+    let names;
+    try { names = readdirSync(dir); } catch { return empty; }
+    let count = 0, reserved_calls = 0;
+    const batches = [];
+    for (const name of names.filter(item => typeof item === 'string' && BATCH.test(item) && item !== excludeBatch).sort()) {
+      const folder = join(dir, name);
+      if (!statOrNull(folder)?.isDirectory() || statOrNull(folder)?.isSymbolicLink()) continue;
+      let saved;
+      try { saved = JSON.parse(readFileSync(join(folder, 'batch.json'), 'utf8')); } catch { continue; }
+      if (!isObject(saved) || saved.intent !== 'check' || typeof saved.root !== 'string' || realish(saved.root) !== wanted || !Array.isArray(saved.rows)) continue;
+      let batchHasUnresolved = false;
+      for (const row of saved.rows) {
+        const ids = Array.isArray(row?.request_ids) ? row.request_ids : [];
+        if (!ids.length) continue;
+        const state = row.recovery_state ?? row.state;
+        const openOrUnknown = ['sending', 'queued', 'running', 'unknown'].includes(state) || row.calls === 'unknown' || row.accounting_complete === false;
+        if (!openOrUnknown) continue;
+        const key = typeof row.test === 'string' ? createHash('sha256').update(row.test).digest('hex') : null;
+        let cap = 0;
+        for (let attempt = 0; attempt < ids.length; attempt++) {
+          let claimCap = null;
+          if (key) {
+            try {
+              const claim = JSON.parse(readFileSync(join(folder, `${key}.${attempt}.dispatch.json`), 'utf8'));
+              if (Number.isSafeInteger(claim?.max_calls) && claim.max_calls >= 1) claimCap = claim.max_calls;
+            } catch { /* ignore missing or unreadable dispatch claim */ }
+          }
+          cap += claimCap ?? (Number.isSafeInteger(row.max_calls) && row.max_calls >= 1 ? row.max_calls : 0);
+        }
+        const observed = (Number.isSafeInteger(row.known_calls) ? row.known_calls : 0) + (Number.isSafeInteger(row.unknown_calls) ? row.unknown_calls : 0);
+        count += 1;
+        reserved_calls += Math.max(cap, observed);
+        batchHasUnresolved = true;
+      }
+      if (batchHasUnresolved) batches.push(name);
+    }
+    return { count, reserved_calls, batches };
+  } catch { return empty; }
+}
+function attemptHasCapacityEvidence(context, id) {
+  if (!context.store || !context.folder) return false;
+  const admissionRec = context.store.read(join(context.folder, `${id}.admission.json`));
+  const latest = context.store.read(join(context.folder, `${id}.json`));
+  const prior = context.store.read(join(context.folder, `${id}.observations.json`));
+  const history = [...(Array.isArray(prior) ? prior : []), ...(latest ? [latest] : [])];
+  const admissionCap = isAdmissionCapacityRecord(admissionRec) && (admissionCapacityCandidate(admissionRec) || admissionRec?.error?.code === 'maintenance');
+  return admissionCap || history.some(item => checkCapacityCandidate(item));
+}
+function attemptConfirmedZeroCapacity(context, id) {
+  if (!context.store || !context.folder) return false;
+  const admissionRec = context.store.read(join(context.folder, `${id}.admission.json`));
+  const latest = context.store.read(join(context.folder, `${id}.json`));
+  const prior = context.store.read(join(context.folder, `${id}.observations.json`));
+  const history = [...(Array.isArray(prior) ? prior : []), ...(latest ? [latest] : [])];
+  const terminal = history.filter(item => sameJob(item, id, 'check') && accountingEnd(item, id));
+  const firstTerminal = history.findIndex(item => sameJob(item, id, 'check') && accountingEnd(item, id));
+  const progressConflict = history.some((item, index) => !accountingEnd(item, id)
+    && (!['queued', 'running'].includes(item?.state) || (firstTerminal >= 0 && index > firstTerminal)));
+  const admissionCap = isAdmissionCapacityRecord(admissionRec) && (admissionCapacityCandidate(admissionRec) || admissionRec?.error?.code === 'maintenance');
+  if (admissionCap) return admissionMatches(admissionRec, id) && accountingProof(admissionRec) && !history.some(item => !checkCapacityCandidate(item)) && !progressConflict;
+  return terminal.length > 0 && !progressConflict && terminal.every(item => checkCapacityCandidate(item) && accountingProof(item))
+    && attemptAccounting(context, id).complete === true && attemptAccounting(context, id).total === 0;
+}
+function budgetRowsForContext(context, excludePendingRow = null) {
+  const now = context.ports?.now?.() ?? Date.now();
+  return (context.rows ?? []).filter(row => !row.unsent || row.request_ids?.length || row.dispatchIncomplete).map(row => {
+    if (context.folder) adoptClaims(context, row);
+    const attempts = [], origin = context.folder ? structuredRestartOrigin(context, row) : null, ids = row.request_ids ?? [];
+    for (let index = 0; index < ids.length; index++) {
+      const id = ids[index];
+      const claim = context.folder ? context.store.read(claimPath(context, row, index)) : null;
+      const requested_max_calls = Number.isSafeInteger(claim?.max_calls) && claim.max_calls >= 1
+        ? claim.max_calls
+        : Number.isSafeInteger(row.claim_max_calls?.[id]) && row.claim_max_calls[id] >= 1
+          ? row.claim_max_calls[id]
+          : row.max_calls;
+      const kind = claim?.restart || (index > 0 && row.restart_used && id !== origin) ? 'restart-replacement' : 'initial';
+      const latest = context.folder ? context.store.read(join(context.folder, `${id}.json`)) : null;
+      const reason_code = restarted(latest) ? 'service-restarted' : null;
+      const hasCapacityEvidence = attemptHasCapacityEvidence(context, id);
+      if (hasCapacityEvidence && attemptConfirmedZeroCapacity(context, id)) {
+        attempts.push({ id, kind, requested_max_calls, status: 'capacity_refused_zero', known_calls: 0, unknown_calls: 0, reason_code });
+        continue;
+      }
+      const part = context.folder ? attemptAccounting(context, id) : { known: row.known_calls ?? 0, unknown: row.unknown_calls ?? 1, complete: row.accounting_complete === true, total: typeof row.calls === 'number' ? row.calls : null };
+      const isLatest = index === ids.length - 1;
+      const activeLost = row.state === 'unknown' && row.lost && now < Math.min(context.deadline ?? Infinity, row.read_until ?? context.deadline ?? Infinity);
+      const terminalReceipt = latest && sameJob(latest, id, 'check') && accountingEnd(latest, id);
+      const unknownWithoutExplicitProof = latest?.state === 'unknown'
+        && ![latest, latest?.usage, latest?.result, latest?.report, latest?.result?.report].some(s => isObject(s) && s.accounting_complete === true);
+      if (isLatest && !terminalReceipt && (OPEN_STATES.has(row.state) || activeLost)) {
+        attempts.push({ id, kind, requested_max_calls, status: 'in_flight', known_calls: part.known, unknown_calls: part.complete ? 0 : part.unknown, reason_code });
+      } else if (!hasCapacityEvidence && !unknownWithoutExplicitProof && part.complete && Number.isSafeInteger(part.total)) {
+        attempts.push({ id, kind, requested_max_calls, status: 'settled', known_calls: part.total, unknown_calls: 0, reason_code });
+      } else {
+        attempts.push({ id, kind, requested_max_calls, status: 'unresolved', known_calls: part.known, unknown_calls: Math.max(1, part.unknown), reason_code });
+      }
+    }
+    if (row.dispatchIncomplete) {
+      attempts.push({ id: 'incomplete-claim', kind: row.restart_used ? 'restart-replacement' : 'initial',
+        requested_max_calls: row.max_calls, status: 'unresolved', known_calls: 0, unknown_calls: 1, reason_code: 'dispatch-incomplete' });
+    }
+    if (row !== excludePendingRow && Number.isSafeInteger(row.budget_in_flight) && row.budget_in_flight >= 1) {
+      attempts.push({ id: 'pending-dispatch', kind: row.restart_pending ? 'restart-replacement' : 'initial',
+        requested_max_calls: row.budget_in_flight, status: 'in_flight', known_calls: 0, unknown_calls: 0, reason_code: null });
+    }
+    return { test: row.test, max_calls: row.max_calls, restart_used: !!row.restart_used, attempts };
+  });
+}
+function applyBudgetDecisionStop(context, row, decision) {
+  if (row.restart_pending || decision.retain_prior_uncertainty) {
+    if (row.prior_restart_snapshot) Object.assign(row, row.prior_restart_snapshot);
+    row.restart_pending = false;
+    const msg = decision.reason_code === 'restart-replacement-disabled'
+      ? 'No restart replacement was sent: restart replacement is disabled for this batch.'
+      : decision.reason_code === 'restart-limit-reached'
+        ? 'No restart replacement was sent: the 1-replacement limit per test was already used.'
+        : `No restart replacement was sent: --max-total-calls ${context.maxTotalCalls} has 0 remaining calls after prior usage and unresolved reservations.`;
+    row.note = { code: decision.reason_code, message: msg };
+    const warnKey = `${row.test}:${decision.reason_code}`;
+    context.budgetNotices ??= new Set();
+    if (!context.budgetNotices.has(warnKey)) { context.budgetNotices.add(warnKey); line(context.ports.stderr, `${row.test}: ${msg}`); }
+    saveBatch(context);
+    return;
+  }
+  const msg = `Not sent: --max-total-calls ${context.maxTotalCalls} has 0 remaining calls after prior usage and unresolved reservations.`;
+  Object.assign(row, { state: 'not_run', unsent: !row.request_ids.length, calls: row.request_ids.length ? accumulatedCalls(context, row) : 0,
+    busy: false, can_retry: false, eligible: false, phase: 'local', note: { code: 'call-budget-exhausted', message: msg } });
+  const warnKey = `${row.test}:call-budget-exhausted`;
+  context.budgetNotices ??= new Set();
+  if (!context.budgetNotices.has(warnKey)) { context.budgetNotices.add(warnKey); line(context.ports.stderr, `${row.test}: ${msg}`); }
+  saveBatch(context);
 }
 function markDeadline(context, rows) {
   if (context.interrupted || !Number.isFinite(context.deadline) || context.ports.now() < context.deadline) return;
@@ -2052,7 +2202,8 @@ async function postJob(context, path, command, request, row, timeoutMs, deadline
 // POST one check and fold the answer into its row.
 async function sendCheck(context, row) {
   row.admitting = true;
-  try { await sendCheckAttempt(context, row); } finally { row.admitting = false; }
+  try { await sendCheckAttempt(context, row); }
+  finally { row.budget_in_flight = 0; row.admitting = false; }
 }
 async function sendCheckAttempt(context, row) {
   if (context.interrupted || context.ports.now() >= context.deadline || !['ready', 'waiting'].includes(row.state)) return;
@@ -2063,6 +2214,24 @@ async function sendCheckAttempt(context, row) {
     return;
   }
   if (row.busy && row.request_ids.length && !await capacityReady(context, context.deadline, row)) return;
+  const candidateForRow = () => ({
+    test: row.test,
+    kind: row.restart_pending ? 'restart-replacement' : 'initial',
+    requested_max_calls: row.max_calls,
+    restart_used: !!row.restart_used,
+    prior_reason_code: row.restart_pending ? 'service-restarted' : null
+  });
+  const preDecision = evaluateCheckBudget({
+    max_total_calls: context.maxTotalCalls ?? null,
+    single_attempt: !!context.singleAttempt,
+    unresolved_prior_reservations: { count: 0, reserved_calls: 0 },
+    rows: budgetRowsForContext(context, row),
+    candidate: candidateForRow()
+  }).decision;
+  if (preDecision.action === 'wait') { row.awaiting_budget = true; return; }
+  if (preDecision.action !== 'send') { applyBudgetDecisionStop(context, row, preDecision); return; }
+  row.awaiting_budget = false;
+  row.budget_in_flight = preDecision.effective_max_calls;
   const attempt = row.request_ids.length, previousCalls = row.restart_used || row.restart_pending ? accumulatedCalls(context, row) : 0;
   if (!await admission(context, 'check', row)) {
     if (context.interrupted && interruptedAdmissions.has(row)) Object.assign(row, { state: 'not_run', calls: previousCalls, phase: 'local', note: { code: null, message: 'Stopped before sending.' } });
@@ -2081,6 +2250,25 @@ async function sendCheckAttempt(context, row) {
     if (context.interrupted && row.request_ids.length === attempt && ['ready', 'waiting'].includes(row.state)) Object.assign(row, { state: 'not_run', calls: previousCalls, phase: 'local', note: { code: null, message: 'Stopped before sending.' } });
     return;
   }
+  const finalDecision = evaluateCheckBudget({
+    max_total_calls: context.maxTotalCalls ?? null,
+    single_attempt: !!context.singleAttempt,
+    unresolved_prior_reservations: { count: 0, reserved_calls: 0 },
+    rows: budgetRowsForContext(context, row),
+    candidate: candidateForRow()
+  }).decision;
+  if (finalDecision.action === 'wait') {
+    await finishReservation(context, row, { state: 'not_run' });
+    row.awaiting_budget = true;
+    return;
+  }
+  if (finalDecision.action !== 'send') {
+    await finishReservation(context, row, { state: 'not_run' });
+    applyBudgetDecisionStop(context, row, finalDecision);
+    return;
+  }
+  const effectiveMaxCalls = finalDecision.effective_max_calls;
+  row.budget_in_flight = effectiveMaxCalls;
   if (row.restart_pending) {
     const restartPath = claimPath(context, row).replace(/\.0\.dispatch\.json$/, '.restart.json');
     let claim;
@@ -2108,7 +2296,8 @@ async function sendCheckAttempt(context, row) {
     return;
   }
   const id = context.ports.randomUUID();
-  try { writeSync(fd, JSON.stringify({ id, reservation: row.reservation, restart: !!row.restart_used })); }
+  (row.claim_max_calls ??= {})[id] = effectiveMaxCalls;
+  try { writeSync(fd, JSON.stringify({ id, reservation: row.reservation, restart: !!row.restart_used, max_calls: effectiveMaxCalls })); }
   finally { closeSync(fd); }
   if (context.interrupted || context.ports.now() >= context.deadline) {
     await finishReservation(context, row, { state: 'not_run' });
@@ -2116,11 +2305,14 @@ async function sendCheckAttempt(context, row) {
     if (context.interrupted) row.note = { code: null, message: 'Stopped before sending.' };
     return;
   }
+  if (finalDecision.reason_code === 'clamped-to-remaining-budget') {
+    line(context.ports.stderr, `Capping ${row.test} to ${effectiveMaxCalls} AI call${effectiveMaxCalls === 1 ? '' : 's'} (remaining from --max-total-calls ${context.maxTotalCalls}).`);
+  }
   row.attempts = (row.attempts ?? 0) + 1;
   row.sent_at = context.ports.now(); row.ended_at = null; row.retry_at = null; row.busy = false; row.can_retry = false;
   row.busy_request_id = null; row.busy_observed_at = null; row.capacity_until = null; row.busy_display = null;
   row.phase = 'server';
-  const request = { requestId: id, source_sha256: context.capture.sha256, scenario: row.test, max_calls: row.max_calls,
+  const request = { requestId: id, source_sha256: context.capture.sha256, scenario: row.test, max_calls: effectiveMaxCalls,
     ...(context.serverFeatures?.includes('lazy-interfaces') ? { lazy_interfaces: true } : {}) };
   const verdict = await context.postCheck(request, row, Math.max(1, Math.min(context.ports.postMs, context.deadline - context.ports.now())));
   if (verdict.kind === 'not_sent') {
@@ -2438,11 +2630,15 @@ async function runScheduledChecks(context, rows, toSend) {
     if (context.interrupted || context.readStop || context.stopped || context.sendError || ports.now() >= context.deadline) return;
     const active = rows.filter(occupiesSlot).length;
     const available = Math.max(0, Math.min(uploads - pendingSends.size, context.checkWindow - active - pendingSends.size));
-    const eligible = toSend.filter(row => !pendingSends.has(row) && ['ready', 'waiting'].includes(row.state)
+    const eligible = toSend.filter(row => !pendingSends.has(row) && !row.awaiting_budget && ['ready', 'waiting'].includes(row.state)
       && (!row.retry_at || ports.now() >= row.retry_at));
     for (const row of eligible.slice(0, available)) {
       const pending = sendCheck(context, row).catch(error => { context.sendError ??= error; }).finally(() => {
-        pendingSends.delete(row); pumpSends();
+        pendingSends.delete(row);
+        if (!row.awaiting_budget) {
+          for (const item of toSend) item.awaiting_budget = false;
+          pumpSends();
+        }
       });
       pendingSends.set(row, pending);
     }
@@ -2468,7 +2664,9 @@ async function runScheduledChecks(context, rows, toSend) {
       waitingShown = waiting.length;
     }
     if (context.sendError) throw context.sendError;
-    await recoverRestarts(context);
+    const earlyRestarts = await recoverRestarts(context);
+    for (const row of rows.filter(row => row.state === 'ready' && (row.restart_used || row.restart_pending))) if (!toSend.includes(row)) toSend.push(row);
+    if (earlyRestarts.length) { for (const item of toSend) item.awaiting_budget = false; pumpSends(); }
     const pending = toSend.some(row => ['ready', 'waiting'].includes(row.state));
     if (pending && active >= context.checkWindow && !rows.some(readable)) break;
     if ((!pending || context.stopped || ports.now() >= context.deadline) && !rows.some(readable) && !pendingSends.size) break;
@@ -2477,8 +2675,9 @@ async function runScheduledChecks(context, rows, toSend) {
     await ports.sleep(Math.max(0, Math.min(ports.pollMs, end - ports.now())), context.signal);
     if (context.interrupted) break;
     await eachLimited(rows.filter(readable), MAX_READS, row => readRow(context, row));
+    for (const item of toSend) item.awaiting_budget = false;
     await recoverRestarts(context);
-    for (const row of rows.filter(row => row.state === 'ready' && row.restart_used)) if (!toSend.includes(row)) toSend.push(row);
+    for (const row of rows.filter(row => row.state === 'ready' && (row.restart_used || row.restart_pending))) if (!toSend.includes(row)) toSend.push(row);
     saveBatch(context);
   }
   } catch (error) { context.sendError ??= error; throw error; }
@@ -3069,7 +3268,7 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
   context.checkPlan = saved.check_plan ?? null;
   context.checkSelection = saved.check_selection; context.baselineReport = saved.baseline_report;
   if (saved.local_only === true && saved.rows.length && saved.rows.every(row => row.unsent && ['refused','not_run'].includes(row.state) && !row.request_ids?.length)) {
-    Object.assign(context,{localOnly:true,batch:name,intent:saved.intent,coverage:saved.coverage,rows:saved.rows,warnings:saved.warnings ?? [],
+    Object.assign(context,{localOnly:true,singleAttempt:context.singleAttempt || saved.single_attempt === true,maxTotalCalls:Number.isSafeInteger(saved.max_total_calls)&&saved.max_total_calls>=1?saved.max_total_calls:null,batch:name,intent:saved.intent,coverage:saved.coverage,rows:saved.rows,warnings:saved.warnings ?? [],
       capture:{sha256:saved.source_sha256},startedAt:Date.parse(saved.created_at),lint:saved.lint});
     if (quiet) return saved.rows;
     return saved.intent === 'lint-only' ? printLintResult(context,saved.rows,saved.lint?.problems ?? []) : printResult(context,saved.rows);
@@ -3079,7 +3278,7 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
     allowSavedLocalReadFallback: !quiet && isLocalSavedBatchRead(context, saved),
   });
   if (identity.login !== saved.login) throw new Stop(5, `These runs belong to ${saved.login}. Run: gh auth switch -u ${saved.login}`);
-  Object.assign(context, { singleAttempt: context.singleAttempt || saved.single_attempt === true, allowMissingInterfaces: saved.lazy_interfaces === true, excludeFixtureProjects: saved.exclude_fixture_projects === true, batch: name, origin: saved.origin, sourceSelection:saved.source_selection, nativeSource:saved.native_source, coverage: saved.coverage, identity, intent: saved.intent, secrets: [identity.token], warnings: saved.warnings ?? [],
+  Object.assign(context, { singleAttempt: context.singleAttempt || saved.single_attempt === true, maxTotalCalls: Number.isSafeInteger(saved.max_total_calls) && saved.max_total_calls >= 1 ? saved.max_total_calls : null, allowMissingInterfaces: saved.lazy_interfaces === true, excludeFixtureProjects: saved.exclude_fixture_projects === true, batch: name, origin: saved.origin, sourceSelection:saved.source_selection, nativeSource:saved.native_source, coverage: saved.coverage, identity, intent: saved.intent, secrets: [identity.token], warnings: saved.warnings ?? [],
     capture: { sha256: saved.source_sha256, files: saved.files.map(path => ({ path })), bytes: saved.bytes, stories:saved.contract_snapshots }, lint: saved.lint, head: saved.head, startedAt: Date.parse(saved.created_at) });
   runtimeOrigin({ PDD_RUNTIME_URL: saved.origin });
   context.auth = authSession({
@@ -3177,13 +3376,26 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
 }
 
 async function recoverRestarts(context) {
-  if (context.singleAttempt || context.intent !== undefined && context.intent !== 'check') return [];
+  if (context.intent !== undefined && context.intent !== 'check') return [];
   const eligible = context.rows.filter(row => {
     adoptClaims(context, row);
     const id = row.request_ids.at(-1), answer = id && context.store.read(join(context.folder, `${id}.json`));
     return !row.restart_used && !row.restart_pending && !row.admitting && !context.restartDecisions?.has(id) && sameJob(answer, id, 'check') && restarted(answer);
   });
   if (!eligible.length || context.interrupted || context.ports.now() >= context.deadline) return [];
+  if (context.singleAttempt) {
+    context.restartDecisions ??= new Set();
+    for (const row of eligible) {
+      context.restartDecisions.add(row.request_ids.at(-1));
+      const warnKey = `${row.test}:restart-replacement-disabled`;
+      context.budgetNotices ??= new Set();
+      if (!context.budgetNotices.has(warnKey)) {
+        context.budgetNotices.add(warnKey);
+        line(context.ports.stderr, `The interpreter restarted ${row.test}; restart replacement is disabled, so pdd kept the original unknown result.`);
+      }
+    }
+    return [];
+  }
   const lintId = context.lint?.request_ids?.at(-1), lint = lintId && context.store.read(join(context.folder, `${lintId}.json`));
   if (!recoverSourceContext(context)) {
     context.continuationNotice = 'The saved source changed or cannot be verified; no restarted check was sent again.';
@@ -3194,7 +3406,6 @@ async function recoverRestarts(context) {
     + 'but the saved lint gives no pass of its own to that test, so pdd did not send it again. Start a fresh pdd test.';
   if (!admitted.length) return [];
   context.restartDecisions ??= new Set();
-  for (const row of admitted) context.restartDecisions.add(row.request_ids.at(-1));
   const capture = context.recoveredSourceCapture ?? context.ports.captureSource(context.root, { tests: sentTests(context.rows), appMap: null, excludeFixtureProjects: context.excludeFixtureProjects });
   if (capture.sha256 !== context.capture.sha256) { context.continuationNotice = 'The saved source changed; no restarted check was sent again.'; return []; }
   capture.stories = context.capture.stories;
@@ -3203,6 +3414,18 @@ async function recoverRestarts(context) {
   const selected = [];
   for (const row of admitted) {
     if (context.interrupted || context.ports.now() >= context.deadline || !validSavedCheck(row)) continue;
+    const decision = evaluateCheckBudget({
+      max_total_calls: context.maxTotalCalls ?? null,
+      single_attempt: !!context.singleAttempt,
+      unresolved_prior_reservations: { count: 0, reserved_calls: 0 },
+      rows: budgetRowsForContext(context, row),
+      candidate: { test: row.test, kind: 'restart-replacement', requested_max_calls: row.max_calls, restart_used: !!row.restart_used, prior_reason_code: 'service-restarted' }
+    }).decision;
+    if (decision.action === 'wait') continue;
+    context.restartDecisions.add(row.request_ids.at(-1));
+    if (decision.action !== 'send') { applyBudgetDecisionStop(context, row, decision); continue; }
+    row.prior_restart_snapshot = { state: row.state, why: row.why, next_step: row.next_step, note: row.note, lost: row.lost, final: row.final,
+      calls: row.calls, known_calls: row.known_calls, unknown_calls: row.unknown_calls, accounting_complete: row.accounting_complete };
     Object.assign(row, { state: 'ready', lost: false, final: false, eligible: true, retry_at: null, restart_pending: true });
     selected.push(row);
   }
@@ -3415,8 +3638,8 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
   const context = { ports, clientVersion: client?.version ?? ports.clientVersion ?? null, workflow, singleAttempt: ports.env.PDD_CHECK_SINGLE_ATTEMPT === '1', cacheEnabled: cache || !!options['--lf'] || !!options['--cache-clear'], json: options['--json'] === true, details: options['--details'] === true, explicitTimeout: options['--timeout'] !== undefined, interrupted: false, warnings: [] };
   let release = () => {};
   try {
-    if (options['--affected'] !== undefined && (options['--affected'] !== true || words.length || Object.keys(options).some(key => !['--affected','--json','--details','--timeout','--max-calls','--cache-clear'].includes(key))))
-      throw new Stop(2, '--affected accepts no Stories and only --cache-clear, --json, --details, --timeout and --max-calls.');
+    if (options['--affected'] !== undefined && (options['--affected'] !== true || words.length || Object.keys(options).some(key => !['--affected','--json','--details','--timeout','--max-calls','--max-total-calls','--no-restart-replacement','--cache-clear'].includes(key))))
+      throw new Stop(2, '--affected accepts no Stories and only --cache-clear, --json, --details, --timeout, --max-calls, --max-total-calls and --no-restart-replacement.');
     if(options['--journeys']!==undefined){
       if(options['--journeys']!==true||words.length>1||['--read','--retry','--fill-hash','--request','--screen','--drawing','--look'].some(key=>options[key]!==undefined))throw new Stop(2,'Use pdd test --journeys [JOURNEY] with normal test options.');
       const {root,found}=localSetup(cwd,[],ports);
@@ -3425,6 +3648,8 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
       options={...options};delete options['--journeys'];
     }
     requestedCalls(options['--max-calls']);
+    context.maxTotalCalls = requestedTotalCalls(options['--max-total-calls']);
+    context.singleAttempt = context.singleAttempt || noRestartReplacementFlag(options['--no-restart-replacement']);
     if (options['--local'] !== undefined && options['--max-calls'] !== undefined) throw new Stop(2, '--local does not accept --max-calls.');
     if (options['--lint'] === true && words.length && (options['--local'] === undefined || options['--local'] === true && !Object.hasOwn(options, '--timeout')) && Object.keys(options).every(key => ['--lint','--local','--json','--timeout'].includes(key))) {
       const {root,found,normalized} = localSetup(cwd,words,ports);
@@ -4131,9 +4356,16 @@ async function runBatch(context, cwd, words, options, setRelease) {
     discoveryChanged ||= !isDeepStrictEqual(initialDiscovery,discoveryScope(current.found));
     return current;
   };
+  const priorReservations = readUnresolvedPriorReservations(root, ports.env, context.batch ?? null);
+  const planPolicyOptions = {
+    maxCalls: options['--max-calls'] !== undefined ? Number(options['--max-calls']) : null,
+    maxTotalCalls: context.maxTotalCalls ?? null,
+    singleAttempt: !!context.singleAttempt,
+    unresolvedReservations: priorReservations
+  };
   const planFor = rows => {
     const current = discover();
-    const plan = buildCheckPlan({root,found:current.found,selected:select(current.found,current.normalized,root,ports),rows,full:true,base,affected:!context.forceAffectedFull,allowMissingInterfaces},planningPorts);
+    const plan = buildCheckPlan({root,found:current.found,selected:select(current.found,current.normalized,root,ports),rows,full:true,base,affected:!context.forceAffectedFull,allowMissingInterfaces,...planPolicyOptions},planningPorts);
     discover();
     return context.forceAffectedFull ? {...plan,stories:plan.stories.map(story=>({...story,role:'target',reason:'conservative: source selection changed during planning'}))} : plan;
   };
@@ -4192,7 +4424,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
   }
   if (options['--max-calls'] !== undefined) for (const row of rows) row.max_calls = Number(options['--max-calls']);
   base ??= resolveWorkflowBase();
-  context.checkPlan = affected ? planFor(rows) : buildCheckPlan({root,found,selected,rows,full:words.length === 0,base,allowMissingInterfaces},planningPorts);
+  context.checkPlan = affected ? planFor(rows) : buildCheckPlan({root,found,selected,rows,full:words.length === 0,base,allowMissingInterfaces,...planPolicyOptions},planningPorts);
   if (affected) {
     const finalSelection = selectCheckTests(context.checkPlan,{affected:true});
     if (discoveryChanged || !isDeepStrictEqual(finalSelection.tests,context.checkSelection.tests)) return restartConservatively();
