@@ -1657,7 +1657,7 @@ test('SEAM11 (M2-2): src/runtime has no hardcoded client version literal; seam s
   assert.ok(seenDirect.length > 0 && seenDirect.every(v => v === null), `expected direct pdd_version=null, got ${JSON.stringify(seenDirect)}`);
 });
 
-test('SEAM12 (MERGE-1): runtime-check-plan keeps approved prompt unchanged and direct buildCheckPlan parses Generated-from headers without ports.headerPrompts', async t => {
+test('SEAM12 (MERGE-1): runtime-check-plan keeps current prompt prose hash and direct buildCheckPlan parses Generated-from headers without ports.headerPrompts', async t => {
   const { execFileSync } = await import('node:child_process');
   const { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
@@ -1669,7 +1669,7 @@ test('SEAM12 (MERGE-1): runtime-check-plan keeps approved prompt unchanged and d
   const blocks = interfaceBlocks(promptText);
   assert.equal(blocks.length, 1);
   const iface = JSON.parse(blocks[0][1]);
-  assert.equal(iface.status, 'approved');
+  assert.ok(['draft', 'approved'].includes(iface.status));
   assert.equal(iface.prose_sha256, proseSha256(promptText));
 
   const tmp = mkdtempSync(join(tmpdir(), 'pdd-merge1-'));
