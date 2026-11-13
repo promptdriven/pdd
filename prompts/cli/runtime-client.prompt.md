@@ -424,7 +424,7 @@ or `passed` field. Keep stdout valid JSON and retain ordinary pass/mismatch
 reports and invalid-input/execution errors. The comparator owns detection,
 waiting, selected app surface and the no-action rule.
 
-For explicit complete lint, print every canonical diagnostic from `result.problems` (or the kept report's problems on older servers), preserving file, section, severity, JSON pointer and plain reason/fix. Merge legacy `program.refused_prompts` without duplicating the same code/file/section. A selected test's confirmed `result.tests` refusal also refuses that row, including Story/criterion mismatches even when prompt admission passed. Unselected tests or diagnostics remain visible without overriding selected rows. Preserve unknown and transport rules; complete lint is zero AI calls, never a check.
+For explicit complete lint, retain every canonical diagnostic from `result.problems` (or the kept report's problems on older servers) in JSON `problems` and saved `summary.json`, preserving file, section, severity, JSON pointer and plain reason/fix. Merge legacy `program.refused_prompts` without duplicating the same code/file/section. In plain text (including saved lint-only `--read` text), format `problems` through `describeLintDiagnostics` from [compatibility and lint display](lint-compatibility-display.prompt.md) (`localOnly: Boolean(context.localOnly)`), so blocking findings (`severity !== 'warning'`) appear under `Lint problems (from the PDD interpreter):` or `Local lint problems:` while warning-only advisories (`severity === 'warning'`, such as `needs-hash-tool`) appear under `Lint advisories (from the PDD interpreter):` or `Local lint advisories:`. In `localOnly` mode, treat only blocking findings (`severity !== 'warning'`) or refused rows as exit-4 refusals; warning-only advisories do not force exit 4. A selected test's confirmed `result.tests` refusal also refuses that row, including Story/criterion mismatches even when prompt admission passed. Unselected tests or diagnostics remain visible without overriding selected rows. Preserve unknown and transport rules; complete lint is zero AI calls, never a check.
 
 For lint-only JSON, `lint_state` summarizes selected outcomes under the Outcome contract below. Keep every returned diagnostic in `problems`, including unselected refusals.
 
@@ -488,12 +488,19 @@ separate. Recovered lint evidence must still match the saved archive and current
 saved-source guards before its selected compatibility can authorize dispatch;
 unavailable reconstruction holds that test without fresh paid work.
 
-Standalone `pdd lint` text and JSON show each selected root/test, all reported
-operations and edges with exact selection and effective modes, safe source
-location, server verdict/reason, report source/build/capability identity,
-association and selected completeness. Preserve inventory diagnostics and the
-envelope coverage flag separately. Show unknown instead of an empty ready list.
-The selected outcome owns admission and exit; display cannot override it.
+Standalone `pdd lint --json` (and saved `summary.json`) retains for each
+selected root/test all reported operations and edges with exact selection and
+effective modes, safe source location, server verdict/reason, report
+source/build/capability identity, association, selected completeness,
+`compatibility` and `client_advice`. Plain-text `pdd lint` (including saved
+lint-only `--read` text) formats each compatibility row with
+`describeCompatibility` from [compatibility and lint display](lint-compatibility-display.prompt.md)
+using `label` `<cleaned story> / <cleaned test>` and `details: false`, and Try's
+not-run lint stderr formats each compatibility row with `describeCompatibility`
+using `label` `<cleaned test>` and `details: false`. Preserve inventory
+diagnostics and the envelope coverage flag separately. Show unknown instead of
+an empty ready list. The selected outcome owns admission and exit; display
+cannot override it.
 
 Advice is visibly `client_advice:{owner,next_step}`, never a server fact. For `binding-missing`,
 name the application/binding author and advise supplying the actual binding.
@@ -1117,6 +1124,8 @@ pointer, but deduplication must retain the original location identity.
 
 - [Call preflight display](lint-call-preflight.prompt.md): required generation, verification and testing context for the pure advisory renderer and exact server report fields.
 
+- [Compatibility and lint display](lint-compatibility-display.prompt.md): required generation and verification context for one-line compatibility summaries and severity-split lint headings.
+
 - [Binding plan](runtime-binding-plan.prompt.md): required boundary parsing and local edge diagnostics for generation and verification.
 
 - [Check planning](runtime-check-plan.prompt.md): required for affected Story
@@ -1574,7 +1583,7 @@ Request `includeRuntime: true` from bindingCoverage for command reports; direct 
 
 For named Runtime Story `lint --local`, keep the SVG-only advisory: captured dependency prompts are layout context, not a request to admit every dependency as a Runtime program. Default `lint --local` checks workspace interface declarations as well. Named nonlocal lint and checks retain executable interface admission. Native-validation Story selection keeps its separate saved-evidence route.
 
-Local lint findings use a local heading; server findings retain interpreter attribution. Intentional native-only omissions count separately from malformed unsent tests in lint summaries. Native omissions never supply a pass.
+Local lint findings use the local problem or advisory heading from [compatibility and lint display](lint-compatibility-display.prompt.md); server findings retain interpreter attribution on both problem and advisory headings. Intentional native-only omissions count separately from malformed unsent tests in lint summaries. Native omissions never supply a pass.
 
 User diagnostics name the PDD interpreter as the service; Runtime interface names the declaration. Preserve machine identifiers and server gate text.
 
