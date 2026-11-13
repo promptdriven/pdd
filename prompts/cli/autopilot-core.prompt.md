@@ -773,10 +773,13 @@ the evidence record.
   the engine extracts and puts structured failure reproduction details in the repair brief
   for each failed check: the failing test names (with files when known, from
   `failingTests` and check-run test annotations), the redacted failing lines of the log
-  (`failingLogLines(text, limit=25)`, exported: TAP failure blocks, spec `✖ failing
-  tests:` blocks, assertion/error lines, check-run output and annotations, and `gh run
-  view RUN --repo REPO --log-failed` when a workflow run id is known, falling back to the
-  last non-empty lines), and the environment of the failure (CI check name vs local
+  (`failingLogLines(text, limit=25)`, exported: strips GitHub Actions step prefixes with
+  optional UTF-8 BOM and ANSI escape sequences before secret redaction and failure parsing;
+  extracts TAP failure blocks, spec `✖ failing tests:` detail blocks without letting earlier
+  spec tree rows or passing siblings starve them, assertion/error lines, check-run output
+  and annotations of failed check runs, and `gh run view RUN --repo REPO --log-failed` once
+  per failed workflow run when a run id is known, falling back to the last non-empty lines),
+  and the environment of the failure (CI check name vs local
   full-suite runner, platform, worker concurrency `$PDD_CHECK_CPUS` vs CI runner
   concurrency, `CI=true`, and clean-checkout or permission context such as `/proc` or
   `EACCES`). The brief requires the repair agent to first run those exact failing tests in
@@ -887,17 +890,21 @@ digits (an optional `#`); it becomes an integer above 0. The head is 40 hex digi
 any case and is saved in lower case. Any other PR value is no result. A repair result
 `{"outcome": "not reproduced", "command", "detail"?}` (`"not-reproduced"` accepted too)
 with a nonblank `command` counts as a job result (`produced`). When the round had only CI
-or full-suite red findings and no reproduction rerun has run at this head yet, the engine
-resets any uncommitted edits in the job worktree to the PR head, refunds the tentative
-`repairs` and `rounds` entries of that round, restores checks (`review`, `suite`,
-`vectors`, `coverage`, `untested`) that already passed at this head for the non-red
-checks, records `reproduceRerun {head, at, command, detail, kinds}`, reruns the failing
-check once (`suite` cleared to run again; failed CI rerun via `POST
-repos/REPO/actions/runs/ID/rerun-failed-jobs`, falling back to `/rerun` or `POST
-repos/REPO/check-runs/ID/rerequest`, treating an unchanged pre-rerun CI signature as
-pending for up to 2 minutes until GitHub updates the check state), and moves back to
-phase `pr` in the same tick. A second `"not reproduced"` at the same head, or one when
-non-CI/non-suite checks were red, ends the job as `checks-red`. A `failed` result ends
+or full-suite red findings (including no prior `Review: FAIL` at this head) and no
+reproduction rerun has run at this head yet, the engine reads the PR on GitHub (finishing
+a merge, or ending as `pr-closed` or `head-moved`, when the PR changed while the repair
+ran), resets any uncommitted edits in the job worktree to the PR head, refunds the
+tentative `repairs` and `rounds` entries of that round, and reruns the failing check once:
+when `ci` was red, failed CI is rerun via 2xx `POST
+repos/REPO/actions/runs/ID/rerun-failed-jobs` (falling back to `/rerun` or `POST
+repos/REPO/check-runs/ID/rerequest`), ending as `checks-red` without recording a rerun if
+no failed CI check could be rerun, and treating an unchanged pre-rerun failed-check
+signature as pending for up to 2 minutes until GitHub updates those failed checks; passing
+checks (`review`, `suite`, `vectors`, `coverage`, `untested`) at this head for the non-red
+checks are restored (`suite` cleared when `suite` was red), `reproduceRerun {head, at,
+command, detail, kinds}` is recorded, and the job moves back to phase `pr` in the same
+tick. A second `"not reproduced"` at the same head, or one when non-CI/non-suite checks
+were red, ends the job as `checks-red`. A `failed` result ends
 with the agent's cause (when a repair reports `kind: "pdd"` and `code: "base-test-red"`
 for #3181, its tentative `repairs` increment is refunded first); anything else ends with
 `no-result`.
