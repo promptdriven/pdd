@@ -5,7 +5,9 @@ import { readFileSync } from 'node:fs';
 
 // Validate the documented files, not a second fixture that can drift from them.
 test('RUNBOOK indexed port example has complete, schema-compatible cases', () => {
-  const text = readFileSync(new URL('../RUNBOOK.md', import.meta.url), 'utf8');
+  const router = readFileSync(new URL('../RUNBOOK.md', import.meta.url), 'utf8');
+  assert.ok(router.includes('`runbook/cli-and-ports.md`'));
+  const text = readFileSync(new URL('../skills/pdd-prompting/runbook/cli-and-ports.md', import.meta.url), 'utf8');
   const section = text.split('### Return a different port reply on each call\n')[1]?.split('\n### ')[0];
   assert.ok(section);
   const extract = (path, fence, language) => {

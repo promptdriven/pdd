@@ -110,7 +110,7 @@ ready. Existing action lookup/recovery belongs to the door, not this module.
 ## Dependencies
 
 - [Screen design check](screen-design-check.prompt.md): required generation/runtime/verification context for optional `look` surface evaluation.
-- [Screen rules](../../RUNBOOK.md#13-give-your-app-a-screen-app-map): required packaged generation and verification context for drawing fidelity and local screen comparison. Its other links are navigation-only for this module's wire contract.
+- [Screen rules](../../skills/pdd-prompting/runbook/screens-and-svg.md#13-give-your-app-a-screen-app-map): required packaged generation and verification context for drawing fidelity and local screen comparison. Its other links are navigation-only for this module's wire contract.
 
 ## Caller navigation
 

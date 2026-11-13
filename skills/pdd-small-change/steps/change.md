@@ -1,8 +1,8 @@
 # change
 
-- Before you write a prompt or a test file, read RUNBOOK.md §2–§4 in the pdd-prompting skill. Copy the RUNBOOK examples: `*.prompt.md` with a Runtime interface block; the Story's test file, `tests/<story>.json` (RUNBOOK §2 names the folder when the repo already has tests/).
+- Before you write a prompt or a test file, read RUNBOOK.md and `runbook/files-and-runtime-block.md` (§2–§4) in the pdd-prompting skill. Copy the RUNBOOK examples: `*.prompt.md` with a Runtime interface block; the Story's test file, `tests/<story>.json` (RUNBOOK §2 names the folder when the repo already has tests/).
 - Read pdd-prompting/review.md.
-- Also read the RUNBOOK sections that fit: §6 CLI, §7 prompt calls, §9 money/dates, §13 screens; §8 check paths, §10 budgets (over cap: 0 calls). §18: one step = one action or about 10 moves/rows/calls; split replays; check expected state per part. Server limit: 10 minutes.
+- From RUNBOOK.md, open only the 1–2 `runbook/` topic files that fit (skip unrelated files). Keep each step to one action or about 10 moves/rows/calls; split replays; check expected state per part. Server limit: 10 minutes.
 - Complete the issue checklist (RUNBOOK §15); exclusions need issue authority.
 - Read pdd-prompting's guide.md in full before you write a prompt. Change the prompt that owns a file before the file. New code starts with its prompt. Files that no prompt owns change directly.
 - For a behavior change, add a test through the public interface. Take its expected result from the plan, not from the code.

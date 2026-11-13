@@ -8,8 +8,10 @@ test('RUNBOOK app-map after + bind example is complete, synced and schema-valid'
   const runbook = readFileSync(new URL('../RUNBOOK.md', import.meta.url), 'utf8');
   const skillRunbook = readFileSync(new URL('../skills/pdd-prompting/RUNBOOK.md', import.meta.url), 'utf8');
   assert.equal(runbook, skillRunbook);
+  assert.ok(runbook.includes('`runbook/screens-and-svg.md`'));
 
-  const section = runbook.split('### App map\n')[1]?.split('\n### ')[0];
+  const screens = readFileSync(new URL('../skills/pdd-prompting/runbook/screens-and-svg.md', import.meta.url), 'utf8');
+  const section = screens.split('### App map\n')[1]?.split('\n### ')[0];
   assert.ok(section, 'missing ### App map section');
   assert.match(section, /Ordinary `pdd lint <story>` checks the Story's prompts and scenario \(unless the scenario declares `"app_maps": \["app-map\.json"\]`\); `pdd simulate <story> --new` checks `app-map\.json` before starting Try\./);
 
