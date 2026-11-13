@@ -21,7 +21,7 @@ test('RELEASE8: public branch examples and messages use neutral names', () => {
   assert.doesNotMatch(read('docs/runtime-boundaries.md'),/the runtime team/);
 });
 test('RELEASE9: runbook and lint documentation describe current behavior', () => {
-  for(const file of ['RUNBOOK.md','skills/pdd-prompting/RUNBOOK.md']) assert.doesNotMatch(read(file),/The existing `http.prompt`.*still handles/);
+  for(const file of ['RUNBOOK.md','skills/pdd-prompting/RUNBOOK.md','skills/pdd-prompting/runbook/testing-and-simulation.md']) assert.doesNotMatch(read(file),/The existing `http.prompt`.*still handles/);
   assert.doesNotMatch(read('docs/lint-capacity.md'),/obsolete unknown wording/);
 });
 test('RELEASE12: launcher prompt describes its actual POSIX shell shebang and Node invocation', () => {
