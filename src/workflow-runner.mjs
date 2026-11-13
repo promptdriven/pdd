@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 314e4137adf52cda0ef2b23f5af333d4007cb626345a5f53bb9d1679213fef6e).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 7001164df5edf62424d8848d6e6b567ca4aeb8d5c4c8b0aebe59a596d14c0fa2).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -1516,7 +1516,7 @@ function publicationFit(lines, approvals, room, env) {
 // The Steps overview cuts each summary to a short line; it is never the only copy that a reviewer can read. Below it, one
 // closed block keeps every whole summary as inert code spans: no summary line starts a body line, so its labels, HTML,
 // mentions and markers stay text. The block has the lowest priority in the body budget. When it does not fit, the longest
-// summaries are shortened first, each cut shows " …", and one line names each shortened step and what was left out.
+// ordinary prefixes are shortened first; complete protected evidence lines survive with visible gaps and omission counts.
 const AGENT_NOTE = 'Agent note — not checked by pdd';
 const FULL_SUMMARIES = '<details><summary>Full step summaries</summary>', SLOT = '\u0000';
 function codeSpan(line) {
@@ -1535,6 +1535,31 @@ function summaryStart(text, size) {
   else if (/\S/.test(points[size])) kept = kept.replace(/\s+\S*$/, '');
   return kept.trimEnd();
 }
+// Detect evidence anywhere in a sanitized line, before inert Markdown rendering.
+const summaryEvidence = line => /https?:\/\/\S+|\b(?:outcome|results?|limitations?|risks?|deferred|blocked|failures?|failed|failing|unresolved)\b|✗/i.test(line);
+function summaryExcerpt(text, size) {
+  const prefix = summaryStart(text, size), ranges = prefix ? [[0, prefix.length]] : [];
+  let offset = 0;
+  for (const line of text.split('\n')) {
+    if (summaryEvidence(line)) ranges.push([offset, offset + line.length]);
+    offset += line.length + 1;
+  }
+  // Prefix and protected lines may overlap. Adjacent lines retain their original newline.
+  const merged = [];
+  for (const [start, end] of ranges.sort((a, b) => a[0] - b[0])) {
+    const last = merged.at(-1);
+    if (last && (start <= last[1] || text.slice(last[1], start) === '\n')) last[1] = Math.max(last[1], end);
+    else merged.push([start, end]);
+  }
+  let retained = 0, end = 0;
+  const lines = [];
+  for (const [start, stop] of merged) {
+    if (start > end) lines.push('…');
+    const part = text.slice(start, stop);
+    retained += characters(part); lines.push(...part.split('\n').filter(Boolean)); end = stop;
+  }
+  return { lines, left: characters(text) - retained };
+}
 const SHORTENED = /^_\d+ step summar(?:y was|ies were) shortened to fit the PR size limit: .*\._$/;
 // The steps of one PR area (those since the previous PR) and their whole summaries after the PR cleaning.
 function prSteps(run, area) {
@@ -1544,11 +1569,12 @@ function prSteps(run, area) {
 const noteRuntime = text => String(text).replace(LINE_PATTERN, match => `Saved runtime receipt (unverified in this agent note): ${match}`);
 const cleanSummary = (run, step) => hideLocalPaths(redactTry(noteRuntime(withoutForgedMachineLines(run.done[step].summary))), run);
 // render(section) is the whole body with that block; the block takes the room that is left: whole when it fits, else one
-// common length for the longest summaries, as large as the search finds within the limit.
+// common prefix length for ordinary notes, with protected evidence retained at every size.
 function withSummaries(steps, texts, render, limit) {
   const fits = size => characters(render(fullSummaries(steps, texts, size))) <= limit;
   let low = 0, high = Object.values(texts).reduce((most, text) => Math.max(most, characters(text)), 0);
   if (fits(Infinity)) return render(fullSummaries(steps, texts, Infinity));
+  if (!fits(0)) throw Object.assign(Error('The protected outcome, limitation and reference evidence exceeds the PR description budget. Shorten the notes while retaining that evidence, then retry.'), { code: 'workflow_pr_body_too_large' });
   while (high - low > 1) { const middle = Math.floor((low + high) / 2); if (fits(middle)) low = middle; else high = middle; }
   return render(fullSummaries(steps, texts, low));
 }
@@ -1557,11 +1583,11 @@ function fullSummaries(steps, texts, size) {
   const shortened = [];
   const items = steps.map(step => {
     if (!texts[step]) return `- **${step}**: done`;
-    const kept = summaryStart(texts[step], size), left = characters(texts[step]) - characters(kept);
+    const { lines, left } = summaryExcerpt(texts[step], size);
     if (left) shortened.push(`${step} (${left.toLocaleString('en-US')} characters left out)`);
-    return `- **${step}**: ${AGENT_NOTE}: ${kept.split('\n').filter(Boolean).map(codeSpan).join('<br>')}${left ? `${kept ? ' ' : ''}…` : ''}`;
+    return `- **${step}**: ${AGENT_NOTE}: ${lines.map(codeSpan).join('<br>')}${left ? `${lines.length ? ' ' : ''}…` : ''}`;
   });
-  const notice = shortened.length ? [`_${shortened.length} step ${shortened.length === 1 ? 'summary was' : 'summaries were'} shortened to fit the PR size limit: ${listed(shortened)}. The PR author has the full summaries in the run folder._`, ''] : [];
+  const notice = shortened.length ? [`_${shortened.length} step ${shortened.length === 1 ? 'summary was' : 'summaries were'} shortened to fit the PR size limit: ${listed(shortened)}. Outcome, limitation and reference lines are preserved; gaps are marked with …._`, ''] : [];
   return [...notice, FULL_SUMMARIES, '', ...items, '', '</details>'];
 }
 function publicationRuntime(run, env, stage = 'current') {
@@ -1875,7 +1901,7 @@ function prBody(run, area, env, drafts = [], tests = true, evidence, readable = 
     ...(text !== null ? ['', '## Verify', '', text] : []), ''].join('\n'), run);
   const approvalLines = (evidence.approvalLines ?? []).map(line => hideLocalPaths(redactTry(line), run));
   const notes = readable?.notes ?? [], budget = BODY_BUDGET - (readable ? characters(readablePrBody(readable.text, notes.join('\n'))) + 2 : 0);
-  // Room for the full summaries with every summary left out comes first, so a cut is never silent. The top evidence,
+  // Room for protected summary evidence and the omission notice comes first. The top evidence,
   // approvals and verify.md then fit as before, and the full summaries get the room that is left.
   const least = fullSummaries(steps, full, 0);
   const { lifted, approvals } = publicationFit(preparedLines, approvalLines, Math.max(0, budget - 200 - (verify === null ? 0 : 1000) - characters(body(null, [], [], least))), env);
@@ -2062,11 +2088,19 @@ async function publishAreaPr(run, area, p, lines, retry, automatic = null) {
   if (existing) {
     if (automatic) { const refused = await automatic.authorize(); if (refused) return refused; }
     let inventoryOnly = false;
-    if (codePr && !opted && commitSha(existing.publishedHeadSha) && existing.publishedHeadSha === run.testInventory.headSha && existing.publicationBodySha256 === bodyIdentity()) {
-      try {
-        const remote = await rawGit(p,run.root,'ls-remote','origin',`refs/heads/${run.branch}`);
-        inventoryOnly = remote.trim() === `${run.testInventory.headSha}\trefs/heads/${run.branch}`;
-      } catch { /* Unavailable remote identity cannot weaken proof safety. */ }
+    if (codePr && !opted && commitSha(existing.publishedHeadSha) && existing.publishedHeadSha === run.testInventory.headSha) {
+      let sameBody = false;
+      try { sameBody = existing.publicationBodySha256 === bodyIdentity(); }
+      catch (error) {
+        if (error?.code === 'workflow_progress_refused') throw error;
+        return fail([...lines, `${oneLine(error.message)} No source was pushed. ${retry}.`].join('\n'));
+      }
+      if (sameBody) {
+        try {
+          const remote = await rawGit(p,run.root,'ls-remote','origin',`refs/heads/${run.branch}`);
+          inventoryOnly = remote.trim() === `${run.testInventory.headSha}\trefs/heads/${run.branch}`;
+        } catch { /* Unavailable remote identity cannot weaken proof safety. */ }
+      }
     }
     if (!inventoryOnly) {
       let pending;
@@ -2149,8 +2183,13 @@ async function publishAreaPr(run, area, p, lines, retry, automatic = null) {
     // The body must include the approval that was deferred until the prepared
     // intent was validated, including its native journal evidence.
     prepared = await publicationEvidence(run, area, p);
-    readable = await readableFor(prepared);
-    body = prBody(run, area, p.env, bodyDrafts, tests, prepared, readable);
+    try {
+      readable = await readableFor(prepared);
+      body = prBody(run, area, p.env, bodyDrafts, tests, prepared, readable);
+    } catch (error) {
+      if (error?.code === 'workflow_progress_refused') throw error;
+      return fail([...lines, `${oneLine(error.message)} No source was pushed. ${retry}.`].join('\n'));
+    }
     const changed = await automatic.validate(); if (changed) return changed;
   }
   const unsafe = await promptGuard(codePr ? intent.headSha : undefined);
@@ -3218,7 +3257,8 @@ async function draftDescription(run, pr1, drafts, p) {
     const footer = `${closing}\n\n${marker}\n`;
     const approvalLines = (evidence.approvalLines ?? []).map(line => hideLocalPaths(redactTry(line), run));
     const room = BODY_BUDGET - characters(opening) - characters(footer) - characters(evidence.issueReference) - characters(ordinaryTop.join('\n')) - 8;
-    const { lifted, approvals } = publicationFit(evidence.lines.map(line => hideLocalPaths(redactTry(line), run)), approvalLines, Math.max(0, room - Math.min(1000, characters(safeRemainder) + reserved)), p.env);
+    // Protected summaries are mandatory; only the ordinary remainder's reservation is capped.
+    const { lifted, approvals } = publicationFit(evidence.lines.map(line => hideLocalPaths(redactTry(line), run)), approvalLines, Math.max(0, room - reserved - Math.min(1000, characters(safeRemainder))), p.env);
     const leading = opening + [...lifted, ...(lifted.length ? [''] : []), ...ordinaryTop, ...(ordinaryTop.length ? [''] : []), evidence.issueReference, '', ...approvals, ...(approvals.length ? [''] : []), ''].join('\n');
     const fitted = verifyFit(safeRemainder, BODY_BUDGET - characters(leading) - characters(footer) - reserved, p.env, true);
     const placed = section => { const text = section.join('\n'); return fitted.includes(SLOT) ? fitted.replace(SLOT, () => text) : `${fitted}\n\n${text}`; };
@@ -3230,7 +3270,9 @@ async function draftDescription(run, pr1, drafts, p) {
     remember();
     return [`pdd updated the PR 1 description: ${drafts.length ? `draft prompts left: ${drafts.join(', ')}` : 'no draft prompts are left'}.`];
   } catch (error) {
-    if(error?.code==='workflow_progress_refused')throw error; return [`warning: pdd could not update the PR 1 description (${error.code ?? 'error'}). ${run.publicationPending ? 'No source was pushed.' : 'The PR retains its previous evidence; after a source push it stays publication-pending.'}`]; }
+    if(error?.code==='workflow_progress_refused')throw error;
+    const advice = error?.code === 'workflow_pr_body_too_large' ? ' Shorten the notes while retaining outcome, limitation and reference evidence, then retry.' : '';
+    return [`warning: pdd could not update the PR 1 description (${error.code ?? 'error'}).${advice} ${run.publicationPending ? 'No source was pushed.' : 'The PR retains its previous evidence; after a source push it stays publication-pending.'}`]; }
 }
 
 // A terminal in the run's own chat pane (Herdr session pdd) belongs to the chat; a person's other Herdr tab does not.

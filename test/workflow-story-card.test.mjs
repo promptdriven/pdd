@@ -840,3 +840,24 @@ test('release: publication preserves peer commits and pushes the approval-bound 
   f.git(f.run.root, 'merge-base', '--is-ancestor', peer, pushed);
   assert.equal(f.git(f.base, '--git-dir=' + remote, 'show', `${pushed}:value.mjs`), 'export const value = 3;');
 });
+
+test('#2874: automatic PR 1 publication refuses cleanly when approval evidence pushes protected summaries over budget', async t => {
+  const f = await storyGate(t);
+  const run = f.record(); run.done.understand.summary = `Limitation: ${'x'.repeat(57030)}`; writeRun(run);
+  await approveStory(f); saveCheck(f);
+  let preparedReached = false;
+  const original = f.ports.execFile;
+  f.ports.execFile = async (file, args, options) => {
+    if (file === 'git' && args[0] === 'symbolic-ref') preparedReached = true;
+    return original(file, args, options);
+  };
+  f.tick();
+  const out = await stepDone({ step: 'check', summary: 'Prompt tests (place-order): ✓ 3 of 3 criteria', cwd: f.run.root }, f.agentPorts());
+  assert.equal(preparedReached, true, 'The body fit before automatic gate authorization.');
+  assert.equal(out.exitCode, 1, out.message);
+  assert.match(out.message, /protected.*evidence|outcome, limitation and reference/i);
+  assert.match(out.message, /shorten/i);
+  assert.match(out.message, /No source was pushed/);
+  assert.equal(f.prs.length, 0);
+  assert.equal(f.pushes.length, 0);
+});
