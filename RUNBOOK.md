@@ -288,6 +288,16 @@ Mark both schemas with the `cli` convention. `argv` goes in. `exit_code`, `stdou
 - Write the rule "Every line written to `stdout` or `stderr` ends with one newline." in the prose.
   Expected text includes the last newline: `"Added #4: Walk the dog\n"`. An empty stream is `""`.
 
+For checks on real code, each tested entry names its command with
+`"implementation": {"kind": "cli", "command": "node bin/tip.mjs"}` alongside
+its operation and schemas. Run `pdd test --target code STORY` to execute the
+same Story cases locally with 0 AI calls. Use `--json` for structured results.
+Each Story result records the current commit. An unsupported step says
+`not run` with its reason and cannot make the Story pass. Entries with ports
+that cannot be faithfully supplied by this runner are not run; do not replace
+their world or call checks with a pass. HTTP and call entries require native
+replay tests.
+
 ## 7. A prompt that calls another prompt
 
 `checkout` asks `pricing` for a quote. The caller's interface has a `calls` entry:
@@ -910,9 +920,13 @@ Stop and tell the person to start a new agent session in the run's worktree. No 
 Only after the check actually runs, replace its `Not checked:` line with the real result in the step's run file and any copy in `verify.md`; never keep both.
 
 Code space is the PDD compiler: your agent writes the code from the approved prompts, and the same tests run on that code.
-Agents replay the approved prompt-space cases against the real code. Checks of prompts on the PDD interpreter do not establish
-that the code behaves the same. Agents execute the tests and supply the evidence; pdd validates structure and
-identity only. It does not independently prove execution or prompt/code equivalence.
+For CLI entries with a declared implementation, `pdd test --target code` executes
+the same Story cases and records the results with the commit. Unsupported steps
+are not run and cannot pass. Agents replay other approved prompt-space cases
+against the real code using native tests. Checks of prompts on the PDD interpreter
+do not establish that the code behaves the same. For agent-supplied replay
+evidence, pdd validates structure and identity; it does not independently prove
+execution or prompt/code equivalence.
 
 In verify after the last commit, run one `pdd workflow prove <run> --test "<command>" --expect "<distinctive text printed by the failing test on old code>"` command that covers all new or changed tests; text the old-code run does not print gives `wrong-reason`. Its line goes on the PR. Fresh worktrees have no installed dependencies, so include any required installation in the command.
 
