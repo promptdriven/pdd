@@ -9,7 +9,7 @@ below, and the one-time [move from the removed full engine](#the-move-from-the-f
 merge, quota-reset or interactive route of its own. Preserve existing setup, workflow and interpreter behavior.
 
 `runAutopilotLauncher` accepts command doctor, start, stop, status, add, release, report, intake or check-base, cwd, packageRoot,
-env, issues (argv operands), and optional runs, checks, engine, label, share, mode, report, decisions, intake, all and
+env, issues (argv operands), and optional runs, checks, engine, label, share, autoUpdate, mode, report, decisions, intake, all and
 json. Return
 `{exitCode, message}`; the CLI owns streams. Outside programs, timer installation, clock and state I/O are injectable
 ports; native defaults implement them on macOS and Linux. Tests may inject `checkCapacityPorts` for the shared queue.
@@ -42,7 +42,11 @@ value of `--mode`, `--report`, `--decisions` (`Use --decisions ask or --decision
 code 2 with its usage line before any effect. `start --share PERCENT` (#3231, `shareOption`) saves `state.share`, a
 whole percent from 1 to 100: the part of this machine's CPU and memory that Autopilot may use (default 50 when none is
 saved); a later start without it keeps it, and pdd.json never sets it. Another value returns exit code 2 with `Use
---share with a whole percent from 1 to 100, for example --share 70 (the default is 50).` before any change. Optional
+--share with a whole percent from 1 to 100, for example --share 70 (the default is 50).` before any change. `start
+--auto-update release|main|off` (#2710) saves `state.autoUpdate` (default `release` when unset; another value returns
+exit code 2 with `Use --auto-update release, --auto-update main or --auto-update off.`); after each enabled core tick,
+run `maybeAutoUpdateAutopilot` of [Autopilot self-update](autopilot-update.prompt.md) under the machine admission lock
+when no job is publishing or merging, and include `autoUpdateStatusLine` in status. Optional
 `--runs` and `--checks` are positive safe integers with no product maximum; save explicit values, and remove them when
 a start omits them.
 
@@ -296,3 +300,5 @@ exit 1 with one line; a missing program says `install git and gh, and sign in to
   process execution.
 - [PATH diagnostics](path-diagnostic.prompt.md): required native generation and verification context for the version
   shadowing warning.
+- [Autopilot self-update](autopilot-update.prompt.md): required native generation and verification context for safe
+  between-tick global `pdd` and skill updates.

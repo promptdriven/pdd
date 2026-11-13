@@ -25,6 +25,7 @@ import { readMachineGuard, timerPriority, validShare } from './machine-guard.mjs
 import { listReportDrafts, sendReportDraft } from './autopilot-reports.mjs';
 import { intakeMode, readIntake, intakeText, stopCardJobs } from './autopilot-intake.mjs';
 import { moveToCore, moved, movedState, engineBefore, procTable, MAX_DEFERS, FULL_ENGINE_REMOVED } from './autopilot-retire.mjs';
+import { autoUpdateStatusLine, maybeAutoUpdateAutopilot, validAutoUpdateMode } from './autopilot-update.mjs';
 import * as nativeFs from 'node:fs';
 
 const INTERVAL = 30 * 60 * 1000;
@@ -328,6 +329,10 @@ function alertLine(state, p, ports) {
   try { const text = (ports.alertStatusLine ?? alertStatusLine)({ repo: state.repo, env: p.env }, { stateRoot: ports.stateRoot }); return text ? `\n${text}` : ''; }
   catch { return ''; }
 }
+function updateLine(stateFile, ports) {
+  try { const text = (ports.autoUpdateStatusLine ?? autoUpdateStatusLine)({ stateRoot: dirname(stateFile) }); return text ? `\n${text}` : ''; }
+  catch { return ''; }
+}
 const coreRoot = stateFile => stateFile.replace(/\.json$/, '-core');
 const coreReports = (ports, env) => join(stateFolder(ports, env), 'core-reports');
 // #3231: the machine guard reads this machine once: Autopilot's share of it (start --share, default 50%), the slots
@@ -498,7 +503,25 @@ async function runTick(stateFile, ports) {
       state = read(stateFile);
       if (!state?.enabled) return ok('Autopilot stopped.');
     }
-    return await coreTick(stateFile, state, p, ports);
+    const tickResult = await coreTick(stateFile, state, p, ports);
+    try {
+      const latest = read(stateFile);
+      if (latest?.enabled) {
+        await (ports.maybeAutoUpdate ?? maybeAutoUpdateAutopilot)({
+          state: latest,
+          packageRoot: latest.packageRoot ?? dirname(dirname(self)),
+          coreRoot: coreRoot(stateFile),
+          stateRoot: dirname(stateFile),
+          env: p.env,
+        }, {
+          now: p.now,
+          execute: (file, args, options) => p.execute(file, args, options),
+          claimUpdateLock: () => claimMachineAdmission(stateFile, p),
+          ...ports.autoUpdatePorts,
+        });
+      }
+    } catch { /* Post-tick self-update never fails a completed tick. */ }
+    return tickResult;
   } finally {
     // The tick's own conditional reads keep their ETags.
     try { p?.etags?.save(); } catch { /* A lost cache only costs counted reads. */ }
@@ -623,6 +646,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
   if (input.report !== undefined && !['file', 'draft', 'off'].includes(input.report)) return { exitCode: 2, message: 'Use --report file, --report draft or --report off.' };
   if (input.intake !== undefined && !['off', 'shadow'].includes(input.intake)) return { exitCode: 2, message: 'Use --intake off or --intake shadow.' };
   if (input.decisions !== undefined && !['ask', 'decide'].includes(input.decisions)) return { exitCode: 2, message: 'Use --decisions ask or --decisions decide.' };
+  if (input.autoUpdate !== undefined && !validAutoUpdateMode(input.autoUpdate)) return { exitCode: 2, message: 'Use --auto-update release, --auto-update main or --auto-update off.' };
   const shareRefusal = shareOption(command, input, null); if (shareRefusal) return shareRefusal;
   let startSelection, startWarnings = [];
   if (command === 'doctor' || command === 'start') {
@@ -693,7 +717,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
     }
     const previous = read(stateFile);
     state = { ...state, ...previous, cwd: state.cwd, id, stateFile };
-    if (command === 'start') { if (input.label) state.label = input.label.trim(); if (input.mode) state.mode = input.mode; if (input.report) state.report = input.report; if (input.decisions) state.decisions = input.decisions; if (input.intake) state.intake = input.intake; }
+    if (command === 'start') { if (input.label) state.label = input.label.trim(); if (input.mode) state.mode = input.mode; if (input.report) state.report = input.report; if (input.decisions) state.decisions = input.decisions; if (input.intake) state.intake = input.intake; if (input.autoUpdate) state.autoUpdate = input.autoUpdate; }
     shareOption(command, input, state);
     let initialRevision = previous?.controlRevision ?? null;
     // A new state is a core state: only a state that an older pdd saved can need the move from the full engine.
@@ -719,6 +743,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
           { root: coreRoot(stateFile), reportRoot: coreReports(ports, p.env), now: p.now })
         + (label ? '' : '\nNo opt-in label: Autopilot takes no issue. Run pdd autopilot start --label pdd:autopilot, then mark issues with pdd autopilot add N.')
         + alertLine(state, p, ports)
+        + updateLine(stateFile, ports)
         + moveStatus(previous, p.now())
         + (state.core?.message ? `\nLast tick ${new Date(state.core.at).toISOString()}: ${line(state.core.message)}` : ''));
     }

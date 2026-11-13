@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 7f4f4030ae7bebe4693ee798e8092c41d015e12c9be7fb6bae18d6a505397482).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: b59a572bd6ab319c1d902efb6aba3bb6ab6c0cb33e0aea64552a8a3eea48151e).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -10,6 +10,7 @@ import { listWorkflowAreas, formatWorkflowList } from './workflow-areas.mjs';
 import { ignorePddFolder, setupProject as defaultSetupProject } from './project-setup.mjs';
 import { findSkills as defaultFindSkills, setupSkills as defaultSetupSkills } from './skills-install.mjs';
 import { pathDiagnostic as defaultPathDiagnostic } from './path-diagnostic.mjs';
+import { checkReleaseNotice as defaultCheckReleaseNotice } from './release-notice.mjs';
 import { checkWorkflowAgents } from './workflow-agents.mjs';
 import { setupMayAsk } from './setup-interaction.mjs';
 import { setupWithWorkflowAgent } from './workflow-setup.mjs';
@@ -50,7 +51,7 @@ const skillNames = folders => folders.map(folder => basename(folder)).join(', ')
 const staleLine = ({ found, stale, staleSkills = [] }, version, cwd) => {
   const details = staleSkills.map(({ name, version, state }) => state === 'older'
     ? `${name} is ${version ?? 'unknown'}` : `${name} differs (version ${version ?? 'unknown'})`).join(', ');
-  return `PDD skills in ${found} ${stale === 'older' ? `are older than pdd ${version}` : `differ from the skills of pdd ${version}`}.${details ? ` ${details}.` : ''} For copies installed by pdd in user folders, run: pdd setup. For other copies, run: npx skills add promptdriven/pdd${[join(cwd, '.agents/skills'), join(cwd, '.claude/skills')].includes(found) ? '' : ' -g'} -a codex -a claude-code -y`;
+  return `PDD skills in ${found} ${stale === 'older' ? `are older than pdd ${version}` : `differ from the skills of pdd ${version}`}.${details ? ` ${details}.` : ''} For copies installed by pdd in user folders, run: pdd setup. For other copies, run: npx skills add promptdriven/pdd${[join(cwd, '.agents/skills'), join(cwd, '.codex/skills'), join(cwd, '.claude/skills')].includes(found) ? '' : ' -g'} -a codex -a claude-code -y`;
 };
 const profileOptions = plan => Object.fromEntries([['--model','model'],['--herdr-agent-name','herdrAgentName'],['--codex-threads','codexThreads']].filter(([flag]) => plan.options[flag] !== undefined).map(([flag,key]) => [key,plan.options[flag]]));
 const RUNNER_ROUTES = {
@@ -86,7 +87,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
   stdin = process.stdin, confirm, mcpServer, runtimeSlots, contracts, product, productPorts, gitContext, workflowProve, provePorts,
   autopilotRegressions, autopilotRegressionsPorts = {}, issueGraph, issueGraphPorts = {}, dependencyIntake, dependencyIntakePorts = {}, autopilotLauncher, autopilotLauncherPorts = {}, workflowAgents = { checkWorkflowAgents }, workflowAgentPorts = {}, setupSkills = defaultSetupSkills,
   setupProject = defaultSetupProject, setupAgentMcp, autopilot, autopilotPorts = {}, autopilotAlerts, autopilotAlertsPorts = {}, autopilotGithub: autopilotGithubModule, autopilotGithubPorts = {}, pathDiagnostic = defaultPathDiagnostic,
-  readPackageVersion = defaultReadPackageVersion, findSkills = defaultFindSkills, interpreterVersion, interpreterVersionPorts = {} } = {}) {
+  readPackageVersion = defaultReadPackageVersion, findSkills = defaultFindSkills, interpreterVersion, interpreterVersionPorts = {}, releaseNotice, releaseNoticePorts = {} } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
@@ -99,7 +100,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       for (const message of pathDiagnostic({ packageRoot, cwd, env, mode })) line(stderr, message);
     } catch { /* An optional PATH diagnostic never prevents the requested command. */ }
   }
-  switch (plan.local) {
+  const code = await (async () => { switch (plan.local) {
     case 'issue-dependency-graph': {
       try { const module = issueGraph ?? await import('./issue-dependency-graph.mjs');
         const result = await module.runIssueGraph({cwd, repository:plan.options['--repo'], issue:plan.options['--issue'], open:!!plan.options['--open']}, issueGraphPorts);
@@ -130,7 +131,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     case 'autopilot-doctor': case 'autopilot-audit': case 'autopilot-check-base': case 'autopilot-start': case 'autopilot-stop': case 'autopilot-status': case 'autopilot-add': case 'autopilot-release': case 'autopilot-report': case 'autopilot-intake': {
       try {
         const module = autopilotLauncher ?? await import('./autopilot-launcher.mjs');
-        const result = await module.runAutopilotLauncher({ command: plan.local.slice(10), issues: [...plan.operands], runs: plan.options['--runs'], checks: plan.options['--checks'], ...(plan.options['--engine'] ? { engine: plan.options['--engine'] } : {}), ...(plan.options['--label'] ? { label: plan.options['--label'] } : {}), ...(plan.options['--mode'] ? { mode: plan.options['--mode'] } : {}), ...(plan.options['--report'] ? { report: plan.options['--report'] } : {}), ...(plan.options['--decisions'] ? { decisions: plan.options['--decisions'] } : {}), ...(plan.options['--intake'] ? { intake: plan.options['--intake'] } : {}), ...(plan.options['--share'] !== undefined ? { share: plan.options['--share'] } : {}), all: plan.options['--all'] === true, ...(plan.options['--json'] === true ? { json: true } : {}), cwd, packageRoot, env }, autopilotLauncherPorts);
+        const result = await module.runAutopilotLauncher({ command: plan.local.slice(10), issues: [...plan.operands], runs: plan.options['--runs'], checks: plan.options['--checks'], ...(plan.options['--engine'] ? { engine: plan.options['--engine'] } : {}), ...(plan.options['--label'] ? { label: plan.options['--label'] } : {}), ...(plan.options['--mode'] ? { mode: plan.options['--mode'] } : {}), ...(plan.options['--report'] ? { report: plan.options['--report'] } : {}), ...(plan.options['--decisions'] ? { decisions: plan.options['--decisions'] } : {}), ...(plan.options['--intake'] ? { intake: plan.options['--intake'] } : {}), ...(plan.options['--share'] !== undefined ? { share: plan.options['--share'] } : {}), ...(plan.options['--auto-update'] ? { autoUpdate: plan.options['--auto-update'] } : {}), all: plan.options['--all'] === true, ...(plan.options['--json'] === true ? { json: true } : {}), cwd, packageRoot, env }, autopilotLauncherPorts);
         if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255 || typeof result.message !== 'string' || !result.message.trim()) throw Error('Invalid Autopilot reply');
         line(result.exitCode === 0 ? stdout : stderr, result.message);
         if (result.exitCode === 0 && ['autopilot-start', 'autopilot-status'].includes(plan.local) && plan.options['--all'] !== true && plan.options['--json'] !== true) {
@@ -180,9 +181,13 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       }
       line(stdout, metadata.version);
       try {
-        for (const result of findSkills({ packageRoot, cwd, home: env.HOME || homedir(), claudeConfigDir: env.CLAUDE_CONFIG_DIR }))
+        for (const result of findSkills({ packageRoot, cwd, home: env.HOME || homedir(), claudeConfigDir: env.CLAUDE_CONFIG_DIR, ...(env.CODEX_HOME ? { codexHome: env.CODEX_HOME } : {}) }))
           if (result.found && (result.stale === 'older' || result.staleSkills?.some(({ state }) => state === 'older'))) line(stderr, staleLine(result, metadata.version, cwd));
       } catch { /* The skills check never changes --version. */ }
+      try {
+        const notice = await (releaseNotice ?? defaultCheckReleaseNotice)({ currentVersion: metadata.version, isVersionCommand: true, interactive: Boolean(stderr?.isTTY), env }, releaseNoticePorts);
+        if (typeof notice === 'string' && notice.trim()) line(stderr, notice.trim());
+      } catch { /* The release notice never changes --version. */ }
       return 0;
     }
     case 'autopilot.off': case 'autopilot.observe': case 'autopilot.auto': case 'autopilot-trust': case 'autopilot-untrust': {
@@ -416,5 +421,15 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         line(stdout, areas.formatWorkflowList(workflows, { json: plan.options['--json'] === true }));return 0;
       } catch { line(stderr, 'The bundled workflows could not be read. Use a complete PDD package.');return 1; }
     default: line(stderr, 'Unsupported command in pdd. Run pdd --help.');return 2;
+  } })();
+  if (!['help', 'completion', 'version', 'version-detailed', 'mcp'].includes(plan.local) && plan.options['--json'] !== true && (stderr?.isTTY === true || Boolean(releaseNotice))) {
+    try {
+      const metadata = await readPackageVersion({ packageRoot });
+      if (metadata?.ok && typeof metadata.version === 'string' && metadata.version) {
+        const notice = await (releaseNotice ?? defaultCheckReleaseNotice)({ currentVersion: metadata.version, isVersionCommand: false, interactive: Boolean(stderr?.isTTY), env }, releaseNoticePorts);
+        if (typeof notice === 'string' && notice.trim()) line(stderr, notice.trim());
+      }
+    } catch { /* An optional release notice never changes command output or exit status. */ }
   }
+  return code;
 }
