@@ -4,7 +4,7 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { evaluateScreenLook, lintScreenDesign } from '../src/screen-design-check.mjs';
 import { compareScreen } from '../src/screen-compare.mjs';
-import { temp } from './runtime-fake.mjs';
+import { temp } from './helpers/runtime-fake.mjs';
 
 // Story oracle: user_stories/screen-design-check.md, Rules to check.
 

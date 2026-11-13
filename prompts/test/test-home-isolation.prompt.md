@@ -33,6 +33,16 @@ selectors after isolation loads. Keep the assigned `PDD_CHECK_CPUS` execution
 hint. Cover both entry routes with synthetic caller controls, verify child
 processes cannot inherit them, and leave the caller's environment and queue
 files unchanged.
+Before test code runs, also remove inherited Herdr and agent session selectors:
+`HERDR_*`, `PDD_AGENT_SESSION`, `PDD_AUTOPILOT_CONTEXT`, `CLAUDECODE`,
+`CLAUDE_CODE_*`, `CLAUDE_PID`, `CODEX_THREAD_ID` and `CODEX_SANDBOX*`.
+A test never reads or joins the live Herdr or agent session of its caller.
+Apply this to focused helper imports and the npm preload, including children
+that inherit the isolated environment. Preserve unrelated environment values
+and allow tests to supply explicit synthetic session values after isolation.
+Use synthetic caller sessions in both entry-route regressions. Keep the caller's
+input open without supplying a reply: the tests must finish without waiting for
+input, and the product formal test must also finish under that caller environment.
 Remove only the allocated
 temporary directory when its owning process exits. Do not add a dependency.
 
@@ -83,7 +93,7 @@ no interpreter operation and makes no model or live service calls.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"35f830d16449e7f44e261cfad857f187c79cca5d13db236d0b9a58c7f534602e","entries":[],"calls":[],"resources":[],"limits":{"max_steps":1,"max_model_calls":1},"conventions":[]}
+{"status":"draft","prose_sha256":"0dcc614137167098de56105a007dec86eca897b52a846c458a95b29f83a22723","entries":[],"calls":[],"resources":[],"limits":{"max_steps":1,"max_model_calls":1},"conventions":[]}
 ```
 
 </details>

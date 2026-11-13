@@ -1,6 +1,6 @@
 # CLI reference
 
-This page lists every command of pdd 0.1.29, as `pdd --help` shows it. A test (`test/docs-commands.test.mjs`) checks that each command form of the help is on this page.
+This page lists every command of pdd 0.1.30, as `pdd --help` shows it. A test (`test/docs-commands.test.mjs`) checks that each command form of the help is on this page.
 
 You need the pdd command only for runs with PRs, for `pdd test`, `pdd lint`, `pdd simulate` and `pdd approve`. Install the skills with `npx skills add promptdriven/pdd` (add `-g` for all your projects), and set up a repo with the `pdd-setup` skill in your agent. For simulations that your agent drives, use the Try tools in `pdd mcp`. Then use a PDD skill: `pdd-feature`, `pdd-bug`, `pdd-small-change`, `pdd-product` or `pdd-prompting`. Call a skill with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code (or ask for it by name). See [Install](USAGE.md#2-install).
 
@@ -420,9 +420,10 @@ pdd autopilot alerts test
 
 The bot posts with the Discord API v10, with link previews off, and reads the
 message back. Only a matching readback counts as delivered. A change of line
-ends or of spaces at a line end is not a mismatch. `test` first checks
-the bot and the channel, read-only, and shows the bot name and the channel name.
-pdd never prints the token or the command output. The bot needs permission to
+ends or of spaces at a line end is not a mismatch. `set --token-command` and `test`
+check the bot and the channel, read-only, and show the bot name and the channel name.
+pdd never prints or saves the token or the command stdout; when a token command
+fails during `set` or `test`, pdd shows only scrubbed single-line stderr. The bot needs permission to
 view the channel, send messages and read message history.
 
 The core sends an alert only for a real need. It sends `stuck` when a job process
@@ -448,7 +449,7 @@ the name that Autopilot saved at its first start (this checkout's start first),
 else the host name, so a host rename does not open a new incident. An access or spending decision, a product
 decision, a stuck issue or a long-running issue is one incident per issue. A repeat call sends
 nothing for a delivered or unconfirmed alert, and sends again an alert that
-failed or had no destination. `--update` sends a new cause, a changed decision needed or the new
+failed or had no destination; a delivered `pdd autopilot alerts test` and later Autopilot ticks also retry open failed or newly configured alerts once. `--update` sends a new cause, a changed decision needed or the new
 issue list. Changing only what was tried sends nothing. `--kind recovered` sends one recovery and closes the matching
 alerts; give `"kind"` in the JSON to close only that incident. Every call and
 its delivery result are recorded in
@@ -544,6 +545,7 @@ The fresh replacement keeps the run, worktree, progress, gates and approvals, an
 - Each chat uses the sign-in of the person who runs the pdd command that starts or resumes it, not the environment of the terminal that first started the Herdr server. pdd gives the chat your own login variables and removes the ones you do not have with `env -u`. Claude Code: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`. Codex: `OPENAI_API_KEY`, `CODEX_API_KEY`, `CODEX_ACCESS_TOKEN`, `OPENAI_FEDERATION_RULE_ID`, `OPENAI_IDENTITY_TOKEN_FILE`, `OPENAI_WORKLOAD_IDENTITY_CONTEXT`, `OPENAI_BASE_URL`. Gemini: `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_GENAI_USE_GCA`, `GOOGLE_APPLICATION_CREDENTIALS`, `GOOGLE_CLOUD_PROJECT`. The base URLs are in these lists because the address goes with the key. Other variables, such as `AWS_*` for Bedrock, come from the Herdr server as they are.
 - pdd writes the login values to a one-time private file (mode 0600) in the run folder, inside your clone's `.git` folder. The chat deletes that file first, then reads the values and starts the agent. If it cannot delete the file, the agent does not start. So the values never show in the Herdr pane or in the shell history. When a file stays because pdd stopped before the chat ran, a start or status of the run deletes it only when it is at least five minutes old. Cancel deletes all login files, including newer ones.
 - When your environment has no login variable, the chat gets none and uses the login in its config folder. An example is a Codex profile with `shell_environment_policy.inherit = "core"`. The Gemini start check runs only `gemini --version`, so it does not show whether that login works.
+- Gemini shell safety dialogs can override `--yolo` and require a person even during unattended runs. When the shell safety dialog is visible, `pdd workflow status` names it and tells you how to open the chat.
 - The first message of each chat gives the full path of this pdd. The agent uses it, so another `pdd` on its PATH does not matter.
 - A Codex chat also gets `-c shell_environment_policy.set.PDD_BIN=…` and `-c shell_environment_policy.set.PDD_AGENT_SESSION="1"` for this launch only, so its commands keep both values when the Codex profile sets `inherit = "core"` or `"none"`. pdd does not change Codex settings. Limit: a `shell_environment_policy.include_only` list that leaves out a name still removes it.
 - Workflow chats have no overall time limit. `pdd workflow prove` limits each phase to 10 minutes by default; remote lint has a caller wait limit. You can close the workflow-start terminal at any time.
@@ -722,8 +724,12 @@ The tools are `try_open`, `try_state`, `try_run`, `try_check` and `try_save_case
 
 | Command | What it does |
 |---|---|
-| `pdd workflow done STEP [--summary TEXT] [--skipped REASON]` | Record a finished step. `check`, `try` and `verify` also record pdd's own latest `pdd test`, `pdd lint` and `pdd workflow prove` results, or warn that pdd has none; the summary stays an agent note. `--skipped REASON` records that the step was skipped, and why. Print the next instruction: the next step, the gate, or "pdd opens the PR now". After the last step of an area with a PR gate, push the branch and open the PR when the applicable gate is satisfied. In a normal feature or bug run, a valid Story approval and a verified full saved check pass open PR 1 without another question; strict and other routes can require a separate approval gate. The bug skill still allows only 2 defect repair rounds after review. |
+| `pdd workflow done STEP [--summary TEXT] [--skipped REASON] [--no-publish]` | Record a finished step. `check`, `try` and `verify` also record pdd's own latest `pdd test`, `pdd lint` and `pdd workflow prove` results, or warn that pdd has none; the summary stays an agent note. `--skipped REASON` records that the step was skipped, and why. Print the next instruction: the next step, the gate, or "pdd opens the PR now". After the last step of an area with a PR gate, push the branch and open the PR when the applicable gate is satisfied. In a normal feature or bug run, a valid Story approval and a verified full saved check pass open PR 1 without another question; strict and other routes can require a separate approval gate. The bug skill still allows only 2 defect repair rounds after review. |
 | `pdd workflow ask QUESTION` | Show the person that the chat waits for an answer in the middle of a step. `status` then says "waiting for you" with the question |
+
+In a code PR area, `pdd workflow done review --no-publish` saves the review without committing, pushing or creating/updating a PR. The option also works in the build area of a small-change run and refuses at Story or prompt approval gates. When all steps finish, the response and status give the publication command; further done calls keep this local hold.
+
+`pdd workflow publish ISSUE` publishes the finished area's current local result using the ordinary ownership, scope, replay and Git safety checks. It preserves step summaries, evidence and timestamps, so a failed publication can be retried without recording review again. Commit the local result before asking a checker to inspect its exact head. Without the option or a saved hold, done publishes automatically as usual.
 
 The agent runs these from the run's worktree. pdd finds the run from that folder. You do not run them yourself.
 
@@ -733,7 +739,7 @@ The agent runs these from the run's worktree. pdd finds the run from that folder
 |---|---|
 | `pdd`, `pdd --help`, `pdd -h`, `pdd help` | Show the commands and the full paths of the installed Prompting guide and RUNBOOK |
 | `pdd help prompting` | Show how to write a prompt, a Story and its test, which commands check them, and the full paths of the Prompting guide and RUNBOOK |
-| `pdd --version` | Print the version, `0.1.29`. When the PDD skills that your agent finds are older, also print the update command on stderr |
+| `pdd --version` | Print the version, `0.1.30`. When the PDD skills that your agent finds are older, also print the update command on stderr |
 | `pdd -V` | Same version and local diagnostics as `pdd --version` |
 | `pdd -VV` | Print the local CLI version, the interpreter's full build identifier and its supported interface, test and app-map format IDs. Use existing gh sign-in without prompting; unavailable metadata prints `PDD interpreter: unknown` and exits 0 |
 | `pdd completion bash\|zsh` | Print a shell completion script. It does not change your shell files |

@@ -1,8 +1,10 @@
-import {loadRuntimeWorkspace,allowsRuntimePath,requireRuntimePath} from './runtime-workspace.mjs';
 // Generated from prompts/cli/svg-layout.prompt.md (sha256: fef7dfa1da080ce8a19192c6603bd269a1932ad202992f582907ee034edff43e).
 import { lstatSync, readFileSync } from 'node:fs';
 import { dirname, relative, resolve, sep } from 'node:path';
 import { lintScreenDesign } from './screen-design-check.mjs';
+import { runtimeWorkspaceSlice, workspace } from './runtime-seam.mjs';
+
+const { requireRuntimePath } = runtimeWorkspaceSlice();
 
 const normalize = text => text.replace(/\s+/g, ' ').trim().toLowerCase();
 const escaped = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -17,7 +19,7 @@ function decode(text) {
   });
 }
 function safeRead(root, path) {
-  requireRuntimePath(loadRuntimeWorkspace({root}),{path,from:'SVG advice'});
+  requireRuntimePath(workspace.policy({root}),{path,from:'SVG advice'});
   const full = resolve(root, path), rel = relative(resolve(root), full);
   if (!rel || rel === '..' || rel.startsWith(`..${sep}`) || resolve(root, rel) !== full) throw Error('path escapes repository');
   const parts = rel.split(sep);
@@ -104,7 +106,7 @@ function links(text) {
 const mentioned = (prose, value) => new RegExp(`(^|[^\\p{L}\\p{N}_])${escaped(normalize(value))}($|[^\\p{L}\\p{N}_])`, 'u').test(normalize(prose));
 
 export function lintSvgLayouts({ root, files, promptPaths }) {
-  const workspace=loadRuntimeWorkspace({root});files=files.filter(path=>allowsRuntimePath(workspace,path));
+  const policy=workspace.policy({root});files=files.filter(path=>workspace.allows(policy,path));
   const warnings = [], promptRecords = [], add = (prompt, drawing, part, reason) => warnings.push({ key: `${prompt}\0${drawing}\0${part}\0${reason}`, text: `Warning: SVG layout ${prompt} -> ${drawing}: ${part}: ${reason}.` });
   for (const prompt of [...new Set(promptPaths ?? files.filter(path => path.endsWith('.prompt.md')))].sort()) {
     let source;
@@ -151,7 +153,7 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
     for (const testFile of files.filter(path => /^(?:tests?|.*\/tests?)\/.*\.json$/.test(path))) {
       try {
         const doc = JSON.parse(safeRead(root, testFile));
-        if (Array.isArray(doc?.app_maps)) for (const candidate of doc.app_maps) if (typeof candidate === 'string' && allowsRuntimePath(workspace, candidate)) mapPaths.add(candidate);
+        if (Array.isArray(doc?.app_maps)) for (const candidate of doc.app_maps) if (typeof candidate === 'string' && workspace.allows(policy, candidate)) mapPaths.add(candidate);
       } catch { /* non-scenario or unreadable JSON */ }
     }
     const appMaps = [], cssPaths = new Set(), inspectedPrompts = new Set(promptRecords.map(record => record.path));

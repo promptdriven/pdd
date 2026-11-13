@@ -21,6 +21,10 @@ Catalog optional text `--model`, `--herdr-agent-name` and `--codex-threads` on
 `workflow run` and `workflow open`. Show them on both help forms. Open settings
 require `--new`; the runner owns validation and profile selection.
 
+## Separate workflow publication (#2947)
+
+The `workflow.done` route additionally accepts Boolean flag `--no-publish`. Its form is `pdd workflow done STEP [--summary TEXT] [--skipped REASON] [--no-publish]`; explain that code-area completion can be recorded locally before publishing. Register `workflow.publish`, prefix `workflow publish`, local `workflow-publish`, exactly one required issue operand and no options. Form: `pdd workflow publish ISSUE`. Describe publication of a finished code PR area without recording its steps again. Runner policy owns approval and publication safety.
+
 ## Authoring
 
 Read the full [Prompting guide](../../docs/prompting-guide.md) before authoring prompts or Stories. Follow the [public alpha boundary](public-boundary.prompt.md) for native authoring/generation scope and shared local command policy. These authoring obligations do not add runtime facts: the complete catalog route declarations below own what the pure data module exposes.
