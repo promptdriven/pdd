@@ -58,13 +58,15 @@ a public partial result exits 3 unless its caller is the local SVG lint command.
 
 ## Outcomes
 
-Module function `outcomeFor(answer, {test, steps = [], kind = answer.command, timeLimit = false, sourceFiles, capacityUncertain = false})`
+Module function `outcomeFor(answer, {test, steps = [], appMaps = [], kind = answer.command, timeLimit = false, sourceFiles, capacityUncertain = false})`
 returns one outcome object. `test` is the selected test path, `steps` its authored
-steps (each with `entry_path`), `kind` is `lint` or `check`, and `timeLimit` is
-true when the client found a typed step time-limit stop in the answer. The client
-sets `capacityUncertain` for a Check when raw capacity evidence is incomplete or
-conflicting. That flag returns `unknown` before generic retryable/not-started
-refusal classification; the answer cannot project as busy or not run.
+steps (each with `entry_path`), `appMaps` the distinct nonblank repository-relative
+app-map paths selected for this test or simulation (`[]` when none), `kind` is
+`lint` or `check`, and `timeLimit` is true when the client found a typed step
+time-limit stop in the answer. The client sets `capacityUncertain` for a Check when
+raw capacity evidence is incomplete or conflicting. That flag returns `unknown`
+before generic retryable/not-started refusal classification; the answer cannot
+project as busy or not run.
 
 | State | When | Retained fields |
 |---|---|---|
@@ -104,17 +106,19 @@ Rules for every answer, in this order:
 ```mermaid
 flowchart TD
     A{Lint job ended?} -->|No| U[unknown: no lint verdict]
-    A -->|Yes| R{Own refusal or reached prompt refused?}
+    A -->|Yes| R{Own, reached-prompt or selected-map refusal?}
     R -->|Yes| F[refused]
     R -->|No| V{This test's verdict}
     V -->|refused| F
-    V -->|passed| C{Selected compatibility admits?}
+    V -->|passed| M{Selected app maps pass?}
+    M -->|No| N[not_run with reason]
+    M -->|Yes| C{Selected compatibility admits?}
     C -->|Yes| P[passed]
     C -->|Concrete blocker| F
     C -->|Unknown or incomplete| N
     V -->|no entry| J{Job refusal?}
     J -->|Yes| F
-    J -->|No| N[not_run with reason]
+    J -->|No| N
     V -->|other| N
 ```
 
@@ -123,11 +127,31 @@ flowchart TD
 - **This test's verdict**: the entries for exactly `test` in `result.tests`, else
   in `report.lint.tests`. Conflicting entries and `not-checked` are not a pass.
   The server lists per-test verdicts only for a lint that asked for `complete: true`.
+- **Selected app maps**: for each `mapPath` in `appMaps`, read its entries across
+  `result.app_maps` and `report.lint.app_maps` (conflicting entries and
+  `not-checked` are not a pass; any `refused` entry refuses), plus any non-warning
+  refusal record or `result.problems` (else `report.problems`) entry whose `file`
+  (else `path`) is `mapPath`, non-warning `errors` entries under a matching
+  `report.lint.app_maps` entry for `mapPath`, and entry-level `error` (as `code`,
+  with optional `reason`) on a matching `result.app_maps` or `report.lint.app_maps`
+  entry when no specific problem or error record is present. Any `refused` map
+  verdict, map refusal record, non-warning map problem or entry `error` refuses
+  this test: prefer specific problem/error records (keeping `code`, `path` from
+  `file`/`path` or `mapPath`, `field`/`at`/`section`, `reason`, `fix` and a
+  fallback `message` from `reason` and `fix`, else `detail`, else `engine_message`,
+  else `code` when `message` is absent) over a generic `lint-refused` summary
+  record, falling back to `<mapPath> was refused by complete lint.` (`lint-refused`,
+  `path: mapPath`) when none carry detail. When the answer supplies `result.app_maps`
+  or `report.lint.app_maps` and `appMaps` is nonempty, a `passed` test verdict also
+  requires every `mapPath` in `appMaps` to have verdict `passed` before
+  compatibility can admit `passed`; answers without an `app_maps` verdict list do
+  not block `passed` unless a refusal or problem names a selected map.
 - **Own evidence is enough.** The server lints the prompts first, then each test
-  until its deadline, so a passing verdict for this test is real evidence even when
-  the lint did not finish for other tests (`complete` is false). One slow or
-  unchecked test never holds back a test that has its own pass and the selected
-  compatibility evidence required below.
+  and app map until its deadline, so a passing verdict for this test and its selected
+  app maps is real evidence even when the lint did not finish for other tests or
+  maps (`complete` is false). One slow, unchecked or refused unselected test or app
+  map never holds back a test that has its own pass, passing selected app maps and
+  the selected compatibility evidence required below.
 - **Complete**: `report.lint.complete === true`; when the report has no `lint`
   object, `result.problems_complete === true`. It only chooses the `not_run`
   reason.
@@ -150,14 +174,16 @@ flowchart TD
 - **Job refusal**: job state `refused`, report `verdict: refused`, or any refusal
   record. It refuses only a selected test with no verdict entry of its own, even
   when a program report exists, and keeps the server's code and text (else
-  `The interpreter refused lint.`). A test with its own passing verdict is
-  eligible under the selected compatibility rule; the job refusal stays visible
-  as a diagnostic in the client.
+  `The interpreter refused lint.`). A test with its own passing verdict and passing
+  selected app maps is eligible under the selected compatibility rule; the job
+  refusal stays visible as a diagnostic in the client.
 - **Not run code**: `deadline` when lint is incomplete; `no-server-verdict`
   when complete lint has no verdict. Keep a compatibility issue code when known.
 - **Not run reason**: `lint did not finish` when lint is not complete, a reached
-  prompt was not listed or the verdict is `not-checked`; else `lint gave no verdict
-  for this test`.
+  prompt was not listed, the test verdict is `not-checked`, or this test's verdict
+  is `passed` and a selected app-map verdict is `not-checked`; else `lint gave no
+  verdict for this app map` when this test's verdict is `passed` and a selected app
+  map lacks a `passed` verdict; else `lint gave no verdict for this test`.
 
 ## Selected compatibility
 

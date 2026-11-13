@@ -1004,7 +1004,12 @@ when supplied), so saved reads and JSON keep them. Transport, polling, capacity
 and job-lifecycle rules stay in this module.
 
 **Shared lint gate.** Scope, not ignore, per test: pdd sends paid work for a
-selected test only when that test's own lint outcome is `passed`. One rule serves
+selected test only when that test's own lint outcome is `passed`. Supply each
+row's `appMaps` to `outcomeFor` across standalone `pdd lint`, `pdd test`,
+saved-batch `--read` (persisting optional `app_maps` on `batch.json` rows and
+reading captured scenario bytes when available), `--retry`, the restart
+replacement and `pdd simulate` (combining the scenario's declared `app_maps`
+with `pdd simulate`'s selected `appMap` when present). One rule serves
 new checks, saved-lint continuation, retry, the restart replacement and a new Try;
 each sends the tests that pass and holds back the others:
 
@@ -1016,13 +1021,17 @@ each sends the tests that pass and holds back the others:
 | unknown (the lint has not ended) | `not_run`, held for the saved-lint continuation | `The lint result is unknown, so pdd sent no checks.` | 3 |
 
 A job refusal refuses only the tests that have no verdict of their own; a test with
-its own passing verdict and admitting selected compatibility is sent. An
-incomplete lint holds back tests without their own admitting evidence. Unsent checks keep zero calls. The send line keeps
+its own passing verdict, passing selected app maps and admitting selected
+compatibility is sent. An incomplete lint holds back tests without their own
+admitting evidence. Unsent checks keep zero calls. The send line keeps
 `Lint passed.` only when every test passed; otherwise it says
 `Lint refused R of N tests.` and/or `Lint gave no verdict for U of N tests.` before
 the actual sending progress specified in Named check results. No sent test means no Sent line.
-When a test is sent, each job refusal and refused prompt that did not refuse one of
-the selected tests is added to the warnings as
+When a test or Try is sent, each job refusal, refused prompt and non-warning
+`result.problems` (else `report.problems`) entry that did not refuse one of the
+selected rows (suppressing a generic `lint-refused` summary record whose path is
+already shown on a refused row or a specific problem) is added to `context.warnings`
+(initialized on Try context as well as Check context) as
 `Lint diagnostic: <code>  <file>  <reason or message>` (Try prints them on stderr).
 The gate keeps the saved-source, owner, intent, call-ceiling, identity and
 dispatch-claim checks. `--retry` stops with exit 2 only when no retryable test
