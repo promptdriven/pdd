@@ -10,7 +10,15 @@ positive evidence about that test; missing or unrecognized evidence is never
 ## Public result vocabulary
 
 Export `CHECK_STATES`, the fixed ordered list `waiting`, `sent`, `passed`,
-`failed`, `refused`, `partial`, `not run`. Export pure
+`failed`, `refused`, `partial`, `not run`. Export `PROVIDER_TEXT`
+(`'the AI provider failed during the run. It is not a failed check. Do not send it again yet.'`),
+pure `failedCheckCount(row)` (`row.failed_checks.length` when positive, else
+`row.checks.total - row.checks.passed` only when both `passed` and `total` are
+nonnegative safe integers and `total > passed`, else `0`; never infer failed
+checks from `criteria`), and pure `providerText(row)` (returning `PROVIDER_TEXT`
+when `failedCheckCount(row) === 0`, and `'the AI provider failed during the run after 1 check failed. Do not send it again yet.'`
+or `'the AI provider failed during the run after N checks failed. Do not send it again yet.'`
+when `failedCheckCount(row) > 0`, never saying `'It is not a failed check.'`). Export pure
 `resultOutcome(row)` returning `{state, reason}`. `reason` is null only for
 `passed`; otherwise it is `{code, message}`, both nonempty strings.
 This is the single owner of public result names and reason mapping. Transport
@@ -40,8 +48,9 @@ A local row marked unsent with refusals is public `not run` with reason code `br
 run a malformed test; this module does not decide which tests to skip. A caller
 stopped by its explicit `--timeout` reports timeout-flag and names `--timeout` in
 the message. An internal or server deadline reports deadline. A known broken-test
-reason means not run. Provider failures retain their provider code and the existing provider-failure
-explanation in the public reason. A server step timeout retains its small-step
+reason means not run. Provider failures retain their provider code and use `providerText(row)` in the
+public reason when no supplied note or reason message overrides it, so a row with
+failed checks never says `It is not a failed check`. A server step timeout retains its small-step
 advice as part of the deadline explanation. Unknown supplied public state names become partial with
 no-server-verdict. Keep supplied human explanations when available.
 

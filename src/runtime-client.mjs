@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 065da6514405ea690f54d6795f55f0492de882a3249a200b48c778b0eb243cbb).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: eafdb42821bd3b00e45830a45741d925ca1139f4aa180f8ec7d5a784131432c2).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
@@ -11,7 +11,7 @@ import {readEvidenceEligibility} from './workflow-runner.mjs';
 import {allRuns} from './workflow-runs.mjs';
 import {assessNativeEvidence, resultLines, usableResult} from './workflow-results.mjs';
 import {loadRuntimeWorkspace,allowsRuntimePath,requireRuntimePath,RuntimeWorkspaceError} from './runtime-workspace.mjs';
-import { hasProgress, outcomeDone, outcomeFor, outcomeOverall, outcomeText, progressText, resultOutcome, resultOverall } from './runtime-outcome.mjs';
+import { failedCheckCount, hasProgress, outcomeDone, outcomeFor, outcomeOverall, outcomeText, progressText, resultOutcome, resultOverall } from './runtime-outcome.mjs';
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -599,7 +599,7 @@ export async function resendableStoryChecks({ root, since = 0 }, ports = {}) {
       const ids = Array.isArray(row.request_ids) ? row.request_ids : [];
       if (!ids.length) return row.recovery_state === 'not_run' && !(Array.isArray(row.refusals) && row.refusals.length) && !row.unsent && row.note?.code !== 'blocked' ? 'never' : 'other';
       if (row.recovery_state === 'passed') return 'pass';
-      if (row.recovery_state === 'failed') return 'failed';
+      if (row.recovery_state === 'failed' || failedCheckCount(row) > 0) return 'failed';
       const id = ids.at(-1);
       let answer = null;
       try { answer = typeof id === 'string' && UUID.test(id) ? JSON.parse(await read(join(directory, name, `${id}.json`))) : null; } catch { answer = null; }
@@ -1742,7 +1742,8 @@ function batchRecord(context) {
       ...(row.accounting_complete !== undefined ? { accounting_complete: row.accounting_complete } : {}), ...(row.capacity_uncertain ? { capacity_uncertain: true } : {}),
       busy_request_id: row.busy_request_id ?? null, busy_observed_at: row.busy_observed_at ?? null, capacity_until: row.capacity_until ?? null,
       engine_sha: row.engine_sha ?? null, requested_model: row.requested_model ?? null, cache_identity: row.cache_identity ?? null,
-      ...(row.cached ? {cached:true,passed_at:row.passed_at,checks:row.checks,criteria:row.criteria} : {}),
+      checks: row.checks ?? null, criteria: row.criteria ?? null, failed_checks: (row.failed_checks ?? []).map(({ normal_result, ...check }) => check),
+      ...(row.cached ? {cached:true,passed_at:row.passed_at} : {}),
       ...(row.cache_reason ? { cache_reason: row.cache_reason } : {}), criterion_texts: row.criterion_texts ?? {}, draft: !!row.draft })) };
 }
 
@@ -2805,7 +2806,17 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
     capture: { sha256: saved.source_sha256, files: saved.files.map(path => ({ path })), bytes: saved.bytes, stories:saved.contract_snapshots }, lint: saved.lint, head: saved.head, startedAt: Date.parse(saved.created_at) });
   runtimeOrigin({ PDD_RUNTIME_URL: saved.origin });
   context.runtime = new Runtime({ origin: saved.origin, token: identity.token, ports, signal: context.signal });
-  const rows = saved.rows.map(row => ({ ...row, why: ['refused', 'not_run', 'unknown'].includes(row.state) && row.why === 'Checks failed.' ? null : row.why, ...(row.request_ids?.length ? { calls: 'unknown' } : {}), request_ids: [...(row.request_ids ?? [])], checks: row.cached ? row.checks : null, failed_checks: [], all_checks: [] }));
+  const savedUnknownEvidence = new WeakMap();
+  const rows = saved.rows.map(savedRow => {
+    const keepUnknownChecks = savedRow.state === 'unknown' && failedCheckCount(savedRow) > 0;
+    const row = { ...savedRow, why: ['refused', 'not_run', 'unknown'].includes(savedRow.state) && savedRow.why === 'Checks failed.' ? null : savedRow.why,
+      ...(savedRow.request_ids?.length ? { calls: 'unknown' } : {}), request_ids: [...(savedRow.request_ids ?? [])],
+      checks: savedRow.cached || keepUnknownChecks ? savedRow.checks ?? null : null,
+      criteria: savedRow.cached || keepUnknownChecks ? savedRow.criteria ?? null : savedRow.criteria,
+      failed_checks: keepUnknownChecks && Array.isArray(savedRow.failed_checks) ? savedRow.failed_checks : [], all_checks: [] };
+    if (keepUnknownChecks) savedUnknownEvidence.set(row, { checks: row.checks, criteria: row.criteria, failed_checks: row.failed_checks });
+    return row;
+  });
   const candidates = rows.filter(row => heldForLint(row));
   // Preserve the producer's original evidence before refresh can normalize unsent usage.
   const evidence = candidates.map(row => ({ row, hadCalls: Object.hasOwn(row, 'calls'), calls: row.calls }));
@@ -2854,6 +2865,17 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
     }
     if (finalPost(row, answer)) return;
     if (row.final && (ports.now() >= (context.deadline ?? Infinity) || context.interrupted)) return;
+    // A verified unknown receipt already carries evaluated checks and provider/time-limit facts; preserve them across --timeout 0 and failed/unknown polls.
+    if (answer && sameJob(answer, id, 'check') && answer.state === 'unknown') {
+      applyAnswer(row, answer, context);
+      row.lost = false;
+      if (ports.now() >= (context.deadline ?? Infinity) || context.interrupted) return;
+      if (!quiet) line(ports.stderr, 'Reading 1 result from the PDD interpreter…');
+      const savedWhy = row.why;
+      await readRow(context, row, context.deadline);
+      if (row.state === 'unknown' && (row.provider || row.failed_checks?.length) && savedWhy) row.why = savedWhy;
+      return;
+    }
     // A verified open receipt stays open when another row consumed this wait.
     if ((ports.now() >= (context.deadline ?? Infinity) || context.interrupted)
       && answer && sameJob(answer, id, 'check') && ['queued', 'running'].includes(answer.state)) { applyAnswer(row, answer, context); return; }
@@ -2861,7 +2883,7 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
     if (!row.capacity_uncertain && !row.lost && (row.state !== 'unknown' || row.lost === false)) row.why = null;
     Object.assign(row, { state: 'unknown', calls: 'unknown', checks: null, criteria: null, failed_checks: [], all_checks: [], busy: false, can_retry: false, note: null, lost: true,
       progress: undefined, ahead: undefined,
-      read_until: Number.isFinite(context.deadline) ? context.deadline : ports.now() + LOST_READ_MS });
+      read_until: Number.isFinite(context.deadline) ? context.deadline : ports.now() + LOST_READ_MS }, savedUnknownEvidence.get(row) ?? {});
     if (row.capacity_uncertain) { row.why = capacityUnknownReason; row.next_step = sameIdReadAdvice(context, row); }
     if (ports.now() >= (context.deadline ?? Infinity) || context.interrupted) return;
     if (!quiet) line(ports.stderr, 'Reading 1 result from the PDD interpreter…');

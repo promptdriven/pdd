@@ -1,6 +1,6 @@
 import { bindingRefusals } from './runtime-binding-plan.mjs';
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: b6fb0b9645b438bbc70fadb6cba75e2409134eb27e1769913e8b13e5f85ad8d0).
-import { hasProgress, outcomeExitCode, outcomeFor, outcomeText, progressText, resultOutcome, PROVIDER_TEXT } from './runtime-outcome.mjs';
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: eb615b381c06da15176474cc35d2e7eb01fabe0c8d137fb20e98b1afdbf3902f).
+import { failedCheckCount, hasProgress, outcomeExitCode, outcomeFor, outcomeText, progressText, providerText, resultOutcome, PROVIDER_TEXT } from './runtime-outcome.mjs';
 export const OPEN_STATES = new Set(['queued', 'running', 'sent']);
 
 // Each row carries its outcome; the outcome model owns the exit precedence.
@@ -170,7 +170,8 @@ export function projectAnswer(answer, { origin, secrets = [], steps: authoredSte
     row.client_advice = advice(row.reason_code);
   const client_advice = compatibility ? advice(compatibility.issue ?? (compatibility.state === 'supported' ? 'supported'
     : [...(compatibility.reported?.operations ?? []), ...(compatibility.reported?.edges ?? [])].find(row => row.verdict === compatibility.state)?.reason_code)) : null;
-  const steps = Array.isArray(report?.samples) && Array.isArray(report.samples[0]?.steps) ? report.samples[0].steps : [];
+  const sampleSteps = (Array.isArray(report?.samples) ? report.samples : [])
+    .flatMap(sample => (Array.isArray(sample?.steps) ? sample.steps : []).map((step, index) => ({ step, index })));
   const nonNegativeInt = value => Number.isInteger(value) && value >= 0 ? value : undefined;
   const rerunStep = item => ({
     step_id: cleanField(item.step_id, secrets) || null,
@@ -182,19 +183,36 @@ export function projectAnswer(answer, { origin, secrets = [], steps: authoredSte
     ...(nonNegativeInt(report.rerun.calls) !== undefined ? { calls: nonNegativeInt(report.rerun.calls) } : {}),
     ...(typeof report.rerun.skipped === 'string' ? { skipped: cleanField(report.rerun.skipped, secrets) } : {}),
     ...(Array.isArray(report.rerun.steps) ? { steps: report.rerun.steps.filter(isObjectLike).map(rerunStep) } : {}) } : null;
-  const all = steps.flatMap((step, index) => Array.isArray(step?.checks) ? step.checks.map(check => ({ step, check, index })) : []).map(({ step, check, index }) => {
+  const scrubTokens = value => typeof value === 'string' ? scrub(value, secrets).replace(TOKENS, '[secret]')
+    : Array.isArray(value) ? value.map(scrubTokens)
+    : isObjectLike(value) ? Object.fromEntries(Object.entries(value).map(([key, item]) => [key, scrubTokens(item)])) : value;
+  const projectCheck = (check, step = null, index = undefined, cleanValues = scrub) => {
     const criterion_id = cleanField(check?.criterion_id, secrets), diagnosis = isObjectLike(check?.diagnosis) ? {
       kind: cleanText(check.diagnosis.kind, secrets) || null, who: cleanText(check.diagnosis.who, secrets) || null,
       why: cleanText(check.diagnosis.why, secrets) || null, next_step: cleanText(check.diagnosis.next_step, secrets) || null,
       evidence: Array.isArray(check.diagnosis.evidence) ? check.diagnosis.evidence.map(item => cleanText(item, secrets)).filter(Boolean) : undefined,
       likely: check.diagnosis.likely === true ? true : undefined,
       ...(isObjectLike(check.diagnosis.rerun) ? { rerun: rerunStep(check.diagnosis.rerun) } : {}) } : null;
-    return { criterion_id, step_id: cleanField(step?.step_id, secrets) || cleanField(authoredSteps[index]?.step_id, secrets) || null,
+    const stepIndex = Number.isInteger(index) && index >= 0 ? index : Number.isInteger(check?.step_number) && check.step_number >= 1 ? check.step_number - 1 : undefined;
+    return { criterion_id,
+      step_id: cleanField(step?.step_id ?? check?.step_id, secrets) || (stepIndex !== undefined ? cleanField(authoredSteps[stepIndex]?.step_id, secrets) : '') || null,
       criterion_text: typeof criterionTexts[criterion_id] === 'string' && criterionTexts[criterion_id].length <= 160 ? cleanField(criterionTexts[criterion_id], secrets) : null,
-      target: cleanField(check?.target, secrets), path: cleanField(check?.path, secrets), expected: scrub(check?.expected, secrets),
-      actual: scrub(check?.actual, secrets), passed: check?.passed === true,
-      normal_result: Object.prototype.hasOwnProperty.call(step ?? {}, 'result') && !step?.error, ...(diagnosis ? { diagnosis } : {}) };
-  });
+      target: cleanField(check?.target, secrets), path: cleanField(check?.path, secrets), expected: cleanValues(check?.expected, secrets),
+      actual: cleanValues(check?.actual, secrets), passed: check?.passed === true,
+      normal_result: step ? Object.prototype.hasOwnProperty.call(step, 'result') && !step.error : false, ...(diagnosis ? { diagnosis } : {}) };
+  };
+  const all = sampleSteps.flatMap(({ step, index }) => Array.isArray(step?.checks) ? step.checks.map(check => ({ step, check, index })) : [])
+    .map(({ step, check, index }) => projectCheck(check, step, index));
+  const sampleFailed = all.filter(check => !check.passed).map(({ passed, ...check }) => check);
+  const failed_checks = sampleFailed.length ? sampleFailed
+    : Array.isArray(result?.failed_checks) ? result.failed_checks.filter(isObjectLike).map(check => {
+        const { passed, ...item } = projectCheck(check, null, undefined, scrubTokens);
+        return item;
+      }) : [];
+  const checks = all.length ? { passed: all.filter(check => check.passed).length, total: all.length }
+    : nonNegativeInt(result?.checks?.passed) !== undefined && nonNegativeInt(result?.checks?.total) !== undefined && result.checks.total >= result.checks.passed
+      ? { passed: result.checks.passed, total: result.checks.total }
+      : failed_checks.length ? { passed: 0, total: failed_checks.length } : null;
   // prompt-runtime #379 adds reason, fix, file, at, where and cause to each refusal; the live server may not send them yet.
   const refusals = (Array.isArray(result?.refusals) ? result.refusals : []).map(item => {
     const view = refusalView(item, secrets);
@@ -237,9 +255,9 @@ export function projectAnswer(answer, { origin, secrets = [], steps: authoredSte
     state: outcome.state, ...(outcome.progress ? { progress: { ...outcome.progress, ...(typeof outcome.progress.step === 'string' ? { step: cleanText(outcome.progress.step, secrets) } : {}) } } : {}),
     ...(outcome.ahead !== undefined ? { ahead: outcome.ahead } : {}),
     note: outcome.state === 'not_run' ? { code: cleanText(outcome.code, secrets) || null, message: cleanText(outcome.message, secrets) || null } : null,
-    time_limit, checks: all.length ? { passed: all.filter(check => check.passed).length, total: all.length } : null,
+    time_limit, checks,
     criteria: results.length ? { passed: results.filter(item => item?.status === 'passed').length, total: results.length } : null,
-    all_checks: all, failed_checks: all.filter(check => !check.passed).map(({ passed, ...check }) => check), refusals,
+    all_checks: all, failed_checks, refusals,
     calls: !incomplete ? usageCalls : 'unknown',
     ...tokens,
     known_calls: incomplete ? knownCalls : undefined, unknown_calls: unknownCalls, accounting_complete: !incomplete, requested_model: model ? cleanText(model, secrets) : null,
@@ -424,10 +442,11 @@ export function summaryLine(rows, story = null) {
   const calls = known.reduce((sum, row) => sum + row.calls, 0) + partial.reduce((sum, row) => sum + (row.known_calls ?? 0), 0);
   const unknownCalls = sent.reduce((sum, row) => sum + (known.includes(row) ? 0 : row.unknown_calls || 1), 0);
   const rerunCalls = rows.reduce((sum, row) => sum + (Number.isInteger(row.rerun?.calls) && row.rerun.calls > 0 ? row.rerun.calls : 0), 0);
+  const extraFailed = rows.filter(row => row.state !== 'failed').reduce((n, row) => n + failedCheckCount(row), 0);
   const labels = rows.filter(row => row.state !== 'passed').map(row => outcomeText({ ...row, progress: undefined, ahead: undefined }));
   const others = [...new Set(labels)].map(label => `${labels.filter(value => value === label).length} ${label}`);
-  // A cross only for a real failure; a check that still runs or has no verdict says so (cli 12b).
-  const mark = rows.some(row => row.state === 'failed') ? '✗'
+  // A cross for any failed row or failed check; a check without failures that still runs or has no verdict says so (cli 12b).
+  const mark = rows.some(row => row.state === 'failed' || failedCheckCount(row) > 0) ? '✗'
     : rows.length && rows.every(row => row.state === 'passed') ? '✓'
     : rows.some(row => OPEN_STATES.has(row.state)) ? 'running ·'
     : rows.some(row => row.busy && ['not_run', 'not run'].includes(row.state)) && rows.every(row => row.state === 'passed' || (row.busy && ['not_run', 'not run'].includes(row.state))) ? 'busy ·' : 'no verdict ·';
@@ -436,7 +455,7 @@ export function summaryLine(rows, story = null) {
   const skipped = rows.some(row => row.cached) ? [count(new Set(rows.filter(row => row.cached).map(row => row.story_path ?? row.story)).size, 'Story').replace('Storys', 'Stories') + ' skipped'] : [];
   const broken = rows.filter(row=>row.unsent).length, unchecked = rows.reduce((n,row)=>n+(row.not_checked?.length??0),0);
   return [`${PROMPT_TESTS_LABEL}${story ? ` (${story})` : ''}${rows.some(row => row.draft) ? ' (DRAFT)' : ''}: ${mark} ${criteriaText}`,
-    `${checks.passed}/${checks.total} checks`, ...(broken ? [`${broken} tests could not run`] : []), ...(unchecked ? [`${unchecked} criteria not checked; the Story is not a full pass`] : []), ...(progress ? [progress] : []), ...others, ...skipped, ...(progress && !sent.length ? [] : [`${usage}${unknownCalls ? ` + ${unknownCalls} unknown` : ''}`])].join(' · ');
+    `${checks.passed}/${checks.total} checks`, ...(extraFailed > 0 ? [`${extraFailed} failed`] : []), ...(broken ? [`${broken} tests could not run`] : []), ...(unchecked ? [`${unchecked} criteria not checked; the Story is not a full pass`] : []), ...(progress ? [progress] : []), ...others, ...skipped, ...(progress && !sent.length ? [] : [`${usage}${unknownCalls ? ` + ${unknownCalls} unknown` : ''}`])].join(' · ');
 }
 
 const shellWord = word => /^[A-Za-z0-9_./:@%+=,-]+$/.test(word) ? word : `'${word.replaceAll("'", "'\\''")}'`;
@@ -555,7 +574,7 @@ export function renderText({ batch, rows, coverage, warnings = [], details = fal
   if (noFailed) return 'No failed Stories. 0 AI calls.\n';
   out.push(...table(rows, now), ...(perStory.length === 1 ? perStory : [...perStory, summaryLine(rows)]));
   if ([3, 4, 5].includes(exitCode)) {
-    const failed = new Set(rows.filter(row => row.state === 'failed').map(row => row.story));
+    const failed = new Set(rows.filter(row => row.state === 'failed' || failedCheckCount(row) > 0).map(row => row.story));
     const inconclusive = new Set(rows.filter(row => !['passed', 'failed'].includes(row.state)).map(row => row.story));
     const other = [...inconclusive].filter(story => !failed.has(story)).length;
     const overlap = [...inconclusive].filter(story => failed.has(story)).length;
@@ -567,8 +586,9 @@ export function renderText({ batch, rows, coverage, warnings = [], details = fal
       out.push(`${first} ${second}, so the exit code is ${exitCode}.`);
     }
   }
-  for (const row of rows.filter(row => row.state === 'failed')) {
-    const failed = row.failed_checks ?? [], reruns = rerunEntries(row, failed), rerunByStep = new Map(reruns.filter(item => item.key !== null).map(item => [item.key, item.line])), lines = [`FAILED  ${row.title} (${row.test})`];
+  for (const row of rows.filter(row => row.state === 'failed' || (row.failed_checks ?? []).length > 0)) {
+    const fullFailure = row.state === 'failed';
+    const failed = row.failed_checks ?? [], reruns = rerunEntries(fullFailure ? row : { ...row, rerun: row.rerun ? { ...row.rerun, skipped: undefined } : null }, failed), rerunByStep = new Map(reruns.filter(item => item.key !== null).map(item => [item.key, item.line])), lines = [`FAILED  ${row.title} (${row.test})`];
     for (const check of failed) {
       lines.push(...checkLines(check, secrets).map(text => `  ${text}`));
       if (check.diagnosis?.why) lines.push(`  Why: ${check.diagnosis.why}`);
@@ -577,11 +597,11 @@ export function renderText({ batch, rows, coverage, warnings = [], details = fal
       if (line) { lines.push(line); rerunByStep.delete(key); }
     }
     if (reruns.some(item => item.key === null)) lines.push(reruns.find(item => item.key === null).line);
-    lines.push(...(row.warnings ?? []).map(text => `  ${text}`));
+    if (fullFailure) lines.push(...(row.warnings ?? []).map(text => `  ${text}`));
     const diagnosed = failed.some(check => check.diagnosis?.why || check.diagnosis?.next_step);
-    if (!diagnosed && row.next_step && row.why) lines.push(`  Why: ${row.why}`);
-    if (!diagnosed && row.next_step) lines.push(`  Next: ${row.next_step}`);
-    if (!diagnosed && !row.next_step) lines.push('  Next: show this check to the person. A person decides expected values. The agent may propose a change, and never makes it.');
+    if (!diagnosed && fullFailure && row.next_step && row.why) lines.push(`  Why: ${row.why}`);
+    if (!diagnosed && fullFailure && row.next_step) lines.push(`  Next: ${row.next_step}`);
+    if (!diagnosed && (!fullFailure || !row.next_step)) lines.push('  Next: show this check to the person. A person decides expected values. The agent may propose a change, and never makes it.');
     lines.push(`  Report: ${row.report_url ?? 'none'}`); out.push(...lines);
   }
   out.push(...localRefusals(rows.filter(row=>!row.unsent), secrets));
@@ -613,7 +633,7 @@ export function renderText({ batch, rows, coverage, warnings = [], details = fal
       ...(row.report_url ? [`  Report: ${row.report_url}`] : []));
   }
   for (const row of rows.filter(row => row.state === 'unknown' && row.provider)) {
-    out.push(`UNKNOWN  ${row.title}: ${PROVIDER_TEXT}`, `  ${row.provider.code}${row.provider.detail ? ` (${row.provider.detail})` : ''}${row.report_url ? `  Report: ${row.report_url}` : ''}`,
+    out.push(`UNKNOWN  ${row.title}: ${providerText(row)}`, `  ${row.provider.code}${row.provider.detail ? ` (${row.provider.detail})` : ''}${row.report_url ? `  Report: ${row.report_url}` : ''}`,
       ...(row.next_step ? [] : ['  To try again, run `pdd test` again (a new request).']), ...serverAdvice(row, secrets));
   }
   if (details) for (const row of rows.filter(row => row.all_checks?.length || !row.cached && formatPromptCacheTokens(row))) {

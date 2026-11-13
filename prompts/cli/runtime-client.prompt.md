@@ -618,7 +618,8 @@ A locally held check becomes a submitted server check as soon as dispatch may ha
 | Evidence | Batch read and retry |
 |---|---|
 | Final POST refusal or nonbusy not-run answer (including legacy saved `refused` or nonbusy `not_run` without a raw receipt) | Preserve its verdict, explanation and exit code; no GET and no new attempt. This includes 422 invalid-input, 503 pool-low-room and 429 rate-limited. |
-| Verified same-ID terminal check receipt | Rebuild checks, criteria, failed checks, usage, timing, model and report metadata from the raw receipt. Do not persist unused duplicate projections in batch rows. |
+| Verified same-ID terminal check receipt | Rebuild checks, criteria, failed checks, usage, timing, model and report metadata from the raw receipt. Persist `checks`, `criteria` and `failed_checks` onto saved `batch.json` rows as well as `summary.json` so non-pass and unknown rows retain their check evidence. |
+| Verified same-ID `unknown` check receipt | Project `checks`, `criteria`, `failed_checks`, provider/time-limit facts and server advice from the saved receipt before polling the same ID; preserve those facts at `--timeout 0`, deadline or interruption and across failed or still-unknown GET polls (also retaining saved `batch.json` `checks`, `criteria` and `failed_checks` on `unknown` rows with failed checks when no raw receipt is present). |
 | Accepted or uncertain submission with open, missing or unverifiable receipt | Clear stale busy/retry eligibility unless authoritative unstarted capacity proof remains; GET the same ID, irrespective of stale local phase or saved verdict. Without terminal evidence a saved passed label becomes unknown (exit 3), an intentional exception to preserved verdicts/exits. |
 | Confirmed unstarted capacity or positively unsent held check | Apply the admission/retry rules above and the saved-lint continuation below. A missing receipt, stale busy flags or unavailable GET is never proof of safe retry. |
 
