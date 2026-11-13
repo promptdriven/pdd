@@ -908,11 +908,27 @@ function capturedCriterionPlan(doc, story, path) {
   return plan;
 }
 
+export function promptMarkdownTargets(text, fromPath, visible) {
+  if (typeof text !== 'string') return [];
+  return markdownContext(text).flatMap(raw => {
+    try { const target = contextPath(raw, fromPath, visible); return target?.endsWith('.prompt.md') ? [target] : []; }
+    catch { return []; }
+  });
+}
+
 // The schema rules of a prompt and of the prompts it calls, all at once (cached per prompt).
-export function promptSchemaRefusals(root, found, prompt, prompts, seen = new Set()) {
+export function promptSchemaRefusals(root, found, prompt, prompts, seen = new Set(), { allowMissingInterfaces = false } = {}) {
   if (!prompt || seen.has(prompt.path)) return [];
   seen.add(prompt.path);
-  if (prompt.error) return [{ ...promptRefusal(prompt, 'interface'), path: prompt.path }];
+  if (prompt.error) {
+    if (allowMissingInterfaces && prompt.error === 'interface-missing') {
+      return promptMarkdownTargets(prompt.text, prompt.path, found.visible).flatMap(target => {
+        if (!prompts.has(target)) prompts.set(target, readPrompt(root, found.visible, target, found.workspace));
+        return promptSchemaRefusals(root, found, prompts.get(target), prompts, seen, { allowMissingInterfaces });
+      });
+    }
+    return [{ ...promptRefusal(prompt, 'interface'), path: prompt.path }];
+  }
   if (!prompt.interface) return [];
   prompt.schemaIssues ??= interfaceSchemaProblems(prompt.interface).map(problem =>
     refusal(problem.code, problem.pointer, `${prompt.path} ${problem.pointer} ${problem.rule}`, {path:prompt.path, ...(problem.hint ? {hint:problem.hint} : {})}));
@@ -920,7 +936,7 @@ export function promptSchemaRefusals(root, found, prompt, prompts, seen = new Se
   const statusProblems = ['draft', 'approved'].includes(prompt.interface.status) ? [] : [{ ...promptRefusal(prompt, 'interface'), path: prompt.path }];
   return [...statusProblems, ...prompt.schemaIssues, ...called.flatMap(target => {
     if (!prompts.has(target)) prompts.set(target, readPrompt(root, found.visible, target,found.workspace));
-    return promptSchemaRefusals(root, found, prompts.get(target), prompts, seen);
+    return promptSchemaRefusals(root, found, prompts.get(target), prompts, seen, { allowMissingInterfaces });
   })];
 }
 
@@ -1041,7 +1057,7 @@ export function scenarioShapeRefusal(doc,path) {
   return null;
 }
 
-function checkTest(root, found, test, prompts) {
+function checkTest(root, found, test, prompts, { allowMissingInterfaces = false } = {}) {
   let doc = test.doc;
   if (!test.error && isObject(doc)) {
     const prepared = preparedText(root,found.visible,test.path,readText(root,test.path),'scenario');
@@ -1075,15 +1091,17 @@ function checkTest(root, found, test, prompts) {
       return done(refusal('invalid-step-model', `${section}.model`, 'A step model must be a model name (a string).', at), story);
     }
     if (!prompts.has(step.entry_path)) prompts.set(step.entry_path, readPrompt(root, found.visible, step.entry_path,found.workspace));
-    const prompt = prompts.get(step.entry_path), broken = promptRefusal(prompt, section);
+    const prompt = prompts.get(step.entry_path);
+    const lazyMissing = allowMissingInterfaces && prompt.error === 'interface-missing';
+    const broken = lazyMissing ? null : promptRefusal(prompt, section);
     if (broken) return done({ ...broken, ...at }, story);
-    const schemaIssues = promptSchemaRefusals(root, found, prompt, prompts);
+    const schemaIssues = promptSchemaRefusals(root, found, prompt, prompts, new Set(), { allowMissingInterfaces });
     if (schemaIssues.length) return done(schemaIssues, story);
-    const entry = (Array.isArray(prompt.interface.entries) ? prompt.interface.entries : []).find(item => item?.operation === step.operation);
+    const entry = lazyMissing ? null : (Array.isArray(prompt.interface.entries) ? prompt.interface.entries : []).find(item => item?.operation === step.operation);
     const native = [...prompts.values()].some(item => item.interface?.kind === 'native-only');
-    if (!entry && !native) return done(refusal('entry-operation-missing', section, `${step.entry_path} has no operation "${step.operation}".`, at), story);
+    if (!lazyMissing && !entry && !native) return done(refusal('entry-operation-missing', section, `${step.entry_path} has no operation "${step.operation}".`, at), story);
     const errorStep = Object.hasOwn(step, 'expected_error');
-    if (!native && errorStep && !(Array.isArray(entry.errors) && entry.errors.includes(step.expected_error))) {
+    if (!lazyMissing && !native && errorStep && !(Array.isArray(entry.errors) && entry.errors.includes(step.expected_error))) {
       return done(refusal('pdd-unknown-error', `${section}.expected_error`, `"${step.expected_error}" is not in the errors of ${step.operation} in ${step.entry_path}.`, at), story);
     }
     if (!Array.isArray(step.checks)) return done(refusal('invalid-check', `${section}.checks`, 'checks must be a list.', at), story);
@@ -1099,7 +1117,7 @@ function checkTest(root, found, test, prompts) {
     if (errorStep && errorChecks === 0) {
       return done(refusal('missing-error-check', `${section}.checks`, `An error step needs one check: target "error", path "/code", op "equals", value "${step.expected_error}".`, at), story);
     }
-    if (!native) inputIssues.push(...checkInput(step.input, entry.input_schema, index).refusals);
+    if (!lazyMissing && !native) inputIssues.push(...checkInput(step.input, entry.input_schema, index).refusals);
   }
   if (inputIssues.length) return done(inputIssues, story);
   for (const step of doc.steps) for (const check of step.checks) {
@@ -1112,7 +1130,7 @@ function checkTest(root, found, test, prompts) {
 }
 
 // Rules P1-P10 for the selected tests. Returns rows and warnings; never throws for a test problem.
-export function preflight({ root, found, selected,workspace=found.workspace??loadRuntimeWorkspace({root}) }) {
+export function preflight({ root, found, selected,workspace=found.workspace??loadRuntimeWorkspace({root}), allowMissingInterfaces = false }) {
   found={...found,workspace};for(const test of selected)requireRuntimePath(workspace,{path:test.path,from:'Selected test'});
   const warnings = [];
   const reviews = numericReviews(root, found, warnings);
@@ -1125,11 +1143,14 @@ export function preflight({ root, found, selected,workspace=found.workspace??loa
       const prompt = readPrompt(root, found.visible, path, workspace);
       prompts.set(path, prompt);
       for (const call of Array.isArray(prompt.interface?.calls) ? prompt.interface.calls : []) visit(call?.target);
+      if (allowMissingInterfaces && prompt.error === 'interface-missing') {
+        for (const target of promptMarkdownTargets(prompt.text, path, found.visible)) visit(target);
+      }
     };
     let refused, plan, testSha = null, effectiveDoc = test.doc;
     try {
       for (const step of Array.isArray(test.doc?.steps) ? test.doc.steps : []) visit(step?.entry_path);
-      const checked = checkTest(root, found, test, prompts);
+      const checked = checkTest(root, found, test, prompts, { allowMissingInterfaces });
       refused = checked.refusal;
       effectiveDoc = checked.doc;
       const nativeProblems = [...prompts.values()].filter(prompt => prompt.interface?.kind === 'native-only')
@@ -1800,7 +1821,7 @@ function preparedText(root, visible, path, text, format,workspace) {
   }
 }
 
-function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadRuntimeWorkspace({root}),excludeFixtureProjects=tests === undefined,validateCriteria=true }, strict = false) {
+function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadRuntimeWorkspace({root}),excludeFixtureProjects=tests === undefined,validateCriteria=true,allowMissingInterfaces=false }, strict = false) {
   const policyBefore=JSON.stringify(loadRuntimeWorkspace({root}));workspace=boundedWorkspace(root,workspace);
   const names = gitFiles(root), visible = new Set(names), overlay = new Map(), payload = new Map(), queue = [], visited = new Set();
   const chains=new Map(),preparationReads=new Set(),referenceReads=new Set();
@@ -2044,7 +2065,9 @@ function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadR
     // A Story boundary selects executable interfaces, while preserving context prose.
     const bindingPrompts = new Map();
     for (const [path,file] of footprintPayload) if (path.endsWith('.prompt.md')) {
-      try { bindingPrompts.set(path,JSON.parse(interfaceBlocks(bytes(file).toString('utf8'))[0][1])); } catch { /* Admission reports malformed interfaces. */ }
+      const blocks = interfaceBlocks(bytes(file).toString('utf8'));
+      if (!blocks.length && allowMissingInterfaces) { bindingPrompts.set(path, { entries: [], calls: [], resources: [] }); continue; }
+      try { bindingPrompts.set(path,JSON.parse(blocks[0][1])); } catch { /* Admission reports malformed interfaces. */ }
     }
     const bindingPlans = [];
     for (const path of selected) {

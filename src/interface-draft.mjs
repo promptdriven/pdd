@@ -26,12 +26,13 @@ export function interfaceFindings({root, paths = promptPaths(root)}) {
     } catch (error) { return [{code:error.code ?? 'interface-unreadable',path,message:error.message}]; }
   });
 }
-export function runtimeCoverage({root, paths = promptPaths(root)}) {
+export function runtimeCoverage({root, paths = promptPaths(root), allowMissingInterfaces = false}) {
   const visible = new Set(gitFiles(root));
   let checkable = 0, native_only = 0;
   for (const path of paths) {
     try {
       const prompt = readPrompt(root,visible,path);
+      if (allowMissingInterfaces && prompt.error === 'interface-missing') { checkable++; continue; }
       if (promptRefusal(prompt,'interface') || interfaceSchemaProblems(prompt.interface).length) continue;
       if (prompt.interface.kind === 'native-only') native_only++;
       else if (Array.isArray(prompt.interface.entries) && prompt.interface.entries.length && prompt.interface.entries.every(entry=>typeof entry?.operation==='string' && entry.operation.trim() && entry.input_schema && entry.result_schema)) checkable++;

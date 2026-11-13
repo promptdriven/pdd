@@ -3,12 +3,12 @@ import {loadRuntimeWorkspace,allowsRuntimePath,requireRuntimePath} from './runti
 // Generated from prompts/cli/runtime-bindings.prompt.md (sha256: 49685dd41853a95fed83cbb240651e13625233abd3ac66323aa6d99be51502c5).
 import { lstatSync } from 'node:fs';
 import { join } from 'node:path';
-import { PreflightError, readPrompt, isSecretPath, sourceFilePort,gitFiles } from './runtime-preflight.mjs';
+import { PreflightError, readPrompt, isSecretPath, sourceFilePort, gitFiles, promptMarkdownTargets } from './runtime-preflight.mjs';
 
-export function bindingCoverage({ root, found, selected, includeRuntime = false }) {
+export function bindingCoverage({ root, found, selected, includeRuntime = false, allowMissingInterfaces = false }) {
   const workspace=loadRuntimeWorkspace({root});
   const controlVisible=new Set(gitFiles(root));
-  const runtime = includeRuntime ? {runtime:runtimeCoverage({root})} : {};
+  const runtime = includeRuntime ? {runtime:runtimeCoverage({root,allowMissingInterfaces})} : {};
   const unavailable = { available: false, bound: null, total: null, modules: [], ...runtime };
   const fail = (path, why) => { throw Object.assign(new PreflightError(4, `pdd-bindings.json: ${path}: ${why}`), { bindingInventory: true }); };
   const regular = path => {
@@ -39,6 +39,9 @@ export function bindingCoverage({ root, found, selected, includeRuntime = false 
     reached.add(path);
     const prompt = readPrompt(root, found.visible, path);
     for (const call of Array.isArray(prompt?.interface?.calls) ? prompt.interface.calls : []) if (typeof call?.target === 'string') queue.push(call.target);
+    if (allowMissingInterfaces && prompt?.error === 'interface-missing') {
+      for (const target of promptMarkdownTargets(prompt.text, path, found.visible)) queue.push(target);
+    }
   }
   for (const item of inventory.modules) {
     const path = item?.module ?? 'module';
@@ -54,7 +57,8 @@ export function bindingCoverage({ root, found, selected, includeRuntime = false 
     if (!item.stories.some(story => chosen.has(story))) continue;
     if (bound) {
       const prompt = readPrompt(root, found.visible, item.prompt);
-      if (prompt.error || !reached.has(item.prompt) || !Array.isArray(prompt?.interface?.entries) || !prompt.interface.entries.length || prompt.interface.entries.some(entry => !entry || typeof entry.operation !== 'string' || !entry.operation.trim() || !object(entry.input_schema) || !object(entry.result_schema))) fail(path, `${item.prompt} must be reached and have an executable Runtime interface`);
+      const lazyMissing = allowMissingInterfaces && prompt.error === 'interface-missing';
+      if (!reached.has(item.prompt) || (!lazyMissing && (prompt.error || !Array.isArray(prompt?.interface?.entries) || !prompt.interface.entries.length || prompt.interface.entries.some(entry => !entry || typeof entry.operation !== 'string' || !entry.operation.trim() || !object(entry.input_schema) || !object(entry.result_schema))))) fail(path, `${item.prompt} must be reached and have an executable Runtime interface`);
     }
     modules.push({ path: item.module, state: bound ? 'bound' : 'unbound', ...(bound ? {} : { reason: item.reason, port_attempt: item.port_attempt }) });
   }

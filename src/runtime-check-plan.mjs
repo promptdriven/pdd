@@ -1,7 +1,7 @@
 // Generated from prompts/cli/runtime-check-plan.prompt.md (sha256: fd2ee080527673f163544e955f736f80f0c4bc183aee6009d9d7e8da6f0d51e4).
 import { spawnSync } from 'node:child_process';
 import { posix } from 'node:path';
-import { captureSource, readPrompt, sourceFilePort } from './runtime-preflight.mjs';
+import { captureSource, readPrompt, sourceFilePort, promptMarkdownTargets } from './runtime-preflight.mjs';
 import { resultOutcome } from './runtime-outcome.mjs';
 import { headerPrompts } from './file-owner.mjs';
 import { allowsRuntimePath, loadRuntimeWorkspace } from './runtime-workspace.mjs';
@@ -14,7 +14,7 @@ const gitRead = (root, args) => {
   return reply.stdout;
 };
 
-export function buildCheckPlan({ root, found, selected, rows = [], full, base = 'HEAD', affected = false }, ports = {}) {
+export function buildCheckPlan({ root, found, selected, rows = [], full, base = 'HEAD', affected = false, allowMissingInterfaces = false }, ports = {}) {
   const git = args => (ports.git ?? gitRead)(root, args);
   let changed = null;
   try {
@@ -57,8 +57,8 @@ export function buildCheckPlan({ root, found, selected, rows = [], full, base = 
     const key = `${code}\0${path}\0${field}`;
     if (!seenProblems.has(key)) { seenProblems.add(key); prerequisites.push({code,path,field}); }
   };
-  const cost = (path, stack = new Set()) => {
-    if (stack.has(path)) { problem('recursive-call-bound', path, '/calls'); return 0; }
+  const cost = (path, stack = new Set(), proseOnly = false) => {
+    if (stack.has(path)) { if (!proseOnly) problem('recursive-call-bound', path, '/calls'); return 0; }
     let prompt = prompts.get(path);
     if (!prompt) {
       try { prompt = readPrompt(root, found.visible, path, found.workspace); }
@@ -66,7 +66,16 @@ export function buildCheckPlan({ root, found, selected, rows = [], full, base = 
       prompts.set(path, prompt);
     }
     const iface = prompt.interface;
-    if (!iface) { problem(prompt.error ?? 'interface-missing', path, '/interface'); return 0; }
+    if (!iface) {
+      if (allowMissingInterfaces && prompt.error === 'interface-missing') {
+        const next = new Set([...stack, path]);
+        let count = 1;
+        for (const target of promptMarkdownTargets(prompt.text, path, found.visible)) count += cost(target, next, true);
+        return count;
+      }
+      problem(prompt.error ?? 'interface-missing', path, '/interface');
+      return 0;
+    }
     if (iface.kind === 'native-only') return 0;
     if (!Number.isSafeInteger(iface.limits?.max_model_calls) || iface.limits.max_model_calls < 1)
       problem('undefined-call-bound', path, '/limits/max_model_calls');
@@ -92,8 +101,9 @@ export function buildCheckPlan({ root, found, selected, rows = [], full, base = 
     for (const file of captured.files ?? []) if (file.target) targets.set(file.path,file.target);
     return captured;
   };
+  const captureExtra = allowMissingInterfaces ? { allowMissingInterfaces: true } : {};
   try {
-    const captured = rememberTargets(capture(root,{tests:selected.map(test=>test.path),appMap:null,excludeFixtureProjects:full}));
+    const captured = rememberTargets(capture(root,{tests:selected.map(test=>test.path),appMap:null,excludeFixtureProjects:full,...captureExtra}));
     footprints = new Map((captured.stories ?? []).map(story=>[story.story_path,story]));
   } catch { /* Keep a broken Story from hiding other Stories' closures. */ }
   const classified = [...groups].map(([story_path, tests]) => {
@@ -101,7 +111,7 @@ export function buildCheckPlan({ root, found, selected, rows = [], full, base = 
     const footprint = footprints.get(story_path);
     try {
       if (footprint?.unavailable) unavailable = true;
-      else closure = sorted((footprint?.files ?? rememberTargets(capture(root, {tests:tests.map(test=>test.path),appMap:null,excludeFixtureProjects:full})).files).map(file=>file.path));
+      else closure = sorted((footprint?.files ?? rememberTargets(capture(root, {tests:tests.map(test=>test.path),appMap:null,excludeFixtureProjects:full,...captureExtra})).files).map(file=>file.path));
     }
     catch { unavailable = true; }
     return {story_path,tests,closure,unavailable};
