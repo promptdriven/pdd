@@ -78,6 +78,30 @@ test('outcomeFor scopes appMaps per row and holds unchecked or missing app-map v
   assert.equal(bareOutcome.code, 'lint-refused');
   assert.equal(bareOutcome.field, 'app-map.json');
   assert.equal(bareOutcome.message, 'app-map.json was refused by complete lint.');
+
+  // Hosted-shape receipt (problems: [invalid-after-step] + refusals: [lint-refused]) omits generic lint-refused from outcome.refusals.
+  const hostedOutcome = outcomeFor(refusedStep.answer, refusedStep);
+  assert.deepEqual(hostedOutcome.refusals.map(item => item.code), ['invalid-after-step']);
+  assert.ok(!hostedOutcome.refusals.some(item => item.code === 'lint-refused'));
+
+  // Paired-runtime receipt (problems: [invalid-after-step] + refusals: [invalid-after-step]) deduplicates identical records and preserves fix from a duplicate without mutating input.
+  const pairedStep = structuredClone(scenario.steps[0].input);
+  pairedStep.answer.result.problems[0].fix = null;
+  pairedStep.answer.result.refusals = [{
+    code: 'invalid-after-step',
+    reason: 'An after step has the wrong fields.',
+    fix: 'Use exactly handler, input and bind for each step.',
+    file: 'app-map.json',
+    at: 'handlers[0].after[0]',
+    where: 'app-map.json, handlers[0].after[0]',
+    path: 'app-map.json',
+  }];
+  const pairedOutcome = outcomeFor(pairedStep.answer, pairedStep);
+  assert.equal(pairedStep.answer.result.problems[0].fix, null, 'must not mutate caller input');
+  assert.equal(pairedOutcome.refusals.length, 1);
+  assert.deepEqual(pairedOutcome.refusals.map(item => item.code), ['invalid-after-step']);
+  assert.equal(pairedOutcome.fix, 'Use exactly handler, input and bind for each step.');
+  assert.equal(pairedOutcome.refusals[0].fix, 'Use exactly handler, input and bind for each step.');
 });
 
 const APP_MAP = JSON.stringify({
@@ -95,21 +119,32 @@ const APP_MAP = JSON.stringify({
   }],
 });
 
-function lintRefusingAppMap(base, { at = 'handlers[0].after[0]', where = 'app-map.json', code = 'invalid-after-step', reason = 'An after step has the wrong fields.', fix = 'Use exactly handler, input and bind for each step.', appMap = 'app-map.json' } = {}) {
+function lintRefusingAppMap(base, { at = 'handlers[0].after[0]', where = 'app-map.json', code = 'invalid-after-step', reason = 'An after step has the wrong fields.', fix = 'Use exactly handler, input and bind for each step.', appMap = 'app-map.json', pairedRefusal = false } = {}) {
   base.state = 'refused';
   base.result.problems_complete = true;
   base.result.tests = base.result.report.lint.tests.map(({ path, verdict }) => ({ path, verdict }));
   base.result.app_maps = [{ path: appMap, verdict: 'refused', problems: 1 }];
-  base.result.refusals = [{
-    code: 'lint-refused',
-    reason: 'The runtime refused this run (lint-refused).',
-    fix: 'Run pdd lint to look for problems. If it stays, tell the PDD team and give them the report link.',
-    file: appMap,
-    at: null,
-    where: appMap,
-    engine_message: 'Lint refused this test or app map.',
-    path: appMap,
-  }];
+  base.result.refusals = pairedRefusal
+    ? [{
+        code,
+        reason,
+        fix,
+        file: appMap,
+        at,
+        ...(where !== undefined ? { where } : {}),
+        engine_message: reason,
+        path: appMap,
+      }]
+    : [{
+        code: 'lint-refused',
+        reason: 'The runtime refused this run (lint-refused).',
+        fix: 'Run pdd lint to look for problems. If it stays, tell the PDD team and give them the report link.',
+        file: appMap,
+        at: null,
+        where: appMap,
+        engine_message: 'Lint refused this test or app map.',
+        path: appMap,
+      }];
   base.result.problems = [{
     code,
     severity: 'error',
@@ -128,7 +163,8 @@ function lintRefusingAppMap(base, { at = 'handlers[0].after[0]', where = 'app-ma
 
 test('2569 regression: runTry stops before POST /v1/try on refused pre-Try app-map lint with exit 4 and nested handler guidance', async t => {
   for (const [label, opts, expectedLocation] of [
-    ['with handler after location', { at: 'handlers[0].after[0]', where: 'app-map.json' }, 'app-map.json handlers[0].after[0]'],
+    ['hosted receipt with handler after location', { at: 'handlers[0].after[0]', where: 'app-map.json', pairedRefusal: false }, 'app-map.json handlers[0].after[0]'],
+    ['paired-runtime receipt with matching problem and refusal', { at: 'handlers[0].after[0]', where: 'app-map.json, handlers[0].after[0]', pairedRefusal: true }, 'app-map.json, handlers[0].after[0]'],
     ['with null location', { at: null, where: 'app-map.json' }, 'app-map.json'],
     ['with omitted where and null location', { at: null, where: undefined }, 'app-map.json'],
   ]) {
@@ -147,6 +183,8 @@ test('2569 regression: runTry stops before POST /v1/try on refused pre-Try app-m
       const code = await runTry({ words: ['place-order'], options: { '--no-open': true }, cwd: setup.repo }, ports);
       assert.equal(code, 4, `${ports.stderr.text}\n${ports.stdout.text}`);
       assert.equal(fake.posts.filter(post => post.command === 'try').length, 0, 'must send zero /v1/try requests');
+      assert.equal((ports.stdout.text.match(/invalid-after-step/g) ?? []).length, 1, ports.stdout.text);
+      assert.doesNotMatch(ports.stdout.text, /lint-refused/);
       assert.deepEqual(ports.stdout.text.trimEnd().split('\n'), [
         `The Try could not start: the app map was refused (invalid-after-step: An after step has the wrong fields.; at ${expectedLocation}).`,
         'Use exactly handler, input and bind for each step. Write each after step as {"handler": {"prompt_path": "...", "operation": "..."}, "input": {...}, "bind": "/field"} (RUNBOOK §13). Then run pdd simulate place-order --new.',
@@ -154,6 +192,54 @@ test('2569 regression: runTry stops before POST /v1/try on refused pre-Try app-m
       assert.doesNotMatch(ports.stdout.text + ports.stderr.text, /Prompt tests|Runtime check|Story +Test|REFUSED|Cannot read properties of undefined/);
     });
   }
+
+  await t.test('trySetupRefused deduplicates repeated refusal clauses and omits generic lint-refused wrapper on Try job refusal', async st => {
+    const setup = harbor(st, repo => writeFileSync(join(repo, 'app-map.json'), `${APP_MAP}\n`));
+    const fake = await fakeRuntime(st, (entry, f) => {
+      if (entry.method === 'POST' && entry.command === 'lint') return { status: 200, json: f.lint(entry.request.requestId) };
+      if (entry.method === 'POST' && entry.command === 'try') {
+        const id = entry.request.requestId;
+        const dup = {
+          code: 'invalid-after-step',
+          reason: 'An after step has the wrong fields.',
+          fix: 'Use exactly handler, input and bind for each step.',
+          file: 'app-map.json',
+          at: 'handlers[0].after[0]',
+          where: 'app-map.json, handlers[0].after[0]',
+          path: 'app-map.json',
+        };
+        const wrapper = {
+          code: 'lint-refused',
+          reason: 'The runtime refused this run (lint-refused).',
+          file: 'app-map.json',
+          where: 'app-map.json',
+          path: 'app-map.json',
+        };
+        return {
+          status: 200,
+          json: f.job(id, 'try', 'refused', {
+            exitCode: 1,
+            refusals: [dup, { ...dup }, wrapper],
+            report: { verdict: 'refused', refusal: { code: 'invalid-after-step' } },
+            session: { id, state: 'stopped' },
+          }),
+        };
+      }
+      return { status: 404, json: { error: { code: 'not-found' } } };
+    });
+    const { ports } = portsFor(
+      { HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state },
+      { openUrl: async () => true },
+    );
+    const code = await runTry({ words: ['place-order'], options: { '--no-open': true }, cwd: setup.repo }, ports);
+    assert.equal(code, 4, `${ports.stderr.text}\n${ports.stdout.text}`);
+    assert.equal((ports.stdout.text.match(/invalid-after-step/g) ?? []).length, 1, ports.stdout.text);
+    assert.doesNotMatch(ports.stdout.text, /lint-refused/);
+    assert.deepEqual(ports.stdout.text.trimEnd().split('\n'), [
+      'The Try could not start: the app map was refused (invalid-after-step: An after step has the wrong fields.; at app-map.json, handlers[0].after[0]).',
+      'Use exactly handler, input and bind for each step. Write each after step as {"handler": {"prompt_path": "...", "operation": "..."}, "input": {...}, "bind": "/field"} (RUNBOOK §13). Then run pdd simulate place-order --new.',
+    ]);
+  });
 });
 
 test('2569 regression: runTry initializes warnings before lintDiagnostics runs on unrelated lint refusals and classifies broadened app-map codes', async t => {

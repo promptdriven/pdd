@@ -4489,7 +4489,7 @@ const GENERIC_REFUSAL = /^The runtime refused this (?:job|run)\b/;
 const isAppMapCode = code => Object.hasOwn(APP_MAP_RULES, code) || code === 'invalid-clipboard-action' || /^(?:after|app-map|invalid-app-map)-/.test(code);
 function normalizeTryRefusals(context, refusals) {
   const text = value => typeof value === 'string' ? cleanText(value, context.secrets) : '';
-  return (refusals.length ? refusals : [{ code: 'refused' }]).map(item => {
+  const items = (refusals.length ? refusals : [{ code: 'refused' }]).map(item => {
     const code = text(item.code) || 'refused';
     const file = text(item.file) || text(item.path);
     const at = text(item.at) || text(item.pointer);
@@ -4505,6 +4505,8 @@ function normalizeTryRefusals(context, refusals) {
       where,
     };
   });
+  const specificTargets = new Set(items.filter(item => item.code !== 'lint-refused').map(item => item.file || item.path).filter(Boolean));
+  return items.filter(item => !(item.code === 'lint-refused' && specificTargets.has(item.file || item.path)));
 }
 function isAppMapSetupRefusal(context, appMap, refusals) {
   if (!appMap) return false;
@@ -4512,11 +4514,11 @@ function isAppMapSetupRefusal(context, appMap, refusals) {
     || /app[-_]map/i.test(item.section) || isAppMapCode(item.code));
 }
 function trySetupRefused(context, test, appMap, refusals, reportUrl) {
-  if (context.doorMode) throw new Stop(125, refusals.map(item => item.reason || item.engine_message || item.message || item.code).filter(Boolean).join('; ') || 'The interpreter refused this Try.');
+  if (context.doorMode) throw new Stop(125, [...new Set(refusals.map(item => item.reason || item.engine_message || item.message || item.code).filter(Boolean))].join('; ') || 'The interpreter refused this Try.');
   const items = normalizeTryRefusals(context, refusals);
   const mapped = !!appMap && items.some(item => item.file === appMap || item.path === appMap || item.section === appMap
     || /app[-_]map/i.test(item.section) || isAppMapCode(item.code));
-  const why = items.map(item => `${item.reason ? `${item.code}: ${item.reason}` : item.code}${item.where ? `; at ${item.where}` : ''}`).join('; '), fix = items.find(item => item.fix)?.fix;
+  const why = [...new Set(items.map(item => `${item.reason ? `${item.code}: ${item.reason}` : item.code}${item.where ? `; at ${item.where}` : ''}`))].join('; '), fix = items.find(item => item.fix)?.fix;
   const needsAfterHelp = items.some(item => item.code === 'invalid-after-step' && !/"handler"\s*:\s*\{|\bprompt_path\b/.test(`${item.reason ?? ''} ${item.fix ?? ''}`));
   const again = `run ${tryCommand(test,context.product_setup,' --new')}.`;
   const target = context.product_setup ? 'the authored part maps or product/plan.md' : appMap;

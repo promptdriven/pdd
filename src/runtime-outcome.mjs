@@ -83,7 +83,7 @@ function lintOutcome(answer, refusals, test, steps, appMaps, sourceFiles) {
   const entries = list => objects(list).filter(item => item.path === test);
   const listed = entries(result?.tests).length ? entries(result.tests) : entries(report?.lint?.tests);
   const verdict = listed.length && listed.every(item => item.verdict === listed[0].verdict) ? listed[0].verdict : null;
-  const problems = objects(result?.problems ?? report?.problems);
+  const problems = objects(result?.problems).length ? objects(result.problems) : objects(report?.problems);
   const targetOf = item => nonEmpty(item.file, item.path);
   const own = [...refusals, ...problems].filter(item => targetOf(item) === test && item.severity !== 'warning');
   const hasAppMaps = Array.isArray(result?.app_maps) || Array.isArray(report?.lint?.app_maps);
@@ -94,12 +94,34 @@ function lintOutcome(answer, refusals, test, steps, appMaps, sourceFiles) {
   const applicableSet = new Set(applicableMaps);
   const appMapProblems = problems.filter(item => applicableSet.has(targetOf(item)) && item.severity !== 'warning');
   const matchingAppMapRefusals = refusals.filter(item => applicableSet.has(targetOf(item)));
-  const hasSpecific = mapPath => [...appMapProblems, ...matchingAppMapRefusals]
-    .some(item => targetOf(item) === mapPath && item.code && item.code !== 'lint-refused');
-  const appMapRefusals = [
-    ...appMapProblems.filter(item => !(item.code === 'lint-refused' && hasSpecific(targetOf(item)))),
-    ...matchingAppMapRefusals.filter(item => !(item.code === 'lint-refused' && hasSpecific(targetOf(item)))),
-  ];
+  const specificMaps = new Set(
+    [...appMapProblems, ...matchingAppMapRefusals]
+      .filter(item => nonEmpty(item.code) && item.code !== 'lint-refused')
+      .map(targetOf),
+  );
+  const appMapRefusals = [];
+  const seenAppMapRefusals = new Map();
+  for (const item of [...appMapProblems, ...matchingAppMapRefusals]) {
+    const mapPath = targetOf(item);
+    if (item.code === 'lint-refused' && specificMaps.has(mapPath)) continue;
+    const key = JSON.stringify([
+      mapPath,
+      nonEmpty(item.code),
+      nonEmpty(item.field, item.at, item.pointer, item.section, item.file, item.path),
+      nonEmpty(item.reason, item.message, item.code),
+    ]);
+    const existingIndex = seenAppMapRefusals.get(key);
+    if (existingIndex === undefined) {
+      seenAppMapRefusals.set(key, appMapRefusals.length);
+      appMapRefusals.push(item);
+    } else {
+      const kept = appMapRefusals[existingIndex];
+      const patch = {};
+      if (!nonEmpty(kept.fix) && nonEmpty(item.fix)) patch.fix = item.fix;
+      if (!nonEmpty(kept.reason) && nonEmpty(item.reason)) patch.reason = item.reason;
+      if (Object.keys(patch).length) appMapRefusals[existingIndex] = { ...kept, ...patch };
+    }
+  }
   const coveredAppMaps = new Set(appMapRefusals.map(targetOf));
   for (const mapPath of applicableMaps) {
     if (!coveredAppMaps.has(mapPath) && rawAppMaps.some(item => item.path === mapPath && item.verdict === 'refused')) {
