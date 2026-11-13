@@ -1,0 +1,481 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/app-map-after-step-2569.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "When lint checks app-map.json alongside tests/walk/spike-world.json and refuses app-map.json with invalid-after-step at handlers[0].after[0], the lint outcome is \"refused\" with code \"invalid-after-step\", field \"handlers[0].after[0]\" and fix \"Use exactly handler, input and bind for each step.\" even though tests/walk/spike-world.json passed."
+    },
+    {
+      "id": "AC2",
+      "text": "When lint refuses app-map.json with invalid-after-step without a field pointer, the lint outcome is \"refused\" with code \"invalid-after-step\", field \"app-map.json\" and fix \"Use exactly handler, input and bind for each step.\""
+    },
+    {
+      "id": "AC3",
+      "text": "When both tests/walk/spike-world.json and app-map.json pass lint with matched supported capabilities, the lint outcome is \"passed\"."
+    }
+  ],
+  "initial_world": {},
+  "simulation": {},
+  "context": [],
+  "steps": [
+    {
+      "step_id": "refused-app-map-with-location",
+      "entry_path": "prompts/cli/runtime-outcome.prompt.md",
+      "operation": "outcomeFor",
+      "input": {
+        "answer": {
+          "command": "lint",
+          "state": "refused",
+          "engine_sha": "088d558b937300e552386b0f81e0bd5e2ce782fb",
+          "result": {
+            "problems_complete": true,
+            "tests": [
+              {
+                "path": "tests/walk/spike-world.json",
+                "verdict": "passed"
+              }
+            ],
+            "app_maps": [
+              {
+                "path": "app-map.json",
+                "verdict": "refused",
+                "problems": 1
+              }
+            ],
+            "refusals": [
+              {
+                "code": "lint-refused",
+                "reason": "The runtime refused this run (lint-refused).",
+                "fix": "Run pdd lint to look for problems. If it stays, tell the PDD team and give them the report link.",
+                "file": "app-map.json",
+                "at": null,
+                "where": "app-map.json",
+                "engine_message": "Lint refused this test or app map.",
+                "path": "app-map.json"
+              }
+            ],
+            "problems": [
+              {
+                "code": "invalid-after-step",
+                "severity": "error",
+                "cause": "test",
+                "file": "app-map.json",
+                "at": "handlers[0].after[0]",
+                "pointer": null,
+                "reason": "An after step has the wrong fields.",
+                "fix": "Use exactly handler, input and bind for each step.",
+                "source": "engine",
+                "where": "app-map.json",
+                "message": "An after step has the wrong fields. Use exactly handler, input and bind for each step."
+              }
+            ],
+            "capabilities": [
+              {
+                "path": "tests/walk/spike-world.json",
+                "report": {
+                  "schema_version": "prompt-runtime.program-capabilities.v1",
+                  "capability_version": "program-capabilities.v1@088d558b937300e552386b0f81e0bd5e2ce782fb",
+                  "engine_build": "088d558b937300e552386b0f81e0bd5e2ce782fb",
+                  "source": {
+                    "scenario_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+                    "closure_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+                    "files": [
+                      {
+                        "path": "spike/machine_box.prompt.md",
+                        "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+                      },
+                      {
+                        "path": "tests/walk/spike-world.json",
+                        "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+                      }
+                    ]
+                  },
+                  "complete": true,
+                  "verdict": "supported",
+                  "operations": [
+                    {
+                      "selection": {
+                        "step_id": "send-ping",
+                        "node_id": "machine_box",
+                        "prompt_path": "spike/machine_box.prompt.md",
+                        "operation": "send"
+                      },
+                      "feature": "ordinary",
+                      "binding_kind": "none",
+                      "resource_mode": "simulated",
+                      "evaluator_mode": "model",
+                      "execution_mode": "ordinary",
+                      "verdict": "supported",
+                      "reason_code": "supported"
+                    }
+                  ],
+                  "edges": [],
+                  "diagnostics": [],
+                  "provider_calls": 0,
+                  "resource_calls": 0
+                }
+              }
+            ],
+            "report": {
+              "lint": {
+                "complete": true
+              },
+              "program": {
+                "prompts": [
+                  {
+                    "path": "spike/machine_box.prompt.md",
+                    "admission_state": "draft"
+                  }
+                ],
+                "refused_prompts": []
+              }
+            }
+          }
+        },
+        "test": "tests/walk/spike-world.json",
+        "steps": [
+          {
+            "entry_path": "spike/machine_box.prompt.md"
+          }
+        ],
+        "kind": "lint",
+        "sourceFiles": [
+          {
+            "path": "app-map.json",
+            "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+          },
+          {
+            "path": "spike/machine_box.prompt.md",
+            "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+          },
+          {
+            "path": "tests/walk/spike-world.json",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          }
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/state",
+          "op": "equals",
+          "value": "refused"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-after-step"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/field",
+          "op": "equals",
+          "value": "handlers[0].after[0]"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/fix",
+          "op": "equals",
+          "value": "Use exactly handler, input and bind for each step."
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "refused-app-map-null-location",
+      "entry_path": "prompts/cli/runtime-outcome.prompt.md",
+      "operation": "outcomeFor",
+      "input": {
+        "answer": {
+          "command": "lint",
+          "state": "refused",
+          "engine_sha": "088d558b937300e552386b0f81e0bd5e2ce782fb",
+          "result": {
+            "problems_complete": true,
+            "tests": [
+              {
+                "path": "tests/walk/spike-world.json",
+                "verdict": "passed"
+              }
+            ],
+            "app_maps": [
+              {
+                "path": "app-map.json",
+                "verdict": "refused",
+                "problems": 1
+              }
+            ],
+            "refusals": [
+              {
+                "code": "lint-refused",
+                "reason": "The runtime refused this run (lint-refused).",
+                "fix": "Run pdd lint to look for problems. If it stays, tell the PDD team and give them the report link.",
+                "file": "app-map.json",
+                "at": null,
+                "where": "app-map.json",
+                "engine_message": "Lint refused this test or app map.",
+                "path": "app-map.json"
+              }
+            ],
+            "problems": [
+              {
+                "code": "invalid-after-step",
+                "severity": "error",
+                "cause": "test",
+                "file": "app-map.json",
+                "at": null,
+                "pointer": null,
+                "reason": "An after step has the wrong fields.",
+                "fix": "Use exactly handler, input and bind for each step.",
+                "source": "engine",
+                "where": "app-map.json",
+                "message": "An after step has the wrong fields. Use exactly handler, input and bind for each step."
+              }
+            ],
+            "capabilities": [
+              {
+                "path": "tests/walk/spike-world.json",
+                "report": {
+                  "schema_version": "prompt-runtime.program-capabilities.v1",
+                  "capability_version": "program-capabilities.v1@088d558b937300e552386b0f81e0bd5e2ce782fb",
+                  "engine_build": "088d558b937300e552386b0f81e0bd5e2ce782fb",
+                  "source": {
+                    "scenario_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+                    "closure_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+                    "files": [
+                      {
+                        "path": "spike/machine_box.prompt.md",
+                        "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+                      },
+                      {
+                        "path": "tests/walk/spike-world.json",
+                        "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+                      }
+                    ]
+                  },
+                  "complete": true,
+                  "verdict": "supported",
+                  "operations": [
+                    {
+                      "selection": {
+                        "step_id": "send-ping",
+                        "node_id": "machine_box",
+                        "prompt_path": "spike/machine_box.prompt.md",
+                        "operation": "send"
+                      },
+                      "feature": "ordinary",
+                      "binding_kind": "none",
+                      "resource_mode": "simulated",
+                      "evaluator_mode": "model",
+                      "execution_mode": "ordinary",
+                      "verdict": "supported",
+                      "reason_code": "supported"
+                    }
+                  ],
+                  "edges": [],
+                  "diagnostics": [],
+                  "provider_calls": 0,
+                  "resource_calls": 0
+                }
+              }
+            ],
+            "report": {
+              "lint": {
+                "complete": true
+              },
+              "program": {
+                "prompts": [
+                  {
+                    "path": "spike/machine_box.prompt.md",
+                    "admission_state": "draft"
+                  }
+                ],
+                "refused_prompts": []
+              }
+            }
+          }
+        },
+        "test": "tests/walk/spike-world.json",
+        "steps": [
+          {
+            "entry_path": "spike/machine_box.prompt.md"
+          }
+        ],
+        "kind": "lint",
+        "sourceFiles": [
+          {
+            "path": "app-map.json",
+            "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+          },
+          {
+            "path": "spike/machine_box.prompt.md",
+            "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+          },
+          {
+            "path": "tests/walk/spike-world.json",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          }
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/state",
+          "op": "equals",
+          "value": "refused"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-after-step"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/field",
+          "op": "equals",
+          "value": "app-map.json"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/fix",
+          "op": "equals",
+          "value": "Use exactly handler, input and bind for each step."
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "passing-app-map-control",
+      "entry_path": "prompts/cli/runtime-outcome.prompt.md",
+      "operation": "outcomeFor",
+      "input": {
+        "answer": {
+          "command": "lint",
+          "state": "passed",
+          "engine_sha": "088d558b937300e552386b0f81e0bd5e2ce782fb",
+          "result": {
+            "problems_complete": true,
+            "tests": [
+              {
+                "path": "tests/walk/spike-world.json",
+                "verdict": "passed"
+              }
+            ],
+            "app_maps": [
+              {
+                "path": "app-map.json",
+                "verdict": "passed",
+                "problems": 0
+              }
+            ],
+            "refusals": [],
+            "problems": [],
+            "capabilities": [
+              {
+                "path": "tests/walk/spike-world.json",
+                "report": {
+                  "schema_version": "prompt-runtime.program-capabilities.v1",
+                  "capability_version": "program-capabilities.v1@088d558b937300e552386b0f81e0bd5e2ce782fb",
+                  "engine_build": "088d558b937300e552386b0f81e0bd5e2ce782fb",
+                  "source": {
+                    "scenario_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+                    "closure_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+                    "files": [
+                      {
+                        "path": "spike/machine_box.prompt.md",
+                        "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+                      },
+                      {
+                        "path": "tests/walk/spike-world.json",
+                        "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+                      }
+                    ]
+                  },
+                  "complete": true,
+                  "verdict": "supported",
+                  "operations": [
+                    {
+                      "selection": {
+                        "step_id": "send-ping",
+                        "node_id": "machine_box",
+                        "prompt_path": "spike/machine_box.prompt.md",
+                        "operation": "send"
+                      },
+                      "feature": "ordinary",
+                      "binding_kind": "none",
+                      "resource_mode": "simulated",
+                      "evaluator_mode": "model",
+                      "execution_mode": "ordinary",
+                      "verdict": "supported",
+                      "reason_code": "supported"
+                    }
+                  ],
+                  "edges": [],
+                  "diagnostics": [],
+                  "provider_calls": 0,
+                  "resource_calls": 0
+                }
+              }
+            ],
+            "report": {
+              "lint": {
+                "complete": true
+              },
+              "program": {
+                "prompts": [
+                  {
+                    "path": "spike/machine_box.prompt.md",
+                    "admission_state": "draft"
+                  }
+                ],
+                "refused_prompts": []
+              }
+            }
+          }
+        },
+        "test": "tests/walk/spike-world.json",
+        "steps": [
+          {
+            "entry_path": "spike/machine_box.prompt.md"
+          }
+        ],
+        "kind": "lint",
+        "sourceFiles": [
+          {
+            "path": "app-map.json",
+            "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+          },
+          {
+            "path": "spike/machine_box.prompt.md",
+            "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+          },
+          {
+            "path": "tests/walk/spike-world.json",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          }
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/state",
+          "op": "equals",
+          "value": "passed"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

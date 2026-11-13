@@ -1,14 +1,15 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, symlinkSync, unlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { captureSource, executableInterfaceText, findTests, interfaceBlocks, preflight, proseSha256 } from '../src/runtime-preflight.mjs';
+import { captureSource, executableInterfaceText, findTests, interfaceBlocks, preflight, proseSha256 } from '../src/runtime-seam.mjs';
 const bin = join(process.cwd(), 'bin/pdd.mjs');
 const roots = [];
 after(() => { for (const root of roots) rmSync(root,{recursive:true,force:true}); });
 function project({ resources = [], expected = 'hello\n', implementation = {kind:'cli',command:'node app.mjs'}, story = '1. A result.', change = () => {}, interfaceChange = () => {}, app = "process.stdin.setEncoding('utf8');let s='';for await (const c of process.stdin) s+=c;process.stdout.write(process.argv[2]+s);\n" } = {}) {
- const root=mkdtempSync(join(process.cwd(),'.compiled-test-')); roots.push(root); spawnSync('git',['init','-q',root]);
+ const root=mkdtempSync(join(tmpdir(),'pdd-compiled-test-')); roots.push(root); spawnSync('git',['init','-q',root]);
  for(const d of ['prompts','tests','user_stories']) mkdirSync(join(root,d));
  writeFileSync(join(root,'app.mjs'),app);
  const iface = {status:'draft',prose_sha256:'HASH',entries:[{operation:'main',implementation,input_schema:{type:'object',properties:{argv:{type:'array',items:{type:'string'}},stdin:{type:'string'}},required:['argv'],additionalProperties:false},result_schema:{type:'object',properties:{stdout:{type:'string'},stderr:{type:'string'},exit_code:{type:'integer'}},required:['stdout','stderr','exit_code'],additionalProperties:false},errors:['bad-input']}],resources,conventions:[{path:'/entries/0/input_schema',convention:'cli'},{path:'/entries/0/result_schema',convention:'cli'}],calls:[],limits:{max_steps:4,max_model_calls:2}};
