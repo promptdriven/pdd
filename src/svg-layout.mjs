@@ -1,6 +1,7 @@
-// Generated from prompts/cli/svg-layout.prompt.md (sha256: f0725b22b7b6aacbdedc93d1ba5ccbf108e0187b017f4001f81414edf4c63044).
+// Generated from prompts/cli/svg-layout.prompt.md (sha256: fef7dfa1da080ce8a19192c6603bd269a1932ad202992f582907ee034edff43e).
 import { lstatSync, readFileSync } from 'node:fs';
 import { dirname, relative, resolve, sep } from 'node:path';
+import { lintScreenDesign } from './screen-design-check.mjs';
 import { runtimeWorkspaceSlice, workspace } from './runtime-seam.mjs';
 
 const { requireRuntimePath } = runtimeWorkspaceSlice();
@@ -106,15 +107,17 @@ const mentioned = (prose, value) => new RegExp(`(^|[^\\p{L}\\p{N}_])${escaped(no
 
 export function lintSvgLayouts({ root, files, promptPaths }) {
   const policy=workspace.policy({root});files=files.filter(path=>workspace.allows(policy,path));
-  const warnings = [], add = (prompt, drawing, part, reason) => warnings.push({ key: `${prompt}\0${drawing}\0${part}\0${reason}`, text: `Warning: SVG layout ${prompt} -> ${drawing}: ${part}: ${reason}.` });
+  const warnings = [], promptRecords = [], add = (prompt, drawing, part, reason) => warnings.push({ key: `${prompt}\0${drawing}\0${part}\0${reason}`, text: `Warning: SVG layout ${prompt} -> ${drawing}: ${part}: ${reason}.` });
   for (const prompt of [...new Set(promptPaths ?? files.filter(path => path.endsWith('.prompt.md')))].sort()) {
     let source;
     try { source = markupTokens(safeRead(root, prompt)).map(token => token.startsWith('<!--') ? '\n' : token).join(''); } catch (error) { add(prompt, '(unread)', 'source', error.message); continue; }
     source = source.replace(/<details\b[^>]*>\s*<summary[^>]*>[^\n]*Runtime interface[^\n]*<\/summary>[\s\S]*?<\/details>/gi, '')
       .replace(/(^##+ Runtime interface[^\n]*\n)[\s\S]*?(?=^##+ |$(?![\s\S]))/gmi, '');
+    const drawings = [];
     for (const link of links(source).sort()) {
       let drawing;
       try { drawing = relative(root, resolve(root, dirname(prompt), decodeURIComponent(link))).split(sep).join('/'); } catch { drawing = link; }
+      if (drawing && drawing !== '..' && !drawing.startsWith('../')) drawings.push(drawing);
       let parts;
       try { parts = partsOf(safeRead(root, drawing)); } catch (error) { add(prompt, drawing, 'drawing', error.message); continue; }
       const appearance = source.match(/^##+ Appearance\b[^\n]*\n([\s\S]*?)(?=^##? |$(?![\s\S]))/m)?.[1] || '';
@@ -130,14 +133,58 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
       // A data/root id is not itself a control declaration. Keep the control's
       // whole sentence so wrapped Markdown does not lose its named ids.
       for (const sentence of source.split(/(?<=[.!?])\s+|\n\s*\n/).filter(text => /\b(?:buttons?|controls?)\b/i.test(text))) {
-        for (const id of sentence.matchAll(/\b(?:id|ids|value|values)\s*(?:=|:)?\s*["'`]+([\w-]+)["'`]+/gi)) controls.add(id[1]);
-        for (const id of sentence.matchAll(/`([\w]+-[\w-]+)`/g)) controls.add(id[1]);
-        for (const label of sentence.matchAll(/["“]([^"”]+)["”]/g)) controls.add(label[1]);
+        const cleaned = sentence
+          .replace(/\b(?:class|type|name|role|style|(?:aria|data)-[\w-]+)\s*(?:=|:)\s*(?:"[^"\n]*"|'[^'\n]*'|`[^`\n]*`)/gi, ' ')
+          .replace(/`\.[\w-]+`/g, ' ')
+          .replace(/(?<![\w-])\.[\w-]+/g, ' ');
+        for (const id of cleaned.matchAll(/\b(?:id|ids|value|values)\s*(?:=|:)?\s*["'`]+([\w-]+)["'`]+/gi)) controls.add(id[1]);
+        for (const id of cleaned.matchAll(/`([\w]+-[\w-]+)`/g)) controls.add(id[1]);
+        for (const label of cleaned.matchAll(/["“]([^"”]+)["”]/g)) controls.add(label[1]);
       }
       if (/\b(?:(?:four|4)\s+)?(?:touch-sized\s+)?direction(?:al)?\s+(?:buttons|controls)\b/i.test(source)) {
         for (const direction of ['left', 'right', 'up', 'down']) if (!parts.some(part => mentioned(part.value.replace(/[-_]/g, ' '), direction))) controls.add(`move-${direction}`);
       }
       for (const control of controls) if (!parts.some(part => normalize(part.value) === normalize(control))) add(prompt, drawing, `control "${control}"`, 'prompt control absent from drawing');
+    }
+    promptRecords.push({ path: prompt, prose: source, drawings });
+  }
+  if (promptRecords.some(record => record.drawings.length > 0)) {
+    const mapPaths = new Set(files.filter(path => /(?:^|\/)app-map\.json$/.test(path)));
+    for (const testFile of files.filter(path => /^(?:tests?|.*\/tests?)\/.*\.json$/.test(path))) {
+      try {
+        const doc = JSON.parse(safeRead(root, testFile));
+        if (Array.isArray(doc?.app_maps)) for (const candidate of doc.app_maps) if (typeof candidate === 'string' && workspace.allows(policy, candidate)) mapPaths.add(candidate);
+      } catch { /* non-scenario or unreadable JSON */ }
+    }
+    const appMaps = [], cssPaths = new Set(), inspectedPrompts = new Set(promptRecords.map(record => record.path));
+    for (const mapPath of [...mapPaths].sort()) {
+      try {
+        const doc = JSON.parse(safeRead(root, mapPath));
+        if (!doc || typeof doc !== 'object' || doc.schema_version !== 'prompt-runtime.app-map.v1' || typeof doc.name !== 'string' || !doc.name) continue;
+        const topSheets = Array.isArray(doc.stylesheets) ? doc.stylesheets.filter(item => typeof item === 'string') : [];
+        const screens = (Array.isArray(doc.screens) ? doc.screens : [])
+          .filter(screen => screen && typeof screen === 'object' && typeof screen.id === 'string' && typeof screen.prompt_path === 'string' && typeof screen.source === 'string' && typeof screen.format === 'string')
+          .map(screen => ({
+            id: screen.id,
+            prompt_path: screen.prompt_path,
+            source: screen.source,
+            format: screen.format,
+            stylesheets: Array.isArray(screen.stylesheets) ? screen.stylesheets.filter(item => typeof item === 'string') : [],
+          }));
+        for (const screen of screens) {
+          if (screen.source === 'operation' && screen.format === 'html' && inspectedPrompts.has(screen.prompt_path)) {
+            for (const cssPath of [...topSheets, ...screen.stylesheets]) cssPaths.add(cssPath);
+          }
+        }
+        appMaps.push({ path: mapPath, stylesheets: topSheets, screens });
+      } catch { /* unreadable or non-app-map JSON */ }
+    }
+    if (appMaps.length) {
+      const stylesheets = [...cssPaths].sort().map(cssPath => {
+        try { return { path: cssPath, content: safeRead(root, cssPath), error: null }; }
+        catch (error) { return { path: cssPath, content: null, error: error.message }; }
+      });
+      for (const text of lintScreenDesign({ appMaps, stylesheets, prompts: promptRecords }).warnings) warnings.push({ key: text, text });
     }
   }
   return [...new Map(warnings.sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0).map(warning => [warning.text, warning.text])).values()];

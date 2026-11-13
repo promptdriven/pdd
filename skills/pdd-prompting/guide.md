@@ -199,6 +199,17 @@ designs. Keep meaningful labels readable at displayed size. A focused detail vie
 may clarify a necessary label or region while retaining its ownership and
 relationship to the overview; it must not duplicate behavioral policy.
 
+Tie an HTML screen prompt (`"source": "operation"`, `"format": "html"`) to its
+approved `.ui.svg` design in two places: list its CSS file(s) under `"stylesheets"`
+in `app-map.json`, and name the CSS classes from that stylesheet on the elements
+and regions in the screen prompt (keeping framework/CSS classes out of the
+`.ui.svg` itself). Without a stylesheet in `app-map.json` and matching class names
+in the prompt, returned HTML renders with bare browser defaults even when its ids
+and words match the drawing. Keep formatted display strings (such as human-readable
+dates and amounts) in the prompt contract rather than raw storage timestamps. SVG
+mockup screens (`"source": "mockup"`, `"format": "svg"`) carry their own SVG paint
+and need no stylesheet in `app-map.json`.
+
 ## Readable organization without duplicate rules
 
 Each rule has one authoritative expression. Operation references contain the
