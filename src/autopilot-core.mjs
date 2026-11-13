@@ -9,11 +9,13 @@ import { jobEnvironment, startAgentJob, readAgentJob, snapshotAgentJob, cleanupA
 import { fileReport, listReportDrafts, reportKind } from './autopilot-reports.mjs';
 import { checkAutopilotBase } from './autopilot-base.mjs';
 import { redactSecrets } from './secret-redaction.mjs';
-import { interfaceBlocks, readPrompt, promptRefusal, gitFiles } from './runtime-preflight.mjs';
+import { runtimePreflightSlice } from './runtime-seam.mjs';
 import { findOwners, promptHeaderHash, resolveOwners } from './file-owner.mjs';
 import { readPromptApprovals } from './approval-policy.mjs';
 import { intakeTick } from './autopilot-intake.mjs';
 import { slotCount, GUARD } from './machine-guard.mjs';
+
+const { interfaceBlocks, readPrompt, promptRefusal, gitFiles } = runtimePreflightSlice();
 
 const MIN = 60 * 1000, HOUR = 60 * MIN, DAY = 24 * HOUR, CLAIM_EXPIRES = 4 * HOUR, STRIKES = 3, MAX_PAUSE_HOURS = 8, NO_RESULT_LIMIT = 3, CLAIM_TRIES = 3, NO_CI_AFTER = 10 * MIN, END_TRIES = 6;
 const REPORT_LABELS = ['pdd:runtime', 'pdd:autopilot-report'];
@@ -1501,12 +1503,12 @@ async function changedFiles(ctx, job, head = job.agentHead ?? job.head) {
 // With `base`, only the rows: the saved checks of any folder of this machine (the newest 200 batches) against a clean
 // checkout of the merge base (#3227 fix 1, coverage must not go down).
 async function savedRuntime({ root, tree, base = false }, ctx) {
-  const { savedStoryEvidence } = await import('./runtime-client.mjs');
+  const { savedStoryEvidence } = await import('./runtime-seam.mjs');
   if (base) {
     const saved = await savedStoryEvidence({ root, comparisonRoot: tree, withTests: true, anyRoot: true, limit: 200 }, { env: ctx.ports.env ?? process.env });
     return { stories: saved.stories ?? [], storyFiles: [], tests: [] };
   }
-  const { findTests, captureSource } = await import('./runtime-preflight.mjs');
+  const { findTests, captureSource } = await import('./runtime-seam.mjs');
   const found = findTests({ root: tree, excludeFixtureProjects: true });
   const saved = await savedStoryEvidence({ root, comparisonRoot: tree, withTests: true }, { env: ctx.ports.env ?? process.env });
   const tests = found.tests.map(test => ({ path: test.path, files: Array.isArray(test.files) && test.files.length ? test.files : [test.path],
@@ -1523,7 +1525,7 @@ async function savedRuntime({ root, tree, base = false }, ctx) {
 // B1: the consumer closure. Each test of the head alone, in its own error boundary; a test that reaches a changed
 // prompt makes each of its Stories a consumer. Exported for the timing test on pdd itself.
 export async function storyReach(tree, tests, prompts, capture = null) {
-  const take = capture ?? (await import('./runtime-preflight.mjs')).captureSource, stories = new Set(), errors = [];
+  const take = capture ?? (await import('./runtime-seam.mjs')).captureSource, stories = new Set(), errors = [];
   for (const test of tests) {
     if (test.error || !(test.stories ?? []).length) continue;
     try { if ((take(tree, { tests: [test.path], appMap: null }).files ?? []).some(file => prompts.includes(file.path))) for (const story of test.stories) stories.add(story); }
@@ -2292,7 +2294,7 @@ async function runtimeResendable(ctx, job, body) {
   const notRun = lines.filter(line => line.verdict === 'not-run');
   if (notRun.length && !lines.some(line => line.verdict === 'other')) {
     try {
-      const read = ctx.ports.resendChecks ?? (async input => (await import('./runtime-client.mjs')).resendableStoryChecks(input, { env: ctx.ports.env ?? process.env }));
+      const read = ctx.ports.resendChecks ?? (async input => (await import('./runtime-seam.mjs')).resendableStoryChecks(input, { env: ctx.ports.env ?? process.env }));
       found = await read({ root: job.worktree, since: job.started ?? 0 });
     } catch (error) { ctx.warn(`Autopilot core could not read the saved Runtime checks of #${job.issue}: ${error.message}`); }
   }
@@ -2398,7 +2400,7 @@ async function runtimeResend(ctx, job, pr) {
   }
   if (Number.isFinite(w.readAt) && now - w.readAt < RUNTIME_READ_EVERY) return hold(w.state === 'waiting' ? 'waiting' : 'sending', w.readAt);
   let health;
-  try { health = await (ctx.ports.runtimeHealth ?? (async () => (await import('./runtime-client.mjs')).checkRuntimeHealth({ env: ctx.ports.env ?? process.env })))(); }
+  try { health = await (ctx.ports.runtimeHealth ?? (async () => (await import('./runtime-seam.mjs')).checkRuntimeHealth({ env: ctx.ports.env ?? process.env })))(); }
   catch (error) { health = { state: 'unavailable', detail: oneLine(error.message, 200) }; }
   w.readAt = now;
   if (health?.detail === 'maintenance') {
@@ -2688,7 +2690,7 @@ async function untestedStoryReds(ctx, job) {
     const changed = await changedFiles(ctx, job, head);
     if (changed.some(file => file.endsWith('.md'))) {
       const tree = await treeAt(ctx, job, 'agent', head);
-      const found = await (ctx.ports.untestedStories ?? (async root => { const { findTests } = await import('./runtime-preflight.mjs'); const f = findTests({ root, excludeFixtureProjects: true }); return { untested: f.untested, visible: f.visible }; }))(tree);
+      const found = await (ctx.ports.untestedStories ?? (async root => { const { findTests } = await import('./runtime-seam.mjs'); const f = findTests({ root, excludeFixtureProjects: true }); return { untested: f.untested, visible: f.visible }; }))(tree);
       const stories = (found?.untested ?? []).filter(row => changed.includes(row.storyPath));
       const prompts = changed.filter(file => file.endsWith('.prompt.md')), visible = found?.visible ?? new Set(gitFiles(tree));
       const kind = path => { try { return readPrompt(tree, visible, path).interface?.kind ?? null; } catch { return null; } };

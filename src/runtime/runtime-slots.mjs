@@ -1,10 +1,9 @@
-// Generated from prompts/cli/runtime-slots.prompt.md (sha256: d43d62233b3109774b127669b7dc2bb6da6d6477df5a27d14ea51915750f38ce).
+// Generated from prompts/cli/runtime-slots.prompt.md (sha256: e0182fc1c83cee3fc27303922cc5a393577f34d650f65610324ccaa7ca06c669).
 import { chmodSync, closeSync, lstatSync, mkdirSync, linkSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync, fsyncSync, utimesSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { runtimeOrigin } from './runtime-client.mjs';
-import { NAMES } from './command-catalog.mjs';
 
 const HEARTBEAT_MS = 5000, EXPIRED_MS = 60_000, LEASE_MS = 1_800_000, PROBE_MS = 15_000;
 const unavailable = error => Object.assign(new Error(`Local interpreter state unavailable: ${String(error?.message ?? error).split('\n')[0]}`), { code: 'local-state-unavailable' });
@@ -376,13 +375,17 @@ export async function listRuntimeJobs(options, ports = {}) {
   return { jobs: [...jobs].sort((a, b) => (a.state === 'active' ? 0 : 1) - (b.state === 'active' ? 0 : 1) || order(a, b)) };
 }
 // The saved kind stays `check`, `lint` or `try` (older pdd versions read and write these records); only the printed word is the command name.
-const KIND_WORDS = Object.freeze({ check: NAMES.test, lint: NAMES.lint, try: NAMES.simulate });
-export async function runJobs({ env = process.env } = {}, { stdout = process.stdout, stderr = process.stderr, files, now = Date.now } = {}) {
+const DEFAULT_COMMANDS = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate' });
+export async function runJobs({ env = process.env, client, commands } = {}, { stdout = process.stdout, stderr = process.stderr, files, now = Date.now } = {}) {
+  const words = client?.commands ?? commands ?? DEFAULT_COMMANDS;
+  const kindWords = Array.isArray(words)
+    ? { check: words[0] ?? 'test', lint: words[1] ?? 'lint', try: words[2] ?? 'simulate' }
+    : { check: words.test ?? 'test', lint: words.lint ?? 'lint', try: words.simulate ?? 'simulate' };
   try {
     const stateDir = resolve(env.PDD_STATE_DIR || join(env.HOME || homedir(), '.pdd', 'runtime'));
     const { jobs } = await listRuntimeJobs({ stateDir, origin: runtimeOrigin(env) }, { files });
     if (!jobs.length) stdout.write('No local interpreter jobs.\n');
-    for (const row of jobs) stdout.write(`${row.state} ${KIND_WORDS[row.kind] ?? row.kind} · PID ${row.pid} · ${Math.max(0, Math.floor((now() - row.started_at) / 1000))} s · ${row.id} · ${row.request_ids.join(', ') || 'no request yet'}\n`);
+    for (const row of jobs) stdout.write(`${row.state} ${kindWords[row.kind] ?? row.kind} · PID ${row.pid} · ${Math.max(0, Math.floor((now() - row.started_at) / 1000))} s · ${row.id} · ${row.request_ids.join(', ') || 'no request yet'}\n`);
     return 0;
   } catch (error) { stderr.write(`${String(error.message).split('\n')[0]}\n`); return 5; }
 }

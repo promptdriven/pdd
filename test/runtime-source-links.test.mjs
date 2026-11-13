@@ -2,9 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { captureSource, sourceFilePort } from '../src/runtime-preflight.mjs';
-import { runContracts } from '../src/contracts.mjs';
-import { runCheck } from '../src/runtime-client.mjs';
+import { captureSource, sourceFilePort } from '../src/runtime-seam.mjs';
+import { runContracts } from '../src/runtime-seam.mjs';
+import { runCheck } from '../src/runtime-seam.mjs';
 import { harbor, fakeRuntime, portsFor, sha } from './runtime-fake.mjs';
 
 const ORDER = 'tests/place-order.json';

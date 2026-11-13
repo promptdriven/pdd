@@ -1,7 +1,7 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { checkInput } from '../src/runtime-preflight.mjs';
+import { checkInput } from '../src/runtime-seam.mjs';
 
 for (const [value, pattern] of [['x', '[^]'], ['x', '[]|x'], ['a\r', '^a$'], ['a\n', '^a$']]) {
   test(`ONEOF2500 unsupported cross-engine evidence ${JSON.stringify([value, pattern])}`, () => {

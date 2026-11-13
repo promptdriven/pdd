@@ -8,8 +8,8 @@ import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { fillHashes } from '../src/runtime-preflight.mjs';
-import { runCheck } from '../src/runtime-client.mjs';
+import { fillHashes } from '../src/runtime-seam.mjs';
+import { runCheck } from '../src/runtime-seam.mjs';
 
 // Independent native expectations were fixed in prompt space. Do not rewrite them.
 const vectors = JSON.parse(fs.readFileSync(new URL('./fixtures/fill-hash/compact-cases.json', import.meta.url)));

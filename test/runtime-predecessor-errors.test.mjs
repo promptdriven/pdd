@@ -4,8 +4,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { projectAnswer, renderJson, renderText, exitCodeFor, summaryLine } from '../src/runtime-output.mjs';
-import { runCheck } from '../src/runtime-client.mjs';
+import { projectAnswer, renderJson, renderText, exitCodeFor, summaryLine, runCheck } from '../src/runtime-seam.mjs';
 import { harbor, fakeRuntime, root, sink, TOKEN } from './runtime-fake.mjs';
 
 // Independently authored synthetic inputs. These tests do not replay the private

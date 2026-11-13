@@ -1,5 +1,5 @@
 import {loadRuntimeWorkspace,allowsRuntimePath} from './runtime-workspace.mjs';
-// Generated from prompts/cli/contracts.prompt.md (sha256: 0b4cb338f8a9782a1e3c19619ce4209fea61c2645db066583ca6814fed353b0a).
+// Generated from prompts/cli/contracts.prompt.md (sha256: cf5871b996696fe6a67c650e008cc651c150441ecd6d21c15645302f8a1d4954).
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fchmodSync, fstatSync, lstatSync, openSync, renameSync, unlinkSync, writeSync } from 'node:fs';
@@ -13,7 +13,8 @@ const line = (stream,text) => stream.write(`${text}\n`);
 const finite = error => String(error.message ?? error).replace(/[\r\n\x00-\x1f\x7f]/g,' ').slice(0,4000);
 const snapshotMap = references => new Map(references.map(ref=>[`${ref.kind}:${ref.target}`,ref.value_json]));
 
-export function runContracts({words = [],options = {},cwd = process.cwd()} = {}, {env = process.env,stdout = process.stdout,stderr = process.stderr} = {}) {
+export function runContracts({words = [],options = {},cwd = process.cwd()} = {}, ports = {}) {
+  const {env = process.env,stdout = process.stdout,stderr = process.stderr} = ports;
   if (words.length>1 || words.length===1 && words[0]!=='sync' || Object.keys(options).some(key=>key!=='--write') || options['--write']!==undefined && (words[0]!=='sync' || options['--write']!==true)) {
     line(stderr,'Use pdd contracts or pdd contracts sync [--write].'); return 2;
   }
@@ -21,7 +22,7 @@ export function runContracts({words = [],options = {},cwd = process.cwd()} = {},
   if (git.status!==0 || !git.stdout.trim()) { line(stderr,'pdd contracts works in a Git repository.'); return 2; }
   const root=git.stdout.trim();
   try {
-    const access=createStrictSourceAccess(root);
+    const access=createStrictSourceAccess(root,undefined,ports);
     const workspace=loadRuntimeWorkspace({root}), visible=new Set(gitFiles(root).filter(path=>allowsRuntimePath(workspace,path))), files=access.sourceFilePort(visible);
     const warnings = [];
     const readDiscovered = path => {
@@ -48,6 +49,7 @@ export function runContracts({words = [],options = {},cwd = process.cwd()} = {},
         selectedReferences.push(...captured.references);
         for (const story of captured.stories) stories.set(story.story_path,story);
       } catch (error) {
+        if (error?.unboundPort) throw error;
         const cause=finite(error); warnings.push(`${test.path}: footprint unavailable: ${cause}`);
         if (typeof test.doc?.story_path==='string') stories.set(test.doc.story_path,{story_path:test.doc.story_path,tests:[test.path],selectedUnavailable:true,unavailable:[{path:test.path,cause}]});
       }
@@ -108,7 +110,7 @@ export function runContracts({words = [],options = {},cwd = process.cwd()} = {},
       line(stdout,`Sync: ${changed} files updated, ${failures} refused.`);
       return failures ? 4 : 0;
     }
-    const history=readContractHistory({root,env});
+    const history=readContractHistory({root,env},ports);
     for (const warning of history.warnings) line(stderr,`Warning: ${warning}`);
     const unknownStories=capture.stories.some(story=>story.unavailable?.length);
     const unknownUses=prepared.length<promptPaths.length || unknownStories;
@@ -132,5 +134,5 @@ export function runContracts({words = [],options = {},cwd = process.cwd()} = {},
     }
     if (!catalog.records.length) line(stdout,'No shared contract records found.');
     return 0;
-  } catch (error) { line(stderr,finite(error)); return error.exitCode ?? (error.code?.startsWith('contract-') || error.code==='seed-invalid' ? 4 : 5); }
+  } catch (error) { if (error?.unboundPort) throw error; line(stderr,finite(error)); return error.exitCode ?? (error.code?.startsWith('contract-') || error.code==='seed-invalid' ? 4 : 5); }
 }

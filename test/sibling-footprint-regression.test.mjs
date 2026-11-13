@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import fs, { mkdirSync, readFileSync, writeFileSync, rmSync, truncateSync, symlinkSync } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
-import { captureSource, findTests, interfaceBlocks, gitFiles, proseSha256 } from '../src/runtime-preflight.mjs';
-import { expandSource } from '../src/contract-refs.mjs';
-import { runContracts } from '../src/contracts.mjs';
-import { runCheck, runTry, readContractHistory } from '../src/runtime-client.mjs';
+import { captureSource, findTests, interfaceBlocks, gitFiles, proseSha256 } from '../src/runtime-seam.mjs';
+import { expandSource } from '../src/runtime/contract-refs.mjs';
+import { runContracts } from '../src/runtime-seam.mjs';
+import { runCheck, runTry, readContractHistory } from '../src/runtime-seam.mjs';
 import { harbor, fakeRuntime, portsFor, PLACE, sink } from './runtime-fake.mjs';
 
 // Expected observations are the eight reviewed native-only case declarations.

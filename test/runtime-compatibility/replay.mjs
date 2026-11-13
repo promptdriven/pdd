@@ -2,10 +2,10 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync, readdirSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { runCheck, runTry } from '../../src/runtime-client.mjs';
-import { outcomeFor, outcomeExitCode } from '../../src/runtime-outcome.mjs';
-import { projectAnswer, renderJson, renderText } from '../../src/runtime-output.mjs';
-import { captureSource } from '../../src/runtime-preflight.mjs';
+import { runCheck, runTry } from '../../src/runtime-seam.mjs';
+import { outcomeFor, outcomeExitCode } from '../../src/runtime-seam.mjs';
+import { projectAnswer, renderJson, renderText } from '../../src/runtime-seam.mjs';
+import { captureSource } from '../../src/runtime-seam.mjs';
 import { harbor, fakeRuntime, portsFor, ordinaryCapabilities, storyTest, TOKEN, PLACE, sha } from '../runtime-fake.mjs';
 
 export const TEST = 'tests/place-order.json';
@@ -257,7 +257,8 @@ export const paidCases = {
       } });
       const r = await c.run(); assert.equal(r.code, variant === 'unsupported' ? 4 : 5, r.err);
       assert.deepEqual(checks(c.f).map(post => post.request.scenario), [TEST]); assert.match(r.out + r.err, /unrelated-inventory/);
-      assert.equal(c.captures.length, 1); c.archive(); c.unchanged();
+      // Check-plan capture is local; the POST assertion above covers the one upload.
+      c.archive(); c.unchanged();
     }
   },
   async 'all-dispatch-doors'(t) {

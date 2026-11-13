@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { describeCallPreflight } from '../src/lint-call-preflight.mjs';
+import { describeCallPreflight } from '../src/runtime/lint-call-preflight.mjs';
 
 const scenario = JSON.parse(readFileSync(new URL('./runtime/lint-call-preflight.json', import.meta.url)));
 for (const step of scenario.steps) test(`issue820 replay ${step.step_id}`, () => {

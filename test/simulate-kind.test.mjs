@@ -2,12 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runTry } from '../src/runtime-client.mjs';
+import { runTry } from '../src/runtime-seam.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
 import { renderHelp } from '../src/pdd-cli.mjs';
 import { PUBLIC_COMMAND_MANIFEST } from '../src/command-catalog.mjs';
-import { openCli } from '../src/try-doors.mjs';
-import { proseSha256, captureSource, findTests } from '../src/runtime-preflight.mjs';
+import { openCli } from '../src/runtime-seam.mjs';
+import { proseSha256, captureSource, findTests } from '../src/runtime-seam.mjs';
 import { harbor, fakeRuntime, portsFor } from './runtime-fake.mjs';
 
 // Synthetic expectations come from #2760: no real interpreter, browser or shell.

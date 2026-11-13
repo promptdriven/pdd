@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { runTry } from '../src/runtime-client.mjs';
+import { runTry } from '../src/runtime-seam.mjs';
 import { harbor, fakeRuntime, portsFor } from './runtime-fake.mjs';
 
 const defect = 'Defect: Try lint in an agent shell stops waiting after 90 seconds instead of sharing the five-minute setup allowance.';

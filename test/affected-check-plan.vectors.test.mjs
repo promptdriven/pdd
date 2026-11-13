@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {selectCheckTests,baselineReport,checkPlanResults} from '../src/runtime-check-plan.mjs';
+import {selectCheckTests,baselineReport,checkPlanResults} from '../src/runtime-seam.mjs';
 
 const exact = text => JSON.parse(text,(key,value,context)=>typeof value === 'number'
   && /^-?(?:0|[1-9][0-9]*)$/.test(context.source) && !Number.isSafeInteger(value) ? BigInt(context.source) : value);

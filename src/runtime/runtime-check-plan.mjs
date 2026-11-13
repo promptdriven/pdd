@@ -1,10 +1,26 @@
-// Generated from prompts/cli/runtime-check-plan.prompt.md (sha256: 0258152105f3d2b9106820f3269dc0d109db5daa41cabeac096fc37db4b2f5a3).
+// Generated from prompts/cli/runtime-check-plan.prompt.md (sha256: 91af25146951fc7b920d95affd1f459b5d92dbe5c9f2511f6bfe1b3865e06bc4).
 import { spawnSync } from 'node:child_process';
-import { posix } from 'node:path';
+import { isAbsolute, posix } from 'node:path';
 import { captureSource, readPrompt, sourceFilePort, promptMarkdownTargets } from './runtime-preflight.mjs';
 import { resultOutcome } from './runtime-outcome.mjs';
-import { headerPrompts } from './file-owner.mjs';
 import { allowsRuntimePath, loadRuntimeWorkspace } from './runtime-workspace.mjs';
+
+const HEAD = 4096, LINE = 1100;
+const HEADER = /^\s*(?:\/\/+|#+|--|;+|\/\*+|\*+|<!--|"""|''')?\s*Generated from (\S+\.prompt\.md)(?: \(sha256: ([a-f0-9]{64})\))?\.?\s*(?:\*\/|-->|"""|''')?\s*$/;
+const bytesOf = content => typeof content === 'string' ? Buffer.from(content, 'utf8') : content;
+const decode = (content, limit) => content ? new TextDecoder().decode(bytesOf(content).subarray(0, limit)) : '';
+const canonicalHeaderPath = value => typeof value === 'string' && value.trim().length > 0 && value.length <= 1000 && !isAbsolute(value)
+  && !/[\\\x00-\x1f\x7f]/.test(value) && !value.split('/').some(part => !part || part === '.' || part === '..' || part.toLowerCase() === '.git');
+export function defaultHeaderPrompts(content) {
+  if (!content) return [];
+  const bytes = bytesOf(content), lines = decode(bytes, HEAD).split(/\r?\n/), seen = new Set();
+  if (bytes.length > HEAD) lines.pop();
+  for (const line of lines.filter(line => line.length <= LINE)) {
+    const match = HEADER.exec(line);
+    if (match && canonicalHeaderPath(match[1])) seen.add(match[1]);
+  }
+  return [...seen];
+}
 
 const sorted = values => [...new Set(values)].sort();
 const unique = values => [...new Set(values)];
@@ -16,6 +32,7 @@ const gitRead = (root, args) => {
 
 export function buildCheckPlan({ root, found, selected, rows = [], full, base = 'HEAD', affected = false, allowMissingInterfaces = false }, ports = {}) {
   const git = args => (ports.git ?? gitRead)(root, args);
+  const readHeaders = ports.headerPrompts ?? defaultHeaderPrompts;
   let changed = null;
   try {
     changed = sorted([...git(['diff', '--name-only', '-z', '--no-renames', base, '--']).split('\0'),
@@ -43,7 +60,7 @@ export function buildCheckPlan({ root, found, selected, rows = [], full, base = 
       // Validate the permitted source path even when its working file is absent.
       if (deleted.has(path)) source.stat({path});
       const content = deleted.has(path) ? git(['show', `${base}:${path}`]) : source.read({path}).content;
-      for (const prompt of headerPrompts(content)) own(prompt, path);
+      for (const prompt of readHeaders(content)) own(prompt, path);
     } catch { /* Unproved deleted ownership keeps target coverage conservative. */ }
   }
   if (changed?.length && found.visible.has('pdd-bindings.json')) {
@@ -94,7 +111,7 @@ export function buildCheckPlan({ root, found, selected, rows = [], full, base = 
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(test);
   }
-  const capture = ports.capture ?? captureSource;
+  const capture = ports.capture ?? ((r, opts) => captureSource(r, opts, ports));
   let footprints = new Map();
   const targets = new Map();
   const rememberTargets = captured => {
@@ -105,7 +122,7 @@ export function buildCheckPlan({ root, found, selected, rows = [], full, base = 
   try {
     const captured = rememberTargets(capture(root,{tests:selected.map(test=>test.path),appMap:null,excludeFixtureProjects:full,...captureExtra}));
     footprints = new Map((captured.stories ?? []).map(story=>[story.story_path,story]));
-  } catch { /* Keep a broken Story from hiding other Stories' closures. */ }
+  } catch (error) { if (error?.unboundPort) throw error; /* Keep a broken Story from hiding other Stories' closures. */ }
   const classified = [...groups].map(([story_path, tests]) => {
     let closure = [], unavailable = false;
     const footprint = footprints.get(story_path);
@@ -113,7 +130,7 @@ export function buildCheckPlan({ root, found, selected, rows = [], full, base = 
       if (footprint?.unavailable) unavailable = true;
       else closure = sorted((footprint?.files ?? rememberTargets(capture(root, {tests:tests.map(test=>test.path),appMap:null,excludeFixtureProjects:full,...captureExtra})).files).map(file=>file.path));
     }
-    catch { unavailable = true; }
+    catch (error) { if (error?.unboundPort) throw error; unavailable = true; }
     return {story_path,tests,closure,unavailable};
   });
   let conservative = '';
@@ -147,7 +164,7 @@ export function buildCheckPlan({ root, found, selected, rows = [], full, base = 
     for (const path of changed.filter(permitted)) {
       const bound = bindings.filter(item=>item?.module === path && typeof item.prompt === 'string').map(item=>item.prompt);
       const inspectOwners = content => {
-        const named = unique([...bound,...headerPrompts(content)]);
+        const named = unique([...bound,...readHeaders(content)]);
         if (!named.length || named.some(prompt=>!permitted(prompt) || !found.visible.has(prompt)))
           conservative ||= `${deleted.has(path)?'deleted':'implementation'} ownership unavailable: ${path}; conservative selection`;
         for (const prompt of named) if (permitted(prompt)) own(prompt,path);
@@ -157,7 +174,7 @@ export function buildCheckPlan({ root, found, selected, rows = [], full, base = 
         // current header was removed. Apply permission before either read.
         const current = deleted.has(path) ? null : source.read({path}).content;
         const previous = old.has(path) ? git(['show',`${base}:${path}`]) : null;
-        if (!implementation(path) && !bound.length && !headerPrompts(previous).length && !headerPrompts(current).length) continue;
+        if (!implementation(path) && !bound.length && !readHeaders(previous).length && !readHeaders(current).length) continue;
         if (current !== null) inspectOwners(current);
         if (previous !== null) inspectOwners(previous);
         else if (deleted.has(path)) conservative ||= `deleted ownership unavailable: ${path}; conservative selection`;

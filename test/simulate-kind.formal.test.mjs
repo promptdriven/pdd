@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runTry } from '../src/runtime-client.mjs';
-import { proseSha256 } from '../src/runtime-preflight.mjs';
+import { runTry } from '../src/runtime-seam.mjs';
+import { proseSha256 } from '../src/runtime-seam.mjs';
 import { harbor, fakeRuntime, portsFor } from './runtime-fake.mjs';
 
 const object = properties => ({ type: 'object', properties, required: Object.keys(properties), additionalProperties: false });

@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runPdd } from '../src/pdd-cli.mjs';
-import { runCheck } from '../src/runtime-client.mjs';
-import { runJobs } from '../src/runtime-slots.mjs';
+import { runCheck } from '../src/runtime-seam.mjs';
+import { runJobs } from '../src/runtime-seam.mjs';
 import { fakeRuntime, harbor, portsFor, sink } from './runtime-fake.mjs';
 
 // Rules of user_stories/name-the-interpreter.md for lines that need an interpreter answer: pdd's own

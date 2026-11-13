@@ -1,7 +1,7 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { expandSource, catalogRecords } from '../src/contract-refs.mjs';
+import { expandSource, catalogRecords } from '../src/runtime/contract-refs.mjs';
 
 // Oracles follow shared-seed AC6 and shared-records/shared-source-limits Rules.
 // The closed domains below use only the public boundary and injected file ports.

@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runCheck } from '../src/runtime-client.mjs';
-import { projectAnswer, renderJson, renderText, exitCodeFor } from '../src/runtime-output.mjs';
+import { runCheck } from '../src/runtime-seam.mjs';
+import { projectAnswer, renderJson, renderText, exitCodeFor } from '../src/runtime-seam.mjs';
 import { fakeRuntime, harbor, portsFor } from './runtime-fake.mjs';
 
 // Expected text comes from the approved display contract for issue 2622.

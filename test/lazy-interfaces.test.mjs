@@ -6,8 +6,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { PLACE, fakeRuntime, harbor, ordinaryCapabilities, portsFor } from './runtime-fake.mjs';
-import { runCheck, runTry } from '../src/runtime-client.mjs';
-import { interfaceBlocks, proseSha256 } from '../src/runtime-preflight.mjs';
+import { interfaceBlocks, proseSha256, runCheck, runTry } from '../src/runtime-seam.mjs';
 
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 

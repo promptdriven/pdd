@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-outcome.prompt.md (sha256: dc888fb33f9e1cb2e3617c3770bb7213d3abdd9af8d7a6f6bea2696f08345c00).
+// Generated from prompts/cli/runtime-outcome.prompt.md (sha256: 6f45ebd1fd18ae8817648216473f9e9db3fb6edcfa632b1652adf0608fa01b22).
 // What happened to one selected test: the one place that turns a server answer into an outcome.
 export const PROVIDER_TEXT = 'the AI provider failed during the run. It is not a failed check. Do not send it again yet.';
 export const CHECK_STATES = Object.freeze(['waiting', 'sent', 'passed', 'failed', 'refused', 'partial', 'not run']);
@@ -25,8 +25,8 @@ export function resultOutcome(row = {}) {
 const objects = value => Array.isArray(value) ? value.filter(item => item && typeof item === 'object' && !Array.isArray(item)) : [];
 const count = value => Number.isSafeInteger(value) && value >= 0;
 const TERMINAL = new Set(['passed', 'failed', 'refused', 'not_run']);
-// Exit precedence: the first state present decides. Any state that is not a known end counts as unknown.
-const DECIDES = [['unknown', 3], ['not_run', 5], ['refused', 4], ['failed', 1], ['passed', 0]];
+// Group precedence: the first state present decides. Any state that is not a known end counts as unknown.
+const DECIDES = ['unknown', 'not_run', 'refused', 'failed', 'passed'];
 
 const refused = (refusals, extra = {}) => {
   const first = refusals[0] ?? {};
@@ -279,13 +279,12 @@ export function progressText(outcomes) {
 
 export const outcomeDone = outcome => TERMINAL.has(outcome.state) || outcome.state === 'not run';
 
-// Module function: the state that decides a group's result, with the exit code's precedence.
+// Module function: the state that decides a group's result.
 export function outcomeOverall(outcomes, { interrupted = false, lintUnknown = false } = {}) {
   if (interrupted || lintUnknown || !outcomes.length || outcomes.some(outcome => outcome.state === 'partial')) return 'unknown';
   const present = new Set(outcomes.map(outcome => outcomeDone(outcome) ? outcome.state === 'not run' ? 'not_run' : outcome.state : 'unknown'));
-  return DECIDES.find(([state]) => present.has(state))[0];
+  return DECIDES.find(state => present.has(state));
 }
-export const outcomeExitCode = (outcomes, options) => new Map(DECIDES).get(outcomeOverall(outcomes, options));
 
 // Public aggregate keeps the deciding row's explanation, not a raw job's label.
 export function resultOverall(outcomes, options) {

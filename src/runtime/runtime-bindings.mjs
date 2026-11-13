@@ -1,6 +1,6 @@
 import { runtimeCoverage } from './interface-draft.mjs';
 import {loadRuntimeWorkspace,allowsRuntimePath,requireRuntimePath} from './runtime-workspace.mjs';
-// Generated from prompts/cli/runtime-bindings.prompt.md (sha256: ef6b13ece701ef841ad293efe2977a99e9192d1abe85a4540bb007e002cb1f4e).
+// Generated from prompts/cli/runtime-bindings.prompt.md (sha256: b4c08f94762052c3040f366ba7013e0c7dfdb6e7dab6e1cabdd95f3a890bdf62).
 import { lstatSync } from 'node:fs';
 import { join } from 'node:path';
 import { PreflightError, readPrompt, isSecretPath, sourceFilePort, gitFiles, promptMarkdownTargets } from './runtime-preflight.mjs';

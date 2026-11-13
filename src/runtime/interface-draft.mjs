@@ -1,16 +1,15 @@
-// Generated from prompts/cli/interface-draft.prompt.md (sha256: c4dd0da761ee6b728deb05e3ae7e0dfbdc613b12f69ba0069fd9282417120492).
+// Generated from prompts/cli/interface-draft.prompt.md (sha256: e805186afc5309318a33c4210471fb4b8cfa6822ce4052514b842ea62895f760).
 import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, linkSync, renameSync, rmSync, openSync, closeSync, fstatSync, chmodSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { isDeepStrictEqual } from 'node:util';
 import { expandSource } from './contract-refs.mjs';
-import { gitFiles, findTests, readPrompt, promptRefusal, interfaceBlocks, interfaceSchemaProblems, proseSha256, sourceFilePort, sha256 } from './runtime-preflight.mjs';
+import { discoveryVisibleFiles, gitFiles, findTests, readPrompt, promptRefusal, interfaceBlocks, interfaceSchemaProblems, proseSha256, sourceFilePort, sha256 } from './runtime-preflight.mjs';
 import { loadRuntimeWorkspace, allowsRuntimePath, nativeWorkspaceFiles } from './runtime-workspace.mjs';
 
 function promptPaths(root) {
-  const found = findTests({root, excludeFixtureProjects:true});
-  return [...found.discoveryVisible].filter(path => path.endsWith('.prompt.md')).sort();
+  return [...discoveryVisibleFiles({ root, excludeFixtureProjects: true })].filter(path => path.endsWith('.prompt.md')).sort();
 }
 export function missingInterfaces(root) {
   return promptPaths(root).filter(path => !interfaceBlocks(sourceFilePort(root).read({path}).content).length);
@@ -609,8 +608,8 @@ function expandedInterface(path,iface,files) {
   const candidate='<details><summary>Runtime interface</summary>\n\n```json\n'+JSON.stringify(iface)+'\n```\n</details>';
   return JSON.parse(interfaceBlocks(expandSource({path,text:candidate,format:'prompt'},files).text)[0][1]);
 }
-function inferInterface(root,path,text,sources) {
-  const files=sourceFilePort(root);
+function inferInterface(root,path,text,sources,visible=new Set(gitFiles(root)),workspace=loadRuntimeWorkspace({root})) {
+  const files=sourceFilePort(root,visible,workspace);
   const declarations=sources.filter(source=>!source.path.endsWith('.prompt.md') || source.path===path).flatMap(source=>jsonDeclarations(source.text));
   const candidates=declarations.filter(value=>Array.isArray(value.entries) && value.entries.length
     && value.entries.every(entry=>typeof entry?.operation==='string'));
@@ -630,7 +629,7 @@ function inferInterface(root,path,text,sources) {
     const operations=[...named,...[...text.matchAll(/\b(?:Export|export|exports)\s+(?:(?:async|module|function)\s+)*`?([A-Za-z_$][\w$]*)\s*\(/g)].map(match=>match[1])];
     // An explicitly owned source file can add clear exported function names, never schemas.
     const own=/`(src\/[\w./-]+\.[cm]js)`/.exec(text)?.[1];
-    if(own) {
+    if(own && visible.has(own) && allowsRuntimePath(workspace,own)) {
       const code=files.read({path:own}).content;
       for(const match of code.matchAll(/^export\s+(?:async\s+)?function\s+([\w$]+)\s*\(/gm)) operations.push(match[1]);
     }
@@ -679,7 +678,7 @@ export async function runInterfaceDraft({words=[],all=false,json=false,cwd=proce
         if(!block && /<summary[^>]*>\s*(?:<strong[^>]*>\s*)?Runtime\s+interface/i.test(text)) throw Error('The Runtime interface block is malformed. Fix it before drafting.');
         const previous=block ? JSON.parse(block[1]) : null;
         const sources=draftSources(root,path,text);
-        const inference=!extend && !supplied && !refresh ? inferInterface(root,path,text,sources) : null;
+        const inference=!extend && !supplied && !refresh ? inferInterface(root,path,text,sources,visible,workspace) : null;
         const iface=extend ? extendContract(previous,supplied) : {...(supplied ?? (refresh ? previous : inference.iface))};
         iface.status='draft';iface.prose_sha256='';
         if(iface.kind==='full') delete iface.kind;
@@ -754,8 +753,9 @@ function nativeTestArgs(root,command,head) {
 export async function runAutomaticApproval({path,root,tests},ports={}) {
   const stdout=ports.stdout ?? process.stdout,stderr=ports.stderr ?? process.stderr;
   try {
-    const {readApprovalPolicy,approvalActor,recordPromptApproval,readPromptApprovals}=await import('./approval-policy.mjs');
-    const {approvePromptText,promptPath}=await import('./prompt-approve.mjs');
+    const {readApprovalPolicy,approvalActor,recordPromptApproval,readPromptApprovals,approvePromptText,promptPath}=ports;
+    if(!readApprovalPolicy||!approvalActor||!recordPromptApproval||!readPromptApprovals||!approvePromptText||!promptPath)
+      throw Error('Automatic approval ports are not bound.');
     const {runCheck}=await import('./runtime-client.mjs');
     const {randomUUID}=await import('node:crypto');
     if(readApprovalPolicy({root},ports).strictApprovals) throw Error('Strict approvals require a person at a terminal.');
@@ -801,7 +801,7 @@ export async function runAutomaticApproval({path,root,tests},ports={}) {
     const nativeCounts={total:count('tests'),passed:count('pass'),failed:count('fail')};
     if(!(nativeCounts.total>0) || nativeCounts.passed!==nativeCounts.total || nativeCounts.failed!==0) throw Error('The native command did not report a complete passing TAP test run.');
     if(JSON.stringify(sourceSnapshot(root))!==JSON.stringify(before)) throw Error('Source changed during native tests. No prompt was approved.');
-    const found=findTests({root,excludeFixtureProjects:true});
+    const found=ports.findTests ? ports.findTests({root,excludeFixtureProjects:true}) : findTests({root,excludeFixtureProjects:true},ports);
     // Follow calls too: every scenario that can reach the drafted contract must pass in full.
     const reaches=(entry,seen=new Set())=>{
       if(entry===path) return true;
@@ -816,7 +816,7 @@ export async function runAutomaticApproval({path,root,tests},ports={}) {
     if(!selected.length || selected.some(test=>test.error)) throw Error('No complete existing prompt tests cover this draft.');
     let output='';
     const checkPorts={...ports,stdout:{write:chunk=>{output+=chunk;}},stderr};
-    const code=await runCheck({cwd:root,words:selected.map(test=>test.path),options:{'--json':true},cache:false},checkPorts);
+    const code=await runCheck({cwd:root,words:selected.map(test=>test.path),options:{'--json':true},cache:false,client:ports.client,...(ports.workflow !== undefined ? {workflow:ports.workflow} : {})},checkPorts);
     let result;try {result=JSON.parse(output);}catch {throw Error('Prompt check evidence is unavailable.');}
     const complete=code===0 && result.exit_code===0 && result.rows?.length===selected.length && selected.every(test=>{
       const row=result.rows.find(row=>row.test===test.path),checks=test.doc.steps.reduce((sum,step)=>sum+(step.checks?.length ?? 0),0);
@@ -839,5 +839,5 @@ export async function runAutomaticApproval({path,root,tests},ports={}) {
     } catch(error) {writeFileSync(file,text);throw error;}
     stdout.write(`Approved ${path}. Approval route: automatic-check-pass.\n`);
     return 0;
-  } catch(error) {stderr.write(`${error.message}\n`);return 4;}
+  } catch(error) {if(error?.unboundPort) throw error;stderr.write(`${error.message}\n`);return 4;}
 }

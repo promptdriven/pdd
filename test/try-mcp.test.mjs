@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { PassThrough } from 'node:stream';
-import { createTryTools, runMcp } from '../src/try-mcp.mjs';
+import { createTryTools, runMcp } from '../src/runtime-seam.mjs';
 
 const packageVersion = createRequire(import.meta.url)('../package.json').version;
 
@@ -95,7 +95,7 @@ test('tool errors are MCP tool results and valid notifications cannot run action
 
 test('owner access opens exactly once and reads real current state with authenticated requests', async t => {
   const { harbor, fakeRuntime, portsFor } = await import('./runtime-fake.mjs');
-  const { readTryOwner } = await import('../src/runtime-client.mjs');
+  const { readTryOwner } = await import('../src/runtime-seam.mjs');
   const { rmSync } = await import('node:fs');
   const { join } = await import('node:path');
   const setup = harbor(t, root => rmSync(join(root, 'tests/unknown-item.json')));
@@ -119,7 +119,7 @@ test('owner access opens exactly once and reads real current state with authenti
 
 test('owner access refuses a Try recorded for another GitHub login before any owner read', async t => {
   const { harbor, fakeRuntime, portsFor } = await import('./runtime-fake.mjs');
-  const { readTryOwner } = await import('../src/runtime-client.mjs');
+  const { readTryOwner } = await import('../src/runtime-seam.mjs');
   const { rmSync } = await import('node:fs');
   const { join } = await import('node:path');
   const setup = harbor(t, root => rmSync(join(root, 'tests/unknown-item.json')));
@@ -140,8 +140,8 @@ test('owner access refuses a Try recorded for another GitHub login before any ow
 
 test('isolated save retains actual starting world and leaves original scenario bytes intact', async t => {
   const { harbor } = await import('./runtime-fake.mjs');
-  const { saveDoorCase,acquireCaseWriteOwnership } = await import('../src/runtime-client.mjs');
-  const { findTests, selectTests } = await import('../src/runtime-preflight.mjs');
+  const { saveDoorCase,acquireCaseWriteOwnership } = await import('../src/runtime-seam.mjs');
+  const { findTests, selectTests } = await import('../src/runtime-seam.mjs');
   const { readFileSync, readdirSync } = await import('node:fs');
   const { join } = await import('node:path');
   const setup = harbor(t), path = 'tests/place-order.json', original = readFileSync(join(setup.repo, path), 'utf8'), doc = JSON.parse(original);
@@ -171,8 +171,8 @@ for (const mode of ['pending', 'owned', 'aborted']) test(`MCP native save preser
   const original = read(f.root, f.second);
   // Only owner/action observations are synthetic. A separate process runs the real MCP,
   // native ownership and durable save transaction, with both possible state roots temporary.
-  const command = `import {createTryTools} from ${JSON.stringify(new URL('../src/try-mcp.mjs', import.meta.url).href)};
-    import {acquireCaseWriteOwnership} from ${JSON.stringify(new URL('../src/runtime-client.mjs', import.meta.url).href)};
+  const command = `import {createTryTools} from ${JSON.stringify(new URL('../src/runtime-seam.mjs', import.meta.url).href)};
+    import {acquireCaseWriteOwnership} from ${JSON.stringify(new URL('../src/runtime-seam.mjs', import.meta.url).href)};
     const f=${JSON.stringify({ root: f.root, target: f.second, story: f.story, prompt: f.prompt, doc: f.doc, requested, mode })};
     const env={...process.env,PDD_STATE_DIR:f.requested},controller=new AbortController();
     const owner={root:f.root,test:{path:f.target,storyPath:f.story,doc:f.doc},record:{id:'synthetic-session',origin:'https://interpreter.example.invalid',login:'owner'},model:{entries:[{entry_path:f.prompt,operation:'order'}]}};
@@ -202,7 +202,7 @@ test('MCP native save accepts a supplied state path under /tmp', async t => {
   const { fixture, read, json } = await import('./helpers/runtime-workspace-fixture.mjs');
   const { existsSync, mkdtempSync, rmSync } = await import('node:fs');
   const { basename, join } = await import('node:path');
-  const { acquireCaseWriteOwnership } = await import('../src/runtime-client.mjs');
+  const { acquireCaseWriteOwnership } = await import('../src/runtime-seam.mjs');
   const f = fixture(t), temporary = mkdtempSync('/tmp/pdd-mcp-native-state-'), state = join('/tmp', basename(temporary));
   t.after(() => rmSync(temporary, { recursive: true, force: true }));
   const env = { ...f.env, PDD_STATE_DIR: state };
@@ -279,7 +279,7 @@ test('saving without a runtime before-world fails instead of inventing test data
 // A read can fail after dispatch with arbitrary server text: wording cannot prove no effect.
 test('failed owner result reads block another run regardless of error wording', async t => {
   const { harbor, fakeRuntime, portsFor } = await import('./runtime-fake.mjs');
-  const { runDoorCall } = await import('../src/runtime-client.mjs');
+  const { runDoorCall } = await import('../src/runtime-seam.mjs');
   for (const status of [401, 403, 410]) {
     const setup = harbor(t); let dispatched = 0;
     const fake = await fakeRuntime(t, (entry, server) => {
@@ -301,7 +301,7 @@ test('failed owner result reads block another run regardless of error wording', 
 
 test('door snapshots use the matching immutable B1 action, never the latest world or another run', async t => {
   const { harbor, fakeRuntime, portsFor } = await import('./runtime-fake.mjs');
-  const { runDoorCall } = await import('../src/runtime-client.mjs');
+  const { runDoorCall } = await import('../src/runtime-seam.mjs');
   for (const available of [true, false]) {
     const setup = harbor(t); let id, dispatched = 0;
     const before = { kv: { text: 'exact\n  before' } }, after = { kv: { text: 'exact\n  after' } };
@@ -331,7 +331,7 @@ test('door snapshots use the matching immutable B1 action, never the latest worl
 
 test('owner tools resume a confirmed idle pause with the same Try, data and budget', async t => {
   const { harbor, fakeRuntime, portsFor } = await import('./runtime-fake.mjs');
-  const { readTryOwner } = await import('../src/runtime-client.mjs');
+  const { readTryOwner } = await import('../src/runtime-seam.mjs');
   const { rmSync } = await import('node:fs');
   const { join } = await import('node:path');
   const setup = harbor(t, root => rmSync(join(root, 'tests/unknown-item.json')));

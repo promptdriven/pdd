@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runCheck, runTry } from '../src/runtime-client.mjs';
+import { runCheck, runTry } from '../src/runtime-seam.mjs';
 import { fakeRuntime, harbor, portsFor, PLACE } from './runtime-fake.mjs';
 
 // Independent n7 timeline: 20 s capacity refusal, 5 s backoff, then >65 s lint work.
