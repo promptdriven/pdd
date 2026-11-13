@@ -77,6 +77,10 @@ function extend(f, w) {
     if (route === '/issues' && method === 'GET' && new URLSearchParams(endpoint.split('?')[1] ?? '').get('labels') === 'pdd:merge-lane') {
       return ok(200, [...f.prs.values()].filter(pr => pr.state === 'open' && pr.labels.includes('pdd:merge-lane')).map(pr => ({ number: pr.number, state: 'open', labels: pr.labels.map(name => ({ name })), pull_request: {} })));
     }
+    if ((m = /^\/issues\/(\d+)$/.exec(route)) && method === 'GET' && f.prs.has(Number(m[1]))) {
+      const pr = f.prs.get(Number(m[1]));
+      return ok(200, { number: pr.number, state: pr.state, labels: pr.labels.map(name => ({ name })), pull_request: {} });
+    }
     // PR reviews on GitHub (a person's APPROVED review).
     if ((m = /^\/pulls\/(\d+)\/reviews$/.exec(route)) && method === 'GET') return ok(200, f.prs.get(Number(m[1]))?.reviews ?? []);
     if ((m = /^\/issues\/(\d+)\/comments$/.exec(route)) && f.prs.has(Number(m[1]))) {
