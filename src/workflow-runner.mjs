@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 237af97ca062fa0d03035c4fbb158fcd709f7dc682fb756b70b037a945a029ed).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 64692968efaaf3364e1f4471504e79da78ed9a6dbc6338ade263fa3f5da39d85).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -128,7 +128,8 @@ function paneOwners(rows, runs) {
   const ordered = [...runs].sort((a,b) => Number(ended(a)) - Number(ended(b)));
   for (const pane of rows) {
     const run = ordered.find(run => (run.chats ?? []).some(chat => matches(pane,chat))
-      || matches(pane,run.layout?.root ?? run.layout,run.layout?.workspaceId));
+      || matches(pane,run.layout?.root ?? run.layout,run.layout?.workspaceId)
+      || !run.layout && (run.chats ?? []).some(chat => chat.workspaceId && pane.workspace_id === chat.workspaceId));
     if (!run) { owners.unowned++; continue; }
     owners[ended(run) ? 'done' : run.parking?.phase === 'parked' ? 'parked' : 'working']++;
     if ((run.chats ?? []).some(chat => matches(pane,chat))) chats.add(pane.pane_id);
@@ -4177,17 +4178,17 @@ function endedChatHelp(run) {
   return done(lines.join('\n'));
 }
 async function cleanupRunChats(run, p, options = {}) {
-  const snapshot = structuredClone(run), savedTerminals = new Map((run.chats ?? []).map(chat => [chat.paneId, chat.terminalId]));
+  const snapshot = structuredClone(run), savedTerminals = new Map((run.chats ?? []).map(chat => [chat.paneId, chat.terminalId ?? null]));
   for (const chat of finishedChats(snapshot)) chat.endedAt ??= finishedAt(snapshot,chat);
   const result = await closeFinishedChats(snapshot, {...p, ...options, checkpoint: async (chat, layout) => {
     commitMaintenance(run, p, latest => {
       if (chat) {
-        const target = latest.chats?.find(item => sameChat(item,chat) && item.terminalId === savedTerminals.get(chat.paneId));
+        const target = latest.chats?.find(item => sameChat(item,chat) && (item.terminalId ?? null) === savedTerminals.get(chat.paneId));
         if (!target || !options.force && !finishedChats(latest).includes(target)) throw Object.assign(Error('Cleanup target changed'), {code:'workflow_progress_refused'});
         if (chat.closed?.reason === 'absent' && target.closed)
           chat.closed = {...target.closed, confirmedAt: chat.closed.confirmedAt};
         Object.assign(target, structuredClone(chat));
-        savedTerminals.set(chat.paneId, chat.terminalId);
+        savedTerminals.set(chat.paneId, chat.terminalId ?? null);
       }
       if (layout) latest.layout = structuredClone(layout);
     });
@@ -4276,32 +4277,103 @@ export async function sweepIdleRuns({graceMs = 60_000, need, timeBudgetMs} = {},
   return {closed, kept, reasonCounts};
 }
 
+function closedWaitingReason(run) {
+  if (ended(run) || run.state !== 'waiting' || ['parked', 'releasing'].includes(run.parking?.phase)) return null;
+  const last = run.pr?.at(-1), area = run.areas?.find(item => item.name === last?.stage);
+  if (last?.state === 'closed' && (area === run.areas?.at(-1) && !run.gate
+      || area?.then === 'ask-code' && run.gate?.kind === 'ask-code' && run.through !== 'code'))
+    return 'pr-closed';
+  if (run.issue?.state === 'closed' && !(run.pr ?? []).some(pr => pr.state === 'open'))
+    return 'issue-closed';
+  return null;
+}
+function cancelClosedWaiting(latest, at, reason) {
+  latest.state = 'cancelled';
+  latest.cancelled = ['replaced', 'handed-over'].includes(latest.cancelled?.state)
+    ? latest.cancelled
+    : { state: 'cancelled', reason, at };
+  latest.gate = null;
+  delete latest.parking; delete latest.blockedOn; delete latest.parkReason;
+  delete latest.runtimeWait; delete latest.routeWait;
+  for (const chat of latest.chats ?? []) chat.endedAt ??= at;
+  if (validSavedAutomaticOrigin(latest)) latest.claimRelease ??= { state: 'pending', reason: 'cancel', at };
+}
+
 export async function tidyRuns({dryRun = false, graceMs, need, timeBudgetMs} = {}, ports = {}) {
   const p = deps(ports), runs = allRuns({cancelled:true}, p), kept = [], warnings = [];
   let closed = 0;
   const elapsed = p.elapsedNow ?? (() => Number(process.hrtime.bigint() / 1_000_000n)), began = elapsed();
-  const candidates = runs.flatMap(run => {
+  const reconcileSaved = targetRuns => {
+    for (const run of targetRuns) {
+      const reason = !readRunOwnership(run.runDir, p) ? closedWaitingReason(run) : null;
+      if (!reason) continue;
+      const at = run.prState?.checkedAt ?? run.updatedAt ?? p.now();
+      if (dryRun) { cancelClosedWaiting(run, at, reason); continue; }
+      let release;
+      try {
+        release = acquireRunLock(run.runDir);
+        commitMaintenance(run, p, latest => {
+          const latestReason = closedWaitingReason(latest);
+          if (latestReason) cancelClosedWaiting(latest, latest.prState?.checkedAt ?? latest.updatedAt ?? p.now(), latestReason);
+        });
+      } catch (error) {
+        if (error?.code === 'workflow_run_save_failed') throw error;
+      } finally { release?.(); }
+    }
+  };
+  const candidatesFor = targetRuns => targetRuns.flatMap(run => {
     const chats = finishedChats(run).filter(chat => !Number.isFinite(chat.closed?.confirmedAt));
     if (chats.length) return chats.map(chat => ({run,chat,at:finishedAt(run,chat)}));
-    return ended(run) && run.layout?.workspaceId && run.layout.phase !== 'closed'
+    const legacyShell = run.layout == null && (run.chats ?? []).some(chat => chat.workspaceId);
+    return ended(run) && (run.layout?.workspaceId && run.layout.phase !== 'closed' || legacyShell)
       ? [{run,chat:null,at:run.cancelled?.at ?? run.updatedAt ?? run.startedAt}] : [];
   }).sort((a,b) => a.at - b.at);
-  for (const [index,{run,chat}] of candidates.entries()) {
-    if (timeBudgetMs !== undefined && elapsed()-began >= timeBudgetMs) { kept.push(...candidates.slice(index).map(({chat})=>({area:chat?.area ?? 'run shell',reason:'sweep-time-budget'}))); break; }
-    if (readRunOwnership(run.runDir,p)) { kept.push({runId:run.runId,reason:'run-busy'}); continue; }
-    let release;
-    try {
-      release = acquireRunLock(run.runDir);
-      const latest = readRun(run.runDir);
-      if (!latest || latest.runId !== run.runId) continue;
-      const result = await cleanupRunChats(latest, {...p,progressGuard:undefined}, {dryRun, ...(chat ? {onlyChat:chat} : {}),
-        ...(graceMs === undefined ? {} : {graceMs}), ...(graceMs === 0 ? {reason:'budget'} : {})});
-      closed += result.closed; kept.push(...result.kept); warnings.push(...result.warnings);
-      if (need !== undefined) { const usage = await paneUsage(p); if (!usage.budget || usage.panes + need <= usage.budget) break; }
-    } catch (error) {
-      kept.push({runId:run.runId,reason:error.code ?? 'cleanup-unavailable'});
-      if (error.code !== 'run_busy') warnings.push(failureReason(error));
-    } finally { release?.(); }
+  const sweepCandidates = async candidates => {
+    for (const [index,{run,chat}] of candidates.entries()) {
+      if (timeBudgetMs !== undefined && elapsed()-began >= timeBudgetMs) { kept.push(...candidates.slice(index).map(({chat})=>({area:chat?.area ?? 'run shell',reason:'sweep-time-budget'}))); return false; }
+      if (readRunOwnership(run.runDir,p)) { kept.push({runId:run.runId,reason:'run-busy'}); continue; }
+      let release;
+      try {
+        release = acquireRunLock(run.runDir);
+        const latest = dryRun ? run : readRun(run.runDir);
+        if (!latest || latest.runId !== run.runId) continue;
+        const result = await cleanupRunChats(latest, {...p,progressGuard:undefined}, {dryRun, ...(chat ? {onlyChat:chat} : {}),
+          ...(graceMs === undefined ? {} : {graceMs}), ...(graceMs === 0 ? {reason:'budget'} : {})});
+        closed += result.closed; kept.push(...result.kept); warnings.push(...result.warnings);
+        if (need !== undefined) { const usage = await paneUsage(p); if (!usage.budget || usage.panes + need <= usage.budget) return false; }
+      } catch (error) {
+        kept.push({runId:run.runId,reason:error.code ?? 'cleanup-unavailable'});
+        if (error.code !== 'run_busy') warnings.push(failureReason(error));
+      } finally { release?.(); }
+    }
+    return true;
+  };
+  reconcileSaved(runs);
+  const more = await sweepCandidates(candidatesFor(runs));
+  if (more && !dryRun && (need === undefined || graceMs === 0)) {
+    let fits = false;
+    if (need !== undefined) {
+      try { const usage = await paneUsage(p); fits = !usage.budget || usage.panes + need <= usage.budget; } catch {}
+    }
+    if (!fits) {
+      const newlyEnded = [];
+      for (const run of runs) {
+        if (timeBudgetMs !== undefined && elapsed()-began >= timeBudgetMs) break;
+        if (ended(run) || run.state !== 'waiting' || readRunOwnership(run.runDir, p)) continue;
+        let release;
+        try {
+          release = acquireRunLock(run.runDir);
+          const latest = readRun(run.runDir);
+          if (!latest || latest.runId !== run.runId || ended(latest) || latest.state !== 'waiting') continue;
+          if (latest.pr?.length) await refreshPr(latest, {...p, progressGuard: undefined});
+          if (latest.state === 'waiting') await refreshWaitingIssue(latest, {...p, progressGuard: undefined});
+          if (ended(latest)) { Object.assign(run, latest); newlyEnded.push(run); }
+        } catch (error) {
+          if (error?.code === 'workflow_run_save_failed') throw error;
+        } finally { release?.(); }
+      }
+      if (newlyEnded.length) await sweepCandidates(candidatesFor(newlyEnded));
+    }
   }
   return {...done([`${dryRun ? 'Would close' : 'Closed'} ${closed} finished chat tabs. Kept ${kept.length}. Retained: ${reasonWords(countReasons(kept))}.`, ...warnings].join('\n')),closed,kept:kept.length,reasonCounts:countReasons(kept)};
 }
@@ -4460,6 +4532,31 @@ export const releaseRunClaim = saveGuard(async ({ ref, cwd, repository, machine,
   } finally { release?.(); }
 });
 
+async function refreshWaitingIssue(run, p) {
+  if (ended(run) || run.state !== 'waiting' || (run.pr ?? []).some(pr => pr.state === 'open')
+      || ['parked', 'releasing'].includes(run.parking?.phase) || !run.repo || !Number.isSafeInteger(run.number))
+    return;
+  const cwd = existsSync(run.root) ? run.root : run.sourceRoot;
+  const reply = await (p.readIssueStatus
+    ? p.readIssueStatus({ cwd, repo: run.repo, number: run.number }, p.commandPorts)
+    : p.execFile('gh', ['api', `repos/${run.repo}/issues/${run.number}`], { cwd }));
+  const raw = typeof reply?.stdout === 'string' ? JSON.parse(reply.stdout || '{}') : reply;
+  if (!raw || Object.hasOwn(raw, 'pull_request') || raw.number !== run.number) return;
+  const state = typeof raw.state === 'string' ? raw.state.toLowerCase() : null;
+  if (state !== 'closed' && state !== 'open') return;
+  const closedAt = typeof raw.closed_at === 'string' && Number.isFinite(Date.parse(raw.closed_at))
+    ? Math.min(Date.parse(raw.closed_at), p.now()) : p.now();
+  if (state === 'closed') {
+    commitMaintenance(run, p, latest => {
+      if (ended(latest) || latest.state !== 'waiting' || (latest.pr ?? []).some(pr => pr.state === 'open')) return;
+      latest.issue = { ...latest.issue, state: 'closed' };
+      cancelClosedWaiting(latest, closedAt, 'issue-closed');
+    });
+  } else if (run.issue?.state && run.issue.state !== 'open') {
+    commitMaintenance(run, p, latest => { latest.issue = { ...latest.issue, state: 'open' }; });
+  }
+}
+
 async function refreshPr(run, p) {
   if (!run.pr?.length || run.state === 'cancelled') return;
   const cwd=existsSync(run.root)?run.root:run.sourceRoot,observations=[];
@@ -4471,8 +4568,8 @@ async function refreshPr(run, p) {
     const observed=new Map(observations.map(observation=>[observation.url,{...observation.fields,view:observation.view}]));
     for(const pr of run.pr) if(pr.readable?.facts && observed.get(pr.url)?.state==='open') for(const line of await refreshReadableTop(run,pr,p,{observed,cwd})) p.say(line);
   };
-  const checkedAt=p.now();
-  if(!observations.some(observation=>{
+  const checkedAt=p.now(), priorClosedAt = run.pr?.at(-1)?.state === 'closed' ? (run.prState?.checkedAt ?? run.updatedAt ?? checkedAt) : null;
+  if(!closedWaitingReason(run) && !observations.some(observation=>{
     const pr=run.pr.find(pr=>pr.url===observation.url&&pr.number===observation.number&&pr.stage===observation.stage);
     return Object.entries(observation.fields).some(([key,value])=>!equalFact(pr[key],value));
   }))return refreshTops();
@@ -4487,7 +4584,10 @@ async function refreshPr(run, p) {
     if(latest.state==='cancelled')return;
     if(last.state==='merged'&&area===latest.areas.at(-1))latest.state='completed';
     if(last.state==='merged'&&area?.then==='ask-code'&&latest.gate?.kind==='ask-code'){latest.state='completed';latest.doneAt='PR 1';}
-    if (ended(latest)) for (const chat of latest.chats ?? []) chat.endedAt ??= checkedAt;
+    const closedReason = closedWaitingReason(latest);
+    const endedAt = closedReason ? (priorClosedAt ?? checkedAt) : checkedAt;
+    if (closedReason) cancelClosedWaiting(latest, endedAt, closedReason);
+    if (ended(latest)) for (const chat of latest.chats ?? []) chat.endedAt ??= endedAt;
   });
   await refreshTops();
 }
@@ -4712,7 +4812,12 @@ function savedStepResults(run) {
 async function listStatus(runs, { json, cancelled, scope, snapshotOnly=false }, p) {
   const reading = runs.filter(run => run.state === 'waiting' && run.pr?.length).reduce((sum, run) => sum + run.pr.length, 0);
   if (reading) p.say(`Reading ${reading} PR${reading === 1 ? '' : 's'} from GitHub…`);
-  for (const run of runs) if (!snapshotOnly && !readRunOwnership(run.runDir,p) && run.state === 'waiting' && run.pr?.length) { try { await refreshPr(run, p); } catch(error) { if(error?.code==='workflow_run_save_failed')throw error; /* A PR read failure keeps the saved state. */ } }
+  for (const run of runs) if (!snapshotOnly && !readRunOwnership(run.runDir,p) && run.state === 'waiting') {
+    try {
+      if (run.pr?.length) await refreshPr(run, p);
+      if (run.state === 'waiting') await refreshWaitingIssue(run, p);
+    } catch(error) { if(error?.code==='workflow_run_save_failed')throw error; /* A PR or issue read failure keeps the saved state. */ }
+  }
   const all = [];
   for (const run of runs) {
     const ordinaryOwnership=readRunOwnership(run.runDir,p);
@@ -4779,7 +4884,10 @@ async function runStatusCommand({ ref, cwd, all = false, json = false, cancelled
   removeStaleLoginFiles(found.run.runDir);
   if (found.run.pr?.length && found.run.state !== 'cancelled') p.say(`Reading ${found.run.pr.length === 1 ? 'the PR' : `${found.run.pr.length} PRs`} from GitHub…`);
   const ordinaryOwnership=readRunOwnership(found.run.runDir,p);
-  if(!ordinaryOwnership&&!snapshotOnly)await refreshPr(found.run, p);
+  if(!ordinaryOwnership&&!snapshotOnly){
+    await refreshPr(found.run, p);
+    if (found.run.state === 'waiting') { try { await refreshWaitingIssue(found.run, p); } catch(error) { if(error?.code==='workflow_run_save_failed')throw error; } }
+  }
   const run = found.run, facts = ended(run)||ordinaryOwnership||snapshotOnly ? {} : await gateFacts(run, p), chat = ordinaryOwnership||snapshotOnly?null:await chatState(run, p, facts);
   facts.suite = readSuiteProgress({cwd:run.root, since:run.updatedAt ?? 0, env:p.env}, p);
   facts.now = p.now();
