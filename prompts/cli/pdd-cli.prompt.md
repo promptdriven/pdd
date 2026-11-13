@@ -1192,6 +1192,12 @@ reply.
               "share": {
                 "type": "string"
               },
+              "agent": {
+                "type": "string"
+              },
+              "pool": {
+                "type": "string"
+              },
               "mode": {
                 "type": "string"
               },
@@ -1229,6 +1235,9 @@ reply.
                     "type": "string"
                   },
                   "CLAUDE_CONFIG_DIR": {
+                    "type": "string"
+                  },
+                  "GEMINI_CLI_HOME": {
                     "type": "string"
                   },
                   "PDD_RUNTIME_URL": {
@@ -1280,7 +1289,7 @@ reply.
 
 Dispatch each metrics route to [metrics command](metrics-command.prompt.md) with the selected arguments, current cwd, stdout and stderr; return its exit code without an interpreter call. Forward optional origin, decisionId and outcome metadata alongside existing base, adoptCorpus and draft fields to startRun; these observations grant no workflow authority.
 
-Dispatch `autopilot-report` to the Autopilot launcher with command report and its operands in issues, with the same reply validation and stream rules and no remote settings warning. Dispatch `autopilot-intake` the same way with command intake and `--json` as `json`. For `autopilot-start`, also pass `--engine` as `engine` and `--label` as `label`, `--mode` as `mode`, `--report` as `report`, `--decisions` as `decisions` and `--intake` as `intake` when given.
+Dispatch `autopilot-report` to the Autopilot launcher with command report and its operands in issues, with the same reply validation and stream rules and no remote settings warning. Dispatch `autopilot-intake` the same way with command intake and `--json` as `json`. For `autopilot-start`, also pass `--engine` as `engine` and `--label` as `label`, `--mode` as `mode`, `--report` as `report`, `--decisions` as `decisions`, `--intake` as `intake`, `--agent` as `agent` and `--pool` as `pool` when given.
 
 For interface-draft dispatch, pass parsed --contract as contract and the --extend/--refresh flags as extend/refresh to `draftInterfaces` alongside cwd, words, all and json. Forward stdout/stderr; drafting remains local.
 
