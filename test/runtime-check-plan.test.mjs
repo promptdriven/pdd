@@ -7,7 +7,7 @@ import {spawnSync} from 'node:child_process';
 import {runCheck} from '../src/runtime-client.mjs';
 import {readRunResults} from '../src/workflow-results.mjs';
 import {findTests,interfaceBlocks,proseSha256} from '../src/runtime-preflight.mjs';
-import {buildCheckPlan,checkPlanResults} from '../src/runtime-check-plan.mjs';
+import {buildCheckPlan,checkPlanResults,estimateCheckCalls} from '../src/runtime-check-plan.mjs';
 import {harbor,fakeRuntime,portsFor,PLACE} from './runtime-fake.mjs';
 
 const git=(root,...args)=>{const r=spawnSync('git',args,{cwd:root,encoding:'utf8'});assert.equal(r.status,0,r.stderr);return r.stdout.trim();};
@@ -201,4 +201,54 @@ test('3114: mixed fresh and reused full-batch rows retain scope on a saved read'
   assert.deepEqual(saved.check_scope,result.check_scope);
   assert.equal(saved.rows.filter(row=>row.cached).length,1);
   assert.equal(fake.posts.filter(row=>row.command==='check').length,3);
+});
+
+test('2671: estimateCheckCalls counts caller return turns for executable child calls and ignores native-only targets',()=>{
+  const pocket=estimateCheckCalls({
+    prompts:[
+      {path:'prompts/pocket.prompt.md',max_model_calls:18,resource_operations:2,calls:[
+        {target:'prompts/layout.prompt.md',max_calls:1},
+        {target:'prompts/profile.prompt.md',max_calls:1},
+        {target:'prompts/native.prompt.md',max_calls:4},
+      ]},
+      {path:'prompts/layout.prompt.md',max_model_calls:8,resource_operations:2,calls:[]},
+      {path:'prompts/profile.prompt.md',max_model_calls:8,resource_operations:2,calls:[]},
+      {path:'prompts/native.prompt.md',kind:'native-only',resource_operations:0,calls:[]},
+    ],
+    rows:[{test:'tests/install-pocket.json',state:'ready',max_calls:18,steps:[{entry_path:'prompts/pocket.prompt.md'}]}],
+  });
+  assert.deepEqual(pocket,{
+    calls:{estimated:11,maximum:36,check_requests:2,lint_model_calls:0},
+    has_external_resources:true,
+    prerequisites:[],
+  });
+
+  const game=estimateCheckCalls({
+    prompts:[
+      {path:'prompts/game.prompt.md',max_model_calls:64,resource_operations:0,calls:[{target:'prompts/board.prompt.md',max_calls:30}]},
+      {path:'prompts/board.prompt.md',max_model_calls:2,resource_operations:0,calls:[]},
+    ],
+    rows:[{test:'tests/play-game.json',state:'ready',max_calls:80,steps:[{entry_path:'prompts/game.prompt.md'}]}],
+  });
+  assert.deepEqual(game,{
+    calls:{estimated:61,maximum:160,check_requests:2,lint_model_calls:0},
+    has_external_resources:false,
+    prerequisites:[],
+  });
+});
+
+test('2671: checkPlanResults distinguishes terminal refused target checks from running or open unresolved checks',()=>{
+  const plan={schema_version:'pdd.check-plan.v1',stories:[{role:'target',tests:['tests/install-pocket.json','tests/other.json']}]};
+  const bothRefused=checkPlanResults(plan,[
+    {test:'tests/install-pocket.json',state:'refused'},
+    {test:'tests/other.json',state:'refused'},
+  ]);
+  assert.equal(bothRefused.target.state,'not_run');
+  assert.equal(bothRefused.guidance,'Inspect refused target checks: tests/install-pocket.json, tests/other.json. Follow each refusal Fix or Next step, then run a fresh pdd test check.');
+
+  const mixedOpen=checkPlanResults(plan,[
+    {test:'tests/install-pocket.json',state:'refused'},
+    {test:'tests/other.json',state:'running'},
+  ]);
+  assert.equal(mixedOpen.guidance,'Read the saved batch for unresolved target checks; do not resend uncertain work.');
 });

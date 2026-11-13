@@ -1334,7 +1334,7 @@ test('hcli-2: saved-data and nested prompt calls contribute to the estimate with
   const fake = await fakeRuntime(t, (e, f) => f.normal(e));
   const result = await check(setup, fake, [], { '--max-calls': '32' });
   assert.equal(result.code, 0, result.out + result.err);
-  // Entry1 + store(load,save)2 + target(1+load1)*max_calls2 =7.
-  assert.match(result.err, /Interpreter calls: about 7; at most 64/);
+  // Entry1 + store(load,save)2 + (target(1+load1)+return1)*max_calls2 = 9.
+  assert.match(result.err, /Interpreter calls: about 9; at most 64/);
   assert.equal(fake.posts.find(p => p.command === 'check').request.max_calls, 32);
 });
