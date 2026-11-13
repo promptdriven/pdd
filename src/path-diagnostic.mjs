@@ -1,4 +1,4 @@
-// Generated from prompts/cli/path-diagnostic.prompt.md (sha256: 9b8faed5c5dd1d1911c3237af02ef1a32d2e830d86ee6cb1aabeb80b40216a1e).
+// Generated from prompts/cli/path-diagnostic.prompt.md (sha256: b0ef1dd01b9b911d53708b8a94bf7c6fee70898d080ad0290b173bc6cf0f6143).
 import { spawnSync } from 'node:child_process';
 import { accessSync, constants, readFileSync, realpathSync, statSync } from 'node:fs';
 import { basename, delimiter, dirname, join, resolve } from 'node:path';

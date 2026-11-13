@@ -11,4 +11,4 @@ export PDD_SUITE_QUEUE="$factory_tmp/suite-queue"
 mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$PDD_STATE_DIR"
 unset NODE_OPTIONS PDD_AUTOPILOT_CONTEXT PDD_AGENT_SESSION CODEX_HOME CLAUDE_CONFIG_DIR
 # timeout owns only the test process it starts. It cannot select another job.
-timeout --signal=TERM --kill-after=5s 890s node --test --test-concurrency=1 test/autopilot-factory.e2e.test.mjs
+timeout --signal=TERM --kill-after=5s 890s node --test --test-concurrency=1 test/autopilot-factory.e2e.test.mjs test/autopilot-factory-core.e2e.test.mjs

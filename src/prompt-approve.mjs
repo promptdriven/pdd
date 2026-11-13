@@ -1,4 +1,4 @@
-// Generated from prompts/cli/prompt-approve.prompt.md (sha256: 475b5bd1578767a6f3c9a708b8735da21b74b68ac6a943f0bc4bb3c9e2518056).
+// Generated from prompts/cli/prompt-approve.prompt.md (sha256: ec53c2dd60308d59acde1bd07812933cfbe7dc6ac7db2795293dadfeefe8155f).
 import { approvalActor, readApprovalPolicy, readSaidWords, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
@@ -6,7 +6,9 @@ import { lstatSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { relative, resolve, sep, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { isDeepStrictEqual } from 'node:util';
-import { gitFiles, interfaceBlocks, promptSchemaRefusals, readPrompt, proseSha256, sha256 } from './runtime-preflight.mjs';
+import { runtimePreflightSlice } from './runtime-seam.mjs';
+
+const { gitFiles, interfaceBlocks, promptSchemaRefusals, readPrompt, proseSha256, sha256 } = runtimePreflightSlice();
 
 class Stop extends Error { constructor(exitCode, message) { super(message); this.exitCode = exitCode; } }
 const line = (stream, text) => stream.write(`${text}\n`);
@@ -241,7 +243,8 @@ export async function askApproval({ root, path, stdout, answers, expectedHash, s
   }
   const iface = prompt.interface, current = iface.prose_sha256 === hash;
   if (iface.status === 'approved' && current) return { state: 'done', exitCode: 0, message: `${path} is already approved and current.` };
-  const {contractCoverage,coverageView}=await import('./interface-draft.mjs');
+  const {loadInterfaceDraft}=await import('./runtime-seam.mjs');
+  const {contractCoverage,coverageView}=await loadInterfaceDraft();
   let coverageLines;
   try {
     const coverage=contractCoverage({root,path,text,iface});
@@ -284,7 +287,7 @@ export async function runApprove({ words = [], cwd = process.cwd(), said, automa
     if (!path) throw new Stop(2, `${relative(root, resolve(realpathSync(cwd), words[0])).split(sep).join('/')} is not a Git-visible *.prompt.md file in this repository.`);
     if (automatic) {
       if(said !== undefined) throw new Stop(2,'--automatic does not combine with --said.');
-      const {runAutomaticApproval}=await import('./interface-draft.mjs');
+      const {runAutomaticApproval}=await import('./runtime-seam.mjs');
       return runAutomaticApproval({path,root,tests},{...ports,stdout,stderr});
     }
     if(tests !== undefined) throw new Stop(2,'--tests requires --automatic.');

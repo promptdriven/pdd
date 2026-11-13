@@ -13,6 +13,8 @@ const sources = new Map([
   [new URL('../../src/machine-resources.mjs', import.meta.url).href, `
     import {checkMachine, GiB} from ${checkMachine};
     export const machineCheckPorts = () => checkMachine().ports;
+    // #3231: no Autopilot job runs on this test machine.
+    export const readAutopilotUse = () => ({processes:0, wrappers:0, rss:0, cores:0});
     export async function readMachineResources() {
       const p = machineCheckPorts();
       return {cpuCount:40, load:p.load(), memory:{available:p.memory(),total:256*GiB},
@@ -23,10 +25,6 @@ const sources = new Map([
   [new URL('../../src/codex-limits.mjs', import.meta.url).href, `
     import {healthyMachine} from ${healthyMachine};
     export const readCodexLimits = healthyMachine.codexLimits;
-  `],
-  [new URL('../../src/autopilot-cleanup.mjs', import.meta.url).href, `
-    import {healthyMachine} from ${healthyMachine};
-    export const cleanupWorktrees = healthyMachine.cleanupWorktrees;
   `],
 ]);
 registerHooks({load(url, context, nextLoad) {

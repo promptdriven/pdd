@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Generated from prompts/cli/test-suite-queue.prompt.md.
+# Generated from prompts/cli/test-suite-queue.prompt.md (sha256: 070b1ca93b099d5339ebfc7209d9c02b18f3fea7a97dc8ad1a5d52c182ac7e08).
 # Run on pdd-vm: scripts/vm-suite.sh <full commit SHA>. Logs stay outside the repo.
 # The suite waits for its turn in vm-suite-lock.sh next to this script. See its header.
 # Caller validation logs use a nonempty PDD_STATE_DIR, else PDD_SUITE_QUEUE.state
@@ -31,7 +31,7 @@ test "$tested" = "$requested"
 test -z "$(git status --porcelain)"
 npm ci --ignore-scripts --no-audit --no-fund
 mkdir "$run_dir/home" "$run_dir/state"
-printf -v suite 'env HOME=%q PDD_STATE_DIR=%q POCKET_BROWSER_BIN=/usr/bin/google-chrome node --test --test-reporter=tap --test-concurrency=4 test/*.test.mjs' "$run_dir/home" "$run_dir/state"
+printf -v suite 'env HOME=%q PDD_STATE_DIR=%q POCKET_BROWSER_BIN=/usr/bin/google-chrome node --test --test-reporter=tap --test-concurrency=4 test/*.test.mjs test/runtime-package/*.test.mjs' "$run_dir/home" "$run_dir/state"
 suite_result=0
 SUITE="$suite" "$lock_runner" > "$run_dir/suite.log" 2>&1 || suite_result=$?
 

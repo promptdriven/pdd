@@ -1,0 +1,134 @@
+import './test-home.mjs';
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { createHash, randomUUID } from 'node:crypto';
+import { createServer } from 'node:http';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// Shared helpers for the runtime client tests: a Harbor repo, a fake runtime on 127.0.0.1 and in-process ports.
+export const root = fileURLToPath(new URL('../..', import.meta.url));
+export const TOKEN = 'gho_TESTTOKEN_never_print_7f3a';
+export const PLACE = 'prompts/place_order.prompt.md';
+export const temp = t => { const p = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-runtime-'))); t.after(() => rmSync(p, { recursive: true, force: true })); return p; };
+const git = (cwd, ...args) => { const r = spawnSync('git', args, { cwd, encoding: 'utf8' }); assert.equal(r.status, 0, r.stderr); };
+export const sink = () => ({ text: '', write(value) { this.text += value; return true; } });
+export const sha = bytes => createHash('sha256').update(bytes).digest('hex');
+export const filesUnder = dir => readdirSync(dir, { recursive: true }).map(name => join(dir, name));
+
+export function harbor(t, edit) {
+  const sandbox = temp(t), repo = join(sandbox, 'repo'), home = join(sandbox, 'home');
+  cpSync(join(root, 'test/fixtures/harbor'), repo, { recursive: true }); mkdirSync(home);
+  edit?.(repo);
+  git(repo, 'init', '-q'); git(repo, 'add', '-A'); git(repo, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-qm', 'init');
+  return { sandbox, repo, home, state: join(sandbox, 'state') };
+}
+
+// One more Story with its own test, a copy of Place an order: user_stories/<name>.md and tests/<name>.json
+// (a test is found by its name and folder).
+export function storyTest(repo, name, folder = 'tests') {
+  const harborFile = path => readFileSync(join(root, 'test/fixtures/harbor', path), 'utf8');
+  writeFileSync(join(repo, `user_stories/${name}.md`), harborFile('user_stories/place-order.md'));
+  const doc = JSON.parse(harborFile('tests/place-order.json'));
+  mkdirSync(join(repo, folder), { recursive: true });
+  writeFileSync(join(repo, folder, `${name}.json`), JSON.stringify({ ...doc, story_path: `user_stories/${name}.md` }, null, 2));
+}
+
+const usage = calls => ({ calls, model: 'unknown', requested_model: calls ? 'gpt-6.1-sol' : 'unknown', seconds: 10.4686, input_tokens: calls ? 6835 : 'unknown', output_tokens: calls ? 110 : 'unknown' });
+const PASSED_CHECKS = [{ criterion_id: 'AC1', target: 'result', path: '/totalCents', op: 'equals', expected: 900, actual: 900, passed: true }];
+
+// Explicit ordinary-operation fake-engine input, not capability discovery or a real parser proof.
+// Its identities and byte manifest come from the selected uploaded scenario, never its expected checks.
+export function ordinaryCapabilities(sources, path) {
+  const scenario = sources.find(source => source.path === path), doc = JSON.parse(scenario.bytes.toString('utf8'));
+  const engine_build = 'eae2202a68d00ab762fcbbf1eba0d8607a132a15';
+  return { schema_version: 'prompt-runtime.program-capabilities.v1', capability_version: `program-capabilities.v1@${engine_build}`, engine_build,
+    source: { scenario_sha256: sha(scenario.bytes), closure_sha256: 'c'.repeat(64),
+      files: sources.map(source => ({ path: source.path, sha256: sha(source.bytes) })).sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0) },
+    complete: true, verdict: 'supported', operations: (doc.steps ?? []).map(step => ({
+      selection: { step_id: step.step_id, node_id: step.operation, prompt_path: step.entry_path, operation: step.operation },
+      feature: 'ordinary', binding_kind: 'none', resource_mode: 'simulated', evaluator_mode: 'default', execution_mode: 'ordinary', verdict: 'supported', reason_code: 'supported' })),
+    edges: [], diagnostics: [], provider_calls: 0, resource_calls: 0 };
+}
+
+// A fake PDD runtime on 127.0.0.1. `answer(entry, fake)` returns {status, json | text, headers} or {destroy: true}.
+export async function fakeRuntime(t, answer) {
+  const fake = { posts: [], jsonPosts: [], gets: [], deletes: [], authorization: new Set(), jobs: new Map() };
+  const server = createServer(async (req, res) => {
+    if (req.method === 'GET' && req.url === '/v1/capacity') {
+      const reply = fake.capacity ? await fake.capacity({ method: req.method, url: req.url, headers: req.headers }, fake) : { status: 404, json: { error: { code: 'not-found' } } };
+      res.writeHead(reply.status, { 'content-type': 'application/json', ...reply.headers }); res.end(JSON.stringify(reply.json)); return;
+    }
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const body = Buffer.concat(chunks), entry = { method: req.method, url: req.url, headers: req.headers };
+    fake.authorization.add(req.headers.authorization);
+    if (req.method === 'POST' && String(req.headers['content-type']).startsWith('application/json')) {
+      entry.json = JSON.parse(body.toString('utf8'));
+      fake.jsonPosts.push(entry);
+    } else if (req.method === 'POST') {
+      const form = await new Request('http://fake/', { method: 'POST', headers: { 'content-type': req.headers['content-type'] }, body }).formData();
+      entry.request = JSON.parse(await form.get('request').text());
+      entry.tar = Buffer.from(await form.get('source').arrayBuffer());
+      entry.command = req.url.split('/').at(-1);
+      fake.posts.push(entry);
+    } else (req.method === 'GET' ? fake.gets : fake.deletes).push(entry);
+    const reply = await answer(entry, fake);
+    if (reply.destroy) { req.socket.destroy(); return; }
+    res.writeHead(reply.status, { 'content-type': reply.text === undefined ? 'application/json' : 'text/plain', ...reply.headers });
+    res.end(reply.text ?? JSON.stringify(reply.json));
+  });
+  await new Promise(done => server.listen(0, '127.0.0.1', done));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  fake.origin = `http://127.0.0.1:${server.address().port}`;
+  fake.job = (id, command, state, result = null, calls = 0) => ({ requestId: id, id, command, state, engine_sha: 'eae2202a68d00ab762fcbbf1eba0d8607a132a15',
+    result, usage: usage(calls), report_url: `${fake.origin}/r/${createHash('sha256').update(id).digest('hex').slice(0, 32)}` });
+  // Like the server: per-test verdicts only for a lint that asked for complete results; this fake passes every uploaded JSON file.
+  fake.lint = (id, prompts = [{ path: PLACE, state: 'approved', admission_state: 'approved', interface: { calls: [] } }], refused = []) => {
+    const post = fake.posts.find(post => post.command === 'lint' && post.request.requestId === id);
+    const listing = post?.request.complete === true ? spawnSync('tar', ['-tf', '-'], { input: post.tar, encoding: 'utf8' }) : null;
+    if (listing) assert.equal(listing.status, 0, listing.stderr);
+    const paths = (listing?.stdout.split('\n') ?? []).filter(Boolean);
+    const sources = paths.map(path => {
+      const file = spawnSync('tar', ['-xOf', '-', path], { input: post.tar });
+      assert.equal(file.status, 0, file.stderr.toString());
+      return { path, bytes: file.stdout };
+    });
+    const tests = sources.filter(source => { try { return JSON.parse(source.bytes).schema_version === 'prompt-runtime.program-scenario.v1'; } catch { return false; } })
+      .map(({ path }) => ({ path, verdict: 'passed', capabilities: ordinaryCapabilities(sources, path) }));
+    return fake.job(id, 'lint', 'passed', { exitCode: 0, refusals: [],
+      capabilities: tests.map(item => ({ path: item.path, report: item.capabilities })), capabilities_complete: !!listing,
+      report: { verdict: 'passed', lint: { complete: !!listing, tests }, program: { prompts, refused_prompts: refused } } });
+  };
+  fake.check = (id, state = 'passed', checks = PASSED_CHECKS, refusals = []) => fake.job(id, 'check', state, ['queued', 'running'].includes(state) ? null
+    : { exitCode: state === 'passed' ? 0 : 1, outcome: state === 'passed' ? 'Pass' : ['refused', 'unknown'].includes(state) ? 'Inconclusive' : 'Fail', refusals, who: null, why: state === 'passed' ? 'All checked criteria passed.' : ['refused', 'unknown'].includes(state) ? 'No verdict. The runtime could not judge this test.' : 'Checks failed.',
+      next_step: ['refused', 'unknown'].includes(state) ? 'Tell the person the reason. Do not resend it automatically.' : null, report: { samples: [{ sample: 1, steps: [{ checks }] }], evaluation: { requested_model: 'gpt-6.1-sol' },
+        criterion_results: [...new Set(checks.map(check => check.criterion_id))].map(id => ({ criterion_id: id, status: checks.every(check => check.criterion_id !== id || check.passed) ? 'passed' : 'failed' })) } },
+    state === 'refused' ? 0 : 1);
+  fake.tryJob = (id, url = `${fake.origin}/s/${'t'.repeat(43)}/`, session = 'running') => fake.job(id, 'try', 'passed',
+    { exitCode: 0, refusals: [], url, session: { id, state: session, tab: 'call', max_calls: 400, remaining_calls: 400 } });
+  fake.stopJob = (id, tryId) => fake.job(id, 'stop', 'passed', { exitCode: 0, refusals: [], output: 'Try stopped. Saved results can be replayed.', session: { id: tryId, state: 'stopped' } });
+  // The usual server: lint passes at once; checks are queued, then pass on the first read.
+  fake.normal = entry => {
+    if (entry.method === 'POST' && entry.command === 'lint') return { status: 200, json: fake.lint(entry.request.requestId) };
+    if (entry.method === 'POST') return { status: 202, json: fake.check(entry.request.requestId, 'queued') };
+    const id = entry.url.split('/').at(-1);
+    return { status: 200, json: fake.check(id) };
+  };
+  return fake;
+}
+
+// In-process ports: a fake clock (sleep moves time), a fake gh and spies on IDs and interrupts.
+export function portsFor(env, extra = {}) {
+  const clock = { now: Date.parse('2026-10-27T16:27:47Z'), uuids: 0, gh: [] };
+  const interrupts = new Set();
+  clock.interrupt = () => { for (const handler of [...interrupts]) handler(); };
+  const ports = { env, agentBridge: false, stdout: sink(), stderr: sink(), pollMs: 2000, interactive: false,
+    now: () => clock.now, sleep: async ms => { clock.now += ms; await new Promise(done => setImmediate(done)); },
+    randomUUID: () => { clock.uuids += 1; return randomUUID(); },
+    gh: args => { clock.gh.push(args); return args[0] === 'auth' ? { status: 0, stdout: `${TOKEN}\n` } : { status: 0, stdout: 'octo 4242\n' }; },
+    onInterrupt: handler => { interrupts.add(handler); return () => { interrupts.delete(handler); }; }, ...extra };
+  return { ports, clock };
+}
