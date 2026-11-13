@@ -5,6 +5,10 @@ admission without evaluating the program or claiming compatibility. #3135
 authorizes additive public exports and Story boundary syntax. Preserve existing
 fixtures and expectations; fixtures win by exact `resource.operation` key after
 per-step overrides, never by fuzzy matching or a different module's entry name.
+When `step.simulation_overrides` is a list of override rows, overlay each object
+row that has a nonblank string `operation` as `row.operation -> row.binding` in
+order without exposing array indices as candidate names; retain plain-object
+`step.simulation_overrides` compatibility for existing local fixtures.
 
 Export `runtimeBoundary(storyPath,text,{notes=[]}={})`: return a sorted unique
 nonempty list of repository-relative `.prompt.md` paths only from one dedicated
@@ -102,6 +106,6 @@ path arithmetic; all filesystem, Git and service access belongs to callers.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"draft","prose_sha256":"a3d441d36355ff7a599ac2156f18d58141cd9086547ec1e7801b191ac9fe66e6","entries":[],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
+{"status":"draft","prose_sha256":"7b4871c63a049ad24f969ec7ff3daeed1cc0e6a6ad8c65114386c8369154342b","entries":[],"calls":[],"resources":[],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
 ```
 </details>
