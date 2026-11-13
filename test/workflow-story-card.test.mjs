@@ -13,7 +13,7 @@ import * as runner from '../src/workflow-runner.mjs';
 const { approveRun, runStatus, startRun, stepDone } = runner;
 const showStoryCard = (...args) => { assert.equal(typeof runner.showStoryCard, 'function', 'workflow card must be available'); return runner.showStoryCard(...args); };
 import { writeRun } from '../src/workflow-runs.mjs';
-import { fakeRuntime, portsFor, storyTest } from './runtime-fake.mjs';
+import { fakeRuntime, portsFor, storyTest } from './helpers/runtime-fake.mjs';
 import { runCheck } from '../src/runtime-seam.mjs';
 import { renderJson } from '../src/runtime-seam.mjs';
 import { captureSource, fillHashes } from '../src/runtime-seam.mjs';

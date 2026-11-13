@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { listReportDrafts } from '../src/autopilot-reports.mjs';
 import { coreWorld } from './helpers/core-world.mjs';
-import { fakeRuntime, portsFor } from './runtime-fake.mjs';
+import { fakeRuntime, portsFor } from './helpers/runtime-fake.mjs';
 import * as runtime from '../src/runtime-seam.mjs';
 
 const writeIn = (cwd, path, text) => { mkdirSync(join(cwd, path, '..'), { recursive: true }); writeFileSync(join(cwd, path), text); };

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {appendFileSync,existsSync,readFileSync,symlinkSync,unlinkSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {runCheck,captureSource,findTests} from '../src/runtime-seam.mjs';
-import {portsFor} from './runtime-fake.mjs';
+import {portsFor} from './helpers/runtime-fake.mjs';
 import {affectedFixture,affectedRuntime,batch,check,checks,cli,commit,disclaimer,git,hasState,historicalAssociation,installGh,put,vectors} from './helpers/affected-check-fixture.mjs';
 const cases=vectors('affected-story-selection').cases;
 const vector=id=>{const found=cases.find(item=>item.id===id);assert.ok(found);return found;};

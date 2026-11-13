@@ -7,7 +7,7 @@ import { fixture } from './helpers/workflow-delivery-fixture.mjs';
 import { approveRun, stepDone } from '../src/workflow-runner.mjs';
 import { proseSha256 } from '../src/runtime-seam.mjs';
 import { writeRun } from '../src/workflow-runs.mjs';
-import { PLACE } from './runtime-fake.mjs';
+import { PLACE } from './helpers/runtime-fake.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const paths = ['prompts/a.prompt.md', 'prompts/b.prompt.md'];

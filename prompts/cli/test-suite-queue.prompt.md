@@ -2,8 +2,8 @@
 
 Own `src/test-suite-queue.mjs` and the compatibility entrypoint
 `scripts/vm-suite-lock.sh`, `src/test-suite-entry.mjs` and the detached native
-recorder `src/test-suite-recorder.mjs`, validation state selection in
-`scripts/vm-suite.sh`, and evidence adapter
+recorder `src/test-suite-recorder.mjs`, full-suite execution and validation
+state selection in `scripts/vm-suite.sh`, and evidence adapter
 `src/validation-evidence.mjs`. This queue bounds full-suite resource use for all
 repositories and parallel workflow runs on one machine. It runs only an explicit
 operator or worker command; it does not schedule tests or approve publication.
@@ -57,6 +57,10 @@ returns the child's status. Preserve the compatibility queued/started/finished
 log lines and history file at `PDD_VM_SUITE_LOCK.history`, else
 `HOME/.local/state/pdd/vm-suite/fullsuite.lock.history`. An explicit legacy lock
 path still needs an existing writable parent; the default log parent is created. No GitHub writes, private paths or live agent calls.
+
+`scripts/vm-suite.sh` runs `node --test` with TAP reporting and concurrency 4
+across `test/*.test.mjs` and `test/runtime-package/*.test.mjs` in its isolated
+checkout.
 
 Both VM scripts preserve a nonempty caller `PDD_STATE_DIR`. Otherwise they set
 it to `PDD_SUITE_QUEUE.state` when a nonempty queue selector is supplied, or
