@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: d32ad43da714095945ea8e11bfcab918233ee8ead6b30220419708448677f0e3).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 215272e84dda1a2540ed20187d9e9ef0986f18d0200804fb4e6386b89a4c82fd).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
@@ -3148,10 +3148,13 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
     }
     if (finalPost(row, answer)) return;
     if (row.final && (ports.now() >= (context.deadline ?? Infinity) || context.interrupted)) return;
-    // A verified unknown receipt already carries evaluated checks and provider/time-limit facts; preserve them across --timeout 0 and failed/unknown polls.
-    if (answer && sameJob(answer, id, 'check') && answer.state === 'unknown') {
+    // A saved unknown row whose verified receipt already carries failed checks preserves them across --timeout 0 and failed/unknown polls.
+    if (row.state === 'unknown' && answer && sameJob(answer, id, 'check') && answer.state === 'unknown'
+      && failedCheckCount(projectAnswer(answer, { origin: context.origin, secrets: context.secrets, steps: row.steps ?? [], criterionTexts: row.criterion_texts ?? {}, test: row.test })) > 0) {
+      const legacyLostWhy = row.lost === undefined && row.why ? row.why : null;
       applyAnswer(row, answer, context);
       row.lost = false;
+      if (legacyLostWhy && !row.why) row.why = legacyLostWhy;
       if (ports.now() >= (context.deadline ?? Infinity) || context.interrupted) return;
       if (!quiet) line(ports.stderr, 'Reading 1 result from the PDD interpreter…');
       const savedWhy = row.why;
