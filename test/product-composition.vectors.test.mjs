@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { composeProductTry } from '../src/product-composition.mjs';
+import { composeProductTry } from '../src/runtime-seam.mjs';
 import { productStatus } from '../src/product.mjs';
 
 const pointer = (value, path) => path === '' ? value : path.slice(1).split('/').reduce((item, token) => item?.[token.replace(/~1/g, '/').replace(/~0/g, '~')], value);

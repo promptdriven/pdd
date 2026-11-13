@@ -70,7 +70,7 @@ test('a failed job reports its exit code and a missing result', async t => {
 });
 
 test('an invalid result file is reported as invalid, not as success', async t => {
-  const dir = folder(t), job = { pid: 1, token: 'x', exit: join(dir, 'e.json'), result: join(dir, 'r.json') };
+  const dir = folder(t), job = { pid: 1, token: join(dir, 'x'), exit: join(dir, 'e.json'), result: join(dir, 'r.json') };
   writeFileSync(job.exit, JSON.stringify({ code: 0, signal: null, at: 1 }));
   writeFileSync(job.result, '{not json');
   assert.equal(readAgentJob(job, { alive: () => false }).result, 'invalid');
@@ -89,7 +89,7 @@ test('the native liveness read keeps a long job token after ps wide output', t =
   const dir = folder(t), token = `job-${'x'.repeat(200)}`, bin = fakePs(dir, 'case "$LC_ALL:$*" in C:*-ww*) printf "%s\\n" "$PS_TOKEN" ;; *) printf "%s\\n" "node truncated" ;; esac');
   const module = new URL('../src/agent-job.mjs', import.meta.url).href;
   const child = spawnSync(process.execPath, ['--input-type=module', '-e', `import { readAgentJob } from ${JSON.stringify(module)}; process.stdout.write(readAgentJob({ pid: process.pid, token: process.env.PS_TOKEN, exit: '/missing-exit', result: '/missing-result' }).state);`],
-    { encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, PS_TOKEN: token } });
+    { cwd: dir, encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, PS_TOKEN: token } });
   assert.equal(child.status, 0, child.stderr);
   assert.equal(child.stdout, 'running');
 });

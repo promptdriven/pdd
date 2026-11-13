@@ -1,6 +1,6 @@
 # Runtime outcome
 
-Own `src/runtime-outcome.mjs`: the one place that decides what happened to one
+Own `src/runtime/runtime-outcome.mjs`: the one place that decides what happened to one
 selected test from one server answer. `pdd lint`, the lint gate for paid work, the
 table, the Story summary, the progress line and the exit code all read this
 decision, so two consumers can never disagree about the same answer. A pass needs
@@ -161,9 +161,14 @@ flowchart TD
   record's fields). When `prompts` is a list: a missing reached prompt refuses as
   `unknown-target` (`<path> is not in the lint report.`) when lint is complete,
   and otherwise counts as not listed; admission state `stale` refuses as
-  `interface-stale` (`<path> changed after its hash was filled or approved.`); any
+  `interface-stale` (`<path> changed after its hash was filled or approved.`);
+  `state: "missing"` with `lazy_interface_pending: true` marks the test
+  `lazyPending` instead of refusing and enqueues `prompt.dependencies` entries
+  present in `prompts` or `refused_prompts`; any other
   state other than `approved` or `draft` refuses as `interface-<state>` (`<path>
-  has no usable Runtime interface.`). A reached `draft` sets `draft`. These
+  has no usable Runtime interface.`). A reached `draft` sets `draft` unless the
+  server synthesized it lazily (`lazy_interface: true`), which also enqueues
+  `prompt.dependencies` entries present in `prompts` or `refused_prompts`. These
   refusals are marked as written for a reached prompt, so the client can add its
   local hint. A program with no `prompts` list gives no reached-prompt evidence,
   either way: the test's own verdict decides.
@@ -235,7 +240,11 @@ association keeps client `state:unknown`; any raw server blocker stays in
 source as supported or blocked. Ended lint is `not_run` (exit 5).
 
 With matched association, admission needs a complete selected report and its
-authoritative aggregate `supported`. Known authoritative `invalid-source`,
+authoritative aggregate `supported` (except when a reached prompt is cold
+`lazyPending`, complete lint passed for this test with no own refusals, and
+`compatibility` has `state: "unknown"` with `reported.complete === false` and no
+concrete blocker, which also admits `passed` so check/Try execution can
+synthesize the lazy interface). Known authoritative `invalid-source`,
 `unsupported-capability` or `missing-binding` gives `refused` (exit 4), preserving
 those codes and rows, even with incomplete selected coverage. Without such a
 concrete blocker, ended unknown/incomplete/missing/conflicting compatibility
@@ -278,9 +287,7 @@ exit helpers below also accept the internal outcome states.
 - Module function `outcomeOverall(outcomes, {interrupted, lintUnknown} = {})`: the
   state that decides a group. Any state that is not done counts as `unknown`. Empty,
   interrupted or `lintUnknown` is `unknown`. Else the first present of `unknown`,
-  `not_run`, `refused`, `failed`, `passed`.
-- Module function `outcomeExitCode(outcomes, options)`: that state's exit code:
-  unknown 3, not_run 5, refused 4, failed 1, passed 0.
+  `not_run`, `refused`, `failed`, `passed`. State-to-exit-code mapping belongs to the host caller's exit-code mapper.
 
 Without `criterion_results`, an outcome proves no criterion passed.
 
@@ -292,7 +299,7 @@ client consumption interface; the server remains the capability decision owner.
 ## Caller navigation
 
 The client owns transport, native digest computation, saved evidence, capacity waits, local
-hints and text cleaning; [runtime output](runtime-output.prompt.md) renders the
+hints and text cleaning; the host exit-code mapper maps `outcomeOverall` to process exit codes; [runtime output](runtime-output.prompt.md) renders the
 retained fields. Server answer shapes: prompt-runtime `server/lint_driver.py`
 (per-test verdicts with `--complete`), `server/runner.py` (`report.lint`) and
 `server/app.py` (status view).

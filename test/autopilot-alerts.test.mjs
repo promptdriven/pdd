@@ -131,8 +131,11 @@ test('an empty or relative HOME never puts the secret or a record in the checkou
     f.replies.push(echo);
     assert.match((await f.alert(12, 'usage-limit', usage)).stdout, /confirmed/);
     assert.equal(statSync(record).mode & 0o777, 0o600, 'the record is in the account home too');
-    assert.equal((await f.pdd(['autopilot', 'alerts', 'set', '--discord-channel', CHANNEL, '--token-command', 'true'])).exitCode, 0);
-    assert.equal(JSON.parse(readFileSync(config, 'utf8')).tokenCommand, 'true');
+    const tokenCmd = `printf '%s\\n' '${BOT_TOKEN}'`;
+    f.replies.push({ status: 200, text: JSON.stringify({ id: '42', username: 'PDD', bot: true }) },
+      { status: 200, text: JSON.stringify({ id: CHANNEL, name: 'alerts', type: 0 }) });
+    assert.equal((await f.pdd(['autopilot', 'alerts', 'set', '--discord-channel', CHANNEL, '--token-command', tokenCmd])).exitCode, 0);
+    assert.equal(JSON.parse(readFileSync(config, 'utf8')).tokenCommand, tokenCmd);
     assert.equal((await f.pdd(['autopilot', 'alerts', 'clear'])).exitCode, 0);
     assert.equal(existsSync(config), false);
     assert.deepEqual(checkout(), [], `HOME=${HOME}: nothing is written in the checkout`);
@@ -479,12 +482,16 @@ test('a delivered alerts test ends the status line of an older failed recovery; 
 
   f.replies.push({ status: 500, text: '' });
   await f.alert(31, 'stuck', { cause: 'No progress', tried: 'Two repairs', need: 'A person to look' });
+  f.replies.push(echo, echo);
+  await f.pdd(['autopilot', 'alerts', 'test']);
+  assert.equal(f.record().incidents['31:stuck'].result, 'delivered', 'delivered test retries open failed alerts');
+  assert.equal((await f.status()).length, 1);
+
+  f.replies.push({ status: 204, text: '' });
+  await f.alert(32, 'stuck', { cause: 'No progress', tried: 'Two repairs', need: 'A person to look' });
   f.replies.push(echo);
   await f.pdd(['autopilot', 'alerts', 'test']);
-  assert.equal((await f.status())[1], 'Alerts: 1 open alert not delivered; check with pdd autopilot alerts test.');
-  f.replies.push(echo);
-  assert.match((await f.alert(31, 'stuck', { cause: 'No progress', tried: 'Two repairs', need: 'A person to look' })).stdout, /Alert sent for #31 stuck/);
-  assert.equal((await f.status()).length, 1);
+  assert.equal((await f.status())[1], 'Alerts: 1 open alert not delivered; check with pdd autopilot alerts test.', 'unconfirmed alerts are not resent');
   f.noSecret();
 });
 
@@ -619,15 +626,38 @@ test('a Discord bot readback that changed only line ends or end spaces is delive
   f.noSecret();
 });
 
-test('a bot token command runs at each send, the token never reaches disk or output, and a failing command sends nothing', async t => {
+test('a bot token command is verified on set, runs at each send, shows scrubbed stderr on failure, and never leaks secrets', async t => {
   const f = setup(t); fakeDiscord(f);
   // The fake secret store is outside HOME, like a real secret manager; the command is a plain local shell command.
-  const store = join(f.dir, 'secret-store'), tokenFile = join(store, 'token');
+  const store = join(f.dir, 'secret-store'), tokenFile = join(store, 'token'), helper = join(store, 'get-token.sh');
   mkdirSync(store); writeFileSync(tokenFile, `${BOT_TOKEN}\n`);
-  const saved = await f.pdd(['autopilot', 'alerts', 'set', '--discord-channel', CHANNEL, '--token-command', `cat '${tokenFile}'`], 'IGNORED-STDIN-VALUE');
+
+  // Broken token commands and failed bot/channel checks are refused on set without writing a destination file.
+  const brokenSet = await f.pdd(['autopilot', 'alerts', 'set', '--discord-channel', CHANNEL, '--token-command',
+    `cat '${tokenFile}'; printf 'gcloud: Reauthentication required (%s)\\n' '${BOT_TOKEN}' >&2; exit 3`]);
+  assert.equal(brokenSet.exitCode, 1);
+  assert.match(brokenSet.stderr, /token command failed \(exit 3\): gcloud: Reauthentication required \(\[token\]\)/);
+  assert.match(brokenSet.stderr, /Nothing was saved/);
+  assert.equal(existsSync(f.config), false);
+
+  const emptySet = await f.pdd(['autopilot', 'alerts', 'set', '--discord-channel', CHANNEL, '--token-command', 'true']);
+  assert.equal(emptySet.exitCode, 1);
+  assert.match(emptySet.stderr, /token command gave no token\. Nothing was saved/);
+  assert.equal(existsSync(f.config), false);
+
+  f.discord.me = 401;
+  const badAuthSet = await f.pdd(['autopilot', 'alerts', 'set', '--discord-channel', CHANNEL, '--token-command', `cat '${tokenFile}'`]);
+  assert.equal(badAuthSet.exitCode, 1);
+  assert.match(badAuthSet.stderr, /Discord bot check failed \(HTTP 401\).*Nothing was saved/);
+  assert.equal(existsSync(f.config), false);
+  f.discord.me = 200;
+
+  writeFileSync(helper, `cat '${tokenFile}'\n`);
+  const saved = await f.pdd(['autopilot', 'alerts', 'set', '--discord-channel', CHANNEL, '--token-command', `sh '${helper}'`], 'IGNORED-STDIN-VALUE');
   assert.equal(saved.exitCode, 0, saved.stderr);
+  assert.match(saved.stdout, /Discord bot PDD in #internal-alerts/);
   assert.match(saved.stdout, /stores no token/);
-  assert.deepEqual(JSON.parse(readFileSync(f.config, 'utf8')), { v: 1, service: 'discord-bot', channel: CHANNEL, tokenCommand: `cat '${tokenFile}'` });
+  assert.deepEqual(JSON.parse(readFileSync(f.config, 'utf8')), { v: 1, service: 'discord-bot', channel: CHANNEL, tokenCommand: `sh '${helper}'` });
   assert.equal(statSync(f.config).mode & 0o777, 0o600);
 
   assert.match((await f.alert(12, 'usage-limit', usage)).stdout, /confirmed/);
@@ -638,17 +668,25 @@ test('a bot token command runs at each send, the token never reaches disk or out
   assert.match((await f.pdd(['autopilot', 'alerts', 'test'])).stdout, /Discord bot PDD in #internal-alerts/);
 
   const count = f.requests.length;
-  await f.pdd(['autopilot', 'alerts', 'set', '--discord-channel', CHANNEL, '--token-command', `cat '${tokenFile}'; cat '${tokenFile}' >&2; exit 3`]);
+  writeFileSync(helper, `cat '${tokenFile}'; printf 'gcloud: Reauthentication required (%s) %s\\n' '${ROTATED_TOKEN}' '${DISCORD}' >&2; exit 3\n`);
   const failed = await f.alert(14, 'access', { cause: 'Needs a paid plan', tried: 'Read the billing page', need: 'Approve spending' });
   assert.equal(failed.exitCode, 0, 'work continues');
   assert.match(failed.stdout, /delivery failed \(token command failed \(exit 3\)\)/);
   const tested = await f.pdd(['autopilot', 'alerts', 'test']);
   assert.equal(tested.exitCode, 1);
-  assert.match(tested.stderr, /token command failed \(exit 3\)\. Its output is not shown/);
-  await f.pdd(['autopilot', 'alerts', 'set', '--discord-channel', CHANNEL, '--token-command', 'true']);
+  assert.match(tested.stderr, /token command failed \(exit 3\): gcloud: Reauthentication required \(\[token\]\) \[webhook\]/);
+  writeFileSync(helper, 'true\n');
   assert.match((await f.alert(15, 'decision', { cause: 'Two layouts', tried: 'Asked on the issue', need: 'Pick one' })).stdout, /token command gave no token/);
   assert.equal(f.requests.length, count, 'no request is sent without a token');
   assert.match((await f.status())[1], /last delivery failed \(token command gave no token\) for #15 decision/);
+
+  // Restoring credentials and running alerts test retries open failed alerts once and clears status.
+  writeFileSync(helper, `cat '${tokenFile}'\n`);
+  const recoveredTest = await f.pdd(['autopilot', 'alerts', 'test']);
+  assert.equal(recoveredTest.exitCode, 0, recoveredTest.stderr);
+  assert.equal(f.record().incidents['14:access'].result, 'delivered');
+  assert.equal(f.record().incidents['15:decision'].result, 'delivered');
+  assert.equal((await f.status()).length, 1);
 
   f.noSecret({ config: true });
 });
@@ -859,17 +897,46 @@ test('destination tests retain concurrent alert state and clear only the selecte
   assert.equal(f.record().log.at(-1).action, 'test', 'test evidence must survive the pending alert save');
   f.replies.push({ status: 403, text: '' });
   await f.alert(42, 'resource', fields);
+  f.replies.push({ status: 200, text: 'not_ok' });
+  await f.alert(43, 'interpreter', fields);
   let status = alertStatusLine({ repo: 'owner/repo', env: f.env }, f.ports);
   assert.ok(status.includes('--destination infrastructure'));
   f.replies.push(echo);
   await f.pdd(['autopilot', 'alerts', 'test']);
-  status = alertStatusLine({ repo: 'owner/repo', env: f.env }, f.ports);
-  assert.ok(status.includes('403'), 'an Autopilot test must not hide an infrastructure failure');
-  f.replies.push({ status: 200, text: 'ok' });
+  assert.equal(f.record().incidents['resource@test-host'].result, 'failed', 'an Autopilot test does not retry infrastructure incidents');
+  f.replies.push({ status: 200, text: 'ok' }, { status: 200, text: 'ok' });
   await f.pdd(['autopilot', 'alerts', 'test', '--destination', 'infrastructure']);
+  assert.equal(f.record().incidents['resource@test-host'].result, 'delivered', 'infrastructure test retries failed infrastructure incidents');
+  assert.equal(f.record().incidents['interpreter@test-host'].result, 'unconfirmed', 'unconfirmed incidents are not resent');
   status = alertStatusLine({ repo: 'owner/repo', env: f.env }, f.ports);
   assert.equal(status.includes('403'), false, 'infrastructure test clears its old send failure');
-  assert.ok(status.includes('--destination infrastructure'), 'the open undelivered incident still needs attention');
+  assert.ok(status.includes('--destination infrastructure'), 'the open unconfirmed incident still needs attention');
+});
+
+test('native tick retry delivers open failed and newly configured alerts once without resending unconfirmed ones', async t => {
+  const f = setup(t);
+  await f.alert(50, 'decision', { cause: 'Choose retention', tried: 'Read policy', need: 'Pick days' });
+  assert.equal(f.record().incidents['50:decision'].result, 'not-configured');
+
+  await f.pdd(['autopilot', 'alerts', 'set'], DISCORD);
+  f.replies.push({ status: 503, text: '' }, { status: 204, text: '' });
+  await f.alert(51, 'access', { cause: 'Needs paid API', tried: 'Checked plan', need: 'Approve 20 USD' });
+  await f.alert(52, 'stuck', { cause: 'CI stalled', tried: 'Retried once', need: 'Inspect runner' });
+  assert.equal(f.record().incidents['51:access'].result, 'failed');
+  assert.equal(f.record().incidents['52:stuck'].result, 'unconfirmed');
+
+  f.replies.push(echo, echo);
+  const first = await runAutopilotAlerts({ action: 'retry', cwd: f.cwd, env: f.env }, f.ports);
+  assert.equal(first.exitCode, 0);
+  assert.equal(f.record().incidents['50:decision'].result, 'delivered');
+  assert.equal(f.record().incidents['51:access'].result, 'delivered');
+  assert.equal(f.record().incidents['52:stuck'].result, 'unconfirmed');
+  const sentCount = f.requests.length;
+
+  const second = await runAutopilotAlerts({ action: 'retry', cwd: f.cwd, env: f.env }, f.ports);
+  assert.equal(second.exitCode, 0);
+  assert.equal(f.requests.length, sentCount, 'delivered and unconfirmed incidents are never retried on subsequent ticks');
+  f.noSecret();
 });
 
 test('failed digest status names the digest without inventing an issue', async t => {

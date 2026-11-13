@@ -3,10 +3,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runCheck, runTry } from '../src/runtime-client.mjs';
-import { outcomeFor } from '../src/runtime-outcome.mjs';
-import { proseSha256 } from '../src/runtime-preflight.mjs';
-import { PLACE, fakeRuntime, harbor, ordinaryCapabilities, portsFor, sha } from './runtime-fake.mjs';
+import { outcomeFor, proseSha256, runCheck, runTry } from '../src/runtime-seam.mjs';
+import { PLACE, fakeRuntime, harbor, ordinaryCapabilities, portsFor, sha } from './helpers/runtime-fake.mjs';
 
 const TEST_WITH_MAP = 'tests/place-order.json';
 const TEST_PLAIN = 'tests/unknown-item.json';
