@@ -445,7 +445,7 @@ test('Formal bounded domain: outcomeFor across testVerdict x mapDeclared x hasMa
   for (const testVerdict of ['passed', 'refused', 'not-checked', 'missing']) {
     for (const mapDeclared of [false, true]) {
       for (const hasMapList of [false, true]) {
-        for (const mapVerdict of hasMapList ? ['passed', 'refused', 'not-checked', 'missing', 'conflict'] : ['none']) {
+        for (const mapVerdict of hasMapList ? ['passed', 'refused', 'not-checked', 'missing', 'conflict', 'conflict-unknown'] : ['none']) {
           for (const hasSpecificProblem of [false, true]) {
             for (const hasGenericRefusal of [false, true]) {
               for (const complete of [false, true]) {
@@ -454,6 +454,7 @@ test('Formal bounded domain: outcomeFor across testVerdict x mapDeclared x hasMa
                 const app_maps = !hasMapList ? undefined
                   : mapVerdict === 'missing' ? []
                   : mapVerdict === 'conflict' ? [{ path: MAP_PATH, verdict: 'passed' }, { path: MAP_PATH, verdict: 'not-checked' }]
+                  : mapVerdict === 'conflict-unknown' ? [{ path: MAP_PATH, verdict: 'passed' }, { path: MAP_PATH, verdict: 'unknown' }]
                   : [{ path: MAP_PATH, verdict: mapVerdict }];
                 const problems = hasSpecificProblem ? [MAP_PROBLEM] : [];
                 const refusals = hasGenericRefusal ? [GENERIC_MAP_REFUSAL] : [];
@@ -497,7 +498,8 @@ test('Formal bounded domain: outcomeFor across testVerdict x mapDeclared x hasMa
                 if (testVerdict === 'passed') {
                   if (mapDeclared && hasMapList && mapVerdict !== 'passed') {
                     assert.equal(outcome.state, 'not_run', 'unverified map in reported app_maps cannot pass');
-                    assert.equal(outcome.reason, !complete || mapVerdict === 'not-checked' ? 'lint did not finish' : 'lint gave no verdict for this app map');
+                    const anyNotChecked = (app_maps ?? []).some(item => item.path === MAP_PATH && item.verdict === 'not-checked');
+                    assert.equal(outcome.reason, !complete || anyNotChecked ? 'lint did not finish' : 'lint gave no verdict for this app map');
                   } else {
                     assert.equal(outcome.state, 'passed');
                   }
@@ -515,5 +517,5 @@ test('Formal bounded domain: outcomeFor across testVerdict x mapDeclared x hasMa
       }
     }
   }
-  assert.equal(checked, 384);
+  assert.equal(checked, 448);
 });

@@ -58,15 +58,16 @@ a public partial result exits 3 unless its caller is the local SVG lint command.
 
 ## Outcomes
 
-Module function `outcomeFor(answer, {test, steps = [], appMaps = [], kind = answer.command, timeLimit = false, sourceFiles, capacityUncertain = false})`
+Module function `outcomeFor(answer, {test, steps = [], appMaps, kind = answer.command, timeLimit = false, sourceFiles, capacityUncertain = false})`
 returns one outcome object. `test` is the selected test path, `steps` its authored
-steps (each with `entry_path`), `appMaps` the distinct nonblank repository-relative
-app-map paths selected for this test or simulation (`[]` when none), `kind` is
-`lint` or `check`, and `timeLimit` is true when the client found a typed step
-time-limit stop in the answer. The client sets `capacityUncertain` for a Check when
-raw capacity evidence is incomplete or conflicting. That flag returns `unknown`
-before generic retryable/not-started refusal classification; the answer cannot
-project as busy or not run.
+steps (each with `entry_path`), `appMaps` is the optional list of repository-relative
+app-map paths that apply to `test` (`[]` means none apply; when omitted, every entry
+in `result.app_maps`, else `report.lint.app_maps`, applies), `kind` is `lint` or
+`check`, and `timeLimit` is true when the client found a typed step time-limit stop
+in the answer. The client sets `capacityUncertain` for a Check when raw capacity
+evidence is incomplete or conflicting. That flag returns `unknown` before generic
+retryable/not-started refusal classification; the answer cannot project as busy or
+not run.
 
 | State | When | Retained fields |
 |---|---|---|
@@ -106,13 +107,13 @@ Rules for every answer, in this order:
 ```mermaid
 flowchart TD
     A{Lint job ended?} -->|No| U[unknown: no lint verdict]
-    A -->|Yes| R{Own, reached-prompt or selected-map refusal?}
+    A -->|Yes| R{Own, reached-prompt or applicable app-map refusal?}
     R -->|Yes| F[refused]
     R -->|No| V{This test's verdict}
     V -->|refused| F
-    V -->|passed| M{Selected app maps pass?}
-    M -->|No| N[not_run with reason]
+    V -->|passed| M{Applicable app maps passed?}
     M -->|Yes| C{Selected compatibility admits?}
+    M -->|No| N[not_run with reason]
     C -->|Yes| P[passed]
     C -->|Concrete blocker| F
     C -->|Unknown or incomplete| N
@@ -127,31 +128,20 @@ flowchart TD
 - **This test's verdict**: the entries for exactly `test` in `result.tests`, else
   in `report.lint.tests`. Conflicting entries and `not-checked` are not a pass.
   The server lists per-test verdicts only for a lint that asked for `complete: true`.
-- **Selected app maps**: for each `mapPath` in `appMaps`, read its entries across
-  `result.app_maps` and `report.lint.app_maps` (conflicting entries and
-  `not-checked` are not a pass; any `refused` entry refuses), plus any non-warning
-  refusal record or `result.problems` (else `report.problems`) entry whose `file`
-  (else `path`) is `mapPath`, non-warning `errors` entries under a matching
-  `report.lint.app_maps` entry for `mapPath`, and entry-level `error` (as `code`,
-  with optional `reason`) on a matching `result.app_maps` or `report.lint.app_maps`
-  entry when no specific problem or error record is present. Any `refused` map
-  verdict, map refusal record, non-warning map problem or entry `error` refuses
-  this test: prefer specific problem/error records (keeping `code`, `path` from
-  `file`/`path` or `mapPath`, `field`/`at`/`section`, `reason`, `fix` and a
-  fallback `message` from `reason` and `fix`, else `detail`, else `engine_message`,
-  else `code` when `message` is absent) over a generic `lint-refused` summary
-  record, falling back to `<mapPath> was refused by complete lint.` (`lint-refused`,
-  `path: mapPath`) when none carry detail. When the answer supplies `result.app_maps`
-  or `report.lint.app_maps` and `appMaps` is nonempty, a `passed` test verdict also
-  requires every `mapPath` in `appMaps` to have verdict `passed` before
-  compatibility can admit `passed`; answers without an `app_maps` verdict list do
-  not block `passed` unless a refusal or problem names a selected map.
+- **Applicable app maps**: entries in `result.app_maps`, else `report.lint.app_maps`,
+  filtered to `appMaps` when `appMaps` is an array (`[]` selects none) or all listed
+  `app_maps` entries when `appMaps` is omitted. When the answer supplies
+  `result.app_maps` or `report.lint.app_maps`, every applicable app map must have a
+  single `verdict: "passed"` entry before a test can pass; conflicting entries or any
+  other verdict (such as `not-checked`) hold the test at `not_run`. Answers without
+  an `app_maps` verdict list do not block `passed` unless a refusal or problem names
+  an applicable app map.
 - **Own evidence is enough.** The server lints the prompts first, then each test
-  and app map until its deadline, so a passing verdict for this test and its selected
-  app maps is real evidence even when the lint did not finish for other tests or
-  maps (`complete` is false). One slow, unchecked or refused unselected test or app
-  map never holds back a test that has its own pass, passing selected app maps and
-  the selected compatibility evidence required below.
+  and selected app map until its deadline, so passing verdicts for this test and its
+  applicable app maps are real evidence even when lint did not finish for other
+  tests or maps (`complete` is false). One slow, unchecked or refused unselected test
+  or app map never holds back a test that has its own pass, passing applicable app
+  maps and the selected compatibility evidence required below.
 - **Complete**: `report.lint.complete === true`; when the report has no `lint`
   object, `result.problems_complete === true`. It only chooses the `not_run`
   reason.
@@ -176,19 +166,38 @@ flowchart TD
   the test. A test refused this way or by its verdict keeps its own refusal records
   and error problems from `result.problems`; a refused verdict with none of them
   gets `<test> was refused by complete lint.` (`lint-refused`).
+- **App-map refusal**: an applicable app map with `verdict: "refused"`, an error
+  problem (`severity !== "warning"`) in `result.problems` (else `report.problems`)
+  whose `file` (else `path`) is an applicable app map, a refusal record whose
+  `file` (else `path`) is an applicable app map, a non-warning `errors` entry under
+  a matching `report.lint.app_maps` entry, or an entry-level `error` (as `code`,
+  with optional `reason`) on a matching `result.app_maps` or `report.lint.app_maps`
+  entry when no specific problem or error record is present refuses the test. Collect
+  matching non-warning `problems` first, then matching `refusals`, `report.lint.app_maps`
+  `errors` and fallback entry `error` (omitting a generic `lint-refused` record for
+  an app map that already has a specific error problem or refusal, and filling any
+  absent `path` from `file` or `<path>` and any absent `message` from `reason` and
+  `fix`, else `detail`, else `engine_message`, else `code`); if an applicable app map
+  has `verdict: "refused"` with none, use
+  `{code: "lint-refused", field: <path>, path: <path>, message: "<path> was refused by complete lint."}`.
+  For app-map refusals, the first retained item gives `code`, `field` (the first
+  non-empty string of `field`, `at`, `pointer`, `section`, `file`, `path`, so a
+  null `at` and `pointer` still names the app-map path), `fix` and `message`
+  (`reason`, else `message`, else `code`).
 - **Job refusal**: job state `refused`, report `verdict: refused`, or any refusal
   record. It refuses only a selected test with no verdict entry of its own, even
   when a program report exists, and keeps the server's code and text (else
   `The interpreter refused lint.`). A test with its own passing verdict and passing
-  selected app maps is eligible under the selected compatibility rule; the job
-  refusal stays visible as a diagnostic in the client.
-- **Not run code**: `deadline` when lint is incomplete; `no-server-verdict`
-  when complete lint has no verdict. Keep a compatibility issue code when known.
+  applicable app maps is eligible under the selected compatibility rule; an
+  unrelated job refusal stays visible as a diagnostic in the client.
+- **Not run code**: `deadline` when lint is incomplete or an applicable test or
+  app-map verdict is `not-checked`; `no-server-verdict` when complete lint has no
+  verdict or conflicting verdicts. Keep a compatibility issue code when known.
 - **Not run reason**: `lint did not finish` when lint is not complete, a reached
-  prompt was not listed, the test verdict is `not-checked`, or this test's verdict
-  is `passed` and a selected app-map verdict is `not-checked`; else `lint gave no
-  verdict for this app map` when this test's verdict is `passed` and a selected app
-  map lacks a `passed` verdict; else `lint gave no verdict for this test`.
+  prompt was not listed, or the test or applicable app-map verdict is
+  `not-checked`; `lint gave no verdict for this app map` when complete lint lacks a
+  single passing verdict for an applicable app map; else `lint gave no verdict for
+  this test`.
 
 ## Selected compatibility
 
@@ -291,6 +300,10 @@ exit helpers below also accept the internal outcome states.
 
 Without `criterion_results`, an outcome proves no criterion passed.
 
+The partial Runtime surface covers `outcomeFor` on supplied lint and check
+answers. Transport, native source-digest capture, per-row app-map discovery and
+CLI rendering remain native-test obligations in the callers.
+
 ## Dependencies
 
 No external runtime dependency. The required wire reference below supplies the
@@ -339,5 +352,13 @@ Features are `ordinary`, `constructor-retained-read`, `method-attachment`,
 `retained-mutation-unsupported`, `runtime-mode-unsupported`, `binding-missing`,
 `analysis-unavailable`, `requirement-uninspectable`. Consume reported decisions;
 these enums do not authorize rediscovering features or applying server policy.
+
+</details>
+
+<details><summary>Runtime interface</summary>
+
+```json
+{"status":"approved","prose_sha256":"ea2e92637ff8069a6e500b8311170a2612a0377bbd244befa4d9616fd73f1705","kind":"partial","entries":[{"operation":"outcomeFor","input_schema":{"type":"object","properties":{"answer":{"type":"object","properties":{"command":{"type":"string","enum":["lint","check"]},"state":{"type":"string"},"engine_sha":{"oneOf":[{"type":"string"},{"type":"null"}]},"dispatch":{"oneOf":[{"type":"string"},{"type":"null"}]},"why":{"oneOf":[{"type":"string"},{"type":"null"}]},"result":{"type":"object","properties":{"problems_complete":{"type":"boolean"},"capabilities_complete":{"type":"boolean"},"tests":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"verdict":{"type":"string"},"problems":{"type":"integer"}},"required":["path","verdict"],"additionalProperties":false}},"app_maps":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"verdict":{"type":"string"},"problems":{"type":"integer"}},"required":["path","verdict"],"additionalProperties":false}},"refusals":{"type":"array","items":{"type":"object","properties":{"code":{"type":"string"},"reason":{"oneOf":[{"type":"string"},{"type":"null"}]},"message":{"oneOf":[{"type":"string"},{"type":"null"}]},"fix":{"oneOf":[{"type":"string"},{"type":"null"}]},"file":{"oneOf":[{"type":"string"},{"type":"null"}]},"path":{"oneOf":[{"type":"string"},{"type":"null"}]},"field":{"oneOf":[{"type":"string"},{"type":"null"}]},"at":{"oneOf":[{"type":"string"},{"type":"null"}]},"pointer":{"oneOf":[{"type":"string"},{"type":"null"}]},"section":{"oneOf":[{"type":"string"},{"type":"null"}]},"where":{"oneOf":[{"type":"string"},{"type":"null"}]},"engine_message":{"oneOf":[{"type":"string"},{"type":"null"}]},"retryable":{"type":"boolean"}},"required":["code"],"additionalProperties":false}},"problems":{"type":"array","items":{"type":"object","properties":{"code":{"type":"string"},"severity":{"type":"string"},"cause":{"oneOf":[{"type":"string"},{"type":"null"}]},"file":{"oneOf":[{"type":"string"},{"type":"null"}]},"path":{"oneOf":[{"type":"string"},{"type":"null"}]},"field":{"oneOf":[{"type":"string"},{"type":"null"}]},"at":{"oneOf":[{"type":"string"},{"type":"null"}]},"pointer":{"oneOf":[{"type":"string"},{"type":"null"}]},"section":{"oneOf":[{"type":"string"},{"type":"null"}]},"reason":{"oneOf":[{"type":"string"},{"type":"null"}]},"fix":{"oneOf":[{"type":"string"},{"type":"null"}]},"source":{"oneOf":[{"type":"string"},{"type":"null"}]},"where":{"oneOf":[{"type":"string"},{"type":"null"}]},"message":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["code"],"additionalProperties":false}},"capabilities":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"report":{"type":"object","properties":{"schema_version":{"type":"string"},"capability_version":{"type":"string"},"engine_build":{"type":"string"},"source":{"oneOf":[{"type":"object","properties":{"scenario_sha256":{"type":"string"},"closure_sha256":{"type":"string"},"files":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"sha256":{"type":"string"}},"required":["path","sha256"],"additionalProperties":false}}},"required":["scenario_sha256","closure_sha256","files"],"additionalProperties":false},{"type":"null"}]},"complete":{"type":"boolean"},"verdict":{"type":"string"},"operations":{"type":"array","items":{"type":"object","properties":{"selection":{"type":"object","properties":{"step_id":{"type":"string"},"node_id":{"type":"string"},"prompt_path":{"type":"string"},"operation":{"type":"string"}},"required":["step_id","node_id","prompt_path","operation"],"additionalProperties":false},"feature":{"type":"string"},"binding_kind":{"type":"string"},"resource_mode":{"type":"string"},"evaluator_mode":{"type":"string"},"execution_mode":{"type":"string"},"verdict":{"type":"string"},"reason_code":{"type":"string"}},"required":["selection","feature","binding_kind","resource_mode","evaluator_mode","execution_mode","verdict","reason_code"],"additionalProperties":false}},"edges":{"type":"array","items":{"type":"object","properties":{"selection":{"type":"object","properties":{"step_id":{"type":"string"},"node_id":{"type":"string"},"prompt_path":{"type":"string"},"operation":{"type":"string"}},"required":["step_id","node_id","prompt_path","operation"],"additionalProperties":false},"feature":{"type":"string"},"binding_kind":{"type":"string"},"resource_mode":{"type":"string"},"evaluator_mode":{"type":"string"},"execution_mode":{"type":"string"},"verdict":{"type":"string"},"reason_code":{"type":"string"}},"required":["selection","feature","binding_kind","resource_mode","evaluator_mode","execution_mode","verdict","reason_code"],"additionalProperties":false}},"diagnostics":{"type":"array","items":{"type":"object","properties":{"code":{"type":"string"},"path":{"oneOf":[{"type":"string"},{"type":"null"}]},"section":{"type":"string"}},"required":["code","path","section"],"additionalProperties":false}},"provider_calls":{"type":"integer"},"resource_calls":{"type":"integer"}},"required":["schema_version","capability_version","engine_build","source","complete","verdict","operations","edges","diagnostics","provider_calls","resource_calls"],"additionalProperties":false}},"required":["path","report"],"additionalProperties":false}},"report":{"type":"object","properties":{"verdict":{"type":"string"},"dispatch":{"type":"string"},"lint":{"type":"object","properties":{"complete":{"type":"boolean"},"tests":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"verdict":{"type":"string"},"problems":{"type":"integer"}},"required":["path","verdict"],"additionalProperties":false}},"app_maps":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"verdict":{"type":"string"},"problems":{"type":"integer"}},"required":["path","verdict"],"additionalProperties":false}}},"required":[],"additionalProperties":false},"program":{"type":"object","properties":{"prompts":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"admission_state":{"type":"string"}},"required":["path","admission_state"],"additionalProperties":false}},"refused_prompts":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"code":{"type":"string"},"message":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["path","code"],"additionalProperties":false}}},"required":[],"additionalProperties":false}},"required":[],"additionalProperties":false}},"required":[],"additionalProperties":false}},"required":["state"],"additionalProperties":false},"test":{"type":"string"},"steps":{"type":"array","items":{"type":"object","properties":{"entry_path":{"type":"string"}},"required":["entry_path"],"additionalProperties":false}},"appMaps":{"type":"array","items":{"type":"string"}},"kind":{"type":"string","enum":["lint","check"]},"timeLimit":{"type":"boolean"},"sourceFiles":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"sha256":{"type":"string"}},"required":["path","sha256"],"additionalProperties":false}},"capacityUncertain":{"type":"boolean"}},"required":["answer","test"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"state":{"type":"string","enum":["queued","running","passed","failed","refused","not_run","unknown"]},"ahead":{"type":"integer"},"draft":{"type":"boolean"},"prompt":{"type":"boolean"},"retryable":{"type":"boolean"},"code":{"oneOf":[{"type":"string"},{"type":"null"}]},"field":{"oneOf":[{"type":"string"},{"type":"null"}]},"fix":{"oneOf":[{"type":"string"},{"type":"null"}]},"message":{"oneOf":[{"type":"string"},{"type":"null"}]},"reason":{"oneOf":[{"type":"string"},{"type":"null"}]},"refusals":{"type":"array","items":{"type":"object","properties":{"code":{"type":"string"},"reason":{"oneOf":[{"type":"string"},{"type":"null"}]},"message":{"oneOf":[{"type":"string"},{"type":"null"}]},"fix":{"oneOf":[{"type":"string"},{"type":"null"}]},"file":{"oneOf":[{"type":"string"},{"type":"null"}]},"path":{"oneOf":[{"type":"string"},{"type":"null"}]},"field":{"oneOf":[{"type":"string"},{"type":"null"}]},"at":{"oneOf":[{"type":"string"},{"type":"null"}]},"pointer":{"oneOf":[{"type":"string"},{"type":"null"}]},"section":{"oneOf":[{"type":"string"},{"type":"null"}]},"where":{"oneOf":[{"type":"string"},{"type":"null"}]},"severity":{"oneOf":[{"type":"string"},{"type":"null"}]},"cause":{"oneOf":[{"type":"string"},{"type":"null"}]},"source":{"oneOf":[{"type":"string"},{"type":"null"}]},"engine_message":{"oneOf":[{"type":"string"},{"type":"null"}]},"prompt":{"type":"boolean"},"retryable":{"type":"boolean"}},"required":["code"],"additionalProperties":false}},"compatibility":{"oneOf":[{"type":"object","properties":{"reported":{"oneOf":[{"type":"object","properties":{"schema_version":{"type":"string"},"capability_version":{"type":"string"},"engine_build":{"type":"string"},"source":{"oneOf":[{"type":"object","properties":{"scenario_sha256":{"type":"string"},"closure_sha256":{"type":"string"},"files":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"sha256":{"type":"string"}},"required":["path","sha256"],"additionalProperties":false}}},"required":["scenario_sha256","closure_sha256","files"],"additionalProperties":false},{"type":"null"}]},"complete":{"type":"boolean"},"verdict":{"type":"string"},"operations":{"type":"array","items":{"type":"object","properties":{"selection":{"type":"object","properties":{"step_id":{"type":"string"},"node_id":{"type":"string"},"prompt_path":{"type":"string"},"operation":{"type":"string"}},"required":["step_id","node_id","prompt_path","operation"],"additionalProperties":false},"feature":{"type":"string"},"binding_kind":{"type":"string"},"resource_mode":{"type":"string"},"evaluator_mode":{"type":"string"},"execution_mode":{"type":"string"},"verdict":{"type":"string"},"reason_code":{"type":"string"}},"required":["selection","feature","binding_kind","resource_mode","evaluator_mode","execution_mode","verdict","reason_code"],"additionalProperties":false}},"edges":{"type":"array","items":{"type":"object","properties":{"selection":{"type":"object","properties":{"step_id":{"type":"string"},"node_id":{"type":"string"},"prompt_path":{"type":"string"},"operation":{"type":"string"}},"required":["step_id","node_id","prompt_path","operation"],"additionalProperties":false},"feature":{"type":"string"},"binding_kind":{"type":"string"},"resource_mode":{"type":"string"},"evaluator_mode":{"type":"string"},"execution_mode":{"type":"string"},"verdict":{"type":"string"},"reason_code":{"type":"string"}},"required":["selection","feature","binding_kind","resource_mode","evaluator_mode","execution_mode","verdict","reason_code"],"additionalProperties":false}},"diagnostics":{"type":"array","items":{"type":"object","properties":{"code":{"type":"string"},"path":{"oneOf":[{"type":"string"},{"type":"null"}]},"section":{"type":"string"}},"required":["code","path","section"],"additionalProperties":false}},"provider_calls":{"type":"integer"},"resource_calls":{"type":"integer"}},"required":["schema_version","capability_version","engine_build","source","complete","verdict","operations","edges","diagnostics","provider_calls","resource_calls"],"additionalProperties":false},{"type":"null"}]},"state":{"type":"string","enum":["supported","unsupported-capability","missing-binding","invalid-source","unknown"]},"association":{"type":"string","enum":["matched","mismatch","unknown"]},"issue":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["state","association","issue"],"additionalProperties":false},{"type":"null"}]}},"required":["state"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
+```
 
 </details>
