@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 7d15175d6d53df2d3642078be75969ebdeaa5c9b223e0d3f27f61869aa7ed402).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 90c517ec607019a768cddeb7a499d42c630140710ed300758556db0875f3cb80).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -2416,6 +2416,13 @@ async function runtimeResend(ctx, job, pr) {
 // when no other open PR holds it and no older green PR of this machine waits; two machines at once keep the lower PR
 // number. A PR that waits restarts its quiet clock each tick: waiting never ends a job.
 const laneHolders = async ctx => (await ctx.gh.all(`repos/${ctx.repo}/issues?state=open&labels=${encodeURIComponent(LANE)}&per_page=100`)).filter(row => row.pull_request).map(row => row.number);
+// A PR's own issue record is consistent right after a label write, while the label search list can lag.
+async function ownLane(ctx, number) {
+  const r = await ctx.gh.call('GET', `repos/${ctx.repo}/issues/${number}`);
+  if (r.status < 200 || r.status >= 300 || !object(r.value)) return 'unknown';
+  return r.value.state === 'open' && labelsOf(r.value).includes(LANE) ? 'present' : 'absent';
+}
+const withOwnLane = (held, pr, own) => own === 'present' && !held.includes(pr) ? [...held, pr] : own === 'absent' ? held.filter(n => n !== pr) : held;
 // A holder is stale when its core issue has no live claim (its machine stopped, or a person stopped the job), and an
 // orphan when it is not a core PR (a hand-added label). Both are cleared.
 async function staleLane(ctx, number) {
@@ -2447,6 +2454,7 @@ async function enterLane(ctx, job) {
     return 'wait';
   };
   let held = await laneHolders(ctx);
+  if (job.lane?.state === 'final') held = withOwnLane(held, job.pr, await ownLane(ctx, job.pr));
   // Stale or orphan holders (no live claim, not a core PR) are cleared by any machine.
   for (const number of held.filter(n => n !== job.pr)) if (await staleLane(ctx, number)) { await dropLabel(ctx, number); held = held.filter(n => n !== number); }
   const others = held.filter(n => n !== job.pr);
@@ -2461,8 +2469,8 @@ async function enterLane(ctx, job) {
     const reserved = await reservations(ctx, job);
     if (reserved) return wait(reserved);
     await gh.ok('POST', `repos/${repo}/issues/${job.pr}/labels`, { labels: [LANE] });
-    const now = await laneHolders(ctx);
-    if (!now.length) return 'wait';                        // the read did not show the label yet: try again next tick
+    const now = withOwnLane(await laneHolders(ctx), job.pr, await ownLane(ctx, job.pr));
+    if (!now.includes(job.pr)) return 'wait';              // neither read showed the label yet: try again next tick
     held = now;
     if (Math.min(...now) !== job.pr) return wait(Math.min(...now));
   }
@@ -2477,8 +2485,9 @@ async function dropLabel(ctx, number) {
 // The race guard right before the merge: this PR must still be the lowest open holder, and the base tip must still be
 // in its head. Else it does not merge in this tick.
 async function laneStillMine(ctx, job) {
-  const held = await laneHolders(ctx);
-  if (!held.includes(job.pr) || held.some(n => n < job.pr)) { await dropLabel(ctx, job.pr); job.lane = null; ctx.saveJob(job); return false; }
+  let held = withOwnLane(await laneHolders(ctx), job.pr, await ownLane(ctx, job.pr));
+  for (const number of held.filter(n => n < job.pr)) if (await staleLane(ctx, number)) { await dropLabel(ctx, number); held = held.filter(n => n !== number); }
+  if (!held.includes(job.pr) || held.some(n => n < job.pr)) { await dropLabel(ctx, job.pr); job.lane = null; ctx.saveJob(job); if (!held.length) ctx.laneFreed = true; return false; }
   const compare = await ctx.gh.ok('GET', `repos/${ctx.repo}/compare/${encodeURIComponent(ctx.state.baseBranch)}...${job.head}`);
   return compare?.behind_by === 0;
 }
@@ -2488,6 +2497,7 @@ async function leaveLane(ctx, job) {
   const r = await ctx.gh.call('DELETE', `repos/${ctx.repo}/issues/${job.pr}/labels/${encodeURIComponent(LANE)}`);
   if (r.status >= 300 && r.status !== 404) throw Error(`GitHub DELETE label returned ${r.status}`);
   job.lane = null; ctx.saveJob(job);
+  ctx.laneFreed = true;
 }
 // ---- Collision rules (debate B) -------------------------------------------------------------------------
 const IDENTITY = ['-c', 'user.name=PDD Autopilot', '-c', 'user.email=pdd@noreply.invalid', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null'];
@@ -2966,6 +2976,7 @@ async function nearChange(ctx, job, cwd, mergeBase, tip, pr) {
 async function finishMerge(ctx, job, read = null) {
   const { gh, repo } = ctx;
   if (!(read ?? await gh.ok('GET', `repos/${repo}/pulls/${job.pr}`)).merged) { Object.assign(job, { lastError: 'the merge is not confirmed', lastErrorStep: 'merge' }); ctx.saveJob(job); return; }
+  ctx.laneFreed = true;
   const issue = await gh.ok('GET', `repos/${repo}/issues/${job.issue}`);
   if (issue.state === 'open') await gh.ok('PATCH', `repos/${repo}/issues/${job.issue}`, { state: 'closed', state_reason: 'completed' });
   if (labelsOf(issue).includes('pdd:working')) await gh.call('DELETE', `repos/${repo}/issues/${job.issue}/labels/${encodeURIComponent('pdd:working')}`);
@@ -3686,17 +3697,32 @@ export async function tickCore(input, ports) {
     } catch (error) { ctx.warn(`Autopilot core heartbeat of #${job.issue} deferred: ${error.message}`); }
   }
   if (input.budget?.state === 'reserve') return { exitCode: 0, message: 'Autopilot core: GitHub budget is at the reserve floor; only heartbeats ran.' };
-  for (const job of readJobs(ctx.fs, ctx.root)) {
+  const runJob = async job => {
     try { await advance(ctx, job); }
     catch (error) {
       const latest = readJson(ctx.fs, join(ctx.dirs.jobs, `${job.issue}.json`));
       ctx.warn(`Autopilot core #${job.issue}: ${error.message}`);
-      if (!latest) continue;
+      if (!latest) return;
       Object.assign(latest, { lastError: safeLine(error.message), lastErrorTool: ['github', 'git'].includes(error.code), lastErrorStep: null });
       // No job holds a slot or a claim past its quiet period plus 2 ticks, whatever keeps failing.
       if (latest.phase !== 'ending' && quietFor(ctx, latest) >= ctx.quiet) latest.overdue = (latest.overdue ?? 0) + 1;
       ctx.saveJob(latest);
       if (latest.overdue >= 2) await overdueStop(ctx, latest).catch(failure => ctx.warn(`Autopilot core END of #${job.issue} waits: ${failure.message}`));
+    }
+  };
+  const laneOrder = (a, b) => Number(Boolean(b.lanePriority)) - Number(Boolean(a.lanePriority)) || a.started - b.started || a.issue - b.issue;
+  const jobOrder = (a, b) => {
+    const rank = job => job.phase !== 'pr' ? 2 : job.lane?.state === 'final' ? 0 : 1;
+    return rank(a) - rank(b) || (a.phase === 'pr' ? laneOrder(a, b) : a.issue - b.issue);
+  };
+  for (const job of readJobs(ctx.fs, ctx.root).sort(jobOrder)) await runJob(job);
+  if (ctx.laneFreed) {
+    const retried = new Set();
+    while (!readJobs(ctx.fs, ctx.root).some(job => job.phase === 'pr' && job.lane?.state === 'final')) {
+      const next = readJobs(ctx.fs, ctx.root).filter(job => job.phase === 'pr' && job.lane?.state === 'waiting' && !retried.has(job.issue)).sort(laneOrder)[0];
+      if (!next) break;
+      retried.add(next.issue);
+      await runJob(next);
     }
   }
   await sweepFiles(ctx);

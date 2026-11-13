@@ -1467,13 +1467,22 @@ runs until its end):
    waiting, holder, since, heldSince}`, and its quiet clock starts again each tick
    (`progress.running`), so waiting never ends a job and never counts as a refresh; a
    wait for the same holder longer than the quiet period sends one `stuck` alert. Else
-   the PR adds the label and reads the holders again (an empty read: try again next
-   tick). The holder is in the final step: `lane {state: final, since, waited}`. A
-   repair (which also clears a stale waiting state, as a new head does), an END (of
-   any kind, before its other steps), a hand-over, a person's stop and an observe
-   validation leave the lane (remove the label); a merge closes the PR. **Race
-   guard:** right before `gh pr merge` the PR reads the holders and the compare again;
-   it merges only as the lowest open holder with `behind_by` 0.
+   the PR adds the label and reads both the holders list and its own issue record (`GET
+   issues/PR`, which is consistent when the label list has not caught up; if neither
+   shows the label on this open PR, try again next tick); a PR already in `final`
+   reconciles the holders list with `GET issues/PR` the same way. The holder is in the
+   final step: `lane {state: final, since, waited}`. A repair (which also clears a stale
+   waiting state, as a new head does), an END (of any kind, before its other steps), a
+   hand-over, a person's stop and an observe validation leave the lane (remove the
+   label); a merge closes the PR. Active `phase: pr` jobs in a tick advance with any
+   `final` holder first and then in lane-priority order (`lanePriority`, then `started`,
+   then `issue`) so claim order holds when two PRs turn green on the same tick, and when
+   the lane frees during a tick (a merge or any lane exit) with no local PR in `final`,
+   the tick advances waiting PRs at once in that same order (at most once per waiting job)
+   instead of waiting for the next timer tick. **Race
+   guard:** right before `gh pr merge` the PR reads the holders (reconciled with `GET
+   issues/PR`, clearing any stale or closed lower holder) and the compare again; it
+   merges only as the lowest open holder with `behind_by` 0.
    The order (debate B L6, C1, C2): a PR that came back from a conflict update
    (`lanePriority`) goes first, then claim order; a PR whose changed files meet a live
    reservation of another PR (this machine's job files, or the `reserved {files,
