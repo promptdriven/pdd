@@ -8,7 +8,7 @@ with Node 22.16 or later. Run from the package checkout.
 ## Controlled native verification
 
 ```sh
-node --test test/affected-check-plan.vectors.test.mjs test/affected-check-plan.native.test.mjs test/affected-story-selection.vectors.test.mjs test/affected-baseline-report.vectors.test.mjs
+node --test test/runtime-package/affected-check-plan.vectors.test.mjs test/runtime-package/affected-check-plan.native.test.mjs test/affected-story-selection.vectors.test.mjs test/affected-baseline-report.vectors.test.mjs
 ```
 
 The selection test starts the actual `bin/pdd.mjs test --affected --json` process

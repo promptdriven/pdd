@@ -23,7 +23,7 @@ function readJournal(repo){
  return saved;
 }
 const {fixture}=await load('test/helpers/workflow-delivery-fixture.mjs');
-const {harbor,PLACE,sink}=await load('test/runtime-fake.mjs');
+const {harbor,PLACE,sink}=await load('test/helpers/runtime-fake.mjs');
 const {runApprove}=await load('src/prompt-approve.mjs');
 const {stepDone,approveRun}=await load('src/workflow-runner.mjs');
 const {proseSha256}=await load('src/runtime-seam.mjs');

@@ -29,5 +29,5 @@ export function fixture(t,{bounded=true}={}){
 }
 export function pendingId(message){return message.match(/pending ([a-f0-9]{64}\.[a-f0-9]{64})/)?.[1];}
 export const stream=()=>({text:'',write(text){this.text+=text;},isTTY:false});
-export function cases(story){return JSON.parse(fs.readFileSync(new URL(`../runtime-workspace/${story}-cases.json`,import.meta.url),'utf8')).cases;}
+export function cases(story){return JSON.parse(fs.readFileSync(new URL(`../runtime-package/runtime-workspace/${story}-cases.json`,import.meta.url),'utf8')).cases;}
 export const closed=testPath=>({kind:'closed-editor',testPath});
