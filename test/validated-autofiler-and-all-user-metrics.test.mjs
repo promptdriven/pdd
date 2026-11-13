@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { checkInput, interfaceBlocks } from '../src/runtime-seam.mjs';
+import { runMetrics } from '../src/metrics-command.mjs';
 import {
   DEFAULT_DAILY_REPORT_LIMIT,
   DEFAULT_RUNTIME_REPORT_REPOSITORY,
@@ -799,4 +800,446 @@ if (endpoint.includes('/issues?state=open')) {
   const modelContract = JSON.parse(interfaceBlocks(modelPrompt)[0][1]);
   const resultSchema = modelContract.entries.find(e => e.operation === 'calculateMetrics').result_schema;
   assert.deepEqual(checkInput(dailyReport, resultSchema, 0).refusals, []);
+});
+
+test('Repeated pdd metrics runs across PR pushes, receipt/label updates, merges, and undated local runs produce zero conflicts', async t => {
+  const root = tempDir(t, 'pdd-metrics-no-conflicts-');
+  const repoDir = join(root, 'repo');
+  const binDir = join(root, 'bin');
+  mkdirSync(repoDir, { recursive: true });
+  mkdirSync(binDir, { recursive: true });
+
+  execFileSync('git', ['init', '-q', repoDir]);
+  execFileSync('git', ['-C', repoDir, 'remote', 'add', 'origin', 'https://github.com/acme/conflict-check.git']);
+
+  // Seed an undated local run in .git/pdd/runs/77 (no createdAt, no startedAt, empty done & events).
+  const undatedRunDir = join(repoDir, '.git', 'pdd', 'runs', '77');
+  mkdirSync(undatedRunDir, { recursive: true });
+  const undatedRun = {
+    v: 1,
+    runId: 'run-77',
+    number: 77,
+    repo: 'acme/conflict-check',
+    workflow: 'bug',
+    state: 'running',
+    done: {},
+    pr: [],
+    metrics: { events: [] },
+  };
+  writeFileSync(join(undatedRunDir, 'status.json'), JSON.stringify(undatedRun));
+
+  const sha = ch => ch.repeat(40);
+  const statePath = join(root, 'gh-state.json');
+  const initialState = {
+    openIssues: [{ number: 21 }, { number: 22 }],
+    allIssues: [
+      {
+        number: 21,
+        state: 'open',
+        html_url: 'https://github.com/acme/conflict-check/issues/21',
+        labels: [{ name: 'bug' }],
+        comments: 0,
+        created_at: '2026-11-13T08:30:00Z',
+        updated_at: '2026-11-13T09:00:00Z',
+      },
+      {
+        number: 22,
+        state: 'open',
+        html_url: 'https://github.com/acme/conflict-check/issues/22',
+        labels: [{ name: 'pdd:working' }, { name: 'pdd:feature' }],
+        comments: 1,
+        created_at: '2026-11-13T09:15:00Z',
+        updated_at: '2026-11-13T09:30:00Z',
+      },
+    ],
+    pulls: [
+      {
+        number: 201,
+        state: 'open',
+        merged_at: null,
+        created_at: '2026-11-13T09:00:00Z',
+        updated_at: '2026-11-13T09:50:00Z',
+        html_url: 'https://github.com/acme/conflict-check/pull/201',
+        author_association: 'OWNER',
+        user: { login: 'dana' },
+        head: { sha: sha('a'), ref: 'pdd/core-21-fix' },
+        title: 'Fix #21',
+        body: 'Closes #21\nSkill: bug\nRuntime: FAIL\nCode replay: FAIL\nFormal check: not needed',
+        labels: [],
+      },
+    ],
+    commentsByThread: {
+      22: [
+        {
+          id: 6022,
+          author_association: 'OWNER',
+          user: { login: 'dana' },
+          created_at: '2026-11-13T09:20:00Z',
+          html_url: 'https://github.com/acme/conflict-check/issues/22#issuecomment-6022',
+          body: 'Working on feature.\nSkill: feature\n<!-- pdd:autopilot-core:review:22:1 -->',
+        },
+      ],
+      201: [
+        {
+          id: 6201,
+          author_association: 'OWNER',
+          user: { login: 'dana' },
+          created_at: '2026-11-13T09:55:00Z',
+          html_url: 'https://github.com/acme/conflict-check/pull/201#issuecomment-6201',
+          body: 'Initial check.\nRuntime: FAIL\n<!-- pdd:autopilot-core:review:21:a -->',
+        },
+      ],
+    },
+  };
+  writeFileSync(statePath, JSON.stringify(initialState));
+
+  const mockGh = `#!/usr/bin/env node
+const fs = require('node:fs');
+const data = JSON.parse(fs.readFileSync(process.env.GH_STATE_FILE, 'utf8'));
+const endpoint = process.argv.slice(2).find(a => a.startsWith('repos/')) || '';
+if (endpoint.includes('/issues?state=open')) {
+  process.stdout.write(data.openIssues.map(x => JSON.stringify(x)).join('\\n') + (data.openIssues.length ? '\\n' : ''));
+} else if (endpoint.includes('/pulls?state=all')) {
+  process.stdout.write(JSON.stringify(data.pulls));
+} else if (endpoint.includes('/issues?state=all')) {
+  process.stdout.write(JSON.stringify(data.allIssues));
+} else if (/\\/pulls\\/(\\d+)$/.test(endpoint)) {
+  const num = Number(/\\/pulls\\/(\\d+)$/.exec(endpoint)[1]);
+  const pr = data.pulls.find(p => p.number === num);
+  if (!pr) process.exit(1);
+  process.stdout.write(JSON.stringify(pr));
+} else if (/\\/issues\\/(\\d+)\\/comments/.test(endpoint)) {
+  const num = Number(/\\/issues\\/(\\d+)\\/comments/.exec(endpoint)[1]);
+  const list = data.commentsByThread[num] || [];
+  process.stdout.write(list.map(c => JSON.stringify(c)).join('\\n') + (list.length ? '\\n' : ''));
+} else if (endpoint.includes('/check-runs')) {
+  process.stdout.write(JSON.stringify({ check_runs: [] }));
+} else {
+  process.exit(1);
+}
+`;
+  writeFileSync(join(binDir, 'gh'), mockGh, { mode: 0o755 });
+  const oldPath = process.env.PATH;
+  const oldState = process.env.GH_STATE_FILE;
+  process.env.PATH = `${binDir}:${oldPath}`;
+  process.env.GH_STATE_FILE = statePath;
+  t.after(() => {
+    process.env.PATH = oldPath;
+    if (oldState === undefined) delete process.env.GH_STATE_FILE;
+    else process.env.GH_STATE_FILE = oldState;
+  });
+
+  const runAt = async nowIso => {
+    let out = '', err = '';
+    const code = await runMetrics({
+      cwd: repoDir,
+      argv: ['--json'],
+      ports: { now: () => nowIso },
+      stdout: s => { out += s; },
+      stderr: s => { err += s; },
+    });
+    assert.equal(code, 0, err);
+    return JSON.parse(out);
+  };
+
+  // Run 1 at 10:00Z
+  const report1 = await runAt('2026-11-13T10:00:00.000Z');
+  assert.deepEqual(report1.conflicts, []);
+  const r1Issue21 = report1.issues.find(i => i.issue === 21);
+  assert.equal(r1Issue21.skillChecks.runtime, 'missed');
+  assert.equal(report1.issues.some(i => i.issue === 77), false, 'undated local run emits no observedAt-stamped skill milestone');
+
+  // Update PR #201 (new commit head, green checks, would-merge label, new comment, then merge) and issue #22 (label update)
+  const updatedState = structuredClone(initialState);
+  updatedState.openIssues = [{ number: 22 }];
+  updatedState.allIssues[0].state = 'closed';
+  updatedState.allIssues[0].updated_at = '2026-11-13T11:50:00Z';
+  updatedState.allIssues[1].labels = [{ name: 'pdd:needs-decision' }, { name: 'pdd:feature' }];
+  updatedState.allIssues[1].updated_at = '2026-11-13T11:55:00Z';
+  updatedState.pulls[0] = {
+    ...updatedState.pulls[0],
+    state: 'closed',
+    merged_at: '2026-11-13T11:50:00Z',
+    updated_at: '2026-11-13T11:50:00Z',
+    head: { sha: sha('b'), ref: 'pdd/core-21-fix' },
+    body: 'Closes #21\nSkill: bug\nRuntime: PASS\nCode replay: PASS\nFormal check: not needed',
+    labels: [{ name: 'pdd:would-merge' }],
+  };
+  updatedState.commentsByThread[201].push({
+    id: 6202,
+    author_association: 'OWNER',
+    user: { login: 'dana' },
+    created_at: '2026-11-13T11:45:00Z',
+    html_url: 'https://github.com/acme/conflict-check/pull/201#issuecomment-6202',
+    body: `Green check on new head.\nRuntime: PASS\nEvidence: vectors=pass formal=none\n<!-- pdd:autopilot-core:would-merge:${sha('b')} -->`,
+  });
+  writeFileSync(statePath, JSON.stringify(updatedState));
+
+  // Run 2 at 12:00Z (undated run #77 still undated, PR/issue updated & merged)
+  const report2 = await runAt('2026-11-13T12:00:00.000Z');
+  assert.deepEqual(report2.conflicts, []);
+  const r2Issue21 = report2.issues.find(i => i.issue === 21);
+  assert.equal(r2Issue21.delivered, 'yes');
+  assert.equal(r2Issue21.wouldMerge, 'yes');
+  assert.equal(r2Issue21.skillChecks.runtime, 'done');
+  assert.equal(r2Issue21.skillChecks.vectors, 'done');
+  assert.equal(r2Issue21.skillChecks.complete, 'done');
+
+  // Run 3 at 12:30Z after local run #77 completes a dated step
+  writeFileSync(
+    join(undatedRunDir, 'status.json'),
+    JSON.stringify({ ...undatedRun, done: { scope: { at: '2026-11-13T12:10:00Z' } } }),
+  );
+  const report3 = await runAt('2026-11-13T12:30:00.000Z');
+  assert.deepEqual(report3.conflicts, []);
+  const r3Issue77 = report3.issues.find(i => i.issue === 77);
+  assert.equal(r3Issue77.skill, 'bug');
+});
+
+test('pdd metrics --date <TODAY> excludes historical merged PRs and unlabeled non-PDD prose issues without paginating non-PDD issue comments', async t => {
+  const root = tempDir(t, 'pdd-metrics-daily-scope-');
+  const repoDir = join(root, 'repo');
+  const binDir = join(root, 'bin');
+  const callsFile = join(root, 'gh-calls.log');
+  mkdirSync(repoDir, { recursive: true });
+  mkdirSync(binDir, { recursive: true });
+  writeFileSync(callsFile, '');
+
+  execFileSync('git', ['init', '-q', repoDir]);
+  execFileSync('git', ['-C', repoDir, 'remote', 'add', 'origin', 'https://github.com/acme/daily-scope.git']);
+
+  const sha = ch => ch.repeat(40);
+  const ghFixture = {
+    openIssues: [{ number: 50 }, { number: 51 }],
+    allIssues: [
+      {
+        // Historical issue from last week
+        number: 8,
+        state: 'closed',
+        html_url: 'https://github.com/acme/daily-scope/issues/8',
+        labels: [{ name: 'small-change' }],
+        comments: 0,
+        created_at: '2026-11-01T09:00:00Z',
+        updated_at: '2026-11-01T11:00:00Z',
+      },
+      {
+        // Unlabeled non-PDD backlog issue updated today mentioning "no-behavior-change" in ordinary prose
+        number: 50,
+        state: 'open',
+        html_url: 'https://github.com/acme/daily-scope/issues/50',
+        labels: [],
+        comments: 4,
+        body: 'Can we treat this docs typo cleanup as a no-behavior-change follow-up?',
+        created_at: '2026-11-13T11:00:00Z',
+        updated_at: '2026-11-13T12:00:00Z',
+      },
+      {
+        // Ordinary non-PDD issue with bare GitHub "bug" label and comments, untouched by PDD
+        number: 51,
+        state: 'open',
+        html_url: 'https://github.com/acme/daily-scope/issues/51',
+        labels: [{ name: 'bug' }],
+        comments: 3,
+        body: 'Button alignment looks off on mobile Safari.',
+        created_at: '2026-11-13T11:30:00Z',
+        updated_at: '2026-11-13T12:15:00Z',
+      },
+      {
+        // Today's real PDD issue
+        number: 31,
+        state: 'closed',
+        html_url: 'https://github.com/acme/daily-scope/issues/31',
+        labels: [{ name: 'pdd:bug' }],
+        comments: 0,
+        created_at: '2026-11-13T12:45:00Z',
+        updated_at: '2026-11-13T14:00:00Z',
+      },
+    ],
+    pulls: [
+      {
+        // Historical merged PR from last week (2026-11-01)
+        number: 80,
+        state: 'closed',
+        merged_at: '2026-11-01T11:00:00Z',
+        created_at: '2026-11-01T10:00:00Z',
+        updated_at: '2026-11-01T11:00:00Z',
+        html_url: 'https://github.com/acme/daily-scope/pull/80',
+        author_association: 'OWNER',
+        user: { login: 'dana' },
+        head: { sha: sha('8'), ref: 'pdd/small-change-8' },
+        title: 'Old config tweak (#8)',
+        body: 'Closes #8\nPrompt tests: 1 of 1 Stories pass.\nCode replay: PASS\nFormal check: not needed\nMade with `pdd workflow run small-change`.',
+        labels: [],
+      },
+      {
+        // Today's merged PDD PR (2026-11-13)
+        number: 301,
+        state: 'closed',
+        merged_at: '2026-11-13T14:00:00Z',
+        created_at: '2026-11-13T13:00:00Z',
+        updated_at: '2026-11-13T14:00:00Z',
+        html_url: 'https://github.com/acme/daily-scope/pull/301',
+        author_association: 'OWNER',
+        user: { login: 'dana' },
+        head: { sha: sha('3'), ref: 'pdd/core-31-fix' },
+        title: 'Fix crash (#31)',
+        body: 'Closes #31\nPrompt tests: 1 of 1 Stories pass.\nCode replay: PASS\nFormal check: not needed\nMade with `pdd workflow run bug`.',
+        labels: [],
+      },
+    ],
+    commentsByThread: {
+      50: [
+        {
+          id: 7050,
+          author_association: 'OWNER',
+          user: { login: 'dana' },
+          created_at: '2026-11-13T12:00:00Z',
+          html_url: 'https://github.com/acme/daily-scope/issues/50#issuecomment-7050',
+          body: 'Agreed, sounds like a no-behavior-change tweak.',
+        },
+      ],
+    },
+  };
+  const fixturePath = join(root, 'gh-daily.json');
+  writeFileSync(fixturePath, JSON.stringify(ghFixture));
+
+  const mockGh = `#!/usr/bin/env node
+const fs = require('node:fs');
+const data = JSON.parse(fs.readFileSync(process.env.GH_DAILY_FIXTURE, 'utf8'));
+const endpoint = process.argv.slice(2).find(a => a.startsWith('repos/')) || '';
+fs.appendFileSync(process.env.GH_CALLS_LOG, endpoint + '\\n');
+if (endpoint.includes('/issues?state=open')) {
+  process.stdout.write(data.openIssues.map(x => JSON.stringify(x)).join('\\n') + '\\n');
+} else if (endpoint.includes('/pulls?state=all')) {
+  process.stdout.write(JSON.stringify(data.pulls));
+} else if (endpoint.includes('/issues?state=all')) {
+  process.stdout.write(JSON.stringify(data.allIssues));
+} else if (/\\/pulls\\/(\\d+)$/.test(endpoint)) {
+  const num = Number(/\\/pulls\\/(\\d+)$/.exec(endpoint)[1]);
+  const pr = data.pulls.find(p => p.number === num);
+  if (!pr) process.exit(1);
+  process.stdout.write(JSON.stringify(pr));
+} else if (/\\/issues\\/(\\d+)\\/comments/.test(endpoint)) {
+  const num = Number(/\\/issues\\/(\\d+)\\/comments/.exec(endpoint)[1]);
+  const list = data.commentsByThread[num] || [];
+  process.stdout.write(list.map(c => JSON.stringify(c)).join('\\n') + (list.length ? '\\n' : ''));
+} else if (endpoint.includes('/check-runs')) {
+  process.stdout.write(JSON.stringify({ check_runs: [] }));
+} else {
+  process.exit(1);
+}
+`;
+  writeFileSync(join(binDir, 'gh'), mockGh, { mode: 0o755 });
+  const oldPath = process.env.PATH;
+  const oldFixture = process.env.GH_DAILY_FIXTURE;
+  const oldLog = process.env.GH_CALLS_LOG;
+  process.env.PATH = `${binDir}:${oldPath}`;
+  process.env.GH_DAILY_FIXTURE = fixturePath;
+  process.env.GH_CALLS_LOG = callsFile;
+  t.after(() => {
+    process.env.PATH = oldPath;
+    if (oldFixture === undefined) delete process.env.GH_DAILY_FIXTURE;
+    else process.env.GH_DAILY_FIXTURE = oldFixture;
+    if (oldLog === undefined) delete process.env.GH_CALLS_LOG;
+    else process.env.GH_CALLS_LOG = oldLog;
+  });
+
+  const invoke = async argv => {
+    let out = '', err = '';
+    const code = await runMetrics({
+      cwd: repoDir,
+      argv,
+      ports: { now: () => '2026-11-13T15:00:00.000Z' },
+      stdout: s => { out += s; },
+      stderr: s => { err += s; },
+    });
+    assert.equal(code, 0, err);
+    return JSON.parse(out);
+  };
+
+  const daily1 = await invoke(['--date', '2026-11-13', '--json']);
+  assert.deepEqual(daily1.issues.map(i => i.issue), [31]);
+  assert.equal(daily1.bySkill.all.issues, 1);
+  assert.equal(daily1.bySkill.bug.issues, 1);
+  assert.equal(daily1.bySkill['small-change'].issues, 0);
+  assert.equal(daily1.bySkill['no-behavior-change'].issues, 0);
+
+  const calls1 = readFileSync(callsFile, 'utf8').trim().split('\n').filter(Boolean);
+  assert.equal(calls1.some(c => c.includes('/issues/50/comments')), false, 'must not paginate comments on unlabeled non-PDD issue #50');
+  assert.equal(calls1.some(c => c.includes('/issues/51/comments')), false, 'must not paginate comments on bare-labeled non-PDD issue #51');
+  assert.equal(calls1.some(c => c.includes('/pulls/80') || c.includes('/issues/80/comments') || c.includes(sha('8'))), false, 'must not poll old merged PR #80 during today activity query');
+
+  // Even after a full queue run writes historical PR #80 and open queue selections into .git/pdd/metrics, --date 2026-11-13 stays scoped to #31!
+  const queueReport = await invoke(['--json']);
+  assert.deepEqual(queueReport.conflicts, []);
+  assert.deepEqual(queueReport.issues.map(i => i.issue), [8, 31, 50, 51]);
+
+  const daily2 = await invoke(['--date', '2026-11-13', '--json']);
+  assert.deepEqual(daily2.conflicts, []);
+  assert.deepEqual(daily2.issues.map(i => i.issue), [31]);
+  assert.equal(daily2.bySkill.all.issues, 1);
+});
+
+test('Drafted noise reports preserve detail text and operatorStop so autoFileValidatedReports filters them under Rule 1', async t => {
+  const root = tempDir(t, 'pdd-draft-rule1-');
+  const gh = createFakeReportGithub();
+
+  const draftedNoise = [
+    {
+      kind: 'pdd',
+      component: 'agent',
+      code: 'cli-error',
+      text: 'Model request failed: quota exceeded for current billing period',
+      command: 'pdd workflow run bug',
+      reproduced: true,
+    },
+    {
+      kind: 'pdd',
+      component: 'pdd-workflow',
+      code: 'cli-error',
+      text: 'API returned 401 unauthorized: token expired',
+      command: 'pdd workflow run feature',
+      reproduced: true,
+    },
+    {
+      kind: 'runtime',
+      component: 'pdd-test',
+      code: 'no-verdict',
+      detail: 'Transport read ECONNRESET while awaiting stream',
+      command: 'pdd test prompts/cli/example.prompt.md',
+      reproduced: true,
+    },
+    {
+      kind: 'pdd',
+      component: 'autopilot-core',
+      code: 'crash',
+      text: 'Worker exited unexpectedly',
+      operatorStop: true,
+      command: 'pdd autopilot',
+      reproduced: true,
+    },
+  ];
+
+  for (const cause of draftedNoise) {
+    const res = await fileReport(
+      { cause, mode: 'draft', root, machine: 'vm-draft', versions: VERSIONS, step: 'verify' },
+      gh.ports,
+    );
+    assert.equal(res.state, 'draft');
+  }
+
+  assert.equal(listReportDrafts({ root }).length, 4);
+
+  const batch = await autoFileValidatedReports(
+    { root, machine: 'vm-draft', runtimeRepo: DEFAULT_RUNTIME_REPORT_REPOSITORY },
+    gh.ports,
+  );
+  assert.equal(batch.filed.length, 0);
+  assert.equal(gh.writes.length, 0);
+  assert.equal(gh.issues.length, 0);
+  assert.equal(batch.filtered.length, 4);
+  assert.deepEqual(
+    batch.filtered.map(r => r.reason).sort(),
+    ['auth-expiry', 'operator-stop', 'quota-or-credit', 'transient-network-blip'],
+  );
 });

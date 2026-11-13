@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-reports.prompt.md (sha256: 6407a130a495b1708a4dc9c7b5a92a22918dc92c3ec513821ddc3c2641c7aa83).
+// Generated from prompts/cli/autopilot-reports.prompt.md (sha256: f7a66e21ccc69b0968ef3a5cb701222f5bda8a54f1e936edcf572a1a3bd1e32d).
 import * as nativeFs from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -124,9 +124,22 @@ const NON_DEFECT_RULES = [
 
 export function classifyNonDefect(causeOrDraft) {
   if (!causeOrDraft || typeof causeOrDraft !== 'object') return null;
-  if (causeOrDraft.operatorStop === true) return { reason: 'operator-stop', category: 'operator', owner: 'operator' };
-  const codeTokens = [causeOrDraft.rawCode, causeOrDraft.code, causeOrDraft.reason].map(longSlug).filter(Boolean);
-  const sampleText = String(causeOrDraft.text ?? '');
+  if (causeOrDraft.operatorStop === true || causeOrDraft.cause?.operatorStop === true) {
+    return { reason: 'operator-stop', category: 'operator', owner: 'operator' };
+  }
+  const codeTokens = [
+    causeOrDraft.rawCode,
+    causeOrDraft.code,
+    causeOrDraft.reason,
+    causeOrDraft.cause?.rawCode,
+    causeOrDraft.cause?.code,
+  ].map(longSlug).filter(Boolean);
+  const sampleText = [
+    causeOrDraft.text,
+    typeof causeOrDraft.cause === 'string' ? causeOrDraft.cause : causeOrDraft.cause?.text,
+    causeOrDraft.detail,
+    causeOrDraft.cause?.detail,
+  ].filter(value => typeof value === 'string' && value.trim()).join('\n');
   for (const rule of NON_DEFECT_RULES) {
     const matchedSlug = codeTokens.find(token => rule.slugTest.test(token));
     if (matchedSlug) {
@@ -244,6 +257,7 @@ function draftFor({ cause, rawCode, versions, step, words, runtimeRepo, runtimeO
     ...(batchId ? { batchId } : {}),
     ...(reportId ? { reportId } : {}),
     ...(cause.reproduced === true ? { reproduced: true } : {}),
+    ...(cause.operatorStop === true ? { operatorStop: true } : {}),
     ...(issues.length ? { issues } : {}),
     ...(heads.length ? { heads } : {}),
     occurrences,
@@ -389,6 +403,7 @@ function mergeDraftRecord(old, draft, now) {
     ...(draft.batchId || old?.batchId ? { batchId: draft.batchId || old.batchId } : {}),
     ...(draft.reportId || old?.reportId ? { reportId: draft.reportId || old.reportId } : {}),
     ...(old?.reproduced || draft.reproduced ? { reproduced: true } : {}),
+    ...(old?.operatorStop === true || draft.operatorStop === true ? { operatorStop: true } : {}),
     ...(issues.length ? { issues } : {}),
     ...(heads.length ? { heads } : {}),
     ...(occurrences.length ? { occurrences } : {}),
@@ -592,7 +607,8 @@ function classifyDropOwner(run) {
     code: run?.cause?.code ?? run?.code,
     reason: run?.reason ?? outcome,
     text: run?.cause?.text ?? run?.text ?? '',
-    operatorStop: run?.operatorStop === true,
+    detail: run?.cause?.detail ?? run?.detail ?? '',
+    operatorStop: run?.operatorStop === true || run?.cause?.operatorStop === true,
   });
   if (nonDefect) return nonDefect.owner;
   const kind = reportKind({ kind: run?.cause?.kind ?? run?.kind ?? 'pdd', component: run?.cause?.component ?? run?.component ?? '', code });

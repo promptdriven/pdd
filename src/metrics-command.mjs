@@ -1,4 +1,4 @@
-// Generated from prompts/cli/metrics-command.prompt.md (sha256: 943d89335977d81983f4bdbb6bc45749be9e8597f10b3a11fff43c4f5530e9c4).
+// Generated from prompts/cli/metrics-command.prompt.md (sha256: 370620d5487073dc9cc98242ba4977bab41e5d59e766e93b4b61aaa172806918).
 import {execFile as callback, spawnSync} from 'node:child_process';
 import {promisify} from 'node:util';
 import {readFile, writeFile, readdir} from 'node:fs/promises';
@@ -15,7 +15,14 @@ import {nativeGithubCounter} from './github-calls.mjs';
 // gh calls go to the GitHub call ledger of their repository; other programs run unchanged.
 const execFile = nativeGithubCounter(promisify(callback), {purpose:'other'});
 const iso = d => new Date(d).toISOString();
-const safeIso = (value, fallback) => value && Number.isFinite(Date.parse(value)) ? iso(value) : fallback;
+const immutableIso = value => {
+  if (typeof value === 'number') return Number.isFinite(value) && value > 0 ? iso(value) : null;
+  if (typeof value === 'string' && value.trim()) {
+    const ms = Date.parse(value);
+    return Number.isFinite(ms) ? iso(ms) : null;
+  }
+  return null;
+};
 const validSha = sha => typeof sha === 'string' && /^[a-f0-9]{40}$/i.test(sha);
 const cleanEvidence = value => {
   if (typeof value !== 'string' || !value) return undefined;
@@ -94,18 +101,23 @@ async function historical({commonDir,repo}, observedAt) {
     const run = readRun(join(commonDir,'pdd','runs',name));
     if (!run || run.repo?.toLowerCase() !== repo || !run.runId) continue;
     if (Array.isArray(run.metrics?.events)) events.push(...run.metrics.events);
+    const fixedRunAt = immutableIso(run.createdAt ?? run.startedAt ?? run.metrics?.events?.[0]?.at);
+    const doneTimes = Object.values(run.done ?? {}).map(d => immutableIso(d?.at)).filter(Boolean).sort();
+    const earliestDoneAt = doneTimes[0] ?? null;
     if (SKILL_NAMES.has(run.workflow)) {
-      const skillAt = (Array.isArray(run.metrics?.events) ? run.metrics.events.map(e => e?.at) : [])
-        .concat(Object.values(run.done ?? {}).map(d => d?.at))
-        .find(t => t && Number.isFinite(new Date(t).getTime()));
-      const ts = skillAt ? iso(skillAt) : observedAt;
-      if (ts) events.push({schema:'pdd.metrics.event.v1',id:`run:${run.runId}:skill`,repo,issue:run.number,type:'milestone',at:ts,observedAt:observedAt ?? ts,source:`legacy:${repo}`,attempt:run.runId,data:{stage:'skill',reason:run.workflow}});
+      if (fixedRunAt) {
+        events.push({schema:'pdd.metrics.event.v1',id:`run:${run.runId}:skill:${run.workflow}`,repo,issue:run.number,type:'milestone',at:fixedRunAt,observedAt:observedAt ?? fixedRunAt,source:`legacy:${repo}`,attempt:run.runId,data:{stage:'skill',reason:run.workflow}});
+      } else if (earliestDoneAt) {
+        events.push({schema:'pdd.metrics.event.v1',id:`run:${run.runId}:skill:${run.workflow}:${earliestDoneAt}`,repo,issue:run.number,type:'milestone',at:earliestDoneAt,observedAt:observedAt ?? earliestDoneAt,source:`legacy:${repo}`,attempt:run.runId,data:{stage:'skill',reason:run.workflow}});
+      }
     }
     for (const pr of run.pr ?? []) {
       if (!Number.isSafeInteger(pr.number) || pr.number < 1 || !observedAt) continue;
       const area = (run.areas ?? []).find(a => a.name === pr.stage);
       const stage = area?.then === 'ask-code' ? 'prompt-pr' : (area?.name === 'code' || run.workflow === 'small-change') ? 'code-pr' : 'pr-mapped';
-      events.push({schema:'pdd.metrics.event.v1',id:`run:${run.runId}:pr:${pr.number}`,repo,issue:run.number,type:'milestone',at:observedAt,observedAt,source:`legacy:${repo}`,attempt:run.runId,data:{stage,pr:pr.number}});
+      const prAt = immutableIso(pr.createdAt ?? pr.at) ?? fixedRunAt ?? earliestDoneAt;
+      const effectiveAt = prAt ?? observedAt;
+      events.push({schema:'pdd.metrics.event.v1',id:`run:${run.runId}:pr:${pr.number}:${stage}:${effectiveAt}`,repo,issue:run.number,type:'milestone',at:effectiveAt,observedAt,source:`legacy:${repo}`,attempt:run.runId,data:{stage,pr:pr.number}});
     }
     if (run.metrics?.coverageGap && Number.isFinite(run.metrics.coverageGapAt)) {
       const at = iso(run.metrics.coverageGapAt);
@@ -195,20 +207,62 @@ function normalizeReceiptStatus(entry) {
   return null;
 }
 
-function parseReceiptMetadata(text, labels = []) {
+function bareSkillFromLabels(labelNames) {
+  if (labelNames.includes('no-behavior-change')) return 'no-behavior-change';
+  if (labelNames.includes('small-change')) return 'small-change';
+  if (labelNames.includes('bug')) return 'bug';
+  if (labelNames.includes('feature')) return 'feature';
+  return null;
+}
+
+function hasExplicitPddMarker(text, labels = [], branchRef = '') {
   const body = String(text ?? '');
   const labelNames = (Array.isArray(labels) ? labels : [])
     .map(l => (typeof l === 'string' ? l : String(l?.name ?? '')).trim().toLowerCase())
     .filter(Boolean);
+  if (labelNames.some(n => n.startsWith('pdd:'))) return true;
+  if (/^pdd\//i.test(String(branchRef ?? '').trim())) return true;
+  if (/Made with `pdd workflow run (?:small-change|bug|feature|no-behavior-change)`/i.test(body)) return true;
+  if (/<!--\s*pdd[-:]/i.test(body)) return true;
+  if (/(?:^|\n)\s*(?:[-*]\s*)?(?:Skill|Workflow)\s*:\s*`?(?:small-change|bug|feature|no-behavior-change)`?(?:\s|$)/i.test(body)) return true;
+  if (/(?:^|\n)\s*(?:[-*]\s*)?(?:Prompt tests|Code replay|Formal check(?:\s*\(agent reported\))?|Replay and formal tests(?:\s*\(Autopilot's run\))?)\s*:/i.test(body)) return true;
+  if (/(?:^|\n)\s*(?:[-*]\s*)?Runtime(?:\s*\([^)]*\))?\s*:\s*(?:PASS|passed|FAIL|failed|missed|not applicable|n\/a|none|no line\b|not run\b|\d+\s+of\s+\d+\s+Stories\s+pass)/i.test(body)) return true;
+  if (/\b(?:vectors|formal)\s*=\s*(?:proved|bounded|pass|passed|done|fail|failed|missed|none|n\/a|not-applicable)\b/i.test(body)) return true;
+  for (const block of body.matchAll(/```(?:json)?\s*([\s\S]*?)```/g)) {
+    let parsed;
+    try { parsed = JSON.parse(block[1]); } catch { continue; }
+    if (!parsed || typeof parsed !== 'object') continue;
+    const jsonSkill = String(parsed.skill ?? parsed.workflow ?? '').trim().toLowerCase();
+    if (
+      SKILL_NAMES.has(jsonSkill)
+      || parsed.wouldMerge === true
+      || parsed.would_merge === true
+      || parsed.disposition === 'would-merge'
+      || (parsed.checks && typeof parsed.checks === 'object')
+      || (parsed.receipts && typeof parsed.receipts === 'object')
+    ) return true;
+  }
+  return false;
+}
+
+function parseReceiptMetadata(text, labels = [], { branchRef = '' } = {}) {
+  const body = String(text ?? '');
+  const labelNames = (Array.isArray(labels) ? labels : [])
+    .map(l => (typeof l === 'string' ? l : String(l?.name ?? '')).trim().toLowerCase())
+    .filter(Boolean);
+  const explicitPdd = hasExplicitPddMarker(body, labels, branchRef);
+  const emptyChecks = { runtime: null, vectors: null, formal: null, complete: null };
+  if (!explicitPdd) return { skill: null, wouldMerge: false, checks: emptyChecks };
 
   let skill = null;
   let wouldMerge = labelNames.includes('pdd:would-merge') || labelNames.includes('would-merge');
-  const checks = { runtime: null, vectors: null, formal: null, complete: null };
+  const checks = { ...emptyChecks };
 
-  if (labelNames.includes('pdd:no-behavior-change') || labelNames.includes('no-behavior-change')) skill = 'no-behavior-change';
-  else if (labelNames.includes('pdd:small-change') || labelNames.includes('small-change')) skill = 'small-change';
-  else if (labelNames.includes('pdd:bug') || labelNames.includes('bug')) skill = 'bug';
-  else if (labelNames.includes('pdd:feature') || labelNames.includes('feature')) skill = 'feature';
+  if (labelNames.includes('pdd:no-behavior-change')) skill = 'no-behavior-change';
+  else if (labelNames.includes('pdd:small-change')) skill = 'small-change';
+  else if (labelNames.includes('pdd:bug')) skill = 'bug';
+  else if (labelNames.includes('pdd:feature')) skill = 'feature';
+  else skill = bareSkillFromLabels(labelNames);
 
   for (const block of body.matchAll(/```(?:json)?\s*([\s\S]*?)```/g)) {
     let parsed;
@@ -217,10 +271,10 @@ function parseReceiptMetadata(text, labels = []) {
     if (parsed.wouldMerge === true || parsed.would_merge === true || parsed.disposition === 'would-merge') wouldMerge = true;
     const jsonSkill = String(parsed.skill ?? parsed.workflow ?? '').trim().toLowerCase();
     if (SKILL_NAMES.has(jsonSkill)) skill = jsonSkill;
-    if (parsed.applies === false) skill = 'no-behavior-change';
     const checkSource = parsed.checks && typeof parsed.checks === 'object' ? parsed.checks
       : parsed.receipts && typeof parsed.receipts === 'object' ? parsed.receipts
       : null;
+    if (parsed.applies === false && (SKILL_NAMES.has(jsonSkill) || checkSource || parsed.wouldMerge != null)) skill = 'no-behavior-change';
     if (checkSource) {
       for (const key of ['runtime', 'vectors', 'formal', 'complete']) {
         const status = normalizeReceiptStatus(checkSource[key]);
@@ -231,8 +285,8 @@ function parseReceiptMetadata(text, labels = []) {
 
   if (/<!--\s*pdd:autopilot-core:would-merge:/i.test(body)) wouldMerge = true;
 
-  const noBehaviorProse = /\bno-behavior-change\b/i.test(body) || /\bPath:\s*b\b/.test(body);
-  if (noBehaviorProse) {
+  const hasAutopilotPathB = /(?:^|\n)\s*(?:[-*]\s*)?Path:\s*b\b/.test(body);
+  if (hasAutopilotPathB) {
     skill = 'no-behavior-change';
   } else {
     const workflowMatch = /Made with `pdd workflow run (small-change|bug|feature|no-behavior-change)`/i.exec(body)
@@ -242,7 +296,7 @@ function parseReceiptMetadata(text, labels = []) {
   }
 
   if (!checks.runtime) {
-    if (/\bPath:\s*b\b/.test(body) || /(?:Prompt tests|Runtime(?:\s*\([^)]*\))?)\s*:\s*(?:not applicable|n\/a|none|no line\b|not run\s*\((?:no[- ]story|native-only|no prompt|docs))/i.test(body)) {
+    if (hasAutopilotPathB || /(?:Prompt tests|Runtime(?:\s*\([^)]*\))?)\s*:\s*(?:not applicable|n\/a|none|no line\b|not run\s*\((?:no[- ]story|native-only|no prompt|docs))/i.test(body)) {
       checks.runtime = 'not-applicable';
     } else if (/(?:Prompt tests|Runtime(?:\s*\([^)]*\))?)\s*:[^\n]*\b(?:FAIL|failed|missed)\b/i.test(body)) {
       checks.runtime = 'missed';
@@ -251,7 +305,7 @@ function parseReceiptMetadata(text, labels = []) {
     }
   }
   if (!checks.vectors) {
-    if (/\bPath:\s*b\b/.test(body) || /Replay and formal tests[^:\n]*:\s*none changed/i.test(body) || /Code replay:\s*NOT APPLICABLE/i.test(body) || /(?:Vectors?|Replay tests?)\s*:\s*(?:not applicable|n\/a|none)/i.test(body) || /\bvectors\s*=\s*(?:none|n\/a|not-applicable)\b/i.test(body)) {
+    if (hasAutopilotPathB || /Replay and formal tests[^:\n]*:\s*none changed/i.test(body) || /Code replay:\s*NOT APPLICABLE/i.test(body) || /(?:Vectors?|Replay tests?)\s*:\s*(?:not applicable|n\/a|none)/i.test(body) || /\bvectors\s*=\s*(?:none|n\/a|not-applicable)\b/i.test(body)) {
       checks.vectors = 'not-applicable';
     } else if (/Code replay:\s*(?:FAIL|BLOCKED)\b/i.test(body) || /(?:Vectors?|Replay tests?[^:\n]*)\s*:\s*(?:FAIL|failed|missed)\b/i.test(body) || /\bvectors\s*=\s*(?:fail|failed|missed)\b/i.test(body)) {
       checks.vectors = 'missed';
@@ -260,7 +314,7 @@ function parseReceiptMetadata(text, labels = []) {
     }
   }
   if (!checks.formal) {
-    if (/\bPath:\s*b\b/.test(body) || /Replay and formal tests[^:\n]*:\s*none changed/i.test(body) || /Formal check:\s*not needed/i.test(body) || /(?:Formal(?:\s+tests?|\s+check)?)\s*:\s*(?:not applicable|not needed|n\/a|none)/i.test(body) || /\bformal\s*=\s*(?:none|n\/a|not-applicable)\b/i.test(body)) {
+    if (hasAutopilotPathB || /Replay and formal tests[^:\n]*:\s*none changed/i.test(body) || /Formal check:\s*not needed/i.test(body) || /(?:Formal(?:\s+tests?|\s+check)?)\s*:\s*(?:not applicable|not needed|n\/a|none)/i.test(body) || /\bformal\s*=\s*(?:none|n\/a|not-applicable)\b/i.test(body)) {
       checks.formal = 'not-applicable';
     } else if (/✗\s*Formal check failed/i.test(body) || /(?:Formal(?:\s+tests?[^:\n]*|\s+check)?)\s*:\s*(?:FAIL|failed|missed)\b/i.test(body) || /\bformal\s*=\s*(?:fail|failed|missed)\b/i.test(body)) {
       checks.formal = 'missed';
@@ -322,14 +376,14 @@ function extractPrIssueLinks(pull) {
   return { codeIssues: [...new Set([...closes, ...partOf])], promptIssues: [] };
 }
 
-function emitReceiptEvents({ facts, idPrefix, repo, issue, at, observedAt, pr = null, head = null, evidence = undefined, meta }) {
+function emitReceiptEvents({ facts, idPrefix, repo, issue, at, observedAt, pr = null, evidence = undefined, meta }) {
+  if (!at) return;
   const common = {
     ...(Number.isSafeInteger(pr) && pr > 0 ? { pr } : {}),
-    ...(validSha(head) ? { head } : {}),
     ...(evidence ? { evidence } : {}),
   };
   if (meta.skill && SKILL_NAMES.has(meta.skill)) {
-    facts.push({ schema: 'pdd.metrics.event.v1', id: `${idPrefix}:skill:${issue}`, repo, issue, type: 'milestone', at, observedAt, source: `github:${repo}`, data: { stage: 'skill', reason: meta.skill, ...(common.pr ? { pr: common.pr } : {}) } });
+    facts.push({ schema: 'pdd.metrics.event.v1', id: `${idPrefix}:skill:${meta.skill}:${issue}`, repo, issue, type: 'milestone', at, observedAt, source: `github:${repo}`, data: { stage: 'skill', reason: meta.skill, ...(common.pr ? { pr: common.pr } : {}) } });
   }
   if (meta.wouldMerge) {
     facts.push({ schema: 'pdd.metrics.event.v1', id: `${idPrefix}:wm:${issue}`, repo, issue, type: 'milestone', at, observedAt, source: `github:${repo}`, data: { stage: 'would-merge', ...common } });
@@ -337,7 +391,7 @@ function emitReceiptEvents({ facts, idPrefix, repo, issue, at, observedAt, pr = 
   for (const key of ['runtime', 'vectors', 'formal', 'complete']) {
     const status = meta.checks[key];
     if (!status) continue;
-    facts.push({ schema: 'pdd.metrics.event.v1', id: `${idPrefix}:receipt-${key}:${issue}`, repo, issue, type: 'milestone', at, observedAt, source: `github:${repo}`, data: { stage: `receipt-${key}`, status, ...(common.pr ? { pr: common.pr } : {}), ...(common.head ? { head: common.head } : {}) } });
+    facts.push({ schema: 'pdd.metrics.event.v1', id: `${idPrefix}:receipt-${key}:${status}:${issue}`, repo, issue, type: 'milestone', at, observedAt, source: `github:${repo}`, data: { stage: `receipt-${key}`, status, ...(common.pr ? { pr: common.pr } : {}) } });
   }
 }
 
@@ -371,7 +425,7 @@ export async function githubAllUserReceipts({ repo, observedAt, trusted = [], ex
   const discoveredPulls = new Map();
   const mappings = new Map();
   const codeMappings = new Set();
-  const issuesWithPr = new Set();
+  const pddIssuesWithPr = new Set();
 
   try {
     const pullsRaw = await readSingle(`repos/${repo}/pulls?state=all&sort=updated&direction=desc&per_page=100`);
@@ -386,48 +440,55 @@ export async function githubAllUserReceipts({ repo, observedAt, trusted = [], ex
       if (!linkedIssues.length) continue;
 
       discoveredPulls.set(pull.number, pull);
-      const prAt = safeIso(pull.created_at || pull.updated_at || pull.merged_at, observedAt);
+      const prCreatedAt = immutableIso(pull.created_at);
       const prHead = validSha(pull.head?.sha) ? pull.head.sha : undefined;
       const prEvidence = cleanEvidence(pull.html_url);
-      const meta = parseReceiptMetadata(`${pull.title ?? ''}\n${pull.body ?? ''}`, pull.labels);
+      const prText = `${pull.title ?? ''}\n${pull.body ?? ''}`;
+      const meta = parseReceiptMetadata(prText, pull.labels, { branchRef: pull.head?.ref });
       if (!meta.skill && /^pdd\/small-change-/i.test(pull.head?.ref ?? '')) meta.skill = 'small-change';
+      const pullHasPdd = hasExplicitPddMarker(prText, pull.labels, pull.head?.ref);
+      const receiptPrefix = prHead ? `pull:${pull.number}:${prHead}` : `pull:${pull.number}`;
 
       for (const issue of codeIssues) {
-        issuesWithPr.add(issue);
+        if (pullHasPdd) pddIssuesWithPr.add(issue);
         codeMappings.add(`${pull.number}:${issue}`);
         const set = mappings.get(pull.number) ?? new Set();
         set.add(issue);
         mappings.set(pull.number, set);
-        facts.push({
-          schema: 'pdd.metrics.event.v1',
-          id: `gh-pr:${pull.number}:${issue}`,
-          repo,
-          issue,
-          type: 'milestone',
-          at: prAt,
-          observedAt,
-          source: `github:${repo}`,
-          data: { stage: 'code-pr', pr: pull.number, ...(prHead ? { head: prHead } : {}), ...(prEvidence ? { evidence: prEvidence } : {}) },
-        });
-        emitReceiptEvents({ facts, idPrefix: `gh-pr:${pull.number}`, repo, issue, at: safeIso(pull.updated_at || pull.merged_at || pull.created_at, observedAt), observedAt, pr: pull.number, head: prHead, evidence: prEvidence, meta });
+        if (prCreatedAt) {
+          facts.push({
+            schema: 'pdd.metrics.event.v1',
+            id: prHead ? `gh-pr:${pull.number}:${prHead}:${issue}` : `gh-pr:${pull.number}:${issue}`,
+            repo,
+            issue,
+            type: 'milestone',
+            at: prCreatedAt,
+            observedAt,
+            source: `github:${repo}`,
+            data: { stage: 'code-pr', pr: pull.number, ...(prHead ? { head: prHead } : {}), ...(prEvidence ? { evidence: prEvidence } : {}) },
+          });
+          emitReceiptEvents({ facts, idPrefix: receiptPrefix, repo, issue, at: prCreatedAt, observedAt, pr: pull.number, evidence: prEvidence, meta });
+        }
       }
       for (const issue of promptIssues) {
-        issuesWithPr.add(issue);
+        if (pullHasPdd) pddIssuesWithPr.add(issue);
         const set = mappings.get(pull.number) ?? new Set();
         set.add(issue);
         mappings.set(pull.number, set);
-        facts.push({
-          schema: 'pdd.metrics.event.v1',
-          id: `gh-prompt-pr:${pull.number}:${issue}`,
-          repo,
-          issue,
-          type: 'milestone',
-          at: prAt,
-          observedAt,
-          source: `github:${repo}`,
-          data: { stage: 'prompt-pr', pr: pull.number, ...(prHead ? { head: prHead } : {}), ...(prEvidence ? { evidence: prEvidence } : {}) },
-        });
-        emitReceiptEvents({ facts, idPrefix: `gh-prompt-pr:${pull.number}`, repo, issue, at: safeIso(pull.updated_at || pull.created_at, observedAt), observedAt, pr: pull.number, head: prHead, evidence: prEvidence, meta });
+        if (prCreatedAt) {
+          facts.push({
+            schema: 'pdd.metrics.event.v1',
+            id: prHead ? `gh-prompt-pr:${pull.number}:${prHead}:${issue}` : `gh-prompt-pr:${pull.number}:${issue}`,
+            repo,
+            issue,
+            type: 'milestone',
+            at: prCreatedAt,
+            observedAt,
+            source: `github:${repo}`,
+            data: { stage: 'prompt-pr', pr: pull.number, ...(prHead ? { head: prHead } : {}), ...(prEvidence ? { evidence: prEvidence } : {}) },
+          });
+          emitReceiptEvents({ facts, idPrefix: receiptPrefix, repo, issue, at: prCreatedAt, observedAt, pr: pull.number, evidence: prEvidence, meta });
+        }
       }
     }
   } catch { /* Optional all-PR list endpoint unavailable on partial mock or restricted token. */ }
@@ -441,54 +502,69 @@ export async function githubAllUserReceipts({ repo, observedAt, trusted = [], ex
       const labelNames = (Array.isArray(row.labels) ? row.labels : [])
         .map(l => (typeof l === 'string' ? l : String(l?.name ?? '')).trim().toLowerCase())
         .filter(Boolean);
-      const hasPddLabel = labelNames.some(n => n.startsWith('pdd:') || SKILL_NAMES.has(n));
-      const issueMeta = parseReceiptMetadata('', row.labels);
-      const rowAt = safeIso(row.updated_at || row.created_at, observedAt);
+      const hasPddIssueLabel = labelNames.some(n => n.startsWith('pdd:'));
+      const hasIssuePddMarker = hasPddIssueLabel || hasExplicitPddMarker(row.body, row.labels);
+      const rowCreatedAt = immutableIso(row.created_at);
       const rowEvidence = cleanEvidence(row.html_url);
+      const fallbackSkill = bareSkillFromLabels(labelNames);
 
-      if (hasPddLabel && (issuesWithPr.has(issue) || labelNames.some(n => n.startsWith('pdd:')))) {
+      if (hasIssuePddMarker && rowCreatedAt) {
+        const issueMeta = parseReceiptMetadata(row.body, row.labels);
         const noteReason = labelNames.includes('pdd:would-merge') ? 'would-merge'
           : labelNames.includes('pdd:needs-decision') ? 'needs-decision'
           : labelNames.includes('pdd:working') ? 'working'
           : 'observed';
         facts.push({
           schema: 'pdd.metrics.event.v1',
-          id: `gh-issue:${issue}:${noteReason}`,
+          id: `gh-issue:${issue}:note:${noteReason}`,
           repo,
           issue,
           type: 'milestone',
-          at: rowAt,
+          at: rowCreatedAt,
           observedAt,
           source: `github:${repo}`,
           data: { stage: 'autopilot-note', reason: noteReason, ...(rowEvidence ? { evidence: rowEvidence } : {}) },
         });
-        emitReceiptEvents({ facts, idPrefix: `gh-issue:${issue}`, repo, issue, at: rowAt, observedAt, evidence: rowEvidence, meta: issueMeta });
+        emitReceiptEvents({ facts, idPrefix: `gh-issue:${issue}`, repo, issue, at: rowCreatedAt, observedAt, evidence: rowEvidence, meta: issueMeta });
+      } else if (pddIssuesWithPr.has(issue) && rowCreatedAt && fallbackSkill) {
+        emitReceiptEvents({
+          facts,
+          idPrefix: `gh-issue:${issue}`,
+          repo,
+          issue,
+          at: rowCreatedAt,
+          observedAt,
+          evidence: rowEvidence,
+          meta: { skill: fallbackSkill, wouldMerge: false, checks: { runtime: null, vectors: null, formal: null, complete: null } },
+        });
       }
 
-      if (Number(row.comments) > 0 && (!issuesWithPr.has(issue) || hasPddLabel)) {
+      if (Number(row.comments) > 0 && hasIssuePddMarker) {
         try {
           const { stdout: cText } = await exec('gh', ['api', '--paginate', `repos/${repo}/issues/${issue}/comments?per_page=100`, '--jq', '.[] | {id,body,html_url,created_at,author_association,user}'], { maxBuffer: 16 * 1024 * 1024 });
           for (const comment of parseJsonList(cText)) {
             if (!comment || !comment.id || !(await isTrusted({ login: comment.user?.login, association: comment.author_association }))) continue;
             const cBody = String(comment.body ?? '');
+            const cAt = immutableIso(comment.created_at);
+            if (!cAt) continue;
             const autopilotTag = /<!--\s*pdd:autopilot-core:(merge|would-merge|end|question|review):/i.exec(cBody)?.[1]?.toLowerCase() ?? null;
             const cMeta = parseReceiptMetadata(cBody, []);
             const hasStructuredPdd = Boolean(autopilotTag || cMeta.skill || cMeta.wouldMerge || Object.values(cMeta.checks).some(Boolean));
             if (!hasStructuredPdd) continue;
-            const cAt = safeIso(comment.created_at, rowAt);
             const cEvidence = cleanEvidence(comment.html_url);
+            const reason = autopilotTag || 'receipt';
             facts.push({
               schema: 'pdd.metrics.event.v1',
-              id: `gh-issue-comment:${comment.id}:${issue}`,
+              id: `gh-issue-comment:${comment.id}:${reason}:${issue}`,
               repo,
               issue,
               type: 'milestone',
               at: cAt,
               observedAt,
               source: `github:${repo}`,
-              data: { stage: 'autopilot-note', reason: autopilotTag || 'receipt', ...(cEvidence ? { evidence: cEvidence } : {}) },
+              data: { stage: 'autopilot-note', reason, ...(cEvidence ? { evidence: cEvidence } : {}) },
             });
-            emitReceiptEvents({ facts, idPrefix: `gh-issue-comment:${comment.id}`, repo, issue, at: cAt, observedAt, evidence: cEvidence, meta: { ...cMeta, skill: cMeta.skill ?? issueMeta.skill } });
+            emitReceiptEvents({ facts, idPrefix: `gh-issue-comment:${comment.id}`, repo, issue, at: cAt, observedAt, evidence: cEvidence, meta: { ...cMeta, skill: cMeta.skill ?? fallbackSkill } });
           }
         } catch { /* Ignore unreadable issue comments. */ }
       }
@@ -498,7 +574,7 @@ export async function githubAllUserReceipts({ repo, observedAt, trusted = [], ex
   return { facts, mappings, codeMappings, discoveredPulls };
 }
 
-async function githubFacts({repo, observedAt, events, cwd}) {
+async function githubFacts({repo, observedAt, events, cwd, scope = null}) {
   let trusted = [];
   try { const config = JSON.parse(await readFile(join(cwd,'pdd.json'),'utf8')); trusted = Array.isArray(config.autopilot?.trust) ? config.autopilot.trust.filter(x => typeof x === 'string').map(x => x.toLowerCase()) : []; } catch { /* No explicit trusted people. */ }
   const read = async path => (await execFile('gh',['api','--paginate',path],{maxBuffer:16*1024*1024})).stdout;
@@ -509,6 +585,7 @@ async function githubFacts({repo, observedAt, events, cwd}) {
     if (e.data.stage === 'code-pr' || e.data.stage === 'implementation-ready') codeMappings.add(`${e.data.pr}:${e.issue}`);
     const issues = mappings.get(e.data.pr) ?? new Set(); issues.add(e.issue); mappings.set(e.data.pr,issues);
   }
+  const localMappings = new Set(mappings.keys());
 
   const discovered = await githubAllUserReceipts({ repo, observedAt, trusted, exec: execFile, isTrusted });
   const facts = [...discovered.facts];
@@ -521,22 +598,45 @@ async function githubFacts({repo, observedAt, events, cwd}) {
 
   for (const [pr,issues] of mappings) {
     try {
+    const isLocalPr = localMappings.has(pr);
+    const prior = discovered.discoveredPulls.get(pr);
+    const priorClosed = Boolean(prior && (prior.state === 'closed' || prior.merged_at));
+
+    if (!isLocalPr && priorClosed && scope?.kind === 'activity' && scope.date) {
+      const priorMergedAt = immutableIso(prior.merged_at);
+      const priorEvidence = cleanEvidence(prior.html_url);
+      if (priorMergedAt && priorEvidence && validSha(prior.head?.sha)) {
+        for (const issue of issues) if (codeMappings.has(`${pr}:${issue}`)) facts.push({schema:'pdd.metrics.event.v1',id:`merge:${pr}:${issue}`,repo,issue,type:'delivery',at:priorMergedAt,observedAt,source:`github:${repo}`,data:{pr,head:prior.head.sha,explicit:true,evidence:priorEvidence}});
+      }
+      const lastUpdatedMs = Date.parse(prior.updated_at || prior.merged_at || prior.created_at || '');
+      const scopeStartMs = Date.parse(`${scope.date}T00:00:00Z`) - 86400000;
+      if (Number.isFinite(lastUpdatedMs) && lastUpdatedMs < scopeStartMs) continue;
+    }
+
     let pull;
-    try {
-      const fetched = JSON.parse(await read(`repos/${repo}/pulls/${pr}`));
-      const prior = discovered.discoveredPulls.get(pr);
-      pull = prior && !fetched.head?.sha && !fetched.merged_at ? prior : { ...(prior ?? {}), ...fetched };
-    } catch (err) {
-      if (discovered.discoveredPulls.has(pr)) pull = discovered.discoveredPulls.get(pr);
-      else throw err;
+    if (!isLocalPr && priorClosed) {
+      pull = prior;
+    } else {
+      try {
+        const fetched = JSON.parse(await read(`repos/${repo}/pulls/${pr}`));
+        pull = prior && !fetched.head?.sha && !fetched.merged_at ? prior : { ...(prior ?? {}), ...fetched };
+      } catch (err) {
+        if (prior) pull = prior;
+        else throw err;
+      }
     }
     const pullEvidence = cleanEvidence(pull.html_url);
-    if (pull.merged_at && pullEvidence && validSha(pull.head?.sha)) for (const issue of issues) if (codeMappings.has(`${pr}:${issue}`)) facts.push({schema:'pdd.metrics.event.v1',id:`merge:${pr}:${issue}`,repo,issue,type:'delivery',at:iso(pull.merged_at),observedAt,source:`github:${repo}`,data:{pr,head:pull.head.sha,explicit:true,evidence:pullEvidence}});
-    if (validSha(pull.head?.sha)) for (const issue of issues) if (codeMappings.has(`${pr}:${issue}`)) facts.push({schema:'pdd.metrics.event.v1',id:`head:${pr}:${pull.head.sha}:${observedAt}:${issue}`,repo,issue,type:'milestone',at:observedAt,observedAt,source:`github:${repo}`,data:{stage:'candidate-head',pr,head:pull.head.sha}});
-    if (pull.body || pull.title || Array.isArray(pull.labels)) {
-      const prMeta = parseReceiptMetadata(`${pull.title ?? ''}\n${pull.body ?? ''}`, pull.labels);
-      const prMetaAt = safeIso(pull.updated_at || pull.merged_at || pull.created_at, observedAt);
-      for (const issue of issues) emitReceiptEvents({ facts, idPrefix: `pull:${pr}`, repo, issue, at: prMetaAt, observedAt, pr, head: pull.head?.sha, evidence: pullEvidence, meta: prMeta });
+    const mergedAt = immutableIso(pull.merged_at);
+    const isClosedOrMerged = pull.state === 'closed' || Boolean(mergedAt);
+    const shouldPollLiveHead = isLocalPr || !isClosedOrMerged;
+    if (mergedAt && pullEvidence && validSha(pull.head?.sha)) for (const issue of issues) if (codeMappings.has(`${pr}:${issue}`)) facts.push({schema:'pdd.metrics.event.v1',id:`merge:${pr}:${issue}`,repo,issue,type:'delivery',at:mergedAt,observedAt,source:`github:${repo}`,data:{pr,head:pull.head.sha,explicit:true,evidence:pullEvidence}});
+    if (shouldPollLiveHead && validSha(pull.head?.sha)) for (const issue of issues) if (codeMappings.has(`${pr}:${issue}`)) facts.push({schema:'pdd.metrics.event.v1',id:`head:${pr}:${pull.head.sha}:${observedAt}:${issue}`,repo,issue,type:'milestone',at:observedAt,observedAt,source:`github:${repo}`,data:{stage:'candidate-head',pr,head:pull.head.sha}});
+    const prCreatedAt = immutableIso(pull.created_at);
+    if (!prior && prCreatedAt && (pull.body || pull.title || Array.isArray(pull.labels))) {
+      const prMeta = parseReceiptMetadata(`${pull.title ?? ''}\n${pull.body ?? ''}`, pull.labels, { branchRef: pull.head?.ref });
+      const prHead = validSha(pull.head?.sha) ? pull.head.sha : undefined;
+      const receiptPrefix = prHead ? `pull:${pr}:${prHead}` : `pull:${pr}`;
+      for (const issue of issues) emitReceiptEvents({ facts, idPrefix: receiptPrefix, repo, issue, at: prCreatedAt, observedAt, pr, evidence: pullEvidence, meta: prMeta });
     }
     const {stdout: text} = await execFile('gh',['api','--paginate',`repos/${repo}/issues/${pr}/comments?per_page=100`,'--jq','.[] | {id,body,html_url,created_at,author_association,user}'],{maxBuffer:16*1024*1024});
     const comments = parseJsonList(text);
@@ -547,10 +647,10 @@ async function githubFacts({repo, observedAt, events, cwd}) {
     for (const comment of comments.filter(comment => allowed.has(comment))) {
       const commentBody = String(comment.body ?? '');
       const commentMeta = parseReceiptMetadata(commentBody, []);
-      if (comment.id && (commentMeta.skill || commentMeta.wouldMerge || Object.values(commentMeta.checks).some(Boolean))) {
-        const cAt = safeIso(comment.created_at, observedAt);
+      const cAt = immutableIso(comment.created_at);
+      if (comment.id && cAt && (commentMeta.skill || commentMeta.wouldMerge || Object.values(commentMeta.checks).some(Boolean))) {
         const cEvidence = cleanEvidence(comment.html_url);
-        for (const issue of issues) emitReceiptEvents({ facts, idPrefix: `pr-comment:${comment.id}`, repo, issue, at: cAt, observedAt, pr, head: pull.head?.sha, evidence: cEvidence, meta: commentMeta });
+        for (const issue of issues) emitReceiptEvents({ facts, idPrefix: `pr-comment:${comment.id}`, repo, issue, at: cAt, observedAt, pr, evidence: cEvidence, meta: commentMeta });
       }
       for (const block of commentBody.matchAll(/```(?:json)?\s*([\s\S]*?)```/g)) {
         let check; try {check = JSON.parse(block[1]);} catch {continue;}
@@ -566,7 +666,7 @@ async function githubFacts({repo, observedAt, events, cwd}) {
     const current = checks.filter(x => x.isTrusted && x.check.head === pull.head?.sha);
     const split = new Set(current.map(x => x.check.verdict)).size > 1;
     let suiteGreen = false;
-    if (pull.head?.sha) {
+    if (shouldPollLiveHead && pull.head?.sha) {
       let runs;
       try { const result = JSON.parse(await read(`repos/${repo}/commits/${pull.head.sha}/check-runs?per_page=100`)); runs = Array.isArray(result.check_runs) ? result.check_runs.filter(run => run.head_sha === pull.head.sha) : null; } catch { runs = null; }
       suiteGreen = Boolean(runs?.some(run => /^(?:full suite|full test suite)$/i.test(run.name ?? '') && run.status === 'completed' && run.conclusion === 'success'));
@@ -669,7 +769,7 @@ export async function runMetrics({argv = [], cwd = process.cwd(), stdout = proce
       selectorSnapshot = queue.selectorSnapshot;
       events.push(...queue.events); await store.appendEvents({root,events:queue.events}); scope = {kind:'queue',snapshotId:queue.snapshotId};
     }
-    let facts; try { facts = await (ports.github ?? githubFacts)({repo,observedAt:now,cwd,events}); } catch { githubUnavailable = true; facts = githubGaps(repo,now,events); }
+    let facts; try { facts = await (ports.github ?? githubFacts)({repo,observedAt:now,cwd,events,scope}); } catch { githubUnavailable = true; facts = githubGaps(repo,now,events); }
     events.push(...facts); if (facts.length) await store.appendEvents({root,events:facts});
     const report = await (ports.calculate ?? calculateMetrics)({events,repo,scope,timezone:opt.timezone,observedAt:cutoff,sources:[...(saved.sources ?? []), ...[...new Set(events.map(e=>e.source))].filter(source => !(saved.sources ?? []).some(s => (typeof s === 'string' ? s : s.source) === source)), ...(githubUnavailable && !events.some(e => e.source === `github:${repo}`) ? [`github:${repo}`] : []), ...(opt.expectedSources ?? []).filter(source => !events.some(e => e.source === source) && !(saved.sources ?? []).some(s => (typeof s === 'string' ? s : s.source) === source))]});
     if (selectorSnapshot) {

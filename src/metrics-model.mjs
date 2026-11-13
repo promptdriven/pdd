@@ -1,4 +1,4 @@
-// Generated from prompts/cli/metrics-model.prompt.md (sha256: 504e600dcf52119e28441231d3272f7880abc80cff8c06585b8155349b1242b5).
+// Generated from prompts/cli/metrics-model.prompt.md (sha256: cdd0a3fa913076378475fc66f7a70f2ac2162475ad7d4433d21f4f219a003a97).
 const stable = value => {
   if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
   if (value && typeof value === 'object') return `{${Object.keys(value).sort().map(k => `${JSON.stringify(k)}:${stable(value[k])}`).join(',')}}`;
@@ -67,10 +67,11 @@ export function calculateMetrics({ events, repo, scope, timezone, observedAt, so
     ...selectionByIssue.keys(),
     ...conflicts.flatMap(c => c.events.filter(e => e.type === 'selection' && e.data.snapshotId === scope.snapshotId).map(e => e.issue)),
   ]);
+  const isActivityObservation = e => e.type !== 'selection' && e.type !== 'ci' && e.type !== 'coverage' && !(e.type === 'milestone' && ['candidate-head', 'pr-mapped'].includes(e.data.stage));
   const issueIds = scope.kind === 'daily-start'
     ? [...new Set(clean.filter(e => e.type === 'start' && dateOf(e.at) === scope.date).map(e => e.issue))]
     : scope.kind === 'activity'
-    ? [...new Set(clean.filter(e => dateOf(e.at) === scope.date).map(e => e.issue))]
+    ? [...new Set(clean.filter(e => isActivityObservation(e) && dateOf(e.at) === scope.date).map(e => e.issue))]
     : scope.kind === 'queue'
     ? [...new Set([...snapshotIssueSet, ...clean.filter(e => e.type !== 'selection').map(e => e.issue)])]
     : [...snapshotIssueSet];

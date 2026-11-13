@@ -68,11 +68,13 @@ comments on a known cause at most once a day.
      exhaustion (`quota`, `rate-limit`, `usage-limit`, `billing`, `credit`,
      `out-of-quota`), authentication or login expiry (`auth`, `token-expired`,
      `unauthorized`, `login`), operator or caller stops (`operator-stop`, `cancelled`,
-     `canceled`, `user-stop`, `caller`), maintenance or AI provider capacity
-     (`maintenance`, `capacity`, `overloaded`), transient network blips (`econnreset`,
-     `etimedout`, `enotfound`, `network-blip`), and repository content or allowed
-     `"not run"` causes (`no-story`, `not-run`, `unchecked-criteria`,
-     `story-criterion-mismatch`, `content`). Filtered causes return
+     `canceled`, `user-stop`, `caller`, or `operatorStop: true`), maintenance or AI
+     provider capacity (`maintenance`, `capacity`, `overloaded`), transient network blips
+     (`econnreset`, `etimedout`, `enotfound`, `network-blip`), and repository content or
+     allowed `"not run"` causes (`no-story`, `not-run`, `unchecked-criteria`,
+     `story-criterion-mismatch`, `content`). `classifyNonDefect` inspects `operatorStop`,
+     code/reason slugs, and `text`/`cause`/`detail` so saved local drafts preserve noise
+     classification during later validation. Filtered causes return
      `{state: "filtered", reason, category, owner, fingerprint}` without writing an
      issue to GitHub.
   2. **Verified owner and scrubbed proof (`validateReportDraft`)**: before auto-filing
@@ -160,7 +162,8 @@ last 24 hours) and `seen` (cause-and-version key to last seen-again comment time
 - `summarizeConversionDrops({runs, backlogCount, claimableCount, claimedCount, clearSpecCount, prOpenedCount, mergedOrWouldMergeCount, drafts, filed, filtered, date})`
   returns `{date, totals, stages, dropsByOwner, reports}`.
 - A draft is `ROOT/drafts/FP.json` with `fingerprint`, `kind`, `component`, `code`,
-  `rawCode`, `step`, `command`, `batchId`, `reportId`, `reproduced`, `issues`, `heads`,
+  `rawCode`, `step`, `command`, `batchId`, `reportId`, `reproduced`, `operatorStop`,
+  `issues`, `heads`,
   `occurrences`, `versions`, `shipped`, `stopped`, `runtimeRepo`, `runtimeOwner`,
   `repository`, `title`, `body` (the public text), `detail` (local only), `labels`,
   `count`, `firstAt` and `lastAt`; a repeat merges proof fields and raises the count. A
