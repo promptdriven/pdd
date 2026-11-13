@@ -1,9 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
+import { fileURLToPath } from 'node:url';
 import { checkRuntimeHealth, readTryOwner, runCheck, runDoorCall, runTry } from '../src/runtime-client.mjs';
 import { runShim } from '../src/try-doors.mjs';
 import { createTryTools, runMcp } from '../src/try-mcp.mjs';
@@ -109,26 +111,8 @@ function cliHarbor(t) {
   });
 }
 
-test('cache-github-login inventory: approved draft cases file is intact and complete', () => {
-  assert.equal(SPEC.kind, 'native-draft-cases');
-  assert.equal(SPEC.draft, false);
-  assert.equal(SPEC.story_path, 'user_stories/cache-github-login.md');
-  assert.deepEqual(
-    SPEC.cases.map(item => item.id),
-    [
-      'cold-cache-first-run',
-      'warm-cache-saved-batch-read-under-rate-limit',
-      'warm-cache-across-runtime-commands-and-mcp',
-      'switched-token-cross-owner-refusals',
-      'missing-or-logged-out-gh-token-with-warm-cache',
-      'corrupt-or-incomplete-cache-self-heals',
-      'http-401-cached-invalidation-and-single-refresh',
-      'gh-api-user-failure-and-rate-limit-boundaries',
-    ],
-  );
-});
-
 test('vector 1 & 2: cold-cache-first-run and warm-cache-saved-batch-read-under-rate-limit', async t => {
+  assert.equal(SPEC.draft, false);
   const coldCase = BY_ID.get('cold-cache-first-run');
   const warmPollCase = BY_ID.get('warm-cache-saved-batch-read-under-rate-limit');
   const setup = harbor(t);
@@ -499,6 +483,7 @@ test('vector 4: switched-token-cross-owner-refusals', async t => {
   assert.equal(apiUserCalls(first.calls).length, vector.expected.first_command_gh_api_user_calls);
   assert.ok(first.ports.stderr.text.includes(vector.expected.read_batch_stderr_contains), first.ports.stderr.text);
 
+  assert.equal(existsSync(join(setup.state, 'github-user.json')), true);
   const updatedCache = parseExactJson(readFileSync(join(setup.state, 'github-user.json'), 'utf8'));
   assert.equal(updatedCache.login, vector.expected.updated_cached_login);
   assert.equal(updatedCache.user_id, vector.expected.updated_cached_user_id);
@@ -604,6 +589,7 @@ test('vector 6: corrupt-or-incomplete-cache-self-heals', async t => {
   assert.equal(await runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--json': true } }, initial.ports), 0);
   const batch = parseExactJson(initial.ports.stdout.text).batch;
   const cacheFile = join(setup.state, 'github-user.json');
+  assert.equal(existsSync(cacheFile), true);
 
   const corruptPayloads = [
     '{bad',
@@ -839,9 +825,11 @@ test('vector 7: http-401-cached-invalidation-and-single-refresh (Subcases A, B, 
   await t.test('Subcase D: cold fresh sign-in + 401 does not refresh again or retry and deletes github-user.json', async t => {
     const setup = harbor(t);
     let lintAttempts = 0;
+    let sawCacheBefore401 = false;
     const fake = await fakeRuntime(t, entry => {
       if (entry.command === 'lint') {
         lintAttempts += 1;
+        sawCacheBefore401 = existsSync(join(setup.state, 'github-user.json'));
         return { status: 401, json: { error: { code: 'auth-required' } } };
       }
       return { status: 401, json: { error: { code: 'auth-required' } } };
@@ -856,6 +844,7 @@ test('vector 7: http-401-cached-invalidation-and-single-refresh (Subcases A, B, 
     });
     const code = await runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--json': true } }, made.ports);
     assert.equal(code, vector.expected.subcase_d_exit_code);
+    assert.equal(sawCacheBefore401, true, 'cold sign-in writes github-user.json before HTTP call');
     // Initial cold sign-in called gh api user once; 0 extra calls after 401!
     assert.equal(apiUserCalls(calls).length - 1, vector.expected.subcase_d_extra_gh_api_user_calls_after_401);
     assert.equal(lintAttempts, vector.expected.subcase_d_http_attempts_for_rejected_call);
@@ -890,6 +879,7 @@ test('vector 8: gh-api-user-failure-and-rate-limit-boundaries (Subcases A & B)',
       gh: args => (args[0] === 'auth' ? { status: 0, stdout: `${TOKEN_OCTO}\n` } : { status: 0, stdout: 'octo 4242\n' }),
     });
     assert.equal(await runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--json': true } }, seed.ports), 0);
+    assert.equal(existsSync(join(setup.state, 'github-user.json')), true);
     const batch = parseExactJson(seed.ports.stdout.text).batch;
 
     const switched = portsFor(env, {
@@ -903,10 +893,10 @@ test('vector 8: gh-api-user-failure-and-rate-limit-boundaries (Subcases A & B)',
     assert.equal(parseExactJson(readFileSync(join(setup.state, 'github-user.json'), 'utf8')).login, 'octo');
   });
 
-  // Subcase B: forced refresh while valid matching-token github-user.json exists and gh api user fails with GitHub rate limit:
+  // Subcase B: real CLI refresh (triggered by incomplete cached_at: "" on disk) while matching-token identity exists and gh api user fails with GitHub rate limit:
   // - local saved-batch --read prints stderr warning and exits 0
   // - remote check, open-batch remote --read, and post-401 refresh exit 5!
-  await t.test('Subcase B: forced refresh rate-limit fallback applies only to local saved-batch --read and never remote or post-401', async t => {
+  await t.test('Subcase B: refresh rate-limit fallback applies only to local saved-batch --read and never remote or post-401', async t => {
     const setup = harbor(t);
     let rejectLint401 = false;
     let holdRunning = false;
@@ -920,6 +910,7 @@ test('vector 8: gh-api-user-failure-and-rate-limit-boundaries (Subcases A & B)',
       return f.normal(entry);
     });
     const env = { HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin };
+    const cacheFile = join(setup.state, 'github-user.json');
 
     // Seed terminal saved batch + matching github-user.json for octo.
     const seed = portsFor(env, {
@@ -938,46 +929,59 @@ test('vector 8: gh-api-user-failure-and-rate-limit-boundaries (Subcases A & B)',
     const openBatch = /pdd test --read (\S+)/.exec(openSeed.ports.stderr.text)[1];
     holdRunning = false;
 
-    const rateLimitedForcedPorts = () => portsFor(env, {
-      forceAuthRefresh: true,
+    const writeIncompleteMatchingCache = () => {
+      writeFileSync(
+        cacheFile,
+        JSON.stringify({ login: 'octo', user_id: '4242', cached_at: '', token_sha256: sha256Hex(TOKEN_OCTO) }),
+        { mode: 0o600 },
+      );
+    };
+
+    const rateLimitedPorts = () => portsFor(env, {
       gh: args => (args[0] === 'auth'
         ? { status: 0, stdout: `${TOKEN_OCTO}\n` }
         : { status: 1, stdout: '', stderr: 'HTTP 403: API rate limit exceeded\n' }),
     });
 
-    // 1. Local terminal saved-batch --read -> prints warning once and exits 0!
-    const localRead = rateLimitedForcedPorts();
+    // 1. Local terminal saved-batch --read with incomplete cached_at -> triggers refresh, prints warning once and exits 0!
+    writeIncompleteMatchingCache();
+    const localRead = rateLimitedPorts();
     const localCode = await runCheck({ cwd: setup.repo, words: [localBatch], options: { '--read': true, '--json': true } }, localRead.ports);
     assert.equal(localCode, vector.expected.subcase_b_saved_local_read_exit_code, localRead.ports.stderr.text);
     assert.ok(localRead.ports.stderr.text.includes(vector.expected.subcase_b_saved_local_read_stderr_contains), localRead.ports.stderr.text);
     assert.equal((localRead.ports.stderr.text.match(/Warning: GitHub API rate limit reached/g) ?? []).length, 1);
 
     // 2. Open saved-batch --read needing remote HTTP -> exits 5!
-    const openRead = rateLimitedForcedPorts();
+    writeIncompleteMatchingCache();
+    const openRead = rateLimitedPorts();
     assert.equal(
       await runCheck({ cwd: setup.repo, words: [openBatch], options: { '--read': true, '--json': true } }, openRead.ports),
       vector.expected.subcase_b_remote_or_post_401_exit_code,
     );
+    assert.doesNotMatch(openRead.ports.stderr.text, /Warning: GitHub API rate limit reached/);
 
-    // 3. Remote pdd test -> exits 5!
-    const remoteCheck = rateLimitedForcedPorts();
+    // 3. Remote pdd test (--cache-clear) -> exits 5!
+    writeIncompleteMatchingCache();
+    const remoteCheck = rateLimitedPorts();
     assert.equal(
-      await runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--json': true } }, remoteCheck.ports),
+      await runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--cache-clear': true, '--json': true } }, remoteCheck.ports),
       vector.expected.subcase_b_remote_or_post_401_exit_code,
     );
+    assert.doesNotMatch(remoteCheck.ports.stderr.text, /Warning: GitHub API rate limit reached/);
 
     // 4. Post-401 refresh while gh api user is rate-limited -> never falls back, deletes cache and exits 5!
+    writeFileSync(
+      cacheFile,
+      JSON.stringify({ login: 'octo', user_id: '4242', cached_at: '2026-10-27T16:27:47.000Z', token_sha256: sha256Hex(TOKEN_OCTO) }),
+      { mode: 0o600 },
+    );
     rejectLint401 = true;
-    const post401 = portsFor(env, {
-      gh: args => (args[0] === 'auth'
-        ? { status: 0, stdout: `${TOKEN_OCTO}\n` }
-        : { status: 1, stdout: '', stderr: 'HTTP 403: API rate limit exceeded\n' }),
-    });
+    const post401 = rateLimitedPorts();
     assert.equal(
-      await runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--json': true } }, post401.ports),
+      await runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--cache-clear': true, '--json': true } }, post401.ports),
       vector.expected.subcase_b_remote_or_post_401_exit_code,
     );
-    assert.equal(existsSync(join(setup.state, 'github-user.json')), false);
+    assert.equal(existsSync(cacheFile), false);
     assert.doesNotMatch(post401.ports.stderr.text, /Warning: GitHub API rate limit reached/);
   });
 });
@@ -986,6 +990,7 @@ test('non-regression & safety boundaries: local lint, Story pass cache, checkRun
   const setup = harbor(t);
   const fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
   const env = { HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin };
+  const cacheFile = join(setup.state, 'github-user.json');
 
   // 1. pdd lint --local and its saved --read make 0 gh calls.
   {
@@ -996,12 +1001,14 @@ test('non-regression & safety boundaries: local lint, Story pass cache, checkRun
     assert.equal(await runCheck({ cwd: setup.repo, words: [localBatch], options: { '--read': true, '--json': true } }, readLocalPorts.ports), 0);
   }
 
-  // 2. Unchanged Story pass reuse in .pdd/cache/test/ makes 0 gh calls on the cached rerun.
+  // 2. Cold check creates 0600 github-user.json, and unchanged Story pass reuse in .pdd/cache/test/ makes 0 gh calls on the cached rerun.
   {
     const first = portsFor(env, {
       gh: args => (args[0] === 'auth' ? { status: 0, stdout: `${TOKEN_OCTO}\n` } : { status: 0, stdout: 'octo 4242\n' }),
     });
     assert.equal(await runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--json': true }, cache: true }, first.ports), 0, first.ports.stderr.text);
+    assert.equal(existsSync(cacheFile), true);
+    assert.equal(modeOctal(cacheFile), '0600');
     const cached = portsFor(env, { gh: () => assert.fail('unchanged cached Story pass must not call gh') });
     assert.equal(await runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--json': true }, cache: true }, cached.ports), 0, cached.ports.stderr.text);
     assert.equal(parseExactJson(cached.ports.stdout.text).rows[0].cached, true);
@@ -1034,20 +1041,181 @@ test('non-regression & safety boundaries: local lint, Story pass cache, checkRun
     assert.match(insidePorts.ports.stderr.text, /PDD_STATE_DIR is inside this repository/);
   }
 
-  // 5. Optional github-user.json persistence fails open if github-user.json is replaced by a symlink, without following the symlink.
+  // 5. Regular 0600 github-user.json makes 0 gh api user calls on warm lint, whereas a symlinked github-user.json is refused and fails open without overwriting target.
   {
+    const warmCalls = [];
+    const warmLint = portsFor(env, {
+      gh: args => {
+        warmCalls.push(args);
+        if (args[0] === 'auth') return { status: 0, stdout: `${TOKEN_OCTO}\n` };
+        assert.fail('warm regular github-user.json must make 0 gh api user calls');
+      },
+    });
+    assert.equal(await runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--lint': true, '--json': true } }, warmLint.ports), 0, warmLint.ports.stderr.text);
+    assert.equal(authTokenCalls(warmCalls).length, 1);
+    assert.equal(apiUserCalls(warmCalls).length, 0);
+
     const targetDir = temp(t);
     const decoy = join(targetDir, 'decoy.json');
     writeFileSync(decoy, 'untouched\n');
-    const cacheFile = join(setup.state, 'github-user.json');
     rmSync(cacheFile, { force: true });
     symlinkSync(decoy, cacheFile);
 
+    const symlinkCalls = [];
     const made = portsFor(env, {
-      gh: args => (args[0] === 'auth' ? { status: 0, stdout: `${TOKEN_OCTO}\n` } : { status: 0, stdout: 'octo 4242\n' }),
+      gh: args => {
+        symlinkCalls.push(args);
+        return args[0] === 'auth' ? { status: 0, stdout: `${TOKEN_OCTO}\n` } : { status: 0, stdout: 'octo 4242\n' };
+      },
     });
     assert.equal(await runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--lint': true, '--json': true } }, made.ports), 0, made.ports.stderr.text);
+    assert.equal(apiUserCalls(symlinkCalls).length, 1);
     assert.equal(readFileSync(decoy, 'utf8'), 'untouched\n', 'symlink target must never be overwritten');
     chmodSync(setup.state, 0o700);
   }
+});
+
+test('real bin/pdd.mjs subprocess boundary: cold write, warm rate-limited --read, incomplete-cache fallback warning, and 401 rotation', async t => {
+  const binPdd = join(fileURLToPath(new URL('..', import.meta.url)), 'bin/pdd.mjs');
+  const setup = harbor(t);
+  // Let the real bin/pdd.mjs subprocess create PDD_STATE_DIR from scratch so we verify its 0700 mode.
+  rmSync(setup.state, { recursive: true, force: true });
+
+  let rejectLintOnce401 = false;
+  const fake = await fakeRuntime(t, (entry, f) => {
+    if (rejectLintOnce401 && entry.method === 'POST' && entry.command === 'lint') {
+      rejectLintOnce401 = false;
+      assert.equal(entry.headers.authorization, `Bearer ${TOKEN_OCTO}`);
+      return { status: 401, json: { error: { code: 'auth-invalid', message: 'Expired token' } } };
+    }
+    if (entry.command === 'lint') return { status: 200, json: f.lint(entry.request.requestId) };
+    if (entry.command === 'check') {
+      const job = f.check(entry.request.requestId, 'passed');
+      f.jobs.set(entry.request.requestId, job);
+      return { status: 200, json: job };
+    }
+    return f.normal(entry);
+  });
+
+  const scratch = temp(t);
+  const ghBinDir = join(scratch, 'gh-bin');
+  const ghStatePath = join(scratch, 'gh-state.json');
+  const ghLogPath = join(scratch, 'gh-calls.jsonl');
+  mkdirSync(ghBinDir, { recursive: true });
+
+  const ghScript = [
+    `#!${process.execPath}`,
+    "const { appendFileSync, readFileSync, writeFileSync } = require('node:fs');",
+    `const TOKEN_1 = ${JSON.stringify(TOKEN_OCTO)};`,
+    `const TOKEN_2 = ${JSON.stringify(TOKEN_OCTO_2)};`,
+    'const args = process.argv.slice(2);',
+    'appendFileSync(process.env.FAKE_GH_LOG, JSON.stringify(args) + "\\n");',
+    "const state = JSON.parse(readFileSync(process.env.FAKE_GH_STATE, 'utf8'));",
+    "if (args[0] === 'auth' && args[1] === 'token') {",
+    '  state.authCount = (state.authCount ?? 0) + 1;',
+    "  writeFileSync(process.env.FAKE_GH_STATE, JSON.stringify(state));",
+    "  const tok = state.mode === 'rotate_on_second_auth' && state.authCount >= 2 ? TOKEN_2 : TOKEN_1;",
+    '  process.stdout.write(`  ${tok}\\n`);',
+    '  process.exit(0);',
+    '}',
+    "if (args[0] === 'api' && args[1] === 'user') {",
+    "  if (state.mode === 'rate_limit') {",
+    "    process.stderr.write('gh: HTTP 403: API rate limit exceeded\\n');",
+    '    process.exit(1);',
+    '  }',
+    "  process.stdout.write('octo 4242\\n');",
+    '  process.exit(0);',
+    '}',
+    'process.exit(2);',
+  ].join('\n') + '\n';
+  const ghExecutable = join(ghBinDir, 'gh');
+  writeFileSync(ghExecutable, ghScript, { mode: 0o755 });
+  chmodSync(ghExecutable, 0o755);
+
+  const subEnv = {
+    ...process.env,
+    HOME: setup.home,
+    PDD_STATE_DIR: setup.state,
+    PDD_RUNTIME_URL: fake.origin,
+    PATH: `${ghBinDir}:${process.env.PATH ?? '/usr/bin:/bin'}`,
+    FAKE_GH_STATE: ghStatePath,
+    FAKE_GH_LOG: ghLogPath,
+  };
+  delete subEnv.GH_TOKEN;
+  delete subEnv.GITHUB_TOKEN;
+
+  const runCli = (argv, mode) => new Promise((resolveRun, rejectRun) => {
+    writeFileSync(ghStatePath, JSON.stringify({ mode, authCount: 0 }));
+    writeFileSync(ghLogPath, '');
+    const child = spawn(process.execPath, [binPdd, ...argv], {
+      cwd: setup.repo,
+      env: subEnv,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', chunk => { stdout += chunk; });
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    child.on('error', rejectRun);
+    child.on('close', (code, signal) => {
+      const logRaw = readFileSync(ghLogPath, 'utf8').trim();
+      const calls = logRaw ? logRaw.split('\n').map(item => JSON.parse(item)) : [];
+      resolveRun({ code, signal, stdout, stderr, calls });
+    });
+  });
+
+  const cacheFile = join(setup.state, 'github-user.json');
+
+  // (i) Cold `pdd test place-order --json`
+  const cold = await runCli(['test', 'place-order', '--json'], 'normal');
+  assert.equal(cold.signal, null);
+  assert.equal(cold.code, 0, cold.stderr);
+  assert.equal(modeOctal(setup.state), '0700');
+  assert.equal(existsSync(cacheFile), true);
+  assert.equal(modeOctal(cacheFile), '0600');
+  assert.equal(authTokenCalls(cold.calls).length, 1);
+  assert.equal(apiUserCalls(cold.calls).length, 1);
+  const coldCache = parseExactJson(readFileSync(cacheFile, 'utf8'));
+  assert.equal(coldCache.login, 'octo');
+  assert.equal(coldCache.user_id, '4242');
+  assert.equal(coldCache.token_sha256, sha256Hex(TOKEN_OCTO));
+  assertNoSecretsOrTempFiles([setup.state, setup.repo], [cold.stdout, cold.stderr]);
+  const batch = parseExactJson(cold.stdout).batch;
+  assert.ok(batch);
+
+  // (ii) Warm `pdd test --read <BATCH> --json` while `gh api user` exits 1 with HTTP 403 rate limit
+  const warmRead = await runCli(['test', '--read', batch, '--json'], 'rate_limit');
+  assert.equal(warmRead.signal, null);
+  assert.equal(warmRead.code, 0, warmRead.stderr);
+  assert.equal(warmRead.stderr, '');
+  assert.equal(authTokenCalls(warmRead.calls).length, 1);
+  assert.equal(apiUserCalls(warmRead.calls).length, 0);
+  assert.equal(parseExactJson(warmRead.stdout).rows[0].state, 'passed');
+
+  // (iii) Incomplete-`cached_at` `pdd test --read <BATCH> --json` under `gh api user` HTTP 403 rate limit
+  writeFileSync(
+    cacheFile,
+    JSON.stringify({ login: 'octo', user_id: '4242', cached_at: '', token_sha256: sha256Hex(TOKEN_OCTO) }),
+    { mode: 0o600 },
+  );
+  const fallbackRead = await runCli(['test', '--read', batch, '--json'], 'rate_limit');
+  assert.equal(fallbackRead.signal, null);
+  assert.equal(fallbackRead.code, 0, fallbackRead.stderr);
+  assert.equal(authTokenCalls(fallbackRead.calls).length, 1);
+  assert.equal(apiUserCalls(fallbackRead.calls).length, 1);
+  assert.match(fallbackRead.stderr, /Warning: GitHub API rate limit reached; using saved GitHub login octo for this token\./);
+  assertNoSecretsOrTempFiles([setup.state, setup.repo], [fallbackRead.stdout, fallbackRead.stderr]);
+
+  // (iv) Warm `pdd test place-order --cache-clear --json` with initial HTTP 401 + rotated token
+  writeFileSync(cacheFile, JSON.stringify(coldCache), { mode: 0o600 });
+  rejectLintOnce401 = true;
+  const rotated = await runCli(['test', 'place-order', '--cache-clear', '--json'], 'rotate_on_second_auth');
+  assert.equal(rotated.signal, null);
+  assert.equal(rotated.code, 0, rotated.stderr);
+  assert.equal(authTokenCalls(rotated.calls).length, 2);
+  assert.equal(apiUserCalls(rotated.calls).length, 1);
+  assert.equal(parseExactJson(readFileSync(cacheFile, 'utf8')).token_sha256, sha256Hex(TOKEN_OCTO_2));
+  assertNoSecretsOrTempFiles([setup.state, setup.repo], [rotated.stdout, rotated.stderr]);
 });

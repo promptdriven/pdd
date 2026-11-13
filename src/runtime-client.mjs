@@ -107,7 +107,7 @@ function withDefaults(ports) {
     return () => { handlers.delete(handler); if (!handlers.size) { unsubscribe?.(); unsubscribe = null; } };
   };
   return {
-    env, forceAuthRefresh: ports.forceAuthRefresh === true, baselineFiles: ports.baselineFiles, baselineIdentity: ports.baselineIdentity, evidencePorts: ports.evidencePorts, readEvidenceEligibility: ports.readEvidenceEligibility, checkPlanPorts: ports.checkPlanPorts, caseHandoff:ports.caseHandoff, cacheFiles: ports.cacheFiles ?? nativeCacheFiles, cacheHash: ports.cacheHash ?? sha256, acquireBatchLock: ports.acquireBatchLock ?? acquireRuntimeBatchLock, timers: ports.timers, random: ports.random, captureSource: ports.captureSource ?? captureSource, slotFiles: ports.slotFiles, isAlive: ports.isAlive, pid: ports.pid, agentBridge: ports.agentBridge, discoverAgents: ports.discoverAgents, askAgent: ports.askAgent, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
+    env, baselineFiles: ports.baselineFiles, baselineIdentity: ports.baselineIdentity, evidencePorts: ports.evidencePorts, readEvidenceEligibility: ports.readEvidenceEligibility, checkPlanPorts: ports.checkPlanPorts, caseHandoff:ports.caseHandoff, cacheFiles: ports.cacheFiles ?? nativeCacheFiles, cacheHash: ports.cacheHash ?? sha256, acquireBatchLock: ports.acquireBatchLock ?? acquireRuntimeBatchLock, timers: ports.timers, random: ports.random, captureSource: ports.captureSource ?? captureSource, slotFiles: ports.slotFiles, isAlive: ports.isAlive, pid: ports.pid, agentBridge: ports.agentBridge, discoverAgents: ports.discoverAgents, askAgent: ports.askAgent, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
     gh: ports.gh ?? (args => {
       const executable = authExecutable(env, ports.ghPath);
       return executable ? spawnSync(executable, args, { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 })
@@ -626,12 +626,15 @@ export async function resendableStoryChecks({ root, since = 0 }, ports = {}) {
     maintenance: neverSent.some(story => latest.get(story).notes.some(note => /maintenance/i.test(note))) };
 }
 
-function validGithubUser(record) {
+function validGithubIdentity(record) {
   return isObject(record)
     && typeof record.login === 'string' && record.login.length > 0 && !/\s/.test(record.login)
     && typeof record.user_id === 'string' && /^[1-9]\d*$/.test(record.user_id)
-    && typeof record.cached_at === 'string' && Number.isFinite(Date.parse(record.cached_at))
     && typeof record.token_sha256 === 'string' && /^[a-f0-9]{64}$/.test(record.token_sha256);
+}
+function validGithubUser(record) {
+  return validGithubIdentity(record)
+    && typeof record.cached_at === 'string' && Number.isFinite(Date.parse(record.cached_at));
 }
 const isGithubRateLimit = text => typeof text === 'string' && /rate limit|secondary rate limit|abuse detection/i.test(text);
 
@@ -658,6 +661,17 @@ class StateStore {
       if (!stat?.isFile() || stat.isSymbolicLink()) return null;
       const record = JSON.parse(readFileSync(path, 'utf8'));
       return validGithubUser(record) ? { login: record.login, user_id: record.user_id, cached_at: record.cached_at, token_sha256: record.token_sha256 } : null;
+    } catch { return null; }
+  }
+  readMatchingGithubIdentity(tokenSha256) {
+    try {
+      if (statOrNull(this.dir)?.isSymbolicLink()) return null;
+      const path = join(this.dir, 'github-user.json'), stat = statOrNull(path);
+      if (!stat?.isFile() || stat.isSymbolicLink()) return null;
+      const record = JSON.parse(readFileSync(path, 'utf8'));
+      return validGithubIdentity(record) && record.token_sha256 === tokenSha256
+        ? { login: record.login, user_id: record.user_id, token_sha256: record.token_sha256 }
+        : null;
     } catch { return null; }
   }
   writeGithubUser(record) {
@@ -806,9 +820,12 @@ function signIn(gh, store, { now = Date.now, stderr = null, forceRefresh = false
     return { token: value, login, userId: id, tokenSha256, fromCache: false, refreshedAfter401: !!afterHttp401 };
   }
   const rawFailure = user.status === 0 ? '' : String(user.stderr || user.error?.code || '');
-  if (forceRefresh && !afterHttp401 && allowSavedLocalReadFallback && matchingCached && user.status !== 0 && isGithubRateLimit(rawFailure)) {
-    if (stderr) line(stderr, `Warning: GitHub API rate limit reached; using saved GitHub login ${matchingCached.login} for this token.`);
-    return { token: value, login: matchingCached.login, userId: matchingCached.user_id, tokenSha256, fromCache: true, refreshedAfter401: false };
+  const matchingIdentity = !afterHttp401 && allowSavedLocalReadFallback && user.status !== 0 && isGithubRateLimit(rawFailure)
+    ? store?.readMatchingGithubIdentity(tokenSha256)
+    : null;
+  if (matchingIdentity) {
+    if (stderr) line(stderr, `Warning: GitHub API rate limit reached; using saved GitHub login ${matchingIdentity.login} for this token.`);
+    return { token: value, login: matchingIdentity.login, userId: matchingIdentity.user_id, tokenSha256, fromCache: true, refreshedAfter401: false };
   }
   const why = user.status === 0 ? '' : causeText(user.stderr || user.error?.code, [value]);
   throw new Stop(exitCode, `pdd could not read your GitHub login (gh api user${why ? `: ${why}` : ''}). Run gh auth status.`);
@@ -2582,7 +2599,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   context.warnings = [...svgWarnings, ...found.warnings,...drift,...(capture.warnings ?? [])];
   context.unmatched = unmatchedLines(found);
   if (!context.json) for (const warning of [...svgWarnings,...drift,...(capture.warnings ?? [])]) line(ports.stderr, warning);
-  const identity = signIn(ports.gh, context.store, { now: ports.now, stderr: ports.stderr, forceRefresh: ports.forceAuthRefresh }), startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
+  const identity = signIn(ports.gh, context.store, { now: ports.now, stderr: ports.stderr }), startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
   const timeoutMin = options['--timeout'] !== undefined ? Number(options['--timeout']) : ports.interactive ? null : AGENT_WAIT_MIN;
   Object.assign(context, { origin, visible: found.visible, capture, identity, batch, startedAt, deadline: timeoutMin ? startedAt + timeoutMin * 60_000 : Infinity, rows, head: null,
     intent: 'lint-only', agentLimit: options['--timeout'] === undefined && !ports.interactive, secrets: [identity.token], lint: { request_ids: [], state: null, selected_cap: requestedCalls(options['--max-calls']) ?? null }, timeoutMin });
@@ -2914,7 +2931,6 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
   const identity = signIn(ports.gh, context.store, {
     now: ports.now,
     stderr: ports.stderr,
-    forceRefresh: ports.forceAuthRefresh,
     allowSavedLocalReadFallback: !quiet && isLocalSavedBatchRead(context, saved),
   });
   if (identity.login !== saved.login) throw new Stop(5, `These runs belong to ${saved.login}. Run: gh auth switch -u ${saved.login}`);
@@ -3088,7 +3104,7 @@ async function runRequest(context, id, cwd) {
     context.store = new StateStore(resolve(context.ports.env.PDD_STATE_DIR || join(context.ports.env.HOME || homedir(), '.pdd', 'runtime')));
   }
   if (!UUID.test(id)) throw new Stop(2, 'The request ID must be a UUID.');
-  const { ports } = context, identity = signIn(ports.gh, context.store, { now: ports.now, stderr: ports.stderr, forceRefresh: ports.forceAuthRefresh }), origin = runtimeOrigin(ports.env);
+  const { ports } = context, identity = signIn(ports.gh, context.store, { now: ports.now, stderr: ports.stderr }), origin = runtimeOrigin(ports.env);
   Object.assign(context, { origin, identity, secrets: [identity.token] });
   context.auth = authSession({ identity, store: context.store, ports, secrets: context.secrets });
   const runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal, auth: context.auth });
@@ -3099,7 +3115,10 @@ async function runRequest(context, id, cwd) {
     if(owner?.not_checked?.length) Object.assign(row,{not_checked:owner.not_checked,criteria_total:owner.criteria_total,criterion_texts:owner.criterion_texts,steps:owner.steps});
     applyAnswer(row, read.answer, context);
   }
-  else row.why = read.unreachable ?? read.why ?? (read.kind === 'auth' ? AUTH_TEXT : 'pdd could not read this run.');
+  else {
+    row.why = read.unreachable ?? read.why ?? (read.kind === 'auth' ? AUTH_TEXT : 'pdd could not read this run.');
+    if (read.kind === 'auth') context.readStop = AUTH_TEXT;
+  }
   return printResult(context, [row], { recovery: `pdd test --request '${id}'` });
 }
 
@@ -3160,7 +3179,7 @@ async function refreshCheckBatches(context, identity, origin, id, answer) {
 async function runCallRead(context, id) {
   const { ports, store } = context;
   const saved = store.read(join(store.dir, 'calls', `${id}.meta.json`));
-  const identity = signIn(ports.gh, store, { now: ports.now, stderr: ports.stderr, forceRefresh: ports.forceAuthRefresh });
+  const identity = signIn(ports.gh, store, { now: ports.now, stderr: ports.stderr });
   if (saved && identity.login !== saved.login) throw new Stop(5, `These runs belong to ${saved.login}. Run: gh auth switch -u ${saved.login}`);
   const origin = runtimeOrigin(saved ? { PDD_RUNTIME_URL: saved.origin } : ports.env);
   const secrets = [identity.token];
@@ -3199,6 +3218,7 @@ async function runCallRead(context, id) {
     report_url: answer?.report_url ? validLink(answer.report_url, origin, 'report') : null,
     why: answer ? answer.why ?? null : reply.status === 401 ? AUTH_TEXT : reply.status === 410 ? 'The result expired.' : 'The call receipt could not be verified.' });
   if (answer) store.write(join(store.folder('calls'), `${id}.json`), answer);
+  if (!answer && reply.status === 401) line(ports.stderr, AUTH_TEXT);
   if (context.json) line(ports.stdout, JSON.stringify(out));
   else {
     line(ports.stdout, `Call ${id}: ${state} · ${out.calls} AI calls`);
@@ -4031,7 +4051,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
   }
   context.otherNote = otherNote(otherFiles(capture.files, found).length);
   let identity;
-  try { identity = signIn(ports.gh, context.store, { now: ports.now, stderr: ports.stderr, forceRefresh: ports.forceAuthRefresh }); }
+  try { identity = signIn(ports.gh, context.store, { now: ports.now, stderr: ports.stderr }); }
   catch (error) {
     if (cache?.mark) await cacheTransaction(cache, data => {
       if (data.latest_identity?.in_progress) {
@@ -4351,7 +4371,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       const root = repoRoot(cwd), store = stateFor(ports.env, root);
       const pointer=store.repo(root).last_door,descriptor=pointer?.descriptor?store.read(pointer.descriptor):null;
       if(descriptor?.originalPath)ports.captureSource(root,{tests:[descriptor.originalPath]});
-      const identity = signIn(ports.gh, store, { now: ports.now, stderr: ports.stderr, forceRefresh: ports.forceAuthRefresh });
+      const identity = signIn(ports.gh, store, { now: ports.now, stderr: ports.stderr });
       return await (await import('./try-doors.mjs')).saveLast({ root, store, identity, ports });
     }
     if (options['--stop'] && (options['--tab'] || options['--new'] || options['--no-open'] || options['--no-wait'] || options['--app-map'] !== undefined || productMode || requestedBudget !== null)) throw new Stop(2, 'pdd simulate --stop takes only a STORY. Run pdd simulate --help.');
@@ -4423,7 +4443,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
         normalized.length ? `${problem} Run pdd simulate --new.` : 'This saved simulation does not contain the current whole project. Run pdd simulate --new.');
     }
     if(context.agentConnection&&loadRuntimeWorkspace({root}).configured)throw new Stop(5,'Bounded agent connection is unavailable: installed CLI controls do not establish packet-only context. Use the ordinary simulator without an agent connection.');
-    const identity = signIn(ports.gh, context.store, { now: ports.now, stderr: ports.stderr, forceRefresh: ports.forceAuthRefresh, exitCode: context.doorMode ? 125 : 5 });
+    const identity = signIn(ports.gh, context.store, { now: ports.now, stderr: ports.stderr, exitCode: context.doorMode ? 125 : 5 });
     Object.assign(context, { capture, identity, secrets: [identity.token], startedAt: ports.now(), deadline: ports.now() + TRY_MS, lint: { request_ids: [], state: null },
       batch: null, rows, timeoutMin: TRY_MS / 60_000, agentLimit: false, head: null });
     context.folder = store.folder('tries');
@@ -4606,7 +4626,7 @@ async function stopByName(context, cwd, words, origin) {
   }
   const [path, record] = hits[0], title = record.title ?? record.story ?? path;
   Object.assign(context, { root, store, origin });
-  const identity = signIn(ports.gh, store, { now: ports.now, stderr: ports.stderr, forceRefresh: ports.forceAuthRefresh });
+  const identity = signIn(ports.gh, store, { now: ports.now, stderr: ports.stderr });
   context.secrets = [identity.token];
   context.auth = authSession({
     identity,
@@ -5167,7 +5187,7 @@ async function watchSavedTests(context, tryId, wait, story) {
 export async function runDoorCall(descriptor, input, givenPorts = {}) {
   const ports = withDefaults(givenPorts), { root, origin, sessionId, login, prompt, operation } = descriptor;
   if(loadRuntimeWorkspace({root}).configured)ports.captureSource(root,{tests:descriptor.originalPath?[descriptor.originalPath]:[descriptor.prompt].filter(Boolean)});
-  const store = stateFor(ports.env, root), identity = signIn(ports.gh, store, { now: ports.now, stderr: ports.stderr, forceRefresh: ports.forceAuthRefresh, exitCode: 125 });
+  const store = stateFor(ports.env, root), identity = signIn(ports.gh, store, { now: ports.now, stderr: ports.stderr, exitCode: 125 });
   if (identity.login !== login) throw new Stop(125, `This Try belongs to ${login}. Run: gh auth switch -u ${login}`);
   if (runtimeOrigin({ PDD_RUNTIME_URL: origin }) !== origin) throw new Stop(2, 'The saved interpreter address is invalid.');
   const repo=store.read(join(store.dir,'repos',`${store.repoKey(root)}.json`));
@@ -5264,7 +5284,7 @@ export async function readTryOwner({ cwd = process.cwd(), story } = {}, givenPor
   if (!record) { await openTry(); record = store.repo(root).tries?.[test.path]; }
   if (!record) throw new Error('No confirmed Try is recorded. Run pdd simulate STORY.');
   ports.captureSource(root,{tests:[test.path]});
-  const identity = signIn(ports.gh, store, { now: ports.now, stderr: ports.stderr, forceRefresh: ports.forceAuthRefresh });
+  const identity = signIn(ports.gh, store, { now: ports.now, stderr: ports.stderr });
   if (record.login !== identity.login) throw new Error(`This Try belongs to ${record.login}. Run: gh auth switch -u ${record.login}`);
   if (runtimeOrigin({ PDD_RUNTIME_URL: record.origin }) !== record.origin) throw new Error('The saved interpreter address is invalid.');
   const promptProblem=tryPromptProblem(root,found,test,record);

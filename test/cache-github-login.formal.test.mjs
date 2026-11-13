@@ -359,7 +359,9 @@ async function seedFixture(t, runtimeOverride) {
   // 1. Terminal saved batch owned by octo.
   const termMade = portsFor(env, { gh: seedGh });
   assert.equal(await runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--json': true } }, termMade.ports), 0);
-  const terminalBatch = JSON.parse(termMade.ports.stdout.text).batch;
+  const termSummary = JSON.parse(termMade.ports.stdout.text);
+  const terminalBatch = termSummary.batch;
+  const checkUuid = termSummary.rows[0].request_id;
 
   // 2. Open (running) saved batch owned by octo.
   holdOpenBatch = true;
@@ -369,11 +371,13 @@ async function seedFixture(t, runtimeOverride) {
   const openBatch = /pdd test --read (\S+)/.exec(openMade.ports.stderr.text)[1];
   holdOpenBatch = false;
 
-  // 3. Open CLI Try + door descriptor owned by octo.
+  // 3. Open CLI Try + door descriptor + call receipt owned by octo.
   const tryMade = portsFor(env, { stdin: Readable.from([]), shell: async () => 0, gh: seedGh });
   assert.equal(await runTry({ cwd: setup.repo, words: ['place-order'], options: { '--cli': true } }, tryMade.ports), 0);
   const descriptorFile = readdirSync(join(setup.state, 'tries')).filter(name => name.endsWith('.door.json'))[0];
   const descriptor = JSON.parse(readFileSync(join(setup.state, 'tries', descriptorFile), 'utf8'));
+  const seededCall = await runDoorCall(descriptor, { argv: ['seed'] }, portsFor(env, { gh: seedGh }).ports);
+  const callUuid = seededCall.id;
 
   rmSync(join(setup.state, 'github-user.json'), { force: true });
   cpSync(setup.state, goldenState, { recursive: true });
@@ -389,17 +393,25 @@ async function seedFixture(t, runtimeOverride) {
 
   const httpTotal = () => fake.posts.length + fake.jsonPosts.length + fake.gets.length + fake.deletes.length;
 
-  return { setup, fake, env, terminalBatch, openBatch, descriptor, resetState, httpTotal, observedUrls };
+  return { setup, fake, env, terminalBatch, openBatch, checkUuid, callUuid, descriptor, resetState, httpTotal, observedUrls };
 }
 
 async function invokeEntry(entryKind, fixture, ports) {
-  const { setup, terminalBatch, openBatch, descriptor } = fixture;
+  const { setup, terminalBatch, openBatch, checkUuid, callUuid, descriptor } = fixture;
   if (entryKind === 'check_saved_read') {
     const code = await runCheck({ cwd: setup.repo, words: [terminalBatch], options: { '--read': true, '--json': true } }, ports);
     return { kind: 'code', code, door: false };
   }
   if (entryKind === 'open_batch_read') {
     const code = await runCheck({ cwd: setup.repo, words: [openBatch], options: { '--read': true, '--json': true } }, ports);
+    return { kind: 'code', code, door: false };
+  }
+  if (entryKind === 'call_read') {
+    const code = await runCheck({ cwd: setup.repo, words: [callUuid], options: { '--read': true, '--json': true } }, ports);
+    return { kind: 'code', code, door: false };
+  }
+  if (entryKind === 'request_read') {
+    const code = await runCheck({ cwd: setup.repo, options: { '--request': checkUuid, '--json': true } }, ports);
     return { kind: 'code', code, door: false };
   }
   if (entryKind === 'check_lint') {
@@ -693,15 +705,15 @@ test('formal Rules 1-4 cross-boundary: all 5 public entry points x 4 cache state
   assert.equal(worlds, 400);
 });
 
-test('formal Rule 5 HTTP 401: 2 initial cache modes x 4 post-401 refresh states x 2 runtime 401 sequences x 5 public boundaries (80 worlds)', { timeout: 120_000 }, async t => {
+test('formal Rule 5 HTTP 401: 2 initial cache modes x 4 post-401 refresh states x 2 runtime 401 sequences x 7 public boundaries (112 worlds)', { timeout: 120_000 }, async t => {
+  const AUTH_DIAGNOSTIC = 'The PDD interpreter did not accept your GitHub login (HTTP 401). Run gh auth login, then run the command again.';
   let activeRule = null;
   let targetAttempts = 0;
   const targetHeaders = [];
 
   const isTargetEndpoint = (boundary, entry) => {
     if (boundary === 'check_post') return entry.method === 'POST' && entry.command === 'lint';
-    if (boundary === 'open_batch_read') return entry.method === 'GET' && entry.url.startsWith('/v1/runs/');
-    if (boundary === 'try_attach') return entry.method === 'GET' && entry.url.startsWith('/v1/runs/');
+    if (['open_batch_read', 'call_read', 'request_read', 'try_attach'].includes(boundary)) return entry.method === 'GET' && entry.url.startsWith('/v1/runs/');
     if (boundary === 'door_call') return Boolean(entry.json);
     if (boundary === 'mcp_owner') return entry.method === 'GET' && entry.url.endsWith('/model');
     return false;
@@ -768,7 +780,7 @@ test('formal Rule 5 HTTP 401: 2 initial cache modes x 4 post-401 refresh states 
     },
   ];
   const runtimeSeqs = ['401_then_200', '401_always'];
-  const boundaries = ['check_post', 'open_batch_read', 'try_attach', 'door_call', 'mcp_owner'];
+  const boundaries = ['check_post', 'open_batch_read', 'call_read', 'request_read', 'try_attach', 'door_call', 'mcp_owner'];
 
   let worlds = 0;
   for (const initCache of initialModes) {
@@ -777,6 +789,7 @@ test('formal Rule 5 HTTP 401: 2 initial cache modes x 4 post-401 refresh states 
         for (const boundary of boundaries) {
           worlds += 1;
           const ctx = `Rule5[${initCache.id} × ${refresh.id} × ${seq} × ${boundary}]`;
+          const exitCodeOn401 = ['open_batch_read', 'call_read', 'request_read'].includes(boundary) ? 3 : 5;
           fixture.resetState(initCache, false);
           fixture.observedUrls.length = 0;
           targetAttempts = 0;
@@ -833,8 +846,8 @@ test('formal Rule 5 HTTP 401: 2 initial cache modes x 4 post-401 refresh states 
             assert.equal(targetAttempts, 1, `${ctx}: cold sign-in + 401 must make 0 HTTP retries`);
             assert.equal(existsSync(cacheFile), false, `${ctx}: forbidden keeping 401-rejected cache file`);
             if (outcome.kind === 'code') {
-              assert.equal(outcome.code, boundary === 'open_batch_read' ? 3 : 5, `${ctx}: cold 401 exit code`);
-              assert.ok(stderr.includes('HTTP 401') || stderr.includes('Run gh auth login'), `${ctx}: cold 401 stderr`);
+              assert.equal(outcome.code, exitCodeOn401, `${ctx}: cold 401 exit code`);
+              assert.ok(stderr.includes(AUTH_DIAGNOSTIC), `${ctx}: cold 401 AUTH_TEXT on stderr (${stderr})`);
             } else {
               assert.equal(outcome.kind, 'rejected', `${ctx}: cold 401 rejects`);
               if (outcome.door) assert.equal(outcome.error.exitCode, 125, `${ctx}: cold 401 door exitCode 125`);
@@ -854,7 +867,8 @@ test('formal Rule 5 HTTP 401: 2 initial cache modes x 4 post-401 refresh states 
             assert.equal(targetAttempts, 1, `${ctx}: failed post-401 refresh must not retry HTTP`);
             assert.equal(existsSync(cacheFile), false, `${ctx}: failed post-401 refresh leaves github-user.json removed`);
             if (outcome.kind === 'code') {
-              assert.equal(outcome.code, boundary === 'open_batch_read' ? 3 : 5, `${ctx}: failed post-401 refresh exit code`);
+              assert.equal(outcome.code, exitCodeOn401, `${ctx}: failed post-401 refresh exit code`);
+              assert.ok(stderr.includes(AUTH_DIAGNOSTIC), `${ctx}: failed post-401 refresh AUTH_TEXT on stderr (${stderr})`);
             } else {
               assert.equal(outcome.kind, 'rejected', `${ctx}: failed post-401 refresh rejects`);
               if (outcome.door) assert.equal(outcome.error.exitCode, 125, `${ctx}: door exitCode 125`);
@@ -865,7 +879,7 @@ test('formal Rule 5 HTTP 401: 2 initial cache modes x 4 post-401 refresh states 
 
           // Post-401 refresh succeeded:
           assert.equal(apiCalls(ghLog).length, 1, `${ctx}: warm 401 calls gh api user once during refresh`);
-          const hasSavedOwner = boundary !== 'check_post';
+          const hasSavedOwner = !['check_post', 'request_read'].includes(boundary);
 
           if (hasSavedOwner && refresh.login !== 'octo') {
             // Forbidden: skipping saved-owner verification after 401 refresh!
@@ -889,7 +903,7 @@ test('formal Rule 5 HTTP 401: 2 initial cache modes x 4 post-401 refresh states 
             continue;
           }
 
-          // Owner matches (or new check_post with no prior owner): retries rejected HTTP request exactly once!
+          // Owner matches (or check_post / request_read with no pre-HTTP owner lock): retries rejected HTTP request exactly once!
           assert.equal(targetAttempts, 2, `${ctx}: retries rejected HTTP request once (no loop)`);
           assert.equal(targetHeaders[1], `Bearer ${refresh.token}`, `${ctx}: retry uses refreshed token`);
 
@@ -911,8 +925,8 @@ test('formal Rule 5 HTTP 401: 2 initial cache modes x 4 post-401 refresh states 
             // seq === '401_always': single retry also 401 -> stops with 0 further retries and deletes github-user.json!
             assert.equal(existsSync(cacheFile), false, `${ctx}: repeated 401 must remove github-user.json`);
             if (outcome.kind === 'code') {
-              assert.equal(outcome.code, boundary === 'open_batch_read' ? 3 : 5, `${ctx}: repeated 401 exit code`);
-              assert.ok(stderr.includes('HTTP 401') || stderr.includes('Run gh auth login'), `${ctx}: repeated 401 stderr`);
+              assert.equal(outcome.code, exitCodeOn401, `${ctx}: repeated 401 exit code`);
+              assert.ok(stderr.includes(AUTH_DIAGNOSTIC), `${ctx}: repeated 401 AUTH_TEXT on stderr (${stderr})`);
             } else {
               assert.equal(outcome.kind, 'rejected', `${ctx}: repeated 401 rejects`);
               if (outcome.door) assert.equal(outcome.error.exitCode, 125, `${ctx}: door exitCode 125`);
@@ -924,14 +938,24 @@ test('formal Rule 5 HTTP 401: 2 initial cache modes x 4 post-401 refresh states 
       }
     }
   }
-  assert.equal(worlds, 80);
+  assert.equal(worlds, 112);
 });
 
-test('formal Rule 6 forced-refresh rate-limit boundary: 4 cache states x 3 gh api user failures x 6 caller modes (72 worlds)', { timeout: 120_000 }, async t => {
+test('formal Rule 6 refresh rate-limit boundary: 4 on-disk cache states x 3 gh api user failures x 6 caller modes (72 worlds)', { timeout: 120_000 }, async t => {
   const fixture = await seedFixture(t);
 
+  const incompleteCachedAtTokenA = {
+    id: 'incomplete_cached_at_token_a',
+    validFor: null,
+    write(stateDir) {
+      writeFileSync(join(stateDir, 'github-user.json'), JSON.stringify({
+        login: 'octo', user_id: '4242', cached_at: '', token_sha256: SHA_A,
+      }), { mode: 0o600 });
+    },
+  };
+
   const cacheModes = [
-    CACHE_STATES.find(c => c.id === 'valid_token_a'),
+    incompleteCachedAtTokenA, // matching token_sha256 with incomplete cached_at triggers real refresh
     CACHE_STATES.find(c => c.id === 'absent'),
     CACHE_STATES.find(c => c.id === 'valid_token_b'), // switched token (active token is TOKEN_A)
     CACHE_STATES.find(c => c.id === 'corrupt_json'),
@@ -974,7 +998,6 @@ test('formal Rule 6 forced-refresh rate-limit boundary: 4 cache states x 3 gh ap
         const beforeHttp = fixture.httpTotal();
 
         const made = portsFor(fixture.env, {
-          forceAuthRefresh: true,
           stdin: Readable.from([]),
           gh: args => {
             ghLog.push(args);
@@ -989,11 +1012,11 @@ test('formal Rule 6 forced-refresh rate-limit boundary: 4 cache states x 3 gh ap
         const outputs = [stdout, stderr, outcome.error?.message ?? ''];
 
         assert.equal(authCalls(ghLog).length, 1, `${ctx}: gh auth token called once`);
-        assert.equal(apiCalls(ghLog).length, 1, `${ctx}: forced refresh calls gh api user once`);
-        assert.equal(httpDelta, 0, `${ctx}: forced refresh failure never makes remote runtime HTTP calls`);
+        assert.equal(apiCalls(ghLog).length, 1, `${ctx}: refresh calls gh api user once`);
+        assert.equal(httpDelta, 0, `${ctx}: refresh failure never makes remote runtime HTTP calls`);
 
         const eligibleFallback =
-          cacheState.id === 'valid_token_a' &&
+          cacheState.id === 'incomplete_cached_at_token_a' &&
           failure.isRateLimit &&
           callerMode === 'check_saved_read';
 
@@ -1004,21 +1027,26 @@ test('formal Rule 6 forced-refresh rate-limit boundary: 4 cache states x 3 gh ap
             1,
             `${ctx}: exact stderr rate-limit warning printed once`,
           );
+          const cacheFile = join(fixture.setup.state, 'github-user.json');
+          assert.equal(modeBits(cacheFile), 0o600, `${ctx}: github-user.json remains 0600`);
+          assert.deepEqual(JSON.parse(readFileSync(cacheFile, 'utf8')), {
+            login: 'octo', user_id: '4242', cached_at: '', token_sha256: SHA_A,
+          }, `${ctx}: incomplete cached_at record preserved without unverified timestamp`);
           assertRule1Invariants({
             stateDir: fixture.setup.state,
             repoDir: fixture.setup.repo,
             outputs,
             ghLog,
             urls: fixture.observedUrls,
-            expectValidCache: { login: 'octo', user_id: '4242', token_sha256: SHA_A },
+            expectValidCache: null,
           }, ctx);
         } else {
           assert.doesNotMatch(stderr, /Warning: GitHub API rate limit reached/, `${ctx}: forbidden rate-limit fallback outside local saved-batch --read`);
           if (outcome.kind === 'code') {
-            assert.equal(outcome.code, 5, `${ctx}: non-eligible forced-refresh failure exits 5`);
+            assert.equal(outcome.code, 5, `${ctx}: non-eligible refresh failure exits 5`);
             assert.ok(stderr.includes('pdd could not read your GitHub login'), `${ctx}: stderr names login failure`);
           } else {
-            assert.equal(outcome.kind, 'rejected', `${ctx}: non-eligible forced-refresh failure rejects`);
+            assert.equal(outcome.kind, 'rejected', `${ctx}: non-eligible refresh failure rejects`);
             if (outcome.door) assert.equal(outcome.error.exitCode, 125, `${ctx}: door exitCode 125`);
             assert.ok(outcome.error.message.includes('pdd could not read your GitHub login'), `${ctx}: error names login failure`);
           }
