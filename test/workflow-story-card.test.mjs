@@ -14,9 +14,9 @@ const { approveRun, runStatus, startRun, stepDone } = runner;
 const showStoryCard = (...args) => { assert.equal(typeof runner.showStoryCard, 'function', 'workflow card must be available'); return runner.showStoryCard(...args); };
 import { writeRun } from '../src/workflow-runs.mjs';
 import { fakeRuntime, portsFor, storyTest } from './runtime-fake.mjs';
-import { runCheck } from '../src/runtime-client.mjs';
-import { renderJson } from '../src/runtime-output.mjs';
-import { captureSource, fillHashes } from '../src/runtime-preflight.mjs';
+import { runCheck } from '../src/runtime-seam.mjs';
+import { renderJson } from '../src/runtime-seam.mjs';
+import { captureSource, fillHashes } from '../src/runtime-seam.mjs';
 import { fixture, packageRoot } from './helpers/workflow-runner-fixture.mjs';
 
 const harbor = join(packageRoot, 'test', 'fixtures', 'harbor');
@@ -225,7 +225,7 @@ test('#2962 a prompt-only repair that passes the check keeps the Story approval'
   assert.equal(f.prs.length, 1, out.message); assert.equal(record.decisions.at(-1).via, 'automatic-check-pass');
   assert.deepEqual(record.storyApproval, before);
   const iface = JSON.parse(readFileSync(join(f.run.root, PROMPT), 'utf8').match(/```json\n([\s\S]*?)\n```/)[1]);
-  const { proseSha256 } = await import('../src/runtime-preflight.mjs');
+  const { proseSha256 } = await import('../src/runtime-seam.mjs');
   assert.equal(iface.status, 'approved'); assert.equal(iface.prose_sha256, proseSha256(readFileSync(join(f.run.root, PROMPT), 'utf8')));
   assert.match(f.prs[0].body, /automatic-check-pass/);
 });

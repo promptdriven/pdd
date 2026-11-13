@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import {chmodSync,readFileSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
-import {runCheck} from '../src/runtime-client.mjs';
-import {findTests,preflight} from '../src/runtime-preflight.mjs';
+import {runCheck} from '../src/runtime-seam.mjs';
+import {findTests,preflight} from '../src/runtime-seam.mjs';
 import {harbor,storyTest,fakeRuntime,portsFor,sha} from './runtime-fake.mjs';
 
 const read=(root,path)=>JSON.parse(readFileSync(join(root,path),'utf8'));

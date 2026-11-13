@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { numberWarnings, findTests, preflight, sha256, captureSource } from '../src/runtime-preflight.mjs';
+import { numberWarnings, findTests, preflight, sha256, captureSource } from '../src/runtime-seam.mjs';
 import { harbor } from './runtime-fake.mjs';
 
 const criterion = 'Enforce a cumulative usage cap of 100 across the worker and watchdog.';

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isRecentLintReceipt } from '../src/runtime-lint-receipt.mjs';
+import { isRecentLintReceipt } from '../src/runtime/runtime-lint-receipt.mjs';
 
 const ENGINE = 'eae2202a68d00ab762fcbbf1eba0d8607a132a15';
 const scope = { root: '/repo', origin: 'https://runtime.example', login: 'dana', user_id: '42', source_sha256: 'a'.repeat(64),

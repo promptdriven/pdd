@@ -6,19 +6,22 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   PROMPT_TESTS_WORDS,
+  checkInput,
+  interfaceBlocks,
   jsonRow,
+  openServe,
   projectAnswer,
   renderJson,
   renderText,
-  tokenUsageOf,
+  runCheck,
+  runtimeOutputSlice,
   tryUsage,
   tryUsageHeaders,
   tryUsageLine,
-} from '../src/runtime-output.mjs';
-import { runCheck } from '../src/runtime-client.mjs';
-import { openServe } from '../src/try-http.mjs';
+} from '../src/runtime-seam.mjs';
 import { CACHED_INPUT_WEIGHT, applyCostMeasurement, captureCosts, costReport, costStatusLines } from '../src/cost-ledger.mjs';
-import { checkInput, interfaceBlocks } from '../src/runtime-preflight.mjs';
+
+const { tokenUsageOf } = runtimeOutputSlice();
 import { fakeRuntime, harbor, PLACE, portsFor, TOKEN } from './runtime-fake.mjs';
 
 const ORIGIN = 'https://runtime.example';

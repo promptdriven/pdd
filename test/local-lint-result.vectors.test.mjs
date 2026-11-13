@@ -6,7 +6,7 @@ import {existsSync,lstatSync,mkdirSync,readFileSync,readdirSync,symlinkSync,writ
 import {join} from 'node:path';
 import {parseArgv} from '../src/argument-parser.mjs';
 import {runPdd} from '../src/pdd-cli.mjs';
-import {runCheck} from '../src/runtime-client.mjs';
+import {runCheck} from '../src/runtime-seam.mjs';
 import {readRunResults,resultLines,usableResult} from '../src/workflow-results.mjs';
 import {readEvidenceEligibility} from '../src/workflow-runner.mjs';
 import {harbor,portsFor,PLACE,root as packageRoot} from './runtime-fake.mjs';

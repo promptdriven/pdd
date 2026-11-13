@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { parseArgv } from '../src/argument-parser.mjs';
 import { renderHelp, runPdd } from '../src/pdd-cli.mjs';
-import { runCheck } from '../src/runtime-client.mjs';
+import { runCheck } from '../src/runtime-seam.mjs';
 import { client } from './runtime-compatibility/replay.mjs';
 import { harbor, portsFor, root, TOKEN } from './runtime-fake.mjs';
 

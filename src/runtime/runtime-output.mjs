@@ -1,10 +1,7 @@
 import { bindingRefusals } from './runtime-binding-plan.mjs';
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: b6fb0b9645b438bbc70fadb6cba75e2409134eb27e1769913e8b13e5f85ad8d0).
-import { hasProgress, outcomeExitCode, outcomeFor, outcomeText, progressText, resultOutcome, PROVIDER_TEXT } from './runtime-outcome.mjs';
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: f68bf52457d88b17943b8e22285a54a0fb332f79b581fc636cc0219cdabe37c8).
+import { hasProgress, outcomeFor, outcomeText, progressText, resultOutcome, PROVIDER_TEXT } from './runtime-outcome.mjs';
 export const OPEN_STATES = new Set(['queued', 'running', 'sent']);
-
-// Each row carries its outcome; the outcome model owns the exit precedence.
-export const exitCodeFor = (rows, options) => outcomeExitCode(rows, options);
 
 const SERVER_PATH = /(?<![\w.:/-])\/(?:home|Users|srv|var|tmp|private|opt|mnt|workspace|usr|etc)\/[^\s"'<>)\]]*/g;
 // Server text in the terminal: no control characters, no token and, in free text, no server paths.
@@ -387,9 +384,10 @@ function batchTokenUsage(publicRows) {
   return { input_tokens, cached_input_tokens, output_tokens, cached_input_share: shareOf(input_tokens, cached_input_tokens), complete };
 }
 
-export function renderJson({ batch = null, repo, sourceSha256 = null, coverage, rows, warnings = [], exitCode, summaryLine: line = summaryLine(rows) }) {
+export function renderJson({ batch = null, repo, sourceSha256 = null, coverage, rows, warnings = [], exitCode, summaryLine: line }, ports = {}) {
   rows = [...rows.filter(row=>row.unsent),...rows.filter(row=>!row.unsent)];
-  const perStory = new Map(storyLines(rows).map(([story, text]) => [story, text]));
+  line = line ?? summaryLine(rows, null, ports);
+  const perStory = new Map(storyLines(rows, ports).map(([story, text]) => [story, text]));
   const publicRows = rows.map(row => ({ ...jsonRow(row), summary_line: perStory.get(row.story) ?? null }));
   return { batch, repo, ...(coverage ? { coverage } : {}), source_sha256: sourceSha256, exit_code: exitCode, summary_line: line, draft: rows.some(row => row.draft),
     token_usage: batchTokenUsage(publicRows), rows: publicRows, warnings };
@@ -398,17 +396,15 @@ export function renderJson({ batch = null, repo, sourceSha256 = null, coverage, 
 const count = (number, word) => `${number} ${word}${number === 1 ? '' : 's'}`;
 // One line an agent can paste into a PR: ✓ only when every story passed.
 // One paste line per Story (0.1.6: many Stories in one run), in table order; a Story with two test files gets one line.
-export function storyLines(rows) {
+export function storyLines(rows, ports = {}) {
   const groups = new Map();
   for (const row of rows) groups.set(row.story, [...(groups.get(row.story) ?? []), row]);
-  return [...groups].map(([story, own]) => [story, summaryLine(own, story)]);
+  return [...groups].map(([story, own]) => [story, summaryLine(own, story, ports)]);
 }
 
-// The paste line label. pdd writes only PROMPT_TESTS_LABEL; readers find both labels with PROMPT_TESTS_WORDS,
-// so the `Runtime check` lines of older PR bodies, run summaries and saved results read the same way.
-export const PROMPT_TESTS_LABEL = 'Prompt tests';
-export const PROMPT_TESTS_WORDS = '(?:Prompt tests|Runtime check)';
-export function summaryLine(rows, story = null) {
+const DEFAULT_PROMPT_TESTS_LABEL = 'Prompt tests';
+export function summaryLine(rows, story = null, ports = {}) {
+  const labelText = ports?.promptTestsLabel ?? DEFAULT_PROMPT_TESTS_LABEL;
   // A passed row proves only the criteria its report lists; without the list its criteria are not reported, never counted.
   const unreported = row => row.state === 'passed' && !row.criteria;
   const own = row => row.criteria ?? { passed: 0, total: row.criteria_total ?? 0 };
@@ -435,7 +431,7 @@ export function summaryLine(rows, story = null) {
   const usage = known.length ? `${count(calls, 'AI call')}${rerunShare ? ` (${rerunShare})` : ''}` : rerunShare || count(calls, 'AI call');
   const skipped = rows.some(row => row.cached) ? [count(new Set(rows.filter(row => row.cached).map(row => row.story_path ?? row.story)).size, 'Story').replace('Storys', 'Stories') + ' skipped'] : [];
   const broken = rows.filter(row=>row.unsent).length, unchecked = rows.reduce((n,row)=>n+(row.not_checked?.length??0),0);
-  return [`${PROMPT_TESTS_LABEL}${story ? ` (${story})` : ''}${rows.some(row => row.draft) ? ' (DRAFT)' : ''}: ${mark} ${criteriaText}`,
+  return [`${labelText}${story ? ` (${story})` : ''}${rows.some(row => row.draft) ? ' (DRAFT)' : ''}: ${mark} ${criteriaText}`,
     `${checks.passed}/${checks.total} checks`, ...(broken ? [`${broken} tests could not run`] : []), ...(unchecked ? [`${unchecked} criteria not checked; the Story is not a full pass`] : []), ...(progress ? [progress] : []), ...others, ...skipped, ...(progress && !sent.length ? [] : [`${usage}${unknownCalls ? ` + ${unknownCalls} unknown` : ''}`])].join(' · ');
 }
 
@@ -545,15 +541,15 @@ function localRefusals(rows, secrets) {
 }
 
 // The terminal result of a batch (stdout).
-export function renderText({ batch, rows, coverage, warnings = [], details = false, timeoutMin = null, interrupted = false, reading = false, exitCode, secrets = [], recovery, now = Date.now(), noFailed = false }) {
+export function renderText({ batch, rows, coverage, warnings = [], details = false, timeoutMin = null, interrupted = false, reading = false, exitCode, secrets = [], recovery, now = Date.now(), noFailed = false }, ports = {}) {
   const out = [];
   rows = [...rows.filter(row=>row.unsent),...rows.filter(row=>!row.unsent)];
   out.push(...localRefusals(rows.filter(row=>row.unsent),secrets));
   if (exitCode === 3) out.push(recovery ?? `pdd test --read ${batch}`);
   // One Story: its own line is the result; the overall line comes only with two or more Stories.
-  const perStory = storyLines(rows).map(([, text]) => text);
+  const perStory = storyLines(rows, ports).map(([, text]) => text);
   if (noFailed) return 'No failed Stories. 0 AI calls.\n';
-  out.push(...table(rows, now), ...(perStory.length === 1 ? perStory : [...perStory, summaryLine(rows)]));
+  out.push(...table(rows, now), ...(perStory.length === 1 ? perStory : [...perStory, summaryLine(rows, null, ports)]));
   if ([3, 4, 5].includes(exitCode)) {
     const failed = new Set(rows.filter(row => row.state === 'failed').map(row => row.story));
     const inconclusive = new Set(rows.filter(row => !['passed', 'failed'].includes(row.state)).map(row => row.story));

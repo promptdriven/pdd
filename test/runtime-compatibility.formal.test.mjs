@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { outcomeFor, outcomeExitCode } from '../src/runtime-outcome.mjs';
+import { outcomeFor, outcomeExitCode } from '../src/runtime-seam.mjs';
 import { pure, mutate } from './runtime-compatibility/replay.mjs';
 
 // Approved Rules to check: old own/reached refusals win, matched concrete blockers

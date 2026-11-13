@@ -1,11 +1,11 @@
 import {loadRuntimeWorkspace} from './runtime-workspace.mjs';
 import {captureSource} from './runtime-preflight.mjs';
-// Generated from prompts/cli/agent-chat.prompt.md (sha256: fa202c9aba70712508abc0a2048566fb396ced4083a4aa033ae843ea4726e28d).
-import {discoverAgents,askAgent} from './agent-adapters.mjs';
-import {loadAgentDefinitions} from './agent-config.mjs';
+// Generated from prompts/cli/agent-chat.prompt.md (sha256: 88ccfc9a9fca1ffaae42fc354f414d00ae2934babe472ecd09c8d4325b1060ec).
 import {createTryGuide} from './agent-guide.mjs';
+import {askAgent} from './agent-ask.mjs';
 import {cleanText} from './runtime-output.mjs';
 const object=x=>x!==null&&typeof x==='object'&&!Array.isArray(x);
+const unboundPortError=message=>Object.assign(new Error(message),{unboundPort:true});
 const FEATURES=['apply','progress','run_events','expect','save','run'];
 const ready=a=>['ready','available'].includes(a?.state);
 const write=(context,text)=>context.ports.stderr.write(`${cleanText(text,context.secrets)}\n`);
@@ -19,22 +19,32 @@ function scrub(value,secrets){
  if(object(value))return Object.fromEntries(Object.entries(value).map(([k,v])=>[k,/token|password|secret|api[_-]?key|authorization|cookie|credential/i.test(k)?'[redacted]':scrub(v,secrets)]));
  return value;
 }
-export async function createAgentBridge(context,test,tryId,options={},link){
+export async function createAgentBridge(context,test,tryId,options={},link,seamPorts={}){
+ const mergeDefined=(base={},override={})=>{const out={...base};for(const [k,v] of Object.entries(override??{}))if(v!==undefined)out[k]=v;return out;};
+ const mergedPorts=mergeDefined(seamPorts,context.ports);
  const workspace=loadRuntimeWorkspace({root:context.root});
- if(workspace.configured){captureSource(context.root,{tests:[test.path]});throw Error('Bounded agent connection is unavailable: native controls cannot establish packet-only context.');}
- const definitions=context.agentDefinitions??loadAgentDefinitions({cwd:context.root,env:context.ports.env});
+ if(workspace.configured){(mergedPorts.captureSource??((r,o)=>captureSource(r,o,mergedPorts)))(context.root,{tests:[test.path]});throw Error('Bounded agent connection is unavailable: native controls cannot establish packet-only context.');}
+ const guideBase=mergeDefined(seamPorts.guidePorts,context.ports?.guidePorts);
+ const ports={...mergedPorts,guidePorts:mergeDefined({redaction:context.ports?.redaction??seamPorts.redaction,redactSecrets:context.ports?.redactSecrets??seamPorts.redactSecrets,evidenceEligibility:context.ports?.evidenceEligibility??context.ports?.readEvidenceEligibility??seamPorts.evidenceEligibility??seamPorts.readEvidenceEligibility,isStoryPath:mergedPorts.isStoryPath,hasAcceptance:mergedPorts.hasAcceptance,matchTests:mergedPorts.matchTests,orphanSummary:mergedPorts.orphanSummary,captureSource:mergedPorts.captureSource,readAgentScenarios:mergedPorts.readAgentScenarios},guideBase)};
+ const loadDefinitions=context.ports?.loadAgentDefinitions??context.ports?.agents?.loadDefinitions??seamPorts.loadAgentDefinitions??seamPorts.agents?.loadDefinitions;
+ if(!context.agentDefinitions&&typeof loadDefinitions!=='function')throw unboundPortError('Agent configuration port (loadAgentDefinitions) is not bound.');
+ const definitions=context.agentDefinitions??loadDefinitions({cwd:context.root,env:ports.env});
  if(!definitions.length)throw Error('No agents are configured. Add an agent or enable defaults in agents.json.');
+ const discover=context.ports?.discoverAgents??context.ports?.agents?.list??seamPorts.discoverAgents??seamPorts.agents?.list;
+ const runPort=context.ports?.runAgentProcess??context.ports?.agents?.run??seamPorts.runAgentProcess??seamPorts.agents?.run;
+ const ask=context.ports?.askAgent??context.ports?.agents?.ask??seamPorts.askAgent??seamPorts.agents?.ask??(typeof runPort==='function'?input=>askAgent(input,{run:runPort}):undefined);
+ if(typeof discover!=='function'||typeof ask!=='function')throw unboundPortError('Agent adapter ports (discoverAgents, askAgent) are not bound.');
  const known=id=>definitions.some(d=>d.id===id),byChoice=value=>definitions.find(d=>d.name===value)??definitions.find(d=>['codex','claude','gemini'].includes(d.id)&&d.id===value);
  const explicit=options['--agent']!==undefined?byChoice(options['--agent']):null;
  if(options['--agent']!==undefined&&!explicit)throw Error('Unknown agent name. Choose a name from agents.json or an enabled default.');
- const {ports,root,store,runtime}=context,prefix=`/v1/try/${tryId}`,bridge_id=ports.randomUUID();
+ const {root,store,runtime}=context,prefix=`/v1/try/${tryId}`,bridge_id=ports.randomUUID();
  write(context,'Connecting your agent to the Try page…');
  const modelReply=await runtime.send(`${prefix}/model`,{method:'GET'},30000);
  if(modelReply.status===404){write(context,'This interpreter does not support Ask your agent yet. The ordinary Try link remains available.');return null;}
  if(!good(modelReply)||!Array.isArray(modelReply.json.entries))throw Error(`Could not read the owner’s Try model for agent chat (${why(modelReply)}). Run pdd simulate again.`);
  const model=modelReply.json,entries=model.entries.filter(e=>typeof e.entry_path==='string'&&typeof e.operation==='string'&&object(e.input_schema))
   .map(e=>({entry:`${e.entry_path}#${e.operation}`,prompt_path:e.entry_path,operation:e.operation,input_schema:e.input_schema,...Object.fromEntries(['label','name','cli','http'].filter(k=>Object.hasOwn(e,k)).map(k=>[k,e[k]]))}));
- const discovered=await (ports.discoverAgents??discoverAgents)({cwd:root,env:ports.env,definitions});
+ const discovered=await discover({cwd:root,env:ports.env,definitions});
  let agents=definitions.map(d=>{const found=discovered.find(a=>a.id===d.id);return{id:d.id,name:d.name,state:found?.state??'error',...(typeof found?.detail==='string'?{detail:found.detail}:{})};});
  let choice=(explicit??byChoice(store.repo(root).agent_choice))?.id;
  if(!known(choice)||(!explicit&&agents.find(a=>a.id===choice)?.state==='not_installed'))choice=agents.find(ready)?.id??agents.find(a=>a.state!=='not_installed')?.id??definitions[0].id;
@@ -49,7 +59,7 @@ export async function createAgentBridge(context,test,tryId,options={},link){
  const guide=createTryGuide({root,env:ports.env,model,test,features,secrets,ports:ports.guidePorts});
  const onSaved=record=>guide.saved(record);context.onAgentCaseSaved=onSaved;
  const ownerUrl=new URL(link);ownerUrl.hash=`agent=${connected.json.browser_key}`;
- let closed=false,task=null,tickTask=null,failed=false;const seen=new Set(),controller=new AbortController();
+ let closed=false,task=null,tickTask=null,failed=false,unboundError=null;const seen=new Set(),controller=new AbortController();
  const stop=()=>controller.abort();context.signal?.addEventListener('abort',stop,{once:true});
  if(context.signal?.aborted)stop();
  async function close(){if(closed)return;closed=true;stop();guide.close();if(context.onAgentCaseSaved===onSaved)delete context.onAgentCaseSaved;context.onAgentChatClose?.();context.signal?.removeEventListener('abort',stop);
@@ -59,7 +69,7 @@ export async function createAgentBridge(context,test,tryId,options={},link){
   const agent=agents.find(a=>a.id===message.agent),name=agent?.name??'Your agent',turn=guide.prepare(message);let result,asked=false;
   if(turn.fast)result=turn.fast;
   else if(!ready(agent))result={say:agent?.state==='signed_out'?`${agent.name} is signed out. Sign in at your terminal, or switch to another agent.`:agent?.state==='quota'?`${agent.name} has reached its usage limit. Switch to another agent.`:`${agent?.name??'This agent'} is not available. Choose an installed agent.`,fill:null};
-  else {asked=true;write(context,`${name} is answering a question from the Try page…`);result=await (ports.askAgent??askAgent)({agent:agent.id,definition:definitions.find(d=>d.id===agent.id),cwd:root,env:ports.env,entries,signal:controller.signal,supportsApply:features.includes('apply'),supportsRun:features.includes('run'),context:turn.context});}
+  else {asked=true;write(context,`${name} is answering a question from the Try page…`);result=await ask({agent:agent.id,definition:definitions.find(d=>d.id===agent.id),cwd:root,env:ports.env,entries,signal:controller.signal,supportsApply:features.includes('apply'),supportsRun:features.includes('run'),context:turn.context});}
   if(controller.signal.aborted)return;
   if(turn.fast)write(context,'PDD checked the run against the local test cases.');
   else write(context,result.error||!ready(agent)?`${name} could not answer: ${result.error?.message??result.say}`:`${name} answered.${result.fill?' It proposed input for the form.':''}`);
@@ -85,9 +95,10 @@ export async function createAgentBridge(context,test,tryId,options={},link){
      seen.add(message.id);task=answer(message).catch(()=>{failed=true;write(context,'Your agent could not finish this message. It will not be run again.');stop();}).finally(()=>{task=null;});
     }
    }
-   if(onTick&&!tickTask)tickTask=Promise.resolve().then(onTick).then(keep=>{if(keep===false)stop();}).catch(()=>{failed=true;write(context,'Saved Try updates could not be read. Reconnect with pdd simulate.');stop();}).finally(()=>{tickTask=null;});
+   if(onTick&&!tickTask)tickTask=Promise.resolve().then(onTick).then(keep=>{if(keep===false)stop();}).catch(err=>{if(err?.unboundPort)unboundError=err;else{failed=true;write(context,'Saved Try updates could not be read. Reconnect with pdd simulate.');}stop();}).finally(()=>{tickTask=null;});
    if(ports.now()-before<1000)await ports.sleep(1000,controller.signal);
   }}finally{await close();await task;await tickTask;}
+  if(unboundError)throw unboundError;
   return failed?5:0;
  }
  return{url:ownerUrl.href,run,close};

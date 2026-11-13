@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 // Failure selection is local to the named scope. No in-scope failure means
 // normal selection, including reuse. Clear retains scope and overrides --lf.
 const root = resolve(process.env.FORMAL_CODE_ROOT || fileURLToPath(new URL('..', import.meta.url)));
-const { runCheck } = await import(pathToFileURL(join(root, 'src/runtime-client.mjs')));
+const { runCheck } = await import(pathToFileURL(join(root, 'src/runtime-seam.mjs')));
 const { harbor, fakeRuntime, portsFor } = await import(pathToFileURL(join(root, 'test/runtime-fake.mjs')));
 const read = path => JSON.parse(readFileSync(path, 'utf8'));
 const write = (path, doc) => writeFileSync(path, JSON.stringify(doc));

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { runApprove } from '../src/prompt-approve.mjs';
-import { interfaceBlocks } from '../src/runtime-preflight.mjs';
+import { interfaceBlocks } from '../src/runtime-seam.mjs';
 import { harbor, PLACE, sink, fakeRuntime, portsFor } from './runtime-fake.mjs';
 
 function setupDraft(t,{nativePass=true,changeProse=false,scripts,broken=false,bulk=false}={}) {

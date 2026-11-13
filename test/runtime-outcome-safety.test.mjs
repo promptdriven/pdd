@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runCheck } from '../src/runtime-client.mjs';
+import { runCheck } from '../src/runtime-seam.mjs';
 import { harbor, fakeRuntime, portsFor, TOKEN } from './runtime-fake.mjs';
 
 function client(h, f) {

@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { captureSource } from '../src/runtime-preflight.mjs';
+import { captureSource } from '../src/runtime-seam.mjs';
 
 // Literal container examples approved against the existing Code examples rule.
 // These ordinary regressions supplement the frozen prompt-space vectors.

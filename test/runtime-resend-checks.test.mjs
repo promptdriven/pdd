@@ -6,7 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runCheck, resendableStoryChecks, checkRuntimeHealth } from '../src/runtime-client.mjs';
+import { runCheck, resendableStoryChecks, checkRuntimeHealth } from '../src/runtime-seam.mjs';
 import { fakeRuntime, harbor, portsFor, temp } from './runtime-fake.mjs';
 
 const STORY = 'user_stories/place-order.md';

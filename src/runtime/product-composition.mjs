@@ -1,7 +1,6 @@
-// Generated from prompts/cli/product-composition.prompt.md (sha256: 3bff92f7915a64c79f6f3afecee8710b138680b1ac87a472880fccd64a9c8c72).
+// Generated from prompts/cli/product-composition.prompt.md (sha256: ec03402c9b8dfb9b90cfc0825a9c79425bb1c45371339285953cbf388b38e27e).
 import { basename, join } from 'node:path';
-import { checkInput, interfaceBlocks, PreflightError, selectTests } from './runtime-preflight.mjs';
-import { parseProductDocuments, parseProductWorldWriters } from './product.mjs';
+import { checkInput, interfaceBlocks, PreflightError } from './runtime-preflight.mjs';
 import { expandSource, isJsonNumber, jsonNumberIdentity, parseJsonValue, stringifyJsonValue } from './contract-refs.mjs';
 
 const fail = (code, message) => { throw Object.assign(Error(message), { code }); };
@@ -178,12 +177,15 @@ function joinMaps(product, parts, maps, chain, encode, selectedParts) {
   return { map: joined, labels, tapOperations };
 }
 
-export function selectJourneys(tests, selector) {
+export function selectJourneys(tests, selector, ports = {}) {
+  if (typeof ports?.selectTests !== 'function') {
+    throw Object.assign(new Error('Product composition port (selectTests) is not bound.'), { unboundPort: true });
+  }
   const candidates = tests.filter(test => /^user_stories\/journeys\/[^/]+\.md$/.test(test.storyPath));
   if (selector === undefined) return candidates.map(test => test.testPath);
   const records = candidates.map(test => ({ ...test, path: test.testPath }));
   const exactPaths = records.filter(test => test.testPath === selector || test.storyPath === selector).map(test => test.testPath);
-  const exact = exactPaths.length ? selectTests({ tests: records }, exactPaths).selected : [];
+  const exact = exactPaths.length ? ports.selectTests({ tests: records }, exactPaths).selected : [];
   const matches = exact.length ? exact : records.filter(test => {
     const name = basename(test.storyPath, '.md');
     return name === selector || name.startsWith(`${selector}-`) || name.startsWith(`${selector}.`);
@@ -195,6 +197,9 @@ export function selectJourneys(tests, selector) {
 }
 
 export function composeProductTry({ root, parts, journey, testPath }, ports) {
+  if (typeof ports?.parseProductDocuments !== 'function' || typeof ports?.parseProductWorldWriters !== 'function') {
+    throw Object.assign(new Error('Product composition ports (parseProductDocuments, parseProductWorldWriters) are not bound.'), { unboundPort: true });
+  }
   const cached = new Map();
   const read = (path, optional = false) => {
     if (cached.has(path)) return cached.get(path);
@@ -213,13 +218,13 @@ export function composeProductTry({ root, parts, journey, testPath }, ports) {
   };
   try {
     const mapText = read('product/map.md'), planText = read('product/plan.md', true) ?? '';
-    const { product } = parseProductDocuments({ mapText, planText });
+    const { product } = ports.parseProductDocuments({ mapText, planText });
     const selected = parts === undefined ? product.parts.map(part => part.part) : [...parts];
     if (!selected.length || new Set(selected).size !== selected.length || selected.some(part => !product.parts.some(row => row.part === part))) {
       fail('invalid-product', `Choose distinct product parts from: ${product.parts.map(part => part.part).join(', ')}.`);
     }
     const writers = new Map();
-    for (const { key, writer } of parseProductWorldWriters({ worldText: read('contracts/world.md', true) ?? '' })) {
+    for (const { key, writer } of ports.parseProductWorldWriters({ worldText: read('contracts/world.md', true) ?? '' })) {
       if (writers.has(key) && writers.get(key) !== writer) fail('world-writer-conflict', `${key} is written by ${writers.get(key)} and ${writer}.`);
       writers.set(key, writer);
     }
@@ -253,7 +258,7 @@ export function composeProductTry({ root, parts, journey, testPath }, ports) {
     if (journey !== undefined) {
       if (typeof testPath !== 'string' || !testPath) fail('invalid-journey', 'Choose one journey test path for this Try.');
       const raw = read(testPath), scenario = parseJsonValue(raw);
-      selectJourneys([{ testPath, storyPath: scenario.story_path }], journey);
+      selectJourneys([{ testPath, storyPath: scenario.story_path }], journey, ports);
       if (!plain(scenario.initial_world)) fail('invalid-journey', `${testPath}: initial_world must be an object.`);
       // Validate its ordinary standalone seed/reference before using only its set.
       expandSource({ path: testPath, text: raw, format: 'scenario' }, files);
@@ -298,6 +303,7 @@ export function composeProductTry({ root, parts, journey, testPath }, ports) {
     return { appMapPath, seedPath, files: [{ path: appMapPath, content: stringifyJsonValue(joined.map) }, { path: seedPath, content: stringifyJsonValue(world) }],
       product_parts, parts: selected, journey: journey ?? null, tapOperations: joined.tapOperations, labels: joined.labels };
   } catch (error) {
+    if (error?.unboundPort) throw error;
     if (error.exitCode || ['invalid-product', 'invalid-journey', 'world-writer-conflict', 'invalid-product-map', 'unsupported-product-router'].includes(error.code) || /^(?:contract-|seed-)/.test(error.code ?? '')) throw error;
     badMap(`Cannot compose this product Try: ${error.message}`);
   }

@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { fillHashes } from '../src/runtime-preflight.mjs';
+import { fillHashes } from '../src/runtime-seam.mjs';
 
 // Story-derived oracle: concatenate authored JSON tokens. Never scan or compact
 // the source to obtain expected bytes. Deliberately retain duplicate keys,

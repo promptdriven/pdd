@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { runTry } from '../src/runtime-client.mjs';
+import { runTry } from '../src/runtime-seam.mjs';
 
 // Oracle authority: user_stories/stop-simulation-by-story-path.md, Rules to check
 // and AC3/AC4. This is a native bounded check, not an interpreted prompt verdict.

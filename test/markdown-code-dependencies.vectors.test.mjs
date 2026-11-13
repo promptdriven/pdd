@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { markdownDefinitions, markdownLinks, markdownSectionText } from '../src/runtime-markdown.mjs';
+import { markdownDefinitions, markdownLinks, markdownSectionText } from '../src/runtime/runtime-markdown.mjs';
 
 const pointer = (value, path) => path === '' ? value : path.slice(1).split('/').reduce(
   (current, key) => current[key.replace(/~1/g, '/').replace(/~0/g, '~')], value);

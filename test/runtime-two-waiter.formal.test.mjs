@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
-import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot } from '../src/runtime-slots.mjs';
+import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot } from '../src/runtime/runtime-slots.mjs';
 
 // Independent oracle: user_stories/runtime-local-queue.md and
 // runtime-capacity-wait.md, Rules to check; runtime-slots.prompt.md owns the

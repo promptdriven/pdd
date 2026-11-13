@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {composeProductTry,productTapCallBound} from '../src/product-composition.mjs';
+import {composeProductTry,productTapCallBound} from '../src/runtime-seam.mjs';
 import {parseProductWorldWriters} from '../src/product.mjs';
 const original=JSON.parse(readFileSync(new URL('./runtime/product-compose-try.json',import.meta.url))).initial_world.files;
 function fixture(){const files=structuredClone(original);return {files,ports:{root:'/project',statFile:path=>({exists:Object.hasOwn(files,path),is_symlink:false}),readFile:path=>files[path].content}};}
@@ -49,7 +49,7 @@ test('bounded tap-budget oracle covers 1024 caller/child/render combinations',()
 });
 
 test('budget oracle detects a missing destination draw without a load failure',async()=>{
- const location=new URL('../src/product-composition.mjs',import.meta.url);
+ const location=new URL('../src/runtime/product-composition.mjs',import.meta.url);
  const source=readFileSync(location,'utf8');
  const changed=source.replace('bound+=Math.max(0,...destinations', 'bound+=0*Math.max(0,...destinations');
  assert.notEqual(changed,source);

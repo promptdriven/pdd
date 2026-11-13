@@ -1,7 +1,7 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { projectAnswer } from '../src/runtime-output.mjs';
+import { projectAnswer } from '../src/runtime-seam.mjs';
 
 // 4 depths × 2 reference states = 8 bounded preservation cases. Alternating
 // object/array containers also check full pointer escaping and authored order.

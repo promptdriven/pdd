@@ -1,6 +1,6 @@
 # Runtime outcome
 
-Own `src/runtime-outcome.mjs`: the one place that decides what happened to one
+Own `src/runtime/runtime-outcome.mjs`: the one place that decides what happened to one
 selected test from one server answer. `pdd lint`, the lint gate for paid work, the
 table, the Story summary, the progress line and the exit code all read this
 decision, so two consumers can never disagree about the same answer. A pass needs
@@ -252,9 +252,7 @@ exit helpers below also accept the internal outcome states.
 - Module function `outcomeOverall(outcomes, {interrupted, lintUnknown} = {})`: the
   state that decides a group. Any state that is not done counts as `unknown`. Empty,
   interrupted or `lintUnknown` is `unknown`. Else the first present of `unknown`,
-  `not_run`, `refused`, `failed`, `passed`.
-- Module function `outcomeExitCode(outcomes, options)`: that state's exit code:
-  unknown 3, not_run 5, refused 4, failed 1, passed 0.
+  `not_run`, `refused`, `failed`, `passed`. State-to-exit-code mapping belongs to the host caller's exit-code mapper.
 
 Without `criterion_results`, an outcome proves no criterion passed.
 
@@ -266,7 +264,7 @@ client consumption interface; the server remains the capability decision owner.
 ## Caller navigation
 
 The client owns transport, native digest computation, saved evidence, capacity waits, local
-hints and text cleaning; [runtime output](runtime-output.prompt.md) renders the
+hints and text cleaning; the host exit-code mapper maps `outcomeOverall` to process exit codes; [runtime output](runtime-output.prompt.md) renders the
 retained fields. Server answer shapes: prompt-runtime `server/lint_driver.py`
 (per-test verdicts with `--complete`), `server/runner.py` (`report.lint`) and
 `server/app.py` (status view).

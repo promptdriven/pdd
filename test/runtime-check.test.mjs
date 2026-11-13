@@ -5,8 +5,8 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, sym
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { captureSource, defaultMaxCalls, gitFiles, isSecretPath, numberWarnings, proseSha256, storyCriteria, tarFiles } from '../src/runtime-preflight.mjs';
-import { runCheck } from '../src/runtime-client.mjs';
+import { captureSource, defaultMaxCalls, gitFiles, isSecretPath, numberWarnings, proseSha256, storyCriteria, tarFiles } from '../src/runtime-seam.mjs';
+import { runCheck } from '../src/runtime-seam.mjs';
 import { fakeRuntime, portsFor } from './runtime-fake.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
 
@@ -449,7 +449,7 @@ test('RUNTIME-OWNER1: pdd test warns once when two prompts own the same source f
   mkdirSync(join(repo, 'src')); writeFileSync(join(repo, 'src/split.js'), 'export {};\n'); writeFileSync(join(repo, 'src/cli.js'), 'export {};\n');
   writeFileSync(join(repo, 'prompts/tipjar.prompt.md'), '# tipjar\n\nThe code runs `src/cli.js`; `src/split.js` owns the money math.\n');
   writeFileSync(join(repo, 'prompts/split.prompt.md'), '# split\n\nThis prompt owns `src/split.js`. It reads `README.md`.\n');
-  const { findTests, sharedSourceFiles } = await import('../src/runtime-preflight.mjs');
+  const { findTests, sharedSourceFiles } = await import('../src/runtime-seam.mjs');
   const found = findTests({ root: repo });
   assert.deepEqual(sharedSourceFiles(repo, found.visible), ['Warning: src/split.js is named by 2 prompts (prompts/split.prompt.md, prompts/tipjar.prompt.md). One prompt should own each source file.']);
   const doc = readJson(join(repo, 'tests/place-order.json')); doc.steps[0].input.items[0].quantity = 0; writeJson(join(repo, 'tests/place-order.json'), doc);
@@ -483,7 +483,7 @@ test('RUNTIME-OWNER2: shared read-only JSON/config/dotfiles and non-owned import
     '- `pdd.json`',
     '- [Helper](helper.prompt.md): provides `src/helper.mjs` and `src/util.mjs`.', '',
   ].join('\n'));
-  const { findTests, gitFiles, sharedSourceFiles } = await import('../src/runtime-preflight.mjs');
+  const { findTests, gitFiles, sharedSourceFiles } = await import('../src/runtime-seam.mjs');
   let found = findTests({ root: repo });
   assert.deepEqual(sharedSourceFiles(repo, found.visible), []);
 
@@ -552,7 +552,7 @@ test('RUNTIME-STORIES1: PLAN.md, README.md and story files with no acceptance cr
   writeFileSync(join(repo, 'user_stories/README.md'), '# Stories\n\nOne file for each Story.\n');
   writeFileSync(join(repo, 'user_stories/play-2048.md'), '# Play 2048\n\nThe game, in parts: see PLAN.md.\n');
   writeFileSync(join(repo, 'user_stories/refund.md'), '# Refund\n\n## Acceptance criteria\n\n1. A refund returns the total.\n');
-  const found = (await import('../src/runtime-preflight.mjs')).findTests({ root: repo });
+  const found = (await import('../src/runtime-seam.mjs')).findTests({ root: repo });
   assert.deepEqual(found.stories.map(story => story.path).sort(), ['user_stories/place-order.md', 'user_stories/refund.md', 'user_stories/unknown-item.md']);
   assert.deepEqual(found.warnings, ['Warning: user_stories/refund.md has no test: expected tests/refund.json (or refund.json in any test or tests folder).']);
 });

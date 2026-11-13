@@ -2,8 +2,8 @@ import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { interfaceBlocks, checkInput, findTests } from '../src/runtime-preflight.mjs';
-import { loadRuntimeWorkspace } from '../src/runtime-workspace.mjs';
+import { interfaceBlocks, checkInput, findTests } from '../src/runtime-seam.mjs';
+import { loadRuntimeWorkspace } from '../src/runtime/runtime-workspace.mjs';
 import { fileURLToPath } from 'node:url';
 
 test('817: workspace port grammar rejects absolute paths and keeps the native relative callback', () => {

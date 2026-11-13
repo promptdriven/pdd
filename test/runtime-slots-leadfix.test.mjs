@@ -4,7 +4,7 @@ import { mkdirSync, writeFileSync, utimesSync, readdirSync, unlinkSync } from 'n
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from '../src/runtime-slots.mjs';
+import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from '../src/runtime/runtime-slots.mjs';
 import { temp } from './runtime-fake.mjs';
 
 const row = (id, extra = {}) => ({ id, state: 'active', kind: 'check', pid: 42, started_at: 0, request_ids: [id], ...extra });
@@ -156,7 +156,7 @@ test('head-only-jitter: followers never claim; head retains identity and positiv
 for (const signal of ['SIGINT', 'SIGHUP', 'SIGTERM']) for (const phase of ['waiting', 'claim', 'paid']) test(`signals-retain-paid-lease: child ${signal} during ${phase}`, async t => {
   const stateDir = join(temp(t), 'state');
   const source = `import {mkdirSync,readFileSync,readdirSync,writeFileSync,unlinkSync,statSync,utimesSync} from 'node:fs'; import {join} from 'node:path';
-const m=await import(${JSON.stringify(new URL('../src/runtime-slots.mjs', import.meta.url).href)}); const dir=${JSON.stringify(join(stateDir, 'slots', 'host'))};mkdirSync(dir,{recursive:true});let pause=false,announce=false;
+const m=await import(${JSON.stringify(new URL('../src/runtime/runtime-slots.mjs', import.meta.url).href)}); const dir=${JSON.stringify(join(stateDir, 'slots', 'host'))};mkdirSync(dir,{recursive:true});let pause=false,announce=false;
 const files={listRecords:async()=>{if(announce){announce=false;process.stdout.write('ready\\n');}if(pause){pause=false;const keep=setInterval(()=>{},1000);await new Promise(done=>{process.once(${JSON.stringify(signal)},done);process.stdout.write('ready\\n');});clearInterval(keep);}return {jobs:readdirSync(dir).filter(n=>n.endsWith('.json')&&n!=='claim.json').map(n=>JSON.parse(readFileSync(join(dir,n))))};},exclusiveCreate:(p,r)=>{try{writeFileSync(p,JSON.stringify(r),{flag:'wx'});return true;}catch(e){if(e.code==='EEXIST')return false;throw e;}},writeAtomic:(p,r)=>writeFileSync(p,JSON.stringify(r)),unlink:p=>{try{unlinkSync(p);}catch(e){if(e.code!=='ENOENT')throw e;}},modifiedAt:p=>{try{return statSync(p).mtimeMs;}catch{return null;}},touch:p=>{try{utimesSync(p,new Date(),new Date());return true;}catch{return false;}}};
 const opts={stateDir:${JSON.stringify(stateDir)},origin:'https://host',kind:'check',limit:1};
 if(${JSON.stringify(phase)}==='waiting'){writeFileSync(join(dir,'busy.json'),JSON.stringify({id:'busy',state:'active',kind:'check',pid:process.pid,started_at:Date.now(),request_ids:['other']}));announce=true;await m.acquireRuntimeSlot(opts,{files});}

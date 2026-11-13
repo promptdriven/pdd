@@ -1,7 +1,7 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildBindingPlan } from '../src/runtime-binding-plan.mjs';
+import { buildBindingPlan } from '../src/runtime/runtime-binding-plan.mjs';
 
 function fixture() {
   const iface = { entries: [

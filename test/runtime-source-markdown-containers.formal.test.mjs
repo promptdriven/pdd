@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { captureSource } from '../src/runtime-preflight.mjs';
+import { captureSource } from '../src/runtime-seam.mjs';
 
 // Approved source: lead12:22 and runtime-preflight's Code examples contract.
 // Exhaustive only over this literal finite grammar, not arbitrary CommonMark:

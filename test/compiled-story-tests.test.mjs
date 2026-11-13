@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, symlinkSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { captureSource, executableInterfaceText, findTests, interfaceBlocks, preflight, proseSha256 } from '../src/runtime-preflight.mjs';
+import { captureSource, executableInterfaceText, findTests, interfaceBlocks, preflight, proseSha256 } from '../src/runtime-seam.mjs';
 const bin = join(process.cwd(), 'bin/pdd.mjs');
 const roots = [];
 after(() => { for (const root of roots) rmSync(root,{recursive:true,force:true}); });

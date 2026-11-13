@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync } from 'node:fs';
-import { runCheck } from '../src/runtime-client.mjs';
-import { renderJson, renderText, summaryLine, exitCodeFor } from '../src/runtime-output.mjs';
+import { runCheck } from '../src/runtime-seam.mjs';
+import { renderJson, renderText, summaryLine, exitCodeFor } from '../src/runtime-seam.mjs';
 import { harbor, fakeRuntime, portsFor, TOKEN } from './runtime-fake.mjs';
 const row = (state, story = 'one', extra = {}) => ({ state, story, title: story, test: `${story}.json`, refusals: [], ...extra });
 

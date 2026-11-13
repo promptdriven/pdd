@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {harbor,fakeRuntime,portsFor} from './runtime-fake.mjs';
-import {runCheck} from '../src/runtime-client.mjs';
+import {runCheck} from '../src/runtime-seam.mjs';
 for(const json of [false,true]) test(`request recovery retains incomplete coverage (json=${json})`, async t=>{
   const {repo,home,state}=harbor(t,repo=>{
     const doc=JSON.parse(readFileSync(join(repo,'tests/place-order.json')));

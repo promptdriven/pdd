@@ -6,9 +6,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { harbor, storyTest, fakeRuntime, portsFor } from './runtime-fake.mjs';
-import { runCheck, saveDoorCase, acquireCaseWriteOwnership } from '../src/runtime-client.mjs';
-import { createTryTools } from '../src/try-mcp.mjs';
-import { captureSource, fillHashes, findTests, preflight, scenarioShapeRefusal } from '../src/runtime-preflight.mjs';
+import { runCheck, saveDoorCase, acquireCaseWriteOwnership, createTryTools, captureSource, fillHashes, findTests, preflight, scenarioShapeRefusal } from '../src/runtime-seam.mjs';
 
 const cli = fileURLToPath(new URL('../bin/pdd.mjs', import.meta.url));
 const git = (cwd, ...args) => {
