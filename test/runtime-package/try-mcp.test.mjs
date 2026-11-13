@@ -8,7 +8,7 @@ const packageVersion = createRequire(import.meta.url)('../../package.json').vers
 
 function fixture(overrides = {}) {
   const scenario = { criteria: [{ id: 'AC1', text: 'Adds bookmark' }], initial_world: { kv: {} }, steps: [{ step_id: 'add', entry_path: 'prompts/bm.prompt.md', operation: 'main', input: { argv: ['add', 'news'] }, checks: [{ criterion_id: 'AC1', target: 'result', path: '/stdout', op: 'equals', value: 'Added\n' }] }] };
-  const owner = { root: '/project', test: { path: 'tests/add.json', storyPath: 'user_stories/add.md', title: 'Add', doc: scenario }, record: { id: 'try-1', origin: 'https://example.com', login: 'owner' }, model: { entries: [{ entry_path: 'prompts/bm.prompt.md', operation: 'main', cli: true, input_schema: { type: 'object' } }], calls: { cap: 400, remaining: 399 } }, data: { kv: { bookmarks: ['real current data'] } } };
+  const owner = { root: '/project', test: { path: 'tests/add.json', storyPath: 'user_stories/add.md', title: 'Add', doc: scenario }, record: { id: 'try-1', origin: 'https://example.com', login: 'owner', source_sha256: 'a'.repeat(64), engine_sha: 'b'.repeat(40) }, model: { entries: [{ entry_path: 'prompts/bm.prompt.md', operation: 'main', cli: true, input_schema: { type: 'object' } }], calls: { cap: 400, remaining: 399 } }, data: { kv: { bookmarks: ['real current data'] } } };
   let calls = 0, saves = 0;
   return { owner, get calls() { return calls; }, get saves() { return saves; }, ports: {
     readTryOwner: async () => owner,
@@ -21,6 +21,8 @@ test('state uses current owner world, run preserves snapshots, check and save us
   const f = fixture(), tools = createTryTools({}, f.ports);
   const state = await tools.call('try_state');
   assert.deepEqual(state.data_now, f.owner.data);
+  assert.equal(state.source_sha256, 'a'.repeat(64));
+  assert.equal(state.engine_sha, 'b'.repeat(40));
   assert.equal(state.entries[0].entry, 'prompts/bm.prompt.md#main');
   const run = await tools.call('try_run', { argv: ['add', 'news'] });
   assert.deepEqual(run.data_before, { kv: {} });
