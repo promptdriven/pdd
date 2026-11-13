@@ -1,6 +1,19 @@
-// Generated from prompts/cli/runtime-binding-plan.prompt.md (sha256: 5287e914876856ec130dfdbff660f78b68805ea54e6c75760aaa3db373f5f0d6).
+// Generated from prompts/cli/runtime-binding-plan.prompt.md (sha256: 667d9ad0ad59e95258aac6c32665398d28642416fc95d7132d7349eba65abd60).
 
 const rows = value => Array.isArray(value) ? value : [];
+const stepSimulation = (base, overrides) => {
+  const result = { ...(base ?? {}) };
+  if (Array.isArray(overrides)) {
+    for (const row of overrides) {
+      if (row && typeof row === 'object' && !Array.isArray(row) && typeof row.operation === 'string' && row.operation) {
+        result[row.operation] = row.binding;
+      }
+    }
+  } else if (overrides && typeof overrides === 'object') {
+    Object.assign(result, overrides);
+  }
+  return result;
+};
 const selectedResources = (iface, operation) => {
   const entries = rows(iface?.entries), selected = entries.filter(entry => entry?.operation === operation);
   const declared = new Set(rows(iface?.resources).flatMap(resource => rows(resource?.operations)
@@ -73,7 +86,7 @@ export function buildBindingPlan({test, storyText, prompts, dependencyPaths=[], 
       for (const call of rows(iface.calls)) if (typeof call?.target==='string') pending.push(call.target);
     }
     steps.push({step_id:step.step_id,closure:[...closure].sort()});
-    const simulation = {...test.doc.simulation,...step.simulation_overrides};
+    const simulation = stepSimulation(test.doc.simulation, step.simulation_overrides);
     const otherEntryCall = [...closure].some(path => rows(prompts.get(path)?.calls).some(call =>
       call?.target === step.entry_path && call.target_operation !== step.operation));
     const active = otherEntryCall ? null : selectedResources(prompts.get(step.entry_path), step.operation);
