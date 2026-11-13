@@ -24,8 +24,8 @@ const REQUIRED_KEYS = ['schema_version', 'criteria', 'initial_world', 'steps'];
 const REQUIRED_STEP_KEYS = ['step_id', 'entry_path', 'operation', 'input', 'checks'];
 const OPTIONAL_STEP_KEYS = ['expected_error', 'simulation_overrides', 'model'];
 const STEP_KEYS = new Set([...REQUIRED_STEP_KEYS, ...OPTIONAL_STEP_KEYS]);
-const RULE_OPS = new Set(['at_most', 'at_least', 'not_contains', 'all_in', 'equals_ignore_case']);
-const EXACT_OPS = new Set(['equals', 'not_equals', 'one_of', 'count', ...RULE_OPS]);
+const RULE_OPS = new Set(['at_most', 'at_least', 'lt', 'lte', 'gt', 'gte', 'not_contains', 'all_in', 'equals_ignore_case']);
+const EXACT_OPS = new Set(['equals', 'not_equals', 'one_of', 'count', 'integer_relation', ...RULE_OPS]);
 const SCHEMA_RULES = new Set(['type', 'properties', 'required', 'additionalProperties', 'items', 'enum', 'const', 'oneOf',
   'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'multipleOf', 'minLength', 'maxLength', 'pattern',
   'minItems', 'maxItems', 'uniqueItems', 'minProperties', 'maxProperties']);
