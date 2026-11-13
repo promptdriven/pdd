@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-outcome.prompt.md (sha256: 9a0d07e75cccf95321abc8bc5bfb07552f87eda0a61b6896e653419100a99ba1).
+// Generated from prompts/cli/runtime-outcome.prompt.md (sha256: c51901dba2086845ee808258a4a3afab7c6bc1d37fa562fb7fcd9b70dbced6c3).
 // What happened to one selected test: the one place that turns a server answer into an outcome.
 export const PROVIDER_TEXT = 'the AI provider failed during the run. It is not a failed check. Do not send it again yet.';
 export const CHECK_STATES = Object.freeze(['waiting', 'sent', 'passed', 'failed', 'refused', 'partial', 'not run']);
@@ -28,20 +28,29 @@ const TERMINAL = new Set(['passed', 'failed', 'refused', 'not_run']);
 // Exit precedence: the first state present decides. Any state that is not a known end counts as unknown.
 const DECIDES = [['unknown', 3], ['not_run', 5], ['refused', 4], ['failed', 1], ['passed', 0]];
 
+const nonEmpty = (...values) => values.find(value => typeof value === 'string' && value.length > 0) ?? null;
+
 const refused = (refusals, extra = {}) => {
   const first = refusals[0] ?? {};
   return { state: 'refused', code: first.code ?? null, field: first.field ?? first.at ?? first.section ?? null, fix: first.fix ?? null,
     message: first.reason ?? first.message ?? first.code ?? null, refusals, ...extra };
 };
 
+const appMapRefused = (refusals, extra = {}) => {
+  const first = refusals[0] ?? {};
+  return { state: 'refused', code: nonEmpty(first.code),
+    field: nonEmpty(first.field, first.at, first.pointer, first.section, first.file, first.path),
+    fix: nonEmpty(first.fix), message: nonEmpty(first.reason, first.message, first.code), refusals, ...extra };
+};
+
 // Module function: one outcome for one selected test from one server answer.
-export function outcomeFor(answer, { test, steps = [], kind = answer?.command, timeLimit = false, sourceFiles, capacityUncertain = false } = {}) {
-  const outcome = answerOutcome(answer, { test, steps, kind, timeLimit, sourceFiles, capacityUncertain });
+export function outcomeFor(answer, { test, steps = [], appMaps, kind = answer?.command, timeLimit = false, sourceFiles, capacityUncertain = false } = {}) {
+  const outcome = answerOutcome(answer, { test, steps, appMaps, kind, timeLimit, sourceFiles, capacityUncertain });
   if (outcome.state !== 'passed' && !outcome.code) outcome.code = timeLimit ? 'deadline' : resultOutcome(outcome).reason.code;
   return kind === 'lint' ? { ...outcome, compatibility: selectedCompatibility(answer, test, sourceFiles) } : outcome;
 }
 
-function answerOutcome(answer, { test, steps, kind, timeLimit, sourceFiles, capacityUncertain }) {
+function answerOutcome(answer, { test, steps, appMaps, kind, timeLimit, sourceFiles, capacityUncertain }) {
   const result = answer?.result, report = result?.report;
   if (timeLimit) return { state: 'unknown', reason: 'The step was stopped at its time limit.' };
   if (capacityUncertain && kind === 'check') return { state: 'unknown', reason: 'Check capacity accounting is incomplete or conflicting.' };
@@ -57,7 +66,7 @@ function answerOutcome(answer, { test, steps, kind, timeLimit, sourceFiles, capa
   const retry = refusals.find(item => item.retryable === true || item.details?.retryable === true);
   if (retry && (report?.dispatch ?? answer?.dispatch) === 'not_started')
     return { state: 'not_run', code: retry.code ?? 'server-busy', retryable: true, message: retry.reason ?? retry.message ?? retry.code ?? null };
-  if (kind === 'lint') return lintOutcome(answer, refusals, test, steps, sourceFiles);
+  if (kind === 'lint') return lintOutcome(answer, refusals, test, steps, appMaps, sourceFiles);
   if (answer?.state === 'unknown') return { state: 'unknown', reason: result?.why ?? 'No verdict was returned.' };
   if (answer?.state === 'failed') return { state: 'failed', criteria: objects(report?.criterion_results) };
   if (answer?.state === 'refused' || report?.verdict === 'refused') return refused(refusals);
@@ -67,15 +76,43 @@ function answerOutcome(answer, { test, steps, kind, timeLimit, sourceFiles, capa
 
 // A selected test passes lint on its own evidence: a passing per-test verdict. An ended lint that
 // gives a test no verdict leaves it not run; only a lint that has not ended is unknown.
-function lintOutcome(answer, refusals, test, steps, sourceFiles) {
+function lintOutcome(answer, refusals, test, steps, appMaps, sourceFiles) {
   const result = answer?.result, report = result?.report, program = report?.program;
   if (!['passed', 'failed', 'refused'].includes(answer?.state)) return { state: 'unknown', reason: 'no lint verdict' };
   const complete = report?.lint && typeof report.lint === 'object' ? report.lint.complete === true : result?.problems_complete === true;
   const entries = list => objects(list).filter(item => item.path === test);
   const listed = entries(result?.tests).length ? entries(result.tests) : entries(report?.lint?.tests);
   const verdict = listed.length && listed.every(item => item.verdict === listed[0].verdict) ? listed[0].verdict : null;
-  const own = [...refusals, ...objects(result?.problems ?? report?.problems)]
-    .filter(item => (item.file ?? item.path) === test && item.severity !== 'warning');
+  const problems = objects(result?.problems ?? report?.problems);
+  const targetOf = item => nonEmpty(item.file, item.path);
+  const own = [...refusals, ...problems].filter(item => targetOf(item) === test && item.severity !== 'warning');
+  const hasAppMaps = Array.isArray(result?.app_maps) || Array.isArray(report?.lint?.app_maps);
+  const rawAppMaps = objects(result?.app_maps).length ? objects(result.app_maps) : objects(report?.lint?.app_maps);
+  const applicableMaps = Array.isArray(appMaps)
+    ? [...new Set(appMaps.filter(path => typeof path === 'string' && path.length > 0))]
+    : [...new Set(rawAppMaps.map(item => item.path).filter(path => typeof path === 'string' && path.length > 0))];
+  const applicableSet = new Set(applicableMaps);
+  const appMapProblems = problems.filter(item => applicableSet.has(targetOf(item)) && item.severity !== 'warning');
+  const matchingAppMapRefusals = refusals.filter(item => applicableSet.has(targetOf(item)));
+  const hasSpecific = mapPath => [...appMapProblems, ...matchingAppMapRefusals]
+    .some(item => targetOf(item) === mapPath && item.code && item.code !== 'lint-refused');
+  const appMapRefusals = [
+    ...appMapProblems.filter(item => !(item.code === 'lint-refused' && hasSpecific(targetOf(item)))),
+    ...matchingAppMapRefusals.filter(item => !(item.code === 'lint-refused' && hasSpecific(targetOf(item)))),
+  ];
+  const coveredAppMaps = new Set(appMapRefusals.map(targetOf));
+  for (const mapPath of applicableMaps) {
+    if (!coveredAppMaps.has(mapPath) && rawAppMaps.some(item => item.path === mapPath && item.verdict === 'refused')) {
+      appMapRefusals.push({ code: 'lint-refused', field: mapPath, path: mapPath, message: `${mapPath} was refused by complete lint.` });
+    }
+  }
+  const mapEntries = mapPath => rawAppMaps.filter(item => item.path === mapPath);
+  const appMapsPassed = !hasAppMaps || applicableMaps.every(mapPath => {
+    const mapListed = mapEntries(mapPath);
+    return mapListed.length === 1 && mapListed[0].verdict === 'passed';
+  });
+  const appMapNotChecked = hasAppMaps && applicableMaps.some(mapPath => mapEntries(mapPath).some(item => item.verdict === 'not-checked'));
+  const notChecked = verdict === 'not-checked' || appMapNotChecked;
   // The prompts the test reaches: each step's entry prompt and its declared call targets.
   let draft = false, unlisted = false, reachedProblem = null;
   if (Array.isArray(program?.prompts) || Array.isArray(program?.refused_prompts)) {
@@ -101,11 +138,13 @@ function lintOutcome(answer, refusals, test, steps, sourceFiles) {
       }
     }
   }
-  const notRun = (reason, code = complete ? 'no-server-verdict' : 'deadline') => ({ state: 'not_run', code, retryable: false, reason, draft });
+  const notRun = (reason, code = !complete || notChecked ? 'deadline' : 'no-server-verdict') => ({ state: 'not_run', code, retryable: false, reason, draft });
   if (own.some(item => refusals.includes(item))) return refused(own, { draft });
   if (reachedProblem) return refused([reachedProblem], { draft });
+  if (appMapRefusals.length) return appMapRefused(appMapRefusals, { draft });
   if (verdict === 'refused') return refused(own.length ? own : [{ code: 'lint-refused', message: `${test} was refused by complete lint.` }], { draft });
   if (verdict === 'passed') {
+    if (!appMapsPassed) return notRun(!complete || unlisted || notChecked ? 'lint did not finish' : 'lint gave no verdict for this app map');
     const compatibility = selectedCompatibility(answer, test, sourceFiles);
     if (compatibility.association === 'matched') {
       if (['invalid-source', 'unsupported-capability', 'missing-binding'].includes(compatibility.state)) {
@@ -121,7 +160,7 @@ function lintOutcome(answer, refusals, test, steps, sourceFiles) {
   // A job refusal refuses a selected test that has no verdict of its own.
   if (!listed.length && (answer.state === 'refused' || report?.verdict === 'refused' || refusals.length))
     return refused(refusals.length ? refusals : [{ code: 'lint-refused', message: 'The interpreter refused lint.' }], { draft });
-  return notRun(complete && !unlisted && verdict !== 'not-checked' ? 'lint gave no verdict for this test' : 'lint did not finish');
+  return notRun(!complete || unlisted || notChecked ? 'lint did not finish' : !appMapsPassed ? 'lint gave no verdict for this app map' : 'lint gave no verdict for this test');
 }
 
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);

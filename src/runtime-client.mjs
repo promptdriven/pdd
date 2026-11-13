@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 9f52257bdc2cc25d7f94685c28ccec061a950eabac16837ca3dcb536a8e2844a).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 1fb9619b42d566ff965d2a5f518985c846b6b9dee63f04f456333b8699de0a4f).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
@@ -1297,7 +1297,7 @@ function judgePost(reply, id, command, secrets) {
   if (reply.status === 401) return { kind: 'stop', note: { code: cleanText(error?.code, secrets) || 'auth-required', message: AUTH_TEXT } };
   if (reply.status === 503 && /^(?:pool-low-room|pool-copy-[a-z-]+|github-unavailable)$/.test(error?.code ?? '')) return { kind: 'not_run', note: note('Try again later.') };
   if ([400, 413, 415, 422].includes(reply.status) && error?.code) {
-    return { kind: 'refused', refusal: { code: cleanText(error.code, secrets), section: null, message: cleanText(error.message, secrets) || null,
+    return { kind: 'refused', refusal: { code: cleanText(error.code, secrets), section: cleanText(error.section, secrets) || null, message: cleanText(error.message, secrets) || null,
       engine_message: reply.json.details ? cleanText(JSON.stringify(reply.json.details), secrets) : null,
       ...(reply.status === 422 ? { reason: cleanText(error.reason, secrets) || null, fix: cleanText(error.fix, secrets) || null,
         hint: cleanText(error.hint, secrets) || null, cause: cleanText(error.cause, secrets) || null } : { hint: null }) } };
@@ -1386,6 +1386,7 @@ function capturedCriteria(rows, capture) {
       refuseSource(row,error);broken=true;continue;
     }
     row.steps=doc.steps;
+    row.app_maps=Array.isArray(doc.app_maps)?doc.app_maps.filter(path=>typeof path==='string'&&path.length>0):[];
     row.criteria_total=doc.criteria.length;
     row.criterion_texts=Object.fromEntries(doc.criteria.filter(isObject).map(item=>[item.id,item.text]));
     const exemptions=Array.isArray(doc.check_exemptions)?doc.check_exemptions:[];
@@ -1461,7 +1462,20 @@ function recoverSourceContext(context) {
     return true;
   } catch (error) { if (!(error instanceof PreflightError)) throw error; return false; }
 }
-const lintOutcome = (answer, row, capture) => outcomeFor(answer ?? {}, { kind: 'lint', test: row.test, steps: row.steps ?? [], sourceFiles: sourceFiles(capture) });
+function rowAppMaps(row, capture, appMap = null) {
+  let declared = Array.isArray(row?.app_maps) ? row.app_maps : null;
+  if (!declared && Array.isArray(capture?.sources)) {
+    const source = capture.sources.find(item => item.path === row?.test);
+    if (source) {
+      try {
+        const doc = JSON.parse(Buffer.from(source.bytes).toString('utf8'));
+        if (Array.isArray(doc?.app_maps)) declared = doc.app_maps;
+      } catch { /* Invalid bytes are handled by scenario preflight. */ }
+    }
+  }
+  return [...new Set([appMap, ...(declared ?? [])].filter(path => typeof path === 'string' && path.length > 0))];
+}
+const lintOutcome = (answer, row, capture, appMap = null) => outcomeFor(answer ?? {}, { kind: 'lint', test: row.test, steps: row.steps ?? [], appMaps: rowAppMaps(row, capture, appMap), sourceFiles: sourceFiles(capture) });
 
 // A generic Runtime refusal is not evidence that any particular local finding caused it.
 function interfaceDiagnostic(view, raw, root, secrets = []) {
@@ -1486,9 +1500,9 @@ function interfaceDiagnostic(view, raw, root, secrets = []) {
 }
 
 // The lint outcome of each row, with server text cleaned and pdd's local hint for a prompt it reached.
-function judgeLint(answer, rows, root, visible, secrets = [], capture) {
+function judgeLint(answer, rows, root, visible, secrets = [], capture, appMap = null) {
   return new Map(rows.map(row => {
-    const outcome = lintOutcome(answer, row, capture);
+    const outcome = lintOutcome(answer, row, capture, appMap);
     const view = projectAnswer(answer, { test: row.test, steps: row.steps ?? [], secrets, sourceFiles: sourceFiles(capture) });
     row.compatibility = view.compatibility; row.client_advice = view.client_advice;
     if (outcome.draft) row.draft = true;
@@ -1500,17 +1514,18 @@ function judgeLint(answer, rows, root, visible, secrets = [], capture) {
       const local = /^interface-/.test(view.code) && view.path ? readPrompt(root, visible, view.path) : null;
       return local?.error ? { ...view, message: `${(view.message ?? view.code).replace(/\.$/, '')} (${local.error}).` } : view;
     });
-    return [row, { ...outcome, reason: cleanText(outcome.reason, secrets) || null, refusals }];
+    return [row, { ...outcome, rawRefusals: outcome.refusals ?? [], reason: cleanText(outcome.reason, secrets) || null, refusals }];
   }));
 }
 
 // The one lint gate for paid work (new checks, saved-lint continuation, retry, restart replacement, Try):
 // a selected test is sent only when its own lint outcome is passed. Others keep their outcome.
-const lintAdmits = (answer, row, capture) => lintOutcome(answer, row, capture).state === 'passed';
+const lintAdmits = (answer, row, capture, appMap = null) => lintOutcome(answer, row, capture, appMap).state === 'passed';
 
 // Refusals that per-test passes scoped out stay visible as warnings; a refusal that already
 // refused one of these rows is shown there instead. Returns the new lines.
 function lintDiagnostics(context, answer, rows) {
+  context.warnings ??= [];
   const result = answer?.result, list = value => Array.isArray(value) ? value.filter(isObject) : [];
   const refusals = list(result?.refusals).length ? list(result.refusals) : list([result?.report?.refusal]);
   const key = item => `${item.code}|${item.file ?? item.path ?? ''}`;
@@ -1705,7 +1720,7 @@ function batchRecord(context) {
     created_at: new Date(context.startedAt).toISOString(), intent: context.intent, lint: lint ? { ...lint, recovery_state: lint.state, ...resultOutcome(lint.public_result ?? lint) } : lint, warnings, coverage: context.coverage,
     contract_snapshots: capture.stories,
     test_cache: context.testCache ? { tokens: [...context.testCache.tokens] } : context.savedTestCache,
-    rows: rows.map(row => ({ test: row.test, native_only: row.native_only ?? [], story: row.story, story_path: row.story_path, title: row.title, request_ids: row.request_ids, recovery_state: row.state, ...resultOutcome(row),
+    rows: rows.map(row => ({ test: row.test, ...(row.app_maps?.length ? { app_maps: row.app_maps } : {}), native_only: row.native_only ?? [], story: row.story, story_path: row.story_path, title: row.title, request_ids: row.request_ids, recovery_state: row.state, ...resultOutcome(row),
       ...(!row.request_ids.length && Object.hasOwn(row, 'calls') ? { calls: row.calls } : {}),
       ...(row.unsent ? { unsent: true } : {}), ...(row.not_checked?.length ? {not_checked:row.not_checked} : {}), progress: row.progress, ahead: row.ahead, phase: row.phase, post_verdict: row.post_verdict ?? null, binding_plan: row.binding_plan, compatibility: row.compatibility, client_advice: row.client_advice, report_url: row.report_url, refusals: row.refusals, note: row.note ?? null, why: row.why ?? null, next_step: row.next_step ?? null,
       sent_at: row.sent_at ?? null, ended_at: row.ended_at ?? null, max_calls: row.max_calls, warnings: row.warnings, steps: row.steps, criteria_total: row.criteria_total,
@@ -2378,8 +2393,9 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   // A test that the test name rule cannot use is refused here and never sent; the other tests are linted.
   const rows = selected.map(test => ({ test: test.path, story: test.story, title: test.title, state: 'ready', phase: 'lint',
     refusals: [], request_ids: [], warnings: [], steps: Array.isArray(test.doc?.steps) ? test.doc.steps.filter(isObject) : [],
+    app_maps: Array.isArray(test.doc?.app_maps) ? test.doc.app_maps.filter(path => typeof path === 'string' && path.length > 0) : [],
     criterion_texts: Object.fromEntries((Array.isArray(test.doc?.criteria) ? test.doc.criteria : []).filter(isObject).map(item => [item.id, item.text])),
-    ...(discoveryRefusal(test) ? { state: 'refused', phase: 'local', unsent:true, refusals: [discoveryRefusal(test)], steps: [] } : {}) }));
+    ...(discoveryRefusal(test) ? { state: 'refused', phase: 'local', unsent:true, refusals: [discoveryRefusal(test)], steps: [], app_maps: [] } : {}) }));
   context.rows = rows;
   const nativeRows = new Map(preflight({root,found,selected}).rows.filter(row => row.native_only?.length).map(row => [row.test,row]));
   for (const row of rows) {
@@ -4164,7 +4180,7 @@ function tryPromptProblem(root, found, test, record, capture) {
 // pdd simulate. Returns the exit code.
 export async function runTry({ words = [], options = {}, cwd = process.cwd() } = {}, givenPorts = {}) {
   options = { ...options };
-  const ports = withDefaults(givenPorts), context = { ports, interrupted: false, doorMode: false };
+  const ports = withDefaults(givenPorts), context = { ports, interrupted: false, doorMode: false, warnings: [] };
   let release = () => {};
   try {
     const productMode=options['--product']===true;
@@ -4316,11 +4332,15 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     const failedRow = rows.find(item => item.state !== 'ready');
     if (failedRow && failedRow !== row) {
       if (context.doorMode) throw new Stop(125, failedRow.refusals?.map(r => r.message || r.code).join('; ') || 'A selected Story did not pass lint.');
+      if (appMap && failedRow.state === 'refused' && isAppMapSetupRefusal(context, appMap, failedRow.raw_refusals ?? failedRow.refusals ?? []))
+        return trySetupRefused(context, test, appMap, failedRow.raw_refusals ?? failedRow.refusals ?? [], failedRow.report_url);
       return printTryProblem(context, failedRow);
     }
     if (context.interrupted) throw new Stop(3, 'Stopped before the Try was made. Nothing new was sent.');
     if (row.state !== 'ready') {
       if (options['--cli'] || options['--serve'] !== undefined) throw new Stop(125, row.refusals?.map(r => r.message || r.code).join('; ') || 'The Story did not pass lint.');
+      if (appMap && row.state === 'refused' && isAppMapSetupRefusal(context, appMap, row.raw_refusals ?? row.refusals ?? []))
+        return trySetupRefused(context, test, appMap, row.raw_refusals ?? row.refusals ?? [], row.report_url);
       return printTryProblem(context, row);
     }
     let request, verdict, reply, done;
@@ -4431,15 +4451,23 @@ async function checkLint(context, rows) {
   const lint = await runLint(context);
   if (lint.kind === 'pending') throw new Stop(3, pendingLintMessage(context, lint.answer));
   if (lint.kind === 'not_run' || lint.kind === 'stop') throw new Stop(5, `${lint.note.message}${lint.note.code ? ` (${lint.note.code})` : ''}`);
-  if (lint.kind === 'refused') { Object.assign(rows[0], { state: 'refused', phase: 'lint', refusals: [lint.refusal] }); return; }
+  if (lint.kind === 'refused') { Object.assign(rows[0], { state: 'refused', phase: 'lint', refusals: [lint.refusal], raw_refusals: [lint.refusal] }); return; }
   if (context.doorMode && lint.kind === 'answer' && lint.answer?.state === 'refused' && !isObject(lint.answer.result?.report?.program)) {
     const refusal = lint.answer.result?.refusals?.[0] ?? lint.answer.result?.report?.refusal;
     throw new Stop(125, refusal?.reason || refusal?.message || refusal?.code || 'The interpreter refused lint.');
   }
   // A Try uses AI calls, so it passes the same lint gate as a check.
-  if (rows.every(row => lintAdmits(lint.answer, row, context.capture))) { for (const text of lintDiagnostics(context, lint.answer, rows)) line(context.ports.stderr, text); return; }
-  const verdicts = judgeLint(lint.answer, rows, context.root, context.visible, context.secrets, context.capture);
-  for (const [row, outcome] of verdicts) if (outcome.state === 'refused') Object.assign(row, { state: 'refused', phase: 'lint', refusals: outcome.refusals });
+  if (rows.every(row => lintAdmits(lint.answer, row, context.capture, context.appMap))) { for (const text of lintDiagnostics(context, lint.answer, rows)) line(context.ports.stderr, text); return; }
+  const verdicts = judgeLint(lint.answer, rows, context.root, context.visible, context.secrets, context.capture, context.appMap);
+  const report = isObject(lint.answer?.result?.report?.refusal) ? lint.answer.result.report.refusal : null;
+  const reportUrl = validLink(cleanText(lint.answer?.report_url, context.secrets), context.origin, 'report');
+  for (const [row, outcome] of verdicts) if (outcome.state === 'refused') {
+    const rawRefusals = outcome.rawRefusals.map(item => ({
+      ...item,
+      ...(report?.code === item.code ? { reason: item.reason ?? report.reason, fix: item.fix ?? report.fix } : {}),
+    }));
+    Object.assign(row, { state: 'refused', phase: 'lint', refusals: outcome.refusals, raw_refusals: rawRefusals, report_url: reportUrl });
+  }
   if ([...verdicts.values()].some(outcome => outcome.state === 'unknown')) throw new Stop(3, 'The lint result is unknown, so pdd made no Try link. Run pdd simulate again later.');
   // A lint that ended without a pass for the test is final: nothing changes by waiting.
   const ended = [...verdicts.values()].find(outcome => outcome.state === 'not_run');
@@ -4454,19 +4482,48 @@ async function checkLint(context, rows) {
 
 // A refused Try setup is not a check (runtime team, Oct 27): two plain lines with what was refused, why and the fix; no table.
 const APP_MAP_RULES = { 'ambiguous-handler': 'on one screen, all taps of one kind must match by the same key',
-  'template-reference-schema': 'a field that gets a value from the screen ($ref) must be a plain {"type": "string"}' };
-const GENERIC_REFUSAL = /^The runtime refused this job\b/;
+  'template-reference-schema': 'a field that gets a value from the screen ($ref) must be a plain {"type": "string"}',
+  'invalid-after-step': 'an after step has the wrong fields' };
+const AFTER_STEP_SHAPE_HELP = 'Write each after step as {"handler": {"prompt_path": "...", "operation": "..."}, "input": {...}, "bind": "/field"} (RUNBOOK §13).';
+const GENERIC_REFUSAL = /^The runtime refused this (?:job|run)\b/;
+const isAppMapCode = code => Object.hasOwn(APP_MAP_RULES, code) || code === 'invalid-clipboard-action' || /^(?:after|app-map|invalid-app-map)-/.test(code);
+function normalizeTryRefusals(context, refusals) {
+  const text = value => typeof value === 'string' ? cleanText(value, context.secrets) : '';
+  return (refusals.length ? refusals : [{ code: 'refused' }]).map(item => {
+    const code = text(item.code) || 'refused';
+    const file = text(item.file) || text(item.path);
+    const at = text(item.at) || text(item.pointer);
+    const rawWhere = text(item.where);
+    const where = !rawWhere ? [file, at].filter(Boolean).join(' ') : file && rawWhere === file && at ? `${file} ${at}` : rawWhere;
+    return {
+      code,
+      file: text(item.file),
+      path: text(item.path),
+      section: text(item.section),
+      reason: [text(item.reason), APP_MAP_RULES[code], text(item.engine_message), GENERIC_REFUSAL.test(text(item.message)) ? '' : text(item.message)].find(Boolean),
+      fix: text(item.fix),
+      where,
+    };
+  });
+}
+function isAppMapSetupRefusal(context, appMap, refusals) {
+  if (!appMap) return false;
+  return normalizeTryRefusals(context, refusals).some(item => item.file === appMap || item.path === appMap || item.section === appMap
+    || /app[-_]map/i.test(item.section) || isAppMapCode(item.code));
+}
 function trySetupRefused(context, test, appMap, refusals, reportUrl) {
   if (context.doorMode) throw new Stop(125, refusals.map(item => item.reason || item.engine_message || item.message || item.code).filter(Boolean).join('; ') || 'The interpreter refused this Try.');
-  const text = value => typeof value === 'string' ? cleanText(value, context.secrets) : '';
-  const items = (refusals.length ? refusals : [{ code: 'refused' }]).map(item => ({ code: text(item.code) || 'refused', section: text(item.section),
-    reason: [text(item.reason), APP_MAP_RULES[text(item.code)], text(item.engine_message), GENERIC_REFUSAL.test(text(item.message)) ? '' : text(item.message)].find(Boolean),
-    fix: text(item.fix), where: text(item.where) || [text(item.file), text(item.at)].filter(Boolean).join(' ') }));
-  const mapped = !!appMap && items.some(item => Object.hasOwn(APP_MAP_RULES, item.code) || /^app-map-/.test(item.code) || /app[-_]map/i.test(item.section));
+  const items = normalizeTryRefusals(context, refusals);
+  const mapped = !!appMap && items.some(item => item.file === appMap || item.path === appMap || item.section === appMap
+    || /app[-_]map/i.test(item.section) || isAppMapCode(item.code));
   const why = items.map(item => `${item.reason ? `${item.code}: ${item.reason}` : item.code}${item.where ? `; at ${item.where}` : ''}`).join('; '), fix = items.find(item => item.fix)?.fix;
+  const needsAfterHelp = items.some(item => item.code === 'invalid-after-step' && !/"handler"\s*:\s*\{|\bprompt_path\b/.test(`${item.reason ?? ''} ${item.fix ?? ''}`));
   const again = `run ${tryCommand(test,context.product_setup,' --new')}.`;
+  const target = context.product_setup ? 'the authored part maps or product/plan.md' : appMap;
   line(context.ports.stdout, `The Try could not start: ${mapped ? 'the app map was refused' : 'the server refused it'} (${why}).`);
-  line(context.ports.stdout, fix ? `${fix} Then ${again}` : mapped ? `Fix ${context.product_setup?'the authored part maps or product/plan.md':appMap} (RUNBOOK §13), then ${again}`
+  line(context.ports.stdout, fix ? `${fix}${needsAfterHelp ? ` ${AFTER_STEP_SHAPE_HELP}` : ''} Then ${again}`
+    : needsAfterHelp ? `${mapped ? `Fix ${target}. ` : ''}${AFTER_STEP_SHAPE_HELP} Then ${again}`
+    : mapped ? `Fix ${target} (RUNBOOK §13), then ${again}`
     : `Fix what it names, then ${again}${reportUrl ? ` Details: ${reportUrl}` : ''}`);
   return 4;
 }
