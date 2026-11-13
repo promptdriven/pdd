@@ -14,7 +14,7 @@ Each code module's `.prompt.md` is the source; code implements it.
 - Read `guide.md` fully before writing/changing prompts, Stories or cases, and `story-guide.md` before a Story. Read RUNBOOK.md first, then `runbook/files-and-runtime-block.md` (§2–§4) and only the 1–2 `runbook/` files that fit.
 - Change the prompt first, then the code.
 - One prompt per module: purpose and behavior. Give each rule one owner prompt. Link to a shared rule. Do not copy it. For a CLI, say if a rule belongs to the whole-CLI prompt or to one module's prompt.
-- Keep caller behavior and important edges. Outside code (database, files, network, clock, randomness, programs): use an injected port that the PDD interpreter fakes, never direct calls. See [RUNBOOK §21](RUNBOOK.md#21-fake-the-outside-world).
+- Keep caller behavior and important edges. Outside code (database, files, network, clock, randomness, programs): use an injected port that the PDD interpreter fakes, never direct calls. See [RUNBOOK §21](runbook/cli-and-ports.md#21-fake-the-outside-world).
 - Linked `.ui.svg` is the layout spec: parts, words, order, ids and states. Prose and drawing must agree (RUNBOOK §13).
 - Derive expectations from requirements before code; never copy code output.
 - Show prompt, Story and cases before building. The person decides; record their actual chat approval with --said (RUNBOOK §2), never invent it.
