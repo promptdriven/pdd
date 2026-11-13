@@ -9,7 +9,7 @@ import { captureSource, findTests, preflight, selectTests } from '../src/runtime
 import { runCheck } from '../src/runtime-seam.mjs';
 import { saveDoorCase } from '../src/runtime-seam.mjs';
 import { readAgentScenarios } from '../src/runtime-seam.mjs';
-import { fakeRuntime, harbor, portsFor, root, sink, temp } from './runtime-fake.mjs';
+import { fakeRuntime, harbor, portsFor, root, sink, temp } from './helpers/runtime-fake.mjs';
 
 const HARBOR = join(root, 'test/fixtures/harbor');
 const PLACE_TEST = JSON.parse(readFileSync(join(HARBOR, 'tests/place-order.json'), 'utf8'));

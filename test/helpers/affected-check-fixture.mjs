@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {appendFileSync,existsSync,mkdirSync,readFileSync,rmSync,writeFileSync} from 'node:fs';
 import {join,resolve} from 'node:path';
 import {spawn,spawnSync} from 'node:child_process';
-import {harbor,fakeRuntime,portsFor,root as packageRoot} from '../runtime-fake.mjs';
+import {harbor,fakeRuntime,portsFor,root as packageRoot} from './runtime-fake.mjs';
 import {runCheck} from '../../src/runtime-seam.mjs';
 import {associateEvidenceWorkspace} from '../../src/workflow-runner.mjs';
 import {interfaceBlocks,proseSha256} from '../../src/runtime-seam.mjs';
