@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { compareScreen } from '../src/screen-compare.mjs';
-import { temp } from './runtime-fake.mjs';
+import { temp } from './helpers/runtime-fake.mjs';
 
 // Replay the approved native vectors without deriving expectations from code.
 const vectors = JSON.parse(readFileSync(new URL('../fixtures/native-cases/screen-label-ownership.json', import.meta.url), 'utf8'));

@@ -5,7 +5,7 @@ import {join,resolve} from 'node:path';
 import {fixture} from './helpers/workflow-delivery-fixture.mjs';
 import * as runner from '../src/workflow-runner.mjs';
 import {writeRun} from '../src/workflow-runs.mjs';
-import {captureSource} from '../src/runtime-preflight.mjs';
+import {captureSource} from '../src/runtime-seam.mjs';
 import {nativeCase,observations} from './helpers/workflow-concurrent-cases.mjs';
 const packageRoot=resolve(import.meta.dirname,'..');
 // Each variant gets its own real Git worktree, HOME and injected outside effects.

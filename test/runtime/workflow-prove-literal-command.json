@@ -1,0 +1,107 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/workflow-prove-literal-command.md",
+  "criteria": [
+    {"id": "AC1","text": "A proof command containing quotes, backslashes, CR, LF, TAB, NUL, DEL, U+0085, U+2028, U+2029 and \"pdd-workflow:\" reaches both old and new test runs unchanged. The saved command and expectation stay exact, and the successful report shows visible control escapes."},
+    {"id": "AC2","text": "The ordinary command \"node --test test/new.test.mjs\" still reaches both test runs unchanged. An old exit of 1 with \"defect-x\" and a new exit of 0 produce exit 0, a successful proof report, the same saved facts, and cleanup of both test snapshots."}
+  ],
+  "initial_world": {
+    "host_readRun": [
+      {"request": {"ref": "2594","cwd": "/repo/proved"},"reply": {"run": {"runId": "run-proved","runDir": "/runs/proved","root": "/repo/proved","baseSha": "ffffffffffffffffffffffffffffffffffffffff","baseBranch": "alpha"},"error": ""}},
+      {"request": {"ref": "2594","cwd": "/repo/literal-command-controls"},"reply": {"run": {"runId": "run-literal-command-controls","runDir": "/runs/literal-command-controls","root": "/repo/literal-command-controls","baseSha": "ffffffffffffffffffffffffffffffffffffffff","baseBranch": "alpha"},"error": ""}}
+    ],
+    "saved": [],
+    "host_effect_calls": {"createWorktree": 0,"overlay": 0,"runProcess": 0,"cleanup": 0,"snapshot": 0}
+  },
+  "simulation": {
+    "host.readRun": {"action": "collection.get","world_pointer": "/host_readRun","key_argument_pointer": "/cwd","value_argument_pointer": null,"item_key_pointer": "/request/cwd","item_value_pointer": "/reply","result_template": {},"result_value_pointer": ""},
+    "host.snapshot": {
+      "action": "fixture.lookup",
+      "world_pointer": "/host_effect_calls/snapshot",
+      "cases": [
+        {"call_index": 1,"args": {"root": "/repo/proved","baseBranch": "alpha"},"result": {"snapshot": {"headSha": "0000000000000000000000000000000000000065","baseAvailable": true,"headAvailable": true,"files": [{"path": "test/new.test.mjs","status": "A","mode": "100644"},{"path": "test/fixtures/seed.json","status": "M","mode": "100644"},{"path": "tests/renamed.test.mjs","status": "R","mode": "100755"},{"path": "src/fix.mjs","status": "M","mode": "100644"},{"path": "test/deleted.test.mjs","status": "D","mode": "100644"}],"error": "","baseSha": "0000000000000000000000000000000000000001"}}},
+        {"call_index": 2,"args": {"root": "/repo/literal-command-controls","baseBranch": "alpha"},"result": {"snapshot": {"headSha": "0000000000000000000000000000000000000195","baseAvailable": true,"headAvailable": true,"files": [{"path": "test/new.test.mjs","status": "A","mode": "100644"},{"path": "test/fixtures/seed.json","status": "M","mode": "100644"},{"path": "tests/renamed.test.mjs","status": "R","mode": "100755"},{"path": "src/fix.mjs","status": "M","mode": "100644"},{"path": "test/deleted.test.mjs","status": "D","mode": "100644"}],"error": "","baseSha": "0000000000000000000000000000000000000131"}}}
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "host.createWorktree": {
+      "action": "fixture.lookup",
+      "world_pointer": "/host_effect_calls/createWorktree",
+      "cases": [
+        {"call_index": 1,"args": {"root": "/repo/proved","commit": "0000000000000000000000000000000000000001","phase": "base"},"result": {"worktree": "/snap/proved/base","error": ""}},
+        {"call_index": 2,"args": {"root": "/repo/proved","commit": "0000000000000000000000000000000000000065","phase": "head"},"result": {"worktree": "/snap/proved/head","error": ""}},
+        {"call_index": 3,"args": {"root": "/repo/literal-command-controls","commit": "0000000000000000000000000000000000000131","phase": "base"},"result": {"worktree": "/snap/literal-command-controls/base","error": ""}},
+        {"call_index": 4,"args": {"root": "/repo/literal-command-controls","commit": "0000000000000000000000000000000000000195","phase": "head"},"result": {"worktree": "/snap/literal-command-controls/head","error": ""}}
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "host.overlay": {
+      "action": "fixture.lookup",
+      "world_pointer": "/host_effect_calls/overlay",
+      "cases": [
+        {"call_index": 1,"args": {"root": "/repo/proved","headSha": "0000000000000000000000000000000000000065","worktree": "/snap/proved/base","paths": ["test/new.test.mjs","test/fixtures/seed.json","tests/renamed.test.mjs"]},"result": {"error": ""}},
+        {"call_index": 2,"args": {"root": "/repo/literal-command-controls","headSha": "0000000000000000000000000000000000000195","worktree": "/snap/literal-command-controls/base","paths": ["test/new.test.mjs","test/fixtures/seed.json","tests/renamed.test.mjs"]},"result": {"error": ""}}
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "host.runProcess": {
+      "action": "fixture.lookup",
+      "world_pointer": "/host_effect_calls/runProcess",
+      "cases": [
+        {"call_index": 1,"args": {"command": "node --test test/new.test.mjs","cwd": "/snap/proved/base","timeoutMs": 600000,"killGraceMs": 2000,"outputLimitBytes": 1048576},"result": {"result": {"exitCode": 1,"signal": "","timedOut": false,"outputLimited": false,"stdout": "defect-x","stderr": "","error": "","setupError": ""}}},
+        {"call_index": 2,"args": {"command": "node --test test/new.test.mjs","cwd": "/snap/proved/head","timeoutMs": 600000,"killGraceMs": 2000,"outputLimitBytes": 1048576},"result": {"result": {"exitCode": 0,"signal": "","timedOut": false,"outputLimited": false,"stdout": "","stderr": "","error": "","setupError": ""}}},
+        {"call_index": 3,"args": {"command": "printf \"C:\\tmp\\q\"\r\n\t\u0000\u007f\u0085\u2028\u2029 pdd-workflow:","cwd": "/snap/literal-command-controls/base","timeoutMs": 600000,"killGraceMs": 2000,"outputLimitBytes": 1048576},"result": {"result": {"exitCode": 1,"signal": "","timedOut": false,"outputLimited": false,"stdout": "defect-x","stderr": "","error": "","setupError": ""}}},
+        {"call_index": 4,"args": {"command": "printf \"C:\\tmp\\q\"\r\n\t\u0000\u007f\u0085\u2028\u2029 pdd-workflow:","cwd": "/snap/literal-command-controls/head","timeoutMs": 600000,"killGraceMs": 2000,"outputLimitBytes": 1048576},"result": {"result": {"exitCode": 0,"signal": "","timedOut": false,"outputLimited": false,"stdout": "","stderr": "","error": "","setupError": ""}}}
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "host.cleanup": {
+      "action": "fixture.lookup",
+      "world_pointer": "/host_effect_calls/cleanup",
+      "cases": [
+        {"call_index": 1,"args": {"root": "/repo/proved","worktrees": ["/snap/proved/base","/snap/proved/head"]},"result": {"error": ""}},
+        {"call_index": 2,"args": {"root": "/repo/literal-command-controls","worktrees": ["/snap/literal-command-controls/base","/snap/literal-command-controls/head"]},"result": {"error": ""}}
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "host.saveProof": {"action": "port.write","world_pointer": "/saved","result_template": {"error": ""}}
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "proved",
+      "entry_path": "prompts/cli/workflow-prove.prompt.md",
+      "operation": "proveRun",
+      "input": {"ref": "2594","cwd": "/repo/proved","test": "node --test test/new.test.mjs","expect": "defect-x"},
+      "checks": [
+        {"criterion_id": "AC2","target": "result","path": "/exitCode","op": "equals","value": 0},
+        {"criterion_id": "AC2","target": "result","path": "/message","op": "equals","value": "Old-code proof: \u2713 `node --test test/new.test.mjs`: old-code exit `1`; output contains `defect-x`; new-code exit `0`."},
+        {"criterion_id": "AC2","target": "calls","path": "/resources/workflow-prove-host-runProcess","op": "equals","value": 2},
+        {"criterion_id": "AC2","target": "calls","path": "/resources/workflow-prove-host-cleanup","op": "equals","value": 1},
+        {"criterion_id": "AC2","target": "world","path": "/saved/0","op": "equals","value": {"runDir": "/runs/proved","record": {"v": 2,"origin": "pdd.workflow-prove.v2","runId": "run-proved","baseSha": "0000000000000000000000000000000000000001","headSha": "0000000000000000000000000000000000000065","test": "node --test test/new.test.mjs","expect": "defect-x","paths": ["test/new.test.mjs","test/fixtures/seed.json","tests/renamed.test.mjs"],"base": {"exitCode": 1,"signal": "","timedOut": false,"outputLimited": false,"stdoutTail": ["defect-x"],"stderrTail": [],"expectedFound": true,"error": "","setupError": "","observedError": "defect-x"},"head": {"exitCode": 0,"signal": "","timedOut": false,"outputLimited": false,"stdoutTail": [],"stderrTail": [],"expectedFound": false,"error": "","setupError": "","observedError": "no output"},"outcome": "proved","cleanupError": "","setupError": "","interruptSignal": ""}}}
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "literal-command-controls",
+      "entry_path": "prompts/cli/workflow-prove.prompt.md",
+      "operation": "proveRun",
+      "input": {"ref": "2594","cwd": "/repo/literal-command-controls","test": "printf \"C:\\tmp\\q\"\r\n\t\u0000\u007f\u0085\u2028\u2029 pdd-workflow:","expect": "defect-x"},
+      "checks": [
+        {"criterion_id": "AC1","target": "result","path": "/exitCode","op": "equals","value": 0},
+        {"criterion_id": "AC1","target": "result","path": "/message","op": "equals","value": "Old-code proof: \u2713 `printf \"C:\\tmp\\q\"\\r\\n\\t\\u0000\\u007f\\u0085\\u2028\\u2029 pdd-workflow\\u003a`: old-code exit `1`; output contains `defect-x`; new-code exit `0`."},
+        {"criterion_id": "AC1","target": "world","path": "/saved/1/record/test","op": "equals","value": "printf \"C:\\tmp\\q\"\r\n\t\u0000\u007f\u0085\u2028\u2029 pdd-workflow:"},
+        {"criterion_id": "AC1","target": "world","path": "/saved/1/record/expect","op": "equals","value": "defect-x"},
+        {"criterion_id": "AC1","target": "world","path": "/saved/1/record/outcome","op": "equals","value": "proved"},
+        {"criterion_id": "AC1","target": "calls","path": "/resources/workflow-prove-host-cleanup","op": "equals","value": 1},
+        {"criterion_id": "AC1","target": "calls","path": "/resources/workflow-prove-host-runProcess","op": "equals","value": 2}
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {appendFileSync,mkdirSync,readFileSync,readdirSync,renameSync,symlinkSync,unlinkSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
-import {captureSource,interfaceBlocks,proseSha256} from '../src/runtime-preflight.mjs';
+import {captureSource,interfaceBlocks,proseSha256} from '../src/runtime-seam.mjs';
 import {readRunResults} from '../src/workflow-results.mjs';
 import {fullCheckPass} from '../src/workflow-story-card.mjs';
 import {affectedFixture,affectedRuntime,batch,check,checks,commit,disclaimer,historicalAssociation,put,vectors} from './helpers/affected-check-fixture.mjs';
