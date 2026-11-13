@@ -180,6 +180,12 @@ A broken step or check shape uses the engine code (`missing-steps`, `invalid-ste
 
 Port the engine's `explicit_story_criteria` and its 4 regexes exactly: the `## Acceptance` / `## Acceptance Criteria` heading (any case, at a line start, `\n` lines only), one numbered list from 1 with continued lines, and the bullet list in the heading section when there is no numbered list. Use Python `splitlines`, `strip` and `split` whitespace rules. The results must equal the engine for the same text.
 
+## Scoped hash inputs
+
+For scoped hash filling, resolve ordinary test selections and capture their source closure under the existing workspace and source rules. An explicit Git-visible `.prompt.md` operand selects that prompt and recursively follows the same required Markdown dependencies, prompt calls and reference expansion as source capture, with the same path, availability and workspace refusals. Collect each reached prompt once. Validate the complete union before mutation, including selected test discovery refusals and every required dependency; an unsafe or unavailable required dependency refuses the selection. Preserve ordinary selection diagnostics for unknown and untested operands.
+
+Extend `fillHashes({root, files, compact, workspace})` with optional `targets`: `files` remains the complete Git-visible inventory bounding reads and defaults as before; `targets` limits prompt iteration and writes to its members. When omitted, iteration remains over `files`. Targets do not grant access outside `files` or the workspace. This does not alter per-interface refusal and partial-success behavior after selection validation.
+
 ## Prose hash
 
 - The interface block is the engine `_INTERFACE` regex (`prompt_program_discovery.py` at eae2202a), in JS with the flags `gi`.
