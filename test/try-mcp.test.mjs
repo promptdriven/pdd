@@ -71,7 +71,7 @@ test('stdio serves MCP negotiation and errors with stdout exclusively JSON', asy
   assert.equal(rows.filter(row => row.error?.code === -32600).length, 2);
   assert.equal(rows.find(row => row.id === 1).result.protocolVersion, '2025-06-18');
   assert.equal(rows.find(row => row.id === 1).result.serverInfo.version, packageVersion);
-  assert.deepEqual(rows.find(row => row.id === 2).result.tools.map(tool => tool.name), ['try_open', 'try_state', 'try_run', 'try_check', 'try_save_case']);
+  assert.deepEqual(rows.find(row => row.id === 2).result.tools.map(tool => tool.name), ['try_open', 'try_state', 'try_run', 'try_observe', 'try_check', 'try_save_case']);
   assert.equal(rows.find(row => row.id === 3).error.code, -32601);
   assert.equal(rows.find(row => row.id === 4).error.code, -32602);
 });
