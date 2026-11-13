@@ -46,7 +46,7 @@ The Runtime client passes runtime-preflight’s captureSource(root,{tests,attemp
 
 ```json
 {
-  "status": "draft",
+  "status": "approved",
   "prose_sha256": "90d8c8b26895978ee778c156bbad5e0cd4c4e1d4aa5849719d81f0e4d508a15e",
   "entries": [
     {

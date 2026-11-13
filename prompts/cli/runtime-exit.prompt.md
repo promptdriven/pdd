@@ -33,6 +33,6 @@ None.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"native-only","status":"draft","prose_sha256":"7b0111b5ad52740bb5726227bb3fb18eeda2809a7a89dc0563c18c9ff8f98da3","reason":"Provides PDD CLI exit-code constants and synchronous callback wrappers over Runtime outcome aggregation."}
+{"kind":"native-only","status":"approved","prose_sha256":"7b0111b5ad52740bb5726227bb3fb18eeda2809a7a89dc0563c18c9ff8f98da3","reason":"Provides PDD CLI exit-code constants and synchronous callback wrappers over Runtime outcome aggregation."}
 ```
 </details>

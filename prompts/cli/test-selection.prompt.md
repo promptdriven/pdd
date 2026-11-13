@@ -55,6 +55,6 @@ Node `node:path` (`basename`, `posix`) supplies pure path operations.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"native-only","status":"draft","prose_sha256":"8c96ea9952dcee3497040071d131d3658d251c0efc9d75c4b8740af17fdad6ac","reason":"Exposes synchronous host-bound callbacks for native Story capture and repository interface inspection alongside pure path-matching functions consumed across pdd and Runtime ports."}
+{"kind":"native-only","status":"approved","prose_sha256":"8c96ea9952dcee3497040071d131d3658d251c0efc9d75c4b8740af17fdad6ac","reason":"Exposes synchronous host-bound callbacks for native Story capture and repository interface inspection alongside pure path-matching functions consumed across pdd and Runtime ports."}
 ```
 </details>
