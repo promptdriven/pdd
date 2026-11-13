@@ -1,8 +1,8 @@
-// Generated from prompts/cli/file-owner.prompt.md (sha256: 4263fd21a5218625f98dbbd847dd4845b858747ac9d0be3952793fb17015ab3e).
+// Generated from prompts/cli/file-owner.prompt.md (sha256: a72ab9ea2461e0dde9342050544c89fb5055c6795e7fd08e3b616360f3430920).
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { closeSync, fstatSync, openSync, readSync, realpathSync } from 'node:fs';
-import { isAbsolute, posix, relative, resolve, sep } from 'node:path';
+import { closeSync, fstatSync, lstatSync, openSync, readSync, realpathSync } from 'node:fs';
+import { isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
 import { runtimePreflightSlice } from './runtime-seam.mjs';
 
 const { gitFiles, interfaceBlocks } = runtimePreflightSlice();
@@ -86,6 +86,9 @@ export function promptClaims(promptPath, content) {
   return unique(claims.filter(path => canonicalPath(path) && !path.endsWith('.prompt.md'))).sort();
 }
 
+export const isTestOwnedPath = path => canonicalPath(path) && !path.endsWith('.prompt.md')
+  && /(?:^|\/)(?:tests?|__tests__)\/|(?:^|\/)(?:[^/]+\.(?:test|spec)\.[^/]+|test_[^/]+\.[^/]+|[^/]+_test\.[^/]+)$/i.test(path);
+
 function bindingTable(text) {
   if (text === null || text === undefined) return new Map();
   try {
@@ -123,9 +126,28 @@ export function resolveOwners({ paths = [], bindings = null, heads = [], prompts
   return { schema_version: 'pdd.owner.v1', files };
 }
 
+function checkRegularPath(root, path) {
+  const parts = path.split('/');
+  let cur = root;
+  for (let i = 0; i < parts.length; i++) {
+    cur = join(cur, parts[i]);
+    let st;
+    try { st = lstatSync(cur); }
+    catch (error) { if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null; throw error; }
+    if (st.isSymbolicLink() || (i === parts.length - 1 ? !st.isFile() : !st.isDirectory())) {
+      const err = new Error('not a regular file');
+      err.code = 'ELOOP';
+      throw err;
+    }
+  }
+  return cur;
+}
+
 function readHead(root, path, limit) {
+  const full = checkRegularPath(root, path);
+  if (full === null) return null;
   let fd;
-  try { fd = openSync(resolve(root, path), 'r'); }
+  try { fd = openSync(full, 'r'); }
   catch (error) { if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null; throw error; }
   try {
     const buffer = Buffer.alloc(Math.min(limit, fstatSync(fd).size + 1));
@@ -161,6 +183,54 @@ export function runOwner({ cwd = process.cwd(), paths = [], json = false } = {},
     named.push(path);
   }
   const result = findOwners({ root, paths: named }, { ...(files ? { files } : {}), ...(read ? { read } : {}) });
+  const warnings = [], warnedTargets = new Set();
+  for (const row of result.files) {
+    if (row.owners.length && isTestOwnedPath(row.path)) {
+      warnedTargets.add(row.path);
+      warnings.push(`Warning: misplaced prompt owner: ${row.path} is claimed by ${row.owners.join(', ')} (${row.source}). Prompts own production modules, not test files.`);
+    }
+  }
+  const queriedPrompts = unique(named.filter(path => path.endsWith('.prompt.md')));
+  if (queriedPrompts.length) {
+    const listFiles = files ?? (() => gitFiles(root));
+    const readPort = read ?? ((path, limit) => readHead(root, path, limit));
+    const visible = listFiles(), visibleSet = new Set(visible);
+    const isRegularVisible = path => {
+      if (!visibleSet.has(path)) return false;
+      if (read) return true;
+      try { return checkRegularPath(root, path) !== null; } catch { return false; }
+    };
+    const attemptVisible = (path, limit) => {
+      if (!isRegularVisible(path)) return null;
+      try { return readPort(path, limit); } catch { return false; }
+    };
+    const prompts = visible.filter(path => path.endsWith('.prompt.md')).map(path => {
+      const content = attemptVisible(path, WHOLE + 1);
+      return { path, content: content && content.length > WHOLE ? false : content };
+    });
+    const promptMap = new Map(prompts.map(row => [row.path, row.content]));
+    const extra = [];
+    for (const promptPath of queriedPrompts) {
+      const content = promptMap.get(promptPath);
+      for (const claim of promptClaims(promptPath, content || null)) if (isTestOwnedPath(claim)) extra.push(claim);
+    }
+    const rawBindings = attemptVisible('pdd-bindings.json', PROMPT);
+    const bindings = rawBindings ? decode(rawBindings, PROMPT) : rawBindings;
+    const table = bindings === false ? null : bindingTable(bindings);
+    if (table) for (const [mod, owners] of table.entries()) {
+      if (isTestOwnedPath(mod) && owners.some(owner => queriedPrompts.includes(owner))) extra.push(mod);
+    }
+    const testCandidates = unique([...visible.filter(isTestOwnedPath), ...extra]).filter(path => !warnedTargets.has(path)).sort();
+    if (testCandidates.length) {
+      const heads = testCandidates.map(path => ({ path, content: isRegularVisible(path) ? attemptVisible(path, HEAD + 1) : null }));
+      const check = resolveOwners({ paths: testCandidates, bindings, heads, prompts });
+      for (const promptPath of queriedPrompts) {
+        const claimed = check.files.filter(row => row.owners.includes(promptPath)).map(row => row.path).sort();
+        if (claimed.length) warnings.push(`Warning: misplaced prompt owner: ${promptPath} claims ${claimed.join(', ')}. Prompts own production modules, not test files.`);
+      }
+    }
+  }
+  for (const warning of warnings) stderr.write(`${warning}\n`);
   if (json) { stdout.write(`${JSON.stringify(result)}\n`); return 0; }
   for (const row of result.files) {
     const doubt = row.certain ? '' : 'not certain: treat as owned';

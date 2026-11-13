@@ -44,7 +44,7 @@ import {
   exactNumberSpelling,
   exactValue,
   executableInterfaceText,
-  fillHashes,
+  fillHashes as rawFillHashes,
   findTests as rawFindTests,
   format,
   formatSize,
@@ -300,6 +300,11 @@ export function findTests(input, ports = {}) {
 export function captureSource(root, options, ports = {}) {
   return rawCaptureSource(root, options, seamSelectionPorts(ports));
 }
+captureSource.isDefaultCapture = true;
+
+export function fillHashes(input, ports = {}) {
+  return rawFillHashes(input, seamSelectionPorts(ports));
+}
 
 export function createStrictSourceAccess(root, workspace, ports = {}) {
   return rawCreateStrictSourceAccess(root, workspace, seamSelectionPorts(ports));
@@ -364,9 +369,17 @@ export function runtimePreflightSlice() {
     captureSource,
     createStrictSourceAccess,
     expectedTestPath,
+    fillHashes,
     findTests,
     hasAcceptance,
     isStoryPath,
+    lintLocalHygiene: (input, ports = {}) => {
+      const { isTestOwnedPath, promptClaims, resolveOwners } = req('./file-owner.mjs');
+      return mod.lintLocalHygiene(
+        input,
+        withPortDefaults(seamSelectionPorts(ports), { isTestOwnedPath, promptClaims, resolveOwners }),
+      );
+    },
     matchTests,
     orphanSummary,
     prepareHashSelection: (input, ports = {}) => mod.prepareHashSelection(input, seamSelectionPorts(ports)),
@@ -507,7 +520,7 @@ export async function runAutomaticApproval(input = {}, ports = {}) {
       { approvePromptText, promptPath },
       ,
       ,
-      { headerPrompts, resolveOwners },
+      { headerPrompts, isTestOwnedPath, promptClaims, resolveOwners },
       { readEvidenceEligibility },
       { allRuns },
       { assessNativeEvidence, resultLines, usableResult },
@@ -545,7 +558,8 @@ export async function runAutomaticApproval(input = {}, ports = {}) {
           approvePromptText,
           promptPath,
           headerPrompts,
-        resolveOwners,
+          isTestOwnedPath,
+          promptClaims,
           resolveOwners,
           allRuns,
           workflowBaseSha: ({ root, env: runEnv }) =>
@@ -571,7 +585,7 @@ export async function runAutomaticApproval(input = {}, ports = {}) {
 export async function runCheck(input = {}, ports = {}) {
   const [
     ,
-    { headerPrompts, resolveOwners },
+    { headerPrompts, isTestOwnedPath, promptClaims, resolveOwners },
     { readEvidenceEligibility },
     { allRuns },
     { assessNativeEvidence, resultLines, usableResult },
@@ -599,6 +613,8 @@ export async function runCheck(input = {}, ports = {}) {
     seamRuntimePorts(
       withPortDefaults(withEligibilityDefault(ports, readEvidenceEligibility), {
         headerPrompts,
+        isTestOwnedPath,
+        promptClaims,
         resolveOwners,
         allRuns,
         workflowBaseSha: ({ root, env: runEnv }) =>
@@ -1081,7 +1097,6 @@ export {
   exactNumberSpelling,
   exactValue,
   executableInterfaceText,
-  fillHashes,
   format,
   formatSize,
   formatWarningLines,

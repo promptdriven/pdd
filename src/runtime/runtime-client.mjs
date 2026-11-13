@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: a0f21871ddd1ffe337b6dd260ec3cc4e7c9873db3e3ac29aef9f9bef3a88060b).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 21f5701949c4c7f3a0b2f576649aed105afd2b3c2f37e335973cca9be73e0b37).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
@@ -18,7 +18,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { homedir, hostname } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { createInterface } from 'node:readline';
-import { DRAFT_SERVER_TEXT, PreflightError, TEST_SCHEMA, captureSource, scenarioShapeRefusal, checkInput, fillHashes, sharedSourceFiles, findTests, formatSize, gitFiles, otherFiles,
+import { DRAFT_SERVER_TEXT, PreflightError, TEST_SCHEMA, captureSource, scenarioShapeRefusal, checkInput, fillHashes, lintLocalHygiene, sharedSourceFiles, findTests, formatSize, gitFiles, otherFiles,
   discoveryRefusal, preflight, hasPromptInterface, interfaceBlocks, executableInterfaceText, readPrompt, formatWarningLines, schemaKeywordWarningLines, missingCliImplementationWarnings, prepareHashSelection, sourceFilePort, sha256, STALE_HINT, staleHint } from './runtime-preflight.mjs';
 import { catalogRecords, compareCopies } from './contract-refs.mjs';
 import { OPEN_STATES, causeText, cleanText, progressTicker, projectAnswer, refusalView, renderJson, renderText, summaryLine, stepTimeLimit, tokenUsageOf, tryUsage, validLink, coverageText } from './runtime-output.mjs';
@@ -108,7 +108,10 @@ function withDefaults(ports) {
     return () => { handlers.delete(handler); if (!handlers.size) { unsubscribe?.(); unsubscribe = null; } };
   };
   const findTestsBound = ports.findTests ?? (input => findTests(input, ports));
-  const captureSourceBound = ports.captureSource ?? ((root, options) => captureSource(root, options, ports));
+  const defaultCaptureSource = (root, options) => captureSource(root, options, ports);
+  defaultCaptureSource.isDefaultCapture = true;
+  const captureSourceBound = ports.captureSource ?? defaultCaptureSource;
+  const fillHashesBound = ports.fillHashes ?? (input => fillHashes(input, ports));
   const selectTestsBound = (found, words, options = {}) => {
     if (typeof ports.selectTests !== 'function') throw unboundPortError('Test selection port (selectTests) is not bound.');
     return ports.selectTests(found, words, { ...options, captureSource: options.captureSource ?? captureSourceBound });
@@ -136,7 +139,7 @@ function withDefaults(ports) {
     throw unboundPortError('Exit code port (exitCodeFor or exitFor) is not bound.');
   };
   return {
-    env, baselineFiles: ports.baselineFiles, baselineIdentity: ports.baselineIdentity, checkPlanPorts: ports.checkPlanPorts, tryLauncherUrl: ports.tryLauncherUrl, redaction: ports.redaction, redactSecrets: ports.redactSecrets, rememberSecrets: ports.rememberSecrets, clientVersion: ports.clientVersion, workflowBaseSha: ports.workflowBaseSha, headerPrompts: ports.headerPrompts, evidenceEligibility: ports.evidenceEligibility, readEvidenceEligibility: ports.readEvidenceEligibility, evidencePorts: ports.evidencePorts, allRuns: ports.allRuns, assessNativeEvidence: ports.assessNativeEvidence, usableResult: ports.usableResult, resultLines: ports.resultLines, parseProductDocuments: ports.parseProductDocuments, parseProductWorldWriters: ports.parseProductWorldWriters, loadAgentDefinitions: ports.loadAgentDefinitions, agents: ports.agents, guidePorts: ports.guidePorts, askApproval: ports.askApproval, promptPath: ports.promptPath, lineReader: ports.lineReader ?? defaultLineReader, lintSvgLayouts: ports.lintSvgLayouts, compareScreen: ports.compareScreen, formatScreenComparison: ports.formatScreenComparison, caseHandoff:ports.caseHandoff, cacheFiles: ports.cacheFiles ?? nativeCacheFiles, cacheHash: ports.cacheHash ?? sha256, acquireBatchLock: ports.acquireBatchLock ?? acquireRuntimeBatchLock, timers: ports.timers, random: ports.random, findTests: findTestsBound, captureSource: captureSourceBound, fillHashes: ports.fillHashes ?? fillHashes, prepareHashSelection: ports.prepareHashSelection, isStoryPath: ports.isStoryPath, hasAcceptance: ports.hasAcceptance, matchTests: ports.matchTests, orphanSummary: ports.orphanSummary, selectTests: selectTestsBound, expectedTestPath: expectedTestPathBound, whyNoTests: whyNoTestsBound, noTestsMessage, exitCodeFor: exitCodeForBound, exitFor: ports.exitFor, promptTestsLabel: ports.promptTestsLabel, slotFiles: ports.slotFiles, isAlive: ports.isAlive, pid: ports.pid, agentBridge: ports.agentBridge, discoverAgents: ports.discoverAgents, askAgent: ports.askAgent, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
+    env, baselineFiles: ports.baselineFiles, baselineIdentity: ports.baselineIdentity, checkPlanPorts: ports.checkPlanPorts, tryLauncherUrl: ports.tryLauncherUrl, redaction: ports.redaction, redactSecrets: ports.redactSecrets, rememberSecrets: ports.rememberSecrets, clientVersion: ports.clientVersion, workflowBaseSha: ports.workflowBaseSha, headerPrompts: ports.headerPrompts, resolveOwners: ports.resolveOwners, promptClaims: ports.promptClaims, isTestOwnedPath: ports.isTestOwnedPath, evidenceEligibility: ports.evidenceEligibility, readEvidenceEligibility: ports.readEvidenceEligibility, evidencePorts: ports.evidencePorts, allRuns: ports.allRuns, assessNativeEvidence: ports.assessNativeEvidence, usableResult: ports.usableResult, resultLines: ports.resultLines, parseProductDocuments: ports.parseProductDocuments, parseProductWorldWriters: ports.parseProductWorldWriters, loadAgentDefinitions: ports.loadAgentDefinitions, agents: ports.agents, guidePorts: ports.guidePorts, askApproval: ports.askApproval, promptPath: ports.promptPath, lineReader: ports.lineReader ?? defaultLineReader, lintSvgLayouts: ports.lintSvgLayouts, compareScreen: ports.compareScreen, formatScreenComparison: ports.formatScreenComparison, caseHandoff:ports.caseHandoff, cacheFiles: ports.cacheFiles ?? nativeCacheFiles, cacheHash: ports.cacheHash ?? sha256, acquireBatchLock: ports.acquireBatchLock ?? acquireRuntimeBatchLock, timers: ports.timers, random: ports.random, findTests: findTestsBound, captureSource: captureSourceBound, fillHashes: fillHashesBound, prepareHashSelection: ports.prepareHashSelection, isStoryPath: ports.isStoryPath, hasAcceptance: ports.hasAcceptance, matchTests: ports.matchTests, orphanSummary: ports.orphanSummary, selectTests: selectTestsBound, expectedTestPath: expectedTestPathBound, whyNoTests: whyNoTestsBound, noTestsMessage, exitCodeFor: exitCodeForBound, exitFor: ports.exitFor, promptTestsLabel: ports.promptTestsLabel, slotFiles: ports.slotFiles, isAlive: ports.isAlive, pid: ports.pid, agentBridge: ports.agentBridge, discoverAgents: ports.discoverAgents, askAgent: ports.askAgent, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
     gh: ports.gh ?? (args => {
       const executable = authExecutable(env, ports.ghPath);
       return executable ? spawnSync(executable, args, { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 })
@@ -2373,7 +2376,7 @@ function runExplainBindings(cwd, words, options, ports) {
   const {root,found,normalized}=localSetup(cwd,words,ports);
   const selected=select(found,normalized,root,ports);
   for (const test of selected) {
-    const problem=discoveryRefusal(test) ?? scenarioShapeRefusal(test.doc,test.path);
+    const problem=discoveryRefusal(test) ?? test.criteriaRefusal ?? scenarioShapeRefusal(test.doc,test.path);
     if (problem) throw Object.assign(new PreflightError(4,`${test.path}: ${problem.message}`),{code:problem.code});
   }
   const capture=ports.captureSource(root,{tests:selected.map(test=>test.path),excludeFixtureProjects:words.length===0});
@@ -2436,7 +2439,13 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   }
   let selected;
   try { selected = select(found, normalized, root, ports); }
-  catch (error) { if (error instanceof Stop && advice.length) error.message = [error.message, ...advice].join('\n'); throw error; }
+  catch (error) {
+    if (error instanceof Stop) {
+      const noTestsAdvice = [...new Set([...advice, ...(paths ? lintLocalHygiene({ root, files: [...found.visible], promptPaths: paths, tests: [], workspace: found.workspace }, ports) : [])])];
+      if (noTestsAdvice.length) error.message = [error.message, ...noTestsAdvice].join('\n');
+    }
+    throw error;
+  }
   if (!paths) { advice.push(...formatAdvice(root, found.visible, entryPaths(selected), found.workspace)); found.warnings.push(...advice); }
   for (const warning of missingCliImplementationWarnings({ root, found, selected })) {
     if (!advice.includes(warning)) advice.push(warning);
@@ -2454,7 +2463,12 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
     const native = nativeRows.get(row.test);
     if (native) Object.assign(row,{state:native.refusals.length ? 'refused' : 'not_run',refusals:native.refusals,phase:'local',native_only:native.native_only,unsent:true,note:{code:'native-only',message:native.native_only.map(item => `${item.path}: ${item.reason}`).join('; ')}});
   }
-  if (!findings.length && rows.every(row => row.native_only?.length)) { saveLocalNativeResult(context, rows, 'lint-only'); return printLintResult(context,rows,[],advice); }
+  if (!findings.length && rows.every(row => row.native_only?.length)) {
+    const hygiene = lintLocalHygiene({ root, files: [...found.visible], promptPaths: words.length ? entryPaths(selected) : undefined, tests: selected, workspace: found.workspace }, ports);
+    context.warnings = [...new Set([...found.warnings, ...hygiene])];
+    saveLocalNativeResult(context, rows, 'lint-only');
+    return printLintResult(context, rows, [], [...new Set([...advice, ...hygiene])]);
+  }
   const local = row => row.phase === 'local';
   const {promptSchemaRefusals} = await import('./runtime-preflight.mjs');
   const prompts = new Map();
@@ -2520,6 +2534,13 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   if (!capture) return printLintResult(context, rows, [], found.warnings);
   if (typeof ports.lintSvgLayouts !== 'function') throw unboundPortError('SVG layout port (lintSvgLayouts) is not bound.');
   const svgWarnings = ports.lintSvgLayouts({ root, files: [...found.visible], promptPaths: capture.files.map(file => file.path).filter(path => path.endsWith('.prompt.md')) });
+  const hygieneWarnings = lintLocalHygiene({
+    root,
+    files: [...found.visible],
+    promptPaths: words.length ? capture.files.map(file => file.path).filter(path => path.endsWith('.prompt.md')) : undefined,
+    tests: selected,
+    workspace: found.workspace,
+  }, ports);
   const drift=[];
   try {
     const files=sourceFilePort(root,found.visible), sources=[];
@@ -2531,9 +2552,9 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
     drift.push(...[...catalog.warnings,...compared.warnings].map(warning=>`Warning: ${warning}`));
     for (const match of compared.matches.filter(match=>match.kind==='near')) drift.push(`Warning: ${match.path} ${match.source_pointer}: copy of ${match.target} differs (${match.differences.join('; ')}). Use {"$contract":${JSON.stringify(match.target)}}.`);
   } catch { drift.push('Warning: contract catalog advice is unavailable.'); }
-  context.warnings = [...svgWarnings, ...found.warnings,...drift,...(capture.warnings ?? [])];
+  context.warnings = [...new Set([...svgWarnings, ...found.warnings, ...drift, ...(capture.warnings ?? []), ...hygieneWarnings])];
   context.unmatched = unmatchedLines(found);
-  if (!context.json) for (const warning of [...svgWarnings,...drift,...(capture.warnings ?? [])]) line(ports.stderr, warning);
+  if (!context.json) for (const warning of [...new Set([...svgWarnings, ...drift, ...(capture.warnings ?? []), ...hygieneWarnings])]) line(ports.stderr, warning);
   const identity = signIn(ports.gh, context.store, ports), startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
   const timeoutMin = options['--timeout'] !== undefined ? Number(options['--timeout']) : ports.interactive ? null : AGENT_WAIT_MIN;
   Object.assign(context, { origin, visible: found.visible, capture, identity, batch, startedAt, deadline: timeoutMin ? startedAt + timeoutMin * 60_000 : Infinity, rows, head: null,
@@ -2667,6 +2688,7 @@ function runFillHash(root, cwd, words, ports, compact = false) {
   const result = ports.fillHashes(scoped ? {root,files:scoped.files,targets:scoped.targets,...(compact ? {compact:true} : {})} : (compact ? {root,compact:true} : {root}));
   for (const { message } of result.warnings) line(ports.stdout, `Warning: ${message}`);
   for (const { path } of result.filled) line(ports.stdout, `Filled prose_sha256: ${path}`);
+  for (const { path } of result.synced ?? []) line(ports.stdout, `Synced criteria: ${path}`);
   if (compact) for (const { path } of result.compacted) line(ports.stdout, `Compacted Runtime interface: ${path}`);
   for (const { message } of result.refused) line(ports.stdout, `Refused: ${message}`);
   for (const { path } of result.stale) line(ports.stdout, `Stale: ${path} is approved, but ${STALE_HINT}.`);
@@ -3233,16 +3255,18 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
       if (typeof ports.lintSvgLayouts !== 'function') throw unboundPortError('SVG layout port (lintSvgLayouts) is not bound.');
       try {
         const root = repoRoot(cwd), workspace=loadRuntimeWorkspace({root}), files = gitFiles(root).filter(path=>allowsRuntimePath(workspace,path));
-        let promptPaths, tests = [];
+        let promptPaths, selectedTests, tests = [];
         if (words.length) {
           const { found, normalized } = localSetup(cwd, words, ports), selected = select(found, normalized, root, ports);
+          selectedTests = selected;
           tests = selected.filter(test => !test.error).map(test => test.path);
           promptPaths = ports.captureSource(root, { tests, appMap: null }).files.map(file => file.path).filter(path => path.endsWith('.prompt.md'));
         }
         // Interface findings refuse only a repository-wide local lint; a selected one gives advice only.
         const problems = words.length ? [] : interfaceFindings({root,paths:promptPaths}).filter(localInterfaceProblem);
         const advice = formatAdvice(root, new Set(gitFiles(root)), promptPaths ?? files.filter(path => path.endsWith('.prompt.md')), workspace);
-        const warnings = [...advice, ...ports.lintSvgLayouts({ root, files, promptPaths })], summary = `partial: checked SVG layout only; prompts not checked (local-only). ${warnings.length} warnings. 0 AI calls. No checks were sent.`;
+        const hygiene = lintLocalHygiene({ root, files, promptPaths, tests: selectedTests, workspace }, ports);
+        const warnings = [...new Set([...advice, ...ports.lintSvgLayouts({ root, files, promptPaths }), ...hygiene])], summary = `partial: checked SVG layout only; prompts not checked (local-only). ${warnings.length} warnings. 0 AI calls. No checks were sent.`;
         const result = saveLocalLayout(context,{root,tests,prompts:promptPaths ?? files.filter(path => path.endsWith('.prompt.md')),warnings,problems,summary});
         return printLocalLayout(context,result);
       } catch (error) { if (error?.unboundPort) throw error; throw new Stop(2, error.message); }
@@ -4813,18 +4837,20 @@ function prepareCase(root,record,p){
   const workspace=loadRuntimeWorkspace({root});requireRuntimePath(workspace,{path,from:'Original selected test'});requireRuntimePath(workspace,{path:story,from:path});
   const found=p.findTests({root}),original=found.tests.find(t=>t.path===path&&t.storyPath===story&&t.doc?.story_path===story);
   if(!original?.doc||original.doc.schema_version!==TEST_SCHEMA||!Array.isArray(original.doc.steps)||NOT_TEST_FILES.test(basename(path)))throw Error(`the original test ${path} is missing or no longer belongs to ${story}. Restore it before importing the case`);
+  if(original.criteriaRefusal)throw Error(original.criteriaRefusal.message);
   caseSafe(p,join(root,path));caseSafe(p,join(root,story));
   const text=caseRead(p,join(root,path)),doc=JSON.parse(text);
-  if(!isDeepStrictEqual(doc,original.doc))throw Error('the original test changed while being inspected');
+  if(!isDeepStrictEqual(doc,original.rawDoc??original.doc)||(original.storySource!==undefined&&caseRead(p,join(root,story))!==original.storySource))throw Error('the original test changed while being inspected');
   if(record.isolated){
-    if(!isObject(test.initial_world)||test.steps.length!==1||!isDeepStrictEqual(test.criteria,doc.criteria)||!isDeepStrictEqual(test.simulation??{},doc.simulation??{})||!isDeepStrictEqual(test.context??[],doc.context??[]))throw Error('recorded case lacks original criteria, simulation, context or confirmed starting world');
+    if(!isObject(test.initial_world)||test.steps.length!==1||(!isDeepStrictEqual(test.criteria,original.doc.criteria)&&!isDeepStrictEqual(test.criteria,doc.criteria))||!isDeepStrictEqual(test.simulation??{},doc.simulation??{})||!isDeepStrictEqual(test.context??[],doc.context??[]))throw Error('recorded case lacks original criteria, simulation, context or confirmed starting world');
     const id=slug(saved.id);if(!id)throw Error('case has no safe identity');
     const variant=`tests/${original.story}.try-${id}.json`;requireRuntimePath(workspace,{path:variant,from:path});
-    return{path:variant,before:null,after:JSON.stringify(test,null,2)+'\n',steps:[test.steps[0].step_id],isolated:true};
+    const isolatedTest=Array.isArray(test.criteria)&&test.criteria.every(c=>isObject(c)&&typeof c.id==='string'&&typeof c.text==='string')?test:{...test,criteria:original.doc.criteria};
+    return{path:variant,before:null,after:JSON.stringify(isolatedTest,null,2)+'\n',steps:[test.steps[0].step_id],isolated:true};
   }
   const beforeWorld=Object.hasOwn(saved,'world_before')?saved.world_before:Object.hasOwn(test,'initial_world')?test.initial_world:undefined;
   if(beforeWorld===undefined||!isDeepStrictEqual(knownEndWorld(doc),beforeWorld))throw Error('confirmed starting world does not match the original test continuation');
-  const byText=new Map((doc.criteria??[]).map(c=>[c.text,c.id])),savedText=new Map((test.criteria??[]).map(c=>[c.id,c.text]));
+  const byText=new Map((original.doc.criteria??[]).map(c=>[c.text,c.id])),savedText=new Map((test.criteria??[]).map(c=>[c.id,c.text]));
   let after=text,current=doc;const steps=[];
   for(const raw of test.steps){if(!isObject(raw)||!Array.isArray(raw.checks)||!raw.checks.length)throw Error('case has no mapped checks');const checks=raw.checks.map(c=>({...c,criterion_id:byText.get(savedText.get(c.criterion_id))}));if(checks.some(c=>!c.criterion_id))throw Error(`"${cleanText(saved.name??saved.id)}" checks a criterion that ${path} does not have; keep expected values and repair the mapping`);const taken=new Set(current.steps.map(s=>s.step_id));let id=slug(raw.step_id)||slug(saved.id)||'saved-case';for(let n=2,base=id;taken.has(id);n++)id=`${base}-${n}`;const step={...raw,step_id:id,checks};after=appendStep(after,current,step);current={...current,steps:[...current.steps,step]};steps.push(id);}
   return{path,before:text,after,steps};
