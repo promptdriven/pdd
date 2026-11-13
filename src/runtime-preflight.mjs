@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: bfb299b3e20bcd0748b68466e8db12c6a1898690654d8cd228a4c159b5b3ede3).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: ec85333fccf82a6e2ec6660b9118b3ee9d4c2a0d74c899e91c3896cdac074df4).
 import { markdownLinks, markdownDefinitions, markdownSectionText } from './runtime-markdown.mjs';
 import { buildBindingPlan, runtimeBoundary } from './runtime-binding-plan.mjs';
 import { createHash } from 'node:crypto';
@@ -53,10 +53,11 @@ const AC_HEADING = /(?<![^\n])##[ \t]+Acceptance(?:[ \t]+Criteria)?[ \t]*(?![^\n
 const NEXT_HEADING = /(?<![^\n])##[ \t]+/;
 const NUMBERED_ITEM = /^([1-9][0-9]*)[.)][ \t]+(.+)$/;
 const BULLET_ITEM = /(?<![^\n])[ \t]*[-*][ \t]+([\s\S]+?)(?=\n[ \t]*[-*][ \t]+|(?![\s\S]))/g;
+const AC_ID = /^ac-?([1-9][0-9]*)$/i;
 
-// A port of the engine's explicit_story_criteria (program_scenario.py, eae2202a).
-export function storyCriteria(source) {
+function numberedStoryCriteria(source, { requireHeading = false } = {}) {
   const heading = AC_HEADING.exec(source);
+  if (requireHeading && !heading) return [];
   const body = heading ? source.slice(heading.index + heading[0].length) : source;
   const result = [];
   let current = null, expected = 1;
@@ -76,12 +77,19 @@ export function storyCriteria(source) {
     }
   }
   if (current !== null) result.push(current.join(' '));
-  if (!result.length && heading) {
-    const next = NEXT_HEADING.exec(body);
-    const section = next ? body.slice(0, next.index) : body;
-    return [...section.matchAll(BULLET_ITEM)].map(match => pyWords(match[1]));
-  }
   return result;
+}
+
+// A port of the engine's explicit_story_criteria (program_scenario.py, eae2202a).
+export function storyCriteria(source) {
+  const result = numberedStoryCriteria(source);
+  if (result.length) return result;
+  const heading = AC_HEADING.exec(source);
+  if (!heading) return result;
+  const body = source.slice(heading.index + heading[0].length);
+  const next = NEXT_HEADING.exec(body);
+  const section = next ? body.slice(0, next.index) : body;
+  return [...section.matchAll(BULLET_ITEM)].map(match => pyWords(match[1]));
 }
 
 export function gitFiles(root) {
@@ -196,7 +204,7 @@ const outsideFixtureProjects = (files, roots) => files.filter(path => !roots.som
 // Git-visible regular files and Stories: discovery reads Story files, never JSON files.
 function discoverStories(root, files, strict = false, workspace=loadRuntimeWorkspace({root}), discoveryFiles = null) {
   workspace=boundedWorkspace(root,workspace);
-  const visible = new Set(), stories = [], storyFiles = [], titles = new Map(), warnings = [], linkedPaths = new Set(), sizes = new Map();
+  const visible = new Set(), stories = [], storyFiles = [], titles = new Map(), storyTexts = new Map(), warnings = [], linkedPaths = new Set(), sizes = new Map();
   let linkedFiles = strict||workspace.configured ? filePort(root, new Set(files), strict,workspace) : undefined;
   for (const path of files) {
     if(!allowsRuntimePath(workspace,path))continue;
@@ -223,17 +231,18 @@ function discoverStories(root, files, strict = false, workspace=loadRuntimeWorks
         warnings.push(`Warning: ${path}: discovery unavailable (${error.code ?? error.message}).`); continue;
       }
       titles.set(path, titleOf(text));
+      storyTexts.set(path, text);
       if (hasAcceptance(text)) stories.push({ path, name: storyName(path), title: titleOf(text) });
     }
   }
   const read = path => strict || linkedPaths.has(path) ? linkedFiles.read({path}).content : readText(root, path);
-  return { visible, stories, storyFiles, titles, warnings, sizes, read };
+  return { visible, stories, storyFiles, titles, storyTexts, warnings, sizes, read };
 }
 
 function discoverTests(root, files, strict = false,workspace=loadRuntimeWorkspace({root}),excludeFixtureProjects=false) {
   const excluded = excludeFixtureProjects ? fixtureProjectRoots(root, files) : [];
   const discoveryFiles = new Set(outsideFixtureProjects(files, excluded));
-  const { visible, stories, storyFiles, titles, warnings: storyWarnings, sizes, read } = discoverStories(root, files, strict,workspace,discoveryFiles);
+  const { visible, stories, storyFiles, titles, storyTexts, warnings: storyWarnings, sizes, read } = discoverStories(root, files, strict,workspace,discoveryFiles);
   const named = new Set(stories.map(story => story.path)), rule = matchTests(storyFiles, [...visible].filter(path => discoveryFiles.has(path)));
   rule.untested = rule.untested.filter(item => named.has(item.storyPath));
   const tests = rule.tests.map(entry => {
@@ -242,7 +251,18 @@ function discoverTests(root, files, strict = false,workspace=loadRuntimeWorkspac
     if (entry.problem) return { ...test, error: entry.problem };
     if (size > LIMITS.bytes) return { ...test, error: `${entry.path} is ${formatSize(size)}. The upload limit is 10 MB, so pdd cannot send it.` };
     // A matched test is read in full, at any size below the upload limit.
-    try { return { ...test, doc: JSON.parse(read(entry.path)) }; }
+    try {
+      let doc = JSON.parse(read(entry.path));
+      if (isObject(doc) && doc.schema_version === TEST_SCHEMA && typeof doc.story_path === 'string' && doc.story_path
+        && visible.has(doc.story_path) && (!entry.storyPath || doc.story_path === entry.storyPath) && !partialTestRefusal(doc)) {
+        const storySource = storyTexts.get(doc.story_path);
+        if (typeof storySource === 'string') {
+          const resolved = resolveScenarioCriteria(doc, storySource);
+          if (resolved.changed && !resolved.refusal) doc = resolved.doc;
+        }
+      }
+      return { ...test, doc };
+    }
     catch (error) {
       if (error instanceof SyntaxError) return { ...test, error: `${entry.path} is not valid JSON: ${error.message}` };
       if (error.code === 'EACCES' || error.code === 'EISDIR' || error.code === 'ENOENT' || error instanceof PreflightError) return { ...test, error: `${entry.path} cannot be read: ${error.code ?? error.message}.` };
@@ -899,6 +919,46 @@ export function discoveryRefusal(test) {
 
 const criterionShape = item => isObject(item) && isDeepStrictEqual(Object.keys(item).sort(), ['id','text'])
   && typeof item.id === 'string' && !!item.id && typeof item.text === 'string' && !!item.text;
+function idOnlyCriterion(item) {
+  if (typeof item === 'string' && item && item.trim() === item) return item;
+  if (isObject(item) && Object.keys(item).length === 1 && typeof item.id === 'string' && item.id && item.id.trim() === item.id) return item.id;
+  return null;
+}
+function resolveScenarioCriteria(doc, storySource) {
+  if (!isObject(doc) || typeof doc.story_path !== 'string' || !doc.story_path) return { doc, changed: false, refusal: null };
+  if (!Object.hasOwn(doc, 'criteria')) {
+    const numbered = numberedStoryCriteria(storySource, { requireHeading: true });
+    if (!numbered.length) return { doc, changed: false, refusal: refusal('story-criteria-missing', 'story_path', `${doc.story_path} has no numbered "## Acceptance criteria" list.`) };
+    return { doc: { ...doc, criteria: numbered.map((text, index) => ({ id: `AC${index + 1}`, text })) }, changed: true, refusal: null };
+  }
+  if (!Array.isArray(doc.criteria) || !doc.criteria.length) {
+    return { doc, changed: false, refusal: refusal('invalid-criterion', 'criteria', 'The test has no criteria.') };
+  }
+  const ids = new Set(), criteria = [];
+  let numbered = null, changed = false;
+  for (const [index, item] of doc.criteria.entries()) {
+    if (criterionShape(item)) {
+      if (ids.has(item.id)) return { doc, changed: false, refusal: refusal('duplicate-criterion', `criteria[${index}]`, `The criterion ID ${item.id} is used twice.`) };
+      ids.add(item.id);
+      criteria.push(item);
+      continue;
+    }
+    const id = idOnlyCriterion(item);
+    if (!id) return { doc, changed: false, refusal: refusal('invalid-criterion', `criteria[${index}]`, 'Each criterion has only a nonempty "id" and "text", or a numbered ID ("AC1" or {"id": "AC1"}).') };
+    if (ids.has(id)) return { doc, changed: false, refusal: refusal('duplicate-criterion', `criteria[${index}]`, `The criterion ID ${id} is used twice.`) };
+    ids.add(id);
+    numbered ??= numberedStoryCriteria(storySource, { requireHeading: true });
+    if (!numbered.length) return { doc, changed: false, refusal: refusal('story-criteria-missing', 'story_path', `${doc.story_path} has no numbered "## Acceptance criteria" list.`) };
+    const match = AC_ID.exec(id), position = match ? Number(match[1]) : 0;
+    if (!position || position > numbered.length) {
+      return { doc, changed: false, refusal: refusal('invalid-criterion', `criteria[${index}]`,
+        `Criterion ID ${show(id)} does not match numbered item 1..${numbered.length} in ${doc.story_path}.`) };
+    }
+    criteria.push({ id, text: numbered[position - 1] });
+    changed = true;
+  }
+  return { doc: changed ? { ...doc, criteria } : doc, changed, refusal: null };
+}
 const stepShape = step => isObject(step) && !Object.keys(step).some(key=>!STEP_KEYS.has(key))
   && ['step_id','entry_path','operation','input','checks'].every(key=>Object.hasOwn(step,key))
   && ['step_id','entry_path','operation'].every(key=>typeof step[key]==='string'&&!!step[key]);
@@ -918,9 +978,11 @@ function appMapsRefusal(doc) {
   }
   return null;
 }
-function documentRefusal(doc,path) {
+function documentRefusal(doc, path, { allowOmittedCriteria = false } = {}) {
   if (!isObject(doc)) return refusal('invalid-document', 'scenario', `${path} is not a JSON object.`);
-  const missing = REQUIRED_KEYS.filter(key => !Object.hasOwn(doc, key)), extra = Object.keys(doc).filter(key => !TOP_KEYS.has(key));
+  const required = allowOmittedCriteria && typeof doc.story_path === 'string' && doc.story_path
+    ? REQUIRED_KEYS.filter(key => key !== 'criteria') : REQUIRED_KEYS;
+  const missing = required.filter(key => !Object.hasOwn(doc, key)), extra = Object.keys(doc).filter(key => !TOP_KEYS.has(key));
   if (missing.length) return refusal('invalid-document', 'scenario', `The test has no ${missing.map(key => `"${key}"`).join(', ')}.`);
   if (extra.length) return refusal('invalid-document', 'scenario', `The test has keys the interpreter does not know: ${extra.map(key => `"${key}"`).join(', ')}.`);
   if (doc.schema_version !== TEST_SCHEMA) return refusal('invalid-document', 'schema_version', `schema_version must be "${TEST_SCHEMA}".`);
@@ -956,70 +1018,68 @@ function checkTest(root, found, test, prompts) {
     const prepared = preparedText(root,found.visible,test.path,readText(root,test.path),'scenario');
     try { doc = parseScenarioJson(prepared.text); } catch { /* Preserve ordinary malformed scenario handling. */ }
   }
-  if (test.error) return discoveryRefusal(test);
-  const shape=documentRefusal(doc,test.path);if(shape)return shape;
-  if (typeof doc.story_path !== 'string' || !doc.story_path) return refusal('pdd-no-story', 'story_path', 'The test has no story_path. Name its story, for example "user_stories/<story>.md".');
-  if (!found.visible.has(doc.story_path)) return refusal('story-missing', 'story_path', `${doc.story_path} is not a Git-visible file.`);
-  if (test.storyPath && doc.story_path !== test.storyPath) return discoveryRefusal({ ...test, doc });
-  const partial = partialTestRefusal(doc); if (partial) return partial;
-  if (!Array.isArray(doc.criteria) || !doc.criteria.length) return refusal('invalid-criterion', 'criteria', 'The test has no criteria.');
-  const ids = new Set();
-  for (const [index, item] of doc.criteria.entries()) {
-    if (!criterionShape(item)) {
-      return refusal('invalid-criterion', `criteria[${index}]`, 'Each criterion has only a nonempty "id" and "text".');
-    }
-    if (ids.has(item.id)) return refusal('duplicate-criterion', `criteria[${index}]`, `The criterion ID ${item.id} is used twice.`);
-    ids.add(item.id);
-  }
-  const story = storyCriteria(readText(root, doc.story_path));
-  if (!story.length) return refusal('story-criteria-missing', 'story_path', `${doc.story_path} has no numbered "## Acceptance criteria" list.`);
+  const done = (issue, story = null) => ({ refusal: issue, doc, story });
+  if (test.error) return done(discoveryRefusal(test));
+  const shape = documentRefusal(doc, test.path, { allowOmittedCriteria: true });
+  if (shape) return done(shape);
+  if (typeof doc.story_path !== 'string' || !doc.story_path) return done(refusal('pdd-no-story', 'story_path', 'The test has no story_path. Name its story, for example "user_stories/<story>.md".'));
+  if (!found.visible.has(doc.story_path)) return done(refusal('story-missing', 'story_path', `${doc.story_path} is not a Git-visible file.`));
+  if (test.storyPath && doc.story_path !== test.storyPath) return done(discoveryRefusal({ ...test, doc }));
+  const partial = partialTestRefusal(doc); if (partial) return done(partial);
+  const storySource = sourceFilePort(root, found.visible, found.workspace).read({ path: doc.story_path }).content;
+  const resolved = resolveScenarioCriteria(doc, storySource);
+  if (resolved.refusal) return done(resolved.refusal);
+  doc = resolved.doc;
+  const ids = new Set(doc.criteria.map(item => item.id));
+  const story = storyCriteria(storySource);
+  if (!story.length) return done(refusal('story-criteria-missing', 'story_path', `${doc.story_path} has no numbered "## Acceptance criteria" list.`), story);
   const testTexts = doc.criteria.map(item => item.text).sort(), storyTexts = [...story].sort();
-  if (!isDeepStrictEqual(testTexts, storyTexts) && !criterionPlan(doc, story)) return refusal('story-criterion-mismatch', 'criteria', firstDifference(testTexts, storyTexts));
-  if (!Array.isArray(doc.steps) || !doc.steps.length) return refusal('missing-steps', 'steps', 'The test has no steps.');
+  if (!isDeepStrictEqual(testTexts, storyTexts) && !criterionPlan(doc, story)) return done(refusal('story-criterion-mismatch', 'criteria', firstDifference(testTexts, storyTexts)), story);
+  if (!Array.isArray(doc.steps) || !doc.steps.length) return done(refusal('missing-steps', 'steps', 'The test has no steps.'), story);
   const exact = new Set(), inputIssues = [];
   for (const [index, step] of doc.steps.entries()) {
     const section = `steps[${index}]`, at = { step: index + 1 };
     if (!stepShape(step)) {
-      return refusal('invalid-step', section, 'A step has step_id, entry_path, operation, input and checks.', at);
+      return done(refusal('invalid-step', section, 'A step has step_id, entry_path, operation, input and checks.', at), story);
     }
     if (Object.hasOwn(step, 'model') && (typeof step.model !== 'string' || !step.model.trim())) {
-      return refusal('invalid-step-model', `${section}.model`, 'A step model must be a model name (a string).', at);
+      return done(refusal('invalid-step-model', `${section}.model`, 'A step model must be a model name (a string).', at), story);
     }
     if (!prompts.has(step.entry_path)) prompts.set(step.entry_path, readPrompt(root, found.visible, step.entry_path,found.workspace));
     const prompt = prompts.get(step.entry_path), broken = promptRefusal(prompt, section);
-    if (broken) return { ...broken, ...at };
+    if (broken) return done({ ...broken, ...at }, story);
     const schemaIssues = promptSchemaRefusals(root, found, prompt, prompts);
-    if (schemaIssues.length) return schemaIssues;
+    if (schemaIssues.length) return done(schemaIssues, story);
     const entry = (Array.isArray(prompt.interface.entries) ? prompt.interface.entries : []).find(item => item?.operation === step.operation);
     const native = [...prompts.values()].some(item => item.interface?.kind === 'native-only');
-    if (!entry && !native) return refusal('entry-operation-missing', section, `${step.entry_path} has no operation "${step.operation}".`, at);
+    if (!entry && !native) return done(refusal('entry-operation-missing', section, `${step.entry_path} has no operation "${step.operation}".`, at), story);
     const errorStep = Object.hasOwn(step, 'expected_error');
     if (!native && errorStep && !(Array.isArray(entry.errors) && entry.errors.includes(step.expected_error))) {
-      return refusal('pdd-unknown-error', `${section}.expected_error`, `"${step.expected_error}" is not in the errors of ${step.operation} in ${step.entry_path}.`, at);
+      return done(refusal('pdd-unknown-error', `${section}.expected_error`, `"${step.expected_error}" is not in the errors of ${step.operation} in ${step.entry_path}.`, at), story);
     }
-    if (!Array.isArray(step.checks)) return refusal('invalid-check', `${section}.checks`, 'checks must be a list.', at);
+    if (!Array.isArray(step.checks)) return done(refusal('invalid-check', `${section}.checks`, 'checks must be a list.', at), story);
     let errorChecks = 0;
     for (const [checkIndex, check] of step.checks.entries()) {
       if (!checkShape(check)) {
-        return refusal('invalid-check', `${section}.checks[${checkIndex}]`, 'A check has criterion_id, target, path and op.', at);
+        return done(refusal('invalid-check', `${section}.checks[${checkIndex}]`, 'A check has criterion_id, target, path and op.', at), story);
       }
-      if (!ids.has(check.criterion_id)) return refusal('unknown-criterion', `${section}.checks[${checkIndex}]`, `The check names ${show(check.criterion_id)}, which is not a criterion ID.`, at);
+      if (!ids.has(check.criterion_id)) return done(refusal('unknown-criterion', `${section}.checks[${checkIndex}]`, `The check names ${show(check.criterion_id)}, which is not a criterion ID.`, at), story);
       if (EXACT_OPS.has(check.op) || (Object.hasOwn(check, 'html') && check.op === 'exists')) exact.add(check.criterion_id);
       if (check.target === 'error' && check.path === '/code' && check.op === 'equals' && check.value === step.expected_error) errorChecks += 1;
     }
     if (errorStep && errorChecks === 0) {
-      return refusal('missing-error-check', `${section}.checks`, `An error step needs one check: target "error", path "/code", op "equals", value "${step.expected_error}".`, at);
+      return done(refusal('missing-error-check', `${section}.checks`, `An error step needs one check: target "error", path "/code", op "equals", value "${step.expected_error}".`, at), story);
     }
     if (!native) inputIssues.push(...checkInput(step.input, entry.input_schema, index).refusals);
   }
-  if (inputIssues.length) return inputIssues;
+  if (inputIssues.length) return done(inputIssues, story);
   for (const step of doc.steps) for (const check of step.checks) {
-    if (!exact.has(check.criterion_id) && !ordinaryInexactCheck(check)) return refusal('criterion-needs-exact-check', 'criteria',
-      `The checks for ${check.criterion_id} do not establish valid criterion coverage.`, {hint:'Fix the check operation, target and JSON pointer before checking this test.'});
+    if (!exact.has(check.criterion_id) && !ordinaryInexactCheck(check)) return done(refusal('criterion-needs-exact-check', 'criteria',
+      `The checks for ${check.criterion_id} do not establish valid criterion coverage.`, {hint:'Fix the check operation, target and JSON pointer before checking this test.'}), story);
   }
-  if (!exact.size) return refusal('unchecked-criteria', 'criteria', 'No criterion has an exact check.',
-    {hint:'Add an exact result, world or call-count check for an observable criterion.'});
-  return null;
+  if (!exact.size) return done(refusal('unchecked-criteria', 'criteria', 'No criterion has an exact check.',
+    {hint:'Add an exact result, world or call-count check for an observable criterion.'}), story);
+  return done(null, story);
 }
 
 // Rules P1-P10 for the selected tests. Returns rows and warnings; never throws for a test problem.
@@ -1037,15 +1097,17 @@ export function preflight({ root, found, selected,workspace=found.workspace??loa
       prompts.set(path, prompt);
       for (const call of Array.isArray(prompt.interface?.calls) ? prompt.interface.calls : []) visit(call?.target);
     };
-    let refused, plan, testSha = null;
+    let refused, plan, testSha = null, effectiveDoc = test.doc;
     try {
       for (const step of Array.isArray(test.doc?.steps) ? test.doc.steps : []) visit(step?.entry_path);
-      refused = checkTest(root, found, test, prompts);
+      const checked = checkTest(root, found, test, prompts);
+      refused = checked.refusal;
+      effectiveDoc = checked.doc;
       const nativeProblems = [...prompts.values()].filter(prompt => prompt.interface?.kind === 'native-only')
         .map(prompt => promptRefusal(prompt,'interface')).filter(Boolean);
       if (nativeProblems.length) refused = [...(refused ? [refused].flat() : []),...nativeProblems];
       if (!refused || refused.code === 'unchecked-criteria') {
-        plan = criterionPlan(test.doc, storyCriteria(readText(root, test.doc.story_path)));
+        plan = criterionPlan(effectiveDoc, checked.story ?? storyCriteria(sourceFilePort(root, found.visible, workspace).read({ path: effectiveDoc.story_path }).content));
       }
       if (!refused && reviews.length) testSha = sha256(readFileSync(join(root,test.path)));
     } catch (error) {
@@ -1053,9 +1115,9 @@ export function preflight({ root, found, selected,workspace=found.workspace??loa
       refused = refusal(error.code ?? 'source-unavailable', 'source', error.message,
         {hint:'Restore the named dependency, make it readable, or correct its declared path.'});
     }
-    const row = { test: test.path, story: test.story, title: test.title, refusals: refused ? [refused].flat() : [], warnings: numberWarnings(test.doc, { testPath: test.path, testSha, reviews }),
-      max_calls: defaultMaxCalls(test.doc), steps: Array.isArray(test.doc?.steps) ? test.doc.steps : [],
-      criteria_total: plan?.criteria.length ?? (Array.isArray(test.doc?.criteria) ? test.doc.criteria.length : 0),
+    const row = { test: test.path, story: test.story, title: test.title, refusals: refused ? [refused].flat() : [], warnings: numberWarnings(effectiveDoc, { testPath: test.path, testSha, reviews }),
+      max_calls: defaultMaxCalls(effectiveDoc), steps: Array.isArray(effectiveDoc?.steps) ? effectiveDoc.steps : [],
+      criteria_total: plan?.criteria.length ?? (Array.isArray(effectiveDoc?.criteria) ? effectiveDoc.criteria.length : 0),
       ...(plan?.not_checked.length ? {not_checked:plan.not_checked} : {}), draft: false };
     row.native_only = [...prompts.values()].filter(item => item.interface?.kind === 'native-only').map(item => ({path:item.path,reason:item.interface.reason}));
     row.draft = row.steps.some(step => prompts.get(step?.entry_path)?.interface?.status === 'draft');
@@ -1157,22 +1219,88 @@ function omitFullKind(body) {
   return body.slice(0, body.indexOf('{') + 1) + kept.join(',') + trailing + body.slice(end);
 }
 
-// --fill-hash: fill draft hashes, omit full kind; optionally compact drafts.
+function syncedCriteriaTexts(criteria, numbered) {
+  if (!numbered.length || !Array.isArray(criteria) || criteria.length !== numbered.length) return null;
+  if (criteria.some(item => !criterionShape(item))) return null;
+  if (new Set(criteria.map(item => item.id)).size !== criteria.length) return null;
+  const parsed = criteria.map(item => AC_ID.exec(item.id));
+  if (parsed.every(Boolean)) {
+    const indices = parsed.map(match => Number(match[1]));
+    if (indices.some(index => index < 1 || index > numbered.length) || new Set(indices).size !== indices.length) return null;
+    return indices.map(index => numbered[index - 1]);
+  }
+  if (parsed.some(match => match && Number(match[1]) > numbered.length)) return null;
+  return [...numbered];
+}
+
+// Replace only top-level criteria[].text string tokens in an already parsed scenario JSON object.
+function replaceCriteriaTexts(body, nextTexts) {
+  const tokens = [...body.matchAll(/"(?:[^"\\]|\\.)*"|[{}[\],:]|[^\s{}[\],:"]+/g)];
+  let at = 0;
+  const node = () => {
+    const head = tokens[at++];
+    if (!head) return null;
+    if (head[0] === '{') {
+      const members = [];
+      if (tokens[at]?.[0] !== '}') while (at < tokens.length) {
+        const key = tokens[at++];
+        if (!key?.[0].startsWith('"') || tokens[at]?.[0] !== ':') return null;
+        at++;
+        const value = node();
+        if (!value) return null;
+        members.push({ key: JSON.parse(key[0]), value });
+        if (tokens[at]?.[0] === ',') at++; else break;
+      }
+      if (tokens[at]?.[0] !== '}') return null;
+      at++;
+      return { kind: 'object', members };
+    }
+    if (head[0] === '[') {
+      const items = [];
+      if (tokens[at]?.[0] !== ']') while (at < tokens.length) {
+        const item = node();
+        if (!item) return null;
+        items.push(item);
+        if (tokens[at]?.[0] === ',') at++; else break;
+      }
+      if (tokens[at]?.[0] !== ']') return null;
+      at++;
+      return { kind: 'array', items };
+    }
+    return { kind: head[0].startsWith('"') ? 'string' : 'scalar', start: head.index, end: head.index + head[0].length };
+  };
+  const root = node();
+  const criteria = root?.kind === 'object' ? root.members.filter(member => member.key === 'criteria') : [];
+  if (criteria.length !== 1 || criteria[0].value.kind !== 'array' || criteria[0].value.items.length !== nextTexts.length) return null;
+  const edits = [];
+  for (const [index, item] of criteria[0].value.items.entries()) {
+    const texts = item.kind === 'object' ? item.members.filter(member => member.key === 'text') : [];
+    if (texts.length !== 1 || texts[0].value.kind !== 'string') return null;
+    edits.push({ start: texts[0].value.start, end: texts[0].value.end, text: JSON.stringify(nextTexts[index]) });
+  }
+  let out = body;
+  for (const edit of edits.reverse()) out = out.slice(0, edit.start) + edit.text + out.slice(edit.end);
+  return out;
+}
+
+// --fill-hash: fill draft hashes, omit full kind, sync stale scenario criteria[].text; optionally compact drafts.
 export function fillHashes({ root, files = gitFiles(root), targets, compact = false,workspace=loadRuntimeWorkspace({root}) }) {
   workspace=boundedWorkspace(root,workspace);
-  const result = { filled: [], current: [], refused: [], stale: [], warnings: [] };
+  const result = { filled: [], current: [], refused: [], stale: [], warnings: [] }, synced = [];
+  Object.defineProperty(result, 'synced', { value: synced });
   if (compact === true) result.compacted = [];
+  const visibleSet = new Set(files);
   const targetSet = targets === undefined ? null : new Set(targets);
   const candidates = targetSet ? files.filter(path => targetSet.has(path)) : files;
   for (const path of candidates) {
     if (!allowsRuntimePath(workspace,path) || !path.endsWith('.prompt.md') || !statOf(join(root, path))?.isFile()) continue;
-    let text;try{text=filePort(root,new Set(files),true,workspace).read({path}).content;}catch(error){result.refused.push({path,message:error.message});continue;}
+    let text;try{text=filePort(root,visibleSet,true,workspace).read({path}).content;}catch(error){result.refused.push({path,message:error.message});continue;}
     const blocks = interfaceBlocks(text);
     try {
-      preparedText(root,new Set(files),path,text,'prompt',workspace);
-      if(workspace.configured){const pending=[path],seen=new Set(),port=sourceFilePort(root,new Set(files));
+      preparedText(root,visibleSet,path,text,'prompt',workspace);
+      if(workspace.configured){const pending=[path],seen=new Set(),port=sourceFilePort(root,visibleSet);
       for(let i=0;i<pending.length;i++){const owner=pending[i];if(seen.has(owner))continue;seen.add(owner);const content=owner===path?text:port.read({path:owner}).content;
-        for(const raw of markdownContext(content)){const target=contextPath(raw,owner,new Set(files));if(target){requireRuntimePath(workspace,{path:target,from:owner,chain:[path]});pending.push(target);}}
+        for(const raw of markdownContext(content)){const target=contextPath(raw,owner,visibleSet);if(target){requireRuntimePath(workspace,{path:target,from:owner,chain:[path]});pending.push(target);}}
         if(owner.endsWith('.prompt.md'))for(const block of interfaceBlocks(content)){let doc;try{doc=JSON.parse(block[1]);}catch{continue;}for(const call of doc.calls??[])if(typeof call?.target==='string'){requireRuntimePath(workspace,{path:call.target,from:owner,chain:[path]});pending.push(call.target);}}
       }}
     }
@@ -1216,13 +1344,49 @@ export function fillHashes({ root, files = gitFiles(root), targets, compact = fa
     if (proseSha256(next) !== hash) { result.refused.push({ path, message: `pdd could not fill "prose_sha256" in ${path} without a change to its text.` }); continue; }
     if (next !== text) {
       requireRuntimePath(loadRuntimeWorkspace({root}),{path,from:'Hash destination'});
-      const safe=filePort(root,new Set(files),true);
+      const safe=filePort(root,visibleSet,true);
       if(safe.read({path}).content!==text)throw new PreflightError(5,`${path}: changed before hash write.`);
       writeFileSync(join(root, path), next);
     }
     (current ? result.current : result.filled).push({ path });
     if (normalized) result.warnings.push({ path, message: `${path} /kind: removed redundant "kind": "full"; full interfaces omit kind.` });
     if (whitespaceChanged) result.compacted.push({ path });
+  }
+  const excludedRoots = targetSet ? [] : fixtureProjectRoots(root, files);
+  const scenarioFiles = (targetSet ? candidates : outsideFixtureProjects(candidates, excludedRoots))
+    .filter(path => isTestFolderJson(path) && allowsRuntimePath(workspace, path));
+  if (scenarioFiles.length) {
+    const storyFiles = (targetSet ? files : outsideFixtureProjects(files, excludedRoots))
+      .filter(path => isStoryPath(path) && allowsRuntimePath(workspace, path));
+    const matchedByPath = new Map(matchTests(storyFiles, [...new Set([...storyFiles, ...scenarioFiles])]).tests
+      .flatMap(entry => (entry.files ?? [entry.path]).map(path => [path, entry])));
+    for (const path of scenarioFiles) {
+      if (!statOf(join(root, path))?.isFile()) continue;
+      let rawText, doc;
+      try {
+        rawText = filePort(root, visibleSet, true, workspace).read({ path }).content;
+        doc = parseScenarioJson(rawText);
+      } catch { continue; }
+      if (!isObject(doc) || doc.schema_version !== TEST_SCHEMA || typeof doc.story_path !== 'string' || !doc.story_path) continue;
+      if (!visibleSet.has(doc.story_path) || !allowsRuntimePath(workspace, doc.story_path)) continue;
+      const matched = matchedByPath.get(path);
+      if (matched?.problem || (matched?.storyPath && matched.storyPath !== doc.story_path)) continue;
+      let storySource;
+      try { storySource = sourceFilePort(root, visibleSet, workspace).read({ path: doc.story_path }).content; } catch { continue; }
+      const nextTexts = syncedCriteriaTexts(doc.criteria, numberedStoryCriteria(storySource, { requireHeading: true }));
+      if (!nextTexts || nextTexts.every((text, index) => doc.criteria[index].text === text)) continue;
+      const next = replaceCriteriaTexts(rawText, nextTexts);
+      if (next === null || next === rawText) continue;
+      const expectedDoc = { ...doc, criteria: doc.criteria.map((item, index) => ({ ...item, text: nextTexts[index] })) };
+      let same = false;
+      try { same = isDeepStrictEqual(parseScenarioJson(next), expectedDoc); } catch { same = false; }
+      if (!same) continue;
+      requireRuntimePath(loadRuntimeWorkspace({ root }), { path, from: 'Hash destination' });
+      const safe = filePort(root, visibleSet, true);
+      if (safe.read({ path }).content !== rawText) throw new PreflightError(5, `${path}: changed before hash write.`);
+      writeFileSync(join(root, path), next);
+      synced.push({ path });
+    }
   }
   return result;
 }
@@ -1526,7 +1690,7 @@ function preparedText(root, visible, path, text, format,workspace) {
   }
 }
 
-function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadRuntimeWorkspace({root}),excludeFixtureProjects=tests === undefined }, strict = false) {
+function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadRuntimeWorkspace({root}),excludeFixtureProjects=tests === undefined,validateCriteria=true }, strict = false) {
   const policyBefore=JSON.stringify(loadRuntimeWorkspace({root}));workspace=boundedWorkspace(root,workspace);
   const names = gitFiles(root), visible = new Set(names), overlay = new Map(), payload = new Map(), queue = [], visited = new Set();
   const chains=new Map(),preparationReads=new Set(),referenceReads=new Set();
@@ -1583,11 +1747,25 @@ function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadR
         : discoveryRefusal({path:file.path,storyPath:expected?.storyPath,doc});
       if (authority) throw Object.assign(new PreflightError(4, `${file.path}: ${authority.message}`), authority,
         {message:`${file.path}: ${authority.message}`,hint:'Restore the Story path selected by the test name, then run the selection again.'});
-      if (typeof doc?.story_path === 'string' && !scenarioShapeRefusal(doc, file.path)) {
+      if (typeof doc?.story_path === 'string' && !documentRefusal(doc, file.path, { allowOmittedCriteria: true })) {
         add(doc.story_path, file.path, 'story');
-        const plan = capturedCriterionPlan(doc, storyCriteria(bytes(inspect(doc.story_path, file.path)).toString('utf8')), file.path);
-        if (plan?.not_checked.length && plan.checked) content = Buffer.from(stringifyScenarioJson({...doc,criteria:plan.criteria,
-          check_exemptions:plan.not_checked.map(item => ({criterion_id:item.criterion_id,reason:'out-of-scope',detail:item.reason}))}), 'utf8');
+        if (validateCriteria) {
+          const storySource = bytes(inspect(doc.story_path, file.path)).toString('utf8');
+          const partial = partialTestRefusal(doc);
+          const resolved = partial ? { doc, changed: false, refusal: null } : resolveScenarioCriteria(doc, storySource);
+          if (resolved.refusal && (!Object.hasOwn(doc, 'criteria') || (Array.isArray(doc.criteria) && doc.criteria.some(item => idOnlyCriterion(item) !== null)))) {
+            throw Object.assign(new PreflightError(4, `${file.path}: ${resolved.refusal.message}`), resolved.refusal,
+              { message: `${file.path}: ${resolved.refusal.message}`, hint: 'Fix the scenario criteria or Story acceptance list, then run the selection again.' });
+          }
+          if (resolved.changed && !resolved.refusal) content = Buffer.from(stringifyScenarioJson(resolved.doc), 'utf8');
+          if (!resolved.refusal && !scenarioShapeRefusal(resolved.doc, file.path)) {
+            const plan = capturedCriterionPlan(resolved.doc, storyCriteria(storySource), file.path);
+            if (resolved.changed || (plan?.not_checked.length && plan.checked)) {
+              content = Buffer.from(stringifyScenarioJson({ ...resolved.doc, criteria: plan.criteria,
+                ...(plan?.not_checked.length ? { check_exemptions: plan.not_checked.map(item => ({ criterion_id: item.criterion_id, reason: 'out-of-scope', detail: item.reason })) } : {}) }), 'utf8');
+            }
+          }
+        }
       }
     }
     const result = {...file,bytes:content,size:content.length};
@@ -1883,9 +2061,10 @@ export function prepareHashSelection({ root, cwd, words }, { capture = captureSo
     const problem = discoveryRefusal(test);
     if (problem) throw new PreflightError(4, problem.message);
   }
-  const captured = capture(root,{tests:[...selection.selected.map(test => test.path),...promptTargets],appMap:null,workspace});
+  const selectedTests = selection.selected.map(test => test.path);
+  const captured = capture(root,{tests:[...selectedTests,...promptTargets],appMap:null,workspace,...(capture===captureSource?{validateCriteria:false}:{})});
   const inventory = captured.files.map(file => typeof file === 'string' ? file : file.path);
-  return { files: [...new Set([...files, ...inventory])], targets: [...new Set(inventory.filter(path => path.endsWith('.prompt.md')))] };
+  return { files: [...new Set([...files, ...inventory])], targets: [...new Set([...inventory.filter(path => path.endsWith('.prompt.md')), ...selectedTests])] };
 }
 
 function captureWithPolicy(root, { attempts = 3, ...selection } = {}, strict = false) {

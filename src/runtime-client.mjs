@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 9f52257bdc2cc25d7f94685c28ccec061a950eabac16837ca3dcb536a8e2844a).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 14dd28298dd4b96877f8a1a9ceb70d9c078759c6158a323715140096aa68f8f7).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
@@ -2598,6 +2598,7 @@ function runFillHash(root, cwd, words, ports, compact = false) {
   const result = ports.fillHashes(scoped ? {root,files:scoped.files,targets:scoped.targets,...(compact ? {compact:true} : {})} : (compact ? {root,compact:true} : {root}));
   for (const { message } of result.warnings) line(ports.stdout, `Warning: ${message}`);
   for (const { path } of result.filled) line(ports.stdout, `Filled prose_sha256: ${path}`);
+  for (const { path } of result.synced ?? []) line(ports.stdout, `Synced criteria: ${path}`);
   if (compact) for (const { path } of result.compacted) line(ports.stdout, `Compacted Runtime interface: ${path}`);
   for (const { message } of result.refused) line(ports.stdout, `Refused: ${message}`);
   for (const { path } of result.stale) line(ports.stdout, `Stale: ${path} is approved, but ${STALE_HINT}.`);
