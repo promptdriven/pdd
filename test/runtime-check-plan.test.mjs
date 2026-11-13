@@ -143,7 +143,8 @@ for(const mode of ['missing-interface','missing-bound','missing-call-bound','rec
   assert.ok(result.check_plan,'3114_PREREQUISITE_PLAN_MISSING');
   assert.equal(result.check_plan.prerequisites.length,1);
   assert.equal(result.check_plan.prerequisites[0].path,'prompts/broken.prompt.md');
-  assert.equal(result.check_plan.calls.maximum,null);assert.equal(clock.gh.length,0);
+  assert.equal(result.check_plan.calls.maximum,null);assert.equal(clock.gh.length,mode==='missing-interface'?2:0);
+  assert.equal(fake.posts.length,0);
   assert.equal(result.rows.length,2);assert.ok(result.rows.every(row=>row.calls===0));
   assert.equal(result.exit_code,4);
 });
