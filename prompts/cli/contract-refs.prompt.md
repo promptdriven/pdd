@@ -260,7 +260,7 @@ These helpers have no outside effects. Reuse this module's existing bounded exac
 
 ```json
 {
-  "status": "draft", "prose_sha256": "6bac5664ce9cfe34205a251c6940665816759e65fe976459a028658c0b7d11bc",
+  "status": "approved", "prose_sha256": "6bac5664ce9cfe34205a251c6940665816759e65fe976459a028658c0b7d11bc",
   "entries": [{
     "operation": "expandSource",
     "input_schema": {
