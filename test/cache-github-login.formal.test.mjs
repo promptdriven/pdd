@@ -4,9 +4,8 @@ import { createHash } from 'node:crypto';
 import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
-import { readTryOwner, runCheck, runDoorCall, runTry } from '../src/runtime-client.mjs';
-import { proseSha256 } from '../src/runtime-preflight.mjs';
-import { PLACE, fakeRuntime, filesUnder, harbor, portsFor, temp } from './runtime-fake.mjs';
+import { proseSha256, readTryOwner, runCheck, runDoorCall, runTry } from '../src/runtime-seam.mjs';
+import { PLACE, fakeRuntime, filesUnder, harbor, portsFor, temp } from './helpers/runtime-fake.mjs';
 
 // Independent specification oracle derived strictly from
 // user_stories/cache-github-login.md ("## Rules to check") and

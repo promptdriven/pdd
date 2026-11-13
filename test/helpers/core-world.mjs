@@ -15,6 +15,8 @@ const ok = (status, body) => ({ code: status < 300 ? 0 : 1, stdout: `HTTP/2.0 ${
 // The shared fake plus PRs, checks, label adds, comment deletes, issue close and the pr merge command.
 function extend(f, w) {
   f.prs = new Map(); f.checks = new Map(); f.statuses = new Map(); f.merges = []; f.writes = [];
+  f.reruns = []; f.annotations = new Map(); f.runLogs = new Map(); f.workflowRuns = new Map();
+  let nextCheckId = 8000;
   const prefix = `repos/${f.repo}`;
   const restPr = pr => ({ number: pr.number, state: pr.state, merged: pr.merged, body: pr.body, title: pr.title, html_url: `https://github.com/${f.repo}/pull/${pr.number}`,
     head: { sha: pr.head, ref: pr.branch, repo: { full_name: f.repo } }, base: { ref: pr.base, repo: { full_name: f.repo } }, merge_commit_sha: pr.mergeSha ?? null, draft: Boolean(pr.draft) });
@@ -22,9 +24,22 @@ function extend(f, w) {
     const pr = { number: 100 + f.prs.size, branch, head, base, body, title, state: 'open', merged: false, comments: [], labels: [] };
     f.prs.set(pr.number, pr); return pr;
   };
-  f.setChecks = (sha, conclusion = 'success', status = 'completed') => f.checks.set(sha, [{ name: 'ci', status, conclusion: status === 'completed' ? conclusion : null }]);
+  f.setChecks = (sha, conclusion = 'success', status = 'completed', extra = {}) => {
+    const id = extra.id ?? ++nextCheckId;
+    if (Array.isArray(extra.annotations)) f.annotations.set(id, extra.annotations);
+    if (extra.log !== undefined && extra.runId) f.runLogs.set(extra.runId, extra.log);
+    if (extra.runId) f.workflowRuns.set(extra.runId, { id: extra.runId, head_sha: sha, status, conclusion: status === 'completed' ? conclusion : null });
+    f.checks.set(sha, [{ id, name: extra.name ?? 'ci', status, conclusion: status === 'completed' ? conclusion : null,
+      ...(extra.completedAt ? { completed_at: extra.completedAt } : {}),
+      ...(extra.detailsUrl || extra.runId ? { details_url: extra.detailsUrl ?? `https://github.com/${f.repo}/actions/runs/${extra.runId}/job/${id}` } : {}),
+      ...(extra.output || extra.annotations ? { output: { title: '', summary: '', annotations_count: extra.annotations?.length ?? 0, ...extra.output } } : {}) }]);
+  };
   const original = f.gh;
   f.gh = async (args, options = {}) => {
+    if (args[0] === 'run' && args[1] === 'view' && args.includes('--log-failed')) {
+      const log = f.runLogs.get(Number(args[2]));
+      return log !== undefined ? { code: 0, stdout: String(log), stderr: '' } : { code: 1, stdout: '', stderr: 'no failed log' };
+    }
     if (args[0] === 'pr' && args[1] === 'merge') {
       f.writes.push(['merge', ...args]);
       const pr = f.prs.get(Number(args[2])), head = args[args.indexOf('--match-head-commit') + 1];
@@ -58,8 +73,8 @@ function extend(f, w) {
       return ok(200, { behind_by: behind, ahead_by: ahead, status: behind ? (ahead ? 'diverged' : 'behind') : ahead ? 'ahead' : 'identical' });
     }
     if (route === '/pulls' && method === 'GET') {
-      const params = new URLSearchParams(endpoint.split('?')[1] ?? ''), head = params.get('head')?.split(':').pop(), state = params.get('state') ?? 'open';
-      return ok(200, [...f.prs.values()].filter(pr => (state === 'all' || pr.state === state) && (!head || pr.branch === head)).map(restPr));
+      const params = new URLSearchParams(endpoint.split('?')[1] ?? ''), head = params.get('head')?.split(':').pop(), base = params.get('base'), state = params.get('state') ?? 'open';
+      return ok(200, [...f.prs.values()].filter(pr => (state === 'all' || pr.state === state) && (!head || pr.branch === head) && (!base || pr.base === base)).map(restPr));
     }
     if ((m = /^\/pulls\/(\d+)$/.exec(route))) {
       const pr = f.prs.get(Number(m[1])); if (!pr) return ok(404, { message: 'Not Found' });
@@ -77,6 +92,10 @@ function extend(f, w) {
     if (route === '/issues' && method === 'GET' && new URLSearchParams(endpoint.split('?')[1] ?? '').get('labels') === 'pdd:merge-lane') {
       return ok(200, [...f.prs.values()].filter(pr => pr.state === 'open' && pr.labels.includes('pdd:merge-lane')).map(pr => ({ number: pr.number, state: 'open', labels: pr.labels.map(name => ({ name })), pull_request: {} })));
     }
+    if ((m = /^\/issues\/(\d+)$/.exec(route)) && method === 'GET' && f.prs.has(Number(m[1]))) {
+      const pr = f.prs.get(Number(m[1]));
+      return ok(200, { number: pr.number, state: pr.state, labels: pr.labels.map(name => ({ name })), pull_request: {} });
+    }
     // PR reviews on GitHub (a person's APPROVED review).
     if ((m = /^\/pulls\/(\d+)\/reviews$/.exec(route)) && method === 'GET') return ok(200, f.prs.get(Number(m[1]))?.reviews ?? []);
     if ((m = /^\/issues\/(\d+)\/comments$/.exec(route)) && f.prs.has(Number(m[1]))) {
@@ -86,6 +105,32 @@ function extend(f, w) {
     }
     if ((m = /^\/commits\/([0-9a-f]{40})\/check-runs$/.exec(route))) { const runs = f.checks.get(m[1]) ?? []; return ok(200, { total_count: runs.length, check_runs: runs }); }
     if ((m = /^\/commits\/([0-9a-f]{40})\/status$/.exec(route))) { const statuses = f.statuses.get(m[1]) ?? []; return ok(200, { state: statuses.length ? statuses.every(s => s.state === 'success') ? 'success' : 'failure' : 'pending', statuses }); }
+    if ((m = /^\/check-runs\/(\d+)\/annotations$/.exec(route)) && method === 'GET') return ok(200, f.annotations.get(Number(m[1])) ?? []);
+    if (route === '/actions/runs' && method === 'GET') {
+      const sha = new URLSearchParams(endpoint.split('?')[1] ?? '').get('head_sha');
+      return ok(200, { workflow_runs: [...f.workflowRuns.values()].filter(r => !sha || r.head_sha === sha) });
+    }
+    if ((m = /^\/actions\/runs\/(\d+)\/(rerun-failed-jobs|rerun)$/.exec(route)) && method === 'POST') {
+      const runId = Number(m[1]), run = f.workflowRuns.get(runId);
+      f.reruns.push({ kind: m[2], id: runId, at: f.now() });
+      const sha = run?.head_sha ?? [...f.checks.entries()].find(([, list]) => list.some(c => String(c.details_url ?? '').includes(`/actions/runs/${runId}/`)))?.[0];
+      if (run) { run.status = 'in_progress'; run.conclusion = null; }
+      if (sha) {
+        if (f.onRerun) f.onRerun(sha, runId);
+        else f.checks.set(sha, (f.checks.get(sha) ?? []).map(c => c.conclusion === 'failure' ? { ...c, status: 'in_progress', conclusion: null } : c));
+      }
+      return ok(201, {});
+    }
+    if ((m = /^\/check-runs\/(\d+)\/rerequest$/.exec(route)) && method === 'POST') {
+      const checkId = Number(m[1]);
+      f.reruns.push({ kind: 'rerequest', id: checkId, at: f.now() });
+      const sha = [...f.checks.entries()].find(([, list]) => list.some(c => c.id === checkId))?.[0];
+      if (sha) {
+        if (f.onRerun) f.onRerun(sha, checkId);
+        else f.checks.set(sha, (f.checks.get(sha) ?? []).map(c => c.id === checkId ? { ...c, status: 'in_progress', conclusion: null } : c));
+      }
+      return ok(201, {});
+    }
     if ((m = /^\/issues\/(\d+)\/labels$/.exec(route)) && method === 'POST') {
       const issue = f.issues.get(Number(m[1])); if (!issue) return ok(404, { message: 'Not Found' });
       for (const name of input.labels) if (!issue.labels.includes(name)) f.label(issue.number, name);
@@ -98,6 +143,10 @@ function extend(f, w) {
     if ((m = /^\/issues\/(\d+)$/.exec(route)) && method === 'PATCH') {
       const issue = f.issues.get(Number(m[1])); if (!issue) return ok(404, { message: 'Not Found' });
       if (input.state === 'closed') f.close(issue.number);
+      if (input.state === 'open' && issue.state === 'closed') {
+        issue.state = 'open'; issue.state_reason = 'reopened';
+        issue.timeline.push({ id: String(f.nextEvent++), event: 'reopened', actor: f.owner, created: f.now() });
+      }
       if (input.body !== undefined) f.edit(issue.number, input.body);
       return ok(200, { number: issue.number, state: issue.state });
     }

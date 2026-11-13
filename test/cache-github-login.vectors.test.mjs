@@ -6,11 +6,9 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync,
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
-import { checkRuntimeHealth, readTryOwner, runCheck, runDoorCall, runTry } from '../src/runtime-client.mjs';
+import { checkRuntimeHealth, createTryTools, proseSha256, readTryOwner, runCheck, runDoorCall, runMcp, runTry } from '../src/runtime-seam.mjs';
 import { runShim } from '../src/try-doors.mjs';
-import { createTryTools, runMcp } from '../src/try-mcp.mjs';
-import { proseSha256 } from '../src/runtime-preflight.mjs';
-import { PLACE, fakeRuntime, filesUnder, harbor, portsFor, sink, temp } from './runtime-fake.mjs';
+import { PLACE, fakeRuntime, filesUnder, harbor, portsFor, sink, temp } from './helpers/runtime-fake.mjs';
 
 const CASES_PATH = new URL('./runtime/cache-github-login-cases.json', import.meta.url);
 
