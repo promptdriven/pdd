@@ -8,7 +8,7 @@ import {execFileSync} from 'node:child_process';
 const root=resolve(process.env.PDD_TEST_SOURCE_ROOT || new URL('../',import.meta.url).pathname);
 const load=p=>import(pathToFileURL(join(root,p)));
 const {fixture}=await load('test/helpers/workflow-delivery-fixture.mjs');
-const {harbor,PLACE}=await load('test/runtime-fake.mjs');
+const {harbor,PLACE}=await load('test/helpers/runtime-fake.mjs');
 const {stepDone,approveRun,openRun,runStatus,changeRun}=await load('src/workflow-runner.mjs');
 async function journalBoundary(){let policy;try{policy=await load('src/approval-policy.mjs');}catch(error){if(error.code!=='ERR_MODULE_NOT_FOUND')throw error;}assert.equal(typeof policy?.recordPromptApproval,'function','Required approval journal public contract is available');return policy;}
 async function recordPromptApproval(...args){return (await journalBoundary()).recordPromptApproval(...args);}

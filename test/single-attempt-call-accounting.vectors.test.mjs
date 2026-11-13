@@ -4,10 +4,9 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
-import { projectAnswer, renderJson } from '../src/runtime-output.mjs';
-import { runCheck } from '../src/runtime-client.mjs';
+import { projectAnswer, renderJson, runCheck } from '../src/runtime-seam.mjs';
 import { savedLostCheck } from '../src/workflow-results.mjs';
-import { harbor, ordinaryCapabilities, portsFor } from './runtime-fake.mjs';
+import { harbor, ordinaryCapabilities, portsFor } from './helpers/runtime-fake.mjs';
 
 const ENGINE = 'eae2202a68d00ab762fcbbf1eba0d8607a132a15';
 

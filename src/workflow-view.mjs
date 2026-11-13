@@ -5,9 +5,12 @@ import { isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { resolveRun } from './workflow-runs.mjs';
-import { findTests, interfaceBlocks, isSecretPath, LIMITS, proseSha256 } from './runtime-preflight.mjs';
-import { PROMPT_TESTS_WORDS } from './runtime-output.mjs';
+import { PROMPT_TESTS_WORDS, format, runtimeOutputSlice, runtimePreflightSlice, version } from './runtime-seam.mjs';
 import { resultLines } from './workflow-results.mjs';
+
+const { findTests, isSecretPath } = runtimePreflightSlice();
+runtimeOutputSlice();
+const { limits: LIMITS } = version();
 
 const execute = promisify(execFile);
 const text = value => String(value ?? '').replace(/[\x00-\x1f\x7f]/g, ' ').trim();
@@ -33,14 +36,12 @@ function readArtifact(root, path) {
   try { return readFileSync(file, 'utf8'); } catch { return null; }
 }
 function promptState(source) {
-  const blocks = interfaceBlocks(source);
+  const blocks = format.interfaceBlocks(source);
   if (!blocks.length) return null;
-  try {
-    const doc = JSON.parse(blocks[0][1]);
-    if (blocks.length !== 1 || !['draft', 'approved'].includes(doc?.status)) return 'invalid interface; needs person review';
-    if (doc.prose_sha256 !== proseSha256(source)) return `${doc.status === 'approved' ? 'stale approval' : 'stale draft hash'}; needs person review`;
-    return doc.status === 'approved' ? 'approved (current prose)' : 'draft; needs person review at the next ready gate';
-  } catch { return 'invalid interface; needs person review'; }
+  const doc = blocks[0].json;
+  if (blocks.length !== 1 || !['draft', 'approved'].includes(doc?.status)) return 'invalid interface; needs person review';
+  if (doc.prose_sha256 !== format.proseSha256(source)) return `${doc.status === 'approved' ? 'stale approval' : 'stale draft hash'}; needs person review`;
+  return doc.status === 'approved' ? 'approved (current prose)' : 'draft; needs person review at the next ready gate';
 }
 
 // This module deliberately uses no runner/chat helpers and never refreshes external state.

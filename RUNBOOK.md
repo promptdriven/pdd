@@ -359,6 +359,31 @@ node `<file>--op-<operation>--hex-<operation name in hex>`. `printf add | xxd -p
   A declared operation that the step did not use counts `0`. pdd does not check paths before it sends, so work out
   each path with these rules before the first check.
 
+**Check operations (`op`).** Exact checks satisfy criterion coverage; `exists` (without `html`) and `contains` are partial checks and must be paired with an exact check on the criterion.
+
+| `op` | Meaning | Example fields |
+|---|---|---|
+| `equals`, `not_equals` | Exact JSON value match or inequality | `"value": 3784` |
+| `one_of` | Actual value matches any listed candidate | `"value": ["pending", "queued"]` |
+| `count` | Length of an array | `"value": 4` |
+| `at_least` / `gte`, `at_most` / `lte`, `lt`, `gt` | Numeric or length bound (`"measure": "value"` default, or `"measure": "length"` for string code points or array items) | `"op": "at_most", "value": 500` |
+| `not_contains`, `all_in`, `equals_ignore_case` | Substring/item exclusion, array subset check, or case-insensitive ASCII string match | `"op": "all_in", "value": ["read", "write"]` |
+| `exists`, `contains` | Presence or substring/item containment (add `"html"` on `exists` for exact HTML selector checks) | `"op": "contains", "value": "Order #"` |
+
+**Cross-path relational checks.** For `equals`, `not_equals`, `at_least` / `gte`, `at_most` / `lte`, `lt`, and `gt` on `result`, `world`, or `calls`, compare against another live field from `"result"`, `"input"`, or `"world"` instead of a literal `value` (or pass `{"ref_target", "ref_path"}` as `"value"`):
+```json
+{"criterion_id": "AC1", "target": "result", "path": "/fee_cents", "op": "at_most", "ref_target": "input", "ref_path": "/cap_cents"}
+```
+Add `"ref_json_path"` when the referenced field is a JSON-encoded string, and `"measure": "length"` when comparing string or array lengths across paths.
+
+**Exact integer conservation (`integer_relation`).** Check exact integer equations or bounds (`"compare": "eq" | "le" | "ge"`) across `result`, `input`, and `world` without hardcoding components:
+```json
+{"criterion_id": "AC2", "target": "result", "path": "", "op": "integer_relation",
+ "value": {"compare": "eq", "left": {"sum": [{"field": "/payout_cents"}, {"field": "/fee_cents"}]},
+           "right": {"ref_target": "input", "ref_path": "/gross_cents"}}}
+```
+Terms use `{"field": "<pointer>"}` (relative to the check's `target`/`path`), `{"ref_target": "result" | "input" | "world", "ref_path": "<pointer>"}`, `{"integer": "100"}` (base-10 string), `{"sum": [...]}`, or `{"product": [...]}`.
+
 ## 9. Money and dates
 
 - Do all money math in whole cents. Write the rounding rule in the prose, with an example:
@@ -522,15 +547,16 @@ rules. Mark unowned surroundings `data-context-only="true"` or class `context-on
 accessibility prose; SVG source order does not set it. Preserve the declared fidelity and comparison requirements
 when a tool cannot check them; report that gap instead of treating admission as proof.
 
-Before building, run `pdd lint --local` (or add Story names) to see local SVG warnings with 0 AI calls and no network. It checks explicit control names, visible labels and named layout regions in both directions. A generic score field does not specify a drawn score box. Static vocabulary matching is advice: warnings name unmatched parts and never block or approve a prompt. Ordinary `pdd lint` includes this advice before its existing server lint. Resolve disagreements by making the prompt and drawing agree with the requested design.
+Before building, run `pdd lint --local` (or add Story names) to see local SVG warnings with 0 AI calls and no network. It checks explicit control names, visible labels and named layout regions in both directions, and warns when an HTML operation screen with a linked `.ui.svg` drawing has `"stylesheets": []` in its app map or names none of the CSS classes in its stylesheet. A generic score field does not specify a drawn score box. Static vocabulary matching is advice: warnings name unmatched parts and never block or approve a prompt. Ordinary `pdd lint` and `pdd test` include this advice before server work. Resolve disagreements by making the prompt, stylesheet and drawing agree with the requested design.
 
 Build reads the linked drawing as the layout spec under its declared purpose and fidelity. For a comparison-reference state, implement its required parts, words, ids and order. After building, serve the real page in that state and run:
 
 ```sh
 pdd test --screen http://127.0.0.1:8080/ --drawing prompts/views/active__stacked.ui.svg
+pdd test --screen http://127.0.0.1:8080/ --drawing prompts/views/active__stacked.ui.svg --look
 ```
 
-This uses installed headless Chrome/Chromium at the SVG viewport, no AI or interpreter calls. Set `PDD_CHROME_PATH` if the executable is not found. It checks every visible text occurrence and id, including numeric values, against the real page; metadata, hidden and context-only SVG subtrees are excluded. It requires visible page parts, center positions within 15% of each viewport dimension, and the same spatial order for separated parts. Arrange the named state and its dynamic values before comparing. This parts comparison does not certify pixel equivalence; retain any stricter accepted measured/exact comparator and tolerance. Text matches require effective visible glyph paint and literal displayed control labels; password and other nondisplayed stored values never supply labels. Applied clips, masks, filters and unsupported text paint or native formatting leave visibility unproved and return an error. Arbitrary overlay occlusion, colors and typography require separate verification.
+This uses installed headless Chrome/Chromium at the SVG viewport, no AI or interpreter calls. Set `PDD_CHROME_PATH` if the executable is not found. It checks every visible text occurrence and id, including numeric values, against the real page; metadata, hidden and context-only SVG subtrees are excluded. It requires visible page parts, center positions within 15% of each viewport dimension, and the same spatial order for separated parts. Adding `--look` also checks the main canvas color, painted card/section/control boxes (bare text inside an unstyled box fails), box dimensions and spacing between adjacent boxes within tolerance, never requiring pixel equality. Arrange the named state and its dynamic values before comparing. Retain any stricter accepted measured/exact comparator and tolerance. Text matches require effective visible glyph paint and literal displayed control labels; password and other nondisplayed stored values never supply labels. Applied clips, masks, filters and unsupported text paint or native formatting leave visibility unproved and return an error. Arbitrary overlay occlusion and typography require separate verification.
 
 For a Simulator Screen door, the comparator waits up to 10 seconds after page
 load for its readiness protocol, app fonts and layout. It reads only the marked
@@ -559,6 +585,7 @@ screens. It holds no code. Without it, the person uses forms (or a terminal for 
   `pdd simulate <story> --app-map <path> --new`. Without `--new`, pdd reuses the open simulation and does not send the map.
   Git must show the file. It must be an app map like the one below, not a page of your app (`public/index.html`).
   pdd checks that the map is JSON with the app-map schema version and a name. A bad explicit map stops the command; a bad default map is skipped with a warning.
+  Ordinary `pdd lint <story>` checks the Story's prompts and scenario (unless the scenario declares `"app_maps": ["app-map.json"]`); `pdd simulate <story> --new` checks `app-map.json` before starting Try.
 - **A screen from an operation** (`"source": "operation"`): the operation draws the screen. `format` is `html`, `text`
   or `grid`. `result_pointer` selects the drawing: `/html` (a string) or `/lines` (a list of strings). `stylesheets` lists CSS files.
   The interpreter cleans the drawn html. It removes the `background` style, `list-style` and `aria-pressed`. Write
@@ -579,8 +606,12 @@ screens. It holds no code. Without it, the person uses forms (or a terminal for 
 - **A handler** connects a tap or a key to an operation. `match` may use `id`, `region_id`, `callback`, `href`,
   `value`, `name` and `label`. Examples: `button` `{"value": "place-order"}` (html `<button value="place-order">`),
   `region` `{"region_id": "price-latte-m", "callback": "onAdd"}` (SVG), `key` `{"value": "n"}`. `state` replaces the
-  whole state: list every field, or give `null` to keep it. `after` runs more operations in order and puts a result
-  in the state (`"bind": "/order"`).
+  whole state: list every field, or give `null` to keep it.
+- **`after`** runs follow-up operations in order on the same world before the screen redraws. Each step has exact keys
+  `handler` (`{"prompt_path": "…", "operation": "…"}`), `input`, and `bind` (never top-level `prompt_path` or
+  `operation` on the step; wrong step keys are refused as `invalid-after-step`). `after` `input` templates may copy
+  values only from `/state` and the primary handler's `/result`; `bind` writes the whole typed `after` operation result
+  to a non-root state pointer whose parent objects exist in `initial_state` and are required in `state_schema`.
 - **`next`** always has these 3 keys. Stay on this screen: `{"kind": "same", "screen": null, "route_pointer": null}`.
   Go to a screen: `{"kind": "screen", "screen": "cart", "route_pointer": null}`. Use the router (only with a `router`):
   `{"kind": "route", "screen": null, "route_pointer": "/route"}`.
@@ -626,6 +657,31 @@ A full, small app map (a book list with 2 filter buttons; one screen from an ope
    "state": {"show": "all", "books": {"$ref": "/result/books"}}}]}
 ```
 `render` returns `{"html": "…"}` with `<button id="show-unread" value="show-unread">Only unread</button>`.
+
+An app map with a follow-up `after` step (`app-map.json`):
+```json
+{"schema_version": "prompt-runtime.app-map.v1", "name": "Machine Desk", "initial_screen": "desk", "initial_route": null,
+ "initial_state": {"draft": "ping", "panel": {"sent": 0, "reply": {"status": "idle"}}},
+ "state_schema": {"type": "object", "properties": {
+   "draft": {"type": "string"},
+   "panel": {"type": "object", "properties": {
+     "sent": {"type": "integer"},
+     "reply": {"type": "object", "properties": {"status": {"type": "string"}},
+       "required": ["status"], "additionalProperties": false}},
+     "required": ["sent", "reply"], "additionalProperties": false}},
+   "required": ["draft", "panel"], "additionalProperties": false},
+ "synthetic": true, "router": null, "routes": [], "stylesheets": [],
+ "screens": [{"id": "desk", "prompt_path": "prompts/desk_screen.prompt.md", "operation": "render", "source": "operation",
+   "format": "html", "input": {"draft": {"$ref": "/state/draft"}, "panel": {"$ref": "/state/panel"}}, "result_pointer": "/html"}],
+ "handlers": [{"screen": "desk", "kind": "button", "match": {"value": "send-ping"},
+   "handler": {"prompt_path": "prompts/machine_box.prompt.md", "operation": "send"},
+   "input": {"message": {"$ref": "/state/draft"}},
+   "next": {"kind": "same", "screen": null, "route_pointer": null},
+   "state": {"draft": "", "panel": {"sent": {"$ref": "/result/sent"}, "reply": {"$ref": "/state/panel/reply"}}},
+   "after": [{"handler": {"prompt_path": "prompts/reply_box.prompt.md", "operation": "read_reply"},
+     "input": {"sent": {"$ref": "/result/sent"}, "previous": {"$ref": "/state/panel/reply/status"}},
+     "bind": "/panel/reply"}]}]}
+```
 
 Cut from the Harbor Coffee app map (`…` marks cut parts):
 ```json
@@ -832,6 +888,12 @@ writes the `Runtime:` lines and one `Evidence:` line in the PR body. Autopilot c
 records. A line that the records do not support is red. The same rules, short enough for one read, are in
 `autopilot-job-rules.md` of the pdd-prompting skill; a job reads that file in full.
 
+- **Skill choice:** a fix that changes no product behavior uses `pdd-small-change`, also when the issue is written as a
+  bug. Pick `pdd-small-change` whenever every planned file takes unowned path `d` non-code files (docs, CI, lock files,
+  non-behavior config or metadata, or test-only maintenance — never `*.prompt.md` or `user_stories/*.md`), and write no
+  new Story or prompt for path `d` files. When a `pdd-small-change` run changes owned code (path `a`, `b` or `c`), keep
+  the Story test, replay and `Runtime:` evidence. A repair on a path-`d`-only PR keeps path `d` without adding a new
+  Story or prompt.
 - **Changed** means changed against the base: `git diff --name-only origin/BASE...HEAD` (BASE is the PR's base
   branch, usually `main`). It never means changed since the previous PR head. A Story or prompt that a merge from the
   base brought in is not changed. A changed Story is a Story whose Story file or test file changed, or whose test
@@ -903,6 +965,9 @@ records. A line that the records do not support is red. The same rules, short en
 
 For the reviewer:
 
+- Non-code path `d` files (docs, config, CI settings, `package.json`, lock files, and test files or fixtures) need no
+  prompt and no Story; never ask for a new prompt or Story for them, and treat a new prompt or Story added for a
+  non-code file as a must-fix.
 - Every choice that the issue did not settle must be listed in the PR body under "Choices Autopilot made:" with its
   reason (with "(changes public behavior: ...)" when users see a change); a missing or wrong line is a P2 must-fix
   (fix the list).

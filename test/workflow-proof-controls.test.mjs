@@ -16,9 +16,10 @@ function scratch(t) {
   for(const name of ['workflow-prove','workflow-prove-existing-tests','workflow-proof-pr','workflow-pr-labels']) {cpSync(`test/runtime/${name}.json`,join(root,`test/runtime/${name}.json`));cpSync(`test/${name}.vectors.test.mjs`,join(root,`test/${name}.vectors.test.mjs`));}
   cpSync('test/workflow-prove.test.mjs',join(root,'test/workflow-prove.test.mjs'));
   cpSync('test/workflow-prove.formal.test.mjs',join(root,'test/workflow-prove.formal.test.mjs'));
-  cpSync('test/runtime-fake.mjs',join(root,'test/runtime-fake.mjs'));
+  mkdirSync(join(root,'test/runtime-package'),{recursive:true});
+  cpSync('test/runtime-package/runtime-fake.mjs',join(root,'test/runtime-package/runtime-fake.mjs'));
   cpSync('test/fixtures',join(root,'test/fixtures'),{recursive:true});
-  cpSync('test/runtime-check.test.mjs',join(root,'test/runtime-check.test.mjs'));return root;
+  cpSync('test/runtime-package/runtime-check.test.mjs',join(root,'test/runtime-package/runtime-check.test.mjs'));return root;
 }
 function run(root,path,pattern) {
   const env={...process.env};delete env.NODE_TEST_CONTEXT;
@@ -36,7 +37,7 @@ for(const [label,name,path,before,after] of cases) test(`PROOF-CONTROL: actual $
   replace(root,path,before,after);const mutant=run(root,file);assert.equal(mutant.status,1,mutant.stdout+mutant.stderr);assert.match(mutant.stdout,/ERR_ASSERTION/);assert.match(mutant.stdout,/exact checks failed/);assert.doesNotMatch(mutant.stdout+mutant.stderr,/^(?:# )?(?:Error \[ERR_MODULE_NOT_FOUND\]|SyntaxError:)/m);
 });
 test('PROOF-CONTROL: restored whitespace tokenizer fails existing quoted-summary regression independently of prove admission',t=>{
-  const root=scratch(t),file='test/runtime-check.test.mjs',baseline=run(root,file,'RUNTIME-RUNBOOK-QUOTES');assert.equal(baseline.status,0,baseline.stdout+baseline.stderr);
+  const root=scratch(t),file='test/runtime-package/runtime-check.test.mjs',baseline=run(root,file,'RUNTIME-RUNBOOK-QUOTES');assert.equal(baseline.status,0,baseline.stdout+baseline.stderr);
   const path=join(root,file),source=readFileSync(path,'utf8'),start=source.indexOf('function runbookWords(command) {'),end=source.indexOf("test('RUNTIME-RUNBOOK-QUOTES",start);assert.ok(start>=0 && end>start);writeFileSync(path,source.slice(0,start)+'function runbookWords(command) { return command.split(/\\s+/); }\n\n'+source.slice(end));
   const mutant=run(root,file,'RUNTIME-RUNBOOK-QUOTES');assert.equal(mutant.status,1,mutant.stdout+mutant.stderr);assert.match(mutant.stdout,/RUNTIME-RUNBOOK-QUOTES/);assert.match(mutant.stdout,/ERR_ASSERTION/);assert.doesNotMatch(mutant.stdout+mutant.stderr,/workflow prove|ERR_MODULE_NOT_FOUND/);
 });
