@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { lintSvgLayouts } from '../src/svg-layout.mjs';
-import { temp } from './runtime-fake.mjs';
+import { temp } from './helpers/runtime-fake.mjs';
 
 // Independent formal oracle derived strictly from user_stories/svg-layout-controls.md
 // ("Rules to check") and prompts/cli/svg-layout.prompt.md ("Parts and advice").

@@ -9,9 +9,9 @@ import { fixture, packageRoot } from './helpers/workflow-runner-fixture.mjs';
 import { writeRun } from '../src/workflow-runs.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
 import * as runner from '../src/workflow-runner.mjs';
-import { captureSource } from '../src/runtime-preflight.mjs';
-import { runCheck } from '../src/runtime-client.mjs';
-import { fakeRuntime, portsFor, sink, storyTest } from './runtime-fake.mjs';
+import { captureSource } from '../src/runtime-seam.mjs';
+import { runCheck } from '../src/runtime-seam.mjs';
+import { fakeRuntime, portsFor, sink, storyTest } from './helpers/runtime-fake.mjs';
 
 const OLD = '20261027-170000-abcd';
 const PATH = 'tests/place-order.json';

@@ -8,7 +8,7 @@ import { CommandInputError, parseArgv } from '../src/argument-parser.mjs';
 import { PUBLIC_COMMAND_ROUTES } from '../src/command-catalog.mjs';
 import { renderCompletion } from '../src/completion.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
-import { harbor, root, sink, temp } from './runtime-fake.mjs';
+import { harbor, root, sink, temp } from './helpers/runtime-fake.mjs';
 
 // Bounded check of user_stories/new-command-names.md, Rules to check (RUNBOOK §17).
 // Oracle from the Story: `check` names `pdd test`, or `pdd lint` when `--lint` is one of its words; `try` names

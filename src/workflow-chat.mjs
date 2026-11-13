@@ -1,5 +1,5 @@
 import { launchProfile, chatAgentName, validLaunchProfile } from './workflow-launch-profile.mjs';
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 3a9c7a5f7c58e91e7d7335121a97b71b8ea92e00ea06dae8a681454857b9c22b).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 1f69a24142d1c9c6a10721dde708b9f59d280a2d394a52d638ad192126906d95).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, lstatSync, readdirSync, writeFileSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
@@ -939,7 +939,7 @@ export async function closeFinishedChats(run, ports = {}) {
     }
   }
   const finished = ports.force ? run.chats ?? [] : finishedChats(run);
-  const candidates = ports.onlyChat ? finished.filter(chat => chat.paneId === ports.onlyChat.paneId && chat.terminalId === ports.onlyChat.terminalId) : finished;
+  const candidates = ports.onlyChat ? finished.filter(chat => chat.paneId === ports.onlyChat.paneId && (chat.terminalId ?? null) === (ports.onlyChat.terminalId ?? null)) : finished;
   const confirmAbsent = async chat => {
     if (ports.dryRun || Number.isFinite(chat.closed?.confirmedAt)) return;
     chat.closed ??= {at: now(), reason: 'absent', screen: null};
@@ -968,23 +968,24 @@ export async function closeFinishedChats(run, ports = {}) {
         await confirmAbsent(chat);
         continue;
       }
+      const missingTerminal = chat.terminalId == null;
       if (!tab || tab.workspace_id !== chat.workspaceId || rows.length !== 1 || rows[0].workspace_id !== chat.workspaceId ||
-          rows[0].pane_id !== chat.paneId || !chat.terminalId || !rows[0].terminal_id)
+          rows[0].pane_id !== chat.paneId || (!missingTerminal && (typeof chat.terminalId !== 'string' || !chat.terminalId)) || !rows[0].terminal_id)
         { keep('chat-identity'); continue; }
       let native;
       try { native = (await herdr(['agent', 'get', chat.paneId])).result?.agent; if (!native) throw problem('invalid_agent_reply'); }
       catch (error) { if (error.code !== 'agent_not_found') throw error; }
-      const terminalChanged = rows[0].terminal_id !== chat.terminalId, restarted = terminalChanged || chat.closed?.restartTerminal === true;
-      if (restarted && (native || tab.label !== chat.area || chat.startUnconfirmed)) { keep('chat-identity'); continue; }
+      const terminalChanged = !missingTerminal && rows[0].terminal_id !== chat.terminalId, restarted = terminalChanged || chat.closed?.restartTerminal === true;
+      if ((restarted && native) || (restarted || missingTerminal) && (tab.label !== chat.area || chat.startUnconfirmed)) { keep('chat-identity'); continue; }
       const agent = chat.agent ?? run.agent;
       if (native && (native.pane_id !== chat.paneId || native.agent !== agent ||
           validSessionId(chat.session?.id) && native.agent_session?.kind === 'id' && native.agent_session.value !== chat.session.id))
         { keep('agent-identity'); continue; }
       if ((!ports.force || ports.reason === 'park') && native && !['idle','done'].includes(native.agent_status)) { keep('agent-busy'); continue; }
-      if ((!ports.force || restarted || ports.reason === 'park') && !native) await assertEmptyForeground(chat.paneId);
+      if ((!ports.force || restarted || missingTerminal || ports.reason === 'park') && !native) await assertEmptyForeground(chat.paneId);
       let id = validSessionId(chat.session?.id) ? chat.session.id : null;
       if (!id) {
-        const live = native ? await chatSession(chat, {...ports, run}) : null;
+        const live = native ? await chatSession(missingTerminal ? {...chat, terminalId: rows[0].terminal_id} : chat, {...ports, run}) : null;
         if (validSessionId(live?.sessionId)) id = live.sessionId;
         else { const own = await ownSession({run, chat, since: launchAnchor(chat), ports}); if (own.kind === 'match') id = own.id; }
       }
@@ -1001,7 +1002,7 @@ export async function closeFinishedChats(run, ports = {}) {
         screen = file;
       } catch { /* Session custody retains history for ordinary cleanup. */ }
       if (!screen && (ports.reason === 'park' || !id)) { keep('screen-unavailable'); continue; }
-      if (terminalChanged) chat.terminalId = rows[0].terminal_id;
+      if (terminalChanged || missingTerminal) chat.terminalId = rows[0].terminal_id;
       if (id) chat.session = {agent, id};
       chat.closed ??= {at: now(), reason: ports.reason ?? (ports.force ? 'cancel' : endedRun(run) ? 'run-end' : 'area-end'), screen};
       if (screen) chat.closed.screen = screen;
@@ -1012,7 +1013,7 @@ export async function closeFinishedChats(run, ports = {}) {
       const finalTabs = await inventory('tab', chat.workspaceId), finalPanes = await inventory('pane', chat.workspaceId);
       const finalRows = finalPanes.filter(p => p.tab_id === chat.tabId);
       if (!finalWorkspace || !samePath(finalWorkspace.worktree?.checkout_path,run.root) || !samePath(finalWorkspace.worktree?.repo_key,run.commonDir) || finalWorkspace.worktree?.is_linked_worktree !== true ||
-          !finalTabs.some(t => t.tab_id === chat.tabId && t.workspace_id === chat.workspaceId && (!restarted || t.label === chat.area)) || finalRows.length !== 1 || finalRows[0].workspace_id !== chat.workspaceId || finalRows[0].pane_id !== chat.paneId || finalRows[0].terminal_id !== chat.terminalId)
+          !finalTabs.some(t => t.tab_id === chat.tabId && t.workspace_id === chat.workspaceId && (!(restarted || missingTerminal) || t.label === chat.area)) || finalRows.length !== 1 || finalRows[0].workspace_id !== chat.workspaceId || finalRows[0].pane_id !== chat.paneId || finalRows[0].terminal_id !== chat.terminalId)
         { keep('chat-identity'); continue; }
       let finalNative;
       try { finalNative = (await herdr(['agent','get',chat.paneId])).result?.agent; if (!finalNative) throw problem('invalid_agent_reply'); }
@@ -1021,7 +1022,7 @@ export async function closeFinishedChats(run, ports = {}) {
         { keep('agent-identity'); continue; }
       if (restarted && finalNative) { keep('agent-identity'); continue; }
       if ((!ports.force || ports.reason === 'park') && finalNative && !['idle','done'].includes(finalNative.agent_status)) { keep('agent-busy'); continue; }
-      if ((!ports.force || restarted || ports.reason === 'park') && !finalNative) await assertEmptyForeground(chat.paneId);
+      if ((!ports.force || restarted || missingTerminal || ports.reason === 'park') && !finalNative) await assertEmptyForeground(chat.paneId);
       if (chat.paneId === (ports.env ?? process.env).HERDR_PANE_ID) { keep('caller-pane'); continue; }
       await ports.beforeClose?.();
       try {
@@ -1036,6 +1037,37 @@ export async function closeFinishedChats(run, ports = {}) {
     } catch (error) {
       if (['workflow_run_save_failed','checkpoint_required','workflow_progress_refused'].includes(error.code)) throw error;
       keep(error.code ?? 'cleanup-unavailable'); warnings.push(`warning: Herdr kept ${chat.area} (${warningReason(error)}).`);
+    }
+  }
+  if (!ports.dryRun && (ports.force && ports.reason !== 'park' || endedRun(run)) && !kept.length && (run.chats ?? []).every(chat => chat.closed) && run.layout == null && (run.chats ?? []).some(chat => chat.workspaceId)) {
+    try {
+      const workspaces = await inventory('workspace');
+      const savedIds = [...new Set((run.chats ?? []).map(chat => chat.workspaceId).filter(Boolean))];
+      const matches = workspaces.filter(w => samePath(w.worktree?.checkout_path, run.root) && samePath(w.worktree?.repo_key, run.commonDir) && w.worktree?.is_linked_worktree === true);
+      if (!matches.length && savedIds.every(id => !workspaces.some(w => w.workspace_id === id))) {
+        run.layout = { workspaceId: savedIds[0], phase: 'closed' };
+        if (typeof ports.checkpoint !== 'function') throw problem('checkpoint_required');
+        await ports.checkpoint(null, run.layout);
+      } else {
+        const w = matches.length === 1 ? matches[0] : null;
+        const label = `${run.repo?.split('/')[1]}#${run.number} ${run.workflow}`;
+        if (!w || w.label !== label || savedIds.some(id => id !== w.workspace_id)) throw problem('layout_cleanup_uncertain');
+        const tabs = await inventory('tab', w.workspace_id), panes = await inventory('pane', w.workspace_id);
+        if (tabs.length !== 1 || panes.length !== 1 || panes[0].workspace_id !== w.workspace_id || panes[0].tab_id !== tabs[0].tab_id || tabs[0].label !== '1' || !panes[0].terminal_id)
+          throw problem('layout_cleanup_uncertain');
+        const repoWorkspaceId = (run.chats ?? []).find(chat => chat.repoWorkspaceId)?.repoWorkspaceId;
+        run.layout = {
+          createdWorkspaceId: w.workspace_id, workspaceId: w.workspace_id,
+          ...(repoWorkspaceId ? { repoWorkspaceId } : {}),
+          tabId: panes[0].tab_id, paneId: panes[0].pane_id, terminalId: panes[0].terminal_id, rootLabel: tabs[0].label,
+        };
+        if (typeof ports.checkpoint !== 'function') throw problem('checkpoint_required');
+        await ports.checkpoint(null, run.layout);
+      }
+    } catch (error) {
+      if (['workflow_run_save_failed','checkpoint_required','workflow_progress_refused'].includes(error.code)) throw error;
+      kept.push({area:'run shell', reason:error.code ?? 'cleanup-unavailable'});
+      warnings.push(`warning: the run workspace stays open (${warningReason(error)}).`);
     }
   }
   if (!ports.dryRun && (ports.force || endedRun(run)) && !kept.length && (run.chats ?? []).every(chat => chat.closed) && run.layout?.workspaceId && run.layout.phase !== 'closed') {

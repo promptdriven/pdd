@@ -468,3 +468,156 @@ for (const [words, now, expected] of [
     assert.equal(/until/i.test(state), Date.parse(expected) > f.clock);
   }
 });
+
+test('Gemini startup warns about unattended shell safety stops', async t => {
+  const f = await fixture(t, { agent: 'gemini' });
+  const started = await f.run();
+  assert.match(started.message, /Gemini.*shell safety dialogs.*--yolo.*person.*unattended/i);
+});
+
+test('Gemini shell safety dialog appears in status without answering it', async t => {
+  const f = await fixture(t, { agent: 'gemini' });
+  await f.run();
+  const pane = f.herdr.paneOf(f.record().chats.at(-1));
+  pane.agent.agent_status = 'blocked';
+  for (const heading of ['CRITICAL SECURITY WARNING: Untrusted Command Flags Detected', 'CAUTION: Build Configuration Was Recently Modified']) {
+    pane.screen = `⚠ ${heading}\nThe command needs confirmation.\nAllow execution of [Shell]?\n● 1. Allow once\n  2. No, suggest changes (esc)\n`;
+    const before = f.herdr.calls.length;
+    const shown = await statusAll(f);
+    for (const words of [shown.detail, shown.line, shown.json.words]) assert.match(words, /Gemini shell-safety dialog.*pdd workflow open 17/);
+    assert.equal(shown.json.group, 'waiting');
+    assertOnlyReads(f, before);
+  }
+  pane.screen = 'Other question\n(Use Enter to select)\n';
+  assert.match((await statusAll(f)).detail, /the chat asks a question in its window/);
+});
+
+
+test('Gemini shell safety status names the menu when the second choice is selected', async t => {
+  const f = await fixture(t, { agent: 'gemini' });
+  await f.run();
+  const pane = f.herdr.paneOf(f.record().chats.at(-1));
+  pane.agent.agent_status = 'blocked';
+  const menu = '⚠ CRITICAL SECURITY WARNING: Untrusted Command Flags Detected\nAllow execution of [Shell]?\n  1. Allow once\n● 2. No, suggest changes (esc)\n';
+  for (const footer of ['', '(Use Enter to select)\n']) {
+    pane.screen = menu + footer;
+    const before = f.herdr.calls.length;
+    const shown = await statusAll(f);
+    for (const words of [shown.detail, shown.line, shown.json.words]) assert.match(words, /Gemini shell-safety dialog.*pdd workflow open 17/);
+    assertOnlyReads(f, before);
+  }
+});
+
+test('Gemini status keeps generic blocked words for stale or unreadable screens', async t => {
+  const f = await fixture(t, { agent: 'gemini' });
+  await f.run();
+  const pane = f.herdr.paneOf(f.record().chats.at(-1));
+  pane.agent.agent_status = 'blocked';
+  const old = '⚠ CRITICAL SECURITY WARNING: Untrusted Command Flags Detected\nAllow execution of [Shell]?\n● 1. Allow once\n  2. No, suggest changes (esc)\n';
+  for (const suffix of ['> \n', 'Another question?\n● 1. Yes\n  2. No\n(Use Enter to select)\n']) {
+    pane.screen = old + suffix;
+    const shown = await statusAll(f);
+    assert.match(shown.json.words, /the chat asks a question/);
+  }
+  const original = f.ports.herdr;
+  f.ports.herdr = async args => { if (args[0] === 'pane' && args[1] === 'read') throw Error('unavailable'); return original(args); };
+  assert.match((await statusAll(f)).json.words, /the chat asks a question/);
+});
+
+test('Gemini Ink bordered shell safety dialog above status bar is named while stale scrollback above Edit or normal Shell dialogs stays generic', async t => {
+  const f = await fixture(t, { agent: 'gemini' });
+  await f.run();
+  const pane = f.herdr.paneOf(f.record().chats.at(-1));
+  pane.agent.agent_status = 'blocked';
+
+  // (a) Real Gemini Ink <Box> with ANSI escapes, inner command box, padded rows, bottom border, and YOLO/model status bar
+  for (const heading of ['CRITICAL SECURITY WARNING: Untrusted Command Flags Detected', 'CAUTION: Build Configuration Was Recently Modified']) {
+    pane.screen = [
+      '> Read /tmp/from-issue.md',
+      '✦ Inspecting file.',
+      '╭──────────────────────────────────────────────────────────────────────╮',
+      '│ \x1b[33m? Shell\x1b[0m  cat /tmp/from-issue.md                                      │',
+      '│ ╭──────────────────────────────────────────────────────────────────╮ │',
+      '│ │ cat /tmp/from-issue.md                                           │ │',
+      '│ ╰──────────────────────────────────────────────────────────────────╯ │',
+      '│                                                                      │',
+      `│ ⚠  ⚠️ ${heading.padEnd(61, ' ')} │`,
+      '│    • /tmp/from-issue.md                                              │',
+      '│    Carefully verify before approving.                                │',
+      '│                                                                      │',
+      '│ Allow execution of [Shell]?                                          │',
+      '│                                                                      │',
+      '│ ● 1. Allow once                                                      │',
+      '│   2. No, suggest changes (esc)                                       │',
+      '│                                                                      │',
+      '│ (Use Enter to select)                                                │',
+      '╰──────────────────────────────────────────────────────────────────────╯',
+      'YOLO mode (ctrl + y to toggle)',
+      '~/work/project   no sandbox (see /docs)   gemini-2.5-pro (98% context left)',
+      '',
+    ].join('\n');
+    const before = f.herdr.calls.length;
+    const shown = await statusAll(f);
+    for (const words of [shown.detail, shown.line, shown.json.words]) assert.match(words, /Gemini shell-safety dialog.*pdd workflow open 17/);
+    assertOnlyReads(f, before);
+  }
+
+  // (b) Earlier shell-safety warning above > input line followed by non-shell Edit confirmation dialog -> generic blocked
+  for (const editQuestion of ['Allow execution of [Edit]?', 'Apply this change?']) {
+    pane.screen = [
+      '⚠ CRITICAL SECURITY WARNING: Untrusted Command Flags Detected',
+      'Allow execution of [Shell]?',
+      '● 1. Allow once',
+      '  2. No, suggest changes (esc)',
+      '> Edit src/index.mjs instead',
+      '╭──────────────────────────────────────────────────────────╮',
+      '│ ? Edit  src/index.mjs                                    │',
+      `│ ${editQuestion.padEnd(56, ' ')} │`,
+      '│ ● 1. Allow once                                          │',
+      '│   2. No, suggest changes (esc)                           │',
+      '│ (Use Enter to select)                                    │',
+      '╰──────────────────────────────────────────────────────────╯',
+      'YOLO mode (ctrl + y to toggle)',
+      '',
+    ].join('\n');
+    assert.match((await statusAll(f)).json.words, /the chat asks a question/);
+  }
+
+  // (c) Earlier quoted or resolved shell-safety warning followed by a normal non-tainted Allow execution of [Shell]? dialog -> generic blocked
+  for (const normalShellScreen of [
+    [
+      '> Check issue #2887',
+      '✦ Issue #2887 quotes CRITICAL SECURITY WARNING: Untrusted Command Flags Detected.',
+      '> Run git status',
+      'Allow execution of [Shell]?',
+      '● 1. Allow once',
+      '  2. No, suggest changes (esc)',
+      '(Use Enter to select)',
+      '',
+    ].join('\n'),
+    [
+      '> Check issue #2887',
+      '✦ Issue #2887 quotes CRITICAL SECURITY WARNING: Untrusted Command Flags Detected.',
+      '╭──────────────────────────────────────────────────────────╮',
+      '│ ? Shell  git status                                      │',
+      '│ ╭──────────────────────────────────────────────────────╮ │',
+      '│ │ git status                                           │ │',
+      '│ ╰──────────────────────────────────────────────────────╯ │',
+      '│ Allow execution of [Shell]?                              │',
+      '│ ● 1. Allow once                                          │',
+      '│   2. No, suggest changes (esc)                           │',
+      '│ (Use Enter to select)                                    │',
+      '╰──────────────────────────────────────────────────────────╯',
+      'YOLO mode (ctrl + y to toggle)',
+      '',
+    ].join('\n'),
+  ]) {
+    pane.screen = normalShellScreen;
+    assert.match((await statusAll(f)).json.words, /the chat asks a question/);
+  }
+});
+
+test('other agent startup does not warn about Gemini safety dialogs', async t => {
+  const f = await fixture(t, { agent: 'claude' });
+  assert.doesNotMatch((await f.run()).message, /Gemini shell safety dialogs/);
+});

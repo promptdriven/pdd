@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { lintSvgLayouts } from '../src/svg-layout.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
-import { portsFor, temp } from './runtime-fake.mjs';
+import { portsFor, temp } from './helpers/runtime-fake.mjs';
 
 const manifestPath = new URL('./runtime/svg-layout-controls-cases.json', import.meta.url);
 const manifestBytes = readFileSync(manifestPath);
