@@ -1,7 +1,7 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { summaryLine, storyLines, exitCodeFor } from '../src/runtime-output.mjs';
+import { summaryLine, storyLines, exitCodeFor } from '../src/runtime-seam.mjs';
 
 // Approved check-no-verdict Story: finite state-order proof, not a prose check.
 // Enumerate all ordered sequences of 0..4 rows over the seven states plus

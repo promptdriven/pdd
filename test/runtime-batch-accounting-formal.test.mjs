@@ -1,7 +1,7 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { projectAnswer, renderJson, summaryLine } from '../src/runtime-output.mjs';
+import { projectAnswer, renderJson, summaryLine } from '../src/runtime-seam.mjs';
 
 // Contract: runtime-output.prompt.md incomplete-accounting rule and the Story's
 // criterion 4 / Rules to check: only positively unsent work defaults to zero.

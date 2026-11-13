@@ -135,7 +135,9 @@ finite safe failure and exits 1. Do not load the launcher or remote settings.
 
 - [Regression detection](autopilot-regressions.prompt.md): required native generation/verification context for regression command dispatch.
 
-- [Interface drafting](interface-draft.prompt.md): required generation and verification context for local `runInterfaceDraft` and `missingInterfaces` dispatch. Automatic approval dispatch is owned by the prompt approval module.
+- [PDD to Runtime seam](runtime-seam.prompt.md): required generation and verification context for Runtime command and reader dispatch (`check`, `lint`, `simulate`, `jobs`, `mcp`, `draftInterfaces`, `contracts`, `loadInterfaceDraft`, and `causeText`).
+
+- [Interface drafting](interface-draft.prompt.md): required generation and verification context for local `draftInterfaces` (`runInterfaceDraft`) and `missingInterfaces` dispatch. Automatic approval dispatch is owned by the prompt approval module.
 
 - [Shared full-suite queue](test-suite-queue.prompt.md): required execution, status and paused inactivity contract.
 
@@ -231,13 +233,13 @@ The required [command catalog](command-catalog.prompt.md#help-forms) owns every 
 
 ## Local jobs
 
-For `runtime-jobs`, dynamically import [runtime slots](runtime-slots.prompt.md), pass the injected env/stdout/stderr to runJobs and return its exit code. Permit an injected slots module for native tests. No repository, gh, fetch, skill discovery, PATH probing or workflow runner is needed. Parsing remains catalog-owned. A listing failure prints one finite cause and returns5.
+For `runtime-jobs`, dynamically import the [Runtime seam](runtime-seam.prompt.md) (or an injected slots module for native tests, calling `jobs` or `runJobs`), pass the injected env/stdout/stderr to `jobs` and return its exit code. No repository, gh, fetch, skill discovery, PATH probing or workflow runner is needed. Parsing remains catalog-owned. A listing failure prints one finite cause and returns5.
 
 ## Runtime commands
 
 For the `prompt-approve` plan, import [prompt approve](prompt-approve.prompt.md) dynamically and return `runApprove({words, cwd, ...(options["--said"] !== undefined ? {said: options["--said"]} : {})}, {stdout, stderr, env})` unchanged.
 
-For the `runtime-check` and `runtime-try` plans, import the [runtime client](runtime-client.prompt.md) dynamically and call `runCheck` or `runTry` with the operands, the options and cwd, plus stdout, stderr and the injected env. Pass `cache:true` for every `runtime-check` plan (test and lint); the runtime client decides which modes use it. Return its exit code unchanged. The runtime client also owns local `lint --local` and `test --screen URL --drawing PATH`; dispatch them with the same operands, options, cwd and ports, without adding runtime authentication in this router. Help for test, lint and simulate stays local. If the client throws, write `pdd stopped with an internal error. If it sent checks, read them with pdd test --read. Do not send them again.` to stderr and return 3, because checks may have been sent.
+For the `runtime-check` and `runtime-try` plans, import the [Runtime seam](runtime-seam.prompt.md) dynamically and call `check`, `lint` (when `--lint` is set) or `simulate` with the operands (`words`), the options and cwd, plus stdout, stderr and the injected env. Pass `cache:true` for every `runtime-check` plan (test and lint); the runtime client decides which modes use it. Return its exit code unchanged. The runtime client also owns local `lint --local` and `test --screen URL --drawing PATH`; dispatch them with the same operands, options, cwd and ports, without adding runtime authentication in this router. Help for test, lint and simulate stays local. If the client throws, write `pdd stopped with an internal error. If it sent checks, read them with pdd test --read. Do not send them again.` to stderr and return 3, because checks may have been sent.
 
 For `workflow-view`, dynamically import [read-only review](workflow-view.prompt.md) and call `viewRun({ref: operands[0], cwd})`. Print the result once (stdout on success, stderr on failure) and return its exit code. This route must not import the workflow runner, inspect Herdr, or execute PATH version probes.
 
@@ -252,7 +254,7 @@ Pass the runner a `say` port that writes one line to stderr, so slow workflow st
 
 ## Try MCP transport and registration
 
-For local `mcp`, dynamically import [Try MCP](try-mcp.prompt.md) and return `runMcp({cwd, env}, {stdin, stdout, stderr})`. Accept injected `mcpServer` for tests. This route performs no PATH diagnostics, skill checks or stdout chatter; stdout belongs exclusively to MCP. A startup error prints one finite cause to stderr and returns 1.
+For local `mcp`, dynamically import the [Runtime seam](runtime-seam.prompt.md) and return `mcp({cwd, env}, {stdin, stdout, stderr})` (or `mcp` / `runMcp` on an injected `mcpServer` for tests). This route performs no PATH diagnostics, skill checks or stdout chatter; stdout belongs exclusively to MCP. A startup error prints one finite cause to stderr and returns 1.
 
 After setup's existing skills and project-block actions, dynamically import [agent MCP setup](agent-mcp-setup.prompt.md) and await `setupAgentMcp({env, packageRoot}, {stdin, stdout, stderr, confirm, interactive})`. Combine its failure with the existing exit status; preserve the earlier actions even if registration is declined or fails. Accept stdin (default process.stdin) and optional confirm as ports. Only registration is covered by its consent; the existing setup actions retain their behavior.
 
@@ -288,9 +290,8 @@ Runtime `dispatch.startRun` binds existing `workflowRunner.startRun(input, ports
 
 ## Local contract commands
 
-For `contracts` and `contracts-sync`, dynamically import
-[contract commands](contracts.prompt.md), allowing an injected contracts module
-for native tests. Call runContracts with words [] or ['sync'], parsed options unchanged,
+For `contracts` and `contracts-sync`, dynamically import the [Runtime seam](runtime-seam.prompt.md), allowing an injected contracts module
+for native tests. Call `contracts` (or `runContracts` on an injected test module) with words [] or ['sync'], parsed options unchanged,
 cwd and env/stdout/stderr; return its exit code. Do not do runtime authentication,
 slot admission, skill discovery or PATH probing here. A thrown error prints one
 finite local cause and returns 5. Catalog owns all syntax.
@@ -312,8 +313,8 @@ reply.
 ```json
 {
   "kind": "partial",
-  "status": "approved",
-  "prose_sha256": "9da72104900bcbb045382bfa98daed3c7f492f468171b1a12b586cdbfbdaca6e",
+  "status": "draft",
+  "prose_sha256": "242598f2f8487b6907fc00ca980dd266358bdaa401530b4bf0e428b3624f54d9",
   "entries": [
     {
       "operation": "runPdd",
@@ -1277,6 +1278,6 @@ Dispatch each metrics route to [metrics command](metrics-command.prompt.md) with
 
 Dispatch `autopilot-report` to the Autopilot launcher with command report and its operands in issues, with the same reply validation and stream rules and no remote settings warning. Dispatch `autopilot-intake` the same way with command intake and `--json` as `json`. For `autopilot-start`, also pass `--engine` as `engine` and `--label` as `label`, `--mode` as `mode`, `--report` as `report`, `--decisions` as `decisions` and `--intake` as `intake` when given.
 
-For interface-draft dispatch, pass parsed --contract as contract and the --extend/--refresh flags as extend/refresh to runInterfaceDraft alongside cwd, words, all and json. Forward stdout/stderr; drafting remains local.
+For interface-draft dispatch, pass parsed --contract as contract and the --extend/--refresh flags as extend/refresh to `draftInterfaces` alongside cwd, words, all and json. Forward stdout/stderr; drafting remains local.
 
 Route `pdd test --target code` to the local compiled Story checker without contacting the interpreter. Reject other test options except `--json` for this route.

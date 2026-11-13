@@ -1,7 +1,7 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { expandSource } from '../src/contract-refs.mjs';
+import { expandSource } from '../src/runtime/contract-refs.mjs';
 
 for (const seed of ['{}', '{ \n }']) {
   for (const key of ['x', '__proto__', 'constructor']) {

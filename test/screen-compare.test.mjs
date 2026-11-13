@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import { accessSync, chmodSync, constants, copyFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { compareScreen, formatScreenComparison } from '../src/screen-compare.mjs';
-import { runCheck } from '../src/runtime-client.mjs';
+import { runCheck } from '../src/runtime-seam.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { sink, temp } from './runtime-fake.mjs';
 

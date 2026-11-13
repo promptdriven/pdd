@@ -4,8 +4,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runPdd } from '../src/pdd-cli.mjs';
-import { runCheck } from '../src/runtime-client.mjs';
-import { findTests, preflight, scenarioShapeRefusal, captureSource, interfaceBlocks, proseSha256 } from '../src/runtime-preflight.mjs';
+import { runCheck, findTests, preflight, scenarioShapeRefusal, captureSource, interfaceBlocks, proseSha256 } from '../src/runtime-seam.mjs';
 import { harbor, fakeRuntime, portsFor, PLACE } from './runtime-fake.mjs';
 
 const TEST = 'tests/place-order.json';

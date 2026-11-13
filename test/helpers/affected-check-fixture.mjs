@@ -4,9 +4,9 @@ import {appendFileSync,existsSync,mkdirSync,readFileSync,rmSync,writeFileSync} f
 import {join,resolve} from 'node:path';
 import {spawn,spawnSync} from 'node:child_process';
 import {harbor,fakeRuntime,portsFor,root as packageRoot} from '../runtime-fake.mjs';
-import {runCheck} from '../../src/runtime-client.mjs';
+import {runCheck} from '../../src/runtime-seam.mjs';
 import {associateEvidenceWorkspace} from '../../src/workflow-runner.mjs';
-import {interfaceBlocks,proseSha256} from '../../src/runtime-preflight.mjs';
+import {interfaceBlocks,proseSha256} from '../../src/runtime-seam.mjs';
 export const disclaimer='Affected checks only; this is not a full workflow pass. Required full-pass gates still apply.';
 export const vectors=name=>JSON.parse(readFileSync(new URL(`../affected-checks/${name}-cases.json`,import.meta.url),'utf8'));
 export const git=(cwd,...args)=>{const r=spawnSync('git',args,{cwd,encoding:'utf8'});assert.equal(r.status,0,r.stderr);return r.stdout.trim();};

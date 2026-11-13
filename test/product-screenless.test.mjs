@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { composeProductTry } from '../src/product-composition.mjs';
+import { composeProductTry } from '../src/runtime-seam.mjs';
 
 const schema = { type: 'object', properties: {}, required: [], additionalProperties: false };
 function fixture() {

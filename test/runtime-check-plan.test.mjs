@@ -4,10 +4,9 @@ import assert from 'node:assert/strict';
 import {appendFileSync,readFileSync,writeFileSync,mkdirSync,unlinkSync} from 'node:fs';
 import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
-import {runCheck} from '../src/runtime-client.mjs';
+import {runCheck,buildCheckPlan,checkPlanResults} from '../src/runtime-seam.mjs';
 import {readRunResults} from '../src/workflow-results.mjs';
-import {findTests,interfaceBlocks,proseSha256} from '../src/runtime-preflight.mjs';
-import {buildCheckPlan,checkPlanResults} from '../src/runtime-check-plan.mjs';
+import {findTests,interfaceBlocks,proseSha256} from '../src/runtime-seam.mjs';
 import {harbor,fakeRuntime,portsFor,PLACE} from './runtime-fake.mjs';
 
 const git=(root,...args)=>{const r=spawnSync('git',args,{cwd:root,encoding:'utf8'});assert.equal(r.status,0,r.stderr);return r.stdout.trim();};
@@ -143,7 +142,8 @@ for(const mode of ['missing-interface','missing-bound','missing-call-bound','rec
   assert.ok(result.check_plan,'3114_PREREQUISITE_PLAN_MISSING');
   assert.equal(result.check_plan.prerequisites.length,1);
   assert.equal(result.check_plan.prerequisites[0].path,'prompts/broken.prompt.md');
-  assert.equal(result.check_plan.calls.maximum,null);assert.equal(clock.gh.length,0);
+  assert.equal(result.check_plan.calls.maximum,null);assert.equal(clock.gh.length,mode==='missing-interface'?2:0);
+  assert.equal(fake.posts.length,0);
   assert.equal(result.rows.length,2);assert.ok(result.rows.every(row=>row.calls===0));
   assert.equal(result.exit_code,4);
 });

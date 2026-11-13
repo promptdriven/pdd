@@ -5,7 +5,7 @@ import {join} from 'node:path';
 import {spawn} from 'node:child_process';
 import {pathToFileURL} from 'node:url';
 import {fixture,read,write,json,get,cases,pendingId,closed,implementation} from './helpers/runtime-workspace-fixture.mjs';
-import * as client from '../src/runtime-client.mjs';
+import * as client from '../src/runtime-seam.mjs';
 const retain=(f,saved=f.saved(),options={})=>{const message=client.saveDoorCase(f.root,saved,{env:f.env,...options});const id=pendingId(message);assert.ok(id,'2781 full received case must remain durably pending: '+message);return id;};
 const apply=async(f,id,ports={})=>{const lease=await client.acquireCaseWriteOwnership({root:f.root,testPath:f.second,handoff:closed(f.second)},{env:f.env});try{return await client.applyPendingCase({root:f.root,pendingId:id,writeOwnership:lease},{env:f.env,...ports});}finally{lease.release();}};
 const received=(f,id)=>JSON.parse(fs.readFileSync(join(f.state,'case-import',id.split('.')[0],id.split('.')[1]+'.received.json'),'utf8'));

@@ -9,11 +9,11 @@ import {tmpdir} from 'node:os';
 import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {syncBuiltinESMExports} from 'node:module';
-import {loadRuntimeWorkspace, allowsRuntimePath, requireRuntimePath} from '../src/runtime-workspace.mjs';
-import {captureSource, fillHashes, createStrictSourceAccess} from '../src/runtime-preflight.mjs';
-import {askAgent} from '../src/agent-adapters.mjs';
-import {saveDoorCase, acquireCaseWriteOwnership, applyPendingCase, runTry} from '../src/runtime-client.mjs';
-import {migrateRuntimeWorkspace} from '../src/runtime-workspace-migration.mjs';
+import {loadRuntimeWorkspace, allowsRuntimePath, requireRuntimePath} from '../src/runtime/runtime-workspace.mjs';
+import {captureSource, fillHashes, createStrictSourceAccess} from '../src/runtime-seam.mjs';
+import {askAgent} from '../src/runtime-seam.mjs';
+import {saveDoorCase, acquireCaseWriteOwnership, applyPendingCase} from '../src/runtime-seam.mjs';
+import {migrateRuntimeWorkspace, runTry} from '../src/runtime-seam.mjs';
 import {associateEvidenceWorkspace, readEvidenceEligibility} from '../src/workflow-runner.mjs';
 import {writeRun} from '../src/workflow-runs.mjs';
 
@@ -232,7 +232,7 @@ test('FORMAL case import: all 2 original targets × 2 worlds × 2 handoffs retai
       if (canAppend) {
         assert.deepEqual({...after, steps: after.steps.slice(0, -1)}, JSON.parse(original));
         const once = read(f.root, target);
-        const command = `import {saveDoorCase} from ${JSON.stringify(new URL('../src/runtime-client.mjs', import.meta.url).href)};` +
+        const command = `import {saveDoorCase} from ${JSON.stringify(new URL('../src/runtime-seam.mjs', import.meta.url).href)};` +
           `process.stdout.write(saveDoorCase(${JSON.stringify(f.root)},${JSON.stringify(saved)},{env:process.env}));`;
         const duplicate = spawnSync(process.execPath, ['--input-type=module', '-e', command], {cwd: f.root, env: f.env, encoding: 'utf8'});
         assert.equal(duplicate.status, 0, duplicate.stderr);
@@ -249,7 +249,7 @@ for (const distinct of [false, true]) test(`FORMAL case custody MCP: supplied st
   const f = fixture(t), processState = join(f.base, 'process-state'), requested = distinct ? join(f.base, 'requested-state') : processState;
   json(f.root, 'pdd-workspace.json', {allowed_paths: ['simulation/', 'tests/']});
   // The injected ports supply confirmed owner/action observations; the real MCP and save transaction run.
-  const command = `import {createTryTools} from ${JSON.stringify(new URL('../src/try-mcp.mjs', import.meta.url).href)};` +
+  const command = `import {createTryTools} from ${JSON.stringify(new URL('../src/runtime-seam.mjs', import.meta.url).href)};` +
     `const f=${JSON.stringify({root: f.root, prompt: f.prompt, story: f.story, target: f.tests[1], doc: f.doc, requested})};` +
     `const owner={root:f.root,test:{path:f.target,storyPath:f.story,doc:f.doc},record:{id:'formal-session',origin:'https://interpreter.example.invalid',login:'owner'},model:{entries:[{entry_path:f.prompt,operation:'order'}]},data:{count:0}};` +
     `const tools=createTryTools({cwd:f.root,env:{...process.env,PDD_STATE_DIR:f.requested}},{readTryOwner:async()=>owner,runDoorCall:async()=>({id:'formal-action',result:9,inputWorld:{count:0},world:{count:0}})});` +

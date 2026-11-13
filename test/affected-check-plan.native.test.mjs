@@ -4,8 +4,7 @@ import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync,mkdirSync,appendFileSync,unlinkSync,renameSync,symlinkSync} from 'node:fs';
 import {join,dirname} from 'node:path';
 import {spawnSync} from 'node:child_process';
-import {findTests,interfaceBlocks,proseSha256,captureSource} from '../src/runtime-preflight.mjs';
-import {buildCheckPlan,selectCheckTests} from '../src/runtime-check-plan.mjs';
+import {findTests,interfaceBlocks,proseSha256,captureSource,buildCheckPlan,selectCheckTests} from '../src/runtime-seam.mjs';
 import {temp,root as projectRoot} from './runtime-fake.mjs';
 import {affectedFixture,affectedRuntime,checks,cli,commit as commitAffected,installGh,put as putAffected} from './helpers/affected-check-fixture.mjs';
 

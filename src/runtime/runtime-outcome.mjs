@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-outcome.prompt.md (sha256: 9a0d07e75cccf95321abc8bc5bfb07552f87eda0a61b6896e653419100a99ba1).
+// Generated from prompts/cli/runtime-outcome.prompt.md (sha256: 6f45ebd1fd18ae8817648216473f9e9db3fb6edcfa632b1652adf0608fa01b22).
 // What happened to one selected test: the one place that turns a server answer into an outcome.
 export const PROVIDER_TEXT = 'the AI provider failed during the run. It is not a failed check. Do not send it again yet.';
 export const CHECK_STATES = Object.freeze(['waiting', 'sent', 'passed', 'failed', 'refused', 'partial', 'not run']);
@@ -25,8 +25,8 @@ export function resultOutcome(row = {}) {
 const objects = value => Array.isArray(value) ? value.filter(item => item && typeof item === 'object' && !Array.isArray(item)) : [];
 const count = value => Number.isSafeInteger(value) && value >= 0;
 const TERMINAL = new Set(['passed', 'failed', 'refused', 'not_run']);
-// Exit precedence: the first state present decides. Any state that is not a known end counts as unknown.
-const DECIDES = [['unknown', 3], ['not_run', 5], ['refused', 4], ['failed', 1], ['passed', 0]];
+// Group precedence: the first state present decides. Any state that is not a known end counts as unknown.
+const DECIDES = ['unknown', 'not_run', 'refused', 'failed', 'passed'];
 
 const refused = (refusals, extra = {}) => {
   const first = refusals[0] ?? {};
@@ -77,7 +77,7 @@ function lintOutcome(answer, refusals, test, steps, sourceFiles) {
   const own = [...refusals, ...objects(result?.problems ?? report?.problems)]
     .filter(item => (item.file ?? item.path) === test && item.severity !== 'warning');
   // The prompts the test reaches: each step's entry prompt and its declared call targets.
-  let draft = false, unlisted = false, reachedProblem = null;
+  let draft = false, lazyPending = false, unlisted = false, reachedProblem = null;
   if (Array.isArray(program?.prompts) || Array.isArray(program?.refused_prompts)) {
     const byPath = new Map(objects(program.prompts).map(prompt => [prompt.path, prompt]));
     const refusedPrompts = new Map(objects(program.refused_prompts).map(item => [item.path, item]));
@@ -93,11 +93,22 @@ function lintOutcome(answer, refusals, test, steps, sourceFiles) {
       else if (!prompt && !complete) unlisted = true;
       else if (!prompt) reachedProblem = problem('unknown-target', `${path} is not in the lint report.`);
       else if (state === 'stale') reachedProblem = problem('interface-stale', `${path} changed after its hash was filled or approved.`);
+      else if (state === 'missing' && prompt.lazy_interface_pending === true) {
+        lazyPending = true;
+        for (const dep of Array.isArray(prompt.dependencies) ? prompt.dependencies : []) {
+          if (typeof dep === 'string' && (byPath.has(dep) || refusedPrompts.has(dep))) queue.push(dep);
+        }
+      }
       else if (state !== 'approved' && state !== 'draft') reachedProblem = problem(`interface-${typeof state === 'string' && state ? state : 'unapproved'}`,
         `${path} has no usable Runtime interface.`);
       else {
-        draft ||= state === 'draft';
+        draft ||= state === 'draft' && prompt.lazy_interface !== true;
         for (const call of objects(prompt.interface?.calls)) if (typeof call.target === 'string') queue.push(call.target);
+        if (prompt.lazy_interface === true) {
+          for (const dep of Array.isArray(prompt.dependencies) ? prompt.dependencies : []) {
+            if (typeof dep === 'string' && (byPath.has(dep) || refusedPrompts.has(dep))) queue.push(dep);
+          }
+        }
       }
     }
   }
@@ -115,6 +126,9 @@ function lintOutcome(answer, refusals, test, steps, sourceFiles) {
           : [{ code: compatibility.state, message: compatibility.state }], { draft });
       }
       if (compatibility.state === 'supported' && compatibility.reported.complete) return { state: 'passed', draft };
+      if (lazyPending && complete && !own.length && compatibility.state === 'unknown' && compatibility.reported?.complete === false) {
+        return { state: 'passed', draft };
+      }
     }
     return notRun(compatibility.issue ?? 'selected compatibility is unknown or incomplete', compatibility.issue ?? 'no-server-verdict');
   }
@@ -265,13 +279,12 @@ export function progressText(outcomes) {
 
 export const outcomeDone = outcome => TERMINAL.has(outcome.state) || outcome.state === 'not run';
 
-// Module function: the state that decides a group's result, with the exit code's precedence.
+// Module function: the state that decides a group's result.
 export function outcomeOverall(outcomes, { interrupted = false, lintUnknown = false } = {}) {
   if (interrupted || lintUnknown || !outcomes.length || outcomes.some(outcome => outcome.state === 'partial')) return 'unknown';
   const present = new Set(outcomes.map(outcome => outcomeDone(outcome) ? outcome.state === 'not run' ? 'not_run' : outcome.state : 'unknown'));
-  return DECIDES.find(([state]) => present.has(state))[0];
+  return DECIDES.find(state => present.has(state));
 }
-export const outcomeExitCode = (outcomes, options) => new Map(DECIDES).get(outcomeOverall(outcomes, options));
 
 // Public aggregate keeps the deciding row's explanation, not a raw job's label.
 export function resultOverall(outcomes, options) {

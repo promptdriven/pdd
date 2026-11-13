@@ -3,9 +3,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {writeFileSync} from 'node:fs';
 import {join} from 'node:path';
-import {bindingCoverage} from '../src/runtime-bindings.mjs';
-import {proseSha256,findTests} from '../src/runtime-preflight.mjs';
-import {runCheck} from '../src/runtime-client.mjs';
+import {bindingCoverage} from '../src/runtime/runtime-bindings.mjs';
+import {proseSha256,findTests} from '../src/runtime-seam.mjs';
+import {runCheck} from '../src/runtime-seam.mjs';
 import {harbor,portsFor,PLACE} from './runtime-fake.mjs';
 
 function native(repo) {
@@ -33,7 +33,8 @@ test('candidate: valid native omissions do not become broken-test counts',async 
 });
 
 test('candidate: locally refused mixed inventory does not claim interpreter findings',async t=>{
-  const setup=harbor(t,repo=>{native(repo);writeFileSync(join(repo,'missing.prompt.md'),'# New behavior\n');}),ports=offline(setup);
+  const setup=harbor(t,repo=>{native(repo);writeFileSync(join(repo,'missing.prompt.md'),'# New behavior\n');});
+  const ports=portsFor({HOME:setup.home,PDD_STATE_DIR:setup.state},{gh:()=>({status:1,stdout:''}),fetch:()=>assert.fail('unexpected network')}).ports;
   assert.equal(await runCheck({cwd:setup.repo,options:{'--lint':true}},ports),4);
   assert.ok(ports.stdout.text.includes('missing.prompt.md'));
   assert.ok(ports.stdout.text.includes('cross-process filesystem locks'));

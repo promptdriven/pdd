@@ -1,7 +1,7 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createRunJudge,compareExpectation} from '../src/agent-judge.mjs';
+import {createRunJudge,compareExpectation} from '../src/runtime/agent-judge.mjs';
 const entry='prompts/main.prompt.md#main';
 const eq=(id,target,path,value)=>({criterion_id:id,target,path,op:'equals',value});
 const step=(id,input,checks)=>({step_id:id,entry_path:'prompts/main.prompt.md',operation:'main',input,checks});

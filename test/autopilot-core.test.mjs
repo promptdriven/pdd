@@ -2047,7 +2047,7 @@ test('I2 a changed prompt with a draft interface is red: one repair with the app
   assert.ok(repair, 'a draft interface starts a repair');
   assert.match(repair.input, /Changed prompts are not approved: prompts\/words\.prompt\.md/); assert.ok(repair.input.includes(WORDS));
   const approved = `# Words\n\nCount the words of a text.\n\n<details><summary>Runtime interface</summary>\n\n\`\`\`json\n${JSON.stringify({ status: 'approved', prose_sha256: '', operations: [] })}\n\`\`\`\n</details>\n`;
-  const { proseSha256: hash } = await import('../src/runtime-preflight.mjs');
+  const { proseSha256: hash } = await import('../src/runtime-seam.mjs');
   const text = approved.replace('"prose_sha256":""', `"prose_sha256":"${hash(approved)}"`);
   writeFileSync(join(w.job(17, 'repair').cwd, 'prompts', 'words.prompt.md'), text);
   const dir = join(w.git(w.cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir'), 'pdd'); mkdirSync(dir, { recursive: true });
@@ -2325,7 +2325,7 @@ test('L4 an exact conflict in the final step (add/add) starts an agent conflict 
 });
 
 // ---- Review 9 regressions (each failed on 5c8b7426c) -----------------------------------------------------------
-const { proseSha256 } = await import('../src/runtime-preflight.mjs');
+const { proseSha256 } = await import('../src/runtime-seam.mjs');
 const block9 = json => `<details><summary>Runtime interface</summary>\n\n\`\`\`json\n${json}\n\`\`\`\n</details>\n`;
 const approvedText = prose => {
   const text = `# Words\n\n${prose}\n\n${block9(JSON.stringify({ status: 'approved', prose_sha256: '', operations: [] }))}`;

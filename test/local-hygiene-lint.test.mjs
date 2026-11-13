@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { runPdd } from '../src/pdd-cli.mjs';
-import { proseSha256 } from '../src/runtime-preflight.mjs';
+import { proseSha256 } from '../src/runtime-seam.mjs';
 import { promptHeaderHash } from '../src/file-owner.mjs';
 import { fakeRuntime, harbor, portsFor, sink } from './runtime-fake.mjs';
 
@@ -138,8 +138,7 @@ test('local lint emits non-blocking warnings for all 4 hygiene traps and clears 
 });
 
 test('3295 elevated >1000-line prompt warning, >1000-line Story warning, preflight(), and pdd lint parity', async t => {
-  const { findTests, preflight } = await import('../src/runtime-preflight.mjs');
-  const { runCheck } = await import('../src/runtime-client.mjs');
+  const { findTests, preflight, runCheck } = await import('../src/runtime-seam.mjs');
   const setup = harbor(t, repo => {
     const elevatedBody = Array.from({ length: 1002 }, (_, idx) => `- Subsystem rule ${idx + 1}: enforce explicit authority checks.`).join('\n');
     const elevatedProse = `# Giant subsystem\n\nOwns \`src/giant.mjs\`.\n\n${elevatedBody}\n`;
@@ -192,7 +191,7 @@ test('3295 elevated >1000-line prompt warning, >1000-line Story warning, preflig
 });
 
 test('excuse comment scanner handles block comments, Python hash comments, and workspace path limits', async t => {
-  const { lintLocalHygiene } = await import('../src/runtime-preflight.mjs');
+  const { lintLocalHygiene } = (await import('../src/runtime-seam.mjs')).runtimePreflightSlice();
   const setup = harbor(t, repo => {
     write(repo, 'prompts/worker.prompt.md', withApprovedInterface('# Worker\n\nOwns `src/worker.mjs` and `src/helper.py`.\n\n', 'work'));
     write(repo, 'src/worker.mjs', [
@@ -234,7 +233,7 @@ test('strict boundary skips symlinks, ancestor symlinks, secret paths, and non-v
   const { symlinkSync } = await import('node:fs');
   const { mkdtempSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
-  const { lintLocalHygiene } = await import('../src/runtime-preflight.mjs');
+  const { lintLocalHygiene } = (await import('../src/runtime-seam.mjs')).runtimePreflightSlice();
 
   const outside = mkdtempSync(join(tmpdir(), 'pdd-hygiene-outside-'));
   writeFileSync(join(outside, 'leak.mjs'), '// Generated from prompts/app.prompt.md.\n// TODO: OUTSIDE-SYMLINK-LEAK\n');
@@ -292,7 +291,7 @@ test('strict boundary skips symlinks, ancestor symlinks, secret paths, and non-v
 });
 
 test('PR 1 prompt-before-code and opening-sentence config mentions avoid false positives while catching owned configs', async t => {
-  const { lintLocalHygiene } = await import('../src/runtime-preflight.mjs');
+  const { lintLocalHygiene } = (await import('../src/runtime-seam.mjs')).runtimePreflightSlice();
   const setup = harbor(t, repo => {
     write(repo, 'pdd.json', '{"strict_approvals":false}\n');
     write(repo, 'package.json', '{"name":"demo"}\n');
@@ -329,7 +328,7 @@ test('PR 1 prompt-before-code and opening-sentence config mentions avoid false p
 });
 
 test('PR 1 pdd-bindings.json modules[].module targets warn when absent from visibleSet while ignoring non-canonical/secret targets', async t => {
-  const { lintLocalHygiene } = await import('../src/runtime-preflight.mjs');
+  const { lintLocalHygiene } = (await import('../src/runtime-seam.mjs')).runtimePreflightSlice();
   const setup = harbor(t, repo => {
     write(repo, 'pdd-bindings.json', JSON.stringify({
       schema_version: 'pdd.bindings.v1',
@@ -359,7 +358,7 @@ test('PR 1 pdd-bindings.json modules[].module targets warn when absent from visi
 });
 
 test('excuse comment lexer handles postfix ++/--/! before division, Rust lifetimes, and Go raw strings', async t => {
-  const { lintLocalHygiene } = await import('../src/runtime-preflight.mjs');
+  const { lintLocalHygiene } = (await import('../src/runtime-seam.mjs')).runtimePreflightSlice();
   const setup = harbor(t, repo => {
     write(repo, 'prompts/polyglot.prompt.md', withApprovedInterface(
       '# Polyglot\n\nOwns `src/math.ts`, `src/slice.rs` and `src/path.go`.\n\n',

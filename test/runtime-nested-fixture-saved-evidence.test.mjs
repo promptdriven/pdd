@@ -2,7 +2,7 @@ import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { createSavedStoryEvidenceReader } from '../src/runtime-client.mjs';
+import { createSavedStoryEvidenceReader } from '../src/runtime-seam.mjs';
 
 // Synthetic accepted saved Check records; only raw observations are injected.
 const fixture = JSON.parse(readFileSync(new URL('./fixtures/product-saved-checks-owner.json', import.meta.url), 'utf8'));

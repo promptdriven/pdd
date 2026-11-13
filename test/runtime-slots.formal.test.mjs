@@ -1,7 +1,7 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { acquireRuntimeSlot } from '../src/runtime-slots.mjs';
+import { acquireRuntimeSlot } from '../src/runtime/runtime-slots.mjs';
 
 // Story oracle: a live occupied lease cannot be reclaimed. A sole waiter gets a
 // reservation exactly when the occupied count is less than the requested limit.

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync,readdirSync} from 'node:fs';
 import {join} from 'node:path';
-import {runTry} from '../src/runtime-client.mjs';
+import {runTry} from '../src/runtime-seam.mjs';
 import {fakeRuntime,harbor,portsFor} from './runtime-fake.mjs';
 
 const invoke=async(setup,fake,options={})=>{

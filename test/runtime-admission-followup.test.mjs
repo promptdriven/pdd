@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
-import { runCheck, runTry } from '../src/runtime-client.mjs';
-import { acquireRuntimeSlot, releaseRuntimeSlot } from '../src/runtime-slots.mjs';
+import { runCheck, runTry } from '../src/runtime-seam.mjs';
+import { acquireRuntimeSlot, releaseRuntimeSlot } from '../src/runtime/runtime-slots.mjs';
 import { harbor, fakeRuntime, portsFor } from './runtime-fake.mjs';
 
 const flush = () => new Promise(done => setImmediate(done));

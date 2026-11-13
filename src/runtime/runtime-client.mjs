@@ -1,35 +1,30 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: cf1a8a0d708b22ef5984257a1d75e6c2b6c70c24c7b2543ad2dcaa00aa258e1f).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 7f447564e584709321ddf32183b1499d14f9950818d1264eb61364ba5a77bc0c).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
 import { isRecentLintReceipt } from './runtime-lint-receipt.mjs';
-import {rememberSecrets} from './secret-redaction.mjs';
+import { rememberSecrets as fallbackRememberSecrets } from './secret-redaction.mjs';
 import { bindingPlanLines, bindingRefusals } from './runtime-binding-plan.mjs';
 import { buildCheckPlan, checkPlanResults, checkPlanLines, checkPlanResultLines, selectCheckTests, baselineReport } from './runtime-check-plan.mjs';
 import { interfaceFindings } from './interface-draft.mjs';
-import {readEvidenceEligibility} from './workflow-runner.mjs';
-import {allRuns} from './workflow-runs.mjs';
-import {assessNativeEvidence, resultLines, usableResult} from './workflow-results.mjs';
 import {loadRuntimeWorkspace,allowsRuntimePath,requireRuntimePath,RuntimeWorkspaceError} from './runtime-workspace.mjs';
 import { hasProgress, outcomeDone, outcomeFor, outcomeOverall, outcomeText, progressText, resultOutcome, resultOverall } from './runtime-outcome.mjs';
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
-import { loadAgentDefinitions } from './agent-config.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, constants, fstatSync, fsyncSync, lstatSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, readSync, renameSync, rmdirSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
 import { homedir, hostname } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
-import { DRAFT_SERVER_TEXT, NO_TESTS, PreflightError, TEST_SCHEMA, captureSource, scenarioShapeRefusal, checkInput, expectedTestPath, fillHashes, lintLocalHygiene, sharedSourceFiles, whyNoTests, findTests, formatSize, gitFiles, otherFiles,
-  discoveryRefusal, preflight, interfaceBlocks, executableInterfaceText, readPrompt, formatWarningLines, schemaKeywordWarningLines, missingCliImplementationWarnings, prepareHashSelection, selectTests, sourceFilePort, sha256, STALE_HINT, staleHint } from './runtime-preflight.mjs';
+import { createInterface } from 'node:readline';
+import { DRAFT_SERVER_TEXT, PreflightError, TEST_SCHEMA, captureSource, scenarioShapeRefusal, checkInput, fillHashes, lintLocalHygiene, sharedSourceFiles, findTests, formatSize, gitFiles, otherFiles,
+  discoveryRefusal, preflight, hasPromptInterface, interfaceBlocks, executableInterfaceText, readPrompt, formatWarningLines, schemaKeywordWarningLines, missingCliImplementationWarnings, prepareHashSelection, sourceFilePort, sha256, STALE_HINT, staleHint } from './runtime-preflight.mjs';
 import { catalogRecords, compareCopies } from './contract-refs.mjs';
-import { askApproval, lineReader, promptPath } from './prompt-approve.mjs';
-import { OPEN_STATES, causeText, cleanText, exitCodeFor, progressTicker, projectAnswer, refusalView, renderJson, renderText, summaryLine, stepTimeLimit, tokenUsageOf, tryUsage, validLink, coverageText } from './runtime-output.mjs';
-import { lintSvgLayouts } from './svg-layout.mjs';
-import { compareScreen, formatScreenComparison } from './screen-compare.mjs';
+import { OPEN_STATES, causeText, cleanText, progressTicker, projectAnswer, refusalView, renderJson, renderText, summaryLine, stepTimeLimit, tokenUsageOf, tryUsage, validLink, coverageText } from './runtime-output.mjs';
 
 const localInterfaceProblem = problem => ['interface-missing','interface-kind-invalid','native-reason-missing','interface-draft-incomplete'].includes(problem.code);
+const unboundPortError = message => Object.assign(new Error(message), { unboundPort: true });
 // The preflight owner's local format advice (#3206): an explicit full kind in a draft and unsupported schema
 // keywords are warnings in lint and the files preview, never refusals; the engine is the one place that refuses.
 // It reads the selected entry prompts and the prompts they call.
@@ -46,6 +41,19 @@ function formatAdvice(root, visible, paths, workspace) {
   for (const path of paths) visit(path);
   return lines;
 }
+function hasMissingPromptInterface(root, found, startPaths) {
+  const seen = new Set(), queue = [...startPaths];
+  while (queue.length) {
+    const path = queue.shift();
+    if (typeof path !== 'string' || seen.has(path) || !found.visible.has(path)) continue;
+    seen.add(path);
+    let prompt;
+    try { prompt = readPrompt(root, found.visible, path, found.workspace); } catch { continue; }
+    if (prompt.error === 'interface-missing') return true;
+    for (const call of Array.isArray(prompt.interface?.calls) ? prompt.interface.calls : []) if (typeof call?.target === 'string') queue.push(call.target);
+  }
+  return false;
+}
 const entryPaths = tests => tests.filter(test => !test.error).flatMap(test => (Array.isArray(test.doc?.steps) ? test.doc.steps : []).map(step => step?.entry_path));
 
 // The one place in pdd that names the PDD runtime address; PDD_RUNTIME_URL overrides it.
@@ -56,7 +64,13 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const BATCH = /^\d{8}-\d{6}-[a-z0-9]{4}$/;
 // pdd's local rules match this engine build (checked Oct 27; spec OPEN 9: warn when the runtime runs another one).
 const ENGINE_SHA = 'eae2202a68d00ab762fcbbf1eba0d8607a132a15';
-const PDD_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+export function defaultLineReader(stdin) {
+  const reader = createInterface({ input: stdin }), lines = [], waiting = [];
+  let closed = false;
+  reader.on('line', text => { const next = waiting.shift(); if (next) next(text); else lines.push(text); });
+  reader.on('close', () => { closed = true; for (const next of waiting.splice(0)) next(''); });
+  return { ask: () => lines.length ? Promise.resolve(lines.shift()) : closed ? Promise.resolve('') : new Promise(done => waiting.push(done)), close: () => reader.close() };
+}
 // The same engine: the full sha or a prefix of it with at least 7 hex digits.
 const sameEngine = sha => { const value = sha.toLowerCase(); return /^[0-9a-f]{7,40}$/.test(value) && ENGINE_SHA.startsWith(value); };
 const POST_MS = 90_000, GET_MS = 30_000, TRY_MS = 300_000, MAX_READS = 8, PROGRESS_MS = 30_000;
@@ -106,8 +120,39 @@ function withDefaults(ports) {
     if (!unsubscribe) unsubscribe = subscribe(() => { for (const listener of [...handlers]) listener(); });
     return () => { handlers.delete(handler); if (!handlers.size) { unsubscribe?.(); unsubscribe = null; } };
   };
+  const findTestsBound = ports.findTests ?? (input => findTests(input, ports));
+  const defaultCaptureSource = (root, options) => captureSource(root, options, ports);
+  defaultCaptureSource.isDefaultCapture = true;
+  const captureSourceBound = ports.captureSource ?? defaultCaptureSource;
+  const fillHashesBound = ports.fillHashes ?? (input => fillHashes(input, ports));
+  const selectTestsBound = (found, words, options = {}) => {
+    if (typeof ports.selectTests !== 'function') throw unboundPortError('Test selection port (selectTests) is not bound.');
+    return ports.selectTests(found, words, { ...options, captureSource: options.captureSource ?? captureSourceBound });
+  };
+  const expectedTestPathBound = storyPath => {
+    if (typeof ports.expectedTestPath !== 'function') throw unboundPortError('Test selection port (expectedTestPath) is not bound.');
+    return ports.expectedTestPath(storyPath);
+  };
+  const whyNoTestsBound = (root, visible, found) => {
+    if (typeof ports.whyNoTests !== 'function') throw unboundPortError('Test selection port (whyNoTests) is not bound.');
+    return ports.whyNoTests(root, visible, found, {
+      allowsPath: (r, p) => allowsRuntimePath(loadRuntimeWorkspace({ root: r }), p),
+      hasInterfaceBlock: hasPromptInterface,
+      discoverTests: (r, files) => findTestsBound({ root: r, files }),
+    });
+  };
+  const noTestsMessage = () => {
+    const value = ports.noTestsMessage ?? ports.NO_TESTS;
+    if (typeof value !== 'string') throw unboundPortError('Test selection port (NO_TESTS) is not bound.');
+    return value;
+  };
+  const exitCodeForBound = (rows, options) => {
+    if (typeof ports.exitCodeFor === 'function') return ports.exitCodeFor(rows, options, { outcomeOverall });
+    if (typeof ports.exitFor === 'function') return ports.exitFor(outcomeOverall(rows, options));
+    throw unboundPortError('Exit code port (exitCodeFor or exitFor) is not bound.');
+  };
   return {
-    env, baselineFiles: ports.baselineFiles, baselineIdentity: ports.baselineIdentity, evidencePorts: ports.evidencePorts, readEvidenceEligibility: ports.readEvidenceEligibility, checkPlanPorts: ports.checkPlanPorts, caseHandoff:ports.caseHandoff, cacheFiles: ports.cacheFiles ?? nativeCacheFiles, cacheHash: ports.cacheHash ?? sha256, acquireBatchLock: ports.acquireBatchLock ?? acquireRuntimeBatchLock, timers: ports.timers, random: ports.random, captureSource: ports.captureSource ?? captureSource, fillHashes: ports.fillHashes ?? fillHashes, prepareHashSelection: ports.prepareHashSelection, slotFiles: ports.slotFiles, isAlive: ports.isAlive, pid: ports.pid, agentBridge: ports.agentBridge, discoverAgents: ports.discoverAgents, askAgent: ports.askAgent, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
+    env, baselineFiles: ports.baselineFiles, baselineIdentity: ports.baselineIdentity, checkPlanPorts: ports.checkPlanPorts, tryLauncherUrl: ports.tryLauncherUrl, redaction: ports.redaction, redactSecrets: ports.redactSecrets, rememberSecrets: ports.rememberSecrets, clientVersion: ports.clientVersion, workflowBaseSha: ports.workflowBaseSha, headerPrompts: ports.headerPrompts, resolveOwners: ports.resolveOwners, promptClaims: ports.promptClaims, isTestOwnedPath: ports.isTestOwnedPath, evidenceEligibility: ports.evidenceEligibility, readEvidenceEligibility: ports.readEvidenceEligibility, evidencePorts: ports.evidencePorts, allRuns: ports.allRuns, assessNativeEvidence: ports.assessNativeEvidence, usableResult: ports.usableResult, resultLines: ports.resultLines, parseProductDocuments: ports.parseProductDocuments, parseProductWorldWriters: ports.parseProductWorldWriters, loadAgentDefinitions: ports.loadAgentDefinitions, agents: ports.agents, guidePorts: ports.guidePorts, askApproval: ports.askApproval, promptPath: ports.promptPath, lineReader: ports.lineReader ?? defaultLineReader, lintSvgLayouts: ports.lintSvgLayouts, compareScreen: ports.compareScreen, formatScreenComparison: ports.formatScreenComparison, caseHandoff:ports.caseHandoff, cacheFiles: ports.cacheFiles ?? nativeCacheFiles, cacheHash: ports.cacheHash ?? sha256, acquireBatchLock: ports.acquireBatchLock ?? acquireRuntimeBatchLock, timers: ports.timers, random: ports.random, findTests: findTestsBound, captureSource: captureSourceBound, fillHashes: fillHashesBound, prepareHashSelection: ports.prepareHashSelection, isStoryPath: ports.isStoryPath, hasAcceptance: ports.hasAcceptance, matchTests: ports.matchTests, orphanSummary: ports.orphanSummary, selectTests: selectTestsBound, expectedTestPath: expectedTestPathBound, whyNoTests: whyNoTestsBound, noTestsMessage, exitCodeFor: exitCodeForBound, exitFor: ports.exitFor, promptTestsLabel: ports.promptTestsLabel, slotFiles: ports.slotFiles, isAlive: ports.isAlive, pid: ports.pid, agentBridge: ports.agentBridge, discoverAgents: ports.discoverAgents, askAgent: ports.askAgent, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
     gh: ports.gh ?? (args => {
       const executable = authExecutable(env, ports.ghPath);
       return executable ? spawnSync(executable, args, { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 })
@@ -175,7 +220,7 @@ export function readContractHistory({root,env = process.env},ports={}) {
   const warnings = [], latest = new Map();
   const empty = story_path => ({story_path,baseline:'not-checked',checked_at:null,result_state:null,files:[],references:[]});
   try {
-    const found = findTests({root});
+    const found = ports.findTests ? ports.findTests({root}) : findTests({root},ports);
     for (const story of found.stories) latest.set(story.path,{value:empty(story.path),time:-Infinity,id:''});
     const directory = join(stateDirectory(env,root),'batches');
     let entries;
@@ -189,7 +234,7 @@ export function readContractHistory({root,env = process.env},ports={}) {
       if (!BATCH.test(name) || !statOrNull(join(directory,name))?.isDirectory() || statOrNull(join(directory,name))?.isSymbolicLink()) continue;
       const folder=join(directory,name), saved=read(join(folder,'batch.json'));
       if (!saved || saved.intent === 'lint-only' || !Array.isArray(saved.rows)) continue;
-      const eligibility=(ports.readEvidenceEligibility??readEvidenceEligibility)({root,producerRoot:saved.root,tests:[...new Set(saved.rows.map(row=>row?.test))],source_sha256:saved.source_sha256,runId:saved.association?.runId??null,stage:saved.association?.stage??null},{env,...ports.evidencePorts});
+      const eligibility=(ports.evidenceEligibility??ports.readEvidenceEligibility??(() => ({state:'unavailable',reason:'workflow evidence eligibility port is not bound'})))({root,producerRoot:saved.root,tests:[...new Set(saved.rows.map(row=>row?.test))],source_sha256:saved.source_sha256,runId:saved.association?.runId??null,stage:saved.association?.stage??null},{env,...ports.evidencePorts});
       if(eligibility.state!=='eligible'&&(saved.root!==root||saved.association))continue;
       for (const row of saved.rows) {
         const snapshot = saved.contract_snapshots?.find(item=>item.tests?.includes(row.test));
@@ -212,7 +257,7 @@ export function readContractHistory({root,env = process.env},ports={}) {
         }
       }
     }
-  } catch (error) { warnings.push(`Local Check history is unavailable: ${cleanText(error.message).slice(0,500)}`); }
+  } catch (error) { if (error?.unboundPort) throw error; warnings.push(`Local Check history is unavailable: ${cleanText(error.message).slice(0,500)}`); }
   return {stories:[...latest.values()].map(row=>warnings.length && row.value.baseline==='not-checked' ? {...row.value,baseline:'unavailable'} : row.value).sort((a,b)=>a.story_path<b.story_path?-1:a.story_path>b.story_path?1:0),warnings:[...new Set(warnings)]};
 }
 
@@ -281,7 +326,7 @@ async function readBaselineReport(context, plan, identity) {
       partial=true;warn('Some saved Check batches lack a safe original selection.');continue;
     }
     let admission;
-    try { admission = await (ports.readEvidenceEligibility ?? readEvidenceEligibility)({root,producerRoot:saved.root,tests,source_sha256:saved.source_sha256,runId:saved.association?.runId??null,stage:saved.association?.stage??null}, {env:ports.env,captureSource:ports.captureSource,...ports.evidencePorts}); }
+    try { const eligibilityPort = ports.evidenceEligibility ?? ports.readEvidenceEligibility ?? (() => ({state:'unavailable',reason:'workflow evidence eligibility port is not bound'})); admission = await eligibilityPort({root,producerRoot:saved.root,tests,source_sha256:saved.source_sha256,runId:saved.association?.runId??null,stage:saved.association?.stage??null}, {env:ports.env,captureSource:ports.captureSource,...ports.evidencePorts}); }
     catch { admission = null; }
     const sameRoot = await real(saved.root) === await real(root);
     if (admission?.state !== 'eligible' && (!sameRoot || saved.association)) { partial=true;warn('Some saved Check history was not admitted by workspace ownership.');continue; }
@@ -306,7 +351,8 @@ async function readBaselineReport(context, plan, identity) {
           if (typeof native.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(native.sha256)) throw Error('original native capture unavailable');
           if (native.sha256 !== nativeIdentity.sha256) currentness='stale';
         }
-      } catch {
+      } catch (error) {
+        if (error?.unboundPort) throw error;
         if (currentness !== 'stale') currentness='unavailable';
         partial=true;warn('Some original-batch source selections are unavailable.');
       }
@@ -451,7 +497,7 @@ async function readSavedStoryEvidence({ root, comparisonRoot = root, withTests =
   const read = ports.readFile ?? (path => readFileSync(path, 'utf8'));
   const list = ports.readDir ?? (path => readdirSync(path));
   const canonical = ports.realpath ?? realpathSync;
-  const capture = ports.captureSource ?? captureSource;
+  const capture = ports.captureSource ?? ((r, opts) => captureSource(r, opts, ports));
   const stories = [], warnings = [];
   const warning = (path, error) => warnings.push(`Could not read saved checks ${path} (${cleanText(error?.code ?? error?.message ?? 'invalid record')}).`);
   const legacyHint = () => warnings.push('Older checks are not counted; run pdd test again.');
@@ -498,7 +544,7 @@ async function readSavedStoryEvidence({ root, comparisonRoot = root, withTests =
         const source = await captures.get(key);
         if (source.error) throw source.error;
         current = source.sha256 === batch.source_sha256;
-      } catch (error) { warning(path, error); }
+      } catch (error) { if (error?.unboundPort) throw error; warning(path, error); }
     }
     const selected = new Map(), sent = new Map(), grouped = new Map(), extra = new Map();
     // withTests: the failed checks, refusals and states of each Story's rows, and the rows that were never sent.
@@ -738,12 +784,19 @@ async function ownBatch(context, name) {
   }
 }
 
-function signIn(gh, store) {
+function recordSecret(ports, ...values) {
+  const remember = ports?.redaction?.remember;
+  if (remember) remember(...values);
+  if (ports?.rememberSecrets && ports.rememberSecrets !== remember) ports.rememberSecrets(...values);
+  if (!remember && !ports?.rememberSecrets) fallbackRememberSecrets(...values);
+}
+
+function signIn(gh, store, ports) {
   const token = gh(['auth', 'token']);
   if (token.error?.code === 'ENOENT') throw new Stop(5, 'Install the GitHub CLI, then run gh auth login');
   const value = token.status === 0 ? String(token.stdout ?? '').trim() : '';
   if (!value) throw new Stop(5, 'Run gh auth login');
-  rememberSecrets(value);
+  recordSecret(ports, value);
   if (store) store.secrets = [value];
   const user = gh(['api', 'user', '--jq', '.login + " " + (.id|tostring)']);
   const [login, id] = user.status === 0 ? String(user.stdout ?? '').trim().split(' ') : [];
@@ -834,7 +887,7 @@ export async function checkRuntimeHealth({ env = process.env } = {}, givenPorts 
   try { origin = runtimeOrigin(env); } catch { return { state: 'access', detail: 'PDD_RUNTIME_URL is not an HTTPS origin', fix: HEALTH_ADDRESS }; }
   let token = '';
   try { const reply = ports.gh(['auth', 'token']); token = reply.status === 0 ? String(reply.stdout ?? '').trim() : ''; } catch { token = ''; }
-  rememberSecrets(token);
+  recordSecret(ports, token);
   if (!token) return { state: 'access', detail: 'no gh sign-in', fix: HEALTH_SIGN_IN };
   const reply = await new Runtime({ origin, token, ports }).send('/v1/capacity', { method: 'GET' }, givenPorts.timeoutMs ?? 10_000);
   if (reply.lost) return { state: 'unavailable', detail: reply.unreachable ? 'not reached' : 'no answer' };
@@ -1226,6 +1279,21 @@ async function readCapacity(context, deadline, refresh) {
     }
   }
 }
+async function probeLazyInterfaces(context, origin, store) {
+  if (context.lazyInterfacesProbed) return !!context.allowMissingInterfaces;
+  context.lazyInterfacesProbed = true;
+  let identity;
+  try { identity = signIn(context.ports.gh, store, context.ports); }
+  catch (error) { if (error instanceof Stop) return false; throw error; }
+  const probe = { origin, identity, ports: context.ports, signal: context.signal, interrupted: context.interrupted };
+  const reply = await readCapacity(probe, context.ports.now() + GET_MS, false);
+  if (reply?.status !== 200 || !Array.isArray(reply.json?.features)) return false;
+  context.probedIdentity = identity;
+  context.serverFeatures = reply.json.features;
+  context.serverEngineSha = reply.json.engine_sha ?? null;
+  context.allowMissingInterfaces = reply.json.features.includes('lazy-interfaces');
+  return context.allowMissingInterfaces;
+}
 async function capacityReady(context, deadline, busyRow = null) {
   let refresh = !!context.admissionMaintenance;
   while (!context.interrupted && !context.stopped && !context.sendError && context.ports.now() < deadline) {
@@ -1355,10 +1423,10 @@ function batchId(now, uuid) {
 }
 
 // Local setup for a check or a try: root, tests, selected rows.
-function localSetup(cwd, words) {
+function localSetup(cwd, words, ports) {
   const root = repoRoot(cwd), names=gitFiles(root), workspace=loadRuntimeWorkspace({root});
   for(const word of words){const path=relative(realpathSync(root),resolve(realpathSync(cwd),word)).split(sep).join('/');if(names.includes(path))requireRuntimePath(workspace,{path,from:'Selected source'});}
-  const found = findTests({ root, files: names, excludeFixtureProjects: words.length === 0 });
+  const found = ports.findTests({ root, files: names, excludeFixtureProjects: words.length === 0 });
   const realCwd = realpathSync(cwd), realRoot = realpathSync(root);
   const normalized = words.map(word => {
     const rel = relative(realRoot, resolve(realCwd, word)).split(sep).join('/');
@@ -1372,16 +1440,16 @@ function localSetup(cwd, words) {
 const sentTests = rows => rows.filter(row => !row.unsent && !row.native_only?.length).map(row => row.test);
 const unmatchedLines = found => (found.orphans ?? []).map(item => `Warning: ${item.line}`);
 
-function storyList(found) {
+function storyList(found, ports) {
   return [...found.tests.map(test => `  ${test.story}  ${test.path}${test.title && test.title !== test.story ? `  (${test.title})` : ''}`),
-    ...(found.untested ?? []).map(item => `  ${item.story}  no test (expected ${expectedTestPath(item.storyPath)})`)];
+    ...(found.untested ?? []).map(item => `  ${item.story}  no test (expected ${ports.expectedTestPath(item.storyPath)})`)];
 }
 
-function select(found, words, root) {
-  if (!found.tests.length) throw new Stop(2, [NO_TESTS, ...(root ? whyNoTests(root, found.discoveryVisible ?? found.visible, found) : []), ...(found.excludedFixtureProjects ?? []).map(path => `Warning: skipped nested fixture project ${path}.`)].join('\n'));
-  const { selected, unknown, untested = [] } = selectTests(found, words);
+function select(found, words, root, ports) {
+  if (!found.tests.length) throw new Stop(2, [ports.noTestsMessage(), ...(root ? ports.whyNoTests(root, found.discoveryVisible ?? found.visible, found) : []), ...(found.excludedFixtureProjects ?? []).map(path => `Warning: skipped nested fixture project ${path}.`)].join('\n'));
+  const { selected, unknown, untested = [] } = ports.selectTests(found, words);
   if (untested.length) throw new Stop(2, untested.join('\n'));
-  if (unknown.length) throw new Stop(2, [`Unknown story ${unknown.map(word => `"${cleanText(word)}"`).join(', ')}. Stories:`, ...storyList(found)].join('\n'));
+  if (unknown.length) throw new Stop(2, [`Unknown story ${unknown.map(word => `"${cleanText(word)}"`).join(', ')}. Stories:`, ...storyList(found, ports)].join('\n'));
   return selected;
 }
 
@@ -1477,7 +1545,7 @@ function recoverSourceContext(context) {
   if (context.sourceRecoveryAttempted) return false;
   context.sourceRecoveryAttempted = true;
   try {
-    const capture = context.ports.captureSource(context.root, { tests: sentTests(context.rows), appMap: null, excludeFixtureProjects: context.excludeFixtureProjects });
+    const capture = context.ports.captureSource(context.root, { tests: sentTests(context.rows), appMap: null, excludeFixtureProjects: context.excludeFixtureProjects, ...(context.allowMissingInterfaces ? { allowMissingInterfaces: true } : {}) });
     if (capture.sha256 !== context.capture.sha256) { context.sourceRecoveryMismatch = true; return false; }
     capture.stories = context.capture.stories;
     context.capture = capture;
@@ -1654,7 +1722,7 @@ function nativeSourceIdentity(context, rows) {
   const tests = rows.filter(row => row.native_only?.length).map(row => row.test);
   if (!tests.length) return null;
   try { return {tests,sha256:context.ports.captureSource(context.root,{tests,appMap:null,excludeFixtureProjects:context.excludeFixtureProjects === true}).sha256}; }
-  catch { return {tests,sha256:null}; }
+  catch (error) { if (error?.unboundPort) throw error; return {tests,sha256:null}; }
 }
 
 // The saved local-layout contract is deliberately distinct from legacy native-only batches.
@@ -1728,6 +1796,7 @@ function batchRecord(context) {
     source_selection: context.sourceSelection ?? {tests:sentTests(rows),exclude_fixture_projects:context.excludeFixtureProjects === true},
     native_source: context.nativeSource ?? null,
     ...(context.localOnly ? {local_only:true} : {}),
+    ...(context.allowMissingInterfaces ? {lazy_interfaces:true} : {}),
     exclude_fixture_projects: context.excludeFixtureProjects === true,
     created_at: new Date(context.startedAt).toISOString(), intent: context.intent, lint: lint ? { ...lint, recovery_state: lint.state, ...resultOutcome(lint.public_result ?? lint) } : lint, warnings, coverage: context.coverage,
     contract_snapshots: capture.stories,
@@ -1903,7 +1972,8 @@ async function sendCheckAttempt(context, row) {
   row.sent_at = context.ports.now(); row.ended_at = null; row.retry_at = null; row.busy = false; row.can_retry = false;
   row.busy_request_id = null; row.busy_observed_at = null; row.capacity_until = null; row.busy_display = null;
   row.phase = 'server';
-  const request = { requestId: id, source_sha256: context.capture.sha256, scenario: row.test, max_calls: row.max_calls };
+  const request = { requestId: id, source_sha256: context.capture.sha256, scenario: row.test, max_calls: row.max_calls,
+    ...(context.serverFeatures?.includes('lazy-interfaces') ? { lazy_interfaces: true } : {}) };
   const verdict = await context.postCheck(request, row, Math.max(1, Math.min(context.ports.postMs, context.deadline - context.ports.now())));
   if (verdict.kind === 'not_sent') {
     const note = { code: null, message: 'Stopped before sending.' };
@@ -1985,8 +2055,8 @@ const authoredSha256 = capture => isObject(capture?.raw_file_hashes)
   ? sha256(Buffer.from(JSON.stringify(Object.entries(capture.raw_file_hashes).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)))) : null;
 function lintReceiptScope(context) {
   return { root: context.root, origin: context.origin, login: context.identity.login, user_id: context.identity.userId,
-    source_sha256: context.capture.sha256, authored_sha256: authoredSha256(context.capture), tests: [...new Set(sentTests(context.rows))].sort(), version: PDD_VERSION,
-    selected_cap: context.lint.selected_cap ?? null };
+    source_sha256: context.capture.sha256, authored_sha256: authoredSha256(context.capture), tests: [...new Set(sentTests(context.rows))].sort(), version: context.clientVersion ?? null,
+    selected_cap: context.lint.selected_cap ?? null, ...(context.allowMissingInterfaces ? { lazy_interfaces: true } : {}) };
 }
 const lintReceiptPath = context => join(context.store.folder('lint-receipts'), `${context.store.repoKey(context.root)}.json`);
 function lintReceiptBlocked(context) {
@@ -2107,7 +2177,8 @@ async function runLint(context) {
       kind: 'refused', refusal: { code: 'lint-call-preflight-unsupported', message: 'The PDD interpreter does not support selected-cap call preflight. No lint or checks were sent. Update the interpreter before inspecting this cap.' }
     };
     const request = { requestId: context.ports.randomUUID(), source_sha256: context.capture.sha256, complete: true, ...named,
-      ...(selectedCap != null ? { max_calls: selectedCap } : {}) };
+      ...(selectedCap != null ? { max_calls: selectedCap } : {}),
+      ...(context.serverFeatures?.includes('lazy-interfaces') ? { lazy_interfaces: true } : {}) };
     context.lint.request_ids.push(request.requestId);
     const verdict = await postJob(context, '/v1/lint', 'lint', request, null, Math.max(1, Math.min(context.ports.postMs, lintEnd - context.ports.now())), lintEnd);
     if (verdict.kind === 'busy') { if (await pause(verdict.wait, verdict.maintenance)) continue; return busy(); }
@@ -2292,13 +2363,13 @@ function printResult(context, rows, extra = {}) {
   markDeadline(context, rows);
   rows = rows.map(row => heldForLint(row) && !row.dispatchIncomplete ? { ...row, calls: 0 } : row);
   const { ports } = context, exitCode = context.localOnly && context.checkPlan?.full && context.checkPlan.prerequisites.length ? 4
-    : exitCodeFor(rows, { interrupted: context.interrupted, lintUnknown: context.lintUnknown || context.lintPending });
+    : ports.exitCodeFor(rows, { interrupted: context.interrupted, lintUnknown: context.lintUnknown || context.lintPending });
   const engines = [...new Set(rows.map(row => row.engine_sha).filter(sha => sha && !sameEngine(sha)))].filter(sha => firstToday(context, sha));
   const warnings = [...(context.warnings ?? []), ...engines.map(sha => `Warning: the interpreter engine is ${cleanText(sha).slice(0, 12)}, but pdd's local checks copy engine ${ENGINE_SHA.slice(0, 12)}. The engine stays the judge.`)];
   const coverage = exitCode === 5 && context.coverage?.runtime?.native_only === 0
     ? Object.fromEntries(Object.entries(context.coverage).filter(([key])=>key !== 'runtime')) : context.coverage;
-  const summary = renderJson({ batch: context.batch ?? null, repo: context.root, sourceSha256: context.capture?.sha256 ?? null, coverage, rows, exitCode, summaryLine: context.noFailed ? 'No failed Stories. 0 AI calls.' : summaryLine(rows),
-    warnings: [...new Set([...warnings, ...(context.unmatched ?? [])]), ...rows.flatMap(row => (row.warnings ?? []).map(text => `${row.test}: ${text}`))] });
+  const summary = renderJson({ batch: context.batch ?? null, repo: context.root, sourceSha256: context.capture?.sha256 ?? null, coverage, rows, exitCode, summaryLine: context.noFailed ? 'No failed Stories. 0 AI calls.' : summaryLine(rows, null, ports),
+    warnings: [...new Set([...warnings, ...(context.unmatched ?? [])]), ...rows.flatMap(row => (row.warnings ?? []).map(text => `${row.test}: ${text}`))] }, ports);
   if (context.intent === 'lint-only') {
     const id = context.lint?.request_ids?.at(-1), answer = id && context.store.read(join(context.folder, `${id}.json`));
     summary.report_url = sameJob(answer, id, 'lint') ? validLink(cleanText(answer.report_url, context.secrets), context.origin, 'report') : null;
@@ -2319,7 +2390,7 @@ function printResult(context, rows, extra = {}) {
   const scrub = text => (context.secrets ?? []).reduce((value, secret) => secret ? value.split(secret).join('[secret]') : value, text);
   if (context.json) line(ports.stdout, scrub(JSON.stringify(summary)));
   else ports.stdout.write(scrub(renderText({ batch: context.batch, rows, coverage: context.coverage, warnings, details: context.details, timeoutMin: context.timeoutMin,
-    now: ports.now(), noFailed: context.noFailed, interrupted: context.interrupted || !!context.readStop, reading: !!context.reading, exitCode, secrets: context.secrets, ...extra })));
+    now: ports.now(), noFailed: context.noFailed, interrupted: context.interrupted || !!context.readStop, reading: !!context.reading, exitCode, secrets: context.secrets, ...extra }, ports)));
   if (!context.json && summary.report_url) line(ports.stdout, `Report: ${summary.report_url}`);
   if (!context.json) for (const value of checkPlanResultLines(summary.check_scope)) line(ports.stdout, scrub(value));
   if (!context.json && context.checkSelection) {
@@ -2333,8 +2404,8 @@ function printResult(context, rows, extra = {}) {
 }
 
 function runExplainBindings(cwd, words, options, ports) {
-  const {root,found,normalized}=localSetup(cwd,words);
-  const selected=select(found,normalized,root);
+  const {root,found,normalized}=localSetup(cwd,words,ports);
+  const selected=select(found,normalized,root,ports);
   for (const test of selected) {
     const problem=discoveryRefusal(test) ?? test.criteriaRefusal ?? scenarioShapeRefusal(test.doc,test.path);
     if (problem) throw Object.assign(new PreflightError(4,`${test.path}: ${problem.message}`),{code:problem.code});
@@ -2347,8 +2418,8 @@ function runExplainBindings(cwd, words, options, ports) {
 }
 
 function runFiles(cwd, words, options, ports) {
-  const { root, found, normalized } = localSetup(cwd, words);
-  const selected = select(found, normalized, root), coverage = bindingCoverage({ root, found, selected, includeRuntime:true });
+  const { root, found, normalized } = localSetup(cwd, words, ports);
+  const selected = select(found, normalized, root, ports), coverage = bindingCoverage({ root, found, selected, includeRuntime:true });
   const rows = selected.map(test => ({test:test.path,story:test.story,state:'ready',refusals:[],
     ...(discoveryRefusal(test) ? {state:'refused',unsent:true,refusals:[discoveryRefusal(test)]} : {})}));
   const nativeRows = new Map(preflight({root,found,selected}).rows.filter(row=>row.native_only?.length).map(row=>[row.test,row]));
@@ -2385,10 +2456,10 @@ function runFiles(cwd, words, options, ports) {
 // pdd lint: only the server's lint (0 AI calls) on the captured files.
 // Locally the selected prompts' limits and interface format gates, SVG advice and privacy/capture checks run.
 async function runLintOnly(context, cwd, words, options, setRelease) {
-  const { ports } = context, origin = runtimeOrigin(ports.env), { root, found, normalized } = localSetup(cwd, words);
+  const { ports } = context, origin = runtimeOrigin(ports.env), { root, found, normalized } = localSetup(cwd, words, ports);
   context.excludeFixtureProjects = words.length === 0;
   const paths = words.length ? undefined : [...found.discoveryVisible].filter(path => path.endsWith('.prompt.md'));
-  const findings = paths ? interfaceFindings({root,paths}).filter(localInterfaceProblem) : [];
+  let findings = paths ? interfaceFindings({root,paths}).filter(localInterfaceProblem) : [];
   const advice = paths ? formatAdvice(root, found.visible, paths, found.workspace) : [];
   found.warnings.push(...advice);
   if (findings.length && !found.tests.length) {
@@ -2398,10 +2469,10 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
     return 4;
   }
   let selected;
-  try { selected = select(found, normalized, root); }
+  try { selected = select(found, normalized, root, ports); }
   catch (error) {
     if (error instanceof Stop) {
-      const noTestsAdvice = [...new Set([...advice, ...(paths ? lintLocalHygiene({ root, files: [...found.visible], promptPaths: paths, tests: [], workspace: found.workspace }) : [])])];
+      const noTestsAdvice = [...new Set([...advice, ...(paths ? lintLocalHygiene({ root, files: [...found.visible], promptPaths: paths, tests: [], workspace: found.workspace }, ports) : [])])];
       if (noTestsAdvice.length) error.message = [error.message, ...noTestsAdvice].join('\n');
     }
     throw error;
@@ -2411,20 +2482,24 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
     if (!advice.includes(warning)) advice.push(warning);
     if (!found.warnings.includes(warning)) found.warnings.push(warning);
   }
-  context.coverage = bindingCoverage({ root, found, selected, includeRuntime:true });
+  const hasMissing = findings.some(item => item.code === 'interface-missing') || hasMissingPromptInterface(root, found, entryPaths(selected));
+  const allowMissingInterfaces = hasMissing ? await probeLazyInterfaces(context, origin, context.store) : false;
+  if (allowMissingInterfaces) findings = findings.filter(item => item.code !== 'interface-missing');
+  const activeLocalProblem = problem => localInterfaceProblem(problem) && !(allowMissingInterfaces && problem.code === 'interface-missing');
+  context.coverage = bindingCoverage({ root, found, selected, includeRuntime:true, allowMissingInterfaces });
   // A test that the test name rule cannot use is refused here and never sent; the other tests are linted.
   const rows = selected.map(test => ({ test: test.path, story: test.story, title: test.title, state: 'ready', phase: 'lint',
     refusals: [], request_ids: [], warnings: [], steps: Array.isArray(test.doc?.steps) ? test.doc.steps.filter(isObject) : [],
     criterion_texts: Object.fromEntries((Array.isArray(test.doc?.criteria) ? test.doc.criteria : []).filter(isObject).map(item => [item.id, item.text])),
     ...(discoveryRefusal(test) ? { state: 'refused', phase: 'local', unsent:true, refusals: [discoveryRefusal(test)], steps: [] } : {}) }));
   context.rows = rows;
-  const nativeRows = new Map(preflight({root,found,selected}).rows.filter(row => row.native_only?.length).map(row => [row.test,row]));
+  const nativeRows = new Map(preflight({root,found,selected,allowMissingInterfaces}).rows.filter(row => row.native_only?.length).map(row => [row.test,row]));
   for (const row of rows) {
     const native = nativeRows.get(row.test);
     if (native) Object.assign(row,{state:native.refusals.length ? 'refused' : 'not_run',refusals:native.refusals,phase:'local',native_only:native.native_only,unsent:true,note:{code:'native-only',message:native.native_only.map(item => `${item.path}: ${item.reason}`).join('; ')}});
   }
   if (!findings.length && rows.every(row => row.native_only?.length)) {
-    const hygiene = lintLocalHygiene({ root, files: [...found.visible], promptPaths: words.length ? entryPaths(selected) : undefined, tests: selected, workspace: found.workspace });
+    const hygiene = lintLocalHygiene({ root, files: [...found.visible], promptPaths: words.length ? entryPaths(selected) : undefined, tests: selected, workspace: found.workspace }, ports);
     context.warnings = [...new Set([...found.warnings, ...hygiene])];
     saveLocalNativeResult(context, rows, 'lint-only');
     return printLintResult(context, rows, [], [...new Set([...advice, ...hygiene])]);
@@ -2434,11 +2509,11 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   const prompts = new Map();
   const problemsFor = (path, seen) => {
     if (typeof path !== 'string' || seen.has(path)) return [];
-    const finding = interfaceFindings({root,paths:[path]}).filter(localInterfaceProblem);
+    const finding = interfaceFindings({root,paths:[path]}).filter(activeLocalProblem);
     if (finding.length) return finding;
     if (!prompts.has(path)) prompts.set(path, readPrompt(root, found.visible, path, found.workspace));
-    return promptSchemaRefusals(root, found, prompts.get(path), prompts, seen).filter(problem =>
-      localInterfaceProblem(problem) || ['invalid-limits', 'invalid-interface'].includes(problem.code) && problem.section.startsWith('/limits'));
+    return promptSchemaRefusals(root, found, prompts.get(path), prompts, seen, { allowMissingInterfaces }).filter(problem =>
+      activeLocalProblem(problem) || ['invalid-limits', 'invalid-interface'].includes(problem.code) && problem.section.startsWith('/limits'));
   };
   const limitRows = rows.map(row => {
     const seen = new Set();
@@ -2483,23 +2558,24 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   }
   // Lint keeps engine validation ownership; only attach structural incomplete-coverage facts.
   for (const row of rows.filter(row => !row.unsent)) {
-    const test = selected.find(test => test.path === row.test), checked = preflight({root,found,selected:[test]}).rows[0];
+    const test = selected.find(test => test.path === row.test), checked = preflight({root,found,selected:[test],allowMissingInterfaces}).rows[0];
     if (checked.not_checked?.length) Object.assign(row, {not_checked:checked.not_checked,criteria_total:checked.criteria_total});
     if (checked.refusals.some(item=>item.code==='unchecked-criteria')) Object.assign(row,
       {state:'refused',phase:'local',unsent:true,refusals:checked.refusals});
   }
-  const capture = captureIndependent(root, rows, ports, {appMap:null,excludeFixtureProjects:words.length === 0});
+  const capture = captureIndependent(root, rows, ports, {appMap:null,excludeFixtureProjects:words.length === 0,...(allowMissingInterfaces ? {allowMissingInterfaces:true} : {})});
   context.sourceSelection = {tests:sentTests(rows),exclude_fixture_projects:words.length === 0};
   context.nativeSource = nativeSourceIdentity(context, rows);
   if (!capture) return printLintResult(context, rows, [], found.warnings);
-  const svgWarnings = lintSvgLayouts({ root, files: [...found.visible], promptPaths: capture.files.map(file => file.path).filter(path => path.endsWith('.prompt.md')) });
+  if (typeof ports.lintSvgLayouts !== 'function') throw unboundPortError('SVG layout port (lintSvgLayouts) is not bound.');
+  const svgWarnings = ports.lintSvgLayouts({ root, files: [...found.visible], promptPaths: capture.files.map(file => file.path).filter(path => path.endsWith('.prompt.md')) });
   const hygieneWarnings = lintLocalHygiene({
     root,
     files: [...found.visible],
     promptPaths: words.length ? capture.files.map(file => file.path).filter(path => path.endsWith('.prompt.md')) : undefined,
     tests: selected,
     workspace: found.workspace,
-  });
+  }, ports);
   const drift=[];
   try {
     const files=sourceFilePort(root,found.visible), sources=[];
@@ -2514,7 +2590,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   context.warnings = [...new Set([...svgWarnings, ...found.warnings, ...drift, ...(capture.warnings ?? []), ...hygieneWarnings])];
   context.unmatched = unmatchedLines(found);
   if (!context.json) for (const warning of [...new Set([...svgWarnings, ...drift, ...(capture.warnings ?? []), ...hygieneWarnings])]) line(ports.stderr, warning);
-  const identity = signIn(ports.gh, context.store), startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
+  const identity = context.probedIdentity ?? signIn(ports.gh, context.store, ports), startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
   const timeoutMin = options['--timeout'] !== undefined ? Number(options['--timeout']) : ports.interactive ? null : AGENT_WAIT_MIN;
   Object.assign(context, { origin, visible: found.visible, capture, identity, batch, startedAt, deadline: timeoutMin ? startedAt + timeoutMin * 60_000 : Infinity, rows, head: null,
     intent: 'lint-only', agentLimit: options['--timeout'] === undefined && !ports.interactive, secrets: [identity.token], lint: { request_ids: [], state: null, selected_cap: requestedCalls(options['--max-calls']) ?? null }, timeoutMin });
@@ -2604,7 +2680,7 @@ function printLintResult(context, rows, problems, warnings = [], answer = null) 
     if (!problems.some(item => item.code === problem.code && (item.path ?? null) === (problem.path ?? null))) problems.push({ ...problem, path: problem.path ?? null, section: null });
   }
   const localRefusal = context.localOnly && (problems.length > 0 || rows.some(row => row.state === 'refused'));
-  const passing = rows.filter(row => row.state === 'passed').length, lintState = outcomeOverall(rows), exitCode = localRefusal ? 4 : exitCodeFor(rows);
+  const passing = rows.filter(row => row.state === 'passed').length, lintState = outcomeOverall(rows), exitCode = localRefusal ? 4 : context.ports.exitCodeFor(rows);
   const omitted = rows.filter(row=>row.native_only?.length && !row.refusals?.length).length;
   const broken = rows.filter(row=>row.unsent && (!row.native_only?.length || row.refusals?.length)).length, unchecked = rows.reduce((n,row)=>n+(row.not_checked?.length??0),0);
   const summary = `Lint: ${passing} of ${rows.length} tests pass.${broken ? ` ${broken} tests could not run.` : ''}${omitted ? ` ${omitted} native-only tests omitted.` : ''}${unchecked ? ` ${unchecked} criteria not checked. The Story is not a full pass.` : ''} 0 AI calls. No checks were sent.`;
@@ -2643,7 +2719,7 @@ function printLintResult(context, rows, problems, warnings = [], answer = null) 
 }
 
 function runFillHash(root, cwd, words, ports, compact = false) {
-  const scoped = words.length ? (ports.prepareHashSelection ?? (input => prepareHashSelection(input,{capture:ports.captureSource})))({root,cwd,words}) : null;
+  const scoped = words.length ? (ports.prepareHashSelection ?? (input => prepareHashSelection(input,{...ports,capture:ports.captureSource})))({root,cwd,words}) : null;
   const result = ports.fillHashes(scoped ? {root,files:scoped.files,targets:scoped.targets,...(compact ? {compact:true} : {})} : (compact ? {root,compact:true} : {root}));
   for (const { message } of result.warnings) line(ports.stdout, `Warning: ${message}`);
   for (const { path } of result.filled) line(ports.stdout, `Filled prose_sha256: ${path}`);
@@ -2817,10 +2893,10 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
     if (quiet) return saved.rows;
     return saved.intent === 'lint-only' ? printLintResult(context,saved.rows,saved.lint?.problems ?? []) : printResult(context,saved.rows);
   }
-  if(loadRuntimeWorkspace({root}).configured)ports.captureSource(root,{tests:saved.rows.filter(row=>!row.unsent).map(row=>row.test),appMap:null,excludeFixtureProjects:saved.exclude_fixture_projects === true});
-  const identity = signIn(ports.gh, context.store);
+  if(loadRuntimeWorkspace({root}).configured)ports.captureSource(root,{tests:saved.rows.filter(row=>!row.unsent).map(row=>row.test),appMap:null,excludeFixtureProjects:saved.exclude_fixture_projects === true,...(saved.lazy_interfaces === true ? {allowMissingInterfaces:true} : {})});
+  const identity = signIn(ports.gh, context.store, ports);
   if (identity.login !== saved.login) throw new Stop(5, `These runs belong to ${saved.login}. Run: gh auth switch -u ${saved.login}`);
-  Object.assign(context, { singleAttempt: context.singleAttempt || saved.single_attempt === true, excludeFixtureProjects: saved.exclude_fixture_projects === true, batch: name, origin: saved.origin, sourceSelection:saved.source_selection, nativeSource:saved.native_source, coverage: saved.coverage, identity, intent: saved.intent, secrets: [identity.token], warnings: saved.warnings ?? [],
+  Object.assign(context, { singleAttempt: context.singleAttempt || saved.single_attempt === true, allowMissingInterfaces: saved.lazy_interfaces === true, excludeFixtureProjects: saved.exclude_fixture_projects === true, batch: name, origin: saved.origin, sourceSelection:saved.source_selection, nativeSource:saved.native_source, coverage: saved.coverage, identity, intent: saved.intent, secrets: [identity.token], warnings: saved.warnings ?? [],
     capture: { sha256: saved.source_sha256, files: saved.files.map(path => ({ path })), bytes: saved.bytes, stories:saved.contract_snapshots }, lint: saved.lint, head: saved.head, startedAt: Date.parse(saved.created_at) });
   runtimeOrigin({ PDD_RUNTIME_URL: saved.origin });
   context.runtime = new Runtime({ origin: saved.origin, token: identity.token, ports, signal: context.signal });
@@ -2829,7 +2905,7 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
   // Preserve the producer's original evidence before refresh can normalize unsent usage.
   const evidence = candidates.map(row => ({ row, hadCalls: Object.hasOwn(row, 'calls'), calls: row.calls }));
   for (const row of rows) adoptClaims(context, row);
-  Object.assign(context, { rows, visible: findTests({ root, excludeFixtureProjects: context.excludeFixtureProjects }).visible, reading: true });
+  Object.assign(context, { rows, visible: ports.findTests({ root, excludeFixtureProjects: context.excludeFixtureProjects }).visible, reading: true });
   const cache = context.cacheEnabled ? await openTestCache(context, root, false) : null;
   context.testCache = cache; context.savedTestCache = saved.test_cache;
   if (cache && !cache.disabled) {
@@ -2977,7 +3053,7 @@ async function runRetry(context, name, options) {
 async function runRequest(context, id, cwd) {
   try { context.root=repoRoot(cwd); context.store=stateFor(context.ports.env,context.root); } catch { /* An outside-repository request read has no owning local batch. */ }
   if (!UUID.test(id)) throw new Stop(2, 'The request ID must be a UUID.');
-  const { ports } = context, identity = signIn(ports.gh, context.store), origin = runtimeOrigin(ports.env);
+  const { ports } = context, identity = signIn(ports.gh, context.store, ports), origin = runtimeOrigin(ports.env);
   Object.assign(context, { origin, secrets: [identity.token] });
   const runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
   const row = { test: '-', story: '-', title: '-', phase: 'server', request_ids: [id], state: 'unknown', refusals: [], warnings: [] };
@@ -3027,7 +3103,7 @@ async function refreshCheckBatches(context, identity, origin, id, answer) {
         const capture = context.ports.captureSource(root, { tests: sentTests(saved.rows), appMap: null, excludeFixtureProjects: saved.exclude_fixture_projects === true });
         if (capture.sha256 !== saved.source_sha256) continue;
         // Project receipts privately: UUID reads never rewrite saved batch/summary views.
-        const projection = { ...context, cacheReadInvocation: true, startedAt: Date.parse(saved.created_at), reading: true, visible: findTests({ root, excludeFixtureProjects: saved.exclude_fixture_projects === true }).visible, warnings: [] };
+        const projection = { ...context, cacheReadInvocation: true, startedAt: Date.parse(saved.created_at), reading: true, visible: context.ports.findTests({ root, excludeFixtureProjects: saved.exclude_fixture_projects === true }).visible, warnings: [] };
         const rows = saved.rows.map(savedRow => {
           const row = { ...savedRow, state: 'unknown', calls: 'unknown', request_ids: [...(savedRow.request_ids ?? [])], checks: null };
           const latest = row.request_ids.at(-1), receipt = latest && store.read(join(folder, `${latest}.json`));
@@ -3039,7 +3115,7 @@ async function refreshCheckBatches(context, identity, origin, id, answer) {
         await finishTestAttempts(cache, rows, capture);
         for (const warning of projection.warnings) if (!context.warnings.includes(warning)) context.warnings.push(warning);
       }
-    } catch { /* A cache failure must not hide an authoritative read or other caches. */ }
+    } catch (error) { if (error?.unboundPort) throw error; /* A cache failure must not hide an authoritative read or other caches. */ }
   }
   return owner;
 }
@@ -3048,7 +3124,7 @@ async function refreshCheckBatches(context, identity, origin, id, answer) {
 async function runCallRead(context, id) {
   const { ports, store } = context;
   const saved = store.read(join(store.dir, 'calls', `${id}.meta.json`));
-  const identity = signIn(ports.gh, store);
+  const identity = signIn(ports.gh, store, ports);
   if (saved && identity.login !== saved.login) throw new Stop(5, `These runs belong to ${saved.login}. Run: gh auth switch -u ${saved.login}`);
   const origin = runtimeOrigin(saved ? { PDD_RUNTIME_URL: saved.origin } : ports.env);
   const runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
@@ -3069,7 +3145,7 @@ async function runCallRead(context, id) {
     applyAnswer(row, answer, owner ? { ...context, batch: owner.batch, folder: owner.folder } : context);
     return printResult(context, [row], { recovery: `pdd test --read ${id}` });
   }
-  const state = answer?.state ?? 'unknown', exitCode = exitCodeFor([{ state }]);
+  const state = answer?.state ?? 'unknown', exitCode = ports.exitCodeFor([{ state }]);
   const sanitize = value => typeof value === 'string' ? value.split(identity.token).join('[secret]').replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, '').replace(/\b(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9_-]{12,})\b/g, '[secret]')
     : Array.isArray(value) ? value.map(sanitize) : isObject(value) ? Object.fromEntries(Object.entries(value).map(([k, v]) => [sanitize(k), sanitize(v)])) : value;
   const out = sanitize({ request_id: id, command: 'call', state, exit_code: exitCode,
@@ -3124,49 +3200,53 @@ async function withCheckRun(context, run) {
 }
 
 // pdd test. Returns the exit code.
-export async function runCheck({ words = [], options = {}, cwd = process.cwd(), cache = false } = {}, givenPorts = {}) {
+export async function runCheck({ words = [], options = {}, cwd = process.cwd(), cache = false, client, workflow } = {}, givenPorts = {}) {
   const ports = withDefaults(givenPorts);
-  const context = { ports, singleAttempt: ports.env.PDD_CHECK_SINGLE_ATTEMPT === '1', cacheEnabled: cache || !!options['--lf'] || !!options['--cache-clear'], json: options['--json'] === true, details: options['--details'] === true, explicitTimeout: options['--timeout'] !== undefined, interrupted: false, warnings: [] };
+  const context = { ports, clientVersion: client?.version ?? ports.clientVersion ?? null, workflow, singleAttempt: ports.env.PDD_CHECK_SINGLE_ATTEMPT === '1', cacheEnabled: cache || !!options['--lf'] || !!options['--cache-clear'], json: options['--json'] === true, details: options['--details'] === true, explicitTimeout: options['--timeout'] !== undefined, interrupted: false, warnings: [] };
   let release = () => {};
   try {
     if (options['--affected'] !== undefined && (options['--affected'] !== true || words.length || Object.keys(options).some(key => !['--affected','--json','--details','--timeout','--max-calls','--cache-clear'].includes(key))))
       throw new Stop(2, '--affected accepts no Stories and only --cache-clear, --json, --details, --timeout and --max-calls.');
     if(options['--journeys']!==undefined){
       if(options['--journeys']!==true||words.length>1||['--read','--retry','--fill-hash','--request','--screen','--drawing'].some(key=>options[key]!==undefined))throw new Stop(2,'Use pdd test --journeys [JOURNEY] with normal test options.');
-      const {root,found}=localSetup(cwd,[]);
-      try { words=selectJourneys(found.tests.map(test=>({testPath:test.path,storyPath:test.storyPath})),words[0]); } catch(error) { throw new Stop(2,error.message); }
+      const {root,found}=localSetup(cwd,[],ports);
+      try { words=selectJourneys(found.tests.map(test=>({testPath:test.path,storyPath:test.storyPath})),words[0],ports); } catch(error) { if (error?.unboundPort) throw error; throw new Stop(2,error.message); }
       if(!words.length)throw new Stop(2,'No root product journeys found.');
       options={...options};delete options['--journeys'];
     }
     requestedCalls(options['--max-calls']);
     if (options['--local'] !== undefined && options['--max-calls'] !== undefined) throw new Stop(2, '--local does not accept --max-calls.');
     if (options['--lint'] === true && words.length && (options['--local'] === undefined || options['--local'] === true && !Object.hasOwn(options, '--timeout')) && Object.keys(options).every(key => ['--lint','--local','--json','--timeout'].includes(key))) {
-      const {root,found,normalized} = localSetup(cwd,words);
-      const selection = selectTests(found,normalized,{native:true});
+      const {root,found,normalized} = localSetup(cwd,words,ports);
+      const selection = ports.selectTests(found,normalized,{native:true});
       if (selection.nativeSelections?.length) {
         if(selection.untested.length)throw new Stop(2,selection.untested.join('\n'));
-        if(selection.unknown.length)throw new Stop(2,[`Unknown story ${selection.unknown.map(word=>JSON.stringify(cleanText(word))).join(', ')}. Stories:`,...storyList(found)].join('\n'));
-        const runs = allRuns({cancelled:true},{env:ports.env}).filter(run => {
+        if(selection.unknown.length)throw new Stop(2,[`Unknown story ${selection.unknown.map(word=>JSON.stringify(cleanText(word))).join(', ')}. Stories:`,...storyList(found,ports)].join('\n'));
+        if (typeof ports.allRuns !== 'function' || typeof ports.assessNativeEvidence !== 'function' || typeof ports.usableResult !== 'function' || (!context.json && typeof ports.resultLines !== 'function')) {
+          throw unboundPortError('Native Story assessment ports (allRuns, assessNativeEvidence, usableResult, resultLines) are not bound.');
+        }
+        const runs = ports.allRuns({cancelled:true},{env:ports.env}).filter(run => {
           try { return realpathSync(run.root) === realpathSync(root); } catch { return false; }
         });
+        const eligibilityPort = ports.evidenceEligibility ?? ports.readEvidenceEligibility ?? (() => ({state:'unavailable',reason:'workflow evidence eligibility port is not bound'}));
         const native = [];
         for (const descriptor of selection.nativeSelections) {
           const owners = runs.filter(run => (run.evidence ?? []).some(entry => entry.native?.profileId === descriptor.profileId && entry.native?.storyPath === descriptor.storyPath));
           const run = owners.length === 1 ? owners[0] : null;
-          const assessment = await assessNativeEvidence({root,runDir:run?.runDir ?? null,runId:run?.runId ?? null,profileId:descriptor.profileId,storyPath:descriptor.storyPath},
-            {workspace:input=>readEvidenceEligibility(input,{env:ports.env})});
+          const assessment = await ports.assessNativeEvidence({root,runDir:run?.runDir ?? null,runId:run?.runId ?? null,profileId:descriptor.profileId,storyPath:descriptor.storyPath},
+            {workspace:input=>eligibilityPort(input,{env:ports.env})});
           if (descriptor.reason || owners.length !== 1) {
             assessment.profileNativeProof = assessment.storyNativeProof = 'none';
             assessment.limits.push(descriptor.reason ?? (owners.length ? 'Native evidence run association is ambiguous.' : 'No owned native evidence run/profile association.'));
           }
           native.push({...descriptor,assessment});
         }
-        const missing = native.some(row=>!usableResult({kind:'native evidence',assessment:row.assessment}));
+        const missing = native.some(row=>!ports.usableResult({kind:'native evidence',assessment:row.assessment}));
         let exitCode = missing ? 1 : 0;
         const runtimeWords = selection.selected.map(test=>test.path);
         if (context.json) {
           let output = '';
-          if (runtimeWords.length) exitCode = await runCheck({words:runtimeWords,options,cwd,cache},{...givenPorts,stdout:{write:chunk=>{output+=chunk;}}});
+          if (runtimeWords.length) exitCode = await runCheck({words:runtimeWords,options,cwd,cache,client,workflow},{...givenPorts,stdout:{write:chunk=>{output+=chunk;}}});
           if (exitCode === 0 && missing) exitCode = 1;
           let report = {};
           if (output.trim()) { try { report = JSON.parse(output); } catch { line(ports.stdout,output.trim()); } }
@@ -3175,9 +3255,9 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
           for (const row of native) {
             line(ports.stdout,`Native Story: ${row.storyPath}; profile ${row.profileId ?? 'unknown'}; owner ${row.promptPath ?? 'unknown'}`);
             for (const criterion of row.assessment.criteria) line(ports.stdout,`${criterion.id}: ${criterion.text}`);
-            for (const value of resultLines([{kind:'native evidence',assessment:row.assessment,source:row.assessment.sourceState,stage:row.assessment.identity.stage}])) line(ports.stdout,value);
+            for (const value of ports.resultLines([{kind:'native evidence',assessment:row.assessment,source:row.assessment.sourceState,stage:row.assessment.identity.stage}])) line(ports.stdout,value);
           }
-          if (runtimeWords.length) exitCode = await runCheck({words:runtimeWords,options,cwd,cache},givenPorts);
+          if (runtimeWords.length) exitCode = await runCheck({words:runtimeWords,options,cwd,cache,client,workflow},givenPorts);
           if (exitCode === 0 && missing) exitCode = 1;
         }
         return exitCode;
@@ -3188,10 +3268,13 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
     // Local modes dispatch before repository runtime state, origin or sign-in.
     if (options['--screen'] !== undefined || options['--drawing'] !== undefined) {
       if (!options['--screen'] || !options['--drawing'] || words.length || Object.keys(options).some(name => !['--screen', '--drawing', '--json'].includes(name))) throw new Stop(2, 'Use pdd test --screen URL --drawing PATH [--json], without other options or Stories.');
+      if (typeof ports.compareScreen !== 'function' || (!context.json && typeof ports.formatScreenComparison !== 'function')) {
+        throw unboundPortError('Screen comparison ports (compareScreen, formatScreenComparison) are not bound.');
+      }
       try {
-        const report = await compareScreen({ url: options['--screen'], drawingPath: options['--drawing'], cwd, chromePath: ports.env.PDD_CHROME_PATH }, { env: ports.env, browser: givenPorts.screenBrowser });
+        const report = await ports.compareScreen({ url: options['--screen'], drawingPath: options['--drawing'], cwd, chromePath: ports.env.PDD_CHROME_PATH }, { env: ports.env, browser: givenPorts.screenBrowser });
         const exitCode = report.passed ? 0 : 1;
-        line(ports.stdout, context.json ? JSON.stringify({ ...report, exit_code: exitCode }) : formatScreenComparison(report));
+        line(ports.stdout, context.json ? JSON.stringify({ ...report, exit_code: exitCode }) : ports.formatScreenComparison(report));
         return exitCode;
       } catch (error) {
         if (error.code === 'screen-not-ready' && error.exitCode === 6) {
@@ -3204,11 +3287,12 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
     }
     if (options['--local'] !== undefined) {
       if (options['--local'] !== true || options['--lint'] !== true || Object.keys(options).some(name => !['--lint', '--local', '--json'].includes(name))) throw new Stop(2, '--local requires --lint and accepts only Story words and --json.');
+      if (typeof ports.lintSvgLayouts !== 'function') throw unboundPortError('SVG layout port (lintSvgLayouts) is not bound.');
       try {
         const root = repoRoot(cwd), workspace=loadRuntimeWorkspace({root}), files = gitFiles(root).filter(path=>allowsRuntimePath(workspace,path));
         let promptPaths, selectedTests, tests = [];
         if (words.length) {
-          const { found, normalized } = localSetup(cwd, words), selected = select(found, normalized, root);
+          const { found, normalized } = localSetup(cwd, words, ports), selected = select(found, normalized, root, ports);
           selectedTests = selected;
           tests = selected.filter(test => !test.error).map(test => test.path);
           promptPaths = ports.captureSource(root, { tests, appMap: null }).files.map(file => file.path).filter(path => path.endsWith('.prompt.md'));
@@ -3216,11 +3300,11 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
         // Interface findings refuse only a repository-wide local lint; a selected one gives advice only.
         const problems = words.length ? [] : interfaceFindings({root,paths:promptPaths}).filter(localInterfaceProblem);
         const advice = formatAdvice(root, new Set(gitFiles(root)), promptPaths ?? files.filter(path => path.endsWith('.prompt.md')), workspace);
-        const hygiene = lintLocalHygiene({ root, files, promptPaths, tests: selectedTests, workspace });
-        const warnings = [...new Set([...advice, ...lintSvgLayouts({ root, files, promptPaths }), ...hygiene])], summary = `partial: checked SVG layout only; prompts not checked (local-only). ${warnings.length} warnings. 0 AI calls. No checks were sent.`;
+        const hygiene = lintLocalHygiene({ root, files, promptPaths, tests: selectedTests, workspace }, ports);
+        const warnings = [...new Set([...advice, ...ports.lintSvgLayouts({ root, files, promptPaths }), ...hygiene])], summary = `partial: checked SVG layout only; prompts not checked (local-only). ${warnings.length} warnings. 0 AI calls. No checks were sent.`;
         const result = saveLocalLayout(context,{root,tests,prompts:promptPaths ?? files.filter(path => path.endsWith('.prompt.md')),warnings,problems,summary});
         return printLocalLayout(context,result);
-      } catch (error) { throw new Stop(2, error.message); }
+      } catch (error) { if (error?.unboundPort) throw error; throw new Stop(2, error.message); }
     }
     const modes = ['--read', '--retry', '--fill-hash', '--files', '--explain-bindings', '--request', '--lint'].filter(name => options[name] !== undefined);
     const others = Object.keys(options).filter(name => !modes.includes(name) && !(modes[0] === '--fill-hash' && name === '--compact') && !(modes[0] === '--retry' && ['--json', '--details', '--timeout'].includes(name)) && !(name === '--json' && ['--read', '--request', '--lint', '--files', '--explain-bindings'].includes(modes[0])) && !(name === '--timeout' && ['--read', '--lint'].includes(modes[0])) && !(name === '--max-calls' && modes[0] === '--lint') && !(name === '--app-map' && modes[0] === '--files'));
@@ -3246,10 +3330,10 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
         const rows = context.rows.map(row=>['ready','sending','waiting'].includes(row.state)
           ? {...row,state:'not_run',note:{code:null,message:error.message}} : row);
         const summary = {...renderJson({batch:context.batch??null,repo:context.root,rows,coverage:context.coverage,
-          exitCode:error.exitCode,warnings:context.warnings}),...(context.checkSelection?{check_selection:context.checkSelection,baseline_report:context.baselineReport,check_plan:context.checkPlan,check_scope:selectedCheckScope(context.checkPlan,rows,context.checkSelection)}:{}),message:error.message,lint_state:error.exitCode===3?'unknown':'not_run'};
+          exitCode:error.exitCode,warnings:context.warnings},ports),...(context.checkSelection?{check_selection:context.checkSelection,baseline_report:context.baselineReport,check_plan:context.checkPlan,check_scope:selectedCheckScope(context.checkPlan,rows,context.checkSelection)}:{}),message:error.message,lint_state:error.exitCode===3?'unknown':'not_run'};
         if (context.folder) context.store.write(join(context.folder,'summary.json'),summary);
         if (context.json) line(ports.stdout,JSON.stringify(summary));
-        else ports.stdout.write(renderText({batch:context.batch,rows,coverage:context.coverage,warnings:context.warnings,exitCode:error.exitCode,secrets:context.secrets}));
+        else ports.stdout.write(renderText({batch:context.batch,rows,coverage:context.coverage,warnings:context.warnings,exitCode:error.exitCode,secrets:context.secrets},ports));
       } else if (context.json && error.bindingInventory) line(ports.stdout, JSON.stringify({ batch: null, repo: context.root, exit_code: 4, lint_state: 'refused',
         coverage: { available: false, bound: null, total: null, modules: [] }, problems: [{ code: 'binding-invalid', path: 'pdd-bindings.json', message: error.message }], rows: [], warnings: [] }));
       else if (context.coverage && error.exitCode !== 5) {
@@ -3605,7 +3689,7 @@ function storyFingerprint(cache, capture, story, options, origin) {
   const rawPaths = [...new Set([story, ...footprint.tests, ...footprint.files.filter(file => file.path.endsWith('.prompt.md')).map(file => file.path)])].sort();
   const raw = rawPaths.map(path => [path, capture.raw_file_hashes?.[path] ?? (path.endsWith('.prompt.md') ? capture.raw_prompt_hashes?.[path] : undefined)]);
   if (raw.some(([, hash]) => !hash)) return null;
-  return cache.context.ports.cacheHash(Buffer.from(JSON.stringify({ footprint, raw, origin, max_calls: options['--max-calls'] ?? null, pdd_version: PDD_VERSION })));
+  return cache.context.ports.cacheHash(Buffer.from(JSON.stringify({ footprint, raw, origin, max_calls: options['--max-calls'] ?? null, pdd_version: cache.context.clientVersion ?? null })));
 }
 // The captured footprint owns reachability; inspect its captured declarations without
 // inventing another dependency graph or reading a later version of a source file.
@@ -3789,19 +3873,41 @@ function affectedPlanningAuthority(root, found, base, ports) {
 async function runBatch(context, cwd, words, options, setRelease) {
   const { ports } = context;
   const origin = runtimeOrigin(ports.env);
-  const { root, found, normalized } = localSetup(cwd, words);
+  const { root, found, normalized } = localSetup(cwd, words, ports);
   context.visible = found.visible; context.origin = origin; context.excludeFixtureProjects = words.length === 0;
   // Ordinary Check waits for completion in every shell unless a limit is explicit.
   context.agentLimit = false;
   context.timeoutMin = options['--timeout'] !== undefined ? Number(options['--timeout']) : null;
-  let selected = select(found, normalized, root);
+  let selected = select(found, normalized, root, ports);
   const inventory = selected;
+  const allowMissingInterfaces = hasMissingPromptInterface(root, found, entryPaths(inventory))
+    ? await probeLazyInterfaces(context, origin, context.store) : false;
   const affected = options['--affected'] === true;
-  const runs = allRuns({cancelled:true}, {env:ports.env}).filter(run => {
-    try { return realpathSync(run.root) === realpathSync(root); } catch { return false; }
-  });
-  const base = runs.length === 1 && /^[a-f0-9]{40}$/.test(runs[0].baseSha ?? '') ? runs[0].baseSha : 'HEAD';
-  const planningPorts = {capture:ports.captureSource,...ports.checkPlanPorts};
+  const resolveWorkflowBase = () => {
+    const workflowBase = context.workflow !== undefined
+      ? context.workflow?.base_sha
+      : ports.workflowBaseSha !== undefined && ports.workflowBaseSha !== null
+        ? (typeof ports.workflowBaseSha === 'function'
+            ? ports.workflowBaseSha({ root, env: ports.env })
+            : ports.workflowBaseSha)
+        : (() => {
+            const runs = (ports.allRuns ?? (() => []))({ cancelled: true }, { env: ports.env }).filter(run => {
+              try { return realpathSync(run.root) === realpathSync(root); } catch { return false; }
+            });
+            return runs.length === 1 ? runs[0].baseSha : null;
+          })();
+    return /^[a-f0-9]{40}$/.test(workflowBase ?? '') ? workflowBase : 'HEAD';
+  };
+  let base = affected ? resolveWorkflowBase() : null;
+  const planningPorts = {
+    headerPrompts: ports.headerPrompts,
+    capture: ports.captureSource,
+    isStoryPath: ports.isStoryPath,
+    hasAcceptance: ports.hasAcceptance,
+    matchTests: ports.matchTests,
+    orphanSummary: ports.orphanSummary,
+    ...ports.checkPlanPorts,
+  };
   // Discovery is part of selection authority, including complete sibling variants.
   // Recheck after captures too: a capture can observe a newly created test that
   // was absent from the discovery result passed to the planner.
@@ -3811,13 +3917,13 @@ async function runBatch(context, cwd, words, options, setRelease) {
   if (affected && initialDiscovery.authority.unavailable) context.forceAffectedFull = true;
   let discoveryChanged = false, cache = null;
   const discover = () => {
-    const current = localSetup(cwd, words);
+    const current = localSetup(cwd, words, ports);
     discoveryChanged ||= !isDeepStrictEqual(initialDiscovery,discoveryScope(current.found));
     return current;
   };
   const planFor = rows => {
     const current = discover();
-    const plan = buildCheckPlan({root,found:current.found,selected:select(current.found,current.normalized,root),rows,full:true,base,affected:!context.forceAffectedFull},planningPorts);
+    const plan = buildCheckPlan({root,found:current.found,selected:select(current.found,current.normalized,root,ports),rows,full:true,base,affected:!context.forceAffectedFull,allowMissingInterfaces},planningPorts);
     discover();
     return context.forceAffectedFull ? {...plan,stories:plan.stories.map(story=>({...story,role:'target',reason:'conservative: source selection changed during planning'}))} : plan;
   };
@@ -3862,8 +3968,8 @@ async function runBatch(context, cwd, words, options, setRelease) {
     const count = new Set(selected.map(test => test.storyPath ?? test.path)).size;
     line(ports.stderr, `pdd: test cache ${cache && !cache.disabled ? 'cleared' : 'unavailable'}. Running ${count} selected ${count === 1 ? 'Story' : 'Stories'}; the interpreter may reuse saved answers.`);
   }
-  context.coverage = bindingCoverage({ root, found, selected, includeRuntime:true });
-  const checked = preflight({ root, found, selected });
+  context.coverage = bindingCoverage({ root, found, selected, includeRuntime:true, allowMissingInterfaces });
+  const checked = preflight({ root, found, selected, allowMissingInterfaces });
   const rows = localRows(checked.rows);
   context.rows = rows;
   for (const row of rows) {
@@ -3875,7 +3981,8 @@ async function runBatch(context, cwd, words, options, setRelease) {
       ...(row.not_checked??[]).map(item=>[item.criterion_id,item.text])]);
   }
   if (options['--max-calls'] !== undefined) for (const row of rows) row.max_calls = Number(options['--max-calls']);
-  context.checkPlan = affected ? planFor(rows) : buildCheckPlan({root,found,selected,rows,full:words.length === 0,base});
+  base ??= resolveWorkflowBase();
+  context.checkPlan = affected ? planFor(rows) : buildCheckPlan({root,found,selected,rows,full:words.length === 0,base,allowMissingInterfaces},planningPorts);
   if (affected) {
     const finalSelection = selectCheckTests(context.checkPlan,{affected:true});
     if (discoveryChanged || !isDeepStrictEqual(finalSelection.tests,context.checkSelection.tests)) return restartConservatively();
@@ -3897,13 +4004,13 @@ async function runBatch(context, cwd, words, options, setRelease) {
   }
 
   const scopedOwnership = words.length > 0 || affected || selected.length < found.tests.length;
-  context.warnings.push(...found.warnings, ...checked.warnings, ...sharedSourceFiles(root, found.discoveryVisible ?? found.visible, { ...(scopedOwnership ? { tests: selected } : {}), workspace: found.workspace }));
+  context.warnings.push(...found.warnings, ...checked.warnings, ...sharedSourceFiles(root, found.discoveryVisible ?? found.visible, { ...(scopedOwnership ? { tests: selected } : {}), workspace: found.workspace }, ports));
   context.unmatched = unmatchedLines(found);
   if (cache) await beginTestAttempts(cache, rows.filter(row => row.state !== 'ready'), null, options, origin);
   if (!rows.some(row => row.state === 'ready')) { if (rows.some(row => row.native_only?.length)) saveLocalNativeResult(context, rows, 'check'); return printResult(context, rows); }
   context.nativeSource = nativeSourceIdentity(context, rows);
   let capture;
-  try { capture = captureIndependent(root, rows, ports, {appMap:null,excludeFixtureProjects:words.length === 0}); }
+  try { capture = captureIndependent(root, rows, ports, {appMap:null,excludeFixtureProjects:words.length === 0,...(allowMissingInterfaces ? {allowMissingInterfaces:true} : {})}); }
   catch (error) { if (cache) await beginTestAttempts(cache, rows, null, options, origin); throw error; }
   if (!capture || !rows.some(row=>row.state==='ready')) {
     if (cache) await beginTestAttempts(cache,rows,null,options,origin);
@@ -3924,7 +4031,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
   }
   context.otherNote = otherNote(otherFiles(capture.files, found).length);
   let identity;
-  try { identity = signIn(ports.gh, context.store); }
+  try { identity = context.probedIdentity ?? signIn(ports.gh, context.store, ports); }
   catch (error) {
     if (cache?.mark) await cacheTransaction(cache, data => {
       if (data.latest_identity?.in_progress) {
@@ -4008,17 +4115,17 @@ function appMapFor(found, given, cwd, root, stderr) {
   return rel;
 }
 
-function oneTest(found, words, root) {
-  const selected = select(found, words, root);
-  if (selected.length !== 1) throw new Stop(2, ['pdd simulate needs one story. Choose one:', ...storyList({ tests: selected })].join('\n'));
+function oneTest(found, words, root, ports) {
+  const selected = select(found, words, root, ports);
+  if (selected.length !== 1) throw new Stop(2, ['pdd simulate needs one story. Choose one:', ...storyList({ tests: selected }, ports)].join('\n'));
   return selected[0];
 }
 
-function productTest(found, words, journey, root) {
-  if(journey===undefined && words.length)return oneTest(found,words,root);
-  const paths=selectJourneys(found.tests.map(test=>({testPath:test.path,storyPath:test.storyPath})),journey);
-  if(!paths.length && journey===undefined)return oneTest(found,words,root);
-  const requested=words.length?new Set(select(found,words,root).map(test=>test.path)):null;
+function productTest(found, words, journey, root, ports) {
+  if(journey===undefined && words.length)return oneTest(found,words,root,ports);
+  const paths=selectJourneys(found.tests.map(test=>({testPath:test.path,storyPath:test.storyPath})),journey,ports);
+  if(!paths.length && journey===undefined)return oneTest(found,words,root,ports);
+  const requested=words.length?new Set(select(found,words,root,ports).map(test=>test.path)):null;
   const selected=found.tests.filter(test=>paths.includes(test.path)&&(!requested||requested.has(test.path)));
   if(selected.length!==1)throw new Stop(2,'Product Simulator needs one explicit Story or journey test.');
   return selected[0];
@@ -4027,7 +4134,8 @@ function captureProductTry(root,test,options,ports) {
   let composition, maxTapCalls;
   const capture=ports.captureSource(root,{tests:[test.path],appMap:null,prepareSource(snapshot){
     const adapters={root,statFile:(path,options)=>snapshot.statFile(relative(root,path).split(sep).join('/'),options),
-      readFile:path=>snapshot.readFile(relative(root,path).split(sep).join('/'))};
+      readFile:path=>snapshot.readFile(relative(root,path).split(sep).join('/')),
+      parseProductDocuments:ports.parseProductDocuments,parseProductWorldWriters:ports.parseProductWorldWriters,selectTests:ports.selectTests};
     const journey=options['--journey']??(/^user_stories\/journeys\/[^/]+\.md$/.test(test.storyPath)?test.path:undefined);
     composition=composeProductTry({root,...(options['--parts']!==undefined?{parts:options['--parts'].split(',').map(part=>part.trim())}:{}),
       ...(journey!==undefined?{journey,testPath:test.path}:{})},adapters);
@@ -4036,7 +4144,7 @@ function captureProductTry(root,test,options,ports) {
     const files={stat:({path})=>output.has(path)?{exists:true,is_symlink:false,size:Buffer.byteLength(output.get(path))}:snapshot.statFile(path),
       read:({path})=>({content:output.get(path)??snapshot.readFile(path).toString('utf8')})};
     const scenario=parseJsonValue(snapshot.readFile(test.path).toString('utf8'));
-    if(options['--journey']!==undefined)selectJourneys([{testPath:test.path,storyPath:scenario.story_path}],options['--journey']);
+    if(options['--journey']!==undefined)selectJourneys([{testPath:test.path,storyPath:scenario.story_path}],options['--journey'],ports);
     scenario.initial_world={$seed:composition.seedPath};
     const expanded=expandSource({path:test.path,text:stringifyJsonValue(scenario),format:'scenario'},files);
     return [...composition.files.map(file=>({path:file.path,bytes:file.content,...(file.path===composition.appMapPath?{role:'app-map'}:{})})),{path:test.path,bytes:expanded.text}];
@@ -4066,10 +4174,10 @@ function programEntries(root, found, test) {
   return { test, cli, http };
 }
 
-function simulationSelection(root, found, words, appMap, options) {
+function simulationSelection(root, found, words, appMap, options, ports) {
   const all = [...found.tests].sort((a, b) => a.path.localeCompare(b.path));
   if (!all.length) throw new Stop(2, 'No Stories are available to simulate.');
-  const selected = words.length ? [oneTest(found, words, root)] : all;
+  const selected = words.length ? [oneTest(found, words, root, ports)] : all;
   const rows = selected.map(test => programEntries(root, found, test));
   const eligibleNames = predicate => [...new Set(all.flatMap(test => {
     const selectedRow = rows.find(row => row.test === test);
@@ -4198,9 +4306,9 @@ function trySourceSelection(record, path) {
   return { tests: scope.tests, appMap: scope.appMap };
 }
 
-function tryPromptProblem(root, found, test, record, capture) {
+function tryPromptProblem(root, found, test, record, capture, ports) {
   const hashes=record.prompt_hashes;
-  if (!capture && record.simulation_scope?.appMap) capture = captureSource(root, trySourceSelection(record, test?.path));
+  if (!capture && record.simulation_scope?.appMap) capture = ports.captureSource(root, trySourceSelection(record, test?.path));
   if (!capture && isObject(hashes)) {
     const files=sourceFilePort(root,found.visible), sources=[], references=[], raw_prompt_hashes={};
     for (const path of Object.keys(hashes)) {
@@ -4243,40 +4351,43 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       const root = repoRoot(cwd), store = stateFor(ports.env, root);
       const pointer=store.repo(root).last_door,descriptor=pointer?.descriptor?store.read(pointer.descriptor):null;
       if(descriptor?.originalPath)ports.captureSource(root,{tests:[descriptor.originalPath]});
-      const identity = signIn(ports.gh, store);
+      const identity = signIn(ports.gh, store, ports);
       return await (await import('./try-doors.mjs')).saveLast({ root, store, identity, ports });
     }
     if (options['--stop'] && (options['--tab'] || options['--new'] || options['--no-open'] || options['--no-wait'] || options['--app-map'] !== undefined || productMode || requestedBudget !== null)) throw new Stop(2, 'pdd simulate --stop takes only a STORY. Run pdd simulate --help.');
     if (words.length > 1) throw new Stop(2, 'pdd simulate takes one STORY.');
     const origin = runtimeOrigin(ports.env);
     if (options['--stop']) return await stopByName(context, cwd, words, origin);
-    const { root, found, normalized } = localSetup(cwd, words), store = stateFor(ports.env, root);
+    const { root, found, normalized } = localSetup(cwd, words, ports), store = stateFor(ports.env, root);
     const repoState = store.repo(root);
     if (!productMode && normalized.length && !options['--new']) {
-      const prior = repoState.tries?.[oneTest(found, normalized, root).path];
+      const prior = repoState.tries?.[oneTest(found, normalized, root, ports).path];
       if (prior?.product_setup) options = { ...options, ...productOptions(prior.product_setup) };
     }
     const productSetup = options['--product'] ? { parts: options['--parts']?.split(',').map(p => p.trim()) ?? null, journey: options['--journey'] ?? null } : null;
-    const localSelected = productSetup ? [productTest(found, normalized, options['--journey'], root)]
-      : normalized.length ? [oneTest(found, normalized, root)] : [...found.tests].sort((a, b) => a.path.localeCompare(b.path));
-    const checked = preflight({ root, found, selected: localSelected }), rows = localRows(checked.rows);
+    const localSelected = productSetup ? [productTest(found, normalized, options['--journey'], root, ports)]
+      : normalized.length ? [oneTest(found, normalized, root, ports)] : [...found.tests].sort((a, b) => a.path.localeCompare(b.path));
+    const allowMissingInterfaces = hasMissingPromptInterface(root, found, entryPaths(localSelected))
+      ? await probeLazyInterfaces(context, origin, store) : false;
+    const checked = preflight({ root, found, selected: localSelected, allowMissingInterfaces }), rows = localRows(checked.rows);
     const refused = rows.find(row => row.state === 'refused');
     if (refused) {
       if (options['--cli'] || options['--shell'] || options['--serve'] !== undefined) throw new Stop(125, refused.refusals?.map(r => r.message || r.code).join('; ') || 'The Story input was refused.');
-      line(ports.stdout, renderText({ rows: [refused], exitCode: 4 })); return 4;
+      line(ports.stdout, renderText({ rows: [refused], exitCode: 4 }, ports)); return 4;
     }
     let appMap = productSetup ? null : appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
     if (!productSetup && options['--serve'] !== undefined && normalized.length && !options['--new']) {
-      const priorTest = oneTest(found, normalized, root), prior = repoState.tries?.[priorTest.path];
+      const priorTest = oneTest(found, normalized, root, ports), prior = repoState.tries?.[priorTest.path];
       if (prior) {
-        const problem = tryPromptProblem(root, found, priorTest, prior);
+        const problem = tryPromptProblem(root, found, priorTest, prior, undefined, ports);
         if (problem) throw new Stop(125, `${problem} Run pdd simulate STORY --serve --new.`);
       }
     }
-    const boundedCapture = !productSetup && loadRuntimeWorkspace({root}).configured && localSelected.length ? ports.captureSource(root, { tests: localSelected.map(item => item.path), appMap }) : null;
+    const captureExtra = allowMissingInterfaces ? { allowMissingInterfaces: true } : {};
+    const boundedCapture = !productSetup && loadRuntimeWorkspace({root}).configured && localSelected.length ? ports.captureSource(root, { tests: localSelected.map(item => item.path), appMap, ...captureExtra }) : null;
     let { test, selected, tab, typed } = productSetup
       ? { test: localSelected[0], selected: localSelected, tab: options['--tab'] ?? (options['--cli'] || options['--shell'] ? 'terminal' : 'screen'), typed: false }
-      : simulationSelection(root, found, normalized, appMap, options);
+      : simulationSelection(root, found, normalized, appMap, options, ports);
     if (productSetup && options['--shell']) options['--cli'] = true;
     const wholeRecords = productSetup || normalized.length ? [] : Object.entries(repoState.tries ?? {}).filter(([, value]) => isObject(value.simulation_scope));
     if (wholeRecords.length > 1) throw new Stop(2, 'Several whole-project simulations are saved. Stop a named Try with pdd simulate --stop STORY before opening the whole project.');
@@ -4292,7 +4403,9 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     context.agentConnection = !options['--no-wait'] && !context.doorMode && ports.agentBridge !== false
       && (ports.stdout.isTTY === true || options['--agent'] !== undefined);
     if (context.agentConnection) {
-      try { context.agentDefinitions = loadAgentDefinitions({cwd:root,env:ports.env}); }
+      const loadDefinitions = ports.loadAgentDefinitions ?? ports.agents?.loadDefinitions;
+      if (typeof loadDefinitions !== 'function') throw unboundPortError('Agent configuration port (loadAgentDefinitions) is not bound.');
+      try { context.agentDefinitions = loadDefinitions({cwd:root,env:ports.env}); }
       catch (error) { throw new Stop(2,error.message); }
       if (!context.agentDefinitions.length) throw new Stop(2,'No agents are configured. Add an agent or enable defaults in agents.json.');
       if (options['--agent'] !== undefined && !context.agentDefinitions.some(d => d.name === options['--agent'] || (['codex','claude','gemini'].includes(d.id) && d.id === options['--agent']))) throw new Stop(2,'Unknown agent name. Choose a name from agents.json or an enabled default.');
@@ -4301,8 +4414,8 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     const row = rows.find(row => row.test === test.path) ?? rows[0];
     const prepared = productSetup ? captureProductTry(root, test, options, ports) : null;
     const capture = prepared?.capture ?? (record?.simulation_scope && !options['--new']
-      ? ports.captureSource(root, trySourceSelection(record, recordPath))
-      : boundedCapture ?? ports.captureSource(root, { tests: selected.map(item => item.path), appMap }));
+      ? ports.captureSource(root, { ...trySourceSelection(record, recordPath), ...captureExtra })
+      : boundedCapture ?? ports.captureSource(root, { tests: selected.map(item => item.path), appMap, ...captureExtra }));
     if (prepared && record?.product_parts && !options['--new'] && JSON.stringify(prepared.composition.product_parts) !== JSON.stringify(record.product_parts)) throw new Stop(4, 'The product part ownership changed. The original session is kept; use --new explicitly.');
     if (prepared) appMap = capture.appMap;
     context.appMap = appMap;
@@ -4310,12 +4423,12 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     for (const warning of capture.warnings ?? []) line(ports.stderr, warning);
     if (record?.simulation_scope && !options['--new']) {
       const problem = !isDeepStrictEqual(record.prompt_hashes, capture.raw_prompt_hashes)
-        ? 'A prompt changed or this Try has no source record.' : tryPromptProblem(root, found, test, record, capture);
+        ? 'A prompt changed or this Try has no source record.' : tryPromptProblem(root, found, test, record, capture, ports);
       if (problem) throw new Stop(normalized.length ? context.doorMode ? 125 : 4 : 2,
         normalized.length ? `${problem} Run pdd simulate --new.` : 'This saved simulation does not contain the current whole project. Run pdd simulate --new.');
     }
     if(context.agentConnection&&loadRuntimeWorkspace({root}).configured)throw new Stop(5,'Bounded agent connection is unavailable: installed CLI controls do not establish packet-only context. Use the ordinary simulator without an agent connection.');
-    const identity = signIn(ports.gh, context.store);
+    const identity = context.probedIdentity ?? signIn(ports.gh, context.store, ports);
     Object.assign(context, { capture, identity, secrets: [identity.token], startedAt: ports.now(), deadline: ports.now() + TRY_MS, lint: { request_ids: [], state: null },
       batch: null, rows, timeoutMin: TRY_MS / 60_000, agentLimit: false, head: null });
     context.folder = store.folder('tries');
@@ -4344,7 +4457,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
         throw new Stop(2, `A Try for "${test.title}" is already open. --app-map and --tab apply only to a new Try: run pdd simulate ${test.story} --new (it stops the open Try first).`);
       }
       if (live && (context.doorMode || context.agentConnection) && !options['--new']) {
-        const problem=tryPromptProblem(root,found,test,record,capture);
+        const problem=tryPromptProblem(root,found,test,record,capture,ports);
         if (problem) throw new Stop(context.doorMode ? 125 : 4, `${problem} Run pdd simulate STORY${options['--serve'] !== undefined ? ' --serve' : ''} --new.`);
       }
       if (answer?.state === 'passed' && answer.result?.session?.state === 'paused' && !options['--new']) {
@@ -4392,6 +4505,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     for (;;) {
       if (!await admission(context, 'try', setup)) throw new Stop(context.interrupted ? 3 : 5, context.interrupted ? 'Stopped before sending.' : 'The interpreter stayed busy until the Try setup wait ended. No new Try was sent.');
       request = { requestId: ports.randomUUID(), source_sha256: capture.sha256, seed: test.path, max_calls: requestedBudget ?? 400, ...(appMap ? { app_map: appMap } : {}), ...(prepared ? {product_parts:prepared.composition.product_parts} : {}),
+        ...(context.serverFeatures?.includes('lazy-interfaces') ? { lazy_interfaces: true } : {}),
         tab };
       setup.request_ids.push(request.requestId);
       const registered = await recordRuntimeRequest(setup.reservation, request.requestId, slotPorts(context));
@@ -4453,6 +4567,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     }
     return printTryProblem(context, row);
   } catch (error) {
+    if (error?.unboundPort) throw error;
     if(options['--product'] && error.code && !error.exitCode){line(ports.stderr,`${error.code}: ${cleanText(error.message)}`);return 4;}
     if (options['--cli'] || options['--serve'] !== undefined || options['--save-last']) {
       line(ports.stderr, `pdd: ${cleanText(error.message || 'The Try could not start.', context.secrets ?? [])}`);
@@ -4480,7 +4595,7 @@ async function stopByName(context, cwd, words, origin) {
   }
   const [path, record] = hits[0], title = record.title ?? record.story ?? path;
   Object.assign(context, { root, store, origin });
-  const identity = signIn(ports.gh, store);
+  const identity = signIn(ports.gh, store, ports);
   context.secrets = [identity.token];
   context.runtime = new Runtime({ origin: record.origin ?? origin, token: identity.token, ports });
   line(ports.stderr, `Stopping the Try for "${title}"…`);
@@ -4537,8 +4652,8 @@ function trySetupRefused(context, test, appMap, refusals, reportUrl) {
 
 function printTryProblem(context, row) {
   if (context.doorMode) throw new Stop(125, row.time_limit ? `${row.time_limit.message} ${row.time_limit.fix}` : row.refusals?.map(r => r.message || r.code).join('; ') || `The Try could not start (${row.state}).`);
-  const exitCode = exitCodeFor([row]);
-  context.ports.stdout.write(renderText({ rows: [row], exitCode, secrets: context.secrets, recovery: `pdd simulate ${row.story}` }));
+  const exitCode = context.ports.exitCodeFor([row]);
+  context.ports.stdout.write(renderText({ rows: [row], exitCode, secrets: context.secrets, recovery: `pdd simulate ${row.story}` }, context.ports));
   return exitCode;
 }
 
@@ -4560,8 +4675,27 @@ async function showTry(context, test, link, options, tryId, reused = false, sess
     if (context.agentConnection) {
       const finalRuntime = new Runtime({ origin: context.origin, token: context.identity.token, ports });
       context.agentFinalSend = finalRuntime.send.bind(finalRuntime);
-      try { bridge = await (ports.agentBridge ?? (await import('./agent-chat.mjs')).createAgentBridge)(context, test, tryId, options, link); }
-      catch (error) { throw new Stop(5, cleanText(error.message || 'Your agent could not connect.', context.secrets)); }
+      try {
+        const seamPorts = {
+          redaction: ports.redaction,
+          redactSecrets: ports.redactSecrets,
+          loadAgentDefinitions: ports.loadAgentDefinitions,
+          discoverAgents: ports.discoverAgents,
+          askAgent: ports.askAgent,
+          evidenceEligibility: ports.evidenceEligibility ?? ports.readEvidenceEligibility,
+          guidePorts: ports.guidePorts,
+          findTests: ports.findTests,
+          captureSource: ports.captureSource,
+          isStoryPath: ports.isStoryPath,
+          hasAcceptance: ports.hasAcceptance,
+          matchTests: ports.matchTests,
+          orphanSummary: ports.orphanSummary,
+        };
+        bridge = await (ports.agentBridge
+          ? ports.agentBridge(context, test, tryId, options, link)
+          : (await import('./agent-chat.mjs')).createAgentBridge(context, test, tryId, options, link, seamPorts));
+      }
+      catch (error) { if (error?.unboundPort) throw error; throw new Stop(5, cleanText(error.message || 'Your agent could not connect.', context.secrets)); }
     }
     if (!options['--no-open'] && await ports.openUrl(bridge?.url ?? link)) line(ports.stdout, `Try ready for "${test.title}": ${link} (open in your browser). ${ends}`);
     else {
@@ -4570,7 +4704,7 @@ async function showTry(context, test, link, options, tryId, reused = false, sess
       if (bridge) line(ports.stdout, `Owner agent chat link (private; do not share): ${bridge.url}`);
     }
     if (!bridge) { await watchSavedTests(context, tryId, !options['--no-wait'] && ports.interactive, test.story); return 0; }
-    answers = ports.interactive ? lineReader(ports.stdin) : null;
+    answers = ports.interactive ? ports.lineReader(ports.stdin) : null;
     context.onAgentChatClose = () => answers?.close();
     return await bridge.run(async () => {
       const tests = await collectSavedTests(context, tryId), approvals = await collectApprovals(context, tryId, test.story, answers);
@@ -4640,7 +4774,7 @@ const inRepo = (realRoot, path) => { try { return realpathSync(join(realRoot, pa
 // bound here; tests may replace the same ports used by the native adapter.
 const caseNativeFiles={lstat:lstatSync,read:readFileSync,open:openSync,write:writeFileSync,close:closeSync,sync:fsyncSync,stat:fstatSync,mkdir:mkdirSync,list:readdirSync,rename:renameSync,unlink:unlinkSync,link:linkSync,realpath:realpathSync};
 const caseLeases=new WeakMap();
-function casePorts(ports={}){return{files:ports.files??caseNativeFiles,env:ports.env??process.env,hash:ports.hash??sha256,nonce:ports.randomUUID??randomUUID,now:ports.now??Date.now,pid:ports.pid??process.pid,host:ports.host??hostname(),isAlive:ports.isAlive??(pid=>{try{process.kill(pid,0);return true;}catch(e){return e.code==='ESRCH'?false:null;}}),sleep:ports.sleep??((ms,signal)=>new Promise(done=>{if(signal?.aborted)return done();const finish=()=>{clearTimeout(timer);signal?.removeEventListener('abort',finish);done();};const timer=setTimeout(finish,ms);signal?.addEventListener('abort',finish,{once:true});})),fault:ports.fault??(()=>{})};}
+function casePorts(ports={}){const findTestsBound=ports.findTests??(input=>findTests(input,ports)),captureSourceBound=ports.captureSource??((root,options)=>captureSource(root,options,ports));return{files:ports.files??caseNativeFiles,env:ports.env??process.env,hash:ports.hash??sha256,nonce:ports.randomUUID??randomUUID,now:ports.now??Date.now,pid:ports.pid??process.pid,host:ports.host??hostname(),isAlive:ports.isAlive??(pid=>{try{process.kill(pid,0);return true;}catch(e){return e.code==='ESRCH'?false:null;}}),sleep:ports.sleep??((ms,signal)=>new Promise(done=>{if(signal?.aborted)return done();const finish=()=>{clearTimeout(timer);signal?.removeEventListener('abort',finish);done();};const timer=setTimeout(finish,ms);signal?.addEventListener('abort',finish,{once:true});})),fault:ports.fault??(()=>{}),findTests:findTestsBound,captureSource:captureSourceBound,isStoryPath:ports.isStoryPath,hasAcceptance:ports.hasAcceptance,matchTests:ports.matchTests,orphanSummary:ports.orphanSummary};}
 function caseStat(p,path){try{return p.files.lstat(path);}catch(e){if(e.code==='ENOENT')return null;throw e;}}
 function caseStateDirectory(env,root,p){
   const configured=resolve(env.PDD_STATE_DIR||join(env.HOME||homedir(),'.pdd','runtime'));
@@ -4753,7 +4887,7 @@ function prepareCase(root,record,p){
   if(unsafeNumber)throw Error('received numeric expectation needs lossless handling; exact original bytes retained');
   if(!isObject(test)||test.schema_version!==TEST_SCHEMA||!Array.isArray(test.steps)||!test.steps.length||typeof story!=='string'||test.story_path!==story||typeof path!=='string')throw Error('the exact original test association or complete received scenario is unavailable');
   const workspace=loadRuntimeWorkspace({root});requireRuntimePath(workspace,{path,from:'Original selected test'});requireRuntimePath(workspace,{path:story,from:path});
-  const found=findTests({root}),original=found.tests.find(t=>t.path===path&&t.storyPath===story&&t.doc?.story_path===story);
+  const found=p.findTests({root}),original=found.tests.find(t=>t.path===path&&t.storyPath===story&&t.doc?.story_path===story);
   if(!original?.doc||original.doc.schema_version!==TEST_SCHEMA||!Array.isArray(original.doc.steps)||NOT_TEST_FILES.test(basename(path)))throw Error(`the original test ${path} is missing or no longer belongs to ${story}. Restore it before importing the case`);
   if(original.criteriaRefusal)throw Error(original.criteriaRefusal.message);
   caseSafe(p,join(root,path));caseSafe(p,join(root,story));
@@ -4834,8 +4968,9 @@ function applyPendingCaseSync({root,pendingId,writeOwnership,signal},ports={},pu
     p.fault('before-ledger',record);persist({...transaction,state:'committed'});p.fault('committed',record);
     return caseResult(record,'committed','applied',{path:prepared.path,steps:prepared.steps});
   }catch(error){
+    if(error?.unboundPort)throw error;
     if(transaction?.state==='publishing'){
-      try{const known=caseImportState(root,record,p,{reconcile:true,reason:'reconciled after publication'});if(known.result?.state==='committed')return known.result;}catch{/* durable prepared record retains custody */}
+      try{const known=caseImportState(root,record,p,{reconcile:true,reason:'reconciled after publication'});if(known.result?.state==='committed')return known.result;}catch(reconcileError){if(reconcileError?.unboundPort)throw reconcileError;/* durable prepared record retains custody */}
     }
     return caseResult(record,'pending',cleanText(error.message??error));
   }finally{if(temp){try{const remaining=caseStat(p,temp);if(tempOwned&&remaining?.ino===tempOwned.ino&&remaining.dev===tempOwned.dev)p.files.unlink(temp);}catch(e){if(e.code!=='ENOENT'){} }} }
@@ -4846,9 +4981,9 @@ export const saveDoorCaseResult=(root,saved,options={})=>{
   try{root=p.files.realpath(root);record=retainCase(root,saved,options,p);
     const known=caseImportState(root,record,p);if(known.result)return caseOutcome(known.result);
     if(options.writeOwnership)return caseOutcome(applyPendingCaseSync({root,pendingId:record.pendingId,writeOwnership:options.writeOwnership,signal:options.signal},options.ports??{env:options.env}));
-    let reason;try{prepareCase(root,record,p);}catch(error){reason=error.message;}
+    let reason;try{prepareCase(root,record,p);}catch(error){if(error?.unboundPort)throw error;reason=error.message;}
     const result=caseResult(record,'pending',options.signal?.aborted?'case save cancelled':reason??'close the editor for the named original test and apply the retained case with supported ownership');return caseOutcome(result);}
-  catch(error){return{kind:'failure',message:`not added: durable case receipt failed (${cleanText(error.message??error)}).${record?' Recovery: '+record.recoveryPath:''}`};}
+  catch(error){if(error?.unboundPort)throw error;return{kind:'failure',message:`not added: durable case receipt failed (${cleanText(error.message??error)}).${record?' Recovery: '+record.recoveryPath:''}`};}
 };
 export const saveDoorCase=(root,saved,options={})=>saveDoorCaseResult(root,saved,options).message;
 
@@ -4871,24 +5006,24 @@ function retainedCaseAuthority(root,record,p){
   const workspace=loadRuntimeWorkspace({root});
   requireRuntimePath(workspace,{path,from:'Retained case original'});requireRuntimePath(workspace,{path:story,from:path});
   caseSafe(p,join(root,path));caseSafe(p,join(root,story));
-  const found=findTests({root}),test=found.tests.find(test=>test.path===path&&test.storyPath===story);
+  const found=p.findTests({root}),test=found.tests.find(test=>test.path===path&&test.storyPath===story);
   if(!test||test.doc?.story_path!==story||sha256(Buffer.from(caseRead(p,join(root,story))))!==original.story_sha256)throw Error('the original Story or test changed');
-  const selection=trySourceSelection(original,path),capture=captureSource(root,selection);
+  const selection=trySourceSelection(original,path),capture=p.captureSource(root,selection);
   const references=capture.references??[];
   if((references.length||original.contract_references!==undefined)
     &&(!Array.isArray(original.contract_references)||!isDeepStrictEqual(original.contract_references,references)))throw Error('original reference baseline is unavailable or changed');
-  const problem=tryPromptProblem(root,found,test,original,capture);if(problem)throw Error(problem);
+  const problem=tryPromptProblem(root,found,test,original,capture,p);if(problem)throw Error(problem);
   const seed=original.seed_scenario;
   if(!isObject(seed)||seed.schema_version!==TEST_SCHEMA||seed.story_path!==story||!Array.isArray(seed.steps)||!seed.steps.length)
     throw Error('original captured scenario context is unavailable');
   // Let the capture owner discover both closures. Current scenario edits cannot
   // hide required context from the original uploaded seed, and neither capture
   // may supply a missing original pin.
-  const originalCapture=captureSource(root,{...selection,prepareSource:()=>[{path,bytes:JSON.stringify(seed)}]});
+  const originalCapture=p.captureSource(root,{...selection,prepareSource:()=>[{path,bytes:JSON.stringify(seed)}]});
   for(const selected of [capture,originalCapture]){
     if(!selected.sources.filter(file=>file.path.endsWith('.prompt.md')).every(file=>hash(raw[file.path])&&hash(effective[file.path])))
       throw Error('complete original raw/effective source pins are unavailable');
-    const problem=tryPromptProblem(root,found,{...test,doc:seed},original,selected);if(problem)throw Error(problem);
+    const problem=tryPromptProblem(root,found,{...test,doc:seed},original,selected,p);if(problem)throw Error(problem);
   }
   return JSON.stringify({id:meta.id,root:meta.root,session:meta.session_id,path,story,pins:{story:original.story_sha256,raw,effective,references:original.contract_references}});
 }
@@ -4935,7 +5070,7 @@ export async function applyPendingCaseWithHandoff({cwd=process.cwd(),pendingId,h
     known=caseImportState(root,record,p,{inspect:true});if(known.result)return outcome(known.result);
     if(!known.published&&!known.reconciliationOnly)guard();
     return outcome(applyPendingCaseSync({root,pendingId,writeOwnership:lease,signal:controller.signal},ports,guard));
-  }catch(error){return record?outcome(caseResult(record,'pending',cleanText(error.message??error))):{kind:'failure',message:`not added: retained case unavailable (${cleanText(error.message??error)}).`};}
+  }catch(error){if(error?.unboundPort)throw error;return record?outcome(caseResult(record,'pending',cleanText(error.message??error))):{kind:'failure',message:`not added: retained case unavailable (${cleanText(error.message??error)}).`};}
   finally{try{lease?.release();}finally{unsubscribe?.();for(const remove of removals)remove();}}
 }
 
@@ -4945,7 +5080,7 @@ async function caseHandoff(context,testPath){
   if(context.ports.caseHandoff)return context.ports.caseHandoff({root:context.root,testPath,signal:context.signal});
   if(!context.ports.interactive||context.signal?.aborted)return null;
   line(context.ports.stdout,`Close the editor for ${testPath}. Hand over this closed file for the pending case apply? y/N`);
-  const answers=lineReader(context.ports.stdin);try{const answer=await answers.ask();return /^y(?:es)?$/i.test(answer.trim())?{kind:'closed-editor',testPath}:null;}finally{answers.close();}
+  const answers=context.ports.lineReader(context.ports.stdin);try{const answer=await answers.ask();return /^y(?:es)?$/i.test(answer.trim())?{kind:'closed-editor',testPath}:null;}finally{answers.close();}
 }
 
 // Saved cases: add each new one once. Returns 'ok', 'missing' (no endpoint yet) or 'ended'.
@@ -4958,11 +5093,12 @@ async function collectSavedTests(context, tryId) {
   for (const [receivedIndex,saved] of reply.json.tests.entries()) {
     const key = typeof saved?.id === 'string' ? saved.id : null;
     if (!key) continue;
-    const p=casePorts({env:ports.env}),record=retainCase(root,saved,{seedTest:context.seedTest,sessionId:tryId,rawBytes:receivedCaseBytes(reply.text,receivedIndex)},p);
+    const caseSelectionPorts={env:ports.env,findTests:ports.findTests,captureSource:ports.captureSource,isStoryPath:ports.isStoryPath,hasAcceptance:ports.hasAcceptance,matchTests:ports.matchTests,orphanSummary:ports.orphanSummary};
+    const p=casePorts(caseSelectionPorts),record=retainCase(root,saved,{seedTest:context.seedTest,sessionId:tryId,rawBytes:receivedCaseBytes(reply.text,receivedIndex)},p);
     let result=caseResult(record,'pending','close the editor for the named original test and explicitly hand over the file');
-    let valid=true;try{prepareCase(root,record,p);}catch(error){valid=false;result=caseResult(record,'pending',error.message);}
+    let valid=true;try{prepareCase(root,record,p);}catch(error){if(error?.unboundPort)throw error;valid=false;result=caseResult(record,'pending',error.message);}
     const handoff=valid&&!writeLeases.has(record.target)?await caseHandoff(context,record.target):null;
-    if(handoff||writeLeases.has(record.target)){try{let lease=writeLeases.get(record.target);if(!lease){lease=await acquireCaseWriteOwnership({root,testPath:record.target,handoff,signal:context.signal},{env:ports.env});writeLeases.set(record.target,lease);}result=await applyPendingCase({root,pendingId:record.pendingId,writeOwnership:lease,signal:context.signal},{env:ports.env});}catch(error){result=caseResult(record,'pending',error.message);}}
+    if(handoff||writeLeases.has(record.target)){try{let lease=writeLeases.get(record.target);if(!lease){lease=await acquireCaseWriteOwnership({root,testPath:record.target,handoff,signal:context.signal},caseSelectionPorts);writeLeases.set(record.target,lease);}result=await applyPendingCase({root,pendingId:record.pendingId,writeOwnership:lease,signal:context.signal},caseSelectionPorts);}catch(error){if(error?.unboundPort)throw error;result=caseResult(record,'pending',error.message);}}
     const said=caseMessage(result);
     if(result.duplicate&&done[key])continue;
     if(done[key]?.result===said)continue;
@@ -4991,8 +5127,11 @@ async function collectApprovals(context, tryId, story, answers) {
         handled[id] = { noticed: true }; store.write(path, handled);
         continue;
       }
-      const real = realpathSync(root), prompt = typeof request.prompt_path === 'string' ? promptPath(real, real, request.prompt_path) : null;
-      const result = prompt ? await askApproval({ root: real, path: prompt, stdout: ports.stdout, answers, expectedHash: request.prose_sha256 })
+      if (typeof ports.promptPath !== 'function' || typeof ports.askApproval !== 'function') {
+        throw unboundPortError('Try approval ports (promptPath, askApproval) are not bound.');
+      }
+      const real = realpathSync(root), prompt = typeof request.prompt_path === 'string' ? ports.promptPath(real, real, request.prompt_path) : null;
+      const result = prompt ? await ports.askApproval({ root: real, path: prompt, stdout: ports.stdout, answers, expectedHash: request.prose_sha256 })
         : { state: 'declined', message: `not approved: ${asked} is not a Git-visible *.prompt.md file in this repository.` };
       line(ports.stdout, result.message);
       handled[id] = { state: result.state, at: new Date(ports.now()).toISOString() };
@@ -5007,7 +5146,7 @@ async function collectApprovals(context, tryId, story, answers) {
 
 // Read saved cases and approval requests once; with `wait` (a person's terminal), keep reading until Ctrl-C or the Try ends.
 async function watchSavedTests(context, tryId, wait, story) {
-  const { ports } = context, answers = wait ? lineReader(ports.stdin) : null;
+  const { ports } = context, answers = wait ? ports.lineReader(ports.stdin) : null;
   let polls = 0, told = false, tests = 'ok', approvals = 'ok';
   try {
     for (;;) {
@@ -5035,14 +5174,14 @@ async function watchSavedTests(context, tryId, wait, story) {
 export async function runDoorCall(descriptor, input, givenPorts = {}) {
   const ports = withDefaults(givenPorts), { root, origin, sessionId, login, prompt, operation } = descriptor;
   if(loadRuntimeWorkspace({root}).configured)ports.captureSource(root,{tests:descriptor.originalPath?[descriptor.originalPath]:[descriptor.prompt].filter(Boolean)});
-  const store = stateFor(ports.env, root), identity = signIn(ports.gh, store);
+  const store = stateFor(ports.env, root), identity = signIn(ports.gh, store, ports);
   if (identity.login !== login) throw new Stop(5, `This Try belongs to ${login}. Run: gh auth switch -u ${login}`);
   if (runtimeOrigin({ PDD_RUNTIME_URL: origin }) !== origin) throw new Stop(2, 'The saved interpreter address is invalid.');
   const repo=store.read(join(store.dir,'repos',`${store.repoKey(root)}.json`));
   const saved=Object.entries(repo?.tries ?? {}).find(([,record])=>record.id===sessionId);
   if (saved) {
-    const found=findTests({root}), test=found.tests.find(test=>test.path===saved[0]);
-    const problem=tryPromptProblem(root,found,test,saved[1]);
+    const found=ports.findTests({root}), test=found.tests.find(test=>test.path===saved[0]);
+    const problem=tryPromptProblem(root,found,test,saved[1],undefined,ports);
     if (problem) throw new Stop(125,`${problem} Run pdd simulate STORY --new.`);
   }
   const runtime = new Runtime({ origin, token: identity.token, ports, signal: ports.signal });
@@ -5100,9 +5239,9 @@ export async function runDoorCall(descriptor, input, givenPorts = {}) {
 }
 
 export async function readTryOwner({ cwd = process.cwd(), story } = {}, givenPorts = {}) {
-  const ports = withDefaults(givenPorts), root = repoRoot(cwd), found = findTests({ root }), store = stateFor(ports.env, root);
+  const ports = withDefaults(givenPorts), root = repoRoot(cwd), found = ports.findTests({ root }), store = stateFor(ports.env, root);
   const repo = store.repo(root), open = found.tests.filter(test => repo.tries?.[test.path]);
-  let selected = story === undefined ? (open.length === 1 ? open : found.tests) : selectTests(found, [story]).selected;
+  let selected = story === undefined ? (open.length === 1 ? open : found.tests) : ports.selectTests(found, [story]).selected;
   if (selected.length > 1) { const live = selected.filter(test => repo.tries?.[test.path]); if (live.length === 1) selected = live; }
   if (selected.length !== 1) throw new Error(`Choose one Story${story ? ` matching "${story}"` : ''}. Available: ${found.tests.map(test => `${test.story} (${test.path})`).join(', ') || 'none'}.`);
   const test = selected[0];
@@ -5115,10 +5254,10 @@ export async function readTryOwner({ cwd = process.cwd(), story } = {}, givenPor
   if (!record) { await openTry(); record = store.repo(root).tries?.[test.path]; }
   if (!record) throw new Error('No confirmed Try is recorded. Run pdd simulate STORY.');
   ports.captureSource(root,{tests:[test.path]});
-  const identity = signIn(ports.gh, store);
+  const identity = signIn(ports.gh, store, ports);
   if (record.login !== identity.login) throw new Error(`This Try belongs to ${record.login}. Run: gh auth switch -u ${record.login}`);
   if (runtimeOrigin({ PDD_RUNTIME_URL: record.origin }) !== record.origin) throw new Error('The saved interpreter address is invalid.');
-  const promptProblem=tryPromptProblem(root,found,test,record);
+  const promptProblem=tryPromptProblem(root,found,test,record,undefined,ports);
   if (record.storyPath !== test.storyPath || record.story_sha256 && createHash('sha256').update(readFileSync(join(root, test.storyPath))).digest('hex') !== record.story_sha256 || promptProblem)
     throw new Error(`${promptProblem ?? 'The Story changed.'} Run pdd simulate STORY --new.`);
   let runtime = new Runtime({ origin: record.origin, token: identity.token, ports, signal: ports.signal });

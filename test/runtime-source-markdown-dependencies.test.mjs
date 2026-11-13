@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { captureSource } from '../src/runtime-preflight.mjs';
+import { captureSource } from '../src/runtime-seam.mjs';
 import { PLACE, harbor, root } from './runtime-fake.mjs';
 
 const DOCUMENT = 'docs/example.md', ORDER = 'tests/place-order.json';

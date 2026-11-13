@@ -1,7 +1,7 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {buildAgentInput} from '../src/agent-packet.mjs';
+import {buildAgentInput} from '../src/runtime/agent-packet.mjs';
 const entry={entry:'prompts/main.prompt.md#main',input_schema:{type:'object',properties:{argv:{type:'array',items:{type:'string'}},body:{type:'object',properties:{url:{type:'string'}}}},required:['argv'],additionalProperties:false}};
 const unpack=s=>JSON.parse(s.slice(s.indexOf('\n\nDATA\n')+7));
 test('packet contains short signatures once and keeps stable parts first',()=>{const context={project:'A project',message:'What can I try?',criteria:[{id:'AC1',text:'Help',state:'todo',entry:entry.entry,input:{argv:['--help']},checks:[{value:'secret expected'}]}],fields:{entry:entry.entry,input:{argv:[]}}};const before=JSON.stringify(context),text=buildAgentInput({context,entries:[entry,entry]}),p=unpack(text);assert.deepEqual(Object.keys(p),['productRules','ways','project','criteria','conversation','coverage','progress','try','message','changed']);assert.equal(p.ways.length,1);assert.deepEqual(p.ways[0],{entry:entry.entry,input:{argv:'array',body:{url:'string'}},required:['argv']});assert.equal(p.criteria[0].state,undefined);assert.deepEqual(p.progress,{line:'',items:[{id:'AC1',state:'todo'}]});assert.ok(!text.includes('additionalProperties'));assert.ok(!text.includes('secret expected'));assert.equal(p.message,context.message);assert.equal(JSON.stringify(context),before);});

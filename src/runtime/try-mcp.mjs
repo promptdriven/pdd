@@ -1,10 +1,7 @@
 // Generated from prompts/cli/try-mcp.prompt.md (sha256: e328d3c2c00b49291d2fc14650035514fe885f4ab03de25621753c6e4ff12134).
 import { createInterface } from 'node:readline';
-import { createRequire } from 'node:module';
 import { readTryOwner, runDoorCall, saveDoorCase, applyPendingCaseWithHandoff } from './runtime-client.mjs';
 import { createRunJudge } from './agent-judge.mjs';
-
-const packageVersion = createRequire(import.meta.url)('../package.json').version;
 
 const object = x => x !== null && typeof x === 'object' && !Array.isArray(x);
 const text = x => typeof x === 'string' && x.length > 0;
@@ -47,7 +44,13 @@ function recordedCaseNote({scope,covered,total}){
 }
 
 export function createTryTools({ cwd = process.cwd(), words = [], env } = {}, ports = {}) {
-  const dependencies = { readTryOwner, runDoorCall, saveDoorCase, applyPendingCaseWithHandoff, ...ports };
+  const dependencies = {
+    ...ports,
+    readTryOwner: ports.readTryOwner ?? readTryOwner,
+    runDoorCall: ports.runDoorCall ?? runDoorCall,
+    saveDoorCase: ports.saveDoorCase ?? saveDoorCase,
+    applyPendingCaseWithHandoff: ports.applyPendingCaseWithHandoff ?? applyPendingCaseWithHandoff,
+  };
   const runtimePorts = { ...ports, env: env ?? ports.env ?? process.env, stdout: ports.stderr ?? process.stderr, stderr: ports.stderr ?? process.stderr };
   const sessions = new Map();
   let queue = Promise.resolve();
@@ -125,7 +128,8 @@ export function createTryTools({ cwd = process.cwd(), words = [], env } = {}, po
   return { call(name, args = {}) { const result = queue.then(() => invoke(name, args)); queue = result.catch(() => {}); return result; } };
 }
 
-export async function runMcp({ cwd = process.cwd(), words = [], env } = {}, ports = {}) {
+export async function runMcp({ cwd = process.cwd(), words = [], env, client } = {}, ports = {}) {
+  const serverVersion = typeof client?.version === 'string' && client.version ? client.version : typeof ports.clientVersion === 'string' && ports.clientVersion ? ports.clientVersion : '0.0.0';
   const stdin = ports.stdin ?? process.stdin, stdout = ports.stdout ?? process.stdout, stderr = ports.stderr ?? process.stderr;
   const service = createTryTools({ cwd, words, env }, ports), replay = new Map();
   const send = message => stdout.write(`${JSON.stringify(message)}\n`);
@@ -136,7 +140,7 @@ export async function runMcp({ cwd = process.cwd(), words = [], env } = {}, port
     if (msg.method === 'initialize') {
       if (!object(msg.params) || typeof msg.params.protocolVersion !== 'string' || !object(msg.params.capabilities) || !object(msg.params.clientInfo)) return error(id, -32602, 'Invalid initialize parameters');
       const versions = ['2025-06-18', '2025-03-26', '2024-11-05'];
-      return { jsonrpc: '2.0', id, result: { protocolVersion: versions.includes(msg.params.protocolVersion) ? msg.params.protocolVersion : versions[0], capabilities: { tools: {} }, serverInfo: { name: 'pdd-try', version: packageVersion } } };
+      return { jsonrpc: '2.0', id, result: { protocolVersion: versions.includes(msg.params.protocolVersion) ? msg.params.protocolVersion : versions[0], capabilities: { tools: {} }, serverInfo: { name: 'pdd-try', version: serverVersion } } };
     }
     if (msg.method === 'ping' || msg.method === 'tools/list') {
       if (msg.params !== undefined && !object(msg.params)) return error(id, -32602, 'Parameters must be an object');

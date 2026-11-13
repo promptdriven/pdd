@@ -13,7 +13,7 @@ import { createServer } from 'node:http';
 import { parkAutomaticRun, runStatus, changeRun, stepDone, startRun, approveRun, yieldAutomaticCapacity, runtimeWakeTag } from '../src/workflow-runner.mjs';
 import { writeRun } from '../src/workflow-runs.mjs';
 import { checkCause, savedCheckCause } from '../src/workflow-results.mjs';
-import { checkRuntimeHealth, runCheck } from '../src/runtime-client.mjs';
+import { checkRuntimeHealth, runCheck } from '../src/runtime-seam.mjs';
 import { fakeRuntime, harbor, portsFor } from './runtime-fake.mjs';
 import { runAutopilotAlerts } from '../src/autopilot-alerts.mjs';
 import { createDependencyReadPorts, readDependencySnapshot } from '../src/issue-dependencies-github.mjs';

@@ -2,9 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { runCheck } from '../src/runtime-client.mjs';
-import { jsonRow, summaryLine, renderText } from '../src/runtime-output.mjs';
-import { outcomeFor } from '../src/runtime-outcome.mjs';
+import { runCheck } from '../src/runtime-seam.mjs';
+import { jsonRow, summaryLine, renderText } from '../src/runtime-seam.mjs';
+import { outcomeFor } from '../src/runtime-seam.mjs';
 import { readRunResults, resultLines } from '../src/workflow-results.mjs';
 import { fakeRuntime, harbor, portsFor } from './runtime-fake.mjs';
 
@@ -160,7 +160,7 @@ test('named states: saved pass evidence names its state without a summary file',
 
 test('named states: lint exception JSON uses a named state and reason', async t => {
   const h = harbor(t);
-  const { PreflightError } = await import('../src/runtime-preflight.mjs');
+  const { PreflightError } = await import('../src/runtime-seam.mjs');
   const p = portsFor(envFor(h), { captureSource() { throw new PreflightError(4, 'capture unavailable'); } });
   assert.equal(await runCheck({ cwd: h.repo, words: ['place-order'], options: { '--lint': true, '--json': true } }, p.ports), 4);
   const r = JSON.parse(p.ports.stdout.text);

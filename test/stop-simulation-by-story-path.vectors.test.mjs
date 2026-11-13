@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { runTry } from '../src/runtime-client.mjs';
+import { runTry } from '../src/runtime-seam.mjs';
 import { fakeRuntime, harbor, PLACE, portsFor, temp } from './runtime-fake.mjs';
 
 // Local native replay only: Git and saved state are real; authentication and service replies are injected.

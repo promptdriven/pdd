@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { findTests, preflight } from '../src/runtime-preflight.mjs';
+import { findTests, preflight } from '../src/runtime-seam.mjs';
 import { harbor, root } from './runtime-fake.mjs';
 
 const bin = join(root, 'bin/pdd.mjs');

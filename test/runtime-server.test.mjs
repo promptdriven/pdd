@@ -4,8 +4,8 @@ import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { cpSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runCheck } from '../src/runtime-client.mjs';
-import { exitCodeFor, validLink } from '../src/runtime-output.mjs';
+import { runCheck } from '../src/runtime-seam.mjs';
+import { exitCodeFor, validLink } from '../src/runtime-seam.mjs';
 import { PLACE, TOKEN, fakeRuntime, filesUnder, harbor, portsFor, root, sha } from './runtime-fake.mjs';
 
 async function check(setup, fake, words = [], options = {}, extra = {}) {
@@ -760,7 +760,7 @@ test('RUNTIME-SERVER16: one pasteable summary line with the appropriate verdict 
 
 // Wrong: the runtime address is written in more than one place, so a move needs many edits.
 test('RUNTIME-ADDRESS1: the runtime address is in one place only, and PDD_RUNTIME_URL overrides it', async () => {
-  const { DEFAULT_RUNTIME_URL, runtimeOrigin } = await import('../src/runtime-client.mjs');
+  const { DEFAULT_RUNTIME_URL, runtimeOrigin } = await import('../src/runtime/runtime-client.mjs');
   const host = new URL(DEFAULT_RUNTIME_URL).host;
   // This test names the hosts on purpose; every other tracked file must not.
   const others = ['--', '.', ':!test/runtime-server.test.mjs'];
@@ -774,7 +774,7 @@ test('RUNTIME-ADDRESS1: the runtime address is in one place only, and PDD_RUNTIM
   };
   assert.equal(evidenceOnly(`RUNBOOK.md:1:[proof](${DEFAULT_RUNTIME_URL}/r/13e8c6dc-532a-4f0c-bb0b-1d1b3671d2a8)`), true);
   for (const bad of [`RUNBOOK.md:1:PDD_RUNTIME_URL=${DEFAULT_RUNTIME_URL}`, `docs/cli.md:1:[proof](${DEFAULT_RUNTIME_URL}/r/13e8c6dc-532a-4f0c-bb0b-1d1b3671d2a8)`, `RUNBOOK.md:1:[proof](${DEFAULT_RUNTIME_URL}/r/latest)`]) assert.equal(evidenceOnly(bad), false);
-  assert.deepEqual(hits.filter(hit => !evidenceOnly(hit)).map(hit => hit.split(':')[0]), ['src/runtime-client.mjs']);
+  assert.deepEqual(hits.filter(hit => !evidenceOnly(hit)).map(hit => hit.split(':')[0]), ['src/runtime/runtime-client.mjs']);
   assert.equal(DEFAULT_RUNTIME_URL, 'https://runtime.promptdriven.ai');
   assert.equal(spawnSync('git', ['grep', '-n', '-e', 'sslip', '-e', '34-72-131-98', '-e', '34\\.72\\.131\\.98', ...others], { cwd: root, encoding: 'utf8' }).stdout, '');
   assert.equal(runtimeOrigin({}), DEFAULT_RUNTIME_URL);
@@ -1004,7 +1004,7 @@ test('RUNTIME-DRAFT4: the draft_prompts list of the server decides DRAFT; withou
 
 // Wrong: the runtime runs on a bare IP, and pdd refuses its own links or accepts a link to another host.
 test('RUNTIME-ADDRESS2: Try and report links on the runtime domain pass; links on the old IP or any other host, port or scheme fail', async () => {
-  const { runtimeOrigin } = await import('../src/runtime-client.mjs');
+  const { runtimeOrigin } = await import('../src/runtime/runtime-client.mjs');
   const origin = runtimeOrigin({}), host = 'https://runtime.promptdriven.ai';
   assert.equal(origin, host);
   const token = 'GzKhkowPRTBHXC8Px6XKK8bjrEpWNWk7E-igsV6aA-s';
@@ -1034,7 +1034,7 @@ test('RUNTIME-COST1: a check plan shows bounded calls before lint', async t => {
 
 // Wrong: a check that is still running looks like a failure in the PR line (cli 12b).
 test('RUNTIME-COST2: the summary line shows running or no verdict, never a cross, until a row really fails', async () => {
-  const { summaryLine } = await import('../src/runtime-output.mjs');
+  const { summaryLine } = await import('../src/runtime-seam.mjs');
   const row = (state, extra = {}) => ({ state, phase: 'server', criteria_total: 1, calls: 1, ...extra });
   assert.match(summaryLine([row('passed'), row('running')]), /^Prompt tests: running · /);
   assert.match(summaryLine([row('passed'), row('unknown')]), /^Prompt tests: no verdict · /);

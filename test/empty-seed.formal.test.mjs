@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-const { expandSource } = await import(process.env.PDD_FORMAL_MODULE || '../src/contract-refs.mjs');
+const { expandSource } = await import(process.env.PDD_FORMAL_MODULE || '../src/runtime/contract-refs.mjs');
 
 test('bounded empty-object insertions preserve values, own keys and surrounding bytes', () => {
   const keys = ['x', '__proto__', 'constructor'];

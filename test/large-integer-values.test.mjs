@@ -6,10 +6,8 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { captureSource, checkInput, fillHashes, findTests, preflight, readPrompt } from '../src/runtime-preflight.mjs';
-import { parseScenarioJson, roundedNumberTokens } from '../src/scenario-json.mjs';
-import { runCheck } from '../src/runtime-client.mjs';
-import { interfaceBlocks, proseSha256 } from '../src/runtime-preflight.mjs';
+import { captureSource, checkInput, fillHashes, findTests, preflight, readPrompt, runCheck, interfaceBlocks, proseSha256 } from '../src/runtime-seam.mjs';
+import { parseScenarioJson, roundedNumberTokens } from '../src/runtime/scenario-json.mjs';
 import { harbor, PLACE, sink } from './runtime-fake.mjs';
 import { fingerprintChanges, storyCard, storyFingerprint } from '../src/workflow-story-card.mjs';
 import { formatReplayEvidence, pinReplayVectors, readReplayEvidence } from '../src/workflow-replay.mjs';
@@ -221,7 +219,7 @@ test('LI10: a native-only test with a whole number above 2^53 keeps the state an
 });
 
 test('T02 (#3150 advice): for 2^53 <= n < 1e21 the advice offers an exponent spelling that reads back as n and that today\'s refusal rule admits', async t => {
-  const { exactNumberSpelling } = await import('../src/runtime-preflight.mjs');
+  const { exactNumberSpelling } = await import('../src/runtime-seam.mjs');
   // Today's interpreter rule (prompt_runtime/program_scenario.py _validate_scenario_integers): an integer literal (no
   // fraction, no exponent) outside +-(2^53 - 1) is refused; a token with a fraction or exponent is a float and passes.
   const refusedToday = token => /^-?(?:0|[1-9][0-9]*)$/.test(token) && (BigInt(token) > 2n ** 53n - 1n || BigInt(token) < -(2n ** 53n - 1n));

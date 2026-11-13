@@ -178,11 +178,16 @@ test('shell completion offers only the main names', t => {
 // The lines that pdd writes name only the new commands. The removal line is built from the catalog words, so
 // no source file needs the text `pdd check` or `pdd try`. A server text passes through as data, never as source.
 test('no source line names pdd check or pdd try', () => {
-  const dir = join(root, 'src'), found = [];
-  for (const name of readdirSync(dir).filter(file => file.endsWith('.mjs'))) {
-    readFileSync(join(dir, name), 'utf8').split('\n').forEach((text, index) => {
+  const files = [
+    ...readdirSync(join(root, 'src')).filter(file => file.endsWith('.mjs')).map(file => join('src', file)),
+    ...readdirSync(join(root, 'src/runtime')).filter(file => file.endsWith('.mjs')).map(file => join('src/runtime', file)),
+  ];
+  assert.ok(files.length >= 105, `expected full src and src/runtime scan, got ${files.length}`);
+  const found = [];
+  for (const file of files) {
+    readFileSync(join(root, file), 'utf8').split('\n').forEach((text, index) => {
       // A whole-line comment is never printed.
-      if (!text.trim().startsWith('//') && /\bpdd (?:check|try)\b/.test(text)) found.push(`${name}:${index + 1}: ${text.trim().slice(0, 120)}`);
+      if (!text.trim().startsWith('//') && /\bpdd (?:check|try)\b/.test(text)) found.push(`${file}:${index + 1}: ${text.trim().slice(0, 120)}`);
     });
   }
   assert.deepEqual(found, []);

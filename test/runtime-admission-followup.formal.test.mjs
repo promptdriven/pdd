@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
-import { acquireRuntimeSlot, releaseRuntimeSlot } from '../src/runtime-slots.mjs';
-import { runCheck } from '../src/runtime-client.mjs';
+import { acquireRuntimeSlot, releaseRuntimeSlot } from '../src/runtime/runtime-slots.mjs';
+import { runCheck } from '../src/runtime-seam.mjs';
 import { harbor, fakeRuntime, portsFor, TOKEN } from './runtime-fake.mjs';
 
 // Oracles come from the approved local-queue/capacity-wait Rules to check and

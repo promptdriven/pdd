@@ -5,9 +5,10 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
-import { applyPendingCaseWithHandoff, runTry } from '../src/runtime-client.mjs';
-import { findTests, gitFiles, proseSha256 } from '../src/runtime-preflight.mjs';
-import { openCli, runShim } from '../src/try-doors.mjs';
+import { runTry } from '../src/runtime-seam.mjs';
+import { applyPendingCaseWithHandoff } from '../src/runtime-seam.mjs';
+import { findTests, gitFiles, proseSha256 } from '../src/runtime-seam.mjs';
+import { openCli, runShim } from '../src/runtime-seam.mjs';
 import { harbor, fakeRuntime, portsFor } from './runtime-fake.mjs';
 
 // Requirements: simulate-program-kind's saved-session and selection rules, plus

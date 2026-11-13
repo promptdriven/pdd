@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { markdownDefinitions, markdownLinks, markdownSectionText } from '../src/runtime-markdown.mjs';
+import { markdownDefinitions, markdownLinks, markdownSectionText } from '../src/runtime/runtime-markdown.mjs';
 
 // Independent oracle: approved markdown-code-dependencies Story AC1–AC4 and
 // runtime-markdown.prompt.md. These finite grammars are deliberate subsets of

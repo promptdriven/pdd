@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { runCheck } from '../src/runtime-client.mjs';
-import { interfaceBlocks, proseSha256 } from '../src/runtime-preflight.mjs';
+import { runCheck } from '../src/runtime-seam.mjs';
+import { interfaceBlocks, proseSha256 } from '../src/runtime-seam.mjs';
 import { readRunResults, resultLines } from '../src/workflow-results.mjs';
 import { runStatus } from '../src/workflow-runner.mjs';
 import { fixture as workflow } from './helpers/workflow-runner-fixture.mjs';
@@ -118,7 +118,6 @@ for (const json of [false, true]) for (const list of [false, true]) {
     fake.capacity=()=>({status:200,json:{maintenance:null,features:['lint-tests']}});
     const env = { HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin };
     const first = portsFor(env);
-    first.ports.gh = () => assert.fail('local lint must not authenticate');
     assert.equal(await runCheck({ cwd: setup.repo, words: ['place-order', 'kernel'], options: { '--lint': true, ...(json ? { '--json': true } : {}) } }, first.ports), 4);
     if (json) {
       const result = JSON.parse(first.ports.stdout.text);
@@ -140,7 +139,7 @@ for (const json of [false, true]) for (const list of [false, true]) {
     assert.ok(refused.refusals.some(item => item.code === 'interface-missing'));
     omission(kernel(saved.rows));
     for (const readJson of [false, true]) {
-      const next = portsFor(env); next.ports.gh = first.ports.gh;
+      const next = portsFor(env); next.ports.gh = () => assert.fail('local lint read must not authenticate');
       assert.equal(await runCheck({ cwd: setup.repo, options: { '--read': evidence.batch, ...(readJson ? { '--json': true } : {}) } }, next.ports), 4);
       if (readJson) {
         const read = JSON.parse(next.ports.stdout.text);
