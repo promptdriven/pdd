@@ -33,7 +33,8 @@ test('candidate: valid native omissions do not become broken-test counts',async 
 });
 
 test('candidate: locally refused mixed inventory does not claim interpreter findings',async t=>{
-  const setup=harbor(t,repo=>{native(repo);writeFileSync(join(repo,'missing.prompt.md'),'# New behavior\n');}),ports=offline(setup);
+  const setup=harbor(t,repo=>{native(repo);writeFileSync(join(repo,'missing.prompt.md'),'# New behavior\n');});
+  const ports=portsFor({HOME:setup.home,PDD_STATE_DIR:setup.state},{gh:()=>({status:1,stdout:''}),fetch:()=>assert.fail('unexpected network')}).ports;
   assert.equal(await runCheck({cwd:setup.repo,options:{'--lint':true}},ports),4);
   assert.ok(ports.stdout.text.includes('missing.prompt.md'));
   assert.ok(ports.stdout.text.includes('cross-process filesystem locks'));

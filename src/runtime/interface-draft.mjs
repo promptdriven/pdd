@@ -1,4 +1,4 @@
-// Generated from prompts/cli/interface-draft.prompt.md (sha256: 8096e897cfe93b06ca82399987c273f8a7aa4b7a9b87f8b6aa7874379f9773ca).
+// Generated from prompts/cli/interface-draft.prompt.md (sha256: e805186afc5309318a33c4210471fb4b8cfa6822ce4052514b842ea62895f760).
 import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, linkSync, renameSync, rmSync, openSync, closeSync, fstatSync, chmodSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { basename, dirname, join, relative, resolve } from 'node:path';
@@ -25,12 +25,13 @@ export function interfaceFindings({root, paths = promptPaths(root)}) {
     } catch (error) { return [{code:error.code ?? 'interface-unreadable',path,message:error.message}]; }
   });
 }
-export function runtimeCoverage({root, paths = promptPaths(root)}) {
+export function runtimeCoverage({root, paths = promptPaths(root), allowMissingInterfaces = false}) {
   const visible = new Set(gitFiles(root));
   let checkable = 0, native_only = 0;
   for (const path of paths) {
     try {
       const prompt = readPrompt(root,visible,path);
+      if (allowMissingInterfaces && prompt.error === 'interface-missing') { checkable++; continue; }
       if (promptRefusal(prompt,'interface') || interfaceSchemaProblems(prompt.interface).length) continue;
       if (prompt.interface.kind === 'native-only') native_only++;
       else if (Array.isArray(prompt.interface.entries) && prompt.interface.entries.length && prompt.interface.entries.every(entry=>typeof entry?.operation==='string' && entry.operation.trim() && entry.input_schema && entry.result_schema)) checkable++;
