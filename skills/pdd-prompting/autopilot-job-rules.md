@@ -11,12 +11,12 @@ line against its own records. A line that the records do not support is red.
 ## Skill choice
 
 - A fix that changes no product behavior uses `pdd-small-change`, also when the issue is written as a bug. Pick
-  `pdd-small-change` whenever every planned file takes path `d` (docs, config, CI, package metadata, lock files, or
-  test files and fixtures).
+  `pdd-small-change` whenever every planned file takes unowned path `d` non-code files (docs, CI, lock files,
+  non-behavior config or metadata, or test-only maintenance — never `*.prompt.md` or `user_stories/*.md`).
 - Write no new Story and no new prompt for a path `d` non-code file.
 - When a `pdd-small-change` run changes owned code (path `a`, `b` or `c`), include the Story test, replay and
   `Runtime:` evidence that `pdd-bug` requires.
-- Repairs keep the build's chosen PDD skill instead of picking a different skill mid-PR.
+- A repair on a path-`d`-only PR keeps path `d` without adding a new Story or prompt.
 
 ## Changed
 

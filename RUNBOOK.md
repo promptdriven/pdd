@@ -833,10 +833,11 @@ records. A line that the records do not support is red. The same rules, short en
 `autopilot-job-rules.md` of the pdd-prompting skill; a job reads that file in full.
 
 - **Skill choice:** a fix that changes no product behavior uses `pdd-small-change`, also when the issue is written as a
-  bug. Pick `pdd-small-change` whenever every planned file takes path `d` (docs, config, CI, package metadata, lock
-  files, or test files and fixtures), and write no new Story or prompt for path `d` files. When a `pdd-small-change`
-  run changes owned code (path `a`, `b` or `c`), keep the Story test, replay and `Runtime:` evidence. Repairs keep the
-  build's chosen PDD skill.
+  bug. Pick `pdd-small-change` whenever every planned file takes unowned path `d` non-code files (docs, CI, lock files,
+  non-behavior config or metadata, or test-only maintenance — never `*.prompt.md` or `user_stories/*.md`), and write no
+  new Story or prompt for path `d` files. When a `pdd-small-change` run changes owned code (path `a`, `b` or `c`), keep
+  the Story test, replay and `Runtime:` evidence. A repair on a path-`d`-only PR keeps path `d` without adding a new
+  Story or prompt.
 - **Changed** means changed against the base: `git diff --name-only origin/BASE...HEAD` (BASE is the PR's base
   branch, usually `main`). It never means changed since the previous PR head. A Story or prompt that a merge from the
   base brought in is not changed. A changed Story is a Story whose Story file or test file changed, or whose test
