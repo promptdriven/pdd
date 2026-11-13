@@ -1,9 +1,8 @@
-// Generated from prompts/cli/autopilot-update.prompt.md (sha256: 644a9037889822416e9a01d24181a97fcfaa9ba54efc1d46e4c627f5be0cf22e).
+// Generated from prompts/cli/autopilot-update.prompt.md (sha256: 5f9dbe56e2e9622f7e6d665f907d66c4a793e2c5579cda7bc0b58c3f311090a0).
 import * as nativeFs from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { isNewerRelease, parseReleaseVersion } from './release-notice.mjs';
-import { setupSkills as defaultSetupSkills } from './skills-install.mjs';
+import { isNewerRelease, parseReleaseVersion, pickLatestRelease } from './release-notice.mjs';
 
 const HOUR_MS = 60 * 60 * 1000;
 const STATUS_FILE = 'autopilot-update.json';
@@ -26,15 +25,39 @@ function writeJson(file, data, fs) {
   } catch { /* Best-effort status persistence. */ }
 }
 
-export function hasMidWriteJobs(coreRoot, ports = {}) {
+function isMidWriteOrRuntimeJob(job) {
+  if (!job || typeof job !== 'object') return false;
+  if (job.phase === 'ending' || job.lane?.state === 'final') return true;
+  if (job.runtimeWait?.state === 'sent' || job.runtime?.state === 'running') return true;
+  return false;
+}
+
+export function hasMidWriteJobs(target, ports = {}) {
   const fs = ports.fs ?? nativeFs;
-  if (!coreRoot) return false;
-  let names = [];
-  try { names = fs.readdirSync(join(coreRoot, 'jobs')).filter(name => name.endsWith('.json')); }
-  catch { return false; }
-  for (const name of names) {
-    const job = readJson(join(coreRoot, 'jobs', name), fs);
-    if (job?.phase === 'ending' || job?.lane?.state === 'final') return true;
+  const coreRoot = typeof target === 'string' ? target : target?.coreRoot;
+  const stateRoot = (typeof target === 'object' && target !== null ? target.stateRoot : null) ?? ports.stateRoot ?? null;
+  const roots = new Set();
+  if (typeof coreRoot === 'string' && coreRoot) roots.add(coreRoot);
+  if (typeof stateRoot === 'string' && stateRoot) {
+    let entries = [];
+    try { entries = fs.readdirSync(stateRoot); } catch { entries = []; }
+    for (const entry of entries) {
+      if (!entry.endsWith('-core')) continue;
+      const candidate = join(stateRoot, entry);
+      if (candidate !== coreRoot) {
+        const saved = readJson(join(stateRoot, `${entry.slice(0, -5)}.json`), fs);
+        if (saved && saved.enabled === false) continue;
+      }
+      roots.add(candidate);
+    }
+  }
+  for (const root of roots) {
+    let names = [];
+    try { names = fs.readdirSync(join(root, 'jobs')).filter(name => name.endsWith('.json')); }
+    catch { continue; }
+    for (const name of names) {
+      if (isMidWriteOrRuntimeJob(readJson(join(root, 'jobs', name), fs))) return true;
+    }
   }
   return false;
 }
@@ -69,6 +92,15 @@ function resolveInstalledRoot(prefix, fallbackRoot, fs) {
   return fallbackRoot;
 }
 
+async function ghApiJson(execute, endpoint) {
+  const reply = await execute('gh', ['api', endpoint], { timeoutMs: 10000 });
+  if (!reply || reply.code !== 0) {
+    const detail = (reply?.stderr || reply?.stdout || `gh api ${endpoint} failed`).trim().split('\n')[0];
+    throw Error(detail || `gh api ${endpoint} failed`);
+  }
+  return JSON.parse(reply.stdout || 'null');
+}
+
 export function autoUpdateStatusLine({ stateRoot }, ports = {}) {
   const fs = ports.fs ?? nativeFs;
   if (!stateRoot) return '';
@@ -90,7 +122,7 @@ export async function maybeAutoUpdateAutopilot({ state, packageRoot, coreRoot, s
   const previous = readJson(statusPath, fs);
   if (previous && Number.isFinite(previous.checkedAt) && now - previous.checkedAt < HOUR_MS)
     return { action: 'throttled' };
-  if (hasMidWriteJobs(coreRoot, { fs }))
+  if (hasMidWriteJobs({ coreRoot, stateRoot }, { fs }))
     return { action: 'deferred', reason: 'mid-write-job' };
   const globalInstall = detectGlobalInstallPrefix(packageRoot, { fs, uid: ports.uid });
   if (!globalInstall) {
@@ -105,29 +137,29 @@ export async function maybeAutoUpdateAutopilot({ state, packageRoot, coreRoot, s
   let targetSpec = null, targetLabel = null, nextSha = null;
   try {
     if (mode === 'release') {
-      const reply = ports.fetchLatestRelease
+      const payload = ports.fetchLatestRelease
         ? await ports.fetchLatestRelease()
-        : JSON.parse((await execute('gh', ['api', 'repos/promptdriven/pdd/releases/latest'], { timeoutMs: 10000 })).stdout || '{}');
-      const tag = reply && reply.draft !== true && typeof reply.tag_name === 'string' ? reply.tag_name.trim() : null;
-      const latestVersion = parseReleaseVersion(tag);
-      if (!latestVersion || !isNewerRelease(latestVersion, currentVersion)) {
+        : await ghApiJson(execute, 'repos/promptdriven/pdd/releases?per_page=10');
+      const picked = pickLatestRelease(payload);
+      if (!picked) throw Error('Could not find a valid PDD release tag');
+      if (!isNewerRelease(picked.version, currentVersion)) {
         writeJson(statusPath, { ...(previous ?? {}), checkedAt: now, channel: mode, action: 'up-to-date', version: currentVersion, lastError: null }, fs);
         return { action: 'up-to-date', version: currentVersion };
       }
-      targetSpec = `github:promptdriven/pdd#${tag}`;
-      targetLabel = tag;
+      targetSpec = `github:promptdriven/pdd#${picked.tag}`;
+      targetLabel = picked.tag;
     } else {
-      const reply = ports.fetchMainHead
+      const payload = ports.fetchMainHead
         ? await ports.fetchMainHead()
-        : JSON.parse((await execute('gh', ['api', 'repos/promptdriven/pdd/commits/main'], { timeoutMs: 10000 })).stdout || '{}');
-      const sha = typeof reply?.sha === 'string' && /^[0-9a-f]{40}$/i.test(reply.sha) ? reply.sha : null;
+        : await ghApiJson(execute, 'repos/promptdriven/pdd/commits/main');
+      const sha = typeof payload?.sha === 'string' && /^[0-9a-f]{40}$/i.test(payload.sha) ? payload.sha : null;
       if (!sha) throw Error('Could not read promptdriven/pdd main head');
       if (previous?.installedSha === sha) {
         writeJson(statusPath, { ...(previous ?? {}), checkedAt: now, channel: mode, action: 'up-to-date', version: currentVersion, installedSha: sha, lastError: null }, fs);
         return { action: 'up-to-date', version: currentVersion };
       }
-      targetSpec = 'github:promptdriven/pdd#main';
-      targetLabel = 'main';
+      targetSpec = `github:promptdriven/pdd#${sha}`;
+      targetLabel = sha.slice(0, 12);
       nextSha = sha;
     }
   } catch (error) {
@@ -141,7 +173,7 @@ export async function maybeAutoUpdateAutopilot({ state, packageRoot, coreRoot, s
       releaseLock = await ports.claimUpdateLock();
       if (!releaseLock) return { action: 'deferred', reason: 'lock-busy' };
     }
-    if (hasMidWriteJobs(coreRoot, { fs })) return { action: 'deferred', reason: 'mid-write-job' };
+    if (hasMidWriteJobs({ coreRoot, stateRoot }, { fs })) return { action: 'deferred', reason: 'mid-write-job' };
     if (state?.cwd && state?.baseBranch) {
       try {
         const branch = await execute('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: state.cwd, timeoutMs: 10000 });
@@ -150,12 +182,13 @@ export async function maybeAutoUpdateAutopilot({ state, packageRoot, coreRoot, s
           await execute('git', ['pull', '--ff-only', 'origin', state.baseBranch], { cwd: state.cwd, timeoutMs: 30000 });
       } catch { /* Checkout fast-forward is best-effort only. */ }
     }
-    const install = await execute('npm', ['install', '-g', '--prefix', globalInstall.prefix, '--no-audit', '--no-fund', targetSpec], { timeoutMs: 120000 });
+    const install = await execute('npm', ['install', '-g', '--prefix', globalInstall.prefix, '--ignore-scripts', '--no-audit', '--no-fund', targetSpec], { timeoutMs: 120000 });
     if (install.code !== 0) throw Error((install.stderr || install.stdout || 'npm install failed').trim().split('\n')[0]);
     const installedRoot = resolveInstalledRoot(globalInstall.prefix, globalInstall.realPackageRoot, fs);
     const toVersion = readJson(join(installedRoot, 'package.json'), fs)?.version ?? currentVersion;
     try {
-      (ports.setupSkills ?? defaultSetupSkills)({
+      const setup = ports.setupSkills ?? (await import('./skills-install.mjs')).setupSkills;
+      setup({
         packageRoot: installedRoot,
         cwd: state?.cwd ?? process.cwd(),
         home: env.HOME || (ports.homedir ?? homedir)(),

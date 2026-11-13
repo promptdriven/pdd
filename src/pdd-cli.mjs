@@ -1,5 +1,5 @@
 // Generated from prompts/cli/pdd-cli.prompt.md (sha256: b59a572bd6ab319c1d902efb6aba3bb6ab6c0cb33e0aea64552a8a3eea48151e).
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,7 +10,6 @@ import { listWorkflowAreas, formatWorkflowList } from './workflow-areas.mjs';
 import { ignorePddFolder, setupProject as defaultSetupProject } from './project-setup.mjs';
 import { findSkills as defaultFindSkills, setupSkills as defaultSetupSkills } from './skills-install.mjs';
 import { pathDiagnostic as defaultPathDiagnostic } from './path-diagnostic.mjs';
-import { checkReleaseNotice as defaultCheckReleaseNotice } from './release-notice.mjs';
 import { checkWorkflowAgents } from './workflow-agents.mjs';
 import { setupMayAsk } from './setup-interaction.mjs';
 import { setupWithWorkflowAgent } from './workflow-setup.mjs';
@@ -19,6 +18,14 @@ import { causeText, runtimeOutputSlice } from './runtime-seam.mjs';
 runtimeOutputSlice();
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+async function maybeCheckReleaseNotice(releaseNotice, input, ports) {
+  if (releaseNotice) return releaseNotice(input, ports);
+  const home = input.env?.HOME || homedir();
+  const stateHome = ports?.stateHome ?? (input.env?.XDG_STATE_HOME || (home ? join(home, '.local', 'state') : null));
+  if (!input.interactive && !ports?.fetchLatestRelease && !(stateHome && existsSync(join(stateHome, 'pdd', 'release-check.json')))) return null;
+  const { checkReleaseNotice } = await import('./release-notice.mjs');
+  return checkReleaseNotice(input, ports);
+}
 const defaultReadPackageVersion = ({ packageRoot }) => {
   try { const { version } = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'));
     return typeof version === 'string' && !!version ? { ok: true, version } : { ok: false, version: '' }; }
@@ -185,7 +192,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
           if (result.found && (result.stale === 'older' || result.staleSkills?.some(({ state }) => state === 'older'))) line(stderr, staleLine(result, metadata.version, cwd));
       } catch { /* The skills check never changes --version. */ }
       try {
-        const notice = await (releaseNotice ?? defaultCheckReleaseNotice)({ currentVersion: metadata.version, isVersionCommand: true, interactive: Boolean(stderr?.isTTY), env }, releaseNoticePorts);
+        const notice = await maybeCheckReleaseNotice(releaseNotice, { currentVersion: metadata.version, isVersionCommand: true, interactive: Boolean(stderr?.isTTY), env }, releaseNoticePorts);
         if (typeof notice === 'string' && notice.trim()) line(stderr, notice.trim());
       } catch { /* The release notice never changes --version. */ }
       return 0;
@@ -426,7 +433,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     try {
       const metadata = await readPackageVersion({ packageRoot });
       if (metadata?.ok && typeof metadata.version === 'string' && metadata.version) {
-        const notice = await (releaseNotice ?? defaultCheckReleaseNotice)({ currentVersion: metadata.version, isVersionCommand: false, interactive: Boolean(stderr?.isTTY), env }, releaseNoticePorts);
+        const notice = await maybeCheckReleaseNotice(releaseNotice, { currentVersion: metadata.version, isVersionCommand: false, interactive: Boolean(stderr?.isTTY), env }, releaseNoticePorts);
         if (typeof notice === 'string' && notice.trim()) line(stderr, notice.trim());
       }
     } catch { /* An optional release notice never changes command output or exit status. */ }

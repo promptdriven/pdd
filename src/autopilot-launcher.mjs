@@ -25,8 +25,9 @@ import { readMachineGuard, timerPriority, validShare } from './machine-guard.mjs
 import { listReportDrafts, sendReportDraft } from './autopilot-reports.mjs';
 import { intakeMode, readIntake, intakeText, stopCardJobs } from './autopilot-intake.mjs';
 import { moveToCore, moved, movedState, engineBefore, procTable, MAX_DEFERS, FULL_ENGINE_REMOVED } from './autopilot-retire.mjs';
-import { autoUpdateStatusLine, maybeAutoUpdateAutopilot, validAutoUpdateMode } from './autopilot-update.mjs';
 import * as nativeFs from 'node:fs';
+
+const validAutoUpdateMode = mode => ['release', 'main', 'off'].includes(mode);
 
 const INTERVAL = 30 * 60 * 1000;
 // The core tick has no AI call and each job phase needs a tick, so the core engine's timer fires every 10 minutes.
@@ -329,9 +330,14 @@ function alertLine(state, p, ports) {
   try { const text = (ports.alertStatusLine ?? alertStatusLine)({ repo: state.repo, env: p.env }, { stateRoot: ports.stateRoot }); return text ? `\n${text}` : ''; }
   catch { return ''; }
 }
-function updateLine(stateFile, ports) {
-  try { const text = (ports.autoUpdateStatusLine ?? autoUpdateStatusLine)({ stateRoot: dirname(stateFile) }); return text ? `\n${text}` : ''; }
-  catch { return ''; }
+async function updateLine(stateFile, ports) {
+  try {
+    const stateRoot = dirname(stateFile);
+    if (!ports.autoUpdateStatusLine && !existsSync(join(stateRoot, 'autopilot-update.json'))) return '';
+    const render = ports.autoUpdateStatusLine ?? (await import('./autopilot-update.mjs')).autoUpdateStatusLine;
+    const text = render({ stateRoot });
+    return text ? `\n${text}` : '';
+  } catch { return ''; }
 }
 const coreRoot = stateFile => stateFile.replace(/\.json$/, '-core');
 const coreReports = (ports, env) => join(stateFolder(ports, env), 'core-reports');
@@ -507,7 +513,8 @@ async function runTick(stateFile, ports) {
     try {
       const latest = read(stateFile);
       if (latest?.enabled) {
-        await (ports.maybeAutoUpdate ?? maybeAutoUpdateAutopilot)({
+        const update = ports.maybeAutoUpdate ?? (await import('./autopilot-update.mjs')).maybeAutoUpdateAutopilot;
+        await update({
           state: latest,
           packageRoot: latest.packageRoot ?? dirname(dirname(self)),
           coreRoot: coreRoot(stateFile),
@@ -743,7 +750,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
           { root: coreRoot(stateFile), reportRoot: coreReports(ports, p.env), now: p.now })
         + (label ? '' : '\nNo opt-in label: Autopilot takes no issue. Run pdd autopilot start --label pdd:autopilot, then mark issues with pdd autopilot add N.')
         + alertLine(state, p, ports)
-        + updateLine(stateFile, ports)
+        + (await updateLine(stateFile, ports))
         + moveStatus(previous, p.now())
         + (state.core?.message ? `\nLast tick ${new Date(state.core.at).toISOString()}: ${line(state.core.message)}` : ''));
     }

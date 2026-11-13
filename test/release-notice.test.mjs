@@ -5,13 +5,13 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { checkReleaseNotice, isNewerRelease, parseReleaseVersion } from '../src/release-notice.mjs';
+import { checkReleaseNotice, isNewerRelease, parseReleaseVersion, pickLatestRelease } from '../src/release-notice.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const capture = (isTTY = false) => ({ text: '', isTTY, write(s) { this.text += s; } });
 
-test('#2710 parseReleaseVersion and isNewerRelease handle plain, v-prefixed and alpha-v tags', () => {
+test('#2710 parseReleaseVersion, isNewerRelease and pickLatestRelease handle plain, v-prefixed and prerelease-only alpha-v arrays', () => {
   assert.equal(parseReleaseVersion('0.1.32'), '0.1.32');
   assert.equal(parseReleaseVersion('v0.1.32'), '0.1.32');
   assert.equal(parseReleaseVersion('alpha-v0.1.32'), '0.1.32');
@@ -19,6 +19,15 @@ test('#2710 parseReleaseVersion and isNewerRelease handle plain, v-prefixed and 
   assert.equal(isNewerRelease('alpha-v0.1.32', '0.1.31'), true);
   assert.equal(isNewerRelease('0.1.31', '0.1.31'), false);
   assert.equal(isNewerRelease('0.1.30', '0.1.31'), false);
+  assert.deepEqual(
+    pickLatestRelease([
+      { tag_name: 'alpha-v0.1.99', draft: true, prerelease: true, published_at: '2026-11-13T12:00:00Z' },
+      { tag_name: 'alpha-v0.1.31', draft: false, prerelease: true, published_at: '2026-11-12T10:00:00Z' },
+      { tag_name: 'alpha-v0.1.32', draft: false, prerelease: true, published_at: '2026-11-13T10:00:00Z' },
+    ]),
+    { tag: 'alpha-v0.1.32', version: '0.1.32' },
+  );
+  assert.equal(pickLatestRelease([{ tag_name: 'alpha-v0.1.32', draft: true }]), null);
 });
 
 test('#2710 checkReleaseNotice caches for 24h, always informs --version, deduplicates interactive commands for 24h, and backs off 1h on errors', async t => {

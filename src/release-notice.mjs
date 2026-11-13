@@ -1,11 +1,11 @@
-// Generated from prompts/cli/release-notice.prompt.md (sha256: 60de2cb79dced07b6253a422453b2142e10a1b68099a2218ebd092b78547bd32).
+// Generated from prompts/cli/release-notice.prompt.md (sha256: 294a463aab7b4aa81a94e58070578e5e1ca03ce8d7f510483d5b7092f364c340).
 import * as nativeFs from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const ERROR_BACKOFF_MS = 23 * 60 * 60 * 1000;
-const RELEASE_URL = 'https://api.github.com/repos/promptdriven/pdd/releases/latest';
+const RELEASE_URL = 'https://api.github.com/repos/promptdriven/pdd/releases?per_page=10';
 
 export function parseReleaseVersion(value) {
   if (typeof value !== 'string') return null;
@@ -20,6 +20,16 @@ export function isNewerRelease(candidate, current) {
   const [a, b] = [next.split('.').map(Number), base.split('.').map(Number)];
   for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i];
   return false;
+}
+
+export function pickLatestRelease(payload) {
+  const list = Array.isArray(payload) ? payload : (payload && typeof payload === 'object' ? [payload] : []);
+  const valid = list
+    .filter(item => item && item.draft !== true && typeof item.tag_name === 'string' && parseReleaseVersion(item.tag_name))
+    .sort((a, b) => (Date.parse(b.published_at || '') || 0) - (Date.parse(a.published_at || '') || 0));
+  if (!valid.length) return null;
+  const tag = valid[0].tag_name.trim();
+  return { tag, version: parseReleaseVersion(tag) };
 }
 
 function readCache(file, fs) {
@@ -64,10 +74,9 @@ export async function checkReleaseNotice({ currentVersion, isVersionCommand = fa
   if (staleCache && mayFetch) {
     try {
       const release = await (ports.fetchLatestRelease ?? defaultFetchLatestRelease)();
-      const tag = release && release.draft !== true && typeof release.tag_name === 'string' ? release.tag_name.trim() : null;
-      const latestVersion = parseReleaseVersion(tag);
-      if (!latestVersion) throw Error('Invalid release tag');
-      cache = { checkedAt: now, latestTag: tag, latestVersion, notifiedAt: cache?.notifiedAt ?? null };
+      const picked = pickLatestRelease(release);
+      if (!picked) throw Error('Invalid release tag');
+      cache = { checkedAt: now, latestTag: picked.tag, latestVersion: picked.version, notifiedAt: cache?.notifiedAt ?? null };
       writeCache(cacheFile, cache, fs);
     } catch {
       cache = { ...(cache ?? {}), checkedAt: now - ERROR_BACKOFF_MS };
