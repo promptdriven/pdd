@@ -1,4 +1,4 @@
-// Generated from prompts/cli/interface-draft.prompt.md (sha256: ffefb26b5154fe96e536a04c2a1897e6d4d75ff1c901ff30525922a4e8d5482b).
+// Generated from prompts/cli/interface-draft.prompt.md (sha256: 7157c4a577414fcc6d2ef9bbc13fd30a25db3fb0e83ffeede8bdf2a731006364).
 import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, linkSync, renameSync, rmSync, openSync, closeSync, fstatSync, chmodSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { basename, dirname, join, relative, resolve } from 'node:path';
@@ -245,7 +245,14 @@ function completeContract(value) {
   };
   unique(iface.entries,'operation','/entries');unique(iface.calls,'operation','/calls');unique(iface.resources,'name','/resources');
   for(const [i,entry] of iface.entries.entries()) {
-    fields(entry,['operation','input_schema','result_schema','errors','instance','resource_operations','copy_out'],`/entries/${i}`);
+    fields(entry,['operation','input_schema','result_schema','errors','instance','resource_operations','copy_out','implementation'],`/entries/${i}`);
+    if(Object.hasOwn(entry,'implementation')) {
+      const impl=entry.implementation,pointer=`/entries/${i}/implementation`;
+      if(!object(impl)) throw declarationError(pointer,'Declare a CLI implementation object.');
+      fields(impl,['kind','command'],pointer);
+      if(impl.kind!=='cli') throw declarationError(pointer+'/kind','Use cli.');
+      if(typeof impl.command!=='string' || !impl.command.trim() || /[\n\r;|&<>`$\\'"(){}*?\[\]]/.test(impl.command)) throw declarationError(pointer+'/command','Use a whitespace-separated argv command with no shell syntax.');
+    }
     if(Object.hasOwn(entry,'instance')) {
       const binding=entry.instance,pointer=`/entries/${i}/instance`;
       if(!object(binding)) throw declarationError(pointer,'Declare a factory or method binding object.');
