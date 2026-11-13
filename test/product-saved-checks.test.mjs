@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import * as runtime from '../src/runtime-client.mjs';
+import * as runtime from '../src/runtime-seam.mjs';
 import { productStatus, productNext } from '../src/product.mjs';
-import { harbor, portsFor, fakeRuntime, filesUnder, sha } from './runtime-fake.mjs';
+import { harbor, portsFor, fakeRuntime, filesUnder, sha } from './helpers/runtime-fake.mjs';
 
 const scenario = JSON.parse(readFileSync(new URL('./runtime/product-saved-checks.json', import.meta.url)));
 const owner = JSON.parse(readFileSync(new URL('./fixtures/product-saved-checks-owner.json', import.meta.url)));

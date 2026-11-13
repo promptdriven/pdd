@@ -1,7 +1,7 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { renderJson, renderText } from '../src/runtime-output.mjs';
+import { renderJson, renderText } from '../src/runtime-seam.mjs';
 
 test('authored criterion coverage remains structural for passed and failed text and JSON', () => {
   for (const state of ['passed', 'failed']) {
