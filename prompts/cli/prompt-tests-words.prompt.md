@@ -18,6 +18,6 @@ None.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"native-only","status":"draft","prose_sha256":"a4da9db9ae844f1cbd7882096924dc35ac82fde431c06056131d67465e46e184","reason":"Exports pure JavaScript string constants for PDD PR evidence labels and regular-expression patterns with no callable Runtime entry."}
+{"kind":"native-only","status":"approved","prose_sha256":"a4da9db9ae844f1cbd7882096924dc35ac82fde431c06056131d67465e46e184","reason":"Exports pure JavaScript string constants for PDD PR evidence labels and regular-expression patterns with no callable Runtime entry."}
 ```
 </details>

@@ -161,7 +161,7 @@ Do not use a GitHub ledger that writes reads to disk. Do not mutate arrays retur
 ```json
 {
   "kind": "partial",
-  "status": "draft",
+  "status": "approved",
   "prose_sha256": "672f4dc5010bf15ab643f59366e903c35ddab435ea5caec73872fa197740d404",
   "entries": [
     {

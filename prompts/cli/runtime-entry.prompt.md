@@ -113,6 +113,6 @@ Load each owner module only when the exported function (or its slice loader) is 
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"native-only","status":"draft","prose_sha256": "777c3a9247d5359ff767eedf9ba0358f79064f8e1bac6d62a4404f64f5145771","reason":"Exposes live JavaScript ESM static and deferred dynamic-import bindings across src/runtime/ submodules, which bound Runtime ports cannot fake."}
+{"kind":"native-only","status":"approved","prose_sha256": "777c3a9247d5359ff767eedf9ba0358f79064f8e1bac6d62a4404f64f5145771","reason":"Exposes live JavaScript ESM static and deferred dynamic-import bindings across src/runtime/ submodules, which bound Runtime ports cannot fake."}
 ```
 </details>

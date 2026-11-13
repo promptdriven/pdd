@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: ccf9c53bce44171862d5d12f956d0d67b294e348f258d1ce44f5118bc0eafffd).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 8e6b63d99ad136a4a487af1a0f364bba91a2041d8f45601d3ff5750544b6fc65).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
@@ -19,7 +19,7 @@ import { homedir, hostname } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { createInterface } from 'node:readline';
 import { DRAFT_SERVER_TEXT, PreflightError, TEST_SCHEMA, captureSource, scenarioShapeRefusal, checkInput, fillHashes, sharedSourceFiles, findTests, formatSize, gitFiles, otherFiles,
-  discoveryRefusal, preflight, hasPromptInterface, interfaceBlocks, executableInterfaceText, readPrompt, formatWarningLines, schemaKeywordWarningLines, sourceFilePort, sha256, STALE_HINT, staleHint } from './runtime-preflight.mjs';
+  discoveryRefusal, preflight, hasPromptInterface, interfaceBlocks, executableInterfaceText, readPrompt, formatWarningLines, schemaKeywordWarningLines, prepareHashSelection, sourceFilePort, sha256, STALE_HINT, staleHint } from './runtime-preflight.mjs';
 import { catalogRecords, compareCopies } from './contract-refs.mjs';
 import { OPEN_STATES, causeText, cleanText, progressTicker, projectAnswer, refusalView, renderJson, renderText, summaryLine, stepTimeLimit, tryUsage, validLink, coverageText } from './runtime-output.mjs';
 
@@ -136,7 +136,7 @@ function withDefaults(ports) {
     throw unboundPortError('Exit code port (exitCodeFor or exitFor) is not bound.');
   };
   return {
-    env, baselineFiles: ports.baselineFiles, baselineIdentity: ports.baselineIdentity, checkPlanPorts: ports.checkPlanPorts, tryLauncherUrl: ports.tryLauncherUrl, redaction: ports.redaction, redactSecrets: ports.redactSecrets, rememberSecrets: ports.rememberSecrets, clientVersion: ports.clientVersion, workflowBaseSha: ports.workflowBaseSha, headerPrompts: ports.headerPrompts, evidenceEligibility: ports.evidenceEligibility, readEvidenceEligibility: ports.readEvidenceEligibility, evidencePorts: ports.evidencePorts, allRuns: ports.allRuns, assessNativeEvidence: ports.assessNativeEvidence, usableResult: ports.usableResult, resultLines: ports.resultLines, parseProductDocuments: ports.parseProductDocuments, parseProductWorldWriters: ports.parseProductWorldWriters, loadAgentDefinitions: ports.loadAgentDefinitions, agents: ports.agents, guidePorts: ports.guidePorts, askApproval: ports.askApproval, promptPath: ports.promptPath, lineReader: ports.lineReader ?? defaultLineReader, lintSvgLayouts: ports.lintSvgLayouts, compareScreen: ports.compareScreen, formatScreenComparison: ports.formatScreenComparison, caseHandoff:ports.caseHandoff, cacheFiles: ports.cacheFiles ?? nativeCacheFiles, cacheHash: ports.cacheHash ?? sha256, acquireBatchLock: ports.acquireBatchLock ?? acquireRuntimeBatchLock, timers: ports.timers, random: ports.random, findTests: findTestsBound, captureSource: captureSourceBound, isStoryPath: ports.isStoryPath, hasAcceptance: ports.hasAcceptance, matchTests: ports.matchTests, orphanSummary: ports.orphanSummary, selectTests: selectTestsBound, expectedTestPath: expectedTestPathBound, whyNoTests: whyNoTestsBound, noTestsMessage, exitCodeFor: exitCodeForBound, exitFor: ports.exitFor, promptTestsLabel: ports.promptTestsLabel, slotFiles: ports.slotFiles, isAlive: ports.isAlive, pid: ports.pid, agentBridge: ports.agentBridge, discoverAgents: ports.discoverAgents, askAgent: ports.askAgent, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
+    env, baselineFiles: ports.baselineFiles, baselineIdentity: ports.baselineIdentity, checkPlanPorts: ports.checkPlanPorts, tryLauncherUrl: ports.tryLauncherUrl, redaction: ports.redaction, redactSecrets: ports.redactSecrets, rememberSecrets: ports.rememberSecrets, clientVersion: ports.clientVersion, workflowBaseSha: ports.workflowBaseSha, headerPrompts: ports.headerPrompts, evidenceEligibility: ports.evidenceEligibility, readEvidenceEligibility: ports.readEvidenceEligibility, evidencePorts: ports.evidencePorts, allRuns: ports.allRuns, assessNativeEvidence: ports.assessNativeEvidence, usableResult: ports.usableResult, resultLines: ports.resultLines, parseProductDocuments: ports.parseProductDocuments, parseProductWorldWriters: ports.parseProductWorldWriters, loadAgentDefinitions: ports.loadAgentDefinitions, agents: ports.agents, guidePorts: ports.guidePorts, askApproval: ports.askApproval, promptPath: ports.promptPath, lineReader: ports.lineReader ?? defaultLineReader, lintSvgLayouts: ports.lintSvgLayouts, compareScreen: ports.compareScreen, formatScreenComparison: ports.formatScreenComparison, caseHandoff:ports.caseHandoff, cacheFiles: ports.cacheFiles ?? nativeCacheFiles, cacheHash: ports.cacheHash ?? sha256, acquireBatchLock: ports.acquireBatchLock ?? acquireRuntimeBatchLock, timers: ports.timers, random: ports.random, findTests: findTestsBound, captureSource: captureSourceBound, fillHashes: ports.fillHashes ?? fillHashes, prepareHashSelection: ports.prepareHashSelection, isStoryPath: ports.isStoryPath, hasAcceptance: ports.hasAcceptance, matchTests: ports.matchTests, orphanSummary: ports.orphanSummary, selectTests: selectTestsBound, expectedTestPath: expectedTestPathBound, whyNoTests: whyNoTestsBound, noTestsMessage, exitCodeFor: exitCodeForBound, exitFor: ports.exitFor, promptTestsLabel: ports.promptTestsLabel, slotFiles: ports.slotFiles, isAlive: ports.isAlive, pid: ports.pid, agentBridge: ports.agentBridge, discoverAgents: ports.discoverAgents, askAgent: ports.askAgent, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
     gh: ports.gh ?? (args => {
       const executable = authExecutable(env, ports.ghPath);
       return executable ? spawnSync(executable, args, { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 })
@@ -2631,8 +2631,9 @@ function printLintResult(context, rows, problems, warnings = [], answer = null) 
   return exitCode;
 }
 
-function runFillHash(root, ports, compact = false) {
-  const result = fillHashes(compact ? { root, compact: true } : { root });
+function runFillHash(root, cwd, words, ports, compact = false) {
+  const scoped = words.length ? (ports.prepareHashSelection ?? (input => prepareHashSelection(input,{...ports,capture:ports.captureSource})))({root,cwd,words}) : null;
+  const result = ports.fillHashes(scoped ? {root,files:scoped.files,targets:scoped.targets,...(compact ? {compact:true} : {})} : (compact ? {root,compact:true} : {root}));
   for (const { message } of result.warnings) line(ports.stdout, `Warning: ${message}`);
   for (const { path } of result.filled) line(ports.stdout, `Filled prose_sha256: ${path}`);
   if (compact) for (const { path } of result.compacted) line(ports.stdout, `Compacted Runtime interface: ${path}`);
@@ -3217,11 +3218,11 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
     }
     const modes = ['--read', '--retry', '--fill-hash', '--files', '--explain-bindings', '--request', '--lint'].filter(name => options[name] !== undefined);
     const others = Object.keys(options).filter(name => !modes.includes(name) && !(modes[0] === '--fill-hash' && name === '--compact') && !(modes[0] === '--retry' && ['--json', '--details', '--timeout'].includes(name)) && !(name === '--json' && ['--read', '--request', '--lint', '--files', '--explain-bindings'].includes(modes[0])) && !(name === '--timeout' && ['--read', '--lint'].includes(modes[0])) && !(name === '--max-calls' && modes[0] === '--lint') && !(name === '--app-map' && modes[0] === '--files'));
-    if (modes.length > 1 || (modes.length && others.length) || (['--fill-hash', '--request', '--retry'].includes(modes[0]) && words.length)
+    if (modes.length > 1 || (modes.length && others.length) || (['--request', '--retry'].includes(modes[0]) && words.length)
       || (modes[0] === '--read' && words.length > 1) || (!modes.length && options['--app-map'] !== undefined)) throw new Stop(2, 'This mix of options does not work together. Run pdd test --help.');
     if (modes[0] === '--request') { release = interruptible(context); return await runRequest(context, options['--request'], cwd); }
     const root = repoRoot(cwd);
-    if (modes[0] === '--fill-hash') return runFillHash(root, ports, options['--compact'] === true);
+    if (modes[0] === '--fill-hash') return runFillHash(root, cwd, words, ports, options['--compact'] === true);
     if (modes[0] === '--explain-bindings') return runExplainBindings(cwd, words, options, ports);
     if (modes[0] === '--files') return runFiles(cwd, words, options, ports);
     context.root = root; context.store = stateFor(ports.env, root);

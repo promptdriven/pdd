@@ -47,6 +47,6 @@ Scrub the parsed object and validate optional fields independently, dropping inv
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"native-only","status":"draft","prose_sha256":"531518f855702abe19934ec1ea850cb627b90dc39b4ce91a31b18de9cc871956","reason":"Prepares OS-specific Gemini temporary policy files, diagnostic log descriptors, and local CLI subprocess arguments executed through an injected host process port."}
+{"kind":"native-only","status":"approved","prose_sha256":"531518f855702abe19934ec1ea850cb627b90dc39b4ce91a31b18de9cc871956","reason":"Prepares OS-specific Gemini temporary policy files, diagnostic log descriptors, and local CLI subprocess arguments executed through an injected host process port."}
 ```
 </details>

@@ -75,7 +75,7 @@ Only listRuntimeJobs is bound below. The files.listRecords resource uses write a
 
 ```json
 {
-  "status": "draft",
+  "status": "approved",
   "prose_sha256": "32a21fcbd5f29886569e96a5709c07a6f728527ee845175d898565a177ce3546",
   "entries": [
     {
