@@ -1,0 +1,291 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/affected-baseline-report.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "After affected Stories A and B pass, a separate baseline report retains Story C's saved failure with its original batch, Check ID, time and report link; it creates no current C result or paid C rerun."
+    },
+    {
+      "id": "AC2",
+      "text": "Baseline history keeps older failures after newer passes or unsent records, distinguishes current, stale and unavailable original-batch source evidence, and shows missing or nonpassing evidence without inventing a pass, defect age or owner."
+    },
+    {
+      "id": "AC3",
+      "text": "An affected command uses its selected results for the process exit status and clearly says it is not a full workflow pass. Saved reads and retries keep the original report snapshot, while all existing full-pass, approval, publication, code, merge and native-suite gates remain blocking."
+    }
+  ],
+  "synthetic": true,
+  "cases": [
+    {
+      "id": "original-failure-separate",
+      "criterion_id": "AC1",
+      "given": {
+        "selected_passes": [
+          "test/runtime/A.json",
+          "test/runtime/A.recorded.json",
+          "test/runtime/B.json"
+        ],
+        "saved_C": {
+          "batch": "synthetic-old",
+          "request_id": "00000000-0000-4000-8000-000000000001",
+          "created_at": "2026-11-01T10:00:00Z",
+          "state": "failed",
+          "report_url": "https://runtime.example.test/r/original"
+        },
+        "command": [
+          "test",
+          "--affected",
+          "--json"
+        ]
+      },
+      "expected": {
+        "batch_rows_tests": [
+          "test/runtime/A.json",
+          "test/runtime/A.recorded.json",
+          "test/runtime/B.json"
+        ],
+        "baseline_failed_observation": "exact original fields",
+        "C_paid_posts": 0,
+        "new_C_calls": 0,
+        "original_saved_files": "byte-identical"
+      }
+    },
+    {
+      "id": "older-failure-not-lost",
+      "criterion_id": "AC2",
+      "given": {
+        "saved_batches": [
+          "C failed with valid Check receipt",
+          "C passed with later valid receipt",
+          "C unsent placeholder",
+          "newest batch contains only A/B"
+        ]
+      },
+      "expected": {
+        "baseline_observations": "older failure and later pass retained with their IDs",
+        "whole_story_pass_invented": false,
+        "unsent_overrides_failure": false
+      }
+    },
+    {
+      "id": "all-original-attempts",
+      "criterion_id": "AC2",
+      "given": {
+        "one_C_row_attempts": [
+          "original failed receipt",
+          "restart replacement passed receipt"
+        ],
+        "receipt_ids": "distinct valid IDs named in saved row"
+      },
+      "expected": {
+        "failed_attempt_retained": true,
+        "later_pass_retained": true,
+        "observed_calls": "no new calls from history reading"
+      }
+    },
+    {
+      "id": "canonical-nonpass-outcomes",
+      "criterion_id": "AC2",
+      "given": {
+        "C_history_states": [
+          "failed",
+          "refused",
+          "not_run",
+          "unknown",
+          "queued",
+          "running"
+        ],
+        "source": "matching-ID Check receipts"
+      },
+      "expected": {
+        "display_states": [
+          "failed",
+          "refused",
+          "not run",
+          "partial",
+          "sent",
+          "sent"
+        ],
+        "positive_pass": false,
+        "original_reason_codes": "retained"
+      }
+    },
+    {
+      "id": "current-stale-unavailable",
+      "criterion_id": "AC2",
+      "given": {
+        "saved_source_selection": [
+          "test/runtime/A.json",
+          "test/runtime/A.recorded.json",
+          "test/runtime/B.json",
+          "test/runtime/C.json"
+        ],
+        "capture_variants": [
+          "equal full source hash",
+          "different full source hash",
+          "capture fails",
+          "source hash missing"
+        ],
+        "C_itself": "unchanged in all examples"
+      },
+      "expected": {
+        "currentness": [
+          "current",
+          "stale",
+          "unavailable",
+          "unavailable"
+        ],
+        "currentness_scope": "original-batch",
+        "claim_C_changed": false,
+        "claim_defect_age": false,
+        "assigned_owner": null
+      }
+    },
+    {
+      "id": "no-evidence-and-corruption",
+      "criterion_id": "AC2",
+      "given": {
+        "history_variants": [
+          "missing state folder",
+          "unreadable directory",
+          "corrupt batch beside readable C failure",
+          "missing or mismatched receipt beside readable C failure",
+          "saved passed label without receipt"
+        ]
+      },
+      "expected": {
+        "unavailable_or_missing": "explicit",
+        "readable_failure_retained": true,
+        "saved_label_pass_accepted": false,
+        "network_recovery_calls": 0
+      }
+    },
+    {
+      "id": "foreign-and-historical-admission",
+      "criterion_id": "AC2",
+      "given": {
+        "record_variants": [
+          "foreign root",
+          "different runtime/account",
+          "ineligible association",
+          "missing ownership",
+          "eligible pr1 source",
+          "eligible before source"
+        ]
+      },
+      "expected": {
+        "foreign_current_proof": false,
+        "unknown_owner_invented": false,
+        "historical_stage": "retained",
+        "historical_current_code_pass": false,
+        "sign_in_solely_for_report": 0
+      }
+    },
+    {
+      "id": "safe-links-and-original-time",
+      "criterion_id": "AC2",
+      "given": {
+        "saved_report_links": [
+          "safe same-origin URL",
+          "unsafe URL with secret"
+        ],
+        "saved_time": "2026-11-01T10:00:00Z",
+        "read_time": "2026-11-12T00:00:00Z"
+      },
+      "expected": {
+        "original_time": "2026-11-01T10:00:00Z",
+        "unsafe_report_url": null,
+        "secret_disclosure": false,
+        "time_refreshed": false
+      }
+    },
+    {
+      "id": "proposed-selected-exit-blocking-gate",
+      "criterion_id": "AC3",
+      "given": {
+        "affected_results": "A/B all pass",
+        "baseline_history": "C valid failed evidence",
+        "strict_modes": [
+          false,
+          true
+        ]
+      },
+      "expected": {
+        "affected_exit_code": 0,
+        "required_text": "Affected checks only; this is not a full workflow pass. Required full-pass gates still apply.",
+        "fullCheckPass": false,
+        "approval_or_publication_advanced": false,
+        "native_suite_requirement": "unchanged"
+      }
+    },
+    {
+      "id": "missing-and-stale-gates",
+      "criterion_id": "AC3",
+      "given": {
+        "affected_results": "A/B pass",
+        "C_evidence_variants": [
+          "missing",
+          "stale",
+          "refused",
+          "partial",
+          "valid current complete pass"
+        ]
+      },
+      "expected": {
+        "fullCheckPass_by_variant": [
+          false,
+          false,
+          false,
+          false,
+          true
+        ],
+        "existing_cross_batch_accumulation": "preserved",
+        "baseline_snapshot_used_as_gate_rows": false
+      }
+    },
+    {
+      "id": "saved-read-retry-snapshot",
+      "criterion_id": "AC3",
+      "given": {
+        "initial_snapshot": "C failed; A/B selected",
+        "later_changes": "C passes elsewhere; Git scope changes to C; target request remains uncertain",
+        "commands": [
+          "test --read SAVED",
+          "test --retry SAVED"
+        ]
+      },
+      "expected": {
+        "selected_tests": [
+          "test/runtime/A.json",
+          "test/runtime/A.recorded.json",
+          "test/runtime/B.json"
+        ],
+        "baseline_snapshot": "original C failed snapshot",
+        "C_posts": 0,
+        "uncertain_target_reposted": false,
+        "caps_and_ids": "original recovery contract",
+        "classification_refreshed": false
+      }
+    },
+    {
+      "id": "workflow-result-consumer",
+      "criterion_id": "AC3",
+      "given": {
+        "latest_batch": "affected A/B with original baseline snapshot",
+        "consumer": "readRunResults; workflow report rendering"
+      },
+      "expected": {
+        "checkSelection": "exact saved snapshot",
+        "baselineReport": "exact saved snapshot",
+        "states_tests": [
+          "test/runtime/A.json",
+          "test/runtime/A.recorded.json",
+          "test/runtime/B.json"
+        ],
+        "usableResult_and_full_gate_logic": "unchanged",
+        "historical_C_pass_promoted": false
+      }
+    }
+  ]
+}

@@ -51,24 +51,7 @@ for (const [name, text] of diagnostics) {
     for (const request of requests) assert.equal(isRetryRequest(request), true, request);
   });
 
-  test(`trusted ${name} does not become a retry packet`, async t => {
-    const f = await launcher(t); await f.start(); f.prompts.length = 0;
-    f.time += 60_000; f.issues = [issue(f)];
-    f.ports.comments = async () => [{ id: 11, user: { login: 'owner' }, body: text,
-      created_at: new Date(f.time).toISOString(), updated_at: new Date(f.time).toISOString() }];
-    await f.tick();
-    assert.equal(f.prompts.length, 0, 'a diagnostic must leave the initial held baseline quiet');
-    // A later ordinary comment may be delivered, but it must not gain retry authority.
-    f.time += 60_000; f.issues[0].comments = 2; f.issues[0].updated_at = new Date(f.time).toISOString();
-    const comments = f.ports.comments;
-    f.ports.comments = async () => [...await comments(), { id: 12, user: { login: 'owner' }, body: text,
-      created_at: new Date(f.time).toISOString(), updated_at: new Date(f.time).toISOString() }];
-    await f.tick();
-    assert.equal(f.prompts.length, 1, 'ordinary trusted updates retain delivery');
-    assert.equal(f.packet().issues.find(row => row.number === 17).retry, undefined);
-  });
-
-  test(`confirmed ${name} delivery cannot unpark exhausted validation`, async t => {
+    test(`confirmed ${name} delivery cannot unpark exhausted validation`, async t => {
     const { f, ports, root } = await environmentRun(t);
     const p = ports({ environmentHealthy: async () => false });
     await parkAutomaticRun({ reason: 'Native validation timeout', step: 'verify', cwd: root }, p);

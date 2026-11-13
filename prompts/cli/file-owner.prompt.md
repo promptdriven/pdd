@@ -92,7 +92,7 @@ Each header has a hash state:
 | State | When |
 |---|---|
 | `current` | HEX equals the header hash of the named prompt. |
-| `current` with `legacy: true` | HEX equals the SHA-256 of the whole prompt file (the earlier form, which every approval changed). pdd accepts this form as current through pdd 0.1.28 only, so one release can refresh headers without making every file stale at once; remove this row after that release. |
+| `current` with `legacy: true` | HEX equals the SHA-256 of the whole prompt file (the earlier form, which every approval changed). pdd accepts this form as current for compatibility and marks it `legacy: true`; write the expected hash for a canonical header. |
 | `stale` | HEX is any other value: the prompt changed after the header was written. |
 | `none` | The header has no hash. |
 | `unknown` | The named prompt is not a Git-visible prompt, or its content is not available. |
@@ -145,6 +145,10 @@ exist: a prompt is written before its code.
   whole-file form.
 - `promptClaims(promptPath, content)`: return the sorted, unique claimed paths
   of one prompt; `[]` for no content.
+- `isTestOwnedPath(path)`: return `true` when `path` is a canonical
+  non-`.prompt.md` repository path inside `test/`, `tests/` or `__tests__/` at
+  any depth, or whose file name matches `*.test.*`, `*.spec.*`, `test_*.*` or
+  `*_test.*`.
 - `resolveOwners({paths, bindings, heads, prompts})`: pure. `paths` is the list
   of canonical repository paths to answer, in order; a repeated path is answered
   once, at its first place. `bindings` is the text of `pdd-bindings.json`, or
@@ -198,7 +202,19 @@ it, print one line for each path:
   state adds no line.
 
 Return 0. The answer is an inventory, not a check: an uncertain or missing owner
-is no error.
+is no error. Before returning 0 (in both text and `--json` modes, leaving stdout
+unchanged), emit a non-blocking warning to stderr whenever a prompt claims
+ownership of a test file (`isTestOwnedPath`):
+
+- for each resolved row in `result.files` with `owners.length > 0` and
+  `isTestOwnedPath(row.path)`: write `Warning: misplaced prompt owner: PATH is claimed by OWNERS (SOURCE). Prompts own production modules, not test files.`
+- for each explicitly requested `*.prompt.md` path in `paths`, resolve Git-visible
+  `isTestOwnedPath` files plus any canonical claimed test paths from
+  `pdd-bindings.json` and `promptClaims`, reading file headers only for
+  Git-visible regular files (`visible`) and keeping non-Git-visible or symlinked
+  claimed paths name-only (`content: null`) so untracked, symlinked or
+  out-of-repo paths are never opened from disk; when that prompt claims test
+  targets not already warned above, write `Warning: misplaced prompt owner: PROMPT claims TARGETS. Prompts own production modules, not test files.`
 
 ## Callers
 

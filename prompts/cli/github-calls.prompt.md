@@ -160,8 +160,8 @@ else 5000. `used` is `usage.counted`. The result is
 
 | State | When | The tick |
 |---|---|---|
-| `reserve` | The newest `core` or `graphql` remaining is less than `floor` (first `core`) | Makes no GitHub call until `resetAt`, except the heartbeats of its own live claims ([tick](autopilot-launcher.prompt.md#github-budget)) |
-| `low` | Otherwise, `used ≥ allowed` | Defers the dependency re-sync and keeps heartbeats ([tick](autopilot-launcher.prompt.md#github-budget)) |
+| `reserve` | The newest `core` or `graphql` remaining is less than `floor` (first `core`) | Makes no GitHub call until `resetAt`, except the heartbeats of its own live claims ([tick](autopilot-launcher.prompt.md#timer-and-tick)) |
+| `low` | Otherwise, `used ≥ allowed` | Defers the dependency re-sync and keeps heartbeats ([tick](autopilot-launcher.prompt.md#timer-and-tick)) |
 | `normal` | Otherwise | Works as usual |
 
 ## Status line
@@ -240,7 +240,7 @@ a new entry changes its body, or GitHub serves the saved next page.
 - [Cost ledger](cost-ledger.prompt.md): required native generation and verification context for per-run call recording through the default costRecord port.
 
 This module also uses the injected file port and clock. Its consumers, for
-navigation only: the [Autopilot launcher](autopilot-launcher.prompt.md#github-budget)
+navigation only: the [Autopilot launcher](autopilot-launcher.prompt.md#timer-and-tick)
 counts its calls, applies the budget, shows the status line and reads review
 pages with the full-last-page rule; the
 [dependency GitHub reader](issue-dependencies-github.prompt.md#conditional-reads)

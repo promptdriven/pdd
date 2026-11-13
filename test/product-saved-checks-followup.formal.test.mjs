@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 // precomputed evidence, product decision, Runtime, authentication or dispatch.
 // An alternate module permits a private semantic control without editing code.
 const runtime = await import(process.env.PDD_FOLLOWUP_FORMAL_MODULE
-  ?? new URL('../src/runtime-client.mjs', import.meta.url).href);
+  ?? new URL('../src/runtime-seam.mjs', import.meta.url).href);
 const A = 'a'.repeat(64), B = 'b'.repeat(64);
 const clone = value => structuredClone(value);
 const own = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
