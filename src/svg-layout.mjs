@@ -1,6 +1,7 @@
-// Generated from prompts/cli/svg-layout.prompt.md (sha256: c2531c05850058ee96d9fd2d55371868c038a89696a92014d03063097d243c24).
+// Generated from prompts/cli/svg-layout.prompt.md (sha256: 53e9df594ab1aa6c15834b13536204414e0832811a56cde6b6f526d38f94096f).
 import { lstatSync, readFileSync } from 'node:fs';
 import { dirname, relative, resolve, sep } from 'node:path';
+import { lintScreenDesign } from './screen-design-check.mjs';
 import { runtimeWorkspaceSlice, workspace } from './runtime-seam.mjs';
 
 const { requireRuntimePath } = runtimeWorkspaceSlice();
@@ -345,16 +346,17 @@ function extractControls(source, parts) {
 
 export function lintSvgLayouts({ root, files, promptPaths }) {
   const policy=workspace.policy({root});files=files.filter(path=>workspace.allows(policy,path));
-  const warnings = [], add = (prompt, drawing, part, reason) => warnings.push({ key: `${prompt}\0${drawing}\0${part}\0${reason}`, text: `Warning: SVG layout ${prompt} -> ${drawing}: ${part}: ${reason}.` });
+  const warnings = [], promptRecords = [], add = (prompt, drawing, part, reason) => warnings.push({ key: `${prompt}\0${drawing}\0${part}\0${reason}`, text: `Warning: SVG layout ${prompt} -> ${drawing}: ${part}: ${reason}.` });
   for (const prompt of [...new Set(promptPaths ?? files.filter(path => path.endsWith('.prompt.md')))].sort()) {
     let source;
     try { source = markupTokens(safeRead(root, prompt)).map(token => token.startsWith('<!--') ? '\n' : token).join(''); } catch (error) { add(prompt, '(unread)', 'source', error.message); continue; }
     source = source.replace(/<details\b[^>]*>\s*<summary[^>]*>[^\n]*Runtime interface[^\n]*<\/summary>[\s\S]*?<\/details>/gi, '')
       .replace(/(^##+ Runtime interface[^\n]*\n)[\s\S]*?(?=^##+ |$(?![\s\S]))/gmi, '');
-    const decodedSource = decodeHtml(source);
+    const decodedSource = decodeHtml(source), drawings = [];
     for (const link of links(source).sort()) {
       let drawing;
       try { drawing = relative(root, resolve(root, dirname(prompt), decodeURIComponent(link))).split(sep).join('/'); } catch { drawing = link; }
+      if (drawing && drawing !== '..' && !drawing.startsWith('../')) drawings.push(drawing);
       let parts;
       try { parts = partsOf(safeRead(root, drawing)); } catch (error) { add(prompt, drawing, 'drawing', error.message); continue; }
       const appearance = source.match(/^##+ Appearance\b[^\n]*\n([\s\S]*?)(?=^##? |$(?![\s\S]))/m)?.[1] || '';
@@ -368,6 +370,46 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
       }
       const controls = extractControls(source, parts);
       for (const control of controls) if (!parts.some(part => normalize(part.value) === normalize(control))) add(prompt, drawing, `control "${control}"`, 'prompt control absent from drawing');
+    }
+    promptRecords.push({ path: prompt, prose: source, drawings });
+  }
+  if (promptRecords.some(record => record.drawings.length > 0)) {
+    const mapPaths = new Set(files.filter(path => /(?:^|\/)app-map\.json$/.test(path)));
+    for (const testFile of files.filter(path => /^(?:tests?|.*\/tests?)\/.*\.json$/.test(path))) {
+      try {
+        const doc = JSON.parse(safeRead(root, testFile));
+        if (Array.isArray(doc?.app_maps)) for (const candidate of doc.app_maps) if (typeof candidate === 'string' && workspace.allows(policy, candidate)) mapPaths.add(candidate);
+      } catch { /* non-scenario or unreadable JSON */ }
+    }
+    const appMaps = [], cssPaths = new Set(), inspectedPrompts = new Set(promptRecords.map(record => record.path));
+    for (const mapPath of [...mapPaths].sort()) {
+      try {
+        const doc = JSON.parse(safeRead(root, mapPath));
+        if (!doc || typeof doc !== 'object' || doc.schema_version !== 'prompt-runtime.app-map.v1' || typeof doc.name !== 'string' || !doc.name) continue;
+        const topSheets = Array.isArray(doc.stylesheets) ? doc.stylesheets.filter(item => typeof item === 'string') : [];
+        const screens = (Array.isArray(doc.screens) ? doc.screens : [])
+          .filter(screen => screen && typeof screen === 'object' && typeof screen.id === 'string' && typeof screen.prompt_path === 'string' && typeof screen.source === 'string' && typeof screen.format === 'string')
+          .map(screen => ({
+            id: screen.id,
+            prompt_path: screen.prompt_path,
+            source: screen.source,
+            format: screen.format,
+            stylesheets: Array.isArray(screen.stylesheets) ? screen.stylesheets.filter(item => typeof item === 'string') : [],
+          }));
+        for (const screen of screens) {
+          if (screen.source === 'operation' && screen.format === 'html' && inspectedPrompts.has(screen.prompt_path)) {
+            for (const cssPath of [...topSheets, ...screen.stylesheets]) cssPaths.add(cssPath);
+          }
+        }
+        appMaps.push({ path: mapPath, stylesheets: topSheets, screens });
+      } catch { /* unreadable or non-app-map JSON */ }
+    }
+    if (appMaps.length) {
+      const stylesheets = [...cssPaths].sort().map(cssPath => {
+        try { return { path: cssPath, content: safeRead(root, cssPath), error: null }; }
+        catch (error) { return { path: cssPath, content: null, error: error.message }; }
+      });
+      for (const text of lintScreenDesign({ appMaps, stylesheets, prompts: promptRecords }).warnings) warnings.push({ key: text, text });
     }
   }
   return [...new Map(warnings.sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0).map(warning => [warning.text, warning.text])).values()];

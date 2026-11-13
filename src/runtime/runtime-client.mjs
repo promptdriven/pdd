@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 8b2b24d0a25d68348d1c754a89d9bb5ebe7cb03e597328aa27fb452b938ef98d).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 9d65377d24dc310b5d270527631aebfbc7f9663e372f1ba12f0fc41f97fb34ba).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
@@ -3225,7 +3225,7 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
     if (options['--affected'] !== undefined && (options['--affected'] !== true || words.length || Object.keys(options).some(key => !['--affected','--json','--details','--timeout','--max-calls','--cache-clear'].includes(key))))
       throw new Stop(2, '--affected accepts no Stories and only --cache-clear, --json, --details, --timeout and --max-calls.');
     if(options['--journeys']!==undefined){
-      if(options['--journeys']!==true||words.length>1||['--read','--retry','--fill-hash','--request','--screen','--drawing'].some(key=>options[key]!==undefined))throw new Stop(2,'Use pdd test --journeys [JOURNEY] with normal test options.');
+      if(options['--journeys']!==true||words.length>1||['--read','--retry','--fill-hash','--request','--screen','--drawing','--look'].some(key=>options[key]!==undefined))throw new Stop(2,'Use pdd test --journeys [JOURNEY] with normal test options.');
       const {root,found}=localSetup(cwd,[],ports);
       try { words=selectJourneys(found.tests.map(test=>({testPath:test.path,storyPath:test.storyPath})),words[0],ports); } catch(error) { if (error?.unboundPort) throw error; throw new Stop(2,error.message); }
       if(!words.length)throw new Stop(2,'No root product journeys found.');
@@ -3283,13 +3283,13 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
     if (Object.hasOwn(options, '--compact') && (options['--compact'] !== true || options['--fill-hash'] !== true || words.length
       || Object.keys(options).some(name => !['--fill-hash', '--compact'].includes(name)))) throw new Stop(2, '--compact requires --fill-hash, without other options or Stories.');
     // Local modes dispatch before repository runtime state, origin or sign-in.
-    if (options['--screen'] !== undefined || options['--drawing'] !== undefined) {
-      if (!options['--screen'] || !options['--drawing'] || words.length || Object.keys(options).some(name => !['--screen', '--drawing', '--json'].includes(name))) throw new Stop(2, 'Use pdd test --screen URL --drawing PATH [--json], without other options or Stories.');
+    if (options['--screen'] !== undefined || options['--drawing'] !== undefined || options['--look'] !== undefined) {
+      if (!options['--screen'] || !options['--drawing'] || words.length || Object.keys(options).some(name => !['--screen', '--drawing', '--look', '--json'].includes(name))) throw new Stop(2, 'Use pdd test --screen URL --drawing PATH [--look] [--json], without other options or Stories.');
       if (typeof ports.compareScreen !== 'function' || (!context.json && typeof ports.formatScreenComparison !== 'function')) {
         throw unboundPortError('Screen comparison ports (compareScreen, formatScreenComparison) are not bound.');
       }
       try {
-        const report = await ports.compareScreen({ url: options['--screen'], drawingPath: options['--drawing'], cwd, chromePath: ports.env.PDD_CHROME_PATH }, { env: ports.env, browser: givenPorts.screenBrowser });
+        const report = await ports.compareScreen({ url: options['--screen'], drawingPath: options['--drawing'], cwd, chromePath: ports.env.PDD_CHROME_PATH, look: options['--look'] === true }, { env: ports.env, browser: givenPorts.screenBrowser });
         const exitCode = report.passed ? 0 : 1;
         line(ports.stdout, context.json ? JSON.stringify({ ...report, exit_code: exitCode }) : ports.formatScreenComparison(report));
         return exitCode;
@@ -4038,7 +4038,10 @@ async function runBatch(context, cwd, words, options, setRelease) {
     if (discoveryChanged || !isDeepStrictEqual(validated.tests,context.checkSelection.tests)) return restartConservatively();
   }
   context.sourceSelection = {tests:sentTests(rows),exclude_fixture_projects:words.length === 0};
-  context.warnings.push(...(capture.warnings ?? []));
+  const svgWarnings = typeof ports.lintSvgLayouts === 'function'
+    ? ports.lintSvgLayouts({ root, files: [...found.visible], promptPaths: capture.files.map(file => file.path).filter(path => path.endsWith('.prompt.md')) })
+    : [];
+  context.warnings.push(...svgWarnings, ...(capture.warnings ?? []));
   if (cache) await beginTestAttempts(cache, rows, capture, options, origin);
   context.testCache = cache;
   const fresh = rows.filter(row => !row.cached);

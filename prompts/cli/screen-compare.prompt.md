@@ -1,6 +1,6 @@
 # Local screen comparison
 
-Own `src/screen-compare.mjs`. Its module function `compareScreen({url, drawingPath, cwd, chromePath}, ports = {})` renders a real page and its `.ui.svg` reference in headless Chrome/Chromium, then returns `{drawing, url, viewport, rows, passed}`. `viewport` has CSS-pixel `width` and `height`. Each row has `{part, kind, expected, actual, status}`; `kind` is `id` or `text`, status is `pass`, `missing`, `hidden`, `region` or `order`. `expected` and `actual` are concise readable observations. `passed` is true only if every required row passes. The module function `formatScreenComparison(report)` returns a Markdown `Screen vs drawing` table and a pass/fail summary. Render supplied content literally: escape Markdown backslashes, punctuation and HTML-special characters, and flatten line breaks so content cannot alter the table or introduce links/HTML. No AI, PDD runtime, gh authentication or saved check batch is involved.
+Own `src/screen-compare.mjs`. Its module function `compareScreen({url, drawingPath, cwd, chromePath, look = false}, ports = {})` renders a real page and its `.ui.svg` reference in headless Chrome/Chromium, then returns `{drawing, url, viewport, rows, passed}` (plus `look: true` when `look` is true). `viewport` has CSS-pixel `width` and `height`. Each row has `{part, kind, expected, actual, status}`; `kind` is `id`, `text` or (only when `look` is true) `look`, status is `pass`, `missing`, `hidden`, `region`, `order` or (only when `look` is true) `look`. `expected` and `actual` are concise readable observations. `passed` is true only if every required row passes. The module function `formatScreenComparison(report)` returns a Markdown `Screen vs drawing` table and a pass/fail summary. Render supplied content literally: escape Markdown backslashes, punctuation and HTML-special characters, and flatten line breaks so content cannot alter the table or introduce links/HTML. No AI, PDD runtime, gh authentication or saved check batch is involved.
 
 ## Reference and browser
 
@@ -18,7 +18,20 @@ A hidden label, accessibility name, script text or offscreen copy cannot satisfy
 
 Compare matched parts' normalized center coordinates: each axis may differ by at most 0.15 of the viewport dimension. Outside this tolerance is `region`. Preserve the spatial order of nonnested parts whose reference bounds are separated vertically or horizontally by more than 2 CSS pixels; overlapping/nested parts impose no extra order. Compare visual geometry, never SVG source order or DOM/focus order. An inversion gives an `order` failure naming the other part. Presence is not enough: an id with unrelated content cannot hide missing text rows. A missing score box, seed box or READY bar must fail even if some score/seed words appear elsewhere.
 
-Keep one table row per required id/text occurrence in stable reference order, including failed parts. State viewport and reference path in the report. This checks parts, text, approximate regions and order; it does not certify colors, typography or pixel equivalence. The caller must arrange the named reference state and dynamic values before invoking it; never drop unmatched words or numbers as “samples” to manufacture a pass.
+Keep one table row per required id/text occurrence in stable reference order, including failed parts. State viewport and reference path in the report. Without `look`, this checks parts, text, approximate regions and order; it does not certify colors, typography or pixel equivalence. The caller must arrange the named reference state and dynamic values before invoking it; never drop unmatched words or numbers as “samples” to manufacture a pass.
+
+## Optional look check
+
+When `look` is true, also capture rendered canvas and painted box surfaces from both the reference SVG and the selected page/app surface, and append the `kind: "look"` rows returned by [screen design check](screen-design-check.prompt.md) (`evaluateScreenLook`). Without `look`, retain exact existing return keys, row kinds and summary wording.
+
+Capture look facts in reference-viewport CSS pixels:
+
+- **Reference `canvasColor`:** the effective RGB `[r, g, b]` fill of the first non-excluded, non-text visible SVG shape covering at least 85% of both viewport dimensions, or `null` when the drawing leaves its backdrop unpainted (for local gradients, use the first visible stop color).
+- **Page `canvasColor`:** the topmost nontransparent background RGB `[r, g, b]` across the app root (`host` for shadow doors, else `documentElement`/`body`) and any single visible non-text child covering at least 85% of both app-viewport dimensions (such as `<main>` or root `<svg>`), defaulting to `[255, 255, 255]` when the browser canvas is left transparent.
+- **Reference `boxes`:** in reference order, each visible required `id` part whose bounds are at least `24 × 16` CSS pixels and smaller than 85% of at least one viewport axis, and whose own SVG shape (or single non-text painted child shape covering at least 70% of both group axes) has a nontransparent fill distinct from `canvasColor` (RGB distance `> 12`) or a visible stroke (`strokeWidth > 0`). Record `{id, box, fill, stroke}`.
+- **Page `boxes`:** for each page element with an `id`, record `{id, visible, painted, box, fill, stroke}` using the element itself (or, when the `#id` wrapper has no own paint and wraps a single visible child element covering at least 80% of both axes, that child surface). `painted` is true only when the surface has a nontransparent fill/background distinct from the page `canvasColor` (RGB distance `> 12`), or a visible border/outline/SVG stroke; descendant text alone never sets `painted` true.
+
+When `report.look` is true (or `report.rows` contains `kind: "look"`), `formatScreenComparison(report)` ends with `Parts, text, regions, order and look within tolerance; pixel equivalence is not required.` instead of the parts-only disclaimer.
 
 ## Supported Simulator Screen doors
 
@@ -96,6 +109,7 @@ ready. Existing action lookup/recovery belongs to the door, not this module.
 
 ## Dependencies
 
+- [Screen design check](screen-design-check.prompt.md): required generation/runtime/verification context for optional `look` surface evaluation.
 - [Screen rules](../../RUNBOOK.md#13-give-your-app-a-screen-app-map): required packaged generation and verification context for drawing fidelity and local screen comparison. Its other links are navigation-only for this module's wire contract.
 
 ## Caller navigation
