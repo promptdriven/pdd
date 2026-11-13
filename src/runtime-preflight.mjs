@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: cc2d616ba651bcf1e534552efa1d365008caa8aba4ed766e4ff244ea59b6d566).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 7d4c6517830a0b841a56a75e519ed5d17da15eac68d7e0b88591de575635a4ae).
 import { markdownLinks, markdownDefinitions, markdownSectionText } from './runtime-markdown.mjs';
 import { buildBindingPlan, runtimeBoundary } from './runtime-binding-plan.mjs';
 import { resolveOwners } from './file-owner.mjs';
