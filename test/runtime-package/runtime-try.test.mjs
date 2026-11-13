@@ -39,10 +39,11 @@ test('RUNTIME-TRY1: pdd simulate lints, posts one Try with the test as seed, ope
   assert.deepEqual(Object.keys(request).sort(), ['max_calls', 'requestId', 'seed', 'source_sha256', 'tab']);
   assert.equal(request.max_calls, 400); assert.equal(request.seed, 'tests/place-order.json'); assert.equal(request.tab, 'call');
   assert.deepEqual(first.opened, [`${fake.origin}/s/${'t'.repeat(43)}/`]);
-  assert.equal(first.out, `Try budget 400 calls; 400 remaining. You are charged only for calls that run.\nTry ready for "Place a coffee order": ${fake.origin}/s/${'t'.repeat(43)}/ (open in your browser). It ends in 24 hours, or with: pdd simulate --stop place-order\n`);
+  assert.equal(first.out, `Try budget 400 calls; 400 remaining. You are charged only for calls that run.\nTry source: sha256:${request.source_sha256}; engine: eae2202a68d00ab762fcbbf1eba0d8607a132a15\nTry ready for "Place a coffee order": ${fake.origin}/s/${'t'.repeat(43)}/ (open in your browser). It ends in 24 hours, or with: pdd simulate --stop place-order\n`);
   const again = await tryStory(setup, fake, ['place-order'], { '--no-open': true });
   assert.equal(again.code, 0, again.err);
   assert.equal(fake.posts.length, 2); assert.deepEqual(again.opened, []);
+  assert.match(again.out, new RegExp(`Try source: sha256:${request.source_sha256}; engine: eae2202a68d00ab762fcbbf1eba0d8607a132a15`));
   assert.match(again.out, new RegExp(`Try ready for "Place a coffee order": ${fake.origin}/s/t{43}/`));
   const screen = await tryStory(setup, fake, ['place-order'], { '--new': true, '--tab': 'screen' });
   assert.equal(screen.code, 0, screen.err);

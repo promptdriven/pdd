@@ -1,4 +1,4 @@
-// Generated from prompts/cli/interpreter-version.prompt.md (sha256: 34199ed07dccf8fd7db6306fe9b10daccfe462c764c948ffe1422113d13b81cf).
+// Generated from prompts/cli/interpreter-version.prompt.md (sha256: c9053d934c43da87d7bf78a11a79aea374ae246d960960ec1e98eda522cc5435).
 import { spawnSync } from 'node:child_process';
 import { runtimeOrigin } from './runtime-seam.mjs';
 
@@ -54,7 +54,11 @@ export async function runDetailedVersion({ version, env = {} }, ports = {}) {
     const metadata = JSON.parse(answer.body);
     if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)
       || typeof metadata.engine_sha !== 'string' || metadata.engine_sha.length !== 40 || !/^[a-f0-9]{40}$/i.test(metadata.engine_sha)) return unknown;
+    const serviceLine = Object.hasOwn(metadata, 'service_sha')
+      ? `PDD service: ${typeof metadata.service_sha === 'string' && /^[a-f0-9]{40}$/i.test(metadata.service_sha) ? metadata.service_sha.toLowerCase() : 'unknown'}\n`
+      : '';
     return { exit_code: 0, stderr: '', stdout: `${prefix}PDD interpreter: ${metadata.engine_sha.toLowerCase()}\n`
+      + serviceLine
       + `Interface formats: ${formatList(metadata.formats?.interface)}\n`
       + `Test formats: ${formatList(metadata.formats?.test)}\n`
       + `App-map formats: ${formatList(metadata.formats?.app_map)}\n` };
