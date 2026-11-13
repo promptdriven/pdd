@@ -265,7 +265,7 @@ function assertBudgetPreserved(b, p, json) {
 async function budgetRecovery(b, retry, authMs, configure = () => {}) {
   const p = portsFor(b.r.env), gh = p.ports.gh;
   b.r.state.clock = p.clock;
-  p.ports.gh = args => { p.clock.now += authMs / 2; return gh(args); };
+  p.ports.gh = args => { if (args[0] === 'auth') p.clock.now += authMs; return gh(args); };
   configure(p);
   const code = await runCheck({ cwd: b.r.h.repo, words: retry ? [] : [b.batch], options: {
     [retry ? '--retry' : '--read']: retry ? b.batch : true, '--json': true, '--timeout': 1,
@@ -365,7 +365,7 @@ for (const retry of [false, true]) test(`CONTINUATION repair2: interrupted ${ret
   const b = await budgetFixture(t), starts = [];
   const next = await budgetRecovery(b, retry, 0, p => {
     const gh = p.ports.gh;
-    p.ports.gh = args => { if (args[0] === 'api') p.clock.interrupt(); return gh(args); };
+    p.ports.gh = args => { if (args[0] === 'auth') p.clock.interrupt(); return gh(args); };
     p.ports.fetch = async (url, init) => { starts.push(init.method); return new Response('{}'); };
   });
   assert.deepEqual(starts, []); assert.equal(next.code, 3);
