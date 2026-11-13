@@ -24,13 +24,16 @@ const regression = "import assert from 'node:assert/strict';import value from '.
 // so a killed test leaves nothing running (#3263). The owner is this file, or PDD_3263_OWNER when a test sets it.
 const marker = `pdd-3263-fixture-${process.pid}`;
 const untilGone = `/*${marker}*/const owner=Number(process.env.PDD_3263_OWNER)||${process.pid};setInterval(()=>{try{process.kill(owner,0)}catch{process.exit()}},200);`;
-const stubbornBase = `node -e "if(!require('fs').readFileSync('src/value.mjs','utf8').includes('true')){process.on('SIGTERM',()=>{});${untilGone}}"`;
-const fixtureProcesses = () => execFileSync('ps',['-eo','pid=,args='],{encoding:'utf8'}).split('\n').filter(row=>row.includes(marker)).map(row=>Number(row.trim().split(/\s+/)[0])).filter(pid=>pid>0&&pid!==process.pid);
+const stubbornBase = `node -e "/*${marker}*/if(!require('fs').readFileSync('src/value.mjs','utf8').includes('true')){process.on('SIGTERM',()=>{});${untilGone}}"`;
+const fixtureProcesses = () => {
+ const psEnv = {...process.env}; delete psEnv.COLUMNS;
+ return execFileSync('ps',['-eo','pid=,args='],{encoding:'utf8',env:psEnv,maxBuffer:64*1024*1024}).split('\n').filter(row=>row.includes(marker)).map(row=>Number(row.trim().split(/\s+/)[0])).filter(pid=>pid>0&&pid!==process.pid);
+};
 const alive = pid => {try {process.kill(pid,0);return true;} catch {return false;}};
 const wait = ms => new Promise(r => setTimeout(r, ms));
 test.after(async () => {
  const signal=(pids,name)=>{for(const pid of pids){try{process.kill(pid,name)}catch{}}};
- let left=fixtureProcesses();signal(left,'SIGTERM');for(let n=0;n<100&&left.some(alive);n++)await wait(20);left=left.filter(alive);signal(left,'SIGKILL');
+ const left=fixtureProcesses();signal(left,'SIGTERM');for(let n=0;n<100&&left.some(alive);n++)await wait(20);signal(fixtureProcesses(),'SIGKILL');
 });
 test('PROVE-NATIVE1: committed tests and binary fixtures overlay old code; dirty bytes stay isolated', async t => {
  const {proveRun}=await api(), f=fixture(t);f.put('src/value.mjs','export default true;\n');f.put('test/new.test.mjs',regression);f.put('test/seed\n雪.bin',Buffer.from([0,255,2]));f.put('test/exec.sh','#!/bin/sh\nexit 0\n',0o755);const head=f.commit();f.put('src/value.mjs','throw Error("dirty");');f.put('test/new.test.mjs','throw Error("dirty test");');f.put('test/untracked.test.mjs','throw Error("untracked");');
@@ -55,7 +58,7 @@ test('PROVE-NATIVE6: default readRun accepts real selection and rejects an absen
  const {proveRun}=await api(),f=fixture(t);const result=await proveRun({ref:'9999',cwd:f.root,test:'true',expect:'x'});assert.equal(result.exitCode,1);assert.equal(result.message,'Old-code proof: ✗ setup-error (run unavailable).');assert.equal(existsSync(join(f.runDir,'old-code-proof.json')),false);
 });
 test('PROVE-NATIVE7: whole process group is killed on output overflow and both snapshots are removed', {timeout:20000}, async t => {
- const {proveRun}=await api(),f=fixture(t);f.put('test/new.test.mjs',regression);f.commit();const pidFile=join(f.runDir,'child.pid');const script=`const fs=require('fs');const {spawn}=require('child_process');let child=spawn(process.execPath,['-e',${JSON.stringify('process.on("SIGTERM",()=>{});'+untilGone)}],{stdio:'ignore'});fs.appendFileSync(${JSON.stringify(pidFile)},String(child.pid)+"\\n");process.on('SIGTERM',()=>{});${untilGone}setTimeout(()=>setInterval(()=>process.stdout.write('x'.repeat(65536)),1),100);`;
+ const {proveRun}=await api(),f=fixture(t);f.put('test/new.test.mjs',regression);f.commit();const pidFile=join(f.runDir,'child.pid');const script=`/*${marker}*/const fs=require('fs');const {spawn}=require('child_process');let child=spawn(process.execPath,['-e',${JSON.stringify(`${untilGone}process.on("SIGTERM",()=>{});`)}],{stdio:'ignore'});fs.appendFileSync(${JSON.stringify(pidFile)},String(child.pid)+"\\n");process.on('SIGTERM',()=>{});${untilGone}setTimeout(()=>setInterval(()=>process.stdout.write('x'.repeat(65536)),1),100);`;
  const started=Date.now();const answer=await proveRun({ref:'2594',cwd:f.root,test:`node -e '${script.replaceAll("'", "'\\''")}'`,expect:'x'});assert.equal(answer.exitCode,1);assert.equal(f.proof().outcome,'output-limit');assert.equal(f.proof().base.outputLimited,true);assert.equal(f.proof().head.outputLimited,true);assert.ok(f.proof().base.stdoutTail.join('\n').length<=1048576);const pids=readFileSync(pidFile,'utf8').trim().split('\n').map(Number);assert.equal(pids.length,2);for(const pid of pids){let alive=false;try{const stat=readFileSync(`/proc/${pid}/stat`,'utf8');alive=!/\) Z /.test(stat);}catch{}assert.equal(alive,false);}assert.ok(Date.now()-started>=4000);assert.equal(f.git('worktree','list','--porcelain').split('worktree ').length,2);
 });
 test('PROVE-NATIVE8: a 1-minute --timeout deadline kills descendants then still executes committed head', {timeout:75000}, async t => {
@@ -63,13 +66,18 @@ test('PROVE-NATIVE8: a 1-minute --timeout deadline kills descendants then still 
 });
 test('3263: a base command that ignores SIGTERM stops when the process running proveRun is killed', {timeout:30000}, async t => {
  const f=fixture(t);f.put('test/new.test.mjs',regression);f.commit();const modulePath=new URL('../src/workflow-prove.mjs',import.meta.url).href;
+ const childTmp=join(f.runDir,'tmp');mkdirSync(childTmp,{recursive:true});
  const script=`import {proveRun} from ${JSON.stringify(modulePath)};process.env.PDD_3263_OWNER=String(process.pid);await proveRun(${JSON.stringify({ref:'2594',cwd:f.root,test:stubbornBase,expect:'defect-x',timeoutMinutes:1})});`;
- const child=spawn(process.execPath,['--input-type=module','-e',script],{stdio:'ignore'});const ended=new Promise(r=>child.on('close',r));
+ const child=spawn(process.execPath,['--input-type=module','-e',script],{stdio:'ignore',env:{...process.env,TMPDIR:childTmp,TMP:childTmp,TEMP:childTmp}});const ended=new Promise(r=>child.on('close',r));
  const started=()=>fixtureProcesses().filter(pid=>pid!==child.pid);let base=[];
  try {for(let n=0;n<500&&!base.length;n++){base=started();if(!base.length)await wait(20);}assert.ok(base.length,'the base command starts');
   child.kill('SIGKILL');await ended;for(let n=0;n<150&&base.some(alive);n++)await wait(20);
   assert.deepEqual(base.filter(alive),[],'no fixture process outlives the killed proveRun process');}
- finally {child.kill('SIGKILL');}
+ finally {
+  child.kill('SIGKILL');await ended;
+  for(const entry of f.git('worktree','list','--porcelain','-z').split('\0')){if(entry.startsWith('worktree ')&&entry.slice(9)!==f.root)rmSync(entry.slice(9),{recursive:true,force:true});}
+  f.git('worktree','prune');
+ }
 });
 test('PROVE-PORT1: blank-input validation has no host effects', async () => {
  const {proveRun}=await api();let called=0;assert.deepEqual(await proveRun({test:' ',expect:'x'},new Proxy({}, {get(){called++;throw Error('effect');}})),{exitCode:2,message:'pdd workflow prove requires nonblank --test and --expect.'});assert.equal(called,0);
