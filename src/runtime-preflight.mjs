@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: f3d567124b7719c1492d3111bb041ff75a389957f91c5bf77965020e43c2c2ab).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 169d908aaf0bf0b978db82f3b21031439c89633b8d1908051de7803f4ca7bc1b).
 import { markdownLinks, markdownDefinitions, markdownSectionText } from './runtime-markdown.mjs';
 import { buildBindingPlan, runtimeBoundary } from './runtime-binding-plan.mjs';
 import { createHash } from 'node:crypto';
@@ -21,7 +21,9 @@ export const LIMITS = Object.freeze({ bytes: 10_485_760, files: 10_000 });
 const TOP_KEYS = new Set(['schema_version', 'story_path', 'criteria', 'initial_world', 'steps', 'entry_paths', 'simulation',
   'check_exemptions', 'context', 'context_byte_budget', 'criteria_scope', 'prompt_mappings', 'app_maps']);
 const REQUIRED_KEYS = ['schema_version', 'criteria', 'initial_world', 'steps'];
-const STEP_KEYS = new Set(['step_id', 'entry_path', 'operation', 'input', 'checks', 'expected_error', 'simulation_overrides', 'model']);
+const REQUIRED_STEP_KEYS = ['step_id', 'entry_path', 'operation', 'input', 'checks'];
+const OPTIONAL_STEP_KEYS = ['expected_error', 'simulation_overrides', 'model'];
+const STEP_KEYS = new Set([...REQUIRED_STEP_KEYS, ...OPTIONAL_STEP_KEYS]);
 const RULE_OPS = new Set(['at_most', 'at_least', 'not_contains', 'all_in', 'equals_ignore_case']);
 const EXACT_OPS = new Set(['equals', 'not_equals', 'one_of', 'count', ...RULE_OPS]);
 const SCHEMA_RULES = new Set(['type', 'properties', 'required', 'additionalProperties', 'items', 'enum', 'const', 'oneOf',
@@ -899,9 +901,21 @@ export function discoveryRefusal(test) {
 
 const criterionShape = item => isObject(item) && isDeepStrictEqual(Object.keys(item).sort(), ['id','text'])
   && typeof item.id === 'string' && !!item.id && typeof item.text === 'string' && !!item.text;
-const stepShape = step => isObject(step) && !Object.keys(step).some(key=>!STEP_KEYS.has(key))
-  && ['step_id','entry_path','operation','input','checks'].every(key=>Object.hasOwn(step,key))
-  && ['step_id','entry_path','operation'].every(key=>typeof step[key]==='string'&&!!step[key]);
+const STEP_SHAPE_NOTE = `Required step keys: ${REQUIRED_STEP_KEYS.join(', ')}; optional step keys: ${OPTIONAL_STEP_KEYS.join(', ')}.`;
+function stepProblem(step) {
+  if (!isObject(step)) return `A step must be a JSON object. ${STEP_SHAPE_NOTE}`;
+  const missing = REQUIRED_STEP_KEYS.filter(key => !Object.hasOwn(step, key));
+  const extra = Object.keys(step).filter(key => !STEP_KEYS.has(key));
+  if (missing.length || extra.length) {
+    const parts = [];
+    if (missing.length) parts.push(`missing required key${missing.length > 1 ? 's' : ''} ${missing.map(key => `"${key}"`).join(', ')}`);
+    if (extra.length) parts.push(`unknown key${extra.length > 1 ? 's' : ''} ${extra.map(key => `"${key}"`).join(', ')}`);
+    return `Invalid step (${parts.join('; ')}). ${STEP_SHAPE_NOTE}`;
+  }
+  const badStrings = ['step_id', 'entry_path', 'operation'].filter(key => typeof step[key] !== 'string' || !step[key]);
+  if (badStrings.length) return `Step ${badStrings.map(key => `"${key}"`).join(', ')} must be ${badStrings.length > 1 ? 'nonblank strings' : 'a nonblank string'}.`;
+  return null;
+}
 const checkShape = check => isObject(check) && ['criterion_id','target','path','op'].every(key=>Object.hasOwn(check,key));
 function appMapsRefusal(doc) {
   if (!Object.hasOwn(doc,'app_maps')) return null;
@@ -939,7 +953,8 @@ export function scenarioShapeRefusal(doc,path) {
   if(!Array.isArray(doc.steps)||!doc.steps.length)return refusal('missing-steps','steps','The test has no steps.');
   for(const [index,step] of doc.steps.entries()) {
     const section=`steps[${index}]`;
-    if(!stepShape(step))return refusal('invalid-step',section,'A step has step_id, entry_path, operation, input and checks.');
+    const brokenStep=stepProblem(step);
+    if(brokenStep)return refusal('invalid-step',section,brokenStep);
     if(Object.hasOwn(step,'model')&&(typeof step.model!=='string'||!step.model.trim()))return refusal('invalid-step-model',`${section}.model`,'A step model must be a model name (a string).');
     if(!Array.isArray(step.checks))return refusal('invalid-check',`${section}.checks`,'checks must be a list.');
     for(const [at,check] of step.checks.entries()) {
@@ -979,8 +994,9 @@ function checkTest(root, found, test, prompts) {
   const exact = new Set(), inputIssues = [];
   for (const [index, step] of doc.steps.entries()) {
     const section = `steps[${index}]`, at = { step: index + 1 };
-    if (!stepShape(step)) {
-      return refusal('invalid-step', section, 'A step has step_id, entry_path, operation, input and checks.', at);
+    const brokenStep = stepProblem(step);
+    if (brokenStep) {
+      return refusal('invalid-step', section, brokenStep, at);
     }
     if (Object.hasOwn(step, 'model') && (typeof step.model !== 'string' || !step.model.trim())) {
       return refusal('invalid-step-model', `${section}.model`, 'A step model must be a model name (a string).', at);
