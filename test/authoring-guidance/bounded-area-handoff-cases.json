@@ -1,0 +1,76 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/bounded-area-handoff.md",
+  "status": "not-run",
+  "boundary": "approveRun advances to the later area; openRun recovery/replacement reuses the brief. Inspect the actual saved/delivered area-start message and original status.json through temporary storage and injected Herdr/program ports; do not export a check-only areaMessage API.",
+  "criteria": [
+    {"id":"AC1","text":"A later area keeps completed earlier steps in workflow order. Short summaries keep their current one-line text and empty summaries still show \"done\"; incomplete and current-area steps are excluded."},
+    {"id":"AC2","text":"Each displayed step item, including its step label and shortening marker, uses at most 1,024 UTF-8 bytes. An oversized item keeps the longest complete-code-point prefix that fits before \" … [summary shortened; read ledger]\"; Unicode characters remain valid."},
+    {"id":"AC3","text":"The entire \"Approved so far:\" line, including labels, separators, markers and its final period, uses at most 8,192 UTF-8 bytes. It keeps the longest leading sequence of capped items that fits and reports the exact remaining count as \"[N further step summaries omitted; read ledger]\"."},
+    {"id":"AC4","text":"Any shortened or omitted summary has one clear recovery instruction outside that line. It gives the exact original status.json path and full-summary selector under \"done\", warns that previews are incomplete, and requires full evidence before relying on a shortened or omitted result, check/approval claim, unresolved failure or decision."},
+    {"id":"AC5","text":"The original saved summaries, line breaks, decisions, approvals, reports, gates, pending questions and completed-step records stay intact. A bounded preview grants no approval, changes no role or workflow progress, and does not change PR or status rendering."}
+  ],
+  "cases": [
+    {
+      "id":"short-empty-order",
+      "criteria":["AC1","AC5"],
+      "given":"Earlier area order is scope, inspect, blank, unfinished. Saved summaries are scope='Ready.  ', inspect='First line\nsecond   line.', blank=''; unfinished has no done record. A current-area done record also exists.",
+      "expected":"Approved so far: scope: Ready; inspect: First line second line; blank: done. No unfinished/current-area item. Ledger summaries retain their stored bytes; no recovery notice is needed."
+    },
+    {
+      "id":"no-earlier-summaries",
+      "criteria":["AC1","AC3"],
+      "given":"The first area has no earlier areas; a later area has no completed earlier steps.",
+      "expected":"First-area brief has no Approved so far line. The later-area line is Approved so far: no step summaries. No invented completion or ledger omission warning."
+    },
+    {
+      "id":"item-equality-and-overflow",
+      "criteria":["AC2","AC4"],
+      "given":"In separate launches, step x has ASCII summary 'a' repeated 1021 and 1022 times, giving uncapped STEP: SUMMARY items of 1024 and 1025 bytes.",
+      "expected":"The 1024-byte item stays whole. The 1025-byte item has the longest prefix fitting with the exact shortening marker; its final byte length is 1024. Only overflow requires recovery advice. The full ledger value survives."
+    },
+    {
+      "id":"unicode-prefix",
+      "criteria":["AC2","AC4"],
+      "given":"Launch later areas with oversized summaries made from repeated é, 界 and 😀, plus a boundary with e followed by a combining acute accent.",
+      "expected":"Every capped item is at most 1024 UTF-8 bytes, ends with the marker, and has the longest prefix of whole original code points that fits. No split surrogate, replacement character or invented normalization. Combining marks may fall across the cutoff; grapheme preservation is not proposed."
+    },
+    {
+      "id":"aggregate-equality-and-overflow",
+      "criteria":["AC1","AC3","AC4"],
+      "given":"Prepare at most ten completed earlier items, each at most 1024 bytes, whose full rendered Approved so far line is exactly 8192 bytes; repeat with one extra ASCII byte in the final item while keeping that item at most 1024 bytes.",
+      "expected":"Equality keeps all items and has no omission marker. Overflow reserves the exact count marker and keeps the longest leading sequence of complete capped items fitting in 8192 bytes, counting prefix, separators and final period. One recovery line identifies the ledger."
+    },
+    {
+      "id":"many-steps-and-large-label",
+      "criteria":["AC1","AC2","AC3","AC4"],
+      "given":"A valid custom workflow has 100 completed earlier steps, including a valid 64-character step name, and short and oversized summaries mixed in workflow order.",
+      "expected":"The rendered line stays within 8192 bytes; each included item stays within 1024 bytes including its label. Omitted count equals completed earlier items minus included items. No later item jumps past an omitted item. One ledger recovery reference avoids unbounded per-step notices."
+    },
+    {
+      "id":"late-failure-and-report-recovery",
+      "criteria":["AC2","AC4","AC5"],
+      "given":"An oversized summary ends with Not checked: verification unavailable and a synthetic report URL; another entirely omitted summary records an unresolved failure. The original ledger and referenced run-folder notes are present.",
+      "expected":"Markers disclose incomplete previews. The exact original status.json recovery path resolves, its done entries contain both late facts and the report URL, and advice requires retrieving relevant full evidence before reliance. It warns that missing preview text cannot establish absence of failures/decisions, and requires all earlier summaries if no safe subset can be identified. A manual reader can recover the failure and report; no pass is inferred."
+    },
+    {
+      "id":"ledger-path-quoting-and-persistence",
+      "criteria":["AC4","AC5"],
+      "given":"The temporary run folder contains spaces, a quote and Unicode. The ledger includes multiline summaries, decisions, approvalRecord, PR records, gate and question. Capture records before and after rendering/launch.",
+      "expected":"The recovery line contains the exact absolute original status.json path as a JSON string and identifies /done/STEP/summary using original workflow step names; scope resolves through /done/scope/summary. The path resolves to unchanged summary values and evidence. Only ordinary authorized transition/chat-owned fields may change; formatting does not edit approval, question, evidence or completed records."
+    },
+    {
+      "id":"launch-recovery-and-replacement",
+      "criteria":["AC2","AC3","AC4","AC5"],
+      "given":"A later-area launch fails, then openRun recovers; separately a current-area replacement reuses areaMessage with oversized earlier summaries and existing current-area continuation facts.",
+      "expected":"Both reused earlier-area preview lines obey both caps and recovery rules. Existing startup failure, replacement custody, remaining-step, gate and question instructions survive. No duplicate workflow progress, rerun of completed steps or new approval occurs. Current-area continuation details retain their existing contract."
+    },
+    {
+      "id":"unchanged-authority-and-renderers",
+      "criteria":["AC5"],
+      "given":"Exercise normal and strict person gates plus existing automatic guidance fixtures, then inspect public status and PR-summary projections of the same long stored summaries.",
+      "expected":"Existing gate decisions, approval guards, role separation and workflow outcomes remain unchanged. A marker never satisfies a gate. Status and PR rendering use their existing contracts and the complete original ledger summaries, not clipped preview values."
+    }
+  ],
+  "verification":"NOT RUN. Cases are native/manual checks, not executable Runtime scenarios or a hosted pass. Use an independent verifier after implementation; prove the overflow cases detect the old unbounded behavior."
+}

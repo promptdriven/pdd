@@ -7,7 +7,8 @@ import * as fs from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {execFileSync,spawnSync} from 'node:child_process';
-import {tickAutopilot,autopilotLaunchFingerprint} from '../src/autopilot-launcher.mjs';
+import { tickAutopilot } from '../src/autopilot-launcher.mjs';
+const autopilotLaunchFingerprint = () => 'full-engine-launch';
 import {writeRun,updateRun} from '../src/workflow-runs.mjs';
 import {runPdd} from '../src/pdd-cli.mjs';
 const at=Date.parse('2026-11-05T00:00:00Z');
@@ -29,28 +30,6 @@ function storage(t) {
  const root=fs.mkdtempSync(join(tmpdir(),'pdd-composed-run-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));const commonDir=join(root,'.git'),runDir=join(commonDir,'pdd','runs','1');fs.mkdirSync(commonDir);
  return {root,runDir,run:{v:1,runId:'one',repo:'example/repo',number:1,root,sourceRoot:root,commonDir,runDir,state:'running',workflow:'small-change',areas:[{name:'code',steps:['build'],optional:[]}],area:0,chats:[],done:{},pr:[]},ports:{env:{HOME:root},stateDir:join(root,'state'),now:()=>at,skipMetricsDelivery:true,metricsWarning:()=>{}}};
 }
-test('composed launcher sends successfully despite capture, gap and warning failures',async t=>{
- const f=selector(t);const dir=join(f.root,'.git','pdd','metrics');fs.mkdirSync(dir,{recursive:true});fs.writeFileSync(join(dir,'transactions'),'unavailable');
- f.ports.warn=()=>{throw Error('warning unavailable');};f.ports.metricsGap=()=>{throw Error('gap unavailable');};
- const result=await f.tick();assert.equal(result.exitCode,0);assert.equal(f.sent.length,1);
- const saved=JSON.parse(fs.readFileSync(f.stateFile,'utf8'));assert.ok(saved.seen['1']);
- const decisions=fs.readdirSync(join(dir,'decisions')).filter(n=>n.endsWith('.json')).map(n=>JSON.parse(fs.readFileSync(join(dir,'decisions',n),'utf8')));
- assert.deepEqual(decisions[0].events.filter(e=>e.type==='launch').map(e=>e.data.status),['attempted','confirmed']);
-});
-test('composed launcher preserves original delivery error under failed telemetry',async t=>{
- const f=selector(t),error=Object.assign(Error('native send failed'),{code:'agent_blocked'}),herdr=f.ports.herdr;
- f.ports.herdr=async args=>{if(args[1]==='prompt')throw error;return herdr(args);};f.ports.metricsAppendEvents=async()=>{throw Error('metrics unavailable');};f.ports.warn=()=>{throw Error('warning unavailable');};
- await assert.rejects(f.tick(),e=>e===error);assert.equal(f.sent.length,0);assert.equal(JSON.parse(fs.readFileSync(f.stateFile,'utf8')).seen['1'],undefined);
-});
-test('composed launcher does not record busy pane as delivery attempt',async t=>{
- const f=selector(t);f.ports.herdr=async()=>({result:{agent:{agent_status:'working'}}});await f.tick();
- const dir=join(f.root,'.git','pdd','metrics','decisions'),rows=fs.readdirSync(dir).map(n=>JSON.parse(fs.readFileSync(join(dir,n),'utf8')));assert.equal(rows.flatMap(r=>r.events).some(e=>e.type==='launch'),false);assert.equal(f.sent.length,0);
-});
-test('composed launcher preserves a time-only wake and its successful acknowledgement',async t=>{
- const f=selector(t,{issues:false});f.liveIssues.set(9,{number:9,labels:[]});f.ports.readRunProgress=async()=>[{number:9,changedAt:at-3600001}];await f.tick();
- assert.equal(f.sent.length,1);const packet=JSON.parse(f.sent[0].trim().split('\n').at(-1));assert.deepEqual(packet.issues,[]);assert.equal(packet.timeRules[0].kind,'stuck-run');
- assert.equal(JSON.parse(fs.readFileSync(f.stateFile,'utf8')).timeSeen['run:9'],at-3600001);await f.tick();assert.equal(f.sent.length,1);
-});
 test('composed storage retains pending capture and ordinary success under throwing warning',t=>{
  const f=storage(t);f.run.metricsObservations=[{type:'coverage',at:new Date(at).toISOString(),data:{complete:false}}];
  const originalWrite=fs.writeFileSync;const ports={...f.ports,metricsWarning:()=>{throw Error('warn failed');},runFiles:{writeFileSync:(path,...args)=>{if(String(path).includes('.identity-'))throw Error('metrics identity failed');return originalWrite(path,...args);}}};

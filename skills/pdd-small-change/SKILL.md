@@ -2,7 +2,7 @@
 name: pdd-small-change
 description: PDD small-change workflow. Use when the person asks for a small, contained change that is easy to undo, such as a typo, a config value or a small fix. Plan it, make it, verify it, one PR.
 metadata:
-  pdd-skills: 0.1.28
+  pdd-skills: 0.1.30
 ---
 
 # PDD small change
@@ -11,13 +11,12 @@ Fix both: the brakes (the real defect) and the warning light (a test or check th
 
 Use this for a small change with a clear effect that is easy to undo. If the impact grows, suggest pdd-bug or pdd-feature.
 
-Each area is one main chat. Step briefs are in `steps/`.
-1. plan: scope → gate: approve
-2. build: change, verify, formal → gate: pr
+Each area is one main chat. Read the step files that its line names.
+1. plan: steps/scope.md → gate: approve
+2. build: steps/change.md, steps/verify.md, steps/formal.md → gate: pr
 
 ## Rules
 
-- If Autopilot is `observe` or `auto`, read `steps/autopilot.md` first.
 - The main chat coordinates and talks with the person; no code or checks.
 - Fresh subagents; never reuse builders or let them check code. Step file/paths at once; no chat history. Every brief requires "the run's main chat" for the chat in briefs/notes; keep actual actors and root paths. Wait once: long time-out; no small follow-ups. Read §11 once. See pdd-prompting RUNBOOK "Bounded handoffs".
 - Checks: fresh first. Only verify/formal may reuse after startup failure; wrote no code, tests or prompts this run.

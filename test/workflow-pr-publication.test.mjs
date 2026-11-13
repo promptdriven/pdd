@@ -495,6 +495,24 @@ test('2874: protected evidence that cannot fit refuses publication instead of lo
   assert.equal(f.git('ls-remote', 'origin', 'refs/heads/topic'), '', 'No source is pushed on refusal.');
 });
 
+test('2874: updating an existing code PR on the same head refuses oversized protected evidence cleanly', t => {
+  const f = fixture(t);
+  assert.equal(f.invoke('formal complete').exitCode, 0);
+  const before = f.data().prs[0].body, events = f.data().events.length;
+  const saved = JSON.parse(readFileSync(join(f.runDir, 'status.json'), 'utf8'));
+  assert.equal(saved.pr[1].publishedHeadSha, f.head);
+  saved.state = 'running'; saved.gate = null; delete saved.done.formal;
+  saved.done.build.summary = `Limitation: ${'upstream remains deferred; '.repeat(3000)}https://github.com/example/upstream/issues/476`;
+  writeFileSync(join(f.runDir, 'status.json'), JSON.stringify(saved));
+  const out = f.invoke('formal complete');
+  assert.equal(out.exitCode, 1, out.message);
+  assert.match(out.message, /protected.*evidence|outcome, limitation and reference/i);
+  assert.match(out.message, /shorten/i);
+  assert.match(out.message, /No source was pushed/);
+  assert.equal(f.data().events.length, events, 'No edit is sent when the updated body exceeds the budget.');
+  assert.equal(f.data().prs[0].body, before, 'The previous PR description stays intact.');
+});
+
 test('PRSUM-PRIORITY: a long verify report keeps its room and the left-out summaries are still named', t => {
   const f = fixture(t); f.run.done.build.summary = 'built '.repeat(2000).trim(); f.save();
   writeFileSync(join(f.runDir, 'verify.md'), `# Verify\n\n## Results\n\n${'ok line of the verify report\n'.repeat(3000)}✗ late failure\n`);
@@ -1114,7 +1132,7 @@ for(const change of ['identical','prompt','dependency','deleted']) test(`#2596 s
   writeFileSync(prompt,readFileSync(prompt,'utf8').replace('## Dependencies\n\nNone.', '## Dependencies\n\n- [Prices](prices.md): required runtime context.'));
   writeFileSync(join(f.root,'prompts/prices.md'),'Synthetic selected dependency.\n');
   f.git('add','.');f.git('commit','-qm','selected runtime corpus');
-  const {captureSource}=await import('../src/runtime-preflight.mjs');
+  const {captureSource}=await import('../src/runtime-seam.mjs');
   const tests=['tests/place-order.json'];
   const source=captureSource(f.root,{tests,appMap:null});
   f.run.evidence=[{at:10,summary:currentRuntime.replace('(release)', '(place-order)'),source:{kind:'runtime-capture-v1',tests,sha256:source.sha256}}];f.save();

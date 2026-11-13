@@ -22,10 +22,14 @@ Keep the manifest outside Git-visible source. pdd reads it; it never executes th
 
 ## Exact whole numbers
 
-A scenario writes a whole number as plain JSON digits at any size, for example `4250129834582680692326400`
-(3600 × 2^70). `JSON.parse` gives a Number, and a Number holds whole numbers exactly only within ±(2^53−1):
-`9007199254740993` silently becomes `9007199254740992`. Read the scenario so that a whole number outside that range
-becomes a BigInt with its exact digits. Every other number keeps its `JSON.parse` value:
+A test for a Number parameter writes a large whole number in its exact Number spelling, for example
+`4.2501298345826807e+24` for 3600 × 2^70 (in JavaScript `String(n)`, or `n.toExponential()` below 1e21; never
+`json.dumps` of a Python int). The interpreter accepts it, and the reviver below keeps it as that exact Number. Only a
+value that no Number holds (2^53 + 1, or a BigInt parameter) stays in plain JSON digits, at any size. The interpreter
+refuses plain digits outside ±(2^53−1), so only the replay test checks such a value. `JSON.parse` gives a Number, and
+a Number holds whole numbers exactly only within ±(2^53−1): `9007199254740993` silently becomes `9007199254740992`.
+Read the scenario so that a whole number in plain digits outside that range becomes a BigInt with its exact digits.
+Every other number keeps its `JSON.parse` value:
 
 ```js
 const scenario = JSON.parse(text, (key, value, context) =>
@@ -36,8 +40,7 @@ const scenario = JSON.parse(text, (key, value, context) =>
 At the public boundary, give a parameter that takes a Number `Number(value)` only when `BigInt(Number(value)) ===
 value` (3600 × 2^70 passes; 2^53 + 1 has no exact Number, so the case fails). Give a BigInt parameter the BigInt.
 Compare an integer result as a BigInt (`BigInt(result)` for a whole Number). Never round to make a case pass.
-A test for a Number parameter can also hold the exact Number spelling (`4.2501298345826807e+24`); the reviver keeps
-it as that exact Number. pdd's own module `src/scenario-json.mjs` implements these rules (`parseScenarioJson`,
+pdd's own module `src/runtime/scenario-json.mjs` implements these rules (`parseScenarioJson`,
 `exactNumber`, `exactValue`).
 pdd keeps the exact digits in the saved anchor (`exact_integers`), so a change in the last digit is a saved-value
 change.

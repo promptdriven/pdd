@@ -1,6 +1,6 @@
 # PDD usage guide
 
-This guide is for people who install pdd 0.1.28 from `promptdriven/pdd`. Each section has commands that you can copy.
+This guide is for people who install pdd 0.1.30 from `promptdriven/pdd`. Each section has commands that you can copy.
 
 > [!WARNING]
 > **Agents run with full access.** PDD starts Codex with `--dangerously-bypass-approvals-and-sandbox`, Claude Code with `--dangerously-skip-permissions`, Gemini CLI with `--yolo`, and Antigravity CLI with `--dangerously-skip-permissions`. The agents do not stop to ask for approval. They can read, change and delete files and run commands as your user. Use PDD only in projects and on machines where you accept this.
@@ -77,7 +77,7 @@ You need the pdd command only for runs on GitHub issues ([section 6](#6-run-a-wo
 ```sh
 npm install -g github:promptdriven/pdd
 "$(npm prefix -g)/bin/pdd" --version  # reports PATH conflicts without changing files
-pdd --version   # prints 0.1.28
+pdd --version   # prints 0.1.30
 which -a pdd    # the first line must be in "$(npm prefix -g)/bin"
 ```
 
@@ -116,7 +116,7 @@ See all of them:
 
 ```sh
 which -a pdd
-pdd --version   # this pdd prints 0.1.28
+pdd --version   # this pdd prints 0.1.30
 ```
 
 If you choose to remove the Python installation, use the tool that installed it:
@@ -149,20 +149,17 @@ The agents that PDD starts always get the full path of this pdd. They are not af
 
 ## 4. The PDD skills
 
-PDD is ten skills. A skill is a folder of plain Markdown that your agent reads when it needs it. Call a skill with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code (or ask for it by name).
+PDD is seven skills. A skill is a folder of plain Markdown that your agent reads when it needs it. Call a skill with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code (or ask for it by name).
 
 | Skill | What it is |
 |---|---|
-| [`pdd-prompting`](../skills/pdd-prompting/SKILL.md) | The full [Prompting guide](prompting-guide.md) (`guide.md`), its core rules, how to review a prompt, and `RUNBOOK.md` for checks on the PDD interpreter |
+| [`pdd-prompting`](../skills/pdd-prompting/SKILL.md) | The full [Prompting guide](prompting-guide.md) (`guide.md`), the [Story guide](story-guide.md) (`story-guide.md`), its core rules, how to review a prompt, and `RUNBOOK.md` for checks on the PDD interpreter |
 | `pdd-feature` | A workflow for new behavior |
 | `pdd-product` | Map a whole product and plan small feature runs |
 | `pdd-bug` | A workflow for something that is broken |
 | `pdd-small-change` | A workflow for a small change that is easy to undo |
 | `pdd-setup` | Add the repo's PDD block and ignore rule in your chat |
 | `pdd-graph` | Read the saved issue dependency graph and explain blockers |
-| `pdd-autopilot` | With Autopilot on (`autopilot.mode` is `observe` or `auto` in `pdd.json`), pick ready issues, claim them and run each one |
-| `pdd-check` | A fresh checker's verdict on a PR at its head |
-| `pdd-merge` | Merge a PR that a fresh checker passed, or write "would merge" in `observe` |
 
 Where the skills go:
 
@@ -174,9 +171,9 @@ Where the skills go:
 
 `pdd setup` installs missing skills in user folders and says where. It also updates eligible marked copies there. A complete copy installed by `npx skills` needs no extra copy. When those skills are older than this pdd, or differ from its skills, `pdd setup` says so and prints the command that updates them: `npx skills add promptdriven/pdd -g -a codex -a claude-code -y` (without `-g` for a copy in your project). `pdd --version` prints the same line when your skills are older. pdd never copies the skills into your repo.
 
-Each copy that pdd makes has a marker file, `.pdd-skill.json`. `pdd setup` replaces a marked copy when its version is older, when the same version has different files, or when its marker is invalid. It keeps a copy with a newer marker version. It never touches a copy without the marker, or a symlink, for example an `npx skills` install.
+Each copy that pdd makes has a marker file, `.pdd-skill.json`. `pdd setup` replaces a marked copy when its version is older, when the same version has different files, or when its marker is invalid. It keeps a copy with a newer marker version. It also removes a marked copy of `pdd-autopilot`, `pdd-check` or `pdd-merge`, because pdd does not ship these skills. It never touches a copy without the marker, or a symlink, for example an `npx skills` install.
 
-`npx skills add promptdriven/pdd --skill pdd-prompting` installs one skill. `npx skills list` shows what you have. The `pdd-skills:` line at the top of each `SKILL.md` shows the version of that skill, for example `pdd-skills: 0.1.28`.
+`npx skills add promptdriven/pdd --skill pdd-prompting` installs one skill. `npx skills list` shows what you have. The `pdd-skills:` line at the top of each `SKILL.md` shows the version of that skill, for example `pdd-skills: 0.1.30`.
 
 Do not edit the installed skill folders: an update replaces your edits. To change a workflow, [make your own](#8-make-your-own-workflow).
 
@@ -356,7 +353,7 @@ For all workflows:
 - verify writes the exact test commands and their real output to `verify.md` in the run folder.
 - The Details section of the PR has the step summaries. PR 2 and the `small-change` PR also have `verify.md`. Code PRs show a `Tests vs base:` block with removed cases, changed assertions and new skips before any `Prompt tests` lines and report links. Report links expire after 7 days.
 - Agents run tests; `pdd workflow prove` also runs its supplied test command on base and head. Read the test output in the PR before you merge.
-The pdd CLI has no merge command. In manual workflows, ask your agent to merge under [RUNBOOK §2](../RUNBOOK.md#2-the-files). In Autopilot `auto` mode, pdd-merge handles eligible merges after repository review and test rules pass; required human approvals still apply.
+The pdd CLI has no merge command. In manual workflows, ask your agent to merge under [RUNBOOK §2](../RUNBOOK.md#2-the-files). In Autopilot `auto` mode, Autopilot merges its own pull request after CI, a fresh review and the full test suite pass; required human approvals still apply.
 
 ### 6.8 Check a run
 
@@ -557,16 +554,16 @@ pdd setup
 Uninstall the skills that `npx skills` installed:
 
 ```sh
-npx skills remove pdd-prompting pdd-setup pdd-feature pdd-bug pdd-small-change pdd-product pdd-autopilot pdd-check pdd-merge pdd-graph      # add -g for the global ones
+npx skills remove pdd-prompting pdd-setup pdd-feature pdd-bug pdd-small-change pdd-product pdd-graph      # add -g for the global ones
 ```
 
 Uninstall the pdd command, the skills that `pdd setup` copied, and its state:
 
 ```sh
 npm uninstall -g pdd
-rm -rf ~/.agents/skills/pdd-{prompting,setup,feature,bug,small-change,product,autopilot,check,merge,graph}
-rm -rf ~/.claude/skills/pdd-{prompting,setup,feature,bug,small-change,product,autopilot,check,merge,graph}
-# If you set CLAUDE_CONFIG_DIR, also remove the ten pdd-* folders in "$CLAUDE_CONFIG_DIR/skills"
+rm -rf ~/.agents/skills/pdd-{prompting,setup,feature,bug,small-change,product,graph}
+rm -rf ~/.claude/skills/pdd-{prompting,setup,feature,bug,small-change,product,graph}
+# If you set CLAUDE_CONFIG_DIR, also remove the seven pdd-* folders in "$CLAUDE_CONFIG_DIR/skills"
 rm -rf ~/.local/state/pdd
 rm -rf ~/.pdd
 ```
@@ -592,7 +589,7 @@ This is a pre-release. These limits are known today:
 
 | You see | What to do |
 |---|---|
-| `pdd --version` does not print `0.1.28` | Another `pdd` comes first. See [section 3](#3-if-you-have-the-old-python-pdd). |
+| `pdd --version` does not print `0.1.30` | Another `pdd` comes first. See [section 3](#3-if-you-have-the-old-python-pdd). |
 | pdd says an agent is not installed or signed in | Install the agent and sign in, or use the other one with `--agent`. |
 | A message about `git rev-parse --show-toplevel` | You are not in a Git clone. `cd` into your clone. |
 | A message about `refs/remotes/origin/...` or a missing base | Run `git fetch origin`. |
