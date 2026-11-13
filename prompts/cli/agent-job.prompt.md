@@ -99,21 +99,27 @@ is uncertain; those records let a later tick retry without a live controller.
   the grace time. When the child ends, it writes
   `{code, signal, at}` to the exit file with a temporary file and a rename. On
   SIGTERM, SIGINT or SIGHUP it stops the whole job: it refreshes its descendant
-  snapshot, sends SIGTERM to any captured child process groups (`-pgid` for
-  descendants with `pid === pgid` outside the wrapper's group) and to its own process
+  snapshot, reads the current process table to verify each un-retired child process
+  group (`-pgid` for descendants with `pid === pgid` outside the wrapper's group
+  that still have members and whose leader PID was not reused), sends SIGTERM to
+  those verified child groups and to its own process
   group (the child and every process the child started, for example `npm ci` under
   `sh`), waits 2 s (a timer that keeps the wrapper alive, also when the direct child
   exits first), writes the exit record (the child's code and signal when it exited,
-  else the stop signal; best effort), and then sends SIGKILL to any remaining
-  captured child process groups whose leader PID was not reused and to its own
-  whole group, itself last. A failed exit-record write or descriptor close never
+  else the stop signal; best effort), and then re-reads the process table and sends
+  SIGKILL only to child groups from that SIGTERM set that still have members and
+  whose leader PID was not reused, and to its own
+  whole group, itself last. When the process table cannot be read at SIGTERM or
+  SIGKILL, child-group signals are skipped rather than guessing. A failed exit-record write or descriptor close never
   skips that SIGKILL. A process that treats the first SIGTERM as "stop gracefully"
   and waits, or a helper in a child process group (`value.mjs`, MCP servers, test
   runners), never survives as an orphan. A process that left the group (its own
   `setsid`) can be captured while
   the wrapper is live, but descendant samples are not a complete ownership boundary.
   `snapshotAgentJob(job)` saves the wrapper and every live descendant as
-  PID/start/command identities on `job.processes`. Before it signals a live wrapper,
+  PID/start/command identities on `job.processes`, and marks any saved child-group
+  leader `groupEnded: true` once a complete snapshot sees zero members in its `pgid`
+  or another process at its PID. Before it signals a live wrapper,
   `cleanupAgentJob(job)` verifies the job token and takes a fresh descendant snapshot.
   It then asks the wrapper to stop, reads a fresh process table and terminates only
   saved identities that still match. If that snapshot is incomplete, cleanup keeps the
@@ -271,7 +277,9 @@ is uncertain; those records let a later tick retry without a live controller.
     job that stays silent.
   - For a hung command the wrapper sends SIGTERM to any child process groups (`-pgid`
     when `pid === pgid` outside the wrapper and agent groups) and to the command and
-    each of its descendants, and SIGKILL 2 s later to those that are left. It appends one line to the
+    each of its descendants, and 2 s later re-reads the process table before sending
+    SIGKILL only to remaining same-start PIDs (`Math.abs(nowRow.start - r.start) < 3000`)
+    and child process groups that still have members without a reused leader PID. It appends one line to the
     log, `agent-job: stopped a hung command after M min with no output and almost no
     CPU: COMMAND (last output: LINE)`, and adds `{at, pid, command, minutes, last, head}`
     to `dir/ID.hangs.json` (a JSON list of the last 50, written with a temporary file and
@@ -280,13 +288,15 @@ is uncertain; those records let a later tick retry without a live controller.
     stop (at most 300 characters) and `head` the output of `git rev-parse HEAD` in `cwd`
     (5 s timeout), or null. The job goes on; the wrapper never stops the agent CLI or the
     whole job for a hang, and a failed round only waits for the next one.
-- Two parts are pure and exported, so their tests check the order and the decisions, not wall time (lead, Nov 11):
+- Pure decision helpers are exported so tests check the order and PID-reuse decisions without wall time (lead, Nov 11):
   `jobStopper({killGroup, setTimer, writeExit, exit, now, grace})` returns `{stop, exited, finish}` with the stop
   order above (SIGTERM to the group and one timer of `grace` ms, then the exit record, SIGKILL to the group and the
   exit; a second stop changes nothing; a failed write never skips the SIGKILL; a child that ends by a stop signal is
-  that stop); `hungRound(memo, {rows, log, now, agentPid, settings})` is one round of the hung-command watch over a
+  that stop); `selectChildGroups(saved, nowRows, wrapperPid, allowedGroups)` selects verified un-reused active child
+  process groups for wrapper `SIGTERM`/`SIGKILL`; `hungRound(memo, {rows, log, now, agentPid, settings})` is one round of the hung-command watch over a
   process table (`memo` keeps the helpers, the reference CPU of each command and the stopped commands) and returns
-  the commands to stop, `[{row, sub, minutes}]`. The wrapper and the watch use them with the real process, clock and
+  the commands to stop, `[{row, sub, minutes}]`; and `hungKillTargets(sub, latestRows, {wrapperPid, agentPid})` selects
+  verified delayed `SIGKILL` groups and PIDs. The wrapper and the watch use them with the real process, clock and
   timers.
 - `agentJobHangs(job)` returns the parsed hang list of `job.hangs` (only the objects in
   it), or `[]` when the file is absent, unreadable or not a list.

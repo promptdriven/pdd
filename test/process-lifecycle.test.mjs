@@ -1,4 +1,4 @@
-// Generated from prompts/cli/process-lifecycle.prompt.md (sha256: 633979f76a75c5eafe13c915d6c0982e6f71ea2125afa24fb03a8bf80be6da83).
+// Generated from prompts/cli/process-lifecycle.prompt.md (sha256: f10e28afdb2daa82da7c1031962649dbbd805441f9a9389f5b6a71c9654f9405).
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { descendants, parseProcessTable, terminateCaptured } from '../src/process-lifecycle.mjs';
@@ -93,5 +93,39 @@ test('signals a captured child process group (-pgid) with SIGTERM then SIGKILL, 
       signal: (...args) => signals.push(args), sleep: async () => {}, grace: 1, poll: 1 });
     assert.equal(result.confirmed, true);
     assert.deepEqual(signals, []);
+  });
+  await t.test('reused leader observed during cleanup permanently drops group even if reused leader exits later', async () => {
+    const reusedLeader = { ...leader, start: 'Mon Nov 11 11:30:00 2026', args: 'node other-tenant' };
+    const otherChild = { pid: 29, ppid: 1, pgid: leader.pgid, rss: 20, start: 'Mon Nov 11 11:30:01 2026', args: 'node other-child' };
+    let step = 0; const signals = [];
+    const frames = [
+      [stubbornGrandchild],               // initial read: group looks active
+      [reusedLeader, otherChild],         // pre-TERM read: leader PID was reused
+      [otherChild],                       // grace / later read: reused leader exited, unrelated child remains in pgid
+    ];
+    const result = await terminateCaptured([leader], {
+      list: async () => frames[Math.min(step++, frames.length - 1)],
+      signal: (...args) => signals.push(args), sleep: async () => {}, grace: 1, poll: 1 });
+    assert.equal(result.confirmed, true);
+    assert.deepEqual(signals, []);
+  });
+  await t.test('groupEnded leader in cumulative manifest is never group-signalled', async () => {
+    const otherChild = { pid: 31, ppid: 1, pgid: leader.pgid, rss: 20, start: 'Mon Nov 11 11:45:00 2026', args: 'node other-group-member' };
+    const signals = [];
+    const result = await terminateCaptured([{ ...leader, groupEnded: true }], {
+      list: async () => [otherChild], signal: (...args) => signals.push(args), sleep: async () => {}, grace: 1, poll: 1 });
+    assert.equal(result.confirmed, true);
+    assert.deepEqual(signals, []);
+  });
+  await t.test('late grandchild forked into active group right before individual SIGKILL keeps cleanup unconfirmed', async () => {
+    const child = rows[2];
+    const lateFork = { pid: 41, ppid: 1, pgid: leader.pgid, rss: 20, start: 'Mon Nov 11 10:00:09 2026', args: 'node late-fork' };
+    let killedChild = false; const signals = [];
+    const result = await terminateCaptured([leader, child], {
+      list: async () => killedChild ? [lateFork] : [leader, child],
+      signal: (target, sig) => { signals.push([target, sig]); if (target === child.pid && sig === 'SIGKILL') killedChild = true; },
+      sleep: async () => {}, grace: 1, poll: 1 });
+    assert.equal(result.confirmed, false);
+    assert.equal(result.remaining, 1);
   });
 });

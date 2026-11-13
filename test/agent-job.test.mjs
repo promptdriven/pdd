@@ -5,7 +5,7 @@ import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync, mkdirSync
 import { spawn, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { agentCommand, jobEnvironment, startAgentJob, readAgentJob, stopAgentJob, snapshotAgentJob, cleanupAgentJob, agentJobCpu, agentJobHangs, jobStopper, hungRound } from '../src/agent-job.mjs';
+import { agentCommand, jobEnvironment, startAgentJob, readAgentJob, stopAgentJob, snapshotAgentJob, cleanupAgentJob, agentJobCpu, agentJobHangs, jobStopper, hungRound, hungKillTargets, selectChildGroups } from '../src/agent-job.mjs';
 
 const folderAt = (t, prefix) => { const dir = mkdtempSync(prefix); t.after(() => rmSync(dir, { recursive: true, force: true })); return dir; };
 const folder = t => folderAt(t, join(tmpdir(), 'pdd-agent-job-'));
@@ -957,4 +957,62 @@ test('3228: stopping a job sends SIGTERM then SIGKILL to detached child process 
   await until(() => deadGroup(job.pid) && deadGroup(subPgid) && ended(grandPid), 20000);
   const cleanup = await cleanupAgentJob(job);
   assert.equal(cleanup.confirmed, true);
+});
+
+test('3228: cumulative manifest retires extinct or reused child groups and verifies PID reuse on SIGTERM, SIGKILL and hung kills', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pdd-3228-pidreuse-'));
+  try {
+    const token = join(dir, 'wrap.spec.json');
+    const wrapper = { pid: 100, ppid: 1, pgid: 100, rss: 10, start: '@w1', args: `node wrapper ${token}` };
+    const subA = { pid: 200, ppid: 100, pgid: 200, rss: 10, start: '@a1', args: 'node subA' };
+    const subB = { pid: 300, ppid: 100, pgid: 300, rss: 10, start: '@b1', args: 'node subB' };
+    const job = { pid: 100, token };
+
+    // Snapshot 1: both child groups active.
+    let table = [wrapper, subA, subB];
+    const snap1 = snapshotAgentJob(job, { list: () => table });
+    assert.equal(snap1.find(r => r.pid === 200).groupEnded, undefined);
+    assert.equal(snap1.find(r => r.pid === 300).groupEnded, undefined);
+
+    // Snapshot 2: subA has 0 members left; subB's PID 300 was reused by another process.
+    const reused300 = { pid: 300, ppid: 1, pgid: 300, rss: 10, start: '@reused', args: 'node unrelated' };
+    table = [wrapper, reused300];
+    const snap2 = snapshotAgentJob(job, { list: () => table });
+    assert.equal(snap2.find(r => r.pid === 200).groupEnded, true);
+    assert.equal(snap2.find(r => r.pid === 300 && r.start === '@b1').groupEnded, true);
+
+    // Snapshot 3: reused300 exited while its unrelated child (pid 301, pgid 300) remains; groupEnded stays sticky!
+    const unrelatedChild = { pid: 301, ppid: 1, pgid: 300, rss: 10, start: '@u1', args: 'node unrelated-child' };
+    table = [wrapper, unrelatedChild];
+    const snap3 = snapshotAgentJob(job, { list: () => table });
+    assert.equal(snap3.find(r => r.pid === 300 && r.start === '@b1').groupEnded, true);
+    assert.deepEqual([...selectChildGroups(snap3, table, 100)], []);
+
+    // selectChildGroups: verifies PID reuse at SIGTERM, fails closed on missing table, and restricts SIGKILL to SIGTERM-verified groups.
+    const liveSub = { pid: 400, ppid: 100, pgid: 400, rss: 10, start: '@c1', args: 'node subC' };
+    const saved = [wrapper, subB, liveSub];
+    assert.deepEqual([...selectChildGroups(saved, null, 100)], [], 'unavailable table sends no child-group signals');
+    const termAllowed = selectChildGroups(saved, [wrapper, reused300, unrelatedChild, liveSub], 100);
+    assert.deepEqual([...termAllowed], [400], 'reused PID 300 is excluded on SIGTERM');
+    // Even if reused300 exits before SIGKILL leaving unrelatedChild in pgid 300, SIGKILL only considers termAllowed ([400]).
+    const killAllowed = selectChildGroups(saved, [wrapper, unrelatedChild, liveSub], 100, termAllowed);
+    assert.deepEqual([...killAllowed], [400], 'reused group excluded at SIGTERM never re-enters at SIGKILL');
+
+    // watchHung delayed SIGKILL: skips reused PIDs/leaders, skips exited individual PIDs, and kills surviving un-reused group members.
+    const hungSub = [
+      { pid: 500, ppid: 101, pgid: 500, cpu: 0, start: 10_000, command: 'sh -c hung' },
+      { pid: 501, ppid: 500, pgid: 500, cpu: 0, start: 10_100, command: 'node child' },
+      { pid: 600, ppid: 101, pgid: 600, cpu: 0, start: 10_000, command: 'sh -c reused-hung' },
+    ];
+    const latestAfterGrace = [
+      // 500 exited, 501 stubbornly stayed in pgid 500 -> group 500 and pid 501 get SIGKILL, pid 500 does not!
+      { pid: 501, ppid: 1, pgid: 500, cpu: 0, start: 10_200, command: 'node child' },
+      // 600 exited and PID 600 was reused 8s later -> neither group 600 nor pid 600 gets SIGKILL!
+      { pid: 600, ppid: 1, pgid: 600, cpu: 0, start: 18_000, command: 'node innocent' },
+    ];
+    assert.deepEqual(hungKillTargets(hungSub, null, { wrapperPid: 100, agentPid: 101 }), { groups: [], pids: [] });
+    assert.deepEqual(hungKillTargets(hungSub, latestAfterGrace, { wrapperPid: 100, agentPid: 101 }), { groups: [500], pids: [501] });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

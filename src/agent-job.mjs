@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-job.prompt.md (sha256: 2ddeed3e9d83d1bc3b21d89376364ae517f24cd62930b9a15f682c72deefd5dc).
+// Generated from prompts/cli/agent-job.prompt.md (sha256: a04b06903d0fd8e3190045cfa2d134aab2d821b270d767967a33d7f5f21d09af).
 import { execFile, spawn, spawnSync } from 'node:child_process';
 import { accessSync, closeSync, constants, fstatSync, openSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { setPriority } from 'node:os';
@@ -402,7 +402,18 @@ export function snapshotAgentJob(job, ports = {}, { requireWrapper = false, clea
   if (current.incomplete) return uncertain('incomplete inventory', root);
   if (!current.every(processIdentity)) return uncertain('process identity invalid', root);
   const byIdentity = new Map();
-  for (const row of [...saved, ...current]) if (processIdentity(row)) byIdentity.set(`${row.pid}:${row.start}`, byIdentity.get(`${row.pid}:${row.start}`) ?? row);
+  for (const row of [...saved, ...current]) {
+    if (!processIdentity(row)) continue;
+    const key = `${row.pid}:${row.start}`, prev = byIdentity.get(key);
+    byIdentity.set(key, prev ? (row.groupEnded && !prev.groupEnded ? { ...prev, groupEnded: true } : prev) : { ...row });
+  }
+  const liveByPid = new Map(rows.map(row => [row.pid, row]));
+  const liveGroups = new Set(rows.map(row => row.pgid));
+  for (const entry of byIdentity.values()) {
+    if (entry.groupEnded || !Number.isSafeInteger(entry.pgid) || entry.pgid <= 1 || entry.pid !== entry.pgid || entry.pgid === job.pid) continue;
+    const liveLeader = liveByPid.get(entry.pid);
+    if (!liveGroups.has(entry.pgid) || (liveLeader && !sameProcess(entry, liveLeader))) entry.groupEnded = true;
+  }
   job.processes = [...byIdentity.values()];
   try { writeAtomic(manifestFile, JSON.stringify(job.processes)); }
   catch { uncertain('manifest write failed'); }
@@ -554,6 +565,22 @@ export function hungRound(memo, { rows, log, now, agentPid, settings }) {
   }
   return stops;
 }
+export function hungKillTargets(sub, latestRows, { wrapperPid = process.pid, agentPid } = {}) {
+  if (!Array.isArray(sub) || !Array.isArray(latestRows)) return { groups: [], pids: [] };
+  const byPid = new Map(latestRows.map(item => [item.pid, item]));
+  const groupMembers = new Set(latestRows.map(item => item.pgid));
+  const groups = [], seenGroups = new Set(), pids = [];
+  for (const r of sub) {
+    const nowRow = byPid.get(r.pid);
+    const reused = Boolean(nowRow && Math.abs(nowRow.start - r.start) >= 3000);
+    if (!reused && Number.isSafeInteger(r.pgid) && r.pgid > 1 && r.pid === r.pgid && r.pgid !== wrapperPid && r.pgid !== agentPid
+        && groupMembers.has(r.pgid) && !seenGroups.has(r.pgid)) {
+      seenGroups.add(r.pgid); groups.push(r.pgid);
+    }
+    if (nowRow && !reused) pids.push(r.pid);
+  }
+  return { groups, pids };
+}
 function watchHung(spec, agentPid, out) {
   const memo = {};
   const round = () => {
@@ -561,16 +588,17 @@ function watchHung(spec, agentPid, out) {
     if (!log.size) return;
     for (const { row, sub, minutes } of hungRound(memo, { rows: processTable(), log, now, agentPid, settings: spec.hung })) {
       const last = lastLogLine(spec.log), command = row.command.slice(0, 500);
-      const signalSub = signal => {
-        for (const r of sub) {
-          if (Number.isSafeInteger(r.pgid) && r.pgid > 1 && r.pid === r.pgid && r.pgid !== process.pid && r.pgid !== agentPid) {
-            try { process.kill(-r.pgid, signal); } catch { /* Gone. */ }
-          }
-          try { process.kill(r.pid, signal); } catch { /* Gone. */ }
+      for (const r of sub) {
+        if (Number.isSafeInteger(r.pgid) && r.pgid > 1 && r.pid === r.pgid && r.pgid !== process.pid && r.pgid !== agentPid) {
+          try { process.kill(-r.pgid, 'SIGTERM'); } catch { /* Gone. */ }
         }
-      };
-      signalSub('SIGTERM');
-      setTimeout(() => signalSub('SIGKILL'), GRACE_MS).unref();
+        try { process.kill(r.pid, 'SIGTERM'); } catch { /* Gone. */ }
+      }
+      setTimeout(() => {
+        const { groups, pids } = hungKillTargets(sub, processTable(), { wrapperPid: process.pid, agentPid });
+        for (const pgid of groups) try { process.kill(-pgid, 'SIGKILL'); } catch { /* Gone. */ }
+        for (const pid of pids) try { process.kill(pid, 'SIGKILL'); } catch { /* Gone. */ }
+      }, GRACE_MS).unref();
       const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: spec.cwd, encoding: 'utf8', timeout: 5000 });
       const record = { at: now, pid: row.pid, command, minutes, last, head: head.status === 0 && /^[0-9a-f]{40}$/.test(head.stdout.trim()) ? head.stdout.trim() : null };
       try { writeFileSync(out, `agent-job: stopped a hung command after ${minutes} min with no output and almost no CPU: ${command} (last output: ${last})\n`); } catch { /* The record below still counts. */ }
@@ -662,6 +690,21 @@ export function jobStopper({ killGroup, setTimer, writeExit, exit, now = Date.no
   const exited = (code, signal) => { if (stopping) ended = { code, signal }; else if (STOP_SIGNALS.includes(signal)) { ended = { code, signal }; stop(signal); } else finish(code, signal); };
   return { finish, stop, exited };
 }
+export function selectChildGroups(saved, nowRows, wrapperPid = process.pid, allowedGroups = null) {
+  if (!Array.isArray(saved) || !Array.isArray(nowRows)) return new Set();
+  const byPid = new Map(nowRows.map(row => [row.pid, row]));
+  const withMembers = new Set(nowRows.map(row => row.pgid));
+  const groups = new Set();
+  for (const row of saved) {
+    if (row?.groupEnded || !Number.isSafeInteger(row?.pgid) || row.pgid <= 1 || row.pgid === wrapperPid || row.pid !== row.pgid) continue;
+    if (allowedGroups && !allowedGroups.has(row.pgid)) continue;
+    if (!withMembers.has(row.pgid)) continue;
+    const current = byPid.get(row.pid);
+    if (current && !sameProcess(row, current)) continue;
+    groups.add(row.pgid);
+  }
+  return groups;
+}
 // The detached wrapper: it owns the agent process and records how it ended.
 function wrap(specFile) {
   const spec = JSON.parse(readFileSync(specFile, 'utf8'));
@@ -672,22 +715,11 @@ function wrap(specFile) {
   setInterval(snapshot, 250).unref();
   lowerPriority(spec);
   const stdin = openSync(spec.input, 'r'), out = openSync(spec.log, 'a', 0o600);
-  let child;
+  let child, activeChildGroups = null;
   const signalChildGroups = signal => {
     if (signal === 'SIGTERM') snapshot();
-    const saved = Array.isArray(job.processes) ? job.processes : [];
-    const nowRows = signal === 'SIGKILL' ? lifecycleRows() : null;
-    if (signal === 'SIGKILL' && !Array.isArray(nowRows)) return;
-    const byPid = nowRows ? new Map(nowRows.map(row => [row.pid, row])) : null;
-    const groups = new Set();
-    for (const row of saved) {
-      if (!Number.isSafeInteger(row?.pgid) || row.pgid <= 1 || row.pgid === process.pid || row.pid !== row.pgid) continue;
-      if (byPid) {
-        const current = byPid.get(row.pid);
-        if (current && !sameProcess(row, current)) continue;
-      }
-      groups.add(row.pgid);
-    }
+    const groups = selectChildGroups(job.processes, lifecycleRows(), process.pid, signal === 'SIGKILL' ? activeChildGroups : null);
+    if (signal === 'SIGTERM') activeChildGroups = groups;
     for (const pgid of groups) try { process.kill(-pgid, signal); } catch { /* Already gone. */ }
   };
   const { finish, stop, exited } = jobStopper({
