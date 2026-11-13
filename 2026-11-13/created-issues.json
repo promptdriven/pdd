@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "report_date": "2026-11-13",
+  "repository": "https://github.com/promptdriven/pdd",
+  "source_scorecard": "2026-11-13/scorecard.json",
+  "issues": [
+    {
+      "number": 3360,
+      "url": "https://github.com/promptdriven/pdd/issues/3360",
+      "title": "Autopilot core: Linux sshd /proc/<pid>/cwd EACCES leaves ended jobs stuck in END and blocks ready issues",
+      "created_at": "2026-11-13T19:41:02Z",
+      "filed_today": true,
+      "funnel_stage": "worker_slot_release",
+      "bottleneck": "Four ended jobs on pdd-vm stayed in END for 72 ticks (12 hours) when /proc/<pid>/cwd returned EACCES, blocking all 4 worker slots."
+    },
+    {
+      "number": 3361,
+      "url": "https://github.com/promptdriven/pdd/issues/3361",
+      "title": "Daily Autopilot conversion analyzer: publish scorecard to stats branch and auto-file verified drop causes",
+      "created_at": "2026-11-13T19:41:05Z",
+      "filed_today": true,
+      "funnel_stage": "conversion_observability",
+      "bottleneck": "Daily scorecards and drop root-cause tracking lived only in local folders without shared history or automated conversion-drop analysis."
+    },
+    {
+      "number": 3362,
+      "url": "https://github.com/promptdriven/pdd/issues/3362",
+      "title": "Story quality lint: require user-level durable Stories and forbid prompts under test/**",
+      "created_at": "2026-11-13T19:41:07Z",
+      "filed_today": true,
+      "funnel_stage": "story_and_review_quality",
+      "bottleneck": "Feature conversion lagged at 61.9% partly due to implementation-level Stories and prompts created for test files."
+    },
+    {
+      "number": 3252,
+      "url": "https://github.com/promptdriven/pdd/issues/3252",
+      "title": "pdd keeps a pool of the person's own Codex and Claude Code logins, and switches to the next one at the usage limit",
+      "created_at": "2026-11-11T19:30:34Z",
+      "filed_today": false,
+      "funnel_stage": "agent_account_had_quota",
+      "bottleneck": "Account credit and quota exhaustion caused 8 released jobs (Rel = 6.6%) and paused intake until manual account rotation."
+    },
+    {
+      "number": 3230,
+      "url": "https://github.com/promptdriven/pdd/issues/3230",
+      "title": "pdd autopilot start keeps the saved agent account and ignores a new one",
+      "created_at": "2026-11-11T17:24:27Z",
+      "filed_today": false,
+      "funnel_stage": "agent_account_had_quota",
+      "bottleneck": "Restarting Autopilot with a fresh login kept the previous exhausted account unless config was edited separately."
+    },
+    {
+      "number": 3228,
+      "url": "https://github.com/promptdriven/pdd/issues/3228",
+      "title": "Autopilot core: a stopped job leaves child processes running, because no SIGKILL goes to the process group",
+      "created_at": "2026-11-11T17:24:22Z",
+      "filed_today": false,
+      "funnel_stage": "passed_ci_suite_and_repair",
+      "bottleneck": "Stopped jobs left orphaned child processes holding machine resources and worktree handles."
+    },
+    {
+      "number": 2710,
+      "url": "https://github.com/promptdriven/pdd/issues/2710",
+      "title": "A person keeps running an old pdd after a release, and nothing updates it or tells them",
+      "created_at": "2026-10-30T19:23:20Z",
+      "filed_today": false,
+      "funnel_stage": "passed_observe_review_m_wm",
+      "bottleneck": "Machines remained on stale PDD binaries across releases, while held PR #3303 made uncached GitHub API calls on every CLI command."
+    },
+    {
+      "number": 3262,
+      "url": "https://github.com/promptdriven/pdd/issues/3262",
+      "title": "Autopilot reports must be real before they are filed: owner, proof, duplicate check, then file automatically",
+      "created_at": "2026-11-11T22:09:19Z",
+      "filed_today": false,
+      "funnel_stage": "conversion_observability",
+      "bottleneck": "33 local draft reports accumulated on pdd-vm because unvalidated reports previously mixed quota noise with real PDD and Runtime defects."
+    }
+  ]
+}

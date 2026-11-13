@@ -1,0 +1,276 @@
+{
+  "schema_version": 1,
+  "report_date": "2026-11-13",
+  "repository": "https://github.com/promptdriven/pdd",
+  "tracking_issue": "https://github.com/promptdriven/pdd/issues/3361",
+  "window": {
+    "timezone": "America/Los_Angeles",
+    "daily_cutoff_local": "09:00",
+    "week_start_date": "2026-11-09",
+    "week_end_date": "2026-11-13",
+    "days_covered": 4
+  },
+  "targets": {
+    "observe_gate": {
+      "m_wm_per_day_min": 20,
+      "m_wm_per_day_max": 30,
+      "conv_pct": 80.0
+    },
+    "2026-11-13": {
+      "m_wm_per_day": 40,
+      "conv_pct": 70.0
+    },
+    "2026-11-20": {
+      "m_wm_per_day": 70,
+      "conv_pct": 85.0
+    }
+  },
+  "daily": [
+    {
+      "date": "2026-11-09",
+      "label": "Mon Nov 9",
+      "window_pt": "Mon 09:00 -> Tue 09:00 PT",
+      "issues": 22,
+      "m_wm": 4,
+      "conv_pct": 18.2,
+      "prs": 7,
+      "pr_pct": 31.8,
+      "end": 11,
+      "end_pct": 50.0,
+      "ask": 5,
+      "ask_pct": 22.7,
+      "rel": 0,
+      "rel_pct": 0.0,
+      "run": 2,
+      "run_pct": 9.1,
+      "by_skill": null,
+      "main_bottleneck": "Pre-0.1.29 path-check false reds and repair cap (End = 50%)"
+    },
+    {
+      "date": "2026-11-10",
+      "label": "Tue Nov 10",
+      "window_pt": "Tue 09:00 -> Wed 09:00 PT",
+      "issues": 29,
+      "m_wm": 23,
+      "conv_pct": 79.3,
+      "prs": 27,
+      "pr_pct": 93.1,
+      "end": 4,
+      "end_pct": 13.8,
+      "ask": 0,
+      "ask_pct": 0.0,
+      "rel": 2,
+      "rel_pct": 6.9,
+      "run": 0,
+      "run_pct": 0.0,
+      "by_skill": {
+        "small-change": { "issues": 11 },
+        "bug": { "issues": 10 },
+        "feature": { "issues": 8 }
+      },
+      "main_bottleneck": "Healthy run (11 small-change + 10 bug + 8 feature)"
+    },
+    {
+      "date": "2026-11-11",
+      "label": "Wed Nov 11",
+      "window_pt": "Wed 09:00 -> Thu 09:00 PT",
+      "issues": 33,
+      "m_wm": 21,
+      "conv_pct": 63.6,
+      "prs": 29,
+      "pr_pct": 87.9,
+      "end": 3,
+      "end_pct": 9.1,
+      "ask": 5,
+      "ask_pct": 15.2,
+      "rel": 2,
+      "rel_pct": 6.1,
+      "run": 2,
+      "run_pct": 6.1,
+      "by_skill": {
+        "small-change": { "issues": 0 },
+        "bug": { "issues": 17 },
+        "feature": { "issues": 16 }
+      },
+      "main_bottleneck": "0 small-change; 16 heavy features (5 Ask + 3 End); 2 wrong sandbox merges caught"
+    },
+    {
+      "date": "2026-11-12",
+      "label": "Thu Nov 12",
+      "window_pt": "Thu 09:00 -> Fri 09:00 PT",
+      "issues": 37,
+      "m_wm": 30,
+      "conv_pct": 81.1,
+      "prs": 32,
+      "pr_pct": 86.5,
+      "end": 2,
+      "end_pct": 5.4,
+      "ask": 1,
+      "ask_pct": 2.7,
+      "rel": 4,
+      "rel_pct": 10.8,
+      "run": 0,
+      "run_pct": 0.0,
+      "by_skill": {
+        "small-change": {
+          "issues": 2,
+          "m_wm": 2,
+          "conv_pct": 100.0,
+          "prs": 2,
+          "pr_pct": 100.0,
+          "end": 0,
+          "ask": 0,
+          "rel": 0,
+          "run": 0
+        },
+        "bug": {
+          "issues": 17,
+          "m_wm": 16,
+          "conv_pct": 94.1,
+          "prs": 16,
+          "pr_pct": 94.1,
+          "end": 0,
+          "ask": 0,
+          "rel": 1,
+          "run": 0
+        },
+        "feature": {
+          "issues": 18,
+          "m_wm": 12,
+          "conv_pct": 66.7,
+          "prs": 14,
+          "pr_pct": 77.8,
+          "end": 2,
+          "ask": 1,
+          "rel": 3,
+          "run": 0
+        },
+        "all": {
+          "issues": 37,
+          "m_wm": 30,
+          "conv_pct": 81.1,
+          "prs": 32,
+          "pr_pct": 86.5,
+          "end": 2,
+          "ask": 1,
+          "rel": 4,
+          "run": 0
+        }
+      },
+      "main_bottleneck": "VM Autopilot slots jammed 12h on work4 credits + #3279/#3360 END alert retry; 30 merged via review wave"
+    }
+  ],
+  "week_summary": {
+    "issues": 121,
+    "issues_per_day_avg": 30.3,
+    "m_wm": 78,
+    "m_wm_per_day_avg": 19.5,
+    "conv_pct": 64.5,
+    "prs": 95,
+    "prs_per_day_avg": 23.8,
+    "pr_pct": 78.5,
+    "end": 20,
+    "end_pct": 16.5,
+    "ask": 11,
+    "ask_pct": 9.1,
+    "rel": 8,
+    "rel_pct": 6.6,
+    "run": 4,
+    "run_pct": 3.3
+  },
+  "skill_summary_tue_to_thu": {
+    "window": "2026-11-10..2026-11-12",
+    "issues_with_skill_breakdown": 99,
+    "auto_mode_gate_pct": 80.0,
+    "skills": {
+      "small-change": {
+        "issues": 13,
+        "m_wm": 12,
+        "conv_pct": 92.3,
+        "prs": 13,
+        "pr_pct": 100.0,
+        "auto_mode_ready": true
+      },
+      "bug": {
+        "issues": 44,
+        "m_wm": 36,
+        "conv_pct": 81.8,
+        "prs": 40,
+        "pr_pct": 90.9,
+        "auto_mode_ready": true
+      },
+      "feature": {
+        "issues": 42,
+        "m_wm": 26,
+        "conv_pct": 61.9,
+        "prs": 35,
+        "pr_pct": 83.3,
+        "auto_mode_ready": false
+      }
+    }
+  },
+  "pipeline_funnel_mon_to_thu": [
+    {
+      "stage": "claimed_or_worked",
+      "count": 121,
+      "pct_of_intake": 100.0,
+      "dropped": 0,
+      "drop_reason": null,
+      "fix_issues": []
+    },
+    {
+      "stage": "agent_account_had_quota",
+      "count": 113,
+      "pct_of_intake": 93.4,
+      "dropped": 8,
+      "drop_reason": "Account/credit stop (Rel = 8) plus 12-hour worker slot jam",
+      "fix_issues": [
+        "https://github.com/promptdriven/pdd/issues/3252",
+        "https://github.com/promptdriven/pdd/issues/3230",
+        "https://github.com/promptdriven/pdd/issues/3279",
+        "https://github.com/promptdriven/pdd/issues/3360"
+      ]
+    },
+    {
+      "stage": "spec_clear_no_human_ask",
+      "count": 102,
+      "pct_of_intake": 84.3,
+      "dropped": 11,
+      "drop_reason": "Unsettled product decision requiring human answer (Ask = 11)",
+      "fix_issues": []
+    },
+    {
+      "stage": "built_and_opened_pr",
+      "count": 95,
+      "pct_of_intake": 78.5,
+      "dropped": 7,
+      "drop_reason": "No PR opened before cutoff or pre-0.1.29 owner/path false reds",
+      "fix_issues": [
+        "https://github.com/promptdriven/pdd/issues/3239"
+      ]
+    },
+    {
+      "stage": "passed_ci_suite_and_repair",
+      "count": 80,
+      "pct_of_intake": 66.1,
+      "dropped": 15,
+      "drop_reason": "Repair cap reached (11) or still running at 09:00 cutoff (4)",
+      "fix_issues": [
+        "https://github.com/promptdriven/pdd/issues/3247",
+        "https://github.com/promptdriven/pdd/issues/3228"
+      ]
+    },
+    {
+      "stage": "passed_observe_review_m_wm",
+      "count": 78,
+      "pct_of_intake": 64.5,
+      "pct_of_prs_opened": 82.1,
+      "dropped": 2,
+      "drop_reason": "Held in human observe review (#3303 uncached API call, #3290 hash-pin gate)",
+      "fix_issues": [
+        "https://github.com/promptdriven/pdd/issues/2710",
+        "https://github.com/promptdriven/pdd/issues/3362"
+      ]
+    }
+  ]
+}

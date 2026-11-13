@@ -1,0 +1,525 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PDD Weekly Metrics, Daily Conversion &amp; Stage Bottlenecks (Mon Nov 9 – Thu Nov 12)</title>
+<style>
+  :root {
+    --bg: #f4f7fb; --card: #ffffff; --border: #d8e1ec; --ink: #0f172a;
+    --muted: #475569; --blue: #0b63ce; --green: #15803d; --red: #b91c1c;
+    --amber: #b45309; --purple: #6d28d9; --slate: #64748b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font: 15px/1.5 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    color: var(--ink); background: var(--bg); max-width: 1320px; margin: 24px auto; padding: 0 20px 48px;
+  }
+  header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 16px; }
+  h1 { font-size: 27px; margin: 0; }
+  h2 { font-size: 19.5px; margin: 0 0 8px; }
+  p { margin: 6px 0 12px; max-width: 1140px; }
+  a { color: var(--blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .kpi-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(205px, 1fr)); gap: 12px; margin: 16px 0; }
+  .kpi { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+  .kpi .lbl { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+  .kpi .big { font-size: 25px; font-weight: 700; margin: 3px 0; }
+  .kpi .sub { font-size: 12.8px; color: var(--muted); }
+  section { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin: 18px 0; }
+  .chart-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(540px, 1fr)); gap: 16px; margin: 12px 0; }
+  .chart-svg { width: 100%; height: auto; border: 1px solid #e2e8f0; border-radius: 8px; background: #fff; display: block; }
+  .svg-title { font-size: 13.5px; font-weight: 700; fill: #0f172a; }
+  .svg-sub { font-size: 11.5px; fill: #475569; }
+  .svg-axis { font-size: 11px; fill: #64748b; }
+  .svg-x { font-size: 12px; font-weight: 600; fill: #1e293b; }
+  .svg-val { font-size: 12px; font-weight: 700; }
+  .svg-target { font-size: 11px; font-weight: 700; }
+  .svg-bar-num { font-size: 11.5px; font-weight: 700; }
+  .legend { display: flex; flex-wrap: wrap; gap: 15px; font-size: 13px; color: var(--muted); margin: 10px 0 2px; }
+  .swatch { display: inline-block; width: 11px; height: 11px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+  .table-wrap { overflow-x: auto; margin-top: 10px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+  th, td { border: 1px solid var(--border); padding: 7px 9px; text-align: left; vertical-align: middle; }
+  th { background: #eef3f9; font-weight: 600; }
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  th.pct, td.pct { text-align: right; font-variant-numeric: tabular-nums; background: #f8fafc; font-weight: 600; white-space: nowrap; }
+  th.mwm, td.mwm { background: #ecfdf5; font-weight: 700; }
+  tr.hi td { background: #eff6ff; font-weight: 700; }
+  td.pos { color: var(--green); }
+  td.neg { color: var(--red); }
+  td.warn { color: var(--amber); }
+  .muted { color: var(--muted); }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .b-green { background: #dcfce7; color: #166534; }
+  .b-blue { background: #dbeafe; color: #1e40af; }
+  .b-amber { background: #fef3c7; color: #92400e; }
+  .b-red { background: #fee2e2; color: #991b1b; }
+  pre { background: #0f172a; color: #f8fafc; padding: 14px 16px; border-radius: 8px; font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-x: auto; margin-top: 8px; }
+  button { padding: 7px 14px; border-radius: 6px; border: 1px solid #cbd5e1; background: #fff; font-weight: 600; cursor: pointer; }
+  button:hover { background: #eff6ff; border-color: var(--blue); }
+  .callout-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; margin-top: 12px; }
+  .callout { border: 1px solid var(--border); border-left: 4px solid var(--blue); border-radius: 8px; padding: 11px 14px; background: #f8fafc; font-size: 13.5px; }
+  .callout.red { border-left-color: var(--red); background: #fef2f2; }
+  .callout.amber { border-left-color: var(--amber); background: #fffbeb; }
+  .callout.green { border-left-color: var(--green); background: #f0fdf4; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Weekly Metrics, Daily Conversion &amp; Bottleneck Showcase (Mon–Thu)</h1>
+    <p class="muted">Column order updated: <b>Issues -&gt; M/WM (Count + %) -&gt; PR (Count + %) -&gt; End -&gt; Ask -&gt; Rel -&gt; Run</b> · 5 graph options below to compare volume targets, conversion rate, and exact stage bottlenecks.</p>
+  </div>
+  <div>
+    <a href="STANDUP-1113.html">Standup Brief</a> ·
+    <a href="BOARD-WALK.md">Project 12 Walk (14 active cards)</a> ·
+    <a href="https://github.com/orgs/promptdriven/projects/12">GitHub Project 12</a>
+  </div>
+</header>
+
+<div class="kpi-strip">
+  <div class="kpi">
+    <div class="lbl">Mon–Thu Total M/WM</div>
+    <div class="big">78 / 121 <span style="color:var(--green)">(64.5%)</span></div>
+    <div class="sub">19.5/day avg · Target: 40/d (70%) -&gt; 70/d (85%)</div>
+  </div>
+  <div class="kpi">
+    <div class="lbl">Daily Conversion Trend</div>
+    <div class="big">18% -&gt; 79% -&gt; 64% -&gt; <span style="color:var(--green)">81%</span></div>
+    <div class="sub">Mon 4/22 · Tue 23/29 · Wed 21/33 · Thu 30/37</div>
+  </div>
+  <div class="kpi">
+    <div class="lbl">Auto-Mode Gate (&gt;= 80%)</div>
+    <div class="big"><span style="color:var(--green)">Bug 81.8%</span> · <span style="color:var(--green)">Small 92.3%</span></div>
+    <div class="sub">Feature at 61.9% (needs observe human review)</div>
+  </div>
+  <div class="kpi">
+    <div class="lbl">#1 Volume Bottleneck</div>
+    <div class="big" style="color:var(--red)">20h / 24h Idle Slots</div>
+    <div class="sub">8h release pause + 12h credit &amp; alert-jam (#3252, #3279)</div>
+  </div>
+</div>
+
+<!-- MASTER REORDERED TABLES -->
+<section>
+  <h2>1. Reordered Master Tables (Issues -&gt; M/WM + % -&gt; PR + % -&gt; End -&gt; Ask -&gt; Rel -&gt; Run)</h2>
+  <p class="muted"><b>M/WM is now Column 2</b> right next to Issues, followed by PR in Column 3, with conversion percentages side-by-side across Mon, Tue, Wed, and Thu.</p>
+
+  <h3>1A. Per-Day Weekly Table (Monday Nov 9 -&gt; Thursday Nov 12)</h3>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Day Window (09:00 -&gt; 09:00 PT)</th>
+          <th class="num">Issues</th>
+          <th class="num mwm">M/WM</th>
+          <th class="pct mwm">M/WM Conv %</th>
+          <th class="num">PR</th>
+          <th class="pct">PR %</th>
+          <th class="num">End</th>
+          <th class="pct">End %</th>
+          <th class="num">Ask</th>
+          <th class="pct">Ask %</th>
+          <th class="num">Rel</th>
+          <th class="pct">Rel %</th>
+          <th class="num">Run</th>
+          <th>Main Bottleneck That Day</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><b>Mon Nov 9</b></td>
+          <td class="num">22</td>
+          <td class="num mwm">4</td><td class="pct mwm neg">18.2%</td>
+          <td class="num">7</td><td class="pct">31.8%</td>
+          <td class="num neg">11</td><td class="pct neg">50.0%</td>
+          <td class="num">5</td><td class="pct">22.7%</td>
+          <td class="num">0</td><td class="pct">0.0%</td>
+          <td class="num">2</td>
+          <td class="muted">Pre-0.1.29 path-check false reds &amp; repair cap (End = 50%)</td>
+        </tr>
+        <tr>
+          <td><b>Tue Nov 10</b></td>
+          <td class="num">29</td>
+          <td class="num mwm">23</td><td class="pct mwm pos">79.3%</td>
+          <td class="num">27</td><td class="pct">93.1%</td>
+          <td class="num">4</td><td class="pct">13.8%</td>
+          <td class="num">0</td><td class="pct">0.0%</td>
+          <td class="num">2</td><td class="pct">6.9%</td>
+          <td class="num">0</td>
+          <td class="muted">Healthy run (11 small-change + 10 bug + 8 feature)</td>
+        </tr>
+        <tr>
+          <td><b>Wed Nov 11</b></td>
+          <td class="num">33</td>
+          <td class="num mwm">21</td><td class="pct mwm warn">63.6%</td>
+          <td class="num">29</td><td class="pct">87.9%</td>
+          <td class="num">3</td><td class="pct">9.1%</td>
+          <td class="num">5</td><td class="pct">15.2%</td>
+          <td class="num">2</td><td class="pct">6.1%</td>
+          <td class="num">2</td>
+          <td class="muted">0 small-change; 16 heavy features (5 Ask + 3 End); 2 wrong sandbox merges caught</td>
+        </tr>
+        <tr>
+          <td><b>Thu Nov 12 (Today)</b></td>
+          <td class="num">37</td>
+          <td class="num mwm">30</td><td class="pct mwm pos">81.1%</td>
+          <td class="num">32</td><td class="pct">86.5%</td>
+          <td class="num">2</td><td class="pct">5.4%</td>
+          <td class="num">1</td><td class="pct">2.7%</td>
+          <td class="num warn">4</td><td class="pct warn">10.8%</td>
+          <td class="num">0</td>
+          <td class="muted">VM Autopilot slots jammed 12h on work4 credits + #3279 alert retry; 30 merged via review wave</td>
+        </tr>
+        <tr class="hi">
+          <td><b>Mon–Thu Total / Avg</b></td>
+          <td class="num">121 (30.3/d)</td>
+          <td class="num mwm">78 (19.5/d)</td><td class="pct mwm">64.5%</td>
+          <td class="num">95 (23.8/d)</td><td class="pct">78.5%</td>
+          <td class="num">20</td><td class="pct">16.5%</td>
+          <td class="num">11</td><td class="pct">9.1%</td>
+          <td class="num">8</td><td class="pct">6.6%</td>
+          <td class="num">4</td>
+          <td><b>Targets: 20–30/d observe now -&gt; 40/d (70%) Nov 13 -&gt; 70/d (85%) Nov 20</b></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3 style="margin-top:18px">1B. Today's Skill Table + Copy-Ready Compact Text (M/WM Second, PR Third + Daily Trend)</h3>
+  <button onclick="navigator.clipboard.writeText(document.getElementById('reordered-discord').textContent).then(()=>this.textContent='Copied!')">Copy Reordered Scorecard + Daily Mon–Thu Trend</button>
+  <pre id="reordered-discord">PDD Autopilot scorecard · Fri Nov 13
+Thu = Thu 9:00 to Fri 9:00 Pacific (M/WM next to Issues, PR third)
+
+              Issues  M/WM (Conv%)   PR    End Ask Rel Run
+small-change       2     2 (100%)     2      0   0   0   0
+bug               17    16 (94.1%)   16      0   0   1   0
+feature           18    12 (66.7%)   14      2   1   3   0
+all               37    30 (81.1%)   32      2   1   4   0
+
+Daily M/WM &amp; Conversion   Issues   M/WM   Conv %   PRs
+Mon Nov 9                     22      4    18.2%     7
+Tue Nov 10                    29     23    79.3%    27
+Wed Nov 11                    33     21    63.6%    29
+Thu Nov 12                    37     30    81.1%    32
+Mon–Thu Total / Avg          121     78    64.5%    95  (19.5 M/WM per day)
+
+Targets                       Observe Gate  Nov 13  Nov 20  Week avg
+Merged or would-merge/day          20–30/d      40      70      19.5
+Merged or would-merge / total          80%     70%     85%     64.5%</pre>
+</section>
+
+<!-- GRAPH 1: DUAL VOLUME + CONVERSION -->
+<section>
+  <h2>Graph Option 1 — Executive Dual Chart: Daily M/WM Volume vs. Daily Conversion Rate %</h2>
+  <p class="muted"><b>Best for daily standup:</b> Left chart compares daily <code>M/WM</code> bars (green) inside total <code>Issues</code> bars (light gray) against your <b>25/d observe</b>, <b>40/d Nov 13</b>, and <b>70/d Nov 20</b> targets. Right chart tracks conversion rate % against the shaded green <b>80%+ Auto-Mode Ready Zone</b>.</p>
+  <div class="chart-grid">
+    <!-- Left: Volume -->
+    <svg viewBox="0 0 580 300" role="img" aria-label="Daily M/WM volume vs targets" class="chart-svg">
+      <rect x="0" y="0" width="100%" height="100%" rx="8" fill="#ffffff"/>
+      <text x="52" y="22" class="svg-title">1A. Daily Volume: Total Issues vs. M/WM (Count/Day vs. Targets)</text>
+      <!-- Y scale: 0 to 75 -> y=245 to y=40 (height 205, 2.733 px per unit) -->
+      <line x1="52" y1="245" x2="552" y2="245" stroke="#cbd5e1"/><text x="44" y="249" text-anchor="end" class="svg-axis">0</text>
+      <line x1="52" y1="190.3" x2="552" y2="190.3" stroke="#e5ebf2"/><text x="44" y="194.3" text-anchor="end" class="svg-axis">20</text>
+      <line x1="52" y1="135.7" x2="552" y2="135.7" stroke="#e5ebf2"/><text x="44" y="139.7" text-anchor="end" class="svg-axis">40</text>
+      <line x1="52" y1="81.0" x2="552" y2="81.0" stroke="#e5ebf2"/><text x="44" y="85.0" text-anchor="end" class="svg-axis">60</text>
+      <line x1="52" y1="53.7" x2="552" y2="53.7" stroke="#047857" stroke-width="1.5" stroke-dasharray="5,4"/>
+      <text x="548" y="48.5" text-anchor="end" fill="#047857" class="svg-target">Nov 20 Target: 70/day</text>
+      <line x1="52" y1="135.7" x2="552" y2="135.7" stroke="#b45309" stroke-width="1.5" stroke-dasharray="5,4"/>
+      <text x="548" y="130.5" text-anchor="end" fill="#b45309" class="svg-target">Nov 13 Target: 40/day</text>
+      <line x1="52" y1="176.7" x2="552" y2="176.7" stroke="#0b63ce" stroke-width="1.3" stroke-dasharray="3,3"/>
+      <text x="548" y="171.5" text-anchor="end" fill="#0b63ce" class="svg-target">Min Observe Goal: 25/day</text>
+
+      <!-- Mon: 22 issues (h=60.1, y=184.9), 4 M/WM (h=10.9, y=234.1) -->
+      <rect x="78" y="184.9" width="58" height="60.1" rx="4" fill="#e2e8f0"/>
+      <rect x="88" y="234.1" width="38" height="10.9" rx="3" fill="#15803d"/>
+      <text x="107" y="179" text-anchor="middle" fill="#475569" class="svg-axis">22 iss</text>
+      <text x="107" y="229" text-anchor="middle" fill="#15803d" class="svg-val">4</text>
+      <text x="107" y="265" text-anchor="middle" class="svg-x">Mon Nov 9</text>
+      <text x="107" y="280" text-anchor="middle" class="svg-axis">Conv 18.2%</text>
+
+      <!-- Tue: 29 issues (h=79.3, y=165.7), 23 M/WM (h=62.9, y=182.1) -->
+      <rect x="186" y="165.7" width="58" height="79.3" rx="4" fill="#e2e8f0"/>
+      <rect x="196" y="182.1" width="38" height="62.9" rx="3" fill="#15803d"/>
+      <text x="215" y="160" text-anchor="middle" fill="#475569" class="svg-axis">29 iss</text>
+      <text x="215" y="218" text-anchor="middle" fill="#ffffff" class="svg-bar-num">23</text>
+      <text x="215" y="265" text-anchor="middle" class="svg-x">Tue Nov 10</text>
+      <text x="215" y="280" text-anchor="middle" class="svg-axis">Conv 79.3%</text>
+
+      <!-- Wed: 33 issues (h=90.2, y=154.8), 21 M/WM (h=57.4, y=187.6) -->
+      <rect x="294" y="154.8" width="58" height="90.2" rx="4" fill="#e2e8f0"/>
+      <rect x="304" y="187.6" width="38" height="57.4" rx="3" fill="#15803d"/>
+      <text x="323" y="149" text-anchor="middle" fill="#475569" class="svg-axis">33 iss</text>
+      <text x="323" y="220" text-anchor="middle" fill="#ffffff" class="svg-bar-num">21</text>
+      <text x="323" y="265" text-anchor="middle" class="svg-x">Wed Nov 11</text>
+      <text x="323" y="280" text-anchor="middle" class="svg-axis">Conv 63.6%</text>
+
+      <!-- Thu: 37 issues (h=101.1, y=143.9), 30 M/WM (h=82.0, y=163.0) -->
+      <rect x="402" y="143.9" width="58" height="101.1" rx="4" fill="#e2e8f0"/>
+      <rect x="412" y="163.0" width="38" height="82.0" rx="3" fill="#15803d"/>
+      <text x="431" y="138" text-anchor="middle" fill="#475569" class="svg-axis">37 iss</text>
+      <text x="431" y="208" text-anchor="middle" fill="#ffffff" class="svg-bar-num">30</text>
+      <text x="431" y="265" text-anchor="middle" class="svg-x">Thu Nov 12</text>
+      <text x="431" y="280" text-anchor="middle" class="svg-axis">Conv 81.1%</text>
+
+      <!-- 4-Day Avg: 30.3 iss (h=82.8, y=162.2), 19.5 M/WM (h=53.3, y=191.7) -->
+      <rect x="494" y="162.2" width="50" height="82.8" rx="4" fill="#dbeafe"/>
+      <rect x="503" y="191.7" width="32" height="53.3" rx="3" fill="#0b63ce"/>
+      <text x="519" y="156" text-anchor="middle" fill="#1e40af" class="svg-axis">30.3/d</text>
+      <text x="519" y="222" text-anchor="middle" fill="#ffffff" class="svg-bar-num">19.5</text>
+      <text x="519" y="265" text-anchor="middle" class="svg-x">Wk Avg</text>
+      <text x="519" y="280" text-anchor="middle" class="svg-axis">64.5%</text>
+    </svg>
+
+    <!-- Right: Conversion % with Auto-Mode Ready Band -->
+    <svg viewBox="0 0 580 300" role="img" aria-label="Daily conversion rate vs 80% auto gate" class="chart-svg">
+      <rect x="0" y="0" width="100%" height="100%" rx="8" fill="#ffffff"/>
+      <text x="52" y="22" class="svg-title">1B. Conversion Rate % (M/WM ÷ Issues) &amp; 80%+ Auto-Mode Zone</text>
+      <!-- Y scale: 0% to 100% -> y=245 to y=40 (2.05 px per %) -->
+      <!-- Shaded Auto-Mode Zone 80%..100% -> y=40 to y=81 -->
+      <rect x="52" y="40" width="500" height="41" fill="#dcfce7" opacity="0.65"/>
+      <text x="546" y="54" text-anchor="end" fill="#166534" class="svg-target">AUTO-MODE READY ZONE (&gt;= 80%)</text>
+      <line x1="52" y1="245" x2="552" y2="245" stroke="#cbd5e1"/><text x="44" y="249" text-anchor="end" class="svg-axis">0%</text>
+      <line x1="52" y1="193.8" x2="552" y2="193.8" stroke="#e5ebf2"/><text x="44" y="197.8" text-anchor="end" class="svg-axis">25%</text>
+      <line x1="52" y1="142.5" x2="552" y2="142.5" stroke="#e5ebf2"/><text x="44" y="146.5" text-anchor="end" class="svg-axis">50%</text>
+      <line x1="52" y1="91.3" x2="552" y2="91.3" stroke="#e5ebf2"/><text x="44" y="95.3" text-anchor="end" class="svg-axis">75%</text>
+      <line x1="52" y1="40" x2="552" y2="40" stroke="#e5ebf2"/><text x="44" y="44" text-anchor="end" class="svg-axis">100%</text>
+
+      <!-- Target lines: 70% -> y=101.5; 80% -> y=81.0; 85% -> y=70.8; Week avg 64.5% -> y=112.8 -->
+      <line x1="52" y1="101.5" x2="552" y2="101.5" stroke="#b45309" stroke-width="1.5" stroke-dasharray="5,4"/>
+      <text x="546" y="114" text-anchor="end" fill="#b45309" class="svg-target">Nov 13 Target (70%)</text>
+      <line x1="52" y1="81.0" x2="552" y2="81.0" stroke="#15803d" stroke-width="1.8" stroke-dasharray="6,3"/>
+      <line x1="52" y1="70.8" x2="552" y2="70.8" stroke="#047857" stroke-width="1.3" stroke-dasharray="3,3"/>
+      <text x="165" y="67" text-anchor="start" fill="#047857" class="svg-target">Nov 20 Target (85%)</text>
+
+      <!-- PR % line (7/22=31.8% -> y=179.8; 27/29=93.1% -> y=49.1; 29/33=87.9% -> y=64.8; 32/37=86.5% -> y=67.7) -->
+      <polyline fill="none" stroke="#94a3b8" stroke-width="2" stroke-dasharray="4,3" points="115,179.8 245,49.1 375,64.8 505,67.7"/>
+      <!-- M/WM % line (18.2% -> y=207.7; 79.3% -> y=82.4; 63.6% -> y=114.6; 81.1% -> y=78.7) -->
+      <polyline fill="none" stroke="#0b63ce" stroke-width="3.2" points="115,207.7 245,82.4 375,114.6 505,78.7"/>
+
+      <circle cx="115" cy="207.7" r="6" fill="#dc2626" stroke="#fff" stroke-width="2"/>
+      <text x="115" y="226" text-anchor="middle" fill="#dc2626" class="svg-val">18.2% (4/22)</text>
+
+      <circle cx="245" cy="82.4" r="6" fill="#0b63ce" stroke="#fff" stroke-width="2"/>
+      <text x="245" y="99" text-anchor="middle" fill="#0b63ce" class="svg-val">79.3% (23/29)</text>
+
+      <circle cx="375" cy="114.6" r="6" fill="#b45309" stroke="#fff" stroke-width="2"/>
+      <text x="375" y="132" text-anchor="middle" fill="#b45309" class="svg-val">63.6% (21/33)</text>
+
+      <circle cx="505" cy="78.7" r="6.5" fill="#15803d" stroke="#fff" stroke-width="2"/>
+      <text x="505" y="96" text-anchor="middle" fill="#15803d" class="svg-val">81.1% (30/37)</text>
+
+      <text x="115" y="265" text-anchor="middle" class="svg-x">Mon Nov 9</text><text x="115" y="280" text-anchor="middle" class="svg-axis">PRs: 31.8%</text>
+      <text x="245" y="265" text-anchor="middle" class="svg-x">Tue Nov 10</text><text x="245" y="280" text-anchor="middle" class="svg-axis">PRs: 93.1%</text>
+      <text x="375" y="265" text-anchor="middle" class="svg-x">Wed Nov 11</text><text x="375" y="280" text-anchor="middle" class="svg-axis">PRs: 87.9%</text>
+      <text x="505" y="265" text-anchor="middle" class="svg-x">Thu Nov 12</text><text x="505" y="280" text-anchor="middle" class="svg-axis">PRs: 86.5%</text>
+    </svg>
+  </div>
+</section>
+
+<!-- GRAPH 2: STAGE BOTTLENECK FUNNEL -->
+<section>
+  <h2>Graph Option 2 — Pipeline Stage Funnel &amp; Drop-Off Map (Where the 121 Issues Leaked Mon–Thu)</h2>
+  <p class="muted"><b>Best for engineering root-cause analysis:</b> Tracks every single issue from intake (121) through each stage, showing <b>how many dropped at each stage</b> and <b>which Project 12 ticket fixes that stage</b>.</p>
+  <svg viewBox="0 0 1180 305" role="img" aria-label="Stage bottleneck funnel Mon-Thu" class="chart-svg">
+    <rect x="0" y="0" width="100%" height="100%" rx="8" fill="#ffffff"/>
+    <text x="24" y="24" class="svg-title">Mon–Thu Full Pipeline Funnel (121 Distinct Issues -&gt; 78 Good M/WM = 64.5% End-to-End · 82.1% of Opened PRs)</text>
+
+    <!-- Stage rows: x_bar=260, max_w=540 (4.46 px per issue) -->
+    <!-- Row 1: 121 -->
+    <text x="24" y="64" class="svg-x">1. Claimed / Worked</text>
+    <rect x="255" y="45" width="540" height="28" rx="5" fill="#0b63ce"/>
+    <text x="525" y="64" text-anchor="middle" fill="#fff" class="svg-bar-num">121 issues (100.0%)</text>
+    <text x="810" y="64" class="svg-sub">Entry cohort (Mon 22 + Tue 29 + Wed 33 + Thu 37)</text>
+
+    <!-- Row 2: 113 (-8 Rel) -->
+    <text x="24" y="106" class="svg-x">2. Agent Account Had Quota</text>
+    <rect x="255" y="87" width="504.3" height="28" rx="5" fill="#2563eb"/>
+    <text x="507" y="106" text-anchor="middle" fill="#fff" class="svg-bar-num">113 issues (93.4%)</text>
+    <rect x="759.3" y="87" width="35.7" height="28" rx="4" fill="#94a3b8"/>
+    <text x="810" y="106" fill="#b45309" class="svg-val">-8 Rel (6.6%) — Credit/quota stops (+ 12h slot jam!) -&gt; Fix: #3252, #3230, #3279</text>
+
+    <!-- Row 3: 102 (-11 Ask) -->
+    <text x="24" y="148" class="svg-x">3. Spec Clear (No Human Ask)</text>
+    <rect x="255" y="129" width="455.2" height="28" rx="5" fill="#3b82f6"/>
+    <text x="482" y="148" text-anchor="middle" fill="#fff" class="svg-bar-num">102 issues (84.3%)</text>
+    <rect x="710.2" y="129" width="49.1" height="28" rx="4" fill="#d97706"/>
+    <text x="810" y="148" fill="#b45309" class="svg-val">-11 Ask (9.1%) — Unsettled product choice (#2739/#2740) -&gt; Healthy safety stop</text>
+
+    <!-- Row 4: 95 (-7 pre-PR End/Run) -->
+    <text x="24" y="190" class="svg-x">4. Built &amp; Opened PR</text>
+    <rect x="255" y="171" width="423.9" height="28" rx="5" fill="#0284c7"/>
+    <text x="467" y="190" text-anchor="middle" fill="#fff" class="svg-bar-num">95 PRs opened (78.5%)</text>
+    <rect x="678.9" y="171" width="31.3" height="28" rx="4" fill="#dc2626"/>
+    <text x="810" y="190" fill="#b91c1c" class="svg-val">-7 No-PR (5.8%) — Mostly Mon pre-0.1.29 owner/path false reds (#3239 fixed)</text>
+
+    <!-- Row 5: 80 (-15 CI/Repair/Cutoff) -->
+    <text x="24" y="232" class="svg-x">5. Passed CI, Suite &amp; Repair</text>
+    <rect x="255" y="213" width="357.0" height="28" rx="5" fill="#0d9488"/>
+    <text x="433" y="232" text-anchor="middle" fill="#fff" class="svg-bar-num">80 passed checks (66.1%)</text>
+    <rect x="612.0" y="213" width="66.9" height="28" rx="4" fill="#dc2626"/>
+    <text x="810" y="232" fill="#b91c1c" class="svg-val">-15 Red/Cap/Cutoff (12.4%) — Repair cap (11) + cutoff Run (4) -&gt; Fix: #3353 (#3247)</text>
+
+    <!-- Row 6: 78 (-2 Held in Human Observe Review) -->
+    <text x="24" y="274" class="svg-x">6. Passed Observe Review (M/WM)</text>
+    <rect x="255" y="255" width="348.1" height="28" rx="5" fill="#15803d"/>
+    <text x="429" y="274" text-anchor="middle" fill="#fff" class="svg-bar-num">78 Good M/WM (64.5%)</text>
+    <rect x="603.1" y="255" width="8.9" height="28" rx="3" fill="#7c3aed"/>
+    <text x="810" y="274" fill="#15803d" class="svg-val">-2 Caught in Review (1.7%: #3303, #3290) -&gt; 82.1% of PRs (78/95) were good!</text>
+  </svg>
+</section>
+
+<!-- GRAPH 3 & GRAPH 5 SIDE BY SIDE -->
+<section>
+  <h2>Graph Options 3 &amp; 4 — 100% Outcome Share by Day + Conversion Rate by Skill Type</h2>
+  <p class="muted"><b>Left (Option 3):</b> Shows how the red <code>Ended</code> failure share dropped from <b>50% -&gt; 14% -&gt; 9% -&gt; 5%</b> over the week. <b>Right (Option 4):</b> Shows why <code>small-change</code> (<b>92.3%</b>) and <code>bug</code> (<b>81.8%</b>) already beat your <b>80% auto-mode gate</b>, while <code>feature</code> (<b>61.9%</b>) still needs <code>observe</code> review.</p>
+  <div class="chart-grid">
+    <!-- Option 3: 100% Stacked Bars -->
+    <svg viewBox="0 0 580 295" role="img" aria-label="100% stacked outcome share by day" class="chart-svg">
+      <rect x="0" y="0" width="100%" height="100%" rx="8" fill="#ffffff"/>
+      <text x="50" y="22" class="svg-title">Option 3. 100% Outcome Mix by Day (Red Failure Drop: 50% -&gt; 5%)</text>
+      <!-- y=42 (100%) to y=242 (0%), height=200 (2px per %) -->
+      <line x1="50" y1="242" x2="545" y2="242" stroke="#cbd5e1"/><text x="42" y="246" text-anchor="end" class="svg-axis">0%</text>
+      <line x1="50" y1="192" x2="545" y2="192" stroke="#e5ebf2"/><text x="42" y="196" text-anchor="end" class="svg-axis">25%</text>
+      <line x1="50" y1="142" x2="545" y2="142" stroke="#e5ebf2"/><text x="42" y="146" text-anchor="end" class="svg-axis">50%</text>
+      <line x1="50" y1="92" x2="545" y2="92" stroke="#e5ebf2"/><text x="42" y="96" text-anchor="end" class="svg-axis">75%</text>
+      <line x1="50" y1="42" x2="545" y2="42" stroke="#e5ebf2"/><text x="42" y="46" text-anchor="end" class="svg-axis">100%</text>
+      <line x1="50" y1="82" x2="545" y2="82" stroke="#15803d" stroke-width="1.5" stroke-dasharray="5,4"/>
+      <text x="542" y="77" text-anchor="end" fill="#15803d" class="svg-target">80% Auto Gate</text>
+
+      <!-- Mon (22): M/WM 18.2% (36.4), Ask 22.7% (45.4), End 50.0% (100), Run 9.1% (18.2) -->
+      <rect x="82" y="205.6" width="66" height="36.4" fill="#15803d"/><text x="115" y="228" text-anchor="middle" fill="#fff" class="svg-bar-num">18%</text>
+      <rect x="82" y="160.2" width="66" height="45.4" fill="#d97706"/><text x="115" y="187" text-anchor="middle" fill="#fff" class="svg-bar-num">23%</text>
+      <rect x="82" y="60.2" width="66" height="100.0" fill="#dc2626"/><text x="115" y="114" text-anchor="middle" fill="#fff" class="svg-bar-num">50% End</text>
+      <rect x="82" y="42.0" width="66" height="18.2" fill="#6366f1"/>
+      <text x="115" y="264" text-anchor="middle" class="svg-x">Mon (22)</text>
+
+      <!-- Tue (29): M/WM 79.3% (158.6), End 13.8% (27.6), Rel 6.9% (13.8) -->
+      <rect x="198" y="83.4" width="66" height="158.6" fill="#15803d"/><text x="231" y="166" text-anchor="middle" fill="#fff" class="svg-bar-num">79.3%</text>
+      <rect x="198" y="55.8" width="66" height="27.6" fill="#dc2626"/><text x="231" y="74" text-anchor="middle" fill="#fff" class="svg-bar-num">14%</text>
+      <rect x="198" y="42.0" width="66" height="13.8" fill="#94a3b8"/>
+      <text x="231" y="264" text-anchor="middle" class="svg-x">Tue (29)</text>
+
+      <!-- Wed (33): M/WM 63.6% (127.2), Ask 15.2% (30.4), End 9.1% (18.2), Rel 6.1% (12.2), Run 6.0% (12.0) -->
+      <rect x="314" y="114.8" width="66" height="127.2" fill="#15803d"/><text x="347" y="182" text-anchor="middle" fill="#fff" class="svg-bar-num">63.6%</text>
+      <rect x="314" y="84.4" width="66" height="30.4" fill="#d97706"/><text x="347" y="104" text-anchor="middle" fill="#fff" class="svg-bar-num">15%</text>
+      <rect x="314" y="66.2" width="66" height="18.2" fill="#dc2626"/>
+      <rect x="314" y="54.0" width="66" height="12.2" fill="#94a3b8"/>
+      <rect x="314" y="42.0" width="66" height="12.0" fill="#6366f1"/>
+      <text x="347" y="264" text-anchor="middle" class="svg-x">Wed (33)</text>
+
+      <!-- Thu (37): M/WM 81.1% (162.2), Ask 2.7% (5.4), End/Held 5.4% (10.8), Rel 10.8% (21.6) -->
+      <rect x="430" y="79.8" width="66" height="162.2" fill="#15803d"/><text x="463" y="165" text-anchor="middle" fill="#fff" class="svg-bar-num">81.1%</text>
+      <rect x="430" y="74.4" width="66" height="5.4" fill="#d97706"/>
+      <rect x="430" y="63.6" width="66" height="10.8" fill="#dc2626"/>
+      <rect x="430" y="42.0" width="66" height="21.6" fill="#94a3b8"/><text x="463" y="57" text-anchor="middle" fill="#1e293b" class="svg-bar-num">11% Rel</text>
+      <text x="463" y="264" text-anchor="middle" class="svg-x">Thu (37)</text>
+    </svg>
+
+    <!-- Option 4: Conversion by Skill Type (Tue–Thu 99 issues with skill breakdown) -->
+    <svg viewBox="0 0 580 295" role="img" aria-label="Conversion rate by skill Tue-Thu" class="chart-svg">
+      <rect x="0" y="0" width="100%" height="100%" rx="8" fill="#ffffff"/>
+      <text x="50" y="22" class="svg-title">Option 4. Conversion by Skill (Tue–Thu: Where Auto Mode Is Ready)</text>
+      <rect x="50" y="42" width="495" height="40" fill="#dcfce7" opacity="0.65"/>
+      <text x="540" y="57" text-anchor="end" fill="#166534" class="svg-target">AUTO-MODE READY (&gt;= 80%)</text>
+      <line x1="50" y1="242" x2="545" y2="242" stroke="#cbd5e1"/><text x="42" y="246" text-anchor="end" class="svg-axis">0%</text>
+      <line x1="50" y1="192" x2="545" y2="192" stroke="#e5ebf2"/><text x="42" y="196" text-anchor="end" class="svg-axis">25%</text>
+      <line x1="50" y1="142" x2="545" y2="142" stroke="#e5ebf2"/><text x="42" y="146" text-anchor="end" class="svg-axis">50%</text>
+      <line x1="50" y1="82" x2="545" y2="82" stroke="#15803d" stroke-width="1.8" stroke-dasharray="6,3"/><text x="42" y="86" text-anchor="end" class="svg-axis">80%</text>
+      <line x1="50" y1="42" x2="545" y2="42" stroke="#e5ebf2"/><text x="42" y="46" text-anchor="end" class="svg-axis">100%</text>
+
+      <!-- small-change: 12 / 13 = 92.3% (h=184.6, y=57.4) -->
+      <rect x="92" y="57.4" width="86" height="184.6" rx="5" fill="#15803d"/>
+      <text x="135" y="50" text-anchor="middle" fill="#15803d" class="svg-val">92.3% (12/13)</text>
+      <text x="135" y="155" text-anchor="middle" fill="#fff" class="svg-bar-num">READY</text>
+      <text x="135" y="264" text-anchor="middle" class="svg-x">small-change</text>
+      <text x="135" y="279" text-anchor="middle" class="svg-axis">13 PRs (100%)</text>
+
+      <!-- bug: 36 / 44 = 81.8% (h=163.6, y=78.4) -->
+      <rect x="248" y="78.4" width="86" height="163.6" rx="5" fill="#0d9488"/>
+      <text x="291" y="71" text-anchor="middle" fill="#0d9488" class="svg-val">81.8% (36/44)</text>
+      <text x="291" y="165" text-anchor="middle" fill="#fff" class="svg-bar-num">READY (&gt;80%)</text>
+      <text x="291" y="264" text-anchor="middle" class="svg-x">pdd-bug</text>
+      <text x="291" y="279" text-anchor="middle" class="svg-axis">40 PRs (90.9%)</text>
+
+      <!-- feature: 26 / 42 = 61.9% (h=123.8, y=118.2) -->
+      <rect x="404" y="118.2" width="86" height="123.8" rx="5" fill="#d97706"/>
+      <text x="447" y="110" text-anchor="middle" fill="#b45309" class="svg-val">61.9% (26/42)</text>
+      <text x="447" y="184" text-anchor="middle" fill="#fff" class="svg-bar-num">OBSERVE</text>
+      <text x="447" y="264" text-anchor="middle" class="svg-x">pdd-feature</text>
+      <text x="447" y="279" text-anchor="middle" class="svg-axis">35 PRs (83.3%)</text>
+    </svg>
+  </div>
+  <div class="legend">
+    <span><i class="swatch" style="background:#15803d"></i>M/WM (Merged or Would-Merge)</span>
+    <span><i class="swatch" style="background:#d97706"></i>Ask (Needs Human Decision)</span>
+    <span><i class="swatch" style="background:#dc2626"></i>End (Repair Cap or Review Reject)</span>
+    <span><i class="swatch" style="background:#94a3b8"></i>Rel (Account/Credit Stop — 0 Strikes)</span>
+    <span><i class="swatch" style="background:#6366f1"></i>Run (Still Active at 09:00 Cutoff)</span>
+  </div>
+</section>
+
+<!-- GRAPH 5: WORKER SLOT UTILIZATION TIMELINE -->
+<section>
+  <h2>Graph Option 5 — Worker Slot Bottleneck Timeline (Why VM Throughput Was 6 Instead of 30+ Yesterday)</h2>
+  <p class="muted"><b>Best for operational capacity tracking:</b> Shows how the 4 worker slots on <code>pdd-vm</code> actually spent the 24 hours, making slot-jam and credit downtime immediately visible.</p>
+  <svg viewBox="0 0 1180 215" role="img" aria-label="24-hour VM worker slot timeline" class="chart-svg">
+    <rect x="0" y="0" width="100%" height="100%" rx="8" fill="#ffffff"/>
+    <text x="24" y="22" class="svg-title">pdd-vm 4-Slot Timeline (Thu 09:00 PT -&gt; Fri 09:00 PT) + Today's Fix Path to 30+/day</text>
+    <!-- x=110 (Thu 09:00) to x=1130 (Fri 09:00), width=1020 -> 42.5 px per hour -->
+    <text x="24" y="66" class="svg-x">Slot 1</text>
+    <text x="24" y="100" class="svg-x">Slot 2</text>
+    <text x="24" y="134" class="svg-x">Slot 3</text>
+    <text x="24" y="168" class="svg-x">Slot 4</text>
+
+    <!-- Active Thu 09:00-12:45 (3.75h -> w=159): Slot 1 ran #2710 -->
+    <rect x="110" y="48" width="159" height="24" rx="4" fill="#15803d"/>
+    <text x="189" y="64" text-anchor="middle" fill="#fff" class="svg-bar-num">#2710 (WM)</text>
+    <rect x="110" y="82" width="159" height="24" rx="4" fill="#e2e8f0"/>
+    <rect x="110" y="116" width="159" height="24" rx="4" fill="#e2e8f0"/>
+    <rect x="110" y="150" width="159" height="24" rx="4" fill="#e2e8f0"/>
+
+    <!-- Paused Thu 12:45-20:47 (8.0h -> w=341, x=269..610) -->
+    <rect x="269" y="48" width="341" height="126" rx="5" fill="#cbd5e1"/>
+    <text x="439" y="106" text-anchor="middle" fill="#1e293b" class="svg-val">Paused 8h During 0.1.29 / 0.1.30 &amp; Audit</text>
+    <text x="439" y="124" text-anchor="middle" fill="#475569" class="svg-sub">(enabled: false on pdd-vm; 24 manual PRs merged)</text>
+
+    <!-- Jammed Thu 20:47-Fri 08:58 (12.2h -> w=520, x=610..1130) -->
+    <rect x="610" y="48" width="520" height="24" rx="4" fill="#dc2626"/>
+    <text x="870" y="64" text-anchor="middle" fill="#fff" class="svg-bar-num">#2571: work4 Out of Credits -&gt; Stuck 72 Ticks (12h) in END Alert Retry (#3279)</text>
+    <rect x="610" y="82" width="520" height="24" rx="4" fill="#dc2626"/>
+    <text x="870" y="98" text-anchor="middle" fill="#fff" class="svg-bar-num">#2740: work4 Out of Credits -&gt; Stuck 72 Ticks (12h) in END Alert Retry (#3279)</text>
+    <rect x="610" y="116" width="520" height="24" rx="4" fill="#dc2626"/>
+    <text x="870" y="132" text-anchor="middle" fill="#fff" class="svg-bar-num">#2741: work4 Out of Credits -&gt; Stuck 72 Ticks (12h) in END Alert Retry (#3279)</text>
+    <rect x="610" y="150" width="210" height="24" rx="4" fill="#dc2626"/>
+    <rect x="820" y="150" width="55" height="24" rx="4" fill="#d97706"/>
+    <text x="847" y="166" text-anchor="middle" fill="#fff" class="svg-bar-num">#2739</text>
+    <rect x="875" y="150" width="255" height="24" rx="4" fill="#dc2626"/>
+
+    <!-- Time labels -->
+    <text x="110" y="198" text-anchor="middle" class="svg-axis">Thu 09:00</text>
+    <text x="269" y="198" text-anchor="middle" class="svg-axis">Thu 12:45</text>
+    <text x="440" y="198" text-anchor="middle" class="svg-axis">Thu 17:00</text>
+    <text x="610" y="198" text-anchor="middle" class="svg-axis">Thu 20:50</text>
+    <text x="822" y="198" text-anchor="middle" class="svg-axis">Fri 01:50</text>
+    <text x="1130" y="198" text-anchor="middle" class="svg-axis">Fri 09:00</text>
+  </svg>
+
+  <div class="callout-grid">
+    <div class="callout red">
+      <b>Bottleneck 1: Credit Stops &amp; Old Account Stickiness</b><br>
+      Caused <code>Rel = 8</code> + coordinator 1h pauses. <b>On Project 12 today:</b> <a href="https://github.com/promptdriven/pdd/issues/3252">#3252</a> (login pool auto-rotation) + <a href="https://github.com/promptdriven/pdd/issues/3230">#3230</a> (<code>autopilot start</code> account fix).
+    </div>
+    <div class="callout amber">
+      <b>Bottleneck 2: 12-Hour END Alert Slot Jam &amp; Stale VM Binary</b><br>
+      Kept 4 dead jobs occupying all 4 slots for 72 ticks. <b>On Project 12 today:</b> <a href="https://github.com/promptdriven/pdd/issues/3279">#3279</a> (merged in #3349) + <a href="https://github.com/promptdriven/pdd/issues/3359">Release 0.1.31 (#3359)</a> + <a href="https://github.com/promptdriven/pdd/issues/2710">#2710</a> (auto-latest check).
+    </div>
+    <div class="callout green">
+      <b>Bottleneck 3: Feature Spec &amp; Repair Churn (61.9% vs 81.8% Bug)</b><br>
+      <code>small-change</code> (92%) and <code>bug</code> (82%) already clear your 80% gate! <b>On Project 12 today:</b> <a href="https://github.com/promptdriven/pdd/issues/3248">#3248</a> (#3351), <a href="https://github.com/promptdriven/pdd/issues/3228">#3228</a> (SIGKILL), <a href="https://github.com/promptdriven/pdd/issues/3262">#3262</a> (reports).
+    </div>
+  </div>
+</section>
+</body>
+</html>
