@@ -71,7 +71,7 @@
   ],
   "verification_plan": {
     "local": "Native regression and bounded finite-domain formal tests in test/declared-app-map-lint.test.mjs must fail on baseline c1cdb274 and pass on the fix, plus full public suite via pdd workflow suite --command \"npm test\".",
-    "prompt_before": "Not run: prompts/cli/runtime-outcome.prompt.md and prompts/cli/runtime-client.prompt.md have no Runtime interface block.",
+    "prompt_before": "Not run: prompts/cli/runtime-client.prompt.md owns the shared CLI lint gate and has no Runtime interface block; prompts/cli/runtime-outcome.prompt.md declares a partial outcomeFor interface.",
     "paid_calls_now": 0
   }
 }

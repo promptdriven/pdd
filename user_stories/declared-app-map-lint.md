@@ -19,6 +19,6 @@ The four acceptance criteria were approved in chat.
 
 ## Evidence and check limits
 
-`prompts/cli/runtime-outcome.prompt.md` and `prompts/cli/runtime-client.prompt.md` own per-selection lint outcomes and the shared lint gate; neither prompt declares a Runtime interface block, so `pdd test` cannot run against them directly (`Runtime prompt check: Not run`). Verification uses native public-boundary and bounded-domain formal tests in PR 2 plus live zero-AI-call hosted lint checks.
+`prompts/cli/runtime-outcome.prompt.md` declares a partial `outcomeFor` Runtime interface, while `prompts/cli/runtime-client.prompt.md` owns the shared CLI lint gate across `pdd lint`, `pdd test`, `--read`, `--retry` and `pdd simulate` without a Runtime interface block (`Runtime prompt check: Not run`). End-to-end CLI verification uses native public-boundary and bounded-domain formal tests in PR 2 plus live zero-AI-call hosted lint checks.
 
 [Proposed synthetic native cases](../test/runtime-admission/declared-app-map-lint-cases.json).
