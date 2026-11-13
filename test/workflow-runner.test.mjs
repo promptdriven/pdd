@@ -2196,7 +2196,7 @@ test('2870: vector edits after prompt-space approval warn and replay without rep
   writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
   const out=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());assert.equal(out.exitCode,0,out.message);
   assert.match(f.prs[1].body,/Code replay: PASS/);assert.match(f.prs[1].body.replaceAll('&#47;','/'),/warning: Saved test values changed:.*\/value.*3.*999/);
-  assert.match(out.message,/warning: Saved test values changed:/);
+  assert.match(out.message,/warning: Saved test values changed: tests\/add\.json \/steps\/0\/checks\/0\/value 3 -> 999/);assert.doesNotMatch(out.message,/&#47;/);
   assert.deepEqual(f.record().replayBaseline,original);
 });
 

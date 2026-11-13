@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-replay.prompt.md (sha256: 9f6fe653f29c7e26cd9034ee2f92e22038af0f8b2c0a77436124e7cacfc2ca8a).
+// Generated from prompts/cli/workflow-replay.prompt.md (sha256: 4caf4584bf227c6cf667653e05f6deccbf35e54d068322f4a2560cfb44aee04b).
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -461,7 +461,10 @@ function valueChanges(before, after, path = '') {
 const changeValue=value=>value===undefined ? '(missing)' : stringifyScenario(value);
 // JSON escaping keeps identities and values distinct. Entities display complete
 // separators without exposing URLs or matching the outer body's path cleaner.
-const renderValue=value=>inertMarkers(String(value).replace(/[^\x20-\x7e]/g,char=>'\\u'+char.charCodeAt(0).toString(16).padStart(4,'0')))
+// The terminal keeps only the JSON form, Unicode escapes and inert markers, so paths and links read plainly (#2953).
+const plainValue=value=>inertMarkers(String(value).replace(/[^\x20-\x7e]/g,char=>'\\u'+char.charCodeAt(0).toString(16).padStart(4,'0')));
+const plainIdentity=value=>plainValue(JSON.stringify(String(value)).slice(1,-1));
+const renderValue=value=>plainValue(value)
   .replace(/[\\`*_[\]()|]/g,'\\$&').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 const reviewText=value=>renderValue(value).replaceAll('/','&#47;');
 const reviewIdentity=value=>reviewText(JSON.stringify(String(value)).slice(1,-1));
@@ -654,13 +657,14 @@ export function formatFormalEvidence(value, rules) {
   if (shown.notNeeded) return `Formal check: not needed (no Rules to check in the Story).${formal.status === 'missing' ? '' : ` The formal block is not accepted: ${shown.words} — ${shown.cause}.`}`;
   return `Formal check (agent reported): ${shown.words} — ${shown.detail}. Repair: ${shown.repair}.${shown.note ? ` ${shown.note}` : ''}`;
 }
-export function formatReplayEvidence(result, {maxCharacters=Infinity, rules} = {}) {
+export function formatReplayEvidence(result, {maxCharacters=Infinity, rules, terminal=false} = {}) {
   const counts=result.counts??emptyCounts(), emptyPass=result.outcome==='pass' && !(Number.isSafeInteger(counts.total) && counts.total>0);
   const label=String(emptyPass?'blocked':result.outcome).replace('_',' ').toUpperCase();
   const failedFormal=formalStatus(result.formal).status==='recorded' && result.formal.result==='failed';
   const head=[ ...(counts.fail ? [`✗ ${counts.fail} replay assertions fail`] : []), ...(failedFormal ? ['✗ Formal check failed (counterexample in replay-evidence.json).'] : []),
     `Code replay: ${label} — ${render(emptyPass?'Replay cannot pass with zero checks.':result.reason)}`,`${counts.total} checks: ${counts.pass} passed, ${counts.fail} failed, ${counts.blocked} blocked, ${counts.not_replayed} not replayed.`];
-  const warnings=(result.warnings??[]).map(w=>`warning: Saved test values changed: ${reviewIdentity(w.vector)} ${w.reason ? reviewIdentity(w.reason) : `${reviewIdentity(w.path)} ${reviewText(typeof w.exact?.before==='string'?w.exact.before:changeValue(w.before))} -> ${reviewText(typeof w.exact?.after==='string'?w.exact.after:changeValue(w.after))}`}`);
+  const [shownIdentity,shownText]=terminal ? [plainIdentity,plainValue] : [reviewIdentity,reviewText];
+  const warnings=(result.warnings??[]).map(w=>`warning: Saved test values changed: ${shownIdentity(w.vector)} ${w.reason ? shownIdentity(w.reason) : `${shownIdentity(w.path)} ${shownText(typeof w.exact?.before==='string'?w.exact.before:changeValue(w.before))} -> ${shownText(typeof w.exact?.after==='string'?w.exact.after:changeValue(w.after))}`}`);
   const tail=[...(warnings.length ? ['Saved-value changes are advisory; the checker or person decides.'] : []),
     ...(result.adoption ? [`Anchor adopted from ${render(result.adoption.repository)}@${render(result.adoption.commit)}; approval reference ${render(result.adoption.reference)} by ${render(result.adoption.asserted_by)}; external-assertion-unverified`] : []),
     ...(result.anchor ? [anchorLine(result.anchor)] : []),

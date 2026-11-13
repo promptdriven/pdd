@@ -269,6 +269,9 @@ identity truncation. Distinct values must remain visibly distinct. Use JSON Unic
 units outside printable ASCII, including invisible and bidi characters. Escape Markdown, HTML, controls and
 path separators so outer body cleaning cannot collapse different paths or damage quoted URLs.
 Escape pdd-workflow: and pdd-product: as in the runner's inert summary text; they cannot become ownership markers.
+The Markdown, HTML and separator escaping is for the PR body only. With option `terminal` true, as in the
+runner's command output, warnings keep the JSON form, the Unicode escapes and the inert markers, and show
+paths and links as plain text (`"tests/add.json"`, not `tests&#47;add.json`).
 Missing is distinct from a literal string or null. The default report shows all warnings. Optional
 maxCharacters is a display budget for the entire replay section: retain its status, counts and trust
 boundary, show the longest prefix of whole warning items that fits, then name the exact omitted count
@@ -385,8 +388,8 @@ A present base `pdd.json` must be a regular readable blob within the 10 MiB read
 
 ```json
 {
-  "status": "approved",
-  "prose_sha256": "5177102bd022915a457a31ad9c1f3665edb83147605edaa2ff8426c2564b1118",
+  "status": "draft",
+  "prose_sha256": "e472fee8cb34f0ca68e7882af6ce5645bf71eaa8ea206ca2bb786a8cb45c9a30",
   "entries": [
     {
       "operation": "adoptReplayCorpus",
