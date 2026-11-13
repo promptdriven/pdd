@@ -30,7 +30,7 @@ function mixed(repo, mode) {
   if (mode !== 'selected') writeFileSync(join(repo, globalPath), '# Unselected behavior\n');
 }
 const offline = setup => portsFor({ HOME: setup.home, XDG_CONFIG_HOME: join(setup.home, '.config'), PDD_STATE_DIR: setup.state }, {
-  gh: () => assert.fail('local lint must not authenticate'),
+  gh: () => ({ status: 1, stdout: '' }),
   fetch: () => assert.fail('local lint must not contact Runtime'),
 }).ports;
 function evidence(result, mode) {

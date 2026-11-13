@@ -64,9 +64,9 @@ test('local lint finds missing interfaces without a Story and gives a usable dra
   assert.match(problem.message,/pdd interface draft 'plain\/no block.prompt\.md'/);
 });
 
-test('server lint finds a missing block before authentication', async t => {
+test('server lint refuses a missing block locally when unauthenticated', async t => {
   const setup=harbor(t,repo => {const file=join(repo,PLACE);writeFileSync(file,readFileSync(file,'utf8').replace(interfaceBlocks(readFileSync(file,'utf8'))[0][0],''));});
-  const p=ports(setup);
+  const p={...ports(setup),gh:()=>({status:1,stdout:''}),fetch:()=>assert.fail('unauthenticated lint must not contact Runtime')};
   assert.equal(await runCheck({cwd:setup.repo,options:{'--lint':true,'--json':true}},p),4);
   assert.equal(JSON.parse(p.stdout.text).problems[0].code,'interface-missing');
 });

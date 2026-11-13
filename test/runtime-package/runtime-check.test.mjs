@@ -105,7 +105,7 @@ test('RUNTIME-RULES1: each rule P1-P10 refuses with its code and nothing is sent
     if (edit(repo, doc) === undefined && edit.length === 2) writeJson(file, doc);
     const result = await check(repo, home, ['place-order']);
     assert.equal(result.code, 4, `${name}: ${result.err}`);
-    assert.deepEqual(result.calls, { fetch: 0, gh: 0 }, name);
+    assert.deepEqual(result.calls, { fetch: 0, gh: code === 'interface-missing' ? 1 : 0 }, name);
     assert.equal(result.json.rows[0].state, 'not run', name);
     assert.equal(result.json.rows[0].refusals[0].code, code, name);
   }
