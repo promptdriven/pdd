@@ -1,6 +1,6 @@
 // Generated from prompts/cli/interpreter-version.prompt.md (sha256: c9053d934c43da87d7bf78a11a79aea374ae246d960960ec1e98eda522cc5435).
 import { spawnSync } from 'node:child_process';
-import { runtimeOrigin } from './runtime-client.mjs';
+import { runtimeOrigin } from './runtime-seam.mjs';
 
 const formatList = value => Array.isArray(value) && value.length <= 32
   && value.every(id => typeof id === 'string' && /^prompt-runtime\.[a-z0-9][a-z0-9._-]{0,127}$/.exec(id)?.[0] === id)

@@ -4,10 +4,8 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
-import { runCheck, runTry, readTryOwner } from '../src/runtime-client.mjs';
-import { createTryTools } from '../src/try-mcp.mjs';
-import { fillHashes, interfaceBlocks, proseSha256 } from '../src/runtime-preflight.mjs';
-import { harbor, fakeRuntime, portsFor, PLACE } from './runtime-fake.mjs';
+import { runCheck, runTry, readTryOwner, createTryTools, fillHashes, interfaceBlocks, proseSha256 } from '../src/runtime-seam.mjs';
+import { harbor, fakeRuntime, portsFor, PLACE } from './runtime-package/runtime-fake.mjs';
 
 const spec = JSON.parse(readFileSync(new URL('./runtime/try-source-identity-cases.json', import.meta.url), 'utf8'));
 const findCase = id => {

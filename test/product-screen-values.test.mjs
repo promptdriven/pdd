@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { composeProductTry } from '../src/product-composition.mjs';
+import { composeProductTry } from '../src/runtime-seam.mjs';
 
 const cases = JSON.parse(readFileSync(new URL('./product-composition/product-malformed-screen-values-cases.json', import.meta.url)));
 const source = JSON.parse(readFileSync(new URL('./runtime/product-compose-try.json', import.meta.url))).initial_world.files;

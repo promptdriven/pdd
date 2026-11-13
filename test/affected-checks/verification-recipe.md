@@ -8,7 +8,7 @@ with Node 22.16 or later. Run from the package checkout.
 ## Controlled native verification
 
 ```sh
-node --test test/affected-check-plan.vectors.test.mjs test/affected-check-plan.native.test.mjs test/affected-story-selection.vectors.test.mjs test/affected-baseline-report.vectors.test.mjs
+node --test test/runtime-package/affected-check-plan.vectors.test.mjs test/runtime-package/affected-check-plan.native.test.mjs test/affected-story-selection.vectors.test.mjs test/affected-baseline-report.vectors.test.mjs
 ```
 
 The selection test starts the actual `bin/pdd.mjs test --affected --json` process
@@ -67,7 +67,7 @@ PDD_VERIFY_GH_CONFIG_DIR="${GH_CONFIG_DIR:-$HOME/.config/gh}" node --input-type=
 import {appendFileSync,cpSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {affectedFixture,cli} from './test/helpers/affected-check-fixture.mjs';
-import {DEFAULT_RUNTIME_URL} from './src/runtime-client.mjs';
+const {DEFAULT_RUNTIME_URL}=await (await import('./src/runtime-seam.mjs')).loadRuntimeClient();
 const evidence=process.env.PDD_VERIFY_EVIDENCE;
 if(!evidence)throw Error('Set PDD_VERIFY_EVIDENCE to a private external evidence directory.');
 const cleanup=[];

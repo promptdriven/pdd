@@ -60,6 +60,10 @@ test('Screen readiness public CLI regression: synthetic door protocol and actual
     assert.equal(result.report.state, state); assert.equal(result.report.reason, reason); assert.equal(result.report.exit_code, 6);
     assert.equal(typeof result.report.message, 'string'); assert.ok(result.report.message.length > 0);
   };
+  // Run one warm-up comparison before the synthetic cold-startup wrapper so
+  // first-run OS disk paging of Chrome does not stack onto the wrapper sleep
+  // and push total wall time past the 60-second whole-browser guard on CI VMs.
+  await t.test('AC1 AC5 HTML uses its own viewport despite shell offsets and renderer scaling', async () => { page = door({ scale: true }); passing(await run()); });
   await t.test('AC1 delayed ready before deadline captures settled app rather than shell', async () => {
     let firstChrome = chrome;
     if (process.platform !== 'win32') {
@@ -67,12 +71,11 @@ test('Screen readiness public CLI regression: synthetic door protocol and actual
       // ordinary 20-second command limit without spending the app-ready wait.
       firstChrome = join(cwd, 'cold-chrome');
       const quotedChrome = `'${resolve(chrome).replaceAll("'", "'\\''")}'`;
-      writeFileSync(firstChrome, `#!/bin/sh\nsleep 25\nexec ${quotedChrome} "$@"\n`, { mode: 0o700 });
+      writeFileSync(firstChrome, `#!/bin/sh\nsleep 21\nexec ${quotedChrome} "$@"\n`, { mode: 0o700 });
     }
     page = door({ state: 'loading', script: "setTimeout(()=>document.documentElement.dataset.pddScreenState='ready',6000)" });
     passing(await run({ env: { PDD_CHROME_PATH: firstChrome } }));
   });
-  await t.test('AC1 AC5 HTML uses its own viewport despite shell offsets and renderer scaling', async () => { page = door({ scale: true }); passing(await run()); });
   for (const [format, content] of [
     ['SVG', svg.replace('<svg ', '<svg width="100%" height="100%" ')],
   ]) await t.test(`AC5 ${format} open shadow surface uses app-local geometry`, async () => { page = door({ kind: 'shadow', content, scale: true }); passing(await run()); });

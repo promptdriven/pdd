@@ -4,7 +4,7 @@ import {createHash} from 'node:crypto';
 import {mkdtempSync, mkdirSync, writeFileSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {baselineReport, buildCheckPlan, checkPlanResults, selectCheckTests} from '../src/runtime-check-plan.mjs';
+import {baselineReport, buildCheckPlan, checkPlanResults, selectCheckTests} from '../src/runtime-seam.mjs';
 import {fullCheckPass} from '../src/workflow-story-card.mjs';
 
 // Oracles: the Rules to check in affected-story-selection.md and
