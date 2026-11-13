@@ -191,3 +191,8 @@ Paired Runtime source branch: `feature/808-product-step-labels`. Its proposed AP
 2. [Read saved baseline obligations separately](affected-baseline-report.md). Test: `test/runtime/affected-baseline-report.json`. Prompt tests: NOT RUN; supplied-observation report only. Native acceptance: `test/affected-checks/affected-baseline-report-cases.json`.
 
 Proposed command status follows selected target results; a target pass can exit 0 while saved baseline failures still block the unchanged full-pass gates. This convention requires person review. No implementation, approval, hosted check or native pass is claimed.
+
+## Existing-session-only Try for headless agents (#3049)
+
+1. [Run an existing simulation by Try ID](existing-session-try.md). Test: `test/runtime/existing-session-try.json`.
+

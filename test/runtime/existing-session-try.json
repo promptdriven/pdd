@@ -1,0 +1,530 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/existing-session-try.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Supplying `try_id` \"520c7aa5-72f6-4add-b60e-8ed87db656c2\" binds only that running simulation with its pinned `source_sha256` and call cap 40 (40 remaining), and refuses a missing, paused, stopped or cap-mismatched Try ID without opening or reopening a session."
+    },
+    {
+      "id": "AC2",
+      "text": "Running a pure JSON prompt on that bound Try returns the confirmed outcome or declared error \"invalid-quantity\" with external `run_id` and internal `action_id`, uses 1 call on the first run and marks an exact repeat as `replayed: true` with 0 calls."
+    },
+    {
+      "id": "AC3",
+      "text": "Observing `run_id` \"7b409bce-ede1-40a5-ba87-ae67cbf516b0\" on Try \"520c7aa5-72f6-4add-b60e-8ed87db656c2\" returns its read-only `state`, `session_state` (including \"stopped\"), external `run_id` and internal `action_id` \"605cd2d9e23745f990720a7a5103490c\", and marks an \"unknown\" call as `unknown_outcome: true` without replaying it."
+    },
+    {
+      "id": "AC4",
+      "text": "`pdd simulate --stop 520c7aa5-72f6-4add-b60e-8ed87db656c2` selects only that saved simulation to stop and refuses an unknown Try ID."
+    }
+  ],
+  "initial_world": {},
+  "simulation": {},
+  "context": [],
+  "steps": [
+    {
+      "step_id": "bind-running-try",
+      "entry_path": "prompts/cli/try-session.prompt.md",
+      "operation": "bindExistingTry",
+      "input": {
+        "try_id": "520c7aa5-72f6-4add-b60e-8ed87db656c2",
+        "records": [
+          {
+            "id": "520c7aa5-72f6-4add-b60e-8ed87db656c2",
+            "test_path": "tests/quote-total.json",
+            "test_name": "quote-total",
+            "story": "quote-total",
+            "story_path": "user_stories/quote-total.md",
+            "source_sha256": "2fb88fd07157409cc408d4278e875567c3362f0eb64b13870430db815239c571",
+            "engine_sha": "ee85fa4be756bc138a1b302b92cf44a428bc0025",
+            "server_commit": "217f8d38036f5dfaa98f915bc1b9011805ac9ac6",
+            "max_calls": 40
+          }
+        ],
+        "drift": null,
+        "model": {
+          "status": 200,
+          "error_code": null,
+          "cap": 40,
+          "remaining": 40
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/try_id",
+          "op": "equals",
+          "value": "520c7aa5-72f6-4add-b60e-8ed87db656c2"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/source_sha256",
+          "op": "equals",
+          "value": "2fb88fd07157409cc408d4278e875567c3362f0eb64b13870430db815239c571"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/cap",
+          "op": "equals",
+          "value": 40
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/remaining",
+          "op": "equals",
+          "value": 40
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "refuse-missing-try",
+      "entry_path": "prompts/cli/try-session.prompt.md",
+      "operation": "bindExistingTry",
+      "input": {
+        "try_id": "99999999-9999-4999-8999-999999999999",
+        "records": [
+          {
+            "id": "520c7aa5-72f6-4add-b60e-8ed87db656c2",
+            "test_path": "tests/quote-total.json",
+            "test_name": "quote-total",
+            "story": "quote-total",
+            "story_path": "user_stories/quote-total.md",
+            "source_sha256": "2fb88fd07157409cc408d4278e875567c3362f0eb64b13870430db815239c571",
+            "engine_sha": "ee85fa4be756bc138a1b302b92cf44a428bc0025",
+            "server_commit": "217f8d38036f5dfaa98f915bc1b9011805ac9ac6",
+            "max_calls": 40
+          }
+        ],
+        "drift": null,
+        "model": {
+          "status": 404,
+          "error_code": "not-found",
+          "cap": null,
+          "remaining": null
+        }
+      },
+      "expected_error": "try-not-found",
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "try-not-found"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "refuse-stopped-or-paused-try",
+      "entry_path": "prompts/cli/try-session.prompt.md",
+      "operation": "bindExistingTry",
+      "input": {
+        "try_id": "520c7aa5-72f6-4add-b60e-8ed87db656c2",
+        "records": [
+          {
+            "id": "520c7aa5-72f6-4add-b60e-8ed87db656c2",
+            "test_path": "tests/quote-total.json",
+            "test_name": "quote-total",
+            "story": "quote-total",
+            "story_path": "user_stories/quote-total.md",
+            "source_sha256": "2fb88fd07157409cc408d4278e875567c3362f0eb64b13870430db815239c571",
+            "engine_sha": "ee85fa4be756bc138a1b302b92cf44a428bc0025",
+            "server_commit": "217f8d38036f5dfaa98f915bc1b9011805ac9ac6",
+            "max_calls": 40
+          }
+        ],
+        "drift": null,
+        "model": {
+          "status": 409,
+          "error_code": "session-stopped",
+          "cap": null,
+          "remaining": null
+        }
+      },
+      "expected_error": "session-not-running",
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "session-not-running"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "refuse-cap-mismatch",
+      "entry_path": "prompts/cli/try-session.prompt.md",
+      "operation": "bindExistingTry",
+      "input": {
+        "try_id": "520c7aa5-72f6-4add-b60e-8ed87db656c2",
+        "records": [
+          {
+            "id": "520c7aa5-72f6-4add-b60e-8ed87db656c2",
+            "test_path": "tests/quote-total.json",
+            "test_name": "quote-total",
+            "story": "quote-total",
+            "story_path": "user_stories/quote-total.md",
+            "source_sha256": "2fb88fd07157409cc408d4278e875567c3362f0eb64b13870430db815239c571",
+            "engine_sha": "ee85fa4be756bc138a1b302b92cf44a428bc0025",
+            "server_commit": "217f8d38036f5dfaa98f915bc1b9011805ac9ac6",
+            "max_calls": 40
+          }
+        ],
+        "drift": null,
+        "model": {
+          "status": 200,
+          "error_code": null,
+          "cap": 400,
+          "remaining": 400
+        }
+      },
+      "expected_error": "cap-mismatch",
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "cap-mismatch"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "project-normal-call",
+      "entry_path": "prompts/cli/try-session.prompt.md",
+      "operation": "projectTryCall",
+      "input": {
+        "request_id": "7b409bce-ede1-40a5-ba87-ae67cbf516b0",
+        "declared_errors": [
+          "invalid-quantity"
+        ],
+        "state": "passed",
+        "has_program_result": true,
+        "usage_calls": 1,
+        "report": {
+          "action_id": "605cd2d9e23745f990720a7a5103490c",
+          "verdict": "passed",
+          "error_code": null,
+          "replayed": false,
+          "remaining_calls": 39
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/outcome",
+          "op": "equals",
+          "value": "result"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/run_id",
+          "op": "equals",
+          "value": "7b409bce-ede1-40a5-ba87-ae67cbf516b0"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/action_id",
+          "op": "equals",
+          "value": "605cd2d9e23745f990720a7a5103490c"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/replayed",
+          "op": "equals",
+          "value": false
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/calls",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "project-declared-error",
+      "entry_path": "prompts/cli/try-session.prompt.md",
+      "operation": "projectTryCall",
+      "input": {
+        "request_id": "d47178f2-b59d-44c0-b2b8-e97a1356492f",
+        "declared_errors": [
+          "invalid-quantity"
+        ],
+        "state": "failed",
+        "has_program_result": false,
+        "usage_calls": 1,
+        "report": {
+          "action_id": "f6c965709d5e4eb18a78add3c9d28123",
+          "verdict": "failed",
+          "error_code": "invalid-quantity",
+          "replayed": false,
+          "remaining_calls": 38
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/outcome",
+          "op": "equals",
+          "value": "program_error"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/error_code",
+          "op": "equals",
+          "value": "invalid-quantity"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/run_id",
+          "op": "equals",
+          "value": "d47178f2-b59d-44c0-b2b8-e97a1356492f"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/action_id",
+          "op": "equals",
+          "value": "f6c965709d5e4eb18a78add3c9d28123"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "project-replayed-call",
+      "entry_path": "prompts/cli/try-session.prompt.md",
+      "operation": "projectTryCall",
+      "input": {
+        "request_id": "324062df-2070-4a5b-a132-7257f110e82d",
+        "declared_errors": [
+          "invalid-quantity"
+        ],
+        "state": "passed",
+        "has_program_result": true,
+        "usage_calls": 0,
+        "report": {
+          "action_id": "896cc07a90bc4eb38bc9071c4caebee2",
+          "verdict": "passed",
+          "error_code": null,
+          "replayed": true,
+          "remaining_calls": 38
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/replayed",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/calls",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "observe-after-stop",
+      "entry_path": "prompts/cli/try-session.prompt.md",
+      "operation": "projectTryObservation",
+      "input": {
+        "try_id": "520c7aa5-72f6-4add-b60e-8ed87db656c2",
+        "run_id": "7b409bce-ede1-40a5-ba87-ae67cbf516b0",
+        "status": 200,
+        "body": {
+          "request_id": "7b409bce-ede1-40a5-ba87-ae67cbf516b0",
+          "action_id": "605cd2d9e23745f990720a7a5103490c",
+          "session_id": "520c7aa5-72f6-4add-b60e-8ed87db656c2",
+          "state": "passed",
+          "session_state": "stopped",
+          "source_sha256": "2fb88fd07157409cc408d4278e875567c3362f0eb64b13870430db815239c571",
+          "server_commit": "217f8d38036f5dfaa98f915bc1b9011805ac9ac6",
+          "engine_sha": "ee85fa4be756bc138a1b302b92cf44a428bc0025"
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/state",
+          "op": "equals",
+          "value": "passed"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/session_state",
+          "op": "equals",
+          "value": "stopped"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/run_id",
+          "op": "equals",
+          "value": "7b409bce-ede1-40a5-ba87-ae67cbf516b0"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/action_id",
+          "op": "equals",
+          "value": "605cd2d9e23745f990720a7a5103490c"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/terminal",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/unknown_outcome",
+          "op": "equals",
+          "value": false
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "observe-unknown-call",
+      "entry_path": "prompts/cli/try-session.prompt.md",
+      "operation": "projectTryObservation",
+      "input": {
+        "try_id": "520c7aa5-72f6-4add-b60e-8ed87db656c2",
+        "run_id": "7b409bce-ede1-40a5-ba87-ae67cbf516b0",
+        "status": 200,
+        "body": {
+          "request_id": "7b409bce-ede1-40a5-ba87-ae67cbf516b0",
+          "action_id": "605cd2d9e23745f990720a7a5103490c",
+          "session_id": "520c7aa5-72f6-4add-b60e-8ed87db656c2",
+          "state": "unknown",
+          "session_state": "running",
+          "source_sha256": "2fb88fd07157409cc408d4278e875567c3362f0eb64b13870430db815239c571",
+          "server_commit": "217f8d38036f5dfaa98f915bc1b9011805ac9ac6",
+          "engine_sha": "ee85fa4be756bc138a1b302b92cf44a428bc0025"
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/state",
+          "op": "equals",
+          "value": "unknown"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/terminal",
+          "op": "equals",
+          "value": false
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/unknown_outcome",
+          "op": "equals",
+          "value": true
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "stop-by-try-id",
+      "entry_path": "prompts/cli/try-session.prompt.md",
+      "operation": "selectTryToStop",
+      "input": {
+        "selector": "520c7aa5-72f6-4add-b60e-8ed87db656c2",
+        "records": [
+          {
+            "id": "11111111-1111-4111-8111-111111111111",
+            "test_path": "tests/other.json",
+            "test_name": "other",
+            "story": "other",
+            "story_path": "user_stories/other.md"
+          },
+          {
+            "id": "520c7aa5-72f6-4add-b60e-8ed87db656c2",
+            "test_path": "tests/quote-total.json",
+            "test_name": "quote-total",
+            "story": "quote-total",
+            "story_path": "user_stories/quote-total.md"
+          }
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/id",
+          "op": "equals",
+          "value": "520c7aa5-72f6-4add-b60e-8ed87db656c2"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/test_path",
+          "op": "equals",
+          "value": "tests/quote-total.json"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "stop-unknown-try-id",
+      "entry_path": "prompts/cli/try-session.prompt.md",
+      "operation": "selectTryToStop",
+      "input": {
+        "selector": "99999999-9999-4999-8999-999999999999",
+        "records": [
+          {
+            "id": "520c7aa5-72f6-4add-b60e-8ed87db656c2",
+            "test_path": "tests/quote-total.json",
+            "test_name": "quote-total",
+            "story": "quote-total",
+            "story_path": "user_stories/quote-total.md"
+          }
+        ]
+      },
+      "expected_error": "stop-not-found",
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "stop-not-found"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}
