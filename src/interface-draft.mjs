@@ -1,4 +1,4 @@
-// Generated from prompts/cli/interface-draft.prompt.md (sha256: 7157c4a577414fcc6d2ef9bbc13fd30a25db3fb0e83ffeede8bdf2a731006364).
+// Generated from prompts/cli/interface-draft.prompt.md (sha256: c4dd0da761ee6b728deb05e3ae7e0dfbdc613b12f69ba0069fd9282417120492).
 import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, linkSync, renameSync, rmSync, openSync, closeSync, fstatSync, chmodSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { basename, dirname, join, relative, resolve } from 'node:path';

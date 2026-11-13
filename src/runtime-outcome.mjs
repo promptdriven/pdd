@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-outcome.prompt.md (sha256: 9a0d07e75cccf95321abc8bc5bfb07552f87eda0a61b6896e653419100a99ba1).
+// Generated from prompts/cli/runtime-outcome.prompt.md (sha256: dc888fb33f9e1cb2e3617c3770bb7213d3abdd9af8d7a6f6bea2696f08345c00).
 // What happened to one selected test: the one place that turns a server answer into an outcome.
 export const PROVIDER_TEXT = 'the AI provider failed during the run. It is not a failed check. Do not send it again yet.';
 export const CHECK_STATES = Object.freeze(['waiting', 'sent', 'passed', 'failed', 'refused', 'partial', 'not run']);

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-check-plan.prompt.md (sha256: fd2ee080527673f163544e955f736f80f0c4bc183aee6009d9d7e8da6f0d51e4).
+// Generated from prompts/cli/runtime-check-plan.prompt.md (sha256: 0258152105f3d2b9106820f3269dc0d109db5daa41cabeac096fc37db4b2f5a3).
 import { spawnSync } from 'node:child_process';
 import { posix } from 'node:path';
 import { captureSource, readPrompt, sourceFilePort, promptMarkdownTargets } from './runtime-preflight.mjs';
