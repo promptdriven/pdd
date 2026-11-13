@@ -135,7 +135,7 @@ test('RUNTIME-SERVER5: Ctrl-C prints the read line and exits 3; --read then GETs
   const last = await check(setup, fake, [], { '--read': true, '--json': true });
   assert.equal(last.code, 1); assert.equal(last.json.batch, batch); assert.equal(fake.posts.length, posts); assert.equal(last.clock.uuids, 0);
   assert.equal(last.json.rows[0].request_id, fake.posts[1].request.requestId);
-  const other = await check(setup, fake, [batch], { '--read': true }, { gh: args => args[0] === 'auth' ? { status: 0, stdout: TOKEN } : { status: 0, stdout: 'someone 7\n' } });
+  const other = await check(setup, fake, [batch], { '--read': true }, { gh: args => args[0] === 'auth' ? { status: 0, stdout: `${TOKEN}_other` } : { status: 0, stdout: 'someone 7\n' } });
   assert.equal(other.code, 5); assert.match(other.err, /These runs belong to octo\. Run: gh auth switch -u octo/);
 });
 
