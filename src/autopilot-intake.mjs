@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-intake.prompt.md (sha256: fb5318da8e0ff2801e01651a7cfed42f56a397fffa6dc5cea403c56ce9f49041).
+// Generated from prompts/cli/autopilot-intake.prompt.md (sha256: cdc03cb8b3b020bc829ca6b3bf8acb23615d658747d5902eb9163420302fb5dd).
 import * as nativeFs from 'node:fs';
 import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -97,13 +97,41 @@ export function personComments(comments) {
     .map(c => ({ author: c.user?.login ?? null, at: c.created_at ?? null, body: c.body.length > INTAKE_LIMITS.commentChars ? `${c.body.slice(0, INTAKE_LIMITS.commentChars)} …[cut]` : c.body }));
 }
 
+const bodyDigest = row => sha(JSON.stringify({ title: text(row?.title), body: text(row?.body) })).slice(0, 16);
 const improveMarkerPrefix = n => `<!-- pdd:autopilot-intake:improve:${n}:`;
 const intakeQuestionPrefix = n => `<!-- pdd:autopilot-core:question:${n}:intake-`;
-function hasAutoImproveSinceHuman(allComments, n, trustedIds = null) {
+
+function markerBodyKeyOf(body, prefix) {
+  const idx = body.indexOf(prefix);
+  if (idx < 0) return null;
+  const rest = body.slice(idx + prefix.length);
+  const end = rest.indexOf('-->');
+  if (end < 0) return null;
+  const parts = rest.slice(0, end).trim().split(':');
+  return parts.length >= 2 && /^[0-9a-f]{8,64}$/.test(parts[1]) ? parts[1] : null;
+}
+
+function hasAutoImproveSinceHuman(allComments, n, opts = {}) {
+  const trustedIds = opts instanceof Set ? opts : (opts?.trustedIds ?? null);
+  const row = opts instanceof Set ? null : (opts?.row ?? null);
+  const card = opts instanceof Set ? null : (opts?.card ?? null);
+  const trustedUnlabeledAt = opts instanceof Set ? 0 : (Number(opts?.trustedUnlabeledAt) || 0);
+  const bKey = row ? bodyDigest(row) : null;
   const impMark = improveMarkerPrefix(n), qMark = intakeQuestionPrefix(n);
   for (let i = (allComments ?? []).length - 1; i >= 0; i--) {
     const c = allComments[i], body = text(c?.body);
-    if (body.includes(impMark) || body.includes(qMark)) return true;
+    const isImp = body.includes(impMark), isQ = body.includes(qMark);
+    if (isImp || isQ) {
+      const createdAt = Date.parse(c?.created_at) || 0;
+      if (isQ && trustedUnlabeledAt > createdAt) return false;
+      const mBodyKey = markerBodyKeyOf(body, isImp ? impMark : qMark);
+      if (mBodyKey && bKey && mBodyKey !== bKey) return false;
+      if (!mBodyKey && row) {
+        if (card?.improvedBodyKey && bKey && card.improvedBodyKey !== bKey) return false;
+        if (!card?.improvedBodyKey && (Date.parse(row.updated_at) || 0) > createdAt && card?.improvedHumanKey) return false;
+      }
+      return true;
+    }
     if (isPersonComment(c) && (!trustedIds || trustedIds.has(c))) return false;
   }
   return false;
@@ -147,11 +175,16 @@ export function cardEnvironment(env = {}) {
   return Object.fromEntries(Object.entries(jobEnvironment(env)).filter(([key]) => !/^(GH|GITHUB)_\w*TOKEN$/i.test(key)));
 }
 
-export function cardPrompt({ repo, row, comments, pool, mode = 'shadow' }) {
+export function cardPrompt({ repo, row, comments, pool, mode = 'shadow', specRefinement = null, decisionNote = null }) {
   const issue = { number: row.number, title: text(row.title), labels: labelsOf(row), created_at: row.created_at ?? null,
     native_links: { blocked_by: row.issue_dependencies_summary?.blocked_by ?? 0, blocking: row.issue_dependencies_summary?.total_blocking ?? 0 },
-    body: text(row.body).slice(0, INTAKE_LIMITS.bodyChars), person_comments: comments };
+    body: text(row.body).slice(0, INTAKE_LIMITS.bodyChars), person_comments: comments,
+    ...(specRefinement ? { spec_refinement: String(specRefinement).slice(0, INTAKE_LIMITS.commentChars) } : {}),
+    ...(decisionNote ? { decision_note: String(decisionNote).slice(0, INTAKE_LIMITS.commentChars) } : {}) };
   const modeNote = mode === 'active' ? 'Your answer drives active intake selection and grouping.' : 'No person reads your answer now: it is a shadow record.';
+  const activeExtra = (specRefinement || decisionNote)
+    ? '\n- When "spec_refinement" or "decision_note" is present in Issue (JSON), include its concrete codebase findings or approved option when grading readiness.'
+    : '';
   return `You are the intake check of Autopilot for ${repo}. Autopilot gives one GitHub issue to one AI coding agent, which makes one PR; the PR merges after CI, the full test suite and a fresh AI reviewer. Rate this one issue before any work starts, like a coding agent's pre-task confidence check. ${modeNote}
 
 Rules:
@@ -165,7 +198,7 @@ Rules:
 - held: a person said they work on it.
 - fixed: the comments show that it no longer happens.
 - elsewhere: the change belongs in another repository.
-- Set "areas" (and "area_hint") to up to 6 normalized repository module or file paths the fix would touch. Set "group_with" to open issue numbers from the list that share the same module or root cause and can ship together when small. Set "size" to "small", "medium" or "large".
+- Set "areas" (and "area_hint") to up to 6 normalized repository module or file paths the fix would touch. Set "group_with" to open issue numbers from the list that share the same module or root cause and can ship together when small. Set "size" to "small", "medium" or "large".${activeExtra}
 
 Issue (JSON):
 ${JSON.stringify(issue, null, 1)}
@@ -178,9 +211,10 @@ Answer with only this JSON object and no other text:
 `;
 }
 
-export function improvePrompt({ repo, row, comments, card, pool }) {
+export function improvePrompt({ repo, row, comments, card, pool, decisionNote = null }) {
   const issue = { number: row.number, title: text(row.title), labels: labelsOf(row), created_at: row.created_at ?? null,
-    body: text(row.body).slice(0, INTAKE_LIMITS.bodyChars), person_comments: comments };
+    body: text(row.body).slice(0, INTAKE_LIMITS.bodyChars), person_comments: comments,
+    ...(decisionNote ? { decision_note: String(decisionNote).slice(0, INTAKE_LIMITS.commentChars) } : {}) };
   return `You are the read-only specification refiner of Autopilot for ${repo}. An initial intake check marked issue #${row.number} as "improve" (${plain(card?.reason, 300) || 'missing concrete scope or acceptance criteria'}).
 Inspect this repository checkout in read-only mode to ground the issue in exact files, root cause or reproduction details, and concrete checkable acceptance criteria before any build starts.
 
@@ -343,13 +377,21 @@ function formatIntakeQuestion(imp) {
 }
 
 async function applyImprovement(ctx, f, row, saved, imp) {
-  const n = row.number;
+  const n = row.number, bKey = saved.bodyKey ?? bodyDigest(row);
   const existing = Number(row.comments) > 0 ? await ctx.gh.all(`repos/${ctx.repo}/issues/${n}/comments?per_page=100`) : [];
-  const alreadyPosted = hasAutoImproveSinceHuman(existing, n);
+  let trustedUnlabeledAt = 0;
+  if (!labelsOf(row).includes(DECISION_LABEL) && existing.some(c => text(c?.body).includes(intakeQuestionPrefix(n)))) {
+    const timeline = await ctx.gh.all(`repos/${ctx.repo}/issues/${n}/timeline?per_page=100`).catch(() => []);
+    const rem = timeline.filter(e => e.event === 'unlabeled' && e.label?.name === DECISION_LABEL).at(-1);
+    if (rem?.actor?.login && (!ctx.ports?.trusted || await ctx.ports.trusted({ user: rem.actor }))) {
+      trustedUnlabeledAt = (Date.parse(rem.created_at) || 0) + 1;
+    }
+  }
+  const alreadyPosted = hasAutoImproveSinceHuman(existing, n, { row, trustedUnlabeledAt });
   const postComment = ctx.comment ? body => ctx.comment(n, body) : body => ctx.gh.ok('POST', `repos/${ctx.repo}/issues/${n}/comments`, { body });
   const preVersion = saved.version;
   if (imp.outcome === 'ready') {
-    const marker = `${improveMarkerPrefix(n)}${preVersion} -->`;
+    const marker = `${improveMarkerPrefix(n)}${preVersion}:${bKey} -->`;
     if (!alreadyPosted) {
       const body = [
         'Autopilot inspected the repository in read-only mode and refined the specification for this issue:',
@@ -389,14 +431,14 @@ async function applyImprovement(ctx, f, row, saved, imp) {
     };
     saveCard(ctx, f, n, {
       issue: n, version: issueVersion(row), preCommentVersion: preVersion,
-      improvedHumanKey: saved.humanKey ?? null, improvedAt: ctx.now(),
+      improvedHumanKey: saved.humanKey ?? null, improvedBodyKey: bKey, improvedAt: ctx.now(),
       at: ctx.now(), agent: saved.agent, seconds: Math.round((ctx.now() - saved.startedAt) / 1000),
       native: null, refinedSpec, card,
     });
     appendDiff(ctx, f, { kind: 'auto-improve', issue: n, outcome: 'ready', areas });
     return;
   }
-  const marker = `${intakeQuestionPrefix(n)}${preVersion} -->`;
+  const marker = `${intakeQuestionPrefix(n)}${preVersion}:${bKey} -->`;
   const formatted = formatIntakeQuestion(imp);
   if (!alreadyPosted) {
     const body = [
@@ -433,8 +475,8 @@ async function applyImprovement(ctx, f, row, saved, imp) {
     reported_model: imp.reported_model ?? saved.baseCard?.reported_model ?? null,
   };
   saveCard(ctx, f, n, {
-    issue: n, version: issueVersion(row), preCommentVersion: preVersion,
-    improvedHumanKey: saved.humanKey ?? null, improvedAt: ctx.now(),
+    issue: n, version: issueVersion(row),
+    improvedBodyKey: bKey, improvedAt: ctx.now(),
     at: ctx.now(), agent: saved.agent, seconds: Math.round((ctx.now() - saved.startedAt) / 1000),
     native: null, card,
   });
@@ -666,13 +708,39 @@ export async function activeIntake(ctx, rows) {
     cache[user.login.toLowerCase()] = { trusted: value, at: ctx.now() }; changed = true;
     return value;
   };
+  let selfLogin;
+  const ownLogin = async () => selfLogin ??= (ctx.login ? String(await ctx.login().catch(() => '')).toLowerCase() : '');
+  const trustedMarkerAuthor = async user => Boolean(await trustOf(user)) || (Boolean(user?.login) && (await ownLogin()) === String(user.login).toLowerCase());
   const readTrustedCommentsAndPool = async (row, n) => {
     const all = Number(row.comments) > 0 ? await ctx.gh.all(`repos/${ctx.repo}/issues/${n}/comments?per_page=100`) : [];
     const comments = [], trustedSet = new Set();
-    for (const c of all.filter(isPersonComment).reverse()) {
-      if (await trustOf(c.user)) {
-        trustedSet.add(c);
-        if (comments.length < INTAKE_LIMITS.comments) comments.unshift(c);
+    let specRefinement = null, latestQuestion = null;
+    const impMark = improveMarkerPrefix(n), qMark = intakeQuestionPrefix(n);
+    for (const c of [...all].reverse()) {
+      const body = text(c?.body);
+      if (isPersonComment(c)) {
+        if (await trustOf(c.user)) {
+          trustedSet.add(c);
+          if (comments.length < INTAKE_LIMITS.comments) comments.unshift(c);
+        }
+        continue;
+      }
+      if (!specRefinement && body.includes(impMark) && await trustedMarkerAuthor(c.user)) {
+        specRefinement = body.replace(/\s*<!--\s*pdd:autopilot-intake:improve:[\s\S]*?-->\s*$/, '').trim() || null;
+      }
+      if (!latestQuestion && body.includes(qMark) && await trustedMarkerAuthor(c.user)) {
+        latestQuestion = c;
+      }
+    }
+    let trustedUnlabeledAt = 0, decisionNote = null;
+    if (latestQuestion && !labelsOf(row).includes(DECISION_LABEL)) {
+      const since = Date.parse(latestQuestion.created_at) || 0;
+      const timeline = await ctx.gh.all(`repos/${ctx.repo}/issues/${n}/timeline?per_page=100`).catch(() => []);
+      const rem = timeline.filter(e => e.event === 'unlabeled' && e.label?.name === DECISION_LABEL && (Date.parse(e.created_at) || 0) >= since).at(-1);
+      if (rem?.actor?.login && await trustOf(rem.actor)) {
+        trustedUnlabeledAt = Math.max(Date.parse(rem.created_at) || 0, since + 1);
+        const quoted = text(latestQuestion.body).split('\n').filter(line => line.startsWith('> ')).map(line => line.slice(2)).join('\n');
+        decisionNote = `A trusted person removed ${DECISION_LABEL} without a comment after Autopilot asked:\n${quoted}\nTreat the recommended option as approved.`;
       }
     }
     const pool = [];
@@ -680,7 +748,7 @@ export async function activeIntake(ctx, rows) {
       if (other.number === n || pool.length >= INTAKE_LIMITS.pool) continue;
       if (known(other.user) ?? await trustOf(other.user)) pool.push({ number: other.number, title: other.title });
     }
-    return { all, comments, trustedSet, pool };
+    return { all, comments, trustedSet, specRefinement, trustedUnlabeledAt, decisionNote, pool };
   };
   for (const row of scoped) {
     const n = row.number;
@@ -690,11 +758,15 @@ export async function activeIntake(ctx, rows) {
       const card = cards.get(n);
       if (native) {
         if (!card?.native || card.native.kind !== native.kind || card.version !== version) {
+          const prevReady = card?.card?.auto_improved && card.card.class === 'ready'
+            ? card.card
+            : card?.previous?.auto_improved && card.previous.class === 'ready' ? card.previous : null;
           const next = {
             issue: n, version, at: ctx.now(), agent, native, card: null,
             previous: card?.card ?? card?.previous ?? null,
-            ...(card?.improvedHumanKey ? { improvedHumanKey: card.improvedHumanKey } : {}),
-            ...(card?.refinedSpec ? { refinedSpec: card.refinedSpec } : {}),
+            ...(prevReady && card?.improvedHumanKey ? { improvedHumanKey: card.improvedHumanKey } : {}),
+            ...(prevReady && card?.improvedBodyKey ? { improvedBodyKey: card.improvedBodyKey } : {}),
+            ...(prevReady && card?.refinedSpec ? { refinedSpec: card.refinedSpec } : {}),
           };
           saveCard(ctx, f, n, next); cards.set(n, next);
         }
@@ -708,11 +780,12 @@ export async function activeIntake(ctx, rows) {
         const author = await trustOf(row.user);
         if (author === undefined || !author) continue;
         started++; running.add(n);
-        const { all, comments, trustedSet, pool } = await readTrustedCommentsAndPool(row, n);
-        const pComments = personComments(comments), hKey = humanDigest(row, pComments);
-        if (hasAutoImproveSinceHuman(all, n, trustedSet) || (card.improvedHumanKey && card.improvedHumanKey === hKey)) {
+        const { all, comments, trustedSet, trustedUnlabeledAt, decisionNote, pool } = await readTrustedCommentsAndPool(row, n);
+        const pComments = personComments(comments), hKey = humanDigest(row, pComments), bKey = bodyDigest(row);
+        if (hasAutoImproveSinceHuman(all, n, { trustedIds: trustedSet, row, card, trustedUnlabeledAt })
+          || (!trustedUnlabeledAt && card.improvedHumanKey && card.improvedHumanKey === hKey && (!card.improvedBodyKey || card.improvedBodyKey === bKey))) {
           running.delete(n);
-          const marked = { ...card, autoImproveTried: version, improvedHumanKey: hKey };
+          const marked = { ...card, autoImproveTried: version, improvedHumanKey: hKey, improvedBodyKey: bKey };
           writeJson(ctx.fs, join(f.cards, `${n}.json`), marked); cards.set(n, marked);
           continue;
         }
@@ -721,12 +794,12 @@ export async function activeIntake(ctx, rows) {
         const repoCwd = ctx.state?.cwd || f.empty;
         const job = ctx.jobs.start({
           id, dir: f.logs, cwd: repoCwd, command: run.command, args: run.args,
-          input: improvePrompt({ repo: ctx.repo, row, comments: pComments, card: card.card, pool }),
+          input: improvePrompt({ repo: ctx.repo, row, comments: pComments, card: card.card, pool, decisionNote }),
           env: cardEnvironment(ctx.ports?.env ?? process.env), issue: n, role: 'intake-improve',
         });
         try {
           writeJson(ctx.fs, join(f.jobs, `${n}.json`), {
-            issue: n, stage: 'improve', version, humanKey: hKey, baseCard: card.card,
+            issue: n, stage: 'improve', version, humanKey: hKey, bodyKey: bKey, baseCard: card.card,
             startedAt: ctx.now(), agent, job, answer,
           });
         } catch (error) {
@@ -743,13 +816,15 @@ export async function activeIntake(ctx, rows) {
         const next = { issue: n, version, at: ctx.now(), agent, native: { kind: 'untrusted', reason: 'the author is not trusted; the core never gives this issue to an agent' }, card: null, previous: card?.card ?? card?.previous ?? null };
         saveCard(ctx, f, n, next); cards.set(n, next); continue;
       }
-      const prevImproved = card?.card?.auto_improved ? card.card : card?.previous?.auto_improved ? card.previous : null;
+      const prevImproved = card?.card?.auto_improved && card.card.class === 'ready'
+        ? card.card
+        : card?.previous?.auto_improved && card.previous.class === 'ready' ? card.previous : null;
       if (prevImproved && card?.improvedHumanKey) {
         const { comments } = await readTrustedCommentsAndPool(row, n);
-        const hKey = humanDigest(row, personComments(comments));
-        if (hKey === card.improvedHumanKey) {
+        const hKey = humanDigest(row, personComments(comments)), bKey = bodyDigest(row);
+        if (hKey === card.improvedHumanKey && (!card.improvedBodyKey || card.improvedBodyKey === bKey)) {
           const reconciled = {
-            issue: n, version, improvedHumanKey: hKey, at: ctx.now(), agent: card.agent ?? agent,
+            issue: n, version, improvedHumanKey: hKey, improvedBodyKey: bKey, at: ctx.now(), agent: card.agent ?? agent,
             seconds: card.seconds ?? 0, native: null,
             ...(card.refinedSpec ? { refinedSpec: card.refinedSpec } : {}),
             card: prevImproved,
@@ -760,12 +835,12 @@ export async function activeIntake(ctx, rows) {
       }
       if (started >= INTAKE_LIMITS.startsPerTick || running.size >= INTAKE_LIMITS.running || !await canStart()) continue;
       started++; running.add(n);
-      const { comments, pool } = await readTrustedCommentsAndPool(row, n);
+      const { comments, specRefinement, decisionNote, pool } = await readTrustedCommentsAndPool(row, n);
       const id = `intake-${n}-${ctx.now().toString(36)}-${randomUUID().slice(0, 6)}`, answer = join(f.logs, `${id}.answer.txt`);
       const run = cardCommand(ctx.state.agent, { model: agent.model, result: answer });
       const job = ctx.jobs.start({
         id, dir: f.logs, cwd: f.empty, command: run.command, args: run.args,
-        input: cardPrompt({ repo: ctx.repo, row, comments: personComments(comments), pool, mode: 'active' }),
+        input: cardPrompt({ repo: ctx.repo, row, comments: personComments(comments), pool, mode: 'active', specRefinement, decisionNote }),
         env: cardEnvironment(ctx.ports?.env ?? process.env), issue: n, role: 'intake',
       });
       try { writeJson(ctx.fs, join(f.jobs, `${n}.json`), { issue: n, stage: 'card', version, startedAt: ctx.now(), agent, job, answer }); }

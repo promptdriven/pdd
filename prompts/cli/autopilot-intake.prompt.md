@@ -116,22 +116,28 @@ read-only pass inspect the repository checkout, still with no GitHub token.
   `reported_model`.
 - Auto-improve before asking (`#3190`, `active` mode only): when an issue's
   current card has class `improve` and no auto-improve comment has been posted
-  since the latest trusted human comment, start at most one bounded read-only
-  repo-inspection job (`improveCommand`: Codex `exec --ignore-user-config
-  --sandbox read-only --ephemeral` in `cwd: state.cwd`, or Claude `-p --safe-mode
-  --permission-mode plan --tools "Read,Glob,Grep"` in `cwd: state.cwd`, still
-  with `cardEnvironment` stripping every GitHub token). `readImprovement` parses
-  `{outcome: "ready" | "person", reason, areas, reproduction, acceptance_criteria,
-  size, group_with, question, model}`. When `outcome` is `ready`, post one
-  structured spec-refinement comment with hidden marker
-  `<!-- pdd:autopilot-intake:improve:N:VERSION -->` and promote the saved card to
-  `ready` for the updated issue state (tracking both pre- and post-comment
-  versions and human comment digest so Autopilot never loops on its own comment).
-  When `outcome` is `person` (only for a genuine human product, money, access or
-  contract choice), post one concise question comment with
-  `<!-- pdd:autopilot-core:question:N:intake-VERSION -->`, add label
+  since the latest trusted human comment or issue title/body edit, start at most
+  one bounded read-only repo-inspection job (`improveCommand`: Codex
+  `exec --ignore-user-config --sandbox read-only --ephemeral` in `cwd: state.cwd`,
+  or Claude `-p --safe-mode --permission-mode plan --tools "Read,Glob,Grep"` in
+  `cwd: state.cwd`, still with `cardEnvironment` stripping every GitHub token).
+  `readImprovement` parses `{outcome: "ready" | "person", reason, areas,
+  reproduction, acceptance_criteria, size, group_with, question, model}`. When
+  `outcome` is `ready`, post one structured spec-refinement comment with hidden
+  marker `<!-- pdd:autopilot-intake:improve:N:VERSION:BODYKEY -->` and promote the
+  saved card to `ready` for the updated issue state (tracking pre- and post-comment
+  versions and human/body digests so Autopilot never loops on its own comment,
+  passing trusted spec-refinement comments into active `cardPrompt` as
+  `spec_refinement` so another machine or rebuilt `cards/` also grades `#N` as
+  `ready`, and reconciling `prevImproved` across non-human version bumps strictly
+  for `ready` cards, never `person` cards). When `outcome` is `person` (only for a
+  genuine human product, money, access or contract choice), post one concise
+  question comment with
+  `<!-- pdd:autopilot-core:question:N:intake-VERSION:BODYKEY -->`, add label
   `pdd:needs-decision`, trigger one `decision` alert via `ports.alert`, and park
-  the card as `person` until a human replies and removes `pdd:needs-decision`.
+  the card as `person` until a human replies, edits the issue, or removes
+  `pdd:needs-decision` (passing trusted label-removal approval into active
+  evaluation when `pdd:needs-decision` is removed without a comment).
 - Each card names the agent kind and the configured model, and a finished card its
   `seconds`. A card job that ends with no valid card, runs longer than 20 minutes
   (it is stopped) or cannot be read for 20 minutes saves an error card; the issue

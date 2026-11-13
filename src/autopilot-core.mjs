@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 775a788a3471c4732b507c0b42b476ab853473b12bae1fd1baf6b518962dfc75).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 773e85f293700d4cb93f04c4372c20632fcb87e27b707f771b7e8588c3c43669).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,7 +13,7 @@ import { runtimePreflightSlice } from './runtime-seam.mjs';
 import { findOwners, promptHeaderHash, resolveOwners } from './file-owner.mjs';
 import { readPromptApprovals } from './approval-policy.mjs';
 import { intakeTick, collectActiveIntake, activeReadyCards, rankReadyRows, intakeMode } from './autopilot-intake.mjs';
-import { issueAreas, areasOverlap, groupReadyIssues, normalizeAreaList } from './autopilot-areas.mjs';
+import { issueAreas, areasOverlap, groupReadyIssues, normalizeAreaList, parseGitHubIssueUrl } from './autopilot-areas.mjs';
 import { slotCount, GUARD } from './machine-guard.mjs';
 
 const { interfaceBlocks, readPrompt, promptRefusal, gitFiles } = runtimePreflightSlice();
@@ -185,6 +185,15 @@ function readJobs(fs, root) {
 }
 const jobIssues = job => Array.isArray(job?.issues) && job.issues.length ? job.issues : [job.issue];
 const jobCompanions = job => Array.isArray(job?.companions) ? job.companions : [];
+function setJobCompanions(job, kept) {
+  if (kept.length) {
+    job.companions = kept;
+    job.issues = [job.issue, ...kept.map(c => c.issue)];
+  } else {
+    delete job.companions;
+    delete job.issues;
+  }
+}
 // Slots come only from this engine's own job files. A job holds a slot while its process runs or its outcome
 // (merge check or END decision) is not yet handled; a job that only finishes its END writes holds none.
 // A job whose Runtime step waits for the interpreter maintenance runs no process: it holds no slot (#3241).
@@ -632,7 +641,18 @@ ${RESULT_RULES(result, ctx, allowNotReproduced)}
 `;
 };
 // T10: the open issues that a job can see, so that an open decision is never chosen silently.
-const issueNumbers = (text, repo) => new Set([...String(text).matchAll(new RegExp(`(?:^|[^\\w/#])(?:${escape(repo)})?#(\\d+)\\b|github\\.com/${escape(repo)}/issues/(\\d+)`, 'gi'))].map(m => Number(m[1] ?? m[2])));
+function issueNumbers(text, repo) {
+  const s = String(text ?? ''), want = String(repo ?? '').toLowerCase(), out = new Set();
+  for (const m of s.matchAll(/(?:https?:\/\/|(?<![/\w.:@-])github\.com\/)[^\s<>)"'`]+/gi)) {
+    const parsed = parseGitHubIssueUrl(m[0]);
+    if (parsed && parsed.repository === want) out.add(parsed.issue);
+  }
+  const withoutUrls = s.replace(/https?:\/\/[^\s<>)"'`]+/gi, ' ');
+  for (const m of withoutUrls.matchAll(new RegExp(`(?<![\\w/#.-])(?:${escape(repo)})?#([1-9]\\d*)\\b`, 'gi'))) {
+    out.add(Number(m[1]));
+  }
+  return out;
+}
 const otherOpen = (rows, job) => { const members = new Set(jobIssues(job)); return rows.filter(row => !row.pull_request && !members.has(row.number) && (row.state ?? 'open') === 'open'); };
 const issueBlock = row => `Issue #${row.number}: ${oneLine(row.title, 200)}\n<<<\n${String(row.body ?? '').slice(0, 2000)}\n>>>`;
 // The review: trusted open issues that the issue or the PR body names by number, or that name a changed file by its
@@ -3168,6 +3188,11 @@ async function runtimeNotRunReport(ctx, job) {
   const filed = await report(ctx, job, why, job.role);
   job.runtimeReport = { key, state: filed?.state ?? null, fingerprint: filed?.fingerprint ?? null, ref: filed?.ref ?? null }; ctx.saveJob(job);
 }
+async function ownsCompanion(ctx, comp) {
+  if (!comp?.claim || ctx.now() - comp.claim.lastSeen >= CLAIM_EXPIRES) return false;
+  const claim = await confirmClaim(ctx, comp).catch(() => null);
+  return Boolean(claim?.active && !claim.expired && ctx.owns(claim, comp));
+}
 // Observe mode: the PR passed every check. Keep it open and ready for review, release the claim (no issue comment,
 // no label) and record "would-merge": validation passed, not merged. The ready rule skips the issue from then on.
 async function wouldMerge(ctx, job, pr) {
@@ -3179,11 +3204,15 @@ async function wouldMerge(ctx, job, pr) {
   await gh.ok('POST', `repos/${repo}/issues/${job.issue}/labels`, { labels: [WOULD_MERGE] });
   const removed = await gh.call('DELETE', `repos/${repo}/issues/${job.issue}/labels/${encodeURIComponent('pdd:working')}`);
   if (removed.status >= 300 && removed.status !== 404) throw Error(`GitHub DELETE label returned ${removed.status}`);
+  const keptCompanions = [];
   for (const comp of jobCompanions(job)) {
+    if (!await ownsCompanion(ctx, comp)) continue;
+    keptCompanions.push(comp);
     if (comp.claim?.commentId) await gh.call('DELETE', `repos/${repo}/issues/comments/${comp.claim.commentId}`).catch(() => {});
     await gh.ok('POST', `repos/${repo}/issues/${comp.issue}/labels`, { labels: [WOULD_MERGE] }).catch(() => {});
     await gh.call('DELETE', `repos/${repo}/issues/${comp.issue}/labels/${encodeURIComponent('pdd:working')}`).catch(() => {});
   }
+  if (keptCompanions.length !== jobCompanions(job).length) setJobCompanions(job, keptCompanions);
   ctx.counts.wouldMerge++; ctx.produced();
   return finishLocal(ctx, job, 'would-merge', `observe mode: PR #${job.pr} passed every check at ${short(job.head)}; not merged`);
 }
@@ -3289,7 +3318,15 @@ async function finishMerge(ctx, job, read = null) {
   const { gh, repo } = ctx;
   if (!(read ?? await gh.ok('GET', `repos/${repo}/pulls/${job.pr}`)).merged) { Object.assign(job, { lastError: 'the merge is not confirmed', lastErrorStep: 'merge' }); ctx.saveJob(job); return; }
   job.lane = null; ctx.laneFreed = true; ctx.saveJob(job);
-  for (const member of jobIssues(job)) {
+  const closeMembers = [job.issue];
+  const keptCompanions = [];
+  for (const comp of jobCompanions(job)) {
+    if (!await ownsCompanion(ctx, comp)) continue;
+    keptCompanions.push(comp);
+    closeMembers.push(comp.issue);
+  }
+  if (keptCompanions.length !== jobCompanions(job).length) setJobCompanions(job, keptCompanions);
+  for (const member of closeMembers) {
     const issue = await gh.ok('GET', `repos/${repo}/issues/${member}`);
     if (issue.state === 'open') await gh.ok('PATCH', `repos/${repo}/issues/${member}`, { state: 'closed', state_reason: 'completed' });
     if (labelsOf(issue).includes('pdd:working')) await gh.call('DELETE', `repos/${repo}/issues/${member}/labels/${encodeURIComponent('pdd:working')}`);
@@ -3715,9 +3752,14 @@ async function report(ctx, job, why, step) {
   return fileReport({ cause: why, mode: ctx.settings.report, root: ctx.ports.reportRoot ?? join(ctx.root, 'reports'), machine: ctx.state.machine, step, words: [ctx.repo, owner, name], runtimeRepo: ctx.settings.runtimeRepo, runtimeOwner: ctx.settings.runtimeOwner,
     versions: { pdd: ctx.ports.version, node: process.version, platform: process.platform, agent: ctx.state.agent?.kind } }, { gh: ctx.ports.gh, now: ctx.now, warn: ctx.warn, fs: ctx.fs });
 }
+async function releaseCompanionIfNotLost(ctx, comp) {
+  const claim = await ctx.readClaim(comp.issue).catch(() => null);
+  if (ctx.lost(claim, comp)) return;
+  await undoClaim(ctx, comp.issue, comp.claim);
+}
 async function releaseCompanions(ctx, job) {
   for (const comp of jobCompanions(job)) {
-    try { await undoClaim(ctx, comp.issue, comp.claim); }
+    try { await releaseCompanionIfNotLost(ctx, comp); }
     catch (error) { ctx.warn(`Autopilot core could not release companion #${comp.issue}: ${error.message}`); }
   }
 }
@@ -4171,14 +4213,14 @@ export async function tickCore(input, ports) {
       const kept = [];
       let dropped = false;
       for (const comp of jobCompanions(job)) {
-        if (stopReason(open.get(comp.issue))) {
+        const expired = !comp.claim || ctx.now() - comp.claim.lastSeen >= CLAIM_EXPIRES;
+        if (expired || stopReason(open.get(comp.issue))) {
           dropped = true;
-          await undoClaim(ctx, comp.issue, comp.claim).catch(error => ctx.warn(`Autopilot core companion #${comp.issue}: ${error.message}`));
+          await releaseCompanionIfNotLost(ctx, comp).catch(error => ctx.warn(`Autopilot core companion #${comp.issue}: ${error.message}`));
         } else kept.push(comp);
       }
       if (dropped) {
-        if (kept.length) { job.companions = kept; job.issues = [job.issue, ...kept.map(c => c.issue)]; }
-        else { delete job.companions; delete job.issues; }
+        setJobCompanions(job, kept);
         ctx.saveJob(job);
       }
     }
@@ -4195,10 +4237,30 @@ export async function tickCore(input, ports) {
       const beat = await ctx.heartbeat(job);
       let saved = false;
       if (beat?.state === 'refreshed') { job.claim.lastSeen = ctx.now(); saved = true; }
+      const keptCompanions = [];
       for (const comp of jobCompanions(job)) {
-        if (!comp.claim || ctx.now() - comp.claim.lastSeen >= CLAIM_EXPIRES) continue;
+        if (!comp.claim || ctx.now() - comp.claim.lastSeen >= CLAIM_EXPIRES) {
+          await releaseCompanionIfNotLost(ctx, comp).catch(() => {});
+          saved = true;
+          continue;
+        }
+        const compClaim = await confirmClaim(ctx, comp);
+        if (ctx.lost(compClaim, comp)) {
+          saved = true;
+          continue;
+        }
+        if (!compClaim?.active || compClaim.expired || !ctx.owns(compClaim, comp)) {
+          await releaseCompanionIfNotLost(ctx, comp).catch(() => {});
+          saved = true;
+          continue;
+        }
         const compBeat = await ctx.heartbeat({ issue: comp.issue, claim: comp.claim }).catch(() => null);
         if (compBeat?.state === 'refreshed') { comp.claim.lastSeen = ctx.now(); saved = true; }
+        keptCompanions.push(comp);
+      }
+      if (keptCompanions.length !== jobCompanions(job).length) {
+        setJobCompanions(job, keptCompanions);
+        saved = true;
       }
       if (saved) ctx.saveJob(job);
     } catch (error) { ctx.warn(`Autopilot core heartbeat of #${job.issue} deferred: ${error.message}`); }

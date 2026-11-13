@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-areas.prompt.md (sha256: 8eb9fa135100da8394e52ed9deecd1ba95fb248653860de00d98a8b1cb0e1c19).
+// Generated from prompts/cli/autopilot-areas.prompt.md (sha256: e4e99e1d9eecf43628faca7769f7bcdee3d524cac298de50f6551ef7502635e9).
 const login = x => typeof x === 'string' && /^[a-z\d](?:[a-z\d-]{0,38})$/i.test(x);
 const repo = x => typeof x === 'string' && /^[\w.-]+\/[\w.-]+$/.test(x);
 const owner = x => x === 'autopilot' || login(x) || typeof x === 'string' && x.startsWith('repo:') && repo(x.slice(5));
@@ -89,11 +89,32 @@ function areaLabelsOf(row) {
     .filter(name => /^area:\s*\S+/i.test(name)).map(name => `area:${name.slice(5).trim().toLowerCase()}`);
 }
 
+export function parseGitHubIssueUrl(raw) {
+  if (typeof raw !== 'string') return null;
+  const trimmed = stripCtl(raw).trim().replace(/[.,;:!?)'"\]]+$/, '');
+  const candidate = /^https?:\/\//i.test(trimmed)
+    ? trimmed
+    : /^github\.com\//i.test(trimmed) ? `https://${trimmed}` : null;
+  if (!candidate) return null;
+  try {
+    const parsed = new URL(candidate);
+    if ((parsed.protocol !== 'https:' && parsed.protocol !== 'http:')
+      || parsed.hostname.toLowerCase() !== 'github.com'
+      || parsed.username || parsed.password || parsed.port) return null;
+    const m = /^\/([\w.-]+\/[\w.-]+)\/issues\/([1-9]\d*)\/?$/.exec(parsed.pathname);
+    if (!m) return null;
+    const issue = Number(m[2]);
+    return Number.isSafeInteger(issue) ? { repository: m[1].toLowerCase(), issue } : null;
+  } catch {
+    return null;
+  }
+}
+
 function textPathsOf(text) {
-  const s = String(text ?? '').slice(0, 32000), out = [];
-  for (const m of s.matchAll(/(?<![/\w.-])([\w.-]+(?:\/[\w.-]+)+(?:\.[A-Za-z0-9]{1,8})?)(?![\w/-])/g)) {
-    const p = m[1];
-    if (!p.startsWith('http') && !p.includes('github.com') && !/^\d+\.\d+/.test(p)) out.push(p);
+  const withoutUrls = String(text ?? '').slice(0, 32000).replace(/https?:\/\/[^\s<>)"'`]+/gi, ' ');
+  const out = [];
+  for (const m of withoutUrls.matchAll(/(?<![/\w.:-])((?:\.[\w-]+|[A-Za-z_][\w-]*)(?:\/[\w.-]+)+(?:\.[A-Za-z0-9]{1,8})?)(?![\w/-])/g)) {
+    out.push(m[1].replace(/\.+$/, ''));
   }
   return out;
 }
