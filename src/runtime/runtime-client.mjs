@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: cde4f3261a63931d5156780b6cbf56668a1d6f241ee334b51ee12105a5dec5ee).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 8b2b24d0a25d68348d1c754a89d9bb5ebe7cb03e597328aa27fb452b938ef98d).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
@@ -2451,7 +2451,7 @@ function runFiles(cwd, words, options, ports) {
   const broken = rows.filter(row => row.unsent && row.refusals.length), exitCode = broken.length ? 4 : 0;
   const summary = `${capture.files.length} files, ${formatSize(capture.bytes)} (${capture.bytes} bytes). ${otherFiles(capture.files, found).length} of them are not prompt, story or test files.${broken.length ? ` ${broken.length} tests could not run.` : ''}`;
   if (options['--json']) {
-    line(ports.stdout, JSON.stringify({repo:root,exit_code:exitCode,summary_line:summary,rows:[...rows.filter(row=>row.unsent).map(row=>({...row,...resultOutcome(row)})),...rows.filter(row=>!row.unsent)],files:capture.files,coverage,...(advice.length ? {warnings:advice} : {})}));
+    line(ports.stdout, JSON.stringify({repo:root,exit_code:exitCode,summary_line:summary,source_sha256:capture.sha256 ?? null,rows:[...rows.filter(row=>row.unsent).map(row=>({...row,...resultOutcome(row)})),...rows.filter(row=>!row.unsent)],files:capture.files,coverage,...(advice.length ? {warnings:advice} : {})}));
     return exitCode;
   }
   for (const row of broken) for (const problem of row.refusals) {
@@ -2464,6 +2464,7 @@ function runFiles(cwd, words, options, ports) {
   for(const read of capture.reads??[])line(ports.stderr,`Local read (${read.roles.join(', ')}, not uploaded): ${read.path}`);
   for (const file of capture.files) line(ports.stdout, `  ${(file.path + (file.target ? ` -> ${file.target}` : '')).padEnd(width)}  ${file.size} bytes`);
   line(ports.stdout, summary);
+  if (capture.sha256) line(ports.stdout, `Source SHA-256: ${capture.sha256}`);
   line(ports.stderr, coverageText(coverage));
   return exitCode;
 }
@@ -4483,7 +4484,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (link && !options['--new']) {
         if (!record.storyPath && record.story !== test.story) throw new Stop(4, 'The original Try story changed. Restore its test file, or use --new to start a new Try.');
         context.seedTest.storyPath = record.storyPath ?? test.storyPath;
-        return await showTry(context, test, link, options, record.id, true, answer?.result?.session);
+        return await showTry(context, test, link, options, record.id, true, answer?.result?.session, answer, record);
       }
       if (!link && answer?.state === 'passed' && LIVE_SESSION.has(answer.result?.session?.state) && !options['--new']) throw new Stop(3, refusedLink(answer, origin));
       // A Try that may still start or run is never made twice by accident.
@@ -4532,8 +4533,9 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (registered === false) { await finishReservation(context, setup, { state: 'not_run' }); throw new Stop(3, context.interrupted ? 'Stopped before sending.' : 'Stopped before the Try was sent.'); }
       if (context.interrupted || ports.now() >= context.deadline) { await finishReservation(context, setup, { state: 'not_run' }); throw new Stop(3, context.interrupted ? 'Stopped before sending.' : 'Stopped before the Try was sent.'); }
       const uploadedSeed=capture.sources.find(file=>file.path===test.path);
-      store.saveRepo(root, { ...repoState, tries: { ...repoState.tries, [test.path]: { id: request.requestId, ...setup, story: test.story, storyPath: test.storyPath, title: test.title, origin, login: identity.login, ...(!productSetup && !words.length ? { simulation_scope: { tests: selected.map(item => item.path), appMap, appMapHash: appMap ? sha256(capture.sources.find(file => file.path === appMap).bytes) : null } } : {}), seed_scenario: uploadedSeed ? JSON.parse(uploadedSeed.bytes.toString('utf8')) : test.doc, story_sha256: createHash('sha256').update(readFileSync(join(root, test.storyPath))).digest('hex'), prompt_hashes: capture.raw_prompt_hashes,
-        effective_prompt_hashes:Object.fromEntries(capture.sources.filter(file=>file.path.endsWith('.prompt.md')).map(file=>[file.path,sha256(file.bytes)])),contract_references:capture.references, ...(productSetup?{product_setup:productSetup,product_parts:prepared.composition.product_parts}:{}) } } });
+      const tryRecord = { id: request.requestId, ...setup, story: test.story, storyPath: test.storyPath, title: test.title, origin, login: identity.login, source_sha256: capture.sha256, ...(!productSetup && !words.length ? { simulation_scope: { tests: selected.map(item => item.path), appMap, appMapHash: appMap ? sha256(capture.sources.find(file => file.path === appMap).bytes) : null } } : {}), seed_scenario: uploadedSeed ? JSON.parse(uploadedSeed.bytes.toString('utf8')) : test.doc, story_sha256: createHash('sha256').update(readFileSync(join(root, test.storyPath))).digest('hex'), prompt_hashes: capture.raw_prompt_hashes,
+        effective_prompt_hashes:Object.fromEntries(capture.sources.filter(file=>file.path.endsWith('.prompt.md')).map(file=>[file.path,sha256(file.bytes)])),contract_references:capture.references, ...(productSetup?{product_setup:productSetup,product_parts:prepared.composition.product_parts}:{}) };
+      store.saveRepo(root, { ...repoState, tries: { ...repoState.tries, [test.path]: tryRecord } });
       store.posted(context.folder, request.requestId);
       line(ports.stderr, `Starting your Try: sending ${capture.files.length} files, ${formatSize(capture.bytes)}${note ? ` ${note}` : ''}…`);
       reply = await context.runtime.post('/v1/try', request, capture.tar, Math.max(1, Math.min(ports.postMs, context.deadline - ports.now())));
@@ -4566,7 +4568,15 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       const cap = done.answer?.result?.session?.max_calls;
       if (Number.isSafeInteger(cap) && cap !== request.max_calls) throw new Stop(5, `The interpreter confirmed a budget of ${cap} calls instead of the requested ${request.max_calls}. This Try is kept; its saved data was not reset.`);
       if (requestedBudget !== null && !Number.isSafeInteger(cap)) throw new Stop(3, 'The interpreter did not confirm the requested Try budget. The same Try is kept; read it again without changing its budget.');
-      return await showTry(context, test, link, options, request.requestId, false, done.answer?.result?.session);
+      const confirmedEngine = validEngineHex(done.answer?.engine_sha);
+      if (confirmedEngine) {
+        const currentRepo = store.repo(root);
+        if (currentRepo.tries?.[test.path]?.id === request.requestId) {
+          currentRepo.tries[test.path].engine_sha = confirmedEngine;
+          store.saveRepo(root, currentRepo);
+        }
+      }
+      return await showTry(context, test, link, options, request.requestId, false, done.answer?.result?.session, done.answer, store.repo(root).tries?.[test.path]);
     }
     if (stepTimeLimit(done.answer, { steps: row.steps, secrets: context.secrets })) { applyAnswer(row, done.answer, context); return printTryProblem(context, row); }
     if (done.answer?.state === 'unknown' || (done.answer?.state === 'passed'
@@ -4716,13 +4726,20 @@ function printTryProblem(context, row) {
   return exitCode;
 }
 
-async function showTry(context, test, link, options, tryId, reused = false, session) {
+const validSha256Hex = value => typeof value === 'string' && /^[0-9a-f]{64}$/i.test(value) ? value.toLowerCase() : null;
+const validEngineHex = value => typeof value === 'string' && /^[0-9a-f]{8,40}$/i.test(value) ? value.toLowerCase() : null;
+
+async function showTry(context, test, link, options, tryId, reused = false, session, answer = null, record = null) {
   if (context.typedForm) line(context.ports.stderr, "This Story's operation takes typed input, so it opens on the Form tab.");
   const budget = Number.isSafeInteger(session?.max_calls) && session.max_calls > 0 && Number.isSafeInteger(session?.remaining_calls)
     && session.remaining_calls >= 0 && session.remaining_calls <= session.max_calls
     ? `Try budget ${session.max_calls} calls; ${session.remaining_calls} remaining. You are charged only for calls that run.`
     : 'The interpreter did not report this Try’s budget.';
-  line(options['--cli'] || options['--serve'] !== undefined ? context.ports.stderr : context.ports.stdout, budget);
+  const stream = options['--cli'] || options['--serve'] !== undefined ? context.ports.stderr : context.ports.stdout;
+  line(stream, budget);
+  const sourceSha = validSha256Hex(answer?.source_sha256) ?? validSha256Hex(record?.source_sha256) ?? (!reused ? validSha256Hex(context.capture?.sha256) : null);
+  const engineSha = validEngineHex(answer?.engine_sha) ?? validEngineHex(record?.engine_sha);
+  if (sourceSha) line(stream, `Try source: sha256:${sourceSha}${engineSha ? `; engine: ${engineSha}` : ''}`);
   if (options['--cli'] || options['--serve'] !== undefined) {
     const doors = await import('./try-doors.mjs');
     return options['--cli'] ? doors.openCli(context, test, tryId, options) : (await import('./try-http.mjs')).openServe(context, test, tryId, options);
@@ -5334,7 +5351,9 @@ export async function readTryOwner({ cwd = process.cwd(), story } = {}, givenPor
   }
   if (metadata.status !== 200 || !Array.isArray(metadata.json?.entries)) throw new Error(cleanText(metadata.json?.error?.message || `The Try model could not be read${metadata.status ? ` (HTTP ${metadata.status})` : ''}. Read this Try again; no new run was sent.`, [identity.token]));
   const state = await runtime.send(`/v1/try/${record.id}/state`, { method: 'GET' }, GET_MS);
-  return { root, test: record.seed_scenario ? { ...test, doc: record.seed_scenario } : test, record, model: metadata.json, actions: Array.isArray(state.json?.actions) ? state.json.actions : null,
+  const source_sha256 = validSha256Hex(metadata.json?.source_sha256) ?? validSha256Hex(record?.source_sha256) ?? null;
+  const engine_sha = validEngineHex(metadata.json?.engine_sha) ?? validEngineHex(record?.engine_sha) ?? null;
+  return { root, test: record.seed_scenario ? { ...test, doc: record.seed_scenario } : test, record, model: metadata.json, source_sha256, engine_sha, actions: Array.isArray(state.json?.actions) ? state.json.actions : null,
     ...(state.status === 200 && Object.hasOwn(state.json ?? {}, 'world') ? { data: state.json.world } : { data_error: `Current saved data unavailable${state.status ? ` (HTTP ${state.status})` : ''}; no initial data was substituted.` }) };
 }
 
