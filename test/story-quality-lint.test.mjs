@@ -70,6 +70,20 @@ test('3362 lintStory accepts clean user-observable Stories, Rules to check, comm
   ]);
   assert.equal(batch.ok, true);
   assert.deepEqual(batch.problems, []);
+
+  // Framework/domain names, narrowed roles, quoted UI literals, grounded outcomes and short sample tokens do not false-fail.
+  const nuancedClean = [
+    '# Save storefront settings on shop.rs',
+    '',
+    'As a user of a Next.js storefront on https://shop.rs/admin, I want to save settings with Node.js, Chart.js and p5.js previews, so that updates go live.',
+    '',
+    '## Acceptance criteria',
+    '',
+    '1. Clicking Save shows "Saved correctly" with coupon code `deadbeefcafe` and exits with code 0.',
+    "2. When offline, the page recovers gracefully by showing 'Offline'.",
+  ].join('\n');
+  const nuancedRes = lintStory(nuancedClean, { path: 'user_stories/storefront-settings.md' });
+  assert.equal(nuancedRes.ok, true, formatStoryLint(nuancedRes));
 });
 
 test('3362 lintStory flags implementation paths, code internals, raw hashes/UUIDs, generic roles and vague criteria', () => {
@@ -299,7 +313,21 @@ test('3362 workflow Story gate and workflow approve refuse test-prompt ownership
   );
   assert.equal(approved.exitCode, 0, approved.message);
 
-  // 7. findTestPromptViolations never opens non-Git-visible files.
+  // 7. Post-approval edits adding Story plumbing or prompts/test/*.prompt.md are still caught before PR 1 opens.
+  assert.equal((await callDone('prompts')).exitCode, 0);
+  writeFileSync(join(run.root, 'prompts/test/post.prompt.md'), '# Post-approval test prompt\n');
+  const postTestPrompt = await callDone('check');
+  assert.equal(postTestPrompt.exitCode, 1);
+  assert.match(postTestPrompt.message, /Error: misplaced test prompt: prompts\/test\/post\.prompt\.md/);
+  unlinkSync(join(run.root, 'prompts/test/post.prompt.md'));
+
+  writeFileSync(join(run.root, 'user_stories/place-order.md'), '# Place order in src/order.mjs\n\nAs a user, I want it.\n\n## Acceptance criteria\n\n1. Works correctly.\n');
+  const postStoryEdit = await callDone('check');
+  assert.equal(postStoryEdit.exitCode, 1);
+  assert.match(postStoryEdit.message, /Story quality check failed:/);
+  cpSync(join(harborDir, 'user_stories/place-order.md'), join(run.root, 'user_stories/place-order.md'));
+
+  // 8. findTestPromptViolations never opens non-Git-visible files.
   const check = findTestPromptViolations({ root: run.root, promptPaths: [PLACE], checkPaths: [] });
   assert.equal(check.ok, true);
 });

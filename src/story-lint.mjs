@@ -1,15 +1,18 @@
-// Generated from prompts/cli/story-lint.prompt.md (sha256: 570e724b7d9776a70d00d7cff8f72b286437922c472e646f1e1e792b7d4df369).
+// Generated from prompts/cli/story-lint.prompt.md (sha256: b2b6ca9fa92cf0d7e57ddc86db6f2f16fb8e05c81ad0e960429effad4c55dc8a).
 import { isAbsolute } from 'node:path';
 
-const IMPL_DIR = /(?:^|[\s"'(\[`])((?:src|lib|dist|build|internal|pkg|cmd|__tests__)\/[A-Za-z0-9_./-]+|prompts\/(?:cli|tests?|__tests__)\/[A-Za-z0-9_./-]+)/;
+const IMPL_DIR = /(?:^|[\s"'(\[`])((?:src|lib|internal|pkg|cmd|__tests__)\/[A-Za-z0-9_./-]+|(?:dist|build)\/[A-Za-z0-9_./-]*[./][A-Za-z0-9_./-]+|prompts\/(?:cli|tests?|__tests__)\/[A-Za-z0-9_./-]+)/;
 const RUNNER_CMD = /(["`])\s*(?:node|npm|pnpm|yarn|pytest|cargo|go)\s+[^"`\r\n]+\1/g;
-const CODE_EXT = /\b((?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.(?:mjs|cjs|js|ts|tsx|jsx|py|rs|go|java|kt|rb|php|cs|cpp|cc|c|hpp|h|swift))\b/;
+const URL_SPAN = /https?:\/\/\S+/gi;
+const CODE_EXT = /(?:^|[\s"'(\[`])((?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.(?:mjs|cjs|js|ts|tsx|jsx|py|rs|go|java|kt|rb|php|cs|cpp|cc|c|hpp|h|swift)|[A-Za-z0-9_.-]+\.(?:mjs|cjs|ts|tsx|jsx)|(?:test_[A-Za-z0-9_.-]+|[A-Za-z0-9_.-]+(?:_test|\.(?:test|spec)))\.(?:mjs|cjs|js|ts|tsx|jsx|py|rs|go|java|kt|rb|php|cs|cpp|cc|c|hpp|h|swift))\b/;
 const CODE_SYNTAX = /\b(?:export\s+(?:async\s+)?(?:function|const|class|default)\b|async\s+function\b|function\s+[A-Za-z_$][\w$]*\s*\()|\s=>\s/;
 const CALL_SIG = /\b(?:[a-z]+[A-Z][\w$]*\s*\([^)\r\n]*\)|[a-z]+_[a-z0-9_]*\s*\(\s*[A-Za-z_$][\w$]*\s*,[^)\r\n]*\))/;
 const CODE_TERMS = /\b(?:AST|Abstract Syntax Tree|bit-flips?|bit-flipping|bitmasks?|0x[0-9a-fA-F]{2,}|Uint8Array|Int32Array|Float64Array|ArrayBuffer|Buffer\.from|RegExp|process\.exit|child_process|fs\.(?:read|write|lstat|stat|open|exists)\w*|TypeError|ReferenceError|SyntaxError)\b/;
 const RAW_DIGEST = /\b(?:sha256:\s*[a-f0-9]{7,}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[a-f0-9]{64}|[a-f0-9]{40})\b/i;
-const GENERIC_ROLE = /\bAs (?:a|an|the) (?:(?:end[- ])?user|system)\b/i;
-const VAGUE_CRITERION = /\b(?:works?\s+correctly|handled?\s+gracefully|properly\s+handled|as\s+expected|seamlessly|gracefully|correctly)\b/i;
+const GENERIC_ROLE = /\bAs\s+(?:a|an|the)\s+(?:(?:end[- ])?user|system|caller)(?=\s*(?:[,;.]|$|\bI\s+(?:want|can|need)\b))/i;
+const UI_LITERAL = /"[^"\r\n]+"|(?<![A-Za-z0-9])'[^'\r\n]+'(?![A-Za-z0-9])/g;
+const GROUNDED_OUTCOME = /\b(?:exits?\s+with\s+(?:code|status)\s+\d+|HTTP\s+\d{3}|status\s+(?:code\s+)?\d+|\d+\s+times?|saves\s+nothing)\b/i;
+const VAGUE_CRITERION = /\b(?:works?\s+correctly|handled?\s+gracefully|properly\s+handled|as\s+expected|seamlessly|gracefully|properly|correctly)\b/i;
 
 const canonicalStoryPath = value => typeof value === 'string' && value.trim().length > 0 && value.length <= 1000 && !isAbsolute(value)
   && !/[\\\x00-\x1f\x7f]/.test(value) && !value.split('/').some(part => !part || part === '.' || part === '..' || part.toLowerCase() === '.git');
@@ -28,13 +31,23 @@ const trimExcerpt = line => {
 function findImplPath(line) {
   const dir = IMPL_DIR.exec(line);
   if (dir) return dir[1].replace(/[.,;:!?)]+$/, '');
-  const ext = CODE_EXT.exec(line.replace(RUNNER_CMD, ' '));
+  const ext = CODE_EXT.exec(line.replace(RUNNER_CMD, ' ').replace(URL_SPAN, ' '));
   return ext ? ext[1] : null;
 }
 
 function findCodeInternals(line) {
   const match = CODE_SYNTAX.exec(line) ?? CALL_SIG.exec(line) ?? CODE_TERMS.exec(line);
   return match ? match[0].trim() : null;
+}
+
+function findVagueCriterion(line) {
+  const withoutCmds = line.replace(RUNNER_CMD, ' ');
+  const unquoted = withoutCmds.replace(UI_LITERAL, ' ');
+  const match = VAGUE_CRITERION.exec(unquoted);
+  if (!match) return null;
+  UI_LITERAL.lastIndex = 0;
+  if (UI_LITERAL.test(withoutCmds) || GROUNDED_OUTCOME.test(unquoted)) return null;
+  return match[0];
 }
 
 export function lintStory(text, { path = 'user_stories/story.md' } = {}) {
@@ -65,7 +78,7 @@ export function lintStory(text, { path = 'user_stories/story.md' } = {}) {
       `Generic role "${role}" hides who uses the behavior. Name a real person or role (for example "As a customer", "As a shop owner" or "As a developer who runs pdd test").`);
 
     if (activeSection === 'criteria') {
-      const vague = VAGUE_CRITERION.exec(line)?.[0];
+      const vague = findVagueCriterion(line);
       if (vague) push('story-vague-criterion',
         `Vague phrase "${vague}" cannot be checked directly. State the exact output, message, state change or exit code that shows it worked.`);
     }
