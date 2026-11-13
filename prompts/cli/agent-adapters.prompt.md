@@ -2,7 +2,7 @@
 
 Own `src/agent-adapters.mjs`: PDD's local agent CLI discovery, shared credential-status interpretation, and direct subprocess runner (`agents.list` and `agents.run`). Simulator chat turns (`askAgent`, response parsing, fill validation, and temporary read-only overlays) live in [Simulator agent turn](agent-ask.prompt.md).
 
-Export asynchronous `discoverAgents({cwd,env,run,definitions,workspace})`, pure `parseAgentAuthStatus({agent,result})`, and `runAgentProcess(command,args,{cwd,env,input='',signal,timeoutMs=120000,maxBytes=131072})`. `run(command,args,{cwd,env,input,signal,timeoutMs,maxBytes})` is a direct subprocess port without a shell returning `{code,stdout,stderr}`, with `runAgentProcess` as its default implementation; cancellation sends `SIGTERM` to the process group (falling back to the child) followed by `SIGKILL` after 500 ms, and enforces `timeoutMs` (`timeout`) and `maxBytes` (`output limit`).
+Export asynchronous `discoverAgents({cwd,env,run,definitions,workspace})`, pure `parseAgentAuthStatus({agent,result})`, `runAgentProcess(command,args,{cwd,env,input='',signal,timeoutMs=120000,maxBytes=131072})`, pure `resolveAgentStepLaunch({agent,definition,step,model,reasoningEffort,tiering,env})`, and asynchronous `runStepAgentProcess({agent,definition,step,args,model,reasoningEffort,tiering,cwd,env,input,signal,timeoutMs,maxBytes,run,now})`. `run(command,args,{cwd,env,input,signal,timeoutMs,maxBytes})` is a direct subprocess port without a shell returning `{code,stdout,stderr}`, with `runAgentProcess` as its default implementation; cancellation sends `SIGTERM` to the process group (falling back to the child) followed by `SIGKILL` after 500 ms, and enforces `timeoutMs` (`timeout`) and `maxBytes` (`output limit`).
 
 Discovery uses supplied private `definitions`, or loads them through [`loadAgentDefinitions`](agent-config.prompt.md) (defaults: Codex, Claude, and Gemini in that order). Return only metadata `{id,name,state,detail?}`, never `kind`, `command`, `env`, or raw auth output. States are `ready`, `available`, `signed_out`, `quota`, `not_installed`, and `error`. Check installation with `--help` and authentication with cheap status commands (10 s timeout, 128 KiB help cap, 16 KiB auth cap); never spend a model call or modify `process.env`. For custom definitions, `kind` selects the adapter (`codex`, `claude`, `gemini`) and `command` runs with a fresh child-only merge `{...env, ...overrides}`.
 
@@ -20,10 +20,17 @@ Discovery checks `--help` read-only capability flags first (`--sandbox` for Code
 
 The native process port classifies `ENOENT` conservatively with Boolean `error.executableMissing`. It is true only when `cwd` is an existing directory and `command` has no installed candidate on the exact effective search path. A missing `cwd`, a present executable with a missing shebang interpreter, a broken symlink, or an unreadable/uncertain lookup makes it false. Inspect only `cwd` and candidate installation metadata, never agent credential files, without invoking help, login, or a model, changing `PATH`, or exposing paths. Both discovery and workflow readiness report `not_installed` / missing only when `error.code === 'ENOENT' && error.executableMissing === true`.
 
+## Step launch tiering and telemetry
+
+`resolveAgentStepLaunch({agent,definition,step,model,reasoningEffort,tiering,env})` resolves `kind` (`definition?.kind ?? agent`), `command` (`definition?.command ?? kind`), and opt-in worker versus reviewer model and reasoning-effort CLI flags via [Autopilot telemetry](autopilot-telemetry.prompt.md) (`resolveStepModelTier` and `buildTieredAgentArgs`), returning `{agent,command,tier,model,reasoningEffort,args,tieringEnabled}` without mutating `process.env` or exposing private credentials. When `tiering` is absent or disabled, existing CLI flags are preserved (`args` carries only `["--model", model]` when `model` is explicitly passed).
+
+`runStepAgentProcess({agent,definition,step,args=[],model,reasoningEffort,tiering,cwd,env,input='',signal,timeoutMs=120000,maxBytes=131072,run=runAgentProcess,now=Date.now})` merges `{...env, ...definition?.env}` for the child only, executes `run(launch.command, [...launch.args, ...args], ...)`, measures wall-clock duration (`startedAt`, `endedAt`, `durationMs`), extracts normalized input/cached/output token counts from `stdout` via `extractHarnessTokens`, and returns `{...result, launch, telemetry: {phase, step, startedAt, endedAt, durationMs, tokens}}`.
+
 ## Dependencies
 
 - [Workspace authority](runtime-workspace.prompt.md): required generation/runtime context for bounded-workspace discovery refusal.
 - [Local agent configuration](agent-config.prompt.md): required generation context for `loadAgentDefinitions`.
+- [Autopilot telemetry](autopilot-telemetry.prompt.md): step-tier model and reasoning-effort routing, phase normalization, and cross-harness token extraction.
 
 ## Caller navigation
 

@@ -1,7 +1,7 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { discoverAgents } from '../src/agent-adapters.mjs';
+import { discoverAgents, resolveAgentStepLaunch, runStepAgentProcess } from '../src/agent-adapters.mjs';
 import { askAgent } from '../src/runtime-seam.mjs';
 const entries=[{entry:'prompts/tool.prompt.md#main',prompt_path:'prompts/tool.prompt.md',operation:'main',input_schema:{type:'object',properties:{argv:{type:'array',items:{type:'string'}}},required:['argv'],additionalProperties:false}}];
 const reply={say:'Ready to add it.',fill:{entry:entries[0].entry,input:{argv:['add','github','--tag','code']}}};
@@ -73,4 +73,18 @@ test('optional run requires negotiated capability and a valid manual applied fil
  }
  for(const requestKind of ['run','unknown'])assert.equal((await askAgent({agent:'claude',entries,supportsApply:true,supportsRun:true,context:{requestKind,message:'Run it'},run:fake(wanted)})).run,undefined);
  for(const extra of [{apply:false},{fill:null},{run:'yes'}])assert.equal((await askAgent({agent:'claude',entries,supportsApply:true,supportsRun:true,context:{message:'Run it'},run:fake({...wanted,...extra})})).run,undefined);
+});
+test('3154 & 3782 resolveAgentStepLaunch and runStepAgentProcess preserve defaults when tiering is off and measure phase time + tokens when enabled',async()=>{
+ const defaultLaunch=resolveAgentStepLaunch({agent:'codex',step:'intake',env:{}});
+ assert.equal(defaultLaunch.tieringEnabled,false);assert.deepEqual(defaultLaunch.args,[]);
+ const workerLaunch=resolveAgentStepLaunch({agent:'codex',step:'small-change',tiering:true,env:{}});
+ assert.equal(workerLaunch.tier,'worker');assert.equal(workerLaunch.tieringEnabled,true);assert.deepEqual(workerLaunch.args,['--model','gpt-5.4-mini','-c','model_reasoning_effort="medium"']);
+ const reviewerLaunch=resolveAgentStepLaunch({agent:'claude',step:'check',tiering:true,env:{}});
+ assert.equal(reviewerLaunch.tier,'reviewer');assert.deepEqual(reviewerLaunch.args,['--model','claude-opus-4-6','--effort','high']);
+ let tick=5000,seenCall;const parentEnv={HOME:'/person'};
+ const definition={id:'custom-codex',name:'Codex Worker',kind:'codex',command:'/local/codex-slot',env:{CODEX_HOME:'/private/slot',PDD_MODEL_TIERING:'1'}};
+ const out=await runStepAgentProcess({definition,step:'improve',args:['exec','--json','-'],env:parentEnv,now:()=>(tick+=1250),run:async(c,a,o)=>{seenCall=[c,a,o];return {code:0,stdout:JSON.stringify({type:'turn.completed',usage:{input_tokens:9000,cached_input_tokens:6000,output_tokens:750}}),stderr:''};}});
+ assert.equal(seenCall[0],'/local/codex-slot');assert.deepEqual(seenCall[1].slice(0,4),['--model','gpt-5.4-mini','-c','model_reasoning_effort="medium"']);
+ assert.equal(seenCall[2].env.CODEX_HOME,'/private/slot');assert.deepEqual(parentEnv,{HOME:'/person'});
+ assert.equal(out.telemetry.phase,'improve');assert.equal(out.telemetry.durationMs,1250);assert.equal(out.telemetry.tokens.inputTokens,9000);assert.equal(out.telemetry.tokens.cachedInputTokens,6000);assert.equal(out.telemetry.tokens.outputTokens,750);
 });

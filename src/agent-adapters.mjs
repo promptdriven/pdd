@@ -1,8 +1,9 @@
-// Generated from prompts/cli/agent-adapters.prompt.md (sha256: 0ed934304d1e0ba6a19b1559a03495691e9c6821c708fcafc469207fb34f18b1).
+// Generated from prompts/cli/agent-adapters.prompt.md (sha256: 8a20967190db8863781691485b5d8280eca5f7c6dda16ba52e257e5f4add8946).
 import { spawn } from 'node:child_process';
 import { lstatSync, statSync } from 'node:fs';
 import { delimiter, resolve, isAbsolute } from 'node:path';
 import { loadAgentDefinitions } from './agent-config.mjs';
+import { buildTieredAgentArgs, extractHarnessTokens, normalizeAutopilotPhase, resolveStepModelTier } from './autopilot-telemetry.mjs';
 import { runtimeWorkspaceSlice, workspace } from './runtime-seam.mjs';
 runtimeWorkspaceSlice();
 const AGENTS = [['codex','Codex'],['claude','Claude'],['gemini','Gemini']];
@@ -71,4 +72,15 @@ export async function discoverAgents({cwd=process.cwd(),env=process.env,run=runA
   }catch(e){result.push({id,name,state:e.code==='ENOENT'&&e.executableMissing===true?'not_installed':'error'});}
  }
  return result;
+}
+export function resolveAgentStepLaunch({agent='codex',definition=null,step=null,model=null,reasoningEffort=null,tiering=null,env=process.env}={}) {
+ const kind=definition?.kind??agent,command=definition?.command??kind;
+ const resolved=resolveStepModelTier({agent:kind,step,model,reasoningEffort,tiering,env});
+ return {agent:resolved.agent,command,tier:resolved.tier,model:resolved.model,reasoningEffort:resolved.reasoningEffort,args:buildTieredAgentArgs(resolved),tieringEnabled:resolved.enabled};
+}
+export async function runStepAgentProcess({agent='codex',definition=null,step=null,args=[],model=null,reasoningEffort=null,tiering=null,cwd,env=process.env,input='',signal,timeoutMs=120000,maxBytes=131072,run=runAgentProcess,now=Date.now}={}) {
+ const childEnv={...env,...definition?.env},launch=resolveAgentStepLaunch({agent,definition,step,model,reasoningEffort,tiering,env:childEnv});
+ const startedAt=now(),result=await run(launch.command,[...launch.args,...args],{cwd,env:childEnv,input,signal,timeoutMs,maxBytes}),endedAt=now();
+ const durationMs=Math.max(0,endedAt-startedAt),tokens=extractHarnessTokens(result.stdout,{agent:launch.agent});
+ return {...result,launch:{agent:launch.agent,tier:launch.tier,model:launch.model,reasoningEffort:launch.reasoningEffort,tieringEnabled:launch.tieringEnabled},telemetry:{phase:normalizeAutopilotPhase(step),step:step??null,startedAt,endedAt,durationMs,tokens}};
 }

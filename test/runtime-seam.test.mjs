@@ -837,6 +837,7 @@ registerHooks({
       }
       if (
         rel === 'src/runtime-seam.mjs' ||
+        rel === 'src/autopilot-telemetry.mjs' ||
         rel === 'src/runtime/index.mjs' ||
         rel === 'src/runtime/secret-redaction.mjs' ||
         rel === 'src/secret-redaction.mjs' ||
