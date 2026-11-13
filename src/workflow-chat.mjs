@@ -1,5 +1,5 @@
 import { launchProfile, chatAgentName, validLaunchProfile } from './workflow-launch-profile.mjs';
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: badc0c8c124e14c6d707736e770146a5533d2a9120f28bd0fe3db84824250c2c).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: eaedce27ead5f3b0dcd14e492a6d60aa0ac12de2d50fb180dc7e92106d334434).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, lstatSync, readdirSync, writeFileSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
@@ -134,7 +134,7 @@ export function herdrCommand(ports = {}) {
 }
 
 // `unset`, `loginFile` and `program` come from chatLaunch: the caller's login and the run's agents.json command.
-export function chatCommand({ agent, cwd, messageFile, sessionId, resumeId, configDir, commonDir, sourceRoot, addDirs = [], unset = [], loginFile = null, program = null, queueEnv = {}, model = null, codexThreads = null }) {
+export function chatCommand({ agent, cwd, messageFile, sessionId, resumeId, configDir, commonDir, sourceRoot, addDirs = [], unset = [], loginFile = null, program = null, queueEnv = {}, model = null, codexThreads = null, excludeDynamicSystemPromptSections = false }) {
   if (resumeId !== undefined && !validSessionId(resumeId)) throw problem('invalid_session_id', 'The saved native session id is not a UUID, so pdd will not resume it.');
   if (typeof cwd !== 'string' || !cwd) throw problem('invalid_worktree', 'The chat has no worktree folder, so pdd will not start it.');
   if (resumeId !== undefined) resumeId = quote(resumeId);
@@ -152,7 +152,7 @@ export function chatCommand({ agent, cwd, messageFile, sessionId, resumeId, conf
     ...(resumeId ? ['--conversation', resumeId] : []), ...(messageFile ? ['--prompt-interactive', ...message] : [])].join(' ');
   const included = addDirs.length ? [...new Set(addDirs)] : commonDir && sourceRoot ? [join(commonDir, 'pdd/runs'), `${sourceRoot}.pdd-worktrees`] : [];
   if (agent === 'gemini') return [...env, ...start, '--yolo', ...included.flatMap(dir => ['--include-directories', quote(dir)]), ...(resumeId ? ['--resume', resumeId] : []), ...(messageFile ? ['--prompt-interactive', ...message] : [])].join(' ');
-  if (agent === 'claude') return [...env, ...start, '--dangerously-skip-permissions', ...(resumeId ? ['--resume', resumeId] : ['--session-id', sessionId]), ...message].join(' ');
+  if (agent === 'claude') return [...env, ...start, '--dangerously-skip-permissions', ...(excludeDynamicSystemPromptSections ? ['--exclude-dynamic-system-prompt-sections'] : []), ...(resumeId ? ['--resume', resumeId] : ['--session-id', sessionId]), ...message].join(' ');
   // Codex builds each command's environment from shell_environment_policy; `set` applies after `inherit`.
   return [...env, ...start, ...(resumeId ? ['resume', resumeId] : []), ...(model !== null ? ['--model', quote(model)] : []), '--no-daemon', '--dangerously-bypass-approvals-and-sandbox',
     '-c', quote(`projects={${tomlString(cwd)}={trust_level="trusted"}}`),
@@ -221,12 +221,27 @@ async function bindAgentName(herdr, paneId, name) {
   if (!name) return;
   await herdr(['agent', 'rename', paneId, name]);
 }
+async function claudeSupportsExcludeDynamic(program, { cwd, env, ports = {} }) {
+  if (!ports.agentHelp && !/[\\/]/.test(program) && !env?.PATH) return false;
+  try {
+    const help = ports.agentHelp
+      ? await ports.agentHelp(program, ['--help'], { cwd, env })
+      : await ordinary(program, ['--help'], { cwd, env, encoding: 'utf8', timeout: 10_000, maxBuffer: 131_072 });
+    const stdout = typeof help === 'string' ? help : String(help?.stdout ?? '');
+    return /(?:^|\s)--exclude-dynamic-system-prompt-sections(?:\s|$)/m.test(stdout);
+  } catch {
+    return false;
+  }
+}
 // One native launch or resume in a pane with the caller's login; a failed request deletes the login file at once.
 async function launchInPane(herdr, paneId, options, { run, env, ports = {}, beforeLaunch }) {
   removeStaleLoginFiles(run.runDir);
   const launch = chatLaunch({ run, agent: options.agent, configDir: options.configDir, env });
   try {
-    const command = chatCommand({ ...options, ...launch });
+    const excludeDynamicSystemPromptSections = options.agent === 'claude'
+      ? (options.excludeDynamicSystemPromptSections ?? await claudeSupportsExcludeDynamic(launch.program ?? 'claude', { cwd: options.cwd, env, ports }))
+      : false;
+    const command = chatCommand({ ...options, ...launch, excludeDynamicSystemPromptSections });
     await beforeLaunch?.();
     const reply = await herdr(['pane', 'run', paneId, command]);
     if (options.namingChat) {

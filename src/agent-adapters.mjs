@@ -1,9 +1,9 @@
 import {loadRuntimeWorkspace} from './runtime-workspace.mjs';
-// Generated from prompts/cli/agent-adapters.prompt.md (sha256: db44fa9caaa62adbd14208ab76143424aaa3961de2cfc181d9ebfe48ab228e96).
+// Generated from prompts/cli/agent-adapters.prompt.md (sha256: 6edd448ca2e908a3c4596f5f21ed9f5aa590c436fba823f19add47a0af80c16c).
 import { spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync, chmodSync, mkdirSync, lstatSync, openSync, fstatSync, closeSync, fchmodSync, statSync, constants } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join, dirname, delimiter, resolve, isAbsolute } from 'node:path';
 import { buildAgentInput } from './agent-packet.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -115,14 +115,39 @@ export async function discoverAgents({cwd=process.cwd(),env=process.env,run=runA
  }
  return result;
 }
-function geminiOverlay(env) {
+function claudeCapabilities(help) {
+ if(!help||help.code!==0||typeof help.stdout!=='string')return {mode:null,excludeDynamic:false};
+ const text=help.stdout;
+ const mode=/(?:^|\s)--system-prompt(?:-file|\[-file\])(?:\s|<|=|,|\.|$)/m.test(text)?'file':/(?:^|\s)--system-prompt(?:\s|<|=|$)/m.test(text)?'arg':null;
+ return {mode,excludeDynamic:/(?:^|\s)--exclude-dynamic-system-prompt-sections(?:\s|$)/m.test(text)};
+}
+function splitClaudeInput(input) {
+ const marker='\n\nDATA\n',index=input.indexOf(marker),header=input.slice(0,index),data=JSON.parse(input.slice(index+marker.length));
+ const staticData={productRules:data.productRules,ways:data.ways,project:data.project,criteria:data.criteria};
+ const turnData={conversation:data.conversation,coverage:data.coverage,progress:data.progress,try:data.try,message:data.message,changed:data.changed};
+ return {systemPrompt:`${header}\nDATA\n${JSON.stringify(staticData)}`,turnInput:JSON.stringify(turnData)};
+}
+function claudeSystemPromptFile(text) {
+ const folder=mkdtempSync(join(tmpdir(),'pdd-agent-claude-'));chmodSync(folder,0o700);
+ try{const file=join(folder,'system-prompt.txt');writeFileSync(file,text,{mode:0o600});return {file,cleanup:()=>rmSync(folder,{recursive:true,force:true})};}catch(e){rmSync(folder,{recursive:true,force:true});throw e;}
+}
+function geminiMcpSentinel(cwd,env,existing,defaultsPath) {
+ const configured=new Set(object(existing?.mcpServers)?Object.keys(existing.mcpServers):[]);
+ const home=env.HOME||homedir(),files=[defaultsPath,...(env.GEMINI_CLI_HOME?[join(env.GEMINI_CLI_HOME,'settings.json'),join(env.GEMINI_CLI_HOME,'.gemini','settings.json')]:[]),home?join(home,'.gemini','settings.json'):null,cwd?join(cwd,'.gemini','settings.json'):null].filter(Boolean);
+ for(const file of files){try{const st=lstatSync(file);if(!st.isFile()||st.size>1048576)continue;const doc=JSON.parse(readFileSync(file,'utf8'));if(object(doc?.mcpServers))for(const key of Object.keys(doc.mcpServers))configured.add(key);}catch{}}
+ let sentinel='pdd-disabled-none',salt=0;
+ while(configured.has(sentinel))sentinel=`pdd-disabled-${createHash('sha256').update([...configured].sort().join('\0')+':'+salt++).digest('hex').slice(0,16)}`;
+ return sentinel;
+}
+function geminiOverlay(env,cwd) {
  const systemDir=process.platform==='darwin'?'/Library/Application Support/GeminiCli':process.platform==='win32'?'C:\\ProgramData\\gemini-cli':'/etc/gemini-cli';
  try{if(readdirSync(join(systemDir,'policies')).some(name=>name.endsWith('.toml')))throw new Error('Gemini system policy prevents the private deny-all policy.');}catch(e){if(e.code!=='ENOENT')throw e;}
- const original=env.GEMINI_CLI_SYSTEM_SETTINGS_PATH||join(systemDir,'settings.json');let existing={};
+ const original=env.GEMINI_CLI_SYSTEM_SETTINGS_PATH||join(systemDir,'settings.json'),defaultsPath=env.GEMINI_CLI_SYSTEM_DEFAULTS_PATH||join(dirname(original),'system-defaults.json');let existing={};
  try{const bytes=readFileSync(original);if(bytes.length>1048576)throw new Error('Settings too large');existing=JSON.parse(bytes.toString('utf8'));if(!object(existing))throw new Error('Invalid settings');}catch(e){if(e.code!=='ENOENT')throw e;}
+ const mcpSentinel=geminiMcpSentinel(cwd,env,existing,defaultsPath);
  const config={...existing,tools:{...existing.tools,core:[],allowed:[],discoveryCommand:'',callCommand:''},hooksConfig:{...existing.hooksConfig,enabled:false},admin:{...existing.admin,mcp:{...existing.admin?.mcp,enabled:false},extensions:{...existing.admin?.extensions,enabled:false},skills:{...existing.admin?.skills,enabled:false}},general:{...existing.general,enableAutoUpdate:false,enableAutoUpdateNotification:false,plan:{...existing.general?.plan,enabled:false,modelRouting:false}}};
  const folder=mkdtempSync(join(tmpdir(),'pdd-agent-gemini-'));chmodSync(folder,0o700);
- try{const settings=join(folder,'settings.json'),policy=join(folder,'deny.toml');writeFileSync(settings,JSON.stringify(config),{mode:0o600});writeFileSync(policy,'[[rule]]\ntoolName = "*"\ndecision = "deny"\npriority = 999\n',{mode:0o600});return {env:{...env,GEMINI_CLI_SYSTEM_SETTINGS_PATH:settings,GEMINI_CLI_SYSTEM_DEFAULTS_PATH:env.GEMINI_CLI_SYSTEM_DEFAULTS_PATH||join(dirname(original),'system-defaults.json')},policy,cleanup:()=>rmSync(folder,{recursive:true,force:true})};}catch(e){rmSync(folder,{recursive:true,force:true});throw e;}
+ try{const settings=join(folder,'settings.json'),policy=join(folder,'deny.toml');writeFileSync(settings,JSON.stringify(config),{mode:0o600});writeFileSync(policy,'[[rule]]\ntoolName = "*"\ndecision = "deny"\npriority = 999\n',{mode:0o600});return {env:{...env,GEMINI_CLI_SYSTEM_SETTINGS_PATH:settings,GEMINI_CLI_SYSTEM_DEFAULTS_PATH:defaultsPath},policy,mcpSentinel,cleanup:()=>rmSync(folder,{recursive:true,force:true})};}catch(e){rmSync(folder,{recursive:true,force:true});throw e;}
 }
 function references(x){return Array.isArray(x)?x.some(references):object(x)&&(Object.hasOwn(x,'$step_result')||Object.values(x).some(references));}
 function validFill(fill,entries){
@@ -141,15 +166,24 @@ export async function askAgent({agent,definition,cwd,env=process.env,context={},
   const safe=scrub({context,entries},env);
   const input=buildAgentInput({context:safe.context,entries:safe.entries,supportsApply,supportsRun});
   const opts={cwd,env,input,signal,timeoutMs,maxBytes:131072};
-  let args,overlay;
-  if(agent==='gemini'){const detail=geminiCapabilityError(await run(command,['--help'],{cwd,env,signal,timeoutMs:10000,maxBytes:131072}));if(detail)return fail('error',detail);overlay=geminiOverlay(env);opts.env=overlay.env;}
-  if(agent==='codex'){
-   args=['exec','--sandbox','read-only','--ephemeral','--color','never','--ignore-rules','-c','approval_policy="never"','-c','web_search="disabled"','-c','mcp_servers={}'];
-   for(const feature of ['hooks','plugins','apps','browser_use','browser_use_external','browser_use_full_cdp_access','computer_use','multi_agent','multi_agent_v2','shell_tool','unified_exec','code_mode','code_mode_host'])args.push('-c',`features.${feature}=false`);
-   args.push('-');
-  }else if(agent==='gemini')args=['--extensions','none','--allowed-mcp-server-names',`pdd-disabled-${randomUUID()}`,'-p','Answer the supplied Try question as strict JSON.','--approval-mode','default','--admin-policy',overlay.policy,'--output-format','json'];
-  else args=['-p','--safe-mode','--tools','Read,Grep,Glob','--permission-mode','plan','--permission-prompts','none','--strict-mcp-config','--no-chrome','--no-session-persistence','--output-format','json'];
-  let answer;try{answer=await run(command,args,opts);if(agent==='codex'&&answer.code!==0){const flag=unknownFeature(answer,args);if(flag){logDiagnostic(name,answer.stderr||answer.stdout,env);const index=args.indexOf(flag);args.splice(index-1,2);answer=await run(command,args,opts);}}}finally{overlay?.cleanup();}
+  let args,overlay,claudePrompt,answer;
+  try{
+   if(agent==='gemini'){const detail=geminiCapabilityError(await run(command,['--help'],{cwd,env,signal,timeoutMs:10000,maxBytes:131072}));if(detail)return fail('error',detail);overlay=geminiOverlay(env,cwd);opts.env=overlay.env;}
+   if(agent==='codex'){
+    args=['exec','--sandbox','read-only','--ephemeral','--color','never','--ignore-rules','-c','approval_policy="never"','-c','web_search="disabled"','-c','mcp_servers={}'];
+    for(const feature of ['hooks','plugins','apps','browser_use','browser_use_external','browser_use_full_cdp_access','computer_use','multi_agent','multi_agent_v2','shell_tool','unified_exec','code_mode','code_mode_host'])args.push('-c',`features.${feature}=false`);
+    args.push('-');
+   }else if(agent==='gemini')args=['--extensions','none','--allowed-mcp-server-names',overlay.mcpSentinel,'-p','Answer the supplied Try question as strict JSON.','--approval-mode','default','--admin-policy',overlay.policy,'--output-format','json'];
+   else{
+    const caps=claudeCapabilities(await run(command,['--help'],{cwd,env,signal,timeoutMs:10000,maxBytes:131072}));
+    args=['-p','--safe-mode','--tools','Read,Grep,Glob','--permission-mode','plan','--permission-prompts','none','--strict-mcp-config','--no-chrome','--no-session-persistence'];
+    if(caps.excludeDynamic)args.push('--exclude-dynamic-system-prompt-sections');
+    if(caps.mode){const split=splitClaudeInput(input);opts.input=split.turnInput;if(caps.mode==='file'){claudePrompt=claudeSystemPromptFile(split.systemPrompt);args.push('--system-prompt-file',claudePrompt.file);}else args.push('--system-prompt',split.systemPrompt);}
+    args.push('--output-format','json');
+   }
+   answer=await run(command,args,opts);
+   if(agent==='codex'&&answer.code!==0){const flag=unknownFeature(answer,args);if(flag){logDiagnostic(name,answer.stderr||answer.stdout,env);const index=args.indexOf(flag);args.splice(index-1,2);answer=await run(command,args,opts);}}
+  }finally{overlay?.cleanup();claudePrompt?.cleanup();}
   if(answer.code!==0)return failedInvocation(agent,answer.stderr||answer.stdout,env,stateOf(answer.stdout+' '+answer.stderr),name);
   let parsed=JSON.parse(answer.stdout);
   // Claude's JSON transport wraps the textual final answer; it is not the chat schema.
