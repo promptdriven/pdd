@@ -167,6 +167,10 @@ test('ML3: core factory simulation merges 4 queued green PRs under GitHub label-
         return r;
       },
     });
+    const openLabeled = [...w.github.prs.values()].filter(pr => pr.state === 'open' && pr.labels.includes('pdd:merge-lane'));
+    const finalJobs = issues.filter(n => jobFile(w, n)?.lane?.state === 'final');
+    assert.ok(openLabeled.length <= 1, `tick ${ticks}: at most one open PR holds pdd:merge-lane, got ${openLabeled.map(p => p.number)}`);
+    assert.ok(finalJobs.length <= 1, `tick ${ticks}: at most one local job holds lane.state === 'final', got ${finalJobs}`);
     // Between 10-minute ticks, any running CI + local suite on a refreshed head completes.
     for (const n of issues) {
       const job = jobFile(w, n);
@@ -181,4 +185,152 @@ test('ML3: core factory simulation merges 4 queued green PRs under GitHub label-
   assert.deepEqual(w.github.merges, issues.map(n => prs.get(n).number), 'all 4 PRs merged in exact claim order');
   // 4 PRs: PR #1 merges on tick 1 (0m), PRs #2..#4 each refresh in the tick the previous PR merged, start suite next tick, and merge on the tick after (7 ticks = 60m total, vs 14 ticks = 130m before!).
   assert.ok(ticks <= 7, `expected at most 7 ticks for 4 merges with base refresh + label lag, got ${ticks} ticks (${elapsedMinutes}m)`);
+});
+
+test('ML4: at most one local PR enters final per tick under POST list lag (including higher-PR winner, transient 502, and human label removal)', async t => {
+  // Older claim #18 opens higher PR #101; newer claim #17 opens lower PR #100. Both turn green while list lags empty.
+  const w = await coreWorld(t, { settings: { runs: 2 } });
+  w.issue(18);
+  await w.tick();
+  w.advance(MIN);
+  w.issue(17);
+  await w.tick();
+
+  // #17 finishes build first -> PR #100; #18 finishes build second -> PR #101 (older claim has higher PR number!).
+  const a = w.build(17);
+  const b = w.build(18);
+  assert.ok(a.pr.number < b.pr.number, 'newer claim has lower PR number');
+  await w.tick();
+  w.review(18, 'PASS'); w.suite(18, 0);
+  w.review(17, 'PASS'); w.suite(17, 0);
+  w.baseCommit('move.txt', 'force final-step refresh\n');
+
+  const baseGh = w.ports().gh;
+  await w.tick({
+    gh: async (args, options) => isLaneList(args) ? okList([]) : baseGh(args, options),
+  });
+
+  assert.equal(jobFile(w, 18)?.lane?.state, 'final', 'older claim #18 (PR #101) enters final');
+  assert.equal(jobFile(w, 17)?.lane?.state, 'waiting', 'newer claim #17 (PR #100) waits instead of entering final concurrently');
+  assert.equal(jobFile(w, 17)?.lane?.holder, b.pr.number);
+  assert.deepEqual(
+    [...w.github.prs.values()].filter(pr => pr.labels.includes('pdd:merge-lane')).map(pr => pr.number),
+    [b.pr.number],
+    'only one PR holds pdd:merge-lane on GitHub',
+  );
+
+  // Even if GET /issues/101 transiently fails (502 -> unknown) while the list still lags empty, #17 still treats local final #18 as held.
+  await w.tick({
+    gh: async (args, options) => {
+      if (isLaneList(args)) return okList([]);
+      if (args.includes('GET') && args.some(x => x === `repos/${w.state.repo}/issues/${b.pr.number}`)) {
+        return { code: 1, stdout: 'HTTP/2.0 502 Bad Gateway\r\n\r\n{}', stderr: '502' };
+      }
+      return baseGh(args, options);
+    },
+  });
+  assert.equal(jobFile(w, 18)?.lane?.state, 'final');
+  assert.equal(jobFile(w, 17)?.lane?.state, 'waiting');
+  assert.ok(!a.pr.labels.includes('pdd:merge-lane'), '#17 still waits on transient read error');
+
+  // If a person removes pdd:merge-lane from stuck #101 on GitHub, #17 takes the freed lane and #18 clears its stale final state.
+  b.pr.labels = b.pr.labels.filter(l => l !== 'pdd:merge-lane');
+  await w.tick({
+    gh: async (args, options) => isLaneList(args) ? okList([]) : baseGh(args, options),
+  });
+  assert.equal(jobFile(w, 17)?.lane?.state, 'final', '#17 takes the lane after human removes label from #101');
+  assert.equal(jobFile(w, 18)?.lane, null, 'reconciled #18 cleared its stale local final state');
+  assert.deepEqual(
+    [...w.github.prs.values()].filter(pr => pr.labels.includes('pdd:merge-lane')).map(pr => pr.number),
+    [a.pr.number],
+  );
+});
+
+test('ML5: same-tick handoff succeeds when issues?labels=pdd:merge-lane lags with a lower-numbered PR after merge (even with retained job) or leaveLane', async t => {
+  // Part A: PR #100 (#17) merges while cleanup is unconfirmed (retaining jobs/17.json) AND label list lags with [#100];
+  // higher-numbered PR #101 (#18) still enters final in the same tick and merges on the next tick under continued list lag!
+  const w = await coreWorld(t, { settings: { runs: 2 } });
+  w.github.mergeMovesBase = true;
+  w.issue(17);
+  await w.tick();
+  w.advance(MIN);
+  w.issue(18);
+  await w.tick();
+
+  const a = w.build(17); // PR #100
+  const b = w.build(18); // PR #101 (101 > 100)
+  assert.ok(a.pr.number < b.pr.number);
+  await w.tick();
+  w.review(17, 'PASS'); w.suite(17, 0);
+  w.review(18, 'PASS'); w.suite(18, 0);
+  w.baseCommit('seed.txt', 'hold #17 in final for one refresh\n');
+  await w.tick(); // #17 enters final & refreshes; #18 waits
+  assert.equal(jobFile(w, 17)?.lane?.state, 'final');
+  assert.equal(jobFile(w, 18)?.lane?.state, 'waiting');
+
+  await w.tick(); // start suite on #17's refreshed head
+  w.github.setChecks(jobFile(w, 17).head);
+  w.suite(17, 0);
+  const head18Before = jobFile(w, 18).head;
+
+  const baseGh = w.ports().gh;
+  const staleListWith100 = () => okList([{ number: a.pr.number, state: 'open', labels: [{ name: 'pdd:merge-lane' }], pull_request: {} }]);
+  await w.tick({
+    // Force finishLocal on #17 to retain jobs/17.json (unconfirmed process cleanup) so Bug 3 is exercised directly!
+    jobs: { ...w.jobs, cleanup: async part => part?.issue === 17 ? { confirmed: false } : w.jobs.cleanup(part) },
+    gh: async (args, options) => isLaneList(args) ? staleListWith100() : baseGh(args, options),
+  });
+
+  assert.deepEqual(w.github.merges, [a.pr.number], 'PR #100 merged');
+  assert.ok(jobFile(w, 17), 'jobs/17.json was retained due to unconfirmed cleanup');
+  assert.equal(jobFile(w, 17)?.lane, null, 'finishMerge cleared job.lane immediately before finishLocal');
+  assert.equal(jobFile(w, 18)?.lane?.state, 'final', 'higher PR #101 entered final in the same tick despite lagging list [#100] and retained job #17');
+  assert.ok(b.pr.labels.includes('pdd:merge-lane'), 'PR #101 kept its newly POSTed pdd:merge-lane label');
+  assert.notEqual(jobFile(w, 18)?.head, head18Before, 'PR #101 refreshed onto new main in the same tick');
+
+  // Now complete #18's refreshed suite and merge #101 while the label list STILL lags with [#100] (tests laneStillMine).
+  await w.tick({ gh: async (args, options) => isLaneList(args) ? staleListWith100() : baseGh(args, options) });
+  w.github.setChecks(jobFile(w, 18).head);
+  w.suite(18, 0);
+  await w.tick({ gh: async (args, options) => isLaneList(args) ? staleListWith100() : baseGh(args, options) });
+  assert.deepEqual(w.github.merges, [a.pr.number, b.pr.number], 'PR #101 passed laneStillMine and merged despite lagging list [#100]');
+
+  // Part B: Non-closing leaveLane exit — PR #100 (#17) hits an add/add conflict and leaves the lane while staying OPEN
+  // with an active claim; label list still lags with [#100] and omits [#101], yet #101 takes the lane in the same tick!
+  const v = await coreWorld(t, { settings: { runs: 2 } });
+  v.issue(17);
+  await v.tick();
+  v.advance(MIN);
+  v.issue(18);
+  await v.tick();
+
+  const va = v.build(17); // PR #100 touches change-17.txt
+  const vb = v.build(18); // PR #101 touches change-18.txt (101 > 100)
+  await v.tick();
+  v.review(17, 'PASS'); v.suite(17, 0);
+  v.review(18, 'PASS'); v.suite(18, 0);
+  v.baseCommit('hold-17.txt', 'keep #17 in final first\n');
+  await v.tick(); // #17 enters final & refreshes; #18 enters waiting
+  assert.equal(jobFile(v, 17)?.lane?.state, 'final');
+  assert.equal(jobFile(v, 18)?.lane?.state, 'waiting');
+
+  await v.tick();
+  v.github.setChecks(jobFile(v, 17).head);
+  v.suite(17, 0);
+  // Push an add/add conflict on change-17.txt so #17 exits the lane via conflictFix -> leaveLane (PR #100 stays OPEN with active claim!).
+  v.baseCommit('change-17.txt', 'conflicting base content\n');
+  const vHead18Before = jobFile(v, 18).head;
+  const vGh = v.ports().gh;
+  const staleVList = () => okList([{ number: va.pr.number, state: 'open', labels: [{ name: 'pdd:merge-lane' }], pull_request: {} }]);
+
+  await v.tick({
+    gh: async (args, options) => isLaneList(args) ? staleVList() : vGh(args, options),
+  });
+
+  assert.equal(va.pr.state, 'open', 'PR #100 remains open during agent conflict update');
+  assert.ok(v.job(17, 'conflict'), '#17 started an agent conflict job with an active claim');
+  assert.ok(!va.pr.labels.includes('pdd:merge-lane'), 'leaveLane removed pdd:merge-lane on PR #100');
+  assert.equal(jobFile(v, 18)?.lane?.state, 'final', 'higher PR #101 took the lane in the same tick despite lagging list [#100]');
+  assert.ok(vb.pr.labels.includes('pdd:merge-lane'), 'PR #101 kept pdd:merge-lane');
+  assert.notEqual(jobFile(v, 18)?.head, vHead18Before, 'PR #101 refreshed onto main in the same tick');
 });

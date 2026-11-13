@@ -1500,31 +1500,39 @@ runs until its end):
 6. **Merge lane** (one final step per repository). A green PR (CI green or none,
    review PASS, suite pass) enters the lane. The lane is the label `pdd:merge-lane` on
    one open PR, shared by every machine through GitHub (`issues?state=open&labels=…`,
-   PRs only). Any machine clears a stale holder (a closed or merged PR, or a core issue
-   (`pdd/core-N-…` branch) with no live claim that is no local final-step job) and an
-   orphan one (not a core PR). **One winner on every tick:** the lowest open holder
-   number; every other PR removes its own label (a failed DELETE throws and the next
-   tick tries again) and waits. When another PR holds the lane, or an older green PR
-   of this machine (claim order, `started`) waits, the PR waits: `lane {state:
+   PRs only). Because that label search index can lag behind both `POST` and `DELETE` or
+   merge writes, every holder read (before `POST`, on the post-`POST` readback, and in
+   the pre-merge race guard) reconciles the listed PRs and any local `phase: pr` jobs in
+   `lane.state: final` against each candidate's consistent issue record (`GET issues/N`):
+   a candidate whose `GET issues/N` is closed or lacks `pdd:merge-lane` (right after a
+   merge, a lane-exit `DELETE`, or a person removing the label) is excluded (and clears
+   `job.lane` on a local `final` job); another local `phase: pr` job in `lane.state:
+   final` whose `GET issues/N` shows the label or fails transiently counts as held so two
+   local PRs never enter `final` in the same tick under `POST` list lag; this PR itself
+   (when already in `final`, after `POST`, or in the race guard) counts as held when `GET
+   issues/PR` shows the label on the open PR or when the list includes it and `GET
+   issues/PR` fails transiently. Any machine clears a remaining stale holder (a closed or
+   merged PR, or a core issue (`pdd/core-N-…` branch) with no live claim that is no local
+   final-step job) and an orphan one (not a core PR). **One winner on every tick:** the
+   lowest open holder number; every other PR removes its own label (a failed DELETE throws
+   and the next tick tries again) and waits. When another PR holds the lane, or an older
+   green PR of this machine (claim order, `started`) waits, the PR waits: `lane {state:
    waiting, holder, since, heldSince}`, and its quiet clock starts again each tick
    (`progress.running`), so waiting never ends a job and never counts as a refresh; a
    wait for the same holder longer than the quiet period sends one `stuck` alert. Else
-   the PR adds the label and reads both the holders list and its own issue record (`GET
-   issues/PR`, which is consistent when the label list has not caught up; if neither
-   shows the label on this open PR, try again next tick); a PR already in `final`
-   reconciles the holders list with `GET issues/PR` the same way. The holder is in the
-   final step: `lane {state: final, since, waited}`. A repair (which also clears a stale
-   waiting state, as a new head does), an END (of any kind, before its other steps), a
-   hand-over, a person's stop and an observe validation leave the lane (remove the
+   the PR adds the label and runs the reconciled holder read (if neither the list nor
+   `GET issues/PR` shows the label on this open PR, try again next tick). The holder is
+   in the final step: `lane {state: final, since, waited}`. A repair (which also clears a
+   stale waiting state, as a new head does), an END (of any kind, before its other steps),
+   a hand-over, a person's stop and an observe validation leave the lane (remove the
    label); a merge closes the PR. Active `phase: pr` jobs in a tick advance with any
    `final` holder first and then in lane-priority order (`lanePriority`, then `started`,
    then `issue`) so claim order holds when two PRs turn green on the same tick, and when
    the lane frees during a tick (a merge or any lane exit) with no local PR in `final`,
    the tick advances waiting PRs at once in that same order (at most once per waiting job)
-   instead of waiting for the next timer tick. **Race
-   guard:** right before `gh pr merge` the PR reads the holders (reconciled with `GET
-   issues/PR`, clearing any stale or closed lower holder) and the compare again; it
-   merges only as the lowest open holder with `behind_by` 0.
+   instead of waiting for the next timer tick. **Race guard:** right before `gh pr merge`
+   the PR runs the reconciled holder read and the compare again; it merges only as the
+   lowest open holder with `behind_by` 0.
    The order (debate B L6, C1, C2): a PR that came back from a conflict update
    (`lanePriority`) goes first, then claim order; a PR whose changed files meet a live
    reservation of another PR (this machine's job files, or the `reserved {files,
@@ -1585,8 +1593,10 @@ runs until its end):
    and the base check,
    with the marker `<!-- pdd:autopilot-core:merge:HEAD -->`. Then
    `gh pr merge PR --repo REPO --merge --match-head-commit HEAD`. A failed merge
-   waits for the next tick (step `merge`). A confirmed merge closes the issue when it is open,
-   removes `pdd:working` and `pdd:would-merge` when present, cleans up locally (see END) and records `merged`.
+   waits for the next tick (step `merge`). A confirmed merge clears `job.lane` and marks the
+   lane freed at once (before issue/label writes and local cleanup, so a retained job file
+   never blocks waiting PRs), closes the issue when it is open, removes `pdd:working` and
+   `pdd:would-merge` when present, cleans up locally (see END) and records `merged`.
    In mode `observe`, the same comment starts `Autopilot would merge this PR (observe
    mode): every check passed for head HEAD. It stays open and ready for review;
    Autopilot does not merge it.` with the marker

@@ -6,7 +6,7 @@ import { lintSvgLayouts } from '../src/svg-layout.mjs';
 import { runCheck } from '../src/runtime-seam.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
-import { fakeRuntime, harbor, portsFor, sink, temp, PLACE } from './runtime-fake.mjs';
+import { fakeRuntime, harbor, portsFor, sink, temp, PLACE } from './helpers/runtime-fake.mjs';
 
 const fixtures = join(import.meta.dirname, 'fixtures/svg-layout');
 function drawing(t, prose = readFileSync(join(fixtures, 'game.prompt.md'), 'utf8'), svg) {

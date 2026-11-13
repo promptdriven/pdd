@@ -42,7 +42,7 @@ jobs:
         run: |
           set +e
           # Keep Chrome startup from competing with other test-file processes.
-          node --import ./test/helpers/test-home.mjs --test --test-concurrency=1 --test-shard=${{ matrix.shard }}/8 test/*.test.mjs 2>&1 | tee "$RUNNER_TEMP/tests.tap"
+          node --import ./test/helpers/test-home.mjs --test --test-concurrency=1 --test-shard=${{ matrix.shard }}/8 test/*.test.mjs test/runtime-package/*.test.mjs 2>&1 | tee "$RUNNER_TEMP/tests.tap"
           result=${PIPESTATUS[0]}
           exit "$result"
       - name: Summarize test counts
