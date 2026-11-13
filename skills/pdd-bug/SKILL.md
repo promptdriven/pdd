@@ -1,6 +1,6 @@
 ---
 name: pdd-bug
-description: Use when fixing PDD product behavior bugs (non-behavior fixes use pdd-small-change). Reproduce, prompt/tests PR 1, code PR 2 if asked.
+description: Use when fixing PDD behavior bugs (non-behavior fixes use pdd-small-change). Reproduce, prompt/tests PR 1, code PR 2 if asked.
 metadata:
   pdd-skills: 0.1.30
 ---
@@ -21,7 +21,7 @@ Fix both: the brakes (the real defect) and the warning light (a test or check th
 - Ask at person gates only. Normal runs: show the Story card as printed; a full check pass opens PR 1. Strict mode keeps its gates. Outside runs, ask before PRs. Merge only on request (RUNBOOK §2).
 - Use full URLs.
 - Normal runs skip try; the person can ask for it at the card. Else follow the optional-step gate.
-- At the story gate, start with one verdict line, then the details: "Verdict: the bug is in the PROMPT (its check fails on the issue's case).", "Verdict: the prompt is right; the bug is only in the CODE." or "Verdict: no prompt covers this yet; the bug can only be in the code." Give the full paths of the Story files. For issue-only prompts, offer "adopt PDD for this module" later. You may offer `pdd simulate <story>` before the check. It opens shell/localhost/page/Form; no Story: whole project. Ask for approval or changes in their own words. In a run, show pdd's Story card as printed, not a bare "approve?". Batch: card, then answer.
+- At the story gate, start with one verdict line, then the details: "Verdict: the bug is in the PROMPT (its check fails on the issue's case).", "Verdict: the prompt is right; the bug is only in the CODE." or "Verdict: no prompt covers this yet; the bug can only be in the code." Give the full paths of the Story files. For issue-only prompts, offer "adopt PDD for this module" later. You may offer `pdd simulate <story>` before the check. It automatically opens shell/localhost/page/Form; no Story: whole project. Ask for approval or changes in their own words. In a run, show pdd's Story card as printed, not a bare "approve?". Batch: card, then answer.
 - Strict: Before PR 1, show the `Prompt tests` line(s) with the report link(s) and the Simulator link, if any. pdd opens PR 1 only after the approval. Then show the PR 1 link and ask: "Do you want the code PR now, or stop here and merge PR 1 first?"
 - On verify/formal failure or review must-fixes, allow 2 repairs after initial review. Use fresh build, verify, formal and review agents. PR 2 starts with real `Review:` verdict, remaining must-fixes and "✗ N vectors fail" for failing vectors. No new human gate.
   - Repair pending: with must-fixes and fewer than 2 repairs, do not run `workflow done review`; fresh build with the must-fix list.
