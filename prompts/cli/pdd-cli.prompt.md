@@ -127,6 +127,8 @@ finite safe failure and exits 1. Do not load the launcher or remote settings.
 
 ## Dependencies
 
+- [Compiled Story checker](compiled-test.prompt.md): required native generation and verification context for code-target dispatch.
+
 - [Detailed version](interpreter-version.prompt.md): required generation, runtime and verification context for the single detailed-version call and result.
 
 - [Setup terminal policy](setup-interaction.prompt.md): required generation and verification context for every optional setup question.
@@ -311,8 +313,8 @@ reply.
 ```json
 {
   "kind": "partial",
-  "status": "approved",
-  "prose_sha256": "94a3a9e414b31f04db14536fc5024f9d60d9ba1d87c92f295a4cd438e0d3de89",
+  "status": "draft",
+  "prose_sha256": "242598f2f8487b6907fc00ca980dd266358bdaa401530b4bf0e428b3624f54d9",
   "entries": [
     {
       "operation": "runPdd",
@@ -1277,3 +1279,5 @@ Dispatch each metrics route to [metrics command](metrics-command.prompt.md) with
 Dispatch `autopilot-report` to the Autopilot launcher with command report and its operands in issues, with the same reply validation and stream rules and no remote settings warning. Dispatch `autopilot-intake` the same way with command intake and `--json` as `json`. For `autopilot-start`, also pass `--engine` as `engine` and `--label` as `label`, `--mode` as `mode`, `--report` as `report`, `--decisions` as `decisions` and `--intake` as `intake` when given.
 
 For interface-draft dispatch, pass parsed --contract as contract and the --extend/--refresh flags as extend/refresh to `draftInterfaces` alongside cwd, words, all and json. Forward stdout/stderr; drafting remains local.
+
+Route `pdd test --target code` to the local compiled Story checker without contacting the interpreter. Reject other test options except `--json` for this route.

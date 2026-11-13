@@ -1,4 +1,4 @@
-// Generated from prompts/cli/try-http.prompt.md (sha256: fbab0ecd56b44601de7c8e28f5906d499be59cd7bf9d972257f0dd03b9328739).
+// Generated from prompts/cli/try-http.prompt.md (sha256: fd02d62d3fa6e26b7f534ce806435737d2afc2a5a709c01c442e2e4e4c9592d1).
 import { createServer, validateHeaderName, validateHeaderValue } from 'node:http';
 import { join, relative } from 'node:path';
 import {loadRuntimeWorkspace} from './runtime-workspace.mjs';
@@ -10,6 +10,7 @@ const problem = (status, message) => Object.assign(new Error(message), { httpSta
 const shellWord = word => /^[A-Za-z0-9_./:@%+=,-]+$/.test(word) ? word : `'${word.replaceAll("'", "'\\''")}'`;
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const HOP = new Set(['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade', 'content-length']);
+const RESERVED_USAGE = new Set(['x-pdd-ai-calls', 'x-pdd-try-used', 'x-pdd-try-remaining', 'x-pdd-try-cap', 'x-pdd-input-tokens', 'x-pdd-cached-input-tokens', 'x-pdd-usage-source']);
 function primitive(values, schema) {
   if (schema?.type === 'array') return values.map(v => primitive([v], schema.items));
   if (values.length !== 1) throw problem(400, 'A query field was repeated; declare an array to accept repeated values.');
@@ -81,7 +82,8 @@ function responseFor(result) {
   if (result.headers !== undefined && !object(result.headers)) throw problem(502, 'The prompt must return an object of HTTP headers.');
   const headers = Object.create(null), nominated = new Set(String(result.headers?.connection ?? result.headers?.Connection ?? '').toLowerCase().split(',').map(s => s.trim()));
   for (const [name, value] of Object.entries(result.headers ?? {})) {
-    if (HOP.has(name.toLowerCase()) || nominated.has(name.toLowerCase())) continue;
+    const lower = name.toLowerCase();
+    if (HOP.has(lower) || nominated.has(lower) || RESERVED_USAGE.has(lower)) continue;
     if (!(typeof value === 'string' || Array.isArray(value) && value.every(v => typeof v === 'string'))) throw problem(502, 'The prompt returned an invalid HTTP header value.');
     try { validateHeaderName(name); for (const item of Array.isArray(value) ? value : [value]) validateHeaderValue(name, item); } catch { throw problem(502, 'The prompt returned an invalid HTTP header.'); }
     headers[name.toLowerCase()] = value;
@@ -174,7 +176,7 @@ export async function openServe(context, test, sessionId, options) {
   (ports.stderr ?? process.stderr).write(`${tryUsageLine(latestUsage)}\n`);
   let tail = Promise.resolve(), pending = 0, stopped = false;
   const server = createServer(async (req, res) => {
-    let counted = false, usage = { ...latestUsage, calls: 0 }, usageSource = 'last-known';
+    let counted = false, usage = { ...latestUsage, calls: 0, input_tokens: 'unknown', cached_input_tokens: 'unknown', output_tokens: 'unknown', cached_input_share: null }, usageSource = 'last-known';
     const reply = (status, message) => { if (!res.headersSent) { res.writeHead(status, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', ...tryUsageHeaders(usage), 'x-pdd-usage-source': usageSource }); res.end(`pdd: ${cleanText(message)}\n`); } else res.destroy(); };
     try {
       const port = server.address()?.port, acceptedHost = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);

@@ -119,7 +119,7 @@ import {
   selectCheckTests,
   selectJourneys as rawSelectJourneys,
   sha256,
-  sharedSourceFiles,
+  sharedSourceFiles as rawSharedSourceFiles,
   sinceText,
   sourceFilePort,
   staleHint,
@@ -305,6 +305,11 @@ export function createStrictSourceAccess(root, workspace, ports = {}) {
   return rawCreateStrictSourceAccess(root, workspace, seamSelectionPorts(ports));
 }
 
+export function sharedSourceFiles(root, visible, options = {}, ports = {}) {
+  const { resolveOwners } = req('./file-owner.mjs');
+  return rawSharedSourceFiles(root, visible, options, withPortDefaults(seamSelectionPorts(ports), { resolveOwners }));
+}
+
 export function selectTests(found, words, options = {}) {
   return hostSelection().selectTests(found, words, {
     ...options,
@@ -366,6 +371,7 @@ export function runtimePreflightSlice() {
     orphanSummary,
     prepareHashSelection: (input, ports = {}) => mod.prepareHashSelection(input, seamSelectionPorts(ports)),
     selectTests,
+    sharedSourceFiles,
     whyNoTests,
   };
 }
@@ -501,7 +507,7 @@ export async function runAutomaticApproval(input = {}, ports = {}) {
       { approvePromptText, promptPath },
       ,
       ,
-      { headerPrompts },
+      { headerPrompts, resolveOwners },
       { readEvidenceEligibility },
       { allRuns },
       { assessNativeEvidence, resultLines, usableResult },
@@ -539,6 +545,8 @@ export async function runAutomaticApproval(input = {}, ports = {}) {
           approvePromptText,
           promptPath,
           headerPrompts,
+        resolveOwners,
+          resolveOwners,
           allRuns,
           workflowBaseSha: ({ root, env: runEnv }) =>
             resolveWorkflowBaseSha({ root, env: runEnv ?? env, allRunsPort: ports.allRuns ?? allRuns }),
@@ -563,7 +571,7 @@ export async function runAutomaticApproval(input = {}, ports = {}) {
 export async function runCheck(input = {}, ports = {}) {
   const [
     ,
-    { headerPrompts },
+    { headerPrompts, resolveOwners },
     { readEvidenceEligibility },
     { allRuns },
     { assessNativeEvidence, resultLines, usableResult },
@@ -591,6 +599,7 @@ export async function runCheck(input = {}, ports = {}) {
     seamRuntimePorts(
       withPortDefaults(withEligibilityDefault(ports, readEvidenceEligibility), {
         headerPrompts,
+        resolveOwners,
         allRuns,
         workflowBaseSha: ({ root, env: runEnv }) =>
           resolveWorkflowBaseSha({ root, env: runEnv ?? env, allRunsPort: ports.allRuns ?? allRuns }),
@@ -1118,7 +1127,6 @@ export {
   schemaKeywordWarningLines,
   selectCheckTests,
   sha256,
-  sharedSourceFiles,
   sinceText,
   sourceFilePort,
   staleHint,

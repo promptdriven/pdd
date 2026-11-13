@@ -114,7 +114,9 @@ test('hcli-4: HTTP usage headers preserve program status/body and expose local z
 test('hcli-4: missing or malformed usage remains unknown, including a real zero remaining allowance', async () => {
   const { tryUsage, tryUsageHeaders } = await import('../../src/runtime-seam.mjs');
   assert.equal(typeof tryUsage, 'function');
-  assert.deepEqual(tryUsage({}), { calls: 'unknown', remaining: 'unknown', cap: 'unknown', used: 'unknown' });
+  assert.deepEqual(tryUsage({}), { calls: 'unknown', remaining: 'unknown', cap: 'unknown', used: 'unknown',
+    input_tokens: 'unknown', cached_input_tokens: 'unknown', output_tokens: 'unknown', cached_input_share: null });
   assert.equal(tryUsageHeaders(tryUsage({ usage: { calls: '2' }, result: { report: { remaining_calls: -1 } } }))['x-pdd-ai-calls'], 'unknown');
-  assert.deepEqual(tryUsage({ usage: { calls: 2 }, result: { report: { remaining_calls: 0 } } }, { cap: 40 }), { calls: 2, remaining: 0, cap: 40, used: 40 });
+  assert.deepEqual(tryUsage({ usage: { calls: 2 }, result: { report: { remaining_calls: 0 } } }, { cap: 40 }), { calls: 2, remaining: 0, cap: 40, used: 40,
+    input_tokens: 'unknown', cached_input_tokens: 'unknown', output_tokens: 'unknown', cached_input_share: null });
 });
