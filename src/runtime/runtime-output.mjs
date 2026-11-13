@@ -186,9 +186,14 @@ export function projectAnswer(answer, { origin, secrets = [], steps: authoredSte
       evidence: Array.isArray(check.diagnosis.evidence) ? check.diagnosis.evidence.map(item => cleanText(item, secrets)).filter(Boolean) : undefined,
       likely: check.diagnosis.likely === true ? true : undefined,
       ...(isObjectLike(check.diagnosis.rerun) ? { rerun: rerunStep(check.diagnosis.rerun) } : {}) } : null;
+    const ref_target = typeof check?.ref_target === 'string' && check.ref_target ? cleanField(check.ref_target, secrets) : undefined;
+    const ref_path = typeof check?.ref_path === 'string' ? cleanField(check.ref_path, secrets) : undefined;
+    const ref_json_path = typeof check?.ref_json_path === 'string' ? cleanField(check.ref_json_path, secrets) : undefined;
     return { criterion_id, step_id: cleanField(step?.step_id, secrets) || cleanField(authoredSteps[index]?.step_id, secrets) || null,
       criterion_text: typeof criterionTexts[criterion_id] === 'string' && criterionTexts[criterion_id].length <= 160 ? cleanField(criterionTexts[criterion_id], secrets) : null,
-      target: cleanField(check?.target, secrets), path: cleanField(check?.path, secrets), expected: scrub(check?.expected, secrets),
+      target: cleanField(check?.target, secrets), path: cleanField(check?.path, secrets),
+      ...(ref_target !== undefined ? { op: cleanField(check?.op, secrets), ref_target, ...(ref_path !== undefined ? { ref_path } : {}), ...(ref_json_path !== undefined ? { ref_json_path } : {}) } : {}),
+      expected: scrub(check?.expected, secrets),
       actual: scrub(check?.actual, secrets), passed: check?.passed === true,
       normal_result: Object.prototype.hasOwnProperty.call(step ?? {}, 'result') && !step?.error, ...(diagnosis ? { diagnosis } : {}) };
   });
@@ -466,8 +471,10 @@ function checkLines(check, secrets) {
     && (check.normal_result === true || ['no-error', 'needs-tool'].includes(check.diagnosis?.kind));
   const actualValue = noError ? 'no error (a normal result)' : check.actual, actualDisplay = noError ? actualValue : shown(actualValue, secrets);
   const criterion = check.criterion_text ? [`  Criterion: ${plainLine(check.criterion_text, secrets)}`] : [];
+  const refLabel = check.ref_target && check.ref_path !== undefined
+    ? `${check.op ? `${check.op} ` : ''}${check.ref_target} ${check.ref_path || '/'}${check.ref_json_path ? ` (${check.ref_json_path})` : ''}` : null;
   const fits = [check.expected, check.actual].every(value => oneLine(value) && shown(value, secrets).length <= 80);
-  if (fits) return [`${head}  expected ${shown(check.expected, secrets)}, got ${actualDisplay}`, ...criterion];
+  if (fits) return [`${head}  expected ${refLabel ? `${refLabel} (${shown(check.expected, secrets)})` : shown(check.expected, secrets)}, got ${actualDisplay}`, ...criterion];
   const expected = valueLines(check.expected), actual = valueLines(actualValue);
   // Start 2 lines before the first line where two strings differ, when it is past the first 20.
   const differ = typeof check.expected === 'string' && typeof check.actual === 'string' ? expected.findIndex((text, index) => text !== actual[index]) : -1;
@@ -476,7 +483,7 @@ function checkLines(check, secrets) {
     ...lines.slice(from, from + VALUE_LINES).map(text => `    ${plainLine(text, secrets)}`),
     ...(lines.length > from + VALUE_LINES ? [`    … ${lines.length - from - VALUE_LINES} more lines in the report`] : []),
     ...(typeof value === 'string' && value.endsWith('\n') ? ['    (ends with a line break)'] : [])];
-  return [head, ...criterion, ...block('expected', check.expected, expected), ...block('got', check.actual, actual)];
+  return [head, ...criterion, ...block(refLabel ? `expected (${refLabel})` : 'expected', check.expected, expected), ...block('got', check.actual, actual)];
 }
 // With a plain reason (#379): the reason, where and the fix; an AI service failure is not a problem in the test.
 function refusalLines(item, serverNext = false) {
