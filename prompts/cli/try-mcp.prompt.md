@@ -65,7 +65,7 @@ classification and formatting, not English-message parsing or a second policy.
 Use a fresh JSON-RPC request ID for an apply attempt while preserving the pending
 identity; existing response replay and conflicting-ID refusal still apply.
 
-Support initialize with version negotiation (2025-06-18, 2025-03-26, 2024-11-05; default newest), ping, tools/list, tools/call and notifications. Invalid JSON gets -32700, invalid envelopes -32600, invalid method parameters -32602, unknown methods -32601. Ignore valid notifications without executing tool calls. Reject batches. Bound incoming lines and response replay memory; never print tokens, stacks or private owner URLs. Closing input waits for queued requests; it does not close the Try.
+Support initialize with version negotiation (2025-06-18, 2025-03-26, 2024-11-05; default newest), ping, tools/list, tools/call and notifications. Initialize returns serverInfo name `pdd-try` and this package's current version from package metadata, never a release-number literal. Invalid JSON gets -32700, invalid envelopes -32600, invalid method parameters -32602, unknown methods -32601. Ignore valid notifications without executing tool calls. Reject batches. Bound incoming lines and response replay memory; never print tokens, stacks or private owner URLs. Closing input waits for queued requests; it does not close the Try.
 
 ## Workspace and save association
 

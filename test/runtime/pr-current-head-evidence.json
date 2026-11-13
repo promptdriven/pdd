@@ -823,7 +823,7 @@
             "story": "release",
             "title": "Synthetic release",
             "test": "test/runtime/release.json",
-            "state": "unknown"
+            "state": "partial"
           }
         ],
         "exitCode": 3

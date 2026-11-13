@@ -7,7 +7,7 @@ import { parseArgv } from '../src/argument-parser.mjs';
 import { NAMES } from '../src/command-catalog.mjs';
 import { renderCompletion } from '../src/completion.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
-import { fakeRuntime, harbor, root, sink } from './runtime-fake.mjs';
+import { fakeRuntime, harbor, root, sink } from './helpers/runtime-fake.mjs';
 
 // Rules of user_stories/new-command-names.md that the runPdd vectors cannot see: a removed name runs
 // nothing, quiet forms give the same result with no extra line, completion, and the words of printed lines.
@@ -117,7 +117,19 @@ test('sim runs like simulate and test --lint like lint, in local modes', async t
   const setup = harbor(t);
   const options = () => ({ cwd: setup.repo, env: { HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: 'http://127.0.0.1:9', PATH: '/usr/bin:/bin' } });
   const lint = await sameRun([[LINT, '--local', '--json'], [TEST, '--lint', '--local', '--json']], options);
-  assert.equal(lint[0].code, 0, lint[0].stderr); JSON.parse(lint[0].stdout); assert.deepEqual(lint[0], lint[1]);
+  const summaries = lint.map(result => {
+    assert.equal(result.code, 0, result.stderr); assert.equal(result.stderr, '');
+    const summary = JSON.parse(result.stdout);
+    assert.match(summary.batch, /^\d{8}-\d{6}-[a-z0-9]{4}$/);
+    const folder = join(setup.state, 'batches', summary.batch);
+    assert.equal(JSON.parse(readFileSync(join(folder, 'batch.json'), 'utf8')).batch, summary.batch);
+    assert.deepEqual(JSON.parse(readFileSync(join(folder, 'summary.json'), 'utf8')), summary);
+    return summary;
+  });
+  // Each completed local lint saves an independent batch; only its identity differs between aliases.
+  assert.notEqual(summaries[0].batch, summaries[1].batch);
+  const stable = summaries.map(({ batch, ...fields }) => fields);
+  assert.deepEqual(stable[0], stable[1]);
   const story = await sameRun([[SIMULATE, 'no-such-story'], ['sim', 'no-such-story']], options);
   assert.equal(story[0].code, 2); assert.deepEqual(story[0], story[1]);
 });
@@ -166,11 +178,13 @@ test('shell completion offers only the main names', t => {
 // The lines that pdd writes name only the new commands. The removal line is built from the catalog words, so
 // no source file needs the text `pdd check` or `pdd try`. A server text passes through as data, never as source.
 test('no source line names pdd check or pdd try', () => {
-  const dir = join(root, 'src'), found = [];
-  for (const name of readdirSync(dir).filter(file => file.endsWith('.mjs'))) {
-    readFileSync(join(dir, name), 'utf8').split('\n').forEach((text, index) => {
+  const files = readdirSync(join(root, 'src')).filter(file => file.endsWith('.mjs')).map(file => join('src', file));
+  assert.ok(files.length >= 85, `expected full host src scan, got ${files.length}`);
+  const found = [];
+  for (const file of files) {
+    readFileSync(join(root, file), 'utf8').split('\n').forEach((text, index) => {
       // A whole-line comment is never printed.
-      if (!text.trim().startsWith('//') && /\bpdd (?:check|try)\b/.test(text)) found.push(`${name}:${index + 1}: ${text.trim().slice(0, 120)}`);
+      if (!text.trim().startsWith('//') && /\bpdd (?:check|try)\b/.test(text)) found.push(`${file}:${index + 1}: ${text.trim().slice(0, 120)}`);
     });
   }
   assert.deepEqual(found, []);

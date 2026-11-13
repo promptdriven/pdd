@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import { cpSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { lintSvgLayouts } from '../src/svg-layout.mjs';
-import { runCheck } from '../src/runtime-client.mjs';
+import { runCheck } from '../src/runtime-seam.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
-import { fakeRuntime, harbor, portsFor, sink, temp, PLACE } from './runtime-fake.mjs';
+import { fakeRuntime, harbor, portsFor, sink, temp, PLACE } from './helpers/runtime-fake.mjs';
 
 const fixtures = join(import.meta.dirname, 'fixtures/svg-layout');
 function drawing(t, prose = readFileSync(join(fixtures, 'game.prompt.md'), 'utf8'), svg) {
@@ -77,10 +77,10 @@ test('local fragment paint resources accept CSS quotes while external resources 
   }
 });
 
-test('public local lint includes no-interface/no-test Git-visible prompts, no auth/network/state', async t => {
+test('public local lint includes no-interface/no-test Git-visible prompts, no auth/network', async t => {
   const setup = harbor(t, repo => { mkdirSync(join(repo, 'views')); cpSync(join(fixtures, 'game.ui.svg'), join(repo, 'views/game.ui.svg')); writeFileSync(join(repo, 'views/game.prompt.md'), '![Layout](game.ui.svg)'); });
   const stdout = sink(), stderr = sink();
-  const env = { HOME: setup.home, PDD_RUNTIME_URL: 'invalid', PDD_STATE_DIR: setup.repo };
+  const env = { HOME: setup.home, PDD_RUNTIME_URL: 'invalid', PDD_STATE_DIR: setup.state };
   assert.equal(await runPdd(['lint', '--local', '--json'], { cwd: setup.repo, env, stdout, stderr }), 4, stderr.text);
   const result = JSON.parse(stdout.text);
   assert.equal(result.exit_code, 4);
@@ -97,7 +97,7 @@ test('Story local lint follows selected dependency closure and omits unrelated p
     writeFileSync(join(repo, PLACE), `${original}\n![Layout](game.ui.svg)`);
     writeFileSync(join(repo, 'prompts/unrelated.prompt.md'), '![Layout](missing.ui.svg)');
   });
-  const p = portsFor({ PDD_RUNTIME_URL: 'invalid', PDD_STATE_DIR: setup.repo }, { gh: () => assert.fail('No auth'), fetch: () => assert.fail('No network') }).ports;
+  const p = portsFor({ PDD_RUNTIME_URL: 'invalid', PDD_STATE_DIR: setup.state }, { gh: () => assert.fail('No auth'), fetch: () => assert.fail('No network') }).ports;
   assert.equal(await runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--lint': true, '--local': true, '--json': true } }, p), 0, p.stderr.text);
   const result = JSON.parse(p.stdout.text);
   assert.ok(result.warnings.some(warning => warning.includes(PLACE)));

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { readDependencySnapshot, createDependencyReadPorts } from '../src/issue-dependencies-github.mjs';
@@ -196,7 +197,7 @@ test('a later pending group advances after ten confirmed groups', async () => {
 });
 
 test('native group state survives a fresh read from a real Git checkout', async t => {
-  const cwd = mkdtempSync(join(process.cwd(), '.pdd-sort-store-'));
+  const cwd = mkdtempSync(join(tmpdir(), 'pdd-sort-store-'));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
   execFileSync('git', ['init', '-q', cwd]);
   execFileSync('git', ['remote', 'add', 'origin', 'https://github.com/example/project.git'], { cwd });

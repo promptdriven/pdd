@@ -1,0 +1,310 @@
+{
+  "kind": "native-draft-cases",
+  "status": "draft; expectations await person review",
+  "story_path": "user_stories/local-lint-result.md",
+  "owner_prompts": [
+    "prompts/cli/runtime-client.prompt.md",
+    "prompts/cli/workflow-results.prompt.md"
+  ],
+  "public_boundaries": [
+    "src/pdd-cli.mjs: runPdd([\"lint\", \"--local\", ...], ports) and runPdd([\"test\", \"--read\" or \"--retry\", BATCH, ...], ports)",
+    "src/runtime-client.mjs: runCheck({words, options, cwd, cache=false}, ports)",
+    "src/workflow-results.mjs: readRunResults({root, since}, ports), resultLines(results, {kinds:[\"pdd lint\"]}), usableResult(result)"
+  ],
+  "runtime_check": "BLOCKED",
+  "runtime_reason": "No Runtime interface at runCheck/readRunResults; workflow-results partial interface covers only assessNativeEvidence. Git/source discovery and private state files/writes are native and unbound (#2548). Not a prompt-runtime.program-scenario.v1 scenario; no check-only API proposed.",
+  "native_replay": "NOT RUN; code-area tests must consume these expected values through the public production boundaries",
+  "authority": [
+    "https://github.com/promptdriven/pdd/issues/2924"
+  ],
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "After `pdd lint --local` completes in a repository with valid Runtime interfaces and no warnings, the run shows its saved lint result as partial and local-only, with 0 warnings, 0 AI calls and no checks sent, instead of \"no pdd lint result\"."
+    },
+    {
+      "id": "AC2",
+      "text": "With a selected Story or no Story selector, saved evidence and JSON retain the actual inspected scope; text and JSON retain warnings, interface findings and the existing lint exit. Saving local evidence and reading it with `pdd test --read BATCH` need no sign-in, network or model calls."
+    },
+    {
+      "id": "AC3",
+      "text": "A local result remains partial and local-only when it has no test rows. It never appears as a full pass or satisfies a full lint/check gate, pass cache or recent passing lint receipt."
+    },
+    {
+      "id": "AC4",
+      "text": "The run reads only eligible results at or after its start and keeps the newest lint result, including a newer local partial result after an older hosted pass. Reading changes no files and starts no work."
+    },
+    {
+      "id": "AC5",
+      "text": "If the state folder is inside the repository, or the local result cannot be saved, local lint exits 2 with a clear state error, does not claim a saved result and leaves previous results intact."
+    }
+  ],
+  "setup": {
+    "synthetic": true,
+    "isolation": "Fresh temporary Git repository copied from unchanged upstream test/fixtures/harbor; external PDD_STATE_DIR per case; fixed injected clock and UUIDs. No credentials or live transport.",
+    "production_flow": "Invoke runPdd with actual local lint arguments, then readRunResults and resultLines for that same root/state and since. Inspect actual command-produced batch/summary using the shared saved-local-layout record contract; call usableResult on returned evidence. The offline-read case calls public runCheck for that same newly produced batch. Controls may seed unrelated historical batches, but target local evidence must come from the command.",
+    "offline_guards": "Authentication, fetch and model metadata callbacks fail if called; invalid PDD_RUNTIME_URL confirms local recording needs no origin validation. Reader state-tree hashes before/after must match.",
+    "default_summary": "partial: checked SVG layout only; prompts not checked (local-only). 0 warnings. 0 AI calls. No checks were sent."
+  },
+  "local_invariants": {
+    "saved_intent": "lint-only",
+    "local_only": true,
+    "lint_state": "partial",
+    "reason_code": "local-only",
+    "usableResult": false,
+    "authentication_calls": 0,
+    "network_calls": 0,
+    "model_calls": 0,
+    "check_posts": 0,
+    "try_posts": 0,
+    "report_url": null,
+    "engine_model_identity": "absent; never fabricated",
+    "full_pass_cache_or_lint_receipt": "not created or refreshed",
+    "reader_writes": 0,
+    "forbidden_summary": [
+      "0 of 0 tests pass",
+      "no pdd lint result"
+    ],
+    "reason": {
+      "code": "local-only",
+      "message": "checked SVG layout only; prompts not checked"
+    },
+    "new_record_discriminator": "v1 lint-only + local_only true + valid local_scope + lint state/lint_state partial + lint.reason.code local-only; legacy native-only batches retain their separate route",
+    "shared_record_contract": "prompts/cli/workflow-results.prompt.md#saved-local-layout-record"
+  },
+  "cases": [
+    {
+      "id": "default-zero-warning",
+      "criterion_ids": [
+        "AC1",
+        "AC2",
+        "AC3"
+      ],
+      "argv": [
+        "lint",
+        "--local"
+      ],
+      "expected": {
+        "exit_code": 0,
+        "saved_batch_and_summary": true,
+        "saved_summary_from_setup": true,
+        "local_scope_tests": [],
+        "local_scope_prompts": [
+          "prompts/place_order.prompt.md"
+        ],
+        "reader_kind": "pdd lint",
+        "reader_summary_from_setup": true,
+        "rendered_partial_and_local_only": true,
+        "apply_local_invariants": true,
+        "saved_rows": [],
+        "reader_states": [],
+        "reader_state": "partial",
+        "reader_localOnly": true,
+        "reader_usableResult": false
+      }
+    },
+    {
+      "id": "selected-json-with-warning",
+      "criterion_ids": [
+        "AC2",
+        "AC3"
+      ],
+      "given": "Synthetic linked SVG has one known layout disagreement; unrelated prompt also has a disagreement. Select only place-order. Use the existing SVG advisory contract for the warning fact.",
+      "argv": [
+        "lint",
+        "place-order",
+        "--local",
+        "--json"
+      ],
+      "expected": {
+        "exit_code": 0,
+        "json_and_saved_batch_identity_match": true,
+        "json_and_saved_scope_match": true,
+        "selected_scope_only": true,
+        "unrelated_warning_absent": true,
+        "apply_local_invariants": true,
+        "selected_warning_retained_in_text_json_saved_and_reader": true,
+        "immediate_text_keeps_warning_and_partial_summary_without_new_scope_line": true
+      },
+      "also_replay_argv": [
+        "lint",
+        "place-order",
+        "--local"
+      ]
+    },
+    {
+      "id": "default-interface-refusal",
+      "criterion_ids": [
+        "AC2",
+        "AC3"
+      ],
+      "given": "One repository prompt has a missing Runtime interface. This preserves existing default-local interface refusal.",
+      "argv": [
+        "lint",
+        "--local",
+        "--json"
+      ],
+      "expected": {
+        "exit_code": 4,
+        "saved_local_partial_classification": true,
+        "apply_local_invariants": true,
+        "original_interface_finding_retained_in_text_json_saved_and_reader": true,
+        "immediate_text_keeps_finding_and_partial_summary": true
+      },
+      "also_replay_argv": [
+        "lint",
+        "--local"
+      ]
+    },
+    {
+      "id": "offline-command-produced-empty-batch-read",
+      "criterion_ids": [
+        "AC1",
+        "AC2",
+        "AC3",
+        "AC4"
+      ],
+      "given": "Create the target batch by the actual local lint command, first with valid interfaces (exit 0), then in an isolated copy with the existing default-interface refusal (exit 4). Both produce rows: []. Use each command JSON batch ID for the reads below; no manufactured saved target. Preserve one legacy native-only batch as a control; do not reclassify it as SVG local lint.",
+      "argv": [
+        "lint",
+        "--local",
+        "--json"
+      ],
+      "expected": {
+        "saved_batch_and_summary_match_shared_contract": true,
+        "saved_rows": [],
+        "text_and_json_reads_preserve_original_exit_codes": [
+          0,
+          4
+        ],
+        "read_json_batch_scope_summary_reason_warnings_problems_equal_command_json": true,
+        "text_read_retains_summary_and_diagnostics": true,
+        "reader_states": [],
+        "reader_usableResult": false,
+        "retry_returns_same_saved_result_and_requests_fresh_local_lint_for_new_evidence": true,
+        "invalid_runtime_origin_never_validated": true,
+        "source_capture_calls_during_read_or_retry": 0,
+        "state_tree_unchanged_by_read_and_retry": true,
+        "no_auth_network_model_dispatch_continuation_lock_or_cache_receipt_writes": true,
+        "legacy_native_only_batch_keeps_existing_read_classification": true,
+        "apply_local_invariants": true
+      },
+      "follow_up_public_runCheck_inputs": [
+        {
+          "words": [
+            "<command-produced batch>"
+          ],
+          "options": {
+            "--read": true
+          },
+          "cwd": "<same temporary repository>",
+          "cache": false
+        },
+        {
+          "words": [
+            "<command-produced batch>"
+          ],
+          "options": {
+            "--read": true,
+            "--json": true
+          },
+          "cwd": "<same temporary repository>",
+          "cache": false
+        },
+        {
+          "words": [],
+          "options": {
+            "--retry": "<command-produced batch>",
+            "--json": true
+          },
+          "cwd": "<same temporary repository>",
+          "cache": false
+        }
+      ]
+    },
+    {
+      "id": "newest-local-after-hosted",
+      "criterion_ids": [
+        "AC3",
+        "AC4"
+      ],
+      "given": "Seed one older eligible hosted lint pass, then create the target local result with the command.",
+      "argv": [
+        "lint",
+        "--local"
+      ],
+      "expected": {
+        "reader_selects_command_local_batch": true,
+        "older_hosted_pass_not_substituted": true,
+        "apply_local_invariants": true
+      }
+    },
+    {
+      "id": "root-time-and-read-only-controls",
+      "criterion_ids": [
+        "AC4"
+      ],
+      "given": "Create local command evidence in two isolated repositories and one earlier local result before since; then create this run target after since.",
+      "argv": [
+        "lint",
+        "--local"
+      ],
+      "expected": {
+        "foreign_and_pre_run_results_excluded": true,
+        "reader_selects_command_local_batch": true,
+        "state_tree_unchanged_by_reads": true,
+        "no_tests_or_commands_started_by_reader": true,
+        "apply_local_invariants": true
+      }
+    },
+    {
+      "id": "state-inside-repository",
+      "criterion_ids": [
+        "AC5"
+      ],
+      "review_choice": "Proposed new local-persistence failure behavior; person review required.",
+      "given": "PDD_STATE_DIR names the repository or a symlink resolving inside it.",
+      "argv": [
+        "lint",
+        "--local"
+      ],
+      "expected": {
+        "exit_code": 2,
+        "clear_external_state_diagnostic": true,
+        "no_completed_new_result": true,
+        "no_saved_success_claim": true,
+        "previous_results_unchanged": true,
+        "network_and_authentication_calls": 0
+      }
+    },
+    {
+      "id": "state-write-failure",
+      "criterion_ids": [
+        "AC5"
+      ],
+      "review_choice": "Proposed new failure exit is 2.",
+      "given": "External state directory has a deterministic filesystem obstruction (a regular file where a directory must be created); also fail summary publication after actual batch preparation through a native file boundary. For that second variation seed an older eligible hosted lint pass first, then consume the actual newly prepared local batch.",
+      "argv": [
+        "lint",
+        "--local",
+        "--json"
+      ],
+      "expected": {
+        "exit_code": 2,
+        "clear_state_save_diagnostic": true,
+        "no_completed_new_result": true,
+        "no_saved_success_claim": true,
+        "previous_results_unchanged": true,
+        "network_and_authentication_calls": 0,
+        "prepared_batch_without_matching_complete_summary_remains_newest_local_candidate": true,
+        "incomplete_reader_state": "partial",
+        "incomplete_reader_localOnly": true,
+        "incomplete_reader_usableResult": false,
+        "incomplete_reader_summary": "Local lint result not saved (the local save did not finish). partial (local-only).",
+        "older_hosted_pass_not_substituted": true,
+        "offline_cli_read_of_prepared_batch_exit_code": 2,
+        "reader_state_tree_unchanged": true
+      }
+    }
+  ]
+}

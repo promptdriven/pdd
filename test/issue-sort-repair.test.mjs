@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { createDependencyReadPorts, readDependencySnapshot } from '../src/issue-dependencies-github.mjs';
 import { routeSortIssues, pacedSortWrites } from '../src/issue-sort-github.mjs';
 import { reconcileDependencyIntake } from '../src/issue-dependencies-intake.mjs';
-import { interfaceBlocks, proseSha256, promptRefusal, checkInput } from '../src/runtime-preflight.mjs';
+import { interfaceBlocks, proseSha256, promptRefusal, checkInput } from '../src/runtime-seam.mjs';
 import { fixture, complete, repository, key } from './helpers/issue-sort-fixture.mjs';
 const fixed = w => ({ ...w.record(1).status, state: 'fixed', fix: 'https://github.com/example/project/pull/90' });
 const snapshot = async w => (await readDependencySnapshot({ repository }, w.ports)).snapshot;
@@ -105,10 +105,11 @@ test('native retries do not attach a label which is already present', async () =
 });
 
 const owners = ['autopilot-areas','issue-sort','issue-sort-github','issue-dependencies','issue-dependencies-github','issue-dependencies-intake','workflow-runner'];
-for (const owner of owners) test(`the ${owner} contract admits native use with a current interface`, () => {
+for (const owner of owners) test(`the ${owner} contract admits native use as a current approved contract`, () => {
   const path = `prompts/cli/${owner}.prompt.md`, source = readFileSync(path, 'utf8');
   const iface = JSON.parse(interfaceBlocks(source)[0][1]);
   assert.equal(promptRefusal({ path, interface: iface, prose: proseSha256(source) }, 'repair'), null);
+  assert.equal(iface.status, 'approved');
 });
 
 test('the public unconfirmed sort result conforms to its Runtime schema', async () => {
