@@ -6,7 +6,7 @@ import { mkdtempSync, realpathSync, symlinkSync, mkdirSync, readFileSync, readdi
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { proseSha256 } from '../src/runtime-preflight.mjs';
+import { proseSha256 } from '../src/runtime-seam.mjs';
 
 const bin = resolve(import.meta.dirname, '../bin/pdd.mjs');
 function fixture(t) {

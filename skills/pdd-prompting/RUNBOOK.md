@@ -359,6 +359,31 @@ node `<file>--op-<operation>--hex-<operation name in hex>`. `printf add | xxd -p
   A declared operation that the step did not use counts `0`. pdd does not check paths before it sends, so work out
   each path with these rules before the first check.
 
+**Check operations (`op`).** Exact checks satisfy criterion coverage; `exists` (without `html`) and `contains` are partial checks and must be paired with an exact check on the criterion.
+
+| `op` | Meaning | Example fields |
+|---|---|---|
+| `equals`, `not_equals` | Exact JSON value match or inequality | `"value": 3784` |
+| `one_of` | Actual value matches any listed candidate | `"value": ["pending", "queued"]` |
+| `count` | Length of an array | `"value": 4` |
+| `at_least` / `gte`, `at_most` / `lte`, `lt`, `gt` | Numeric or length bound (`"measure": "value"` default, or `"measure": "length"` for string code points or array items) | `"op": "at_most", "value": 500` |
+| `not_contains`, `all_in`, `equals_ignore_case` | Substring/item exclusion, array subset check, or case-insensitive ASCII string match | `"op": "all_in", "value": ["read", "write"]` |
+| `exists`, `contains` | Presence or substring/item containment (add `"html"` on `exists` for exact HTML selector checks) | `"op": "contains", "value": "Order #"` |
+
+**Cross-path relational checks.** For `equals`, `not_equals`, `at_least` / `gte`, `at_most` / `lte`, `lt`, and `gt` on `result`, `world`, or `calls`, compare against another live field from `"result"`, `"input"`, or `"world"` instead of a literal `value` (or pass `{"ref_target", "ref_path"}` as `"value"`):
+```json
+{"criterion_id": "AC1", "target": "result", "path": "/fee_cents", "op": "at_most", "ref_target": "input", "ref_path": "/cap_cents"}
+```
+Add `"ref_json_path"` when the referenced field is a JSON-encoded string, and `"measure": "length"` when comparing string or array lengths across paths.
+
+**Exact integer conservation (`integer_relation`).** Check exact integer equations or bounds (`"compare": "eq" | "le" | "ge"`) across `result`, `input`, and `world` without hardcoding components:
+```json
+{"criterion_id": "AC2", "target": "result", "path": "", "op": "integer_relation",
+ "value": {"compare": "eq", "left": {"sum": [{"field": "/payout_cents"}, {"field": "/fee_cents"}]},
+           "right": {"ref_target": "input", "ref_path": "/gross_cents"}}}
+```
+Terms use `{"field": "<pointer>"}` (relative to the check's `target`/`path`), `{"ref_target": "result" | "input" | "world", "ref_path": "<pointer>"}`, `{"integer": "100"}` (base-10 string), `{"sum": [...]}`, or `{"product": [...]}`.
+
 ## 9. Money and dates
 
 - Do all money math in whole cents. Write the rounding rule in the prose, with an example:
@@ -832,6 +857,12 @@ writes the `Runtime:` lines and one `Evidence:` line in the PR body. Autopilot c
 records. A line that the records do not support is red. The same rules, short enough for one read, are in
 `autopilot-job-rules.md` of the pdd-prompting skill; a job reads that file in full.
 
+- **Skill choice:** a fix that changes no product behavior uses `pdd-small-change`, also when the issue is written as a
+  bug. Pick `pdd-small-change` whenever every planned file takes unowned path `d` non-code files (docs, CI, lock files,
+  non-behavior config or metadata, or test-only maintenance — never `*.prompt.md` or `user_stories/*.md`), and write no
+  new Story or prompt for path `d` files. When a `pdd-small-change` run changes owned code (path `a`, `b` or `c`), keep
+  the Story test, replay and `Runtime:` evidence. A repair on a path-`d`-only PR keeps path `d` without adding a new
+  Story or prompt.
 - **Changed** means changed against the base: `git diff --name-only origin/BASE...HEAD` (BASE is the PR's base
   branch, usually `main`). It never means changed since the previous PR head. A Story or prompt that a merge from the
   base brought in is not changed. A changed Story is a Story whose Story file or test file changed, or whose test
@@ -903,6 +934,9 @@ records. A line that the records do not support is red. The same rules, short en
 
 For the reviewer:
 
+- Non-code path `d` files (docs, config, CI settings, `package.json`, lock files, and test files or fixtures) need no
+  prompt and no Story; never ask for a new prompt or Story for them, and treat a new prompt or Story added for a
+  non-code file as a must-fix.
 - Every choice that the issue did not settle must be listed in the PR body under "Choices Autopilot made:" with its
   reason (with "(changes public behavior: ...)" when users see a change); a missing or wrong line is a P2 must-fix
   (fix the list).
