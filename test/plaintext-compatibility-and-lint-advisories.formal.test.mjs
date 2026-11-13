@@ -1,9 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  describeCompatibility,
-  describeLintDiagnostics,
-} from '../src/lint-compatibility-display.mjs';
+
+async function loadDisplayModule() {
+  try {
+    return await import('../src/lint-compatibility-display.mjs');
+  } catch (error) {
+    if (error?.code === 'ERR_MODULE_NOT_FOUND') {
+      assert.fail(
+        'lint-compatibility-display module is missing; plain-text compatibility summary and severity-split lint advisories are unimplemented',
+      );
+    }
+    throw error;
+  }
+}
 
 // Independent formal oracle derived strictly from the approved Story
 // user_stories/plaintext-compatibility-and-lint-advisories.md
@@ -325,18 +334,20 @@ function storyOracleDiagnostics({ problems, localOnly }) {
   return lines.join('\n');
 }
 
-test('FORMAL Rule 1 & Rule 3 (default plain-text mode): single-line compatibility summary, zero JSON braces and input immutability (7020 inputs)', () => {
+test('FORMAL Rule 1 & Rule 3: single-line default compatibility summary, detailed full JSON preservation, and input immutability (7020 configurations, 14040 evaluations)', async () => {
+  const { describeCompatibility } = await loadDisplayModule();
   const reports = buildReportedDomain();
   assert.equal(reports.length, 195);
 
-  let checked = 0;
+  let configurations = 0;
+  let evaluations = 0;
   for (const label of LABELS) {
     for (const state of STATES) {
       for (const association of ASSOCIATIONS) {
         for (const issue of ISSUES) {
           for (const reported of reports) {
             for (const clientAdvice of CLIENT_ADVICES) {
-              const input = {
+              const plainInput = {
                 label,
                 compatibility: {
                   state,
@@ -347,23 +358,23 @@ test('FORMAL Rule 1 & Rule 3 (default plain-text mode): single-line compatibilit
                 clientAdvice: structuredClone(clientAdvice),
                 details: false,
               };
-              const snapshot = structuredClone(input);
-              const actual = describeCompatibility(input);
+              const plainSnapshot = structuredClone(plainInput);
+              const plainActual = describeCompatibility(plainInput);
 
               // Rule 3: purity & zero mutation of supplied inputs and nested arrays/objects.
-              assert.deepEqual(input, snapshot, 'describeCompatibility mutated its input');
-              let frozenActual;
+              assert.deepEqual(plainInput, plainSnapshot, 'describeCompatibility mutated its input');
+              let frozenPlainActual;
               assert.doesNotThrow(() => {
-                frozenActual = describeCompatibility(deepFreeze(structuredClone(snapshot)));
+                frozenPlainActual = describeCompatibility(deepFreeze(structuredClone(plainSnapshot)));
               }, 'describeCompatibility attempted transient mutation on frozen input');
-              assert.deepEqual(frozenActual, actual, 'describeCompatibility must be deterministic');
+              assert.deepEqual(frozenPlainActual, plainActual, 'describeCompatibility must be deterministic');
 
-              assert.deepEqual(Object.keys(actual), ['text']);
-              assert.equal(typeof actual.text, 'string');
-              assert.equal(actual.text.endsWith('\n'), false);
+              assert.deepEqual(Object.keys(plainActual), ['text']);
+              assert.equal(typeof plainActual.text, 'string');
+              assert.equal(plainActual.text.endsWith('\n'), false);
 
               // Rule 1 forbidden states when detailed mode is off:
-              const lines = actual.text.split('\n');
+              const lines = plainActual.text.split('\n');
               const expectedLineCount = clientAdvice === null ? 1 : 2;
               assert.equal(
                 lines.length,
@@ -384,38 +395,19 @@ test('FORMAL Rule 1 & Rule 3 (default plain-text mode): single-line compatibilit
                 );
               } else {
                 const defaulted = describeCompatibility({
-                  label: snapshot.label,
-                  compatibility: structuredClone(snapshot.compatibility),
+                  label: plainSnapshot.label,
+                  compatibility: structuredClone(plainSnapshot.compatibility),
                 });
-                assert.deepEqual(defaulted, actual);
+                assert.deepEqual(defaulted, plainActual);
               }
 
-              // Full Story & contract oracle comparison:
-              const expectedText = storyOracleCompatibility(snapshot);
-              assert.equal(actual.text, expectedText);
-              checked++;
-            }
-          }
-        }
-      }
-    }
-  }
+              // Full Story & contract oracle comparison for default plain-text mode:
+              const expectedPlainText = storyOracleCompatibility(plainSnapshot);
+              assert.equal(plainActual.text, expectedPlainText);
+              evaluations++;
 
-  assert.equal(checked, 7020);
-});
-
-test('FORMAL Rule 1 & Rule 3 (detailed mode): pretty-printed compatibility JSON, compact client advice JSON and input immutability (7020 inputs)', () => {
-  const reports = buildReportedDomain();
-  assert.equal(reports.length, 195);
-
-  let checked = 0;
-  for (const label of LABELS) {
-    for (const state of STATES) {
-      for (const association of ASSOCIATIONS) {
-        for (const issue of ISSUES) {
-          for (const reported of reports) {
-            for (const clientAdvice of CLIENT_ADVICES) {
-              const input = {
+              // Detailed mode preservation & Rule 3 immutability on the same configuration:
+              const detailedInput = {
                 label,
                 compatibility: {
                   state,
@@ -426,24 +418,25 @@ test('FORMAL Rule 1 & Rule 3 (detailed mode): pretty-printed compatibility JSON,
                 clientAdvice: structuredClone(clientAdvice),
                 details: true,
               };
-              const snapshot = structuredClone(input);
-              const actual = describeCompatibility(input);
+              const detailedSnapshot = structuredClone(detailedInput);
+              const detailedActual = describeCompatibility(detailedInput);
 
-              // Rule 3: purity & zero mutation of supplied inputs and nested arrays/objects.
-              assert.deepEqual(input, snapshot, 'describeCompatibility mutated its input');
-              let frozenActual;
+              assert.deepEqual(detailedInput, detailedSnapshot, 'describeCompatibility mutated its input');
+              let frozenDetailedActual;
               assert.doesNotThrow(() => {
-                frozenActual = describeCompatibility(deepFreeze(structuredClone(snapshot)));
+                frozenDetailedActual = describeCompatibility(deepFreeze(structuredClone(detailedSnapshot)));
               }, 'describeCompatibility attempted transient mutation on frozen input');
-              assert.deepEqual(frozenActual, actual, 'describeCompatibility must be deterministic');
+              assert.deepEqual(frozenDetailedActual, detailedActual, 'describeCompatibility must be deterministic');
 
-              assert.deepEqual(Object.keys(actual), ['text']);
-              assert.equal(typeof actual.text, 'string');
-              assert.equal(actual.text.endsWith('\n'), false);
+              assert.deepEqual(Object.keys(detailedActual), ['text']);
+              assert.equal(typeof detailedActual.text, 'string');
+              assert.equal(detailedActual.text.endsWith('\n'), false);
 
-              const expectedText = storyOracleCompatibility(snapshot);
-              assert.equal(actual.text, expectedText);
-              checked++;
+              const expectedDetailedText = storyOracleCompatibility(detailedSnapshot);
+              assert.equal(detailedActual.text, expectedDetailedText);
+              evaluations++;
+
+              configurations++;
             }
           }
         }
@@ -451,10 +444,12 @@ test('FORMAL Rule 1 & Rule 3 (detailed mode): pretty-printed compatibility JSON,
     }
   }
 
-  assert.equal(checked, 7020);
+  assert.equal(configurations, 7020);
+  assert.equal(evaluations, 14040);
 });
 
-test('FORMAL Rule 2 & Rule 3: bounded lint severity partitioning, relative order and input immutability (3110 inputs)', () => {
+test('FORMAL Rule 2 & Rule 3: bounded lint severity partitioning, relative order and input immutability (3110 inputs)', async () => {
+  const { describeLintDiagnostics } = await loadDisplayModule();
   const sequences = enumerateSequences(DIAGNOSTIC_TEMPLATES.length, 4);
   assert.equal(sequences.length, 1555);
 

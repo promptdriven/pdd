@@ -12,28 +12,51 @@ const scenario = JSON.parse(scenarioText, (key, value, context) =>
 async function loadDisplayModule() {
   try {
     return await import('../src/lint-compatibility-display.mjs');
-  } catch {
-    assert.fail('lint-compatibility-display module is missing; plain-text compatibility summary and severity-split lint advisories are unimplemented');
+  } catch (error) {
+    if (error?.code === 'ERR_MODULE_NOT_FOUND') {
+      assert.fail(
+        'lint-compatibility-display module is missing; plain-text compatibility summary and severity-split lint advisories are unimplemented',
+      );
+    }
+    throw error;
   }
 }
 
-for (const step of scenario.steps) {
-  test(`issue3237 vector replay ${step.step_id}`, async () => {
-    const mod = await loadDisplayModule();
+test('issue3237 vector replay: all 6 approved scenario steps in order', async () => {
+  const mod = await loadDisplayModule();
+  assert.equal(scenario.steps.length, 6);
+  const world = structuredClone(scenario.initial_world);
+  const failures = [];
+
+  for (const step of scenario.steps) {
     const fn = mod[step.operation];
     assert.equal(typeof fn, 'function', `expected exported operation ${step.operation}`);
     const input = structuredClone(step.input);
     const before = structuredClone(input);
     const result = fn(input);
-    for (const check of step.checks) {
+    for (let checkIndex = 0; checkIndex < step.checks.length; checkIndex++) {
+      const check = step.checks[checkIndex];
       assert.equal(check.target, 'result');
       assert.equal(check.path, '/text');
       assert.equal(check.op, 'equals');
-      assert.deepEqual(result.text, check.value, `${check.criterion_id}: ${step.step_id}`);
+      try {
+        assert.deepEqual(result.text, check.value, `${check.criterion_id}: ${step.step_id}`);
+      } catch (error) {
+        failures.push([step.step_id, checkIndex, error.message]);
+      }
     }
-    assert.deepEqual(input, before, 'display formatter must never mutate supplied inputs');
-  });
-}
+    assert.deepEqual(input, before, `display formatter must never mutate supplied inputs (${step.step_id})`);
+  }
+
+  assert.deepEqual(world, scenario.initial_world);
+  assert.equal(
+    failures.length,
+    0,
+    `Failed scenario checks (${failures.map(([stepId, checkIndex]) => `${stepId}[${checkIndex}]`).join(', ')}):\n${failures
+      .map(([stepId, checkIndex, message]) => `[${stepId}#${checkIndex}] ${message}`)
+      .join('\n')}`,
+  );
+});
 
 test('issue3237 edge cases: empty/multi-mode structured, absent report, null advice, and diagnostic ordering', async () => {
   const { describeCompatibility, describeLintDiagnostics } = await loadDisplayModule();
