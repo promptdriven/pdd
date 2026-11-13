@@ -348,9 +348,12 @@ The default `gh` port likewise ignores stdin and captures stdout and stderr; it 
 
 ## Sign-in
 
-- Token = `gh auth token`, in memory only: never in files, logs, argv, URLs or error text. No `gh`: exit 5, `Install the GitHub CLI, then run gh auth login`. Empty: exit 5, `Run gh auth login`.
-- `gh api user --jq '.login + " " + (.id|tostring)'` once per batch; save the login and the user ID.
-- Every call sends `Authorization: Bearer <token>` with TLS on and `redirect: 'manual'`.
+- Every sign-in reads `gh auth token` live and keeps the trimmed token in memory only: never in files, cache records, receipts, logs, argv, URLs, stdout or stderr. Missing `gh` (`ENOENT`): exit 5 (`125` in Try door mode), `Install the GitHub CLI, then run gh auth login`, with 0 `gh api user` calls. Nonzero exit or blank token: exit 5 (`125` in Try door mode), `Run gh auth login`, with 0 `gh api user` calls; never return a cached identity when `gh auth token` fails or returns blank.
+- Private machine identity cache `$PDD_STATE_DIR/github-user.json` (`0600` inside `0700` `$PDD_STATE_DIR`, written atomically via temporary file and rename; never stores the raw token) holds `{login, user_id, cached_at, token_sha256}`, where `login` is a nonblank GitHub login without whitespace, `user_id` is a positive decimal-digit string (`/^[1-9]\d*$/`), `cached_at` is an ISO timestamp from the injected clock, and `token_sha256` is the lowercase 64-hex SHA-256 digest of the trimmed token.
+- When `github-user.json` is valid JSON with valid `login`, valid `user_id` and `token_sha256` equal to `sha256(token)`, reuse `{login, user_id}` with 0 `gh api user` calls across all sign-in callers (`pdd test`, `pdd lint`, `--read` for saved batches and call UUIDs, `--retry`, `--request`, `pdd simulate` create/attach/reopen/`--save-last`/`--stop`, `runDoorCall` and `readTryOwner`), including while GitHub's REST rate limit is exhausted.
+- When `github-user.json` is missing, unreadable, corrupt, incomplete or has `token_sha256` different from `sha256(token)`, call `gh api user --jq '.login + " " + (.id|tostring)'` once, validate `login` and `user_id`, and atomically write `github-user.json` (failing open to the verified in-memory identity if optional cache persistence fails, without relaxing the outside-repository state rule).
+- When `gh api user` fails or returns invalid output: if a valid `github-user.json` with matching `token_sha256` exists during a forced refresh (never after an HTTP 401 rejection), the failure is a GitHub API rate limit, and the command is reading saved local batch results (`--read` of a saved batch), print one concise `stderr` warning (`Warning: GitHub API rate limit reached; using saved GitHub login <login> for this token.`) and use that matching-token identity for the saved local read; otherwise stop with exit 5 (`125` in Try door mode): `pdd could not read your GitHub login (gh api user: <first error line>). Run gh auth status.` (omitting `: <first error line>` when empty, with the token redacted).
+- Every runtime HTTP call sends `Authorization: Bearer <token>` with TLS on and `redirect: 'manual'`. When a runtime HTTP call answers 401 during an invocation whose identity came from `github-user.json` (and has not yet refreshed in that invocation), remove `github-user.json` and run one fresh `gh auth token` + `gh api user --jq '.login + " " + (.id|tostring)'` lookup: if valid, atomically write `github-user.json`, update the session token and `{login, user_id}`, re-check any required saved-owner login (`saved.login`, `record.login` or `descriptor.login`) before retrying — failing immediately with that caller's owner-mismatch message if the login changed — and retry the 401-rejected HTTP request once without writing a second `<id>.posted` marker. If the invocation's initial sign-in already called `gh api user` fresh, if the refresh fails, or if the single retry also answers 401, ensure `github-user.json` is removed and apply the caller's HTTP 401 stop or error with no further `gh` call or retry.
 
 ## Free interpreter health check
 
@@ -840,6 +843,7 @@ identity checks and all existing owner/origin/budget guards.
 ## State (outside the repo; folders 0700, files 0600; no tar and no token on disk)
 
 ```
+$PDD_STATE_DIR/github-user.json             cached {login, user_id, cached_at, token_sha256}; never the raw token
 $PDD_STATE_DIR/repos/<key>.json        last batch and open Try per test; key = first 16 hex of sha256(repo root realpath)
 $PDD_STATE_DIR/batches/<batch>/batch.json   origin, root, HEAD, login, user ID, source_sha256, files, bytes, lint, rows
 $PDD_STATE_DIR/batches/<batch>/<id>.posted  written before its POST; a second POST with this ID is impossible
@@ -998,7 +1002,7 @@ pdd reports each slow upload, lint and Try setup step. Use the [progress helpers
 - `--retry`: `Retrying N unstarted checks…`. `--read`: `Reading N results from the PDD interpreter…` when it reads any from the server.
 - `gh` sign-in is quick, so it prints no line; a failed `gh api user` names gh's first error line.
 - Outside the advisory capacity read's explicit fail-open rule, a network error that proves the request never reached the server (address not found, connection refused, no route, TLS certificate refused) stops at once, exit 5, nothing else sent: `pdd could not reach the PDD interpreter at <origin>: <reason> (<code>). Nothing was sent. Check your network and PDD_RUNTIME_URL, then run the command again.` A timeout or a lost answer keeps the one-shot rule: read the same request ID and never send it twice; the tick line names the reason while pdd reads again.
-- HTTP 401: `The PDD interpreter did not accept your GitHub login (HTTP 401). Run gh auth login, then run the command again.` Another unexpected status keeps the unknown state and adds the server's message: `The interpreter answered HTTP 500: <message>.`
+- HTTP 401: after any single cached-identity refresh allowed by [Sign-in](#sign-in), `The PDD interpreter did not accept your GitHub login (HTTP 401). Run gh auth login, then run the command again.` Another unexpected status keeps the unknown state and adds the server's message: `The interpreter answered HTTP 500: <message>.`
 
 ## Outcome
 
