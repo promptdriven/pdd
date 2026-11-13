@@ -14,7 +14,7 @@ import { parkAutomaticRun, runStatus, changeRun, stepDone, startRun, approveRun,
 import { writeRun } from '../src/workflow-runs.mjs';
 import { checkCause, savedCheckCause } from '../src/workflow-results.mjs';
 import { checkRuntimeHealth, runCheck } from '../src/runtime-seam.mjs';
-import { fakeRuntime, harbor, portsFor } from './runtime-fake.mjs';
+import { fakeRuntime, harbor, portsFor } from './helpers/runtime-fake.mjs';
 import { runAutopilotAlerts } from '../src/autopilot-alerts.mjs';
 import { createDependencyReadPorts, readDependencySnapshot } from '../src/issue-dependencies-github.mjs';
 import { projectIssueGraph } from '../src/issue-dependencies.mjs';

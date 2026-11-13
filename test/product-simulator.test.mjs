@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runTry, readTryOwner } from '../src/runtime-seam.mjs';
-import { fakeRuntime, portsFor, sha, temp } from './runtime-fake.mjs';
+import { fakeRuntime, portsFor, sha, temp } from './helpers/runtime-fake.mjs';
 
 function coffee(t) {
   const folder = temp(t), repo = join(folder, 'repo'), home = join(folder, 'home'), state = join(folder, 'state');

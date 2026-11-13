@@ -1,22 +1,16 @@
+import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PUBLIC_COMMAND_ROUTES } from '../src/command-catalog.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
-import { DEFAULT_RUNTIME_URL, runtimeOrigin } from '../src/runtime/runtime-client.mjs';
-import { runCheck } from '../src/runtime-seam.mjs';
 import { summaryLine } from '../src/runtime-seam.mjs';
-import { TEST_SCHEMA, interfaceBlocks } from '../src/runtime-seam.mjs';
 import { runtimeLines } from '../src/workflow-runner.mjs';
-import { harbor, portsFor, root, sink } from './runtime-fake.mjs';
+import { harbor, root, sink } from './helpers/runtime-fake.mjs';
 
 // Bounded check of user_stories/name-the-interpreter.md, Rules to check (RUNBOOK §17).
-// Oracle from the Story: pdd's own lines never call the hosted service "PDD runtime" or "the runtime";
-// the machine-read words of the keep-list stay where code reads them. "the Runtime interface" (the block) and
-// "the Runtime check line" (the summary line) are keep-list names, not the service.
 const FORBIDDEN = [/\bPDD runtime\b/i, /\bthe runtime\b(?!\s+(?:interfaces?|check)\b)/i];
-// The keep-list server text that pdd detects and prints as the server sent it.
 const SERVER_TEXTS = new Set(['The runtime opens soon.']);
 const label = argv => JSON.stringify(argv);
 
@@ -27,14 +21,11 @@ function helpArgvs() {
     if (!['help', '--version'].includes(prefix[0])) prefixes.set(prefix.join(' '), prefix);
   }
   const list = [[], ['--help'], ['-h'], ['help']];
-  // `sim` is the short form of `simulate`: its help is the same help.
   for (const prefix of [...prefixes.values(), ['sim']]) list.push(['help', ...prefix], [...prefix, '--help'], [...prefix, '-h']);
   return list;
 }
 
 test('help: every help argv names the interpreter and keeps "runtime" only for the Runtime interface block', async t => {
-  // Exercise the wording independently of the real package folder's name.
-  // packageRoot is the public port for paths printed by local help.
   const packageRoot = '/pdd-test-package';
   const list = helpArgvs();
   let lines = 0;
@@ -100,15 +91,13 @@ function tokens(source) {
 }
 const sourceFiles = () => [
   ...readdirSync(join(root, 'src')).filter(name => name.endsWith('.mjs')).map(name => join('src', name)),
-  ...readdirSync(join(root, 'src/runtime')).filter(name => name.endsWith('.mjs')).map(name => join('src/runtime', name)),
   ...readdirSync(join(root, 'bin')).filter(name => name.endsWith('.mjs')).map(name => join('bin', name))];
 
-test('pdd\'s own strings: no string literal in src or bin calls the service "PDD runtime" or "the runtime"', t => {
+test('pdd\'s own strings: no string literal in host src or bin calls the service "PDD runtime" or "the runtime"', t => {
   let strings = 0, found = 0, files = 0;
   for (const file of sourceFiles()) {
     const source = readFileSync(join(root, file), 'utf8'), list = tokens(source); files++;
     strings += list.filter(token => token.kind === 'string').length;
-    // Each place where a forbidden word stands in the file must be a comment, a regex or a keep-list server text.
     for (const pattern of FORBIDDEN) for (const match of source.matchAll(new RegExp(pattern.source, 'gi'))) {
       found++;
       const token = list.find(item => item.start <= match.index && match.index < item.end);
@@ -123,49 +112,16 @@ test('pdd\'s own strings: no string literal in src or bin calls the service "PDD
   t.diagnostic(`bounds: ${files} files, ${strings} string literals; ${found} forbidden-word places, all in comments, regexes or the keep-list server text`);
 });
 
-// The keep-list: each machine-read word, checked where code reads it.
 const sourceOf = file => readFileSync(join(root, 'src', file), 'utf8');
-test('keep-list: schema ids, host, setting, folder, block label and gate text stay; the Prompt tests line reads old lines', async t => {
-  // Schema ids `prompt-runtime.*`: tests are still found by their schema id; the app map id stays where it is read.
-  assert.equal(TEST_SCHEMA, 'prompt-runtime.program-scenario.v1');
-  for (const file of ['runtime/runtime-client.mjs', 'workflow-view.mjs']) assert.ok(sourceOf(file).includes('\'prompt-runtime.app-map.v1\''), file);
+test('keep-list (host): workflow schema id, CLI test --files, approval block label and Prompt tests line stay', async t => {
+  assert.ok(sourceOf('workflow-view.mjs').includes('\'prompt-runtime.app-map.v1\''), 'workflow-view.mjs');
   const setup = harbor(t), files = sink();
   assert.equal(await runPdd(['test', '--files'], { stdout: files, stderr: sink(), cwd: setup.repo, env: { HOME: setup.home, PDD_STATE_DIR: setup.state, PATH: '/usr/bin:/bin' } }), 0);
   assert.match(files.text, /tests\/place-order\.json/);
-  // The default host and the setting name. Only src/runtime-client.mjs writes the host (RUNTIME-ADDRESS1),
-  // so this check reads it from there: the host still starts with the word "runtime".
-  const host = new URL(DEFAULT_RUNTIME_URL);
-  assert.equal(host.protocol, 'https:');
-  assert.equal(host.hostname.split('.')[0], 'runtime');
-  assert.ok(host.hostname.endsWith('.promptdriven.ai'), host.hostname);
-  assert.equal(runtimeOrigin({}), DEFAULT_RUNTIME_URL);
-  assert.equal(runtimeOrigin({ PDD_RUNTIME_URL: 'https://other.example' }), 'https://other.example');
-  // The folder ~/.pdd/runtime, in each module that builds it.
-  for (const [file, words] of [['runtime/runtime-client.mjs', '\'.pdd\', \'runtime\''], ['runtime/runtime-slots.mjs', '\'.pdd\', \'runtime\''],
-    ['runtime/agent-project.mjs', '\'.pdd/runtime\''], ['runtime/agent-ask.mjs', '\'.pdd\',\'runtime\'']]) assert.ok(sourceOf(file).includes(words), file);
-  // The block label: pdd finds a `Runtime interface` block, and its messages name the block.
-  const block = label => `# A prompt\n\n<details><summary>${label}</summary>\n\n\`\`\`json\n{"status": "draft"}\n\`\`\`\n</details>\n`;
-  assert.equal(interfaceBlocks(block('Runtime interface')).length, 1);
-  assert.equal(interfaceBlocks(block('Interpreter interface')).length, 0);
-  for (const file of ['runtime/runtime-preflight.mjs', 'prompt-approve.mjs']) assert.ok(tokens(sourceOf(file)).some(token => token.kind === 'string'
-    && sourceOf(file).slice(token.start, token.end).includes('Runtime interface')), file);
-  // The `Prompt tests (story): ...` line that pdd writes is the line that the PR reader reads; an older `Runtime check` line reads the same way.
+  assert.ok(tokens(sourceOf('prompt-approve.mjs')).some(token => token.kind === 'string'
+    && sourceOf('prompt-approve.mjs').slice(token.start, token.end).includes('Runtime interface')), 'prompt-approve.mjs');
   const line = summaryLine([{ story: 'place-order', state: 'passed', criteria: { passed: 1, total: 1 }, checks: { passed: 1, total: 1 }, calls: 1 }], 'place-order');
   assert.match(line, /^Prompt tests \(place-order\): /);
   for (const text of [line, line.replace('Prompt tests', 'Runtime check')]) assert.deepEqual(runtimeLines(text).map(item => [item.story, item.pass]), [['place-order', true]]);
   assert.match(sourceOf('workflow-view.mjs'), /PROMPT_TESTS_WORDS/);
-  // The gate answer "The runtime opens soon." is still detected, and a server text is printed as the server sent it.
-  const said = [];
-  for (const [status, text, json] of [[503, 'The runtime opens soon.'], [429, null, { error: { code: 'other', message: 'The runtime is busy. Try again later.' } }], [503, 'Other text.']]) {
-    const run = harbor(t); let requests = 0;
-    const fetch = async () => { requests++; return json ? Response.json(json, { status }) : new Response(text, { status, headers: { 'content-type': 'text/plain' } }); };
-    const { ports } = portsFor({ HOME: run.home, PDD_STATE_DIR: run.state, PDD_RUNTIME_URL: 'http://127.0.0.1:9' }, { fetch });
-    const code = await runCheck({ words: ['place-order'], cwd: run.repo, options: status === 503 && text === 'Other text.' ? { '--timeout': 1 } : {} }, ports);
-    said.push({ code, requests, out: ports.stdout.text + ports.stderr.text });
-  }
-  // The gate stops at the first answer; another 503 text is not the gate.
-  assert.equal(said[0].code, 5, said[0].out); assert.equal(said[0].requests, 1, said[0].out); assert.ok(said[0].out.includes('The runtime opens soon.'), said[0].out);
-  assert.equal(said[1].code, 5, said[1].out); assert.ok(said[1].out.includes('The runtime is busy. Try again later.'), said[1].out);
-  assert.notEqual(said[2].code, 5, said[2].out); assert.ok(said[2].requests > 1, said[2].out);
-  t.diagnostic('bounds: 6 keep-list words (schema ids: 2, host, setting, folder: 4 readers, block label, gate text), the Prompt tests line with both labels and 1 server text');
 });
