@@ -1,0 +1,186 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/screen-hidden-accessibility.md",
+  "module": "src/screen-compare.mjs",
+  "operation": "pdd test --screen",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "`pdd test --screen` on a 400 by 400 page with a visible `#search-box` region, visible \"Search\" heading and an unreferenced `.sr-only` HTML label styled with `clip-path: inset(50%)`, `clip: rect(0, 0, 0, 0)` on `position: absolute`, or both exits with code 0 and marks `#search-box` and \"Search\" as `pass`."
+    },
+    {
+      "id": "AC2",
+      "text": "When the `.ui.svg` drawing requires a visible \"Search query\" label that exists on the page only inside a fully clipped `.sr-only` HTML element, `pdd test --screen` exits with code 1, marks \"Search query\" as `hidden` and sets `passed` to `false`."
+    },
+    {
+      "id": "AC3",
+      "text": "When a page element uses partial or unestablished clipping such as `clip-path: inset(49%)`, `clip-path: circle(0)`, non-empty `clip: rect(0px, 1px, 1px, 0px)` or `clip: rect(0, 0, 0, 0)` on `position: static`, `pdd test --screen` exits with code 5 and prints the unsupported clipping error to stderr."
+    },
+    {
+      "id": "AC4",
+      "text": "When a page element combines a collapsed clip with `filter` or `mask-image`, or when a `.ui.svg` drawing or Simulator Screen host or shell ancestor uses `clip-path` or `clip`, `pdd test --screen` rejects it with the existing error instead of passing."
+    }
+  ],
+  "drawings": {
+    "base": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 400 400\"><title>Search screen</title><desc>Visible search card</desc><g id=\"search-box\"><rect x=\"20\" y=\"20\" width=\"360\" height=\"120\" fill=\"#e2e8f0\"/><text x=\"40\" y=\"60\" font-size=\"20\" fill=\"#0f172a\">Search</text></g></svg>",
+    "required_sr_text": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 400 400\"><title>Search screen with visible label</title><desc>Requires visible Search query text</desc><g id=\"search-box\"><rect x=\"20\" y=\"20\" width=\"360\" height=\"120\" fill=\"#e2e8f0\"/><text x=\"40\" y=\"60\" font-size=\"20\" fill=\"#0f172a\">Search</text><text x=\"40\" y=\"100\" font-size=\"16\" fill=\"#0f172a\">Search query</text></g></svg>",
+    "clipped_reference": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 400 400\"><g id=\"search-box\"><rect x=\"20\" y=\"20\" width=\"360\" height=\"120\" fill=\"#e2e8f0\"/><text style=\"clip-path:inset(50%)\" x=\"40\" y=\"60\" font-size=\"20\" fill=\"#0f172a\">Search</text></g></svg>"
+  },
+  "cases": [
+    {
+      "id": "sr-only-inset-50",
+      "criterion_id": "AC1",
+      "drawing": "base",
+      "sr_style": "position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0",
+      "given": "400x400 page with visible #search-box, visible 'Search', and unreferenced <label class='sr-only'>Search query</label> using clip-path: inset(50%)",
+      "required_observation": "exit 0, passed true, rows #search-box=pass and “Search”=pass",
+      "expected_exit": 0,
+      "expected_passed": true,
+      "expected_rows": [
+        {"part": "#search-box", "status": "pass"},
+        {"part": "“Search”", "status": "pass"}
+      ]
+    },
+    {
+      "id": "sr-only-clip-rect-zero",
+      "criterion_id": "AC1",
+      "drawing": "base",
+      "sr_style": "position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0, 0, 0, 0);white-space:nowrap;border:0",
+      "given": "400x400 page with visible #search-box, visible 'Search', and unreferenced <label class='sr-only'>Search query</label> using position:absolute and clip: rect(0, 0, 0, 0)",
+      "required_observation": "exit 0, passed true, rows #search-box=pass and “Search”=pass",
+      "expected_exit": 0,
+      "expected_passed": true,
+      "expected_rows": [
+        {"part": "#search-box", "status": "pass"},
+        {"part": "“Search”", "status": "pass"}
+      ]
+    },
+    {
+      "id": "sr-only-both-clip-and-inset",
+      "criterion_id": "AC1",
+      "drawing": "base",
+      "sr_style": "position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0, 0, 0, 0);clip-path:inset(50%);white-space:nowrap;border:0",
+      "given": "400x400 page with Tailwind/Bootstrap .sr-only rule combining clip: rect(0, 0, 0, 0) and clip-path: inset(50%)",
+      "required_observation": "exit 0, passed true, rows #search-box=pass and “Search”=pass",
+      "expected_exit": 0,
+      "expected_passed": true,
+      "expected_rows": [
+        {"part": "#search-box", "status": "pass"},
+        {"part": "“Search”", "status": "pass"}
+      ]
+    },
+    {
+      "id": "sr-only-fixed-rect-1px",
+      "criterion_id": "AC1",
+      "drawing": "base",
+      "sr_style": "position:fixed;width:1px;height:1px;overflow:hidden;clip:rect(1px, 1px, 1px, 1px)",
+      "given": "400x400 page with WordPress-style screen-reader-text using position:fixed and clip: rect(1px, 1px, 1px, 1px)",
+      "required_observation": "exit 0, passed true, rows #search-box=pass and “Search”=pass",
+      "expected_exit": 0,
+      "expected_passed": true,
+      "expected_rows": [
+        {"part": "#search-box", "status": "pass"},
+        {"part": "“Search”", "status": "pass"}
+      ]
+    },
+    {
+      "id": "sr-only-axis-inset",
+      "criterion_id": "AC1",
+      "drawing": "base",
+      "sr_style": "position:absolute;left:40px;top:90px;clip-path:inset(0 50%)",
+      "given": "400x400 page with unreferenced HTML label collapsed horizontally via clip-path: inset(0 50%)",
+      "required_observation": "exit 0, passed true, rows #search-box=pass and “Search”=pass",
+      "expected_exit": 0,
+      "expected_passed": true,
+      "expected_rows": [
+        {"part": "#search-box", "status": "pass"},
+        {"part": "“Search”", "status": "pass"}
+      ]
+    },
+    {
+      "id": "required-label-only-in-sr-only",
+      "criterion_id": "AC2",
+      "drawing": "required_sr_text",
+      "sr_style": "position:absolute;left:40px;top:90px;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)",
+      "given": "drawing requires visible 'Search query' inside #search-box, but page only has 'Search query' inside fully clipped .sr-only label",
+      "required_observation": "exit 1, passed false, “Search query” status is hidden",
+      "expected_exit": 1,
+      "expected_passed": false,
+      "expected_rows": [
+        {"part": "#search-box", "status": "pass"},
+        {"part": "“Search”", "status": "pass"},
+        {"part": "“Search query”", "status": "hidden"}
+      ]
+    },
+    {
+      "id": "partial-inset-49",
+      "criterion_id": "AC3",
+      "drawing": "base",
+      "sr_style": "position:absolute;left:40px;top:90px;width:100px;height:20px;clip-path:inset(49%)",
+      "given": "page element has partial clip-path: inset(49%)",
+      "required_observation": "exit 5 with Unsupported applied clip-path, clip, mask or filter error",
+      "expected_exit": 5,
+      "expected_stderr": "Unsupported applied clip-path, clip, mask or filter; visible parts cannot be established."
+    },
+    {
+      "id": "non-inset-circle-zero",
+      "criterion_id": "AC3",
+      "drawing": "base",
+      "sr_style": "position:absolute;left:40px;top:90px;width:100px;height:20px;clip-path:circle(0)",
+      "given": "page element has non-inset clip-path: circle(0)",
+      "required_observation": "exit 5 with Unsupported applied clip-path, clip, mask or filter error",
+      "expected_exit": 5,
+      "expected_stderr": "Unsupported applied clip-path, clip, mask or filter; visible parts cannot be established."
+    },
+    {
+      "id": "non-empty-clip-rect",
+      "criterion_id": "AC3",
+      "drawing": "base",
+      "sr_style": "position:absolute;left:40px;top:90px;width:100px;height:20px;clip:rect(0px, 1px, 1px, 0px)",
+      "given": "page element has non-empty 1x1px clip: rect(0px, 1px, 1px, 0px)",
+      "required_observation": "exit 5 with Unsupported applied clip-path, clip, mask or filter error",
+      "expected_exit": 5,
+      "expected_stderr": "Unsupported applied clip-path, clip, mask or filter; visible parts cannot be established."
+    },
+    {
+      "id": "static-clip-rect-zero",
+      "criterion_id": "AC3",
+      "drawing": "base",
+      "sr_style": "position:static;clip:rect(0, 0, 0, 0)",
+      "given": "page element has clip: rect(0, 0, 0, 0) on position: static where CSS clip does not apply",
+      "required_observation": "exit 5 with Unsupported applied clip-path, clip, mask or filter error",
+      "expected_exit": 5,
+      "expected_stderr": "Unsupported applied clip-path, clip, mask or filter; visible parts cannot be established."
+    },
+    {
+      "id": "collapsed-clip-with-filter",
+      "criterion_id": "AC4",
+      "drawing": "base",
+      "sr_style": "position:absolute;left:40px;top:90px;width:100px;height:20px;clip-path:inset(50%);filter:blur(1px)",
+      "given": "page element combines collapsed clip-path: inset(50%) with filter: blur(1px)",
+      "required_observation": "exit 5 with Unsupported applied clip-path, clip, mask or filter error",
+      "expected_exit": 5,
+      "expected_stderr": "Unsupported applied clip-path, clip, mask or filter; visible parts cannot be established."
+    },
+    {
+      "id": "collapsed-clip-with-mask",
+      "criterion_id": "AC4",
+      "drawing": "base",
+      "sr_style": "position:absolute;left:40px;top:90px;width:100px;height:20px;clip-path:inset(50%);mask-image:linear-gradient(black,transparent)",
+      "given": "page element combines collapsed clip-path: inset(50%) with mask-image",
+      "required_observation": "exit 5 with Unsupported applied clip-path, clip, mask or filter error",
+      "expected_exit": 5,
+      "expected_stderr": "Unsupported applied clip-path, clip, mask or filter; visible parts cannot be established."
+    },
+    {
+      "id": "reference-clipped-text",
+      "criterion_id": "AC4",
+      "drawing": "clipped_reference",
+      "sr_style": null,
+      "given": ".ui.svg reference drawing itself applies clip-path: inset(50%) to a <text> node",
+      "required_observation": "exit 2 with Unsupported applied clip-path, clip, mask or filter error",
+      "expected_exit": 2,
+      "expected_stderr": "Unsupported applied clip-path, clip, mask or filter; visible parts cannot be established."
+    }
+  ]
+}
