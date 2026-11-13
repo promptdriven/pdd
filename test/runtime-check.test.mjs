@@ -443,18 +443,80 @@ test('RUNTIME-SCHEMA5: the number warning fires only for a near miss of a number
   assert.deepEqual(warn('No number here.', 5), []);
 });
 
-// Wrong: two prompts claim the same source file and nobody notices until they disagree (cli issue 10).
-test('RUNTIME-OWNER1: pdd test warns once when two prompts name the same source file', async t => {
+// Wrong: two prompts claim the same source file and nobody notices until they disagree (cli issue 10; scoped in #3236).
+test('RUNTIME-OWNER1: pdd test warns once when two prompts own the same source file, scoped to selected Story closure', async t => {
   const { repo, home } = harbor(t);
   mkdirSync(join(repo, 'src')); writeFileSync(join(repo, 'src/split.js'), 'export {};\n'); writeFileSync(join(repo, 'src/cli.js'), 'export {};\n');
   writeFileSync(join(repo, 'prompts/tipjar.prompt.md'), '# tipjar\n\nThe code runs `src/cli.js`; `src/split.js` owns the money math.\n');
   writeFileSync(join(repo, 'prompts/split.prompt.md'), '# split\n\nThis prompt owns `src/split.js`. It reads `README.md`.\n');
-  const found = (await import('../src/runtime-seam.mjs')).findTests({ root: repo });
-  const { sharedSourceFiles } = await import('../src/runtime-seam.mjs');
+  const { findTests, sharedSourceFiles } = await import('../src/runtime-seam.mjs');
+  const found = findTests({ root: repo });
   assert.deepEqual(sharedSourceFiles(repo, found.visible), ['Warning: src/split.js is named by 2 prompts (prompts/split.prompt.md, prompts/tipjar.prompt.md). One prompt should own each source file.']);
   const doc = readJson(join(repo, 'tests/place-order.json')); doc.steps[0].input.items[0].quantity = 0; writeJson(join(repo, 'tests/place-order.json'), doc);
-  const result = await check(repo, home, ['place-order'], {});
-  assert.equal(result.out.split('is named by 2 prompts').length, 2);
+  const unrelated = await check(repo, home, ['place-order'], {});
+  assert.equal(unrelated.out.includes('is named by 2 prompts'), false, 'scoped run ignores unrelated prompt collisions');
+  const unscoped = await check(repo, home, [], {});
+  assert.equal(unscoped.out.split('is named by 2 prompts').length, 2, 'unscoped run warns repository-wide');
+  doc.context = [{ prompt_path: 'prompts/split.prompt.md' }]; writeJson(join(repo, 'tests/place-order.json'), doc);
+  const reached = await check(repo, home, ['place-order'], {});
+  assert.equal(reached.out.split('is named by 2 prompts').length, 2, 'scoped run warns when selected closure reaches a conflicting owner');
+});
+
+// Wrong: shared config/JSON/dotfiles or imported helper mentions trigger false multi-owner warnings (#3236).
+test('RUNTIME-OWNER2: shared read-only JSON/config/dotfiles and non-owned imports stay silent while genuine collisions warn', async t => {
+  const { repo, home } = harbor(t);
+  mkdirSync(join(repo, 'src')); mkdirSync(join(repo, 'config'));
+  writeFileSync(join(repo, 'pdd.json'), '{"strict_approvals":false}\n');
+  writeFileSync(join(repo, 'package.json'), '{"name":"sample"}\n');
+  writeFileSync(join(repo, '.gitignore'), 'node_modules/\n');
+  writeFileSync(join(repo, 'config/settings.yaml'), 'mode: fast\n');
+  writeFileSync(join(repo, 'src/helper.mjs'), '// Generated from prompts/helper.prompt.md.\nexport const h = 1;\n');
+  writeFileSync(join(repo, 'src/caller.mjs'), '// Generated from prompts/caller.prompt.md.\nexport const c = 2;\n');
+  writeFileSync(join(repo, 'src/util.mjs'), 'export const u = 3;\n');
+  writeFileSync(join(repo, 'prompts/helper.prompt.md'), '# helper\n\nOwns `src/helper.mjs` and reads `pdd.json`, `package.json`, `.gitignore` and `config/settings.yaml`.\n');
+  writeFileSync(join(repo, 'prompts/util.prompt.md'), '# util\n\nOwns `src/util.mjs` and reads `pdd.json`, `package.json` and `.gitignore`.\n');
+  writeFileSync(join(repo, 'prompts/caller.prompt.md'), [
+    '# caller', '',
+    'Owns `src/caller.mjs`, reads `pdd.json`, `package.json`, `.gitignore` and `config/settings.yaml`, and imports `src/helper.mjs`.',
+    'Later prose also calls `src/util.mjs` and `src/helper.mjs`.', '',
+    '## Dependencies', '',
+    '- `pdd.json`',
+    '- [Helper](helper.prompt.md): provides `src/helper.mjs` and `src/util.mjs`.', '',
+  ].join('\n'));
+  const { findTests, gitFiles, sharedSourceFiles } = await import('../src/runtime-seam.mjs');
+  let found = findTests({ root: repo });
+  assert.deepEqual(sharedSourceFiles(repo, found.visible), []);
+
+  // Genuine collisions still warn: unrecorded code claim in selected closure vs unrelated collision outside closure.
+  writeFileSync(join(repo, 'src/foo.mjs'), 'export {};\n');
+  writeFileSync(join(repo, 'src/headed.mjs'), '// Generated from prompts/unrelated-a.prompt.md.\n// Generated from prompts/unrelated-b.prompt.md.\nexport {};\n');
+  writeFileSync(join(repo, 'prompts/alpha.prompt.md'), '# alpha\n\nOwns `src/foo.mjs`.\n');
+  writeFileSync(join(repo, 'prompts/beta.prompt.md'), '# beta\n\nOwns `src/foo.mjs`.\n');
+  writeFileSync(join(repo, 'prompts/unrelated-a.prompt.md'), '# ua\n\nOwns `src/other.mjs`.\n');
+  writeFileSync(join(repo, 'prompts/unrelated-b.prompt.md'), '# ub\n\nOwns `src/other.mjs`.\n');
+  writeFileSync(join(repo, 'src/other.mjs'), 'export {};\n');
+  // Connect place_order.prompt.md -> alpha.prompt.md via ## Dependencies without changing approved prose_sha256: use test context.
+  const doc = readJson(join(repo, 'tests/place-order.json'));
+  doc.steps[0].input.items[0].quantity = 0;
+  doc.context = [{ prompt_path: 'prompts/caller.prompt.md' }];
+  writeFileSync(join(repo, 'prompts/caller.prompt.md'), `${readFileSync(join(repo, 'prompts/caller.prompt.md'), 'utf8')}- [Alpha](alpha.prompt.md): transitive dependency.\n`);
+  writeJson(join(repo, 'tests/place-order.json'), doc);
+
+  found = findTests({ root: repo });
+  assert.deepEqual(sharedSourceFiles(repo, found.visible, { tests: found.tests.filter(item => item.story === 'place-order') }), [
+    'Warning: src/foo.mjs is named by 2 prompts (prompts/alpha.prompt.md, prompts/beta.prompt.md). One prompt should own each source file.',
+  ]);
+  assert.deepEqual(sharedSourceFiles(repo, found.visible), [
+    'Warning: src/foo.mjs is named by 2 prompts (prompts/alpha.prompt.md, prompts/beta.prompt.md). One prompt should own each source file.',
+    'Warning: src/headed.mjs is named by 2 prompts (prompts/unrelated-a.prompt.md, prompts/unrelated-b.prompt.md). One prompt should own each source file.',
+    'Warning: src/other.mjs is named by 2 prompts (prompts/unrelated-a.prompt.md, prompts/unrelated-b.prompt.md). One prompt should own each source file.',
+  ]);
+  const scoped = await check(repo, home, ['place-order'], {});
+  assert.match(scoped.out, /Warning: src\/foo\.mjs is named by 2 prompts/);
+  assert.doesNotMatch(scoped.out, /src\/other\.mjs|src\/headed\.mjs/);
+
+  // Self-check on pdd repository itself: zero false source-ownership warnings.
+  assert.deepEqual(sharedSourceFiles(root, new Set(gitFiles(root))), []);
 });
 
 // Wrong: an agent wrote its own test format and *.prompt files, and pdd only says "No tests found".

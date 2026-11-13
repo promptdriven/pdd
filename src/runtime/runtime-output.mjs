@@ -1,5 +1,5 @@
 import { bindingRefusals } from './runtime-binding-plan.mjs';
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: feef75cf42213e9f55731fd6fad719147f4c3ca06d61bc95992cae439c371c73).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: f68bf52457d88b17943b8e22285a54a0fb332f79b581fc636cc0219cdabe37c8).
 import { hasProgress, outcomeFor, outcomeText, progressText, resultOutcome, PROVIDER_TEXT } from './runtime-outcome.mjs';
 export const OPEN_STATES = new Set(['queued', 'running', 'sent']);
 
@@ -227,6 +227,7 @@ export function projectAnswer(answer, { origin, secrets = [], steps: authoredSte
   const rawRefusals = Array.isArray(result?.refusals) && result.refusals.length ? result.refusals : [report?.refusal];
   const busyRefusal = outcome.state === 'not_run' && outcome.retryable === true && answer?.command === 'check'
     ? rawRefusals.find(item => item?.retryable === true || item?.details?.retryable === true) : null;
+  const tokens = tokenUsageOf(answer, { incomplete });
   return {
     ...(compatibility ? { compatibility, client_advice } : {}),
     busy_display: busyRefusal ? { max_wait_seconds: busyRefusal.max_wait_seconds } : null,
@@ -237,6 +238,7 @@ export function projectAnswer(answer, { origin, secrets = [], steps: authoredSte
     criteria: results.length ? { passed: results.filter(item => item?.status === 'passed').length, total: results.length } : null,
     all_checks: all, failed_checks: all.filter(check => !check.passed).map(({ passed, ...check }) => check), refusals,
     calls: !incomplete ? usageCalls : 'unknown',
+    ...tokens,
     known_calls: incomplete ? knownCalls : undefined, unknown_calls: unknownCalls, accounting_complete: !incomplete, requested_model: model ? cleanText(model, secrets) : null,
     server_seconds: typeof usage.seconds === 'number' ? usage.seconds : null,
     report_url: validLink(answer?.report_url, origin, 'report'), why: result?.why ? cleanText(result.why, secrets) : null,
@@ -251,6 +253,85 @@ const isObjectLike = value => value !== null && typeof value === 'object' && !Ar
 export { PROVIDER_TEXT } from './runtime-outcome.mjs';
 const round = seconds => typeof seconds === 'number' ? Math.round(seconds * 10) / 10 : null;
 const sentRow = row => row.phase === 'server' || !!row.request_id || row.state === 'sent';
+const tokenInt = value => Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+const absentToken = value => value === undefined || value === null || value === 'unknown';
+const malformedToken = value => !absentToken(value) && tokenInt(value) === undefined;
+const shareOf = (input, cached) => typeof input === 'number' && typeof cached === 'number' && input > 0 && cached <= input ? cached / input : null;
+const unknownTokens = () => ({ input_tokens: 'unknown', cached_input_tokens: 'unknown', output_tokens: 'unknown', cached_input_share: null });
+const formatPromptCacheTokens = usage => {
+  if (typeof usage?.input_tokens !== 'number' || typeof usage?.cached_input_tokens !== 'number' || usage.cached_input_tokens > usage.input_tokens) return null;
+  const share = shareOf(usage.input_tokens, usage.cached_input_tokens);
+  const pct = share !== null ? `, ${(share * 100).toFixed(1)}%` : '';
+  const out = typeof usage.output_tokens === 'number' ? ` · ${usage.output_tokens} output` : '';
+  return `${usage.input_tokens} input (${usage.cached_input_tokens} cached${pct})${out}`;
+};
+
+export function tokenUsageOf(answer, { incomplete = false } = {}) {
+  const usage = isObjectLike(answer?.usage) ? answer.usage : {};
+  const result = isObjectLike(answer?.result) ? answer.result : {};
+  const report = isObjectLike(result.report) ? result.report : null;
+  const topReport = isObjectLike(answer?.report) ? answer.report : null;
+  const surfaces = [answer, usage, result, report, topReport].filter(isObjectLike);
+  if (incomplete || surfaces.some(s => Object.hasOwn(s, 'accounting_complete') && s.accounting_complete !== true)) return unknownTokens();
+  if (surfaces.some(s => ['not_started', 'pre-dispatch'].includes(s.dispatch) || s.dispatch_state === 'pre-dispatch')) return unknownTokens();
+  if (['input_tokens', 'cached_input_tokens', 'output_tokens'].some(key => malformedToken(usage[key]))) return unknownTokens();
+  const uIn = tokenInt(usage.input_tokens), uCached = tokenInt(usage.cached_input_tokens), uOut = tokenInt(usage.output_tokens);
+  if (uIn !== undefined && uCached !== undefined && uCached > uIn) return unknownTokens();
+  const modelUsage = report?.model_usage ?? topReport?.model_usage;
+  let muIn, muCached, muOut;
+  if (modelUsage !== undefined && modelUsage !== null) {
+    if (!isObjectLike(modelUsage)) return unknownTokens();
+    const totals = isObjectLike(modelUsage.totals) ? modelUsage.totals : null;
+    const complete = totals && Object.hasOwn(totals, 'complete') ? totals.complete : Object.hasOwn(modelUsage, 'complete') ? modelUsage.complete : undefined;
+    const cov = isObjectLike(modelUsage.coverage) ? modelUsage.coverage : null;
+    if (complete === false || (complete !== undefined && typeof complete !== 'boolean')
+      || cov?.accounting_incomplete === true
+      || (Number.isSafeInteger(cov?.unobserved_current_calls) && cov.unobserved_current_calls > 0)) return unknownTokens();
+    if (totals) {
+      if (['input_tokens', 'cached_input_tokens', 'output_tokens'].some(key => malformedToken(totals[key]))) return unknownTokens();
+      const shareRaw = totals.cached_input_share;
+      if (shareRaw !== undefined && shareRaw !== null && !(typeof shareRaw === 'number' && Number.isFinite(shareRaw) && shareRaw >= 0 && shareRaw <= 1)) return unknownTokens();
+    }
+    const tIn = totals ? tokenInt(totals.input_tokens) : tokenInt(modelUsage.input_tokens);
+    const tCached = totals ? tokenInt(totals.cached_input_tokens) : tokenInt(modelUsage.cached_input_tokens);
+    const tOut = totals ? tokenInt(totals.output_tokens) : tokenInt(modelUsage.output_tokens);
+    if (tIn !== undefined && tCached !== undefined && tCached > tIn) return unknownTokens();
+    if (Array.isArray(modelUsage.calls)) {
+      if (modelUsage.calls.some(call => !isObjectLike(call))) return unknownTokens();
+      const current = modelUsage.calls.filter(call => (call.origin ?? 'current') === 'current');
+      const dispatched = current.filter(call => call.dispatch_state !== 'pre-dispatch');
+      if (current.length > 0 && dispatched.length === 0) return unknownTokens();
+      if (dispatched.some(call => call.dispatch_state === 'transport-uncertain' || call.usage_status === 'unknown'
+        || tokenInt(call.input_tokens) === undefined || tokenInt(call.cached_input_tokens) === undefined
+        || call.cached_input_tokens > call.input_tokens || malformedToken(call.output_tokens))) return unknownTokens();
+      if (modelUsage.calls.length > 0) {
+        const cIn = dispatched.reduce((sum, call) => sum + call.input_tokens, 0);
+        const cCached = dispatched.reduce((sum, call) => sum + call.cached_input_tokens, 0);
+        const allCurrent = modelUsage.calls.every(call => (call.origin ?? 'current') === 'current');
+        if (allCurrent && ((tIn !== undefined && tIn !== cIn) || (tCached !== undefined && tCached !== cCached))) return unknownTokens();
+        muIn = cIn;
+        muCached = cCached;
+        if (dispatched.length > 0 && dispatched.every(call => tokenInt(call.output_tokens) !== undefined)) {
+          muOut = dispatched.reduce((sum, call) => sum + call.output_tokens, 0);
+        }
+      } else if (complete === true) {
+        muIn = tIn ?? 0;
+        muCached = tCached ?? 0;
+        muOut = tOut;
+      }
+    } else if (complete === true) {
+      if (tIn === undefined || tCached === undefined) return unknownTokens();
+      muIn = tIn;
+      muCached = tCached;
+      muOut = tOut;
+    } else return unknownTokens();
+  }
+  const input_tokens = muIn ?? uIn ?? 'unknown';
+  const cached_input_tokens = muCached ?? uCached ?? 'unknown';
+  const output_tokens = muOut ?? uOut ?? 'unknown';
+  if (typeof input_tokens === 'number' && typeof cached_input_tokens === 'number' && cached_input_tokens > input_tokens) return unknownTokens();
+  return { input_tokens, cached_input_tokens, output_tokens, cached_input_share: shareOf(input_tokens, cached_input_tokens) };
+}
 
 function criterionCoverage(row) {
   if (!Array.isArray(row.steps)) return null;
@@ -270,11 +351,21 @@ function criterionCoverage(row) {
 
 export function jsonRow(row) {
   const publicChecks = checks => (checks ?? []).map(({ normal_result, ...check }) => check);
+  const rowTokens = row.cached
+    ? { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0, cached_input_share: null }
+    : (() => {
+        const input_tokens = tokenInt(row.input_tokens) ?? 'unknown';
+        const cached_input_tokens = tokenInt(row.cached_input_tokens) ?? 'unknown';
+        const output_tokens = tokenInt(row.output_tokens) ?? 'unknown';
+        if (typeof input_tokens === 'number' && typeof cached_input_tokens === 'number' && cached_input_tokens > input_tokens) return unknownTokens();
+        return { input_tokens, cached_input_tokens, output_tokens, cached_input_share: shareOf(input_tokens, cached_input_tokens) };
+      })();
   return { story: row.story, title: row.title, test: row.test, ...(row.native_only?.length ? {native_only:row.native_only} : {}), ...resultOutcome(row), ...(row.unsent ? {unsent:true} : {}), ...(row.not_checked?.length ? {not_checked:row.not_checked} : {}), ...(row.binding_plan ? {binding_plan:row.binding_plan,binding_diagnostics:bindingRefusals(row.binding_plan,row.compatibility)} : {}), ...(row.compatibility ? { compatibility: row.compatibility, client_advice: row.client_advice } : {}), criterion_coverage: criterionCoverage(row), ...(row.progress ? { progress: row.progress } : {}), ...(row.ahead !== undefined && row.ahead !== null ? { ahead: row.ahead } : {}), checks: row.checks ?? null, criteria: row.criteria ?? null,
     failed_checks: publicChecks(row.failed_checks), refusals: (row.refusals ?? []).map(item => ({ code: item.code, ...(item.path ? { path: item.path } : {}), field: item.field ?? null, section: item.section ?? null,
       message: item.message ?? null, engine_message: item.engine_message ?? null, hint: item.hint ?? null, reason: item.reason ?? null, fix: item.fix ?? null,
       where: item.where ?? null, cause: item.cause ?? null,
       ...(item.dependency_errors?.length ? { dependency_errors: item.dependency_errors } : {}) })), calls: sentRow(row) ? row.calls ?? 'unknown' : 0,
+    ...rowTokens,
     seconds: round(row.seconds), requested_model: row.requested_model ?? null, report_url: row.report_url ?? null,
     ...(row.accounting_complete !== undefined ? { known_calls: row.known_calls ?? null, unknown_calls: row.unknown_calls ?? 0, accounting_complete: row.accounting_complete } : {}),
     request_id: row.request_ids?.at(-1) ?? null, draft: !!row.draft, busy: !!row.busy, can_retry: !!row.can_retry, time_limit: row.time_limit ?? null,
@@ -283,12 +374,23 @@ export function jsonRow(row) {
     ...resultOutcome(row) };
 }
 
+function batchTokenUsage(publicRows) {
+  const sumKey = key => publicRows.every(row => typeof row[key] === 'number')
+    ? publicRows.reduce((sum, row) => sum + row[key], 0) : 'unknown';
+  const input_tokens = sumKey('input_tokens');
+  const cached_input_tokens = typeof input_tokens === 'number' ? sumKey('cached_input_tokens') : 'unknown';
+  const output_tokens = sumKey('output_tokens');
+  const complete = typeof input_tokens === 'number' && typeof cached_input_tokens === 'number';
+  return { input_tokens, cached_input_tokens, output_tokens, cached_input_share: shareOf(input_tokens, cached_input_tokens), complete };
+}
+
 export function renderJson({ batch = null, repo, sourceSha256 = null, coverage, rows, warnings = [], exitCode, summaryLine: line }, ports = {}) {
   rows = [...rows.filter(row=>row.unsent),...rows.filter(row=>!row.unsent)];
   line = line ?? summaryLine(rows, null, ports);
   const perStory = new Map(storyLines(rows, ports).map(([story, text]) => [story, text]));
+  const publicRows = rows.map(row => ({ ...jsonRow(row), summary_line: perStory.get(row.story) ?? null }));
   return { batch, repo, ...(coverage ? { coverage } : {}), source_sha256: sourceSha256, exit_code: exitCode, summary_line: line, draft: rows.some(row => row.draft),
-    rows: rows.map(row => ({ ...jsonRow(row), summary_line: perStory.get(row.story) ?? null })), warnings };
+    token_usage: batchTokenUsage(publicRows), rows: publicRows, warnings };
 }
 
 const count = (number, word) => `${number} ${word}${number === 1 ? '' : 's'}`;
@@ -510,9 +612,11 @@ export function renderText({ batch, rows, coverage, warnings = [], details = fal
     out.push(`UNKNOWN  ${row.title}: ${PROVIDER_TEXT}`, `  ${row.provider.code}${row.provider.detail ? ` (${row.provider.detail})` : ''}${row.report_url ? `  Report: ${row.report_url}` : ''}`,
       ...(row.next_step ? [] : ['  To try again, run `pdd test` again (a new request).']), ...serverAdvice(row, secrets));
   }
-  if (details) for (const row of rows.filter(row => row.all_checks?.length)) {
+  if (details) for (const row of rows.filter(row => row.all_checks?.length || !row.cached && formatPromptCacheTokens(row))) {
+    const tokenText = !row.cached ? formatPromptCacheTokens(row) : null;
     out.push(`Checks for ${row.title} (${row.test}):`,
-      ...[...row.all_checks].sort((a, b) => a.passed - b.passed).flatMap(check => checkLines(check, secrets)
+      ...(tokenText ? [`  Tokens: ${tokenText}`] : []),
+      ...[...(row.all_checks ?? [])].sort((a, b) => a.passed - b.passed).flatMap(check => checkLines(check, secrets)
         .map((text, index) => index ? `  ${text}` : `  ${check.passed ? 'passed' : 'failed'}  ${text}`)));
   }
   for (const row of rows) for (const item of criterionCoverage(row) ?? []) {
@@ -527,6 +631,16 @@ export function renderText({ batch, rows, coverage, warnings = [], details = fal
   if (coverage) out.push(coverageText(coverage, {busy: rows.some(row => row.busy_display || row.busy) && rows.every(row => row.state === 'passed' || row.busy_display || row.busy)}));
   const models = [...new Set(rows.map(row => row.requested_model).filter(Boolean))];
   out.push(`${rows.filter(row => row.state === 'passed').length} of ${rows.length} stories passed.${models.length ? ` Model asked for: ${models.join(', ')}.` : ''}`);
+  const activeRows = rows.filter(row => !row.cached);
+  const cacheRows = activeRows.filter(row => formatPromptCacheTokens(row) !== null);
+  if (cacheRows.length) {
+    const input_tokens = cacheRows.reduce((sum, row) => sum + row.input_tokens, 0);
+    const cached_input_tokens = cacheRows.reduce((sum, row) => sum + row.cached_input_tokens, 0);
+    const output_tokens = cacheRows.every(row => typeof row.output_tokens === 'number')
+      ? cacheRows.reduce((sum, row) => sum + row.output_tokens, 0) : 'unknown';
+    const unknownCount = activeRows.length - cacheRows.length;
+    out.push(`Token usage: ${formatPromptCacheTokens({ input_tokens, cached_input_tokens, output_tokens })}${unknownCount ? ` + ${unknownCount} unknown` : ''}.`);
+  }
   const linked = rows.filter(row => row.report_url);
   if (linked.length) {
     const width = Math.max(...linked.map(row => row.story.length));
@@ -543,14 +657,18 @@ export function tryUsage(answer, { cap } = {}) {
   const total = number(answer?.calls?.cap ?? answer?.result?.session?.max_calls ?? cap);
   const remaining = number(answer?.calls?.remaining ?? answer?.result?.session?.remaining_calls ?? answer?.result?.report?.remaining_calls);
   return { calls: number(answer?.usage?.calls), remaining, cap: total,
-    used: typeof total === 'number' && typeof remaining === 'number' && remaining <= total ? total - remaining : 'unknown' };
+    used: typeof total === 'number' && typeof remaining === 'number' && remaining <= total ? total - remaining : 'unknown',
+    ...tokenUsageOf(answer) };
 }
 export function tryUsageLine(usage, { command = false } = {}) {
-  return `Try AI usage: ${command ? `${usage.calls} this command · ` : ''}${usage.used} used · ${usage.remaining} remaining (session cap ${usage.cap}).`;
+  const tokens = formatPromptCacheTokens(usage);
+  return `Try AI usage: ${command ? `${usage.calls} this command · ` : ''}${usage.used} used · ${usage.remaining} remaining (session cap ${usage.cap})${tokens ? ` · ${tokens}` : ''}.`;
 }
 export function tryUsageHeaders(usage) {
   return { 'x-pdd-ai-calls': String(usage.calls), 'x-pdd-try-used': String(usage.used),
-    'x-pdd-try-remaining': String(usage.remaining), 'x-pdd-try-cap': String(usage.cap) };
+    'x-pdd-try-remaining': String(usage.remaining), 'x-pdd-try-cap': String(usage.cap),
+    ...(tokenInt(usage?.input_tokens) !== undefined ? { 'x-pdd-input-tokens': String(usage.input_tokens) } : {}),
+    ...(tokenInt(usage?.cached_input_tokens) !== undefined ? { 'x-pdd-cached-input-tokens': String(usage.cached_input_tokens) } : {}) };
 }
 
 export function coverageText(coverage, {busy = false} = {}) {
