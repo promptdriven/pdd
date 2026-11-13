@@ -1,4 +1,4 @@
-// Generated from prompts/cli/metrics-model.prompt.md (sha256: b530fd8b75cfa4110173e250edc83c332df76518641f7f4f097ecf771f50bf18).
+// Generated from prompts/cli/metrics-model.prompt.md (sha256: 504e600dcf52119e28441231d3272f7880abc80cff8c06585b8155349b1242b5).
 const stable = value => {
   if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
   if (value && typeof value === 'object') return `{${Object.keys(value).sort().map(k => `${JSON.stringify(k)}:${stable(value[k])}`).join(',')}}`;
@@ -9,6 +9,14 @@ const order = (a, b) => time(a.at) - time(b.at) || time(a.observedAt) - time(b.o
 const latest = events => [...events].sort(order).at(-1);
 const reasonList = events => [...new Set(events.flatMap(e => [...(Array.isArray(e.data.reasons) ? e.data.reasons : []), ...(e.data.reason ? [e.data.reason] : [])]))].sort();
 const state = (yes, unknown = false) => yes ? 'yes' : unknown ? 'unknown' : 'no';
+const SKILL_SET = new Set(['small-change', 'bug', 'feature', 'no-behavior-change']);
+const RECEIPT_SET = new Set(['done', 'missed', 'not-applicable', 'unknown']);
+const parseSkillTag = value => {
+  if (typeof value !== 'string') return null;
+  if (SKILL_SET.has(value)) return value;
+  const match = /^(?:pdd-)?(small-change|bug|feature|no-behavior-change)(?:[:@-]|$)/.exec(value);
+  return match ? match[1] : null;
+};
 const count = (issues, predicate, scope, observedAt) => {
   const selected = issues.filter(predicate);
   const unknown = issues.filter(i => predicate(i) === null).length;
@@ -55,13 +63,20 @@ export function calculateMetrics({ events, repo, scope, timezone, observedAt, so
   for (const e of selections) {
     const list = selectionByIssue.get(e.issue) || []; list.push(e); selectionByIssue.set(e.issue, list);
   }
+  const snapshotIssueSet = new Set([
+    ...selectionByIssue.keys(),
+    ...conflicts.flatMap(c => c.events.filter(e => e.type === 'selection' && e.data.snapshotId === scope.snapshotId).map(e => e.issue)),
+  ]);
   const issueIds = scope.kind === 'daily-start'
     ? [...new Set(clean.filter(e => e.type === 'start' && dateOf(e.at) === scope.date).map(e => e.issue))]
     : scope.kind === 'activity'
     ? [...new Set(clean.filter(e => dateOf(e.at) === scope.date).map(e => e.issue))]
-    : [...new Set([...selectionByIssue.keys(), ...conflicts.flatMap(c => c.events.filter(e => e.type === 'selection' && e.data.snapshotId === scope.snapshotId).map(e => e.issue))])];
+    : scope.kind === 'queue'
+    ? [...new Set([...snapshotIssueSet, ...clean.filter(e => e.type !== 'selection').map(e => e.issue)])]
+    : [...snapshotIssueSet];
   issueIds.sort((a, b) => a - b);
   const relevantConflicts = issue => conflicts.filter(c => c.events.some(e => e.issue === issue));
+  const runCounts = new Map();
   const issues = issueIds.map(issue => {
     const rows = clean.filter(e => e.issue === issue);
     const issueConflicts = relevantConflicts(issue);
@@ -135,6 +150,47 @@ export function calculateMetrics({ events, repo, scope, timezone, observedAt, so
     const assistance = rows.filter(e => e.type === 'assistance');
     const assisted = assistance.some(e => e.data.classification === 'recovery') ? 'yes' : startRows.length > 0 && startRows.every(start => coverage.some(e => e.source === start.source && e.data.complete === true && e.data.since && e.data.until && time(e.data.since) <= time(start.at) && time(e.data.until) >= cutoff)) && !hasConflict('assistance') && !hasConflict('coverage') ? 'no' : 'unknown';
     const selectionConflict = hasConflict('selection') || new Set(selectionRows.map(e => stable([e.data.inScope, e.data.state]))).size > 1;
+
+    const primaryPr = candidate?.data.pr ?? delivery?.data.pr ?? explicit?.data.pr ?? null;
+    const pickReceipt = stageName => {
+      const matching = rows.filter(e => e.type === 'milestone' && e.data.stage === stageName && RECEIPT_SET.has(e.data.status));
+      const scoped = primaryPr != null ? matching.filter(e => e.data.pr == null || e.data.pr === primaryPr) : matching;
+      return latest(scoped.length ? scoped : matching)?.data.status ?? null;
+    };
+    const runtimeReceipt = pickReceipt('receipt-runtime') ?? 'unknown';
+    const vectorsReceipt = pickReceipt('receipt-vectors') ?? 'unknown';
+    const formalReceipt = pickReceipt('receipt-formal') ?? 'unknown';
+    const explicitComplete = pickReceipt('receipt-complete');
+    const checkStatuses = [runtimeReceipt, vectorsReceipt, formalReceipt];
+    const completeReceipt = explicitComplete && explicitComplete !== 'unknown'
+      ? explicitComplete
+      : checkStatuses.every(s => s === 'not-applicable')
+      ? 'not-applicable'
+      : checkStatuses.some(s => s === 'missed')
+      ? 'missed'
+      : checkStatuses.some(s => s === 'unknown')
+      ? 'unknown'
+      : 'done';
+    const skillChecks = { runtime: runtimeReceipt, vectors: vectorsReceipt, formal: formalReceipt, complete: completeReceipt };
+
+    const skillMilestones = rows.filter(e => e.type === 'milestone' && e.data.stage === 'skill' && parseSkillTag(e.data.reason));
+    const scopedSkills = primaryPr != null ? skillMilestones.filter(e => e.data.pr == null || e.data.pr === primaryPr) : skillMilestones;
+    const explicitSkill = parseSkillTag(latest(scopedSkills.length ? scopedSkills : skillMilestones)?.data.reason);
+    const fallbackSkillEvent = latest(rows.filter(e => parseSkillTag(e.data.area) || parseSkillTag(e.data.skillVersion)));
+    const fallbackSkill = parseSkillTag(fallbackSkillEvent?.data.area) ?? parseSkillTag(fallbackSkillEvent?.data.skillVersion);
+    const allNotApplicable = checkStatuses.every(s => s === 'not-applicable');
+    const skill = explicitSkill === 'no-behavior-change' || allNotApplicable
+      ? 'no-behavior-change'
+      : explicitSkill ?? fallbackSkill ?? 'unknown';
+
+    const hasWouldMerge = rows.some(e => e.type === 'milestone' && e.data.stage === 'would-merge' && (primaryPr == null || e.data.pr == null || e.data.pr === primaryPr));
+    const wouldMerge = hasConflict('milestone') ? 'unknown' : hasWouldMerge ? 'yes' : 'unknown';
+
+    const codePrs = new Set(rows.filter(e => e.data.pr != null && (e.type === 'pr' || e.type === 'candidate' || e.type === 'delivery' || (e.type === 'milestone' && ['code-pr','implementation-ready','candidate-head','head'].includes(e.data.stage)))).map(e => e.data.pr));
+    const promptPrs = new Set(rows.filter(e => e.data.pr != null && e.type === 'milestone' && e.data.stage === 'prompt-pr').map(e => e.data.pr));
+    const hasRunSignal = attempts.length > 0 || startRows.length > 0 || codePrs.size > 0 || promptPrs.size > 0 || deliveries.length > 0 || rows.some(e => e.type === 'milestone' && ['autopilot-note','would-merge','skill','pr-mapped'].includes(e.data.stage));
+    runCounts.set(issue, Math.max(attempts.length, startRows.length, codePrs.size, promptPrs.size, hasRunSignal ? 1 : 0));
+
     return {
       repo: canonicalRepo, issue,
       selection: { inScope: selectionConflict ? null : selection?.data.inScope ?? null, state: selectionConflict ? 'unknown' : selection?.data.state || 'unknown', reasons: reasonList(selectionRows) },
@@ -144,6 +200,9 @@ export function calculateMetrics({ events, repo, scope, timezone, observedAt, so
       started: hasConflict('start') ? 'unknown' : state(startRows.length > 0, !startRows.length),
       validated,
       delivered: hasConflict('delivery') ? 'unknown' : state(deliveries.length > 0, !deliveries.length),
+      skill,
+      wouldMerge,
+      skillChecks,
       requiredOutcome: required, promptOnlyStop: required === 'prompt-only',
       origins: [...new Set(startRows.map(e => e.data.origin || 'unknown'))].sort(), attempts, starts: startRows,
       candidate: candidate || null, checks, ci: rows.filter(e => e.type === 'ci'),
@@ -166,10 +225,46 @@ export function calculateMetrics({ events, repo, scope, timezone, observedAt, so
     const measure = count(denominatorIssues, i => stageValue(i, to) === 'yes' ? true : stageValue(i, to) === 'no' ? false : null, scope, observedAt);
     transitions[name] = {...measure, denominatorIssues: denominatorIssues.map(i => i.issue), denominatorUnknown: issues.filter(i => stageValue(i, from) === 'unknown').length};
   }
-  const queue = Object.fromEntries(['ready', 'excluded', 'waiting', 'unknown'].map(s => [s, { count: issues.filter(i => i.selection.state === s).length, issues: issues.filter(i => i.selection.state === s).map(i => ({ issue: i.issue, reasons: i.selection.reasons })) }]));
+  const queueIssues = scope.kind === 'queue' ? issues.filter(i => snapshotIssueSet.has(i.issue)) : issues;
+  const queue = Object.fromEntries(['ready', 'excluded', 'waiting', 'unknown'].map(s => [s, { count: queueIssues.filter(i => i.selection.state === s).length, issues: queueIssues.filter(i => i.selection.state === s).map(i => ({ issue: i.issue, reasons: i.selection.reasons })) }]));
   const activityRows = clean.filter(e => dateOf(e.at) === scope.date);
   const activity = scope.kind !== 'activity' ? null : Object.fromEntries(Object.entries({ starts: e => e.type === 'start', candidateCompletions: e => e.type === 'milestone' && e.data.stage === 'implementation-ready' && e.data.pr != null && e.data.head, validationResults: e => e.type === 'check', deliveries: e => e.type === 'delivery' && e.data.explicit === true && e.data.evidence && e.data.pr != null }).map(([name, matches]) => { const matched = activityRows.filter(matches); return [name, { count: matched.length, issues: [...new Set(matched.map(e => e.issue))].sort((a,b) => a-b), events: matched }]; }));
+  const summarizeCheck = (group, key) => ({
+    done: group.filter(i => i.skillChecks[key] === 'done').length,
+    applies: group.filter(i => i.skillChecks[key] === 'done' || i.skillChecks[key] === 'missed').length,
+    unknown: group.filter(i => i.skillChecks[key] === 'unknown').length,
+  });
+  const summarizeSkill = group => {
+    const issueCount = group.length;
+    const runs = group.reduce((sum, i) => sum + (runCounts.get(i.issue) ?? 0), 0);
+    const pr = group.filter(i => i.prCreated === 'yes').length;
+    const merged = group.filter(i => i.delivered === 'yes').length;
+    const wm = group.filter(i => i.delivered !== 'yes' && i.wouldMerge === 'yes').length;
+    const mergedOrWouldMerge = merged + wm;
+    return {
+      issues: issueCount,
+      runs,
+      pr,
+      merged,
+      wouldMerge: wm,
+      mergedOrWouldMerge,
+      conversionPct: issueCount ? mergedOrWouldMerge * 100 / issueCount : null,
+      checks: {
+        runtime: summarizeCheck(group, 'runtime'),
+        vectors: summarizeCheck(group, 'vectors'),
+        formal: summarizeCheck(group, 'formal'),
+        complete: summarizeCheck(group, 'complete'),
+      },
+    };
+  };
+  const bySkill = {
+    'small-change': summarizeSkill(issues.filter(i => i.skill === 'small-change')),
+    bug: summarizeSkill(issues.filter(i => i.skill === 'bug')),
+    feature: summarizeSkill(issues.filter(i => i.skill === 'feature')),
+    'no-behavior-change': summarizeSkill(issues.filter(i => i.skill === 'no-behavior-change')),
+    all: summarizeSkill(issues),
+  };
   const coverage = clean.filter(e => e.type === 'coverage');
   const sourceId = s => typeof s === 'string' ? s : s.source;
-  return { definitionVersion: 'pdd.metrics.v1', repo: canonicalRepo, scope: { ...scope }, timezone, observedAt, sources: [...sources].sort((a,b) => String(sourceId(a)).localeCompare(String(sourceId(b)))), coverage: { events: coverage, missingSources: sources.map(sourceId).filter(s => !clean.some(e => e.source === s)).sort(), complete: false }, conflicts, issues, queue, activity, stages, transitions, waits: issues.flatMap(i => i.waits) };
+  return { definitionVersion: 'pdd.metrics.v1', repo: canonicalRepo, scope: { ...scope }, timezone, observedAt, sources: [...sources].sort((a,b) => String(sourceId(a)).localeCompare(String(sourceId(b)))), coverage: { events: coverage, missingSources: sources.map(sourceId).filter(s => !clean.some(e => e.source === s)).sort(), complete: false }, conflicts, issues, queue, activity, stages, transitions, bySkill, waits: issues.flatMap(i => i.waits) };
 }

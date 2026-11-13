@@ -17,6 +17,8 @@ Expose issue-level in-scope selection, confirmed starts by origin, PR creation, 
 For a daily-start group, membership is issues with confirmed starts on the selected local date. Queue capacity and dependency causes remain separately visible. Concurrent waits are tracked independently by attempt and stage, with multiple reasons retained; a resume clears only its matching wait. Sources can be strings or source metadata objects; compare source identities by their source field and preserve metadata, including a known or unknown export scope when supplied. An absent scope remains unknown.
 
 Waits list elapsed duration at cutoff, stage and known reasons; planned prompt-only, observe-mode and new-product holds remain distinct from failures. Human-reported failed fixes require an explicit linked human complaint about the delivered fix. Administrative reopen, new scope, revert and unclassified reports are separate. Keep every qualifying report after a delivered fix even if another delivery follows. Count an explicit linked human complaint about the delivered issue as an issue-level known report even when no delivery identity is provided. Associate it with a delivery only when its attempt or PR identifies a matching preceding delivery; never assign an unlinked report to the latest delivery. Expose unassociated known reports separately from ambiguous or unevidenced reports; attribution and follow-up remain unknown where unassociated reports could apply. For each delivery expose its associated reports and 7- and 30-day windows measured from that delivery; later reports remain in the associated list. The existing issue followUp describes the latest delivery, while failedFixReports and failedFix cover all deliveries. Show immature windows. No report yet is not proven lasting success. Recorded recovery indicates assistance; an initial authorization is not recovery, and missing capture cannot establish an unassisted run. Missing machines and historical capture limitations are visible rather than zero.
+
+In `queue` scope, `queue` summarizes the supplied snapshot's open membership, while `issues` and `bySkill` also include distinct issues with non-selection observations at or before the cutoff so merged or closed work observed from GitHub receipts remains visible. Each issue exposes `skill` (`small-change`, `bug`, `feature`, `no-behavior-change`, or `unknown`), `wouldMerge` (`yes` when a non-conflicting `would-merge` milestone exists, else `unknown`), and `skillChecks` (`runtime`, `vectors`, `formal`, `complete` each `done`, `missed`, `not-applicable`, or `unknown`). When explicit receipt milestones mark `runtime`, `vectors` and `formal` as `not-applicable` (docs, config or test-only work with no behavior change), or an explicit `no-behavior-change` skill is recorded, `skill` is `no-behavior-change`. `bySkill` reports rows for `small-change`, `bug`, `feature`, `no-behavior-change`, and `all` (aggregated across distinct issues in `issues`). Each row exposes `issues`, `runs`, `pr`, `merged`, `wouldMerge` (non-merged issues with `wouldMerge` = `yes`), `mergedOrWouldMerge` (`merged + wouldMerge`), `conversionPct` (`mergedOrWouldMerge * 100 / issues`, or `null` when `issues` is `0`), and `checks` (`runtime`, `vectors`, `formal`, `complete` as `{done, applies, unknown}` where `not-applicable` runs do not increment `applies` and missing receipts increment `unknown` rather than `applies`).
 </details>
 
 A FAIL is negative only with accepted evidence. A split across sources remains unknown until two fresh accepted checks after the last opposing verdict agree, with distinct structured sessions and either different families or same-family mode on both checks. Compare family identities case-insensitively while preserving the original recorded identity. Opaque identities alone cannot establish that pair; retain every observation. Repeated observations of the same checker comment may refine unknown acceptance to accepted without making contradictory claims. At each cutoff, a later unknown acceptance does not erase an earlier known acceptance; differing known acceptance claims remain conflicts. Retain genuinely different claims as conflicts and preserve the earliest observation of each claim for historical cutoffs.
@@ -30,7 +32,7 @@ None. Timezone conversion is deterministic and uses the supplied timezone and cu
 ```json
 {
   "status": "draft",
-  "prose_sha256": "dc3450fa3967e8594af884a44e1bb80ec465594ff8d58cfa5a45612b21ab06c2",
+  "prose_sha256": "bd499295c540200a9b8283dd3ad578060e3deacd9565da9561130714bf0e6d09",
   "entries": [
     {
       "operation": "calculateMetrics",
@@ -3609,6 +3611,25 @@ None. Timezone conversion is deterministic and uses the supplied timezone and cu
                     ],
                     "additionalProperties": false
                   }
+                },
+                "skill": {
+                  "type": "string",
+                  "enum": ["small-change", "bug", "feature", "no-behavior-change", "unknown"]
+                },
+                "wouldMerge": {
+                  "type": "string",
+                  "enum": ["yes", "no", "unknown"]
+                },
+                "skillChecks": {
+                  "type": "object",
+                  "properties": {
+                    "runtime": { "type": "string", "enum": ["done", "missed", "not-applicable", "unknown"] },
+                    "vectors": { "type": "string", "enum": ["done", "missed", "not-applicable", "unknown"] },
+                    "formal": { "type": "string", "enum": ["done", "missed", "not-applicable", "unknown"] },
+                    "complete": { "type": "string", "enum": ["done", "missed", "not-applicable", "unknown"] }
+                  },
+                  "required": ["runtime", "vectors", "formal", "complete"],
+                  "additionalProperties": false
                 }
               },
               "required": [
@@ -3640,7 +3661,10 @@ None. Timezone conversion is deterministic and uses the supplied timezone and cu
                 "failedFix",
                 "deliveryFollowUps",
                 "unassociatedFailedFixReports",
-                "unclassifiedReports"
+                "unclassifiedReports",
+                "skill",
+                "wouldMerge",
+                "skillChecks"
               ],
               "additionalProperties": false
             }
@@ -5231,6 +5255,138 @@ None. Timezone conversion is deterministic and uses the supplied timezone and cu
               "eligibility"
             ],
             "additionalProperties": false
+          },
+          "bySkill": {
+            "type": "object",
+            "properties": {
+              "small-change": {
+                "type": "object",
+                "properties": {
+                  "issues": { "type": "integer" },
+                  "runs": { "type": "integer" },
+                  "pr": { "type": "integer" },
+                  "merged": { "type": "integer" },
+                  "wouldMerge": { "type": "integer" },
+                  "mergedOrWouldMerge": { "type": "integer" },
+                  "conversionPct": { "oneOf": [{ "type": "number" }, { "type": "null" }] },
+                  "checks": {
+                    "type": "object",
+                    "properties": {
+                      "runtime": { "type": "object", "properties": { "done": { "type": "integer" }, "applies": { "type": "integer" }, "unknown": { "type": "integer" } }, "required": ["done", "applies", "unknown"], "additionalProperties": false },
+                      "vectors": { "type": "object", "properties": { "done": { "type": "integer" }, "applies": { "type": "integer" }, "unknown": { "type": "integer" } }, "required": ["done", "applies", "unknown"], "additionalProperties": false },
+                      "formal": { "type": "object", "properties": { "done": { "type": "integer" }, "applies": { "type": "integer" }, "unknown": { "type": "integer" } }, "required": ["done", "applies", "unknown"], "additionalProperties": false },
+                      "complete": { "type": "object", "properties": { "done": { "type": "integer" }, "applies": { "type": "integer" }, "unknown": { "type": "integer" } }, "required": ["done", "applies", "unknown"], "additionalProperties": false }
+                    },
+                    "required": ["runtime", "vectors", "formal", "complete"],
+                    "additionalProperties": false
+                  }
+                },
+                "required": ["issues", "runs", "pr", "merged", "wouldMerge", "mergedOrWouldMerge", "conversionPct", "checks"],
+                "additionalProperties": false
+              },
+              "bug": {
+                "type": "object",
+                "properties": {
+                  "issues": { "type": "integer" },
+                  "runs": { "type": "integer" },
+                  "pr": { "type": "integer" },
+                  "merged": { "type": "integer" },
+                  "wouldMerge": { "type": "integer" },
+                  "mergedOrWouldMerge": { "type": "integer" },
+                  "conversionPct": { "oneOf": [{ "type": "number" }, { "type": "null" }] },
+                  "checks": {
+                    "type": "object",
+                    "properties": {
+                      "runtime": { "type": "object", "properties": { "done": { "type": "integer" }, "applies": { "type": "integer" }, "unknown": { "type": "integer" } }, "required": ["done", "applies", "unknown"], "additionalProperties": false },
+                      "vectors": { "type": "object", "properties": { "done": { "type": "integer" }, "applies": { "type": "integer" }, "unknown": { "type": "integer" } }, "required": ["done", "applies", "unknown"], "additionalProperties": false },
+                      "formal": { "type": "object", "properties": { "done": { "type": "integer" }, "applies": { "type": "integer" }, "unknown": { "type": "integer" } }, "required": ["done", "applies", "unknown"], "additionalProperties": false },
+                      "complete": { "type": "object", "properties": { "done": { "type": "integer" }, "applies": { "type": "integer" }, "unknown": { "type": "integer" } }, "required": ["done", "applies", "unknown"], "additionalProperties": false }
+                    },
+                    "required": ["runtime", "vectors", "formal", "complete"],
+                    "additionalProperties": false
+                  }
+                },
+                "required": ["issues", "runs", "pr", "merged", "wouldMerge", "mergedOrWouldMerge", "conversionPct", "checks"],
+                "additionalProperties": false
+              },
+              "feature": {
+                "type": "object",
+                "properties": {
+                  "issues": { "type": "integer" },
+                  "runs": { "type": "integer" },
+                  "pr": { "type": "integer" },
+                  "merged": { "type": "integer" },
+                  "wouldMerge": { "type": "integer" },
+                  "mergedOrWouldMerge": { "type": "integer" },
+                  "conversionPct": { "oneOf": [{ "type": "number" }, { "type": "null" }] },
+                  "checks": {
+                    "type": "object",
+                    "properties": {
+                      "runtime": { "type": "object", "properties": { "done": { "type": "integer" }, "applies": { "type": "integer" }, "unknown": { "type": "integer" } }, "required": ["done", "applies", "unknown"], "additionalProperties": false },
+                      "vectors": { "type": "object", "properties": { "done": { "type": "integer" }, "applies": { "type": "integer" }, "unknown": { "type": "integer" } }, "required": ["done", "applies", "unknown"], "additionalProperties": false },
+                      "formal": { "type": "object", "properties": { "done": { "type": "integer" }, "applies": { "type": "integer" }, "unknown": { "type": "integer" } }, "required": ["done", "applies", "unknown"], "additionalProperties": false },
+                      "complete": { "type": "object", "properties": { "done": { "type": "integer" }, "applies": { "type": "integer" }, "unknown": { "type": "integer" } }, "required": ["done", "applies", "unknown"], "additionalProperties": false }
+                    },
+                    "required": ["runtime", "vectors", "formal", "complete"],
+                    "additionalProperties": false
+                  }
+                },
+                "required": ["issues", "runs", "pr", "merged", "wouldMerge", "mergedOrWouldMerge", "conversionPct", "checks"],
+                "additionalProperties": false
+              },
+              "no-behavior-change": {
+                "type": "object",
+                "properties": {
+                  "issues": { "type": "integer" },
+                  "runs": { "type": "integer" },
+                  "pr": { "type": "integer" },
+                  "merged": { "type": "integer" },
+                  "wouldMerge": { "type": "integer" },
+                  "mergedOrWouldMerge": { "type": "integer" },
+                  "conversionPct": { "oneOf": [{ "type": "number" }, { "type": "null" }] },
+                  "checks": {
+                    "type": "object",
+                    "properties": {
+                      "runtime": { "type": "object", "properties": { "done": { "type": "integer" }, "applies": { "type": "integer" }, "unknown": { "type": "integer" } }, "required": ["done", "applies", "unknown"], "additionalProperties": false },
+                      "vectors": { "type": "object", "properties": { "done": { "type": "integer" }, "applies": { "type": "integer" }, "unknown": { "type": "integer" } }, "required": ["done", "applies", "unknown"], "additionalProperties": false },
+                      "formal": { "type": "object", "properties": { "done": { "type": "integer" }, "applies": { "type": "integer" }, "unknown": { "type": "integer" } }, "required": ["done", "applies", "unknown"], "additionalProperties": false },
+                      "complete": { "type": "object", "properties": { "done": { "type": "integer" }, "applies": { "type": "integer" }, "unknown": { "type": "integer" } }, "required": ["done", "applies", "unknown"], "additionalProperties": false }
+                    },
+                    "required": ["runtime", "vectors", "formal", "complete"],
+                    "additionalProperties": false
+                  }
+                },
+                "required": ["issues", "runs", "pr", "merged", "wouldMerge", "mergedOrWouldMerge", "conversionPct", "checks"],
+                "additionalProperties": false
+              },
+              "all": {
+                "type": "object",
+                "properties": {
+                  "issues": { "type": "integer" },
+                  "runs": { "type": "integer" },
+                  "pr": { "type": "integer" },
+                  "merged": { "type": "integer" },
+                  "wouldMerge": { "type": "integer" },
+                  "mergedOrWouldMerge": { "type": "integer" },
+                  "conversionPct": { "oneOf": [{ "type": "number" }, { "type": "null" }] },
+                  "checks": {
+                    "type": "object",
+                    "properties": {
+                      "runtime": { "type": "object", "properties": { "done": { "type": "integer" }, "applies": { "type": "integer" }, "unknown": { "type": "integer" } }, "required": ["done", "applies", "unknown"], "additionalProperties": false },
+                      "vectors": { "type": "object", "properties": { "done": { "type": "integer" }, "applies": { "type": "integer" }, "unknown": { "type": "integer" } }, "required": ["done", "applies", "unknown"], "additionalProperties": false },
+                      "formal": { "type": "object", "properties": { "done": { "type": "integer" }, "applies": { "type": "integer" }, "unknown": { "type": "integer" } }, "required": ["done", "applies", "unknown"], "additionalProperties": false },
+                      "complete": { "type": "object", "properties": { "done": { "type": "integer" }, "applies": { "type": "integer" }, "unknown": { "type": "integer" } }, "required": ["done", "applies", "unknown"], "additionalProperties": false }
+                    },
+                    "required": ["runtime", "vectors", "formal", "complete"],
+                    "additionalProperties": false
+                  }
+                },
+                "required": ["issues", "runs", "pr", "merged", "wouldMerge", "mergedOrWouldMerge", "conversionPct", "checks"],
+                "additionalProperties": false
+              }
+            },
+            "required": ["small-change", "bug", "feature", "no-behavior-change", "all"],
+            "additionalProperties": false
           }
         },
         "required": [
@@ -5247,7 +5403,8 @@ None. Timezone conversion is deterministic and uses the supplied timezone and cu
           "activity",
           "stages",
           "waits",
-          "transitions"
+          "transitions",
+          "bySkill"
         ],
         "additionalProperties": false
       },
