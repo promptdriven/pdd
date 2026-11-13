@@ -8,9 +8,10 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: c5211083dfc5fb2cc338687cb9bb779c0a1cc9e78d283e6f9b8403f5a1e89649).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: d3a5333608fa0121171f7ddea502b8efbd07efb245e2ca29ec3115e444cf582c).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
+import { findOwners, isTestOwnedPath } from './file-owner.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { constants, openSync, closeSync, fsyncSync, unlinkSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -50,7 +51,7 @@ import { startChat, sendToChat, herdrCommand, chatSession, chatHealth, openChat,
 import { samePath } from './workflow-herdr-layout.mjs';
 import { workflowAgentEntry } from './workflow-agents.mjs';
 import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
-import { PROMPT_TESTS_LABEL, PROMPT_TESTS_WORDS, causeText, format, isStoryPath, render, runtimeOutputSlice, runtimePreflightSlice } from './runtime-seam.mjs';
+import { PROMPT_TESTS_LABEL, PROMPT_TESTS_WORDS, causeText, format, isStoryPath, promptRefusal, render, runtimeOutputSlice, runtimePreflightSlice } from './runtime-seam.mjs';
 import { approvalRecords, preparePrEvidence } from './workflow-pr-evidence.mjs';
 import { validateProofRecord } from './workflow-prove.mjs';
 import { readRunResults, resultLines, usableResult, noResultLine, NO_VERDICT, prepareNativeEvidence, savedCheckCause, savedLostCheck } from './workflow-results.mjs';
@@ -1430,6 +1431,73 @@ async function matchingPromptApprovals(run, p) {
     return prompts.length ? [{ ...record, prompts }] : [];
   });
 }
+
+// Verify locally on the host whether every changed or owned prompt in the run declares a valid native-only contract.
+async function nativeOnlyPrompts(run, p) {
+  try {
+    const files = await changedFiles(run, p);
+    if (!files.length) return null;
+    const promptSet = new Set(files.filter(path => path.endsWith('.prompt.md')));
+    const nonPrompts = files.filter(path => !path.endsWith('.prompt.md') && !isStoryPath(path) && !isTestOwnedPath(path));
+    if (nonPrompts.length) {
+      const owned = findOwners({ root: run.root, paths: nonPrompts });
+      for (const row of owned.files) {
+        if (!row.certain && row.source !== 'prose') return null;
+        for (const owner of row.owners) promptSet.add(owner);
+      }
+    }
+    for (const path of files.filter(item => item.endsWith('.json'))) {
+      let raw, doc;
+      try { raw = readFileSync(join(run.root, path), 'utf8'); } catch { continue; }
+      try { doc = JSON.parse(raw); } catch { continue; }
+      if (doc?.schema_version !== 'prompt-runtime.program-scenario.v1') continue;
+      if (!Array.isArray(doc.steps)) return null;
+      for (const step of doc.steps) if (typeof step?.entry_path === 'string') promptSet.add(step.entry_path);
+    }
+    const paths = [...promptSet].sort();
+    if (!paths.length) return null;
+    const visible = new Set(gitFiles(run.root));
+    const verified = [];
+    for (const path of paths) {
+      const parsed = readPrompt(run.root, visible, path);
+      if (promptRefusal(parsed, 'interface')) return null;
+      const reason = typeof parsed.interface?.reason === 'string' ? parsed.interface.reason.trim() : '';
+      if (parsed.interface?.kind !== 'native-only' || !reason) return null;
+      verified.push({ path, reason });
+    }
+    return verified;
+  } catch { return null; }
+}
+
+const cleanNativeReason = value => String(value ?? '').replace(/[\u0000-\u001f\u007f-\u009f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200).replaceAll('pdd-workflow:', 'pdd-workflow\\u003a');
+
+// Keep GitHub's filterable label aligned with saved evidence and valid native-only scope.
+async function syncNoVerdictLabel(run, pr, evidence, p) {
+  try {
+    const call = async args => {
+      const reply = await p.execFile('gh', args, { cwd: run.root });
+      if (reply.code !== undefined && reply.code !== 0) throw Error(reply.stderr || 'GitHub label request failed');
+      return reply.stdout;
+    };
+    const exempt = evidence.results.some(result => ['pdd test', 'pdd lint'].includes(result.kind)) || Boolean(evidence.nativeOnly?.length);
+    const view = JSON.parse(String(await call(['pr', 'view', pr.url, '--json', 'labels'])));
+    if (!Array.isArray(view.labels)) throw Error('PR labels unavailable');
+    const present = view.labels.some(label => label?.name === NO_VERDICT);
+    if (!exempt && !present) {
+      const labels = JSON.parse(String(await call(['label', 'list', '--repo', run.repo, '--limit', '1000', '--json', 'name'])));
+      if (!Array.isArray(labels)) throw Error('Repository labels unavailable');
+      if (!labels.some(label => label?.name === NO_VERDICT)) await call(['label', 'create', NO_VERDICT, '--repo', run.repo]);
+      await call(['pr', 'edit', pr.url, '--add-label', NO_VERDICT]);
+    } else if (exempt && present) {
+      await call(['pr', 'edit', pr.url, '--remove-label', NO_VERDICT]);
+    }
+    return [];
+  } catch (error) {
+    if (error?.code === 'workflow_progress_refused') throw error;
+    return [`warning: pdd could not update the ${NO_VERDICT} PR label (${causeOf(error)}); retry publication.`];
+  }
+}
+
 async function publicationEvidence(run, area, p) {
   const saved = { runId: run.runId, ...(Number.isFinite(run.startedAt) ? { startedAt: run.startedAt } : {}), runDir: run.runDir, root: run.root, baseSha: run.baseSha, baseBranch:run.baseBranch, workflow:run.workflow, number: run.number,
     decisions: run.decisions ?? [], promptApprovals: await matchingPromptApprovals(run, p),
@@ -1469,10 +1537,17 @@ async function publicationEvidence(run, area, p) {
   }
   if (run.publicationPending) evidence.lines.unshift('Check evidence: publication-pending (source is being published).');
   // pdd's own pdd test and pdd lint results lead the body; the code PR's prove result is its Old-code proof line.
-  const results=ownResults(run,p);
-  evidence.pddLines = resultLines(results, { kinds: ['pdd test', 'pdd lint', ...results.some(result=>result.kind==='native evidence')?['native evidence']:[]] });
+  const results = ownResults(run, p);
+  const hasSavedVerdict = results.some(result => ['pdd test', 'pdd lint'].includes(result.kind));
+  const nativeOnly = hasSavedVerdict ? null : await nativeOnlyPrompts(run, p);
+  const nativeEvidence = results.some(result => result.kind === 'native evidence');
+  evidence.pddLines = nativeOnly?.length
+    ? [`pdd result: not-applicable (native-only): ${nativeOnly.map(item => `${item.path} (${cleanNativeReason(item.reason)})`).join('; ')}.`,
+      ...(nativeEvidence ? resultLines(results, { kinds: ['native evidence'] }) : [])]
+    : resultLines(results, { kinds: ['pdd test', 'pdd lint', ...(nativeEvidence ? ['native evidence'] : [])] });
   // The readable part (#3042) reads the same records as plain facts: results, approvals and the proof judgment.
   evidence.results = results;
+  evidence.nativeOnly = nativeOnly;
   evidence.approvals = approvalRecords(saved).map(item => ({ route: item.route, at: item.at, words: typeof item.words === 'string' ? item.words : null }));
   return evidence;
 }
@@ -1809,8 +1884,10 @@ async function readableFacts(run, area, p, evidence, { drafts = [], pending = fa
     fields, thisPr: holds.length ? `${others.length ? '' : 'no code change. '}It holds ${listed(holds)}.` : 'no code change.', diff,
     area: prArea({ area: fields.area, files, workflow: run.workflow }), title: fields.title,
     records: {
-      promptTests: test ? { result: testResult, pass: /✗/.test(testResult) ? false : /✓/.test(testResult) ? true : null, report: test.reports?.[0] ?? null, current: test.source === 'current' } : null,
-      lint: lint ? { result: lintCount ? `${lintCount[1]} of ${lintCount[2]} tests pass` : resultText(lint.summary), pass: lintCount ? Number(lintCount[2]) > 0 && lintCount[1] === lintCount[2] : null } : null,
+      promptTests: test ? { result: testResult, pass: /✗/.test(testResult) ? false : /✓/.test(testResult) ? true : null, report: test.reports?.[0] ?? null, current: test.source === 'current' }
+        : evidence.nativeOnly?.length ? { result: 'not-applicable (native-only)', pass: null, report: null, current: true } : null,
+      lint: lint ? { result: lintCount ? `${lintCount[1]} of ${lintCount[2]} tests pass` : resultText(lint.summary), pass: lintCount ? Number(lintCount[2]) > 0 && lintCount[1] === lintCount[2] : null }
+        : evidence.nativeOnly?.length ? { result: 'not-applicable (native-only)', pass: null } : null,
       replay: replay ? { ...replay, ...(replay.formal?.result === 'failed' ? { counterexample: formalCounterexample(run) } : {}) } : null,
       ...(run.workflow === 'small-change' && label === 'the PR' ? { checklist: readSmallChangeChecklist(run) } : {}),
       formal, ...(formal?.result === 'failed' ? { counterexample: formalCounterexample(run) } : {}),
@@ -2155,6 +2232,7 @@ async function publishAreaPr(run, area, p, lines, retry, automatic = null) {
     const metadata=Object.fromEntries(['publishedHeadSha','publicationBodySha256','readable','sourcePaths'].filter(key=>Object.hasOwn(existing,key)).map(key=>[key,existing[key]]));
     commitRun(run,p,latest=>{applyPublication(latest);const pr=latest.pr.find(pr=>pr.url===existing.url&&pr.stage===existing.stage);if(pr)Object.assign(pr,metadata);});
     if (area.then === 'ask-code') await refreshReplayBaseline(run,p,false,sourcePaths);
+    lines.push(...await syncNoVerdictLabel(run, existing, prepared, p));
     lines.push(`Pushed the new commits to ${label}.`);
     return null;
   }
@@ -2207,6 +2285,7 @@ async function publishAreaPr(run, area, p, lines, retry, automatic = null) {
   if (commitSha(published.publishedHeadSha)) published.readable = savedReadable(readable.facts, published.publishedHeadSha);
   const applyPublication=publicationUpdate(run,codePr?['testInventory']:[]);
   commitRun(run,p,latest=>{applyPublication(latest);if(!latest.pr.some(pr=>pr.url===published.url&&pr.stage===published.stage))latest.pr.push(published);});
+  lines.push(...await syncNoVerdictLabel(run, published, prepared, p));
   // PR 1's Next line now links PR 2 (#3042). A failure there only warns.
   const ask = askArea(run), pr1 = codePr && ask && prOf(run, ask.name);
   if (pr1) {
@@ -3301,12 +3380,13 @@ async function draftDescription(run, pr1, drafts, p) {
     const fitted = verifyFit(safeRemainder, BODY_BUDGET - characters(leading) - characters(footer) - reserved, p.env, true);
     const placed = section => { const text = section.join('\n'); return fitted.includes(SLOT) ? fitted.replace(SLOT, () => text) : `${fitted}\n\n${text}`; };
     const nextBody = from < 0 ? `${leading}${fitted}${footer}` : withSummaries(steps, texts, section => `${leading}${placed(section)}${footer}`, BODY_BUDGET);
+    const labelWarnings = run.publicationPending ? [] : await syncNoVerdictLabel(run, pr1, evidence, p);
     // Only the time of the status line changed: nothing to write.
-    if (nextBody === body || sameReadableTop(nextBody, body)) { remember(); return []; }
+    if (nextBody === body || sameReadableTop(nextBody, body)) { remember(); return labelWarnings; }
     const reply = await p.execFile('gh', ['pr', 'edit', pr1.url, '--body-file', '-'], { cwd: run.root, input: nextBody });
     if (reply.code !== undefined && reply.code !== 0) throw Object.assign(Error('PR 1 description update failed.'), { code: reply.code });
     remember();
-    return [`pdd updated the PR 1 description: ${drafts.length ? `draft prompts left: ${drafts.join(', ')}` : 'no draft prompts are left'}.`];
+    return [...labelWarnings, `pdd updated the PR 1 description: ${drafts.length ? `draft prompts left: ${drafts.join(', ')}` : 'no draft prompts are left'}.`];
   } catch (error) {
     if(error?.code==='workflow_progress_refused')throw error;
     const advice = error?.code === 'workflow_pr_body_too_large' ? ' Shorten the notes while retaining outcome, limitation and reference evidence, then retry.' : '';

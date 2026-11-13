@@ -7,6 +7,8 @@ import { dirname, join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import {pinReplayVectors,sourceFingerprint} from '../src/workflow-replay.mjs';
 import { DETAILS_OPEN, detailsOf, prStatus } from '../src/workflow-pr-body.mjs';
+import { proseSha256 } from '../src/runtime-seam.mjs';
+import { promptHeaderHash } from '../src/file-owner.mjs';
 
 // #3042: pdd's own body (evidence, steps, approvals, Verify) now sits in the closed Details section under the readable
 // part. Checks that start at the first line of pdd's body read that section.
@@ -46,9 +48,12 @@ const file=process.env.PDD_PUBLICATION_GH_STATE,s=JSON.parse(fs.readFileSync(fil
 const flag=n=>a[a.indexOf(n)+1],out=x=>process.stdout.write(typeof x==='string'?x:JSON.stringify(x));
 const commit=()=>cp.execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();
 const remote=(ref='topic')=>{try{return cp.execFileSync('git',['ls-remote','origin','refs/heads/'+ref],{encoding:'utf8'}).trim().split('\\t')[0]}catch{return ''}};
-if(a[0]==='repo')out({nameWithOwner:'example/project',defaultBranchRef:{name:'main'},url:'https://github.com/example/project'});
+if(a[0]==='label'&&a[1]==='list')out((s.repoLabels||[]).map(name=>({name})));
+else if(a[0]==='label'&&a[1]==='create'){if(s.failLabel){process.stderr.write('label refused');process.exit(1)} s.repoLabels=[...(s.repoLabels||[]),a[2]];fs.writeFileSync(file,JSON.stringify(s));}
+else if(a[0]==='pr'&&a[1]==='edit'&&(a.includes('--add-label')||a.includes('--remove-label'))){const pr=s.prs.find(p=>p.url===a[2]);pr.labels=pr.labels||[];if(a.includes('--add-label'))pr.labels.push(flag('--add-label'));else pr.labels=pr.labels.filter(x=>x!==flag('--remove-label'));fs.writeFileSync(file,JSON.stringify(s));}
+else if(a[0]==='repo')out({nameWithOwner:'example/project',defaultBranchRef:{name:'main'},url:'https://github.com/example/project'});
 else if(a[1]==='list')out(s.prs.filter(p=>(!a.includes('--head')||p.headRefName===flag('--head'))&&(!a.includes('--search')||p.body.includes(flag('--search').split('"')[1]))).map(p=>({...p,headRefOid:remote(p.headRefName)||p.headRefOid})));
-else if(a[1]==='view'){const found=s.prs.find(p=>p.url===a[2]),p=found?.headRefName?{...found,headRefOid:remote(found.headRefName)||found.headRefOid}:found||{body:''};out(String(flag('--json')).split(',').includes('comments')?{...p,comments:(s.comments||[]).map(c=>({author:{login:'reviewer'},authorAssociation:c.author_association,body:c.body,createdAt:c.created_at,url:c.html_url}))}:p)}
+else if(a[1]==='view'){const found=s.prs.find(p=>p.url===a[2]),p=found?.headRefName?{...found,labels:(found.labels||[]).map(name=>({name})),headRefOid:remote(found.headRefName)||found.headRefOid}:found||{body:'',labels:[]};out(String(flag('--json')).split(',').includes('comments')?{...p,comments:(s.comments||[]).map(c=>({author:{login:'reviewer'},authorAssociation:c.author_association,body:c.body,createdAt:c.created_at,url:c.html_url}))}:p)}
 else if(a[0]==='api'&&/^repos\\/example\\/project\\/pulls\\/\\d+\\/files\\?per_page=100$/.test(a[1])){
  if(!a.includes('--paginate')||!a.includes('--slurp'))throw Error('file list must include every JSON page');
  const pages=s.prFiles?.[a[1].split('/')[4]];if(!pages)throw Error('file list unavailable');out(pages);
@@ -65,12 +70,12 @@ else if(a[1]==='create'||a[1]==='edit'){
 `;
   writeFileSync(join(bin, 'gh'), fake); chmodSync(join(bin, 'gh'), 0o755);
   const save = () => writeFileSync(join(runDir, 'status.json'), JSON.stringify(run)); save();
-  const invoke = (summary, method = 'stepDone', step = prompt ? 'check' : 'formal') => {
+  const invoke = (summary, method = 'stepDone', step = prompt ? 'check' : 'formal', results = null) => {
     const review=String(summary).split('\n').filter(row=>row.startsWith('Review:')).join('\n');if(review)writeFileSync(join(runDir,'review.md'),review);
     const verify=String(summary).split('\n').filter(row=>/^(?:Not fixed yet:|Proof \()/.test(row)).join('\n');if(verify)writeFileSync(join(runDir,'verify.md'),verify);
     const scope=String(summary).split('\n').filter(row=>row.startsWith('Not caught because:')).join('\n');if(scope)writeFileSync(join(runDir,'scope.md'),scope);
 
-    const script = `import {${method}} from ${JSON.stringify(join(packageRoot, 'src/workflow-runner.mjs'))};const r=await ${method}({ref:'17',step:${JSON.stringify(step)},summary:${JSON.stringify(summary)},cwd:${JSON.stringify(root)}},{stateDir:${JSON.stringify(join(base, 'pdd-state'))},isTTY:true,env:{HOME:${JSON.stringify(base)}},confirm:async()=>false});process.stdout.write(JSON.stringify(r));`;
+    const script = `import {${method}} from ${JSON.stringify(join(packageRoot, 'src/workflow-runner.mjs'))};const r=await ${method}({ref:'17',step:${JSON.stringify(step)},summary:${JSON.stringify(summary)},cwd:${JSON.stringify(root)}},{stateDir:${JSON.stringify(join(base, 'pdd-state'))},isTTY:true,env:{HOME:${JSON.stringify(base)}},confirm:async()=>false,...(${JSON.stringify(results)} ? {readRunResults:()=>${JSON.stringify(results)}} : {})});process.stdout.write(JSON.stringify(r));`;
     return JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], { cwd: root, encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, PDD_PUBLICATION_GH_STATE: state, GIT_ALLOW_PROTOCOL: 'file' } }));
   };
   const machine = (proved = head) => writeFileSync(join(runDir, 'old-code-proof.json'), JSON.stringify({ v: 2, origin: 'pdd.workflow-prove.v2',interruptSignal:'', runId: run.runId, baseSha, headSha: proved, test: 'node --test test/value.test.mjs', expect: 'defect', paths: ['test/value.test.mjs'], base: phase(1, true), head: phase(0), outcome: 'proved', cleanupError: '', setupError: '' }));
@@ -1533,4 +1538,128 @@ for (const options of [{ extraFiles: 45 }, { extraFiles: 45, production: true },
   if (options.extraFiles) { assert.equal(pr.facts.diff.files.length, 40); assert.ok(pr.facts.diff.count > 40); }
   if (coverage) assert.doesNotMatch(pr.visible, /^⛔/);
   else assert.match(pr.visible, /^⛔/);
+});
+
+const makePromptText = (prose, iface) => {
+  const placeholder = `${prose}\n\n<details><summary>Runtime interface</summary>\n\n\`\`\`json\n${JSON.stringify({ ...iface, prose_sha256: '' }, null, 2)}\n\`\`\`\n</details>\n`;
+  return `${prose}\n\n<details><summary>Runtime interface</summary>\n\n\`\`\`json\n${JSON.stringify({ ...iface, prose_sha256: proseSha256(placeholder) }, null, 2)}\n\`\`\`\n</details>\n`;
+};
+
+test('2923 publication labels a PR without a saved pdd result and creates missing repo label', t => {
+  const f = fixture(t);
+  const out = f.invoke('Review: agent claims a pass');
+  assert.equal(out.exitCode, 0, out.message);
+  assert.deepEqual(f.data().repoLabels, ['pdd:no-verdict']);
+  assert.ok(f.data().prs[0].labels?.includes('pdd:no-verdict'));
+  assert.match(f.data().prs[0].body, /pdd:no-verdict/);
+});
+
+for (const kind of ['pdd test', 'pdd lint']) test(`2923 saved failed ${kind} removes only the no-verdict label`, t => {
+  const f = fixture(t, { existing: true });
+  const state = f.data(); state.prs[0].labels = ['other', 'pdd:no-verdict']; state.repoLabels = ['pdd:no-verdict']; f.configure(state);
+  const out = f.invoke('Review: note', 'stepDone', 'formal', [{ kind, result: 'failed', summary: '✗ failed', at: 1 }]);
+  assert.equal(out.exitCode, 0, out.message);
+  assert.deepEqual(f.data().prs[0].labels, ['other']);
+});
+
+test('2923 label failure warns while the PR remains open', t => {
+  const f = fixture(t); f.configure({ failLabel: true });
+  const out = f.invoke('Review: note');
+  assert.equal(out.exitCode, 0, out.message);
+  assert.match(out.message, /warning: pdd could not update the pdd:no-verdict PR label/);
+  assert.equal(f.data().prs[0].state, 'OPEN');
+});
+
+test('2923 existing repository label is reused without changing it', t => {
+  const f = fixture(t); f.configure({ repoLabels: ['pdd:no-verdict', 'other'] });
+  const out = f.invoke('Review: note');
+  assert.equal(out.exitCode, 0, out.message);
+  assert.deepEqual(f.data().repoLabels, ['pdd:no-verdict', 'other']);
+  assert.deepEqual(f.data().prs[0].labels, ['pdd:no-verdict']);
+});
+
+test('2923 valid native-only PR 1 with zero scenario JSONs renders not-applicable (native-only) and omits pdd:no-verdict', t => {
+  const f = fixture(t, { prompt: true });
+  mkdirSync(join(f.root, 'prompts'), { recursive: true });
+  mkdirSync(join(f.root, 'user_stories'), { recursive: true });
+  const promptText = makePromptText('# Crypto ECDH\n\nOwn `src/crypto.mjs`. Validate P-256 ECDH public keys with Node native crypto.', {
+    kind: 'native-only',
+    status: 'approved',
+    reason: 'Node P-256 ECDH validation uses native OpenSSL bindings that bound ports cannot fake',
+  });
+  writeFileSync(join(f.root, 'prompts/crypto.prompt.md'), promptText);
+  writeFileSync(join(f.root, 'user_stories/ecdh.md'), '# Validate ECDH keys\n\nAs a service operator, I want invalid P-256 ECDH public keys rejected, so that handshakes fail safely.\n\n## Acceptance criteria\n\n1. An invalid P-256 point is rejected before shared-secret derivation.\n');
+  f.git('add', '.'); f.git('commit', '-qm', 'native-only prompt and story');
+  const out = f.invoke('Prompt scope checked');
+  assert.equal(out.exitCode, 0, out.message);
+  const pr = f.data().prs[0];
+  assert.ok(!pr.labels?.includes('pdd:no-verdict'), `unexpected labels: ${JSON.stringify(pr.labels)}`);
+  assert.doesNotMatch(pr.body, /pdd:no-verdict/);
+  assert.match(pr.body, /\| Prompt tests \(`pdd test`\) \| not-applicable \(native-only\) \|/);
+  assert.match(pddPart(pr.body), /pdd result: not-applicable \(native-only\): prompts\/crypto\.prompt\.md \(Node P-256 ECDH validation uses native OpenSSL bindings that bound ports cannot fake\)\./);
+});
+
+test('2923 valid native-only code update removes prior pdd:no-verdict label; blank reason or mixed scope still gets pdd:no-verdict', t => {
+  const f = fixture(t, { existing: true });
+  const validNative = makePromptText('# Crypto ECDH\n\nOwn `src/crypto.mjs`.', {
+    kind: 'native-only',
+    status: 'approved',
+    reason: 'Native OpenSSL P-256 curve point validation',
+  });
+  f.git('switch', '-q', 'main');
+  mkdirSync(join(f.root, 'prompts'), { recursive: true });
+  writeFileSync(join(f.root, 'prompts/crypto.prompt.md'), validNative);
+  f.git('add', '.'); f.git('commit', '-qm', 'merged native-only prompt');
+  f.git('push', '-q', 'origin', 'main', 'main:refs/heads/prompt-topic');
+  const mergedBase = f.git('rev-parse', 'HEAD');
+  f.git('switch', '-q', 'topic');
+  f.git('rebase', '-q', 'main');
+  mkdirSync(join(f.root, 'src'), { recursive: true });
+  writeFileSync(join(f.root, 'src/crypto.mjs'), `// Generated from prompts/crypto.prompt.md (sha256: ${promptHeaderHash(validNative)}).\nexport const ok = true;\n`);
+  f.git('add', '.'); f.git('commit', '-qm', 'native-only code implementation');
+  f.git('push', '-qf', 'origin', 'HEAD:refs/heads/topic');
+  f.run.baseSha = mergedBase;
+  f.save();
+  const state = f.data(); state.prs[0].labels = ['keep-me', 'pdd:no-verdict']; state.repoLabels = ['pdd:no-verdict']; f.configure(state);
+  const okOut = f.invoke('Review: checked');
+  assert.equal(okOut.exitCode, 0, okOut.message);
+  assert.deepEqual(f.data().prs[0].labels, ['keep-me']);
+  assert.doesNotMatch(f.data().prs[0].body, /pdd:no-verdict/);
+  assert.match(pddPart(f.data().prs[0].body), /pdd result: not-applicable \(native-only\): prompts\/crypto\.prompt\.md/);
+
+  // Blank reason on a native-only prompt fails local interface validation and must apply pdd:no-verdict.
+  const fp = fixture(t, { existing: true, prompt: true });
+  mkdirSync(join(fp.root, 'prompts'), { recursive: true });
+  mkdirSync(join(fp.root, 'user_stories'), { recursive: true });
+  writeFileSync(join(fp.root, 'user_stories/ecdh.md'), '# Validate ECDH keys\n\nAs a service operator, I want invalid P-256 ECDH public keys rejected, so that handshakes fail safely.\n\n## Acceptance criteria\n\n1. An invalid P-256 point is rejected.\n');
+  const blankNative = makePromptText('# Crypto ECDH\n\nOwn `src/crypto.mjs`.', {
+    kind: 'native-only',
+    status: 'approved',
+    reason: '   ',
+  });
+  writeFileSync(join(fp.root, 'prompts/crypto.prompt.md'), blankNative);
+  fp.git('add', '.'); fp.git('commit', '-qm', 'blank reason');
+  const pState = fp.data(); pState.prs[0].labels = ['keep-me']; pState.repoLabels = ['pdd:no-verdict']; fp.configure(pState);
+  const blankOut = fp.invoke('Prompt scope checked');
+  assert.equal(blankOut.exitCode, 0, blankOut.message);
+  assert.deepEqual(fp.data().prs[0].labels, ['keep-me', 'pdd:no-verdict']);
+  assert.match(fp.data().prs[0].body, /pdd:no-verdict/);
+
+  // Restoring valid native-only reason while adding an executable partial prompt keeps pdd:no-verdict because scope is mixed.
+  writeFileSync(join(fp.root, 'prompts/crypto.prompt.md'), validNative);
+  const partialPrompt = makePromptText('# Policy\n\nOwn `src/policy.mjs`.', {
+    kind: 'partial',
+    status: 'approved',
+    entries: [],
+    calls: [],
+    resources: [],
+    limits: { max_steps: 1, max_model_calls: 1 },
+    conventions: [],
+  });
+  writeFileSync(join(fp.root, 'prompts/policy.prompt.md'), partialPrompt);
+  fp.git('add', '.'); fp.git('commit', '-qm', 'mixed prompts');
+  const current = fp.data(); current.prs[0].labels = ['keep-me']; fp.configure(current);
+  const mixedOut = fp.invoke('Prompt scope mixed');
+  assert.equal(mixedOut.exitCode, 0, mixedOut.message);
+  assert.deepEqual(fp.data().prs[0].labels, ['keep-me', 'pdd:no-verdict']);
 });
