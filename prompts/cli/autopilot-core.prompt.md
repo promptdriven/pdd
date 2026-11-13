@@ -768,7 +768,30 @@ the evidence record.
   a merge from the base, the repair and the conflict update check that the fix is still
   needed (#3227 fix 5): the PR's changed tests run on the new merge base in a throwaway
   worktree; when they pass there too, the base holds the fix, and the PR keeps only what
-  the base does not hold and says so in its body.
+  the base does not hold and says so in its body. **Reproduce before a repair round
+  (#3247):** when the red findings include a failed CI check or a failed full test suite,
+  the engine extracts and puts structured failure reproduction details in the repair brief
+  for each failed check: the failing test names (with files when known, from
+  `failingTests` and check-run test annotations), the redacted failing lines of the log
+  (`failingLogLines(text, limit=25)`, exported: strips GitHub Actions step prefixes with
+  optional UTF-8 BOM and ANSI escape sequences before secret redaction and failure parsing;
+  extracts TAP failure blocks, spec `✖ failing tests:` detail blocks without letting earlier
+  spec tree rows or passing siblings starve them, assertion/error lines, check-run output
+  and annotations of failed check runs, and `gh run view RUN --repo REPO --log-failed` once
+  per failed workflow run when a run id is known, falling back to the last non-empty lines),
+  and the environment of the failure (CI check name vs local
+  full-suite runner, platform, worker concurrency `$PDD_CHECK_CPUS` vs CI runner
+  concurrency, `CI=true`, and clean-checkout or permission context such as `/proc` or
+  `EACCES`). The brief requires the repair agent to first run those exact failing tests in
+  the matching environment and observe them fail before changing code, to check
+  `origin/BASE` (`git merge-base origin/BASE HEAD` in a throwaway worktree, #3181) when an
+  untouched test fails and report `{"outcome": "failed", "kind": "pdd", "component":
+  "base-suite", "code": "base-test-red", "cause", "detail"}` without guessing an edit when
+  the test fails on `origin/BASE` too, and after a fix to run the same tests in the same
+  environment and confirm they pass before pushing. When every red finding of the round is
+  a CI or full-suite failure and no reproduction rerun has run at this head yet, the brief
+  also allows `{"outcome": "not reproduced", "command", "detail"?}` (`"not-reproduced"`
+  accepted too) when the failure does not reproduce and the repair made no code changes.
 - **Review** (in `worktrees/N-review`, a detached checkout of the head): a fresh agent
   that did not write the change. It gets the path checks' table of the PR's changed
   files, each in one of three states (owned on the base, with its owner; unowned on the
@@ -864,8 +887,27 @@ result after a repeated hang is an `issue` stop too. A
 reviewer that T1 stops counts as no verdict unless its result file is valid. An exited or dead job: a valid `pr` result moves
 to the merge check in the same tick. The PR number may be a number or a string of
 digits (an optional `#`); it becomes an integer above 0. The head is 40 hex digits in
-any case and is saved in lower case. Any other PR value is no result. A `failed`
-result ends with the agent's cause; anything else ends with `no-result`.
+any case and is saved in lower case. Any other PR value is no result. A repair result
+`{"outcome": "not reproduced", "command", "detail"?}` (`"not-reproduced"` accepted too)
+with a nonblank `command` counts as a job result (`produced`). When the round had only CI
+or full-suite red findings (including no prior `Review: FAIL` at this head) and no
+reproduction rerun has run at this head yet, the engine reads the PR on GitHub (finishing
+a merge, or ending as `pr-closed` or `head-moved`, when the PR changed while the repair
+ran), resets any uncommitted edits in the job worktree to the PR head, refunds the
+tentative `repairs` and `rounds` entries of that round, and reruns the failing check once:
+when `ci` was red, failed CI is rerun via 2xx `POST
+repos/REPO/actions/runs/ID/rerun-failed-jobs` (falling back to `/rerun` or `POST
+repos/REPO/check-runs/ID/rerequest`), ending as `checks-red` without recording a rerun if
+no failed CI check could be rerun, and treating an unchanged pre-rerun failed-check
+signature as pending for up to 2 minutes until GitHub updates those failed checks; passing
+checks (`review`, `suite`, `vectors`, `coverage`, `untested`) at this head for the non-red
+checks are restored (`suite` cleared when `suite` was red), `reproduceRerun {head, at,
+command, detail, kinds}` is recorded, and the job moves back to phase `pr` in the same
+tick. A second `"not reproduced"` at the same head, or one when non-CI/non-suite checks
+were red, ends the job as `checks-red`. A `failed` result ends
+with the agent's cause (when a repair reports `kind: "pdd"` and `code: "base-test-red"`
+for #3181, its tentative `repairs` increment is refunded first); anything else ends with
+`no-result`.
 
 **Needs a person.** A result `{"outcome": "needs-person", "kind", "question", "options"?,
 "recommended"?}` with a nonblank question counts as a job result (`produced`). `kind` is
