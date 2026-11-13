@@ -7,7 +7,7 @@ import { Readable } from 'node:stream';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { headerPrompts, headerEntries, headerHashState, promptHeaderHash, promptClaims, resolveOwners, findOwners } from '../src/file-owner.mjs';
+import { headerPrompts, headerEntries, headerHashState, promptHeaderHash, promptClaims, isTestOwnedPath, resolveOwners, findOwners, runOwner } from '../src/file-owner.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { runApprove } from '../src/prompt-approve.mjs';
 import { PLACE, harbor, sink } from './runtime-fake.mjs';
@@ -275,4 +275,63 @@ test('3295 pdd owner warns on stderr without blocking exit 0 or changing stdout 
   assert.equal(byPrompt.code, 0);
   assert.equal(byPrompt.out, 'prompts/prose.prompt.md: no owner\nprompts/prod.prompt.md: no owner\n');
   assert.equal(byPrompt.err, 'Warning: misplaced prompt owner: prompts/prose.prompt.md claims src/test_unit.py, src/unit.test.mjs, src/unit_test.go. Prompts own production modules, not test files.\n');
+});
+
+test('3295 isTestOwnedPath requires canonicalPath and runOwner never opens non-visible or symlinked test claims', async t => {
+  const { symlinkSync } = await import('node:fs');
+  for (const bad of ['../outside.test.mjs', '/tmp/secret.test.mjs', 'test/../../outside.mjs', '.git/hooks/pre-commit.test.sh', 'prompts/foo.prompt.md', '']) {
+    assert.equal(isTestOwnedPath(bad), false, `must reject non-canonical or prompt path: ${bad}`);
+  }
+  assert.equal(isTestOwnedPath('test/ok.test.mjs'), true);
+
+  const outside = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-owner-outside-')));
+  t.after(() => rmSync(outside, { recursive: true, force: true }));
+  writeFileSync(join(outside, 'outside.test.mjs'), '// Generated from prompts/leak.prompt.md.\n');
+
+  const root = repo(t, {
+    '.gitignore': 'test/ignored.test.mjs\n',
+    'pdd-bindings.json': JSON.stringify({
+      schema_version: 'pdd.bindings.v1',
+      modules: [
+        { module: '../outside.test.mjs', stories: ['user_stories/s.md'], prompt: 'prompts/bound.prompt.md' },
+        { module: '/tmp/secret.test.mjs', stories: ['user_stories/s.md'], prompt: 'prompts/bound.prompt.md' },
+        { module: 'test/../../outside.mjs', stories: ['user_stories/s.md'], prompt: 'prompts/bound.prompt.md' },
+        { module: '.git/hooks/pre-commit.test.sh', stories: ['user_stories/s.md'], prompt: 'prompts/bound.prompt.md' },
+        { module: 'test/ignored.test.mjs', stories: ['user_stories/s.md'], prompt: 'prompts/bound.prompt.md' },
+        { module: 'test/link.test.mjs', stories: ['user_stories/s.md'], prompt: 'prompts/bound.prompt.md' },
+      ],
+    }),
+    'prompts/bound.prompt.md': '# Bound\n\nOwn `test/prose-absent.test.mjs`.\n',
+    'prompts/leak.prompt.md': '# Leak\n\nVerify nothing.\n',
+    'test/ignored.test.mjs': '// Generated from prompts/leak.prompt.md.\n',
+  });
+  symlinkSync(join(outside, 'outside.test.mjs'), join(root, 'test/link.test.mjs'));
+
+  // 1. Real CLI run: untracked symlink and gitignored file are never opened on disk (leak.prompt.md has 0 claims!),
+  // non-canonical binding entries are ignored, and canonical name-only claims on bound.prompt.md still warn cleanly.
+  const stdout = capture(), stderr = capture();
+  const code = await runPdd(['owner', 'prompts/bound.prompt.md', 'prompts/leak.prompt.md'], { stdout, stderr, cwd: root });
+  assert.equal(code, 0);
+  assert.equal(stderr.text, 'Warning: misplaced prompt owner: prompts/bound.prompt.md claims test/ignored.test.mjs, test/link.test.mjs, test/prose-absent.test.mjs. Prompts own production modules, not test files.\n');
+
+  // 2. Port-level spy: non-visible extra claims never invoke read().
+  const reads = [];
+  const spyOut = capture(), spyErr = capture();
+  const spyCode = runOwner(
+    { cwd: root, paths: ['prompts/bound.prompt.md'] },
+    {
+      stdout: spyOut,
+      stderr: spyErr,
+      files: () => ['pdd-bindings.json', 'prompts/bound.prompt.md'],
+      read: path => {
+        reads.push(path);
+        if (path === 'pdd-bindings.json') return Buffer.from(readFileSync(join(root, 'pdd-bindings.json')));
+        if (path === 'prompts/bound.prompt.md') return Buffer.from('# Bound\n\nOwn `test/unlisted.test.mjs`.\n');
+        return null;
+      },
+    },
+  );
+  assert.equal(spyCode, 0);
+  assert.equal(reads.some(path => path.startsWith('test/') || path.startsWith('..')), false, `unexpected reads: ${JSON.stringify(reads)}`);
+  assert.match(spyErr.text, /prompts\/bound\.prompt\.md claims test\/ignored\.test\.mjs, test\/link\.test\.mjs, test\/unlisted\.test\.mjs\./);
 });

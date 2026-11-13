@@ -145,9 +145,10 @@ exist: a prompt is written before its code.
   whole-file form.
 - `promptClaims(promptPath, content)`: return the sorted, unique claimed paths
   of one prompt; `[]` for no content.
-- `isTestOwnedPath(path)`: return `true` when `path` is a non-`.prompt.md` path
-  inside `test/`, `tests/` or `__tests__/` at any depth, or whose file name
-  matches `*.test.*`, `*.spec.*`, `test_*.*` or `*_test.*`.
+- `isTestOwnedPath(path)`: return `true` when `path` is a canonical
+  non-`.prompt.md` repository path inside `test/`, `tests/` or `__tests__/` at
+  any depth, or whose file name matches `*.test.*`, `*.spec.*`, `test_*.*` or
+  `*_test.*`.
 - `resolveOwners({paths, bindings, heads, prompts})`: pure. `paths` is the list
   of canonical repository paths to answer, in order; a repeated path is answered
   once, at its first place. `bindings` is the text of `pdd-bindings.json`, or
@@ -208,9 +209,12 @@ ownership of a test file (`isTestOwnedPath`):
 - for each resolved row in `result.files` with `owners.length > 0` and
   `isTestOwnedPath(row.path)`: write `Warning: misplaced prompt owner: PATH is claimed by OWNERS (SOURCE). Prompts own production modules, not test files.`
 - for each explicitly requested `*.prompt.md` path in `paths`, resolve Git-visible
-  `isTestOwnedPath` files plus any claimed test paths from `pdd-bindings.json`
-  and `promptClaims`; when that prompt claims test targets not already warned
-  above, write `Warning: misplaced prompt owner: PROMPT claims TARGETS. Prompts own production modules, not test files.`
+  `isTestOwnedPath` files plus any canonical claimed test paths from
+  `pdd-bindings.json` and `promptClaims`, reading file headers only for
+  Git-visible regular files (`visible`) and keeping non-Git-visible or symlinked
+  claimed paths name-only (`content: null`) so untracked, symlinked or
+  out-of-repo paths are never opened from disk; when that prompt claims test
+  targets not already warned above, write `Warning: misplaced prompt owner: PROMPT claims TARGETS. Prompts own production modules, not test files.`
 
 ## Callers
 

@@ -328,6 +328,36 @@ test('PR 1 prompt-before-code and opening-sentence config mentions avoid false p
   ]);
 });
 
+test('PR 1 pdd-bindings.json modules[].module targets warn when absent from visibleSet while ignoring non-canonical/secret targets', async t => {
+  const { lintLocalHygiene } = await import('../src/runtime-preflight.mjs');
+  const setup = harbor(t, repo => {
+    write(repo, 'pdd-bindings.json', JSON.stringify({
+      schema_version: 'pdd.bindings.v1',
+      modules: [
+        { module: 'test/future.test.mjs', stories: ['user_stories/s.md'], prompt: 'prompts/pr1-bound.prompt.md' },
+        { module: '../escape.test.mjs', stories: ['user_stories/s.md'], prompt: 'prompts/pr1-bound.prompt.md' },
+        { module: 'secrets/token.test.mjs', stories: ['user_stories/s.md'], prompt: 'prompts/pr1-bound.prompt.md' },
+        { module: 'src/future-prod.mjs', stories: ['user_stories/s.md'], prompt: 'prompts/pr1-prod.prompt.md' },
+      ],
+    }));
+    write(repo, 'pdd.json', '{"strict_approvals":false}\n');
+    write(repo, 'prompts/pr1-bound.prompt.md', withApprovedInterface('# PR 1 bound test\n\nDefines future checks.\n\n', 'boundCheck'));
+    // PR 1 production module declared via pdd-bindings.json (absent on disk) while prose reads pdd.json — must NOT false-warn!
+    write(repo, 'prompts/pr1-prod.prompt.md', withApprovedInterface('# PR 1 prod\n\nReads `pdd.json` for approval policy.\n\n', 'prodRun'));
+    // Untracked/unlisted disk file at test/future.test.mjs with a TODO — must stay name-only and never be opened!
+    write(repo, 'test/future.test.mjs', '// TODO: UNLISTED-PR1-BINDING-LEAK\n');
+  });
+
+  const warnings = lintLocalHygiene({
+    root: setup.repo,
+    files: ['pdd-bindings.json', 'pdd.json', 'prompts/pr1-bound.prompt.md', 'prompts/pr1-prod.prompt.md'],
+  });
+  assert.equal(warnings.join('\n').includes('UNLISTED-PR1-BINDING-LEAK'), false);
+  assert.deepEqual(warnings, [
+    'Warning: misplaced prompt owner: prompts/pr1-bound.prompt.md claims test/future.test.mjs. Prompts own production modules, not test suites, CI workflows or repository config files.',
+  ]);
+});
+
 test('excuse comment lexer handles postfix ++/--/! before division, Rust lifetimes, and Go raw strings', async t => {
   const { lintLocalHygiene } = await import('../src/runtime-preflight.mjs');
   const setup = harbor(t, repo => {
