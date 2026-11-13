@@ -1,5 +1,6 @@
 import { bindingRefusals } from './runtime-binding-plan.mjs';
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: ffcdf87a9c3b8b4a5529f8717e1962fe82bc07ade2374e653b6de586a3ccc0c6).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: 6bb0e37594519581e44e9e9341f7d26927fcbbfa476ec3aa537876bcdb890799).
+import { describeCompatibility } from './lint-compatibility-display.mjs';
 import { hasProgress, outcomeExitCode, outcomeFor, outcomeText, progressText, resultOutcome, PROVIDER_TEXT } from './runtime-outcome.mjs';
 export const OPEN_STATES = new Set(['queued', 'running', 'sent']);
 
@@ -526,8 +527,12 @@ export function renderText({ batch, rows, coverage, warnings = [], details = fal
   for (const row of rows) for (const item of row.not_checked ?? []) out.push(
     `${row.test} ${item.criterion_id}: not checked: ${cleanText(item.reason,secrets)} (${cleanText(item.text,secrets)})`);
   for (const row of rows.filter(row=>row.binding_plan)) for (const detail of bindingRefusals(row.binding_plan,row.compatibility)) out.push(cleanText(JSON.stringify(detail),secrets));
-  for (const row of rows.filter(row => row.compatibility)) out.push(`Compatibility (${cleanText(row.test, secrets)}): ${JSON.stringify(row.compatibility, null, 2)}`,
-    `  Client advice: ${JSON.stringify(row.client_advice)}`);
+  for (const row of rows.filter(row => row.compatibility)) out.push(...describeCompatibility({
+    label: cleanText(row.test || '', secrets),
+    compatibility: row.compatibility,
+    clientAdvice: row.client_advice || null,
+    details: Boolean(details),
+  }).text.split('\n'));
   if (coverage) out.push(coverageText(coverage, {busy: rows.some(row => row.busy_display || row.busy) && rows.every(row => row.state === 'passed' || row.busy_display || row.busy)}));
   const models = [...new Set(rows.map(row => row.requested_model).filter(Boolean))];
   out.push(`${rows.filter(row => row.state === 'passed').length} of ${rows.length} stories passed.${models.length ? ` Model asked for: ${models.join(', ')}.` : ''}`);
