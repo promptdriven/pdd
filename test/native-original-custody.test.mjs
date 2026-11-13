@@ -5,7 +5,7 @@ import {readFileSync,writeFileSync,rmSync} from 'node:fs';
 import {join} from 'node:path';
 import {nativeFixture,put,git} from './helpers/native-cli-fixture.mjs';
 import {prepareNativeEvidence} from '../src/workflow-results.mjs';
-import {captureSource} from '../src/runtime-preflight.mjs';
+import {captureSource} from '../src/runtime-seam.mjs';
 import {stepDone,approveRun,readEvidenceEligibility} from '../src/workflow-runner.mjs';
 
 async function originals(t,options) {

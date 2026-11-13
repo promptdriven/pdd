@@ -1,4 +1,4 @@
-// Generated from prompts/test/test-home-isolation.prompt.md.
+// Generated from prompts/test/test-home-isolation.prompt.md (sha256: e1491f298a2dfa4e68e9655a056ad9b8167e4a87e294a7bc904b80c47da77382).
 // Import before production modules in focused tests. npm test preloads it too.
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import os, { tmpdir } from 'node:os';
@@ -17,6 +17,12 @@ for (const key of [
   // Outer suite controls must not select a test's queue or subprocess command.
   'PDD_SUITE_QUEUE', 'PDD_VM_SUITE_LOCK', 'SUITE',
 ]) delete process.env[key];
+
+// Native tests and their children must never join the caller's live sessions.
+// Tests can install their own synthetic selectors after this bootstrap.
+for (const key of Object.keys(process.env)) {
+  if (/^(?:HERDR_|PDD_AGENT_SESSION$|PDD_AUTOPILOT_CONTEXT$|CLAUDECODE$|CLAUDE_CODE_|CLAUDE_PID$|CODEX_THREAD_ID$|CODEX_SANDBOX)/.test(key)) delete process.env[key];
+}
 
 // userInfo bypasses HOME and reads the account database. A caught lookup still
 // fails the process; tests of this fallback must supply the existing userInfo port.

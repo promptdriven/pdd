@@ -1,9 +1,18 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PROVIDER_TEXT, resultOutcome } from '../src/runtime-outcome.mjs';
-import { exitCodeFor, projectAnswer, renderJson, renderText, summaryLine } from '../src/runtime-output.mjs';
+import {
+  exitCodeFor,
+  projectAnswer,
+  PROVIDER_TEXT,
+  renderJson,
+  renderText,
+  runtimeOutcomeSlice,
+  summaryLine,
+} from '../src/runtime-seam.mjs';
 import { checkCause } from '../src/workflow-results.mjs';
+
+const { resultOutcome } = runtimeOutcomeSlice();
 
 const STATES = ['passed', 'failed', 'unknown', 'refused', 'not_run'];
 const PROVIDERS = [false, true];

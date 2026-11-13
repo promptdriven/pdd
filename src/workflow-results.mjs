@@ -1,17 +1,20 @@
 // Generated from prompts/cli/workflow-results.prompt.md (sha256: 38ece5f5192ba1f81f52c0288d9b5e9fcd3e03dd78d8386683cf834bf8ef1cce).
 import { isDeepStrictEqual } from 'node:util';
-import {checkPlanResults,checkPlanResultLines} from './runtime-check-plan.mjs';
-import { failedCheckCount, outcomeText, resultOutcome } from './runtime-outcome.mjs';
-import { PROMPT_TESTS_WORDS } from './runtime-output.mjs';
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { createHash } from 'node:crypto';
 import { readPromptApprovals } from './approval-policy.mjs';
+import './file-owner.mjs';
 import { readRun } from './workflow-runs.mjs';
-import { captureSource, gitFiles, proseSha256, sourceFilePort } from './runtime-preflight.mjs';
+import { runtimeCheckPlanSlice, runtimeOutcomeSlice, runtimeOutputSlice, runtimePreflightSlice } from './runtime-seam.mjs';
 import { judgeOldCodeProof } from './workflow-pr-evidence.mjs';
+
+const { checkPlanResults, checkPlanResultLines } = runtimeCheckPlanSlice();
+const { failedCheckCount, outcomeText, resultOutcome } = runtimeOutcomeSlice();
+const { PROMPT_TESTS_WORDS } = runtimeOutputSlice();
+const { captureSource, gitFiles, proseSha256, sourceFilePort } = runtimePreflightSlice();
 
 const BATCH = /^\d{8}-\d{6}-[a-z0-9]{4}$/;
 export const PDD_RESULT = 'pdd result';

@@ -70,7 +70,7 @@ else if(a[1]==='create'||a[1]==='edit'){
 }
 import { sourceFingerprint } from '../src/workflow-replay.mjs';
 import { storyCount } from '../src/workflow-runner.mjs';
-import { renderJson, renderText } from '../src/runtime-output.mjs';
+import { renderJson, renderText } from '../src/runtime-seam.mjs';
 
 // Expectations below are bounded instances of the approved Story's Rules to check.
 // Fixture mechanics supply Git/GitHub facts only; they do not supply the oracle.

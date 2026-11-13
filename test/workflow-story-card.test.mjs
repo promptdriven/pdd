@@ -13,10 +13,10 @@ import * as runner from '../src/workflow-runner.mjs';
 const { approveRun, runStatus, startRun, stepDone } = runner;
 const showStoryCard = (...args) => { assert.equal(typeof runner.showStoryCard, 'function', 'workflow card must be available'); return runner.showStoryCard(...args); };
 import { writeRun } from '../src/workflow-runs.mjs';
-import { fakeRuntime, portsFor, storyTest } from './runtime-fake.mjs';
-import { runCheck } from '../src/runtime-client.mjs';
-import { renderJson } from '../src/runtime-output.mjs';
-import { captureSource, fillHashes } from '../src/runtime-preflight.mjs';
+import { fakeRuntime, portsFor, storyTest } from './helpers/runtime-fake.mjs';
+import { runCheck } from '../src/runtime-seam.mjs';
+import { renderJson } from '../src/runtime-seam.mjs';
+import { captureSource, fillHashes } from '../src/runtime-seam.mjs';
 import { fixture, packageRoot } from './helpers/workflow-runner-fixture.mjs';
 
 const harbor = join(packageRoot, 'test', 'fixtures', 'harbor');
@@ -225,7 +225,7 @@ test('#2962 a prompt-only repair that passes the check keeps the Story approval'
   assert.equal(f.prs.length, 1, out.message); assert.equal(record.decisions.at(-1).via, 'automatic-check-pass');
   assert.deepEqual(record.storyApproval, before);
   const iface = JSON.parse(readFileSync(join(f.run.root, PROMPT), 'utf8').match(/```json\n([\s\S]*?)\n```/)[1]);
-  const { proseSha256 } = await import('../src/runtime-preflight.mjs');
+  const { proseSha256 } = await import('../src/runtime-seam.mjs');
   assert.equal(iface.status, 'approved'); assert.equal(iface.prose_sha256, proseSha256(readFileSync(join(f.run.root, PROMPT), 'utf8')));
   assert.match(f.prs[0].body, /automatic-check-pass/);
 });
@@ -839,4 +839,25 @@ test('release: publication preserves peer commits and pushes the approval-bound 
   assert.equal(pushed, evidence.basis.headSha);
   f.git(f.run.root, 'merge-base', '--is-ancestor', peer, pushed);
   assert.equal(f.git(f.base, '--git-dir=' + remote, 'show', `${pushed}:value.mjs`), 'export const value = 3;');
+});
+
+test('#2874: automatic PR 1 publication refuses cleanly when approval evidence pushes protected summaries over budget', async t => {
+  const f = await storyGate(t);
+  const run = f.record(); run.done.understand.summary = `Limitation: ${'x'.repeat(57030)}`; writeRun(run);
+  await approveStory(f); saveCheck(f);
+  let preparedReached = false;
+  const original = f.ports.execFile;
+  f.ports.execFile = async (file, args, options) => {
+    if (file === 'git' && args[0] === 'symbolic-ref') preparedReached = true;
+    return original(file, args, options);
+  };
+  f.tick();
+  const out = await stepDone({ step: 'check', summary: 'Prompt tests (place-order): ✓ 3 of 3 criteria', cwd: f.run.root }, f.agentPorts());
+  assert.equal(preparedReached, true, 'The body fit before automatic gate authorization.');
+  assert.equal(out.exitCode, 1, out.message);
+  assert.match(out.message, /protected.*evidence|outcome, limitation and reference/i);
+  assert.match(out.message, /shorten/i);
+  assert.match(out.message, /No source was pushed/);
+  assert.equal(f.prs.length, 0);
+  assert.equal(f.pushes.length, 0);
 });

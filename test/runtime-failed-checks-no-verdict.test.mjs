@@ -3,12 +3,20 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import * as runtimeOutcome from '../src/runtime-outcome.mjs';
-import { exitCodeFor, projectAnswer, renderJson, renderText, summaryLine } from '../src/runtime-output.mjs';
-import { resendableStoryChecks, runCheck } from '../src/runtime-client.mjs';
+import {
+  exitCodeFor,
+  projectAnswer,
+  renderJson,
+  renderText,
+  resendableStoryChecks,
+  runCheck,
+  runtimeOutcomeSlice,
+  summaryLine,
+} from '../src/runtime-seam.mjs';
 import { checkCause, savedCheckCause } from '../src/workflow-results.mjs';
-import { fakeRuntime, harbor, PLACE, portsFor, TOKEN } from './runtime-fake.mjs';
+import { fakeRuntime, harbor, PLACE, portsFor, TOKEN } from './helpers/runtime-fake.mjs';
 
+const runtimeOutcome = runtimeOutcomeSlice();
 const { resultOutcome, PROVIDER_TEXT } = runtimeOutcome;
 
 function formatBytesAnswer(fake, id) {

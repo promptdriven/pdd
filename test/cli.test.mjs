@@ -17,7 +17,7 @@ const capture = () => ({ text: '', write(value) { this.text += value; } });
 
 // Wrong: deleting the adapter leaves private catalog/validator routes or unknown help succeeds.
 test('ALPHA1: only local plans are admitted without Host disposition or forwarded arguments', () => {
-  assert.deepEqual(PUBLIC_COMMAND_IDS, ['interface.draft', 'metrics', 'metrics.export', 'metrics.import', 'metrics.record', 'autopilot.regressions', 'autopilot.doctor', 'autopilot.start', 'autopilot.audit', 'autopilot.check-base', 'autopilot.stop', 'autopilot.status', 'autopilot.report', 'autopilot.intake', 'autopilot.add', 'autopilot.release', 'autopilot.alert', 'autopilot.alerts', 'graph', 'dependencies.prepare', 'dependencies.complete', 'workflow.suite', 'workflow.park', 'workflow.yield', 'product.status', 'product.next', 'product.start', 'workflow.run', 'workflow.prove', 'workflow.done', 'workflow.cost', 'workflow.evidence', 'workflow.evidence-associate', 'workflow.ask', 'workflow.request-uptake', 'workflow.approve', 'workflow.resend', 'workflow.card', 'workflow.changes', 'workflow.tidy', 'workflow.cancel', 'workflow.status', 'workflow.view', 'workflow.open', 'help', 'version', 'version.detailed', 'completion', 'workflow.list', 'check', 'lint', 'files', 'owner', 'approve', 'try', 'jobs', 'contracts', 'contracts.sync', 'mcp', 'autopilot.off', 'autopilot.observe', 'autopilot.auto', 'autopilot.trust', 'autopilot.untrust', 'setup']);
+  assert.deepEqual(PUBLIC_COMMAND_IDS, ['interface.draft', 'metrics', 'metrics.export', 'metrics.import', 'metrics.record', 'autopilot.regressions', 'autopilot.doctor', 'autopilot.start', 'autopilot.audit', 'autopilot.check-base', 'autopilot.stop', 'autopilot.status', 'autopilot.report', 'autopilot.intake', 'autopilot.add', 'autopilot.release', 'autopilot.alert', 'autopilot.alerts', 'graph', 'dependencies.prepare', 'dependencies.complete', 'workflow.suite', 'workflow.park', 'workflow.yield', 'product.status', 'product.next', 'product.start', 'workflow.run', 'workflow.prove', 'workflow.done', 'workflow.publish', 'workflow.cost', 'workflow.evidence', 'workflow.evidence-associate', 'workflow.ask', 'workflow.request-uptake', 'workflow.approve', 'workflow.resend', 'workflow.card', 'workflow.changes', 'workflow.tidy', 'workflow.cancel', 'workflow.status', 'workflow.view', 'workflow.open', 'help', 'version', 'version.detailed', 'completion', 'workflow.list', 'check', 'lint', 'files', 'owner', 'approve', 'try', 'jobs', 'contracts', 'contracts.sync', 'mcp', 'autopilot.off', 'autopilot.observe', 'autopilot.auto', 'autopilot.trust', 'autopilot.untrust', 'setup']);
   for (const argv of [[], ['--help'], ['-h'], ['help'], ['--version'], ['completion', 'bash'],
     ['completion', 'zsh'], ['autopilot', 'doctor'], ['jobs'], ['mcp'], ['setup'], ['workflow', 'list'], ['workflow', 'list', '--json'], ['workflow', '--help']]) {
     const input = [...argv], plan = parseArgv(input);
@@ -134,6 +134,8 @@ test('ALPHA7: each runner route calls its own export once with parsed values, cw
     [['workflow','start','small-change','1'], 'startRun', { name: 'small-change', issue: '1', agent: 'codex' }],
     [['workflow','start','bug','2','--base','round3/tipjar-workflow-base'], 'startRun', { name: 'bug', issue: '2', agent: 'codex', base: 'round3/tipjar-workflow-base' }],
     [['workflow','done','prompt-story','--summary','Story and cases written'], 'stepDone', { step: 'prompt-story', summary: 'Story and cases written' }],
+    [['workflow','done','review','--no-publish','--summary','Local review complete'], 'stepDone', { step: 'review', noPublish: true, summary: 'Local review complete' }],
+    [['workflow','publish','o/r#7'], 'publishRun', { ref: 'o/r#7' }],
     [['workflow','done','scope'], 'stepDone', { step: 'scope' }],
     [['workflow','done','try','--skipped','No person at the Try step'], 'stepDone', { step: 'try', skipped: 'No person at the Try step' }],
     [['workflow','approve'], 'approveRun', { ref: undefined }],
@@ -159,7 +161,7 @@ test('ALPHA7: each runner route calls its own export once with parsed values, cw
 
 // Wrong: malformed references/options reach effects, or an owner failure is retried.
 test('ALPHA8: runner argument failures and invalid replies are finite without a second call', async () => {
-  const invalid = [['workflow','run'],['workflow','run','../unknown','1'],['workflow','run','feature','0'],['workflow','run','feature','42','extra'],
+  const invalid = [['workflow','publish'], ['workflow','publish','17','extra'], ['workflow','publish','17','--no-publish'], ['workflow','done','review','--no-publish','--no-publish'], ['workflow','run'],['workflow','run','../unknown','1'],['workflow','run','feature','0'],['workflow','run','feature','42','extra'],
     ['workflow','run','feature','42','--agent',''],['workflow','run','feature','42','--agent','   '],['workflow','run','bug','2','--base'],
     ['workflow','run','bug','2','--base','one','--base','two'],['workflow','done'],['workflow','done','Scope'],['workflow','done','scope','--summary'],
     ['workflow','approve','7','8'],['workflow','approve','a1234567-1234-4123-8123-123456789abc'],['workflow','changes','7'],['workflow','cancel'],
