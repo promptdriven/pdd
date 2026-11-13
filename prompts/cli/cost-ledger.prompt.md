@@ -87,20 +87,21 @@ An exclusive reservation left by a crash means unknown, not permission to retry.
 
 ## Reports
 
+Export `CACHED_INPUT_WEIGHT = 0.1` as the documented analytical weight for cached input tokens (an analytical token-efficiency weight, never a dollar billing claim).
 `costReport(runs, now)` returns `{schema:"pdd.cost-report.v1", generatedAt, runs,
-day, week}`. Public run rows have `repo`, `issue`, `runId`, `outcome`, `outcomeAt`,
-`tokens`, `person`, `suiteMinutes`, `ciMinutes`, `githubCalls`, `coverage` only.
-Each window has `since`, `totals` (token rows, person counts/minutes, suiteMinutes,
+day, week}` while keeping stored `pdd.cost.v1` ledger counters unchanged. Public run rows have `repo`, `issue`, `runId`, `outcome`, `outcomeAt`,
+`totalTokens`, `uncachedInput`, `cacheHitShare`, `effectiveTokens`, `tokens`, `person`, `suiteMinutes`, `ciMinutes`, `githubCalls`, `coverage` only.
+Each window has `since`, `totals` (token summary fields, token rows, person counts/minutes, suiteMinutes,
 ciMinutes, githubCalls), `coverage` (union of run coverage), `mergedIssues`, and
-`p50`, `p90` (the same totals shape, null for no merged issues). Totals include `totalTokens` (sum across measured accounts, null without token observations); percentiles compute this across issue totals, not by summing account percentiles. Totals use events
+`p50`, `p90` (the same totals shape, null for no merged issues). Token summary fields on runs, window totals and percentiles are `totalTokens` (sum across measured accounts, null without token observations), `uncachedInput` (`Math.max(0, input - cachedInput)`, null without token observations), `cacheHitShare` (`input > 0 ? Math.min(1, cachedInput / input) : null`, null for zero input or without token observations), and `effectiveTokens` (`uncachedInput + CACHED_INPUT_WEIGHT * Math.min(input, cachedInput) + output` rounded to two decimal places, null without token observations); percentiles compute these across issue summaries, not by summing account percentiles. Totals use events
 observed in `(now-window, now]`, not the entire cost of an old attempt. Unknown
 minute values stay null unless at least one measured contribution exists; coverage
 identifies partial totals. Percentiles use nearest rank over cumulative issue costs
 for issues whose latest outcome is merged in the window; combine attempts of the
 same repo/issue once. Do not combine different repositories with equal issue numbers.
 `costStatusLines(report)` returns readable day/week totals and P50/P90 per merged
-issue for tokens, suite, CI, GitHub calls, person interactions, active and wait
-minutes, plus outcome counts, per-account token totals and coverage.
+issue for tokens (including analytical `0.1x`-cached `effectiveTokens` explicitly labeled as non-billing, `uncachedInput` and `cacheHitShare`), suite, CI, GitHub calls, person interactions, active and wait
+minutes, plus outcome counts, per-account token totals (with uncached input, cached share and analytical effective tokens) and coverage.
 
 
 Include native auditor chats in `runDir/audits/*.json` with matching runId in

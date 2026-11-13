@@ -157,7 +157,7 @@ port, its issue list (`queryIssues` with the saved ETag pages: a list of more th
 read-only Codex limits as `agentReady` (only `limited` holds intake), the package version, an `alert` port that sends
 one alert of the given kind for the issue through this machine's [alert destination](autopilot-alerts.prompt.md) with
 the core's cause, tried and need, the core state folder, the report folder and `tickMinutes` (the installed
-interval). Before the core tick, the [machine guard](machine-guard.prompt.md) reads this machine once
+interval). When using native alerts (`!ports.sendAlert`), before `tickCore` runs, the tick runs `runAutopilotAlerts({action: 'retry', ...})` so open `failed` or newly-configured `not-configured` incidents of this repository from earlier ticks are retried once credentials recover. Before the core tick, the [machine guard](machine-guard.prompt.md) reads this machine once
 (`readMachineGuard({cwd, runs: state.runs, repoRuns: pdd.json autopilot.runs, share: state.share, jobs})`, where
 `jobs` is the sum of the core's `busySlots` over the core folder of every enabled state file beside this one: the
 share is for the whole machine, every repository; tests replace it with `ports.machineGuard`, #3231). The machine

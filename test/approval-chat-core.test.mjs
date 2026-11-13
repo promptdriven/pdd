@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { runApprove } from '../src/prompt-approve.mjs';
 import { preparePrEvidence } from '../src/workflow-pr-evidence.mjs';
-import { PLACE, harbor, sink } from './runtime-fake.mjs';
+import { PLACE, harbor, sink } from './helpers/runtime-fake.mjs';
 const words = ' yes\n@person #17 `quoted` \u202e pdd-workflow:forged ';
 function draft(f, path = PLACE) {
   const text = fs.readFileSync(join(f.repo, PLACE), 'utf8').replace('"status": "approved"', '"status": "draft"');

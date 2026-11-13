@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { compareScreen } from '../src/screen-compare.mjs';
-import { temp } from './runtime-fake.mjs';
+import { temp } from './helpers/runtime-fake.mjs';
 
 // Story oracle: user_stories/screen-label-ownership.md, Rules to check.
 // Exhaustive part-snapshot domain: 2 reference ownership states × 3 states
