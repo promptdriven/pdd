@@ -1,5 +1,6 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: b677446ac7d727e6ba39cf05c3271fd348d6ce4b4b5bd980e3cd5217b0cd9483).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 69b8a99454595ac2a935bfd1bbb8eac55df51d342d7dcb5dee690ceb62e9a7e8).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
+import { bindExistingTry, projectTryCall, projectTryObservation, selectTryToStop } from './try-session.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
 import { isRecentLintReceipt } from './runtime-lint-receipt.mjs';
@@ -4745,7 +4746,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (registered === false) { await finishReservation(context, setup, { state: 'not_run' }); throw new Stop(3, context.interrupted ? 'Stopped before sending.' : 'Stopped before the Try was sent.'); }
       if (context.interrupted || ports.now() >= context.deadline) { await finishReservation(context, setup, { state: 'not_run' }); throw new Stop(3, context.interrupted ? 'Stopped before sending.' : 'Stopped before the Try was sent.'); }
       const uploadedSeed=capture.sources.find(file=>file.path===test.path);
-      const tryRecord = { id: request.requestId, ...setup, story: test.story, storyPath: test.storyPath, title: test.title, origin, login: identity.login, source_sha256: capture.sha256, ...(!productSetup && !words.length ? { simulation_scope: { tests: selected.map(item => item.path), appMap, appMapHash: appMap ? sha256(capture.sources.find(file => file.path === appMap).bytes) : null } } : {}), seed_scenario: uploadedSeed ? JSON.parse(uploadedSeed.bytes.toString('utf8')) : test.doc, story_sha256: createHash('sha256').update(readFileSync(join(root, test.storyPath))).digest('hex'), prompt_hashes: capture.raw_prompt_hashes,
+      const tryRecord = { id: request.requestId, ...setup, story: test.story, storyPath: test.storyPath, title: test.title, origin, login: identity.login, source_sha256: capture.sha256, max_calls: request.max_calls, ...(!productSetup && !words.length ? { simulation_scope: { tests: selected.map(item => item.path), appMap, appMapHash: appMap ? sha256(capture.sources.find(file => file.path === appMap).bytes) : null } } : {}), seed_scenario: uploadedSeed ? JSON.parse(uploadedSeed.bytes.toString('utf8')) : test.doc, story_sha256: createHash('sha256').update(readFileSync(join(root, test.storyPath))).digest('hex'), prompt_hashes: capture.raw_prompt_hashes,
         effective_prompt_hashes:Object.fromEntries(capture.sources.filter(file=>file.path.endsWith('.prompt.md')).map(file=>[file.path,sha256(file.bytes)])),contract_references:capture.references, ...(productSetup?{product_setup:productSetup,product_parts:prepared.composition.product_parts}:{}) };
       store.saveRepo(root, { ...repoState, tries: { ...repoState.tries, [test.path]: tryRecord } });
       store.posted(context.folder, request.requestId);
@@ -4825,17 +4826,27 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
   } finally { release();for(const lease of context.caseWriteLeases?.values()??[])lease.release(); await Promise.all([...(context.reservations ?? [])].map(reservation => releaseRuntimeSlot(reservation, { ended: false }, slotPorts(context)))); }
 }
 
-// pdd simulate --stop [STORY]: find the Try by its story name in the state record, so it works on any branch (real-user issue 14).
+// pdd simulate --stop [STORY]: find the Try by its exact Try ID or story/test selector in the state record, so it works on any branch (real-user issue 14).
 async function stopByName(context, cwd, words, origin) {
   const { ports } = context, root = repoRoot(cwd), store = stateFor(ports.env, root), repoState = store.repo(root);
   const entries = Object.entries(repoState.tries ?? {}), word = words[0]?.replace(/^\.\//, '');
   const names = entries.map(([path, record]) => record.story ?? basename(path, '.json')).join(', ') || 'none';
-  const hits = word === undefined ? entries : entries.filter(([path, record]) => [record.storyPath, record.story, path, basename(path, '.json')].includes(word));
-  if (hits.length !== 1) {
+  const records = entries.map(([path, record]) => ({
+    id: String(record.id ?? ''),
+    test_path: path,
+    test_name: basename(path, '.json'),
+    story: String(record.story ?? basename(path, '.json')),
+    story_path: String(record.storyPath ?? ''),
+  }));
+  let picked;
+  try {
+    picked = selectTryToStop({ ...(word !== undefined ? { selector: word } : {}), records });
+  } catch {
     throw new Stop(2, word !== undefined ? `No open Try for "${cleanText(word)}". Open Try links: ${names}.`
       : entries.length ? `Name the Try to stop. Open Try links: ${names}.` : 'No open Try in this repository.');
   }
-  const [path, record] = hits[0], title = record.title ?? record.story ?? path;
+  const [path, record] = entries.find(([candidatePath, candidate]) => candidatePath === picked.test_path && String(candidate.id ?? '') === picked.id);
+  const title = record.title ?? record.story ?? path;
   Object.assign(context, { root, store, origin });
   const identity = signIn(ports.gh, store, ports);
   context.secrets = [identity.token];
@@ -5466,9 +5477,39 @@ async function watchSavedTests(context, tryId, wait, story) {
 }
 
 
+function savedTryReceiptMeta(store, record) {
+  const receipt = typeof record?.id === 'string' && UUID.test(record.id) ? store.read(join(store.folder('tries'), `${record.id}.json`)) : null;
+  const maxCalls = Number.isSafeInteger(record?.max_calls) && record.max_calls > 0 ? record.max_calls
+    : Number.isSafeInteger(receipt?.max_calls) && receipt.max_calls > 0 ? receipt.max_calls
+    : Number.isSafeInteger(receipt?.result?.session?.max_calls) && receipt.result.session.max_calls > 0 ? receipt.result.session.max_calls : null;
+  return {
+    source_sha256: validSha256Hex(record?.source_sha256) ?? validSha256Hex(receipt?.source_sha256) ?? null,
+    engine_sha: validEngineHex(record?.engine_sha) ?? validEngineHex(receipt?.engine_sha) ?? null,
+    server_commit: typeof record?.server_commit === 'string' && record.server_commit ? record.server_commit : typeof receipt?.server_commit === 'string' && receipt.server_commit ? receipt.server_commit : null,
+    max_calls: maxCalls,
+  };
+}
+
+function normalizeObservationBody(json) {
+  if (!isObject(json) || typeof json.request_id !== 'string' || typeof json.session_id !== 'string'
+    || typeof json.state !== 'string' || typeof json.session_state !== 'string') return null;
+  return {
+    request_id: json.request_id,
+    action_id: typeof json.action_id === 'string' ? json.action_id : null,
+    session_id: json.session_id,
+    state: json.state,
+    session_state: json.session_state,
+    source_sha256: typeof json.source_sha256 === 'string' ? json.source_sha256 : null,
+    server_commit: typeof json.server_commit === 'string' ? json.server_commit : null,
+    engine_sha: typeof json.engine_sha === 'string' ? json.engine_sha : null,
+  };
+}
+
 // The doors use the same gh identity, private store, one-shot dispatch and owner-scoped ledger as Try.
 export async function runDoorCall(descriptor, input, givenPorts = {}) {
   const ports = withDefaults(givenPorts), { root, origin, sessionId, login, prompt, operation } = descriptor;
+  const existingOnly = descriptor.existingOnly === true;
+  const declaredErrors = Array.isArray(descriptor.declaredErrors) ? descriptor.declaredErrors : [];
   if(loadRuntimeWorkspace({root}).configured)ports.captureSource(root,{tests:descriptor.originalPath?[descriptor.originalPath]:[descriptor.prompt].filter(Boolean)});
   const store = stateFor(ports.env, root), identity = signIn(ports.gh, store, ports, { exitCode: 125 });
   if (identity.login !== login) throw new Stop(125, `This Try belongs to ${login}. Run: gh auth switch -u ${login}`);
@@ -5484,7 +5525,10 @@ export async function runDoorCall(descriptor, input, givenPorts = {}) {
   if (ports.signal?.aborted) throw new Stop(125, 'The local server stopped before the command was sent.');
   const id = ports.randomUUID(), request = { requestId: id, prompt, operation, input };
   const recovery = ` Read the result with: pdd test --read ${id}`;
-  store.write(join(store.folder('calls'), `${id}.meta.json`), { id, origin, root, login, user_id: identity.userId, session_id: sessionId });
+  store.write(join(store.folder('calls'), `${id}.meta.json`), {
+    id, origin, root, login, user_id: identity.userId, session_id: sessionId,
+    ...(typeof descriptor.originalPath === 'string' ? { test_path: descriptor.originalPath } : {}),
+  });
   store.posted(store.folder('tries'), id);
   let knownOutcome = false, dispatched = false;
   const auth = authSession({
@@ -5499,7 +5543,10 @@ export async function runDoorCall(descriptor, input, givenPorts = {}) {
       return new Stop(125, `This Try belongs to ${owner}. Run: gh auth switch -u ${owner}`);
     },
     onRefresh: next => {
-      if (next.login === login) store.write(join(store.folder('calls'), `${id}.meta.json`), { id, origin, root, login, user_id: next.userId, session_id: sessionId });
+      if (next.login === login) store.write(join(store.folder('calls'), `${id}.meta.json`), {
+        id, origin, root, login, user_id: next.userId, session_id: sessionId,
+        ...(typeof descriptor.originalPath === 'string' ? { test_path: descriptor.originalPath } : {}),
+      });
     },
   });
   const runtime = new Runtime({ origin, token: identity.token, ports, signal: ports.signal, auth });
@@ -5518,27 +5565,76 @@ export async function runDoorCall(descriptor, input, givenPorts = {}) {
       if (answer && (!sameJob(answer, id, 'call') || (answer.session_id && answer.session_id !== sessionId))) throw new Stop(125, 'The interpreter returned a different command.' + recovery);
       if (answer && ENDED.has(answer.state)) {
         store.write(join(store.folder('tries'), `${id}.json`), answer);
-        if (answer.state !== 'passed' || !isObject(answer.result?.program_result)) {
-          knownOutcome = ['failed', 'refused', 'not_run'].includes(answer.state);
+        const rawReport = isObject(answer.result?.report) ? answer.result.report : null;
+        const reportError = isObject(rawReport?.error) ? rawReport.error : null;
+        const usage = tryUsage(answer, { cap: descriptor.callCap });
+        let projected;
+        try {
+          projected = projectTryCall({
+            request_id: id,
+            declared_errors: declaredErrors,
+            state: answer.state === 'not_run' ? 'refused' : answer.state,
+            has_program_result: isObject(answer.result?.program_result),
+            usage_calls: Number.isSafeInteger(usage?.calls) ? usage.calls : null,
+            report: rawReport ? {
+              action_id: typeof rawReport.action_id === 'string' ? rawReport.action_id : null,
+              verdict: typeof rawReport.verdict === 'string' ? rawReport.verdict : null,
+              error_code: typeof reportError?.code === 'string' ? reportError.code : null,
+              replayed: Boolean(rawReport.replayed),
+              remaining_calls: Number.isSafeInteger(rawReport.remaining_calls) ? rawReport.remaining_calls : null,
+            } : null,
+          });
+        } catch (projectionError) {
+          knownOutcome = projectionError.code === 'call-refused' && ['failed', 'refused', 'not_run'].includes(answer.state);
           const limit = stepTimeLimit(answer, { steps: [{ step_id: operation }], secrets });
           const why = answer.result?.refusals?.[0];
-          if (limit) throw Object.assign(new Stop(125, `${limit.message} ${limit.fix}${recovery}`), { tryUsage: tryUsage(answer, { cap: descriptor.callCap }) });
-          throw Object.assign(new Stop(125, cleanText(why?.engine_message || why?.message || why?.code || 'The command result is unknown. Do not repeat it automatically.', secrets) + (['failed', 'refused'].includes(answer.state) ? '' : recovery)), { tryUsage: tryUsage(answer, { cap: descriptor.callCap }) });
+          if (limit) throw Object.assign(new Stop(125, `${limit.message} ${limit.fix}${recovery}`), { tryUsage: usage });
+          throw Object.assign(new Stop(125, cleanText(why?.engine_message || why?.message || why?.code || 'The command result is unknown. Do not repeat it automatically.', secrets) + (['failed', 'refused'].includes(answer.state) ? '' : recovery)), { tryUsage: usage });
         }
-        let observation = answer.result.report ?? {};
-        if (typeof observation.action_id === 'string') {
+        let observation = rawReport ?? {};
+        if (typeof projected.action_id === 'string') {
           try {
             const state = await runtime.send(`/v1/try/${sessionId}/state`, { method: 'GET' }, GET_MS);
             const matched = state.status === 200 && Array.isArray(state.json?.actions)
-              ? state.json.actions.find(action => action.action_id === observation.action_id) : null;
+              ? state.json.actions.find(action => action.action_id === projected.action_id) : null;
             if (matched) observation = { ...observation,
               ...(Object.hasOwn(matched, 'input_world') ? { input_world: matched.input_world } : {}),
               ...(Object.hasOwn(matched, 'world') ? { world: matched.world } : {}) };
           } catch { /* Observation is optional; the confirmed result remains confirmed. */ }
         }
-        return { id, result: answer.result.program_result, usage: tryUsage(answer, { cap: descriptor.callCap }), inputWorld: observation.input_world, world: observation.world };
+        return {
+          id,
+          actionId: projected.action_id,
+          replayed: projected.replayed,
+          result: projected.outcome === 'result' ? answer.result.program_result : null,
+          error: projected.outcome === 'program_error' ? reportError : null,
+          usage,
+          inputWorld: observation.input_world,
+          world: observation.world,
+        };
       }
       if (ports.now() >= end) throw new Stop(125, 'The command result is unknown. Do not repeat it automatically.' + recovery);
+      if (existingOnly) {
+        const obsReply = await runtime.send(`/v1/try/${sessionId}/calls/${id}/observation`, { method: 'GET' }, GET_MS);
+        let obs;
+        try {
+          obs = projectTryObservation({ try_id: sessionId, run_id: id, status: obsReply.status ?? 0, body: normalizeObservationBody(obsReply.json) });
+        } catch {
+          throw new Stop(125, cleanText(obsReply.json?.error?.message || 'The command could not be observed. Do not repeat it automatically.', secrets) + recovery);
+        }
+        if (obs.unknown_outcome) {
+          throw new Stop(125, 'The command result is unknown. Do not repeat it automatically.' + recovery);
+        }
+        if (obs.terminal) {
+          const read = await runtime.get(id);
+          if ([401, 403, 410].includes(read.status)) throw new Stop(125, cleanText(read.json?.error?.message || (read.status === 401 ? AUTH_TEXT : 'The command could not be read. Do not repeat it automatically.'), secrets) + recovery);
+          answer = [200, 202].includes(read.status) ? read.json : null;
+          if (!answer || !ENDED.has(answer.state)) throw new Stop(125, 'The command result is unknown. Do not repeat it automatically.' + recovery);
+          continue;
+        }
+        await ports.sleep(ports.pollMs, ports.signal);
+        continue;
+      }
       await ports.sleep(ports.pollMs, ports.signal);
       if (ports.signal?.aborted) throw new Stop(125, 'The local server stopped; this command result is unknown. Do not repeat it automatically.' + recovery);
       const read = await runtime.get(id);
@@ -5551,9 +5647,160 @@ export async function runDoorCall(descriptor, input, givenPorts = {}) {
   }
 }
 
-export async function readTryOwner({ cwd = process.cwd(), story } = {}, givenPorts = {}) {
+export async function observeTryCall({ cwd = process.cwd(), story, tryId, runId } = {}, givenPorts = {}) {
+  const ports = withDefaults(givenPorts), root = repoRoot(cwd), store = stateFor(ports.env, root), repo = store.repo(root);
+  const targetTryId = String(tryId ?? ''), targetRunId = String(runId ?? '');
+  const entries = Object.entries(repo.tries ?? {});
+  if (!entries.some(([, item]) => String(item.id ?? '') === targetTryId) && UUID.test(targetTryId) && UUID.test(targetRunId)) {
+    const callMeta = store.read(join(store.folder('calls'), `${targetRunId}.meta.json`));
+    if (isObject(callMeta) && callMeta.id === targetRunId && callMeta.root === root && callMeta.session_id === targetTryId
+      && typeof callMeta.origin === 'string' && typeof callMeta.login === 'string') {
+      const doorMeta = store.read(join(store.folder('tries'), `${targetTryId}.door.json`));
+      const seedPath = typeof callMeta.test_path === 'string' ? callMeta.test_path
+        : typeof doorMeta?.originalPath === 'string' ? doorMeta.originalPath : null;
+      const found = seedPath ? ports.findTests({ root }) : null;
+      const seedTest = seedPath ? found.tests.find(item => item.path === seedPath) : null;
+      if (seedPath || story === undefined) {
+        const syntheticPath = seedPath ?? 'tests/__stopped__.json';
+        entries.push([syntheticPath, {
+          id: targetTryId,
+          origin: callMeta.origin,
+          login: callMeta.login,
+          story: seedTest?.story ?? (seedPath ? basename(seedPath, '.json') : '__stopped__'),
+          storyPath: seedTest?.storyPath ?? '',
+        }]);
+      }
+    }
+  }
+  const records = entries.map(([path, record]) => {
+    const meta = savedTryReceiptMeta(store, record);
+    return {
+      id: String(record.id ?? ''),
+      test_path: path,
+      test_name: basename(path, '.json'),
+      story: String(record.story ?? basename(path, '.json')),
+      story_path: String(record.storyPath ?? ''),
+      ...meta,
+    };
+  });
+  const prebound = bindExistingTry({
+    try_id: targetTryId,
+    ...(story !== undefined ? { story } : {}),
+    records,
+    drift: null,
+    model: { status: 200, error_code: null, cap: null, remaining: null },
+  });
+  if (!UUID.test(prebound.try_id) || !UUID.test(targetRunId)) {
+    throw Object.assign(new Error(`Invalid external run UUID "${cleanText(targetRunId)}". Pass the external run_id UUID returned by try_run, not an internal action_id or path.`), { code: 'invalid-run-id' });
+  }
+  const [recordPath, record] = entries.find(([path, item]) => path === prebound.test_path && String(item.id ?? '') === prebound.try_id);
+  if (recordPath !== 'tests/__stopped__.json' && loadRuntimeWorkspace({ root }).configured) ports.captureSource(root, { tests: [recordPath] });
+  const identity = signIn(ports.gh, store, ports);
+  if (record.login !== identity.login) throw new Error(`This Try belongs to ${record.login}. Run: gh auth switch -u ${record.login}`);
+  if (runtimeOrigin({ PDD_RUNTIME_URL: record.origin }) !== record.origin) throw new Error('The saved interpreter address is invalid.');
+  const secrets = [identity.token];
+  const auth = authSession({
+    identity,
+    store,
+    ports,
+    secrets,
+    expectedOwnerLogin: () => record.login,
+    ownerMismatchError: owner => new Error(`This Try belongs to ${owner}. Run: gh auth switch -u ${owner}`),
+  });
+  const runtime = new Runtime({ origin: record.origin, token: identity.token, ports, signal: ports.signal, auth });
+  const reply = await runtime.send(`/v1/try/${encodeURIComponent(prebound.try_id)}/calls/${encodeURIComponent(targetRunId)}/observation`, { method: 'GET' }, GET_MS);
+  return projectTryObservation({
+    try_id: prebound.try_id,
+    run_id: targetRunId,
+    status: reply.status ?? 0,
+    body: normalizeObservationBody(reply.json),
+  });
+}
+
+export async function readTryOwner({ cwd = process.cwd(), story, tryId } = {}, givenPorts = {}) {
   const ports = withDefaults(givenPorts), root = repoRoot(cwd), found = ports.findTests({ root }), store = stateFor(ports.env, root);
-  const repo = store.repo(root), open = found.tests.filter(test => repo.tries?.[test.path]);
+  const repo = store.repo(root);
+  if (tryId !== undefined) {
+    const entries = Object.entries(repo.tries ?? {});
+    const records = entries.map(([path, record]) => ({
+      id: String(record.id ?? ''),
+      test_path: path,
+      test_name: basename(path, '.json'),
+      story: String(record.story ?? basename(path, '.json')),
+      story_path: String(record.storyPath ?? ''),
+      ...savedTryReceiptMeta(store, record),
+    }));
+    const prebound = bindExistingTry({
+      try_id: String(tryId),
+      ...(story !== undefined ? { story } : {}),
+      records,
+      drift: null,
+      model: { status: 200, error_code: null, cap: null, remaining: null },
+    });
+    const [recordPath, record] = entries.find(([path, item]) => path === prebound.test_path && String(item.id ?? '') === prebound.try_id);
+    const test = found.tests.find(item => item.path === recordPath);
+    if (test) ports.captureSource(root, { tests: [test.path] });
+    else if (loadRuntimeWorkspace({ root }).configured) ports.captureSource(root, { tests: [recordPath] });
+    const identity = signIn(ports.gh, store, ports);
+    if (record.login !== identity.login) throw new Error(`This Try belongs to ${record.login}. Run: gh auth switch -u ${record.login}`);
+    if (runtimeOrigin({ PDD_RUNTIME_URL: record.origin }) !== record.origin) throw new Error('The saved interpreter address is invalid.');
+    let drift = null;
+    if (!test || record.storyPath !== test.storyPath
+      || record.story_sha256 && createHash('sha256').update(readFileSync(join(root, test.storyPath))).digest('hex') !== record.story_sha256) {
+      drift = 'The Story changed. Run pdd simulate STORY --new.';
+    } else {
+      const promptProblem = tryPromptProblem(root, found, test, record, undefined, ports);
+      if (promptProblem) drift = `${promptProblem} Run pdd simulate STORY --new.`;
+    }
+    if (drift !== null) {
+      bindExistingTry({
+        try_id: String(tryId),
+        ...(story !== undefined ? { story } : {}),
+        records,
+        drift,
+        model: { status: 200, error_code: null, cap: null, remaining: null },
+      });
+    }
+    const secrets = [identity.token];
+    const auth = authSession({
+      identity,
+      store,
+      ports,
+      secrets,
+      expectedOwnerLogin: () => record.login,
+      ownerMismatchError: owner => new Error(`This Try belongs to ${owner}. Run: gh auth switch -u ${owner}`),
+    });
+    const runtime = new Runtime({ origin: record.origin, token: identity.token, ports, signal: ports.signal, auth });
+    const metadata = await runtime.send(`/v1/try/${record.id}/model`, { method: 'GET' }, GET_MS);
+    const bound = bindExistingTry({
+      try_id: String(tryId),
+      ...(story !== undefined ? { story } : {}),
+      records,
+      drift: null,
+      model: {
+        status: metadata.status ?? 0,
+        error_code: typeof metadata.json?.error?.code === 'string' ? metadata.json.error.code : null,
+        cap: Number.isSafeInteger(metadata.json?.calls?.cap) && metadata.json.calls.cap > 0 ? metadata.json.calls.cap : null,
+        remaining: Number.isSafeInteger(metadata.json?.calls?.remaining) && metadata.json.calls.remaining >= 0 ? metadata.json.calls.remaining : null,
+      },
+    });
+    if (!Array.isArray(metadata.json?.entries)) throw new Error(`The Try model could not be read. Read this Try again; no new run was sent.`);
+    const state = await runtime.send(`/v1/try/${record.id}/state`, { method: 'GET' }, GET_MS);
+    return {
+      root,
+      test: record.seed_scenario ? { ...test, doc: record.seed_scenario } : test,
+      record,
+      model: metadata.json,
+      actions: Array.isArray(state.json?.actions) ? state.json.actions : null,
+      source_sha256: validSha256Hex(metadata.json?.source_sha256) ?? bound.source_sha256,
+      engine_sha: validEngineHex(metadata.json?.engine_sha) ?? bound.engine_sha,
+      server_commit: (typeof metadata.json?.server_commit === 'string' && metadata.json.server_commit ? metadata.json.server_commit : null) ?? bound.server_commit,
+      ...(state.status === 200 && Object.hasOwn(state.json ?? {}, 'world')
+        ? { data: state.json.world }
+        : { data_error: `Current saved data unavailable${state.status ? ` (HTTP ${state.status})` : ''}; no initial data was substituted.` }),
+    };
+  }
+  const open = found.tests.filter(test => repo.tries?.[test.path]);
   let selected = story === undefined ? (open.length === 1 ? open : found.tests) : ports.selectTests(found, [story]).selected;
   if (selected.length > 1) { const live = selected.filter(test => repo.tries?.[test.path]); if (live.length === 1) selected = live; }
   if (selected.length !== 1) throw new Error(`Choose one Story${story ? ` matching "${story}"` : ''}. Available: ${found.tests.map(test => `${test.story} (${test.path})`).join(', ') || 'none'}.`);
@@ -5601,9 +5848,11 @@ export async function readTryOwner({ cwd = process.cwd(), story } = {}, givenPor
   }
   if (metadata.status !== 200 || !Array.isArray(metadata.json?.entries)) throw new Error(cleanText(metadata.json?.error?.message || `The Try model could not be read${metadata.status ? ` (HTTP ${metadata.status})` : ''}. Read this Try again; no new run was sent.`, secrets));
   const state = await runtime.send(`/v1/try/${record.id}/state`, { method: 'GET' }, GET_MS);
-  const source_sha256 = validSha256Hex(metadata.json?.source_sha256) ?? validSha256Hex(record?.source_sha256) ?? null;
-  const engine_sha = validEngineHex(metadata.json?.engine_sha) ?? validEngineHex(record?.engine_sha) ?? null;
-  return { root, test: record.seed_scenario ? { ...test, doc: record.seed_scenario } : test, record, model: metadata.json, source_sha256, engine_sha, actions: Array.isArray(state.json?.actions) ? state.json.actions : null,
+  const meta = savedTryReceiptMeta(store, record);
+  const source_sha256 = validSha256Hex(metadata.json?.source_sha256) ?? meta.source_sha256;
+  const engine_sha = validEngineHex(metadata.json?.engine_sha) ?? meta.engine_sha;
+  const server_commit = (typeof metadata.json?.server_commit === 'string' && metadata.json.server_commit ? metadata.json.server_commit : null) ?? meta.server_commit;
+  return { root, test: record.seed_scenario ? { ...test, doc: record.seed_scenario } : test, record, model: metadata.json, source_sha256, engine_sha, server_commit, actions: Array.isArray(state.json?.actions) ? state.json.actions : null,
     ...(state.status === 200 && Object.hasOwn(state.json ?? {}, 'world') ? { data: state.json.world } : { data_error: `Current saved data unavailable${state.status ? ` (HTTP ${state.status})` : ''}; no initial data was substituted.` }) };
 }
 

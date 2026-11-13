@@ -628,7 +628,7 @@ Changed criterion text and other malformed test rules still refuse the test.
 | `pdd approve PROMPT [--said WORDS]` | Approve one prompt with your chat words, or terminal y/N without --said; strict mode requires a person terminal. |
 | `pdd simulate [STORY] [--max-calls N] [--tab call\|screen\|terminal\|world] [--app-map PATH] [--new] [--no-open] [--no-wait] [--agent NAME]` | Automatically open a shell for command-line programs, localhost with an example request for HTTP routes, or the Simulator page for screens and typed operations. With no Story, open the whole project. |
 | `pdd simulate [STORY] --page [--new]` | Open the Simulator page explicitly |
-| `pdd simulate --stop [STORY]` | Stop the open Simulator link of a Story |
+| `pdd simulate --stop [STORY]` | Stop the open Simulator link of a Story or exact Try ID |
 
 For `--target code`, each tested Runtime entry declares
 `"implementation": {"kind": "cli", "command": "node bin/tip.mjs"}`. The command
@@ -718,7 +718,7 @@ The Simulator's agent fills the fields directly when supported. It runs the acti
 |---|---|
 | `pdd mcp` | Start the stdio MCP server for the current repository; select the Story through tool input. Your agent can open a simulation, inspect its state, run input, check the result against the Story and save a case |
 
-The tools are `try_open`, `try_state`, `try_run`, `try_check` and `try_save_case`. `try_open` and `try_state` include `source_sha256` and `engine_sha` for the open Try. Use them when the person asks to try behavior. Runs count against the simulation budget and appear in the Simulator. Saved results are separate recorded cases with exact starting data. Complete missing Story coverage before `pdd test`; observations need review and are never approved expected values. MCP protocol messages use stdout; progress and diagnostics use stderr.
+The tools are `try_open`, `try_state`, `try_run`, `try_observe`, `try_check` and `try_save_case`. `try_open` and `try_state` include `source_sha256`, `engine_sha` and `server_commit` for the open Try. Supply `try_id` to bind an existing running simulation without opening or reopening one, and use `try_observe` to read call and session state without replaying a run. Use them when the person asks to try behavior. Runs count against the simulation budget and appear in the Simulator. Saved results are separate recorded cases with exact starting data. Complete missing Story coverage before `pdd test`; observations need review and are never approved expected values. MCP protocol messages use stdout; progress and diagnostics use stderr.
 
 ## Used by the agent
 

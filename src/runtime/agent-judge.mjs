@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-judge.prompt.md (sha256: 1f1b319ce2b65c859531b654773135e9ec5fbff098cde31f5c6d8b8e356f59ab).
+// Generated from prompts/cli/agent-judge.prompt.md (sha256: 7413bb037488fc165d9f2e799ca4b04017b326ee8acee87da119c68d7af175a5).
 import {isDeepStrictEqual} from 'node:util';
 const clone=value=>JSON.parse(JSON.stringify(value));
 const own=(x,k)=>x!==null&&typeof x==='object'&&Object.hasOwn(x,k);
@@ -6,6 +6,13 @@ const references=x=>Array.isArray(x)?x.some(references):x!==null&&typeof x==='ob
 const entry=s=>`${s.entry_path}#${s.operation}`;
 const validPointer=p=>typeof p==='string'&&(p===''||(p.startsWith('/')&&!/~(?:[^01]|$)/.test(p)));
 function at(value,path){if(!validPointer(path))return{invalid:true};if(value===undefined)return{missing:true};if(path==='')return{value};for(const key of path.slice(1).split('/').map(k=>k.replace(/~1/g,'/').replace(/~0/g,'~'))){if(!own(value,key))return{missing:true};value=value[key];}return{value};}
+function observedTarget(run,target,path){
+ if(target==='world')return run.world_after===undefined?{unavailable:true}:at(run.world_after,path);
+ const hasError=own(run,'error')&&run.error!==undefined&&run.error!==null,hasResult=!hasError&&own(run,'result')&&run.result!==undefined;
+ if(target==='result')return hasResult?at(run.result,path):hasError?{missing:true}:{unavailable:true};
+ if(target==='error')return hasError?at(run.error,path):hasResult?{missing:true}:{unavailable:true};
+ return{unavailable:true};
+}
 const ranked=states=>['fail','differs','tried','todo','pass'].find(s=>states.includes(s))??'todo';
 function expectedStart(scenario,index){if(index===0)return own(scenario,'initial_world')&&!references(scenario.initial_world)?{known:true,value:scenario.initial_world}:{known:false};const values=(scenario.steps[index-1].checks??[]).filter(c=>c.target==='world'&&c.op==='equals'&&c.path==='').map(c=>c.value);return values.length&&values.every(v=>v!==null&&typeof v==='object'&&!Array.isArray(v)&&!references(v)&&isDeepStrictEqual(v,values[0]))?{known:true,value:values[0]}:{known:false};}
 export function createRunJudge({scenario,checkPassed=[]}){
@@ -24,12 +31,13 @@ export function createRunJudge({scenario,checkPassed=[]}){
     const skip=reason=>{if(!item.unchecked.includes(reason))item.unchecked.push(reason);};
     for(const ch of checks){
      if(ch.target==='calls'){skip('calls not checked here: pdd test covers them');continue;}
-     if(ch.op!=='equals'||!['result','world'].includes(ch.target)||!validPointer(ch.path)||!own(ch,'value')){skip('unsupported check not checked here');continue;}
+     if(ch.op!=='equals'||!['result','error','world'].includes(ch.target)||!validPointer(ch.path)||!own(ch,'value')){skip('unsupported check not checked here');continue;}
      if(references(ch.value)){skip('step-result reference not checked here');continue;}
      if(ch.target==='world'&&!same){skip('world not checked: different or unknown starting data');continue;}
      if(ch.target==='result'&&run.lossless!==true&&(ch.path==='/stdout'||ch.path.startsWith('/stdout/')||(ch.path===''&&own(ch.value,'stdout')))){skip('ledger stdout not checked: lossless result required');continue;}
-     if((ch.target==='result'?run.result:run.world_after)===undefined){skip(`${ch.target} not checked: observation unavailable`);continue;}
-     const actual=at(ch.target==='result'?run.result:run.world_after,ch.path);item.compared++;
+     const actual=observedTarget(run,ch.target,ch.path);
+     if(actual.unavailable){skip(`${ch.target} not checked: observation unavailable`);continue;}
+     item.compared++;
      if(actual.missing||!isDeepStrictEqual(actual.value,ch.value)){const difference={target:ch.target,path:ch.path,expected:clone(ch.value),got:actual.missing||actual.value===undefined?null:clone(actual.value),...(actual.missing?{missing:true}:{})};item.first_difference??=difference;firstDifference??=difference;}
     }
     item.state=item.first_difference?(same?'fail':'differs'):item.compared?'pass':'tried';evidence.set(`${c.id}:${index}`,clone(item));items.push(item);
@@ -50,12 +58,13 @@ export function compareExpectation(args={}) {
  if(!run||typeof bindingEntry!=='string'||input===undefined||references(input)||run.entry!==bindingEntry||!isDeepStrictEqual(run.input,input)){skip('run does not match the delivered fill');return out;}
  const same=own(args,'world_before')&&world_before!==undefined&&own(run,'world_before')&&run.world_before!==undefined&&isDeepStrictEqual(world_before,run.world_before);
  for(const check of expect.checks){
-  if(!check||!['result','world'].includes(check.target)||(own(check,'op')&&check.op!=='equals')||!validPointer(check.path)||!own(check,'value')){skip('unsupported expectation check not compared');continue;}
+  if(!check||!['result','error','world'].includes(check.target)||(own(check,'op')&&check.op!=='equals')||!validPointer(check.path)||!own(check,'value')){skip('unsupported expectation check not compared');continue;}
   if(references(check.value)){skip('step-result reference not compared');continue;}
   if(check.target==='world'&&!same){skip('world not compared: different or unknown fill starting data');continue;}
   if(check.target==='result'&&run.lossless!==true&&(check.path==='/stdout'||check.path.startsWith('/stdout/')||(check.path===''&&own(check.value,'stdout')))){skip('ledger stdout not checked: lossless result required');continue;}
-  if((check.target==='result'?run.result:run.world_after)===undefined){skip(`${check.target} not compared: observation unavailable`);continue;}
-  const actual=at(check.target==='result'?run.result:run.world_after,check.path);out.compared++;
+  const actual=observedTarget(run,check.target,check.path);
+  if(actual.unavailable){skip(`${check.target} not compared: observation unavailable`);continue;}
+  out.compared++;
   if(actual.missing||!isDeepStrictEqual(actual.value,check.value))out.first_difference??={target:check.target,path:check.path,expected:clone(check.value),got:actual.missing||actual.value===undefined?null:clone(actual.value),...(actual.missing?{missing:true}:{})};
  }
  out.state=out.first_difference?'differs':out.compared?'match':'not_compared';return clone(out);
