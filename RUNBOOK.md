@@ -359,6 +359,31 @@ node `<file>--op-<operation>--hex-<operation name in hex>`. `printf add | xxd -p
   A declared operation that the step did not use counts `0`. pdd does not check paths before it sends, so work out
   each path with these rules before the first check.
 
+**Check operations (`op`).** Exact checks satisfy criterion coverage; `exists` (without `html`) and `contains` are partial checks and must be paired with an exact check on the criterion.
+
+| `op` | Meaning | Example fields |
+|---|---|---|
+| `equals`, `not_equals` | Exact JSON value match or inequality | `"value": 3784` |
+| `one_of` | Actual value matches any listed candidate | `"value": ["pending", "queued"]` |
+| `count` | Length of an array | `"value": 4` |
+| `at_least` / `gte`, `at_most` / `lte`, `lt`, `gt` | Numeric or length bound (`"measure": "value"` default, or `"measure": "length"` for string code points or array items) | `"op": "at_most", "value": 500` |
+| `not_contains`, `all_in`, `equals_ignore_case` | Substring/item exclusion, array subset check, or case-insensitive ASCII string match | `"op": "all_in", "value": ["read", "write"]` |
+| `exists`, `contains` | Presence or substring/item containment (add `"html"` on `exists` for exact HTML selector checks) | `"op": "contains", "value": "Order #"` |
+
+**Cross-path relational checks.** For `equals`, `not_equals`, `at_least` / `gte`, `at_most` / `lte`, `lt`, and `gt` on `result`, `world`, or `calls`, compare against another live field from `"result"`, `"input"`, or `"world"` instead of a literal `value` (or pass `{"ref_target", "ref_path"}` as `"value"`):
+```json
+{"criterion_id": "AC1", "target": "result", "path": "/fee_cents", "op": "at_most", "ref_target": "input", "ref_path": "/cap_cents"}
+```
+Add `"ref_json_path"` when the referenced field is a JSON-encoded string, and `"measure": "length"` when comparing string or array lengths across paths.
+
+**Exact integer conservation (`integer_relation`).** Check exact integer equations or bounds (`"compare": "eq" | "le" | "ge"`) across `result`, `input`, and `world` without hardcoding components:
+```json
+{"criterion_id": "AC2", "target": "result", "path": "", "op": "integer_relation",
+ "value": {"compare": "eq", "left": {"sum": [{"field": "/payout_cents"}, {"field": "/fee_cents"}]},
+           "right": {"ref_target": "input", "ref_path": "/gross_cents"}}}
+```
+Terms use `{"field": "<pointer>"}` (relative to the check's `target`/`path`), `{"ref_target": "result" | "input" | "world", "ref_path": "<pointer>"}`, `{"integer": "100"}` (base-10 string), `{"sum": [...]}`, or `{"product": [...]}`.
+
 ## 9. Money and dates
 
 - Do all money math in whole cents. Write the rounding rule in the prose, with an example:
