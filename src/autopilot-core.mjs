@@ -1,3 +1,4 @@
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 7d15175d6d53df2d3642078be75969ebdeaa5c9b223e0d3f27f61869aa7ed402).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -708,7 +709,7 @@ const logSig = seen => `${seen?.log?.size ?? '-'}:${seen?.log?.mtime ?? '-'}`;
 //   age, the process stops and the job ends as a no-result (ceiling) with one alert. The age counts from the process
 //   start, without sleep gaps; nothing resets it.
 const NOTE_HOURS = 3, CPU_STEP = 10, SEEN_LIMIT = 200_000, READ_LIMIT = 8 * 1024 * 1024;
-const NEUTRAL_TOOLS = new Set(['wait', 'wait_agent', 'sleep', 'list_agents']);
+const NEUTRAL_TOOLS = new Set(['wait', 'wait_5_seconds', 'wait_agent', 'sleep', 'list_agents']);
 function processAge(ctx, job, part, at = ctx.now()) {
   const started = part?.started ?? job.started;
   const slept = (job.gaps ?? []).filter(g => g.to > started && g.from < at).reduce((sum, g) => sum + Math.min(g.to, at) - Math.max(g.from, started), 0);
@@ -769,6 +770,12 @@ function streamItems(line, role) {
     if (['reasoning', 'agent_message'].includes(type)) return [];
     tool(item.tool ?? item.name ?? (type === 'command_execution' ? '' : type), `${type}|${JSON.stringify(item)}`, object(item.arguments) ? { ...item.arguments, command: item.command ?? item.arguments.command } : item);
     out(output); if (result !== undefined) out(typeof result === 'string' ? result : JSON.stringify(result));
+    return items;
+  }
+  if (event.event === 'step_update' && event.step_update?.step_type === 'tool' && event.step_update?.state === 'DONE') {
+    const step = event.step_update, params = object(step.tool_info?.parameters) ? step.tool_info.parameters : {};
+    tool(step.tool_name, `${step.tool_name}|${JSON.stringify(params)}`, { ...params, command: params.command ?? params.CommandLine });
+    if (step.tool_info?.output !== undefined) out(step.tool_info.output);
     return items;
   }
   for (const part of Array.isArray(event.message?.content) ? event.message.content : []) {
@@ -941,7 +948,7 @@ function pddOnPath(ctx, env) {
 // #3177: the agent roles run commands in a shell; their wrapper checks which pdd that shell finds.
 const SHELL_ROLES = new Set(['build', 'repair', 'conflict', 'review']);
 const engineVersion = ctx => ctx.ports.version ?? readJson(ctx.fs, join(PACKAGE_ROOT, 'package.json'), {})?.version ?? null;
-// The skills folders that the agent's tools load by default (as pdd setup installs them): Codex ~/.agents/skills,
+// The skills folders that the agent's tools load by default (as pdd setup installs them): Codex and agy ~/.agents/skills,
 // Claude $CLAUDE_CONFIG_DIR/skills (absolute) else ~/.claude/skills; and the engine's own skills version.
 function skillsCheck(ctx) {
   const env = ctx.ports.env ?? process.env, home = env.HOME, dir = join(PACKAGE_ROOT, 'skills');
@@ -1068,7 +1075,7 @@ async function intake(ctx, rows) {
   const busy = jobs.filter(holdsSlot).length;
   let free = settings.runs - busy, tries = 0;
   if (free <= 0) return null;
-  if (!['codex', 'claude'].includes(state.agent?.kind)) return 'intake held: the core engine needs a Codex or Claude agent; run pdd autopilot start from a signed-in Codex or Claude';
+  if (!['codex', 'claude', 'agy'].includes(state.agent?.kind)) return 'intake held: the core engine needs a Codex, Claude or agy agent; run pdd autopilot start from a signed-in Codex, Claude or agy';
   // The launcher asks for an opt-in label: with none, no issue is claimed (a start without a label starts nothing).
   if (settings.labelRequired && !settings.label) return 'intake held: no opt-in label; run pdd autopilot start --label pdd:autopilot and mark issues with pdd autopilot add N';
   // The machine pause: no new job starts until it ends; then intake goes on as usual.
@@ -2028,14 +2035,46 @@ function evidenceSummary(ctx, job) {
     `- Record: ${basename(evidencePath(ctx, job))} on this machine`].join('\n');
 }
 const EVIDENCE_START = '<!-- pdd:autopilot-core:evidence:start -->', EVIDENCE_END = '<!-- pdd:autopilot-core:evidence:end -->';
+function plainPrText(body) {
+  let fence = null;
+  return String(body ?? '').replace(/\r\n?/g, '\n').split('\n').map(line => {
+    const mark = line.trim().match(/^(`{3,}|~{3,})/)?.[1];
+    if (fence) { if (mark && line.trim().startsWith(fence) && !line.trim().slice(mark.length).trim()) fence = null; return ''; }
+    const open = /^ {0,3}(?:(`{3,})[^`]*|(~{3,}).*)$/.exec(line);
+    if (open) { fence = open[1] ?? open[2]; return ''; }
+    return line;
+  }).join('\n')
+    .replace(/(?<![`\\])(`+)(?!`)(?:(?!\n[ \t]*\n)[\s\S])*?(?<!`)\1(?!`)/g, ' ')
+    .replace(/<!--[\s\S]*?-->/g, ' ');
+}
+function matchedIssues(plain, words, repo) {
+  const escaped = String(repo ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const ref = `(?:(?<![\\w./-])${escaped}#(\\d+)|https?:\\/\\/github\\.com\\/${escaped}\\/issues\\/(\\d+)|(?<![\\w./-])#(\\d+))(?![\\w/])`;
+  const listRe = new RegExp(`\\b(?:${words})(?!\\u200b)(?::[ \\t]*|[ \\t]+)(${ref}(?:(?:[ \\t]*,[ \\t]*(?:and[ \\t]+)?|[ \\t]+and[ \\t]+)${ref})*)`, 'gi');
+  const numRe = new RegExp(ref, 'gi'), out = new Set();
+  for (const m of plain.matchAll(listRe)) for (const n of m[1].matchAll(numRe)) out.add(Number(n[1] ?? n[2] ?? n[3]));
+  return out;
+}
+function hasClosingKeyword(body, issue, repo) {
+  return matchedIssues(plainPrText(body), 'close[sd]?|fix(?:e[sd])?|resolve[sd]?', repo).has(issue);
+}
+function isPartialIssuePr(body, issue, repo) {
+  const plain = plainPrText(body);
+  if (/^\s*Not fixed yet:/im.test(plain)) return true;
+  return !matchedIssues(plain, 'close[sd]?|fix(?:e[sd])?|resolve[sd]?', repo).has(issue)
+    && matchedIssues(plain, 'refs?|part[ \\t]+of', repo).has(issue);
+}
 async function writeEvidenceBlock(ctx, job) {
   const block = `${EVIDENCE_START}\n### Autopilot evidence for head ${short(job.head)}\n\n${ctx.publicBody(evidenceSummary(ctx, job))}\n${EVIDENCE_END}`;
   // A fresh read: the review may have written the follow-ups section in this tick.
   const pr = await ctx.gh.ok('GET', `repos/${ctx.repo}/pulls/${job.pr}`);
   const body = String(pr?.body ?? ''), at = body.indexOf(EVIDENCE_START), end = body.indexOf(EVIDENCE_END);
+  const closing = hasClosingKeyword(body, job.issue, ctx.repo) || isPartialIssuePr(body, job.issue, ctx.repo) ? '' : `Fixes #${job.issue}\n\n`;
+  const addition = `${closing}${block}`;
   const followUps = body.indexOf('Follow-ups from the Autopilot review');
-  const next = at >= 0 && end > at ? `${body.slice(0, at)}${block}${body.slice(end + EVIDENCE_END.length)}`
-    : followUps >= 0 ? `${body.slice(0, followUps).trimEnd()}\n\n${block}\n\n${body.slice(followUps)}` : `${body.trimEnd()}\n\n${block}`;
+  const next = at >= 0 && end > at ? `${body.slice(0, at)}${addition}${body.slice(end + EVIDENCE_END.length)}`
+    : followUps >= 0 ? `${body.slice(0, followUps).trimEnd()}\n\n${addition}\n\n${body.slice(followUps)}`.trimStart()
+    : body.trimEnd() ? `${body.trimEnd()}\n\n${addition}` : addition;
   if (next !== body) await ctx.gh.ok('PATCH', `repos/${ctx.repo}/pulls/${job.pr}`, { body: next });
 }
 
@@ -2928,8 +2967,44 @@ async function finishMerge(ctx, job, read = null) {
   const issue = await gh.ok('GET', `repos/${repo}/issues/${job.issue}`);
   if (issue.state === 'open') await gh.ok('PATCH', `repos/${repo}/issues/${job.issue}`, { state: 'closed', state_reason: 'completed' });
   if (labelsOf(issue).includes('pdd:working')) await gh.call('DELETE', `repos/${repo}/issues/${job.issue}/labels/${encodeURIComponent('pdd:working')}`);
+  if (labelsOf(issue).includes(WOULD_MERGE)) await gh.call('DELETE', `repos/${repo}/issues/${job.issue}/labels/${encodeURIComponent(WOULD_MERGE)}`);
   ctx.counts.merged++; ctx.produced();
   await finishLocal(ctx, job, 'merged', `merged PR #${job.pr}`);
+}
+async function sweepWouldMerge(ctx, open, rows) {
+  if (!open) return;
+  const active = new Set(readJobs(ctx.fs, ctx.root).map(job => job.issue));
+  const want = new Set([...open.values()].filter(row => row.state === 'open' && labelsOf(row).includes(WOULD_MERGE)
+    && !labelsOf(row).includes('pdd:working') && !active.has(row.number)).map(row => row.number));
+  if (!want.size) return;
+  const pulls = await ctx.gh.ok('GET', `repos/${ctx.repo}/pulls?state=all&base=${encodeURIComponent(ctx.state.baseBranch)}&per_page=30`);
+  const latest = new Map();
+  for (const pr of pulls ?? []) {
+    if (pr?.base?.ref !== ctx.state.baseBranch) continue;
+    if (String(pr.head?.repo?.full_name ?? '').toLowerCase() !== ctx.repo.toLowerCase()) continue;
+    const n = Number(/^pdd\/core-(\d+)-/.exec(String(pr.head?.ref ?? ''))?.[1] ?? 0);
+    if (want.has(n) && pr.number > (latest.get(n)?.number ?? 0)) latest.set(n, pr);
+  }
+  for (const [n, pr] of latest) {
+    if (pr.state === 'open' || !(pr.merged || pr.merged_at)) continue;
+    try {
+      const timeline = await ctx.gh.all(`repos/${ctx.repo}/issues/${n}/timeline?per_page=100`);
+      const labeledIdx = timeline.findLastIndex(e => e.event === 'labeled' && e.label?.name === WOULD_MERGE);
+      const reopenedIdx = timeline.findLastIndex(e => e.event === 'reopened');
+      const reopenedAfter = reopenedIdx >= 0 && (reopenedIdx > labeledIdx
+        || (pr.merged_at && (Date.parse(timeline[reopenedIdx]?.created_at) || 0) > (Date.parse(pr.merged_at) || 0)));
+      const row = open.get(n);
+      if (!reopenedAfter && !isPartialIssuePr(pr.body, n, ctx.repo)) {
+        await ctx.gh.ok('PATCH', `repos/${ctx.repo}/issues/${n}`, { state: 'closed', state_reason: 'completed' });
+        if (row) row.state = 'closed';
+        open.delete(n); ctx.skip.add(n);
+        if (Array.isArray(rows) && row) { const idx = rows.indexOf(row); if (idx >= 0) rows.splice(idx, 1); }
+      }
+      const removed = await ctx.gh.call('DELETE', `repos/${ctx.repo}/issues/${n}/labels/${encodeURIComponent(WOULD_MERGE)}`);
+      if (removed.status >= 300 && removed.status !== 404) throw Error(`DELETE label ${WOULD_MERGE}: HTTP ${removed.status}`);
+      if (row?.labels) row.labels = row.labels.filter(l => (typeof l === 'string' ? l : l?.name) !== WOULD_MERGE);
+    } catch (error) { ctx.warn(`Autopilot core could not close merged would-merge issue #${n}: ${error.message}`); }
+  }
 }
 
 // ---- Stop owners (A1 of #3238) ------------------------------------------------------------------------------
@@ -3582,6 +3657,7 @@ export async function tickCore(input, ports) {
   let rows = null;
   if (input.budget?.state !== 'reserve') try { rows = await ports.listIssues(); } catch (error) { ctx.warn(`Autopilot core could not list issues: ${error.message}`); }
   const open = rows && new Map(rows.filter(row => !row.pull_request).map(row => [row.number, row]));
+  if (open) await sweepWouldMerge(ctx, open, rows).catch(error => ctx.warn(`Autopilot core could not sweep would-merge issues: ${error.message}`));
   // Only open issues by trusted authors reach a prompt (the same rule as intake).
   ctx.trustedOpen = async () => ctx.openRows ??= Array.isArray(rows) ? (await Promise.all(rows.filter(row => !row.pull_request).map(async row => await ctx.trust(row) ? row : null))).filter(Boolean) : null;
   if (open) for (const job of readJobs(ctx.fs, ctx.root)) {
