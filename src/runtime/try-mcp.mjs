@@ -1,10 +1,12 @@
-// Generated from prompts/cli/try-mcp.prompt.md (sha256: e328d3c2c00b49291d2fc14650035514fe885f4ab03de25621753c6e4ff12134).
+// Generated from prompts/cli/try-mcp.prompt.md (sha256: 381ee7e57cc3d117af9dbc2265a64a5826bb9b28d6bc040d333942fece128574).
 import { createInterface } from 'node:readline';
 import { readTryOwner, runDoorCall, saveDoorCase, applyPendingCaseWithHandoff } from './runtime-client.mjs';
 import { createRunJudge } from './agent-judge.mjs';
 
 const object = x => x !== null && typeof x === 'object' && !Array.isArray(x);
 const text = x => typeof x === 'string' && x.length > 0;
+const validSha256 = x => typeof x === 'string' && /^[0-9a-f]{64}$/i.test(x) ? x.toLowerCase() : null;
+const validEngineSha = x => typeof x === 'string' && /^[0-9a-f]{8,40}$/i.test(x) ? x.toLowerCase() : null;
 const schema = properties => ({ type: 'object', properties: { story: { type: 'string' }, ...properties }, additionalProperties: false });
 const tools = [
   ['try_open', 'Open or reuse the current repo and Story Try. Returns its entries, data and budget. No prompt approval.', {}, false],
@@ -71,6 +73,8 @@ export function createTryTools({ cwd = process.cwd(), words = [], env } = {}, po
     const { judge, runs } = session;
     if (name === 'try_open' || name === 'try_state') return {
       story: owner.test.title, story_path: owner.test.storyPath, try_id: owner.record.id,
+      source_sha256: validSha256(owner.model?.source_sha256) ?? validSha256(owner.source_sha256) ?? validSha256(owner.record?.source_sha256) ?? null,
+      engine_sha: validEngineSha(owner.model?.engine_sha) ?? validEngineSha(owner.engine_sha) ?? validEngineSha(owner.record?.engine_sha) ?? null,
       criteria: owner.test.doc.criteria, test_inputs: judge.bindings(),
       entries: owner.model.entries.map(e => ({ ...e, entry: `${e.entry_path}#${e.operation}` })),
       data_now: owner.data ?? null, ...(owner.data_error ? { data_error: owner.data_error } : {}),

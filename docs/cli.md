@@ -618,7 +618,7 @@ Changed criterion text and other malformed test rules still refuse the test.
 | `pdd test --fill-hash [PATH\|STORY...]` | Fill draft interface hashes, remove redundant `"kind": "full"` from drafts and synchronize matching scenario `criteria[].text` from `story_path`. With selections, update only the selected work and required prompt dependencies; leave unrelated files unchanged. An explicit `.prompt.md` path works without tests. With no selection, inspect all Git-visible prompts and Story scenarios. Approved prompts stay unchanged. No network |
 | `pdd test --fill-hash --compact` | With no operands, fill draft hashes and remove interface JSON formatting whitespace. Remove redundant `"kind": "full"` from drafts; preserve other values, strings, number spellings and prose. Approved and statusless files stay unchanged. No network |
 | `pdd test --explain-bindings [STORY...] [--json]` | Explain each selected resource edge, fixture candidate, mismatch cause and repair. Local reads only; no sign-in or interpreter call |
-| `pdd test --files [STORY...] [--app-map PATH] [--json]` | List the exact selected upload manifest and byte sizes. No network; `--app-map` previews the Simulator's app map |
+| `pdd test --files [STORY...] [--app-map PATH] [--json]` | List the exact selected upload manifest, byte sizes and `source_sha256`. No network; `--app-map` previews the Simulator's app map |
 | `pdd lint [STORY...] [--json] [--timeout MIN] [--max-calls N]` | Print local SVG layout and source-hygiene warnings, then the server checks the format of the prompts, Stories and tests only, with 0 AI calls, and requests complete diagnostics and prints the problems the server reports. Requires network access; use it before a real check |
 | `pdd lint --local [STORY...] [--json]` | Compare linked `.ui.svg` parts and labels with prompt prose and check local prompt, Story and source-comment hygiene; warning advice only, 0 AI calls and no network/authentication. Without Story names, inspect all Git-visible prompts, even with no PDD tests |
 | `pdd test --screen URL --drawing PATH [--json]` | Compare the real page with its `.ui.svg` layout spec in installed headless Chrome/Chromium at the SVG viewport. No AI or interpreter call; missing/hidden parts, order or region differences fail |
@@ -718,7 +718,7 @@ The Simulator's agent fills the fields directly when supported. It runs the acti
 |---|---|
 | `pdd mcp` | Start the stdio MCP server for the current repository; select the Story through tool input. Your agent can open a simulation, inspect its state, run input, check the result against the Story and save a case |
 
-The tools are `try_open`, `try_state`, `try_run`, `try_check` and `try_save_case`. Use them when the person asks to try behavior. Runs count against the simulation budget and appear in the Simulator. Saved results are separate recorded cases with exact starting data. Complete missing Story coverage before `pdd test`; observations need review and are never approved expected values. MCP protocol messages use stdout; progress and diagnostics use stderr.
+The tools are `try_open`, `try_state`, `try_run`, `try_check` and `try_save_case`. `try_open` and `try_state` include `source_sha256` and `engine_sha` for the open Try. Use them when the person asks to try behavior. Runs count against the simulation budget and appear in the Simulator. Saved results are separate recorded cases with exact starting data. Complete missing Story coverage before `pdd test`; observations need review and are never approved expected values. MCP protocol messages use stdout; progress and diagnostics use stderr.
 
 ## Used by the agent
 
@@ -749,6 +749,7 @@ The agent runs these from the run's worktree. pdd finds the run from that folder
 two-second limit, then sends at most one `GET /v1/version` to the configured
 interpreter origin. The request and response body have one ten-second limit.
 It follows no redirects, sends no source, starts no jobs and makes no AI calls.
+When the interpreter also reports `service_sha`, `pdd -VV` prints `PDD service: <sha|unknown>` right after `PDD interpreter:`.
 Format IDs keep the interpreter's order; an empty list shows `none`, and a
 missing or unsafe list shows `unknown`. Each version flag must be one exact
 token; repeated flags, extra operands and `--verbose` are unsupported.
