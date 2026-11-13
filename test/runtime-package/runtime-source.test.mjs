@@ -47,11 +47,12 @@ test('SOURCE1: --files scopes a Story offline, prints its exact manifest and byt
   assert.equal(code, 0, ports.stderr.text);
   const expected = [PLACE, ORDER, STORY].sort();
   const lines = ports.stdout.text.trimEnd().split('\n');
-  assert.deepEqual(lines.slice(0, -1).map(line => line.trim().split(/\s{2,}/)[0]), expected);
+  assert.deepEqual(lines.slice(0, -2).map(line => line.trim().split(/\s{2,}/)[0]), expected);
   const bytes = expected.reduce((sum, path) => sum + readFileSync(join(setup.repo, path)).length, 0);
-  assert.match(lines.at(-1), new RegExp(`3 files, .*\\(${bytes} bytes\\)`));
+  assert.match(lines.at(-2), new RegExp(`3 files, .*\\(${bytes} bytes\\)`));
   for (const path of expected) assert.ok(lines.some(line => line.includes(path) && line.endsWith(`${readFileSync(join(setup.repo, path)).length} bytes`)), path);
   const first = captureSource(setup.repo, { tests: [ORDER] }), second = captureSource(setup.repo, { tests: [ORDER] });
+  assert.equal(lines.at(-1), `Source SHA-256: ${first.sha256}`);
   assert.deepEqual(names(first.tar), expected); assert.equal(first.bytes, bytes);
   assert.ok(first.tar.equals(second.tar)); assert.equal(first.sha256, second.sha256);
   const all = captureSource(setup.repo);
@@ -95,7 +96,9 @@ test('SOURCE2: calls, declared Markdown context, test context, app-map screens/a
   assert.deepEqual(names(capture.tar), expected);
   const { ports } = offline(setup);
   assert.equal(await runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--files': true, '--app-map': 'app/custom-map.json' } }, ports), 0, ports.stderr.text);
-  assert.deepEqual(ports.stdout.text.trimEnd().split('\n').slice(0, -1).map(line => line.trim().split(/\s{2,}/)[0]), expected);
+  const lines = ports.stdout.text.trimEnd().split('\n');
+  assert.deepEqual(lines.slice(0, -2).map(line => line.trim().split(/\s{2,}/)[0]), expected);
+  assert.equal(lines.at(-1), `Source SHA-256: ${capture.sha256}`);
 });
 
 test('SOURCE3: incomplete context and invalid includes give actionable local diagnostics without sign-in', async t => {
@@ -388,7 +391,9 @@ test('SOURCE11: HTML rule and interface sections do not add reference filenames 
       assert.equal(await runCheck({ cwd: repo, words: ['place-order'], options: { '--files': true } }, ports), 0, ports.stderr.text);
       const captured = captureSource(repo, { tests: [ORDER] });
       assert.deepEqual(names(captured.tar), expected);
-      assert.deepEqual(ports.stdout.text.trimEnd().split('\n').slice(0, -1).map(line => line.trim().split(/\s{2,}/)[0]), expected);
+      const lines = ports.stdout.text.trimEnd().split('\n');
+      assert.deepEqual(lines.slice(0, -2).map(line => line.trim().split(/\s{2,}/)[0]), expected);
+      assert.equal(lines.at(-1), `Source SHA-256: ${captured.sha256}`);
       assert.equal(captured.bytes, expected.reduce((sum, path) => sum + readFileSync(join(repo, path)).length, 0));
     });
   }
