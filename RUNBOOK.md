@@ -131,8 +131,8 @@ types and sees, as AC1 below does. Do not name code ("`splitBill(2, 4)` returns 
    "checks": [{"criterion_id": "AC3", "target": "result", "path": "/stderr", "op": "equals", "value": "todo: no task #9\n"},
               {"criterion_id": "AC3", "target": "calls", "path": "/resources/todo-store-save", "op": "equals", "value": 0}]}]}
 ```
-- Each criterion needs at least one exact check: `equals`, `not_equals`, `one_of` or `count`. Paths: section 8.
-- The `input` must match the `input_schema`. An error step has `"expected_error": "unknown-sku"` and a check on `error` `/code`.
+- Each criterion needs at least one exact check: `equals`, `not_equals`, `one_of`, `count`, `at_least`, `at_most`, `not_contains`, `all_in` or `equals_ignore_case` (or HTML `exists`, section 20). Paths and operations: section 8.
+- The `input` must match the `input_schema`. Each step requires `step_id`, `entry_path`, `operation`, `input` and `checks`, with optional `expected_error`, `simulation_overrides` (section 21) and `model`. An error step has `"expected_error": "unknown-sku"` and a check on `error` `/code`.
 - Check facts, not values that the AI picks freely (wording that the story does not fix, generated IDs).
 - `context` is almost always `[]`. It gives one prompt extra text files to read, in this test only. A file linked in a
   prompt's `## Dependencies` is eligible for that prompt's context, subject to the route's selection below. Link shared data there. Each row is exactly
@@ -321,6 +321,28 @@ replay tests.
 | `world` | a JSON pointer into the saved data after the step (section 5) | `/stamps/sam` equals 11 |
 | `calls` | `/resources/<node>-<resource>-<operation>`: uses of that resource operation in this step | `/resources/todo-store-save` equals 0 |
 | `calls` | `/internal/<node>`: calls to that prompt in this step | `/internal/pricing` equals 1 |
+
+**Check operations (`op`):**
+
+| `op` | Allowed `target` | Required fields & meaning | Counts as exact coverage? |
+|---|---|---|---|
+| `equals` | `result`, `world`, `calls`, `error` | `"value"`: exact JSON match | Yes |
+| `not_equals` | `result`, `world`, `calls`, `error` | `"value"`: value is present and not equal to `"value"` | Yes |
+| `one_of` | `result`, `world`, `calls`, `error` | `"value"`: nonempty list of at most 32 distinct JSON scalars (`null`, string, boolean, int or finite float) | Yes |
+| `count` | `result`, `world`, `calls`, `error` | `"value"`: nonnegative integer length of string, array or object (on `calls`, `/internal` or `/resources` counts distinct targets) | Yes |
+| `at_least`, `at_most` | `result`, `world` | `"measure": "value"` with a finite number `"value"`, or `"measure": "length"` with a nonnegative integer `"value"` (string code points, array items or object keys) | Yes |
+| `not_contains` | `result`, `world` | `"value"`: nonempty string that does not appear in the target string (no `"measure"`) | Yes |
+| `all_in` | `result`, `world` | `"value"`: nonempty list of at most 32 distinct JSON scalars; every item of the target array must match one (empty array passes; no `"measure"`) | Yes |
+| `equals_ignore_case` | `result`, `world` | `"value"`: string compared with Unicode case folding without trimming (no `"measure"`) | Yes |
+| `exists` | `result`, `world`, `calls`, `error` | Optional boolean `"value"` (default `true`) | Only with `"html"` (section 20) |
+| `contains` | `result`, `world` | `"value"`: nonempty substring in the target string | No (supplemental only) |
+
+Example bounded length check (`at_most`) and set check (`all_in`), plus optional `"json_path"` (an RFC 6901 pointer into a JSON-text string at `"path"` on `result` or `world`):
+```json
+{"criterion_id": "AC1", "target": "result", "path": "/title", "op": "at_most", "measure": "length", "value": 20}
+{"criterion_id": "AC2", "target": "result", "path": "/score", "op": "at_least", "measure": "value", "value": 10}
+{"criterion_id": "AC3", "target": "result", "path": "/tags", "op": "all_in", "value": ["alpha", "beta", "gamma"]}
+```
 
 A **node** is one prompt operation in the program of the step. Its name is the prompt file name without `.prompt.md`
 (`todo`, `pricing`, `orders_api`). But when the step reaches 2 or more operations of one prompt, each of them is the
@@ -1342,6 +1364,35 @@ I can look up the same item twice and see each supplied reply.
   "steps": [
     {"step_id": "first", "entry_path": "prompts/varying-port.prompt.md", "operation": "lookup", "input": {"id": "book-7"}, "checks": [{"criterion_id": "AC1", "target": "result", "path": "/label", "op": "equals", "value": "Available"}], "model": "gpt-6.1-sol"},
     {"step_id": "second", "entry_path": "prompts/varying-port.prompt.md", "operation": "lookup", "input": {"id": "book-7"}, "checks": [{"criterion_id": "AC1", "target": "result", "path": "/label", "op": "equals", "value": "Reserved"}], "model": "gpt-6.1-sol"}
+  ]
+}
+```
+
+### Override an in-program peer for a failure step
+
+When another prompt in the repository implements a declared port or HTTP operation, the interpreter binds calls to that peer prompt automatically. For an outside port whose reply varies across calls or steps, use top-level `fixture.lookup` with `call_index` above. To simulate a peer failure on one step while other steps still call the real peer prompt, set optional `simulation_overrides` on that step (never `simulation` on a step) to a list of override rows. Each row has exact keys `operation`, `criterion_id`, `failure_quote`, `reason` and `binding`: `criterion_id` must be checked in that step, `failure_quote` must quote an explicit non-negated failure phrase from that criterion's text (such as `"peer is unavailable"`, `"timeout"`, `"offline"` or `"failed"`), and `binding` uses `port.write` or `fixture.lookup` validated against `initial_world`.
+
+```json
+{
+  "step_id": "peer-down",
+  "entry_path": "prompts/service.prompt.md",
+  "operation": "resolveItem",
+  "input": {"id": "item-7"},
+  "simulation_overrides": [
+    {
+      "operation": "peer.lookup",
+      "criterion_id": "AC1",
+      "failure_quote": "peer is unavailable",
+      "reason": "Simulate unavailable peer catalog returning ok: false.",
+      "binding": {
+        "action": "port.write",
+        "world_pointer": "/peer_requests",
+        "result_template": {"ok": false, "label": ""}
+      }
+    }
+  ],
+  "checks": [
+    {"criterion_id": "AC1", "target": "result", "path": "/label", "op": "equals", "value": "Fallback"}
   ]
 }
 ```
