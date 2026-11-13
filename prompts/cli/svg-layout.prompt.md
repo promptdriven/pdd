@@ -21,13 +21,16 @@ Report all three kinds of disagreement, identifying the prompt, drawing and part
 | Drawing label absent from prompt | A visible nonnumeric label is never mentioned in the prompt prose. Match complete normalized words/phrases, not arbitrary substrings. Pure numeric sample values remain dynamic content for this advisory. |
 | Drawing region layout unspecified | A visible stable id is not acknowledged as an id/region or named layout part in the prose. Generic data-field mentions do not specify that field's box, bar or container. A label such as SCORE with data prose saying “score” may match as text while the `score` region still needs a layout declaration. |
 
-Explicit prose such as `region score`, `id="score"`, or “score box” acknowledges the corresponding named region. A backticked id within `## Appearance` also acknowledges it. Do not count an interface schema property or a general state-field declaration as a layout mapping. Retain explicit behavioral control-id declarations anywhere in the prose. Matching is conservative local advice: name uncertain/unmatched parts; do not infer a semantic equivalence or change the prompt/drawing automatically. Report source-read/parse limitations as warnings. This is a vocabulary and part check, not an AI assessment of meaning or a geometry check.
+Explicit prose such as `region score`, `id="score"`, or “score box” acknowledges the corresponding named region. A backticked id within `## Appearance` also acknowledges it. Do not count an interface schema property or a general state-field declaration as a layout mapping. Retain explicit behavioral control-id declarations anywhere in the prose; strip non-label HTML/CSS attributes (`class`, `type`, `name`, `role`, `style`, `aria-*`, `data-*`) and `.class` tokens before scanning control sentences so stylesheet class declarations never invent missing control labels or ids. Matching is conservative local advice: name uncertain/unmatched parts; do not infer a semantic equivalence or change the prompt/drawing automatically. Report source-read/parse limitations as warnings. This is a vocabulary and part check, not an AI assessment of meaning or a geometry check.
+
+Also inspect workspace-allowed `prompt-runtime.app-map.v1` app maps (`(^|/)app-map\.json$` in `files` plus string entries of `"app_maps"` in workspace-allowed `test/**/*.json` and `tests/**/*.json` files) and delegate stylesheet and CSS-class checks for inspected prompts to [screen design check](screen-design-check.prompt.md). Read each referenced stylesheet safely inside `root` without following symlinks, passing any read/escape/symlink failure as that stylesheet's `error` record rather than throwing. Merge its returned warnings into the deduplicated sorted output.
 
 Warnings start `Warning: SVG layout`, are deduplicated and ordered by prompt path, drawing path and part. A 2048-like screen with four direction buttons only in prose and SCORE/SEED boxes and a READY bar only in the drawing must warn about directions, READY and the unspecified score/seed layout regions, even when prose mentions score and seed data.
 
 ## Dependencies
 
 - [Workspace authority](runtime-workspace.prompt.md): required generation/runtime/verification context for opt-in permission.
+- [Screen design check](screen-design-check.prompt.md): required generation/runtime/verification context for HTML screen stylesheet and CSS-class warnings.
 
 - [Screen rules](../../RUNBOOK.md#13-give-your-app-a-screen-app-map): authoring and verification context.
 
