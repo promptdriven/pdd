@@ -271,3 +271,132 @@ test('FORMAL shared-contract-drift: all 36 required/enum permutations retain mul
     assert.equal(compareCopies([{path,text:prompt(copy)}],literalRecords).matches[0].kind,values.join('')==='abc'?'exact':'near');
   }
 });
+
+test('FORMAL shared-contract-copy-precedence: all 576 parent/addressable/nested-md/literal/near combinations', () => {
+  const variantSchema = kind => {
+    if (kind === 'two-fields') return { type:'object', properties:{ a:{type:'string'}, b:{type:'string'} }, required:['a','b'], additionalProperties:false };
+    if (kind === 'three-v1') return { type:'object', properties:{ a:{type:'string',enum:['v1']}, b:{type:'string'}, c:{type:'string'} }, required:['a','b','c'], additionalProperties:false };
+    const tag = kind === 'four-v1' ? 'v1' : kind === 'four-v2' ? 'v2' : 'v3';
+    return { type:'object', properties:{ a:{type:'string',enum:[tag]}, b:{type:'string'}, c:{type:'string'}, d:{type:'string'} }, required:['a','b','c','d'], additionalProperties:false };
+  };
+  const wrapParent = child => ({
+    type:'object',
+    properties:{ p1:{type:'string'}, p2:{type:'string'}, p3:{type:'string'}, child },
+    required:['p1','p2','p3','child'],
+    additionalProperties:false,
+  });
+  const mdSection = (heading, value) => `### ${heading}\n\`\`\`json\n${JSON.stringify(value)}\n\`\`\`\n`;
+  const fourV1 = variantSchema('four-v1'), fourV3 = variantSchema('four-v3');
+
+  for (const parentMode of ['standalone', 'unmatched-parent', 'exact-parent', 'ambiguous-exact-parent'])
+  for (const copyVariant of ['two-fields', 'four-v1', 'four-v2', 'three-v1'])
+  for (const addressableExactCount of [0, 1, 2])
+  for (const nestedMdMode of ['none', 'matches-v1', 'matches-v1-twice', 'literal-only'])
+  for (const jsonNearCount of [0, 1, 2]) {
+    const copy = variantSchema(copyVariant);
+    const rootSchema = parentMode === 'standalone' ? copy : wrapParent(copy);
+    const consumer = { path, text: prompt(rootSchema) };
+    const contractFiles = [];
+
+    if (parentMode === 'exact-parent' || parentMode === 'ambiguous-exact-parent') {
+      contractFiles.push({ path: 'contracts/parent1.md', text: mdSection('parent_row', wrapParent(copy)) });
+      if (parentMode === 'ambiguous-exact-parent') contractFiles.push({ path: 'contracts/parent2.md', text: mdSection('parent_row', wrapParent(copy)) });
+    }
+    for (let i = 1; i <= addressableExactCount; i++) {
+      contractFiles.push({ path: `contracts/exact${i}.md`, text: mdSection('row', copy) });
+    }
+    if (nestedMdMode === 'matches-v1' || nestedMdMode === 'matches-v1-twice') {
+      const holder = {
+        type:'object',
+        properties:{ h1:{type:'string'}, h2:{type:'string'}, h3:{type:'string'}, installs:{ type:'array', items:fourV1 } },
+        required:['h1','h2','h3','installs'],
+        additionalProperties:false,
+      };
+      contractFiles.push({ path: 'contracts/holder1.md', text: mdSection('holder_row', holder) });
+      if (nestedMdMode === 'matches-v1-twice') contractFiles.push({ path: 'contracts/holder2.md', text: mdSection('holder_row', holder) });
+    } else if (nestedMdMode === 'literal-only') {
+      const literalHolder = {
+        type:'object',
+        properties:{
+          l1:{ type:'string', default:copy, examples:[copy], const:copy, enum:[copy] },
+          l2:{ type:'string' },
+          l3:{ type:'string' },
+        },
+        required:['l1','l2','l3'],
+        additionalProperties:false,
+      };
+      contractFiles.push({ path: 'contracts/literal.md', text: mdSection('literal_row', literalHolder) });
+    }
+    for (let i = 1; i <= jsonNearCount; i++) {
+      contractFiles.push({ path: `contracts/near${i}.json`, text: JSON.stringify({ jobs:{ type:'array', items:fourV3 } }) });
+    }
+
+    const catalog = catalogRecords(contractFiles);
+    assert.deepEqual(catalog.warnings, []);
+    const records = [
+      ...catalog.records,
+      ...(nestedMdMode === 'literal-only'
+        ? [{ path:'contracts/seed.json', target:'contracts/seed.json#', value_json:JSON.stringify({ kv:{ sample:copy }, items:copy }) }]
+        : []),
+    ];
+    const got = compareCopies([consumer], records);
+    const plan = planSync([consumer], got.matches);
+    const label = JSON.stringify({ parentMode, copyVariant, addressableExactCount, nestedMdMode, jsonNearCount });
+
+    if (parentMode === 'exact-parent') {
+      assert.deepEqual(got, {
+        matches: [{ path, source_pointer:'/entries/0/input_schema', target:'contracts/parent1.md#parent_row', kind:'exact', differences:[] }],
+        warnings: [],
+      }, label);
+      assert.equal(plan.edits.length, 1, label);
+      assert.deepEqual(body(plan.edits[0].after).entries[0].input_schema, { $contract:'contracts/parent1.md#parent_row' }, label);
+      continue;
+    }
+    if (parentMode === 'ambiguous-exact-parent') {
+      assert.deepEqual(got.matches, [], label);
+      assert.deepEqual(got.warnings, [
+        `${path} /entries/0/input_schema: ambiguous contract copies (contracts/parent1.md#parent_row, contracts/parent2.md#parent_row)`,
+      ], label);
+      assert.deepEqual(plan.edits, [], label);
+      continue;
+    }
+
+    const childPointer = parentMode === 'standalone' ? '/entries/0/input_schema' : '/entries/0/input_schema/properties/child';
+    if (copyVariant === 'two-fields') {
+      assert.deepEqual(got, { matches:[], warnings:[] }, label);
+      assert.deepEqual(plan.edits, [], label);
+    } else if (addressableExactCount === 1) {
+      assert.deepEqual(got, {
+        matches: [{ path, source_pointer:childPointer, target:'contracts/exact1.md#row', kind:'exact', differences:[] }],
+        warnings: [],
+      }, label);
+      assert.equal(plan.edits.length, 1, label);
+    } else if (addressableExactCount > 1) {
+      assert.deepEqual(got.matches, [], label);
+      assert.deepEqual(got.warnings, [
+        `${path} ${childPointer}: ambiguous contract copies (contracts/exact1.md#row, contracts/exact2.md#row)`,
+      ], label);
+      assert.deepEqual(plan.edits, [], label);
+    } else if ((nestedMdMode === 'matches-v1' || nestedMdMode === 'matches-v1-twice') && copyVariant === 'four-v1') {
+      assert.deepEqual(got, { matches:[], warnings:[] }, label);
+      assert.deepEqual(plan.edits, [], label);
+    } else if (jsonNearCount === 1) {
+      assert.equal(got.warnings.length, 0, label);
+      assert.equal(got.matches.length, 1, label);
+      assert.equal(got.matches[0].source_pointer, childPointer, label);
+      assert.equal(got.matches[0].target, 'contracts/near1.json#/jobs/items', label);
+      assert.equal(got.matches[0].kind, 'near', label);
+      assert.ok(got.matches[0].differences.length > 0, label);
+      assert.equal(plan.edits.length, 1, label);
+    } else if (jsonNearCount > 1) {
+      assert.deepEqual(got.matches, [], label);
+      assert.deepEqual(got.warnings, [
+        `${path} ${childPointer}: ambiguous contract copies (contracts/near1.json#/jobs/items, contracts/near2.json#/jobs/items)`,
+      ], label);
+      assert.deepEqual(plan.edits, [], label);
+    } else {
+      assert.deepEqual(got, { matches:[], warnings:[] }, label);
+      assert.deepEqual(plan.edits, [], label);
+    }
+  }
+});

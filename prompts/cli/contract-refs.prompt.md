@@ -203,8 +203,31 @@ are equal, as are `0`, `-0`, `0.0` and `0e0`. Distinct exact values, including
 `9007199254740993` and `9007199254740992`, must compare different even when binary
 rounding would collapse them. A differing candidate is drift, including changed
 nested types with the same field set; an equal candidate needs no drift warning.
-Prefer a unique exact candidate; otherwise require exactly one candidate. Multiple
-candidates produce advice and no selected match.
+Top-level object schemas (`type: "object"` with object `properties`, excluding
+`$seed` worlds) in `records` are addressable candidates. Also collect nested
+object schemas (`type: "object"` with object `properties`) at schema positions
+inside `records` — descending from schema roots (`type: "object"` `properties`
+values, `type: "array"` `items`, `oneOf` variants, and any interface
+`entries/*/{input_schema,result_schema}` or
+`resources/*/operations/*/{arguments_schema,result_schema}`), never traversing
+shared seed worlds, non-schema root properties or literal annotations
+(`default`, `examples`, `enum`, `const`) — because Markdown contract sub-schemas
+have no addressable `$contract` pointer of their own. At each inspected inline
+object schema with at least three properties, evaluate addressable candidates
+first: when one or more addressable `exact` candidates exist, select the unique
+`exact` match or warn `ambiguous contract copies` when multiple addressable
+`exact` candidates exist, and do not descend into child schema positions inside
+that `exact`-matched inline schema so its children are neither reported
+redundantly nor paired as `near` drift against other records. When no
+addressable `exact` candidate exists and the inline schema is semantically equal
+to any collected nested contract object schema, treat it as already matching a
+shared contract sub-schema: emit no `near` match and no ambiguity warning for
+it, and do not descend into its child schema positions. Otherwise evaluate
+eligible differing (`near`) addressable candidates: select a unique `near`
+candidate, or warn `ambiguous contract copies` with no selected match when
+multiple `near` candidates exist, and continue descending into child schema
+positions. Inline schemas that are not object schemas or have fewer than three
+properties continue descending into their child schema positions.
 
 Module function `planSync(sources, matches)` returns `{edits,warnings}`; an edit is
 `{path,before,after}`. Replace selected exact/near inline schemas by `$contract`
@@ -237,7 +260,7 @@ These helpers have no outside effects. Reuse this module's existing bounded exac
 
 ```json
 {
-  "status": "approved", "prose_sha256": "6bcc602c533997ea8c6a5e7640473947f5305f599f165922502ac21a2b6de041",
+  "status": "draft", "prose_sha256": "6bac5664ce9cfe34205a251c6940665816759e65fe976459a028658c0b7d11bc",
   "entries": [{
     "operation": "expandSource",
     "input_schema": {

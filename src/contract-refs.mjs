@@ -1,4 +1,4 @@
-// Generated from prompts/cli/contract-refs.prompt.md (sha256: fd6ff9d2bcdb6e45cd9010f8822c3dae7cf430bd59faeed66cfdbf83803ce5dc).
+// Generated from prompts/cli/contract-refs.prompt.md (sha256: b2b82a78ad7cdd219acf40c02a7861776391e575a65de87f5ce9533ed13f3957).
 // Numbers remain tokens until serialization, including values outside binary64.
 class JsonNumber { constructor(text) { this.text = text; Object.freeze(this); } }
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value) && !(value instanceof JsonNumber);
@@ -376,9 +376,27 @@ function differences(a,b,pointer = '', root = true, schema = true, unordered = f
   return encode(a) === encode(b) ? [] : [`${pointer}: ${encode(a)} -> ${encode(b)}`];
 }
 export function compareCopies(sources, records) {
-  const matches = [], warnings = [], candidates = records.flatMap(record => {
-    try { const value = parse(record.value_json); return object(value) && value.type==='object' && object(value.properties) ? [{...record,value}] : []; } catch { return []; }
-  });
+  const matches = [], warnings = [], candidates = [], nested = new Map();
+  const collectSchema = (value, top = false) => {
+    if (!object(value) || Object.hasOwn(value, '$contract') || Object.hasOwn(value, '$seed')) return;
+    if (value.type === 'object' && object(value.properties)) {
+      if (!top && Object.keys(value.properties).length >= 3) {
+        const signature = JSON.stringify(Object.keys(value.properties).sort());
+        nested.set(signature, [...(nested.get(signature) ?? []), value]);
+      }
+      for (const key of Object.keys(value.properties)) collectSchema(value.properties[key]);
+    }
+    if (value.type === 'array' && object(value.items)) collectSchema(value.items);
+    if (Array.isArray(value.oneOf)) for (const variant of value.oneOf) collectSchema(variant);
+  };
+  for (const record of records) {
+    let value;
+    try { value = parse(record.value_json); } catch { continue; }
+    if (!object(value) || Object.hasOwn(value, '$seed')) continue;
+    if (value.type === 'object' && object(value.properties)) candidates.push({ ...record, value });
+    collectSchema(value, true);
+    if (Array.isArray(value.entries) || Array.isArray(value.resources)) schemaSlots(value, slot => { collectSchema(slot); return slot; });
+  }
   for (const {path,text} of sources) {
     const blocks = [...text.matchAll(INTERFACE)];
     if (blocks.length !== 1) continue;
@@ -391,9 +409,12 @@ export function compareCopies(sources, records) {
           const other = new Set(Object.keys(record.value.properties));
           return [...keys].filter(key => !other.has(key)).length + [...other].filter(key => !keys.has(key)).length <= 1;
         }).map(record => ({ record, differences: differences(value,record.value) })).filter(option => !option.differences.length || Object.keys(option.record.value.properties).length >= 4);
-        const exact = options.filter(option => !option.differences.length), chosen = exact.length ? exact : options;
-        if (chosen.length === 1) matches.push({ path, source_pointer:pointer, target:chosen[0].record.target, kind:chosen[0].differences.length ? 'near' : 'exact', differences:chosen[0].differences });
-        else if (chosen.length > 1) warnings.push(`${path} ${pointer}: ambiguous contract copies (${chosen.map(option => option.record.target).join(', ')})`);
+        const exact = options.filter(option => !option.differences.length);
+        if (exact.length === 1) { matches.push({ path, source_pointer:pointer, target:exact[0].record.target, kind:'exact', differences:[] }); return value; }
+        if (exact.length > 1) { warnings.push(`${path} ${pointer}: ambiguous contract copies (${exact.map(option => option.record.target).join(', ')})`); return value; }
+        if ((nested.get(JSON.stringify([...keys].sort())) ?? []).some(schema => !differences(value,schema).length)) return value;
+        if (options.length === 1) matches.push({ path, source_pointer:pointer, target:options[0].record.target, kind:'near', differences:options[0].differences });
+        else if (options.length > 1) warnings.push(`${path} ${pointer}: ambiguous contract copies (${options.map(option => option.record.target).join(', ')})`);
       }
       return schemaChildren(value,pointer,visit);
     };
