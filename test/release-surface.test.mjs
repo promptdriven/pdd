@@ -32,7 +32,9 @@ test('RELEASE12: launcher prompt describes its actual POSIX shell shebang and No
 
 test('RELEASE13: Runtime guidance binds factories and supported resources without claiming native effects', () => {
   const boundaries=read('docs/runtime-boundaries.md');
-  for(const name of ['prompt-runtime.interface.v2','instance_types','copy_out','post_schema','port.write','sql.execute','blob.read','blob.write','blob.stat','compute.hash_json','compute.hash_utf8']) assert.ok(boundaries.includes(name),name);
+  for(const name of ['prompt-runtime.interface.v2','instance_types','copy_out','post_schema','port.write','sql.execute','blob.read','blob.write','blob.stat','compute.hash_json','compute.hash_utf8','compute.eval_exact','compute.divmod_exact','compute.decimal','compute.date_add','compute.date_diff']) assert.ok(boundaries.includes(name),name);
+  assert.equal(read('RUNBOOK.md'),read('skills/pdd-prompting/RUNBOOK.md'));
+  assert.match(read('RUNBOOK.md'),/compute\.eval_exact/);
   assert.match(boundaries,/factory.*method/s);
   assert.match(boundaries,/Never invent a fake API only for a check/);
   for(const word of ['Keyed cryptography','signatures','process','socket','Git','DOM typing','paste','live effects','unbound']) assert.ok(boundaries.includes(word),word);

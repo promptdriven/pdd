@@ -44,6 +44,7 @@ Story and test. See [RUNBOOK §5](../RUNBOOK.md#5-saved-data) for saved data and
 | `sql.execute` | Bounded SQL in a real in-memory SQLite connection, including transactions, commit and rollback. It does not open the application's disk database. |
 | `blob.read`, `blob.write`, `blob.stat` | File contents and metadata in a path-keyed scenario world; no host file is opened. |
 | `compute.hash_json`, `compute.hash_utf8` | SHA-256 of canonical JSON (`value`) or exact UTF-8 bytes (`text`). These are deterministic compute operations. |
+| `compute.eval_exact`, `compute.divmod_exact`, `compute.decimal`, `compute.expression`, `compute.date_add`, `compute.date_diff`, `compute.periods` | Deterministic exact `BigInt`, rational, decimal and ISO calendar math (`action: "compute"`), with explicit rounding modes (`floor`, `ceil`, `trunc`, `half_up`, `half_even`) and zero live external effects. Native modules that compute internally (`BigInt`, Python `int`/`Fraction`/`Decimal`) keep their native signature with no injected `compute` parameter. |
 | HTTP fixtures | Exact argument/result cases for declared HTTP operations, without a live network request. |
 
 Keyed cryptography and signatures, process and socket lifecycle, Git effects, DOM typing
