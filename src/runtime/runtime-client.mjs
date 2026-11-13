@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 21f5701949c4c7f3a0b2f576649aed105afd2b3c2f37e335973cca9be73e0b37).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: c0a50c35f8122a1e4ddd953f50a60c88b5ba21b1be46cde48ce2988e1a5bf371).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
@@ -3683,8 +3683,19 @@ function declarationCacheReason(capture, story, tests) {
   for (const path of tests) {
     let doc; try { doc = JSON.parse(sources.get(path)); } catch { return 'runs again: resource declarations unavailable'; }
     // A step override is part of that step's world, not evidence for other steps.
-    const bindings = [doc.simulation ?? {}, ...(doc.steps ?? []).map(step => ({ ...(doc.simulation ?? {}), ...(step.simulation_overrides ?? {}) }))];
-    for (const simulation of bindings) for (const [operation, binding] of Object.entries(simulation)) {
+    const stepSimulation = (base, overrides) => {
+      const result = { ...(base ?? {}) };
+      if (Array.isArray(overrides)) {
+        for (const row of overrides) {
+          const name = isObject(row) && typeof row.operation === 'string' && row.operation.trim() ? row.operation : 'simulation_overrides';
+          result[name] = isObject(row) && isObject(row.binding) ? row.binding : null;
+        }
+      } else if (isObject(overrides)) Object.assign(result, overrides);
+      return result;
+    };
+    const steps = Array.isArray(doc.steps) ? doc.steps : [];
+    const bindings = steps.length ? steps.map(step => stepSimulation(doc.simulation, step?.simulation_overrides)) : [doc.simulation ?? {}];
+    for (const simulation of [doc.simulation ?? {}, ...bindings]) for (const [operation, binding] of Object.entries(simulation)) {
       if (!deterministic(binding)) return fake(operation.split('.')[0]);
     }
     for (const prompt of prompts) for (const resource of prompt.resources ?? []) {
