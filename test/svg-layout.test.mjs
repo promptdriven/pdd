@@ -121,11 +121,89 @@ test('hosted lint merges advisory warnings before authentication and preserves o
 
 test('CLI rejects local/screen combinations before auth, browser and runtime effects', async t => {
   const cwd = temp(t);
-  for (const argv of [ ['test','--local'], ['test','--lint','--local','--details'], ['test','--drawing','a.ui.svg'], ['test','--screen','http://example.test'], ['test','--screen','http://example.test','--drawing','a.ui.svg','story'], ['test','--screen','http://example.test','--drawing','a.ui.svg','--lint'] ]) {
+  for (const argv of [ ['test','--local'], ['test','--lint','--local','--details'], ['test','--drawing','a.ui.svg'], ['test','--screen','http://example.test'], ['test','--look'], ['test','--journeys','--look'], ['test','--screen','http://example.test','--look'], ['test','--drawing','a.ui.svg','--look'], ['test','--screen','http://example.test','--drawing','a.ui.svg','story'], ['test','--screen','http://example.test','--drawing','a.ui.svg','--lint'], ['test','--screen','http://example.test','--drawing','a.ui.svg','--look','story'], ['test','--screen','http://example.test','--drawing','a.ui.svg','--look','--lint'] ]) {
     const plan = parseArgv(argv), p = portsFor({ PDD_RUNTIME_URL: 'invalid' }, { gh: () => assert.fail('No auth'), fetch: () => assert.fail('No network'), screenBrowser: () => assert.fail('No browser') }).ports;
     assert.equal(await runCheck({ cwd, words: [...plan.operands], options: { ...plan.options } }, p), 2, JSON.stringify(argv));
     assert.equal(p.stdout.text, '');
   }
+});
+
+test('HTML screen with .ui.svg warns on missing stylesheet or missing CSS classes in local lint, hosted lint and pdd test', async t => {
+  const ledgerSvg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 220"><rect width="420" height="220" fill="#0f172a"/><g id="balance-card"><rect x="16" y="48" width="388" height="68" fill="#1e293b"/><text x="32" y="88" fill="#f8fafc">BALANCE</text></g><g id="add-expense"><rect x="16" y="132" width="160" height="44" fill="#0284c7"/><text x="36" y="160" fill="#ffffff">Add Expense</text></g></svg>';
+  const draftInterface = name => `<details><summary>Runtime interface</summary>\n\n\`\`\`json\n${JSON.stringify({
+    status: 'draft',
+    prose_sha256: '',
+    entries: [{
+      operation: name,
+      input_schema: { type: 'object', properties: {}, required: [], additionalProperties: false },
+      result_schema: { type: 'object', properties: { html: { type: 'string' } }, required: ['html'], additionalProperties: false },
+      errors: [],
+    }],
+    calls: [],
+    resources: [],
+    limits: { max_steps: 4, max_model_calls: 2 },
+    conventions: [],
+  }, null, 2)}\n\`\`\`\n</details>\n`;
+  const baseProse = `# Ledger Screen\n\n## Appearance\n\n![Ledger](views/ledger__stacked.ui.svg)\n\nRender \`balance-card\` with BALANCE and Button "Add Expense" with id="add-expense".\n\n## Dependencies\n\nNone.\n\n${draftInterface('renderLedger')}`;
+  const notesProse = `# Notes Screen\n\nRender notes HTML without any drawing.\n\n## Dependencies\n\nNone.\n\n${draftInterface('renderNotes')}`;
+  const makeMap = stylesheets => JSON.stringify({
+    schema_version: 'prompt-runtime.app-map.v1',
+    name: 'Pocket Ledger',
+    default_screen: 'ledger',
+    stylesheets,
+    screens: [
+      { id: 'ledger', title: 'Ledger', source: 'operation', prompt_path: 'prompts/ledger_screen.prompt.md', operation: 'renderLedger', format: 'html', stylesheets: [] },
+      { id: 'notes', title: 'Notes', source: 'operation', prompt_path: 'prompts/notes_screen.prompt.md', operation: 'renderNotes', format: 'html', stylesheets: [] },
+      { id: 'menu', title: 'Menu', source: 'mockup', prompt_path: 'prompts/place_order.prompt.md', format: 'svg', svg_path: 'prompts/views/ledger__stacked.ui.svg', stylesheets: [] },
+    ],
+  }, null, 2);
+
+  const setup = harbor(t, repo => {
+    mkdirSync(join(repo, 'prompts/views'), { recursive: true });
+    mkdirSync(join(repo, 'styles'), { recursive: true });
+    writeFileSync(join(repo, 'prompts/views/ledger__stacked.ui.svg'), ledgerSvg);
+    writeFileSync(join(repo, 'prompts/ledger_screen.prompt.md'), baseProse);
+    writeFileSync(join(repo, 'prompts/notes_screen.prompt.md'), notesProse);
+    writeFileSync(join(repo, 'app-map.json'), makeMap([]));
+    const scenario = JSON.parse(readFileSync(join(repo, 'tests/place-order.json'), 'utf8'));
+    writeFileSync(join(repo, 'tests/place-order.json'), JSON.stringify({ ...scenario, app_maps: ['app-map.json'], context: [...(scenario.context ?? []), 'prompts/ledger_screen.prompt.md', 'prompts/notes_screen.prompt.md'] }, null, 2));
+  });
+  const fillStdout = sink(), fillStderr = sink();
+  assert.equal(await runPdd(['test', '--fill-hash'], { cwd: setup.repo, env: { HOME: setup.home, PDD_STATE_DIR: setup.state }, stdout: fillStdout, stderr: fillStderr }), 0, fillStderr.text || fillStdout.text);
+
+  const expectedMissingSheet = 'Warning: SVG layout app-map.json -> prompts/ledger_screen.prompt.md: stylesheets: HTML screen "ledger" links prompts/views/ledger__stacked.ui.svg with no stylesheet in "stylesheets".';
+  const localPorts = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: 'invalid', PDD_STATE_DIR: setup.state }, { gh: () => assert.fail('No auth'), fetch: () => assert.fail('No network') }).ports;
+  assert.equal(await runCheck({ cwd: setup.repo, options: { '--lint': true, '--local': true, '--json': true } }, localPorts), 0, localPorts.stderr.text);
+  assert.deepEqual(JSON.parse(localPorts.stdout.text).warnings, [expectedMissingSheet]);
+
+  const fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
+  const lintPorts = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin }).ports;
+  assert.equal(await runCheck({ cwd: setup.repo, options: { '--lint': true, '--json': true } }, lintPorts), 0, lintPorts.stderr.text);
+  assert.deepEqual(JSON.parse(lintPorts.stdout.text).warnings, [expectedMissingSheet]);
+
+  const testPorts = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin }).ports;
+  assert.equal(await runCheck({ cwd: setup.repo, options: { '--json': true } }, testPorts), 0, testPorts.stderr.text);
+  assert.ok(JSON.parse(testPorts.stdout.text).warnings.includes(expectedMissingSheet), testPorts.stdout.text);
+
+  writeFileSync(join(setup.repo, 'styles/pocket.css'), '.ledger-card { background-color: #1e293b; }\n.btn-primary { background-color: #0284c7; }\n');
+  writeFileSync(join(setup.repo, 'app-map.json'), makeMap(['styles/pocket.css']));
+  const missingClass = lintSvgLayouts({ root: setup.repo, files: ['app-map.json', 'styles/pocket.css', 'prompts/ledger_screen.prompt.md', 'prompts/notes_screen.prompt.md', 'prompts/place_order.prompt.md', 'prompts/views/ledger__stacked.ui.svg'] });
+  assert.deepEqual(missingClass, [
+    'Warning: SVG layout prompts/ledger_screen.prompt.md -> styles/pocket.css: stylesheet classes: HTML screen "ledger" links prompts/views/ledger__stacked.ui.svg and names no CSS class from its stylesheet (for example .btn-primary).',
+  ]);
+
+  const styledProse = baseProse.replace(
+    'Render `balance-card` with BALANCE and Button "Add Expense" with id="add-expense".',
+    'Render `balance-card` with `.ledger-card` and BALANCE, and Button "Add Expense" with id="add-expense", class="btn-primary" and type="button".',
+  );
+  writeFileSync(join(setup.repo, 'prompts/ledger_screen.prompt.md'), styledProse);
+  const clean = lintSvgLayouts({ root: setup.repo, files: ['app-map.json', 'styles/pocket.css', 'prompts/ledger_screen.prompt.md', 'prompts/notes_screen.prompt.md', 'prompts/place_order.prompt.md', 'prompts/views/ledger__stacked.ui.svg'] });
+  assert.deepEqual(clean, []);
+
+  rmSync(join(setup.repo, 'styles/pocket.css'));
+  const missingFile = lintSvgLayouts({ root: setup.repo, files: ['app-map.json', 'prompts/ledger_screen.prompt.md', 'prompts/views/ledger__stacked.ui.svg'] });
+  assert.equal(missingFile.length, 1);
+  assert.match(missingFile[0], /app-map\.json -> styles\/pocket\.css: stylesheet:/);
 });
 
 test('lint ignores valid comments without reconstructing markup and warns on malformed comments', t => {
@@ -144,4 +222,57 @@ test('lint ignores valid comments without reconstructing markup and warns on mal
   assert.deepEqual(literal, []);
   const active = lintSvgLayouts(drawing(t, prose, '<svg><!-- harmless --><script>alert(1)</script></svg>'));
   assert.match(active[0], /unsafe/);
+});
+
+test('non-control status, explanation and negated quotes absent from SVG never warn as controls', t => {
+  const prose = [
+    '# Dialog',
+    '',
+    '## Appearance',
+    '',
+    '![Dialog](game.ui.svg)',
+    '',
+    'Alongside the "Confirm" button (`id="confirm"`), show status text "Changes stay local until confirmed."',
+    'Without controls enabled, explain "Read-only preview. Editing is locked."',
+    'No button triggers "Auto-publish" in this state.',
+    '`instructions` says "Enter confirms. Escape closes." Also explain "Drafts expire after 24 hours."'
+  ].join('\n');
+  assert.deepEqual(lintSvgLayouts(drawing(t, prose, '<svg xmlns="http://www.w3.org/2000/svg"><g id="confirm"><text>Confirm</text></g></svg>')), []);
+  assert.deepEqual(lintSvgLayouts(drawing(t, prose, '<svg xmlns="http://www.w3.org/2000/svg"></svg>')), [
+    'Warning: SVG layout game.prompt.md -> game.ui.svg: control "Confirm": prompt control absent from drawing.',
+    'Warning: SVG layout game.prompt.md -> game.ui.svg: control "confirm": prompt control absent from drawing.'
+  ]);
+});
+
+test('apostrophes, fenced HTML controls, raw HTML containers and non-control prose attributes stay bounded', t => {
+  const prose = [
+    '# Editor',
+    '',
+    '![Editor](game.ui.svg)',
+    '',
+    "Keep the requester's 'Retry' button visible when the screen's banner doesn't clear.",
+    'Render a button with class="chip primary", role="button", aria-busy=\'true\', data-testid="save-chip", and id="next-step" labeled "Next".',
+    '<div id="card-shell" class="panel">',
+    '```html',
+    '<div id="inner-box" class="stack">',
+    '  <button id="apply" value="apply-now">Apply &amp; close</button>',
+    '  <input type="hidden" id="csrf" name="csrf" value="secret-token"/>',
+    '  <input type="reset" id="clear-all" name="clear-name" value="Clear"/>',
+    '  <textarea id="notes" name="notes-body" placeholder="Write notes">Sample draft</textarea>',
+    '</div>',
+    '```',
+    '</div>'
+  ].join('\n');
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg"><g id="card-shell"><g id="apply"><text>Apply &amp; close</text></g></g></svg>';
+  assert.deepEqual(lintSvgLayouts(drawing(t, prose, svg)), [
+    'Warning: SVG layout game.prompt.md -> game.ui.svg: control "Clear": prompt control absent from drawing.',
+    'Warning: SVG layout game.prompt.md -> game.ui.svg: control "Next": prompt control absent from drawing.',
+    'Warning: SVG layout game.prompt.md -> game.ui.svg: control "Retry": prompt control absent from drawing.',
+    'Warning: SVG layout game.prompt.md -> game.ui.svg: control "apply-now": prompt control absent from drawing.',
+    'Warning: SVG layout game.prompt.md -> game.ui.svg: control "clear-all": prompt control absent from drawing.',
+    'Warning: SVG layout game.prompt.md -> game.ui.svg: control "clear-name": prompt control absent from drawing.',
+    'Warning: SVG layout game.prompt.md -> game.ui.svg: control "next-step": prompt control absent from drawing.',
+    'Warning: SVG layout game.prompt.md -> game.ui.svg: control "notes": prompt control absent from drawing.',
+    'Warning: SVG layout game.prompt.md -> game.ui.svg: control "notes-body": prompt control absent from drawing.'
+  ]);
 });

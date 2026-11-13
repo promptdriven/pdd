@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: cde4f3261a63931d5156780b6cbf56668a1d6f241ee334b51ee12105a5dec5ee).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: b677446ac7d727e6ba39cf05c3271fd348d6ce4b4b5bd980e3cd5217b0cd9483).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
@@ -672,6 +672,18 @@ export async function resendableStoryChecks({ root, since = 0 }, ports = {}) {
     maintenance: neverSent.some(story => latest.get(story).notes.some(note => /maintenance/i.test(note))) };
 }
 
+function validGithubIdentity(record) {
+  return isObject(record)
+    && typeof record.login === 'string' && record.login.length > 0 && !/\s/.test(record.login)
+    && typeof record.user_id === 'string' && /^[1-9]\d*$/.test(record.user_id)
+    && typeof record.token_sha256 === 'string' && /^[a-f0-9]{64}$/.test(record.token_sha256);
+}
+function validGithubUser(record) {
+  return validGithubIdentity(record)
+    && typeof record.cached_at === 'string' && Number.isFinite(Date.parse(record.cached_at));
+}
+const isGithubRateLimit = text => typeof text === 'string' && /rate limit|secondary rate limit|abuse detection/i.test(text);
+
 class StateStore {
   constructor(dir) { this.dir = dir; this.secrets = []; }
   folder(...parts) {
@@ -688,6 +700,54 @@ class StateStore {
     chmodSync(temporary, 0o600); renameSync(temporary, path);
   }
   read(path) { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; } }
+  readGithubUser() {
+    try {
+      if (statOrNull(this.dir)?.isSymbolicLink()) return null;
+      const path = join(this.dir, 'github-user.json'), stat = statOrNull(path);
+      if (!stat?.isFile() || stat.isSymbolicLink()) return null;
+      const record = JSON.parse(readFileSync(path, 'utf8'));
+      return validGithubUser(record) ? { login: record.login, user_id: record.user_id, cached_at: record.cached_at, token_sha256: record.token_sha256 } : null;
+    } catch { return null; }
+  }
+  readMatchingGithubIdentity(tokenSha256) {
+    try {
+      if (statOrNull(this.dir)?.isSymbolicLink()) return null;
+      const path = join(this.dir, 'github-user.json'), stat = statOrNull(path);
+      if (!stat?.isFile() || stat.isSymbolicLink()) return null;
+      const record = JSON.parse(readFileSync(path, 'utf8'));
+      return validGithubIdentity(record) && record.token_sha256 === tokenSha256
+        ? { login: record.login, user_id: record.user_id, token_sha256: record.token_sha256 }
+        : null;
+    } catch { return null; }
+  }
+  writeGithubUser(record) {
+    if (!validGithubUser(record)) return false;
+    let folder;
+    try {
+      if (statOrNull(this.dir)?.isSymbolicLink()) return false;
+      folder = this.folder();
+    } catch { return false; }
+    const path = join(folder, 'github-user.json');
+    if (statOrNull(path)?.isSymbolicLink()) return false;
+    const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
+    let text = `${JSON.stringify({ login: record.login, user_id: record.user_id, cached_at: record.cached_at, token_sha256: record.token_sha256 }, null, 2)}\n`;
+    for (const secret of this.secrets) if (secret) text = text.split(secret).join('[secret]');
+    try {
+      const fd = openSync(temporary, 'wx', 0o600);
+      try { chmodSync(temporary, 0o600); writeSync(fd, text); } finally { closeSync(fd); }
+      renameSync(temporary, path);
+      return true;
+    } catch {
+      try { unlinkSync(temporary); } catch { /* ignore temp cleanup failure */ }
+      return false;
+    }
+  }
+  deleteGithubUser() {
+    try {
+      if (statOrNull(this.dir)?.isSymbolicLink()) return;
+      unlinkSync(join(this.dir, 'github-user.json'));
+    } catch { /* ignore absent or unremovable cache file */ }
+  }
   // Exclusive create: a second POST with the same request ID is impossible.
   posted(folder, id) {
     const fd = openSync(join(folder, `${id}.posted`), 'wx', 0o600);
@@ -791,18 +851,42 @@ function recordSecret(ports, ...values) {
   if (!remember && !ports?.rememberSecrets) fallbackRememberSecrets(...values);
 }
 
-function signIn(gh, store, ports) {
+function signIn(gh, store, ports, { forceRefresh = false, afterHttp401 = false, allowSavedLocalReadFallback = false, exitCode = 5 } = {}) {
+  const now = ports?.now ?? Date.now, stderr = ports?.stderr ?? null;
   const token = gh(['auth', 'token']);
-  if (token.error?.code === 'ENOENT') throw new Stop(5, 'Install the GitHub CLI, then run gh auth login');
+  if (token.error?.code === 'ENOENT') throw new Stop(exitCode, 'Install the GitHub CLI, then run gh auth login');
   const value = token.status === 0 ? String(token.stdout ?? '').trim() : '';
-  if (!value) throw new Stop(5, 'Run gh auth login');
+  if (!value) throw new Stop(exitCode, 'Run gh auth login');
   recordSecret(ports, value);
-  if (store) store.secrets = [value];
+  if (store) store.secrets = [...new Set([...(store.secrets ?? []), value])];
+  const tokenSha256 = sha256(Buffer.from(value, 'utf8'));
+  const cached = store ? store.readGithubUser() : null;
+  const matchingCached = cached && cached.token_sha256 === tokenSha256 ? cached : null;
+  if (!forceRefresh && matchingCached) {
+    return { token: value, login: matchingCached.login, userId: matchingCached.user_id, tokenSha256, fromCache: true, refreshedAfter401: false };
+  }
   const user = gh(['api', 'user', '--jq', '.login + " " + (.id|tostring)']);
-  const [login, id] = user.status === 0 ? String(user.stdout ?? '').trim().split(' ') : [];
+  const rawUser = user.status === 0 ? String(user.stdout ?? '').replace(/[\r\n]+$/, '') : '';
+  const parts = rawUser ? rawUser.split(' ') : [];
+  const [login, id] = parts.length === 2 ? parts : [];
+  if (user.status === 0 && login && !/\s/.test(login) && /^[1-9]\d*$/.test(id ?? '')) {
+    store?.writeGithubUser({ login, user_id: id, cached_at: new Date(now()).toISOString(), token_sha256: tokenSha256 });
+    return { token: value, login, userId: id, tokenSha256, fromCache: false, refreshedAfter401: !!afterHttp401 };
+  }
+  const rawFailure = user.status === 0 ? '' : String(user.stderr || user.error?.code || '');
+  const matchingIdentity = !afterHttp401 && allowSavedLocalReadFallback && user.status !== 0 && isGithubRateLimit(rawFailure)
+    ? store?.readMatchingGithubIdentity(tokenSha256)
+    : null;
+  if (matchingIdentity) {
+    if (stderr) line(stderr, `Warning: GitHub API rate limit reached; using saved GitHub login ${matchingIdentity.login} for this token.`);
+    return { token: value, login: matchingIdentity.login, userId: matchingIdentity.user_id, tokenSha256, fromCache: true, refreshedAfter401: false };
+  }
   const why = user.status === 0 ? '' : causeText(user.stderr || user.error?.code, [value]);
-  if (!login || !/^\d+$/.test(id ?? '')) throw new Stop(5, `pdd could not read your GitHub login (gh api user${why ? `: ${why}` : ''}). Run gh auth status.`);
-  return { token: value, login, userId: id };
+  throw new Stop(exitCode, `pdd could not read your GitHub login (gh api user${why ? `: ${why}` : ''}). Run gh auth status.`);
+}
+
+function authSession({ identity, store, ports, secrets = null, expectedOwnerLogin = null, ownerMismatchError = null, signInExitCode = 5, onRefresh = null }) {
+  return { identity, store, ports, secrets, expectedOwnerLogin, ownerMismatchError, signInExitCode, onRefresh };
 }
 
 // Retry-After in seconds (1 to 300); no header or a bad one means 5 s.
@@ -824,28 +908,68 @@ const AUTH_TEXT = 'The PDD interpreter did not accept your GitHub login (HTTP 40
 
 // HTTP to the runtime. The token stays in this object and in request headers only.
 class Runtime {
-  constructor({ origin, token, ports, signal }) { Object.assign(this, { origin, token, ports, signal }); this.sources = new WeakMap(); }
-  async send(path, init, ms) {
+  constructor({ origin, token, ports, signal, auth }) { Object.assign(this, { origin, token, ports, signal, auth }); this.sources = new WeakMap(); }
+  async sendOnce(path, init, ms) {
     if (this.signal?.aborted) return { lost: true };
     const controller = new AbortController(), stop = () => controller.abort();
     const timer = setTimeout(stop, ms);
     this.signal?.addEventListener('abort', stop, { once: true });
+    const bearer = this.auth?.identity.token ?? this.token;
+    const resolved = typeof init?.body === 'function' ? { ...init, body: init.body() } : init;
     try {
-      const response = await this.ports.fetch(new URL(path, this.origin), { ...init, redirect: 'manual', signal: controller.signal,
-        headers: { ...init.headers, Authorization: `Bearer ${this.token}` } });
+      const response = await this.ports.fetch(new URL(path, this.origin), { ...resolved, redirect: 'manual', signal: controller.signal,
+        headers: { ...resolved?.headers, Authorization: `Bearer ${bearer}` } });
       const text = await response.text();
       let json = null;
       try { json = JSON.parse(text); } catch { json = null; }
       return { status: response.status, headers: response.headers, text, json };
     } catch (error) { return lostReply(error, this.origin); } finally { clearTimeout(timer); this.signal?.removeEventListener('abort', stop); }
   }
+  async send(path, init, ms) {
+    const previousToken = this.auth?.identity.token ?? this.token;
+    const first = await this.sendOnce(path, init, ms);
+    if (this.auth && path !== '/v1/capacity' && [200, 202].includes(first.status)) this.auth.verifiedByServer = true;
+    if (first.status !== 401 || !this.auth) return first;
+    this.auth.store?.deleteGithubUser();
+    if (!this.auth.identity.fromCache || this.auth.identity.refreshedAfter401) return first;
+    this.auth.identity.fromCache = false;
+    this.auth.identity.refreshedAfter401 = true;
+    let refreshed;
+    try {
+      refreshed = signIn(this.ports.gh, this.auth.store, this.ports, {
+        forceRefresh: true,
+        afterHttp401: true,
+        exitCode: this.auth.signInExitCode,
+      });
+    } catch (error) {
+      if (error instanceof Stop) { this.auth.store?.deleteGithubUser(); return first; }
+      throw error;
+    }
+    Object.assign(this.auth.identity, refreshed, { fromCache: false, refreshedAfter401: true });
+    this.token = refreshed.token;
+    if (Array.isArray(this.auth.secrets) && !this.auth.secrets.includes(refreshed.token)) this.auth.secrets.push(refreshed.token);
+    this.auth.onRefresh?.(this.auth.identity);
+    const expectedOwner = typeof this.auth.expectedOwnerLogin === 'function' ? this.auth.expectedOwnerLogin() : this.auth.expectedOwnerLogin;
+    if (expectedOwner && refreshed.login !== expectedOwner) throw this.auth.ownerMismatchError(expectedOwner);
+    if (this.auth.verifiedByServer && refreshed.token === previousToken) {
+      this.auth.store?.deleteGithubUser();
+      return first;
+    }
+    const retry = await this.sendOnce(path, init, ms);
+    if (retry.status === 401) this.auth.store?.deleteGithubUser();
+    else if (path !== '/v1/capacity' && [200, 202].includes(retry.status)) this.auth.verifiedByServer = true;
+    return retry;
+  }
   post(path, request, tar, timeoutMs = this.ports.postMs) {
-    const form = new FormData();
-    form.set('request', new Blob([JSON.stringify(request)], { type: 'application/json' }), 'request.json');
-    let source = this.sources.get(tar);
-    if (!source) { source = new Blob([tar], { type: 'application/x-tar' }); this.sources.set(tar, source); }
-    form.set('source', source, 'source.tar');
-    return this.send(path, { method: 'POST', body: form }, timeoutMs);
+    const makeForm = () => {
+      const form = new FormData();
+      form.set('request', new Blob([JSON.stringify(request)], { type: 'application/json' }), 'request.json');
+      let source = this.sources.get(tar);
+      if (!source) { source = new Blob([tar], { type: 'application/x-tar' }); this.sources.set(tar, source); }
+      form.set('source', source, 'source.tar');
+      return form;
+    };
+    return this.send(path, { method: 'POST', body: makeForm }, timeoutMs);
   }
   get(id, timeoutMs = GET_MS) { return this.send(`/v1/runs/${id}`, { method: 'GET' }, timeoutMs); }
   reopen(id) { return this.send(`/v1/try/${id}/reopen`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }, this.ports.postMs); }
@@ -1244,13 +1368,18 @@ async function readCapacity(context, deadline, refresh) {
     entry = { at: now, pending: true, observers: 0, controller: new AbortController() };
     // Capacity is shared across commands. Its finite transport budget remains
     // bounded by the initiating phase, but no one observer owns its cancellation.
-    const runtime = new Runtime({ origin: context.origin, token: context.identity.token, ports: context.ports, signal: entry.controller.signal });
+    const runtime = new Runtime({ origin: context.origin, token: context.identity.token, ports: context.ports, signal: entry.controller.signal, auth: context.auth });
     entry.promise = runtime.send('/v1/capacity', { method: 'GET' }, Math.max(1, Math.min(GET_MS, deadline - now))).then(reply => {
       entry.pending = false; entry.at = context.ports.now();
+      const currentKey = JSON.stringify([context.origin, context.identity.login, context.identity.userId]);
       // Keep unclear replies distinct and reusable until this completion TTL.
       // Recognized access gates retain their ordinary stop/recheck behavior.
-      if ((blockingAnswer(reply) || reply.status === 401 || gateText(reply)) && capacityCache.get(key) === entry) capacityCache.delete(key);
+      if ((currentKey !== key || blockingAnswer(reply) || reply.status === 401 || gateText(reply)) && capacityCache.get(key) === entry) capacityCache.delete(key);
       return reply;
+    }, error => {
+      entry.pending = false;
+      if (capacityCache.get(key) === entry) capacityCache.delete(key);
+      throw error;
     });
     capacityCache.set(key, entry);
   }
@@ -1283,9 +1412,10 @@ async function probeLazyInterfaces(context, origin, store) {
   if (context.lazyInterfacesProbed) return !!context.allowMissingInterfaces;
   context.lazyInterfacesProbed = true;
   let identity;
-  try { identity = signIn(context.ports.gh, store, context.ports); }
+  try { identity = signIn(context.ports.gh, store, context.ports, { exitCode: context.doorMode ? 125 : 5 }); }
   catch (error) { if (error instanceof Stop) return false; throw error; }
-  const probe = { origin, identity, ports: context.ports, signal: context.signal, interrupted: context.interrupted };
+  const auth = authSession({ identity, store, ports: context.ports, signInExitCode: context.doorMode ? 125 : 5 });
+  const probe = { origin, identity, ports: context.ports, signal: context.signal, interrupted: context.interrupted, auth };
   const reply = await readCapacity(probe, context.ports.now() + GET_MS, false);
   if (reply?.status !== 200 || !Array.isArray(reply.json?.features)) return false;
   context.probedIdentity = identity;
@@ -2270,7 +2400,11 @@ async function checkBatch(context, rows, priorLint = null) {
     notSent('not_run', { note: { code: context.interrupted ? 'interrupted' : 'lint-pending', message: pendingLintMessage(context, lint.answer) } });
     return;
   }
-  if (lint.kind === 'not_run' || lint.kind === 'stop') { notSent('not_run', { note: lint.note, ...(lint.note?.code === 'lint-busy' ? { calls: 0, phase: 'lint' } : {}) }); return; }
+  if (lint.kind === 'not_run' || lint.kind === 'stop') {
+    if (lint.kind === 'stop') context.stopped = lint.note;
+    notSent('not_run', { note: lint.note, ...(lint.note?.code === 'lint-busy' ? { calls: 0, phase: 'lint' } : {}) });
+    return;
+  }
   if (lint.kind === 'refused') { notSent('refused', { phase: 'lint', refusals: [lint.refusal] }); return; }
   const verdicts = judgeLint(lint.answer, sendable, context.root, context.visible, context.secrets, context.capture);
   context.lint.public_result = resultOverall([...verdicts.values()]);
@@ -2401,7 +2535,7 @@ function printResult(context, rows, extra = {}) {
   if (context.batch && rows.some(row => row.can_retry)) line(ports.stderr, `Retry only unstarted checks with: pdd test --retry ${context.batch}`);
   if (context.readStop) line(ports.stderr, context.readStop);
   if (context.continuationNotice) line(ports.stderr, context.continuationNotice);
-  if (context.stopped && !context.json) line(ports.stderr, context.stopped.message);
+  if (context.stopped && (!context.json || context.stopped.message === AUTH_TEXT)) line(ports.stderr, context.stopped.message);
   const scrub = text => (context.secrets ?? []).reduce((value, secret) => secret ? value.split(secret).join('[secret]') : value, text);
   if (context.json) line(ports.stdout, scrub(JSON.stringify(summary)));
   else ports.stdout.write(scrub(renderText({ batch: context.batch, rows, coverage: context.coverage, warnings, details: context.details, timeoutMin: context.timeoutMin,
@@ -2451,7 +2585,7 @@ function runFiles(cwd, words, options, ports) {
   const broken = rows.filter(row => row.unsent && row.refusals.length), exitCode = broken.length ? 4 : 0;
   const summary = `${capture.files.length} files, ${formatSize(capture.bytes)} (${capture.bytes} bytes). ${otherFiles(capture.files, found).length} of them are not prompt, story or test files.${broken.length ? ` ${broken.length} tests could not run.` : ''}`;
   if (options['--json']) {
-    line(ports.stdout, JSON.stringify({repo:root,exit_code:exitCode,summary_line:summary,rows:[...rows.filter(row=>row.unsent).map(row=>({...row,...resultOutcome(row)})),...rows.filter(row=>!row.unsent)],files:capture.files,coverage,...(advice.length ? {warnings:advice} : {})}));
+    line(ports.stdout, JSON.stringify({repo:root,exit_code:exitCode,summary_line:summary,source_sha256:capture.sha256 ?? null,rows:[...rows.filter(row=>row.unsent).map(row=>({...row,...resultOutcome(row)})),...rows.filter(row=>!row.unsent)],files:capture.files,coverage,...(advice.length ? {warnings:advice} : {})}));
     return exitCode;
   }
   for (const row of broken) for (const problem of row.refusals) {
@@ -2464,6 +2598,7 @@ function runFiles(cwd, words, options, ports) {
   for(const read of capture.reads??[])line(ports.stderr,`Local read (${read.roles.join(', ')}, not uploaded): ${read.path}`);
   for (const file of capture.files) line(ports.stdout, `  ${(file.path + (file.target ? ` -> ${file.target}` : '')).padEnd(width)}  ${file.size} bytes`);
   line(ports.stdout, summary);
+  if (capture.sha256) line(ports.stdout, `Source SHA-256: ${capture.sha256}`);
   line(ports.stderr, coverageText(coverage));
   return exitCode;
 }
@@ -2616,7 +2751,8 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   saveBatch(context);
   const repoState = context.store.repo(root);
   context.store.saveRepo(root, { ...repoState, last_batch: batch });
-  context.runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
+  context.auth = authSession({ identity, store: context.store, ports, secrets: context.secrets, onRefresh: next => { context.identity = next; saveBatch(context); } });
+  context.runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal, auth: context.auth });
   let lint;
   try { lint = await runLint(context); }
   catch (error) {
@@ -2876,6 +3012,32 @@ async function continueHeld(context, candidates, saved) {
   return selected;
 }
 
+function isLocalSavedBatchRead(context, saved) {
+  if (!isObject(saved) || !Array.isArray(saved.rows)) return false;
+  const lintId = saved.lint?.request_ids?.at(-1);
+  if (lintId) {
+    const lintAnswer = context.store.read(join(context.folder, `${lintId}.json`));
+    if (!(sameJob(lintAnswer, lintId, 'lint') && ['passed', 'failed', 'refused'].includes(lintAnswer.state))) return false;
+  }
+  for (const rawRow of saved.rows) {
+    const row = { ...rawRow, request_ids: [...(rawRow?.request_ids ?? [])] };
+    if (heldForLint(row)) return false;
+    const id = row.request_ids.at(-1);
+    if (!id) continue;
+    const admission = context.store.read(join(context.folder, `${id}.admission.json`));
+    if (admissionCapacityCandidate(admission)) return false;
+    const answer = context.store.read(join(context.folder, `${id}.json`));
+    if (answer && confirmedEnd(answer) && sameJob(answer, id, 'check')) {
+      if (!context.singleAttempt && (saved.intent === undefined || saved.intent === 'check') && !row.restart_used && !row.restart_pending && restarted(answer)) return false;
+      continue;
+    }
+    const isFinalPost = !answer && (['refused', 'not_run', 'stop'].includes(row.post_verdict)
+      || (!row.post_verdict && (row.state === 'refused' || (row.state === 'not_run' && !row.busy && !row.can_retry))));
+    if (!isFinalPost) return false;
+  }
+  return true;
+}
+
 async function runRead(context, batchWord, quiet = false, options = {}) {
   context.cacheReadInvocation = true;
   const { store, ports, root } = context;
@@ -2910,12 +3072,22 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
     return saved.intent === 'lint-only' ? printLintResult(context,saved.rows,saved.lint?.problems ?? []) : printResult(context,saved.rows);
   }
   if(loadRuntimeWorkspace({root}).configured)ports.captureSource(root,{tests:saved.rows.filter(row=>!row.unsent).map(row=>row.test),appMap:null,excludeFixtureProjects:saved.exclude_fixture_projects === true,...(saved.lazy_interfaces === true ? {allowMissingInterfaces:true} : {})});
-  const identity = signIn(ports.gh, context.store, ports);
+  const identity = signIn(ports.gh, context.store, ports, {
+    allowSavedLocalReadFallback: !quiet && isLocalSavedBatchRead(context, saved),
+  });
   if (identity.login !== saved.login) throw new Stop(5, `These runs belong to ${saved.login}. Run: gh auth switch -u ${saved.login}`);
   Object.assign(context, { singleAttempt: context.singleAttempt || saved.single_attempt === true, allowMissingInterfaces: saved.lazy_interfaces === true, excludeFixtureProjects: saved.exclude_fixture_projects === true, batch: name, origin: saved.origin, sourceSelection:saved.source_selection, nativeSource:saved.native_source, coverage: saved.coverage, identity, intent: saved.intent, secrets: [identity.token], warnings: saved.warnings ?? [],
     capture: { sha256: saved.source_sha256, files: saved.files.map(path => ({ path })), bytes: saved.bytes, stories:saved.contract_snapshots }, lint: saved.lint, head: saved.head, startedAt: Date.parse(saved.created_at) });
   runtimeOrigin({ PDD_RUNTIME_URL: saved.origin });
-  context.runtime = new Runtime({ origin: saved.origin, token: identity.token, ports, signal: context.signal });
+  context.auth = authSession({
+    identity,
+    store: context.store,
+    ports,
+    secrets: context.secrets,
+    expectedOwnerLogin: saved.login,
+    ownerMismatchError: owner => new Stop(5, `These runs belong to ${owner}. Run: gh auth switch -u ${owner}`),
+  });
+  context.runtime = new Runtime({ origin: saved.origin, token: identity.token, ports, signal: context.signal, auth: context.auth });
   const rows = saved.rows.map(row => ({ ...row, why: ['refused', 'not_run', 'unknown'].includes(row.state) && row.why === 'Checks failed.' ? null : row.why, ...(row.request_ids?.length ? { calls: 'unknown' } : {}), request_ids: [...(row.request_ids ?? [])], checks: row.cached ? row.checks : null, failed_checks: [], all_checks: [] }));
   const candidates = rows.filter(row => heldForLint(row));
   // Preserve the producer's original evidence before refresh can normalize unsent usage.
@@ -3067,11 +3239,17 @@ async function runRetry(context, name, options) {
 }
 
 async function runRequest(context, id, cwd) {
-  try { context.root=repoRoot(cwd); context.store=stateFor(context.ports.env,context.root); } catch { /* An outside-repository request read has no owning local batch. */ }
+  try { context.root=repoRoot(cwd); context.store=stateFor(context.ports.env,context.root); }
+  catch (error) {
+    if (error instanceof Stop && error.exitCode === 2 && error.message.includes('PDD_STATE_DIR')) throw error;
+    /* An outside-repository request read has no owning local batch, but still uses PDD_STATE_DIR for github-user.json. */
+    context.store = new StateStore(resolve(context.ports.env.PDD_STATE_DIR || join(context.ports.env.HOME || homedir(), '.pdd', 'runtime')));
+  }
   if (!UUID.test(id)) throw new Stop(2, 'The request ID must be a UUID.');
   const { ports } = context, identity = signIn(ports.gh, context.store, ports), origin = runtimeOrigin(ports.env);
-  Object.assign(context, { origin, secrets: [identity.token] });
-  const runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
+  Object.assign(context, { origin, identity, secrets: [identity.token] });
+  context.auth = authSession({ identity, store: context.store, ports, secrets: context.secrets });
+  const runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal, auth: context.auth });
   const row = { test: '-', story: '-', title: '-', phase: 'server', request_ids: [id], state: 'unknown', refusals: [], warnings: [] };
   const read = judgeGet(await runtime.get(id), id, 'check');
   if (read.kind === 'state') {
@@ -3079,7 +3257,10 @@ async function runRequest(context, id, cwd) {
     if(owner?.not_checked?.length) Object.assign(row,{not_checked:owner.not_checked,criteria_total:owner.criteria_total,criterion_texts:owner.criterion_texts,steps:owner.steps});
     applyAnswer(row, read.answer, context);
   }
-  else row.why = read.unreachable ?? read.why ?? (read.kind === 'auth' ? AUTH_TEXT : 'pdd could not read this run.');
+  else {
+    row.why = read.unreachable ?? read.why ?? (read.kind === 'auth' ? AUTH_TEXT : 'pdd could not read this run.');
+    if (read.kind === 'auth') context.readStop = AUTH_TEXT;
+  }
   return printResult(context, [row], { recovery: `pdd test --request '${id}'` });
 }
 
@@ -3143,7 +3324,16 @@ async function runCallRead(context, id) {
   const identity = signIn(ports.gh, store, ports);
   if (saved && identity.login !== saved.login) throw new Stop(5, `These runs belong to ${saved.login}. Run: gh auth switch -u ${saved.login}`);
   const origin = runtimeOrigin(saved ? { PDD_RUNTIME_URL: saved.origin } : ports.env);
-  const runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
+  const secrets = [identity.token];
+  const auth = authSession({
+    identity,
+    store,
+    ports,
+    secrets,
+    expectedOwnerLogin: saved?.login ?? null,
+    ownerMismatchError: owner => new Stop(5, `These runs belong to ${owner}. Run: gh auth switch -u ${owner}`),
+  });
+  const runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal, auth });
   const reply = await runtime.get(id), blocked = blockingAnswer(reply);
   if (blocked) throw new Stop(5, blocked);
   const command = ['call', 'check'].includes(reply.json?.command) ? reply.json.command : null;
@@ -3151,7 +3341,7 @@ async function runCallRead(context, id) {
     && !(saved?.session_id && reply.json.session_id && saved.session_id !== reply.json.session_id);
   const answer = verified && !(command === 'call' && reply.json.state === 'passed' && !isObject(reply.json.result?.program_result)) ? reply.json : null;
   if (answer?.command === 'check') {
-    Object.assign(context, { origin, secrets: [identity.token] });
+    Object.assign(context, { origin, secrets });
     const row = { test: '-', story: '-', title: '-', phase: 'server', request_ids: [id], state: 'unknown', refusals: [], warnings: [] };
     const owner = await refreshCheckBatches(context, identity, origin, id, answer);
     if (owner?.row.not_checked?.length) Object.assign(row, {not_checked:owner.row.not_checked,criteria_total:owner.row.criteria_total,
@@ -3162,7 +3352,7 @@ async function runCallRead(context, id) {
     return printResult(context, [row], { recovery: `pdd test --read ${id}` });
   }
   const state = answer?.state ?? 'unknown', exitCode = ports.exitCodeFor([{ state }]);
-  const sanitize = value => typeof value === 'string' ? value.split(identity.token).join('[secret]').replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, '').replace(/\b(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9_-]{12,})\b/g, '[secret]')
+  const sanitize = value => typeof value === 'string' ? secrets.reduce((text, secret) => secret ? text.split(secret).join('[secret]') : text, value).replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, '').replace(/\b(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9_-]{12,})\b/g, '[secret]')
     : Array.isArray(value) ? value.map(sanitize) : isObject(value) ? Object.fromEntries(Object.entries(value).map(([k, v]) => [sanitize(k), sanitize(v)])) : value;
   const out = sanitize({ request_id: id, command: 'call', state, exit_code: exitCode,
     calls: answer?.usage?.calls ?? 'unknown', usage: answer?.usage ?? null,
@@ -3170,6 +3360,7 @@ async function runCallRead(context, id) {
     report_url: answer?.report_url ? validLink(answer.report_url, origin, 'report') : null,
     why: answer ? answer.why ?? null : reply.status === 401 ? AUTH_TEXT : reply.status === 410 ? 'The result expired.' : 'The call receipt could not be verified.' });
   if (answer) store.write(join(store.folder('calls'), `${id}.json`), answer);
+  if (!answer && reply.status === 401) line(ports.stderr, AUTH_TEXT);
   if (context.json) line(ports.stdout, JSON.stringify(out));
   else {
     line(ports.stdout, `Call ${id}: ${state} · ${out.calls} AI calls`);
@@ -3224,7 +3415,7 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
     if (options['--affected'] !== undefined && (options['--affected'] !== true || words.length || Object.keys(options).some(key => !['--affected','--json','--details','--timeout','--max-calls','--cache-clear'].includes(key))))
       throw new Stop(2, '--affected accepts no Stories and only --cache-clear, --json, --details, --timeout and --max-calls.');
     if(options['--journeys']!==undefined){
-      if(options['--journeys']!==true||words.length>1||['--read','--retry','--fill-hash','--request','--screen','--drawing'].some(key=>options[key]!==undefined))throw new Stop(2,'Use pdd test --journeys [JOURNEY] with normal test options.');
+      if(options['--journeys']!==true||words.length>1||['--read','--retry','--fill-hash','--request','--screen','--drawing','--look'].some(key=>options[key]!==undefined))throw new Stop(2,'Use pdd test --journeys [JOURNEY] with normal test options.');
       const {root,found}=localSetup(cwd,[],ports);
       try { words=selectJourneys(found.tests.map(test=>({testPath:test.path,storyPath:test.storyPath})),words[0],ports); } catch(error) { if (error?.unboundPort) throw error; throw new Stop(2,error.message); }
       if(!words.length)throw new Stop(2,'No root product journeys found.');
@@ -3282,13 +3473,13 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
     if (Object.hasOwn(options, '--compact') && (options['--compact'] !== true || options['--fill-hash'] !== true || words.length
       || Object.keys(options).some(name => !['--fill-hash', '--compact'].includes(name)))) throw new Stop(2, '--compact requires --fill-hash, without other options or Stories.');
     // Local modes dispatch before repository runtime state, origin or sign-in.
-    if (options['--screen'] !== undefined || options['--drawing'] !== undefined) {
-      if (!options['--screen'] || !options['--drawing'] || words.length || Object.keys(options).some(name => !['--screen', '--drawing', '--json'].includes(name))) throw new Stop(2, 'Use pdd test --screen URL --drawing PATH [--json], without other options or Stories.');
+    if (options['--screen'] !== undefined || options['--drawing'] !== undefined || options['--look'] !== undefined) {
+      if (!options['--screen'] || !options['--drawing'] || words.length || Object.keys(options).some(name => !['--screen', '--drawing', '--look', '--json'].includes(name))) throw new Stop(2, 'Use pdd test --screen URL --drawing PATH [--look] [--json], without other options or Stories.');
       if (typeof ports.compareScreen !== 'function' || (!context.json && typeof ports.formatScreenComparison !== 'function')) {
         throw unboundPortError('Screen comparison ports (compareScreen, formatScreenComparison) are not bound.');
       }
       try {
-        const report = await ports.compareScreen({ url: options['--screen'], drawingPath: options['--drawing'], cwd, chromePath: ports.env.PDD_CHROME_PATH }, { env: ports.env, browser: givenPorts.screenBrowser });
+        const report = await ports.compareScreen({ url: options['--screen'], drawingPath: options['--drawing'], cwd, chromePath: ports.env.PDD_CHROME_PATH, look: options['--look'] === true }, { env: ports.env, browser: givenPorts.screenBrowser });
         const exitCode = report.passed ? 0 : 1;
         line(ports.stdout, context.json ? JSON.stringify({ ...report, exit_code: exitCode }) : ports.formatScreenComparison(report));
         return exitCode;
@@ -4037,7 +4228,10 @@ async function runBatch(context, cwd, words, options, setRelease) {
     if (discoveryChanged || !isDeepStrictEqual(validated.tests,context.checkSelection.tests)) return restartConservatively();
   }
   context.sourceSelection = {tests:sentTests(rows),exclude_fixture_projects:words.length === 0};
-  context.warnings.push(...(capture.warnings ?? []));
+  const svgWarnings = typeof ports.lintSvgLayouts === 'function'
+    ? ports.lintSvgLayouts({ root, files: [...found.visible], promptPaths: capture.files.map(file => file.path).filter(path => path.endsWith('.prompt.md')) })
+    : [];
+  context.warnings.push(...svgWarnings, ...(capture.warnings ?? []));
   if (cache) await beginTestAttempts(cache, rows, capture, options, origin);
   context.testCache = cache;
   const fresh = rows.filter(row => !row.cached);
@@ -4072,7 +4266,8 @@ async function runBatch(context, cwd, words, options, setRelease) {
   saveBatch(context);
   const repoState = context.store.repo(root);
   context.store.saveRepo(root, { ...repoState, last_batch: batch });
-  context.runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
+  context.auth = authSession({ identity, store: context.store, ports, secrets: context.secrets, onRefresh: next => { context.identity = next; saveBatch(context); } });
+  context.runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal, auth: context.auth });
   await checkBatch(context, fresh);
   if (cache) {
     const observed = context.observedTestIdentities ?? [];
@@ -4444,12 +4639,29 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
         normalized.length ? `${problem} Run pdd simulate --new.` : 'This saved simulation does not contain the current whole project. Run pdd simulate --new.');
     }
     if(context.agentConnection&&loadRuntimeWorkspace({root}).configured)throw new Stop(5,'Bounded agent connection is unavailable: installed CLI controls do not establish packet-only context. Use the ordinary simulator without an agent connection.');
-    const identity = context.probedIdentity ?? signIn(ports.gh, context.store, ports);
+    const identity = context.probedIdentity ?? signIn(ports.gh, context.store, ports, { exitCode: context.doorMode ? 125 : 5 });
     Object.assign(context, { capture, identity, secrets: [identity.token], startedAt: ports.now(), deadline: ports.now() + TRY_MS, lint: { request_ids: [], state: null },
       batch: null, rows, timeoutMin: TRY_MS / 60_000, agentLimit: false, head: null });
     context.folder = store.folder('tries');
     release = interruptible(context);
-    context.runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
+    let activeOwner = record?.login ?? null;
+    context.auth = authSession({
+      identity,
+      store: context.store,
+      ports,
+      secrets: context.secrets,
+      signInExitCode: context.doorMode ? 125 : 5,
+      expectedOwnerLogin: () => activeOwner,
+      ownerMismatchError: owner => new Stop(context.doorMode ? 125 : 5, `This Try belongs to ${owner}. Run: gh auth switch -u ${owner}`),
+      onRefresh: next => {
+        context.identity = next;
+        const latestRepo = store.repo(root), current = latestRepo.tries?.[test.path];
+        if (current && (!record || options['--new'] || current.id !== record.id)) {
+          store.saveRepo(root, { ...latestRepo, tries: { ...latestRepo.tries, [test.path]: { ...current, login: next.login } } });
+        }
+      },
+    });
+    context.runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal, auth: context.auth });
     if (record) {
       const needsOwner = context.doorMode || requestedBudget !== null || context.agentConnection;
       if (needsOwner && record.login && record.login !== identity.login) throw new Stop(context.doorMode ? 125 : 5, `This Try belongs to ${record.login}. Run: gh auth switch -u ${record.login}`);
@@ -4483,7 +4695,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (link && !options['--new']) {
         if (!record.storyPath && record.story !== test.story) throw new Stop(4, 'The original Try story changed. Restore its test file, or use --new to start a new Try.');
         context.seedTest.storyPath = record.storyPath ?? test.storyPath;
-        return await showTry(context, test, link, options, record.id, true, answer?.result?.session);
+        return await showTry(context, test, link, options, record.id, true, answer?.result?.session, answer, record);
       }
       if (!link && answer?.state === 'passed' && LIVE_SESSION.has(answer.result?.session?.state) && !options['--new']) throw new Stop(3, refusedLink(answer, origin));
       // A Try that may still start or run is never made twice by accident.
@@ -4493,6 +4705,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (!ended) { line(ports.stderr, 'Stopping the old Try…'); await stopTry(context, record); }
       delete repoState.tries[recordPath];
       store.saveRepo(root, repoState);
+      activeOwner = null;
     }
     if(prepared){
       const version=await context.runtime.send('/v1/version',{method:'GET',headers:{'X-PDD-Features':'product-parts-v1'}},GET_MS);
@@ -4532,8 +4745,9 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (registered === false) { await finishReservation(context, setup, { state: 'not_run' }); throw new Stop(3, context.interrupted ? 'Stopped before sending.' : 'Stopped before the Try was sent.'); }
       if (context.interrupted || ports.now() >= context.deadline) { await finishReservation(context, setup, { state: 'not_run' }); throw new Stop(3, context.interrupted ? 'Stopped before sending.' : 'Stopped before the Try was sent.'); }
       const uploadedSeed=capture.sources.find(file=>file.path===test.path);
-      store.saveRepo(root, { ...repoState, tries: { ...repoState.tries, [test.path]: { id: request.requestId, ...setup, story: test.story, storyPath: test.storyPath, title: test.title, origin, login: identity.login, ...(!productSetup && !words.length ? { simulation_scope: { tests: selected.map(item => item.path), appMap, appMapHash: appMap ? sha256(capture.sources.find(file => file.path === appMap).bytes) : null } } : {}), seed_scenario: uploadedSeed ? JSON.parse(uploadedSeed.bytes.toString('utf8')) : test.doc, story_sha256: createHash('sha256').update(readFileSync(join(root, test.storyPath))).digest('hex'), prompt_hashes: capture.raw_prompt_hashes,
-        effective_prompt_hashes:Object.fromEntries(capture.sources.filter(file=>file.path.endsWith('.prompt.md')).map(file=>[file.path,sha256(file.bytes)])),contract_references:capture.references, ...(productSetup?{product_setup:productSetup,product_parts:prepared.composition.product_parts}:{}) } } });
+      const tryRecord = { id: request.requestId, ...setup, story: test.story, storyPath: test.storyPath, title: test.title, origin, login: identity.login, source_sha256: capture.sha256, ...(!productSetup && !words.length ? { simulation_scope: { tests: selected.map(item => item.path), appMap, appMapHash: appMap ? sha256(capture.sources.find(file => file.path === appMap).bytes) : null } } : {}), seed_scenario: uploadedSeed ? JSON.parse(uploadedSeed.bytes.toString('utf8')) : test.doc, story_sha256: createHash('sha256').update(readFileSync(join(root, test.storyPath))).digest('hex'), prompt_hashes: capture.raw_prompt_hashes,
+        effective_prompt_hashes:Object.fromEntries(capture.sources.filter(file=>file.path.endsWith('.prompt.md')).map(file=>[file.path,sha256(file.bytes)])),contract_references:capture.references, ...(productSetup?{product_setup:productSetup,product_parts:prepared.composition.product_parts}:{}) };
+      store.saveRepo(root, { ...repoState, tries: { ...repoState.tries, [test.path]: tryRecord } });
       store.posted(context.folder, request.requestId);
       line(ports.stderr, `Starting your Try: sending ${capture.files.length} files, ${formatSize(capture.bytes)}${note ? ` ${note}` : ''}…`);
       reply = await context.runtime.post('/v1/try', request, capture.tar, Math.max(1, Math.min(ports.postMs, context.deadline - ports.now())));
@@ -4566,7 +4780,15 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       const cap = done.answer?.result?.session?.max_calls;
       if (Number.isSafeInteger(cap) && cap !== request.max_calls) throw new Stop(5, `The interpreter confirmed a budget of ${cap} calls instead of the requested ${request.max_calls}. This Try is kept; its saved data was not reset.`);
       if (requestedBudget !== null && !Number.isSafeInteger(cap)) throw new Stop(3, 'The interpreter did not confirm the requested Try budget. The same Try is kept; read it again without changing its budget.');
-      return await showTry(context, test, link, options, request.requestId, false, done.answer?.result?.session);
+      const confirmedEngine = validEngineHex(done.answer?.engine_sha);
+      if (confirmedEngine) {
+        const currentRepo = store.repo(root);
+        if (currentRepo.tries?.[test.path]?.id === request.requestId) {
+          currentRepo.tries[test.path].engine_sha = confirmedEngine;
+          store.saveRepo(root, currentRepo);
+        }
+      }
+      return await showTry(context, test, link, options, request.requestId, false, done.answer?.result?.session, done.answer, store.repo(root).tries?.[test.path]);
     }
     if (stepTimeLimit(done.answer, { steps: row.steps, secrets: context.secrets })) { applyAnswer(row, done.answer, context); return printTryProblem(context, row); }
     if (done.answer?.state === 'unknown' || (done.answer?.state === 'passed'
@@ -4617,7 +4839,15 @@ async function stopByName(context, cwd, words, origin) {
   Object.assign(context, { root, store, origin });
   const identity = signIn(ports.gh, store, ports);
   context.secrets = [identity.token];
-  context.runtime = new Runtime({ origin: record.origin ?? origin, token: identity.token, ports });
+  context.auth = authSession({
+    identity,
+    store,
+    ports,
+    secrets: context.secrets,
+    expectedOwnerLogin: record.login ?? null,
+    ownerMismatchError: owner => new Stop(5, `This Try belongs to ${owner}. Run: gh auth switch -u ${owner}`),
+  });
+  context.runtime = new Runtime({ origin: record.origin ?? origin, token: identity.token, ports, auth: context.auth });
   line(ports.stderr, `Stopping the Try for "${title}"…`);
   await stopTry(context, record);
   delete repoState.tries[path];
@@ -4716,13 +4946,20 @@ function printTryProblem(context, row) {
   return exitCode;
 }
 
-async function showTry(context, test, link, options, tryId, reused = false, session) {
+const validSha256Hex = value => typeof value === 'string' && /^[0-9a-f]{64}$/i.test(value) ? value.toLowerCase() : null;
+const validEngineHex = value => typeof value === 'string' && /^[0-9a-f]{8,40}$/i.test(value) ? value.toLowerCase() : null;
+
+async function showTry(context, test, link, options, tryId, reused = false, session, answer = null, record = null) {
   if (context.typedForm) line(context.ports.stderr, "This Story's operation takes typed input, so it opens on the Form tab.");
   const budget = Number.isSafeInteger(session?.max_calls) && session.max_calls > 0 && Number.isSafeInteger(session?.remaining_calls)
     && session.remaining_calls >= 0 && session.remaining_calls <= session.max_calls
     ? `Try budget ${session.max_calls} calls; ${session.remaining_calls} remaining. You are charged only for calls that run.`
     : 'The interpreter did not report this Try’s budget.';
-  line(options['--cli'] || options['--serve'] !== undefined ? context.ports.stderr : context.ports.stdout, budget);
+  const stream = options['--cli'] || options['--serve'] !== undefined ? context.ports.stderr : context.ports.stdout;
+  line(stream, budget);
+  const sourceSha = validSha256Hex(answer?.source_sha256) ?? validSha256Hex(record?.source_sha256) ?? (!reused ? validSha256Hex(context.capture?.sha256) : null);
+  const engineSha = validEngineHex(answer?.engine_sha) ?? validEngineHex(record?.engine_sha);
+  if (sourceSha) line(stream, `Try source: sha256:${sourceSha}${engineSha ? `; engine: ${engineSha}` : ''}`);
   if (options['--cli'] || options['--serve'] !== undefined) {
     const doors = await import('./try-doors.mjs');
     return options['--cli'] ? doors.openCli(context, test, tryId, options) : (await import('./try-http.mjs')).openServe(context, test, tryId, options);
@@ -4732,7 +4969,7 @@ async function showTry(context, test, link, options, tryId, reused = false, sess
   let bridge = null, answers = null;
   try {
     if (context.agentConnection) {
-      const finalRuntime = new Runtime({ origin: context.origin, token: context.identity.token, ports });
+      const finalRuntime = new Runtime({ origin: context.origin, token: context.identity.token, ports, auth: context.auth });
       context.agentFinalSend = finalRuntime.send.bind(finalRuntime);
       try {
         const seamPorts = {
@@ -5233,8 +5470,8 @@ async function watchSavedTests(context, tryId, wait, story) {
 export async function runDoorCall(descriptor, input, givenPorts = {}) {
   const ports = withDefaults(givenPorts), { root, origin, sessionId, login, prompt, operation } = descriptor;
   if(loadRuntimeWorkspace({root}).configured)ports.captureSource(root,{tests:descriptor.originalPath?[descriptor.originalPath]:[descriptor.prompt].filter(Boolean)});
-  const store = stateFor(ports.env, root), identity = signIn(ports.gh, store, ports);
-  if (identity.login !== login) throw new Stop(5, `This Try belongs to ${login}. Run: gh auth switch -u ${login}`);
+  const store = stateFor(ports.env, root), identity = signIn(ports.gh, store, ports, { exitCode: 125 });
+  if (identity.login !== login) throw new Stop(125, `This Try belongs to ${login}. Run: gh auth switch -u ${login}`);
   if (runtimeOrigin({ PDD_RUNTIME_URL: origin }) !== origin) throw new Stop(2, 'The saved interpreter address is invalid.');
   const repo=store.read(join(store.dir,'repos',`${store.repoKey(root)}.json`));
   const saved=Object.entries(repo?.tries ?? {}).find(([,record])=>record.id===sessionId);
@@ -5243,20 +5480,37 @@ export async function runDoorCall(descriptor, input, givenPorts = {}) {
     const problem=tryPromptProblem(root,found,test,saved[1],undefined,ports);
     if (problem) throw new Stop(125,`${problem} Run pdd simulate STORY --new.`);
   }
-  const runtime = new Runtime({ origin, token: identity.token, ports, signal: ports.signal });
+  const secrets = [identity.token];
   if (ports.signal?.aborted) throw new Stop(125, 'The local server stopped before the command was sent.');
   const id = ports.randomUUID(), request = { requestId: id, prompt, operation, input };
   const recovery = ` Read the result with: pdd test --read ${id}`;
   store.write(join(store.folder('calls'), `${id}.meta.json`), { id, origin, root, login, user_id: identity.userId, session_id: sessionId });
   store.posted(store.folder('tries'), id);
-  let knownOutcome = false;
+  let knownOutcome = false, dispatched = false;
+  const auth = authSession({
+    identity,
+    store,
+    ports,
+    secrets,
+    signInExitCode: 125,
+    expectedOwnerLogin: login,
+    ownerMismatchError: owner => {
+      if (!dispatched) knownOutcome = true;
+      return new Stop(125, `This Try belongs to ${owner}. Run: gh auth switch -u ${owner}`);
+    },
+    onRefresh: next => {
+      if (next.login === login) store.write(join(store.folder('calls'), `${id}.meta.json`), { id, origin, root, login, user_id: next.userId, session_id: sessionId });
+    },
+  });
+  const runtime = new Runtime({ origin, token: identity.token, ports, signal: ports.signal, auth });
   try {
     const reply = await runtime.send(`/v1/try/${sessionId}/call`, { method: 'POST',
       headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) }, ports.postMs);
     if (reply.status && ![200, 202].includes(reply.status)) {
       knownOutcome = reply.status >= 400 && reply.status < 500 && reply.status != 408;
-      throw new Stop(125, cleanText(reply.json?.error?.message || reply.json?.error?.code || `The interpreter refused the command (HTTP ${reply.status}).`, [identity.token]) + recovery);
+      throw new Stop(125, cleanText(reply.json?.error?.message || (reply.status === 401 ? AUTH_TEXT : reply.json?.error?.code) || `The interpreter refused the command (HTTP ${reply.status}).`, secrets) + recovery);
     }
+    dispatched = true;
     const end = ports.now() + 900_000;
     let answer = null;
     for (;;) {
@@ -5266,10 +5520,10 @@ export async function runDoorCall(descriptor, input, givenPorts = {}) {
         store.write(join(store.folder('tries'), `${id}.json`), answer);
         if (answer.state !== 'passed' || !isObject(answer.result?.program_result)) {
           knownOutcome = ['failed', 'refused', 'not_run'].includes(answer.state);
-          const limit = stepTimeLimit(answer, { steps: [{ step_id: operation }], secrets: [identity.token] });
+          const limit = stepTimeLimit(answer, { steps: [{ step_id: operation }], secrets });
           const why = answer.result?.refusals?.[0];
           if (limit) throw Object.assign(new Stop(125, `${limit.message} ${limit.fix}${recovery}`), { tryUsage: tryUsage(answer, { cap: descriptor.callCap }) });
-          throw Object.assign(new Stop(125, cleanText(why?.engine_message || why?.message || why?.code || 'The command result is unknown. Do not repeat it automatically.', [identity.token]) + (['failed', 'refused'].includes(answer.state) ? '' : recovery)), { tryUsage: tryUsage(answer, { cap: descriptor.callCap }) });
+          throw Object.assign(new Stop(125, cleanText(why?.engine_message || why?.message || why?.code || 'The command result is unknown. Do not repeat it automatically.', secrets) + (['failed', 'refused'].includes(answer.state) ? '' : recovery)), { tryUsage: tryUsage(answer, { cap: descriptor.callCap }) });
         }
         let observation = answer.result.report ?? {};
         if (typeof observation.action_id === 'string') {
@@ -5288,7 +5542,7 @@ export async function runDoorCall(descriptor, input, givenPorts = {}) {
       await ports.sleep(ports.pollMs, ports.signal);
       if (ports.signal?.aborted) throw new Stop(125, 'The local server stopped; this command result is unknown. Do not repeat it automatically.' + recovery);
       const read = await runtime.get(id);
-      if ([401, 403, 410].includes(read.status)) throw new Stop(125, cleanText(read.json?.error?.message || 'The command could not be read. Do not repeat it automatically.', [identity.token]) + recovery);
+      if ([401, 403, 410].includes(read.status)) throw new Stop(125, cleanText(read.json?.error?.message || (read.status === 401 ? AUTH_TEXT : 'The command could not be read. Do not repeat it automatically.'), secrets) + recovery);
       answer = [200, 202].includes(read.status) ? read.json : null;
     }
   } catch (error) {
@@ -5319,7 +5573,16 @@ export async function readTryOwner({ cwd = process.cwd(), story } = {}, givenPor
   const promptProblem=tryPromptProblem(root,found,test,record,undefined,ports);
   if (record.storyPath !== test.storyPath || record.story_sha256 && createHash('sha256').update(readFileSync(join(root, test.storyPath))).digest('hex') !== record.story_sha256 || promptProblem)
     throw new Error(`${promptProblem ?? 'The Story changed.'} Run pdd simulate STORY --new.`);
-  let runtime = new Runtime({ origin: record.origin, token: identity.token, ports, signal: ports.signal });
+  const secrets = [identity.token];
+  const auth = authSession({
+    identity,
+    store,
+    ports,
+    secrets,
+    expectedOwnerLogin: () => record.login,
+    ownerMismatchError: owner => new Error(`This Try belongs to ${owner}. Run: gh auth switch -u ${owner}`),
+  });
+  let runtime = new Runtime({ origin: record.origin, token: identity.token, ports, signal: ports.signal, auth });
   let metadata = await runtime.send(`/v1/try/${record.id}/model`, { method: 'GET' }, GET_MS);
   let paused = false;
   if (metadata.status === 409 && metadata.json?.error?.code === 'session-stopped') {
@@ -5329,12 +5592,18 @@ export async function readTryOwner({ cwd = process.cwd(), story } = {}, givenPor
   }
   if (paused || [404, 410].includes(metadata.status)) {
     await openTry(); record = store.repo(root).tries?.[test.path];
-    runtime = new Runtime({ origin: record.origin, token: identity.token, ports, signal: ports.signal });
+    const refreshedIdentity = signIn(ports.gh, store, ports);
+    Object.assign(identity, refreshedIdentity);
+    if (!secrets.includes(identity.token)) secrets.push(identity.token);
+    if (record.login !== identity.login) throw new Error(`This Try belongs to ${record.login}. Run: gh auth switch -u ${record.login}`);
+    runtime = new Runtime({ origin: record.origin, token: identity.token, ports, signal: ports.signal, auth });
     metadata = await runtime.send(`/v1/try/${record.id}/model`, { method: 'GET' }, GET_MS);
   }
-  if (metadata.status !== 200 || !Array.isArray(metadata.json?.entries)) throw new Error(cleanText(metadata.json?.error?.message || `The Try model could not be read${metadata.status ? ` (HTTP ${metadata.status})` : ''}. Read this Try again; no new run was sent.`, [identity.token]));
+  if (metadata.status !== 200 || !Array.isArray(metadata.json?.entries)) throw new Error(cleanText(metadata.json?.error?.message || `The Try model could not be read${metadata.status ? ` (HTTP ${metadata.status})` : ''}. Read this Try again; no new run was sent.`, secrets));
   const state = await runtime.send(`/v1/try/${record.id}/state`, { method: 'GET' }, GET_MS);
-  return { root, test: record.seed_scenario ? { ...test, doc: record.seed_scenario } : test, record, model: metadata.json, actions: Array.isArray(state.json?.actions) ? state.json.actions : null,
+  const source_sha256 = validSha256Hex(metadata.json?.source_sha256) ?? validSha256Hex(record?.source_sha256) ?? null;
+  const engine_sha = validEngineHex(metadata.json?.engine_sha) ?? validEngineHex(record?.engine_sha) ?? null;
+  return { root, test: record.seed_scenario ? { ...test, doc: record.seed_scenario } : test, record, model: metadata.json, source_sha256, engine_sha, actions: Array.isArray(state.json?.actions) ? state.json.actions : null,
     ...(state.status === 200 && Object.hasOwn(state.json ?? {}, 'world') ? { data: state.json.world } : { data_error: `Current saved data unavailable${state.status ? ` (HTTP ${state.status})` : ''}; no initial data was substituted.` }) };
 }
 
