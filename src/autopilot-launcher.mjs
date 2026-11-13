@@ -390,6 +390,11 @@ async function runCoreTick(stateFile, state, p, ports) {
     return state.cachedIssues ?? [];
   };
   const agent = state.agent ?? {};
+  const alertPorts = { ...p.alertPorts, repository: async () => ({ nameWithOwner: state.repo }), stateRoot: dirname(stateFile), now: p.now, hostname: () => state.machine };
+  if (!p.sendAlert) {
+    try { await runAutopilotAlerts({ action: 'retry', cwd: state.cwd, env: p.env }, alertPorts); }
+    catch { /* Alert retry never stops the tick. */ }
+  }
   const result = await tickCore({ state, settings: core, budget }, {
     gh: (args, options = {}) => p.execute('gh', args, { timeoutMs: 120000, ...options }),
     git: (args, options = {}) => p.execute('git', args, { timeoutMs: 300000, ...options }),
@@ -400,7 +405,7 @@ async function runCoreTick(stateFile, state, p, ports) {
     // One alert through this machine's alert destination; the core gives each alert its own cause, tried and need.
     alert: ({ issue, kind, text, tried, need, update }) => (p.sendAlert ?? runAutopilotAlerts)({ action: 'alert', cwd: state.cwd, env: p.env, issue: String(issue), kind, ...(update ? { update: true } : {}),
       text: JSON.stringify({ cause: text, tried: tried ?? 'The Autopilot core engine could not go on with this issue.', need: need ?? 'Check the issue and this machine.' }) },
-      { ...p.alertPorts, repository: async () => ({ nameWithOwner: state.repo }), stateRoot: dirname(stateFile), now: p.now, hostname: () => state.machine }),
+      alertPorts),
     machine,
     ...p.corePorts,
   });

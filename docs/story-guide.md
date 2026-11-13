@@ -45,8 +45,9 @@ As a person who keeps a to-do list in the terminal, I want to mark a task as don
 2. **One criterion = one action and its result.** Say what the person does, and what they see or what is saved.
    If "and" joins two actions, split them. Name no functions or types. A command that the person types is fine.
    Do not write "correctly", "gracefully" or "as expected". A test cannot see them.
-3. **Every criterion needs an exact check.** It needs at least one `equals`, `not_equals`, `one_of` or `count`
-   check on one of the four places below (RUNBOOK §2, §8). A criterion with no exact check is "not checked".
+3. **Every criterion needs an exact check.** It needs at least one `equals`, `not_equals`, `one_of`, `count`,
+   `at_least`, `at_most`, `not_contains`, `all_in` or `equals_ignore_case` check on one of the four places below
+   (or HTML `exists`; RUNBOOK §2, §8, §20). A criterion with no exact check is "not checked".
    The other criteria still run, but the Story is not a full pass. In a normal run, pdd then does not open PR 1
    by itself. A test with no exact check at all is refused (`unchecked-criteria`), and pdd sends nothing.
 4. **"Does not" and "stays the same" need something to watch.**

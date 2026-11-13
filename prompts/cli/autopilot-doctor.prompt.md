@@ -118,7 +118,7 @@ Check these boundaries in order and continue after failures:
 - Enumerate tracked *.prompt.md and report draft/missing interfaces as advisory
   paths that may need approval on first check. Malformed or unreadable prompts
   warn. Never approve them or block doctor solely for drafts.
-- Read interpreter access through the runtime client's existing checkRuntimeHealth
+- Read interpreter access through the [Runtime seam](runtime-seam.prompt.md) `health` check (`checkRuntimeHealth`)
   with the selected environment and injected gh/fetch/clock ports. No upload or job.
   Preserve its health rules, including a JSON 404 from an interpreter without the
   optional capacity endpoint. Missing auth, denial, maintenance or unreachable
@@ -142,7 +142,7 @@ Check these boundaries in order and continue after failures:
 - [Workflow worktree](workflow-worktree.prompt.md): canonical GitHub origin normalization.
 - [Workflow agents](workflow-agents.prompt.md): read-only agy readiness.
 - [Codex limits](codex-limits.prompt.md): read-only account usage states.
-- [Runtime client](runtime-client.prompt.md#free-interpreter-health-check): required health classification and runtimeOrigin address rules.
+- [PDD to Runtime seam](runtime-seam.prompt.md) and [Runtime client](runtime-client.prompt.md#free-interpreter-health-check): required `health` classification and `runtimeOrigin` address rules.
 - [Autopilot settings on GitHub](autopilot-github.prompt.md): owns when two
   Autopilot settings differ, the `MODE, trust NAMES` form and the publish commands.
   Doctor reads GitHub with its own read-only run port, not with that module's ports.
@@ -162,7 +162,7 @@ Do not use a GitHub ledger that writes reads to disk. Do not mutate arrays retur
 {
   "kind": "partial",
   "status": "approved",
-  "prose_sha256": "49e976db22ee4709dcf0a37edfd6b72f7c5b44ed1699fca409870ad96fccbc07",
+  "prose_sha256": "672f4dc5010bf15ab643f59366e903c35ddab435ea5caec73872fa197740d404",
   "entries": [
     {
       "operation": "runAutopilotDoctor",

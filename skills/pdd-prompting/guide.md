@@ -20,12 +20,17 @@ may combine them:
 | Public contract | Exact signatures, defaults, bindings, metadata and output schema | Beside a small rule, otherwise one named interface reference |
 | Consequential operations | Evaluation boundaries and effects that qualify a decision, including failure | Beside the affected rule, otherwise one linked compatibility reference |
 
-The public contract names **every output key, field or tuple position**, its
-meaning, units and representation. Include conditional presence, ordering and
-identity where observable. A quantity's description cannot substitute for its
-external name. Group repeated shapes once and refer to them from outcomes.
-Declarations from interfaces or callers belong to declared consumer context;
-required meaning never depends on inference from excluded source.
+The public contract makes every observable output key, field or tuple position,
+its meaning, units and representation explicit. When a prompt carries an explicit
+`<details><summary>Runtime interface</summary>` schema or `$contract` reference,
+that schema is the single owner of the exhaustive field, type and requiredness
+inventory; prose states domain semantics, invariants, units, conditional
+presence, ordering, identity and decision rules rather than re-enumerating every
+schema property in prose tables. Without an explicit schema, name every output
+key, field or tuple position in the contract and group repeated shapes once. A
+quantity's description cannot substitute for its external name. Declarations from
+interfaces or callers belong to declared consumer context; required meaning never
+depends on inference from excluded source.
 
 Within the selected preservation promise, retain each public owner and binding
 kind: module function, instance method, staticmethod or classmethod. Preserve
@@ -194,23 +199,42 @@ designs. Keep meaningful labels readable at displayed size. A focused detail vie
 may clarify a necessary label or region while retaining its ownership and
 relationship to the overview; it must not duplicate behavioral policy.
 
+Tie an HTML screen prompt (`"source": "operation"`, `"format": "html"`) to its
+approved `.ui.svg` design in two places: list its CSS file(s) under `"stylesheets"`
+in `app-map.json`, and name the CSS classes from that stylesheet on the elements
+and regions in the screen prompt (keeping framework/CSS classes out of the
+`.ui.svg` itself). Without a stylesheet in `app-map.json` and matching class names
+in the prompt, returned HTML renders with bare browser defaults even when its ids
+and words match the drawing. Keep formatted display strings (such as human-readable
+dates and amounts) in the prompt contract rather than raw storage timestamps. SVG
+mockup screens (`"source": "mockup"`, `"format": "svg"`) carry their own SVG paint
+and need no stylesheet in `app-map.json`.
+
 ## Readable organization without duplicate rules
 
 Each rule has one authoritative expression. Operation references contain the
 boundaries that qualify domain decisions, without repeating the normal route.
 Signature lists contain declarations, without parallel behavior descriptions.
-Shared errors, returns and output shapes have one definition with local links.
-Where native semantics matter, one readable ordered expression states the guards
-and effects without a parallel prose translation.
+When a `<details><summary>Runtime interface</summary>` block or `$contract`
+schema owns the field, type and requiredness inventory, prose states domain
+rules, invariants and nonobvious field semantics instead of repeating property
+catalogs in tables. Shared errors, returns and output shapes have one definition
+with local links. Where native semantics matter, one readable ordered expression
+states the guards and effects without a parallel prose translation.
 
 Purpose, domain decisions and meaningful exceptions remain visible when detailed
 references are closed. Named references provide exact declarations and boundaries.
 Disclosures organize necessary detail; they do not hide duplicate explanations.
-Labels and prose remain readable at their intended display size, including narrow
-layouts. Additional space is appropriate for necessary meaning and legibility.
+Labels and prose remain concise and readable at their intended display size,
+including narrow layouts. Never minify JSON blocks onto one line to save lines;
+keep structured blocks indented and readable.
 
-The contract states exact defaults, boundaries, payloads and failure precedence
-without word caps, diagram quotas, opaque shorthand or hidden sidecars. Dependency
+Prompts state observable behavior (what the module does), `## Domain decisions`
+(why consequential rules exist) and failure edges, while leaving algorithms,
+private helper names, loops, OS flags (such as `O_NOFOLLOW`) and internal data
+structures free — never how to code it. State exact defaults, boundaries,
+payloads and failure precedence without word caps, diagram quotas, opaque
+shorthand, hidden sidecars or line-by-line code restatement. Dependency
 declarations name required context and facilities without absent-package lists or
 repeated independence claims. Links and image paths are relative to the prompt
 that contains them.
@@ -294,6 +318,31 @@ whether those boundaries remain stable across the error envelope and names any
 permitted variation in decisions.
 
 </details>
+
+## Choose evidence before Stories
+
+Before splitting work into Stories, list each claimed behavior and the evidence
+that can prove it. Stories are strictly for user-observable behavior that a
+person can read and approve in about one minute: pricing or incentive rules,
+admission rules, state changes, and CLI or UX flows. If a single issue appears
+to need more than 3 Stories, stop and ask the person before creating them.
+
+Real process termination, filesystem durability (`fsync`, atomic rename),
+concurrency fences, cryptographic primitives, pure byte codecs, GPU memory
+behavior and similar physical or byte-level plumbing with no user-facing policy
+route to `"kind": "native-only"` (with a required nonblank `reason` naming the
+effect bound ports cannot fake) plus deterministic native tests (`node --test`
+or the repo's runner), with `0` Runtime Stories. A native-only declaration does
+not make a prompt check pass; it records why the check cannot run.
+
+Test suites, fixtures, CI workflows, package manifests, build configs and
+documentation do not get `.prompt.md` owners. Internal test observers and
+harnesses support native tests and take `0` Runtime Stories, while a testing
+tool feature that a person invokes as product behavior still gets a Story. For a
+mixed module, check deterministic policy and individual transitions in prompt
+space, then prove byte-exact wire formats, long protocol traces and physical
+execution with native tests. Do not mark a whole codec, GPU module or OS wrapper
+native-only when it also has a useful deterministic policy contract.
 
 ## Runtime interface declarations
 
