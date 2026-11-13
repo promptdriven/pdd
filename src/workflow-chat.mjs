@@ -1,5 +1,5 @@
 import { launchProfile, chatAgentName, validLaunchProfile } from './workflow-launch-profile.mjs';
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: eaedce27ead5f3b0dcd14e492a6d60aa0ac12de2d50fb180dc7e92106d334434).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 3a9c7a5f7c58e91e7d7335121a97b71b8ea92e00ea06dae8a681454857b9c22b).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, lstatSync, readdirSync, writeFileSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
@@ -203,12 +203,16 @@ export function chatLaunch({ run, agent, configDir, env = process.env }) {
   for (const name of queueNames) if (!Object.hasOwn(values, name) && typeof env[name] === 'string') values[name] = env[name];
   const queueEnv = Object.fromEntries(queueNames.filter(name => Object.hasOwn(values, name)).map(name => [name, values[name]]));
   const unset = [...queueNames.filter(name => !Object.hasOwn(values, name)), ...names.filter(name => !Object.hasOwn(values, name)), ...(home && !configDir ? [home] : [])];
+  const probeEnv = Object.fromEntries(Object.entries(env ?? {}).filter(([name, value]) => typeof value === 'string' && !AGENT_MARKER.test(name)));
+  for (const name of unset) delete probeEnv[name];
+  if (configDir && home) probeEnv[home] = configDir;
+  Object.assign(probeEnv, values);
   let loginFile = null;
   if (Object.keys(values).length) {
     loginFile = join(run.runDir, `login-${randomUUID()}.env`);
     writeFileSync(loginFile, Object.entries(values).map(([name, value]) => `export ${name}=${quote(value)}\n`).join(''), { mode: 0o600, flag: 'wx' });
   }
-  return { unset, loginFile, program: entry?.command ?? null, queueEnv };
+  return { unset, loginFile, program: entry?.command ?? null, queueEnv, probeEnv };
 }
 // A chat snapshot, never the current terminal, decides invocation settings.
 function launchSettings(run, chat) {
@@ -236,10 +240,10 @@ async function claudeSupportsExcludeDynamic(program, { cwd, env, ports = {} }) {
 // One native launch or resume in a pane with the caller's login; a failed request deletes the login file at once.
 async function launchInPane(herdr, paneId, options, { run, env, ports = {}, beforeLaunch }) {
   removeStaleLoginFiles(run.runDir);
-  const launch = chatLaunch({ run, agent: options.agent, configDir: options.configDir, env });
+  const { probeEnv, ...launch } = chatLaunch({ run, agent: options.agent, configDir: options.configDir, env });
   try {
     const excludeDynamicSystemPromptSections = options.agent === 'claude'
-      ? (options.excludeDynamicSystemPromptSections ?? await claudeSupportsExcludeDynamic(launch.program ?? 'claude', { cwd: options.cwd, env, ports }))
+      ? (options.excludeDynamicSystemPromptSections ?? await claudeSupportsExcludeDynamic(launch.program ?? 'claude', { cwd: options.cwd, env: probeEnv, ports }))
       : false;
     const command = chatCommand({ ...options, ...launch, excludeDynamicSystemPromptSections });
     await beforeLaunch?.();

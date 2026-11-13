@@ -49,9 +49,11 @@ Gemini's merged admin settings may be replaced by its remote admin defaults. Do 
 local admin overlay for effect suppression: CLI --extensions none independently disables extensions,
 and --allowed-mcp-server-names with a deterministic nonmatching sentinel (`pdd-disabled-none`, or a
 deterministic `pdd-disabled-<sha256>` token verified not to collide with any `mcpServers` key in
-system, defaults, user or workspace Gemini settings) independently prevents MCP startup before
-connection while keeping CLI flags stable across turns. Keep tools.core empty, discovery commands
-empty and hooks disabled.
+system, defaults, `GEMINI_CLI_HOME`, user or workspace `<cwd ?? process.cwd()>/.gemini/settings.json`
+settings) independently prevents MCP startup before connection while keeping CLI flags stable across
+turns. Follow symlinks with a 1 MiB read bound, parse JSONC comments and trailing commas, and fail
+closed to a deterministic hashed sentinel whenever an existing candidate settings file cannot be read
+or parsed cleanly. Keep tools.core empty, discovery commands empty and hooks disabled.
 
 ## Explicitly requested page execution
 

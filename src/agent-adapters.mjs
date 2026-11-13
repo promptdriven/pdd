@@ -1,8 +1,8 @@
 import {loadRuntimeWorkspace} from './runtime-workspace.mjs';
-// Generated from prompts/cli/agent-adapters.prompt.md (sha256: 6edd448ca2e908a3c4596f5f21ed9f5aa590c436fba823f19add47a0af80c16c).
+// Generated from prompts/cli/agent-adapters.prompt.md (sha256: b3ce373d0c0dc8a8d3a374b8cd38ca2def071589ecc11ca6d6477596f45fa055).
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync, chmodSync, mkdirSync, lstatSync, openSync, fstatSync, closeSync, fchmodSync, statSync, constants } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, readSync, readdirSync, rmSync, chmodSync, mkdirSync, lstatSync, openSync, fstatSync, closeSync, fchmodSync, statSync, constants } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, dirname, delimiter, resolve, isAbsolute } from 'node:path';
 import { buildAgentInput } from './agent-packet.mjs';
@@ -131,19 +131,54 @@ function claudeSystemPromptFile(text) {
  const folder=mkdtempSync(join(tmpdir(),'pdd-agent-claude-'));chmodSync(folder,0o700);
  try{const file=join(folder,'system-prompt.txt');writeFileSync(file,text,{mode:0o600});return {file,cleanup:()=>rmSync(folder,{recursive:true,force:true})};}catch(e){rmSync(folder,{recursive:true,force:true});throw e;}
 }
+function parseJsonc(text) {
+ const src=text.charCodeAt(0)===0xfeff?text.slice(1):text;let out='',inStr=false;
+ for(let i=0;i<src.length;i++){
+  const ch=src[i];
+  if(inStr){out+=ch;if(ch==='\\'&&i+1<src.length)out+=src[++i];else if(ch==='"')inStr=false;}
+  else if(ch==='"'){inStr=true;out+=ch;}
+  else if(ch==='/'&&src[i+1]==='/'){i+=2;while(i<src.length&&src[i]!=='\n'&&src[i]!=='\r')i++;i--;}
+  else if(ch==='/'&&src[i+1]==='*'){const end=src.indexOf('*/',i+2);if(end===-1)throw new SyntaxError('Unterminated comment');i=end+1;}
+  else out+=ch;
+ }
+ let clean='';inStr=false;
+ for(let i=0;i<out.length;i++){
+  const ch=out[i];
+  if(inStr){clean+=ch;if(ch==='\\'&&i+1<out.length)clean+=out[++i];else if(ch==='"')inStr=false;}
+  else if(ch==='"'){inStr=true;clean+=ch;}
+  else if(ch===','){let j=i+1;while(j<out.length&&(out[j]===' '||out[j]==='\t'||out[j]==='\n'||out[j]==='\r'))j++;if(out[j]!=='}'&&out[j]!==']')clean+=ch;}
+  else clean+=ch;
+ }
+ return JSON.parse(clean);
+}
 function geminiMcpSentinel(cwd,env,existing,defaultsPath) {
- const configured=new Set(object(existing?.mcpServers)?Object.keys(existing.mcpServers):[]);
- const home=env.HOME||homedir(),files=[defaultsPath,...(env.GEMINI_CLI_HOME?[join(env.GEMINI_CLI_HOME,'settings.json'),join(env.GEMINI_CLI_HOME,'.gemini','settings.json')]:[]),home?join(home,'.gemini','settings.json'):null,cwd?join(cwd,'.gemini','settings.json'):null].filter(Boolean);
- for(const file of files){try{const st=lstatSync(file);if(!st.isFile()||st.size>1048576)continue;const doc=JSON.parse(readFileSync(file,'utf8'));if(object(doc?.mcpServers))for(const key of Object.keys(doc.mcpServers))configured.add(key);}catch{}}
- let sentinel='pdd-disabled-none',salt=0;
- while(configured.has(sentinel))sentinel=`pdd-disabled-${createHash('sha256').update([...configured].sort().join('\0')+':'+salt++).digest('hex').slice(0,16)}`;
+ const configured=new Set(object(existing?.mcpServers)?Object.keys(existing.mcpServers):[]),failed=existing?.mcpServers!==undefined&&!object(existing.mcpServers)?[Buffer.from('system:mcpServers')]:[];
+ const effectiveCwd=cwd??process.cwd(),home=env.HOME||homedir(),files=[...new Set([defaultsPath,...(env.GEMINI_CLI_HOME?[join(env.GEMINI_CLI_HOME,'settings.json'),join(env.GEMINI_CLI_HOME,'.gemini','settings.json')]:[]),home?join(home,'.gemini','settings.json'):null,effectiveCwd?join(effectiveCwd,'.gemini','settings.json'):null].filter(Boolean))];
+ for(const file of files){
+  try{lstatSync(file);}catch(e){if(e.code==='ENOENT'||e.code==='ENOTDIR')continue;failed.push(Buffer.from(`${file}:${e.code||e.message}`));continue;}
+  let fd,raw=null;
+  try{
+   const st=statSync(file);if(!st.isFile()||st.size>1048576)throw new Error('invalid_target');
+   fd=openSync(file,'r');const fst=fstatSync(fd);if(!fst.isFile()||fst.size>1048576)throw new Error('invalid_target');
+   const buf=Buffer.alloc(fst.size+1);let n=0;while(n<buf.length){const got=readSync(fd,buf,n,buf.length-n,n);if(!got)break;n+=got;}
+   if(n>1048576)throw new Error('too_large');raw=buf.subarray(0,n);
+   const doc=parseJsonc(raw.toString('utf8'));if(!object(doc)||(doc.mcpServers!==undefined&&!object(doc.mcpServers)))throw new Error('invalid_json');
+   if(doc.mcpServers)for(const key of Object.keys(doc.mcpServers))configured.add(key);
+  }catch(e){
+   failed.push(raw??Buffer.from(`${file}:${e.code||e.message}`));
+   if(raw)for(const [tok] of raw.toString('utf8').matchAll(/pdd-disabled-[0-9A-Za-z_-]*/g))configured.add(tok);
+  }finally{if(fd!==undefined)try{closeSync(fd);}catch{}}
+ }
+ if(!failed.length&&!configured.has('pdd-disabled-none'))return 'pdd-disabled-none';
+ let salt=0,sentinel;
+ do{const h=createHash('sha256');h.update([...configured].sort().join('\0')+'\0');for(const chunk of failed){h.update(chunk);h.update('\0');}h.update(String(salt++));sentinel=`pdd-disabled-${h.digest('hex').slice(0,16)}`;}while(configured.has(sentinel)||failed.some(b=>b.includes(sentinel)));
  return sentinel;
 }
 function geminiOverlay(env,cwd) {
  const systemDir=process.platform==='darwin'?'/Library/Application Support/GeminiCli':process.platform==='win32'?'C:\\ProgramData\\gemini-cli':'/etc/gemini-cli';
  try{if(readdirSync(join(systemDir,'policies')).some(name=>name.endsWith('.toml')))throw new Error('Gemini system policy prevents the private deny-all policy.');}catch(e){if(e.code!=='ENOENT')throw e;}
  const original=env.GEMINI_CLI_SYSTEM_SETTINGS_PATH||join(systemDir,'settings.json'),defaultsPath=env.GEMINI_CLI_SYSTEM_DEFAULTS_PATH||join(dirname(original),'system-defaults.json');let existing={};
- try{const bytes=readFileSync(original);if(bytes.length>1048576)throw new Error('Settings too large');existing=JSON.parse(bytes.toString('utf8'));if(!object(existing))throw new Error('Invalid settings');}catch(e){if(e.code!=='ENOENT')throw e;}
+ try{const bytes=readFileSync(original);if(bytes.length>1048576)throw new Error('Settings too large');existing=parseJsonc(bytes.toString('utf8'));if(!object(existing))throw new Error('Invalid settings');}catch(e){if(e.code!=='ENOENT')throw e;}
  const mcpSentinel=geminiMcpSentinel(cwd,env,existing,defaultsPath);
  const config={...existing,tools:{...existing.tools,core:[],allowed:[],discoveryCommand:'',callCommand:''},hooksConfig:{...existing.hooksConfig,enabled:false},admin:{...existing.admin,mcp:{...existing.admin?.mcp,enabled:false},extensions:{...existing.admin?.extensions,enabled:false},skills:{...existing.admin?.skills,enabled:false}},general:{...existing.general,enableAutoUpdate:false,enableAutoUpdateNotification:false,plan:{...existing.general?.plan,enabled:false,modelRouting:false}}};
  const folder=mkdtempSync(join(tmpdir(),'pdd-agent-gemini-'));chmodSync(folder,0o700);

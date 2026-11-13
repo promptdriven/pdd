@@ -7,8 +7,8 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { askAgent } from '../src/agent-adapters.mjs';
 import { buildAgentInput } from '../src/agent-packet.mjs';
-import { chatCommand, startChat } from '../src/workflow-chat.mjs';
-import { openRun } from '../src/workflow-runner.mjs';
+import { chatCommand, chatLaunch } from '../src/workflow-chat.mjs';
+import { openRun, startRun } from '../src/workflow-runner.mjs';
 import { fixture, packageRoot } from './helpers/workflow-runner-fixture.mjs';
 
 const entries = [
@@ -307,4 +307,185 @@ test('workflow-chat capability-gates --exclude-dynamic-system-prompt-sections fo
       assert.doesNotMatch(pane.commands[1], /--exclude-dynamic-system-prompt-sections/);
     }
   }
+});
+
+test('Gemini MCP sentinel parses JSONC comments/trailing commas, follows symlinks, inspects omitted cwd, and fails closed on unreadable or corrupt settings', async t => {
+  const dir = fs.mkdtempSync(join(tmpdir(), 'pdd-gemini-jsonc-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const geminiHelp = '--approval-mode --admin-policy --extensions --allowed-mcp-server-names --output-format';
+  const sysSettings = join(dir, 'system-settings.json');
+  fs.writeFileSync(sysSettings, '{\n  // system comment\n  "mcpServers": { "sys": { "url": "http://localhost:8080/*not-comment*/ //keep", }, },\n}\n');
+
+  async function pickSentinel(opts) {
+    let sentinel;
+    const res = await askAgent({
+      agent: 'gemini',
+      entries,
+      context: { message: 'Check sentinel' },
+      ...opts,
+      run: async (_cmd, args) => {
+        if (args.includes('--help')) return { code: 0, stdout: geminiHelp, stderr: '' };
+        sentinel = args[args.indexOf('--allowed-mcp-server-names') + 1];
+        return { code: 0, stdout: JSON.stringify({ response: JSON.stringify(validReply) }), stderr: '' };
+      },
+    });
+    assert.deepEqual(res, validReply);
+    return sentinel;
+  }
+
+  // 1. JSONC line/block comments + trailing commas + Stow/Nix symlinked ~/.gemini/settings.json
+  const stowTarget = join(dir, 'dotfiles-gemini-settings.json');
+  fs.writeFileSync(
+    stowTarget,
+    `{
+      // Line comment before mcpServers
+      /* Block comment with "pdd-disabled-fake" inside comment */
+      "mcpServers": {
+        "pdd-disabled-none": {
+          "command": "node", // inline comment
+          "args": ["server.js",],
+        },
+      },
+    }`,
+  );
+  const stowHome = join(dir, 'stow-home'), cleanCwd = join(dir, 'clean-cwd');
+  fs.mkdirSync(join(stowHome, '.gemini'), { recursive: true });
+  fs.mkdirSync(cleanCwd, { recursive: true });
+  fs.symlinkSync(stowTarget, join(stowHome, '.gemini', 'settings.json'));
+
+  const s1 = await pickSentinel({ cwd: cleanCwd, env: { HOME: stowHome, GEMINI_CLI_SYSTEM_SETTINGS_PATH: sysSettings } });
+  const s2 = await pickSentinel({ cwd: cleanCwd, env: { HOME: stowHome, GEMINI_CLI_SYSTEM_SETTINGS_PATH: sysSettings } });
+  assert.equal(s1, s2);
+  assert.match(s1, /^pdd-disabled-[0-9a-f]{16}$/);
+
+  // 2. Omitted cwd still inspects <process.cwd()>/.gemini/settings.json
+  const cleanHome = join(dir, 'clean-home'), omittedWorkspace = join(dir, 'omitted-cwd');
+  fs.mkdirSync(join(cleanHome, '.gemini'), { recursive: true });
+  fs.mkdirSync(join(omittedWorkspace, '.gemini'), { recursive: true });
+  fs.writeFileSync(join(omittedWorkspace, '.gemini', 'settings.json'), '{"mcpServers":{"pdd-disabled-none":{"command":"local"}}}');
+  const prevCwd = process.cwd();
+  try {
+    process.chdir(omittedWorkspace);
+    const omittedSentinel = await pickSentinel({ env: { HOME: cleanHome, GEMINI_CLI_SYSTEM_SETTINGS_PATH: sysSettings } });
+    assert.match(omittedSentinel, /^pdd-disabled-[0-9a-f]{16}$/);
+    assert.notEqual(omittedSentinel, 'pdd-disabled-none');
+  } finally {
+    process.chdir(prevCwd);
+  }
+
+  // 3. Corrupt / unparseable settings.json fails closed to a deterministic hash that cannot match 'pdd-disabled-none' or raw tokens
+  const corruptCwd = join(dir, 'corrupt-cwd');
+  fs.mkdirSync(join(corruptCwd, '.gemini'), { recursive: true });
+  const rawCorrupt = '{"mcpServers": { "pdd-disabled-none": true, "pdd-disabled-deadbeef01234567": true, BROKEN_JSON';
+  fs.writeFileSync(join(corruptCwd, '.gemini', 'settings.json'), rawCorrupt);
+  const c1 = await pickSentinel({ cwd: corruptCwd, env: { HOME: cleanHome, GEMINI_CLI_SYSTEM_SETTINGS_PATH: sysSettings } });
+  const c2 = await pickSentinel({ cwd: corruptCwd, env: { HOME: cleanHome, GEMINI_CLI_SYSTEM_SETTINGS_PATH: sysSettings } });
+  assert.equal(c1, c2);
+  assert.match(c1, /^pdd-disabled-[0-9a-f]{16}$/);
+  assert.ok(!rawCorrupt.includes(c1), 'sentinel must not equal any token in raw corrupt file');
+
+  // 4. Unreadable / broken-symlink settings.json also fails closed deterministically
+  const brokenCwd = join(dir, 'broken-cwd');
+  fs.mkdirSync(join(brokenCwd, '.gemini'), { recursive: true });
+  fs.symlinkSync(join(dir, 'missing-target.json'), join(brokenCwd, '.gemini', 'settings.json'));
+  const b1 = await pickSentinel({ cwd: brokenCwd, env: { HOME: cleanHome, GEMINI_CLI_SYSTEM_SETTINGS_PATH: sysSettings } });
+  const b2 = await pickSentinel({ cwd: brokenCwd, env: { HOME: cleanHome, GEMINI_CLI_SYSTEM_SETTINGS_PATH: sysSettings } });
+  assert.equal(b1, b2);
+  assert.match(b1, /^pdd-disabled-[0-9a-f]{16}$/);
+
+  if (process.geteuid?.() !== 0) {
+    const chmodCwd = join(dir, 'chmod-cwd');
+    fs.mkdirSync(join(chmodCwd, '.gemini'), { recursive: true });
+    const unreadable = join(chmodCwd, '.gemini', 'settings.json');
+    fs.writeFileSync(unreadable, '{"mcpServers":{"pdd-disabled-none":{"command":"x"}}}', { mode: 0o000 });
+    t.after(() => { try { fs.chmodSync(unreadable, 0o600); } catch {} });
+    const u1 = await pickSentinel({ cwd: chmodCwd, env: { HOME: cleanHome, GEMINI_CLI_SYSTEM_SETTINGS_PATH: sysSettings } });
+    const u2 = await pickSentinel({ cwd: chmodCwd, env: { HOME: cleanHome, GEMINI_CLI_SYSTEM_SETTINGS_PATH: sysSettings } });
+    assert.equal(u1, u2);
+    assert.match(u1, /^pdd-disabled-[0-9a-f]{16}$/);
+  }
+});
+
+test('workflow-chat probes Claude --help with effective agents.json probeEnv rather than raw caller env', async t => {
+  const f = await fixture(t, { agent: 'claude' });
+  const modernBin = join(f.base, 'modern-bin'), legacyBin = join(f.base, 'legacy-bin'), home = f.ports.env.HOME;
+  fs.mkdirSync(modernBin);
+  fs.mkdirSync(legacyBin);
+
+  // Caller PATH has modern claude WITH --exclude-dynamic-system-prompt-sections.
+  fs.writeFileSync(
+    join(modernBin, 'claude'),
+    `#!${process.execPath}\nif(process.argv.includes('--help')){process.stdout.write('Options:\\n  --dangerously-skip-permissions\\n  --exclude-dynamic-system-prompt-sections\\n');process.exit(0);}\nif(process.argv[2]==='auth'){process.stdout.write('{"loggedIn":true}');process.exit(0);}\nprocess.stdout.write(JSON.stringify(process.argv.slice(2)));\n`,
+    { mode: 0o755 },
+  );
+  // agents.json entry overrides PATH to legacy claude WITHOUT --exclude-dynamic-system-prompt-sections (and refuses if CLAUDECODE leaked).
+  const probeLog = join(f.base, 'probe-env.json');
+  fs.writeFileSync(
+    join(legacyBin, 'claude'),
+    `#!${process.execPath}\nconst fs=require('node:fs');if(process.argv.includes('--help')){fs.writeFileSync(${JSON.stringify(probeLog)},JSON.stringify({PATH:process.env.PATH,CLAUDECODE:process.env.CLAUDECODE??null,CLAUDE_CONFIG_DIR:process.env.CLAUDE_CONFIG_DIR??null,ENTRY_MARK:process.env.ENTRY_MARK??null}));process.stdout.write('Options:\\n  --dangerously-skip-permissions\\n');process.exit(0);}\nif(process.argv[2]==='auth'){process.stdout.write('{"loggedIn":true}');process.exit(0);}\nprocess.stdout.write(JSON.stringify(process.argv.slice(2)));\n`,
+    { mode: 0o755 },
+  );
+
+  const savedCfg = join(home, '.claude-entry');
+  fs.mkdirSync(savedCfg, { recursive: true });
+  fs.mkdirSync(join(home, '.config', 'pdd'), { recursive: true });
+  fs.writeFileSync(
+    join(home, '.config', 'pdd', 'agents.json'),
+    JSON.stringify({
+      agents: [
+        {
+          name: 'legacy-claude',
+          kind: 'claude',
+          command: 'claude',
+          env: { PATH: `${legacyBin}:/usr/bin:/bin`, CLAUDE_CONFIG_DIR: savedCfg, ENTRY_MARK: 'from-entry' },
+        },
+      ],
+    }),
+  );
+
+  f.ports.env = {
+    ...f.ports.env,
+    PATH: `${modernBin}:/usr/bin:/bin`,
+    CLAUDECODE: '1',
+    PDD_AGENT_SESSION: '1',
+    CLAUDE_CONFIG_DIR: '/caller/should-not-win',
+  };
+
+  const baseHerdr = f.ports.herdr;
+  f.ports.herdr = async args => (args[0] === 'pane' && args[1] === 'run' ? baseHerdr([...args.slice(0, 3), args[3].replace("'claude' ", 'claude ')]) : baseHerdr(args));
+
+  const started = await startRun({ name: 'small-change', issue: '17', agent: 'legacy-claude', cwd: f.source, packageRoot }, {
+    ...f.ports,
+    env: { HOME: home, PATH: `${modernBin}:/usr/bin:/bin`, CLAUDE_CONFIG_DIR: '/caller/should-not-win' },
+  });
+  assert.equal(started.exitCode, 0, started.message);
+  const chat = f.record().chats[0];
+  const pane = f.herdr.paneOf(chat);
+  assert.doesNotMatch(pane.commands[0], /--exclude-dynamic-system-prompt-sections/, 'must probe legacy claude from agents.json PATH, not modern caller PATH');
+  const logged = JSON.parse(fs.readFileSync(probeLog, 'utf8'));
+  assert.equal(logged.PATH, `${legacyBin}:/usr/bin:/bin`);
+  assert.equal(logged.CLAUDECODE, null);
+  assert.equal(logged.CLAUDE_CONFIG_DIR, savedCfg);
+  assert.equal(logged.ENTRY_MARK, 'from-entry');
+
+  // Verify chatLaunch.probeEnv directly strips AGENT_MARKER vars even when present on caller env
+  const direct = chatLaunch({
+    run: f.record(),
+    agent: 'claude',
+    configDir: savedCfg,
+    env: { HOME: home, PATH: `${modernBin}:/usr/bin:/bin`, CLAUDECODE: '1', HERDR_PANE_ID: '%1', PDD_AGENT_SESSION: '1' },
+  });
+  assert.equal(direct.probeEnv.PATH, `${legacyBin}:/usr/bin:/bin`);
+  assert.equal(direct.probeEnv.CLAUDE_CONFIG_DIR, savedCfg);
+  assert.equal(direct.probeEnv.CLAUDECODE, undefined);
+  assert.equal(direct.probeEnv.HERDR_PANE_ID, undefined);
+  assert.equal(direct.probeEnv.PDD_AGENT_SESSION, undefined);
+  if (direct.loginFile) fs.rmSync(direct.loginFile, { force: true });
+
+  // Confirm live session once, then simulate ended chat and verify resume also probes with effective agents.json probeEnv
+  assert.equal((await openRun({ ref: '17', cwd: f.source }, { ...f.ports, env: { HOME: home, PATH: `${modernBin}:/usr/bin:/bin`, HERDR_ENV: '1' } })).exitCode, 0);
+  pane.agent = null;
+  const resumed = await openRun({ ref: '17', cwd: f.source }, { ...f.ports, env: { HOME: home, PATH: `${modernBin}:/usr/bin:/bin`, HERDR_ENV: '1' } });
+  assert.equal(resumed.exitCode, 0, resumed.message);
+  assert.doesNotMatch(pane.commands[1], /--exclude-dynamic-system-prompt-sections/);
 });
