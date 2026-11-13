@@ -151,7 +151,13 @@ ended or moved to the merge check before free slots are counted.
    base check, repairs, END) **except the merge** (merge check step 8); its message
    starts `Autopilot core (observe: no merge):`.
 2. Read the open issues through `ports.listIssues()`. A failed list skips the
-   person checks and intake for this tick; jobs still advance.
+   person checks and intake for this tick; jobs still advance. When any open issue
+   without `pdd:working` or a local job carries `pdd:would-merge`, read
+   `repos/REPO/pulls?state=all&base=BASE&per_page=30` once and, for each such issue whose
+   latest repository PR (head branch `pdd/core-N-*`) is merged into `baseBranch`, read its
+   timeline, remove `pdd:would-merge` and (unless the issue was reopened after that
+   `pdd:would-merge` label or that PR body marks the work partial with `Refs`, `Part of` or
+   `Not fixed yet:`) close the issue (`state_reason: completed`); a failure only warns.
 3. A person stops a job by closing the issue, removing `pdd:working`, adding
    `pdd:stuck` or assigning someone. Then stop its processes and clean up locally,
    with no GitHub write, and do not take that issue again in this tick. A job with a
@@ -1312,7 +1318,12 @@ runs until its end):
    their engine lines from it and name it, and the PR body gets one engine block between
    `<!-- pdd:autopilot-core:evidence:start -->` and `<!-- pdd:autopilot-core:evidence:end -->`
    (replaced in place, before the follow-ups section; its lines never read as a
-   Runtime, Path or Evidence line). The record stays after END: the local cleanup keeps
+   Runtime, Path or Evidence line). When the PR body outside fenced code blocks, code
+   spans and HTML comments has no GitHub closing keyword for `#N` (`close`, `closes`,
+   `closed`, `fix`, `fixes`, `fixed`, `resolve`, `resolves` or `resolved` before `#N`,
+   `REPO#N` or the issue URL) and does not mark `#N` partial (`Refs #N`, `Part of #N` or a
+   `Not fixed yet:` line), prepend `Fixes #N` right before that engine block so a person's
+   merge on GitHub closes the issue automatically. The record stays after END: the local cleanup keeps
    `*-evidence-*.json` like the logs, because worktrees and job files go.
 4. Any red finding: stop the other checks, but first keep the partial results (#3227 fix
    4): while the engine's replay run (T04) still runs, the merge check waits for it (it
@@ -1524,7 +1535,7 @@ runs until its end):
    with the marker `<!-- pdd:autopilot-core:merge:HEAD -->`. Then
    `gh pr merge PR --repo REPO --merge --match-head-commit HEAD`. A failed merge
    waits for the next tick (step `merge`). A confirmed merge closes the issue when it is open,
-   removes `pdd:working`, cleans up locally (see END) and records `merged`.
+   removes `pdd:working` and `pdd:would-merge` when present, cleans up locally (see END) and records `merged`.
    In mode `observe`, the same comment starts `Autopilot would merge this PR (observe
    mode): every check passed for head HEAD. It stays open and ready for review;
    Autopilot does not merge it.` with the marker
