@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 735cce86b6758d8f4981921304db1245e650784b36a2297af5f7b80d5e9670be).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 5d413814e71c26865c705b0c36659770969304e71e1465edc7a9388a73df86ae).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -4509,6 +4509,62 @@ async function observeRunSessions(run, p) {
     });
   }
 }
+function geminiShellSafetyDialog(screen) {
+  if (typeof screen !== 'string') return false;
+  const plain = screen.replace(/\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '');
+  const EDGES = /^[\s\u2500-\u259f]+|[\s\u2500-\u259f]+$/g;
+  const CHOICE_1 = /^(?:([●❯])[ \t]*)?1\.[ \t]*Allow once\b/i;
+  const CHOICE_2 = /^(?:([●❯])[ \t]*)?2\.[ \t]*No,[ \t]*suggest changes(?:[ \t]*\(esc\))?$/i;
+  const INPUT = /^[›>❯](?:\s|$)/;
+  const STATUS_CHROME = /\b(?:YOLO\b|auto-accept\b|no sandbox\b|sandbox\b|context left\b|gemini-[\w.-]+|ctrl\s*\+|shift\s*\+)|\?\s+for shortcuts\b/i;
+  const WARNING = /^(?:⚠\uFE0F?\s*)*(?:CRITICAL SECURITY WARNING:\s+Untrusted Command Flags Detected|CAUTION:\s+Build Configuration Was Recently Modified)\b/i;
+  const lines = plain.split(/\r?\n/).map(raw => {
+    const text = raw.replace(EDGES, '').trim();
+    const rule = !text && /[─━═\-_=]{3,}/.test(raw);
+    return { raw, text, rule, blank: !text && !rule };
+  });
+  let choice2 = -1;
+  for (let i = lines.length - 1; i >= 1; i--) {
+    if (CHOICE_2.test(lines[i].text) && CHOICE_1.test(lines[i - 1].text)) { choice2 = i; break; }
+  }
+  if (choice2 < 1) return false;
+  const m1 = lines[choice2 - 1].text.match(CHOICE_1), m2 = lines[choice2].text.match(CHOICE_2);
+  if (!m1 || !m2 || Boolean(m1[1]) === Boolean(m2[1])) return false;
+  let sawFooter = false, chromeLines = 0;
+  for (let i = choice2 + 1; i < lines.length; i++) {
+    const { raw, text, rule, blank } = lines[i];
+    if (blank) continue;
+    if (rule) {
+      if (/[╭┌]/.test(raw) || chromeLines > 0) return false;
+      continue;
+    }
+    if (!sawFooter && chromeLines === 0 && /^\(Use Enter to select\)$/i.test(text)) { sawFooter = true; continue; }
+    if (!INPUT.test(text) && ++chromeLines <= 4 && STATUS_CHROME.test(text)) continue;
+    return false;
+  }
+  let question = -1;
+  for (let i = choice2 - 2, skipped = 0; i >= 0 && skipped <= 3; i--) {
+    const { text, blank } = lines[i];
+    if (blank) { skipped++; continue; }
+    if (/^Redirection detected\./i.test(text)) { skipped++; continue; }
+    if (/^Allow execution of \[Shell\]\?$/i.test(text)) question = i;
+    break;
+  }
+  if (question < 1) return false;
+  for (let i = question - 1, scanned = 0; i >= 0 && scanned < 30; i--, scanned++) {
+    const { text, rule, blank } = lines[i];
+    if (rule || (blank && lines[i - 1]?.blank)) break;
+    if (blank) continue;
+    if (INPUT.test(text) || /^[✦⏺■⎿]/.test(text) || /^\?\s+\S/.test(text)
+      || /^(?:[●❯][ \t]*)?\d+\.[ \t]/.test(text) || /^\(Use Enter to select\)$/i.test(text)
+      || (!/^[•*-]\s/.test(text) && /^(?:Allow execution of|Apply this change\?|Do you want to proceed\?)/i.test(text)))
+      break;
+    const joined = `${text} ${lines[i + 1]?.text ?? ''}`.replace(/\s+/g, ' ');
+    if (WARNING.test(text) || (/^(?:⚠\uFE0F?\s*)*(?:CRITICAL SECURITY WARNING:|CAUTION:)/i.test(text) && WARNING.test(joined)))
+      return true;
+  }
+  return false;
+}
 async function chatState(run, p, facts = {}) {
   await observeRunSessions(run, p);
   if (run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase)) return 'unconfirmed';
@@ -4570,7 +4626,7 @@ async function chatState(run, p, facts = {}) {
     if (live.status === 'blocked' && (chat.agent ?? run.agent) === 'gemini' && run.state === 'running' && !run.gate && !openQuestion(run)) {
       try {
         const screen = await herdrCommand(p)(['pane', 'read', chat.paneId, '--source', 'detection']);
-        if (typeof screen === 'string' && /(?:CRITICAL SECURITY WARNING: Untrusted Command Flags Detected|CAUTION: Build Configuration Was Recently Modified)[^]*?Allow execution of \[Shell\]\?[^]*?(?:(?:●|❯)[ \t]*1\.[ \t]*Allow once[^\n]*\r?\n[ \t]*2\.|1\.[ \t]*Allow once[^\n]*\r?\n[ \t]*(?:●|❯)[ \t]*2\.)[ \t]*No, suggest changes(?:[ \t]*\(esc\))?[ \t]*(?:\r?\n[ \t]*\(Use Enter to select\)[ \t]*)?\s*$/i.test(screen)) facts.geminiShellSafety = true;
+        if (geminiShellSafetyDialog(screen)) facts.geminiShellSafety = true;
       } catch { /* An unreadable screen leaves the generic blocked status. */ }
     }
     const saved = currentChat(run);
