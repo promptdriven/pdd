@@ -1,10 +1,11 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: f3d567124b7719c1492d3111bb041ff75a389957f91c5bf77965020e43c2c2ab).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 25fc3f496030a3c0874dcec057a7f7c9fb13f37ae522133e22b79819cd048ba5).
 import { markdownLinks, markdownDefinitions, markdownSectionText } from './runtime-markdown.mjs';
 import { buildBindingPlan, runtimeBoundary } from './runtime-binding-plan.mjs';
+import { isTestOwnedPath, promptClaims, resolveOwners } from './file-owner.mjs';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
-import { basename, join, posix, isAbsolute } from 'node:path';
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
+import { basename, join, posix, isAbsolute, relative, resolve, sep } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { expandSource } from './contract-refs.mjs';
 import { exactValue, parseScenarioJson, roundedNumberTokens, stringifyScenarioJson } from './scenario-json.mjs';
@@ -21,7 +22,9 @@ export const LIMITS = Object.freeze({ bytes: 10_485_760, files: 10_000 });
 const TOP_KEYS = new Set(['schema_version', 'story_path', 'criteria', 'initial_world', 'steps', 'entry_paths', 'simulation',
   'check_exemptions', 'context', 'context_byte_budget', 'criteria_scope', 'prompt_mappings', 'app_maps']);
 const REQUIRED_KEYS = ['schema_version', 'criteria', 'initial_world', 'steps'];
-const STEP_KEYS = new Set(['step_id', 'entry_path', 'operation', 'input', 'checks', 'expected_error', 'simulation_overrides', 'model']);
+const REQUIRED_STEP_KEYS = ['step_id', 'entry_path', 'operation', 'input', 'checks'];
+const OPTIONAL_STEP_KEYS = ['expected_error', 'simulation_overrides', 'model'];
+const STEP_KEYS = new Set([...REQUIRED_STEP_KEYS, ...OPTIONAL_STEP_KEYS]);
 const RULE_OPS = new Set(['at_most', 'at_least', 'not_contains', 'all_in', 'equals_ignore_case']);
 const EXACT_OPS = new Set(['equals', 'not_equals', 'one_of', 'count', ...RULE_OPS]);
 const SCHEMA_RULES = new Set(['type', 'properties', 'required', 'additionalProperties', 'items', 'enum', 'const', 'oneOf',
@@ -53,10 +56,11 @@ const AC_HEADING = /(?<![^\n])##[ \t]+Acceptance(?:[ \t]+Criteria)?[ \t]*(?![^\n
 const NEXT_HEADING = /(?<![^\n])##[ \t]+/;
 const NUMBERED_ITEM = /^([1-9][0-9]*)[.)][ \t]+(.+)$/;
 const BULLET_ITEM = /(?<![^\n])[ \t]*[-*][ \t]+([\s\S]+?)(?=\n[ \t]*[-*][ \t]+|(?![\s\S]))/g;
+const AC_ID = /^ac-?([1-9][0-9]*)$/i;
 
-// A port of the engine's explicit_story_criteria (program_scenario.py, eae2202a).
-export function storyCriteria(source) {
+function numberedStoryCriteria(source, { requireHeading = false } = {}) {
   const heading = AC_HEADING.exec(source);
+  if (requireHeading && !heading) return [];
   const body = heading ? source.slice(heading.index + heading[0].length) : source;
   const result = [];
   let current = null, expected = 1;
@@ -76,12 +80,19 @@ export function storyCriteria(source) {
     }
   }
   if (current !== null) result.push(current.join(' '));
-  if (!result.length && heading) {
-    const next = NEXT_HEADING.exec(body);
-    const section = next ? body.slice(0, next.index) : body;
-    return [...section.matchAll(BULLET_ITEM)].map(match => pyWords(match[1]));
-  }
   return result;
+}
+
+// A port of the engine's explicit_story_criteria (program_scenario.py, eae2202a).
+export function storyCriteria(source) {
+  const result = numberedStoryCriteria(source);
+  if (result.length) return result;
+  const heading = AC_HEADING.exec(source);
+  if (!heading) return result;
+  const body = source.slice(heading.index + heading[0].length);
+  const next = NEXT_HEADING.exec(body);
+  const section = next ? body.slice(0, next.index) : body;
+  return [...section.matchAll(BULLET_ITEM)].map(match => pyWords(match[1]));
 }
 
 export function gitFiles(root) {
@@ -196,7 +207,7 @@ const outsideFixtureProjects = (files, roots) => files.filter(path => !roots.som
 // Git-visible regular files and Stories: discovery reads Story files, never JSON files.
 function discoverStories(root, files, strict = false, workspace=loadRuntimeWorkspace({root}), discoveryFiles = null) {
   workspace=boundedWorkspace(root,workspace);
-  const visible = new Set(), stories = [], storyFiles = [], titles = new Map(), warnings = [], linkedPaths = new Set(), sizes = new Map();
+  const visible = new Set(), stories = [], storyFiles = [], titles = new Map(), storyTexts = new Map(), warnings = [], linkedPaths = new Set(), sizes = new Map();
   let linkedFiles = strict||workspace.configured ? filePort(root, new Set(files), strict,workspace) : undefined;
   for (const path of files) {
     if(!allowsRuntimePath(workspace,path))continue;
@@ -223,17 +234,18 @@ function discoverStories(root, files, strict = false, workspace=loadRuntimeWorks
         warnings.push(`Warning: ${path}: discovery unavailable (${error.code ?? error.message}).`); continue;
       }
       titles.set(path, titleOf(text));
+      storyTexts.set(path, text);
       if (hasAcceptance(text)) stories.push({ path, name: storyName(path), title: titleOf(text) });
     }
   }
   const read = path => strict || linkedPaths.has(path) ? linkedFiles.read({path}).content : readText(root, path);
-  return { visible, stories, storyFiles, titles, warnings, sizes, read };
+  return { visible, stories, storyFiles, titles, storyTexts, warnings, sizes, read };
 }
 
 function discoverTests(root, files, strict = false,workspace=loadRuntimeWorkspace({root}),excludeFixtureProjects=false) {
   const excluded = excludeFixtureProjects ? fixtureProjectRoots(root, files) : [];
   const discoveryFiles = new Set(outsideFixtureProjects(files, excluded));
-  const { visible, stories, storyFiles, titles, warnings: storyWarnings, sizes, read } = discoverStories(root, files, strict,workspace,discoveryFiles);
+  const { visible, stories, storyFiles, titles, storyTexts, warnings: storyWarnings, sizes, read } = discoverStories(root, files, strict,workspace,discoveryFiles);
   const named = new Set(stories.map(story => story.path)), rule = matchTests(storyFiles, [...visible].filter(path => discoveryFiles.has(path)));
   rule.untested = rule.untested.filter(item => named.has(item.storyPath));
   const tests = rule.tests.map(entry => {
@@ -242,7 +254,28 @@ function discoverTests(root, files, strict = false,workspace=loadRuntimeWorkspac
     if (entry.problem) return { ...test, error: entry.problem };
     if (size > LIMITS.bytes) return { ...test, error: `${entry.path} is ${formatSize(size)}. The upload limit is 10 MB, so pdd cannot send it.` };
     // A matched test is read in full, at any size below the upload limit.
-    try { return { ...test, doc: JSON.parse(read(entry.path)) }; }
+    try {
+      const rawDoc = JSON.parse(read(entry.path));
+      let doc = rawDoc, criteriaRefusal = null, resolvedStorySource;
+      const hasRefCriteria = isObject(doc?.criteria) && (Object.hasOwn(doc.criteria, '$contract') || Object.hasOwn(doc.criteria, '$seed'))
+        || Array.isArray(doc?.criteria) && doc.criteria.some(item => isObject(item) && (Object.hasOwn(item, '$contract') || Object.hasOwn(item, '$seed')));
+      if (isObject(doc) && !hasRefCriteria && needsCriteriaResolution(doc) && !documentRefusal(doc, entry.path, { allowOmittedCriteria: true })
+        && typeof doc.story_path === 'string' && doc.story_path && visible.has(doc.story_path)
+        && (!entry.storyPath || doc.story_path === entry.storyPath) && !partialTestRefusal(doc)) {
+        const storySource = storyTexts.get(doc.story_path);
+        if (typeof storySource === 'string') {
+          resolvedStorySource = storySource;
+          const resolved = resolveScenarioCriteria(doc, storySource);
+          if (resolved.changed && !resolved.refusal) doc = resolved.doc;
+          else if (resolved.refusal) criteriaRefusal = resolved.refusal;
+        }
+      }
+      const item = { ...test, doc };
+      Object.defineProperty(item, 'rawDoc', { value: rawDoc });
+      if (resolvedStorySource !== undefined) Object.defineProperty(item, 'storySource', { value: resolvedStorySource });
+      if (criteriaRefusal) Object.defineProperty(item, 'criteriaRefusal', { value: criteriaRefusal });
+      return item;
+    }
     catch (error) {
       if (error instanceof SyntaxError) return { ...test, error: `${entry.path} is not valid JSON: ${error.message}` };
       if (error.code === 'EACCES' || error.code === 'EISDIR' || error.code === 'ENOENT' || error instanceof PreflightError) return { ...test, error: `${entry.path} cannot be read: ${error.code ?? error.message}.` };
@@ -621,6 +654,10 @@ export const formatWarningLines = prompt => interfaceFormatWarnings(prompt?.inte
 // Lint and the files preview give unsupported schema keywords as advice too (#3206); a check keeps its schema rules.
 export const schemaKeywordWarningLines = prompt => (isObject(prompt?.interface) ? interfaceSchemaProblems(prompt.interface) : [])
   .filter(item => item.code === 'graph-schema-unsupported-keyword').map(item => `Warning: ${prompt.path} ${item.pointer} ${item.code}: ${item.rule}`);
+const validCliImplementation = impl => isObject(impl) && Object.keys(impl).length === 2 && impl.kind === 'cli'
+  && typeof impl.command === 'string' && Boolean(impl.command.trim()) && !/[\n\r;|&<>`$\\'"(){}*?\[\]]/.test(impl.command);
+const isCliEntry = (iface, index) => index >= 0 && Array.isArray(iface?.conventions)
+  && ['input_schema', 'result_schema'].every(key => iface.conventions.some(item => isObject(item) && item.path === `/entries/${index}/${key}` && item.convention === 'cli'));
 export function interfaceSchemaProblems(iface) {
   const kindProblems = interfaceKindProblems(iface);
   if (kindProblems.length || iface?.kind === 'native-only') return kindProblems;
@@ -628,6 +665,9 @@ export function interfaceSchemaProblems(iface) {
   if (Array.isArray(iface?.draft_gaps) && iface.draft_gaps.length) out.push({code:'interface-draft-incomplete',pointer:'/draft_gaps',rule:iface.draft_gaps.join('; ')});
   for (const [index, entry] of (Array.isArray(iface?.entries) ? iface.entries : []).entries()) {
     for (const key of ['input_schema', 'result_schema']) if (isObject(entry) && Object.hasOwn(entry, key)) schemaRules(entry[key], `/entries/${index}/${key}`, out);
+    if (isObject(entry) && Object.hasOwn(entry, 'implementation') && !validCliImplementation(entry.implementation)) {
+      out.push({ code: 'interface-implementation-invalid', pointer: `/entries/${index}/implementation`, rule: 'must declare {"kind": "cli", "command": "..."} with whitespace-separated argv and no shell syntax.' });
+    }
   }
   for (const [index, resource] of (Array.isArray(iface?.resources) ? iface.resources : []).entries()) {
     for (const [opIndex, operation] of (Array.isArray(resource?.operations) ? resource.operations : []).entries()) {
@@ -899,9 +939,72 @@ export function discoveryRefusal(test) {
 
 const criterionShape = item => isObject(item) && isDeepStrictEqual(Object.keys(item).sort(), ['id','text'])
   && typeof item.id === 'string' && !!item.id && typeof item.text === 'string' && !!item.text;
-const stepShape = step => isObject(step) && !Object.keys(step).some(key=>!STEP_KEYS.has(key))
-  && ['step_id','entry_path','operation','input','checks'].every(key=>Object.hasOwn(step,key))
-  && ['step_id','entry_path','operation'].every(key=>typeof step[key]==='string'&&!!step[key]);
+function idOnlyCriterion(item) {
+  if (typeof item === 'string' && item && item.trim() === item) return item;
+  if (isObject(item) && Object.keys(item).length === 1 && typeof item.id === 'string' && item.id && item.id.trim() === item.id) return item.id;
+  return null;
+}
+const needsCriteriaResolution = doc => !Object.hasOwn(doc, 'criteria')
+  || (Array.isArray(doc.criteria) && doc.criteria.some(item => !criterionShape(item)));
+function resolveScenarioCriteria(doc, storySource) {
+  if (!isObject(doc) || typeof doc.story_path !== 'string' || !doc.story_path) return { doc, changed: false, refusal: null };
+  if (!Object.hasOwn(doc, 'criteria')) {
+    const numbered = numberedStoryCriteria(storySource, { requireHeading: true });
+    if (!numbered.length) return { doc, changed: false, refusal: refusal('story-criteria-missing', 'story_path', `${doc.story_path} has no numbered "## Acceptance criteria" list.`) };
+    return { doc: { ...doc, criteria: numbered.map((text, index) => ({ id: `AC${index + 1}`, text })) }, changed: true, refusal: null };
+  }
+  if (!Array.isArray(doc.criteria) || !doc.criteria.length) {
+    return { doc, changed: false, refusal: refusal('invalid-criterion', 'criteria', 'The test has no criteria.') };
+  }
+  const hasIdOnly = doc.criteria.some(item => idOnlyCriterion(item) !== null);
+  const ids = new Set(), positions = new Set(), criteria = [];
+  let numbered = null, changed = false;
+  for (const [index, item] of doc.criteria.entries()) {
+    if (criterionShape(item)) {
+      const match = hasIdOnly ? AC_ID.exec(item.id) : null, position = match ? Number(match[1]) : 0;
+      if (ids.has(item.id) || (position && positions.has(position))) {
+        return { doc, changed: false, refusal: refusal('duplicate-criterion', `criteria[${index}]`, `The criterion ID ${item.id} is used twice.`) };
+      }
+      ids.add(item.id);
+      if (position) positions.add(position);
+      criteria.push(item);
+      continue;
+    }
+    const id = idOnlyCriterion(item);
+    if (!id) return { doc, changed: false, refusal: refusal('invalid-criterion', `criteria[${index}]`, 'Each criterion has only a nonempty "id" and "text", or a numbered ID ("AC1" or {"id": "AC1"}).') };
+    if (ids.has(id)) return { doc, changed: false, refusal: refusal('duplicate-criterion', `criteria[${index}]`, `The criterion ID ${id} is used twice.`) };
+    ids.add(id);
+    numbered ??= numberedStoryCriteria(storySource, { requireHeading: true });
+    if (!numbered.length) return { doc, changed: false, refusal: refusal('story-criteria-missing', 'story_path', `${doc.story_path} has no numbered "## Acceptance criteria" list.`) };
+    const match = AC_ID.exec(id), position = match ? Number(match[1]) : 0;
+    if (!position || position > numbered.length) {
+      return { doc, changed: false, refusal: refusal('invalid-criterion', `criteria[${index}]`,
+        `Criterion ID ${show(id)} does not match numbered item 1..${numbered.length} in ${doc.story_path}.`) };
+    }
+    if (positions.has(position)) {
+      return { doc, changed: false, refusal: refusal('duplicate-criterion', `criteria[${index}]`, `The criterion ID ${id} is used twice.`) };
+    }
+    positions.add(position);
+    criteria.push({ id, text: numbered[position - 1] });
+    changed = true;
+  }
+  return { doc: changed ? { ...doc, criteria } : doc, changed, refusal: null };
+}
+const STEP_SHAPE_NOTE = `Required step keys: ${REQUIRED_STEP_KEYS.join(', ')}; optional step keys: ${OPTIONAL_STEP_KEYS.join(', ')}.`;
+function stepProblem(step) {
+  if (!isObject(step)) return `A step must be a JSON object. ${STEP_SHAPE_NOTE}`;
+  const missing = REQUIRED_STEP_KEYS.filter(key => !Object.hasOwn(step, key));
+  const extra = Object.keys(step).filter(key => !STEP_KEYS.has(key));
+  if (missing.length || extra.length) {
+    const parts = [];
+    if (missing.length) parts.push(`missing required key${missing.length > 1 ? 's' : ''} ${missing.map(key => `"${key}"`).join(', ')}`);
+    if (extra.length) parts.push(`unknown key${extra.length > 1 ? 's' : ''} ${extra.map(key => `"${key}"`).join(', ')}`);
+    return `Invalid step (${parts.join('; ')}). ${STEP_SHAPE_NOTE}`;
+  }
+  const badStrings = ['step_id', 'entry_path', 'operation'].filter(key => typeof step[key] !== 'string' || !step[key]);
+  if (badStrings.length) return `Step ${badStrings.map(key => `"${key}"`).join(', ')} must be ${badStrings.length > 1 ? 'nonblank strings' : 'a nonblank string'}.`;
+  return null;
+}
 const checkShape = check => isObject(check) && ['criterion_id','target','path','op'].every(key=>Object.hasOwn(check,key));
 function appMapsRefusal(doc) {
   if (!Object.hasOwn(doc,'app_maps')) return null;
@@ -918,9 +1021,11 @@ function appMapsRefusal(doc) {
   }
   return null;
 }
-function documentRefusal(doc,path) {
+function documentRefusal(doc, path, { allowOmittedCriteria = false } = {}) {
   if (!isObject(doc)) return refusal('invalid-document', 'scenario', `${path} is not a JSON object.`);
-  const missing = REQUIRED_KEYS.filter(key => !Object.hasOwn(doc, key)), extra = Object.keys(doc).filter(key => !TOP_KEYS.has(key));
+  const required = allowOmittedCriteria && typeof doc.story_path === 'string' && doc.story_path
+    ? REQUIRED_KEYS.filter(key => key !== 'criteria') : REQUIRED_KEYS;
+  const missing = required.filter(key => !Object.hasOwn(doc, key)), extra = Object.keys(doc).filter(key => !TOP_KEYS.has(key));
   if (missing.length) return refusal('invalid-document', 'scenario', `The test has no ${missing.map(key => `"${key}"`).join(', ')}.`);
   if (extra.length) return refusal('invalid-document', 'scenario', `The test has keys the interpreter does not know: ${extra.map(key => `"${key}"`).join(', ')}.`);
   if (doc.schema_version !== TEST_SCHEMA) return refusal('invalid-document', 'schema_version', `schema_version must be "${TEST_SCHEMA}".`);
@@ -939,7 +1044,8 @@ export function scenarioShapeRefusal(doc,path) {
   if(!Array.isArray(doc.steps)||!doc.steps.length)return refusal('missing-steps','steps','The test has no steps.');
   for(const [index,step] of doc.steps.entries()) {
     const section=`steps[${index}]`;
-    if(!stepShape(step))return refusal('invalid-step',section,'A step has step_id, entry_path, operation, input and checks.');
+    const brokenStep=stepProblem(step);
+    if(brokenStep)return refusal('invalid-step',section,brokenStep);
     if(Object.hasOwn(step,'model')&&(typeof step.model!=='string'||!step.model.trim()))return refusal('invalid-step-model',`${section}.model`,'A step model must be a model name (a string).');
     if(!Array.isArray(step.checks))return refusal('invalid-check',`${section}.checks`,'checks must be a list.');
     for(const [at,check] of step.checks.entries()) {
@@ -956,70 +1062,69 @@ function checkTest(root, found, test, prompts) {
     const prepared = preparedText(root,found.visible,test.path,readText(root,test.path),'scenario');
     try { doc = parseScenarioJson(prepared.text); } catch { /* Preserve ordinary malformed scenario handling. */ }
   }
-  if (test.error) return discoveryRefusal(test);
-  const shape=documentRefusal(doc,test.path);if(shape)return shape;
-  if (typeof doc.story_path !== 'string' || !doc.story_path) return refusal('pdd-no-story', 'story_path', 'The test has no story_path. Name its story, for example "user_stories/<story>.md".');
-  if (!found.visible.has(doc.story_path)) return refusal('story-missing', 'story_path', `${doc.story_path} is not a Git-visible file.`);
-  if (test.storyPath && doc.story_path !== test.storyPath) return discoveryRefusal({ ...test, doc });
-  const partial = partialTestRefusal(doc); if (partial) return partial;
-  if (!Array.isArray(doc.criteria) || !doc.criteria.length) return refusal('invalid-criterion', 'criteria', 'The test has no criteria.');
-  const ids = new Set();
-  for (const [index, item] of doc.criteria.entries()) {
-    if (!criterionShape(item)) {
-      return refusal('invalid-criterion', `criteria[${index}]`, 'Each criterion has only a nonempty "id" and "text".');
-    }
-    if (ids.has(item.id)) return refusal('duplicate-criterion', `criteria[${index}]`, `The criterion ID ${item.id} is used twice.`);
-    ids.add(item.id);
-  }
-  const story = storyCriteria(readText(root, doc.story_path));
-  if (!story.length) return refusal('story-criteria-missing', 'story_path', `${doc.story_path} has no numbered "## Acceptance criteria" list.`);
+  const done = (issue, story = null) => ({ refusal: issue, doc, story });
+  if (test.error) return done(discoveryRefusal(test));
+  const shape = documentRefusal(doc, test.path, { allowOmittedCriteria: true });
+  if (shape) return done(shape);
+  if (typeof doc.story_path !== 'string' || !doc.story_path) return done(refusal('pdd-no-story', 'story_path', 'The test has no story_path. Name its story, for example "user_stories/<story>.md".'));
+  if (!found.visible.has(doc.story_path)) return done(refusal('story-missing', 'story_path', `${doc.story_path} is not a Git-visible file.`));
+  if (test.storyPath && doc.story_path !== test.storyPath) return done(discoveryRefusal({ ...test, doc }));
+  const partial = partialTestRefusal(doc); if (partial) return done(partial);
+  const storySource = sourceFilePort(root, found.visible, found.workspace).read({ path: doc.story_path }).content;
+  const resolved = resolveScenarioCriteria(doc, storySource);
+  if (resolved.refusal) return done(resolved.refusal);
+  doc = resolved.doc;
+  const ids = new Set(doc.criteria.map(item => item.id));
+  const story = storyCriteria(storySource);
+  if (!story.length) return done(refusal('story-criteria-missing', 'story_path', `${doc.story_path} has no numbered "## Acceptance criteria" list.`), story);
   const testTexts = doc.criteria.map(item => item.text).sort(), storyTexts = [...story].sort();
-  if (!isDeepStrictEqual(testTexts, storyTexts) && !criterionPlan(doc, story)) return refusal('story-criterion-mismatch', 'criteria', firstDifference(testTexts, storyTexts));
-  if (!Array.isArray(doc.steps) || !doc.steps.length) return refusal('missing-steps', 'steps', 'The test has no steps.');
+  if (!isDeepStrictEqual(testTexts, storyTexts) && !criterionPlan(doc, story)) return done(refusal('story-criterion-mismatch', 'criteria', firstDifference(testTexts, storyTexts)), story);
+  if (!Array.isArray(doc.steps) || !doc.steps.length) return done(refusal('missing-steps', 'steps', 'The test has no steps.'), story);
   const exact = new Set(), inputIssues = [];
   for (const [index, step] of doc.steps.entries()) {
     const section = `steps[${index}]`, at = { step: index + 1 };
-    if (!stepShape(step)) {
-      return refusal('invalid-step', section, 'A step has step_id, entry_path, operation, input and checks.', at);
+    const brokenStep = stepProblem(step);
+    if (brokenStep) {
+      return done(refusal('invalid-step', section, brokenStep, at), story);
     }
     if (Object.hasOwn(step, 'model') && (typeof step.model !== 'string' || !step.model.trim())) {
-      return refusal('invalid-step-model', `${section}.model`, 'A step model must be a model name (a string).', at);
+      return done(refusal('invalid-step-model', `${section}.model`, 'A step model must be a model name (a string).', at), story);
     }
     if (!prompts.has(step.entry_path)) prompts.set(step.entry_path, readPrompt(root, found.visible, step.entry_path,found.workspace));
     const prompt = prompts.get(step.entry_path), broken = promptRefusal(prompt, section);
-    if (broken) return { ...broken, ...at };
+    if (broken) return done({ ...broken, ...at }, story);
     const schemaIssues = promptSchemaRefusals(root, found, prompt, prompts);
-    if (schemaIssues.length) return schemaIssues;
+    if (schemaIssues.length) return done(schemaIssues, story);
     const entry = (Array.isArray(prompt.interface.entries) ? prompt.interface.entries : []).find(item => item?.operation === step.operation);
     const native = [...prompts.values()].some(item => item.interface?.kind === 'native-only');
-    if (!entry && !native) return refusal('entry-operation-missing', section, `${step.entry_path} has no operation "${step.operation}".`, at);
+    if (!entry && !native) return done(refusal('entry-operation-missing', section, `${step.entry_path} has no operation "${step.operation}".`, at), story);
     const errorStep = Object.hasOwn(step, 'expected_error');
     if (!native && errorStep && !(Array.isArray(entry.errors) && entry.errors.includes(step.expected_error))) {
-      return refusal('pdd-unknown-error', `${section}.expected_error`, `"${step.expected_error}" is not in the errors of ${step.operation} in ${step.entry_path}.`, at);
+      return done(refusal('pdd-unknown-error', `${section}.expected_error`, `"${step.expected_error}" is not in the errors of ${step.operation} in ${step.entry_path}.`, at), story);
     }
-    if (!Array.isArray(step.checks)) return refusal('invalid-check', `${section}.checks`, 'checks must be a list.', at);
+    if (!Array.isArray(step.checks)) return done(refusal('invalid-check', `${section}.checks`, 'checks must be a list.', at), story);
     let errorChecks = 0;
     for (const [checkIndex, check] of step.checks.entries()) {
       if (!checkShape(check)) {
-        return refusal('invalid-check', `${section}.checks[${checkIndex}]`, 'A check has criterion_id, target, path and op.', at);
+        return done(refusal('invalid-check', `${section}.checks[${checkIndex}]`, 'A check has criterion_id, target, path and op.', at), story);
       }
-      if (!ids.has(check.criterion_id)) return refusal('unknown-criterion', `${section}.checks[${checkIndex}]`, `The check names ${show(check.criterion_id)}, which is not a criterion ID.`, at);
+      if (!ids.has(check.criterion_id)) return done(refusal('unknown-criterion', `${section}.checks[${checkIndex}]`, `The check names ${show(check.criterion_id)}, which is not a criterion ID.`, at), story);
       if (EXACT_OPS.has(check.op) || (Object.hasOwn(check, 'html') && check.op === 'exists')) exact.add(check.criterion_id);
       if (check.target === 'error' && check.path === '/code' && check.op === 'equals' && check.value === step.expected_error) errorChecks += 1;
     }
     if (errorStep && errorChecks === 0) {
-      return refusal('missing-error-check', `${section}.checks`, `An error step needs one check: target "error", path "/code", op "equals", value "${step.expected_error}".`, at);
+      return done(refusal('missing-error-check', `${section}.checks`, `An error step needs one check: target "error", path "/code", op "equals", value "${step.expected_error}".`, at), story);
     }
     if (!native) inputIssues.push(...checkInput(step.input, entry.input_schema, index).refusals);
   }
-  if (inputIssues.length) return inputIssues;
+  if (inputIssues.length) return done(inputIssues, story);
   for (const step of doc.steps) for (const check of step.checks) {
-    if (!exact.has(check.criterion_id) && !ordinaryInexactCheck(check)) return refusal('criterion-needs-exact-check', 'criteria',
-      `The checks for ${check.criterion_id} do not establish valid criterion coverage.`, {hint:'Fix the check operation, target and JSON pointer before checking this test.'});
+    if (!exact.has(check.criterion_id) && !ordinaryInexactCheck(check)) return done(refusal('criterion-needs-exact-check', 'criteria',
+      `The checks for ${check.criterion_id} do not establish valid criterion coverage.`, {hint:'Fix the check operation, target and JSON pointer before checking this test.'}), story);
   }
-  if (!exact.size) return refusal('unchecked-criteria', 'criteria', 'No criterion has an exact check.',
-    {hint:'Add an exact result, world or call-count check for an observable criterion.'});
-  return null;
+  if (!exact.size) return done(refusal('unchecked-criteria', 'criteria', 'No criterion has an exact check.',
+    {hint:'Add an exact result, world or call-count check for an observable criterion.'}), story);
+  return done(null, story);
 }
 
 // Rules P1-P10 for the selected tests. Returns rows and warnings; never throws for a test problem.
@@ -1037,15 +1142,17 @@ export function preflight({ root, found, selected,workspace=found.workspace??loa
       prompts.set(path, prompt);
       for (const call of Array.isArray(prompt.interface?.calls) ? prompt.interface.calls : []) visit(call?.target);
     };
-    let refused, plan, testSha = null;
+    let refused, plan, testSha = null, effectiveDoc = test.doc;
     try {
       for (const step of Array.isArray(test.doc?.steps) ? test.doc.steps : []) visit(step?.entry_path);
-      refused = checkTest(root, found, test, prompts);
+      const checked = checkTest(root, found, test, prompts);
+      refused = checked.refusal;
+      effectiveDoc = checked.doc;
       const nativeProblems = [...prompts.values()].filter(prompt => prompt.interface?.kind === 'native-only')
         .map(prompt => promptRefusal(prompt,'interface')).filter(Boolean);
       if (nativeProblems.length) refused = [...(refused ? [refused].flat() : []),...nativeProblems];
       if (!refused || refused.code === 'unchecked-criteria') {
-        plan = criterionPlan(test.doc, storyCriteria(readText(root, test.doc.story_path)));
+        plan = criterionPlan(effectiveDoc, checked.story ?? storyCriteria(sourceFilePort(root, found.visible, workspace).read({ path: effectiveDoc.story_path }).content));
       }
       if (!refused && reviews.length) testSha = sha256(readFileSync(join(root,test.path)));
     } catch (error) {
@@ -1053,66 +1160,151 @@ export function preflight({ root, found, selected,workspace=found.workspace??loa
       refused = refusal(error.code ?? 'source-unavailable', 'source', error.message,
         {hint:'Restore the named dependency, make it readable, or correct its declared path.'});
     }
-    const row = { test: test.path, story: test.story, title: test.title, refusals: refused ? [refused].flat() : [], warnings: numberWarnings(test.doc, { testPath: test.path, testSha, reviews }),
-      max_calls: defaultMaxCalls(test.doc), steps: Array.isArray(test.doc?.steps) ? test.doc.steps : [],
-      criteria_total: plan?.criteria.length ?? (Array.isArray(test.doc?.criteria) ? test.doc.criteria.length : 0),
+    const row = { test: test.path, story: test.story, title: test.title, refusals: refused ? [refused].flat() : [], warnings: numberWarnings(effectiveDoc, { testPath: test.path, testSha, reviews }),
+      max_calls: defaultMaxCalls(effectiveDoc), steps: Array.isArray(effectiveDoc?.steps) ? effectiveDoc.steps : [],
+      criteria_total: plan?.criteria.length ?? (Array.isArray(effectiveDoc?.criteria) ? effectiveDoc.criteria.length : 0),
       ...(plan?.not_checked.length ? {not_checked:plan.not_checked} : {}), draft: false };
     row.native_only = [...prompts.values()].filter(item => item.interface?.kind === 'native-only').map(item => ({path:item.path,reason:item.interface.reason}));
     row.draft = row.steps.some(step => prompts.get(step?.entry_path)?.interface?.status === 'draft');
     for (const [index, step] of row.steps.entries()) {
-      const prompt = prompts.get(step?.entry_path), entry = prompt?.interface?.entries?.find?.(item => item?.operation === step?.operation);
+      const prompt = prompts.get(step?.entry_path), entries = Array.isArray(prompt?.interface?.entries) ? prompt.interface.entries : [];
+      const entryIndex = entries.findIndex(item => item?.operation === step?.operation), entry = entryIndex >= 0 ? entries[entryIndex] : undefined;
       for (const text of entry ? checkInput(step.input, entry.input_schema, index).warnings : []) warnings.push(`Warning: ${test.path} ${text}`);
+      if (entry && isCliEntry(prompt?.interface, entryIndex) && !entry.implementation) {
+        const message = `Warning: ${step.entry_path} entry ${step.operation} has no implementation declaration.`;
+        if (!warnings.includes(message)) warnings.push(message);
+      }
     }
     // Number advice from the exact test values. It never blocks; the interpreter decides.
     // A native-only test is never sent to the interpreter, so it gets no number advice.
-    let tokens = [], range = null;
-    if (!row.native_only.length) try { const text = readText(root, test.path); if (text !== null) { tokens = roundedNumberTokens(text); range = interpreterIntegerWarning(parseScenarioJson(text), test.path); } } catch { tokens = []; }
+    let tokens = [], range = null, rawTestText = null;
+    if (!test.error && !row.refusals.some(item => item.section === 'source')) {
+      try { rawTestText = readText(root, test.path); } catch { rawTestText = null; }
+    }
+    if (!row.native_only.length && rawTestText !== null) {
+      try { tokens = roundedNumberTokens(rawTestText); range = interpreterIntegerWarning(parseScenarioJson(rawTestText), test.path); } catch { tokens = []; }
+    }
     if (range) warnings.push(range);
     if (!row.native_only.length) for (const prompt of prompts.values()) for (const line of schemaBoundWarnings(prompt)) if (!warnings.includes(line)) warnings.push(line);
-    for (const prompt of prompts.values()) for (const line of formatWarningLines(prompt)) if (!warnings.includes(line)) warnings.push(line);
+    for (const prompt of prompts.values()) {
+      for (const line of formatWarningLines(prompt)) if (!warnings.includes(line)) warnings.push(line);
+      const proseWarning = promptProseWarningLine(prompt.path, prompt.rawText ?? prompt.text);
+      if (proseWarning && !warnings.includes(proseWarning)) warnings.push(proseWarning);
+    }
+    const storyWarning = storyComplexityWarningLine({ path: test.path, storyPath: test.storyPath, doc: test.doc }, rawTestText);
+    if (storyWarning && !warnings.includes(storyWarning)) warnings.push(storyWarning);
     for (const item of tokens) warnings.push(`Warning: ${test.path} ${interpreterSection(item.path)} is ${item.source}, which reads as the Number ${String(item.value)}. Write the value you mean: plain digits for an exact whole number, or the exact Number spelling.`);
     return row;
   });
   return { rows, warnings };
 }
 
-// Keep PDD's declaration classification local. Token offsets preserve all other
-// JSON spellings; in particular, parsing and stringifying would round numbers.
+export function missingCliImplementationWarnings({ root, found, selected, workspace = found.workspace ?? loadRuntimeWorkspace({ root }) }) {
+  workspace = boundedWorkspace(root, workspace);
+  const warnings = [], prompts = new Map();
+  for (const test of Array.isArray(selected) ? selected : []) {
+    if (test?.error) continue;
+    for (const step of Array.isArray(test?.doc?.steps) ? test.doc.steps : []) {
+      const path = step?.entry_path;
+      if (typeof path !== 'string') continue;
+      if (!prompts.has(path)) {
+        try { prompts.set(path, readPrompt(root, found.visible, path, workspace)); } catch { prompts.set(path, null); }
+      }
+      const iface = prompts.get(path)?.interface, entries = Array.isArray(iface?.entries) ? iface.entries : [];
+      const entryIndex = entries.findIndex(item => item?.operation === step?.operation), entry = entryIndex >= 0 ? entries[entryIndex] : undefined;
+      if (entry && isCliEntry(iface, entryIndex) && !entry.implementation) {
+        const message = `Warning: ${path} entry ${step.operation} has no implementation declaration.`;
+        if (!warnings.includes(message)) warnings.push(message);
+      }
+    }
+  }
+  return warnings;
+}
+
+// Keep PDD's declaration classification and CLI implementation binding local.
+// Token offsets preserve all other JSON spellings; parsing and stringifying would round numbers.
 export function executableInterfaceText(text) {
   const blocks = interfaceBlocks(text);
   if (blocks.length !== 1) return text;
   const block = blocks[0], body = block[1];
   let value;
-  try { value = JSON.parse(body); } catch { return text; }
-  if (!isObject(value) || !Object.hasOwn(value, 'kind') || !['full', 'partial'].includes(value.kind)) return text;
-  const tokens = [...body.matchAll(/"(?:[^"\\]|\\[\s\S])*"|[{}\[\],:]/g)];
-  const members = [];
-  let depth = 0, keyExpected = false, comma = null;
-  for (let index = 0; index < tokens.length; index++) {
-    const token = tokens[index], spelling = token[0];
-    if (spelling === '{' || spelling === '[') {
-      depth++;
-      if (depth === 1) keyExpected = true;
-    } else if (spelling === '}' || spelling === ']') depth--;
-    else if (depth === 1 && spelling === ',') { keyExpected = true; comma = token.index; }
-    else if (depth === 1 && keyExpected && spelling.startsWith('"')) {
-      if (JSON.parse(spelling) === 'kind') {
-        const result = tokens[index + 2];
-        if (tokens[index + 1]?.[0] !== ':' || !result?.[0].startsWith('"')) return text;
-        members.push({ start: token.index, end: result.index + result[0].length, comma });
+  try { value = parseScenarioJson(body); } catch { return text; }
+  if (!isObject(value) || (Object.hasOwn(value, 'kind') && !['full', 'partial'].includes(value.kind))) return text;
+  const hasLocalKind = Object.hasOwn(value, 'kind');
+  const entries = Array.isArray(value.entries) ? value.entries : [];
+  if (entries.some(entry => isObject(entry) && Object.hasOwn(entry, 'implementation') && !validCliImplementation(entry.implementation))) return text;
+  const hasImplementation = entries.some(entry => isObject(entry) && validCliImplementation(entry.implementation));
+  if (!hasLocalKind && !hasImplementation) return text;
+  const tokens = [...body.matchAll(/"(?:[^"\\]|\\[\s\S])*"|[{}\[\],:]|[^\s{}\[\],:"]+/g)];
+  const skipValue = pos => {
+    const first = tokens[pos];
+    if (!first) return null;
+    if (first[0] !== '{' && first[0] !== '[') return { end: first.index + first[0].length, next: pos + 1 };
+    let depth = 0;
+    for (let index = pos; index < tokens.length; index++) {
+      const spelling = tokens[index][0];
+      if (spelling === '{' || spelling === '[') depth++;
+      else if (spelling === '}' || spelling === ']') {
+        depth--;
+        if (depth === 0) return { end: tokens[index].index + 1, next: index + 1 };
       }
-      keyExpected = false;
+    }
+    return null;
+  };
+  const objectMembers = pos => {
+    const members = [];
+    let cur = pos + 1, commaBefore = null;
+    while (cur < tokens.length && tokens[cur][0] !== '}') {
+      const keyTok = tokens[cur], valPos = cur + 2;
+      if (!keyTok?.[0].startsWith('"') || tokens[cur + 1]?.[0] !== ':') return null;
+      const skipped = skipValue(valPos), after = skipped ? tokens[skipped.next] : null;
+      if (!skipped || !after) return null;
+      members.push({ key: JSON.parse(keyTok[0]), keyStart: keyTok.index, valPos, end: skipped.end, commaBefore, commaAfter: after[0] === ',' ? after.index : null });
+      if (after[0] !== ',') break;
+      commaBefore = after.index;
+      cur = skipped.next + 1;
+    }
+    return members;
+  };
+  const arrayItems = pos => {
+    const items = [];
+    let cur = pos + 1;
+    while (cur < tokens.length && tokens[cur][0] !== ']') {
+      const skipped = skipValue(cur), after = skipped ? tokens[skipped.next] : null;
+      if (!skipped || !after) return null;
+      items.push(cur);
+      if (after[0] !== ',') break;
+      cur = skipped.next + 1;
+    }
+    return items;
+  };
+  const memberSpan = member => member.commaBefore !== null ? [member.commaBefore, member.end]
+    : member.commaAfter !== null ? [member.keyStart, member.commaAfter + 1] : [member.keyStart, member.end];
+  const rootMembers = tokens[0]?.[0] === '{' ? objectMembers(0) : null;
+  if (!rootMembers) return text;
+  const spans = [];
+  if (hasLocalKind) {
+    const kindMembers = rootMembers.filter(member => member.key === 'kind');
+    if (kindMembers.length !== 1 || !tokens[kindMembers[0].valPos]?.[0].startsWith('"')) return text;
+    spans.push(memberSpan(kindMembers[0]));
+  }
+  if (hasImplementation) {
+    const entriesMembers = rootMembers.filter(member => member.key === 'entries');
+    if (entriesMembers.length !== 1 || tokens[entriesMembers[0].valPos]?.[0] !== '[') return text;
+    const itemPositions = arrayItems(entriesMembers[0].valPos);
+    if (!itemPositions) return text;
+    for (const itemPos of itemPositions) {
+      if (tokens[itemPos]?.[0] !== '{') continue;
+      const entryMembers = objectMembers(itemPos);
+      if (!entryMembers) return text;
+      const implMembers = entryMembers.filter(member => member.key === 'implementation');
+      if (implMembers.length > 1) return text;
+      if (implMembers.length === 1) spans.push(memberSpan(implMembers[0]));
     }
   }
-  // Ambiguous duplicate metadata retains the original admission diagnostic.
-  if (members.length !== 1) return text;
-  const member = members[0];
-  let start = member.comma ?? member.start, end = member.end;
-  if (member.comma === null) {
-    const following = tokens.find(token => token.index >= end);
-    if (following?.[0] === ',') end = following.index + 1;
-  }
-  const projected = body.slice(0, start) + body.slice(end);
+  if (!spans.length) return text;
+  spans.sort((a, b) => b[0] - a[0]);
+  const projected = spans.reduce((current, [start, end]) => current.slice(0, start) + current.slice(end), body);
   const offset = block.indices[1][0];
   return text.slice(0, offset) + projected + text.slice(block.indices[1][1]);
 }
@@ -1157,20 +1349,84 @@ function omitFullKind(body) {
   return body.slice(0, body.indexOf('{') + 1) + kept.join(',') + trailing + body.slice(end);
 }
 
-// --fill-hash: fill draft hashes, omit full kind; optionally compact drafts.
-export function fillHashes({ root, files = gitFiles(root), compact = false,workspace=loadRuntimeWorkspace({root}) }) {
+function syncedCriteriaTexts(criteria, numbered) {
+  if (!numbered.length || !Array.isArray(criteria) || criteria.length !== numbered.length) return null;
+  if (criteria.some(item => !criterionShape(item))) return null;
+  const parsed = criteria.map(item => AC_ID.exec(item.id));
+  if (!parsed.every(Boolean)) return null;
+  const indices = parsed.map(match => Number(match[1]));
+  if (indices.some(index => index < 1 || index > numbered.length) || new Set(indices).size !== indices.length) return null;
+  return indices.map(index => numbered[index - 1]);
+}
+
+// Replace only top-level criteria[].text string tokens in an already parsed scenario JSON object.
+function replaceCriteriaTexts(body, nextTexts) {
+  const tokens = [...body.matchAll(/"(?:[^"\\]|\\.)*"|[{}[\],:]|[^\s{}[\],:"]+/g)];
+  let at = 0;
+  const node = () => {
+    const head = tokens[at++];
+    if (!head) return null;
+    if (head[0] === '{') {
+      const members = [];
+      if (tokens[at]?.[0] !== '}') while (at < tokens.length) {
+        const key = tokens[at++];
+        if (!key?.[0].startsWith('"') || tokens[at]?.[0] !== ':') return null;
+        at++;
+        const value = node();
+        if (!value) return null;
+        members.push({ key: JSON.parse(key[0]), value });
+        if (tokens[at]?.[0] === ',') at++; else break;
+      }
+      if (tokens[at]?.[0] !== '}') return null;
+      at++;
+      return { kind: 'object', members };
+    }
+    if (head[0] === '[') {
+      const items = [];
+      if (tokens[at]?.[0] !== ']') while (at < tokens.length) {
+        const item = node();
+        if (!item) return null;
+        items.push(item);
+        if (tokens[at]?.[0] === ',') at++; else break;
+      }
+      if (tokens[at]?.[0] !== ']') return null;
+      at++;
+      return { kind: 'array', items };
+    }
+    return { kind: head[0].startsWith('"') ? 'string' : 'scalar', start: head.index, end: head.index + head[0].length };
+  };
+  const root = node();
+  const criteria = root?.kind === 'object' ? root.members.filter(member => member.key === 'criteria') : [];
+  if (criteria.length !== 1 || criteria[0].value.kind !== 'array' || criteria[0].value.items.length !== nextTexts.length) return null;
+  const edits = [];
+  for (const [index, item] of criteria[0].value.items.entries()) {
+    const texts = item.kind === 'object' ? item.members.filter(member => member.key === 'text') : [];
+    if (texts.length !== 1 || texts[0].value.kind !== 'string') return null;
+    edits.push({ start: texts[0].value.start, end: texts[0].value.end, text: JSON.stringify(nextTexts[index]) });
+  }
+  let out = body;
+  for (const edit of edits.reverse()) out = out.slice(0, edit.start) + edit.text + out.slice(edit.end);
+  return out;
+}
+
+// --fill-hash: fill draft hashes, omit full kind, sync stale scenario criteria[].text; optionally compact drafts.
+export function fillHashes({ root, files = gitFiles(root), targets, compact = false,workspace=loadRuntimeWorkspace({root}) }) {
   workspace=boundedWorkspace(root,workspace);
-  const result = { filled: [], current: [], refused: [], stale: [], warnings: [] };
+  const result = { filled: [], current: [], refused: [], stale: [], warnings: [] }, synced = [];
+  Object.defineProperty(result, 'synced', { value: synced });
   if (compact === true) result.compacted = [];
-  for (const path of files) {
+  const visibleSet = new Set(files);
+  const targetSet = targets === undefined ? null : new Set(targets);
+  const candidates = targetSet ? files.filter(path => targetSet.has(path)) : files;
+  for (const path of candidates) {
     if (!allowsRuntimePath(workspace,path) || !path.endsWith('.prompt.md') || !statOf(join(root, path))?.isFile()) continue;
-    let text;try{text=filePort(root,new Set(files),true,workspace).read({path}).content;}catch(error){result.refused.push({path,message:error.message});continue;}
+    let text;try{text=filePort(root,visibleSet,true,workspace).read({path}).content;}catch(error){result.refused.push({path,message:error.message});continue;}
     const blocks = interfaceBlocks(text);
     try {
-      preparedText(root,new Set(files),path,text,'prompt',workspace);
-      if(workspace.configured){const pending=[path],seen=new Set(),port=sourceFilePort(root,new Set(files));
+      preparedText(root,visibleSet,path,text,'prompt',workspace);
+      if(workspace.configured){const pending=[path],seen=new Set(),port=sourceFilePort(root,visibleSet);
       for(let i=0;i<pending.length;i++){const owner=pending[i];if(seen.has(owner))continue;seen.add(owner);const content=owner===path?text:port.read({path:owner}).content;
-        for(const raw of markdownContext(content)){const target=contextPath(raw,owner,new Set(files));if(target){requireRuntimePath(workspace,{path:target,from:owner,chain:[path]});pending.push(target);}}
+        for(const raw of markdownContext(content)){const target=contextPath(raw,owner,visibleSet);if(target){requireRuntimePath(workspace,{path:target,from:owner,chain:[path]});pending.push(target);}}
         if(owner.endsWith('.prompt.md'))for(const block of interfaceBlocks(content)){let doc;try{doc=JSON.parse(block[1]);}catch{continue;}for(const call of doc.calls??[])if(typeof call?.target==='string'){requireRuntimePath(workspace,{path:call.target,from:owner,chain:[path]});pending.push(call.target);}}
       }}
     }
@@ -1214,13 +1470,49 @@ export function fillHashes({ root, files = gitFiles(root), compact = false,works
     if (proseSha256(next) !== hash) { result.refused.push({ path, message: `pdd could not fill "prose_sha256" in ${path} without a change to its text.` }); continue; }
     if (next !== text) {
       requireRuntimePath(loadRuntimeWorkspace({root}),{path,from:'Hash destination'});
-      const safe=filePort(root,new Set(files),true);
+      const safe=filePort(root,visibleSet,true);
       if(safe.read({path}).content!==text)throw new PreflightError(5,`${path}: changed before hash write.`);
       writeFileSync(join(root, path), next);
     }
     (current ? result.current : result.filled).push({ path });
     if (normalized) result.warnings.push({ path, message: `${path} /kind: removed redundant "kind": "full"; full interfaces omit kind.` });
     if (whitespaceChanged) result.compacted.push({ path });
+  }
+  const excludedRoots = targetSet ? [] : fixtureProjectRoots(root, files);
+  const scenarioFiles = (targetSet ? candidates : outsideFixtureProjects(candidates, excludedRoots))
+    .filter(path => isTestFolderJson(path) && allowsRuntimePath(workspace, path));
+  if (scenarioFiles.length) {
+    const storyFiles = (targetSet ? files : outsideFixtureProjects(files, excludedRoots))
+      .filter(path => isStoryPath(path) && allowsRuntimePath(workspace, path));
+    const matchedByPath = new Map(matchTests(storyFiles, [...new Set([...storyFiles, ...scenarioFiles])]).tests
+      .flatMap(entry => (entry.files ?? [entry.path]).map(path => [path, entry])));
+    for (const path of scenarioFiles) {
+      if (!statOf(join(root, path))?.isFile()) continue;
+      let rawText, doc;
+      try {
+        rawText = filePort(root, visibleSet, true, workspace).read({ path }).content;
+        doc = parseScenarioJson(rawText);
+      } catch { continue; }
+      if (!isObject(doc) || doc.schema_version !== TEST_SCHEMA || typeof doc.story_path !== 'string' || !doc.story_path) continue;
+      if (!visibleSet.has(doc.story_path) || !allowsRuntimePath(workspace, doc.story_path)) continue;
+      const matched = matchedByPath.get(path);
+      if (matched?.problem || (matched?.storyPath && matched.storyPath !== doc.story_path)) continue;
+      let storySource;
+      try { storySource = sourceFilePort(root, visibleSet, workspace).read({ path: doc.story_path }).content; } catch { continue; }
+      const nextTexts = syncedCriteriaTexts(doc.criteria, numberedStoryCriteria(storySource, { requireHeading: true }));
+      if (!nextTexts || nextTexts.every((text, index) => doc.criteria[index].text === text)) continue;
+      const next = replaceCriteriaTexts(rawText, nextTexts);
+      if (next === null || next === rawText) continue;
+      const expectedDoc = { ...doc, criteria: doc.criteria.map((item, index) => ({ ...item, text: nextTexts[index] })) };
+      let same = false;
+      try { same = isDeepStrictEqual(parseScenarioJson(next), expectedDoc); } catch { same = false; }
+      if (!same) continue;
+      requireRuntimePath(loadRuntimeWorkspace({ root }), { path, from: 'Hash destination' });
+      const safe = filePort(root, visibleSet, true);
+      if (safe.read({ path }).content !== rawText) throw new PreflightError(5, `${path}: changed before hash write.`);
+      writeFileSync(join(root, path), next);
+      synced.push({ path });
+    }
   }
   return result;
 }
@@ -1524,7 +1816,7 @@ function preparedText(root, visible, path, text, format,workspace) {
   }
 }
 
-function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadRuntimeWorkspace({root}),excludeFixtureProjects=tests === undefined }, strict = false) {
+function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadRuntimeWorkspace({root}),excludeFixtureProjects=tests === undefined,validateCriteria=true }, strict = false) {
   const policyBefore=JSON.stringify(loadRuntimeWorkspace({root}));workspace=boundedWorkspace(root,workspace);
   const names = gitFiles(root), visible = new Set(names), overlay = new Map(), payload = new Map(), queue = [], visited = new Set();
   const chains=new Map(),preparationReads=new Set(),referenceReads=new Set();
@@ -1581,11 +1873,25 @@ function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadR
         : discoveryRefusal({path:file.path,storyPath:expected?.storyPath,doc});
       if (authority) throw Object.assign(new PreflightError(4, `${file.path}: ${authority.message}`), authority,
         {message:`${file.path}: ${authority.message}`,hint:'Restore the Story path selected by the test name, then run the selection again.'});
-      if (typeof doc?.story_path === 'string' && !scenarioShapeRefusal(doc, file.path)) {
+      if (typeof doc?.story_path === 'string' && !documentRefusal(doc, file.path, { allowOmittedCriteria: true })) {
         add(doc.story_path, file.path, 'story');
-        const plan = capturedCriterionPlan(doc, storyCriteria(bytes(inspect(doc.story_path, file.path)).toString('utf8')), file.path);
-        if (plan?.not_checked.length && plan.checked) content = Buffer.from(stringifyScenarioJson({...doc,criteria:plan.criteria,
-          check_exemptions:plan.not_checked.map(item => ({criterion_id:item.criterion_id,reason:'out-of-scope',detail:item.reason}))}), 'utf8');
+        if (validateCriteria) {
+          const storySource = bytes(inspect(doc.story_path, file.path)).toString('utf8');
+          const partial = partialTestRefusal(doc);
+          const resolved = partial ? { doc, changed: false, refusal: null } : resolveScenarioCriteria(doc, storySource);
+          if (resolved.refusal && needsCriteriaResolution(doc)) {
+            throw Object.assign(new PreflightError(4, `${file.path}: ${resolved.refusal.message}`), resolved.refusal,
+              { message: `${file.path}: ${resolved.refusal.message}`, hint: 'Fix the scenario criteria or Story acceptance list, then run the selection again.' });
+          }
+          if (resolved.changed && !resolved.refusal) content = Buffer.from(stringifyScenarioJson(resolved.doc), 'utf8');
+          if (!resolved.refusal && !scenarioShapeRefusal(resolved.doc, file.path)) {
+            const plan = capturedCriterionPlan(resolved.doc, storyCriteria(storySource), file.path);
+            if (resolved.changed || (plan?.not_checked.length && plan.checked)) {
+              content = Buffer.from(stringifyScenarioJson({ ...resolved.doc, criteria: plan.criteria,
+                ...(plan?.not_checked.length ? { check_exemptions: plan.not_checked.map(item => ({ criterion_id: item.criterion_id, reason: 'out-of-scope', detail: item.reason })) } : {}) }), 'utf8');
+            }
+          }
+        }
       }
     }
     const result = {...file,bytes:content,size:content.length};
@@ -1857,6 +2163,36 @@ export function captureSource(root, { attempts = 3, ...selection } = {}) {
   return captureWithPolicy(root, { attempts, ...selection });
 }
 
+// Resolve a scoped hash request before mutation. Capture remains the one owner
+// of source closure, availability, workspace and reference validation.
+export function prepareHashSelection({ root, cwd, words }, { capture = captureSource } = {}) {
+  const files = gitFiles(root), visible = new Set(files), workspace = loadRuntimeWorkspace({root});
+  const realRoot = realpathSync(root), realCwd = realpathSync(cwd);
+  const normalized = words.map(word => {
+    const candidate = relative(realRoot, resolve(realCwd, word)).split(sep).join('/');
+    return visible.has(candidate) || (!candidate.startsWith('../') && candidate !== '..' && statOf(resolve(realCwd, word))?.isDirectory()) ? (candidate || '.') : word;
+  });
+  for (const path of normalized) if (visible.has(path)) requireRuntimePath(workspace,{path,from:'Selected source'});
+  const found = findTests({root,files,workspace,excludeFixtureProjects:false});
+  const promptTargets = normalized.filter(path => visible.has(path) && path.endsWith('.prompt.md'));
+  const testWords = normalized.filter(path => !promptTargets.includes(path));
+  const selection = testWords.length ? selectTests(found, testWords) : {selected:[],unknown:[],untested:[]};
+  if (selection.untested.length) throw new PreflightError(2, selection.untested.join('\n'));
+  if (selection.unknown.length) {
+    const stories = [...found.tests.map(test => `  ${test.story}  ${test.path}${test.title && test.title !== test.story ? `  (${test.title})` : ''}`),
+      ...(found.untested ?? []).map(item => `  ${item.story}  no test (expected ${expectedTestPath(item.storyPath)})`)];
+    throw new PreflightError(2, [`Unknown story ${selection.unknown.map(word => JSON.stringify(word)).join(', ')}. Stories:`, ...stories].join('\n'));
+  }
+  for (const test of selection.selected) {
+    const problem = discoveryRefusal(test);
+    if (problem) throw new PreflightError(4, problem.message);
+  }
+  const selectedTests = selection.selected.map(test => test.path);
+  const captured = capture(root,{tests:[...selectedTests,...promptTargets],appMap:null,workspace,...(capture===captureSource?{validateCriteria:false}:{})});
+  const inventory = captured.files.map(file => typeof file === 'string' ? file : file.path);
+  return { files: [...new Set([...files, ...inventory])], targets: [...new Set([...inventory.filter(path => path.endsWith('.prompt.md')), ...selectedTests])] };
+}
+
 function captureWithPolicy(root, { attempts = 3, ...selection } = {}, strict = false) {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const captured = captureOnce(root, selection, strict);
@@ -1887,29 +2223,585 @@ export function whyNoTests(root, visible, found = discoverTests(root, [...visibl
   return why.length > 5 ? [...why.slice(0, 5), `…and ${why.length - 5} more`] : why;
 }
 
-// Source files named (in backticks) by more than one prompt: one warning line each (real-user cli issue 10).
-export function sharedSourceFiles(root, visible) {
-  const owners = new Map(), warnings = [];
-  for (const prompt of [...visible].filter(path => allowsRuntimePath(loadRuntimeWorkspace({root}),path)&&path.endsWith('.prompt.md')).sort()) {
-    if (Number(statOf(join(root,prompt))?.size ?? 0) > LIMITS.bytes) continue;
+const PROSE_NON_SOURCE_FILE = /(?:^|\/)\.[^/]+$|\.(?:json|jsonl|ndjson|ya?ml|toml|ini|cfg|conf|lock|md|txt|csv|tsv|xml|svg|png|jpe?g|gif|webp|ico|pdf|woff2?)$/i;
+
+function readRegularPrefix(root, path, limit) {
+  const stat = statOf(join(root, path));
+  if (!stat?.isFile()) return null;
+  let fd;
+  try { fd = openSync(join(root, path), constants.O_RDONLY | constants.O_NOFOLLOW); }
+  catch (error) {
+    if (['ENOENT', 'ENOTDIR', 'ELOOP'].includes(error.code)) return null;
+    if (['EACCES', 'EPERM', 'EISDIR'].includes(error.code)) return false;
+    throw error;
+  }
+  try {
+    const buffer = Buffer.alloc(Math.min(limit, Number(fstatSync(fd).size) + 1));
+    let total = 0;
+    while (total < buffer.length) {
+      const count = readSync(fd, buffer, total, buffer.length - total, total);
+      if (!count) break;
+      total += count;
+    }
+    return buffer.subarray(0, total);
+  } finally { closeSync(fd); }
+}
+
+function safeClosureTarget(raw, from, allowedSet) {
+  if (typeof raw !== 'string') return null;
+  try {
+    const resolved = from ? contextPath(raw, from, allowedSet) : sourcePath(raw, 'Selected source');
+    return resolved && allowedSet.has(resolved) ? resolved : null;
+  } catch { return null; }
+}
+
+// Source files owned by more than one prompt: one warning line each, scoped to selected tests when supplied.
+export function sharedSourceFiles(root, visible, { tests = null, prompts: selectedPrompts = null, workspace = loadRuntimeWorkspace({ root }) } = {}) {
+  const policy = boundedWorkspace(root, workspace);
+  const allowedSet = new Set([...visible].filter(path => allowsRuntimePath(policy, path)));
+  const promptPaths = [...allowedSet].filter(path => path.endsWith('.prompt.md')).sort();
+  const promptTexts = new Map(), warnings = [];
+  let linkedPort;
+  for (const prompt of promptPaths) {
+    const stat = statOf(join(root, prompt));
+    if (Number(stat?.size ?? 0) > LIMITS.bytes) continue;
     let text;
-    try { text = readText(root, prompt); }
+    try { text = stat?.isSymbolicLink() ? (linkedPort ??= sourceFilePort(root, allowedSet, policy)).read({ path: prompt }).content : readText(root, prompt); }
     catch (error) {
-      if (!(error instanceof PreflightError && error.exitCode === 4) && !['EACCES','EPERM','EISDIR','ENOENT'].includes(error.code)) throw error;
+      if (!(error instanceof PreflightError && error.exitCode === 4) && !['EACCES', 'EPERM', 'EISDIR', 'ENOENT'].includes(error.code)) throw error;
       warnings.push(`Warning: ${prompt}: source ownership advice unavailable (${error.code ?? error.message}).`); continue;
     }
-    for (const match of text.matchAll(/`([^`\s]+)`/g)) {
-      const path = match[1].replace(/^\.\//, '');
-      if (path === prompt || path.endsWith('.md') || !visible.has(path)) continue;
-      owners.set(path, new Set([...(owners.get(path) ?? []), prompt]));
+    promptTexts.set(prompt, text);
+  }
+  let scope = null;
+  if (tests !== null || selectedPrompts !== null) {
+    scope = new Set();
+    const queue = [], visited = new Set();
+    const enqueue = (raw, from = null, role = 'context') => {
+      const target = safeClosureTarget(raw, from, allowedSet);
+      if (target && !visited.has(`${role}:${target}`)) queue.push({ path: target, role });
+    };
+    const readSafe = path => {
+      if (promptTexts.has(path)) return promptTexts.get(path);
+      const stat = statOf(join(root, path));
+      if (!stat || Number(stat.size) > LIMITS.bytes) return null;
+      try { return stat.isSymbolicLink() ? (linkedPort ??= sourceFilePort(root, allowedSet, policy)).read({ path }).content : readText(root, path); }
+      catch { return null; }
+    };
+    for (const raw of selectedPrompts ?? []) {
+      const target = safeClosureTarget(raw, null, allowedSet);
+      if (target?.endsWith('.prompt.md')) { scope.add(target); enqueue(target); }
+    }
+    for (const entry of tests ?? []) {
+      const testPath = typeof entry === 'string' ? safeClosureTarget(entry, null, allowedSet) : safeClosureTarget(entry?.path, null, allowedSet);
+      let doc = isObject(entry?.doc) ? entry.doc : null;
+      if (!doc && testPath) {
+        const raw = readSafe(testPath);
+        if (raw) { try { const parsed = JSON.parse(raw); if (isObject(parsed)) doc = parsed; } catch {} }
+      }
+      if (typeof entry?.storyPath === 'string') enqueue(entry.storyPath, null, 'story');
+      if (!doc) continue;
+      if (typeof doc.story_path === 'string') enqueue(doc.story_path, null, 'story');
+      for (const item of Array.isArray(doc.entry_paths) ? doc.entry_paths : []) enqueue(item);
+      for (const item of Array.isArray(doc.app_maps) ? doc.app_maps : []) enqueue(item, null, 'app-map');
+      for (const step of Array.isArray(doc.steps) ? doc.steps : []) if (typeof step?.entry_path === 'string') enqueue(step.entry_path);
+      for (const item of Array.isArray(doc.context) ? doc.context : []) {
+        if (typeof item?.prompt_path === 'string') enqueue(item.prompt_path);
+        for (const contextItem of Array.isArray(item?.paths) ? item.paths : []) enqueue(contextItem);
+      }
+    }
+    while (queue.length) {
+      const { path, role } = queue.shift(), key = `${role}:${path}`;
+      if (visited.has(key)) continue;
+      visited.add(key);
+      if (path.endsWith('.prompt.md')) scope.add(path);
+      if (role === 'app-map') {
+        const text = readSafe(path); if (!text) continue;
+        let map; try { map = JSON.parse(text); } catch { continue; }
+        const walk = value => {
+          if (Array.isArray(value)) { for (const item of value) walk(item); return; }
+          if (!isObject(value)) return;
+          if (typeof value.prompt_path === 'string') enqueue(value.prompt_path);
+          if (typeof value.owner_prompt === 'string') enqueue(value.owner_prompt);
+          for (const field of ['screens', 'router', 'routes', 'handlers', 'handler', 'after', 'timers', 'host_regions', 'helpers']) walk(value[field]);
+        };
+        walk(map);
+      } else if (path.endsWith('.md')) {
+        const text = readSafe(path); if (!text) continue;
+        if (role === 'story' || isStoryPath(path)) {
+          for (const member of runtimeBoundary(path, text) ?? []) enqueue(member);
+        }
+        for (const raw of markdownContext(text)) enqueue(raw, path);
+        if (path.endsWith('.prompt.md')) {
+          for (const block of interfaceBlocks(text)) {
+            let doc; try { doc = JSON.parse(block[1]); } catch { continue; }
+            for (const call of Array.isArray(doc?.calls) ? doc.calls : []) if (typeof call?.target === 'string') enqueue(call.target, path);
+          }
+        }
+      }
     }
   }
-  return [...warnings,...[...owners].filter(([, prompts]) => prompts.size > 1).sort(([a], [b]) => a.localeCompare(b))
-    .map(([path, prompts]) => `Warning: ${path} is named by ${prompts.size} prompts (${[...prompts].join(', ')}). One prompt should own each source file.`)];
+  const candidatePaths = [...allowedSet].filter(path => !path.endsWith('.md')).sort((a, b) => a.localeCompare(b));
+  const rawBindings = allowedSet.has('pdd-bindings.json') ? readRegularPrefix(root, 'pdd-bindings.json', 65_536) : null;
+  const bindings = rawBindings ? rawBindings.toString('utf8') : rawBindings;
+  const heads = candidatePaths.map(path => ({ path, content: readRegularPrefix(root, path, 4097) }));
+  const prompts = [...promptTexts.entries()].map(([path, content]) => ({ path, content }));
+  const allowedPromptSet = new Set(promptPaths);
+  const resolved = resolveOwners({ paths: candidatePaths, bindings, heads, prompts });
+  const conflicts = [];
+  for (const row of resolved.files) {
+    if (row.source === 'prose' && PROSE_NON_SOURCE_FILE.test(row.path)) continue;
+    const owners = [...new Set(row.owners.filter(prompt => allowedPromptSet.has(prompt)))].sort();
+    if (owners.length < 2) continue;
+    if (scope && !owners.some(prompt => scope.has(prompt))) continue;
+    conflicts.push(`Warning: ${row.path} is named by ${owners.length} prompts (${owners.join(', ')}). One prompt should own each source file.`);
+  }
+  return [...warnings, ...conflicts];
 }
 
 // Files sent that are not prompt, story or test files.
 export function otherFiles(files, found) {
   const known = new Set([...found.tests.map(test => test.path), ...found.stories.map(story => story.path)]);
   return files.filter(file => !file.path.endsWith('.prompt.md') && !known.has(file.path));
+}
+
+const MISPLACED_CI = /^(?:\.github)\//i;
+const MISPLACED_CONFIG = /(?:^|\/)(?:package(?:-lock)?\.json|pdd\.json|tsconfig(?:\.[^/]+)?\.json|jsconfig\.json)$/i;
+const NON_CODE_ASSET = /(?:^|\/)\.[^/]+$|\.(?:json|jsonl|ndjson|ya?ml|toml|ini|cfg|conf|lock|md|txt|csv|tsv|xml|svg|png|jpe?g|gif|webp|ico|pdf|woff2?)$/i;
+const HEADER_COMMENT = /^\s*(?:\/\/+|#+|--|;+|\/\*+|\*+|<!--|"""|''')?\s*Generated from (\S+\.prompt\.md)(?: \(sha256: ([a-f0-9]{64})\))?\.?\s*(?:\*\/|-->|"""|''')?\s*$/;
+const EXCUSE_CLAUSE = /(?:^|;\s*)(?:(TODO|FIXME|HACK|XXX)(?:\([^)\r\n]*\))?(?=$|[\s:—–-])|(todo|fixme|hack)(?:\([^)\r\n]*\))?\s*[:—–-])/;
+const PROMPT_PROSE_LINE_LIMIT = 500;
+const PROMPT_PROSE_ELEVATED_LIMIT = 1000;
+const STORY_STEP_LIMIT = 15;
+const STORY_LINE_LIMIT = 1000;
+
+function promptProseLineCount(text) {
+  const prose = text.replace(INTERFACE, '').trimEnd();
+  return prose ? prose.split(/\r?\n/).length : 0;
+}
+
+function promptProseWarningLine(promptPath, promptText) {
+  if (typeof promptText !== 'string') return null;
+  const proseLines = promptProseLineCount(promptText);
+  if (proseLines > PROMPT_PROSE_ELEVATED_LIMIT) {
+    return `Warning: oversized prompt (elevated): ${promptPath} has ${proseLines} prose lines (limit: ${PROMPT_PROSE_LINE_LIMIT}; elevated above ${PROMPT_PROSE_ELEVATED_LIMIT}). Split the module into focused contracts or use "kind": "native-only" with deterministic code tests.`;
+  }
+  if (proseLines > PROMPT_PROSE_LINE_LIMIT) {
+    return `Warning: oversized prompt: ${promptPath} has ${proseLines} prose lines (limit: ${PROMPT_PROSE_LINE_LIMIT}). Keep prompt prose focused on WHAT, WHY and failure boundaries; let the Runtime interface or $contract schema own field inventories.`;
+  }
+  return null;
+}
+
+function textLineCount(text) {
+  if (typeof text !== 'string' || !text.length) return 0;
+  const trimmed = text.replace(/\r?\n$/, '');
+  return trimmed ? trimmed.split(/\r?\n/).length : 0;
+}
+
+function storyComplexityWarningLine({ path, storyPath, doc }, rawText) {
+  if (!isObject(doc) || (Object.hasOwn(doc, 'schema_version') && doc.schema_version !== TEST_SCHEMA)) return null;
+  const steps = Array.isArray(doc.steps) ? doc.steps.length : 0;
+  const lines = typeof rawText === 'string' ? textLineCount(rawText) : 0;
+  const reasons = [];
+  if (steps > STORY_STEP_LIMIT) reasons.push(`${steps} scenario steps (limit: ${STORY_STEP_LIMIT})`);
+  if (lines > STORY_LINE_LIMIT) reasons.push(`${lines} lines (limit: ${STORY_LINE_LIMIT})`);
+  if (!reasons.length) return null;
+  const storyLabel = storyPath ?? (typeof doc.story_path === 'string' && doc.story_path.trim() ? doc.story_path.trim() : null) ?? path;
+  return `Warning: oversized Story: ${storyLabel} (${path}) has ${reasons.join(' and ')}. Keep prompt scenarios focused on policy and authority boundaries and move multi-step state-machine or wire-protocol sequences to native tests (RUNBOOK.md §17, §18).`;
+}
+
+function promptOpeningSentence(text) {
+  const lines = new TextDecoder().decode(Buffer.from(text, 'utf8').subarray(0, 65_536)).split(/\r?\n/);
+  let at = 0;
+  const blanks = () => { while (at < lines.length && !lines[at].trim()) at++; };
+  blanks();
+  if (/^# /.test(lines[at] ?? '')) { at++; blanks(); }
+  const stop = line => !line.trim() || /^\s*#/.test(line) || /^\s*(?:```|~~~)/.test(line);
+  const paragraph = [];
+  while (at < lines.length && !stop(lines[at])) paragraph.push(lines[at++].trim());
+  const joined = paragraph.join(' ');
+  let code = false;
+  for (let i = 0; i < joined.length; i++) {
+    if (joined[i] === '`') code = !code;
+    else if (!code && '.!?'.includes(joined[i]) && (i + 1 === joined.length || /\s/.test(joined[i + 1]))) return joined.slice(0, i + 1);
+  }
+  return joined;
+}
+
+function readOnlyConfigMention(promptPath, promptText, configPath) {
+  const opening = promptOpeningSentence(promptText);
+  const folder = posix.dirname(promptPath), near = target => posix.normalize(posix.join(folder, target));
+  const positions = [];
+  const masked = opening.replace(/\]\(([^)\s]+)\)/g, (full, target, index) => {
+    const file = target.split('#')[0];
+    if (file && !/^[a-z][a-z0-9+.-]*:/i.test(file) && near(file) === configPath) positions.push(index);
+    return `]${' '.repeat(full.length - 1)}`;
+  });
+  for (const match of masked.matchAll(/[A-Za-z0-9_@+~./-]+/g)) {
+    const run = match[0].replace(/\.+$/, '');
+    if (!run.includes('/') && !run.includes('.')) continue;
+    const resolved = /^\.\.?\//.test(run) ? near(run) : run;
+    if (resolved === configPath) positions.push(match.index);
+  }
+  if (!positions.length) return false;
+  const readVerb = /\b(?:read(?:s|ing)?|load(?:s|ing)?|pars(?:es?|ing)|inspect(?:s|ing)?|from)\b/gi;
+  const ownVerb = /\b(?:owns?|owning|generates?|generating|writes?|writing|maintains?|maintaining|produces?|producing)\b/i;
+  return positions.every(pos => {
+    const prefix = opening.slice(0, pos);
+    const matches = [...prefix.matchAll(readVerb)];
+    if (!matches.length) return false;
+    const last = matches.at(-1);
+    const between = prefix.slice(last.index + last[0].length);
+    return !ownVerb.test(between) && !/;/.test(between);
+  });
+}
+
+function scanExcuseComments(source, filePath) {
+  if (!source || source.includes('\0')) return [];
+  const hashComments = /\.(?:py|pyw|sh|bash|zsh|ksh|rb|pl|pm|r|jl|tcl|awk|sed|mk)$/i.test(filePath)
+    || /(?:^|\/)(?:Makefile|Dockerfile|Containerfile|Justfile)$/i.test(filePath);
+  const dashComments = /\.(?:sql|lua|hs|elm|ada)$/i.test(filePath);
+  const slashComments = !hashComments && !dashComments;
+  const jsLike = /\.(?:[cm]?[jt]sx?)$/i.test(filePath);
+  const goFile = /\.go$/i.test(filePath);
+  const rustFile = /\.rs$/i.test(filePath);
+  const hits = [];
+  const checkComment = (rawLine, body, lineNumber) => {
+    if (HEADER_COMMENT.test(rawLine)) return;
+    if (!EXCUSE_CLAUSE.test(body.trim())) return;
+    hits.push({ line: lineNumber, text: rawLine.trim().replace(/\s+/g, ' ').slice(0, 160) });
+  };
+  let i = 0, line = 1, canStartRegex = true, afterDot = false;
+  const templateBraces = [];
+  if (source.startsWith('#!')) {
+    const end = source.indexOf('\n');
+    if (end < 0) return [];
+    i = end + 1; line = 2;
+  }
+  const consumeJsTemplateBody = () => {
+    while (i < source.length) {
+      const ch = source[i];
+      if (ch === '\\') { if (source[i + 1] === '\n') line++; i += 2; continue; }
+      if (ch === '\n') { line++; i++; continue; }
+      if (ch === '`') { i++; canStartRegex = false; afterDot = false; return; }
+      if (ch === '$' && source[i + 1] === '{') { i += 2; templateBraces.push(0); canStartRegex = true; afterDot = false; return; }
+      i++;
+    }
+  };
+  while (i < source.length) {
+    const ch = source[i], next = source[i + 1];
+    if (ch === '\n') { line++; i++; continue; }
+    if (ch === ' ' || ch === '\t' || ch === '\r') { i++; continue; }
+    if (hashComments && (source.startsWith('"""', i) || source.startsWith("'''", i))) {
+      const quote = source.slice(i, i + 3); i += 3;
+      while (i < source.length && !source.startsWith(quote, i)) {
+        if (source[i] === '\\') { if (source[i + 1] === '\n') line++; i += 2; continue; }
+        if (source[i] === '\n') line++;
+        i++;
+      }
+      i = Math.min(source.length, i + 3);
+      continue;
+    }
+    if (rustFile && (ch === 'r' || (ch === 'b' && next === 'r'))) {
+      const rawMatch = /^b?r(#*)"/.exec(source.slice(i));
+      if (rawMatch) {
+        const closing = `"${rawMatch[1]}`;
+        i += rawMatch[0].length;
+        const end = source.indexOf(closing, i);
+        const body = source.slice(i, end < 0 ? source.length : end);
+        for (let k = 0; k < body.length; k++) if (body[k] === '\n') line++;
+        i = end < 0 ? source.length : end + closing.length;
+        continue;
+      }
+    }
+    if (rustFile && ch === "'") {
+      if (next === '\\') {
+        i += 2;
+        while (i < source.length && source[i] !== "'" && source[i] !== '\n') {
+          if (source[i] === '\\') i += 2;
+          else i++;
+        }
+        if (source[i] === "'") i++;
+        continue;
+      }
+      if (next && next !== "'" && next !== '\n') {
+        const cp = source.codePointAt(i + 1);
+        const cpLen = cp > 0xffff ? 2 : 1;
+        if (source[i + 1 + cpLen] === "'") { i += 2 + cpLen; continue; }
+      }
+      let j = i + 1;
+      while (j < source.length && /[A-Za-z0-9_]/.test(source[j])) j++;
+      i = j;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      const quote = ch; i++;
+      while (i < source.length && source[i] !== quote) {
+        if (source[i] === '\\') { if (source[i + 1] === '\n') line++; i += 2; continue; }
+        if (source[i] === '\n') { line++; if (!hashComments && !rustFile) { i++; break; } }
+        i++;
+      }
+      if (source[i] === quote) i++;
+      canStartRegex = false; afterDot = false;
+      continue;
+    }
+    if (jsLike && ch === '`') {
+      i++; consumeJsTemplateBody(); continue;
+    }
+    if (goFile && ch === '`') {
+      i++;
+      while (i < source.length && source[i] !== '`') {
+        if (source[i] === '\n') line++;
+        i++;
+      }
+      if (source[i] === '`') i++;
+      continue;
+    }
+    if ((slashComments && ch === '/' && next === '/') || (hashComments && ch === '#') || (dashComments && ch === '-' && next === '-')) {
+      const prefixLen = ch === '#' ? 1 : 2;
+      let end = source.indexOf('\n', i);
+      if (end < 0) end = source.length;
+      const raw = source.slice(i, end).replace(/\r$/, '');
+      const body = raw.slice(prefixLen).replace(/^[/#-]+/, '');
+      checkComment(raw, body, line);
+      i = end;
+      continue;
+    }
+    if (slashComments && ch === '/' && next === '*') {
+      const close = source.indexOf('*/', i + 2);
+      const end = close < 0 ? source.length : close + 2;
+      const parts = source.slice(i, end).split('\n');
+      parts.forEach((part, offset) => {
+        const clean = part.replace(/\r$/, '');
+        const body = clean.replace(/^\s*\/\*+\s?/, '').replace(/\s?\*+\/\s*$/, '').replace(/^\s*\*+\s?/, '');
+        if (body.trim()) checkComment(clean, body, line + offset);
+      });
+      line += parts.length - 1;
+      i = end;
+      continue;
+    }
+    if (jsLike && ch === '/' && canStartRegex) {
+      let j = i + 1, inClass = false, closed = false;
+      while (j < source.length && source[j] !== '\n') {
+        if (source[j] === '\\') { j += 2; continue; }
+        if (source[j] === '[') inClass = true;
+        else if (source[j] === ']') inClass = false;
+        else if (source[j] === '/' && !inClass) { closed = true; j++; break; }
+        j++;
+      }
+      if (closed) {
+        while (j < source.length && /[A-Za-z]/.test(source[j])) j++;
+        i = j; canStartRegex = false; afterDot = false; continue;
+      }
+    }
+    if (jsLike && templateBraces.length) {
+      if (ch === '{') templateBraces[templateBraces.length - 1]++;
+      else if (ch === '}') {
+        if (templateBraces[templateBraces.length - 1] === 0) {
+          templateBraces.pop(); i++; consumeJsTemplateBody(); continue;
+        }
+        templateBraces[templateBraces.length - 1]--;
+      }
+    }
+    if (/[A-Za-z_$]/.test(ch)) {
+      let j = i + 1;
+      while (j < source.length && /[A-Za-z0-9_$]/.test(source[j])) j++;
+      const word = source.slice(i, j);
+      canStartRegex = !afterDot && /^(?:return|throw|case|delete|void|typeof|instanceof|in|of|new|yield|await|else|do)$/.test(word);
+      afterDot = false;
+      i = j;
+      continue;
+    }
+    if (/[0-9]/.test(ch)) {
+      let j = i + 1;
+      while (j < source.length && /[0-9A-Za-z_.]/.test(source[j])) j++;
+      canStartRegex = false; afterDot = false; i = j; continue;
+    }
+    if ((ch === '+' && next === '+') || (ch === '-' && next === '-')) {
+      canStartRegex = false; afterDot = false; i += 2; continue;
+    }
+    if (ch === '?' && next === '.') {
+      afterDot = true; canStartRegex = true; i += 2; continue;
+    }
+    if (ch === '!' && next !== '=' && !canStartRegex) {
+      afterDot = false; i++; continue;
+    }
+    afterDot = ch === '.';
+    canStartRegex = !/[)\]]/.test(ch);
+    i++;
+  }
+  return hits;
+}
+
+export function lintLocalHygiene({ root, files = gitFiles(root), promptPaths, tests, workspace = loadRuntimeWorkspace({ root }) } = {}) {
+  const policy = boundedWorkspace(root, workspace);
+  const allowedFiles = [...new Set(files)].filter(path => !isSecretPath(path) && allowsRuntimePath(policy, path)).sort();
+  const selectedPaths = [
+    ...(promptPaths ?? []).map(path => path.replace(/^\.\//, '')),
+    ...(tests ?? []).map(entry => typeof entry === 'string' ? entry.replace(/^\.\//, '') : entry?.path).filter(Boolean),
+  ];
+  const allFixtureRoots = fixtureProjectRoots(root, allowedFiles);
+  const excluded = allFixtureRoots
+    .filter(fixtureRoot => !selectedPaths.some(path => path === fixtureRoot || path.startsWith(`${fixtureRoot}/`)));
+  const activeFixtureRoots = allFixtureRoots.filter(fixtureRoot => !excluded.includes(fixtureRoot));
+  const projectRelativePath = path => {
+    const ownerRoot = activeFixtureRoots.find(fixtureRoot => path.startsWith(`${fixtureRoot}/`));
+    return ownerRoot ? path.slice(ownerRoot.length + 1) : path;
+  };
+  const scopedFiles = outsideFixtureProjects(allowedFiles, excluded);
+  const visibleSet = new Set(scopedFiles);
+  const inspectedPrompts = [...new Set((promptPaths ?? scopedFiles.filter(path => path.endsWith('.prompt.md')))
+    .map(path => path.replace(/^\.\//, ''))
+    .filter(path => visibleSet.has(path) && !isSecretPath(path) && path.endsWith('.prompt.md')))].sort();
+  const inspectedSet = new Set(inspectedPrompts);
+
+  const realRoot = realpathSync(root);
+  const strictReader = snapshotReader(realRoot, visibleSet, undefined, true, policy);
+  const inspectStrict = (path, isControl = false) => {
+    if (!visibleSet.has(path) || isSecretPath(path)) return null;
+    try {
+      const file = strictReader.inspectRaw(path, 'Source', true, isControl, isControl);
+      return file.stat ? file : null;
+    } catch { return null; }
+  };
+  const readStrictPrefix = (path, limit, isControl = false) => {
+    const file = inspectStrict(path, isControl);
+    if (!file) return null;
+    let fd;
+    try {
+      fd = openSync(join(realRoot, file.path), constants.O_RDONLY | constants.O_NOFOLLOW);
+      if (!sameStat(file.stat, fstatSync(fd, { bigint: true })) || !strictReader.stable(file.observed)) return null;
+      const buffer = Buffer.alloc(Math.min(limit, file.size + 1));
+      let total = 0;
+      while (total < buffer.length) {
+        const count = readSync(fd, buffer, total, buffer.length - total, total);
+        if (!count) break;
+        total += count;
+      }
+      if (!strictReader.stable(file.observed) || !sameStat(file.stat, fstatSync(fd, { bigint: true }))) return null;
+      return buffer.subarray(0, total);
+    } catch (error) {
+      if (['ENOENT', 'ENOTDIR', 'ELOOP'].includes(error.code)) return null;
+      if (['EACCES', 'EPERM', 'EISDIR'].includes(error.code)) return false;
+      throw error;
+    } finally { if (fd !== undefined) closeSync(fd); }
+  };
+  const readStrictText = path => {
+    const file = inspectStrict(path);
+    if (!file || file.size > LIMITS.bytes) return null;
+    try { return strictReader.bytes(file).toString('utf8'); }
+    catch { return null; }
+  };
+
+  const allPromptPaths = [...visibleSet].filter(path => path.endsWith('.prompt.md')).sort();
+  const promptTexts = new Map();
+  const extraClaims = [];
+  for (const prompt of allPromptPaths) {
+    const text = readStrictText(prompt);
+    if (typeof text !== 'string') continue;
+    promptTexts.set(prompt, text);
+    if (inspectedSet.has(prompt)) for (const claim of promptClaims(prompt, text)) {
+      if (!isSecretPath(claim) && allowsRuntimePath(policy, claim) && !claim.endsWith('.md')) extraClaims.push(claim);
+    }
+  }
+
+  const canonicalRepoPath = value => typeof value === 'string' && value.trim().length > 0 && value.length <= 1000 && !isAbsolute(value)
+    && !/[\\\x00-\x1f\x7f]/.test(value) && !value.split('/').some(part => !part || part === '.' || part === '..' || part.toLowerCase() === '.git');
+  const rawBindings = visibleSet.has('pdd-bindings.json') ? readStrictPrefix('pdd-bindings.json', 65_537, true) : null;
+  const bindings = rawBindings ? (rawBindings.length > 65_536 ? false : rawBindings.toString('utf8')) : rawBindings;
+  if (typeof bindings === 'string') {
+    try {
+      const doc = JSON.parse(bindings);
+      if (isObject(doc) && doc.schema_version === 'pdd.bindings.v1' && Array.isArray(doc.modules)) {
+        for (const item of doc.modules) {
+          const mod = item?.module;
+          if (typeof mod === 'string' && typeof item?.prompt === 'string' && inspectedSet.has(item.prompt)
+            && canonicalRepoPath(mod) && !mod.endsWith('.md') && !isSecretPath(mod) && allowsRuntimePath(policy, mod)) {
+            extraClaims.push(mod);
+          }
+        }
+      }
+    } catch { /* invalid JSON is handled by resolveOwners */ }
+  }
+  const candidatePaths = [...new Set([...[...visibleSet].filter(path => !path.endsWith('.md')), ...outsideFixtureProjects(extraClaims, excluded)])].sort();
+  const heads = candidatePaths.map(path => ({ path, content: visibleSet.has(path) ? readStrictPrefix(path, 4097) : null }));
+  const prompts = [...promptTexts.entries()].map(([path, content]) => ({ path, content }));
+  const resolved = resolveOwners({ paths: candidatePaths, bindings, heads, prompts });
+
+  const rawRowsByPrompt = new Map(), codeRowMap = new Map();
+  for (const row of resolved.files) {
+    const validOwners = row.owners.filter(prompt => promptTexts.has(prompt));
+    if (!validOwners.length) continue;
+    const classifiedPath = projectRelativePath(row.path);
+    const isMisplacedTest = isTestOwnedPath(classifiedPath) || MISPLACED_CI.test(classifiedPath);
+    const isConfig = MISPLACED_CONFIG.test(classifiedPath);
+    const isCode = !isMisplacedTest && !isConfig && !NON_CODE_ASSET.test(classifiedPath);
+    const fileInfo = isCode ? inspectStrict(row.path) : null;
+    for (const owner of validOwners) {
+      if (!rawRowsByPrompt.has(owner)) rawRowsByPrompt.set(owner, []);
+      rawRowsByPrompt.get(owner).push({ row, isCode, isMisplacedTest, isConfig });
+    }
+    if (fileInfo && validOwners.some(owner => inspectedSet.has(owner))) {
+      codeRowMap.set(row.path, [...new Set(validOwners)].sort());
+    }
+  }
+
+  const warnings = [];
+  for (const prompt of inspectedPrompts) {
+    const promptText = promptTexts.get(prompt);
+    if (typeof promptText !== 'string') continue;
+    const promptRows = rawRowsByPrompt.get(prompt) ?? [];
+    const claimsProductionCode = promptRows.some(item => item.isCode);
+    const misplaced = [];
+    for (const { row, isMisplacedTest, isConfig } of promptRows) {
+      if (isMisplacedTest) misplaced.push(row.path);
+      else if (isConfig) {
+        if (row.source === 'prose' && claimsProductionCode && readOnlyConfigMention(prompt, promptText, row.path)) continue;
+        misplaced.push(row.path);
+      }
+    }
+    if (misplaced.length) {
+      const uniqueTargets = [...new Set(misplaced)].sort();
+      warnings.push(`Warning: misplaced prompt owner: ${prompt} claims ${uniqueTargets.join(', ')}. Prompts own production modules, not test suites, CI workflows or repository config files.`);
+    }
+    const proseWarning = promptProseWarningLine(prompt, promptText);
+    if (proseWarning) warnings.push(proseWarning);
+  }
+
+  const matchedStoryByTest = new Map(
+    matchTests(scopedFiles.filter(isStoryPath), scopedFiles).tests.map(item => [item.path, item.storyPath]),
+  );
+  const inspectedTests = tests === undefined
+    ? discoverTests(root, scopedFiles, true, policy, true).tests.map(item => ({ ...item, raw: readStrictText(item.path) }))
+    : tests.map(entry => {
+      const rawPath = typeof entry === 'string' ? entry : entry?.path;
+      if (typeof rawPath !== 'string') return null;
+      const clean = rawPath.replace(/^\.\//, '');
+      if (!inspectStrict(clean)) return null;
+      const raw = readStrictText(clean);
+      if (!raw) return null;
+      let doc;
+      try { doc = JSON.parse(raw); } catch { return null; }
+      const docStory = typeof doc?.story_path === 'string' && doc.story_path.trim() ? doc.story_path.trim() : null;
+      const storyPath = (isObject(entry) && typeof entry.storyPath === 'string' && entry.storyPath)
+        ? entry.storyPath
+        : (matchedStoryByTest.get(clean) ?? docStory);
+      return { path: clean, storyPath, doc, raw };
+    }).filter(Boolean);
+
+  for (const testEntry of [...inspectedTests].sort((a, b) => String(a?.path ?? '').localeCompare(String(b?.path ?? '')))) {
+    const storyWarning = storyComplexityWarningLine(testEntry, testEntry?.raw);
+    if (storyWarning) warnings.push(storyWarning);
+  }
+
+  for (const filePath of [...codeRowMap.keys()].sort()) {
+    const sourceText = readStrictText(filePath);
+    if (typeof sourceText !== 'string') continue;
+    const owners = codeRowMap.get(filePath);
+    for (const hit of scanExcuseComments(sourceText, filePath)) {
+      warnings.push(`Warning: excuse comment in ${filePath}:${hit.line} (owned by ${owners.join(', ')}): ${hit.text}`);
+    }
+  }
+
+  return warnings;
 }

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 934d74d7c7eb8ed2a892246604c3e557d40fedf29f1738b00ccea3223f45cdfe).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 1dc5a4cc0d5f25e85ffdd403dc5809c88442a5c93cabcb8581616f328836c17e).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
@@ -21,11 +21,11 @@ import { chmodSync, closeSync, constants, fstatSync, fsyncSync, lstatSync, linkS
 import { isDeepStrictEqual } from 'node:util';
 import { homedir, hostname } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
-import { DRAFT_SERVER_TEXT, NO_TESTS, PreflightError, TEST_SCHEMA, captureSource, scenarioShapeRefusal, checkInput, expectedTestPath, fillHashes, sharedSourceFiles, whyNoTests, findTests, formatSize, gitFiles, otherFiles,
-  discoveryRefusal, preflight, interfaceBlocks, executableInterfaceText, readPrompt, formatWarningLines, schemaKeywordWarningLines, selectTests, sourceFilePort, sha256, STALE_HINT, staleHint } from './runtime-preflight.mjs';
+import { DRAFT_SERVER_TEXT, NO_TESTS, PreflightError, TEST_SCHEMA, captureSource, scenarioShapeRefusal, checkInput, expectedTestPath, fillHashes, lintLocalHygiene, sharedSourceFiles, whyNoTests, findTests, formatSize, gitFiles, otherFiles,
+  discoveryRefusal, preflight, interfaceBlocks, executableInterfaceText, readPrompt, formatWarningLines, schemaKeywordWarningLines, missingCliImplementationWarnings, prepareHashSelection, selectTests, sourceFilePort, sha256, STALE_HINT, staleHint } from './runtime-preflight.mjs';
 import { catalogRecords, compareCopies } from './contract-refs.mjs';
 import { askApproval, lineReader, promptPath } from './prompt-approve.mjs';
-import { OPEN_STATES, causeText, cleanText, exitCodeFor, progressTicker, projectAnswer, refusalView, renderJson, renderText, summaryLine, stepTimeLimit, tryUsage, validLink, coverageText } from './runtime-output.mjs';
+import { OPEN_STATES, causeText, cleanText, exitCodeFor, progressTicker, projectAnswer, refusalView, renderJson, renderText, summaryLine, stepTimeLimit, tokenUsageOf, tryUsage, validLink, coverageText } from './runtime-output.mjs';
 import { lintSvgLayouts } from './svg-layout.mjs';
 import { compareScreen, formatScreenComparison } from './screen-compare.mjs';
 
@@ -107,7 +107,7 @@ function withDefaults(ports) {
     return () => { handlers.delete(handler); if (!handlers.size) { unsubscribe?.(); unsubscribe = null; } };
   };
   return {
-    env, baselineFiles: ports.baselineFiles, baselineIdentity: ports.baselineIdentity, evidencePorts: ports.evidencePorts, readEvidenceEligibility: ports.readEvidenceEligibility, checkPlanPorts: ports.checkPlanPorts, caseHandoff:ports.caseHandoff, cacheFiles: ports.cacheFiles ?? nativeCacheFiles, cacheHash: ports.cacheHash ?? sha256, acquireBatchLock: ports.acquireBatchLock ?? acquireRuntimeBatchLock, timers: ports.timers, random: ports.random, captureSource: ports.captureSource ?? captureSource, slotFiles: ports.slotFiles, isAlive: ports.isAlive, pid: ports.pid, agentBridge: ports.agentBridge, discoverAgents: ports.discoverAgents, askAgent: ports.askAgent, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
+    env, baselineFiles: ports.baselineFiles, baselineIdentity: ports.baselineIdentity, evidencePorts: ports.evidencePorts, readEvidenceEligibility: ports.readEvidenceEligibility, checkPlanPorts: ports.checkPlanPorts, caseHandoff:ports.caseHandoff, cacheFiles: ports.cacheFiles ?? nativeCacheFiles, cacheHash: ports.cacheHash ?? sha256, acquireBatchLock: ports.acquireBatchLock ?? acquireRuntimeBatchLock, timers: ports.timers, random: ports.random, captureSource: ports.captureSource ?? captureSource, fillHashes: ports.fillHashes ?? fillHashes, prepareHashSelection: ports.prepareHashSelection, slotFiles: ports.slotFiles, isAlive: ports.isAlive, pid: ports.pid, agentBridge: ports.agentBridge, discoverAgents: ports.discoverAgents, askAgent: ports.askAgent, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
     gh: ports.gh ?? (args => {
       const executable = authExecutable(env, ports.ghPath);
       return executable ? spawnSync(executable, args, { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 })
@@ -1011,7 +1011,10 @@ function usagePart(record) {
   const known = Math.max(callLowerBound, providerCalls ?? 0);
   const complete = !invalid && !conflicting && !invalidFlag && !conflictingFlags && !flags.includes(false) && calls !== undefined
     && (unknownRaw ?? 0) === 0 && (knownRaw === undefined || knownRaw <= calls) && (providerCalls === undefined || providerCalls === calls);
-  return { known, unknown: complete ? 0 : Math.max(1, unknownRaw ?? 0), complete, total: complete ? calls : null };
+  const zeroWork = complete && calls === 0 && ((checkCapacityCandidate(record) && accountingProof(record))
+    || (isAdmissionCapacityRecord(record) && admissionCapacityCandidate(record) && accountingProof(record)));
+  return { known, unknown: complete ? 0 : Math.max(1, unknownRaw ?? 0), complete, total: complete ? calls : null,
+    zeroWork, tokens: tokenUsageOf(record, { incomplete: !complete }) };
 }
 function attemptAccounting(context, id) {
   const path = join(context.folder, `${id}.json`), answer = context.store.read(path);
@@ -1026,19 +1029,39 @@ function attemptAccounting(context, id) {
   const unsafeAdmission = admissionCandidate && !accountingProof(admission);
   const admissionConflict = admissionCandidate && (!admissionMatches(admission, id) || unsafeAdmission || history.some(item => !checkCapacityCandidate(item)));
   const records = [...accountingHistory, ...(admission ? [admission] : [])];
-  if (!records.length) return { known: 0, unknown: 1, complete: false, total: null };
+  const emptyTokens = { input_tokens: 'unknown', cached_input_tokens: 'unknown', output_tokens: 'unknown', cached_input_share: null };
+  if (!records.length) return { known: 0, unknown: 1, complete: false, total: null, zeroWork: false, tokens: emptyTokens };
   const parts = records.map(usagePart), known = Math.max(...parts.map(part => part.known));
   const unknown = Math.max(1, ...parts.map(part => part.unknown));
   const complete = !admissionConflict && parts.every(part => part.complete) && new Set(parts.map(part => part.total)).size === 1;
-  return { known, unknown: complete ? 0 : unknown, complete, total: complete ? parts[0].total : null };
+  const zeroWork = complete && parts[0].total === 0 && parts.every(part => part.zeroWork);
+  const agree = key => complete && !zeroWork && parts.every(part => typeof part.tokens[key] === 'number') && new Set(parts.map(part => part.tokens[key])).size === 1
+    ? parts[0].tokens[key] : 'unknown';
+  const input_tokens = agree('input_tokens');
+  const cached_input_tokens = typeof input_tokens === 'number' ? agree('cached_input_tokens') : 'unknown';
+  const output_tokens = agree('output_tokens');
+  const cached_input_share = typeof input_tokens === 'number' && typeof cached_input_tokens === 'number' && input_tokens > 0 && cached_input_tokens <= input_tokens
+    ? cached_input_tokens / input_tokens : null;
+  return { known, unknown: complete ? 0 : unknown, complete, total: complete ? parts[0].total : null,
+    zeroWork, tokens: { input_tokens, cached_input_tokens, output_tokens, cached_input_share } };
 }
 function accumulatedAccounting(context, row) {
   const ids = row.request_ids ?? [];
-  if (!ids.length || !context.store || !context.folder) return { calls: row.calls, known_calls: row.known_calls, unknown_calls: row.unknown_calls ?? 0, accounting_complete: row.accounting_complete };
+  if (!ids.length || !context.store || !context.folder) return { calls: row.calls, known_calls: row.known_calls, unknown_calls: row.unknown_calls ?? 0, accounting_complete: row.accounting_complete,
+    input_tokens: row.input_tokens ?? 'unknown', cached_input_tokens: row.cached_input_tokens ?? 'unknown', output_tokens: row.output_tokens ?? 'unknown', cached_input_share: row.cached_input_share ?? null };
   const parts = ids.map(id => attemptAccounting(context, id)), known = parts.reduce((sum, part) => sum + part.known, 0);
   const unknown = parts.reduce((sum, part) => sum + part.unknown, 0), complete = parts.every(part => part.complete);
   const total = complete ? parts.reduce((sum, part) => sum + part.total, 0) : null;
-  return { calls: complete ? total : 'unknown', known_calls: known, unknown_calls: complete ? 0 : Math.max(1, unknown), accounting_complete: complete };
+  const dispatched = complete ? parts.filter(part => !part.zeroWork) : [];
+  const sumToken = key => complete && dispatched.length > 0 && dispatched.every(part => typeof part.tokens[key] === 'number')
+    ? dispatched.reduce((sum, part) => sum + part.tokens[key], 0) : 'unknown';
+  const input_tokens = sumToken('input_tokens');
+  const cached_input_tokens = typeof input_tokens === 'number' ? sumToken('cached_input_tokens') : 'unknown';
+  const output_tokens = sumToken('output_tokens');
+  const cached_input_share = typeof input_tokens === 'number' && typeof cached_input_tokens === 'number' && input_tokens > 0 && cached_input_tokens <= input_tokens
+    ? cached_input_tokens / input_tokens : null;
+  return { calls: complete ? total : 'unknown', known_calls: known, unknown_calls: complete ? 0 : Math.max(1, unknown), accounting_complete: complete,
+    input_tokens, cached_input_tokens, output_tokens, cached_input_share };
 }
 function accumulatedCalls(context, row) { return accumulatedAccounting(context, row).calls; }
 // A confirmed pause follows a POST. Keep its submission and accounting visible
@@ -1060,6 +1083,7 @@ function markCapacityUnknown(context, row) {
   const accounting = accumulatedAccounting(context, row);
   Object.assign(row, { state: 'unknown', phase: 'server', calls: 'unknown', known_calls: accounting.known_calls ?? 0,
     unknown_calls: Math.max(1, accounting.unknown_calls ?? 0), accounting_complete: false, capacity_uncertain: true,
+    input_tokens: 'unknown', cached_input_tokens: 'unknown', output_tokens: 'unknown', cached_input_share: null,
     busy: false, can_retry: false, busy_display: null, retry_at: null, busy_request_id: null, busy_observed_at: null,
     capacity_until: null, note: null, why: capacityUnknownReason, next_step: sameIdReadAdvice(context, row) });
 }
@@ -1596,7 +1620,9 @@ function applyAnswer(row, answer, context, observedWait = null, observedAt = con
   const firstDiagnosis = view.failed_checks.find(check => check.diagnosis) ?? null, failed = view.state === 'failed';
   Object.assign(row, { state: view.state, checks: view.checks, criteria: view.criteria, failed_checks: view.failed_checks, all_checks: view.all_checks,
     refusals: view.refusals.map((item, index) => interfaceDiagnostic(item,
-      (answer?.result?.refusals ?? [answer?.result?.report?.refusal])[index], context.root, context.secrets)), calls: view.calls, requested_model: view.requested_model, report_url: view.report_url ?? row.report_url,
+      (answer?.result?.refusals ?? [answer?.result?.report?.refusal])[index], context.root, context.secrets)), calls: view.calls,
+    input_tokens: view.input_tokens, cached_input_tokens: view.cached_input_tokens, output_tokens: view.output_tokens, cached_input_share: view.cached_input_share,
+    requested_model: view.requested_model, report_url: view.report_url ?? row.report_url,
     server_seconds: view.server_seconds, busy_display: view.busy_display, time_limit: view.time_limit, known_calls: view.known_calls, unknown_calls: view.unknown_calls,
     accounting_complete: view.accounting_complete,
     why: failed ? view.why ?? firstDiagnosis?.diagnosis?.why ?? null : ['refused', 'not_run', 'unknown'].includes(view.state) ? advice.why ?? (view.state === 'unknown' && row.lost && row.why !== 'Checks failed.' ? row.why : null) : null,
@@ -1607,7 +1633,8 @@ function applyAnswer(row, answer, context, observedWait = null, observedAt = con
     draft: view.draft ?? row.draft });
   if (row.request_ids.length) Object.assign(row, context.store && context.folder ? accumulatedAccounting(context, row) : {
     calls: accounting.complete ? accounting.total : 'unknown', known_calls: accounting.known,
-    unknown_calls: accounting.complete ? 0 : accounting.unknown, accounting_complete: accounting.complete });
+    unknown_calls: accounting.complete ? 0 : accounting.unknown, accounting_complete: accounting.complete,
+    ...(accounting.tokens ?? {}) });
   const wait = capacitySafe ? checkCapacity(answer) : null;
   if (capacityUncertain) markCapacityUnknown(context, row);
   else if (wait !== null) markBusy(context, row, observedWait ?? wait, observedAt, context.reading && observedWait === null);
@@ -2309,7 +2336,7 @@ function runExplainBindings(cwd, words, options, ports) {
   const {root,found,normalized}=localSetup(cwd,words);
   const selected=select(found,normalized,root);
   for (const test of selected) {
-    const problem=discoveryRefusal(test) ?? scenarioShapeRefusal(test.doc,test.path);
+    const problem=discoveryRefusal(test) ?? test.criteriaRefusal ?? scenarioShapeRefusal(test.doc,test.path);
     if (problem) throw Object.assign(new PreflightError(4,`${test.path}: ${problem.message}`),{code:problem.code});
   }
   const capture=ports.captureSource(root,{tests:selected.map(test=>test.path),excludeFixtureProjects:words.length===0});
@@ -2372,8 +2399,18 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   }
   let selected;
   try { selected = select(found, normalized, root); }
-  catch (error) { if (error instanceof Stop && advice.length) error.message = [error.message, ...advice].join('\n'); throw error; }
+  catch (error) {
+    if (error instanceof Stop) {
+      const noTestsAdvice = [...new Set([...advice, ...(paths ? lintLocalHygiene({ root, files: [...found.visible], promptPaths: paths, tests: [], workspace: found.workspace }) : [])])];
+      if (noTestsAdvice.length) error.message = [error.message, ...noTestsAdvice].join('\n');
+    }
+    throw error;
+  }
   if (!paths) { advice.push(...formatAdvice(root, found.visible, entryPaths(selected), found.workspace)); found.warnings.push(...advice); }
+  for (const warning of missingCliImplementationWarnings({ root, found, selected })) {
+    if (!advice.includes(warning)) advice.push(warning);
+    if (!found.warnings.includes(warning)) found.warnings.push(warning);
+  }
   context.coverage = bindingCoverage({ root, found, selected, includeRuntime:true });
   // A test that the test name rule cannot use is refused here and never sent; the other tests are linted.
   const rows = selected.map(test => ({ test: test.path, story: test.story, title: test.title, state: 'ready', phase: 'lint',
@@ -2386,7 +2423,12 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
     const native = nativeRows.get(row.test);
     if (native) Object.assign(row,{state:native.refusals.length ? 'refused' : 'not_run',refusals:native.refusals,phase:'local',native_only:native.native_only,unsent:true,note:{code:'native-only',message:native.native_only.map(item => `${item.path}: ${item.reason}`).join('; ')}});
   }
-  if (!findings.length && rows.every(row => row.native_only?.length)) { saveLocalNativeResult(context, rows, 'lint-only'); return printLintResult(context,rows,[],advice); }
+  if (!findings.length && rows.every(row => row.native_only?.length)) {
+    const hygiene = lintLocalHygiene({ root, files: [...found.visible], promptPaths: words.length ? entryPaths(selected) : undefined, tests: selected, workspace: found.workspace });
+    context.warnings = [...new Set([...found.warnings, ...hygiene])];
+    saveLocalNativeResult(context, rows, 'lint-only');
+    return printLintResult(context, rows, [], [...new Set([...advice, ...hygiene])]);
+  }
   const local = row => row.phase === 'local';
   const {promptSchemaRefusals} = await import('./runtime-preflight.mjs');
   const prompts = new Map();
@@ -2451,6 +2493,13 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   context.nativeSource = nativeSourceIdentity(context, rows);
   if (!capture) return printLintResult(context, rows, [], found.warnings);
   const svgWarnings = lintSvgLayouts({ root, files: [...found.visible], promptPaths: capture.files.map(file => file.path).filter(path => path.endsWith('.prompt.md')) });
+  const hygieneWarnings = lintLocalHygiene({
+    root,
+    files: [...found.visible],
+    promptPaths: words.length ? capture.files.map(file => file.path).filter(path => path.endsWith('.prompt.md')) : undefined,
+    tests: selected,
+    workspace: found.workspace,
+  });
   const drift=[];
   try {
     const files=sourceFilePort(root,found.visible), sources=[];
@@ -2462,9 +2511,9 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
     drift.push(...[...catalog.warnings,...compared.warnings].map(warning=>`Warning: ${warning}`));
     for (const match of compared.matches.filter(match=>match.kind==='near')) drift.push(`Warning: ${match.path} ${match.source_pointer}: copy of ${match.target} differs (${match.differences.join('; ')}). Use {"$contract":${JSON.stringify(match.target)}}.`);
   } catch { drift.push('Warning: contract catalog advice is unavailable.'); }
-  context.warnings = [...svgWarnings, ...found.warnings,...drift,...(capture.warnings ?? [])];
+  context.warnings = [...new Set([...svgWarnings, ...found.warnings, ...drift, ...(capture.warnings ?? []), ...hygieneWarnings])];
   context.unmatched = unmatchedLines(found);
-  if (!context.json) for (const warning of [...svgWarnings,...drift,...(capture.warnings ?? [])]) line(ports.stderr, warning);
+  if (!context.json) for (const warning of [...new Set([...svgWarnings, ...drift, ...(capture.warnings ?? []), ...hygieneWarnings])]) line(ports.stderr, warning);
   const identity = signIn(ports.gh, context.store), startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
   const timeoutMin = options['--timeout'] !== undefined ? Number(options['--timeout']) : ports.interactive ? null : AGENT_WAIT_MIN;
   Object.assign(context, { origin, visible: found.visible, capture, identity, batch, startedAt, deadline: timeoutMin ? startedAt + timeoutMin * 60_000 : Infinity, rows, head: null,
@@ -2593,10 +2642,12 @@ function printLintResult(context, rows, problems, warnings = [], answer = null) 
   return exitCode;
 }
 
-function runFillHash(root, ports, compact = false) {
-  const result = fillHashes(compact ? { root, compact: true } : { root });
+function runFillHash(root, cwd, words, ports, compact = false) {
+  const scoped = words.length ? (ports.prepareHashSelection ?? (input => prepareHashSelection(input,{capture:ports.captureSource})))({root,cwd,words}) : null;
+  const result = ports.fillHashes(scoped ? {root,files:scoped.files,targets:scoped.targets,...(compact ? {compact:true} : {})} : (compact ? {root,compact:true} : {root}));
   for (const { message } of result.warnings) line(ports.stdout, `Warning: ${message}`);
   for (const { path } of result.filled) line(ports.stdout, `Filled prose_sha256: ${path}`);
+  for (const { path } of result.synced ?? []) line(ports.stdout, `Synced criteria: ${path}`);
   if (compact) for (const { path } of result.compacted) line(ports.stdout, `Compacted Runtime interface: ${path}`);
   for (const { message } of result.refused) line(ports.stdout, `Refused: ${message}`);
   for (const { path } of result.stale) line(ports.stdout, `Stale: ${path} is approved, but ${STALE_HINT}.`);
@@ -3155,27 +3206,29 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
       if (options['--local'] !== true || options['--lint'] !== true || Object.keys(options).some(name => !['--lint', '--local', '--json'].includes(name))) throw new Stop(2, '--local requires --lint and accepts only Story words and --json.');
       try {
         const root = repoRoot(cwd), workspace=loadRuntimeWorkspace({root}), files = gitFiles(root).filter(path=>allowsRuntimePath(workspace,path));
-        let promptPaths, tests = [];
+        let promptPaths, selectedTests, tests = [];
         if (words.length) {
           const { found, normalized } = localSetup(cwd, words), selected = select(found, normalized, root);
+          selectedTests = selected;
           tests = selected.filter(test => !test.error).map(test => test.path);
           promptPaths = ports.captureSource(root, { tests, appMap: null }).files.map(file => file.path).filter(path => path.endsWith('.prompt.md'));
         }
         // Interface findings refuse only a repository-wide local lint; a selected one gives advice only.
         const problems = words.length ? [] : interfaceFindings({root,paths:promptPaths}).filter(localInterfaceProblem);
         const advice = formatAdvice(root, new Set(gitFiles(root)), promptPaths ?? files.filter(path => path.endsWith('.prompt.md')), workspace);
-        const warnings = [...advice, ...lintSvgLayouts({ root, files, promptPaths })], summary = `partial: checked SVG layout only; prompts not checked (local-only). ${warnings.length} warnings. 0 AI calls. No checks were sent.`;
+        const hygiene = lintLocalHygiene({ root, files, promptPaths, tests: selectedTests, workspace });
+        const warnings = [...new Set([...advice, ...lintSvgLayouts({ root, files, promptPaths }), ...hygiene])], summary = `partial: checked SVG layout only; prompts not checked (local-only). ${warnings.length} warnings. 0 AI calls. No checks were sent.`;
         const result = saveLocalLayout(context,{root,tests,prompts:promptPaths ?? files.filter(path => path.endsWith('.prompt.md')),warnings,problems,summary});
         return printLocalLayout(context,result);
       } catch (error) { throw new Stop(2, error.message); }
     }
     const modes = ['--read', '--retry', '--fill-hash', '--files', '--explain-bindings', '--request', '--lint'].filter(name => options[name] !== undefined);
     const others = Object.keys(options).filter(name => !modes.includes(name) && !(modes[0] === '--fill-hash' && name === '--compact') && !(modes[0] === '--retry' && ['--json', '--details', '--timeout'].includes(name)) && !(name === '--json' && ['--read', '--request', '--lint', '--files', '--explain-bindings'].includes(modes[0])) && !(name === '--timeout' && ['--read', '--lint'].includes(modes[0])) && !(name === '--max-calls' && modes[0] === '--lint') && !(name === '--app-map' && modes[0] === '--files'));
-    if (modes.length > 1 || (modes.length && others.length) || (['--fill-hash', '--request', '--retry'].includes(modes[0]) && words.length)
+    if (modes.length > 1 || (modes.length && others.length) || (['--request', '--retry'].includes(modes[0]) && words.length)
       || (modes[0] === '--read' && words.length > 1) || (!modes.length && options['--app-map'] !== undefined)) throw new Stop(2, 'This mix of options does not work together. Run pdd test --help.');
     if (modes[0] === '--request') { release = interruptible(context); return await runRequest(context, options['--request'], cwd); }
     const root = repoRoot(cwd);
-    if (modes[0] === '--fill-hash') return runFillHash(root, ports, options['--compact'] === true);
+    if (modes[0] === '--fill-hash') return runFillHash(root, cwd, words, ports, options['--compact'] === true);
     if (modes[0] === '--explain-bindings') return runExplainBindings(cwd, words, options, ports);
     if (modes[0] === '--files') return runFiles(cwd, words, options, ports);
     context.root = root; context.store = stateFor(ports.env, root);
@@ -3581,8 +3634,19 @@ function declarationCacheReason(capture, story, tests) {
   for (const path of tests) {
     let doc; try { doc = JSON.parse(sources.get(path)); } catch { return 'runs again: resource declarations unavailable'; }
     // A step override is part of that step's world, not evidence for other steps.
-    const bindings = [doc.simulation ?? {}, ...(doc.steps ?? []).map(step => ({ ...(doc.simulation ?? {}), ...(step.simulation_overrides ?? {}) }))];
-    for (const simulation of bindings) for (const [operation, binding] of Object.entries(simulation)) {
+    const stepSimulation = (base, overrides) => {
+      const result = { ...(base ?? {}) };
+      if (Array.isArray(overrides)) {
+        for (const row of overrides) {
+          const name = isObject(row) && typeof row.operation === 'string' && row.operation.trim() ? row.operation : 'simulation_overrides';
+          result[name] = isObject(row) && isObject(row.binding) ? row.binding : null;
+        }
+      } else if (isObject(overrides)) Object.assign(result, overrides);
+      return result;
+    };
+    const steps = Array.isArray(doc.steps) ? doc.steps : [];
+    const bindings = steps.length ? steps.map(step => stepSimulation(doc.simulation, step?.simulation_overrides)) : [doc.simulation ?? {}];
+    for (const simulation of [doc.simulation ?? {}, ...bindings]) for (const [operation, binding] of Object.entries(simulation)) {
       if (!deterministic(binding)) return fake(operation.split('.')[0]);
     }
     for (const prompt of prompts) for (const resource of prompt.resources ?? []) {
@@ -3641,7 +3705,7 @@ async function beginTestAttempts(cache, rows, capture, options, origin, force = 
         || (pass && !cleanRecordMatches(data.latest_identity, pass) ? 'runs again: interpreter build or model changed' : null);
       if (reason) for (const row of own) row.cache_reason = reason;
       if (!force && !reason && [undefined, '', '0', 'false'].includes(cache.context.ports.env.CI) && eligibleCachePass(pass, cache.context.ports.now()) && fingerprint && pass?.fingerprint === identityFingerprint(cache, fingerprint, pass) && own.every(row => row.state === 'ready' && pass.tests.includes(row.test))) {
-        for (const row of own) Object.assign(row, pass.rows[row.test], { state: 'passed', cached: true, cache_identity: { engine_sha: pass.engine_sha, requested_model: pass.requested_model }, passed_at: pass.passed_at, phase: 'cache', calls: 0, seconds: 0, request_ids: [], report_url: null });
+        for (const row of own) Object.assign(row, pass.rows[row.test], { state: 'passed', cached: true, cache_identity: { engine_sha: pass.engine_sha, requested_model: pass.requested_model }, passed_at: pass.passed_at, phase: 'cache', calls: 0, input_tokens: 0, cached_input_tokens: 0, output_tokens: 0, cached_input_share: null, seconds: 0, request_ids: [], report_url: null });
         continue;
       }
       const generation = ++data.generation;
@@ -3832,7 +3896,8 @@ async function runBatch(context, cwd, words, options, setRelease) {
     return 4;
   }
 
-  context.warnings.push(...found.warnings, ...checked.warnings, ...sharedSourceFiles(root, found.discoveryVisible ?? found.visible));
+  const scopedOwnership = words.length > 0 || affected || selected.length < found.tests.length;
+  context.warnings.push(...found.warnings, ...checked.warnings, ...sharedSourceFiles(root, found.discoveryVisible ?? found.visible, { ...(scopedOwnership ? { tests: selected } : {}), workspace: found.workspace }));
   context.unmatched = unmatchedLines(found);
   if (cache) await beginTestAttempts(cache, rows.filter(row => row.state !== 'ready'), null, options, origin);
   if (!rows.some(row => row.state === 'ready')) { if (rows.some(row => row.native_only?.length)) saveLocalNativeResult(context, rows, 'check'); return printResult(context, rows); }
@@ -4691,18 +4756,20 @@ function prepareCase(root,record,p){
   const workspace=loadRuntimeWorkspace({root});requireRuntimePath(workspace,{path,from:'Original selected test'});requireRuntimePath(workspace,{path:story,from:path});
   const found=findTests({root}),original=found.tests.find(t=>t.path===path&&t.storyPath===story&&t.doc?.story_path===story);
   if(!original?.doc||original.doc.schema_version!==TEST_SCHEMA||!Array.isArray(original.doc.steps)||NOT_TEST_FILES.test(basename(path)))throw Error(`the original test ${path} is missing or no longer belongs to ${story}. Restore it before importing the case`);
+  if(original.criteriaRefusal)throw Error(original.criteriaRefusal.message);
   caseSafe(p,join(root,path));caseSafe(p,join(root,story));
   const text=caseRead(p,join(root,path)),doc=JSON.parse(text);
-  if(!isDeepStrictEqual(doc,original.doc))throw Error('the original test changed while being inspected');
+  if(!isDeepStrictEqual(doc,original.rawDoc??original.doc)||(original.storySource!==undefined&&caseRead(p,join(root,story))!==original.storySource))throw Error('the original test changed while being inspected');
   if(record.isolated){
-    if(!isObject(test.initial_world)||test.steps.length!==1||!isDeepStrictEqual(test.criteria,doc.criteria)||!isDeepStrictEqual(test.simulation??{},doc.simulation??{})||!isDeepStrictEqual(test.context??[],doc.context??[]))throw Error('recorded case lacks original criteria, simulation, context or confirmed starting world');
+    if(!isObject(test.initial_world)||test.steps.length!==1||(!isDeepStrictEqual(test.criteria,original.doc.criteria)&&!isDeepStrictEqual(test.criteria,doc.criteria))||!isDeepStrictEqual(test.simulation??{},doc.simulation??{})||!isDeepStrictEqual(test.context??[],doc.context??[]))throw Error('recorded case lacks original criteria, simulation, context or confirmed starting world');
     const id=slug(saved.id);if(!id)throw Error('case has no safe identity');
     const variant=`tests/${original.story}.try-${id}.json`;requireRuntimePath(workspace,{path:variant,from:path});
-    return{path:variant,before:null,after:JSON.stringify(test,null,2)+'\n',steps:[test.steps[0].step_id],isolated:true};
+    const isolatedTest=Array.isArray(test.criteria)&&test.criteria.every(c=>isObject(c)&&typeof c.id==='string'&&typeof c.text==='string')?test:{...test,criteria:original.doc.criteria};
+    return{path:variant,before:null,after:JSON.stringify(isolatedTest,null,2)+'\n',steps:[test.steps[0].step_id],isolated:true};
   }
   const beforeWorld=Object.hasOwn(saved,'world_before')?saved.world_before:Object.hasOwn(test,'initial_world')?test.initial_world:undefined;
   if(beforeWorld===undefined||!isDeepStrictEqual(knownEndWorld(doc),beforeWorld))throw Error('confirmed starting world does not match the original test continuation');
-  const byText=new Map((doc.criteria??[]).map(c=>[c.text,c.id])),savedText=new Map((test.criteria??[]).map(c=>[c.id,c.text]));
+  const byText=new Map((original.doc.criteria??[]).map(c=>[c.text,c.id])),savedText=new Map((test.criteria??[]).map(c=>[c.id,c.text]));
   let after=text,current=doc;const steps=[];
   for(const raw of test.steps){if(!isObject(raw)||!Array.isArray(raw.checks)||!raw.checks.length)throw Error('case has no mapped checks');const checks=raw.checks.map(c=>({...c,criterion_id:byText.get(savedText.get(c.criterion_id))}));if(checks.some(c=>!c.criterion_id))throw Error(`"${cleanText(saved.name??saved.id)}" checks a criterion that ${path} does not have; keep expected values and repair the mapping`);const taken=new Set(current.steps.map(s=>s.step_id));let id=slug(raw.step_id)||slug(saved.id)||'saved-case';for(let n=2,base=id;taken.has(id);n++)id=`${base}-${n}`;const step={...raw,step_id:id,checks};after=appendStep(after,current,step);current={...current,steps:[...current.steps,step]};steps.push(id);}
   return{path,before:text,after,steps};
