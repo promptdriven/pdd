@@ -83,8 +83,9 @@ function bounded(lines, path, word = 'lines') {
 }
 
 function expectedText(step) {
+  const rhs = check => typeof check?.ref_target === 'string' && typeof check?.ref_path === 'string' ? `${check.ref_target} ${check.ref_path}` : compact(check?.value);
   return [step?.expected_error !== undefined && step?.expected_error !== null ? `error ${step.expected_error}` : null,
-    ...(Array.isArray(step?.checks) ? step.checks : []).map(check => `${check?.criterion_id ?? '?'} ${check?.path ?? '?'} ${check?.op ?? '?'} ${compact(check?.value)}`)]
+    ...(Array.isArray(step?.checks) ? step.checks : []).map(check => `${check?.criterion_id ?? '?'} ${check?.path ?? '?'} ${check?.op ?? '?'} ${rhs(check)}`)]
     .filter(Boolean).join('; ') || 'none';
 }
 const caseName = (step, index) => typeof step?.step_id === 'string' && step.step_id ? step.step_id : `step ${index + 1}`;
