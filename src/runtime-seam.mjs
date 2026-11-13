@@ -364,6 +364,7 @@ export function runtimePreflightSlice() {
     isStoryPath,
     matchTests,
     orphanSummary,
+    prepareHashSelection: (input, ports = {}) => mod.prepareHashSelection(input, seamSelectionPorts(ports)),
     selectTests,
     whyNoTests,
   };
