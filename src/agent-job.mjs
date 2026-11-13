@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-job.prompt.md (sha256: e9ca204deb7286f4ee34a14bb773fdb09c5444336be69af93b0b8c0464801f3f).
+// Generated from prompts/cli/agent-job.prompt.md (sha256: 5db7d4a63c213d0420d111146f96e92ad4d7c37fc9ec2b315be5599dfdbce32c).
 import { execFile, spawn, spawnSync } from 'node:child_process';
 import { accessSync, closeSync, constants, fstatSync, openSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { setPriority } from 'node:os';
@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { descendants, parseProcessTable, sameProcess, terminateCaptured } from './process-lifecycle.mjs';
 
 const self = fileURLToPath(import.meta.url), GRACE_MS = 2000;
-const SESSION_KEYS = /^(?:CLAUDECODE$|CLAUDE_CODE_|CLAUDE_PID$|CODEX_THREAD_ID$|CODEX_SANDBOX|HERDR_|PDD_AGENT_SESSION$|PDD_AUTOPILOT_CONTEXT$)/;
+const SESSION_KEYS = /^(?:ANTIGRAVITY_(?!APP_DATA_DIR$)|CLAUDECODE$|CLAUDE_CODE_|CLAUDE_PID$|CODEX_THREAD_ID$|CODEX_SANDBOX|HERDR_|PDD_AGENT_SESSION$|PDD_AUTOPILOT_CONTEXT$)/;
 const readJson = file => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch (error) { if (error.code === 'ENOENT') return undefined; return 'invalid'; } };
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const startIdentity = value => typeof value === 'string' && /^(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) [A-Z][a-z]{2} (?: [1-9]|[12]\d|3[01]) \d{2}:\d{2}:\d{2} \d{4}|@\S+)$/.test(value);
@@ -24,7 +24,8 @@ export function agentCommand(agent, { model } = {}) {
   if (agent?.kind === 'codex') return { command: agent.command ?? 'codex', args: ['exec', '--json', '--dangerously-bypass-approvals-and-sandbox', '-c', 'features.multi_agent=false', ...extra, '-'] };
   // Claude streams its events (stream-json) so that its log grows while it works; the core reads the result file.
   if (agent?.kind === 'claude') return { command: agent.command ?? 'claude', args: ['-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'bypassPermissions', ...extra] };
-  throw Error('Autopilot core jobs need codex or claude');
+  if (agent?.kind === 'agy') return { command: agent.command ?? 'agy', args: ['--input-format', 'text', '--output-format', 'stream-json', '--dangerously-skip-permissions', ...extra] };
+  throw Error('Autopilot core jobs need codex, claude or agy');
 }
 
 export function jobEnvironment(env = {}) {

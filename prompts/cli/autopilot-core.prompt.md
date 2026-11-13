@@ -68,8 +68,10 @@ Runtime step (role `runtime`, like the suite: no P1, P2 or P3). Each tick, for e
   to 1 MB; the size only above), so a re-run that writes the same file or an edit that flips
   back is not new; (P3) a tool call in its own stream that is not a wait (Codex `--json`
   `item.completed` with its type and fields; Claude `stream-json` `tool_use` with its name and
-  input; the tools `wait`, `wait_agent`, `sleep`, `list_agents`, a `write_stdin` with no
-  input and a `sleep N` command are waits); (P4) a tool output line (also of a wait) or a
+  input; agy `stream-json` `step_update` of `step_type` `tool` and `state` `DONE` with its
+  `tool_name` and `tool_info.parameters`; the tools `wait`, `wait_5_seconds`, `wait_agent`,
+  `sleep`, `list_agents`, a `write_stdin` with no input and a `sleep N` command are waits);
+  (P4) a tool output line (also of a wait) or a
   plain log line, after normalization: dates, clock times and durations removed; UUIDs, hex
   ids of 7 or more characters and 20 or more base64 characters with a digit and a letter
   become `X`; temp paths become `T`; digits become `N`; spaces trimmed; (P5) 10 s or more of
@@ -149,7 +151,13 @@ ended or moved to the merge check before free slots are counted.
    base check, repairs, END) **except the merge** (merge check step 8); its message
    starts `Autopilot core (observe: no merge):`.
 2. Read the open issues through `ports.listIssues()`. A failed list skips the
-   person checks and intake for this tick; jobs still advance.
+   person checks and intake for this tick; jobs still advance. When any open issue
+   without `pdd:working` or a local job carries `pdd:would-merge`, read
+   `repos/REPO/pulls?state=all&base=BASE&per_page=30` once and, for each such issue whose
+   latest repository PR (head branch `pdd/core-N-*`) is merged into `baseBranch`, read its
+   timeline, remove `pdd:would-merge` and (unless the issue was reopened after that
+   `pdd:would-merge` label or that PR body marks the work partial with `Refs`, `Part of` or
+   `Not fixed yet:`) close the issue (`state_reason: completed`); a failure only warns.
 3. A person stops a job by closing the issue, removing `pdd:working`, adding
    `pdd:stuck` or assigning someone. Then stop its processes and clean up locally,
    with no GitHub write, and do not take that issue again in this tick. A job with a
@@ -324,7 +332,7 @@ For each ready issue while slots are free, at most 3 claim attempts per tick:
    start error, also one that the spawn reports later, ends the saved job as
    `no-result`; it never stops the tick.
 
-Intake is held before a claim when the saved agent is not Codex or Claude, when
+Intake is held before a claim when the saved agent is not Codex, Claude or agy, when
 `ports.agentReady()` is false at the first ready issue (for example a Codex usage
 limit), while a machine pause runs (below), or while CI does not start in this
 repository ([Stop owners](#stop-owners), #3260). A final machine-room denial can
@@ -592,7 +600,7 @@ older than the engine). The build, repair, conflict and review jobs get `pddChec
 {version, cli, skills}`: the engine's version (`ports.version` or the package version),
 `ROOT/bin/pdd`, and `skills {dir, version, read}` (`dir` = `PDD_SKILLS`, `version` = its
 `pdd-feature/SKILL.md` `pdd-skills:` value, `read` = the folder that the job's agent
-loads by default: Codex `~/.agents/skills`, Claude `$CLAUDE_CONFIG_DIR/skills` when that
+loads by default: Codex and agy `~/.agents/skills`, Claude `$CLAUDE_CONFIG_DIR/skills` when that
 is absolute, else `~/.claude/skills`). The [job runner](agent-job.prompt.md) notes when
 the agent's shell finds another pdd or the installed skills have another version, and
 status shows those notes beside the running process. They file nothing and never end a
@@ -1310,7 +1318,12 @@ runs until its end):
    their engine lines from it and name it, and the PR body gets one engine block between
    `<!-- pdd:autopilot-core:evidence:start -->` and `<!-- pdd:autopilot-core:evidence:end -->`
    (replaced in place, before the follow-ups section; its lines never read as a
-   Runtime, Path or Evidence line). The record stays after END: the local cleanup keeps
+   Runtime, Path or Evidence line). When the PR body outside fenced code blocks, code
+   spans and HTML comments has no GitHub closing keyword for `#N` (`close`, `closes`,
+   `closed`, `fix`, `fixes`, `fixed`, `resolve`, `resolves` or `resolved` before `#N`,
+   `REPO#N` or the issue URL) and does not mark `#N` partial (`Refs #N`, `Part of #N` or a
+   `Not fixed yet:` line), prepend `Fixes #N` right before that engine block so a person's
+   merge on GitHub closes the issue automatically. The record stays after END: the local cleanup keeps
    `*-evidence-*.json` like the logs, because worktrees and job files go.
 4. Any red finding: stop the other checks, but first keep the partial results (#3227 fix
    4): while the engine's replay run (T04) still runs, the merge check waits for it (it
@@ -1522,7 +1535,7 @@ runs until its end):
    with the marker `<!-- pdd:autopilot-core:merge:HEAD -->`. Then
    `gh pr merge PR --repo REPO --merge --match-head-commit HEAD`. A failed merge
    waits for the next tick (step `merge`). A confirmed merge closes the issue when it is open,
-   removes `pdd:working`, cleans up locally (see END) and records `merged`.
+   removes `pdd:working` and `pdd:would-merge` when present, cleans up locally (see END) and records `merged`.
    In mode `observe`, the same comment starts `Autopilot would merge this PR (observe
    mode): every check passed for head HEAD. It stays open and ready for review;
    Autopilot does not merge it.` with the marker

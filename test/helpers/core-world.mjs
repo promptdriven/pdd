@@ -58,8 +58,8 @@ function extend(f, w) {
       return ok(200, { behind_by: behind, ahead_by: ahead, status: behind ? (ahead ? 'diverged' : 'behind') : ahead ? 'ahead' : 'identical' });
     }
     if (route === '/pulls' && method === 'GET') {
-      const params = new URLSearchParams(endpoint.split('?')[1] ?? ''), head = params.get('head')?.split(':').pop(), state = params.get('state') ?? 'open';
-      return ok(200, [...f.prs.values()].filter(pr => (state === 'all' || pr.state === state) && (!head || pr.branch === head)).map(restPr));
+      const params = new URLSearchParams(endpoint.split('?')[1] ?? ''), head = params.get('head')?.split(':').pop(), base = params.get('base'), state = params.get('state') ?? 'open';
+      return ok(200, [...f.prs.values()].filter(pr => (state === 'all' || pr.state === state) && (!head || pr.branch === head) && (!base || pr.base === base)).map(restPr));
     }
     if ((m = /^\/pulls\/(\d+)$/.exec(route))) {
       const pr = f.prs.get(Number(m[1])); if (!pr) return ok(404, { message: 'Not Found' });
@@ -98,6 +98,10 @@ function extend(f, w) {
     if ((m = /^\/issues\/(\d+)$/.exec(route)) && method === 'PATCH') {
       const issue = f.issues.get(Number(m[1])); if (!issue) return ok(404, { message: 'Not Found' });
       if (input.state === 'closed') f.close(issue.number);
+      if (input.state === 'open' && issue.state === 'closed') {
+        issue.state = 'open'; issue.state_reason = 'reopened';
+        issue.timeline.push({ id: String(f.nextEvent++), event: 'reopened', actor: f.owner, created: f.now() });
+      }
       if (input.body !== undefined) f.edit(issue.number, input.body);
       return ok(200, { number: issue.number, state: issue.state });
     }
