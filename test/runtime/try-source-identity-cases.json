@@ -1,0 +1,66 @@
+{
+  "kind": "native-draft-cases",
+  "status": "reviewed; approved by person (\"look goood\")",
+  "story_path": "user_stories/try-source-identity.md",
+  "owner_prompts": [
+    "prompts/cli/runtime-client.prompt.md",
+    "prompts/cli/try-mcp.prompt.md"
+  ],
+  "public_boundaries": [
+    "src/runtime-client.mjs: runCheck({cwd, words, options}, ports) with --files [--json]",
+    "src/runtime-client.mjs: runTry({cwd, words, options}, ports) and readTryOwner({cwd, story}, ports)",
+    "src/try-mcp.mjs: createTryTools({cwd, words, env}, ports)"
+  ],
+  "runtime_check": "BLOCKED",
+  "runtime_reason": "The owning prompts have no Runtime interfaces. Git discovery, tar archive hashing, private saved-state files and stdio JSON-RPC MCP transport are native and unbound.",
+  "authority": ["https://github.com/promptdriven/pdd/issues/2566"],
+  "criteria": [
+    {"id": "AC1", "text": "`pdd test --files` prints `Source SHA-256: <64-hex>` immediately after the file-count summary line without network access, and `pdd test --files --json` includes top-level `source_sha256` matching the uploaded archive digest."},
+    {"id": "AC2", "text": "Starting or reusing a Try with `pdd simulate` prints `Try source: sha256:<64-hex>; engine: <engine_sha>` immediately after the Try budget line (or `Try source: sha256:<64-hex>` when `engine_sha` is unknown or absent), to stdout in browser mode and to stderr in `--cli` or `--serve` mode."},
+    {"id": "AC3", "text": "Calling `try_open` or `try_state` in `pdd mcp` returns `source_sha256` and `engine_sha` for the active Try session alongside its entries, saved data and budget."}
+  ],
+  "cases": [
+    {
+      "id": "files-text-and-json-digest",
+      "criterion_ids": ["AC1"],
+      "given": "Isolated Harbor Git repository with no network or sign-in",
+      "when": "runCheck with --files and --files --json, then runTry capture",
+      "expected": {
+        "exit_code": 0,
+        "text_has_source_sha256_line": true,
+        "json_source_sha256_matches_uploaded_try_request": true,
+        "network_requests": 0
+      }
+    },
+    {
+      "id": "simulate-browser-and-reuse-identity",
+      "criterion_ids": ["AC2"],
+      "given": "Fake runtime returning engine_sha eae2202a68d00ab762fcbbf1eba0d8607a132a15",
+      "when": "runTry creates a Try and a second runTry reuses it",
+      "expected": {
+        "exit_code": 0,
+        "stdout_contains": "Try source: sha256:<request.source_sha256>; engine: eae2202a68d00ab762fcbbf1eba0d8607a132a15"
+      }
+    },
+    {
+      "id": "simulate-door-stderr-lossless",
+      "criterion_ids": ["AC2"],
+      "given": "CLI or serve door Try setup",
+      "when": "runTry with --cli or --serve",
+      "expected": {
+        "stderr_contains_try_source": true,
+        "stdout_omits_try_source": true
+      }
+    },
+    {
+      "id": "mcp-try-open-and-state-identity",
+      "criterion_ids": ["AC3"],
+      "given": "readTryOwner returning model/record source_sha256 and engine_sha",
+      "when": "createTryTools call('try_open') and call('try_state')",
+      "expected": {
+        "source_sha256_returned": true,
+        "engine_sha_returned": true
+      }
+    }
+  ]
+}

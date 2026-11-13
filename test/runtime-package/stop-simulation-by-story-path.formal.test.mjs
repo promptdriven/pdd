@@ -129,7 +129,8 @@ test('STOP-STORY-PATH formal: exhaustive bounded saved-selection and removal rul
         }
         uniqueSelections++;
         if (reply.confirmed) assert.equal(code, 0, `${context}: confirmed unique stop must exit 0; ${stderr}`);
-        assert.equal(auth.length, 2, `${context}: selected stop must authenticate`);
+        assert.equal(auth.length, uniqueSelections === 1 ? 2 : 1, `${context}: selected stop must authenticate`);
+        assert.deepEqual(auth[0], ['auth', 'token'], `${context}: selected stop must read live gh auth token`);
         assert.deepEqual(requests, [
           { method: 'DELETE', path: `/v1/try/${selected.value.id}`, requestId: stopId },
           ...Array.from({ length: reply.reads }, () => ({ method: 'GET', path: `/v1/runs/${stopId}`, requestId: undefined })),

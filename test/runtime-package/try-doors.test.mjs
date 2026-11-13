@@ -100,7 +100,7 @@ test('doors: wrapper failures use 125, never call as another login or follow lau
   const setup = clip(t), ready = await opened(t, setup);
   assert.equal(ready.code, 0, ready.ports.stderr.text);
   const { runShim } = await import('../../src/runtime-seam.mjs');
-  const wrong = ready.makePorts({ gh: args => args[0] === 'auth' ? { status: 0, stdout: TOKEN } : { status: 0, stdout: 'other 1234' } });
+  const wrong = ready.makePorts({ gh: args => args[0] === 'auth' ? { status: 0, stdout: `${TOKEN}_other` } : { status: 0, stdout: 'other 1234' } });
   assert.equal(await runShim(ready.descriptor, ['--help'], wrong), 125);
   assert.match(wrong.stderr.text, /^pdd:.*belong/);
   assert.equal(ready.fake.jsonPosts.length, 0);

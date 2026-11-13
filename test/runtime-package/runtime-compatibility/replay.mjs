@@ -294,7 +294,7 @@ export const paidCases = {
       const first = await c.run('check', { '--timeout': 0.01 }, ['place-order'], door === 'retry' ? { fetch: busyFetch } : {}), saved = c.saved(first);
       c.state.pending = false; c.state.job = door === 'restart' ? 'restart' : 'passed';
       let extra = {};
-      if (guard === 'owner') extra.gh = args => ({ status: 0, stdout: args[0] === 'auth' ? TOKEN : 'someone-else 7' });
+      if (guard === 'owner') extra.gh = args => ({ status: 0, stdout: args[0] === 'auth' ? `${TOKEN}_other` : 'someone-else 7' });
       if (guard === 'source') writeFileSync(join(c.h.repo, PLACE), readFileSync(join(c.h.repo, PLACE), 'utf8') + '\nChanged.\n');
       if (guard === 'intent') { saved.batch.intent = 'try'; writeFileSync(saved.path, JSON.stringify(saved.batch)); }
       if (guard === 'claim') {

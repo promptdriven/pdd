@@ -1,0 +1,33 @@
+# Reuse my GitHub login across pdd commands
+
+As a developer who runs pdd checks and reads saved batches, I want pdd to reuse my GitHub login for the same gh token, so that polling a batch or running checks does not spend my GitHub API rate limit.
+
+## Acceptance criteria
+
+1. Running `pdd test place-order` for the first time with a signed-in `gh` token calls `gh auth token` once and `gh api user` once, saves login `"octo"`, user ID `"4242"` and the token's SHA-256 digest in private state without saving the raw token, and exits with code 0.
+2. Polling a saved batch with `pdd test --read BATCH --json` when the `gh` token matches the saved SHA-256 digest calls `gh auth token` once and `gh api user` 0 times, and exits with code 0 even when GitHub's REST rate limit is exhausted; running `pdd lint`, `pdd test`, `pdd simulate` and `pdd mcp` Try commands with that same token also calls `gh api user` 0 times.
+3. After switching to another GitHub account whose `gh` token has a different SHA-256 digest, running `pdd test --read BATCH` for `"octo"`'s saved batch calls `gh api user` once, updates the saved login for the active token, prints `"These runs belong to octo. Run: gh auth switch -u octo"` to stderr and exits with code 5.
+4. When `gh auth token` fails or returns blank while a saved login file exists, `pdd test --read BATCH` calls `gh api user` 0 times, prints `"Run gh auth login"` to stderr and exits with code 5; when no matching saved login exists and `gh api user` fails, `pdd` prints `"pdd could not read your GitHub login (gh api user: <reason>). Run gh auth status."` to stderr and exits with code 5.
+5. When the PDD interpreter answers HTTP 401 during a command that used the saved login, `pdd` clears the saved login, refreshes `gh auth token` and `gh api user` once, retries the request once when the owner still matches, and if the interpreter still answers HTTP 401 prints `"The PDD interpreter did not accept your GitHub login (HTTP 401). Run gh auth login, then run the command again."` to stderr and exits with code 5.
+
+## What must not change
+
+- Every runtime sign-in still reads `gh auth token` live in memory on each command and exits 5 (`125` in Try door mode) when `gh` is missing (`"Install the GitHub CLI, then run gh auth login"`) or signed out (`"Run gh auth login"`).
+- The raw GitHub token never appears on disk, in `$PDD_STATE_DIR/github-user.json`, batch receipts, Try records, logs, argv, URLs, stdout or stderr.
+- Owner-login checks still refuse cross-account access on saved batches and UUID reads (exit 5), simulations (exit 5), CLI/HTTP Try doors (exit 125) and `pdd mcp` Try tools (`"This Try belongs to <login>. Run: gh auth switch -u <login>"`).
+- Unchanged Story pass reuse in `.pdd/cache/test/`, offline `pdd lint --local` batches and their saved reads, and the free interpreter health check (`0` `gh api user` calls) keep their existing behavior.
+
+## Rules to check
+
+- Token secrets stay in memory only, and `$PDD_STATE_DIR/github-user.json` is written atomically via same-directory temporary file and rename with mode `0600` inside the `0700` state directory storing only `{login, user_id, cached_at, token_sha256}` where `token_sha256` is the lowercase 64-hex SHA-256 of the trimmed token. Forbidden: writing the raw token or any reversible representation of it to disk, logs, argv, URLs, stdout or stderr, or leaving partial JSON in `github-user.json`.
+- A valid `github-user.json` (nonblank whitespace-free `login`, positive decimal-digit `user_id`, and `token_sha256` equal to `sha256(token)`) satisfies sign-in with `0` `gh api user` calls across all runtime CLI, Try door and MCP owner paths. Forbidden: calling `gh api user` on a warm matching-token cache hit during normal sign-in.
+- Missing, unreadable, corrupt or incomplete `github-user.json`, or a `token_sha256` mismatch, runs `gh api user --jq '.login + " " + (.id|tostring)'` once, validates `login` and `user_id`, and updates `github-user.json` for the active token. Forbidden: reusing a cached `{login, user_id}` across different tokens or accepting blank logins or non-positive user IDs.
+- Missing `gh` or a failed or blank `gh auth token` stops before reading or returning `github-user.json`. Forbidden: returning a cached `{login, user_id}` when `gh auth token` fails or returns blank.
+- On HTTP `401` from the interpreter during a command whose sign-in used `github-user.json`, `pdd` removes `github-user.json`, performs at most one fresh `gh auth token` + `gh api user` lookup, re-verifies any required saved-owner login before retrying, and retries the rejected HTTP request at most once without creating a second `<id>.posted` file; when initial sign-in already called `gh api user` fresh in that command, HTTP `401` clears `github-user.json` and stops with `0` extra `gh` calls and `0` retries. Forbidden: retry loops on repeated `401`, duplicate `.posted` markers, skipping saved-owner verification after refresh, or keeping a `401`-rejected cache file.
+- Rate-limit fallback to a matching-token `github-user.json` when a forced `gh api user` lookup fails with a GitHub API rate limit applies only to local saved-batch reads (`--read` of a saved batch) with a `stderr` warning and never after an HTTP `401` rejection; cold-cache or switched-token `gh api user` failures exit 5 (`125` in Try door mode). Forbidden: trusting an unverified cold or switched token on `gh api user` failure, or falling back to a `401`-rejected session for remote requests.
+
+## Cases and Runtime boundary
+
+[Native draft cases](../test/runtime/cache-github-login-cases.json) record the requirement-derived expected results for this issue and its security, owner-refusal, HTTP `401` and rate-limit controls. They are a review inventory, not executable Runtime scenarios or completed native tests.
+
+Runtime check: BLOCKED (#2548). The owner, [Runtime client](../prompts/cli/runtime-client.prompt.md#sign-in), has no Runtime interface for its real public boundaries (`runCheck`, `runTry`, `runDoorCall` and `readTryOwner`). Git repository discovery, `gh` subprocess execution, `node:crypto` SHA-256 token hashing and private `0600` state files under `$PDD_STATE_DIR` remain native and unbound; fake transport replies alone cannot bind the behavior. No interpreter budget is authorized, no Runtime check ran and no report or prompt verdict is claimed. Native replay must exercise the real public boundaries (`runCheck`, `runTry`, `runDoorCall`, `readTryOwner` and `createTryMcpServer`) with temporary Git/state directories, synthetic `gh` and transport ports, file-mode and raw-token-absence assertions, and formal verification of the rules above.

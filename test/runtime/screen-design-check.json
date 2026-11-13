@@ -1,0 +1,345 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/screen-design-check.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "When `app-map.json` has `\"stylesheets\": []` for HTML screen `\"ledger\"` whose prompt `prompts/ledger_screen.prompt.md` links `prompts/views/ledger__stacked.ui.svg`, lint warns `Warning: SVG layout app-map.json -> prompts/ledger_screen.prompt.md: stylesheets: HTML screen \"ledger\" links prompts/views/ledger__stacked.ui.svg with no stylesheet in \"stylesheets\".`"
+    },
+    {
+      "id": "AC2",
+      "text": "When `app-map.json` lists `styles/pocket.css` defining `.btn-primary` and `.ledger-card` and `prompts/ledger_screen.prompt.md` names no class from `styles/pocket.css`, lint warns `Warning: SVG layout prompts/ledger_screen.prompt.md -> styles/pocket.css: stylesheet classes: HTML screen \"ledger\" links prompts/views/ledger__stacked.ui.svg and names no CSS class from its stylesheet (for example .btn-primary).`, and emits 0 warnings once the prompt names `.ledger-card`."
+    },
+    {
+      "id": "AC3",
+      "text": "Comparing a rendered screen with `--look` against a `#0f172a` canvas and two stacked `#1e293b` cards (`#balance-card` at `388×68` and `#entry-list` at `388×74`, `12px` apart) passes when the screen has a `#111827` canvas and painted `380×66` and `380×72` `#1e293b` cards `14px` apart, without requiring pixel equality."
+    },
+    {
+      "id": "AC4",
+      "text": "Comparing that same screen with `--look` when its stylesheet is dropped fails with status `look` on the `#ffffff` canvas and the unpainted `#balance-card` and `#entry-list` boxes (`unpainted box` and `unpainted box; gap 0px`)."
+    }
+  ],
+  "initial_world": {},
+  "simulation": {},
+  "context": [],
+  "steps": [
+    {
+      "step_id": "missing-stylesheet",
+      "entry_path": "prompts/cli/screen-design-check.prompt.md",
+      "operation": "lintScreenDesign",
+      "input": {
+        "appMaps": [
+          {
+            "path": "app-map.json",
+            "stylesheets": [],
+            "screens": [
+              {
+                "id": "ledger",
+                "prompt_path": "prompts/ledger_screen.prompt.md",
+                "source": "operation",
+                "format": "html",
+                "stylesheets": []
+              },
+              {
+                "id": "menu",
+                "prompt_path": "prompts/menu_screen.prompt.md",
+                "source": "mockup",
+                "format": "svg",
+                "stylesheets": []
+              }
+            ]
+          }
+        ],
+        "stylesheets": [],
+        "prompts": [
+          {
+            "path": "prompts/ledger_screen.prompt.md",
+            "prose": "Render Pocket Ledger with region balance-card and region entry-list.",
+            "drawings": ["prompts/views/ledger__stacked.ui.svg"]
+          },
+          {
+            "path": "prompts/menu_screen.prompt.md",
+            "prose": "Render the SVG menu mockup.",
+            "drawings": ["prompts/views/menu__phone.ui.svg"]
+          }
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/warnings",
+          "op": "equals",
+          "value": [
+            "Warning: SVG layout app-map.json -> prompts/ledger_screen.prompt.md: stylesheets: HTML screen \"ledger\" links prompts/views/ledger__stacked.ui.svg with no stylesheet in \"stylesheets\"."
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "missing-css-classes",
+      "entry_path": "prompts/cli/screen-design-check.prompt.md",
+      "operation": "lintScreenDesign",
+      "input": {
+        "appMaps": [
+          {
+            "path": "app-map.json",
+            "stylesheets": ["styles/pocket.css"],
+            "screens": [
+              {
+                "id": "ledger",
+                "prompt_path": "prompts/ledger_screen.prompt.md",
+                "source": "operation",
+                "format": "html",
+                "stylesheets": []
+              }
+            ]
+          }
+        ],
+        "stylesheets": [
+          {
+            "path": "styles/pocket.css",
+            "content": "/* Pocket tokens */\n.ledger-card { background-color: #1e293b; padding: .75rem; }\n.btn-primary { background-color: #0284c7; }",
+            "error": null
+          }
+        ],
+        "prompts": [
+          {
+            "path": "prompts/ledger_screen.prompt.md",
+            "prose": "Render Pocket Ledger with region balance-card and region entry-list.",
+            "drawings": ["prompts/views/ledger__stacked.ui.svg"]
+          }
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/warnings",
+          "op": "equals",
+          "value": [
+            "Warning: SVG layout prompts/ledger_screen.prompt.md -> styles/pocket.css: stylesheet classes: HTML screen \"ledger\" links prompts/views/ledger__stacked.ui.svg and names no CSS class from its stylesheet (for example .btn-primary)."
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "matched-css-classes",
+      "entry_path": "prompts/cli/screen-design-check.prompt.md",
+      "operation": "lintScreenDesign",
+      "input": {
+        "appMaps": [
+          {
+            "path": "app-map.json",
+            "stylesheets": ["styles/pocket.css"],
+            "screens": [
+              {
+                "id": "ledger",
+                "prompt_path": "prompts/ledger_screen.prompt.md",
+                "source": "operation",
+                "format": "html",
+                "stylesheets": []
+              }
+            ]
+          }
+        ],
+        "stylesheets": [
+          {
+            "path": "styles/pocket.css",
+            "content": ".ledger-card { background-color: #1e293b; }\n.btn-primary { background-color: #0284c7; }",
+            "error": null
+          }
+        ],
+        "prompts": [
+          {
+            "path": "prompts/ledger_screen.prompt.md",
+            "prose": "Render Pocket Ledger with `.ledger-card` on region balance-card and region entry-list.",
+            "drawings": ["prompts/views/ledger__stacked.ui.svg"]
+          }
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/warnings",
+          "op": "equals",
+          "value": []
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "look-styled-pass",
+      "entry_path": "prompts/cli/screen-design-check.prompt.md",
+      "operation": "evaluateScreenLook",
+      "input": {
+        "viewport": { "width": 420, "height": 220 },
+        "reference": {
+          "canvasColor": [15, 23, 42],
+          "boxes": [
+            {
+              "id": "balance-card",
+              "box": { "x": 16, "y": 48, "width": 388, "height": 68 },
+              "fill": [30, 41, 59],
+              "stroke": [56, 189, 248]
+            },
+            {
+              "id": "entry-list",
+              "box": { "x": 16, "y": 128, "width": 388, "height": 74 },
+              "fill": [30, 41, 59],
+              "stroke": [51, 65, 85]
+            }
+          ]
+        },
+        "actual": {
+          "canvasColor": [17, 24, 39],
+          "boxes": [
+            {
+              "id": "balance-card",
+              "visible": true,
+              "painted": true,
+              "box": { "x": 20, "y": 50, "width": 380, "height": 66 },
+              "fill": [30, 41, 59],
+              "stroke": [56, 189, 248]
+            },
+            {
+              "id": "entry-list",
+              "visible": true,
+              "painted": true,
+              "box": { "x": 20, "y": 130, "width": 380, "height": 72 },
+              "fill": [30, 41, 59],
+              "stroke": [51, 65, 85]
+            }
+          ]
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/passed",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/rows",
+          "op": "equals",
+          "value": [
+            {
+              "part": "canvas",
+              "kind": "look",
+              "expected": "canvas #0f172a",
+              "actual": "canvas #111827",
+              "status": "pass"
+            },
+            {
+              "part": "#balance-card look",
+              "kind": "look",
+              "expected": "painted 388×68 #1e293b",
+              "actual": "painted 380×66 #1e293b",
+              "status": "pass"
+            },
+            {
+              "part": "#entry-list look",
+              "kind": "look",
+              "expected": "painted 388×74 #1e293b, gap 12px",
+              "actual": "painted 380×72 #1e293b, gap 14px",
+              "status": "pass"
+            }
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "look-dropped-stylesheet-fail",
+      "entry_path": "prompts/cli/screen-design-check.prompt.md",
+      "operation": "evaluateScreenLook",
+      "input": {
+        "viewport": { "width": 420, "height": 220 },
+        "reference": {
+          "canvasColor": [15, 23, 42],
+          "boxes": [
+            {
+              "id": "balance-card",
+              "box": { "x": 16, "y": 48, "width": 388, "height": 68 },
+              "fill": [30, 41, 59],
+              "stroke": [56, 189, 248]
+            },
+            {
+              "id": "entry-list",
+              "box": { "x": 16, "y": 128, "width": 388, "height": 74 },
+              "fill": [30, 41, 59],
+              "stroke": [51, 65, 85]
+            }
+          ]
+        },
+        "actual": {
+          "canvasColor": [255, 255, 255],
+          "boxes": [
+            {
+              "id": "balance-card",
+              "visible": true,
+              "painted": false,
+              "box": { "x": 8, "y": 52, "width": 404, "height": 44 },
+              "fill": null,
+              "stroke": null
+            },
+            {
+              "id": "entry-list",
+              "visible": true,
+              "painted": false,
+              "box": { "x": 8, "y": 96, "width": 404, "height": 52 },
+              "fill": null,
+              "stroke": null
+            }
+          ]
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/passed",
+          "op": "equals",
+          "value": false
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/rows",
+          "op": "equals",
+          "value": [
+            {
+              "part": "canvas",
+              "kind": "look",
+              "expected": "canvas #0f172a",
+              "actual": "canvas #ffffff",
+              "status": "look"
+            },
+            {
+              "part": "#balance-card look",
+              "kind": "look",
+              "expected": "painted 388×68 #1e293b",
+              "actual": "unpainted box",
+              "status": "look"
+            },
+            {
+              "part": "#entry-list look",
+              "kind": "look",
+              "expected": "painted 388×74 #1e293b, gap 12px",
+              "actual": "unpainted box; gap 0px",
+              "status": "look"
+            }
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

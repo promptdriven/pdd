@@ -159,6 +159,9 @@ test('RUNTIME-CAPTURE1: capture refuses secrets, links and size limits, and make
     'tests/unknown-item.json', 'user_stories/place-order.md', 'user_stories/unknown-item.md']);
   const listed = await check(repo, home, [], { '--files': true });
   assert.equal(listed.code, 0); assert.match(listed.out, /^5 files, \d+ KB \(\d+ bytes\)\. 0 of them are not prompt, story or test files\.$/m);
+  assert.match(listed.out, new RegExp(`^Source SHA-256: ${first.sha256}$`, 'm'));
+  const listedJson = await check(repo, home, [], { '--files': true, '--json': true });
+  assert.equal(listedJson.code, 0); assert.equal(JSON.parse(listedJson.out).source_sha256, first.sha256);
   for (const [name, setup, pattern] of [
     ['secret', r => writeFileSync(join(r, '.env.local'), 'TOKEN=x\n'), /\.env\.local: the name looks like a secret/],
     ['secret folder', r => { mkdirSync(join(r, 'config/secrets'), { recursive: true }); writeFileSync(join(r, 'config/secrets/a.txt'), 'x'); }, /config\/secrets\/a\.txt/],
@@ -208,7 +211,7 @@ test('RUNTIME-CLI1: check and try help, option ranges and option mixes', t => {
   assert.equal(help.status, 0); assert.match(help.stdout, /pdd test --fill-hash/); assert.match(help.stdout, /pdd test --read \[BATCH\|CALL_ID\]/);
   assert.equal(lint.status, 0); assert.match(lint.stdout, /pdd lint \[STORY\.\.\.\] \[--json\] +.*sends no checks/);
   assert.match(lint.stdout, /pdd lint --local \[STORY\.\.\.\] \[--json\]/);
-  assert.match(help.stdout, /pdd test --screen URL --drawing PATH \[--json\]/);
+  assert.match(help.stdout, /pdd test --screen URL --drawing PATH \[--look\] \[--json\]/);
   for (const text of [help.stdout, lint.stdout]) assert.doesNotMatch(text, /--request|--lint|pdd test --local/);
   assert.match(pdd('simulate', '--help').stdout, /pdd simulate --stop \[STORY\]/);
   assert.doesNotMatch(pdd('completion', 'bash').stdout, /--request/);

@@ -1,0 +1,131 @@
+{
+  "kind": "native-draft-cases",
+  "status": "draft; expectations await person review",
+  "story_path": "user_stories/svg-layout-controls.md",
+  "owner_prompts": ["prompts/cli/svg-layout.prompt.md"],
+  "public_boundaries": [
+    "src/svg-layout.mjs: lintSvgLayouts({root, files, promptPaths})",
+    "src/pdd-cli.mjs: runPdd([\"lint\", \"--local\", ...], ports)"
+  ],
+  "runtime_check": "BLOCKED",
+  "runtime_reason": "prompts/cli/svg-layout.prompt.md has no Runtime interface. src/svg-layout.mjs reads Git-visible local files directly with lstatSync/readFileSync and calls loadRuntimeWorkspace({root}) without an injected filesystem or workspace port. Not a prompt-runtime.program-scenario.v1 scenario; no check-only API or synthetic Runtime interface is proposed.",
+  "native_replay": "NOT RUN; code-area tests must consume these expected values through public lintSvgLayouts and runPdd([\"lint\", \"--local\"]) boundaries",
+  "authority": [
+    "https://github.com/promptdriven/pdd/issues/2733",
+    "https://github.com/promptdriven/pdd/issues/2733#issuecomment-6718763692",
+    "https://github.com/promptdriven/pdd/issues/2733#issuecomment-6748701110"
+  ],
+  "criteria": [
+    {"id": "AC1", "text": "Running `pdd lint --local` on a screen prompt with `<div id=\"app-shell\" class=\"app\"><main id=\"wait-card\" class=\"body pushed no-dock\"><p id=\"status-chip\" class=\"chip st-waiting\" role=\"status\" aria-busy=\"true\">Waiting for approval</p><button id=\"refresh\" name=\"refresh\">Refresh</button><button id=\"sign-out\" name=\"sign-out-action\">Sign out</button></main></div>` against a `.ui.svg` drawing that contains `wait-card`, `status-chip` and `Refresh` (`id=\"refresh\"`) warns for `\"Sign out\"`, `\"sign-out\"` and `\"sign-out-action\"`, emits 0 missing-control warnings for `\"app-shell\"`, `\"app\"`, `\"body pushed no-dock\"`, `\"chip st-waiting\"`, `\"status\"` or `\"true\"`, and exits with code 0."},
+    {"id": "AC2", "text": "Running `pdd lint --local` on a screen prompt with single-quoted `<div id='shell-frame' class='app-frame compact' role='region' aria-live='polite' aria-busy='false'><button id='retry' name='retry' type='button' class='btn primary' aria-label='Retry connection'>Retry</button></div>` and negated prose `No button shows \"Loading...\" while idle.` against a `.ui.svg` drawing that contains `Retry` (`id=\"retry\"`) emits 0 warnings and exits with code 0."},
+    {"id": "AC3", "text": "Running `pdd lint --local` on a screen prompt with ``Use buttons with label \"Start\". `instructions` says \"Arrow keys to steer. Enter to start. P to pause. R to restart.\" Also explain \"Automatic moves wait at least 1 second plus interpreter time.\" No button directly advances a move: the host timer does that automatically while the live Screen is visible.`` against a `.ui.svg` drawing showing `Start` and both help texts emits 0 warnings, including 0 warnings for `\" Also explain \"`, and exits with code 0."},
+    {"id": "AC4", "text": "Running `pdd lint --local` on a 2048-like screen prompt with four direction buttons in prose and `SCORE`, `SEED` (`#score`, `#seed`) and `READY` (`#status`) in the `.ui.svg` drawing still warns for `\"move-down\"`, `\"move-left\"`, `\"move-right\"`, `\"move-up\"`, `label \"READY\"`, `region #score`, `region #seed` and `region #status`, and exits with code 0."}
+  ],
+  "setup": {
+    "synthetic": true,
+    "isolation": "Fresh temporary Git repository per case with external PDD_STATE_DIR and invalid PDD_RUNTIME_URL so authentication, network and model calls fail if attempted.",
+    "production_flow": "Write the case prompt and .ui.svg files into the temporary Git repository, call lintSvgLayouts({root, files}) directly, and also run runPdd([\"lint\", \"--local\", \"--json\"], ports) after staging the files in Git with a valid native-only Runtime interface on the temporary screen prompt."
+  },
+  "local_invariants": {"authentication_calls": 0, "network_calls": 0, "model_calls": 0, "cli_exit_code": 0},
+  "cases": [
+    {
+      "id": "html-double-quoted-classes-aria-and-missing-button",
+      "criterion_ids": ["AC1"],
+      "prompt_path": "prompts/phone/access_wait.prompt.md",
+      "drawing_path": "views/access_wait__stacked.ui.svg",
+      "prompt_markdown": "# Access wait\n\n## Appearance\n\nComparison-reference state (`wait-card`, `status-chip`, `refresh`):\n\n![Access wait](../../views/access_wait__stacked.ui.svg)\n\nRender `<div id=\"app-shell\" class=\"app\"><main id=\"wait-card\" class=\"body pushed no-dock\"><h1>Access pending</h1><p id=\"status-chip\" class=\"chip st-waiting\" role=\"status\" aria-busy=\"true\">Waiting for approval</p><button id=\"refresh\" name=\"refresh\">Refresh</button><button id=\"sign-out\" name=\"sign-out-action\">Sign out</button></main></div>` with native buttons keeping their ids and names.\n",
+      "drawing_svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"360\" height=\"640\" viewBox=\"0 0 360 640\"><g id=\"wait-card\"><text x=\"24\" y=\"64\">Access pending</text><g id=\"status-chip\"><text x=\"24\" y=\"108\">Waiting for approval</text></g><g id=\"refresh\"><text x=\"24\" y=\"164\">Refresh</text></g></g></svg>",
+      "expected": {
+        "warnings": [
+          "Warning: SVG layout prompts/phone/access_wait.prompt.md -> views/access_wait__stacked.ui.svg: control \"Sign out\": prompt control absent from drawing.",
+          "Warning: SVG layout prompts/phone/access_wait.prompt.md -> views/access_wait__stacked.ui.svg: control \"sign-out\": prompt control absent from drawing.",
+          "Warning: SVG layout prompts/phone/access_wait.prompt.md -> views/access_wait__stacked.ui.svg: control \"sign-out-action\": prompt control absent from drawing."
+        ],
+        "forbidden_control_values": ["app-shell", "app", "body pushed no-dock", "chip st-waiting", "status", "true", "wait-card", "status-chip"],
+        "apply_local_invariants": true
+      }
+    },
+    {
+      "id": "html-single-quoted-attributes-and-container-ids",
+      "criterion_ids": ["AC2"],
+      "prompt_path": "prompts/phone/single_quote.prompt.md",
+      "drawing_path": "views/single_quote__stacked.ui.svg",
+      "prompt_markdown": "# Single quote screen\n\n## Appearance\n\nComparison-reference state (`banner`, `retry`):\n\n![Single quote](../../views/single_quote__stacked.ui.svg)\n\nRender `<div id='shell-frame' class='app-frame compact' role='region' aria-live='polite' aria-busy='false'><section id='banner'><p>Connection lost</p><button id='retry' name='retry' type='button' class='btn primary' aria-label='Retry connection'>Retry</button><input type='hidden' id='csrf-token' name='csrf' value='token-placeholder'/></section></div>` so the retry button stays visible. No button shows \"Loading...\" while idle.\n",
+      "drawing_svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"360\" height=\"240\" viewBox=\"0 0 360 240\"><g id=\"banner\"><text x=\"20\" y=\"40\">Connection lost</text><g id=\"retry\"><text x=\"20\" y=\"90\">Retry</text></g></g></svg>",
+      "expected": {
+        "warnings": [],
+        "forbidden_control_values": ["shell-frame", "app-frame compact", "region", "polite", "false", "button", "btn primary", "Retry connection", "csrf-token", "csrf", "token-placeholder", "Loading..."],
+        "apply_local_invariants": true
+      }
+    },
+    {
+      "id": "multi-sentence-quoted-help-text-and-negated-button",
+      "criterion_ids": ["AC3"],
+      "prompt_path": "prompts/screen.prompt.md",
+      "drawing_path": "prompts/views/screen.ui.svg",
+      "prompt_markdown": "# Screen\n\n## Appearance\n\n![Screen](views/screen.ui.svg)\n\nUse buttons with label \"Start\". `instructions` says \"Arrow keys to steer. Enter to start. P to pause. R to restart.\" Also explain \"Automatic moves wait at least 1 second plus interpreter time.\" No button directly advances a move: the host timer does that automatically while the live Screen is visible.\n",
+      "drawing_svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"480\" height=\"120\" viewBox=\"0 0 480 120\"><text x=\"8\" y=\"20\">Start</text><text x=\"8\" y=\"45\">Arrow keys to steer. Enter to start. P to pause. R to restart.</text><text x=\"8\" y=\"70\">Automatic moves wait at least 1 second plus interpreter time.</text></svg>",
+      "expected": {
+        "warnings": [],
+        "forbidden_control_values": [" Also explain ", "Arrow keys to steer. Enter to start. P to pause. R to restart.", "Automatic moves wait at least 1 second plus interpreter time.", "instructions"],
+        "apply_local_invariants": true
+      }
+    },
+    {
+      "id": "negated-and-non-control-quoted-prose-with-buttons",
+      "criterion_ids": ["AC2", "AC3"],
+      "prompt_path": "prompts/dialog.prompt.md",
+      "drawing_path": "prompts/views/dialog.ui.svg",
+      "prompt_markdown": "# Dialog\n\n## Appearance\n\nRegion `dialog-box`, `confirm`.\n\n![Dialog](views/dialog.ui.svg)\n\nAlongside the \"Confirm\" button (`id=\"confirm\"`), show status text \"Changes stay local until confirmed.\" Without controls enabled, explain \"Read-only preview. Editing is locked.\" No button triggers \"Auto-publish\" in this state.\n",
+      "drawing_svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 360 160\"><g id=\"dialog-box\"><text x=\"16\" y=\"32\">Changes stay local until confirmed.</text><text x=\"16\" y=\"60\">Read-only preview. Editing is locked.</text><g id=\"confirm\"><text x=\"16\" y=\"108\">Confirm</text></g></g></svg>",
+      "expected": {
+        "warnings": [],
+        "forbidden_control_values": ["Changes stay local until confirmed.", "Read-only preview. Editing is locked.", "Auto-publish", " explain "],
+        "apply_local_invariants": true
+      }
+    },
+    {
+      "id": "preserved-2048-directions-labels-and-regions",
+      "criterion_ids": ["AC4"],
+      "prompt_path": "game.prompt.md",
+      "drawing_path": "game.ui.svg",
+      "prompt_markdown": "# 2048-like browser screen\n\nShow score and seed data from game state. Provide four touch-sized direction\nbuttons with ids `move-left`, `move-right`, `move-up` and `move-down`.\n\n![Game layout](game.ui.svg)\n",
+      "drawing_svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 400 400\"><title id=\"title\">Metadata is not a required label</title><desc>Start state of a small 2048-like screen.</desc><g id=\"score\" transform=\"translate(250 20)\"><rect width=\"120\" height=\"65\" fill=\"#bbada0\"/><text x=\"10\" y=\"22\">SCORE</text><text x=\"10\" y=\"48\">0</text></g><g id=\"seed\" transform=\"translate(20 100)\"><rect width=\"120\" height=\"65\" fill=\"#eee4da\"/><text x=\"10\" y=\"22\">SEED</text><text x=\"10\" y=\"48\">42</text></g><text x=\"40\" y=\"220\">2</text><text x=\"120\" y=\"220\">2</text><g id=\"status\" transform=\"translate(20 280)\"><rect width=\"350\" height=\"45\" fill=\"#eee4da\"/><text x=\"10\" y=\"28\">READY</text></g><g display=\"none\"><text id=\"hidden-sample\">HIDDEN</text></g><g data-context-only=\"true\"><text id=\"surroundings\" x=\"10\" y=\"380\">CONTEXT</text></g></svg>",
+      "expected": {
+        "warnings": [
+          "Warning: SVG layout game.prompt.md -> game.ui.svg: control \"move-down\": prompt control absent from drawing.",
+          "Warning: SVG layout game.prompt.md -> game.ui.svg: control \"move-left\": prompt control absent from drawing.",
+          "Warning: SVG layout game.prompt.md -> game.ui.svg: control \"move-right\": prompt control absent from drawing.",
+          "Warning: SVG layout game.prompt.md -> game.ui.svg: control \"move-up\": prompt control absent from drawing.",
+          "Warning: SVG layout game.prompt.md -> game.ui.svg: label \"READY\": drawing label absent from prompt.",
+          "Warning: SVG layout game.prompt.md -> game.ui.svg: region #score: drawing region layout unspecified in prompt.",
+          "Warning: SVG layout game.prompt.md -> game.ui.svg: region #seed: drawing region layout unspecified in prompt.",
+          "Warning: SVG layout game.prompt.md -> game.ui.svg: region #status: drawing region layout unspecified in prompt."
+        ],
+        "apply_local_invariants": true
+      }
+    },
+    {
+      "id": "preserved-missing-prose-and-native-form-controls",
+      "criterion_ids": ["AC1", "AC4"],
+      "prompt_path": "prompts/controls.prompt.md",
+      "drawing_path": "prompts/controls.ui.svg",
+      "prompt_markdown": "# Controls\n\n## Appearance\n\n![Controls](controls.ui.svg)\n\nProvide Button \"Save draft\" with id=\"save-draft\", `<input type='submit' id='apply-filter' name='filter-submit' value='Apply' class='btn'/>`, and `<select id=\"sort-order\" name=\"sort-by\" aria-label=\"Sort order\"></select>`.\n",
+      "drawing_svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 200 80\"><text x=\"10\" y=\"24\">Filters</text></svg>",
+      "expected": {
+        "warnings": [
+          "Warning: SVG layout prompts/controls.prompt.md -> prompts/controls.ui.svg: control \"Apply\": prompt control absent from drawing.",
+          "Warning: SVG layout prompts/controls.prompt.md -> prompts/controls.ui.svg: control \"Save draft\": prompt control absent from drawing.",
+          "Warning: SVG layout prompts/controls.prompt.md -> prompts/controls.ui.svg: control \"apply-filter\": prompt control absent from drawing.",
+          "Warning: SVG layout prompts/controls.prompt.md -> prompts/controls.ui.svg: control \"filter-submit\": prompt control absent from drawing.",
+          "Warning: SVG layout prompts/controls.prompt.md -> prompts/controls.ui.svg: control \"save-draft\": prompt control absent from drawing.",
+          "Warning: SVG layout prompts/controls.prompt.md -> prompts/controls.ui.svg: control \"sort-by\": prompt control absent from drawing.",
+          "Warning: SVG layout prompts/controls.prompt.md -> prompts/controls.ui.svg: control \"sort-order\": prompt control absent from drawing.",
+          "Warning: SVG layout prompts/controls.prompt.md -> prompts/controls.ui.svg: label \"Filters\": drawing label absent from prompt."
+        ],
+        "forbidden_control_values": ["submit", "btn", "Sort order"],
+        "apply_local_invariants": true
+      }
+    }
+  ]
+}

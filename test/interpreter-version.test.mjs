@@ -179,3 +179,16 @@ test('default fetch transport is injectable and its failures disclose no excepti
   });
   assert.equal(requests, 1); assert.deepEqual(result, { exit_code: 0, stdout: unknown, stderr: '' });
 });
+
+test('service_sha prints lowercased 40-hex when present, unknown when malformed, and omits when absent', async () => {
+  const serviceSha = 'fedcba0987654321fedcba0987654321fedcba09';
+  const get = body => runDetailedVersion({ version }, { resolveOrigin: () => ({ valid: true, origin: 'https://fixture.invalid' }),
+    readToken: () => ({ token }), getMetadata: () => ({ status: 200, body: JSON.stringify(body) }) });
+  const withKnownService = await get({ engine_sha: sha, service_sha: serviceSha.toUpperCase(),
+    formats: { interface: ['prompt-runtime.interface.v4'], test: ['prompt-runtime.program-scenario.v1'], app_map: ['prompt-runtime.app-map.v1'] } });
+  assert.equal(withKnownService.stdout, `PDD CLI: ${version}\nPDD interpreter: ${sha}\nPDD service: ${serviceSha}\nInterface formats: prompt-runtime.interface.v4\nTest formats: prompt-runtime.program-scenario.v1\nApp-map formats: prompt-runtime.app-map.v1\n`);
+  for (const bad of ['unknown', '', 'fedcba09', `${serviceSha}\n`, `\u001b[2J${serviceSha}`, null, 42, {}]) {
+    const res = await get({ engine_sha: sha, service_sha: bad, formats: { interface: [], test: [], app_map: [] } });
+    assert.equal(res.stdout, `PDD CLI: ${version}\nPDD interpreter: ${sha}\nPDD service: unknown\nInterface formats: none\nTest formats: none\nApp-map formats: none\n`);
+  }
+});
