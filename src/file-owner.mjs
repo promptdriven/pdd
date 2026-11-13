@@ -1,4 +1,4 @@
-// Generated from prompts/cli/file-owner.prompt.md (sha256: 4263fd21a5218625f98dbbd847dd4845b858747ac9d0be3952793fb17015ab3e).
+// Generated from prompts/cli/file-owner.prompt.md (sha256: 575c73881b136031542a433bad4bcca1a1fa5a69f0bc1a759bcb8f1eb49faa3a).
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { closeSync, fstatSync, openSync, readSync, realpathSync } from 'node:fs';
@@ -84,6 +84,9 @@ export function promptClaims(promptPath, content) {
   return unique(claims.filter(path => canonicalPath(path) && !path.endsWith('.prompt.md'))).sort();
 }
 
+export const isTestOwnedPath = path => typeof path === 'string' && !path.endsWith('.prompt.md')
+  && /(?:^|\/)(?:tests?|__tests__)\/|(?:^|\/)(?:[^/]+\.(?:test|spec)\.[^/]+|test_[^/]+\.[^/]+|[^/]+_test\.[^/]+)$/i.test(path);
+
 function bindingTable(text) {
   if (text === null || text === undefined) return new Map();
   try {
@@ -159,6 +162,38 @@ export function runOwner({ cwd = process.cwd(), paths = [], json = false } = {},
     named.push(path);
   }
   const result = findOwners({ root, paths: named }, { ...(files ? { files } : {}), ...(read ? { read } : {}) });
+  const warnings = [], warnedTargets = new Set();
+  for (const row of result.files) {
+    if (row.owners.length && isTestOwnedPath(row.path)) {
+      warnedTargets.add(row.path);
+      warnings.push(`Warning: misplaced prompt owner: ${row.path} is claimed by ${row.owners.join(', ')} (${row.source}). Prompts own production modules, not test files.`);
+    }
+  }
+  const queriedPrompts = unique(named.filter(path => path.endsWith('.prompt.md')));
+  if (queriedPrompts.length) {
+    const listFiles = files ?? (() => gitFiles(root));
+    const readPort = read ?? ((path, limit) => readHead(root, path, limit));
+    const safeRead = (path, limit) => { try { return readPort(path, limit); } catch { return null; } };
+    const visible = listFiles();
+    const extra = [];
+    for (const promptPath of queriedPrompts) {
+      for (const claim of promptClaims(promptPath, safeRead(promptPath, PROMPT))) if (isTestOwnedPath(claim)) extra.push(claim);
+    }
+    const rawBindings = safeRead('pdd-bindings.json', PROMPT);
+    const table = rawBindings ? bindingTable(decode(rawBindings, PROMPT)) : null;
+    if (table) for (const [mod, owners] of table.entries()) {
+      if (isTestOwnedPath(mod) && owners.some(owner => queriedPrompts.includes(owner))) extra.push(mod);
+    }
+    const testCandidates = unique([...visible.filter(isTestOwnedPath), ...extra]).filter(path => !warnedTargets.has(path)).sort();
+    if (testCandidates.length) {
+      const check = findOwners({ root, paths: testCandidates }, { ...(files ? { files } : {}), ...(read ? { read } : {}) });
+      for (const promptPath of queriedPrompts) {
+        const claimed = check.files.filter(row => row.owners.includes(promptPath)).map(row => row.path).sort();
+        if (claimed.length) warnings.push(`Warning: misplaced prompt owner: ${promptPath} claims ${claimed.join(', ')}. Prompts own production modules, not test files.`);
+      }
+    }
+  }
+  for (const warning of warnings) stderr.write(`${warning}\n`);
   if (json) { stdout.write(`${JSON.stringify(result)}\n`); return 0; }
   for (const row of result.files) {
     const doubt = row.certain ? '' : 'not certain: treat as owned';

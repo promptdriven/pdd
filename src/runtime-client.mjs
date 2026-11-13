@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 0f5ca74e935560b7ece30648a834e384e4d6a38d3bbebe9241446e134a6b1be2).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 98d792b4d938d2a33a615bf9109bbf3b22af0daed7619ae9fba24b1142a39267).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
@@ -2372,7 +2372,13 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   }
   let selected;
   try { selected = select(found, normalized, root); }
-  catch (error) { if (error instanceof Stop && advice.length) error.message = [error.message, ...advice].join('\n'); throw error; }
+  catch (error) {
+    if (error instanceof Stop) {
+      const noTestsAdvice = [...new Set([...advice, ...(paths ? lintLocalHygiene({ root, files: [...found.visible], promptPaths: paths, tests: [], workspace: found.workspace }) : [])])];
+      if (noTestsAdvice.length) error.message = [error.message, ...noTestsAdvice].join('\n');
+    }
+    throw error;
+  }
   if (!paths) { advice.push(...formatAdvice(root, found.visible, entryPaths(selected), found.workspace)); found.warnings.push(...advice); }
   context.coverage = bindingCoverage({ root, found, selected, includeRuntime:true });
   // A test that the test name rule cannot use is refused here and never sent; the other tests are linted.
@@ -2386,7 +2392,12 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
     const native = nativeRows.get(row.test);
     if (native) Object.assign(row,{state:native.refusals.length ? 'refused' : 'not_run',refusals:native.refusals,phase:'local',native_only:native.native_only,unsent:true,note:{code:'native-only',message:native.native_only.map(item => `${item.path}: ${item.reason}`).join('; ')}});
   }
-  if (!findings.length && rows.every(row => row.native_only?.length)) { saveLocalNativeResult(context, rows, 'lint-only'); return printLintResult(context,rows,[],advice); }
+  if (!findings.length && rows.every(row => row.native_only?.length)) {
+    const hygiene = lintLocalHygiene({ root, files: [...found.visible], promptPaths: words.length ? entryPaths(selected) : undefined, tests: selected, workspace: found.workspace });
+    context.warnings = [...new Set([...found.warnings, ...hygiene])];
+    saveLocalNativeResult(context, rows, 'lint-only');
+    return printLintResult(context, rows, [], [...new Set([...advice, ...hygiene])]);
+  }
   const local = row => row.phase === 'local';
   const {promptSchemaRefusals} = await import('./runtime-preflight.mjs');
   const prompts = new Map();
@@ -2451,6 +2462,13 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   context.nativeSource = nativeSourceIdentity(context, rows);
   if (!capture) return printLintResult(context, rows, [], found.warnings);
   const svgWarnings = lintSvgLayouts({ root, files: [...found.visible], promptPaths: capture.files.map(file => file.path).filter(path => path.endsWith('.prompt.md')) });
+  const hygieneWarnings = lintLocalHygiene({
+    root,
+    files: [...found.visible],
+    promptPaths: words.length ? capture.files.map(file => file.path).filter(path => path.endsWith('.prompt.md')) : undefined,
+    tests: selected,
+    workspace: found.workspace,
+  });
   const drift=[];
   try {
     const files=sourceFilePort(root,found.visible), sources=[];
@@ -2462,9 +2480,9 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
     drift.push(...[...catalog.warnings,...compared.warnings].map(warning=>`Warning: ${warning}`));
     for (const match of compared.matches.filter(match=>match.kind==='near')) drift.push(`Warning: ${match.path} ${match.source_pointer}: copy of ${match.target} differs (${match.differences.join('; ')}). Use {"$contract":${JSON.stringify(match.target)}}.`);
   } catch { drift.push('Warning: contract catalog advice is unavailable.'); }
-  context.warnings = [...svgWarnings, ...found.warnings,...drift,...(capture.warnings ?? [])];
+  context.warnings = [...new Set([...svgWarnings, ...found.warnings, ...drift, ...(capture.warnings ?? []), ...hygieneWarnings])];
   context.unmatched = unmatchedLines(found);
-  if (!context.json) for (const warning of [...svgWarnings,...drift,...(capture.warnings ?? [])]) line(ports.stderr, warning);
+  if (!context.json) for (const warning of [...new Set([...svgWarnings, ...drift, ...(capture.warnings ?? []), ...hygieneWarnings])]) line(ports.stderr, warning);
   const identity = signIn(ports.gh, context.store), startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
   const timeoutMin = options['--timeout'] !== undefined ? Number(options['--timeout']) : ports.interactive ? null : AGENT_WAIT_MIN;
   Object.assign(context, { origin, visible: found.visible, capture, identity, batch, startedAt, deadline: timeoutMin ? startedAt + timeoutMin * 60_000 : Infinity, rows, head: null,
@@ -3167,7 +3185,7 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
         const problems = words.length ? [] : interfaceFindings({root,paths:promptPaths}).filter(localInterfaceProblem);
         const advice = formatAdvice(root, new Set(gitFiles(root)), promptPaths ?? files.filter(path => path.endsWith('.prompt.md')), workspace);
         const hygiene = lintLocalHygiene({ root, files, promptPaths, tests: selectedTests, workspace });
-        const warnings = [...advice, ...lintSvgLayouts({ root, files, promptPaths }), ...hygiene], summary = `partial: checked SVG layout only; prompts not checked (local-only). ${warnings.length} warnings. 0 AI calls. No checks were sent.`;
+        const warnings = [...new Set([...advice, ...lintSvgLayouts({ root, files, promptPaths }), ...hygiene])], summary = `partial: checked SVG layout only; prompts not checked (local-only). ${warnings.length} warnings. 0 AI calls. No checks were sent.`;
         const result = saveLocalLayout(context,{root,tests,prompts:promptPaths ?? files.filter(path => path.endsWith('.prompt.md')),warnings,problems,summary});
         return printLocalLayout(context,result);
       } catch (error) { throw new Stop(2, error.message); }

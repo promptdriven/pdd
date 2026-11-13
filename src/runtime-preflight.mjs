@@ -1,7 +1,7 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: c95cfb256cfae2f38394f2651b19508ebafe62944fdaf8573e845313c58de46d).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 31a66311ee5103fbf238585787dc53334afe4d11c2a9b80df637e660f98d1427).
 import { markdownLinks, markdownDefinitions, markdownSectionText } from './runtime-markdown.mjs';
 import { buildBindingPlan, runtimeBoundary } from './runtime-binding-plan.mjs';
-import { promptClaims, resolveOwners } from './file-owner.mjs';
+import { isTestOwnedPath, promptClaims, resolveOwners } from './file-owner.mjs';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
@@ -1066,11 +1066,22 @@ export function preflight({ root, found, selected,workspace=found.workspace??loa
     }
     // Number advice from the exact test values. It never blocks; the interpreter decides.
     // A native-only test is never sent to the interpreter, so it gets no number advice.
-    let tokens = [], range = null;
-    if (!row.native_only.length) try { const text = readText(root, test.path); if (text !== null) { tokens = roundedNumberTokens(text); range = interpreterIntegerWarning(parseScenarioJson(text), test.path); } } catch { tokens = []; }
+    let tokens = [], range = null, rawTestText = null;
+    if (!test.error && !row.refusals.some(item => item.section === 'source')) {
+      try { rawTestText = readText(root, test.path); } catch { rawTestText = null; }
+    }
+    if (!row.native_only.length && rawTestText !== null) {
+      try { tokens = roundedNumberTokens(rawTestText); range = interpreterIntegerWarning(parseScenarioJson(rawTestText), test.path); } catch { tokens = []; }
+    }
     if (range) warnings.push(range);
     if (!row.native_only.length) for (const prompt of prompts.values()) for (const line of schemaBoundWarnings(prompt)) if (!warnings.includes(line)) warnings.push(line);
-    for (const prompt of prompts.values()) for (const line of formatWarningLines(prompt)) if (!warnings.includes(line)) warnings.push(line);
+    for (const prompt of prompts.values()) {
+      for (const line of formatWarningLines(prompt)) if (!warnings.includes(line)) warnings.push(line);
+      const proseWarning = promptProseWarningLine(prompt.path, prompt.rawText ?? prompt.text);
+      if (proseWarning && !warnings.includes(proseWarning)) warnings.push(proseWarning);
+    }
+    const storyWarning = storyComplexityWarningLine({ path: test.path, storyPath: test.storyPath, doc: test.doc }, rawTestText);
+    if (storyWarning && !warnings.includes(storyWarning)) warnings.push(storyWarning);
     for (const item of tokens) warnings.push(`Warning: ${test.path} ${interpreterSection(item.path)} is ${item.source}, which reads as the Number ${String(item.value)}. Write the value you mean: plain digits for an exact whole number, or the exact Number spelling.`);
     return row;
   });
@@ -1946,12 +1957,50 @@ export function otherFiles(files, found) {
   return files.filter(file => !file.path.endsWith('.prompt.md') && !known.has(file.path));
 }
 
-const MISPLACED_TEST_OR_CI = /^(?:tests?|__tests__|\.github)\/|(?:^|\/)(?:[^/]+\.(?:test|spec)\.[A-Za-z0-9]+|test_[^/]+\.[A-Za-z0-9]+|[^/]+_test\.[A-Za-z0-9]+)$/i;
+const MISPLACED_CI = /^(?:\.github)\//i;
 const MISPLACED_CONFIG = /(?:^|\/)(?:package(?:-lock)?\.json|pdd\.json|tsconfig(?:\.[^/]+)?\.json|jsconfig\.json)$/i;
 const NON_CODE_ASSET = /(?:^|\/)\.[^/]+$|\.(?:json|jsonl|ndjson|ya?ml|toml|ini|cfg|conf|lock|md|txt|csv|tsv|xml|svg|png|jpe?g|gif|webp|ico|pdf|woff2?)$/i;
 const HEADER_COMMENT = /^\s*(?:\/\/+|#+|--|;+|\/\*+|\*+|<!--|"""|''')?\s*Generated from (\S+\.prompt\.md)(?: \(sha256: ([a-f0-9]{64})\))?\.?\s*(?:\*\/|-->|"""|''')?\s*$/;
 const EXCUSE_CLAUSE = /(?:^|;\s*)(?:(TODO|FIXME|HACK|XXX)(?:\([^)\r\n]*\))?(?=$|[\s:—–-])|(todo|fixme|hack)(?:\([^)\r\n]*\))?\s*[:—–-])/;
+const PROMPT_PROSE_LINE_LIMIT = 500;
+const PROMPT_PROSE_ELEVATED_LIMIT = 1000;
 const STORY_STEP_LIMIT = 15;
+const STORY_LINE_LIMIT = 1000;
+
+function promptProseLineCount(text) {
+  const prose = text.replace(INTERFACE, '').trimEnd();
+  return prose ? prose.split(/\r?\n/).length : 0;
+}
+
+function promptProseWarningLine(promptPath, promptText) {
+  if (typeof promptText !== 'string') return null;
+  const proseLines = promptProseLineCount(promptText);
+  if (proseLines > PROMPT_PROSE_ELEVATED_LIMIT) {
+    return `Warning: oversized prompt (elevated): ${promptPath} has ${proseLines} prose lines (limit: ${PROMPT_PROSE_LINE_LIMIT}; elevated above ${PROMPT_PROSE_ELEVATED_LIMIT}). Split the module into focused contracts or use "kind": "native-only" with deterministic code tests.`;
+  }
+  if (proseLines > PROMPT_PROSE_LINE_LIMIT) {
+    return `Warning: oversized prompt: ${promptPath} has ${proseLines} prose lines (limit: ${PROMPT_PROSE_LINE_LIMIT}). Keep prompt prose focused on WHAT, WHY and failure boundaries; let the Runtime interface or $contract schema own field inventories.`;
+  }
+  return null;
+}
+
+function textLineCount(text) {
+  if (typeof text !== 'string' || !text.length) return 0;
+  const trimmed = text.replace(/\r?\n$/, '');
+  return trimmed ? trimmed.split(/\r?\n/).length : 0;
+}
+
+function storyComplexityWarningLine({ path, storyPath, doc }, rawText) {
+  if (!isObject(doc) || (Object.hasOwn(doc, 'schema_version') && doc.schema_version !== TEST_SCHEMA)) return null;
+  const steps = Array.isArray(doc.steps) ? doc.steps.length : 0;
+  const lines = typeof rawText === 'string' ? textLineCount(rawText) : 0;
+  const reasons = [];
+  if (steps > STORY_STEP_LIMIT) reasons.push(`${steps} scenario steps (limit: ${STORY_STEP_LIMIT})`);
+  if (lines > STORY_LINE_LIMIT) reasons.push(`${lines} lines (limit: ${STORY_LINE_LIMIT})`);
+  if (!reasons.length) return null;
+  const storyLabel = storyPath ?? (typeof doc.story_path === 'string' && doc.story_path.trim() ? doc.story_path.trim() : null) ?? path;
+  return `Warning: oversized Story: ${storyLabel} (${path}) has ${reasons.join(' and ')}. Keep prompt scenarios focused on policy and authority boundaries and move multi-step state-machine or wire-protocol sequences to native tests (RUNBOOK.md §17, §18).`;
+}
 
 function promptOpeningSentence(text) {
   const lines = new TextDecoder().decode(Buffer.from(text, 'utf8').subarray(0, 65_536)).split(/\r?\n/);
@@ -2255,22 +2304,18 @@ export function lintLocalHygiene({ root, files = gitFiles(root), promptPaths, te
   const prompts = [...promptTexts.entries()].map(([path, content]) => ({ path, content }));
   const resolved = resolveOwners({ paths: candidatePaths, bindings, heads, prompts });
 
-  const productionCodeByPrompt = new Map(), rawRowsByPrompt = new Map(), codeRowMap = new Map();
+  const rawRowsByPrompt = new Map(), codeRowMap = new Map();
   for (const row of resolved.files) {
     const validOwners = row.owners.filter(prompt => promptTexts.has(prompt));
     if (!validOwners.length) continue;
     const classifiedPath = projectRelativePath(row.path);
-    const isMisplacedTest = MISPLACED_TEST_OR_CI.test(classifiedPath);
+    const isMisplacedTest = isTestOwnedPath(classifiedPath) || MISPLACED_CI.test(classifiedPath);
     const isConfig = MISPLACED_CONFIG.test(classifiedPath);
     const isCode = !isMisplacedTest && !isConfig && !NON_CODE_ASSET.test(classifiedPath);
     const fileInfo = isCode ? inspectStrict(row.path) : null;
     for (const owner of validOwners) {
       if (!rawRowsByPrompt.has(owner)) rawRowsByPrompt.set(owner, []);
       rawRowsByPrompt.get(owner).push({ row, isCode, isMisplacedTest, isConfig });
-      if (fileInfo) {
-        if (!productionCodeByPrompt.has(owner)) productionCodeByPrompt.set(owner, []);
-        productionCodeByPrompt.get(owner).push({ path: row.path, bytes: fileInfo.size });
-      }
     }
     if (fileInfo && validOwners.some(owner => inspectedSet.has(owner))) {
       codeRowMap.set(row.path, [...new Set(validOwners)].sort());
@@ -2283,7 +2328,6 @@ export function lintLocalHygiene({ root, files = gitFiles(root), promptPaths, te
     if (typeof promptText !== 'string') continue;
     const promptRows = rawRowsByPrompt.get(prompt) ?? [];
     const claimsProductionCode = promptRows.some(item => item.isCode);
-    const ownedCode = (productionCodeByPrompt.get(prompt) ?? []).sort((a, b) => a.path.localeCompare(b.path));
     const misplaced = [];
     for (const { row, isMisplacedTest, isConfig } of promptRows) {
       if (isMisplacedTest) misplaced.push(row.path);
@@ -2296,20 +2340,15 @@ export function lintLocalHygiene({ root, files = gitFiles(root), promptPaths, te
       const uniqueTargets = [...new Set(misplaced)].sort();
       warnings.push(`Warning: misplaced prompt owner: ${prompt} claims ${uniqueTargets.join(', ')}. Prompts own production modules, not test suites, CI workflows or repository config files.`);
     }
-    if (ownedCode.length) {
-      const proseBytes = Buffer.byteLength(promptText.replace(INTERFACE, ''), 'utf8');
-      const codeBytes = ownedCode.reduce((sum, item) => sum + item.bytes, 0);
-      if (proseBytes > codeBytes) {
-        warnings.push(`Warning: oversized prompt: ${prompt} has ${proseBytes} prose bytes vs ${codeBytes} code bytes (${ownedCode.map(item => item.path).join(', ')}). Keep the behavior contract smaller than its generated code.`);
-      }
-    }
+    const proseWarning = promptProseWarningLine(prompt, promptText);
+    if (proseWarning) warnings.push(proseWarning);
   }
 
   const matchedStoryByTest = new Map(
     matchTests(scopedFiles.filter(isStoryPath), scopedFiles).tests.map(item => [item.path, item.storyPath]),
   );
   const inspectedTests = tests === undefined
-    ? discoverTests(root, scopedFiles, true, policy, true).tests
+    ? discoverTests(root, scopedFiles, true, policy, true).tests.map(item => ({ ...item, raw: readStrictText(item.path) }))
     : tests.map(entry => {
       const rawPath = typeof entry === 'string' ? entry : entry?.path;
       if (typeof rawPath !== 'string') return null;
@@ -2323,17 +2362,12 @@ export function lintLocalHygiene({ root, files = gitFiles(root), promptPaths, te
       const storyPath = (isObject(entry) && typeof entry.storyPath === 'string' && entry.storyPath)
         ? entry.storyPath
         : (matchedStoryByTest.get(clean) ?? docStory);
-      return { path: clean, storyPath, doc };
+      return { path: clean, storyPath, doc, raw };
     }).filter(Boolean);
 
   for (const testEntry of [...inspectedTests].sort((a, b) => String(a?.path ?? '').localeCompare(String(b?.path ?? '')))) {
-    const doc = testEntry?.doc;
-    if (!isObject(doc) || (Object.hasOwn(doc, 'schema_version') && doc.schema_version !== TEST_SCHEMA)) continue;
-    const steps = Array.isArray(doc.steps) ? doc.steps.length : 0;
-    if (steps > STORY_STEP_LIMIT) {
-      const storyLabel = testEntry.storyPath ?? testEntry.path;
-      warnings.push(`Warning: oversized Story: ${storyLabel} (${testEntry.path}) has ${steps} scenario steps (limit: ${STORY_STEP_LIMIT}). Keep Story scenarios focused on behavior boundaries and move long step sequences to code tests.`);
-    }
+    const storyWarning = storyComplexityWarningLine(testEntry, testEntry?.raw);
+    if (storyWarning) warnings.push(storyWarning);
   }
 
   for (const filePath of [...codeRowMap.keys()].sort()) {

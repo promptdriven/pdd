@@ -206,3 +206,73 @@ test('3200 pdd owner shows each header hash that is not current', async t => {
   await runPdd(['owner', 'src/stale.mjs', '--json'], { stdout: json, stderr, cwd: root });
   assert.deepEqual(JSON.parse(json.text).files[0].headers, [{ prompt: 'prompts/a.prompt.md', sha256: HEX, expected: hash, state: 'stale', legacy: false }]);
 });
+
+test('3295 pdd owner warns on stderr without blocking exit 0 or changing stdout when prompts claim test files', async t => {
+  const prodPrompt = '# Prod\n\nOwn `src/prod.mjs`.\n';
+  const boundPrompt = '# Bound test\n\nVerify suite.\n';
+  const headerPrompt = '# Header test\n\nVerify suite.\n';
+  const prosePrompt = '# Prose test\n\nOwn `src/unit.test.mjs`, `src/unit_test.go` and `src/test_unit.py`.\n';
+  const root = repo(t, {
+    'pdd-bindings.json': JSON.stringify({
+      schema_version: 'pdd.bindings.v1',
+      modules: [{ module: 'test/bound.e2e.mjs', stories: ['user_stories/s.md'], prompt: 'prompts/bound.prompt.md' }],
+    }),
+    'prompts/prod.prompt.md': prodPrompt,
+    'prompts/bound.prompt.md': boundPrompt,
+    'prompts/header.prompt.md': headerPrompt,
+    'prompts/prose.prompt.md': prosePrompt,
+    'src/prod.mjs': `// Generated from prompts/prod.prompt.md (sha256: ${promptHeaderHash(prodPrompt)}).\n`,
+    'test/bound.e2e.mjs': 'export {};\n',
+    'tests/header.mjs': `// Generated from prompts/header.prompt.md (sha256: ${promptHeaderHash(headerPrompt)}).\n`,
+    'src/unit.test.mjs': 'export {};\n',
+    'src/unit_test.go': 'package unit\n',
+    'src/test_unit.py': 'x = 1\n',
+  });
+  const run = async argv => {
+    const stdout = capture(), stderr = capture();
+    const code = await runPdd(argv, { stdout, stderr, cwd: root });
+    return { code, out: stdout.text, err: stderr.text };
+  };
+
+  // Production modules stay completely silent on stderr.
+  const prod = await run(['owner', 'src/prod.mjs']);
+  assert.equal(prod.code, 0);
+  assert.equal(prod.err, '');
+  assert.equal(prod.out, 'src/prod.mjs: prompts/prod.prompt.md (header)\n');
+
+  // Test paths claimed via binding, header, or prose emit non-blocking stderr warnings while keeping exit 0 and stdout intact.
+  const text = await run(['owner', 'test/bound.e2e.mjs', 'tests/header.mjs', 'src/unit.test.mjs', 'src/unit_test.go', 'src/test_unit.py']);
+  assert.equal(text.code, 0);
+  assert.equal(text.out, [
+    'test/bound.e2e.mjs: prompts/bound.prompt.md (binding)',
+    'tests/header.mjs: prompts/header.prompt.md (header)',
+    'src/unit.test.mjs: prompts/prose.prompt.md (prose, not certain: treat as owned)',
+    '  named only in the opening sentence of prompts/prose.prompt.md; add a Generated from header or a pdd-bindings.json entry',
+    'src/unit_test.go: prompts/prose.prompt.md (prose, not certain: treat as owned)',
+    '  named only in the opening sentence of prompts/prose.prompt.md; add a Generated from header or a pdd-bindings.json entry',
+    'src/test_unit.py: prompts/prose.prompt.md (prose, not certain: treat as owned)',
+    '  named only in the opening sentence of prompts/prose.prompt.md; add a Generated from header or a pdd-bindings.json entry',
+    '',
+  ].join('\n'));
+  assert.equal(text.err, [
+    'Warning: misplaced prompt owner: test/bound.e2e.mjs is claimed by prompts/bound.prompt.md (binding). Prompts own production modules, not test files.',
+    'Warning: misplaced prompt owner: tests/header.mjs is claimed by prompts/header.prompt.md (header). Prompts own production modules, not test files.',
+    'Warning: misplaced prompt owner: src/unit.test.mjs is claimed by prompts/prose.prompt.md (prose). Prompts own production modules, not test files.',
+    'Warning: misplaced prompt owner: src/unit_test.go is claimed by prompts/prose.prompt.md (prose). Prompts own production modules, not test files.',
+    'Warning: misplaced prompt owner: src/test_unit.py is claimed by prompts/prose.prompt.md (prose). Prompts own production modules, not test files.',
+    '',
+  ].join('\n'));
+
+  // --json keeps stdout pure valid pdd.owner.v1 JSON and writes the warning to stderr.
+  const json = await run(['owner', 'test/bound.e2e.mjs', '--json']);
+  assert.equal(json.code, 0);
+  assert.equal(JSON.parse(json.out).schema_version, 'pdd.owner.v1');
+  assert.equal(JSON.parse(json.out).files[0].owner, 'prompts/bound.prompt.md');
+  assert.match(json.err, /Warning: misplaced prompt owner: test\/bound\.e2e\.mjs is claimed by prompts\/bound\.prompt\.md \(binding\)\./);
+
+  // Querying a prompt path directly also warns on stderr when that prompt claims test files.
+  const byPrompt = await run(['owner', 'prompts/prose.prompt.md', 'prompts/prod.prompt.md']);
+  assert.equal(byPrompt.code, 0);
+  assert.equal(byPrompt.out, 'prompts/prose.prompt.md: no owner\nprompts/prod.prompt.md: no owner\n');
+  assert.equal(byPrompt.err, 'Warning: misplaced prompt owner: prompts/prose.prompt.md claims src/test_unit.py, src/unit.test.mjs, src/unit_test.go. Prompts own production modules, not test files.\n');
+});

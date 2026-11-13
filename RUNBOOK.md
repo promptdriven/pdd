@@ -51,6 +51,7 @@ Add a second file only for a case that needs a different starting world. Name it
 **One rule, one prompt.** Before you write a prompt, look in `prompts/` for a prompt that owns the rule. Change that
 prompt. Two prompts must never state the same rule. A command-line program has one program prompt (section 6).
 A helper module can have its own prompt. Then the program prompt calls it (section 7) and does not repeat its rules.
+Prompts own production modules, never repository test suites (`test/**`, `tests/**`, `*.test.*`, `*_test.*` or `test_*.*`); `pdd lint`, `pdd lint --local` and `pdd owner PATH` warn when a prompt claims ownership of test files via `pdd-bindings.json`, `Generated from` headers or opening-sentence prose claims. Keep each `.prompt.md` prose body (excluding its `<details><summary>Runtime interface</summary>` block) at or below 500 lines (`pdd lint` and `pdd lint --local` warn above 500 lines and print an elevated warning above 1,000 lines advising module decomposition or `"kind": "native-only"` with deterministic code tests), and keep each Story scenario JSON at or below 15 steps and 1,000 lines.
 
 **The prompt** ends with `<details><summary>Runtime interface</summary>`, a ```` ```json ```` block and `</details>`.
 The block of Harbor Coffee's `place_order` (schemas cut):
@@ -995,8 +996,8 @@ A page or a screen is never "browser-only": what it shows and what each tap does
 for example `{"html": "…", "emptyMessage": "No books yet", "rows": 3}`. Check the facts with `equals` or `count`
 on those fields (`/emptyMessage`); use structured HTML checks for markup (section 20). Only what the interpreter truly cannot see (CSS layout, sizes,
 animation) goes in a story with no PDD test (pdd only warns "has no test"), proved with the repo's tests in PR 2.
-Keep the prompt short. A `calls` entry is enough: do not copy the called prompt's schemas. Put a big table or list in a
-repo file and link it under `## Dependencies`. Test data goes in the test (`input`, `initial_world`), not in the prompt.
+Keep the prompt short (500 prose lines or fewer excluding its Runtime interface block; `pdd lint` warns above 500 lines and gives elevated decomposition advice above 1,000 lines). A `calls` entry is enough: do not copy the called prompt's schemas. Put a big table or list in a
+repo file and link it under `## Dependencies`. Test data goes in the test (`input`, `initial_world`), not in the prompt. Keep each Story scenario JSON focused on policy and authority boundaries (15 steps or fewer and 1,000 lines or fewer), and prove multi-step state-machine or wire-protocol sequences with native tests (section 17).
 
 **A pure function:** one operation, input → result, no saved data, no `calls`. Each step costs 1 AI call.
 `initial_world` and `simulation` are `{}`. One step for the 2048 `board` prompt:

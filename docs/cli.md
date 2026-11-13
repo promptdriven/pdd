@@ -123,7 +123,10 @@ approval keeps the headers of the prompt current.
 The text form adds one line for each header that is not plain current, with
 the expected hash. pdd never rewrites a header: a hash in a header says that
 the file follows that prompt version. The command returns 0 when it can answer, also for an uncertain
-or missing owner. It returns 2 outside a Git repository or for a PATH outside it.
+or missing owner. When a prompt claims ownership of a test file (`test/**`,
+`tests/**`, `*.test.*`, `*_test.*` or `test_*.*`), `pdd owner` writes a
+non-blocking warning on `stderr` and keeps exit code 0 and `stdout` unchanged.
+It returns 2 outside a Git repository or for a PATH outside it.
 Code replay and the `pdd test` check plan use the binding and header records
 only.
 
@@ -613,7 +616,7 @@ Changed criterion text and other malformed test rules still refuse the test.
 | `pdd test --fill-hash --compact` | With no operands, fill draft hashes and remove interface JSON formatting whitespace. Remove redundant `"kind": "full"` from drafts; preserve other values, strings, number spellings and prose. Approved and statusless files stay unchanged. No network |
 | `pdd test --explain-bindings [STORY...] [--json]` | Explain each selected resource edge, fixture candidate, mismatch cause and repair. Local reads only; no sign-in or interpreter call |
 | `pdd test --files [STORY...] [--app-map PATH] [--json]` | List the exact selected upload manifest and byte sizes. No network; `--app-map` previews the Simulator's app map |
-| `pdd lint [STORY...] [--json] [--timeout MIN] [--max-calls N]` | Print local SVG layout warnings, then the server checks the format of the prompts, Stories and tests only, with 0 AI calls, and requests complete diagnostics and prints the problems the server reports. Requires network access; use it before a real check |
+| `pdd lint [STORY...] [--json] [--timeout MIN] [--max-calls N]` | Print local SVG layout and source-hygiene warnings, then the server checks the format of the prompts, Stories and tests only, with 0 AI calls, and requests complete diagnostics and prints the problems the server reports. Requires network access; use it before a real check |
 | `pdd lint --local [STORY...] [--json]` | Compare linked `.ui.svg` parts and labels with prompt prose and check local prompt, Story and source-comment hygiene; warning advice only, 0 AI calls and no network/authentication. Without Story names, inspect all Git-visible prompts, even with no PDD tests |
 | `pdd test --screen URL --drawing PATH [--json]` | Compare the real page with its `.ui.svg` layout spec in installed headless Chrome/Chromium at the SVG viewport. No AI or interpreter call; missing/hidden parts, order or region differences fail |
 | `pdd interface draft [PROMPT...] [--all] [--json]` | Draft missing Runtime blocks from explicit prose or contracts and lint locally, without AI or network calls. Uncertain facts include field questions and a recovery command. |
@@ -669,7 +672,7 @@ for the same link. Saved lint reads retain it.
 - A GitHub login that is not invited gets one line: `Your GitHub login NAME is not on the PDD interpreter invite list yet. Ask the PDD team to add you.` A GitHub account without PDD Cloud access gets the server's sign-up line (sign up at https://promptdriven.ai/login). When PDD Cloud cannot check the account, pdd says at once `PDD Cloud could not confirm your access. Try again in a minute.` A pdd that is too old gets `Please update pdd: …`. All of these exit with code 5.
 - The interpreter address is set in one place in pdd. You do not need to set it.
 
-Linked `.ui.svg` drawings specify the screen's parts, words, spatial order, ids and named state. Local lint reports unmatched controls, labels and unspecified layout regions, plus local source-hygiene warnings (misplaced prompt owners, prompts larger than their owned code, Stories above 15 scenario steps, and `TODO`/`FIXME`/`HACK`/`XXX` excuse comments in prompt-owned code); a generic data-field mention does not describe a score box or status bar. Local warnings do not change the exit code. Default local lint also checks workspace interfaces. Interface findings exit 4 and name the draft command. Named Runtime Story local lint stays advisory without interface-declaration refusals; dependency prompts supply layout and ownership context. A native-only declaration needs a reason. These local checks do not certify semantic or visual agreement. `--local` belongs to `pdd lint`; it mixes only with Story names and `--json`.
+Linked `.ui.svg` drawings specify the screen's parts, words, spatial order, ids and named state. Local lint (and preliminary local checks in `pdd lint`) reports unmatched controls, labels and unspecified layout regions, plus local source-hygiene warnings (misplaced prompt owners including `test/**` / `tests/**` / `*.test.*`, prompts above 500 or 1,000 prose lines, Stories above 15 scenario steps or 1,000 lines, and `TODO`/`FIXME`/`HACK`/`XXX` excuse comments in prompt-owned code); a generic data-field mention does not describe a score box or status bar. Local warnings do not change the exit code. Default local lint also checks workspace interfaces. Interface findings exit 4 and name the draft command. Named Runtime Story local lint stays advisory without interface-declaration refusals; dependency prompts supply layout and ownership context. A native-only declaration needs a reason. These local checks do not certify semantic or visual agreement. `--local` belongs to `pdd lint`; it mixes only with Story names and `--json`.
 
 An explicitly selected Story with a `Native validation` owner link is assessed from its saved native evidence by `pdd lint STORY`, including `pdd lint --local STORY`. This reads no hosted service and creates no association. Missing native proof exits 1; complete current whole-Story proof exits 0. It is separate from the SVG-only advisory for Runtime Stories.
 

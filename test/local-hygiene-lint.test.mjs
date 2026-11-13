@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { proseSha256 } from '../src/runtime-preflight.mjs';
 import { promptHeaderHash } from '../src/file-owner.mjs';
-import { harbor, sink } from './runtime-fake.mjs';
+import { fakeRuntime, harbor, portsFor, sink } from './runtime-fake.mjs';
 
 const write = (repo, path, text) => {
   mkdirSync(dirname(join(repo, path)), { recursive: true });
@@ -40,11 +40,11 @@ function makeSteps(count) {
 
 test('local lint emits non-blocking warnings for all 4 hygiene traps and clears to 0 warnings once fixed', async t => {
   const setup = harbor(t, repo => {
-    // 1 + 3. Bloated ~3,500-byte prompt owning a ~400-byte src/calc.mjs that contains a TODO excuse comment
+    // 1 + 4. Bloated 505-prose-line prompt owning a tiny src/calc.mjs that contains a TODO excuse comment
     // plus normal domain comments and string/regex literals that must NOT trigger false warnings.
-    const filler = Array.from({ length: 48 }, (_, idx) =>
+    const filler = Array.from({ length: 500 }, (_, idx) =>
       `- Rule detail ${idx + 1}: double the supplied whole-number input deterministically without hidden side effects.`).join('\n');
-    const bloatedProse = `# Calculator\n\nOwns \`src/calc.mjs\` and reads \`pdd.json\`.\n\n${filler}\n\n`;
+    const bloatedProse = `# Calculator\n\nOwns \`src/calc.mjs\` and reads \`pdd.json\`.\n\n${filler}\n`;
     const calcPrompt = withApprovedInterface(bloatedProse);
     const calcHash = promptHeaderHash(calcPrompt);
     write(repo, 'pdd.json', '{"strict_approvals":false}\n');
@@ -65,7 +65,7 @@ test('local lint emits non-blocking warnings for all 4 hygiene traps and clears 
     write(repo, 'prompts/test/calc-test.prompt.md', testPrompt);
     write(repo, 'test/calc.test.mjs', '// Generated from prompts/test/calc-test.prompt.md.\nexport {};\n');
 
-    // 4. Bloated 22-step Story in user_stories/calc.md + tests/calc.json.
+    // 3. Bloated 22-step Story in user_stories/calc.md + tests/calc.json.
     write(repo, 'user_stories/calc.md', '# Calculator\n\n## Acceptance criteria\n\n1. Doubling x returns 2x.\n');
     write(repo, 'tests/calc.json', JSON.stringify({
       schema_version: 'prompt-runtime.program-scenario.v1',
@@ -88,9 +88,9 @@ test('local lint emits non-blocking warnings for all 4 hygiene traps and clears 
   const parsed = JSON.parse(trapped.out);
   assert.equal(parsed.exit_code, 0);
   assert.equal(parsed.warnings.length, 4, JSON.stringify(parsed.warnings, null, 2));
-  assert.match(parsed.warnings[0], /Warning: oversized prompt: prompts\/calc\.prompt\.md has \d+ prose bytes vs \d+ code bytes \(src\/calc\.mjs\)\./);
+  assert.match(parsed.warnings[0], /Warning: oversized prompt: prompts\/calc\.prompt\.md has 504 prose lines \(limit: 500\)\./);
   assert.match(parsed.warnings[1], /Warning: misplaced prompt owner: prompts\/test\/calc-test\.prompt\.md claims \.github\/workflows\/ci\.yml, test\/calc\.test\.mjs, tsconfig\.json\./);
-  assert.match(parsed.warnings[2], /Warning: oversized Story: user_stories\/calc\.md \(tests\/calc\.json\) has 22 scenario steps \(limit: 15\)\./);
+  assert.match(parsed.warnings[2], /Warning: oversized Story: user_stories\/calc\.md \(tests\/calc\.json\) has 22 scenario steps \(limit: 15\)\. Keep prompt scenarios focused on policy and authority boundaries and move multi-step state-machine or wire-protocol sequences to native tests \(RUNBOOK\.md §17, §18\)\./);
   assert.match(parsed.warnings[3], /Warning: excuse comment in src\/calc\.mjs:6 \(owned by prompts\/calc\.prompt\.md\): \/\/ TODO: handle edge case later/);
 
   // Scoped Story local lint catches the selected Story's warnings and omits unrelated misplaced prompts.
@@ -100,18 +100,28 @@ test('local lint emits non-blocking warnings for all 4 hygiene traps and clears 
   assert.equal(scopedJson.warnings.length, 3);
   assert.ok(!scopedJson.warnings.some(line => line.includes('calc-test.prompt.md')));
 
-  // Fix all 4 traps: remove the test-owning prompt, shrink prose below code size, trim Story to 3 steps, remove TODO.
-  const conciseProse = '# Calculator\n\nOwns `src/calc.mjs` and reads `pdd.json`: return `{ y: x * 2 }`.\n\n';
-  const cleanPrompt = withApprovedInterface(conciseProse);
+  // Fix all 4 traps: remove the test-owning prompt, keep a normal 35-line prompt (even when prose bytes exceed tiny code bytes
+  // and even when <details>Runtime interface</details> adds 520 schema lines!), trim Story to 3 steps, and remove TODO.
+  const domainLines = Array.from({ length: 30 }, (_, idx) => `- Domain note ${idx + 1}: preserve exact signed integer doubling.`).join('\n');
+  const conciseProse = `# Calculator\n\nOwns \`src/calc.mjs\` and reads \`pdd.json\`.\n\n## Domain decisions\n\n${domainLines}\n\n`;
+  const bigSchemaProps = Object.fromEntries(Array.from({ length: 185 }, (_, idx) => [`f${idx}`, { type: 'integer' }]));
+  const bigIface = {
+    status: 'approved',
+    prose_sha256: proseSha256(conciseProse),
+    limits: { max_steps: 2, max_model_calls: 2 },
+    entries: [{
+      operation: 'calculate',
+      input_schema: { type: 'object', required: ['x'], additionalProperties: false, properties: { x: { type: 'integer' }, ...bigSchemaProps } },
+      result_schema: { type: 'object', required: ['y'], additionalProperties: false, properties: { y: { type: 'integer' } } },
+    }],
+  };
+  const cleanPrompt = `${conciseProse}<details><summary>Runtime interface</summary>\n\n\`\`\`json\n${JSON.stringify(bigIface, null, 2)}\n\`\`\`\n</details>\n`;
+  assert.ok(cleanPrompt.split('\n').length > 550, 'total prompt file lines exceed 500 due to Runtime interface JSON');
   const cleanHash = promptHeaderHash(cleanPrompt);
   write(setup.repo, 'prompts/calc.prompt.md', cleanPrompt);
   write(setup.repo, 'src/calc.mjs', [
     `// Generated from prompts/calc.prompt.md (sha256: ${cleanHash}).`,
-    '// Domain invariant: integer doubling preserves exact sign and zero across negative, zero and positive inputs.',
-    'export function calculate({ x }) {',
-    '  if (!Number.isSafeInteger(x)) throw new RangeError("x must be a safe integer");',
-    '  return { y: x * 2 };',
-    '}',
+    'export const calculate = ({ x }) => ({ y: x * 2 });',
     '',
   ].join('\n'));
   const { execFileSync } = await import('node:child_process');
@@ -125,6 +135,60 @@ test('local lint emits non-blocking warnings for all 4 hygiene traps and clears 
   assert.equal(clean.code, 0, clean.err);
   const cleanJson = JSON.parse(clean.out);
   assert.deepEqual(cleanJson.warnings, []);
+});
+
+test('3295 elevated >1000-line prompt warning, >1000-line Story warning, preflight(), and pdd lint parity', async t => {
+  const { findTests, preflight } = await import('../src/runtime-preflight.mjs');
+  const { runCheck } = await import('../src/runtime-client.mjs');
+  const setup = harbor(t, repo => {
+    const elevatedBody = Array.from({ length: 1002 }, (_, idx) => `- Subsystem rule ${idx + 1}: enforce explicit authority checks.`).join('\n');
+    const elevatedProse = `# Giant subsystem\n\nOwns \`src/giant.mjs\`.\n\n${elevatedBody}\n`;
+    const giantPrompt = withApprovedInterface(elevatedProse, 'runGiant');
+    write(repo, 'prompts/giant.prompt.md', giantPrompt);
+    write(repo, 'src/giant.mjs', `// Generated from prompts/giant.prompt.md (sha256: ${promptHeaderHash(giantPrompt)}).\nexport const runGiant = ({ x }) => ({ y: x });\n`);
+    write(repo, 'user_stories/giant.md', '# Giant\n\n## Acceptance criteria\n\n1. Returns x.\n');
+    // Only 2 scenario steps, but > 1,000 lines of large fixture world JSON!
+    const largeWorld = Object.fromEntries(Array.from({ length: 990 }, (_, idx) => [`record_${idx}`, `value_${idx}`]));
+    write(repo, 'tests/giant.json', `${JSON.stringify({
+      schema_version: 'prompt-runtime.program-scenario.v1',
+      story_path: 'user_stories/giant.md',
+      criteria: [{ id: 'AC1', text: 'Returns x.' }],
+      initial_world: largeWorld,
+      steps: [
+        {
+          step_id: 's1',
+          entry_path: 'prompts/giant.prompt.md',
+          operation: 'runGiant',
+          input: { x: 1 },
+          checks: [{ criterion_id: 'AC1', target: 'result', path: '/y', op: 'equals', value: 1 }],
+        },
+        {
+          step_id: 's2',
+          entry_path: 'prompts/giant.prompt.md',
+          operation: 'runGiant',
+          input: { x: 2 },
+          checks: [{ criterion_id: 'AC1', target: 'result', path: '/y', op: 'equals', value: 2 }],
+        },
+      ],
+    }, null, 2)}\n`);
+  });
+
+  // 1. preflight() emits both the elevated >1000-line prompt warning and the >1000-line Story warning.
+  const found = findTests({ root: setup.repo });
+  const pre = preflight({ root: setup.repo, found, selected: found.tests.filter(item => item.storyPath === 'user_stories/giant.md') });
+  assert.ok(pre.warnings.some(line => /Warning: oversized prompt \(elevated\): prompts\/giant\.prompt\.md has 1006 prose lines \(limit: 500; elevated above 1000\)\./.test(line)), JSON.stringify(pre.warnings));
+  assert.ok(pre.warnings.some(line => /Warning: oversized Story: user_stories\/giant\.md \(tests\/giant\.json\) has 1038 lines \(limit: 1000\)\./.test(line)), JSON.stringify(pre.warnings));
+
+  // 2. Ordinary hosted `pdd lint` (not `--local`) surfaces the exact same non-blocking warnings with exit 0.
+  const fake = await fakeRuntime(t, (entry, f) => ({
+    status: 200,
+    json: f.lint(entry.request.requestId, [{ path: 'prompts/giant.prompt.md', state: 'approved', admission_state: 'approved', interface: { calls: [] } }]),
+  }));
+  const jsonPorts = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin }).ports;
+  assert.equal(await runCheck({ cwd: setup.repo, words: ['giant'], options: { '--lint': true, '--json': true } }, jsonPorts), 0, jsonPorts.stderr.text);
+  const lintJson = JSON.parse(jsonPorts.stdout.text);
+  assert.ok(lintJson.warnings.some(line => line.includes('Warning: oversized prompt (elevated): prompts/giant.prompt.md has 1006 prose lines')));
+  assert.ok(lintJson.warnings.some(line => line.includes('Warning: oversized Story: user_stories/giant.md (tests/giant.json) has 1038 lines')));
 });
 
 test('excuse comment scanner handles block comments, Python hash comments, and workspace path limits', async t => {
@@ -367,7 +431,7 @@ test('scoped local lint excludes unselected nested fixtures, preserves filename-
   assert.equal(unscopedJson.reason.code, 'local-only');
   assert.equal(unscopedJson.reason.message, 'checked SVG layout only; prompts not checked');
   assert.deepEqual(unscopedJson.warnings, [
-    'Warning: oversized Story: user_stories/calc.md (tests/calc.json) has 18 scenario steps (limit: 15). Keep Story scenarios focused on behavior boundaries and move long step sequences to code tests.',
+    'Warning: oversized Story: user_stories/calc.md (tests/calc.json) has 18 scenario steps (limit: 15). Keep prompt scenarios focused on policy and authority boundaries and move multi-step state-machine or wire-protocol sequences to native tests (RUNBOOK.md §17, §18).',
   ]);
 
   // Scoped local lint on root Story calc: still excludes nested-app and preserves user_stories/calc.md!
@@ -375,7 +439,7 @@ test('scoped local lint excludes unselected nested fixtures, preserves filename-
   assert.equal(scopedRoot.code, 0, scopedRoot.err);
   const scopedRootJson = JSON.parse(scopedRoot.out);
   assert.deepEqual(scopedRootJson.warnings, [
-    'Warning: oversized Story: user_stories/calc.md (tests/calc.json) has 18 scenario steps (limit: 15). Keep Story scenarios focused on behavior boundaries and move long step sequences to code tests.',
+    'Warning: oversized Story: user_stories/calc.md (tests/calc.json) has 18 scenario steps (limit: 15). Keep prompt scenarios focused on policy and authority boundaries and move multi-step state-machine or wire-protocol sequences to native tests (RUNBOOK.md §17, §18).',
   ]);
 
   // Explicitly selecting the nested fixture Story inspects that nested fixture root.
