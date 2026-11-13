@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: ec85333fccf82a6e2ec6660b9118b3ee9d4c2a0d74c899e91c3896cdac074df4).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: b6c901a31ba6fcde3a391db4016c7bc0a2bf60b34e363dc841fa3ba5ab7855a8).
 import { markdownLinks, markdownDefinitions, markdownSectionText } from './runtime-markdown.mjs';
 import { buildBindingPlan, runtimeBoundary } from './runtime-binding-plan.mjs';
 import { createHash } from 'node:crypto';
@@ -252,16 +252,26 @@ function discoverTests(root, files, strict = false,workspace=loadRuntimeWorkspac
     if (size > LIMITS.bytes) return { ...test, error: `${entry.path} is ${formatSize(size)}. The upload limit is 10 MB, so pdd cannot send it.` };
     // A matched test is read in full, at any size below the upload limit.
     try {
-      let doc = JSON.parse(read(entry.path));
-      if (isObject(doc) && doc.schema_version === TEST_SCHEMA && typeof doc.story_path === 'string' && doc.story_path
-        && visible.has(doc.story_path) && (!entry.storyPath || doc.story_path === entry.storyPath) && !partialTestRefusal(doc)) {
+      const rawDoc = JSON.parse(read(entry.path));
+      let doc = rawDoc, criteriaRefusal = null, resolvedStorySource;
+      const hasRefCriteria = isObject(doc?.criteria) && (Object.hasOwn(doc.criteria, '$contract') || Object.hasOwn(doc.criteria, '$seed'))
+        || Array.isArray(doc?.criteria) && doc.criteria.some(item => isObject(item) && (Object.hasOwn(item, '$contract') || Object.hasOwn(item, '$seed')));
+      if (isObject(doc) && !hasRefCriteria && needsCriteriaResolution(doc) && !documentRefusal(doc, entry.path, { allowOmittedCriteria: true })
+        && typeof doc.story_path === 'string' && doc.story_path && visible.has(doc.story_path)
+        && (!entry.storyPath || doc.story_path === entry.storyPath) && !partialTestRefusal(doc)) {
         const storySource = storyTexts.get(doc.story_path);
         if (typeof storySource === 'string') {
+          resolvedStorySource = storySource;
           const resolved = resolveScenarioCriteria(doc, storySource);
           if (resolved.changed && !resolved.refusal) doc = resolved.doc;
+          else if (resolved.refusal) criteriaRefusal = resolved.refusal;
         }
       }
-      return { ...test, doc };
+      const item = { ...test, doc };
+      Object.defineProperty(item, 'rawDoc', { value: rawDoc });
+      if (resolvedStorySource !== undefined) Object.defineProperty(item, 'storySource', { value: resolvedStorySource });
+      if (criteriaRefusal) Object.defineProperty(item, 'criteriaRefusal', { value: criteriaRefusal });
+      return item;
     }
     catch (error) {
       if (error instanceof SyntaxError) return { ...test, error: `${entry.path} is not valid JSON: ${error.message}` };
@@ -924,6 +934,8 @@ function idOnlyCriterion(item) {
   if (isObject(item) && Object.keys(item).length === 1 && typeof item.id === 'string' && item.id && item.id.trim() === item.id) return item.id;
   return null;
 }
+const needsCriteriaResolution = doc => !Object.hasOwn(doc, 'criteria')
+  || (Array.isArray(doc.criteria) && doc.criteria.some(item => !criterionShape(item)));
 function resolveScenarioCriteria(doc, storySource) {
   if (!isObject(doc) || typeof doc.story_path !== 'string' || !doc.story_path) return { doc, changed: false, refusal: null };
   if (!Object.hasOwn(doc, 'criteria')) {
@@ -934,12 +946,17 @@ function resolveScenarioCriteria(doc, storySource) {
   if (!Array.isArray(doc.criteria) || !doc.criteria.length) {
     return { doc, changed: false, refusal: refusal('invalid-criterion', 'criteria', 'The test has no criteria.') };
   }
-  const ids = new Set(), criteria = [];
+  const hasIdOnly = doc.criteria.some(item => idOnlyCriterion(item) !== null);
+  const ids = new Set(), positions = new Set(), criteria = [];
   let numbered = null, changed = false;
   for (const [index, item] of doc.criteria.entries()) {
     if (criterionShape(item)) {
-      if (ids.has(item.id)) return { doc, changed: false, refusal: refusal('duplicate-criterion', `criteria[${index}]`, `The criterion ID ${item.id} is used twice.`) };
+      const match = hasIdOnly ? AC_ID.exec(item.id) : null, position = match ? Number(match[1]) : 0;
+      if (ids.has(item.id) || (position && positions.has(position))) {
+        return { doc, changed: false, refusal: refusal('duplicate-criterion', `criteria[${index}]`, `The criterion ID ${item.id} is used twice.`) };
+      }
       ids.add(item.id);
+      if (position) positions.add(position);
       criteria.push(item);
       continue;
     }
@@ -954,6 +971,10 @@ function resolveScenarioCriteria(doc, storySource) {
       return { doc, changed: false, refusal: refusal('invalid-criterion', `criteria[${index}]`,
         `Criterion ID ${show(id)} does not match numbered item 1..${numbered.length} in ${doc.story_path}.`) };
     }
+    if (positions.has(position)) {
+      return { doc, changed: false, refusal: refusal('duplicate-criterion', `criteria[${index}]`, `The criterion ID ${id} is used twice.`) };
+    }
+    positions.add(position);
     criteria.push({ id, text: numbered[position - 1] });
     changed = true;
   }
@@ -1222,15 +1243,11 @@ function omitFullKind(body) {
 function syncedCriteriaTexts(criteria, numbered) {
   if (!numbered.length || !Array.isArray(criteria) || criteria.length !== numbered.length) return null;
   if (criteria.some(item => !criterionShape(item))) return null;
-  if (new Set(criteria.map(item => item.id)).size !== criteria.length) return null;
   const parsed = criteria.map(item => AC_ID.exec(item.id));
-  if (parsed.every(Boolean)) {
-    const indices = parsed.map(match => Number(match[1]));
-    if (indices.some(index => index < 1 || index > numbered.length) || new Set(indices).size !== indices.length) return null;
-    return indices.map(index => numbered[index - 1]);
-  }
-  if (parsed.some(match => match && Number(match[1]) > numbered.length)) return null;
-  return [...numbered];
+  if (!parsed.every(Boolean)) return null;
+  const indices = parsed.map(match => Number(match[1]));
+  if (indices.some(index => index < 1 || index > numbered.length) || new Set(indices).size !== indices.length) return null;
+  return indices.map(index => numbered[index - 1]);
 }
 
 // Replace only top-level criteria[].text string tokens in an already parsed scenario JSON object.
@@ -1753,7 +1770,7 @@ function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadR
           const storySource = bytes(inspect(doc.story_path, file.path)).toString('utf8');
           const partial = partialTestRefusal(doc);
           const resolved = partial ? { doc, changed: false, refusal: null } : resolveScenarioCriteria(doc, storySource);
-          if (resolved.refusal && (!Object.hasOwn(doc, 'criteria') || (Array.isArray(doc.criteria) && doc.criteria.some(item => idOnlyCriterion(item) !== null)))) {
+          if (resolved.refusal && needsCriteriaResolution(doc)) {
             throw Object.assign(new PreflightError(4, `${file.path}: ${resolved.refusal.message}`), resolved.refusal,
               { message: `${file.path}: ${resolved.refusal.message}`, hint: 'Fix the scenario criteria or Story acceptance list, then run the selection again.' });
           }

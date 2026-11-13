@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 14dd28298dd4b96877f8a1a9ceb70d9c078759c6158a323715140096aa68f8f7).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 5ac49368d96b2f047e9e173ae737e5b75ddd9e4c8a4f2a22e4ab68a9e132d8b6).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
@@ -2309,7 +2309,7 @@ function runExplainBindings(cwd, words, options, ports) {
   const {root,found,normalized}=localSetup(cwd,words);
   const selected=select(found,normalized,root);
   for (const test of selected) {
-    const problem=discoveryRefusal(test) ?? scenarioShapeRefusal(test.doc,test.path);
+    const problem=discoveryRefusal(test) ?? test.criteriaRefusal ?? scenarioShapeRefusal(test.doc,test.path);
     if (problem) throw Object.assign(new PreflightError(4,`${test.path}: ${problem.message}`),{code:problem.code});
   }
   const capture=ports.captureSource(root,{tests:selected.map(test=>test.path),excludeFixtureProjects:words.length===0});
@@ -4692,18 +4692,20 @@ function prepareCase(root,record,p){
   const workspace=loadRuntimeWorkspace({root});requireRuntimePath(workspace,{path,from:'Original selected test'});requireRuntimePath(workspace,{path:story,from:path});
   const found=findTests({root}),original=found.tests.find(t=>t.path===path&&t.storyPath===story&&t.doc?.story_path===story);
   if(!original?.doc||original.doc.schema_version!==TEST_SCHEMA||!Array.isArray(original.doc.steps)||NOT_TEST_FILES.test(basename(path)))throw Error(`the original test ${path} is missing or no longer belongs to ${story}. Restore it before importing the case`);
+  if(original.criteriaRefusal)throw Error(original.criteriaRefusal.message);
   caseSafe(p,join(root,path));caseSafe(p,join(root,story));
   const text=caseRead(p,join(root,path)),doc=JSON.parse(text);
-  if(!isDeepStrictEqual(doc,original.doc))throw Error('the original test changed while being inspected');
+  if(!isDeepStrictEqual(doc,original.rawDoc??original.doc)||(original.storySource!==undefined&&caseRead(p,join(root,story))!==original.storySource))throw Error('the original test changed while being inspected');
   if(record.isolated){
-    if(!isObject(test.initial_world)||test.steps.length!==1||!isDeepStrictEqual(test.criteria,doc.criteria)||!isDeepStrictEqual(test.simulation??{},doc.simulation??{})||!isDeepStrictEqual(test.context??[],doc.context??[]))throw Error('recorded case lacks original criteria, simulation, context or confirmed starting world');
+    if(!isObject(test.initial_world)||test.steps.length!==1||(!isDeepStrictEqual(test.criteria,original.doc.criteria)&&!isDeepStrictEqual(test.criteria,doc.criteria))||!isDeepStrictEqual(test.simulation??{},doc.simulation??{})||!isDeepStrictEqual(test.context??[],doc.context??[]))throw Error('recorded case lacks original criteria, simulation, context or confirmed starting world');
     const id=slug(saved.id);if(!id)throw Error('case has no safe identity');
     const variant=`tests/${original.story}.try-${id}.json`;requireRuntimePath(workspace,{path:variant,from:path});
-    return{path:variant,before:null,after:JSON.stringify(test,null,2)+'\n',steps:[test.steps[0].step_id],isolated:true};
+    const isolatedTest=Array.isArray(test.criteria)&&test.criteria.every(c=>isObject(c)&&typeof c.id==='string'&&typeof c.text==='string')?test:{...test,criteria:original.doc.criteria};
+    return{path:variant,before:null,after:JSON.stringify(isolatedTest,null,2)+'\n',steps:[test.steps[0].step_id],isolated:true};
   }
   const beforeWorld=Object.hasOwn(saved,'world_before')?saved.world_before:Object.hasOwn(test,'initial_world')?test.initial_world:undefined;
   if(beforeWorld===undefined||!isDeepStrictEqual(knownEndWorld(doc),beforeWorld))throw Error('confirmed starting world does not match the original test continuation');
-  const byText=new Map((doc.criteria??[]).map(c=>[c.text,c.id])),savedText=new Map((test.criteria??[]).map(c=>[c.id,c.text]));
+  const byText=new Map((original.doc.criteria??[]).map(c=>[c.text,c.id])),savedText=new Map((test.criteria??[]).map(c=>[c.id,c.text]));
   let after=text,current=doc;const steps=[];
   for(const raw of test.steps){if(!isObject(raw)||!Array.isArray(raw.checks)||!raw.checks.length)throw Error('case has no mapped checks');const checks=raw.checks.map(c=>({...c,criterion_id:byText.get(savedText.get(c.criterion_id))}));if(checks.some(c=>!c.criterion_id))throw Error(`"${cleanText(saved.name??saved.id)}" checks a criterion that ${path} does not have; keep expected values and repair the mapping`);const taken=new Set(current.steps.map(s=>s.step_id));let id=slug(raw.step_id)||slug(saved.id)||'saved-case';for(let n=2,base=id;taken.has(id);n++)id=`${base}-${n}`;const step={...raw,step_id:id,checks};after=appendStep(after,current,step);current={...current,steps:[...current.steps,step]};steps.push(id);}
   return{path,before:text,after,steps};

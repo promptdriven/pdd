@@ -6,7 +6,8 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { harbor, storyTest, fakeRuntime, portsFor } from './runtime-fake.mjs';
-import { runCheck } from '../src/runtime-client.mjs';
+import { runCheck, saveDoorCase, acquireCaseWriteOwnership } from '../src/runtime-client.mjs';
+import { createTryTools } from '../src/try-mcp.mjs';
 import { captureSource, fillHashes, findTests, preflight, scenarioShapeRefusal } from '../src/runtime-preflight.mjs';
 
 const cli = fileURLToPath(new URL('../bin/pdd.mjs', import.meta.url));
@@ -95,6 +96,9 @@ test('3298 AC1: scenario with story_path and ID-only criteria resolves text and 
     [[{ id: 'AC0' }], 'invalid-criterion'],
     [['CUSTOM'], 'invalid-criterion'],
     [['AC1', 'AC1'], 'duplicate-criterion'],
+    [['AC1', 'ac-1'], 'duplicate-criterion'],
+    [['AC1', 'ac1'], 'duplicate-criterion'],
+    [[{ id: 'AC1', text: 'An order of 2 Espresso S and 1 Blueberry Muffin L has a total of 900 cents ($9.00).' }, 'ac-1'], 'duplicate-criterion'],
   ]) {
     const { repo } = harbor(t, r => {
       const doc = readJson(r, 'tests/place-order.json');
@@ -176,4 +180,154 @@ test('3298 AC1: pdd test --fill-hash syncs stale criteria[].text in place while 
     cwd: repo, encoding: 'utf8', env: { ...process.env, HOME: home, PDD_STATE_DIR: state },
   });
   assert.equal(localLint.status, 0, `${localLint.stdout}\n${localLint.stderr}`);
+});
+
+test('3298 AC1: fillHashes skips non-AC<N> or mixed criterion IDs without overwriting or inverting texts', t => {
+  const { repo } = harbor(t, r => {
+    const doc = readJson(r, 'tests/place-order.json');
+    doc.criteria = [
+      { id: 'AC2', text: doc.criteria[1].text },
+      { id: 'CUSTOM', text: doc.criteria[0].text },
+      { id: 'AC3', text: doc.criteria[2].text },
+    ];
+    for (const check of doc.steps[0].checks) {
+      if (check.criterion_id === 'AC1') check.criterion_id = 'CUSTOM';
+    }
+    writeFileSync(join(r, 'tests/place-order.json'), JSON.stringify(doc, null, 2) + '\n');
+  });
+  const before = readFileSync(join(repo, 'tests/place-order.json'), 'utf8');
+  const storyFull = join(repo, 'user_stories/place-order.md');
+  writeFileSync(storyFull, readFileSync(storyFull, 'utf8').replace('keeps the name "Sam"', 'retains the name "Sam"'));
+  git(repo, 'add', '-A');
+
+  const res = fillHashes({ root: repo });
+  assert.deepEqual(res.synced, []);
+  assert.equal(readFileSync(join(repo, 'tests/place-order.json'), 'utf8'), before, 'mixed/custom IDs must not be overwritten');
+});
+
+test('3298 AC1: saveDoorCase and MCP try_save_case work when original scenario omits criteria or uses ID-only criteria', async t => {
+  for (const mode of ['omitted', 'id-only']) {
+    const { repo, home, state } = harbor(t, r => {
+      const doc = readJson(r, 'tests/place-order.json');
+      if (mode === 'omitted') delete doc.criteria;
+      else doc.criteria = ['AC1', 'AC2', 'AC3'];
+      doc.steps[0].checks.push({ criterion_id: 'AC1', target: 'world', path: '', op: 'equals', value: {} });
+      writeFileSync(join(r, 'tests/place-order.json'), JSON.stringify(doc, null, 2) + '\n');
+    });
+    const env = { ...process.env, HOME: home, PDD_STATE_DIR: state };
+    const found = findTests({ root: repo });
+    const original = found.tests.find(item => item.path === 'tests/place-order.json');
+    assert.equal(Object.keys(original).includes('rawDoc'), false, 'rawDoc stays non-enumerable');
+    assert.equal(original.doc.criteria.length, 3);
+
+    // 1. Continuation append via saveDoorCase maps criterion text to AC1..AC3 while preserving authored criteria shape on disk.
+    const lease = await acquireCaseWriteOwnership({
+      root: repo, testPath: 'tests/place-order.json',
+      handoff: { kind: 'closed-editor', testPath: 'tests/place-order.json' },
+    }, { env });
+    let msg;
+    try {
+      msg = saveDoorCase(repo, {
+        id: 'cont-1',
+        name: 'Continuation case',
+        story_path: 'user_stories/place-order.md',
+        original_path: 'tests/place-order.json',
+        world_before: {},
+        test: {
+          schema_version: 'prompt-runtime.program-scenario.v1',
+          story_path: 'user_stories/place-order.md',
+          criteria: [{ id: 'SERVER_C2', text: original.doc.criteria[1].text }],
+          initial_world: {},
+          steps: [{
+            step_id: 'second-order',
+            entry_path: 'prompts/place_order.prompt.md',
+            operation: 'place_order',
+            input: original.doc.steps[0].input,
+            checks: [{ criterion_id: 'SERVER_C2', target: 'result', path: '/customerName', op: 'equals', value: 'Sam' }],
+          }],
+        },
+      }, { env, writeOwnership: lease });
+    } finally {
+      lease.release();
+    }
+    assert.match(msg, /^added /, `${mode}: ${msg}`);
+    const afterAppend = readJson(repo, 'tests/place-order.json');
+    assert.equal(afterAppend.steps.length, 2);
+    assert.equal(afterAppend.steps[1].checks[0].criterion_id, 'AC2');
+    if (mode === 'omitted') assert.equal(Object.hasOwn(afterAppend, 'criteria'), false);
+    else assert.deepEqual(afterAppend.criteria, ['AC1', 'AC2', 'AC3']);
+    git(repo, 'add', '-A');
+    const afterFound = findTests({ root: repo });
+    assert.deepEqual(preflight({ root: repo, found: afterFound, selected: afterFound.tests }).rows[0].refusals, []);
+
+    // 2. Isolated MCP try_save_case writes valid variant without failing original.doc comparison.
+    const currentTest = afterFound.tests.find(item => item.path === 'tests/place-order.json');
+    const owner = {
+      root: repo,
+      test: currentTest,
+      record: { id: 'try-1', origin: 'http://127.0.0.1:9', login: 'tester' },
+      model: { entries: [{ entry_path: 'prompts/place_order.prompt.md', operation: 'place_order', input_schema: { type: 'object' } }], calls: { cap: 20, remaining: 19 } },
+      data: {},
+    };
+    const ownedIso = await acquireCaseWriteOwnership({
+      root: repo, testPath: 'tests/place-order.json',
+      handoff: { kind: 'closed-editor', testPath: 'tests/place-order.json' },
+    }, { env });
+    try {
+      const mcpTools = createTryTools({ cwd: repo, env }, {
+        env,
+        readTryOwner: async () => owner,
+        runDoorCall: async () => ({ id: 'mcp1', result: { customerName: 'Sam', pickupAt: '08:30', items: [], totalCents: 900 }, inputWorld: {}, world: {} }),
+        saveDoorCase: (root, saved, opts) => saveDoorCase(root, saved, { ...opts, env, writeOwnership: ownedIso }),
+      });
+      await mcpTools.call('try_run', { entry: 'prompts/place_order.prompt.md#place_order', input: currentTest.doc.steps[0].input });
+      const savedOut = await mcpTools.call('try_save_case', { criterion_id: 'AC1' });
+      assert.match(savedOut.result, /^added /, `${mode} isolated: ${savedOut.result}`);
+    } finally {
+      ownedIso.release();
+    }
+    const variantDoc = readJson(repo, 'tests/place-order.try-mcp1.json');
+    assert.equal(scenarioShapeRefusal(variantDoc, 'tests/place-order.try-mcp1.json'), null);
+    assert.equal(variantDoc.criteria.length, 3);
+  }
+});
+
+test('3298 AC1: pdd test --explain-bindings surfaces real criterion resolution refusals instead of invalid-document', async t => {
+  // Valid omitted-criteria scenario succeeds in --explain-bindings.
+  {
+    const { repo, home, state } = harbor(t, r => {
+      const doc = readJson(r, 'tests/place-order.json');
+      delete doc.criteria;
+      writeFileSync(join(r, 'tests/place-order.json'), JSON.stringify(doc, null, 2) + '\n');
+    });
+    const { ports } = portsFor({ HOME: home, PDD_STATE_DIR: state, PDD_RUNTIME_URL: 'http://127.0.0.1:9' });
+    assert.equal(await runCheck({ cwd: repo, words: ['place-order'], options: { '--explain-bindings': true, '--json': true } }, ports), 0);
+    assert.equal(JSON.parse(ports.stdout.text).schema_version, 'pdd.binding-plans.v1');
+  }
+
+  // Bullet-only Story + omitted criteria surfaces story-criteria-missing, not invalid-document.
+  {
+    const { repo, home, state } = harbor(t, r => {
+      writeFileSync(join(r, 'user_stories/place-order.md'), '# Place an order\n\n## Acceptance criteria\n- First bullet.\n- Second bullet.\n');
+      const doc = readJson(r, 'tests/place-order.json');
+      delete doc.criteria;
+      writeFileSync(join(r, 'tests/place-order.json'), JSON.stringify(doc, null, 2) + '\n');
+    });
+    const { ports } = portsFor({ HOME: home, PDD_STATE_DIR: state, PDD_RUNTIME_URL: 'http://127.0.0.1:9' });
+    assert.equal(await runCheck({ cwd: repo, words: ['place-order'], options: { '--explain-bindings': true } }, ports), 4);
+    assert.match(ports.stderr.text, /has no numbered "## Acceptance criteria" list/);
+    assert.doesNotMatch(ports.stderr.text, /The test has no "criteria"/);
+  }
+
+  // Out-of-range ID-only criterion surfaces numbered bounds refusal, not generic shape refusal.
+  {
+    const { repo, home, state } = harbor(t, r => {
+      const doc = readJson(r, 'tests/place-order.json');
+      doc.criteria = ['AC99'];
+      writeFileSync(join(r, 'tests/place-order.json'), JSON.stringify(doc, null, 2) + '\n');
+    });
+    const { ports } = portsFor({ HOME: home, PDD_STATE_DIR: state, PDD_RUNTIME_URL: 'http://127.0.0.1:9' });
+    assert.equal(await runCheck({ cwd: repo, words: ['place-order'], options: { '--explain-bindings': true } }, ports), 4);
+    assert.match(ports.stderr.text, /Criterion ID "AC99" does not match numbered item 1\.\.3/);
+  }
 });
