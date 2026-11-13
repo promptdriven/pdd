@@ -1,0 +1,224 @@
+{
+  "kind": "native-draft-cases",
+  "draft": false,
+  "expected_source": "person-approved at Story gate",
+  "status": "approved; expectations reviewed and approved by person at Story gate",
+  "story_path": "user_stories/cache-github-login.md",
+  "owner_prompts": [
+    "prompts/cli/runtime-client.prompt.md"
+  ],
+  "public_boundaries": [
+    "src/runtime-client.mjs: runCheck({words, options, cwd, cache}, ports)",
+    "src/runtime-client.mjs: runTry({words, options, cwd}, ports)",
+    "src/runtime-client.mjs: runDoorCall(descriptor, input, ports)",
+    "src/runtime-client.mjs: readTryOwner({cwd, story}, ports)",
+    "src/try-mcp.mjs: createTryMcpServer({cwd, runtime})"
+  ],
+  "runtime_check": "BLOCKED",
+  "runtime_reason": "No Runtime interface on prompts/cli/runtime-client.prompt.md; Git discovery, gh subprocess execution, node:crypto SHA-256 token hashing and private 0600 state files under PDD_STATE_DIR are native and unbound (#2548). Not a prompt-runtime.program-scenario.v1 scenario.",
+  "native_replay": "NOT RUN; code-area tests must consume these expected values after person approval through the public production boundaries",
+  "authority": [
+    "https://github.com/promptdriven/pdd/issues/2914"
+  ],
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Running `pdd test place-order` for the first time with a signed-in `gh` token calls `gh auth token` once and `gh api user` once, saves login `\"octo\"`, user ID `\"4242\"` and the token's SHA-256 digest in private state without saving the raw token, and exits with code 0."
+    },
+    {
+      "id": "AC2",
+      "text": "Polling a saved batch with `pdd test --read BATCH --json` when the `gh` token matches the saved SHA-256 digest calls `gh auth token` once and `gh api user` 0 times, and exits with code 0 even when GitHub's REST rate limit is exhausted; running `pdd lint`, `pdd test`, `pdd simulate` and `pdd mcp` Try commands with that same token also calls `gh api user` 0 times."
+    },
+    {
+      "id": "AC3",
+      "text": "After switching to another GitHub account whose `gh` token has a different SHA-256 digest, running `pdd test --read BATCH` for `\"octo\"`'s saved batch calls `gh api user` once, updates the saved login for the active token, prints `\"These runs belong to octo. Run: gh auth switch -u octo\"` to stderr and exits with code 5."
+    },
+    {
+      "id": "AC4",
+      "text": "When `gh auth token` fails or returns blank while a saved login file exists, `pdd test --read BATCH` calls `gh api user` 0 times, prints `\"Run gh auth login\"` to stderr and exits with code 5; when no matching saved login exists and `gh api user` fails, `pdd` prints `\"pdd could not read your GitHub login (gh api user: <reason>). Run gh auth status.\"` to stderr and exits with code 5."
+    },
+    {
+      "id": "AC5",
+      "text": "When the PDD interpreter answers HTTP 401 during a command that used the saved login, `pdd` clears the saved login, refreshes `gh auth token` and `gh api user` once, retries the request once when the owner still matches, and if the interpreter still answers HTTP 401 prints `\"The PDD interpreter did not accept your GitHub login (HTTP 401). Run gh auth login, then run the command again.\"` to stderr and exits with code 5."
+    }
+  ],
+  "setup": {
+    "synthetic": true,
+    "isolation": "Fresh temporary Git repository copied from test/fixtures/harbor; external PDD_STATE_DIR per case; deterministic injected clock, UUIDs, gh port and local HTTP fakeRuntime. No live GitHub or interpreter calls.",
+    "state_cache_file": "$PDD_STATE_DIR/github-user.json",
+    "state_cache_schema": {
+      "login": "nonblank whitespace-free GitHub login string",
+      "user_id": "positive decimal integer string (/^[1-9]\\d*$/)",
+      "cached_at": "ISO-8601 timestamp from ports.now()",
+      "token_sha256": "64-character lowercase hex SHA-256 of trimmed gh auth token"
+    }
+  },
+  "security_invariants": {
+    "state_dir_mode": "0700",
+    "cache_file_mode": "0600",
+    "atomic_write": "same-directory temporary file + rename; no leftover temp files",
+    "raw_token_persisted_anywhere": false,
+    "raw_token_in_stdout_or_stderr": false,
+    "live_gh_auth_token_on_every_signin": true
+  },
+  "cases": [
+    {
+      "id": "cold-cache-first-run",
+      "criterion_ids": [
+        "AC1"
+      ],
+      "given": "Empty external PDD_STATE_DIR; gh auth token returns TOKEN_OCTO and gh api user returns 'octo 4242'.",
+      "command": "pdd test place-order --json",
+      "expected": {
+        "exit_code": 0,
+        "gh_auth_token_calls": 1,
+        "gh_api_user_calls": 1,
+        "cache_file_exists": true,
+        "cache_file_mode_octal": "0600",
+        "cached_record": {
+          "login": "octo",
+          "user_id": "4242",
+          "cached_at": "2026-10-27T16:27:47.000Z",
+          "token_sha256": "<sha256(TOKEN_OCTO)>"
+        },
+        "raw_token_in_any_state_file_or_output": false
+      }
+    },
+    {
+      "id": "warm-cache-saved-batch-read-under-rate-limit",
+      "criterion_ids": [
+        "AC2"
+      ],
+      "given": "Batch saved by octo from cold-cache-first-run with terminal check receipts on disk and matching github-user.json; gh api user stub fails with status 1 and stderr 'gh: API rate limit exceeded (HTTP 403)'.",
+      "command": "5 consecutive invocations of pdd test --read <BATCH> --json",
+      "expected": {
+        "exit_code_each": 0,
+        "gh_auth_token_calls_total": 5,
+        "gh_api_user_calls_total": 0,
+        "runtime_http_requests_during_polls": 0,
+        "stderr_each": ""
+      }
+    },
+    {
+      "id": "warm-cache-across-runtime-commands-and-mcp",
+      "criterion_ids": [
+        "AC2"
+      ],
+      "given": "Valid github-user.json for TOKEN_OCTO ('octo', '4242') in PDD_STATE_DIR; gh auth token returns TOKEN_OCTO and gh api user fails if called.",
+      "commands": [
+        "pdd lint place-order --json",
+        "pdd test place-order --cache-clear --json",
+        "pdd test --read <CALL_UUID> --json",
+        "pdd test --request <CALL_UUID> --json",
+        "pdd test --retry <HELD_BATCH> --json",
+        "pdd simulate place-order --page --no-open --no-wait",
+        "pdd simulate place-order --page --no-open --no-wait",
+        "readTryOwner + runDoorCall (MCP try_run)",
+        "pdd simulate place-order --save-last",
+        "pdd simulate place-order --stop"
+      ],
+      "expected": {
+        "gh_auth_token_calls_per_signin": 1,
+        "gh_api_user_calls_total": 0,
+        "all_commands_succeed_with_cached_identity": true
+      }
+    },
+    {
+      "id": "switched-token-cross-owner-refusals",
+      "criterion_ids": [
+        "AC3"
+      ],
+      "given": "Saved batch and open Try owned by 'octo' ('4242') with github-user.json for TOKEN_OCTO; operator switches GitHub account so gh auth token returns TOKEN_MALLORY and gh api user returns 'mallory 777'.",
+      "commands": [
+        "pdd test --read <OCTO_BATCH>",
+        "pdd simulate place-order --page --no-open --no-wait (with explicit --max-calls 400 or connected reuse)",
+        "runDoorCall on octo's descriptor",
+        "readTryOwner on octo's open Try"
+      ],
+      "expected": {
+        "first_command_gh_api_user_calls": 1,
+        "subsequent_commands_gh_api_user_calls": 0,
+        "updated_cached_login": "mallory",
+        "updated_cached_user_id": "777",
+        "updated_token_sha256": "<sha256(TOKEN_MALLORY)>",
+        "read_batch_exit_code": 5,
+        "read_batch_stderr_contains": "These runs belong to octo. Run: gh auth switch -u octo",
+        "simulate_reuse_exit_code": 5,
+        "door_exit_code": 125,
+        "door_stderr_contains": "This Try belongs to octo. Run: gh auth switch -u octo",
+        "read_try_owner_throws": "This Try belongs to octo. Run: gh auth switch -u octo"
+      }
+    },
+    {
+      "id": "missing-or-logged-out-gh-token-with-warm-cache",
+      "criterion_ids": [
+        "AC4"
+      ],
+      "given": "Valid github-user.json for 'octo' exists on disk; subcase A: gh binary missing (ENOENT); subcase B: gh auth token exits 1 or prints empty stdout.",
+      "command": "pdd test --read <BATCH>",
+      "expected": {
+        "enoent_exit_code": 5,
+        "enoent_stderr_contains": "Install the GitHub CLI, then run gh auth login",
+        "logged_out_exit_code": 5,
+        "logged_out_stderr_contains": "Run gh auth login",
+        "gh_api_user_calls": 0,
+        "cached_identity_returned": false
+      }
+    },
+    {
+      "id": "corrupt-or-incomplete-cache-self-heals",
+      "criterion_ids": [
+        "AC1",
+        "AC3"
+      ],
+      "given": "github-user.json contains truncated JSON ('{bad'), missing token_sha256, whitespace/empty login, or non-positive user_id ('0' or 'abc'); gh auth token returns TOKEN_OCTO and gh api user returns 'octo 4242'.",
+      "command": "pdd test --read <OCTO_BATCH> --json",
+      "expected": {
+        "exit_code": 0,
+        "gh_auth_token_calls": 1,
+        "gh_api_user_calls": 1,
+        "cache_rewritten_valid_0600": true
+      }
+    },
+    {
+      "id": "http-401-cached-invalidation-and-single-refresh",
+      "criterion_ids": [
+        "AC5"
+      ],
+      "given": "Subcase A: sign-in came from github-user.json, first runtime HTTP call returns 401, fresh gh auth token + gh api user returns rotated TOKEN_OCTO_2 for 'octo 4242', and single retry returns 200. Subcase B: fresh lookup after 401 returns 'mallory 777' on octo's saved batch/Try. Subcase C: single retry after refresh also returns 401. Subcase D: initial sign-in was cold-cache (already called gh api user fresh in this command) and runtime returns 401.",
+      "expected": {
+        "subcase_a_exit_code": 0,
+        "subcase_a_gh_api_user_calls": 1,
+        "subcase_a_http_attempts_for_rejected_call": 2,
+        "subcase_a_duplicate_posted_markers": 0,
+        "subcase_b_http_retries_after_owner_mismatch": 0,
+        "subcase_b_exit_code": 5,
+        "subcase_b_stderr_contains": "belong",
+        "subcase_c_exit_code": 5,
+        "subcase_c_gh_api_user_calls": 1,
+        "subcase_c_http_attempts_for_rejected_call": 2,
+        "subcase_c_cache_file_exists_after": false,
+        "subcase_c_stderr_contains": "The PDD interpreter did not accept your GitHub login (HTTP 401). Run gh auth login, then run the command again.",
+        "subcase_d_exit_code": 5,
+        "subcase_d_extra_gh_api_user_calls_after_401": 0,
+        "subcase_d_http_attempts_for_rejected_call": 1,
+        "subcase_d_cache_file_exists_after": false
+      }
+    },
+    {
+      "id": "gh-api-user-failure-and-rate-limit-boundaries",
+      "criterion_ids": [
+        "AC4"
+      ],
+      "given": "Subcase A: cold cache or switched token while gh api user exits 1 with 'HTTP 403: API rate limit exceeded'. Subcase B: forced refresh while valid matching-token github-user.json exists and gh api user fails with GitHub rate limit during saved local batch --read vs. remote check/post-401 refresh.",
+      "expected": {
+        "subcase_a_exit_code": 5,
+        "subcase_a_stderr_contains": "pdd could not read your GitHub login (gh api user: HTTP 403: API rate limit exceeded). Run gh auth status.",
+        "subcase_a_cache_written": false,
+        "subcase_b_saved_local_read_exit_code": 0,
+        "subcase_b_saved_local_read_stderr_contains": "Warning: GitHub API rate limit reached; using saved GitHub login octo for this token.",
+        "subcase_b_remote_or_post_401_exit_code": 5
+      }
+    }
+  ]
+}

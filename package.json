@@ -1,6 +1,6 @@
 {
   "name": "pdd",
-  "version": "0.1.29",
+  "version": "0.1.31",
   "description": "PDD: local Prompting guide, skills and recipes for your coding agent",
   "type": "module",
   "bin": {
@@ -22,7 +22,7 @@
     "user_stories/fake-*.md"
   ],
   "scripts": {
-    "test": "node --import ./test/helpers/test-home.mjs --test test/*.test.mjs"
+    "test": "node --import ./test/helpers/test-home.mjs --test test/*.test.mjs test/runtime-package/*.test.mjs"
   },
   "engines": {
     "node": ">=22.16.0"
