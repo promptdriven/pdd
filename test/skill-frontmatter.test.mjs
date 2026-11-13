@@ -69,7 +69,7 @@ test('YAML scalar check rejects ambiguous plain values and preserves quoted word
 
 for (const suffix of ['', ' ', '\t']) {
   test(`YAML frontmatter rejects a terminal mapping colon with suffix ${JSON.stringify(suffix)}`, () => {
-    const header = `---\nname: pdd-autopilot\ndescription: Use Autopilot:${suffix}\nmetadata:\n  pdd-skills: 0.1.23\n---\n`;
+    const header = `---\nname: pdd-feature\ndescription: Use Autopilot:${suffix}\nmetadata:\n  pdd-skills: 0.1.23\n---\n`;
     assert.throws(() => frontmatter(header), { name: 'AssertionError' });
   });
 }

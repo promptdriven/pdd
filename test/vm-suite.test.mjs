@@ -49,8 +49,9 @@ appendFileSync(${JSON.stringify(join(dir, 'events'))}, JSON.stringify(event) + '
 if (name === 'git') {
   if (scenario.failCommand === args[0]) process.exit(9);
   if (args[0] === 'init') {
-    mkdirSync(join(args.at(-1), 'test'), { recursive: true });
+    mkdirSync(join(args.at(-1), 'test/runtime-package'), { recursive: true });
     writeFileSync(join(args.at(-1), 'test/example.test.mjs'), '');
+    writeFileSync(join(args.at(-1), 'test/runtime-package/runtime.test.mjs'), '');
   }
   if (args[0] === 'rev-parse') console.log(scenario.head || '${sha}');
   if (args[0] === 'status' && scenario.dirty) console.log(' M package.json');
@@ -155,7 +156,7 @@ test('vm-suite posts only counts on the detached tested commit, with an empty su
   assert.deepEqual(suite.stateFiles, []);
   assert.equal(suite.browser, '/usr/bin/google-chrome');
   assert.ok(suite.args.includes('--test-concurrency=4'));
-  assert.equal(suite.args.at(-1), 'test/example.test.mjs');
+  assert.deepEqual(suite.args.slice(-2), ['test/example.test.mjs', 'test/runtime-package/runtime.test.mjs']);
   assert.equal(suite.cwd, git.find(e => e.args[0] === 'checkout').cwd);
 });
 

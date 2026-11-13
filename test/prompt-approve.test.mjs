@@ -5,8 +5,8 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { approvePromptText, runApprove } from '../src/prompt-approve.mjs';
-import { proseSha256 } from '../src/runtime-preflight.mjs';
-import { PLACE, harbor, root, sink } from './runtime-fake.mjs';
+import { proseSha256 } from '../src/runtime-seam.mjs';
+import { PLACE, harbor, root, sink } from './helpers/runtime-fake.mjs';
 
 const GOLDEN = 'd5958a8577dcb8dd6ff25c8df4ea3b85e8c5dcf7c16863d8e502a24095db6abb';
 const asDraft = text => text.replace('"status": "approved"', '"status": "draft"').replace(GOLDEN, '');

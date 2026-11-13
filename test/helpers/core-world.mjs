@@ -58,8 +58,8 @@ function extend(f, w) {
       return ok(200, { behind_by: behind, ahead_by: ahead, status: behind ? (ahead ? 'diverged' : 'behind') : ahead ? 'ahead' : 'identical' });
     }
     if (route === '/pulls' && method === 'GET') {
-      const params = new URLSearchParams(endpoint.split('?')[1] ?? ''), head = params.get('head')?.split(':').pop(), state = params.get('state') ?? 'open';
-      return ok(200, [...f.prs.values()].filter(pr => (state === 'all' || pr.state === state) && (!head || pr.branch === head)).map(restPr));
+      const params = new URLSearchParams(endpoint.split('?')[1] ?? ''), head = params.get('head')?.split(':').pop(), base = params.get('base'), state = params.get('state') ?? 'open';
+      return ok(200, [...f.prs.values()].filter(pr => (state === 'all' || pr.state === state) && (!head || pr.branch === head) && (!base || pr.base === base)).map(restPr));
     }
     if ((m = /^\/pulls\/(\d+)$/.exec(route))) {
       const pr = f.prs.get(Number(m[1])); if (!pr) return ok(404, { message: 'Not Found' });
@@ -98,6 +98,10 @@ function extend(f, w) {
     if ((m = /^\/issues\/(\d+)$/.exec(route)) && method === 'PATCH') {
       const issue = f.issues.get(Number(m[1])); if (!issue) return ok(404, { message: 'Not Found' });
       if (input.state === 'closed') f.close(issue.number);
+      if (input.state === 'open' && issue.state === 'closed') {
+        issue.state = 'open'; issue.state_reason = 'reopened';
+        issue.timeline.push({ id: String(f.nextEvent++), event: 'reopened', actor: f.owner, created: f.now() });
+      }
       if (input.body !== undefined) f.edit(issue.number, input.body);
       return ok(200, { number: issue.number, state: issue.state });
     }
@@ -147,7 +151,7 @@ export async function coreWorld(t, { repository = 'acme/widgets', settings = {},
       const job = { ...spec, pid: ++pid, token: `${spec.dir}/${spec.id}.spec.json`, log: join(spec.dir, `${spec.id}.log`), exit: join(spec.dir, `${spec.id}.exit.json`),
         result: join(spec.dir, `${spec.id}.result.json`), started: w.now() };
       // A suite starts admitted by the machine's suite queue, unless the test queues it (w.suiteQueued, then w.admit).
-      writeFileSync(job.log, spec.role === 'suite' ? (w.suiteQueued ? 'waiting for a check slot (position 1)\n' : 'running the full test suite\n') : `log of ${spec.id}\nError: pdd test returned no verdict\n`);
+      writeFileSync(job.log, ['suite', 'vectors'].includes(spec.role) ? (w.suiteQueued ? 'waiting for a check slot (position 1)\n' : 'running the full test suite\n') : `log of ${spec.id}\nError: pdd test returned no verdict\n`);
       w.started.push(job); w.alive.add(job.pid); return job;
     },
     read: job => ({ state: w.alive.has(job.pid) ? 'running' : existsSync(job.exit) ? 'exited' : 'dead',
@@ -155,10 +159,19 @@ export async function coreWorld(t, { repository = 'acme/widgets', settings = {},
       result: existsSync(job.result) ? JSON.parse(readFileSync(job.result, 'utf8')) : null,
       log: existsSync(job.log) ? { size: statSync(job.log).size, mtime: statSync(job.log).mtimeMs } : null }),
     stop: job => { const was = w.alive.delete(job.pid); if (was) w.stopped.push(job.id); return was; },
+    snapshot: job => {
+      job.processes = [{ pid: job.pid, start: String(job.started), command: `scripted ${job.id}` }]; return job.processes;
+    },
+    cleanup: async job => { w.jobs.stop(job); return { confirmed: !w.alive.has(job.pid) }; },
     // CPU seconds by child pid, as agentJobCpu gives them; null when the test sets none.
     cpu: job => w.cpu.get(job.pid) ?? null,
+    // The wrapper's hung-command records (agentJobHangs); w.hang adds one.
+    hangs: job => w.hangs.get(job.pid) ?? [],
   };
-  w.cpu = new Map();
+  w.cpu = new Map(); w.hangs = new Map();
+  w.hang = (issue, role, record = {}) => { const job = w.job(issue, role), rows = w.hangs.get(job.pid) ?? [];
+    rows.push({ at: w.now() + rows.length, pid: 4000 + rows.length, command: '/bin/bash -lc npm install', minutes: 15, last: '{"type":"item.started"}', head: null, ...record });
+    w.hangs.set(job.pid, rows); appendFileSync(job.log, `agent-job: stopped a hung command after 15 min with no output and almost no CPU: ${rows.at(-1).command}\n`); return rows.at(-1); };
   w.job = (issue, role) => [...w.started].reverse().find(j => j.issue === issue && (!role || j.role === role));
   // Finish a job: exit record, optional result file.
   w.finish = (issue, role, { code = 0, result } = {}) => {
@@ -181,11 +194,13 @@ export async function coreWorld(t, { repository = 'acme/widgets', settings = {},
   // The scripted builder: commit on the job branch, push, open a PR, finish with a pr result.
   // A scripted PR body gets a debate-A Path line unless it has one or the test asks for none (pathLine: false).
   // write: false commits only what the test put in the worktree (a conflict fix), not the change-N.txt file.
-  w.build = (issue, { body, role = 'build', checks = 'success', runtime, result = {}, pathLine = true, write = true } = {}) => {
+  // add: false commits only what the test staged (the rest of the worktree stays as it is, for example not committed).
+  w.build = (issue, { body, role = 'build', checks = 'success', runtime, result = {}, pathLine = true, write = true, add = true } = {}) => {
     const job = w.job(issue, role);
     if (body && pathLine && !/^[\s>*-]*Path:/m.test(body)) body = `${body}\nPath: d — change-${issue}.txt — unowned — no contract change — Test: done check`;
     if (write) writeFileSync(join(job.cwd, `change-${issue}.txt`), `change ${job.id}\n`);
-    git(job.cwd, 'add', '.'); if (git(job.cwd, 'status', '--porcelain')) git(job.cwd, 'commit', '-qm', `change ${job.id}`); git(job.cwd, 'push', '-q', 'origin', `HEAD:${job.branch}`);
+    if (add) git(job.cwd, 'add', '.');
+    if (git(job.cwd, 'diff', '--cached', '--name-only')) git(job.cwd, 'commit', '-qm', `change ${job.id}`); git(job.cwd, 'push', '-q', 'origin', `HEAD:${job.branch}`);
     const head = git(job.cwd, 'rev-parse', 'HEAD');
     let pr = [...w.github.prs.values()].find(p => p.branch === job.branch);
     if (pr) { pr.head = head; if (body) pr.body = body; } else pr = w.github.openPr({ branch: job.branch, head, ...(body ? { body } : {}) });
@@ -199,6 +214,31 @@ export async function coreWorld(t, { repository = 'acme/widgets', settings = {},
     w.finish(issue, 'review', { result: { verdict, head: job.head, summary: `Review ${verdict}`, mustFix } });
   };
   w.suite = (issue, code = 0) => w.finish(issue, 'suite', { code });
+  // The engine's replay and formal run (T04): each file runs alone and prints its TAP summary and then its marker line
+  // with the run's nonce. w.replayFiles lists [kind, index] from the command; w.tapFile writes one file's part.
+  w.replayFiles = job => [...(job.args.at(-3) ?? '').matchAll(/# pdd-autopilot-([0-9a-f]+): ([a-z-]+) (\d+) exit/g)].map(m => ({ nonce: m[1], kind: m[2], index: Number(m[3]) }));
+  w.tapFile = (job, kind, index, { tests = 1, fail = 0, failed = [], skipped = 0, code } = {}) => {
+    const nonce = w.replayFiles(job)[0]?.nonce ?? 'none';
+    return [...failed.map((f, i) => `not ok ${i + 1} - ${f.name}\n  ---\n  location: '${job.cwd}/${f.file}:1:1'\n  ...`),
+      `1..${tests}`, `# tests ${tests}`, `# pass ${tests - fail - skipped}`, `# fail ${fail}`, `# skipped ${skipped}`, `# pdd-autopilot-${nonce}: ${kind} ${index} exit ${code ?? (fail ? 1 : 0)}`, ''].join('\n');
+  };
+  // The whole run: `tests`, `fail` and `failed` go to the first file of the kind (other files pass 1 test each, so the
+  // kind's total is `tests`); `formal` gives the formal part; `code` sets the first file's exit. `linked` (replay files
+  // that import a changed module) and `control` (each control kind) pass 1 test per file unless given.
+  w.vectorsRun = (issue, { formal, linked, control, ...vectors } = {}) => {
+    const job = w.job(issue, 'vectors'), files = w.replayFiles(job), parts = [], used = [];
+    const hasVectors = files.some(f => f.kind === 'vectors'), formalPart = formal ?? (hasVectors ? { tests: 1 } : vectors);
+    for (const kind of ['vectors', 'formal', 'linked', 'control-vectors', 'control-formal']) {
+      const mine = files.filter(f => f.kind === kind);
+      const whole = kind === 'vectors' ? vectors : kind === 'formal' ? formalPart : kind === 'linked' ? linked ?? { tests: mine.length } : control?.[kind] ?? { tests: mine.length };
+      if (!mine.length) continue;
+      used.push(whole);
+      const total = whole.tests ?? 3, rest = mine.length - 1;
+      mine.forEach((f, i) => parts.push(w.tapFile(job, kind, f.index, i === 0 ? { ...whole, tests: Math.max(1, total - rest) } : { tests: 1 })));
+    }
+    appendFileSync(job.log, parts.join(''));
+    return w.finish(issue, 'vectors', { code: used.some(k => k.fail || k.code) ? 1 : 0 });
+  };
   w.issue = (n, extra = {}) => w.github.add(n, { created: w.now() - (1000 - n) * 60000, updated: w.now() - 60000, ...extra });
   w.ports = (extra = {}) => ({
     gh: w.gh,
@@ -207,10 +247,27 @@ export async function coreWorld(t, { repository = 'acme/widgets', settings = {},
     listIssues: async () => { const r = await w.gh(['api', '--include', '--method', 'GET', `repos/${repository.toLowerCase()}/issues?state=open&per_page=100`]); return JSON.parse(r.stdout.split(/\r?\n\r?\n/).slice(1).join('\n\n')); },
     trusted: async row => ['acme', 'promptdriven'].includes(row.user?.login),
     checkBase: async () => ({ exitCode: 0, message: 'Base check ok.' }),
+    // The saved Runtime checks (T01). By default every changed Story and prompt is covered at the head; a test of the
+    // coverage rule sets w.runtimeEvidence.
+    runtimeEvidence: async (input, ctx) => {
+      w.evidenceReads = [...(w.evidenceReads ?? []), input];
+      if (w.runtimeEvidence) return w.runtimeEvidence(input, ctx);
+      const changed = spawnSync('git', ['diff', '--name-only', 'origin/main...HEAD'], { cwd: input.tree, encoding: 'utf8' }).stdout.split('\n').filter(Boolean);
+      const stories = changed.filter(file => /^user_stories\/.+\.md$/.test(file));
+      return { stories: [{ story: 'user_stories/all.md', pass: true, current: true }, ...stories.map(story => ({ story, pass: true, current: true }))], storyFiles: stories,
+        footprints: { 'user_stories/all.md': changed.filter(file => file.endsWith('.prompt.md')) } };
+    },
     agentReady: async () => true,
     warn: () => {},
+    // #3241: no Runtime check to send again and a healthy interpreter, unless a test sets w.resend or w.health.
+    resendChecks: async input => { w.resendReads = [...(w.resendReads ?? []), input]; return w.resend ? w.resend(input) : { stories: [], neverSent: [], noVerdict: [], failed: [], maintenance: false }; },
+    runtimeHealth: async () => { w.healthReads = [...(w.healthReads ?? []), w.now()]; return w.health ? w.health() : { state: 'healthy', detail: 'HTTP 200' }; },
     ...extra,
   });
+  // #3231: a fixed machine for the launcher path (a server with room and 2 automatic slots), so a busy or unplugged
+  // test machine never holds intake.
+  w.machineGuard = async ({ runs } = {}) => ({ klass: 'server', auto: 2, slots: Number.isSafeInteger(runs) ? runs : 2, source: 'automatic', room: { ok: true, reason: null },
+    priority: () => ({}), line: 'Machine: server (test)' });
   w.tick = async (extra = {}) => { const r = await tickCore({ state: w.state, settings: w.settings, budget: { state: 'normal' } }, w.ports(extra)); w.ticks.push(r); return r; };
   w.peer = async (options = {}) => coreWorld(t, { repository, settings, machine: 'machine-b', coordinatorId: 'coord-b', ...options,
     shared: { dir, remote: w.remote, github: w.github, reports: w.reports, clock: w.clock } });

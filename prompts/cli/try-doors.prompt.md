@@ -1,6 +1,6 @@
 # Use a Try session from a terminal or HTTP client
 
-Own src/try-doors.mjs. Provide one generic adapter around the owner's saved Try. Preserve argv strings, program
+Own `src/runtime/try-doors.mjs` (the host launcher shim outside `src/runtime/` is owned by the Runtime seam). Provide one generic adapter around the owner's saved Try. Preserve argv strings, program
 streams and saved session identity. Do not interpret commands, execute a project binary, or generate project logic.
 
 `openCli(context, test, sessionId, options)` selects the first distinct CLI entry used by the Story's tests; refuse
@@ -13,7 +13,7 @@ a letter, up to 64 characters; pdd, node, gh and git are reserved because puttin
 the runtime state store. Create .pdd/try/bin/<program> with mode 0700 and a POSIX shell shebang that execs the absolute Node executable. Never traverse a symlink
 or overwrite a file not marked as a PDD Try launcher. Ignore .pdd/try/ via the repository's local Git exclude file
 so future source captures contain no adapters or evidence. No token or browser capability enters the launcher.
-Keep the evaluated JavaScript constant. Pass the installed module URL and private
+Keep the evaluated JavaScript constant. Pass the installed module URL (`context.ports.tryLauncherUrl` when supplied, otherwise this module's `file:` URL) and private
 descriptor path as separate data arguments, followed by the program's unchanged
 argv, with POSIX-safe shell quoting. Paths must never become JavaScript source.
 
@@ -31,7 +31,7 @@ whether the program exited successfully. Unknown execution must not leave an old
 
 `saveLast(context)` reads the last confirmed invocation for this repository, verifies the current gh login and
 original session identity, and appends the input/result as one exact recorded case in the original test file
-through saveDoorCase. This records an observation; it does not approve a prompt or validate that the answer is
+through saveDoorCase (using `context.ports.lineReader` — defaulting to the runtime client's shared `defaultLineReader` over `stdin` — for the interactive closed-editor handoff prompt when needed). This records an observation; it does not approve a prompt or validate that the answer is
 correct. Repeated Save for the same action is a no-op. Refuse missing/unknown evidence or a changed Story/test
 identity, and keep earlier checks and all unrelated test bytes. Tie the recording to the original step's criterion.
 Print the target file and new step name. No model call is needed.

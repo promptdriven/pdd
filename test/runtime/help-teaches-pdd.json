@@ -10,8 +10,10 @@
     {"id": "AC6", "text": "`pdd prompting` is still an unknown command: it prints nothing to stdout, prints one line to stderr that says \"Unknown command\" and names `prompting`, and exits with code 2."},
     {"id": "AC7", "text": "`pdd --help` and `pdd help prompting` never name a removed command (\"pdd check\", \"pdd try\" or \"workflow start\") and exit with code 0."}
   ],
-  "initial_world": {},
-  "simulation": {},
+  "initial_world": {"unexpected_launcher_calls": []},
+  "simulation": {
+    "autopilotLauncher.runAutopilotLauncher": {"action":"port.write","world_pointer":"/unexpected_launcher_calls","result_template":{"exitCode":255,"message":"Unexpected Autopilot dispatch in a non-Autopilot scenario"}}
+  },
   "context": [],
   "steps": [
     {
@@ -24,7 +26,8 @@
         {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "/docs/prompting-guide.md"},
         {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "/RUNBOOK.md"},
         {"criterion_id": "AC1", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
-        {"criterion_id": "AC1", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+        {"criterion_id": "AC1", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
+        {"criterion_id":"AC1","target":"calls","path":"/resources/pdd-cli-autopilotLauncher-runAutopilotLauncher","op":"equals","value":0}
       ]
     },
     {
@@ -41,7 +44,8 @@
         {"criterion_id": "AC7", "target": "result", "path": "/stdout", "op": "not_contains", "value": "pdd check"},
         {"criterion_id": "AC7", "target": "result", "path": "/stdout", "op": "not_contains", "value": "pdd try"},
         {"criterion_id": "AC7", "target": "result", "path": "/stdout", "op": "not_contains", "value": "workflow start"},
-        {"criterion_id": "AC7", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+        {"criterion_id": "AC7", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
+        {"criterion_id":"AC1","target":"calls","path":"/resources/pdd-cli-autopilotLauncher-runAutopilotLauncher","op":"equals","value":0}
       ]
     },
     {
@@ -54,7 +58,8 @@
         {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "/docs/prompting-guide.md"},
         {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "/RUNBOOK.md"},
         {"criterion_id": "AC1", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
-        {"criterion_id": "AC1", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+        {"criterion_id": "AC1", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
+        {"criterion_id":"AC1","target":"calls","path":"/resources/pdd-cli-autopilotLauncher-runAutopilotLauncher","op":"equals","value":0}
       ]
     },
     {
@@ -67,7 +72,8 @@
         {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "/docs/prompting-guide.md"},
         {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "/RUNBOOK.md"},
         {"criterion_id": "AC1", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
-        {"criterion_id": "AC1", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+        {"criterion_id": "AC1", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
+        {"criterion_id":"AC1","target":"calls","path":"/resources/pdd-cli-autopilotLauncher-runAutopilotLauncher","op":"equals","value":0}
       ]
     },
     {
@@ -95,7 +101,8 @@
         {"criterion_id": "AC7", "target": "result", "path": "/stdout", "op": "not_contains", "value": "pdd check"},
         {"criterion_id": "AC7", "target": "result", "path": "/stdout", "op": "not_contains", "value": "pdd try"},
         {"criterion_id": "AC7", "target": "result", "path": "/stdout", "op": "not_contains", "value": "workflow start"},
-        {"criterion_id": "AC7", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+        {"criterion_id": "AC7", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
+        {"criterion_id":"AC2","target":"calls","path":"/resources/pdd-cli-autopilotLauncher-runAutopilotLauncher","op":"equals","value":0}
       ]
     },
     {
@@ -107,7 +114,8 @@
         {"criterion_id": "AC6", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
         {"criterion_id": "AC6", "target": "result", "path": "/stderr", "op": "contains", "value": "Unknown command"},
         {"criterion_id": "AC6", "target": "result", "path": "/stderr", "op": "contains", "value": "prompting"},
-        {"criterion_id": "AC6", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
+        {"criterion_id": "AC6", "target": "result", "path": "/exit_code", "op": "equals", "value": 2},
+        {"criterion_id":"AC6","target":"calls","path":"/resources/pdd-cli-autopilotLauncher-runAutopilotLauncher","op":"equals","value":0}
       ]
     }
   ]

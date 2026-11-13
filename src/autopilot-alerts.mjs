@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-alerts.prompt.md (sha256: 1398972c19e472bb84a2452375f61198b342c4c18613bdf26757beb8c55d9a34).
+// Generated from prompts/cli/autopilot-alerts.prompt.md (sha256: 8856c7b39b215e50bbebe1fb98c74dc618acb35eae1d367244a5ca83d5e4747a).
 import * as nativeFs from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';

@@ -1,5 +1,5 @@
 import { launchProfile, chatAgentName, validLaunchProfile } from './workflow-launch-profile.mjs';
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: badc0c8c124e14c6d707736e770146a5533d2a9120f28bd0fe3db84824250c2c).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 3a9c7a5f7c58e91e7d7335121a97b71b8ea92e00ea06dae8a681454857b9c22b).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, lstatSync, readdirSync, writeFileSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
@@ -134,7 +134,7 @@ export function herdrCommand(ports = {}) {
 }
 
 // `unset`, `loginFile` and `program` come from chatLaunch: the caller's login and the run's agents.json command.
-export function chatCommand({ agent, cwd, messageFile, sessionId, resumeId, configDir, commonDir, sourceRoot, addDirs = [], unset = [], loginFile = null, program = null, queueEnv = {}, model = null, codexThreads = null }) {
+export function chatCommand({ agent, cwd, messageFile, sessionId, resumeId, configDir, commonDir, sourceRoot, addDirs = [], unset = [], loginFile = null, program = null, queueEnv = {}, model = null, codexThreads = null, excludeDynamicSystemPromptSections = false }) {
   if (resumeId !== undefined && !validSessionId(resumeId)) throw problem('invalid_session_id', 'The saved native session id is not a UUID, so pdd will not resume it.');
   if (typeof cwd !== 'string' || !cwd) throw problem('invalid_worktree', 'The chat has no worktree folder, so pdd will not start it.');
   if (resumeId !== undefined) resumeId = quote(resumeId);
@@ -152,7 +152,7 @@ export function chatCommand({ agent, cwd, messageFile, sessionId, resumeId, conf
     ...(resumeId ? ['--conversation', resumeId] : []), ...(messageFile ? ['--prompt-interactive', ...message] : [])].join(' ');
   const included = addDirs.length ? [...new Set(addDirs)] : commonDir && sourceRoot ? [join(commonDir, 'pdd/runs'), `${sourceRoot}.pdd-worktrees`] : [];
   if (agent === 'gemini') return [...env, ...start, '--yolo', ...included.flatMap(dir => ['--include-directories', quote(dir)]), ...(resumeId ? ['--resume', resumeId] : []), ...(messageFile ? ['--prompt-interactive', ...message] : [])].join(' ');
-  if (agent === 'claude') return [...env, ...start, '--dangerously-skip-permissions', ...(resumeId ? ['--resume', resumeId] : ['--session-id', sessionId]), ...message].join(' ');
+  if (agent === 'claude') return [...env, ...start, '--dangerously-skip-permissions', ...(excludeDynamicSystemPromptSections ? ['--exclude-dynamic-system-prompt-sections'] : []), ...(resumeId ? ['--resume', resumeId] : ['--session-id', sessionId]), ...message].join(' ');
   // Codex builds each command's environment from shell_environment_policy; `set` applies after `inherit`.
   return [...env, ...start, ...(resumeId ? ['resume', resumeId] : []), ...(model !== null ? ['--model', quote(model)] : []), '--no-daemon', '--dangerously-bypass-approvals-and-sandbox',
     '-c', quote(`projects={${tomlString(cwd)}={trust_level="trusted"}}`),
@@ -203,12 +203,16 @@ export function chatLaunch({ run, agent, configDir, env = process.env }) {
   for (const name of queueNames) if (!Object.hasOwn(values, name) && typeof env[name] === 'string') values[name] = env[name];
   const queueEnv = Object.fromEntries(queueNames.filter(name => Object.hasOwn(values, name)).map(name => [name, values[name]]));
   const unset = [...queueNames.filter(name => !Object.hasOwn(values, name)), ...names.filter(name => !Object.hasOwn(values, name)), ...(home && !configDir ? [home] : [])];
+  const probeEnv = Object.fromEntries(Object.entries(env ?? {}).filter(([name, value]) => typeof value === 'string' && !AGENT_MARKER.test(name)));
+  for (const name of unset) delete probeEnv[name];
+  if (configDir && home) probeEnv[home] = configDir;
+  Object.assign(probeEnv, values);
   let loginFile = null;
   if (Object.keys(values).length) {
     loginFile = join(run.runDir, `login-${randomUUID()}.env`);
     writeFileSync(loginFile, Object.entries(values).map(([name, value]) => `export ${name}=${quote(value)}\n`).join(''), { mode: 0o600, flag: 'wx' });
   }
-  return { unset, loginFile, program: entry?.command ?? null, queueEnv };
+  return { unset, loginFile, program: entry?.command ?? null, queueEnv, probeEnv };
 }
 // A chat snapshot, never the current terminal, decides invocation settings.
 function launchSettings(run, chat) {
@@ -221,12 +225,27 @@ async function bindAgentName(herdr, paneId, name) {
   if (!name) return;
   await herdr(['agent', 'rename', paneId, name]);
 }
+async function claudeSupportsExcludeDynamic(program, { cwd, env, ports = {} }) {
+  if (!ports.agentHelp && !/[\\/]/.test(program) && !env?.PATH) return false;
+  try {
+    const help = ports.agentHelp
+      ? await ports.agentHelp(program, ['--help'], { cwd, env })
+      : await ordinary(program, ['--help'], { cwd, env, encoding: 'utf8', timeout: 10_000, maxBuffer: 131_072 });
+    const stdout = typeof help === 'string' ? help : String(help?.stdout ?? '');
+    return /(?:^|\s)--exclude-dynamic-system-prompt-sections(?:\s|$)/m.test(stdout);
+  } catch {
+    return false;
+  }
+}
 // One native launch or resume in a pane with the caller's login; a failed request deletes the login file at once.
 async function launchInPane(herdr, paneId, options, { run, env, ports = {}, beforeLaunch }) {
   removeStaleLoginFiles(run.runDir);
-  const launch = chatLaunch({ run, agent: options.agent, configDir: options.configDir, env });
+  const { probeEnv, ...launch } = chatLaunch({ run, agent: options.agent, configDir: options.configDir, env });
   try {
-    const command = chatCommand({ ...options, ...launch });
+    const excludeDynamicSystemPromptSections = options.agent === 'claude'
+      ? (options.excludeDynamicSystemPromptSections ?? await claudeSupportsExcludeDynamic(launch.program ?? 'claude', { cwd: options.cwd, env: probeEnv, ports }))
+      : false;
+    const command = chatCommand({ ...options, ...launch, excludeDynamicSystemPromptSections });
     await beforeLaunch?.();
     const reply = await herdr(['pane', 'run', paneId, command]);
     if (options.namingChat) {
