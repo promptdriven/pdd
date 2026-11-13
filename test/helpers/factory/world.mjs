@@ -8,7 +8,7 @@ import {fork,execFileSync,execFile} from 'node:child_process';
 import {createHash,randomUUID} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {fakeHerdr} from '../fake-herdr.mjs';
-import {proseSha256} from '../../../src/runtime-preflight.mjs';
+import {proseSha256} from '../../../src/runtime-seam.mjs';
 import {analysisFor} from '../autopilot-github-world.mjs';
 import {runAutopilotAlerts} from '../../../src/autopilot-alerts.mjs';
 import {factoryGithub} from './github.mjs';

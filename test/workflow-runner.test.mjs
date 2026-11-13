@@ -7,8 +7,9 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { execFile as callbackExec, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
-import { captureSource, proseSha256 } from '../src/runtime-preflight.mjs';
-import { renderJson } from '../src/runtime-output.mjs';
+import { captureSource, proseSha256 } from '../src/runtime-seam.mjs';
+import { renderJson } from '../src/runtime-seam.mjs';
+import * as runner from '../src/workflow-runner.mjs';
 import { startRun, stepDone, approveRun, changeRun, cancelRun, runStatus, openRun, askPerson } from '../src/workflow-runner.mjs';
 
 const exec = promisify(callbackExec);
@@ -1799,7 +1800,7 @@ test('RELEASE11: PR2 refreshes its selected remote base with an explicit trackin
 // Greg #2442: newer verify results must beat the old check without treating UNKNOWN as a failure.
 // #2904: these Story counts come from pdd's own saved pdd test batches that done records, never from typed summaries.
 async function ownBatch(f, run, name, lines) {
-  const { captureSource } = await import('../src/runtime-preflight.mjs');
+  const { captureSource } = await import('../src/runtime-seam.mjs');
   const folder = join(f.ports.env.PDD_STATE_DIR ?? join(f.ports.env.HOME, '.pdd', 'runtime'), 'batches', name), tests = ['tests/value.json'];
   mkdirSync(folder, { recursive: true });
   writeFileSync(join(folder, 'batch.json'), JSON.stringify({ version: 1, batch: name, root: run.root, created_at: new Date(f.clock).toISOString(), intent: 'check',
@@ -1837,7 +1838,7 @@ test('GREG2442-2: changed uncommitted source invalidates pass evidence, byte-ide
 test('GREG2442-3: saved check JSON records only source-verified evidence and preserves all workflow/publication state', async t => {
   const { recordEvidence } = await import('../src/workflow-runner.mjs');
   assert.equal(typeof recordEvidence, 'function');
-  const { captureSource } = await import('../src/runtime-preflight.mjs');
+  const { captureSource } = await import('../src/runtime-seam.mjs');
   const { f, run } = await featureAtTryGate(t);
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
   assert.equal(f.prs.length, 1); const prBody = f.prs[0].body;
@@ -2659,7 +2660,7 @@ test('Prompt tests lines: the PR 1 top and total read new and old labels alike, 
 
 test('Prompt tests lines: workflow evidence records a saved result with the new or the old label', async t => {
   const { recordEvidence } = await import('../src/workflow-runner.mjs');
-  const { captureSource } = await import('../src/runtime-preflight.mjs');
+  const { captureSource } = await import('../src/runtime-seam.mjs');
   const { cpSync } = await import('node:fs');
   const { f, run } = await featureAtTryGate(t);
   for (const dir of ['prompts', 'tests', 'user_stories']) cpSync(join(packageRoot, 'test/fixtures/harbor', dir), join(run.root, dir), { recursive: true });
@@ -2827,7 +2828,7 @@ test('2904: a cache-only pdd test row with no agent summary shows its cached bui
 // #2904 follow-up: the status Story count reads only pdd's own recorded results; typed lines never count.
 test('2904: status counts Stories from pdd\'s own recorded pdd test results, never from a typed done summary', async t => {
   const { f, run, done } = await featureWithOwnResults(t, { results: false });
-  const { captureSource } = await import('../src/runtime-preflight.mjs');
+  const { captureSource } = await import('../src/runtime-seam.mjs');
   const stateDir = f.ports.env.PDD_STATE_DIR;
   // The agent claims a pass; pdd has no result of its own.
   await done('check', { summary: 'Prompt tests (value): ✓ 8 of 8 criteria · 20/20 checks · 2 AI calls' });
@@ -2887,7 +2888,7 @@ test('2904: product evidence reads pdd\'s own records and receipts, never typed 
 
 test('2921: named progress without step numbers keeps its accounting and cuts trailing agent words', async () => {
   const { runtimeLines } = await import('../src/workflow-runner.mjs');
-  const { projectAnswer, summaryLine } = await import('../src/runtime-output.mjs');
+  const { projectAnswer, summaryLine } = await import('../src/runtime-seam.mjs');
   const view = projectAnswer({ command: 'check', state: 'running', progress: { step: 'pay', calls_settled: 3, calls_open: 1 } });
   const result = 'running · 0 of 2 criteria · 0/0 checks · sent (awaiting-server-verdict) · pay · 3 AI calls so far · 1 not yet settled · 1 sent (awaiting-server-verdict)';
   for (const story of [null, 's']) {
@@ -2900,7 +2901,7 @@ test('2921: named progress without step numbers keeps its accounting and cuts tr
 
 test('2904: every Prompt tests form that summaryLine prints stays whole, and agent words after it are cut off', async () => {
   const { runtimeLines } = await import('../src/workflow-runner.mjs');
-  const { summaryLine } = await import('../src/runtime-output.mjs');
+  const { summaryLine } = await import('../src/runtime-seam.mjs');
   const S = { phase: 'server', request_ids: ['a'] };
   const groups = [
     [{ ...S, state: 'failed', criteria: { passed: 0, total: 1 }, checks: { passed: 0, total: 0 }, rerun: { calls: 2 }, unknown_calls: 1 }],
@@ -2984,4 +2985,157 @@ test('2760: feature and bug Story gates offer the automatic simulation command a
     assert.match(gate.message, /whole project/i);
     assert.equal(f.prs.length, 0, 'advice must not publish or approve');
   }
+});
+
+
+// #2947: native public-boundary cases; no real GitHub or Herdr effects.
+async function localPublicationFixture(t, name = 'bug') {
+  const f = await fixture(t, { name });
+  writeFileSync(join(f.source, 'pdd.json'), JSON.stringify({ strict_approvals: true }));
+  assert.equal((await f.run()).exitCode, 0);
+  while (f.record().area < f.record().areas.length - 1) {
+    const run = f.record(), area = run.areas[run.area];
+    for (const step of area.steps) {
+      if (area.gate === 'pr') writeFileSync(join(run.root, 'prompt-change.txt'), 'prompt result\n');
+      const out = await stepDone({ step, cwd: run.root }, f.agentPorts());
+      assert.equal(out.exitCode, 0, out.message);
+    }
+    const out = await approveRun({ ref: '17', cwd: f.source }, f.ports);
+    assert.equal(out.exitCode, 0, out.message);
+  }
+  const run = f.record(), area = run.areas[run.area];
+  writeFileSync(join(run.root, 'value.mjs'), 'export const value = 2;\n');
+  for (const step of area.steps.slice(0, -1)) {
+    const out = await stepDone({ step, cwd: run.root }, f.agentPorts());
+    assert.equal(out.exitCode, 0, out.message);
+  }
+  return f;
+}
+
+for (const name of ['bug', 'small-change']) test(`#2947: ${name} records locally, publishes separately and defers a PR update`, async t => {
+  const f = await localPublicationFixture(t, name), run = f.record(), area = run.areas[run.area], step = area.steps.at(-1);
+  const head = f.git(run.root, 'rev-parse', 'HEAD'), before = { pushes: f.pushes.length, prs: f.prs.length, edits: f.edits.length, chats: run.chats.length };
+  const out = await stepDone({ step, noPublish: true, summary: 'Local review complete', cwd: run.root }, f.agentPorts());
+  assert.equal(out.exitCode, 0, out.message);
+  assert.match(out.message, /publication.*deferred/i); assert.match(out.message, /pdd workflow publish 17/);
+  assert.equal(f.git(run.root, 'rev-parse', 'HEAD'), head, 'local recording must not auto-commit');
+  assert.deepEqual({ pushes: f.pushes.length, prs: f.prs.length, edits: f.edits.length, chats: f.record().chats.length }, before);
+  assert.equal(f.record().done[step].summary, 'Local review complete');
+  const recorded = structuredClone(f.record().done);
+  for (const json of [false, true]) {
+    const status = await runStatus({ ref: '17', cwd: f.source, json }, f.ports);
+    assert.equal(status.exitCode, 0, status.message); assert.match(status.message, /publication.*deferred/i); assert.match(status.message, /pdd workflow publish 17/);
+  }
+  const published = await runner.publishRun({ ref: '17', cwd: f.source }, f.agentPorts());
+  assert.equal(published.exitCode, 0, published.message);
+  assert.equal(f.prs.length, before.prs + 1); assert.ok(f.pushes.length > before.pushes);
+  assert.deepEqual(f.record().done, recorded); assert.equal(f.record().localPublication, undefined);
+
+  writeFileSync(join(run.root, 'value.mjs'), 'export const value = 3;\n');
+  const afterPublish = { pushes: f.pushes.length, edits: f.edits.length, body: f.prs.at(-1).body };
+  assert.equal((await stepDone({ step, noPublish: true, cwd: run.root }, f.agentPorts())).exitCode, 0);
+  assert.equal((await stepDone({ step, cwd: run.root }, f.agentPorts())).exitCode, 0, 'ordinary done must preserve a saved local hold');
+  assert.deepEqual({ pushes: f.pushes.length, edits: f.edits.length, body: f.prs.at(-1).body }, afterPublish);
+  const updateRecords = structuredClone(f.record().done);
+  const updated = await runner.publishRun({ ref: '17', cwd: f.source }, f.agentPorts());
+  assert.equal(updated.exitCode, 0, updated.message); assert.equal(f.prs.length, before.prs + 1);
+  assert.ok(f.pushes.length > afterPublish.pushes); assert.deepEqual(f.record().done, updateRecords);
+});
+
+test('#2947: publish refuses incomplete steps, questions and approval gates without recording review', async t => {
+  const f = await fixture(t); await f.run(); const run = f.record();
+  const rejected = await stepDone({ step: 'scope', noPublish: true, cwd: run.root }, f.agentPorts());
+  assert.equal(rejected.exitCode, 1); assert.deepEqual(f.record().done, {});
+  assert.equal((await runner.publishRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 1);
+  await stepDone({ step: 'scope', cwd: run.root }, f.agentPorts());
+  assert.equal((await runner.publishRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 1);
+  await approveRun({ ref: '17', cwd: f.source }, f.ports);
+  const unfinished = await runner.publishRun({ ref: '17', cwd: f.source }, f.ports);
+  assert.equal(unfinished.exitCode, 1); assert.match(unfinished.message, /change.*verify.*formal/); assert.equal(f.record().done.review, undefined);
+  for (const step of f.record().areas.at(-1).steps) await stepDone({ step, noPublish: true, cwd: run.root }, f.agentPorts());
+  await askPerson({ text: 'Inspect the local head first', cwd: run.root }, f.agentPorts());
+  const saved = f.record();
+  assert.equal((await runner.publishRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 1);
+  assert.deepEqual(f.record().question, saved.question); assert.deepEqual(f.record().done, saved.done); assert.equal(f.prs.length, 0);
+});
+
+test('#2947: a failed explicit publication keeps the hold and retries without rerecording steps', async t => {
+  const f = await localPublicationFixture(t, 'small-change'), run = f.record();
+  await stepDone({ step: 'formal', noPublish: true, cwd: run.root }, f.agentPorts());
+  const saved = f.record(), execFile = f.ports.execFile;
+  const failurePorts = f.agentPorts({ execFile: async (file, args, opts) => {
+    if (file === 'git' && args[0] === 'push') throw Object.assign(Error('offline'), { code: 'ENETUNREACH' });
+    return execFile(file, args, opts);
+  } });
+  const failed = await runner.publishRun({ ref: '17', cwd: f.source }, failurePorts);
+  assert.equal(failed.exitCode, 1, failed.message); assert.equal(f.prs.length, 0);
+  assert.deepEqual(f.record().done, saved.done); assert.deepEqual(f.record().localPublication, saved.localPublication);
+  const retried = await runner.publishRun({ ref: '17', cwd: f.source }, f.agentPorts());
+  assert.equal(retried.exitCode, 0, retried.message); assert.equal(f.prs.length, 1); assert.deepEqual(f.record().done, saved.done);
+});
+
+
+test('#2947: an out-of-order local review holds publication when missing steps finish', async t => {
+  const f = await localPublicationFixture(t, 'small-change'), run = f.record();
+  // Rerunning change clears the later verify record through the public boundary.
+  await stepDone({ step: 'change', cwd: run.root }, f.agentPorts());
+  const held = await stepDone({ step: 'formal', noPublish: true, cwd: run.root }, f.agentPorts());
+  assert.equal(held.exitCode, 0, held.message); assert.match(held.message, /Next step: verify/);
+  const workingJson = JSON.parse((await runStatus({ cwd: f.source, json: true }, f.ports)).message).runs[0];
+  assert.equal(workingJson.group, 'working'); assert.match(workingJson.words, /verify/);
+  const workingList = (await runStatus({ cwd: f.source }, f.ports)).message;
+  assert.match(workingList, /agent working on verify/); assert.doesNotMatch(workingList, /Needs your input|publication deferred/i);
+  assert.equal((await runner.publishRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 1);
+  const next = await stepDone({ step: 'verify', cwd: run.root }, f.agentPorts());
+  assert.equal(next.exitCode, 0, next.message);
+  // Rerecording an earlier step invalidates formal, so finish it again.
+  const final = await stepDone({ step: 'formal', cwd: run.root }, f.agentPorts());
+  assert.equal(final.exitCode, 0, final.message); assert.match(final.message, /publication.*deferred/i);
+  const waitingJson = JSON.parse((await runStatus({ cwd: f.source, json: true }, f.ports)).message).runs[0];
+  assert.equal(waitingJson.group, 'waiting'); assert.match(waitingJson.words, /publication deferred/i);
+  assert.match((await runStatus({ cwd: f.source }, f.ports)).message, /publication deferred: pdd workflow publish 17/);
+  assert.equal(f.pushes.length, 0); assert.equal(f.prs.length, 0);
+});
+
+test('#2947: returning to prompt space clears a saved local publication hold', async t => {
+  const f = await localPublicationFixture(t, 'bug'), run = f.record();
+  const held = await stepDone({ step: 'review', noPublish: true, cwd: run.root }, f.agentPorts());
+  assert.equal(held.exitCode, 0, held.message);
+  assert.deepEqual(f.record().localPublication, { area: 'code', step: 'review' });
+  f.git(run.root, 'add', '.'); f.git(run.root, 'commit', '-qm', 'Commit local code edits before returning to PR 1');
+  const returned = await openRun({ ref: '17', area: 'prompt-pr', cwd: f.source }, { ...f.ports, readPrStatus: async () => ({ state: 'open' }) });
+  assert.equal(returned.exitCode, 0, returned.message);
+  assert.equal(f.record().localPublication, undefined);
+  for (const step of f.record().areas[f.record().area].steps) {
+    assert.equal((await stepDone({ step, cwd: run.root }, f.agentPorts())).exitCode, 0);
+  }
+  assert.equal((await approveRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
+  assert.equal(f.record().areas[f.record().area].name, 'code');
+  writeFileSync(join(run.root, 'value.mjs'), 'export const value = 4;\n');
+  for (const step of f.record().areas[f.record().area].steps) {
+    const out = await stepDone({ step, cwd: run.root }, f.agentPorts());
+    assert.equal(out.exitCode, 0, out.message);
+  }
+  assert.equal(f.prs.length, 2, 'After returning to prompt space, finishing code publishes PR 2 without a stale hold.');
+});
+
+test('#2947: cancellation and a concurrent question stop explicit publication', async t => {
+  const f = await localPublicationFixture(t, 'small-change'), run = f.record();
+  await stepDone({ step: 'formal', noPublish: true, cwd: run.root }, f.agentPorts());
+  const records = structuredClone(f.record().done), execFile = f.ports.execFile;
+  let interrupted = false;
+  const publish = await runner.publishRun({ ref: '17', cwd: f.source }, f.agentPorts({ execFile: async (file, args, opts) => {
+    if (!interrupted && file === 'git' && args[0] === 'status') {
+      interrupted = true;
+      const question = await askPerson({ text: 'Inspect this before publishing', cwd: run.root }, f.agentPorts());
+      assert.equal(question.exitCode, 0, question.message);
+    }
+    return execFile(file, args, opts);
+  } }));
+  assert.equal(interrupted, true); assert.equal(publish.exitCode, 1, publish.message);
+  assert.deepEqual(f.record().done, records); assert.equal(f.pushes.length, 0); assert.equal(f.prs.length, 0);
+  assert.equal((await cancelRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
+  const cancelled = await runner.publishRun({ ref: '17', cwd: f.source }, f.ports);
+  assert.equal(cancelled.exitCode, 1); assert.match(cancelled.message, /stopped/);
+  assert.equal(f.pushes.length, 0); assert.equal(f.prs.length, 0);
 });
