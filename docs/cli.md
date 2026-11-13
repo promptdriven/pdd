@@ -420,9 +420,10 @@ pdd autopilot alerts test
 
 The bot posts with the Discord API v10, with link previews off, and reads the
 message back. Only a matching readback counts as delivered. A change of line
-ends or of spaces at a line end is not a mismatch. `test` first checks
-the bot and the channel, read-only, and shows the bot name and the channel name.
-pdd never prints the token or the command output. The bot needs permission to
+ends or of spaces at a line end is not a mismatch. `set --token-command` and `test`
+check the bot and the channel, read-only, and show the bot name and the channel name.
+pdd never prints or saves the token or the command stdout; when a token command
+fails during `set` or `test`, pdd shows only scrubbed single-line stderr. The bot needs permission to
 view the channel, send messages and read message history.
 
 The core sends an alert only for a real need. It sends `stuck` when a job process
@@ -448,7 +449,7 @@ the name that Autopilot saved at its first start (this checkout's start first),
 else the host name, so a host rename does not open a new incident. An access or spending decision, a product
 decision, a stuck issue or a long-running issue is one incident per issue. A repeat call sends
 nothing for a delivered or unconfirmed alert, and sends again an alert that
-failed or had no destination. `--update` sends a new cause, a changed decision needed or the new
+failed or had no destination; a delivered `pdd autopilot alerts test` and later Autopilot ticks also retry open failed or newly configured alerts once. `--update` sends a new cause, a changed decision needed or the new
 issue list. Changing only what was tried sends nothing. `--kind recovered` sends one recovery and closes the matching
 alerts; give `"kind"` in the JSON to close only that incident. Every call and
 its delivery result are recorded in
