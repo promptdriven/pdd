@@ -231,3 +231,77 @@ test('3346: live manual waiting run with open PR and open issue stays working an
   assert.ok(f.herdr.paneOf(buildChat), 'open PR manual build chat stays open');
   assert.equal(f.herdr.workspaces.some(w => w.workspace_id === buildChat.workspaceId), true, 'run workspace stays open');
 });
+
+test('3346: refreshWaitingIssue ignores non-zero replies and preserves runs entering parked or releasing in flight', async t => {
+  const f = await fixture(t, { agent: 'claude', name: 'small-change' });
+  f.ports.skipMetricsDelivery = true;
+  assert.equal((await f.run()).exitCode, 0);
+  assert.equal((await stepDone({ step: 'scope', summary: 'scope', cwd: f.record().root }, f.agentPorts())).exitCode, 0);
+  assert.equal(f.record().state, 'waiting');
+
+  const origExec = f.ports.execFile;
+
+  // 1. Non-zero exit reply on gh api is ignored even if stdout looks like closed JSON
+  f.ports.execFile = async (file, args, opts) => {
+    if (file === 'gh' && args[0] === 'api' && args[1] === 'repos/example/project/issues/17')
+      return { code: 1, stdout: JSON.stringify({ number: 17, state: 'closed' }), stderr: 'HTTP 502' };
+    return origExec(file, args, opts);
+  };
+  await runStatus({ cwd: f.source, json: true }, f.ports);
+  assert.equal(f.record().state, 'waiting', 'non-zero issue read does not cancel run');
+  assert.equal(f.record().issue?.state, undefined);
+
+  // 2. Concurrent transition to parked or releasing while gh api is in flight keeps parking custody intact
+  for (const phase of ['parked', 'releasing']) {
+    const reset = f.record();
+    delete reset.parking;
+    save(reset);
+
+    let sawInFlightRead = false;
+    f.ports.execFile = async (file, args, opts) => {
+      if (file === 'gh' && args[0] === 'api' && args[1] === 'repos/example/project/issues/17') {
+        sawInFlightRead = true;
+        const concurrent = f.record();
+        concurrent.parking = { phase, blocker: { kind: 'idle_question' }, parkedAt: f.clock };
+        save(concurrent);
+        return {
+          code: 0,
+          stdout: JSON.stringify({
+            number: 17,
+            state: 'closed',
+            closed_at: new Date(f.clock).toISOString(),
+            html_url: 'https://github.com/example/project/issues/17',
+            title: 'Use value two',
+            body: 'Value must be two.'
+          })
+        };
+      }
+      return origExec(file, args, opts);
+    };
+
+    // Check both list status and detail status
+    await runStatus({ cwd: f.source, json: true }, f.ports);
+    assert.ok(sawInFlightRead, `${phase}: issue read ran in flight`);
+    assert.equal(f.record().state, 'waiting', `${phase}: run was not cancelled`);
+    assert.equal(f.record().parking?.phase, phase, `${phase}: parking custody preserved`);
+    assert.equal(f.record().cancelled, null, `${phase}: no cancelled record written`);
+
+    // Open-state refresh also skips parked/releasing records in flight
+    const reopened = f.record();
+    delete reopened.parking;
+    reopened.issue = { ...reopened.issue, state: 'reopening' };
+    save(reopened);
+    f.ports.execFile = async (file, args, opts) => {
+      if (file === 'gh' && args[0] === 'api' && args[1] === 'repos/example/project/issues/17') {
+        const concurrent = f.record();
+        concurrent.parking = { phase, blocker: { kind: 'idle_question' }, parkedAt: f.clock };
+        save(concurrent);
+        return { code: 0, stdout: JSON.stringify({ number: 17, state: 'open', html_url: 'https://github.com/example/project/issues/17', title: 'Use value two', body: 'Value must be two.' }) };
+      }
+      return origExec(file, args, opts);
+    };
+    await runStatus({ ref: '17', cwd: f.source, json: true }, f.ports);
+    assert.equal(f.record().parking?.phase, phase);
+    assert.equal(f.record().issue?.state, 'reopening', `${phase}: open-state maintenance skipped parked/releasing record`);
+  }
+});

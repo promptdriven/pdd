@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 64692968efaaf3364e1f4471504e79da78ed9a6dbc6338ade263fa3f5da39d85).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: caeafb7e9945112fc4b95743b88aef888684ed1a16f98148f5f167f709fed50a).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -4540,6 +4540,7 @@ async function refreshWaitingIssue(run, p) {
   const reply = await (p.readIssueStatus
     ? p.readIssueStatus({ cwd, repo: run.repo, number: run.number }, p.commandPorts)
     : p.execFile('gh', ['api', `repos/${run.repo}/issues/${run.number}`], { cwd }));
+  if (reply?.code !== undefined && reply.code !== 0) return;
   const raw = typeof reply?.stdout === 'string' ? JSON.parse(reply.stdout || '{}') : reply;
   if (!raw || Object.hasOwn(raw, 'pull_request') || raw.number !== run.number) return;
   const state = typeof raw.state === 'string' ? raw.state.toLowerCase() : null;
@@ -4548,12 +4549,17 @@ async function refreshWaitingIssue(run, p) {
     ? Math.min(Date.parse(raw.closed_at), p.now()) : p.now();
   if (state === 'closed') {
     commitMaintenance(run, p, latest => {
-      if (ended(latest) || latest.state !== 'waiting' || (latest.pr ?? []).some(pr => pr.state === 'open')) return;
+      if (ended(latest) || latest.state !== 'waiting' || ['parked', 'releasing'].includes(latest.parking?.phase)
+          || (latest.pr ?? []).some(pr => pr.state === 'open')) return;
       latest.issue = { ...latest.issue, state: 'closed' };
-      cancelClosedWaiting(latest, closedAt, 'issue-closed');
+      const reason = closedWaitingReason(latest);
+      if (reason) cancelClosedWaiting(latest, closedAt, reason);
     });
   } else if (run.issue?.state && run.issue.state !== 'open') {
-    commitMaintenance(run, p, latest => { latest.issue = { ...latest.issue, state: 'open' }; });
+    commitMaintenance(run, p, latest => {
+      if (ended(latest) || ['parked', 'releasing'].includes(latest.parking?.phase)) return;
+      latest.issue = { ...latest.issue, state: 'open' };
+    });
   }
 }
 
