@@ -1,4 +1,4 @@
-// Generated from prompts/cli/screen-compare.prompt.md (sha256: d4cdafddcfb7d66f9307696be17a67ad581b20b90f104b8f1656711c55bd9a77).
+// Generated from prompts/cli/screen-compare.prompt.md (sha256: 155a482d841462a315cf838c4937395e7a27e9417475a819c56722e982a5bba6).
 import { spawn } from 'node:child_process';
 import { accessSync, constants, lstatSync, mkdtempSync, readFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
@@ -36,7 +36,11 @@ async function browserRun({ source, url, chromePath, env }) {
     return reply.result?.value;
   };
   try {
-    child = spawn(executable(chromePath, env), ['--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--no-first-run', '--no-default-browser-check', '--disable-background-networking', '--disable-extensions', '--remote-debugging-pipe', `--user-data-dir=${profile}`, 'about:blank'], { env, detached: process.platform !== 'win32', stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'] });
+    child = spawn(executable(chromePath, env), ['--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--no-first-run', '--no-default-browser-check', '--disable-background-networking', '--disable-extensions', '--use-mock-keychain', '--password-store=basic', '--remote-debugging-pipe', `--user-data-dir=${profile}`, 'about:blank'], { env, detached: process.platform !== 'win32', stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'] });
+    const onPipeError = error => { closed = true; stop(failure(`Chrome command pipe failed: ${error.message}`, 5)); };
+    child.stdio[3].on('error', onPipeError);
+    child.stdio[4].on('error', onPipeError);
+    child.stderr.on('error', () => {});
     child.on('error', error => { closed = true; stop(failure(`Chrome could not start: ${error.message}`, 5)); });
     child.on('exit', () => { closed = true; stop(failure('Chrome closed before the comparison finished.', 5)); });
     child.stderr.resume();
