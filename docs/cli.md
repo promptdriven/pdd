@@ -724,8 +724,12 @@ The tools are `try_open`, `try_state`, `try_run`, `try_check` and `try_save_case
 
 | Command | What it does |
 |---|---|
-| `pdd workflow done STEP [--summary TEXT] [--skipped REASON]` | Record a finished step. `check`, `try` and `verify` also record pdd's own latest `pdd test`, `pdd lint` and `pdd workflow prove` results, or warn that pdd has none; the summary stays an agent note. `--skipped REASON` records that the step was skipped, and why. Print the next instruction: the next step, the gate, or "pdd opens the PR now". After the last step of an area with a PR gate, push the branch and open the PR when the applicable gate is satisfied. In a normal feature or bug run, a valid Story approval and a verified full saved check pass open PR 1 without another question; strict and other routes can require a separate approval gate. The bug skill still allows only 2 defect repair rounds after review. |
+| `pdd workflow done STEP [--summary TEXT] [--skipped REASON] [--no-publish]` | Record a finished step. `check`, `try` and `verify` also record pdd's own latest `pdd test`, `pdd lint` and `pdd workflow prove` results, or warn that pdd has none; the summary stays an agent note. `--skipped REASON` records that the step was skipped, and why. Print the next instruction: the next step, the gate, or "pdd opens the PR now". After the last step of an area with a PR gate, push the branch and open the PR when the applicable gate is satisfied. In a normal feature or bug run, a valid Story approval and a verified full saved check pass open PR 1 without another question; strict and other routes can require a separate approval gate. The bug skill still allows only 2 defect repair rounds after review. |
 | `pdd workflow ask QUESTION` | Show the person that the chat waits for an answer in the middle of a step. `status` then says "waiting for you" with the question |
+
+In a code PR area, `pdd workflow done review --no-publish` saves the review without committing, pushing or creating/updating a PR. The option also works in the build area of a small-change run and refuses at Story or prompt approval gates. When all steps finish, the response and status give the publication command; further done calls keep this local hold.
+
+`pdd workflow publish ISSUE` publishes the finished area's current local result using the ordinary ownership, scope, replay and Git safety checks. It preserves step summaries, evidence and timestamps, so a failed publication can be retried without recording review again. Commit the local result before asking a checker to inspect its exact head. Without the option or a saved hold, done publishes automatically as usual.
 
 The agent runs these from the run's worktree. pdd finds the run from that folder. You do not run them yourself.
 

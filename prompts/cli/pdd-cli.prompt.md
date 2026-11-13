@@ -18,6 +18,10 @@ Forward workflow run/open model, herdrAgentName and codexThreads unchanged from
 their text options to the runner. Pass the invocation environment on open as on
 run, so fake and native callers select account folders by the same route.
 
+## Separate workflow publication (#2947)
+
+For `workflow-done`, pass `noPublish: true` to `stepDone` only when `--no-publish` is present. For `workflow-publish`, call the workflow runner's `publishRun` with `ref` from the issue operand plus the usual cwd and packageRoot. Use the same injected runner, ports, message handling and finite-error behavior as other workflow runner routes. Dispatch never records approval or reruns steps itself; local help does not import the runner.
+
 ## Detailed version dispatch
 
 The catalog owns version syntax. Ordinary version retains every existing stdout,
@@ -313,8 +317,8 @@ reply.
 ```json
 {
   "kind": "partial",
-  "status": "draft",
-  "prose_sha256": "242598f2f8487b6907fc00ca980dd266358bdaa401530b4bf0e428b3624f54d9",
+  "status": "approved",
+  "prose_sha256": "dd2392d88ce590335b37d4d156ac09cab1a0d2861f8521b78abb28f7d897985d",
   "entries": [
     {
       "operation": "runPdd",
