@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 065da6514405ea690f54d6795f55f0492de882a3249a200b48c778b0eb243cbb).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: e8e8ec30889a7bd4910599a59e9ca44bc8a5dd821e14c63e305e98ba3df899d1).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
@@ -1410,6 +1410,7 @@ function capturedCriteria(rows, capture) {
       refuseSource(row,error);broken=true;continue;
     }
     row.steps=doc.steps;
+    row.app_maps=declaredMaps(doc);
     row.criteria_total=doc.criteria.length;
     row.criterion_texts=Object.fromEntries(doc.criteria.filter(isObject).map(item=>[item.id,item.text]));
     const exemptions=Array.isArray(doc.check_exemptions)?doc.check_exemptions:[];
@@ -1485,7 +1486,16 @@ function recoverSourceContext(context) {
     return true;
   } catch (error) { if (!(error instanceof PreflightError)) throw error; return false; }
 }
-const lintOutcome = (answer, row, capture) => outcomeFor(answer ?? {}, { kind: 'lint', test: row.test, steps: row.steps ?? [], sourceFiles: sourceFiles(capture) });
+const declaredMaps = doc => Array.isArray(doc?.app_maps) ? [...new Set(doc.app_maps.filter(path => typeof path === 'string' && path))] : [];
+function rowAppMaps(row, capture, appMap = null) {
+  let maps = declaredMaps({ app_maps: row?.app_maps });
+  if (!maps.length && Array.isArray(capture?.sources)) {
+    const source = capture.sources.find(item => item.path === row?.test);
+    if (source) try { maps = declaredMaps(JSON.parse(Buffer.from(source.bytes).toString('utf8'))); } catch { /* Handled by scenarioShapeRefusal. */ }
+  }
+  return [...new Set([...maps, ...(typeof appMap === 'string' && appMap ? [appMap] : [])])];
+}
+const lintOutcome = (answer, row, capture, appMap = null) => outcomeFor(answer ?? {}, { kind: 'lint', test: row.test, steps: row.steps ?? [], appMaps: rowAppMaps(row, capture, appMap), sourceFiles: sourceFiles(capture) });
 
 // A generic Runtime refusal is not evidence that any particular local finding caused it.
 function interfaceDiagnostic(view, raw, root, secrets = []) {
@@ -1510,9 +1520,9 @@ function interfaceDiagnostic(view, raw, root, secrets = []) {
 }
 
 // The lint outcome of each row, with server text cleaned and pdd's local hint for a prompt it reached.
-function judgeLint(answer, rows, root, visible, secrets = [], capture) {
+function judgeLint(answer, rows, root, visible, secrets = [], capture, appMap = null) {
   return new Map(rows.map(row => {
-    const outcome = lintOutcome(answer, row, capture);
+    const outcome = lintOutcome(answer, row, capture, appMap);
     const view = projectAnswer(answer, { test: row.test, steps: row.steps ?? [], secrets, sourceFiles: sourceFiles(capture) });
     row.compatibility = view.compatibility; row.client_advice = view.client_advice;
     if (outcome.draft) row.draft = true;
@@ -1530,21 +1540,28 @@ function judgeLint(answer, rows, root, visible, secrets = [], capture) {
 
 // The one lint gate for paid work (new checks, saved-lint continuation, retry, restart replacement, Try):
 // a selected test is sent only when its own lint outcome is passed. Others keep their outcome.
-const lintAdmits = (answer, row, capture) => lintOutcome(answer, row, capture).state === 'passed';
+const lintAdmits = (answer, row, capture, appMap = null) => lintOutcome(answer, row, capture, appMap).state === 'passed';
 
 // Refusals that per-test passes scoped out stay visible as warnings; a refusal that already
 // refused one of these rows is shown there instead. Returns the new lines.
 function lintDiagnostics(context, answer, rows) {
+  const warnings = context.warnings ??= [];
   const result = answer?.result, list = value => Array.isArray(value) ? value.filter(isObject) : [];
   const refusals = list(result?.refusals).length ? list(result.refusals) : list([result?.report?.refusal]);
+  const problems = list(result?.problems ?? result?.report?.problems).filter(item => item.severity !== 'warning');
   const key = item => `${item.code}|${item.file ?? item.path ?? ''}`;
-  const shown = new Set(rows.filter(row => row.state === 'refused').flatMap(row => (row.refusals ?? []).map(item => `${item.code}|${item.path ?? ''}`)));
+  const refusedItems = rows.filter(row => row.state === 'refused').flatMap(row => row.refusals ?? []);
+  const shown = new Set(refusedItems.map(item => `${item.code}|${item.path ?? ''}`));
+  const shownPaths = new Set(refusedItems.map(item => item.path).filter(Boolean));
   const added = [];
-  for (const item of [...refusals, ...list(result?.report?.program?.refused_prompts)]) {
-    if (shown.has(key(cleanItem(item, context.secrets)))) continue;
+  for (const item of [...problems, ...refusals, ...list(result?.report?.program?.refused_prompts)]) {
+    const cleaned = cleanItem(item, context.secrets);
+    if (shown.has(key(cleaned)) || cleaned.code === 'lint-refused' && cleaned.path && shownPaths.has(cleaned.path)) continue;
+    shown.add(key(cleaned));
+    if (cleaned.code !== 'lint-refused' && cleaned.path) shownPaths.add(cleaned.path);
     const view = interfaceDiagnostic(refusalView(item, context.secrets), item, context.root, context.secrets);
     const text = `Lint diagnostic: ${[view.code, view.path, view.section, view.reason ?? view.message, view.hint].filter(Boolean).join('  ')}`;
-    if (!context.warnings.includes(text)) { context.warnings.push(text); added.push(text); }
+    if (!warnings.includes(text)) { warnings.push(text); added.push(text); }
   }
   return added;
 }
@@ -1735,7 +1752,7 @@ function batchRecord(context) {
     rows: rows.map(row => ({ test: row.test, native_only: row.native_only ?? [], story: row.story, story_path: row.story_path, title: row.title, request_ids: row.request_ids, recovery_state: row.state, ...resultOutcome(row),
       ...(!row.request_ids.length && Object.hasOwn(row, 'calls') ? { calls: row.calls } : {}),
       ...(row.unsent ? { unsent: true } : {}), ...(row.not_checked?.length ? {not_checked:row.not_checked} : {}), progress: row.progress, ahead: row.ahead, phase: row.phase, post_verdict: row.post_verdict ?? null, binding_plan: row.binding_plan, compatibility: row.compatibility, client_advice: row.client_advice, report_url: row.report_url, refusals: row.refusals, note: row.note ?? null, why: row.why ?? null, next_step: row.next_step ?? null,
-      sent_at: row.sent_at ?? null, ended_at: row.ended_at ?? null, max_calls: row.max_calls, warnings: row.warnings, steps: row.steps, criteria_total: row.criteria_total,
+      sent_at: row.sent_at ?? null, ended_at: row.ended_at ?? null, max_calls: row.max_calls, warnings: row.warnings, steps: row.steps, ...(row.app_maps?.length ? { app_maps: row.app_maps } : {}), criteria_total: row.criteria_total,
       reservation: row.reservation ?? null, restart_used: !!row.restart_used,
       busy: !!row.busy, can_retry: !!row.can_retry, eligible: !!row.eligible, retry_at: row.retry_at ?? null,
       ...(row.known_calls !== undefined ? { known_calls: row.known_calls } : {}), ...(row.unknown_calls !== undefined ? { unknown_calls: row.unknown_calls } : {}),
@@ -2409,8 +2426,9 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   // A test that the test name rule cannot use is refused here and never sent; the other tests are linted.
   const rows = selected.map(test => ({ test: test.path, story: test.story, title: test.title, state: 'ready', phase: 'lint',
     refusals: [], request_ids: [], warnings: [], steps: Array.isArray(test.doc?.steps) ? test.doc.steps.filter(isObject) : [],
+    app_maps: declaredMaps(test.doc),
     criterion_texts: Object.fromEntries((Array.isArray(test.doc?.criteria) ? test.doc.criteria : []).filter(isObject).map(item => [item.id, item.text])),
-    ...(discoveryRefusal(test) ? { state: 'refused', phase: 'local', unsent:true, refusals: [discoveryRefusal(test)], steps: [] } : {}) }));
+    ...(discoveryRefusal(test) ? { state: 'refused', phase: 'local', unsent:true, refusals: [discoveryRefusal(test)], steps: [], app_maps: [] } : {}) }));
   context.rows = rows;
   const nativeRows = new Map(preflight({root,found,selected}).rows.filter(row => row.native_only?.length).map(row => [row.test,row]));
   for (const row of rows) {
@@ -3837,6 +3855,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
   for (const row of rows) {
     const test = selected.find(item => item.path === row.test);
     row.story_path = test?.storyPath;
+    row.app_maps = declaredMaps(test?.doc);
     // A test that discovery cannot use (a conflict, unreadable, invalid or over the upload limit) is refused and never uploaded.
     if (test?.error) row.unsent = true;
     row.criterion_texts = Object.fromEntries([...(Array.isArray(test?.doc?.criteria) ? test.doc.criteria : []).filter(isObject).map(item => [item.id, item.text]),
@@ -3929,9 +3948,9 @@ async function runBatch(context, cwd, words, options, setRelease) {
       // sending. The same rows replace the provisional cache projection in output.
       const originals = new Map(localRows(checked.rows).map(row => [row.test, row]));
       for (const row of rerun) {
-        const original = originals.get(row.test), storyPath = row.story_path, texts = row.criterion_texts;
+        const original = originals.get(row.test), storyPath = row.story_path, texts = row.criterion_texts, appMaps = row.app_maps;
         for (const key of Object.keys(row)) delete row[key];
-        Object.assign(row, original, { story_path: storyPath, criterion_texts: texts, cache_reason: 'runs again: interpreter build or model changed' });
+        Object.assign(row, original, { story_path: storyPath, criterion_texts: texts, ...(appMaps?.length ? { app_maps: appMaps } : {}), cache_reason: 'runs again: interpreter build or model changed' });
         if (options['--max-calls'] !== undefined) row.max_calls = Number(options['--max-calls']);
       }
       await beginTestAttempts(cache, rerun, capture, options, origin, true);
@@ -4196,7 +4215,7 @@ function tryPromptProblem(root, found, test, record, capture) {
 // pdd simulate. Returns the exit code.
 export async function runTry({ words = [], options = {}, cwd = process.cwd() } = {}, givenPorts = {}) {
   options = { ...options };
-  const ports = withDefaults(givenPorts), context = { ports, interrupted: false, doorMode: false };
+  const ports = withDefaults(givenPorts), context = { ports, interrupted: false, doorMode: false, warnings: [] };
   let release = () => {};
   try {
     const productMode=options['--product']===true;
@@ -4228,6 +4247,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     const localSelected = productSetup ? [productTest(found, normalized, options['--journey'], root)]
       : normalized.length ? [oneTest(found, normalized, root)] : [...found.tests].sort((a, b) => a.path.localeCompare(b.path));
     const checked = preflight({ root, found, selected: localSelected }), rows = localRows(checked.rows);
+    for (const item of rows) item.app_maps = declaredMaps(localSelected.find(candidate => candidate.path === item.test)?.doc);
     const refused = rows.find(row => row.state === 'refused');
     if (refused) {
       if (options['--cli'] || options['--shell'] || options['--serve'] !== undefined) throw new Stop(125, refused.refusals?.map(r => r.message || r.code).join('; ') || 'The Story input was refused.');
@@ -4469,8 +4489,8 @@ async function checkLint(context, rows) {
     throw new Stop(125, refusal?.reason || refusal?.message || refusal?.code || 'The interpreter refused lint.');
   }
   // A Try uses AI calls, so it passes the same lint gate as a check.
-  if (rows.every(row => lintAdmits(lint.answer, row, context.capture))) { for (const text of lintDiagnostics(context, lint.answer, rows)) line(context.ports.stderr, text); return; }
-  const verdicts = judgeLint(lint.answer, rows, context.root, context.visible, context.secrets, context.capture);
+  if (rows.every(row => lintAdmits(lint.answer, row, context.capture, context.appMap))) { for (const text of lintDiagnostics(context, lint.answer, rows)) line(context.ports.stderr, text); return; }
+  const verdicts = judgeLint(lint.answer, rows, context.root, context.visible, context.secrets, context.capture, context.appMap);
   for (const [row, outcome] of verdicts) if (outcome.state === 'refused') Object.assign(row, { state: 'refused', phase: 'lint', refusals: outcome.refusals });
   if ([...verdicts.values()].some(outcome => outcome.state === 'unknown')) throw new Stop(3, 'The lint result is unknown, so pdd made no Try link. Run pdd simulate again later.');
   // A lint that ended without a pass for the test is final: nothing changes by waiting.
