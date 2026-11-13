@@ -117,7 +117,19 @@ test('sim runs like simulate and test --lint like lint, in local modes', async t
   const setup = harbor(t);
   const options = () => ({ cwd: setup.repo, env: { HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: 'http://127.0.0.1:9', PATH: '/usr/bin:/bin' } });
   const lint = await sameRun([[LINT, '--local', '--json'], [TEST, '--lint', '--local', '--json']], options);
-  assert.equal(lint[0].code, 0, lint[0].stderr); JSON.parse(lint[0].stdout); assert.deepEqual(lint[0], lint[1]);
+  const summaries = lint.map(result => {
+    assert.equal(result.code, 0, result.stderr); assert.equal(result.stderr, '');
+    const summary = JSON.parse(result.stdout);
+    assert.match(summary.batch, /^\d{8}-\d{6}-[a-z0-9]{4}$/);
+    const folder = join(setup.state, 'batches', summary.batch);
+    assert.equal(JSON.parse(readFileSync(join(folder, 'batch.json'), 'utf8')).batch, summary.batch);
+    assert.deepEqual(JSON.parse(readFileSync(join(folder, 'summary.json'), 'utf8')), summary);
+    return summary;
+  });
+  // Each completed local lint saves an independent batch; only its identity differs between aliases.
+  assert.notEqual(summaries[0].batch, summaries[1].batch);
+  const stable = summaries.map(({ batch, ...fields }) => fields);
+  assert.deepEqual(stable[0], stable[1]);
   const story = await sameRun([[SIMULATE, 'no-such-story'], ['sim', 'no-such-story']], options);
   assert.equal(story[0].code, 2); assert.deepEqual(story[0], story[1]);
 });

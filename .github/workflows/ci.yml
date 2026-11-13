@@ -14,11 +14,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  public:
-    # main and alpha require this check name; the offline Node suite owns that gate.
-    name: tests
+  test-shards:
+    name: test-shard (${{ matrix.shard }}/8)
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -38,7 +41,8 @@ jobs:
       - name: Run offline tests
         run: |
           set +e
-          npm test 2>&1 | tee "$RUNNER_TEMP/tests.tap"
+          # Keep Chrome startup from competing with other test-file processes.
+          node --import ./test/helpers/test-home.mjs --test --test-concurrency=1 --test-shard=${{ matrix.shard }}/8 test/*.test.mjs 2>&1 | tee "$RUNNER_TEMP/tests.tap"
           result=${PIPESTATUS[0]}
           exit "$result"
       - name: Summarize test counts
@@ -62,6 +66,18 @@ jobs:
       - run: node bin/pdd.mjs --help
       - run: npm pack --ignore-scripts --dry-run
 
+  public:
+    # main and alpha require this check name; every offline test shard must pass.
+    name: tests
+    if: ${{ always() }}
+    needs: test-shards
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every test shard to pass
+        env:
+          SHARD_RESULT: ${{ needs.test-shards.result }}
+        run: test "$SHARD_RESULT" = success
+
   install-smoke:
     name: install-smoke
     runs-on: ubuntu-latest
@@ -75,7 +91,7 @@ jobs:
         run: |
           smoke_dir=$(mktemp -d)
           checks=0
-          trap 'echo "### install-smoke" >> "$GITHUB_STEP_SUMMARY"; echo "$checks/3 command smoke checks passed (help, local lint, empty-state read). No runtime scenario tests ran." >> "$GITHUB_STEP_SUMMARY"; rm -rf "$smoke_dir"' EXIT
+          trap 'echo "### install-smoke" >> "$GITHUB_STEP_SUMMARY"; echo "$checks/4 command smoke checks passed (help, local lint, saved-local read, empty-state read). No runtime scenario tests ran." >> "$GITHUB_STEP_SUMMARY"; rm -rf "$smoke_dir"' EXIT
           export HOME="$smoke_dir/home" PDD_STATE_DIR="$smoke_dir/state"
           export PDD_RUNTIME_URL=http://127.0.0.1:1
           mkdir -p "$HOME" "$PDD_STATE_DIR"
@@ -91,8 +107,22 @@ jobs:
           git add .
           "$installed" lint --local place-order | tee "$smoke_dir/lint.log"
           checks=$((checks + 1))
+          "$installed" test --read --json > "$smoke_dir/saved-read.json"
+          node --input-type=module - "$smoke_dir/saved-read.json" <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          const result = JSON.parse(readFileSync(process.argv[2], 'utf8'));
+          assert.equal(result.exit_code, 0);
+          assert.equal(result.state, 'partial');
+          assert.equal(result.lint_state, 'partial');
+          assert.equal(result.local_only, true);
+          assert.equal(result.reason?.code, 'local-only');
+          assert.deepEqual(result.rows, []);
+          NODE
+          checks=$((checks + 1))
+          mkdir -p "$smoke_dir/empty-state"
           read_result=0
-          "$installed" test --read > "$smoke_dir/read.log" 2>&1 || read_result=$?
+          PDD_STATE_DIR="$smoke_dir/empty-state" "$installed" test --read > "$smoke_dir/read.log" 2>&1 || read_result=$?
           cat "$smoke_dir/read.log"
           test "$read_result" -eq 2
           checks=$((checks + 1))

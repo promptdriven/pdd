@@ -1,8 +1,8 @@
 # Local authoring-kit CLI
 
-Own `src/pdd-cli.mjs`; export `renderHelp(prefix, packageRoot)` (packageRoot defaults to this package's root) and `runPdd(argv, dependencies)`. Help, version, completion and recipe discovery operate using public local files only. pdd prints no guide text: help names the installed guide files and gives a short summary ([Learn PDD](command-catalog.prompt.md#learn-pdd)); the agent loads the pdd-prompting skill. Parse with `parseArgv` from the required argument-parser contract before reading skills or workflows; unsupported input gets a finite stderr diagnostic/exit2 and no private fallback.
+Own `src/pdd-cli.mjs`; export `renderHelp(prefix, packageRoot)` (packageRoot defaults to this package's root) and `runPdd(argv, dependencies)`. Help, ordinary version, completion and recipe discovery operate using public local files only. pdd prints no guide text: help names the installed guide files and gives a short summary ([Learn PDD](command-catalog.prompt.md#learn-pdd)); the agent loads the pdd-prompting skill. Parse with `parseArgv` from the required argument-parser contract before reading skills or workflows; unsupported input gets a finite stderr diagnostic/exit2 and no private fallback.
 
-Use the package-root metadata version. For `--version`, print only that version followed by one newline, without the package name or any prefix. Then call [skills install](skills-install.prompt.md) `findSkills` with the same arguments as setup, and for each agent result whose `stale` is `'older'` or whose `staleSkills` includes an older skill print the stale line below to stderr (0.1.8 tester: no command showed that the installed skills were older than pdd). A failure of that check prints nothing and never changes the exit code. `workflow list` reads the bundled workflow areas only; it does not start work. Preserve stdout for successful values and stderr for errors. `setup` runs the existing setup actions only after the admission below permits them. Within that action, first it calls [skills install](skills-install.prompt.md) `setupSkills({packageRoot, cwd, home, claudeConfigDir})` with home from the HOME environment value (else `os.homedir()`) and `CLAUDE_CONFIG_DIR`. For each agent result it prints `Updated N PDD skills in ROOT: NAMES` when it updated copies, then, when found, `PDD skills found in FOLDER`, or when `stale` is set the stale line `PDD skills in FOLDER are older than pdd VERSION. DETAILS. For copies installed by pdd in user folders, run: pdd setup. For other copies, run: npx skills add promptdriven/pdd -g -a codex -a claude-code -y` (`differ from the skills of pdd VERSION` for `'differs'`; VERSION from the package metadata; leave out ` -g` when FOLDER is `<cwd>/.agents/skills` or `<cwd>/.claude/skills`). `DETAILS` names every affected skill and its installed version from `staleSkills` (for example `pdd-autopilot is 0.1.20`; use `unknown` for a missing version, and identify same-version differences). Omit ` DETAILS.` when there are no details. Mention that `pdd setup` updates copies installed by pdd in user folders; copies without its marker, symlinks and project copies use the shown `npx skills add` command. Do not imply that setup replaces those copies. Print this `npx skills add` command, never `npx skills update`: update changes only skills that `npx skills add` recorded, and says "No global skills tracked" for copies that pdd setup or a person made (0.1.8 tester). `add` replaces any copy, and later `update` works too, else `Installed N PDD skills to ROOT: NAMES` when it copied any. NAMES are the skill folder names, joined by `, `, in the order of `PDD_SKILL_NAMES`. Use `skill` instead of `skills` when N is 1. An agent error prints `pdd setup: the PDD skills could not be installed in ROOT (REASON).` to stderr. Then it calls [project setup](project-setup.prompt.md) `setupProject({cwd, packageRoot})` and prints `Wrote the PDD block in FILE.` or `FILE already has this PDD block. No change.`; its error prints `pdd setup: ` and the message to stderr. Then, only when cwd is in a Git repository, it calls project setup `ignorePddFolder({root})` with the Git top-level folder and prints `Added .pdd/ to FILE. pdd test keeps its local cache there.` when it wrote the file, `FILE has a "!" line for .pdd/, so pdd setup did not change the file.` when it returned `negated`, and nothing when `.pdd/` was already ignored; its error prints `pdd setup: ` and the message to stderr. Outside Git it prints nothing for this part. Setup reads the Git context (`gitContext(cwd)`) once, for this part and the Autopilot part. Each part runs even when the other fails. Exit 1 if any part failed, else 0. No other command installs skills. pdd starts Autopilot through its launcher and workflow chats through the workflow runner; `product start` may delegate to a normal feature run. Keep imports and injection defaults self-contained, with no private transport/backend dependency.
+Use the package-root metadata version. For the catalog's ordinary version route, print only that version followed by one newline, without the package name or any prefix. Then call [skills install](skills-install.prompt.md) `findSkills` with the same arguments as setup, and for each agent result whose `stale` is `'older'` or whose `staleSkills` includes an older skill print the stale line below to stderr (0.1.8 tester: no command showed that the installed skills were older than pdd). A failure of that check prints nothing and never changes the exit code. `workflow list` reads the bundled workflow areas only; it does not start work. Preserve stdout for successful values and stderr for errors. `setup` runs the existing setup actions only after the admission below permits them. Within that action, first it calls [skills install](skills-install.prompt.md) `setupSkills({packageRoot, cwd, home, claudeConfigDir})` with home from the HOME environment value (else `os.homedir()`) and `CLAUDE_CONFIG_DIR`. For each agent result it prints `Updated N PDD skills in ROOT: NAMES` when it updated copies, then, when found, `PDD skills found in FOLDER`, or when `stale` is set the stale line `PDD skills in FOLDER are older than pdd VERSION. DETAILS. For copies installed by pdd in user folders, run: pdd setup. For other copies, run: npx skills add promptdriven/pdd -g -a codex -a claude-code -y` (`differ from the skills of pdd VERSION` for `'differs'`; VERSION from the package metadata; leave out ` -g` when FOLDER is `<cwd>/.agents/skills` or `<cwd>/.claude/skills`). `DETAILS` names every affected skill and its installed version from `staleSkills` (for example `pdd-autopilot is 0.1.20`; use `unknown` for a missing version, and identify same-version differences). Omit ` DETAILS.` when there are no details. Mention that `pdd setup` updates copies installed by pdd in user folders; copies without its marker, symlinks and project copies use the shown `npx skills add` command. Do not imply that setup replaces those copies. Print this `npx skills add` command, never `npx skills update`: update changes only skills that `npx skills add` recorded, and says "No global skills tracked" for copies that pdd setup or a person made (0.1.8 tester). `add` replaces any copy, and later `update` works too, else `Installed N PDD skills to ROOT: NAMES` when it copied any. NAMES are the skill folder names, joined by `, `, in the order of `PDD_SKILL_NAMES`. Use `skill` instead of `skills` when N is 1. An agent error prints `pdd setup: the PDD skills could not be installed in ROOT (REASON).` to stderr. Then it calls [project setup](project-setup.prompt.md) `setupProject({cwd, packageRoot})` and prints `Wrote the PDD block in FILE.` or `FILE already has this PDD block. No change.`; its error prints `pdd setup: ` and the message to stderr. Then, only when cwd is in a Git repository, it calls project setup `ignorePddFolder({root})` with the Git top-level folder and prints `Added .pdd/ to FILE. pdd test keeps its local cache there.` when it wrote the file, `FILE has a "!" line for .pdd/, so pdd setup did not change the file.` when it returned `negated`, and nothing when `.pdd/` was already ignored; its error prints `pdd setup: ` and the message to stderr. Outside Git it prints nothing for this part. Setup reads the Git context (`gitContext(cwd)`) once, for this part and the Autopilot part. Each part runs even when the other fails. Exit 1 if any part failed, else 0. No other command installs skills. pdd starts Autopilot through its launcher and workflow chats through the workflow runner; `product start` may delegate to a normal feature run. Keep imports and injection defaults self-contained, with no private transport/backend dependency.
 
 For setup, version reporting and workflow startup, use [PATH diagnostics](path-diagnostic.prompt.md). Print the returned lines to stderr. Setup uses the full report; `--version` uses its conflict-only mode while stdout remains exactly the package version and newline; the `workflow-run` plan uses its compact shadowing warning before dispatch. Other commands, help and invalid syntax do not discover or probe PATH. A diagnostic failure must not prevent the requested command. No installer script is part of this package; setup is the supported install check.
 
@@ -17,6 +17,30 @@ Dispatch `workflow-cost` to workflow runner `runCosts({ref,cwd,input}, ports)`; 
 Forward workflow run/open model, herdrAgentName and codexThreads unchanged from
 their text options to the runner. Pass the invocation environment on open as on
 run, so fake and native callers select account folders by the same route.
+
+## Detailed version dispatch
+
+The catalog owns version syntax. Ordinary version retains every existing stdout,
+PATH and stale-skill behavior, with no token or network access. For admitted
+`version-detailed`, read the same package-root version first, then call
+[detailed version](interpreter-version.prompt.md) operation `runDetailedVersion`
+exactly once with `{version,env}`. Pass the invocation env unchanged; the helper owns its address-port projection
+and passes the full native environment to its credential process.
+Write the returned stdout/stderr unchanged and return its exit_code. This route
+runs no PATH diagnostic, skill discovery, setup or workflow. If package metadata
+cannot be read, retain the ordinary unreadable-version stderr/exit1 and do not
+call the helper. A helper import/call failure prints the helper's unknown result
+for the already read local version and exits 0, with no raw exception text.
+
+The existing dependencies object may additionally inject `readPackageVersion`,
+`findSkills`, `interpreterVersion` (module) and `interpreterVersionPorts`.
+`readPackageVersion({packageRoot})` defaults to the existing local package.json
+read and returns `{ok,version}`, with false/empty version on unreadable, malformed
+or missing version metadata. The CLI still rejects a blank/nonstring version.
+Runtime `package.readVersion` binds that callback. Runtime `skills.findSkills`
+binds the existing read-only discovery callback, wrapping its array as `{results}`
+with the same result rows as setupSkills. It is called only on ordinary version.
+All existing interface declarations and transport defaults remain in force.
 
 ## Setup safe defaults
 
@@ -36,7 +60,7 @@ keeps Autopilot's existing warning and successful exit.
 
 Read the entire [Prompting guide](../../docs/prompting-guide.md) before authoring prompts or Stories. Follow [public alpha boundary](public-boundary.prompt.md) for native authoring/generation scope and shared local command policy. Runtime parsing/forwarding receives no guide input; applicable concrete validation and route facts remain with the required parser/catalog contracts.
 
-For admitted setup, after the existing skills, project and MCP actions in the setup callback, call [Autopilot settings](autopilot.prompt.md) `runAutopilot({action: "setup", interactive, inRepo}, ports)` once; derive terminal context from the setup terminal policy below and repository context from Git, and supply real terminal-question, config and GitHub ports or their injected substitutes. Include its failure in the setup exit status while retaining other actions; print a setup message only when nonempty, so outside-repository setup adds no Autopilot output. Setup never writes to GitHub. When the root `pdd.json` had no `autopilot` key before that call and has a valid mode after it (exit 0), print one more stdout line: `Setup saved the Autopilot mode only in this checkout. Autopilot workers read pdd.json on GitHub; to update it there, run pdd autopilot MODE.` Dispatch catalog dispositions `autopilot.off`, `autopilot.observe`, `autopilot.auto`, `autopilot-trust` and `autopilot-untrust` to the same function, with action mode and the named mode, or trust/untrust and parsed names respectively. For settings writes, supply the launcher’s native `withAutopilotModeLock({cwd,env}, action, ports)` as the settings write boundary; take it only for the final fresh read and save, after any setup questions. Preserve the settings result and non-repository behavior. Read-only setup takes no boundary. Print its message once to stdout on exit 0, stderr otherwise, and return its exit code. Autopilot workers start from the default branch on GitHub and read `pdd.json` there. So after a mode, trust or untrust action with exit 0, call [Autopilot settings on GitHub](autopilot-github.prompt.md) `publishAutopilotSettings({cwd, action, mode, names, retry}, autopilotGithubPorts)` with the parsed names and with retry the same command (`pdd autopilot MODE`, or `pdd autopilot trust|untrust NAMES`), and print its nonempty message to stdout. Tests may inject `dependencies.autopilotGithub` (the module) and `autopilotGithubPorts`. When that call throws, print `pdd.json on GitHub was not updated. To retry, run RETRY.` This line never changes the exit code, and the local write stays. Permit injected module and ports; a thrown error yields one finite diagnostic and exit 1. No Autopilot settings route starts a workflow or interpreter.
+For admitted setup, after the existing skills, project and MCP actions in the setup callback, call [Autopilot settings](autopilot.prompt.md) `runAutopilot({action: "setup", interactive, inRepo}, ports)` once; derive terminal context from the setup terminal policy below and repository context from Git, and supply real terminal-question, config and GitHub ports or their injected substitutes. Include its failure in the setup exit status while retaining other actions; print a setup message only when nonempty, so outside-repository setup adds no Autopilot output. Setup never writes to GitHub. When the root `pdd.json` had no `autopilot` key before that call and has a valid mode after it (exit 0), print one more stdout line: `Setup saved pdd.json, the PDD block and .gitignore only in this checkout. Commit and push them so that GitHub, other machines and Autopilot jobs have them, or run pdd autopilot MODE to put the Autopilot mode on GitHub.` Dispatch catalog dispositions `autopilot.off`, `autopilot.observe`, `autopilot.auto`, `autopilot-trust` and `autopilot-untrust` to the same function, with action mode and the named mode, or trust/untrust and parsed names respectively. For settings writes, supply the launcher’s native `withAutopilotModeLock({cwd,env}, action, ports)` as the settings write boundary; take it only for the final fresh read and save, after any setup questions. Preserve the settings result and non-repository behavior. Read-only setup takes no boundary. Print its message once to stdout on exit 0, stderr otherwise, and return its exit code. Autopilot workers start from the default branch on GitHub and read `pdd.json` there. So after a mode, trust or untrust action with exit 0, call [Autopilot settings on GitHub](autopilot-github.prompt.md) `publishAutopilotSettings({cwd, action, mode, names, retry}, autopilotGithubPorts)` with the parsed names and with retry the same command (`pdd autopilot MODE`, or `pdd autopilot trust|untrust NAMES`), and print its nonempty message to stdout. Tests may inject `dependencies.autopilotGithub` (the module) and `autopilotGithubPorts`. When that call throws, print `pdd.json on GitHub was not updated. To retry, run RETRY.` This line never changes the exit code, and the local write stays. Permit injected module and ports; a thrown error yields one finite diagnostic and exit 1. No Autopilot settings route starts a workflow or interpreter.
 
 Dispatch `issue-dependency-graph` to injected `issueGraph` (default `src/issue-dependency-graph.mjs`) module function `runIssueGraph({cwd,repository,issue,open}, issueGraphPorts)`, mapping repository and issue from the corresponding options and open to a Boolean. Print its message to stdout on exit 0, stderr otherwise, and return its exitCode. On a throw, print a finite diagnostic and return 1.
 
@@ -46,16 +70,10 @@ Dispatch `dependencies-prepare` and `dependencies-complete` to an injected
 complete's --input to be exactly `-` and prepare's optional --issue to be a positive
 issue number. Pass prepare `{command:"prepare",cwd,issue}`; pass complete
 `{command:"complete",cwd,stdin}` with the exact UTF-8 stdin payload. The intake
-owner validates JSON. After complete returns exitCode 0, call launcher module function `requestAutopilotCompletion` once with `{cwd,env}` using the injected `autopilotLauncher`
-(default src/autopilot-launcher.mjs) and `autopilotLauncherPorts`. This includes
-pending results that may already have saved durable work. Do not trigger on
-prepare, rejected or thrown intake; an exception may leave effects uncertain.
+owner validates JSON. No command wakes an Autopilot coordinator: Autopilot has no coordinator chat.
 Print the intake message once to stdout on exitCode 0, stderr otherwise, and
-return its exitCode unchanged. Treat a launcher import or call throw, or a malformed launcher result, as unknown.
-On busy or unknown, write a separate finite warning to stderr that reconciliation
-was not confirmed; preserve the original intake message, stream and exit code.
-Do not change the JSON, retry automatically or claim a wake. A finite throw returns 1 with one safe
-line and no automatic retry. No route silently chooses or calls an AI model.
+return its exitCode unchanged. A finite intake import or call throw returns 1 with one
+safe line and no automatic retry. No route silently chooses or calls an AI model.
 Preserve every existing evidence-associate route and --test text-list behavior.
 
 Dispatch `workflow-suite` through the workflow runner's `runSuite` with cwd,
@@ -68,8 +86,6 @@ The required [queue contract](test-suite-queue.prompt.md) owns execution.
 Dispatch `workflow-park` to the native workflow runner `parkAutomaticRun` with reason, step (from `--step`), runtime (true only for `--interpreter`) and cwd, using existing workflow ports and result handling.
 
 Dispatch `workflow-yield` to workflow runner module function `yieldAutomaticCapacity` with the supplied run reference and cwd, using the existing workflow runner ports and result handling.
-
-The `autopilot start --resume-custody FILE` option passes the file path unchanged to the launcher; the launcher owns recovery checks and effects.
 
 Dispatch `project-files` to `runProjectFiles({cwd,json}, {stdout,stderr})`
 from the files view module, with json from --json. Return its exit code. This
@@ -98,8 +114,6 @@ Dispatch `pdd interface draft [PROMPT...] [--all] [--json]` locally to the inter
 Pass workflow-park --route unchanged as route to parkAutomaticRun only when supplied. Omit the route key when absent, preserving the input shape of existing park callers.
 
 
-Dispatch `autopilot-audit` to the launcher with command audit and both operands
-in issues. Use the existing reply and stream rules; no remote settings warning.
 
 Dispatch autopilot-doctor through the launcher with command doctor, the normal cwd/packageRoot/env and injected launcher ports. Preserve multi-line output and exit status. Do not run the remote settings warning for doctor. Dispatch catalog disposition `autopilot.release` to the launcher with command `release`, the single issue operand in `issues`, and the normal cwd, env and launcher ports. Preserve its reply and exit status; the launcher and workflow runner own locking, custody checks, durable cleanup retries and label removal.
 
@@ -112,6 +126,10 @@ reply, print once to stdout on zero and stderr otherwise. An exception prints a
 finite safe failure and exits 1. Do not load the launcher or remote settings.
 
 ## Dependencies
+
+- [Compiled Story checker](compiled-test.prompt.md): required native generation and verification context for code-target dispatch.
+
+- [Detailed version](interpreter-version.prompt.md): required generation, runtime and verification context for the single detailed-version call and result.
 
 - [Setup terminal policy](setup-interaction.prompt.md): required generation and verification context for every optional setup question.
 
@@ -162,9 +180,14 @@ finite safe failure and exits 1. Do not load the launcher or remote settings.
 
 Native integration uses the public APIs linked in the route sections below. Runtime bindings cover only the declared operations and supplied replies; unrelated command effects remain native.
 
+Dispatch `autopilot-audit` to the launcher with command audit and both operands
+in issues. Use the existing reply and stream rules; no remote settings warning.
+Dispatch `autopilot-check-base` to the launcher with command check-base and both
+operands in issues. Use the same reply and stream rules; no remote settings warning.
+
 ## Autopilot dispatch
 
-For catalog dispositions `autopilot-start`, `autopilot-stop`, `autopilot-status`, `autopilot-add` and `autopilot-release`, dynamically import [Autopilot launcher](autopilot-launcher.prompt.md). Call its module function `runAutopilotLauncher({command, issues, runs, checks, resumeCustody, all, cwd, packageRoot, env}, ports)`: command is the disposition suffix, issues are the operands unchanged, runs is the --runs text when present, checks is the --checks text when present, resumeCustody is the --resume-custody path when present, and all is true only for `autopilot status --all`. Tests may inject `dependencies.autopilotLauncher` and `autopilotLauncherPorts`. Print its {exitCode,message} once, stdout on zero and stderr otherwise, and return that code. After `autopilot-start` or `autopilot-status` without `--all` with exit 0, call [Autopilot settings on GitHub](autopilot-github.prompt.md) `checkAutopilotSettings({cwd}, autopilotGithubPorts)` and print its nonempty warning as one stderr line; a throw prints nothing. This check never writes, never changes the exit code, and start never writes `pdd.json` to GitHub. Invalid replies or exceptions produce one finite diagnostic and exit 1 without retry. Help and parsing do not load the launcher or check sign-ins. Existing admission applies only to setup and workflow-run; the launcher owns its own startup checks.
+For catalog dispositions `autopilot-start`, `autopilot-stop`, `autopilot-status`, `autopilot-add`, `autopilot-release` and `autopilot-check-base`, dynamically import [Autopilot launcher](autopilot-launcher.prompt.md). Call its module function `runAutopilotLauncher({command, issues, runs, checks, share, all, cwd, packageRoot, env}, ports)`: command is the disposition suffix, issues are the operands unchanged, runs is the --runs text when present, checks is the --checks text when present, share is the --share text when present (#3231), and all is true only for `autopilot status --all`. Tests may inject `dependencies.autopilotLauncher` and `autopilotLauncherPorts`. Print its {exitCode,message} once, stdout on zero and stderr otherwise, and return that code. After `autopilot-start` or `autopilot-status` without `--all` with exit 0, call [Autopilot settings on GitHub](autopilot-github.prompt.md) `checkAutopilotSettings({cwd}, autopilotGithubPorts)` and print its nonempty warning as one stderr line; a throw prints nothing. This check never writes, never changes the exit code, and start never writes `pdd.json` to GitHub. Invalid replies or exceptions produce one finite diagnostic and exit 1 without retry. Help and parsing do not load the launcher or check sign-ins. Existing admission applies only to setup and workflow-run; the launcher owns its own startup checks.
 
 For catalog dispositions `autopilot-alert` and `autopilot-alerts`, dynamically import [Autopilot alerts](autopilot-alerts.prompt.md) and call its module function `runAutopilotAlerts({action, cwd, env, text, issue, kind, update}, ports)`. The action is `alert` for `autopilot-alert`, else the `set`, `test` or `clear` operand. For `alert`, `--input` must be `-`; otherwise return 2 with one line before importing the module. Read all stdin as UTF-8 `text` for `alert` and `set` only, and not for `set` with `--token-command`; when `set` reads a terminal, first print one hint line to stderr. Pass `--issue`, `--kind` and the `--update` flag unchanged, pass `--destination` as `destination` only when given, and pass `--discord-channel` as `discordChannel` and `--token-command` as `tokenCommand` only when given. Either of these two options with `test` or `clear` returns 2 with one line. Tests may inject `dependencies.autopilotAlerts` and `autopilotAlertsPorts`. Print the reply once, stdout on zero and stderr otherwise. An invalid reply or exception prints one fixed line without the error text, so a webhook URL can never reach the output, and returns 1.
 
@@ -272,19 +295,988 @@ cwd and env/stdout/stderr; return its exit code. Do not do runtime authenticatio
 slot admission, skill discovery or PATH probing here. A thrown error prints one
 finite local cause and returns 5. Catalog owns all syntax.
 
+The `autopilotLauncher` Runtime resource below models only this CLI dispatch and
+its `{exitCode,message}` reply. It does not model or test the launcher's native
+timer, process, state, or network behavior; that behavior remains in the child
+prompt's native dependency context.
+
+Runtime `autopilotLauncher.runAutopilotLauncher` binds the injected
+`dependencies.autopilotLauncher.runAutopilotLauncher` callback or the existing
+default module. It forwards the constructed dispatch input, including Runtime's
+closed environment projection, unchanged and returns its `{exitCode,message}`
+reply.
+
 <details>
 <summary>Runtime interface</summary>
 
 ```json
-{"kind":"partial","status":"approved","prose_sha256":"cbea4ed8db7cd437414bffe7abee43407550df62da963e0f0d74de7e79df6dd2","entries":[{"operation":"runPdd","input_schema":{"type":"object","properties":{"argv":{"type":"array","items":{"type":"string"}},"cwd":{"type":"string"},"env":{"type":"object","properties":{"HOME":{"type":"string"},"PATH":{"type":"string"},"CODEX_HOME":{"type":"string"},"CLAUDE_CONFIG_DIR":{"type":"string"}},"required":[],"additionalProperties":false},"packageRoot":{"type":"string"}},"required":["argv"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exit_code":{"type":"integer"},"stdout":{"type":"string"},"stderr":{"type":"string"}},"required":["exit_code","stdout","stderr"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[{"name":"dispatch","kind":"port","access":"write","operations":[{"name":"prove","access":"write","arguments_schema":{"type":"object","properties":{"ref":{"type":"string"},"test":{"type":"string"},"expect":{"type":"string"},"cwd":{"type":"string"},"timeoutMinutes":{"type":"integer","minimum":1,"maximum":120}},"required":["ref","test","expect","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false}},{"name":"requestUptake","access":"write","arguments_schema":{"type":"object","properties":{"requestId":{"type":"string"},"summary":{"type":"string"},"cwd":{"type":"string"}},"required":["requestId","summary","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false}},{"name":"startRun","access":"write","arguments_schema":{"type":"object","properties":{"input":{"type":"object","properties":{"name":{"type":"string"},"issue":{"type":"string"},"agent":{"type":"string","enum":["codex","claude"]},"cwd":{"type":"string"},"packageRoot":{"type":"string"},"base":{"type":"string"},"adoptCorpus":{"type":"string"},"draft":{"type":"boolean"},"origin":{"type":"string","enum":["manual","autopilot","unknown"]},"decisionId":{"type":"string"},"outcome":{"type":"string","enum":["code","prompt-only"]}},"required":["name","issue","agent","cwd","packageRoot"],"additionalProperties":false},"env":{"type":"object","properties":{"HOME":{"type":"string"},"PATH":{"type":"string"},"CODEX_HOME":{"type":"string"},"CLAUDE_CONFIG_DIR":{"type":"string"}},"required":[],"additionalProperties":false}},"required":["input","env"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false}}]},{"name":"agents","kind":"port","access":"write","operations":[{"name":"checkWorkflowAgents","access":"write","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"env":{"type":"object","properties":{"HOME":{"type":"string"},"PATH":{"type":"string"},"CODEX_HOME":{"type":"string"},"CLAUDE_CONFIG_DIR":{"type":"string"}},"required":[],"additionalProperties":false},"requested":{"type":"string","enum":["codex","claude"]}},"required":["cwd","env"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"agent":{"oneOf":[{"type":"string","enum":["codex","claude","gemini","agy"]},{"type":"null"}]},"message":{"type":"string"},"hint":{"type":"string"}},"required":["ok","agent","message"],"additionalProperties":false}}]},{"name":"diagnostics","kind":"port","access":"write","operations":[{"name":"pathDiagnostic","access":"write","arguments_schema":{"type":"object","properties":{"packageRoot":{"type":"string"},"cwd":{"type":"string"},"env":{"type":"object","properties":{"HOME":{"type":"string"},"PATH":{"type":"string"},"CODEX_HOME":{"type":"string"},"CLAUDE_CONFIG_DIR":{"type":"string"}},"required":[],"additionalProperties":false},"mode":{"type":"string","enum":["setup","version","workflow"]}},"required":["packageRoot","cwd","env","mode"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"lines":{"type":"array","items":{"type":"string"}}},"required":["lines"],"additionalProperties":false}}]},{"name":"setup","kind":"port","access":"write","operations":[{"name":"setupSkills","access":"write","arguments_schema":{"type":"object","properties":{"packageRoot":{"type":"string"},"cwd":{"type":"string"},"home":{"type":"string"},"claudeConfigDir":{"type":"string"}},"required":["packageRoot","cwd","home"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"results":{"type":"array","items":{"type":"object","properties":{"agent":{"type":"string"},"root":{"type":"string"},"found":{"oneOf":[{"type":"string"},{"type":"null"}]},"stale":{"oneOf":[{"type":"string"},{"type":"null"}]},"staleSkills":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"version":{"oneOf":[{"type":"string"},{"type":"null"}]},"state":{"type":"string","enum":["older","differs"]}},"required":["name","version","state"],"additionalProperties":false}},"installed":{"type":"array","items":{"type":"string"}},"updated":{"type":"array","items":{"type":"string"}}},"required":["agent","root","found","stale","installed","updated"],"additionalProperties":false}}},"required":["results"],"additionalProperties":false}},{"name":"setupProject","access":"write","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"packageRoot":{"type":"string"}},"required":["cwd","packageRoot"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"file":{"type":"string"},"changed":{"type":"boolean"}},"required":["file","changed"],"additionalProperties":false}},{"name":"setupAgentMcp","access":"write","arguments_schema":{"type":"object","properties":{"env":{"type":"object","properties":{"HOME":{"type":"string"},"PATH":{"type":"string"},"CODEX_HOME":{"type":"string"},"CLAUDE_CONFIG_DIR":{"type":"string"}},"required":[],"additionalProperties":false},"packageRoot":{"type":"string"}},"required":["env","packageRoot"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"}},"required":["exitCode"],"additionalProperties":false}}]}],"limits":{"max_steps":10,"max_model_calls":12},"conventions":[]}
+{
+  "kind": "partial",
+  "status": "approved",
+  "prose_sha256": "9da72104900bcbb045382bfa98daed3c7f492f468171b1a12b586cdbfbdaca6e",
+  "entries": [
+    {
+      "operation": "runPdd",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "argv": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "env": {
+            "type": "object",
+            "properties": {
+              "HOME": {
+                "type": "string"
+              },
+              "PATH": {
+                "type": "string"
+              },
+              "CODEX_HOME": {
+                "type": "string"
+              },
+              "CLAUDE_CONFIG_DIR": {
+                "type": "string"
+              },
+              "PDD_RUNTIME_URL": {
+                "type": "string"
+              }
+            },
+            "required": [],
+            "additionalProperties": false
+          },
+          "packageRoot": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "argv"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "exit_code": {
+            "type": "integer"
+          },
+          "stdout": {
+            "type": "string"
+          },
+          "stderr": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "exit_code",
+          "stdout",
+          "stderr"
+        ],
+        "additionalProperties": false
+      },
+      "errors": []
+    }
+  ],
+  "calls": [
+    {
+      "operation": "runDetailedVersion",
+      "target": "prompts/cli/interpreter-version.prompt.md",
+      "target_operation": "runDetailedVersion",
+      "max_calls": 1
+    }
+  ],
+  "resources": [
+    {
+      "name": "dispatch",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "prove",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "ref": {
+                "type": "string"
+              },
+              "test": {
+                "type": "string"
+              },
+              "expect": {
+                "type": "string"
+              },
+              "cwd": {
+                "type": "string"
+              },
+              "timeoutMinutes": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 120
+              }
+            },
+            "required": [
+              "ref",
+              "test",
+              "expect",
+              "cwd"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "exitCode": {
+                "type": "integer"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "exitCode",
+              "message"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "requestUptake",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "requestId": {
+                "type": "string"
+              },
+              "summary": {
+                "type": "string"
+              },
+              "cwd": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "requestId",
+              "summary",
+              "cwd"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "exitCode": {
+                "type": "integer"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "exitCode",
+              "message"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "startRun",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "input": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "issue": {
+                    "type": "string"
+                  },
+                  "agent": {
+                    "type": "string",
+                    "enum": [
+                      "codex",
+                      "claude"
+                    ]
+                  },
+                  "cwd": {
+                    "type": "string"
+                  },
+                  "packageRoot": {
+                    "type": "string"
+                  },
+                  "base": {
+                    "type": "string"
+                  },
+                  "adoptCorpus": {
+                    "type": "string"
+                  },
+                  "draft": {
+                    "type": "boolean"
+                  },
+                  "origin": {
+                    "type": "string",
+                    "enum": [
+                      "manual",
+                      "autopilot",
+                      "unknown"
+                    ]
+                  },
+                  "decisionId": {
+                    "type": "string"
+                  },
+                  "outcome": {
+                    "type": "string",
+                    "enum": [
+                      "code",
+                      "prompt-only"
+                    ]
+                  }
+                },
+                "required": [
+                  "name",
+                  "issue",
+                  "agent",
+                  "cwd",
+                  "packageRoot"
+                ],
+                "additionalProperties": false
+              },
+              "env": {
+                "type": "object",
+                "properties": {
+                  "HOME": {
+                    "type": "string"
+                  },
+                  "PATH": {
+                    "type": "string"
+                  },
+                  "CODEX_HOME": {
+                    "type": "string"
+                  },
+                  "CLAUDE_CONFIG_DIR": {
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "input",
+              "env"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "exitCode": {
+                "type": "integer"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "exitCode",
+              "message"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "agents",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "checkWorkflowAgents",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "cwd": {
+                "type": "string"
+              },
+              "env": {
+                "type": "object",
+                "properties": {
+                  "HOME": {
+                    "type": "string"
+                  },
+                  "PATH": {
+                    "type": "string"
+                  },
+                  "CODEX_HOME": {
+                    "type": "string"
+                  },
+                  "CLAUDE_CONFIG_DIR": {
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              },
+              "requested": {
+                "type": "string",
+                "enum": [
+                  "codex",
+                  "claude"
+                ]
+              }
+            },
+            "required": [
+              "cwd",
+              "env"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "ok": {
+                "type": "boolean"
+              },
+              "agent": {
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "codex",
+                      "claude",
+                      "gemini",
+                      "agy"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "message": {
+                "type": "string"
+              },
+              "hint": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "ok",
+              "agent",
+              "message"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "diagnostics",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "pathDiagnostic",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "packageRoot": {
+                "type": "string"
+              },
+              "cwd": {
+                "type": "string"
+              },
+              "env": {
+                "type": "object",
+                "properties": {
+                  "HOME": {
+                    "type": "string"
+                  },
+                  "PATH": {
+                    "type": "string"
+                  },
+                  "CODEX_HOME": {
+                    "type": "string"
+                  },
+                  "CLAUDE_CONFIG_DIR": {
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "setup",
+                  "version",
+                  "workflow"
+                ]
+              }
+            },
+            "required": [
+              "packageRoot",
+              "cwd",
+              "env",
+              "mode"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "lines": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "lines"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "setup",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "setupSkills",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "packageRoot": {
+                "type": "string"
+              },
+              "cwd": {
+                "type": "string"
+              },
+              "home": {
+                "type": "string"
+              },
+              "claudeConfigDir": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "packageRoot",
+              "cwd",
+              "home"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "results": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "agent": {
+                      "type": "string"
+                    },
+                    "root": {
+                      "type": "string"
+                    },
+                    "found": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "stale": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "staleSkills": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "version": {
+                            "oneOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "state": {
+                            "type": "string",
+                            "enum": [
+                              "older",
+                              "differs"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "version",
+                          "state"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "installed": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "updated": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "agent",
+                    "root",
+                    "found",
+                    "stale",
+                    "installed",
+                    "updated"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "results"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "setupProject",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "cwd": {
+                "type": "string"
+              },
+              "packageRoot": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "cwd",
+              "packageRoot"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "file": {
+                "type": "string"
+              },
+              "changed": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "file",
+              "changed"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "setupAgentMcp",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "env": {
+                "type": "object",
+                "properties": {
+                  "HOME": {
+                    "type": "string"
+                  },
+                  "PATH": {
+                    "type": "string"
+                  },
+                  "CODEX_HOME": {
+                    "type": "string"
+                  },
+                  "CLAUDE_CONFIG_DIR": {
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              },
+              "packageRoot": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "env",
+              "packageRoot"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "exitCode": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "exitCode"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "package",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "readVersion",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "packageRoot": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "packageRoot"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "ok": {
+                "type": "boolean"
+              },
+              "version": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "ok",
+              "version"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "skills",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "findSkills",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "packageRoot": {
+                "type": "string"
+              },
+              "cwd": {
+                "type": "string"
+              },
+              "home": {
+                "type": "string"
+              },
+              "claudeConfigDir": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "packageRoot",
+              "cwd",
+              "home"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "results": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "agent": {
+                      "type": "string"
+                    },
+                    "root": {
+                      "type": "string"
+                    },
+                    "found": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "stale": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "staleSkills": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "version": {
+                            "oneOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "state": {
+                            "type": "string",
+                            "enum": [
+                              "older",
+                              "differs"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "version",
+                          "state"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "installed": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "updated": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "agent",
+                    "root",
+                    "found",
+                    "stale",
+                    "installed",
+                    "updated"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "results"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "autopilotLauncher",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "runAutopilotLauncher",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
+                "enum": [
+                  "doctor",
+                  "audit",
+                  "check-base",
+                  "start",
+                  "stop",
+                  "status",
+                  "add",
+                  "release",
+                  "report",
+                  "intake"
+                ]
+              },
+              "issues": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "runs": {
+                "type": "string"
+              },
+              "checks": {
+                "type": "string"
+              },
+              "engine": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "share": {
+                "type": "string"
+              },
+              "mode": {
+                "type": "string"
+              },
+              "report": {
+                "type": "string"
+              },
+              "decisions": {
+                "type": "string"
+              },
+              "intake": {
+                "type": "string"
+              },
+              "all": {
+                "type": "boolean"
+              },
+              "json": {
+                "type": "boolean"
+              },
+              "cwd": {
+                "type": "string"
+              },
+              "packageRoot": {
+                "type": "string"
+              },
+              "env": {
+                "type": "object",
+                "properties": {
+                  "HOME": {
+                    "type": "string"
+                  },
+                  "PATH": {
+                    "type": "string"
+                  },
+                  "CODEX_HOME": {
+                    "type": "string"
+                  },
+                  "CLAUDE_CONFIG_DIR": {
+                    "type": "string"
+                  },
+                  "PDD_RUNTIME_URL": {
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "command",
+              "issues",
+              "cwd",
+              "packageRoot",
+              "env"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "exitCode": {
+                "type": "integer"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "exitCode",
+              "message"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  ],
+  "limits": {
+    "max_steps": 10,
+    "max_model_calls": 12
+  },
+  "conventions": []
+}
 ```
 
 </details>
 
 Dispatch each metrics route to [metrics command](metrics-command.prompt.md) with the selected arguments, current cwd, stdout and stderr; return its exit code without an interpreter call. Forward optional origin, decisionId and outcome metadata alongside existing base, adoptCorpus and draft fields to startRun; these observations grant no workflow authority.
 
-Dispatch `autopilot-check-base` to the Autopilot launcher with command check-base and both operands in issues, using the same reply validation and stream rules as its other commands. Do not run the remote settings warning for this command.
-
-Dispatch `autopilot-report` to the Autopilot launcher with command report and its operands in issues, with the same reply validation and stream rules and no remote settings warning. Dispatch `autopilot-intake` the same way with command intake and `--json` as `json`. For `autopilot-start`, also pass `--engine` as `engine` and `--label` as `label`, `--mode` as `mode`, `--report` as `report` and `--intake` as `intake` when given.
+Dispatch `autopilot-report` to the Autopilot launcher with command report and its operands in issues, with the same reply validation and stream rules and no remote settings warning. Dispatch `autopilot-intake` the same way with command intake and `--json` as `json`. For `autopilot-start`, also pass `--engine` as `engine` and `--label` as `label`, `--mode` as `mode`, `--report` as `report`, `--decisions` as `decisions` and `--intake` as `intake` when given.
 
 For interface-draft dispatch, pass parsed --contract as contract and the --extend/--refresh flags as extend/refresh to runInterfaceDraft alongside cwd, words, all and json. Forward stdout/stderr; drafting remains local.
+
+Route `pdd test --target code` to the local compiled Story checker without contacting the interpreter. Reject other test options except `--json` for this route.

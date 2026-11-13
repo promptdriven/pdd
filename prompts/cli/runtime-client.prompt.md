@@ -363,11 +363,11 @@ Export `checkRuntimeHealth({env}, ports)` for the [Autopilot launcher](autopilot
 | HTTP 401 or 403, or no gh token (then nothing is sent) | `access`; `fix` says to run `gh auth status` and sign in again with `gh auth login`, or to ask the PDD team for interpreter access |
 | an invalid `PDD_RUNTIME_URL` origin (nothing is sent), a 3xx redirect (not followed), a 200 or 404 that is not a JSON object such as an HTML page or an empty body, or any other status | `access`; `fix` says to check `PDD_RUNTIME_URL` |
 
-`detail` is a short text such as `HTTP 503`, `not reached`, `no answer`, `maintenance`, `no gh sign-in` or `HTTP 401: The interpreter did not accept the gh login`; neither `detail` nor `fix` ever holds the token.
+`detail` is a short text such as `HTTP 503`, `not reached`, `no answer`, `maintenance`, `no gh sign-in` or `HTTP 401: The interpreter did not accept the gh login`; neither `detail` nor `fix` ever holds the token. For a future `maintenance.until` the result also has `until` (that time as an ISO string) and `reason` (the maintenance reason as clean text, or null), so a caller such as the [Autopilot core](autopilot-core.prompt.md) can wait for the end and name it (#3241).
 
 ## `pdd test`
 
-Modes: `--fill-hash` accepts only optional `--compact`, no STORY and makes no network call. `--files [STORY...] [--app-map PATH]` prints the exact selected upload manifest, each file size and total bytes, with no network or sign-in. For linked entries, display `authored/path -> canonical/target` with the target byte size using the additive target metadata owned by [source-reading policy](runtime-preflight.prompt.md#files); preserve ordinary file lines. Normalize STORY paths as for a check. Use the same selection as Check, lint and Try: the selected tests and their dependency closure, optional includes and the chosen app map, as owned by [source capture](runtime-preflight.prompt.md#source-capture). Check, lint and the default file preview do not infer an app map; explicit scenario `app_maps` remain part of the preflight owner's selected source. `--app-map` is accepted on Check only with `--files`, to preview the map used by a Try (including a default Try map named explicitly). Keep original test paths for Try seeds and saved cases. `--lint [STORY...] [--json] [--timeout MIN]` runs local SVG layout advice, then the server's lint, `POST /v1/lint` (0 AI calls), on the captured files, sets `complete: true` in its lint request, and sends no checks. Every lint that can authorize a check or Try requests `complete: true`, so admission has per-test evidence. Before batch creation, holding any row for lint, capture or sign-in, apply only the selected entry/called prompts’ `/limits` admission problems from [runtime preflight](runtime-preflight.prompt.md), keeping its reason code, prompt path, field and fix hint. Use `readPrompt` and `promptSchemaRefusals` from that owner, retaining only `/limits` problems at this existing local gate; other schema checks keep their server route. Inspect the reached interfaces independently of P1–P10 refusal precedence, so an unrelated bad Story/schema/hash does not hide a rejected limit. If any limits are refused, return exit 4 with no authentication lookup or upload; report affected rows as refused and other selected rows as not run, with no batch. Deduplicate problems by code, prompt path and pointer in text and JSON, while retaining every selected row and its own refusal state even when rows reach the same prompt. Text gives the reason/fix, one line per selected test in the server lint format (`refused: <codes>` or `not run`), and says no files were sent; JSON retains the lint response keys with lint_state refused, problems, rows and zero calls. Apart from this limits gate and the SVG advisory, locally it runs only discovery and the privacy and capture checks (secret names, links, size and file limits); all other local-copy engine problems remain server-lint owned. A selected test with a [discovery refusal](runtime-preflight.prompt.md#test-name-rule) (`discoveryRefusal`: a conflict, a file pdd cannot read or parse, a file over the upload limit, or a `story_path` that names another Story) is refused locally with that sentence and is neither sent nor named in the lint request; the other selected tests are linted. A local discovery refusal keeps its state, phase and reason while remote lint waits or cannot run. Every later capture, including a UUID receipt cache refresh, uses the saved set of sent tests. The same holds for Check and `--files`: a test whose discovery gave an `error` is never uploaded (Check keeps this in the saved batch row as `unsent`, so a read, retry or restart recaptures the same files), and `--files` prints `Warning: not sent: <sentence>` for it. When every selected test is refused this way, pdd sends nothing: `Lint refused every selected test before sending. 0 AI calls. No files were sent.`, exit 4. It prints every problem the server reports, all at once (each `refused_prompts` entry: code, path, section, message; and each reached prompt that is not approved or a current draft, with the plain hints), one line per selected test (`passes lint` or `refused: <codes>`), and `Lint: N of M tests pass. 0 AI calls. No checks were sent.`. Exit 0 only when lint finished and passed for every selected test, 4 on lint refusals, 5 for not run, not invited or update required, and 3 while queued/running or unknown. A pending explicit lint retains its batch and prints its GET-only read command; sends no checks or Try. `--json` gives `{batch, repo, exit_code, lint_state, summary_line, problems, rows, warnings}`. Normal `pdd test` keeps its local preflight for now. `--read [BATCH|CALL_ID] [--json] [--timeout MIN]` reads saved batch results (and may dispatch original held checks under saved-lint continuation below) or an owner-scoped call by UUID. Hidden `--request UUID` reads one run with GET only. A wrong mix is exit 2.
+Modes: `--fill-hash [PATH|STORY...]` accepts selection operands and makes no network call; `--compact` keeps its no-operand restriction. `--files [STORY...] [--app-map PATH]` prints the exact selected upload manifest, each file size and total bytes, with no network or sign-in. For linked entries, display `authored/path -> canonical/target` with the target byte size using the additive target metadata owned by [source-reading policy](runtime-preflight.prompt.md#files); preserve ordinary file lines. Normalize STORY paths as for a check. Use the same selection as Check, lint and Try: the selected tests and their dependency closure, optional includes and the chosen app map, as owned by [source capture](runtime-preflight.prompt.md#source-capture). Check, lint and the default file preview do not infer an app map; explicit scenario `app_maps` remain part of the preflight owner's selected source. `--app-map` is accepted on Check only with `--files`, to preview the map used by a Try (including a default Try map named explicitly). Keep original test paths for Try seeds and saved cases. `--lint [STORY...] [--json] [--timeout MIN]` runs local SVG layout advice, then the server's lint, `POST /v1/lint` (0 AI calls), on the captured files, sets `complete: true` in its lint request, and sends no checks. Every lint that can authorize a check or Try requests `complete: true`, so admission has per-test evidence. Before batch creation, holding any row for lint, capture or sign-in, apply only the selected entry/called prompts’ `/limits` admission problems from [runtime preflight](runtime-preflight.prompt.md), keeping its reason code, prompt path, field and fix hint. Use `readPrompt` and `promptSchemaRefusals` from that owner, retaining only `/limits` problems at this existing local gate; other schema checks keep their server route. Inspect the reached interfaces independently of P1–P10 refusal precedence, so an unrelated bad Story/schema/hash does not hide a rejected limit. If any limits are refused, return exit 4 with no authentication lookup or upload; report affected rows as refused and other selected rows as not run, with no batch. Deduplicate problems by code, prompt path and pointer in text and JSON, while retaining every selected row and its own refusal state even when rows reach the same prompt. Text gives the reason/fix, one line per selected test in the server lint format (`refused: <codes>` or `not run`), and says no files were sent; JSON retains the lint response keys with lint_state refused, problems, rows and zero calls. Apart from this limits gate and the SVG advisory, locally it runs only discovery and the privacy and capture checks (secret names, links, size and file limits); all other local-copy engine problems remain server-lint owned. A selected test with a [discovery refusal](runtime-preflight.prompt.md#test-name-rule) (`discoveryRefusal`: a conflict, a file pdd cannot read or parse, a file over the upload limit, or a `story_path` that names another Story) is refused locally with that sentence and is neither sent nor named in the lint request; the other selected tests are linted. A local discovery refusal keeps its state, phase and reason while remote lint waits or cannot run. Every later capture, including a UUID receipt cache refresh, uses the saved set of sent tests. The same holds for Check and `--files`: a test whose discovery gave an `error` is never uploaded (Check keeps this in the saved batch row as `unsent`, so a read, retry or restart recaptures the same files), and `--files` prints `Warning: not sent: <sentence>` for it. When every selected test is refused this way, pdd sends nothing: `Lint refused every selected test before sending. 0 AI calls. No files were sent.`, exit 4. It prints every problem the server reports, all at once (each `refused_prompts` entry: code, path, section, message; and each reached prompt that is not approved or a current draft, with the plain hints), one line per selected test (`passes lint` or `refused: <codes>`), and `Lint: N of M tests pass. 0 AI calls. No checks were sent.`. Exit 0 only when lint finished and passed for every selected test, 4 on lint refusals, 5 for not run, not invited or update required, and 3 while queued/running or unknown. A pending explicit lint retains its batch and prints its GET-only read command; sends no checks or Try. `--json` gives `{batch, repo, exit_code, lint_state, summary_line, problems, rows, warnings}`. Normal `pdd test` keeps its local preflight for now. `--read [BATCH|CALL_ID] [--json] [--timeout MIN]` reads saved batch results (and may dispatch original held checks under saved-lint continuation below) or an owner-scoped call by UUID. Hidden `--request UUID` reads one run with GET only. A wrong mix is exit 2.
 
 ### Cap-aware remote lint (draft)
 
@@ -403,21 +403,34 @@ uses no provider calls.
 
 ### Hash filling
 
-Use the [preflight hash-fill contract](runtime-preflight.prompt.md#prose-hash) for local classification and updates. Forward `--compact` as `compact: true` to `fillHashes`; without it retain the default hash-only call. For execution with `--compact`, require exactly `--fill-hash` and `--compact`, with no other option or STORY word; reject other execution combinations with exit 2 before file writes, runtime state, authentication, network or AI effects, including direct `runCheck` callers. Preserve the CLI's existing [local help policy](pdd-cli.prompt.md#help-contract): accepted help requests show help before this handler runs. The removed `check` name remains rejected under the [parser contract](argument-parser.prompt.md#removed-names). `--lf` and `--cache-clear` are incompatible with `--compact`, like every other execution option. Print to stdout in this group order: warnings as `Warning: <message>`, filled paths as `Filled prose_sha256: <path>`, refusals as `Refused: <message>`, then stale approved paths with the existing stale hint. Preserve each result array's order within its group. Finish with `Hashes: N filled, N current, N refused, N stale.` Warnings do not enter those counts. Return exit 4 if any refusal or stale result exists, otherwise exit 0, including when only warnings were reported and nothing was filled. Do not require tests, sign-in or a runtime request for hash filling. Only with `--compact`, print `Compacted Runtime interface: <path>` for each `compacted` record after the filled paths and before refusals. Print `Interfaces: N compacted.` immediately before the existing final hash summary. Preserve the hash-only output exactly.
+The optional `ports.fillHashes` replaces the imported preflight `fillHashes` at this boundary; its production default is that import. Optional `ports.prepareHashSelection` replaces local selection and closure preparation for scoped filling; its production default performs the preflight selection and capture described below. It receives `{root, cwd, words}` and returns `{files, targets}`: the complete read inventory and deduplicated selected prompt paths. It must reject before returning on a selection or closure failure. The unscoped call continues to use the default `fillHashes({root})` shape. A scoped call supplies `{root, files, targets}`. Existing `ports.captureSource` remains the source-capture replacement used by production selection. `ports.stdout` remains the actual writable stream. These optional ports supply deterministic orchestration tests; native temporary-repository tests must establish actual filesystem/Git effects and unchanged bytes.
+
+Use the [preflight hash-fill contract](runtime-preflight.prompt.md#prose-hash) for local classification and updates. With no operands, inspect all eligible Git-visible prompts, independently of whether any tests exist. With operands, pass the invocation directory and selections to [preflight’s scoped hash inputs](runtime-preflight.prompt.md#scoped-hash-inputs) and use its validated targets for filling. Keep the complete required source inventory available to preflight when bounding dependency reads. Forward `--compact` as `compact: true` to `fillHashes`; without it retain the default hash-only call. For execution with `--compact`, require exactly `--fill-hash` and `--compact`, with no other option or STORY word; reject other execution combinations with exit 2 before file writes, runtime state, authentication, network or AI effects, including direct `runCheck` callers. Preserve the CLI's existing [local help policy](pdd-cli.prompt.md#help-contract): accepted help requests show help before this handler runs. The removed `check` name remains rejected under the [parser contract](argument-parser.prompt.md#removed-names). `--lf` and `--cache-clear` are incompatible with `--compact`, like every other execution option. Print to stdout in this group order: warnings as `Warning: <message>`, filled paths as `Filled prose_sha256: <path>`, refusals as `Refused: <message>`, then stale approved paths with the existing stale hint. Preserve each result array's order within its group. Finish with `Hashes: N filled, N current, N refused, N stale.` Warnings do not enter those counts. Return exit 4 if any refusal or stale result exists, otherwise exit 0, including when only warnings were reported and nothing was filled. Do not require tests for unscoped or explicit prompt-path filling; never require sign-in or a runtime request for hash filling. Only with `--compact`, print `Compacted Runtime interface: <path>` for each `compacted` record after the filled paths and before refusals. Print `Interfaces: N compacted.` immediately before the existing final hash summary. Preserve the hash-only output exactly.
 
 ### Local drawing checks
 
-`--lint --local [STORY...] [--json]` runs only [SVG layout lint](svg-layout.prompt.md), with no runtime, network, token lookup, state-directory access or AI call. With no Story, inspect every Git-visible prompt, including prompts without a Runtime interface or tests. With Story words, use ordinary Story selection and the selected source dependency closure to select prompts; unknown selection is exit 2. Do not run engine P1–P10 or require an approved interface for this advisory. Its warnings never change exit 0. Print every warning and the partial result specified in Named check results; JSON is `{repo, exit_code:0, state, lint_state, reason, rows:[], warnings, summary_line}`. State and reason come from the shared projection. An actual repository/discovery failure is exit 2. `--local` requires `--lint` and mixes only with `--json` and Story words.
+`--lint --local [STORY...] [--json]` runs [SVG layout lint](svg-layout.prompt.md), with no runtime, network, token lookup or AI call. With no Story, inspect every Git-visible prompt, including prompts without a Runtime interface or tests. With Story words, use ordinary Story selection and the selected source dependency closure to select prompts; unknown selection is exit 2. Do not run engine P1–P10 or require an approved interface for this advisory. Its warnings never change exit 0. Print every warning and the partial result; [Named check results](#named-check-results) owns local persistence, the JSON record and saved reads. The existing [interface findings](#missing-and-native-only-interfaces) still refuse default local lint with exit 4; selected local lint stays advisory. An actual repository/discovery failure is exit 2. `--local` requires `--lint` and mixes only with `--json` and Story words.
 
 Ordinary `--lint` runs the same advisory on its selected captured prompts before sign-in/server work; merge its warnings into the existing text/JSON warnings without changing server lint semantics, rows, refusal rules, request shapes or call counts. Warning-only SVG differences do not become server refusals.
 
-`--screen URL --drawing PATH [--json]` is a separate local Check mode with no Story operand, gh sign-in, runtime call, saved batch or AI call. Reject all other options/modes, an orphan `--drawing`, or a missing drawing option with exit 2 before side effects. Call [screen comparison](screen-compare.prompt.md) with `cwd`, URL and drawing path; pass `PDD_CHROME_PATH` from the injected environment when present. Text prints its `Screen vs drawing` Markdown table and summary, JSON prints the returned report plus `exit_code`. Exit 0 when all parts pass, 1 for a comparison failure, 2 for invalid input and 5 for unavailable browser, navigation or execution failure. An error must not print a passing table. Keep stdout valid JSON in JSON mode and diagnostics on stderr. These local modes return before runtime address/state/authentication setup.
+`--screen URL --drawing PATH [--json]` is a separate local Check mode with no Story operand, gh sign-in, runtime call, saved batch or AI call. Reject all other options/modes, an orphan `--drawing`, or a missing drawing option with exit 2 before side effects. Call [screen comparison](screen-compare.prompt.md) with `cwd`, URL and drawing path; pass `PDD_CHROME_PATH` from the injected environment when present. Text prints its `Screen vs drawing` Markdown table and summary, JSON prints the returned report plus `exit_code`. Exit 0 when all parts pass, 1 for a comparison failure, 2 for invalid input and 5 for unavailable browser, navigation or execution failure. An error must not print a passing table. Keep stdout valid JSON in JSON mode and diagnostics on stderr. These local modes return before runtime address/authentication setup; local lint alone saves the evidence specified in [Named check results](#named-check-results).
+
+For the screen comparator's `screen-not-ready` outcome, preserve its
+`state`, `reason`, and actionable `message` and return exit 6. This is a distinct
+local result, not a failed drawing comparison or unavailable browser. Text prints
+`Screen not ready (<state>; <reason>): <message>` without a parts table. JSON
+prints exactly `{drawing, url, outcome:"not-ready", code:"screen-not-ready",
+state, reason, message, exit_code:6}`; `drawing` is the resolved reference path
+and `url` is the requested URL, as for ordinary screen reports. It has no `rows`
+or `passed` field. Keep stdout valid JSON and retain ordinary pass/mismatch
+reports and invalid-input/execution errors. The comparator owns detection,
+waiting, selected app surface and the no-action rule.
 
 For explicit complete lint, print every canonical diagnostic from `result.problems` (or the kept report's problems on older servers), preserving file, section, severity, JSON pointer and plain reason/fix. Merge legacy `program.refused_prompts` without duplicating the same code/file/section. A selected test's confirmed `result.tests` refusal also refuses that row, including Story/criterion mismatches even when prompt admission passed. Unselected tests or diagnostics remain visible without overriding selected rows. Preserve unknown and transport rules; complete lint is zero AI calls, never a check.
 
 For lint-only JSON, `lint_state` summarizes selected outcomes under the Outcome contract below. Keep every returned diagnostic in `problems`, including unselected refusals.
 
-**Saved standalone lint.** For a saved batch with explicit lint-only intent,
+**Saved standalone lint.** The new local-layout record uses [Named check results](#named-check-results). For other saved batches with explicit lint-only intent,
 `--read BATCH` (including latest-batch reads) reports the same selected lint
 outcomes, diagnostics, lint summary and exit policy as explicit complete lint
 above, in text and JSON. This holds whether the original command ended pending
@@ -430,7 +443,7 @@ handling and the existing [saved Check intent and continuation policy](#continue
 including its legacy classification; passing lint alone never establishes Check intent.
 
 Order:
-1. [Preflight](runtime-preflight.prompt.md), scoped capture and sign-in. Nothing is sent yet. If every selected test is refused locally, print the result and exit 4 with no sign-in. The result warnings include the preflight warning about source files that two prompts name. Before Check dispatch, use the check scope plan defined below.
+1. [Preflight](runtime-preflight.prompt.md), scoped capture and sign-in. Nothing is sent yet. If every selected test is refused locally, print the result and exit 4 with no sign-in. The result warnings include the preflight warning about source files that two prompts own, scoped to the selected tests when Story words, `--affected` or `--lf` narrow the run (and repository-wide otherwise). Before Check dispatch, use the check scope plan defined below.
 2. Batch ID `YYYYMMDD-HHMMSS-xxxx` (local time). Allocate one new `crypto.randomUUID()` for lint at batch creation and write `batch.json`. Allocate each test's first check UUID only at its first authorized dispatch after the applicable dispatch gates; pending lint allocates no check UUID. Print to stderr `If pdd stops, read the results with: pdd test --read <batch>` after lint passes and right before the first check POST, and again at the end of an exit 3. A pending lint also has a saved result to read: name its batch when the wait limit ends.
 3. Lint: write `<id>.posted` (exclusive create), then POST `/v1/lint` multipart (`request` = `{requestId, source_sha256, complete: true}`, no `paths`; `source` = the tar). When the last `/v1/capacity` answer of this command lists `"lint-tests"` in its `features` array, the request also carries `tests` (the selected test paths that are sent, sorted; never a test refused locally) and `app_maps` (the sorted, distinct union of maps named by the CLI and `app_maps` declared by the selected tests that are sent, or `[]` when neither names a map), so the interpreter lints exactly the tests that pdd found by the [test name rule](runtime-preflight.prompt.md#test-name-rule). Without that feature (an older interpreter, or no capacity answer) the request stays as it is; such an interpreter refuses fields it does not know, and it finds tests in the upload by itself. Read until terminal within the caller wait defined below; there is no independent 120-second lint cap. Judge selected tests through the Outcome contract below.
 4. Checks: validate an explicit --max-calls as a whole number from1 through1000 before sign-in, capture or network effects, including direct runCheck callers. For each test write `<id>.posted`, then POST `/v1/check` with `{requestId, source_sha256, scenario: <test path>, max_calls}` and the same tar. `max_calls` = `--max-calls` or the preflight default (12 for each step, 18 to 1000). Each remote lint, test and new Simulator setup uses the shared local admission contract below. Hold remaining tests locally only when an explicit local job cap, the per-process upload setting below or confirmed server backpressure requires it; do not reserve a batch slot while its child jobs wait for slots. POST timeout is the earlier 90 s and remaining command budget. Reuse one immutable source Blob per packed tar across all its lint, test, retry and Simulator setup POSTs, preserving exact tar bytes and source hash; multipart request metadata remains distinct for each attempt. Reuse must not copy the source per upload or impose a default job cap.
@@ -555,6 +568,8 @@ When time runs out, show busy/not-run with zero calls and plain advice that no c
 `pdd test --retry BATCH [--json] [--details] [--timeout MIN]` is explicit recovery for that batch only. Check owner login and repository, refresh prior IDs, recapture the original selected source and require the exact saved source SHA before any POST. Retry only confirmed unstarted capacity rows or locally held eligible rows with no POST. Keep all earlier IDs/answers, original per-test caps and original source identity; never re-execute completed, running or unknown submissions. Recover their evidence under the lifecycle below. Reuse confirmed lint for identical source. A changed capture, missing proof, unresolved lint or expired/unverifiable receipt cannot authorize a retry; explain how to start a fresh selected check. Honor the saved absolute Check retry time and capacity-hold bound across recovery invocations. Each recovery invocation gets its own finite caller wait (including refreshing prior IDs), with no admission-attempt ceiling. `--read` remains GET-only except saved-lint continuation and confirmed restart recovery below. No other check-mode options mix with --retry except json/details/timeout, and it takes no Story words.
 
 ## Concurrent saved-batch operations
+
+The new local-layout record uses the read-only route in [Named check results](#named-check-results); the following recovery ownership applies to other saved batches.
 
 One batch has one writer across processes, including separate terminals. A new Check and
 explicit `--lint` own their batch from before the first saved record until the command ends,
@@ -752,7 +767,7 @@ Only a same-ID, correct-command terminal check receipt with state unknown and st
 
 Persist the consumed replacement allowance across reads/retries and capacity attempts. Before allocating the replacement UUID, require the [shared lint gate](#outcome) on the saved lint, saved owner, repository, identical recaptured source and original per-row max_calls, a live caller wait and an exclusive per-row replacement claim. Overlapping readers cannot both send. Print `The interpreter restarted during this check. pdd sends it again (1 of 1).` Keep both IDs, raw receipts and their known/unknown call accounting; do not reset usage or enlarge the row ceiling. Apply ordinary admission to the replacement. A second restarted receipt ends unknown with read/report advice, never a second replacement. UUID call reads and paid Try calls remain GET-only. A deadline-ended eligible replacement stays saved for guarded recovery; approval is never inferred. Source identity validation remains mandatory, but reuse one captured identical archive for a recovery decision instead of packing and hashing it twice per scheduler turn. Repeated visits to the same pending replacement without a new dispatch decision do not recapture source. An actual later recovery invocation or newly authorized replacement still validates against the saved source before sending.
 
-Aggregate usage from every original, replacement and capacity-attempt ID in the row. Keep every raw observation. For one ID, queued and running observations are provisional progress, not separate attempts: use terminal accounting when a terminal observation exists, and use the latest progress accounting only while no terminal exists. A correctly identified same-ID `unknown` receipt is terminal accounting evidence. Preserve every terminal incomplete or conflicting observation; a later complete-looking terminal observation for that ID cannot settle it because this Runtime contract defines no reconciliation signal. Keep `calls` unknown and `accounting_complete:false` when a terminal component is incomplete or conflicting. Then sum known and unknown parts across distinct IDs. A complete replacement cannot erase an incomplete original, change its raw receipt, authorize capacity replay or make the cohort cache-eligible. Only a future explicit Runtime reconciliation contract may settle that component. Local lease release or reclamation does not change provider usage.
+Aggregate usage from every original, replacement and capacity-attempt ID in the row. Keep every raw observation. For one ID, queued and running observations are provisional progress, not separate attempts: use terminal accounting when a terminal observation exists, and use the latest progress accounting only while no terminal exists. A correctly identified same-ID `unknown` receipt is terminal accounting evidence. Preserve every terminal incomplete or conflicting observation; a later complete-looking terminal observation for that ID cannot settle it because this Runtime contract defines no reconciliation signal. Keep `calls` unknown and `accounting_complete:false` when a terminal component is incomplete or conflicting. Then sum known and unknown parts across distinct IDs. Likewise, accumulate `input_tokens`, `cached_input_tokens` and `output_tokens` across `request_ids` only when every attempt has complete call accounting, at least one attempt dispatched, and every dispatched attempt has a valid integer for that token counter (confirmed unstarted zero-work capacity attempts contribute `0` only alongside a dispatched complete attempt; rows whose attempts are all pre-dispatch or incomplete keep `'unknown'` and `cached_input_share:null`). Reused Story-cache rows (`cached:true`) report `0` calls and `0` token counts with `cached_input_share:null`. A complete replacement cannot erase an incomplete original, change its raw receipt, authorize capacity replay or make the cohort cache-eligible. Only a future explicit Runtime reconciliation contract may settle that component. Local lease release or reclamation does not change provider usage.
 
 ## Shared contract advice
 
@@ -964,7 +979,7 @@ refusal. Explicit page mode remains usable for generic call-only Stories.
 - A Try setup that the server refuses (the POST or the job; runtime team, Oct 27) is not a check: no table and no `pdd test` advice, exit 4. Two plain lines: `The Try could not start: the app map was refused (<code>: <reason>).` and `Fix <app map path> (RUNBOOK §13), then run pdd simulate <story> --new.` It is the app map when one was sent and the code is `ambiguous-handler`, `template-reference-schema` or `app-map-*`, or the section names the app map. Else `the server refused it (…)` and `Fix what it names, then run pdd simulate <story> --new.`, with ` Details: <report link>` when there is one. Many refusals join with `; `; a refusal with a `where` (prompt-runtime #379) adds `; at <where>` after its reason. The reason is the server's `reason` (on each `result.refusals[]` item, or on `result.report.refusal` with the same code), else pdd's plain rule (`ambiguous-handler`: on one screen, all taps of one kind must match by the same key; `template-reference-schema`: a field that gets a value from the screen (`$ref`) must be a plain {"type": "string"}), else the engine message, else the server message unless it is the generic `The runtime refused this job…`. A server `fix` takes the place of pdd's fix words: `<fix> Then run pdd simulate <story> --new.` A Try that is ready but has an invalid link is exit 3 with one line and no table: `Try link refused: it points at <link origin>, not <configured address>. The server's address setting may be wrong; tell the PDD team.` (or `Try link refused: it is not a valid Try link. Tell the PDD team.` when the origin matches). pdd keeps its record so `pdd simulate --stop` can end it, a later `pdd simulate` says the same, and pdd never prints that link.
 - A reused link says `It keeps its original 24-hour expiry; stop it with: pdd simulate --stop <story>`, so reopening never promises a fresh 24 hours.
 - Open a newly created link with `open` (macOS) or `xdg-open` (Linux) and print the end line `Try ready for "<title>": <link> (open in your browser). It ends in 24 hours, or with: pdd simulate --stop <story>`. `--no-open`, or a failed open, prints `Try ready for "<title>": <link>` and then how to open it.
-- `--stop [STORY]` finds the Try in the state record by story name, test path or test file name, so it works on a branch without the story (real-user issue 14). No STORY stops the one open Try; none or several is exit 2 with the open names. It sends DELETE `/v1/try/<id>` with the header `X-Request-Id: <new UUID>`; read the stop job until `passed`; then forget the Try. A DELETE answer 404 or 410 counts as stopped. A status GET 404 or 410 keeps the recorded setup and requires explicit `--new` for replacement. Only a confirmed explicit stop forgets the record; the person never edits a state file.
+- `--stop [STORY]` finds the Try in the state record by the exact saved repository-relative Story path, story name, test path or test file name, so it works on a branch without the story (real-user issue 14). The selector must identify exactly one saved record before sign-in or a stop request; an unknown or ambiguous selector is exit 2 and stops nothing. No STORY stops the one open Try; none or several is exit 2 with the open names. It sends DELETE `/v1/try/<id>` with the header `X-Request-Id: <new UUID>`; read the stop job until `passed`; then forget only the selected Try. A DELETE answer 404 or 410 counts as stopped. A status GET 404 or 410 keeps the recorded setup and requires explicit `--new` for replacement. Only a confirmed explicit stop forgets the record; an unconfirmed stop keeps it and returns nonzero. The person never edits a state file.
 - The note on other files prints once per command, in calm words, to stderr, after capture. Sending progress follows the actual admission and POST event in Named check results.
 - Confirmed not-started 429 server-full or 503 check-queue-full/lint-queue-full during new Try setup waits under admission recovery within the existing setup allowance; accepted setup is read by its ID. Other 429 replies make no new attempt: exit 5 with the server's message, else `Too many Try links are open. Stop one with pdd simulate --stop`.
 - Approvals from the Try page (#9, agreed fields): with the saved cases, pdd reads `GET /v1/try/<id>/approvals` (`{approvals: [{id, prompt_path, prose_sha256, requested_at, state}]}`). For each `pending` request in a person's terminal it uses [prompt approve](prompt-approve.prompt.md): the path must be a Git-visible `*.prompt.md` inside the repo (else declined), the request's `prose_sha256` must equal the local prose hash (else declined: `the prompt changed since you clicked Approve`), an approved and current prompt is done with no question, otherwise it shows the interface and asks the same y/n; one reader serves all questions. Then it sends `POST /v1/try/<id>/approvals/<request id>` with `{"state": "done" | "declined"}` (JSON). `tries/<id>.approvals.json` keeps each answer, so pdd never asks twice and resends only an answer whose POST failed. Without a terminal (an agent) pdd only prints `The Try page asks to approve <path>. A person answers it in a terminal: pdd simulate <story>` once and answers nothing. A missing endpoint (404) is skipped. Waiting needs both stdin and stdout to be terminals.
@@ -1033,7 +1048,7 @@ Explicit lint JSON uses the deciding selected row for its aggregate public state
 
 ## Missing and native-only interfaces
 
-Use the preflight owner's missing-block, kind, native-reason and draft-gap findings in local lint over the repository prompts when no Story is selected, also in a repository without Stories. Local lint with selected Story words gives only its advice and never refuses for these findings. Server lint applies these findings to selected entries and called prompts before authentication/upload. Report the preflight local format advice (`interface-kind-explicit-full` at `/kind` and unsupported schema keywords) as warnings in explicit lint, for entry and called prompts; it never refuses a row or changes its state, exit code or upload. Local lint reports this advice for its selected prompt closure, or repository prompts when no Story is selected. Preserve server ownership of other schema/hash diagnostics in explicit lint, and retain the existing local limits gate, its hints and selected rows. Keep SVG advice separate. Server lint reports these local findings before authentication or upload. Checks and lint omit native-only scenarios from uploads even when criteria, checks or reached declarations are invalid. Preserve local refusals and native-only paths/reasons; internal recovery keeps invalid rows refused and valid rows not_run, including called prompts. Public output uses the outcome owner state and reason. Mixed selections still run the other scenarios. Save the exact source selection as source_selection {tests, exclude_fixture_projects}, and separately save native_source {tests, sha256} for omitted native-only scenarios. Neither the native capture nor its scenarios enter uploads. Preserve native_only [{path, reason}] in batch rows. Saved reads retain both source identities. A selection with only native-only scenarios still saves local check/lint evidence, coverage, refusals and reasons without authentication or Runtime requests; mark that batch local_only true and every row unsent, and allow its saved read without authentication or Runtime requests. This also applies when other selected rows are refused locally and no row is ready. An unavailable native capture keeps sha256 null and freshness unknown. Native-only is never a pass and does not silently turn a partial result into success. Each test summary shows repository Runtime coverage: N of M prompts checkable, K native-only. Count valid current full/partial blocks as checkable, valid current native-only declarations separately, and include missing/invalid/stale prompts in M. Keep this separate from module binding coverage.
+Use the preflight owner's missing-block, kind, native-reason and draft-gap findings in local lint over the repository prompts when no Story is selected, also in a repository without Stories. Local lint with selected Story words gives only its advice and never refuses for these findings. Server lint applies these findings to selected entries and called prompts before authentication/upload. Report the preflight local format advice (`interface-kind-explicit-full` at `/kind` and unsupported schema keywords) as warnings in explicit lint, for entry and called prompts, and report `missingCliImplementationWarnings` for tested CLI-convention entries; neither refuses a row or changes its state, exit code or upload. Do not merge general `preflight` input, number or schema-bound warnings into explicit lint; local-copy engine warnings remain server-lint owned. Local lint reports format advice for its selected prompt closure, or repository prompts when no Story is selected. Preserve server ownership of other schema/hash diagnostics in explicit lint, and retain the existing local limits gate, its hints and selected rows. Keep SVG advice separate. Server lint reports these local findings before authentication or upload. Checks and lint omit native-only scenarios from uploads even when criteria, checks or reached declarations are invalid. Preserve local refusals and native-only paths/reasons; internal recovery keeps invalid rows refused and valid rows not_run, including called prompts. Public output uses the outcome owner state and reason. Mixed selections still run the other scenarios. Save the exact source selection as source_selection {tests, exclude_fixture_projects}, and separately save native_source {tests, sha256} for omitted native-only scenarios. Neither the native capture nor its scenarios enter uploads. Preserve native_only [{path, reason}] in batch rows. Saved reads retain both source identities. A selection with only native-only scenarios still saves local check/lint evidence, coverage, refusals and reasons without authentication or Runtime requests; mark that batch local_only true and every row unsent, and allow its saved read without authentication or Runtime requests. This also applies when other selected rows are refused locally and no row is ready. An unavailable native capture keeps sha256 null and freshness unknown. Native-only is never a pass and does not silently turn a partial result into success. Each test summary shows repository Runtime coverage: N of M prompts checkable, K native-only. Count valid current full/partial blocks as checkable, valid current native-only declarations separately, and include missing/invalid/stale prompts in M. Keep this separate from module binding coverage.
 
 Saved lint refresh and check continuation apply only to rows prepared for Runtime
 lint. Exclude local rows and rows with native_only declarations from every
@@ -1113,9 +1128,11 @@ pointer, but deduplication must retain the original location identity.
 
 - Load [runtime outcome](runtime-outcome.prompt.md) for the public result projection, reason codes and pass boundary used by this module.
 
-- [Native results](workflow-results.prompt.md#native-profile-and-criterion-assessment-draft):
+- [Native results](workflow-results.prompt.md#native-profile-and-criterion-assessment-draft)
+  and [saved local-layout record](workflow-results.prompt.md#saved-local-layout-record):
   required generation/runtime/verification context for native admission,
-  assessment and visible proof limits. This is an unapproved native draft;
+  assessment, visible proof limits and the canonical persisted local-layout
+  shape, completion boundary and saved-reader projection. This is an unapproved native draft;
   copied workspace contracts remain their owner's unapproved draft context.
 
 - [Evidence eligibility read owner](workflow-runner.prompt.md#read-evidence-eligibility): required generation/runtime/verification context for `readEvidenceEligibility`, its inputs/result and accepted association policy. Use this binding for contract history, saved Story evidence and migration handoff; do not invoke registration on reads.
@@ -1124,9 +1141,7 @@ pointer, but deduplication must retain the original location identity.
 
 - [Runtime outcome](runtime-outcome.prompt.md): required for generation and tests; selected outcomes and exit policy.
 
-- [Preflight](runtime-preflight.prompt.md#source-capture): required generation and
-  verification context for source capture, advisory warnings and Story footprint
-  availability.
+- [Preflight](runtime-preflight.prompt.md): required generation/runtime/verification context for ordinary selection, source capture, direct-prompt closure and prose-hash classification, including its declared workspace and reference dependencies; also supplies advisory warnings and Story footprints.
 
 - [References](contract-refs.prompt.md): required generation and verification
   context for canonical provenance and explicit-lint copy comparison.
@@ -1254,11 +1269,25 @@ If owner metadata refuses a saved Try with session-stopped, read that same owner
 
 ## Read saved Story evidence locally
 
-Export module function `savedStoryEvidence({root, comparisonRoot=root}, ports={})`,
+Export module function `savedStoryEvidence({root, comparisonRoot=root, withTests=false}, ports={})`,
 returning `{stories, warnings}`. Each Story row is
 `{story, pass, current, result, at}`: repository-relative Story path, Boolean
 pass/current, `result` equal to "✓" for pass and "no verdict" otherwise, and
-Unix epoch milliseconds `at`. This read-only capability never resolves runtime
+Unix epoch milliseconds `at`. With `withTests: true` each row also has `tests`: the
+sorted repository-relative test paths of that Story that its batch selected (for a
+pass, every one of them was sent), so a caller can bind a pass to the exact tests that
+it checked; `sent` (false for a row whose tests were never sent, for example refused
+before execution or interrupted; such a row is listed too, with `pass` false); `failed`,
+the number of failed checks in the answers of its tests (a failed check counts also
+when the answer has no verdict) and `failedSteps`, their step ids (at most 10);
+`refusals`, the refusal codes of its batch rows and answers; `states`, the batch row
+states (for example `refused`, `not_run`, `unknown`); `codes`, the row reason codes
+(for example `interrupted`, `server-busy`, `graph-provider-failure`); and `advice`, the
+fix texts that pdd saved for it (at most 3, each at most 800 characters): each batch
+warning that starts with `Warning: TEST ` for one of its tests and names one of its
+refusal codes, and each refusal `fix`. Two more options read other folders: `anyRoot: true` reads batches of any
+root (each compared with `comparisonRoot`), and `limit: N` reads only the newest N batch
+folders. Without these options the rows are exactly as above. This read-only capability never resolves runtime
 configuration, signs in, calls a service, creates a directory, writes saved state
 or dispatches work. Use the injected `env` for the existing state-directory
 selection. The optional raw ports are `readFile(path)` returning UTF-8 text,
@@ -1331,7 +1360,106 @@ run's current base. Missing state is empty. Malformed or unreadable
 records produce finite warnings and no invented pass, while unrelated readable
 batches remain usable. Do not recover by a network read or change saved caches.
 
+## Read the Story checks that can be sent again
+
+Export module function `resendableStoryChecks({root, since=0}, ports={})` for the
+[Autopilot core](autopilot-core.prompt.md) (#3241, rule B5). It returns `{stories,
+neverSent, noVerdict, failed, maintenance}`: sorted repository-relative Story paths of
+`root` whose latest saved check can be sent once more (`stories` = `neverSent` and
+`noVerdict` together), the Stories whose latest check has a failed check (never sent
+again), and whether the note of a never-sent check names maintenance. It reads like
+`savedStoryEvidence`: the same state directory from the injected `env`, the canonical
+root match, the same optional `readFile`, `readDir` and `realpath` ports, and no
+sign-in, service call, directory creation or write.
+
+- Only batches with `intent: "check"` count, and with `since` above 0 only those
+  whose `created_at` is at or after `since` (Unix epoch milliseconds). A batch that
+  cannot be read or parsed is skipped with no warning.
+- Batches are read in name order; a later batch that has rows of a Story replaces
+  the earlier state of that Story.
+- Each row is one of these. **Never sent**: no request ID, the recovery state
+  `not_run`, no refusal, no `unsent` mark (a local discovery refusal or a native-only
+  row) and no note with the code `blocked` (an access gate): held in maintenance,
+  busy, or stopped before sending. **Passed** or **failed** by its recovery state.
+  Else a sent row reads the saved answer of its latest request ID in the batch folder
+  (`ID.json`, the same projection as `savedStoryEvidence`): a `failed` answer, or any
+  failed check in it, is **failed**; an `unknown` answer with no failed check (for
+  example `graph-provider-failure`, an AI provider failure) is **no verdict**. Any
+  other row (a refusal, an open or unsaved answer) is **other**.
+- A Story in one batch is failed when one of its rows failed; else other when one is
+  other; else never sent when one was never sent; else no verdict when one has no
+  verdict; else passed. Only never sent and no verdict are listed in `stories`.
+- A Story is named as `savedStoryEvidence` names it: a row Story that is a `.md`
+  path, else the unique captured `.md` file of the batch with that base name; a row
+  whose Story cannot be named is skipped.
+
 ## Check scope plan
+
+### Affected checks and historical baseline report (draft)
+
+`pdd test --affected` is an explicit ordinary-check mode with no operands. Allow
+only `--json`, `--details`, `--timeout`, `--max-calls` and `--cache-clear` beside
+it. Reject other combinations, including `--lf`, journeys, files, bindings,
+lint, read/retry, request, hash and screen modes, with exit 2 before state writes,
+sign-in or network effects. Ordinary full and named selections remain unchanged.
+No new comparison flag is introduced: use the existing unique saved-run base or
+HEAD. A committed no-run change with no working changes falls back to all Stories.
+
+Discover the ordinary full inventory and obtain the planning owner's complete
+classification first. Use its `selectCheckTests` for actual dispatch selection.
+Apply dispatch preflight, capture, lint, cache attempts and all call/admission
+bounds only to that selection. Keep every selected Story variant and criterion.
+`--cache-clear` clears the ordinary cache and sends the affected selection again;
+all existing cache age/identity/CI/declaration and restart rules still apply.
+An identity-change second phase cannot add an omitted baseline. Never widen a
+saved read/retry, or recompute its affected scope from later edits.
+
+Persist `check_selection:{mode,tests,baseline_tests}` alongside the full
+`check_plan` and the exact selected `source_selection`. This metadata records
+selection, not execution or proof. Current batch rows contain selected tests
+only; omitted baselines never acquire synthetic rows, passes, calls or receipts.
+Keep `check_scope`'s missing-row semantics. Its baseline unresolved guidance in
+affected mode must identify omitted work, not imply that this batch has a pending
+baseline request to read.
+
+Build `baseline_report` through the planning owner's projection, using locally
+saved Check history only. Scan every available eligible batch, not only the
+newest batch and not the pass-only Story summary. Reuse `readEvidenceEligibility`,
+saved Check row/receipt validation and source-capture authorities. Filter by the
+actual original producer/selection/stage and known runtime/account identity;
+unknown identity supplies unavailable evidence, never a guessed account. Do not
+sign in, GET receipts or POST checks solely to populate this report. Read raw
+files/directories and capture hashes through injected ports with native defaults.
+Retain every available original failed Check receipt, including an older failed
+attempt after a later passing receipt. Use a matching-ID Check receipt for sent
+outcomes; never trust a saved passed label alone. Local unsent problems may appear
+as local observations, never execution or success, and cannot erase sent history.
+Retain failed/refused/partial/not-run distinctions through canonical outcomes.
+Sort observations by original batch time (unknown last), batch ID, test path and
+request ID; preserve distinct original attempts. Missing/corrupt/ineligible
+records cannot attest a pass. Mark partial/unavailable history and finite warnings
+without hiding other readable failures. Missing state gives empty history.
+
+Compare each observation with its complete original source selection/hash under
+the existing eligibility/stage authority: equal is current, different is stale,
+and missing/unreadable identity is unavailable. Historical PR 1/before evidence
+keeps that qualifier in its stage and cannot attest current-code proof. Validate
+and redact original report links as usual. Never infer baseline age or owner.
+Save the report snapshot in batch.json and summary.json; JSON exposes the same
+field. Text lists baseline paths, original outcomes/batch/time/report and
+currentness with the original-batch scope. Explicitly label this historical or
+omitted evidence, not work performed in this invocation. Saved batch reads and
+retries preserve that snapshot rather than refreshing history or paying for a
+baseline rerun. No saved original is rewritten or deleted to assemble a report.
+
+**Proposed exit contract for person review:** affected command status follows
+the existing named-selection convention, based only on its selected target
+results. A target pass can exit 0 beside a saved baseline failure. Always state
+`Affected checks only; this is not a full workflow pass. Required full-pass gates still apply.`
+This adds no failure waiver: `fullCheckPass`, Story/approval/publication/code/merge
+gates, strict approval and repository-required native full-suite checks remain
+unchanged and blocking, including failed, missing and stale baseline evidence.
+The baseline snapshot itself is never submitted as current gate evidence.
 
 Before normal Check dispatch, build the local plan owned by
 [check planning](runtime-check-plan.prompt.md), using the unique same-worktree
@@ -1365,10 +1493,58 @@ This also applies to earlier rows when a later submission is interrupted.
 Read older saved batches without that field. Lint metadata also carries the
 public state and reason, with its internal state in recovery_state.
 
-`pdd lint --local` exits 0 when its SVG check completes. Both text and JSON state
-`partial: checked SVG layout only; prompts not checked`. JSON includes state and
-lint_state partial, reason local-only, and rows with the same public result.
-It never supplies a full lint pass. Local mode runs this path for all selections.
+`pdd lint --local` retains its existing immediate text: every interface finding,
+every advisory warning, then `partial: checked SVG layout only; prompts not
+checked (local-only). N warnings. 0 AI calls. No checks were sent.` Completed
+advisory inspection exits 0; default interface refusals retain exit 4. Named and
+default selection, warning order and refusal precedence stay with their existing
+owners. Native Story assessment keeps its separate route. Actual scope belongs
+in the saved record and JSON; no new immediate text scope line is required.
+
+Persist completed local inspection before returning its ordinary result. Use
+exactly the shared [saved local-layout record](workflow-results.prompt.md#saved-local-layout-record)
+for `batch.json` and `summary.json`, including its completion boundary and
+incomplete-read classification. This is a version 1 `lint-only` batch in the
+existing external state, with the canonical root, creation time and ordinary
+batch identity. Its scope records the selected test paths and actually inspected
+prompt paths; a repository scan has no selected tests. Keep the current local
+advisory `rows: []`, even for a selected Story; do not fabricate a test row.
+Expose that shared summary shape in immediate JSON. Do not broaden preflight
+or interface admission to produce this record.
+
+Use the existing native state writer and repository `last_batch` discovery.
+Prepare the batch and update its repository pointer before publishing the
+matching complete `summary.json`; that summary is the completion boundary.
+Report completion only after its successful save. On a failure, retain any
+newly prepared batch as incomplete, without a completed summary or saved-success
+claim. Existing batches and summaries remain untouched. The workflow reader's
+shared incomplete rule prevents this newer prepared record from exposing an
+older hosted pass. This bounded native save needs no new public API or source
+capture/refactor route.
+
+Use the existing outside-repository state boundary, including exit 2 for a
+state path inside the repository. Proposed persistence-failure policy for review:
+if creating or saving this result fails, exit 2 with a clear state-save diagnostic.
+No fallback calls the interpreter. Other preflight/refusal policies remain with
+their owners. Saving needs no sign-in, Runtime-origin validation, network/model
+call, Check or Try. It creates no full-pass cache or recent passing lint receipt,
+server receipt, token, engine/model identity or report link.
+
+Before the authenticated saved-read/recovery route, recognize only the new
+shared local-layout discriminator. `pdd test --read BATCH`, with or without
+`--json`, reads this new record offline, including its empty rows. A matching
+complete record returns its original summary, scope, diagnostics, partial/local-only
+classification and original exit (0 or 4), using the shared JSON shape or the
+same immediate text facts. An incomplete record exits 2 with the shared incomplete
+summary and a clear state-save diagnostic; JSON keeps the same shape with
+`exit_code: 2`. A quiet read returns the saved rows without reclassifying them.
+Retry of this new record returns the same saved result and asks for a fresh
+local lint when new evidence is wanted; it starts no continuation. These reads
+and retries perform no authentication, origin validation, source recapture,
+network/model call, dispatch, lock/state/repository-pointer write, cache update
+or receipt update. Apply the existing root and safe batch-path checks. Legacy
+native-only local batches keep their existing separate read/retry route; their
+`local_only: true` alone cannot identify this new SVG record.
 
 Print a Sent progress line only after the Check POST has occurred and its reply
 confirms admission (accepted job or terminal executed result). No such line may

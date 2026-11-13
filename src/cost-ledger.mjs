@@ -1,10 +1,11 @@
-// Generated from prompts/cli/cost-ledger.prompt.md (sha256: 3db3740cb607051e1c55942538d44374ffe78071fb6a79b10cf8c4a65435e22f).
+// Generated from prompts/cli/cost-ledger.prompt.md (sha256: 4f8eecedef118d2fefe13b38f836821bc8455ab1466d2e40861b3cd185cbe94c).
 import * as nativeFs from 'node:fs';
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 const DAY = 86_400_000, BYTES = 256 * 1024;
+export const CACHED_INPUT_WEIGHT = 0.1;
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(value);
 const number = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 const hash = value => createHash('sha256').update(value).digest('hex').slice(0, 20);
@@ -248,6 +249,17 @@ export async function captureClosedCi(run, ports = {}) {
   }
 }
 
+function tokenSummary(tokens) {
+  if (!tokens.length) return { totalTokens: null, uncachedInput: null, cacheHitShare: null, effectiveTokens: null };
+  const input = tokens.reduce((sum, row) => sum + row.input, 0);
+  const cached = tokens.reduce((sum, row) => sum + row.cachedInput, 0);
+  const output = tokens.reduce((sum, row) => sum + row.output, 0);
+  const totalTokens = tokens.reduce((sum, row) => sum + row.total, 0);
+  const uncachedInput = Math.max(0, input - cached);
+  const cacheHitShare = input > 0 ? Math.min(1, cached / input) : null;
+  const effectiveTokens = Math.round((uncachedInput + CACHED_INPUT_WEIGHT * Math.min(input, cached) + output) * 100) / 100;
+  return { totalTokens, uncachedInput, cacheHitShare, effectiveTokens };
+}
 function total(costs) {
   const tokens = new Map(), person = { questions: 0, answers: 0, approvals: 0, waitingMinutes: 0, activeMinutes: null };
   let suiteMinutes = null, ciMinutes = null, githubCalls = 0;
@@ -261,7 +273,8 @@ function total(costs) {
     if (cost.ciMinutes !== null) ciMinutes = (ciMinutes ?? 0) + cost.ciMinutes;
     githubCalls += cost.githubCalls;
   }
-  return { totalTokens: tokens.size ? [...tokens.values()].reduce((sum, row) => sum + row.total, 0) : null, tokens: [...tokens.values()].sort((a,b) => a.account.localeCompare(b.account)), person, suiteMinutes, ciMinutes, githubCalls };
+  const sorted = [...tokens.values()].sort((a,b) => a.account.localeCompare(b.account));
+  return { ...tokenSummary(sorted), tokens: sorted, person, suiteMinutes, ciMinutes, githubCalls };
 }
 function eventsTotal(events) {
   const result = { tokens: [], person: { questions: 0, answers: 0, approvals: 0, waitingMinutes: 0, activeMinutes: null }, suiteMinutes: null, ciMinutes: null, githubCalls: 0 };
@@ -273,14 +286,14 @@ function eventsTotal(events) {
     } else if (Object.hasOwn(result.person, e.metric)) result.person[e.metric] = (result.person[e.metric] ?? 0) + e.value;
     else if (['suiteMinutes', 'ciMinutes', 'githubCalls'].includes(e.metric)) result[e.metric] = (result[e.metric] ?? 0) + e.value;
   }
-  result.totalTokens = result.tokens.length ? result.tokens.reduce((sum, row) => sum + row.total, 0) : null;
-  result.tokens.sort((a,b) => a.account.localeCompare(b.account)); return result;
+  result.tokens.sort((a,b) => a.account.localeCompare(b.account));
+  return { ...tokenSummary(result.tokens), ...result };
 }
 function percentile(rows, q) {
   if (!rows.length) return null;
   const rank = values => values.length ? values.sort((a,b) => a-b)[Math.ceil(values.length*q)-1] : null;
   const result = total([]);
-  for (const key of ['totalTokens','suiteMinutes','ciMinutes','githubCalls']) result[key] = rank(rows.map(row => row[key]).filter(number));
+  for (const key of ['totalTokens','uncachedInput','cacheHitShare','effectiveTokens','suiteMinutes','ciMinutes','githubCalls']) result[key] = rank(rows.map(row => row[key]).filter(number));
   for (const key of Object.keys(result.person)) result.person[key] = rank(rows.map(row => row.person[key]).filter(number));
   for (const account of new Set(rows.flatMap(row => row.tokens.map(token => token.account)))) {
     const token = rows.flatMap(row => row.tokens).find(row => row.account === account);
@@ -291,7 +304,8 @@ function percentile(rows, q) {
 export function costReport(runs, now) {
   const costs = runs.map(run => ({ run, cost: run.cost ?? initial(run, now) }));
   const publicRows = costs.map(({ run, cost }) => ({ repo: run.repo, issue: run.number, runId: run.runId,
-    ...Object.fromEntries(['outcome','outcomeAt','tokens','person','suiteMinutes','ciMinutes','githubCalls','coverage'].map(key => [key, cost[key]])) }));
+    outcome: cost.outcome, outcomeAt: cost.outcomeAt, ...tokenSummary(cost.tokens),
+    ...Object.fromEntries(['tokens','person','suiteMinutes','ciMinutes','githubCalls','coverage'].map(key => [key, cost[key]])) }));
   const window = days => {
     const since = now - days * DAY, groups = new Map();
     for (const row of costs) { const key = `${row.run.repo.toLowerCase()}#${row.run.number}`; if (!groups.has(key)) groups.set(key, []); groups.get(key).push(row); }
@@ -306,11 +320,17 @@ export function costReport(runs, now) {
 }
 export function costStatusLines(report) {
   const num = value => value === null ? 'unknown' : Number(value.toFixed(2));
-  const describe = row => row ? `${num(row.totalTokens)} tokens; CI ${num(row.ciMinutes)} min; suite ${num(row.suiteMinutes)} min; GitHub ${row.githubCalls}; person Q/A/approvals ${row.person.questions}/${row.person.answers}/${row.person.approvals}, active ${num(row.person.activeMinutes)} min, wait ${num(row.person.waitingMinutes)} min` : 'no merged issues';
-  const lines = ['Issue costs (local measured usage):'];
+  const pct = value => value === null || value === undefined ? 'n/a' : `${(value * 100).toFixed(1)}%`;
+  const tok = row => row.totalTokens === null ? 'unknown tokens'
+    : `${num(row.totalTokens)} tokens (${num(row.effectiveTokens)} analytical effective @ 0.1x cached, uncached input ${num(row.uncachedInput)}, cache hit ${pct(row.cacheHitShare)})`;
+  const describe = row => row ? `${tok(row)}; CI ${num(row.ciMinutes)} min; suite ${num(row.suiteMinutes)} min; GitHub ${row.githubCalls}; person Q/A/approvals ${row.person.questions}/${row.person.answers}/${row.person.approvals}, active ${num(row.person.activeMinutes)} min, wait ${num(row.person.waitingMinutes)} min` : 'no merged issues';
+  const lines = ['Issue costs (local measured usage; analytical effective tokens weight cached input at 0.1x, not dollar billing):'];
   for (const key of ['day','week']) {
     const row = report[key]; lines.push(`Last ${key}: ${describe(row.totals)}`, `  Per merged issue (${row.mergedIssues}): P50 ${describe(row.p50)}; P90 ${describe(row.p90)}`);
-    for (const token of row.totals.tokens) lines.push(`  ${token.account}: ${token.total} tokens (input ${token.input}, cached ${token.cachedInput}, output ${token.output}, reasoning ${token.reasoningOutput})`);
+    for (const token of row.totals.tokens) {
+      const summary = tokenSummary([token]);
+      lines.push(`  ${token.account}: ${token.total} tokens, ${num(summary.effectiveTokens)} analytical effective @ 0.1x cached (input ${token.input}, uncached ${summary.uncachedInput}, cached ${token.cachedInput} [${pct(summary.cacheHitShare)}], output ${token.output}, reasoning ${token.reasoningOutput})`);
+    }
     if (row.coverage.length) lines.push(`  Coverage: ${row.coverage.join(', ')}`);
   }
   lines.push(`Outcomes: ${['running',...outcomes].map(outcome => `${outcome} ${report.runs.filter(row => row.outcome === outcome).length}`).join(', ')}`);

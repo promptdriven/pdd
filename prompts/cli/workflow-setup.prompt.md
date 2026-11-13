@@ -11,4 +11,4 @@ With a ready selection, print its optional one-line `hint` to ports.stderr, then
 - Load the [Prompting guide](../../docs/prompting-guide.md) for authoring/generation.
 - Load [workflow agent readiness](workflow-agents.prompt.md) for generation/testing/runtime admission policy. Ports.run is its native status boundary; this adapter does not infer sign-in from files or parse status output.
 - [Skills install](skills-install.prompt.md), [project setup](project-setup.prompt.md), and [agent MCP setup](agent-mcp-setup.prompt.md) retain their existing setup behavior. The caller's supplied setup action owns their execution.
-- The [CLI](pdd-cli.prompt.md) owns public dispatch. Adding this adapter does not by itself change pdd setup; the pending shared-file wiring must be integrated before claiming the public command fixed.
+- Navigation only: the [CLI](pdd-cli.prompt.md) owns public dispatch. Adding this adapter does not by itself change pdd setup; the pending shared-file wiring must be integrated before claiming the public command fixed.

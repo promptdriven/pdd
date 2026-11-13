@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 0844f3050acb23a08e7504b116191998be01aed5397048d477938b29e8a0d3c1).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 592a0d5b284d2290c23548894993c6f4a80ec25253b248df3e5ef88cf3419354).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -8,7 +8,7 @@ import { renderCompletion } from './completion.mjs';
 import { NAMES, PUBLIC_COMMAND_MANIFEST, PUBLIC_COMMAND_ROUTES, PUBLIC_HELP_TEXT } from './command-catalog.mjs';
 import { listWorkflowAreas, formatWorkflowList } from './workflow-areas.mjs';
 import { ignorePddFolder, setupProject as defaultSetupProject } from './project-setup.mjs';
-import { findSkills, setupSkills as defaultSetupSkills } from './skills-install.mjs';
+import { findSkills as defaultFindSkills, setupSkills as defaultSetupSkills } from './skills-install.mjs';
 import { pathDiagnostic as defaultPathDiagnostic } from './path-diagnostic.mjs';
 import { checkWorkflowAgents } from './workflow-agents.mjs';
 import { setupMayAsk } from './setup-interaction.mjs';
@@ -16,6 +16,11 @@ import { setupWithWorkflowAgent } from './workflow-setup.mjs';
 import { causeText } from './runtime-output.mjs';
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+const defaultReadPackageVersion = ({ packageRoot }) => {
+  try { const { version } = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'));
+    return typeof version === 'string' && !!version ? { ok: true, version } : { ok: false, version: '' }; }
+  catch { return { ok: false, version: '' }; }
+};
 const line = (stream, text) => stream.write(`${text}\n`);
 // The real reason of an unexpected error, after the fixed safe line.
 const reason = error => { const text = causeText(error?.message ?? error); return text ? ` Reason: ${text}` : ''; };
@@ -77,7 +82,8 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
   cwd = process.cwd(), packageRoot = PACKAGE_ROOT, env = process.env, workflowRunner, workflowAreas,
   stdin = process.stdin, confirm, mcpServer, runtimeSlots, contracts, product, productPorts, gitContext, workflowProve, provePorts,
   autopilotRegressions, autopilotRegressionsPorts = {}, issueGraph, issueGraphPorts = {}, dependencyIntake, dependencyIntakePorts = {}, autopilotLauncher, autopilotLauncherPorts = {}, workflowAgents = { checkWorkflowAgents }, workflowAgentPorts = {}, setupSkills = defaultSetupSkills,
-  setupProject = defaultSetupProject, setupAgentMcp, autopilot, autopilotPorts = {}, autopilotAlerts, autopilotAlertsPorts = {}, autopilotGithub: autopilotGithubModule, autopilotGithubPorts = {}, pathDiagnostic = defaultPathDiagnostic } = {}) {
+  setupProject = defaultSetupProject, setupAgentMcp, autopilot, autopilotPorts = {}, autopilotAlerts, autopilotAlertsPorts = {}, autopilotGithub: autopilotGithubModule, autopilotGithubPorts = {}, pathDiagnostic = defaultPathDiagnostic,
+  readPackageVersion = defaultReadPackageVersion, findSkills = defaultFindSkills, interpreterVersion, interpreterVersionPorts = {} } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
@@ -107,14 +113,6 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
           payload = Buffer.concat(chunks).toString('utf8');
         }
         const result = await module.runDependencyIntake(plan.local === 'dependencies-prepare' ? {command:'prepare',cwd,issue:plan.options['--issue']} : {command:'complete',cwd,stdin:payload},dependencyIntakePorts);
-        if (plan.local === 'dependencies-complete' && result.exitCode === 0) {
-          let state = 'unknown';
-          try { const launcher = autopilotLauncher ?? await import('./autopilot-launcher.mjs');
-            const wake = await launcher.requestAutopilotCompletion({cwd, env}, autopilotLauncherPorts);
-            if (['reconciled', 'inactive', 'busy', 'unknown'].includes(wake?.state)) state = wake.state;
-          } catch { /* Completion intake remains accepted even if the wake fails. */ }
-          if (state === 'busy' || state === 'unknown') line(stderr, 'Autopilot reconciliation was not confirmed.');
-        }
         (result.exitCode ? stderr : stdout).write(result.message); return result.exitCode;
       } catch(error) { line(stderr, `Dependency intake failed.${reason(error)}`); return 1; }
     }
@@ -129,7 +127,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     case 'autopilot-doctor': case 'autopilot-audit': case 'autopilot-check-base': case 'autopilot-start': case 'autopilot-stop': case 'autopilot-status': case 'autopilot-add': case 'autopilot-release': case 'autopilot-report': case 'autopilot-intake': {
       try {
         const module = autopilotLauncher ?? await import('./autopilot-launcher.mjs');
-        const result = await module.runAutopilotLauncher({ command: plan.local.slice(10), issues: [...plan.operands], runs: plan.options['--runs'], checks: plan.options['--checks'], ...(plan.options['--engine'] ? { engine: plan.options['--engine'] } : {}), ...(plan.options['--label'] ? { label: plan.options['--label'] } : {}), ...(plan.options['--mode'] ? { mode: plan.options['--mode'] } : {}), ...(plan.options['--report'] ? { report: plan.options['--report'] } : {}), ...(plan.options['--intake'] ? { intake: plan.options['--intake'] } : {}), resumeCustody: plan.options['--resume-custody'], all: plan.options['--all'] === true, ...(plan.options['--json'] === true ? { json: true } : {}), cwd, packageRoot, env }, autopilotLauncherPorts);
+        const result = await module.runAutopilotLauncher({ command: plan.local.slice(10), issues: [...plan.operands], runs: plan.options['--runs'], checks: plan.options['--checks'], ...(plan.options['--engine'] ? { engine: plan.options['--engine'] } : {}), ...(plan.options['--label'] ? { label: plan.options['--label'] } : {}), ...(plan.options['--mode'] ? { mode: plan.options['--mode'] } : {}), ...(plan.options['--report'] ? { report: plan.options['--report'] } : {}), ...(plan.options['--decisions'] ? { decisions: plan.options['--decisions'] } : {}), ...(plan.options['--intake'] ? { intake: plan.options['--intake'] } : {}), ...(plan.options['--share'] !== undefined ? { share: plan.options['--share'] } : {}), all: plan.options['--all'] === true, ...(plan.options['--json'] === true ? { json: true } : {}), cwd, packageRoot, env }, autopilotLauncherPorts);
         if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255 || typeof result.message !== 'string' || !result.message.trim()) throw Error('Invalid Autopilot reply');
         line(result.exitCode === 0 ? stdout : stderr, result.message);
         if (result.exitCode === 0 && ['autopilot-start', 'autopilot-status'].includes(plan.local) && plan.options['--all'] !== true && plan.options['--json'] !== true) {
@@ -165,16 +163,25 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       return runMetrics({ argv: args, cwd, stdout, stderr });
     }
     case 'help': line(stdout, plan.topic ? renderTopic(plan.topic, packageRoot) : renderHelp(plan.helpPrefix, packageRoot));return 0;
-    case 'version':
-      try { const metadata = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'));
-        if (typeof metadata.version !== 'string' || !metadata.version) throw Error('version');
-        line(stdout, metadata.version);
-        try {
-          for (const result of findSkills({ packageRoot, cwd, home: env.HOME || homedir(), claudeConfigDir: env.CLAUDE_CONFIG_DIR }))
-            if (result.found && (result.stale === 'older' || result.staleSkills?.some(({ state }) => state === 'older'))) line(stderr, staleLine(result, metadata.version, cwd));
-        } catch { /* The skills check never changes --version. */ }
-        return 0;
+    case 'version': case 'version-detailed': {
+      let metadata;
+      try { metadata = await readPackageVersion({ packageRoot });
+        if (!metadata?.ok || typeof metadata.version !== 'string' || !metadata.version) throw Error('version');
       } catch { line(stderr, 'This PDD package has no readable version metadata.');return 1; }
+      if (plan.local === 'version-detailed') {
+        let result;
+        try { const module = interpreterVersion ?? await import('./interpreter-version.mjs');
+          result = await module.runDetailedVersion({ version: metadata.version, env }, interpreterVersionPorts);
+        } catch { result = { exit_code: 0, stdout: `PDD CLI: ${metadata.version}\nPDD interpreter: unknown\n`, stderr: '' }; }
+        stdout.write(result.stdout); stderr.write(result.stderr); return result.exit_code;
+      }
+      line(stdout, metadata.version);
+      try {
+        for (const result of findSkills({ packageRoot, cwd, home: env.HOME || homedir(), claudeConfigDir: env.CLAUDE_CONFIG_DIR }))
+          if (result.found && (result.stale === 'older' || result.staleSkills?.some(({ state }) => state === 'older'))) line(stderr, staleLine(result, metadata.version, cwd));
+      } catch { /* The skills check never changes --version. */ }
+      return 0;
+    }
     case 'autopilot.off': case 'autopilot.observe': case 'autopilot.auto': case 'autopilot-trust': case 'autopilot-untrust': {
       try {
         const module = autopilot ?? await import('./autopilot.mjs');
@@ -344,7 +351,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         // Setup saves a first mode only in this checkout and never writes to GitHub, where the workers read it.
         const saved = savedAutopilot(context?.toplevel)?.mode;
         if (result.exitCode === 0 && before === undefined && ['off', 'observe', 'auto'].includes(saved))
-          line(stdout, `Setup saved the Autopilot mode only in this checkout. Autopilot workers read pdd.json on GitHub; to update it there, run pdd autopilot ${saved}.`);
+          line(stdout, `Setup saved pdd.json, the PDD block and .gitignore only in this checkout. Commit and push them so that GitHub, other machines and Autopilot jobs have them, or run pdd autopilot ${saved} to put the Autopilot mode on GitHub.`);
       } catch (error) { line(stderr, `Autopilot settings failed.${reason(error)}`); code = 1; }
       return code;
       } });
@@ -360,6 +367,11 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     case 'runtime-check':
     case 'runtime-try':
       try {
+        if (plan.local === 'runtime-check' && plan.options['--target'] === 'code') {
+          if (Object.keys(plan.options).some(key => !['--target', '--json'].includes(key))) { line(stderr, 'pdd test --target code accepts only --json and Story selections.'); return 2; }
+          const { runCompiledTest } = await import('./compiled-test.mjs');
+          return await runCompiledTest({ root: cwd, words: [...plan.operands], json: !!plan.options['--json'] }, { stdout, stderr });
+        }
         const runtime = await import('./runtime-client.mjs');
         return await runtime[plan.local === 'runtime-check' ? 'runCheck' : 'runTry']({ words: [...plan.operands], options: { ...plan.options }, cwd, cache: plan.local === 'runtime-check' }, { stdout, stderr, env });
       } catch (error) {

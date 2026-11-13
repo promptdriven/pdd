@@ -1,10 +1,11 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: a2f38067c5398c95bff5d3f362a3d0cdd2c9dce57d9e4784575aea6509496f0d).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 7d4c6517830a0b841a56a75e519ed5d17da15eac68d7e0b88591de575635a4ae).
 import { markdownLinks, markdownDefinitions, markdownSectionText } from './runtime-markdown.mjs';
 import { buildBindingPlan, runtimeBoundary } from './runtime-binding-plan.mjs';
+import { resolveOwners } from './file-owner.mjs';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
-import { basename, join, posix, isAbsolute } from 'node:path';
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
+import { basename, join, posix, isAbsolute, relative, resolve, sep } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { expandSource } from './contract-refs.mjs';
 import { exactValue, parseScenarioJson, roundedNumberTokens, stringifyScenarioJson } from './scenario-json.mjs';
@@ -302,6 +303,13 @@ const INTERPRETER_INTEGERS = { min: -(2n ** 53n - 1n), max: 2n ** 53n - 1n, text
 const outsideInterpreter = value => typeof value === 'bigint' && (value < INTERPRETER_INTEGERS.min || value > INTERPRETER_INTEGERS.max);
 // The interpreter's section of a test value: keys joined by ".", indexes as [N] (steps[10].input.seconds).
 const interpreterSection = path => path.reduce((text, part) => typeof part === 'number' ? `${text}[${part}]` : text ? `${text}.${part}` : String(part), '');
+// The exact Number spelling that the interpreter admits: a token with an exponent, so it is no integer literal, that
+// reads back as exactly this Number. String(n) has an exponent only from 1e21; below that (2^53 <= n < 1e21) it is plain
+// digits, which the interpreter refuses and which, as an integer literal, may even name another whole number.
+export function exactNumberSpelling(n) {
+  const text = /e/i.test(String(n)) ? String(n) : n.toExponential();
+  return Number(text) === n ? text : null;
+}
 // Advice only: the interpreter is the one place that refuses; the test is still sent.
 function interpreterIntegerWarning(doc, path) {
   let found = null;
@@ -313,9 +321,8 @@ function interpreterIntegerWarning(doc, path) {
   };
   visit(doc, []);
   if (!found) return null;
-  const section = interpreterSection(found.path), nearest = Number(found.value);
-  const spelling = Number.isFinite(nearest) && BigInt(nearest) === found.value
-    ? `If the parameter takes a Number, write its exact Number spelling ${String(nearest)}; the interpreter accepts it. ` : 'No JavaScript Number holds this value. ';
+  const section = interpreterSection(found.path), nearest = Number(found.value), exact = Number.isFinite(nearest) && BigInt(nearest) === found.value ? exactNumberSpelling(nearest) : null;
+  const spelling = exact ? `If the parameter takes a Number, write its exact Number spelling ${exact}; the interpreter accepts it. ` : 'No JavaScript Number holds this value. ';
   return `Warning: ${path} scenario-integer-out-of-range: ${section} is ${found.value}, outside the PDD interpreter's integer range ${INTERPRETER_INTEGERS.text}, `
     + 'so the interpreter refuses this test before execution (0 AI calls). ' + spelling
     + "Check the exact value in the repository's own vector test (RUNBOOK §17); do not change the input type or the expected value to fit the interpreter.";
@@ -615,6 +622,10 @@ export const formatWarningLines = prompt => interfaceFormatWarnings(prompt?.inte
 // Lint and the files preview give unsupported schema keywords as advice too (#3206); a check keeps its schema rules.
 export const schemaKeywordWarningLines = prompt => (isObject(prompt?.interface) ? interfaceSchemaProblems(prompt.interface) : [])
   .filter(item => item.code === 'graph-schema-unsupported-keyword').map(item => `Warning: ${prompt.path} ${item.pointer} ${item.code}: ${item.rule}`);
+const validCliImplementation = impl => isObject(impl) && Object.keys(impl).length === 2 && impl.kind === 'cli'
+  && typeof impl.command === 'string' && Boolean(impl.command.trim()) && !/[\n\r;|&<>`$\\'"(){}*?\[\]]/.test(impl.command);
+const isCliEntry = (iface, index) => index >= 0 && Array.isArray(iface?.conventions)
+  && ['input_schema', 'result_schema'].every(key => iface.conventions.some(item => isObject(item) && item.path === `/entries/${index}/${key}` && item.convention === 'cli'));
 export function interfaceSchemaProblems(iface) {
   const kindProblems = interfaceKindProblems(iface);
   if (kindProblems.length || iface?.kind === 'native-only') return kindProblems;
@@ -622,6 +633,9 @@ export function interfaceSchemaProblems(iface) {
   if (Array.isArray(iface?.draft_gaps) && iface.draft_gaps.length) out.push({code:'interface-draft-incomplete',pointer:'/draft_gaps',rule:iface.draft_gaps.join('; ')});
   for (const [index, entry] of (Array.isArray(iface?.entries) ? iface.entries : []).entries()) {
     for (const key of ['input_schema', 'result_schema']) if (isObject(entry) && Object.hasOwn(entry, key)) schemaRules(entry[key], `/entries/${index}/${key}`, out);
+    if (isObject(entry) && Object.hasOwn(entry, 'implementation') && !validCliImplementation(entry.implementation)) {
+      out.push({ code: 'interface-implementation-invalid', pointer: `/entries/${index}/implementation`, rule: 'must declare {"kind": "cli", "command": "..."} with whitespace-separated argv and no shell syntax.' });
+    }
   }
   for (const [index, resource] of (Array.isArray(iface?.resources) ? iface.resources : []).entries()) {
     for (const [opIndex, operation] of (Array.isArray(resource?.operations) ? resource.operations : []).entries()) {
@@ -1054,8 +1068,13 @@ export function preflight({ root, found, selected,workspace=found.workspace??loa
     row.native_only = [...prompts.values()].filter(item => item.interface?.kind === 'native-only').map(item => ({path:item.path,reason:item.interface.reason}));
     row.draft = row.steps.some(step => prompts.get(step?.entry_path)?.interface?.status === 'draft');
     for (const [index, step] of row.steps.entries()) {
-      const prompt = prompts.get(step?.entry_path), entry = prompt?.interface?.entries?.find?.(item => item?.operation === step?.operation);
+      const prompt = prompts.get(step?.entry_path), entries = Array.isArray(prompt?.interface?.entries) ? prompt.interface.entries : [];
+      const entryIndex = entries.findIndex(item => item?.operation === step?.operation), entry = entryIndex >= 0 ? entries[entryIndex] : undefined;
       for (const text of entry ? checkInput(step.input, entry.input_schema, index).warnings : []) warnings.push(`Warning: ${test.path} ${text}`);
+      if (entry && isCliEntry(prompt?.interface, entryIndex) && !entry.implementation) {
+        const message = `Warning: ${step.entry_path} entry ${step.operation} has no implementation declaration.`;
+        if (!warnings.includes(message)) warnings.push(message);
+      }
     }
     // Number advice from the exact test values. It never blocks; the interpreter decides.
     // A native-only test is never sent to the interpreter, so it gets no number advice.
@@ -1070,43 +1089,112 @@ export function preflight({ root, found, selected,workspace=found.workspace??loa
   return { rows, warnings };
 }
 
-// Keep PDD's declaration classification local. Token offsets preserve all other
-// JSON spellings; in particular, parsing and stringifying would round numbers.
+export function missingCliImplementationWarnings({ root, found, selected, workspace = found.workspace ?? loadRuntimeWorkspace({ root }) }) {
+  workspace = boundedWorkspace(root, workspace);
+  const warnings = [], prompts = new Map();
+  for (const test of Array.isArray(selected) ? selected : []) {
+    if (test?.error) continue;
+    for (const step of Array.isArray(test?.doc?.steps) ? test.doc.steps : []) {
+      const path = step?.entry_path;
+      if (typeof path !== 'string') continue;
+      if (!prompts.has(path)) {
+        try { prompts.set(path, readPrompt(root, found.visible, path, workspace)); } catch { prompts.set(path, null); }
+      }
+      const iface = prompts.get(path)?.interface, entries = Array.isArray(iface?.entries) ? iface.entries : [];
+      const entryIndex = entries.findIndex(item => item?.operation === step?.operation), entry = entryIndex >= 0 ? entries[entryIndex] : undefined;
+      if (entry && isCliEntry(iface, entryIndex) && !entry.implementation) {
+        const message = `Warning: ${path} entry ${step.operation} has no implementation declaration.`;
+        if (!warnings.includes(message)) warnings.push(message);
+      }
+    }
+  }
+  return warnings;
+}
+
+// Keep PDD's declaration classification and CLI implementation binding local.
+// Token offsets preserve all other JSON spellings; parsing and stringifying would round numbers.
 export function executableInterfaceText(text) {
   const blocks = interfaceBlocks(text);
   if (blocks.length !== 1) return text;
   const block = blocks[0], body = block[1];
   let value;
-  try { value = JSON.parse(body); } catch { return text; }
-  if (!isObject(value) || !Object.hasOwn(value, 'kind') || !['full', 'partial'].includes(value.kind)) return text;
-  const tokens = [...body.matchAll(/"(?:[^"\\]|\\[\s\S])*"|[{}\[\],:]/g)];
-  const members = [];
-  let depth = 0, keyExpected = false, comma = null;
-  for (let index = 0; index < tokens.length; index++) {
-    const token = tokens[index], spelling = token[0];
-    if (spelling === '{' || spelling === '[') {
-      depth++;
-      if (depth === 1) keyExpected = true;
-    } else if (spelling === '}' || spelling === ']') depth--;
-    else if (depth === 1 && spelling === ',') { keyExpected = true; comma = token.index; }
-    else if (depth === 1 && keyExpected && spelling.startsWith('"')) {
-      if (JSON.parse(spelling) === 'kind') {
-        const result = tokens[index + 2];
-        if (tokens[index + 1]?.[0] !== ':' || !result?.[0].startsWith('"')) return text;
-        members.push({ start: token.index, end: result.index + result[0].length, comma });
+  try { value = parseScenarioJson(body); } catch { return text; }
+  if (!isObject(value) || (Object.hasOwn(value, 'kind') && !['full', 'partial'].includes(value.kind))) return text;
+  const hasLocalKind = Object.hasOwn(value, 'kind');
+  const entries = Array.isArray(value.entries) ? value.entries : [];
+  if (entries.some(entry => isObject(entry) && Object.hasOwn(entry, 'implementation') && !validCliImplementation(entry.implementation))) return text;
+  const hasImplementation = entries.some(entry => isObject(entry) && validCliImplementation(entry.implementation));
+  if (!hasLocalKind && !hasImplementation) return text;
+  const tokens = [...body.matchAll(/"(?:[^"\\]|\\[\s\S])*"|[{}\[\],:]|[^\s{}\[\],:"]+/g)];
+  const skipValue = pos => {
+    const first = tokens[pos];
+    if (!first) return null;
+    if (first[0] !== '{' && first[0] !== '[') return { end: first.index + first[0].length, next: pos + 1 };
+    let depth = 0;
+    for (let index = pos; index < tokens.length; index++) {
+      const spelling = tokens[index][0];
+      if (spelling === '{' || spelling === '[') depth++;
+      else if (spelling === '}' || spelling === ']') {
+        depth--;
+        if (depth === 0) return { end: tokens[index].index + 1, next: index + 1 };
       }
-      keyExpected = false;
+    }
+    return null;
+  };
+  const objectMembers = pos => {
+    const members = [];
+    let cur = pos + 1, commaBefore = null;
+    while (cur < tokens.length && tokens[cur][0] !== '}') {
+      const keyTok = tokens[cur], valPos = cur + 2;
+      if (!keyTok?.[0].startsWith('"') || tokens[cur + 1]?.[0] !== ':') return null;
+      const skipped = skipValue(valPos), after = skipped ? tokens[skipped.next] : null;
+      if (!skipped || !after) return null;
+      members.push({ key: JSON.parse(keyTok[0]), keyStart: keyTok.index, valPos, end: skipped.end, commaBefore, commaAfter: after[0] === ',' ? after.index : null });
+      if (after[0] !== ',') break;
+      commaBefore = after.index;
+      cur = skipped.next + 1;
+    }
+    return members;
+  };
+  const arrayItems = pos => {
+    const items = [];
+    let cur = pos + 1;
+    while (cur < tokens.length && tokens[cur][0] !== ']') {
+      const skipped = skipValue(cur), after = skipped ? tokens[skipped.next] : null;
+      if (!skipped || !after) return null;
+      items.push(cur);
+      if (after[0] !== ',') break;
+      cur = skipped.next + 1;
+    }
+    return items;
+  };
+  const memberSpan = member => member.commaBefore !== null ? [member.commaBefore, member.end]
+    : member.commaAfter !== null ? [member.keyStart, member.commaAfter + 1] : [member.keyStart, member.end];
+  const rootMembers = tokens[0]?.[0] === '{' ? objectMembers(0) : null;
+  if (!rootMembers) return text;
+  const spans = [];
+  if (hasLocalKind) {
+    const kindMembers = rootMembers.filter(member => member.key === 'kind');
+    if (kindMembers.length !== 1 || !tokens[kindMembers[0].valPos]?.[0].startsWith('"')) return text;
+    spans.push(memberSpan(kindMembers[0]));
+  }
+  if (hasImplementation) {
+    const entriesMembers = rootMembers.filter(member => member.key === 'entries');
+    if (entriesMembers.length !== 1 || tokens[entriesMembers[0].valPos]?.[0] !== '[') return text;
+    const itemPositions = arrayItems(entriesMembers[0].valPos);
+    if (!itemPositions) return text;
+    for (const itemPos of itemPositions) {
+      if (tokens[itemPos]?.[0] !== '{') continue;
+      const entryMembers = objectMembers(itemPos);
+      if (!entryMembers) return text;
+      const implMembers = entryMembers.filter(member => member.key === 'implementation');
+      if (implMembers.length > 1) return text;
+      if (implMembers.length === 1) spans.push(memberSpan(implMembers[0]));
     }
   }
-  // Ambiguous duplicate metadata retains the original admission diagnostic.
-  if (members.length !== 1) return text;
-  const member = members[0];
-  let start = member.comma ?? member.start, end = member.end;
-  if (member.comma === null) {
-    const following = tokens.find(token => token.index >= end);
-    if (following?.[0] === ',') end = following.index + 1;
-  }
-  const projected = body.slice(0, start) + body.slice(end);
+  if (!spans.length) return text;
+  spans.sort((a, b) => b[0] - a[0]);
+  const projected = spans.reduce((current, [start, end]) => current.slice(0, start) + current.slice(end), body);
   const offset = block.indices[1][0];
   return text.slice(0, offset) + projected + text.slice(block.indices[1][1]);
 }
@@ -1152,11 +1240,13 @@ function omitFullKind(body) {
 }
 
 // --fill-hash: fill draft hashes, omit full kind; optionally compact drafts.
-export function fillHashes({ root, files = gitFiles(root), compact = false,workspace=loadRuntimeWorkspace({root}) }) {
+export function fillHashes({ root, files = gitFiles(root), targets, compact = false,workspace=loadRuntimeWorkspace({root}) }) {
   workspace=boundedWorkspace(root,workspace);
   const result = { filled: [], current: [], refused: [], stale: [], warnings: [] };
   if (compact === true) result.compacted = [];
-  for (const path of files) {
+  const targetSet = targets === undefined ? null : new Set(targets);
+  const candidates = targetSet ? files.filter(path => targetSet.has(path)) : files;
+  for (const path of candidates) {
     if (!allowsRuntimePath(workspace,path) || !path.endsWith('.prompt.md') || !statOf(join(root, path))?.isFile()) continue;
     let text;try{text=filePort(root,new Set(files),true,workspace).read({path}).content;}catch(error){result.refused.push({path,message:error.message});continue;}
     const blocks = interfaceBlocks(text);
@@ -1851,6 +1941,35 @@ export function captureSource(root, { attempts = 3, ...selection } = {}) {
   return captureWithPolicy(root, { attempts, ...selection });
 }
 
+// Resolve a scoped hash request before mutation. Capture remains the one owner
+// of source closure, availability, workspace and reference validation.
+export function prepareHashSelection({ root, cwd, words }, { capture = captureSource } = {}) {
+  const files = gitFiles(root), visible = new Set(files), workspace = loadRuntimeWorkspace({root});
+  const realRoot = realpathSync(root), realCwd = realpathSync(cwd);
+  const normalized = words.map(word => {
+    const candidate = relative(realRoot, resolve(realCwd, word)).split(sep).join('/');
+    return visible.has(candidate) || (!candidate.startsWith('../') && candidate !== '..' && statOf(resolve(realCwd, word))?.isDirectory()) ? (candidate || '.') : word;
+  });
+  for (const path of normalized) if (visible.has(path)) requireRuntimePath(workspace,{path,from:'Selected source'});
+  const found = findTests({root,files,workspace,excludeFixtureProjects:false});
+  const promptTargets = normalized.filter(path => visible.has(path) && path.endsWith('.prompt.md'));
+  const testWords = normalized.filter(path => !promptTargets.includes(path));
+  const selection = testWords.length ? selectTests(found, testWords) : {selected:[],unknown:[],untested:[]};
+  if (selection.untested.length) throw new PreflightError(2, selection.untested.join('\n'));
+  if (selection.unknown.length) {
+    const stories = [...found.tests.map(test => `  ${test.story}  ${test.path}${test.title && test.title !== test.story ? `  (${test.title})` : ''}`),
+      ...(found.untested ?? []).map(item => `  ${item.story}  no test (expected ${expectedTestPath(item.storyPath)})`)];
+    throw new PreflightError(2, [`Unknown story ${selection.unknown.map(word => JSON.stringify(word)).join(', ')}. Stories:`, ...stories].join('\n'));
+  }
+  for (const test of selection.selected) {
+    const problem = discoveryRefusal(test);
+    if (problem) throw new PreflightError(4, problem.message);
+  }
+  const captured = capture(root,{tests:[...selection.selected.map(test => test.path),...promptTargets],appMap:null,workspace});
+  const inventory = captured.files.map(file => typeof file === 'string' ? file : file.path);
+  return { files: [...new Set([...files, ...inventory])], targets: [...new Set(inventory.filter(path => path.endsWith('.prompt.md')))] };
+}
+
 function captureWithPolicy(root, { attempts = 3, ...selection } = {}, strict = false) {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const captured = captureOnce(root, selection, strict);
@@ -1881,25 +2000,140 @@ export function whyNoTests(root, visible, found = discoverTests(root, [...visibl
   return why.length > 5 ? [...why.slice(0, 5), `…and ${why.length - 5} more`] : why;
 }
 
-// Source files named (in backticks) by more than one prompt: one warning line each (real-user cli issue 10).
-export function sharedSourceFiles(root, visible) {
-  const owners = new Map(), warnings = [];
-  for (const prompt of [...visible].filter(path => allowsRuntimePath(loadRuntimeWorkspace({root}),path)&&path.endsWith('.prompt.md')).sort()) {
-    if (Number(statOf(join(root,prompt))?.size ?? 0) > LIMITS.bytes) continue;
+const PROSE_NON_SOURCE_FILE = /(?:^|\/)\.[^/]+$|\.(?:json|jsonl|ndjson|ya?ml|toml|ini|cfg|conf|lock|md|txt|csv|tsv|xml|svg|png|jpe?g|gif|webp|ico|pdf|woff2?)$/i;
+
+function readRegularPrefix(root, path, limit) {
+  const stat = statOf(join(root, path));
+  if (!stat?.isFile()) return null;
+  let fd;
+  try { fd = openSync(join(root, path), constants.O_RDONLY | constants.O_NOFOLLOW); }
+  catch (error) {
+    if (['ENOENT', 'ENOTDIR', 'ELOOP'].includes(error.code)) return null;
+    if (['EACCES', 'EPERM', 'EISDIR'].includes(error.code)) return false;
+    throw error;
+  }
+  try {
+    const buffer = Buffer.alloc(Math.min(limit, Number(fstatSync(fd).size) + 1));
+    let total = 0;
+    while (total < buffer.length) {
+      const count = readSync(fd, buffer, total, buffer.length - total, total);
+      if (!count) break;
+      total += count;
+    }
+    return buffer.subarray(0, total);
+  } finally { closeSync(fd); }
+}
+
+function safeClosureTarget(raw, from, allowedSet) {
+  if (typeof raw !== 'string') return null;
+  try {
+    const resolved = from ? contextPath(raw, from, allowedSet) : sourcePath(raw, 'Selected source');
+    return resolved && allowedSet.has(resolved) ? resolved : null;
+  } catch { return null; }
+}
+
+// Source files owned by more than one prompt: one warning line each, scoped to selected tests when supplied.
+export function sharedSourceFiles(root, visible, { tests = null, prompts: selectedPrompts = null, workspace = loadRuntimeWorkspace({ root }) } = {}) {
+  const policy = boundedWorkspace(root, workspace);
+  const allowedSet = new Set([...visible].filter(path => allowsRuntimePath(policy, path)));
+  const promptPaths = [...allowedSet].filter(path => path.endsWith('.prompt.md')).sort();
+  const promptTexts = new Map(), warnings = [];
+  let linkedPort;
+  for (const prompt of promptPaths) {
+    const stat = statOf(join(root, prompt));
+    if (Number(stat?.size ?? 0) > LIMITS.bytes) continue;
     let text;
-    try { text = readText(root, prompt); }
+    try { text = stat?.isSymbolicLink() ? (linkedPort ??= sourceFilePort(root, allowedSet, policy)).read({ path: prompt }).content : readText(root, prompt); }
     catch (error) {
-      if (!(error instanceof PreflightError && error.exitCode === 4) && !['EACCES','EPERM','EISDIR','ENOENT'].includes(error.code)) throw error;
+      if (!(error instanceof PreflightError && error.exitCode === 4) && !['EACCES', 'EPERM', 'EISDIR', 'ENOENT'].includes(error.code)) throw error;
       warnings.push(`Warning: ${prompt}: source ownership advice unavailable (${error.code ?? error.message}).`); continue;
     }
-    for (const match of text.matchAll(/`([^`\s]+)`/g)) {
-      const path = match[1].replace(/^\.\//, '');
-      if (path === prompt || path.endsWith('.md') || !visible.has(path)) continue;
-      owners.set(path, new Set([...(owners.get(path) ?? []), prompt]));
+    promptTexts.set(prompt, text);
+  }
+  let scope = null;
+  if (tests !== null || selectedPrompts !== null) {
+    scope = new Set();
+    const queue = [], visited = new Set();
+    const enqueue = (raw, from = null, role = 'context') => {
+      const target = safeClosureTarget(raw, from, allowedSet);
+      if (target && !visited.has(`${role}:${target}`)) queue.push({ path: target, role });
+    };
+    const readSafe = path => {
+      if (promptTexts.has(path)) return promptTexts.get(path);
+      const stat = statOf(join(root, path));
+      if (!stat || Number(stat.size) > LIMITS.bytes) return null;
+      try { return stat.isSymbolicLink() ? (linkedPort ??= sourceFilePort(root, allowedSet, policy)).read({ path }).content : readText(root, path); }
+      catch { return null; }
+    };
+    for (const raw of selectedPrompts ?? []) {
+      const target = safeClosureTarget(raw, null, allowedSet);
+      if (target?.endsWith('.prompt.md')) { scope.add(target); enqueue(target); }
+    }
+    for (const entry of tests ?? []) {
+      const testPath = typeof entry === 'string' ? safeClosureTarget(entry, null, allowedSet) : safeClosureTarget(entry?.path, null, allowedSet);
+      let doc = isObject(entry?.doc) ? entry.doc : null;
+      if (!doc && testPath) {
+        const raw = readSafe(testPath);
+        if (raw) { try { const parsed = JSON.parse(raw); if (isObject(parsed)) doc = parsed; } catch {} }
+      }
+      if (typeof entry?.storyPath === 'string') enqueue(entry.storyPath, null, 'story');
+      if (!doc) continue;
+      if (typeof doc.story_path === 'string') enqueue(doc.story_path, null, 'story');
+      for (const item of Array.isArray(doc.entry_paths) ? doc.entry_paths : []) enqueue(item);
+      for (const item of Array.isArray(doc.app_maps) ? doc.app_maps : []) enqueue(item, null, 'app-map');
+      for (const step of Array.isArray(doc.steps) ? doc.steps : []) if (typeof step?.entry_path === 'string') enqueue(step.entry_path);
+      for (const item of Array.isArray(doc.context) ? doc.context : []) {
+        if (typeof item?.prompt_path === 'string') enqueue(item.prompt_path);
+        for (const contextItem of Array.isArray(item?.paths) ? item.paths : []) enqueue(contextItem);
+      }
+    }
+    while (queue.length) {
+      const { path, role } = queue.shift(), key = `${role}:${path}`;
+      if (visited.has(key)) continue;
+      visited.add(key);
+      if (path.endsWith('.prompt.md')) scope.add(path);
+      if (role === 'app-map') {
+        const text = readSafe(path); if (!text) continue;
+        let map; try { map = JSON.parse(text); } catch { continue; }
+        const walk = value => {
+          if (Array.isArray(value)) { for (const item of value) walk(item); return; }
+          if (!isObject(value)) return;
+          if (typeof value.prompt_path === 'string') enqueue(value.prompt_path);
+          if (typeof value.owner_prompt === 'string') enqueue(value.owner_prompt);
+          for (const field of ['screens', 'router', 'routes', 'handlers', 'handler', 'after', 'timers', 'host_regions', 'helpers']) walk(value[field]);
+        };
+        walk(map);
+      } else if (path.endsWith('.md')) {
+        const text = readSafe(path); if (!text) continue;
+        if (role === 'story' || isStoryPath(path)) {
+          for (const member of runtimeBoundary(path, text) ?? []) enqueue(member);
+        }
+        for (const raw of markdownContext(text)) enqueue(raw, path);
+        if (path.endsWith('.prompt.md')) {
+          for (const block of interfaceBlocks(text)) {
+            let doc; try { doc = JSON.parse(block[1]); } catch { continue; }
+            for (const call of Array.isArray(doc?.calls) ? doc.calls : []) if (typeof call?.target === 'string') enqueue(call.target, path);
+          }
+        }
+      }
     }
   }
-  return [...warnings,...[...owners].filter(([, prompts]) => prompts.size > 1).sort(([a], [b]) => a.localeCompare(b))
-    .map(([path, prompts]) => `Warning: ${path} is named by ${prompts.size} prompts (${[...prompts].join(', ')}). One prompt should own each source file.`)];
+  const candidatePaths = [...allowedSet].filter(path => !path.endsWith('.md')).sort((a, b) => a.localeCompare(b));
+  const rawBindings = allowedSet.has('pdd-bindings.json') ? readRegularPrefix(root, 'pdd-bindings.json', 65_536) : null;
+  const bindings = rawBindings ? rawBindings.toString('utf8') : rawBindings;
+  const heads = candidatePaths.map(path => ({ path, content: readRegularPrefix(root, path, 4097) }));
+  const prompts = [...promptTexts.entries()].map(([path, content]) => ({ path, content }));
+  const allowedPromptSet = new Set(promptPaths);
+  const resolved = resolveOwners({ paths: candidatePaths, bindings, heads, prompts });
+  const conflicts = [];
+  for (const row of resolved.files) {
+    if (row.source === 'prose' && PROSE_NON_SOURCE_FILE.test(row.path)) continue;
+    const owners = [...new Set(row.owners.filter(prompt => allowedPromptSet.has(prompt)))].sort();
+    if (owners.length < 2) continue;
+    if (scope && !owners.some(prompt => scope.has(prompt))) continue;
+    conflicts.push(`Warning: ${row.path} is named by ${owners.length} prompts (${owners.join(', ')}). One prompt should own each source file.`);
+  }
+  return [...warnings, ...conflicts];
 }
 
 // Files sent that are not prompt, story or test files.

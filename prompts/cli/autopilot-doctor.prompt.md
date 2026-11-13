@@ -2,20 +2,26 @@
 
 Own `src/autopilot-doctor.mjs`. Export asynchronous `runAutopilotDoctor(input,
 ports = {})`. Input carries cwd, packageRoot and env, and an optional saved profile binding
-(agent id/kind, home, definitionHome, configHome), plus optional coordinatorPaneId. Preserve existing launcher
+(agent id/kind, home, definitionHome, configHome). Preserve existing launcher
 behavior except the authorized required preflight before startup effects.
 The doctor is read-only: no GitHub writes, agent generation, interpreter jobs,
 state files, timer changes, workspace allocation, cleanup or approvals.
 
+The core engine is the only Autopilot engine. Its jobs run headless, so doctor
+has no Herdr check and makes no Herdr call. The launcher can also pass `engine`,
+`coordinatorPaneId` and a `coordinatorHealth` port. Doctor ignores them.
+
 Return {exitCode, message, checks}. Checks are ordered records with exactly id,
-status (pass, warn, fail), detail and fix. Exit 1 only for missing or signed-out
+status (pass, warn, fail), detail and fix. Every record has a fix, also a pass
+record. Exit 1 only for missing or signed-out
 agent sign-in; otherwise exit 0. This is the only new refusal allowed before
 native start. Every other doctor finding is WARN with a fix command, including
 a different pdd on PATH, read-only repository permission and disabled merge
 methods, in both observe and auto mode. Preserve native start admission,
 cleanup, parking and recovery decisions. Start displays advisory lines and
 continues to its native guards; doctor findings must not add other refusals.
-Message has one line per record: STATUS id: detail; fix: command.
+Message has one line per record. A pass line is `PASS id: detail`: it shows no
+fix. A warn or fail line is `STATUS id: detail; fix: command`.
 Collapse control characters and newlines in details. Never echo auth payloads,
 tokens or provider diagnostics. Each fix is a concrete shell command, safely
 quoted for paths, with a diagnostic command for successful checks or conditions
@@ -38,9 +44,13 @@ installed (probed definitions), env (effective invocation environment), and
 configurationError (caught load error or null). Program/file/config selection ports
 match the doctor. A saved binding wins over conflicting definition profile values.
 
-Printed commands must target that invocation environment. Preserve safe PATH,
-HOME, CODEX_HOME, CLAUDE_CONFIG_DIR and GEMINI_CLI_HOME bindings and explicit unsets
-for absent provider directories. Include other non-secret definition overrides as literal bindings;
+Printed commands must target that invocation environment. Compare it with the
+caller environment for HOME, PATH, CODEX_HOME, CLAUDE_CONFIG_DIR, GEMINI_CLI_HOME
+and each override name of the selected definition. Bind only the names that
+differ: an explicit unset (`-u NAME`) when the caller has NAME and the invocation
+environment does not, and `NAME=value` when the value differs. Such a fix is
+`env BINDINGS /bin/sh -c 'COMMAND'`. When no name differs, the fix is the plain
+command. Non-secret values are literal and safely quoted;
 credential-named bindings and URLs with credentials, query or fragment use shell
 variable references, never literal secret values.
 Report no raw provider/configuration error or auth payload. A failed inspection
@@ -57,6 +67,18 @@ Check these boundaries in order and continue after failures:
   is enabled. Missing tools, gh auth or write permission warn. Read effective
   rules for the default branch separately. Unreadable rules warn; list rule types
   and say required reviews/checks still apply. Do not claim merge eligibility.
+- Git identity (`git-identity`): Autopilot jobs commit, so they need a name and an
+  email. Read the effective `git config user.name` and `git config user.email` in
+  the repository folder with the invocation environment. In that environment, a
+  nonblank GIT_AUTHOR_NAME and GIT_COMMITTER_NAME also give the name, and a nonblank
+  GIT_AUTHOR_EMAIL and GIT_COMMITTER_EMAIL (or EMAIL) also give the email, as Git
+  reads them. A missing value warns: `Git user.name and user.email are needed for
+  Autopilot commits; missing: NAMES`, where NAMES is `user.name`, `user.email` or
+  both. The fix sets only the missing values, joined with ` && `:
+  `git config --global user.name "Your Name"` and
+  `git config --global user.email "you@example.com"`. With both values, pass with
+  `Git user.name and user.email are set for Autopilot commits` and the fix
+  `git config user.name && git config user.email`.
 - Choose a signed-in configured agent using the launcher's normal provider order
   and invocation environment. Probe only Codex login status or Claude auth status
   --json (preserve supported agy/Gemini launcher selection through its read-only readiness/credential ports). When sign-in is missing or signed out, fail with the installed agent's sign-in
@@ -65,30 +87,34 @@ Check these boundaries in order and continue after failures:
   read-only account port. Limited and unknown are warnings. For Claude,
   unsupported read-only usage evidence is warning with `claude` and /usage advice;
   no generation call to discover allowance, and no credit/reset advice.
-- With the core engine (the input's `engine`, which a machine start saved, else
-  `autopilot.engine: "core"` in the checked repository's `pdd.json`), jobs run
-  headless: report `PASS herdr: Not needed: autopilot.engine is core, so jobs run
-  headless without Herdr`, run no Herdr command and add no `herdr-room` check.
-  Otherwise:
-- Herdr installed. Read the workflow session `pdd` server status and pane list without starting a server, matching the shared workflow pane budget.
-  A stopped server has zero panes. Apply PDD_HERDR_PANE_BUDGET (default 56,
-  0 unlimited), using the workflow owner's ensurePaneBudget with cleanup disabled,
-  rather than a second parser or inventory policy. Only charge the one pane that
-  openWorkspace actually allocates on a fresh start. For a saved coordinator, use
-  the launcher's coordinatorHealth in session `pdd-autopilot`; never search for
-  that pane in `pdd`. A verified coordinator needs no allocation or workflow room
-  read. An unavailable or mismatched saved target warns and defers to the existing
-  guarded start recovery; preflight must not refuse a start that native start
-  admits. Saved custody and pending delivery also defer allocation to their guards.
-  Insufficient room, invalid budget and unreadable inventory warn and defer to
-  native start. This includes a finished workflow shell after its chat has closed:
-  preflight does not need to predict which panes native cleanup can reclaim.
-  Recommend the native tidy command for capacity, or unset an invalid budget.
-- Setup: require a complete PDD block in AGENTS.md or CLAUDE.md, all ten skill
+- Setup: require a complete PDD block in AGENTS.md or CLAUDE.md, all seven skill
   entrypoints in one selected provider's supported project/user skill root,
   and valid pdd.json autopilot mode/trust. Off warns; native start owns mode admission. Describe observe versus auto
   authority, owner/write-access trust even with [], explicit trusted users and
   strict approvals in plain words. Never change mode or trust.
+- GitHub settings (`settings-github`): Autopilot job worktrees and other machines
+  start from GitHub, so they read `pdd.json` of the default branch there. Read it
+  with `gh api repos/REPO/contents/pdd.json?ref=BRANCH` (REPO and BRANCH from the
+  `gh repo view` read above; the branch is URL-encoded) and decode its base64
+  content. A gh reply with `(HTTP 404)` means that GitHub has no file. The settings
+  differ as [Autopilot settings on GitHub](autopilot-github.prompt.md#publish)
+  defines: the effective mode or the trust names, ignoring case and order. SETTINGS
+  is that prompt's `MODE, trust NAMES` form. The first matching row decides:
+
+  | Observation | Status | Detail | Fix |
+  |---|---|---|---|
+  | No REPO or BRANCH, a failed read, or a file that is not a base64 JSON object | warn | `Autopilot settings on GitHub are unproved; doctor could not read pdd.json of the default branch` | `gh auth login && ` plus the read command, or `gh auth login` without REPO or BRANCH |
+  | This checkout has a `pdd.json` that is not a JSON object | warn | `pdd.json in this checkout is not a JSON object; the GitHub comparison is unproved` | `vi pdd.json` |
+  | No file on GitHub and none in this checkout | warn | `pdd.json is missing in this checkout and on GitHub (BRANCH)` | `pdd setup` |
+  | No file on GitHub | warn | `pdd.json is only in this checkout; GitHub (BRANCH) has none, so other machines and Autopilot job worktrees do not see it` | `git add pdd.json && git commit -m "Add PDD settings" && git push`, plus ` # or pdd autopilot MODE` when the local mode is observe or auto |
+  | No file in this checkout | warn | `pdd.json is only on GitHub (BRANCH): SETTINGS; this checkout has none` | `git fetch origin && git checkout origin/BRANCH -- pdd.json` |
+  | The settings differ | warn | `GitHub: SETTINGS; this checkout: SETTINGS; Autopilot jobs use the GitHub copy` | The publish commands of that prompt's Check, joined with ` && `: `pdd autopilot MODE` (the local mode) when the modes differ, `pdd autopilot trust NAMES` and `pdd autopilot untrust NAME` |
+  | The same settings | pass | `GitHub (BRANCH) has the same Autopilot settings: SETTINGS` | the read command |
+
+  The read command is `gh api 'repos/REPO/contents/pdd.json?ref=BRANCH' -H
+  'Accept: application/vnd.github.raw'`. A trust name or `origin/BRANCH` in a fix
+  is shell-quoted unless it has only letters, digits and `_ . @ / -`. Doctor
+  makes no GitHub write here: only the printed fix publishes.
 - Enumerate tracked *.prompt.md and report draft/missing interfaces as advisory
   paths that may need approval on first check. Malformed or unreadable prompts
   warn. Never approve them or block doctor solely for drafts.
@@ -117,18 +143,17 @@ Check these boundaries in order and continue after failures:
 - [Workflow agents](workflow-agents.prompt.md): read-only agy readiness.
 - [Codex limits](codex-limits.prompt.md): read-only account usage states.
 - [Runtime client](runtime-client.prompt.md#free-interpreter-health-check): required health classification and runtimeOrigin address rules.
-- [Workflow chat](workflow-chat.prompt.md): required ensurePaneBudget admission and pane inventory rules; doctor disables all cleanup.
+- [Autopilot settings on GitHub](autopilot-github.prompt.md): owns when two
+  Autopilot settings differ, the `MODE, trust NAMES` form and the publish commands.
+  Doctor reads GitHub with its own read-only run port, not with that module's ports.
 
 All program, file, network, environment/platform/version/uid and account reads
 have injected ports. Native defaults are adapter bindings only. Files provides
 readFileSync, realpathSync, accessSync and statSync; run accepts executable,
 argv and cwd/env options and returns code/stdout/stderr. agentDefinitions,
-selectAgent, codexLimits, coordinatorHealth, runtimeHealth, fetch and spawn are independently
+selectAgent, codexLimits, runtimeHealth, fetch and spawn are independently
 replaceable ports. onSelection observes the resolved selection before checks;
 the launcher uses its env and agent for startup after a passing report.
-coordinatorHealth({env}) returns the launcher's {state, reason?} observation:
-working, starting, idle, blocked, done, or unavailable with a reason. Unknown
-or failed observations are advisory and leave recovery to start.
 Do not use a GitHub ledger that writes reads to disk. Do not mutate arrays returned by definition ports.
 
 <details><summary>Runtime interface</summary>
@@ -137,7 +162,7 @@ Do not use a GitHub ledger that writes reads to disk. Do not mutate arrays retur
 {
   "kind": "partial",
   "status": "approved",
-  "prose_sha256": "18dae0f1a37855d569abe401be94c190e22b505c46127437f79e3ef7f04040fd",
+  "prose_sha256": "49e976db22ee4709dcf0a37edfd6b72f7c5b44ed1699fca409870ad96fccbc07",
   "entries": [
     {
       "operation": "runAutopilotDoctor",

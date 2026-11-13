@@ -1,6 +1,7 @@
-// Generated from prompts/cli/interface-draft.prompt.md (sha256: 964f1155c78fd45cc69ef93e07685273f47996db6c3217122018fa29948f685e).
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+// Generated from prompts/cli/interface-draft.prompt.md (sha256: 7157c4a577414fcc6d2ef9bbc13fd30a25db3fb0e83ffeede8bdf2a731006364).
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, linkSync, renameSync, rmSync, openSync, closeSync, fstatSync, chmodSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { isDeepStrictEqual } from 'node:util';
 import { expandSource } from './contract-refs.mjs';
@@ -55,7 +56,58 @@ function saveDrafts(root, records) {
   mkdirSync(join(root,'.pdd'),{recursive:true});
   // This local folder must also stay ignored in projects that have not run setup.
   try { writeFileSync(join(root,'.pdd/.gitignore'),'*\n',{flag:'wx'}); } catch(error) {if(error.code!=='EEXIST') throw error;}
-  writeFileSync(metadataFile(root),JSON.stringify(records,null,2)+'\n');
+  let mode;
+  try {
+    // Preserve the permission check of an in-place save without truncating it.
+    const descriptor=openSync(metadataFile(root),'r+');
+    try { mode=fstatSync(descriptor).mode & 0o777; }
+    finally { closeSync(descriptor); }
+  } catch(error) { if(error.code!=='ENOENT') throw error; }
+  const temporary=join(root,'.pdd',`interface-drafts-${randomUUID()}.tmp`);
+  try {
+    writeFileSync(temporary,JSON.stringify(records,null,2)+'\n',{flag:'wx',mode:mode===undefined ? 0o600 : mode & 0o600});
+    if(mode!==undefined) chmodSync(temporary,mode);
+    renameSync(temporary,metadataFile(root));
+  } catch(error) {
+    if(error.code==='EEXIST') throw error;
+    try { rmSync(temporary,{force:true}); }
+    catch(cleanup) { throw new Error(`${error.message}\nCannot remove temporary interface draft provenance: ${cleanup.message}`,{cause:error}); }
+    throw error;
+  }
+}
+function replaceDraftPrompt(root, path, next) {
+  const file=join(root,path),descriptor=openSync(file,'r+');
+  let mode;
+  try { mode=fstatSync(descriptor).mode & 0o777; }
+  finally { closeSync(descriptor); }
+  const directory=mkdtempSync(join(dirname(file),`.pdd-${basename(file).slice(0,32)}-`));
+  const backup=join(directory,'original'),staged=join(directory,'next');
+  try {
+    // Retain the original inode: recovery must not need another content write.
+    linkSync(file,backup);
+    writeFileSync(staged,next,{flag:'wx',mode:mode & 0o600});
+    chmodSync(staged,mode);
+    renameSync(staged,file);
+    return {path,directory,backup};
+  } catch(error) {
+    try { rmSync(directory,{recursive:true,force:true}); }
+    catch(cleanup) { throw new Error(`${error.message}\nCannot remove temporary draft for ${path}: ${cleanup.message}`,{cause:error}); }
+    throw error;
+  }
+}
+function restoreDraftPrompts(root, changes, error) {
+  const failures=[];
+  for(const {path,directory,backup} of [...changes].reverse()) {
+    try {
+      renameSync(backup,join(root,path));
+    } catch(rollback) {
+      // Leave the retained original available if restoration itself is refused.
+      failures.push(`Cannot restore ${path}: ${rollback.message}`);continue;
+    }
+    try { rmSync(directory,{recursive:true,force:true}); }
+    catch(cleanup) { failures.push(`Cannot remove temporary draft for ${path}: ${cleanup.message}`); }
+  }
+  return failures.length ? new Error([error.message,...failures].join('\n'),{cause:error}) : error;
 }
 function jsonDeclarations(text) {
   const values=[];
@@ -193,7 +245,14 @@ function completeContract(value) {
   };
   unique(iface.entries,'operation','/entries');unique(iface.calls,'operation','/calls');unique(iface.resources,'name','/resources');
   for(const [i,entry] of iface.entries.entries()) {
-    fields(entry,['operation','input_schema','result_schema','errors','instance','resource_operations','copy_out'],`/entries/${i}`);
+    fields(entry,['operation','input_schema','result_schema','errors','instance','resource_operations','copy_out','implementation'],`/entries/${i}`);
+    if(Object.hasOwn(entry,'implementation')) {
+      const impl=entry.implementation,pointer=`/entries/${i}/implementation`;
+      if(!object(impl)) throw declarationError(pointer,'Declare a CLI implementation object.');
+      fields(impl,['kind','command'],pointer);
+      if(impl.kind!=='cli') throw declarationError(pointer+'/kind','Use cli.');
+      if(typeof impl.command!=='string' || !impl.command.trim() || /[\n\r;|&<>`$\\'"(){}*?\[\]]/.test(impl.command)) throw declarationError(pointer+'/command','Use a whitespace-separated argv command with no shell syntax.');
+    }
     if(Object.hasOwn(entry,'instance')) {
       const binding=entry.instance,pointer=`/entries/${i}/instance`;
       if(!object(binding)) throw declarationError(pointer,'Declare a factory or method binding object.');
@@ -329,23 +388,109 @@ function extendBody(body,previous,iface) {
   if(!isDeepStrictEqual(JSON.parse(next),iface)) throw declarationError('/','Cannot preserve the existing declaration bytes safely.');
   return next;
 }
+const markdownFragment = title => title.toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu,'').replace(/\s+/g,'-');
+function explicitAnchorId(attributes) {
+  let at=0;
+  while(at<attributes.length) {
+    const space=/^[\t\n\f\r ]+/.exec(attributes.slice(at));
+    if(!space) return null;
+    at+=space[0].length;
+    const name=/^[^\t\n\f\r />=]+/.exec(attributes.slice(at));
+    if(!name) return null;
+    at+=name[0].length;
+    const gap=/^[\t\n\f\r ]*/.exec(attributes.slice(at))[0];
+    at+=gap.length;
+    let value=null,quoted=false;
+    if(attributes[at]==='=') {
+      at++;
+      const beforeValue=/^[\t\n\f\r ]*/.exec(attributes.slice(at))[0];
+      at+=beforeValue.length;
+      const quote=attributes[at];
+      if(quote==='"'||quote==="'") {
+        const end=attributes.indexOf(quote,at+1);
+        if(end<0) return null;
+        value=attributes.slice(at+1,end);quoted=true;at=end+1;
+      } else {
+        const bare=/^[^\t\n\f\r "'=<>`]+/.exec(attributes.slice(at));
+        if(!bare) return null;
+        value=bare[0];at+=bare[0].length;
+      }
+    }
+    if(name[0].toLowerCase()==='id'&&quoted&&value) return value;
+  }
+  return null;
+}
+function markdownSection(text, requested) {
+  let fragment;
+  try { fragment=decodeURIComponent(requested); }
+  catch { throw declarationError('/dependencies','Required context has an invalid Markdown fragment: '+requested); }
+  if(!fragment) throw declarationError('/dependencies','Required context needs a stable Markdown fragment.');
+  const headings=[], anchors=[], lines=text.split(/\n/); let offset=0,fence=null;
+  for(const raw of lines) {
+    const line=raw.endsWith('\r') ? raw.slice(0,-1) : raw;
+    const marker=/^ {0,3}(\x60{3,}|~{3,})(.*)$/.exec(line);
+    if(fence) {
+      if(marker && marker[1][0]===fence.char && marker[1].length>=fence.length && !marker[2].trim()) fence=null;
+      offset+=raw.length+1;continue;
+    }
+    if(marker) { fence={char:marker[1][0],length:marker[1].length};offset+=raw.length+1;continue; }
+    for(const match of line.matchAll(/<a\b([^>]*)>\s*(?:<\/a>)?/gi)) {
+      const anchor=explicitAnchorId(match[1]);
+      if(anchor) anchors.push({anchor,end:offset+match.index+match[0].length});
+    }
+    const heading=/^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*$/.exec(line);
+    if(heading) {
+      const title=heading[2].replace(/[ \t]+#+[ \t]*$/,'');
+      headings.push({level:heading[1].length,anchor:markdownFragment(title),start:offset});
+    }
+    offset+=raw.length+1;
+  }
+  const matches=headings.filter(heading=>heading.anchor===fragment);
+  for(const alias of anchors.filter(alias=>alias.anchor===fragment)) {
+    const heading=headings.find(heading=>heading.start>=alias.end);
+    if(heading && !text.slice(alias.end,heading.start).trim()) matches.push(heading);
+  }
+  const selected=[...new Set(matches)];
+  if(!selected.length) throw declarationError('/dependencies','Required context has no Markdown heading for fragment: '+fragment);
+  if(selected.length!==1) throw declarationError('/dependencies','Required context has an ambiguous Markdown fragment: '+fragment);
+  const heading=selected[0],after=headings.find(item=>item.start>heading.start && item.level<=heading.level);
+  return {anchor:fragment,text:text.slice(heading.start,after?.start)};
+}
+const negatedMarker=(text,marker) => new RegExp('\\bnot(?:\\s+\\w+){0,2}\\s+'+marker+'\\b','i').test(text);
+function declaredDependencyLinks(section) {
+  const declarations=section.split(/\n(?= {0,3}[-*+] )|\n{2,}/);
+  return declarations.flatMap(declaration => {
+    const markerText=declaration.replace(/\[([^\]]*)\]\([^)]*\)/g,'$1');
+    if(/\bnavigation[- ]only\b/i.test(markerText) && !negatedMarker(markerText,'navigation[- ]only')) return [];
+    const links=[...declaration.matchAll(/\[([^\]]*)\]\(([^)\s]+)\)/g)];
+    if(/^\s*[-*+]\s+/.test(declaration)) return links;
+    return links.filter(link => {
+      const start=declaration.lastIndexOf('\n',link.index)+1,end=declaration.indexOf('\n',link.index);
+      const line=declaration.slice(start,end < 0 ? declaration.length : end);
+      const bareLink=/^\s*\[[^\]]*\]\([^\s)]+\)\.?\s*$/.test(line);
+      return !negatedMarker(line,'required') && (/\brequired\b/i.test(line) || bareLink);
+    });
+  });
+}
 // Load only declared context. JSON declarations are data, never prose coverage.
 function draftSources(root,path,text) {
   const files=sourceFilePort(root), sources=[], visiting=new Set(), loaded=new Set();
-  function load(path,text) {
-    if(visiting.has(path)) throw declarationError('/dependencies','Required context contains a cycle: '+path);
-    if(loaded.has(path)) return;
-    visiting.add(path);
-    const context=interfaceBlocks(text).reduce((prose,block)=>prose.replace(block[0],''),text);
-    sources.push({path,text:context});
+  function load(path,text,fragment) {
+    const identity=fragment === undefined ? path : path+'#'+fragment;
+    if(visiting.has(identity)) throw declarationError('/dependencies','Required context contains a cycle: '+identity);
+    if(loaded.has(identity)) return;
+    visiting.add(identity);
+    const selected=fragment === undefined ? null : markdownSection(text,fragment);
+    const context=interfaceBlocks(selected ? selected.text : text).reduce((prose,block)=>prose.replace(block[0],''),selected ? selected.text : text);
+    sources.push({path:identity,text:context});
     const section=/^## Dependencies\s*\n([\s\S]*?)(?=^## |$(?![\s\S]))/m.exec(context)?.[1] ?? '';
-    for(const link of section.matchAll(/\[([^\]]*)\]\(([^)\s]+)\)/g)) {
-      if(/^[a-z]+:|^\//i.test(link[2])) throw declarationError('/dependencies','Required context must name a local workspace file.');
-      const target=relative(root,resolve(root,join(path,'..'),link[2].split('#')[0])).split('\\').join('/');
-      if(link[2].includes('#')) throw declarationError('/dependencies','Select required context without a fragment for local drafting.');
-      load(target,files.read({path:target}).content);
+    for(const link of declaredDependencyLinks(section)) {
+      const reference=link[2],at=reference.indexOf('#'),file=at<0 ? reference : reference.slice(0,at),targetFragment=at<0 ? undefined : reference.slice(at+1);
+      if(/^[a-z]+:|^\//i.test(file || reference)) throw declarationError('/dependencies','Required context must name a local workspace file.');
+      const target=file ? relative(root,resolve(root,join(path,'..'),file)).split('\\').join('/') : path;
+      load(target,files.read({path:target}).content,targetFragment);
     }
-    visiting.delete(path);loaded.add(path);
+    visiting.delete(identity);loaded.add(identity);
   }
   load(path,text);
   return sources;
@@ -515,7 +660,7 @@ export async function runInterfaceDraft({words=[],all=false,json=false,cwd=proce
       nativeWorkspaceFiles(root).stat({path:target});
       supplied=JSON.parse(files.read({path:target}).content);
     }
-    const records=drafts(root),rows=[];
+    const records=drafts(root),rows=[],changes=[];
     for(const path of paths) {
       try {
         const text=files.read({path}).content,blocks=interfaceBlocks(text);
@@ -554,12 +699,21 @@ export async function runInterfaceDraft({words=[],all=false,json=false,cwd=proce
         const render=()=>{if(extend) return text.replace(block[0],()=>block[0].replace(block[1],()=>extendBody(block[1],previous,iface)));const rendered='<details><summary>Runtime interface</summary>\n\n```json\n'+JSON.stringify(iface,null,2)+'\n```\n</details>';return block ? text.replace(block[0],()=>rendered) : text+rendered;};
         iface.prose_sha256=proseSha256(render());
         const next=render();
-        records[path]={head:git(root,['rev-parse','HEAD']).trim(),original_sha256:sha256(text),prose_sha256:iface.prose_sha256,interface_sha256:sha256(JSON.stringify(iface)),...(block ? {mode:extend?'extend':'refresh',...(extend ? {extension_before:block[1]} : {})} : inferredBudget ? {mode:'prose'} : {})};
-        writeFileSync(join(root,path),next);
+        const record={head:git(root,['rev-parse','HEAD']).trim(),original_sha256:sha256(text),prose_sha256:iface.prose_sha256,interface_sha256:sha256(JSON.stringify(iface)),...(block ? {mode:extend?'extend':'refresh',...(extend ? {extension_before:block[1]} : {})} : inferredBudget ? {mode:'prose'} : {})};
+        const change=replaceDraftPrompt(root,path,next);
+        records[path]=record;
+        changes.push(change);
         rows.push({path,state:'drafted',prose_coverage:coverage,...(extend ? {approval_scope:'whole-interface',approval_note:'The Runtime interface has one global status; mixed approval status is unavailable. The whole interface needs re-approval.',interface_diff:{before:block[1],after:interfaceBlocks(next)[0][1],unchanged:preservedPointers(previous,iface)}} : {}),...(inferredBudget ? {draft_budget:{source:'command-default',limits:iface.limits}} : {}),...(questions.length ? {questions,next_step:recovery(path)} : {})});
       } catch(error) {rows.push({path,state:'refused',problems:[{code:error.code ?? 'interface-draft-failed',message:error.message,...(error.pointer!==undefined ? {section:error.pointer,rule:error.rule} : {})}]});}
     }
-    if(rows.some(row=>row.state==='drafted')) saveDrafts(root,records);
+    if(changes.length) {
+      try { saveDrafts(root,records); }
+      catch(error) { throw restoreDraftPrompts(root,changes,error); }
+      for(const {path,directory} of changes) {
+        try { rmSync(directory,{recursive:true,force:true}); }
+        catch(cleanup) { stderr.write(`Draft saved; cannot remove temporary draft for ${path}: ${cleanup.message}\n`); }
+      }
+    }
     for(const row of rows) {
       row.problems ??= interfaceFindings({root,paths:[row.path]});
       row.lint_clean=row.problems.length===0;

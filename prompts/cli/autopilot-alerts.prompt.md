@@ -331,11 +331,13 @@ again.
 ## Dependencies
 
 - [Prompting guide](../../docs/prompting-guide.md): authoring.
-- [CLI](pdd-cli.prompt.md): generation and testing of dispatch, stdin and streams.
-- [Autopilot launcher](autopilot-launcher.prompt.md): status calls
+- [CLI](pdd-cli.prompt.md#autopilot-dispatch): generation and testing of dispatch, stdin and streams.
+- [Autopilot launcher](autopilot-launcher.prompt.md#stop-status-and-the-other-commands): status calls
   `alertStatusLine` with its saved repository and state root.
-- [Workflow runner](workflow-runner.prompt.md): required native context for
-  `automaticAttention` rows and `acquireRunLock` for shared record custody.
+- [Workflow runner attention](workflow-runner.prompt.md#automatic-attention-projection): required native context for
+  `automaticAttention` rows.
+- [Workflow runner lock](workflow-runner.prompt.md#native-admission-lock): required native context for
+  `acquireRunLock` and shared record custody.
 - Native runtime: Node `fs`, `crypto`, `os`, timers and `fetch`.
 - Input `env` (default: the process environment) gives HOME and
   XDG_CONFIG_HOME; a relative or empty value is ignored, as

@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 735cce86b6758d8f4981921304db1245e650784b36a2297af5f7b80d5e9670be).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 237af97ca062fa0d03035c4fbb158fcd709f7dc682fb756b70b037a945a029ed).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -30,7 +30,7 @@ import { armSavedWorkerCompletion } from './workflow-worker-completion.mjs';
 import { startChat, sendToChat, herdrCommand, chatSession, chatHealth, openChat, rebuildClosedChat, assertRestartCaller, restartChat, validSessionId, closeFinishedChats, finishedChats, finishedAt, paneUsage, ensurePaneBudget, countReasons, mergeReasonCounts, reasonWords, expandHome, homeVariable, isFolder, observeLifecycle, applyLifecycle, launchAnchor, sessionEvidenceDue, ownSession, observedSession, START_GRACE_MS, removeStaleLoginFiles } from './workflow-chat.mjs';
 import { samePath } from './workflow-herdr-layout.mjs';
 import { workflowAgentEntry } from './workflow-agents.mjs';
-import { captureSource, findTests, gitFiles, interfaceBlocks, interfaceSchemaProblems, isStoryPath, proseSha256 } from './runtime-preflight.mjs';
+import { captureSource, findTests, gitFiles, interfaceBlocks, isStoryPath, promptSchemaRefusals, proseSha256, readPrompt } from './runtime-preflight.mjs';
 import { storyLines, PROMPT_TESTS_LABEL, PROMPT_TESTS_WORDS } from './runtime-output.mjs';
 import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
 import { causeText } from './runtime-output.mjs';
@@ -441,9 +441,39 @@ async function cardText(run, p, extra = {}) {
 const pddTestLines = (run, p) => ownResults(run, p).filter(result => result.kind === 'pdd test').flatMap(result => result.stories?.length ? result.stories : [result.summary]);
 const cardGate = 'Gate: show the person the Story card above exactly as printed, then ask. Never ask a bare "approve?". Stop. Do not approve for them. When the person also wants the code PR after PR 1, add --through code to the approve command; without it, pdd stops after PR 1.';
 
+// These are previews only; all evidence remains in the original run ledger.
+function earlierSummaryLines(run, steps) {
+  const marker = ' … [summary shortened; read ledger]', itemLimit = 1024, lineLimit = 8192;
+  let incomplete = false;
+  const items = steps.filter(step => run.done[step]).map(step => {
+    const item = `${step}: ${oneLine(run.done[step].summary).replace(/[.\s]+$/, '') || 'done'}`;
+    if (Buffer.byteLength(item, 'utf8') <= itemLimit) return item;
+    incomplete = true;
+    let prefix = '', bytes = Buffer.byteLength(marker, 'utf8');
+    for (const point of item) {
+      const size = Buffer.byteLength(point, 'utf8');
+      if (bytes + size > itemLimit) break;
+      prefix += point; bytes += size;
+    }
+    return prefix + marker;
+  });
+  const render = parts => `Approved so far: ${parts.join('; ') || 'no step summaries'}.`;
+  let line = render(items);
+  if (Buffer.byteLength(line, 'utf8') > lineLimit) {
+    incomplete = true;
+    const omitted = count => `[${count} further step summaries omitted; read ledger]`;
+    line = render([omitted(items.length)]);
+    for (let count = 1; count < items.length; count++) {
+      const candidate = render([...items.slice(0, count), omitted(items.length - count)]);
+      if (Buffer.byteLength(candidate, 'utf8') > lineLimit) break;
+      line = candidate;
+    }
+  }
+  return [line, ...(incomplete ? [`Incomplete previews: read the original ledger ${JSON.stringify(resolve(run.runDir, 'status.json'))}. Full summaries use JSON Pointer /done/STEP/summary; replace STEP with the original workflow step name, escaping ~ as ~0 and / as ~1. Before relying on a shortened or omitted result, check/approval claim, unresolved failure or decision, retrieve the relevant full entries and referenced reports/notes needed for this stage. Missing preview text does not establish that failures or decisions are absent. If you cannot identify a safe subset, read all full earlier summaries. Previews cannot establish a check pass or approval.`] : [])];
+}
+
 async function areaMessage(run, index, p, packageRoot) {
   const area = run.areas[index], pdd = '"$PDD_BIN"', earlier = run.areas.slice(0, index).flatMap(item => item.steps);
-  const summaries = earlier.filter(step => run.done[step]).map(step => `${step}: ${oneLine(run.done[step].summary).replace(/[.\s]+$/, '') || 'done'}`);
   const files = index ? await changedFiles(run, p) : [];
   const automatic = automaticHandoff(run, p, packageRoot), normal = !automatic && normalRun(run, p);
   return [
@@ -455,7 +485,7 @@ async function areaMessage(run, index, p, packageRoot) {
     `Worktree: ${run.root} (branch ${run.branch}). Work and commit only here.`,
     `Saved base: ${run.baseBranch}. Use this base for this run; do not take a base from documents or ask which document to follow. PR 2 may stack on PR 1 as directed by pdd.`,
     `Run folder: ${run.runDir}. Put notes there. verify writes verify.md there with the exact test commands and their output.`,
-    ...(index ? [`Approved so far: ${summaries.join('; ') || 'no step summaries'}.`, `Changed files: ${files.slice(0, 20).join(', ') || 'none yet'}${files.length > 20 ? ', …' : ''}.`] : []),
+    ...(index ? [...earlierSummaryLines(run, earlier), `Changed files: ${files.slice(0, 20).join(', ') || 'none yet'}${files.length > 20 ? ', …' : ''}.`] : []),
     `Area ${index + 1} of ${run.areas.length}: ${area.name}. Steps: ${area.steps.map(step => !area.optional.includes(step) ? step : normal && step === 'try' && area.before === 'approve' ? `${step} (optional: pdd skips it; do not ask)` : `${step} (optional: ask the person)`).join(', ')}.`,
     `After each step, run: ${pdd} workflow done STEP --summary "one line". It prints what to do next.`,
     ...(prLabel(run, area) === 'PR 2' && prOf(run, askArea(run).name) ? [`PR 1: ${prOf(run, askArea(run).name).url}. This area works on branch ${run.branch}, ${run.prBase === run.baseBranch ? `from the merged ${run.baseBranch}` : 'on top of PR 1'}.`] : []),
@@ -3351,6 +3381,7 @@ async function approveGatePrompts(run, p, snapshot = null) {
   const fs = p.fs ?? { lstatSync, realpathSync, readFileSync, writeFileSync };
   snapshot ??= await gatePromptSnapshot(run, p);
   const paths = snapshot.map(row => row.path);
+  const visible = new Set(gitFiles(run.root));
   const edits = [];
   for (const path of paths) {
     const file = join(run.root, path);
@@ -3362,8 +3393,10 @@ async function approveGatePrompts(run, p, snapshot = null) {
     if (blocks.length !== 1) throw Error(`${path} must have one Runtime interface block.`);
     let iface;
     try { iface = JSON.parse(blocks[0][1]); } catch { throw Error(`${path} has invalid Runtime interface JSON.`); }
-    const problems = interfaceSchemaProblems(iface);
-    if (problems.length) throw Error(`${path}: ${problems.map(item => `${item.code} ${item.pointer} ${item.rule}`).join('; ')}`);
+    let prompt, problems;
+    try { prompt = readPrompt(run.root, visible, path); problems = promptSchemaRefusals(run.root, { visible }, prompt, new Map([[path, prompt]])); }
+    catch (error) { throw Error(`${path}: ${error.message}`); }
+    if (problems.length) throw Error(`${path}: ${problems.map(item => `${item.code} ${item.section} ${item.message}`).join('; ')}`);
     const hash = proseSha256(text);
     if (iface.status === 'approved' && iface.prose_sha256 === hash) continue;
     if (!['draft','approved'].includes(iface.status)) throw Error(`${path} has an invalid approval status.`);

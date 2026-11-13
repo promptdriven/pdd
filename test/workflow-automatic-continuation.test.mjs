@@ -56,33 +56,6 @@ test('automatic startup refuses incomplete binding',async t=>{
   assert.equal(result.exitCode,1); assert.match(result.message,/invalid automatic start context/i);
 });
 
-for (const mode of ['direct', 'environment', 'envelope']) test(`injected admission consumer persists origin from ${mode}`,async t=>{
-  const f=await fixture(t,{name:'bug',agent:'codex'});
-  const root=realpathSync(f.source), stateRoot=join(f.state,'autopilot'); mkdirSync(stateRoot,{recursive:true});
-  writeFileSync(join(f.source,'pdd.json'),JSON.stringify({autopilot:{mode:'auto',trust:[]}}));
-  writeFileSync(join(stateRoot,`${createHash('sha256').update(root).digest('hex').slice(0,20)}.json`),JSON.stringify({enabled:true,repo:'example/project',cwd:root,coordinatorId:origin.coordinatorId,machine:origin.machine,activatedAt:'activation',startAction:{command:'pdd autopilot start',repository:'example/project',mode:'auto'}}));
-  const fixturePath=join(f.base,'reader.json'), logPath=join(f.base,'gh.log');
-  writeFileSync(fixturePath,JSON.stringify({labels:['pdd:working'],events:[{id:12,event:'labeled',label:{name:'pdd:working'},actor:{login:'example'}}],comments:[{id:11,user:{login:'example'},body:JSON.stringify({repository:origin.repository,coordinatorId:origin.coordinatorId,machine:origin.machine,labelEventId:'12'})}]}));
-  const {execFile: callback}=await import('node:child_process'); const {promisify}=await import('node:util'); const exec=promisify(callback);
-  const original=f.ports.execFile;
-  const execFile=(file,args,opts)=>file==='gh' && args[0]==='api' && args[1]==='--include' ? exec(process.execPath,[join(packageRoot,'test/helpers/continuation-fake-gh.mjs'),...args],{...opts,env:{...process.env,READER_FIXTURE_FILE:fixturePath,READER_GH_LOG:logPath}}) : original(file,args,opts);
-  let admitted=0;
-  const coordinator={...origin,activation:'activation'};
-  const input = mode === 'envelope' ? {version:'pdd.autopilot-coordinator.v1',repository:origin.repository,coordinatorId:origin.coordinatorId,machine:origin.machine,activation:'activation'} : coordinator;
-  const result=await startRun({name:'bug',issue:'17',agent:'codex',cwd:f.source,packageRoot,...(mode === 'environment' ? {} : {coordinator:input})},{...f.ports,env:{...f.ports.env,...(mode === 'environment' ? {PDD_AUTOPILOT_CONTEXT:JSON.stringify(input)} : {})},execFile,autopilotStateRoot:stateRoot,checkDependencyStart:async value=>{admitted++; assert.deepEqual(value.coordinator,coordinator); return {allowed:true,reason:'ok'};}});
-  assert.equal(result.exitCode,0,result.message); assert.equal(admitted,1); assert.deepEqual(f.record().automaticOrigin,origin);
-  const run=f.record(), initial=readFileSync(join(run.runDir,'story-start.md'),'utf8');
-  assert.equal(existsSync(join(run.root,'pdd.json')),false); assert.match(initial,/operator invoked pdd autopilot start/); assert.match(initial,/steps\/autopilot\.md/); assert.match(initial,/example\/project.*auto mode/);
-  const delivery=await changeRun({ref:'17',cwd:f.source,text:'Read the owner handoff.',packageRoot},{...f.ports,autopilotStateRoot:stateRoot});
-  assert.equal(delivery.exitCode,0,delivery.message); const packet=f.herdr.paneOf(run.chats[0]).agent.prompts.at(-1); assert.match(packet,/Submitted request: Read the owner handoff/); assert.doesNotMatch(packet,/The person asks for changes|then show the result and ask again/); assert.ok(packet.includes(join(packageRoot,'bin','pdd.mjs')));
-  if (mode === 'direct') {
-    const agentPorts={...f.ports,autopilotStateRoot:stateRoot};
-    assert.equal((await stepDone({step:'reproduce',summary:'Reproduced',cwd:run.root,packageRoot},agentPorts)).exitCode,0);
-    const gate=await stepDone({step:'prompt-story',summary:'Drafted',cwd:run.root,packageRoot},agentPorts);
-    assert.equal(gate.exitCode,0,gate.message); assert.match(gate.message,/operator invoked pdd autopilot start/); assert.match(gate.message,/scoped automatic overlay/); assert.doesNotMatch(gate.message,/Gate: show the person the result/);
-  }
-});
-
 test('invalid automatic inputs are refused before allocating a run',async t=>{
   const f=await fixture(t,{name:'bug',agent:'codex'});
   const base={name:'bug',issue:'17',agent:'codex',cwd:f.source,packageRoot};
