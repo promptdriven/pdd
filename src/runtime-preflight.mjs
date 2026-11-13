@@ -622,6 +622,10 @@ export const formatWarningLines = prompt => interfaceFormatWarnings(prompt?.inte
 // Lint and the files preview give unsupported schema keywords as advice too (#3206); a check keeps its schema rules.
 export const schemaKeywordWarningLines = prompt => (isObject(prompt?.interface) ? interfaceSchemaProblems(prompt.interface) : [])
   .filter(item => item.code === 'graph-schema-unsupported-keyword').map(item => `Warning: ${prompt.path} ${item.pointer} ${item.code}: ${item.rule}`);
+const validCliImplementation = impl => isObject(impl) && Object.keys(impl).length === 2 && impl.kind === 'cli'
+  && typeof impl.command === 'string' && Boolean(impl.command.trim()) && !/[\n\r;|&<>`$\\'"(){}*?\[\]]/.test(impl.command);
+const isCliEntry = (iface, index) => index >= 0 && Array.isArray(iface?.conventions)
+  && ['input_schema', 'result_schema'].every(key => iface.conventions.some(item => isObject(item) && item.path === `/entries/${index}/${key}` && item.convention === 'cli'));
 export function interfaceSchemaProblems(iface) {
   const kindProblems = interfaceKindProblems(iface);
   if (kindProblems.length || iface?.kind === 'native-only') return kindProblems;
@@ -629,6 +633,9 @@ export function interfaceSchemaProblems(iface) {
   if (Array.isArray(iface?.draft_gaps) && iface.draft_gaps.length) out.push({code:'interface-draft-incomplete',pointer:'/draft_gaps',rule:iface.draft_gaps.join('; ')});
   for (const [index, entry] of (Array.isArray(iface?.entries) ? iface.entries : []).entries()) {
     for (const key of ['input_schema', 'result_schema']) if (isObject(entry) && Object.hasOwn(entry, key)) schemaRules(entry[key], `/entries/${index}/${key}`, out);
+    if (isObject(entry) && Object.hasOwn(entry, 'implementation') && !validCliImplementation(entry.implementation)) {
+      out.push({ code: 'interface-implementation-invalid', pointer: `/entries/${index}/implementation`, rule: 'must declare {"kind": "cli", "command": "..."} with whitespace-separated argv and no shell syntax.' });
+    }
   }
   for (const [index, resource] of (Array.isArray(iface?.resources) ? iface.resources : []).entries()) {
     for (const [opIndex, operation] of (Array.isArray(resource?.operations) ? resource.operations : []).entries()) {
@@ -1061,8 +1068,13 @@ export function preflight({ root, found, selected,workspace=found.workspace??loa
     row.native_only = [...prompts.values()].filter(item => item.interface?.kind === 'native-only').map(item => ({path:item.path,reason:item.interface.reason}));
     row.draft = row.steps.some(step => prompts.get(step?.entry_path)?.interface?.status === 'draft');
     for (const [index, step] of row.steps.entries()) {
-      const prompt = prompts.get(step?.entry_path), entry = prompt?.interface?.entries?.find?.(item => item?.operation === step?.operation);
+      const prompt = prompts.get(step?.entry_path), entries = Array.isArray(prompt?.interface?.entries) ? prompt.interface.entries : [];
+      const entryIndex = entries.findIndex(item => item?.operation === step?.operation), entry = entryIndex >= 0 ? entries[entryIndex] : undefined;
       for (const text of entry ? checkInput(step.input, entry.input_schema, index).warnings : []) warnings.push(`Warning: ${test.path} ${text}`);
+      if (entry && isCliEntry(prompt?.interface, entryIndex) && !entry.implementation) {
+        const message = `Warning: ${step.entry_path} entry ${step.operation} has no implementation declaration.`;
+        if (!warnings.includes(message)) warnings.push(message);
+      }
     }
     // Number advice from the exact test values. It never blocks; the interpreter decides.
     // A native-only test is never sent to the interpreter, so it gets no number advice.
@@ -1077,43 +1089,112 @@ export function preflight({ root, found, selected,workspace=found.workspace??loa
   return { rows, warnings };
 }
 
-// Keep PDD's declaration classification local. Token offsets preserve all other
-// JSON spellings; in particular, parsing and stringifying would round numbers.
+export function missingCliImplementationWarnings({ root, found, selected, workspace = found.workspace ?? loadRuntimeWorkspace({ root }) }) {
+  workspace = boundedWorkspace(root, workspace);
+  const warnings = [], prompts = new Map();
+  for (const test of Array.isArray(selected) ? selected : []) {
+    if (test?.error) continue;
+    for (const step of Array.isArray(test?.doc?.steps) ? test.doc.steps : []) {
+      const path = step?.entry_path;
+      if (typeof path !== 'string') continue;
+      if (!prompts.has(path)) {
+        try { prompts.set(path, readPrompt(root, found.visible, path, workspace)); } catch { prompts.set(path, null); }
+      }
+      const iface = prompts.get(path)?.interface, entries = Array.isArray(iface?.entries) ? iface.entries : [];
+      const entryIndex = entries.findIndex(item => item?.operation === step?.operation), entry = entryIndex >= 0 ? entries[entryIndex] : undefined;
+      if (entry && isCliEntry(iface, entryIndex) && !entry.implementation) {
+        const message = `Warning: ${path} entry ${step.operation} has no implementation declaration.`;
+        if (!warnings.includes(message)) warnings.push(message);
+      }
+    }
+  }
+  return warnings;
+}
+
+// Keep PDD's declaration classification and CLI implementation binding local.
+// Token offsets preserve all other JSON spellings; parsing and stringifying would round numbers.
 export function executableInterfaceText(text) {
   const blocks = interfaceBlocks(text);
   if (blocks.length !== 1) return text;
   const block = blocks[0], body = block[1];
   let value;
-  try { value = JSON.parse(body); } catch { return text; }
-  if (!isObject(value) || !Object.hasOwn(value, 'kind') || !['full', 'partial'].includes(value.kind)) return text;
-  const tokens = [...body.matchAll(/"(?:[^"\\]|\\[\s\S])*"|[{}\[\],:]/g)];
-  const members = [];
-  let depth = 0, keyExpected = false, comma = null;
-  for (let index = 0; index < tokens.length; index++) {
-    const token = tokens[index], spelling = token[0];
-    if (spelling === '{' || spelling === '[') {
-      depth++;
-      if (depth === 1) keyExpected = true;
-    } else if (spelling === '}' || spelling === ']') depth--;
-    else if (depth === 1 && spelling === ',') { keyExpected = true; comma = token.index; }
-    else if (depth === 1 && keyExpected && spelling.startsWith('"')) {
-      if (JSON.parse(spelling) === 'kind') {
-        const result = tokens[index + 2];
-        if (tokens[index + 1]?.[0] !== ':' || !result?.[0].startsWith('"')) return text;
-        members.push({ start: token.index, end: result.index + result[0].length, comma });
+  try { value = parseScenarioJson(body); } catch { return text; }
+  if (!isObject(value) || (Object.hasOwn(value, 'kind') && !['full', 'partial'].includes(value.kind))) return text;
+  const hasLocalKind = Object.hasOwn(value, 'kind');
+  const entries = Array.isArray(value.entries) ? value.entries : [];
+  if (entries.some(entry => isObject(entry) && Object.hasOwn(entry, 'implementation') && !validCliImplementation(entry.implementation))) return text;
+  const hasImplementation = entries.some(entry => isObject(entry) && validCliImplementation(entry.implementation));
+  if (!hasLocalKind && !hasImplementation) return text;
+  const tokens = [...body.matchAll(/"(?:[^"\\]|\\[\s\S])*"|[{}\[\],:]|[^\s{}\[\],:"]+/g)];
+  const skipValue = pos => {
+    const first = tokens[pos];
+    if (!first) return null;
+    if (first[0] !== '{' && first[0] !== '[') return { end: first.index + first[0].length, next: pos + 1 };
+    let depth = 0;
+    for (let index = pos; index < tokens.length; index++) {
+      const spelling = tokens[index][0];
+      if (spelling === '{' || spelling === '[') depth++;
+      else if (spelling === '}' || spelling === ']') {
+        depth--;
+        if (depth === 0) return { end: tokens[index].index + 1, next: index + 1 };
       }
-      keyExpected = false;
+    }
+    return null;
+  };
+  const objectMembers = pos => {
+    const members = [];
+    let cur = pos + 1, commaBefore = null;
+    while (cur < tokens.length && tokens[cur][0] !== '}') {
+      const keyTok = tokens[cur], valPos = cur + 2;
+      if (!keyTok?.[0].startsWith('"') || tokens[cur + 1]?.[0] !== ':') return null;
+      const skipped = skipValue(valPos), after = skipped ? tokens[skipped.next] : null;
+      if (!skipped || !after) return null;
+      members.push({ key: JSON.parse(keyTok[0]), keyStart: keyTok.index, valPos, end: skipped.end, commaBefore, commaAfter: after[0] === ',' ? after.index : null });
+      if (after[0] !== ',') break;
+      commaBefore = after.index;
+      cur = skipped.next + 1;
+    }
+    return members;
+  };
+  const arrayItems = pos => {
+    const items = [];
+    let cur = pos + 1;
+    while (cur < tokens.length && tokens[cur][0] !== ']') {
+      const skipped = skipValue(cur), after = skipped ? tokens[skipped.next] : null;
+      if (!skipped || !after) return null;
+      items.push(cur);
+      if (after[0] !== ',') break;
+      cur = skipped.next + 1;
+    }
+    return items;
+  };
+  const memberSpan = member => member.commaBefore !== null ? [member.commaBefore, member.end]
+    : member.commaAfter !== null ? [member.keyStart, member.commaAfter + 1] : [member.keyStart, member.end];
+  const rootMembers = tokens[0]?.[0] === '{' ? objectMembers(0) : null;
+  if (!rootMembers) return text;
+  const spans = [];
+  if (hasLocalKind) {
+    const kindMembers = rootMembers.filter(member => member.key === 'kind');
+    if (kindMembers.length !== 1 || !tokens[kindMembers[0].valPos]?.[0].startsWith('"')) return text;
+    spans.push(memberSpan(kindMembers[0]));
+  }
+  if (hasImplementation) {
+    const entriesMembers = rootMembers.filter(member => member.key === 'entries');
+    if (entriesMembers.length !== 1 || tokens[entriesMembers[0].valPos]?.[0] !== '[') return text;
+    const itemPositions = arrayItems(entriesMembers[0].valPos);
+    if (!itemPositions) return text;
+    for (const itemPos of itemPositions) {
+      if (tokens[itemPos]?.[0] !== '{') continue;
+      const entryMembers = objectMembers(itemPos);
+      if (!entryMembers) return text;
+      const implMembers = entryMembers.filter(member => member.key === 'implementation');
+      if (implMembers.length > 1) return text;
+      if (implMembers.length === 1) spans.push(memberSpan(implMembers[0]));
     }
   }
-  // Ambiguous duplicate metadata retains the original admission diagnostic.
-  if (members.length !== 1) return text;
-  const member = members[0];
-  let start = member.comma ?? member.start, end = member.end;
-  if (member.comma === null) {
-    const following = tokens.find(token => token.index >= end);
-    if (following?.[0] === ',') end = following.index + 1;
-  }
-  const projected = body.slice(0, start) + body.slice(end);
+  if (!spans.length) return text;
+  spans.sort((a, b) => b[0] - a[0]);
+  const projected = spans.reduce((current, [start, end]) => current.slice(0, start) + current.slice(end), body);
   const offset = block.indices[1][0];
   return text.slice(0, offset) + projected + text.slice(block.indices[1][1]);
 }

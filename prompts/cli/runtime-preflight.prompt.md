@@ -421,19 +421,19 @@ It performs only the projection below; it reads, writes, approves and hashes
 nothing. Capture and effective-hash readers share this same operation. Ordinary
 `readPrompt` text remains the local declaration, with its kind intact.
 
-`kind` classifies a PDD declaration; it is not an executable Runtime field.
-Keep explicit `full` and `partial` in authored files and local prompt readers.
+`kind` classifies a PDD declaration, and `entries[].implementation` (`{kind: "cli", command}` with whitespace-separated argv and no shell syntax) binds local code-target execution; neither is an executable Runtime field.
+Keep explicit `full` and `partial` kinds and valid `entries[].implementation` declarations in authored files and local prompt readers. Validate `entries[].implementation` in `interfaceSchemaProblems` (`interface-implementation-invalid` at `/entries/<index>/implementation` when malformed).
 After reference expansion and ordinary closure/boundary selection, remove only
-that top-level member from the single valid Runtime interface block in each
-selected prompt's upload copy. An absent kind already uses Runtime's accepted
+top-level `full` or `partial` `kind` and valid `entries[].implementation` members from the single valid Runtime interface block in each
+selected prompt's upload copy, including when top-level `kind` is already omitted. An interface with neither local field already uses Runtime's accepted
 spelling and leaves the bytes unchanged. Do not add operations or claim that
 undeclared operations or unexecuted criteria passed.
 
-Remove the member and only its necessary JSON delimiter. Preserve every other
-token and byte, including prose, wrappers, string escapes, number spellings,
+Inspect JSON with `parseScenarioJson` from `scenario-json.mjs` and remove only each local member and its necessary JSON delimiter by token offsets. Preserve every other
+token and byte, including prose, wrappers, string escapes, exact integer and exponent number spellings,
 status, prose hash, schemas, calls, resources, limits and nested `kind` fields.
-Never parse and reserialize the interface to perform this projection. Malformed
-or ambiguous blocks and unknown kinds retain their existing refusal handling;
+Never parse with lossy number coercion or reserialize the interface to perform this projection. Malformed
+or ambiguous blocks, duplicate local keys, invalid `implementation` shapes and unknown kinds retain their existing refusal handling;
 never strip arbitrary unknown fields to make admission pass. Native-only keeps
 the existing not-run reason and dispatch exclusion, rather than becoming an
 executable declaration.
@@ -501,3 +501,5 @@ Binding-boundary repair messages call the declaration a Runtime interface bounda
 ## Generated product map selection (#808)
 
 The existing synchronous prepareSource hook may mark exactly one returned file with optional `role: "app-map"`. Other roles, multiple marked outputs or a marked output whose effective JSON is not a v1 app map refuse with exit 4 before upload. Resolve the effective selected appMap to that marked file within this same capture attempt; explicit non-null appMap and a marked generated map conflict and refuse. Discover its screen, router, handler, after-operation and stylesheet closure using the ordinary app-map rules. The marked map's path is returned in capture.appMap. Its raw absence/Git visibility exception is only the existing virtual-output exception; retain workspace, privacy, ancestor, no-write and stability rules. A present ignored regular generated-name candidate is occupied, so composition chooses another name without reading or uploading its contents. Unsafe candidates remain refusals. No marked output preserves current results and archive bytes. Do not alter queue limits or scheduling.
+
+For each tested CLI-convention entry (an entry whose `/entries/<index>/input_schema` and `/entries/<index>/result_schema` both carry convention `"cli"`) that lacks an `implementation` declaration, include preflight warning `Warning: <entry_path> entry <operation> has no implementation declaration.`, and export `missingCliImplementationWarnings({root, found, selected})` returning only those CLI missing-implementation warnings for explicit lint. Non-CLI entries receive no missing-implementation warning, and this advice does not refuse an interpreter check.
