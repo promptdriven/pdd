@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: c0a50c35f8122a1e4ddd953f50a60c88b5ba21b1be46cde48ce2988e1a5bf371).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 7f447564e584709321ddf32183b1499d14f9950818d1264eb61364ba5a77bc0c).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
@@ -40,6 +40,19 @@ function formatAdvice(root, visible, paths, workspace) {
   };
   for (const path of paths) visit(path);
   return lines;
+}
+function hasMissingPromptInterface(root, found, startPaths) {
+  const seen = new Set(), queue = [...startPaths];
+  while (queue.length) {
+    const path = queue.shift();
+    if (typeof path !== 'string' || seen.has(path) || !found.visible.has(path)) continue;
+    seen.add(path);
+    let prompt;
+    try { prompt = readPrompt(root, found.visible, path, found.workspace); } catch { continue; }
+    if (prompt.error === 'interface-missing') return true;
+    for (const call of Array.isArray(prompt.interface?.calls) ? prompt.interface.calls : []) if (typeof call?.target === 'string') queue.push(call.target);
+  }
+  return false;
 }
 const entryPaths = tests => tests.filter(test => !test.error).flatMap(test => (Array.isArray(test.doc?.steps) ? test.doc.steps : []).map(step => step?.entry_path));
 
@@ -1266,6 +1279,21 @@ async function readCapacity(context, deadline, refresh) {
     }
   }
 }
+async function probeLazyInterfaces(context, origin, store) {
+  if (context.lazyInterfacesProbed) return !!context.allowMissingInterfaces;
+  context.lazyInterfacesProbed = true;
+  let identity;
+  try { identity = signIn(context.ports.gh, store, context.ports); }
+  catch (error) { if (error instanceof Stop) return false; throw error; }
+  const probe = { origin, identity, ports: context.ports, signal: context.signal, interrupted: context.interrupted };
+  const reply = await readCapacity(probe, context.ports.now() + GET_MS, false);
+  if (reply?.status !== 200 || !Array.isArray(reply.json?.features)) return false;
+  context.probedIdentity = identity;
+  context.serverFeatures = reply.json.features;
+  context.serverEngineSha = reply.json.engine_sha ?? null;
+  context.allowMissingInterfaces = reply.json.features.includes('lazy-interfaces');
+  return context.allowMissingInterfaces;
+}
 async function capacityReady(context, deadline, busyRow = null) {
   let refresh = !!context.admissionMaintenance;
   while (!context.interrupted && !context.stopped && !context.sendError && context.ports.now() < deadline) {
@@ -1517,7 +1545,7 @@ function recoverSourceContext(context) {
   if (context.sourceRecoveryAttempted) return false;
   context.sourceRecoveryAttempted = true;
   try {
-    const capture = context.ports.captureSource(context.root, { tests: sentTests(context.rows), appMap: null, excludeFixtureProjects: context.excludeFixtureProjects });
+    const capture = context.ports.captureSource(context.root, { tests: sentTests(context.rows), appMap: null, excludeFixtureProjects: context.excludeFixtureProjects, ...(context.allowMissingInterfaces ? { allowMissingInterfaces: true } : {}) });
     if (capture.sha256 !== context.capture.sha256) { context.sourceRecoveryMismatch = true; return false; }
     capture.stories = context.capture.stories;
     context.capture = capture;
@@ -1768,6 +1796,7 @@ function batchRecord(context) {
     source_selection: context.sourceSelection ?? {tests:sentTests(rows),exclude_fixture_projects:context.excludeFixtureProjects === true},
     native_source: context.nativeSource ?? null,
     ...(context.localOnly ? {local_only:true} : {}),
+    ...(context.allowMissingInterfaces ? {lazy_interfaces:true} : {}),
     exclude_fixture_projects: context.excludeFixtureProjects === true,
     created_at: new Date(context.startedAt).toISOString(), intent: context.intent, lint: lint ? { ...lint, recovery_state: lint.state, ...resultOutcome(lint.public_result ?? lint) } : lint, warnings, coverage: context.coverage,
     contract_snapshots: capture.stories,
@@ -1943,7 +1972,8 @@ async function sendCheckAttempt(context, row) {
   row.sent_at = context.ports.now(); row.ended_at = null; row.retry_at = null; row.busy = false; row.can_retry = false;
   row.busy_request_id = null; row.busy_observed_at = null; row.capacity_until = null; row.busy_display = null;
   row.phase = 'server';
-  const request = { requestId: id, source_sha256: context.capture.sha256, scenario: row.test, max_calls: row.max_calls };
+  const request = { requestId: id, source_sha256: context.capture.sha256, scenario: row.test, max_calls: row.max_calls,
+    ...(context.serverFeatures?.includes('lazy-interfaces') ? { lazy_interfaces: true } : {}) };
   const verdict = await context.postCheck(request, row, Math.max(1, Math.min(context.ports.postMs, context.deadline - context.ports.now())));
   if (verdict.kind === 'not_sent') {
     const note = { code: null, message: 'Stopped before sending.' };
@@ -2026,7 +2056,7 @@ const authoredSha256 = capture => isObject(capture?.raw_file_hashes)
 function lintReceiptScope(context) {
   return { root: context.root, origin: context.origin, login: context.identity.login, user_id: context.identity.userId,
     source_sha256: context.capture.sha256, authored_sha256: authoredSha256(context.capture), tests: [...new Set(sentTests(context.rows))].sort(), version: context.clientVersion ?? null,
-    selected_cap: context.lint.selected_cap ?? null };
+    selected_cap: context.lint.selected_cap ?? null, ...(context.allowMissingInterfaces ? { lazy_interfaces: true } : {}) };
 }
 const lintReceiptPath = context => join(context.store.folder('lint-receipts'), `${context.store.repoKey(context.root)}.json`);
 function lintReceiptBlocked(context) {
@@ -2147,7 +2177,8 @@ async function runLint(context) {
       kind: 'refused', refusal: { code: 'lint-call-preflight-unsupported', message: 'The PDD interpreter does not support selected-cap call preflight. No lint or checks were sent. Update the interpreter before inspecting this cap.' }
     };
     const request = { requestId: context.ports.randomUUID(), source_sha256: context.capture.sha256, complete: true, ...named,
-      ...(selectedCap != null ? { max_calls: selectedCap } : {}) };
+      ...(selectedCap != null ? { max_calls: selectedCap } : {}),
+      ...(context.serverFeatures?.includes('lazy-interfaces') ? { lazy_interfaces: true } : {}) };
     context.lint.request_ids.push(request.requestId);
     const verdict = await postJob(context, '/v1/lint', 'lint', request, null, Math.max(1, Math.min(context.ports.postMs, lintEnd - context.ports.now())), lintEnd);
     if (verdict.kind === 'busy') { if (await pause(verdict.wait, verdict.maintenance)) continue; return busy(); }
@@ -2428,7 +2459,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   const { ports } = context, origin = runtimeOrigin(ports.env), { root, found, normalized } = localSetup(cwd, words, ports);
   context.excludeFixtureProjects = words.length === 0;
   const paths = words.length ? undefined : [...found.discoveryVisible].filter(path => path.endsWith('.prompt.md'));
-  const findings = paths ? interfaceFindings({root,paths}).filter(localInterfaceProblem) : [];
+  let findings = paths ? interfaceFindings({root,paths}).filter(localInterfaceProblem) : [];
   const advice = paths ? formatAdvice(root, found.visible, paths, found.workspace) : [];
   found.warnings.push(...advice);
   if (findings.length && !found.tests.length) {
@@ -2451,14 +2482,18 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
     if (!advice.includes(warning)) advice.push(warning);
     if (!found.warnings.includes(warning)) found.warnings.push(warning);
   }
-  context.coverage = bindingCoverage({ root, found, selected, includeRuntime:true });
+  const hasMissing = findings.some(item => item.code === 'interface-missing') || hasMissingPromptInterface(root, found, entryPaths(selected));
+  const allowMissingInterfaces = hasMissing ? await probeLazyInterfaces(context, origin, context.store) : false;
+  if (allowMissingInterfaces) findings = findings.filter(item => item.code !== 'interface-missing');
+  const activeLocalProblem = problem => localInterfaceProblem(problem) && !(allowMissingInterfaces && problem.code === 'interface-missing');
+  context.coverage = bindingCoverage({ root, found, selected, includeRuntime:true, allowMissingInterfaces });
   // A test that the test name rule cannot use is refused here and never sent; the other tests are linted.
   const rows = selected.map(test => ({ test: test.path, story: test.story, title: test.title, state: 'ready', phase: 'lint',
     refusals: [], request_ids: [], warnings: [], steps: Array.isArray(test.doc?.steps) ? test.doc.steps.filter(isObject) : [],
     criterion_texts: Object.fromEntries((Array.isArray(test.doc?.criteria) ? test.doc.criteria : []).filter(isObject).map(item => [item.id, item.text])),
     ...(discoveryRefusal(test) ? { state: 'refused', phase: 'local', unsent:true, refusals: [discoveryRefusal(test)], steps: [] } : {}) }));
   context.rows = rows;
-  const nativeRows = new Map(preflight({root,found,selected}).rows.filter(row => row.native_only?.length).map(row => [row.test,row]));
+  const nativeRows = new Map(preflight({root,found,selected,allowMissingInterfaces}).rows.filter(row => row.native_only?.length).map(row => [row.test,row]));
   for (const row of rows) {
     const native = nativeRows.get(row.test);
     if (native) Object.assign(row,{state:native.refusals.length ? 'refused' : 'not_run',refusals:native.refusals,phase:'local',native_only:native.native_only,unsent:true,note:{code:'native-only',message:native.native_only.map(item => `${item.path}: ${item.reason}`).join('; ')}});
@@ -2474,11 +2509,11 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   const prompts = new Map();
   const problemsFor = (path, seen) => {
     if (typeof path !== 'string' || seen.has(path)) return [];
-    const finding = interfaceFindings({root,paths:[path]}).filter(localInterfaceProblem);
+    const finding = interfaceFindings({root,paths:[path]}).filter(activeLocalProblem);
     if (finding.length) return finding;
     if (!prompts.has(path)) prompts.set(path, readPrompt(root, found.visible, path, found.workspace));
-    return promptSchemaRefusals(root, found, prompts.get(path), prompts, seen).filter(problem =>
-      localInterfaceProblem(problem) || ['invalid-limits', 'invalid-interface'].includes(problem.code) && problem.section.startsWith('/limits'));
+    return promptSchemaRefusals(root, found, prompts.get(path), prompts, seen, { allowMissingInterfaces }).filter(problem =>
+      activeLocalProblem(problem) || ['invalid-limits', 'invalid-interface'].includes(problem.code) && problem.section.startsWith('/limits'));
   };
   const limitRows = rows.map(row => {
     const seen = new Set();
@@ -2523,12 +2558,12 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   }
   // Lint keeps engine validation ownership; only attach structural incomplete-coverage facts.
   for (const row of rows.filter(row => !row.unsent)) {
-    const test = selected.find(test => test.path === row.test), checked = preflight({root,found,selected:[test]}).rows[0];
+    const test = selected.find(test => test.path === row.test), checked = preflight({root,found,selected:[test],allowMissingInterfaces}).rows[0];
     if (checked.not_checked?.length) Object.assign(row, {not_checked:checked.not_checked,criteria_total:checked.criteria_total});
     if (checked.refusals.some(item=>item.code==='unchecked-criteria')) Object.assign(row,
       {state:'refused',phase:'local',unsent:true,refusals:checked.refusals});
   }
-  const capture = captureIndependent(root, rows, ports, {appMap:null,excludeFixtureProjects:words.length === 0});
+  const capture = captureIndependent(root, rows, ports, {appMap:null,excludeFixtureProjects:words.length === 0,...(allowMissingInterfaces ? {allowMissingInterfaces:true} : {})});
   context.sourceSelection = {tests:sentTests(rows),exclude_fixture_projects:words.length === 0};
   context.nativeSource = nativeSourceIdentity(context, rows);
   if (!capture) return printLintResult(context, rows, [], found.warnings);
@@ -2555,7 +2590,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   context.warnings = [...new Set([...svgWarnings, ...found.warnings, ...drift, ...(capture.warnings ?? []), ...hygieneWarnings])];
   context.unmatched = unmatchedLines(found);
   if (!context.json) for (const warning of [...new Set([...svgWarnings, ...drift, ...(capture.warnings ?? []), ...hygieneWarnings])]) line(ports.stderr, warning);
-  const identity = signIn(ports.gh, context.store, ports), startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
+  const identity = context.probedIdentity ?? signIn(ports.gh, context.store, ports), startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
   const timeoutMin = options['--timeout'] !== undefined ? Number(options['--timeout']) : ports.interactive ? null : AGENT_WAIT_MIN;
   Object.assign(context, { origin, visible: found.visible, capture, identity, batch, startedAt, deadline: timeoutMin ? startedAt + timeoutMin * 60_000 : Infinity, rows, head: null,
     intent: 'lint-only', agentLimit: options['--timeout'] === undefined && !ports.interactive, secrets: [identity.token], lint: { request_ids: [], state: null, selected_cap: requestedCalls(options['--max-calls']) ?? null }, timeoutMin });
@@ -2858,10 +2893,10 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
     if (quiet) return saved.rows;
     return saved.intent === 'lint-only' ? printLintResult(context,saved.rows,saved.lint?.problems ?? []) : printResult(context,saved.rows);
   }
-  if(loadRuntimeWorkspace({root}).configured)ports.captureSource(root,{tests:saved.rows.filter(row=>!row.unsent).map(row=>row.test),appMap:null,excludeFixtureProjects:saved.exclude_fixture_projects === true});
+  if(loadRuntimeWorkspace({root}).configured)ports.captureSource(root,{tests:saved.rows.filter(row=>!row.unsent).map(row=>row.test),appMap:null,excludeFixtureProjects:saved.exclude_fixture_projects === true,...(saved.lazy_interfaces === true ? {allowMissingInterfaces:true} : {})});
   const identity = signIn(ports.gh, context.store, ports);
   if (identity.login !== saved.login) throw new Stop(5, `These runs belong to ${saved.login}. Run: gh auth switch -u ${saved.login}`);
-  Object.assign(context, { singleAttempt: context.singleAttempt || saved.single_attempt === true, excludeFixtureProjects: saved.exclude_fixture_projects === true, batch: name, origin: saved.origin, sourceSelection:saved.source_selection, nativeSource:saved.native_source, coverage: saved.coverage, identity, intent: saved.intent, secrets: [identity.token], warnings: saved.warnings ?? [],
+  Object.assign(context, { singleAttempt: context.singleAttempt || saved.single_attempt === true, allowMissingInterfaces: saved.lazy_interfaces === true, excludeFixtureProjects: saved.exclude_fixture_projects === true, batch: name, origin: saved.origin, sourceSelection:saved.source_selection, nativeSource:saved.native_source, coverage: saved.coverage, identity, intent: saved.intent, secrets: [identity.token], warnings: saved.warnings ?? [],
     capture: { sha256: saved.source_sha256, files: saved.files.map(path => ({ path })), bytes: saved.bytes, stories:saved.contract_snapshots }, lint: saved.lint, head: saved.head, startedAt: Date.parse(saved.created_at) });
   runtimeOrigin({ PDD_RUNTIME_URL: saved.origin });
   context.runtime = new Runtime({ origin: saved.origin, token: identity.token, ports, signal: context.signal });
@@ -3845,6 +3880,8 @@ async function runBatch(context, cwd, words, options, setRelease) {
   context.timeoutMin = options['--timeout'] !== undefined ? Number(options['--timeout']) : null;
   let selected = select(found, normalized, root, ports);
   const inventory = selected;
+  const allowMissingInterfaces = hasMissingPromptInterface(root, found, entryPaths(inventory))
+    ? await probeLazyInterfaces(context, origin, context.store) : false;
   const affected = options['--affected'] === true;
   const resolveWorkflowBase = () => {
     const workflowBase = context.workflow !== undefined
@@ -3886,7 +3923,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
   };
   const planFor = rows => {
     const current = discover();
-    const plan = buildCheckPlan({root,found:current.found,selected:select(current.found,current.normalized,root,ports),rows,full:true,base,affected:!context.forceAffectedFull},planningPorts);
+    const plan = buildCheckPlan({root,found:current.found,selected:select(current.found,current.normalized,root,ports),rows,full:true,base,affected:!context.forceAffectedFull,allowMissingInterfaces},planningPorts);
     discover();
     return context.forceAffectedFull ? {...plan,stories:plan.stories.map(story=>({...story,role:'target',reason:'conservative: source selection changed during planning'}))} : plan;
   };
@@ -3931,8 +3968,8 @@ async function runBatch(context, cwd, words, options, setRelease) {
     const count = new Set(selected.map(test => test.storyPath ?? test.path)).size;
     line(ports.stderr, `pdd: test cache ${cache && !cache.disabled ? 'cleared' : 'unavailable'}. Running ${count} selected ${count === 1 ? 'Story' : 'Stories'}; the interpreter may reuse saved answers.`);
   }
-  context.coverage = bindingCoverage({ root, found, selected, includeRuntime:true });
-  const checked = preflight({ root, found, selected });
+  context.coverage = bindingCoverage({ root, found, selected, includeRuntime:true, allowMissingInterfaces });
+  const checked = preflight({ root, found, selected, allowMissingInterfaces });
   const rows = localRows(checked.rows);
   context.rows = rows;
   for (const row of rows) {
@@ -3945,7 +3982,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
   }
   if (options['--max-calls'] !== undefined) for (const row of rows) row.max_calls = Number(options['--max-calls']);
   base ??= resolveWorkflowBase();
-  context.checkPlan = affected ? planFor(rows) : buildCheckPlan({root,found,selected,rows,full:words.length === 0,base},planningPorts);
+  context.checkPlan = affected ? planFor(rows) : buildCheckPlan({root,found,selected,rows,full:words.length === 0,base,allowMissingInterfaces},planningPorts);
   if (affected) {
     const finalSelection = selectCheckTests(context.checkPlan,{affected:true});
     if (discoveryChanged || !isDeepStrictEqual(finalSelection.tests,context.checkSelection.tests)) return restartConservatively();
@@ -3973,7 +4010,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
   if (!rows.some(row => row.state === 'ready')) { if (rows.some(row => row.native_only?.length)) saveLocalNativeResult(context, rows, 'check'); return printResult(context, rows); }
   context.nativeSource = nativeSourceIdentity(context, rows);
   let capture;
-  try { capture = captureIndependent(root, rows, ports, {appMap:null,excludeFixtureProjects:words.length === 0}); }
+  try { capture = captureIndependent(root, rows, ports, {appMap:null,excludeFixtureProjects:words.length === 0,...(allowMissingInterfaces ? {allowMissingInterfaces:true} : {})}); }
   catch (error) { if (cache) await beginTestAttempts(cache, rows, null, options, origin); throw error; }
   if (!capture || !rows.some(row=>row.state==='ready')) {
     if (cache) await beginTestAttempts(cache,rows,null,options,origin);
@@ -3994,7 +4031,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
   }
   context.otherNote = otherNote(otherFiles(capture.files, found).length);
   let identity;
-  try { identity = signIn(ports.gh, context.store, ports); }
+  try { identity = context.probedIdentity ?? signIn(ports.gh, context.store, ports); }
   catch (error) {
     if (cache?.mark) await cacheTransaction(cache, data => {
       if (data.latest_identity?.in_progress) {
@@ -4330,7 +4367,9 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     const productSetup = options['--product'] ? { parts: options['--parts']?.split(',').map(p => p.trim()) ?? null, journey: options['--journey'] ?? null } : null;
     const localSelected = productSetup ? [productTest(found, normalized, options['--journey'], root, ports)]
       : normalized.length ? [oneTest(found, normalized, root, ports)] : [...found.tests].sort((a, b) => a.path.localeCompare(b.path));
-    const checked = preflight({ root, found, selected: localSelected }), rows = localRows(checked.rows);
+    const allowMissingInterfaces = hasMissingPromptInterface(root, found, entryPaths(localSelected))
+      ? await probeLazyInterfaces(context, origin, store) : false;
+    const checked = preflight({ root, found, selected: localSelected, allowMissingInterfaces }), rows = localRows(checked.rows);
     const refused = rows.find(row => row.state === 'refused');
     if (refused) {
       if (options['--cli'] || options['--shell'] || options['--serve'] !== undefined) throw new Stop(125, refused.refusals?.map(r => r.message || r.code).join('; ') || 'The Story input was refused.');
@@ -4344,7 +4383,8 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
         if (problem) throw new Stop(125, `${problem} Run pdd simulate STORY --serve --new.`);
       }
     }
-    const boundedCapture = !productSetup && loadRuntimeWorkspace({root}).configured && localSelected.length ? ports.captureSource(root, { tests: localSelected.map(item => item.path), appMap }) : null;
+    const captureExtra = allowMissingInterfaces ? { allowMissingInterfaces: true } : {};
+    const boundedCapture = !productSetup && loadRuntimeWorkspace({root}).configured && localSelected.length ? ports.captureSource(root, { tests: localSelected.map(item => item.path), appMap, ...captureExtra }) : null;
     let { test, selected, tab, typed } = productSetup
       ? { test: localSelected[0], selected: localSelected, tab: options['--tab'] ?? (options['--cli'] || options['--shell'] ? 'terminal' : 'screen'), typed: false }
       : simulationSelection(root, found, normalized, appMap, options, ports);
@@ -4374,8 +4414,8 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     const row = rows.find(row => row.test === test.path) ?? rows[0];
     const prepared = productSetup ? captureProductTry(root, test, options, ports) : null;
     const capture = prepared?.capture ?? (record?.simulation_scope && !options['--new']
-      ? ports.captureSource(root, trySourceSelection(record, recordPath))
-      : boundedCapture ?? ports.captureSource(root, { tests: selected.map(item => item.path), appMap }));
+      ? ports.captureSource(root, { ...trySourceSelection(record, recordPath), ...captureExtra })
+      : boundedCapture ?? ports.captureSource(root, { tests: selected.map(item => item.path), appMap, ...captureExtra }));
     if (prepared && record?.product_parts && !options['--new'] && JSON.stringify(prepared.composition.product_parts) !== JSON.stringify(record.product_parts)) throw new Stop(4, 'The product part ownership changed. The original session is kept; use --new explicitly.');
     if (prepared) appMap = capture.appMap;
     context.appMap = appMap;
@@ -4388,7 +4428,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
         normalized.length ? `${problem} Run pdd simulate --new.` : 'This saved simulation does not contain the current whole project. Run pdd simulate --new.');
     }
     if(context.agentConnection&&loadRuntimeWorkspace({root}).configured)throw new Stop(5,'Bounded agent connection is unavailable: installed CLI controls do not establish packet-only context. Use the ordinary simulator without an agent connection.');
-    const identity = signIn(ports.gh, context.store, ports);
+    const identity = context.probedIdentity ?? signIn(ports.gh, context.store, ports);
     Object.assign(context, { capture, identity, secrets: [identity.token], startedAt: ports.now(), deadline: ports.now() + TRY_MS, lint: { request_ids: [], state: null },
       batch: null, rows, timeoutMin: TRY_MS / 60_000, agentLimit: false, head: null });
     context.folder = store.folder('tries');
@@ -4465,6 +4505,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     for (;;) {
       if (!await admission(context, 'try', setup)) throw new Stop(context.interrupted ? 3 : 5, context.interrupted ? 'Stopped before sending.' : 'The interpreter stayed busy until the Try setup wait ended. No new Try was sent.');
       request = { requestId: ports.randomUUID(), source_sha256: capture.sha256, seed: test.path, max_calls: requestedBudget ?? 400, ...(appMap ? { app_map: appMap } : {}), ...(prepared ? {product_parts:prepared.composition.product_parts} : {}),
+        ...(context.serverFeatures?.includes('lazy-interfaces') ? { lazy_interfaces: true } : {}),
         tab };
       setup.request_ids.push(request.requestId);
       const registered = await recordRuntimeRequest(setup.reservation, request.requestId, slotPorts(context));
