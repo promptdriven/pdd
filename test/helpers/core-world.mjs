@@ -15,6 +15,8 @@ const ok = (status, body) => ({ code: status < 300 ? 0 : 1, stdout: `HTTP/2.0 ${
 // The shared fake plus PRs, checks, label adds, comment deletes, issue close and the pr merge command.
 function extend(f, w) {
   f.prs = new Map(); f.checks = new Map(); f.statuses = new Map(); f.merges = []; f.writes = [];
+  f.reruns = []; f.annotations = new Map(); f.runLogs = new Map(); f.workflowRuns = new Map();
+  let nextCheckId = 8000;
   const prefix = `repos/${f.repo}`;
   const restPr = pr => ({ number: pr.number, state: pr.state, merged: pr.merged, body: pr.body, title: pr.title, html_url: `https://github.com/${f.repo}/pull/${pr.number}`,
     head: { sha: pr.head, ref: pr.branch, repo: { full_name: f.repo } }, base: { ref: pr.base, repo: { full_name: f.repo } }, merge_commit_sha: pr.mergeSha ?? null, draft: Boolean(pr.draft) });
@@ -22,9 +24,22 @@ function extend(f, w) {
     const pr = { number: 100 + f.prs.size, branch, head, base, body, title, state: 'open', merged: false, comments: [], labels: [] };
     f.prs.set(pr.number, pr); return pr;
   };
-  f.setChecks = (sha, conclusion = 'success', status = 'completed') => f.checks.set(sha, [{ name: 'ci', status, conclusion: status === 'completed' ? conclusion : null }]);
+  f.setChecks = (sha, conclusion = 'success', status = 'completed', extra = {}) => {
+    const id = extra.id ?? ++nextCheckId;
+    if (Array.isArray(extra.annotations)) f.annotations.set(id, extra.annotations);
+    if (extra.log !== undefined && extra.runId) f.runLogs.set(extra.runId, extra.log);
+    if (extra.runId) f.workflowRuns.set(extra.runId, { id: extra.runId, head_sha: sha, status, conclusion: status === 'completed' ? conclusion : null });
+    f.checks.set(sha, [{ id, name: extra.name ?? 'ci', status, conclusion: status === 'completed' ? conclusion : null,
+      ...(extra.completedAt ? { completed_at: extra.completedAt } : {}),
+      ...(extra.detailsUrl || extra.runId ? { details_url: extra.detailsUrl ?? `https://github.com/${f.repo}/actions/runs/${extra.runId}/job/${id}` } : {}),
+      ...(extra.output || extra.annotations ? { output: { title: '', summary: '', annotations_count: extra.annotations?.length ?? 0, ...extra.output } } : {}) }]);
+  };
   const original = f.gh;
   f.gh = async (args, options = {}) => {
+    if (args[0] === 'run' && args[1] === 'view' && args.includes('--log-failed')) {
+      const log = f.runLogs.get(Number(args[2]));
+      return log !== undefined ? { code: 0, stdout: String(log), stderr: '' } : { code: 1, stdout: '', stderr: 'no failed log' };
+    }
     if (args[0] === 'pr' && args[1] === 'merge') {
       f.writes.push(['merge', ...args]);
       const pr = f.prs.get(Number(args[2])), head = args[args.indexOf('--match-head-commit') + 1];
@@ -58,8 +73,8 @@ function extend(f, w) {
       return ok(200, { behind_by: behind, ahead_by: ahead, status: behind ? (ahead ? 'diverged' : 'behind') : ahead ? 'ahead' : 'identical' });
     }
     if (route === '/pulls' && method === 'GET') {
-      const params = new URLSearchParams(endpoint.split('?')[1] ?? ''), head = params.get('head')?.split(':').pop(), state = params.get('state') ?? 'open';
-      return ok(200, [...f.prs.values()].filter(pr => (state === 'all' || pr.state === state) && (!head || pr.branch === head)).map(restPr));
+      const params = new URLSearchParams(endpoint.split('?')[1] ?? ''), head = params.get('head')?.split(':').pop(), base = params.get('base'), state = params.get('state') ?? 'open';
+      return ok(200, [...f.prs.values()].filter(pr => (state === 'all' || pr.state === state) && (!head || pr.branch === head) && (!base || pr.base === base)).map(restPr));
     }
     if ((m = /^\/pulls\/(\d+)$/.exec(route))) {
       const pr = f.prs.get(Number(m[1])); if (!pr) return ok(404, { message: 'Not Found' });
@@ -77,6 +92,10 @@ function extend(f, w) {
     if (route === '/issues' && method === 'GET' && new URLSearchParams(endpoint.split('?')[1] ?? '').get('labels') === 'pdd:merge-lane') {
       return ok(200, [...f.prs.values()].filter(pr => pr.state === 'open' && pr.labels.includes('pdd:merge-lane')).map(pr => ({ number: pr.number, state: 'open', labels: pr.labels.map(name => ({ name })), pull_request: {} })));
     }
+    if ((m = /^\/issues\/(\d+)$/.exec(route)) && method === 'GET' && f.prs.has(Number(m[1]))) {
+      const pr = f.prs.get(Number(m[1]));
+      return ok(200, { number: pr.number, state: pr.state, labels: pr.labels.map(name => ({ name })), pull_request: {} });
+    }
     // PR reviews on GitHub (a person's APPROVED review).
     if ((m = /^\/pulls\/(\d+)\/reviews$/.exec(route)) && method === 'GET') return ok(200, f.prs.get(Number(m[1]))?.reviews ?? []);
     if ((m = /^\/issues\/(\d+)\/comments$/.exec(route)) && f.prs.has(Number(m[1]))) {
@@ -86,6 +105,32 @@ function extend(f, w) {
     }
     if ((m = /^\/commits\/([0-9a-f]{40})\/check-runs$/.exec(route))) { const runs = f.checks.get(m[1]) ?? []; return ok(200, { total_count: runs.length, check_runs: runs }); }
     if ((m = /^\/commits\/([0-9a-f]{40})\/status$/.exec(route))) { const statuses = f.statuses.get(m[1]) ?? []; return ok(200, { state: statuses.length ? statuses.every(s => s.state === 'success') ? 'success' : 'failure' : 'pending', statuses }); }
+    if ((m = /^\/check-runs\/(\d+)\/annotations$/.exec(route)) && method === 'GET') return ok(200, f.annotations.get(Number(m[1])) ?? []);
+    if (route === '/actions/runs' && method === 'GET') {
+      const sha = new URLSearchParams(endpoint.split('?')[1] ?? '').get('head_sha');
+      return ok(200, { workflow_runs: [...f.workflowRuns.values()].filter(r => !sha || r.head_sha === sha) });
+    }
+    if ((m = /^\/actions\/runs\/(\d+)\/(rerun-failed-jobs|rerun)$/.exec(route)) && method === 'POST') {
+      const runId = Number(m[1]), run = f.workflowRuns.get(runId);
+      f.reruns.push({ kind: m[2], id: runId, at: f.now() });
+      const sha = run?.head_sha ?? [...f.checks.entries()].find(([, list]) => list.some(c => String(c.details_url ?? '').includes(`/actions/runs/${runId}/`)))?.[0];
+      if (run) { run.status = 'in_progress'; run.conclusion = null; }
+      if (sha) {
+        if (f.onRerun) f.onRerun(sha, runId);
+        else f.checks.set(sha, (f.checks.get(sha) ?? []).map(c => c.conclusion === 'failure' ? { ...c, status: 'in_progress', conclusion: null } : c));
+      }
+      return ok(201, {});
+    }
+    if ((m = /^\/check-runs\/(\d+)\/rerequest$/.exec(route)) && method === 'POST') {
+      const checkId = Number(m[1]);
+      f.reruns.push({ kind: 'rerequest', id: checkId, at: f.now() });
+      const sha = [...f.checks.entries()].find(([, list]) => list.some(c => c.id === checkId))?.[0];
+      if (sha) {
+        if (f.onRerun) f.onRerun(sha, checkId);
+        else f.checks.set(sha, (f.checks.get(sha) ?? []).map(c => c.id === checkId ? { ...c, status: 'in_progress', conclusion: null } : c));
+      }
+      return ok(201, {});
+    }
     if ((m = /^\/issues\/(\d+)\/labels$/.exec(route)) && method === 'POST') {
       const issue = f.issues.get(Number(m[1])); if (!issue) return ok(404, { message: 'Not Found' });
       for (const name of input.labels) if (!issue.labels.includes(name)) f.label(issue.number, name);
@@ -98,6 +143,10 @@ function extend(f, w) {
     if ((m = /^\/issues\/(\d+)$/.exec(route)) && method === 'PATCH') {
       const issue = f.issues.get(Number(m[1])); if (!issue) return ok(404, { message: 'Not Found' });
       if (input.state === 'closed') f.close(issue.number);
+      if (input.state === 'open' && issue.state === 'closed') {
+        issue.state = 'open'; issue.state_reason = 'reopened';
+        issue.timeline.push({ id: String(f.nextEvent++), event: 'reopened', actor: f.owner, created: f.now() });
+      }
       if (input.body !== undefined) f.edit(issue.number, input.body);
       return ok(200, { number: issue.number, state: issue.state });
     }
@@ -147,7 +196,7 @@ export async function coreWorld(t, { repository = 'acme/widgets', settings = {},
       const job = { ...spec, pid: ++pid, token: `${spec.dir}/${spec.id}.spec.json`, log: join(spec.dir, `${spec.id}.log`), exit: join(spec.dir, `${spec.id}.exit.json`),
         result: join(spec.dir, `${spec.id}.result.json`), started: w.now() };
       // A suite starts admitted by the machine's suite queue, unless the test queues it (w.suiteQueued, then w.admit).
-      writeFileSync(job.log, spec.role === 'suite' ? (w.suiteQueued ? 'waiting for a check slot (position 1)\n' : 'running the full test suite\n') : `log of ${spec.id}\nError: pdd test returned no verdict\n`);
+      writeFileSync(job.log, ['suite', 'vectors'].includes(spec.role) ? (w.suiteQueued ? 'waiting for a check slot (position 1)\n' : 'running the full test suite\n') : `log of ${spec.id}\nError: pdd test returned no verdict\n`);
       w.started.push(job); w.alive.add(job.pid); return job;
     },
     read: job => ({ state: w.alive.has(job.pid) ? 'running' : existsSync(job.exit) ? 'exited' : 'dead',
@@ -155,10 +204,19 @@ export async function coreWorld(t, { repository = 'acme/widgets', settings = {},
       result: existsSync(job.result) ? JSON.parse(readFileSync(job.result, 'utf8')) : null,
       log: existsSync(job.log) ? { size: statSync(job.log).size, mtime: statSync(job.log).mtimeMs } : null }),
     stop: job => { const was = w.alive.delete(job.pid); if (was) w.stopped.push(job.id); return was; },
+    snapshot: job => {
+      job.processes = [{ pid: job.pid, start: String(job.started), command: `scripted ${job.id}` }]; return job.processes;
+    },
+    cleanup: async job => { w.jobs.stop(job); return { confirmed: !w.alive.has(job.pid) }; },
     // CPU seconds by child pid, as agentJobCpu gives them; null when the test sets none.
     cpu: job => w.cpu.get(job.pid) ?? null,
+    // The wrapper's hung-command records (agentJobHangs); w.hang adds one.
+    hangs: job => w.hangs.get(job.pid) ?? [],
   };
-  w.cpu = new Map();
+  w.cpu = new Map(); w.hangs = new Map();
+  w.hang = (issue, role, record = {}) => { const job = w.job(issue, role), rows = w.hangs.get(job.pid) ?? [];
+    rows.push({ at: w.now() + rows.length, pid: 4000 + rows.length, command: '/bin/bash -lc npm install', minutes: 15, last: '{"type":"item.started"}', head: null, ...record });
+    w.hangs.set(job.pid, rows); appendFileSync(job.log, `agent-job: stopped a hung command after 15 min with no output and almost no CPU: ${rows.at(-1).command}\n`); return rows.at(-1); };
   w.job = (issue, role) => [...w.started].reverse().find(j => j.issue === issue && (!role || j.role === role));
   // Finish a job: exit record, optional result file.
   w.finish = (issue, role, { code = 0, result } = {}) => {
@@ -181,11 +239,13 @@ export async function coreWorld(t, { repository = 'acme/widgets', settings = {},
   // The scripted builder: commit on the job branch, push, open a PR, finish with a pr result.
   // A scripted PR body gets a debate-A Path line unless it has one or the test asks for none (pathLine: false).
   // write: false commits only what the test put in the worktree (a conflict fix), not the change-N.txt file.
-  w.build = (issue, { body, role = 'build', checks = 'success', runtime, result = {}, pathLine = true, write = true } = {}) => {
+  // add: false commits only what the test staged (the rest of the worktree stays as it is, for example not committed).
+  w.build = (issue, { body, role = 'build', checks = 'success', runtime, result = {}, pathLine = true, write = true, add = true } = {}) => {
     const job = w.job(issue, role);
     if (body && pathLine && !/^[\s>*-]*Path:/m.test(body)) body = `${body}\nPath: d — change-${issue}.txt — unowned — no contract change — Test: done check`;
     if (write) writeFileSync(join(job.cwd, `change-${issue}.txt`), `change ${job.id}\n`);
-    git(job.cwd, 'add', '.'); if (git(job.cwd, 'status', '--porcelain')) git(job.cwd, 'commit', '-qm', `change ${job.id}`); git(job.cwd, 'push', '-q', 'origin', `HEAD:${job.branch}`);
+    if (add) git(job.cwd, 'add', '.');
+    if (git(job.cwd, 'diff', '--cached', '--name-only')) git(job.cwd, 'commit', '-qm', `change ${job.id}`); git(job.cwd, 'push', '-q', 'origin', `HEAD:${job.branch}`);
     const head = git(job.cwd, 'rev-parse', 'HEAD');
     let pr = [...w.github.prs.values()].find(p => p.branch === job.branch);
     if (pr) { pr.head = head; if (body) pr.body = body; } else pr = w.github.openPr({ branch: job.branch, head, ...(body ? { body } : {}) });
@@ -199,6 +259,31 @@ export async function coreWorld(t, { repository = 'acme/widgets', settings = {},
     w.finish(issue, 'review', { result: { verdict, head: job.head, summary: `Review ${verdict}`, mustFix } });
   };
   w.suite = (issue, code = 0) => w.finish(issue, 'suite', { code });
+  // The engine's replay and formal run (T04): each file runs alone and prints its TAP summary and then its marker line
+  // with the run's nonce. w.replayFiles lists [kind, index] from the command; w.tapFile writes one file's part.
+  w.replayFiles = job => [...(job.args.at(-3) ?? '').matchAll(/# pdd-autopilot-([0-9a-f]+): ([a-z-]+) (\d+) exit/g)].map(m => ({ nonce: m[1], kind: m[2], index: Number(m[3]) }));
+  w.tapFile = (job, kind, index, { tests = 1, fail = 0, failed = [], skipped = 0, code } = {}) => {
+    const nonce = w.replayFiles(job)[0]?.nonce ?? 'none';
+    return [...failed.map((f, i) => `not ok ${i + 1} - ${f.name}\n  ---\n  location: '${job.cwd}/${f.file}:1:1'\n  ...`),
+      `1..${tests}`, `# tests ${tests}`, `# pass ${tests - fail - skipped}`, `# fail ${fail}`, `# skipped ${skipped}`, `# pdd-autopilot-${nonce}: ${kind} ${index} exit ${code ?? (fail ? 1 : 0)}`, ''].join('\n');
+  };
+  // The whole run: `tests`, `fail` and `failed` go to the first file of the kind (other files pass 1 test each, so the
+  // kind's total is `tests`); `formal` gives the formal part; `code` sets the first file's exit. `linked` (replay files
+  // that import a changed module) and `control` (each control kind) pass 1 test per file unless given.
+  w.vectorsRun = (issue, { formal, linked, control, ...vectors } = {}) => {
+    const job = w.job(issue, 'vectors'), files = w.replayFiles(job), parts = [], used = [];
+    const hasVectors = files.some(f => f.kind === 'vectors'), formalPart = formal ?? (hasVectors ? { tests: 1 } : vectors);
+    for (const kind of ['vectors', 'formal', 'linked', 'control-vectors', 'control-formal']) {
+      const mine = files.filter(f => f.kind === kind);
+      const whole = kind === 'vectors' ? vectors : kind === 'formal' ? formalPart : kind === 'linked' ? linked ?? { tests: mine.length } : control?.[kind] ?? { tests: mine.length };
+      if (!mine.length) continue;
+      used.push(whole);
+      const total = whole.tests ?? 3, rest = mine.length - 1;
+      mine.forEach((f, i) => parts.push(w.tapFile(job, kind, f.index, i === 0 ? { ...whole, tests: Math.max(1, total - rest) } : { tests: 1 })));
+    }
+    appendFileSync(job.log, parts.join(''));
+    return w.finish(issue, 'vectors', { code: used.some(k => k.fail || k.code) ? 1 : 0 });
+  };
   w.issue = (n, extra = {}) => w.github.add(n, { created: w.now() - (1000 - n) * 60000, updated: w.now() - 60000, ...extra });
   w.ports = (extra = {}) => ({
     gh: w.gh,
@@ -207,10 +292,27 @@ export async function coreWorld(t, { repository = 'acme/widgets', settings = {},
     listIssues: async () => { const r = await w.gh(['api', '--include', '--method', 'GET', `repos/${repository.toLowerCase()}/issues?state=open&per_page=100`]); return JSON.parse(r.stdout.split(/\r?\n\r?\n/).slice(1).join('\n\n')); },
     trusted: async row => ['acme', 'promptdriven'].includes(row.user?.login),
     checkBase: async () => ({ exitCode: 0, message: 'Base check ok.' }),
+    // The saved Runtime checks (T01). By default every changed Story and prompt is covered at the head; a test of the
+    // coverage rule sets w.runtimeEvidence.
+    runtimeEvidence: async (input, ctx) => {
+      w.evidenceReads = [...(w.evidenceReads ?? []), input];
+      if (w.runtimeEvidence) return w.runtimeEvidence(input, ctx);
+      const changed = spawnSync('git', ['diff', '--name-only', 'origin/main...HEAD'], { cwd: input.tree, encoding: 'utf8' }).stdout.split('\n').filter(Boolean);
+      const stories = changed.filter(file => /^user_stories\/.+\.md$/.test(file));
+      return { stories: [{ story: 'user_stories/all.md', pass: true, current: true }, ...stories.map(story => ({ story, pass: true, current: true }))], storyFiles: stories,
+        footprints: { 'user_stories/all.md': changed.filter(file => file.endsWith('.prompt.md')) } };
+    },
     agentReady: async () => true,
     warn: () => {},
+    // #3241: no Runtime check to send again and a healthy interpreter, unless a test sets w.resend or w.health.
+    resendChecks: async input => { w.resendReads = [...(w.resendReads ?? []), input]; return w.resend ? w.resend(input) : { stories: [], neverSent: [], noVerdict: [], failed: [], maintenance: false }; },
+    runtimeHealth: async () => { w.healthReads = [...(w.healthReads ?? []), w.now()]; return w.health ? w.health() : { state: 'healthy', detail: 'HTTP 200' }; },
     ...extra,
   });
+  // #3231: a fixed machine for the launcher path (a server with room and 2 automatic slots), so a busy or unplugged
+  // test machine never holds intake.
+  w.machineGuard = async ({ runs } = {}) => ({ klass: 'server', auto: 2, slots: Number.isSafeInteger(runs) ? runs : 2, source: 'automatic', room: { ok: true, reason: null },
+    priority: () => ({}), line: 'Machine: server (test)' });
   w.tick = async (extra = {}) => { const r = await tickCore({ state: w.state, settings: w.settings, budget: { state: 'normal' } }, w.ports(extra)); w.ticks.push(r); return r; };
   w.peer = async (options = {}) => coreWorld(t, { repository, settings, machine: 'machine-b', coordinatorId: 'coord-b', ...options,
     shared: { dir, remote: w.remote, github: w.github, reports: w.reports, clock: w.clock } });

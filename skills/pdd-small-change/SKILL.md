@@ -1,23 +1,22 @@
 ---
 name: pdd-small-change
-description: PDD small-change workflow. Use when the person asks for a small, contained change that is easy to undo, such as a typo, a config value or a small fix. Plan it, make it, verify it, one PR.
+description: PDD small-change workflow. Use when the person asks for a small, contained change that is easy to undo, or for any fix that changes no product behavior (docs, config, CI, package data or tests), also when the issue is written as a bug. Plan it, make it, verify it, one PR.
 metadata:
-  pdd-skills: 0.1.28
+  pdd-skills: 0.1.30
 ---
 
 # PDD small change
 
 Fix both: the brakes (the real defect) and the warning light (a test or check that would catch it next time). Brakes first. If the agent cannot find the defect yet, it fixes the warning light first: it adds what makes the defect visible (a failing reproducer test, a precise error, logging), so the cause becomes easy to find, and then it fixes the brakes. A warning-light-only change must say 'Not fixed yet: this helps find the cause' on the PR, and the issue stays open; it never closes the bug.
 
-Use this for a small change with a clear effect that is easy to undo. If the impact grows, suggest pdd-bug or pdd-feature.
+Use this for a small change that is easy to undo, and for every fix that touches only non-code files (docs, config, CI, metadata or tests) with no product behavior change, even when worded as a bug. If behavior impact grows, suggest pdd-bug or pdd-feature.
 
-Each area is one main chat. Step briefs are in `steps/`.
-1. plan: scope → gate: approve
-2. build: change, verify, formal → gate: pr
+Each area is one main chat. Read the step files that its line names.
+1. plan: steps/scope.md → gate: approve
+2. build: steps/change.md, steps/verify.md, steps/formal.md → gate: pr
 
 ## Rules
 
-- If Autopilot is `observe` or `auto`, read `steps/autopilot.md` first.
 - The main chat coordinates and talks with the person; no code or checks.
 - Fresh subagents; never reuse builders or let them check code. Step file/paths at once; no chat history. Every brief requires "the run's main chat" for the chat in briefs/notes; keep actual actors and root paths. Wait once: long time-out; no small follow-ups. Read §11 once. See pdd-prompting RUNBOOK "Bounded handoffs".
 - Checks: fresh first. Only verify/formal may reuse after startup failure; wrote no code, tests or prompts this run.

@@ -89,9 +89,9 @@ The caller keeps the local write and exit code 0 in each case.
 
 Check reads the local value (no file counts as `{}`), the default-branch `pdd.json` as in Publish (a 404 counts as `{}`) and the newest open settings PR (a failed list counts as no PR). The settings differ as defined above. When they are the same and no settings PR is open, return `same` with an empty message. Else return `different` with one line that starts with `Warning: ` and has these parts, in this order:
 
-1. When they differ: `pdd.json on GitHub (BRANCH) has other Autopilot settings (GitHub: MODE, trust NAMES; this checkout: MODE, trust NAMES). Autopilot workers use the GitHub copy.`
-2. When a settings PR is open: `The settings PR PR_URL is open: Autopilot workers use its change only after the merge.`
-3. When they differ: `To change the GitHub copy, run COMMANDS.` COMMANDS are joined with ` and `: `pdd autopilot LOCAL_MODE` when the modes differ, `pdd autopilot trust NAMES` for the local names that GitHub does not have, and `pdd autopilot untrust NAME` for each GitHub name that the checkout does not have.
+1. When they differ: `pdd.json on GitHub (BRANCH) has other Autopilot settings (GitHub: MODE, trust NAMES; this checkout: MODE, trust NAMES). Autopilot on this machine uses this checkout's settings (and this machine's --mode and --label, when set); other machines and people read the GitHub copy.` The core engine reads the checkout's `pdd.json`, so the line never says that Autopilot uses the GitHub copy.
+2. When a settings PR is open: `The settings PR PR_URL is open: the GitHub copy changes only after the merge.`
+3. When they differ: `To put this checkout's settings on GitHub, run COMMANDS.` COMMANDS are joined with ` and `: `pdd autopilot LOCAL_MODE` when the modes differ, `pdd autopilot trust NAMES` for the local names that GitHub does not have, and `pdd autopilot untrust NAME` for each GitHub name that the checkout does not have.
 
 When the local value or the default-branch file cannot be read, return `unknown` with an empty message. Check never writes.
 
@@ -103,4 +103,4 @@ The native gh runner records each `gh` call in the GitHub call ledger of the rep
 
 - [Workflow GitHub](workflow-github.prompt.md): required generation context for `resolveWorkflowRepository` and its `execFile` port.
 - [Autopilot settings](autopilot.prompt.md): owns the local `pdd.json` shape and its writes. The change table above follows its rules for the local write.
-- The [CLI](pdd-cli.prompt.md) calls Publish after the mode, trust and untrust commands, and Check after `pdd autopilot start` and `pdd autopilot status`.
+- Navigation only: the [CLI](pdd-cli.prompt.md) calls Publish after the mode, trust and untrust commands, and Check after `pdd autopilot start` and `pdd autopilot status`.

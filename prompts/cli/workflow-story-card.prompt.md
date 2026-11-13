@@ -50,7 +50,7 @@ A file that cannot be read, or a test file that is not valid JSON, shows `(canno
 
 The tests to judge are the given `tests` (the run's changed test files), all scenarios independently discovered by runtime preflight `findTests({root, excludeFixtureProjects: true})` in the current project (the same scope as default `pdd test`, excluding nested fixture projects), and every still-present test of these batches. Discovery cannot depend on saved results: an existing scenario with no result must block a full pass. Discovery failure is unavailable. Every current project Story reported as untested, and every required `stories` path from the run approval without an associated discovered or explicitly selected scenario, adds a missing problem naming that Story. Missing tests cannot authorize the automatic full-pass route. Default fixture exclusions remain the same. Keep the newest result per test so a selective recheck can reuse still-current results from an earlier full check. For each test, the newest batch that has it decides (newest `created_at`, then batch name). The test passes only when:
 - exactly one authoritative batch row and exactly one summary row name this test; both have `state` `passed`, neither has refusals, unchecked criteria, a broken-test reason or an unsent flag, and any batch criterion counts agree with the summary; the summary row's `criteria` has `total` above 0, equal to the current test file's number of criteria, and `passed` equal to `total`; and
-- its source did not change after the check: the batch's saved `contract_snapshots` row for its Story equals the same row of `captureSource(root, {tests: ROW TESTS, appMap: null})` today, including its test selection, files and reference provenance. Equal file hashes alone cannot replace this row comparison. A nonempty snapshot list with no row for the selected test is unavailable and never falls back. A batch with no snapshots instead needs its `source_sha256` to equal today's capture of all its tests.
+- its source did not change after the check: the batch's saved `contract_snapshots` row for its Story equals the same row of `source.identity({root, tests: ROW TESTS, appMap: null})` (`captureSource`) today, including its test selection, files and reference provenance. Equal file hashes alone cannot replace this row comparison. A nonempty snapshot list with no row for the selected test is unavailable and never falls back. A batch with no snapshots instead needs its `source_sha256` to equal today's capture of all its tests.
 
 Every given prompt path (all of the run's selected changed prompts) must be in the files of a passing test's snapshot row (or of its batch `files` without snapshots).
 
@@ -66,7 +66,7 @@ Return `{pass, tests, problems}`. `tests` is one row `{path, batch, state}` for 
 
 ## Dependencies
 
-- [Runtime preflight](runtime-preflight.prompt.md): `captureSource`, `findTests` and `interfaceBlocks`.
+- [Runtime preflight](runtime-preflight.prompt.md): `source.identity` (`captureSource`) and `findTests`.
 - [Workflow results](workflow-results.prompt.md): the batch folder and name rule for pdd's own results.
-- [Exact scenario numbers](scenario-json.prompt.md): `parseScenarioJson` and `stringifyScenarioJson` for test values.
+- [Exact scenario numbers](scenario-json.prompt.md): `format.parseScenario` and `format.stringifyScenario` for test values.
 - RUNBOOK §2 (Story, test and prompt files), §4 (expected values) and §11 (what an agent may fix).

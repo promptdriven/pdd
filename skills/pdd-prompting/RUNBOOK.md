@@ -51,6 +51,7 @@ Add a second file only for a case that needs a different starting world. Name it
 **One rule, one prompt.** Before you write a prompt, look in `prompts/` for a prompt that owns the rule. Change that
 prompt. Two prompts must never state the same rule. A command-line program has one program prompt (section 6).
 A helper module can have its own prompt. Then the program prompt calls it (section 7) and does not repeat its rules.
+Prompts own production modules, never repository test suites (`test/**`, `tests/**`, `*.test.*`, `*_test.*` or `test_*.*`); `pdd lint`, `pdd lint --local` and `pdd owner PATH` warn when a prompt claims ownership of test files via `pdd-bindings.json`, `Generated from` headers or opening-sentence prose claims. Keep each `.prompt.md` prose body (excluding its `<details><summary>Runtime interface</summary>` block) at or below 500 lines (`pdd lint` and `pdd lint --local` warn above 500 lines and print an elevated warning above 1,000 lines advising module decomposition or `"kind": "native-only"` with deterministic code tests), and keep each Story scenario JSON at or below 15 steps and 1,000 lines.
 
 **The prompt** ends with `<details><summary>Runtime interface</summary>`, a ```` ```json ```` block and `</details>`.
 The block of Harbor Coffee's `place_order` (schemas cut):
@@ -130,8 +131,8 @@ types and sees, as AC1 below does. Do not name code ("`splitBill(2, 4)` returns 
    "checks": [{"criterion_id": "AC3", "target": "result", "path": "/stderr", "op": "equals", "value": "todo: no task #9\n"},
               {"criterion_id": "AC3", "target": "calls", "path": "/resources/todo-store-save", "op": "equals", "value": 0}]}]}
 ```
-- Each criterion needs at least one exact check: `equals`, `not_equals`, `one_of` or `count`. Paths: section 8.
-- The `input` must match the `input_schema`. An error step has `"expected_error": "unknown-sku"` and a check on `error` `/code`.
+- Each criterion needs at least one exact check: `equals`, `not_equals`, `one_of`, `count`, `at_least`, `at_most`, `not_contains`, `all_in` or `equals_ignore_case` (or HTML `exists`, section 20). Paths and operations: section 8.
+- The `input` must match the `input_schema`. Each step requires `step_id`, `entry_path`, `operation`, `input` and `checks`, with optional `expected_error`, `simulation_overrides` (section 21) and `model`. An error step has `"expected_error": "unknown-sku"` and a check on `error` `/code`.
 - Check facts, not values that the AI picks freely (wording that the story does not fix, generated IDs).
 - `context` is almost always `[]`. It gives one prompt extra text files to read, in this test only. A file linked in a
   prompt's `## Dependencies` is eligible for that prompt's context, subject to the route's selection below. Link shared data there. Each row is exactly
@@ -190,15 +191,18 @@ within `[-9007199254740991, 9007199254740991]`, or ±(2^53−1). An out-of-range
 names the bad bound's JSON Pointer (for example `/properties/count/maximum`), the declared bound (`bound_text`)
 and the supported range (`supported_integer_range`).
 
-**Large whole numbers.** Write an exact whole number as plain JSON digits, for example
-`"seconds": 4250129834582680692326400`. pdd reads, shows, compares and sends these exact digits. The PDD interpreter
-accepts plain digits only within ±(2^53−1): it refuses larger ones before execution (`scenario-integer-out-of-range`,
-0 AI calls), and pdd warns about them before it sends the test. For a parameter that takes a Number, write its exact
-Number spelling instead: `String(n)` in JavaScript, for example `4.2501298345826807e+24` for 3600 × 2^70. JavaScript
-and the interpreter read it as exactly that Number, and the interpreter admits it with `"type": "integer"`. A value
-that no Number holds (2^53 + 1, or a BigInt parameter) stays in plain digits; only the repository's own vector test
-(§17) checks it. Do not change the input type or the expected value to fit the interpreter. pdd warns when a token
-with a fraction or an exponent loses digits: `9007199254740993.0` reads as `9007199254740992`.
+**Large whole numbers.** For a parameter that takes a Number, write a whole number outside ±(2^53−1) in its exact
+Number spelling, for example `"seconds": 4.2501298345826807e+24` for 3600 × 2^70. JavaScript and the interpreter read
+it as exactly that Number, and the interpreter admits it with `"type": "integer"`. Write each scenario number with
+`String(n)` in JavaScript; between 2^53 and 1e21, `String(n)` gives plain digits, so use `n.toExponential()` there.
+Never write a scenario number with `json.dumps` of a Python int: it gives plain digits. The PDD interpreter accepts
+plain digits only within ±(2^53−1). It refuses larger ones before execution (`scenario-integer-out-of-range`, 0 AI
+calls), and pdd warns before it sends the test. When the warning says `If the parameter takes a Number, write its
+exact Number spelling …`, apply that fix and check again. Such a refusal is not a reason for `Runtime: not run`. Only
+a value that no Number holds (2^53 + 1, or a BigInt parameter) stays in plain JSON digits. pdd reads, shows, compares
+and sends those exact digits, and only the repository's own vector test (§17) checks the value. Do not change the
+input type or the expected value to fit the interpreter. pdd warns when a token with a fraction or an exponent loses
+digits: `9007199254740993.0` reads as `9007199254740992`.
 
 For an optional input field, leave it out of `required`. Do not use `oneOf` with `null` for it: the Simulator's form shows
 `oneOf` only as a raw JSON box. A correct schema (`read` is optional):
@@ -285,6 +289,16 @@ Mark both schemas with the `cli` convention. `argv` goes in. `exit_code`, `stdou
 - Write the rule "Every line written to `stdout` or `stderr` ends with one newline." in the prose.
   Expected text includes the last newline: `"Added #4: Walk the dog\n"`. An empty stream is `""`.
 
+For checks on real code, each tested entry names its command with
+`"implementation": {"kind": "cli", "command": "node bin/tip.mjs"}` alongside
+its operation and schemas. Run `pdd test --target code STORY` to execute the
+same Story cases locally with 0 AI calls. Use `--json` for structured results.
+Each Story result records the current commit. An unsupported step says
+`not run` with its reason and cannot make the Story pass. Entries with ports
+that cannot be faithfully supplied by this runner are not run; do not replace
+their world or call checks with a pass. HTTP and call entries require native
+replay tests.
+
 ## 7. A prompt that calls another prompt
 
 `checkout` asks `pricing` for a quote. The caller's interface has a `calls` entry:
@@ -308,6 +322,28 @@ Mark both schemas with the `cli` convention. `argv` goes in. `exit_code`, `stdou
 | `calls` | `/resources/<node>-<resource>-<operation>`: uses of that resource operation in this step | `/resources/todo-store-save` equals 0 |
 | `calls` | `/internal/<node>`: calls to that prompt in this step | `/internal/pricing` equals 1 |
 
+**Check operations (`op`):**
+
+| `op` | Allowed `target` | Required fields & meaning | Counts as exact coverage? |
+|---|---|---|---|
+| `equals` | `result`, `world`, `calls`, `error` | `"value"`: exact JSON match | Yes |
+| `not_equals` | `result`, `world`, `calls`, `error` | `"value"`: value is present and not equal to `"value"` | Yes |
+| `one_of` | `result`, `world`, `calls`, `error` | `"value"`: nonempty list of at most 32 distinct JSON scalars (`null`, string, boolean, int or finite float) | Yes |
+| `count` | `result`, `world`, `calls`, `error` | `"value"`: nonnegative integer length of string, array or object (on `calls`, `/internal` or `/resources` counts distinct targets) | Yes |
+| `at_least`, `at_most` | `result`, `world` | `"measure": "value"` with a finite number `"value"`, or `"measure": "length"` with a nonnegative integer `"value"` (string code points, array items or object keys) | Yes |
+| `not_contains` | `result`, `world` | `"value"`: nonempty string that does not appear in the target string (no `"measure"`) | Yes |
+| `all_in` | `result`, `world` | `"value"`: nonempty list of at most 32 distinct JSON scalars; every item of the target array must match one (empty array passes; no `"measure"`) | Yes |
+| `equals_ignore_case` | `result`, `world` | `"value"`: string compared with Unicode case folding without trimming (no `"measure"`) | Yes |
+| `exists` | `result`, `world`, `calls`, `error` | Optional boolean `"value"` (default `true`) | Only with `"html"` (section 20) |
+| `contains` | `result`, `world` | `"value"`: nonempty substring in the target string | No (supplemental only) |
+
+Example bounded length check (`at_most`) and set check (`all_in`), plus optional `"json_path"` (an RFC 6901 pointer into a JSON-text string at `"path"` on `result` or `world`):
+```json
+{"criterion_id": "AC1", "target": "result", "path": "/title", "op": "at_most", "measure": "length", "value": 20}
+{"criterion_id": "AC2", "target": "result", "path": "/score", "op": "at_least", "measure": "value", "value": 10}
+{"criterion_id": "AC3", "target": "result", "path": "/tags", "op": "all_in", "value": ["alpha", "beta", "gamma"]}
+```
+
 A **node** is one prompt operation in the program of the step. Its name is the prompt file name without `.prompt.md`
 (`todo`, `pricing`, `orders_api`). But when the step reaches 2 or more operations of one prompt, each of them is the
 node `<file>--op-<operation>--hex-<operation name in hex>`. `printf add | xxd -p` gives the hex: `616464`.
@@ -322,6 +358,31 @@ node `<file>--op-<operation>--hex-<operation name in hex>`. `printf add | xxd -p
   `error`, an error came back without that field: compare the path with the prompt's declared errors.
   A declared operation that the step did not use counts `0`. pdd does not check paths before it sends, so work out
   each path with these rules before the first check.
+
+**Check operations (`op`).** Exact checks satisfy criterion coverage; `exists` (without `html`) and `contains` are partial checks and must be paired with an exact check on the criterion.
+
+| `op` | Meaning | Example fields |
+|---|---|---|
+| `equals`, `not_equals` | Exact JSON value match or inequality | `"value": 3784` |
+| `one_of` | Actual value matches any listed candidate | `"value": ["pending", "queued"]` |
+| `count` | Length of an array | `"value": 4` |
+| `at_least` / `gte`, `at_most` / `lte`, `lt`, `gt` | Numeric or length bound (`"measure": "value"` default, or `"measure": "length"` for string code points or array items) | `"op": "at_most", "value": 500` |
+| `not_contains`, `all_in`, `equals_ignore_case` | Substring/item exclusion, array subset check, or case-insensitive ASCII string match | `"op": "all_in", "value": ["read", "write"]` |
+| `exists`, `contains` | Presence or substring/item containment (add `"html"` on `exists` for exact HTML selector checks) | `"op": "contains", "value": "Order #"` |
+
+**Cross-path relational checks.** For `equals`, `not_equals`, `at_least` / `gte`, `at_most` / `lte`, `lt`, and `gt` on `result`, `world`, or `calls`, compare against another live field from `"result"`, `"input"`, or `"world"` instead of a literal `value` (or pass `{"ref_target", "ref_path"}` as `"value"`):
+```json
+{"criterion_id": "AC1", "target": "result", "path": "/fee_cents", "op": "at_most", "ref_target": "input", "ref_path": "/cap_cents"}
+```
+Add `"ref_json_path"` when the referenced field is a JSON-encoded string, and `"measure": "length"` when comparing string or array lengths across paths.
+
+**Exact integer conservation (`integer_relation`).** Check exact integer equations or bounds (`"compare": "eq" | "le" | "ge"`) across `result`, `input`, and `world` without hardcoding components:
+```json
+{"criterion_id": "AC2", "target": "result", "path": "", "op": "integer_relation",
+ "value": {"compare": "eq", "left": {"sum": [{"field": "/payout_cents"}, {"field": "/fee_cents"}]},
+           "right": {"ref_target": "input", "ref_path": "/gross_cents"}}}
+```
+Terms use `{"field": "<pointer>"}` (relative to the check's `target`/`path`), `{"ref_target": "result" | "input" | "world", "ref_path": "<pointer>"}`, `{"integer": "100"}` (base-10 string), `{"sum": [...]}`, or `{"product": [...]}`.
 
 ## 9. Money and dates
 
@@ -384,6 +445,13 @@ For a failed step, pdd prints at most one `Rerun:` verdict:
 on exit (Claude Code: `run_in_background`; Codex: a long `timeout_ms`). `--timeout MIN` sets an explicit limit.
 pdd prints the recovery `--read` command before the first check. If the tool stops pdd, run that command once
 to keep waiting on the saved batch. Never poll every minute or send the same check again.
+
+**Maintenance.** During announced maintenance pdd prints the end time and the reason (`The interpreter is in
+maintenance until 08:52 UTC (…). pdd waits, then continues.`). Then it waits and sends the check. In your own session,
+let it wait. Do not cut the wait short: no Ctrl-C, no `timeout` command and no short `--timeout`. A stopped wait sends
+nothing and gives no verdict, and nobody else sends the check again. An Autopilot core job does not wait: it follows
+§15 "Autopilot core jobs".
+
 Before `pdd test` or `pdd simulate`, tell the person in one line what you run and that it can take a few minutes. pdd prints
 a progress line on stderr before each slow step (lint, upload, the queue, the simulation setup). When it fails, it says what
 failed, the real reason and what to do next: pass that line on as it is.
@@ -393,9 +461,15 @@ failed, the real reason and what to do next: pass that line on as it is.
 | 0 | passed | Put the one-line result in the PR (section 15). If it says DRAFT, offer a simulation. |
 | 1 | failed | Find the cause first ("After a ✗" below). Fix only what the evidence shows. A person decides expected values. |
 | 4 | refused | Nothing was judged (`no verdict ·`): a file breaks a rule, or the AI service failed. Read the reason and the next step under the line. When the reason names a file rule, fix that file (table below); for an AI-service cause, change no file. If a fix changes an expected value, ask the person. |
-| 5 | not run | Sign-in, network, server busy or no AI room. Run `gh auth status`. Wait, then run again. If it stays, tell the person. In Autopilot, do not tell the person: follow pdd-autopilot `steps/handoff.md` "Interpreter outage" (`pdd workflow park --interpreter`). |
+| 5 | not run | Sign-in, network, server busy or no AI room. Run `gh auth status`. Wait, then run again. If it stays, tell the person. |
 | 3 | unknown or still running | Run `pdd test --read BATCH` once with a long shell timeout or exit notification; it waits until every Story ends. Never resend the check. |
 | 2 | command error | Wrong command or story name. Run `pdd test --help`. |
+
+**A failed check is a FAIL, also with no verdict.** One step with no answer (for example `graph-provider-failure`)
+makes its Story `no verdict` (exit 3, 4 or 5). Other steps of the same check can still fail. When the line shows fewer
+passed checks than the total (`no verdict · 10 of 13 criteria · 17/19 checks`), open the report and read each step.
+A step that shows `expected X, got Y` is a failed check. Follow "After a ✗" for it, and report it as a FAIL, never as
+`not run`. Only a check with no failed step is no verdict.
 
 **After a ✗ (exit 1).** Find the real cause first, then fix it. Never send the same files again to get another answer.
 1. Read pdd's `Why:`, `Next:` and `Rerun:` lines when pdd prints them. Open "Debug this step" on the report. Read the
@@ -411,7 +485,7 @@ failed, the real reason and what to do next: pass that line on as it is.
 | The expected value may be wrong | The Story does not give this value, or gives another one | Stop. Ask the person: keep the value (you fix the prompt) or change the test. Give an example. In a normal run, write the proposed value and run `pdd workflow done check --summary "Prompt tests line"` again: pdd shows the change on the Story card for the person. |
 | The Story is unclear | Two answers fit the Story | Stop. Ask the person to decide the rule in the Story. |
 | The answer changes between runs | `Rerun: failed 1 of 3 (unstable)` | Make the rule in the prompt firmer. Do not fit the prompt to one answer. |
-| No verdict | `no verdict ·` with an AI-service or limit cause, or `busy ·` when the remaining checks are busy. Exit 3, 4 or 5 can also hide a failed Story: read each Story line | Tell the person, with pdd's next step. Change no file. Never send it again on your own. In Autopilot, do not tell the person: follow pdd-autopilot `steps/handoff.md` "Interpreter outage" (`pdd workflow park --interpreter`). |
+| No verdict | `no verdict ·` with an AI-service or limit cause, or `busy ·` when the remaining checks are busy. Exit 3, 4 or 5 can also hide a failed Story or a failed step: read each Story line and the report ("A failed check is a FAIL" above) | Tell the person, with pdd's next step. Change no file. Never send it again on your own. |
 
 4. At most 2 fix rounds for the same ✗. Then stop, and tell the person what you tried.
 
@@ -425,13 +499,13 @@ failed, the real reason and what to do next: pass that line on as it is.
 | `graph-schema-…` | A schema breaks a rule of section 3. Local diagnostics give the rule and JSON Pointer | Check the named schema against section 3. |
 | `invalid-input` | A step input breaks the input schema: `"7pm"`, or a tax rate as a number | Fix the input. pdd shows the field and the rule. |
 | `story-criterion-mismatch` | A test criterion is not the story text: often curly quotes | Copy the story line exactly. |
-| `unchecked-criteria` | A criterion has no exact check | Add a check for it. |
+| `unchecked-criteria` | No criterion has an exact check. One criterion with no exact check is `not checked`: the others run, but the Story is not a full pass | Add an exact check for each criterion. |
 | `interface-stale` | The prose changed after the hash | Draft: run `--fill-hash`. Approved: set draft and fill the hash. In a normal run, a full check pass re-approves it at PR 1 (section 2); else ask again. |
 | `repository-graph-catalog-error` | Too few AI calls left for a step | Run again with a higher `--max-calls`. |
 | `graph-result-failure` | Often the prose calls a prompt more than `max_calls` | Make the prose and `max_calls` agree. |
 | `run-admission-failed` | Nothing ran (0 AI calls). Often one step's worst case is bigger than `--max-calls` (section 10). Other causes give the same code with no reason | Raise `--max-calls` (at most 1000), or lower `max_calls` in the prompt's `calls`. The interface `limits` do not help. If it stays, tell the person. |
 | `invalid-context` | `context` is not a list of `{"prompt_path", "paths"}` rows, for example a text note (section 2). | Fix the rows, or use `[]`. |
-| `graph-provider-failure` | The AI service failed. No verdict: pdd prints `no verdict ·` (✗ only when another check failed, in this Story or another Story) | Tell the person, with its AI calls. The person may send it again. Never send it again on your own. In Autopilot, do not tell the person: follow pdd-autopilot `steps/handoff.md` "Interpreter outage" (`pdd workflow park --interpreter`). |
+| `graph-provider-failure` | The AI service failed. No verdict: pdd prints `no verdict ·` (✗ only when another check failed, in this Story or another Story) | Tell the person, with its AI calls. The person may send it again. Never send it again on your own. |
 | `graph-uncertain-child-dispatch` | One AI call did not answer. No verdict. Your test is fine | Same as `graph-provider-failure`. |
 
 ## 12. `pdd simulate` and Save as test
@@ -482,6 +556,17 @@ pdd test --screen http://127.0.0.1:8080/ --drawing prompts/views/active__stacked
 ```
 
 This uses installed headless Chrome/Chromium at the SVG viewport, no AI or interpreter calls. Set `PDD_CHROME_PATH` if the executable is not found. It checks every visible text occurrence and id, including numeric values, against the real page; metadata, hidden and context-only SVG subtrees are excluded. It requires visible page parts, center positions within 15% of each viewport dimension, and the same spatial order for separated parts. Arrange the named state and its dynamic values before comparing. This parts comparison does not certify pixel equivalence; retain any stricter accepted measured/exact comparator and tolerance. Text matches require effective visible glyph paint and literal displayed control labels; password and other nondisplayed stored values never supply labels. Applied clips, masks, filters and unsupported text paint or native formatting leave visibility unproved and return an error. Arbitrary overlay occlusion, colors and typography require separate verification.
+
+For a Simulator Screen door, the comparator waits up to 10 seconds after page
+load for its readiness protocol, app fonts and layout. It reads only the marked
+same-origin iframe or open shadow app surface in local coordinates. It never
+clicks Open or sends an action. Exit 6 (`screen-not-ready`) gives state, reason
+and recovery guidance without a drawing table. An unopened app requires a
+deliberate open, which can spend AI calls; a legacy viewer requires an update.
+Keep a not-ready result distinct from a drawing mismatch and rerun after the
+named prerequisite is satisfied. JSON has `drawing`, `url`, `outcome` (`not-ready`),
+`code` (`screen-not-ready`), `state`, `reason`, `message` and `exit_code` (6),
+without comparison `rows` or `passed`.
 
 Verification must put a **Screen vs drawing** table in `verify.md` and in the body of the code PR (code space):
 
@@ -644,8 +729,9 @@ ticks. Ticks use the existing action/call budget.
 **Independent checker: code-only bugs.** Use this route only for a bug with the recorded Story-gate verdict
 "the prompt is right; the bug is only in the CODE". Compare the owning prompt and required context on the old
 and new snapshots: they must be unchanged. Check the same issue-derived Story and expected cases on each
-snapshot. Both prompt checks must pass in full. Apply pdd-check's current-source, fresh-result rules to each;
-unavailable or unverifiable results are no verdict, never an assumed pass.
+snapshot. Both prompt checks must pass in full. Each counts only when it matches the Story, the test cases and
+the prompt source of its snapshot, from a fresh run (not cached); unavailable or unverifiable results are no
+verdict, never an assumed pass.
 
 Independently run the same native regression against the old code and the corrected code, using the same
 expected cases and public boundary. The old code must fail an assertion for the issue's reason and the new
@@ -748,7 +834,7 @@ the Story's "As a …" line, §2), the changed files and their +/− counts itse
 green" in a summary stays your words. In the PR title and description your words cannot close an issue: pdd breaks
 each closing keyword (fix, close, resolve and their forms) in the title, the summary, the cases, the file notes and
 verify.md, so only pdd's `Closes #N` closes one. Code spans and code blocks stay as you wrote them (GitHub reads no
-reference there). A commit message can close an issue, so do not write "Fixes #N" in one. In the readable part your
+reference there). A commit message can close an issue, so do not write "Fixes #N" in one. Outside a workflow run (including integration or release PRs into `main`), write one `Closes #N` line per completed issue in the PR body, and `Refs #N` for any partial issue. In the readable part your
 words also cannot add a link or a mention. Separate the cells of a `Case:` line with `|`; put a value that has a `|`
 in a code span. Do not paste logs, warnings or full paths of this computer (`/Users/…`). PR 1 cannot merge while a
 prompt in it is still draft.
@@ -763,6 +849,101 @@ Case: 1205 | $12.50 | $12.05
 ```
 
 In PR 2 the same case has four cells: `Case: 1205 | $12.50 | $12.05 | $12.05`.
+
+### Autopilot core jobs
+
+A job of the Autopilot core engine (`pdd autopilot start --engine core`) makes one PR with no workflow run. It
+writes the `Runtime:` lines and one `Evidence:` line in the PR body. Autopilot checks each line against its own
+records. A line that the records do not support is red. The same rules, short enough for one read, are in
+`autopilot-job-rules.md` of the pdd-prompting skill; a job reads that file in full.
+
+- **Skill choice:** a fix that changes no product behavior uses `pdd-small-change`, also when the issue is written as a
+  bug. Pick `pdd-small-change` whenever every planned file takes unowned path `d` non-code files (docs, CI, lock files,
+  non-behavior config or metadata, or test-only maintenance — never `*.prompt.md` or `user_stories/*.md`), and write no
+  new Story or prompt for path `d` files. When a `pdd-small-change` run changes owned code (path `a`, `b` or `c`), keep
+  the Story test, replay and `Runtime:` evidence. A repair on a path-`d`-only PR keeps path `d` without adding a new
+  Story or prompt.
+- **Changed** means changed against the base: `git diff --name-only origin/BASE...HEAD` (BASE is the PR's base
+  branch, usually `main`). It never means changed since the previous PR head. A Story or prompt that a merge from the
+  base brought in is not changed. A changed Story is a Story whose Story file or test file changed, or whose test
+  reaches a changed prompt.
+- Commit every change, then run `pdd test` for each changed Story, all of them in one `pdd test` batch where you
+  can (`pdd test STORY STORY ...`); every Story whose test reaches a changed prompt counts, however many. Write one
+  `Runtime:` line for each changed Story.
+  Put the verdict first. Then put the Story file path (as `git diff` shows it) first in the parentheses:
+  ```text
+  Runtime: PASS (user_stories/format-bytes.md, 19/19 checks)
+  Runtime: FAIL (user_stories/format-bytes.md, 2 of 19 checks failed: steps format-10, zibi)
+  Runtime: not run (user_stories/package-repository.md: native-only prompt, no Runtime test)
+  ```
+  A single line with no Story (for example `Runtime: PASS`) is valid only when the PR changes one Story or none. Two
+  lines for the same Story are red. A PASS of a Story that the PR does not change never counts. A FAIL line blocks
+  the merge.
+- A failed check is a FAIL, also when its check has no verdict (§11). Find the cause and fix it ("After a ✗"). Never
+  write a failed check as `not run`.
+- `not run` is only for a cause that this PR cannot fix: a native-only prompt, no verdict with no failed step, or a
+  refusal that pdd gives no fix for. A changed Story with no Runtime test is no such cause: write its Runtime test
+  (one step for each criterion) and run `pdd test`, or mark the owning prompt's interface native-only with a reason.
+  A refusal with a fix from pdd is this PR's work. For example, a whole number outside the interpreter's range: apply
+  the Number spelling that pdd prints (§3 "Large whole numbers") and check again.
+- Do not wait for maintenance. When pdd prints that the interpreter is in maintenance (§11), it has sent nothing yet.
+  Stop pdd then. For each changed Story that pdd did not send, write `Runtime: not run (STORY: maintenance until
+  HH:MM UTC)` with the end time that pdd printed. Autopilot sends the check itself when maintenance ends and rewrites the line. Never send it again yourself. Never
+  cut short a check that pdd has already sent.
+- `vectors=` counts the replay files (`*.vectors.test.*`) that the PR changes or that read a changed scenario file.
+  Count `node:test` tests (the `# tests` and `# pass` lines), not steps or checks, for example `vectors=pass (36/36)`.
+- After a merge from the base, check that the fix is still needed. Check out the new merge base
+  (`git merge-base origin/BASE HEAD`) in a throwaway worktree, copy in the PR's changed tests, and run them. When they
+  pass on the base code too, the base already holds the fix. Then keep the base's code, keep only what the base does
+  not hold, and say so in the PR body.
+
+**Choices and questions.** These rules are in rule 1 of the job brief too.
+
+- Autopilot decides when at least one reasonable fix solves the problem and breaks nothing that people use today: pick
+  that fix and list it in the PR body under "Choices Autopilot made:", one line each with its reason
+  ("- CHOICE (REASON)"), with "(changes public behavior: WHAT)" when users see a change. For example, "make remove
+  safer" is decided: ask y/N only in an interactive terminal, --yes skips it, scripts stay unchanged; nothing is asked.
+- A pdd-bug or pdd-small-change run never asks a choice question: pick the fix that makes the reported behavior right
+  with the least surprise.
+- With `decisions` `decide` (the default): never ask a person about a choice. Decide every choice yourself,
+  product-direction ones too, and list each; list the big ones first, each marked "(big)". A choice question is never
+  posted: Autopilot starts the job once more with "Autopilot decides this choice: do not ask."
+- With `decisions` `ask`: routine compatible choices of command syntax, options or data representation are agent
+  decisions when a safe, low-surprise choice exists. Preserve existing APIs, defaults and behavior unless the request
+  authorizes a change. Several valid designs alone are not a reason to ask. A choice may be a question
+  (`"kind":"choice"`) only when every reasonable fix breaks something that people use today, or, in a pdd-feature
+  run, when the choice actually changes product direction: whether a new feature
+  area or capability should exist, removing a feature, an on-purpose change to a core contract, security, privacy or
+  data policy, or something that costs money; an open trusted issue that asks the same product question counts too.
+  Then do not choose and open no PR. Decide and list every other choice. An issue gets at most one choice question.
+- A bug fix may change an approved rule (Serhan, D1): when the fix of a pdd-bug or pdd-small-change run changes a
+  rule in an approved prompt, change it without asking and list it with "(changes approved rule: OLD -> NEW)", so a
+  person sees it. The repository's approval setting still applies to the changed prompt.
+- Two cases always go to a person, in every run: a change against a person's recorded answer to an earlier question
+  (an answer above, a decision issue), and a change of what blocks merges (a new required check, a gate, a hash pin,
+  CI policy). Do not make such a change: write the needs-person result with `"kind":"blocker"`. A real blocker (missing access or a secret, an issue that contradicts
+  itself, work that cannot be done) is `"kind":"blocker"` too.
+- The needs-person result asks exactly one question with 2 or 3 options, so a person can answer with one letter:
+  ```json
+  {"outcome":"needs-person","kind":"blocker|choice","question":"<one plain question>","options":["<answer A>","<answer B>"],"recommended":"<the letter you recommend>"}
+  ```
+- A vague issue is never a reason to ask. When the issue, or a person's answer above, settles a choice, build.
+- Autopilot posts the question on the issue, adds `pdd:needs-decision` and says: "Please answer in a comment (one
+  letter is enough)." A trusted person's reply ends the wait: at its next check Autopilot reads the answer, removes
+  the label itself and goes on. The next job gets the answer.
+
+For the reviewer:
+
+- Non-code path `d` files (docs, config, CI settings, `package.json`, lock files, and test files or fixtures) need no
+  prompt and no Story; never ask for a new prompt or Story for them, and treat a new prompt or Story added for a
+  non-code file as a must-fix.
+- Every choice that the issue did not settle must be listed in the PR body under "Choices Autopilot made:" with its
+  reason (with "(changes public behavior: ...)" when users see a change); a missing or wrong line is a P2 must-fix
+  (fix the list).
+- A bug or small-change fix may change a rule in an approved prompt; it must be listed with "(changes approved rule:
+  OLD -> NEW)", and a missing mark is a P2 must-fix (fix the list). A change against a person's recorded answer to an
+  earlier question, or a change of what blocks merges (a required check, a gate, a hash pin, CI policy), is a P1
+  must-fix in every mode: undo it, or end with the needs-person result `"kind":"blocker"`.
 
 ## 16. Known limits today
 
@@ -796,9 +977,13 @@ Stop and tell the person to start a new agent session in the run's worktree. No 
 Only after the check actually runs, replace its `Not checked:` line with the real result in the step's run file and any copy in `verify.md`; never keep both.
 
 Code space is the PDD compiler: your agent writes the code from the approved prompts, and the same tests run on that code.
-Agents replay the approved prompt-space cases against the real code. Checks of prompts on the PDD interpreter do not establish
-that the code behaves the same. Agents execute the tests and supply the evidence; pdd validates structure and
-identity only. It does not independently prove execution or prompt/code equivalence.
+For CLI entries with a declared implementation, `pdd test --target code` executes
+the same Story cases and records the results with the commit. Unsupported steps
+are not run and cannot pass. Agents replay other approved prompt-space cases
+against the real code using native tests. Checks of prompts on the PDD interpreter
+do not establish that the code behaves the same. For agent-supplied replay
+evidence, pdd validates structure and identity; it does not independently prove
+execution or prompt/code equivalence.
 
 In verify after the last commit, run one `pdd workflow prove <run> --test "<command>" --expect "<distinctive text printed by the failing test on old code>"` command that covers all new or changed tests; text the old-code run does not print gives `wrong-reason`. Its line goes on the PR. Fresh worktrees have no installed dependencies, so include any required installation in the command.
 
@@ -816,7 +1001,8 @@ In verify after the last commit, run one `pdd workflow prove <run> --test "<comm
   store after the step, seeded from `initial_world`; `calls` → a spy count. A target you cannot map is
   "Not replayed", with the reason. It is never a pass. Missing checks and unexecuted operations are not replayed.
 - In `verify`, run the replay test. Then run it again on a throwaway copy with ONE planted mistake (in a bug run:
-  the old code). At least one assertion must fail there. A crash does not count.
+  the old code). At least one assertion must fail there. A crash does not count. After a merge from the base, the old
+  code is the code at the new merge base: when no assertion fails there, the base already holds the fix.
 - Write the table into `verify.md`: case, criterion, input, expected, prompt check, code (got), result.
   Also show that `tests/<story>.json` is unchanged since prompt space.
 - In bug and feature, finish the initial build, verify and formal steps with fresh independent review.
@@ -880,8 +1066,8 @@ A page or a screen is never "browser-only": what it shows and what each tap does
 for example `{"html": "…", "emptyMessage": "No books yet", "rows": 3}`. Check the facts with `equals` or `count`
 on those fields (`/emptyMessage`); use structured HTML checks for markup (section 20). Only what the interpreter truly cannot see (CSS layout, sizes,
 animation) goes in a story with no PDD test (pdd only warns "has no test"), proved with the repo's tests in PR 2.
-Keep the prompt short. A `calls` entry is enough: do not copy the called prompt's schemas. Put a big table or list in a
-repo file and link it under `## Dependencies`. Test data goes in the test (`input`, `initial_world`), not in the prompt.
+Keep the prompt short (500 prose lines or fewer excluding its Runtime interface block; `pdd lint` warns above 500 lines and gives elevated decomposition advice above 1,000 lines). A `calls` entry is enough: do not copy the called prompt's schemas. Put a big table or list in a
+repo file and link it under `## Dependencies`. Test data goes in the test (`input`, `initial_world`), not in the prompt. Keep each Story scenario JSON focused on policy and authority boundaries (15 steps or fewer and 1,000 lines or fewer), and prove multi-step state-machine or wire-protocol sequences with native tests (section 17).
 
 **A pure function:** one operation, input → result, no saved data, no `calls`. Each step costs 1 AI call.
 `initial_world` and `simulation` are `{}`. One step for the 2048 `board` prompt:
@@ -1212,6 +1398,35 @@ I can look up the same item twice and see each supplied reply.
   "steps": [
     {"step_id": "first", "entry_path": "prompts/varying-port.prompt.md", "operation": "lookup", "input": {"id": "book-7"}, "checks": [{"criterion_id": "AC1", "target": "result", "path": "/label", "op": "equals", "value": "Available"}], "model": "gpt-6.1-sol"},
     {"step_id": "second", "entry_path": "prompts/varying-port.prompt.md", "operation": "lookup", "input": {"id": "book-7"}, "checks": [{"criterion_id": "AC1", "target": "result", "path": "/label", "op": "equals", "value": "Reserved"}], "model": "gpt-6.1-sol"}
+  ]
+}
+```
+
+### Override an in-program peer for a failure step
+
+When another prompt in the repository implements a declared port or HTTP operation, the interpreter binds calls to that peer prompt automatically. For an outside port whose reply varies across calls or steps, use top-level `fixture.lookup` with `call_index` above. To simulate a peer failure on one step while other steps still call the real peer prompt, set optional `simulation_overrides` on that step (never `simulation` on a step) to a list of override rows. Each row has exact keys `operation`, `criterion_id`, `failure_quote`, `reason` and `binding`: `criterion_id` must be checked in that step, `failure_quote` must quote an explicit non-negated failure phrase from that criterion's text (such as `"peer is unavailable"`, `"timeout"`, `"offline"` or `"failed"`), and `binding` uses `port.write` or `fixture.lookup` validated against `initial_world`.
+
+```json
+{
+  "step_id": "peer-down",
+  "entry_path": "prompts/service.prompt.md",
+  "operation": "resolveItem",
+  "input": {"id": "item-7"},
+  "simulation_overrides": [
+    {
+      "operation": "peer.lookup",
+      "criterion_id": "AC1",
+      "failure_quote": "peer is unavailable",
+      "reason": "Simulate unavailable peer catalog returning ok: false.",
+      "binding": {
+        "action": "port.write",
+        "world_pointer": "/peer_requests",
+        "result_template": {"ok": false, "label": ""}
+      }
+    }
+  ],
+  "checks": [
+    {"criterion_id": "AC1", "target": "result", "path": "/label", "op": "equals", "value": "Fallback"}
   ]
 }
 ```

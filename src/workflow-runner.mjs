@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 5d413814e71c26865c705b0c36659770969304e71e1465edc7a9388a73df86ae).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 314e4137adf52cda0ef2b23f5af333d4007cb626345a5f53bb9d1679213fef6e).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -27,19 +27,40 @@ import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, reconcileWo
 import { allocateIssueWorktree, releaseIssueClaim } from './workflow-worktree.mjs';
 import { allRuns, currentChat, gitContext, listRuns, readRun, readRunOwnership, resolveRun, runDirFor, runForWorktree, updateRun, updateRunCosts, writeRun } from './workflow-runs.mjs';
 import { armSavedWorkerCompletion } from './workflow-worker-completion.mjs';
+import {
+  ANCHOR_FOLDER,
+  askArea,
+  associationKey,
+  beforeHead,
+  canonical,
+  checkedAssociation,
+  commitSha,
+  evidenceTests,
+  frozenRoot,
+  oneLine,
+  ownedPr1Head,
+  prOf,
+  readEvidenceEligibility,
+  sameFact,
+  selectedCapture,
+  selectionEqual,
+} from './workflow-eligibility.mjs';
+export { readEvidenceEligibility };
 import { startChat, sendToChat, herdrCommand, chatSession, chatHealth, openChat, rebuildClosedChat, assertRestartCaller, restartChat, validSessionId, closeFinishedChats, finishedChats, finishedAt, paneUsage, ensurePaneBudget, countReasons, mergeReasonCounts, reasonWords, expandHome, homeVariable, isFolder, observeLifecycle, applyLifecycle, launchAnchor, sessionEvidenceDue, ownSession, observedSession, START_GRACE_MS, removeStaleLoginFiles } from './workflow-chat.mjs';
 import { samePath } from './workflow-herdr-layout.mjs';
 import { workflowAgentEntry } from './workflow-agents.mjs';
-import { captureSource, findTests, gitFiles, interfaceBlocks, interfaceSchemaProblems, isStoryPath, proseSha256 } from './runtime-preflight.mjs';
-import { storyLines, PROMPT_TESTS_LABEL, PROMPT_TESTS_WORDS } from './runtime-output.mjs';
 import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
-import { causeText } from './runtime-output.mjs';
+import { PROMPT_TESTS_LABEL, PROMPT_TESTS_WORDS, causeText, format, isStoryPath, render, runtimeOutputSlice, runtimePreflightSlice } from './runtime-seam.mjs';
 import { approvalRecords, preparePrEvidence } from './workflow-pr-evidence.mjs';
 import { validateProofRecord } from './workflow-prove.mjs';
 import { readRunResults, resultLines, usableResult, noResultLine, NO_VERDICT, prepareNativeEvidence, savedCheckCause, savedLostCheck } from './workflow-results.mjs';
 import { collectTestInventory } from './workflow-inventory.mjs';
 import {readSmallChangeChecklist} from './workflow-small-change.mjs';
 import {adoptReplayCorpus,REPLAY_POLICY,sourceFingerprint as gitFingerprint,pinReplayVectors,pinRunAnchor,readReplayEvidence,readFormalEvidence,formatFormalEvidence,formatReplayEvidence} from './workflow-replay.mjs';
+
+const { captureSource, findTests, gitFiles, interfaceBlocks, promptSchemaRefusals, readPrompt } = runtimePreflightSlice();
+runtimeOutputSlice();
+const { proseSha256 } = format;
 import { DETAILS_OPEN, TOP_NOTE, balancedDetails, closingInert, detailsOf, pr1Order, prArea, prStatus, readPrFields, readableNextLines, readablePrBody, readablePrTitle, readablePrTop, sameReadableTop, userStory } from './workflow-pr-body.mjs';
 import { nativeGithubCounter } from './github-calls.mjs';
 import { storyCard, storyFingerprint, fingerprintChanges, fullCheckPass } from './workflow-story-card.mjs';
@@ -66,7 +87,6 @@ function execute(file, args, { cwd, input, ...options } = {}) {
   });
 }
 const shell = value => /^[A-Za-z0-9_@%+=:,./-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
-const oneLine = value => String(value ?? '').replace(/\s+/g, ' ').trim();
 // A chat failure as `code: reason` from the first message line, with the code only once; a bare code when there are no other words.
 const firstLine = value => oneLine(String(value ?? '').split('\n')[0]);
 const failureReason = error => {
@@ -108,7 +128,8 @@ function paneOwners(rows, runs) {
   const ordered = [...runs].sort((a,b) => Number(ended(a)) - Number(ended(b)));
   for (const pane of rows) {
     const run = ordered.find(run => (run.chats ?? []).some(chat => matches(pane,chat))
-      || matches(pane,run.layout?.root ?? run.layout,run.layout?.workspaceId));
+      || matches(pane,run.layout?.root ?? run.layout,run.layout?.workspaceId)
+      || !run.layout && (run.chats ?? []).some(chat => chat.workspaceId && pane.workspace_id === chat.workspaceId));
     if (!run) { owners.unowned++; continue; }
     owners[ended(run) ? 'done' : run.parking?.phase === 'parked' ? 'parked' : 'working']++;
     if ((run.chats ?? []).some(chat => matches(pane,chat))) chats.add(pane.pane_id);
@@ -229,10 +250,6 @@ function protectProgress(run,p,{approval=false,validate}={}) {
 }
 const sameGate = (current, selected) => (!current || !selected) ? current === selected : ['area','kind','at'].every(key=>current[key]===selected[key]) && (!selected.id || current.id===selected.id);
 const equalFact = (a,b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
-// The same saved record regardless of key order.
-const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object'
-  ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
-const sameFact = (a,b) => JSON.stringify(canonical(a ?? null)) === JSON.stringify(canonical(b ?? null));
 const lastChat = (run, area) => [...(run.chats ?? [])].reverse().find(chat => chat.area === area);
 // The chat identity and lifecycle fields that one observation may change.
 const CHAT_OBSERVATION = ['workspaceId', 'repoWorkspaceId', 'tabId', 'paneId', 'terminalId', 'session', 'startedAt', 'messageFile', 'resumedAt', 'startUnconfirmed', 'state', 'evidence', 'code', 'closed', 'openedAt', 'endedAt', 'launchProfile', 'herdrAgentName', 'namingError', 'idleSince', 'idleAnchor', 'continueAnchor'];
@@ -441,9 +458,39 @@ async function cardText(run, p, extra = {}) {
 const pddTestLines = (run, p) => ownResults(run, p).filter(result => result.kind === 'pdd test').flatMap(result => result.stories?.length ? result.stories : [result.summary]);
 const cardGate = 'Gate: show the person the Story card above exactly as printed, then ask. Never ask a bare "approve?". Stop. Do not approve for them. When the person also wants the code PR after PR 1, add --through code to the approve command; without it, pdd stops after PR 1.';
 
+// These are previews only; all evidence remains in the original run ledger.
+function earlierSummaryLines(run, steps) {
+  const marker = ' … [summary shortened; read ledger]', itemLimit = 1024, lineLimit = 8192;
+  let incomplete = false;
+  const items = steps.filter(step => run.done[step]).map(step => {
+    const item = `${step}: ${oneLine(run.done[step].summary).replace(/[.\s]+$/, '') || 'done'}`;
+    if (Buffer.byteLength(item, 'utf8') <= itemLimit) return item;
+    incomplete = true;
+    let prefix = '', bytes = Buffer.byteLength(marker, 'utf8');
+    for (const point of item) {
+      const size = Buffer.byteLength(point, 'utf8');
+      if (bytes + size > itemLimit) break;
+      prefix += point; bytes += size;
+    }
+    return prefix + marker;
+  });
+  const render = parts => `Approved so far: ${parts.join('; ') || 'no step summaries'}.`;
+  let line = render(items);
+  if (Buffer.byteLength(line, 'utf8') > lineLimit) {
+    incomplete = true;
+    const omitted = count => `[${count} further step summaries omitted; read ledger]`;
+    line = render([omitted(items.length)]);
+    for (let count = 1; count < items.length; count++) {
+      const candidate = render([...items.slice(0, count), omitted(items.length - count)]);
+      if (Buffer.byteLength(candidate, 'utf8') > lineLimit) break;
+      line = candidate;
+    }
+  }
+  return [line, ...(incomplete ? [`Incomplete previews: read the original ledger ${JSON.stringify(resolve(run.runDir, 'status.json'))}. Full summaries use JSON Pointer /done/STEP/summary; replace STEP with the original workflow step name, escaping ~ as ~0 and / as ~1. Before relying on a shortened or omitted result, check/approval claim, unresolved failure or decision, retrieve the relevant full entries and referenced reports/notes needed for this stage. Missing preview text does not establish that failures or decisions are absent. If you cannot identify a safe subset, read all full earlier summaries. Previews cannot establish a check pass or approval.`] : [])];
+}
+
 async function areaMessage(run, index, p, packageRoot) {
   const area = run.areas[index], pdd = '"$PDD_BIN"', earlier = run.areas.slice(0, index).flatMap(item => item.steps);
-  const summaries = earlier.filter(step => run.done[step]).map(step => `${step}: ${oneLine(run.done[step].summary).replace(/[.\s]+$/, '') || 'done'}`);
   const files = index ? await changedFiles(run, p) : [];
   const automatic = automaticHandoff(run, p, packageRoot), normal = !automatic && normalRun(run, p);
   return [
@@ -455,7 +502,7 @@ async function areaMessage(run, index, p, packageRoot) {
     `Worktree: ${run.root} (branch ${run.branch}). Work and commit only here.`,
     `Saved base: ${run.baseBranch}. Use this base for this run; do not take a base from documents or ask which document to follow. PR 2 may stack on PR 1 as directed by pdd.`,
     `Run folder: ${run.runDir}. Put notes there. verify writes verify.md there with the exact test commands and their output.`,
-    ...(index ? [`Approved so far: ${summaries.join('; ') || 'no step summaries'}.`, `Changed files: ${files.slice(0, 20).join(', ') || 'none yet'}${files.length > 20 ? ', …' : ''}.`] : []),
+    ...(index ? [...earlierSummaryLines(run, earlier), `Changed files: ${files.slice(0, 20).join(', ') || 'none yet'}${files.length > 20 ? ', …' : ''}.`] : []),
     `Area ${index + 1} of ${run.areas.length}: ${area.name}. Steps: ${area.steps.map(step => !area.optional.includes(step) ? step : normal && step === 'try' && area.before === 'approve' ? `${step} (optional: pdd skips it; do not ask)` : `${step} (optional: ask the person)`).join(', ')}.`,
     `After each step, run: ${pdd} workflow done STEP --summary "one line". It prints what to do next.`,
     ...(prLabel(run, area) === 'PR 2' && prOf(run, askArea(run).name) ? [`PR 1: ${prOf(run, askArea(run).name).url}. This area works on branch ${run.branch}, ${run.prBase === run.baseBranch ? `from the merged ${run.baseBranch}` : 'on top of PR 1'}.`] : []),
@@ -479,8 +526,6 @@ PDD_SAID
 Choose a quoted delimiter absent as a whole payload line. Or the person can use terminal y/N: pdd workflow approve ${run.number} in a normal terminal.`;
 const approvalRetry = (run, prefix) => `The saved approval remains usable for this same gate. Retry with its exact recorded words; no new approval is needed. ${approvalGuide(run, prefix).replace('Show the gate and ask the person. One approval covers the gate and all its selected draft prompts. Relay their exact later words with:', 'Use the saved words with:')}`;
 const codeLater = run => `To make the code PR later, tell your agent, or run pdd workflow approve ${run.number} in a terminal.`;
-const prOf = (run, name) => (run.pr ?? []).find(pr => pr.stage === name) ?? null;
-const askArea = run => run.areas.find(area => area.then === 'ask-code') ?? null;
 // PR 1 is the ask-code area's prompt PR and PR 2 the code PR; a one-PR workflow says "the PR".
 const prLabel = (run, area) => !askArea(run) ? 'the PR' : area.then === 'ask-code' ? 'PR 1' : 'PR 2';
 
@@ -1098,33 +1143,6 @@ export function matchesSource(record, root, fingerprint, capture = captureSource
   }
   return false;
 }
-// Registration authority is independent of receipt content and source equality.
-const evidenceTests = tests => {
-  if (!Array.isArray(tests) || !tests.length || tests.some(path => typeof path !== 'string' || !path || /[\\\x00-\x1f\x7f]/.test(path)
-    || path.startsWith('/') || /^[A-Za-z]:/.test(path) || path.split('/').some(part => !part || part === '.' || part === '..' || part.toLowerCase() === '.git'))
-    || new Set(tests).size !== tests.length) throw Error('Select nonempty unique safe authored-relative test paths.');
-  return [...tests].sort();
-};
-const selectionEqual = (a,b) => sameFact(evidenceTests(a),evidenceTests(b));
-const associationKey = a => JSON.stringify([a.workspaceRoot,evidenceTests(a.tests),a.source_sha256]);
-function ownedPr1Head(run) {
-  const area = askArea(run), pr = area && prOf(run,area.name);
-  if (!pr || !Number.isSafeInteger(pr.number) || pr.url !== `https://github.com/${run.repo}/pull/${pr.number}` || !commitSha(pr.publishedHeadSha))
-    throw Error('The owned recorded PR 1 head is missing or unavailable.');
-  return pr.publishedHeadSha;
-}
-function selectedCapture(root,tests,capture=captureSource) {
-  const visible=new Set(gitFiles(root));
-  if(tests.some(path=>!visible.has(path)))throw Error('A selected authored source is missing or unavailable.');
-  return capture(root,{tests,appMap:null});
-}
-const ANCHOR_FOLDER = {pr1:'evidence-pr1',before:'evidence-before'};
-function frozenRoot(run,head,stage='pr1') { return join(realpathSync(run.runDir),ANCHOR_FOLDER[stage],head); }
-// The before stage names its historical source by an explicit full commit id: the caller's reconstruction provenance.
-function beforeHead(a) {
-  if (!commitSha(a.sourceAnchor?.head) || a.sourceAnchor.head !== a.sourceAnchor.head.toLowerCase()) throw Error('The registered before commit is missing or invalid.');
-  return a.sourceAnchor.head;
-}
 // Same Story: every selected test at the historical commit is a current test of the run with the same story_path.
 function sameStoryTests(run,frozen,tests) {
   const current=new Set(gitFiles(run.root));
@@ -1133,21 +1151,6 @@ function sameStoryTests(run,frozen,tests) {
     try { then=JSON.parse(readFileSync(join(frozen,path),'utf8')).story_path; now=current.has(path)?JSON.parse(readFileSync(join(run.root,path),'utf8')).story_path:undefined; } catch { then=undefined; }
     if (typeof then !== 'string' || then !== now) throw Error(`${path} is not a current test of the same Story at that commit.`);
   }
-}
-function checkedAssociation(run,a,capture=captureSource) {
-  if (a.runId !== run.runId || a.repo !== run.repo || !['current','pr1','before'].includes(a.stage)
-    || !/^[a-f0-9]{64}$/.test(a.source_sha256 ?? '') || realpathSync(a.workspaceRoot) !== a.workspaceRoot
-    || a.registration?.operation !== 'evidence-associate' || !Number.isFinite(a.registration.at)
-    || a.registration.cwd !== realpathSync(run.root)) throw Error('The evidence association has a different run, owner, producer or registration.');
-  evidenceTests(a.tests);
-  const head = a.stage === 'pr1' ? ownedPr1Head(run) : a.stage === 'before' ? beforeHead(a) : null;
-  const root = a.stage === 'current' ? realpathSync(run.root) : frozenRoot(run,head,a.stage);
-  if (a.sourceAnchor?.root !== root || a.sourceAnchor?.head !== head || realpathSync(root) !== root)
-    throw Error('The registered stage source anchor is missing, changed or unrelated.');
-  if (selectedCapture(root,a.tests,capture).sha256 !== a.source_sha256) throw Error('The registered stage source has changed or is unavailable.');
-  if (a.stage === 'current' && selectedCapture(a.workspaceRoot,a.tests,capture).sha256 !== a.source_sha256)
-    throw Error('The producer selected source has changed or is unavailable.');
-  return root;
 }
 // One eligibility rule for import, status/Story counts and prepared PR lines.
 function eligibleEvidence(run,record,{stage='current',root=run.root,fingerprint=null,capture=captureSource}={}) {
@@ -1895,7 +1898,6 @@ function prTitle(issueTitle, suffix) {
   return `${kept.trimEnd()} …${suffix}`;
 }
 
-const commitSha = value => /^(?:[a-f\d]{40}|[a-f\d]{64})$/i.test(value);
 // Updates use the same publication owner's identity checks as initial creation.
 // Local source supplies an expected intent, never authority for the saved head.
 async function readPublishedPr1(run, pr, p) {
@@ -2721,7 +2723,7 @@ async function recordEvidenceCommand({ ref, summaryFile, cwd }, ports) {
         throw Error('Evidence row Story/state does not match its selected test.');
       return { ...row, phase: 'server', criteria_total: test.doc?.criteria?.length ?? 0 };
     });
-    const expected = new Map(storyLines(rows));
+    const expected = new Map(render(rows, { as: 'story-lines' }));
     lines = rows.map(row => row.summary_line);
     // A saved result of an older pdd says `Runtime check`: read its label as `Prompt tests` before the compare.
     const label = line => typeof line === 'string' ? line.replace(LABEL_START, PROMPT_TESTS_LABEL) : line;
@@ -3353,6 +3355,7 @@ async function approveGatePrompts(run, p, snapshot = null) {
   const fs = p.fs ?? { lstatSync, realpathSync, readFileSync, writeFileSync };
   snapshot ??= await gatePromptSnapshot(run, p);
   const paths = snapshot.map(row => row.path);
+  const visible = new Set(gitFiles(run.root));
   const edits = [];
   for (const path of paths) {
     const file = join(run.root, path);
@@ -3364,8 +3367,10 @@ async function approveGatePrompts(run, p, snapshot = null) {
     if (blocks.length !== 1) throw Error(`${path} must have one Runtime interface block.`);
     let iface;
     try { iface = JSON.parse(blocks[0][1]); } catch { throw Error(`${path} has invalid Runtime interface JSON.`); }
-    const problems = interfaceSchemaProblems(iface);
-    if (problems.length) throw Error(`${path}: ${problems.map(item => `${item.code} ${item.pointer} ${item.rule}`).join('; ')}`);
+    let prompt, problems;
+    try { prompt = readPrompt(run.root, visible, path); problems = promptSchemaRefusals(run.root, { visible }, prompt, new Map([[path, prompt]])); }
+    catch (error) { throw Error(`${path}: ${error.message}`); }
+    if (problems.length) throw Error(`${path}: ${problems.map(item => `${item.code} ${item.section} ${item.message}`).join('; ')}`);
     const hash = proseSha256(text);
     if (iface.status === 'approved' && iface.prose_sha256 === hash) continue;
     if (!['draft','approved'].includes(iface.status)) throw Error(`${path} has an invalid approval status.`);
@@ -4175,17 +4180,17 @@ function endedChatHelp(run) {
   return done(lines.join('\n'));
 }
 async function cleanupRunChats(run, p, options = {}) {
-  const snapshot = structuredClone(run), savedTerminals = new Map((run.chats ?? []).map(chat => [chat.paneId, chat.terminalId]));
+  const snapshot = structuredClone(run), savedTerminals = new Map((run.chats ?? []).map(chat => [chat.paneId, chat.terminalId ?? null]));
   for (const chat of finishedChats(snapshot)) chat.endedAt ??= finishedAt(snapshot,chat);
   const result = await closeFinishedChats(snapshot, {...p, ...options, checkpoint: async (chat, layout) => {
     commitMaintenance(run, p, latest => {
       if (chat) {
-        const target = latest.chats?.find(item => sameChat(item,chat) && item.terminalId === savedTerminals.get(chat.paneId));
+        const target = latest.chats?.find(item => sameChat(item,chat) && (item.terminalId ?? null) === savedTerminals.get(chat.paneId));
         if (!target || !options.force && !finishedChats(latest).includes(target)) throw Object.assign(Error('Cleanup target changed'), {code:'workflow_progress_refused'});
         if (chat.closed?.reason === 'absent' && target.closed)
           chat.closed = {...target.closed, confirmedAt: chat.closed.confirmedAt};
         Object.assign(target, structuredClone(chat));
-        savedTerminals.set(chat.paneId, chat.terminalId);
+        savedTerminals.set(chat.paneId, chat.terminalId ?? null);
       }
       if (layout) latest.layout = structuredClone(layout);
     });
@@ -4274,32 +4279,103 @@ export async function sweepIdleRuns({graceMs = 60_000, need, timeBudgetMs} = {},
   return {closed, kept, reasonCounts};
 }
 
+function closedWaitingReason(run) {
+  if (ended(run) || run.state !== 'waiting' || ['parked', 'releasing'].includes(run.parking?.phase)) return null;
+  const last = run.pr?.at(-1), area = run.areas?.find(item => item.name === last?.stage);
+  if (last?.state === 'closed' && (area === run.areas?.at(-1) && !run.gate
+      || area?.then === 'ask-code' && run.gate?.kind === 'ask-code' && run.through !== 'code'))
+    return 'pr-closed';
+  if (run.issue?.state === 'closed' && !(run.pr ?? []).some(pr => pr.state === 'open'))
+    return 'issue-closed';
+  return null;
+}
+function cancelClosedWaiting(latest, at, reason) {
+  latest.state = 'cancelled';
+  latest.cancelled = ['replaced', 'handed-over'].includes(latest.cancelled?.state)
+    ? latest.cancelled
+    : { state: 'cancelled', reason, at };
+  latest.gate = null;
+  delete latest.parking; delete latest.blockedOn; delete latest.parkReason;
+  delete latest.runtimeWait; delete latest.routeWait;
+  for (const chat of latest.chats ?? []) chat.endedAt ??= at;
+  if (validSavedAutomaticOrigin(latest)) latest.claimRelease ??= { state: 'pending', reason: 'cancel', at };
+}
+
 export async function tidyRuns({dryRun = false, graceMs, need, timeBudgetMs} = {}, ports = {}) {
   const p = deps(ports), runs = allRuns({cancelled:true}, p), kept = [], warnings = [];
   let closed = 0;
   const elapsed = p.elapsedNow ?? (() => Number(process.hrtime.bigint() / 1_000_000n)), began = elapsed();
-  const candidates = runs.flatMap(run => {
+  const reconcileSaved = targetRuns => {
+    for (const run of targetRuns) {
+      const reason = !readRunOwnership(run.runDir, p) ? closedWaitingReason(run) : null;
+      if (!reason) continue;
+      const at = run.prState?.checkedAt ?? run.updatedAt ?? p.now();
+      if (dryRun) { cancelClosedWaiting(run, at, reason); continue; }
+      let release;
+      try {
+        release = acquireRunLock(run.runDir);
+        commitMaintenance(run, p, latest => {
+          const latestReason = closedWaitingReason(latest);
+          if (latestReason) cancelClosedWaiting(latest, latest.prState?.checkedAt ?? latest.updatedAt ?? p.now(), latestReason);
+        });
+      } catch (error) {
+        if (error?.code === 'workflow_run_save_failed') throw error;
+      } finally { release?.(); }
+    }
+  };
+  const candidatesFor = targetRuns => targetRuns.flatMap(run => {
     const chats = finishedChats(run).filter(chat => !Number.isFinite(chat.closed?.confirmedAt));
     if (chats.length) return chats.map(chat => ({run,chat,at:finishedAt(run,chat)}));
-    return ended(run) && run.layout?.workspaceId && run.layout.phase !== 'closed'
+    const legacyShell = run.layout == null && (run.chats ?? []).some(chat => chat.workspaceId);
+    return ended(run) && (run.layout?.workspaceId && run.layout.phase !== 'closed' || legacyShell)
       ? [{run,chat:null,at:run.cancelled?.at ?? run.updatedAt ?? run.startedAt}] : [];
   }).sort((a,b) => a.at - b.at);
-  for (const [index,{run,chat}] of candidates.entries()) {
-    if (timeBudgetMs !== undefined && elapsed()-began >= timeBudgetMs) { kept.push(...candidates.slice(index).map(({chat})=>({area:chat?.area ?? 'run shell',reason:'sweep-time-budget'}))); break; }
-    if (readRunOwnership(run.runDir,p)) { kept.push({runId:run.runId,reason:'run-busy'}); continue; }
-    let release;
-    try {
-      release = acquireRunLock(run.runDir);
-      const latest = readRun(run.runDir);
-      if (!latest || latest.runId !== run.runId) continue;
-      const result = await cleanupRunChats(latest, {...p,progressGuard:undefined}, {dryRun, ...(chat ? {onlyChat:chat} : {}),
-        ...(graceMs === undefined ? {} : {graceMs}), ...(graceMs === 0 ? {reason:'budget'} : {})});
-      closed += result.closed; kept.push(...result.kept); warnings.push(...result.warnings);
-      if (need !== undefined) { const usage = await paneUsage(p); if (!usage.budget || usage.panes + need <= usage.budget) break; }
-    } catch (error) {
-      kept.push({runId:run.runId,reason:error.code ?? 'cleanup-unavailable'});
-      if (error.code !== 'run_busy') warnings.push(failureReason(error));
-    } finally { release?.(); }
+  const sweepCandidates = async candidates => {
+    for (const [index,{run,chat}] of candidates.entries()) {
+      if (timeBudgetMs !== undefined && elapsed()-began >= timeBudgetMs) { kept.push(...candidates.slice(index).map(({chat})=>({area:chat?.area ?? 'run shell',reason:'sweep-time-budget'}))); return false; }
+      if (readRunOwnership(run.runDir,p)) { kept.push({runId:run.runId,reason:'run-busy'}); continue; }
+      let release;
+      try {
+        release = acquireRunLock(run.runDir);
+        const latest = dryRun ? run : readRun(run.runDir);
+        if (!latest || latest.runId !== run.runId) continue;
+        const result = await cleanupRunChats(latest, {...p,progressGuard:undefined}, {dryRun, ...(chat ? {onlyChat:chat} : {}),
+          ...(graceMs === undefined ? {} : {graceMs}), ...(graceMs === 0 ? {reason:'budget'} : {})});
+        closed += result.closed; kept.push(...result.kept); warnings.push(...result.warnings);
+        if (need !== undefined) { const usage = await paneUsage(p); if (!usage.budget || usage.panes + need <= usage.budget) return false; }
+      } catch (error) {
+        kept.push({runId:run.runId,reason:error.code ?? 'cleanup-unavailable'});
+        if (error.code !== 'run_busy') warnings.push(failureReason(error));
+      } finally { release?.(); }
+    }
+    return true;
+  };
+  reconcileSaved(runs);
+  const more = await sweepCandidates(candidatesFor(runs));
+  if (more && !dryRun && (need === undefined || graceMs === 0)) {
+    let fits = false;
+    if (need !== undefined) {
+      try { const usage = await paneUsage(p); fits = !usage.budget || usage.panes + need <= usage.budget; } catch {}
+    }
+    if (!fits) {
+      const newlyEnded = [];
+      for (const run of runs) {
+        if (timeBudgetMs !== undefined && elapsed()-began >= timeBudgetMs) break;
+        if (ended(run) || run.state !== 'waiting' || readRunOwnership(run.runDir, p)) continue;
+        let release;
+        try {
+          release = acquireRunLock(run.runDir);
+          const latest = readRun(run.runDir);
+          if (!latest || latest.runId !== run.runId || ended(latest) || latest.state !== 'waiting') continue;
+          if (latest.pr?.length) await refreshPr(latest, {...p, progressGuard: undefined});
+          if (latest.state === 'waiting') await refreshWaitingIssue(latest, {...p, progressGuard: undefined});
+          if (ended(latest)) { Object.assign(run, latest); newlyEnded.push(run); }
+        } catch (error) {
+          if (error?.code === 'workflow_run_save_failed') throw error;
+        } finally { release?.(); }
+      }
+      if (newlyEnded.length) await sweepCandidates(candidatesFor(newlyEnded));
+    }
   }
   return {...done([`${dryRun ? 'Would close' : 'Closed'} ${closed} finished chat tabs. Kept ${kept.length}. Retained: ${reasonWords(countReasons(kept))}.`, ...warnings].join('\n')),closed,kept:kept.length,reasonCounts:countReasons(kept)};
 }
@@ -4458,6 +4534,37 @@ export const releaseRunClaim = saveGuard(async ({ ref, cwd, repository, machine,
   } finally { release?.(); }
 });
 
+async function refreshWaitingIssue(run, p) {
+  if (ended(run) || run.state !== 'waiting' || (run.pr ?? []).some(pr => pr.state === 'open')
+      || ['parked', 'releasing'].includes(run.parking?.phase) || !run.repo || !Number.isSafeInteger(run.number))
+    return;
+  const cwd = existsSync(run.root) ? run.root : run.sourceRoot;
+  const reply = await (p.readIssueStatus
+    ? p.readIssueStatus({ cwd, repo: run.repo, number: run.number }, p.commandPorts)
+    : p.execFile('gh', ['api', `repos/${run.repo}/issues/${run.number}`], { cwd }));
+  if (reply?.code !== undefined && reply.code !== 0) return;
+  const raw = typeof reply?.stdout === 'string' ? JSON.parse(reply.stdout || '{}') : reply;
+  if (!raw || Object.hasOwn(raw, 'pull_request') || raw.number !== run.number) return;
+  const state = typeof raw.state === 'string' ? raw.state.toLowerCase() : null;
+  if (state !== 'closed' && state !== 'open') return;
+  const closedAt = typeof raw.closed_at === 'string' && Number.isFinite(Date.parse(raw.closed_at))
+    ? Math.min(Date.parse(raw.closed_at), p.now()) : p.now();
+  if (state === 'closed') {
+    commitMaintenance(run, p, latest => {
+      if (ended(latest) || latest.state !== 'waiting' || ['parked', 'releasing'].includes(latest.parking?.phase)
+          || (latest.pr ?? []).some(pr => pr.state === 'open')) return;
+      latest.issue = { ...latest.issue, state: 'closed' };
+      const reason = closedWaitingReason(latest);
+      if (reason) cancelClosedWaiting(latest, closedAt, reason);
+    });
+  } else if (run.issue?.state && run.issue.state !== 'open') {
+    commitMaintenance(run, p, latest => {
+      if (ended(latest) || ['parked', 'releasing'].includes(latest.parking?.phase)) return;
+      latest.issue = { ...latest.issue, state: 'open' };
+    });
+  }
+}
+
 async function refreshPr(run, p) {
   if (!run.pr?.length || run.state === 'cancelled') return;
   const cwd=existsSync(run.root)?run.root:run.sourceRoot,observations=[];
@@ -4469,8 +4576,8 @@ async function refreshPr(run, p) {
     const observed=new Map(observations.map(observation=>[observation.url,{...observation.fields,view:observation.view}]));
     for(const pr of run.pr) if(pr.readable?.facts && observed.get(pr.url)?.state==='open') for(const line of await refreshReadableTop(run,pr,p,{observed,cwd})) p.say(line);
   };
-  const checkedAt=p.now();
-  if(!observations.some(observation=>{
+  const checkedAt=p.now(), priorClosedAt = run.pr?.at(-1)?.state === 'closed' ? (run.prState?.checkedAt ?? run.updatedAt ?? checkedAt) : null;
+  if(!closedWaitingReason(run) && !observations.some(observation=>{
     const pr=run.pr.find(pr=>pr.url===observation.url&&pr.number===observation.number&&pr.stage===observation.stage);
     return Object.entries(observation.fields).some(([key,value])=>!equalFact(pr[key],value));
   }))return refreshTops();
@@ -4485,7 +4592,10 @@ async function refreshPr(run, p) {
     if(latest.state==='cancelled')return;
     if(last.state==='merged'&&area===latest.areas.at(-1))latest.state='completed';
     if(last.state==='merged'&&area?.then==='ask-code'&&latest.gate?.kind==='ask-code'){latest.state='completed';latest.doneAt='PR 1';}
-    if (ended(latest)) for (const chat of latest.chats ?? []) chat.endedAt ??= checkedAt;
+    const closedReason = closedWaitingReason(latest);
+    const endedAt = closedReason ? (priorClosedAt ?? checkedAt) : checkedAt;
+    if (closedReason) cancelClosedWaiting(latest, endedAt, closedReason);
+    if (ended(latest)) for (const chat of latest.chats ?? []) chat.endedAt ??= endedAt;
   });
   await refreshTops();
 }
@@ -4773,7 +4883,12 @@ function savedStepResults(run) {
 async function listStatus(runs, { json, cancelled, scope, snapshotOnly=false }, p) {
   const reading = runs.filter(run => run.state === 'waiting' && run.pr?.length).reduce((sum, run) => sum + run.pr.length, 0);
   if (reading) p.say(`Reading ${reading} PR${reading === 1 ? '' : 's'} from GitHub…`);
-  for (const run of runs) if (!snapshotOnly && !readRunOwnership(run.runDir,p) && run.state === 'waiting' && run.pr?.length) { try { await refreshPr(run, p); } catch(error) { if(error?.code==='workflow_run_save_failed')throw error; /* A PR read failure keeps the saved state. */ } }
+  for (const run of runs) if (!snapshotOnly && !readRunOwnership(run.runDir,p) && run.state === 'waiting') {
+    try {
+      if (run.pr?.length) await refreshPr(run, p);
+      if (run.state === 'waiting') await refreshWaitingIssue(run, p);
+    } catch(error) { if(error?.code==='workflow_run_save_failed')throw error; /* A PR or issue read failure keeps the saved state. */ }
+  }
   const all = [];
   for (const run of runs) {
     const ordinaryOwnership=readRunOwnership(run.runDir,p);
@@ -4840,7 +4955,10 @@ async function runStatusCommand({ ref, cwd, all = false, json = false, cancelled
   removeStaleLoginFiles(found.run.runDir);
   if (found.run.pr?.length && found.run.state !== 'cancelled') p.say(`Reading ${found.run.pr.length === 1 ? 'the PR' : `${found.run.pr.length} PRs`} from GitHub…`);
   const ordinaryOwnership=readRunOwnership(found.run.runDir,p);
-  if(!ordinaryOwnership&&!snapshotOnly)await refreshPr(found.run, p);
+  if(!ordinaryOwnership&&!snapshotOnly){
+    await refreshPr(found.run, p);
+    if (found.run.state === 'waiting') { try { await refreshWaitingIssue(found.run, p); } catch(error) { if(error?.code==='workflow_run_save_failed')throw error; } }
+  }
   const run = found.run, facts = ended(run)||ordinaryOwnership||snapshotOnly ? {} : await gateFacts(run, p), chat = ordinaryOwnership||snapshotOnly?null:await chatState(run, p, facts);
   facts.suite = readSuiteProgress({cwd:run.root, since:run.updatedAt ?? 0, env:p.env}, p);
   facts.now = p.now();
@@ -5824,43 +5942,6 @@ export const runStatus=saveGuard(async(options,ports)=>{
 export const openRun=saveGuard(openRunCommand);
 
 export const showStoryCard=saveGuard(showStoryCardCommand);
-
-// Canonical, read-only association admission for native workspace consumers.
-// The existing registered authority above remains the only permission rule.
-export function readEvidenceEligibility({root,producerRoot,tests,source_sha256,runId=null,stage=null},ports={}){
-  const canonical=ports.realpath??realpathSync,capture=ports.captureSource??captureSource;
-  let result={state:'unavailable',reason:'source or ownership unavailable',runId:null,repo:null,producerRoot:null,tests:[],stage:null,sourceAnchor:null,source_sha256:source_sha256??null};
-  try{
-    root=canonical(root);producerRoot=canonical(producerRoot);tests=evidenceTests(tests);
-    result={...result,producerRoot,tests};
-    if(!/^[a-f0-9]{64}$/.test(source_sha256??''))return{...result,state:'ineligible',reason:'original selected source identity is missing'};
-    const runs=(ports.allRuns??allRuns)({cancelled:true},ports);
-    // Only the consumer's owned source/run may authorize an alternate producer.
-    const candidates=[];
-    for(const run of runs){
-      if(!run||typeof run.root!=='string'||canonical(run.root)!==root)continue;
-      for(const association of run.evidenceAssociations??[]){
-        if(association.workspaceRoot===producerRoot&&selectionEqual(association.tests,tests)&&association.source_sha256===source_sha256)candidates.push({run,association});
-      }
-    }
-    if(candidates.length){
-      if(candidates.length!==1)return{...result,state:'ineligible',reason:'workspace association is ambiguous'};
-      const {run,association:a}=candidates[0];
-      if(runId!==null&&runId!==run.runId||stage!==null&&stage!==a.stage)return{...result,state:'ineligible',reason:'saved run or stage disagrees with the owned association'};
-      // Before-the-fix evidence is historical: only a caller that names that stage may read it.
-      if(a.stage==='before'&&stage!=='before')return{...result,state:'ineligible',reason:'before-the-fix evidence is historical; it is read only through its registered import'};
-      const inspect=ports.inspectRepository??(path=>{const git=spawnSync('git',['rev-parse','--path-format=absolute','--git-common-dir'],{cwd:path,encoding:'utf8'});if(git.status!==0)throw Error('repository ownership unavailable');return canonical(git.stdout.trim());});
-      const common=inspect(root);
-      if(canonical(run.commonDir)!==common||canonical(run.runDir)!==canonical(runDirFor(common,run.number))||typeof run.repo!=='string'||!run.runId)return{...result,state:'ineligible',reason:'run ownership is missing or contradictory'};
-      checkedAssociation(run,a,capture);
-      return{state:'eligible',reason:null,runId:run.runId,repo:run.repo,producerRoot,tests,stage:a.stage,sourceAnchor:{...a.sourceAnchor},source_sha256};
-    }
-    if(runId!==null||stage!==null&&stage!=='current')return{...result,state:'ineligible',reason:'saved run/stage has no matching owned association'};
-    if(root!==producerRoot)return{...result,state:'ineligible',reason:'alternate producer has no owned workspace association'};
-    if(capture(root,{tests,appMap:null}).sha256!==source_sha256)return{...result,state:'ineligible',reason:'the exact selected source has changed'};
-    return{state:'eligible',reason:null,runId:null,repo:null,producerRoot,tests,stage:'current',sourceAnchor:{root,head:null},source_sha256};
-  }catch(error){return{...result,reason:oneLine(error.message??error)};}
-}
 
 // An explicit full-suite command uses the machine queue, never the run mutation lock.
 export function runSuite(input, ports = {}) { return runTestSuite(input, ports); }

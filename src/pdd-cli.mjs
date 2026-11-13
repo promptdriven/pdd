@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 7e81436a195eb2462535a47ff22c1a2d087c27905ed47da7d7a627b99874a0b3).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 2369beceaf7c73e9c5986974543504ec86c049665ea670a1edddc42782df3cc9).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -13,7 +13,9 @@ import { pathDiagnostic as defaultPathDiagnostic } from './path-diagnostic.mjs';
 import { checkWorkflowAgents } from './workflow-agents.mjs';
 import { setupMayAsk } from './setup-interaction.mjs';
 import { setupWithWorkflowAgent } from './workflow-setup.mjs';
-import { causeText } from './runtime-output.mjs';
+import { causeText, runtimeOutputSlice } from './runtime-seam.mjs';
+
+runtimeOutputSlice();
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const defaultReadPackageVersion = ({ packageRoot }) => {
@@ -113,14 +115,6 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
           payload = Buffer.concat(chunks).toString('utf8');
         }
         const result = await module.runDependencyIntake(plan.local === 'dependencies-prepare' ? {command:'prepare',cwd,issue:plan.options['--issue']} : {command:'complete',cwd,stdin:payload},dependencyIntakePorts);
-        if (plan.local === 'dependencies-complete' && result.exitCode === 0) {
-          let state = 'unknown';
-          try { const launcher = autopilotLauncher ?? await import('./autopilot-launcher.mjs');
-            const wake = await launcher.requestAutopilotCompletion({cwd, env}, autopilotLauncherPorts);
-            if (['reconciled', 'inactive', 'busy', 'unknown'].includes(wake?.state)) state = wake.state;
-          } catch { /* Completion intake remains accepted even if the wake fails. */ }
-          if (state === 'busy' || state === 'unknown') line(stderr, 'Autopilot reconciliation was not confirmed.');
-        }
         (result.exitCode ? stderr : stdout).write(result.message); return result.exitCode;
       } catch(error) { line(stderr, `Dependency intake failed.${reason(error)}`); return 1; }
     }
@@ -135,7 +129,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     case 'autopilot-doctor': case 'autopilot-audit': case 'autopilot-check-base': case 'autopilot-start': case 'autopilot-stop': case 'autopilot-status': case 'autopilot-add': case 'autopilot-release': case 'autopilot-report': case 'autopilot-intake': {
       try {
         const module = autopilotLauncher ?? await import('./autopilot-launcher.mjs');
-        const result = await module.runAutopilotLauncher({ command: plan.local.slice(10), issues: [...plan.operands], runs: plan.options['--runs'], checks: plan.options['--checks'], ...(plan.options['--engine'] ? { engine: plan.options['--engine'] } : {}), ...(plan.options['--label'] ? { label: plan.options['--label'] } : {}), ...(plan.options['--mode'] ? { mode: plan.options['--mode'] } : {}), ...(plan.options['--report'] ? { report: plan.options['--report'] } : {}), ...(plan.options['--intake'] ? { intake: plan.options['--intake'] } : {}), resumeCustody: plan.options['--resume-custody'], all: plan.options['--all'] === true, ...(plan.options['--json'] === true ? { json: true } : {}), cwd, packageRoot, env }, autopilotLauncherPorts);
+        const result = await module.runAutopilotLauncher({ command: plan.local.slice(10), issues: [...plan.operands], runs: plan.options['--runs'], checks: plan.options['--checks'], ...(plan.options['--engine'] ? { engine: plan.options['--engine'] } : {}), ...(plan.options['--label'] ? { label: plan.options['--label'] } : {}), ...(plan.options['--mode'] ? { mode: plan.options['--mode'] } : {}), ...(plan.options['--report'] ? { report: plan.options['--report'] } : {}), ...(plan.options['--decisions'] ? { decisions: plan.options['--decisions'] } : {}), ...(plan.options['--intake'] ? { intake: plan.options['--intake'] } : {}), ...(plan.options['--share'] !== undefined ? { share: plan.options['--share'] } : {}), all: plan.options['--all'] === true, ...(plan.options['--json'] === true ? { json: true } : {}), cwd, packageRoot, env }, autopilotLauncherPorts);
         if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255 || typeof result.message !== 'string' || !result.message.trim()) throw Error('Invalid Autopilot reply');
         line(result.exitCode === 0 ? stdout : stderr, result.message);
         if (result.exitCode === 0 && ['autopilot-start', 'autopilot-status'].includes(plan.local) && plan.options['--all'] !== true && plan.options['--json'] !== true) {
@@ -291,8 +285,9 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     }
     case 'mcp': {
       try {
-        const server = mcpServer ?? await import('./try-mcp.mjs');
-        return await server.runMcp({ cwd, env }, { stdin, stdout, stderr });
+        if (mcpServer) return await (mcpServer.mcp ?? mcpServer.runMcp).call(mcpServer, { cwd, env }, { stdin, stdout, stderr });
+        const { mcp } = await import('./runtime-seam.mjs');
+        return await mcp({ cwd, env }, { stdin, stdout, stderr });
       } catch (error) { line(stderr, `pdd mcp could not start.${reason(error)}`); return 1; }
     }
     case 'setup': {
@@ -325,7 +320,8 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       } catch (error) { line(stderr, `pdd setup: ${error.message}`); code = 1; }
       try {
         if(context?.toplevel) {
-          const {missingInterfaces,runInterfaceDraft}=await import('./interface-draft.mjs');
+          const {loadInterfaceDraft,draftInterfaces}=await import('./runtime-seam.mjs');
+          const {missingInterfaces}=await loadInterfaceDraft();
           const missing=missingInterfaces(context.toplevel);
           if(missing.length) {
             line(stdout,`${missing.length} prompts have no Runtime interface. Run pdd interface draft --all.`);
@@ -340,7 +336,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
                 try {answer=await reader.ask();} finally {reader.close();}
               }
               if(typeof answer==='string' && /^(y|yes)$/i.test(answer.trim()))
-                if(await runInterfaceDraft({cwd:context.toplevel,all:true},{stdout,stderr})) code=1;
+                if(await draftInterfaces({cwd:context.toplevel,all:true},{stdout,stderr})) code=1;
             }
           }
         }
@@ -359,24 +355,37 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         // Setup saves a first mode only in this checkout and never writes to GitHub, where the workers read it.
         const saved = savedAutopilot(context?.toplevel)?.mode;
         if (result.exitCode === 0 && before === undefined && ['off', 'observe', 'auto'].includes(saved))
-          line(stdout, `Setup saved the Autopilot mode only in this checkout. Autopilot workers read pdd.json on GitHub; to update it there, run pdd autopilot ${saved}.`);
+          line(stdout, `Setup saved pdd.json, the PDD block and .gitignore only in this checkout. Commit and push them so that GitHub, other machines and Autopilot jobs have them, or run pdd autopilot ${saved} to put the Autopilot mode on GitHub.`);
       } catch (error) { line(stderr, `Autopilot settings failed.${reason(error)}`); code = 1; }
       return code;
       } });
     }
     case 'runtime-jobs':
-      try { const slots = runtimeSlots ?? await import('./runtime-slots.mjs'); return await slots.runJobs({ env }, { stdout, stderr }); }
+      try {
+        if (runtimeSlots) return await (runtimeSlots.jobs ?? runtimeSlots.runJobs).call(runtimeSlots, { env }, { stdout, stderr });
+        const { jobs } = await import('./runtime-seam.mjs');
+        return await jobs({ env }, { stdout, stderr });
+      }
       catch (error) { line(stderr, `Local interpreter jobs could not be read.${reason(error)}`); return 5; }
     case 'contracts': case 'contracts-sync':
       try {
-        const commands = contracts ?? await import('./contracts.mjs');
-        return await commands.runContracts({ words: plan.local === 'contracts-sync' ? ['sync'] : [], options: { ...plan.options }, cwd }, { env, stdout, stderr });
+        const input = { words: plan.local === 'contracts-sync' ? ['sync'] : [], options: { ...plan.options }, cwd };
+        const ports = { env, stdout, stderr };
+        if (contracts) return await (contracts.contracts ?? contracts.runContracts).call(contracts, input, ports);
+        const [{ contracts: run }] = await Promise.all([import('./runtime-seam.mjs'), import('./product.mjs'), import('./workflow-runner.mjs')]);
+        return await run(input, ports);
       } catch (error) { line(stderr, `Local contracts could not be read.${reason(error)}`); return 5; }
     case 'runtime-check':
     case 'runtime-try':
       try {
-        const runtime = await import('./runtime-client.mjs');
-        return await runtime[plan.local === 'runtime-check' ? 'runCheck' : 'runTry']({ words: [...plan.operands], options: { ...plan.options }, cwd, cache: plan.local === 'runtime-check' }, { stdout, stderr, env });
+        if (plan.local === 'runtime-check' && plan.options['--target'] === 'code') {
+          if (Object.keys(plan.options).some(key => !['--target', '--json'].includes(key))) { line(stderr, 'pdd test --target code accepts only --json and Story selections.'); return 2; }
+          const { runCompiledTest } = await import('./compiled-test.mjs');
+          return await runCompiledTest({ root: cwd, words: [...plan.operands], json: !!plan.options['--json'] }, { stdout, stderr });
+        }
+        const runtime = await import('./runtime-seam.mjs');
+        const action = plan.local === 'runtime-try' ? 'simulate' : plan.options['--lint'] === true ? 'lint' : 'check';
+        return await runtime[action]({ words: [...plan.operands], options: { ...plan.options }, cwd }, { stdout, stderr, env });
       } catch (error) {
         line(stderr, `pdd stopped with an internal error. If it sent checks, read them with pdd test --read. Do not send them again.${reason(error)}`);
         return 3;
@@ -390,8 +399,8 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       return runOwner({ cwd, paths: [...plan.operands], json: !!plan.options['--json'] }, { stdout, stderr });
     }
     case 'interface-draft': {
-      const {runInterfaceDraft}=await import('./interface-draft.mjs');
-      return runInterfaceDraft({cwd,words:[...plan.operands],all:!!plan.options['--all'],json:!!plan.options['--json'],contract:plan.options['--contract'],extend:!!plan.options['--extend'],refresh:!!plan.options['--refresh']},{stdout,stderr});
+      const {draftInterfaces}=await import('./runtime-seam.mjs');
+      return draftInterfaces({cwd,words:[...plan.operands],all:!!plan.options['--all'],json:!!plan.options['--json'],contract:plan.options['--contract'],extend:!!plan.options['--extend'],refresh:!!plan.options['--refresh']},{stdout,stderr});
     }
     case 'prompt-approve': {
       const { runApprove } = await import('./prompt-approve.mjs');

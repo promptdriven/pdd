@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
-import {ordinaryCapabilities} from '../../runtime-fake.mjs';
+import {ordinaryCapabilities} from '../runtime-fake.mjs';
 
 // HTTP-shaped fetch port, entirely in memory. No socket or service is started.
 export function factoryInterpreter() {

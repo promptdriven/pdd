@@ -251,7 +251,7 @@ test('2897 repair: returned automatic code resume arms completion for its new at
 });
 
 test('2897 repair: owning prompt passes local interpreter freshness admission',async()=>{
-  const {interfaceBlocks,proseSha256,promptRefusal}=await import('../src/runtime-preflight.mjs');
+  const {interfaceBlocks,proseSha256,promptRefusal}=await import('../src/runtime-seam.mjs');
   const path='prompts/cli/workflow-runner.prompt.md',text=readFileSync(join(packageRoot,path),'utf8');
   const iface=JSON.parse(interfaceBlocks(text)[0][1]);
   assert.ok(['draft','approved'].includes(iface.status));

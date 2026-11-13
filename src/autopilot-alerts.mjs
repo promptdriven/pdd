@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-alerts.prompt.md (sha256: 1398972c19e472bb84a2452375f61198b342c4c18613bdf26757beb8c55d9a34).
+// Generated from prompts/cli/autopilot-alerts.prompt.md (sha256: 201e6aac5efd0580de02a10cd024c94f24396d7c86293db9012dc7290c261547).
 import * as nativeFs from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
@@ -30,6 +30,9 @@ const oneLine = value => String(value).replace(/[\x00-\x1f\x7f]+/g, ' ').trim();
 // Defense in depth: no reply of this module may carry a webhook address or a bot token, even one that a bug let through.
 const scrub = text => String(text).replace(/https?:\/\/\S*(?:webhooks|hooks\.slack\.com)\S*/gi, '[webhook]')
   .replace(/[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{20,}/g, '[token]');
+const scrubStderr = text => clip(oneLine(scrub(text ?? '')
+  .replace(/\b(?:Bot|Bearer)\s+\S+/gi, '[token]')
+  .replace(/[A-Za-z0-9._-]{20,}/g, '[token]')), 200);
 const done = (exitCode, message) => ({ exitCode, message: scrub(message) });
 const repoName = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+$/.test(value);
 const clip = (value, size) => value.length > size ? `${value.slice(0, size - 1)}…` : value;
@@ -112,17 +115,25 @@ function botDestination(saved) {
   return null;
 }
 
-// Run the person's own command at send time; its output is the token and is never shown or saved.
+// Run the person's own command at send time; its stdout is the token and is never shown or saved.
 async function nativeTokenCommand(command, { cwd }) {
   try { return (await execute('/bin/sh', ['-c', command], { cwd, encoding: 'utf8', timeout: TOKEN_COMMAND_MS, maxBuffer: 64 * 1024 })).stdout; }
-  catch (error) { throw Object.assign(Error('token command failed'), { exitCode: Number.isInteger(error?.code) ? error.code : undefined }); }
+  catch (error) {
+    throw Object.assign(Error('token command failed'), {
+      exitCode: Number.isInteger(error?.code) ? error.code : undefined,
+      stderr: typeof error?.stderr === 'string' ? scrubStderr(error.stderr) : '',
+    });
+  }
 }
 
 async function botToken(destination, ports, cwd) {
   if (destination.token) return { token: destination.token };
   let output;
   try { output = await (ports.tokenCommand ?? nativeTokenCommand)(destination.tokenCommand, { cwd }); }
-  catch (error) { return { error: `token command failed${Number.isInteger(error?.exitCode) ? ` (exit ${error.exitCode})` : ''}` }; }
+  catch (error) {
+    const stderr = scrubStderr(error?.stderr ?? '');
+    return { error: `token command failed${Number.isInteger(error?.exitCode) ? ` (exit ${error.exitCode})` : ''}`, ...(stderr ? { stderr } : {}) };
+  }
   const token = String(output ?? '').trim();
   return BOT_TOKEN.test(token) ? { token } : { error: 'token command gave no token' };
 }
@@ -335,15 +346,73 @@ async function sendAlert(input, ports, env, fs) {
   });
 }
 
+const activeRouteOf = (kind, infrastructure) => MACHINE_KINDS.includes(kind) && infrastructure ? 'infrastructure' : 'autopilot';
+function hasRetryableIncident(record, fs, env, ports, routeFilter) {
+  if (!record || !object(record.incidents)) return false;
+  const infrastructure = readDestination(fs, env, ports, 'infrastructure');
+  return Object.values(record.incidents).some(item => {
+    if (!object(item) || !['failed', 'not-configured'].includes(item.result)) return false;
+    const activeRoute = activeRouteOf(item.kind, infrastructure);
+    if (routeFilter && activeRoute !== routeFilter) return false;
+    return Boolean(readDestination(fs, env, ports, activeRoute)) && issuesOf(item).length > 0 && object(item.fields);
+  });
+}
+
+async function retryRecordIncidents(record, { fs, env, ports, repo, cwd, routeFilter }) {
+  const at = new Date((ports.now ?? Date.now)()).toISOString();
+  const root = stateRoot(env, ports);
+  const infrastructure = readDestination(fs, env, ports, 'infrastructure');
+  let retried = 0;
+  for (const [key, item] of Object.entries(record.incidents)) {
+    if (!object(item) || !['failed', 'not-configured'].includes(item.result)) continue;
+    const activeRoute = activeRouteOf(item.kind, infrastructure);
+    if (routeFilter && activeRoute !== routeFilter) continue;
+    const destination = readDestination(fs, env, ports, activeRoute);
+    if (!destination) continue;
+    const issues = issuesOf(item);
+    if (!issues.length || !object(item.fields)) continue;
+    const host = typeof item.host === 'string' && item.host.trim() ? item.host : machineName(fs, root, repo, ports, cwd);
+    const outcome = await deliver(destination, alertText('alert', { kinds: [item.kind], host, repo, issues, fields: item.fields }), ports, cwd);
+    const routeInfo = activeRoute === 'infrastructure' ? { destination: 'infrastructure' } : {};
+    const { detail: _detail, destination: _destination, ...rest } = item;
+    record.incidents[key] = { ...rest, host, ...routeInfo, listed: issues, updatedAt: at, result: outcome.result,
+      ...(outcome.detail ? { detail: outcome.detail } : {}) };
+    record.log = [...record.log, { at, issue: issues[0], kind: item.kind, action: 'retry', ...routeInfo, result: outcome.result,
+      ...(outcome.detail ? { detail: outcome.detail } : {}) }].slice(-LOG_LIMIT);
+    retried += 1;
+  }
+  return retried;
+}
+
+async function retryOpenAlerts(input, ports, env, fs) {
+  if (!ports.stateRoot && !homeFolder(env, ports)) return done(0, 'No failed alerts retried.');
+  let repo;
+  try { repo = (await (ports.repository ?? nativeRepository)({ cwd: input.cwd }))?.nameWithOwner; } catch { /* Checked below. */ }
+  if (!repoName(repo)) return done(0, 'No failed alerts retried.');
+  const initialFile = recordFile(repo, env, ports);
+  if (!initialFile || !hasRetryableIncident(readRecord(fs, initialFile), fs, env, ports))
+    return done(0, 'No failed alerts to retry.');
+  return withRecord(repo, env, ports, fs, async (file, record) => {
+    const retried = await retryRecordIncidents(record, { fs, env, ports, repo, cwd: input.cwd });
+    if (!retried) return done(0, 'No failed alerts to retry.');
+    try { writePrivate(fs, file, record); } catch { return done(1, 'Cannot save the Autopilot alert record on this machine.'); }
+    return done(0, `Retried ${retried} open Autopilot alert${retried === 1 ? '' : 's'}.`);
+  });
+}
+
 async function sendDigest(input, ports, env, fs) {
   if (!ports.stateRoot && !homeFolder(env, ports)) return noHome('Nothing was recorded or sent. Continue other work.');
   let repo;
   try { repo = (await (ports.repository ?? nativeRepository)({ cwd: input.cwd }))?.nameWithOwner; } catch { /* No repository. */ }
   if (!repoName(repo)) return done(1, 'Autopilot digest needs a GitHub repository.');
   return withRecord(repo, env, ports, fs, async (file, record) => {
+    const retried = await retryRecordIncidents(record, { fs, env, ports, repo, cwd: input.cwd });
     const host = machineName(fs, stateRoot(env, ports), repo, ports, input.cwd), now = (ports.now ?? Date.now)();
     const last = record.digests?.[host];
-    if (last && now - Date.parse(last.at) < 6 * 60 * 60 * 1000) return done(0, 'Autopilot digest is not due; nothing sent.');
+    if (last && now - Date.parse(last.at) < 6 * 60 * 60 * 1000) {
+      if (retried) try { writePrivate(fs, file, record); } catch { return done(1, 'Cannot save the Autopilot digest record.'); }
+      return done(0, 'Autopilot digest is not due; nothing sent.');
+    }
     const rows = new Map();
     for (const item of Array.isArray(input.attention) ? input.attention : []) {
       if (Number.isSafeInteger(item?.number) && item.number > 0 && ['stuck', 'parked', 'decision'].includes(item.category) && typeof item.cause === 'string')
@@ -355,7 +424,10 @@ async function sendDigest(input, ports, env, fs) {
         cause: `${item.fields?.cause ?? ''}; ${item.fields?.need ?? ''}` });
     }
     const items = [...rows.values()].sort((a, b) => a.number - b.number || a.category.localeCompare(b.category));
-    if (!items.length) return done(0, 'No open Autopilot work; nothing sent.');
+    if (!items.length) {
+      if (retried) try { writePrivate(fs, file, record); } catch { return done(1, 'Cannot save the Autopilot digest record.'); }
+      return done(0, 'No open Autopilot work; nothing sent.');
+    }
     const footer = count => count ? `\n${count} more open items.` : '';
     const heading = clip(`PDD Autopilot digest (${host})\nRepository: ${repo}`, TEXT_LIMIT - footer(items.length).length);
     const lines = [heading];
@@ -385,6 +457,7 @@ export async function runAutopilotAlerts(input = {}, ports = {}) {
   try {
     if (input.destination !== undefined && (!['set', 'test', 'clear'].includes(input.action) || !['autopilot', 'infrastructure'].includes(input.destination)))
       return done(2, 'Use --destination autopilot|infrastructure with alerts set, test or clear.');
+    if (input.action === 'retry') return await retryOpenAlerts(input, ports, env, fs);
     if (input.action === 'digest') return await sendDigest(input, ports, env, fs);
     if (input.action === 'alert') return await sendAlert(input, ports, env, fs);
     if (input.action === 'set' && (input.discordChannel !== undefined || input.tokenCommand !== undefined)) {
@@ -395,11 +468,17 @@ export async function runAutopilotAlerts(input = {}, ports = {}) {
       if (command === undefined && !BOT_TOKEN.test(token)) return done(2, 'Give the Discord bot token on stdin, or use --token-command. Nothing was saved.');
       const file = configFile(env, ports, input.destination);
       if (!file) return noHome('Nothing was saved.');
-      try { writePrivate(fs, file, { v: 1, service: 'discord-bot', channel, ...(command === undefined ? { token } : { tokenCommand: command }) }); }
+      if (command !== undefined) {
+        const verified = await verifyBotAccess({ service: 'discord-bot', channel, tokenCommand: command }, ports, input.cwd);
+        const reason = verified.tokenError ?? verified.checkError;
+        if (reason) return done(1, `Alert destination not saved: ${reason.replace(/\.$/, '')}. Nothing was saved.`);
+        try { writePrivate(fs, file, { v: 1, service: 'discord-bot', channel, tokenCommand: command }); }
+        catch { return done(1, 'Cannot save the alert destination; nothing was changed.'); }
+        return done(0, `Saved ${verified.where} (channel ${channel}) on this machine; pdd runs your token command at each send and stores no token. Run ${testHint}.`);
+      }
+      try { writePrivate(fs, file, { v: 1, service: 'discord-bot', channel, token }); }
       catch { return done(1, 'Cannot save the alert destination; nothing was changed.'); }
-      return done(0, command === undefined
-        ? `Saved a Discord bot for channel ${channel} on this machine; the token is readable only by you. Run ${testHint}.`
-        : `Saved a Discord bot for channel ${channel} on this machine; pdd runs your token command at each send and stores no token. Run ${testHint}.`);
+      return done(0, `Saved a Discord bot for channel ${channel} on this machine; the token is readable only by you. Run ${testHint}.`);
     }
     if (input.action === 'set') {
       const parsed = webhook(input.text);
@@ -414,7 +493,7 @@ export async function runAutopilotAlerts(input = {}, ports = {}) {
       if (!configFile(env, ports, input.destination)) return noHome('Nothing was sent.');
       const destination = readDestination(fs, env, ports, input.destination);
       if (!destination) return done(1, `No alert destination is set on this machine. Run ${setHint}.`);
-      const text = `PDD Autopilot test alert (${hostName(ports)}).`, delivered = () => recordTest(fs, env, ports, input.destination);
+      const text = `PDD Autopilot test alert (${hostName(ports)}).`, delivered = () => recordTest(fs, env, ports, input.destination, input.cwd);
       if (destination.service === 'discord-bot') return await testBot(destination, text, input, ports, delivered);
       const outcome = await deliver(destination, text, ports, input.cwd), service = SERVICE[destination.service];
       if (outcome.result === 'delivered') { await delivered(); return done(0, `Test alert delivered; ${service} confirmed the message.`); }
@@ -435,9 +514,10 @@ export async function runAutopilotAlerts(input = {}, ports = {}) {
   } catch { return done(1, 'The Autopilot alert command failed; nothing was printed about the webhook.'); }
 }
 
-// A delivered test is the newest send of each existing record, so status drops an older failed send (such as a closed recovery).
-async function recordTest(fs, env, ports, destination) {
+// A delivered test is the newest send of each existing record and retries open failed/not-configured incidents on its route.
+async function recordTest(fs, env, ports, destination, cwd) {
   const root = stateRoot(env, ports), at = new Date((ports.now ?? Date.now)()).toISOString();
+  const selectedRoute = destination === 'infrastructure' ? 'infrastructure' : 'autopilot';
   if (!root) return;
   let names = [];
   try { names = fs.readdirSync(join(root, 'alerts')).filter(name => STATE_FILE.test(name)); } catch { return; }
@@ -447,26 +527,33 @@ async function recordTest(fs, env, ports, destination) {
     try {
       await withRecord(record.repo, env, ports, fs, async (file, latest) => {
         latest.log = [...latest.log, { at, kind: 'test', action: 'test', result: 'delivered',
-          ...(destination === 'infrastructure' ? { destination } : {}) }].slice(-LOG_LIMIT);
+          ...(selectedRoute === 'infrastructure' ? { destination: 'infrastructure' } : {}) }].slice(-LOG_LIMIT);
+        await retryRecordIncidents(latest, { fs, env, ports, repo: record.repo, cwd, routeFilter: selectedRoute });
         writePrivate(fs, file, latest);
       });
     } catch { /* The test message was still delivered. */ }
   }
 }
 
-// Read-only identity and channel checks first, then one test message with readback.
-async function testBot(destination, text, input, ports, delivered) {
-  const auth = await botToken(destination, ports, input.cwd);
-  if (auth.error) return done(1, `Test alert not sent: the ${auth.error}. Its output is not shown.`);
+async function verifyBotAccess(destination, ports, cwd) {
+  const auth = await botToken(destination, ports, cwd);
+  if (auth.error) return { tokenError: `the ${auth.error}${auth.stderr ? `: ${auth.stderr}` : ''}` };
   const me = await botGet(ports, auth.token, '/users/@me');
-  if (!me.value) return done(1, `Discord bot check failed (${me.detail}); check the token. Nothing was sent.`);
+  if (!me.value) return { checkError: `Discord bot check failed (${me.detail}); check the token` };
   const channel = await botGet(ports, auth.token, `/channels/${destination.channel}`);
   const bot = clip(oneLine(me.value.username ?? 'unknown'), 100);
-  if (!channel.value) return done(1, `Discord bot ${bot} cannot read channel ${destination.channel} (${channel.detail}). Nothing was sent.`);
-  const where = `Discord bot ${bot} in #${clip(oneLine(channel.value.name ?? destination.channel), 100)}`;
-  const outcome = await botSend(destination, auth.token, text, ports);
-  if (outcome.result === 'delivered') { await delivered(); return done(0, `Test alert delivered; ${where} posted it and the readback matched.`); }
-  return done(1, `Test alert ${outcome.result} (${outcome.detail}) for ${where}.`);
+  if (!channel.value) return { checkError: `Discord bot ${bot} cannot read channel ${destination.channel} (${channel.detail})` };
+  return { token: auth.token, bot, where: `Discord bot ${bot} in #${clip(oneLine(channel.value.name ?? destination.channel), 100)}` };
+}
+
+// Read-only identity and channel checks first, then one test message with readback.
+async function testBot(destination, text, input, ports, delivered) {
+  const verified = await verifyBotAccess(destination, ports, input.cwd);
+  if (verified.tokenError) return done(1, `Test alert not sent: ${verified.tokenError.replace(/\.$/, '')}.`);
+  if (verified.checkError) return done(1, `${verified.checkError}. Nothing was sent.`);
+  const outcome = await botSend(destination, verified.token, text, ports);
+  if (outcome.result === 'delivered') { await delivered(); return done(0, `Test alert delivered; ${verified.where} posted it and the readback matched.`); }
+  return done(1, `Test alert ${outcome.result} (${outcome.detail}) for ${verified.where}.`);
 }
 
 // One short line for pdd autopilot status, from local files only; empty when nothing needs the person.

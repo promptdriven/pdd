@@ -9,7 +9,7 @@ on the GitHub issue, so it stays with the original run.
 
 Export module functions `runAutopilotAlerts(input, ports)` and
 `alertStatusLine(input, ports)`. `runAutopilotAlerts` takes `action` `set`,
-`test`, `clear`, `alert` or native-only `digest` and returns `{exitCode, message}` with a one-line
+`test`, `clear`, `alert` or native-only `digest` or `retry` and returns `{exitCode, message}` with a one-line
 message. The [CLI](pdd-cli.prompt.md) owns streams and reads stdin into
 `input.text`. The [launcher](autopilot-launcher.prompt.md) shows the status line.
 This is a new public interface.
@@ -51,12 +51,21 @@ token comes from one of two places:
   with mode 0600. A token is 20 to 256 characters of letters, digits, `.`, `_`
   and `-`.
 - `tokenCommand` (from `--token-command CMD`), for example a cloud secret
-  manager command. Save `{"v":1,"service":"discord-bot","channel":ID,"tokenCommand":CMD}`
-  and no token. Run CMD with `/bin/sh -c` in `cwd` at each send and each test,
-  with a 30-second limit. Its trimmed stdout is the token. A nonzero exit, a
-  timeout or output that is not a token is the result `failed` with detail
-  `token command failed (exit N)` or `token command gave no token`; nothing is
-  sent. Never save, print or log the command output or its stderr.
+  manager command. Before saving on `set`, run CMD and the two read-only bot
+  checks (`GET /users/@me` and `GET /channels/ID`); if the command or either
+  check fails, exit 1 naming the failure and `Nothing was saved.`, without
+  writing the destination file. When verified, save
+  `{"v":1,"service":"discord-bot","channel":ID,"tokenCommand":CMD}` and no
+  token, and name the bot `username` and channel `name`. Run CMD with `/bin/sh -c`
+  in `cwd` at each `set`, send and `test`, with a 30-second limit. Its trimmed
+  stdout is the token. A nonzero exit, a timeout or output that is not a token
+  is the result `failed` with recorded detail `token command failed (exit N)` or
+  `token command gave no token`; nothing is sent. Never save, print or log the
+  command stdout or any secret. On `tokenCommand` failure in `set` or `test`,
+  surface `error.stderr` (never `stdout`) only after scrubbing webhook URLs,
+  `Bot`/`Bearer` credentials and any 20+ character token-like string
+  (`[A-Za-z0-9._-]{20,}`), collapsing whitespace to one line and clipping to
+  200 characters.
 
 The bot token is a secret under the same rules as the URL. `tokenCommand`
 without `discordChannel`, or an invalid channel, token or command, exits 2 and
@@ -85,7 +94,7 @@ where VERSION is the package version.
 | Action | Result |
 | --- | --- |
 | `set` | Trim `text`. Save it when it is a supported webhook. Exit 0 and name the service. Otherwise exit 2 and save nothing. |
-| `test` | Send one test message, `PDD Autopilot test alert (HOST).`, with the host name. Exit 0 only when it is delivered. Exit 1 when no destination is set, or delivery failed or is unconfirmed. A bot destination also makes the [read-only checks](#a-discord-bot-destination). When the test is delivered, add a log row (action `test`, result `delivered`, no issue) to each alert record that already exists on this machine. Otherwise record nothing. |
+| `test` | Send one test message, `PDD Autopilot test alert (HOST).`, with the host name. Exit 0 only when it is delivered. Exit 1 when no destination is set, or delivery failed or is unconfirmed. A bot destination also makes the [read-only checks](#a-discord-bot-destination). When the test is delivered, under each existing alert record's lock add a log row (action `test`, result `delivered`, no issue) and retry open incidents on the selected route whose `result` is `failed` or `not-configured` (never `delivered` or `unconfirmed`). Otherwise record nothing. |
 | `clear` | Remove the destination file. Exit 0, also when no file exists. |
 
 Supported webhooks use `https`, no user name or password and no port:
@@ -258,9 +267,9 @@ unknown values exit 2. Infrastructure uses a separate private file
 `autopilot-infrastructure-alerts.json` beside `autopilot-alerts.json`, with the
 same secret, path, validation and permissions rules. Set, test and clear affect
 only the selected file. Their success and failure hints retain the selected
-`--destination infrastructure`, so the next command addresses the same route. A delivered test clears only older send failures on its selected route;
-open undelivered incidents still count. Log its route (`destination` is
-`infrastructure`; absent means `autopilot` for legacy records). Alert and digest callers cannot choose a destination.
+`--destination infrastructure`, so the next command addresses the same route. A delivered test clears older send failures on its selected route and retries open `failed` or `not-configured` incidents routed there;
+open `unconfirmed` incidents still count without resending. Log its route (`destination` is
+`infrastructure`; absent means `autopilot` for legacy records). Alert, retry and digest callers cannot choose a destination.
 
 Route machine kinds (`usage-limit`, `resource`, `interpreter`,
 `interpreter-access`) to the infrastructure destination when set, otherwise the
@@ -277,6 +286,8 @@ show its kind without an issue number. A delivered destination test also takes
 the shared record lock for each record update.
 
 ## Quiet digest and concurrent runs
+
+The native `retry` action takes `cwd` and `env`. When the repository's alert record exists and has at least one open incident whose `result` is `failed` or `not-configured` and whose active route now has a configured destination, take the shared record lock, deliver each such open incident once (`action: "retry"`), update its `result`, `detail`, `updatedAt` and `listed`, and save atomically. Never retry `delivered` or `unconfirmed` incidents. When no record or eligible open incident exists, return exit 0 immediately without locking, network calls or writes. `digest` also runs this retry step under the record lock before checking the 6-hour digest gate.
 
 The native `digest` action takes `cwd`, `env`, and `attention`, an array of
 `{number, category, cause}` from the workflow runner's automatic attention
@@ -323,19 +334,21 @@ Alerts: 1 open alert not delivered; last delivery failed (HTTP 404) for #12 usag
 Without a destination the end is `; set one with pdd autopilot alerts set.`
 
 A failed recovery is not sent again, because its incident is closed. A delivered
-`test` adds the newest send to every record, so it ends the `last delivery` part
-of an older failed or unconfirmed send, for example of that recovery. An open
-incident that is not delivered still counts, and the next call for it sends it
-again.
+`test` adds the newest send to every record and retries open `failed` or
+`not-configured` incidents on its route, so it ends the `last delivery` part
+of an older failed or unconfirmed send and delivers recovered-credential alerts.
+An open `unconfirmed` incident still counts without resending.
 
 ## Dependencies
 
 - [Prompting guide](../../docs/prompting-guide.md): authoring.
-- [CLI](pdd-cli.prompt.md): generation and testing of dispatch, stdin and streams.
-- [Autopilot launcher](autopilot-launcher.prompt.md): status calls
+- [CLI](pdd-cli.prompt.md#autopilot-dispatch): generation and testing of dispatch, stdin and streams.
+- [Autopilot launcher](autopilot-launcher.prompt.md#stop-status-and-the-other-commands): status calls
   `alertStatusLine` with its saved repository and state root.
-- [Workflow runner](workflow-runner.prompt.md): required native context for
-  `automaticAttention` rows and `acquireRunLock` for shared record custody.
+- [Workflow runner attention](workflow-runner.prompt.md#automatic-attention-projection): required native context for
+  `automaticAttention` rows.
+- [Workflow runner lock](workflow-runner.prompt.md#native-admission-lock): required native context for
+  `acquireRunLock` and shared record custody.
 - Native runtime: Node `fs`, `crypto`, `os`, timers and `fetch`.
 - Input `env` (default: the process environment) gives HOME and
   XDG_CONFIG_HOME; a relative or empty value is ignored, as
@@ -344,7 +357,7 @@ again.
   `{status, text}` or throws (code `unreached` means the request did not reach
   the server); method defaults to POST, and a GET has no body;
   `tokenCommand(command, {cwd})` returns the command stdout or throws with an
-  optional numeric `exitCode`; the default runs `/bin/sh -c`;
+  optional numeric `exitCode` and optional string `stderr`; the default runs `/bin/sh -c`;
   `repository({cwd})` returns `{nameWithOwner}`; `now()`; `hostname()`;
   `userInfo()` returns `{homedir}` or throws (default `os.userInfo`);
   `stateRoot`; `recordLock(directory, filename)` returns a release callback or

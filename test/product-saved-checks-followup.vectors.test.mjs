@@ -4,9 +4,9 @@ import childProcess, { spawnSync } from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 import { chmodSync, cpSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import * as runtime from '../src/runtime-client.mjs';
+import * as runtime from '../src/runtime-seam.mjs';
 import { productStatus, productNext, productStart } from '../src/product.mjs';
-import { harbor, portsFor, fakeRuntime, filesUnder, sha } from './runtime-fake.mjs';
+import { harbor, portsFor, fakeRuntime, filesUnder, sha } from './helpers/runtime-fake.mjs';
 
 const vectors = JSON.parse(readFileSync(new URL('./fixtures/product-saved-checks-followup-cases.json', import.meta.url)));
 const productScenario = JSON.parse(readFileSync(new URL('./runtime/product-saved-checks.json', import.meta.url)));
