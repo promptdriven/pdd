@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: ed7a9795ebc09047d575b6512e7898b40f17696f84eece4a920c933175642850).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 47910637f72a9f5bd16830a2272f476800f278f339b3305d496eb2119ea140cd).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -178,8 +178,10 @@ const routes = [
   { id: 'autopilot.auto', prefix: ['autopilot', 'auto'], local: 'autopilot.auto', operands: [], options: [], forms: [form('pdd autopilot auto', 'Set the repository Autopilot mode to auto.')] },
   { id: 'autopilot.trust', prefix: ['autopilot', 'trust'], local: 'autopilot-trust', operands: [{name:'name',type:'text',repeat:true}], options: [], forms: [form('pdd autopilot trust NAME...', 'Add explicitly trusted GitHub names.')] },
   { id: 'autopilot.untrust', prefix: ['autopilot', 'untrust'], local: 'autopilot-untrust', operands: [{name:'name',type:'text'}], options: [], forms: [form('pdd autopilot untrust NAME', 'Remove an explicitly trusted GitHub name.')] },
-  { id: 'setup', prefix: ['setup'], local: 'setup', operands: [], options: [{ name: '--yes', kind: 'flag' }],
-    forms: [form('pdd setup [--yes]', 'Install the PDD skills for Codex and Claude if they are missing, and add the short PDD block to CLAUDE.md, else AGENTS.md. Offer detected Codex, Claude Code and Gemini MCP registrations after showing exact config changes and one y/N question. Offer Autopilot settings in a Git repository with a terminal; keep an existing mode on repeat setup. Without a terminal or with --yes, use safe defaults without questions.')] },
+  { id: 'pair.status', prefix: ['pair', 'status'], local: 'pair-status', operands: [], options: [{ name: '--json', kind: 'flag' }], forms: [form('pdd pair status --json', 'Read pending pairing and paired public keys.')] },
+  { id: 'pair.offer', prefix: ['pair', 'offer'], local: 'pair-offer', operands: [], options: [{ name: '--message', kind: 'text' }], forms: [form('pdd pair offer --message FILE', 'Deliver a signed phone offer to waiting setup.')] },
+  { id: 'setup', prefix: ['setup'], local: 'setup', operands: [], options: [{ name: '--yes', kind: 'flag' }, { name: '--no-pair', kind: 'flag' }, { name: '--pair-code', kind: 'text' }, { name: '--check', kind: 'flag' }, { name: '--json', kind: 'flag' }],
+    forms: [form('pdd setup [--yes] [--no-pair] [--pair-code CODE] [--check] [--json]', 'Install the PDD skills for Codex and Claude if they are missing, and add the short PDD block to CLAUDE.md, else AGENTS.md. Offer detected Codex, Claude Code and Gemini MCP registrations after showing exact config changes and one y/N question. Offer Autopilot settings in a Git repository with a terminal; keep an existing mode on repeat setup. Without a terminal or with --yes, use safe defaults without questions.')] },
 ];
 export const PUBLIC_COMMAND_ROUTES = Object.freeze(routes.map(route => Object.freeze({ ...route,
   prefix: Object.freeze(route.prefix), ...(route.quiet ? { quiet: Object.freeze(route.quiet) } : {}),

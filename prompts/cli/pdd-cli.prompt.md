@@ -111,6 +111,12 @@ Pass workflow-park options --blocker and --until unchanged as blocker and until 
 
 Dispatch workflow-resend through the existing runner result/port handling to resendChecks with refs equal to all issue operands, cwd, packageRoot, and said only when --said is supplied. Forward the caller stdin and env to the resend runner ports. No prompt approval or worker launch.
 
+## Folder readiness and phone pairing
+
+For `setup --check`, call project setup `checkProjectReady({cwd, packageRoot})` before all admission, PATH diagnostics, skill/auth checks, notices or setup actions. Print exactly `{"ready":true}\n` or `{"ready":false}\n` with `--json`; otherwise print `Ready\n` or `Not ready\n`. Both exit 0. For `setup --yes --no-pair`, perform the same check first and return 0 without output or further action if ready. Otherwise run existing setup with safe defaults and no pairing. Reject invalid flag combinations and invalid pair codes before those effects with exit 2. Pair code is 4–64 ASCII letters, digits or hyphens; `--pair-code` requires an interactive terminal. Noninteractive setup and `--yes` skip pairing.
+
+After existing setup actions, an interactive setup calls [phone pairing](setup-pairing.prompt.md), which offers pairing and, on acceptance, resolves the login and skips when already paired; `--pair-code` calls it even if a phone is already saved. Pass the supplied code unchanged. Permit injection of the pairing module and its ports, including confirmation. Dispatch `pair status --json` and `pair offer --message FILE` to the same owner, without setup actions or workflow approval changes. Pairing failures are finite diagnostics and nonzero exits. Readiness and pair routes do not emit release notices.
+
 ## Interface drafting and setup offer
 
 Dispatch `pdd interface draft [PROMPT...] [--all] [--json]` locally to the interface drafting owner. Dispatch `pdd approve PROMPT --automatic --tests COMMAND` to its automatic route. In a Git repository, setup detects prompts without blocks and offers `pdd interface draft --all` before MCP setup. With an interactive confirmation it may draft; a decline or a noninteractive call only prints the command. Reuse setup confirmation ports. Never run native tests or approve a prompt from setup.
@@ -130,6 +136,8 @@ reply, print once to stdout on zero and stderr otherwise. An exception prints a
 finite safe failure and exits 1. Do not load the launcher or remote settings.
 
 ## Dependencies
+
+- [Phone pairing](setup-pairing.prompt.md): required generation and verification context for setup pairing and local handoff.
 
 - [Compiled Story checker](compiled-test.prompt.md): required native generation and verification context for code-target dispatch.
 
@@ -288,7 +296,7 @@ flowchart TD
 
 Optional fields in the existing `dependencies` object may inject the existing `workflowAgents` module for workflow admission, `workflowAgentPorts` for the adapter/helper's status-process port, and existing `setupSkills`, `setupProject`, `setupAgentMcp` and `pathDiagnostic` functions. Defaults remain the public package modules; these are dependency substitutions, not argv options or new operations. The setup adapter remains the setup gate; its selected agent does not restrict which existing setup actions run or change MCP consent.
 
-Runtime `agents.checkWorkflowAgents` represents that existing module function, including the adapter's internal call on setup. Supply exact cwd/env and omit requested when absent; use the supplied reply rather than inspecting files or running programs. Runtime `setup.setupSkills`, `setup.setupProject`, `setup.setupAgentMcp` and `diagnostics.pathDiagnostic` bind those actual module functions. The first wraps its native array as `{results}`, MCP wraps its integer as `{exitCode}`, and diagnostics wraps its array as `{lines}`. The MCP function retains its stdin/stdout/stderr/confirm ports and consent internally; its fixture returns only the exit code and cannot establish real config writes or consent. The setup callback invokes each bound action once in existing order after admission, with the arguments already specified above. Runtime binds no Git context: treat a Runtime cwd as outside Git, so the `.gitignore` part prints nothing there.
+Runtime `setup.checkProjectReady` binds the actual injected readiness function and wraps its Boolean as `{ready}`. Optional Runtime inputs `stdinIsTTY` and `stdoutIsTTY` set `dependencies.stdin.isTTY` and `dependencies.stdout.isTTY` on the actual supplied streams, respectively; both default to false in this transport. Runtime `pairing.runSetupPairing` binds the actual injected pairing operation, with arguments `{cwd, env, code, interactive}` (omit code when absent) and result `{exitCode, message}`; the caller prints a nonempty message on the appropriate stream. Runtime `pairing.pairStatus` and `pairing.pairOffer` bind the actual injected module functions, with `{cwd, env}` and `{cwd, env, messageFile}` respectively and the same result shape. Runtime `agents.checkWorkflowAgents` represents that existing module function, including the adapter's internal call on setup. Supply exact cwd/env and omit requested when absent; use the supplied reply rather than inspecting files or running programs. Runtime `setup.setupSkills`, `setup.setupProject`, `setup.setupAgentMcp` and `diagnostics.pathDiagnostic` bind those actual module functions. The first wraps its native array as `{results}`, MCP wraps its integer as `{exitCode}`, and diagnostics wraps its array as `{lines}`. The MCP function retains its stdin/stdout/stderr/confirm ports and consent internally; its fixture returns only the exit code and cannot establish real config writes or consent. The setup callback invokes each bound action once in existing order after admission, with the arguments already specified above. Runtime binds no Git context: treat a Runtime cwd as outside Git, so the `.gitignore` part prints nothing there.
 
 Runtime `dispatch.startRun` binds existing `workflowRunner.startRun(input, ports)`: its `input` member is the unchanged native first argument, and `env` maps to second-argument `ports.env`; progress `say` remains the captured stderr port. Preserve optional base/adoptCorpus/draft fields and stream/exit handling. Optional Runtime cwd/packageRoot/env fields bind existing dependencies (transport defaults `.`, `.`, and an empty fixture env respectively); native defaults remain unchanged. Runtime env is a closed fixture projection of HOME, PATH, CODEX_HOME and CLAUDE_CONFIG_DIR, not a restriction or filtered copy of the native environment. The fake readiness reply proves admission dispatch only, not native probing or credential validity.
 
@@ -317,8 +325,8 @@ reply.
 ```json
 {
   "kind": "partial",
-  "status": "approved",
-  "prose_sha256": "14eeea146500e7b767cb26eb081a966588fa9f9857d2c42465470f6de4885097",
+  "status": "draft",
+  "prose_sha256": "2dccf638f3f0089a15d0ae78f8f9dc61ee0b44dcbacbcec119b7b541738f6a2e",
   "entries": [
     {
       "operation": "runPdd",
@@ -358,6 +366,12 @@ reply.
           },
           "packageRoot": {
             "type": "string"
+          },
+          "stdinIsTTY": {
+            "type": "boolean"
+          },
+          "stdoutIsTTY": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -971,6 +985,38 @@ reply.
             ],
             "additionalProperties": false
           }
+        },
+        {
+          "name": "checkProjectReady",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "cwd": {
+                "type": "string"
+              },
+              "packageRoot": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "cwd",
+              "packageRoot"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "ready": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "ready"
+            ],
+            "additionalProperties": false
+          }
         }
       ]
     },
@@ -1263,6 +1309,189 @@ reply.
               "cwd",
               "packageRoot",
               "env"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "exitCode": {
+                "type": "integer"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "exitCode",
+              "message"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "pairing",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "runSetupPairing",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "cwd": {
+                "type": "string"
+              },
+              "env": {
+                "type": "object",
+                "properties": {
+                  "HOME": {
+                    "type": "string"
+                  },
+                  "PATH": {
+                    "type": "string"
+                  },
+                  "CODEX_HOME": {
+                    "type": "string"
+                  },
+                  "CLAUDE_CONFIG_DIR": {
+                    "type": "string"
+                  },
+                  "PDD_RUNTIME_URL": {
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              },
+              "code": {
+                "type": "string"
+              },
+              "interactive": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "cwd",
+              "env",
+              "interactive"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "exitCode": {
+                "type": "integer"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "exitCode",
+              "message"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "pairStatus",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "cwd": {
+                "type": "string"
+              },
+              "env": {
+                "type": "object",
+                "properties": {
+                  "HOME": {
+                    "type": "string"
+                  },
+                  "PATH": {
+                    "type": "string"
+                  },
+                  "CODEX_HOME": {
+                    "type": "string"
+                  },
+                  "CLAUDE_CONFIG_DIR": {
+                    "type": "string"
+                  },
+                  "PDD_RUNTIME_URL": {
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "cwd",
+              "env"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "exitCode": {
+                "type": "integer"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "exitCode",
+              "message"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "pairOffer",
+          "access": "write",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "cwd": {
+                "type": "string"
+              },
+              "env": {
+                "type": "object",
+                "properties": {
+                  "HOME": {
+                    "type": "string"
+                  },
+                  "PATH": {
+                    "type": "string"
+                  },
+                  "CODEX_HOME": {
+                    "type": "string"
+                  },
+                  "CLAUDE_CONFIG_DIR": {
+                    "type": "string"
+                  },
+                  "PDD_RUNTIME_URL": {
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              },
+              "messageFile": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "cwd",
+              "env",
+              "messageFile"
             ],
             "additionalProperties": false
           },

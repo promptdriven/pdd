@@ -1,6 +1,7 @@
-// Generated from prompts/cli/project-setup.prompt.md (sha256: 9409020fcf148cdc815b719fee5ddc1f1fb35dfe842632a617961c22f188a4e5).
+// Generated from prompts/cli/project-setup.prompt.md (sha256: 4ad1ae59ff57c4e131a5f692fdf5bcb2280b513ca1115b8eb80e905c03d084ac).
 import { appendFileSync, existsSync, lstatSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 const START = '<!-- pdd:start -->', END = '<!-- pdd:end -->';
 
@@ -52,4 +53,19 @@ export function ignorePddFolder({ root }) {
   const newline = old.includes('\r\n') ? '\r\n' : '\n';
   appendFileSync(file, `${old.length && old.at(-1) !== 0x0a ? newline : ''}.pdd/${newline}`);
   return { file, changed: true, negated: false };
+}
+
+export function checkProjectReady({ cwd, packageRoot }) {
+  try {
+    const file = join(cwd, existsSync(join(cwd, 'CLAUDE.md')) ? 'CLAUDE.md' : 'AGENTS.md');
+    const lines = readFileSync(file, 'utf8').split('\n');
+    const start = lines.indexOf(START), end = lines.indexOf(END);
+    if (start < 0 || end <= start || lines.filter(x => x === START).length !== 1 || lines.filter(x => x === END).length !== 1 || lines.slice(start, end + 1).join('\n') !== block(packageRoot)) return false;
+    const git = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    if (git.status !== 0) return true;
+    const ignore = join(git.stdout.trim(), '.gitignore');
+    if (!lstatSync(ignore).isFile()) return false;
+    const rules = readFileSync(ignore).toString('latin1').split('\n').map(x => x.replace(/[ \r]+$/, ''));
+    return rules.some(x => IGNORED.has(x) || x.startsWith('!') && IGNORED.has(x.slice(1)) || NEGATION.test(x));
+  } catch { return false; }
 }

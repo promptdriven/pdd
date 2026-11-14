@@ -1,0 +1,322 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/setup-readiness.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "`pdd setup --check --json` prints `{\"ready\":true}` and exits 0 when the current project has its current PDD block and its Git root ignores `.pdd/` or has a respected negation that setup preserves."
+    },
+    {
+      "id": "AC2",
+      "text": "`pdd setup --check --json` prints `{\"ready\":false}` and exits 0 when the block or ignore handling still needs setup; checking changes no file and starts no setup, authentication, agent status or network work."
+    },
+    {
+      "id": "AC3",
+      "text": "`pdd setup --check` prints `Ready` or `Not ready` for the same conditions; `--json` without `--check` and `--check` combined with `--yes`, `--no-pair` or `--pair-code` exit 2 before setup effects."
+    }
+  ],
+  "initial_world": {
+    "ready": 0
+  },
+  "simulation": {
+    "setup.checkProjectReady": {
+      "action": "fixture.lookup",
+      "world_pointer": "/ready",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "cwd": "/fixture/project",
+            "packageRoot": "/fixture/pdd"
+          },
+          "result": {
+            "ready": true
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "cwd": "/fixture/project",
+            "packageRoot": "/fixture/pdd"
+          },
+          "result": {
+            "ready": false
+          }
+        },
+        {
+          "call_index": 3,
+          "args": {
+            "cwd": "/fixture/project",
+            "packageRoot": "/fixture/pdd"
+          },
+          "result": {
+            "ready": true
+          }
+        },
+        {
+          "call_index": 4,
+          "args": {
+            "cwd": "/fixture/project",
+            "packageRoot": "/fixture/pdd"
+          },
+          "result": {
+            "ready": false
+          }
+        }
+      ]
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "ready",
+      "entry_path": "prompts/cli/pdd-cli.prompt.md",
+      "operation": "runPdd",
+      "input": {
+        "argv": [
+          "setup",
+          "--check",
+          "--json"
+        ],
+        "cwd": "/fixture/project",
+        "packageRoot": "/fixture/pdd",
+        "env": {
+          "HOME": "/fixture/home"
+        },
+        "stdinIsTTY": false,
+        "stdoutIsTTY": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/stdout",
+          "op": "equals",
+          "value": "{\"ready\":true}\n"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/exit_code",
+          "op": "equals",
+          "value": 0
+        }
+      ]
+    },
+    {
+      "step_id": "missing",
+      "entry_path": "prompts/cli/pdd-cli.prompt.md",
+      "operation": "runPdd",
+      "input": {
+        "argv": [
+          "setup",
+          "--check",
+          "--json"
+        ],
+        "cwd": "/fixture/project",
+        "packageRoot": "/fixture/pdd",
+        "env": {
+          "HOME": "/fixture/home"
+        },
+        "stdinIsTTY": false,
+        "stdoutIsTTY": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/stdout",
+          "op": "equals",
+          "value": "{\"ready\":false}\n"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/pdd-cli-agents-checkWorkflowAgents",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupSkills",
+          "op": "equals",
+          "value": 0
+        }
+      ]
+    },
+    {
+      "step_id": "invalid",
+      "entry_path": "prompts/cli/pdd-cli.prompt.md",
+      "operation": "runPdd",
+      "input": {
+        "argv": [
+          "setup",
+          "--check",
+          "--yes"
+        ],
+        "cwd": "/fixture/project",
+        "packageRoot": "/fixture/pdd",
+        "env": {
+          "HOME": "/fixture/home"
+        },
+        "stdinIsTTY": false,
+        "stdoutIsTTY": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/exit_code",
+          "op": "equals",
+          "value": 2
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-checkProjectReady",
+          "op": "equals",
+          "value": 0
+        }
+      ]
+    },
+    {
+      "step_id": "ready-text",
+      "entry_path": "prompts/cli/pdd-cli.prompt.md",
+      "operation": "runPdd",
+      "input": {
+        "argv": [
+          "setup",
+          "--check"
+        ],
+        "cwd": "/fixture/project",
+        "packageRoot": "/fixture/pdd",
+        "env": {
+          "HOME": "/fixture/home"
+        },
+        "stdinIsTTY": false,
+        "stdoutIsTTY": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/stdout",
+          "op": "equals",
+          "value": "Ready\n"
+        }
+      ]
+    },
+    {
+      "step_id": "not-ready-text",
+      "entry_path": "prompts/cli/pdd-cli.prompt.md",
+      "operation": "runPdd",
+      "input": {
+        "argv": [
+          "setup",
+          "--check"
+        ],
+        "cwd": "/fixture/project",
+        "packageRoot": "/fixture/pdd",
+        "env": {
+          "HOME": "/fixture/home"
+        },
+        "stdinIsTTY": false,
+        "stdoutIsTTY": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/stdout",
+          "op": "equals",
+          "value": "Not ready\n"
+        }
+      ]
+    },
+    {
+      "step_id": "json-alone",
+      "entry_path": "prompts/cli/pdd-cli.prompt.md",
+      "operation": "runPdd",
+      "input": {
+        "argv": [
+          "setup",
+          "--json"
+        ],
+        "cwd": "/fixture/project",
+        "packageRoot": "/fixture/pdd",
+        "env": {
+          "HOME": "/fixture/home"
+        },
+        "stdinIsTTY": false,
+        "stdoutIsTTY": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/exit_code",
+          "op": "equals",
+          "value": 2
+        }
+      ]
+    },
+    {
+      "step_id": "no-pair-check",
+      "entry_path": "prompts/cli/pdd-cli.prompt.md",
+      "operation": "runPdd",
+      "input": {
+        "argv": [
+          "setup",
+          "--check",
+          "--no-pair"
+        ],
+        "cwd": "/fixture/project",
+        "packageRoot": "/fixture/pdd",
+        "env": {
+          "HOME": "/fixture/home"
+        },
+        "stdinIsTTY": false,
+        "stdoutIsTTY": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/exit_code",
+          "op": "equals",
+          "value": 2
+        }
+      ]
+    },
+    {
+      "step_id": "code-check",
+      "entry_path": "prompts/cli/pdd-cli.prompt.md",
+      "operation": "runPdd",
+      "input": {
+        "argv": [
+          "setup",
+          "--check",
+          "--pair-code",
+          "K7Q2-9MXD"
+        ],
+        "cwd": "/fixture/project",
+        "packageRoot": "/fixture/pdd",
+        "env": {
+          "HOME": "/fixture/home"
+        },
+        "stdinIsTTY": false,
+        "stdoutIsTTY": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/exit_code",
+          "op": "equals",
+          "value": 2
+        }
+      ]
+    }
+  ]
+}
