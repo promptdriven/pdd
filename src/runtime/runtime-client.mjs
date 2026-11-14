@@ -2455,7 +2455,7 @@ async function retrySimulatedNoVerdicts(context, rows, sent) {
   for (const row of rows) { const key = row.story_path ?? row.story; if (!groups.has(key)) groups.set(key, []); groups.get(key).push(row); }
   const retry = [];
   for (const [story, group] of groups) {
-    const candidates = group.filter(row => sent.includes(row) && row.state === 'unknown' && !row.lost && !row.capacity_uncertain && !row.dispatchIncomplete);
+    const candidates = group.filter(row => sent.includes(row) && ['refused', 'not_run', 'unknown'].includes(row.state) && !row.lost && !row.capacity_uncertain && !row.dispatchIncomplete);
     if (!candidates.length || group.some(row => !sent.includes(row) && !row.cached)) continue;
     let simulated = true;
     for (const row of group) {
@@ -2472,7 +2472,7 @@ async function retrySimulatedNoVerdicts(context, rows, sent) {
     if (!simulated || declarationCacheReason(context.capture, story, group.map(row => row.test))) continue;
     for (const row of candidates) {
       const id = row.request_ids.at(-1), answer = read(id);
-      if (!sameJob(answer, id, 'check') || answer.state !== 'unknown') continue;
+      if (!sameJob(answer, id, 'check') || !['refused', 'not_run'].includes(answer.state)) continue;
       const refusals = [...(Array.isArray(answer.result?.refusals) ? answer.result.refusals : []),
         ...(answer.result?.report?.refusal ? [answer.result.report.refusal] : [])];
       if (!refusals.length || refusals.some(item => !['graph-provider-failure', 'no-server-verdict'].includes(item?.code))) continue;
@@ -2486,7 +2486,6 @@ async function retrySimulatedNoVerdicts(context, rows, sent) {
   }
   if (!retry.length || !await waitBudget(context, 1000)) return;
   for (const row of retry) {
-    if (row.reservation) { await releaseRuntimeSlot(row.reservation, { ended: true }, slotPorts(context)); row.reservation = null; }
     Object.assign(row, { state: 'ready', lost: false, final: false, note: null, why: null, next_step: null });
   }
   line(context.ports.stderr, `Retrying ${retry.length} simulated ${retry.length === 1 ? 'check' : 'checks'} after no verdict (1 of 1).`);

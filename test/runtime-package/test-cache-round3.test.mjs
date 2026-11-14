@@ -62,6 +62,15 @@ function findBatch(dir, name) {
   return null;
 }
 
+async function waitForOverlap(ctx, count = 2) {
+  const file = join(ctx.repo, '.pdd/cache/test/stories.json');
+  for (let i = 0; i < 2000; i++) {
+    try { if ((read(file).latest_identity?.in_progress ?? []).length >= count) return; } catch {}
+    await new Promise(done => setTimeout(done, 5));
+  }
+  assert.fail('both cache ownership marks must overlap');
+}
+
 const interleavings = [
   { name: 'overlap and older writer', run: async ctx => {
   assert.equal((await ctx.invoke()).sent, 3);
@@ -80,9 +89,10 @@ const interleavings = [
   const pRun = ctx.invokeWith(p.ports, ['independent']);
   while (!held.size) await new Promise(done => setTimeout(done, 5));
   phase = 'q';
-  const qRes = await ctx.invokeWith(q.ports, ['place-order']);
+  const qRun = ctx.invokeWith(q.ports, ['place-order']);
+  await waitForOverlap(ctx);
   released = true;
-  const pRes = await pRun;
+  const [pRes, qRes] = await Promise.all([pRun, qRun]);
   ctx.state.reply = null; ctx.state.identity = { ...B }; ctx.clock.now = q.clock.now + 60000;
   const u = await ctx.invoke(['unknown-item']);
   assert.equal(u.sent, 1, 'pdd saw build b in Q; the old build-a pass must not be reused');
@@ -201,9 +211,14 @@ test('TEST-CACHE-V1 short run inside a longer run cannot reuse a pass', async t 
   const pRun = ctx.invokeWith(p.ports, ['independent']);
   try {
     while (!held.size) await new Promise(done => setTimeout(done, 5));
-    phase = 'q'; await ctx.invokeWith(q.ports, ['place-order']);
-    const short = await ctx.invokeWith(r.ports, ['unknown-item']);
-    assert.equal(short.sent, 1, 'the longer run has already seen build b; never reuse build a while it is active');
+    phase = 'q'; const qRun = ctx.invokeWith(q.ports, ['place-order']);
+    await waitForOverlap(ctx);
+    const beforeShort = ctx.fake.posts.filter(post => post.command === 'check' && post.request.scenario === 'tests/unknown-item.json').length;
+    const shortRun = ctx.invokeWith(r.ports, ['unknown-item']);
+    await waitForOverlap(ctx, 3);
+    released = true; await pRun; await qRun;
+    const short = await shortRun;
+    assert.equal(ctx.fake.posts.filter(post => post.command === 'check' && post.request.scenario === 'tests/unknown-item.json').length - beforeShort, 1, 'the longer run has already seen build b; never reuse build a while it is active');
   } finally { released = true; await pRun; ctx.state.reply = null; }
   ctx.clock.now = r.clock.now + 5 * min;
   assert.equal((await ctx.invoke(['unknown-item'])).sent, 1, 'overlap leaves doubt');
@@ -315,7 +330,10 @@ test('TEST-CACHE-K3: --cache-clear during a run', async t => {
   try {
     assert.equal(held.size, 1, 'the other run is still in progress');
     phase = 'q';
-    const q = await ctx.invokeWith(round4Other(ctx, 30000).ports, ['place-order'], { '--cache-clear': true });
+    const qRun = ctx.invokeWith(round4Other(ctx, 30000).ports, ['place-order'], { '--cache-clear': true });
+    await waitForOverlap(ctx);
+    released = true; await pRun;
+    const q = await qRun;
     assert.equal(q.code, 0); assert.equal(q.sent, 1);
     r = await ctx.invokeWith(round4Other(ctx, 60000).ports, ['place-order']);
   } finally { released = true; await pRun; ctx.state.reply = null; }
