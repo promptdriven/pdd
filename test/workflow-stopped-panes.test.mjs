@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {fixture, packageRoot, matchingClaimPorts} from './helpers/workflow-runner-fixture.mjs';
 import {openHerdrRunLayout} from '../src/workflow-herdr-layout.mjs';
 import {ownSession, ensurePaneBudget} from '../src/workflow-chat.mjs';
-import {parkBlockedRun, sweepIdleRuns, tidyRuns, runStatus, resumeStoppedRun, wakeParkedRun} from '../src/workflow-runner.mjs';
+import {parkBlockedRun, sweepIdleRuns, tidyRuns, runStatus, wakeParkedRun} from '../src/workflow-runner.mjs';
 const ids=['11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','33333333-3333-4333-8333-333333333333'];
 const save=(f,r)=>writeFileSync(join(r.runDir,'status.json'),JSON.stringify(r));
 async function stopped(t) {
@@ -152,15 +152,6 @@ test('3123 older-owner handover waits for check custody before closing its paren
   f.ports.readSuiteProgress=()=>({state:'finished',pausedMs:0});
   await sweepIdleRuns({graceMs:0},f.ports);
   assert.equal(f.record().state,'cancelled','idle-check-custody-allows-normal-release');
-});
-test('3123 tick recovery saves all found IDs even when the current agent still runs',async t=>{
-  const {f,r}=await stopped(t);r.state='running';delete r.blockedOn;save(f,r);
-  f.ports.owners={read:async()=>({json:JSON.stringify({localOwner:'current',claims:[{issue:r.issue.url,active:true,owner:'current',coordinatorId:'current',machine:'fixture',commentId:'11',labelEventId:'12'}]})})};
-  f.herdr.paneOf(r.chats.at(-1)).agent={agent:'codex',agent_status:'idle',agent_session:{kind:'id',value:ids[2]}};
-  f.herdr.calls.length=0;
-  await resumeStoppedRun({ref:'17',cwd:f.source,coordinatorId:'current',machine:'fixture'},f.ports);
-  assert.deepEqual(f.record().chats.map(c=>c.session?.id),ids,'tick-evidence-is-durable-without-parking');
-  assert.equal(f.herdr.calls.filter(a=>a[0]==='pane'&&a[1]==='run').length,0,'observation-does-not-relaunch-a-live-chat');
 });
 
 for (const guard of ['foreign-agent','changed-terminal','foreign-pane','naming-failed'])

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {existsSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
-import {openRun, resumeStoppedRun, parkBlockedRun, wakeParkedRun, runStatus, stepDone} from '../src/workflow-runner.mjs';
+import {openRun, parkBlockedRun, wakeParkedRun, runStatus, stepDone} from '../src/workflow-runner.mjs';
 import {writeRun} from '../src/workflow-runs.mjs';
 import {fixture, packageRoot} from './helpers/workflow-runner-fixture.mjs';
 
@@ -40,9 +40,6 @@ async function ready(t, route) {
     paused.blockedOn = {kind: 'dependency', until: '18'}; writeRun(paused);
     const parked = await parkBlockedRun({...args, blocker: {kind: 'dependency', until: '18'}}, f.ports);
     assert.equal(parked.recovery, 'parked', parked.message);
-  } else if (route === 'resume') {
-    f.herdr.paneOf(run.chats.at(-1)).agent = null;
-    f.tick(120000);
   } else if (['missing-tab', 'confirmed-absent-tab'].includes(route)) {
     const chat = run.chats.at(-1);
     f.herdr.tabs = f.herdr.tabs.filter(tab => tab.tab_id !== chat.tabId);
@@ -56,15 +53,14 @@ async function ready(t, route) {
       };
     }
   }
-  f.action = () => route === 'resume' ? resumeStoppedRun(args, f.ports)
-    : route === 'wake' ? wakeParkedRun({...args, at: f.record().parking.at}, f.ports)
+  f.action = () => route === 'wake' ? wakeParkedRun({...args, at: f.record().parking.at}, f.ports)
       : openRun({...args, cwd: route === 'parked-open' ? f.source : f.record().root, ...(route === 'new' ? {newSession: true} : {}),
         ...(['area', 'historical'].includes(route) ? {area: f.record().areas[0].name} : {})}, f.ports);
   f.herdr.calls.length = 0;
   return f;
 }
 
-for (const route of ['open', 'area', 'historical', 'new', 'missing-tab', 'confirmed-absent-tab', 'resume', 'wake', 'parked-open']) {
+for (const route of ['open', 'area', 'historical', 'new', 'missing-tab', 'confirmed-absent-tab', 'wake', 'parked-open']) {
   test(`claim transfer refuses ${route}, retains work and releases identified local chats`, async t => {
     const f = await ready(t, route), before = f.record();
     f.observation.claims = [{...winner(before), owner: 'owner-b', coordinatorId: 'owner-b',
@@ -110,7 +106,7 @@ for (const route of ['open', 'area', 'historical', 'new', 'missing-tab', 'confir
   });
 }
 
-for (const route of ['open', 'resume', 'wake']) {
+for (const route of ['open', 'wake']) {
   for (const observation of ['unavailable', 'absent', 'expired', 'ambiguous', 'malformed', 'missing-local-owner', 'inconsistent-winner', 'same-machine']) {
     test(`${route} refuses ${observation} ownership without a handover or chat effects`, async t => {
       const f = await ready(t, route), before = f.record(), claim = winner(before);

@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 0b12289158448bd468d0108307a14988713572a1f3ed77682bc104df0ebdfc08).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: a41ef142cbfdd2fd7958c6df33ebe99301203f315b77a48865da497cd4322517).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -625,7 +625,6 @@ function automaticResumeWords(run, now) {
     || success.sessionId !== chat.session?.id || success.resumedAt !== chat.resumedAt) return null;
   return `resumed after the chat stopped (${success.count} of 3)`;
 }
-const IDLE_WAIT_MS = 600000;
 const idleAgent = (chat, live) => live.alive && ['idle', 'done'].includes(live.status)
   && validSessionId(chat.session?.id) && live.sessionId === chat.session.id;
 function observeIdle(chat, live, now) {
@@ -4177,22 +4176,6 @@ async function recoverParkingOwner(run, owner, p) {
   return recovery;
 }
 
-export const recoverAutomaticRunOwner = saveGuard((args, ports) => lockedMutation(args, ports, async (input, ports) => {
-  const p = deps(ports), found = await resolveRun(input.ref, {cwd:input.cwd}, p), run = found.run;
-  const skip = () => ({...done(''), recovery:'skipped'});
-  if (!run || ended(run) || !validSavedAutomaticOrigin(run) || !samePath(run.sourceRoot,input.cwd)) return skip();
-  const owner = currentParkingOwner(run,p,{allowOlder:true});
-  if (!owner || owner.coordinatorId !== input.coordinatorId || owner.machine !== input.machine) return skip();
-  if (input.releaseUnowned) {
-    await chatContinuationOwnership(run, p, {releaseUnowned: true, claimObservation:input.claimObservation ?? null,
-      releaseReason:input.releaseReason === 'expired' ? 'expired' : 'lost'});
-    const latest = readRun(run.runDir) ?? run;
-    return {...done(''), recovery: ended(latest) ? latest.claimRelease?.state === 'pending' ? 'pending' : 'released' : 'skipped'};
-  }
-  if (run.automaticOrigin.coordinatorId === owner.coordinatorId) return skip();
-  const result = await recoverParkingOwner(run,owner,p);
-  return result ? {...done(''),recovery:'recovered',claim:result.claim} : skip();
-}));
 // Admission reuses parking custody. It never starts a worker or releases a claim.
 export async function sweepIdleRuns({graceMs = 60_000, need, timeBudgetMs} = {}, ports = {}) {
   const p = deps(ports), runs = allRuns({}, p).sort((a,b) => idleSince(a) - idleSince(b) || a.number - b.number);
@@ -5406,67 +5389,6 @@ async function continueResumedChat(run, chat, p, packageRoot) {
   if (result.exitCode !== 0) p.say(result.message);
 }
 
-// An idle worker uses the existing journal and transport. It never launches another chat.
-export const nudgeIdleRun = saveGuard((args, ports) => lockedMutation(args, ports, async (input, ports) => {
-  const p = deps(ports), found = await resolveRun(input.ref, {cwd: input.cwd}, p);
-  const skipped = () => ({...done(''), recovery: 'skipped'});
-  if (!found.run) return found.error ? {...fail(found.error), recovery: 'skipped'} : skipped();
-  const run = found.run, chat = currentChat(run), area = run.areas[run.area];
-  const owned = fresh => fresh && runIdentity(fresh) === runIdentity(run)
-    && validSavedAutomaticOrigin(fresh) && fresh.automaticOrigin.coordinatorId === input.coordinatorId
-    && fresh.automaticOrigin.machine === input.machine && samePath(fresh.sourceRoot, input.cwd);
-  if (!owned(run) || run.parking || layoutClosing(run) || chat?.closed) return skipped();
-  // The saved stop survives a failed alert handoff or process restart. The alert
-  // service owns retries and delivered/unconfirmed deduplication on later ticks.
-  if (run.state === 'stuck' && run.chatIdleLimit)
-    return {...done(run.parkReason), recovery: 'stuck', area: run.chatIdleLimit.area};
-  const eligible = fresh => owned(fresh) && fresh.state === 'running' && !fresh.gate && !openQuestion(fresh) && !activeChatFailure(fresh)
-    && !continuationCheckHeld(fresh, p)
-    && !layoutClosing(fresh) && !currentChat(fresh)?.closed && fresh.area === run.area
-    && (!fresh.chatReplacement || ['launched', 'rolledBack', 'ended'].includes(fresh.chatReplacement.phase))
-    && currentChat(fresh) && !currentChat(fresh).startUnconfirmed && validSessionId(currentChat(fresh).session?.id)
-    && !prOf(fresh, area?.name) && area?.steps.some(step => !fresh.done[step]);
-  if (!eligible(run)) return skipped();
-  const original = structuredClone(chat), progress = Object.fromEntries(area.steps.filter(step => run.done[step]).map(step => [step, run.done[step]]));
-  const unchanged = fresh => eligible(fresh) && sameFact(currentChat(fresh), original)
-    && sameFact(fresh.done, run.done) && sameFact(fresh.automaticOrigin, run.automaticOrigin);
-  const live = await chatSession(chat, p), at = p.now(), observed = observeIdle(chat, live, at);
-  if (!idleAgent(chat, live)) {
-    if (!sameFact(chat, observed)) conditionalCommit(run, p, unchanged, fresh => copyObservation(currentChat(fresh), observed));
-    return skipped();
-  }
-  if (await chatHealth({run, chat, live}, p)) return skipped();
-  const previous = run.chatIdleNudges?.[area.name];
-  const budget = previous && sameFact(previous.progress, progress) ? previous : {progress, count: 0, lastAt: null};
-  const since = Math.max(observed.idleSince, budget.lastAt ?? -Infinity);
-  if (at < since + IDLE_WAIT_MS) {
-    if (!sameFact(chat, observed)) conditionalCommit(run, p, unchanged, fresh => copyObservation(currentChat(fresh), observed));
-    return skipped();
-  }
-  if (budget.count >= 3) {
-    const reason = `The ${area.name} agent stayed idle after 3 continue prompts without step progress. Inspect the chat before continuing this run.`;
-    const saved = conditionalCommit(run, p, unchanged, fresh => {
-      copyObservation(currentChat(fresh), observed);
-      fresh.state = 'stuck'; fresh.parkReason = reason; fresh.chatIdleLimit = {area: area.name, at};
-    });
-    return saved ? {...done(reason), recovery: 'stuck', area: area.name} : skipped();
-  }
-  const attempt = {...budget, count: budget.count + 1, lastAt: at};
-  if (!conditionalCommit(run, p, unchanged, fresh => {
-    copyObservation(currentChat(fresh), observed);
-    (fresh.chatIdleNudges ??= {})[area.name] = attempt;
-  })) return skipped();
-  const reserved = readRun(run.runDir);
-  const stillCurrent = fresh => eligible(fresh) && sameFact(currentChat(fresh), currentChat(reserved))
-    && sameFact(fresh.done, reserved.done) && sameFact(fresh.automaticOrigin, reserved.automaticOrigin)
-    && sameFact(fresh.chatIdleNudges?.[area.name], attempt);
-  const result = await deliverContinue(reserved, continueText(reserved, input.packageRoot), {
-    ...p, packageRoot: input.packageRoot, deliveryGuard: stillCurrent,
-    beforeDeliverySubmit: async () => idleAgent(currentChat(reserved), await chatSession(currentChat(reserved), p)),
-  });
-  return {...result, recovery: result.exitCode === 0 ? 'nudged' : 'skipped'};
-}));
-
 // A replacement wait owns its clearing condition, while disk and slot custody survive.
 function replaceParkingBlocker(run, blocker, interpreterBatch, interpreterCheck, now) {
   if (!blocker) return;
@@ -5658,12 +5580,6 @@ export const wakeParkedRun = saveGuard((args, ports) => lockedMutation(args, por
   commitRun(fresh, p, latest => {if (latest.parking?.at === input.at) delete latest.parking;});
   return {...done('Resumed the saved parked session.'), recovery: 'resumed'};
 }));
-
-export const resumeStoppedRun = saveGuard(async ({ref, cwd, packageRoot, coordinatorId, machine}, ports) => {
-  const args = {ref, cwd, packageRoot};
-  const result = await lockedMutation(args, ports, (input, p) => openRunLocked({...input, automaticResume: {coordinatorId, machine}}, p));
-  return result.recovery ? result : {...result, recovery: result.exitCode === 0 ? 'resumed' : 'skipped'};
-});
 
 async function startRunCommand(args, ports = {}) {
   if (Object.hasOwn(args, 'automaticOrigin')) return fail('Invalid automatic start context.');
