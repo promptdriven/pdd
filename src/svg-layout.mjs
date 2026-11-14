@@ -189,11 +189,8 @@ function viewControlSources(source, drawings) {
   }
   const associate = current => {
     const direct = linked(current.text.join('\n'));
-    const children = current.children.flatMap(associate);
     current.views = direct.length ? direct : named(current.title);
-    // A subsection may place its drawing in a nested preview after its controls.
-    if (!current.views.length) current.views = [...new Set(children)];
-    return [...new Set([...current.views, ...children])];
+    for (const child of current.children) associate(child);
   };
   associate(tree);
   tree.views = drawings;

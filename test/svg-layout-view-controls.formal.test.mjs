@@ -104,3 +104,41 @@ test('bounded filename state and complete stem associations', t => {
     }
   }
 });
+
+test('bounded unassociated parent controls reach drawings outside its subtree', t => {
+  const root = temp(t);
+  mkdirSync(join(root, 'views'));
+  const paths = ['views/now__stacked.ui.svg', 'views/agents__stacked.ui.svg', 'views/machines__stacked.ui.svg'];
+  const own = ['Approve', 'Connect', 'Restart'];
+  writeFileSync(join(root, 'screen.prompt.md'), `# Screen
+## Appearance
+Button "Help".
+### Now
+![Now](${paths[0]})
+Button "Approve".
+### Agents
+![Agents](${paths[1]})
+Button "Connect".
+## Machines
+![Machines](${paths[2]})
+Button "Restart".
+`);
+  // Every presence assignment for the shared control and each view's own control.
+  for (let mask = 0; mask < 64; mask++) {
+    const expected = [];
+    for (let i = 0; i < paths.length; i++) {
+      const required = ['Help', own[i]];
+      const present = required.filter((_, bit) => mask & (1 << (2 * i + bit)));
+      writeFileSync(join(root, paths[i]), `<svg>${present.map(label => `<text>${label}</text>`).join('')}</svg>`);
+      for (const label of required) if (!present.includes(label)) expected.push(`${paths[i]}|${label}`);
+    }
+    const actual = lintSvgLayouts({ root, files: ['screen.prompt.md', ...paths] })
+      .filter(w => w.includes('prompt control absent from drawing'))
+      .map(w => {
+        const match = w.match(/ -> (views\/[^:]+): control "([^"]+)": prompt control absent from drawing/);
+        assert.ok(match, w);
+        return `${match[1]}|${match[2]}`;
+      });
+    assert.deepEqual(actual.sort(), expected.sort(), `shared parent mask=${mask}`);
+  }
+});

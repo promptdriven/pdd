@@ -78,7 +78,12 @@
       "fenced-example/views/workflows__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Start Run</text></svg>",
       "fenced-example/views/machines__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Connect</text><text>Pause</text><text>Resume</text></svg>",
       "single/screen.prompt.md": "# Screen\n\nRegion tab-now, region tab-agents, region tab-workflows, region tab-machines.\nShared shell buttons with ids `tab-now`, `tab-agents`, `tab-workflows`, `tab-machines`.\n\n![Now](views/now__stacked.ui.svg)\n\n## Now\nButton \"Approve\".\n\n## Agents\nButton \"+ New Agent\".\n\n## Workflows\nButton \"Start Run\".\n\n## Machines\nButton \"Connect\". Button \"Pause\". Button \"Resume\".\n\n[Same](views/now__stacked.ui.svg#screen)\n![Equivalent link](./views/now__stacked.ui.svg)",
-      "single/views/now__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc></svg>"
+      "single/views/now__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc></svg>",
+      "shared-parent-outside-view/screen.prompt.md": "# Screen\n\n## Shared shell\nRegion tab-now, region tab-agents, region tab-workflows, region tab-machines.\n\n## Appearance\nShared shell buttons with ids `tab-now`, `tab-agents`, `tab-workflows`, `tab-machines`.\n\n### Now\n![Now](views/now__stacked.ui.svg)\n\nButton \"Approve\".\n\n### Workflows\n![Workflows](views/workflows__stacked.ui.svg)\n\nButton \"Start Run\".\n\n### Machines\n![Machines](views/machines__stacked.ui.svg)\n\nButton \"Connect\". Button \"Pause\". Button \"Resume\".\n\n## Agents\n![Agents](views/agents__stacked.ui.svg)\n\nButton \"+ New Agent\".\n\n",
+      "shared-parent-outside-view/views/now__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Approve</text></svg>",
+      "shared-parent-outside-view/views/agents__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>+ New Agent</text></svg>",
+      "shared-parent-outside-view/views/workflows__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Start Run</text></svg>",
+      "shared-parent-outside-view/views/machines__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Connect</text><text>Pause</text><text>Resume</text></svg>"
     }
   },
   "steps": [
@@ -364,6 +369,32 @@
         }
       ],
       "step_id": "fenced-example"
+    },
+    {
+      "entry_path": "prompts/cli/svg-layout.prompt.md",
+      "operation": "lintSvgLayouts",
+      "input": {
+        "root": "shared-parent-outside-view",
+        "files": [
+          "screen.prompt.md",
+          "views/now__stacked.ui.svg",
+          "views/agents__stacked.ui.svg",
+          "views/workflows__stacked.ui.svg",
+          "views/machines__stacked.ui.svg"
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": [
+            "Warning: SVG layout screen.prompt.md -> views/agents__stacked.ui.svg: control \"tab-now\": prompt control absent from drawing."
+          ]
+        }
+      ],
+      "step_id": "shared-parent-outside-view"
     },
     {
       "entry_path": "prompts/cli/svg-layout.prompt.md",
