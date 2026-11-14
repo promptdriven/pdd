@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 86e607ca37da882aa566f52ed83594cfe3b1a125726f9b64bd2077dd58d33559).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 90307af4ce2e5bb12dd4906d989bacf49d838ca4e719f9c7d626cad1e902ec06).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { findOwners, findTestPromptViolations, isTestOwnedPath } from './file-owner.mjs';
@@ -1467,39 +1467,34 @@ const safeRepoPath = path => typeof path === 'string' && Boolean(path) && !path.
 // Verify locally on the host whether every changed or owned prompt in the run declares a valid native-only contract.
 async function nativeOnlyPrompts(run, area, p, head = 'HEAD') {
   try {
+    const ask = askArea(run), pr1 = ask && prOf(run, ask.name), label = area ? prLabel(run, area) : 'the PR';
     let headSha = '';
     try { headSha = (await rawGit(p, run.root, 'rev-parse', '--verify', `${head}^{commit}`)).trim(); } catch {}
-    if (!commitSha(headSha) && head !== 'HEAD') {
-      try { headSha = (await rawGit(p, run.root, 'rev-parse', '--verify', 'HEAD^{commit}')).trim(); } catch {}
+    if (!commitSha(headSha) && head !== 'HEAD' && commitSha(pr1?.publishedHeadSha)) {
+      try { headSha = (await rawGit(p, run.root, 'rev-parse', '--verify', `${pr1.publishedHeadSha}^{commit}`)).trim(); } catch {}
     }
+    if (!commitSha(headSha)) return null;
     let comparison = '';
-    if (commitSha(headSha) && typeof run.baseBranch === 'string' && run.baseBranch) {
+    if (typeof run.baseBranch === 'string' && run.baseBranch) {
       try { comparison = (await rawGit(p, run.root, 'merge-base', headSha, `refs/remotes/origin/${run.baseBranch}`)).trim(); } catch {}
     }
     if (!commitSha(comparison) && commitSha(run.baseSha)) comparison = run.baseSha;
     if (!commitSha(comparison)) return null;
-    const target = commitSha(headSha) ? headSha : 'HEAD';
-    const diffFiles = (await rawGit(p, run.root, 'diff', '--no-color', '--no-renames', '--name-only', '-z', comparison, target)).split('\0').filter(Boolean);
-    const ask = askArea(run), pr1 = ask && prOf(run, ask.name), label = area ? prLabel(run, area) : 'the PR';
-    const retained = Array.isArray(pr1?.sourcePaths) && (label === 'PR 2' || (label === 'PR 1' && comparison === target)) ? pr1.sourcePaths.filter(safeRepoPath) : [];
+    const diffFiles = (await rawGit(p, run.root, 'diff', '--no-color', '--no-renames', '--name-only', '-z', comparison, headSha)).split('\0').filter(Boolean);
+    const retained = Array.isArray(pr1?.sourcePaths) && (label === 'PR 2' || (label === 'PR 1' && comparison === headSha)) ? pr1.sourcePaths.filter(safeRepoPath) : [];
     const files = [...new Set([...diffFiles, ...retained])];
     if (!files.length) return null;
 
-    let treeEntries = null;
-    if (commitSha(headSha)) {
-      try {
-        const treeOut = await rawGit(p, run.root, 'ls-tree', '-r', '-z', headSha);
-        treeEntries = new Map();
-        for (const row of treeOut.split('\0').filter(Boolean)) {
-          const match = /^(100644|100755|120000|160000) (blob|commit) ([a-f0-9]{40,64})\t(.+)$/.exec(row);
-          if (!match) return null;
-          treeEntries.set(match[4], { mode: match[1], type: match[2], oid: match[3] });
-        }
-      } catch { treeEntries = null; }
+    const treeRes = await p.execFile('git', ['ls-tree', '-r', '-z', headSha], { cwd: run.root, maxBuffer: 64 * 1024 * 1024 });
+    if (treeRes.code !== undefined && treeRes.code !== 0) return null;
+    const treeEntries = new Map();
+    for (const row of String(treeRes.stdout ?? '').split('\0').filter(Boolean)) {
+      const match = /^(100644|100755|120000|160000) (blob|commit) ([a-f0-9]{40,64})\t(.+)$/.exec(row);
+      if (!match) return null;
+      treeEntries.set(match[4], { mode: match[1], type: match[2], oid: match[3] });
     }
     const blobCache = new Map();
     const loadBlobs = async requested => {
-      if (!treeEntries) return;
       const needed = requested.filter(path => !blobCache.has(path) && treeEntries.get(path)?.type === 'blob' && treeEntries.get(path).mode !== '160000');
       const oids = [...new Set(needed.map(path => treeEntries.get(path).oid))];
       if (!oids.length) return;
@@ -1514,16 +1509,14 @@ async function nativeOnlyPrompts(run, area, p, head = 'HEAD') {
       for (const path of needed) blobCache.set(path, byOid.get(treeEntries.get(path).oid));
     };
 
-    const headRegular = treeEntries
-      ? [...treeEntries.entries()].filter(([, entry]) => entry.mode === '100644' || entry.mode === '100755').map(([path]) => path).sort()
-      : gitFiles(run.root);
+    const headRegular = [...treeEntries.entries()].filter(([, entry]) => entry.mode === '100644' || entry.mode === '100755').map(([path]) => path).sort();
     const visible = new Set(headRegular);
 
     const promptSet = new Set(files.filter(path => path.endsWith('.prompt.md')));
     const nonPrompts = files.filter(path => !path.endsWith('.prompt.md') && !isStoryPath(path) && !isTestOwnedPath(path));
     if (nonPrompts.length) {
-      if (treeEntries) await loadBlobs(['pdd-bindings.json', ...headRegular.filter(path => path.endsWith('.prompt.md')), ...nonPrompts]);
-      const owned = treeEntries ? findOwners({ root: run.root, paths: nonPrompts }, {
+      await loadBlobs(['pdd-bindings.json', ...headRegular.filter(path => path.endsWith('.prompt.md')), ...nonPrompts]);
+      const owned = findOwners({ root: run.root, paths: nonPrompts }, {
         files: () => headRegular,
         read: (path, limit) => {
           const parts = path.split('/');
@@ -1537,7 +1530,7 @@ async function nativeOnlyPrompts(run, area, p, head = 'HEAD') {
           if (!buf) throw Error('Committed file unavailable.');
           return buf.subarray(0, limit);
         },
-      }) : findOwners({ root: run.root, paths: nonPrompts });
+      });
       for (const row of owned.files) {
         if (!row.certain && row.source !== 'prose') return null;
         for (const owner of row.owners) promptSet.add(owner);
@@ -1545,17 +1538,13 @@ async function nativeOnlyPrompts(run, area, p, head = 'HEAD') {
     }
 
     const jsonFiles = files.filter(item => item.endsWith('.json'));
-    if (treeEntries && jsonFiles.length) await loadBlobs(jsonFiles);
+    if (jsonFiles.length) await loadBlobs(jsonFiles);
     for (const path of jsonFiles) {
+      const entry = treeEntries.get(path);
+      if (!entry) continue;
+      if (entry.mode !== '100644' && entry.mode !== '100755') return null;
       let raw, doc;
-      if (treeEntries) {
-        const entry = treeEntries.get(path);
-        if (!entry) continue;
-        if (entry.mode !== '100644' && entry.mode !== '100755') return null;
-        try { raw = new TextDecoder('utf-8', { fatal: true }).decode(blobCache.get(path)); } catch { continue; }
-      } else {
-        try { raw = readFileSync(join(run.root, path), 'utf8'); } catch { continue; }
-      }
+      try { raw = new TextDecoder('utf-8', { fatal: true }).decode(blobCache.get(path)); } catch { continue; }
       try { doc = JSON.parse(raw); } catch { continue; }
       if (doc?.schema_version !== 'prompt-runtime.program-scenario.v1') continue;
       if (!Array.isArray(doc.steps)) return null;
@@ -1564,17 +1553,6 @@ async function nativeOnlyPrompts(run, area, p, head = 'HEAD') {
 
     const paths = [...promptSet].sort();
     if (!paths.length || paths.some(path => !safeRepoPath(path) || !visible.has(path))) return null;
-    if (!treeEntries) {
-      const verified = [];
-      for (const path of paths) {
-        const parsed = readPrompt(run.root, visible, path);
-        if (promptRefusal(parsed, 'interface')) return null;
-        const reason = typeof parsed.interface?.reason === 'string' ? parsed.interface.reason.trim() : '';
-        if (parsed.interface?.kind !== 'native-only' || !reason) return null;
-        verified.push({ path, reason });
-      }
-      return verified;
-    }
 
     let workspace = Object.freeze({ configured: false, allowed_paths: Object.freeze([]) });
     if (treeEntries.has('pdd-workspace.json')) {
@@ -1582,6 +1560,7 @@ async function nativeOnlyPrompts(run, area, p, head = 'HEAD') {
       if (wsEntry.mode !== '100644' && wsEntry.mode !== '100755') return null;
       await loadBlobs(['pdd-workspace.json']);
       const wsBuf = blobCache.get('pdd-workspace.json');
+      if (!wsBuf) return null;
       workspace = loadRuntimeWorkspace({ root: run.root }, {
         stat: () => ({ exists: true, is_symlink: false, size: wsBuf.byteLength }),
         read: () => ({ content: new TextDecoder('utf-8', { fatal: true }).decode(wsBuf) }),
