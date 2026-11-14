@@ -63,6 +63,10 @@ For `live.alive`, return `state: running` and `exact: true` unless a valid saved
 `session: {agent, id}` only when `live.sessionId` is present, selecting the
 provided agent or defaulting to `chat.agent`. This lifecycle matching flag is
 distinct from `chatSession`’s stricter UUID custody proof.
+Copy the supplied `live.launchFailure` exit code and message unchanged into
+launch-exit evidence; an already-failed chat retains its saved code and evidence
+through unavailable observations. The fixed diagnostic above belongs to the
+native receipt producer, not to this transition’s supplied input.
 For a never-confirmed chat (`starting` or `unknown`), authoritative agent absence
 with `live.launchFailure` gives `state: failed`, `code: agent_launch_failed` and
 `evidence: {kind: launch-exit, at, paneId, exitCode, message}` immediately, even
@@ -458,7 +462,7 @@ Export countReasons(kept) to count the reason fields, mergeReasonCounts(...group
 ```json
 {
   "status": "draft",
-  "prose_sha256": "c13fc39cc628b46ba45a3bbed64474d136cf1c46bb6d15e0667618ac50606cfa",
+  "prose_sha256": "4c57acced576723bd12aee119a55132e5128850267dbf508fc6a34e13c4bfd5f",
   "entries": [
     {
       "operation": "sendToChat",
