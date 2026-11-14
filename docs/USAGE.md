@@ -157,7 +157,7 @@ PDD is seven skills. A skill is a folder of plain Markdown that your agent reads
 | `pdd-feature` | A workflow for new behavior |
 | `pdd-product` | Map a whole product and plan small feature runs |
 | `pdd-bug` | A workflow for something that is broken |
-| `pdd-small-change` | A workflow for a small change that is easy to undo |
+| `pdd-small-change` | A workflow for changes outside PDD (docs, config, CI, packages or tests) |
 | `pdd-setup` | Add the repo's PDD block and ignore rule in your chat |
 | `pdd-graph` | Read the saved issue dependency graph and explain blockers |
 
