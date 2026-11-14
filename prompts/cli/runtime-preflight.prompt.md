@@ -18,6 +18,9 @@ fifth argument of `readPrompt`; expand references through that same port. Preser
 the existing schema, status, hash, call-closure and refusal rules. Without the
 port, retain root-checkout reading. Story identity, criteria and authored scenario
 validation remain rooted in the product checkout; the overlay supplies no answers.
+For a prepared prompt, raw prompt hashes identify the prepared authored bytes,
+including a draft path absent on disk, rather than a replaced root original.
+This preserves the submitted source baseline when reopening a product Try.
 
 Export `promptMarkdownTargets(text, fromPath, visible)` returning declared Markdown `.prompt.md` dependency paths resolved against `visible`, and export `promptSchemaRefusals(root, found, prompt, prompts, seen = new Set(), {allowMissingInterfaces = false} = {})` as the common
 parse/schema check for one prompt and its called prompts. Return all reached

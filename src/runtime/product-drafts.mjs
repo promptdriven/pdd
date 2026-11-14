@@ -1,4 +1,4 @@
-// Generated from prompts/cli/product-drafts.prompt.md (sha256: 10a9a4319d28745b35112fea62581c59b8ccac86675122f313d15d47c5b63d7e).
+// Generated from prompts/cli/product-drafts.prompt.md (sha256: f546e466c781c37a7b2ae86993a54b6cff76f0331d47b5498dc949d4bd81f645).
 import { execFileSync } from 'node:child_process';
 import { readdirSync, realpathSync } from 'node:fs';
 import { join, posix } from 'node:path';
@@ -50,7 +50,7 @@ export function withProductDrafts({root, parts, snapshot, parseProductDocuments,
     if(index===drafts.length) {
       const overlay=new Map(files.map(f=>[f.path,f.bytes]));
       const owner=path=>drafts.find(d=>path===d.folder || path.startsWith(d.folder+'/') || path===d.map) || (claims.has(path) ? drafts.find(d=>d.part===claims.get(path)) : null);
-      const combined={validateCapture(sources){ for(const file of sources) { const d=owner(file.path); if(d && !overlay.has(file.path)) bad(`Part ${d.part}: ${file.path} is missing from its draft. Complete or end the draft.`); } },statFile(path,options){if(overlay.has(path)) return {exists:true,is_symlink:false,size:overlay.get(path).length}; const d=owner(path); if(d) { if(path===d.map || path===`prompts/${d.part}/seed.json`) return {exists:false,is_symlink:false,size:0}; bad(`Part ${d.part}: ${path} is missing from its draft. Complete or end the draft.`); } return snapshot.statFile(path,options);},
+      const combined={validateCapture(sources, capture={}){ for(const path of [...sources.map(file=>file.path),...(capture.references??[]).map(ref=>ref.target.split('#')[0]),...(capture.reads??[]).map(read=>read.path)]) { const d=owner(path); if(d && !overlay.has(path)) bad(`Part ${d.part}: ${path} is missing from its draft. Complete or end the draft.`); } },statFile(path,options){if(overlay.has(path)) return {exists:true,is_symlink:false,size:overlay.get(path).length}; const d=owner(path); if(d) { if(path===d.map || path===`prompts/${d.part}/seed.json`) return {exists:false,is_symlink:false,size:0}; bad(`Part ${d.part}: ${path} is missing from its draft. Complete or end the draft.`); } return snapshot.statFile(path,options);},
         readFile(path){if(overlay.has(path)) return Buffer.from(overlay.get(path)); const d=owner(path); if(d) bad(`Part ${d.part}: ${path} is missing from its draft. Complete or end the draft.`); return snapshot.readFile(path);}};
       return prepare(combined,files);
     }

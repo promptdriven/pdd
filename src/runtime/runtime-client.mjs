@@ -4367,7 +4367,7 @@ function captureProductTry(root,test,options,ports) {
     return [...draftFiles,...composition.files.map(file=>({path:file.path,bytes:file.content,...(file.path===composition.appMapPath?{role:'app-map'}:{})})),{path:test.path,bytes:expanded.text}];
     });
   }});
-  draftSource?.validateCapture?.(capture.sources);
+  draftSource?.validateCapture?.(capture.sources,capture);
   return {capture,composition,maxTapCalls};
 }
 const productOptions = setup => setup ? {'--product':true,...(setup.parts?{'--parts':setup.parts.join(',')}:{}),...(setup.journey?{'--journey':setup.journey}:{})} : {};
@@ -4702,7 +4702,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
         throw new Stop(2, `A Try for "${test.title}" is already open. --app-map and --tab apply only to a new Try: run pdd simulate ${test.story} --new (it stops the open Try first).`);
       }
       if (live && (context.doorMode || context.agentConnection) && !options['--new']) {
-        const problem=tryPromptProblem(root,found,test,record,capture,ports);
+        const problem=tryPromptProblem(root,preflightFound,test,record,capture,ports);
         if (problem) throw new Stop(context.doorMode ? 125 : 4, `${problem} Run pdd simulate STORY${options['--serve'] !== undefined ? ' --serve' : ''} --new.`);
       }
       if (answer?.state === 'passed' && answer.result?.session?.state === 'paused' && !options['--new']) {

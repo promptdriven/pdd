@@ -56,8 +56,12 @@ const extract = (tar, path) => {
 };
 function answer(entry, fake) {
   if (entry.url === '/v1/version') return {status:200, json:{features:['product-parts-v1']}};
-  if (entry.command === 'lint') return {status:200, json:fake.lint(entry.request.requestId,
-    ['phone/phone','server/server','barista/board'].map(name=>({path:`prompts/${name}.prompt.md`,state:'draft',admission_state:'draft',interface:{calls:[]}})))};
+  if (entry.command === 'lint') {
+    const listed=spawnSync('tar',['-tf','-'],{input:entry.tar,encoding:'utf8'});
+    assert.equal(listed.status,0,listed.stderr);
+    return {status:200, json:fake.lint(entry.request.requestId,
+      listed.stdout.split('\n').filter(path=>path.endsWith('.prompt.md')).map(path=>({path,state:'draft',admission_state:'draft',interface:{calls:[]}})))};
+  }
   if (entry.method === 'POST') return {status:200, json:fake.tryJob(entry.request.requestId)};
   if (entry.url.endsWith('/tests') || entry.url.endsWith('/approvals')) return {status:200,json:{tests:[],approvals:[]}};
   return {status:200,json:fake.tryJob(entry.url.split('/').at(-1))};
@@ -186,4 +190,43 @@ test('drafts from another Git repository refuse before uploading any source', as
   assert.match(result.text,/phone/);
   assert.ok(result.text.includes(setup.home));
   assert.equal(fake.posts.length,0);
+});
+
+test('reference expansion cannot hide root fallback inside a draft-owned folder', async t=>{
+  const setup=fixture(t),fake=await fakeRuntime(t,answer);
+  const contract='prompts/phone/root-only-contract.md';
+  write(setup.root,contract,read(join(setup.root,'contracts/phone-server.md')));
+  const prompt='prompts/journey-only.prompt.md';
+  write(setup.root,prompt,read(join(setup.root,'prompts/phone/phone.prompt.md')).replaceAll('contracts/phone-server.md',contract).replaceAll('../../','../'));
+  assert.deepEqual(fillHashes({root:setup.root,targets:[prompt]}).refused,[]);
+  const scenario=JSON.parse(read(join(setup.root,'tests/J1-coffee-pickup.json')));
+  scenario.steps[0].entry_path=prompt;
+  write(setup.root,'tests/J1-coffee-pickup.json',JSON.stringify(scenario));
+  const result=await open(setup,fake);
+  assert.notEqual(result.code,0,result.text);
+  assert.match(result.text,/phone/);
+  assert.ok(result.text.includes(contract),result.text);
+  assert.equal(fake.posts.length,0);
+});
+
+test('a new draft-only prompt retains its saved source baseline on product Try reuse', async t=>{
+  const setup=fixture(t),fake=await fakeRuntime(t,answer);
+  const original='prompts/phone/phone.prompt.md',added='prompts/phone/draft-only.prompt.md';
+  write(setup.drafts.phone,added,read(join(setup.drafts.phone,original)));
+  const map=read(join(setup.drafts.phone,'app/maps/phone.json')).replaceAll(original,added);
+  write(setup.drafts.phone,'app/maps/phone.json',map);
+  write(setup.root,'tests/J1-coffee-pickup.json',read(join(setup.root,'tests/J1-coffee-pickup.json')).replaceAll(original,added));
+  assert.equal(existsSync(join(setup.root,added)),false);
+  const first=await open(setup,fake);
+  assert.equal(first.code,0,first.text);
+  const second=await open(setup,fake);
+  assert.equal(second.code,0,second.text);
+  const door=await open(setup,fake,{'--cli':true});
+  // The fixture has no terminal entry. Reuse must reach that eligibility check,
+  // rather than reject a draft prompt that is present in its captured baseline.
+  assert.equal(door.code,125,door.text);
+  assert.doesNotMatch(door.text,/A prompt changed or this Try has no source record/);
+  assert.match(door.text,/CLI|command.line|terminal/i);
+  assert.equal(fake.posts.length,2);
+  assert.equal(fake.deletes.length,0);
 });

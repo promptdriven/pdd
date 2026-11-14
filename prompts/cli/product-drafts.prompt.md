@@ -8,6 +8,8 @@ The combined source also supplies `validateCapture(sources)`, accepting the
 final capture's `{path,bytes}` records. After root capture, the client must call
 it to refuse any root fallback inside an active draft's owned folder or map,
 including references reached only by scenario steps or prompt dependencies.
+Also audit reference targets and captured reads: expansion must not hide a root
+fallback inside a draft-owned path merely by omitting its raw bytes from upload.
 This native source adapter lets `pdd simulate --product` explore connected prompt
 space before part code exists or merges. Existing composition owns map assembly,
 tap chains, shared world semantics and limits.
@@ -69,7 +71,7 @@ tap chains, shared world semantics and limits.
   "kind": "native-only",
   "reason": "Verifies real Git common-directory/worktree identity and stable source snapshots across multiple checkouts; ordinary Node tests exercise these filesystem and Git boundaries.",
   "status": "draft",
-  "prose_sha256": "f25e8986a5698bba01482ebded83b4a1d6803ee3ab1fe7b677dcb19c634092f2"
+  "prose_sha256": "f546e466c781c37a7b2ae86993a54b6cff76f0331d47b5498dc949d4bd81f645"
 }
 ```
 </details>

@@ -2089,6 +2089,7 @@ function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadR
           const original = snapshots.get(file.path);
           return original?.bytes ? [[file.path,sha256(original.bytes)]] : [];
         }
+        if (overlay.has(file.path)) return [[file.path,sha256(bytes(overlay.get(file.path)))]];
         const original=inspectRaw(file.path,'Prompt snapshot',true);
         return original.stat ? [[file.path,sha256(bytes(original))]] : [];
       } catch (error) {
