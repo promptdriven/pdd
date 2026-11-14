@@ -90,9 +90,18 @@ test('2922 status keeps grouping, fields and active chat/PR refresh', async t =>
   const inspect = async (options, group) => {
     const start = f.h.calls.length;
     const result = await runStatus({ cwd: f.source, json: true, ...options }, f.ports);
-    const row = assertJson(result);
+    let row;
+    if (options.all) {
+      assert.equal(result.exitCode, 0);
+      const doc = JSON.parse(result.message);
+      assert.equal(doc.version, 1);
+      row = doc.runs.find(run => run.repo === cases.expected.selectedRun.repo && run.number === cases.expected.selectedRun.number);
+      assert.ok(row, 'Select the run by repository and issue');
+      for (const field of ['steps', 'chats', 'requests', 'ordinaryOwnership']) assert.ok(!Object.hasOwn(row, field), field);
+    } else row = assertJson(result);
     assert.equal(row.group, group);
-    for (const field of ['ref', 'repo', 'number', 'workflow', 'area', 'group', 'words', 'prs', 'stories', 'updatedAt', 'root', 'runDir', 'viewCommand', 'requests', 'ordinaryOwnership']) assert.ok(Object.hasOwn(row, field), field);
+    for (const field of ['ref', 'repo', 'number', 'workflow', 'area', 'group', 'words', 'prs', 'stories', 'updatedAt', 'root', 'runDir', 'viewCommand']) assert.ok(Object.hasOwn(row, field), field);
+    if (!options.all) for (const field of ['requests', 'ordinaryOwnership']) assert.ok(Object.hasOwn(row, field), field);
     assert.ok(f.h.calls.slice(start).some(args => args[0] === 'agent' && args[1] === 'get'), 'Active chat observation still occurs');
     return row;
   };
