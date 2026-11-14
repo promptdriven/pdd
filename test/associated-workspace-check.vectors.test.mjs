@@ -18,8 +18,7 @@ for (const { step, index, stage, mismatch, label } of cases) test(`scenario: ${l
     const target = translate(path);
     mkdirSync(dirname(target), { recursive: true });
     const content = path.endsWith('/batch.json') || path.endsWith('/summary.json')
-      ? file.content.replaceAll('/producer', translate('/producer')) : path === '/run/tests/order.json'
-        ? JSON.stringify({ ...JSON.parse(file.content), schema_version: 'prompt-runtime.program-scenario.v1' }) : file.content;
+      ? file.content.replaceAll('/producer', translate('/producer')) : file.content;
     writeFileSync(target, content);
   }
   if (mismatch) {
