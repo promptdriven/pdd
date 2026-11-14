@@ -144,7 +144,7 @@ test('small-change: run exits at once, done reaches the gate, changes go to the 
   const first = run.chats[0], pane = f.herdr.paneOf(first);
   assert.equal(pane.commands.length, 1);
   // 2901: the caller has no login variables, so each one is unset and the Herdr server's old copy cannot decide the login.
-  assert.match(pane.commands[0], /^cd '[^']+' && env -u PDD_SUITE_QUEUE -u PDD_VM_SUITE_LOCK -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u CLAUDE_CODE_OAUTH_TOKEN -u ANTHROPIC_BASE_URL -u CLAUDE_CODE_USE_BEDROCK -u CLAUDE_CODE_USE_VERTEX PDD_AGENT_SESSION=1 PDD_BIN=\S+ CLAUDE_CONFIG_DIR=\S+ claude --dangerously-skip-permissions --session-id [0-9a-f-]{36} "\$\(cat '.+plan-start\.md'\)"$/);
+  assert.match(pane.commands[0], /^cd '[^']+' && sh -c '[^']+' '[^']+\.exit' env -u PDD_SUITE_QUEUE -u PDD_VM_SUITE_LOCK -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u CLAUDE_CODE_OAUTH_TOKEN -u ANTHROPIC_BASE_URL -u CLAUDE_CODE_USE_BEDROCK -u CLAUDE_CODE_USE_VERTEX PDD_AGENT_SESSION=1 PDD_BIN=\S+ CLAUDE_CONFIG_DIR=\S+ claude --dangerously-skip-permissions --session-id [0-9a-f-]{36} "\$\(cat '.+plan-start\.md'\)"$/);
   assert.ok(pane.commands[0].startsWith(`cd '${run.root}' && `), 'the chat starts in the run worktree (2903)');
   assert.equal(first.session.id, pane.agent.agent_session.value);
   const message = readFileSync(join(run.runDir, 'plan-start.md'), 'utf8');
@@ -284,7 +284,7 @@ for (const name of ['bug', 'feature']) {
     assert.equal((await f.run()).exitCode, 0);
     let run = f.record();
     assert.deepEqual(areas.map(([area]) => area), ['story', 'prompt-pr', 'code']);
-    assert.match(f.herdr.paneOf(run.chats[0]).commands[0], /^cd '[^']+' && env -u PDD_SUITE_QUEUE -u PDD_VM_SUITE_LOCK -u OPENAI_API_KEY -u CODEX_API_KEY -u CODEX_ACCESS_TOKEN -u OPENAI_FEDERATION_RULE_ID -u OPENAI_IDENTITY_TOKEN_FILE -u OPENAI_WORKLOAD_IDENTITY_CONTEXT -u OPENAI_BASE_URL -u CODEX_HOME PDD_AGENT_SESSION=1 PDD_BIN=\S+ codex --no-daemon --dangerously-bypass-approvals-and-sandbox -c 'projects=\{".+"=\{trust_level="trusted"\}\}' -c 'shell_environment_policy\.set\.PDD_BIN="[^"]+"' -c 'shell_environment_policy\.set\.PDD_AGENT_SESSION="1"' -c 'features\.multi_agent_v2\.max_concurrent_threads_per_session=5' "\$\(cat '.+story-start\.md'\)"$/);
+    assert.match(f.herdr.paneOf(run.chats[0]).commands[0], /^cd '[^']+' && sh -c '[^']+' '[^']+\.exit' env -u PDD_SUITE_QUEUE -u PDD_VM_SUITE_LOCK -u OPENAI_API_KEY -u CODEX_API_KEY -u CODEX_ACCESS_TOKEN -u OPENAI_FEDERATION_RULE_ID -u OPENAI_IDENTITY_TOKEN_FILE -u OPENAI_WORKLOAD_IDENTITY_CONTEXT -u OPENAI_BASE_URL -u CODEX_HOME PDD_AGENT_SESSION=1 PDD_BIN=\S+ codex --no-daemon --dangerously-bypass-approvals-and-sandbox -c 'projects=\{".+"=\{trust_level="trusted"\}\}' -c 'shell_environment_policy\.set\.PDD_BIN="[^"]+"' -c 'shell_environment_policy\.set\.PDD_AGENT_SESSION="1"' -c 'features\.multi_agent_v2\.max_concurrent_threads_per_session=5' "\$\(cat '.+story-start\.md'\)"$/);
     for (const [index, [area, steps]] of areas.entries()) {
       // #3042 red pair: PR 1's CI is red when the code PR opens, so PR 2 carries PR 1 and never says "merge it first".
       if (area === 'code') f.ci = [{ conclusion: 'FAILURE' }];
@@ -1131,8 +1131,8 @@ test('0.1.7 #2: status says the chat stopped when no agent runs in its pane, and
   f.ports.timeZone = 'UTC';
   await f.run(); const run = f.record(), pane = f.herdr.paneOf(run.chats[0]);
   pane.agent = null; // The agent ended; the tab holds a plain shell.
-  // Herdr sees a new chat's agent only after it starts, so a chat that just started still "works".
-  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^State: the agent works on scope$/m);
+  // Initial startup observed this agent running, so its disappearance is definite end evidence.
+  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^State: the chat stopped\. Run pdd workflow open 17 to start it again\.$/m);
   f.tick(60000);
   const shown = await runStatus({ ref: '17', cwd: f.source }, f.ports);
   assert.equal(shown.exitCode, 0);

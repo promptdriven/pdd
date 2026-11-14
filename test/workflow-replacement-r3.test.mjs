@@ -66,7 +66,14 @@ for(const mode of ['shell','agent','unknown']) test(`${scenarioTitle({shell:'she
 });
 
 for (const throws of [false,true]) test(`attach handoff persists observations and never writes after ${throws?'failure':'completion'}`,async t=>{
- const f=await fixture(t,{agent:'codex'});await f.run();
+ const f=await fixture(t,{agent:'codex'});
+ const herdr=f.ports.herdr;
+ // The UUID is learned by open; startup can see the process without session metadata yet.
+ f.ports.herdr=async args=>{
+  const result=await herdr(args);
+  return args[0]==='agent'&&args[1]==='get' ? {result:{agent:{...result.result.agent,agent_session:null}}} : result;
+ };
+ await f.run();f.ports.herdr=herdr;
  const original=f.record().chats.at(-1);
  const session='00000000-0000-4000-8000-000000000088';
  f.herdr.paneOf(original).agent.agent_session.value=session;

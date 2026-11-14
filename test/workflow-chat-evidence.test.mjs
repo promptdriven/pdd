@@ -13,7 +13,15 @@ const CODEX_SESSION = '33333333-3333-4333-8333-333333333333';
 async function started(t, agent) {
   const f = await fixture(t, { agent });
   if (agent === 'codex') { const dir = join(f.base, 'codexhome'); mkdirSync(dir); f.ports.env.CODEX_HOME = dir; }
+  const herdr = f.ports.herdr;
+  // Keep this test's acknowledged initial launch genuinely unobserved, including startup's own inspection.
+  f.ports.herdr = async args => {
+    const result = await herdr(args);
+    if (args[0] === 'pane' && args[1] === 'run') f.herdr.panes.find(pane => pane.pane_id === args[2]).agent = null;
+    return result;
+  };
   assert.equal((await f.run()).exitCode, 0);
+  f.ports.herdr = herdr;
   const chat = f.record().chats.at(-1);
   assert.ok(chat, 'The started chat is saved');
   // The launch was acknowledged, but Herdr never shows an agent in the pane.
