@@ -1,4 +1,4 @@
-// Generated from prompts/cli/skills-install.prompt.md (sha256: 91f679030187c9a265438d59decaa4d68d09a7c6c6f8d3b2d116778ebea730d3).
+// Generated from prompts/cli/skills-install.prompt.md (sha256: 00ad884238d2710bc65a0c8d391f1bb6bb00d45312918778f082780d96eae57b).
 import { createHash } from 'node:crypto';
 import { cpSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
@@ -120,7 +120,7 @@ function layout({ packageRoot, cwd, home, claudeConfigDir }) {
     { agent: 'Codex', root: join(home, '.agents/skills'), read: [join(cwd, '.agents/skills'), join(home, '.agents/skills')] },
     { agent: 'Claude', root: claudeRoot, read: [join(cwd, '.claude/skills'), claudeRoot] },
   ];
-  return { version, skills, agents };
+  return { version, skills, agents, claudeRoot };
 }
 
 export function setupSkills(options) {
@@ -128,8 +128,37 @@ export function setupSkills(options) {
   return agents.map(agent => setupAgent(agent, skills, version));
 }
 
-// The same find and stale check with no writes, for pdd --version.
+// The same find and stale check with no writes, for pdd --version (#3324 also inspects .codex/skills and partial folders).
 export function findSkills(options) {
-  const { version, skills, agents } = layout(options);
-  return agents.map(({ agent, read }) => ({ agent, ...findIn(read, skills, version) }));
+  const { version, skills, agents, claudeRoot } = layout(options);
+  const results = agents.map(({ agent, read }) => ({ agent, ...findIn(read, skills, version) }));
+  const seen = new Set(results.map(result => result.found).filter(Boolean));
+  const { cwd, home, codexHome } = options;
+  const candidates = [
+    [join(cwd, '.agents/skills'), 'Codex'],
+    [join(cwd, '.codex/skills'), 'Codex'],
+    [join(home, '.agents/skills'), 'Codex'],
+    ...(codexHome && isAbsolute(codexHome) ? [[join(codexHome, 'skills'), 'Codex']] : []),
+    [join(home, '.codex/skills'), 'Codex'],
+    [join(cwd, '.claude/skills'), 'Claude'],
+    [claudeRoot, 'Claude'],
+  ];
+  for (const [folder, agent] of candidates) {
+    if (seen.has(folder)) continue;
+    seen.add(folder);
+    const staleSkills = skills.flatMap(({ name, digest: sum }) => {
+      if (!hasSkill(folder, name)) return [];
+      const status = foundState(join(folder, name), version, sum);
+      return status ? [{ name, ...status }] : [];
+    });
+    if (staleSkills.some(({ state }) => state === 'older')) {
+      results.push({
+        agent,
+        found: folder,
+        stale: staleSkills.every(({ state }) => state === 'older') ? 'older' : 'differs',
+        staleSkills,
+      });
+    }
+  }
+  return results;
 }

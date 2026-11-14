@@ -356,3 +356,182 @@ test('S16 #3260 with no job reading CI, intake reads the latest runs at most eve
   w.advance(6 * MIN); r = await w.tick();
   assert.ok(w.job(18, 'build'), 'a started run ends the hold'); assert.equal(machine(w).ciDown, null);
 });
+
+function scriptedPool(w, entries) {
+  const exhausted = new Map();
+  const pick = () => {
+    const now = w.now(), cooling = [];
+    for (const entry of entries) {
+      const cd = exhausted.get(entry.id);
+      if (cd && cd.until > now) { cooling.push(cd); continue; }
+      return {
+        state: 'ready',
+        configured: true,
+        poolSize: entries.length,
+        login: entry,
+        agent: { id: entry.id, kind: entry.kind, command: entry.command },
+        env: { HOME: '/Users/pool', ...entry.env },
+      };
+    }
+    const resetTimes = cooling.map(c => c.until);
+    return {
+      state: 'exhausted',
+      configured: true,
+      poolSize: entries.length,
+      resetAt: resetTimes.length ? Math.min(...resetTimes) : null,
+      cooling,
+      unavailable: [],
+    };
+  };
+  return {
+    exhausted,
+    ports: {
+      selectLogin: async () => pick(),
+      exhaustLogin: async ({ loginId, resetAt, reason }) => {
+        const until = resetAt ?? (w.now() + (entries.find(e => e.id === loginId)?.cooldownMs ?? 30 * MIN));
+        exhausted.set(loginId, { id: loginId, until, resetAt: until, reason });
+        return pick();
+      },
+    },
+  };
+}
+
+test('S17 #3252 mid-build and mid-review pool rotation (Codex -> Gemini -> Claude): rotates in-place with isolated env, zero strikes, zero holdIssue, zero streak, and merges', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  const pool = scriptedPool(w, [
+    { id: 'codex-pro', kind: 'codex', command: '/bin/codex', env: { CODEX_HOME: '/Users/pool/.codex-pro' }, cooldownMs: 2 * HOUR },
+    { id: 'gemini-main', kind: 'gemini', command: '/bin/gemini', env: { GEMINI_CLI_HOME: '/Users/pool/.gemini-main' }, cooldownMs: 2 * HOUR },
+    { id: 'claude-team', kind: 'claude', command: '/bin/claude', env: { CLAUDE_CONFIG_DIR: '/Users/pool/.claude-team' }, cooldownMs: 2 * HOUR },
+  ]);
+  const alerts = [], tick = () => w.tick({ ...pool.ports, alert: async a => alerts.push(a) });
+
+  // 1. Issue #17 starts build on codex-pro.
+  w.issue(17);
+  await tick();
+  const build1 = w.job(17, 'build');
+  assert.equal(build1.command, '/bin/codex');
+  assert.equal(build1.env.CODEX_HOME, '/Users/pool/.codex-pro');
+
+  // 2. codex-pro exits with usage limit -> rotates build in-place to gemini-main!
+  w.say(17, 'build', JSON.stringify({ type: 'error', message: 'You have hit your usage limit.' }));
+  w.finish(17, 'build', { code: 1 });
+  await tick();
+  const build2 = w.job(17, 'build');
+  assert.notEqual(build2.id, build1.id);
+  assert.equal(build2.command, '/bin/gemini');
+  assert.equal(build2.env.GEMINI_CLI_HOME, '/Users/pool/.gemini-main');
+  assert.equal(build2.env.CODEX_HOME, undefined, 'CODEX_HOME is stripped on Gemini rotation');
+  assert.equal(machine(w).streak, 0, 'pool rotation adds nothing to streak');
+
+  // 3. gemini-main opens PR #100, then hits 429 RESOURCE_EXHAUSTED during review -> rotates review to claude-team without consuming review attempts!
+  const { pr } = w.build(17);
+  await tick();
+  const rev1 = w.job(17, 'review');
+  assert.equal(rev1.command, '/bin/gemini');
+  w.say(17, 'review', JSON.stringify({ type: 'result', status: 'error', error: { message: '429 RESOURCE_EXHAUSTED: Quota has been exhausted' } }));
+  w.finish(17, 'review', { code: 1 });
+  w.suite(17, 0);
+  await tick();
+  const rev2 = w.job(17, 'review');
+  assert.notEqual(rev2.id, rev1.id);
+  assert.equal(rev2.command, '/bin/claude');
+  assert.equal(rev2.env.CLAUDE_CONFIG_DIR, '/Users/pool/.claude-team');
+  assert.equal(rev2.env.GEMINI_CLI_HOME, undefined);
+  assert.equal(jobFile(w, 17).review.attempts, 1, 'quota rotation does not burn one of the 2 review attempts');
+
+  // 4. claude-team passes review -> PR merges cleanly with 0 alerts, 0 strikes, 0 holds!
+  w.review(17, 'PASS');
+  await tick(); await tick();
+  assert.deepEqual(w.github.merges, [pr.number]);
+  assert.equal(alerts.length, 0);
+  assert.equal(history(w).filter(r => r.strike || r.hold).length, 0);
+  assert.equal(machine(w).streak, 0);
+});
+
+test('S18 #3252 full-pool exhaustion during PR review/repair: pauses cleanly with zero jammed slots, zero burned retries, one deduplicated alert, status resetAt, and auto-resumes after resetAt', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  const pool = scriptedPool(w, [
+    { id: 'codex-main', kind: 'codex', command: '/bin/codex', env: { CODEX_HOME: '/Users/pool/.codex' }, cooldownMs: 2 * HOUR },
+    { id: 'claude-main', kind: 'claude', command: '/bin/claude', env: { CLAUDE_CONFIG_DIR: '/Users/pool/.claude' }, cooldownMs: 90 * MIN },
+  ]);
+  const alerts = [], tick = () => w.tick({ ...pool.ports, alert: async a => alerts.push(a) });
+
+  w.issue(17); w.issue(18);
+  await tick();
+  const { pr } = w.build(17);
+  await tick();
+  w.suite(17, 0);
+
+  // Exhaust codex-main, then claude-main during review.
+  w.say(17, 'review', JSON.stringify({ type: 'error', message: 'You are out of credits.' }));
+  w.finish(17, 'review', { code: 1 });
+  await tick();
+  w.say(17, 'review', JSON.stringify({ type: 'result', is_error: true, result: 'You have hit your usage limit.' }));
+  w.finish(17, 'review', { code: 1 });
+  const pausedTick = await tick();
+
+  // Verify clean pause: 0 of 1 slots busy, 1 deduplicated usage-limit alert, intake held, PR kept open with claim heartbeat!
+  assert.match(pausedTick.message, /0 of 1 slots busy; intake held: every login in the pool is exhausted until /);
+  assert.equal(alerts.length, 1);
+  assert.equal(alerts[0].kind, 'usage-limit');
+  assert.match(alerts[0].text, /every login in the pool reached quota or rate limits/);
+  assert.equal(jobFile(w, 17).phase, 'pr');
+  assert.equal(jobFile(w, 17).stepStop.code, 'pool-exhausted');
+  assert.equal(jobFile(w, 17).repairs, 0, 'zero repairs burned');
+  assert.equal(machine(w).streak, 0, 'zero streak');
+  assert.match(status(w), /Login pool exhausted since \S+: next reset at \S+\./);
+  assert.match(status(w), /#17 PR #100 .* login pool: waits until \S+; no slot/);
+
+  // Advance 60 minutes over 6 ticks: still 1 alert (deduplicated!), heartbeat continues, #18 not claimed.
+  const beatBefore = jobFile(w, 17).claim.lastSeen;
+  for (let i = 0; i < 6; i++) { w.advance(10 * MIN); await tick(); }
+  assert.equal(alerts.length, 1, 'still one deduplicated alert across ticks');
+  assert.ok(jobFile(w, 17).claim.lastSeen > beatBefore, 'claim heartbeat stays alive');
+  assert.equal(w.job(18), undefined);
+  assert.equal(history(w).filter(r => r.strike || r.hold).length, 0);
+
+  // Advance past claude-main's 90m cooldown -> #17 wakes automatically, reviews on claude-main, merges, clears poolOut, and #18 starts!
+  w.advance(35 * MIN);
+  await tick();
+  assert.equal(machine(w).poolOut, null, 'poolOut clears automatically on resume');
+  assert.equal(w.job(17, 'review').command, '/bin/claude');
+  w.review(17, 'PASS');
+  await tick(); await tick();
+  assert.deepEqual(w.github.merges, [pr.number]);
+  assert.ok(w.job(18, 'build'), '#18 starts once #17 merges');
+});
+
+test('S19 #3252 full-pool exhaustion before PR: releases unbuilt build cleanly without strike, cooldown, holdIssue or streak, sends one alert, and resumes after resetAt', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  const pool = scriptedPool(w, [
+    { id: 'codex-only', kind: 'codex', command: '/bin/codex', env: { CODEX_HOME: '/Users/pool/.codex' }, cooldownMs: 60 * MIN },
+  ]);
+  const alerts = [], tick = () => w.tick({ ...pool.ports, alert: async a => alerts.push(a) });
+
+  w.issue(17);
+  await tick();
+  w.say(17, 'build', JSON.stringify({ type: 'error', message: 'You have hit your usage limit.' }));
+  w.finish(17, 'build', { code: 1 });
+  const r1 = await tick();
+
+  assert.equal(jobFile(w, 17), null, 'unbuilt job releases its slot cleanly');
+  assert.deepEqual(w.labels(17), [], 'pdd:working removed, no pdd:stuck');
+  assert.equal(w.comments(17).length, 0, 'no END or stop note on issue');
+  assert.equal(machine(w).streak, 0, 'no machine streak');
+  assert.equal(history(w).filter(r => r.strike || r.hold || r.noResult).length, 0, 'no strike, hold, or 24h cooldown');
+  assert.equal(alerts.length, 1);
+  assert.match(r1.message, /0 of 1 slots busy; intake held: every login in the pool is exhausted/);
+
+  // Ticks while still cooling down do not re-alert or re-claim.
+  w.advance(20 * MIN);
+  const r2 = await tick();
+  assert.equal(alerts.length, 1);
+  assert.equal(w.job(17, 'build')?.pid === undefined ? false : w.alive.has(w.job(17, 'build').pid), false);
+  assert.match(r2.message, /intake held: every login in the pool is exhausted/);
+
+  // After 60m cooldown expires, #17 is claimed and built cleanly!
+  w.advance(45 * MIN);
+  await tick();
+  assert.ok(w.alive.has(w.job(17, 'build').pid));
+  assert.equal(machine(w).poolOut, null);
+});

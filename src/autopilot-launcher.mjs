@@ -1,7 +1,10 @@
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 98de089f0856d6d7a2cd0211c1855623e31649af2f682d46f4efb78bff2d1681).
 import {runAutopilotDoctor, resolveAutopilotAgent} from './autopilot-doctor.mjs';
+import { loadAgentDefinitions } from './agent-config.mjs';
 import {releaseRunClaim, cancelRun, acquireRunLock} from './workflow-runner.mjs';
 import { releaseCheckCapacity } from './test-suite-queue.mjs';
 import { readCodexLimits } from './codex-limits.mjs';
+import { loadLoginPool, selectPoolLogin, markLoginExhausted, clearPoolCooldowns, loginEnvironment } from './login-pool.mjs';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
@@ -23,9 +26,11 @@ import { selectAutopilotBase, checkAutopilotBase } from './autopilot-base.mjs';
 import { readCoreSettings, tickCore, coreStatus, busySlots } from './autopilot-core.mjs';
 import { readMachineGuard, timerPriority, validShare } from './machine-guard.mjs';
 import { listReportDrafts, sendReportDraft } from './autopilot-reports.mjs';
-import { intakeMode, readIntake, intakeText, stopCardJobs } from './autopilot-intake.mjs';
+import { INTAKE_MODES, intakeMode, readIntake, intakeText, stopCardJobs } from './autopilot-intake.mjs';
 import { moveToCore, moved, movedState, engineBefore, procTable, MAX_DEFERS, FULL_ENGINE_REMOVED } from './autopilot-retire.mjs';
 import * as nativeFs from 'node:fs';
+
+const validAutoUpdateMode = mode => ['release', 'main', 'off'].includes(mode);
 
 const INTERVAL = 30 * 60 * 1000;
 // The core tick has no AI call and each job phase needs a tick, so the core engine's timer fires every 10 minutes.
@@ -76,7 +81,19 @@ function portsFor(state, ports) {
   const checked = async (command, args, options) => { const result = await execute(command, args, options); if (result.code !== 0) throw Error(`${command} failed; check its sign-in and retry.`); return result.stdout; };
   return { ...ports, env, run, execute, checked, githubRoot, warn: ports.warn ?? (text => process.stderr.write(`${text}\n`)), now };
 }
-const keepEnv = env => Object.fromEntries(['HOME', 'PATH', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME', 'XDG_CONFIG_HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'PDD_SUITE_QUEUE', 'PDD_VM_SUITE_LOCK'].filter(k => typeof env[k] === 'string').map(k => [k, env[k]]));
+const AGENT_KINDS = ['codex', 'claude', 'gemini', 'agy'];
+const AGENT_CONFIG_VARS = { codex: 'CODEX_HOME', claude: 'CLAUDE_CONFIG_DIR', gemini: 'GEMINI_CLI_HOME', agy: 'ANTIGRAVITY_APP_DATA_DIR' };
+const keepEnv = env => Object.fromEntries(['HOME', 'PATH', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME', 'ANTIGRAVITY_APP_DATA_DIR', 'XDG_CONFIG_HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'PDD_SUITE_QUEUE', 'PDD_VM_SUITE_LOCK'].filter(k => typeof env[k] === 'string').map(k => [k, env[k]]));
+function explicitConfigOverride(previous, env) {
+  const kind = previous?.agent?.kind, variable = kind ? AGENT_CONFIG_VARS[kind] : null;
+  if (!variable || typeof env?.[variable] !== 'string' || !env[variable].trim()) return false;
+  return env[variable] !== (previous?.environment?.[variable] || null);
+}
+function describeProfile(agent, env) {
+  if (!agent) return 'none';
+  const variable = AGENT_CONFIG_VARS[agent.kind], folder = variable ? env?.[variable] : null;
+  return folder ? `${agent.id} (${folder})` : String(agent.id ?? agent.kind);
+}
 const NOT_GIT = 'This folder is not a Git repository. cd into the repo you want Autopilot to work on, then run the command again.';
 // Git translates its messages; pdd reads the "not a git repository" text only in the C locale.
 const gitRootIn = p => p.execute('git', ['rev-parse', '--show-toplevel'], { env: { ...p.env, LC_ALL: 'C', LANG: 'C' } });
@@ -219,13 +236,23 @@ async function trusted(row, state, config, p) {
 }
 // A trusted claim comment that carries a lastSeen heartbeat.
 function profileBinding(state, p) {
-  const variable = { codex: 'CODEX_HOME', claude: 'CLAUDE_CONFIG_DIR', gemini: 'GEMINI_CLI_HOME' }[state.agent.kind];
+  const variable = AGENT_CONFIG_VARS[state.agent.kind];
   return {
     agent: { id: state.agent.id, kind: state.agent.kind },
     home: state.environment?.HOME ?? p.env.HOME ?? null,
     definitionHome: state.definitionHome ?? state.environment?.HOME ?? p.env.HOME ?? null,
     configHome: variable ? state.environment?.[variable] || null : null,
   };
+}
+function clearPauseState(stateFile) {
+  const root = coreRoot(stateFile);
+  clearPoolCooldowns({ stateRoot: root });
+  const coreFile = join(root, 'core.json'), current = read(coreFile);
+  if (current && typeof current === 'object' && !Array.isArray(current)) {
+    delete current.pausedUntil; delete current.pausedHours; delete current.poolOut;
+    current.streak = 0; current.hours = 1;
+    save(coreFile, current);
+  }
 }
 function claimTickLock(file) {
   const owner = `${file}.${randomUUID()}.owner`;
@@ -311,10 +338,12 @@ const machineMode = state => ['auto', 'observe', 'off'].includes(state?.mode) ? 
 const machineReport = state => ['file', 'draft', 'off'].includes(state?.report) ? state.report : null;
 // The machine's saved core decision mode (pdd autopilot start --decisions) wins over pdd.json for the core engine.
 const machineDecisions = state => ['ask', 'decide'].includes(state?.decisions) ? state.decisions : null;
-// The machine's intake mode (pdd autopilot start --intake): shadow writes intake cards; off (the default) writes none.
-const machineIntake = state => intakeMode(state?.intake);
-// A start with no opt-in label (the machine's --label or pdd.json autopilot.label) asks for one and starts nothing.
+// The machine's intake mode (pdd autopilot start --intake): active selects from ready cards, shadow writes cards only, off writes none.
+const savedIntake = state => INTAKE_MODES.includes(state?.intake) ? state.intake : null;
+const effectiveIntake = (state, core = null) => savedIntake(state) ?? intakeMode(core?.intake);
+// A start with no opt-in label (the machine's --label or pdd.json autopilot.label) asks for one and starts nothing unless intake is active.
 const NO_LABEL = 'Autopilot did not start: it works only on the issues that you mark with an opt-in label. Run pdd autopilot start --label pdd:autopilot, then mark issues with pdd autopilot add N (or add the label on GitHub). Nothing was started or claimed.';
+const ACTIVE_INTAKE_AGENT_MSG = 'Active intake needs a codex or claude login for sandboxed read-only card checks; add codex or claude to --pool, pass --agent codex or --agent claude, or use --intake off --label pdd:autopilot.';
 // The status line of the move from the full engine: pending or waiting, or done in the last 7 days.
 function moveStatus(state, now) {
   if (!state) return '';
@@ -327,6 +356,15 @@ function moveStatus(state, now) {
 function alertLine(state, p, ports) {
   try { const text = (ports.alertStatusLine ?? alertStatusLine)({ repo: state.repo, env: p.env }, { stateRoot: ports.stateRoot }); return text ? `\n${text}` : ''; }
   catch { return ''; }
+}
+async function updateLine(stateFile, ports) {
+  try {
+    const stateRoot = dirname(stateFile);
+    if (!ports.autoUpdateStatusLine && !existsSync(join(stateRoot, 'autopilot-update.json'))) return '';
+    const render = ports.autoUpdateStatusLine ?? (await import('./autopilot-update.mjs')).autoUpdateStatusLine;
+    const text = render({ stateRoot });
+    return text ? `\n${text}` : '';
+  } catch { return ''; }
 }
 const coreRoot = stateFile => stateFile.replace(/\.json$/, '-core');
 const coreReports = (ports, env) => join(stateFolder(ports, env), 'core-reports');
@@ -371,7 +409,7 @@ async function runCoreTick(stateFile, state, p, ports) {
   if (machineMode(state)) core.mode = machineMode(state);
   if (machineReport(state)) core.report = machineReport(state);
   if (machineDecisions(state)) core.decisions = machineDecisions(state);
-  core.intake = machineIntake(state);
+  core.intake = effectiveIntake(state, core);
   core.labelRequired = true;
   // Card jobs never outlive the core: mode off stops them (a tick that ends here does not reach the core's hook).
   if (core.mode === 'off') { try { stopCardJobs({ root: coreRoot(stateFile), ...(p.corePorts?.jobs ? { jobs: p.corePorts.jobs } : {}) }); } catch { /* Next tick. */ } return ok('Autopilot is off.'); }
@@ -389,7 +427,37 @@ async function runCoreTick(stateFile, state, p, ports) {
     if (Number.isFinite(result.fullAt)) state.issuesFullAt = result.fullAt;
     return state.cachedIssues ?? [];
   };
-  const agent = state.agent ?? {};
+  const agent = state.agent ?? {}, cRoot = coreRoot(stateFile);
+  let pool = { configured: false, poolPath: null, weeklyStopPercent: 97, logins: [] };
+  if (state.poolPath !== 'off') {
+    try { pool = loadLoginPool({ cwd: state.cwd, env: p.env, poolPath: state.poolPath || undefined, fallbackAgent: agent }); }
+    catch (error) { if (state.poolPath) throw error; }
+  }
+  const poolCache = new Map();
+  const poolKey = opts => Array.isArray(opts?.allowedKinds) ? [...opts.allowedKinds].sort().join(',') : '*';
+  const selectPool = (opts = {}) => {
+    const key = poolKey(opts);
+    if (!poolCache.has(key)) {
+      poolCache.set(key, selectPoolLogin(
+        {
+          cwd: state.cwd,
+          env: p.env,
+          poolPath: pool.poolPath,
+          pool: pool.configured ? pool : undefined,
+          fallbackAgent: agent,
+          stateRoot: cRoot,
+          ...(Array.isArray(opts?.allowedKinds) ? { allowedKinds: opts.allowedKinds } : {}),
+        },
+        { run: p.run, readCodexLimits: p.codexLimits ?? readCodexLimits, now: p.now },
+      ));
+    }
+    return poolCache.get(key);
+  };
+  const exhaustPool = async ({ loginId, resetAt = null, reason = 'quota', allowedKinds } = {}) => {
+    if (loginId) markLoginExhausted({ stateRoot: cRoot, loginId, resetAt, reason, now: p.now() });
+    poolCache.clear();
+    return selectPool(Array.isArray(allowedKinds) ? { allowedKinds } : {});
+  };
   const alertPorts = { ...p.alertPorts, repository: async () => ({ nameWithOwner: state.repo }), stateRoot: dirname(stateFile), now: p.now, hostname: () => state.machine };
   if (!p.sendAlert) {
     try { await runAutopilotAlerts({ action: 'retry', cwd: state.cwd, env: p.env }, alertPorts); }
@@ -398,10 +466,12 @@ async function runCoreTick(stateFile, state, p, ports) {
   const result = await tickCore({ state, settings: core, budget }, {
     gh: (args, options = {}) => p.execute('gh', args, { timeoutMs: 120000, ...options }),
     git: (args, options = {}) => p.execute('git', args, { timeoutMs: 300000, ...options }),
-    now: p.now, env: p.env, warn: p.warn, root: coreRoot(stateFile), reportRoot: coreReports(ports, p.env), tickMinutes: timerMinutes(state),
+    now: p.now, env: p.env, warn: p.warn, root: cRoot, reportRoot: coreReports(ports, p.env), tickMinutes: timerMinutes(state),
     version: read(join(state.packageRoot ?? dirname(dirname(self)), 'package.json'), {})?.version, listIssues,
     trusted: row => trusted(row, state, { trust: core.trust }, p),
-    agentReady: async () => agent.kind !== 'codex' || (await (p.codexLimits ?? readCodexLimits)({ command: agent.command ?? 'codex', cwd: state.cwd, env: p.env })).state !== 'limited',
+    agentReady: async () => pool.configured ? (await selectPool()).state === 'ready'
+      : agent.kind !== 'codex' || (await (p.codexLimits ?? readCodexLimits)({ command: agent.command ?? 'codex', cwd: state.cwd, env: p.env, weeklyStopPercent: pool.weeklyStopPercent })).state !== 'limited',
+    ...(pool.configured ? { selectLogin: selectPool, exhaustLogin: exhaustPool } : {}),
     // One alert through this machine's alert destination; the core gives each alert its own cause, tried and need.
     alert: ({ issue, kind, text, tried, need, update }) => (p.sendAlert ?? runAutopilotAlerts)({ action: 'alert', cwd: state.cwd, env: p.env, issue: String(issue), kind, ...(update ? { update: true } : {}),
       text: JSON.stringify({ cause: text, tried: tried ?? 'The Autopilot core engine could not go on with this issue.', need: need ?? 'Check the issue and this machine.' }) },
@@ -413,7 +483,7 @@ async function runCoreTick(stateFile, state, p, ports) {
   if (release) try {
     const latest = read(stateFile);
     if (latest?.enabled) {
-      for (const key of ['defaultBranch', 'baseBranch', 'cachedIssues', 'etag', 'pages', 'issuesSince', 'issuesFullAt']) if (Object.hasOwn(state, key)) latest[key] = state[key]; else delete latest[key];
+      for (const key of ['defaultBranch', 'baseBranch', 'cachedIssues', 'etag', 'pages', 'issuesSince', 'issuesFullAt', 'intakeNote']) if (Object.hasOwn(state, key)) latest[key] = state[key]; else delete latest[key];
       latest.core = { at: p.now(), message: result.message }; latest.nextTick = p.now() + timerMinutes(latest) * 60000; save(stateFile, latest);
     }
   } finally { release(); }
@@ -498,7 +568,26 @@ async function runTick(stateFile, ports) {
       state = read(stateFile);
       if (!state?.enabled) return ok('Autopilot stopped.');
     }
-    return await coreTick(stateFile, state, p, ports);
+    const tickResult = await coreTick(stateFile, state, p, ports);
+    try {
+      const latest = read(stateFile);
+      if (latest?.enabled) {
+        const update = ports.maybeAutoUpdate ?? (await import('./autopilot-update.mjs')).maybeAutoUpdateAutopilot;
+        await update({
+          state: latest,
+          packageRoot: latest.packageRoot ?? dirname(dirname(self)),
+          coreRoot: coreRoot(stateFile),
+          stateRoot: dirname(stateFile),
+          env: p.env,
+        }, {
+          now: p.now,
+          execute: (file, args, options) => p.execute(file, args, options),
+          claimUpdateLock: () => claimMachineAdmission(stateFile, p),
+          ...ports.autoUpdatePorts,
+        });
+      }
+    } catch { /* Post-tick self-update never fails a completed tick. */ }
+    return tickResult;
   } finally {
     // The tick's own conditional reads keep their ETags.
     try { p?.etags?.save(); } catch { /* A lost cache only costs counted reads. */ }
@@ -621,34 +710,128 @@ export async function runAutopilotLauncher(input, ports = {}) {
   if (input.label !== undefined && !(typeof input.label === 'string' && input.label.trim())) return { exitCode: 2, message: 'Use --label with a GitHub label name.' };
   if (input.mode !== undefined && !['auto', 'observe', 'off'].includes(input.mode)) return { exitCode: 2, message: 'Use --mode auto, --mode observe or --mode off.' };
   if (input.report !== undefined && !['file', 'draft', 'off'].includes(input.report)) return { exitCode: 2, message: 'Use --report file, --report draft or --report off.' };
-  if (input.intake !== undefined && !['off', 'shadow'].includes(input.intake)) return { exitCode: 2, message: 'Use --intake off or --intake shadow.' };
+  if (input.intake !== undefined && !INTAKE_MODES.includes(input.intake)) return { exitCode: 2, message: 'Use --intake off, --intake shadow or --intake active.' };
   if (input.decisions !== undefined && !['ask', 'decide'].includes(input.decisions)) return { exitCode: 2, message: 'Use --decisions ask or --decisions decide.' };
+  if (input.agent !== undefined && !AGENT_KINDS.includes(input.agent)) return { exitCode: 2, message: 'Use --agent codex, claude, gemini or agy.' };
+  if (input.pool !== undefined) {
+    try { loadLoginPool({ cwd: input.cwd ?? process.cwd(), env: input.env ?? ports.env ?? process.env, poolPath: input.pool }); }
+    catch (error) { return { exitCode: 2, message: line(error.message) }; }
+  }
+  if (input.autoUpdate !== undefined && !validAutoUpdateMode(input.autoUpdate)) return { exitCode: 2, message: 'Use --auto-update release, --auto-update main or --auto-update off.' };
   const shareRefusal = shareOption(command, input, null); if (shareRefusal) return shareRefusal;
-  let startSelection, startWarnings = [];
+  let startSelection, startWarnings = [], accountOverride = false, activePool = null, chosenPoolLogin = null, activeIntakeStart = false;
   if (command === 'doctor' || command === 'start') {
-    const doctorPorts = typeof ports.doctorPorts === 'function' ? ports.doctorPorts(input,ports) : ports.doctorPorts ?? ports;
+    const baseDoctorPorts = typeof ports.doctorPorts === 'function' ? ports.doctorPorts(input,ports) : ports.doctorPorts ?? ports;
     const env = input.env ?? ports.env ?? process.env;
-    let doctorInput=input;
+    let doctorInput = input, extraDoctorPorts = {};
     try {
       // Resolve identity without creating state, admission locks or GitHub ledgers.
       const cwd=await gitRoot({env,execute:(file,args,options)=>
-        (doctorPorts.run??runAgentProcess)(file,args,{cwd:input.cwd,env,timeoutMs:10000,...options})});
+        (baseDoctorPorts.run??runAgentProcess)(file,args,{cwd:input.cwd,env,timeoutMs:10000,...options})});
       const id=createHash('sha256').update(cwd).digest('hex').slice(0,20);
       const previous=read(join(stateFolder(ports,env),`${id}.json`));
-      // Autopilot takes only the issues that a person marks: with no opt-in label it asks for one and starts nothing.
-      const saved={...previous,...(input.label?{label:input.label.trim()}:{}),...(input.mode?{mode:input.mode}:{})};
+      // Autopilot takes only the issues that a person marks unless active intake evaluates open issues.
+      const saved={...previous,...(input.label?{label:input.label.trim()}:{}),...(input.mode?{mode:input.mode}:{}),...(input.intake?{intake:input.intake}:{})};
       const repoSettings=readCoreSettings(cwd);
-      if (command==='start' && !(machineLabel(saved) ?? repoSettings.label) && (machineMode(saved) ?? repoSettings.mode)!=='off') throw Error(NO_LABEL);
-      const profile=savedProfile(previous,env);
-      doctorInput={...input,cwd,env,profile};
+      activeIntakeStart = command === 'start' && effectiveIntake(saved, repoSettings) === 'active' && (machineMode(saved) ?? repoSettings.mode) !== 'off';
+      if (command==='start' && !(machineLabel(saved) ?? repoSettings.label) && !activeIntakeStart && (machineMode(saved) ?? repoSettings.mode)!=='off') throw Error(NO_LABEL);
+      const callerPoolOff = typeof input.pool === 'string' && ['off', 'none'].includes(input.pool.trim());
+      const effectivePoolOption = callerPoolOff ? 'off' : input.pool !== undefined ? input.pool : input.agent !== undefined ? 'off' : previous?.poolPath;
+      if (effectivePoolOption !== 'off') {
+        try {
+          const loaded = loadLoginPool({ cwd, env, poolPath: effectivePoolOption, fallbackAgent: previous?.agent });
+          if (loaded.configured) activePool = loaded;
+        } catch (error) {
+          if (input.pool !== undefined || previous?.poolPath) throw error;
+        }
+      }
+      accountOverride = command === 'start' && (input.agent !== undefined || input.pool !== undefined || explicitConfigOverride(previous, env) || Boolean(activePool?.configured && !previous?.poolPath));
+      if (activePool?.configured) {
+        if (activeIntakeStart && !activePool.logins.some(item => !item.paused && (item.kind === 'codex' || item.kind === 'claude'))) {
+          throw Error(ACTIVE_INTAKE_AGENT_MSG);
+        }
+        const picked = await selectPoolLogin(
+          { cwd, env, poolPath: activePool.poolPath, pool: activePool, stateRoot: null, allowLimited: true },
+          { fs: baseDoctorPorts.files ?? nativeFs, run: baseDoctorPorts.run, readCodexLimits: baseDoctorPorts.codexLimits, codexLimitPorts: { spawn: baseDoctorPorts.spawn } },
+        );
+        if (activeIntakeStart && (picked.state !== 'ready' || !['codex', 'claude'].includes(picked.login?.kind))) {
+          const intakePicked = await selectPoolLogin(
+            { cwd, env, poolPath: activePool.poolPath, pool: activePool, stateRoot: null, allowLimited: true, allowedKinds: ['codex', 'claude'] },
+            { fs: baseDoctorPorts.files ?? nativeFs, run: baseDoctorPorts.run, readCodexLimits: baseDoctorPorts.codexLimits, codexLimitPorts: { spawn: baseDoctorPorts.spawn } },
+          );
+          if (intakePicked.state !== 'ready') throw Error(ACTIVE_INTAKE_AGENT_MSG);
+        }
+        chosenPoolLogin = picked.state === 'ready' ? picked.login : (activePool.logins.find(item => !item.paused) ?? activePool.logins[0]);
+        const doctorEnv = picked.state === 'ready' ? picked.env : loginEnvironment(env, chosenPoolLogin);
+        const profile = {
+          agent: { id: chosenPoolLogin.id, kind: chosenPoolLogin.kind },
+          home: doctorEnv.HOME ?? homedir(),
+          definitionHome: env.HOME ?? homedir(),
+          configHome: chosenPoolLogin.configDir,
+        };
+        doctorInput = { ...input, cwd, env: doctorEnv, profile };
+        extraDoctorPorts = {
+          selectAgent: undefined,
+          agentDefinitions: async () => [{ id: chosenPoolLogin.id, kind: chosenPoolLogin.kind, command: chosenPoolLogin.command, ...(chosenPoolLogin.model ? { model: chosenPoolLogin.model } : {}), env: chosenPoolLogin.env }],
+          codexLimits: (opts, limitPorts) => (baseDoctorPorts.codexLimits ?? readCodexLimits)({ weeklyStopPercent: activePool.weeklyStopPercent, ...opts }, limitPorts),
+        };
+      } else if (command === 'start' && input.agent !== undefined) {
+        if (activeIntakeStart && !['codex', 'claude'].includes(input.agent)) throw Error(ACTIVE_INTAKE_AGENT_MSG);
+        let defs = [];
+        try { defs = await ((ports.selectAgent ? undefined : baseDoctorPorts.agentDefinitions) ?? loadAgentDefinitions)({ cwd, env }); } catch {}
+        const match = Array.isArray(defs) ? defs.find(def => def?.kind === input.agent) : null;
+        const targetId = input.agent === 'agy' ? 'agy' : match?.id || input.agent;
+        const ownVar = AGENT_CONFIG_VARS[input.agent];
+        const doctorEnv = loginEnvironment(env, { kind: input.agent, configVar: ownVar, configDir: ownVar && env[ownVar] ? env[ownVar] : null, env: {} });
+        const profile = {
+          agent: { id: targetId, kind: input.agent },
+          home: env.HOME ?? homedir(),
+          definitionHome: env.HOME ?? homedir(),
+          configHome: ownVar && env[ownVar] ? env[ownVar] : null,
+        };
+        doctorInput = { ...input, cwd, env: doctorEnv, profile };
+        extraDoctorPorts = {
+          ...(ports.selectAgent ? { selectAgent: undefined } : {}),
+          ...(input.agent !== 'agy' && (ports.selectAgent || !match)
+            ? { agentDefinitions: async () => [match ?? { id: targetId, kind: input.agent, command: input.agent, env: {} }] }
+            : {}),
+        };
+      } else if (command === 'start' && explicitConfigOverride(previous, env)) {
+        if (activeIntakeStart && !['codex', 'claude'].includes(previous.agent.kind)) throw Error(ACTIVE_INTAKE_AGENT_MSG);
+        const kind = previous.agent.kind, ownVar = AGENT_CONFIG_VARS[kind];
+        const doctorEnv = loginEnvironment(env, { kind, configVar: ownVar, configDir: env[ownVar], env: {} });
+        const profile = {
+          agent: { id: previous.agent.id, kind },
+          home: env.HOME ?? homedir(),
+          definitionHome: env.HOME ?? homedir(),
+          configHome: env[ownVar],
+        };
+        doctorInput = { ...input, cwd, env: doctorEnv, profile };
+        if (ports.selectAgent) {
+          extraDoctorPorts = {
+            selectAgent: undefined,
+            agentDefinitions: async () => [{ ...previous.agent, env: {} }],
+          };
+        }
+      } else {
+        if (activeIntakeStart && previous?.agent?.kind && !['codex', 'claude'].includes(previous.agent.kind)) {
+          throw Error(ACTIVE_INTAKE_AGENT_MSG);
+        }
+        const profile = savedProfile(previous, env);
+        doctorInput = { ...input, cwd, env, profile };
+      }
     } catch (error) {
       if (command==='start') return bad(error.message);
       // Doctor still reports repository failures in its complete report.
       if (!error.exact) return bad(error.message);
     }
-    const diagnostics = await runAutopilotDoctor(doctorInput, {...doctorPorts,
+    const doctorPorts = typeof ports.doctorPorts === 'function' ? ports.doctorPorts(doctorInput, ports) : baseDoctorPorts;
+    const diagnostics = await runAutopilotDoctor(doctorInput, {...doctorPorts, ...extraDoctorPorts,
       onSelection:selection=>{startSelection=selection;}});
     if (command === 'doctor' || diagnostics.exitCode !== 0) return diagnostics;
+    if (activeIntakeStart && !activePool?.configured && startSelection?.agent?.kind && !['codex', 'claude'].includes(startSelection.agent.kind)) {
+      return bad(ACTIVE_INTAKE_AGENT_MSG);
+    }
     startWarnings = diagnostics.message.split('\n').filter(line=>line.startsWith('WARN '));
   }
   let state = { cwd: input.cwd, environment: keepEnv(input.env ?? process.env) };
@@ -693,19 +876,20 @@ export async function runAutopilotLauncher(input, ports = {}) {
     }
     const previous = read(stateFile);
     state = { ...state, ...previous, cwd: state.cwd, id, stateFile };
-    if (command === 'start') { if (input.label) state.label = input.label.trim(); if (input.mode) state.mode = input.mode; if (input.report) state.report = input.report; if (input.decisions) state.decisions = input.decisions; if (input.intake) state.intake = input.intake; }
+    if (command === 'start') { if (input.label) state.label = input.label.trim(); if (input.mode) state.mode = input.mode; if (input.report) state.report = input.report; if (input.decisions) state.decisions = input.decisions; if (input.intake) state.intake = input.intake; if (input.autoUpdate) state.autoUpdate = input.autoUpdate; }
     shareOption(command, input, state);
     let initialRevision = previous?.controlRevision ?? null;
     // A new state is a core state: only a state that an older pdd saved can need the move from the full engine.
     if (command === 'start' && !previous) { initialRevision = randomUUID(); state.controlRevision = initialRevision; state.engine = 'core'; state.enabled = false; state.timerInstalled = false; state.nextTick = null; save(stateFile, state); }
     // Explicit undefined values mask unrelated ambient provider directories in portsFor.
     const invocationEnv=startSelection ? {...startSelection.env,
-      CODEX_HOME:startSelection.env.CODEX_HOME,CLAUDE_CONFIG_DIR:startSelection.env.CLAUDE_CONFIG_DIR,GEMINI_CLI_HOME:startSelection.env.GEMINI_CLI_HOME} : input.env;
+      CODEX_HOME:startSelection.env.CODEX_HOME,CLAUDE_CONFIG_DIR:startSelection.env.CLAUDE_CONFIG_DIR,GEMINI_CLI_HOME:startSelection.env.GEMINI_CLI_HOME,ANTIGRAVITY_APP_DATA_DIR:startSelection.env.ANTIGRAVITY_APP_DATA_DIR} : input.env;
     p = portsFor(state, { ...ports, env: invocationEnv });
     if (command === 'start') { releaseAdmission(); releaseAdmission = null; }
     if (command === 'intake') {
+      const mode = effectiveIntake(state, readCoreSettings(state.cwd));
       const report = readIntake({ root: coreRoot(stateFile), now: p.now() });
-      return ok(input.json ? JSON.stringify({ repository: state.repo ?? null, intake: machineIntake(state), ...report }, null, 2) : `Intake: ${machineIntake(state)} on this machine.\n${intakeText(report)}`);
+      return ok(input.json ? JSON.stringify({ repository: state.repo ?? null, intake: mode, ...report }, null, 2) : `Intake: ${mode} on this machine.\n${intakeText(report, { mode })}`);
     }
     if (command === 'status') {
       const timerActive = Boolean(await timer('status', state, p)), guard = await coreGuard(state, p, ports, stateFile);
@@ -714,11 +898,14 @@ export async function runAutopilotLauncher(input, ports = {}) {
       if (machineMode(state)) settingsNow.mode = machineMode(state);
       if (machineReport(state)) settingsNow.report = machineReport(state);
       if (machineDecisions(state)) settingsNow.decisions = machineDecisions(state);
+      const intakeNow = effectiveIntake(state, settingsNow);
+      if (intakeNow !== 'off') settingsNow.intake = intakeNow;
       return ok(`Autopilot ${state.enabled ? 'enabled' : 'disabled'}; timer ${timerLine(state, timerActive)}; next tick: ${timerActive && state.nextTick ? new Date(state.nextTick).toISOString() : 'none'}\n`
         + coreStatus({ state, guard: guard.line, settings: { ...settingsNow, label }, sources: { label: machineLabel(state) ? 'machine' : label ? 'pdd.json' : null, mode: machineMode(state) ? 'machine' : 'pdd.json', report: machineReport(state) ? 'machine' : 'pdd.json', decisions: machineDecisions(state) ? 'machine' : 'pdd.json' } },
           { root: coreRoot(stateFile), reportRoot: coreReports(ports, p.env), now: p.now })
-        + (label ? '' : '\nNo opt-in label: Autopilot takes no issue. Run pdd autopilot start --label pdd:autopilot, then mark issues with pdd autopilot add N.')
+        + (label || intakeNow === 'active' ? '' : '\nNo opt-in label: Autopilot takes no issue. Run pdd autopilot start --label pdd:autopilot, then mark issues with pdd autopilot add N.')
         + alertLine(state, p, ports)
+        + (await updateLine(stateFile, ports))
         + moveStatus(previous, p.now())
         + (state.core?.message ? `\nLast tick ${new Date(state.core.at).toISOString()}: ${line(state.core.message)}` : ''));
     }
@@ -770,27 +957,48 @@ export async function runAutopilotLauncher(input, ports = {}) {
     if (quiet < floor) return bad(`Autopilot did not start: autopilot.quietMinutes is ${quiet}; it must be at least ${floor} (2 times the ${CORE_INTERVAL / 60000}-minute core timer). Nothing was started or claimed.`);
     await automaticBase(state, p);
     if ((await p.execute('gh', ['auth', 'status'])).code !== 0) return bad('GitHub is not signed in; run gh auth login.');
-    const previousProfile = savedProfile(previous,p.env);
+    const previousProfile = accountOverride || activePool?.configured ? null : savedProfile(previous,p.env);
     let probe = p, saved = null;
     if (previousProfile) {
-      const configVariable = { codex:'CODEX_HOME', claude:'CLAUDE_CONFIG_DIR', gemini:'GEMINI_CLI_HOME' }[previous.agent.kind];
+      const configVariable = AGENT_CONFIG_VARS[previous.agent.kind];
       const env = { ...p.env, HOME:previousProfile.definitionHome };
-      for (const variable of ['CODEX_HOME','CLAUDE_CONFIG_DIR','GEMINI_CLI_HOME']) {
+      for (const variable of Object.values(AGENT_CONFIG_VARS)) {
         if (variable === configVariable && previousProfile.configHome) env[variable] = previousProfile.configHome; else delete env[variable];
       }
       saved = { ...previousProfile, configVariable }; probe = { ...p, env };
     }
-    const agent = ports.selectAgent ? await ports.selectAgent(state, probe) : saved ? await selectAgent(state, probe, saved) : startSelection.agent;
+    const rawAgent = ports.selectAgent && !accountOverride && !activePool?.configured
+      ? await ports.selectAgent(state, probe)
+      : saved ? await selectAgent(state, probe, saved) : startSelection.agent;
+    const agent = chosenPoolLogin && rawAgent ? { ...rawAgent, ...(chosenPoolLogin.model ? { model: chosenPoolLogin.model } : {}) } : rawAgent;
     if (!agent || saved && (agent.id !== saved.agent.id || agent.kind !== saved.agent.kind)) return bad(saved ? 'The saved coordinator profile is unavailable. Restore its sign-in and retry.' : 'Sign in to Codex, Claude Code, agy or Gemini at your terminal, then run pdd autopilot start.');
+    if (effectiveIntake(state, readCoreSettings(state.cwd)) === 'active' && !activePool?.configured && !['codex', 'claude'].includes(agent.kind)) {
+      return bad(ACTIVE_INTAKE_AGENT_MSG);
+    }
     const version = read(join(packageRoot, 'package.json')).version;
     const warnings = (ports.pathDiagnostic ?? pathDiagnostic)({ cwd: state.cwd, packageRoot, env: p.env, mode: 'workflow' });
+    const oldAccountLabel = previous?.agent ? describeProfile(previous.agent, previous.environment) : null;
     if (!previousProfile) {
-      state.agent = { id: agent.id, kind: agent.kind, command: agent.command };
+      state.agent = { id: agent.id, kind: agent.kind, command: agent.command, ...(agent.model ? { model: agent.model } : {}) };
       state.definitionHome = (input.env ?? ports.env ?? process.env).HOME;
       state.environment = keepEnv({ ...p.env, ...agent.env });
+      delete state.ownerLaunch;
+      state.launchProfile = profileBinding(state, p);
     }
     // The core engine has no coordinator launch to record its profile: save it here so a later start can verify it.
     if (state.agent) state.launchProfile ??= profileBinding(state, p);
+    if (input.pool !== undefined) state.poolPath = ['off', 'none'].includes(input.pool.trim()) ? 'off' : activePool?.poolPath ?? 'off';
+    else if (activePool?.configured && !state.poolPath) state.poolPath = activePool.poolPath;
+    if (input.agent !== undefined && input.pool === undefined && state.poolPath && state.poolPath !== 'off') state.poolPath = 'off';
+    const accountNotices = [];
+    const newAccountLabel = describeProfile(state.agent, state.environment);
+    if (accountOverride && oldAccountLabel && oldAccountLabel !== newAccountLabel) accountNotices.push(`Account changed from ${oldAccountLabel} to ${newAccountLabel}.`);
+    if (activePool?.configured) {
+      const ids = activePool.logins.filter(item => !item.paused).map(item => item.id);
+      accountNotices.push(`Login pool: ${ids.join(' -> ')} (${ids.length} login(s)).`);
+    } else if (input.pool !== undefined && previous?.poolPath && previous.poolPath !== 'off') {
+      accountNotices.push('Login pool disabled.');
+    }
     // The time of this start: in auto mode it is the operator action that approves the core jobs' prompt changes.
     state.startedAt = new Date(p.now()).toISOString();
     state.activatedAt ??= new Date(p.now()).toISOString();
@@ -819,6 +1027,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
       if (!previous) { state.enabled = false; state.nextTick = null; state.controlRevision = initialRevision; delete state.activatedAt; delete state.runs; save(stateFile, state); }
       return bad('Autopilot timer could not start; enable your systemd user session on Linux or launchctl user session on macOS, then retry.');
     }
+    if (accountOverride && previous) clearPauseState(stateFile);
     state.startAction = { command: 'pdd autopilot start', repository: state.repo, mode: currentConfig.mode };
     save(stateFile, state);
     let warning = '';
@@ -838,7 +1047,10 @@ export async function runAutopilotLauncher(input, ports = {}) {
       }
     }
     catch (e) { warning += ` Warning: ${line(e.message)}; next tick will retry.`; }
-    return ok(`${startWarnings.length ? startWarnings.join('\n')+'\n' : ''}${moveLines.length ? moveLines.join('\n')+'\n' : ''}Autopilot started for ${state.repo} in ${state.cwd}. Base ${state.baseBranch}. Mode ${currentConfig.mode}${machineMode(state) ? ' (this machine)' : ''} · issues with ${machineLabel(state) ?? readCoreSettings(state.cwd).label} · agent ${state.agent.id} · pdd ${version} · next tick: ${new Date(state.nextTick).toISOString()}. See: pdd autopilot status.${warning}${warnings.length ? ' ' + warnings.map(line).join(' ') : ''}`);
+    const startCore = readCoreSettings(state.cwd);
+    const startLabel = machineLabel(state) ?? startCore.label;
+    const scopeSummary = startLabel ? `issues with ${startLabel}` : 'ready issues from active intake';
+    return ok(`${startWarnings.length ? startWarnings.join('\n')+'\n' : ''}${moveLines.length ? moveLines.join('\n')+'\n' : ''}Autopilot started for ${state.repo} in ${state.cwd}. Base ${state.baseBranch}. Mode ${currentConfig.mode}${machineMode(state) ? ' (this machine)' : ''} · ${scopeSummary} · agent ${state.agent.id} · pdd ${version} · next tick: ${new Date(state.nextTick).toISOString()}. See: pdd autopilot status.${accountNotices.length ? ' ' + accountNotices.join(' ') : ''}${warning}${warnings.length ? ' ' + warnings.map(line).join(' ') : ''}`);
   } catch (e) { return bad(e.exact ? e.message : `Autopilot: ${e.code === 'ENOENT' ? 'install git, gh and Herdr, and sign in to your agent, then retry.' : line(e.message)}`); }
   finally { releaseAdmission?.(); controlLock?.(); }
 }

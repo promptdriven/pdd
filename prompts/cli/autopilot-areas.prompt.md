@@ -32,6 +32,16 @@ and past assignees are evidence for a person, never automatic authority. The ski
 shows this map once for a person to edit and save in root pdd.json. This module
 never approves or writes it.
 
+For active intake grouping and parallel slot serialization (#3189), export pure
+helpers `normalizeAreaPath`, `normalizeAreaList`, `parseGitHubIssueUrl`,
+`issueAreas`, `areasOverlap`, `isSmallCard`, and `groupReadyIssues`. Normalize
+repository-relative paths (up to 6 per card) and `area:*` labels while stripping
+URLs and validating GitHub issue links via `new URL` host checks (`github.com`
+only), detect file, nested module folder, prompt-module stem and `area:*`
+overlaps, and cluster 2 to 3 small ready issues that share a `group_with` link or
+overlapping module area into one grouped claim while keeping medium or large
+issues solo.
+
 ## Dependencies
 
 None. All inputs are values. Files are read by issue-sort-github.
@@ -40,6 +50,6 @@ None. All inputs are values. Files are read by issue-sort-github.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"09f7ec1473601f0a593d4121d0b7c53619ea5965321ca735c7a965a92e0796ae","entries":[{"operation":"resolveArea","input_schema":{"type":"object","properties":{"areas":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"owner":{"type":"string"},"match":{"type":"object","properties":{"paths":{"type":"array","items":{"type":"string"}},"keywords":{"type":"array","items":{"type":"string"}},"labels":{"type":"array","items":{"type":"string"}},"repositories":{"type":"array","items":{"type":"string"}}},"required":[],"additionalProperties":false},"mixed":{"type":"string","enum":["whole","split"]}},"required":["name","owner","match"],"additionalProperties":false}},"codeowners":{"type":"string"},"evidence":{"type":"object","properties":{"paths":{"type":"array","items":{"type":"string"}},"keywords":{"type":"array","items":{"type":"string"}},"labels":{"type":"array","items":{"type":"string"}},"repository":{"type":"string"},"area":{"type":"string"}},"required":[],"additionalProperties":false}},"required":[],"additionalProperties":false},"result_schema":{"type":"object","properties":{"state":{"type":"string","enum":["resolved","unsure"]},"area":{"type":"string"},"owner":{"type":"string"},"source":{"type":"string","enum":["config","codeowners","evidence","default"]}},"required":["state","area","owner","source"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":2},"conventions":[]}
+{"status":"approved","prose_sha256":"d57f052caed1c4c5d91c0f5a5253fc454020210ca7cdcc5f4451a13742383ad3","entries":[{"operation":"resolveArea","input_schema":{"type":"object","properties":{"areas":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"owner":{"type":"string"},"match":{"type":"object","properties":{"paths":{"type":"array","items":{"type":"string"}},"keywords":{"type":"array","items":{"type":"string"}},"labels":{"type":"array","items":{"type":"string"}},"repositories":{"type":"array","items":{"type":"string"}}},"required":[],"additionalProperties":false},"mixed":{"type":"string","enum":["whole","split"]}},"required":["name","owner","match"],"additionalProperties":false}},"codeowners":{"type":"string"},"evidence":{"type":"object","properties":{"paths":{"type":"array","items":{"type":"string"}},"keywords":{"type":"array","items":{"type":"string"}},"labels":{"type":"array","items":{"type":"string"}},"repository":{"type":"string"},"area":{"type":"string"}},"required":[],"additionalProperties":false}},"required":[],"additionalProperties":false},"result_schema":{"type":"object","properties":{"state":{"type":"string","enum":["resolved","unsure"]},"area":{"type":"string"},"owner":{"type":"string"},"source":{"type":"string","enum":["config","codeowners","evidence","default"]}},"required":["state","area","owner","source"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":2},"conventions":[]}
 ```
 </details>
