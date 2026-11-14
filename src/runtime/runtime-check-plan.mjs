@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-check-plan.prompt.md (sha256: 91af25146951fc7b920d95affd1f459b5d92dbe5c9f2511f6bfe1b3865e06bc4).
+// Generated from prompts/cli/runtime-check-plan.prompt.md (sha256: 93de87a46fe0fbd788029c90585e8fa15df6ceb4e4834438ee93238f90c123f8).
 import { spawnSync } from 'node:child_process';
 import { isAbsolute, posix } from 'node:path';
 import { captureSource, readPrompt, sourceFilePort, promptMarkdownTargets } from './runtime-preflight.mjs';
@@ -30,7 +30,7 @@ const gitRead = (root, args) => {
   return reply.stdout;
 };
 
-export function buildCheckPlan({ root, found, selected, rows = [], full, base = 'HEAD', affected = false, allowMissingInterfaces = false }, ports = {}) {
+export function buildCheckPlan({ root, found, selected, rows = [], full, base = 'HEAD', affected = false, allowMissingInterfaces = false, maxCalls = null, maxTotalCalls = null, singleAttempt = false, unresolvedReservations = null }, ports = {}) {
   const git = args => (ports.git ?? gitRead)(root, args);
   const readHeaders = ports.headerPrompts ?? defaultHeaderPrompts;
   let changed = null;
@@ -208,18 +208,92 @@ export function buildCheckPlan({ root, found, selected, rows = [], full, base = 
   if (!stories.some(story=>story.role === 'target')) for (const story of stories) {
     story.role = 'target'; story.reason = 'no affected Story established; conservative selection';
   }
-  let estimated = 0, maximum = 0, requests = 0;
-  const dispatched = new Set(selectCheckTests({stories},{affected}).tests);
+  let estimated = 0;
+  const dispatched = new Set(selectCheckTests({stories},{affected}).tests), budgetRows = [];
   for (const row of rows.filter(row=>!affected || dispatched.has(row.test))) {
     // Inspect interfaces even when a different local rule won preflight precedence.
     const count = (row.steps ?? []).reduce((sum, step) => sum + cost(step?.entry_path), 0);
     if (row.state !== 'ready') continue;
-    if (!Number.isSafeInteger(row.max_calls) || row.max_calls < 1) problem('undefined-call-bound',row.test,'/max_calls');
-    estimated += Math.min(row.max_calls, count);
-    maximum += row.max_calls * 2; requests += 2;
+    const validBound = Number.isSafeInteger(row.max_calls) && row.max_calls >= 1;
+    if (!validBound) problem('undefined-call-bound',row.test,'/max_calls');
+    else estimated += Math.min(row.max_calls, count);
+    budgetRows.push({ test: row.test, max_calls: validBound ? row.max_calls : 0, restart_used: false, attempts: [] });
   }
+  const prior = {
+    count: Number.isSafeInteger(unresolvedReservations?.count) && unresolvedReservations.count >= 0 ? unresolvedReservations.count : 0,
+    reserved_calls: Number.isSafeInteger(unresolvedReservations?.reserved_calls) && unresolvedReservations.reserved_calls >= 0 ? unresolvedReservations.reserved_calls : 0,
+    batches: Array.isArray(unresolvedReservations?.batches) ? [...unresolvedReservations.batches] : []
+  };
+  const evaluated = evaluateCheckBudget({ max_total_calls: maxTotalCalls, single_attempt: singleAttempt,
+    unresolved_prior_reservations: { count: prior.count, reserved_calls: prior.reserved_calls }, rows: budgetRows, candidate: null });
+  const call_policy = {
+    max_calls_override: maxCalls ?? null,
+    per_request_max_calls: evaluated.plan.per_request_caps,
+    max_total_calls: maxTotalCalls ?? null,
+    restart_replacement: evaluated.plan.restart_replacement,
+    unbounded_maximum: prerequisites.length ? null : evaluated.plan.unbounded_maximum,
+    planned_maximum: prerequisites.length ? null : evaluated.plan.planned_maximum,
+    unresolved_reservations: prior,
+    accounting_scope: evaluated.plan.accounting_scope
+  };
   return {schema_version:'pdd.check-plan.v1',full,base,changed_paths:changed,stories,
-    calls:{estimated:prerequisites.length?null:estimated,maximum:prerequisites.length?null:maximum,check_requests:requests,lint_model_calls:0},prerequisites};
+    calls:{estimated:prerequisites.length?null:estimated,maximum:prerequisites.length?null:evaluated.plan.planned_maximum,check_requests:evaluated.plan.planned_check_requests,lint_model_calls:0},
+    call_policy,prerequisites};
+}
+
+export function evaluateCheckBudget({ max_total_calls = null, single_attempt = false, unresolved_prior_reservations = { count: 0, reserved_calls: 0 }, rows = [], candidate = null } = {}) {
+  const multiplier = single_attempt ? 1 : 2;
+  const per_request_caps = [...new Set(rows.map(row => row.max_calls).filter(value => Number.isSafeInteger(value) && value >= 1))].sort((a, b) => a - b);
+  const unbounded_maximum = rows.reduce((sum, row) => sum + (Number.isSafeInteger(row.max_calls) && row.max_calls >= 1 ? row.max_calls * multiplier : 0), 0);
+  const planned_maximum = max_total_calls === null ? unbounded_maximum : Math.min(unbounded_maximum, max_total_calls);
+  const plan = {
+    per_request_caps,
+    max_total_calls,
+    restart_replacement: single_attempt ? 'disabled' : 'at-most-one',
+    unbounded_maximum,
+    planned_maximum,
+    planned_check_requests: rows.length * multiplier,
+    unresolved_prior_reservations: {
+      count: unresolved_prior_reservations?.count ?? 0,
+      reserved_calls: unresolved_prior_reservations?.reserved_calls ?? 0
+    },
+    accounting_scope: 'logical-interpreter-calls'
+  };
+  let consumed_known = 0, unresolved_reserved = 0, in_flight_reserved = 0;
+  for (const row of rows) {
+    for (const attempt of row.attempts ?? []) {
+      const floor = Math.max(attempt.requested_max_calls, (attempt.known_calls ?? 0) + (attempt.unknown_calls ?? 0));
+      if (attempt.status === 'capacity_refused_zero') continue;
+      if (attempt.status === 'settled') consumed_known += attempt.known_calls;
+      else if (attempt.status === 'in_flight') in_flight_reserved += floor;
+      else unresolved_reserved += floor;
+    }
+  }
+  const committed_calls = consumed_known + unresolved_reserved + in_flight_reserved;
+  const remaining_calls = max_total_calls === null ? null : Math.max(0, max_total_calls - committed_calls);
+  const accounting = { consumed_known, unresolved_reserved, in_flight_reserved, committed_calls, remaining_calls };
+  let decision = null;
+  if (candidate !== null && candidate !== undefined) {
+    if (candidate.kind === 'restart-replacement' && candidate.prior_reason_code !== 'service-restarted') {
+      decision = { action: 'refuse-replacement', reason_code: 'not-service-restarted', effective_max_calls: 0, retain_prior_uncertainty: true };
+    } else if (candidate.kind === 'restart-replacement' && candidate.restart_used) {
+      decision = { action: 'refuse-replacement', reason_code: 'restart-limit-reached', effective_max_calls: 0, retain_prior_uncertainty: true };
+    } else if (candidate.kind === 'restart-replacement' && single_attempt) {
+      decision = { action: 'refuse-replacement', reason_code: 'restart-replacement-disabled', effective_max_calls: 0, retain_prior_uncertainty: true };
+    } else {
+      const retain_prior_uncertainty = candidate.kind === 'restart-replacement';
+      if (max_total_calls === null || remaining_calls >= candidate.requested_max_calls) {
+        decision = { action: 'send', reason_code: 'within-budget', effective_max_calls: candidate.requested_max_calls, retain_prior_uncertainty };
+      } else if (in_flight_reserved > 0 && Math.max(0, max_total_calls - (consumed_known + unresolved_reserved)) > remaining_calls) {
+        decision = { action: 'wait', reason_code: 'awaiting-in-flight-settlement', effective_max_calls: 0, retain_prior_uncertainty };
+      } else if (remaining_calls >= 1) {
+        decision = { action: 'send', reason_code: 'clamped-to-remaining-budget', effective_max_calls: remaining_calls, retain_prior_uncertainty };
+      } else {
+        decision = { action: 'block', reason_code: 'call-budget-exhausted', effective_max_calls: 0, retain_prior_uncertainty };
+      }
+    }
+  }
+  return { plan, accounting, decision };
 }
 
 export function selectCheckTests(plan, {affected = false} = {}) {
@@ -261,10 +335,23 @@ export function checkPlanResults(plan, rows) {
 }
 
 export function checkPlanLines(plan) {
+  const policy = plan.call_policy, disabled = policy?.restart_replacement === 'disabled';
+  const capNote = policy?.max_total_calls != null ? `${disabled ? ', ' : ' ('}capped by --max-total-calls ${policy.max_total_calls}${disabled ? '' : ')'}` : '';
+  const callsLine = disabled
+    ? `  Interpreter calls: about ${plan.calls.estimated ?? 'unknown'}; at most ${plan.calls.maximum ?? 'unknown'} (restart replacement disabled${capNote}); at most ${plan.calls.check_requests} Check requests; lint: 0 model calls.`
+    : `  Interpreter calls: about ${plan.calls.estimated ?? 'unknown'}; at most ${plan.calls.maximum ?? 'unknown'} including one restart replacement per test${capNote}; at most ${plan.calls.check_requests} Check requests; lint: 0 model calls.`;
+  const policyLines = policy ? [(() => {
+    const caps = policy.per_request_max_calls?.length ? policy.per_request_max_calls.join(', ') : 'none';
+    const ceiling = policy.max_total_calls != null ? `${policy.max_total_calls} (--max-total-calls)` : 'unbounded';
+    const replacement = disabled ? 'disabled' : 'at most 1 per test on confirmed service-restarted';
+    const prior = policy.unresolved_reservations;
+    const priorText = prior?.count ? `${prior.count} (${prior.reserved_calls} calls reserved${prior.batches?.length ? ` in ${prior.batches.join(', ')}` : ''})` : '0';
+    return `  Call policy: per-request cap ${caps}; invocation ceiling ${ceiling}; restart replacement ${replacement}; unresolved prior reservations ${priorText} (logical interpreter call limits; not dollar, token or provider-attempt guarantees).`;
+  })()] : [];
   return ['Check plan:', ...plan.stories.flatMap(story=>[
     `  ${story.role}: ${story.story_path} (${story.tests.join(', ')}); ${story.reason}`,
     `    dependency closure: ${story.dependency_closure.join(', ') || 'unavailable'}`]),
-    `  Interpreter calls: about ${plan.calls.estimated ?? 'unknown'}; at most ${plan.calls.maximum ?? 'unknown'} including one restart replacement per test; at most ${plan.calls.check_requests} Check requests; lint: 0 model calls.`,
+    callsLine, ...policyLines,
     ...plan.prerequisites.map(item=>`  prerequisite: ${item.code}: ${item.path} ${item.field}`)];
 }
 

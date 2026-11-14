@@ -1,0 +1,527 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/invocation-call-budget.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "When `--max-total-calls` is `18` and an `18`-call Check ends with `service-restarted` and unresolved usage, the original attempt retains its `18`-call reservation, `0` calls remain, no replacement Check is sent, and the original `unknown` uncertainty is retained."
+    },
+    {
+      "id": "AC2",
+      "text": "When `--max-total-calls` is `36` with an `18`-call per-request cap and an `18`-call Check ends with `service-restarted` and unresolved usage, `18` calls remain so at most one eligible replacement Check is permitted at `effective_max_calls: 18` while retaining prior uncertainty; any second `service-restarted` replacement on that test is refused (`restart-limit-reached`)."
+    },
+    {
+      "id": "AC3",
+      "text": "Across multiple Stories in one invocation, complete-zero pre-execution capacity refusals consume `0` calls, settled attempts consume `known_calls` and return unused allowance to the invocation pool, in-flight attempts hold candidates needing more calls (`awaiting-in-flight-settlement`) when settlement could free allowance, partial remaining allowance after settlement clamps `effective_max_calls`, and `0` remaining allowance blocks further dispatch (`call-budget-exhausted`)."
+    },
+    {
+      "id": "AC4",
+      "text": "When `--no-restart-replacement` (or `PDD_CHECK_SINGLE_ATTEMPT=1`) sets `single_attempt`, the plan disables restart replacement (`1` Check request per test, `1x` unbounded maximum) and refuses any `service-restarted` replacement (`restart-replacement-disabled`) while retaining the original `unknown` uncertainty across fresh runs, `--read`, and `--retry`."
+    },
+    {
+      "id": "AC5",
+      "text": "Pre-dispatch budget planning surfaces effective `per_request_caps`, `max_total_calls`, `restart_replacement` policy, `unbounded_maximum` versus capped `planned_maximum`, `planned_check_requests`, and `unresolved_prior_reservations` separately from the current batch's `committed_calls`, scoped strictly to `logical-interpreter-calls`."
+    }
+  ],
+  "initial_world": {},
+  "simulation": {},
+  "context": [],
+  "steps": [
+    {
+      "step_id": "ceiling-18-blocks-unresolved-restart-replacement",
+      "entry_path": "prompts/cli/runtime-check-plan.prompt.md",
+      "operation": "evaluateCheckBudget",
+      "input": {
+        "max_total_calls": 18,
+        "single_attempt": false,
+        "unresolved_prior_reservations": {
+          "count": 1,
+          "reserved_calls": 12
+        },
+        "rows": [
+          {
+            "test": "test/runtime/order.json",
+            "max_calls": 18,
+            "restart_used": false,
+            "attempts": [
+              {
+                "id": "req-1",
+                "kind": "initial",
+                "requested_max_calls": 18,
+                "status": "unresolved",
+                "known_calls": 6,
+                "unknown_calls": 0,
+                "reason_code": "service-restarted"
+              }
+            ]
+          }
+        ],
+        "candidate": {
+          "test": "test/runtime/order.json",
+          "kind": "restart-replacement",
+          "requested_max_calls": 18,
+          "restart_used": false,
+          "prior_reason_code": "service-restarted"
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/accounting",
+          "op": "equals",
+          "value": {
+            "consumed_known": 0,
+            "unresolved_reserved": 18,
+            "in_flight_reserved": 0,
+            "committed_calls": 18,
+            "remaining_calls": 0
+          }
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/decision",
+          "op": "equals",
+          "value": {
+            "action": "block",
+            "reason_code": "call-budget-exhausted",
+            "effective_max_calls": 0,
+            "retain_prior_uncertainty": true
+          }
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/plan",
+          "op": "equals",
+          "value": {
+            "per_request_caps": [18],
+            "max_total_calls": 18,
+            "restart_replacement": "at-most-one",
+            "unbounded_maximum": 36,
+            "planned_maximum": 18,
+            "planned_check_requests": 2,
+            "unresolved_prior_reservations": {
+              "count": 1,
+              "reserved_calls": 12
+            },
+            "accounting_scope": "logical-interpreter-calls"
+          }
+        }
+      ]
+    },
+    {
+      "step_id": "ceiling-36-permits-one-bounded-replacement",
+      "entry_path": "prompts/cli/runtime-check-plan.prompt.md",
+      "operation": "evaluateCheckBudget",
+      "input": {
+        "max_total_calls": 36,
+        "single_attempt": false,
+        "unresolved_prior_reservations": {
+          "count": 0,
+          "reserved_calls": 0
+        },
+        "rows": [
+          {
+            "test": "test/runtime/order.json",
+            "max_calls": 18,
+            "restart_used": false,
+            "attempts": [
+              {
+                "id": "req-1",
+                "kind": "initial",
+                "requested_max_calls": 18,
+                "status": "unresolved",
+                "known_calls": 0,
+                "unknown_calls": 1,
+                "reason_code": "service-restarted"
+              }
+            ]
+          }
+        ],
+        "candidate": {
+          "test": "test/runtime/order.json",
+          "kind": "restart-replacement",
+          "requested_max_calls": 18,
+          "restart_used": false,
+          "prior_reason_code": "service-restarted"
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/accounting/remaining_calls",
+          "op": "equals",
+          "value": 18
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/decision",
+          "op": "equals",
+          "value": {
+            "action": "send",
+            "reason_code": "within-budget",
+            "effective_max_calls": 18,
+            "retain_prior_uncertainty": true
+          }
+        }
+      ]
+    },
+    {
+      "step_id": "second-restart-refused-even-with-remaining-budget",
+      "entry_path": "prompts/cli/runtime-check-plan.prompt.md",
+      "operation": "evaluateCheckBudget",
+      "input": {
+        "max_total_calls": 60,
+        "single_attempt": false,
+        "unresolved_prior_reservations": {
+          "count": 0,
+          "reserved_calls": 0
+        },
+        "rows": [
+          {
+            "test": "test/runtime/order.json",
+            "max_calls": 18,
+            "restart_used": true,
+            "attempts": [
+              {
+                "id": "req-1",
+                "kind": "initial",
+                "requested_max_calls": 18,
+                "status": "unresolved",
+                "known_calls": 0,
+                "unknown_calls": 1,
+                "reason_code": "service-restarted"
+              },
+              {
+                "id": "req-2",
+                "kind": "restart-replacement",
+                "requested_max_calls": 18,
+                "status": "unresolved",
+                "known_calls": 0,
+                "unknown_calls": 1,
+                "reason_code": "service-restarted"
+              }
+            ]
+          }
+        ],
+        "candidate": {
+          "test": "test/runtime/order.json",
+          "kind": "restart-replacement",
+          "requested_max_calls": 18,
+          "restart_used": true,
+          "prior_reason_code": "service-restarted"
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/accounting",
+          "op": "equals",
+          "value": {
+            "consumed_known": 0,
+            "unresolved_reserved": 36,
+            "in_flight_reserved": 0,
+            "committed_calls": 36,
+            "remaining_calls": 24
+          }
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/decision",
+          "op": "equals",
+          "value": {
+            "action": "refuse-replacement",
+            "reason_code": "restart-limit-reached",
+            "effective_max_calls": 0,
+            "retain_prior_uncertainty": true
+          }
+        }
+      ]
+    },
+    {
+      "step_id": "multi-story-in-flight-waits-before-clamping",
+      "entry_path": "prompts/cli/runtime-check-plan.prompt.md",
+      "operation": "evaluateCheckBudget",
+      "input": {
+        "max_total_calls": 30,
+        "single_attempt": false,
+        "unresolved_prior_reservations": {
+          "count": 0,
+          "reserved_calls": 0
+        },
+        "rows": [
+          {
+            "test": "test/runtime/a.json",
+            "max_calls": 18,
+            "restart_used": false,
+            "attempts": [
+              {
+                "id": "cap-0",
+                "kind": "initial",
+                "requested_max_calls": 18,
+                "status": "capacity_refused_zero",
+                "known_calls": 0,
+                "unknown_calls": 0,
+                "reason_code": "check-capacity"
+              },
+              {
+                "id": "req-a",
+                "kind": "initial",
+                "requested_max_calls": 18,
+                "status": "settled",
+                "known_calls": 4,
+                "unknown_calls": 0,
+                "reason_code": null
+              }
+            ]
+          },
+          {
+            "test": "test/runtime/b.json",
+            "max_calls": 18,
+            "restart_used": false,
+            "attempts": [
+              {
+                "id": "req-b",
+                "kind": "initial",
+                "requested_max_calls": 18,
+                "status": "in_flight",
+                "known_calls": 2,
+                "unknown_calls": 0,
+                "reason_code": null
+              }
+            ]
+          },
+          {
+            "test": "test/runtime/c.json",
+            "max_calls": 18,
+            "restart_used": false,
+            "attempts": []
+          }
+        ],
+        "candidate": {
+          "test": "test/runtime/c.json",
+          "kind": "initial",
+          "requested_max_calls": 18,
+          "restart_used": false,
+          "prior_reason_code": null
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/accounting",
+          "op": "equals",
+          "value": {
+            "consumed_known": 4,
+            "unresolved_reserved": 0,
+            "in_flight_reserved": 18,
+            "committed_calls": 22,
+            "remaining_calls": 8
+          }
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/decision",
+          "op": "equals",
+          "value": {
+            "action": "wait",
+            "reason_code": "awaiting-in-flight-settlement",
+            "effective_max_calls": 0,
+            "retain_prior_uncertainty": false
+          }
+        }
+      ]
+    },
+    {
+      "step_id": "multi-story-settled-clamps-remaining-allowance",
+      "entry_path": "prompts/cli/runtime-check-plan.prompt.md",
+      "operation": "evaluateCheckBudget",
+      "input": {
+        "max_total_calls": 30,
+        "single_attempt": false,
+        "unresolved_prior_reservations": {
+          "count": 0,
+          "reserved_calls": 0
+        },
+        "rows": [
+          {
+            "test": "test/runtime/a.json",
+            "max_calls": 12,
+            "restart_used": false,
+            "attempts": [
+              {
+                "id": "req-a",
+                "kind": "initial",
+                "requested_max_calls": 12,
+                "status": "settled",
+                "known_calls": 4,
+                "unknown_calls": 0,
+                "reason_code": null
+              }
+            ]
+          },
+          {
+            "test": "test/runtime/b.json",
+            "max_calls": 18,
+            "restart_used": false,
+            "attempts": [
+              {
+                "id": "req-b",
+                "kind": "initial",
+                "requested_max_calls": 18,
+                "status": "settled",
+                "known_calls": 16,
+                "unknown_calls": 0,
+                "reason_code": null
+              }
+            ]
+          },
+          {
+            "test": "test/runtime/c.json",
+            "max_calls": 18,
+            "restart_used": false,
+            "attempts": []
+          }
+        ],
+        "candidate": {
+          "test": "test/runtime/c.json",
+          "kind": "initial",
+          "requested_max_calls": 18,
+          "restart_used": false,
+          "prior_reason_code": null
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/accounting",
+          "op": "equals",
+          "value": {
+            "consumed_known": 20,
+            "unresolved_reserved": 0,
+            "in_flight_reserved": 0,
+            "committed_calls": 20,
+            "remaining_calls": 10
+          }
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/decision",
+          "op": "equals",
+          "value": {
+            "action": "send",
+            "reason_code": "clamped-to-remaining-budget",
+            "effective_max_calls": 10,
+            "retain_prior_uncertainty": false
+          }
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/plan",
+          "op": "equals",
+          "value": {
+            "per_request_caps": [12, 18],
+            "max_total_calls": 30,
+            "restart_replacement": "at-most-one",
+            "unbounded_maximum": 96,
+            "planned_maximum": 30,
+            "planned_check_requests": 6,
+            "unresolved_prior_reservations": {
+              "count": 0,
+              "reserved_calls": 0
+            },
+            "accounting_scope": "logical-interpreter-calls"
+          }
+        }
+      ]
+    },
+    {
+      "step_id": "no-restart-replacement-disables-replacement-and-halves-plan",
+      "entry_path": "prompts/cli/runtime-check-plan.prompt.md",
+      "operation": "evaluateCheckBudget",
+      "input": {
+        "max_total_calls": 50,
+        "single_attempt": true,
+        "unresolved_prior_reservations": {
+          "count": 2,
+          "reserved_calls": 30
+        },
+        "rows": [
+          {
+            "test": "test/runtime/a.json",
+            "max_calls": 18,
+            "restart_used": false,
+            "attempts": [
+              {
+                "id": "req-a",
+                "kind": "initial",
+                "requested_max_calls": 18,
+                "status": "unresolved",
+                "known_calls": 3,
+                "unknown_calls": 0,
+                "reason_code": "service-restarted"
+              }
+            ]
+          },
+          {
+            "test": "test/runtime/b.json",
+            "max_calls": 18,
+            "restart_used": false,
+            "attempts": []
+          }
+        ],
+        "candidate": {
+          "test": "test/runtime/a.json",
+          "kind": "restart-replacement",
+          "requested_max_calls": 18,
+          "restart_used": false,
+          "prior_reason_code": "service-restarted"
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/plan",
+          "op": "equals",
+          "value": {
+            "per_request_caps": [18],
+            "max_total_calls": 50,
+            "restart_replacement": "disabled",
+            "unbounded_maximum": 36,
+            "planned_maximum": 36,
+            "planned_check_requests": 2,
+            "unresolved_prior_reservations": {
+              "count": 2,
+              "reserved_calls": 30
+            },
+            "accounting_scope": "logical-interpreter-calls"
+          }
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/decision",
+          "op": "equals",
+          "value": {
+            "action": "refuse-replacement",
+            "reason_code": "restart-replacement-disabled",
+            "effective_max_calls": 0,
+            "retain_prior_uncertainty": true
+          }
+        }
+      ]
+    }
+  ]
+}

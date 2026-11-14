@@ -191,3 +191,7 @@ Paired Runtime source branch: `feature/808-product-step-labels`. Its proposed AP
 2. [Read saved baseline obligations separately](affected-baseline-report.md). Test: `test/runtime/affected-baseline-report.json`. Prompt tests: NOT RUN; supplied-observation report only. Native acceptance: `test/affected-checks/affected-baseline-report-cases.json`.
 
 Proposed command status follows selected target results; a target pass can exit 0 while saved baseline failures still block the unchanged full-pass gates. This convention requires person review. No implementation, approval, hosted check or native pass is claimed.
+
+## Invocation call budget and restart-replacement control (#793, draft for review)
+
+1. [Bound total interpreter calls and control restart replacements](invocation-call-budget.md). Test: `test/runtime/invocation-call-budget.json`. Native acceptance: `test/invocation-call-budget.vectors.test.mjs`, `test/invocation-call-budget.native.test.mjs`, `test/invocation-call-budget.formal.test.mjs`.
