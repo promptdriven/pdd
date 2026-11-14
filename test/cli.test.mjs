@@ -23,9 +23,10 @@ test('ALPHA1: only local plans are admitted without Host disposition or forwarde
     const input = [...argv], plan = parseArgv(input);
     assert.equal(plan.hostArgv, undefined); assert.equal(plan.host, undefined); assert.deepEqual(input, argv);
   }
+  assert.equal(parseArgv(['setup', '--json']).options['--json'], true);
   // G1: people call the skills in their own chat; pdd starts no session and no named-workflow chat.
   for (const argv of [['session'], ['session','--agent','claude','Draft a prompt'], ['workflow','feature'], ['workflow','bug','--agent','claude'], ['workflow','small-change','Fix it'],
-    ['setup', 'now'], ['setup', '--json'], ['run', 'start', 'issue'], ['verify'], ['runtime', 'discover'],
+    ['setup', 'now'], ['run', 'start', 'issue'], ['verify'], ['runtime', 'discover'],
     ['replay'], ['call'], ['tests'], ['doctor'], ['phone'], ['machine'], ['repo'], ['agents'], ['workbench'],
     ['unknown', '--help'], ['workflow', 'new', 'feature'], ['workflow', 'list', '--brief'],
     ['workflow', 'list', '--json', '--json'], ['workflow', 'list', 'extra'], ['completion', 'fish'],

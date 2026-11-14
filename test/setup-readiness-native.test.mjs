@@ -23,10 +23,12 @@ test('readiness is read-only and follows the selected block and ignore rule', as
     assert.equal(await run(), false);
   } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
-test('invalid supplied code is refused before any setup effects', async () => {
-  const stdout = stream(), stderr = stream(); let called = false;
-  const exit = await runPdd(['setup','--pair-code','bad!'], { stdout, stderr, stdin: stream(), pathDiagnostic() { called = true; return []; }, setupSkills() { called = true; return []; } });
-  assert.equal(exit, 2); assert.equal(called, false);
+test('invalid setup options are refused before any setup effects', async () => {
+  for (const argv of [['setup','--pair-code','bad!'], ['setup','--json']]) {
+    const stdout = stream(), stderr = stream(); let called = false;
+    const exit = await runPdd(argv, { stdout, stderr, stdin: stream(), checkProjectReady() { called = true; }, pathDiagnostic() { called = true; return []; }, setupSkills() { called = true; return []; } });
+    assert.equal(exit, 2); assert.equal(called, false);
+  }
 });
 test('unattended setup in a child process initializes once and repeats without writes', () => {
  const cwd = mkdtempSync(join(tmpdir(), 'pdd-unattended-'));
