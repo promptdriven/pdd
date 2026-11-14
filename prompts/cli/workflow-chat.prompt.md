@@ -38,7 +38,7 @@ Before deciding that a present workspace needs no rebuild, use the [layout owner
 
 ## Shared lifecycle observations
 
-For an ordinary fresh start, durably associate a unique launch attempt with its chat before dispatch. Preserve the agent’s interactive terminal input and output. An exit receipt for that exact attempt records the exit status after the foreground command exits; it does not capture terminal output. Missing, malformed or unrelated receipts prove nothing. Resume and replacement retain their existing custody and observation rules.
+For an ordinary fresh start, durably associate `chat.launchAttempt` containing `id` (a UUID) and `exitFile` (`<runDir>/launch-<UUID>.exit.json`) with its chat before dispatch. Preserve the agent’s interactive terminal input and output. An exit receipt for that exact attempt is JSON containing `attemptId` (the same UUID) and integer `exitCode`, recorded after the foreground command exits; it does not capture terminal output. Missing, malformed or unrelated receipts prove nothing. Resume and replacement retain their existing custody and observation rules.
 
 
 The [runner lifecycle](workflow-runner.prompt.md#chat-lifecycle) is authoritative for start, open, status and projections. Before ordinary start dispatch, prepare the chat identity and await `ports.checkpoint(chat)` so its starting state is durable; checkpoint failure sends nothing. An absent native agent or expired grace is not end evidence. Opening a starting chat uses injected clock/sleep and session/Herdr inspection until confirmation or the shared grace deadline; it does not launch or resume while confirmation is pending. Preserve the same identity on an uncertain reply. Report positive running/end/failure evidence to the runner before terminal attachment.
@@ -405,7 +405,7 @@ Export countReasons(kept) to count the reason fields, mergeReasonCounts(...group
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"draft","prose_sha256":"aeef289842291da8ea1a345dc46f35d16f1c48712722ce1158afb38286663651","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"},"reason":{"type":"string"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
+{"status":"draft","prose_sha256":"08b0332dade952319aa9f8af69c3871cea2e656f226eb94d0aab2ff48c20d1dd","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"},"reason":{"type":"string"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
 ```
 </details>
 
