@@ -29,16 +29,6 @@
     "requests": []
   },
   "simulation": {
-    "files.readFileSync": {
-      "action": "blob.read",
-      "world_pointer": "/files",
-      "path_argument_pointer": "/path",
-      "content_argument_pointer": null,
-      "result_template": {
-        "content": null
-      },
-      "result_value_pointer": "/content"
-    },
     "files.readdirSync": {
       "action": "port.write",
       "world_pointer": "/requests",
@@ -90,6 +80,16 @@
         "PDD_STATE_DIR": "/state",
         "HOME": null
       }
+    },
+    "fileContents.read": {
+      "action": "blob.read",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "content": ""
+      },
+      "result_value_pointer": "/content"
     }
   },
   "context": [],
