@@ -39,3 +39,17 @@ Keep the package self-contained: no private dependencies and no credentials. Onl
 Each path has one active writer. Use a topic branch, keep other work and keep implementation prompts with their code. Use ordinary Node tests for changed public behavior. Avoid tests that only check prose or repeat the implementation. The public full suite is `npm test`. It needs no live service and no model call. A real agent run that the person asked for is a separate activity.
 
 Report what changed, the real check results and any behavior that is not proved. In every PR into `main` that finishes an issue (including release or integration PRs), write one `Closes #N` line per completed issue; use `Refs #N` only when the issue still needs another PR. A local draft or PR summary is not publication. Keep execution notes outside the repository. Public source publication needs a review and a green public full suite. Follow the route of the named integrator. Never force-push, rewrite private repository history or publish a package to npm as a routine check.
+
+## Golden principles
+
+Each rule names the check that reports on it. The ratchet report shows base and head numbers in each PR body. Each refactor PR states its class: A (structure only), B (structure plus generated records) or C (dead-code deletion).
+
+| Rule | Checked by |
+|---|---|
+| Reuse the existing helper. Do not write a second copy. | Ratchet report: clone lines |
+| Deleting code is a win. | Ratchet report: net lines |
+| Keep structure and behavior in separate PRs. | PR class A, B or C in the PR body; golden CLI diff |
+| In host code (`src/`, not `src/runtime/` or `src/vendor/`), write no comments, except the `Generated from` header, a hashbang, a license and `// external: <link> <reason>`. | Ratchet report: comment lines |
+| Keep history out of prompts. State each rule in the present tense. | Ratchet report: history references |
+| Make one PR for each change. | Review |
+| Extend the module's existing test file. Do not add a test file for each fix round. | Review |
