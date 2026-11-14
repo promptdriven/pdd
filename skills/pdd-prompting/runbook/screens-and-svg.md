@@ -226,7 +226,7 @@ markup fail the check. Parser and size failures appear as `invalid_html` diagnos
 **One rendering contract.** Structured HTML checks and the Simulator share the sanitizer. Checks select elements and read
 attributes and text from the same sanitized HTML that the Simulator displays. The renderer derives interactive target markers
 after sanitization. Reported attribute values describe the retained subset, with sensitive values redacted.
-Assert only on elements, attributes and style declarations that survive.
+Assert only on elements, attributes and style declarations that survive. For dense grids, boards, or large tables (such as a 20×20 cell grid), return compact summary markup and key controls from simulated `render` and check structured state fields (`score`, positions, counts) in `pdd test`, rather than emitting hundreds of repeated HTML cell tags; verify full multi-hundred-cell DOM or canvas grids locally with `pdd test --screen URL --drawing SVG` or native browser tests in code space.
 
 The supported HTML subset includes ordinary text and sections, headings, lists, tables, forms and controls.
 Allowed attributes include `id`, `class`, `role`, `title`, form attributes such as `name`, `value`, `type` and `disabled`,

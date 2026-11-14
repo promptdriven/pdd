@@ -1,11 +1,10 @@
 # scope
 
-- Read the repo instructions and the code and prompts that the request touches.
-- In scope.md, list every issue request and trusted follow-up as a checklist. Save the same items in `small-change-checklist.json` (RUNBOOK §15). Keep pending items visible; exclusions need a reason quoted from the issue, not the plan.
-- State the result, the files it touches, why it is small and how to undo it.
-- When fixing the issue changes no product behavior and plans only unowned path d non-code files (docs, CI, lockfiles, non-behavior metadata or test-only maintenance — never `*.prompt.md` or `user_stories/*.md`), write no Story and no prompt.
-- If behavior changes, write the expected output or error now, before the code changes.
-- For a behavior fix, write `Defect:` (the real defect and where it occurs) and `Not caught because:` (the detection gap) in scope.md.
-- Name the test command. Record any docs-only/formal exemption in the typed formal block (RUNBOOK §15); prose is not gate evidence.
-- Ask only about a choice that changes the result. Do not widen the scope.
-- Only the person decides gate approval. See RUNBOOK §2.
+- Read repo instructions and the files the request touches.
+- List every issue request and trusted follow-up in scope.md and `small-change-checklist.json` (RUNBOOK §15); keep pending items visible and quote the issue for any exclusion.
+- Run `pdd owner` on planned files. Plan only unowned path d files outside PDD (docs, guides, packages, lockfiles, config, CI or tests); write no Story or prompt.
+- If it needs `*.prompt.md`, `user_stories/*.md`, prompt-owned files or product/app code (`src/`, `app/`, etc.), even with no prompt yet, stop and switch to pdd-bug or pdd-feature (in `pdd workflow run`, use `<pdd> workflow ask` to ask the person to run `pdd workflow run bug N` or `feature N`, or proceed only if the person explicitly confirms).
+- State the result, planned files, why it stays outside PDD and how to undo it.
+- For a CI, config, package or test defect, write `Defect:` and `Not caught because:` in scope.md.
+- Name the test command. Put any docs-only/formal exemption in the typed formal block (RUNBOOK §15), not prose.
+- Ask only about choices that change the result; never widen scope. Only the person approves gates (RUNBOOK §2).
