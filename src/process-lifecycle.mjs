@@ -1,4 +1,4 @@
-// Generated from prompts/cli/process-lifecycle.prompt.md (sha256: ca1d227bd76f65a3347d6f057eead8bc937ef9226b566c7f0fd4fd3228c5ac70).
+// Generated from prompts/cli/process-lifecycle.prompt.md (sha256: f10e28afdb2daa82da7c1031962649dbbd805441f9a9389f5b6a71c9654f9405).
 
 const rowPattern = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+((?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) .{20})|@\S+)\s+(.*)$/;
 
@@ -42,6 +42,19 @@ export async function terminateCaptured(captured, ports) {
         && typeof row.start === 'string' && row.start.length > 0 && typeof row.args === 'string') ? rows : null;
     } catch { return null; }
   };
+  const leaders = [], seenGroups = new Set();
+  for (const row of captured) {
+    if (!row?.groupEnded && Number.isSafeInteger(row?.pgid) && row.pgid > 1 && row.pid === row.pgid && row.pgid !== process.pid && !seenGroups.has(row.pgid)) {
+      seenGroups.add(row.pgid); leaders.push(row);
+    }
+  }
+  const groupState = (rows, leader) => {
+    const current = rows.find(row => row.pid === leader.pid);
+    if (current && current.start !== leader.start) return { active: false, reused: true, uncertain: false, members: [] };
+    if (current && !sameProcess(leader, current)) return { active: false, reused: false, uncertain: true, members: [current] };
+    const members = rows.filter(row => row.pgid === leader.pgid && row.pid !== process.pid);
+    return { active: members.some(row => row.pid !== leader.pid), reused: false, uncertain: false, members };
+  };
   const matching = (rows, targets) => {
     const now = new Map(rows.map(row => [row.pid, row]));
     const live = [], uncertain = [];
@@ -52,11 +65,21 @@ export async function terminateCaptured(captured, ports) {
     }
     return { live, uncertain };
   };
+  const remainingCount = (liveRows, rows, groupRows) => {
+    const pids = new Set(liveRows.map(row => row.pid));
+    for (const leader of groupRows) for (const member of groupState(rows, leader).members) pids.add(member.pid);
+    return pids.size;
+  };
   let rows = await read();
   if (!rows) return { confirmed: false, stopped: 0, killed: 0, remaining: captured.length };
   let { live, uncertain } = matching(rows, captured), stopped = 0, killed = 0;
-  if (uncertain.length) return { confirmed: false, stopped, killed, remaining: live.length + uncertain.length };
-  const termRows = [];
+  if (uncertain.length || leaders.some(leader => groupState(rows, leader).uncertain))
+    return { confirmed: false, stopped, killed, remaining: Math.max(1, live.length + uncertain.length) };
+  let activeGroups = leaders.filter(leader => {
+    const state = groupState(rows, leader);
+    return !state.reused && state.active;
+  });
+  const termRows = [], termPids = new Set();
   for (const row of live) {
     rows = await read();
     if (!rows) return { confirmed: false, stopped, killed, remaining: Math.max(1, live.length) };
@@ -64,17 +87,36 @@ export async function terminateCaptured(captured, ports) {
     if (current.uncertain.length) return { confirmed: false, stopped, killed, remaining: Math.max(1, current.uncertain.length + termRows.length) };
     if (!current.live.length) continue;
     try { signal(row.pid, 'SIGTERM'); stopped++; } catch { /* A later inventory decides. */ }
-    termRows.push(row);
+    termRows.push(row); termPids.add(row.pid);
+  }
+  const termGroups = [];
+  for (const leader of activeGroups) {
+    const before = groupState(rows, leader);
+    if (before.reused || !before.members.length) continue;
+    if (!before.members.some(member => !termPids.has(member.pid))) { termGroups.push(leader); continue; }
+    rows = await read();
+    if (!rows) return { confirmed: false, stopped, killed, remaining: Math.max(1, termRows.length + activeGroups.length) };
+    const state = groupState(rows, leader);
+    if (state.uncertain) return { confirmed: false, stopped, killed, remaining: Math.max(1, state.members.length + termGroups.length) };
+    if (state.reused || !state.members.length) continue;
+    termGroups.push(leader);
+    try { signal(-leader.pgid, 'SIGTERM'); if (!termPids.has(leader.pid)) stopped++; } catch { /* A later inventory decides. */ }
   }
   live = termRows;
-  for (let waited = 0; live.length && waited < grace; waited += poll) {
+  activeGroups = termGroups;
+  for (let waited = 0; (live.length || activeGroups.length) && waited < grace; waited += poll) {
     await sleep(Math.min(poll, grace - waited));
     rows = await read();
-    if (!rows) return { confirmed: false, stopped, killed, remaining: live.length };
+    if (!rows) return { confirmed: false, stopped, killed, remaining: Math.max(1, live.length + activeGroups.length) };
     ({ live, uncertain } = matching(rows, live));
-    if (uncertain.length) return { confirmed: false, stopped, killed, remaining: live.length + uncertain.length };
+    if (uncertain.length || activeGroups.some(leader => groupState(rows, leader).uncertain))
+      return { confirmed: false, stopped, killed, remaining: Math.max(1, live.length + uncertain.length) };
+    activeGroups = activeGroups.filter(leader => {
+      const state = groupState(rows, leader);
+      return !state.reused && state.members.length > 0;
+    });
   }
-  const killRows = [];
+  const killRows = [], killPids = new Set();
   for (const row of live) {
     rows = await read();
     if (!rows) return { confirmed: false, stopped, killed, remaining: Math.max(1, live.length) };
@@ -82,15 +124,32 @@ export async function terminateCaptured(captured, ports) {
     if (current.uncertain.length) return { confirmed: false, stopped, killed, remaining: Math.max(1, current.uncertain.length + killRows.length) };
     if (!current.live.length) continue;
     try { signal(row.pid, 'SIGKILL'); killed++; } catch { /* A later inventory decides. */ }
-    killRows.push(row);
+    killRows.push(row); killPids.add(row.pid);
+  }
+  const survivingGroups = [], killGroups = [];
+  for (const leader of activeGroups) {
+    const before = groupState(rows, leader);
+    if (before.reused || !before.members.length) continue;
+    if (!before.members.some(member => !killPids.has(member.pid))) { survivingGroups.push(leader); continue; }
+    rows = await read();
+    if (!rows) return { confirmed: false, stopped, killed, remaining: Math.max(1, killRows.length + activeGroups.length) };
+    const state = groupState(rows, leader);
+    if (state.uncertain) return { confirmed: false, stopped, killed, remaining: Math.max(1, state.members.length + survivingGroups.length) };
+    if (state.reused || !state.members.length) continue;
+    survivingGroups.push(leader);
+    try { signal(-leader.pgid, 'SIGKILL'); if (!killPids.has(leader.pid)) killed++; } catch { /* A later inventory decides. */ }
+    killGroups.push(leader);
   }
   live = killRows;
-  if (killRows.length) {
+  if (killRows.length || killGroups.length) {
     await sleep(poll);
     rows = await read();
-    if (!rows) return { confirmed: false, stopped, killed, remaining: killRows.length };
+    if (!rows) return { confirmed: false, stopped, killed, remaining: Math.max(1, killRows.length + survivingGroups.length) };
     ({ live, uncertain } = matching(rows, killRows));
-    if (uncertain.length) return { confirmed: false, stopped, killed, remaining: live.length + uncertain.length };
+    if (uncertain.length || survivingGroups.some(leader => groupState(rows, leader).uncertain))
+      return { confirmed: false, stopped, killed, remaining: Math.max(1, live.length + uncertain.length) };
   }
-  return { confirmed: live.length === 0, stopped, killed, remaining: live.length };
+  const unReusedGroups = rows ? survivingGroups.filter(leader => !groupState(rows, leader).reused) : [];
+  const remaining = rows ? remainingCount(live, rows, unReusedGroups) : live.length;
+  return { confirmed: remaining === 0, stopped, killed, remaining };
 }

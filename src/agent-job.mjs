@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-job.prompt.md (sha256: 5db7d4a63c213d0420d111146f96e92ad4d7c37fc9ec2b315be5599dfdbce32c).
+// Generated from prompts/cli/agent-job.prompt.md (sha256: a04b06903d0fd8e3190045cfa2d134aab2d821b270d767967a33d7f5f21d09af).
 import { execFile, spawn, spawnSync } from 'node:child_process';
 import { accessSync, closeSync, constants, fstatSync, openSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { setPriority } from 'node:os';
@@ -192,6 +192,7 @@ function markCustodyUncertain(job, finding, legacy = false) {
 }
 
 function worktreeCwds(rows, uid, ports = {}) {
+  const platform = ports.platform ?? process.platform;
   if (typeof ports.cwd === 'function') {
     const found = new Map();
     for (const row of rows) try {
@@ -200,12 +201,12 @@ function worktreeCwds(rows, uid, ports = {}) {
     } catch { /* Re-read this identity below. */ }
     return found;
   }
-  if (process.platform === 'linux') {
+  if (platform === 'linux') {
     const found = new Map();
     for (const row of rows) try { found.set(row.pid, readlinkSync(`/proc/${row.pid}/cwd`)); } catch { /* Re-read this identity below. */ }
     return found;
   }
-  if (process.platform !== 'darwin') return null;
+  if (platform !== 'darwin') return null;
   const listed = (ports.spawnSync ?? spawnSync)('lsof', ['-n', '-a', '-u', String(uid), '-d', 'cwd', '-Fpn'], { encoding: 'utf8', timeout: 5000, maxBuffer: 64 * 1024 * 1024 });
   if (listed.status !== 0) return null;
   const found = new Map(); let pid = null;
@@ -239,23 +240,47 @@ function startsBeforeBoundary(row, boundary) {
   return Number.isFinite(start) && Math.floor(start / 1000) < Math.floor(boundary / 1000);
 }
 
-// The wrapper is detached into a new POSIX session. A candidate whose current
-// session leader predates that boundary cannot be its descendant. Missing or
-// changing PID/start/session evidence stays uncertain.
-function inOlderLinuxSession(row, job, boundary, ports = {}) {
-  if (process.platform !== 'linux' || !Number.isFinite(boundary)) return false;
+function ancestorPids(rows, seeds) {
+  const byPid = new Map(rows.map(row => [row.pid, row])), seen = new Set();
+  for (let pid of seeds) {
+    for (let depth = 0; Number.isSafeInteger(pid) && pid > 0 && !seen.has(pid) && depth < 64; depth++) {
+      seen.add(pid);
+      pid = byPid.get(pid)?.ppid;
+    }
+  }
+  return seen;
+}
+
+// The wrapper is detached into a new non-root POSIX session. A candidate outside
+// the wrapper's group and session whose session leader predates the boundary, or
+// is privilege-separated under root (such as Linux sshd), or is systemd's (sd-pam)
+// inside systemd --user's own session, cannot descend from the wrapper.
+function inOutsideLinuxSession(row, job, boundary, latest, ports = {}) {
+  const platform = ports.platform ?? process.platform;
+  if (platform !== 'linux' || row.pgid === job.pid) return false;
   const read = pid => {
     const result = (ports.spawnSync ?? spawnSync)('ps', ['-ww', '-p', String(pid), '-o', 'pid=,sid=,uid=,state=,lstart='],
       { encoding: 'utf8', timeout: 2000, env: { ...process.env, LC_ALL: 'C' } });
     if (result?.status !== 0) return null;
-    const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) .{20})\s*$/.exec(String(result.stdout));
+    const match = /^\s*(\d+)\s+(\d+)\s+(-?\d+)\s+(\S+)\s+((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) .{20})\s*$/.exec(String(result.stdout));
     return match ? { pid: Number(match[1]), sid: Number(match[2]), uid: Number(match[3]), state: match[4], start: match[5].trim() } : null;
   };
   const current = read(row.pid);
   if (!current || current.pid !== row.pid || current.uid !== row.uid || current.start !== row.start
       || String(current.state).startsWith('Z') || !Number.isSafeInteger(current.sid) || current.sid <= 0 || current.sid === job.pid) return false;
   const leader = read(current.sid);
-  return Boolean(leader && leader.pid === current.sid && leader.sid === current.sid && startsBeforeBoundary(leader, boundary));
+  if (!leader || leader.pid !== current.sid || leader.sid !== current.sid) return false;
+  if (Number.isFinite(boundary) && startsBeforeBoundary(leader, boundary)) return true;
+  if (row.uid > 0 && leader.uid === 0) return true;
+  if (current.pid !== current.sid && row.args === '(sd-pam)' && leader.uid === row.uid) return true;
+  if (row.uid > 0 && Number.isSafeInteger(row.ppid) && row.ppid > 1 && Array.isArray(latest)) {
+    const ancestors = ancestorPids(latest, [process.pid, job.pid]);
+    if (!ancestors.has(row.ppid)) {
+      const parent = read(row.ppid);
+      if (parent && parent.pid === row.ppid && parent.uid === 0 && !String(parent.state).startsWith('Z')) return true;
+    }
+  }
+  return false;
 }
 
 // An explicit custody-root match can only retain the disposable worktree. It never
@@ -263,7 +288,8 @@ function inOlderLinuxSession(row, job, boundary, ports = {}) {
 // so an unsaved matching process is the late detached-helper case that the periodic
 // descendant snapshots can miss.
 function worktreeCustody(job, custodyRoot, ports = {}, retained = [], legacy = false, boundary = null) {
-  if (!['darwin', 'linux'].includes(process.platform)) return { reason: 'cwd custody is unsupported', root: null, identities: null };
+  const platform = ports.platform ?? process.platform;
+  if (!['darwin', 'linux'].includes(platform)) return { reason: 'cwd custody is unsupported', root: null, identities: null };
   const manifest = readJson(`${job.token}.processes.json`);
   if (legacy ? manifest !== undefined : !processManifest(manifest)) return { reason: 'manifest invalid', root: null, identities: null };
   const saved = legacy ? [] : manifest;
@@ -293,7 +319,7 @@ function worktreeCustody(job, custodyRoot, ports = {}, retained = [], legacy = f
       if (!Array.isArray(latest)) return { reason: 'worktree inventory unavailable', root, identities: null };
       const current = latest.find(now => sameIdentity(row, now));
       if (current && !String(current.state ?? '').startsWith('Z') && !startsBeforeBoundary(row, boundary)
-          && !inOlderLinuxSession(row, job, boundary, ports)) {
+          && !inOutsideLinuxSession(row, job, boundary, latest, ports)) {
         identities.push(row); reason ??= 'cwd evidence unavailable for a live process';
       }
       continue;
@@ -376,7 +402,18 @@ export function snapshotAgentJob(job, ports = {}, { requireWrapper = false, clea
   if (current.incomplete) return uncertain('incomplete inventory', root);
   if (!current.every(processIdentity)) return uncertain('process identity invalid', root);
   const byIdentity = new Map();
-  for (const row of [...saved, ...current]) if (processIdentity(row)) byIdentity.set(`${row.pid}:${row.start}`, byIdentity.get(`${row.pid}:${row.start}`) ?? row);
+  for (const row of [...saved, ...current]) {
+    if (!processIdentity(row)) continue;
+    const key = `${row.pid}:${row.start}`, prev = byIdentity.get(key);
+    byIdentity.set(key, prev ? (row.groupEnded && !prev.groupEnded ? { ...prev, groupEnded: true } : prev) : { ...row });
+  }
+  const liveByPid = new Map(rows.map(row => [row.pid, row]));
+  const liveGroups = new Set(rows.map(row => row.pgid));
+  for (const entry of byIdentity.values()) {
+    if (entry.groupEnded || !Number.isSafeInteger(entry.pgid) || entry.pgid <= 1 || entry.pid !== entry.pgid || entry.pgid === job.pid) continue;
+    const liveLeader = liveByPid.get(entry.pid);
+    if (!liveGroups.has(entry.pgid) || (liveLeader && !sameProcess(entry, liveLeader))) entry.groupEnded = true;
+  }
   job.processes = [...byIdentity.values()];
   try { writeAtomic(manifestFile, JSON.stringify(job.processes)); }
   catch { uncertain('manifest write failed'); }
@@ -440,7 +477,8 @@ export async function cleanupAgentJob(job, ports = {}) {
   const spec = readJson(job.token);
   const hasCustodyRoot = object(spec) && typeof spec.custodyRoot === 'string' && spec.custodyRoot;
   if (!hasCustodyRoot) return currentCustody ? { ...result, confirmed: false, remaining: Math.max(result.remaining, 1) } : result;
-  if (!['darwin', 'linux'].includes(process.platform) || (ports.alive ?? nativeAlive)(job.pid, job.token))
+  const platform = ports.platform ?? process.platform;
+  if (!['darwin', 'linux'].includes(platform) || (ports.alive ?? nativeAlive)(job.pid, job.token))
     return { ...result, confirmed: false, remaining: Math.max(result.remaining, 1) };
   let currentRoot = null;
   try { currentRoot = realpathSync(spec.custodyRoot); } catch {}
@@ -474,11 +512,11 @@ const etimeSeconds = text => {
   return clock.split(':').reduce((sum, part) => sum * 60 + Number(part), 0) + Number(days) * 86400;
 };
 function processTable() {
-  const table = spawnSync('ps', ['-A', '-ww', '-o', 'pid=,ppid=,time=,etime=,command='], { encoding: 'utf8', timeout: 5000, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, LC_ALL: 'C', LANG: 'C' } });
+  const table = spawnSync('ps', ['-A', '-ww', '-o', 'pid=,ppid=,pgid=,time=,etime=,command='], { encoding: 'utf8', timeout: 5000, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, LC_ALL: 'C', LANG: 'C' } });
   if (table.status !== 0) return null;
   const now = Date.now();
-  return String(table.stdout).split('\n').map(line => /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s?(.*)$/.exec(line)).filter(Boolean)
-    .map(([, pid, ppid, time, etime, command]) => ({ pid: Number(pid), ppid: Number(ppid), cpu: cpuSeconds(time), start: now - etimeSeconds(etime) * 1000, command: command.trim() }))
+  return String(table.stdout).split('\n').map(line => /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s?(.*)$/.exec(line)).filter(Boolean)
+    .map(([, pid, ppid, pgid, time, etime, command]) => ({ pid: Number(pid), ppid: Number(ppid), pgid: Number(pgid), cpu: cpuSeconds(time), start: now - etimeSeconds(etime) * 1000, command: command.trim() }))
     .filter(row => Number.isFinite(row.cpu) && Number.isFinite(row.start));
 }
 function lastLogLine(file) {
@@ -527,6 +565,22 @@ export function hungRound(memo, { rows, log, now, agentPid, settings }) {
   }
   return stops;
 }
+export function hungKillTargets(sub, latestRows, { wrapperPid = process.pid, agentPid } = {}) {
+  if (!Array.isArray(sub) || !Array.isArray(latestRows)) return { groups: [], pids: [] };
+  const byPid = new Map(latestRows.map(item => [item.pid, item]));
+  const groupMembers = new Set(latestRows.map(item => item.pgid));
+  const groups = [], seenGroups = new Set(), pids = [];
+  for (const r of sub) {
+    const nowRow = byPid.get(r.pid);
+    const reused = Boolean(nowRow && Math.abs(nowRow.start - r.start) >= 3000);
+    if (!reused && Number.isSafeInteger(r.pgid) && r.pgid > 1 && r.pid === r.pgid && r.pgid !== wrapperPid && r.pgid !== agentPid
+        && groupMembers.has(r.pgid) && !seenGroups.has(r.pgid)) {
+      seenGroups.add(r.pgid); groups.push(r.pgid);
+    }
+    if (nowRow && !reused) pids.push(r.pid);
+  }
+  return { groups, pids };
+}
 function watchHung(spec, agentPid, out) {
   const memo = {};
   const round = () => {
@@ -534,8 +588,17 @@ function watchHung(spec, agentPid, out) {
     if (!log.size) return;
     for (const { row, sub, minutes } of hungRound(memo, { rows: processTable(), log, now, agentPid, settings: spec.hung })) {
       const last = lastLogLine(spec.log), command = row.command.slice(0, 500);
-      for (const r of sub) try { process.kill(r.pid, 'SIGTERM'); } catch { /* Gone. */ }
-      setTimeout(() => { for (const r of sub) try { process.kill(r.pid, 'SIGKILL'); } catch { /* Gone. */ } }, GRACE_MS).unref();
+      for (const r of sub) {
+        if (Number.isSafeInteger(r.pgid) && r.pgid > 1 && r.pid === r.pgid && r.pgid !== process.pid && r.pgid !== agentPid) {
+          try { process.kill(-r.pgid, 'SIGTERM'); } catch { /* Gone. */ }
+        }
+        try { process.kill(r.pid, 'SIGTERM'); } catch { /* Gone. */ }
+      }
+      setTimeout(() => {
+        const { groups, pids } = hungKillTargets(sub, processTable(), { wrapperPid: process.pid, agentPid });
+        for (const pgid of groups) try { process.kill(-pgid, 'SIGKILL'); } catch { /* Gone. */ }
+        for (const pid of pids) try { process.kill(pid, 'SIGKILL'); } catch { /* Gone. */ }
+      }, GRACE_MS).unref();
       const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: spec.cwd, encoding: 'utf8', timeout: 5000 });
       const record = { at: now, pid: row.pid, command, minutes, last, head: head.status === 0 && /^[0-9a-f]{40}$/.test(head.stdout.trim()) ? head.stdout.trim() : null };
       try { writeFileSync(out, `agent-job: stopped a hung command after ${minutes} min with no output and almost no CPU: ${command} (last output: ${last})\n`); } catch { /* The record below still counts. */ }
@@ -627,18 +690,43 @@ export function jobStopper({ killGroup, setTimer, writeExit, exit, now = Date.no
   const exited = (code, signal) => { if (stopping) ended = { code, signal }; else if (STOP_SIGNALS.includes(signal)) { ended = { code, signal }; stop(signal); } else finish(code, signal); };
   return { finish, stop, exited };
 }
+export function selectChildGroups(saved, nowRows, wrapperPid = process.pid, allowedGroups = null) {
+  if (!Array.isArray(saved) || !Array.isArray(nowRows)) return new Set();
+  const byPid = new Map(nowRows.map(row => [row.pid, row]));
+  const withMembers = new Set(nowRows.map(row => row.pgid));
+  const groups = new Set();
+  for (const row of saved) {
+    if (row?.groupEnded || !Number.isSafeInteger(row?.pgid) || row.pgid <= 1 || row.pgid === wrapperPid || row.pid !== row.pgid) continue;
+    if (allowedGroups && !allowedGroups.has(row.pgid)) continue;
+    if (!withMembers.has(row.pgid)) continue;
+    const current = byPid.get(row.pid);
+    if (current && !sameProcess(row, current)) continue;
+    groups.add(row.pgid);
+  }
+  return groups;
+}
 // The detached wrapper: it owns the agent process and records how it ended.
 function wrap(specFile) {
   const spec = JSON.parse(readFileSync(specFile, 'utf8'));
-  const snapshot = () => snapshotAgentJob({ pid: process.pid, token: specFile });
+  const job = { pid: process.pid, token: specFile };
+  const snapshot = () => snapshotAgentJob(job);
   snapshot();
   const earlySnapshot = setTimeout(snapshot, 25); earlySnapshot.unref();
   setInterval(snapshot, 250).unref();
   lowerPriority(spec);
   const stdin = openSync(spec.input, 'r'), out = openSync(spec.log, 'a', 0o600);
-  let child;
+  let child, activeChildGroups = null;
+  const signalChildGroups = signal => {
+    if (signal === 'SIGTERM') snapshot();
+    const groups = selectChildGroups(job.processes, lifecycleRows(), process.pid, signal === 'SIGKILL' ? activeChildGroups : null);
+    if (signal === 'SIGTERM') activeChildGroups = groups;
+    for (const pgid of groups) try { process.kill(-pgid, signal); } catch { /* Already gone. */ }
+  };
   const { finish, stop, exited } = jobStopper({
-    killGroup: signal => { try { process.kill(-process.pid, signal); } catch { if (signal === 'SIGTERM') try { child?.kill('SIGTERM'); } catch { /* The child may already be gone. */ } } },
+    killGroup: signal => {
+      signalChildGroups(signal);
+      try { process.kill(-process.pid, signal); } catch { if (signal === 'SIGTERM') try { child?.kill('SIGTERM'); } catch { /* The child may already be gone. */ } }
+    },
     setTimer: (fn, ms) => setTimeout(fn, ms),
     writeExit: record => { try { writeAtomic(spec.exit, JSON.stringify(record)); } finally { for (const fd of [stdin, out]) try { closeSync(fd); } catch { /* Already closed. */ } } },
     exit: () => process.exit(0) });
