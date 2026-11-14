@@ -171,6 +171,7 @@ function viewControlSources(source, drawings) {
       const indent = item[1].replace(/\t/g, '    ').length;
       while (lists.length && lists.at(-1).indent >= indent) lists.pop();
       const child = node(item[2].split(/:\s|:\*\*/)[0]);
+      child.listItem = true;
       parent().children.push(child);
       lists.push({ indent, node: child }); block = null; child.text.push(line); continue;
     }
@@ -187,8 +188,19 @@ function viewControlSources(source, drawings) {
     }
     (block ?? parent()).text.push(line);
   }
+  const hasControls = current => extractControls(current.text.join('\n'), []).size > 0 || current.children.some(hasControls);
+  const attachment = current => {
+    if (named(current.title).length || hasControls(current)) return false;
+    const metadata = /^(?:drawing|svg|layout|preview|design|reference)s?:?$/.test(viewName(current.title));
+    const bareImage = current.listItem && /^\s*[-+*]\s+!?\[[^\]]*\](?:\([^\n]*\)|\[[^\]]*\])?\s*$/.test(current.text.join('\n'));
+    return metadata || bareImage;
+  };
+  const scopeLinks = current => [
+    ...linked(current.text.join('\n')),
+    ...current.children.filter(attachment).flatMap(scopeLinks),
+  ];
   const associate = current => {
-    const direct = linked(current.text.join('\n'));
+    const direct = [...new Set(scopeLinks(current))];
     current.views = direct.length ? direct : named(current.title);
     for (const child of current.children) associate(child);
   };

@@ -83,7 +83,17 @@
       "shared-parent-outside-view/views/now__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Approve</text></svg>",
       "shared-parent-outside-view/views/agents__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>+ New Agent</text></svg>",
       "shared-parent-outside-view/views/workflows__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Start Run</text></svg>",
-      "shared-parent-outside-view/views/machines__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Connect</text><text>Pause</text><text>Resume</text></svg>"
+      "shared-parent-outside-view/views/machines__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Connect</text><text>Pause</text><text>Resume</text></svg>",
+      "nested-drawing-items/screen.prompt.md": "# Screen\n\nRegion tab-now, region tab-agents, region tab-workflows, region tab-machines.\nShared shell buttons with ids `tab-now`, `tab-agents`, `tab-workflows`, `tab-machines`.\n\n## Appearance\n\n- **Now:**\n  - Drawing: ![Now](views/now__stacked.ui.svg)\n  Button \"Approve\".\n  - Child controls repeat: Button \"Approve\".\n\n- **Agents:**\n  - Drawing: ![Agents](views/agents__stacked.ui.svg)\n  Button \"+ New Agent\".\n  - Child controls repeat: Button \"+ New Agent\".\n\n- **Workflows:**\n  - Drawing: ![Workflows](views/workflows__stacked.ui.svg)\n  Button \"Start Run\".\n  - Child controls repeat: Button \"Start Run\".\n\n- **Machines:**\n  - Drawing: ![Machines](views/machines__stacked.ui.svg)\n  Button \"Connect\". Button \"Pause\". Button \"Resume\".\n  - Child controls repeat: Button \"Connect\". Button \"Pause\". Button \"Resume\".\n",
+      "nested-drawing-items/views/now__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Approve</text></svg>",
+      "nested-drawing-items/views/agents__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>+ New Agent</text></svg>",
+      "nested-drawing-items/views/workflows__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Start Run</text></svg>",
+      "nested-drawing-items/views/machines__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Connect</text><text>Pause</text><text>Resume</text></svg>",
+      "nested-image-items/screen.prompt.md": "# Screen\n\nRegion tab-now, region tab-agents, region tab-workflows, region tab-machines.\nShared shell buttons with ids `tab-now`, `tab-agents`, `tab-workflows`, `tab-machines`.\n\n## Appearance\n\n- **Now:**\n  - ![Now](views/now__stacked.ui.svg)\n  Button \"Approve\".\n  - Child controls repeat: Button \"Approve\".\n\n- **Agents:**\n  - ![Agents](views/agents__stacked.ui.svg)\n  Button \"+ New Agent\".\n  - Child controls repeat: Button \"+ New Agent\".\n\n- **Workflows:**\n  - ![Workflows](views/workflows__stacked.ui.svg)\n  Button \"Start Run\".\n  - Child controls repeat: Button \"Start Run\".\n\n- **Machines:**\n  - ![Machines](views/machines__stacked.ui.svg)\n  Button \"Connect\". Button \"Pause\". Button \"Resume\".\n  - Child controls repeat: Button \"Connect\". Button \"Pause\". Button \"Resume\".\n",
+      "nested-image-items/views/now__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Approve</text></svg>",
+      "nested-image-items/views/agents__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>+ New Agent</text></svg>",
+      "nested-image-items/views/workflows__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Start Run</text></svg>",
+      "nested-image-items/views/machines__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Connect</text><text>Pause</text><text>Resume</text></svg>"
     }
   },
   "steps": [
@@ -395,6 +405,54 @@
         }
       ],
       "step_id": "shared-parent-outside-view"
+    },
+    {
+      "entry_path": "prompts/cli/svg-layout.prompt.md",
+      "operation": "lintSvgLayouts",
+      "input": {
+        "root": "nested-drawing-items",
+        "files": [
+          "screen.prompt.md",
+          "views/now__stacked.ui.svg",
+          "views/agents__stacked.ui.svg",
+          "views/workflows__stacked.ui.svg",
+          "views/machines__stacked.ui.svg"
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": []
+        }
+      ],
+      "step_id": "nested-drawing-items"
+    },
+    {
+      "entry_path": "prompts/cli/svg-layout.prompt.md",
+      "operation": "lintSvgLayouts",
+      "input": {
+        "root": "nested-image-items",
+        "files": [
+          "screen.prompt.md",
+          "views/now__stacked.ui.svg",
+          "views/agents__stacked.ui.svg",
+          "views/workflows__stacked.ui.svg",
+          "views/machines__stacked.ui.svg"
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": []
+        }
+      ],
+      "step_id": "nested-image-items"
     },
     {
       "entry_path": "prompts/cli/svg-layout.prompt.md",
