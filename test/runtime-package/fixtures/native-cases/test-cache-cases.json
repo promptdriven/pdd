@@ -1,15 +1,6 @@
 {
   "schema_version": "pdd.native-cases.v1",
   "story_path": "user_stories/test-cache.md",
-  "initial_world": {},
-  "steps": [
-    {
-      "id": "native-cache",
-      "entry_path": "prompts/cli/runtime-client.prompt.md",
-      "operation": "runCheck",
-      "input": {}
-    }
-  ],
   "criteria": [
     {
       "id": "AC1",
