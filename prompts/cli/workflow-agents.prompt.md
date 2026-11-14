@@ -13,7 +13,7 @@ Export module functions `chooseWorkflowAgent({codex,claude,gemini,agy,requested}
 | No explicit agent, only Antigravity CLI ready | Select agy. |
 | None ready | Refuse with installation/sign-in/status guidance for the states actually observed. |
 
-All missing: say `Install Codex, Claude Code, Gemini CLI or Antigravity CLI first.` (naming only the candidates in the set) and provide the official install links (Gemini: https://geminicli.com/docs/get-started/installation/, Antigravity CLI: https://antigravity.google/docs/cli/). Otherwise give one actionable line for each unavailable candidate: missing means install that agent; signed_out means `Codex is not signed in. Run: codex login` or `Claude Code is not signed in. Run: claude auth login`; Gemini guidance uses `gemini` for sign-in and `gemini --version` for an unavailable probe; Antigravity CLI guidance uses `agy` for sign-in and `agy models` for an unavailable probe; unavailable means its sign-in could not be checked and gives its status command. Never display raw authentication stdout/stderr, user/account details, credentials or config paths. One ready candidate makes an unselected candidate's failure irrelevant.
+All missing: say `Install Codex, Claude Code, Gemini CLI or Antigravity CLI first.` (naming only the candidates in the set) and provide the official install links (Gemini: https://geminicli.com/docs/get-started/installation/, Antigravity CLI: https://antigravity.google/docs/cli/). Otherwise give one actionable line for each unavailable candidate: missing Codex means `Codex is not installed. Install: https://developers.openai.com/codex/cli` and missing Claude Code means `Claude Code is not installed. Install: https://code.claude.com/docs/en/setup`; other missing agents name their install link; signed_out means `Codex is not signed in. Run: codex login` or `Claude Code is not signed in. Run: claude auth login`; Gemini guidance uses `gemini` for sign-in and `gemini --version` for an unavailable probe; Antigravity CLI guidance uses `agy` for sign-in and `agy models` for an unavailable probe; unavailable means its sign-in could not be checked and gives its status command. Never display raw authentication stdout/stderr, user/account details, credentials or config paths. One ready candidate makes an unselected candidate's failure irrelevant.
 
 `checkWorkflowAgents` uses an injectable async `ports.run(command,argv,options)` (default the existing native process runner). Check all candidates in parallel when no agent is requested, with the whole group bounded by one status-probe wait rather than two sequential waits; an explicit request checks only that candidate. Run only `codex login status`, `claude auth status`, `gemini --version` or `agy models`; do not run login/logout, interactive prompts, a model query, or unrelated tool commands. Use the supplied cwd/env, closed stdin, at most 16 KiB output and the native status-probe wait bound of 10 seconds. No version pin, HOME/config inference, credential lookup, cached readiness or fallback to another environment.
 
@@ -78,8 +78,8 @@ Number settings that a person may choose (for example `COLUMNS`, `LINES`, `HISTS
 
 ```json
 {
-  "status": "approved",
-  "prose_sha256": "59c0ad4e8151d6fa433a5e4a22929325e007e093f4ee995376adab057c3d85d4",
+  "status": "draft",
+  "prose_sha256": "",
   "entries": [
     {
       "operation": "chooseWorkflowAgent",
