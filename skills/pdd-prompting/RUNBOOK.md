@@ -391,8 +391,7 @@ Terms use `{"field": "<pointer>"}` (relative to the check's `target`/`path`), `{
 - Give a rate as a decimal string, not a number: `"taxRatePercent": "8.875"`.
 - Give a date as a `YYYY-MM-DD` string with a `pattern`. Write the calendar rules in the prose
   ("closed every Monday", "a real calendar date"). Use real dates in the story: "Monday 2026-11-02", "2026-02-30".
-- A `compute` resource does exact decimal and date math. Whole cents and a written rule were exact for a 14-item bill,
-  so use `compute` only when a check shows a math error.
+- A `compute` resource (`compute.eval_exact`, `compute.divmod_exact`, `compute.decimal`, `compute.date_add`, `compute.date_diff`, `compute.periods`) does deterministic exact `BigInt`, rational, decimal and ISO date math with explicit rounding (`floor`, `ceil`, `trunc`, `half_up`, `half_even`). Use it for 64-bit/`BigInt` divisions, remainders, basis-point or pro-rata formulas, or when a check shows a math error; see the [exact-math fragment in §21](#exact-decimal-rational-and-date-math).
 
 ## 10. AI calls
 
@@ -1334,6 +1333,28 @@ The `simulation` entry of the scenario:
 `hash_json` hashes the interpreter's canonical JSON: keys sorted by UTF-16 code units, no spaces, and the interpreter's own spelling of numbers (a subset of RFC 8785). An application's own serializer can give other bytes, for example for floats or non-ASCII keys. To hash exact bytes that the application made, use `hash_utf8`. Native tests must prove that the hash and the serializer match.
 
 Lint accepts this declaration also when the native code hashes inside (for example with Python `hashlib`) and takes no `compute` argument. Keep the native signature. [Module binding coverage](https://github.com/promptdriven/pdd/blob/main/docs/runtime-bindings.md) checks that the prompt can reach its operations. It does not run native hashing. Native tests own that, and a lint pass is not a behavior pass.
+
+### Exact decimal, rational and date math
+
+For multi-step `BigInt`, basis-point, pro-rata, remainder or calendar-day formulas, declare deterministic `compute` operations instead of asking the model to evaluate long arithmetic in prose:
+
+- `compute.eval_exact`: exact keys `{"expression", "inputs", "scale", "rounding"}`. Evaluates exact `Fraction` and arbitrary-precision `BigInt` formulas (`+ - * / // %`, comparisons, `and/or/not`, `a if cond else b`, `min`, `max`, `abs`, `floor`, `ceil`, `trunc`, `quot`, `rem`, `round(x, places[, mode])`) over JSON integers, decimal strings or `"num/den"` strings. `rounding` is `floor`, `ceil`, `trunc`, `half_up` or `half_even`; `scale` is an integer decimal-place count (`0` for whole integers/cents) or `null` for exact terminating decimals.
+- `compute.divmod_exact`: exact keys `{"dividend", "divisor", "rounding"}`, returning `{"quotient", "remainder"}` as plain decimal strings where `dividend == quotient * divisor + remainder`.
+- `compute.date_diff`: exact keys `{"start_date", "end_date"}` (`YYYY-MM-DD`), returning signed integer elapsed days `(end_date - start_date).days`. `compute.date_add` (`{"date", "days", "months", "years"}`) and `compute.periods` (`{"start", "count", "unit", "step"}`) shift ISO dates with month-end clamping. `compute.decimal` (`{"operator", "left", "right", "precision", "rounding"}`) runs single fixed-precision decimal operations.
+
+The `resources` entry of the prompt's Runtime interface:
+
+```json
+{"resources":[{"name":"compute","kind":"compute","access":"read","operations":[{"name":"eval_exact","access":"read","arguments_schema":{"type":"object","properties":{"expression":{"type":"string"},"inputs":{"type":"object","properties":{"principal":{"type":"string"},"rate_bps":{"type":"string"},"days":{"type":"integer"}},"required":["principal","rate_bps","days"],"additionalProperties":false},"scale":{"oneOf":[{"type":"integer"},{"type":"null"}]},"rounding":{"type":"string","enum":["floor","ceil","trunc","half_up","half_even"]}},"required":["expression","inputs","scale","rounding"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"value":{"type":"string"}},"required":["value"],"additionalProperties":false}},{"name":"date_diff","access":"read","arguments_schema":{"type":"object","properties":{"start_date":{"type":"string"},"end_date":{"type":"string"}},"required":["start_date","end_date"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"value":{"type":"integer"}},"required":["value"],"additionalProperties":false}}]}]}
+```
+
+The `simulation` entry of the scenario:
+
+```json
+{"simulation":{"compute.eval_exact":{"action":"compute","result_template":{"value":null},"result_value_pointer":"/value"},"compute.date_diff":{"action":"compute","result_template":{"value":null},"result_value_pointer":"/value"}}}
+```
+
+Lint and [module binding coverage](https://github.com/promptdriven/pdd/blob/main/docs/runtime-bindings.md) accept these declarations when native code computes internally (for example JavaScript `BigInt` or Python `int`, `Fraction`, `Decimal` and `datetime.date`) and takes no `compute` parameter. Keep the native signature unchanged; native tests still own native arithmetic parity.
 
 ### Inject a fixed-answer callback
 
