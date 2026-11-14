@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: f9deeb188d22f254ce16c87283edef2ad08e165d32fadc3d048acf305471d3bc).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 3c0401a35d7c0252e15f9e12a9e914ab1c0c3817ea5473db645de001b7abe531).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -2551,7 +2551,10 @@ async function runtimeResend(ctx, job, pr) {
     await runtimeNotRunReport(ctx, job);
     return result('maintenance', false);
   }
-  if (Number.isFinite(w.readAt) && now - w.readAt < RUNTIME_READ_EVERY) return hold(w.state === 'waiting' ? 'waiting' : 'sending', w.readAt);
+  const waitEvery = Number.isFinite(w.until) && Number.isFinite(w.readAt) && w.until > w.readAt
+    ? Math.min(RUNTIME_READ_EVERY, Math.max(5_000, w.until - w.readAt))
+    : RUNTIME_READ_EVERY;
+  if (Number.isFinite(w.readAt) && now - w.readAt < waitEvery) return hold(w.state === 'waiting' ? 'waiting' : 'sending', w.readAt);
   let health;
   try { health = await (ctx.ports.runtimeHealth ?? (async () => (await import('./runtime-seam.mjs')).checkRuntimeHealth({ env: ctx.ports.env ?? process.env })))(); }
   catch (error) { health = { state: 'unavailable', detail: oneLine(error.message, 200) }; }
