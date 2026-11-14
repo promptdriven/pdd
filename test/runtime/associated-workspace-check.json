@@ -82,7 +82,7 @@
             ],
             "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "runId": null,
-            "stage": "current"
+            "stage": null
           },
           "call_index": 1,
           "result": {
@@ -98,7 +98,7 @@
             ],
             "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "runId": null,
-            "stage": "current"
+            "stage": null
           },
           "call_index": 2,
           "result": {
