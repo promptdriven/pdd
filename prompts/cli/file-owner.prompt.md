@@ -8,25 +8,30 @@ calls no interpreter.
 
 ## Owner records
 
-Three records can name the owner of a path. Read them in this order:
+Four records can name the owner of a path. Read them in this order:
 
 | Source | Record | Certain |
 |---|---|---|
 | `binding` | An entry of the root `pdd-bindings.json` (`pdd.bindings.v1`) whose `module` is the path. Its `prompt` names the owner. | yes |
 | `header` | A [`Generated from` header](#generated-from-header) in the first 4 KiB of the file. | yes |
 | `prose` | A [prompt claim](#prompt-claims): the first sentence of a prompt's opening paragraph names the path. | no |
+| `path` | A [path or file-name claim](#path-and-file-name-claims) on an eligible production code path. | no |
 
 `owners` is the list of prompts that the binding and the header name, binding
-first, then headers in line order, without duplicates. Only when that list is
-empty, `owners` is the sorted list of prompts that claim the path in prose.
-`owner` is the first entry of `owners`, or null. `source` is the source of
-`owner`; with no owner it is `binding` for a binding entry without a prompt,
-otherwise null.
+first, then headers in line order, without duplicates; when both exist, `owner`
+is the first binding prompt and `owners` holds all deduplicated certain prompts.
+Only when that list is empty, `owners` is the sorted list of prompts that claim
+the path in prose. Only when `owners` is still empty, no binding entry declares
+the path without a prompt, and neither `pdd-bindings.json` nor the file's head
+failed to read, check [path and file-name claims](#path-and-file-name-claims)
+for eligible production code paths. `owner` is the first entry of `owners`, or
+null. `source` is the source of `owner`; with no owner it is `binding` for a
+binding entry without a prompt, otherwise null.
 
 `certain` is false when the answer can be wrong in the unowned direction.
 Callers treat a path with `certain: false` as owned. It is false when:
 
-- the owners come from prose only;
+- the owners come from `prose` or `path` only;
 - a binding or header names a prompt that is not a Git-visible `*.prompt.md`
   file;
 - no owner is found and `pdd-bindings.json` exists but is not valid JSON, is
@@ -35,15 +40,18 @@ Callers treat a path with `certain: false` as owned. It is false when:
 - no binding names a prompt and the file exists but cannot be read.
 
 Otherwise `certain` is true. A binding entry without `prompt` (it has `reason`
-and `port_attempt` instead) names no owner; prose claims still apply, and without
-a header or a claim it is certain that no prompt owns the path. Binding entries that are not objects with a string `module` are
-skipped; a string `prompt` names the owner.
+and `port_attempt` instead) names no owner; prose claims still apply, path and
+file-name claims do not, and without a header or a prose claim it is certain
+that no prompt owns the path. Binding entries that are not objects with a string
+`module` are skipped; a string `prompt` names the owner.
 
 `note` explains an uncertain or prompt-less answer in one line, else it is `''`.
 Join several notes with `; `, in this order:
 
 - prose only: `named only in the opening sentence of PROMPT; add a Generated from header or a pdd-bindings.json entry`
   (PROMPT lists the owners, joined with `, `);
+- mirrored path match: `matched by path to PROMPT; add a Generated from header or a pdd-bindings.json entry`;
+- file-name or stem match: `matched by file name to PROMPT; add a Generated from header or a pdd-bindings.json entry`;
 - a missing prompt: `names PROMPT, which is not a Git-visible prompt` (one note per missing prompt);
 - unreadable bindings: `pdd-bindings.json could not be read, so a binding may be missing`;
 - unreadable file: `the file could not be read, so a header may be missing`;
@@ -127,6 +135,74 @@ The claimed paths are:
 Keep only canonical paths. Drop paths that end in `.prompt.md`: a prompt names
 other prompts as links, not as owned files. A claim does not need the file to
 exist: a prompt is written before its code.
+
+## Path and file-name claims
+
+A canonical repository path is an **eligible production code path** unless it is
+a test-owned path (`isTestOwnedPath(path)`), a fixture or example path
+(`/(?:^|\/)(?:fixtures|examples)\//i`), a prompt (`*.prompt.md`), a Story
+(`user_stories/**`), documentation (`doc/**`, `docs/**`), CI (`.github/**`), a
+dotfile (`/(?:^|\/)\.[^/]+$/`), a manifest or build config (`package.json`,
+`package-lock.json`, `pdd.json`, `pdd-bindings.json`, `tsconfig*.json`,
+`jsconfig.json`, `Makefile`, `GNUmakefile`, `Dockerfile`, `Containerfile`,
+`Procfile`, `Justfile`, `Vagrantfile`, `Rakefile`, `Gemfile`, any letter case),
+a non-code data or asset file (`.md`, `.mdx`, `.rst`, `.txt`,
+`.json`, `.jsonl`, `.ndjson`, `.yaml`, `.yml`, `.toml`, `.ini`, `.cfg`, `.conf`,
+`.lock`, `.csv`, `.tsv`, `.xml`, `.svg`, `.png`, `.jpg`, `.jpeg`, `.gif`,
+`.webp`, `.ico`, `.pdf`, `.woff`, `.woff2`, any letter case), or a path whose
+basename has no `.ext` extension (unless mirrored verbatim under a directory).
+
+`resolveOwners({ paths = [], allPaths = paths, bindings = null, heads = [], prompts = [] })`
+takes the optional `allPaths` list of canonical repository paths (default
+`paths`), and `findOwners` passes `allPaths: visible` (all Git-visible
+repository paths from `ports.files()`) so querying one path still checks
+uniqueness across the repository. Candidate code files are all deduplicated,
+sorted eligible production code paths with a `.ext` extension in `allPaths` and
+`paths`. Both match tiers below return sorted unique `owners` with
+`source: 'path'` and `certain: false`:
+
+1. **Mirrored path match** (`note`: `matched by path to PROMPT; add a Generated from header or a pdd-bindings.json entry`):
+   from each canonical prompt `<p>.prompt.md` in `prompts` whose `<p>` is
+   canonical and matches neither `isTestOwnedPath(<p>)` nor
+   `/(?:^|\/)(?:fixtures|examples)\//i`, strip `.prompt.md` to get `<p>`, then
+   strip an optional leading `prompts/modules/` or `prompts/` prefix to get
+   `<rel>`.
+   - **Exact path mirror:** `<rel> === path`, and either `<rel>`'s basename has
+     a `.ext` extension or `<rel>` contains `/` (preserving
+     `prompts/bin/tool.prompt.md` -> `bin/tool` while rejecting flat root
+     extensionless files such as `LICENSE` or `CODEOWNERS`; for example
+     `prompts/modules/m1/verify-access.py.prompt.md` or
+     `m1/verify-access.py.prompt.md` -> `m1/verify-access.py`).
+   - **Extensionless path mirror:** `<rel>` has no `.ext` extension in its
+     basename, `path` without its final `.ext` equals `<rel>` (for example
+     `prompts/src/foo.prompt.md` -> `src/foo.mjs`), `<rel>` is not itself a
+     canonical path in `allPaths` or `paths`, and `path` is the only candidate
+     code file whose extensionless path equals `<rel>`.
+2. **Unique file-name or stem match** (when mirrored path did not match; `note`:
+   `matched by file name to PROMPT; add a Generated from header or a pdd-bindings.json entry`):
+   let `<prompt-base>` be `<rel>`'s basename, `<prompt-parent>` be `<rel>`'s
+   immediate parent directory name (`''` when `<rel>` has no `/`), `<code-base>`
+   be `path`'s basename, `<stem>` be `<code-base>` without its final `.ext`, and
+   `<code-parent>` be `path`'s immediate parent directory name (`''` at the
+   repository root).
+   - **Exact basename with extension:** when `<prompt-base>` includes a `.ext`
+     extension (for example `verify-access.py` from
+     `prompts/m1/verify-access.py.prompt.md`) and equals `<code-base>`, match
+     when `path` is the unique candidate code file with basename `<code-base>`
+     and a single prompt has `<prompt-base> === <code-base>`; when multiple
+     candidate code files or prompts share `<code-base>`, narrow by immediate
+     parent directory name and match only when `<code-parent>` is non-empty,
+     `<code-parent> === <prompt-parent>`, and there is one candidate code file
+     and one prompt with `<code-parent>/<code-base>`.
+   - **File stem:** otherwise compare `<stem>` with `<prompt-base>` (for example
+     `file-owner` for `src/file-owner.mjs` and
+     `prompts/cli/file-owner.prompt.md`). Match when `path` is the only
+     candidate code file with stem `<stem>` and a single prompt has
+     `<prompt-base> === <stem>`; when multiple candidate code files or prompts
+     share `<stem>`, narrow by `<immediate-parent>/<stem>` and match only when
+     `<code-parent>` is non-empty, `<code-parent> === <prompt-parent>`, and
+     there is one candidate code file with `<code-parent>/<stem>` and one prompt
+     with `<prompt-parent>/<stem>`; otherwise return no owner.
 
 ## Public contract
 
