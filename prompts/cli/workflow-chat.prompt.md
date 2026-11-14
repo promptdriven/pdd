@@ -38,6 +38,9 @@ Before deciding that a present workspace needs no rebuild, use the [layout owner
 
 ## Shared lifecycle observations
 
+For an ordinary fresh start, durably associate a unique launch attempt with its chat before dispatch. Preserve the agent’s interactive terminal input and output. An exit receipt for that exact attempt records the exit status after the foreground command exits; it does not capture terminal output. Missing, malformed or unrelated receipts prove nothing. Resume and replacement retain their existing custody and observation rules.
+
+
 The [runner lifecycle](workflow-runner.prompt.md#chat-lifecycle) is authoritative for start, open, status and projections. Before ordinary start dispatch, prepare the chat identity and await `ports.checkpoint(chat)` so its starting state is durable; checkpoint failure sends nothing. An absent native agent or expired grace is not end evidence. Opening a starting chat uses injected clock/sleep and session/Herdr inspection until confirmation or the shared grace deadline; it does not launch or resume while confirmation is pending. Preserve the same identity on an uncertain reply. Report positive running/end/failure evidence to the runner before terminal attachment.
 
 ## Explicit fresh session
