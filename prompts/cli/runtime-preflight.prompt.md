@@ -476,3 +476,16 @@ Binding-boundary repair messages call the declaration a Runtime interface bounda
 The existing synchronous prepareSource hook may mark exactly one returned file with optional `role: "app-map"`. Other roles, multiple marked outputs or a marked output whose effective JSON is not a v1 app map refuse with exit 4 before upload. Resolve the effective selected appMap to that marked file within this same capture attempt; explicit non-null appMap and a marked generated map conflict and refuse. Discover its screen, router, handler, after-operation and stylesheet closure using the ordinary app-map rules. The marked map's path is returned in capture.appMap. Its raw absence/Git visibility exception is only the existing virtual-output exception; retain workspace, privacy, ancestor, no-write and stability rules. A present ignored regular generated-name candidate is occupied, so composition chooses another name without reading or uploading its contents. Unsafe candidates remain refusals. No marked output preserves current results and archive bytes. Do not alter queue limits or scheduling.
 
 For each tested CLI-convention entry (an entry whose `/entries/<index>/input_schema` and `/entries/<index>/result_schema` both carry convention `"cli"`) that lacks an `implementation` declaration, include preflight warning `Warning: <entry_path> entry <operation> has no implementation declaration.`, and export `missingCliImplementationWarnings({root, found, selected})` returning only those CLI missing-implementation warnings for explicit lint. Non-CLI entries receive no missing-implementation warning, and this advice does not refuse an interpreter check.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "status": "draft",
+  "prose_sha256": "c8b9041bd07fd20155338e6dfe8bbcc8e45b37c84b1be7512ce1f374d92211cf",
+  "kind": "native-only",
+  "reason": "Preflight discovers real Git-visible files and captures identity-bound filesystem snapshots, including symlink and concurrent-change observations. Its injected Story matching ports cannot fake Git discovery or these filesystem effects; native tests cover those boundaries and the static checkTest rules."
+}
+```
+
+</details>
