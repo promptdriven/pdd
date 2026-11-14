@@ -27,3 +27,8 @@ Help is local. `pdd help` and `pdd help prompting` work with no network, no gh l
 The new lines name only current commands. Forbidden: "pdd check", "pdd try" or "workflow start" in a help line.
 
 The PDD interpreter cannot know the folder where pdd is installed. So the test file checks that the help names `/docs/prompting-guide.md` and `/RUNBOOK.md`. The code area adds Node tests: both paths are absolute and exist on disk, help works with no network and no PDD skills, and `pdd help prompting` with another word exits with code 2.
+
+```pdd-boundary
+prompts/cli/pdd-cli.prompt.md
+prompts/cli/interpreter-version.prompt.md
+```

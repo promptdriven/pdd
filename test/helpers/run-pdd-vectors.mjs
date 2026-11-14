@@ -37,9 +37,19 @@ export async function replayRunPddVectors(t, file) {
         };
       };
       const runAutopilotLauncher = spy('autopilotLauncher.runAutopilotLauncher');
+      const unused = ['origin.resolve','credentials.readToken','metadata.get','dispatch.prove','dispatch.requestUptake','dispatch.startRun','agents.checkWorkflowAgents','diagnostics.pathDiagnostic','setup.setupSkills','setup.setupProject','setup.setupAgentMcp','package.readVersion','skills.findSkills'];
+      for (const key of unused) if (scenario.simulation?.[key]) {
+        assert.equal(scenario.simulation[key].action, 'fixture.lookup');
+        mapped.add(key);
+      }
+      let unexpected = 0;
+      const never = () => { unexpected++; throw new Error('Unexpected outside port in a help or usage-error step'); };
       for (const key of Object.keys(scenario.simulation ?? {})) assert.ok(mapped.has(key), `Not replayed: unmapped simulation ${key}`);
       const exit_code = await runPdd(step.input.argv, { stdout, stderr, workflowRunner: noDispatch,
-        autopilotLauncher: runAutopilotLauncher ? { runAutopilotLauncher } : noDispatch });
+        autopilotLauncher: runAutopilotLauncher ? { runAutopilotLauncher } : noDispatch,
+        interpreterVersion: {runDetailedVersion: never}, workflowProve: noDispatch, workflowAgents: {checkWorkflowAgents: never},
+        pathDiagnostic: never, setupSkills: never, setupProject: never, setupAgentMcp: never, readPackageVersion: never, findSkills: never });
+      assert.equal(unexpected, 0, 'A help or usage-error step must not call outside ports');
       const result = { exit_code, stdout: stdout.text, stderr: stderr.text };
       for (const check of step.checks) {
         assert.ok(check.target === 'result' || check.target === 'calls', `Not replayed: unmapped target ${check.target}`);
