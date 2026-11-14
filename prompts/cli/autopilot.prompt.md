@@ -10,7 +10,7 @@ Setup in a Git repository with a terminal asks for a mode only when no Autopilot
 
 The input action is `setup`, `mode`, `trust`, `untrust`, or `isTrusted`. For mode, `mode` is the selected value, for trust/untrust names are operands, and for isTrusted author is the issue author. `interactive` and `inRepo` describe setup context. Terminal mode and names questions, config read/save and GitHub lookup are injected ports; defaults use the actual repository, filesystem and GitHub. `config.read` reads key `autopilot` and returns its JSON text as `raw`, or null if absent; `config.save` writes JSON text as `raw` for the same key and returns it, atomically preserving other top-level keys. The adapter encodes saved values as compact JSON; it preserves unknown Autopilot keys when updating the setting. `github.lookup` supplies owner and write-access names, with `complete` false on incomplete lookup; unavailable owner is the empty string and unavailable writers are an empty list. Give each native GitHub lookup a fixed 5-second budget. When it expires, stop waiting and terminate only the child processes owned by that lookup, allowing a bounded termination grace. This budget is internal and adds no public setting. Treat timeout as incomplete data, retain an owner or writers already confirmed, and never trust an empty owner or absent data. Translate other lookup failures into incomplete data as well. The actual terminal ports ask separately for a mode and additional names, consuming successive input lines in order even when both answers arrive together. `terminal.mode({})` returns `{answer}`; blank selects off, and an explicit answer must be off, observe or auto. `terminal.names({owner,writers,complete})` displays these names as trusted, identifies owner and writers, asks who else to add, and returns `{names}`. The setup result message also includes the displayed names and identifies their trust and roles. On fresh setup it asks both questions. On repeat setup it does not ask for a mode or save a new mode; it saves nonempty additional names, while an empty names answer makes no save. An existing object with no mode reads as off without asking again; invalid saved values stay unchanged unless a mode command replaces them. With an existing non-object Autopilot value, trust and untrust save nothing, return exit code 0 and report that the saved value is unchanged; a mode command can replace it. A non-terminal or outside-repository setup asks neither and saves nothing. A stored invalid mode of any type reads as off with a one-line notice and remains unchanged until a mode command replaces it. Result fields report effective mode, explicit trust, author trust, a human-readable message and exit code. Inputs and results in Runtime bind this same public function and its ports; they do not invoke real Git, GitHub or disk.
 
-For any settings write, acquire the existing admission boundary only after all human input, reread the latest setting inside it, merge only the intended fields and save before release. Setup adds its chosen names to current trust; its chosen initial mode applies only if the setting is still absent. Trust and untrust change only trust, and mode changes only mode; preserve concurrent unrelated settings. Read-only setup and trust lookup need no write boundary.
+For any settings write, acquire the existing admission boundary only after all human input, reread the latest setting inside it, merge only the intended fields and save before release. Setup adds its chosen names to current trust; its chosen initial mode applies only if the setting is still absent. Trust and untrust update trust and, if the latest setting has no mode, materialize its effective mode as off; preserve any existing mode, including an invalid one. When the setting is absent, save compact JSON with mode off followed by trust. Mode changes only mode; preserve concurrent unrelated settings. Read-only setup and trust lookup need no write boundary.
 
 Future workflow skills own run actions: in auto they record the checker’s PASS as approval words using `--said`, marked as decided by the checker; in off and observe the person approves as today. When GitHub supplies neither owner nor writers, only explicitly trusted names qualify for full auto; no other author's issue gets full auto. This does not change runtime approval enforcement or bypass strict approvals. See the [approval policy](approval-policy.prompt.md) for its independent policy.
 
@@ -37,7 +37,7 @@ Actions outside the stated set, invalid mode operands and missing or blank names
 
 ```json
 {
-  "status": "approved",
+  "status": "draft",
   "entries": [
     {
       "operation": "runAutopilot",
@@ -335,7 +335,7 @@ Actions outside the stated set, invalid mode operands and missing or blank names
     "max_model_calls": 6
   },
   "conventions": [],
-  "prose_sha256":"ff8929dbe22ab5e36cfbadfaaa4cc7d970a6eaf0fefdb69979443fa9d644178a"
+  "prose_sha256":"887a43724c2cb9a04ed902bc2e9d9b8dfd89a9031a0187a9cfcfd7656bd222b3"
 }
 ```
 </details>

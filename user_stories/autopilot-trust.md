@@ -13,3 +13,7 @@ As a repository maintainer, I can add and remove trusted names, so that I can ma
 - Setting a mode starts no run or interpreter. Native test: spy on workflow and interpreter dispatch.
 - Native test: save with unrelated top-level and Autopilot keys; verify both remain unchanged.
 - Native test: exercise CLI parsing, dispatch and help with injected ports.
+
+```pdd-boundary
+prompts/cli/autopilot.prompt.md
+```
