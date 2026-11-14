@@ -78,7 +78,7 @@ The Runtime read ports represent native file operations, environment settings, s
 ```json
 {
   "kind": "partial",
-  "status": "draft",
+  "status": "approved",
   "prose_sha256": "b9d2ce2208de82ba78aa78f83261437321b44f73402953a37b30dbc1730e1171",
   "entries": [
     {
