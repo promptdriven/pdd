@@ -54,7 +54,15 @@
       "entry_path": "prompts/cli/runtime-client.prompt.md",
       "operation": "runCheck",
       "input": {},
-      "checks": []
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": 0
+        }
+      ]
     }
   ]
 }
