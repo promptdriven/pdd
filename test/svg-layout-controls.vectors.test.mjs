@@ -26,13 +26,6 @@ function guardedPorts(env) {
   return { ports, calls };
 }
 
-const nativeOnlyBlock = `\n<details><summary>Runtime interface</summary>\n\n\`\`\`json\n${JSON.stringify({
-  kind: 'native-only',
-  status: 'draft',
-  prose_sha256: '',
-  reason: 'Screen layout lint vector fixture uses local static SVG advice without interpreter operations.'
-})}\n\`\`\`\n</details>\n`;
-
 test('svg-layout-controls manifest stays aligned with Story criteria', () => {
   assert.equal(inventory.kind, 'native-draft-cases');
   assert.equal(inventory.story_path, 'user_stories/svg-layout-controls.md');
@@ -55,14 +48,9 @@ for (const vector of inventory.cases) {
     const directWarnings = lintSvgLayouts({ root: repo, files });
     assert.deepEqual(directWarnings, vector.expected.warnings, `${vector.id}: direct lintSvgLayouts warnings`);
 
-    writeFileSync(promptFile, `${vector.prompt_markdown}${nativeOnlyBlock}`);
     git(repo, 'init', '-q');
     git(repo, 'add', '-A');
     const env = { HOME: home, PDD_STATE_DIR: state, PDD_RUNTIME_URL: 'invalid' };
-    const fill = guardedPorts(env);
-    assert.equal(await runPdd(['test', '--fill-hash'], { cwd: repo, ...fill.ports }), 0, fill.ports.stderr.text);
-    git(repo, 'add', '-A');
-
     const cliRun = guardedPorts(env);
     const exitCode = await runPdd(['lint', '--local', '--json'], { cwd: repo, ...cliRun.ports });
     const json = parseExactJson(cliRun.ports.stdout.text);
@@ -79,9 +67,9 @@ for (const vector of inventory.cases) {
     }
 
     if (vector.expected.apply_local_invariants) {
-      assert.equal(fill.calls.authentication + cliRun.calls.authentication, inventory.local_invariants.authentication_calls);
-      assert.equal(fill.calls.network + cliRun.calls.network, inventory.local_invariants.network_calls);
-      assert.equal(fill.calls.model + cliRun.calls.model, inventory.local_invariants.model_calls);
+      assert.equal(cliRun.calls.authentication, inventory.local_invariants.authentication_calls);
+      assert.equal(cliRun.calls.network, inventory.local_invariants.network_calls);
+      assert.equal(cliRun.calls.model, inventory.local_invariants.model_calls);
     }
 
     assert.deepEqual(readFileSync(manifestPath), manifestBytes, 'approved draft cases file must remain unchanged');

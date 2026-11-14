@@ -52,16 +52,15 @@ test('kind parsing refuses unknown kinds and preserves full, partial and legacy 
   for (const kind of [undefined,'full','partial']) assert.equal(interfaceSchemaProblems({...minimal,...(kind ? {kind} : {})}).length,0);
 });
 
-test('local lint finds missing interfaces without a Story and gives a usable draft command', async t => {
+test('local lint accepts plain Markdown prompts without a Story or Runtime interface block', async t => {
   const setup=harbor(t,repo => {
     mkdirSync(join(repo,'plain'),{recursive:true});
     writeFileSync(join(repo,'plain/no block.prompt.md'),'# Native behavior\n\nReturn the selected name.\n');
   });
   const p=ports(setup);
-  assert.equal(await runCheck({cwd:setup.repo,options:{'--lint':true,'--local':true,'--json':true}},p),4);
-  const result=JSON.parse(p.stdout.text), problem=result.problems.find(item => item.path==='plain/no block.prompt.md');
-  assert.equal(problem.code,'interface-missing');
-  assert.match(problem.message,/pdd interface draft 'plain\/no block.prompt\.md'/);
+  assert.equal(await runCheck({cwd:setup.repo,options:{'--lint':true,'--local':true,'--json':true}},p),0,p.stderr.text);
+  const result=JSON.parse(p.stdout.text);
+  assert.deepEqual(result.problems,[]);
 });
 
 test('server lint refuses a missing block locally when unauthenticated', async t => {

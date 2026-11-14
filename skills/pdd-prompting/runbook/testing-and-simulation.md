@@ -4,9 +4,9 @@
 
 ## 11. `pdd test`
 
-`pdd test --fill-hash` fills the hash of draft prompts. `pdd test` checks discovered tests, reusing unchanged passing Stories from `.pdd/cache/test/`. Use `--lf` for last failures, `--cache-clear` to clear the cache, or `--retry` to retry confirmed unstarted checks in a saved batch.
-`pdd test place-order` checks one story. `pdd test --read` reads the last results again. `--fill-hash` sends nothing. A saved `--read` may continue original checks held for lint after it passes, using identical source, owner and call ceilings; other reads send nothing.
-Do not run `pdd lint` immediately before `pdd test`: test includes interpreter lint (0 AI calls). Run `pdd test --fill-hash && pdd test --files STORY && pdd test STORY` in one shell call (omit STORY twice for all Stories). Use standalone lint for admission diagnostics alone. Exit 0 means finished and passed; queued/running lint exits 3 with its saved read command. Never import pdd's source.
+`pdd test` checks discovered tests, reusing unchanged passing Stories from `.pdd/cache/test/`. Use `--lf` for last failures, `--cache-clear` to clear the cache, or `--retry` to retry confirmed unstarted checks in a saved batch.
+`pdd test place-order` checks one story. `pdd test --read` reads the last results again. A saved `--read` may continue original checks held for lint after it passes, using identical source, owner and call ceilings; other reads send nothing.
+Do not run `pdd lint` immediately before `pdd test`: test includes interpreter lint (0 AI calls). Run `pdd test --files STORY && pdd test STORY` in one shell call (omit STORY twice for all Stories). Use standalone lint for admission diagnostics alone. Exit 0 means finished and passed; queued/running lint exits 3 with its saved read command. Never import pdd's source.
 `pdd lint [STORY…]` sends the files to the server's lint only. It makes no AI call, and it prints every problem
 the server finds.
 pdd checks the files on this computer first. Then it sends checks for tests without a reusable pass. It shows one table (story, test,
@@ -84,7 +84,7 @@ A step that shows `expected X, got Y` is a failed check. Follow "After a ✗" fo
 | `invalid-input` | A step input breaks the input schema: `"7pm"`, or a tax rate as a number | Fix the input. pdd shows the field and the rule. |
 | `story-criterion-mismatch` | A test criterion is not the story text: often curly quotes | Copy the story line exactly. |
 | `unchecked-criteria` | No criterion has an exact check. One criterion with no exact check is `not checked`: the others run, but the Story is not a full pass | Add an exact check for each criterion. |
-| `interface-stale` | The prose changed after the hash | Draft: run `--fill-hash`. Approved: set draft and fill the hash. In a normal run, a full check pass re-approves it at PR 1 (section 2); else ask again. |
+| `interface-stale` | A legacy embedded interface block has a stale prose hash | Remove the embedded block so the interpreter synthesizes the interface from the prompt, or ask the person to re-approve. |
 | `repository-graph-catalog-error` | Too few AI calls left for a step | Run again with a higher `--max-calls`. |
 | `graph-result-failure` | Often the prose calls a prompt more than `max_calls` | Make the prose and `max_calls` agree. |
 | `run-admission-failed` | Nothing ran (0 AI calls). Often one step's worst case is bigger than `--max-calls` (section 10). Other causes give the same code with no reason | Raise `--max-calls` (at most 1000), or lower `max_calls` in the prompt's `calls`. The interface `limits` do not help. If it stays, tell the person. |

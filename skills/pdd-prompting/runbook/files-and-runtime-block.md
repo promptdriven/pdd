@@ -1,4 +1,4 @@
-# Runbook: Files, Runtime Interface, Schemas, and Approvals
+# Runbook: Files, Prompts, Schemas, and Approvals
 
 > Part of [RUNBOOK.md](../RUNBOOK.md) — see the router table in `../RUNBOOK.md` for other `§N` sections.
 
@@ -9,7 +9,7 @@ The interpreter checks the **prompt**; the repo's own tests check native code.
 You need a GitHub login (`gh auth status`). A check sends relevant source selected from Git-visible files (max 10 MiB and 10,000 files).
 `pdd test --files` lists the selected files and byte sizes without a network call (section 2). Never put secrets in the repo.
 
-The order of work: story → prompt (`"status": "draft"`) → test → `pdd test --fill-hash` → `pdd test <story>` →
+The order of work: story → prompt (`prompts/<job>.prompt.md`) → test → `pdd test <story>` →
 offer `pdd simulate <story>` → the person tries it and approves → PR 1 with the one-line result (section 15).
 Read section 3 (schema rules) and section 8 (check paths) before the first check. Most failed first checks start there.
 When the person asks you to report a problem with pdd itself, follow
@@ -19,7 +19,7 @@ When the person asks you to report a problem with pdd itself, follow
 
 | File | What it holds |
 |---|---|
-| `prompts/<job>.prompt.md` | The program in plain English, then `## Dependencies`, then one Runtime interface block. |
+| `prompts/<job>.prompt.md` | The program in plain Markdown: purpose, `## Domain decisions`, public operations, failure edges and `## Dependencies`. |
 | `user_stories/<story>.md` | One story: first one line "As a …, I want …, so that …" in the words of the issue (the PR shows it as the user story), then a numbered `## Acceptance criteria` list. pdd skips index files: `PLAN.md`, `README.md` and any file with no `## Acceptance criteria` heading. |
 | `tests/<story>.json` | The test for that story. pdd finds it by its name and folder: `<story>.json` with a folder named `tests` or `test` anywhere in its path, not only as the direct parent (`tests/`, `test/runtime/`, `runtime/tests/`). pdd does not look inside other JSON files to find tests, and a test can have any size up to the upload limit (section 1). Every `.json` file in a `tests` or `test` folder named `<story>.json` or `<story>.<word>.json` is a test of that story, so give fixtures and other data files other names. If the repo's own tests are in `tests/` or `test/`, use `tests/runtime/` or `test/runtime/`. |
 
@@ -51,33 +51,18 @@ Add a second file only for a case that needs a different starting world. Name it
 **One rule, one prompt.** Before you write a prompt, look in `prompts/` for a prompt that owns the rule. Change that
 prompt. Two prompts must never state the same rule. A command-line program has one program prompt (section 6).
 A helper module can have its own prompt. Then the program prompt calls it (section 7) and does not repeat its rules.
-Prompts own production modules, never repository test suites (`test/**`, `tests/**`, `*.test.*`, `*_test.*` or `test_*.*`); `pdd lint`, `pdd lint --local` and `pdd owner PATH` warn when a prompt claims ownership of test files via `pdd-bindings.json`, `Generated from` headers or opening-sentence prose claims. Keep each `.prompt.md` prose body (excluding its `<details><summary>Runtime interface</summary>` block) at or below 500 lines (`pdd lint` and `pdd lint --local` warn above 500 lines and print an elevated warning above 1,000 lines advising module decomposition or `"kind": "native-only"` with deterministic code tests), and keep each Story scenario JSON at or below 15 steps and 1,000 lines.
+Prompts own production modules, never repository test suites (`test/**`, `tests/**`, `*.test.*`, `*_test.*` or `test_*.*`); `pdd lint`, `pdd lint --local` and `pdd owner PATH` warn when a prompt claims ownership of test files via `pdd-bindings.json`, `Generated from` headers or opening-sentence prose claims. Keep each `.prompt.md` prose body at or below 500 lines (`pdd lint` and `pdd lint --local` warn above 500 lines and print an elevated warning above 1,000 lines advising module decomposition or frontmatter `kind: native-only` with deterministic code tests), and keep each Story scenario JSON at or below 15 steps and 1,000 lines.
 
-**The prompt** ends with `<details><summary>Runtime interface</summary>`, a ```` ```json ```` block and `</details>`.
-The block of Harbor Coffee's `place_order` (schemas cut):
-```json
-{"status": "draft", "prose_sha256": "",
- "entries": [{"operation": "place_order", "input_schema": {...}, "result_schema": {...}, "errors": ["unknown-item"]}],
- "calls": [], "resources": [], "limits": {"max_steps": 4, "max_model_calls": 2}, "conventions": []}
-```
-- Omit `kind` for a full interface. Explicit `kind` is `partial` or `native-only`.
-  A draft with `"kind": "full"` gets a warning at `/kind`, not a refusal; `pdd test --fill-hash` removes it.
-  Approved prompts stay unchanged. Full declares the module's checkable behavior. Partial declares only some operations.
-  Native-only requires `reason`: name the native effect that the bound ports in §21 cannot fake.
-  It needs status and prose_sha256, but no entries or limits. A checker reviews this reason.
-  Approval records it. Checks show `not run: <reason>`; they never count it as passed.
-- Missing blocks: run `pdd interface draft PROMPT`, or `pdd interface draft --all` for the repository.
-  This local command uses explicit prose transport declarations or schemas without AI calls and preserves prose.
-  Unknown fields become questions with a `--contract FILE` recovery command. Use `--extend --contract FILE`
-  to add operations without changing existing declarations. Use `--refresh [--contract FILE]` to reopen
-  a stale or changed block as draft. Effect ports use §21 resources. Run `pdd lint STORY` for Runtime
-  admission; local drafting alone proves no Runtime acceptance.
-- A complete block drafted from unchanged committed behavior can use
-  `pdd approve PROMPT --automatic --tests COMMAND`. Existing native tests and a complete
-  current prompt check must pass; pdd records `automatic-check-pass` evidence.
-  Strict mode still requires a person. New behavior requires a person.
-- Every schema follows section 3. List every error that the prose can return in `errors`.
-- Include `"prose_sha256": ""` in the Runtime interface; let `pdd test --fill-hash` calculate its value instead of calculating the hash manually.
+**The prompt** is plain Markdown. The interpreter synthesizes and caches its Runtime interface on demand from the prompt prose and linked contracts, so you do not author an embedded `Runtime interface` JSON block.
+- For pure OS, network, database or byte-level plumbing with no user-facing policy (section 21), add YAML frontmatter at the top of the prompt:
+  ```yaml
+  ---
+  kind: native-only
+  reason: <the native effect that bound ports in §21 cannot fake>
+  ---
+  ```
+  A checker reviews this reason. Approval records it in the local approval journal without editing the prompt file. Checks show `not run: <reason>`; they never count it as passed.
+- Name every observable input field, output field, unit and error code in the prompt prose or in a linked `contracts/*.md` record (`$contract`, below). Every explicit contract or app-map schema follows section 3.
 - Show the gate. Judge the person's later reply in any chat. A question, change request or earlier message is not approval. No exact phrase is needed. Never invent a decision or edit approval fields. See [Record a chat approval](https://github.com/promptdriven/pdd/blob/main/docs/cli.md#record-a-chat-approval). In a normal workflow run (not strict mode, not Autopilot), the Story gate shows pdd's Story card: show it as printed, then ask, never a bare "approve?". The person approves each Story with that context. With the approval they may choose the code PR after PR 1 (`--through code`); without it, pdd stops after PR 1. For several runs, show the cards one after another and record one answer for each card.
 - After actual approval, record the exact words for the ready gate and all its drafts:
 
@@ -100,14 +85,11 @@ Choose a delimiter absent as a whole line from the payload. Keep it quoted. Neve
 - Without --said, a person at a normal terminal can answer y/N once for the listed gate and all its drafts. `pdd approve PATH` approves one prompt. For a caller outside a normal terminal, `pdd workflow approve` instructs the agent to ask the person, then run with --said and their words; `pdd approve PATH` instructs the person to run that command. Native Herdr area-chat evidence may record history but never authorizes approval. Only an explicit approve call passes an approval gate; steps, `workflow done` and chat messages never do. The one exception is the full-pass route of a normal run above: `workflow done` opens PR 1, and nothing else. Warn, without blocking, when a workflow has no approve gate before code.
 - Workflow approval reads `pdd.json` from the main checkout (`sourceRoot`), outside the agent's run worktree. Standalone `pdd approve PATH` reads it from the Git root of the current checkout. Root `pdd.json` with `"strict_approvals": true` permits only a person terminal; absent/false is easy mode. Strict mode refuses --said. Prompt approval records the invoking actor, time, route, exact words and path/hash; PR evidence shows matching approvals safely quoted in code spans. Gate approval does not approve the later code-or-stop gate, except the choice that the person gives with a normal run's Story approval. A person decides expected values; never change them on your own.
 - pdd never merges and has no merge command. An agent may merge only after the person's explicit chat request. Resolve the PR's exact current head and require at least one check and all required checks green for that head; missing, failed or pending checks stop. First post a PR comment beginning `Merge requested by the person: "…"`, preserving the exact request safely in a Markdown code span (use a fence longer than any backtick run; JSON-quote controls/newlines). Use a body file, never interpolate the words into shell code. A failed comment stops. Recheck head/checks, then run `gh pr merge PR --merge --match-head-commit <head>` with that same head. A changed head stops; obtain green checks for its current head before retrying.
-- To change an approved prompt (prose or interface), set `"status": "draft"`, run `pdd test --fill-hash` and ask the
-  person to approve again through these routes.
+- When an approved prompt changes, ask the person to approve the updated prose again through these routes.
 
-**The interpreted route.** This route does not generate an implementation. It still needs a typed Runtime interface
-derived from the prompt's canonical contract and admitted by the runtime; prose alone does not establish executable
-entry points. Schema and safety admission do not prove that execution preserves the contract's meaning.
+**The interpreted route.** This route does not generate an implementation. The interpreter synthesizes or admits a typed Runtime contract from the prompt and its dependencies; schema and safety admission do not prove that execution preserves the contract's meaning.
 Static native-code binding checks are a separate route. Independent prompt-to-code review does not apply when no
-implementation is generated. Record the actual prompt, interface, selected context and checks instead;
+implementation is generated. Record the actual prompt, selected context and checks instead;
 do not report a code review that did not occur.
 
 **The story** has one line for each criterion. Number from 1. Use straight quotes (`"`), not curly quotes. Text copied
@@ -140,7 +122,7 @@ types and sees, as AC1 below does. Do not name code ("`splitBill(2, 4)` returns 
   `"context": [{"prompt_path": "prompts/ui.prompt.md", "paths": ["docs/tile-colors.md"]}]`. A text note, a missing key
   or an extra key gives `invalid-context` at `context[N]`. Never give the story, a test or expected values as context:
   the program would see the answers. Patterns for tests: section 18.
-- Shared records and starting worlds expand locally before `pdd lint`, `pdd test` and `pdd simulate`: use `{"$contract": "contracts/phone-server.md#order_in"}` or `{"$contract": "contracts/records.json#/defs/order"}` in a Runtime interface schema, and `"initial_world": {"$seed": "contracts/seed-world.json", "set": {"/orders": []}}` for a shared starting world (`pdd contracts` lists shared records).
+- Shared records and starting worlds expand locally before `pdd lint`, `pdd test` and `pdd simulate`: link `contracts/*.md` under `## Dependencies` (or use `{"$contract": "contracts/phone-server.md#order_in"}` / `{"$contract": "contracts/records.json#/defs/order"}` in any explicit schema), and use `"initial_world": {"$seed": "contracts/seed-world.json", "set": {"/orders": []}}` for a shared starting world (`pdd contracts` lists shared records).
 
 **Scoped uploads.** A check selects its tests, their stories, entry prompts and explicit test context. It recursively
 follows prompt call targets, local links in `## Dependencies` and Markdown images in selected Markdown files.
@@ -152,7 +134,7 @@ call. With no Story, it selects all discovered tests. Add `--app-map PATH` to in
 links after dropping `#fragment`. It does not enforce the named section or interpret authoring, generation, runtime,
 verification or testing roles. Graph projection selects direct declared context or retained draft context, appearance
 context and explicit test context. It excludes executable call targets, except dependencies explicitly retained for
-instances. The interface drafter's dependency context defaults to depth 1 and has a byte budget. These are limits
+instances. These are limits
 of these routes, not a description of every adapter; shared-contract adapters have their own rules.
 
 Review the required transitive dependency chain for the intended use. Confirm which files and sections that route

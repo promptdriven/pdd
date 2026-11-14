@@ -1,4 +1,4 @@
-// Generated from prompts/cli/file-owner.prompt.md (sha256: aaf12b7f91e68c39d3573f741af8273c428685c592f735a374b3746c45474b8c).
+// Generated from prompts/cli/file-owner.prompt.md (sha256: 79dedc291d442e365b8aca00233e41e31894fab23d0026e56f16049d2ae49f0c).
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { closeSync, fstatSync, lstatSync, openSync, readSync, realpathSync } from 'node:fs';
@@ -52,7 +52,7 @@ export function headerHashState(hash, promptContent) {
 }
 
 function openingSentence(text) {
-  const lines = text.split(/\r?\n/);
+  const lines = text.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, '').split(/\r?\n/);
   let at = 0;
   const blanks = () => { while (at < lines.length && !lines[at].trim()) at++; };
   blanks();

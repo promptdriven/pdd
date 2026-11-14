@@ -38,7 +38,7 @@ Use `# Product name: plan`. A small map with exactly one part needs no separate 
 State what never crosses a boundary. Under a separate `## Prompts` heading (not
 inside `## Boundaries` or `## Runs`), state how each part starts and connects in
 real execution, naming both its checkable domain/screen prompt(s) (faked over
-contract ports in `pdd test`) and any thin `"kind": "native-only"` adapter prompt(s)
+contract ports in `pdd test`) and any thin `kind: native-only` adapter prompt(s)
 for real HTTP/HTTPS routes, auth/cookies, SQLite or external databases, CLI/OS
 processes and browser DOM/network clients (RUNBOOK §21; `0` Runtime AI calls in
 `pdd test`, verified by native tests in `code` PR 2) so finished runs form a

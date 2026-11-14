@@ -166,8 +166,8 @@ test('shell completion offers only the main names', t => {
     const workflow = choices(shell, ['workflow']);
     assert.ok(workflow.includes(RUN)); assert.ok(!workflow.includes('start'));
     const testOptions = choices(shell, [TEST]);
-    assert.ok(testOptions.includes('--read') && testOptions.includes('--fill-hash'));
-    for (const hidden of ['--lint', '--local', '--request']) assert.ok(!testOptions.includes(hidden), `${shell} ${TEST} ${hidden}`);
+    assert.ok(testOptions.includes('--read') && testOptions.includes('--files'));
+    for (const hidden of ['--lint', '--local', '--request', '--fill-hash', '--compact']) assert.ok(!testOptions.includes(hidden), `${shell} ${TEST} ${hidden}`);
     assert.ok(choices(shell, [LINT]).includes('--local'));
     assert.ok(choices(shell, [SIMULATE]).includes('--stop'));
     assert.deepEqual(choices(shell, [SIMULATE, '--tab']).sort(), ['call', 'screen', 'terminal', 'world']);

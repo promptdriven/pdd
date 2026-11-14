@@ -5,7 +5,7 @@ I can run `pdd help` and see where the Prompting guide and the RUNBOOK are on my
 ## Acceptance criteria
 
 1. `pdd`, `pdd --help`, `pdd -h` and `pdd help` each name `pdd help prompting` and the full paths of the installed Prompting guide (`docs/prompting-guide.md`) and RUNBOOK (`RUNBOOK.md`), print nothing to stderr and exit with code 0.
-2. `pdd help prompting` shows how to write a prompt file, `prompts/NAME.prompt.md`, with its `## Dependencies` section and its Runtime interface block, prints nothing to stderr and exits with code 0.
+2. `pdd help prompting` shows how to write a prompt file, `prompts/NAME.prompt.md`, with its `## Dependencies` section, prints nothing to stderr and exits with code 0.
 3. `pdd help prompting` shows how to write a Story file, `user_stories/STORY.md`, with its numbered acceptance criteria, and the Story's test file, `tests/STORY.json`, and exits with code 0.
 4. `pdd help prompting` names the commands `pdd test`, `pdd lint` and `pdd approve`, and exits with code 0.
 5. `pdd help prompting` names the full paths of the installed `docs/prompting-guide.md` and `RUNBOOK.md`, and exits with code 0.

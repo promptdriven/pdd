@@ -62,7 +62,9 @@ test('doctor: non-agent findings warn; warnings permit readiness',async()=>{
     const r=await invoke(f);assert.equal(r.code,0,`${fault}: ${r.text}`);
     check(r,{node:'node',permission:'github-permission',merge:'merge-method',setup:'setup-block',timers:'user-timers',identity:'git-identity',settings:'settings-github'}[fault],'WARN');
   }
-  const f=doctorFixture();f.tracked='one.prompt.md\0';f.paths.set('/project/one.prompt.md','# Draft');f.ports.codexLimits=async()=>({state:'unknown'});
+  const plain=doctorFixture();plain.tracked='one.prompt.md\0';plain.paths.set('/project/one.prompt.md','# Plain prompt');
+  const pr=await invoke(plain);assert.equal(pr.code,0,pr.text);check(pr,'draft-prompts','PASS');
+  const f=doctorFixture();f.tracked='one.prompt.md\0';f.paths.set('/project/one.prompt.md','# Draft\n\n<details><summary>Runtime interface</summary>\n\n```json\n{"status":"draft"}\n```\n</details>\n');f.ports.codexLimits=async()=>({state:'unknown'});
   const r=await invoke(f);assert.equal(r.code,0,r.text);check(r,'draft-prompts','WARN');check(r,'agent-usage','WARN');
 });
 

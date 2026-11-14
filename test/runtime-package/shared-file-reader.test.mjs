@@ -161,7 +161,7 @@ test('shared reader: files reports bad prompts, mismatched tests, untested Stori
   assert.equal(reply.status, 0, 'file problems must be listed, not abort inventory: ' + reply.stderr);
   const view = JSON.parse(reply.stdout);
   assert.equal(view.prompts.find(row => row.path === 'prompts/notes.prompt.md').has_interface, false);
-  assert.ok(view.refusals.some(row => row.path === 'prompts/notes.prompt.md' && row.code === 'interface-missing'));
+  assert.equal(view.refusals.some(row => row.path === 'prompts/notes.prompt.md'), false);
   assert.ok(view.refusals.some(row => row.path === 'prompts/bad.prompt.md' && row.code === 'invalid-limits'));
   assert.deepEqual(view.tests.find(row => row.path === 'tests/place-order.json').stories, ['user_stories/place-order.md']);
   assert.equal(view.tests[0].refusals[0].code, 'pdd-story-mismatch');

@@ -111,7 +111,7 @@ test('3298 AC1: scenario with story_path and ID-only criteria resolves text and 
   }
 });
 
-test('3298 AC1: pdd test --fill-hash syncs stale criteria[].text in place while preserving exact tokens and scoping', async t => {
+test('3298 AC1: fillHashes syncs stale criteria[].text in place while preserving exact tokens and scoping', async t => {
   const { repo, home, state } = harbor(t, r => {
     storyTest(r, 'other');
     mkdirSync(join(r, 'contracts'), { recursive: true });
@@ -148,13 +148,9 @@ test('3298 AC1: pdd test --fill-hash syncs stale criteria[].text in place while 
   assert.equal(preflight({ root: repo, found: staleFound, selected: staleFound.tests.filter(i => i.path === 'tests/place-order.json') }).rows[0].refusals[0]?.code, 'story-criterion-mismatch');
   assert.equal(preflight({ root: repo, found: staleFound, selected: staleFound.tests.filter(i => i.path === 'tests/other.json') }).rows[0].refusals[0]?.code, 'story-criterion-mismatch');
 
-  // Scoped --fill-hash updates ONLY place-order, leaving other.json stale.
-  const { ports } = portsFor({ HOME: home, PDD_STATE_DIR: state, PDD_RUNTIME_URL: 'http://127.0.0.1:9' });
-  ports.fetch = async () => { throw Error('unexpected network'); };
-  ports.gh = () => { throw Error('unexpected gh'); };
-  assert.equal(await runCheck({ cwd: repo, words: ['place-order'], options: { '--fill-hash': true } }, ports), 0);
-  assert.match(ports.stdout.text, /Synced criteria: tests\/place-order\.json/);
-  assert.doesNotMatch(ports.stdout.text, /tests\/other\.json/);
+  // Scoped fillHashes updates ONLY place-order, leaving other.json stale.
+  const scoped = fillHashes({ root: repo, targets: ['tests/place-order.json'] });
+  assert.deepEqual(scoped.synced, [{ path: 'tests/place-order.json' }]);
 
   const syncedRaw = readFileSync(join(repo, 'tests/place-order.json'), 'utf8');
   assert.match(syncedRaw, /"\$seed": "contracts\/world\.json#\/orders"/, 'unexpanded $seed preserved');
@@ -165,7 +161,7 @@ test('3298 AC1: pdd test --fill-hash syncs stale criteria[].text in place while 
   assert.deepEqual(preflight({ root: repo, found: afterScoped, selected: afterScoped.tests.filter(i => i.path === 'tests/place-order.json') }).rows[0].refusals, []);
   assert.equal(preflight({ root: repo, found: afterScoped, selected: afterScoped.tests.filter(i => i.path === 'tests/other.json') }).rows[0].refusals[0]?.code, 'story-criterion-mismatch');
 
-  // Unscoped CLI `pdd test --fill-hash` syncs the remaining stale scenario and preserves default enumerable keys.
+  // Unscoped fillHashes syncs the remaining stale scenario and preserves default enumerable keys.
   const direct = fillHashes({ root: repo });
   assert.deepEqual(Object.keys(direct), ['filled', 'current', 'refused', 'stale', 'warnings']);
   assert.deepEqual(direct.synced, [{ path: 'tests/other.json' }]);

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: cbe50209920179b0fc2ca7eb816a3aa43eb11d23a871e91e4761961aa297786c).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: f40a2ae75328ec4b89e4c23a35101b95e1428af2748d9da6c0df7b13f3e46326).
 import { markdownLinks, markdownDefinitions, markdownSectionText } from './runtime-markdown.mjs';
 import { buildBindingPlan, runtimeBoundary } from './runtime-binding-plan.mjs';
 import { createHash } from 'node:crypto';
@@ -589,7 +589,7 @@ export function interfaceKindProblems(iface) {
 // upload copies omit kind (#3210). So it is a warning, never a refusal; the engine decides.
 export function interfaceFormatWarnings(iface) {
   return isObject(iface) && Object.hasOwn(iface, 'kind') && iface.kind === 'full' && iface.status === 'draft'
-    ? [{code:'interface-kind-explicit-full',pointer:'/kind',rule:'must omit /kind for a full interface. Run pdd test --fill-hash to remove the redundant field from drafts.'}] : [];
+    ? [{code:'interface-kind-explicit-full',pointer:'/kind',rule:'must omit /kind for a full interface.'}] : [];
 }
 export const formatWarningLines = prompt => interfaceFormatWarnings(prompt?.interface).map(item => `Warning: ${prompt.path} ${item.pointer} ${item.code}: ${item.rule}`);
 // Lint and the files preview give unsupported schema keywords as advice too (#3206); a check keeps its schema rules.
@@ -625,13 +625,63 @@ export function interfaceSchemaProblems(iface) {
   return out;
 }
 
+function unquoteFrontmatterScalar(raw) {
+  const value = raw.trim();
+  if (!value) return '';
+  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+    if (value.startsWith('"')) {
+      try { return JSON.parse(value); } catch { return value.slice(1, -1); }
+    }
+    return value.slice(1, -1).replaceAll("''", "'");
+  }
+  return value;
+}
+
+export function parsePromptFrontmatter(text) {
+  const str = String(text ?? '');
+  if (!/^(?:\uFEFF)?---[ \t]*\r?\n/.test(str)) {
+    return { hasFrontmatter: false, kind: null, reason: null, error: null };
+  }
+  const match = /^(?:\uFEFF)?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(str);
+  if (!match) {
+    return { hasFrontmatter: true, kind: null, reason: null, error: 'interface-kind-invalid' };
+  }
+  const fields = {};
+  for (const rawLine of match[1].split(/\r?\n/)) {
+    const trimmed = rawLine.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const kv = /^([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.*)$/.exec(rawLine);
+    if (!kv || !['kind', 'reason'].includes(kv[1]) || Object.hasOwn(fields, kv[1])) {
+      return { hasFrontmatter: true, kind: fields.kind ?? null, reason: fields.reason ?? null, error: 'interface-kind-invalid' };
+    }
+    fields[kv[1]] = unquoteFrontmatterScalar(kv[2]);
+  }
+  const kind = fields.kind ?? null;
+  const reason = Object.hasOwn(fields, 'reason') ? fields.reason : null;
+  if (kind !== 'native-only') {
+    return { hasFrontmatter: true, kind, reason, error: 'interface-kind-invalid' };
+  }
+  if (typeof reason !== 'string' || !reason.trim()) {
+    return { hasFrontmatter: true, kind, reason, error: 'native-reason-missing' };
+  }
+  return { hasFrontmatter: true, kind, reason: reason.trim(), error: null };
+}
+
 // The prompt file of an entry: {path, text, blocks, interface, error}.
 export function readPrompt(root, visible, path,workspace=loadRuntimeWorkspace({root})) {
   workspace=boundedWorkspace(root,workspace);
   if(typeof path==='string')requireRuntimePath(workspace,{path,from:'Prompt'});
   if (typeof path !== 'string' || !path.endsWith('.prompt.md') || !visible.has(path)) return { path, error: 'entry-missing' };
   const rawText = sourceFilePort(root,visible,workspace).read({path}).content, prepared = preparedText(root,visible,path,rawText,'prompt',workspace), text = prepared.text, blocks = interfaceBlocks(text);
+  const frontmatter = parsePromptFrontmatter(text);
   const source = { path, rawText, text, blocks, references: prepared.references };
+  if (frontmatter.hasFrontmatter) {
+    if (blocks.length > 0) return { ...source, error: 'pdd-two-interfaces' };
+    if (frontmatter.error) {
+      return { ...source, frontmatter: true, frontmatterError: frontmatter.error, interface: { ...(frontmatter.kind !== null ? { kind: frontmatter.kind } : {}), ...(frontmatter.reason !== null ? { reason: frontmatter.reason } : {}) }, prose: proseSha256(text) };
+    }
+    return { ...source, frontmatter: true, hasInterface: false, nativeOnly: { path, reason: frontmatter.reason }, interface: { kind: 'native-only', reason: frontmatter.reason }, prose: proseSha256(text) };
+  }
   if (!blocks.length) return { ...source, error: 'interface-missing' };
   if (blocks.length > 1) return { ...source, error: 'pdd-two-interfaces' };
   let value;
@@ -650,19 +700,29 @@ export function readPrompt(root, visible, path,workspace=loadRuntimeWorkspace({r
 
 // Drafts may run; until the server takes them, its refusal gets this plain text.
 export const DRAFT_SERVER_TEXT = 'The server does not run draft prompts yet. Approve the prompt first, or wait for the server update.';
-const draftStaleHint = path => `pdd: ${path} is a draft whose text changed after its hash was filled. Run pdd test --fill-hash.`;
-export const STALE_HINT = 'the text changed after approval: set status to draft, run pdd test --fill-hash, ask the person';
+const draftStaleHint = path => `pdd: ${path} is a draft whose prose_sha256 is not current.`;
+export const STALE_HINT = 'the text changed after approval: update the prompt and ask the person to approve it again';
 export const staleHint = `pdd: ${STALE_HINT}.`;
 const PROMPT_MESSAGES = {
   'entry-missing': path => `${path} is not a Git-visible *.prompt.md file.`,
-  'interface-missing': path => `${path} has no Runtime interface block. Run pdd interface draft ${/^[A-Za-z0-9_./-]+$/.test(path) ? path : "'" + path.replaceAll("'", "'\\''") + "'"}.`,
-  'pdd-two-interfaces': path => `${path} has more than one Runtime interface block. Keep one.`,
+  'interface-missing': path => `${path} has no Runtime interface block, and the Runtime server does not advertise lazy-interfaces.`,
+  'pdd-two-interfaces': path => `${path} has more than one Runtime interface declaration. Keep one.`,
   'invalid-json': path => `The Runtime interface of ${path} is not valid JSON.`,
 };
 
 // Rule P7 for one prompt. Returns null or a refusal (without the step).
 export function promptRefusal(prompt, section) {
   if (prompt.error) return refusal(prompt.error, section, PROMPT_MESSAGES[prompt.error](prompt.path));
+  if (prompt.frontmatter) {
+    if (prompt.frontmatterError === 'native-reason-missing') {
+      return refusal('native-reason-missing', section, `${prompt.path} /reason must state in plain words why the effect cannot be faked.`);
+    }
+    if (prompt.frontmatterError) {
+      return refusal(prompt.frontmatterError, section, `${prompt.path} frontmatter must declare only kind: native-only and reason.`);
+    }
+    const kindProblems = interfaceKindProblems(prompt.interface);
+    return kindProblems.length ? refusal(kindProblems[0].code, section, `${prompt.path} ${kindProblems[0].rule}`) : null;
+  }
   const kindProblems = interfaceKindProblems(prompt.interface);
   if (kindProblems.length) return refusal(kindProblems[0].code, section, `${prompt.path} ${kindProblems[0].rule}`);
   const status = prompt.interface.status;
@@ -674,6 +734,39 @@ export function promptRefusal(prompt, section) {
       : refusal('interface-stale', section, `${prompt.path} changed after its interface was approved.`, { hint: staleHint });
   }
   return null;
+}
+
+function discoveryPromptPaths(root) {
+  return [...discoveryVisibleFiles({ root, excludeFixtureProjects: true })].filter(path => path.endsWith('.prompt.md')).sort();
+}
+
+export function interfaceFindings({ root, paths = discoveryPromptPaths(root) }) {
+  const visible = new Set(gitFiles(root));
+  return paths.flatMap(path => {
+    try {
+      const prompt = readPrompt(root, visible, path), problem = promptRefusal(prompt, 'interface');
+      if (!prompt.interface) return [{ ...problem, path }];
+      const schema = interfaceSchemaProblems(prompt.interface).map(item => ({ code: item.code, path, section: item.pointer, message: `${path} ${item.pointer} ${item.rule}` }));
+      return problem && !schema.some(item => item.code === problem.code) ? [{ ...problem, path }, ...schema] : schema;
+    } catch (error) {
+      return [{ code: error.code ?? 'interface-unreadable', path, message: error.message }];
+    }
+  });
+}
+
+export function runtimeCoverage({ root, paths = discoveryPromptPaths(root), allowMissingInterfaces = true }) {
+  const visible = new Set(gitFiles(root));
+  let checkable = 0, native_only = 0;
+  for (const path of paths) {
+    try {
+      const prompt = readPrompt(root, visible, path);
+      if (allowMissingInterfaces && prompt.error === 'interface-missing') { checkable++; continue; }
+      if (promptRefusal(prompt, 'interface') || interfaceSchemaProblems(prompt.interface).length) continue;
+      if (prompt.interface.kind === 'native-only') native_only++;
+      else if (Array.isArray(prompt.interface.entries) && prompt.interface.entries.length && prompt.interface.entries.every(entry => typeof entry?.operation === 'string' && entry.operation.trim() && entry.input_schema && entry.result_schema)) checkable++;
+    } catch { /* Missing and invalid source remains in the denominator. */ }
+  }
+  return { checkable, total: paths.length, native_only };
 }
 
 function numbersIn(text) {
@@ -875,8 +968,14 @@ export function promptSchemaRefusals(root, found, prompt, prompts, seen = new Se
   if (!prompt.interface) return [];
   prompt.schemaIssues ??= interfaceSchemaProblems(prompt.interface).map(problem =>
     refusal(problem.code, problem.pointer, `${prompt.path} ${problem.pointer} ${problem.rule}`, {path:prompt.path, ...(problem.hint ? {hint:problem.hint} : {})}));
-  const called = (Array.isArray(prompt.interface.calls) ? prompt.interface.calls : []).map(call => call?.target).filter(target => typeof target === 'string');
-  const statusProblems = ['draft', 'approved'].includes(prompt.interface.status) ? [] : [{ ...promptRefusal(prompt, 'interface'), path: prompt.path }];
+  const called = [
+    ...(Array.isArray(prompt.interface.calls) ? prompt.interface.calls : []).map(call => call?.target).filter(target => typeof target === 'string'),
+    ...(prompt.frontmatter ? promptMarkdownTargets(prompt.text, prompt.path, found.visible) : []),
+  ];
+  const ownRefusal = prompt.frontmatter || !['draft', 'approved'].includes(prompt.interface.status)
+    ? promptRefusal(prompt, 'interface')
+    : null;
+  const statusProblems = ownRefusal ? [{ ...ownRefusal, path: prompt.path }] : [];
   return [...statusProblems, ...prompt.schemaIssues, ...called.flatMap(target => {
     if (!prompts.has(target)) prompts.set(target, readPrompt(root, found.visible, target,found.workspace));
     return promptSchemaRefusals(root, found, prompts.get(target), prompts, seen, { allowMissingInterfaces });
@@ -1100,7 +1199,7 @@ export function preflight({ root, found, selected,workspace=found.workspace??loa
       const prompt = readPrompt(root, found.visible, path, workspace);
       prompts.set(path, prompt);
       for (const call of Array.isArray(prompt.interface?.calls) ? prompt.interface.calls : []) visit(call?.target);
-      if (allowMissingInterfaces && prompt.error === 'interface-missing') {
+      if ((allowMissingInterfaces && prompt.error === 'interface-missing') || prompt.frontmatter) {
         for (const target of promptMarkdownTargets(prompt.text, path, found.visible)) visit(target);
       }
     };
@@ -1371,7 +1470,7 @@ function replaceCriteriaTexts(body, nextTexts) {
   return out;
 }
 
-// --fill-hash: fill draft hashes, omit full kind, sync stale scenario criteria[].text; optionally compact drafts.
+// Fill legacy draft hashes, omit full kind, and sync stale scenario criteria[].text.
 export function fillHashes({ root, files = gitFiles(root), targets, compact = false,workspace=loadRuntimeWorkspace({root}) }, ports = {}) {
   const isTestFolderJsonFn = ports?.isTestFolderJson ?? defaultIsTestFolderJson;
   const isStoryPathFn = ports?.isStoryPath ?? defaultIsStoryPath;
@@ -1403,8 +1502,8 @@ export function fillHashes({ root, files = gitFiles(root), targets, compact = fa
     try { value = JSON.parse(body); } catch { result.refused.push({ path, message: `The Runtime interface of ${path} is not valid JSON.` }); continue; }
     if (!isObject(value)) { result.refused.push({ path, message: `The Runtime interface of ${path} is not a JSON object.` }); continue; }
     if (!Object.hasOwn(value, 'status')) {
-      if (Object.hasOwn(value, 'prose_sha256')) result.refused.push({ path, message: `The Runtime interface of ${path} has no status. Add "status": "draft" and run pdd test --fill-hash again.` });
-      else result.warnings.push({ path, message: `The Runtime interface of ${path} has no status and no prose_sha256, so pdd skipped it. If this is a prompt you check, add "status": "draft" and run pdd test --fill-hash again.` });
+      if (Object.hasOwn(value, 'prose_sha256')) result.refused.push({ path, message: `The Runtime interface of ${path} has no status. Add "status": "draft" to its Runtime interface.` });
+      else result.warnings.push({ path, message: `The Runtime interface of ${path} has no status and no prose_sha256, so pdd skipped it. Add "status": "draft" if this legacy interface block is active.` });
       continue;
     }
     const hash = proseSha256(text);
@@ -2026,7 +2125,8 @@ function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadR
     // A Story boundary selects executable interfaces, while preserving context prose.
     const bindingPrompts = new Map();
     for (const [path,file] of footprintPayload) if (path.endsWith('.prompt.md')) {
-      const blocks = interfaceBlocks(bytes(file).toString('utf8'));
+      const promptText = bytes(file).toString('utf8'), blocks = interfaceBlocks(promptText), frontmatter = parsePromptFrontmatter(promptText);
+      if (!blocks.length && frontmatter.hasFrontmatter && !frontmatter.error && frontmatter.kind === 'native-only') { bindingPrompts.set(path, { kind: 'native-only', reason: frontmatter.reason }); continue; }
       if (!blocks.length && allowMissingInterfaces) { bindingPrompts.set(path, { entries: [], calls: [], resources: [] }); continue; }
       try { bindingPrompts.set(path,JSON.parse(blocks[0][1])); } catch { /* Admission reports malformed interfaces. */ }
     }
@@ -2290,7 +2390,7 @@ const canonicalClaimPath = value => typeof value === 'string' && value.trim().le
   && !/[\\\x00-\x1f\x7f]/.test(value) && !value.split('/').some(part => !part || part === '.' || part === '..' || part.toLowerCase() === '.git');
 
 function openingClaimSentence(text) {
-  const lines = text.split(/\r?\n/);
+  const lines = text.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, '').split(/\r?\n/);
   let at = 0;
   const blanks = () => { while (at < lines.length && !lines[at].trim()) at++; };
   blanks();
@@ -2519,7 +2619,7 @@ const STORY_STEP_LIMIT = 15;
 const STORY_LINE_LIMIT = 1000;
 
 function promptProseLineCount(text) {
-  const prose = text.replace(INTERFACE, '').trimEnd();
+  const prose = text.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, '').replace(INTERFACE, '').trimEnd();
   return prose ? prose.split(/\r?\n/).length : 0;
 }
 
@@ -2527,10 +2627,10 @@ function promptProseWarningLine(promptPath, promptText) {
   if (typeof promptText !== 'string') return null;
   const proseLines = promptProseLineCount(promptText);
   if (proseLines > PROMPT_PROSE_ELEVATED_LIMIT) {
-    return `Warning: oversized prompt (elevated): ${promptPath} has ${proseLines} prose lines (limit: ${PROMPT_PROSE_LINE_LIMIT}; elevated above ${PROMPT_PROSE_ELEVATED_LIMIT}). Split the module into focused contracts or use "kind": "native-only" with deterministic code tests.`;
+    return `Warning: oversized prompt (elevated): ${promptPath} has ${proseLines} prose lines (limit: ${PROMPT_PROSE_LINE_LIMIT}; elevated above ${PROMPT_PROSE_ELEVATED_LIMIT}). Split the module into focused contracts or mark native-only YAML frontmatter (kind: native-only) with deterministic code tests.`;
   }
   if (proseLines > PROMPT_PROSE_LINE_LIMIT) {
-    return `Warning: oversized prompt: ${promptPath} has ${proseLines} prose lines (limit: ${PROMPT_PROSE_LINE_LIMIT}). Keep prompt prose focused on WHAT, WHY and failure boundaries; let the Runtime interface or $contract schema own field inventories.`;
+    return `Warning: oversized prompt: ${promptPath} has ${proseLines} prose lines (limit: ${PROMPT_PROSE_LINE_LIMIT}). Keep prompt prose focused on WHAT, WHY and failure boundaries; let shared $contract schemas own field inventories.`;
   }
   return null;
 }
@@ -2554,7 +2654,7 @@ function storyComplexityWarningLine({ path, storyPath, doc }, rawText) {
 }
 
 function promptOpeningSentence(text) {
-  const lines = new TextDecoder().decode(Buffer.from(text, 'utf8').subarray(0, 65_536)).split(/\r?\n/);
+  const lines = new TextDecoder().decode(Buffer.from(text, 'utf8').subarray(0, 65_536)).replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, '').split(/\r?\n/);
   let at = 0;
   const blanks = () => { while (at < lines.length && !lines[at].trim()) at++; };
   blanks();

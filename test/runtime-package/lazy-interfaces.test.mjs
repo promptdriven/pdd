@@ -6,7 +6,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { PLACE, fakeRuntime, harbor, ordinaryCapabilities, portsFor } from './runtime-fake.mjs';
-import { interfaceBlocks, proseSha256, runCheck, runTry } from '../../src/runtime-seam.mjs';
+import { fillHashes, interfaceBlocks, proseSha256, runCheck, runTry } from '../../src/runtime-seam.mjs';
 
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 
@@ -242,15 +242,12 @@ test('LAZY-4: pdd simulate starts, reuses and stops a Try on an interface-less r
   assert.equal(fake.deletes.length, 1);
 });
 
-test('LAZY-5: malformed/stale embedded blocks and transitive native-only prompts still stay local under lazy-interfaces, and --fill-hash skips plain prompts', async t => {
-  // 1) --fill-hash on interface-less prompt is a clean no-op
+test('LAZY-5: malformed/stale embedded blocks and transitive native-only prompts still stay local under lazy-interfaces, and fillHashes skips plain prompts', async t => {
+  // 1) fillHashes on interface-less prompt is a clean no-op
   const plain = harbor(t, repo => { stripInterface(repo); });
-  const fillPorts = portsFor({ HOME: plain.home, PDD_STATE_DIR: plain.state }, {
-    gh: () => assert.fail('--fill-hash must not authenticate'),
-    fetch: () => assert.fail('--fill-hash must not contact Runtime'),
-  }).ports;
   const beforeText = readFileSync(join(plain.repo, PLACE), 'utf8');
-  assert.equal(await runCheck({ cwd: plain.repo, options: { '--fill-hash': true } }, fillPorts), 0, fillPorts.stderr.text);
+  const filled = fillHashes({ root: plain.repo });
+  assert.deepEqual([filled.filled, filled.current, filled.refused, filled.stale], [[], [], [], []]);
   assert.equal(readFileSync(join(plain.repo, PLACE), 'utf8'), beforeText);
 
   // 2) Stale embedded interface is still refused locally with 0 capacity probes and 0 uploads

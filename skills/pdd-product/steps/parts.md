@@ -5,7 +5,7 @@ Read the approved map. For medium and large products, write the `Boundaries` and
 part's planned prompts and runnable startup boundary. Give each part its prompt
 folder and plan both kinds of modules:
 - Checkable domain and screen prompts verified by `pdd test` over fake contract ports.
-- Thin `"kind": "native-only"` adapter prompts (`0` Runtime Stories, proved by native
+- Thin `kind: native-only` adapter prompts (`0` Runtime Stories, proved by native
   tests in `code`; RUNBOOK §21) for real HTTP/HTTPS servers, OAuth/cookies, SQLite or
   external databases, CLI/OS processes and browser DOM/network shells.
 
