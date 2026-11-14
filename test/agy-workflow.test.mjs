@@ -85,7 +85,8 @@ test('agy run starts and reopens the same Herdr chat with its folders; recorded 
   let run = f.record(); assert.equal(run.agent, 'agy'); assert.equal(run.configDir, null);
   const launches = () => f.herdr.calls.filter(a => a[0] === 'pane' && a[1] === 'run');
   const line = launches()[0][3];
-  assert.ok(line.startsWith(`cd '${run.root}' && env `), line);
+  assert.ok(line.startsWith(`cd '${run.root}' && `), line);
+  assert.ok(line.includes(' env '), line);
   assert.ok(line.includes(`PDD_AGENT_SESSION=1 `), line);
   assert.ok(line.includes(` agy --dangerously-skip-permissions --settings '{"trustedWorkspaces":[${JSON.stringify(run.root)}]}' --add-dir `), line);
   for (const dir of [join(run.commonDir, 'pdd/runs'), `${run.sourceRoot}.pdd-worktrees`]) assert.ok(line.includes(`--add-dir '${dir}'`), line);
