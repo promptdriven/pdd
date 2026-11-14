@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-telemetry.prompt.md (sha256: 8ac368d86e675ea2ff5b0f47753ecb15de6bc777e21be41a69700d5bea20f8bf).
+// Generated from prompts/cli/autopilot-telemetry.prompt.md (sha256: a7f12a1bfcdc279adc3f9f6615faaaba8fd7f784b17a7eff15179f12d412a827).
 
 export const AUTOPILOT_PHASES = Object.freeze([
   'intake',
@@ -52,15 +52,20 @@ const PHASE_ALIASES = new Map([
   ['pr2', 'code/pr2'],
   ['implement', 'code/pr2'],
   ['build', 'code/pr2'],
+  ['worker', 'code/pr2'],
   ['repair', 'repair'],
   ['fix', 'repair'],
   ['rebase', 'repair'],
   ['base-refresh', 'repair'],
+  ['conflict', 'repair'],
   ['check', 'check'],
   ['review', 'check'],
   ['audit', 'check'],
   ['suite', 'check'],
   ['independent-review', 'check'],
+  ['vectors', 'check'],
+  ['runtime', 'check'],
+  ['merge-check', 'check'],
   ['ci-wait', 'ci-wait'],
   ['ci', 'ci-wait'],
   ['checks-wait', 'ci-wait'],
@@ -69,10 +74,14 @@ const PHASE_ALIASES = new Map([
 ]);
 
 const WORKER_STEPS = new Set([
-  'intake', 'improve', 'small-change', 'worker',
-  'story', 'story/pr1', 'pr1', 'code', 'code/pr2', 'pr2', 'repair', 'fix',
+  'intake', 'triage', 'sort', 'dependencies',
+  'improve', 'groom', 'clarify',
+  'small-change', 'worker',
+  'story', 'story/pr1', 'pr1', 'prompt', 'prompts',
+  'code', 'code/pr2', 'pr2', 'implement', 'build',
+  'repair', 'fix', 'rebase', 'base-refresh', 'conflict',
 ]);
-const REVIEWER_STEPS = new Set(['review', 'check', 'independent-review', 'audit', 'merge']);
+const REVIEWER_STEPS = new Set(['review', 'check', 'independent-review', 'audit', 'merge', 'publish']);
 const VALID_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh']);
 const VALID_AGENTS = new Set(['codex', 'claude', 'gemini', 'agy']);
 const ANSI_RE = /\x1b\[[0-?]*[ -/]*[@-~]/g;
@@ -80,6 +89,7 @@ const ANSI_RE = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const nonneg = value => (typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0);
 const hasNum = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
+const posNum = (value, fallback) => (typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : fallback);
 const round2 = value => Math.round(value * 100) / 100;
 const round4 = value => Math.round(value * 10000) / 10000;
 
@@ -106,10 +116,22 @@ export function normalizeAutopilotPhase(phase) {
   return PHASE_ALIASES.get(key) ?? null;
 }
 
+function resolvePhaseOrFallback(rawPhase) {
+  if (typeof rawPhase !== 'string' || !rawPhase.trim()) {
+    throw new Error(`Invalid Autopilot phase: ${String(rawPhase ?? '')}`);
+  }
+  const trimmed = rawPhase.trim();
+  const canonical = normalizeAutopilotPhase(trimmed);
+  return {
+    phase: canonical ?? 'code/pr2',
+    key: canonical ?? trimmed.toLowerCase(),
+    fallbackStep: canonical ? null : trimmed,
+  };
+}
+
 function normalizeSpan(span = {}, fallbackMachine = null) {
   if (!isObject(span)) throw new Error('Phase span must be an object.');
-  const phase = normalizeAutopilotPhase(span.phase ?? span.step);
-  if (!phase) throw new Error(`Unknown Autopilot phase: ${String(span.phase ?? span.step ?? '')}`);
+  const { phase, fallbackStep } = resolvePhaseOrFallback(span.phase ?? span.step);
   const startedAt = Number.isFinite(span.startedAt) ? span.startedAt : null;
   const endedAt = Number.isFinite(span.endedAt) ? span.endedAt : null;
   const durationMs = hasNum(span.durationMs)
@@ -117,11 +139,10 @@ function normalizeSpan(span = {}, fallbackMachine = null) {
     : startedAt !== null && endedAt !== null
       ? Math.max(0, endedAt - startedAt)
       : 0;
-  const machine = typeof (span.machine ?? fallbackMachine) === 'string' && (span.machine ?? fallbackMachine).trim()
-    ? (span.machine ?? fallbackMachine).trim()
-    : null;
+  const rawMachine = typeof span.machine === 'string' && span.machine.trim() ? span.machine : fallbackMachine;
+  const machine = typeof rawMachine === 'string' && rawMachine.trim() ? rawMachine.trim() : null;
   const agent = typeof span.agent === 'string' && span.agent.trim() ? span.agent.trim().toLowerCase() : null;
-  const step = typeof span.step === 'string' && span.step.trim() ? span.step.trim() : null;
+  const step = typeof span.step === 'string' && span.step.trim() ? span.step.trim() : fallbackStep;
   return { phase, startedAt, endedAt, durationMs, machine, agent, step };
 }
 
@@ -142,22 +163,29 @@ export function createPhaseTracker({ issue = null, repo = null, machine = null, 
   const open = new Map();
   return {
     startPhase(phase, meta = {}) {
-      const canonical = normalizeAutopilotPhase(phase);
-      if (!canonical) throw new Error(`Unknown Autopilot phase: ${String(phase ?? '')}`);
+      const resolved = resolvePhaseOrFallback(phase);
       const startedAt = now();
-      const stack = open.get(canonical) ?? [];
-      stack.push({ startedAt, meta: isObject(meta) ? { ...meta } : {} });
-      open.set(canonical, stack);
-      return { phase: canonical, startedAt };
+      const stack = open.get(resolved.key) ?? [];
+      const baseMeta = isObject(meta) ? { ...meta } : {};
+      if (resolved.fallbackStep && !baseMeta.step) baseMeta.step = resolved.fallbackStep;
+      stack.push({ startedAt, meta: baseMeta });
+      open.set(resolved.key, stack);
+      return { phase: resolved.phase, startedAt };
     },
     finishPhase(phase, meta = {}) {
-      const canonical = normalizeAutopilotPhase(phase);
-      if (!canonical) throw new Error(`Unknown Autopilot phase: ${String(phase ?? '')}`);
+      const resolved = resolvePhaseOrFallback(phase);
       const endedAt = now();
-      const stack = open.get(canonical);
+      const stack = open.get(resolved.key);
       const started = stack?.length ? stack.pop() : null;
       const startedAt = Number.isFinite(meta?.startedAt) ? meta.startedAt : (started?.startedAt ?? endedAt);
-      const merged = { ...(started?.meta ?? {}), ...(isObject(meta) ? meta : {}), phase: canonical, startedAt, endedAt };
+      const merged = {
+        ...(started?.meta ?? {}),
+        ...(isObject(meta) ? meta : {}),
+        ...(resolved.fallbackStep && !meta?.step && !started?.meta?.step ? { step: resolved.fallbackStep } : {}),
+        phase: resolved.phase,
+        startedAt,
+        endedAt,
+      };
       state = recordPhaseSpan(state, merged);
       return state.spans.at(-1);
     },
@@ -179,7 +207,8 @@ function mergeWallClockMs(spans) {
   let unanchoredMs = 0;
   for (const span of spans) {
     if (Number.isFinite(span.startedAt) && Number.isFinite(span.endedAt) && span.endedAt >= span.startedAt) {
-      intervals.push([span.startedAt, span.endedAt]);
+      const upper = Math.min(span.endedAt, span.startedAt + nonneg(span.durationMs));
+      if (upper > span.startedAt) intervals.push([span.startedAt, upper]);
     } else {
       unanchoredMs += nonneg(span.durationMs);
     }
@@ -203,12 +232,13 @@ function mergeWallClockMs(spans) {
 
 export function summarizeIssuePhases(spansOrRecord = []) {
   const raw = Array.isArray(spansOrRecord) ? spansOrRecord : (isObject(spansOrRecord) && Array.isArray(spansOrRecord.spans) ? spansOrRecord.spans : []);
+  const fallbackMachine = !Array.isArray(spansOrRecord) && isObject(spansOrRecord) ? spansOrRecord.machine ?? null : null;
   const normalized = [];
   for (const item of raw) {
     if (!isObject(item)) continue;
-    const phase = normalizeAutopilotPhase(item.phase ?? item.step);
-    if (!phase) continue;
-    normalized.push(normalizeSpan(item));
+    const rawPhase = item.phase ?? item.step;
+    if (typeof rawPhase !== 'string' || !rawPhase.trim()) continue;
+    normalized.push(normalizeSpan(item, fallbackMachine));
   }
   const buckets = new Map(AUTOPILOT_PHASES.map(phase => [phase, { durationMs: 0, count: 0, machines: new Set() }]));
   const allMachines = new Set();
@@ -276,12 +306,11 @@ function parseEventRecords(source) {
 
 function detectHarnessAgent(records, explicitAgent) {
   if (typeof explicitAgent === 'string' && VALID_AGENTS.has(explicitAgent.trim().toLowerCase())) {
-    const clean = explicitAgent.trim().toLowerCase();
-    return clean === 'agy' ? 'gemini' : clean;
+    return explicitAgent.trim().toLowerCase();
   }
   for (const row of records) {
-    if (typeof row.agent === 'string' && VALID_AGENTS.has(row.agent.toLowerCase())) {
-      return row.agent.toLowerCase() === 'agy' ? 'gemini' : row.agent.toLowerCase();
+    if (typeof row.agent === 'string' && VALID_AGENTS.has(row.agent.trim().toLowerCase())) {
+      return row.agent.trim().toLowerCase();
     }
     if (row.type === 'turn.completed' || row.type === 'thread.started' || row.payload?.type === 'token_count' || row.type === 'token_count') return 'codex';
     const usage = row.usage ?? row.message?.usage;
@@ -290,6 +319,7 @@ function detectHarnessAgent(records, explicitAgent) {
       if (Object.hasOwn(usage, 'cached_input_tokens') || Object.hasOwn(usage, 'reasoning_output_tokens')) return 'codex';
     }
     if (row.type === 'assistant' || row.type === 'message_start' || row.type === 'message_delta' || isObject(row.modelUsage)) return 'claude';
+    if (row.event === 'step_update' && isObject(row.step_update)) return 'agy';
     if (isObject(row.stats?.models) || isObject(row.usageMetadata) || isObject(row.stats) && (Object.hasOwn(row.stats, 'cached') || Object.hasOwn(row.stats, 'thoughts'))) return 'gemini';
   }
   return null;
@@ -301,7 +331,7 @@ function finalizeTokenSummary(agent, observed, turns, counts) {
   const uncachedInputTokens = Math.max(0, inputTokens - cachedInputTokens);
   const outputTokens = nonneg(counts.output);
   const reasoningTokens = nonneg(counts.reasoning);
-  const computedTotal = agent === 'gemini' ? inputTokens + outputTokens + reasoningTokens : inputTokens + outputTokens;
+  const computedTotal = agent === 'gemini' || agent === 'agy' ? inputTokens + outputTokens + reasoningTokens : inputTokens + outputTokens;
   const totalTokens = counts.total > 0 ? Math.max(counts.total, inputTokens + outputTokens) : computedTotal;
   const cacheHitShare = observed && inputTokens > 0 ? round4(cachedInputTokens / inputTokens) : null;
   const effectiveTokens = observed
@@ -324,15 +354,37 @@ function finalizeTokenSummary(agent, observed, turns, counts) {
 
 function extractCodex(records) {
   const turnSum = { input: 0, cached: 0, output: 0, reasoning: 0, total: 0 };
-  const cumMax = { input: 0, cached: 0, output: 0, reasoning: 0, total: 0 };
+  const bankedCum = { input: 0, cached: 0, output: 0, reasoning: 0, total: 0 };
+  const sessionPeak = { input: 0, cached: 0, output: 0, reasoning: 0, total: 0 };
   const lastSum = { input: 0, cached: 0, output: 0, reasoning: 0, total: 0 };
-  let turns = 0, sawTurn = false, sawCum = false, sawLast = false;
+  let turnCount = 0, cumTurns = 0, lastTurns = 0;
+  let sawTurn = false, sawCum = false, sawLast = false, inCumSession = false;
+
+  const bankSession = () => {
+    if (!inCumSession) return;
+    bankedCum.input += sessionPeak.input;
+    bankedCum.cached += sessionPeak.cached;
+    bankedCum.output += sessionPeak.output;
+    bankedCum.reasoning += sessionPeak.reasoning;
+    bankedCum.total += sessionPeak.total;
+    sessionPeak.input = 0;
+    sessionPeak.cached = 0;
+    sessionPeak.output = 0;
+    sessionPeak.reasoning = 0;
+    sessionPeak.total = 0;
+    inCumSession = false;
+  };
+
   for (const row of records) {
+    if (row.type === 'session_meta' || row.type === 'thread.started') {
+      bankSession();
+      continue;
+    }
     if (row.type === 'turn.completed' && isObject(row.usage)) {
       const u = row.usage;
       if ([u.input_tokens, u.output_tokens].some(hasNum)) {
         sawTurn = true;
-        turns += 1;
+        turnCount += 1;
         turnSum.input += nonneg(u.input_tokens);
         turnSum.cached += nonneg(u.cached_input_tokens);
         turnSum.output += nonneg(u.output_tokens);
@@ -351,14 +403,27 @@ function extractCodex(records) {
       const last = tokenPayload.info?.last_token_usage ?? tokenPayload.last_token_usage;
       if (isObject(total) && [total.input_tokens, total.output_tokens, total.total_tokens].some(hasNum)) {
         sawCum = true;
-        cumMax.input = Math.max(cumMax.input, nonneg(total.input_tokens));
-        cumMax.cached = Math.max(cumMax.cached, nonneg(total.cached_input_tokens));
-        cumMax.output = Math.max(cumMax.output, nonneg(total.output_tokens));
-        cumMax.reasoning = Math.max(cumMax.reasoning, nonneg(total.reasoning_output_tokens));
-        cumMax.total = Math.max(cumMax.total, hasNum(total.total_tokens) ? total.total_tokens : nonneg(total.input_tokens) + nonneg(total.output_tokens));
+        const curInput = nonneg(total.input_tokens);
+        const curCached = nonneg(total.cached_input_tokens);
+        const curOutput = nonneg(total.output_tokens);
+        const curReasoning = nonneg(total.reasoning_output_tokens);
+        const curTotal = hasNum(total.total_tokens) ? total.total_tokens : curInput + curOutput;
+        if (inCumSession && (curTotal < sessionPeak.total || curInput < sessionPeak.input)) {
+          bankSession();
+        }
+        const advanced = !inCumSession
+          ? (curInput > 0 || curOutput > 0 || curTotal > 0)
+          : (curTotal > sessionPeak.total || curInput > sessionPeak.input || curOutput > sessionPeak.output);
+        if (advanced) cumTurns += 1;
+        inCumSession = true;
+        sessionPeak.input = Math.max(sessionPeak.input, curInput);
+        sessionPeak.cached = Math.max(sessionPeak.cached, curCached);
+        sessionPeak.output = Math.max(sessionPeak.output, curOutput);
+        sessionPeak.reasoning = Math.max(sessionPeak.reasoning, curReasoning);
+        sessionPeak.total = Math.max(sessionPeak.total, curTotal);
       } else if (isObject(last) && [last.input_tokens, last.output_tokens].some(hasNum)) {
         sawLast = true;
-        turns += 1;
+        lastTurns += 1;
         lastSum.input += nonneg(last.input_tokens);
         lastSum.cached += nonneg(last.cached_input_tokens);
         lastSum.output += nonneg(last.output_tokens);
@@ -367,19 +432,27 @@ function extractCodex(records) {
       }
     }
   }
+  bankSession();
   const observed = sawTurn || sawCum || sawLast;
   const base = sawCum
     ? {
-      input: Math.max(cumMax.input, turnSum.input),
-      cached: Math.max(cumMax.cached, turnSum.cached),
-      output: Math.max(cumMax.output, turnSum.output),
-      reasoning: Math.max(cumMax.reasoning, turnSum.reasoning),
-      total: Math.max(cumMax.total, turnSum.total),
+      input: Math.max(bankedCum.input, turnSum.input),
+      cached: Math.max(bankedCum.cached, turnSum.cached),
+      output: Math.max(bankedCum.output, turnSum.output),
+      reasoning: Math.max(bankedCum.reasoning, turnSum.reasoning),
+      total: Math.max(bankedCum.total, turnSum.total),
     }
     : sawTurn
       ? turnSum
       : lastSum;
-  return finalizeTokenSummary('codex', observed, turns || (sawCum ? 1 : 0), base);
+  const resolvedTurns = sawCum && sawTurn
+    ? Math.max(turnCount, cumTurns || 1)
+    : sawCum
+      ? (cumTurns || 1)
+      : sawTurn
+        ? turnCount
+        : lastTurns;
+  return finalizeTokenSummary('codex', observed, resolvedTurns, base);
 }
 
 function claudeUsageTuple(usage) {
@@ -398,8 +471,8 @@ function claudeUsageTuple(usage) {
 function extractClaude(records) {
   const messages = new Map();
   let lastMsgKey = null, syntheticSeq = 0;
-  const resultMax = { input: 0, cached: 0, output: 0, reasoning: 0, total: 0 };
-  let sawResult = false;
+  const resultSum = { input: 0, cached: 0, output: 0, reasoning: 0, total: 0 };
+  let resultCount = 0;
 
   for (const row of records) {
     if (row.isMeta || row.isApiErrorMessage) continue;
@@ -460,14 +533,14 @@ function extractClaude(records) {
           }
         }
         if (any) {
-          sawResult = true;
-          for (const k of Object.keys(resultMax)) resultMax[k] = Math.max(resultMax[k], sumModels[k]);
+          resultCount += 1;
+          for (const k of Object.keys(resultSum)) resultSum[k] += sumModels[k];
         }
       } else {
         const tuple = claudeUsageTuple(row.usage);
         if (tuple) {
-          sawResult = true;
-          for (const k of Object.keys(resultMax)) resultMax[k] = Math.max(resultMax[k], tuple[k]);
+          resultCount += 1;
+          for (const k of Object.keys(resultSum)) resultSum[k] += tuple[k];
         }
       }
     }
@@ -480,29 +553,23 @@ function extractClaude(records) {
     msgSum.output += item.output;
     msgSum.total += item.total;
   }
-  const observed = messages.size > 0 || sawResult;
-  const counts = sawResult
-    ? {
-      input: Math.max(msgSum.input, resultMax.input),
-      cached: Math.max(msgSum.cached, resultMax.cached),
-      output: Math.max(msgSum.output, resultMax.output),
-      reasoning: 0,
-      total: Math.max(msgSum.total, resultMax.total),
-    }
-    : msgSum;
-  return finalizeTokenSummary('claude', observed, messages.size || (sawResult ? 1 : 0), counts);
+  const observed = messages.size > 0 || resultCount > 0;
+  const counts = messages.size > 0 ? msgSum : resultSum;
+  const turns = messages.size > 0 ? messages.size : resultCount;
+  return finalizeTokenSummary('claude', observed, turns, counts);
 }
 
-function extractGemini(records) {
+function extractGemini(records, agentLabel = 'gemini') {
   const metaSum = { input: 0, cached: 0, output: 0, reasoning: 0, total: 0 };
-  const envMax = { input: 0, cached: 0, output: 0, reasoning: 0, total: 0 };
-  let metaTurns = 0, sawMeta = false, sawEnv = false;
+  const envSum = { input: 0, cached: 0, output: 0, reasoning: 0, total: 0 };
+  let metaTurns = 0, statsCount = 0;
 
   for (const row of records) {
-    if (isObject(row.stats?.models)) {
+    const rawStats = isObject(row.stats) ? row.stats : (isObject(row.result?.stats) ? row.result.stats : null);
+    if (isObject(rawStats?.models)) {
       const snap = { input: 0, cached: 0, output: 0, reasoning: 0, total: 0 };
       let any = false;
-      for (const entry of Object.values(row.stats.models)) {
+      for (const entry of Object.values(rawStats.models)) {
         const t = entry?.tokens;
         if (!isObject(t)) continue;
         const prompt = t.prompt ?? t.input ?? t.input_tokens;
@@ -517,28 +584,28 @@ function extractGemini(records) {
         }
       }
       if (any) {
-        sawEnv = true;
-        for (const k of Object.keys(envMax)) envMax[k] = Math.max(envMax[k], snap[k]);
+        statsCount += 1;
+        for (const k of Object.keys(envSum)) envSum[k] += snap[k];
       }
       continue;
     }
-    if (isObject(row.stats)) {
-      const s = row.stats;
-      const prompt = s.input_tokens ?? s.prompt ?? s.input;
-      const out = s.output_tokens ?? s.candidates ?? s.output;
-      if ([prompt, out, s.total_tokens, s.total].some(hasNum)) {
-        sawEnv = true;
-        envMax.input = Math.max(envMax.input, nonneg(prompt));
-        envMax.cached = Math.max(envMax.cached, nonneg(s.cached ?? s.cached_input_tokens));
-        envMax.output = Math.max(envMax.output, nonneg(out));
-        envMax.reasoning = Math.max(envMax.reasoning, nonneg(s.thoughts ?? s.reasoning_tokens));
-        envMax.total = Math.max(envMax.total, nonneg(s.total_tokens ?? s.total));
+    if (isObject(rawStats)) {
+      const prompt = rawStats.input_tokens ?? rawStats.prompt ?? rawStats.input;
+      const out = rawStats.output_tokens ?? rawStats.candidates ?? rawStats.output;
+      if ([prompt, out, rawStats.total_tokens, rawStats.total].some(hasNum)) {
+        statsCount += 1;
+        envSum.input += nonneg(prompt);
+        envSum.cached += nonneg(rawStats.cached ?? rawStats.cached_input_tokens);
+        envSum.output += nonneg(out);
+        envSum.reasoning += nonneg(rawStats.thoughts ?? rawStats.reasoning_tokens);
+        envSum.total += nonneg(rawStats.total_tokens ?? rawStats.total);
       }
       continue;
     }
-    const meta = isObject(row.usageMetadata) ? row.usageMetadata : null;
+    const meta = isObject(row.usageMetadata)
+      ? row.usageMetadata
+      : (isObject(row.step_update?.usageMetadata) ? row.step_update.usageMetadata : null);
     if (meta && [meta.promptTokenCount, meta.candidatesTokenCount, meta.totalTokenCount].some(hasNum)) {
-      sawMeta = true;
       metaTurns += 1;
       metaSum.input += nonneg(meta.promptTokenCount);
       metaSum.cached += nonneg(meta.cachedContentTokenCount);
@@ -550,17 +617,10 @@ function extractGemini(records) {
     }
   }
 
-  const observed = sawEnv || sawMeta;
-  const counts = sawEnv
-    ? {
-      input: Math.max(envMax.input, metaSum.input),
-      cached: Math.max(envMax.cached, metaSum.cached),
-      output: Math.max(envMax.output, metaSum.output),
-      reasoning: Math.max(envMax.reasoning, metaSum.reasoning),
-      total: Math.max(envMax.total, metaSum.total),
-    }
-    : metaSum;
-  return finalizeTokenSummary('gemini', observed, metaTurns || (sawEnv ? 1 : 0), counts);
+  const observed = metaTurns > 0 || statsCount > 0;
+  const counts = metaTurns > 0 ? metaSum : envSum;
+  const turns = metaTurns > 0 ? metaTurns : statsCount;
+  return finalizeTokenSummary(agentLabel, observed, turns, counts);
 }
 
 export function extractHarnessTokens(source, { agent = null } = {}) {
@@ -569,7 +629,7 @@ export function extractHarnessTokens(source, { agent = null } = {}) {
   if (!detected) return finalizeTokenSummary(null, false, 0, { input: 0, cached: 0, output: 0, reasoning: 0, total: 0 });
   if (detected === 'codex') return extractCodex(records);
   if (detected === 'claude') return extractClaude(records);
-  return extractGemini(records);
+  return extractGemini(records, detected);
 }
 
 function mergeTokenRows(rows, label = null) {
@@ -611,7 +671,7 @@ export function summarizeIssueTelemetry({ issue = null, repo = null, spans = [],
       ? item
       : extractHarnessTokens(rawSource, { agent: explicitAgent });
     parsedStreams.push({ ...extracted, step, tier: explicitTier });
-    if (extracted.agent) {
+    if (extracted.observed && extracted.agent) {
       if (!byAgentBuckets.has(extracted.agent)) byAgentBuckets.set(extracted.agent, []);
       byAgentBuckets.get(extracted.agent).push(extracted);
     }
@@ -704,53 +764,52 @@ export function buildTieredAgentArgs(options = {}) {
   return args;
 }
 
-export function estimateDailyCapacity({
-  targets = null,
-  targetIssuesPerDay = null,
-  phaseSummary = null,
-  tokenSummary = null,
-  prsPerIssue = 2,
-  interpreterCallsPerIssue = 4,
-  ciMinutesPerPr = 8,
-  suiteMinutesPerPr = 6,
-  activeMinutesPerIssue = null,
-  effectiveTokensPerIssue = null,
-  workerShare = 0.75,
-  workerTierDiscount = 0.35,
-  activeHoursPerDay = 20,
-  slotsPerMachine = 4,
-  checkSlotsPerMachine = 2,
-  effectiveTokensPerAccountDay = 5_000_000,
-  availableMachines = null,
-  availableAccounts = null,
-  dailyCiMinuteBudget = null,
-  dailyInterpreterCallBudget = null,
-} = {}) {
-  const selectedTargets = Array.isArray(targets) && targets.length
-    ? targets
-    : hasNum(targetIssuesPerDay) && targetIssuesPerDay > 0
-      ? [targetIssuesPerDay]
+export function estimateDailyCapacity(options = {}) {
+  const opts = isObject(options) ? options : {};
+  const validTargets = Array.isArray(opts.targets)
+    ? opts.targets.filter(t => typeof t === 'number' && Number.isFinite(t) && t > 0)
+    : [];
+  const singleTarget = posNum(opts.targetIssuesPerDay, null);
+  const selectedTargets = validTargets.length
+    ? validTargets
+    : singleTarget !== null
+      ? [singleTarget]
       : [...DAILY_CAPACITY_TARGETS];
 
+  const prsPerIssue = posNum(opts.prsPerIssue, 2);
+  const interpreterCallsPerIssue = posNum(opts.interpreterCallsPerIssue, 4);
+  const ciMinutesPerPr = posNum(opts.ciMinutesPerPr, 8);
+  const suiteMinutesPerPr = posNum(opts.suiteMinutesPerPr, 6);
+  const activeHoursPerDay = posNum(opts.activeHoursPerDay, 20);
+  const slotsPerMachine = posNum(opts.slotsPerMachine, 4);
+  const checkSlotsPerMachine = posNum(opts.checkSlotsPerMachine, 2);
+  const effectiveTokensPerAccountDay = posNum(opts.effectiveTokensPerAccountDay, 5_000_000);
+  const availableMachines = posNum(opts.availableMachines, null);
+  const availableAccounts = posNum(opts.availableAccounts, null);
+  const dailyCiMinuteBudget = posNum(opts.dailyCiMinuteBudget, null);
+  const dailyInterpreterCallBudget = posNum(opts.dailyInterpreterCallBudget, null);
+
   const measuredActiveMinutes = (() => {
-    if (hasNum(activeMinutesPerIssue) && activeMinutesPerIssue > 0) return activeMinutesPerIssue;
-    if (isObject(phaseSummary?.byPhase)) {
+    const explicit = posNum(opts.activeMinutesPerIssue, null);
+    if (explicit !== null) return explicit;
+    if (isObject(opts.phaseSummary?.byPhase)) {
       const activePhases = ['intake', 'improve', 'story/pr1', 'code/pr2', 'repair', 'check', 'merge'];
-      const sumMs = activePhases.reduce((acc, p) => acc + nonneg(phaseSummary.byPhase[p]?.durationMs), 0);
+      const sumMs = activePhases.reduce((acc, p) => acc + nonneg(opts.phaseSummary.byPhase[p]?.durationMs), 0);
       if (sumMs > 0) return sumMs / 60000;
     }
     return 28;
   })();
 
   const measuredTokensPerIssue = (() => {
-    if (hasNum(effectiveTokensPerIssue) && effectiveTokensPerIssue > 0) return effectiveTokensPerIssue;
-    const fromSummary = tokenSummary?.total?.effectiveTokens ?? tokenSummary?.effectiveTokens;
-    if (hasNum(fromSummary) && fromSummary > 0) return fromSummary;
+    const explicit = posNum(opts.effectiveTokensPerIssue, null);
+    if (explicit !== null) return explicit;
+    const fromSummary = posNum(opts.tokenSummary?.total?.effectiveTokens ?? opts.tokenSummary?.effectiveTokens, null);
+    if (fromSummary !== null) return fromSummary;
     return 180_000;
   })();
 
-  const clampedWorkerShare = Math.min(1, Math.max(0, workerShare));
-  const clampedDiscount = Math.min(1, Math.max(0.05, workerTierDiscount));
+  const clampedWorkerShare = Math.min(1, posNum(opts.workerShare, 0.75));
+  const clampedDiscount = Math.min(1, Math.max(0.05, posNum(opts.workerTierDiscount, 0.35)));
   const tieredMultiplier = clampedWorkerShare * clampedDiscount + (1 - clampedWorkerShare);
   const slotMinutesPerDay = Math.max(60, activeHoursPerDay * 60);
 
@@ -776,11 +835,11 @@ export function estimateDailyCapacity({
     const accountsNeededTiered = Math.max(1, Math.ceil(tieredEffectiveTokensPerDay / Math.max(1, effectiveTokensPerAccountDay)));
 
     const pressures = [
-      { kind: 'accounts', ratio: hasNum(availableAccounts) && availableAccounts > 0 ? accountsNeededTiered / availableAccounts : accountsNeededTiered / 2 },
-      { kind: 'suite-slots', ratio: hasNum(availableMachines) && availableMachines > 0 ? machinesForSuites / availableMachines : machinesForSuites / 2 },
-      { kind: 'run-slots', ratio: hasNum(availableMachines) && availableMachines > 0 ? machinesForRuns / availableMachines : machinesForRuns / 2 },
-      ...(hasNum(dailyCiMinuteBudget) && dailyCiMinuteBudget > 0 ? [{ kind: 'ci-minutes', ratio: ciMinutesPerDay / dailyCiMinuteBudget }] : []),
-      ...(hasNum(dailyInterpreterCallBudget) && dailyInterpreterCallBudget > 0 ? [{ kind: 'interpreter-calls', ratio: interpreterCallsPerDay / dailyInterpreterCallBudget }] : []),
+      { kind: 'accounts', ratio: availableAccounts !== null ? accountsNeededTiered / availableAccounts : accountsNeededTiered / 2 },
+      { kind: 'suite-slots', ratio: availableMachines !== null ? machinesForSuites / availableMachines : machinesForSuites / 2 },
+      { kind: 'run-slots', ratio: availableMachines !== null ? machinesForRuns / availableMachines : machinesForRuns / 2 },
+      ...(dailyCiMinuteBudget !== null ? [{ kind: 'ci-minutes', ratio: ciMinutesPerDay / dailyCiMinuteBudget }] : []),
+      ...(dailyInterpreterCallBudget !== null ? [{ kind: 'interpreter-calls', ratio: interpreterCallsPerDay / dailyInterpreterCallBudget }] : []),
     ];
     pressures.sort((a, b) => b.ratio - a.ratio);
 

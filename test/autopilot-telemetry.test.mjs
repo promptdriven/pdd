@@ -273,3 +273,198 @@ test('3154 & 3782 estimateDailyCapacity models 25, 40, 70, and 80 issues/day and
   assert.ok(cap.byTarget[80].interpreterCallsPerDay > cap.byTarget[25].interpreterCallsPerDay);
   assert.ok(cap.byTarget[80].ciMinutesPerDay > cap.byTarget[40].ciMinutesPerDay);
 });
+
+test('3154 & 3782 supports all real Autopilot job roles and safely normalizes unknown nonblank phases', () => {
+  for (const [role, expectedPhase] of [
+    ['build', 'code/pr2'],
+    ['implement', 'code/pr2'],
+    ['conflict', 'repair'],
+    ['rebase', 'repair'],
+    ['base-refresh', 'repair'],
+    ['review', 'check'],
+    ['suite', 'check'],
+    ['vectors', 'check'],
+    ['runtime', 'check'],
+    ['merge-check', 'check'],
+    ['improve', 'improve'],
+    ['intake', 'intake'],
+    ['publish', 'merge'],
+  ]) {
+    assert.equal(normalizeAutopilotPhase(role), expectedPhase, `expected ${role} -> ${expectedPhase}`);
+  }
+
+  for (const step of [
+    'build', 'conflict', 'implement', 'rebase', 'base-refresh',
+    'prompt', 'prompts', 'triage', 'sort', 'dependencies',
+    'groom', 'clarify', 'improve', 'intake', 'repair',
+  ]) {
+    assert.equal(classifyStepTier(step), 'worker', `expected worker tier for ${step}`);
+  }
+  for (const step of ['review', 'check', 'independent-review', 'audit', 'merge', 'publish']) {
+    assert.equal(classifyStepTier(step), 'reviewer', `expected reviewer tier for ${step}`);
+  }
+
+  // Unknown nonblank roles do not throw in recordPhaseSpan / createPhaseTracker / summarizeIssuePhases
+  const customLedger = recordPhaseSpan({ issue: 99, machine: 'vm-custom' }, { phase: 'future-role', startedAt: 1000, endedAt: 4000 });
+  assert.equal(customLedger.spans[0].phase, 'code/pr2');
+  assert.equal(customLedger.spans[0].step, 'future-role');
+  assert.equal(customLedger.spans[0].durationMs, 3000);
+
+  let nowMs = 500;
+  const tracker = createPhaseTracker({ issue: 99, machine: 'vm-custom', now: () => nowMs });
+  tracker.startPhase('future-step');
+  nowMs += 2500;
+  const doneSpan = tracker.finishPhase('future-step');
+  assert.equal(doneSpan.phase, 'code/pr2');
+  assert.equal(doneSpan.step, 'future-step');
+  assert.equal(doneSpan.durationMs, 2500);
+
+  // Empty or non-string phases are still rejected
+  assert.throws(() => recordPhaseSpan({}, { phase: '' }), /Invalid Autopilot phase/);
+  assert.throws(() => recordPhaseSpan({}, { phase: '   ' }), /Invalid Autopilot phase/);
+  assert.throws(() => recordPhaseSpan({}, { phase: null }), /Invalid Autopilot phase/);
+  assert.throws(() => tracker.startPhase(''), /Invalid Autopilot phase/);
+});
+
+test('3154 extractHarnessTokens handles Codex total+last turns, session resets, Claude message-only vs multi-result, Gemini multi-stats, and agy', () => {
+  // Codex token_count events carrying BOTH total_token_usage and last_token_usage + duplicate snapshot + concatenated session reset
+  const codexConcatStream = [
+    JSON.stringify({
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: {
+          total_token_usage: { input_tokens: 10_000, cached_input_tokens: 6_000, output_tokens: 800, reasoning_output_tokens: 200, total_tokens: 10_800 },
+          last_token_usage: { input_tokens: 10_000, cached_input_tokens: 6_000, output_tokens: 800, reasoning_output_tokens: 200, total_tokens: 10_800 },
+        },
+      },
+    }),
+    // Duplicate snapshot at same cumulative counts should not inflate turns
+    JSON.stringify({
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: {
+          total_token_usage: { input_tokens: 10_000, cached_input_tokens: 6_000, output_tokens: 800, reasoning_output_tokens: 200, total_tokens: 10_800 },
+          last_token_usage: { input_tokens: 10_000, cached_input_tokens: 6_000, output_tokens: 800, reasoning_output_tokens: 200, total_tokens: 10_800 },
+        },
+      },
+    }),
+    JSON.stringify({
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: {
+          total_token_usage: { input_tokens: 22_000, cached_input_tokens: 15_000, output_tokens: 1_700, reasoning_output_tokens: 500, total_tokens: 23_700 },
+          last_token_usage: { input_tokens: 12_000, cached_input_tokens: 9_000, output_tokens: 900, reasoning_output_tokens: 300, total_tokens: 12_900 },
+        },
+      },
+    }),
+    // Concatenated second session resets cumulative total downward -> bank 22k/1.7k and add 5k/400
+    JSON.stringify({
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: {
+          total_token_usage: { input_tokens: 5_000, cached_input_tokens: 2_000, output_tokens: 400, reasoning_output_tokens: 100, total_tokens: 5_400 },
+          last_token_usage: { input_tokens: 5_000, cached_input_tokens: 2_000, output_tokens: 400, reasoning_output_tokens: 100, total_tokens: 5_400 },
+        },
+      },
+    }),
+  ].join('\n');
+  const codexReset = extractHarnessTokens(codexConcatStream);
+  assert.equal(codexReset.agent, 'codex');
+  assert.equal(codexReset.turns, 3);
+  assert.equal(codexReset.inputTokens, 27_000);
+  assert.equal(codexReset.cachedInputTokens, 17_000);
+  assert.equal(codexReset.outputTokens, 2_100);
+  assert.equal(codexReset.reasoningTokens, 600);
+  assert.equal(codexReset.totalTokens, 29_100);
+
+  // Claude: when per-message rows exist, ignore inflated result envelope; when absent, sum multiple result envelopes
+  const claudeMsgPreferred = [
+    JSON.stringify({ type: 'assistant', message: { id: 'msg-1', usage: { input_tokens: 1_000, cache_read_input_tokens: 3_000, output_tokens: 250 } } }),
+    JSON.stringify({ type: 'result', usage: { input_tokens: 50_000, cache_read_input_tokens: 50_000, output_tokens: 9_000 } }),
+  ].join('\n');
+  const claudeFromMsgs = extractHarnessTokens(claudeMsgPreferred);
+  assert.equal(claudeFromMsgs.turns, 1);
+  assert.equal(claudeFromMsgs.inputTokens, 4_000);
+  assert.equal(claudeFromMsgs.outputTokens, 250);
+
+  const claudeTwoResults = [
+    JSON.stringify({ type: 'result', usage: { input_tokens: 2_000, cache_read_input_tokens: 1_000, output_tokens: 300 } }),
+    JSON.stringify({ type: 'result', usage: { input_tokens: 4_000, cache_read_input_tokens: 2_000, output_tokens: 500 } }),
+  ].join('\n');
+  const claudeResultSum = extractHarnessTokens(claudeTwoResults);
+  assert.equal(claudeResultSum.turns, 2);
+  assert.equal(claudeResultSum.inputTokens, 9_000);
+  assert.equal(claudeResultSum.cachedInputTokens, 3_000);
+  assert.equal(claudeResultSum.outputTokens, 800);
+
+  // Gemini: sum multiple separate stats envelopes when usageMetadata is absent
+  const geminiTwoStats = [
+    JSON.stringify({ stats: { models: { 'gemini-2.5-flash': { tokens: { prompt: 3_000, cached: 1_000, candidates: 200, thoughts: 50, total: 3_250 } } } } }),
+    JSON.stringify({ result: { stats: { models: { 'gemini-2.5-pro': { tokens: { prompt: 5_000, cached: 2_000, candidates: 400, thoughts: 100, total: 5_500 } } } } } }),
+  ].join('\n');
+  const geminiSummed = extractHarnessTokens(geminiTwoStats);
+  assert.equal(geminiSummed.turns, 2);
+  assert.equal(geminiSummed.inputTokens, 8_000);
+  assert.equal(geminiSummed.cachedInputTokens, 3_000);
+  assert.equal(geminiSummed.outputTokens, 600);
+  assert.equal(geminiSummed.reasoningTokens, 150);
+  assert.equal(geminiSummed.totalTokens, 8_750);
+
+  // Unobserved streams excluded from byAgent, and 'agy' preserved distinctly from 'gemini'
+  const telemetry = summarizeIssueTelemetry({
+    issue: 3154,
+    repo: 'promptdriven/pdd',
+    spans: { machine: 'vm-main', spans: [{ phase: 'build', startedAt: 0, endedAt: 120_000, durationMs: 45_000 }] },
+    streams: [
+      { step: 'suite', agent: 'codex', source: '' },
+      { step: 'build', agent: 'agy', source: JSON.stringify({ usageMetadata: { promptTokenCount: 4_000, cachedContentTokenCount: 1_000, candidatesTokenCount: 300, thoughtsTokenCount: 50, totalTokenCount: 4_350 } }) },
+      { step: 'review', agent: 'gemini', source: JSON.stringify({ usageMetadata: { promptTokenCount: 6_000, cachedContentTokenCount: 2_000, candidatesTokenCount: 500, thoughtsTokenCount: 100, totalTokenCount: 6_600 } }) },
+    ],
+  });
+  assert.equal(Object.hasOwn(telemetry.tokens.byAgent, 'codex'), false, 'unobserved empty stream must not populate byAgent');
+  assert.equal(telemetry.tokens.byAgent.agy.agent, 'agy');
+  assert.equal(telemetry.tokens.byAgent.agy.inputTokens, 4_000);
+  assert.equal(telemetry.tokens.byAgent.gemini.agent, 'gemini');
+  assert.equal(telemetry.tokens.byAgent.gemini.inputTokens, 6_000);
+  assert.deepEqual(telemetry.phases.machines, ['vm-main'], 'record-level machine is inherited');
+  assert.equal(telemetry.phases.totalDurationMs, 45_000);
+  assert.equal(telemetry.phases.wallClockMs, 45_000, 'wallClockMs never exceeds explicit smaller durationMs');
+});
+
+test('3154 estimateDailyCapacity guards NaN, non-finite, and nonpositive numbers in targets and options', () => {
+  const guarded = estimateDailyCapacity({
+    targets: [NaN, -10, 0, Infinity, 50],
+    prsPerIssue: NaN,
+    interpreterCallsPerIssue: -2,
+    ciMinutesPerPr: 0,
+    suiteMinutesPerPr: -Infinity,
+    activeMinutesPerIssue: 0,
+    effectiveTokensPerIssue: -500,
+    workerShare: NaN,
+    workerTierDiscount: 0,
+    activeHoursPerDay: -5,
+    slotsPerMachine: 0,
+    checkSlotsPerMachine: NaN,
+    effectiveTokensPerAccountDay: 0,
+    availableMachines: -1,
+    availableAccounts: NaN,
+    dailyCiMinuteBudget: 0,
+    dailyInterpreterCallBudget: -10,
+  });
+  assert.deepEqual(guarded.rows.map(r => r.targetIssuesPerDay), [50]);
+  for (const val of Object.values(guarded.assumptions)) {
+    assert.ok(Number.isFinite(val) && val > 0, `expected positive finite assumption, got ${val}`);
+  }
+  const row = guarded.byTarget[50];
+  assert.ok(Number.isFinite(row.baselineEffectiveTokensPerDay) && row.baselineEffectiveTokensPerDay > 0);
+  assert.ok(Number.isFinite(row.tieredEffectiveTokensPerDay) && row.tieredEffectiveTokensPerDay > 0);
+  assert.ok(Number.isFinite(row.machinesNeeded) && row.machinesNeeded >= 1);
+  assert.ok(Number.isFinite(row.accountsNeededTiered) && row.accountsNeededTiered >= 1);
+
+  const fallbackTargets = estimateDailyCapacity({ targets: [NaN, 0, -5] });
+  assert.deepEqual(fallbackTargets.rows.map(r => r.targetIssuesPerDay), [25, 40, 70, 80]);
+});

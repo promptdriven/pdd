@@ -84,7 +84,50 @@ test('3154 & 3782 resolveAgentStepLaunch and runStepAgentProcess preserve defaul
  let tick=5000,seenCall;const parentEnv={HOME:'/person'};
  const definition={id:'custom-codex',name:'Codex Worker',kind:'codex',command:'/local/codex-slot',env:{CODEX_HOME:'/private/slot',PDD_MODEL_TIERING:'1'}};
  const out=await runStepAgentProcess({definition,step:'improve',args:['exec','--json','-'],env:parentEnv,now:()=>(tick+=1250),run:async(c,a,o)=>{seenCall=[c,a,o];return {code:0,stdout:JSON.stringify({type:'turn.completed',usage:{input_tokens:9000,cached_input_tokens:6000,output_tokens:750}}),stderr:''};}});
- assert.equal(seenCall[0],'/local/codex-slot');assert.deepEqual(seenCall[1].slice(0,4),['--model','gpt-5.4-mini','-c','model_reasoning_effort="medium"']);
+ assert.equal(seenCall[0],'/local/codex-slot');assert.deepEqual(seenCall[1],['exec','--model','gpt-5.4-mini','-c','model_reasoning_effort="medium"','--json','-']);
  assert.equal(seenCall[2].env.CODEX_HOME,'/private/slot');assert.deepEqual(parentEnv,{HOME:'/person'});
+ assert.deepEqual(out.launch,{agent:'codex',command:'/local/codex-slot',tier:'worker',model:'gpt-5.4-mini',reasoningEffort:'medium',args:['--model','gpt-5.4-mini','-c','model_reasoning_effort="medium"'],tieringEnabled:true});
  assert.equal(out.telemetry.phase,'improve');assert.equal(out.telemetry.durationMs,1250);assert.equal(out.telemetry.tokens.inputTokens,9000);assert.equal(out.telemetry.tokens.cachedInputTokens,6000);assert.equal(out.telemetry.tokens.outputTokens,750);
+});
+test('3154 & 3782 runStepAgentProcess handles Codex resume subcommands, explicit caller --model/-m flags, null stdout, and rejected error.telemetry',async()=>{
+ const calls=[];
+ const runOk=async(c,a)=>{calls.push([c,a]);return {code:0,stdout:'',stderr:''};};
+ await runStepAgentProcess({agent:'codex',step:'build',tiering:true,args:['exec','resume','sess-123','continue work'],run:runOk});
+ assert.deepEqual(calls.at(-1)[1],['exec','resume','--model','gpt-5.4-mini','-c','model_reasoning_effort="medium"','sess-123','continue work']);
+ await runStepAgentProcess({agent:'codex',step:'review',tiering:true,args:['resume','sess-456','review diff'],run:runOk});
+ assert.deepEqual(calls.at(-1)[1],['resume','--model','gpt-5.4','-c','model_reasoning_effort="high"','sess-456','review diff']);
+ const callerModelOut=await runStepAgentProcess({agent:'codex',step:'build',tiering:true,args:['exec','-m','o3-custom','--json','-'],run:runOk});
+ assert.equal(callerModelOut.launch.model,'o3-custom');
+ assert.deepEqual(calls.at(-1)[1],['exec','-c','model_reasoning_effort="medium"','-m','o3-custom','--json','-']);
+ const overrideOut=await runStepAgentProcess({agent:'codex',step:'build',tiering:{enabled:true,overrideExplicitModel:true},args:['exec','--model','o3-custom','-'],run:runOk});
+ assert.equal(overrideOut.launch.model,'gpt-5.4-mini');
+ assert.deepEqual(calls.at(-1)[1],['exec','--model','gpt-5.4-mini','-c','model_reasoning_effort="medium"','-']);
+ const nullStdout=await runStepAgentProcess({agent:'claude',step:'check',run:async()=>({code:0,stdout:undefined,stderr:''})});
+ assert.equal(nullStdout.stdout,'');assert.equal(nullStdout.telemetry.tokens.observed,false);
+ let tick=1000;
+ await assert.rejects(
+  runStepAgentProcess({
+   agent:'codex',
+   step:'build',
+   tiering:true,
+   args:['exec','--json','-'],
+   now:()=>(tick+=800),
+   run:async()=>{
+    const err=new Error('timeout');
+    err.stdout=JSON.stringify({type:'turn.completed',usage:{input_tokens:4000,cached_input_tokens:1000,output_tokens:300}});
+    throw err;
+   },
+  }),
+  err=>{
+   assert.equal(err.message,'timeout');
+   assert.equal(err.launch.command,'codex');
+   assert.equal(err.launch.model,'gpt-5.4-mini');
+   assert.equal(err.telemetry.phase,'code/pr2');
+   assert.equal(err.telemetry.durationMs,800);
+   assert.equal(err.telemetry.tokens.observed,true);
+   assert.equal(err.telemetry.tokens.inputTokens,4000);
+   assert.equal(err.telemetry.tokens.outputTokens,300);
+   return true;
+  },
+ );
 });

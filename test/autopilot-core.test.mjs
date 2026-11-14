@@ -3936,3 +3936,76 @@ test('legacy cleanup does not use a source checkout as a fallback root', { skip:
   assert.ok(jobFile(w, 17), 'without a proven core checkout, local cleanup stays pending');
   assert.equal(existsSync(build.cwd), true);
 });
+
+test('3154 & 3782 opt-in model tiering routes worker vs reviewer launches and records per-phase duration + harness tokens into saved telemetry', async t => {
+  // 1. Default off: zero model or effort flags added to build or review launches
+  const wOff = await coreWorld(t);
+  wOff.issue(17, { title: 'Default launch check', body: 'Keep default CLI flags when tiering is off.' });
+  await wOff.tick();
+  const buildOff = wOff.job(17, 'build');
+  assert.equal(buildOff.args.includes('--model'), false);
+  assert.equal(buildOff.args.some(a => a.includes('model_reasoning_effort')), false);
+
+  // 2. Opt-in via PDD_MODEL_TIERING=1 (and settings.modelTiering): worker roles get worker model+effort, review gets reviewer model+effort, and telemetry persists
+  const w = await coreWorld(t, { settings: { modelTiering: true } });
+  assert.equal(coreSettings({ autopilot: { mode: 'auto', engine: 'core', modelTiering: true } }).modelTiering, true);
+  w.issue(21, { title: 'Tiered issue telemetry', body: 'Measure phase spans and extract harness tokens.' });
+  await w.tick({ env: { ...process.env, PDD_MODEL_TIERING: '1' } });
+  const build = w.job(21, 'build');
+  assert.deepEqual(build.args, [
+    'exec', '--json', '--dangerously-bypass-approvals-and-sandbox', '-c', 'features.multi_agent=false',
+    '--model', 'gpt-5.4-mini', '-c', 'model_reasoning_effort="medium"', '-',
+  ]);
+
+  // Simulate 3 minutes of build work + real Codex JSONL token usage in the build log
+  w.advance(3 * MIN);
+  appendFileSync(
+    build.log,
+    `${JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 15_000, cached_input_tokens: 10_000, output_tokens: 1_200, reasoning_output_tokens: 400 } })}\n`,
+  );
+  const { head } = w.build(21);
+  await w.tick({ env: { ...process.env, PDD_MODEL_TIERING: '1' } });
+
+  // Active job file in phase 'pr' already has build + intake telemetry saved
+  const activeJob = JSON.parse(readFileSync(join(w.root, 'jobs', '21.json'), 'utf8'));
+  assert.equal(activeJob.telemetry.phases.byPhase['code/pr2'].durationMs, 3 * MIN);
+  assert.equal(activeJob.telemetry.tokens.byTier.worker.inputTokens, 15_000);
+
+  // Review launch uses reviewer model + high reasoning effort, before trailing '-'
+  const review = w.job(21, 'review');
+  assert.deepEqual(review.args, [
+    'exec', '--json', '--dangerously-bypass-approvals-and-sandbox', '-c', 'features.multi_agent=false',
+    '--model', 'gpt-5.4', '-c', 'model_reasoning_effort="high"', '-',
+  ]);
+
+  // Simulate 2 minutes of review + suite execution and Reviewer token usage
+  w.advance(2 * MIN);
+  appendFileSync(
+    review.log,
+    `${JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 8_000, cached_input_tokens: 5_000, output_tokens: 600, reasoning_output_tokens: 250 } })}\n`,
+  );
+  w.review(21, 'PASS');
+  w.suite(21, 0);
+  await w.tick({ env: { ...process.env, PDD_MODEL_TIERING: '1' } });
+  assert.deepEqual(w.github.merges, [100]);
+
+  // Verify saved head evidence record AND history.jsonl completion record carry phase durations + worker/reviewer token summaries
+  const evidence = JSON.parse(readFileSync(join(w.root, 'logs', `21-evidence-${head}.json`), 'utf8'));
+  assert.ok(evidence.telemetry, 'head evidence record includes telemetry');
+
+  const mergedRow = readFileSync(join(w.root, 'history.jsonl'), 'utf8')
+    .trim()
+    .split('\n')
+    .map(line => JSON.parse(line))
+    .find(row => row.issue === 21 && row.outcome === 'merged');
+  assert.ok(mergedRow?.telemetry, 'history.jsonl merged record includes telemetry');
+  assert.equal(mergedRow.telemetry.phases.byPhase['code/pr2'].durationMs, 3 * MIN);
+  assert.ok(mergedRow.telemetry.phases.byPhase.check.durationMs >= 2 * MIN);
+  assert.equal(mergedRow.telemetry.phases.byPhase.merge.count, 1);
+  assert.equal(mergedRow.telemetry.tokens.byTier.worker.inputTokens, 15_000);
+  assert.equal(mergedRow.telemetry.tokens.byTier.worker.outputTokens, 1_200);
+  assert.equal(mergedRow.telemetry.tokens.byTier.reviewer.inputTokens, 8_000);
+  assert.equal(mergedRow.telemetry.tokens.byTier.reviewer.outputTokens, 600);
+  assert.equal(mergedRow.telemetry.tokens.byAgent.codex.inputTokens, 23_000);
+  assert.equal(mergedRow.telemetry.tokens.total.totalTokens, 24_800);
+});

@@ -40,6 +40,8 @@ string `core`; any other value, or none, is `full`.
 | `repairs` | `autopilot.maxRepairs` (the old key `autopilot.repairs` is an alias): safe integer of at least 0, default 6, the safety cap of repairs for one job |
 | `testCommand` | nonblank `autopilot.testCommand`; else `npm test` when `packageJson.scripts.test` exists; else `null` |
 
+When `autopilot.modelTiering` is a Boolean or plain object, `coreSettings` also preserves `modelTiering` (omitting the key when unset so the default settings shape stays unchanged).
+
 `readCoreSettings(cwd, fs, machine = null)` applies it to `cwd/pdd.json` and `cwd/package.json`;
 an unreadable file counts as absent.
 
@@ -56,6 +58,8 @@ restart reads them again. A job file has `issue`, `title`, `url`, `body`,
 (`running`, `pr` or `ending`), `role` (`build`, `repair` or `conflict`), `repairs`, `started`,
 `progress {sig, at, running}`, the started `agent` job, and in phase `pr` also `pr`,
 `head`, `runtime`, `review` and `suite`.
+
+**Opt-in model tiering and phase/token telemetry.** Agent launches (`build`, `repair`, `conflict`, `review`, and shadow `intake`) keep the exact default [`agentCommand`](agent-job.prompt.md) CLI arguments unless `settings.modelTiering` / `autopilot.modelTiering` or `PDD_MODEL_TIERING` (`"1"` or `"true"`) enables [Autopilot telemetry](autopilot-telemetry.prompt.md) tiering. When enabled, worker roles (`intake`, `build`, `repair`, `conflict`) and reviewer roles (`review`) resolve models and reasoning effort via `resolveStepModelTier` and `buildTieredAgentArgs` (honoring `PDD_WORKER_MODEL`, `PDD_REVIEWER_MODEL`, `PDD_WORKER_EFFORT`, `PDD_REVIEWER_EFFORT`, and placing Codex flags before `-`). Engine `intake` and `merge` steps record spans with `createPhaseTracker`, and every completed job part (`build`, `repair`, `conflict`, `review`, `suite`, `vectors`, `runtime`) records its wall-clock span once via `recordPhaseSpan` and extracts agent log token usage via `extractHarnessTokens`, saving `{phases, tokens}` (`summarizeIssuePhases` and `summarizeIssueTelemetry`) on `job.telemetry`, the head evidence record, and the `history.jsonl` completion line.
 
 **The process rule (debate C, one function `watchProcess`).** It applies to every agent
 process: build, repair, conflict, review and suite, and to the `pdd test` run of the
@@ -1737,6 +1741,7 @@ with the native defaults named above.
 - [File owner lookup](file-owner.prompt.md): required for `findOwners`, `resolveOwners`
   and `promptHeaderHash` (M-a derived prompt headers).
 - [Headless job runner](agent-job.prompt.md): required for job start, outcome, capture and cleanup.
+- [Autopilot telemetry](autopilot-telemetry.prompt.md): required for opt-in worker/reviewer model tiering, per-phase wall-clock tracking, and harness log token summaries.
 - [Machine guard](machine-guard.prompt.md): required for `slotCount` (the slots) and
   `GUARD` (the cleanup limits).
 - [GitHub dependency reader](issue-dependencies-github.prompt.md): required for the

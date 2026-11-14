@@ -1273,6 +1273,7 @@ that the core posts are redacted for secrets and cut in length.
 | `reports.runtimeOwner` | GitHub login to assign Runtime problem reports filed in `reports.runtimeRepo`. Without it, reports have no assignee | none |
 | `maxRepairs` | Safety cap of repair jobs for one PR (the old key `repairs` still works). Repairs go on while they make progress: see below | 6 |
 | `testCommand` | Full test command that runs on the PR head, in a clean checkout. With `package-lock.json` and listed dependencies, `npm ci --ignore-scripts` runs first | `npm test` when `package.json` has a test script |
+| `modelTiering` | Opt-in worker and reviewer model routing (`true`, `false`, or `{enabled, worker, reviewer, models, efforts, overrideExplicitModel}`). Also enabled on one machine with `PDD_MODEL_TIERING=1` (with optional `PDD_WORKER_MODEL`, `PDD_REVIEWER_MODEL`, `PDD_WORKER_EFFORT`, `PDD_REVIEWER_EFFORT` overrides). Worker roles (`intake`, `build`, `repair`, `conflict`) use the worker profile (`medium` effort by default) and `review` uses the reviewer profile (`high` effort by default). Completed jobs save per-phase wall-clock durations and harness token totals in `history.jsonl` and the head evidence record | off: default agent command with no model or effort override |
 
 **The machine guard.** Autopilot never takes over a person's machine. It may use a
 share of the machine's CPU and memory, for all repositories on the machine together:
