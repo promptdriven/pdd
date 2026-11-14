@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { parseArgv } from '../src/argument-parser.mjs';
 import { NAMES } from '../src/command-catalog.mjs';
 import { renderCompletion } from '../src/completion.mjs';
@@ -178,8 +178,11 @@ test('shell completion offers only the main names', t => {
 // The lines that pdd writes name only the new commands. The removal line is built from the catalog words, so
 // no source file needs the text `pdd check` or `pdd try`. A server text passes through as data, never as source.
 test('no source line names pdd check or pdd try', () => {
-  const files = readdirSync(join(root, 'src')).filter(file => file.endsWith('.mjs')).map(file => join('src', file));
-  assert.ok(files.length >= 85, `expected full host src scan, got ${files.length}`);
+  const hostSource = file => file.endsWith('.mjs') && !['vendor', 'runtime'].includes(file.split('/')[1]);
+  const files = readdirSync(join(root, 'src'), { recursive: true }).map(file => `src/${file.split(sep).join('/')}`).filter(hostSource);
+  const tracked = execFileSync('git', ['ls-files', '-z', '--', 'src'], { cwd: root, encoding: 'utf8' }).split('\0').filter(hostSource);
+  assert.ok(tracked.length > 0, 'git lists the host src files');
+  assert.deepEqual(tracked.filter(file => existsSync(join(root, file)) && !files.includes(file)), [], 'the scan reads every host src file that git tracks');
   const found = [];
   for (const file of files) {
     readFileSync(join(root, file), 'utf8').split('\n').forEach((text, index) => {
