@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-doctor.prompt.md (sha256: 2df6bed83816259532dcb17be64abcce2a3cd97aa17ba84e062d28705c60da2f).
+// Generated from prompts/cli/autopilot-doctor.prompt.md (sha256: 5c8fcf22f715d34d92a0d82ef85e90e143c7f03fe5c3779b928e0fbdcc86c6e2).
 // Source: prompts/cli/autopilot-doctor.prompt.md.
 import {rememberSecrets, knownSecretValues} from './secret-redaction.mjs';
 import * as nativeFiles from 'node:fs';
@@ -206,7 +206,8 @@ export async function runAutopilotDoctor(input, ports = {}) {
     const text = read(join(cwd,path));
     if (text===null) { unreadable.push(path); continue; }
     const block = text.match(/<summary>Runtime interface<\/summary>[\s\S]*?```json\s*([\s\S]*?)```/i);
-    const data = block?json(block[1]):null;
+    if (!block) continue;
+    const data = json(block[1]);
     if (!data || data.status!=='approved') drafts.push(path);
   }
   add('draft-prompts',!ready(tracked)||drafts.length||unreadable.length?'warn':'pass',`First check may need prompt approval: ${drafts.join(', ')||'none'}${unreadable.length?`; unreadable: ${unreadable.join(', ')}`:''}`,'pdd files --json');

@@ -20,7 +20,7 @@ Setup also reports the running pdd executable and version, the `pdd` paths in or
 
 ## Repository Autopilot settings
 
-`pdd setup` asks for `off`, `observe` or `auto` once in a Git repository with a terminal. An empty answer selects `off`. It shows the owner and available write-access people, warns when lookup is incomplete, and optionally asks for additional GitHub names. Repeat setup keeps the saved mode and can add names. Without a terminal on both stdin and stdout, with `--yes`, or outside Git, it asks no Autopilot questions and saves no Autopilot settings. Without both terminals or with `--yes`, setup also declines interface drafting and MCP registration without asking, even when called by an agent. The normal skills, project block and ignore-file actions still run. A symlinked agent config is skipped with a warning and exit 0; incomplete GitHub owner lookup also warns without failing setup. Required write failures and malformed configs still return an error.
+`pdd setup` asks for `off`, `observe` or `auto` once in a Git repository with a terminal. An empty answer selects `off`. It shows the owner and available write-access people, warns when lookup is incomplete, and optionally asks for additional GitHub names. Repeat setup keeps the saved mode and can add names. Without a terminal on both stdin and stdout, with `--yes`, or outside Git, it asks no Autopilot questions and saves no Autopilot settings. Without both terminals or with `--yes`, setup also declines MCP registration without asking, even when called by an agent. The normal skills, project block and ignore-file actions still run. A symlinked agent config is skipped with a warning and exit 0; incomplete GitHub owner lookup also warns without failing setup. Required write failures and malformed configs still return an error.
 
 | Command | What it does |
 | --- | --- |
@@ -43,9 +43,9 @@ These commands store settings and determine trust. Selecting a mode starts no ru
 
 ## Inspect authored files
 
-`pdd files [--json]` lists prompts, Runtime interfaces, Stories, tests and refusal
-reasons. It reads working files only. It does not sign in, call the interpreter,
-fill hashes or approve prompts. It works from any folder in a Git repository.
+`pdd files [--json]` lists prompts, Stories, tests and refusal
+reasons. It reads working files only. It does not sign in, call the interpreter
+or approve prompts. It works from any folder in a Git repository.
 
 The reader expands `$contract` references and preserves numeric JSON tokens for
 lint, test and approval. Approval shows resolved fields and constraints. It keeps
@@ -106,11 +106,11 @@ nothing to add) and `headers`.
 `headers` has one row for each `Generated from` header of the file: `prompt`,
 `sha256` (the header's hash or null), `expected` (the prompt's header hash, or
 null when the prompt is not available), `state` and `legacy`. The header hash
-is the SHA-256 of the prompt's behavior text: the prompt with the `status` and
-`prose_sha256` fields taken out of its Runtime interface JSON, and that JSON
-written without white space. It covers the prose and every interface
-declaration. `pdd approve` and `pdd test --fill-hash` do not change it, so an
-approval keeps the headers of the prompt current.
+is the SHA-256 of the prompt's behavior text: for a plain prompt, the prompt
+text itself; when an embedded Runtime interface JSON block is present, the prompt
+with `status` and `prose_sha256` taken out and that JSON written without white
+space. `pdd approve` does not change it, so an approval keeps the headers of the
+prompt current.
 
 | `state` | Meaning |
 |---|---|
@@ -683,16 +683,11 @@ Changed criterion text and other malformed test rules still refuse the test.
 | `pdd test [PATH\|STORY...] [--lf] [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]` | Reuse complete unchanged passes from `.pdd/cache/test/`. `--lf` selects last-known failures, or the normal scope when none are recorded. `--cache-clear` discards the cache while retaining operand scope and takes precedence over `--lf`. Check Stories on the PDD interpreter with your gh login. With no STORY, test every Story. Send your Git files and wait for the checks, with one progress line every 30 s. Then print one table with a report link for each test, one `Prompt tests` line for each Story and, with two or more Stories, the overall line |
 | `pdd test --read [BATCH\|CALL_ID] [--json] [--timeout MIN]` | Read saved results; a normal Check held for lint may continue its original checks. Other reads send no work |
 | `pdd test --retry BATCH [--json] [--details] [--timeout MIN]` | Retry only confirmed unstarted checks with the saved source and call caps. Keeps completed, running and unknown jobs; changed source requires a fresh selected check |
-| `pdd test --fill-hash [PATH\|STORY...]` | Fill draft interface hashes, remove redundant `"kind": "full"` from drafts and synchronize matching scenario `criteria[].text` from `story_path`. With selections, update only the selected work and required prompt dependencies; leave unrelated files unchanged. An explicit `.prompt.md` path works without tests. With no selection, inspect all Git-visible prompts and Story scenarios. Approved prompts stay unchanged. No network |
-| `pdd test --fill-hash --compact` | With no operands, fill draft hashes and remove interface JSON formatting whitespace. Remove redundant `"kind": "full"` from drafts; preserve other values, strings, number spellings and prose. Approved and statusless files stay unchanged. No network |
 | `pdd test --explain-bindings [STORY...] [--json]` | Explain each selected resource edge, fixture candidate, mismatch cause and repair. Local reads only; no sign-in or interpreter call |
 | `pdd test --files [STORY...] [--app-map PATH] [--json]` | List the exact selected upload manifest, byte sizes and `source_sha256`. No network; `--app-map` previews the Simulator's app map |
 | `pdd lint [STORY...] [--json] [--timeout MIN] [--max-calls N]` | Print local SVG layout and source-hygiene warnings, then the server checks the format of the prompts, Stories and tests only, with 0 AI calls, and requests complete diagnostics and prints the problems the server reports. Requires network access; use it before a real check |
 | `pdd lint --local [STORY...] [--json]` | Compare linked `.ui.svg` parts, labels and HTML screen stylesheet links with prompt prose and check local prompt, Story and source-comment hygiene; warning advice only, 0 AI calls and no network/authentication. Without Story names, inspect all Git-visible prompts, even with no PDD tests |
 | `pdd test --screen URL --drawing PATH [--look] [--json]` | Compare the real page with its `.ui.svg` layout spec in installed headless Chrome/Chromium at the SVG viewport (`--look` also checks canvas color, painted card/section boxes, box size and spacing within tolerance, without pixel equality; `pdd test --screen URL --drawing PATH [--json]` checks parts only). No AI or interpreter call; missing/hidden parts, order, region or look differences fail |
-| `pdd interface draft [PROMPT...] [--all] [--json]` | Draft missing Runtime blocks from explicit prose or contracts and lint locally, without AI or network calls. Uncertain facts include field questions and a recovery command. |
-| `pdd interface draft PROMPT [--contract FILE] [--extend \| --refresh] [--json]` | Supply schemas and effect ports, extend an existing block, or reopen a stale block as draft. |
-| `pdd approve PROMPT --automatic --tests COMMAND` | Approve a complete draft of unchanged committed behavior after existing native tests and a complete current prompt check. Strict mode requires a person. |
 | `pdd approve PROMPT [--said WORDS]` | Approve one prompt with your chat words, or terminal y/N without --said; strict mode requires a person terminal. |
 | `pdd simulate [STORY] [--max-calls N] [--tab call\|screen\|terminal\|world] [--app-map PATH] [--new] [--no-open] [--no-wait] [--agent NAME]` | Automatically open a shell for command-line programs, localhost with an example request for HTTP routes, or the Simulator page for screens and typed operations. With no Story, open the whole project. |
 | `pdd simulate [STORY] --page [--new]` | Open the Simulator page explicitly |
@@ -712,18 +707,17 @@ Ordinary `pdd test` reuses complete unchanged Story passes from the Git-ignored 
 
 Reuse includes reached call targets, exact authored bytes, interpreter origin, call budget, pdd version, and the interpreter build and requested model reported by job answers. A missing identity or a pass older than seven days runs again. A different build or model observed during a run also runs the selected Stories initially skipped, with a reason; after a timeout or interrupt those rows are marked not sent. Reuse requires one clean record naming the same known build and model as the pass. A clean normal run starts after the previous sample, sees no record change during the run, and has only agreeing complete identities. Overlap, any read that writes the record (even after resending), an old or unknown writer, partial or mixed observations, or multiple stored values leaves doubt and runs. A later clean normal run can restore reuse. Before sending checks, a run saves an in-progress mark with its pid and start time. Another run's mark, live or dead, makes checks run. Live marks remain until their owners finish; dead marks are retired after forcing a run. A run can finish clean only while it still owns its mark and no other run has changed the record; it removes only its own mark. A failed sign-in removes its own mark but leaves doubt. All check sends share one ownership boundary: normal checks, saved-read continuations, retries and recovery hold their own mark from before the first send until their last send and observations finish. A retry retains ownership across its initial read. Reads and retries finish with doubt; direct callers with reuse disabled still coordinate their sends. Cache clear preserves every in-progress mark. A crash therefore costs one extra run, and overlap remains doubt until a later clean run. An all-skipped local run cannot discover an interpreter update without calls. Stories using the real clock or AI-played fakes run every time and say why; completely deterministic simulation bindings and fixed clock data permit reuse. Fixed clock values must be finite numbers or ISO 8601 date-time strings; labels such as `real 2026`, `now 1` and `1` run with the real-clock reason. Unknown resource kinds or actions run. Missing Story footprints, missing sources or malformed declarations report `runs again: resource declarations unavailable`; reuse can resume once evidence is complete; plain dependencies without an interface declare no resources. An expired pass reports `runs again: saved pass is older than seven days`. `CI` unset or set to the empty string, `0` or `false` permits ordinary reuse; every other value runs every selected Story. A saved pass at most seven days old still counts for prompt approval. Tracked cache files and caches copied without their external machine-local state are never reused. Damaged regular metadata heals after a completed run; its warning names `pdd test --cache-clear`. Dead-owner cache locks recover with one warning. Symlinked ancestors of `PDD_STATE_DIR` are accepted, but a final state-folder symlink is refused.
 
-Run hash filling, local source preflight and the prompt check in one shell call:
+Run local source preflight and the prompt check in one shell call:
 
 ```sh
-pdd test --fill-hash && pdd test --files STORY && pdd test STORY
+pdd test --files STORY && pdd test STORY
 ```
 
-Replace STORY with the selected Story name. Use `pdd test --fill-hash STORY`
-to fill only that Story and its required prompt dependencies; omit STORY to fill
-all Git-visible prompts. Each command must succeed before the next starts. Hash
-filling and `--files` are local; the final test performs interpreter lint before
-sending checks. Do not run `pdd lint` immediately before `pdd test`. Use standalone
-lint when you want only format/admission diagnostics without a behavioral check.
+Replace STORY with the selected Story name; omit STORY to preview and check all
+Stories. Each command must succeed before the next starts. `--files` is local;
+the final test performs interpreter lint before sending checks. Do not run
+`pdd lint` immediately before `pdd test`. Use standalone lint when you want only
+format/admission diagnostics without a behavioral check.
 
 `pdd test` reuses a passing lint received within ten minutes for the exact same
 captured source, test selection, interpreter endpoint, signed-in account,
@@ -746,14 +740,14 @@ for the same link. Saved lint reads retain it.
 - Lint and check results use `waiting`, `sent`, `passed`, `failed`, `refused`, `partial` or `not run`. Every result except `passed` includes a reason code in text, JSON, saved batches and PR evidence. Only `passed` is a full pass.
 - `pdd lint --local` exits 0 after its local part and reports `partial` with code `local-only`: checked SVG layout only; prompts not checked. It cannot satisfy a PDD gate.
 - For a new check, `--timeout MIN` starts after the free lint. Preliminary lint has a separate wait of MIN minutes, capped at 90 seconds in an agent shell. This bound includes maintenance, local slots and capacity waits. A timeout reports `timeout-flag` and names `--timeout`. Standalone `pdd lint --timeout MIN` bounds lint itself, including admission and capacity waits before sending. A caller stop cause takes precedence over `server-busy`; raw capacity receipts keep their server codes. A default lint wait reports `deadline`.
-- Offline-only work uses `pdd lint --local`, local authoring review, `pdd test --files` and `pdd test --fill-hash`. It is not a server lint pass. Factories can bind through interface v2 instances; ports and SQL, blob and compute resources cover declared simulation. Native effects stay unbound; see [Interpreter boundaries](runtime-boundaries.md).
+- Offline-only work uses `pdd lint --local`, local authoring review, `pdd files` and `pdd test --files`. It is not a server lint pass. Factories can bind through interface v2 instances; ports and SQL, blob and compute resources cover declared simulation. Native effects stay unbound; see [Interpreter boundaries](runtime-boundaries.md).
 - Running `pdd simulate STORY` for a paused simulation explicitly reopens the same session before showing its link. Its original expiry and remaining call allowance stay in force; an unconfirmed reopen is nonzero.
 - A `draft` prompt can be checked, and its result is marked DRAFT. A DRAFT pass is not an approval.
-- With no test file, `pdd test` says `No tests found` and lists why, for example a Story with no `tests/<story>.json`, a `.json` file in a test folder that matches no Story, or a prompt with no Runtime interface block.
+- With no test file, `pdd test` says `No tests found` and lists why, for example a Story with no `tests/<story>.json`, a `.json` file in a test folder that matches no Story, or a prompt that ends in `.prompt` instead of `.prompt.md`.
 - A GitHub login that is not invited gets one line: `Your GitHub login NAME is not on the PDD interpreter invite list yet. Ask the PDD team to add you.` A GitHub account without PDD Cloud access gets the server's sign-up line (sign up at https://promptdriven.ai/login). When PDD Cloud cannot check the account, pdd says at once `PDD Cloud could not confirm your access. Try again in a minute.` A pdd that is too old gets `Please update pdd: …`. All of these exit with code 5.
 - The interpreter address is set in one place in pdd. You do not need to set it.
 
-Linked `.ui.svg` drawings specify the screen's parts, words, spatial order, ids and named state. Local lint (and preliminary local checks in `pdd lint` / `pdd test`) reports unmatched controls, labels, unspecified layout regions, HTML operation screens whose app map leaves `"stylesheets": []`, and HTML screen prompts that name none of their stylesheet's CSS classes, plus local source-hygiene warnings in `pdd lint` (misplaced prompt owners including `test/**` / `tests/**` / `*.test.*`, prompts above 500 or 1,000 prose lines, Stories above 15 scenario steps or 1,000 lines, and `TODO`/`FIXME`/`HACK`/`XXX` excuse comments in prompt-owned code); a generic data-field mention does not describe a score box or status bar. Local warnings do not change the exit code. Default local lint also checks workspace interfaces. Interface findings exit 4 and name the draft command. Named Runtime Story local lint stays advisory without interface-declaration refusals; dependency prompts supply layout and ownership context. A native-only declaration needs a reason. These local checks do not certify semantic or visual agreement. `--local` belongs to `pdd lint`; it mixes only with Story names and `--json`.
+Linked `.ui.svg` drawings specify the screen's parts, words, spatial order, ids and named state. Local lint (and preliminary local checks in `pdd lint` / `pdd test`) reports unmatched controls, labels, unspecified layout regions, HTML operation screens whose app map leaves `"stylesheets": []`, and HTML screen prompts that name none of their stylesheet's CSS classes, plus local source-hygiene warnings in `pdd lint` (misplaced prompt owners including `test/**` / `tests/**` / `*.test.*`, prompts above 500 or 1,000 prose lines, Stories above 15 scenario steps or 1,000 lines, and `TODO`/`FIXME`/`HACK`/`XXX` excuse comments in prompt-owned code); a generic data-field mention does not describe a score box or status bar. Local warnings do not change the exit code. Default local lint also checks any explicit schemas and frontmatter declarations in workspace prompts; malformed declarations exit 4. Named Runtime Story local lint stays advisory; dependency prompts supply layout and ownership context. A native-only declaration needs a reason. These local checks do not certify semantic or visual agreement. `--local` belongs to `pdd lint`; it mixes only with Story names and `--json`.
 
 An explicitly selected Story with a `Native validation` owner link is assessed from its saved native evidence by `pdd lint STORY`, including `pdd lint --local STORY`. This reads no hosted service and creates no association. Missing native proof exits 1; complete current whole-Story proof exits 0. It is separate from the SVG-only advisory for Runtime Stories.
 
@@ -1161,130 +1155,17 @@ workflow wall time, not billed job minutes. Incomplete data is marked in coverag
 a failed or interrupted measurement is not retried. Status never fetches durations.
 
 
-## Runtime interface kinds and coverage
+## Prompt coverage and native-only declarations
 
-Omit `kind` for a full interface; explicit kinds are `partial` or `native-only`.
-A draft with `"kind": "full"` gets a warning at `/kind`, not a refusal. `pdd test --fill-hash`
-reports and removes that redundant field from drafts, including current drafts.
-Approved prompts stay unchanged.
-Native-only requires a reason that names an effect the bound ports cannot fake
-(RUNBOOK §21). A checker reviews the reason. Approval records it. Checks show
-`not run: <reason>`, with no passing result. Other selected tests can run.
+Plain Markdown prompts are checkable by default; the interpreter synthesizes and caches their Runtime interfaces on demand. For pure OS, network, database or byte-level plumbing with `0` Runtime Stories, declare YAML frontmatter at the top of the prompt (`kind: native-only` and a nonblank `reason` naming an effect the bound ports in RUNBOOK §21 cannot fake). Prompts with an embedded Runtime interface block remain supported (`partial` or `native-only`). A checker reviews a native-only reason. Approval records the prompt's prose SHA-256 in the local approval journal without editing plain Markdown prompts. Checks show `not run: <reason>`, with no passing result. Other selected tests can run.
 
 Test output, workflow status and saved PR evidence include prompt coverage counts. Text uses `Runtime coverage: N of M prompts checkable, K native-only` for native declarations and `Interpreter coverage` otherwise. A response with only passed and busy checks uses `Runtime coverage` and retains all coverage counts. Native-only rows retain their paths and reasons, including all-local selections. Invalid native-only scenarios retain refusal details as `not run (broken-test)` and are never uploaded.
 
-Saved reads preserve native-only outcomes and reasons while other selected rows
-wait for lint or complete it. Local lint also saves coverage and omission evidence
-when another selected row is refused before upload. These local results can be
-read without authentication. Repository-wide `pdd lint` preserves this evidence
-when any prompt lacks an interface, including an unselected prompt. Its saved
-read retains the global diagnostics and exit 4. Repositories without Story tests
-still get global missing-interface diagnostics. Temporary lint failures retain local paths, reasons,
-refusals and coverage in text and JSON, and return exit 5. Named lint targets
-include only executable scenarios present in the uploaded archive. The files
-preview uses that same selection and shows native omissions with their reasons.
+Saved reads preserve native-only outcomes and reasons while other selected rows wait for lint or complete it. Local lint also saves coverage and omission evidence when another selected row is refused before upload. These local results can be read without authentication. Temporary lint failures retain local paths, reasons, refusals and coverage in text and JSON, and return exit 5. Named lint targets include only executable scenarios present in the uploaded archive. The files preview uses that same selection and shows native omissions with their reasons.
 
-M includes missing, stale and invalid blocks. Checkable means a valid current full
-or partial declaration; it does not mean that all module behavior has passed.
+M includes unreadable, stale and invalid prompts. Checkable means a valid plain Markdown prompt or a valid current full or partial declaration; it does not mean that all module behavior has passed.
 
-`pdd interface draft --all` selects workspace prompts and excludes nested fixture
-projects. Without extension or refresh, existing blocks stay unchanged. Each result includes local lint findings.
-A clean local lint is not a server lint or a prompt check. Setup offers this command
-when it finds missing blocks. It never approves them.
-
-
-Locally valid authored drafts omit the redundant `kind: full` field so the strict Runtime
-parser can read them; a missing kind means full. Partial local drafts retain
-`kind: partial` and their questions.
-
-The local prose drafter recognizes an explicit single-operation transport: a named
-operation, a required named input field with its type, and a required named result
-field with its type, in closed objects. It requires an explicit pure-behavior
-statement. Its draft execution ceilings are `max_steps: 4` and `max_model_calls: 2`.
-The result labels these as `command-default` draft budgets for review. A prose
-draft that uses them needs a person and cannot use automatic approval. To choose
-other ceilings, supply a contract with `--refresh --contract FILE`.
-Numeric inputs remain numbers even if the function rejects fractions. A contract
-that explicitly requests representative JSON rejection shapes can use a disjoint
-`oneOf` for number, string, boolean, null, arrays of numbers and empty objects.
-This transport does not cover arbitrary nested JavaScript objects.
-The JSON row includes local `lint_clean` and a `prose_coverage` report. A draft
-never claims completeness. Each quoted contract sentence is `mapped`, `unmapped`
-or `conflicting`. Mappings name exact fields and their retained values in
-`mappings` (`pointer` and `meaning`); `pointers` lists the same fields. A description
-can retain prose meaning, but cannot override a contradictory schema type.
-Unknown meaning stays unmapped. Each unresolved sentence has a review question
-and a next step. This report is evidence for review, not proof of behavior.
-
-The report covers prose, embedded JSON, dependency JSON, `--contract`, `--refresh`
-and `--extend`, including declared context after shared `$contract` expansion.
-Valid authored JSON is accepted as the author's declaration even when coverage
-needs review. Coverage does not make it partial or rewrite its fields. Extension
-preserves approved declaration bytes. Prose inference with unresolved meaning
-stays partial. Local lint is not Runtime admission: Runtime lint must pass before
-an executable draft is used. Import, refresh and extension validate expanded
-schema copies and preserve authored references in the saved block.
-
-For complex prose, each incomplete result has `questions` with `pointer` and
-`question`, and `next_step`. Answer the questions in a Git-visible JSON contract
-file, with complete `entries`, `calls`, `resources`, `limits` and `conventions`.
-Authored `draft_gaps` and malformed inferred schemas also produce questions and a
-next step on the first invocation. Repeating the command keeps those questions
-stable.
-Use the resource declarations in [RUNBOOK §21](../skills/pdd-prompting/runbook/cli-and-ports.md#21-fake-the-outside-world)
-for file, network and program ports. Then run:
-
-```sh
-pdd interface draft prompts/example.prompt.md --contract contracts/example.json
-pdd lint example
-```
-
-If the prompt already contains an incomplete block, add `--refresh` to the draft
-command. A supplied invalid schema is refused before the prompt changes, with its
-JSON pointer and rule. Local drafting does not contact the Runtime. Runtime lint
-must admit the draft before a check; admission alone does not prove behavior.
-
-To add operations to an approved interface, supply an additive contract fragment:
-
-```sh
-pdd interface draft prompts/example.prompt.md --extend --contract contracts/additions.json
-```
-
-The fragment can add entries, resources or prompt calls. Existing declarations and
-limits must remain equal; conflicts name their pointer and leave the prompt
-unchanged. Extension preserves the exact bytes of existing declarations and appends
-new array members. The Runtime format has one global status, so it cannot hold
-mixed approval status. The whole interface becomes draft and requires full
-re-approval. The result declares `approval_scope: "whole-interface"` and includes
-`interface_diff` with before/after JSON and unchanged declaration pointers. The
-approval view shows the scope and interface diff. Historical approval evidence
-stays intact. To reopen a stale
-block without changing its declarations, use `--refresh`. To replace declarations
-for changed behavior, use `--refresh --contract FILE`. These routes keep prose
-bytes and never record approval. Extension and refresh cannot use automatic
-approval provenance for new behavior.
-
-Runtime refusals retain a reported field pointer and rule. A supplied rule also
-stays visible when the field is unknown, beside the field-unknown note. If the server gives
-only `invalid-interface`, pdd reports any local schema findings separately. When
-there is no local finding, it says that the Runtime did not identify the field.
-No inferred cause is presented as a server diagnosis.
-
-The approval view shows the current coverage report. If any sentence is unmapped
-or conflicting, it asks one grouped question with the quoted sentences: amend the
-prose, amend the declaration, or accept the authored contract as written. A person
-must decide. Delegated approval cannot answer this question.
-
-The automatic approval route requires a valid draft from this command with no
-unmapped or conflicting contract sentence in its freshly computed report,
-unchanged committed prose, code and tests, passing existing native tests, and full
-prompt-check results on current source. It records `automatic-check-pass` with the
-command, results and source hashes. New behavior requires a person.
-
-Automatic native-test commands use `node --test TEST...`, `npm test` or
-`npm run test:NAME`. Node files must be committed test files. The command must
-finish with a TAP report, at least one test, all tests passed, and no failures.
-Build scripts and commands without test results do not qualify.
+Runtime refusals retain a reported field pointer and rule. A supplied rule also stays visible when the field is unknown, beside the field-unknown note. If the server gives only `invalid-interface`, pdd reports any local schema findings separately. When there is no local finding, it says that the Runtime did not identify the field. No inferred cause is presented as a server diagnosis.
 
 ## Core engine
 

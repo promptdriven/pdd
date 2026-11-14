@@ -1,4 +1,4 @@
-// Generated from prompts/cli/prompt-approve.prompt.md (sha256: 4479047e484c85f270c09471cbffa16a9f873816a04fbf68d40f7495de5b1b3c).
+// Generated from prompts/cli/prompt-approve.prompt.md (sha256: b8dc43475c6749222ee9fd9443f5501952e492548fddd3e897771c34b74e7959).
 import { approvalActor, readApprovalPolicy, readSaidWords, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
@@ -93,14 +93,20 @@ function proseOf(text) {
 }
 
 // The newest version in Git that was approved with its own prose hash: {commit, text}, or null.
-function lastApproved(root, path) {
+function lastApproved(root, path, approvals = []) {
+  const approvedHashes = new Set(approvals.flatMap(entry => Array.isArray(entry?.prompts)
+    ? entry.prompts.filter(item => item?.path === path && typeof item?.proseSha256 === 'string').map(item => item.proseSha256)
+    : []));
   const log = spawnSync('git', ['log', '--format=%H', '-n', String(HISTORY), '--', path], { cwd: root, encoding: 'utf8' });
   for (const commit of log.status === 0 ? log.stdout.split('\n').filter(Boolean) : []) {
     const shown = spawnSync('git', ['show', `${commit}:${path}`], { cwd: root, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
-    const blocks = shown.status === 0 ? interfaceBlocks(shown.stdout) : [];
+    if (shown.status !== 0) continue;
+    const hash = proseSha256(shown.stdout);
+    if (approvedHashes.has(hash)) return { commit, text: shown.stdout };
+    const blocks = interfaceBlocks(shown.stdout);
     let value = null;
     try { value = blocks.length === 1 ? JSON.parse(blocks[0][1]) : null; } catch { value = null; }
-    if (value?.status === 'approved' && value.prose_sha256 === proseSha256(shown.stdout)) return { commit, text: shown.stdout };
+    if (value?.status === 'approved' && value.prose_sha256 === hash) return { commit, text: shown.stdout };
   }
   return null;
 }
@@ -142,8 +148,8 @@ const capped = (title, rows, more) => rows.length <= PROSE_LINES ? [title, ...ro
   : [title, ...rows.slice(0, PROSE_LINES), `… ${rows.length - PROSE_LINES} more lines not shown. ${more}`];
 
 // What the person approves in words: the prose changes since the last approved version, else all of the prose.
-function proseView(root, path, text) {
-  const before = lastApproved(root, path), prose = proseOf(text);
+function proseView(root, path, text, approvals = []) {
+  const before = lastApproved(root, path, approvals), prose = proseOf(text);
   if (!before) {
     const rows = prose.split('\n').map(text => plain(`  ${text}`));
     while (rows.length && !rows.at(-1)) rows.pop();
@@ -155,17 +161,12 @@ function proseView(root, path, text) {
 }
 
 // A global status cannot approve additions separately. Show the full declaration change.
-function interfaceView(root,path,text) {
-  const before=lastApproved(root,path),current=interfaceBlocks(text)[0]?.[1];
-  if(!current) return [];
-  const next=JSON.parse(current);let old=before && interfaceBlocks(before.text)[0]?.[1];
-  if(!old) {
-    try {
-      const record=JSON.parse(readFileSync(join(root,'.pdd/interface-drafts.json'),'utf8'))[path];
-      if(record?.mode==='extend' && record.interface_sha256===sha256(JSON.stringify(next))) old=record.extension_before;
-    } catch { /* Unavailable or edited provenance supplies no display baseline. */ }
-  }
-  if(!old) return [];
+function interfaceView(root, path, text, approvals = []) {
+  const before = lastApproved(root, path, approvals), current = interfaceBlocks(text)[0]?.[1];
+  if (!current) return [];
+  const next = JSON.parse(current);
+  const old = before && interfaceBlocks(before.text)[0]?.[1];
+  if (!old) return [];
   const previous=JSON.parse(old);
   const declarations=value=>Object.fromEntries(Object.entries(value).filter(([key])=>!['status','prose_sha256'].includes(key)));
   if(isDeepStrictEqual(declarations(previous),declarations(next))) return [];
@@ -265,7 +266,7 @@ function approvalHygieneRefusal(root, path, visible) {
 
 // Show one prompt, ask the person, and approve on y. expectedHash (from the Try page) must equal the local prose hash.
 // Returns {state: 'done' | 'declined', exitCode, message}; prints the view and the question to stdout.
-export async function askApproval({ root, path, stdout, answers, expectedHash, said, commit }) {
+export async function askApproval({ root, path, stdout, answers, expectedHash, said, commit, approvals, commonDir, strictApprovals = false }) {
   let visible, prompt, problems;
   const declined = error => ({ state: 'declined', exitCode: 4, message: error.message });
   try {
@@ -277,11 +278,11 @@ export async function askApproval({ root, path, stdout, answers, expectedHash, s
     prompt = readPrompt(root, visible, path);
   }
   catch (error) { return declined(error); }
-  const text = prompt.rawText, hash = prompt.interface ? proseSha256(text) : null;
-  if (prompt.interface && expectedHash !== undefined && expectedHash !== hash) {
+  const text = prompt.rawText, hash = typeof text === 'string' ? proseSha256(text) : null;
+  if (hash !== null && expectedHash !== undefined && expectedHash !== hash) {
     return { state: 'declined', exitCode: 4, message: `${path}: the prompt changed since you clicked Approve. Not approved; look at the new text, then click Approve again.` };
   }
-  try { problems = promptSchemaRefusals(root, { visible }, prompt, new Map([[path, prompt]])); }
+  try { problems = promptSchemaRefusals(root, { visible }, prompt, new Map([[path, prompt]]), new Set(), { allowMissingInterfaces: true }); }
   catch (error) { return declined(error); }
   if (problems.length) {
     for (const problem of problems) {
@@ -290,28 +291,54 @@ export async function askApproval({ root, path, stdout, answers, expectedHash, s
     }
     return { state: 'declined', exitCode: 4, message: `Fix these in ${path} before you approve.` };
   }
-  const iface = prompt.interface, current = iface.prose_sha256 === hash;
-  if (iface.status === 'approved' && current) return { state: 'done', exitCode: 0, message: `${path} is already approved and current.` };
-  const {loadInterfaceDraft}=await import('./runtime-seam.mjs');
-  const {contractCoverage,coverageView}=await loadInterfaceDraft();
-  let coverageLines;
-  try {
-    const coverage=contractCoverage({root,path,text,iface});
-    coverageLines=[...coverageView(coverage), ...(coverage.some(row=>row.status!=='mapped') ? ['Coverage decision: amend the prose, amend the declaration, or accept the authored contract as written. Answer yes below only to accept all quoted sentences as written.'] : [])];
-  } catch (error) {
-    if (error.code !== 'interface-contract-invalid' || error.pointer !== '/dependencies') throw error;
-    coverageLines=[`coverage-context-unavailable: ${error.message}`,
-      'Coverage decision: repair the declared context, or accept the authored declaration and prose with incomplete coverage evidence. Answer yes below only to accept this coverage gap.'];
+  let resolvedCommonDir = commonDir;
+  if (!resolvedCommonDir) {
+    const common = spawnSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: root, encoding: 'utf8' });
+    if (common.status === 0) resolvedCommonDir = common.stdout.trim();
   }
-  for (const row of [...describeInterface(path, iface), ...coverageLines, ...interfaceView(root,path,text), ...proseView(root, path, text)]) line(stdout, row);
-  if (iface.status === 'approved') line(stdout, 'The text changed after it was approved. Read the prompt again before you answer.');
+  const journal = Array.isArray(approvals)
+    ? approvals
+    : (() => { try { return resolvedCommonDir ? readPromptApprovals({ commonDir: resolvedCommonDir }) : []; } catch { return []; } })();
+  const hasBlock = prompt.blocks?.length === 1;
+  const iface = prompt.interface;
+  if (hasBlock) {
+    if (iface.status === 'approved' && iface.prose_sha256 === hash) return { state: 'done', exitCode: 0, message: `${path} is already approved and current.` };
+  } else if (journal.some(entry => (!strictApprovals || entry.actor?.kind === 'terminal') && entry.prompts?.some(item => item.path === path && item.proseSha256 === hash))) {
+    return { state: 'done', exitCode: 0, message: `${path} is already approved and current.` };
+  }
+  const headerLines = hasBlock
+    ? [...describeInterface(path, iface), ...interfaceView(root, path, text, journal)]
+    : iface?.kind === 'native-only'
+      ? [path, 'Kind: native-only', `Reason: ${iface.reason}`]
+      : [path];
+  for (const row of [...headerLines, ...proseView(root, path, text, journal)]) line(stdout, row);
+  const previousApproved = lastApproved(root, path, journal);
+  if ((hasBlock && iface.status === 'approved') || (!hasBlock && previousApproved && proseOf(previousApproved.text) !== proseOf(text))) {
+    line(stdout, 'The text changed after it was approved. Read the prompt again before you answer.');
+  }
   if (said === undefined) stdout.write(`Approve ${path}? y/n `);
   const answer = said === undefined ? await answers.ask() : "yes";
   if (!/^(?:y|yes)$/i.test(answer.trim())) { line(stdout, ''); return { state: 'declined', exitCode: 1, message: `Not approved: ${path}. Nothing changed.` }; }
-  const next = approvePromptText(text);
-  if (!next) return { state: 'declined', exitCode: 4, message: `pdd could not set approved in ${path}. Add "prose_sha256": "" to the Runtime interface, then approve again.` };
-  if (commit) await commit({ text, next, hash });
-  else writeFileSync(join(root, path), next);
+  if (hasBlock) {
+    const next = approvePromptText(text);
+    if (!next) return { state: 'declined', exitCode: 4, message: `pdd could not set approved in ${path}. Add "prose_sha256": "" to the Runtime interface, then approve again.` };
+    if (commit) await commit({ text, next, hash, prompt });
+    else writeFileSync(join(root, path), next);
+  } else if (commit) {
+    await commit({ text, next: null, hash, prompt });
+  } else if (resolvedCommonDir) {
+    await recordPromptApproval({
+      commonDir: resolvedCommonDir,
+      evidence: {
+        id: randomUUID(),
+        route: 'terminal',
+        actor: approvalActor(process.env),
+        at: Date.now(),
+        words: null,
+        prompts: [{ path, proseSha256: hash, kind: iface?.kind ?? 'full', ...(iface?.kind === 'native-only' ? { reason: iface.reason } : {}) }],
+      },
+    });
+  }
   return { state: 'done', exitCode: 0, message: `Approved ${path}.` };
 }
 
@@ -324,7 +351,7 @@ export function promptPath(root, cwd, word) {
 }
 
 // pdd approve PROMPT. Returns the exit code.
-export async function runApprove({ words = [], cwd = process.cwd(), said, automatic = false, tests } = {}, ports = {}) {
+export async function runApprove({ words = [], cwd = process.cwd(), said } = {}, ports = {}) {
   const stdout = ports.stdout ?? process.stdout, stderr = ports.stderr ?? process.stderr, stdin = ports.stdin ?? process.stdin;
   const interactive = ports.interactive ?? (!!process.stdin.isTTY && !!process.stdout.isTTY);
   try {
@@ -334,14 +361,6 @@ export async function runApprove({ words = [], cwd = process.cwd(), said, automa
     if (top.status !== 0) throw new Stop(2, 'pdd approve works in a Git repository.');
     const root = realpathSync(top.stdout.trim()), path = promptPath(root, cwd, words[0]);
     if (!path) throw new Stop(2, `${relative(root, resolve(realpathSync(cwd), words[0])).split(sep).join('/')} is not a Git-visible *.prompt.md file in this repository.`);
-    if (automatic) {
-      if(said !== undefined) throw new Stop(2,'--automatic does not combine with --said.');
-      const hygiene = approvalHygieneRefusal(root, path, new Set(gitFiles(root)));
-      if (hygiene) throw new Stop(4, hygiene);
-      const {runAutomaticApproval}=await import('./runtime-seam.mjs');
-      return runAutomaticApproval({path,root,tests},{...ports,stdout,stderr});
-    }
-    if(tests !== undefined) throw new Stop(2,'--tests requires --automatic.');
     const { strictApprovals } = readApprovalPolicy({ root }, ports);
     const env = ports.env ?? process.env;
     const agent = approvalActor(env).kind === 'agent';
@@ -356,27 +375,30 @@ export async function runApprove({ words = [], cwd = process.cwd(), said, automa
     const common = await gitRun(['rev-parse', '--path-format=absolute', '--git-common-dir'], root);
     if (common.status !== 0) throw new Stop(4, 'Cannot resolve Git common directory.');
     const commonDir = common.stdout.trim();
-    readPromptApprovals({ commonDir }, ports);
+    const approvals = readPromptApprovals({ commonDir }, ports);
     if (said !== undefined) {
       try { said = await readSaidWords(said, { ...ports, stdin }); }
       catch (error) { throw new Stop(2, error.message); }
     }
     const answers = said === undefined ? lineReader(stdin) : { close() {} };
-    const commit = async ({ text, next, hash }) => {
+    const commit = async ({ text, next, hash, prompt }) => {
       const fs = ports.fs ?? { writeFileSync };
-      const evidence = { id: (ports.randomUUID ?? randomUUID)(), route: said === undefined ? 'terminal' : 'said', actor: approvalActor(env), at: (ports.now ?? Date.now)(), words: said ?? null, prompts: [{ path, proseSha256: hash, ...(() => { const iface = JSON.parse(interfaceBlocks(text)[0][1]); return {kind:iface.kind ?? 'full',...(iface.kind === 'native-only' ? {reason:iface.reason} : {})}; })() }] };
+      const iface = prompt?.interface;
+      const evidence = { id: (ports.randomUUID ?? randomUUID)(), route: said === undefined ? 'terminal' : 'said', actor: approvalActor(env), at: (ports.now ?? Date.now)(), words: said ?? null, prompts: [{ path, proseSha256: hash, kind: iface?.kind ?? 'full', ...(iface?.kind === 'native-only' ? { reason: iface.reason } : {}) }] };
       try {
-        fs.writeFileSync(join(root, path), next);
+        if (next !== null) fs.writeFileSync(join(root, path), next);
         await recordPromptApproval({ commonDir, evidence }, ports);
       } catch (error) {
-        try { fs.writeFileSync(join(root, path), text); } catch { throw new Stop(4, `Approval evidence failed; rollback failed for ${path}.`); }
+        if (next !== null) {
+          try { fs.writeFileSync(join(root, path), text); } catch { throw new Stop(4, `Approval evidence failed; rollback failed for ${path}.`); }
+        }
         throw error;
       }
       line(stdout, `${path} ${hash}`);
       line(stdout, `Approval route: ${evidence.route}; actor: ${evidence.actor.kind} ${evidence.actor.id}; at: ${evidence.at}`);
     };
     try {
-      const result = await askApproval({ root, path, stdout, answers, said, commit });
+      const result = await askApproval({ root, path, stdout, answers, said, commit, approvals, commonDir, strictApprovals });
       if (result.exitCode === 1) line(stdout, 'Not approved. Nothing changed.');
       else if (result.exitCode === 4 && result.message.startsWith('Fix these')) line(stdout, 'Fix these before you approve.');
       else line(result.exitCode === 4 ? stderr : stdout, result.message);

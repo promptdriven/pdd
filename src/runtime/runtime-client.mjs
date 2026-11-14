@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 7ee5fc6a1bc717c02d7be2e57cca5a4fe9f4bb1c7a74d4c58fcf625e7566bcda).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 09c42fc52379754758b34089061b3a7074822f98c4116113f2a53f623921c6b4).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
@@ -6,7 +6,6 @@ import { isRecentLintReceipt } from './runtime-lint-receipt.mjs';
 import { rememberSecrets as fallbackRememberSecrets } from './secret-redaction.mjs';
 import { bindingPlanLines, bindingRefusals } from './runtime-binding-plan.mjs';
 import { buildCheckPlan, checkPlanResults, checkPlanLines, checkPlanResultLines, selectCheckTests, baselineReport } from './runtime-check-plan.mjs';
-import { interfaceFindings } from './interface-draft.mjs';
 import {loadRuntimeWorkspace,allowsRuntimePath,requireRuntimePath,RuntimeWorkspaceError} from './runtime-workspace.mjs';
 import { hasProgress, outcomeDone, outcomeFor, outcomeOverall, outcomeText, progressText, resultOutcome, resultOverall } from './runtime-outcome.mjs';
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
@@ -19,7 +18,7 @@ import { homedir, hostname } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { createInterface } from 'node:readline';
 import { DRAFT_SERVER_TEXT, PreflightError, TEST_SCHEMA, captureSource, scenarioShapeRefusal, checkInput, fillHashes, lintLocalHygiene, sharedSourceFiles, findTests, formatSize, gitFiles, otherFiles,
-  discoveryRefusal, preflight, hasPromptInterface, interfaceBlocks, executableInterfaceText, readPrompt, formatWarningLines, schemaKeywordWarningLines, missingCliImplementationWarnings, prepareHashSelection, sourceFilePort, sha256, STALE_HINT, staleHint } from './runtime-preflight.mjs';
+  discoveryRefusal, preflight, hasPromptInterface, interfaceBlocks, interfaceFindings, executableInterfaceText, readPrompt, formatWarningLines, schemaKeywordWarningLines, missingCliImplementationWarnings, prepareHashSelection, sourceFilePort, sha256, STALE_HINT, staleHint } from './runtime-preflight.mjs';
 import { catalogRecords, compareCopies } from './contract-refs.mjs';
 import { OPEN_STATES, causeText, cleanText, progressTicker, projectAnswer, refusalView, renderJson, renderText, summaryLine, stepTimeLimit, tokenUsageOf, tryUsage, validLink, coverageText } from './runtime-output.mjs';
 
@@ -137,7 +136,6 @@ function withDefaults(ports) {
     if (typeof ports.whyNoTests !== 'function') throw unboundPortError('Test selection port (whyNoTests) is not bound.');
     return ports.whyNoTests(root, visible, found, {
       allowsPath: (r, p) => allowsRuntimePath(loadRuntimeWorkspace({ root: r }), p),
-      hasInterfaceBlock: hasPromptInterface,
       discoverTests: (r, files) => findTestsBound({ root: r, files }),
     });
   };
@@ -2562,7 +2560,7 @@ function runExplainBindings(cwd, words, options, ports) {
     const problem=discoveryRefusal(test) ?? test.criteriaRefusal ?? scenarioShapeRefusal(test.doc,test.path);
     if (problem) throw Object.assign(new PreflightError(4,`${test.path}: ${problem.message}`),{code:problem.code});
   }
-  const capture=ports.captureSource(root,{tests:selected.map(test=>test.path),excludeFixtureProjects:words.length===0});
+  const capture=ports.captureSource(root,{tests:selected.map(test=>test.path),excludeFixtureProjects:words.length===0,allowMissingInterfaces:true});
   const plans=capture.bindingPlans ?? [];
   const code=plans.some(plan=>plan.problems.length || plan.edges.some(edge=>edge.state==='missing')) ? 4 : 0;
   line(ports.stdout,options['--json'] ? JSON.stringify({schema_version:'pdd.binding-plans.v1',plans}) : plans.flatMap(bindingPlanLines).join('\n'));
@@ -2571,10 +2569,10 @@ function runExplainBindings(cwd, words, options, ports) {
 
 function runFiles(cwd, words, options, ports) {
   const { root, found, normalized } = localSetup(cwd, words, ports);
-  const selected = select(found, normalized, root, ports), coverage = bindingCoverage({ root, found, selected, includeRuntime:true });
+  const selected = select(found, normalized, root, ports), coverage = bindingCoverage({ root, found, selected, includeRuntime:true, allowMissingInterfaces:true });
   const rows = selected.map(test => ({test:test.path,story:test.story,state:'ready',refusals:[],
     ...(discoveryRefusal(test) ? {state:'refused',unsent:true,refusals:[discoveryRefusal(test)]} : {})}));
-  const nativeRows = new Map(preflight({root,found,selected}).rows.filter(row=>row.native_only?.length).map(row=>[row.test,row]));
+  const nativeRows = new Map(preflight({root,found,selected,allowMissingInterfaces:true}).rows.filter(row=>row.native_only?.length).map(row=>[row.test,row]));
   const advice = formatAdvice(root, found.visible, entryPaths(selected), found.workspace);
   for (const row of rows) {
     const native = nativeRows.get(row.test);
@@ -2583,7 +2581,7 @@ function runFiles(cwd, words, options, ports) {
   }
   const appMap = options['--app-map'] === undefined ? null : appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
   for (const path of found.excludedFixtureProjects ?? []) line(ports.stderr, `Warning: skipped nested fixture project ${path}.`);
-  const capture = captureIndependent(root, rows, ports, {appMap,excludeFixtureProjects:words.length === 0})
+  const capture = captureIndependent(root, rows, ports, {appMap,excludeFixtureProjects:words.length === 0,allowMissingInterfaces:true})
     ?? {files:[],reads:[],bytes:0};
   const broken = rows.filter(row => row.unsent && row.refusals.length), exitCode = broken.length ? 4 : 0;
   const summary = `${capture.files.length} files, ${formatSize(capture.bytes)} (${capture.bytes} bytes). ${otherFiles(capture.files, found).length} of them are not prompt, story or test files.${broken.length ? ` ${broken.length} tests could not run.` : ''}`;
@@ -2615,6 +2613,9 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   let findings = paths ? interfaceFindings({root,paths}).filter(localInterfaceProblem) : [];
   const advice = paths ? formatAdvice(root, found.visible, paths, found.workspace) : [];
   found.warnings.push(...advice);
+  if (findings.some(item => item.code === 'interface-missing') && !found.tests.length) {
+    if (await probeLazyInterfaces(context, origin, context.store)) findings = findings.filter(item => item.code !== 'interface-missing');
+  }
   if (findings.length && !found.tests.length) {
     const summary = 'Lint refused Runtime interfaces. 0 AI calls. No files were sent.';
     if (context.json) line(ports.stdout,JSON.stringify({repo:root,exit_code:4,lint_state:'refused',problems:findings,rows:[],summary_line:summary}));
@@ -2871,20 +2872,6 @@ function printLintResult(context, rows, problems, warnings = [], answer = null) 
   out.push(summary, coverageText(context.coverage), ...warnings);
   ports.stdout.write(`${out.join('\n')}\n`);
   return exitCode;
-}
-
-function runFillHash(root, cwd, words, ports, compact = false) {
-  const scoped = words.length ? (ports.prepareHashSelection ?? (input => prepareHashSelection(input,{...ports,capture:ports.captureSource})))({root,cwd,words}) : null;
-  const result = ports.fillHashes(scoped ? {root,files:scoped.files,targets:scoped.targets,...(compact ? {compact:true} : {})} : (compact ? {root,compact:true} : {root}));
-  for (const { message } of result.warnings) line(ports.stdout, `Warning: ${message}`);
-  for (const { path } of result.filled) line(ports.stdout, `Filled prose_sha256: ${path}`);
-  for (const { path } of result.synced ?? []) line(ports.stdout, `Synced criteria: ${path}`);
-  if (compact) for (const { path } of result.compacted) line(ports.stdout, `Compacted Runtime interface: ${path}`);
-  for (const { message } of result.refused) line(ports.stdout, `Refused: ${message}`);
-  for (const { path } of result.stale) line(ports.stdout, `Stale: ${path} is approved, but ${STALE_HINT}.`);
-  if (compact) line(ports.stdout, `Interfaces: ${result.compacted.length} compacted.`);
-  line(ports.stdout, `Hashes: ${result.filled.length} filled, ${result.current.length} current, ${result.refused.length} refused, ${result.stale.length} stale.`);
-  return result.refused.length || result.stale.length ? 4 : 0;
 }
 
 function interruptible(context) {
@@ -3418,7 +3405,7 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
     if (options['--affected'] !== undefined && (options['--affected'] !== true || words.length || Object.keys(options).some(key => !['--affected','--json','--details','--timeout','--max-calls','--cache-clear'].includes(key))))
       throw new Stop(2, '--affected accepts no Stories and only --cache-clear, --json, --details, --timeout and --max-calls.');
     if(options['--journeys']!==undefined){
-      if(options['--journeys']!==true||words.length>1||['--read','--retry','--fill-hash','--request','--screen','--drawing','--look'].some(key=>options[key]!==undefined))throw new Stop(2,'Use pdd test --journeys [JOURNEY] with normal test options.');
+      if(options['--journeys']!==true||words.length>1||['--read','--retry','--request','--screen','--drawing','--look'].some(key=>options[key]!==undefined))throw new Stop(2,'Use pdd test --journeys [JOURNEY] with normal test options.');
       const {root,found}=localSetup(cwd,[],ports);
       try { words=selectJourneys(found.tests.map(test=>({testPath:test.path,storyPath:test.storyPath})),words[0],ports); } catch(error) { if (error?.unboundPort) throw error; throw new Stop(2,error.message); }
       if(!words.length)throw new Stop(2,'No root product journeys found.');
@@ -3473,8 +3460,6 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
         return exitCode;
       }
     }
-    if (Object.hasOwn(options, '--compact') && (options['--compact'] !== true || options['--fill-hash'] !== true || words.length
-      || Object.keys(options).some(name => !['--fill-hash', '--compact'].includes(name)))) throw new Stop(2, '--compact requires --fill-hash, without other options or Stories.');
     // Local modes dispatch before repository runtime state, origin or sign-in.
     if (options['--screen'] !== undefined || options['--drawing'] !== undefined || options['--look'] !== undefined) {
       if (!options['--screen'] || !options['--drawing'] || words.length || Object.keys(options).some(name => !['--screen', '--drawing', '--look', '--json'].includes(name))) throw new Stop(2, 'Use pdd test --screen URL --drawing PATH [--look] [--json], without other options or Stories.');
@@ -3505,10 +3490,10 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
           const { found, normalized } = localSetup(cwd, words, ports), selected = select(found, normalized, root, ports);
           selectedTests = selected;
           tests = selected.filter(test => !test.error).map(test => test.path);
-          promptPaths = ports.captureSource(root, { tests, appMap: null }).files.map(file => file.path).filter(path => path.endsWith('.prompt.md'));
+          promptPaths = ports.captureSource(root, { tests, appMap: null, allowMissingInterfaces: true }).files.map(file => file.path).filter(path => path.endsWith('.prompt.md'));
         }
         // Interface findings refuse only a repository-wide local lint; a selected one gives advice only.
-        const problems = words.length ? [] : interfaceFindings({root,paths:promptPaths}).filter(localInterfaceProblem);
+        const problems = words.length ? [] : interfaceFindings({root,paths:promptPaths}).filter(problem => localInterfaceProblem(problem) && problem.code !== 'interface-missing');
         const advice = formatAdvice(root, new Set(gitFiles(root)), promptPaths ?? files.filter(path => path.endsWith('.prompt.md')), workspace);
         const hygiene = lintLocalHygiene({ root, files, promptPaths, tests: selectedTests, workspace }, ports);
         const warnings = [...new Set([...advice, ...ports.lintSvgLayouts({ root, files, promptPaths }), ...hygiene])], summary = `partial: checked SVG layout only; prompts not checked (local-only). ${warnings.length} warnings. 0 AI calls. No checks were sent.`;
@@ -3516,13 +3501,12 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
         return printLocalLayout(context,result);
       } catch (error) { if (error?.unboundPort) throw error; throw new Stop(2, error.message); }
     }
-    const modes = ['--read', '--retry', '--fill-hash', '--files', '--explain-bindings', '--request', '--lint'].filter(name => options[name] !== undefined);
-    const others = Object.keys(options).filter(name => !modes.includes(name) && !(modes[0] === '--fill-hash' && name === '--compact') && !(modes[0] === '--retry' && ['--json', '--details', '--timeout'].includes(name)) && !(name === '--json' && ['--read', '--request', '--lint', '--files', '--explain-bindings'].includes(modes[0])) && !(name === '--timeout' && ['--read', '--lint'].includes(modes[0])) && !(name === '--max-calls' && modes[0] === '--lint') && !(name === '--app-map' && modes[0] === '--files'));
+    const modes = ['--read', '--retry', '--files', '--explain-bindings', '--request', '--lint'].filter(name => options[name] !== undefined);
+    const others = Object.keys(options).filter(name => !modes.includes(name) && !(modes[0] === '--retry' && ['--json', '--details', '--timeout'].includes(name)) && !(name === '--json' && ['--read', '--request', '--lint', '--files', '--explain-bindings'].includes(modes[0])) && !(name === '--timeout' && ['--read', '--lint'].includes(modes[0])) && !(name === '--max-calls' && modes[0] === '--lint') && !(name === '--app-map' && modes[0] === '--files'));
     if (modes.length > 1 || (modes.length && others.length) || (['--request', '--retry'].includes(modes[0]) && words.length)
       || (modes[0] === '--read' && words.length > 1) || (!modes.length && options['--app-map'] !== undefined)) throw new Stop(2, 'This mix of options does not work together. Run pdd test --help.');
     if (modes[0] === '--request') { release = interruptible(context); return await runRequest(context, options['--request'], cwd); }
     const root = repoRoot(cwd);
-    if (modes[0] === '--fill-hash') return runFillHash(root, cwd, words, ports, options['--compact'] === true);
     if (modes[0] === '--explain-bindings') return runExplainBindings(cwd, words, options, ports);
     if (modes[0] === '--files') return runFiles(cwd, words, options, ports);
     context.root = root; context.store = stateFor(ports.env, root);

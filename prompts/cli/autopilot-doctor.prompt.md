@@ -115,9 +115,11 @@ Check these boundaries in order and continue after failures:
   'Accept: application/vnd.github.raw'`. A trust name or `origin/BRANCH` in a fix
   is shell-quoted unless it has only letters, digits and `_ . @ / -`. Doctor
   makes no GitHub write here: only the printed fix publishes.
-- Enumerate tracked *.prompt.md and report draft/missing interfaces as advisory
-  paths that may need approval on first check. Malformed or unreadable prompts
-  warn. Never approve them or block doctor solely for drafts.
+- Enumerate tracked *.prompt.md and report embedded Runtime interface blocks whose
+  status is not approved as advisory drafts that may need approval on first check
+  (plain Markdown prompts without an embedded Runtime interface block are ready as
+  is). Malformed or unreadable embedded blocks warn. Never approve them or block
+  doctor solely for drafts.
 - Read interpreter access through the [Runtime seam](runtime-seam.prompt.md) `health` check (`checkRuntimeHealth`)
   with the selected environment and injected gh/fetch/clock ports. No upload or job.
   Preserve its health rules, including a JSON 404 from an interpreter without the
@@ -162,7 +164,7 @@ Do not use a GitHub ledger that writes reads to disk. Do not mutate arrays retur
 {
   "kind": "partial",
   "status": "approved",
-  "prose_sha256": "5a34da31b0bfbb2aac38cf4dee95acf3cee7eaf93ed65025b3676f2758a162cd",
+  "prose_sha256": "e29312fde0fa6f4c2c9dec6a38351235b7f203cb8e69d312a0306075e73f939a",
   "entries": [
     {
       "operation": "runAutopilotDoctor",

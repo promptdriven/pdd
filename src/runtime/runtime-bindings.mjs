@@ -1,11 +1,10 @@
-import { runtimeCoverage } from './interface-draft.mjs';
+// Generated from prompts/cli/runtime-bindings.prompt.md (sha256: 783f8f28845524197cad5451d4416848f104fff4586ddc7f2e8b35939bbc4e86).
 import {loadRuntimeWorkspace,allowsRuntimePath,requireRuntimePath} from './runtime-workspace.mjs';
-// Generated from prompts/cli/runtime-bindings.prompt.md (sha256: b4c08f94762052c3040f366ba7013e0c7dfdb6e7dab6e1cabdd95f3a890bdf62).
 import { lstatSync } from 'node:fs';
 import { join } from 'node:path';
-import { PreflightError, readPrompt, isSecretPath, sourceFilePort, gitFiles, promptMarkdownTargets } from './runtime-preflight.mjs';
+import { PreflightError, readPrompt, isSecretPath, sourceFilePort, gitFiles, promptMarkdownTargets, runtimeCoverage } from './runtime-preflight.mjs';
 
-export function bindingCoverage({ root, found, selected, includeRuntime = false, allowMissingInterfaces = false }) {
+export function bindingCoverage({ root, found, selected, includeRuntime = false, allowMissingInterfaces = true }) {
   const workspace=loadRuntimeWorkspace({root});
   const controlVisible=new Set(gitFiles(root));
   const runtime = includeRuntime ? {runtime:runtimeCoverage({root,allowMissingInterfaces})} : {};

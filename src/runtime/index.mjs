@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-entry.prompt.md (sha256: f75d073eea022ff07abfe554acdad7cc24fdda45d1b1c32e5cb5eec584fb53a8).
+// Generated from prompts/cli/runtime-entry.prompt.md (sha256: 62024d6af8212ce63af0d0c7445aedd30f2b017db715bdacd411a9d34157ed8d).
 import { createRequire } from 'node:module';
 import { isDeepStrictEqual } from 'node:util';
 
@@ -9,7 +9,7 @@ export const TEST_SCHEMA = 'prompt-runtime.program-scenario.v1';
 const APP_MAP_SCHEMA = 'prompt-runtime.app-map.v1';
 const ENGINE_SHA = 'eae2202a68d00ab762fcbbf1eba0d8607a132a15';
 export const DRAFT_SERVER_TEXT = 'The server does not run draft prompts yet. Approve the prompt first, or wait for the server update.';
-export const STALE_HINT = 'the text changed after approval: set status to draft, run pdd test --fill-hash, ask the person';
+export const STALE_HINT = 'the text changed after approval: update the prompt and ask the person to approve it again';
 export const staleHint = `pdd: ${STALE_HINT}.`;
 export const PROVIDER_TEXT = 'the AI provider failed during the run. It is not a failed check. Do not send it again yet.';
 export const CHECK_STATES = Object.freeze(['waiting', 'sent', 'passed', 'failed', 'refused', 'partial', 'not run']);
@@ -289,8 +289,16 @@ export function otherFiles(...args) {
   return runtimePreflightSlice().otherFiles(...args);
 }
 
+export function parsePromptFrontmatter(...args) {
+  return runtimePreflightSlice().parsePromptFrontmatter(...args);
+}
+
 export function preflight(...args) {
   return runtimePreflightSlice().preflight(...args);
+}
+
+export function promptMarkdownTargets(...args) {
+  return runtimePreflightSlice().promptMarkdownTargets(...args);
 }
 
 export function promptRefusal(...args) {
@@ -412,21 +420,6 @@ function loadContracts() {
 
 export function runContracts(input, ports) {
   return loadContracts().runContracts(input, ports);
-}
-
-export async function loadInterfaceDraft() {
-  const { contractCoverage, coverageView, missingInterfaces } = await import('./interface-draft.mjs');
-  return { contractCoverage, coverageView, missingInterfaces };
-}
-
-export async function runInterfaceDraft(input, ports) {
-  const { runInterfaceDraft: run } = await import('./interface-draft.mjs');
-  return run(input, ports);
-}
-
-export async function runAutomaticApproval(input, ports) {
-  const { runAutomaticApproval: run } = await import('./interface-draft.mjs');
-  return run(input, ports);
 }
 
 let tryMcpModule = null;
@@ -597,7 +590,6 @@ function buildCheckInput(input = {}, { defaultCache = false, extraOptions = {} }
 
 const LOCAL_WHAT_FLAGS = Object.freeze({
   files: '--files',
-  'fill-hash': '--fill-hash',
   'explain-bindings': '--explain-bindings',
 });
 
@@ -663,10 +655,7 @@ export async function local(input = {}, ports) {
   if (!flag) {
     throw new RangeError(`Unsupported local inspection mode: ${String(input?.what)}`);
   }
-  const extraOptions = {
-    [flag]: true,
-    ...(input?.compact === true && input?.options?.['--compact'] === undefined ? { '--compact': true } : {}),
-  };
+  const extraOptions = { [flag]: true };
   return runCheck({ ...buildCheckInput(input, { defaultCache: false, extraOptions }), cache: false }, ports);
 }
 
@@ -713,23 +702,6 @@ export async function mcp(input = {}, ports) {
       ...(cwd !== undefined ? { cwd } : {}),
       words,
       ...(env !== undefined ? { env } : {}),
-    },
-    ports,
-  );
-}
-
-export async function draftInterfaces(input = {}, ports) {
-  const cwd = input?.cwd ?? input?.root;
-  const words = Array.isArray(input?.words) ? [...input.words] : Array.isArray(input?.paths) ? [...input.paths] : [];
-  return runInterfaceDraft(
-    {
-      ...(cwd !== undefined ? { cwd } : {}),
-      words,
-      all: Boolean(input?.all),
-      json: Boolean(input?.json),
-      contract: input?.contract,
-      extend: Boolean(input?.extend),
-      refresh: Boolean(input?.refresh),
     },
     ports,
   );

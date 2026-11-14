@@ -30,7 +30,7 @@ test('issue820: cap validation and forbidden mixes fail before capture or networ
   for (const value of [0, 1001, -1, 1.5, NaN, null, '', '01', '1e2', true]) {
     assert.equal(await runCheck({ cwd: h.repo, words: ['place-order'], options: { '--lint': true, '--max-calls': value } }, p.ports), 2, String(value));
   }
-  for (const mode of ['--local', '--files', '--fill-hash', '--read', '--explain-bindings']) {
+  for (const mode of ['--local', '--files', '--read', '--explain-bindings']) {
     assert.equal(await runCheck({ cwd: h.repo, options: { '--lint': true, '--max-calls': 25, [mode]: true } }, p.ports), 2, mode);
   }
   for (const value of ['0', '1001', '-1', '1.5', '01', '1e2']) assert.throws(() => parseArgv(['lint', '--max-calls', value]));

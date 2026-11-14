@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { cpSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runCheck } from '../../src/runtime-seam.mjs';
-import { exitCodeFor, validLink } from '../../src/runtime-seam.mjs';
+import { exitCodeFor, fillHashes, validLink } from '../../src/runtime-seam.mjs';
 import { PLACE, TOKEN, fakeRuntime, filesUnder, harbor, portsFor, root, sha } from './runtime-fake.mjs';
 
 async function check(setup, fake, words = [], options = {}, extra = {}) {
@@ -1364,7 +1364,7 @@ test('hcli-2: saved-data and nested prompt calls contribute to the estimate with
     const prompt = value => text.replace(/```json\s*[\s\S]*?```/, '```json\n' + JSON.stringify(value) + '\n```');
     writeFileSync(file, prompt(iface)); writeFileSync(join(repo, 'prompts/shared.prompt.md'), prompt(shared));
   });
-  const fill = spawnSync(process.execPath, [join(root, 'bin/pdd.mjs'), 'test', '--fill-hash'], { cwd: setup.repo, encoding: 'utf8' }); assert.equal(fill.status, 0, fill.stderr);
+  assert.equal(fillHashes({ root: setup.repo }).refused.length, 0);
   const fake = await fakeRuntime(t, (e, f) => f.normal(e));
   const result = await check(setup, fake, [], { '--max-calls': '32' });
   assert.equal(result.code, 0, result.out + result.err);

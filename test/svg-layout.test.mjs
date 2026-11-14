@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { cpSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { lintSvgLayouts } from '../src/svg-layout.mjs';
-import { runCheck } from '../src/runtime-seam.mjs';
+import { fillHashes, runCheck } from '../src/runtime-seam.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
 import { fakeRuntime, harbor, portsFor, sink, temp, PLACE } from './helpers/runtime-fake.mjs';
@@ -77,14 +77,14 @@ test('local fragment paint resources accept CSS quotes while external resources 
   }
 });
 
-test('public local lint includes no-interface/no-test Git-visible prompts, no auth/network', async t => {
+test('public local lint includes no-interface/no-test Git-visible prompts with zero interface-missing problems, no auth/network', async t => {
   const setup = harbor(t, repo => { mkdirSync(join(repo, 'views')); cpSync(join(fixtures, 'game.ui.svg'), join(repo, 'views/game.ui.svg')); writeFileSync(join(repo, 'views/game.prompt.md'), '![Layout](game.ui.svg)'); });
   const stdout = sink(), stderr = sink();
   const env = { HOME: setup.home, PDD_RUNTIME_URL: 'invalid', PDD_STATE_DIR: setup.state };
-  assert.equal(await runPdd(['lint', '--local', '--json'], { cwd: setup.repo, env, stdout, stderr }), 4, stderr.text);
+  assert.equal(await runPdd(['lint', '--local', '--json'], { cwd: setup.repo, env, stdout, stderr }), 0, stderr.text);
   const result = JSON.parse(stdout.text);
-  assert.equal(result.exit_code, 4);
-  assert.ok(result.problems.some(problem => problem.code === 'interface-missing' && problem.path === 'views/game.prompt.md')); assert.ok(result.warnings.some(warning => warning.includes('views/game.prompt.md'))); assert.match(result.summary_line, /0 AI calls/);
+  assert.equal(result.exit_code, 0);
+  assert.deepEqual(result.problems, []); assert.ok(result.warnings.some(warning => warning.includes('views/game.prompt.md'))); assert.match(result.summary_line, /0 AI calls/);
   const p = portsFor(env, { gh: () => assert.fail('No auth'), fetch: () => assert.fail('No network') }).ports;
   assert.equal(await runCheck({ cwd: setup.repo, words: ['no-such-story'], options: { '--lint': true, '--local': true } }, p), 2);
   assert.match(p.stderr.text, /Unknown story/);
@@ -168,8 +168,7 @@ test('HTML screen with .ui.svg warns on missing stylesheet or missing CSS classe
     const scenario = JSON.parse(readFileSync(join(repo, 'tests/place-order.json'), 'utf8'));
     writeFileSync(join(repo, 'tests/place-order.json'), JSON.stringify({ ...scenario, app_maps: ['app-map.json'], context: [...(scenario.context ?? []), 'prompts/ledger_screen.prompt.md', 'prompts/notes_screen.prompt.md'] }, null, 2));
   });
-  const fillStdout = sink(), fillStderr = sink();
-  assert.equal(await runPdd(['test', '--fill-hash'], { cwd: setup.repo, env: { HOME: setup.home, PDD_STATE_DIR: setup.state }, stdout: fillStdout, stderr: fillStderr }), 0, fillStderr.text || fillStdout.text);
+  fillHashes({ root: setup.repo });
 
   const expectedMissingSheet = 'Warning: SVG layout app-map.json -> prompts/ledger_screen.prompt.md: stylesheets: HTML screen "ledger" links prompts/views/ledger__stacked.ui.svg with no stylesheet in "stylesheets".';
   const localPorts = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: 'invalid', PDD_STATE_DIR: setup.state }, { gh: () => assert.fail('No auth'), fetch: () => assert.fail('No network') }).ports;

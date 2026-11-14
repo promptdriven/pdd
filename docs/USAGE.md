@@ -404,7 +404,6 @@ For extra files, add `pdd-source.json` at the repository root:
 Case saving recovers an abandoned ownership lock only after confirming that its owner ended. A symlink or non-regular recovery guard refuses the save and leaves the guard, lock and authored test unchanged. Contention with another recovery attempt uses the same finite wait and cancellation limits as other ownership waits; an unresolved save stays pending.
 
 ```sh
-pdd test --fill-hash          # fill the hash of draft interfaces; sends nothing
 pdd test --files              # exact upload manifest and byte sizes for all Stories; offline
 pdd test --files place-order  # preview only this Story; offline
 pdd lint                      # the server checks the format only, 0 AI calls
@@ -423,7 +422,7 @@ The AI-call budget is a ceiling; you are charged only for calls that run. Check 
 
 After the table, `pdd test` prints one `Prompt tests` line for each Story that you can paste into a PR, for example `Prompt tests (place-order): ✓ 4 of 4 criteria · 11/11 checks · 2 AI calls`. With two or more Stories, the overall `Prompt tests:` line comes last.
 
-Run `pdd lint` (or `pdd lint STORY`) before a real check. The server checks the format of the prompts, Stories and tests only. It requests complete diagnostics (`complete: true`), uses 0 AI calls and shows the problems the server reports, including each schema pointer and Story/test diagnostic. A selected test refused by complete lint is refused even when its prompt admission passed. The preliminary lint before a check or a simulation keeps its ordinary admission request. It requires network access, sign-in and server capacity. An offline-only task must use local file/schema/criteria review instead; `pdd test --files` and `pdd test --fill-hash` send nothing. Those checks are not a server lint pass. See [Offline review and interpreter boundaries](runtime-boundaries.md). With `--json`, `lint_state` matches the selected test rows and exit code: `passed` for exit 0, `refused` for exit 4. The problems list retains all server diagnostics, including those outside the selected tests.
+Run `pdd lint` (or `pdd lint STORY`) before a real check. The server checks the format of the prompts, Stories and tests only. It requests complete diagnostics (`complete: true`), uses 0 AI calls and shows the problems the server reports, including each schema pointer and Story/test diagnostic. A selected test refused by complete lint is refused even when its prompt admission passed. The preliminary lint before a check or a simulation keeps its ordinary admission request. It requires network access, sign-in and server capacity. An offline-only task must use local file/schema/criteria review instead; `pdd files` and `pdd test --files` send nothing. Those checks are not a server lint pass. See [Offline review and interpreter boundaries](runtime-boundaries.md). With `--json`, `lint_state` matches the selected test rows and exit code: `passed` for exit 0, `refused` for exit 4. The problems list retains all server diagnostics, including those outside the selected tests.
 
 A prompt whose interface is still `draft` can be checked, and its result is marked DRAFT. A DRAFT pass is not an approval.
 
@@ -457,10 +456,10 @@ In manual workflows, a person approves a prompt. Explicit Autopilot auto setup a
 pdd approve prompts/place_order.prompt.md
 ```
 
-pdd shows the prompt's runtime interface in plain words: each input, result and error. Then it shows the text that you approve: the changes since the last approved version in Git, or the whole text when there is none, at most 40 lines. Then it asks `Approve prompts/place_order.prompt.md? y/n`. When you answer `y`, pdd sets the prompt to `approved` and fills its hash. Any other answer changes nothing.
+pdd shows the prompt summary and the text that you approve: the changes since the last approved version in Git, or the whole text when there is none, at most 40 lines. Then it asks `Approve prompts/place_order.prompt.md? y/n`. When you answer `y`, pdd records your approval for the prompt's prose SHA-256 (keeping plain Markdown prompts unchanged on disk). Any other answer changes nothing.
 
 - If the prompt has schema problems, pdd lists them and does not approve.
-- If an approved prompt changes, `pdd test` refuses it as stale. The agent sets it back to `draft`, and you approve it again.
+- If an approved prompt changes, ask the person to approve the updated prose again.
 
 ### 7.2 Simulate a Story
 
@@ -477,7 +476,7 @@ Use `--no-open` to get the link without opening a browser. Use `--no-wait` to re
 
 | pdd prints | What to do |
 |---|---|
-| `No tests found. The test of Story user_stories/S.md is S.json in a test or tests folder. See RUNBOOK.md §2.` | pdd also says why for each near miss: a Story with no test (with the path it expects), a `.json` file in a test folder that matches no Story, a prompt that ends in `.prompt` instead of `.prompt.md`, or a prompt with no Runtime interface block. Fix the files that it names. See RUNBOOK.md section 2. |
+| `No tests found. The test of Story user_stories/S.md is S.json in a test or tests folder. See RUNBOOK.md §2.` | pdd also says why for each near miss: a Story with no test (with the path it expects), a `.json` file in a test folder that matches no Story, or a prompt that ends in `.prompt` instead of `.prompt.md`. Fix the files that it names. See RUNBOOK.md section 2. |
 | `Your GitHub account does not have PDD interpreter access yet. Sign up at https://promptdriven.ai/login with GitHub; you can use the interpreter when your account is approved.` | PDD Cloud has not approved your GitHub account. Sign up at [promptdriven.ai/login](https://promptdriven.ai/login) with the GitHub account that `gh` uses. After the approval, access starts within 1 minute. Exit code 5. |
 | `Your GitHub login NAME is not on the PDD interpreter invite list yet. Ask the PDD team to add you.` | Ask the PDD team to add your GitHub login. Exit code 5. |
 | `PDD Cloud could not confirm your access. Try again in a minute.` | PDD Cloud did not answer. Run the same command again in a minute. Exit code 5. |

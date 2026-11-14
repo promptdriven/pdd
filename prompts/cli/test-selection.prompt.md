@@ -40,8 +40,8 @@ Export synchronous `selectTests(found, words = [], { native = false, captureSour
 ## Empty-repository explanation
 
 Export `NO_TESTS` (`'No tests found. The test of Story user_stories/S.md is S.json in a test or tests folder. See RUNBOOK.md §2.'`) and synchronous `whyNoTests(root, visible, found, ports = {})`:
-- Require `ports.allowsPath(root, path)` and `ports.hasInterfaceBlock(root, path)` (and `ports.discoverTests(root, [...visible])` when `found` is omitted), throwing a clear unbound-port `Error` when omitted.
-- Filter `visible` by `ports.allowsPath(root, path)` and sort. Collect lines in order: `found.untested` lines, `found.orphans` lines, `PDD prompts must end in .prompt.md: rename <path> to <path>.md.` for each `*.prompt` file, and `<path> has no Runtime interface block. See RUNBOOK.md §2.` for each `*.prompt.md` file where `ports.hasInterfaceBlock(root, path)` is false.
+- Require `ports.allowsPath(root, path)` (and `ports.discoverTests(root, [...visible])` when `found` is omitted), throwing a clear unbound-port `Error` when omitted.
+- Filter `visible` by `ports.allowsPath(root, path)` and sort. Collect lines in order: `found.untested` lines, `found.orphans` lines, and `PDD prompts must end in .prompt.md: rename <path> to <path>.md.` for each `*.prompt` file. Plain `*.prompt.md` files without embedded Runtime interface blocks are valid and emit no diagnostic.
 - Return at most 5 lines; when more exist, return the first 5 followed by `…and N more`. Open no JSON file.
 
 ## Dependencies
@@ -50,11 +50,11 @@ Node `node:path` (`basename`, `posix`) supplies pure path operations.
 
 ## Caller navigation
 
-[PDD to Runtime seam](runtime-seam.prompt.md) supplies these functions to [Runtime preflight](runtime-preflight.prompt.md), [Project card](agent-project.prompt.md), [Compose a product Try](product-composition.prompt.md), and [Runtime client](runtime-client.prompt.md) as ports, and binds preflight's `captureSource`, `discoverTests`, workspace path check, and interface reader when pdd callers invoke `selectTests` or `whyNoTests`.
+[PDD to Runtime seam](runtime-seam.prompt.md) supplies these functions to [Runtime preflight](runtime-preflight.prompt.md), [Project card](agent-project.prompt.md), [Compose a product Try](product-composition.prompt.md), and [Runtime client](runtime-client.prompt.md) as ports, and binds preflight's `captureSource`, `discoverTests`, and workspace path check when pdd callers invoke `selectTests` or `whyNoTests`.
 
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"native-only","status":"approved","prose_sha256":"8c96ea9952dcee3497040071d131d3658d251c0efc9d75c4b8740af17fdad6ac","reason":"Exposes synchronous host-bound callbacks for native Story capture and repository interface inspection alongside pure path-matching functions consumed across pdd and Runtime ports."}
+{"kind":"native-only","status":"approved","prose_sha256": "198f6e2574b4d61cabe8d4a09dcdd5e5cb7dff809eb4cf438aeafb6a0097a6d8","reason":"Exposes synchronous host-bound callbacks for native Story capture and repository interface inspection alongside pure path-matching functions consumed across pdd and Runtime ports."}
 ```
 </details>

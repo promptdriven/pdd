@@ -29,7 +29,7 @@
     {
       "id": "direct-hash-preservation",
       "criterion_id": "AC1",
-      "operation": "fillHashes + runCheck --fill-hash",
+      "operation": "fillHashes + runCheck stale refusal",
       "given": {
         "targets": [
           "in-bound draft current",

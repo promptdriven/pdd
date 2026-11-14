@@ -21,8 +21,8 @@ may combine them:
 | Consequential operations | Evaluation boundaries and effects that qualify a decision, including failure | Beside the affected rule, otherwise one linked compatibility reference |
 
 The public contract makes every observable output key, field or tuple position,
-its meaning, units and representation explicit. When a prompt carries an explicit
-`<details><summary>Runtime interface</summary>` schema or `$contract` reference,
+its meaning, units and representation explicit. When a prompt links a shared
+`$contract` schema,
 that schema is the single owner of the exhaustive field, type and requiredness
 inventory; prose states domain semantics, invariants, units, conditional
 presence, ordering, identity and decision rules rather than re-enumerating every
@@ -215,7 +215,7 @@ and need no stylesheet in `app-map.json`.
 Each rule has one authoritative expression. Operation references contain the
 boundaries that qualify domain decisions, without repeating the normal route.
 Signature lists contain declarations, without parallel behavior descriptions.
-When a `<details><summary>Runtime interface</summary>` block or `$contract`
+When a shared `$contract`
 schema owns the field, type and requiredness inventory, prose states domain
 rules, invariants and nonobvious field semantics instead of repeating property
 catalogs in tables. Shared errors, returns and output shapes have one definition
@@ -330,7 +330,7 @@ to need more than 3 Stories, stop and ask the person before creating them.
 Real process termination, filesystem durability (`fsync`, atomic rename),
 concurrency fences, cryptographic primitives, pure byte codecs, GPU memory
 behavior and similar physical or byte-level plumbing with no user-facing policy
-route to `"kind": "native-only"` (with a required nonblank `reason` naming the
+route to frontmatter `kind: native-only` (with a required nonblank `reason` naming the
 effect bound ports cannot fake) plus deterministic native tests (`node --test`
 or the repo's runner), with `0` Runtime Stories. A native-only declaration does
 not make a prompt check pass; it records why the check cannot run.
@@ -344,22 +344,26 @@ space, then prove byte-exact wire formats, long protocol traces and physical
 execution with native tests. Do not mark a whole codec, GPU module or OS wrapper
 native-only when it also has a useful deterministic policy contract.
 
-## Runtime interface declarations
+## Prompt format and native-only declarations
 
-A behavior prompt ends with one Runtime interface block. Omit `kind` for its full
-checkable contract; use `kind: partial` for a declared subset. An explicit
-`"kind": "full"` in a draft gets a warning at `/kind`; `pdd test --fill-hash`
-removes that redundant field from drafts while leaving approved prompts unchanged. Use `kind: native-only` only with a nonblank `reason` that names
-the effect that bound ports cannot fake (RUNBOOK §21). A checker confirms the
-reason. Approval records it; checks show not run and preserve the reason.
+A behavior prompt is plain Markdown: purpose, `## Domain decisions`, public
+operations, failure edges and `## Dependencies`. Do not write an embedded
+`Runtime interface` block; the PDD interpreter synthesizes and caches interfaces
+on demand from the prompt and its linked contracts.
 
-`pdd interface draft PROMPT` drafts a missing block locally from explicit contract
-schemas. `pdd interface draft --all` drafts the repository and lints each result.
-Unresolved facts include field questions and a `--contract FILE` recovery command.
-Use `--extend --contract FILE` to add operations while preserving existing
-declarations, or `--refresh [--contract FILE]` to reopen a stale or changed block
-as draft. File, network and program ports use RUNBOOK §21 resources. A clean local
-lint is not a Runtime check; run `pdd lint STORY` for admission.
-The automatic-check-pass approval route needs unchanged committed behavior, passing
-existing native tests and a full prompt check on current source. New behavior and
-strict approval mode require a person.
+Use YAML frontmatter at the very top of the file only when a prompt owns pure
+native plumbing with `0` Runtime Stories:
+
+```yaml
+---
+kind: native-only
+reason: <the native effect that bound ports cannot fake>
+---
+```
+
+`reason` must be a nonblank line naming the effect that bound ports cannot fake
+(RUNBOOK §21). A checker confirms the reason. `pdd approve` records prompt
+approval by prose SHA-256 in the local approval journal without editing the
+prompt file; checks show `not run` and preserve the reason. File, network and
+program ports use RUNBOOK §21 resources; run `pdd lint STORY` for Runtime
+admission. New behavior and strict approval mode require a person.

@@ -3,7 +3,7 @@ import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID,createHash} from 'node:crypto';
-import {interfaceBlocks,proseSha256} from '../src/runtime-seam.mjs';
+import {fillHashes,interfaceBlocks,proseSha256} from '../src/runtime-seam.mjs';
 import {scriptedAgent} from './helpers/factory/agent.mjs';
 import {existsSync,readdirSync,readFileSync,writeFileSync,rmSync} from 'node:fs';
 import {join} from 'node:path';
@@ -17,7 +17,7 @@ test('factory 3114: full native check retains baseline scope and blocks missing-
     put(w.cwd,`user_stories/${name}.md`,'# Value\n\n## Acceptance criteria\n\n1. The value is 2.\n');
     put(w.cwd,`tests/${name}.json`,{...scenario,story_path:`user_stories/${name}.md`});
   }
-  await w.command(['test','--fill-hash']);
+  fillHashes({root:w.cwd});
   w.git(w.cwd,'add','.');w.git(w.cwd,'commit','-qm','Synthetic full check obligations');
   put(w.cwd,'user_stories/value.md',readFileSync(join(w.cwd,'user_stories/value.md'),'utf8')+'\n');
   const checked=await w.command(['test','--json']);
@@ -43,7 +43,7 @@ for(const kind of ['missing-interface','missing-bound','missing-call-bound','rec
     put(w.cwd,'value.prompt.md',original);
     put(w.cwd,'user_stories/value.md','# Value\n\n## Acceptance criteria\n\n1. The value is 2.\n');
     put(w.cwd,'tests/value.json',scenario);
-    await w.command(['test','--fill-hash']);
+    fillHashes({root:w.cwd});
     const repaired=readFileSync(join(w.cwd,'value.prompt.md'),'utf8');
     if(kind==='missing-interface')put(w.cwd,'value.prompt.md','# Missing interface\n');
     else {

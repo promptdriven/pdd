@@ -4,8 +4,7 @@ import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { join } from 'node:path';
-import { runCheck } from '../../src/runtime-seam.mjs';
-import { interfaceBlocks } from '../../src/runtime-seam.mjs';
+import { fillHashes, interfaceBlocks, runCheck } from '../../src/runtime-seam.mjs';
 import { PLACE, TOKEN, fakeRuntime, filesUnder, harbor, portsFor, root } from './runtime-fake.mjs';
 
 const START = Date.parse('2026-10-27T16:27:47Z');
@@ -257,20 +256,20 @@ test('a lint report link that echoes the account token is never printed', async 
   assert.equal(result.json.report_url, null);
 });
 
-test('the documented one-call shell line fills draft hashes, preflights and checks once', async t => {
+test('the documented one-call shell line preflights and checks a draft once', async t => {
   const setup = harbor(t, repo => {
     const path = join(repo, PLACE);
     writeFileSync(path, readFileSync(path, 'utf8').replace('"status": "approved"', '"status": "draft"').replace(/"prose_sha256": "[a-f0-9]+"/, '"prose_sha256": ""'));
   });
+  fillHashes({ root: setup.repo });
   const fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
   const bin = join(setup.sandbox, 'bin'); mkdirSync(bin);
   const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
   writeFileSync(join(bin, 'pdd'), `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(join(root, 'bin/pdd.mjs'))} "$@"\n`, { mode: 0o700 });
   writeFileSync(join(bin, 'gh'), `#!/bin/sh\nif [ "$1" = auth ]; then printf '%s\\n' ${quote(TOKEN)}; else printf 'octo 4242\\n'; fi\n`, { mode: 0o700 });
-  const result = await promisify(execFile)('bash', ['-c', 'pdd test --fill-hash && pdd test --files place-order && pdd test place-order'], {
+  const result = await promisify(execFile)('bash', ['-c', 'pdd test --files place-order && pdd test place-order'], {
     cwd: setup.repo, env: { ...process.env, HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin, PATH: `${bin}:${process.env.PATH}`, CI: '1' }, timeout: 15_000,
   });
-  assert.match(result.stdout, /Filled prose_sha256/);
   assert.match(result.stdout, /files, .*bytes/);
   assert.match(result.stdout, /Prompt tests \(place-order\) \(DRAFT\): ✓/);
   assert.deepEqual(commands(fake), ['lint', 'check']);
