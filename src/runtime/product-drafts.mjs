@@ -1,4 +1,4 @@
-// Generated from prompts/cli/product-drafts.prompt.md (sha256: 4e6343a6db89c1ff3cb74faeee4ae0107dd63d1a62d846fab188e60a3ea95d29).
+// Generated from prompts/cli/product-drafts.prompt.md (sha256: 163123fbd8079c4de670fb59832263b465231a0548d74b83a6bdbb6198016b8b).
 import { execFileSync } from 'node:child_process';
 import { readdirSync, realpathSync } from 'node:fs';
 import { join, posix } from 'node:path';

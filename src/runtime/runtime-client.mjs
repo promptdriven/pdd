@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 7ee5fc6a1bc717c02d7be2e57cca5a4fe9f4bb1c7a74d4c58fcf625e7566bcda).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: b6b6c2bca72fb2e9d26550225d8f90d3d7fe52d401760f7234a8f7a74448e03a).
 import { withProductDrafts } from './product-drafts.mjs';
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
