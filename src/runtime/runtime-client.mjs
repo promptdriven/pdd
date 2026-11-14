@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 7ee5fc6a1bc717c02d7be2e57cca5a4fe9f4bb1c7a74d4c58fcf625e7566bcda).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: a039a40fe9a477fea91bd1a2aba47207713a4c2fcebb3c2644131f0be8aee702).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
@@ -1018,9 +1018,15 @@ export async function checkRuntimeHealth({ env = process.env } = {}, givenPorts 
   if (reply.status >= 500 || [408, 429].includes(reply.status)) return { state: 'unavailable', detail: `HTTP ${reply.status}` };
   if (reply.status === 200 && isObject(reply.json)) {
     const until = Date.parse(reply.json.maintenance?.until);
-    // A maintenance answer names its end and reason, so the Autopilot core can wait for it (#3241).
-    return Number.isFinite(until) && until > ports.now() ? { state: 'unavailable', detail: 'maintenance', until: new Date(until).toISOString(), reason: cleanText(reply.json.maintenance?.reason, [token]) || null }
-      : { state: 'healthy', detail: 'HTTP 200' };
+    const retryAfter = reply.json.maintenance?.retry_after ?? reply.json.retry_after;
+    // A maintenance answer names its end, retry-after and reason, so the Autopilot core can wait for it (#3241, #865).
+    return Number.isFinite(until) && until > ports.now() ? {
+      state: 'unavailable',
+      detail: 'maintenance',
+      until: new Date(until).toISOString(),
+      reason: cleanText(reply.json.maintenance?.reason, [token]) || null,
+      ...(Number.isSafeInteger(retryAfter) && retryAfter > 0 ? { retry_after: retryAfter } : {}),
+    } : { state: 'healthy', detail: 'HTTP 200' };
   }
   // An older interpreter without the capacity read still answered with JSON; a 404 page that is not JSON is a wrong address.
   if (reply.status === 404 && isObject(reply.json)) return { state: 'healthy', detail: 'HTTP 404' };
@@ -1117,8 +1123,9 @@ function capacityHistoryHasEvidence(context, row) {
 function capacityHistorySafe(context, row) {
   if (!context.store || !context.folder) return false;
   const restartOrigin = structuredRestartOrigin(context, row);
-  let found = false;
-  for (const id of row.request_ids ?? []) {
+  const ids = row.request_ids ?? [], lastId = ids.at(-1);
+  let found = false, openLatest = false;
+  for (const id of ids) {
     if (id === restartOrigin) continue;
     const admission = context.store.read(join(context.folder, `${id}.admission.json`));
     const latest = context.store.read(join(context.folder, `${id}.json`));
@@ -1127,10 +1134,16 @@ function capacityHistorySafe(context, row) {
     const terminalHistory = history.filter(answer => accountingEnd(answer, id));
     const firstTerminal = history.findIndex(answer => accountingEnd(answer, id));
     const progressConflict = history.some((answer, index) => !accountingEnd(answer, id)
-      && (!['queued', 'running'].includes(answer?.state) || index > firstTerminal));
+      && (!['queued', 'running'].includes(answer?.state) || (firstTerminal !== -1 && index > firstTerminal)));
     const admissionCandidate = isAdmissionCapacityRecord(admission) && admissionCapacityCandidate(admission);
     const answerCandidates = terminalHistory.filter(answer => checkCapacityCandidate(answer));
-    if (!admissionCandidate && !answerCandidates.length) continue;
+    if (!admissionCandidate && !answerCandidates.length) {
+      if (id === lastId && !isAdmissionCapacityRecord(admission) && !terminalHistory.length && !progressConflict
+        && history.length > 0 && history.every(answer => sameJob(answer, id, 'check') && ['queued', 'running'].includes(answer?.state))) {
+        openLatest = true;
+      }
+      continue;
+    }
     found = true;
     if (admissionCandidate && (!admissionMatches(admission, id) || !accountingProof(admission) || history.some(answer => !checkCapacityCandidate(answer)))) return false;
     if (answerCandidates.some(answer => !accountingProof(answer))) return false;
@@ -1138,8 +1151,10 @@ function capacityHistorySafe(context, row) {
   }
   // A durable structured restart is the one bounded exception. Its unknown
   // usage stays in the published totals, but does not block a later zero-work
-  // capacity receipt from continuing that replacement.
-  const accountingRow = restartOrigin ? { ...row, request_ids: row.request_ids.filter(id => id !== restartOrigin) } : row;
+  // capacity receipt from continuing that replacement. An open in-flight latest
+  // attempt also stays non-uncertain while running; its final receipt settles totals.
+  const excluded = new Set([restartOrigin, openLatest ? lastId : null].filter(Boolean));
+  const accountingRow = excluded.size ? { ...row, request_ids: ids.filter(id => !excluded.has(id)) } : row;
   return found && accumulatedAccounting(context, accountingRow).accounting_complete === true;
 }
 function structuredRestartOrigin(context, row) {
@@ -1337,6 +1352,36 @@ function queueProgress(context, answer) {
     if (context.queueLines.get(answer.id) !== message) { line(context.ports.stderr, message); context.queueLines.set(answer.id, message); }
   }
 }
+function normalizeMaintenance(raw, now, secrets = []) {
+  if (!isObject(raw)) return null;
+  const until = typeof raw.until === 'string' ? cleanText(raw.until, secrets) : '';
+  const untilMs = Date.parse(until);
+  if (!Number.isFinite(untilMs) || untilMs <= now) return null;
+  const remaining = Math.max(1, Math.ceil((untilMs - now) / 1000));
+  return { until, reason: cleanText(raw.reason, secrets) || null, retry_after: Math.max(5, Math.min(3600, remaining)) };
+}
+function maintenanceFromReply(reply, fallbackWaitMs, now, secrets = []) {
+  const details = isObject(reply.json?.maintenance) ? reply.json.maintenance
+    : isObject(reply.json?.error?.details) ? reply.json.error.details : {};
+  const normalized = normalizeMaintenance(details, now, secrets);
+  if (normalized) return normalized;
+  const seconds = Number.isSafeInteger(details.retry_after) && details.retry_after > 0
+    ? Math.min(3600, details.retry_after)
+    : Math.max(5, Math.min(3600, Math.ceil(fallbackWaitMs / 1000)));
+  return { until: new Date(now + seconds * 1000).toISOString(), reason: cleanText(details.reason, secrets) || null, retry_after: seconds };
+}
+function activeMaintenance(context) {
+  return context?.maintenance ? normalizeMaintenance(context.maintenance, context.ports.now(), context.secrets) : null;
+}
+function maintenanceDelay(record, now) {
+  if (record?.error?.code !== 'maintenance') return null;
+  const details = isObject(record.error?.details) ? record.error.details : isObject(record.maintenance) ? record.maintenance : {};
+  if (details.retryable === false) return null;
+  const until = Date.parse(details.until);
+  if (Number.isFinite(until) && until > now) return until - now;
+  const seconds = details.retry_after ?? record.retry_after;
+  return (typeof seconds === 'number' && Number.isFinite(seconds) && seconds > 0 ? Math.min(3600, Math.max(1, seconds)) : 5) * 1000;
+}
 const localMaintenanceEnd = until => new Intl.DateTimeFormat(undefined, {
   hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short',
 }).format(new Date(until));
@@ -1350,8 +1395,11 @@ function showMaintenance(context, details) {
 }
 function maintenanceNotice(context, verdict, reply) {
   const details = reply.json?.error?.details ?? reply.json?.maintenance ?? {};
-  const until = Date.parse(details.until), now = context.ports.now();
-  context.admissionMaintenance = { details, end: Math.max(now + verdict.wait, Number.isFinite(until) ? until : now) };
+  const now = context.ports.now();
+  const info = maintenanceFromReply(reply, verdict.wait, now, context.secrets);
+  const until = Date.parse(info.until);
+  context.admissionMaintenance = { details: { ...details, ...info }, end: Math.max(now + verdict.wait, Number.isFinite(until) ? until : now) };
+  context.maintenance = info;
   verdict.wait = Math.min(60_000, context.admissionMaintenance.end - now);
   context.waitCause = 'maintenance';
   showMaintenance(context, details);
@@ -1443,12 +1491,13 @@ async function capacityReady(context, deadline, busyRow = null) {
       context.capacityWarning = true;
       line(context.ports.stderr, 'Warning: interpreter capacity could not be read; continuing with ordinary interpreter admission.');
     }
+    const now = context.ports.now();
     const maintenance = reply.status === 200 ? reply.json?.maintenance : null, until = Date.parse(maintenance?.until);
     const pending = context.admissionMaintenance;
-    const future = Number.isFinite(until) && until > context.ports.now();
+    const future = Number.isFinite(until) && until > now;
     const end = Math.max(future ? until : 0, pending?.end ?? 0);
-    if (end <= context.ports.now()) {
-      context.admissionMaintenance = null; context.maintenanceLine = null;
+    if (end <= now) {
+      context.admissionMaintenance = null; context.maintenanceLine = null; context.maintenance = null;
       if (busyRow) {
         const now = context.ports.now(), counts = reply.status === 200 ? reply.json?.slots?.check : null;
         const usable = Number.isSafeInteger(counts?.running) && counts.running >= 0
@@ -1465,6 +1514,8 @@ async function capacityReady(context, deadline, busyRow = null) {
       return true;
     }
     context.waitCause = 'maintenance';
+    context.maintenance = future ? normalizeMaintenance(maintenance, now, context.secrets)
+      : normalizeMaintenance(pending?.details, now, context.secrets) ?? context.maintenance ?? null;
     if (future) showMaintenance(context, maintenance); else if (pending) showMaintenance(context, pending.details);
     if (!await waitBudget(context, Math.min(60_000, end - context.ports.now()), deadline)) return false;
     refresh = true;
@@ -1503,7 +1554,11 @@ function judgePost(reply, id, command, secrets) {
   if (reply.status === 503 && error?.code === 'maintenance' && reply.json?.dispatch === 'not_started' && safeAdmission(reply)) {
     if (command === 'check' && (!admissionMatches(reply.json, id) || !accountingProof(reply.json)))
       return { kind: 'unknown', why: 'Check maintenance accounting is incomplete or conflicting.', admission: reply.json, capacity_uncertain: true };
-    return { kind: 'busy', wait: retryAfter(reply.headers), admission: reply.json, maintenance: true };
+    const bodyRetry = error.details?.retry_after ?? reply.json?.maintenance?.retry_after ?? reply.json?.retry_after;
+    const wait = typeof bodyRetry === 'number' && Number.isFinite(bodyRetry) && bodyRetry > 0
+      ? Math.min(3600, Math.max(1, bodyRetry)) * 1000
+      : retryAfter(reply.headers);
+    return { kind: 'busy', wait, admission: reply.json, maintenance: true };
   }
   if (command === 'lint' && reply.status === 503 && error?.code === 'lint-queue-full' && lintQueueWait(error) !== null && safeAdmission(reply)) return { kind: 'busy', wait: capacityDelay(error, reply.headers), admission: reply.json };
   if (['check', 'try'].includes(command) && [429, 503].includes(reply.status) && reply.json?.dispatch === 'not_started' && safeAdmission(reply)) {
@@ -1938,7 +1993,8 @@ function saveLocalNativeResult(context, rows, intent, problems = []) {
 
 function batchRecord(context) {
   const { batch, origin, root, identity, capture, rows, lint, warnings } = context;
-  return { version: 1, batch, origin, root, check_plan: context.checkPlan ?? null, ...(context.checkSelection ? {check_selection:context.checkSelection,baseline_report:context.baselineReport} : {}), head: context.head, login: identity.login, user_id: identity.userId,
+  const maintenance = activeMaintenance(context);
+  return { version: 1, batch, origin, root, ...(maintenance ? { maintenance, retry_after: maintenance.retry_after } : {}), check_plan: context.checkPlan ?? null, ...(context.checkSelection ? {check_selection:context.checkSelection,baseline_report:context.baselineReport} : {}), head: context.head, login: identity.login, user_id: identity.userId,
     source_sha256: capture.sha256, files: capture.files.map(file => file.path), bytes: capture.bytes, timeout_min: context.timeoutMin,
     ...(context.singleAttempt ? {single_attempt:true} : {}),
     source_selection: context.sourceSelection ?? {tests:sentTests(rows),exclude_fixture_projects:context.excludeFixtureProjects === true},
@@ -2534,6 +2590,11 @@ function printResult(context, rows, extra = {}) {
     summary.check_selection = context.checkSelection; summary.baseline_report = context.baselineReport;
     summary.warnings = [...new Set([...summary.warnings, AFFECTED_DISCLAIMER])];
   }
+  const maintenance = activeMaintenance(context);
+  if (maintenance) {
+    summary.maintenance = maintenance;
+    summary.retry_after = maintenance.retry_after;
+  }
   if (context.folder) context.store.write(join(context.folder, 'summary.json'), summary);
   if (context.batch && rows.some(row => row.can_retry)) line(ports.stderr, `Retry only unstarted checks with: pdd test --retry ${context.batch}`);
   if (context.readStop) line(ports.stderr, context.readStop);
@@ -2842,7 +2903,8 @@ function printLintResult(context, rows, problems, warnings = [], answer = null) 
   const reportedCoverage = answer?.result?.capabilities_complete ?? answer?.result?.report?.lint?.capabilities_complete;
   const capabilityCoverage = typeof reportedCoverage === 'boolean' ? reportedCoverage : null;
   const reportUrl = validLink(cleanText(answer?.report_url, context.secrets), context.origin, 'report');
-  const result = { batch, repo: root, exit_code: exitCode, lint_state: resultOverall(rows).state, ...resultOverall(rows), report_url: reportUrl, summary_line: summary, capabilities_complete: capabilityCoverage, coverage: context.coverage, problems,
+  const maintenance = activeMaintenance(context);
+  const result = { batch, repo: root, exit_code: exitCode, lint_state: resultOverall(rows).state, ...resultOverall(rows), ...(maintenance ? { maintenance, retry_after: maintenance.retry_after } : {}), report_url: reportUrl, summary_line: summary, capabilities_complete: capabilityCoverage, coverage: context.coverage, problems,
     rows: rows.map(row => ({ story: row.story, title: row.title, test: row.test, ...(row.native_only?.length ? {native_only:row.native_only,note:row.note} : {}), ...resultOutcome(row), refusals: row.refusals, ...(row.unsent?{unsent:true}:{}), ...(row.not_checked?.length?{not_checked:row.not_checked}:{}), call_preflight: row.call_preflight ?? null, binding_plan: row.binding_plan, ...(row.binding_plan?{binding_diagnostics:bindingRefusals(row.binding_plan,row.compatibility)}:{}), compatibility: row.compatibility, client_advice: row.client_advice })), warnings: [...new Set([...(context.warnings ?? []), ...(context.unmatched ?? [])])] };
   result.call_preflight_context = answer?.result?.call_preflight_context ?? answer?.result?.report?.lint?.call_preflight_context ?? null;
   result.call_preflight_requested_cap = context.lint?.selected_cap ?? null;
@@ -3079,7 +3141,7 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
     allowSavedLocalReadFallback: !quiet && isLocalSavedBatchRead(context, saved),
   });
   if (identity.login !== saved.login) throw new Stop(5, `These runs belong to ${saved.login}. Run: gh auth switch -u ${saved.login}`);
-  Object.assign(context, { singleAttempt: context.singleAttempt || saved.single_attempt === true, allowMissingInterfaces: saved.lazy_interfaces === true, excludeFixtureProjects: saved.exclude_fixture_projects === true, batch: name, origin: saved.origin, sourceSelection:saved.source_selection, nativeSource:saved.native_source, coverage: saved.coverage, identity, intent: saved.intent, secrets: [identity.token], warnings: saved.warnings ?? [],
+  Object.assign(context, { singleAttempt: context.singleAttempt || saved.single_attempt === true, allowMissingInterfaces: saved.lazy_interfaces === true, excludeFixtureProjects: saved.exclude_fixture_projects === true, batch: name, origin: saved.origin, sourceSelection:saved.source_selection, nativeSource:saved.native_source, coverage: saved.coverage, maintenance: saved.maintenance ?? null, identity, intent: saved.intent, secrets: [identity.token], warnings: saved.warnings ?? [],
     capture: { sha256: saved.source_sha256, files: saved.files.map(path => ({ path })), bytes: saved.bytes, stories:saved.contract_snapshots }, lint: saved.lint, head: saved.head, startedAt: Date.parse(saved.created_at) });
   runtimeOrigin({ PDD_RUNTIME_URL: saved.origin });
   context.auth = authSession({
@@ -3128,7 +3190,10 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
     row.phase = 'server';
     const admission = store.read(join(context.folder, `${id}.admission.json`));
     if (admissionCapacityCandidate(admission)) {
-      const wait = capacityDelay(admission.error);
+      if (admission?.error?.code === 'maintenance') {
+        context.maintenance ??= normalizeMaintenance(admission.maintenance ?? admission.error.details, ports.now(), context.secrets);
+      }
+      const wait = capacityDelay(admission.error) ?? maintenanceDelay(admission, ports.now());
       if (wait !== null && accountingProof(admission) && capacityRetryAllowed(context, row)) { markBusy(context, row, wait); return; }
       markCapacityUnknown(context, row);
     }

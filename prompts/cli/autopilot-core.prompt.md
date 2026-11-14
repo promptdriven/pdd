@@ -1458,7 +1458,8 @@ runs until its end):
    is sent for that head. Nothing to send:
    step 2 applies as usual. Else, when everything above is green, the job holds this
    step before the merge lane:
-   - **Wait.** At most every 10 minutes it reads the free interpreter health
+   - **Wait.** At most every 10 minutes (or sooner when a known future `until` arrives,
+     with at least a 5-second floor) it reads the free interpreter health
      (`checkRuntimeHealth`: one `GET /v1/capacity`, no check, no AI call). While the
      answer is maintenance, the job waits: it writes no new line and files no report,
      it holds no slot (it runs no process), and each tick counts as progress, so the
