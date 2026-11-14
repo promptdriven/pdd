@@ -5,7 +5,7 @@ The `pdd test --files` usage form also accepts optional `--json` for its manifes
 
 The public command catalog also includes `pdd autopilot off`, `pdd autopilot observe`, `pdd autopilot auto`, `pdd autopilot trust <name>...`, and `pdd autopilot untrust <name>`. Expose these forms in help and completion; reject missing or extra operands through the existing parser contract.
 
-Own `src/command-catalog.mjs`; export only `PUBLIC_COMMAND_ROUTES`, `PUBLIC_COMMAND_IDS`, `PUBLIC_COMMAND_MANIFEST`, `NAMES` ([Names](#names)), `PUBLIC_HELP_TEXT` ([Help text](#help-text)) and `BUNDLED_WORKFLOW_NAMES` (feature, bug, small-change, product). Catalog the complete small alpha surface: root help, --version (also -V), -VV, completion bash|zsh, workflow list [--json] and setup (`pdd setup [--yes]`, local `setup`, no operands, optional flag `--yes` selecting safe defaults without questions; its help says that it installs the PDD skills for Codex and Claude if they are missing, adds the short PDD block to CLAUDE.md, else AGENTS.md, and that repeat setup keeps an existing Autopilot mode). Each route has stable id, exact prefix, local disposition, operand/option specs and plain help forms. Expose no excluded command, private schema/type, service flag or hosted execution operation. Help, parser and completion share this one authority.
+Own `src/command-catalog.mjs`; export only `PUBLIC_COMMAND_ROUTES`, `PUBLIC_COMMAND_IDS`, `PUBLIC_COMMAND_MANIFEST`, `NAMES` ([Names](#names)), `PUBLIC_HELP_TEXT` ([Help text](#help-text)) and `BUNDLED_WORKFLOW_NAMES` (feature, bug, small-change, product). Catalog the complete small alpha surface: root help, --version (also -V), -VV, completion bash|zsh, workflow list [--json] and setup (`pdd setup [--yes] [--no-pair] [--pair-code CODE] [--check] [--json]`, local `setup`, no operands; `--json` requires `--check`, `--check` excludes `--yes`, `--no-pair` and `--pair-code`, and `--pair-code` excludes `--yes` and `--no-pair`; its help says that it installs the PDD skills for Codex and Claude if they are missing, adds the short PDD block to CLAUDE.md, else AGENTS.md, and that repeat setup keeps an existing Autopilot mode). Each route has stable id, exact prefix, local disposition, operand/option specs and plain help forms. Expose no excluded command, private schema/type, service flag or hosted execution operation. Help, parser and completion share this one authority.
 
 Catalog `dependencies prepare` (local `dependencies-prepare`, optional text `--issue`), `dependencies complete` (local `dependencies-complete`, text `--input`), and `workflow yield` (local `workflow-yield`, run reference). Show their forms `pdd dependencies prepare [--issue N]`, `pdd dependencies complete --input -`, and `pdd workflow yield N`.
 
@@ -240,7 +240,7 @@ The ordered help-form list consists of the lines below in their displayed order,
   pdd lint --local [STORY...] [--json]  Check linked SVG layout parts locally with warning diagnostics and 0 AI/network calls.
   pdd files [--json]  List prompts, Runtime interfaces, Stories, tests and refusal reasons; no network calls.
   pdd owner PATH... [--json]  Show which prompt owns each file, from pdd-bindings.json, Generated from headers and prompt opening sentences; reads local files only.
-  pdd approve PROMPT [--said WORDS]  Approve one prompt with the person's chat words in easy mode, or show its interface/text changes and ask terminal y/N; strict mode requires a person terminal.
+  pdd approve PROMPT [--said WORDS]  Approve one prompt with the person's chat words in easy mode, or show its runtime interface and text changes and ask terminal y/N; strict mode requires a person terminal.
   pdd simulate [STORY] [--max-calls N] [--tab call|screen|terminal|world] [--app-map PATH] [--new] [--no-open] [--no-wait] [--agent NAME]  Open the Story in the PDD Simulator: make a link on the PDD interpreter with your gh login and open it in your browser; it ends in 24 hours. Short form: pdd sim. A new simulation defaults to 400 calls; --max-calls accepts 1 to 1000. With terminal stdout or explicit --agent, it stays running to connect your own agent; otherwise it reads saved cases once and returns. --agent selects a configured name or a default Codex, Claude or Gemini; --no-wait skips the bridge. In a terminal it adds each test saved in the Simulator to the story's test file.
   pdd simulate [STORY] --cli [--shell] [--max-calls N] [--new]  Run your program in your terminal through a Simulator session; prints a PATH line, or opens a shell with --shell.
   pdd simulate [STORY] --serve [PORT] [--max-calls N] [--new]  Serve real HTTP requests through your Simulator session on localhost (default port 8080).
@@ -255,7 +255,9 @@ The ordered help-form list consists of the lines below in their displayed order,
   pdd autopilot auto  Set the repository Autopilot mode to auto.
   pdd autopilot trust NAME...  Add explicitly trusted GitHub names.
   pdd autopilot untrust NAME  Remove an explicitly trusted GitHub name.
-  pdd setup [--yes]  Install the PDD skills for Codex and Claude if they are missing, and add the short PDD block to CLAUDE.md, else AGENTS.md. Offer detected Codex, Claude Code and Gemini MCP registrations after showing exact config changes and one y/N question. Offer Autopilot settings in a Git repository with a terminal; keep an existing mode on repeat setup. Without a terminal or with --yes, use safe defaults without questions.
+  pdd pair status --json  Read pending pairing and paired public keys.
+  pdd pair offer --message FILE  Deliver a signed phone offer to waiting setup.
+  pdd setup [--yes] [--no-pair] [--pair-code CODE] [--check] [--json]  Install the PDD skills for Codex and Claude if they are missing, and add the short PDD block to CLAUDE.md, else AGENTS.md. Offer detected Codex, Claude Code and Gemini MCP registrations after showing exact config changes and one y/N question. Offer Autopilot settings in a Git repository with a terminal; keep an existing mode on repeat setup. Without a terminal or with --yes, use safe defaults without questions.
 ```
 
 
@@ -375,6 +377,8 @@ options. Both are exact single tokens, not repeatable or clustered flags.
 Preserve ordinary local help behavior; a help request never reads metadata.
 Do not interpret `-V -V`, `-VVV`, `--version --verbose`, extra operands or mixed
 version flags as detailed version. Existing parser refusal policy applies.
+
+The catalog also admits `pdd pair status --json` and `pdd pair offer --message FILE`, with no other operands or flags. Setup and pair flags are discoverable through help and completion.
 
 ## Dependencies
 

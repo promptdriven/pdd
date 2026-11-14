@@ -1,0 +1,812 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/setup-readiness.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "`pdd setup --check --json` prints `{\"ready\":true}` and exits 0 when the current project has its current PDD block and its Git root ignores `.pdd/` or has a respected negation that setup preserves."
+    },
+    {
+      "id": "AC2",
+      "text": "`pdd setup --check --json` prints `{\"ready\":false}` and exits 0 when the block or ignore handling still needs setup; checking changes no file and starts no setup, authentication, agent status or network work."
+    },
+    {
+      "id": "AC3",
+      "text": "`pdd setup --check` prints `Ready` or `Not ready` for the same conditions; `--json` without `--check` and `--check` combined with `--yes`, `--no-pair` or `--pair-code` exit 2 before setup effects."
+    }
+  ],
+  "initial_world": {
+    "ready": 0,
+    "interpreter_fixture": {
+      "origin": 0,
+      "token": 0,
+      "metadata": 0
+    },
+    "counters": {
+      "unused-agents-checkWorkflowAgents": 0,
+      "diagnostics": 0,
+      "unused-dispatch-prove": 0,
+      "unused-dispatch-requestUptake": 0,
+      "unused-dispatch-startRun": 0,
+      "package": 0,
+      "unused-setup-setupAgentMcp": 0,
+      "unused-setup-setupProject": 0,
+      "unused-setup-setupSkills": 0,
+      "skills": 0
+    },
+    "unused2661": {
+      "pairing-pairOffer": 0,
+      "pairing-pairStatus": 0,
+      "pairing-runSetupPairing": 0
+    },
+    "unexpected_launcher_calls": []
+  },
+  "simulation": {
+    "setup.checkProjectReady": {
+      "action": "fixture.lookup",
+      "world_pointer": "/ready",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "cwd": "/fixture/project",
+            "packageRoot": "/fixture/pdd"
+          },
+          "result": {
+            "ready": true
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "cwd": "/fixture/project",
+            "packageRoot": "/fixture/pdd"
+          },
+          "result": {
+            "ready": false
+          }
+        },
+        {
+          "call_index": 3,
+          "args": {
+            "cwd": "/fixture/project",
+            "packageRoot": "/fixture/pdd"
+          },
+          "result": {
+            "ready": true
+          }
+        },
+        {
+          "call_index": 4,
+          "args": {
+            "cwd": "/fixture/project",
+            "packageRoot": "/fixture/pdd"
+          },
+          "result": {
+            "ready": false
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "origin.resolve": {
+      "action": "fixture.lookup",
+      "world_pointer": "/interpreter_fixture/origin",
+      "cases": [
+        {
+          "args": {
+            "env": {}
+          },
+          "call_index": 1,
+          "result": {
+            "valid": false,
+            "origin": ""
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "credentials.readToken": {
+      "action": "fixture.lookup",
+      "world_pointer": "/interpreter_fixture/token",
+      "cases": [
+        {
+          "args": {
+            "timeoutMs": 2000
+          },
+          "call_index": 1,
+          "result": {
+            "token": ""
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "metadata.get": {
+      "action": "fixture.lookup",
+      "world_pointer": "/interpreter_fixture/metadata",
+      "cases": [
+        {
+          "args": {
+            "origin": "https://interpreter.invalid",
+            "path": "/v1/version",
+            "method": "GET",
+            "token": "synthetic",
+            "timeoutMs": 10000,
+            "redirect": "manual"
+          },
+          "call_index": 1,
+          "result": {
+            "status": 404,
+            "body": ""
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "agents.checkWorkflowAgents": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/unused-agents-checkWorkflowAgents",
+      "cases": [
+        {
+          "args": {
+            "cwd": "fixture",
+            "env": {}
+          },
+          "call_index": 1,
+          "result": {
+            "ok": false,
+            "agent": "codex",
+            "message": "fixture"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "autopilotLauncher.runAutopilotLauncher": {
+      "action": "port.write",
+      "world_pointer": "/unexpected_launcher_calls",
+      "result_template": {
+        "exitCode": 255,
+        "message": "Unexpected Autopilot dispatch in a non-Autopilot scenario"
+      }
+    },
+    "diagnostics.pathDiagnostic": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/diagnostics",
+      "cases": [
+        {
+          "args": {
+            "packageRoot": ".",
+            "cwd": ".",
+            "env": {
+              "HOME": "/home/fixture"
+            },
+            "mode": "version"
+          },
+          "call_index": 1,
+          "result": {
+            "lines": [
+              "Synthetic PATH conflict warning."
+            ]
+          }
+        },
+        {
+          "args": {
+            "packageRoot": ".",
+            "cwd": ".",
+            "env": {
+              "HOME": "/home/fixture"
+            },
+            "mode": "version"
+          },
+          "call_index": 2,
+          "result": {
+            "lines": [
+              "Synthetic PATH conflict warning."
+            ]
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "dispatch.prove": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/unused-dispatch-prove",
+      "cases": [
+        {
+          "args": {
+            "ref": "fixture",
+            "test": "fixture",
+            "expect": "fixture",
+            "cwd": "fixture"
+          },
+          "call_index": 1,
+          "result": {
+            "exitCode": 0,
+            "message": "fixture"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "dispatch.requestUptake": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/unused-dispatch-requestUptake",
+      "cases": [
+        {
+          "args": {
+            "requestId": "fixture",
+            "summary": "fixture",
+            "cwd": "fixture"
+          },
+          "call_index": 1,
+          "result": {
+            "exitCode": 0,
+            "message": "fixture"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "dispatch.startRun": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/unused-dispatch-startRun",
+      "cases": [
+        {
+          "args": {
+            "input": {
+              "name": "fixture",
+              "issue": "fixture",
+              "agent": "codex",
+              "cwd": "fixture",
+              "packageRoot": "fixture"
+            },
+            "env": {}
+          },
+          "call_index": 1,
+          "result": {
+            "exitCode": 0,
+            "message": "fixture"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "package.readVersion": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/package",
+      "cases": [
+        {
+          "args": {
+            "packageRoot": "."
+          },
+          "call_index": 1,
+          "result": {
+            "ok": true,
+            "version": "0.1.28"
+          }
+        },
+        {
+          "args": {
+            "packageRoot": "."
+          },
+          "call_index": 2,
+          "result": {
+            "ok": true,
+            "version": "0.1.28"
+          }
+        },
+        {
+          "args": {
+            "packageRoot": "."
+          },
+          "call_index": 3,
+          "result": {
+            "ok": true,
+            "version": "0.1.28"
+          }
+        },
+        {
+          "args": {
+            "packageRoot": "."
+          },
+          "call_index": 4,
+          "result": {
+            "ok": true,
+            "version": "0.1.28"
+          }
+        },
+        {
+          "args": {
+            "packageRoot": "."
+          },
+          "call_index": 5,
+          "result": {
+            "ok": true,
+            "version": "0.1.28"
+          }
+        },
+        {
+          "args": {
+            "packageRoot": "."
+          },
+          "call_index": 6,
+          "result": {
+            "ok": true,
+            "version": "0.1.28"
+          }
+        },
+        {
+          "args": {
+            "packageRoot": "."
+          },
+          "call_index": 7,
+          "result": {
+            "ok": true,
+            "version": "0.1.28"
+          }
+        },
+        {
+          "args": {
+            "packageRoot": "."
+          },
+          "call_index": 8,
+          "result": {
+            "ok": true,
+            "version": "0.1.28"
+          }
+        },
+        {
+          "args": {
+            "packageRoot": "."
+          },
+          "call_index": 9,
+          "result": {
+            "ok": true,
+            "version": "0.1.28"
+          }
+        },
+        {
+          "args": {
+            "packageRoot": "."
+          },
+          "call_index": 10,
+          "result": {
+            "ok": true,
+            "version": "0.1.28"
+          }
+        },
+        {
+          "args": {
+            "packageRoot": "."
+          },
+          "call_index": 11,
+          "result": {
+            "ok": true,
+            "version": "0.1.28"
+          }
+        },
+        {
+          "args": {
+            "packageRoot": "."
+          },
+          "call_index": 12,
+          "result": {
+            "ok": true,
+            "version": "0.1.28"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "pairing.pairOffer": {
+      "action": "fixture.lookup",
+      "world_pointer": "/unused2661/pairing-pairOffer",
+      "cases": [
+        {
+          "args": {
+            "cwd": "fixture",
+            "env": {},
+            "messageFile": "fixture"
+          },
+          "call_index": 1,
+          "result": {
+            "exitCode": 0,
+            "message": ""
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "pairing.pairStatus": {
+      "action": "fixture.lookup",
+      "world_pointer": "/unused2661/pairing-pairStatus",
+      "cases": [
+        {
+          "args": {
+            "cwd": "fixture",
+            "env": {}
+          },
+          "call_index": 1,
+          "result": {
+            "exitCode": 0,
+            "message": ""
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "pairing.runSetupPairing": {
+      "action": "fixture.lookup",
+      "world_pointer": "/unused2661/pairing-runSetupPairing",
+      "cases": [
+        {
+          "args": {
+            "cwd": "fixture",
+            "env": {},
+            "interactive": true
+          },
+          "call_index": 1,
+          "result": {
+            "exitCode": 0,
+            "message": ""
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "setup.setupAgentMcp": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/unused-setup-setupAgentMcp",
+      "cases": [
+        {
+          "args": {
+            "env": {},
+            "packageRoot": "fixture"
+          },
+          "call_index": 1,
+          "result": {
+            "exitCode": 0
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "setup.setupProject": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/unused-setup-setupProject",
+      "cases": [
+        {
+          "args": {
+            "cwd": "fixture",
+            "packageRoot": "fixture"
+          },
+          "call_index": 1,
+          "result": {
+            "file": "fixture",
+            "changed": false
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "setup.setupSkills": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/unused-setup-setupSkills",
+      "cases": [
+        {
+          "args": {
+            "packageRoot": "fixture",
+            "cwd": "fixture",
+            "home": "fixture"
+          },
+          "call_index": 1,
+          "result": {
+            "results": []
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "skills.findSkills": {
+      "action": "fixture.lookup",
+      "world_pointer": "/counters/skills",
+      "cases": [
+        {
+          "args": {
+            "packageRoot": ".",
+            "cwd": ".",
+            "home": "/home/fixture"
+          },
+          "call_index": 1,
+          "result": {
+            "results": []
+          }
+        },
+        {
+          "args": {
+            "packageRoot": ".",
+            "cwd": ".",
+            "home": "/home/fixture"
+          },
+          "call_index": 2,
+          "result": {
+            "results": []
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "ready",
+      "entry_path": "prompts/cli/pdd-cli.prompt.md",
+      "operation": "runPdd",
+      "input": {
+        "argv": [
+          "setup",
+          "--check",
+          "--json"
+        ],
+        "cwd": "/fixture/project",
+        "packageRoot": "/fixture/pdd",
+        "env": {
+          "HOME": "/fixture/home"
+        },
+        "stdinIsTTY": false,
+        "stdoutIsTTY": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/stdout",
+          "op": "equals",
+          "value": "{\"ready\":true}\n"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/exit_code",
+          "op": "equals",
+          "value": 0
+        }
+      ]
+    },
+    {
+      "step_id": "missing",
+      "entry_path": "prompts/cli/pdd-cli.prompt.md",
+      "operation": "runPdd",
+      "input": {
+        "argv": [
+          "setup",
+          "--check",
+          "--json"
+        ],
+        "cwd": "/fixture/project",
+        "packageRoot": "/fixture/pdd",
+        "env": {
+          "HOME": "/fixture/home"
+        },
+        "stdinIsTTY": false,
+        "stdoutIsTTY": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/stdout",
+          "op": "equals",
+          "value": "{\"ready\":false}\n"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/pdd-cli-agents-checkWorkflowAgents",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupSkills",
+          "op": "equals",
+          "value": 0
+        }
+      ]
+    },
+    {
+      "step_id": "invalid",
+      "entry_path": "prompts/cli/pdd-cli.prompt.md",
+      "operation": "runPdd",
+      "input": {
+        "argv": [
+          "setup",
+          "--check",
+          "--yes"
+        ],
+        "cwd": "/fixture/project",
+        "packageRoot": "/fixture/pdd",
+        "env": {
+          "HOME": "/fixture/home"
+        },
+        "stdinIsTTY": false,
+        "stdoutIsTTY": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/exit_code",
+          "op": "equals",
+          "value": 2
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-checkProjectReady",
+          "op": "equals",
+          "value": 0
+        }
+      ]
+    },
+    {
+      "step_id": "ready-text",
+      "entry_path": "prompts/cli/pdd-cli.prompt.md",
+      "operation": "runPdd",
+      "input": {
+        "argv": [
+          "setup",
+          "--check"
+        ],
+        "cwd": "/fixture/project",
+        "packageRoot": "/fixture/pdd",
+        "env": {
+          "HOME": "/fixture/home"
+        },
+        "stdinIsTTY": false,
+        "stdoutIsTTY": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/stdout",
+          "op": "equals",
+          "value": "Ready\n"
+        }
+      ]
+    },
+    {
+      "step_id": "not-ready-text",
+      "entry_path": "prompts/cli/pdd-cli.prompt.md",
+      "operation": "runPdd",
+      "input": {
+        "argv": [
+          "setup",
+          "--check"
+        ],
+        "cwd": "/fixture/project",
+        "packageRoot": "/fixture/pdd",
+        "env": {
+          "HOME": "/fixture/home"
+        },
+        "stdinIsTTY": false,
+        "stdoutIsTTY": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/stdout",
+          "op": "equals",
+          "value": "Not ready\n"
+        }
+      ]
+    },
+    {
+      "step_id": "json-alone",
+      "entry_path": "prompts/cli/pdd-cli.prompt.md",
+      "operation": "runPdd",
+      "input": {
+        "argv": [
+          "setup",
+          "--json"
+        ],
+        "cwd": "/fixture/project",
+        "packageRoot": "/fixture/pdd",
+        "env": {
+          "HOME": "/fixture/home"
+        },
+        "stdinIsTTY": false,
+        "stdoutIsTTY": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/exit_code",
+          "op": "equals",
+          "value": 2
+        }
+      ]
+    },
+    {
+      "step_id": "no-pair-check",
+      "entry_path": "prompts/cli/pdd-cli.prompt.md",
+      "operation": "runPdd",
+      "input": {
+        "argv": [
+          "setup",
+          "--check",
+          "--no-pair"
+        ],
+        "cwd": "/fixture/project",
+        "packageRoot": "/fixture/pdd",
+        "env": {
+          "HOME": "/fixture/home"
+        },
+        "stdinIsTTY": false,
+        "stdoutIsTTY": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/exit_code",
+          "op": "equals",
+          "value": 2
+        }
+      ]
+    },
+    {
+      "step_id": "code-check",
+      "entry_path": "prompts/cli/pdd-cli.prompt.md",
+      "operation": "runPdd",
+      "input": {
+        "argv": [
+          "setup",
+          "--check",
+          "--pair-code",
+          "K7Q2-9MXD"
+        ],
+        "cwd": "/fixture/project",
+        "packageRoot": "/fixture/pdd",
+        "env": {
+          "HOME": "/fixture/home"
+        },
+        "stdinIsTTY": false,
+        "stdoutIsTTY": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/exit_code",
+          "op": "equals",
+          "value": 2
+        }
+      ]
+    }
+  ]
+}

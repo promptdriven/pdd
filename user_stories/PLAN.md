@@ -191,3 +191,11 @@ Paired Runtime source branch: `feature/808-product-step-labels`. Its proposed AP
 2. [Read saved baseline obligations separately](affected-baseline-report.md). Test: `test/runtime/affected-baseline-report.json`. Prompt tests: NOT RUN; supplied-observation report only. Native acceptance: `test/affected-checks/affected-baseline-report-cases.json`.
 
 Proposed command status follows selected target results; a target pass can exit 0 while saved baseline failures still block the unchanged full-pass gates. This convention requires person review. No implementation, approval, hosted check or native pass is claimed.
+
+## Folder setup and phone pairing (#2661)
+
+1. [Check whether a folder is ready](setup-readiness.md). Scenario: `test/runtime/setup-readiness.json`.
+2. [Set up a folder unattended](setup-unattended.md). Scenario: `test/runtime/setup-unattended.json`.
+3. [Pair a phone at setup](setup-phone-pairing.md). Scenario: `test/runtime/setup-phone-pairing.json`.
+
+Native cases: `test/setup-readiness-native.test.mjs` and `test/setup-pairing-native.test.mjs`. Scenario replay: `test/setup-scenarios.vectors.test.mjs`.

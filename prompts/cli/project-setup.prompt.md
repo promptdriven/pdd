@@ -1,6 +1,6 @@
 # Project setup
 
-Own `src/project-setup.mjs`. Export `setupProject({cwd, packageRoot})` and `ignorePddFolder({root})`. They do what the [pdd-setup skill](../../skills/pdd-setup/SKILL.md) tells an agent to do, without an agent: `setupProject` adds or updates one short PDD block in the file that the project's agents read, and `ignorePddFolder` keeps the local `.pdd/` folder out of Git. `pdd setup` calls both.
+Own `src/project-setup.mjs`. Export `setupProject({cwd, packageRoot})`, `ignorePddFolder({root})`, and `checkProjectReady({cwd, packageRoot})`. They do what the [pdd-setup skill](../../skills/pdd-setup/SKILL.md) tells an agent to do, without an agent: `setupProject` adds or updates one short PDD block in the file that the project's agents read, and `ignorePddFolder` keeps the local `.pdd/` folder out of Git. `pdd setup` calls both.
 
 ## The block
 
@@ -36,6 +36,10 @@ Return `{file, changed}`: the absolute file path and whether the file was writte
 | Is not a regular file (a folder or a symbolic link) | Throw an error that names the file and says to add `.pdd/` by hand; write nothing |
 
 Keep every old byte: read the file as bytes and only append. A file that is not valid UTF-8 keeps its bytes. Return `{file, changed, negated}`: the absolute `.gitignore` path, whether the file was written, and whether a negation line kept it unchanged.
+
+## Readiness
+
+`checkProjectReady` reads only: return true exactly when the selected project file contains the current complete block and, in a Git repository, the root ignore handling requires no write under the `.pdd/` rule above, including a respected negation. Outside Git the ignore condition is satisfied. Missing or malformed files return false. It does not change files, initialize a repository, read authentication or machine skills, or contact a service.
 
 ## Dependencies
 

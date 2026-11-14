@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 412e0746887533970aa0147273d391096fff13afec8e7752f0ad86c60ecdd6de).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 595844ba7a8f6b0a088e4c90e900b6106e32eb8771d3eb2936010007f8408c9b).
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -7,7 +7,7 @@ import { CommandInputError, parseArgv } from './argument-parser.mjs';
 import { renderCompletion } from './completion.mjs';
 import { NAMES, PUBLIC_COMMAND_MANIFEST, PUBLIC_COMMAND_ROUTES, PUBLIC_HELP_TEXT } from './command-catalog.mjs';
 import { listWorkflowAreas, formatWorkflowList } from './workflow-areas.mjs';
-import { ignorePddFolder, setupProject as defaultSetupProject } from './project-setup.mjs';
+import { ignorePddFolder, checkProjectReady as defaultCheckProjectReady, setupProject as defaultSetupProject } from './project-setup.mjs';
 import { findSkills as defaultFindSkills, setupSkills as defaultSetupSkills } from './skills-install.mjs';
 import { pathDiagnostic as defaultPathDiagnostic } from './path-diagnostic.mjs';
 import { checkWorkflowAgents } from './workflow-agents.mjs';
@@ -93,13 +93,31 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
   cwd = process.cwd(), packageRoot = PACKAGE_ROOT, env = process.env, workflowRunner, workflowAreas,
   stdin = process.stdin, confirm, mcpServer, runtimeSlots, contracts, product, productPorts, gitContext, workflowProve, provePorts,
   autopilotRegressions, autopilotRegressionsPorts = {}, issueGraph, issueGraphPorts = {}, dependencyIntake, dependencyIntakePorts = {}, autopilotLauncher, autopilotLauncherPorts = {}, workflowAgents = { checkWorkflowAgents }, workflowAgentPorts = {}, setupSkills = defaultSetupSkills,
-  setupProject = defaultSetupProject, setupAgentMcp, autopilot, autopilotPorts = {}, autopilotAlerts, autopilotAlertsPorts = {}, autopilotGithub: autopilotGithubModule, autopilotGithubPorts = {}, pathDiagnostic = defaultPathDiagnostic,
+  setupProject = defaultSetupProject, checkProjectReady = defaultCheckProjectReady, pairing, pairingPorts = {}, setupAgentMcp, autopilot, autopilotPorts = {}, autopilotAlerts, autopilotAlertsPorts = {}, autopilotGithub: autopilotGithubModule, autopilotGithubPorts = {}, pathDiagnostic = defaultPathDiagnostic,
   readPackageVersion = defaultReadPackageVersion, findSkills = defaultFindSkills, interpreterVersion, interpreterVersionPorts = {}, releaseNotice, releaseNoticePorts = {} } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
     line(stderr, error instanceof CommandInputError ? error.message : 'The command could not be parsed. Run pdd --help.');
     return 2;
+  }
+  if (plan.local === 'setup') {
+    const o = plan.options, interactive = setupMayAsk({ yes: o['--yes'], stdinIsTTY: stdin.isTTY, stdoutIsTTY: stdout.isTTY });
+    if (o['--json'] && !o['--check'] || o['--check'] && (o['--yes'] || o['--no-pair'] || o['--pair-code']) || o['--pair-code'] && (o['--yes'] || o['--no-pair'] || !interactive || !/^[A-Za-z0-9-]{4,64}$/.test(o['--pair-code']))) { line(stderr, 'Invalid setup options.'); return 2; }
+    if (o['--check'] || o['--yes'] && o['--no-pair']) {
+      const ready = await checkProjectReady({ cwd, packageRoot });
+      if (o['--check']) { line(stdout, o['--json'] ? JSON.stringify({ ready }) : ready ? 'Ready' : 'Not ready'); return 0; }
+      if (ready) return 0;
+    }
+  }
+  if (plan.local === 'pair-status' || plan.local === 'pair-offer') {
+    if (plan.local === 'pair-status' && !plan.options['--json'] || plan.local === 'pair-offer' && !plan.options['--message']) { line(stderr, 'Invalid pair options.'); return 2; }
+    try {
+      const module = pairing ?? await import('./setup-pairing.mjs');
+      const result = plan.local === 'pair-status' ? await module.pairStatus({ cwd, env }, pairingPorts) : await module.pairOffer({ cwd, env, messageFile: plan.options['--message'] }, pairingPorts);
+      if (result.message) line(result.exitCode ? stderr : stdout, result.message);
+      return result.exitCode;
+    } catch (error) { line(stderr, `Pairing failed.${reason(error)}`); return 1; }
   }
   if (['setup', 'version', 'workflow-run'].includes(plan.local)) {
     try {
@@ -370,6 +388,15 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         if (result.exitCode === 0 && before === undefined && ['off', 'observe', 'auto'].includes(saved))
           line(stdout, `Setup saved pdd.json, the PDD block and .gitignore only in this checkout. Commit and push them so that GitHub, other machines and Autopilot jobs have them, or run pdd autopilot ${saved} to put the Autopilot mode on GitHub.`);
       } catch (error) { line(stderr, `Autopilot settings failed.${reason(error)}`); code = 1; }
+      if (interactive && !plan.options['--no-pair']) {
+        try {
+          const module = pairing ?? await import('./setup-pairing.mjs');
+          const input = { cwd, env, interactive, ...(plan.options['--pair-code'] === undefined ? {} : { code: plan.options['--pair-code'] }) };
+          const result = await module.runSetupPairing(input, { ...pairingPorts, stdin, stdout, stderr, confirm });
+          if (result.message) line(result.exitCode ? stderr : stdout, result.message);
+          if (result.exitCode) code = result.exitCode;
+        } catch (error) { line(stderr, `Pairing failed.${reason(error)}`); code = 1; }
+      }
       return code;
       } });
     }

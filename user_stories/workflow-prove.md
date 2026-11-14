@@ -22,3 +22,9 @@ Success requires valid setup and cleanup, an ordinary nonzero old exit with the 
 Ordinary workflow/status/replay commands do not execute supplied commands. Prove never approves, opens a PR, commits or cleans the person's worktree. Synthetic Runtime cases establish decisions and exact port requests; real Git snapshots, byte/mode handling, unsafe ancestry, process-group killing, cleanup and atomic persistence require native verification.
 
 Native parent interrupts SIGINT/SIGTERM/SIGHUP are recorded in required interruptSignal, stop phase scheduling, kill an active child group, clean both owned snapshots and exit 130/143/129 even if cleanup/save fails. Before-process/interphase interruption never invents a phase signal. Setup/cleanup errors keep saved-outcome priority; otherwise parent interruption is signalled before ordinary outcomes. A child signal alone exits 1. Stale cleanup needs positive ownership and inactive-owner proof, never repo-wide prune. Runtime fakes do not prove signals, stale ownership or real merge-base behavior.
+
+```pdd-boundary
+prompts/cli/pdd-cli.prompt.md
+prompts/cli/interpreter-version.prompt.md
+prompts/cli/workflow-prove.prompt.md
+```
