@@ -19,7 +19,7 @@ const identifier = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9
 const text = value => typeof value === 'string' && value.length > 0 && !/[\u0000-\u001f\u007f]/u.test(value);
 const repositoryName = value => text(value) && /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(value);
 const sha = value => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value);
-const sameRepo = (a, b) => typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();
+export const sameRepo = (a, b) => typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();
 const fail = code => { throw Object.assign(new Error(code), { code }); };
 const parseJson = value => { try { return JSON.parse(value); } catch { fail('workflow_github_json_invalid'); } };
 const outcome = (state, message, pr = null) => ({ state, pr, message });
@@ -82,23 +82,24 @@ function originRepository(remote) {
   return name;
 }
 
-function canonicalUrl(value, repository, kind, number) {
+export function canonicalGithubUrl(value, repository, kind, number) {
+  const match = typeof value === 'string' && /^https:\/\/github\.com\/([^/]+\/[^/]+)\/(issues|pull)\/([1-9][0-9]*)$/.exec(value);
+  if (!match || !sameRepo(match[1], repository) || match[2] !== kind) return 0;
   try {
     const url = new URL(value);
-    const match = /^\/([^/]+\/[^/]+)\/(issues|pull)\/([1-9][0-9]*)$/.exec(url.pathname);
-    return url.protocol === 'https:' && url.host === 'github.com' && !url.username && !url.password
-      && !url.search && !url.hash && match && sameRepo(match[1], repository)
-      && match[2] === kind && Number(match[3]) === number;
-  } catch { return false; }
+    const found = url.host === 'github.com' && !url.search && !url.hash && url.pathname === `/${match[1]}/${kind}/${match[3]}` ? Number(match[3]) : 0;
+    return number === undefined || found === number ? found : 0;
+  } catch { return 0; }
 }
 
-async function repositoryAt(cwd, deps) {
+async function repositoryAt(cwd, deps, expected) {
   if (!text(cwd)) fail('workflow_github_cwd_required');
   const remote = (await deps.command(cwd, 'git', ['remote', 'get-url', 'origin'])).trim();
   const repository = originRepository(remote);
   const actual = parseJson(await deps.command(cwd, 'gh', ['repo', 'view', repository,
     '--json', 'nameWithOwner,defaultBranchRef,url']));
   if (!repositoryName(actual?.nameWithOwner) || !sameRepo(actual.nameWithOwner, repository)
+    || expected !== undefined && !sameRepo(actual.nameWithOwner, expected)
     || !text(actual.defaultBranchRef?.name) || actual.url !== `https://github.com/${actual.nameWithOwner}`)
     fail('workflow_github_repository_mismatch');
   return { repository: actual.nameWithOwner, defaultBranch: actual.defaultBranchRef.name };
@@ -126,7 +127,7 @@ export async function resolveWorkflowIssue(input, ports = {}) {
   if (selected.repository && !sameRepo(selected.repository, repo.repository)) fail('workflow_github_issue_foreign');
   const actual = parseJson(await deps.command(cwd, 'gh', ['api', `repos/${repo.repository}/issues/${selected.number}`]));
   if (!actual || Object.hasOwn(actual, 'pull_request') || actual.number !== selected.number
-    || !canonicalUrl(actual.html_url, repo.repository, 'issues', selected.number)
+    || !canonicalGithubUrl(actual.html_url, repo.repository, 'issues', selected.number)
     || typeof actual.title !== 'string' || !(actual.body === null || typeof actual.body === 'string'))
     fail('workflow_github_issue_mismatch');
   return { ...repo, issue: { number: actual.number, url: actual.html_url, title: actual.title, body: actual.body ?? '' } };
@@ -166,8 +167,7 @@ export async function prepareWorkflowPr(input, ports = {}) {
   const { cwd, runId, stageId, repository, baseBranch, title: suppliedTitle } = structuredClone(input ?? {});
   if (!identifier(runId) || !identifier(stageId) || !repositoryName(repository)
     || suppliedTitle !== undefined && (!text(suppliedTitle) || suppliedTitle.length > 256)) fail('workflow_github_intent_invalid');
-  const deps = dependencies(ports), actual = await repositoryAt(cwd, deps);
-  if (!sameRepo(repository, actual.repository)) fail('workflow_github_repository_mismatch');
+  const deps = dependencies(ports), actual = await repositoryAt(cwd, deps, repository);
   const topic = await localTopic(cwd, baseBranch, deps);
   const title = suppliedTitle ?? (await deps.command(cwd, 'git', ['log', '-1', '--format=%s'])).trim();
   if (!text(title) || title.length > 256) fail('workflow_github_title_invalid');
@@ -188,7 +188,7 @@ function intentCopy(value) {
 function actualPr(row, intent) {
   if (!row || !Number.isSafeInteger(row.number) || row.number < 1 || row.isCrossRepository !== false
     || !sameRepo(`${row.headRepositoryOwner?.login}/${row.headRepository?.name}`, intent.repository)
-    || !canonicalUrl(row.url, intent.repository, 'pull', row.number)
+    || !canonicalGithubUrl(row.url, intent.repository, 'pull', row.number)
     || row.headRefName !== intent.headBranch || row.baseRefName !== intent.baseBranch || row.headRefOid !== intent.headSha
     || !markerBody(row.body, intent.marker) || !['OPEN', 'MERGED', 'CLOSED'].includes(row.state)
     || row.state === 'MERGED' && !sha(row.mergeCommit?.oid)) fail('workflow_github_pr_mismatch');
@@ -225,8 +225,7 @@ export async function reconcileWorkflowPr(input, ports = {}) {
     const { cwd, intent: supplied, draft = false } = structuredClone(input ?? {});
     if (typeof draft !== 'boolean') fail('workflow_github_draft_invalid');
     const intent = intentCopy(supplied), deps = dependencies(ports);
-    const actual = await repositoryAt(cwd, deps);
-    if (!sameRepo(actual.repository, intent.repository)) fail('workflow_github_repository_mismatch');
+    await repositoryAt(cwd, deps, intent.repository);
     const found = await lookup(cwd, intent, deps, draft);
     if (found.state === 'found') return found.outcome;
   } catch { /* Read failure never authorizes another push or create. */ }
@@ -243,15 +242,15 @@ export async function publishWorkflowPr(input, ports = {}) {
     const intent = intentCopy(supplied), deps = dependencies(ports);
     if (!markerBody(body, intent.marker)) fail('workflow_github_marker_missing');
     if (characters(body) > PR_BODY_LIMIT) return outcome('failed', `The PR description has ${characters(body).toLocaleString('en-US')} characters. GitHub accepts at most 65,536. Nothing was pushed. Make it shorter, then try again.`);
-    const actual = await repositoryAt(cwd, deps);
-    if (!sameRepo(actual.repository, intent.repository)) fail('workflow_github_repository_mismatch');
+    await repositoryAt(cwd, deps, intent.repository);
     const found = await lookup(cwd, intent, deps, draft);
     if (found.state === 'found') return unpublishedOnly
       ? outcome('recovery_required', 'An original PR already exists. Inspect it without unpublished-only publication.') : found.outcome;
     if (found.state !== 'absent') return outcome('recovery_required', 'Cannot confirm the original PR identity. Reconcile the saved intent without another publication.');
+    const readPushRemote = async () => (await deps.command(cwd, 'git', ['remote', 'get-url', '--push', '--all', 'origin'])).trim();
     const topic = await localTopic(cwd, intent.baseBranch, deps);
     if (topic.headBranch !== intent.headBranch || topic.headSha !== intent.headSha) fail('workflow_github_source_changed');
-    const pushRemote = (await deps.command(cwd, 'git', ['remote', 'get-url', '--push', '--all', 'origin'])).trim();
+    const pushRemote = await readPushRemote();
     if (!sameRepo(originRepository(pushRemote), intent.repository)) fail('workflow_github_repository_mismatch');
     if (unpublishedOnly) {
       const remote = await deps.raw(cwd, 'git', ['ls-remote', '--exit-code', '--refs', 'origin', `refs/heads/${intent.headBranch}`]);
@@ -261,10 +260,8 @@ export async function publishWorkflowPr(input, ports = {}) {
       const current = await localTopic(cwd, intent.baseBranch, deps);
       if (current.headBranch !== intent.headBranch || current.headSha !== intent.headSha
         || !markerBody(body, intent.marker)) fail('workflow_github_source_changed');
-      const currentRepo = await repositoryAt(cwd, deps);
-      if (!sameRepo(currentRepo.repository, intent.repository)
-        || (await deps.command(cwd, 'git', ['remote', 'get-url', '--push', '--all', 'origin'])).trim() !== pushRemote)
-        fail('workflow_github_repository_mismatch');
+      await repositoryAt(cwd, deps, intent.repository);
+      if (await readPushRemote() !== pushRemote) fail('workflow_github_repository_mismatch');
     }
     // An earlier attempt may have pushed this exact SHA before GitHub refused the PR: do not push it again.
     const remote = unpublishedOnly ? null : await deps.raw(cwd, 'git', ['ls-remote', '--exit-code', '--refs', 'origin', `refs/heads/${intent.headBranch}`]);
