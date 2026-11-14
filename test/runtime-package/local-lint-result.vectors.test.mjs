@@ -6,7 +6,7 @@ import {existsSync,lstatSync,mkdirSync,readFileSync,readdirSync,symlinkSync,writ
 import {join} from 'node:path';
 import {parseArgv} from '../../src/argument-parser.mjs';
 import {runPdd} from '../../src/pdd-cli.mjs';
-import {runCheck} from '../../src/runtime-seam.mjs';
+import {runCheck, interfaceBlocks, proseSha256} from '../../src/runtime-seam.mjs';
 import {readRunResults,resultLines,usableResult} from '../../src/workflow-results.mjs';
 import {readEvidenceEligibility} from '../../src/workflow-runner.mjs';
 import {harbor,portsFor,PLACE,root as packageRoot} from './runtime-fake.mjs';
@@ -83,7 +83,12 @@ function compare(expected,actual) {
   for (const [key,value] of Object.entries(expected)) assert.deepEqual(actual[key],value,key);
 }
 function withWarning(repo) {
-  writeFileSync(join(repo,PLACE),`${readFileSync(join(repo,PLACE),'utf8')}\n![layout](selected.ui.svg)\n`);
+  let text = `${readFileSync(join(repo,PLACE),'utf8')}\n![layout](selected.ui.svg)\n`;
+  const block = interfaceBlocks(text)[0], iface = JSON.parse(block[1]);
+  iface.status = 'draft';
+  text = text.slice(0, block.indices[1][0]) + JSON.stringify(iface) + text.slice(block.indices[1][1]);
+  text = text.replace(/"prose_sha256"\s*:\s*"[^"]*"/, `"prose_sha256":"${proseSha256(text)}"`);
+  writeFileSync(join(repo,PLACE),text);
   writeFileSync(join(repo,'prompts/selected.ui.svg'),'<svg><text>Selected warning</text></svg>');
   writeFileSync(join(repo,'prompts/unrelated.prompt.md'),'![layout](unrelated.ui.svg)');
   writeFileSync(join(repo,'prompts/unrelated.ui.svg'),'<svg><text>Unrelated warning</text></svg>');

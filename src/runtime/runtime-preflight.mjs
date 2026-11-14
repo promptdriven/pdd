@@ -860,14 +860,14 @@ export function promptMarkdownTargets(text, fromPath, visible) {
 }
 
 // The schema rules of a prompt and of the prompts it calls, all at once (cached per prompt).
-export function promptSchemaRefusals(root, found, prompt, prompts, seen = new Set(), { allowMissingInterfaces = false } = {}) {
+export function promptSchemaRefusals(root, found, prompt, prompts, seen = new Set(), { allowMissingInterfaces = false, lint = false } = {}) {
   if (!prompt || seen.has(prompt.path)) return [];
   seen.add(prompt.path);
   if (prompt.error) {
     if (allowMissingInterfaces && prompt.error === 'interface-missing') {
       return promptMarkdownTargets(prompt.text, prompt.path, found.visible).flatMap(target => {
         if (!prompts.has(target)) prompts.set(target, readPrompt(root, found.visible, target, found.workspace));
-        return promptSchemaRefusals(root, found, prompts.get(target), prompts, seen, { allowMissingInterfaces });
+        return promptSchemaRefusals(root, found, prompts.get(target), prompts, seen, { allowMissingInterfaces, lint });
       });
     }
     return [{ ...promptRefusal(prompt, 'interface'), path: prompt.path }];
@@ -877,9 +877,12 @@ export function promptSchemaRefusals(root, found, prompt, prompts, seen = new Se
     refusal(problem.code, problem.pointer, `${prompt.path} ${problem.pointer} ${problem.rule}`, {path:prompt.path, ...(problem.hint ? {hint:problem.hint} : {})}));
   const called = (Array.isArray(prompt.interface.calls) ? prompt.interface.calls : []).map(call => call?.target).filter(target => typeof target === 'string');
   const statusProblems = ['draft', 'approved'].includes(prompt.interface.status) ? [] : [{ ...promptRefusal(prompt, 'interface'), path: prompt.path }];
-  return [...statusProblems, ...prompt.schemaIssues, ...called.flatMap(target => {
+  const schemaIssues = lint ? prompt.schemaIssues.filter(item => item.code !== 'graph-schema-unsupported-keyword' &&
+    !(item.code === 'graph-schema-type-invalid' && item.message.includes('has no "type"') &&
+      prompt.schemaIssues.some(other => other.code === 'graph-schema-unsupported-keyword' && other.section === item.section))) : prompt.schemaIssues;
+  return [...statusProblems, ...schemaIssues, ...called.flatMap(target => {
     if (!prompts.has(target)) prompts.set(target, readPrompt(root, found.visible, target,found.workspace));
-    return promptSchemaRefusals(root, found, prompts.get(target), prompts, seen, { allowMissingInterfaces });
+    return promptSchemaRefusals(root, found, prompts.get(target), prompts, seen, { allowMissingInterfaces, lint });
   })];
 }
 
@@ -1007,13 +1010,41 @@ export function scenarioShapeRefusal(doc,path) {
     if(!Array.isArray(step.checks))return refusal('invalid-check',`${section}.checks`,'checks must be a list.');
     for(const [at,check] of step.checks.entries()) {
       if(!checkShape(check))return refusal('invalid-check',`${section}.checks[${at}]`,'A check has criterion_id, target, path and op.');
+      if(!['result','error','world','calls'].includes(check.target) || (check.target === 'result' && (Object.hasOwn(step,'expected_error') || !possibleResultPointer(null,check.path)))) return refusal('invalid-check',`${section}.checks[${at}]`,'The check target or result pointer cannot be used for this step.');
       if(!ids.has(check.criterion_id))return refusal('unknown-criterion',`${section}.checks[${at}]`,`The check names ${show(check.criterion_id)}, which is not a criterion ID.`);
     }
   }
   return null;
 }
 
-function checkTest(root, found, test, prompts, { allowMissingInterfaces = false } = {}) {
+// Only reject paths that cannot exist under the declared schema. Unknown or
+// open schema constructs remain possible, so they do not create a refusal.
+function possibleResultPointer(schema, path) {
+  if (typeof path !== 'string' || (path !== '' && !path.startsWith('/')) || /~(?![01])/.test(path)) return false;
+  const tokens = path === '' ? [] : path.slice(1).split('/').map(token => token.replace(/~1/g, '/').replace(/~0/g, '~'));
+  function possible(node, index) {
+    if (index === tokens.length || !isObject(node)) return true;
+    for (const key of ['oneOf', 'anyOf']) {
+      if (Array.isArray(node[key]) && !node[key].some(branch => possible(branch, index))) return false;
+    }
+    const token = tokens[index];
+    if (node.type === 'object' || isObject(node.properties)) {
+      if (isObject(node.properties) && Object.hasOwn(node.properties, token)) return possible(node.properties[token], index + 1);
+      if (node.additionalProperties === false) return false;
+      return possible(node.additionalProperties, index + 1);
+    }
+    if (node.type === 'array') {
+      if (!/^(0|[1-9][0-9]*)$/.test(token)) return false;
+      if (Number.isInteger(node.maxItems) && Number(token) >= node.maxItems) return false;
+      return possible(node.items, index + 1);
+    }
+    if (typeof node.type === 'string') return false;
+    return true;
+  }
+  return possible(schema, 0);
+}
+
+function checkTest(root, found, test, prompts, { allowMissingInterfaces = false, lint = false } = {}) {
   let doc = test.doc;
   if (!test.error && isObject(doc)) {
     const prepared = preparedText(root,found.visible,test.path,readText(root,test.path),'scenario');
@@ -1052,7 +1083,7 @@ function checkTest(root, found, test, prompts, { allowMissingInterfaces = false 
     const lazyMissing = allowMissingInterfaces && prompt.error === 'interface-missing';
     const broken = lazyMissing ? null : promptRefusal(prompt, section);
     if (broken) return done({ ...broken, ...at }, story);
-    const schemaIssues = promptSchemaRefusals(root, found, prompt, prompts, new Set(), { allowMissingInterfaces });
+    const schemaIssues = promptSchemaRefusals(root, found, prompt, prompts, new Set(), { allowMissingInterfaces, lint });
     if (schemaIssues.length) return done(schemaIssues, story);
     const entry = lazyMissing ? null : (Array.isArray(prompt.interface.entries) ? prompt.interface.entries : []).find(item => item?.operation === step.operation);
     const native = [...prompts.values()].some(item => item.interface?.kind === 'native-only');
@@ -1062,18 +1093,23 @@ function checkTest(root, found, test, prompts, { allowMissingInterfaces = false 
       return done(refusal('pdd-unknown-error', `${section}.expected_error`, `"${step.expected_error}" is not in the errors of ${step.operation} in ${step.entry_path}.`, at), story);
     }
     if (!Array.isArray(step.checks)) return done(refusal('invalid-check', `${section}.checks`, 'checks must be a list.', at), story);
-    let errorChecks = 0;
+    let errorChecks = 0, invalidCheck = null;
     for (const [checkIndex, check] of step.checks.entries()) {
       if (!checkShape(check)) {
         return done(refusal('invalid-check', `${section}.checks[${checkIndex}]`, 'A check has criterion_id, target, path and op.', at), story);
       }
       if (!ids.has(check.criterion_id)) return done(refusal('unknown-criterion', `${section}.checks[${checkIndex}]`, `The check names ${show(check.criterion_id)}, which is not a criterion ID.`, at), story);
+      const problem = !['result', 'error', 'world', 'calls'].includes(check.target) ? `Unknown check target ${show(check.target)}; use result, error, world or calls.`
+        : check.target === 'result' && errorStep ? 'An expected_error step cannot check result; check its error instead.'
+        : check.target === 'result' && !possibleResultPointer(entry?.result_schema, check.path) ? `Result pointer ${show(check.path)} is invalid or cannot exist in the result schema.` : null;
+      if (problem) invalidCheck ??= refusal('invalid-check', `${section}.checks[${checkIndex}]`, problem, at);
       if (EXACT_OPS.has(check.op) || (Object.hasOwn(check, 'html') && check.op === 'exists')) exact.add(check.criterion_id);
       if (check.target === 'error' && check.path === '/code' && check.op === 'equals' && check.value === step.expected_error) errorChecks += 1;
     }
     if (errorStep && errorChecks === 0) {
       return done(refusal('missing-error-check', `${section}.checks`, `An error step needs one check: target "error", path "/code", op "equals", value "${step.expected_error}".`, at), story);
     }
+    if (invalidCheck) return done(invalidCheck, story);
     if (!lazyMissing && !native) inputIssues.push(...checkInput(step.input, entry.input_schema, index).refusals);
   }
   if (inputIssues.length) return done(inputIssues, story);
@@ -1087,7 +1123,7 @@ function checkTest(root, found, test, prompts, { allowMissingInterfaces = false 
 }
 
 // Rules P1-P10 for the selected tests. Returns rows and warnings; never throws for a test problem.
-export function preflight({ root, found, selected,workspace=found.workspace??loadRuntimeWorkspace({root}), allowMissingInterfaces = false }) {
+export function preflight({ root, found, selected,workspace=found.workspace??loadRuntimeWorkspace({root}), allowMissingInterfaces = false, lint = false }) {
   found={...found,workspace};for(const test of selected)requireRuntimePath(workspace,{path:test.path,from:'Selected test'});
   const warnings = [];
   const reviews = numericReviews(root, found, warnings);
@@ -1107,7 +1143,7 @@ export function preflight({ root, found, selected,workspace=found.workspace??loa
     let refused, plan, testSha = null, effectiveDoc = test.doc;
     try {
       for (const step of Array.isArray(test.doc?.steps) ? test.doc.steps : []) visit(step?.entry_path);
-      const checked = checkTest(root, found, test, prompts, { allowMissingInterfaces });
+      const checked = checkTest(root, found, test, prompts, { allowMissingInterfaces, lint });
       refused = checked.refusal;
       effectiveDoc = checked.doc;
       const nativeProblems = [...prompts.values()].filter(prompt => prompt.interface?.kind === 'native-only')

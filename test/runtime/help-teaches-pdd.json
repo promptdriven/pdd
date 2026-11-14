@@ -2,17 +2,323 @@
   "schema_version": "prompt-runtime.program-scenario.v1",
   "story_path": "user_stories/help-teaches-pdd.md",
   "criteria": [
-    {"id": "AC1", "text": "`pdd`, `pdd --help`, `pdd -h` and `pdd help` each name `pdd help prompting` and the full paths of the installed Prompting guide (`docs/prompting-guide.md`) and RUNBOOK (`RUNBOOK.md`), print nothing to stderr and exit with code 0."},
-    {"id": "AC2", "text": "`pdd help prompting` shows how to write a prompt file, `prompts/NAME.prompt.md`, with its `## Dependencies` section and its Runtime interface block, prints nothing to stderr and exits with code 0."},
-    {"id": "AC3", "text": "`pdd help prompting` shows how to write a Story file, `user_stories/STORY.md`, with its numbered acceptance criteria, and the Story's test file, `tests/STORY.json`, and exits with code 0."},
-    {"id": "AC4", "text": "`pdd help prompting` names the commands `pdd test`, `pdd lint` and `pdd approve`, and exits with code 0."},
-    {"id": "AC5", "text": "`pdd help prompting` names the full paths of the installed `docs/prompting-guide.md` and `RUNBOOK.md`, and exits with code 0."},
-    {"id": "AC6", "text": "`pdd prompting` is still an unknown command: it prints nothing to stdout, prints one line to stderr that says \"Unknown command\" and names `prompting`, and exits with code 2."},
-    {"id": "AC7", "text": "`pdd --help` and `pdd help prompting` never name a removed command (\"pdd check\", \"pdd try\" or \"workflow start\") and exit with code 0."}
+    {
+      "id": "AC1",
+      "text": "`pdd`, `pdd --help`, `pdd -h` and `pdd help` each name `pdd help prompting` and the full paths of the installed Prompting guide (`docs/prompting-guide.md`) and RUNBOOK (`RUNBOOK.md`), print nothing to stderr and exit with code 0."
+    },
+    {
+      "id": "AC2",
+      "text": "`pdd help prompting` shows how to write a prompt file, `prompts/NAME.prompt.md`, with its `## Dependencies` section and its Runtime interface block, prints nothing to stderr and exits with code 0."
+    },
+    {
+      "id": "AC3",
+      "text": "`pdd help prompting` shows how to write a Story file, `user_stories/STORY.md`, with its numbered acceptance criteria, and the Story's test file, `tests/STORY.json`, and exits with code 0."
+    },
+    {
+      "id": "AC4",
+      "text": "`pdd help prompting` names the commands `pdd test`, `pdd lint` and `pdd approve`, and exits with code 0."
+    },
+    {
+      "id": "AC5",
+      "text": "`pdd help prompting` names the full paths of the installed `docs/prompting-guide.md` and `RUNBOOK.md`, and exits with code 0."
+    },
+    {
+      "id": "AC6",
+      "text": "`pdd prompting` is still an unknown command: it prints nothing to stdout, prints one line to stderr that says \"Unknown command\" and names `prompting`, and exits with code 2."
+    },
+    {
+      "id": "AC7",
+      "text": "`pdd --help` and `pdd help prompting` never name a removed command (\"pdd check\", \"pdd try\" or \"workflow start\") and exit with code 0."
+    }
   ],
-  "initial_world": {"unexpected_launcher_calls": []},
+  "initial_world": {
+    "unexpected_launcher_calls": [],
+    "unexpected_call_counters": {
+      "package-readVersion": 0,
+      "skills-findSkills": 0,
+      "diagnostics-pathDiagnostic": 0,
+      "origin-resolve": 0,
+      "credentials-readToken": 0,
+      "metadata-get": 0,
+      "dispatch-prove": 0,
+      "dispatch-requestUptake": 0,
+      "dispatch-startRun": 0,
+      "agents-checkWorkflowAgents": 0,
+      "setup-setupSkills": 0,
+      "setup-setupProject": 0,
+      "setup-setupAgentMcp": 0
+    }
+  },
   "simulation": {
-    "autopilotLauncher.runAutopilotLauncher": {"action":"port.write","world_pointer":"/unexpected_launcher_calls","result_template":{"exitCode":255,"message":"Unexpected Autopilot dispatch in a non-Autopilot scenario"}}
+    "autopilotLauncher.runAutopilotLauncher": {
+      "action": "port.write",
+      "world_pointer": "/unexpected_launcher_calls",
+      "result_template": {
+        "exitCode": 255,
+        "message": "Unexpected Autopilot dispatch in a non-Autopilot scenario"
+      }
+    },
+    "package.readVersion": {
+      "action": "fixture.lookup",
+      "world_pointer": "/unexpected_call_counters/package-readVersion",
+      "cases": [
+        {
+          "args": {
+            "packageRoot": "."
+          },
+          "call_index": 1,
+          "result": {
+            "ok": true,
+            "version": "0.1.28"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "skills.findSkills": {
+      "action": "fixture.lookup",
+      "world_pointer": "/unexpected_call_counters/skills-findSkills",
+      "cases": [
+        {
+          "args": {
+            "packageRoot": ".",
+            "cwd": ".",
+            "home": "/home/fixture"
+          },
+          "call_index": 1,
+          "result": {
+            "results": []
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "diagnostics.pathDiagnostic": {
+      "action": "fixture.lookup",
+      "world_pointer": "/unexpected_call_counters/diagnostics-pathDiagnostic",
+      "cases": [
+        {
+          "args": {
+            "packageRoot": ".",
+            "cwd": ".",
+            "env": {
+              "HOME": "/home/fixture"
+            },
+            "mode": "version"
+          },
+          "call_index": 1,
+          "result": {
+            "lines": [
+              "Synthetic PATH conflict warning."
+            ]
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "origin.resolve": {
+      "action": "fixture.lookup",
+      "world_pointer": "/unexpected_call_counters/origin-resolve",
+      "cases": [
+        {
+          "args": {
+            "env": {}
+          },
+          "call_index": 1,
+          "result": {
+            "valid": true,
+            "origin": "https://interpreter.invalid"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "credentials.readToken": {
+      "action": "fixture.lookup",
+      "world_pointer": "/unexpected_call_counters/credentials-readToken",
+      "cases": [
+        {
+          "args": {
+            "timeoutMs": 2000
+          },
+          "call_index": 1,
+          "result": {
+            "token": "synthetic-fixture-token"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "metadata.get": {
+      "action": "fixture.lookup",
+      "world_pointer": "/unexpected_call_counters/metadata-get",
+      "cases": [
+        {
+          "args": {
+            "origin": "https://interpreter.invalid",
+            "path": "/v1/version",
+            "method": "GET",
+            "token": "synthetic-fixture-token",
+            "timeoutMs": 10000,
+            "redirect": "manual"
+          },
+          "call_index": 1,
+          "result": {
+            "status": 200,
+            "body": "{\"engine_sha\":\"0123456789abcdef0123456789abcdef01234567\",\"api_version\":\"v1\",\"formats\":{\"interface\":[\"prompt-runtime.interface.v2\",\"prompt-runtime.interface.v3\",\"prompt-runtime.interface.v4\"],\"test\":[\"prompt-runtime.program-scenario.v1\"],\"app_map\":[\"prompt-runtime.app-map.v1\"]},\"model\":\"ignored-fixture-model\",\"message\":\"ignored remote prose\"}"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "dispatch.prove": {
+      "action": "fixture.lookup",
+      "world_pointer": "/unexpected_call_counters/dispatch-prove",
+      "cases": [
+        {
+          "args": {
+            "ref": "fixture",
+            "test": "fixture",
+            "expect": "fixture",
+            "cwd": "fixture"
+          },
+          "call_index": 1,
+          "result": {
+            "exitCode": 0,
+            "message": "fixture"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "dispatch.requestUptake": {
+      "action": "fixture.lookup",
+      "world_pointer": "/unexpected_call_counters/dispatch-requestUptake",
+      "cases": [
+        {
+          "args": {
+            "requestId": "fixture",
+            "summary": "fixture",
+            "cwd": "fixture"
+          },
+          "call_index": 1,
+          "result": {
+            "exitCode": 0,
+            "message": "fixture"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "dispatch.startRun": {
+      "action": "fixture.lookup",
+      "world_pointer": "/unexpected_call_counters/dispatch-startRun",
+      "cases": [
+        {
+          "args": {
+            "input": {
+              "name": "fixture",
+              "issue": "fixture",
+              "agent": "codex",
+              "cwd": "fixture",
+              "packageRoot": "fixture"
+            },
+            "env": {}
+          },
+          "call_index": 1,
+          "result": {
+            "exitCode": 0,
+            "message": "fixture"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "agents.checkWorkflowAgents": {
+      "action": "fixture.lookup",
+      "world_pointer": "/unexpected_call_counters/agents-checkWorkflowAgents",
+      "cases": [
+        {
+          "args": {
+            "cwd": "fixture",
+            "env": {}
+          },
+          "call_index": 1,
+          "result": {
+            "ok": false,
+            "agent": "codex",
+            "message": "fixture"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "setup.setupSkills": {
+      "action": "fixture.lookup",
+      "world_pointer": "/unexpected_call_counters/setup-setupSkills",
+      "cases": [
+        {
+          "args": {
+            "packageRoot": "fixture",
+            "cwd": "fixture",
+            "home": "fixture"
+          },
+          "call_index": 1,
+          "result": {
+            "results": []
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "setup.setupProject": {
+      "action": "fixture.lookup",
+      "world_pointer": "/unexpected_call_counters/setup-setupProject",
+      "cases": [
+        {
+          "args": {
+            "cwd": "fixture",
+            "packageRoot": "fixture"
+          },
+          "call_index": 1,
+          "result": {
+            "file": "fixture",
+            "changed": false
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "setup.setupAgentMcp": {
+      "action": "fixture.lookup",
+      "world_pointer": "/unexpected_call_counters/setup-setupAgentMcp",
+      "cases": [
+        {
+          "args": {
+            "env": {},
+            "packageRoot": "fixture"
+          },
+          "call_index": 1,
+          "result": {
+            "exitCode": 0
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    }
   },
   "context": [],
   "steps": [
@@ -20,102 +326,995 @@
       "step_id": "bare-pdd-names-the-guide",
       "entry_path": "prompts/cli/pdd-cli.prompt.md",
       "operation": "runPdd",
-      "input": {"argv": []},
+      "input": {
+        "argv": []
+      },
       "checks": [
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd help prompting"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "/docs/prompting-guide.md"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "/RUNBOOK.md"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
-        {"criterion_id": "AC1", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
-        {"criterion_id":"AC1","target":"calls","path":"/resources/pdd-cli-autopilotLauncher-runAutopilotLauncher","op":"equals","value":0}
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/stdout",
+          "op": "contains",
+          "value": "pdd help prompting"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/stdout",
+          "op": "contains",
+          "value": "/docs/prompting-guide.md"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/stdout",
+          "op": "contains",
+          "value": "/RUNBOOK.md"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/stderr",
+          "op": "equals",
+          "value": ""
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/exit_code",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-autopilotLauncher-runAutopilotLauncher",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-package-readVersion",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-skills-findSkills",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-diagnostics-pathDiagnostic",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/interpreter-version-origin-resolve",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/interpreter-version-credentials-readToken",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/interpreter-version-metadata-get",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-dispatch-prove",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-dispatch-requestUptake",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-dispatch-startRun",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-agents-checkWorkflowAgents",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupSkills",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupProject",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupAgentMcp",
+          "op": "equals",
+          "value": 0
+        }
       ]
     },
     {
       "step_id": "root-help-names-the-guide",
       "entry_path": "prompts/cli/pdd-cli.prompt.md",
       "operation": "runPdd",
-      "input": {"argv": ["--help"]},
+      "input": {
+        "argv": [
+          "--help"
+        ]
+      },
       "checks": [
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd help prompting"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "/docs/prompting-guide.md"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "/RUNBOOK.md"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
-        {"criterion_id": "AC1", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
-        {"criterion_id": "AC7", "target": "result", "path": "/stdout", "op": "not_contains", "value": "pdd check"},
-        {"criterion_id": "AC7", "target": "result", "path": "/stdout", "op": "not_contains", "value": "pdd try"},
-        {"criterion_id": "AC7", "target": "result", "path": "/stdout", "op": "not_contains", "value": "workflow start"},
-        {"criterion_id": "AC7", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
-        {"criterion_id":"AC1","target":"calls","path":"/resources/pdd-cli-autopilotLauncher-runAutopilotLauncher","op":"equals","value":0}
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/stdout",
+          "op": "contains",
+          "value": "pdd help prompting"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/stdout",
+          "op": "contains",
+          "value": "/docs/prompting-guide.md"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/stdout",
+          "op": "contains",
+          "value": "/RUNBOOK.md"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/stderr",
+          "op": "equals",
+          "value": ""
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/exit_code",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/stdout",
+          "op": "not_contains",
+          "value": "pdd check"
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/stdout",
+          "op": "not_contains",
+          "value": "pdd try"
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/stdout",
+          "op": "not_contains",
+          "value": "workflow start"
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/exit_code",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-autopilotLauncher-runAutopilotLauncher",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-package-readVersion",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-skills-findSkills",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-diagnostics-pathDiagnostic",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/interpreter-version-origin-resolve",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/interpreter-version-credentials-readToken",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/interpreter-version-metadata-get",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-dispatch-prove",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-dispatch-requestUptake",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-dispatch-startRun",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-agents-checkWorkflowAgents",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupSkills",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupProject",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupAgentMcp",
+          "op": "equals",
+          "value": 0
+        }
       ]
     },
     {
       "step_id": "short-help-names-the-guide",
       "entry_path": "prompts/cli/pdd-cli.prompt.md",
       "operation": "runPdd",
-      "input": {"argv": ["-h"]},
+      "input": {
+        "argv": [
+          "-h"
+        ]
+      },
       "checks": [
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd help prompting"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "/docs/prompting-guide.md"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "/RUNBOOK.md"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
-        {"criterion_id": "AC1", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
-        {"criterion_id":"AC1","target":"calls","path":"/resources/pdd-cli-autopilotLauncher-runAutopilotLauncher","op":"equals","value":0}
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/stdout",
+          "op": "contains",
+          "value": "pdd help prompting"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/stdout",
+          "op": "contains",
+          "value": "/docs/prompting-guide.md"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/stdout",
+          "op": "contains",
+          "value": "/RUNBOOK.md"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/stderr",
+          "op": "equals",
+          "value": ""
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/exit_code",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-autopilotLauncher-runAutopilotLauncher",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-package-readVersion",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-skills-findSkills",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-diagnostics-pathDiagnostic",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/interpreter-version-origin-resolve",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/interpreter-version-credentials-readToken",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/interpreter-version-metadata-get",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-dispatch-prove",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-dispatch-requestUptake",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-dispatch-startRun",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-agents-checkWorkflowAgents",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupSkills",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupProject",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupAgentMcp",
+          "op": "equals",
+          "value": 0
+        }
       ]
     },
     {
       "step_id": "help-word-names-the-guide",
       "entry_path": "prompts/cli/pdd-cli.prompt.md",
       "operation": "runPdd",
-      "input": {"argv": ["help"]},
+      "input": {
+        "argv": [
+          "help"
+        ]
+      },
       "checks": [
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd help prompting"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "/docs/prompting-guide.md"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "/RUNBOOK.md"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
-        {"criterion_id": "AC1", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
-        {"criterion_id":"AC1","target":"calls","path":"/resources/pdd-cli-autopilotLauncher-runAutopilotLauncher","op":"equals","value":0}
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/stdout",
+          "op": "contains",
+          "value": "pdd help prompting"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/stdout",
+          "op": "contains",
+          "value": "/docs/prompting-guide.md"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/stdout",
+          "op": "contains",
+          "value": "/RUNBOOK.md"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/stderr",
+          "op": "equals",
+          "value": ""
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/exit_code",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-autopilotLauncher-runAutopilotLauncher",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-package-readVersion",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-skills-findSkills",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-diagnostics-pathDiagnostic",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/interpreter-version-origin-resolve",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/interpreter-version-credentials-readToken",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/interpreter-version-metadata-get",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-dispatch-prove",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-dispatch-requestUptake",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-dispatch-startRun",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-agents-checkWorkflowAgents",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupSkills",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupProject",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupAgentMcp",
+          "op": "equals",
+          "value": 0
+        }
       ]
     },
     {
       "step_id": "help-prompting-teaches-pdd",
       "entry_path": "prompts/cli/pdd-cli.prompt.md",
       "operation": "runPdd",
-      "input": {"argv": ["help", "prompting"]},
+      "input": {
+        "argv": [
+          "help",
+          "prompting"
+        ]
+      },
       "checks": [
-        {"criterion_id": "AC2", "target": "result", "path": "/stdout", "op": "contains", "value": "prompts/NAME.prompt.md"},
-        {"criterion_id": "AC2", "target": "result", "path": "/stdout", "op": "contains", "value": "## Dependencies"},
-        {"criterion_id": "AC2", "target": "result", "path": "/stdout", "op": "contains", "value": "Runtime interface"},
-        {"criterion_id": "AC2", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
-        {"criterion_id": "AC2", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
-        {"criterion_id": "AC3", "target": "result", "path": "/stdout", "op": "contains", "value": "user_stories/STORY.md"},
-        {"criterion_id": "AC3", "target": "result", "path": "/stdout", "op": "contains", "value": "Acceptance criteria"},
-        {"criterion_id": "AC3", "target": "result", "path": "/stdout", "op": "contains", "value": "tests/STORY.json"},
-        {"criterion_id": "AC3", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
-        {"criterion_id": "AC4", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd test"},
-        {"criterion_id": "AC4", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd lint"},
-        {"criterion_id": "AC4", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd approve"},
-        {"criterion_id": "AC4", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
-        {"criterion_id": "AC5", "target": "result", "path": "/stdout", "op": "contains", "value": "/docs/prompting-guide.md"},
-        {"criterion_id": "AC5", "target": "result", "path": "/stdout", "op": "contains", "value": "/RUNBOOK.md"},
-        {"criterion_id": "AC5", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
-        {"criterion_id": "AC7", "target": "result", "path": "/stdout", "op": "not_contains", "value": "pdd check"},
-        {"criterion_id": "AC7", "target": "result", "path": "/stdout", "op": "not_contains", "value": "pdd try"},
-        {"criterion_id": "AC7", "target": "result", "path": "/stdout", "op": "not_contains", "value": "workflow start"},
-        {"criterion_id": "AC7", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
-        {"criterion_id":"AC2","target":"calls","path":"/resources/pdd-cli-autopilotLauncher-runAutopilotLauncher","op":"equals","value":0}
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/stdout",
+          "op": "contains",
+          "value": "prompts/NAME.prompt.md"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/stdout",
+          "op": "contains",
+          "value": "## Dependencies"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/stdout",
+          "op": "contains",
+          "value": "Runtime interface"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/stderr",
+          "op": "equals",
+          "value": ""
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/exit_code",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/stdout",
+          "op": "contains",
+          "value": "user_stories/STORY.md"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/stdout",
+          "op": "contains",
+          "value": "Acceptance criteria"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/stdout",
+          "op": "contains",
+          "value": "tests/STORY.json"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/exit_code",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/stdout",
+          "op": "contains",
+          "value": "pdd test"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/stdout",
+          "op": "contains",
+          "value": "pdd lint"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/stdout",
+          "op": "contains",
+          "value": "pdd approve"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/exit_code",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/stdout",
+          "op": "contains",
+          "value": "/docs/prompting-guide.md"
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/stdout",
+          "op": "contains",
+          "value": "/RUNBOOK.md"
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/exit_code",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/stdout",
+          "op": "not_contains",
+          "value": "pdd check"
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/stdout",
+          "op": "not_contains",
+          "value": "pdd try"
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/stdout",
+          "op": "not_contains",
+          "value": "workflow start"
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/exit_code",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/pdd-cli-autopilotLauncher-runAutopilotLauncher",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/pdd-cli-package-readVersion",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/pdd-cli-skills-findSkills",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/pdd-cli-diagnostics-pathDiagnostic",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/interpreter-version-origin-resolve",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/interpreter-version-credentials-readToken",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/interpreter-version-metadata-get",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/pdd-cli-dispatch-prove",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/pdd-cli-dispatch-requestUptake",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/pdd-cli-dispatch-startRun",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/pdd-cli-agents-checkWorkflowAgents",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupSkills",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupProject",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupAgentMcp",
+          "op": "equals",
+          "value": 0
+        }
       ]
     },
     {
       "step_id": "prompting-is-an-unknown-command",
       "entry_path": "prompts/cli/pdd-cli.prompt.md",
       "operation": "runPdd",
-      "input": {"argv": ["prompting"]},
+      "input": {
+        "argv": [
+          "prompting"
+        ]
+      },
       "checks": [
-        {"criterion_id": "AC6", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
-        {"criterion_id": "AC6", "target": "result", "path": "/stderr", "op": "contains", "value": "Unknown command"},
-        {"criterion_id": "AC6", "target": "result", "path": "/stderr", "op": "contains", "value": "prompting"},
-        {"criterion_id": "AC6", "target": "result", "path": "/exit_code", "op": "equals", "value": 2},
-        {"criterion_id":"AC6","target":"calls","path":"/resources/pdd-cli-autopilotLauncher-runAutopilotLauncher","op":"equals","value":0}
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/stdout",
+          "op": "equals",
+          "value": ""
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/stderr",
+          "op": "contains",
+          "value": "Unknown command"
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/stderr",
+          "op": "contains",
+          "value": "prompting"
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/exit_code",
+          "op": "equals",
+          "value": 2
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "calls",
+          "path": "/resources/pdd-cli-autopilotLauncher-runAutopilotLauncher",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "calls",
+          "path": "/resources/pdd-cli-package-readVersion",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "calls",
+          "path": "/resources/pdd-cli-skills-findSkills",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "calls",
+          "path": "/resources/pdd-cli-diagnostics-pathDiagnostic",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "calls",
+          "path": "/resources/interpreter-version-origin-resolve",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "calls",
+          "path": "/resources/interpreter-version-credentials-readToken",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "calls",
+          "path": "/resources/interpreter-version-metadata-get",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "calls",
+          "path": "/resources/pdd-cli-dispatch-prove",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "calls",
+          "path": "/resources/pdd-cli-dispatch-requestUptake",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "calls",
+          "path": "/resources/pdd-cli-dispatch-startRun",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "calls",
+          "path": "/resources/pdd-cli-agents-checkWorkflowAgents",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupSkills",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupProject",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "calls",
+          "path": "/resources/pdd-cli-setup-setupAgentMcp",
+          "op": "equals",
+          "value": 0
+        }
       ]
     }
   ]

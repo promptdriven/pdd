@@ -11,7 +11,7 @@ expand references through the existing safe contract resolver before parsing.
 Keep numeric source tokens when parsing the effective Runtime interface.
 Approval displays that expanded interface but edits only the authored text.
 
-Export `promptMarkdownTargets(text, fromPath, visible)` returning declared Markdown `.prompt.md` dependency paths resolved against `visible`, and export `promptSchemaRefusals(root, found, prompt, prompts, seen = new Set(), {allowMissingInterfaces = false} = {})` as the common
+Export `promptMarkdownTargets(text, fromPath, visible)` returning declared Markdown `.prompt.md` dependency paths resolved against `visible`, and export `promptSchemaRefusals(root, found, prompt, prompts, seen = new Set(), {allowMissingInterfaces = false, lint = false} = {})` as the common
 parse/schema check for one prompt and its called prompts. Return all reached
 schema problems with code, section (JSON pointer), message and prompt path;
 retain fix hints. Missing/duplicate interfaces, invalid status and invalid JSON retain their
@@ -113,9 +113,11 @@ For a valid test with some exact checks, source capture keeps every authored ste
 | P9 | `input` matches `input_schema`. Skip an input that holds `$step_result`. Report every problem of every step at once | `invalid-input` |
 | P10 | An error step's `expected_error` is in the entry `errors`, with one `equals` check on `error` `/code` | `pdd-unknown-error`, `missing-error-check` |
 
-F1–F2 are local format advice, never refusals: report each one as a non-blocking warning with the prompt path, the JSON Pointer and the repair advice, for selected entry prompts and the prompts they call (every prompt when lint selects no Story), before authentication/upload in files previews and local/server lint. Checks and Try report F1 the same way. The selection keeps its state, exit code and upload; the engine is the one place that refuses. F2 explains the unsupported keyword; for `anyOf`, advise `oneOf` with complete variant schemas. A check keeps the schema rules below. Do not require every property in `required`: optional fields remain valid. No schema or expected value is rewritten. Other explicit-lint schema diagnostics remain server-owned.
+F1–F2 are local format advice, never refusals: report each one as a non-blocking warning with the prompt path, the JSON Pointer and the repair advice, for selected entry prompts and the prompts they call (every prompt when lint selects no Story), before authentication/upload in files previews and local/server lint. Checks and Try report F1 the same way. The selection keeps its state, exit code and upload; the engine is the one place that refuses. F2 explains the unsupported keyword; for `anyOf`, advise `oneOf` with complete variant schemas. `preflight` accepts an additive `lint` option, defaulting to false. When true, unsupported-keyword diagnostics and a missing type caused by that unsupported construct are warnings rather than schema refusals, while all other schema and scenario checks still run. A check keeps the schema rules below. Do not require every property in `required`: optional fields remain valid. No schema or expected value is rewritten. Other explicit remote-lint schema diagnostics remain server-owned.
 
-A broken step or check shape uses the engine code (`missing-steps`, `invalid-step`, `invalid-check`, `unknown-criterion`, `invalid-criterion`). For `invalid-step` at `steps[i]` (in both `checkTest` and `scenarioShapeRefusal`), explain the actual violation rather than printing only the required key list: if the step is not a JSON object, say it must be a JSON object and list the required keys (`step_id`, `entry_path`, `operation`, `input`, `checks`) and optional keys (`expected_error`, `simulation_overrides`, `model`); if required keys are missing or extra keys outside that closed set are present, name every missing key and every unknown key in quotes and state the required keys (`step_id`, `entry_path`, `operation`, `input`, `checks`) and allowed optional keys (`expected_error`, `simulation_overrides`, `model`); if `step_id`, `entry_path` or `operation` is not a nonblank string, name the offending key(s) and say they must be nonblank strings. A step may name a `model` (as the live engine eae2202a allows); a model that is not a nonblank string is `invalid-step-model`. pdd is never stricter than the live engine.
+A check target must be one of `result`, `error`, `world` or `calls`; refuse any other target as `invalid-check`. A step with `expected_error` cannot check `result`; refuse that check. Refuse a `result` JSON pointer that cannot exist in the entry’s closed `result_schema`; retain pointers that can exist in any permitted schema branch. These checks apply in `checkTest` and hence local preflight before sending.
+
+A broken step or check shape uses the engine code (`missing-steps`, `invalid-step`, `invalid-check`, `unknown-criterion`, `invalid-criterion`). For `invalid-step` at `steps[i]` (in both `checkTest` and `scenarioShapeRefusal`), explain the actual violation rather than printing only the required key list: if the step is not a JSON object, say it must be a JSON object and list the required keys (`step_id`, `entry_path`, `operation`, `input`, `checks`) and optional keys (`expected_error`, `simulation_overrides`, `model`); if required keys are missing or extra keys outside that closed set are present, name every missing key and every unknown key in quotes and state the required keys (`step_id`, `entry_path`, `operation`, `input`, `checks`) and allowed optional keys (`expected_error`, `simulation_overrides`, `model`); if `step_id`, `entry_path` or `operation` is not a nonblank string, name the offending key(s) and say they must be nonblank strings. A step may name a `model` (as the live engine eae2202a allows); a model that is not a nonblank string is `invalid-step-model`. Other shape rules stay aligned with the live engine; the static result-check refusals above also catch impossible assertions that hosted admission misses.
 - Default `max_calls` for a test: 12 for each step, at least 18, at most 1000. This is a ceiling, not a charge; steps that use saved data or prompt calls need room for their whole call graph. A refusal has `code`, `section` (engine style, for example `steps[0].input.items[0].quantity`), `message`, an optional `hint` and the 1-based `step`.
 
 - P7: drafts may run. A `draft` with a current hash passes, and its row is marked `draft`. A status that is neither `draft` nor `approved` is `interface-unapproved`. Stale hints: approved = `pdd: the text changed after approval: set status to draft, run pdd test --fill-hash, ask the person.`; draft = `pdd: <path> is a draft whose text changed after its hash was filled. Run pdd test --fill-hash.` Preflight never sets `approved`; only the host approval command does, after a person's `y` in a terminal.
@@ -180,11 +182,10 @@ Default shared-reference preparation uses the synchronous module function
 `readPrompt(root, visible, path)` parses/validates interface schemas and before
 `checkTest` validates a scenario or its inputs. Preserve readPrompt's synchronous
 public API. `--fill-hash` validates references but writes only its existing draft
-hash string, redundant full-kind member and, only with explicit compaction, interface JSON whitespace; never an expanded schema/world. Explicit lint prepares references
-without adding local engine-rule validation.
+hash string, redundant full-kind member and, only with explicit compaction, interface JSON whitespace; never an expanded schema/world. Explicit remote lint prepares references without adding local engine-rule validation; local lint uses the existing static validations.
 Preparation preserves existing malformed no-reference consumer handling:
 `readPrompt` still reports `invalid-json`, scenario failures keep their existing
-diagnostics, and explicit lint leaves engine validation server-side. Necessary
+diagnostics, and explicit remote lint leaves engine validation server-side. Necessary
 syntax parsing does not turn ordinary malformed consumer source into a contract
 error; malformed selected contract JSON still gives `contract-invalid`.
 
@@ -475,3 +476,16 @@ Binding-boundary repair messages call the declaration a Runtime interface bounda
 The existing synchronous prepareSource hook may mark exactly one returned file with optional `role: "app-map"`. Other roles, multiple marked outputs or a marked output whose effective JSON is not a v1 app map refuse with exit 4 before upload. Resolve the effective selected appMap to that marked file within this same capture attempt; explicit non-null appMap and a marked generated map conflict and refuse. Discover its screen, router, handler, after-operation and stylesheet closure using the ordinary app-map rules. The marked map's path is returned in capture.appMap. Its raw absence/Git visibility exception is only the existing virtual-output exception; retain workspace, privacy, ancestor, no-write and stability rules. A present ignored regular generated-name candidate is occupied, so composition chooses another name without reading or uploading its contents. Unsafe candidates remain refusals. No marked output preserves current results and archive bytes. Do not alter queue limits or scheduling.
 
 For each tested CLI-convention entry (an entry whose `/entries/<index>/input_schema` and `/entries/<index>/result_schema` both carry convention `"cli"`) that lacks an `implementation` declaration, include preflight warning `Warning: <entry_path> entry <operation> has no implementation declaration.`, and export `missingCliImplementationWarnings({root, found, selected})` returning only those CLI missing-implementation warnings for explicit lint. Non-CLI entries receive no missing-implementation warning, and this advice does not refuse an interpreter check.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "status": "approved",
+  "prose_sha256": "5a715163be46ba7b87db94308b3cff46b7ded2e21b303b45af1fd633471023c7",
+  "kind": "native-only",
+  "reason": "Preflight discovers real Git-visible files and captures identity-bound filesystem snapshots, including symlink and concurrent-change observations. Its injected Story matching ports cannot fake Git discovery or these filesystem effects; native tests cover those boundaries and the static checkTest rules."
+}
+```
+
+</details>

@@ -2,11 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runCheck } from '../src/runtime-seam.mjs';
-import { fakeRuntime, harbor, portsFor } from './helpers/runtime-fake.mjs';
+import { interfaceBlocks, runCheck } from '../src/runtime-seam.mjs';
+import { fakeRuntime, harbor, PLACE, portsFor } from './helpers/runtime-fake.mjs';
 
 for (const failed of [false, true]) test(`criterion coverage survives immediate and saved/read output (${failed ? 'failed' : 'passed'})`, async t => {
   const setup = harbor(t, repo => {
+    const promptPath = join(repo, PLACE), text = readFileSync(promptPath, 'utf8'), block = interfaceBlocks(text)[0];
+    const iface = JSON.parse(block[1]);
+    Object.assign(iface.entries[0].result_schema.properties, { exit_code: {type:'integer'}, exitCode: {type:'integer'}, stdout: {type:'string'} });
+    writeFileSync(promptPath, text.replace(block[1], JSON.stringify(iface)));
     const path = join(repo, 'tests/place-order.json'), doc = JSON.parse(readFileSync(path));
     // Synthetic authored checks: one mixed criterion, one exit-only criterion,
     // another output criterion.

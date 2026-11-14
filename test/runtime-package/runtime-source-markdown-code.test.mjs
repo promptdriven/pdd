@@ -95,5 +95,6 @@ test('SOURCE-MARKDOWN: pdd lint --local on actual repository selected source mak
   const selected = repositoryTests(row);
   const { ports, calls } = offline(temp(t));
   assert.equal(await runCheck({ cwd: root, words: selected, options: row.options }, ports), row.expected_exit_code, ports.stderr.text);
+  assert.match(ports.stdout.text + ports.stderr.text, /interface-missing/);
   assert.deepEqual(calls, { gh: row.expected_auth_calls, fetch: row.expected_network_calls });
 });

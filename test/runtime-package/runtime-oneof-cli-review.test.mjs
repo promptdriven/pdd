@@ -46,6 +46,7 @@ test('ONEOF2500 independent CLI replay: original addresses, overlap and numeric 
   const storyPath = join(repo, 'user_stories/place-order.md'), story = readFileSync(storyPath, 'utf8');
   const oldText = doc.criteria[1].text;
   const check = doc.steps[0].checks.find(row => row.criterion_id === 'AC2');
+  contract.entries[0].result_schema.properties.score = { type: 'integer' };
   check.path = '/score'; check.value = 28;
   for (const [text, warns] of [
     ['Starting from seed 42, I can play the fixed 30 moves and get the established replay result.', false],

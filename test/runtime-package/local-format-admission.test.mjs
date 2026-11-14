@@ -131,3 +131,33 @@ for (const skill of ['pdd-feature', 'pdd-bug']) test(`${skill} recommends drafti
   assert.match(rule, /[Oo]therwise.*(?:write|author).*Runtime block/);
   assert.doesNotMatch(rule, /required|must|need/);
 });
+
+test('local lint reports invalid checks even alongside unsupported schema warnings', async t => {
+  const setup = harbor(t, repo => {
+    unsupported(repo);
+    const path = join(repo, 'tests/place-order.json'), doc = JSON.parse(read(path));
+    doc.steps[0].checks.push({ criterion_id: doc.steps[0].checks[0].criterion_id, target: 'unknown', path: '', op: 'equals', value: 1 });
+    writeFileSync(path, JSON.stringify(doc));
+  });
+  const ports = offline(setup);
+  assert.equal(await runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--lint': true, '--local': true } }, ports), 4);
+  const out = ports.stdout.text + ports.stderr.text;
+  assert.match(out, /graph-schema-unsupported-keyword/);
+  assert.match(out, /invalid-check/);
+});
+
+for (const variant of ['explicit type', 'missing type sibling']) test(`local lint refuses ${variant} alongside unsupported schema warnings`, async t => {
+  const setup = harbor(t, repo => {
+    unsupported(repo);
+    rewrite(repo, PLACE, iface => {
+      const properties = iface.entries[0].input_schema.properties;
+      if (variant === 'explicit type') properties.state.properties.food.type = 'bogus';
+      else properties.broken = { description: 'missing type' };
+    });
+  });
+  const ports = offline(setup);
+  assert.equal(await runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--lint': true, '--local': true } }, ports), 4);
+  const out = ports.stdout.text + ports.stderr.text;
+  assert.match(out, /graph-schema-unsupported-keyword/);
+  assert.match(out, /graph-schema-type-invalid/);
+});

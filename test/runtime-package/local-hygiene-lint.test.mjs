@@ -16,7 +16,7 @@ const write = (repo, path, text) => {
 function withApprovedInterface(prose, operation = 'calculate') {
   const hash = proseSha256(prose);
   const iface = {
-    status: 'approved',
+    status: 'draft',
     prose_sha256: hash,
     limits: { max_steps: 2, max_model_calls: 2 },
     entries: [{
@@ -84,9 +84,10 @@ test('local lint emits non-blocking warnings for all 4 hygiene traps and clears 
   };
 
   const trapped = await runLint(['--json']);
-  assert.equal(trapped.code, 0, `warnings must never block exit 0: ${trapped.err}`);
+  assert.equal(trapped.code, 4, trapped.err);
   const parsed = JSON.parse(trapped.out);
-  assert.equal(parsed.exit_code, 0);
+  assert.equal(parsed.exit_code, 4);
+  assert.ok(parsed.problems.some(problem => problem.code === 'interface-stale'));
   assert.equal(parsed.warnings.length, 4, JSON.stringify(parsed.warnings, null, 2));
   assert.match(parsed.warnings[0], /Warning: oversized prompt: prompts\/calc\.prompt\.md has 504 prose lines \(limit: 500\)\./);
   assert.match(parsed.warnings[1], /Warning: misplaced prompt owner: prompts\/test\/calc-test\.prompt\.md claims \.github\/workflows\/ci\.yml, test\/calc\.test\.mjs, tsconfig\.json\./);
@@ -95,7 +96,7 @@ test('local lint emits non-blocking warnings for all 4 hygiene traps and clears 
 
   // Scoped Story local lint catches the selected Story's warnings and omits unrelated misplaced prompts.
   const scoped = await runLint(['calc', '--json']);
-  assert.equal(scoped.code, 0);
+  assert.equal(scoped.code, 4);
   const scopedJson = JSON.parse(scoped.out);
   assert.equal(scopedJson.warnings.length, 3);
   assert.ok(!scopedJson.warnings.some(line => line.includes('calc-test.prompt.md')));
@@ -106,7 +107,7 @@ test('local lint emits non-blocking warnings for all 4 hygiene traps and clears 
   const conciseProse = `# Calculator\n\nOwns \`src/calc.mjs\` and reads \`pdd.json\`.\n\n## Domain decisions\n\n${domainLines}\n\n`;
   const bigSchemaProps = Object.fromEntries(Array.from({ length: 185 }, (_, idx) => [`f${idx}`, { type: 'integer' }]));
   const bigIface = {
-    status: 'approved',
+    status: 'draft',
     prose_sha256: proseSha256(conciseProse),
     limits: { max_steps: 2, max_model_calls: 2 },
     entries: [{
@@ -115,7 +116,8 @@ test('local lint emits non-blocking warnings for all 4 hygiene traps and clears 
       result_schema: { type: 'object', required: ['y'], additionalProperties: false, properties: { y: { type: 'integer' } } },
     }],
   };
-  const cleanPrompt = `${conciseProse}<details><summary>Runtime interface</summary>\n\n\`\`\`json\n${JSON.stringify(bigIface, null, 2)}\n\`\`\`\n</details>\n`;
+  let cleanPrompt = `${conciseProse}<details><summary>Runtime interface</summary>\n\n\`\`\`json\n${JSON.stringify(bigIface, null, 2)}\n\`\`\`\n</details>\n`;
+  cleanPrompt = cleanPrompt.replace(/"prose_sha256": "[^"]*"/, `"prose_sha256": "${proseSha256(cleanPrompt)}"`);
   assert.ok(cleanPrompt.split('\n').length > 550, 'total prompt file lines exceed 500 due to Runtime interface JSON');
   const cleanHash = promptHeaderHash(cleanPrompt);
   write(setup.repo, 'prompts/calc.prompt.md', cleanPrompt);
@@ -455,7 +457,8 @@ test('scoped local lint excludes unselected nested fixtures, preserves filename-
 
   // Unscoped local lint: excludes nested-app, ignores calc.vectors.json, and names user_stories/calc.md for calc.json.
   const unscoped = await runLint(['--json']);
-  assert.equal(unscoped.code, 0, unscoped.err);
+  // The draft and non-scenario JSON remain hygiene inputs, and static admission refuses them.
+  assert.equal(unscoped.code, 4, unscoped.err);
   const unscopedJson = JSON.parse(unscoped.out);
   assert.equal(unscopedJson.reason.code, 'local-only');
   assert.equal(unscopedJson.reason.message, 'checked SVG layout only; prompts not checked');
@@ -465,7 +468,7 @@ test('scoped local lint excludes unselected nested fixtures, preserves filename-
 
   // Scoped local lint on root Story calc: still excludes nested-app and preserves user_stories/calc.md!
   const scopedRoot = await runLint(['calc', '--json']);
-  assert.equal(scopedRoot.code, 0, scopedRoot.err);
+  assert.equal(scopedRoot.code, 4, scopedRoot.err);
   const scopedRootJson = JSON.parse(scopedRoot.out);
   assert.deepEqual(scopedRootJson.warnings, [
     'Warning: oversized Story: user_stories/calc.md (tests/calc.json) has 18 scenario steps (limit: 15). Keep prompt scenarios focused on policy and authority boundaries and move multi-step state-machine or wire-protocol sequences to native tests (RUNBOOK.md §17, §18).',
@@ -473,7 +476,7 @@ test('scoped local lint excludes unselected nested fixtures, preserves filename-
 
   // Explicitly selecting the nested fixture Story inspects that nested fixture root.
   const scopedFixture = await runLint(['test/fixtures/nested-app/user_stories/nested.md', '--json']);
-  assert.equal(scopedFixture.code, 0, scopedFixture.err);
+  assert.equal(scopedFixture.code, 4, scopedFixture.err);
   const scopedFixtureJson = JSON.parse(scopedFixture.out);
   assert.ok(scopedFixtureJson.warnings.some(line => line.includes('test/fixtures/nested-app/user_stories/nested.md')));
   assert.ok(scopedFixtureJson.warnings.some(line => line.includes('test/fixtures/nested-app/src/nested.mjs:1')));

@@ -24,22 +24,28 @@ export async function replayRunPddVectors(t, file) {
       assert.equal(step.operation, 'runPdd', `Not replayed: unmapped operation ${step.operation}`);
       const stdout = capture(), stderr = capture(), calls = { resources: {} }, mapped = new Set();
       const spy = binding => {
-        const rule = scenario.simulation?.[binding];
-        if (!rule) return undefined;
+        if (!scenario.simulation?.[binding]) return undefined;
         mapped.add(binding);
         const [resource, method] = binding.split('.');
-        const id = `pdd-cli-${resource}-${method}`;
+        const owner = ['origin', 'credentials', 'metadata'].includes(resource) ? 'interpreter-version' : 'pdd-cli';
+        const id = `${owner}-${resource}-${method}`;
         calls.resources[id] = 0;
-        return async input => {
-          calls.resources[id]++;
-          if (rule.action === 'port.write') pointer(world, rule.world_pointer).push(structuredClone(input));
-          return structuredClone(rule.result_template);
-        };
+        return () => { calls.resources[id]++; assert.fail(`Unexpected ${binding} call`); };
       };
-      const runAutopilotLauncher = spy('autopilotLauncher.runAutopilotLauncher');
+      const get = name => spy(name);
+      const runAutopilotLauncher = get('autopilotLauncher.runAutopilotLauncher');
+      const deps = {
+        readPackageVersion: get('package.readVersion'), findSkills: get('skills.findSkills'),
+        pathDiagnostic: get('diagnostics.pathDiagnostic'),
+        interpreterVersionPorts: { resolveOrigin: get('origin.resolve'), readToken: get('credentials.readToken'), getMetadata: get('metadata.get') },
+        workflowProve: { proveRun: get('dispatch.prove') },
+        workflowRunner: { acknowledgeRequest: get('dispatch.requestUptake'), startRun: get('dispatch.startRun') },
+        workflowAgents: { checkWorkflowAgents: get('agents.checkWorkflowAgents') },
+        setupSkills: get('setup.setupSkills'), setupProject: get('setup.setupProject'), setupAgentMcp: get('setup.setupAgentMcp'),
+        autopilotLauncher: runAutopilotLauncher ? { runAutopilotLauncher } : noDispatch,
+      };
       for (const key of Object.keys(scenario.simulation ?? {})) assert.ok(mapped.has(key), `Not replayed: unmapped simulation ${key}`);
-      const exit_code = await runPdd(step.input.argv, { stdout, stderr, workflowRunner: noDispatch,
-        autopilotLauncher: runAutopilotLauncher ? { runAutopilotLauncher } : noDispatch });
+      const exit_code = await runPdd(step.input.argv, { stdout, stderr, ...deps });
       const result = { exit_code, stdout: stdout.text, stderr: stderr.text };
       for (const check of step.checks) {
         assert.ok(check.target === 'result' || check.target === 'calls', `Not replayed: unmapped target ${check.target}`);

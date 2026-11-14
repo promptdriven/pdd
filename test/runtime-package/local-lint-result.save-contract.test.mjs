@@ -113,3 +113,20 @@ test('valid local scope still saves a complete partial result through the source
   assert.equal(read.status,0,read.stderr); assert.deepEqual(JSON.parse(read.stdout),summary);
   assert.deepEqual(snapshot(h.state),before);
 });
+
+test('invalid authored entry paths produce static refusals for selected and default local lint', t => {
+  const h = fixture(t), path = join(h.repo,'tests/place-order.json');
+  const original = readJson(path);
+  for (const entry of ['../outside.prompt.md','/outside.prompt.md','prompts/../outside.prompt.md']) {
+    const doc = structuredClone(original);
+    doc.steps[0].entry_path = entry;
+    writeFileSync(path,JSON.stringify(doc));
+    for (const selector of [[],['place-order'],['tests/place-order.json']]) {
+      const result = command(h,['lint','--local','--json',...selector]);
+      assert.equal(result.status,4,`${entry} ${selector}: ${result.stderr}`);
+      const report = JSON.parse(result.stdout);
+      assert.ok(report.problems.some(problem => problem.code === 'entry-missing'),JSON.stringify(report.problems));
+      assert.ok(!report.local_scope.prompts.includes(entry));
+    }
+  }
+});

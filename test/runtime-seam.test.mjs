@@ -2429,7 +2429,7 @@ test('SEAM18 (M3-1, M3-2, M3-3): section 4.1 API keeps zero-static-import lazy l
     '<details><summary>Runtime interface</summary>',
     '',
     '```json',
-    '{"status":"draft","prose_sha256":"","entries":[{"operation":"render","input_schema":{"type":"object","additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"],"additionalProperties":false}}],"limits":{"max_steps":10,"max_model_calls":4}}',
+    '{"status":"draft","prose_sha256":"","entries":[{"operation":"render","input_schema":{"type":"object","properties":{},"required":[],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"],"additionalProperties":false}}],"limits":{"max_steps":10,"max_model_calls":4}}',
     '```',
     '</details>',
     '',
@@ -2469,7 +2469,7 @@ test('SEAM18 (M3-1, M3-2, M3-3): section 4.1 API keeps zero-static-import lazy l
     { root: cardRepo, local: true, options: { '--json': true } },
     { stdout: { write: s => { lintOut += s; } }, stderr: lintErr, env: { ...process.env, HOME: cardHome, PDD_STATE_DIR: cardState } },
   );
-  assert.equal(lintCode, 0);
+  assert.equal(lintCode, 0, lintOut);
   const lintReport = JSON.parse(lintOut);
   assert.ok(
     lintReport.warnings.some(w => String(w).includes('unmentioned-card-box')),
