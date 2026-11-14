@@ -7,7 +7,7 @@ import {runAgentProcess} from './agent-adapters.mjs';
 import {loadAgentDefinitions} from './agent-config.mjs';
 import {readCodexLimits} from './codex-limits.mjs';
 import {runAutopilotAlerts} from './autopilot-alerts.mjs';
-import {recordCostGithub, costReport} from './cost-ledger.mjs';
+import {recordCostGithub, costReport, isUuid, shortHash} from './cost-ledger.mjs';
 import {allRuns, readRun, stateDirFor, updateRunCosts} from './workflow-runs.mjs';
 import {launchProfile} from './workflow-launch-profile.mjs';
 import {expandHome} from './workflow-chat.mjs';
@@ -15,17 +15,21 @@ import {acquireRunLock} from './workflow-runner.mjs';
 
 const sha = v => typeof v === 'string' && /^[0-9a-f]{40,64}$/i.test(v);
 const named = v => typeof v === 'string' && v.trim().length > 0;
-const sessionIdentity = value => typeof value === 'string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(value);
 const read = (fs, path, fallback = null) => {
   try {return JSON.parse(fs.readFileSync(path, 'utf8'));}
   catch (e) {if(e.code === 'ENOENT') return fallback; throw e;}
 };
-const repositoryFolder=(run,ports)=>ports.auditStateRoot ?? join(stateDirFor(ports),'autopilot-audits',createHash('sha256').update(run.repo.toLowerCase()).digest('hex').slice(0,20));
+const repositoryFolder=(run,ports)=>ports.auditStateRoot ?? join(stateDirFor(ports),'autopilot-audits',shortHash(run.repo.toLowerCase()));
 const fileFor = (run, pr) => join(run.runDir, 'audits', `${pr}.json`);
 const auditIdentity = audit => createHash('sha256').update(JSON.stringify([audit.runId,audit.pr,audit.merge])).digest('hex');
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const time = value => Number.isFinite(value) && value >= 0;
 const invalidEvidence = () => Object.assign(Error('audit-evidence-invalid'), {code:'audit-evidence-invalid'});
+const savedMergeOf = pr => pr?.mergeCommit?.oid ?? pr?.mergeCommit ?? pr?.mergeSha;
+const evidenceCause = error => error instanceof SyntaxError || error.code === 'audit-evidence-invalid' ? 'audit-evidence-invalid' : 'audit-evidence-unreadable';
+const repoMismatch = (local, shared, repo) => shared.some(a => a.repository !== repo.toLowerCase())
+  || local.some(a => a.repository !== undefined && a.repository.toLowerCase() !== repo.toLowerCase());
+const sendAuditAlert = (run, ports, input) => (ports.sendAlert ?? (i => runAutopilotAlerts(i, {...ports, ...ports.alertPorts, repository: async () => ({nameWithOwner: run.repo})})))(input);
 function validAudit(audit) {
   if (!object(audit) || audit.schema !== 'pdd.audit.v1' || !named(audit.runId)
     || !Number.isSafeInteger(audit.pr) || audit.pr <= 0 || !sha(audit.merge) || !sha(audit.parent)
@@ -36,7 +40,7 @@ function validAudit(audit) {
     || Object.hasOwn(audit.chat,'session') && (!object(audit.chat.session) || !named(audit.chat.session.id))
     || Object.hasOwn(audit,'repository') && !/^[\w.-]+\/[\w.-]+$/.test(audit.repository)) return false;
   if (audit.state === 'recorded') {
-    if (!validResult(audit.result) || !time(audit.completedAt) || !sessionIdentity(audit.chat.session?.id)) return false;
+    if (!validResult(audit.result) || !time(audit.completedAt) || !isUuid(audit.chat.session?.id)) return false;
   } else if (['result','completedAt','comment','reopen','revert','alert','concern'].some(key => Object.hasOwn(audit,key))) return false;
   for (const key of ['comment','reopen','revert','alert']) if (Object.hasOwn(audit,key)) {
     const effect = audit[key];
@@ -101,11 +105,9 @@ export function pendingAudits({run}, ports = {}) {
   }
   try {
     ({local,shared}=auditInventory(fs,run,ports));
-    if(shared.some(a=>a.repository!==run.repo.toLowerCase())
-      || local.some(a=>a.repository!==undefined && a.repository.toLowerCase()!==run.repo.toLowerCase())) throw invalidEvidence();
+    if(repoMismatch(local,shared,run.repo)) throw invalidEvidence();
   } catch (error) {
-    const cause=error instanceof SyntaxError || error.code==='audit-evidence-invalid'
-      ? 'audit-evidence-invalid' : 'audit-evidence-unreadable';
+    const cause=evidenceCause(error);
     for(const pr of merged) hold(pr,cause);
     return [];
   }
@@ -113,7 +115,7 @@ export function pendingAudits({run}, ports = {}) {
     const copy=local.find(a=>a.pr===pr.number);
     if(copy && copy.runId!==run.runId) {hold(pr,'audit-attempt-mismatch');return false;}
     const authority=shared.filter(a=>a.runId===run.runId && a.pr===pr.number);
-    const savedMerge=pr.mergeCommit?.oid ?? pr.mergeCommit ?? pr.mergeSha;
+    const savedMerge=savedMergeOf(pr);
     const a=authority[0] ?? copy;
     if(authority.length>1 || savedMerge && a && a.merge!==savedMerge
       || copy && a && copy.merge!==a.merge) {hold(pr,'audit-evidence-invalid');return false;}
@@ -150,7 +152,7 @@ function alertDeliveryState(result) {
 // Separate custody lets us ask for a decision without importing or repairing authority.
 async function alertUnavailableRecommendation(run, pr, audit, ports) {
   const saved=run.pr.find(p=>p.number===Number(pr));
-  const savedMerge=saved?.mergeCommit?.oid ?? saved?.mergeCommit ?? saved?.mergeSha;
+  const savedMerge=savedMergeOf(saved);
   if(!audit || audit.runId!==run.runId || audit.pr!==Number(pr) || saved?.state!=='merged'
     || savedMerge && savedMerge!==audit.merge
     || audit.repository!==undefined && audit.repository.toLowerCase()!==run.repo.toLowerCase()) return;
@@ -175,8 +177,7 @@ async function alertUnavailableRecommendation(run, pr, audit, ports) {
         tried:'Held the audit without a revert or another auditor. Saved evidence and effect reservations are unchanged.',
         need:`Inspect the saved audit evidence and decide: keep the merge and finish the rest on issue #${run.number}, or revert on a review branch with git revert -m 1 ${audit.merge}, then open a PR against ${run.baseBranch}.`,
       })};
-    const result=await (ports.sendAlert ?? (i=>runAutopilotAlerts(i,{...ports,...ports.alertPorts,repository:async()=>({nameWithOwner:run.repo})})))(input);
-    reservation.state=alertDeliveryState(result);
+    reservation.state=alertDeliveryState(await sendAuditAlert(run,ports,input));
   } catch {reservation.state='unknown';}
   reservation.at=now();save(fs,file,reservation);
 }
@@ -221,19 +222,17 @@ async function auditMergeOwned({run, pr}, ports = {}) {
     try {if(new Set(candidates.map(a=>a.merge)).size===1)
       await alertUnavailableRecommendation(run,pr,candidates[0],ports);}
     catch { /* An unavailable alert journal cannot release the evidence hold. */ }
-    return fail(error instanceof SyntaxError || error.code==='audit-evidence-invalid'
-      ? 'audit-evidence-invalid; saved authority needs inspection.' : 'audit-evidence-unreadable; saved authority needs inspection.');
+    return fail(`${evidenceCause(error)}; saved authority needs inspection.`);
   }
   if(ports.auditHoldOnly) return fail('saved evidence needs an ordinary audit scan before follow-up.');
-  if(sharedRecords.some(a=>a.repository!==run.repo.toLowerCase())
-    || localRecords.some(a=>a.repository!==undefined && a.repository.toLowerCase()!==run.repo.toLowerCase()))
+  if(repoMismatch(localRecords,sharedRecords,run.repo))
     return fail('audit-evidence-invalid; saved audit repository differs.');
   if(sharedRecords.filter(a=>a.runId===run.runId && a.pr===Number(pr)).length>1)
     return fail('audit-evidence-invalid; conflicting saved merge identities.');
   let audit=read(fs,localFile);
   if(audit && audit.runId !== run.runId) return fail('audit-attempt-mismatch; audit belongs to another run attempt.');
   const saved=run.pr.find(p=>p.number===Number(pr));
-  const savedMerge=saved.mergeCommit?.oid ?? saved.mergeCommit ?? saved.mergeSha;
+  const savedMerge=savedMergeOf(saved);
   let merge=audit?.merge;
   if(!audit) {
     const pull = JSON.parse(await command('gh',['api',`repos/${run.repo}/pulls/${pr}`]));
@@ -344,7 +343,7 @@ async function auditMergeOwned({run, pr}, ports = {}) {
       else delete audit.chat.session;
       const previous = [...(run.chats??[]),...(run.abandonedChats??[]),run.chatReplacement?.original,run.chatReplacement?.replacement].filter(Boolean).map(c=>c.session?.id);
       for(const earlier of [...localRecords,...sharedRecords]) previous.push(earlier.chat?.session?.id);
-      if(answer.code !== 0 || !sessionIdentity(parsed.sessionId) || previous.includes(parsed.sessionId) || !validResult(parsed.result)) {
+      if(answer.code !== 0 || !isUuid(parsed.sessionId) || previous.includes(parsed.sessionId) || !validResult(parsed.result)) {
         audit.state='unknown';persist();return fail('auditor session or verdict is invalid.');
       }
       audit.result=parsed.result;audit.state='recorded';audit.completedAt=now();persist();
@@ -372,8 +371,7 @@ async function auditMergeOwned({run, pr}, ports = {}) {
             ? `Default: keep the merge and finish the rest on issue #${run.number}. Other option: revert on a review branch with git revert -m 1 ${audit.merge}, then open a PR against ${run.baseBranch}.`
             : 'Review the revert PR or resolve the saved revert failure.',
         })};
-        const result=await (ports.sendAlert ?? (i=>runAutopilotAlerts(i,{...ports,...ports.alertPorts,repository:async()=>({nameWithOwner:run.repo})})))(input);
-        if(alertDeliveryState(result)!=='sent') throw Error('Alert unconfirmed');
+        if(alertDeliveryState(await sendAuditAlert(run,ports,input))!=='sent') throw Error('Alert unconfirmed');
         return 'recorded';
       });
     }

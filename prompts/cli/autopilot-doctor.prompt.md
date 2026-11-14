@@ -45,8 +45,8 @@ configurationError (caught load error or null). Program/file/config selection po
 match the doctor. A saved binding wins over conflicting definition profile values.
 
 Printed commands must target that invocation environment. Compare it with the
-caller environment for HOME, PATH, CODEX_HOME, CLAUDE_CONFIG_DIR, GEMINI_CLI_HOME
-and each override name of the selected definition. Bind only the names that
+caller environment for HOME, PATH, CODEX_HOME, CLAUDE_CONFIG_DIR, GEMINI_CLI_HOME,
+ANTIGRAVITY_APP_DATA_DIR and each override name of the selected definition. Bind only the names that
 differ: an explicit unset (`-u NAME`) when the caller has NAME and the invocation
 environment does not, and `NAME=value` when the value differs. Such a fix is
 `env BINDINGS /bin/sh -c 'COMMAND'`. When no name differs, the fix is the plain
@@ -81,7 +81,7 @@ Check these boundaries in order and continue after failures:
   `git config user.name && git config user.email`.
 - Choose a signed-in configured agent using the launcher's normal provider order
   and invocation environment. Probe only Codex login status or Claude auth status
-  --json (preserve supported agy/Gemini launcher selection through its read-only readiness/credential ports). When sign-in is missing or signed out, fail with the installed agent's sign-in
+  --json (preserve supported agy/Gemini launcher selection through its read-only readiness/credential ports, mapping saved agy `configHome` to `ANTIGRAVITY_APP_DATA_DIR` and accepting Gemini `--version` with `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_GENAI_USE_VERTEXAI=true`, `GOOGLE_GENAI_USE_GCA=true`, or a `refresh_token` in `.gemini/oauth_creds.json` or `oauth_creds.json` under `GEMINI_CLI_HOME || HOME`). When sign-in is missing or signed out, fail with the installed agent's sign-in
   command. A configuration read error is advisory; it does not establish missing
   sign-in and must not create a failing agent check. Missing CLIs name their install command. Read Codex limits using its
   read-only account port. Limited and unknown are warnings. For Claude,
@@ -162,7 +162,7 @@ Do not use a GitHub ledger that writes reads to disk. Do not mutate arrays retur
 {
   "kind": "partial",
   "status": "approved",
-  "prose_sha256": "672f4dc5010bf15ab643f59366e903c35ddab435ea5caec73872fa197740d404",
+  "prose_sha256": "5a34da31b0bfbb2aac38cf4dee95acf3cee7eaf93ed65025b3676f2758a162cd",
   "entries": [
     {
       "operation": "runAutopilotDoctor",

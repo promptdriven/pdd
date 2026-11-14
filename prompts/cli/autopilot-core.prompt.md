@@ -40,6 +40,8 @@ string `core`; any other value, or none, is `full`.
 | `repairs` | `autopilot.maxRepairs` (the old key `autopilot.repairs` is an alias): safe integer of at least 0, default 6, the safety cap of repairs for one job |
 | `testCommand` | nonblank `autopilot.testCommand`; else `npm test` when `packageJson.scripts.test` exists; else `null` |
 
+When `autopilot.modelTiering` is a Boolean or plain object, `coreSettings` also preserves `modelTiering` (omitting the key when unset so the default settings shape stays unchanged).
+
 `readCoreSettings(cwd, fs, machine = null)` applies it to `cwd/pdd.json` and `cwd/package.json`;
 an unreadable file counts as absent.
 
@@ -57,6 +59,8 @@ restart reads them again. A job file has `issue`, `title`, `url`, `body`,
 `progress {sig, at, running}`, the started `agent` job, and in phase `pr` also `pr`,
 `head`, `runtime`, `review` and `suite`.
 
+**Opt-in model tiering and phase/token telemetry.** Agent launches (`build`, `repair`, `conflict`, `review`, and shadow `intake`) keep the exact default [`agentCommand`](agent-job.prompt.md) CLI arguments unless `settings.modelTiering` / `autopilot.modelTiering` or `PDD_MODEL_TIERING` (`"1"` or `"true"`) enables [Autopilot telemetry](autopilot-telemetry.prompt.md) tiering. When enabled, worker roles (`intake`, `build`, `repair`, `conflict`) and reviewer roles (`review`) resolve models and reasoning effort via `resolveStepModelTier` and `buildTieredAgentArgs` (honoring `PDD_WORKER_MODEL`, `PDD_REVIEWER_MODEL`, `PDD_WORKER_EFFORT`, `PDD_REVIEWER_EFFORT`, and placing Codex flags before `-`). Engine `intake` and `merge` steps record spans with `createPhaseTracker`, and every completed job part (`build`, `repair`, `conflict`, `review`, `suite`, `vectors`, `runtime`) records its wall-clock span once via `recordPhaseSpan` and extracts agent log token usage via `extractHarnessTokens`, saving `{phases, tokens}` (`summarizeIssuePhases` and `summarizeIssueTelemetry`) on `job.telemetry`, the head evidence record, and the `history.jsonl` completion line.
+
 **The process rule (debate C, one function `watchProcess`).** It applies to every agent
 process: build, repair, conflict, review and suite, and to the `pdd test` run of the
 Runtime step (role `runtime`, like the suite: no P1, P2 or P3). Each tick, for each running process:
@@ -68,7 +72,7 @@ Runtime step (role `runtime`, like the suite: no P1, P2 or P3). Each tick, for e
   to 1 MB; the size only above), so a re-run that writes the same file or an edit that flips
   back is not new; (P3) a tool call in its own stream that is not a wait (Codex `--json`
   `item.completed` with its type and fields; Claude `stream-json` `tool_use` with its name and
-  input; agy `stream-json` `step_update` of `step_type` `tool` and `state` `DONE` with its
+  input; Gemini `stream-json` `tool_use` with its `tool_name` and `parameters`; agy `stream-json` `step_update` of `step_type` `tool` and `state` `DONE` with its
   `tool_name` and `tool_info.parameters`; the tools `wait`, `wait_5_seconds`, `wait_agent`,
   `sleep`, `list_agents`, a `write_stdin` with no input and a `sleep N` command are waits);
   (P4) a tool output line (also of a wait) or a
@@ -250,22 +254,23 @@ that issue for this tick.
 
 ## Claim and start
 
-**No label, no claim.** When the settings have `labelRequired` (the launcher sets it) and no `label`, intake claims
+**No label, no claim.** When the settings have `labelRequired` (the launcher sets it), no `label`, and `intake` is not `active`, intake claims
 nothing and returns `intake held: no opt-in label; run pdd autopilot start --label pdd:autopilot and mark issues with
-pdd autopilot add N`. Jobs still advance. Without `labelRequired` (a direct `tickCore` call), no label means every
-ready issue.
+pdd autopilot add N`. Jobs still advance. Without `labelRequired` (a direct `tickCore` call) or when `intake` is `active`, no opt-in label is required.
 
-**Collisions at start (debate B 5.1, 5.2; notes and hints, never a lock).** S2: intake
+**Active intake selection, grouping and area serialization (#3189, #3190, #3233).** When `settings.intake` is `active`, `tickCore` first calls `collectActiveIntake` of [intake cards](autopilot-intake.prompt.md) so finished card and auto-improve passes update `ROOT/intake/cards/` before core selection. Active intake card checks run only on sandboxed `codex` or `claude` logins (never `gemini`, `agy`, `--yolo` or `--dangerously-skip-permissions`): when neither `ports.selectLogin({allowedKinds: ["codex", "claude"]})` nor `state.agent` can supply a ready `codex` or `claude` login and no ready cards can start, `intake()` records `state.intakeNote` (`intake held: active intake needs a codex or claude login` or the active intake pool cooldown note) and surfaces it in the tick hold and `coreStatus` so status never sits silent with zero issues claimed. In `active` mode, core selection considers only ready issues whose saved intake card matches the current `issueVersion(row)` (or pre-comment auto-improved version) with `card.class === "ready"`; unvetted, `improve`, `person` and other card classes never start a build. Eligible issues are ranked with `wouldPick` (unblockers with `total_blocking > 0` first, then issues continuing an active group, then high-clarity small or bug wins, then priority labels, ahead of oldest age). When 2 to 3 small `ready` issues share a `group_with` cluster or overlapping module `areas` (`groupReadyIssues`), core claims them together into one grouped job (`job.issues = [primary, ...companions]`, `job.companions`, `job.areas`), includes all companion specs and any refined specification in `issueText`, requires `Closes #A`, `Closes #B` in the PR body and `writeEvidenceBlock`, heartbeats all member claims (detaching any companion whose claim expired or was won by another machine), and closes, marks or releases only verified-owned member issues on merge, observe `would-merge`, END or stop. Any candidate or group whose `areas` (card `areas`, named paths or `area:*` labels) overlap a running job's `areas`, changed `files`, named paths or `area:*` labels (`areasOverlap`) waits out that slot (`intake held: area busy (#M touches AREA)`) while disjoint candidates take free slots.
+
+**Collisions at start (debate B 5.1, 5.2; notes and hints, never a lock).** S2: in `off` and `shadow` intake modes, intake
 reads up to the free slots plus 4 ready issues and starts first those whose named
 paths (paths in the title and body) meet no other running job (its named paths and its
 changed files); else the oldest. A slot is never left idle for it. S3: the build brief
 lists each other running job of the repository (this machine's job files; for other
-machines the `files` of the claim records of `pdd:working` issues, at most 10, read only
+machines the `files` and `areas` of the claim records of `pdd:working` issues, at most 10, read only
 when an issue is ready) with
 "Other jobs change these files now. Change them only when the issue needs it. Keep such
 edits small and on their own lines.", and the base merges of the last 24 hours that
 touched files that the issue names. P1: at each push (once per head) the job's changed
-files are written into its claim record (`files`) with a PATCH of its own claim comment.
+files (and `areas`, when set) are written into its claim record with a PATCH of its own claim comment.
 
 For each ready issue while slots are free, at most 3 claim attempts per tick:
 
@@ -332,7 +337,9 @@ For each ready issue while slots are free, at most 3 claim attempts per tick:
    start error, also one that the spawn reports later, ends the saved job as
    `no-result`; it never stops the tick.
 
-Intake is held before a claim when the saved agent is not Codex, Claude or agy, when
+Intake is held before a claim when the saved agent is not Codex, Claude, Gemini or agy
+(unless `ports.selectLogin` supplies a supported pool login), when `ports.selectLogin()`
+reports an exhausted login pool (`intake held: the login pool is exhausted ...`), when
 `ports.agentReady()` is false at the first ready issue (for example a Codex usage
 limit), while a machine pause runs (below), or while CI does not start in this
 repository ([Stop owners](#stop-owners), #3260). A final machine-room denial can
@@ -425,6 +432,22 @@ end as `no-result`. Every job kind follows the same rules, in every machine stat
    from now, for example after the clock went back, or a `pending` that is not
    `{issue, at}` numbers) reads as not paused, `streak` 0, `hours` 1, no pending; it
    never stops a tick or status.
+   **Multi-harness login pool (#3252):** when `ports.selectLogin` and
+   `ports.exhaustLogin` are supplied by the [login pool](login-pool.prompt.md), each AI
+   process (`build`, `repair`, `conflict`, `review`) selects the first healthy login and
+   runs with that login's `agent` and isolated `env` (`loginId` saved on the part). When
+   such an AI process ends with no result because of a quota, usage-limit, spend-control
+   or out-of-credits refusal (`isQuotaExhaustionMessage`), the engine calls
+   `ports.exhaustLogin` for that `loginId`: while another login in the pool is `ready`
+   (bounded by the pool size per job), it cleans up the finished part and restarts the
+   same step in place on the next login with zero issue strikes, zero `holdIssue`, zero
+   `pending` and zero `streak` increment. When every login in the pool is `exhausted`, it
+   saves `poolOut {since, resetAt, reason, alerted}` in `core.json`, sends at most one
+   deduplicated `usage-limit` alert naming the earliest reset time (`resetAt`), holds a
+   phase `pr` job via a `service` step wait until `resetAt` (without `holdIssue` or
+   `streak` increment) or releases an unbuilt job cleanly (`owner: "service"`, no
+   cooldown, no `holdIssue`, no `streak` increment), and wakes automatically once `now >=
+   resetAt` or `ports.selectLogin()` finds a `ready` login again (clearing `poolOut`).
 4. `history.jsonl` is read line by line and a line that does not parse is skipped.
    Before each append, the file gets a newline when it does not end with one, so a cut
    line never swallows the next record.
@@ -588,7 +611,7 @@ then such files oldest first while the folder holds more than 500 MiB. Each step
 warns. The numbers are the guard's `logDays` and `logBytes`.
 
 Jobs run through the [headless job runner](agent-job.prompt.md) with
-`agentCommand(state.agent)` and `jobEnvironment(env)`, in `logs/`, with id
+`agentCommand` for Codex, Claude and agy (or Gemini headless CLI `-p "" --output-format stream-json --approval-mode yolo` with optional `--model MODEL` and stdin prompt) and `jobEnvironment(env)` (using the selected pool login's `agent` and isolated `env` when `ports.selectLogin` is present), in `logs/`, with id
 `N-ROLE-STAMP`. The prompt names the job's result file path. Every job runs the pdd
 that runs the tick: the tick writes `bin/pdd` in `ROOT` (`#!/bin/sh` and `exec 'NODE'
 'PACKAGE/bin/pdd.mjs' "$@"`, with this Node and this package, quoted for the shell;
@@ -600,7 +623,7 @@ older than the engine). The build, repair, conflict and review jobs get `pddChec
 {version, cli, skills}`: the engine's version (`ports.version` or the package version),
 `ROOT/bin/pdd`, and `skills {dir, version, read}` (`dir` = `PDD_SKILLS`, `version` = its
 `pdd-feature/SKILL.md` `pdd-skills:` value, `read` = the folder that the job's agent
-loads by default: Codex and agy `~/.agents/skills`, Claude `$CLAUDE_CONFIG_DIR/skills` when that
+loads by default: Codex, Gemini and agy `~/.agents/skills`, Claude `$CLAUDE_CONFIG_DIR/skills` when that
 is absolute, else `~/.claude/skills`). The [job runner](agent-job.prompt.md) notes when
 the agent's shell finds another pdd or the installed skills have another version, and
 status shows those notes beside the running process. They file nothing and never end a
@@ -1678,8 +1701,8 @@ files only: the engine line (mode, repository, folder, base, agent), the slot li
 guard's machine line when the launcher gives one (`guard`, for example `Machine:
 share 50% (default) of 10 cores and 16 GiB · slots min(4, 5 cores ÷ 2, 8 GiB ÷ 3 GiB) = 2
 → 2 (automatic) · … · new work: held (memory pressure)`), the pause
-line (`New jobs paused until TIME (H h): …` or `No pause: N no-result end(s) in a row …`), the CI line
-while `ciDown` is set (`CI does not start: …`), one line per job (`#N build running 12m (log …)`, `#N PR #P at SHA: review …,
+line (`New jobs paused until TIME (H h): …` or `No pause: N no-result end(s) in a row …`), the login-pool exhaustion line while `poolOut` is set (`Login pool exhausted since TIME: next reset at TIME.` or `Bounded retry window applies.`), the CI line
+while `ciDown` is set (`CI does not start: …`), any active-intake login hold (`state.intakeNote`), one line per job (`#N build running 12m (log …)`, `#N PR #P at SHA: review …,
 suite …`, with `; merge lane: final step`, `; merge lane: waiting for PR #P since TIME`,
 `; Runtime: waits for the interpreter maintenance since HH:MM UTC (until HH:MM UTC); no
 slot` or `; Runtime: the check that was not sent runs again`, `#N ending: …`), one line per step wait
@@ -1722,7 +1745,7 @@ merge)`.
 `gh(args, {input})` and `git(args, {cwd})` return `{code, stdout, stderr}`; GitHub
 REST calls use `gh api --include --method M ENDPOINT [--input -]`. Also `now()`,
 `fs`, `root`, `reportRoot`, `env`, `version` (the PDD version), `listIssues()`,
-`trusted(row)`, `agentReady()`, `warn(text)`, `alert({issue, kind, text, tried, need, update})`,
+`trusted(row)`, `agentReady()`, optional `selectLogin()` and `exhaustLogin({loginId, resetAt, reason})` of the [login pool](login-pool.prompt.md), `warn(text)`, `alert({issue, kind, text, tried, need, update})`,
 `machine` (`{room, priority(role)}` of the [machine guard](machine-guard.prompt.md); absent: no
 room check and the job runner's default priority), `untestedStories(tree)` (default
 `findTests` of the preflight), `runtimeHealth()` (default `checkRuntimeHealth({env})`) and `resendChecks({root, since})`
@@ -1737,6 +1760,8 @@ with the native defaults named above.
 - [File owner lookup](file-owner.prompt.md): required for `findOwners`, `resolveOwners`
   and `promptHeaderHash` (M-a derived prompt headers).
 - [Headless job runner](agent-job.prompt.md): required for job start, outcome, capture and cleanup.
+- [Multi-harness login pool](login-pool.prompt.md): required for `isQuotaExhaustionMessage` and optional login selection/cooldown rotation.
+- [Autopilot telemetry](autopilot-telemetry.prompt.md): required for opt-in worker/reviewer model tiering, per-phase wall-clock tracking, and harness log token summaries.
 - [Machine guard](machine-guard.prompt.md): required for `slotCount` (the slots) and
   `GUARD` (the cleanup limits).
 - [GitHub dependency reader](issue-dependencies-github.prompt.md): required for the

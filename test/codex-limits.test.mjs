@@ -212,3 +212,49 @@ test('native fake app-server process reads limits without creating a thread or a
   const result = await readCodexLimits({ command: file, cwd: dir, env: { HOME: dir, PATH: process.env.PATH } });
   assert.equal(result.state, 'limited'); assert.equal(result.resetAt, 1800000000000);
 });
+
+test('#3252 weekly stop line stops secondary window at 97% by default while primary stops at 100%, and spendControlReached stops immediately', async () => {
+  assert.deepEqual(parseCodexLimits(limits(window(99), window(96.9, 1800000600))), { state: 'healthy', resetAt: null, usedPercent: 99 });
+  assert.deepEqual(parseCodexLimits(limits(window(40), window(97, 1800000600))), { state: 'limited', resetAt: 1800000600000, usedPercent: 97 });
+  assert.deepEqual(parseCodexLimits(limits(window(40), window(98.5, 1800000900))), { state: 'limited', resetAt: 1800000900000, usedPercent: 98.5 });
+  assert.deepEqual(parseCodexLimits(limits(window(40), window(96, 1800000600)), { weeklyStopPercent: 95 }), { state: 'limited', resetAt: 1800000600000, usedPercent: 96 });
+  assert.deepEqual(parseCodexLimits({ rateLimits: { primary: window(10), secondary: window(20, 1800000300), spendControlReached: true } }), { state: 'limited', resetAt: 1800000300000, usedPercent: 20 });
+  assert.deepEqual(parseCodexLimits({ rateLimits: { primary: window(10, null), secondary: window(20, null), spendControlReached: true } }), { state: 'limited', resetAt: null, usedPercent: 20 });
+
+  const f = fakeServer(limits(window(12), window(97, 1800001200)));
+  const viaTransport = await readCodexLimits({ weeklyStopPercent: 97 }, { spawn: () => f.process });
+  assert.deepEqual(viaTransport, { state: 'limited', resetAt: 1800001200000, usedPercent: 97 });
+
+  // OpenAI Pro accounts report their 7-day weekly window in primary (windowDurationMins: 10080) with secondary: null.
+  assert.deepEqual(parseCodexLimits({
+    rateLimits: {
+      planType: 'pro',
+      primary: { usedPercent: 97, windowDurationMins: 10080, resetsAt: 1795218173 },
+      secondary: null,
+      credits: { hasCredits: true },
+    },
+  }), { state: 'limited', resetAt: 1795218173000, usedPercent: 97 });
+  assert.deepEqual(parseCodexLimits({
+    rateLimits: {
+      planType: 'pro',
+      primary: { usedPercent: 96, windowDurationMins: 10080, resetsAt: 1795218173 },
+      secondary: null,
+      credits: { hasCredits: true },
+    },
+  }), { state: 'healthy', resetAt: null, usedPercent: 96 });
+  assert.deepEqual(parseCodexLimits({
+    rateLimits: {
+      planType: 'pro',
+      primary: { usedPercent: 97, resetsAt: 1795218173 },
+      secondary: null,
+      credits: { hasCredits: true },
+    },
+  }), { state: 'limited', resetAt: 1795218173000, usedPercent: 97 });
+  assert.deepEqual(parseCodexLimits({
+    rateLimits: {
+      planType: 'team',
+      primary: { usedPercent: 98, windowDurationMins: 300, resetsAt: 1795000000 },
+      secondary: { usedPercent: 60, windowDurationMins: 10080, resetsAt: 1795218173 },
+    },
+  }), { state: 'healthy', resetAt: null, usedPercent: 98 });
+});

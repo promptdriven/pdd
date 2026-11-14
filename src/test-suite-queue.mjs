@@ -41,11 +41,7 @@ export async function configureCheckCapacity({env = process.env, checks, runs, o
   } : {};
   const capacity = {...calculateCheckCapacity({checks,runs}, {...p,env,...shared}), owner, observedAt, expiresAt:observedAt + CAPACITY_LIFETIME};
   p.fs.mkdirSync(p.root, {recursive:true,mode:0o700});
-  await underLock(p, () => {
-    const path = join(p.root, 'capacity.json'), temp = `${path}.${p.uuid()}.tmp`;
-    try { p.fs.writeFileSync(temp, JSON.stringify(capacity), {mode:0o600}); p.fs.renameSync(temp,path); }
-    finally { try { p.fs.unlinkSync(temp); } catch {} }
-  });
+  await underLock(p, () => writeAtomic(p, join(p.root, 'capacity.json'), JSON.stringify(capacity)));
   return capacity;
 }
 export async function releaseCheckCapacity({env = process.env, owner}, ports = {}) {
@@ -152,11 +148,13 @@ function portsFor(env, ports) {
     execute: (command, options) => ports.spawn ? executeSuite(command, options, ports) : executeRecordedSuite(command, options, ports),
     processIdentity, git:(args,cwd) => spawnSync('git',args,{cwd,encoding:'utf8',maxBuffer:64*1024*1024,timeout:5000,env:{PATH:env.PATH ?? '/usr/bin:/bin',HOME:env.HOME,LC_ALL:env.LC_ALL ?? 'C',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null'}}), uuid: randomUUID, ...ports, root: ports.queueRoot ?? suiteQueueRoot(env) };
 }
-function save(p, record) {
-  const target = join(p.root, `ticket-${record.ticket}.json`), temp = `${target}.${p.uuid()}.tmp`;
-  try { p.fs.writeFileSync(temp, serializeValidationReceipt(record), { mode: 0o600 }); p.fs.renameSync(temp, target); }
+function writeAtomic(p, target, content) {
+  const temp = `${target}.${p.uuid()}.tmp`;
+  try { p.fs.writeFileSync(temp, content, { mode: 0o600 }); p.fs.renameSync(temp, target); }
   finally { try { p.fs.unlinkSync(temp); } catch {} }
 }
+const save = (p, record) => writeAtomic(p, join(p.root, `ticket-${record.ticket}.json`), serializeValidationReceipt(record));
+const announceReceipt = (ports, p, row) => { if (ports.announceReceipt !== false) p.say(`Validation receipt: ${row.receiptPath}; output evidence: ${row.logPath}`); };
 function records(p) {
   let names;
   try { names = p.fs.readdirSync(p.root); } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
@@ -248,7 +246,7 @@ export async function runTestSuite({ cwd, command, timeout = 30, env = process.e
       catch (error) { try { p.fs.unlinkSync(record.logPath); } catch {} throw error; }
       return record;
     });
-    if (ports.announceReceipt !== false) p.say(`Validation receipt: ${row.receiptPath}; output evidence: ${row.logPath}`);
+    announceReceipt(ports, p, row);
     let lastPosition;
     for (;;) {
       const position = await underLock(p, () => {
@@ -299,7 +297,7 @@ export async function runTestSuite({ cwd, command, timeout = 30, env = process.e
       row.reason = result.reason == null ? (!confirmed ? 'Test suite descendant ownership is unknown.' : result.exitCode ? `Test suite exited with status ${result.exitCode}.` : null) : safeEvidenceText(result.reason);
       save(p, row);
     }
-    if (ports.announceReceipt !== false) p.say(`Validation receipt: ${row.receiptPath}; output evidence: ${row.logPath}`);
+    announceReceipt(ports, p, row);
     return { exitCode: result.ownershipConfirmed === false ? 1 : result.exitCode, message: row.reason ? safeEvidenceText(row.reason) : 'Full test suite finished.' };
   } catch (error) {
     // Setup cannot have a child. Once execution starts, keep the reservation

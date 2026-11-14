@@ -1,6 +1,6 @@
 # Read Codex account limits
 
-Own `src/codex-limits.mjs`. Export async `readCodexLimits({command,cwd,env}, ports={})`
+Own `src/codex-limits.mjs`. Export async `readCodexLimits({command,cwd,env,weeklyStopPercent}, ports={})`
 with `spawn` injectable. Start only command `app-server --listen stdio://` with
 this exact environment. Exchange newline-delimited JSON: initialize id 1 with
 clientInfo name pdd_health, title PDD health, version 1; after its successful
@@ -16,14 +16,22 @@ child and return the selected result. A descendant holding an inherited pipe
 must not prevent completion. An already closed child or a failed spawn needs no
 stop. This allows ordinary shutdown effects to complete while keeping failed
 health observations finite. Never log or return raw messages, errors, credentials, account
-identity, credit balances or reset-credit metadata. Export `parseCodexLimits(reply)`
+identity, credit balances or reset-credit metadata. Export `parseCodexLimits(reply, {weeklyStopPercent=97}={})`
 for the same response normalization.
 
 Return exactly `{state, resetAt, usedPercent}`. States are healthy, limited or
 unknown; resetAt is epoch milliseconds or null; usedPercent is a number or null.
 Use the codex bucket in rateLimitsByLimitId when present, else rateLimits.
-A primary or secondary window at 100% or above blocks; a nonblank
-rateLimitReachedType also blocks. Preserve a block with unknown reset time.
+A short primary window (such as 300 minutes) blocks at 100% or above. Any
+secondary window, any primary window with `windowDurationMins >= 1440` (such as
+OpenAI Pro accounts reporting their 7-day 10,080-minute weekly window in
+`primary` with `secondary: null`), or a single-window Pro or credit-enabled
+account (`secondary == null` without a shorter `windowDurationMins` when
+`planType === "pro"` or `credits.hasCredits === true`) blocks at
+`weeklyStopPercent` (default 97%, finite in `(0, 100]`) or above so Pro and
+credit-enabled accounts stop before paid extra credits burn. A nonblank
+rateLimitReachedType or `spendControlReached === true` (on the bucket or reply)
+also blocks. Preserve a block with unknown reset time.
 A window is valid only with finite usedPercent >=0; resetsAt may be null or a
 finite nonnegative Unix seconds value within Date range. Missing windows with
 no explicit reached type, malformed windows/bucket, protocol errors, missing
