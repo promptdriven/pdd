@@ -59,6 +59,11 @@ export function observeLifecycle(chat, live, at, agent = chat?.agent, ran = null
   // Running is the live agent in the saved pane; it is exact unless it shows another session than the saved one.
   if (live.alive) return { state: 'running', exact: !validSessionId(chat.session?.id) || !live.sessionId || live.sessionId === chat.session.id,
     ...(live.sessionId ? { session: { agent, id: live.sessionId } } : {}) };
+  if (state === 'failed') return { state, ...(chat.code ? {code: chat.code} : {}), ...(chat.evidence ? {evidence: chat.evidence} : {}) };
+  if (state === 'running' && live.code === 'agent_not_found' && live.launchFailure?.exitCode > 0)
+    return {state: 'ended', evidence: {kind: 'launch-exit', at, paneId: chat.paneId, ...live.launchFailure}};
+  if (['starting', 'unknown'].includes(state) && live.code === 'agent_not_found' && live.launchFailure)
+    return {state: 'failed', code: 'agent_launch_failed', evidence: {kind: 'launch-exit', at, paneId: chat.paneId, ...live.launchFailure}};
   if (!ABSENT.has(live.code)) return { state: state === 'running' ? 'unknown' : state };
   if (state === 'ended' || state === 'failed') return { state };
   if (chat.startUnconfirmed) return { state: 'starting' };
@@ -110,7 +115,9 @@ export function applyLifecycle(chat, observed) {
   chat.state = observed.state;
   if (observed.session) chat.session = observed.session;
   if (observed.evidence) chat.evidence = observed.evidence;
-  else if (observed.state !== 'ended') delete chat.evidence;
+  else if (!['ended', 'failed'].includes(observed.state)) delete chat.evidence;
+  if (observed.code) chat.code = observed.code;
+  if (observed.state === 'failed') delete chat.startUnconfirmed;
   if (observed.state !== 'failed') delete chat.code;
   return chat;
 }
@@ -245,7 +252,12 @@ async function launchInPane(herdr, paneId, options, { run, env, ports = {}, befo
     const excludeDynamicSystemPromptSections = options.agent === 'claude'
       ? (options.excludeDynamicSystemPromptSections ?? await claudeSupportsExcludeDynamic(launch.program ?? 'claude', { cwd: options.cwd, env: probeEnv, ports }))
       : false;
-    const command = chatCommand({ ...options, ...launch, excludeDynamicSystemPromptSections });
+    let command = chatCommand({ ...options, ...launch, excludeDynamicSystemPromptSections });
+    if (options.launchExitFile) {
+      const prefix = `cd ${quote(options.cwd)} && `;
+      const script = '"$@"; pdd_launch_exit=$?; (umask 077; printf "%s\\n" "$pdd_launch_exit" > "$0"); exit "$pdd_launch_exit"';
+      command = `${prefix}sh -c ${quote(script)} ${quote(options.launchExitFile)} ${command.slice(prefix.length)}`;
+    }
     await beforeLaunch?.();
     const reply = await herdr(['pane', 'run', paneId, command]);
     if (options.namingChat) {
@@ -288,6 +300,7 @@ export async function startChat({ run, area, message }, ports = {}) {
   savedAgentEntry(run, run.agent, env);
   await ensureServer(herdr, ports);
   const messageFile = join(run.runDir, `${area}-start.md`);
+  const launchExitFile = join(run.runDir, `${area}-launch-${randomUUID()}.exit`);
   const profile = launchProfile(run), herdrAgentName = chatAgentName(profile, area, run);
   const sessionId = run.agent === 'claude' ? randomUUID() : null;
   const configDir = expandHome(run.configDir !== undefined ? run.configDir : env[homeVariable(run.agent)], env);
@@ -296,7 +309,7 @@ export async function startChat({ run, area, message }, ports = {}) {
   const identity = layout => {
     if (startedAt === undefined) { writeFileSync(messageFile, message); startedAt = now(); }
     return { area, agent: run.agent, launchProfile: profile, herdrAgentName, tabId: layout.tabId, paneId: layout.paneId, terminalId: layout.terminalId, workspaceId: layout.workspaceId, repoWorkspaceId: layout.repoWorkspaceId,
-    label: `${run.repo.split('/')[1]}#${run.number} ${run.workflow} › ${area}`, startedAt, session: sessionId ? { agent: 'claude', id: sessionId } : null, configDir, messageFile, state: 'starting' };
+    label: `${run.repo.split('/')[1]}#${run.number} ${run.workflow} › ${area}`, startedAt, session: sessionId ? { agent: 'claude', id: sessionId } : null, configDir, messageFile, launchExitFile, state: 'starting' };
   };
   const checkpoint = async layout => {
     if (!ports.checkpoint) return;
@@ -316,12 +329,16 @@ export async function startChat({ run, area, message }, ports = {}) {
     await checkpoint(layout);
     return {layout, chat};
   }, { directory: ports.layoutDirectory });
-  try { await launchInPane(herdr, layout.paneId, { commonDir: run.commonDir, sourceRoot: run.sourceRoot, agent: run.agent, cwd: run.root, addDirs: agentDirs(run), messageFile, sessionId, configDir, ...launchSettings(run, chat) }, { run, env, ports }); }
+  try { await launchInPane(herdr, layout.paneId, { commonDir: run.commonDir, sourceRoot: run.sourceRoot, agent: run.agent, cwd: run.root, addDirs: agentDirs(run), messageFile, sessionId, configDir, ...launchSettings(run, chat), launchExitFile }, { run, env, ports }); }
   catch (error) {
     const failed = problem(error.code ?? 'herdr_failed', error.message);
     failed.chat = { ...chat, startUnconfirmed: true };
     throw failed;
   }
+  const live = await chatSession(chat, {...ports, run, env, herdr});
+  const observed = observeLifecycle(chat, live, now(), run.agent);
+  if (observed.state === 'failed' || observed.state === 'running' && observed.exact) applyLifecycle(chat, observed);
+  if (observed.state === 'failed') { const error = problem('agent_launch_failed', `${observed.evidence.message} (exit ${observed.evidence.exitCode})`); error.chat = chat; throw error; }
   return chat;
 }
 
@@ -635,6 +652,21 @@ export async function chatSession(chat, ports = {}) {
       ...(namingError ? {namingError} : {}) };
   } catch (error) {
     const missing = { alive: false, status: null, sessionId: null, code: error.code ?? 'herdr_failed', message: error.message };
+    if (error.code === 'agent_not_found' && chat.launchExitFile && !Number.isFinite(chat.resumedAt)) {
+      try {
+        const receipt = readFileSync(chat.launchExitFile, 'utf8').trim();
+        if (/^(?:0|[1-9]\d{0,2})$/.test(receipt) && Number(receipt) <= 255) {
+          let screen = '';
+          try { screen = await herdrCommand(ports)(['pane', 'read', chat.paneId, '--source', 'detection']); } catch { /* No screen available. */ }
+          const env = ports.env ?? process.env;
+          const secrets = Object.entries(env).filter(([name, value]) => (Object.values(LOGIN_VARIABLES).flat().includes(name) || /(?:KEY|TOKEN|SECRET|PASSWORD)/i.test(name)) && typeof value === 'string' && value.length > 0).map(([, value]) => value);
+          const message = String(screen).replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '')
+            .split('\n').map(line => line.trim()).filter(line => line && !/^(?:\$|[❯›>]|.*(?:\b(?:env -u|PDD_AGENT_SESSION|CODEX_HOME|CLAUDE_CONFIG_DIR)\b|pdd_launch_exit|\b(?:export|unset)\s|(?:^|\s)[A-Za-z_][A-Za-z0-9_]*=|[$#] $))/.test(line) && !secrets.some(value => line.includes(value)))
+            .join(' ').slice(0, 500) || 'Agent exited before startup was confirmed.';
+          missing.launchFailure = {exitCode: Number(receipt), message};
+        }
+      } catch { /* A missing or malformed receipt proves nothing. */ }
+    }
     if (['agent_not_found', 'pane_not_found'].includes(error.code) && chat.workspaceId) {
       try { if (!(await workspaceInventory(herdrCommand(ports))).some(row => row.workspace_id === chat.workspaceId)) missing.workspaceClosed = true; }
       catch { /* Unavailable inventory cannot prove closure. */ }
@@ -786,7 +818,7 @@ export async function openChat({ run, chat, resumeMessage }, ports = {}) {
   applyLifecycle(chat, observed);
   if (live.alive) delete chat.startUnconfirmed;
   if (observed.state === 'starting') throw problem('chat_start_unconfirmed', `The ${chat.area} chat is starting, not confirmed: Herdr shows no agent in its tab, and pdd sent no new launch or resume. Look at the "${chat.area}" tab in Herdr session pdd, then run pdd workflow open ${run.number} again.`);
-  if (observed.state === 'failed') throw problem('chat_start_failed', `The ${chat.area} chat did not start (${chat.code ?? 'error'}). Start a fresh session with: pdd workflow open ${run.number} --new`);
+  if (observed.state === 'failed') throw problem('chat_start_failed', `The ${chat.area} chat did not start (${chat.code ?? 'error'}): ${chat.evidence?.message ?? 'Agent exited before startup was confirmed.'} Start a fresh session with: pdd workflow open ${run.number} --new`);
   let resumed = false;
   if (live.namingError) chat.namingError = live.namingError;
   else delete chat.namingError;

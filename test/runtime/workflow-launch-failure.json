@@ -1,0 +1,236 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/workflow-launch-failure.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Before an area agent is observed running, its chat stays starting, including during startup grace."
+    },
+    {
+      "id": "AC2",
+      "text": "When an area agent exits with an error, workflow status retains its exit code and diagnostic, even if the agent was briefly observed running."
+    },
+    {
+      "id": "AC3",
+      "text": "A recorded launch failure stays visible when Herdr later becomes unavailable."
+    },
+    {
+      "id": "AC4",
+      "text": "An agent observed alive shows a running chat even when an earlier launch receipt exists."
+    }
+  ],
+  "initial_world": {},
+  "simulation": {},
+  "context": [],
+  "steps": [
+    {
+      "step_id": "pending",
+      "entry_path": "prompts/cli/workflow-chat.prompt.md",
+      "operation": "observeLifecycle",
+      "input": {
+        "chat": {
+          "state": "starting",
+          "paneId": "pane-2634",
+          "startedAt": 1000
+        },
+        "live": {
+          "alive": false,
+          "code": "agent_not_found"
+        },
+        "at": 1001
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/state",
+          "op": "equals",
+          "value": "starting"
+        }
+      ]
+    },
+    {
+      "step_id": "exit",
+      "entry_path": "prompts/cli/workflow-chat.prompt.md",
+      "operation": "observeLifecycle",
+      "input": {
+        "chat": {
+          "state": "starting",
+          "paneId": "pane-2634",
+          "startedAt": 1000
+        },
+        "live": {
+          "alive": false,
+          "code": "agent_not_found",
+          "launchFailure": {
+            "exitCode": 1,
+            "message": "unable to open database file"
+          }
+        },
+        "at": 1001
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/state",
+          "op": "equals",
+          "value": "failed"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/code",
+          "op": "equals",
+          "value": "agent_launch_failed"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/evidence",
+          "op": "equals",
+          "value": {
+            "kind": "launch-exit",
+            "at": 1001,
+            "paneId": "pane-2634",
+            "exitCode": 1,
+            "message": "unable to open database file"
+          }
+        }
+      ]
+    },
+    {
+      "step_id": "retained",
+      "entry_path": "prompts/cli/workflow-chat.prompt.md",
+      "operation": "observeLifecycle",
+      "input": {
+        "chat": {
+          "state": "failed",
+          "paneId": "pane-2634",
+          "startedAt": 1000,
+          "code": "agent_launch_failed",
+          "evidence": {
+            "kind": "launch-exit",
+            "at": 1001,
+            "paneId": "pane-2634",
+            "exitCode": 1,
+            "message": "unable to open database file"
+          }
+        },
+        "live": {
+          "alive": false,
+          "code": "server_unavailable"
+        },
+        "at": 1002
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/state",
+          "op": "equals",
+          "value": "failed"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/code",
+          "op": "equals",
+          "value": "agent_launch_failed"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/evidence",
+          "op": "equals",
+          "value": {
+            "kind": "launch-exit",
+            "at": 1001,
+            "paneId": "pane-2634",
+            "exitCode": 1,
+            "message": "unable to open database file"
+          }
+        }
+      ]
+    },
+    {
+      "step_id": "alive",
+      "entry_path": "prompts/cli/workflow-chat.prompt.md",
+      "operation": "observeLifecycle",
+      "input": {
+        "chat": {
+          "state": "starting",
+          "paneId": "pane-2634",
+          "startedAt": 1000
+        },
+        "live": {
+          "alive": true,
+          "launchFailure": {
+            "exitCode": 1,
+            "message": "unable to open database file"
+          }
+        },
+        "at": 1002
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/state",
+          "op": "equals",
+          "value": "running"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/exact",
+          "op": "equals",
+          "value": true
+        }
+      ]
+    },
+    {
+      "step_id": "observed-before-exit",
+      "entry_path": "prompts/cli/workflow-chat.prompt.md",
+      "operation": "observeLifecycle",
+      "input": {
+        "chat": {
+          "state": "running",
+          "paneId": "pane-2634",
+          "startedAt": 1000
+        },
+        "live": {
+          "alive": false,
+          "code": "agent_not_found",
+          "launchFailure": {
+            "exitCode": 1,
+            "message": "unable to open database file"
+          }
+        },
+        "at": 1001
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/state",
+          "op": "equals",
+          "value": "ended"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/evidence",
+          "op": "equals",
+          "value": {
+            "kind": "launch-exit",
+            "at": 1001,
+            "paneId": "pane-2634",
+            "exitCode": 1,
+            "message": "unable to open database file"
+          }
+        }
+      ]
+    }
+  ]
+}

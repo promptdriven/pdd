@@ -38,6 +38,51 @@ Before deciding that a present workspace needs no rebuild, use the [layout owner
 
 ## Shared lifecycle observations
 
+### New area launch outcomes
+
+A queued terminal command is not evidence that the agent started. Keep startup
+uncertainty separate from a definite early exit, so slow agents stay recoverable
+and setup failures retain a useful reason.
+
+For each `startChat` dispatch, checkpoint a unique `launchExitFile` alongside the
+starting identity before sending the command. The native command preserves its
+terminal input/output and writes its exit code privately to that file when it
+returns; it never redirects the interactive agent through a pipe. This receipt
+belongs only to that launch, not a later resume or replacement. Missing, unreadable
+or malformed receipts prove nothing. Retain ordinary lost-dispatch custody.
+
+When Herdr positively reports no agent in that pane, `chatSession` may return
+`launchFailure: {exitCode, message}` from that receipt (exitCode is an integer
+from 0 through 255). Read the pane's recent output for a bounded diagnostic;
+strip terminal controls and omit the echoed launch command and shell prompt.
+Keep at most 500 characters, without login values or invocation environment.
+An unavailable or empty screen uses `Agent exited before startup was confirmed.`
+Do not infer failure from screen text, a shell alone, agent absence or elapsed time.
+Do not consume an initial receipt after a resume, or let it override a live agent.
+
+`observeLifecycle(chat, live, at, agent, ran)` owns the deterministic transition.
+For a never-confirmed chat (`starting` or `unknown`), authoritative agent absence
+with `live.launchFailure` gives `state: failed`, `code: agent_launch_failed` and
+`evidence: {kind: launch-exit, at, paneId, exitCode, message}` immediately, even
+inside startup grace or after a lost dispatch acknowledgement. Positive live
+observation still wins. A previously running chat whose initial command exits nonzero also retains
+`launch-exit` evidence with that exit code and diagnostic, while transitioning to
+ended: observing a process does not prove that agent initialization succeeded.
+An exit code of zero after positive running observation follows ordinary end rules.
+An ended chat keeps that evidence across later inspections.
+Retain saved failed evidence through later unavailable or absent observations.
+`applyLifecycle` saves the failure code and evidence and clears startUnconfirmed
+on this definite failure. Open reports that retained diagnostic and points to
+`pdd workflow open N --new`, without blindly relaunching.
+
+After initial dispatch, inspect once without waiting for startup: return the
+same chat as running only on positive observation, failed with its evidence on
+positive launch failure, or starting otherwise. A confirmed immediate failure
+throws `agent_launch_failed` with that same failed chat as `error.chat`, without
+marking it unconfirmed. A pane acknowledgement alone never proves agent startup.
+This also applies to each later area started through `startChat`.
+
+
 The [runner lifecycle](workflow-runner.prompt.md#chat-lifecycle) is authoritative for start, open, status and projections. Before ordinary start dispatch, prepare the chat identity and await `ports.checkpoint(chat)` so its starting state is durable; checkpoint failure sends nothing. An absent native agent or expired grace is not end evidence. Opening a starting chat uses injected clock/sleep and session/Herdr inspection until confirmation or the shared grace deadline; it does not launch or resume while confirmation is pending. Preserve the same identity on an uncertain reply. Report positive running/end/failure evidence to the runner before terminal attachment.
 
 ## Explicit fresh session
@@ -65,7 +110,7 @@ flowchart TD
     O -->|Inspection unavailable or ambiguous| U([Retry same command; cancel available])
 ```
 
-A failed checkpoint stops before the next native effect. Never retry a native request internally after uncertainty. Any nonthrowing `pane run` reply confirms launch, as for ordinary startChat; do not require an empty JSON object. Recovery is an explicit later --new invocation, not a fresh attempt.
+A failed checkpoint stops before the next native effect. Never retry a native request internally after uncertainty. Any nonthrowing `pane run` reply acknowledges dispatch, as for ordinary startChat; do not require an empty JSON object. Native startup still needs the lifecycle observation above. Recovery is an explicit later --new invocation, not a fresh attempt.
 
 Before intent, inspect complete workspace/tab/pane inventories and agent state once. Require the saved workspace to be the run's linked worktree (`checkout_path` canonically equals assigned `run.root`, `repo_key` canonically equals `run.commonDir`, using the layout owner's two-sided normalization), the tab in that workspace, and its single pane to match saved pane and any saved terminal id. The pane's live folder takes no part in this or any later ownership check ([pane identity](workflow-herdr-layout.prompt.md#pane-identity)). Refuse missing/changed/extra-pane ownership, malformed inventories and inspection failures. Export `assertRestartCaller({chat,pending}, ports={})` for the runner to apply caller safety before closed-workspace inspection on --new, and call it from restartChat too. It returns nothing on success and throws the caller errors below. This module owns caller safety: refuse whenever injected `ports.env` (default process env) has `PDD_AGENT_SESSION` set. Also refuse the caller's selected pdd pane, or an undetermined pane when inside Herdr, with another-terminal advice. Identify the pdd caller using `HERDR_PANE_ID` and the `pdd` session component of `HERDR_SOCKET_PATH`; the same pane id in another session is not the target. Do not duplicate these checks in the runner. An unconfirmed original launch requires positive observation of that same saved agent before replacement; absence never clears uncertainty. Preserve any positively observed valid native UUID in the archived original; an alive original need not expose a UUID or invalidate an already saved valid Claude id.
 
@@ -397,12 +442,292 @@ Export countReasons(kept) to count the reason fields, mergeReasonCounts(...group
 - [Worktree assignment](workflow-worktree.prompt.md): load for closed-workspace recovery verification through `lookupIssueWorktree`, including the saved current branch.
 - [Workflow agents](workflow-agents.prompt.md#login-variables): required context for `LOGIN_VARIABLES`, the one per-kind list of login variables.
 - [Named local agents](agent-config.prompt.md): required context for reading a saved agents.json entry again at launch (`loadAgentDefinitions`).
-- Native `herdr`, `now`, `elapsedNow` and `sleep` ports supply transport, wall time, monotonic elapsed time and delay; optional `beforeSubmit` supplies the caller-owned durable precondition. The `sessionFs` port supplies the bounded session-file reads of [chat health](#chat-health). The scoped Interpreter entry describes the real module function's JSON-visible arguments/results; it does not bind native Herdr, clock, terminal or session effects. Native stub and private-Herdr tests must establish readiness and submission behavior.
+- Native `herdr`, `now`, `elapsedNow` and `sleep` ports supply transport, wall time, monotonic elapsed time and delay; optional `beforeSubmit` supplies the caller-owned durable precondition. The `sessionFs` port supplies the bounded session-file reads of [chat health](#chat-health). The scoped Interpreter entries describe sendToChat and the deterministic observeLifecycle transition (the input keys map to its positional arguments, with omitted agent defaulting to chat.agent); it does not bind native Herdr, clock, terminal or session effects. Native stub and private-Herdr tests must establish readiness and submission behavior.
 
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"c6078630c961a64adece6763381811f95a88ecd4ca32aaac15fee5ed4e8cc180","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"},"reason":{"type":"string"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
+{
+  "status": "draft",
+  "prose_sha256": "1950cd021d67f884dae1087ac1c8e5fa965ad55099b3554c2ae953890fe43fff",
+  "entries": [
+    {
+      "operation": "sendToChat",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "chat": {
+            "type": "object",
+            "properties": {
+              "paneId": {
+                "type": "string"
+              },
+              "startedAt": {
+                "type": "number"
+              },
+              "resumedAt": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "paneId"
+            ],
+            "additionalProperties": false
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "chat",
+          "text"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "code": {
+            "type": "string"
+          },
+          "uncertain": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": false
+      },
+      "errors": []
+    },
+    {
+      "operation": "observeLifecycle",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "chat": {
+            "type": "object",
+            "properties": {
+              "state": {
+                "type": "string",
+                "enum": [
+                  "starting",
+                  "running",
+                  "ended",
+                  "failed",
+                  "unknown"
+                ]
+              },
+              "paneId": {
+                "type": "string"
+              },
+              "agent": {
+                "type": "string"
+              },
+              "startedAt": {
+                "type": "number"
+              },
+              "resumedAt": {
+                "type": "number"
+              },
+              "startUnconfirmed": {
+                "type": "boolean"
+              },
+              "session": {
+                "type": "object",
+                "properties": {
+                  "agent": {
+                    "type": "string"
+                  },
+                  "id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "agent",
+                  "id"
+                ],
+                "additionalProperties": false
+              },
+              "code": {
+                "type": "string"
+              },
+              "evidence": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string"
+                  },
+                  "at": {
+                    "type": "number"
+                  },
+                  "paneId": {
+                    "type": "string"
+                  },
+                  "exitCode": {
+                    "type": "integer"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "observed": {
+                    "type": "string"
+                  },
+                  "sessionId": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "at"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "state",
+              "paneId",
+              "startedAt"
+            ],
+            "additionalProperties": false
+          },
+          "live": {
+            "type": "object",
+            "properties": {
+              "alive": {
+                "type": "boolean"
+              },
+              "code": {
+                "type": "string"
+              },
+              "sessionId": {
+                "type": "string"
+              },
+              "launchFailure": {
+                "type": "object",
+                "properties": {
+                  "exitCode": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 255
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "exitCode",
+                  "message"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "alive"
+            ],
+            "additionalProperties": false
+          },
+          "at": {
+            "type": "number"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "ran": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "chat",
+          "live",
+          "at"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string"
+          },
+          "exact": {
+            "type": "boolean"
+          },
+          "session": {
+            "type": "object",
+            "properties": {
+              "agent": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "agent",
+              "id"
+            ],
+            "additionalProperties": false
+          },
+          "evidence": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "at": {
+                "type": "number"
+              },
+              "paneId": {
+                "type": "string"
+              },
+              "exitCode": {
+                "type": "integer"
+              },
+              "message": {
+                "type": "string"
+              },
+              "observed": {
+                "type": "string"
+              },
+              "sessionId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "at"
+            ],
+            "additionalProperties": false
+          },
+          "code": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "additionalProperties": false
+      },
+      "errors": []
+    }
+  ],
+  "calls": [],
+  "resources": [],
+  "limits": {
+    "max_steps": 4,
+    "max_model_calls": 1
+  },
+  "conventions": [],
+  "kind": "partial"
+}
 ```
 </details>
 
