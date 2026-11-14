@@ -78,7 +78,7 @@ Number settings that a person may choose (for example `COLUMNS`, `LINES`, `HISTS
 
 ```json
 {
-  "status": "draft",
+  "status": "approved",
   "prose_sha256": "3fcafbbb41d6966a4600b9dd7846bc09ebee8555cf9ab9fe3e85d20e78fcf922",
   "entries": [
     {

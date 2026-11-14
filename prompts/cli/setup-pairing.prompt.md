@@ -20,7 +20,7 @@ Node's cryptography and filesystem facilities provide signature verification and
 ```json
 {
   "kind": "native-only",
-  "status": "draft",
+  "status": "approved",
   "prose_sha256": "e10aece20b26e1d75a3c39c77653de558df450da03bb7116ecb983ff808c1e2b",
   "reason": "Cryptographic verification, terminal confirmation, concurrent filesystem handoff and expiry require real native effects that bound Runtime ports cannot establish."
 }
