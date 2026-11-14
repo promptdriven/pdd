@@ -1,0 +1,130 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/shared-simulation.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Two scenarios can use the same shared bindings and each receives the shared read and write bindings."
+    },
+    {
+      "id": "AC2",
+      "text": "A scenario can replace a shared binding while retaining the other shared bindings."
+    },
+    {
+      "id": "AC3",
+      "text": "A missing shared binding file is refused."
+    }
+  ],
+  "initial_world": {
+    "files": {
+      "contracts/bindings.json": {
+        "content": "{\"store.read\":{\"action\":\"read_world\",\"world_pointer\":\"/stock\",\"example\":true},\"store.write\":{\"action\":\"write_world\",\"world_pointer\":\"/stock\"}}",
+        "is_symlink": false
+      }
+    }
+  },
+  "simulation": {
+    "files.stat": {
+      "action": "blob.stat",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "exists": false,
+        "is_symlink": false,
+        "size": 0
+      },
+      "result_value_pointer": ""
+    },
+    "files.read": {
+      "action": "blob.read",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "content": ""
+      },
+      "result_value_pointer": "/content"
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "first",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "test/first.json",
+        "text": "{\"$simulation\":\"contracts/bindings.json#\"}",
+        "format": "scenario"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "{\"simulation\":{\"store.read\":{\"action\":\"read_world\",\"world_pointer\":\"/stock\",\"example\":true},\"store.write\":{\"action\":\"write_world\",\"world_pointer\":\"/stock\"}}}"
+        }
+      ]
+    },
+    {
+      "step_id": "second",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "test/second.json",
+        "text": "{\"$simulation\":\"contracts/bindings.json#\"}",
+        "format": "scenario"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "{\"simulation\":{\"store.read\":{\"action\":\"read_world\",\"world_pointer\":\"/stock\",\"example\":true},\"store.write\":{\"action\":\"write_world\",\"world_pointer\":\"/stock\"}}}"
+        }
+      ]
+    },
+    {
+      "step_id": "replace",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "test/second.json",
+        "text": "{\"$simulation\":\"contracts/bindings.json#\",\"simulation\":{\"store.read\":{\"action\":\"read_world\",\"world_pointer\":\"/other\"}}}",
+        "format": "scenario"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "{\"simulation\":{\"store.read\":{\"action\":\"read_world\",\"world_pointer\":\"/other\"},\"store.write\":{\"action\":\"write_world\",\"world_pointer\":\"/stock\"}}}"
+        }
+      ]
+    },
+    {
+      "step_id": "missing",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "test/missing.json",
+        "text": "{\"$simulation\":\"contracts/missing.json#\"}",
+        "format": "scenario"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "contract-missing"
+        }
+      ],
+      "expected_error": "contract-missing"
+    }
+  ]
+}

@@ -24,9 +24,9 @@ For `prompt`, expand only schema roots in Runtime interface entries
 (`arguments_schema`, `result_schema`). For `json-schema`, the whole JSON value
 is a schema root. Descend into schema `properties` values, `items` and `oneOf`
 variants. Do not traverse literal annotations (`default`, `examples`, `enum`,
-`const`), ordinary prose, business inputs or expected values. A scenario expands
-only an `initial_world` root containing `$seed`; literal step inputs, checks,
-simulation and other fields remain values even if they contain `$contract`.
+`const`), ordinary prose, business inputs or expected values. A scenario expands an `initial_world` root containing `$seed` and a root
+`$simulation` reference. Literal step inputs, checks, binding contents and other
+fields remain values even if they contain reference-like keys.
 A real `$ref` is left alone for the existing schema validator to refuse.
 
 A schema reference is an object with string `$contract` and, optionally, string
@@ -122,6 +122,29 @@ Invalid world shape, siblings, missing parents,
 array bounds or set pointers give `seed-invalid`. A missing seed file still gives
 `contract-missing`; seed cycles give `contract-cycle`.
 
+## Shared simulation bindings
+
+A scenario may specify a root string `$simulation` naming a shared JSON or
+Markdown object record using the same target selection, safety, size and cycle
+rules as `$contract`. The selected object is a binding map keyed by resource
+operation identifier. A shared record may instead contain only `$simulation`
+and optional `simulation`: it inherits that referenced map and replaces whole
+bindings by identifier from its own `simulation` object. A scenario's optional
+`simulation` object likewise replaces whole inherited bindings by identifier;
+new identifiers are added. A malformed reference, wrapper, or simulation map
+gives `contract-invalid`; missing targets and cycles keep their contract error
+codes. Errors identify the scenario and `/$simulation` reference location.
+
+Expand before preflight and execution. Remove the root `$simulation` and expose
+the resulting map as `simulation`. When no explicit `simulation` exists, replace the
+`$simulation` member in place; otherwise remove that member and retain the
+existing `simulation` slot. Preserve unaffected whitespace and key order using
+the surrounding object layout. Keep step overrides and existing validation
+unchanged, including refusal of missing resource-operation bindings. Binding
+contents remain explicit literal data: do not infer operation names, world
+paths, input fields or result templates. Scenarios without `$simulation` keep
+their existing behavior and bytes.
+
 ## Effective bytes and provenance
 
 Expansion, provenance, cataloging and sync preserve JSON number values and their
@@ -149,8 +172,8 @@ reserialization.
 Do not expand schemas into authored source during ordinary reads.
 
 Each reference has `consumer` (original input path), `source_pointer` (the authored
-schema slot or `/initial_world`), `target` (canonical identity), `kind`
-(`contract` or `seed`) and `value_json` (compact JSON of that target after nested
+schema slot or `/initial_world` or `/$simulation`), `target` (canonical identity), `kind`
+(`contract`, `seed` or `simulation`) and `value_json` (compact JSON of that target after nested
 expansion, before this consumer's annotations or set). Recursively sort object
 keys only; preserve array element order at every length, including 11 or more,
 and leave number tokens and literal values unchanged.
@@ -237,7 +260,7 @@ These helpers have no outside effects. Reuse this module's existing bounded exac
 
 ```json
 {
-  "status": "approved", "prose_sha256": "6bcc602c533997ea8c6a5e7640473947f5305f599f165922502ac21a2b6de041",
+  "status": "draft", "prose_sha256": "1b5ea6fb96f674b5940e38cb7ed2476ffc411c18ed67e2f7c7bc05c68d8014c8",
   "entries": [{
     "operation": "expandSource",
     "input_schema": {
@@ -256,7 +279,7 @@ These helpers have no outside effects. Reuse this module's existing bounded exac
           "type": "object",
           "properties": {
             "consumer": {"type": "string"}, "source_pointer": {"type": "string"},
-            "target": {"type": "string"}, "kind": {"type": "string", "enum": ["contract", "seed"]},
+            "target": {"type": "string"}, "kind": {"type": "string", "enum": ["contract", "seed", "simulation"]},
             "value_json": {"type": "string"}
           },
           "required": ["consumer", "source_pointer", "target", "kind", "value_json"],

@@ -202,7 +202,7 @@ function expand({ path: consumer, text, format }, files, documents) {
     if (kind === 'seed' && (hash >= 0 || !path.endsWith('.json'))) error('seed-invalid', requested, 'seed must name a JSON file without a fragment', chain);
     const loaded = load(path, requested, chain), {content} = loaded;
     let value, canonical;
-    if (path.endsWith('.md') && kind === 'contract') {
+    if (path.endsWith('.md') && kind !== 'seed') {
       const matches = sections(content).filter(section => section.title === selection || fragment(section.title) === selection);
       if (!matches.length) error('contract-missing', requested, `no ### ${selection}`, chain);
       if (matches.length !== 1) error('contract-ambiguous', requested, `ambiguous heading ${selection}`, chain);
@@ -279,6 +279,21 @@ function expand({ path: consumer, text, format }, files, documents) {
     }
     return world;
   }
+  function simulation(requested, pointer, chain = []) {
+    const { value, canonical } = target(requested, 'simulation', chain);
+    let result;
+    if (Object.hasOwn(value, '$simulation')) {
+      if (Object.keys(value).some(key => !['$simulation','simulation'].includes(key)) ||
+          (Object.hasOwn(value, 'simulation') && !object(value.simulation)))
+        error('contract-invalid', String(requested), `${pointer}: invalid simulation wrapper`, chain);
+      result = simulation(value.$simulation, pointer, [...chain, canonical]);
+      result = shallow(result);
+      for (const key of keysOf(value.simulation ?? {})) put(result, key, value.simulation[key]);
+    } else result = clone(value);
+    bounded(result, canonical, chain);
+    record(pointer, canonical, 'simulation', result);
+    return result;
+  }
   let document, block;
   if (format === 'prompt') {
     const blocks = [...text.matchAll(INTERFACE)];
@@ -289,7 +304,41 @@ function expand({ path: consumer, text, format }, files, documents) {
   } else {
     try { document = clone(parse(text)); } catch { return { text, references: [] }; }
     if (format === 'json-schema') document = schema(document, '');
-    else if (format === 'scenario' && object(document) && Object.hasOwn(document, 'initial_world')) put(document,'initial_world',seed(document.initial_world, '/initial_world'));
+    else if (format === 'scenario' && object(document)) {
+      if (Object.hasOwn(document, '$simulation')) {
+        const pointer = '/$simulation';
+        let merged;
+        try {
+          if (Object.hasOwn(document, 'simulation') && !object(document.simulation))
+            error('contract-invalid', String(document.$simulation), `${pointer}: simulation must be an object`);
+          merged = simulation(document.$simulation, pointer);
+          merged = shallow(merged);
+          for (const key of keysOf(document.simulation ?? {})) put(merged, key, document.simulation[key]);
+          bounded(merged, String(document.$simulation));
+        } catch (cause) {
+          if (cause instanceof Error && !cause.message.includes(pointer)) cause.message = `${consumer}: ${pointer}: ${cause.message}`.slice(0,4000);
+          throw cause;
+        }
+        // Re-index the enclosing layout after removing or renaming the reference member.
+        const layout = layouts.get(document), entries = layout.entries;
+        const keep = Object.hasOwn(document, 'simulation') ? null : entries.find(item => item.key === '$simulation' && item.active);
+        const edits = [];
+        if (keep) edits.push({start:keep.keyStart,end:keep.keyEnd,text:'"simulation"'});
+        for (let i = 0; i < entries.length;) {
+          if (entries[i].key !== '$simulation' || entries[i] === keep) { i++; continue; }
+          const first = i;
+          while (i + 1 < entries.length && entries[i + 1].key === '$simulation' && entries[i + 1] !== keep) i++;
+          if (i + 1 < entries.length) edits.push({start:entries[first].keyStart,end:entries[i + 1].keyStart,text:''});
+          else edits.push({start:entries[first - 1].end,end:entries[i].end,text:''});
+          i++;
+        }
+        let revised = text;
+        for (const edit of edits.sort((a,b)=>b.start-a.start)) revised = revised.slice(0,edit.start) + edit.text + revised.slice(edit.end);
+        document = clone(parse(revised));
+        put(document, 'simulation', merged);
+      }
+      if (Object.hasOwn(document, 'initial_world')) put(document,'initial_world',seed(document.initial_world, '/initial_world'));
+    }
   }
   if (!references.size) return { text, references: [] };
   const result = render(document,()=>tooBig([...references.values()].at(-1).target));

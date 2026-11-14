@@ -837,6 +837,13 @@ Use `"initial_world":{"$seed":"contracts/seed-world.json","set":{"/orders":[]}}`
 for a shared starting world. Paths are relative to the repository root. Set
 pointers apply in written order to a fresh world and may add an object's final
 key; their parents must exist. Expected values and literal inputs stay literal.
+A scenario may use `"$simulation":"contracts/bindings.json#/shared"` to share
+an explicitly authored simulation binding map. JSON records and Markdown headings
+follow the same target and safety rules as `$contract`. A scenario's `simulation`
+map replaces each matching shared binding in full and adds new identifiers. A
+shared record can also contain `$simulation` and an optional `simulation` map to
+inherit and replace bindings. Existing step `simulation_overrides` apply after
+expansion. Missing resource operations are still refused.
 
 `pdd test`, `pdd lint` and `pdd simulate` use expanded schemas/worlds, including uploaded bytes. A
 missing target stops before upload. Real schema `$ref` remains refused. Explicit
