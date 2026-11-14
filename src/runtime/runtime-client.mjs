@@ -2120,7 +2120,7 @@ async function sendCheckAttempt(context, row) {
   row.sent_at = context.ports.now(); row.ended_at = null; row.retry_at = null; row.busy = false; row.can_retry = false;
   row.busy_request_id = null; row.busy_observed_at = null; row.capacity_until = null; row.busy_display = null;
   row.phase = 'server';
-  const request = { requestId: id, source_sha256: context.capture.sha256, scenario: row.test, max_calls: row.max_calls,
+  const request = { requestId: id, source_sha256: context.capture.sha256, scenario: row.test, max_calls: row.retry_budget ?? row.max_calls,
     ...(context.serverFeatures?.includes('lazy-interfaces') ? { lazy_interfaces: true } : {}) };
   const verdict = await context.postCheck(request, row, Math.max(1, Math.min(context.ports.postMs, context.deadline - context.ports.now())));
   if (verdict.kind === 'not_sent') {
@@ -2424,7 +2424,73 @@ async function checkBatch(context, rows, priorLint = null) {
   // Only now is there something to read again (lead, Oct 27): after lint passes, before the first check POST.
   if (toSend.length && !priorLint) line(ports.stderr, `If pdd stops, read the results with: pdd test --read ${context.batch}`);
   for (const row of toSend) row.eligible = true;
+  if (!priorLint && toSend.length && !context.batchAdmission) {
+    context.waitCause = 'a local batch slot';
+    context.batchAdmission = await acquireRuntimeSlot({ stateDir: join(context.store.dir, 'check-batches', createHash('sha256').update(context.origin).digest('hex')), origin: context.origin,
+      limit: 1, kind: 'check', deadline: Number.isFinite(context.deadline) ? context.deadline : null },
+    { ...slotPorts(context), say: () => line(ports.stderr, 'Waiting for another local test batch to finish.') });
+    if (!context.batchAdmission) {
+      for (const row of toSend) Object.assign(row, { state: 'not_run', calls: 0, phase: 'local',
+        note: { code: context.interrupted ? 'interrupted' : 'timeout-flag', message: context.interrupted ? 'Stopped before sending.' : 'Time limit reached before sending.' } });
+      return;
+    }
+  }
   await runScheduledChecks(context, rows, toSend);
+  if (!priorLint) await retrySimulatedNoVerdicts(context, rows, toSend);
+}
+
+// Only explicit, captured simulated scenarios with a confirmed terminal receipt
+// may be replayed. Unknown transport and unfinished jobs retain their leases.
+async function retrySimulatedNoVerdicts(context, rows, sent) {
+  if (context.interrupted || context.readStop || context.stopped || context.sendError) return;
+  const read = id => context.store.read(join(context.folder, `${id}.json`));
+  const receipts = row => (row.request_ids ?? []).flatMap(id => {
+    const latest = read(id), history = context.store.read(join(context.folder, `${id}.observations.json`));
+    return [latest, ...(Array.isArray(history) ? history : Array.isArray(history?.observations) ? history.observations : [])].filter(Boolean);
+  });
+  const failed = answer => answer.state === 'failed' || projectAnswer(answer, { origin: context.origin, secrets: context.secrets }).failed_checks.length > 0;
+  if (rows.some(row => row.state === 'failed' || row.failed_checks?.length || receipts(row).some(failed))) return;
+  const sources = new Map((context.capture.sources ?? []).map(file => [file.path, Buffer.from(file.bytes).toString('utf8')]));
+  const groups = new Map();
+  for (const row of rows) { const key = row.story_path ?? row.story; if (!groups.has(key)) groups.set(key, []); groups.get(key).push(row); }
+  const retry = [];
+  for (const [story, group] of groups) {
+    const candidates = group.filter(row => sent.includes(row) && row.state === 'unknown' && !row.lost && !row.capacity_uncertain && !row.dispatchIncomplete);
+    if (!candidates.length || group.some(row => !sent.includes(row) && !row.cached)) continue;
+    let simulated = true;
+    for (const row of group) {
+      try {
+        const doc = JSON.parse(sources.get(row.test)), report = row.compatibility;
+        const operations = report?.reported?.operations;
+        if (report?.association !== 'matched' || report.state !== 'supported' || report.reported?.complete !== true
+          || !Array.isArray(doc.steps) || !doc.steps.length || !Array.isArray(operations)
+          || operations.some(operation => operation.resource_mode !== 'simulated')
+          || doc.steps.some(step => !operations.some(operation => operation.selection?.step_id === step.step_id
+            && operation.selection?.prompt_path === step.entry_path && operation.selection?.operation === step.operation))) simulated = false;
+      } catch { simulated = false; }
+    }
+    if (!simulated || declarationCacheReason(context.capture, story, group.map(row => row.test))) continue;
+    for (const row of candidates) {
+      const id = row.request_ids.at(-1), answer = read(id);
+      if (!sameJob(answer, id, 'check') || answer.state !== 'unknown') continue;
+      const refusals = [...(Array.isArray(answer.result?.refusals) ? answer.result.refusals : []),
+        ...(answer.result?.report?.refusal ? [answer.result.report.refusal] : [])];
+      if (!refusals.length || refusals.some(item => !['graph-provider-failure', 'no-server-verdict'].includes(item?.code))) continue;
+      const view = projectAnswer(answer, { origin: context.origin, secrets: context.secrets });
+      const accounting = accumulatedAccounting(context, row);
+      if (view.time_limit || view.failed_checks.length || !accounting.accounting_complete
+        || !Number.isSafeInteger(accounting.calls) || accounting.calls >= row.max_calls) continue;
+      row.retry_budget = row.max_calls - accounting.calls;
+      retry.push(row);
+    }
+  }
+  if (!retry.length || !await waitBudget(context, 1000)) return;
+  for (const row of retry) {
+    if (row.reservation) { await releaseRuntimeSlot(row.reservation, { ended: true }, slotPorts(context)); row.reservation = null; }
+    Object.assign(row, { state: 'ready', lost: false, final: false, note: null, why: null, next_step: null });
+  }
+  line(context.ports.stderr, `Retrying ${retry.length} simulated ${retry.length === 1 ? 'check' : 'checks'} after no verdict (1 of 1).`);
+  await runScheduledChecks(context, rows, retry);
 }
 
 async function runScheduledChecks(context, rows, toSend) {
@@ -3402,6 +3468,7 @@ async function withCheckRun(context, run) {
   try { result = await run(); }
   catch (error) { context.checkRunFailed = true; throw error; }
   finally {
+    if (context.batchAdmission) await releaseRuntimeSlot(context.batchAdmission, { ended: true }, slotPorts(context));
     const cache = context.testCache;
     if (cache && context.capture && context.rows) await finishTestAttempts(cache, context.rows, context.capture);
   }
