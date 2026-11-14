@@ -5,7 +5,7 @@ Own `src/runtime-seam.mjs` and the stable launcher entry `src/try-doors.mjs`. `s
 The seam keeps stable pdd-owned file paths for anything pdd writes into a user's files or passes to a child process:
 
 - `src/try-doors.mjs` re-exports `runShim` from `./runtime-seam.mjs` so `.pdd/try/bin/<program>` launchers keep a stable pdd-owned module path across upgrades and package extraction.
-- `runTry(input, ports)` in `src/runtime-seam.mjs` defaults `ports.tryLauncherUrl` to the `file:` URL of `src/try-doors.mjs` before delegating to the Runtime package entry, preserving an explicit `ports.tryLauncherUrl` when provided.
+- `runTry(input, ports)` in `src/runtime-seam.mjs` defaults `ports.tryLauncherUrl` to the `file:` URL of `src/try-doors.mjs` before delegating to the Runtime package entry, preserving an explicit `ports.tryLauncherUrl` when provided. Supply `ports.readWorkflowRun` from the host workflow-run reader for product draft capture, preserving an explicit injected reader; the Runtime package never imports that host module.
 
 ## Request metadata and host ports
 
@@ -75,6 +75,6 @@ The seam holds no mutable request state and loads zero additional pdd or Runtime
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"native-only","status":"approved","prose_sha256": "f7f4c16056acf0cc1a013cadc3dc33168ad83f5d66928507f9eee1c3b779b864","reason":"Re-exports live JavaScript ESM module bindings from src/runtime/index.mjs as pdd's sole import seam, which bound Runtime ports cannot fake."}
+{"kind":"native-only","status":"approved","prose_sha256": "f7a325633a76176b80823778f1a79eb349a78e88a0a354e5aebc007748dcb87c","reason":"Re-exports live JavaScript ESM module bindings from src/runtime/index.mjs as pdd's sole import seam, which bound Runtime ports cannot fake."}
 ```
 </details>
