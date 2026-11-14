@@ -9,7 +9,7 @@ below, and the one-time [move from the removed full engine](#the-move-from-the-f
 merge, quota-reset or interactive route of its own. Preserve existing setup, workflow and interpreter behavior.
 
 `runAutopilotLauncher` accepts command doctor, start, stop, status, add, release, report, intake or check-base, cwd, packageRoot,
-env, issues (argv operands), and optional runs, checks, engine, label, share, mode, report, decisions, intake, agent,
+env, issues (argv operands), and optional runs, checks, engine, label, share, autoUpdate, mode, report, decisions, intake, agent,
 pool, all and json. Return
 `{exitCode, message}`; the CLI owns streams. Outside programs, timer installation, clock and state I/O are injectable
 ports; native defaults implement them on macOS and Linux. Tests may inject `checkCapacityPorts` for the shared queue.
@@ -48,7 +48,10 @@ selects `codex`, `claude`, `gemini` or `agy` and returns exit code 2 with `Use -
 for any blank or other name before any change. `start --pool PATH` validates the login pool with `loadLoginPool` of the
 [multi-harness login pool](login-pool.prompt.md) and saves `state.poolPath` (`off` or `none` saves `"off"`, disabling
 automatic pool file discovery; a blank or invalid pool file returns exit code 2 with its validation line before any
-change). Optional `--runs` and `--checks` are positive safe integers with no product maximum; save explicit values, and
+change). `start --auto-update release|main|off` (#2710) saves `state.autoUpdate` (default `release` when unset; another value returns
+exit code 2 with `Use --auto-update release, --auto-update main or --auto-update off.`); after each enabled core tick,
+run `maybeAutoUpdateAutopilot` of [Autopilot self-update](autopilot-update.prompt.md) under the machine admission lock
+when no job is publishing or merging, and include `autoUpdateStatusLine` in status. Optional `--runs` and `--checks` are positive safe integers with no product maximum; save explicit values, and
 remove them when a start omits them.
 
 ## Automatic continuation custody
@@ -310,3 +313,5 @@ exit 1 with one line; a missing program says `install git and gh, and sign in to
   process execution.
 - [PATH diagnostics](path-diagnostic.prompt.md): required native generation and verification context for the version
   shadowing warning.
+- [Autopilot self-update](autopilot-update.prompt.md): required native generation and verification context for safe
+  between-tick global `pdd` and skill updates.

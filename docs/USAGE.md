@@ -560,7 +560,7 @@ npx skills remove pdd-prompting pdd-setup pdd-feature pdd-bug pdd-small-change p
 Uninstall the pdd command, the skills that `pdd setup` copied, and its state:
 
 ```sh
-npm uninstall -g pdd
+npm uninstall -g @promptdriven/pdd pdd
 rm -rf ~/.agents/skills/pdd-{prompting,setup,feature,bug,small-change,product,graph}
 rm -rf ~/.claude/skills/pdd-{prompting,setup,feature,bug,small-change,product,graph}
 # If you set CLAUDE_CONFIG_DIR, also remove the seven pdd-* folders in "$CLAUDE_CONFIG_DIR/skills"
