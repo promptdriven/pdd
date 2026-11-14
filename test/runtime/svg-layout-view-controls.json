@@ -1,0 +1,402 @@
+{
+  "story_path": "user_stories/svg-layout-view-controls.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Running `pdd lint --local` with Now, Agents, Workflows and Machines drawings and all shared and tab-specific controls present produces no SVG control warnings."
+    },
+    {
+      "id": "AC2",
+      "text": "Running `pdd lint --local` when the shared tab-now button is missing from the Agents drawing warns for tab-now on Agents only."
+    },
+    {
+      "id": "AC3",
+      "text": "Running `pdd lint --local` when Approve is missing from its Now drawing warns for Approve on Now only."
+    },
+    {
+      "id": "AC4",
+      "text": "Running `pdd lint --local` with one linked drawing still warns for every declared control missing from that drawing."
+    }
+  ],
+  "initial_world": {
+    "files": {
+      "headings/screen.prompt.md": "# Screen\n\n## Shared shell\nRegion tab-now, region tab-agents, region tab-workflows, region tab-machines.\nShared shell buttons with ids `tab-now`, `tab-agents`, `tab-workflows`, `tab-machines`.\n\n## Appearance\n\n### Now\n![Now](views/now__stacked.ui.svg)\n\nButton \"Approve\".\n\n### Agents\n![Agents](views/agents__stacked.ui.svg)\n\nButton \"+ New Agent\".\n\n### Workflows\n![Workflows](views/workflows__stacked.ui.svg)\n\nButton \"Start Run\".\n\n### Machines\n![Machines](views/machines__stacked.ui.svg)\n\nButton \"Connect\". Button \"Pause\". Button \"Resume\".\n",
+      "headings/views/now__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Approve</text></svg>",
+      "headings/views/agents__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>+ New Agent</text></svg>",
+      "headings/views/workflows__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Start Run</text></svg>",
+      "headings/views/machines__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Connect</text><text>Pause</text><text>Resume</text></svg>",
+      "list-items/screen.prompt.md": "# Screen\n\nRegion tab-now, region tab-agents, region tab-workflows, region tab-machines.\nShared shell buttons with ids `tab-now`, `tab-agents`, `tab-workflows`, `tab-machines`.\n\n## Appearance\n\n- **Now:** ![Now](views/now__stacked.ui.svg)\n  Button \"Approve\".\n  - Child controls repeat: Button \"Approve\".\n\n- **Agents:** ![Agents](views/agents__stacked.ui.svg)\n  Button \"+ New Agent\".\n  - Child controls repeat: Button \"+ New Agent\".\n\n- **Workflows:** ![Workflows](views/workflows__stacked.ui.svg)\n  Button \"Start Run\".\n  - Child controls repeat: Button \"Start Run\".\n\n- **Machines:** ![Machines](views/machines__stacked.ui.svg)\n  Button \"Connect\". Button \"Pause\". Button \"Resume\".\n  - Child controls repeat: Button \"Connect\". Button \"Pause\". Button \"Resume\".\n",
+      "list-items/views/now__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Approve</text></svg>",
+      "list-items/views/agents__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>+ New Agent</text></svg>",
+      "list-items/views/workflows__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Start Run</text></svg>",
+      "list-items/views/machines__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Connect</text><text>Pause</text><text>Resume</text></svg>",
+      "interleaved-blocks/screen.prompt.md": "# Screen\n\nRegion tab-now, region tab-agents, region tab-workflows, region tab-machines.\nShared shell buttons with ids `tab-now`, `tab-agents`, `tab-workflows`, `tab-machines`.\n\n## Appearance\n\n**Now:**\n\nButton \"Approve\".\n\n![Now](views/now__stacked.ui.svg)\n\n**Agents:**\n\nButton \"+ New Agent\".\n\n![Agents](views/agents__stacked.ui.svg)\n\n**Workflows:**\n\nButton \"Start Run\".\n\n![Workflows](views/workflows__stacked.ui.svg)\n\n**Machines:**\n\nButton \"Connect\". Button \"Pause\". Button \"Resume\".\n\n![Machines](views/machines__stacked.ui.svg)\n",
+      "interleaved-blocks/views/now__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Approve</text></svg>",
+      "interleaved-blocks/views/agents__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>+ New Agent</text></svg>",
+      "interleaved-blocks/views/workflows__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Start Run</text></svg>",
+      "interleaved-blocks/views/machines__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Connect</text><text>Pause</text><text>Resume</text></svg>",
+      "named-headings/screen.prompt.md": "# Screen\n\nRegion tab-now, region tab-agents, region tab-workflows, region tab-machines.\nShared shell buttons with ids `tab-now`, `tab-agents`, `tab-workflows`, `tab-machines`.\n\n## Appearance\n\n### Now\nButton \"Approve\".\n\n### Agents\nButton \"+ New Agent\".\n\n### Workflows\nButton \"Start Run\".\n\n### Machines\nButton \"Connect\". Button \"Pause\". Button \"Resume\".\n\n## Dependencies\n![Now](views/now__stacked.ui.svg)\n![Agents](views/agents__stacked.ui.svg)\n![Workflows](views/workflows__stacked.ui.svg)\n![Machines](views/machines__stacked.ui.svg)\n",
+      "named-headings/views/now__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Approve</text></svg>",
+      "named-headings/views/agents__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>+ New Agent</text></svg>",
+      "named-headings/views/workflows__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Start Run</text></svg>",
+      "named-headings/views/machines__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Connect</text><text>Pause</text><text>Resume</text></svg>",
+      "reference-links/screen.prompt.md": "# Screen\n\nRegion tab-now, region tab-agents, region tab-workflows, region tab-machines.\nShared shell buttons with ids `tab-now`, `tab-agents`, `tab-workflows`, `tab-machines`.\n\n## Appearance\n\n### View 0\nButton \"Approve\".\n\n![Drawing][Now]\n\n### View 1\nButton \"+ New Agent\".\n\n![Drawing][Agents]\n\n### View 2\nButton \"Start Run\".\n\n![Drawing][Workflows]\n\n### View 3\nButton \"Connect\". Button \"Pause\". Button \"Resume\".\n\n![Drawing][Machines]\n\n[Now]: views/now__stacked.ui.svg\n[Agents]: views/agents__stacked.ui.svg\n[Workflows]: views/workflows__stacked.ui.svg\n[Machines]: views/machines__stacked.ui.svg",
+      "reference-links/views/now__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Approve</text></svg>",
+      "reference-links/views/agents__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>+ New Agent</text></svg>",
+      "reference-links/views/workflows__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Start Run</text></svg>",
+      "reference-links/views/machines__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Connect</text><text>Pause</text><text>Resume</text></svg>",
+      "missing-shared/screen.prompt.md": "# Screen\n\n## Shared shell\nRegion tab-now, region tab-agents, region tab-workflows, region tab-machines.\nShared shell buttons with ids `tab-now`, `tab-agents`, `tab-workflows`, `tab-machines`.\n\n## Appearance\n\n### Now\n![Now](views/now__stacked.ui.svg)\n\nButton \"Approve\".\n\n### Agents\n![Agents](views/agents__stacked.ui.svg)\n\nButton \"+ New Agent\".\n\n### Workflows\n![Workflows](views/workflows__stacked.ui.svg)\n\nButton \"Start Run\".\n\n### Machines\n![Machines](views/machines__stacked.ui.svg)\n\nButton \"Connect\". Button \"Pause\". Button \"Resume\".\n",
+      "missing-shared/views/now__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Approve</text></svg>",
+      "missing-shared/views/agents__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>+ New Agent</text></svg>",
+      "missing-shared/views/workflows__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Start Run</text></svg>",
+      "missing-shared/views/machines__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Connect</text><text>Pause</text><text>Resume</text></svg>",
+      "missing-own/screen.prompt.md": "# Screen\n\n## Shared shell\nRegion tab-now, region tab-agents, region tab-workflows, region tab-machines.\nShared shell buttons with ids `tab-now`, `tab-agents`, `tab-workflows`, `tab-machines`.\n\n## Appearance\n\n### Now\n![Now](views/now__stacked.ui.svg)\n\nButton \"Approve\".\n\n### Agents\n![Agents](views/agents__stacked.ui.svg)\n\nButton \"+ New Agent\".\n\n### Workflows\n![Workflows](views/workflows__stacked.ui.svg)\n\nButton \"Start Run\".\n\n### Machines\n![Machines](views/machines__stacked.ui.svg)\n\nButton \"Connect\". Button \"Pause\". Button \"Resume\".\n",
+      "missing-own/views/now__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/></svg>",
+      "missing-own/views/agents__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>+ New Agent</text></svg>",
+      "missing-own/views/workflows__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Start Run</text></svg>",
+      "missing-own/views/machines__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Connect</text><text>Pause</text><text>Resume</text></svg>",
+      "multiple-layouts/screen.prompt.md": "# Screen\n\n## Shared shell\nRegion tab-now, region tab-agents, region tab-workflows, region tab-machines.\nShared shell buttons with ids `tab-now`, `tab-agents`, `tab-workflows`, `tab-machines`.\n\n## Appearance\n\n### Now\n![Now](views/now__stacked.ui.svg)\n![Busy Now](views/now--busy__split-pane.ui.svg)\n\nButton \"Approve\".\n\n### Agents\n![Agents](views/agents__stacked.ui.svg)\n\nButton \"+ New Agent\".\n\n### Workflows\n![Workflows](views/workflows__stacked.ui.svg)\n\nButton \"Start Run\".\n\n### Machines\n![Machines](views/machines__stacked.ui.svg)\n\nButton \"Connect\". Button \"Pause\". Button \"Resume\".\n",
+      "multiple-layouts/views/now__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Approve</text></svg>",
+      "multiple-layouts/views/agents__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>+ New Agent</text></svg>",
+      "multiple-layouts/views/workflows__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Start Run</text></svg>",
+      "multiple-layouts/views/machines__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Connect</text><text>Pause</text><text>Resume</text></svg>",
+      "multiple-layouts/views/now--busy__split-pane.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/></svg>",
+      "named-layouts/screen.prompt.md": "# Screen\n\nRegion tab-now, region tab-agents, region tab-workflows, region tab-machines.\nShared shell buttons with ids `tab-now`, `tab-agents`, `tab-workflows`, `tab-machines`.\n\n## Appearance\n\n### Now\nButton \"Approve\".\n\n### Agents\nButton \"+ New Agent\".\n\n### Workflows\nButton \"Start Run\".\n\n### Machines\nButton \"Connect\". Button \"Pause\". Button \"Resume\".\n\n## Dependencies\n![Now](views/now__stacked.ui.svg)\n![Agents](views/agents__stacked.ui.svg)\n![Workflows](views/workflows__stacked.ui.svg)\n![Machines](views/machines__stacked.ui.svg)\n\n![Busy Now](views/now--busy__split-pane.ui.svg)",
+      "named-layouts/views/now__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Approve</text></svg>",
+      "named-layouts/views/agents__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>+ New Agent</text></svg>",
+      "named-layouts/views/workflows__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Start Run</text></svg>",
+      "named-layouts/views/machines__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Connect</text><text>Pause</text><text>Resume</text></svg>",
+      "named-layouts/views/now--busy__split-pane.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/></svg>",
+      "shared-after-views/screen.prompt.md": "# Screen\n\nRegion tab-now, region tab-agents, region tab-workflows, region tab-machines.\nShared shell buttons with ids `tab-now`, `tab-agents`, `tab-workflows`, `tab-machines`.\n\n## Appearance\n\n- **Now:** ![Now](views/now__stacked.ui.svg)\n  Button \"Approve\".\n  - Child controls repeat: Button \"Approve\".\n\n- **Agents:** ![Agents](views/agents__stacked.ui.svg)\n  Button \"+ New Agent\".\n  - Child controls repeat: Button \"+ New Agent\".\n\n- **Workflows:** ![Workflows](views/workflows__stacked.ui.svg)\n  Button \"Start Run\".\n  - Child controls repeat: Button \"Start Run\".\n\n- **Machines:** ![Machines](views/machines__stacked.ui.svg)\n  Button \"Connect\". Button \"Pause\". Button \"Resume\".\n  - Child controls repeat: Button \"Connect\". Button \"Pause\". Button \"Resume\".\n\n- Shared footer: Button \"Help\".\n\n## Keyboard\nButton \"Escape\".\n",
+      "shared-after-views/views/now__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Approve</text></svg>",
+      "shared-after-views/views/agents__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>+ New Agent</text></svg>",
+      "shared-after-views/views/workflows__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Start Run</text></svg>",
+      "shared-after-views/views/machines__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Connect</text><text>Pause</text><text>Resume</text></svg>",
+      "fenced-example/screen.prompt.md": "# Screen\n\n## Shared shell\nRegion tab-now, region tab-agents, region tab-workflows, region tab-machines.\nShared shell buttons with ids `tab-now`, `tab-agents`, `tab-workflows`, `tab-machines`.\n\n## Appearance\n\n### Now\n![Now](views/now__stacked.ui.svg)\n\n```html\n<!-- example -->\n<button>Approve</button>\n# Machines\n- ![Machines](views/machines__stacked.ui.svg)\n```\n\n### Agents\n![Agents](views/agents__stacked.ui.svg)\n\nButton \"+ New Agent\".\n\n### Workflows\n![Workflows](views/workflows__stacked.ui.svg)\n\nButton \"Start Run\".\n\n### Machines\n![Machines](views/machines__stacked.ui.svg)\n\nButton \"Connect\". Button \"Pause\". Button \"Resume\".\n",
+      "fenced-example/views/now__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Approve</text></svg>",
+      "fenced-example/views/agents__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>+ New Agent</text></svg>",
+      "fenced-example/views/workflows__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Start Run</text></svg>",
+      "fenced-example/views/machines__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc><g id=\"tab-now\"/><g id=\"tab-agents\"/><g id=\"tab-workflows\"/><g id=\"tab-machines\"/><text>Connect</text><text>Pause</text><text>Resume</text></svg>",
+      "single/screen.prompt.md": "# Screen\n\nRegion tab-now, region tab-agents, region tab-workflows, region tab-machines.\nShared shell buttons with ids `tab-now`, `tab-agents`, `tab-workflows`, `tab-machines`.\n\n![Now](views/now__stacked.ui.svg)\n\n## Now\nButton \"Approve\".\n\n## Agents\nButton \"+ New Agent\".\n\n## Workflows\nButton \"Start Run\".\n\n## Machines\nButton \"Connect\". Button \"Pause\". Button \"Resume\".\n\n[Same](views/now__stacked.ui.svg#screen)\n![Equivalent link](./views/now__stacked.ui.svg)",
+      "single/views/now__stacked.ui.svg": "<svg viewBox=\"0 0 400 600\"><title>Example</title><desc>Screen view</desc></svg>"
+    }
+  },
+  "steps": [
+    {
+      "entry_path": "prompts/cli/svg-layout.prompt.md",
+      "operation": "lintSvgLayouts",
+      "input": {
+        "root": "headings",
+        "files": [
+          "screen.prompt.md",
+          "views/now__stacked.ui.svg",
+          "views/agents__stacked.ui.svg",
+          "views/workflows__stacked.ui.svg",
+          "views/machines__stacked.ui.svg"
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": []
+        }
+      ],
+      "step_id": "headings"
+    },
+    {
+      "entry_path": "prompts/cli/svg-layout.prompt.md",
+      "operation": "lintSvgLayouts",
+      "input": {
+        "root": "list-items",
+        "files": [
+          "screen.prompt.md",
+          "views/now__stacked.ui.svg",
+          "views/agents__stacked.ui.svg",
+          "views/workflows__stacked.ui.svg",
+          "views/machines__stacked.ui.svg"
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": []
+        }
+      ],
+      "step_id": "list-items"
+    },
+    {
+      "entry_path": "prompts/cli/svg-layout.prompt.md",
+      "operation": "lintSvgLayouts",
+      "input": {
+        "root": "interleaved-blocks",
+        "files": [
+          "screen.prompt.md",
+          "views/now__stacked.ui.svg",
+          "views/agents__stacked.ui.svg",
+          "views/workflows__stacked.ui.svg",
+          "views/machines__stacked.ui.svg"
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": []
+        }
+      ],
+      "step_id": "interleaved-blocks"
+    },
+    {
+      "entry_path": "prompts/cli/svg-layout.prompt.md",
+      "operation": "lintSvgLayouts",
+      "input": {
+        "root": "named-headings",
+        "files": [
+          "screen.prompt.md",
+          "views/now__stacked.ui.svg",
+          "views/agents__stacked.ui.svg",
+          "views/workflows__stacked.ui.svg",
+          "views/machines__stacked.ui.svg"
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": []
+        }
+      ],
+      "step_id": "named-headings"
+    },
+    {
+      "entry_path": "prompts/cli/svg-layout.prompt.md",
+      "operation": "lintSvgLayouts",
+      "input": {
+        "root": "reference-links",
+        "files": [
+          "screen.prompt.md",
+          "views/now__stacked.ui.svg",
+          "views/agents__stacked.ui.svg",
+          "views/workflows__stacked.ui.svg",
+          "views/machines__stacked.ui.svg"
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": []
+        }
+      ],
+      "step_id": "reference-links"
+    },
+    {
+      "entry_path": "prompts/cli/svg-layout.prompt.md",
+      "operation": "lintSvgLayouts",
+      "input": {
+        "root": "missing-shared",
+        "files": [
+          "screen.prompt.md",
+          "views/now__stacked.ui.svg",
+          "views/agents__stacked.ui.svg",
+          "views/workflows__stacked.ui.svg",
+          "views/machines__stacked.ui.svg"
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": [
+            "Warning: SVG layout screen.prompt.md -> views/agents__stacked.ui.svg: control \"tab-now\": prompt control absent from drawing."
+          ]
+        }
+      ],
+      "step_id": "missing-shared"
+    },
+    {
+      "entry_path": "prompts/cli/svg-layout.prompt.md",
+      "operation": "lintSvgLayouts",
+      "input": {
+        "root": "missing-own",
+        "files": [
+          "screen.prompt.md",
+          "views/now__stacked.ui.svg",
+          "views/agents__stacked.ui.svg",
+          "views/workflows__stacked.ui.svg",
+          "views/machines__stacked.ui.svg"
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": [
+            "Warning: SVG layout screen.prompt.md -> views/now__stacked.ui.svg: control \"Approve\": prompt control absent from drawing."
+          ]
+        }
+      ],
+      "step_id": "missing-own"
+    },
+    {
+      "entry_path": "prompts/cli/svg-layout.prompt.md",
+      "operation": "lintSvgLayouts",
+      "input": {
+        "root": "multiple-layouts",
+        "files": [
+          "screen.prompt.md",
+          "views/now__stacked.ui.svg",
+          "views/agents__stacked.ui.svg",
+          "views/workflows__stacked.ui.svg",
+          "views/machines__stacked.ui.svg",
+          "views/now--busy__split-pane.ui.svg"
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": [
+            "Warning: SVG layout screen.prompt.md -> views/now--busy__split-pane.ui.svg: control \"Approve\": prompt control absent from drawing."
+          ]
+        }
+      ],
+      "step_id": "multiple-layouts"
+    },
+    {
+      "entry_path": "prompts/cli/svg-layout.prompt.md",
+      "operation": "lintSvgLayouts",
+      "input": {
+        "root": "named-layouts",
+        "files": [
+          "screen.prompt.md",
+          "views/now__stacked.ui.svg",
+          "views/agents__stacked.ui.svg",
+          "views/workflows__stacked.ui.svg",
+          "views/machines__stacked.ui.svg",
+          "views/now--busy__split-pane.ui.svg"
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": [
+            "Warning: SVG layout screen.prompt.md -> views/now--busy__split-pane.ui.svg: control \"Approve\": prompt control absent from drawing."
+          ]
+        }
+      ],
+      "step_id": "named-layouts"
+    },
+    {
+      "entry_path": "prompts/cli/svg-layout.prompt.md",
+      "operation": "lintSvgLayouts",
+      "input": {
+        "root": "shared-after-views",
+        "files": [
+          "screen.prompt.md",
+          "views/now__stacked.ui.svg",
+          "views/agents__stacked.ui.svg",
+          "views/workflows__stacked.ui.svg",
+          "views/machines__stacked.ui.svg"
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": [
+            "Warning: SVG layout screen.prompt.md -> views/agents__stacked.ui.svg: control \"Escape\": prompt control absent from drawing.",
+            "Warning: SVG layout screen.prompt.md -> views/agents__stacked.ui.svg: control \"Help\": prompt control absent from drawing.",
+            "Warning: SVG layout screen.prompt.md -> views/machines__stacked.ui.svg: control \"Escape\": prompt control absent from drawing.",
+            "Warning: SVG layout screen.prompt.md -> views/machines__stacked.ui.svg: control \"Help\": prompt control absent from drawing.",
+            "Warning: SVG layout screen.prompt.md -> views/now__stacked.ui.svg: control \"Escape\": prompt control absent from drawing.",
+            "Warning: SVG layout screen.prompt.md -> views/now__stacked.ui.svg: control \"Help\": prompt control absent from drawing.",
+            "Warning: SVG layout screen.prompt.md -> views/workflows__stacked.ui.svg: control \"Escape\": prompt control absent from drawing.",
+            "Warning: SVG layout screen.prompt.md -> views/workflows__stacked.ui.svg: control \"Help\": prompt control absent from drawing."
+          ]
+        }
+      ],
+      "step_id": "shared-after-views"
+    },
+    {
+      "entry_path": "prompts/cli/svg-layout.prompt.md",
+      "operation": "lintSvgLayouts",
+      "input": {
+        "root": "fenced-example",
+        "files": [
+          "screen.prompt.md",
+          "views/now__stacked.ui.svg",
+          "views/agents__stacked.ui.svg",
+          "views/workflows__stacked.ui.svg",
+          "views/machines__stacked.ui.svg"
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": []
+        }
+      ],
+      "step_id": "fenced-example"
+    },
+    {
+      "entry_path": "prompts/cli/svg-layout.prompt.md",
+      "operation": "lintSvgLayouts",
+      "input": {
+        "root": "single",
+        "files": [
+          "screen.prompt.md",
+          "views/now__stacked.ui.svg"
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": [
+            "Warning: SVG layout screen.prompt.md -> views/now__stacked.ui.svg: control \"+ New Agent\": prompt control absent from drawing.",
+            "Warning: SVG layout screen.prompt.md -> views/now__stacked.ui.svg: control \"Approve\": prompt control absent from drawing.",
+            "Warning: SVG layout screen.prompt.md -> views/now__stacked.ui.svg: control \"Connect\": prompt control absent from drawing.",
+            "Warning: SVG layout screen.prompt.md -> views/now__stacked.ui.svg: control \"Pause\": prompt control absent from drawing.",
+            "Warning: SVG layout screen.prompt.md -> views/now__stacked.ui.svg: control \"Resume\": prompt control absent from drawing.",
+            "Warning: SVG layout screen.prompt.md -> views/now__stacked.ui.svg: control \"Start Run\": prompt control absent from drawing.",
+            "Warning: SVG layout screen.prompt.md -> views/now__stacked.ui.svg: control \"tab-agents\": prompt control absent from drawing.",
+            "Warning: SVG layout screen.prompt.md -> views/now__stacked.ui.svg: control \"tab-machines\": prompt control absent from drawing.",
+            "Warning: SVG layout screen.prompt.md -> views/now__stacked.ui.svg: control \"tab-now\": prompt control absent from drawing.",
+            "Warning: SVG layout screen.prompt.md -> views/now__stacked.ui.svg: control \"tab-workflows\": prompt control absent from drawing."
+          ]
+        }
+      ],
+      "step_id": "single"
+    }
+  ],
+  "schema_version": "prompt-runtime.program-scenario.v1"
+}

@@ -113,6 +113,99 @@ function links(text) {
 }
 const mentioned = (prose, value) => new RegExp(`(^|[^\\p{L}\\p{N}_])${escaped(normalize(value))}($|[^\\p{L}\\p{N}_])`, 'u').test(normalize(prose));
 
+// Keep scope independent of drawing contents: a missing control cannot select its view.
+function viewControlSources(source, drawings) {
+  const result = new Map(drawings.map(link => [link, []]));
+  const identity = link => { try { return resolve('/', decodeURIComponent(link)); } catch { return link; } };
+  if (new Set(drawings.map(identity)).size < 2) return new Map(drawings.map(link => [link, source]));
+  const definitions = source.split('\n').filter(line => /^\s*\[[^\]]+\]:/.test(line)).join('\n');
+  const linked = text => {
+    let fence = null;
+    const prose = text.split('\n').filter(line => {
+      const marker = /^\s*(`{3,}|~{3,})/.exec(line);
+      if (fence) {
+        if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length && /^\s*(?:`+|~+)\s*$/.test(line)) fence = null;
+        return false;
+      }
+      if (marker) { fence = marker[1]; return false; }
+      return true;
+    }).join('\n');
+    return links(`${prose}\n${definitions}`).filter(link => result.has(link));
+  };
+  const viewName = text => normalize(text.replace(/[*`]/g, '').replace(/[-_]+/g, ' '));
+  const names = new Map();
+  for (const link of drawings) {
+    let stem;
+    try { stem = decodeURIComponent(link).split('/').at(-1).replace(/\.ui\.svg$/i, ''); } catch { continue; }
+    for (const name of new Set([stem, stem.split('__')[0].split('--')[0]])) {
+      const key = viewName(name);
+      if (!names.has(key)) names.set(key, []);
+      names.get(key).push(link);
+    }
+  }
+  const named = title => names.get(viewName(title.replace(/\s+#+\s*$/, ''))) ?? [];
+  const node = (title = '') => ({ title, text: [], children: [] });
+  const tree = node(), sections = [{ level: 0, node: tree }];
+  let lists = [], block = null, fence = null;
+  const parent = () => lists.at(-1)?.node ?? sections.at(-1).node;
+  for (const line of source.split('\n')) {
+    const codeFence = /^\s*(`{3,}|~{3,})/.exec(line);
+    if (fence) {
+      (block ?? parent()).text.push(line);
+      if (codeFence && codeFence[1][0] === fence[0] && codeFence[1].length >= fence.length && /^\s*(?:`+|~+)\s*$/.test(line)) fence = null;
+      continue;
+    }
+    if (codeFence) { fence = codeFence[1]; (block ?? parent()).text.push(line); continue; }
+    // Definitions supply destinations, never a scope of their own.
+    if (/^\s*\[[^\]]+\]:/.test(line)) continue;
+    const heading = /^ {0,3}(#{1,6})\s+(.+)$/.exec(line);
+    if (heading) {
+      while (sections.at(-1).level >= heading[1].length) sections.pop();
+      const child = node(heading[2]);
+      sections.at(-1).node.children.push(child);
+      sections.push({ level: heading[1].length, node: child });
+      lists = []; block = null; child.text.push(line); continue;
+    }
+    const item = /^(\s*)(?:[-+*]|\d+[.)])\s+(.+)$/.exec(line);
+    if (item) {
+      const indent = item[1].replace(/\t/g, '    ').length;
+      while (lists.length && lists.at(-1).indent >= indent) lists.pop();
+      const child = node(item[2].split(/:\s|:\*\*/)[0]);
+      parent().children.push(child);
+      lists.push({ indent, node: child }); block = null; child.text.push(line); continue;
+    }
+    if (line.trim()) {
+      const indent = /^\s*/.exec(line)[0].replace(/\t/g, '    ').length;
+      while (lists.length && indent <= lists.at(-1).indent) { lists.pop(); block = null; }
+    }
+    // Bold labels and leading "View:" labels delimit interleaved prose blocks.
+    const label = /^\s*\*\*([^*]+?)\*\*(?:\s*:?\s*$|\s*:\s*|\s+)/.exec(line)
+      ?? /^\s*([^:<\[!]+?):(?:\s+|$)/.exec(line);
+    if (label) {
+      block = node(label[1].replace(/:$/, ''));
+      parent().children.push(block);
+    }
+    (block ?? parent()).text.push(line);
+  }
+  const associate = current => {
+    const direct = linked(current.text.join('\n'));
+    const children = current.children.flatMap(associate);
+    current.views = direct.length ? direct : named(current.title);
+    // A subsection may place its drawing in a nested preview after its controls.
+    if (!current.views.length) current.views = [...new Set(children)];
+    return [...new Set([...current.views, ...children])];
+  };
+  associate(tree);
+  tree.views = drawings;
+  const collect = (current, inherited) => {
+    const scope = current.views.length ? current.views : inherited;
+    for (const link of scope) result.get(link).push(current.text.join('\n'));
+    for (const child of current.children) collect(child, scope);
+  };
+  collect(tree, drawings);
+  return new Map([...result].map(([link, chunks]) => [link, chunks.join('\n\n')]));
+}
+
 const VOID_HTML = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr']);
 const BLOCK_HTML = new Set(['address', 'article', 'aside', 'blockquote', 'br', 'dd', 'details', 'dialog', 'div', 'dl', 'dt', 'fieldset', 'figcaption', 'figure', 'footer', 'form', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'header', 'hgroup', 'hr', 'li', 'main', 'nav', 'ol', 'p', 'pre', 'section', 'summary', 'table', 'tbody', 'td', 'tfoot', 'th', 'thead', 'tr', 'ul']);
 const CONTROL_ATTRS = new Set(['id', 'ids', 'name', 'names', 'value', 'values']);
@@ -352,8 +445,9 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
     try { source = markupTokens(safeRead(root, prompt)).map(token => token.startsWith('<!--') ? '\n' : token).join(''); } catch (error) { add(prompt, '(unread)', 'source', error.message); continue; }
     source = source.replace(/<details\b[^>]*>\s*<summary[^>]*>[^\n]*Runtime interface[^\n]*<\/summary>[\s\S]*?<\/details>/gi, '')
       .replace(/(^##+ Runtime interface[^\n]*\n)[\s\S]*?(?=^##+ |$(?![\s\S]))/gmi, '');
-    const decodedSource = decodeHtml(source), drawings = [];
-    for (const link of links(source).sort()) {
+    const decodedSource = decodeHtml(source), drawings = [], drawingLinks = links(source).sort();
+    const controlSources = viewControlSources(source, drawingLinks);
+    for (const link of drawingLinks) {
       let drawing;
       try { drawing = relative(root, resolve(root, dirname(prompt), decodeURIComponent(link))).split(sep).join('/'); } catch { drawing = link; }
       if (drawing && drawing !== '..' && !drawing.startsWith('../')) drawings.push(drawing);
@@ -368,7 +462,7 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
           if (!declaration.test(source) && !appearance.includes(`\`${value}\``)) add(prompt, drawing, `region #${value}`, 'drawing region layout unspecified in prompt');
         }
       }
-      const controls = extractControls(source, parts);
+      const controls = extractControls(controlSources.get(link), parts);
       for (const control of controls) if (!parts.some(part => normalize(part.value) === normalize(control))) add(prompt, drawing, `control "${control}"`, 'prompt control absent from drawing');
     }
     promptRecords.push({ path: prompt, prose: source, drawings });
