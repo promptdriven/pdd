@@ -227,12 +227,22 @@ async function codexChat(t) {
   const f = await fixture(t, { agent: 'codex' });
   const home = join(f.base, 'codexhome'); mkdirSync(home); f.ports.env.CODEX_HOME = home;
   f.ports.timeZone = 'UTC';
-  assert.equal((await f.run()).exitCode, 0);
-  const run = f.record(), pane = f.herdr.paneOf(run.chats.at(-1));
   // A Codex thread id is a UUIDv7: its first 48 bits are the session start in milliseconds.
   const started = f.clock, hex = started.toString(16).padStart(12, '0');
   const id = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-7abc-8def-0123456789ab`;
-  pane.agent.agent_session.value = id;
+  const herdr = f.ports.herdr;
+  f.ports.herdr = async args => {
+    const result = await herdr(args);
+    if (args[0] === 'pane' && args[1] === 'run') {
+      const pane = f.herdr.panes.find(item => item.pane_id === args[2]);
+      const session = f.herdr.sessions.find(item => item.id === pane.agent.agent_session.value);
+      pane.agent.agent_session.value = id;
+      if (session) session.id = id;
+    }
+    return result;
+  };
+  assert.equal((await f.run()).exitCode, 0);
+  const run = f.record(), pane = f.herdr.paneOf(run.chats.at(-1));
   pane.agent.agent_status = 'idle';
   const day = new Date(started), folder = join(home, 'sessions', String(day.getFullYear()), String(day.getMonth() + 1).padStart(2, '0'), String(day.getDate()).padStart(2, '0'));
   const file = join(folder, `rollout-2026-10-27T17-00-00-${id}.jsonl`);
