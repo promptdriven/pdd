@@ -16,3 +16,9 @@ As a person who has signed in to one coding agent, I want PDD to use that agent,
 ## Rules to check
 
 A workflow is admitted only with a ready selected agent. Explicit choice cannot fall back; omitted choice prefers ready Codex, otherwise ready Claude Code. Missing, signed-out and unknown status never count as ready. A failing unselected agent must not veto a ready selected agent.
+
+```pdd-boundary
+prompts/cli/pdd-cli.prompt.md
+prompts/cli/interpreter-version.prompt.md
+prompts/cli/workflow-agents.prompt.md
+```

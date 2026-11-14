@@ -36,6 +36,7 @@
     }
   ],
   "initial_world": {
+    "unused2661": {"autopilotLauncher-runAutopilotLauncher":[],"dispatch-requestUptake":0,"pairing-pairOffer":0,"pairing-pairStatus":0,"pairing-runSetupPairing":0,"setup-checkProjectReady":0},
     "host_readRun": [
       {
         "request": {
@@ -1888,6 +1889,13 @@
     "outside_requests": []
   },
   "simulation": {
+    "autopilotLauncher.runAutopilotLauncher": {"action":"port.write","world_pointer":"/unused2661/autopilotLauncher-runAutopilotLauncher","result_template":{"exitCode":255,"message":"Unexpected Autopilot dispatch in a non-Autopilot scenario"}},
+    "dispatch.requestUptake": {"action":"fixture.lookup","world_pointer":"/unused2661/dispatch-requestUptake","cases":[{"args":{"requestId":"fixture","summary":"fixture","cwd":"fixture"},"call_index":1,"result":{"exitCode":0,"message":"fixture"}}],"result_template":null,"result_value_pointer":""},
+    "pairing.pairOffer": {"action":"fixture.lookup","world_pointer":"/unused2661/pairing-pairOffer","cases":[{"args":{"cwd":"fixture","env":{},"messageFile":"fixture"},"call_index":1,"result":{"exitCode":0,"message":""}}],"result_template":null,"result_value_pointer":""},
+    "pairing.pairStatus": {"action":"fixture.lookup","world_pointer":"/unused2661/pairing-pairStatus","cases":[{"args":{"cwd":"fixture","env":{}},"call_index":1,"result":{"exitCode":0,"message":""}}],"result_template":null,"result_value_pointer":""},
+    "pairing.runSetupPairing": {"action":"fixture.lookup","world_pointer":"/unused2661/pairing-runSetupPairing","cases":[{"args":{"cwd":"fixture","env":{},"interactive":true},"call_index":1,"result":{"exitCode":0,"message":""}}],"result_template":null,"result_value_pointer":""},
+    "setup.checkProjectReady": {"action":"fixture.lookup","world_pointer":"/unused2661/setup-checkProjectReady","cases":[{"call_index":1,"args":{"cwd":"/fixture/project","packageRoot":"/fixture/pdd"},"result":{"ready":true}},{"call_index":2,"args":{"cwd":"/fixture/project","packageRoot":"/fixture/pdd"},"result":{"ready":false}},{"call_index":3,"args":{"cwd":"/fixture/project","packageRoot":"/fixture/pdd"},"result":{"ready":true}},{"call_index":4,"args":{"cwd":"/fixture/project","packageRoot":"/fixture/pdd"},"result":{"ready":false}}],"result_template":null,"result_value_pointer":""},
+
     "host.readRun": {
       "action": "collection.get",
       "world_pointer": "/host_readRun",

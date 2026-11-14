@@ -18,3 +18,8 @@ A positive decimal issue number in the workflow-name position must be rejected
 as a usage error with guidance that repeats that number. Starting a workflow or
 silently selecting a workflow is forbidden. The issue case is `81`; other command
 behavior is a preservation boundary, not an additional behavior change.
+
+```pdd-boundary
+prompts/cli/pdd-cli.prompt.md
+prompts/cli/interpreter-version.prompt.md
+```
