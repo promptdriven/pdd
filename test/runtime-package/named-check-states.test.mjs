@@ -41,7 +41,7 @@ test('named states: local lint reports partial in JSON and text with no authenti
       assert.equal(r.reason.code, 'local-only');
     } else {
       assert.match(p.ports.stdout.text, /partial/); assert.match(p.ports.stdout.text, /local-only/);
-      assert.match(p.ports.stdout.text, /SVG/); assert.match(p.ports.stdout.text, /prompts.*not checked/);
+      assert.match(p.ports.stdout.text, /SVG/); assert.match(p.ports.stdout.text, /static admission/);
     }
   }
 });

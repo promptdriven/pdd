@@ -3530,9 +3530,9 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
         const {promptSchemaRefusals} = await import('./runtime-preflight.mjs');
         for (const path of promptPaths) {
           if (!prompts.has(path)) prompts.set(path, readPrompt(root, found.visible, path, workspace));
-          for (const problem of promptSchemaRefusals(root, found, prompts.get(path), prompts, seen)) problems.push(problem);
+          for (const problem of promptSchemaRefusals(root, found, prompts.get(path), prompts, seen, {lint:true})) problems.push(problem);
         }
-        for (const row of preflight({root,found,selected:selectedTests,workspace}).rows) {
+        for (const row of preflight({root,found,selected:selectedTests,workspace,lint:true}).rows) {
           for (const problem of row.refusals) problems.push({...problem,path:problem.path ?? row.test});
         }
         // Saved v1 diagnostics have a deliberately small, stable shape.

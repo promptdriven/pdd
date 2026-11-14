@@ -268,7 +268,7 @@
         "--local": true
       },
       "selected_tests": "all discovered repository PDD scenarios outside test/fixtures/",
-      "expected_exit_code": 0,
+      "expected_exit_code": 4,
       "expected_auth_calls": 0,
       "expected_network_calls": 0
     }

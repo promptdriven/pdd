@@ -860,14 +860,14 @@ export function promptMarkdownTargets(text, fromPath, visible) {
 }
 
 // The schema rules of a prompt and of the prompts it calls, all at once (cached per prompt).
-export function promptSchemaRefusals(root, found, prompt, prompts, seen = new Set(), { allowMissingInterfaces = false } = {}) {
+export function promptSchemaRefusals(root, found, prompt, prompts, seen = new Set(), { allowMissingInterfaces = false, lint = false } = {}) {
   if (!prompt || seen.has(prompt.path)) return [];
   seen.add(prompt.path);
   if (prompt.error) {
     if (allowMissingInterfaces && prompt.error === 'interface-missing') {
       return promptMarkdownTargets(prompt.text, prompt.path, found.visible).flatMap(target => {
         if (!prompts.has(target)) prompts.set(target, readPrompt(root, found.visible, target, found.workspace));
-        return promptSchemaRefusals(root, found, prompts.get(target), prompts, seen, { allowMissingInterfaces });
+        return promptSchemaRefusals(root, found, prompts.get(target), prompts, seen, { allowMissingInterfaces, lint });
       });
     }
     return [{ ...promptRefusal(prompt, 'interface'), path: prompt.path }];
@@ -877,9 +877,12 @@ export function promptSchemaRefusals(root, found, prompt, prompts, seen = new Se
     refusal(problem.code, problem.pointer, `${prompt.path} ${problem.pointer} ${problem.rule}`, {path:prompt.path, ...(problem.hint ? {hint:problem.hint} : {})}));
   const called = (Array.isArray(prompt.interface.calls) ? prompt.interface.calls : []).map(call => call?.target).filter(target => typeof target === 'string');
   const statusProblems = ['draft', 'approved'].includes(prompt.interface.status) ? [] : [{ ...promptRefusal(prompt, 'interface'), path: prompt.path }];
-  return [...statusProblems, ...prompt.schemaIssues, ...called.flatMap(target => {
+  const schemaIssues = lint ? prompt.schemaIssues.filter(item => item.code !== 'graph-schema-unsupported-keyword' &&
+    !(item.code === 'graph-schema-type-invalid' && item.message.includes('has no "type"') &&
+      prompt.schemaIssues.some(other => other.code === 'graph-schema-unsupported-keyword' && other.section === item.section))) : prompt.schemaIssues;
+  return [...statusProblems, ...schemaIssues, ...called.flatMap(target => {
     if (!prompts.has(target)) prompts.set(target, readPrompt(root, found.visible, target,found.workspace));
-    return promptSchemaRefusals(root, found, prompts.get(target), prompts, seen, { allowMissingInterfaces });
+    return promptSchemaRefusals(root, found, prompts.get(target), prompts, seen, { allowMissingInterfaces, lint });
   })];
 }
 
@@ -1041,7 +1044,7 @@ function possibleResultPointer(schema, path) {
   return possible(schema, 0);
 }
 
-function checkTest(root, found, test, prompts, { allowMissingInterfaces = false } = {}) {
+function checkTest(root, found, test, prompts, { allowMissingInterfaces = false, lint = false } = {}) {
   let doc = test.doc;
   if (!test.error && isObject(doc)) {
     const prepared = preparedText(root,found.visible,test.path,readText(root,test.path),'scenario');
@@ -1080,7 +1083,7 @@ function checkTest(root, found, test, prompts, { allowMissingInterfaces = false 
     const lazyMissing = allowMissingInterfaces && prompt.error === 'interface-missing';
     const broken = lazyMissing ? null : promptRefusal(prompt, section);
     if (broken) return done({ ...broken, ...at }, story);
-    const schemaIssues = promptSchemaRefusals(root, found, prompt, prompts, new Set(), { allowMissingInterfaces });
+    const schemaIssues = promptSchemaRefusals(root, found, prompt, prompts, new Set(), { allowMissingInterfaces, lint });
     if (schemaIssues.length) return done(schemaIssues, story);
     const entry = lazyMissing ? null : (Array.isArray(prompt.interface.entries) ? prompt.interface.entries : []).find(item => item?.operation === step.operation);
     const native = [...prompts.values()].some(item => item.interface?.kind === 'native-only');
@@ -1120,7 +1123,7 @@ function checkTest(root, found, test, prompts, { allowMissingInterfaces = false 
 }
 
 // Rules P1-P10 for the selected tests. Returns rows and warnings; never throws for a test problem.
-export function preflight({ root, found, selected,workspace=found.workspace??loadRuntimeWorkspace({root}), allowMissingInterfaces = false }) {
+export function preflight({ root, found, selected,workspace=found.workspace??loadRuntimeWorkspace({root}), allowMissingInterfaces = false, lint = false }) {
   found={...found,workspace};for(const test of selected)requireRuntimePath(workspace,{path:test.path,from:'Selected test'});
   const warnings = [];
   const reviews = numericReviews(root, found, warnings);
@@ -1140,7 +1143,7 @@ export function preflight({ root, found, selected,workspace=found.workspace??loa
     let refused, plan, testSha = null, effectiveDoc = test.doc;
     try {
       for (const step of Array.isArray(test.doc?.steps) ? test.doc.steps : []) visit(step?.entry_path);
-      const checked = checkTest(root, found, test, prompts, { allowMissingInterfaces });
+      const checked = checkTest(root, found, test, prompts, { allowMissingInterfaces, lint });
       refused = checked.refusal;
       effectiveDoc = checked.doc;
       const nativeProblems = [...prompts.values()].filter(prompt => prompt.interface?.kind === 'native-only')
