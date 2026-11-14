@@ -17,9 +17,9 @@ Start with `# Product name: map`, `Sentence: "the person's sentence"` and
 
 A part names its prompt folder, such as `phone` and `prompts/phone`, and states
 whether it faces a person or runs headless (only user-facing parts get `.ui.svg`
-screens and `app-map.json`; backend servers, routers and daemons get `0` screens).
-Stories use stable IDs such as P01, plain customer words (`As a <person>, I want
-<goal>, so that <reason>`), and CORE or LATER. Never write component-actor Stories
+screens and `app/maps/<part>.json`; backend servers, routers and daemons get `0`
+screens). Stories use stable IDs such as P01, plain customer words (`As a <person>,
+I want <goal>, so that <reason>`), and CORE or LATER. Never write component-actor Stories
 (`"I want the router/connector to..."`), cross-part plumbing duplicates (`1` user
 goal = `1` Story), or standalone Stories for edge cases and internal safety rules
 (those belong in module prompts and `## Rules to check`). A journey names its
@@ -35,8 +35,9 @@ Use `# Product name: plan`. A small map with exactly one part needs no separate 
 | Boundaries | From, To, What crosses, Contract |
 | Runs | Run, Part, Slice, Stories, Needs |
 
-State what never crosses a boundary. Also state how each part starts and connects
-in real execution, naming both its checkable domain/screen prompt(s) (faked over
+State what never crosses a boundary. Under a separate `## Prompts` heading (not
+inside `## Boundaries` or `## Runs`), state how each part starts and connects in
+real execution, naming both its checkable domain/screen prompt(s) (faked over
 contract ports in `pdd test`) and any thin `"kind": "native-only"` adapter prompt(s)
 for real HTTP/HTTPS routes, auth/cookies, SQLite or external databases, CLI/OS
 processes and browser DOM/network clients (RUNBOOK §21; `0` Runtime AI calls in

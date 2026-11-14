@@ -1,6 +1,6 @@
 # map
 
-Read `story-guide.md` first. Write `product/map.md`: the sentence, size, Parts,
+Read `pdd-prompting/story-guide.md` first. Write `product/map.md`: the sentence, size, Parts,
 Stories, Journeys and Questions, using the tables in `references/files.md`.
 Each Story is one real user goal (`As a <person>, I want <goal>, so that <reason>`),
 marked `CORE` or `LATER`. Never make an internal part the actor (`"I want the
