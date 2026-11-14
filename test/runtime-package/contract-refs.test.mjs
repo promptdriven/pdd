@@ -135,3 +135,182 @@ test('REF sync previews preserve prose/hash, adopt constraints, retain local ann
   const unmatched={path:'unmatched.prompt.md',text:'# no interface\n'};
   assert.equal(planSync([unmatched],matches).edits.length,0);
 });
+
+test('REF 2866 nested Markdown contract schemas suppress false near drift while addressable exact still wins', () => {
+  const installItem = schema({
+    install_id: { type: 'string' },
+    tool: { type: 'string' },
+    version: { type: 'string', maxLength: 64, pattern: '^[A-Za-z0-9._+-]+$' },
+    state: { type: 'string', enum: ['waiting', 'running', 'done', 'failed'] },
+    step: { type: 'string' },
+    at: { type: 'string' },
+    reason: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+  });
+  const installerJob = schema({
+    install_id: { type: 'string' },
+    tool: { type: 'string' },
+    version: { type: 'string' },
+    state: { type: 'string', enum: ['running', 'done', 'failed'] },
+    step: { type: 'string' },
+    at: { type: 'string' },
+    reason: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+  });
+  const machineRow = schema({
+    machine_id: { type: 'string' },
+    name: { type: 'string' },
+    state: { type: 'string' },
+    installs: { type: 'array', items: installItem },
+  });
+  const mdRecord = (title, value) => `### ${title}\n\`\`\`json\n${JSON.stringify(value)}\n\`\`\`\n`;
+  const catalog = catalogRecords([
+    { path: 'contracts/phone-relay.md', text: mdRecord('machine_row', machineRow) },
+    { path: 'contracts/world.md', text: mdRecord('machine_row', machineRow) },
+    { path: 'contracts/fakes/installer.json', text: JSON.stringify({ jobs: { type: 'array', items: installerJob } }) },
+  ]);
+  assert.deepEqual(catalog.records.map(r => r.target), [
+    'contracts/fakes/installer.json#',
+    'contracts/fakes/installer.json#/jobs/items',
+    'contracts/phone-relay.md#machine_row',
+    'contracts/world.md#machine_row',
+  ]);
+
+  const inlineInstall = {
+    title: 'Local install item',
+    description: 'Exact copy of machine_row installs/items',
+    additionalProperties: false,
+    required: [...installItem.required].reverse(),
+    properties: Object.fromEntries(Object.entries(installItem.properties).reverse()),
+    type: 'object',
+  };
+  const standalone = source(inlineInstall);
+  const wrapped = source(schema({
+    request_id: { type: 'string' },
+    actor: { type: 'string' },
+    note: { type: 'string' },
+    install: inlineInstall,
+  }));
+  for (const consumer of [standalone, wrapped]) {
+    const compared = compareCopies([consumer], catalog.records);
+    assert.deepEqual(compared, { matches: [], warnings: [] });
+    assert.deepEqual(planSync([consumer], compared.matches), { edits: [], warnings: [] });
+  }
+
+  // Top-level array, oneOf, and interface-shaped contract records also expose nested schema positions.
+  for (const nestedHolder of [
+    { type: 'array', items: installItem },
+    { oneOf: [installItem, { type: 'null' }] },
+    { entries: [{ input_schema: { type: 'array', items: installItem } }], resources: [] },
+  ]) {
+    const got = compareCopies([standalone], [
+      record('contracts/holder.md#holder', nestedHolder),
+      record('contracts/fakes/installer.json#/jobs/items', installerJob),
+    ]);
+    assert.deepEqual(got, { matches: [], warnings: [] });
+  }
+
+  // An addressable exact record still wins over nested non-addressable equality and near candidates.
+  const withAddressable = [...catalog.records, record('contracts/install.md#install_row', installItem)];
+  const exactWin = compareCopies([standalone], withAddressable);
+  assert.deepEqual(exactWin, {
+    matches: [{
+      path: 'prompts/consumer.prompt.md',
+      source_pointer: '/entries/0/input_schema',
+      target: 'contracts/install.md#install_row',
+      kind: 'exact',
+      differences: [],
+    }],
+    warnings: [],
+  });
+  const ambiguousAddressable = compareCopies([standalone], [...withAddressable, record('contracts/install.json#', installItem)]);
+  assert.deepEqual(ambiguousAddressable.matches, []);
+  assert.equal(ambiguousAddressable.warnings.length, 1);
+  assert.match(ambiguousAddressable.warnings[0], /ambiguous contract copies \(contracts\/install\.md#install_row, contracts\/install\.json#\)/);
+});
+
+test('REF 2866 exact-matched parent inline schema does not descend into child schema positions', () => {
+  const childSchema = schema({
+    install_id: { type: 'string' },
+    tool: { type: 'string' },
+    version: { type: 'string', maxLength: 64 },
+    state: { type: 'string', enum: ['waiting', 'running', 'done', 'failed'] },
+  });
+  const nearChild = schema({
+    install_id: { type: 'string' },
+    tool: { type: 'string' },
+    version: { type: 'string' },
+    state: { type: 'string', enum: ['running', 'done', 'failed'] },
+  });
+  const machineRow = schema({
+    machine_id: { type: 'string' },
+    name: { type: 'string' },
+    state: { type: 'string' },
+    installs: { type: 'array', items: childSchema },
+  });
+  const consumer = source({
+    type: 'object',
+    properties: { machines: { type: 'array', items: structuredClone(machineRow) } },
+    required: ['machines'],
+    additionalProperties: false,
+  });
+
+  // Unique exact parent: no child near match, and no redundant child exact/ambiguous output even when child has addressable records.
+  const uniqueParent = compareCopies([consumer], [
+    record('contracts/phone-relay.md#machine_row', machineRow),
+    record('contracts/fakes/installer.json#/jobs/items', nearChild),
+    record('contracts/child-a.json#', childSchema),
+    record('contracts/child-b.json#', childSchema),
+  ]);
+  assert.deepEqual(uniqueParent, {
+    matches: [{
+      path: 'prompts/consumer.prompt.md',
+      source_pointer: '/entries/0/input_schema/properties/machines/items',
+      target: 'contracts/phone-relay.md#machine_row',
+      kind: 'exact',
+      differences: [],
+    }],
+    warnings: [],
+  });
+
+  // Ambiguous exact parent: emits only the parent ambiguity warning and does not descend into children.
+  const ambiguousParent = compareCopies([consumer], [
+    record('contracts/phone-relay.md#machine_row', machineRow),
+    record('contracts/world.md#machine_row', machineRow),
+    record('contracts/fakes/installer.json#/jobs/items', nearChild),
+    record('contracts/child-a.json#', childSchema),
+  ]);
+  assert.deepEqual(ambiguousParent.matches, []);
+  assert.deepEqual(ambiguousParent.warnings, [
+    'prompts/consumer.prompt.md /entries/0/input_schema/properties/machines/items: ambiguous contract copies (contracts/phone-relay.md#machine_row, contracts/world.md#machine_row)',
+  ]);
+});
+
+test('REF 2866 seed worlds, non-schema roots and literal annotations never suppress near drift', () => {
+  const canonical = schema({
+    install_id: { type: 'string' },
+    tool: { type: 'string' },
+    version: { type: 'string' },
+    state: { type: 'string', enum: ['running', 'done', 'failed'] },
+  });
+  const drifted = schema({
+    install_id: { type: 'string' },
+    tool: { type: 'string' },
+    version: { type: 'string' },
+    state: { type: 'string', enum: ['queued', 'running', 'done', 'failed'] },
+  });
+  const literalContainer = schema({
+    alpha: { type: 'string', default: drifted, examples: [drifted], const: drifted, enum: [drifted] },
+    beta: { type: 'string' },
+    gamma: { type: 'string' },
+  });
+  const got = compareCopies([source(drifted)], [
+    record('contracts/fakes/installer.json#/jobs/items', canonical),
+    record('contracts/literal.md#literal_container', literalContainer),
+    record('contracts/seed-world.json#', { kv: { schema: drifted }, items: drifted, properties: { nested: drifted } }),
+    record('contracts/raw-seed.json#', { $seed: 'contracts/seed-world.json', type: 'object', properties: drifted.properties }),
+  ]);
+  assert.equal(got.warnings.length, 0);
+  assert.equal(got.matches.length, 1);
+  assert.equal(got.matches[0].kind, 'near');
+  assert.equal(got.matches[0].target, 'contracts/fakes/installer.json#/jobs/items');
+  assert.ok(got.matches[0].differences.some(diff => diff.includes('/properties/state/enum')));
+});

@@ -396,3 +396,108 @@ test('NATIVE actual Check from one sibling, all Story tests or a batch remains c
   write(setup.repo,dependency,'Sibling dependency after.');
   assert.match(list(setup,ready.env).stdout,/place-order.md: stale: needs a new check/);
 });
+
+test('NATIVE 2866 lint and contracts sync handle nested Markdown sub-schemas, exact parent containment and real drift',async t=>{
+  const setup=harbor(t),{repo}=setup;
+  const installSchema={
+    type:'object',
+    properties:{
+      install_id:{type:'string'},
+      tool:{type:'string'},
+      version:{type:'string',maxLength:64,pattern:'^[A-Za-z0-9._+-]+$'},
+      state:{type:'string',enum:['waiting','running','done','failed']},
+      step:{type:'string'},
+      at:{type:'string'},
+      reason:{oneOf:[{type:'string'},{type:'null'}]},
+    },
+    required:['install_id','tool','version','state','step','at','reason'],
+    additionalProperties:false,
+  };
+  const installerJob={
+    type:'object',
+    properties:{
+      install_id:{type:'string'},
+      tool:{type:'string'},
+      version:{type:'string'},
+      state:{type:'string',enum:['running','done','failed']},
+      step:{type:'string'},
+      at:{type:'string'},
+      reason:{oneOf:[{type:'string'},{type:'null'}]},
+    },
+    required:['install_id','tool','version','state','step','at','reason'],
+    additionalProperties:false,
+  };
+  const machineRow={
+    type:'object',
+    properties:{
+      machine_id:{type:'string'},
+      name:{type:'string'},
+      state:{type:'string'},
+      installs:{type:'array',items:installSchema},
+    },
+    required:['machine_id','name','state','installs'],
+    additionalProperties:false,
+  };
+  const worldSnapshot={
+    type:'object',
+    properties:{
+      snapshot_id:{type:'string'},
+      recorded_at:{type:'string'},
+      owner:{type:'string'},
+      installs:{type:'array',items:installSchema},
+    },
+    required:['snapshot_id','recorded_at','owner','installs'],
+    additionalProperties:false,
+  };
+  write(repo,'contracts/phone-relay.md',`# Phone relay\n\n### machine_row\n\`\`\`json\n${JSON.stringify(machineRow)}\n\`\`\`\n`);
+  write(repo,'contracts/world.md',`# World\n\n### world_snapshot\n\`\`\`json\n${JSON.stringify(worldSnapshot)}\n\`\`\`\n`);
+  json(repo,'contracts/fakes/installer.json',{jobs:{type:'array',items:installerJob}});
+  json(repo,'contracts/seed-world.json',{kv:{machines:[{machine_id:'m1',installs:[]}]}});
+
+  write(repo,'prompts/other.prompt.md',readFileSync(join(repo,PLACE),'utf8'));
+  const second=load(repo,OTHER);for(const step of second.steps)step.entry_path='prompts/other.prompt.md';json(repo,OTHER,second);
+
+  // PLACE carries an inline exact copy of machine_row; prompts/other.prompt.md carries a standalone inline copy of installs/items.
+  updatePrompt(repo,PLACE,value=>{
+    value.entries[0].result_schema={type:'object',properties:{machines:{type:'array',items:structuredClone(machineRow)}},required:['machines'],additionalProperties:false};
+    value.status='draft';
+  });
+  updatePrompt(repo,'prompts/other.prompt.md',value=>{
+    value.entries[0].result_schema=structuredClone(installSchema);
+    value.status='draft';
+  });
+  fillHashes({root:repo});
+  const otherBeforeSync=readFileSync(join(repo,'prompts/other.prompt.md'),'utf8');
+
+  const ready=await runtime(t,setup);
+  assert.equal(await runCheck({cwd:repo,options:{'--lint':true}},ready.ports),0,ready.ports.stderr.text);
+  assert.doesNotMatch(ready.ports.stderr.text,/copy of .*installer\.json.* differs/);
+  assert.doesNotMatch(ready.ports.stderr.text,/ambiguous contract copies/);
+
+  const previewOut=sink(),previewErr=sink();
+  assert.equal(runContracts({cwd:repo,words:['sync']},{env:ready.env,stdout:previewOut,stderr:previewErr}),0,previewErr.text);
+  assert.equal(previewErr.text,'');
+  assert.match(previewOut.text,/prompts\/place_order\.prompt\.md \/entries\/0\/result_schema\/properties\/machines\/items -> contracts\/phone-relay\.md#machine_row; exact copy/);
+  assert.doesNotMatch(previewOut.text,/installs\/items/);
+  assert.doesNotMatch(previewOut.text,/installer\.json/);
+  assert.doesNotMatch(previewOut.text,/prompts\/other\.prompt\.md/);
+
+  const writeOut=sink(),writeErr=sink();
+  assert.equal(runContracts({cwd:repo,words:['sync'],options:{'--write':true}},{env:ready.env,stdout:writeOut,stderr:writeErr}),0,writeErr.text);
+  assert.deepEqual(body(readFileSync(join(repo,PLACE),'utf8')).entries[0].result_schema.properties.machines.items,{$contract:'contracts/phone-relay.md#machine_row'});
+  assert.equal(readFileSync(join(repo,'prompts/other.prompt.md'),'utf8'),otherBeforeSync);
+
+  // Genuine drift (matches neither nested installs/items nor installer.json jobs/items) still emits near drift advice in pdd lint.
+  const driftedInstall={
+    ...structuredClone(installerJob),
+    properties:{...structuredClone(installerJob.properties),state:{type:'string',enum:['queued','running','done','failed']}},
+  };
+  updatePrompt(repo,'prompts/other.prompt.md',value=>{
+    value.entries[0].result_schema=driftedInstall;
+    value.status='draft';
+  });
+  fillHashes({root:repo});
+  const lintStdout=sink(),lintStderr=sink();
+  assert.equal(await runCheck({cwd:repo,words:['unknown-item'],options:{'--lint':true}},{...ready.ports,stdout:lintStdout,stderr:lintStderr}),0,lintStderr.text);
+  assert.match(lintStderr.text,/Warning: prompts\/other\.prompt\.md \/entries\/0\/result_schema: copy of contracts\/fakes\/installer\.json#\/jobs\/items differs/);
+});
