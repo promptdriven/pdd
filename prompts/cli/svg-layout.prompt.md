@@ -29,6 +29,16 @@ Explicit control extraction covers both HTML markup and prose while excluding no
 
 Explicit prose or HTML markup such as `region score`, `id="score"`, or “score box” acknowledges the corresponding drawn region without turning non-control container `id`s into required prompt controls. A backticked id within `## Appearance` also acknowledges it. Do not count an interface schema property or a general state-field declaration as a layout mapping. Retain explicit behavioral control declarations anywhere in the prose. Matching is conservative local advice: name uncertain/unmatched parts; do not infer a semantic equivalence or change the prompt/drawing automatically. Report source-read/parse limitations as warnings. This is a vocabulary and part check, not an AI assessment of meaning or a geometry check.
 
+## Domain decisions: controls in multiple views
+
+For one distinct linked drawing, keep whole-prompt control extraction unchanged. With multiple drawings, require shared controls on every drawing, but require view-specific controls only on the drawings associated with their Markdown section, list item (including indented children), or interleaved labeled view block. A section ends at a sibling/ancestor heading, a list item at its sibling or dedent, and a labeled block at the next label or enclosing boundary. Controls before, between and after those scopes remain shared within their enclosing scope.
+
+Associate a scope with its explicit local drawing links (inline or reference-style, including links after the controls). A section may contain multiple drawings for one view; its controls apply to all of them. A narrower child association overrides its enclosing view. Reference definitions alone do not start a view scope. Without a local link, a heading or leading label may identify the drawing's filename state (`<state>` in `views/<state>[--<variant>]__<layout-mode>.ui.svg`) or its complete filename stem; match whole names ignoring case, Markdown emphasis and hyphen/underscore spacing. A state applies to all its variants/layouts. Incidental mentions in navigation or control sentences do not start view scopes. Unassociated prose remains shared; never use the controls present in a drawing to decide which requirements apply. Markdown examples inside fenced code do not create scope boundaries, while their actual controls remain subject to the existing extraction rules.
+
+Link-only drawing metadata belongs to its enclosing scope, including an indented image item or a control-free child labeled Drawing, SVG, Layout, Preview, Design or Reference. A separately named view or a child that declares controls is its own scope: its links never narrow otherwise unassociated parent prose. This lets a list item place its drawing after its controls without mistaking a group of child views for a shared-control restriction.
+
+Only prompt-to-drawing control requirements are scoped. Drawing-to-prompt label and region checks, safety/read diagnostics, warning ordering/deduplication, and advisory admission remain unchanged. This avoids cross-view false positives without hiding shared or own-view omissions.
+
 Also inspect workspace-allowed `prompt-runtime.app-map.v1` app maps (`(^|/)app-map\.json$` in `files` plus string entries of `"app_maps"` in workspace-allowed `test/**/*.json` and `tests/**/*.json` files) and delegate stylesheet and CSS-class checks for inspected prompts to [screen design check](screen-design-check.prompt.md). Read each referenced stylesheet safely inside `root` without following symlinks, passing any read/escape/symlink failure as that stylesheet's `error` record rather than throwing. Merge its returned warnings into the deduplicated sorted output.
 
 Warnings start `Warning: SVG layout`, are deduplicated and ordered by prompt path, drawing path and part. A 2048-like screen with four direction buttons only in prose and SCORE/SEED boxes and a READY bar only in the drawing must warn about directions, READY and the unspecified score/seed layout regions, even when prose mentions score and seed data.
@@ -43,3 +53,15 @@ Warnings start `Warning: SVG layout`, are deduplicated and ordered by prompt pat
 ## Caller navigation
 
 The CLI exposes this advisory through [Check](runtime-client.prompt.md).
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "kind": "native-only",
+  "status": "approved",
+  "prose_sha256": "cc767b34bffba0b79c36076ac86be84efebfc5be68c7610b5386198834363a9b",
+  "reason": "lintSvgLayouts reads real local prompt/drawing files and checks regular-file and symlink ancestors through its native filesystem boundary; it has no injectable file port. Native tests exercise its deterministic view policy and the public local-lint command alongside these reads."
+}
+```
+</details>
