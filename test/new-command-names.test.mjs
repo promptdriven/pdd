@@ -180,9 +180,11 @@ test('shell completion offers only the main names', t => {
 test('no source line names pdd check or pdd try', () => {
   const hostSource = file => file.endsWith('.mjs') && !['vendor', 'runtime'].includes(file.split('/')[1]);
   const files = readdirSync(join(root, 'src'), { recursive: true }).map(file => `src/${file.split(sep).join('/')}`).filter(hostSource);
-  const tracked = execFileSync('git', ['ls-files', '-z', '--', 'src'], { cwd: root, encoding: 'utf8' }).split('\0').filter(hostSource);
+  const gitFiles = flag => execFileSync('git', ['ls-files', '-z', flag, '--', ':(glob)**/*.mjs', ':(exclude)vendor', ':(exclude)runtime'], { cwd: join(root, 'src'), encoding: 'utf8' }).split('\0').filter(Boolean);
+  const deleted = gitFiles('--deleted');
+  const tracked = gitFiles('--cached').filter(file => !deleted.includes(file)).map(file => `src/${file}`);
   assert.ok(tracked.length > 0, 'git lists the host src files');
-  assert.deepEqual(tracked.filter(file => existsSync(join(root, file)) && !files.includes(file)), [], 'the scan reads every host src file that git tracks');
+  assert.deepEqual(tracked.filter(file => !files.includes(file)), [], 'the scan reads every host src file that git tracks');
   const found = [];
   for (const file of files) {
     readFileSync(join(root, file), 'utf8').split('\n').forEach((text, index) => {

@@ -9,7 +9,7 @@ const execFileAsync = promisify(execFile);
 const root = fileURLToPath(new URL('../..', import.meta.url));
 const srcDir = join(root, 'src');
 
-export const SEAM_LOADS_RECORD = join(root, 'test/fixtures/seam-loads.mjs');
+export const SEAM_LOADS_RECORD = join(root, 'test/fixtures/seam-loads.txt');
 export const REPLAY_CHILD_EXPR = 'source.identity({root:process.argv[1],tests:JSON.parse(process.argv[2])}).files';
 
 const ASYNC_SEAM_BRIDGE_PROBES = new Set([

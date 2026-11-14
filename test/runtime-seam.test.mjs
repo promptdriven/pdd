@@ -607,7 +607,7 @@ test('SEAM5 (R2-3): every CLI command family, child entry, Autopilot tick and li
   const { pathToFileURL } = await import('node:url');
   const { PUBLIC_COMMAND_ROUTES } = await import('../src/command-catalog.mjs');
   const { REPLAY_CHILD_EXPR, SEAM_LOADS_RECORD, findTarjanCycles, inBatches, seamWorld } = await import('./helpers/seam-loads.mjs');
-  const { default: record } = await import(pathToFileURL(SEAM_LOADS_RECORD).href);
+  const record = readFileSync(SEAM_LOADS_RECORD, 'utf8').split('\n').filter(Boolean).map(line => line.split(' '));
   const world = seamWorld();
   t.after(world.remove);
   const { bin, nonGit, repo, scratch } = world;
@@ -667,9 +667,26 @@ test('SEAM5 (R2-3): every CLI command family, child entry, Autopilot tick and li
     'child:workflow-replay-selector', 'lib:svg-layout.mjs', 'lib:prompt-approve.mjs',
     'lib:file-owner.mjs', 'lib:agent-adapters.mjs',
   ]);
-  const loads = new Map(world.probes.map(([key]) => [key, Object.keys(record).filter(name => record[name].includes(key)).sort()]));
-  for (const [key, { loaded, cycles }] of await world.probeAll()) {
-    assert.deepEqual(loaded, loads.get(key), `loaded modules mismatch for ${key}; if intended, run node test/tools/record-seam-loads.mjs and review the record diff`);
+  const HEAVY_MODULES = [
+    'src/product.mjs', 'src/prompt-approve.mjs', 'src/runtime/interface-draft.mjs',
+    'src/runtime/runtime-client.mjs', 'src/screen-compare.mjs', 'src/workflow-runner.mjs',
+  ];
+  const MUST_NOT_LOAD = new Map([
+    ...['cli:--help', 'cli:help-topic', 'cli:--version', 'cli:completion', 'cli:workflow-list'].map(key => [key, HEAVY_MODULES]),
+    ...['lib:svg-layout.mjs', 'child:workflow-worker-completion'].map(key => [key, [...HEAVY_MODULES, 'src/runtime/runtime-output.mjs']]),
+  ]);
+  const results = await world.probeAll();
+  const loadedAnywhere = new Set([...results.values()].flatMap(({ loaded }) => loaded.map(name => `src/${name}`)));
+  for (const heavy of new Set([...MUST_NOT_LOAD.values()].flat())) {
+    assert.ok(loadedAnywhere.has(heavy), `${heavy} is in the hand-written heavy list but no probe loads it; if it moved, update the list by hand`);
+  }
+  for (const [key, heavy] of MUST_NOT_LOAD) {
+    const loaded = results.get(key).loaded.map(name => `src/${name}`);
+    assert.deepEqual(heavy.filter(name => loaded.includes(name)), [], `${key} must not load these heavy modules`);
+  }
+  const loads = new Map(world.probes.map(([key]) => [key, record.filter(([entry]) => entry === key).map(([, name]) => name).sort()]));
+  for (const [key, { loaded, cycles }] of results) {
+    assert.deepEqual(loaded, loads.get(key), `loaded modules mismatch for ${key}. Find why the code now loads a different set. A change to test/fixtures/seam-loads.txt needs a reviewer to read its diff before it is committed.`);
     if (ACYCLIC_ENTRIES.has(key)) {
       assert.deepEqual(cycles, [], `expected zero import cycles for ${key}`);
     } else {
