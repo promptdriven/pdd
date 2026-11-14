@@ -1,0 +1,133 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/single-attempt-call-accounting-3277.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "When a single check attempt dispatches 34 provider calls with 33 known calls and 1 unknown call, `pdd test` reports `\"calls\": \"unknown\"`, `\"known_calls\": 33`, `\"unknown_calls\": 1` and `\"accounting_complete\": false` in JSON and `\"33 AI calls + 1 unknown\"` in the Prompt tests summary line."
+    },
+    {
+      "id": "AC2",
+      "text": "When a single check attempt dispatches 34 provider calls with 1 unknown call and omits `\"known_calls\"`, `pdd test` subtracts the 1 unknown call from the 34 dispatched calls and reports `\"calls\": \"unknown\"`, `\"known_calls\": 33`, `\"unknown_calls\": 1` and `\"accounting_complete\": false`."
+    },
+    {
+      "id": "AC3",
+      "text": "When a single check attempt completes with 3 calls, 2 known calls, 0 unknown calls and complete accounting, `pdd test` keeps `\"calls\": 3`, `\"unknown_calls\": 0` and `\"accounting_complete\": true`."
+    }
+  ],
+  "initial_world": {},
+  "simulation": {},
+  "context": [],
+  "steps": [
+    {
+      "step_id": "explicit-known-and-provider-total",
+      "entry_path": "prompts/cli/runtime-output.prompt.md",
+      "operation": "projectAnswer",
+      "input": {
+        "command": "check",
+        "state": "unknown",
+        "usage": {
+          "calls": 34,
+          "known_calls": 33,
+          "unknown_calls": 1
+        },
+        "result": {
+          "report": {
+            "provider_calls": 34,
+            "samples": []
+          }
+        }
+      },
+      "checks": [
+        { "criterion_id": "AC1", "target": "result", "path": "/calls", "op": "equals", "value": "unknown" },
+        { "criterion_id": "AC1", "target": "result", "path": "/known_calls", "op": "equals", "value": 33 },
+        { "criterion_id": "AC1", "target": "result", "path": "/unknown_calls", "op": "equals", "value": 1 },
+        { "criterion_id": "AC1", "target": "result", "path": "/accounting_complete", "op": "equals", "value": false }
+      ]
+    },
+    {
+      "step_id": "omitted-known-subtracts-unknown",
+      "entry_path": "prompts/cli/runtime-output.prompt.md",
+      "operation": "projectAnswer",
+      "input": {
+        "command": "check",
+        "state": "unknown",
+        "usage": {
+          "calls": 34,
+          "unknown_calls": 1
+        },
+        "result": {
+          "report": {
+            "provider_calls": 34,
+            "samples": []
+          }
+        }
+      },
+      "checks": [
+        { "criterion_id": "AC2", "target": "result", "path": "/calls", "op": "equals", "value": "unknown" },
+        { "criterion_id": "AC2", "target": "result", "path": "/known_calls", "op": "equals", "value": 33 },
+        { "criterion_id": "AC2", "target": "result", "path": "/unknown_calls", "op": "equals", "value": 1 },
+        { "criterion_id": "AC2", "target": "result", "path": "/accounting_complete", "op": "equals", "value": false }
+      ]
+    },
+    {
+      "step_id": "complete-receipt-keeps-total",
+      "entry_path": "prompts/cli/runtime-output.prompt.md",
+      "operation": "projectAnswer",
+      "input": {
+        "command": "check",
+        "state": "passed",
+        "accounting_complete": true,
+        "usage": {
+          "calls": 3,
+          "known_calls": 2,
+          "unknown_calls": 0,
+          "accounting_complete": true
+        },
+        "result": {
+          "exitCode": 0,
+          "report": {
+            "provider_calls": 3,
+            "accounting_complete": true,
+            "samples": []
+          }
+        }
+      },
+      "checks": [
+        { "criterion_id": "AC3", "target": "result", "path": "/calls", "op": "equals", "value": 3 },
+        { "criterion_id": "AC3", "target": "result", "path": "/unknown_calls", "op": "equals", "value": 0 },
+        { "criterion_id": "AC3", "target": "result", "path": "/accounting_complete", "op": "equals", "value": true }
+      ]
+    },
+    {
+      "step_id": "render-json-disjoint-summary",
+      "entry_path": "prompts/cli/runtime-output.prompt.md",
+      "operation": "renderJson",
+      "input": {
+        "repo": "example/project",
+        "exitCode": 3,
+        "rows": [
+          {
+            "story": "single-attempt-call-accounting-3277",
+            "title": "Keep single-attempt call counts disjoint",
+            "test": "test/runtime/single-attempt-call-accounting-3277.json",
+            "state": "partial",
+            "phase": "server",
+            "calls": "unknown",
+            "known_calls": 33,
+            "unknown_calls": 1,
+            "accounting_complete": false
+          }
+        ]
+      },
+      "checks": [
+        { "criterion_id": "AC1", "target": "result", "path": "/rows/0/calls", "op": "equals", "value": "unknown" },
+        { "criterion_id": "AC1", "target": "result", "path": "/rows/0/known_calls", "op": "equals", "value": 33 },
+        { "criterion_id": "AC1", "target": "result", "path": "/rows/0/unknown_calls", "op": "equals", "value": 1 },
+        { "criterion_id": "AC1", "target": "result", "path": "/rows/0/accounting_complete", "op": "equals", "value": false },
+        { "criterion_id": "AC1", "target": "result", "path": "/rows/0/summary_line", "op": "equals", "value": "Prompt tests (single-attempt-call-accounting-3277): no verdict · 0 of 0 criteria · 0/0 checks · 1 partial (no-server-verdict) · 33 AI calls + 1 unknown" },
+        { "criterion_id": "AC1", "target": "result", "path": "/summary_line", "op": "equals", "value": "Prompt tests: no verdict · 0 of 0 criteria · 0/0 checks · 1 partial (no-server-verdict) · 33 AI calls + 1 unknown" }
+      ]
+    }
+  ]
+}
