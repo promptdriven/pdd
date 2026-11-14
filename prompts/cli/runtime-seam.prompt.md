@@ -5,7 +5,7 @@ Own `src/runtime-seam.mjs` and the stable launcher entry `src/try-doors.mjs`. `s
 The seam keeps stable pdd-owned file paths for anything pdd writes into a user's files or passes to a child process:
 
 - `src/try-doors.mjs` re-exports `runShim` from `./runtime-seam.mjs` so `.pdd/try/bin/<program>` launchers keep a stable pdd-owned module path across upgrades and package extraction.
-- `runTry(input, ports)` in `src/runtime-seam.mjs` defaults `ports.tryLauncherUrl` to the `file:` URL of `src/try-doors.mjs` before delegating to the Runtime package entry, preserving an explicit `ports.tryLauncherUrl` when provided.
+- `runTry(input, ports)` in `src/runtime-seam.mjs` defaults `ports.tryLauncherUrl` to the `file:` URL of `src/try-doors.mjs` before delegating to the Runtime package entry, preserving an explicit `ports.tryLauncherUrl` when provided. Supply `ports.readWorkflowRun` from the host workflow-run reader for product draft capture, preserving an explicit injected reader; the Runtime package never imports that host module.
 
 ## Request metadata and host ports
 

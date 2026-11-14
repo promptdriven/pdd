@@ -1,5 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: b6b6c2bca72fb2e9d26550225d8f90d3d7fe52d401760f7234a8f7a74448e03a).
-import { withProductDrafts } from './product-drafts.mjs';
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 211b9a0e18df5e22bdb0376d4e9f0c8d1452cdd2d023825479592cf94e3d73bd).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
@@ -153,7 +152,7 @@ function withDefaults(ports) {
     throw unboundPortError('Exit code port (exitCodeFor or exitFor) is not bound.');
   };
   return {
-    env, baselineFiles: ports.baselineFiles, baselineIdentity: ports.baselineIdentity, checkPlanPorts: ports.checkPlanPorts, tryLauncherUrl: ports.tryLauncherUrl, redaction: ports.redaction, redactSecrets: ports.redactSecrets, rememberSecrets: ports.rememberSecrets, clientVersion: ports.clientVersion, workflowBaseSha: ports.workflowBaseSha, headerPrompts: ports.headerPrompts, resolveOwners: ports.resolveOwners, promptClaims: ports.promptClaims, isTestOwnedPath: ports.isTestOwnedPath, evidenceEligibility: ports.evidenceEligibility, readEvidenceEligibility: ports.readEvidenceEligibility, evidencePorts: ports.evidencePorts, allRuns: ports.allRuns, assessNativeEvidence: ports.assessNativeEvidence, usableResult: ports.usableResult, resultLines: ports.resultLines, parseProductDocuments: ports.parseProductDocuments, parseProductWorldWriters: ports.parseProductWorldWriters, loadAgentDefinitions: ports.loadAgentDefinitions, agents: ports.agents, guidePorts: ports.guidePorts, askApproval: ports.askApproval, promptPath: ports.promptPath, lineReader: ports.lineReader ?? defaultLineReader, lintSvgLayouts: ports.lintSvgLayouts, compareScreen: ports.compareScreen, formatScreenComparison: ports.formatScreenComparison, caseHandoff:ports.caseHandoff, cacheFiles: ports.cacheFiles ?? nativeCacheFiles, cacheHash: ports.cacheHash ?? sha256, acquireBatchLock: ports.acquireBatchLock ?? acquireRuntimeBatchLock, timers: ports.timers, random: ports.random, findTests: findTestsBound, captureSource: captureSourceBound, fillHashes: fillHashesBound, prepareHashSelection: ports.prepareHashSelection, isStoryPath: ports.isStoryPath, hasAcceptance: ports.hasAcceptance, matchTests: ports.matchTests, orphanSummary: ports.orphanSummary, selectTests: selectTestsBound, expectedTestPath: expectedTestPathBound, whyNoTests: whyNoTestsBound, noTestsMessage, exitCodeFor: exitCodeForBound, exitFor: ports.exitFor, promptTestsLabel: ports.promptTestsLabel, slotFiles: ports.slotFiles, isAlive: ports.isAlive, pid: ports.pid, agentBridge: ports.agentBridge, discoverAgents: ports.discoverAgents, askAgent: ports.askAgent, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
+    env, baselineFiles: ports.baselineFiles, baselineIdentity: ports.baselineIdentity, checkPlanPorts: ports.checkPlanPorts, tryLauncherUrl: ports.tryLauncherUrl, redaction: ports.redaction, redactSecrets: ports.redactSecrets, rememberSecrets: ports.rememberSecrets, clientVersion: ports.clientVersion, workflowBaseSha: ports.workflowBaseSha, headerPrompts: ports.headerPrompts, resolveOwners: ports.resolveOwners, promptClaims: ports.promptClaims, isTestOwnedPath: ports.isTestOwnedPath, evidenceEligibility: ports.evidenceEligibility, readEvidenceEligibility: ports.readEvidenceEligibility, evidencePorts: ports.evidencePorts, allRuns: ports.allRuns, assessNativeEvidence: ports.assessNativeEvidence, usableResult: ports.usableResult, resultLines: ports.resultLines, readWorkflowRun: ports.readWorkflowRun, parseProductDocuments: ports.parseProductDocuments, parseProductWorldWriters: ports.parseProductWorldWriters, loadAgentDefinitions: ports.loadAgentDefinitions, agents: ports.agents, guidePorts: ports.guidePorts, askApproval: ports.askApproval, promptPath: ports.promptPath, lineReader: ports.lineReader ?? defaultLineReader, lintSvgLayouts: ports.lintSvgLayouts, compareScreen: ports.compareScreen, formatScreenComparison: ports.formatScreenComparison, caseHandoff:ports.caseHandoff, cacheFiles: ports.cacheFiles ?? nativeCacheFiles, cacheHash: ports.cacheHash ?? sha256, acquireBatchLock: ports.acquireBatchLock ?? acquireRuntimeBatchLock, timers: ports.timers, random: ports.random, findTests: findTestsBound, captureSource: captureSourceBound, fillHashes: fillHashesBound, prepareHashSelection: ports.prepareHashSelection, isStoryPath: ports.isStoryPath, hasAcceptance: ports.hasAcceptance, matchTests: ports.matchTests, orphanSummary: ports.orphanSummary, selectTests: selectTestsBound, expectedTestPath: expectedTestPathBound, whyNoTests: whyNoTestsBound, noTestsMessage, exitCodeFor: exitCodeForBound, exitFor: ports.exitFor, promptTestsLabel: ports.promptTestsLabel, slotFiles: ports.slotFiles, isAlive: ports.isAlive, pid: ports.pid, agentBridge: ports.agentBridge, discoverAgents: ports.discoverAgents, askAgent: ports.askAgent, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
     gh: ports.gh ?? (args => {
       const executable = authExecutable(env, ports.ghPath);
       return executable ? spawnSync(executable, args, { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 })
@@ -4345,10 +4344,11 @@ function productTest(found, words, journey, root, ports) {
   if(selected.length!==1)throw new Stop(2,'Product Simulator needs one explicit Story or journey test.');
   return selected[0];
 }
-function captureProductTry(root,test,options,ports) {
+async function captureProductTry(root,test,options,ports) {
+  const { withProductDrafts } = await import('./product-drafts.mjs');
   let composition, maxTapCalls, draftSource;
   const capture=ports.captureSource(root,{tests:[test.path],appMap:null,prepareSource(snapshot){
-    return withProductDrafts({root, parts:options['--parts']?.split(',').map(part=>part.trim()), snapshot, parseProductDocuments:ports.parseProductDocuments, captureSource:ports.captureSource}, (snapshot,draftFiles)=>{
+    return withProductDrafts({root, parts:options['--parts']?.split(',').map(part=>part.trim()), snapshot, parseProductDocuments:ports.parseProductDocuments, captureSource:ports.captureSource, readRun:ports.readWorkflowRun}, (snapshot,draftFiles)=>{
     draftSource=snapshot;
     const adapters={root,statFile:(path,options)=>snapshot.statFile(relative(root,path).split(sep).join('/'),options),
       readFile:path=>snapshot.readFile(relative(root,path).split(sep).join('/')),
@@ -4586,7 +4586,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     const productSetup = options['--product'] ? { parts: options['--parts']?.split(',').map(p => p.trim()) ?? null, journey: options['--journey'] ?? null } : null;
     const localSelected = productSetup ? [productTest(found, normalized, options['--journey'], root, ports)]
       : normalized.length ? [oneTest(found, normalized, root, ports)] : [...found.tests].sort((a, b) => a.path.localeCompare(b.path));
-    const prepared = productSetup ? captureProductTry(root, localSelected[0], options, ports) : null;
+    const prepared = productSetup ? await captureProductTry(root, localSelected[0], options, ports) : null;
     let preflightFound = found;
     if (prepared) {
       const captured = new Map(prepared.capture.sources.map(file => [file.path, file.bytes]));

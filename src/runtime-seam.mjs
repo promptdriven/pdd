@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 613473d90d7a8219fcd71f3b0f62effa91333e899433f33837d66e6ad6d7432b).
+// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 5952f7f675fae497f31f7b89785144670a9fd9a692388589db6cc4a340797dba).
 import { readFileSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -644,12 +644,14 @@ export async function runTry(input = {}, ports = {}) {
     { readEvidenceEligibility },
     { parseProductDocuments, parseProductWorldWriters },
     { askApproval, lineReader, promptPath },
+    { readRun },
   ] = await Promise.all([
     import('./secret-redaction.mjs'),
     import('./agent-config.mjs'),
     import('./workflow-runner.mjs'),
     import('./product.mjs'),
     import('./prompt-approve.mjs'),
+    import('./workflow-runs.mjs'),
   ]);
   const defaultDiscoverAgents = async (...args) => (await import('./agent-adapters.mjs')).discoverAgents(...args);
   const defaultAskAgent = async (turnInput, ...rest) => askAgent(turnInput, ...rest);
@@ -675,6 +677,7 @@ export async function runTry(input = {}, ports = {}) {
         askAgent: ports.askAgent ?? ports.agents?.ask ?? defaultAskAgent,
         parseProductDocuments,
         parseProductWorldWriters,
+        readWorkflowRun: readRun,
         askApproval,
         lineReader,
         promptPath,

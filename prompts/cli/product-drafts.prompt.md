@@ -1,7 +1,7 @@
 # Explore active product drafts
 
 Own `src/runtime/product-drafts.mjs`. Export synchronous
-`withProductDrafts({root, parts, snapshot, parseProductDocuments, captureSource}, prepare)`.
+`withProductDrafts({root, parts, snapshot, parseProductDocuments, captureSource, readRun}, prepare)`.
 It calls `prepare(source, files)` with repository-relative read/stat source ports
 and an array of `{path,bytes}` draft inputs, returning the callback result.
 The combined source also supplies `validateCapture(sources, capture = {})`, accepting the
@@ -24,6 +24,8 @@ tap chains, shared world semantics and limits.
   part qualify. Completed/cancelled runs and `Part: all` do not supply drafts.
   Validate that each draft checkout belongs to the same Git common directory.
   No GitHub lookup, code generation, merge, branch switch or workflow mutation.
+  Use the injected host `readRun(runDir)` reader for workflow record parsing;
+  the Runtime package imports no host workflow module.
 - At most one active run may supply a part, even across slices. Ambiguity refuses
   `invalid-product-map`, naming the part, run IDs and checkout paths. Overlapping
   declared prompt folders also refuse, naming both parts and the conflicting paths.
@@ -78,7 +80,7 @@ is navigation for its wider startup/status responsibilities.
   "kind": "native-only",
   "reason": "Verifies real Git common-directory/worktree identity and stable source snapshots across multiple checkouts; ordinary Node tests exercise these filesystem and Git boundaries.",
   "status": "approved",
-  "prose_sha256": "4e6343a6db89c1ff3cb74faeee4ae0107dd63d1a62d846fab188e60a3ea95d29"
+  "prose_sha256": "c2371206fee02ff0495ebe37f9ec59b1bbc04cdd4bee17cd9c041a1336e72b02"
 }
 ```
 </details>

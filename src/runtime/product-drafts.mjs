@@ -1,8 +1,7 @@
-// Generated from prompts/cli/product-drafts.prompt.md (sha256: 163123fbd8079c4de670fb59832263b465231a0548d74b83a6bdbb6198016b8b).
+// Generated from prompts/cli/product-drafts.prompt.md (sha256: 50a7ab22b5bb5041c18c1bfc26511e8bf776a7728b144617bb17a7f69ad05a17).
 import { execFileSync } from 'node:child_process';
 import { readdirSync, realpathSync } from 'node:fs';
 import { join, posix } from 'node:path';
-import { readRun } from '../workflow-runs.mjs';
 import { gitFiles } from './runtime-preflight.mjs';
 import { markdownDefinitions, markdownLinks, markdownSectionText } from './runtime-markdown.mjs';
 
@@ -11,7 +10,7 @@ const git = (root, args) => execFileSync('git', args, {cwd:root, encoding:'utf8'
 const common = root => realpathSync(git(root, ['rev-parse','--path-format=absolute','--git-common-dir']));
 const overlaps = (a,b) => a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
 
-export function withProductDrafts({root, parts, snapshot, parseProductDocuments, captureSource}, prepare) {
+export function withProductDrafts({root, parts, snapshot, parseProductDocuments, captureSource, readRun}, prepare) {
   const readOptional = path => snapshot.statFile(path).exists ? snapshot.readFile(path).toString('utf8') : '';
   const {product} = parseProductDocuments({mapText:readOptional('product/map.md'), planText:readOptional('product/plan.md')});
   const selected = parts === undefined ? product.parts.map(p=>p.part) : parts;
