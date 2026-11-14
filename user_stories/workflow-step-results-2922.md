@@ -32,3 +32,8 @@ The synthetic input has two areas, with code current and check in the earlier st
 The [frozen native cases](../test/fixtures/workflow-step-results-2922-cases.json) contain the full synthetic input and independently authored expected mapping. The [assertion specification](../test/fixtures/workflow-step-results-2922-assertions.md) requires identity-based checks for all three commands and rejection of wrong-step assignment, invalid JSON, dropped payload fields/records, unrelated empty arrays and a generic "Gate: none" without each step's absence.
 
 Coverage: the Runtime scenario is PARTIAL lexical coverage at a message-string boundary. Its substring checks cannot establish these associations, parsed JSON or full payload equality. The combined review package freezes every criterion; the native assertions still require implementation and execution in the Code stage. Neither draft lane is a behavior pass.
+
+```pdd-boundary
+prompts/cli/workflow-runner.prompt.md
+prompts/cli/workflow-view.prompt.md
+```

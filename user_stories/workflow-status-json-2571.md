@@ -11,3 +11,7 @@ As a person who steers runs from a phone, I want a versioned JSON list of my run
 - Each run identifies its issue, workflow, agent, current area and step, PRs, Story count, chat location and last change.
 - Waiting reports the gate, question, stopped chat or startup failure; a stopped chat reports its reason or unknown.
 - The JSON never includes a private Try link.
+
+```pdd-boundary
+prompts/cli/workflow-runner.prompt.md
+```

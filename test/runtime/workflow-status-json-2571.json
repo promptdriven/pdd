@@ -27,8 +27,8 @@
       "input": {"cwd": "/project", "all": true, "json": true},
       "checks": [
         {"criterion_id": "AC1", "target": "result", "path": "/exitCode", "op": "equals", "value": 0},
-        {"criterion_id": "AC1", "target": "result", "path": "/message", "op": "contains", "value": "\"version\": 1"},
-        {"criterion_id": "AC1", "target": "result", "path": "/message", "op": "contains", "value": "\"runs\": []"}
+        {"criterion_id": "AC1", "target": "result", "path": "/message", "json_path": "/version", "op": "equals", "value": 1},
+        {"criterion_id": "AC1", "target": "result", "path": "/message", "json_path": "/runs", "op": "equals", "value": []}
       ]
     }
   ]

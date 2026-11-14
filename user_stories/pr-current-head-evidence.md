@@ -22,3 +22,9 @@ A current successful check requires compatible current selected content; changed
 ## Coverage boundary
 
 The runtime cases exercise the existing source-aware Story count helper, evidence preparation through fixed outside replies, and the existing JSON renderer with authored check facts. They do not publish or refresh a PR. Native code verification must replay these cases and also prove removal of stale claims from headers, step summaries, Verify and PR contents descriptions; pending edits before push; final-edit failures; exact-head CI/proof count provenance; and text/JSON saved-read coverage propagation. The runtime renderer cases do not prove those text or read effects. No runtime pass by itself proves those effects.
+
+```pdd-boundary
+prompts/cli/workflow-runner.prompt.md
+prompts/cli/workflow-pr-evidence.prompt.md
+prompts/cli/runtime-output.prompt.md
+```

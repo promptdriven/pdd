@@ -8,13 +8,26 @@ import { fixture } from './helpers/workflow-runner-fixture.mjs';
 
 const scenario = JSON.parse(readFileSync(new URL('./runtime/workflow-status-json-2571.json', import.meta.url)));
 
+function pointer(value, path) {
+  assert.ok(path === '' || path.startsWith('/'), `Invalid JSON pointer ${path}`);
+  if (path === '') return value;
+  for (const token of path.slice(1).split('/')) {
+    assert.ok(!/~(?![01])/.test(token), `Invalid JSON pointer escape in ${path}`);
+    const key = token.replace(/~1/g, '/').replace(/~0/g, '~');
+    assert.ok(value !== null && typeof value === 'object' && Object.hasOwn(value, key), `Missing JSON pointer ${path}`);
+    value = value[key];
+  }
+  return value;
+}
+
 test('2571 scenario replay: empty machine list', async t => {
   const f = await fixture(t);
   for (const step of scenario.steps) {
     const result = await runStatus({...step.input, cwd:f.source}, {...f.ports, allRuns: () => JSON.parse(scenario.simulation["runs.allRuns"].result_template.json)});
     for (const check of step.checks) {
       assert.equal(check.target, 'result');
-      const actual = check.path.slice(1).split('/').reduce((v,k) => v?.[k], result);
+      let actual = pointer(result, check.path);
+      if (check.json_path !== undefined) actual = pointer(JSON.parse(actual), check.json_path);
       if (check.op === 'equals') assert.deepEqual(actual, check.value);
       else if (check.op === 'contains') assert.ok(actual.includes(check.value));
       else assert.fail(`Unsupported operation ${check.op}`);
