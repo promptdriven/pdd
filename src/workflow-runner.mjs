@@ -5215,7 +5215,8 @@ function listJsonV1(run, item, chatStateValue, health) {
       const reason = health?.kind === 'usage-limit' ? 'usage_limit' : chat?.evidence?.kind === 'pane-exit' ? 'exited' : 'unknown';
       waiting = {kind:'chat_stopped', gate:null, question:null, reason};
     } else if (question) waiting = {kind:'question', gate:null, question:question.text ?? null, reason:null};
-    else if (run.gate) waiting = {kind:'gate', gate:run.gate.id ?? null, question:null, reason:null};
+    else if (!run.gate && run.state === 'running' && chatStateValue === 'blocked') waiting = {kind:'question', gate:null, question:null, reason:null};
+    else if (run.gate && chatStateValue !== 'working') waiting = {kind:'gate', gate:run.gate.id ?? null, question:null, reason:null};
   }
   const result = Object.fromEntries(['ref','repo','number','workflow','area','group','words','stories','waitingForStory','updatedAt','root','runDir','viewCommand','launchProfile','runtimeCoverage','nativeOnly','smallChange'].filter(key => item[key] !== undefined).map(key => [key,item[key]]));
   const pick = (value, keys) => Object.fromEntries(keys.filter(key => value?.[key] !== undefined).map(key => [key, value[key]]));

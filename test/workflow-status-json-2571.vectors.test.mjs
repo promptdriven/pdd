@@ -120,3 +120,24 @@ test('2571 list reads the current draft flag from GitHub', async t => {
   assert.equal(output.runs[0].prs[0].draft,true);
   assert.ok(calls[0].at(-1).split(',').includes('isDraft'));
 });
+
+
+test('2571 live chat waiting follows the visible gate and question state', async t => {
+  const f = await fixture(t); assert.equal((await f.run()).exitCode, 0);
+  const path = join(f.source, '.git/pdd/runs/17/status.json');
+  const run = f.record(), pane = f.herdr.paneOf(run.chats[0]);
+  const read = async () => JSON.parse((await runStatus({cwd:f.source,all:true,json:true}, f.ports)).message).runs[0];
+  run.gate = {id:'gate-live',kind:'approve-pr',area:run.areas[run.area].name,at:1};
+  writeFileSync(path, JSON.stringify(run));
+  pane.agent.agent_status = 'working';
+  let row = await read();
+  assert.equal(row.group, 'working'); assert.equal(row.waiting, null);
+  pane.agent.agent_status = 'idle';
+  row = await read();
+  assert.equal(row.group, 'waiting'); assert.deepEqual(row.waiting,{kind:'gate',gate:'gate-live',question:null,reason:null});
+  run.gate = null; run.state = 'running'; writeFileSync(path, JSON.stringify(run));
+  pane.agent.agent_status = 'blocked';
+  row = await read();
+  assert.equal(row.group, 'waiting'); assert.match(row.words,/chat asks a question/);
+  assert.deepEqual(row.waiting,{kind:'question',gate:null,question:null,reason:null});
+});
