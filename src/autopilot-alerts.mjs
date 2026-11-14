@@ -79,6 +79,10 @@ function writePrivate(fs, file, value) {
   try { fs.writeFileSync(temp, JSON.stringify(value), { mode: 0o600, flag: 'wx' }); fs.chmodSync(temp, 0o600); fs.renameSync(temp, file); }
   finally { try { fs.unlinkSync(temp); } catch { /* Already renamed. */ } }
 }
+const saveJson = (fs, file, value) => { try { writePrivate(fs, file, value); return true; } catch { return false; } };
+const appendLog = (record, entry) => { record.log = [...record.log, entry].slice(-LOG_LIMIT); };
+const confirmerFor = destination => destination?.service === 'discord-bot' ? 'the Discord bot readback' : 'the webhook';
+const nowIso = ports => new Date((ports.now ?? Date.now)()).toISOString();
 
 function webhook(text) {
   const value = String(text ?? '').trim();
@@ -153,6 +157,8 @@ async function nativeHttp({ method = 'POST', url, headers = {}, body }) {
 }
 
 const success = status => Number.isInteger(status) && status >= 200 && status < 300;
+const httpStatus = status => `HTTP ${Number.isInteger(status) ? status : 'unknown'}`;
+const sendFailure = error => error?.code === 'unreached' ? { result: 'failed', detail: 'not reached' } : { result: 'unconfirmed', detail: 'no reply' };
 // Compare text as a chat service may store it: LF line ends, no whitespace at a line end, and no whitespace at either end.
 const normalized = text => text.replace(/\r\n?/g, '\n').split('\n').map(line => line.trimEnd()).join('\n').trim();
 const sameText = (stored, sent) => typeof stored === 'string' && normalized(stored) === normalized(sent);
@@ -163,7 +169,7 @@ async function botGet(ports, token, path) {
   let reply;
   try { reply = await botRequest(ports, token, 'GET', path); } catch { return { detail: 'no reply' }; }
   const status = Number(reply?.status), value = parse(reply?.text);
-  if (!success(status)) return { detail: `HTTP ${Number.isInteger(status) ? status : 'unknown'}` };
+  if (!success(status)) return { detail: httpStatus(status) };
   return object(value) ? { value } : { detail: 'unreadable reply' };
 }
 
@@ -172,9 +178,9 @@ async function botSend(destination, token, text, ports) {
   const channel = `/channels/${destination.channel}/messages`;
   let reply;
   try { reply = await botRequest(ports, token, 'POST', channel, { content: text, allowed_mentions: { parse: [] }, flags: 4 }); }
-  catch (error) { return error?.code === 'unreached' ? { result: 'failed', detail: 'not reached' } : { result: 'unconfirmed', detail: 'no reply' }; }
+  catch (error) { return sendFailure(error); }
   const status = Number(reply?.status), posted = parse(reply?.text);
-  if (!success(status)) return { result: 'failed', detail: `HTTP ${Number.isInteger(status) ? status : 'unknown'}` };
+  if (!success(status)) return { result: 'failed', detail: httpStatus(status) };
   if (!/^[0-9]{1,25}$/.test(String(posted?.id ?? ''))) return { result: 'unconfirmed', detail: 'no message id' };
   const back = await botGet(ports, token, `${channel}/${posted.id}`);
   if (!back.value) return { result: 'unconfirmed', detail: `readback ${back.detail}` };
@@ -194,17 +200,21 @@ async function deliver(destination, text, ports, cwd) {
   if (discord) { const address = new URL(url); address.searchParams.set('wait', 'true'); url = address.href; }
   let reply;
   try { reply = await (ports.http ?? nativeHttp)({ url, body }); }
-  catch (error) { return error?.code === 'unreached' ? { result: 'failed', detail: 'not reached' } : { result: 'unconfirmed', detail: 'no reply' }; }
+  catch (error) { return sendFailure(error); }
   const status = Number(reply?.status), raw = typeof reply?.text === 'string' ? reply.text.trim() : '';
-  if (!(Number.isInteger(status) && status >= 200 && status < 300)) {
+  if (!success(status)) {
     const word = !discord && /^[a-z_]{1,40}$/.test(raw) ? ` ${raw}` : '';
-    return { result: 'failed', detail: `HTTP ${Number.isInteger(status) ? status : 'unknown'}${word}` };
+    return { result: 'failed', detail: `${httpStatus(status)}${word}` };
   }
   if (!discord) return status === 200 && raw === 'ok' ? { result: 'delivered' } : { result: 'unconfirmed', detail: 'no readback' };
-  let message;
-  try { message = JSON.parse(raw); } catch { /* Checked below. */ }
+  const message = parse(raw);
   return typeof message?.id === 'string' && sameText(message.content, text)
     ? { result: 'delivered' } : { result: 'unconfirmed', detail: 'no readback' };
+}
+
+async function resolveRepo(input, ports) {
+  try { const name = (await (ports.repository ?? nativeRepository)({ cwd: input.cwd }))?.nameWithOwner; return repoName(name) ? name : null; }
+  catch { return null; }
 }
 
 async function nativeRepository({ cwd }) {
@@ -281,19 +291,16 @@ async function sendAlert(input, ports, env, fs) {
     return done(2, `Give "kind" in a recovery as one of ${ALERT_KINDS.filter(kind => kind !== 'recovered').join('|')}, or leave it out. Nothing was recorded.`);
   const clean = Object.fromEntries(names.map(name => [name, fields[name].trim()]));
   if (!ports.stateRoot && !homeFolder(env, ports)) return noHome('Nothing was recorded or sent. Continue other work.');
-  let repo;
-  try { repo = (await (ports.repository ?? nativeRepository)({ cwd: input.cwd }))?.nameWithOwner; } catch { /* Checked below. */ }
-  if (!repoName(repo)) return done(1, 'Autopilot alerts need a GitHub repository; run pdd autopilot alert in its checkout.');
+  const repo = await resolveRepo(input, ports);
+  if (!repo) return done(1, 'Autopilot alerts need a GitHub repository; run pdd autopilot alert in its checkout.');
   return withRecord(repo, env, ports, fs, async (file, record) => {
-    const at = new Date((ports.now ?? Date.now)()).toISOString(), host = machineName(fs, stateRoot(env, ports), repo, ports, input.cwd);
+    const at = nowIso(ports), host = machineName(fs, stateRoot(env, ports), repo, ports, input.cwd);
     const destination = destinationFor(fs, env, ports, input.kind), number = Number(issue);
-    const confirmer = destination?.service === 'discord-bot' ? 'the Discord bot readback' : 'the webhook';
+    const confirmer = confirmerFor(destination);
     const send = text => destination ? deliver(destination, text, ports, input.cwd) : { result: 'not-configured' };
     const route = MACHINE_KINDS.includes(input.kind) && readDestination(fs, env, ports, 'infrastructure') ? { destination: 'infrastructure' } : {};
-    const log = (kind, action, outcome, routeInfo = route) => {
-      record.log = [...record.log, { at, issue: number, kind, action, ...routeInfo, result: outcome.result, ...(outcome.detail ? { detail: outcome.detail } : {}) }].slice(-LOG_LIMIT);
-    };
-    const save = () => { try { writePrivate(fs, file, record); return true; } catch { return false; } };
+    const log = (kind, action, outcome, routeInfo = route) => appendLog(record, { at, issue: number, kind, action, ...routeInfo, result: outcome.result, ...(outcome.detail ? { detail: outcome.detail } : {}) });
+    const save = () => saveJson(fs, file, record);
     const unsaved = done(1, 'Cannot save the Autopilot alert record on this machine.');
     const machineKey = kind => `${kind}@${host}`;
     if (recovery) {
@@ -318,8 +325,7 @@ async function sendAlert(input, ports, env, fs) {
           : { result: 'not-configured' };
         for (const key of group) delete record.incidents[key];
         log(kinds.join(','), 'recovered', outcome, infrastructure && MACHINE_KINDS.includes(kinds[0]) ? { destination: 'infrastructure' } : {});
-        messages.push(outcomeMessage('Recovery', `${kinds.join(', ')} (${issueTags(issues.length ? issues : [number])})`, outcome,
-          route?.service === 'discord-bot' ? 'the Discord bot readback' : 'the webhook'));
+        messages.push(outcomeMessage('Recovery', `${kinds.join(', ')} (${issueTags(issues.length ? issues : [number])})`, outcome, confirmerFor(route)));
       }
       return save() ? done(0, messages.join(' ')) : unsaved;
     }
@@ -359,7 +365,7 @@ function hasRetryableIncident(record, fs, env, ports, routeFilter) {
 }
 
 async function retryRecordIncidents(record, { fs, env, ports, repo, cwd, routeFilter }) {
-  const at = new Date((ports.now ?? Date.now)()).toISOString();
+  const at = nowIso(ports);
   const root = stateRoot(env, ports);
   const infrastructure = readDestination(fs, env, ports, 'infrastructure');
   let retried = 0;
@@ -377,8 +383,7 @@ async function retryRecordIncidents(record, { fs, env, ports, repo, cwd, routeFi
     const { detail: _detail, destination: _destination, ...rest } = item;
     record.incidents[key] = { ...rest, host, ...routeInfo, listed: issues, updatedAt: at, result: outcome.result,
       ...(outcome.detail ? { detail: outcome.detail } : {}) };
-    record.log = [...record.log, { at, issue: issues[0], kind: item.kind, action: 'retry', ...routeInfo, result: outcome.result,
-      ...(outcome.detail ? { detail: outcome.detail } : {}) }].slice(-LOG_LIMIT);
+    appendLog(record, { at, issue: issues[0], kind: item.kind, action: 'retry', ...routeInfo, result: outcome.result, ...(outcome.detail ? { detail: outcome.detail } : {}) });
     retried += 1;
   }
   return retried;
@@ -386,33 +391,30 @@ async function retryRecordIncidents(record, { fs, env, ports, repo, cwd, routeFi
 
 async function retryOpenAlerts(input, ports, env, fs) {
   if (!ports.stateRoot && !homeFolder(env, ports)) return done(0, 'No failed alerts retried.');
-  let repo;
-  try { repo = (await (ports.repository ?? nativeRepository)({ cwd: input.cwd }))?.nameWithOwner; } catch { /* Checked below. */ }
-  if (!repoName(repo)) return done(0, 'No failed alerts retried.');
+  const repo = await resolveRepo(input, ports);
+  if (!repo) return done(0, 'No failed alerts retried.');
   const initialFile = recordFile(repo, env, ports);
   if (!initialFile || !hasRetryableIncident(readRecord(fs, initialFile), fs, env, ports))
     return done(0, 'No failed alerts to retry.');
   return withRecord(repo, env, ports, fs, async (file, record) => {
     const retried = await retryRecordIncidents(record, { fs, env, ports, repo, cwd: input.cwd });
     if (!retried) return done(0, 'No failed alerts to retry.');
-    try { writePrivate(fs, file, record); } catch { return done(1, 'Cannot save the Autopilot alert record on this machine.'); }
-    return done(0, `Retried ${retried} open Autopilot alert${retried === 1 ? '' : 's'}.`);
+    return saveJson(fs, file, record) ? done(0, `Retried ${retried} open Autopilot alert${retried === 1 ? '' : 's'}.`)
+      : done(1, 'Cannot save the Autopilot alert record on this machine.');
   });
 }
 
 async function sendDigest(input, ports, env, fs) {
   if (!ports.stateRoot && !homeFolder(env, ports)) return noHome('Nothing was recorded or sent. Continue other work.');
-  let repo;
-  try { repo = (await (ports.repository ?? nativeRepository)({ cwd: input.cwd }))?.nameWithOwner; } catch { /* No repository. */ }
-  if (!repoName(repo)) return done(1, 'Autopilot digest needs a GitHub repository.');
+  const repo = await resolveRepo(input, ports);
+  if (!repo) return done(1, 'Autopilot digest needs a GitHub repository.');
   return withRecord(repo, env, ports, fs, async (file, record) => {
     const retried = await retryRecordIncidents(record, { fs, env, ports, repo, cwd: input.cwd });
+    const unsaved = done(1, 'Cannot save the Autopilot digest record.');
     const host = machineName(fs, stateRoot(env, ports), repo, ports, input.cwd), now = (ports.now ?? Date.now)();
     const last = record.digests?.[host];
-    if (last && now - Date.parse(last.at) < 6 * 60 * 60 * 1000) {
-      if (retried) try { writePrivate(fs, file, record); } catch { return done(1, 'Cannot save the Autopilot digest record.'); }
-      return done(0, 'Autopilot digest is not due; nothing sent.');
-    }
+    if (last && now - Date.parse(last.at) < 6 * 60 * 60 * 1000)
+      return retried && !saveJson(fs, file, record) ? unsaved : done(0, 'Autopilot digest is not due; nothing sent.');
     const rows = new Map();
     for (const item of Array.isArray(input.attention) ? input.attention : []) {
       if (Number.isSafeInteger(item?.number) && item.number > 0 && ['stuck', 'parked', 'decision'].includes(item.category) && typeof item.cause === 'string')
@@ -424,10 +426,7 @@ async function sendDigest(input, ports, env, fs) {
         cause: `${item.fields?.cause ?? ''}; ${item.fields?.need ?? ''}` });
     }
     const items = [...rows.values()].sort((a, b) => a.number - b.number || a.category.localeCompare(b.category));
-    if (!items.length) {
-      if (retried) try { writePrivate(fs, file, record); } catch { return done(1, 'Cannot save the Autopilot digest record.'); }
-      return done(0, 'No open Autopilot work; nothing sent.');
-    }
+    if (!items.length) return retried && !saveJson(fs, file, record) ? unsaved : done(0, 'No open Autopilot work; nothing sent.');
     const footer = count => count ? `\n${count} more open items.` : '';
     const heading = clip(`PDD Autopilot digest (${host})\nRepository: ${repo}`, TEXT_LIMIT - footer(items.length).length);
     const lines = [heading];
@@ -444,9 +443,8 @@ async function sendDigest(input, ports, env, fs) {
     const outcome = destination ? await deliver(destination, text, ports, input.cwd) : { result: 'not-configured' };
     const at = new Date(now).toISOString();
     record.digests = { ...record.digests, [host]: { at, ...outcome } };
-    record.log = [...record.log, { at, host, kind: 'digest', action: 'digest', ...outcome }].slice(-LOG_LIMIT);
-    try { writePrivate(fs, file, record); } catch { return done(1, 'Cannot save the Autopilot digest record.'); }
-    return done(0, outcomeMessage('Digest', repo, outcome, destination?.service === 'discord-bot' ? 'the Discord bot readback' : 'the webhook'));
+    appendLog(record, { at, host, kind: 'digest', action: 'digest', ...outcome });
+    return saveJson(fs, file, record) ? done(0, outcomeMessage('Digest', repo, outcome, confirmerFor(destination))) : unsaved;
   });
 }
 
@@ -454,6 +452,11 @@ export async function runAutopilotAlerts(input = {}, ports = {}) {
   const env = input.env ?? process.env, fs = ports.fs ?? nativeFs;
   const suffix = input.destination === 'infrastructure' ? ' --destination infrastructure' : '';
   const testHint = `pdd autopilot alerts test${suffix}`, setHint = `pdd autopilot alerts set${suffix}`;
+  const saveDestination = (value, message) => {
+    const file = configFile(env, ports, input.destination);
+    if (!file) return noHome('Nothing was saved.');
+    return saveJson(fs, file, value) ? done(0, message) : done(1, 'Cannot save the alert destination; nothing was changed.');
+  };
   try {
     if (input.destination !== undefined && (!['set', 'test', 'clear'].includes(input.action) || !['autopilot', 'infrastructure'].includes(input.destination)))
       return done(2, 'Use --destination autopilot|infrastructure with alerts set, test or clear.');
@@ -466,28 +469,22 @@ export async function runAutopilotAlerts(input = {}, ports = {}) {
       if (command !== undefined && (typeof command !== 'string' || !command.trim() || command.length > 2000)) return done(2, 'Give --token-command one nonblank command. Nothing was saved.');
       const token = command === undefined ? String(input.text ?? '').trim() : undefined;
       if (command === undefined && !BOT_TOKEN.test(token)) return done(2, 'Give the Discord bot token on stdin, or use --token-command. Nothing was saved.');
-      const file = configFile(env, ports, input.destination);
-      if (!file) return noHome('Nothing was saved.');
+      if (!configFile(env, ports, input.destination)) return noHome('Nothing was saved.');
       if (command !== undefined) {
         const verified = await verifyBotAccess({ service: 'discord-bot', channel, tokenCommand: command }, ports, input.cwd);
         const reason = verified.tokenError ?? verified.checkError;
         if (reason) return done(1, `Alert destination not saved: ${reason.replace(/\.$/, '')}. Nothing was saved.`);
-        try { writePrivate(fs, file, { v: 1, service: 'discord-bot', channel, tokenCommand: command }); }
-        catch { return done(1, 'Cannot save the alert destination; nothing was changed.'); }
-        return done(0, `Saved ${verified.where} (channel ${channel}) on this machine; pdd runs your token command at each send and stores no token. Run ${testHint}.`);
+        return saveDestination({ v: 1, service: 'discord-bot', channel, tokenCommand: command },
+          `Saved ${verified.where} (channel ${channel}) on this machine; pdd runs your token command at each send and stores no token. Run ${testHint}.`);
       }
-      try { writePrivate(fs, file, { v: 1, service: 'discord-bot', channel, token }); }
-      catch { return done(1, 'Cannot save the alert destination; nothing was changed.'); }
-      return done(0, `Saved a Discord bot for channel ${channel} on this machine; the token is readable only by you. Run ${testHint}.`);
+      return saveDestination({ v: 1, service: 'discord-bot', channel, token },
+        `Saved a Discord bot for channel ${channel} on this machine; the token is readable only by you. Run ${testHint}.`);
     }
     if (input.action === 'set') {
       const parsed = webhook(input.text);
       if (!parsed) return done(2, 'Give one Discord or Slack incoming webhook URL (https) on stdin. Nothing was saved.');
-      const file = configFile(env, ports, input.destination);
-      if (!file) return noHome('Nothing was saved.');
-      try { writePrivate(fs, file, { v: 1, service: parsed.service, url: parsed.url }); }
-      catch { return done(1, 'Cannot save the alert destination; nothing was changed.'); }
-      return done(0, `Saved a ${SERVICE[parsed.service]} webhook for Autopilot alerts on this machine. Run ${testHint} to send a test message.`);
+      return saveDestination({ v: 1, service: parsed.service, url: parsed.url },
+        `Saved a ${SERVICE[parsed.service]} webhook for Autopilot alerts on this machine. Run ${testHint} to send a test message.`);
     }
     if (input.action === 'test') {
       if (!configFile(env, ports, input.destination)) return noHome('Nothing was sent.');
@@ -516,7 +513,7 @@ export async function runAutopilotAlerts(input = {}, ports = {}) {
 
 // A delivered test is the newest send of each existing record and retries open failed/not-configured incidents on its route.
 async function recordTest(fs, env, ports, destination, cwd) {
-  const root = stateRoot(env, ports), at = new Date((ports.now ?? Date.now)()).toISOString();
+  const root = stateRoot(env, ports), at = nowIso(ports);
   const selectedRoute = destination === 'infrastructure' ? 'infrastructure' : 'autopilot';
   if (!root) return;
   let names = [];
@@ -526,8 +523,7 @@ async function recordTest(fs, env, ports, destination, cwd) {
     if (!record || !repoName(record.repo)) continue;
     try {
       await withRecord(record.repo, env, ports, fs, async (file, latest) => {
-        latest.log = [...latest.log, { at, kind: 'test', action: 'test', result: 'delivered',
-          ...(selectedRoute === 'infrastructure' ? { destination: 'infrastructure' } : {}) }].slice(-LOG_LIMIT);
+        appendLog(latest, { at, kind: 'test', action: 'test', result: 'delivered', ...(selectedRoute === 'infrastructure' ? { destination: 'infrastructure' } : {}) });
         await retryRecordIncidents(latest, { fs, env, ports, repo: record.repo, cwd, routeFilter: selectedRoute });
         writePrivate(fs, file, latest);
       });
