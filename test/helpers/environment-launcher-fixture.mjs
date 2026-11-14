@@ -54,7 +54,7 @@ export async function launcher(t) {
   writeFileSync(join(home, '.config', 'pdd', 'autopilot-alerts.json'), JSON.stringify({ v: 1, service: 'discord', url: 'https://discord.com/api/webhooks/1/abc' }));
   const module = await import('../../src/autopilot-launcher.mjs');
   f.start = () => module.runAutopilotLauncher({ command: 'start', cwd, env, packageRoot: resolve('.'), issues: [] }, f.ports);
-  f.stateFile = () => join(f.ports.stateRoot, readdirSync(f.ports.stateRoot).find(x => x.endsWith('.json')));
+  f.stateFile = () => join(f.ports.stateRoot, readdirSync(f.ports.stateRoot).find(x => /^[0-9a-f]{20}\.json$/.test(x)));
   f.tick = () => module.tickAutopilot(f.stateFile(), f.ports);
   f.packet = () => JSON.parse(f.prompts.at(-1).trim().split('\n').at(-1));
   f.rules = () => f.prompts.length ? f.packet().timeRules ?? [] : [];

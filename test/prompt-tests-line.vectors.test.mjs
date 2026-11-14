@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { renderJson } from '../src/runtime-seam.mjs';
 
 // Replay the approved prompt-tests-line Story vectors on the real renderJson export (RUNBOOK §17).
-const scenario = JSON.parse(readFileSync(new URL('./runtime/prompt-tests-line.json', import.meta.url), 'utf8'));
+const scenario = JSON.parse(readFileSync(new URL('./fixtures/prompt-tests-line-cases.json', import.meta.url), 'utf8'));
 const pointer = (value, path) => path === '' ? value : path.slice(1).split('/').reduce(
   (current, key) => current?.[key.replace(/~1/g, '/').replace(/~0/g, '~')], value);
 const compare = {

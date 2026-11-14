@@ -6,7 +6,7 @@ Own `src/svg-layout.mjs`. Its module function `lintSvgLayouts({root, files, prom
 
 ## Workspace advice
 
-Use the [workspace authority](runtime-workspace.prompt.md) before prompt/drawing content access, including no-Story local scans. Filter optional excluded candidates without opening them; report unavailable advice where relevant. Required linked drawings remain preflight's capture responsibility and cannot be silently pruned. Keep advisory warnings advisory and retain strict no-link reads.
+Use the [workspace authority](runtime-seam.prompt.md) (`loadRuntimeWorkspace`, `allowsRuntimePath`) before prompt/drawing content access, including no-Story local scans. Filter optional excluded candidates without opening them; report unavailable advice where relevant. Required linked drawings remain preflight's capture responsibility and cannot be silently pruned. Keep advisory warnings advisory and retain strict no-link reads.
 
 
 ## Parts and advice
@@ -37,11 +37,11 @@ Warnings start `Warning: SVG layout`, are deduplicated and ordered by prompt pat
 
 ## Dependencies
 
-- [Workspace authority](runtime-workspace.prompt.md): required generation/runtime/verification context for opt-in permission.
+- [Runtime seam](runtime-seam.prompt.md#public-contract): required generation/runtime/verification context for workspace opt-in permission (`loadRuntimeWorkspace`, `allowsRuntimePath`).
 - [Screen design check](screen-design-check.prompt.md): required generation/runtime/verification context for HTML screen stylesheet and CSS-class warnings.
 
 - [Screen rules](../../skills/pdd-prompting/runbook/screens-and-svg.md#13-give-your-app-a-screen-app-map): authoring and verification context.
 
 ## Caller navigation
 
-The CLI exposes this advisory through [Check](runtime-client.prompt.md).
+The CLI exposes this advisory through [Runtime seam](runtime-seam.prompt.md).

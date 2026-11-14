@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 073ab464fd1a98a35d650171434c226e6276f814570d46c6a5ee1ce4659f4167).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: f2acabd55766de0a97a2451434b4f508d3ac9641d89deb71bad676c3d5331a5a).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';

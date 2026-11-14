@@ -52,7 +52,7 @@ test('journeys keep discovery order, complete IDs, and multiple tests for one St
 });
 
 test('product choose journeys: unchanged prompt-space cases execute the real public boundary', () => {
-  const scenario = JSON.parse(readFileSync(new URL('./runtime/product-choose-journeys.json', import.meta.url)));
+  const scenario = JSON.parse(readFileSync(new URL('./product-composition/product-choose-journeys-cases.json', import.meta.url)));
   for (const step of scenario.steps) {
     let result, error;
     try { result = selectJourneys(step.input.tests, step.input.selector); } catch (caught) { error = caught; }

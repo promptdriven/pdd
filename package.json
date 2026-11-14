@@ -22,8 +22,14 @@
     "user_stories/fake-*.md"
   ],
   "scripts": {
-    "test": "node --import ./test/helpers/test-home.mjs --test test/*.test.mjs test/runtime-package/*.test.mjs"
+    "test": "node --import ./test/helpers/test-home.mjs --test test/*.test.mjs"
   },
+  "dependencies": {
+    "@promptdriven/runtime-client": "github:promptdriven/runtime-client#8de0f58ff80d04e1a1b7efdc6263f7cef0b2a8de"
+  },
+  "bundleDependencies": [
+    "@promptdriven/runtime-client"
+  ],
   "engines": {
     "node": ">=22.16.0"
   },

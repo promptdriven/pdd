@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 613473d90d7a8219fcd71f3b0f62effa91333e899433f33837d66e6ad6d7432b).
+// Generated from prompts/cli/runtime-seam.prompt.md (sha256: e5bee5bce124bbe25c68c8312365716252065e3ec285c18be5c4f2b1c4190eb4).
 import { readFileSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -40,6 +40,7 @@ import {
   defaultMaxCalls,
   discoveryRefusal,
   discoveryVisibleFiles,
+  estimateCheckCalls,
   exactIntegerLeaves,
   exactNumberSpelling,
   exactValue,
@@ -136,7 +137,7 @@ import {
   version,
   withExactIntegers,
   workspace,
-} from './runtime/index.mjs';
+} from '@promptdriven/runtime-client';
 
 const req = createRequire(import.meta.url);
 const TRY_LAUNCHER_URL = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), 'try-doors.mjs')).href;
@@ -1093,6 +1094,7 @@ export {
   defaultMaxCalls,
   discoveryRefusal,
   discoveryVisibleFiles,
+  estimateCheckCalls,
   exactIntegerLeaves,
   exactNumberSpelling,
   exactValue,

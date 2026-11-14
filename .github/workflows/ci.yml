@@ -37,12 +37,21 @@ jobs:
           fi
           command -v zsh
           zsh --version
+      - name: Configure private package Git access
+        env:
+          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          if [ -n "$PRIVATE_REPO_TOKEN" ]; then
+            git config --global url."https://x-access-token:${PRIVATE_REPO_TOKEN}@github.com/promptdriven/".insteadOf "https://github.com/promptdriven/"
+            git config --global --add url."https://x-access-token:${PRIVATE_REPO_TOKEN}@github.com/promptdriven/".insteadOf "ssh://git@github.com/promptdriven/"
+            git config --global --add url."https://x-access-token:${PRIVATE_REPO_TOKEN}@github.com/promptdriven/".insteadOf "git@github.com:promptdriven/"
+          fi
       - run: npm ci --ignore-scripts
       - name: Run offline tests
         run: |
           set +e
           # Keep Chrome startup from competing with other test-file processes.
-          node --import ./test/helpers/test-home.mjs --test --test-concurrency=1 --test-shard=${{ matrix.shard }}/8 test/*.test.mjs test/runtime-package/*.test.mjs 2>&1 | tee "$RUNNER_TEMP/tests.tap"
+          node --import ./test/helpers/test-home.mjs --test --test-concurrency=1 --test-shard=${{ matrix.shard }}/8 test/*.test.mjs 2>&1 | tee "$RUNNER_TEMP/tests.tap"
           result=${PIPESTATUS[0]}
           exit "$result"
       - name: Summarize test counts
@@ -87,6 +96,16 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
+      - name: Configure private package Git access
+        env:
+          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          if [ -n "$PRIVATE_REPO_TOKEN" ]; then
+            git config --global url."https://x-access-token:${PRIVATE_REPO_TOKEN}@github.com/promptdriven/".insteadOf "https://github.com/promptdriven/"
+            git config --global --add url."https://x-access-token:${PRIVATE_REPO_TOKEN}@github.com/promptdriven/".insteadOf "ssh://git@github.com/promptdriven/"
+            git config --global --add url."https://x-access-token:${PRIVATE_REPO_TOKEN}@github.com/promptdriven/".insteadOf "git@github.com:promptdriven/"
+          fi
+      - run: npm ci --ignore-scripts
       - name: Pack, install and smoke the installed command
         run: |
           smoke_dir=$(mktemp -d)
@@ -97,7 +116,7 @@ jobs:
           mkdir -p "$HOME" "$PDD_STATE_DIR"
           npm pack --ignore-scripts --json --pack-destination "$smoke_dir" > "$smoke_dir/pack.json"
           archive=$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))[0].filename' "$smoke_dir/pack.json")
-          npm install --global --prefix "$smoke_dir/install" --ignore-scripts --no-audit --no-fund --package-lock=false "$smoke_dir/$archive"
+          npm install --global --prefix "$smoke_dir/install" --offline --ignore-scripts --no-audit --no-fund --package-lock=false "$smoke_dir/$archive"
           installed="$smoke_dir/install/bin/pdd"
           "$installed" --help
           checks=$((checks + 1))

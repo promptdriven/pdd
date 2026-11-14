@@ -2,7 +2,7 @@ import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -62,6 +62,7 @@ test('the paths come from the module location, never from the cwd', async t => {
   // A copy of the package, run from another folder, names its own files.
   const copy = join(elsewhere, 'copy'), cwd = join(elsewhere, 'work');
   for (const part of ['bin', 'src', 'docs', 'RUNBOOK.md', 'package.json']) cpSync(join(root, part), join(copy, part), { recursive: true });
+  symlinkSync(join(root, 'node_modules'), join(copy, 'node_modules'), 'dir');
   mkdirSync(cwd);
   for (const argv of [['help'], TOPIC]) {
     const result = spawnSync(process.execPath, [join(copy, 'bin', 'pdd.mjs'), ...argv], { cwd, encoding: 'utf8', timeout: 5000 });

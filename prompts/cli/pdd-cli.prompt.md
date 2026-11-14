@@ -139,9 +139,7 @@ finite safe failure and exits 1. Do not load the launcher or remote settings.
 
 - [Regression detection](autopilot-regressions.prompt.md): required native generation/verification context for regression command dispatch.
 
-- [PDD to Runtime seam](runtime-seam.prompt.md): required generation and verification context for Runtime command and reader dispatch (`check`, `lint`, `simulate`, `jobs`, `mcp`, `draftInterfaces`, `contracts`, `loadInterfaceDraft`, and `causeText`).
-
-- [Interface drafting](interface-draft.prompt.md): required generation and verification context for local `draftInterfaces` (`runInterfaceDraft`) and `missingInterfaces` dispatch. Automatic approval dispatch is owned by the prompt approval module.
+- [PDD to Runtime seam](runtime-seam.prompt.md#public-contract): required generation and verification context for Runtime command and reader dispatch (`check`, `lint`, `simulate`, `jobs`, `mcp`, `draftInterfaces` / `runInterfaceDraft`, `missingInterfaces`, `contracts` list/sync, `loadInterfaceDraft`, and `causeText`). Automatic approval dispatch is owned by the prompt approval module; the syntax-only Runtime entry does not bind local filesystem/contract effects.
 
 - [Shared full-suite queue](test-suite-queue.prompt.md): required execution, status and paused inactivity contract.
 
@@ -166,12 +164,6 @@ finite safe failure and exits 1. Do not load the launcher or remote settings.
 - [Autopilot alerts](autopilot-alerts.prompt.md): required native generation, verification and testing context for alert and destination dispatch.
 
 - [Command catalog](command-catalog.prompt.md): required authoring/generation/runtime/verification/testing context for route facts, complete help entries and `PUBLIC_HELP_TEXT` heading, closing, Learn PDD and prompting topic templates. This module renders the common help wrapper and forwards parsed values; it does not own a second help table.
-
-- [Contract commands](contracts.prompt.md): required generation and verification
-  context for local list/sync dispatch; the syntax-only Runtime entry does not
-  bind these native effects.
-
-- [Runtime slots](runtime-slots.prompt.md): required generation/verification context for local jobs dispatch. The existing syntax-only Runtime entry does not bind its native filesystem effects.
 
 - [Workflow runner](workflow-runner.prompt.md#workspace-evidence-association): required authoring/generation/verification/testing context for the native evidence association dispatch. It owns registration, source and persistence policy; the syntax-only Interpreter entry does not bind this operation.
 - [Old-code proof](workflow-prove.prompt.md): required authoring/generation/runtime/verification context for the explicit prove dispatch and injected callback contract.
@@ -254,7 +246,7 @@ For `workflow-prove`, require both `--test` and `--expect` before importing or i
 
 ## Progress and unexpected errors
 
-Pass the runner a `say` port that writes one line to stderr, so slow workflow steps show progress while stdout keeps the result. An unexpected error in a runner, runtime or view route keeps its fixed safe line and adds `Reason: <cleaned first line of the error>` (the [cause helper](runtime-output.prompt.md#progress-and-causes)), so the person sees what really failed.
+Pass the runner a `say` port that writes one line to stderr, so slow workflow steps show progress while stdout keeps the result. An unexpected error in a runner, runtime or view route keeps its fixed safe line and adds `Reason: <cleaned first line of the error>` (the [cause helper](runtime-seam.prompt.md)), so the person sees what really failed.
 
 ## Try MCP transport and registration
 
@@ -318,7 +310,7 @@ reply.
 {
   "kind": "partial",
   "status": "approved",
-  "prose_sha256": "14eeea146500e7b767cb26eb081a966588fa9f9857d2c42465470f6de4885097",
+  "prose_sha256": "2e112cbdbfd1c5f16eada4bcff84b39e9f6c2833b813122cb7529f2e6c40a890",
   "entries": [
     {
       "operation": "runPdd",

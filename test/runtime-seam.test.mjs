@@ -1,7 +1,7 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -434,6 +434,13 @@ function scannedCandidates(source) {
 function referencesRuntimeDir(relPath, candidate) {
   const clean = candidate.split('?')[0].split('#')[0].trim();
   if (!clean) return false;
+  if (
+    clean === '@promptdriven/runtime-client'
+    || clean.startsWith('@promptdriven/runtime-client/')
+    || /(?:^|[^A-Za-z0-9_.-])node_modules\/@promptdriven\/runtime-client(?:\/|$)/.test(clean)
+  ) {
+    return true;
+  }
   if (/(?:^|[^A-Za-z0-9_.-])src\/runtime(?:\/|$)/.test(clean)) return true;
   if (clean.startsWith('./') || clean.startsWith('../')) {
     const resolved = posix.normalize(posix.join(posix.dirname(relPath), clean));
@@ -460,7 +467,7 @@ export function findSeamViolations(relPath, source) {
   lines.forEach((line, index) => {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith('#')) return;
-    if (/(?:^|[^A-Za-z0-9_.-])src\/runtime(?:\/|$)/.test(line)) {
+    if (/(?:^|[^A-Za-z0-9_.-])(?:src\/runtime(?:\/|$)|@promptdriven\/runtime-client(?![A-Za-z0-9_.-]))/.test(line)) {
       hits.push(`${relPath}:${index + 1}: ${trimmed}`);
     }
   });
@@ -493,22 +500,24 @@ export function findInwardViolations(relPath, source) {
   return [...new Set(hits)];
 }
 
-test('SEAM1: only src/runtime-seam.mjs imports or addresses src/runtime/ across src, bin and scripts', () => {
+test('SEAM1: src/runtime/ is removed and only src/runtime-seam.mjs imports @promptdriven/runtime-client across src, bin and scripts', () => {
+  assert.equal(existsSync(join(root, 'src/runtime')), false, 'src/runtime/ must not exist post-cutoff');
+  assert.equal(existsSync(join(root, 'test/runtime-package')), false, 'test/runtime-package/ must not exist post-cutoff');
   const files = [...walk('src'), ...walk('bin'), ...walk('scripts')]
-    .filter(rel => !rel.startsWith('src/runtime/') && rel !== 'src/runtime-seam.mjs');
+    .filter(rel => rel !== 'src/runtime-seam.mjs');
   assert.ok(files.length >= 75, `expected full pdd file scan, got ${files.length}`);
   const violations = files.flatMap(rel => findSeamViolations(rel, readFileSync(join(root, rel), 'utf8')));
-  assert.deepEqual(violations, [], `Files outside src/runtime-seam.mjs must not import src/runtime/:\n${violations.join('\n')}`);
+  assert.deepEqual(violations, [], `Files outside src/runtime-seam.mjs must not import @promptdriven/runtime-client or src/runtime/:\n${violations.join('\n')}`);
 });
 
-test('SEAM2: src/runtime-seam.mjs imports only src/runtime/index.mjs from src/runtime/ and exposes its surface', async () => {
+test('SEAM2: src/runtime-seam.mjs imports only @promptdriven/runtime-client root entry and exposes its surface', async () => {
   const seamSource = readFileSync(join(root, 'src/runtime-seam.mjs'), 'utf8');
   const runtimeSpecifiers = scannedCandidates(seamSource)
     .map(item => item.value)
     .filter(specifier => referencesRuntimeDir('src/runtime-seam.mjs', specifier));
-  assert.deepEqual([...new Set(runtimeSpecifiers)], ['./runtime/index.mjs']);
+  assert.deepEqual([...new Set(runtimeSpecifiers)], ['@promptdriven/runtime-client']);
   const seam = await import('../src/runtime-seam.mjs');
-  const entry = await import('../src/runtime/index.mjs');
+  const entry = await import('@promptdriven/runtime-client');
   const seamOnlyHostExports = [
     'COMMAND_EXIT_CODE',
     'NO_TESTS',
@@ -528,10 +537,10 @@ test('SEAM2: src/runtime-seam.mjs imports only src/runtime/index.mjs from src/ru
   ];
   assert.deepEqual(Object.keys(seam).sort(), [...Object.keys(entry), ...seamOnlyHostExports].sort());
   for (const key of seamOnlyHostExports) {
-    assert.equal(Object.hasOwn(entry, key), false, `cut host symbol ${key} must not remain on src/runtime/index.mjs`);
+    assert.equal(Object.hasOwn(entry, key), false, `cut host symbol ${key} must not remain on @promptdriven/runtime-client`);
   }
   for (const key of Object.keys(entry)) {
-    assert.equal(typeof seam[key], typeof entry[key], `seam export ${key} must match typeof src/runtime/index.mjs`);
+    assert.equal(typeof seam[key], typeof entry[key], `seam export ${key} must match typeof @promptdriven/runtime-client`);
   }
 });
 
@@ -595,6 +604,9 @@ test('SEAM3: detector catches static, dynamic, re-export, URL, escaped and child
     ['bin/pdd.mjs', "import(pathToFileURL(join(import.meta.dirname, '..', 'src', 'runtime', 'index.mjs')).href);\n"],
     ['scripts/autopilot-smoke.mjs', "const p = 'src/runtime/runtime-client.mjs';\n"],
     ['scripts/vm-suite.sh', "node src/runtime/runtime-client.mjs\n"],
+    ['src/pdd-cli.mjs', "import { runCheck } from '@promptdriven/runtime-client';\n"],
+    ['src/pdd-cli.mjs', "const m = await import('@promptdriven/runtime-client/runtime-client.mjs');\n"],
+    ['scripts/vm-suite.sh', "node --input-type=module -e 'import \"@promptdriven/runtime-client\"'\n"],
   ];
   for (const [file, code] of cases) {
     assert.ok(findSeamViolations(file, code).length > 0, `expected violation for ${file}: ${code.trim()}`);
@@ -793,15 +805,24 @@ registerHooks({
     return cycles.sort();
   };
 
-  // 1. Static ESM import/re-export graph across all src/ and src/runtime/ files (including src/runtime-seam.mjs and src/runtime/index.mjs).
+  // 1. Static ESM import/re-export graph across all src/ and installed @promptdriven/runtime-client files.
+  const pkgRuntimeDir = 'node_modules/@promptdriven/runtime-client/src/runtime';
+  const staticFiles = [
+    ...walk('src').filter(f => f.endsWith('.mjs')).map(rel => [rel, rel]),
+    ...walk(pkgRuntimeDir).filter(f => f.endsWith('.mjs')).map(diskRel => [`src/runtime/${diskRel.slice(pkgRuntimeDir.length + 1)}`, diskRel]),
+  ];
   const staticAdj = new Map();
-  for (const rel of walk('src').filter(f => f.endsWith('.mjs'))) {
-    const clean = stripCommentsPreservingLines(readFileSync(join(root, rel), 'utf8'));
+  for (const [rel, diskRel] of staticFiles) {
+    const clean = stripCommentsPreservingLines(readFileSync(join(root, diskRel), 'utf8'));
     const edges = new Set();
     const staticRe = /\b(?:import|export)\s+(?:[^'"]*?\bfrom\s*)?(['"])([^'"]+)\1/g;
     let m;
     while ((m = staticRe.exec(clean)) !== null) {
       const spec = decodeJsEscapes(m[2]);
+      if (spec === '@promptdriven/runtime-client') {
+        edges.add('src/runtime/index.mjs');
+        continue;
+      }
       if (!spec.startsWith('./') && !spec.startsWith('../')) continue;
       const target = posix.normalize(posix.join(posix.dirname(rel), spec));
       if (target.startsWith('src/') && target.endsWith('.mjs') && target !== rel) edges.add(target);
@@ -820,9 +841,15 @@ registerHooks({
   const analyzeProbeLines = (lines, { ignoreAsyncSeamOutgoing = false } = {}) => {
     const out = new Set();
     const adj = new Map();
+    const pkgRuntimePrefix = `${pkgRuntimeDir}/`;
+    const pkgEntryRel = 'node_modules/@promptdriven/runtime-client/src/index.mjs';
     const toRel = full => {
       if (!full) return null;
       const rel = relative(root, full).split(sep).join('/');
+      if (rel === pkgEntryRel) return 'src/runtime/index.mjs';
+      if (rel.startsWith(pkgRuntimePrefix) && rel.endsWith('.mjs')) {
+        return `src/runtime/${rel.slice(pkgRuntimePrefix.length)}`;
+      }
       return rel.startsWith('src/') && rel.endsWith('.mjs') ? rel : null;
     };
     for (const line of lines) {
@@ -1046,11 +1073,16 @@ registerHooks({
   assert.equal(runWithRejectedModule('/runtime-output.mjs', [join(root, 'src/workflow-worker-completion.mjs'), '{}']).status, 0);
 });
 
-test('SEAM6: no file in src/runtime/ imports or addresses a path outside src/runtime/', () => {
-  const files = walk('src/runtime');
-  assert.ok(files.length >= 25, `expected full src/runtime/ file scan, got ${files.length}`);
-  const violations = files.flatMap(rel => findInwardViolations(rel, readFileSync(join(root, rel), 'utf8')));
-  assert.deepEqual(violations, [], `Files in src/runtime/ must not import outside src/runtime/:\n${violations.join('\n')}`);
+test('SEAM6: installed @promptdriven/runtime-client modules do not import or address host pdd paths', () => {
+  assert.equal(existsSync(join(root, 'src/runtime')), false);
+  const pkgRuntimeDir = 'node_modules/@promptdriven/runtime-client/src/runtime';
+  const files = walk(pkgRuntimeDir);
+  assert.ok(files.length >= 25, `expected full runtime-client file scan, got ${files.length}`);
+  const violations = files.flatMap(diskRel => {
+    const logicalRel = `src/runtime/${diskRel.slice(pkgRuntimeDir.length + 1)}`;
+    return findInwardViolations(logicalRel, readFileSync(join(root, diskRel), 'utf8'));
+  });
+  assert.deepEqual(violations, [], `Files in @promptdriven/runtime-client must not import host pdd paths:\n${violations.join('\n')}`);
 });
 
 test('SEAM7: inward detector catches static, dynamic, require, package.json URL, escaped, child-process and string paths outside src/runtime/', () => {
@@ -1093,8 +1125,8 @@ test('SEAM8 (R2-1): host and Runtime share one secret-redaction registry through
   const { mkdtempSync, rmSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
   const hostRedaction = await import('../src/secret-redaction.mjs');
-  const packageFallback = await import('../src/runtime/secret-redaction.mjs');
-  const { createTryGuide: createStandaloneGuide } = await import('../src/runtime/agent-guide.mjs');
+  const packageFallback = await import('@promptdriven/runtime-client/secret-redaction.mjs');
+  const { createTryGuide: createStandaloneGuide } = await import('@promptdriven/runtime-client/agent-guide.mjs');
   const seam = await import('../src/runtime-seam.mjs');
 
   const dir = mkdtempSync(join(tmpdir(), 'pdd-r2-1-'));
@@ -1601,15 +1633,15 @@ test('SEAM10 (R2-4): workflow base SHA is observed inside runBatch after discove
   assert.equal(earlyReads, 0);
 });
 
-test('SEAM11 (M2-2): src/runtime has no hardcoded client version literal; seam supplies package.json version and direct callers get null', async t => {
+test('SEAM11 (M2-2): @promptdriven/runtime-client has no hardcoded client version literal; seam supplies package.json version and direct callers get null', async t => {
   const seam = await import('../src/runtime-seam.mjs');
-  const directClient = await import('../src/runtime/runtime-client.mjs');
+  const directClient = await import('@promptdriven/runtime-client/runtime-client.mjs');
   const { harbor, fakeRuntime, portsFor } = await import('./helpers/runtime-fake.mjs');
 
-  for (const rel of walk('src/runtime')) {
+  for (const rel of walk('node_modules/@promptdriven/runtime-client/src/runtime')) {
     const src = readFileSync(join(root, rel), 'utf8');
     assert.ok(!src.includes('DEFAULT_CLIENT_VERSION'), `${rel} must not define DEFAULT_CLIENT_VERSION`);
-    if (rel !== 'src/runtime/try-mcp.mjs') {
+    if (!rel.endsWith('/try-mcp.mjs')) {
       assert.ok(!/['"`]0\.1\.\d+['"`]/.test(src), `${rel} must not contain a hardcoded 0.1.x version literal`);
     }
   }
@@ -1659,15 +1691,16 @@ test('SEAM11 (M2-2): src/runtime has no hardcoded client version literal; seam s
   assert.ok(seenDirect.length > 0 && seenDirect.every(v => v === null), `expected direct pdd_version=null, got ${JSON.stringify(seenDirect)}`);
 });
 
-test('SEAM12 (MERGE-1): runtime-check-plan keeps current prompt prose hash and direct buildCheckPlan parses Generated-from headers without ports.headerPrompts', async t => {
+test('SEAM12 (MERGE-1): runtime-seam prompt keeps current prose hash and direct buildCheckPlan parses Generated-from headers without ports.headerPrompts', async t => {
   const { execFileSync } = await import('node:child_process');
   const { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
-  const { buildCheckPlan } = await import('../src/runtime/runtime-check-plan.mjs');
-  const { findTests: rawFindTests, interfaceBlocks, proseSha256 } = await import('../src/runtime/runtime-preflight.mjs');
+  const { buildCheckPlan } = await import('@promptdriven/runtime-client/runtime-check-plan.mjs');
+  const { findTests: rawFindTests, interfaceBlocks, proseSha256 } = await import('@promptdriven/runtime-client/runtime-preflight.mjs');
   const selectionPorts = await import('../src/test-selection.mjs');
 
-  const promptText = readFileSync(join(root, 'prompts/cli/runtime-check-plan.prompt.md'), 'utf8');
+  assert.equal(existsSync(join(root, 'prompts/cli/runtime-check-plan.prompt.md')), false);
+  const promptText = readFileSync(join(root, 'prompts/cli/runtime-seam.prompt.md'), 'utf8');
   const blocks = interfaceBlocks(promptText);
   assert.equal(blocks.length, 1);
   const iface = JSON.parse(blocks[0][1]);
@@ -1740,10 +1773,10 @@ test('SEAM13 (WEAKER DEFAULTS): agent-project has no localEvidenceEligibility fa
   const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
   const seam = await import('../src/runtime-seam.mjs');
-  const directProject = await import('../src/runtime/agent-project.mjs');
-  const directComposition = await import('../src/runtime/product-composition.mjs');
-  const directClient = await import('../src/runtime/runtime-client.mjs');
-  const directPreflight = await import('../src/runtime/runtime-preflight.mjs');
+  const directProject = await import('@promptdriven/runtime-client/agent-project.mjs');
+  const directComposition = await import('@promptdriven/runtime-client/product-composition.mjs');
+  const directClient = await import('@promptdriven/runtime-client/runtime-client.mjs');
+  const directPreflight = await import('@promptdriven/runtime-client/runtime-preflight.mjs');
   const hostSelection = await import('../src/test-selection.mjs');
   const hostExit = await import('../src/runtime-exit.mjs');
   const baseCutPorts = {
@@ -1754,7 +1787,7 @@ test('SEAM13 (WEAKER DEFAULTS): agent-project has no localEvidenceEligibility fa
   };
   const { harbor, fakeRuntime, portsFor } = await import('./helpers/runtime-fake.mjs');
 
-  const agentProjectSrc = readFileSync(join(root, 'src/runtime/agent-project.mjs'), 'utf8');
+  const agentProjectSrc = readFileSync(join(root, 'node_modules/@promptdriven/runtime-client/src/runtime/agent-project.mjs'), 'utf8');
   assert.ok(!agentProjectSrc.includes('localEvidenceEligibility'), 'agent-project.mjs must not keep localEvidenceEligibility');
 
   const setup = harbor(t);
@@ -1865,8 +1898,8 @@ test('SEAM13 (WEAKER DEFAULTS): agent-project has no localEvidenceEligibility fa
   );
 
   // S1: Direct createAgentBridge without loadAgentDefinitions, discoverAgents or askAgent throws an unbound-port Error before network.
-  const directAgentChat = await import('../src/runtime/agent-chat.mjs');
-  const directAgentAsk = await import('../src/runtime/agent-ask.mjs');
+  const directAgentChat = await import('@promptdriven/runtime-client/agent-chat.mjs');
+  const directAgentAsk = await import('@promptdriven/runtime-client/agent-ask.mjs');
   await assert.rejects(
     () => directAgentAsk.askAgent({ agent: 'codex', entries: [] }),
     err => hasControlledDiagnostic(err) && err.unboundPort === true,
@@ -1969,8 +2002,8 @@ test('SEAM14 (Should-fix 1 & 5): single shared defaultLineReader in src/runtime 
   const { spawnSync } = await import('node:child_process');
   const { pathToFileURL } = await import('node:url');
   const { Readable } = await import('node:stream');
-  const directClient = await import('../src/runtime/runtime-client.mjs');
-  const tryDoorsSrc = readFileSync(join(root, 'src/runtime/try-doors.mjs'), 'utf8');
+  const directClient = await import('@promptdriven/runtime-client/runtime-client.mjs');
+  const tryDoorsSrc = readFileSync(join(root, 'node_modules/@promptdriven/runtime-client/src/runtime/try-doors.mjs'), 'utf8');
 
   // (1) One shared defaultLineReader in src/runtime/runtime-client.mjs, imported by src/runtime/try-doors.mjs.
   assert.equal(typeof directClient.defaultLineReader, 'function');
@@ -2193,9 +2226,9 @@ test('SEAM16 (S2): workflow-worker-completion keeps top-level await (exit 13 on 
 });
 
 test('SEAM17 (S3): stateless header reader in runtime-check-plan matches file-owner headerPrompts across corpus, and index constants match canonical owners', async () => {
-  const { defaultHeaderPrompts } = await import('../src/runtime/runtime-check-plan.mjs');
+  const { defaultHeaderPrompts } = await import('@promptdriven/runtime-client/runtime-check-plan.mjs');
   const { headerPrompts } = await import('../src/file-owner.mjs');
-  const index = await import('../src/runtime/index.mjs');
+  const index = await import('@promptdriven/runtime-client');
   const seam = await import('../src/runtime-seam.mjs');
   const hostSelection = await import('../src/test-selection.mjs');
   const hostExit = await import('../src/runtime-exit.mjs');
@@ -2214,9 +2247,9 @@ test('SEAM17 (S3): stateless header reader in runtime-check-plan matches file-ow
   assert.deepEqual(seam.COMMAND_EXIT_CODE, hostExit.COMMAND_EXIT_CODE);
   assert.deepEqual(seam.PROMPT_TESTS_LABEL, hostPromptWords.PROMPT_TESTS_LABEL);
   assert.deepEqual(seam.PROMPT_TESTS_WORDS, hostPromptWords.PROMPT_TESTS_WORDS);
-  const clientSource = readFileSync(join(root, 'src/runtime/runtime-client.mjs'), 'utf8');
+  const clientSource = readFileSync(join(root, 'node_modules/@promptdriven/runtime-client/src/runtime/runtime-client.mjs'), 'utf8');
   const engineShaMatch = /\bconst ENGINE_SHA = '([0-9a-f]{40})';/.exec(clientSource);
-  assert.ok(engineShaMatch, 'expected ENGINE_SHA in src/runtime/runtime-client.mjs');
+  assert.ok(engineShaMatch, 'expected ENGINE_SHA in @promptdriven/runtime-client runtime-client.mjs');
   assert.equal(index.version().engine_sha, engineShaMatch[1]);
   assert.equal(seam.version().engine_sha, engineShaMatch[1]);
 
@@ -2296,20 +2329,25 @@ test('SEAM18 (M3-1, M3-2, M3-3): section 4.1 API keeps zero-static-import lazy l
   const { tmpdir } = await import('node:os');
   const { pathToFileURL } = await import('node:url');
 
-  const indexSource = readFileSync(join(root, 'src/runtime/index.mjs'), 'utf8');
+  const pkgRoot = join(root, 'node_modules/@promptdriven/runtime-client');
+  const indexSource = readFileSync(join(pkgRoot, 'src/runtime/index.mjs'), 'utf8');
   const staticImports = [...indexSource.matchAll(/^\s*(?:import|export)\s+(?:[^'"]*?\s+from\s+)?['"]([^'"]+)['"]/gm)].map(m => m[1]);
   assert.ok(staticImports.length > 0);
   for (const spec of staticImports) {
-    assert.ok(spec.startsWith('node:'), `src/runtime/index.mjs must have zero relative static imports, found: ${spec}`);
+    assert.ok(spec.startsWith('node:'), `runtime/index.mjs must have zero relative static imports, found: ${spec}`);
   }
 
   const loadedSrcInFreshChild = expr => {
     const hookDataUrl = `data:text/javascript,${encodeURIComponent(
-      `const prefix = ${JSON.stringify(pathToFileURL(join(root, 'src/')).href)};
+      `const srcPrefix = ${JSON.stringify(pathToFileURL(join(root, 'src/')).href)};
+       const pkgEntryUrl = ${JSON.stringify(pathToFileURL(join(pkgRoot, 'src/index.mjs')).href)};
+       const pkgRuntimePrefix = ${JSON.stringify(pathToFileURL(join(pkgRoot, 'src/runtime/')).href)};
        const base = ${JSON.stringify(pathToFileURL(root + '/').href)};
        export async function resolve(s, c, next) {
          const r = await next(s, c);
-         if (r.url.startsWith(prefix)) process.stderr.write('MOD:' + r.url.slice(base.length) + '\\n');
+         if (r.url === pkgEntryUrl) process.stderr.write('MOD:@promptdriven/runtime-client/index.mjs\\n');
+         else if (r.url.startsWith(pkgRuntimePrefix)) process.stderr.write('MOD:@promptdriven/runtime-client/' + r.url.slice(pkgRuntimePrefix.length) + '\\n');
+         else if (r.url.startsWith(srcPrefix)) process.stderr.write('MOD:' + r.url.slice(base.length) + '\\n');
          return r;
        }`,
     )}`;
@@ -2331,16 +2369,16 @@ test('SEAM18 (M3-1, M3-2, M3-3): section 4.1 API keeps zero-static-import lazy l
     return { mods, stdout: child.stdout.trim() };
   };
 
-  const entryUrl = JSON.stringify(pathToFileURL(join(root, 'src/runtime/index.mjs')).href);
+  const entryUrl = JSON.stringify(pathToFileURL(join(pkgRoot, 'src/runtime/index.mjs')).href);
   const seamUrl = JSON.stringify(pathToFileURL(join(root, 'src/runtime-seam.mjs')).href);
 
-  assert.deepEqual(loadedSrcInFreshChild(`await import(${entryUrl});`).mods, ['src/runtime/index.mjs']);
+  assert.deepEqual(loadedSrcInFreshChild(`await import('@promptdriven/runtime-client');`).mods, ['@promptdriven/runtime-client/index.mjs']);
   assert.deepEqual(loadedSrcInFreshChild(`await import(${seamUrl});`).mods, [
     'src/runtime-seam.mjs',
-    'src/runtime/index.mjs',
+    '@promptdriven/runtime-client/index.mjs',
   ]);
   const verChild = loadedSrcInFreshChild(`const s = await import(${seamUrl}); process.stdout.write(JSON.stringify(s.version()));`);
-  assert.deepEqual(verChild.mods, ['src/runtime-seam.mjs', 'src/runtime/index.mjs']);
+  assert.deepEqual(verChild.mods, ['src/runtime-seam.mjs', '@promptdriven/runtime-client/index.mjs']);
   const ver = JSON.parse(verChild.stdout);
   assert.equal(ver.package, '@promptdriven/runtime-client');
   assert.equal(ver.api_version, 1);
@@ -2351,8 +2389,7 @@ test('SEAM18 (M3-1, M3-2, M3-3): section 4.1 API keeps zero-static-import lazy l
   assert.deepEqual(ver.limits, { bytes: 10_485_760, files: 10_000 });
 
   // CJS createRequire loads do not pass through ESM resolve, so verify CJS require.cache + ESM mods together:
-  const rootPrefix = join(root, 'src/').replaceAll('\\', '/');
-  const rootDir = rootPrefix.slice(0, -4);
+  const pkgRuntimePrefix = join(pkgRoot, 'src/runtime/').replaceAll('\\', '/');
   const sliceProbe = callExpr => {
     const script = `
       import { createRequire } from 'node:module';
@@ -2361,8 +2398,8 @@ test('SEAM18 (M3-1, M3-2, M3-3): section 4.1 API keeps zero-static-import lazy l
       ${callExpr};
       const cjs = Object.keys(req.cache)
         .map(p => p.replaceAll('\\\\', '/'))
-        .filter(p => p.startsWith(${JSON.stringify(rootPrefix)}))
-        .map(p => p.slice(${JSON.stringify(rootDir)}.length))
+        .filter(p => p.startsWith(${JSON.stringify(pkgRuntimePrefix)}))
+        .map(p => 'src/runtime/' + p.slice(${JSON.stringify(pkgRuntimePrefix)}.length))
         .sort();
       process.stdout.write(JSON.stringify(cjs));
     `;
@@ -2376,7 +2413,7 @@ test('SEAM18 (M3-1, M3-2, M3-3): section 4.1 API keeps zero-static-import lazy l
     'src/runtime/runtime-workspace.mjs',
   ]);
 
-  const index = await import('../src/runtime/index.mjs');
+  const index = await import('@promptdriven/runtime-client');
   const seam = await import('../src/runtime-seam.mjs');
   const { redactSecrets } = await import('../src/secret-redaction.mjs');
   const { approvePromptText } = await import('../src/prompt-approve.mjs');
@@ -2566,11 +2603,12 @@ test('SEAM20: whyNoTests preserves workspace preflight errors through the compat
   );
 });
 
-test('SEAM21: repo prompt dependency graph has zero cycles and modified Runtime prompts link no host PDD prompts', async () => {
+test('SEAM21: repo prompt dependency graph has zero cycles, pure-Runtime prompts are removed, and staying prompts have zero broken prompt links', async () => {
   const seam = await import('../src/runtime-seam.mjs');
   const { contractCoverage } = await seam.loadInterfaceDraft();
   const dummyIface = { status: 'draft', prose_sha256: '', entries: [], calls: [], resources: [], limits: { max_steps: 1, max_model_calls: 1 } };
   const prompts = [...seam.discoveryVisibleFiles({ root, excludeFixtureProjects: true })].filter(p => p.endsWith('.prompt.md')).sort();
+  const promptSet = new Set(prompts);
   const cycles = [];
   for (const path of prompts) {
     try {
@@ -2581,39 +2619,53 @@ test('SEAM21: repo prompt dependency graph has zero cycles and modified Runtime 
   }
   assert.deepEqual(cycles, []);
 
-  const runtimeModuleNames = walk('src/runtime')
-    .filter(p => p.endsWith('.mjs'))
-    .map(p => p.replace(/^src\/runtime\//, '').replace(/\.mjs$/, ''));
-  const runtimePrompts = new Set(runtimeModuleNames.map(n => (n === 'index' ? 'prompts/cli/runtime-entry.prompt.md' : `prompts/cli/${n}.prompt.md`)));
-  const splitRuntimePrompts = [
+  const removedRuntimePrompts = [
     'prompts/cli/agent-ask.prompt.md',
     'prompts/cli/agent-chat.prompt.md',
+    'prompts/cli/agent-coverage.prompt.md',
     'prompts/cli/agent-guide.prompt.md',
+    'prompts/cli/agent-judge.prompt.md',
+    'prompts/cli/agent-packet.prompt.md',
     'prompts/cli/agent-project.prompt.md',
+    'prompts/cli/contract-refs.prompt.md',
     'prompts/cli/contracts.prompt.md',
     'prompts/cli/interface-draft.prompt.md',
+    'prompts/cli/lint-call-preflight.prompt.md',
     'prompts/cli/product-composition.prompt.md',
+    'prompts/cli/runtime-binding-plan.prompt.md',
+    'prompts/cli/runtime-bindings.prompt.md',
+    'prompts/cli/runtime-check-plan.prompt.md',
     'prompts/cli/runtime-client.prompt.md',
     'prompts/cli/runtime-entry.prompt.md',
+    'prompts/cli/runtime-lint-receipt.prompt.md',
+    'prompts/cli/runtime-markdown.prompt.md',
     'prompts/cli/runtime-outcome.prompt.md',
     'prompts/cli/runtime-output.prompt.md',
     'prompts/cli/runtime-preflight.prompt.md',
     'prompts/cli/runtime-slots.prompt.md',
     'prompts/cli/runtime-workspace-migration.prompt.md',
+    'prompts/cli/runtime-workspace.prompt.md',
+    'prompts/cli/scenario-json.prompt.md',
     'prompts/cli/try-doors.prompt.md',
+    'prompts/cli/try-http.prompt.md',
+    'prompts/cli/try-mcp.prompt.md',
   ];
-  const inwardLinks = [];
-  for (const promptPath of splitRuntimePrompts) {
+  for (const promptPath of removedRuntimePrompts) {
+    assert.equal(existsSync(join(root, promptPath)), false, `${promptPath} must be removed from pdd`);
+  }
+
+  const brokenLinks = [];
+  for (const promptPath of prompts) {
     const text = readFileSync(join(root, promptPath), 'utf8');
     for (const match of text.matchAll(/\[[^\]]*\]\(([^)\s]+\.prompt\.md[^)\s]*)\)/g)) {
       const raw = match[1];
       if (/^https?:\/\//i.test(raw)) continue;
       const target = raw.split('#')[0];
       const resolved = posix.normalize(posix.join(posix.dirname(promptPath), target));
-      if (!runtimePrompts.has(resolved)) inwardLinks.push(`${promptPath} -> ${resolved}`);
+      if (!promptSet.has(resolved)) brokenLinks.push(`${promptPath} -> ${resolved}`);
     }
   }
-  assert.deepEqual(inwardLinks, []);
+  assert.deepEqual(brokenLinks, []);
 });
 
 test('SEAM22: draftInterfaces succeeds when prompt prose names a moved src/<name>.mjs path', async t => {
@@ -2642,9 +2694,9 @@ test('SEAM22: draftInterfaces succeeds when prompt prose names a moved src/<name
 });
 
 test('SEAM23: unbound-port errors propagate with unboundPort: true across product composition, screen check, and automatic approval', async t => {
-  const runtime = await import('../src/runtime/index.mjs');
-  const { composeProductTry } = await import('../src/runtime/product-composition.mjs');
-  const { runAutomaticApproval } = await import('../src/runtime/interface-draft.mjs');
+  const runtime = await import('@promptdriven/runtime-client');
+  const { composeProductTry } = await import('@promptdriven/runtime-client/product-composition.mjs');
+  const { runAutomaticApproval } = await import('@promptdriven/runtime-client/interface-draft.mjs');
 
   assert.throws(
     () => composeProductTry({ root: '/repo' }, {}),
@@ -2702,11 +2754,13 @@ test('SEAM23: unbound-port errors propagate with unboundPort: true across produc
   );
 });
 
-test('SEAM24: no file under test/ outside test/runtime-package/ and test/runtime-seam.test.mjs imports or addresses src/runtime/', () => {
-  const files = walk('test').filter(rel => !rel.startsWith('test/runtime-package/') && rel !== 'test/runtime-seam.test.mjs');
+test('SEAM24: no file under test/ outside test/runtime-seam.test.mjs imports or addresses @promptdriven/runtime-client or src/runtime/', () => {
+  assert.equal(existsSync(join(root, 'test/runtime-package')), false);
+  const files = walk('test').filter(rel => rel !== 'test/runtime-seam.test.mjs');
   assert.ok(files.length >= 200, `expected full staying test/ file scan, got ${files.length}`);
   const violations = files.flatMap(rel => findSeamViolations(rel, readFileSync(join(root, rel), 'utf8')));
-  assert.deepEqual(violations, [], `Staying test/ files must route through src/runtime-seam.mjs instead of src/runtime/:\n${violations.join('\n')}`);
+  assert.deepEqual(violations, [], `Staying test/ files must route through src/runtime-seam.mjs instead of @promptdriven/runtime-client or src/runtime/:\n${violations.join('\n')}`);
   assert.ok(findSeamViolations('test/example.test.mjs', "import { runCheck } from '../src/runtime/runtime-client.mjs';\n").length > 0);
   assert.ok(findSeamViolations('test/helpers/example.mjs', "const m = await import('../../src/runtime/index.mjs');\n").length > 0);
+  assert.ok(findSeamViolations('test/example.test.mjs', "import { runCheck } from '@promptdriven/runtime-client';\n").length > 0);
 });

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-doctor.prompt.md (sha256: 2df6bed83816259532dcb17be64abcce2a3cd97aa17ba84e062d28705c60da2f).
+// Generated from prompts/cli/autopilot-doctor.prompt.md (sha256: 387fb90691367105ed1128c1d47809d241ee6b8e51092f0353aad9da69441525).
 // Source: prompts/cli/autopilot-doctor.prompt.md.
 import {rememberSecrets, knownSecretValues} from './secret-redaction.mjs';
 import * as nativeFiles from 'node:fs';

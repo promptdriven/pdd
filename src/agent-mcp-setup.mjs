@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-mcp-setup.prompt.md (sha256: db494764e71aa74ffc473d28219ea0162741c91edd61fd65582df82ec0f89dfe).
+// Generated from prompts/cli/agent-mcp-setup.prompt.md (sha256: ce406b38ec0ac26106e96fd0d2e8165250b45bc14e9cb48cd5bbd67d7ef3edd7).
 import { accessSync, constants, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, delimiter, join, resolve } from 'node:path';
 import { homedir } from 'node:os';

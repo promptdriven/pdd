@@ -1,14 +1,14 @@
 # Verify affected selection and historical baseline reports
 
 These commands exercise the native public boundaries for the two approved Stories:
-`affected-story-selection` and `affected-baseline-report`. The four approved JSON
-files are inputs, not generated expectations. No dependency installation is needed
+`affected-story-selection` and `affected-baseline-report`. The two approved JSON
+files are inputs, not generated expectations. Run `npm ci --ignore-scripts` first
 with Node 22.16 or later. Run from the package checkout.
 
 ## Controlled native verification
 
 ```sh
-node --test test/runtime-package/affected-check-plan.vectors.test.mjs test/runtime-package/affected-check-plan.native.test.mjs test/affected-story-selection.vectors.test.mjs test/affected-baseline-report.vectors.test.mjs
+node --test test/affected-story-selection.vectors.test.mjs test/affected-baseline-report.vectors.test.mjs
 ```
 
 The selection test starts the actual `bin/pdd.mjs test --affected --json` process
