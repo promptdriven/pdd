@@ -83,7 +83,8 @@
         "action": "trust",
         "names": [
           "Dana"
-        ]
+        ],
+        "inRepo": true
       },
       "checks": [
         {
@@ -112,7 +113,8 @@
         "action": "untrust",
         "names": [
           "Dana"
-        ]
+        ],
+        "inRepo": true
       },
       "checks": [
         {

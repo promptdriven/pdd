@@ -240,7 +240,14 @@ export function fullCheckPass({ root, since = 0, tests = [], prompts = [], stori
   try { names = readdirSync(directory).filter(name => BATCH.test(name)).sort(); } catch { names = []; }
   for (const name of names) {
     const batch = readJson(join(directory, name, 'batch.json'));
-    if (!batch || batch.batch !== name || batch.intent !== 'check' || typeof batch.root !== 'string' || !Array.isArray(batch.rows) || real(batch.root) !== wanted) continue;
+    if (!batch || batch.batch !== name || batch.intent !== 'check' || typeof batch.root !== 'string' || !Array.isArray(batch.rows)) continue;
+    if (ports.workspace) {
+      let association;
+      try { association = ports.workspace({ root, producerRoot: batch.root, tests: [...new Set(batch.rows.map(row => row?.test))], source_sha256: batch.source_sha256, runId: batch.association?.runId ?? null, stage: batch.association?.stage ?? null }); } catch { continue; }
+      if (association?.state === 'eligible') {
+        if (association.stage !== 'current') continue;
+      } else if (real(batch.root) !== wanted || batch.association) continue;
+    } else if (real(batch.root) !== wanted || batch.association) continue;
     const at = Date.parse(batch.created_at);
     if (!Number.isFinite(at) || at < since) continue;
     const summary = readJson(join(directory, name, 'summary.json'));
@@ -267,7 +274,7 @@ export function fullCheckPass({ root, since = 0, tests = [], prompts = [], stori
     const found = latest.get(path);
     if (!found) { problems.push({ kind: 'missing', path, detail: 'no saved check has this test' }); continue; }
     const summary = found.summary;
-    if (!summary || summary.batch !== found.name || typeof summary.repo !== 'string' || real(summary.repo) !== wanted
+    if (!summary || summary.batch !== found.name || typeof summary.repo !== 'string' || real(summary.repo) !== real(found.batch.root)
       || typeof summary.source_sha256 !== 'string' || summary.source_sha256 !== found.batch.source_sha256) {
       problems.push({ kind: 'unavailable', path, detail: `batch ${found.name}: summary identity does not match the batch` }); continue;
     }

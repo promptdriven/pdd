@@ -46,7 +46,7 @@ A file that cannot be read, or a test file that is not valid JSON, shows `(canno
 
 ## Full check pass
 
-`fullCheckPass({root, since, tests, prompts, stories}, ports)` decides from pdd's own saved check results whether the prompt check passed in full on the current files. It reads the `pdd test` batches in `ports.env.PDD_STATE_DIR`, else `HOME/.pdd/runtime`, folder `batches/<batch>`, with the same batch-name rule as [workflow results](workflow-results.prompt.md). It uses a batch only when its `batch.json` has `intent` `check`, the same real `root`, and `created_at` at or after `since`. It reconciles the authoritative rows in `batch.json` with the batch's `summary.json` only when its `batch` equals the batch folder name, its real `repo` equals the batch root and its `source_sha256` equals the batch source hash. A missing or mismatched identity is unavailable, not a pass.
+`fullCheckPass({root, since, tests, prompts, stories}, ports)` uses the caller’s workspace eligibility callback for associated batches and decides from pdd's own saved check results whether the prompt check passed in full on the current files. It reads the `pdd test` batches in `ports.env.PDD_STATE_DIR`, else `HOME/.pdd/runtime`, folder `batches/<batch>`, with the same batch-name rule as [workflow results](workflow-results.prompt.md). It uses a batch only when its `batch.json` has `intent` `check`, a workspace admitted for stage `current` by the caller’s association eligibility decision, and `created_at` at or after `since`. The run root is eligible under that rule; a different root is not excluded solely for being different. It reconciles the authoritative rows in `batch.json` with the batch's `summary.json` only when its `batch` equals the batch folder name, its real `repo` equals the batch root and its `source_sha256` equals the batch source hash. A missing or mismatched identity is unavailable, not a pass.
 
 The tests to judge are the given `tests` (the run's changed test files), all scenarios independently discovered by runtime preflight `findTests({root, excludeFixtureProjects: true})` in the current project (the same scope as default `pdd test`, excluding nested fixture projects), and every still-present test of these batches. Discovery cannot depend on saved results: an existing scenario with no result must block a full pass. Discovery failure is unavailable. Every current project Story reported as untested, and every required `stories` path from the run approval without an associated discovered or explicitly selected scenario, adds a missing problem naming that Story. Missing tests cannot authorize the automatic full-pass route. Default fixture exclusions remain the same. Keep the newest result per test so a selective recheck can reuse still-current results from an earlier full check. For each test, the newest batch that has it decides (newest `created_at`, then batch name). The test passes only when:
 - exactly one authoritative batch row and exactly one summary row name this test; both have `state` `passed`, neither has refusals, unchecked criteria, a broken-test reason or an unsent flag, and any batch criterion counts agree with the summary; the summary row's `criteria` has `total` above 0, equal to the current test file's number of criteria, and `passed` equal to `total`; and
@@ -70,3 +70,456 @@ Return `{pass, tests, problems}`. `tests` is one row `{path, batch, state}` for 
 - [Workflow results](workflow-results.prompt.md): the batch folder and name rule for pdd's own results.
 - [Exact scenario numbers](scenario-json.prompt.md): `format.parseScenario` and `format.stringifyScenario` for test values.
 - RUNBOOK §2 (Story, test and prompt files), §4 (expected values) and §11 (what an agent may fix).
+
+The Runtime read ports represent native file operations, environment settings, source capture and test discovery, and the caller-supplied workspace eligibility callback. The required supplied binding is the actual synchronous `readEvidenceEligibility({root, producerRoot, tests, source_sha256, runId, stage}, ports)` from the workflow runner, with its original producer and complete test selection. Pass the original batch association runId and stage selectors, or null for each when absent; never substitute the consumer’s requested stage. Its result is authoritative: the Runtime Boolean is true only when the binding returns state `eligible` and stage `current`; ineligible, unavailable, unresolved or historical results are false. It is not a receipt or a separate association decision. `environment.read` supplies `PDD_STATE_DIR` and `HOME`; null means absent. JSON strings carry the saved batch, summary, scenario and source records unchanged; an unavailable native file read is not a passing result. When `files.realpathSync` returns null, resolve the supplied path lexically, matching the native fallback for an unavailable real path. The workspace callback supplies whether the producer is admitted for current evidence.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{
+  "kind": "partial",
+  "status": "approved",
+  "prose_sha256": "b9d2ce2208de82ba78aa78f83261437321b44f73402953a37b30dbc1730e1171",
+  "entries": [
+    {
+      "operation": "fullCheckPass",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "string"
+          },
+          "since": {
+            "type": "integer"
+          },
+          "tests": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "prompts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "stories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "pass": {
+            "type": "boolean"
+          },
+          "tests": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "batch": {
+                  "type": "string"
+                },
+                "state": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "batch",
+                "state"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "problems": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "detail": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "path",
+                "detail"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "pass",
+          "tests",
+          "problems"
+        ],
+        "additionalProperties": false
+      },
+      "errors": []
+    }
+  ],
+  "calls": [],
+  "resources": [
+    {
+      "name": "fileContents",
+      "kind": "blob",
+      "access": "read",
+      "operations": [
+        {
+          "name": "read",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "content"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "files",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "readdirSync",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "entries": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "entries"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "realpathSync",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "existsSync",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "exists": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "exists"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "source",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "capture",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "root": {
+                "type": "string"
+              },
+              "tests": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "appMap": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "root",
+              "tests",
+              "appMap"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "json": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "json"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "findTests",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "root": {
+                "type": "string"
+              },
+              "excludeFixtureProjects": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "root",
+              "excludeFixtureProjects"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "json": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "json"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "workspace",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "eligible",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "root": {
+                "type": "string"
+              },
+              "producerRoot": {
+                "type": "string"
+              },
+              "tests": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "source_sha256": {
+                "type": "string"
+              },
+              "runId": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "stage": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "root",
+              "producerRoot",
+              "tests",
+              "source_sha256",
+              "runId",
+              "stage"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "eligible": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "eligible"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "environment",
+      "kind": "port",
+      "access": "read",
+      "operations": [
+        {
+          "name": "read",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "PDD_STATE_DIR": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "HOME": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "PDD_STATE_DIR",
+              "HOME"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  ],
+  "limits": {
+    "max_steps": 40,
+    "max_model_calls": 12
+  },
+  "conventions": []
+}
+```
+</details>
