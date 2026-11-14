@@ -69,7 +69,7 @@ A step that shows `expected X, got Y` is a failed check. Follow "After a ✗" fo
 | The expected value may be wrong | The Story does not give this value, or gives another one | Stop. Ask the person: keep the value (you fix the prompt) or change the test. Give an example. In a normal run, write the proposed value and run `pdd workflow done check --summary "Prompt tests line"` again: pdd shows the change on the Story card for the person. |
 | The Story is unclear | Two answers fit the Story | Stop. Ask the person to decide the rule in the Story. |
 | The answer changes between runs | `Rerun: failed 1 of 3 (unstable)` | Make the rule in the prompt firmer. Do not fit the prompt to one answer. |
-| No verdict | `no verdict ·` with an AI-service or limit cause, or `busy ·` when the remaining checks are busy. Exit 3, 4 or 5 can also hide a failed Story or a failed step: read each Story line and the report ("A failed check is a FAIL" above) | Tell the person, with pdd's next step. Change no file. Never send it again on your own. |
+| No verdict | `no verdict ·` with an AI-service or limit cause, or `busy ·` when the remaining checks are busy. Exit 3, 4 or 5 can also hide a failed Story or a failed step: read each Story line and the report ("A failed check is a FAIL" above) | pdd performs its one eligible simulated retry before reporting. Tell the person the final result and pdd's next step. Change no file. Never send it again on your own. |
 
 4. At most 2 fix rounds for the same ✗. Then stop, and tell the person what you tried.
 
@@ -89,8 +89,8 @@ A step that shows `expected X, got Y` is a failed check. Follow "After a ✗" fo
 | `graph-result-failure` | Often the prose calls a prompt more than `max_calls` | Make the prose and `max_calls` agree. |
 | `run-admission-failed` | Nothing ran (0 AI calls). Often one step's worst case is bigger than `--max-calls` (section 10). Other causes give the same code with no reason | Raise `--max-calls` (at most 1000), or lower `max_calls` in the prompt's `calls`. The interface `limits` do not help. If it stays, tell the person. |
 | `invalid-context` | `context` is not a list of `{"prompt_path", "paths"}` rows, for example a text note (section 2). | Fix the rows, or use `[]`. |
-| `graph-provider-failure` | The AI service failed. No verdict: pdd prints `no verdict ·` (✗ only when another check failed, in this Story or another Story) | Tell the person, with its AI calls. The person may send it again. Never send it again on your own. |
-| `graph-uncertain-child-dispatch` | One AI call did not answer. No verdict. Your test is fine | Same as `graph-provider-failure`. |
+| `graph-provider-failure` | The AI service failed. No verdict: pdd prints `no verdict ·` (✗ only when another check failed, in this Story or another Story) | pdd performs its one eligible simulated retry before reporting. Tell the person the final result and its AI calls. The person may send it again. Never send it again on your own. |
+| `graph-uncertain-child-dispatch` | One AI call did not answer. No verdict. Your test is fine | Tell the person, with its AI calls. An uncertain dispatch is not eligible for automatic replay. Never send it again on your own. |
 
 ## 12. `pdd simulate` and Save as test
 
