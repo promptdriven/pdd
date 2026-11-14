@@ -53,10 +53,7 @@ or malformed receipts prove nothing. Retain ordinary lost-dispatch custody.
 
 When Herdr positively reports no agent in that pane, `chatSession` may return
 `launchFailure: {exitCode, message}` from that receipt (exitCode is an integer
-from 0 through 255). Read the pane's recent output for a bounded diagnostic;
-strip terminal controls and omit the echoed launch command and shell prompt.
-Keep at most 500 characters, without login values or invocation environment.
-An unavailable or empty screen uses `Agent exited before startup was confirmed.`
+from 0 through 255). The message is the fixed diagnostic `Agent exited; inspect the chat pane for details.` The exit code supplies the concrete reason; direct the person to inspect the pane for further details. Never read or persist terminal output for this receipt diagnostic, because it can contain private conversation or credentials.
 Do not infer failure from screen text, a shell alone, agent absence or elapsed time.
 Do not consume an initial receipt after a resume, or let it override a live agent.
 

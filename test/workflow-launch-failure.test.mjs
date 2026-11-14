@@ -31,26 +31,26 @@ test('an agent that exits before detection leaves a private receipt and a durabl
   assert.equal(chat.state, 'failed');
   assert.equal(chat.evidence.exitCode, 14);
   const status = await runStatus({ref:'17', cwd:f.source}, f.ports);
-  assert.match(status.message, /Database unavailable/);
-  assert.match(status.message, /Location: \/tmp\/state.sqlite Cause: unable to open database file/);
+  assert.match(status.message, /Agent exited; inspect the chat pane for details/);
+  assert.doesNotMatch(status.message, /Database unavailable|state\.sqlite|unable to open/);
   assert.doesNotMatch(status.message, /pdd_launch_exit|PDD_AGENT_SESSION/);
   assert.match(status.message, /open 17 --new/);
   assert.match(status.message, /^Next: pdd workflow open 17 --new$/m);
   assert.equal((await chatSession({...chat, resumedAt: chat.startedAt + 1}, {...f.ports, run:f.record()})).launchFailure, undefined);
   const previous = f.ports.herdr;
   f.ports.herdr = async args => { if (args[0] === 'agent' && args[1] === 'get') throw Object.assign(Error('offline'), {code:'server_unavailable'}); return previous(args); };
-  assert.match((await runStatus({ref:'17', cwd:f.source}, f.ports)).message, /Database unavailable/);
+  assert.match((await runStatus({ref:'17', cwd:f.source}, f.ports)).message, /Agent exited; inspect the chat pane for details/);
   f.ports.herdr = previous;
   const failedReplacement = await openRun({ref:'17', cwd:f.source, packageRoot, newSession:true}, f.ports);
   assert.notEqual(failedReplacement.exitCode, 0);
-  assert.match(failedReplacement.message, /agent_launch_failed.*Database unavailable.*exit 14/);
+  assert.match(failedReplacement.message, /agent_launch_failed.*Agent exited; inspect the chat pane for details.*exit 14/);
   const replacement = f.record().chats.at(-1);
   assert.notEqual(replacement.launchExitFile, chat.launchExitFile);
   assert.equal(readFileSync(replacement.launchExitFile, 'utf8').trim(), '14');
   assert.equal(replacement.state, 'failed');
   assert.equal(replacement.evidence.exitCode, 14);
   assert.equal(f.record().chatReplacement.phase, 'launched');
-  assert.match((await runStatus({ref:'17', cwd:f.source}, f.ports)).message, /Database unavailable/);
+  assert.match((await runStatus({ref:'17', cwd:f.source}, f.ports)).message, /Agent exited; inspect the chat pane for details/);
   f.ports.herdr = herdr;
   const reopened = await openRun({ref:'17', cwd:f.source, packageRoot, newSession:true}, f.ports);
   assert.equal(reopened.exitCode, 0, reopened.message);
@@ -81,7 +81,7 @@ test('a lost replacement launch reply recovers its failure receipt without redis
   assert.equal(pending.phase, 'launchRequested');
   const result = await openRun({ref:'17', cwd:f.source, packageRoot, newSession:true}, f.ports);
   assert.notEqual(result.exitCode, 0);
-  assert.match(result.message, /agent_launch_failed.*Database unavailable.*exit 14/);
+  assert.match(result.message, /agent_launch_failed.*Agent exited; inspect the chat pane for details.*exit 14/);
   assert.equal(launches, 2);
   assert.equal(f.record().chatReplacement.replacement.launchExitFile, pending.replacement.launchExitFile);
   assert.equal(f.record().chats.at(-1).state, 'failed');
@@ -133,11 +133,36 @@ test('a briefly observed agent that exits with an error retains its diagnostic',
   pane.agent = null;
   pane.screen = 'Database unavailable\nCause: unable to open database file\n';
   const status = await runStatus({ref:'17', cwd:f.source}, f.ports);
-  assert.match(status.message, /exit 14.*Database unavailable/);
+  assert.match(status.message, /exit 14.*Agent exited; inspect the chat pane for details/);
   assert.equal(f.record().chats[0].evidence.kind, 'launch-exit');
   const json = JSON.parse((await runStatus({ref:'17', cwd:f.source, json:true}, f.ports)).message).runs[0];
   assert.equal(json.group, 'waiting');
   const herdr = f.ports.herdr;
   f.ports.herdr = async args => { if (args[0] === 'agent' && args[1] === 'get') throw Object.assign(Error('offline'), {code:'server_unavailable'}); return herdr(args); };
-  assert.match((await runStatus({ref:'17', cwd:f.source}, f.ports)).message, /exit 14.*Database unavailable/);
+  assert.match((await runStatus({ref:'17', cwd:f.source}, f.ports)).message, /exit 14.*Agent exited; inspect the chat pane for details/);
+});
+
+test('exit evidence never reads or persists private pane content', async t => {
+  const f = await fixture(t, {agent:'codex', name:'feature'});
+  assert.equal((await f.run()).exitCode, 0);
+  const chat = f.record().chats[0], pane = f.herdr.paneOf(chat);
+  writeFileSync(chat.launchExitFile, '14\n');
+  pane.agent = null;
+  pane.screen = 'private customer prompt\nfile credential: file-password-123\nsplit-secret-part-one\nsplit-secret-part-two\n';
+  const herdr = f.ports.herdr;
+  let reads = 0;
+  f.ports.herdr = async args => {
+    if (args[0] === 'pane' && args[1] === 'read') reads++;
+    return herdr(args);
+  };
+  const live = await chatSession(chat, {...f.ports, run:f.record()});
+  assert.equal(reads, 0);
+  assert.deepEqual(live.launchFailure, {exitCode:14, message:'Agent exited; inspect the chat pane for details.'});
+  const status = await runStatus({ref:'17', cwd:f.source}, f.ports);
+  assert.match(status.message, /exit 14.*Agent exited; inspect the chat pane for details/);
+  const durable = JSON.stringify(f.record());
+  for (const privateText of ['private customer prompt', 'file-password-123', 'split-secret-part-one', 'split-secret-part-two']) {
+    assert.equal(status.message.includes(privateText), false);
+    assert.equal(durable.includes(privateText), false);
+  }
 });

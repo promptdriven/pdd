@@ -656,14 +656,7 @@ export async function chatSession(chat, ports = {}) {
       try {
         const receipt = readFileSync(chat.launchExitFile, 'utf8').trim();
         if (/^(?:0|[1-9]\d{0,2})$/.test(receipt) && Number(receipt) <= 255) {
-          let screen = '';
-          try { screen = await herdrCommand(ports)(['pane', 'read', chat.paneId, '--source', 'detection']); } catch { /* No screen available. */ }
-          const env = ports.env ?? process.env;
-          const secrets = Object.entries(env).filter(([name, value]) => (Object.values(LOGIN_VARIABLES).flat().includes(name) || /(?:KEY|TOKEN|SECRET|PASSWORD)/i.test(name)) && typeof value === 'string' && value.length > 0).map(([, value]) => value);
-          const message = String(screen).replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '')
-            .split('\n').map(line => line.trim()).filter(line => line && !/^(?:\$|[❯›>]|.*(?:\b(?:env -u|PDD_AGENT_SESSION|CODEX_HOME|CLAUDE_CONFIG_DIR)\b|pdd_launch_exit|\b(?:export|unset)\s|(?:^|\s)[A-Za-z_][A-Za-z0-9_]*=|[$#] $))/.test(line) && !secrets.some(value => line.includes(value)))
-            .join(' ').slice(0, 500) || 'Agent exited before startup was confirmed.';
-          missing.launchFailure = {exitCode: Number(receipt), message};
+          missing.launchFailure = {exitCode: Number(receipt), message: 'Agent exited; inspect the chat pane for details.'};
         }
       } catch { /* A missing or malformed receipt proves nothing. */ }
     }
