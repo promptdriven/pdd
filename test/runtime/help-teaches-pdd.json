@@ -10,7 +10,7 @@
     {"id": "AC6", "text": "`pdd prompting` is still an unknown command: it prints nothing to stdout, prints one line to stderr that says \"Unknown command\" and names `prompting`, and exits with code 2."},
     {"id": "AC7", "text": "`pdd --help` and `pdd help prompting` never name a removed command (\"pdd check\", \"pdd try\" or \"workflow start\") and exit with code 0."}
   ],
-  "initial_world": {"unexpected_launcher_calls": []},
+  "initial_world": {"counters":{"origin":0,"token":0,"metadata":0,"package":0,"skills":0,"diagnostics":0,"unused-dispatch-prove":0,"unused-dispatch-requestUptake":0,"unused-dispatch-startRun":0,"unused-agents-checkWorkflowAgents":0,"unused-setup-setupSkills":0,"unused-setup-setupProject":0,"unused-setup-setupAgentMcp":0},"unexpected_launcher_calls":[]},
   "simulation": {
     "package.readVersion": {"action":"fixture.lookup","world_pointer":"/counters/package","cases":[{"args":{"packageRoot":"."},"call_index":1,"result":{"ok":true,"version":"0.1.28"}}],"result_template":null,"result_value_pointer":""},
     "skills.findSkills": {"action":"fixture.lookup","world_pointer":"/counters/skills","cases":[{"args":{"packageRoot":".","cwd":".","home":"/home/fixture"},"call_index":1,"result":{"results":[]}}],"result_template":null,"result_value_pointer":""},

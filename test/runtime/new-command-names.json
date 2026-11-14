@@ -17,7 +17,7 @@
     {"id": "AC13", "text": "`pdd test --bogus` prints a usage error to stderr, with no \"Unknown command\" and no \"was removed\", prints nothing to stdout and exits with code 2."},
     {"id": "AC14", "text": "`pdd sim --help` prints the `pdd simulate` help to stdout, prints nothing to stderr and exits with code 0."}
   ],
-  "initial_world": {},
+  "initial_world": {"counters":{"origin":0,"token":0,"metadata":0,"package":0,"skills":0,"diagnostics":0,"unused-dispatch-prove":0,"unused-dispatch-requestUptake":0,"unused-dispatch-startRun":0,"unused-agents-checkWorkflowAgents":0,"unused-setup-setupSkills":0,"unused-setup-setupProject":0,"unused-setup-setupAgentMcp":0},"unexpected_launcher_calls":[]},
   "simulation": {
     "autopilotLauncher.runAutopilotLauncher": {"action":"port.write","world_pointer":"/unexpected_launcher_calls","result_template":{"exitCode":255,"message":"Unexpected Autopilot dispatch in a non-Autopilot scenario"}},
     "package.readVersion": {"action":"fixture.lookup","world_pointer":"/counters/package","cases":[{"args":{"packageRoot":"."},"call_index":1,"result":{"ok":true,"version":"0.1.28"}}],"result_template":null,"result_value_pointer":""},
