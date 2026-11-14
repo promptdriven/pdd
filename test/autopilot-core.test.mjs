@@ -4026,3 +4026,40 @@ test('3154 & 3782 opt-in model tiering routes worker vs reviewer launches and re
   assert.equal(mergedRow.telemetry.tokens.byAgent.codex.inputTokens, 23_000);
   assert.equal(mergedRow.telemetry.tokens.total.totalTokens, 24_800);
 });
+
+test('3389: pdd autopilot release frees a core claim, and the next tick stops the old job', async t => {
+  const { tickAutopilot, runAutopilotLauncher } = await import('../src/autopilot-launcher.mjs');
+  const { spawnSync } = await import('node:child_process');
+  const w = await coreWorld(t);
+  writeFileSync(join(w.cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', trust: [], engine: 'core', testCommand: 'npm test', label: 'pdd:autopilot' } }));
+  w.issue(17, { labels: ['pdd:autopilot'] });
+  const cwd = w.git(w.cwd, 'rev-parse', '--show-toplevel'), stateRoot = join(w.dir, 'state');
+  const stateFile = join(stateRoot, `${createHash('sha256').update(cwd).digest('hex').slice(0, 20)}.json`);
+  mkdirSync(stateRoot, { recursive: true });
+  writeFileSync(stateFile, JSON.stringify({ enabled: true, engine: 'core', cwd, repo: 'acme/widgets', defaultBranch: 'main', coordinatorId: 'coord-a', machine: 'machine-a',
+    agent: { id: 'codex', kind: 'codex', command: 'codex' }, packageRoot: join(w.dir, 'pkg') }));
+  const ports = { stateRoot, now: w.now, env: { HOME: process.env.HOME, PATH: process.env.PATH }, timer: async () => true, warn: () => {}, authority: { read: async () => ({ authority: 'trusted' }) },
+    run: async (command, args, options = {}) => {
+      if (command === 'gh') return w.gh(args, options);
+      if (command !== 'git') assert.fail(`unexpected program ${command}`);
+      const r = spawnSync('git', args, { cwd: options.cwd ?? cwd, encoding: 'utf8' }); return { code: r.status, stdout: r.stdout, stderr: r.stderr };
+    },
+    machineGuard: w.machineGuard, corePorts: { jobs: w.jobs, checkBase: async () => ({ exitCode: 0, message: 'ok' }), agentReady: async () => true } };
+  assert.match((await tickAutopilot(stateFile, ports)).message, /Autopilot core: 1 started/);
+  const jobFile = join(stateFile.replace(/\.json$/, '-core'), 'jobs', '17.json'), job = JSON.parse(readFileSync(jobFile, 'utf8'));
+  // The core claim names the machine by its id, not by the host name.
+  assert.match(job.claim.machine, /^m-[0-9a-f]{12}$/);
+  assert.ok(w.labels(17).includes('pdd:working'));
+
+  const released = await runAutopilotLauncher({ command: 'release', cwd, packageRoot: join(w.dir, 'pkg'), env: ports.env, issues: ['17'] }, ports);
+  assert.equal(released.exitCode, 0, released.message);
+  assert.match(released.message, /Released the Autopilot claim for acme\/widgets#17/);
+  assert.ok(!w.labels(17).includes('pdd:working'));
+
+  // The next tick stops the old job as a person stop. A new job may take the issue again, since it keeps pdd:autopilot.
+  await tickAutopilot(stateFile, ports);
+  const history = readFileSync(join(stateFile.replace(/\.json$/, '-core'), 'history.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  assert.ok(history.some(row => row.issue === 17 && row.outcome === 'stopped' && /pdd:working was removed/.test(row.text)), JSON.stringify(history));
+  const now = existsSync(jobFile) ? JSON.parse(readFileSync(jobFile, 'utf8')) : null;
+  assert.notEqual(now?.id, job.id, 'the old job is gone');
+});

@@ -253,7 +253,11 @@ issue of another repository returns exit 2): `Marked N issue(s) with pdd:autopil
 
 **Release** releases this machine's own claim on ISSUE through the shared `releaseRunClaim` of the workflow runner
 (the run lock, worker and check-custody guard, chat cleanup and local allocation result stay with the runner), and
-returns its result unchanged.
+returns its result unchanged. A core claim names this machine by its id (`machineIdOf(state)` of the core engine), an
+older claim by the host name, so release tries the id first and then the host name (#3389). A failed try of the
+other form makes no change; the first try that succeeds gives the result, and when both fail the id try's result is
+returned. Release does not end the core job itself: the
+next tick finds `pdd:working` removed and stops that job as a person stop, keeping its branch and PR.
 
 **Audit** (`pdd autopilot audit RUN PR`) resolves the saved run with `resolveRun` and calls `auditMerge` of the
 [audit owner](autopilot-audit.prompt.md) with that run and PR, through this launcher's counted process port (purpose

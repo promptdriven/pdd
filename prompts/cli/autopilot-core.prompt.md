@@ -295,7 +295,8 @@ For each ready issue while slots are free, at most 3 claim attempts per tick:
    comment `Autopilot core claim.` with a fenced JSON record
    `{repository, coordinatorId, machine, labelEventId, lastSeen: ""}`, where `machine`
    is this machine's id (`state.machineId`, else `m-` and the first 12 hex digits of
-   the SHA-256 of the host name), never the host name. The job saves it as
+   the SHA-256 of the host name; exported as `machineIdOf(state)`, so the launcher's
+   release uses the same id), never the host name. The job saves it as
    `claim.machine` and heartbeats with it. A claim whose record names this machine's
    host name (an older build) or its id is this machine's. The machine
    wins only when its comment is by the winning event's actor and is the earliest

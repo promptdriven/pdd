@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 8ea9dc7f289888e608c3cfea708a8551f13c03d67712fe7ad821aec9aa05409c).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 58bcdb6852445079972b5a96fedc4426125769a8cae590c9f990811fbb362507).
 import {runAutopilotDoctor, resolveAutopilotAgent} from './autopilot-doctor.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import {releaseRunClaim, cancelRun, acquireRunLock} from './workflow-runner.mjs';
@@ -23,7 +23,7 @@ import { alertStatusLine, runAutopilotAlerts } from './autopilot-alerts.mjs';
 import { countGithubCalls, githubBudget, githubBudgetSettings, githubEtagCache, githubFullLastPage, githubLedger, githubMachineEntries, githubReply, githubStateRoot, githubUsage } from './github-calls.mjs';
 import { costReport, costStatusLines } from './cost-ledger.mjs';
 import { selectAutopilotBase, checkAutopilotBase } from './autopilot-base.mjs';
-import { readCoreSettings, tickCore, coreStatus, busySlots } from './autopilot-core.mjs';
+import { readCoreSettings, tickCore, coreStatus, busySlots, machineIdOf } from './autopilot-core.mjs';
 import { readMachineGuard, timerPriority, validShare } from './machine-guard.mjs';
 import { listReportDrafts, sendReportDraft } from './autopilot-reports.mjs';
 import { INTAKE_MODES, intakeMode, readIntake, intakeText, stopCardJobs } from './autopilot-intake.mjs';
@@ -998,15 +998,22 @@ export async function runAutopilotLauncher(input, ports = {}) {
       return ok(`Marked ${issues.length} issue(s) with pdd:autopilot.`);
     }
     if (command === 'release') {
-      const result = await releaseRunClaim({
-        ref: issues[0], cwd: state.cwd, repository: state.repo,
-        machine: state.machine, coordinatorId: state.coordinatorId,
-      }, { ...workflowCleanupPorts(p, ports), execFile: async (file, args, options) => {
-        const reply = await p.execute(file, args, { purpose: 'claims', ...options });
-        if (reply.code !== 0) throw Object.assign(Error(reply.stderr || reply.stdout || `${file} failed`), reply);
-        return reply;
-      } });
-      return { exitCode: result.exitCode, message: result.message };
+      // A core claim names this machine by its id, an older claim by the host name: try the id first (#3389).
+      const forms = [...new Set([machineIdOf(state), state.machine].filter(Boolean))];
+      let first = null;
+      for (const machine of forms) {
+        const result = await releaseRunClaim({
+          ref: issues[0], cwd: state.cwd, repository: state.repo,
+          machine, coordinatorId: state.coordinatorId,
+        }, { ...workflowCleanupPorts(p, ports), execFile: async (file, args, options) => {
+          const reply = await p.execute(file, args, { purpose: 'claims', ...options });
+          if (reply.code !== 0) throw Object.assign(Error(reply.stderr || reply.stdout || `${file} failed`), reply);
+          return reply;
+        } });
+        if (result.exitCode === 0) return { exitCode: 0, message: result.message };
+        first ??= result;
+      }
+      return { exitCode: first.exitCode, message: first.message };
     }
     if (command !== 'start') return { exitCode: 2, message: 'Use pdd autopilot start, stop, status, add or release.' };
     // The no-progress period must be at least 2 ticks of the core timer, or a working job could look quiet.
