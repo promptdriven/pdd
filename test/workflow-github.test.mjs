@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, writeFile, rm, mkdir, symlink, link, chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, reconcileWorkflowPr } from '../src/workflow-github.mjs';
+import { canonicalGithubUrl, resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, reconcileWorkflowPr } from '../src/workflow-github.mjs';
 
 const headSha = 'a'.repeat(40), mergeSha = 'b'.repeat(40);
 async function fixture(t) {
@@ -531,4 +531,10 @@ test('PRBODY6: known refusals and uncertain gh diagnostics redact private paths 
     assert.doesNotMatch(result.message, /alice|private-client|private-report|private-share|\/home\/|\/Users\//);
     assert.match(result.message, /<local path>/);
   }
+});
+
+test('canonicalGithubUrl rejects overflowed unsafe integer and Infinity numbers', () => {
+  assert.equal(canonicalGithubUrl('https://github.com/Acme/Project/pull/42', 'acme/project', 'pull'), 42);
+  assert.equal(canonicalGithubUrl('https://github.com/Acme/Project/pull/9007199254740993', 'Acme/Project', 'pull'), 0);
+  assert.equal(canonicalGithubUrl(`https://github.com/Acme/Project/issues/1${'0'.repeat(400)}`, 'Acme/Project', 'issues'), 0);
 });

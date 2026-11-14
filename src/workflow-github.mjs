@@ -84,10 +84,11 @@ function originRepository(remote) {
 
 export function canonicalGithubUrl(value, repository, kind, number) {
   const match = typeof value === 'string' && /^https:\/\/github\.com\/([^/]+\/[^/]+)\/(issues|pull)\/([1-9][0-9]*)$/.exec(value);
-  if (!match || !sameRepo(match[1], repository) || match[2] !== kind) return 0;
+  const n = match ? Number(match[3]) : 0;
+  if (!Number.isSafeInteger(n) || n <= 0 || !sameRepo(match[1], repository) || match[2] !== kind) return 0;
   try {
     const url = new URL(value);
-    const found = url.host === 'github.com' && !url.search && !url.hash && url.pathname === `/${match[1]}/${kind}/${match[3]}` ? Number(match[3]) : 0;
+    const found = url.host === 'github.com' && !url.search && !url.hash && url.pathname === `/${match[1]}/${kind}/${match[3]}` ? n : 0;
     return number === undefined || found === number ? found : 0;
   } catch { return 0; }
 }
