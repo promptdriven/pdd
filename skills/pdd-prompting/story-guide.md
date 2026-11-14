@@ -131,3 +131,5 @@ Then criterion 1 can end with "and starts no sync", and the test counts the sync
   Then the test text does not match the Story (`story-criterion-mismatch`).
 - `pdd lint STORY` uses 0 AI calls and prints each criterion that is not checked.
   Do not run it right before `pdd test`: `pdd test` includes lint (RUNBOOK §11).
+- Keep implementation plumbing out of the Story. `pdd approve` and workflow gates refuse changed Stories that name code paths (`src/…`, `prompts/cli/…`, `*.mjs`), function signatures, bit-level or AST internals, raw hashes or UUIDs, generic roles ("a user", "the system") or vague words ("correctly", "gracefully", "as expected").
+- Prompts own production modules, not tests. Do not put prompts under `prompts/test/` or claim `test/` files in a prompt.

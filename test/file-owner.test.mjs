@@ -100,11 +100,12 @@ test('3200 resolveOwners: binding, header, prose, and the uncertain cases', () =
 
 // Wrong: findOwners reads other files, misses an untracked prompt or fails on a path that does not exist yet.
 test('3200 findOwners reads the working tree of a real repository', t => {
+  const cutHeader = '// Generated from prompts/cut-header.prompt.md';
   const root = repo(t, {
     'pdd-bindings.json': JSON.stringify({ schema_version: 'pdd.bindings.v1', modules: [{ module: 'src/bound.mjs', stories: ['user_stories/s.md'], prompt: 'prompts/bound.prompt.md' }] }),
     'prompts/bound.prompt.md': '# Bound\n', 'prompts/new.prompt.md': '# New\n\nOwn `src/new.mjs`.\n', 'prompts/late.prompt.md': '# Late\n',
     'src/late.mjs': `${'// license\n'.repeat(11)}// Generated from prompts/late.prompt.md (sha256: ${HEX}).\nexport const x = 1;\n`, 'src/bound.mjs': 'export {};\n',
-    'prompts/cut.prompt.md': '# Cut\n', 'src/cut.mjs': `${' '.repeat(4096 - CUT.length - 1)}\n${CUT} (sha256: ${HEX}).\n` });
+    'prompts/cut-header.prompt.md': '# Cut\n', 'src/cut.mjs': `${' '.repeat(4096 - cutHeader.length - 1)}\n${cutHeader} (sha256: ${HEX}).\n` });
   const result = findOwners({ root, paths: ['src/late.mjs', 'src/bound.mjs', 'src/new.mjs', 'README.md', 'src/cut.mjs'] });
   assert.deepEqual(result.files.map(({ path, owner, source, certain }) => [path, owner, source, certain]), [
     ['src/late.mjs', 'prompts/late.prompt.md', 'header', true], ['src/bound.mjs', 'prompts/bound.prompt.md', 'binding', true],
@@ -334,4 +335,142 @@ test('3295 isTestOwnedPath requires canonicalPath and runOwner never opens non-v
   assert.equal(spyCode, 0);
   assert.equal(reads.some(path => path.startsWith('test/') || path.startsWith('..')), false, `unexpected reads: ${JSON.stringify(reads)}`);
   assert.match(spyErr.text, /prompts\/bound\.prompt\.md claims test\/ignored\.test\.mjs, test\/link\.test\.mjs, test\/unlisted\.test\.mjs\./);
+});
+
+test('3377 resolveOwners and pdd owner match mirrored paths and unique file names or stems without prose exploration', async t => {
+  const byPath = names => `matched by path to ${names}; add a Generated from header or a pdd-bindings.json entry`;
+  const byName = names => `matched by file name to ${names}; add a Generated from header or a pdd-bindings.json entry`;
+
+  // 1 & 2. Mirrored path match (prompts/modules/... and extensionless path mirror) + unique stem / basename match.
+  const root = repo(t, {
+    'prompts/modules/m1/verify-access.py.prompt.md': '# Verify access\n\nChecks user permissions.\n\n- Output: `m1/verify-access.py`\n',
+    'm1/verify-access.py': 'def verify():\n    return True\n',
+    'prompts/src/mirrored.prompt.md': '# Mirrored\n\nComputes mirrored output.\n',
+    'src/mirrored.mjs': 'export const mirrored = 1;\n',
+    'prompts/bin/tool.prompt.md': '# Tool\n\nRuns the CLI wrapper.\n',
+    'bin/tool': '#!/usr/bin/env node\n',
+    'prompts/cli/verify-token.prompt.md': '# Verify token\n\nChecks bearer tokens.\n',
+    'src/verify-token.mjs': 'export const verifyToken = () => true;\n',
+    'prompts/m1/check-quota.py.prompt.md': '# Check quota\n\nChecks request quota.\n',
+    'src/m1/check-quota.py': 'def check_quota():\n    return True\n',
+  });
+  const paths = ['m1/verify-access.py', 'src/mirrored.mjs', 'bin/tool', 'src/verify-token.mjs', 'src/m1/check-quota.py'];
+  assert.deepEqual(plain(findOwners({ root, paths }).files), [
+    row('m1/verify-access.py', ['prompts/modules/m1/verify-access.py.prompt.md'], 'path', false, byPath('prompts/modules/m1/verify-access.py.prompt.md')),
+    row('src/mirrored.mjs', ['prompts/src/mirrored.prompt.md'], 'path', false, byPath('prompts/src/mirrored.prompt.md')),
+    row('bin/tool', ['prompts/bin/tool.prompt.md'], 'path', false, byPath('prompts/bin/tool.prompt.md')),
+    row('src/verify-token.mjs', ['prompts/cli/verify-token.prompt.md'], 'path', false, byName('prompts/cli/verify-token.prompt.md')),
+    row('src/m1/check-quota.py', ['prompts/m1/check-quota.py.prompt.md'], 'path', false, byName('prompts/m1/check-quota.py.prompt.md')),
+  ]);
+
+  const stdout = capture(), stderr = capture();
+  assert.equal(await runPdd(['owner', 'm1/verify-access.py', 'src/verify-token.mjs'], { stdout, stderr, cwd: root }), 0, stderr.text);
+  assert.equal(stdout.text, [
+    'm1/verify-access.py: prompts/modules/m1/verify-access.py.prompt.md (path, not certain: treat as owned)',
+    `  ${byPath('prompts/modules/m1/verify-access.py.prompt.md')}`,
+    'src/verify-token.mjs: prompts/cli/verify-token.prompt.md (path, not certain: treat as owned)',
+    `  ${byName('prompts/cli/verify-token.prompt.md')}`,
+    '',
+  ].join('\n'));
+
+  const stemRoot = repo(t, {
+    'prompts/cli/verify-access.prompt.md': '# Verify access\n\nChecks user permissions.\n',
+    'src/verify-access.mjs': 'export const verifyAccess = () => true;\n',
+  });
+  assert.deepEqual(plain(findOwners({ root: stemRoot, paths: ['src/verify-access.mjs'] }).files), [
+    row('src/verify-access.mjs', ['prompts/cli/verify-access.prompt.md'], 'path', false, byName('prompts/cli/verify-access.prompt.md')),
+  ]);
+
+  // 3. Precedence: binding and header (certain: true) beat prose and path; prose beats path; read failures block path fallback.
+  const precPrompts = [
+    { path: 'prompts/bound-owner.prompt.md', content: '# Bound owner\n\nHandles requests.\n' },
+    { path: 'prompts/header-owner.prompt.md', content: '# Header owner\n\nHandles requests.\n' },
+    { path: 'prompts/prose-owner.prompt.md', content: '# Prose owner\n\nOwn `src/bound.mjs`, `src/headed.mjs` and `src/prosed.mjs`.\n' },
+    { path: 'prompts/bound.prompt.md', content: '# Stem bound\n\nSame stem.\n' },
+    { path: 'prompts/headed.prompt.md', content: '# Stem headed\n\nSame stem.\n' },
+    { path: 'prompts/prosed.prompt.md', content: '# Stem prosed\n\nSame stem.\n' },
+    { path: 'prompts/fallback.prompt.md', content: '# Fallback\n\nSame stem.\n' },
+  ];
+  const precBindings = JSON.stringify({
+    schema_version: 'pdd.bindings.v1',
+    modules: [{ module: 'src/bound.mjs', stories: ['user_stories/s.md'], prompt: 'prompts/bound-owner.prompt.md' }],
+  });
+  const precHeads = [
+    { path: 'src/headed.mjs', content: '// Generated from prompts/header-owner.prompt.md.\n' },
+    { path: 'src/unreadable.mjs', content: false },
+  ];
+  const precPaths = ['src/bound.mjs', 'src/headed.mjs', 'src/prosed.mjs', 'src/fallback.mjs', 'src/unreadable.mjs'];
+  assert.deepEqual(plain(resolveOwners({ paths: precPaths, bindings: precBindings, heads: precHeads, prompts: precPrompts }).files), [
+    row('src/bound.mjs', ['prompts/bound-owner.prompt.md'], 'binding', true),
+    row('src/headed.mjs', ['prompts/header-owner.prompt.md'], 'header', true),
+    row('src/prosed.mjs', ['prompts/prose-owner.prompt.md'], 'prose', false,
+      'named only in the opening sentence of prompts/prose-owner.prompt.md; add a Generated from header or a pdd-bindings.json entry'),
+    row('src/fallback.mjs', ['prompts/fallback.prompt.md'], 'path', false, byName('prompts/fallback.prompt.md')),
+    row('src/unreadable.mjs', [], null, false, 'the file could not be read, so a header may be missing'),
+  ]);
+  assert.deepEqual(plain(resolveOwners({ paths: ['src/fallback.mjs'], bindings: false, heads: [], prompts: precPrompts }).files), [
+    row('src/fallback.mjs', [], null, false, 'pdd-bindings.json could not be read, so a binding may be missing'),
+  ]);
+
+  // 4. Non-code, root extensionless, build-config, fixture/example, and test exclusions never match by path or stem.
+  const excludedPrompts = ['package', 'foo', 'ci', 'story', 'Makefile', 'Dockerfile', 'LICENSE', 'CODEOWNERS', 'helpers'].map(name => ({
+    path: `prompts/${name}.prompt.md`,
+    content: `# ${name}\n\nDescribes behavior.\n`,
+  }));
+  const excludedPaths = [
+    'package.json', 'docs/foo.md', '.github/workflows/ci.yml', 'test/foo.test.mjs',
+    'user_stories/story.md', '.foo', 'Makefile', 'Dockerfile', 'LICENSE', 'CODEOWNERS',
+    'fixtures/app/src/helpers.mjs', 'examples/fakes/foo.mjs',
+  ];
+  assert.deepEqual(
+    plain(resolveOwners({ paths: excludedPaths, bindings: null, heads: [], prompts: excludedPrompts }).files),
+    excludedPaths.map(path => row(path, [], null, true)),
+  );
+
+  const nonProdPrompts = [
+    { path: 'examples/fakes/files.prompt.md', content: '# Fake files\n\nDescribes example fake.\n' },
+    { path: 'test/fixtures/foo.prompt.md', content: '# Fixture foo\n\nDescribes fixture.\n' },
+    { path: 'fixtures/app/prompts/helpers.prompt.md', content: '# Fixture helpers\n\nDescribes fixture helpers.\n' },
+    { path: 'test/bar.prompt.md', content: '# Test bar\n\nDescribes test helper.\n' },
+    { path: 'prompts/test/baz.prompt.md', content: '# Test baz\n\nDescribes test harness.\n' },
+  ];
+  const prodTargets = ['src/files.mjs', 'src/foo.mjs', 'src/helpers.mjs', 'src/bar.mjs', 'src/baz.mjs', 'fixtures/app/src/helpers.mjs'];
+  assert.deepEqual(
+    plain(resolveOwners({ paths: prodTargets, bindings: null, heads: [], prompts: nonProdPrompts }).files),
+    prodTargets.map(path => row(path, [], null, true)),
+  );
+});
+
+test('3377 findOwners checks repository-wide uniqueness via allPaths and narrows uniquely by parent folder', t => {
+  const byName = names => `matched by file name to ${names}; add a Generated from header or a pdd-bindings.json entry`;
+
+  // Ambiguous stem across src/a/index.mjs and src/b/index.mjs with generic prompts/index.prompt.md:
+  // even a single-file query for ['src/a/index.mjs'] sees src/b/index.mjs via visible allPaths and refuses to guess.
+  const ambigRoot = repo(t, {
+    'prompts/index.prompt.md': '# Index\n\nEntry point.\n',
+    'src/a/index.mjs': 'export const a = 1;\n',
+    'src/b/index.mjs': 'export const b = 2;\n',
+    'prompts/x/dup.prompt.md': '# Dup X\n\nDuplicate stem.\n',
+    'prompts/y/dup.prompt.md': '# Dup Y\n\nDuplicate stem.\n',
+    'src/dup.mjs': 'export const dup = 1;\n',
+  });
+  assert.deepEqual(plain(findOwners({ root: ambigRoot, paths: ['src/a/index.mjs'] }).files), [
+    row('src/a/index.mjs', [], null, true),
+  ]);
+  assert.deepEqual(plain(findOwners({ root: ambigRoot, paths: ['src/dup.mjs'] }).files), [
+    row('src/dup.mjs', [], null, true),
+  ]);
+
+  // With prompts/a/index.prompt.md, src/a/index.mjs narrows uniquely by parent folder a/index while src/b/index.mjs stays unowned.
+  const narrowedRoot = repo(t, {
+    'prompts/a/index.prompt.md': '# A index\n\nEntry for A.\n',
+    'src/a/index.mjs': 'export const a = 1;\n',
+    'src/b/index.mjs': 'export const b = 2;\n',
+  });
+  assert.deepEqual(plain(findOwners({ root: narrowedRoot, paths: ['src/a/index.mjs'] }).files), [
+    row('src/a/index.mjs', ['prompts/a/index.prompt.md'], 'path', false, byName('prompts/a/index.prompt.md')),
+  ]);
+  assert.deepEqual(plain(findOwners({ root: narrowedRoot, paths: ['src/b/index.mjs'] }).files), [
+    row('src/b/index.mjs', [], null, true),
+  ]);
 });

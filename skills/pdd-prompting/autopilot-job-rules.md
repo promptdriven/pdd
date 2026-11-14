@@ -10,12 +10,14 @@ line against its own records. A line that the records do not support is red.
 
 ## Skill choice
 
-- A fix that changes no product behavior uses `pdd-small-change`, also when the issue is written as a bug. Pick
-  `pdd-small-change` whenever every planned file takes unowned path `d` non-code files (docs, CI, lock files,
-  non-behavior config or metadata, or test-only maintenance — never `*.prompt.md` or `user_stories/*.md`).
+- Use `pdd-small-change` only when every planned file is an unowned path `d` file outside PDD (docs, guides, CI, lock
+  files, packages, non-behavior config or metadata, or test-only maintenance — never `*.prompt.md`,
+  `user_stories/*.md`, or product/app code), also when the issue is written as a bug.
+- If an issue touches prompt-owned or product/app code (`src/`, `app/`, etc.), even when no prompt exists yet, pick
+  `pdd-bug` or `pdd-feature` instead so PR 1 creates or updates the owning prompt.
 - Write no new Story and no new prompt for a path `d` non-code file.
-- When a `pdd-small-change` run changes owned code (path `a`, `b` or `c`), include the Story test, replay and
-  `Runtime:` evidence that `pdd-bug` requires.
+- If a `pdd-small-change` run already touched owned or product code, note it and include the Story test, replay and
+  `Runtime:` evidence or rerun under `pdd-bug` or `pdd-feature`.
 - A repair on a path-`d`-only PR keeps path `d` without adding a new Story or prompt.
 
 ## Changed

@@ -1,10 +1,9 @@
 # verify
 
-- Compare each checklist item with the issue and trusted follow-ups; update its state and evidence (RUNBOOK §15), then run focused and required checks.
-- For a behavior fix, show that the new test fails on the old code in a throwaway copy, when you can.
-- For a behavior fix, write `Proof (defect fixed):` and `Proof (gap closed):` with evidence for each in verify.md. Give a reason for each removed test or changed assertion.
-- If only the warning light changed, write `Not fixed yet: this helps find the cause` in verify.md for pdd to lift to the PR top; use `Refs #N` and keep the issue open.
-- Report the exact commands, exit codes and real output. Name what no test covers. Put the results first. Put the exact commands and long output last, in a closed `<details>` block.
+- Update checklist state and evidence against the issue (RUNBOOK §15); run focused and required checks.
+- Run `git diff --name-only` and `pdd owner`. If the diff touches `*.prompt.md`, `user_stories/*.md`, owned files or product/app code (`src/`, `app/`, etc.), add a line `Not checked: small-change touched owned or product code (<files>); pdd-bug or pdd-feature owns prompt and code behavior` in verify.md and a `File:` note in `done`.
+- For a defect fix, test failure before the fix when possible, write `Proof (defect fixed):` and `Proof (gap closed):` in verify.md, and explain changed assertions.
+- If warning-light only, write `Not fixed yet: this helps find the cause` in verify.md and use `Refs #N`.
+- Put results and exit codes first; name uncovered gaps. Put the exact commands and long output last, in a closed `<details>` block.
 - verify.md shows commands and results only: no local absolute paths (like /Users/… or /home/…) and no raw logs.
-- In your `done` summary add the PR fields of RUNBOOK §15: `Title:`, `Problem:`, `Change:`, `Result:`, `Case:` rows and `File:` notes.
-- For proof that pdd records, run `pdd workflow prove ISSUE --test COMMAND --expect TEXT` (add `--timeout MIN` for slow tests).
+- In `done` add RUNBOOK §15 fields (`Title:`, `Problem:`, `Change:`, `Result:`, `Case:`, `File:`); if needed run `pdd workflow prove ISSUE --test CMD --expect TEXT`.
