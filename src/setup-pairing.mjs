@@ -24,11 +24,15 @@ function valid(offer, pending, now) {
 }
 const now = ports => (ports.now ?? Date.now)();
 function pendingAt(dir, ports) { const p = read(join(dir, 'pending.json'), null); return p && typeof p.id === 'string' && /^[a-f0-9]{32}$/.test(p.id) && typeof p.login === 'string' && typeof p.code === 'string' && typeof p.expiresAt === 'string' && now(ports) < Date.parse(p.expiresAt) ? p : null; }
-async function ask(question, ports) {
+async function ask(question, ports, signal) {
   ports.stdout?.write(question);
   if (ports.confirm) return /^(y|yes)$/i.test(String(await ports.confirm(question)).trim());
-  const { lineReader } = await import('./prompt-approve.mjs'); const reader = lineReader(ports.stdin ?? process.stdin);
-  try { return /^(y|yes)$/i.test((await reader.ask()).trim()); } finally { reader.close(); }
+  const { lineReader } = await import('./prompt-approve.mjs');
+  if (signal?.aborted) return false;
+  const reader = lineReader(ports.stdin ?? process.stdin);
+  const close = () => reader.close();
+  signal?.addEventListener('abort', close, { once: true });
+  try { return /^(y|yes)$/i.test((await reader.ask()).trim()); } finally { signal?.removeEventListener('abort', close); reader.close(); }
 }
 export async function pairStatus({ env }, ports = {}) {
   const dir = root(env), p = pendingAt(dir, ports);
@@ -51,9 +55,11 @@ export async function runSetupPairing({ cwd, env, code, interactive }, ports = {
   if (code === undefined && records(keysFile).some(x => x.login === login)) return ok('');
   const random = ports.random ?? (n => randomBytes(n));
   code ??= random(4).toString('hex').toUpperCase();
-  let locked = false, id, interrupted = false, interruptResolve;
-  const interrupt = new Promise(resolve => { interruptResolve = resolve; });
-  const onInterrupt = () => { interrupted = true; interruptResolve(false); };
+  let locked = false, id, cancelResolve, timer;
+  const controller = new AbortController();
+  const cancelled = new Promise(resolve => { cancelResolve = resolve; });
+  const cancel = () => { controller.abort(); cancelResolve(false); };
+  const onInterrupt = () => cancel();
   process.on('SIGINT', onInterrupt);
   try {
     const parent = join(dir, '..');
@@ -65,22 +71,23 @@ export async function runSetupPairing({ cwd, env, code, interactive }, ports = {
     id = random(16).toString('hex');
     const p = { id, login, code, expiresAt: new Date(now(ports) + 600000).toISOString() };
     safeWrite(join(dir, 'pending.json'), JSON.stringify(p));
+    timer = (ports.setTimer ?? setTimeout)(cancel, Math.max(0, Date.parse(p.expiresAt) - now(ports)));
     ports.stdout?.write(`Pairing code: ${code} (expires in 10 minutes)\n`);
     const offerFile = join(dir, `offer-${id}.json`);
     let offer;
-    while (!interrupted && now(ports) < Date.parse(p.expiresAt)) {
+    while (!controller.signal.aborted && now(ports) < Date.parse(p.expiresAt)) {
       offer = read(offerFile, null);
       if (offer) break;
-      if (ports.wait) await ports.wait({ pending: p, offerFile }); else await delay(250);
+      await Promise.race([ports.wait ? ports.wait({ pending: p, offerFile }) : delay(250), cancelled]);
     }
-    if (interrupted || !valid(offer, p, now(ports))) return fail('Phone offer expired or invalid.');
-    if (!await Promise.race([ask(`Does your phone show ${code}? [y/N] `, ports), interrupt])) return fail('Phone pairing declined or interrupted.');
-    if (interrupted || !valid(offer, p, now(ports))) return fail('Phone offer expired or invalid.');
+    if (controller.signal.aborted || !valid(offer, p, now(ports))) return fail('Phone offer expired or invalid.');
+    if (!await Promise.race([ask(`Does your phone show ${code}? [y/N] `, ports, controller.signal), cancelled])) return fail('Phone pairing declined or interrupted.');
+    if (controller.signal.aborted || !valid(offer, p, now(ports))) return fail('Phone offer expired or invalid.');
     const keys = records(keysFile), existing = keys.find(x => x.login === login && x.keyId === offer.keyId);
     if (existing && JSON.stringify(sorted(existing.publicKey)) !== JSON.stringify(sorted(offer.publicKey))) return fail('Phone key ID already belongs to another key.');
     if (!existing) keys.push(publicRecord(offer));
     safeWrite(keysFile, JSON.stringify(keys));
     return ok(`Paired: ${offer.deviceName} (key ${offer.keyId})`);
   } catch { return fail('Phone pairing could not start or complete.'); }
-  finally { process.removeListener('SIGINT', onInterrupt); if (locked) { try { const p = read(join(dir, 'pending.json'), null); if (p?.id === id) unlinkSync(join(dir, 'pending.json')); } catch {} try { unlinkSync(join(dir, `offer-${id}.json`)); } catch {} rmSync(join(dir, 'lock'), { recursive: true, force: true }); } }
+  finally { if (timer !== undefined) (ports.clearTimer ?? clearTimeout)(timer); controller.abort(); process.removeListener('SIGINT', onInterrupt); if (locked) { try { const p = read(join(dir, 'pending.json'), null); if (p?.id === id) unlinkSync(join(dir, 'pending.json')); } catch {} try { unlinkSync(join(dir, `offer-${id}.json`)); } catch {} rmSync(join(dir, 'lock'), { recursive: true, force: true }); } }
 }

@@ -80,3 +80,26 @@ test('interrupt during confirmation removes invitation without saving key', asyn
   assert.deepEqual(JSON.parse((await pairStatus({ env })).message), { pending: null, paired: [] });
  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+test('unanswered confirmation expires and ignores a later rejected callback', async () => {
+ const dir = mkdtempSync(join(tmpdir(), 'pdd-pair-timeout-')), env = { HOME: dir }, { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' }); let rejectConfirmation;
+ try {
+  const ports = { login: () => 'ana', setTimer: fn => setTimeout(fn, 20), confirm: () => new Promise((resolve, reject) => { rejectConfirmation = reject; }), wait: async ({ pending }) => { const file = join(dir, 'offer.json'); writeFileSync(file, JSON.stringify(signed(pending.code, privateKey, publicKey.export({ format: 'jwk' })))); assert.equal((await pairOffer({ env, messageFile: file }, ports)).exitCode, 0); } };
+  assert.equal((await runSetupPairing({ cwd: dir, env, code: 'TIME-123', interactive: true }, ports)).exitCode, 1);
+  rejectConfirmation(Error('late')); await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(JSON.parse((await pairStatus({ env })).message), { pending: null, paired: [] });
+ } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+test('SIGINT closes the real confirmation reader while child stdin remains open', async () => {
+ const { spawn } = await import('node:child_process');
+ const dir = mkdtempSync(join(tmpdir(), 'pdd-pair-reader-')), env = { ...process.env, HOME: dir, XDG_STATE_HOME: join(dir, 'state') };
+ const module = new URL('../src/setup-pairing.mjs', import.meta.url).href;
+ const script = `import {runSetupPairing,pairOffer} from ${JSON.stringify(module)}; import {generateKeyPairSync,sign} from 'node:crypto'; import {writeFileSync} from 'node:fs'; const {privateKey,publicKey}=generateKeyPairSync('ec',{namedCurve:'prime256v1'}); const sort=x=>x&&typeof x==='object'?Object.fromEntries(Object.keys(x).sort().map(k=>[k,sort(x[k])])):x; const ports={stdout:process.stdout,stdin:process.stdin,login:()=> 'ana',wait:async({pending})=>{const body={v:1,login:'ana',code:pending.code,keyId:'k',deviceName:'Phone',publicKey:publicKey.export({format:'jwk'})}; writeFileSync(process.env.HOME+'/offer',JSON.stringify({...body,signature:sign('sha256',Buffer.from(JSON.stringify(sort(body))),{key:privateKey,dsaEncoding:'ieee-p1363'}).toString('base64url')})); await pairOffer({env:process.env,messageFile:process.env.HOME+'/offer'},ports)}}; const r=await runSetupPairing({cwd:'.',env:process.env,code:'TEST-123',interactive:true},ports); console.log('RESULT',r.exitCode);`;
+ let child;
+ try {
+  child = spawn(process.execPath, ['--input-type=module', '-e', script], { env, stdio: ['pipe', 'pipe', 'pipe'] });
+  let output = ''; await new Promise((resolve, reject) => { const timer = setTimeout(() => reject(Error('confirmation did not appear')), 3000); child.stdout.on('data', chunk => { output += chunk; if (output.includes('Does your phone show')) { clearTimeout(timer); resolve(); } }); child.once('error', reject); });
+  const exited = new Promise((resolve, reject) => { const timer = setTimeout(() => reject(Error('child remained alive with stdin open')), 3000); child.once('exit', (code, signal) => { clearTimeout(timer); resolve({code, signal}); }); });
+  child.kill('SIGINT'); assert.deepEqual(await exited, { code: 0, signal: null }); assert.match(output, /RESULT 1/);
+  assert.deepEqual(JSON.parse((await pairStatus({ env })).message), { pending: null, paired: [] });
+ } finally { child?.kill('SIGKILL'); rmSync(dir, { recursive: true, force: true }); }
+});
