@@ -765,9 +765,9 @@ test('RUNTIME-ADDRESS1: the runtime address is in one place only, and PDD_RUNTIM
   // This test names the hosts on purpose; every other tracked file must not.
   const others = ['--', '.', ':!test/runtime-package/runtime-server.test.mjs'];
   const hits = spawnSync('git', ['grep', '-n', '-F', host, ...others], { cwd: root, encoding: 'utf8' }).stdout.trim().split('\n').filter(Boolean);
-  // Fixed report evidence in the two runbooks is not a runtime configuration value.
+  // Fixed report evidence in the runbook and its topic files is not a runtime configuration value.
   const evidenceOnly = hit => {
-    const match = /^(RUNBOOK\.md|skills\/pdd-prompting\/RUNBOOK\.md):[0-9]+:(.*)$/.exec(hit);
+    const match = /^(RUNBOOK\.md|skills\/pdd-prompting\/RUNBOOK\.md|skills\/pdd-prompting\/runbook\/[a-z0-9-]+\.md):[0-9]+:(.*)$/.exec(hit);
     if (!match) return false;
     const report = new RegExp(`\\[[^\\]\\n]+\\]\\(https://${host.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/r/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\)`, 'g');
     return !match[2].replace(report, '').includes(host);

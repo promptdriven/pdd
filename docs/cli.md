@@ -549,7 +549,7 @@ The fresh replacement keeps the run, worktree, progress, gates and approvals, an
 - The first message of each chat gives the full path of this pdd. The agent uses it, so another `pdd` on its PATH does not matter.
 - A Codex chat also gets `-c shell_environment_policy.set.PDD_BIN=…` and `-c shell_environment_policy.set.PDD_AGENT_SESSION="1"` for this launch only, so its commands keep both values when the Codex profile sets `inherit = "core"` or `"none"`. pdd does not change Codex settings. Limit: a `shell_environment_policy.include_only` list that leaves out a name still removes it.
 - Workflow chats have no overall time limit. `pdd workflow prove` limits each phase to 10 minutes by default; remote lint has a caller wait limit. You can close the workflow-start terminal at any time.
-The pdd CLI has no merge command. In manual workflows, ask your agent to merge under [RUNBOOK §2](../RUNBOOK.md#2-the-files). In Autopilot `auto` mode, the [core engine](#core-engine) merges a PR only after its merge check passes; required human approvals still apply.
+The pdd CLI has no merge command. In manual workflows, ask your agent to merge under [RUNBOOK §2](../skills/pdd-prompting/runbook/files-and-runtime-block.md#2-the-files). In Autopilot `auto` mode, the [core engine](#core-engine) merges a PR only after its merge check passes; required human approvals still apply.
 
 `pdd workflow run bug 2544 --draft` saves draft PR publication before starting the
 chat. The saved Boolean applies to PR 1 and the separately approved code PR, or
@@ -1163,7 +1163,7 @@ file, with complete `entries`, `calls`, `resources`, `limits` and `conventions`.
 Authored `draft_gaps` and malformed inferred schemas also produce questions and a
 next step on the first invocation. Repeating the command keeps those questions
 stable.
-Use the resource declarations in [RUNBOOK §21](../RUNBOOK.md#21-fake-the-outside-world)
+Use the resource declarations in [RUNBOOK §21](../skills/pdd-prompting/runbook/cli-and-ports.md#21-fake-the-outside-world)
 for file, network and program ports. Then run:
 
 ```sh
@@ -1375,7 +1375,7 @@ Each tick, without AI calls:
    Story, the verdict first and the Story file path first in the parentheses
    (`Runtime: PASS (STORY, N/N checks)`, `Runtime: FAIL (STORY, N of M checks failed:
    STEPS)` or `Runtime: not run (STORY: REASON)`), and one `Evidence:` line in the PR
-   body ([RUNBOOK §15, "Autopilot core jobs"](../RUNBOOK.md#autopilot-core-jobs)). A
+   body ([RUNBOOK §15, "Autopilot core jobs"](../skills/pdd-prompting/runbook/autopilot-and-checklists.md#autopilot-core-jobs)). A
    single line with no Story is valid only when the PR changes one Story or none. Two
    lines for the same Story are red. It writes no review verdict: only the
    fresh reviewer gives one. In `auto` and
