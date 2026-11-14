@@ -4202,7 +4202,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
   const rows = localRows(checked.rows);
   context.rows = rows;
   for (const row of rows) {
-    if (options['--step']) Object.assign(row, {diagnostic_subset:true,selected_steps:row.steps.map(step => step.step_id)});
+    if (options['--step']) Object.assign(row, {diagnostic_subset:true,selected_steps:row.refusals?.length ? options['--step'] : row.steps.map(step => step.step_id)});
     const test = selected.find(item => item.path === row.test);
     row.story_path = test?.storyPath;
     // A test that discovery cannot use (a conflict, unreadable, invalid or over the upload limit) is refused and never uploaded.
@@ -4251,7 +4251,8 @@ async function runBatch(context, cwd, words, options, setRelease) {
     if (!heading) throw new PreflightError(4, 'Story acceptance criteria heading is missing.');
     const tail = story.slice(heading.index + heading[0].length), next = /^##\s/m.exec(tail);
     const projectedStory = story.slice(0, heading.index + heading[0].length) + '\n\n' + criteria.map((item,index) => `${index + 1}. ${item.text}`).join('\n') + '\n\n' + (next ? tail.slice(next.index) : '');
-    return [{path:test.path,bytes:stringifyScenarioJson({...row.diagnostic_doc,criteria,steps:row.steps})},{path:test.storyPath,bytes:projectedStory}];
+    const exemptions = row.diagnostic_doc.check_exemptions;
+    return [{path:test.path,bytes:stringifyScenarioJson({...row.diagnostic_doc,criteria,steps:row.steps,...(Array.isArray(exemptions) ? {check_exemptions:exemptions.filter(item => used.has(item?.criterion_id))} : {})})},{path:test.storyPath,bytes:projectedStory}];
   } : undefined;
   try { capture = captureIndependent(root, rows, ports, {appMap:null,excludeFixtureProjects:words.length === 0,...(diagnosticPrepare ? {prepareSource:diagnosticPrepare} : {}),...(allowMissingInterfaces ? {allowMissingInterfaces:true} : {})}); }
   catch (error) { if (cache) await beginTestAttempts(cache, rows, null, options, origin); throw error; }

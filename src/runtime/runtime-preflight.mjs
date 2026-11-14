@@ -1041,11 +1041,13 @@ function checkTest(root, found, test, prompts, { allowMissingInterfaces = false,
     const available = doc.steps.map(step => step?.step_id).filter(id => typeof id === 'string');
     const unknown = selectedSteps.filter(id => !available.includes(id));
     if (unknown.length) return done(refusal('unknown-step', 'steps', `Unknown step ${unknown.join(', ')}. Available steps: ${available.join(', ')}.`), story);
-    const chosen = doc.steps.filter(step => selectedSteps.includes(step.step_id));
-    const omitted = doc.steps.some((step, index) => !selectedSteps.includes(step.step_id) && chosen.some(chosenStep => doc.steps.indexOf(chosenStep) > index));
-    if (omitted && (stringifyScenarioJson(chosen).includes('$step_result') || Object.keys(doc.initial_world ?? {}).length || Object.keys(doc.simulation ?? {}).length))
+    const chosen = doc.steps.filter(step => selectedSteps.includes(step?.step_id));
+    const omitted = doc.steps.some((step, index) => !selectedSteps.includes(step?.step_id) && chosen.some(chosenStep => doc.steps.indexOf(chosenStep) > index));
+    const omittedIds = new Set(doc.steps.filter(step => !selectedSteps.includes(step?.step_id)).map(step => step?.step_id));
+    const omittedReference = value => Array.isArray(value) ? value.some(omittedReference) : isObject(value) && ((isObject(value.$step_result) && omittedIds.has(value.$step_result.step_id)) || Object.values(value).some(omittedReference));
+    if (omittedReference(chosen) || (omitted && (Object.keys(doc.initial_world ?? {}).length || Object.keys(doc.simulation ?? {}).length)))
       return done(refusal('step-prerequisite', 'steps', 'Selected steps may depend on omitted predecessor steps; select the prerequisite steps.'), story);
-    const used = new Set(chosen.flatMap(step => (step.checks ?? []).map(check => check.criterion_id)));
+    const used = new Set(chosen.flatMap(step => Array.isArray(step.checks) ? step.checks.map(check => check?.criterion_id) : []));
     doc = { ...doc, steps: chosen, criteria: doc.criteria.filter(item => used.has(item.id)) };
     story = doc.criteria.map(item => item.text);
   }
