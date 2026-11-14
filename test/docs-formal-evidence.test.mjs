@@ -6,7 +6,7 @@ import {readFileSync} from 'node:fs';
 const read = path => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8').replace(/\s+/g, ' ');
 
 // #3139: following either public contract must give the same small-change readiness policy.
-for (const path of ['docs/replay-evidence.md', 'RUNBOOK.md', 'skills/pdd-prompting/RUNBOOK.md']) {
+for (const path of ['docs/replay-evidence.md', 'skills/pdd-prompting/runbook/autopilot-and-checklists.md']) {
   test(`${path} requires the one-PR small-change formal record and scoped docs exemption`, () => {
     const text = read(path);
     assert.match(text, /one-PR small-change[^.]*recorded formal result/i, path);
