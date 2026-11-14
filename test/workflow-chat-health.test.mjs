@@ -68,6 +68,11 @@ test('claude: every turn fails on a login error, so status says the chat cannot 
   assert.equal(json.group, 'waiting', 'the run is listed under "waiting for you"');
   assert.equal(json.words, "the chat cannot work: the agent's login failed");
   assert.deepEqual(json.chatProblem, { kind: 'login', agent: 'claude', until: null, message: DISABLED_KEY });
+  const saved = f.record();
+  saved.chats.at(-1).evidence = { kind: 'pane-exit' };
+  writeFileSync(join(f.git(f.source, 'rev-parse', '--path-format=absolute', '--git-common-dir'), 'pdd', 'runs', '17', 'status.json'), JSON.stringify(saved));
+  const versioned = await runStatus({ cwd: f.source, all: true, json: true }, f.ports);
+  assert.deepEqual(JSON.parse(versioned.message).runs[0].waiting, {kind:'chat_stopped', gate:null, question:null, reason:'unknown'});
   assertOnlyReads(f, before);
 });
 

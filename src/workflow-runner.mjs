@@ -5211,8 +5211,8 @@ function listJsonV1(run, item, chatStateValue, health) {
   let waiting = null;
   if (!ended(run)) {
     if (activeChatFailure(run)) waiting = {kind:'startup_failed', gate:null, question:null, reason:null};
-    else if (chatStateValue === 'stopped' || chatStateValue === 'cannot-work' && health?.kind === 'usage-limit') {
-      const reason = health?.kind === 'usage-limit' ? 'usage_limit' : chat?.evidence?.kind === 'pane-exit' ? 'exited' : 'unknown';
+    else if (chatStateValue === 'stopped' || chatStateValue === 'cannot-work') {
+      const reason = health?.kind === 'usage-limit' ? 'usage_limit' : chatStateValue === 'stopped' && chat?.evidence?.kind === 'pane-exit' ? 'exited' : 'unknown';
       waiting = {kind:'chat_stopped', gate:null, question:null, reason};
     } else if (question) waiting = {kind:'question', gate:null, question:question.text ?? null, reason:null};
     else if (!run.gate && run.state === 'running' && chatStateValue === 'blocked') waiting = {kind:'question', gate:null, question:null, reason:null};
