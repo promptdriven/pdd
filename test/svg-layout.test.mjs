@@ -276,3 +276,103 @@ test('apostrophes, fenced HTML controls, raw HTML containers and non-control pro
     'Warning: SVG layout game.prompt.md -> game.ui.svg: control "notes-body": prompt control absent from drawing.'
   ]);
 });
+
+test('multi-drawing prompts scope per-tab list items, subsections and interleaved images while keeping shared and gallery controls', t => {
+  const root = temp(t);
+  mkdirSync(join(root, 'prompts/phone'), { recursive: true });
+  mkdirSync(join(root, 'views'), { recursive: true });
+
+  const shell = '<g id="pocket-tabs"><g id="tab-now"><text>Now</text></g><g id="tab-agents"><text>Agents</text></g><g id="tab-workflows"><text>Workflows</text></g><g id="tab-machines"><text>Machines</text></g></g>';
+  const svgs = {
+    'views/phone-now__stacked.ui.svg': `<svg xmlns="http://www.w3.org/2000/svg">${shell}<g id="approve-gate"><text>Approve</text></g><g id="reply-agent"><text>Reply</text></g></svg>`,
+    'views/phone-agents__stacked.ui.svg': `<svg xmlns="http://www.w3.org/2000/svg">${shell}<g id="new-agent"><text>+ New Agent</text></g></svg>`,
+    'views/phone-workflows__stacked.ui.svg': `<svg xmlns="http://www.w3.org/2000/svg">${shell}<g id="start-run"><text>Start Run</text></g></svg>`,
+    'views/phone-machines__stacked.ui.svg': `<svg xmlns="http://www.w3.org/2000/svg">${shell}<g id="pair-machine"><text>Connect</text></g><g id="pause-login"><text>Pause</text></g></svg>`,
+  };
+  for (const [rel, content] of Object.entries(svgs)) writeFileSync(join(root, rel), content);
+
+  const phonePrompt = [
+    '# Pocket phone',
+    '',
+    '## Appearance',
+    '',
+    'Every tab renders bottom bar `pocket-tabs` with buttons `tab-now`, `tab-agents`, `tab-workflows`, and `tab-machines` labeled "Now", "Agents", "Workflows", and "Machines".',
+    '',
+    '1. **`Now` tab (`tab === "now"`):** Provide button "Reply" (`id="reply-agent"`) and button "Approve" (`id="approve-gate"`).',
+    '2. **`Agents` tab (`tab === "agents"`):** Provide button "+ New Agent" (`id="new-agent"`).',
+    '3. **`Workflows` tab (`tab === "workflows"`):** Provide button "Start Run" (`id="start-run"`).',
+    '4. **`Machines` tab (`tab === "machines"`):** Provide button "Connect" (`id="pair-machine"`) and button "Pause" (`id="pause-login"`).',
+    '',
+    '![Now](../../views/phone-now__stacked.ui.svg)',
+    '',
+    '![Agents](../../views/phone-agents__stacked.ui.svg)',
+    '',
+    '![Workflows](../../views/phone-workflows__stacked.ui.svg)',
+    '',
+    '![Machines](../../views/phone-machines__stacked.ui.svg)',
+    '',
+    '## Dependencies',
+    '',
+    '- [Now layout](../../views/phone-now__stacked.ui.svg): `#approve-gate` and `#reply-agent`.',
+    '- [Agents layout](../../views/phone-agents__stacked.ui.svg): `#new-agent`.',
+    '- [Workflows layout](../../views/phone-workflows__stacked.ui.svg): `#start-run`.',
+    '- [Machines layout](../../views/phone-machines__stacked.ui.svg): `#pair-machine` and `#pause-login`.',
+  ].join('\n');
+  writeFileSync(join(root, 'prompts/phone/phone.prompt.md'), phonePrompt);
+  const phoneFiles = ['prompts/phone/phone.prompt.md', ...Object.keys(svgs)];
+  assert.deepEqual(lintSvgLayouts({ root, files: phoneFiles }), []);
+
+  writeFileSync(join(root, 'views/phone-machines__stacked.ui.svg'), `<svg xmlns="http://www.w3.org/2000/svg">${shell}<g id="pause-login"><text>Pause</text></g></svg>`);
+  writeFileSync(join(root, 'views/phone-now__stacked.ui.svg'), '<svg xmlns="http://www.w3.org/2000/svg"><g id="pocket-tabs"><g id="tab-now"><text>Now</text></g><g id="tab-agents"><text>Agents</text></g><g id="tab-workflows"><text>Workflows</text></g></g><g id="approve-gate"><text>Approve</text></g><g id="reply-agent"><text>Reply</text></g></svg>');
+  assert.deepEqual(lintSvgLayouts({ root, files: phoneFiles }), [
+    'Warning: SVG layout prompts/phone/phone.prompt.md -> views/phone-machines__stacked.ui.svg: control "Connect": prompt control absent from drawing.',
+    'Warning: SVG layout prompts/phone/phone.prompt.md -> views/phone-machines__stacked.ui.svg: control "pair-machine": prompt control absent from drawing.',
+    'Warning: SVG layout prompts/phone/phone.prompt.md -> views/phone-now__stacked.ui.svg: control "Machines": prompt control absent from drawing.',
+    'Warning: SVG layout prompts/phone/phone.prompt.md -> views/phone-now__stacked.ui.svg: control "tab-machines": prompt control absent from drawing.',
+  ]);
+
+  const interleavedPrompt = [
+    '# Cart',
+    '',
+    '## Appearance',
+    '',
+    'Header keeps button "Help" (`id="help-btn"`).',
+    '',
+    '![Empty](../../views/cart--empty__stacked.ui.svg)',
+    '',
+    'Show button "Browse" (`id="browse-btn"`).',
+    '',
+    '### Filled',
+    '',
+    '![Filled](../../views/cart--filled__stacked.ui.svg)',
+    '',
+    'Show button "Checkout" (`id="checkout-btn"`).',
+  ].join('\n');
+  writeFileSync(join(root, 'prompts/phone/cart.prompt.md'), interleavedPrompt);
+  writeFileSync(join(root, 'views/cart--empty__stacked.ui.svg'), '<svg xmlns="http://www.w3.org/2000/svg"><g id="help-btn"><text>Help</text></g><g id="browse-btn"><text>Browse</text></g></svg>');
+  writeFileSync(join(root, 'views/cart--filled__stacked.ui.svg'), '<svg xmlns="http://www.w3.org/2000/svg"><g id="help-btn"><text>Help</text></g><g id="checkout-btn"><text>Checkout</text></g></svg>');
+  const cartFiles = ['prompts/phone/cart.prompt.md', 'views/cart--empty__stacked.ui.svg', 'views/cart--filled__stacked.ui.svg'];
+  assert.deepEqual(lintSvgLayouts({ root, files: cartFiles }), []);
+
+  const galleryPrompt = [
+    '# Board',
+    '',
+    '## Appearance',
+    '',
+    '![Split](../../views/board__split-pane.ui.svg)',
+    '',
+    '![Stacked](../../views/board__stacked.ui.svg)',
+    '',
+    'Provide button "New game" (`id="new-game"`).',
+    '',
+    '- **Split-pane layout:** Provide button "Hide sidebar" (`id="hide-sidebar"`).',
+  ].join('\n');
+  writeFileSync(join(root, 'prompts/phone/board.prompt.md'), galleryPrompt);
+  writeFileSync(join(root, 'views/board__split-pane.ui.svg'), '<svg xmlns="http://www.w3.org/2000/svg"><g id="new-game"><text>New game</text></g><g id="hide-sidebar"><text>Hide sidebar</text></g></svg>');
+  writeFileSync(join(root, 'views/board__stacked.ui.svg'), '<svg xmlns="http://www.w3.org/2000/svg"></svg>');
+  const boardFiles = ['prompts/phone/board.prompt.md', 'views/board__split-pane.ui.svg', 'views/board__stacked.ui.svg'];
+  assert.deepEqual(lintSvgLayouts({ root, files: boardFiles }), [
+    'Warning: SVG layout prompts/phone/board.prompt.md -> views/board__stacked.ui.svg: control "New game": prompt control absent from drawing.',
+    'Warning: SVG layout prompts/phone/board.prompt.md -> views/board__stacked.ui.svg: control "new-game": prompt control absent from drawing.',
+  ]);
+});

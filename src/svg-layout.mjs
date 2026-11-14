@@ -1,4 +1,4 @@
-// Generated from prompts/cli/svg-layout.prompt.md (sha256: f5b3070a312ff2d05e3dce96607e98d71a6bb46b5a0c28a45112054c75aa2adb).
+// Generated from prompts/cli/svg-layout.prompt.md (sha256: 2969078ae0e2067e53589bc5893ce851612af71025b9c1d590719f19b4aacc57).
 import { lstatSync, readFileSync } from 'node:fs';
 import { dirname, relative, resolve, sep } from 'node:path';
 import { lintScreenDesign } from './screen-design-check.mjs';
@@ -103,8 +103,8 @@ function partsOf(source) {
   if (stack.length || roots !== 1 || tokens.join('') !== source) throw Error('malformed SVG');
   return parts.map(part => ({ kind: part.kind, value: part.node ? part.node.text.replace(/\s+/g, ' ').trim() : part.value })).filter(part => part.value);
 }
-function links(text) {
-  const refs = new Map([...text.matchAll(/^\s*\[([^\]]+)\]:\s*<?([^\s>]+)>?/gm)].map(m => [normalize(m[1]), m[2]]));
+const refDefs = text => new Map([...text.matchAll(/^\s*\[([^\]]+)\]:\s*<?([^\s>]+)>?/gm)].map(m => [normalize(m[1]), m[2]]));
+function links(text, refs = refDefs(text)) {
   return [...new Set([
     ...[...text.matchAll(/!?\[[^\]]*\]\(\s*(?:<([^>]+)>|([^\s)]+))(?:\s+["'][^)]*)?\)/g)].map(m => m[1] || m[2]),
     ...[...text.matchAll(/!?\[([^\]]+)\]\[([^\]]*)\]/g)].map(m => refs.get(normalize(m[2] || m[1]))),
@@ -112,6 +112,143 @@ function links(text) {
   ].filter(value => value && !/^(?:[a-z][a-z\d+.-]*:|\/\/|#)/i.test(value) && /\.ui\.svg(?:#.*)?$/i.test(value)).map(value => value.split('#')[0]))];
 }
 const mentioned = (prose, value) => new RegExp(`(^|[^\\p{L}\\p{N}_])${escaped(normalize(value))}($|[^\\p{L}\\p{N}_])`, 'u').test(normalize(prose));
+const resolveDrawing = (root, prompt, link) => {
+  try { return relative(root, resolve(root, dirname(prompt), decodeURIComponent(link))).split(sep).join('/'); } catch { return link; }
+};
+
+function drawingTokenMap(drawings) {
+  const states = drawings.map(d => normalize(d.split('/').at(-1).replace(/\.ui\.svg$/i, '').split('__')[0]).split(/[-_\s]+/).filter(Boolean));
+  let prefix = 0;
+  while (states.every(words => words.length > prefix + 1 && words[prefix] === states[0][prefix])) prefix++;
+  const map = new Map();
+  const add = (token, drawing) => {
+    const clean = normalize(token);
+    if (!clean || /^\d+$/.test(clean)) return;
+    if (!map.has(clean)) map.set(clean, new Set());
+    map.get(clean).add(drawing);
+  };
+  drawings.forEach((drawing, idx) => {
+    const stem = drawing.split('/').at(-1).replace(/\.ui\.svg$/i, '');
+    const [state, mode] = stem.split('__');
+    const candidates = [stem, state, ...state.split('--'), ...(mode ? [mode, ...mode.split('--')] : [])];
+    if (prefix > 0) candidates.push(states[idx].slice(prefix).join('-'));
+    for (const candidate of candidates) { add(candidate, drawing); add(candidate.replace(/[-_]+/g, ' '), drawing); }
+  });
+  for (const [token, owners] of map) if (owners.size >= drawings.length) map.delete(token);
+  return map;
+}
+
+function matchTokens(label, tokenMap, total) {
+  if (!label) return null;
+  const spaced = label.replace(/[-_]+/g, ' '), matched = new Set();
+  for (const [token, owners] of tokenMap) {
+    if (mentioned(label, token) || mentioned(spaced, token)) for (const drawing of owners) matched.add(drawing);
+  }
+  return matched.size > 0 && matched.size < total ? matched : null;
+}
+
+function scopedSourcesByDrawing(source, root, prompt, drawings) {
+  const refs = refDefs(source), allowed = new Set(drawings), tokenMap = drawingTokenMap(drawings);
+  const linkedIn = text => {
+    const set = new Set(links(text, refs).map(link => resolveDrawing(root, prompt, link)).filter(d => allowed.has(d)));
+    return set.size > 0 && set.size < drawings.length ? set : null;
+  };
+  const isStandaloneImages = text => {
+    const stripped = text
+      .replace(/^\s*\[[^\]]+\]:\s*<?[^\s>]+>?\s*$/gm, '')
+      .replace(/!\[[^\]]*\]\(\s*(?:<[^>]+>|[^\s)]+)(?:\s+["'][^)]*)?\)/g, '')
+      .replace(/!\[[^\]]+\]\[[^\]]*\]/g, '')
+      .replace(/!\[[^\]]+\](?![\[(:])/g, '')
+      .trim();
+    return !stripped && links(text, refs).length > 0;
+  };
+  const listLead = line => {
+    const rest = line.replace(/^ {0,3}(?:[-*+]|\d+[.)])[ \t]+/, '');
+    let tick = false, quote = null;
+    for (let i = 0; i < Math.min(rest.length, 160); i++) {
+      const ch = rest[i];
+      if (ch === '`') { tick = !tick; continue; }
+      if (tick) continue;
+      if (quote) { if (ch === quote) quote = null; continue; }
+      if (ch === '"' || ch === "'") { quote = ch; continue; }
+      if (ch === ':' || ch === '—' || rest.slice(i, i + 4) === ' -- ') return rest.slice(0, i);
+    }
+    return '';
+  };
+  const lines = source.split('\n'), sections = [{ headings: [], blocks: [] }];
+  let i = 0;
+  const pushBlock = block => sections.at(-1).blocks.push(block);
+  while (i < lines.length) {
+    const line = lines[i];
+    if (/^[ \t]*$/.test(line)) { i++; continue; }
+    const fenceMatch = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+    if (fenceMatch) {
+      const marker = fenceMatch[1], start = i++;
+      while (i < lines.length && !new RegExp(`^ {0,3}${marker[0]}{${marker.length},}[ \\t]*$`).test(lines[i])) i++;
+      if (i < lines.length) i++;
+      pushBlock({ kind: 'fence', text: lines.slice(start, i).join('\n') });
+      continue;
+    }
+    const headingMatch = /^ {0,3}(#{1,6})[ \t]+(.*)$/.exec(line);
+    if (headingMatch) {
+      const level = headingMatch[1].length, title = headingMatch[2];
+      const prev = sections.at(-1).headings.filter(h => h.level < level);
+      const targets = linkedIn(line) ?? matchTokens(title, tokenMap, drawings.length);
+      sections.push({ headings: [...prev, { level, targets }], blocks: [{ kind: 'heading', text: line, ownTargets: targets }] });
+      i++;
+      continue;
+    }
+    const bulletMatch = /^( {0,3})(?:[-*+]|\d+[.)])[ \t]+/.exec(line);
+    if (bulletMatch) {
+      const baseIndent = bulletMatch[1].length, start = i++;
+      while (i < lines.length) {
+        const next = lines[i];
+        if (/^[ \t]*$/.test(next)) {
+          let peek = i + 1;
+          while (peek < lines.length && /^[ \t]*$/.test(lines[peek])) peek++;
+          if (peek < lines.length && !/^ {0,3}#{1,6}[ \t]+/.test(lines[peek]) && /^( *)/.exec(lines[peek])[1].length >= baseIndent + 2) {
+            i = peek; continue;
+          }
+          break;
+        }
+        if (/^ {0,3}(?:`{3,}|~{3,}|#{1,6}[ \t]+)/.test(next)) break;
+        const nextBullet = /^( {0,3})(?:[-*+]|\d+[.)])[ \t]+/.exec(next);
+        if (nextBullet && nextBullet[1].length <= baseIndent) break;
+        i++;
+      }
+      pushBlock({ kind: 'list', text: lines.slice(start, i).join('\n'), firstLine: line });
+      continue;
+    }
+    const start = i++;
+    while (i < lines.length && !/^[ \t]*$/.test(lines[i]) && !/^ {0,3}(?:`{3,}|~{3,}|#{1,6}[ \t]+|(?:[-*+]|\d+[.)])[ \t]+)/.test(lines[i])) i++;
+    pushBlock({ kind: 'para', text: lines.slice(start, i).join('\n') });
+  }
+  const scoped = new Map(drawings.map(d => [d, []]));
+  for (const section of sections) {
+    const sectionTargets = [...section.headings].reverse().find(h => h.targets)?.targets ?? null;
+    const standalone = section.blocks.map(b => b.kind === 'para' && isStandaloneImages(b.text));
+    const gallery = standalone.map((isImg, idx) => isImg && (idx > 0 && standalone[idx - 1] || idx + 1 < standalone.length && standalone[idx + 1]));
+    let imageScope = null;
+    for (let idx = 0; idx < section.blocks.length; idx++) {
+      const block = section.blocks[idx];
+      if (standalone[idx]) {
+        imageScope = gallery[idx] ? null : linkedIn(block.text);
+        continue;
+      }
+      let targets = null;
+      if (block.kind === 'heading') targets = block.ownTargets ?? sectionTargets;
+      else if (block.kind === 'list') {
+        const explicit = linkedIn(block.text) ?? matchTokens(listLead(block.firstLine), tokenMap, drawings.length);
+        if (explicit) { imageScope = null; targets = explicit; }
+        else targets = sectionTargets ?? imageScope;
+      } else {
+        targets = linkedIn(block.text) ?? sectionTargets ?? imageScope;
+      }
+      for (const drawing of drawings) if (!targets || targets.has(drawing)) scoped.get(drawing).push(block.text);
+    }
+  }
+  return new Map([...scoped].map(([d, chunks]) => [d, chunks.join('\n\n')]));
+}
 
 const VOID_HTML = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr']);
 const BLOCK_HTML = new Set(['address', 'article', 'aside', 'blockquote', 'br', 'dd', 'details', 'dialog', 'div', 'dl', 'dt', 'fieldset', 'figcaption', 'figure', 'footer', 'form', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'header', 'hgroup', 'hr', 'li', 'main', 'nav', 'ol', 'p', 'pre', 'section', 'summary', 'table', 'tbody', 'td', 'tfoot', 'th', 'thead', 'tr', 'ul']);
@@ -353,10 +490,10 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
     source = source.replace(/<details\b[^>]*>\s*<summary[^>]*>[^\n]*Runtime interface[^\n]*<\/summary>[\s\S]*?<\/details>/gi, '')
       .replace(/(^##+ Runtime interface[^\n]*\n)[\s\S]*?(?=^##+ |$(?![\s\S]))/gmi, '');
     const decodedSource = decodeHtml(source), drawings = [];
-    for (const link of links(source).sort()) {
-      let drawing;
-      try { drawing = relative(root, resolve(root, dirname(prompt), decodeURIComponent(link))).split(sep).join('/'); } catch { drawing = link; }
-      if (drawing && drawing !== '..' && !drawing.startsWith('../')) drawings.push(drawing);
+    const resolvedLinks = links(source).sort().map(link => resolveDrawing(root, prompt, link));
+    for (const drawing of resolvedLinks) if (drawing && drawing !== '..' && !drawing.startsWith('../')) drawings.push(drawing);
+    const scopedSources = drawings.length > 1 ? scopedSourcesByDrawing(source, root, prompt, drawings) : null;
+    for (const drawing of resolvedLinks) {
       let parts;
       try { parts = partsOf(safeRead(root, drawing)); } catch (error) { add(prompt, drawing, 'drawing', error.message); continue; }
       const appearance = source.match(/^##+ Appearance\b[^\n]*\n([\s\S]*?)(?=^##? |$(?![\s\S]))/m)?.[1] || '';
@@ -368,7 +505,7 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
           if (!declaration.test(source) && !appearance.includes(`\`${value}\``)) add(prompt, drawing, `region #${value}`, 'drawing region layout unspecified in prompt');
         }
       }
-      const controls = extractControls(source, parts);
+      const controls = extractControls(scopedSources?.get(drawing) ?? source, parts);
       for (const control of controls) if (!parts.some(part => normalize(part.value) === normalize(control))) add(prompt, drawing, `control "${control}"`, 'prompt control absent from drawing');
     }
     promptRecords.push({ path: prompt, prose: source, drawings });
