@@ -1,4 +1,4 @@
-// Generated from prompts/cli/metrics-command.prompt.md (sha256: 91fee8d3f0656b7e8c9b1bbbdd260b9b563029c85a85e2273cb47d6cb0736d3b).
+// Generated from prompts/cli/metrics-command.prompt.md (sha256: 370620d5487073dc9cc98242ba4977bab41e5d59e766e93b4b61aaa172806918).
 import {execFile as callback, spawnSync} from 'node:child_process';
 import {promisify} from 'node:util';
 import {readFile, writeFile, readdir} from 'node:fs/promises';
@@ -15,6 +15,26 @@ import {nativeGithubCounter} from './github-calls.mjs';
 // gh calls go to the GitHub call ledger of their repository; other programs run unchanged.
 const execFile = nativeGithubCounter(promisify(callback), {purpose:'other'});
 const iso = d => new Date(d).toISOString();
+const immutableIso = value => {
+  if (typeof value === 'number') return Number.isFinite(value) && value > 0 ? iso(value) : null;
+  if (typeof value === 'string' && value.trim()) {
+    const ms = Date.parse(value);
+    return Number.isFinite(ms) ? iso(ms) : null;
+  }
+  return null;
+};
+const validSha = sha => typeof sha === 'string' && /^[a-f0-9]{40}$/i.test(sha);
+const cleanEvidence = value => {
+  if (typeof value !== 'string' || !value) return undefined;
+  try {
+    const u = new URL(value);
+    if (u.protocol !== 'https:' || u.username || u.password || u.search) return undefined;
+    if (/^(?:localhost|127\.|10\.|192\.168\.|169\.254\.|172\.(?:1[6-9]|2[0-9]|3[01])\.|\[::1\])/i.test(u.hostname)) return undefined;
+    if (u.hash && !(u.hostname === 'github.com' && /^#(?:issuecomment|check-run)-[0-9]+$/.test(u.hash))) return undefined;
+    return value;
+  } catch { return undefined; }
+};
+const SKILL_NAMES = new Set(['small-change', 'bug', 'feature', 'no-behavior-change']);
 const output = (stream, text) => typeof stream === 'function' ? stream(text) : stream.write(text);
 function options(argv) {
   const out = {timezone:'UTC'}, args = [...argv];
@@ -81,11 +101,23 @@ async function historical({commonDir,repo}, observedAt) {
     const run = readRun(join(commonDir,'pdd','runs',name));
     if (!run || run.repo?.toLowerCase() !== repo || !run.runId) continue;
     if (Array.isArray(run.metrics?.events)) events.push(...run.metrics.events);
+    const fixedRunAt = immutableIso(run.createdAt ?? run.startedAt ?? run.metrics?.events?.[0]?.at);
+    const doneTimes = Object.values(run.done ?? {}).map(d => immutableIso(d?.at)).filter(Boolean).sort();
+    const earliestDoneAt = doneTimes[0] ?? null;
+    if (SKILL_NAMES.has(run.workflow)) {
+      if (fixedRunAt) {
+        events.push({schema:'pdd.metrics.event.v1',id:`run:${run.runId}:skill:${run.workflow}`,repo,issue:run.number,type:'milestone',at:fixedRunAt,observedAt:observedAt ?? fixedRunAt,source:`legacy:${repo}`,attempt:run.runId,data:{stage:'skill',reason:run.workflow}});
+      } else if (earliestDoneAt) {
+        events.push({schema:'pdd.metrics.event.v1',id:`run:${run.runId}:skill:${run.workflow}:${earliestDoneAt}`,repo,issue:run.number,type:'milestone',at:earliestDoneAt,observedAt:observedAt ?? earliestDoneAt,source:`legacy:${repo}`,attempt:run.runId,data:{stage:'skill',reason:run.workflow}});
+      }
+    }
     for (const pr of run.pr ?? []) {
       if (!Number.isSafeInteger(pr.number) || pr.number < 1 || !observedAt) continue;
       const area = (run.areas ?? []).find(a => a.name === pr.stage);
       const stage = area?.then === 'ask-code' ? 'prompt-pr' : (area?.name === 'code' || run.workflow === 'small-change') ? 'code-pr' : 'pr-mapped';
-      events.push({schema:'pdd.metrics.event.v1',id:`run:${run.runId}:pr:${pr.number}`,repo,issue:run.number,type:'milestone',at:observedAt,observedAt,source:`legacy:${repo}`,attempt:run.runId,data:{stage,pr:pr.number}});
+      const prAt = immutableIso(pr.createdAt ?? pr.at) ?? fixedRunAt ?? earliestDoneAt;
+      const effectiveAt = prAt ?? observedAt;
+      events.push({schema:'pdd.metrics.event.v1',id:`run:${run.runId}:pr:${pr.number}:${stage}:${effectiveAt}`,repo,issue:run.number,type:'milestone',at:effectiveAt,observedAt,source:`legacy:${repo}`,attempt:run.runId,data:{stage,pr:pr.number}});
     }
     if (run.metrics?.coverageGap && Number.isFinite(run.metrics.coverageGapAt)) {
       const at = iso(run.metrics.coverageGapAt);
@@ -94,8 +126,8 @@ async function historical({commonDir,repo}, observedAt) {
     // Preserve only facts with saved event times.
     for (const [step, item] of Object.entries(run.done ?? {})) {
       if (!item?.at || !Number.isFinite(new Date(item.at).getTime())) continue;
-      const observedAt = iso(item.at);
-      const fallback = backfillRun({run:{...run,done:{[step]:item}},source:`legacy:${repo}`,observedAt,idPrefix:`run:${run.runId}`});
+      const savedObservedAt = iso(item.at);
+      const fallback = backfillRun({run:{...run,done:{[step]:item}},source:`legacy:${repo}`,observedAt:savedObservedAt,idPrefix:`run:${run.runId}`});
       events.push(...fallback.filter(fact => !(Array.isArray(run.metrics?.events) ? run.metrics.events : []).some(e => e?.schema === fact.schema && e.repo?.toLowerCase() === fact.repo && e.issue === fact.issue && e.attempt === fact.attempt && e.type === 'step' && e.data?.step === fact.data.step && e.data?.status === fact.data.status && Number.isFinite(Date.parse(e.at)) && Date.parse(e.at) === Date.parse(fact.at) && (!e.data.area || !fact.data.area || e.data.area === fact.data.area))));
     }
   }
@@ -135,34 +167,496 @@ function checkerSession(value) {
 function reviewer(check) {
   return `${check.family}:session-${Buffer.from(check.session).toString('base64url')}`;
 }
-async function githubFacts({repo, observedAt, events, cwd}) {
+
+function parseJsonList(stdout) {
+  const trimmed = String(stdout ?? '').trim();
+  if (!trimmed) return [];
+  try {
+    const parsed = JSON.parse(trimmed);
+    return Array.isArray(parsed) ? parsed : (parsed && typeof parsed === 'object' ? [parsed] : []);
+  } catch {
+    const items = [];
+    for (const line of trimmed.split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        const value = JSON.parse(line);
+        if (Array.isArray(value)) items.push(...value);
+        else if (value && typeof value === 'object') items.push(value);
+      } catch { /* skip non-JSON line */ }
+    }
+    return items;
+  }
+}
+
+function normalizeReceiptStatus(entry) {
+  if (entry == null) return null;
+  if (typeof entry === 'string') {
+    const v = entry.trim().toLowerCase();
+    if (['not-applicable', 'na', 'n/a', 'none', 'not-needed', 'not_applicable'].includes(v)) return 'not-applicable';
+    if (['done', 'pass', 'passed', 'proved', 'bounded', 'yes', 'true', 'ok'].includes(v)) return 'done';
+    if (['missed', 'fail', 'failed', 'blocked', 'no', 'false'].includes(v)) return 'missed';
+    if (v === 'unknown') return 'unknown';
+    return null;
+  }
+  if (typeof entry === 'object') {
+    if (entry.applies === false) return 'not-applicable';
+    if (entry.done === true) return 'done';
+    if (entry.done === false && entry.applies === true) return 'missed';
+    if (typeof entry.status === 'string') return normalizeReceiptStatus(entry.status);
+  }
+  return null;
+}
+
+function bareSkillFromLabels(labelNames) {
+  if (labelNames.includes('no-behavior-change')) return 'no-behavior-change';
+  if (labelNames.includes('small-change')) return 'small-change';
+  if (labelNames.includes('bug')) return 'bug';
+  if (labelNames.includes('feature')) return 'feature';
+  return null;
+}
+
+function hasExplicitPddMarker(text, labels = [], branchRef = '') {
+  const body = String(text ?? '');
+  const labelNames = (Array.isArray(labels) ? labels : [])
+    .map(l => (typeof l === 'string' ? l : String(l?.name ?? '')).trim().toLowerCase())
+    .filter(Boolean);
+  if (labelNames.some(n => n.startsWith('pdd:'))) return true;
+  if (/^pdd\//i.test(String(branchRef ?? '').trim())) return true;
+  if (/Made with `pdd workflow run (?:small-change|bug|feature|no-behavior-change)`/i.test(body)) return true;
+  if (/<!--\s*pdd[-:]/i.test(body)) return true;
+  if (/(?:^|\n)\s*(?:[-*]\s*)?(?:Skill|Workflow)\s*:\s*`?(?:small-change|bug|feature|no-behavior-change)`?(?:\s|$)/i.test(body)) return true;
+  if (/(?:^|\n)\s*(?:[-*]\s*)?(?:Prompt tests|Code replay|Formal check(?:\s*\(agent reported\))?|Replay and formal tests(?:\s*\(Autopilot's run\))?)\s*:/i.test(body)) return true;
+  if (/(?:^|\n)\s*(?:[-*]\s*)?Runtime(?:\s*\([^)]*\))?\s*:\s*(?:PASS|passed|FAIL|failed|missed|not applicable|n\/a|none|no line\b|not run\b|\d+\s+of\s+\d+\s+Stories\s+pass)/i.test(body)) return true;
+  if (/\b(?:vectors|formal)\s*=\s*(?:proved|bounded|pass|passed|done|fail|failed|missed|none|n\/a|not-applicable)\b/i.test(body)) return true;
+  for (const block of body.matchAll(/```(?:json)?\s*([\s\S]*?)```/g)) {
+    let parsed;
+    try { parsed = JSON.parse(block[1]); } catch { continue; }
+    if (!parsed || typeof parsed !== 'object') continue;
+    const jsonSkill = String(parsed.skill ?? parsed.workflow ?? '').trim().toLowerCase();
+    if (
+      SKILL_NAMES.has(jsonSkill)
+      || parsed.wouldMerge === true
+      || parsed.would_merge === true
+      || parsed.disposition === 'would-merge'
+      || (parsed.checks && typeof parsed.checks === 'object')
+      || (parsed.receipts && typeof parsed.receipts === 'object')
+    ) return true;
+  }
+  return false;
+}
+
+function parseReceiptMetadata(text, labels = [], { branchRef = '' } = {}) {
+  const body = String(text ?? '');
+  const labelNames = (Array.isArray(labels) ? labels : [])
+    .map(l => (typeof l === 'string' ? l : String(l?.name ?? '')).trim().toLowerCase())
+    .filter(Boolean);
+  const explicitPdd = hasExplicitPddMarker(body, labels, branchRef);
+  const emptyChecks = { runtime: null, vectors: null, formal: null, complete: null };
+  if (!explicitPdd) return { skill: null, wouldMerge: false, checks: emptyChecks };
+
+  let skill = null;
+  let wouldMerge = labelNames.includes('pdd:would-merge') || labelNames.includes('would-merge');
+  const checks = { ...emptyChecks };
+
+  if (labelNames.includes('pdd:no-behavior-change')) skill = 'no-behavior-change';
+  else if (labelNames.includes('pdd:small-change')) skill = 'small-change';
+  else if (labelNames.includes('pdd:bug')) skill = 'bug';
+  else if (labelNames.includes('pdd:feature')) skill = 'feature';
+  else skill = bareSkillFromLabels(labelNames);
+
+  for (const block of body.matchAll(/```(?:json)?\s*([\s\S]*?)```/g)) {
+    let parsed;
+    try { parsed = JSON.parse(block[1]); } catch { continue; }
+    if (!parsed || typeof parsed !== 'object') continue;
+    if (parsed.wouldMerge === true || parsed.would_merge === true || parsed.disposition === 'would-merge') wouldMerge = true;
+    const jsonSkill = String(parsed.skill ?? parsed.workflow ?? '').trim().toLowerCase();
+    if (SKILL_NAMES.has(jsonSkill)) skill = jsonSkill;
+    const checkSource = parsed.checks && typeof parsed.checks === 'object' ? parsed.checks
+      : parsed.receipts && typeof parsed.receipts === 'object' ? parsed.receipts
+      : null;
+    if (parsed.applies === false && (SKILL_NAMES.has(jsonSkill) || checkSource || parsed.wouldMerge != null)) skill = 'no-behavior-change';
+    if (checkSource) {
+      for (const key of ['runtime', 'vectors', 'formal', 'complete']) {
+        const status = normalizeReceiptStatus(checkSource[key]);
+        if (status) checks[key] = status;
+      }
+    }
+  }
+
+  if (/<!--\s*pdd:autopilot-core:would-merge:/i.test(body)) wouldMerge = true;
+
+  const hasAutopilotPathB = /(?:^|\n)\s*(?:[-*]\s*)?Path:\s*b\b/.test(body);
+  if (hasAutopilotPathB) {
+    skill = 'no-behavior-change';
+  } else {
+    const workflowMatch = /Made with `pdd workflow run (small-change|bug|feature|no-behavior-change)`/i.exec(body)
+      || /<!--\s*pdd[-:](?:workflow|skill|autopilot)[^>]*(small-change|bug|feature|no-behavior-change)/i.exec(body)
+      || /(?:^|\n)\s*(?:[-*]\s*)?(?:Skill|Workflow)\s*:\s*`?(small-change|bug|feature|no-behavior-change)`?(?:\s|$)/i.exec(body);
+    if (workflowMatch) skill = workflowMatch[1].toLowerCase();
+  }
+
+  if (!checks.runtime) {
+    if (hasAutopilotPathB || /(?:Prompt tests|Runtime(?:\s*\([^)]*\))?)\s*:\s*(?:not applicable|n\/a|none|no line\b|not run\s*\((?:no[- ]story|native-only|no prompt|docs))/i.test(body)) {
+      checks.runtime = 'not-applicable';
+    } else if (/(?:Prompt tests|Runtime(?:\s*\([^)]*\))?)\s*:[^\n]*\b(?:FAIL|failed|missed)\b/i.test(body)) {
+      checks.runtime = 'missed';
+    } else if (/(?:Prompt tests|Runtime(?:\s*\([^)]*\))?)\s*:[^\n]*\b(?:PASS|passed|\d+\s+of\s+\d+\s+Stories\s+pass)\b/i.test(body)) {
+      checks.runtime = 'done';
+    }
+  }
+  if (!checks.vectors) {
+    if (hasAutopilotPathB || /Replay and formal tests[^:\n]*:\s*none changed/i.test(body) || /Code replay:\s*NOT APPLICABLE/i.test(body) || /(?:Vectors?|Replay tests?)\s*:\s*(?:not applicable|n\/a|none)/i.test(body) || /\bvectors\s*=\s*(?:none|n\/a|not-applicable)\b/i.test(body)) {
+      checks.vectors = 'not-applicable';
+    } else if (/Code replay:\s*(?:FAIL|BLOCKED)\b/i.test(body) || /(?:Vectors?|Replay tests?[^:\n]*)\s*:\s*(?:FAIL|failed|missed)\b/i.test(body) || /\bvectors\s*=\s*(?:fail|failed|missed)\b/i.test(body)) {
+      checks.vectors = 'missed';
+    } else if (/Code replay:\s*PASS\b/i.test(body) || /(?:Vectors?|Replay tests?[^:\n]*)\s*:\s*(?:PASS|passed|done)\b/i.test(body) || /\bvectors\s*=\s*(?:pass|passed|done)\b/i.test(body)) {
+      checks.vectors = 'done';
+    }
+  }
+  if (!checks.formal) {
+    if (hasAutopilotPathB || /Replay and formal tests[^:\n]*:\s*none changed/i.test(body) || /Formal check:\s*not needed/i.test(body) || /(?:Formal(?:\s+tests?|\s+check)?)\s*:\s*(?:not applicable|not needed|n\/a|none)/i.test(body) || /\bformal\s*=\s*(?:none|n\/a|not-applicable)\b/i.test(body)) {
+      checks.formal = 'not-applicable';
+    } else if (/✗\s*Formal check failed/i.test(body) || /(?:Formal(?:\s+tests?[^:\n]*|\s+check)?)\s*:\s*(?:FAIL|failed|missed)\b/i.test(body) || /\bformal\s*=\s*(?:fail|failed|missed)\b/i.test(body)) {
+      checks.formal = 'missed';
+    } else if (/Formal check \(agent reported\):\s*recorded\s*—\s*(?:proved|bounded|pass)/i.test(body) || /(?:Formal(?:\s+tests?[^:\n]*|\s+check)?)\s*:\s*(?:PASS|passed|proved|bounded|done)\b/i.test(body) || /\bformal\s*=\s*(?:proved|bounded|pass|passed|done)\b/i.test(body)) {
+      checks.formal = 'done';
+    }
+  }
+  if (!checks.complete) {
+    if (/Complete\s*:\s*(?:not applicable|n\/a|none)/i.test(body)) checks.complete = 'not-applicable';
+    else if (/Complete\s*:\s*(?:FAIL|failed|missed)\b/i.test(body)) checks.complete = 'missed';
+    else if (/Complete\s*:\s*(?:PASS|passed|done)\b/i.test(body)) checks.complete = 'done';
+  }
+  if (skill === 'no-behavior-change') {
+    for (const key of ['runtime', 'vectors', 'formal', 'complete']) {
+      if (!checks[key]) checks[key] = 'not-applicable';
+    }
+  }
+
+  return { skill, wouldMerge, checks };
+}
+
+function extractPrIssueLinks(pull) {
+  const prNum = Number(pull?.number);
+  const title = String(pull?.title ?? '');
+  const body = String(pull?.body ?? '');
+  const text = `${title}\n${body}`;
+  const ref = String(pull?.head?.ref ?? '');
+  const closes = new Set();
+  const partOf = new Set();
+
+  for (const match of text.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#([1-9]\d*)\b/gi)) {
+    const n = Number(match[1]);
+    if (Number.isSafeInteger(n) && n !== prNum) closes.add(n);
+  }
+  const coreBranch = /^pdd\/core-([1-9]\d*)-/i.exec(ref);
+  if (coreBranch) {
+    const n = Number(coreBranch[1]);
+    if (Number.isSafeInteger(n) && n !== prNum) closes.add(n);
+  }
+  for (const match of text.matchAll(/\b(?:part of|refs?)\s+#([1-9]\d*)\b/gi)) {
+    const n = Number(match[1]);
+    if (Number.isSafeInteger(n) && n !== prNum && !closes.has(n)) partOf.add(n);
+  }
+  const workflowBranch = /^(?:pdd|feat|fix|bug|small-change)\/(?:issue-)?([1-9]\d*)(?:-|$)/i.exec(ref);
+  if (workflowBranch) {
+    const n = Number(workflowBranch[1]);
+    if (Number.isSafeInteger(n) && n !== prNum && !closes.has(n)) partOf.add(n);
+  }
+
+  const isPromptPr = closes.size === 0 && partOf.size > 0 && !/PR 2 of this run:\s*the code/i.test(body) && (
+    /<!--\s*pdd[-:]workflow:[^>]*prompt/i.test(body)
+    || /\bPR\s*1\b|\bprompt(?:\s+and\s+tests|\s+PR)\b/i.test(text)
+    || (/Made with `pdd workflow run (?:feature|bug)`/i.test(body) && /\bPart of\s+#[1-9]\d*\b/i.test(body))
+  );
+
+  if (isPromptPr) {
+    return { codeIssues: [], promptIssues: [...partOf] };
+  }
+  return { codeIssues: [...new Set([...closes, ...partOf])], promptIssues: [] };
+}
+
+function emitReceiptEvents({ facts, idPrefix, repo, issue, at, observedAt, pr = null, evidence = undefined, meta }) {
+  if (!at) return;
+  const common = {
+    ...(Number.isSafeInteger(pr) && pr > 0 ? { pr } : {}),
+    ...(evidence ? { evidence } : {}),
+  };
+  if (meta.skill && SKILL_NAMES.has(meta.skill)) {
+    facts.push({ schema: 'pdd.metrics.event.v1', id: `${idPrefix}:skill:${meta.skill}:${issue}`, repo, issue, type: 'milestone', at, observedAt, source: `github:${repo}`, data: { stage: 'skill', reason: meta.skill, ...(common.pr ? { pr: common.pr } : {}) } });
+  }
+  if (meta.wouldMerge) {
+    facts.push({ schema: 'pdd.metrics.event.v1', id: `${idPrefix}:wm:${issue}`, repo, issue, type: 'milestone', at, observedAt, source: `github:${repo}`, data: { stage: 'would-merge', ...common } });
+  }
+  for (const key of ['runtime', 'vectors', 'formal', 'complete']) {
+    const status = meta.checks[key];
+    if (!status) continue;
+    facts.push({ schema: 'pdd.metrics.event.v1', id: `${idPrefix}:receipt-${key}:${status}:${issue}`, repo, issue, type: 'milestone', at, observedAt, source: `github:${repo}`, data: { stage: `receipt-${key}`, status, ...(common.pr ? { pr: common.pr } : {}) } });
+  }
+}
+
+function createTrustChecker({ repo, trusted, read }) {
+  const lowerTrusted = new Set(trusted.map(x => String(x).toLowerCase()));
+  const cache = new Map();
+  return async ({ login, association } = {}) => {
+    const name = typeof login === 'string' ? login.trim() : '';
+    const lower = name.toLowerCase();
+    if (association === 'OWNER' || (lower && lowerTrusted.has(lower))) return true;
+    if (!name || !/^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/i.test(name)) return false;
+    if (association != null && !['MEMBER', 'COLLABORATOR'].includes(association)) return false;
+    if (cache.has(lower)) return cache.get(lower);
+    let ok = false;
+    try {
+      const permission = JSON.parse(await read(`repos/${repo}/collaborators/${name}/permission`));
+      ok = ['write', 'maintain', 'admin'].includes(permission?.permission);
+    } catch { ok = false; }
+    cache.set(lower, ok);
+    return ok;
+  };
+}
+
+// Discover PRs, labels, workflow/Autopilot issue notes, skills, check receipts and would-merge across all trusted repository users.
+export async function githubAllUserReceipts({ repo, observedAt, trusted = [], exec = execFile, isTrusted: suppliedTrust = null }) {
+  const readSingle = async path => (await exec('gh', ['api', path], { maxBuffer: 16 * 1024 * 1024 })).stdout;
+  const readPaged = async path => (await exec('gh', ['api', '--paginate', path], { maxBuffer: 16 * 1024 * 1024 })).stdout;
+  const isTrusted = suppliedTrust ?? createTrustChecker({ repo, trusted, read: readPaged });
+
+  const facts = [];
+  const discoveredPulls = new Map();
+  const mappings = new Map();
+  const codeMappings = new Set();
+  const pddIssuesWithPr = new Set();
+
+  try {
+    const pullsRaw = await readSingle(`repos/${repo}/pulls?state=all&sort=updated&direction=desc&per_page=100`);
+    for (const pull of parseJsonList(pullsRaw)) {
+      if (!pull || !Number.isSafeInteger(pull.number) || pull.number < 1) continue;
+      if (!pull.html_url && !pull.head?.sha && !pull.title && !pull.body) continue;
+      const authorTrusted = Boolean(pull.merged_at) || await isTrusted({ login: pull.user?.login, association: pull.author_association });
+      if (!authorTrusted) continue;
+
+      const { codeIssues, promptIssues } = extractPrIssueLinks(pull);
+      const linkedIssues = [...codeIssues, ...promptIssues];
+      if (!linkedIssues.length) continue;
+
+      discoveredPulls.set(pull.number, pull);
+      const prCreatedAt = immutableIso(pull.created_at);
+      const prHead = validSha(pull.head?.sha) ? pull.head.sha : undefined;
+      const prEvidence = cleanEvidence(pull.html_url);
+      const prText = `${pull.title ?? ''}\n${pull.body ?? ''}`;
+      const meta = parseReceiptMetadata(prText, pull.labels, { branchRef: pull.head?.ref });
+      if (!meta.skill && /^pdd\/small-change-/i.test(pull.head?.ref ?? '')) meta.skill = 'small-change';
+      const pullHasPdd = hasExplicitPddMarker(prText, pull.labels, pull.head?.ref);
+      const receiptPrefix = prHead ? `pull:${pull.number}:${prHead}` : `pull:${pull.number}`;
+
+      for (const issue of codeIssues) {
+        if (pullHasPdd) pddIssuesWithPr.add(issue);
+        codeMappings.add(`${pull.number}:${issue}`);
+        const set = mappings.get(pull.number) ?? new Set();
+        set.add(issue);
+        mappings.set(pull.number, set);
+        if (prCreatedAt) {
+          facts.push({
+            schema: 'pdd.metrics.event.v1',
+            id: prHead ? `gh-pr:${pull.number}:${prHead}:${issue}` : `gh-pr:${pull.number}:${issue}`,
+            repo,
+            issue,
+            type: 'milestone',
+            at: prCreatedAt,
+            observedAt,
+            source: `github:${repo}`,
+            data: { stage: 'code-pr', pr: pull.number, ...(prHead ? { head: prHead } : {}), ...(prEvidence ? { evidence: prEvidence } : {}) },
+          });
+          emitReceiptEvents({ facts, idPrefix: receiptPrefix, repo, issue, at: prCreatedAt, observedAt, pr: pull.number, evidence: prEvidence, meta });
+        }
+      }
+      for (const issue of promptIssues) {
+        if (pullHasPdd) pddIssuesWithPr.add(issue);
+        const set = mappings.get(pull.number) ?? new Set();
+        set.add(issue);
+        mappings.set(pull.number, set);
+        if (prCreatedAt) {
+          facts.push({
+            schema: 'pdd.metrics.event.v1',
+            id: prHead ? `gh-prompt-pr:${pull.number}:${prHead}:${issue}` : `gh-prompt-pr:${pull.number}:${issue}`,
+            repo,
+            issue,
+            type: 'milestone',
+            at: prCreatedAt,
+            observedAt,
+            source: `github:${repo}`,
+            data: { stage: 'prompt-pr', pr: pull.number, ...(prHead ? { head: prHead } : {}), ...(prEvidence ? { evidence: prEvidence } : {}) },
+          });
+          emitReceiptEvents({ facts, idPrefix: receiptPrefix, repo, issue, at: prCreatedAt, observedAt, pr: pull.number, evidence: prEvidence, meta });
+        }
+      }
+    }
+  } catch { /* Optional all-PR list endpoint unavailable on partial mock or restricted token. */ }
+
+  try {
+    const issuesRaw = await readSingle(`repos/${repo}/issues?state=all&sort=updated&direction=desc&per_page=100`);
+    for (const row of parseJsonList(issuesRaw)) {
+      if (!row || row.pull_request != null || !Number.isSafeInteger(row.number) || row.number < 1) continue;
+      if (!row.html_url && !row.state && !Array.isArray(row.labels)) continue;
+      const issue = row.number;
+      const labelNames = (Array.isArray(row.labels) ? row.labels : [])
+        .map(l => (typeof l === 'string' ? l : String(l?.name ?? '')).trim().toLowerCase())
+        .filter(Boolean);
+      const hasPddIssueLabel = labelNames.some(n => n.startsWith('pdd:'));
+      const hasIssuePddMarker = hasPddIssueLabel || hasExplicitPddMarker(row.body, row.labels);
+      const rowCreatedAt = immutableIso(row.created_at);
+      const rowEvidence = cleanEvidence(row.html_url);
+      const fallbackSkill = bareSkillFromLabels(labelNames);
+
+      if (hasIssuePddMarker && rowCreatedAt) {
+        const issueMeta = parseReceiptMetadata(row.body, row.labels);
+        const noteReason = labelNames.includes('pdd:would-merge') ? 'would-merge'
+          : labelNames.includes('pdd:needs-decision') ? 'needs-decision'
+          : labelNames.includes('pdd:working') ? 'working'
+          : 'observed';
+        facts.push({
+          schema: 'pdd.metrics.event.v1',
+          id: `gh-issue:${issue}:note:${noteReason}`,
+          repo,
+          issue,
+          type: 'milestone',
+          at: rowCreatedAt,
+          observedAt,
+          source: `github:${repo}`,
+          data: { stage: 'autopilot-note', reason: noteReason, ...(rowEvidence ? { evidence: rowEvidence } : {}) },
+        });
+        emitReceiptEvents({ facts, idPrefix: `gh-issue:${issue}`, repo, issue, at: rowCreatedAt, observedAt, evidence: rowEvidence, meta: issueMeta });
+      } else if (pddIssuesWithPr.has(issue) && rowCreatedAt && fallbackSkill) {
+        emitReceiptEvents({
+          facts,
+          idPrefix: `gh-issue:${issue}`,
+          repo,
+          issue,
+          at: rowCreatedAt,
+          observedAt,
+          evidence: rowEvidence,
+          meta: { skill: fallbackSkill, wouldMerge: false, checks: { runtime: null, vectors: null, formal: null, complete: null } },
+        });
+      }
+
+      if (Number(row.comments) > 0 && hasIssuePddMarker) {
+        try {
+          const { stdout: cText } = await exec('gh', ['api', '--paginate', `repos/${repo}/issues/${issue}/comments?per_page=100`, '--jq', '.[] | {id,body,html_url,created_at,author_association,user}'], { maxBuffer: 16 * 1024 * 1024 });
+          for (const comment of parseJsonList(cText)) {
+            if (!comment || !comment.id || !(await isTrusted({ login: comment.user?.login, association: comment.author_association }))) continue;
+            const cBody = String(comment.body ?? '');
+            const cAt = immutableIso(comment.created_at);
+            if (!cAt) continue;
+            const autopilotTag = /<!--\s*pdd:autopilot-core:(merge|would-merge|end|question|review):/i.exec(cBody)?.[1]?.toLowerCase() ?? null;
+            const cMeta = parseReceiptMetadata(cBody, []);
+            const hasStructuredPdd = Boolean(autopilotTag || cMeta.skill || cMeta.wouldMerge || Object.values(cMeta.checks).some(Boolean));
+            if (!hasStructuredPdd) continue;
+            const cEvidence = cleanEvidence(comment.html_url);
+            const reason = autopilotTag || 'receipt';
+            facts.push({
+              schema: 'pdd.metrics.event.v1',
+              id: `gh-issue-comment:${comment.id}:${reason}:${issue}`,
+              repo,
+              issue,
+              type: 'milestone',
+              at: cAt,
+              observedAt,
+              source: `github:${repo}`,
+              data: { stage: 'autopilot-note', reason, ...(cEvidence ? { evidence: cEvidence } : {}) },
+            });
+            emitReceiptEvents({ facts, idPrefix: `gh-issue-comment:${comment.id}`, repo, issue, at: cAt, observedAt, evidence: cEvidence, meta: { ...cMeta, skill: cMeta.skill ?? fallbackSkill } });
+          }
+        } catch { /* Ignore unreadable issue comments. */ }
+      }
+    }
+  } catch { /* Optional all-issues list endpoint unavailable on partial mock or restricted token. */ }
+
+  return { facts, mappings, codeMappings, discoveredPulls };
+}
+
+async function githubFacts({repo, observedAt, events, cwd, scope = null}) {
   let trusted = [];
   try { const config = JSON.parse(await readFile(join(cwd,'pdd.json'),'utf8')); trusted = Array.isArray(config.autopilot?.trust) ? config.autopilot.trust.filter(x => typeof x === 'string').map(x => x.toLowerCase()) : []; } catch { /* No explicit trusted people. */ }
+  const read = async path => (await execFile('gh',['api','--paginate',path],{maxBuffer:16*1024*1024})).stdout;
+  const isTrusted = createTrustChecker({ repo, trusted, read });
+
   const mappings = new Map(), codeMappings = new Set();
   for (const e of events) if (e.type === 'milestone' && e.data?.pr) {
     if (e.data.stage === 'code-pr' || e.data.stage === 'implementation-ready') codeMappings.add(`${e.data.pr}:${e.issue}`);
     const issues = mappings.get(e.data.pr) ?? new Set(); issues.add(e.issue); mappings.set(e.data.pr,issues);
   }
-  const facts = [];
+  const localMappings = new Set(mappings.keys());
+
+  const discovered = await githubAllUserReceipts({ repo, observedAt, trusted, exec: execFile, isTrusted });
+  const facts = [...discovered.facts];
+  for (const [pr, issues] of discovered.mappings) {
+    const set = mappings.get(pr) ?? new Set();
+    for (const issue of issues) set.add(issue);
+    mappings.set(pr, set);
+  }
+  for (const codeKey of discovered.codeMappings) codeMappings.add(codeKey);
+
   for (const [pr,issues] of mappings) {
     try {
-    const read = async path => (await execFile('gh',['api','--paginate',path],{maxBuffer:16*1024*1024})).stdout;
-    const pull = JSON.parse(await read(`repos/${repo}/pulls/${pr}`));
-    if (pull.merged_at && pull.html_url && pull.head?.sha) for (const issue of issues) if (codeMappings.has(`${pr}:${issue}`)) facts.push({schema:'pdd.metrics.event.v1',id:`merge:${pr}:${issue}`,repo,issue,type:'delivery',at:iso(pull.merged_at),observedAt,source:`github:${repo}`,data:{pr,head:pull.head.sha,explicit:true,evidence:pull.html_url}});
-    if (pull.head?.sha && /^[a-f0-9]{40}$/i.test(pull.head.sha)) for (const issue of issues) if (codeMappings.has(`${pr}:${issue}`)) facts.push({schema:'pdd.metrics.event.v1',id:`head:${pr}:${pull.head.sha}:${observedAt}:${issue}`,repo,issue,type:'milestone',at:observedAt,observedAt,source:`github:${repo}`,data:{stage:'candidate-head',pr,head:pull.head.sha}});
+    const isLocalPr = localMappings.has(pr);
+    const prior = discovered.discoveredPulls.get(pr);
+    const priorClosed = Boolean(prior && (prior.state === 'closed' || prior.merged_at));
+
+    if (!isLocalPr && priorClosed && scope?.kind === 'activity' && scope.date) {
+      const priorMergedAt = immutableIso(prior.merged_at);
+      const priorEvidence = cleanEvidence(prior.html_url);
+      if (priorMergedAt && priorEvidence && validSha(prior.head?.sha)) {
+        for (const issue of issues) if (codeMappings.has(`${pr}:${issue}`)) facts.push({schema:'pdd.metrics.event.v1',id:`merge:${pr}:${issue}`,repo,issue,type:'delivery',at:priorMergedAt,observedAt,source:`github:${repo}`,data:{pr,head:prior.head.sha,explicit:true,evidence:priorEvidence}});
+      }
+      const lastUpdatedMs = Date.parse(prior.updated_at || prior.merged_at || prior.created_at || '');
+      const scopeStartMs = Date.parse(`${scope.date}T00:00:00Z`) - 86400000;
+      if (Number.isFinite(lastUpdatedMs) && lastUpdatedMs < scopeStartMs) continue;
+    }
+
+    let pull;
+    if (!isLocalPr && priorClosed) {
+      pull = prior;
+    } else {
+      try {
+        const fetched = JSON.parse(await read(`repos/${repo}/pulls/${pr}`));
+        pull = prior && !fetched.head?.sha && !fetched.merged_at ? prior : { ...(prior ?? {}), ...fetched };
+      } catch (err) {
+        if (prior) pull = prior;
+        else throw err;
+      }
+    }
+    const pullEvidence = cleanEvidence(pull.html_url);
+    const mergedAt = immutableIso(pull.merged_at);
+    const isClosedOrMerged = pull.state === 'closed' || Boolean(mergedAt);
+    const shouldPollLiveHead = isLocalPr || !isClosedOrMerged;
+    if (mergedAt && pullEvidence && validSha(pull.head?.sha)) for (const issue of issues) if (codeMappings.has(`${pr}:${issue}`)) facts.push({schema:'pdd.metrics.event.v1',id:`merge:${pr}:${issue}`,repo,issue,type:'delivery',at:mergedAt,observedAt,source:`github:${repo}`,data:{pr,head:pull.head.sha,explicit:true,evidence:pullEvidence}});
+    if (shouldPollLiveHead && validSha(pull.head?.sha)) for (const issue of issues) if (codeMappings.has(`${pr}:${issue}`)) facts.push({schema:'pdd.metrics.event.v1',id:`head:${pr}:${pull.head.sha}:${observedAt}:${issue}`,repo,issue,type:'milestone',at:observedAt,observedAt,source:`github:${repo}`,data:{stage:'candidate-head',pr,head:pull.head.sha}});
+    const prCreatedAt = immutableIso(pull.created_at);
+    if (!prior && prCreatedAt && (pull.body || pull.title || Array.isArray(pull.labels))) {
+      const prMeta = parseReceiptMetadata(`${pull.title ?? ''}\n${pull.body ?? ''}`, pull.labels, { branchRef: pull.head?.ref });
+      const prHead = validSha(pull.head?.sha) ? pull.head.sha : undefined;
+      const receiptPrefix = prHead ? `pull:${pr}:${prHead}` : `pull:${pr}`;
+      for (const issue of issues) emitReceiptEvents({ facts, idPrefix: receiptPrefix, repo, issue, at: prCreatedAt, observedAt, pr, evidence: pullEvidence, meta: prMeta });
+    }
     const {stdout: text} = await execFile('gh',['api','--paginate',`repos/${repo}/issues/${pr}/comments?per_page=100`,'--jq','.[] | {id,body,html_url,created_at,author_association,user}'],{maxBuffer:16*1024*1024});
-    const comments = text.trim() ? text.trim().split('\n').map(line => JSON.parse(line)) : [];
+    const comments = parseJsonList(text);
     const checks = [], allowed = new Set();
     for (const comment of comments) {
-      const login = comment.user?.login;
-      if (comment.author_association === 'OWNER' || (typeof login === 'string' && trusted.includes(login.toLowerCase()))) { allowed.add(comment); continue; }
-      if (!['MEMBER','COLLABORATOR'].includes(comment.author_association) || typeof login !== 'string' || !/^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/i.test(login)) continue;
-      try { const permission = JSON.parse(await read(`repos/${repo}/collaborators/${login}/permission`)); if (['write','maintain','admin'].includes(permission.permission)) allowed.add(comment); } catch { /* Unknown trust cannot establish acceptance. */ }
+      if (await isTrusted({ login: comment.user?.login, association: comment.author_association })) allowed.add(comment);
     }
-    for (const comment of comments.filter(comment => allowed.has(comment))) for (const block of String(comment.body ?? '').matchAll(/```(?:json)?\s*([\s\S]*?)```/g)) {
-      let check; try {check = JSON.parse(block[1]);} catch {continue;}
-      if (!['PASS','FAIL','NOT SURE'].includes(check.verdict) || !/^[a-f0-9]{40}$/i.test(check.head ?? '') || !Number.isInteger(check.risk) || check.risk < 1 || check.risk > 5 || !/^[a-z0-9_-]+$/i.test(check.family ?? '') || !checkerSession(check.session) || !['same-family','different-family'].includes(check.checker_mode) || !substantiveEvidence(check.evidence) || !comment.html_url || !comment.created_at) continue;
-      checks.push({check,comment,isTrusted:true});
+    for (const comment of comments.filter(comment => allowed.has(comment))) {
+      const commentBody = String(comment.body ?? '');
+      const commentMeta = parseReceiptMetadata(commentBody, []);
+      const cAt = immutableIso(comment.created_at);
+      if (comment.id && cAt && (commentMeta.skill || commentMeta.wouldMerge || Object.values(commentMeta.checks).some(Boolean))) {
+        const cEvidence = cleanEvidence(comment.html_url);
+        for (const issue of issues) emitReceiptEvents({ facts, idPrefix: `pr-comment:${comment.id}`, repo, issue, at: cAt, observedAt, pr, evidence: cEvidence, meta: commentMeta });
+      }
+      for (const block of commentBody.matchAll(/```(?:json)?\s*([\s\S]*?)```/g)) {
+        let check; try {check = JSON.parse(block[1]);} catch {continue;}
+        if (!['PASS','FAIL','NOT SURE'].includes(check.verdict) || !/^[a-f0-9]{40}$/i.test(check.head ?? '') || !Number.isInteger(check.risk) || check.risk < 1 || check.risk > 5 || !/^[a-z0-9_-]+$/i.test(check.family ?? '') || !checkerSession(check.session) || !['same-family','different-family'].includes(check.checker_mode) || !substantiveEvidence(check.evidence) || !comment.html_url || !comment.created_at) continue;
+        checks.push({check,comment,isTrusted:true});
+      }
     }
     let sensitive = null;
     if (checks.length) try {
@@ -172,12 +666,12 @@ async function githubFacts({repo, observedAt, events, cwd}) {
     const current = checks.filter(x => x.isTrusted && x.check.head === pull.head?.sha);
     const split = new Set(current.map(x => x.check.verdict)).size > 1;
     let suiteGreen = false;
-    if (pull.head?.sha) {
+    if (shouldPollLiveHead && pull.head?.sha) {
       let runs;
       try { const result = JSON.parse(await read(`repos/${repo}/commits/${pull.head.sha}/check-runs?per_page=100`)); runs = Array.isArray(result.check_runs) ? result.check_runs.filter(run => run.head_sha === pull.head.sha) : null; } catch { runs = null; }
       suiteGreen = Boolean(runs?.some(run => /^(?:full suite|full test suite)$/i.test(run.name ?? '') && run.status === 'completed' && run.conclusion === 'success'));
-      const observations = runs?.length ? runs.map(run => ({key:String(run.id ?? createHash('sha256').update(String(run.name ?? '') + '\0' + String(run.html_url ?? '')).digest('hex')), status: run.status === 'completed' ? (run.conclusion === 'success' ? 'passed' : ['failure','timed_out','action_required','startup_failure'].includes(run.conclusion) ? 'failed' : 'unknown') : 'unknown', evidence: run.html_url, reason: run.name})) : [{key:'none',status: runs ? 'missing' : 'unknown'}];
-      for (const [index, observation] of observations.entries()) for (const issue of issues) facts.push({schema:'pdd.metrics.event.v1',id:`ci:${pr}:${pull.head.sha}:${observation.key}:${issue}:${observation.status}`,repo,issue,type:'ci',at:observedAt,observedAt,source:`github:${repo}`,data:{pr,head:pull.head.sha,...Object.fromEntries(Object.entries(observation).filter(([k,v]) => k !== 'key' && v !== undefined))}});
+      const observations = runs?.length ? runs.map(run => ({key:String(run.id ?? createHash('sha256').update(String(run.name ?? '') + '\0' + String(run.html_url ?? '')).digest('hex')), status: run.status === 'completed' ? (run.conclusion === 'success' ? 'passed' : ['failure','timed_out','action_required','startup_failure'].includes(run.conclusion) ? 'failed' : 'unknown') : 'unknown', evidence: cleanEvidence(run.html_url), reason: run.name})) : [{key:'none',status: runs ? 'missing' : 'unknown'}];
+      for (const observation of observations) for (const issue of issues) facts.push({schema:'pdd.metrics.event.v1',id:`ci:${pr}:${pull.head.sha}:${observation.key}:${issue}:${observation.status}`,repo,issue,type:'ci',at:observedAt,observedAt,source:`github:${repo}`,data:{pr,head:pull.head.sha,...Object.fromEntries(Object.entries(observation).filter(([k,v]) => k !== 'key' && v !== undefined))}});
     }
     const patchId = head => {
       const diff = spawnSync('git',['show','--format=','--binary',head],{cwd,maxBuffer:32*1024*1024});
@@ -185,14 +679,16 @@ async function githubFacts({repo, observedAt, events, cwd}) {
       const patch = spawnSync('git',['patch-id','--stable'],{cwd,input:diff.stdout});
       return patch.status === 0 ? String(patch.stdout).trim().split(/\s+/)[0] || null : null;
     };
-    for (const {check,comment,isTrusted} of checks) {
+    for (const {check,comment,isTrusted: checkTrusted} of checks) {
       const secondNeeded = check.risk >= 4 || split || sensitive === true;
       const second = current.some(x => x !== undefined && x.check !== check && x.check.verdict === check.verdict && x.check.session !== check.session && (x.check.family.toLowerCase() !== check.family.toLowerCase() || (x.check.checker_mode === 'same-family' && check.checker_mode === 'same-family')));
-      const accepted = isTrusted && check.head === pull.head?.sha && sensitive !== null && (!secondNeeded || second);
-      for (const issue of issues) facts.push({schema:'pdd.metrics.event.v1',id:`check:${comment.id}:${issue}`,repo,issue,type:'check',at:iso(comment.created_at),observedAt,source:`github:${repo}`,data:{pr,head:check.head,verdict:check.verdict,reviewer:reviewer(check),checkerFamily:check.family,checkerMode:check.checker_mode,evidence:comment.html_url,acceptance:accepted ? 'accepted' : 'unknown'}});
-      if (isTrusted && check.verdict === 'PASS' && check.head !== pull.head?.sha && suiteGreen && sensitive === false && check.risk < 4 && !split) {
+      const accepted = checkTrusted && check.head === pull.head?.sha && sensitive !== null && (!secondNeeded || second);
+      const commentEvidence = cleanEvidence(comment.html_url);
+      if (!commentEvidence) continue;
+      for (const issue of issues) facts.push({schema:'pdd.metrics.event.v1',id:`check:${comment.id}:${issue}`,repo,issue,type:'check',at:iso(comment.created_at),observedAt,source:`github:${repo}`,data:{pr,head:check.head,verdict:check.verdict,reviewer:reviewer(check),checkerFamily:check.family,checkerMode:check.checker_mode,evidence:commentEvidence,acceptance:accepted ? 'accepted' : 'unknown'}});
+      if (checkTrusted && check.verdict === 'PASS' && check.head !== pull.head?.sha && suiteGreen && sensitive === false && check.risk < 4 && !split) {
         const oldId = patchId(check.head), newId = patchId(pull.head.sha);
-        if (oldId && oldId === newId) for (const issue of issues) facts.push({schema:'pdd.metrics.event.v1',id:`equivalent:${comment.id}:${pull.head.sha}:${issue}`,repo,issue,type:'check',at:observedAt,observedAt,source:`github:${repo}`,data:{pr,head:pull.head.sha,verdict:'PASS',reviewer:reviewer(check),checkerFamily:check.family,checkerMode:check.checker_mode,evidence:comment.html_url,acceptance:'equivalent'}});
+        if (oldId && oldId === newId) for (const issue of issues) facts.push({schema:'pdd.metrics.event.v1',id:`equivalent:${comment.id}:${pull.head.sha}:${issue}`,repo,issue,type:'check',at:observedAt,observedAt,source:`github:${repo}`,data:{pr,head:pull.head.sha,verdict:'PASS',reviewer:reviewer(check),checkerFamily:check.family,checkerMode:check.checker_mode,evidence:commentEvidence,acceptance:'equivalent'}});
       }
     }
     } catch {
@@ -209,6 +705,16 @@ function render(report) {
   const fraction = (name, value) => lines.push(`${name}: ${value.numerator}/${value.denominator} (${value.percentage == null ? 'n/a' : `${value.percentage}%`}; unknown: ${value.unknown}; denominator unknown: ${value.denominatorUnknown ?? 0}; issues: ${(value.issues ?? []).map(i => `#${i}`).join(', ') || 'none'})`);
   for (const [name, value] of Object.entries(report.stages ?? {})) fraction(`Stage ${name}`, value);
   for (const [name, value] of Object.entries(report.transitions ?? {})) fraction(`Transition ${name}`, value);
+  if (report.bySkill) {
+    lines.push('Skill | Issues | M/WM (Conv%) | PR | Runs | Runtime | Vectors | Formal | Complete');
+    const fmtConv = row => `${row.merged}/${row.wouldMerge} (${row.conversionPct == null ? 'n/a' : `${Number(row.conversionPct.toFixed(1))}%`})`;
+    const fmtCheck = c => `${c.done}/${c.applies}${c.unknown ? ` (?${c.unknown})` : ''}`;
+    for (const skill of ['small-change', 'bug', 'feature', 'no-behavior-change', 'all']) {
+      const row = report.bySkill[skill];
+      if (!row) continue;
+      lines.push(`${skill} | ${row.issues} | ${fmtConv(row)} | ${row.pr} | ${row.runs} | ${fmtCheck(row.checks.runtime)} | ${fmtCheck(row.checks.vectors)} | ${fmtCheck(row.checks.formal)} | ${fmtCheck(row.checks.complete)}`);
+    }
+  }
   if (report.activity === null) lines.push('Daily activity: use --date YYYY-MM-DD');
   for (const [name, group] of Object.entries(report.activity ?? {})) lines.push(`Activity ${name}: ${group.count} ${(group.issues ?? []).map(i => `#${i}`).join(', ')}`);
   if (report.selectorObservation) lines.push(`Selector observation ${report.selectorObservation.snapshotId} at ${report.selectorObservation.observedAt}: ${report.selectorObservation.limit}`);
@@ -263,7 +769,7 @@ export async function runMetrics({argv = [], cwd = process.cwd(), stdout = proce
       selectorSnapshot = queue.selectorSnapshot;
       events.push(...queue.events); await store.appendEvents({root,events:queue.events}); scope = {kind:'queue',snapshotId:queue.snapshotId};
     }
-    let facts; try { facts = await (ports.github ?? githubFacts)({repo,observedAt:now,cwd,events}); } catch { githubUnavailable = true; facts = githubGaps(repo,now,events); }
+    let facts; try { facts = await (ports.github ?? githubFacts)({repo,observedAt:now,cwd,events,scope}); } catch { githubUnavailable = true; facts = githubGaps(repo,now,events); }
     events.push(...facts); if (facts.length) await store.appendEvents({root,events:facts});
     const report = await (ports.calculate ?? calculateMetrics)({events,repo,scope,timezone:opt.timezone,observedAt:cutoff,sources:[...(saved.sources ?? []), ...[...new Set(events.map(e=>e.source))].filter(source => !(saved.sources ?? []).some(s => (typeof s === 'string' ? s : s.source) === source)), ...(githubUnavailable && !events.some(e => e.source === `github:${repo}`) ? [`github:${repo}`] : []), ...(opt.expectedSources ?? []).filter(source => !events.some(e => e.source === source) && !(saved.sources ?? []).some(s => (typeof s === 'string' ? s : s.source) === source))]});
     if (selectorSnapshot) {
