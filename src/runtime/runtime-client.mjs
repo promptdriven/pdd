@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 7ee5fc6a1bc717c02d7be2e57cca5a4fe9f4bb1c7a74d4c58fcf625e7566bcda).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: f9c39713af88587b5c76b9253cd7bf2b3ec54f17fe7862e4e164d3da72e816d8).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
@@ -2121,7 +2121,8 @@ async function sendCheckAttempt(context, row) {
   row.busy_request_id = null; row.busy_observed_at = null; row.capacity_until = null; row.busy_display = null;
   row.phase = 'server';
   const request = { requestId: id, source_sha256: context.capture.sha256, scenario: row.test, max_calls: row.max_calls,
-    ...(context.serverFeatures?.includes('lazy-interfaces') ? { lazy_interfaces: true } : {}) };
+    ...(context.serverFeatures?.includes('lazy-interfaces') ? { lazy_interfaces: true } : {}),
+    ...sourceProvenance(context) };
   const verdict = await context.postCheck(request, row, Math.max(1, Math.min(context.ports.postMs, context.deadline - context.ports.now())));
   if (verdict.kind === 'not_sent') {
     const note = { code: null, message: 'Stopped before sending.' };
@@ -2144,6 +2145,15 @@ async function sendCheckAttempt(context, row) {
       ? context.deadline : context.ports.now() + LOST_READ_MS });
     row.lost = true; row.read_until = Number.isFinite(context.deadline) ? context.deadline : context.ports.now() + LOST_READ_MS;
   }
+}
+
+function sourceProvenance(context, capture = context?.capture) {
+  if (!context?.serverFeatures?.includes('source-provenance') || typeof capture?.source_commit !== 'string') return {};
+  let dirty_files = Array.isArray(capture.dirty_files) ? capture.dirty_files : [];
+  while (dirty_files.length && Buffer.byteLength(JSON.stringify(dirty_files), 'utf8') > 32_768) {
+    dirty_files = dirty_files.slice(0, Math.floor(dirty_files.length / 2));
+  }
+  return { source_commit: capture.source_commit, source_dirty: Boolean(capture.source_dirty), dirty_files };
 }
 
 // GET one open row once.
@@ -2325,6 +2335,7 @@ async function runLint(context) {
       kind: 'refused', refusal: { code: 'lint-call-preflight-unsupported', message: 'The PDD interpreter does not support selected-cap call preflight. No lint or checks were sent. Update the interpreter before inspecting this cap.' }
     };
     const request = { requestId: context.ports.randomUUID(), source_sha256: context.capture.sha256, complete: true, ...named,
+      ...sourceProvenance(context),
       ...(selectedCap != null ? { max_calls: selectedCap } : {}),
       ...(context.serverFeatures?.includes('lazy-interfaces') ? { lazy_interfaces: true } : {}) };
     context.lint.request_ids.push(request.requestId);
@@ -2746,7 +2757,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   if (!context.json) for (const warning of [...new Set([...svgWarnings, ...drift, ...(capture.warnings ?? []), ...hygieneWarnings])]) line(ports.stderr, warning);
   const identity = context.probedIdentity ?? signIn(ports.gh, context.store, ports), startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
   const timeoutMin = options['--timeout'] !== undefined ? Number(options['--timeout']) : ports.interactive ? null : AGENT_WAIT_MIN;
-  Object.assign(context, { origin, visible: found.visible, capture, identity, batch, startedAt, deadline: timeoutMin ? startedAt + timeoutMin * 60_000 : Infinity, rows, head: null,
+  Object.assign(context, { origin, visible: found.visible, capture, identity, batch, startedAt, deadline: timeoutMin ? startedAt + timeoutMin * 60_000 : Infinity, rows, head: capture.source_commit ?? null,
     intent: 'lint-only', agentLimit: options['--timeout'] === undefined && !ports.interactive, secrets: [identity.token], lint: { request_ids: [], state: null, selected_cap: requestedCalls(options['--max-calls']) ?? null }, timeoutMin });
   context.folder = context.store.folder('batches', batch);
   setRelease(interruptible(context));
@@ -4262,7 +4273,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
   const startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
   const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   Object.assign(context, { capture, identity, batch, startedAt, deadline: Infinity, rows,
-    intent: 'check', head: head.status === 0 ? head.stdout.trim() : null, secrets: [identity.token], lint: { request_ids: [], state: null } });
+    intent: 'check', head: capture.source_commit ?? (head.status === 0 ? head.stdout.trim() : null), secrets: [identity.token], lint: { request_ids: [], state: null } });
   context.folder = context.store.folder('batches', batch);
   setRelease(interruptible(context));
   await ownBatch(context, batch);
@@ -4742,6 +4753,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (!await admission(context, 'try', setup)) throw new Stop(context.interrupted ? 3 : 5, context.interrupted ? 'Stopped before sending.' : 'The interpreter stayed busy until the Try setup wait ended. No new Try was sent.');
       request = { requestId: ports.randomUUID(), source_sha256: capture.sha256, seed: test.path, max_calls: requestedBudget ?? 400, ...(appMap ? { app_map: appMap } : {}), ...(prepared ? {product_parts:prepared.composition.product_parts} : {}),
         ...(context.serverFeatures?.includes('lazy-interfaces') ? { lazy_interfaces: true } : {}),
+        ...sourceProvenance(context, capture),
         tab };
       setup.request_ids.push(request.requestId);
       const registered = await recordRuntimeRequest(setup.reservation, request.requestId, slotPorts(context));

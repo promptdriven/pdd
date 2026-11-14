@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: cbe50209920179b0fc2ca7eb816a3aa43eb11d23a871e91e4761961aa297786c).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 52c6019af7d4b06d5236404f5aaf66ea44a2bc62bb480211bccff2f7fcf5fda3).
 import { markdownLinks, markdownDefinitions, markdownSectionText } from './runtime-markdown.mjs';
 import { buildBindingPlan, runtimeBoundary } from './runtime-binding-plan.mjs';
 import { createHash } from 'node:crypto';
@@ -98,6 +98,31 @@ export function gitFiles(root) {
   const listed = spawnSync('git', ['ls-files', '-z', '-co', '--exclude-standard'], { cwd: root, maxBuffer: 512 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
   if (listed.status !== 0) throw new PreflightError(5, 'pdd could not list the Git files of this repository.');
   return [...new Set(listed.stdout.toString('utf8').split('\0').filter(Boolean))].sort();
+}
+
+const COMMIT_HEX = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
+function gitHead(root) {
+  const rev = spawnSync('git', ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  if (rev.status !== 0) return null;
+  const sha = rev.stdout.trim().toLowerCase();
+  return COMMIT_HEX.test(sha) ? sha : null;
+}
+function gitTreeBlobs(root, commit) {
+  const tree = spawnSync('git', ['ls-tree', '-r', '-z', commit], { cwd: root, maxBuffer: 512 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
+  if (tree.status !== 0) return null;
+  const entries = new Map();
+  for (const record of tree.stdout.toString('utf8').split('\0')) {
+    if (!record) continue;
+    const tab = record.indexOf('\t');
+    if (tab < 0) continue;
+    const [mode, type, oid] = record.slice(0, tab).trim().split(/\s+/);
+    const path = record.slice(tab + 1);
+    if (path && oid && type === 'blob') entries.set(path, { mode, oid: oid.toLowerCase() });
+  }
+  return entries;
+}
+function gitBlobOid(buf, algorithm = 'sha1') {
+  return createHash(algorithm).update(`blob ${buf.length}\0`).update(buf).digest('hex');
 }
 
 const statOf = path => { try { return lstatSync(path, { bigint: true }); } catch (error) { if (['ENOENT', 'ENAMETOOLONG'].includes(error.code)) return null; throw error; } };
@@ -1783,6 +1808,7 @@ function preparedText(root, visible, path, text, format,workspace) {
 
 function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadRuntimeWorkspace({root}),excludeFixtureProjects=tests === undefined,validateCriteria=true,allowMissingInterfaces=false }, strict = false, ports = {}) {
   const { isStoryPath, matchTests } = requireSelectionPorts(ports);
+  const headBefore = gitHead(root);
   const policyBefore=JSON.stringify(loadRuntimeWorkspace({root}));workspace=boundedWorkspace(root,workspace);
   const names = gitFiles(root), visible = new Set(names), overlay = new Map(), payload = new Map(), queue = [], visited = new Set();
   const chains=new Map(),preparationReads=new Set(),referenceReads=new Set();
@@ -2094,8 +2120,32 @@ function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadR
     }));
     const tar = tarFiles(entries);
     if (tar.length > LIMITS.bytes) throw Object.assign(new PreflightError(4, `The source archive is ${formatSize(tar.length)}. The limit is 10 MB.`), {selection:true});
-    const same = !reader.unstable && isDeepStrictEqual(gitFiles(root), names) && reader.stable() && JSON.stringify(loadRuntimeWorkspace({root}))===policyBefore;
+    const same = !reader.unstable && gitHead(root) === headBefore && isDeepStrictEqual(gitFiles(root), names) && reader.stable() && JSON.stringify(loadRuntimeWorkspace({root}))===policyBefore;
     if (!same) return null;
+    let sourceCommit = headBefore, sourceDirty = null, dirtyFiles = [];
+    if (sourceCommit !== null) {
+      const tree = gitTreeBlobs(root, sourceCommit);
+      if (!tree) {
+        sourceCommit = null;
+      } else {
+        const algo = sourceCommit.length === 64 ? 'sha256' : 'sha1';
+        const checkedPaths = [...new Set([...files.map(file => file.path), ...referenceReads, ...preparationReads])].sort();
+        for (const path of checkedPaths) {
+          const rawBytes = overlay.has(path) ? overlay.get(path).bytes : snapshots.get(path)?.bytes;
+          if (!rawBytes) { dirtyFiles.push(path); continue; }
+          const oid = gitBlobOid(rawBytes, algo);
+          const entry = tree.get(path);
+          if (!entry) { dirtyFiles.push(path); continue; }
+          if (entry.mode === '120000') {
+            const target = snapshots.get(path)?.target;
+            if (!target || tree.get(target)?.oid !== oid) dirtyFiles.push(path);
+            continue;
+          }
+          if (entry.oid !== oid) dirtyFiles.push(path);
+        }
+        sourceDirty = dirtyFiles.length > 0;
+      }
+    }
     const stories = new Map();
     for (const path of selected) {
       let doc; try { doc = JSON.parse(bytes(payload.get(sourcePath(path,'Selected test'))).toString('utf8')); } catch { continue; }
@@ -2120,6 +2170,9 @@ function captureOnce(root, { tests, appMap = null, prepareSource,workspace=loadR
       warnings:footprints.flatMap(story=>(story.unavailable ?? []).map(item=>`Warning: ${story.story_path}: footprint unavailable: ${item.cause}`)),
       raw_file_hashes:rawFileHashes,
       raw_prompt_hashes:Object.fromEntries(Object.entries(rawFileHashes).filter(([path])=>path.endsWith('.prompt.md'))),
+      source_commit:sourceCommit,
+      source_dirty:sourceDirty,
+      dirty_files:dirtyFiles,
       reads:[...new Set([...onDisk.storyFiles,...snapshots.keys()])].filter(path=>path!==SOURCE_CONFIG&&!payload.has(path)&&(snapshots.get(path)?.bytes||onDisk.storyFiles.includes(path))).sort().map(path=>({path,roles:[...(onDisk.storyFiles.includes(path)?['discovery']:[]),...(referenceReads.has(path)?['reference']:[]),...(preparationReads.has(path)?['preparation']:[]),...(!onDisk.storyFiles.includes(path)&&!referenceReads.has(path)&&!preparationReads.has(path)?['footprint']:[])].sort()})),
       bindingPlans,
       sources:entries.map(file=>({path:file.path,bytes:Buffer.from(file.bytes)})) };
