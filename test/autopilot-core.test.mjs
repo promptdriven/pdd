@@ -1,7 +1,7 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readdirSync, readFileSync, writeFileSync, rmSync, mkdirSync, appendFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync, writeFileSync, rmSync, mkdirSync, appendFileSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
@@ -664,17 +664,23 @@ test('a merge check that keeps failing on GitHub (a 502) is a service stop after
   assert.equal(listReportDrafts({ root: w.reportRoot }).length, 0, 'and files no report');
 });
 
-test('an agent other than Codex, Claude or agy holds intake without a claim; agy starts headless jobs', async t => {
+test('an agent other than Codex, Claude, Gemini or agy holds intake without a claim; Gemini and agy start headless jobs', async t => {
   const w = await coreWorld(t);
-  w.state.agent = { kind: 'gemini', command: 'gemini' };
+  w.state.agent = { kind: 'other', command: 'other' };
   w.issue(17);
   const result = await w.tick();
-  assert.equal(w.started.length, 0); assert.equal(w.github.writes.length, 0); assert.match(result.message, /Codex, Claude or agy/);
-  w.state.agent = { id: 'agy', kind: 'agy', command: '/opt/bin/agy' };
+  assert.equal(w.started.length, 0); assert.equal(w.github.writes.length, 0); assert.match(result.message, /Codex, Claude, Gemini or agy/);
+  w.state.agent = { id: 'gemini-main', kind: 'gemini', command: '/opt/bin/gemini', model: 'gemini-2.5-pro' };
   await w.tick();
   assert.equal(w.started.length, 1);
-  assert.equal(w.started[0].command, '/opt/bin/agy');
-  assert.deepEqual(w.started[0].args, ['--input-format', 'text', '--output-format', 'stream-json', '--dangerously-skip-permissions']);
+  assert.equal(w.started[0].command, '/opt/bin/gemini');
+  assert.deepEqual(w.started[0].args, ['-p', '', '--output-format', 'stream-json', '--approval-mode', 'yolo', '--model', 'gemini-2.5-pro']);
+  w.issue(18);
+  w.state.agent = { id: 'agy', kind: 'agy', command: '/opt/bin/agy' };
+  await w.tick();
+  assert.equal(w.started.length, 2);
+  assert.equal(w.started[1].command, '/opt/bin/agy');
+  assert.deepEqual(w.started[1].args, ['--input-format', 'text', '--output-format', 'stream-json', '--dangerously-skip-permissions']);
 });
 
 test('an ended job holds no slot after a restart, and END and merge remove its per-issue files', async t => {
@@ -3877,9 +3883,10 @@ test('legacy cleanup accepts only the exact core checkout and records its missin
     supplied.push({ root: options.legacyCustodyRoot ?? null, boundary: options.legacyCustodyBoundary });
     return cleanupAgentJob(part, { ...options, list: () => [caller], cwd: () => '/outside/core-worktree', kill: () => assert.fail('legacy cleanup sends no signal') });
   };
+  const expectedRoot = realpathSync(build.cwd);
   await w.tick({ warn: message => warnings.push(message) });
   assert.ok(supplied.length > 0);
-  assert.ok(supplied.every(row => row.root === build.cwd), 'core supplies only the exact issue checkout');
+  assert.ok(supplied.every(row => row.root === expectedRoot), 'core supplies only the exact issue checkout');
   assert.ok(supplied.every(row => row.boundary === saved.started), 'core supplies the saved job start that predates its parts');
   assert.equal(jobFile(w, 17), null, 'a clear bounded legacy scan permits normal final cleanup');
   assert.equal(existsSync(build.cwd), false);
@@ -3908,8 +3915,9 @@ test('legacy cleanup omits an unproven age boundary and retains unreadable proce
       cwd: pid => { if (pid === unreadable.pid) throw Error('EACCES'); return '/outside/core-worktree'; },
       kill: () => assert.fail('legacy cleanup sends no signal') });
   };
+  const expectedRoot = realpathSync(build.cwd);
   await w.tick();
-  assert.equal(supplied?.legacyCustodyRoot, build.cwd);
+  assert.equal(supplied?.legacyCustodyRoot, expectedRoot);
   assert.equal(Object.hasOwn(supplied, 'legacyCustodyBoundary'), false, 'a part timestamp is not used as a substitute');
   assert.ok(jobFile(w, 17), 'the checkout stays while the unreadable process has no proven age relationship');
   assert.equal(existsSync(build.cwd), true);
@@ -3935,4 +3943,77 @@ test('legacy cleanup does not use a source checkout as a fallback root', { skip:
   assert.ok(supplied.every(root => root === null), 'the source checkout is never handed to the legacy scanner');
   assert.ok(jobFile(w, 17), 'without a proven core checkout, local cleanup stays pending');
   assert.equal(existsSync(build.cwd), true);
+});
+
+test('3154 & 3782 opt-in model tiering routes worker vs reviewer launches and records per-phase duration + harness tokens into saved telemetry', async t => {
+  // 1. Default off: zero model or effort flags added to build or review launches
+  const wOff = await coreWorld(t);
+  wOff.issue(17, { title: 'Default launch check', body: 'Keep default CLI flags when tiering is off.' });
+  await wOff.tick();
+  const buildOff = wOff.job(17, 'build');
+  assert.equal(buildOff.args.includes('--model'), false);
+  assert.equal(buildOff.args.some(a => a.includes('model_reasoning_effort')), false);
+
+  // 2. Opt-in via PDD_MODEL_TIERING=1 (and settings.modelTiering): worker roles get worker model+effort, review gets reviewer model+effort, and telemetry persists
+  const w = await coreWorld(t, { settings: { modelTiering: true } });
+  assert.equal(coreSettings({ autopilot: { mode: 'auto', engine: 'core', modelTiering: true } }).modelTiering, true);
+  w.issue(21, { title: 'Tiered issue telemetry', body: 'Measure phase spans and extract harness tokens.' });
+  await w.tick({ env: { ...process.env, PDD_MODEL_TIERING: '1' } });
+  const build = w.job(21, 'build');
+  assert.deepEqual(build.args, [
+    'exec', '--json', '--dangerously-bypass-approvals-and-sandbox', '-c', 'features.multi_agent=false',
+    '--model', 'gpt-5.4-mini', '-c', 'model_reasoning_effort="medium"', '-',
+  ]);
+
+  // Simulate 3 minutes of build work + real Codex JSONL token usage in the build log
+  w.advance(3 * MIN);
+  appendFileSync(
+    build.log,
+    `${JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 15_000, cached_input_tokens: 10_000, output_tokens: 1_200, reasoning_output_tokens: 400 } })}\n`,
+  );
+  const { head } = w.build(21);
+  await w.tick({ env: { ...process.env, PDD_MODEL_TIERING: '1' } });
+
+  // Active job file in phase 'pr' already has build + intake telemetry saved
+  const activeJob = JSON.parse(readFileSync(join(w.root, 'jobs', '21.json'), 'utf8'));
+  assert.equal(activeJob.telemetry.phases.byPhase['code/pr2'].durationMs, 3 * MIN);
+  assert.equal(activeJob.telemetry.tokens.byTier.worker.inputTokens, 15_000);
+
+  // Review launch uses reviewer model + high reasoning effort, before trailing '-'
+  const review = w.job(21, 'review');
+  assert.deepEqual(review.args, [
+    'exec', '--json', '--dangerously-bypass-approvals-and-sandbox', '-c', 'features.multi_agent=false',
+    '--model', 'gpt-5.4', '-c', 'model_reasoning_effort="high"', '-',
+  ]);
+
+  // Simulate 2 minutes of review + suite execution and Reviewer token usage
+  w.advance(2 * MIN);
+  appendFileSync(
+    review.log,
+    `${JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 8_000, cached_input_tokens: 5_000, output_tokens: 600, reasoning_output_tokens: 250 } })}\n`,
+  );
+  w.review(21, 'PASS');
+  w.suite(21, 0);
+  await w.tick({ env: { ...process.env, PDD_MODEL_TIERING: '1' } });
+  assert.deepEqual(w.github.merges, [100]);
+
+  // Verify saved head evidence record AND history.jsonl completion record carry phase durations + worker/reviewer token summaries
+  const evidence = JSON.parse(readFileSync(join(w.root, 'logs', `21-evidence-${head}.json`), 'utf8'));
+  assert.ok(evidence.telemetry, 'head evidence record includes telemetry');
+
+  const mergedRow = readFileSync(join(w.root, 'history.jsonl'), 'utf8')
+    .trim()
+    .split('\n')
+    .map(line => JSON.parse(line))
+    .find(row => row.issue === 21 && row.outcome === 'merged');
+  assert.ok(mergedRow?.telemetry, 'history.jsonl merged record includes telemetry');
+  assert.equal(mergedRow.telemetry.phases.byPhase['code/pr2'].durationMs, 3 * MIN);
+  assert.ok(mergedRow.telemetry.phases.byPhase.check.durationMs >= 2 * MIN);
+  assert.equal(mergedRow.telemetry.phases.byPhase.merge.count, 1);
+  assert.equal(mergedRow.telemetry.tokens.byTier.worker.inputTokens, 15_000);
+  assert.equal(mergedRow.telemetry.tokens.byTier.worker.outputTokens, 1_200);
+  assert.equal(mergedRow.telemetry.tokens.byTier.reviewer.inputTokens, 8_000);
+  assert.equal(mergedRow.telemetry.tokens.byTier.reviewer.outputTokens, 600);
+  assert.equal(mergedRow.telemetry.tokens.byAgent.codex.inputTokens, 23_000);
+  assert.equal(mergedRow.telemetry.tokens.total.totalTokens, 24_800);
 });

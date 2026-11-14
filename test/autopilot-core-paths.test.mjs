@@ -235,7 +235,8 @@ test('P12 one owner reader: the engine table and `pdd owner` give the same answe
     assert.deepEqual(mine ? [mine.prompt, mine.owners, mine.certain] : [null, [], true], [row.owner, row.owners, row.certain], path);
     if (mine?.prompt) assert.equal(mine.how, row.source, path);
   }
-  assert.equal(engine.get('src/split.js'), undefined, 'src/split.js: no owner (its prompt names it after the opening sentence)');
+  assert.equal(engine.get('src/split.js')?.how, 'path');
+  assert.equal(engine.get('src/split.js')?.certain, false);
   assert.equal(engine.get('src/ordinal.js')?.how, 'prose');
   assert.equal(engine.get('src/money.js')?.how, 'binding', 'the binding comes first');
 });

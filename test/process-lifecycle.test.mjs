@@ -1,4 +1,4 @@
-// Generated from prompts/cli/process-lifecycle.prompt.md (sha256: ca1d227bd76f65a3347d6f057eead8bc937ef9226b566c7f0fd4fd3228c5ac70).
+// Generated from prompts/cli/process-lifecycle.prompt.md (sha256: f10e28afdb2daa82da7c1031962649dbbd805441f9a9389f5b6a71c9654f9405).
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { descendants, parseProcessTable, terminateCaptured } from '../src/process-lifecycle.mjs';
@@ -74,4 +74,58 @@ test('keeps a same-start process with changed command for retry', async () => {
   const signals = [], changed = { ...rows[1], args: 'node helper changed' };
   const result = await terminateCaptured([rows[1]], { list: async () => [changed], signal: (...args) => signals.push(args), sleep: async () => {}, grace: 1, poll: 1 });
   assert.equal(result.confirmed, false); assert.deepEqual(signals, []);
+});
+
+test('signals a captured child process group (-pgid) with SIGTERM then SIGKILL, even after its leader exited, and skips reused leader PIDs', async t => {
+  const leader = rows[1], stubbornGrandchild = { pid: 19, ppid: 1, pgid: leader.pgid, rss: 20, start: 'Mon Nov 11 10:00:05 2026', args: 'node value.mjs stubborn' };
+  await t.test('leader exited leaving a SIGTERM-ignoring grandchild in the group', async () => {
+    let active = [stubbornGrandchild]; const signals = [];
+    const result = await terminateCaptured([leader], { list: async () => active,
+      signal: (target, sig) => { signals.push([target, sig]); if (target === -leader.pgid && sig === 'SIGKILL') active = []; },
+      sleep: async () => {}, grace: 1, poll: 1 });
+    assert.deepEqual(result, { confirmed: true, stopped: 1, killed: 1, remaining: 0 });
+    assert.deepEqual(signals, [[-leader.pgid, 'SIGTERM'], [-leader.pgid, 'SIGKILL']]);
+  });
+  await t.test('reused leader PID is never group-signalled', async () => {
+    const reusedLeader = { ...leader, start: 'Mon Nov 11 11:30:00 2026', args: 'node other-tenant' };
+    const signals = [];
+    const result = await terminateCaptured([leader], { list: async () => [reusedLeader],
+      signal: (...args) => signals.push(args), sleep: async () => {}, grace: 1, poll: 1 });
+    assert.equal(result.confirmed, true);
+    assert.deepEqual(signals, []);
+  });
+  await t.test('reused leader observed during cleanup permanently drops group even if reused leader exits later', async () => {
+    const reusedLeader = { ...leader, start: 'Mon Nov 11 11:30:00 2026', args: 'node other-tenant' };
+    const otherChild = { pid: 29, ppid: 1, pgid: leader.pgid, rss: 20, start: 'Mon Nov 11 11:30:01 2026', args: 'node other-child' };
+    let step = 0; const signals = [];
+    const frames = [
+      [stubbornGrandchild],               // initial read: group looks active
+      [reusedLeader, otherChild],         // pre-TERM read: leader PID was reused
+      [otherChild],                       // grace / later read: reused leader exited, unrelated child remains in pgid
+    ];
+    const result = await terminateCaptured([leader], {
+      list: async () => frames[Math.min(step++, frames.length - 1)],
+      signal: (...args) => signals.push(args), sleep: async () => {}, grace: 1, poll: 1 });
+    assert.equal(result.confirmed, true);
+    assert.deepEqual(signals, []);
+  });
+  await t.test('groupEnded leader in cumulative manifest is never group-signalled', async () => {
+    const otherChild = { pid: 31, ppid: 1, pgid: leader.pgid, rss: 20, start: 'Mon Nov 11 11:45:00 2026', args: 'node other-group-member' };
+    const signals = [];
+    const result = await terminateCaptured([{ ...leader, groupEnded: true }], {
+      list: async () => [otherChild], signal: (...args) => signals.push(args), sleep: async () => {}, grace: 1, poll: 1 });
+    assert.equal(result.confirmed, true);
+    assert.deepEqual(signals, []);
+  });
+  await t.test('late grandchild forked into active group right before individual SIGKILL keeps cleanup unconfirmed', async () => {
+    const child = rows[2];
+    const lateFork = { pid: 41, ppid: 1, pgid: leader.pgid, rss: 20, start: 'Mon Nov 11 10:00:09 2026', args: 'node late-fork' };
+    let killedChild = false; const signals = [];
+    const result = await terminateCaptured([leader, child], {
+      list: async () => killedChild ? [lateFork] : [leader, child],
+      signal: (target, sig) => { signals.push([target, sig]); if (target === child.pid && sig === 'SIGKILL') killedChild = true; },
+      sleep: async () => {}, grace: 1, poll: 1 });
+    assert.equal(result.confirmed, false);
+    assert.equal(result.remaining, 1);
+  });
 });

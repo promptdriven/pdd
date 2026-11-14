@@ -8,7 +8,7 @@ A PDD workflow is a skill: a folder of plain Markdown and one JSON file. Your ag
 |---|---|
 | `pdd-feature` | New behavior. |
 | `pdd-bug` | The code breaks an accepted expectation. |
-| `pdd-small-change` | A small change with a clear effect that is easy to undo. If the impact grows, the agent suggests `bug` or `feature`. |
+| `pdd-small-change` | A change outside PDD (docs, guides, packages, config, CI, lockfiles or tests — never prompts, Stories or product code). Product or prompt-owned code uses `bug` or `feature`. |
 | `pdd-product` | Map a whole product and plan its runs. |
 
 Each workflow has areas. Each area has steps and ends at a gate. `?` marks an optional step.
@@ -37,8 +37,8 @@ What each step does:
 
 | Step | What the subagent does |
 |---|---|
-| scope | States the result, the files, why the change is small and how to undo it. Writes the expected result and names the test command. For a behavior fix, records `Defect:` and `Not caught because:`. |
-| change | Makes only the approved change. If a prompt owns the behavior, it changes the prompt first. Adds a test. |
+| scope | Checks `pdd owner` on planned files and switches to `bug` or `feature` if the issue touches prompts, Stories, prompt-owned files or product code. States the result, the non-PDD files, why the change stays outside PDD, how to undo it and the test command. For a CI, config, package or test defect, records `Defect:` and `Not caught because:`. |
+| change | Edits only the approved non-PDD files (docs, guides, packages, config, CI, lockfiles or tests — never prompts or Stories). Adds or updates checks or tests when planned. |
 | reproduce | Finds the smallest safe input that shows the bug. Writes the expected and the actual result. |
 | understand | States the wanted result, what must not change and what is out of scope. Counts the behaviors. With more than one, writes `user_stories/PLAN.md`. |
 | visual? | For a visible interface, sketches 2 or 3 options, with empty and error states. For a page or a screen, it also writes the app map and its SVG mockups from the chosen design, so the Simulator shows the real screen (the Screen tab). The chat asks you first, and recommends this step for a page or a screen. |
@@ -52,7 +52,7 @@ What each step does:
 
 If verify or formal finds a failing case, or review finds must-fixes, the chat returns to a fresh build, then verify, formal and fresh review. There are at most two repair rounds after the initial review. In an Autopilot run, the chat keeps repairing while a useful correction exists, up to 5 repair rounds in one area (a round returns to an earlier step; a retry of the PR open is not one); pdd then refuses another round, marks the run stuck and the issue takes the stuck path. If vectors still fail, PR 2 keeps "✗ N vectors fail" at the top. The PR then opens with the actual `Review: N must-fix` or `Review: no must-fix` verdict and any remaining must-fix list at the top. There is no new human gate. These are agent instructions; metadata orders steps but does not enforce reviewer independence or judgment.
 
-Only prompt-story reads the full Prompting guide. check reads the `pdd-prompting` core rules and review rules. change reads the guide only when it changes a prompt.
+Only prompt-story reads the full Prompting guide. check reads the `pdd-prompting` core rules and review rules.
 
 ## Two ways to use a workflow
 
@@ -189,7 +189,7 @@ Agents run tests. `pdd workflow prove` also runs its supplied command on base an
 
 - The verify step runs in a fresh subagent that did not write the code.
 - It runs the new cases, the regression tests and the repo's required checks. When it can, it shows that a new test fails on the old or wrong code, in a throwaway copy.
-- For a small-change behavior fix it writes `Proof (defect fixed):` and `Proof (gap closed):`, and a reason for each removed test or changed assertion.
+- For a small-change defect fix it writes `Proof (defect fixed):` and `Proof (gap closed):`, and a reason for each removed test or changed assertion.
 - It writes the exact commands, the exit codes and the real output to `verify.md`. It names what no test covers.
 - The body of PR 2, or of the one `small-change` PR, starts with the same kind of part for people: a status line, the user story, a summary (PR 2: Problem, Cause, Fix, Result; small change: Problem, Change, Result), before and after cases, what changed, a Proof table (approved cases on the new and the old code, or on a planted mistake in a feature run; the formal result; the regression tests; CI; the review; the checker) and the Merge line. Its status line says `✅ Ready to merge` only when each of these records is there and current, and `⛔ Not fixed yet` for a PR that only helps find the cause. `pdd workflow status N` refreshes the status line and the rows of each open PR of the run (CI, the checker verdict, PR 1's CI and a new base) and says when ("Updated <time>"). A stacked PR 2 follows PR 1's CI: "Builds on PR 1 (#N): merge it first." when PR 1 is green, "This PR also merges PR 1 (#N). Do not merge PR 1 alone." when PR 1 is red or PR 2 already targets the base branch, and "Builds on PR 1 (#N)." while PR 1's CI has no result. Its Details section has the step summaries and `verify.md`. The Details section starts with pdd's own `pdd result:` lines (or `pdd result: none. … (pdd:no-verdict)`) and the `Old-code proof:` line. `Prompt tests` lines and report links that come from a step summary follow, each starting with `Agent note — not checked by pdd:`. Report links expire after 7 days.
 - The readable Result uses the recorded Proof rows. Agent Result claims stay in Details. A one-PR small-change with only test files and test helpers, added executable test lines, and a current `old-passes` record shows **Coverage validation**. Executable tests include JSON files in test folders whose published-head content has `schema_version: "prompt-runtime.program-scenario.v1"` and nonempty `steps`. Arbitrary JSON fixtures and empty scenarios do not qualify. Both snapshots pass. This closes a coverage gap and does not establish a runtime defect fix. Old code passing alone does not block this coverage work. Production changes, fixture-only work and bug/feature proofs keep the old-code failure requirement.

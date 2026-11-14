@@ -9,8 +9,8 @@ below, and the one-time [move from the removed full engine](#the-move-from-the-f
 merge, quota-reset or interactive route of its own. Preserve existing setup, workflow and interpreter behavior.
 
 `runAutopilotLauncher` accepts command doctor, start, stop, status, add, release, report, intake or check-base, cwd, packageRoot,
-env, issues (argv operands), and optional runs, checks, engine, label, share, mode, report, decisions, intake, all and
-json. Return
+env, issues (argv operands), and optional runs, checks, engine, label, share, autoUpdate, mode, report, decisions, intake, agent,
+pool, all and json. Return
 `{exitCode, message}`; the CLI owns streams. Outside programs, timer installation, clock and state I/O are injectable
 ports; native defaults implement them on macOS and Linux. Tests may inject `checkCapacityPorts` for the shared queue.
 
@@ -37,14 +37,22 @@ machine`); it never writes `pdd.json` (unlike `pdd autopilot observe`). `start -
 `state.report` the same way. `start --decisions ask|decide` saves `state.decisions` the same way: it replaces the
 core's `decisions` in the tick and status (`decisions MODE (this machine)`). `start --intake off|shadow` saves
 `state.intake`; the core tick gets `intake` from it
-(`intakeMode` of the [intake cards](autopilot-intake.prompt.md); off when none is saved). A blank label, or another
-value of `--mode`, `--report`, `--decisions` (`Use --decisions ask or --decisions decide.`) or `--intake`, returns exit
+(`intakeMode` of the [intake cards](autopilot-intake.prompt.md): `off`, `shadow` or `active`; `state.intake` wins over
+`autopilot.intake` in `pdd.json`, and `off` is the default). A blank label, or another
+value of `--mode`, `--report`, `--decisions` (`Use --decisions ask or --decisions decide.`) or `--intake` (`Use --intake off, --intake shadow or --intake active.`), returns exit
 code 2 with its usage line before any effect. `start --share PERCENT` (#3231, `shareOption`) saves `state.share`, a
 whole percent from 1 to 100: the part of this machine's CPU and memory that Autopilot may use (default 50 when none is
 saved); a later start without it keeps it, and pdd.json never sets it. Another value returns exit code 2 with `Use
---share with a whole percent from 1 to 100, for example --share 70 (the default is 50).` before any change. Optional
-`--runs` and `--checks` are positive safe integers with no product maximum; save explicit values, and remove them when
-a start omits them.
+--share with a whole percent from 1 to 100, for example --share 70 (the default is 50).` before any change. `start --agent NAME`
+selects `codex`, `claude`, `gemini` or `agy` and returns exit code 2 with `Use --agent codex, claude, gemini or agy.`
+for any blank or other name before any change. `start --pool PATH` validates the login pool with `loadLoginPool` of the
+[multi-harness login pool](login-pool.prompt.md) and saves `state.poolPath` (`off` or `none` saves `"off"`, disabling
+automatic pool file discovery; a blank or invalid pool file returns exit code 2 with its validation line before any
+change). `start --auto-update release|main|off` (#2710) saves `state.autoUpdate` (default `release` when unset; another value returns
+exit code 2 with `Use --auto-update release, --auto-update main or --auto-update off.`); after each enabled core tick,
+run `maybeAutoUpdateAutopilot` of [Autopilot self-update](autopilot-update.prompt.md) under the machine admission lock
+when no job is publishing or merging, and include `autoUpdateStatusLine` in status. Optional `--runs` and `--checks` are positive safe integers with no product maximum; save explicit values, and
+remove them when a start omits them.
 
 ## Automatic continuation custody
 
@@ -64,17 +72,21 @@ the saved control revision, so a tick or start that read the old revision does n
 ## Doctor and start
 
 Dispatch doctor to [the doctor owner](autopilot-doctor.prompt.md). A start first keeps the Git-folder validation
-above, then reads only the saved state. **It asks for an opt-in label first:** when neither `--label`, the machine
-label nor `autopilot.label` in `pdd.json` names a label and the mode (the machine mode from `--mode` or saved, else
+above, then reads only the saved state. **It asks for an opt-in label first unless intake is active:** when neither `--label`, the machine
+label nor `autopilot.label` in `pdd.json` names a label, the effective intake mode (`--intake`, saved `state.intake` or `autopilot.intake` in `pdd.json`) is not `active`, and the mode (the machine mode from `--mode` or saved, else
 the core mode of `pdd.json`) is not off, return
 exit 1 with exactly `Autopilot did not start: it works only on the issues that you mark with an opt-in label. Run pdd
 autopilot start --label pdd:autopilot, then mark issues with pdd autopilot add N (or add the label on GitHub). Nothing
-was started or claimed.` No doctor, state write, timer, tick, claim or GitHub call happens. Then it resolves the saved
-agent profile (`savedProfile`), and runs that doctor
-with the selected invocation environment and injected ports, before any start state write, admission lock, timer
-change, claim or GitHub mutation. No directory or lock is created by that resolution. On a required failure return
-the complete doctor report unchanged. After a pass, use that invocation environment for the startup checks, and print
-the doctor's WARN lines first in the start message. A doctor pass alone grants no approval or merge authority.
+was started or claimed.` No doctor, state write, timer, tick, claim or GitHub call happens. When the effective intake mode is `active` and the mode is not `off`, start also requires a `codex` or `claude` login for sandboxed read-only intake card checks: either the selected single agent has kind `codex` or `claude`, or at least one non-paused signed-in `codex` or `claude` login exists in the configured `--pool`; otherwise refuse before writing enabled state with `Active intake needs a codex or claude login for sandboxed read-only card checks; add codex or claude to --pool, pass --agent codex or --agent claude, or use --intake off --label pdd:autopilot.` Then it checks whether the
+caller requested an explicit account or login-pool override (`--agent`, `--pool`, or an explicit caller `CODEX_HOME`,
+`CLAUDE_CONFIG_DIR`, `GEMINI_CLI_HOME` or `ANTIGRAVITY_APP_DATA_DIR` that differs from the saved `launchProfile`).
+Without an explicit override it resolves the saved agent profile (`savedProfile`); with `--agent` or `--pool` it
+targets the requested agent or first ready pool login (and with an explicit config-folder override it runs doctor in the
+caller's environment without pinning the old saved profile). It runs that doctor with the selected invocation
+environment and injected ports, before any start state write, admission lock, timer change, claim or GitHub mutation.
+No directory or lock is created by that resolution. On a required failure return the complete doctor report unchanged.
+After a pass, use that invocation environment for the startup checks, and print the doctor's WARN lines first in the
+start message. A doctor pass alone grants no approval or merge authority.
 
 A start then, in this order:
 
@@ -86,12 +98,15 @@ A start then, in this order:
 4. Refuses an `autopilot.quietMinutes` below 2 times the core timer (20): `Autopilot did not start:
    autopilot.quietMinutes is N; it must be at least 20 (2 times the 10-minute core timer). Nothing was started or
    claimed.`
-5. Selects the automatic base, checks `gh auth status`, and selects the agent: the saved profile when one is saved
-   (refuse when it is unavailable), else the doctor's selection. Without a saved profile it saves the agent, its
-   definition HOME and the kept environment (`HOME`, `PATH`, the agent config folders, the XDG and D-Bus session
-   values and the shared queue variables; never credentials or the whole environment). It saves `launchProfile` from
-   the profile binding when none is saved, so a later start verifies the same sign-in; a state saved without one
-   selects the agent again. A changed saved profile refuses with `The saved coordinator profile cannot be verified.`
+5. Selects the automatic base, checks `gh auth status`, and selects the agent: without an explicit account or pool
+   override it keeps the saved profile when one is saved (refuse when it is unavailable) and refuses a silently changed
+   saved profile with `The saved coordinator profile cannot be verified.`; without a saved profile, or when `--agent`,
+   `--pool` or an explicit caller agent config folder overrides the saved profile (#3230), it saves the newly verified
+   agent, its definition HOME, the kept environment (`HOME`, `PATH`, the agent config folders, the XDG and D-Bus session
+   values and the shared queue variables; never credentials or the whole environment), `launchProfile` from the new
+   profile binding, and `poolPath` when `--pool` is set, removes legacy `ownerLaunch`, clears stale `pausedUntil`,
+   `pausedHours`, `streak` and `poolOut` in `core.json` (plus `clearPoolCooldowns` when switching accounts or pools),
+   and adds an `Account changed from OLD to NEW.` or `Login pool: PATH (N login(s)).` note to the start message.
 6. Saves `startedAt` (ISO time; in auto mode it is the operator action that approves the core jobs' prompt changes),
    `activatedAt` (once), `coordinatorId` and `machine` (once), `enabled`, `nextTick` and a new `controlRevision`,
    then rechecks under the admission lock that no other control changed the state while it started.
@@ -154,7 +169,9 @@ machine and the settings' `github` value), and calls `tickCore` with this launch
 port, its issue list (`queryIssues` with the saved ETag pages: a list of more than one page is read in full only every
 6 hours, and between full reads the tick reads the issues changed since then), its trust rule for authors
 (`trusted`: the owner, the core trust list, or write, maintain or admin permission, read once per login), the
-read-only Codex limits as `agentReady` (only `limited` holds intake), the package version, an `alert` port that sends
+read-only Codex limits as `agentReady` (only `limited` holds intake; 97% weekly stop protection applies) and, when a
+multi-harness login pool is configured (`loadLoginPool(...).configured`), `selectLogin(opts)` (forwarding optional `allowedKinds` to `selectPoolLogin` and caching per-`allowedKinds` key until `exhaustLogin` clears it) and `exhaustLogin` from the
+[login pool](login-pool.prompt.md), the package version, an `alert` port that sends
 one alert of the given kind for the issue through this machine's [alert destination](autopilot-alerts.prompt.md) with
 the core's cause, tried and need, the core state folder, the report folder and `tickMinutes` (the installed
 interval). When using native alerts (`!ports.sendAlert`), before `tickCore` runs, the tick runs `runAutopilotAlerts({action: 'retry', ...})` so open `failed` or newly-configured `not-configured` incidents of this repository from earlier ticks are retried once credentials recover. Before the core tick, the [machine guard](machine-guard.prompt.md) reads this machine once
@@ -168,7 +185,7 @@ core makes its admission decision without blocking unrelated core work. The core
 settings come from `readCoreSettings(cwd, fs, {auto, runs: state.runs})`, so this machine's `start --runs N` reaches
 the core and a machine without it gets its automatic slots; the core gets the guard as its `machine` port (the room
 check and each job's priority). Tests may replace core ports with `ports.corePorts`. Afterwards, under the admission lock and only while
-still enabled, it saves the issue-list cache, the base fields, `nextTick` (now plus `timerMinutes`) and `core: {at,
+still enabled, it saves the issue-list cache, the base fields, `intakeNote` when present, `nextTick` (now plus `timerMinutes`) and `core: {at,
 message}`.
 
 Each `gh` call goes through `countGithubCalls` into this repository's ledger in `ROOT/github/`, with its purpose
@@ -284,8 +301,8 @@ exit 1 with one line; a missing program says `install git and gh, and sign in to
 - [Worktree allocator](workflow-worktree.prompt.md): required native generation and verification context for
   `releaseIssueClaim`.
 - [Shared full-suite queue](test-suite-queue.prompt.md): required context for `releaseCheckCapacity`.
-- [Codex limits](codex-limits.prompt.md): required native generation and verification context for the read-only usage
-  read.
+- [Codex limits](codex-limits.prompt.md) and [multi-harness login pool](login-pool.prompt.md): required native
+  generation and verification context for the read-only usage read and ordered multi-harness login rotation.
 - [GitHub calls](github-calls.prompt.md): required native generation and verification context for the call ledger,
   the budget and the ETag cache.
 - [Autopilot alerts](autopilot-alerts.prompt.md): required native generation and verification context for the core's
@@ -296,3 +313,5 @@ exit 1 with one line; a missing program says `install git and gh, and sign in to
   process execution.
 - [PATH diagnostics](path-diagnostic.prompt.md): required native generation and verification context for the version
   shadowing warning.
+- [Autopilot self-update](autopilot-update.prompt.md): required native generation and verification context for safe
+  between-tick global `pdd` and skill updates.

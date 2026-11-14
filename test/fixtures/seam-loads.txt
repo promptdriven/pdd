@@ -52,11 +52,13 @@ cli:--help workflow-agents.mjs
 cli:--help workflow-areas.mjs
 cli:--help workflow-setup.mjs
 cli:approve approval-policy.mjs
+cli:approve file-owner.mjs
 cli:approve prompt-approve.mjs
 cli:approve runtime/contract-refs.mjs
 cli:approve runtime/runtime-markdown.mjs
 cli:approve runtime/runtime-preflight.mjs
 cli:approve runtime/scenario-json.mjs
+cli:approve story-lint.mjs
 cli:approve-automatic runtime-exit.mjs
 cli:autopilot-alerts autopilot-alerts.mjs
 cli:autopilot-off autopilot.mjs
@@ -231,6 +233,7 @@ cli:workflow-status runtime/runtime-check-plan.mjs
 cli:workflow-status runtime/runtime-markdown.mjs
 cli:workflow-status runtime/runtime-preflight.mjs
 cli:workflow-status runtime/scenario-json.mjs
+cli:workflow-status story-lint.mjs
 cli:workflow-status test-suite-queue.mjs
 cli:workflow-status toml-string.mjs
 cli:workflow-status validation-evidence.mjs
@@ -339,6 +342,7 @@ lib:product.mjs runtime/secret-redaction.mjs
 lib:product.mjs screen-compare.mjs
 lib:product.mjs screen-design-check.mjs
 lib:product.mjs secret-redaction.mjs
+lib:product.mjs story-lint.mjs
 lib:product.mjs svg-layout.mjs
 lib:product.mjs test-suite-queue.mjs
 lib:product.mjs toml-string.mjs
@@ -363,6 +367,7 @@ lib:product.mjs workflow-story-card.mjs
 lib:product.mjs workflow-worker-completion.mjs
 lib:product.mjs workflow-worktree.mjs
 lib:prompt-approve.mjs approval-policy.mjs
+lib:prompt-approve.mjs file-owner.mjs
 lib:prompt-approve.mjs prompt-approve.mjs
 lib:prompt-approve.mjs runtime-seam.mjs
 lib:prompt-approve.mjs runtime/contract-refs.mjs
@@ -372,6 +377,7 @@ lib:prompt-approve.mjs runtime/runtime-markdown.mjs
 lib:prompt-approve.mjs runtime/runtime-preflight.mjs
 lib:prompt-approve.mjs runtime/runtime-workspace.mjs
 lib:prompt-approve.mjs runtime/scenario-json.mjs
+lib:prompt-approve.mjs story-lint.mjs
 lib:svg-layout.mjs runtime-seam.mjs
 lib:svg-layout.mjs runtime/index.mjs
 lib:svg-layout.mjs runtime/runtime-workspace.mjs
@@ -385,6 +391,8 @@ tick:autopilot-launcher autopilot-intake.mjs
 tick:autopilot-launcher autopilot-launcher.mjs
 tick:autopilot-launcher autopilot-reports.mjs
 tick:autopilot-launcher autopilot-retire.mjs
+tick:autopilot-launcher autopilot-telemetry.mjs
+tick:autopilot-launcher login-pool.mjs
 tick:autopilot-launcher machine-guard.mjs
 tick:autopilot-launcher path-diagnostic.mjs
 tick:autopilot-launcher process-lifecycle.mjs

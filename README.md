@@ -30,7 +30,7 @@ pdd setup
 1. `npm install -g github:promptdriven/pdd` installs the `pdd` command.
 2. `npx skills add promptdriven/pdd -g --skill '*'` adds all the PDD skills for your agents. `--skill '*'` selects every PDD skill. Without it, the installer shows the list "Select skills to install" with no skill selected: select all of them, then press Enter. Then the installer asks which agents get the skills: select the agents that you use. It can say `Failed to install` for an agent that cannot have global skills. That agent still gets them.
 3. The installer also shows security ratings from outside scanners. Some PDD skills get a warning because they read GitHub issues and pull requests, and anyone can write those. The skills treat that text as data. Autopilot gives its agents only the text of trusted people: the owner, people with write access and the names in `trust`.
-4. `pdd --version` must print `0.1.31`. When your skills are older than pdd, it also prints the command that updates them.
+4. `pdd --version` must print `0.1.32`. When your skills are older than pdd, it also prints the command that updates them.
 5. `pdd setup` adds a short PDD block to `AGENTS.md`, or to `CLAUDE.md` when the repo has one. Then every agent chat in the repo knows that the project uses PDD. In a Git repo, it also adds the line `.pdd/` to `.gitignore`, because `pdd test` keeps its local cache there. Setup checks for a ready agent first, installs missing skills or updates eligible marked copies, and previews MCP configuration changes for your approval.
 
 To update, run the 2 install commands and `pdd setup` again, then start a new agent chat. After `npx skills add`, `npx skills update -g` also updates the skills.
@@ -335,7 +335,7 @@ The skills and the other commands run on your computer; `pdd lint --local` is of
 | `The runtime is busy. Try again later.` (exit code 5), or `Too many Try links are open.` | Wait a few minutes, then run the command again. To close a simulation that you do not use, run `pdd simulate --stop STORY`. |
 | `This Try has ended` | The simulation used all its AI calls or its 24 hours. Run `pdd simulate STORY --new`. |
 | `Autopilot did not start: it works only on the issues that you mark with an opt-in label.` | Mark issues with `pdd autopilot add N`, then run `pdd autopilot start --label pdd:autopilot`. |
-| `pdd --version` does not print `0.1.31` | Another `pdd` comes first on your PATH. Run `"$(npm prefix -g)/bin/pdd" --version`. On a conflict it shows the `export PATH=…` line that puts this pdd first. |
+| `pdd --version` does not print `0.1.32` | Another `pdd` comes first on your PATH. Run `"$(npm prefix -g)/bin/pdd" --version`. On a conflict it shows the `export PATH=…` line that puts this pdd first. |
 
 The [usage guide](docs/USAGE.md#13-troubleshooting) has more.
 

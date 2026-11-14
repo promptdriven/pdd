@@ -1,4 +1,4 @@
-// Generated from prompts/cli/path-diagnostic.prompt.md (sha256: b0ef1dd01b9b911d53708b8a94bf7c6fee70898d080ad0290b173bc6cf0f6143).
+// Generated from prompts/cli/path-diagnostic.prompt.md (sha256: a0a45ff8363d4d399c28859d7d3ae0efb8f37c5296fc281b31ff2a3f9ffa1e8a).
 import { spawnSync } from 'node:child_process';
 import { accessSync, constants, readFileSync, realpathSync, statSync } from 'node:fs';
 import { basename, delimiter, dirname, join, resolve } from 'node:path';
@@ -18,6 +18,25 @@ function candidates(cwd, env) {
   listed ??= env.PATH === undefined ? [] : env.PATH.split(delimiter).map(dir => resolve(cwd, dir || '.', 'pdd'));
   return [...new Set(listed)].filter(executable);
 }
+function unrelatedNpmPdd(cwd, env, paths) {
+  const dirs = new Set();
+  for (const dir of env.PATH === undefined ? [] : env.PATH.split(delimiter)) {
+    dirs.add(resolve(cwd, dir || '.', '../lib/node_modules/pdd'));
+    dirs.add(resolve(cwd, dir || '.', 'node_modules/pdd'));
+  }
+  for (const path of paths) {
+    const real = identity(path) ?? path;
+    const match = /^(.*\/node_modules\/pdd)(?:\/|$)/.exec(real);
+    if (match) dirs.add(match[1]);
+  }
+  for (const pkgDir of dirs) {
+    try {
+      const metadata = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8'));
+      if (metadata?.name === 'pdd' && !executable(join(pkgDir, 'bin/pdd.mjs'))) return pkgDir;
+    } catch { /* Missing or unreadable candidate folder. */ }
+  }
+  return null;
+}
 
 // Only --version probes another executable; the guard prevents another copy of this pdd from probing back.
 export function pathDiagnostic({ packageRoot, cwd, env, mode }) {
@@ -31,7 +50,8 @@ export function pathDiagnostic({ packageRoot, cwd, env, mode }) {
   const paths = candidates(cwd, env), current = identity(running), selected = paths[0];
   const isAlpha = path => current !== null && identity(path) === current;
   const shadowed = selected && !isAlpha(selected);
-  const conflict = shadowed || paths.some(path => !isAlpha(path));
+  const foreignNpm = unrelatedNpmPdd(cwd, env, paths);
+  const conflict = shadowed || paths.some(path => !isAlpha(path)) || Boolean(foreignNpm);
   if (mode === 'version' && !conflict || mode === 'workflow' && !shadowed) return [];
   let selectedVersion = `pdd ${version}`;
   if (shadowed) {
@@ -51,5 +71,6 @@ export function pathDiagnostic({ packageRoot, cwd, env, mode }) {
     const alpha = paths.find(path => basename(path) === 'pdd' && isAlpha(path));
     if (alpha) lines.push(`After environment activation, run: export PATH=${quote(dirname(alpha))}:"$PATH"; hash -r`);
   }
+  if (foreignNpm) lines.push(`Found the unrelated npm package "pdd" at ${clean(foreignNpm)}. Run: npm uninstall -g pdd && npm install -g github:promptdriven/pdd`);
   return lines;
 }

@@ -482,7 +482,7 @@ async function t10World(t, settings = { decisions: 'ask' }) {
   w.github.add(9, { title: 'Docs typo', body: 'Fix a typo in docs/intro.md.', labels: ['pdd:stuck'] });
   await w.tick();
   writeIn(w.job(17, 'build').cwd, 'src/duration.js', 'export const formatDuration = s => s < 60 ? `${s}s` : `${Math.floor(s / 60)}m`;\n');
-  const { pr, head } = w.build(17, { body: `Fixes #17.\n\n${NOT_RUN}\nPath: e — src/duration.js — unowned — no contract change — Test: done check`, result: { promptChanged: false } });
+  const { pr, head } = w.build(17, { body: `Fixes #17.\n\n${NOT_RUN}\nPath: b — src/duration.js — prompts/duration.prompt.md — no contract change — Test: done check`, result: { promptChanged: false } });
   await w.tick();
   return { w, pr, head };
 }
