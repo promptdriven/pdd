@@ -80,14 +80,14 @@ function reviseStory(f,before,after) {
 }
 // pdd's own saved check batch for the current files, as pdd test writes it.
 let batches = 0;
-function saveCheck(f, { state = 'passed', criteria = { passed: 3, total: 3 }, tests = [TEST] } = {}) {
+function saveCheck(f, { state = 'passed', criteria = { passed: 3, total: 3 }, tests = [TEST], root = f.run.root } = {}) {
   const stamp = new Date(f.clock).toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15), name = `${stamp}-${String(++batches).padStart(4, '0')}`;
-  const folder = join(f.ports.env.PDD_STATE_DIR, 'batches', name), capture = captureSource(f.run.root, { tests, appMap: null });
+  const folder = join(f.ports.env.PDD_STATE_DIR, 'batches', name), capture = captureSource(root, { tests, appMap: null });
   mkdirSync(folder, { recursive: true });
-  writeFileSync(join(folder, 'batch.json'), JSON.stringify({ version: 1, batch: name, root: f.run.root, created_at: new Date(f.clock).toISOString(), intent: 'check',
+  writeFileSync(join(folder, 'batch.json'), JSON.stringify({ version: 1, batch: name, root, created_at: new Date(f.clock).toISOString(), intent: 'check',
     source_sha256: capture.sha256, files: capture.files.map(file => file.path), contract_snapshots: capture.stories, rows: tests.map(test => ({ test, state, request_ids: [] })) }));
   const line = `Prompt tests (place-order): ${state === 'passed' ? '✓' : '✗'} ${criteria ? `${criteria.passed} of ${criteria.total} criteria` : 'no verdict'}`;
-  writeFileSync(join(folder, 'summary.json'), JSON.stringify(renderJson({ batch: name, repo: f.run.root, sourceSha256: capture.sha256, exitCode: state === 'passed' ? 0 : 1, rows: tests.map(test => ({ test, story: test, state, criteria })), summaryLine: line })));
+  writeFileSync(join(folder, 'summary.json'), JSON.stringify(renderJson({ batch: name, repo: root, sourceSha256: capture.sha256, exitCode: state === 'passed' ? 0 : 1, rows: tests.map(test => ({ test, story: test, state, criteria })), summaryLine: line })));
   return name;
 }
 const approveStory = async (f, words = 'Yes, this is what I asked for.', extra = {}) => {
@@ -860,4 +860,39 @@ test('#2874: automatic PR 1 publication refuses cleanly when approval evidence p
   assert.match(out.message, /No source was pushed/);
   assert.equal(f.prs.length, 0);
   assert.equal(f.pushes.length, 0);
+});
+
+
+test('#3390: a current associated workspace pass opens PR 1', async t => {
+  const f = await storyGate(t); await approveStory(f);
+  const producer = join(f.state, 'producer');
+  f.git(f.run.root, 'clone', '-q', f.run.root, producer);
+  const registration = await runner.associateEvidenceWorkspace({ ref: '17', cwd: f.run.root, workspace: producer, stage: 'current', tests: [TEST] }, f.ports);
+  assert.equal(registration.exitCode, 0, registration.message);
+  saveCheck(f, { root: producer });
+  const done = await f.done('check', 'Prompt tests (place-order): ✓ 3 of 3 criteria');
+  assert.equal(f.record().done.check.pddResults[0].source, 'current');
+  assert.equal(f.prs.length, 1, done.message);
+});
+
+test('#3390: an unassociated workspace pass cannot open PR 1', async t => {
+  const f = await storyGate(t); await approveStory(f);
+  const producer = join(f.state, 'producer');
+  f.git(f.run.root, 'clone', '-q', f.run.root, producer);
+  saveCheck(f, { root: producer });
+  await f.done('check');
+  assert.equal(f.prs.length, 0);
+});
+
+
+test('#3390: an associated pass becomes stale when current files change', async t => {
+  const f = await storyGate(t); await approveStory(f);
+  const producer = join(f.state, 'producer');
+  f.git(f.run.root, 'clone', '-q', f.run.root, producer);
+  const registration = await runner.associateEvidenceWorkspace({ ref: '17', cwd: f.run.root, workspace: producer, stage: 'current', tests: [TEST] }, f.ports);
+  assert.equal(registration.exitCode, 0, registration.message);
+  saveCheck(f, { root: producer });
+  writeFileSync(join(f.run.root, PROMPT), `${readFileSync(join(f.run.root, PROMPT), 'utf8')}\nChanged after check.\n`);
+  await f.done('check');
+  assert.equal(f.prs.length, 0);
 });
