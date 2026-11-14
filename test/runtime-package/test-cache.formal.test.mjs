@@ -16,7 +16,7 @@ function git(repo, ...args) {
   const result = spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
 }
-async function fixture(t) {
+async function fixture(t, { independentSlots = false } = {}) {
   const env = harbor(t);
   let mode = 'passed', incomplete = false, delay = null;
   const fake = await fakeRuntime(t, async entry => {
@@ -31,6 +31,18 @@ async function fixture(t) {
   const invoke = async ({ options = {}, words = ['place-order'], repo = env.repo, state = env.state, trouble } = {}) => {
     const { ports, clock } = portsFor({ HOME: env.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: state });
     Object.defineProperty(clock, 'now', { get: () => sharedClock.now, set: value => { sharedClock.now = value; } });
+    if (independentSlots) {
+      // Cache generations need overlapping HTTP checks; runtime-simulated-retry tests cover the shared queue.
+      const records = new Map(), timestamps = new Map();
+      ports.slotFiles = {
+        listRecords: ({ directory }) => ({ jobs: [...records].filter(([path, row]) => resolve(path, '..') === directory && row.state).map(([, row]) => row) }),
+        exclusiveCreate: (path, row) => { if (records.has(path)) return false; records.set(path, row); timestamps.set(path, clock.now); return true; },
+        writeAtomic: (path, row) => { records.set(path, row); timestamps.set(path, clock.now); },
+        unlink: path => { records.delete(path); timestamps.delete(path); },
+        modifiedAt: path => timestamps.get(path) ?? null,
+        touch: path => { if (!records.has(path)) return false; timestamps.set(path, clock.now); return true; },
+      };
+    }
     if (trouble === 'auth') ports.gh = () => ({ status: 1, stdout: '', stderr: 'not logged in' });
     if (trouble === 'interrupt') ports.sleep = async ms => { clock.now += ms; clock.interrupt(); };
     if (trouble === 'timeout') ports.sleep = async ms => { clock.now += 120000; };
@@ -91,7 +103,7 @@ for (const noVerdict of ['auth', 'unknown', 'refused', 'incomplete', 'interrupt'
 }
 for (const older of ['passed', 'failed']) for (const newer of ['passed', 'failed']) for (const clear of [false, true]) {
   test(`bounded generation older=${older} newer=${newer} clear=${clear}`, async t => {
-    const ctx = await fixture(t); await ctx.invoke(); change(ctx);
+    const ctx = await fixture(t, { independentSlots: true }); await ctx.invoke(); change(ctx);
     let release; const gate = new Promise(done => { release = done; });
     ctx.mode(older); ctx.delay(gate);
     const before = ctx.fake.posts.filter(row => row.command === 'check').length;
