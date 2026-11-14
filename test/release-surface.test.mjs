@@ -1,7 +1,7 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 const root = process.env.PDD_RELEASE_SURFACE_ROOT || resolve(import.meta.dirname, '..');
 const read = path => readFileSync(join(root,path),'utf8');
@@ -21,7 +21,9 @@ test('RELEASE8: public branch examples and messages use neutral names', () => {
   assert.doesNotMatch(read('docs/runtime-boundaries.md'),/the runtime team/);
 });
 test('RELEASE9: runbook and lint documentation describe current behavior', () => {
-  for(const file of ['RUNBOOK.md','skills/pdd-prompting/RUNBOOK.md']) assert.doesNotMatch(read(file),/The existing `http.prompt`.*still handles/);
+  const runbookFiles = ['RUNBOOK.md', 'skills/pdd-prompting/RUNBOOK.md',
+    ...readdirSync(join(root, 'skills/pdd-prompting/runbook')).filter(name => name.endsWith('.md')).map(name => `skills/pdd-prompting/runbook/${name}`)];
+  for(const file of runbookFiles) assert.doesNotMatch(read(file),/The existing `http.prompt`.*still handles/,file);
   assert.doesNotMatch(read('docs/lint-capacity.md'),/obsolete unknown wording/);
 });
 test('RELEASE12: launcher prompt describes its actual POSIX shell shebang and Node invocation', () => {
