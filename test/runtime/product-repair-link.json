@@ -16,6 +16,7 @@
     }
   ],
   "initial_world": {
+    "unused_resource_counters": {"unused-github-pullRequest": 0, "unused-repository-closeBaseSource": 0, "unused-repository-openBaseSource": 0},
     "files": {
       "/project/product/map.md": {
         "content": "# Coffee pickup: map\nSentence: \"A phone app to order coffee, a shop server, and a barista screen.\"\nSize: medium (12 CORE Stories, 3 parts)\n\n## Parts\n| Part | Folder | What it is |\n|---|---|---|\n| phone | prompts/phone | The app that a customer uses. |\n| server | prompts/server | The shop server between the phone and the barista. |\n| barista | prompts/barista | The screen behind the counter. |\n\n## Stories\n| Id | Part | Story | Tag |\n|---|---|---|---|\n| P01 | phone | I see the menu with prices. | CORE |\n| P02 | phone | I order a latte and see \"Ordered\". | CORE |\n| P03 | phone | I see \"Ready\" when my order is done. | CORE |\n| P04 | phone | I see a reason when my order is refused. | CORE |\n| S01 | server | My valid order becomes a ticket. | CORE |\n| S02 | server | My order for an unknown drink is refused with a reason. | CORE |\n| S03 | server | My completed ticket makes the order ready. | CORE |\n| S04 | server | I can read the current status of my order. | CORE |\n| B01 | barista | I see waiting tickets. | CORE |\n| B02 | barista | I mark a ticket done. | CORE |\n| B03 | barista | I see the drink and size on each ticket. | CORE |\n| B04 | barista | I see when there are no waiting tickets. | CORE |\n| P09 | phone | I can save a favourite drink. | LATER |\n\n## Journeys\n| Id | Journey | Stories |\n|---|---|---|\n| J1 | I order a latte. The barista sees it and marks it done. My phone shows \"Ready\". | P02, S01, S03, B01, B02, P03 |\n\n## Questions\n| Id | Question | Recommendation | Example | Answer |\n|---|---|---|---|---|\n| Q1 | Can a customer cancel an order? | No, not in the first version. | \"Cancel\" is LATER. | No. |\n",
@@ -34,7 +35,11 @@
       "/project": "{\"version\": 2, \"repository\": \"example/coffee\", \"bindings\": [{\"run\": \"phone-1\", \"issue\": 81}]}"
     }
   },
-  "simulation": {"savedChecks.evidence": {"action":"port.write","world_pointer":"/requests","result_template":{"json":"{\"stories\":[],\"warnings\":[]}"}},
+  "simulation": {
+    "github.pullRequest": {"action": "fixture.lookup", "world_pointer": "/unused_resource_counters/unused-github-pullRequest", "cases": [{"args": {"cwd": "__unused__", "repository": "__unused__", "number": 1}, "call_index": 1, "result": {"json": "null"}}], "result_template": null, "result_value_pointer": ""},
+    "repository.closeBaseSource": {"action": "fixture.lookup", "world_pointer": "/unused_resource_counters/unused-repository-closeBaseSource", "cases": [{"args": {"handle": "__unused__"}, "call_index": 1, "result": {}}], "result_template": null, "result_value_pointer": ""},
+    "repository.openBaseSource": {"action": "fixture.lookup", "world_pointer": "/unused_resource_counters/unused-repository-openBaseSource", "cases": [{"args": {"cwd": "__unused__", "baseBranch": "__unused__"}, "call_index": 1, "result": {"root": null, "handle": null}}], "result_template": null, "result_value_pointer": ""},
+    "savedChecks.evidence": {"action":"port.write","world_pointer":"/requests","result_template":{"json":"{\"stories\":[],\"warnings\":[]}"}},
     "productState.lock": {
       "action": "port.write",
       "world_pointer": "/requests",

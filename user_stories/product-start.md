@@ -21,3 +21,7 @@ exist, prefer an issue with a local feature run, then choose the oldest and warn
 creation. Give the agent an example filename beginning with the Story's map ID.
 Long titles fit GitHub's 256-character limit with a warning and a clear Story
 count or range; the body keeps every full Story ID and text.
+
+```pdd-boundary
+prompts/cli/product.prompt.md
+```
