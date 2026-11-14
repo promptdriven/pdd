@@ -4,8 +4,8 @@ Own `src/runtime/product-drafts.mjs`. Export synchronous
 `withProductDrafts({root, parts, snapshot, parseProductDocuments, captureSource}, prepare)`.
 It calls `prepare(source, files)` with repository-relative read/stat source ports
 and an array of `{path,bytes}` draft inputs, returning the callback result.
-The combined source also supplies `validateCapture(sources)`, accepting the
-final capture's `{path,bytes}` records. After root capture, the client must call
+The combined source also supplies `validateCapture(sources, capture = {})`, accepting the
+final capture's `{path,bytes}` records and its reference/read metadata. After root capture, the client must call
 it to refuse any root fallback inside an active draft's owned folder or map,
 including references reached only by scenario steps or prompt dependencies.
 Also audit reference targets and captured reads: expansion must not hide a root
@@ -53,10 +53,17 @@ tap chains, shared world semantics and limits.
   returns draft inputs with the two generated artifacts and effective seed scenario.
   Never write source files, run records, approvals, branches or worktrees.
 
+## Parser port
+
+`parseProductDocuments({mapText, planText})` is the injected canonical product
+parser. Its result supplies `product.parts` records with `part` (part ID) and
+`folder` (owned prompt folder), and `product.runs` records with `run` (planned-run
+ID) and `part` (part ID or `all`). Preserve its validation and errors; this
+adapter does not generate or redefine that parser. The [product owner](product.prompt.md)
+is navigation for its wider startup/status responsibilities.
+
 ## Dependencies
 
-- [Product](product.prompt.md): required generation context for the canonical
-  product document parser and planned-run markers.
 - [Workflow runs](workflow-runs.prompt.md): required generation context for local
   run records and active/ended state.
 - [Preflight](runtime-preflight.prompt.md): required generation context for Git
@@ -70,8 +77,8 @@ tap chains, shared world semantics and limits.
 {
   "kind": "native-only",
   "reason": "Verifies real Git common-directory/worktree identity and stable source snapshots across multiple checkouts; ordinary Node tests exercise these filesystem and Git boundaries.",
-  "status": "draft",
-  "prose_sha256": "f546e466c781c37a7b2ae86993a54b6cff76f0331d47b5498dc949d4bd81f645"
+  "status": "approved",
+  "prose_sha256": "4e6343a6db89c1ff3cb74faeee4ae0107dd63d1a62d846fab188e60a3ea95d29"
 }
 ```
 </details>
