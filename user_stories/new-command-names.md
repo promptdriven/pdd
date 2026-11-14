@@ -29,6 +29,13 @@ I can run `pdd test`, `pdd lint`, `pdd simulate` (short: `pdd sim`) and `pdd wor
 
 `pdd sim` and `pdd workflow start` are quiet forms of `pdd simulate` and `pdd workflow run`: the same plan and the same result, with no extra line. Help and shell completion show only `pdd test`, `pdd lint`, `pdd simulate` and `pdd workflow run`. `pdd test --lint` still works like `pdd lint`, and `--lint` and `--local` stay hidden on `pdd test`. Forbidden: a notice for a quiet form, a different result from the main name, `workflow start`, `check` or `try` in help or completion, or a new refusal for `pdd test --lint`.
 
-No line that pdd prints names `pdd check` or `pdd try`, except the removal line. This covers next-step hints, errors, progress lines, status lines, PR text and the guide text. Forbidden: `Read the results later with: pdd check --read BATCH`, `Run pdd try <story> --new` or `pdd try:` in a line that pdd writes.
+No line that pdd prints names `pdd check` or `pdd try`, except the removal line. This covers next-step hints, errors, progress lines, status lines, PR text and the guide text. Forbidden: `Read the results later with: pdd check --read BATCH`, `Run pdd try new-command-names --new` or `pdd try:` in a line that pdd writes.
 
 The new words are data in one place, so a later rename is one edit. The test file checks help, removal lines, quiet forms and usage errors. That nothing runs, completion and the hint lines need Node tests in the code area.
+
+The boundary includes the CLI entry and every Runtime call target. Address, PATH and skill implementations are native callback dependencies, represented by resources rather than excluded executable prompt calls.
+
+```pdd-boundary
+prompts/cli/pdd-cli.prompt.md
+prompts/cli/interpreter-version.prompt.md
+```
