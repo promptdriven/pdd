@@ -10,7 +10,9 @@ const cases = scenario.steps.map((step, index) => ({ step, index }));
 cases.push({ step: scenario.steps[1], index: 0, stage: 'before', label: 'before-stage evidence' });
 cases.push({ step: scenario.steps[1], index: 0, stage: 'pr1', label: 'PR 1 evidence' });
 cases.push({ step: scenario.steps[1], index: 0, mismatch: true, label: 'mismatched summary producer' });
-for (const { step, index, stage, mismatch, label } of cases) test(`scenario: ${label ?? step.step_id}`, t => {
+cases.push({ step: scenario.steps[1], index: 0, stage: 'pr1', sameRoot: true, label: 'same-root unmarked PR 1 evidence' });
+cases.push({ step: scenario.steps[0], index: 1, sameRoot: true, label: 'same-root unmarked current history' });
+for (const { step, index, stage, mismatch, sameRoot, label } of cases) test(`scenario: ${label ?? step.step_id}`, t => {
   const dir = mkdtempSync(join(tmpdir(), 'pdd-associated-vector-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const translate = path => join(dir, path);
@@ -18,7 +20,7 @@ for (const { step, index, stage, mismatch, label } of cases) test(`scenario: ${l
     const target = translate(path);
     mkdirSync(dirname(target), { recursive: true });
     const content = path.endsWith('/batch.json') || path.endsWith('/summary.json')
-      ? file.content.replaceAll('/producer', translate('/producer')) : file.content;
+      ? file.content.replaceAll('/producer', translate(sameRoot ? '/run' : '/producer')) : file.content;
     writeFileSync(target, content);
   }
   if (mismatch) {
@@ -35,7 +37,7 @@ for (const { step, index, stage, mismatch, label } of cases) test(`scenario: ${l
     workspace: input => {
       assert.deepEqual({ ...input, root: '/run', producerRoot: '/producer' }, fixture.args);
       assert.equal(input.root, translate('/run'));
-      assert.equal(input.producerRoot, translate('/producer'));
+      assert.equal(input.producerRoot, translate(sameRoot ? '/run' : '/producer'));
       return fixture.result.eligible ? { state: 'eligible', stage: stage ?? 'current' } : { state: 'unavailable' };
     },
   });

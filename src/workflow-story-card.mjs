@@ -244,9 +244,9 @@ export function fullCheckPass({ root, since = 0, tests = [], prompts = [], stori
     if (ports.workspace) {
       let association;
       try { association = ports.workspace({ root, producerRoot: batch.root, tests: [...new Set(batch.rows.map(row => row?.test))], source_sha256: batch.source_sha256, runId: batch.association?.runId ?? null, stage: batch.association?.stage ?? null }); } catch { continue; }
-      if (association?.state !== 'eligible' || association.stage !== 'current') {
-        if (real(batch.root) !== wanted || batch.association) continue;
-      }
+      if (association?.state === 'eligible') {
+        if (association.stage !== 'current') continue;
+      } else if (real(batch.root) !== wanted || batch.association) continue;
     } else if (real(batch.root) !== wanted || batch.association) continue;
     const at = Date.parse(batch.created_at);
     if (!Number.isFinite(at) || at < since) continue;
