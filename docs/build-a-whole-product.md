@@ -38,6 +38,26 @@ Review the plan PR's parts and contracts. The coffee plan has `server-1`,
 barista screen. Each part tests other parts as fakes from their contracts.
 A feature run reads the map and contracts and does not change `contracts/`.
 
+## Check the plan
+
+Before part prompts and Story tests exist, run `pdd product status` to read the
+map and plan and report structural problems such as duplicate IDs or unknown
+references. It makes no interpreter calls, though it may read GitHub for run
+status. Run `pdd contracts` to inventory shared records and their users; unused
+records can have no users yet. Its warnings are advisory and a successful listing
+does not validate the schemas.
+
+Review the shared schemas and seed with the map and boundaries. Walk through
+normal, refusal and empty-world examples, and check that each required domain
+boundary and ownership is represented. These checks do not establish a hosted
+lint pass.
+
+Hosted `pdd lint` requires program-scenario tests, so a plan without them cannot
+run it. `pdd lint --local` is a partial local check; it does not validate shared
+schemas and cannot stand in for hosted lint. There is no need to add placeholder
+tests. Once feature Story tests exist, `pdd test` includes lint, so a separate
+lint run before it is unnecessary.
+
 ## Start and track runs
 
 After the plan PR is merged and its base branch is available locally:
