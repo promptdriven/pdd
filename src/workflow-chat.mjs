@@ -1357,7 +1357,7 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
             ...(Object.hasOwn(layout, 'repoCreateIntent') ? {repoCreateIntent: layout.repoCreateIntent} : {}), workspaceId: layout.workspaceId, ...layout.root} : layout;
           await save(record.phase, custody); await reconcileHistorical();
         },directory:ports.layoutDirectory,...(ports.execFile?{execFile:ports.execFile}:{})});
-      record.replacement={...record.replacement,area:record.area,agent,launchProfile:structuredClone(record.launchProfile),herdrAgentName:chatAgentName(record.launchProfile,record.area,run),tabId:layout.tabId,paneId:layout.paneId,terminalId:layout.terminalId,workspaceId:layout.workspaceId,repoWorkspaceId:layout.repoWorkspaceId,label:original.label,startedAt:record.replacement?.startedAt??now(),session:record.replacement?.session??(agent==='claude'?{agent,id:uuid()}:null),configDir,messageFile:join(run.runDir,`${record.area}-restart-${record.id}-start.md`),state:'starting'};
+      record.replacement={...record.replacement,area:record.area,agent,launchProfile:structuredClone(record.launchProfile),herdrAgentName:chatAgentName(record.launchProfile,record.area,run),tabId:layout.tabId,paneId:layout.paneId,terminalId:layout.terminalId,workspaceId:layout.workspaceId,repoWorkspaceId:layout.repoWorkspaceId,label:original.label,startedAt:record.replacement?.startedAt??now(),session:record.replacement?.session??(agent==='claude'?{agent,id:uuid()}:null),configDir,messageFile:join(run.runDir,`${record.area}-restart-${record.id}-start.md`),launchExitFile:record.replacement?.launchExitFile??join(run.runDir,`${record.area}-launch-${uuid()}.exit`),state:'starting'};
     };
     if(record.phase==='closed') {
       requireHome({ agent, configDir });
@@ -1372,10 +1372,16 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
         if(unexplained.length!==1 || matching.length!==1) throw uncertain();
         const rows=panes.filter(row=>row.tab_id===matching[0].tab_id);
         if(rows.length!==1||rows[0].workspace_id!==original.workspaceId) throw invalid();
-        record.replacement={area:record.area,agent,launchProfile:structuredClone(record.launchProfile),herdrAgentName:chatAgentName(record.launchProfile,record.area,run),tabId:matching[0].tab_id,paneId:rows[0].pane_id,terminalId:rows[0].terminal_id,workspaceId:original.workspaceId,repoWorkspaceId:original.repoWorkspaceId,label:original.label,startedAt:now(),session:agent==='claude'?{agent,id:uuid()}:null,configDir,messageFile:join(run.runDir,`${record.area}-restart-${record.id}-start.md`),state:'starting'};
+        record.replacement={area:record.area,agent,launchProfile:structuredClone(record.launchProfile),herdrAgentName:chatAgentName(record.launchProfile,record.area,run),tabId:matching[0].tab_id,paneId:rows[0].pane_id,terminalId:rows[0].terminal_id,workspaceId:original.workspaceId,repoWorkspaceId:original.repoWorkspaceId,label:original.label,startedAt:now(),session:agent==='claude'?{agent,id:uuid()}:null,configDir,messageFile:join(run.runDir,`${record.area}-restart-${record.id}-start.md`),launchExitFile:join(run.runDir,`${record.area}-launch-${uuid()}.exit`),state:'starting'};
       }
       await save('prepared');
     }
+    const finishFailedLaunch = async target => {
+      const live=await chatSession(target,{...ports,run,env,herdr});
+      const observed=observeLifecycle(target,live,now(),agent);
+      if(observed.state!=='failed') return false;
+      applyLifecycle(target,observed); await save('launched'); return true;
+    };
     await reconcileHistorical();
     if(record.phase==='launchRequested') {
       const containerPresent=owned(record.replacement);
@@ -1384,6 +1390,7 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
       if(!native) {
         if(record.recovery?.resumeRequested) throw uncertain();
         const target=record.replacement;
+        if(containerPresent && await finishFailedLaunch(target)) return target;
         const anchor=attemptAnchor(target);
         if(anchor===null || now()-anchor<START_GRACE_MS) throw uncertain();
         // A shell in front proves only that no agent runs now, not that none ever ran. Look for this attempt's session first.
@@ -1398,8 +1405,9 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
           requestIntent();
           requireHome(target);
           await save('launchRequested');await reconcileHistorical();
-          try {await launchInPane(herdr,target.paneId,{commonDir:run.commonDir,sourceRoot:run.sourceRoot,agent,cwd:run.root,addDirs:agentDirs(run),messageFile:target.messageFile,sessionId:target.session?.id,configDir,...launchSettings(run,target)},{run,env,ports});}
+          try {await launchInPane(herdr,target.paneId,{commonDir:run.commonDir,sourceRoot:run.sourceRoot,agent,cwd:run.root,addDirs:agentDirs(run),messageFile:target.messageFile,sessionId:target.session?.id,configDir,...launchSettings(run,target),launchExitFile:target.launchExitFile},{run,env,ports});}
           catch(error){error.chat={...target};throw error;}
+          if(await finishFailedLaunch(target)) return target;
           delete record.replacement.startUnconfirmed;await save('launched');return record.replacement;
         }
         // This attempt ran: resume its exact session in a verified owned container; never send a second first message.
@@ -1423,8 +1431,9 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
     // The checkpoint rereads cancellation. Legacy cancel may still arrive after that check.
     requireHome(record.replacement);
     record.replacement.startUnconfirmed=true;requestIntent();await save('launchRequested');await reconcileHistorical(true);
-    try {await launchInPane(herdr,record.replacement.paneId,{commonDir:run.commonDir,sourceRoot:run.sourceRoot,agent,cwd:run.root,addDirs:agentDirs(run),messageFile:record.replacement.messageFile,sessionId:record.replacement.session?.id,configDir,...launchSettings(run,record.replacement)},{run,env,ports});}
+    try {await launchInPane(herdr,record.replacement.paneId,{commonDir:run.commonDir,sourceRoot:run.sourceRoot,agent,cwd:run.root,addDirs:agentDirs(run),messageFile:record.replacement.messageFile,sessionId:record.replacement.session?.id,configDir,...launchSettings(run,record.replacement),launchExitFile:record.replacement.launchExitFile},{run,env,ports});}
     catch(error){error.chat={...record.replacement};throw error;}
+    if(await finishFailedLaunch(record.replacement)) return record.replacement;
     delete record.replacement.startUnconfirmed;await save('launched');return record.replacement;
   },{directory:ports.layoutDirectory});
   } catch(error) {if(error.historicalChat)return error.historicalChat;throw error;}

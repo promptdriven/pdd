@@ -40,10 +40,51 @@ test('an agent that exits before detection leaves a private receipt and a durabl
   const previous = f.ports.herdr;
   f.ports.herdr = async args => { if (args[0] === 'agent' && args[1] === 'get') throw Object.assign(Error('offline'), {code:'server_unavailable'}); return previous(args); };
   assert.match((await runStatus({ref:'17', cwd:f.source}, f.ports)).message, /Database unavailable/);
+  f.ports.herdr = previous;
+  const failedReplacement = await openRun({ref:'17', cwd:f.source, packageRoot, newSession:true}, f.ports);
+  assert.notEqual(failedReplacement.exitCode, 0);
+  assert.match(failedReplacement.message, /agent_launch_failed.*Database unavailable.*exit 14/);
+  const replacement = f.record().chats.at(-1);
+  assert.notEqual(replacement.launchExitFile, chat.launchExitFile);
+  assert.equal(readFileSync(replacement.launchExitFile, 'utf8').trim(), '14');
+  assert.equal(replacement.state, 'failed');
+  assert.equal(replacement.evidence.exitCode, 14);
+  assert.equal(f.record().chatReplacement.phase, 'launched');
+  assert.match((await runStatus({ref:'17', cwd:f.source}, f.ports)).message, /Database unavailable/);
   f.ports.herdr = herdr;
   const reopened = await openRun({ref:'17', cwd:f.source, packageRoot, newSession:true}, f.ports);
   assert.equal(reopened.exitCode, 0, reopened.message);
   assert.notEqual(f.record().chats.at(-1).paneId, chat.paneId);
+});
+
+test('a lost replacement launch reply recovers its failure receipt without redispatch', async t => {
+  const f = await fixture(t, {agent:'codex', name:'feature'});
+  const fake = join(f.base, 'codex');
+  writeFileSync(fake, '#!/bin/sh\nprintf "Database unavailable\\n"\nexit 14\n'); chmodSync(fake, 0o755);
+  const herdr = f.ports.herdr;
+  let launches = 0;
+  f.ports.herdr = async args => {
+    const result = await herdr(args);
+    if (args[0] === 'pane' && args[1] === 'run') {
+      launches++;
+      const shell = spawnSync('sh', ['-c', args[3]], {encoding:'utf8', env:{...process.env, PATH:`${f.base}:${process.env.PATH}`}});
+      assert.equal(shell.status, 14);
+      const pane = f.herdr.panes.find(p => p.pane_id === args[2]);
+      pane.screen = shell.stdout; delete pane.agent;
+      if (launches === 2) throw Object.assign(Error('reply lost'), {code:'herdr_failed'});
+    }
+    return result;
+  };
+  assert.notEqual((await f.run()).exitCode, 0);
+  assert.notEqual((await openRun({ref:'17', cwd:f.source, packageRoot, newSession:true}, f.ports)).exitCode, 0);
+  const pending = f.record().chatReplacement;
+  assert.equal(pending.phase, 'launchRequested');
+  const result = await openRun({ref:'17', cwd:f.source, packageRoot, newSession:true}, f.ports);
+  assert.notEqual(result.exitCode, 0);
+  assert.match(result.message, /agent_launch_failed.*Database unavailable.*exit 14/);
+  assert.equal(launches, 2);
+  assert.equal(f.record().chatReplacement.replacement.launchExitFile, pending.replacement.launchExitFile);
+  assert.equal(f.record().chats.at(-1).state, 'failed');
 });
 
 for (const exitCode of [0, 1]) test(`receipt preserves exit ${exitCode} in a worktree with shell metacharacters`, async t => {

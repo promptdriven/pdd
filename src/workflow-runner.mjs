@@ -5697,6 +5697,7 @@ async function openRunLocked({ ref, cwd, area, newSession = false, model, herdrA
       const replacementResult = message => done([...(chat.namingError ? [`Herdr name is not bound (${chat.namingError.code}); inspect the saved pane.`] : []), message].join('\n'));
       if (run.chatReplacement?.phase === 'ended') return replacementResult(`Ended the historical ${chat.area} replacement attempt without launching or resuming it. The current chat and progress are kept.`);
       if (run.chatReplacement?.phase === 'rolledBack') return replacementResult(`Restored the usable ${chat.area} chat. The same replacement attempt was rolled back.`);
+      if (chat.state === 'failed') return fail(`agent_launch_failed: ${chat.evidence?.message ?? 'Agent exited before startup was confirmed.'} (exit ${chat.evidence?.exitCode}). Retry: pdd workflow open ${run.number} --new`);
       if (run.chatReplacement?.phase === 'launched' && chat.area === run.areas[run.area]?.name && !chat.startUnconfirmed) armCurrentAutomaticChat(run, p);
       if (run.chatReplacement?.recovery?.resumeRequested) return replacementResult(`Resumed this attempt's ${chat.area} session in Herdr session pdd; no second first message was sent. The run, completed work, gates and approvals are kept.`);
       return replacementResult(`Started one fresh ${chat.area} chat in Herdr session pdd. The run, completed work, gates and approvals are kept.`);

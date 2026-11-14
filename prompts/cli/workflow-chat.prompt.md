@@ -44,11 +44,11 @@ A queued terminal command is not evidence that the agent started. Keep startup
 uncertainty separate from a definite early exit, so slow agents stay recoverable
 and setup failures retain a useful reason.
 
-For each `startChat` dispatch, checkpoint a unique `launchExitFile` alongside the
+For each `startChat` dispatch and each fresh `restartChat` replacement, checkpoint a unique `launchExitFile` alongside the
 starting identity before sending the command. The native command preserves its
 terminal input/output and writes its exit code privately to that file when it
 returns; it never redirects the interactive agent through a pipe. This receipt
-belongs only to that launch, not a later resume or replacement. Missing, unreadable
+belongs only to that launch, not a later resume; a replacement has its own receipt. Missing, unreadable
 or malformed receipts prove nothing. Retain ordinary lost-dispatch custody.
 
 When Herdr positively reports no agent in that pane, `chatSession` may return
@@ -80,7 +80,14 @@ same chat as running only on positive observation, failed with its evidence on
 positive launch failure, or starting otherwise. A confirmed immediate failure
 throws `agent_launch_failed` with that same failed chat as `error.chat`, without
 marking it unconfirmed. A pane acknowledgement alone never proves agent startup.
-This also applies to each later area started through `startChat`.
+This also applies to each later area started through `startChat` and each fresh
+replacement dispatch through `restartChat`. A replacement checkpoints its own
+receipt identity before dispatch and its observed failure before returning. A
+known failed replacement is a completed dispatch attempt, not a pending unknown
+launch; preserve its failed chat and let the runner return nonzero with the reason.
+A lost acknowledgement with positive matching receipt evidence may settle that
+same failed attempt, but must never send its first message again. Keep the existing
+uncertainty protocol when no receipt or native-session evidence exists.
 
 
 The [runner lifecycle](workflow-runner.prompt.md#chat-lifecycle) is authoritative for start, open, status and projections. Before ordinary start dispatch, prepare the chat identity and await `ports.checkpoint(chat)` so its starting state is durable; checkpoint failure sends nothing. An absent native agent or expired grace is not end evidence. Opening a starting chat uses injected clock/sleep and session/Herdr inspection until confirmation or the shared grace deadline; it does not launch or resume while confirmation is pending. Preserve the same identity on an uncertain reply. Report positive running/end/failure evidence to the runner before terminal attachment.
@@ -449,7 +456,7 @@ Export countReasons(kept) to count the reason fields, mergeReasonCounts(...group
 ```json
 {
   "status": "draft",
-  "prose_sha256": "1950cd021d67f884dae1087ac1c8e5fa965ad55099b3554c2ae953890fe43fff",
+  "prose_sha256": "ee287ac0efeb4ead2c6ee73c92ad7c4dc2a852ba7581e65e2f101e65163e85fe",
   "entries": [
     {
       "operation": "sendToChat",
