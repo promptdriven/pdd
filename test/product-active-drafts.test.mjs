@@ -66,8 +66,8 @@ function answer(entry, fake) {
   if (entry.url.endsWith('/tests') || entry.url.endsWith('/approvals')) return {status:200,json:{tests:[],approvals:[]}};
   return {status:200,json:fake.tryJob(entry.url.split('/').at(-1))};
 }
-async function open(setup, fake, options = {}) {
-  const {ports} = portsFor({HOME:setup.home,PDD_STATE_DIR:setup.state,PDD_RUNTIME_URL:fake.origin}, {openUrl:async()=>true});
+async function open(setup, fake, options = {}, givenPorts = {}) {
+  const {ports} = portsFor({HOME:setup.home,PDD_STATE_DIR:setup.state,PDD_RUNTIME_URL:fake.origin}, {openUrl:async()=>true,...givenPorts});
   const code = await runTry({cwd:setup.root,words:[],options:{'--product':true,'--journey':'J1','--no-open':true,'--no-wait':true,...options}}, ports);
   return {code, text:ports.stdout.text + ports.stderr.text};
 }
@@ -229,4 +229,15 @@ test('a new draft-only prompt retains its saved source baseline on product Try r
   assert.match(door.text,/CLI|command.line|terminal/i);
   assert.equal(fake.posts.length,2);
   assert.equal(fake.deletes.length,0);
+});
+
+test('product Try preserves an explicitly injected workflow record reader', async t=>{
+  const setup=fixture(t),fake=await fakeRuntime(t,answer),calls=[];
+  rmSync(join(setup.drafts.phone,'prompts/phone'),{recursive:true});
+  const result=await open(setup,fake,{},{
+    readWorkflowRun(path){calls.push(path);return null;}
+  });
+  assert.equal(result.code,0,result.text);
+  assert.equal(calls.length,2);
+  assert.ok(calls.every(path=>path.includes('pdd/runs/')));
 });

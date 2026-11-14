@@ -677,7 +677,7 @@ export async function runTry(input = {}, ports = {}) {
         askAgent: ports.askAgent ?? ports.agents?.ask ?? defaultAskAgent,
         parseProductDocuments,
         parseProductWorldWriters,
-        readWorkflowRun: readRun,
+        readWorkflowRun: ports.readWorkflowRun ?? readRun,
         askApproval,
         lineReader,
         promptPath,
