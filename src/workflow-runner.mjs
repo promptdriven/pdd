@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: d3a5333608fa0121171f7ddea502b8efbd07efb245e2ca29ec3115e444cf582c).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 3b041fb7110177667d998178eaf55ee69518a474d3da9d91aca4a19ec50cf85d).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { findOwners, isTestOwnedPath } from './file-owner.mjs';
@@ -51,7 +51,7 @@ import { startChat, sendToChat, herdrCommand, chatSession, chatHealth, openChat,
 import { samePath } from './workflow-herdr-layout.mjs';
 import { workflowAgentEntry } from './workflow-agents.mjs';
 import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
-import { PROMPT_TESTS_LABEL, PROMPT_TESTS_WORDS, causeText, format, isStoryPath, promptRefusal, render, runtimeOutputSlice, runtimePreflightSlice } from './runtime-seam.mjs';
+import { PROMPT_TESTS_LABEL, PROMPT_TESTS_WORDS, causeText, format, isStoryPath, loadRuntimeWorkspace, promptRefusal, render, runtimeOutputSlice, runtimePreflightSlice } from './runtime-seam.mjs';
 import { approvalRecords, preparePrEvidence } from './workflow-pr-evidence.mjs';
 import { validateProofRecord } from './workflow-prove.mjs';
 import { readRunResults, resultLines, usableResult, noResultLine, NO_VERDICT, prepareNativeEvidence, savedCheckCause, savedLostCheck } from './workflow-results.mjs';
@@ -1432,40 +1432,158 @@ async function matchingPromptApprovals(run, p) {
   });
 }
 
+const safeRepoPath = path => typeof path === 'string' && Boolean(path) && !path.startsWith('/') && !/[\\\u0000-\u001f\u007f]/.test(path) && path.split('/').every(part => part && part !== '.' && part !== '..' && part !== '.git');
+
 // Verify locally on the host whether every changed or owned prompt in the run declares a valid native-only contract.
-async function nativeOnlyPrompts(run, p) {
+async function nativeOnlyPrompts(run, area, p, head = 'HEAD') {
   try {
-    const files = await changedFiles(run, p);
+    let headSha = '';
+    try { headSha = (await rawGit(p, run.root, 'rev-parse', '--verify', `${head}^{commit}`)).trim(); } catch {}
+    if (!commitSha(headSha) && head !== 'HEAD') {
+      try { headSha = (await rawGit(p, run.root, 'rev-parse', '--verify', 'HEAD^{commit}')).trim(); } catch {}
+    }
+    let comparison = '';
+    if (commitSha(headSha) && typeof run.baseBranch === 'string' && run.baseBranch) {
+      try { comparison = (await rawGit(p, run.root, 'merge-base', headSha, `refs/remotes/origin/${run.baseBranch}`)).trim(); } catch {}
+    }
+    if (!commitSha(comparison) && commitSha(run.baseSha)) comparison = run.baseSha;
+    if (!commitSha(comparison)) return null;
+    const target = commitSha(headSha) ? headSha : 'HEAD';
+    const diffFiles = (await rawGit(p, run.root, 'diff', '--no-color', '--no-renames', '--name-only', '-z', comparison, target)).split('\0').filter(Boolean);
+    const ask = askArea(run), pr1 = ask && prOf(run, ask.name), label = area ? prLabel(run, area) : 'the PR';
+    const retained = Array.isArray(pr1?.sourcePaths) && (label === 'PR 2' || (label === 'PR 1' && comparison === target)) ? pr1.sourcePaths.filter(safeRepoPath) : [];
+    const files = [...new Set([...diffFiles, ...retained])];
     if (!files.length) return null;
+
+    let treeEntries = null;
+    if (commitSha(headSha)) {
+      try {
+        const treeOut = await rawGit(p, run.root, 'ls-tree', '-r', '-z', headSha);
+        treeEntries = new Map();
+        for (const row of treeOut.split('\0').filter(Boolean)) {
+          const match = /^(100644|100755|120000|160000) (blob|commit) ([a-f0-9]{40,64})\t(.+)$/.exec(row);
+          if (!match) return null;
+          treeEntries.set(match[4], { mode: match[1], type: match[2], oid: match[3] });
+        }
+      } catch { treeEntries = null; }
+    }
+    const blobCache = new Map();
+    const loadBlobs = async requested => {
+      if (!treeEntries) return;
+      const needed = requested.filter(path => !blobCache.has(path) && treeEntries.get(path)?.type === 'blob' && treeEntries.get(path).mode !== '160000');
+      const oids = [...new Set(needed.map(path => treeEntries.get(path).oid))];
+      if (!oids.length) return;
+      const byOid = new Map();
+      for (let i = 0; i < oids.length; i += 16) {
+        await Promise.all(oids.slice(i, i + 16).map(async oid => {
+          const shown = await p.execFile('git', ['cat-file', 'blob', oid], { cwd: run.root, encoding: 'buffer', maxBuffer: 64 * 1024 * 1024 });
+          if (shown.code !== undefined && shown.code !== 0) throw Error(shown.stderr || 'Committed object unavailable.');
+          byOid.set(oid, Buffer.isBuffer(shown.stdout) ? shown.stdout : Buffer.from(String(shown.stdout ?? ''), 'utf8'));
+        }));
+      }
+      for (const path of needed) blobCache.set(path, byOid.get(treeEntries.get(path).oid));
+    };
+
+    const headRegular = treeEntries
+      ? [...treeEntries.entries()].filter(([, entry]) => entry.mode === '100644' || entry.mode === '100755').map(([path]) => path).sort()
+      : gitFiles(run.root);
+    const visible = new Set(headRegular);
+
     const promptSet = new Set(files.filter(path => path.endsWith('.prompt.md')));
     const nonPrompts = files.filter(path => !path.endsWith('.prompt.md') && !isStoryPath(path) && !isTestOwnedPath(path));
     if (nonPrompts.length) {
-      const owned = findOwners({ root: run.root, paths: nonPrompts });
+      if (treeEntries) await loadBlobs(['pdd-bindings.json', ...headRegular.filter(path => path.endsWith('.prompt.md')), ...nonPrompts]);
+      const owned = treeEntries ? findOwners({ root: run.root, paths: nonPrompts }, {
+        files: () => headRegular,
+        read: (path, limit) => {
+          const parts = path.split('/');
+          for (let i = 1; i < parts.length; i++) {
+            if (treeEntries.get(parts.slice(0, i).join('/'))?.mode === '120000') throw Error('not a regular file');
+          }
+          const entry = treeEntries.get(path);
+          if (!entry) return null;
+          if (entry.mode !== '100644' && entry.mode !== '100755') throw Error('not a regular file');
+          const buf = blobCache.get(path);
+          if (!buf) throw Error('Committed file unavailable.');
+          return buf.subarray(0, limit);
+        },
+      }) : findOwners({ root: run.root, paths: nonPrompts });
       for (const row of owned.files) {
         if (!row.certain && row.source !== 'prose') return null;
         for (const owner of row.owners) promptSet.add(owner);
       }
     }
-    for (const path of files.filter(item => item.endsWith('.json'))) {
+
+    const jsonFiles = files.filter(item => item.endsWith('.json'));
+    if (treeEntries && jsonFiles.length) await loadBlobs(jsonFiles);
+    for (const path of jsonFiles) {
       let raw, doc;
-      try { raw = readFileSync(join(run.root, path), 'utf8'); } catch { continue; }
+      if (treeEntries) {
+        const entry = treeEntries.get(path);
+        if (!entry) continue;
+        if (entry.mode !== '100644' && entry.mode !== '100755') return null;
+        try { raw = new TextDecoder('utf-8', { fatal: true }).decode(blobCache.get(path)); } catch { continue; }
+      } else {
+        try { raw = readFileSync(join(run.root, path), 'utf8'); } catch { continue; }
+      }
       try { doc = JSON.parse(raw); } catch { continue; }
       if (doc?.schema_version !== 'prompt-runtime.program-scenario.v1') continue;
       if (!Array.isArray(doc.steps)) return null;
       for (const step of doc.steps) if (typeof step?.entry_path === 'string') promptSet.add(step.entry_path);
     }
+
     const paths = [...promptSet].sort();
-    if (!paths.length) return null;
-    const visible = new Set(gitFiles(run.root));
-    const verified = [];
-    for (const path of paths) {
-      const parsed = readPrompt(run.root, visible, path);
-      if (promptRefusal(parsed, 'interface')) return null;
-      const reason = typeof parsed.interface?.reason === 'string' ? parsed.interface.reason.trim() : '';
-      if (parsed.interface?.kind !== 'native-only' || !reason) return null;
-      verified.push({ path, reason });
+    if (!paths.length || paths.some(path => !safeRepoPath(path) || !visible.has(path))) return null;
+    if (!treeEntries) {
+      const verified = [];
+      for (const path of paths) {
+        const parsed = readPrompt(run.root, visible, path);
+        if (promptRefusal(parsed, 'interface')) return null;
+        const reason = typeof parsed.interface?.reason === 'string' ? parsed.interface.reason.trim() : '';
+        if (parsed.interface?.kind !== 'native-only' || !reason) return null;
+        verified.push({ path, reason });
+      }
+      return verified;
     }
-    return verified;
+
+    let workspace = Object.freeze({ configured: false, allowed_paths: Object.freeze([]) });
+    if (treeEntries.has('pdd-workspace.json')) {
+      const wsEntry = treeEntries.get('pdd-workspace.json');
+      if (wsEntry.mode !== '100644' && wsEntry.mode !== '100755') return null;
+      await loadBlobs(['pdd-workspace.json']);
+      const wsBuf = blobCache.get('pdd-workspace.json');
+      workspace = loadRuntimeWorkspace({ root: run.root }, {
+        stat: () => ({ exists: true, is_symlink: false, size: wsBuf.byteLength }),
+        read: () => ({ content: new TextDecoder('utf-8', { fatal: true }).decode(wsBuf) }),
+      });
+    }
+    await loadBlobs(paths);
+    const needsContracts = paths.some(path => {
+      const text = blobCache.get(path)?.toString('utf8') ?? '';
+      return text.includes('$contract') || text.includes('$seed');
+    });
+    const materialized = [...new Set([...paths, ...(needsContracts ? headRegular.filter(path => path.endsWith('.json') && path !== 'pdd-workspace.json') : [])])];
+    if (needsContracts) await loadBlobs(materialized);
+    const tempRoot = mkdtempSync(join(tmpdir(), 'pdd-native-scope-'));
+    try {
+      for (const relPath of materialized) {
+        if (!safeRepoPath(relPath) || relPath === 'pdd-workspace.json') continue;
+        const buf = blobCache.get(relPath);
+        if (!buf) return null;
+        const full = join(tempRoot, relPath);
+        mkdirSync(dirname(full), { recursive: true });
+        writeFileSync(full, buf, { mode: 0o600, flag: 'wx' });
+      }
+      const verified = [];
+      for (const path of paths) {
+        const parsed = readPrompt(tempRoot, visible, path, workspace);
+        if (promptRefusal(parsed, 'interface')) return null;
+        const reason = typeof parsed.interface?.reason === 'string' ? parsed.interface.reason.trim() : '';
+        if (parsed.interface?.kind !== 'native-only' || !reason) return null;
+        verified.push({ path, reason });
+      }
+      return verified;
+    } finally { rmSync(tempRoot, { recursive: true, force: true }); }
   } catch { return null; }
 }
 
@@ -1476,17 +1594,26 @@ async function syncNoVerdictLabel(run, pr, evidence, p) {
   try {
     const call = async args => {
       const reply = await p.execFile('gh', args, { cwd: run.root });
-      if (reply.code !== undefined && reply.code !== 0) throw Error(reply.stderr || 'GitHub label request failed');
+      if (reply.code !== undefined && reply.code !== 0) {
+        throw Object.assign(Error(reply.stderr || reply.stdout || 'GitHub label request failed'), { stderr: reply.stderr, stdout: reply.stdout, code: reply.code });
+      }
       return reply.stdout;
     };
-    const exempt = evidence.results.some(result => ['pdd test', 'pdd lint'].includes(result.kind)) || Boolean(evidence.nativeOnly?.length);
+    const exempt = evidence.results.some(result => ['pdd test', 'pdd lint'].includes(result.kind) && usableResult(result)) || Boolean(evidence.nativeOnly?.length);
     const view = JSON.parse(String(await call(['pr', 'view', pr.url, '--json', 'labels'])));
     if (!Array.isArray(view.labels)) throw Error('PR labels unavailable');
     const present = view.labels.some(label => label?.name === NO_VERDICT);
     if (!exempt && !present) {
       const labels = JSON.parse(String(await call(['label', 'list', '--repo', run.repo, '--limit', '1000', '--json', 'name'])));
       if (!Array.isArray(labels)) throw Error('Repository labels unavailable');
-      if (!labels.some(label => label?.name === NO_VERDICT)) await call(['label', 'create', NO_VERDICT, '--repo', run.repo]);
+      if (!labels.some(label => label?.name === NO_VERDICT)) {
+        try { await call(['label', 'create', NO_VERDICT, '--repo', run.repo]); }
+        catch (error) {
+          if (error?.code === 'workflow_progress_refused') throw error;
+          const detail = [error?.stderr, error?.stdout, error?.message].filter(Boolean).join('\n');
+          if (!/\balready[_ ]exists\b/i.test(detail)) throw error;
+        }
+      }
       await call(['pr', 'edit', pr.url, '--add-label', NO_VERDICT]);
     } else if (exempt && present) {
       await call(['pr', 'edit', pr.url, '--remove-label', NO_VERDICT]);
@@ -1498,7 +1625,7 @@ async function syncNoVerdictLabel(run, pr, evidence, p) {
   }
 }
 
-async function publicationEvidence(run, area, p) {
+async function publicationEvidence(run, area, p, head = 'HEAD') {
   const saved = { runId: run.runId, ...(Number.isFinite(run.startedAt) ? { startedAt: run.startedAt } : {}), runDir: run.runDir, root: run.root, baseSha: run.baseSha, baseBranch:run.baseBranch, workflow:run.workflow, number: run.number,
     decisions: run.decisions ?? [], promptApprovals: await matchingPromptApprovals(run, p),
     steps: run.areas.flatMap(item => item.steps).map(step => ({ step, summary: run.done[step]?.summary ?? '' })) };
@@ -1538,13 +1665,20 @@ async function publicationEvidence(run, area, p) {
   if (run.publicationPending) evidence.lines.unshift('Check evidence: publication-pending (source is being published).');
   // pdd's own pdd test and pdd lint results lead the body; the code PR's prove result is its Old-code proof line.
   const results = ownResults(run, p);
-  const hasSavedVerdict = results.some(result => ['pdd test', 'pdd lint'].includes(result.kind));
-  const nativeOnly = hasSavedVerdict ? null : await nativeOnlyPrompts(run, p);
+  const verdictResults = results.filter(result => ['pdd test', 'pdd lint'].includes(result.kind));
+  const usableTest = verdictResults.some(result => result.kind === 'pdd test' && usableResult(result));
+  const usableLint = verdictResults.some(result => result.kind === 'pdd lint' && usableResult(result));
+  const hasUsableVerdict = usableTest || usableLint;
+  const nativeOnly = usableTest && usableLint ? null : await nativeOnlyPrompts(run, area, p, head);
   const nativeEvidence = results.some(result => result.kind === 'native evidence');
-  evidence.pddLines = nativeOnly?.length
-    ? [`pdd result: not-applicable (native-only): ${nativeOnly.map(item => `${item.path} (${cleanNativeReason(item.reason)})`).join('; ')}.`,
-      ...(nativeEvidence ? resultLines(results, { kinds: ['native evidence'] }) : [])]
-    : resultLines(results, { kinds: ['pdd test', 'pdd lint', ...(nativeEvidence ? ['native evidence'] : [])] });
+  const verdictLines = verdictResults.length ? resultLines(verdictResults) : [];
+  const nativeOnlyLines = !usableTest && nativeOnly?.length
+    ? [`pdd result: not-applicable (native-only): ${nativeOnly.map(item => `${item.path} (${cleanNativeReason(item.reason)})`).join('; ')}.`]
+    : [];
+  const nativeEvidenceLines = nativeEvidence ? resultLines(results, { kinds: ['native evidence'] }) : [];
+  evidence.pddLines = hasUsableVerdict || nativeOnly?.length
+    ? [...verdictLines, ...nativeOnlyLines, ...nativeEvidenceLines]
+    : [...verdictLines, noResultLine(['pdd test', 'pdd lint']), ...nativeEvidenceLines];
   // The readable part (#3042) reads the same records as plain facts: results, approvals and the proof judgment.
   evidence.results = results;
   evidence.nativeOnly = nativeOnly;
@@ -1886,7 +2020,7 @@ async function readableFacts(run, area, p, evidence, { drafts = [], pending = fa
     records: {
       promptTests: test ? { result: testResult, pass: /✗/.test(testResult) ? false : /✓/.test(testResult) ? true : null, report: test.reports?.[0] ?? null, current: test.source === 'current' }
         : evidence.nativeOnly?.length ? { result: 'not-applicable (native-only)', pass: null, report: null, current: true } : null,
-      lint: lint ? { result: lintCount ? `${lintCount[1]} of ${lintCount[2]} tests pass` : resultText(lint.summary), pass: lintCount ? Number(lintCount[2]) > 0 && lintCount[1] === lintCount[2] : null }
+      lint: lint ? { result: lintCount ? `${lintCount[1]} of ${lintCount[2]} tests pass` : resultText(lint.summary), pass: lintCount ? (Number(lintCount[2]) > 0 ? lintCount[1] === lintCount[2] : evidence.nativeOnly?.length ? null : false) : null }
         : evidence.nativeOnly?.length ? { result: 'not-applicable (native-only)', pass: null } : null,
       replay: replay ? { ...replay, ...(replay.formal?.result === 'failed' ? { counterexample: formalCounterexample(run) } : {}) } : null,
       ...(run.workflow === 'small-change' && label === 'the PR' ? { checklist: readSmallChangeChecklist(run) } : {}),
@@ -2232,7 +2366,7 @@ async function publishAreaPr(run, area, p, lines, retry, automatic = null) {
     const metadata=Object.fromEntries(['publishedHeadSha','publicationBodySha256','readable','sourcePaths'].filter(key=>Object.hasOwn(existing,key)).map(key=>[key,existing[key]]));
     commitRun(run,p,latest=>{applyPublication(latest);const pr=latest.pr.find(pr=>pr.url===existing.url&&pr.stage===existing.stage);if(pr)Object.assign(pr,metadata);});
     if (area.then === 'ask-code') await refreshReplayBaseline(run,p,false,sourcePaths);
-    lines.push(...await syncNoVerdictLabel(run, existing, prepared, p));
+    if (!failed) lines.push(...await syncNoVerdictLabel(run, existing, prepared, p));
     lines.push(`Pushed the new commits to ${label}.`);
     return null;
   }
@@ -3318,12 +3452,11 @@ async function draftDescription(run, pr1, drafts, p) {
     if (typeof body !== 'string') throw Error('PR 1 description unavailable.');
     const old = body.split('\n').find(line => line.startsWith('Draft prompts: '));
     const draftBody = !old ? body : drafts.length ? body.replace(old, draftLine(drafts)) : body.replace(`\n\n${old}`, '').replace(old, '');
-    const area = askArea(run), evidence = await publicationEvidence(run, area, p), marker = `<!-- pdd-workflow:${run.runId}:${area.name} -->`;
+    const area = askArea(run), head = run.branch === pr1.branch ? 'HEAD' : `refs/remotes/origin/${pr1.branch}`, evidence = await publicationEvidence(run, area, p, head), marker = `<!-- pdd-workflow:${run.runId}:${area.name} -->`;
     if (evidence.lines.some(line => line.includes('pdd-workflow:')) || String(draftBody).replace(marker, '').includes('pdd-workflow:')) throw Error('Remove supplied workflow ownership markers.');
     // #3042: a readable description keeps pdd's body in its Details section; an older description is all pdd body and
     // gets the readable part now. The readable part is made again from the current records.
     const inside = detailsOf(String(draftBody).replace(marker, ''));
-    const head = run.branch === pr1.branch ? 'HEAD' : `refs/remotes/origin/${pr1.branch}`;
     let headSha = '';
     try { headSha = await git(p, run.root, 'rev-parse', '--verify', `${head}^{commit}`); } catch { /* The checker verdict stays unknown. */ }
     const facts = await readableFacts(run, area, p, evidence, { drafts, published: await publishedChecks(run, pr1, headSha, p), base: pr1.base, head });
@@ -3380,12 +3513,15 @@ async function draftDescription(run, pr1, drafts, p) {
     const fitted = verifyFit(safeRemainder, BODY_BUDGET - characters(leading) - characters(footer) - reserved, p.env, true);
     const placed = section => { const text = section.join('\n'); return fitted.includes(SLOT) ? fitted.replace(SLOT, () => text) : `${fitted}\n\n${text}`; };
     const nextBody = from < 0 ? `${leading}${fitted}${footer}` : withSummaries(steps, texts, section => `${leading}${placed(section)}${footer}`, BODY_BUDGET);
-    const labelWarnings = run.publicationPending ? [] : await syncNoVerdictLabel(run, pr1, evidence, p);
     // Only the time of the status line changed: nothing to write.
-    if (nextBody === body || sameReadableTop(nextBody, body)) { remember(); return labelWarnings; }
+    if (nextBody === body || sameReadableTop(nextBody, body)) {
+      remember();
+      return run.publicationPending ? [] : await syncNoVerdictLabel(run, pr1, evidence, p);
+    }
     const reply = await p.execFile('gh', ['pr', 'edit', pr1.url, '--body-file', '-'], { cwd: run.root, input: nextBody });
     if (reply.code !== undefined && reply.code !== 0) throw Object.assign(Error('PR 1 description update failed.'), { code: reply.code });
     remember();
+    const labelWarnings = run.publicationPending ? [] : await syncNoVerdictLabel(run, pr1, evidence, p);
     return [...labelWarnings, `pdd updated the PR 1 description: ${drafts.length ? `draft prompts left: ${drafts.join(', ')}` : 'no draft prompts are left'}.`];
   } catch (error) {
     if(error?.code==='workflow_progress_refused')throw error;
