@@ -142,3 +142,95 @@ Button "Restart".
     assert.deepEqual(actual.sort(), expected.sort(), `shared parent mask=${mask}`);
   }
 });
+
+test('bounded nested drawing metadata associates each generic parent view', t => {
+  const root = temp(t);
+  mkdirSync(join(root, 'views'));
+  const paths = ['views/alpha__stacked.ui.svg', 'views/beta__stacked.ui.svg'];
+  const own = ['Approve', 'Connect'];
+  const forms = [
+    path => `  - Drawing: ![Image](${path})`,
+    path => `  1. ![Image](${path})`,
+    path => `  - Preview: ![Image](${path})`,
+  ];
+  for (const [form, metadata] of forms.entries()) {
+    writeFileSync(join(root, 'screen.prompt.md'), `# Screen\nButton "Help".\n- First view\n  Button "Approve".\n${metadata(paths[0])}\n- Second view\n  Button "Connect".\n${metadata(paths[1])}\n`);
+    for (let mask = 0; mask < 16; mask++) {
+      const expected = [];
+      for (let i = 0; i < paths.length; i++) {
+        const required = ['Help', own[i]];
+        const present = required.filter((_, bit) => mask & (1 << (2 * i + bit)));
+        writeFileSync(join(root, paths[i]), `<svg>${present.map(label => `<text>${label}</text>`).join('')}</svg>`);
+        for (const label of required) if (!present.includes(label)) expected.push(`${paths[i]}|${label}`);
+      }
+      const actual = lintSvgLayouts({ root, files: ['screen.prompt.md', ...paths] })
+        .filter(w => w.includes('prompt control absent from drawing'))
+        .map(w => {
+          const match = w.match(/ -> (views\/[^:]+): control "([^"]+)": prompt control absent from drawing/);
+          assert.ok(match, w);
+          return `${match[1]}|${match[2]}`;
+        });
+      assert.deepEqual(actual.sort(), expected.sort(), `metadata form=${form} mask=${mask}`);
+    }
+  }
+});
+
+test('bounded child views do not narrow unassociated parent controls', t => {
+  const root = temp(t);
+  mkdirSync(join(root, 'views'));
+  const paths = ['views/alpha__stacked.ui.svg', 'views/beta__stacked.ui.svg', 'views/gamma__stacked.ui.svg'];
+  const own = ['Approve', 'Connect', 'Restart'];
+  for (const child of ['named', 'control-owning']) {
+    const childTitle = child === 'named' ? 'First view' : 'Drawing';
+    writeFileSync(join(root, 'screen.prompt.md'), `# Screen\n## Group\nButton "Help".\n### ${childTitle}\n![Image](${paths[0]})\nButton "Approve".\n### Second view\n![Image](${paths[1]})\nButton "Connect".\n## Outside\n![Image](${paths[2]})\nButton "Restart".\n`);
+    for (let mask = 0; mask < 64; mask++) {
+      const expected = [];
+      for (let i = 0; i < paths.length; i++) {
+        const required = ['Help', own[i]];
+        const present = required.filter((_, bit) => mask & (1 << (2 * i + bit)));
+        writeFileSync(join(root, paths[i]), `<svg>${present.map(label => `<text>${label}</text>`).join('')}</svg>`);
+        for (const label of required) if (!present.includes(label)) expected.push(`${paths[i]}|${label}`);
+      }
+      const actual = lintSvgLayouts({ root, files: ['screen.prompt.md', ...paths] })
+        .filter(w => w.includes('prompt control absent from drawing'))
+        .map(w => {
+          const match = w.match(/ -> (views\/[^:]+): control "([^"]+)": prompt control absent from drawing/);
+          assert.ok(match, w);
+          return `${match[1]}|${match[2]}`;
+        });
+      assert.deepEqual(actual.sort(), expected.sort(), `child=${child} mask=${mask}`);
+    }
+  }
+});
+
+test('bounded drawing identity resolves relative to the prompt directory', t => {
+  const root = temp(t);
+  mkdirSync(join(root, 'prompts'));
+  const paths = ['now.ui.svg', 'prompts/now.ui.svg'];
+  writeFileSync(join(root, 'prompts/screen.prompt.md'), `# Screen
+Button "Help".
+## First view
+![Image](../now.ui.svg)
+Button "Approve".
+## Second view
+![Image](now.ui.svg)
+Button "Connect".
+`);
+  for (let mask = 0; mask < 16; mask++) {
+    const expected = [];
+    for (let i = 0; i < paths.length; i++) {
+      const required = ['Help', ['Approve', 'Connect'][i]];
+      const present = required.filter((_, bit) => mask & (1 << (2 * i + bit)));
+      writeFileSync(join(root, paths[i]), `<svg>${present.map(label => `<text>${label}</text>`).join('')}</svg>`);
+      for (const label of required) if (!present.includes(label)) expected.push(`${paths[i]}|${label}`);
+    }
+    const actual = lintSvgLayouts({ root, files: ['prompts/screen.prompt.md', ...paths] })
+      .filter(w => w.includes('prompt control absent from drawing'))
+      .map(w => {
+        const match = w.match(/ -> ([^:]+\.ui\.svg): control "([^"]+)": prompt control absent from drawing/);
+        assert.ok(match, w);
+        return `${match[1]}|${match[2]}`;
+      });
+    assert.deepEqual(actual.sort(), expected.sort(), `relative identity mask=${mask}`);
+  }
+});

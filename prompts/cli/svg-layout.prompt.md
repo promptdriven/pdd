@@ -59,7 +59,7 @@ The CLI exposes this advisory through [Check](runtime-client.prompt.md).
 ```json
 {
   "kind": "native-only",
-  "status": "draft",
+  "status": "approved",
   "prose_sha256": "cc767b34bffba0b79c36076ac86be84efebfc5be68c7610b5386198834363a9b",
   "reason": "lintSvgLayouts reads real local prompt/drawing files and checks regular-file and symlink ancestors through its native filesystem boundary; it has no injectable file port. Native tests exercise its deterministic view policy and the public local-lint command alongside these reads."
 }

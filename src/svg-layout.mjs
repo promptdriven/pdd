@@ -114,9 +114,9 @@ function links(text) {
 const mentioned = (prose, value) => new RegExp(`(^|[^\\p{L}\\p{N}_])${escaped(normalize(value))}($|[^\\p{L}\\p{N}_])`, 'u').test(normalize(prose));
 
 // Keep scope independent of drawing contents: a missing control cannot select its view.
-function viewControlSources(source, drawings) {
+function viewControlSources(source, drawings, base) {
   const result = new Map(drawings.map(link => [link, []]));
-  const identity = link => { try { return resolve('/', decodeURIComponent(link)); } catch { return link; } };
+  const identity = link => { try { return resolve(base, decodeURIComponent(link)); } catch { return link; } };
   if (new Set(drawings.map(identity)).size < 2) return new Map(drawings.map(link => [link, source]));
   const definitions = source.split('\n').filter(line => /^\s*\[[^\]]+\]:/.test(line)).join('\n');
   const linked = text => {
@@ -192,7 +192,7 @@ function viewControlSources(source, drawings) {
   const attachment = current => {
     if (named(current.title).length || hasControls(current)) return false;
     const metadata = /^(?:drawing|svg|layout|preview|design|reference)s?:?$/.test(viewName(current.title));
-    const bareImage = current.listItem && /^\s*[-+*]\s+!?\[[^\]]*\](?:\([^\n]*\)|\[[^\]]*\])?\s*$/.test(current.text.join('\n'));
+    const bareImage = current.listItem && /^\s*(?:[-+*]|\d+[.)])\s+!?\[[^\]]*\](?:\([^\n]*\)|\[[^\]]*\])?\s*$/.test(current.text.join('\n'));
     return metadata || bareImage;
   };
   const scopeLinks = current => [
@@ -455,7 +455,7 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
     source = source.replace(/<details\b[^>]*>\s*<summary[^>]*>[^\n]*Runtime interface[^\n]*<\/summary>[\s\S]*?<\/details>/gi, '')
       .replace(/(^##+ Runtime interface[^\n]*\n)[\s\S]*?(?=^##+ |$(?![\s\S]))/gmi, '');
     const decodedSource = decodeHtml(source), drawings = [], drawingLinks = links(source).sort();
-    const controlSources = viewControlSources(source, drawingLinks);
+    const controlSources = viewControlSources(source, drawingLinks, resolve(root, dirname(prompt)));
     for (const link of drawingLinks) {
       let drawing;
       try { drawing = relative(root, resolve(root, dirname(prompt), decodeURIComponent(link))).split(sep).join('/'); } catch { drawing = link; }
