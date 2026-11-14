@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: c5211083dfc5fb2cc338687cb9bb779c0a1cc9e78d283e6f9b8403f5a1e89649).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 0b12289158448bd468d0108307a14988713572a1f3ed77682bc104df0ebdfc08).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -66,8 +66,6 @@ import { nativeGithubCounter } from './github-calls.mjs';
 import { storyCard, storyFingerprint, fingerprintChanges, fullCheckPass } from './workflow-story-card.mjs';
 
 import { applyCostMeasurement, captureClosedCi, costReport } from './cost-ledger.mjs';
-
-export const WORKFLOW_CAPABILITIES = Object.freeze(['prompt-reentry', 'route-interface-drafting', 'route-code-only-checker']);
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const CHANGE_PREFIX = 'The person asks for changes';
@@ -618,18 +616,6 @@ function clearChatFailure(run) {
 const revising = run => { const last = run.changes?.at(-1); return Boolean(last && !last.answer && last.stage === run.gate.area && last.at >= run.gate.at); };
 // A run stopped at the repair limit keeps that one-line reason, also after a later park (#3041).
 const stuckReason = run => run.repairLimit?.area ? repairLimitReason(run.repairLimit.area) : run.integrationLimit?.area ? integrationLimitReason(run.integrationLimit.area) : run.parkReason ?? 'automatic work stopped';
-// Read saved facts only. The digest must not probe or wake native workers.
-export function automaticAttention({ repo, machine }, ports = {}) {
-  return (ports.readRuns ? ports.readRuns() : allRuns({}, ports)).flatMap(run => {
-    if (run.repo?.toLowerCase() !== repo?.toLowerCase() || !run.automaticOrigin || run.automaticOrigin.machine !== machine
-      || run.state === 'cancelled' || run.state === 'completed' && run.gate?.kind !== 'ask-code') return [];
-    const question = openQuestion(run);
-    const item = run.state === 'stuck' ? { category: 'stuck', cause: stuckReason(run) }
-      : run.state === 'paused' ? { category: 'parked', cause: run.runtimeWait?.reason ?? run.parkReason ?? 'automatic work paused' }
-      : question || run.gate ? { category: 'decision', cause: question?.text ?? run.gate.kind } : null;
-    return item ? [{ number: run.number, ...item }] : [];
-  }).sort((a, b) => a.number - b.number);
-}
 const layoutClosing = run => ['close_intent', 'closed'].includes(run.layout?.phase);
 function automaticResumeWords(run, now) {
   const success = run.chatResumeSuccess, chat = currentChat(run);
@@ -1069,7 +1055,6 @@ function hideLocalPaths(text, run) {
 // Prompt tests lines in a step summary (0.1.6): "Prompt tests (<story>) (DRAFT)?: …" per Story, and the overall
 // "Prompt tests: …"; older summaries say "Runtime check" and read the same way. The chat pastes the lines that pdd test
 // prints, one per line or joined with "; "; a result ends at a line break, ";", a "Report" line, a link or the next line.
-const PROMPT_TESTS = new RegExp(PROMPT_TESTS_WORDS);
 const LABEL_START = new RegExp(`^${PROMPT_TESTS_WORDS}`);
 const LINE_PATTERN = new RegExp(`${PROMPT_TESTS_WORDS}((?:\\s*\\([^)]*\\))*):\\s*(.*?)(?=\\n|\\s*(?:;|\\bReport\\b|https?:\\/\\/|${PROMPT_TESTS_WORDS}|$))`, 'gs');
 // A result is only its pdd parts, joined by " · " (mark and criteria, checks, other states, AI calls). Words an agent
@@ -2365,11 +2350,12 @@ async function finishPr(run, area, step, p, lines, packageRoot = PACKAGE_ROOT) {
 const promptPathChanges = (approved, current) => !Array.isArray(approved) ? [] : [
   ...current.filter(path => !approved.includes(path)).map(path => `Prompt added: ${path}`),
   ...approved.filter(path => !current.includes(path)).map(path => `Prompt removed: ${path}`)];
-async function changedStoryGate(run, area, step, p, lines, snapshot = run.gate?.promptSnapshot, approval = storyCoverage(run), extraChanges = []) {
+async function changedStoryGate(run, area, step, p, lines, snapshot = run.gate?.promptSnapshot) {
+  const approval = storyCoverage(run);
   if (!approval?.fingerprint || !Array.isArray(snapshot)) return null;
   const paths = snapshot.map(row => row.path);
   const current = storyFingerprint({ root: run.root, changed: await changedFiles(run, p) });
-  const changes = [...extraChanges, ...fingerprintChanges(approval.fingerprint, current), ...promptPathChanges(approval.prompts, paths)];
+  const changes = [...fingerprintChanges(approval.fingerprint, current), ...promptPathChanges(approval.prompts, paths)];
   if (changes.length) {
     const contract=await storyContract(run,p),paths=await storyContractPaths(run,p);
     const gateId = run.gate.id;
@@ -2433,130 +2419,7 @@ function automaticPr1Scope(run, p, packageRoot) {
   } catch { return 'current automatic approval policy or operator scope is unavailable'; }
   return null;
 }
-function automaticPr1ParkingEligible(run, p) {
-  const park = run.parking;
-  return !park || park.phase === 'parked' && park.blocker?.kind === 'person'
-    && sameGate(park.personWait?.gate, run.gate) && !park.personWait?.question
-    && !run.blockedOn && !run.runtimeWait && !park.checkHeld
-    && blockerFor({...run, parking: null})?.kind === 'person' && !continuationCheckHeld(run, p);
-}
-function automaticPr1Eligible(run, {cwd, coordinatorId, machine}, p, published = null) {
-  const area = run.areas[run.area];
-  return validSavedAutomaticOrigin(run) && run.automaticOrigin.coordinatorId === coordinatorId
-    && run.automaticOrigin.machine === machine && samePath(run.sourceRoot, cwd)
-    && ['pdd-bug', 'pdd-feature'].includes(run.skill) && run.state === 'waiting'
-    && automaticPr1ParkingEligible(run, p) && !openQuestion(run) && !run.repairLimit && !run.integrationLimit
-    && (!run.chatReplacement || ['launched', 'rolledBack', 'ended'].includes(run.chatReplacement.phase))
-    && run.gate?.kind === 'approve-pr' && run.gate.area === area?.name
-    && area.gate === 'pr' && area.before === 'approve'
-    && (!prOf(run, area.name) || published && sameFact(prOf(run, area.name), published))
-    && area.steps.every(step => run.done[step]);
-}
-const recordedStoryDecision = run => [...run.decisions].reverse().find(decision =>
-  decision.stage === run.areas[storyGateIndex(run)]?.name && decision.decision === 'approve');
-
-async function deriveStoryCoverage(run, decision, p) {
-  const evidence = decision?.evidence;
-  if (!evidence?.id || !Array.isArray(evidence.prompts) || !readPromptApprovals({commonDir: run.commonDir}, p).some(row => sameFact(row, evidence)))
-    throw Error('recorded Story approval evidence is unavailable');
-  if (typeof decision.storyContract !== 'string' || !Array.isArray(decision.storyPaths))
-    throw Error('approval-bound Story contract is unavailable');
-  const paths = await storyContractPaths(run, p), changed = await changedFiles(run, p, true);
-  const inventory = [...new Set([...paths, ...changed.filter(path => path.endsWith('.json') || path.endsWith('.md') && path.split('/').includes('user_stories'))])].sort();
-  const folder = mkdtempSync(join(tmpdir(), 'pdd-story-coverage-'));
-  let recovered, changes = [];
-  try {
-    const texts = [];
-    // Freeze each file once. Contract and fingerprint then read the same bytes,
-    // without another asynchronous inventory or a read from the live worktree.
-    for (const path of inventory) {
-      const file = resolve(run.root, path);
-      if (!file.startsWith(resolve(run.root) + '/') || path.includes('\\') || path.split('/').includes('.git'))
-        throw Error('unsafe Story contract path');
-      let bytes;
-      try {
-        if (!lstatSync(file).isFile()) throw Error('Story contract files must be regular files');
-        bytes = readFileSync(file);
-      } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
-      texts.push([path, bytes.toString('utf8')]);
-      mkdirSync(dirname(join(folder, path)), {recursive: true});
-      writeFileSync(join(folder, path), bytes);
-    }
-    if (storyContractHash(run, texts) !== decision.storyContract)
-      changes = ['Story contract changed since its recorded approval'];
-    const fingerprint = storyFingerprint({root: folder, changed});
-    if (!changes.length && [...fingerprint.stories, ...fingerprint.tests].some(row => !decision.storyPaths.includes(row.path)))
-      changes = ['Story fingerprint contains files outside the approved contract'];
-    recovered = {fingerprint, derivedFrom: {storyContract: decision.storyContract}};
-  } finally { rmSync(folder, {recursive: true, force: true}); }
-  if (!changes.length && !recovered.fingerprint.stories.some(row => row.sha256 && row.criteria.length))
-    throw Error('recorded approval has no Story coverage');
-  return {coverage: {gateId: decision.gateId, evidenceId: evidence.id, at: decision.at,
-    fingerprint: recovered.fingerprint, prompts: evidence.prompts.map(row => row.path),
-    source: 'derived from the recorded approval', derivedFrom: recovered.derivedFrom}, changes};
-}
-export const advanceAutomaticPr1 = saveGuard((args, ports = {}) => lockedMutation(args, ports, async ({ref, cwd, packageRoot = PACKAGE_ROOT, coordinatorId, machine}, ports) => {
-  const p = deps(ports); p.pdd = pddFor(p, packageRoot);
-  const found = await resolveRun(ref, {cwd}, p);
-  if (found.error) return fail(found.error);
-  const run = found.run, area = run.areas[run.area];
-  const owner = {cwd, coordinatorId, machine};
-  if (!automaticPr1Eligible(run, owner, p)) return done('Automatic PR 1 gate skipped.');
-  const selected = structuredClone({origin: run.automaticOrigin, coverage: storyCoverage(run), storyDecision: recordedStoryDecision(run), area, index: run.area, branch: run.branch});
-  let publicationGate;
-  const progressRecorded = protectProgress(run, p, {validate: latest => {
-    // Only this invocation's durably saved PR may appear during its final transition.
-    if (!automaticPr1Eligible(latest, owner, p, prOf(run, area.name)) || !sameFact(latest.automaticOrigin, selected.origin)
-      || !sameFact(storyCoverage(latest), selected.coverage) || !sameFact(latest.areas[latest.area], selected.area)
-      || !sameFact(recordedStoryDecision(latest), selected.storyDecision)
-      || latest.area !== selected.index || latest.branch !== selected.branch
-      || publicationGate && (!sameGate(latest.gate, publicationGate) || latest.gate.storyChanges?.length))
-      throw Object.assign(Error('Automatic PR 1 eligibility changed. Preserve the current blocker and inspect the run.'), {code: 'workflow_progress_refused'});
-  }});
-  p.inspectProgress();
-  const hold = reason => {
-    const gateId = run.gate.id;
-    commitRun(run, p, latest => { if (latest.gate?.id === gateId) latest.gate.automaticHold = reason; });
-    return done(`PR 1 waits: ${reason}.`);
-  };
-  const scope = automaticPr1Scope(run, p, packageRoot);
-  if (scope) return hold(scope);
-  if (run.gate.storyChanges?.length) return hold('Story changes require a person approval');
-  const ownership = await continuationOwnership(run, run.root, p);
-  if (ownership) return hold(ownership);
-  let snapshot = await gatePromptSnapshot(run, p);
-  if (!storyCoverage(run)?.fingerprint) {
-    let recovered;
-    try { recovered = await deriveStoryCoverage(run, selected.storyDecision, p); }
-    catch (error) { return hold(`saved Story approval coverage is missing: ${oneLine(error.message)}`); }
-    snapshot = await gatePromptSnapshot(run, p);
-    const changed = await changedStoryGate(run, area, 'check', p, [], snapshot, recovered.coverage, recovered.changes);
-    if (changed) return hold('Story changes require a person approval');
-    const scope = automaticPr1Scope(run, p, packageRoot), ownership = await continuationOwnership(run, run.root, p);
-    if (scope || ownership) return hold(scope || ownership);
-    snapshot = await gatePromptSnapshot(run, p);
-    const changedAgain = await changedStoryGate(run, area, 'check', p, [], snapshot, recovered.coverage, recovered.changes);
-    if (changedAgain) return hold('Story changes require a person approval');
-    commitRun(run, p, latest => {
-      if (automaticPr1Scope(latest, p, packageRoot)
-        || !readPromptApprovals({commonDir: latest.commonDir}, p).some(row => sameFact(row, selected.storyDecision.evidence)))
-        throw Object.assign(Error('Recorded Story coverage authority changed. Keep the current gate.'), {code: 'workflow_progress_refused'});
-      latest.storyApproval = recovered.coverage;
-    });
-    selected.coverage = structuredClone(recovered.coverage);
-  }
-  const changed = await changedStoryGate(run, area, 'check', p, [], snapshot);
-  if (changed) return hold('Story changes require a person approval');
-  const contents = await worktreeContents(run, p);
-  const check = fullCheckPass({root: run.root, since: run.promptReturn?.at ?? run.startedAt ?? 0,
-    tests: contents.tests, stories: (storyCoverage(run).fingerprint.stories ?? []).filter(story => story.criteria.length).map(story => story.path),
-    prompts: snapshot.map(row => row.path)}, p);
-  if (!check.pass) return hold(`prompt check is not a full pass: ${check.problems.slice(0, 20).map(problem => `${problem.kind}: ${problem.path}: ${problem.detail}`).join('; ')}`);
-  publicationGate = structuredClone(run.gate);
-  p.inspectProgress();
-  return automaticPr1(run, area, 'check', p, [], check, packageRoot, progressRecorded);
-}, 'automatic-pr1.lock'));
-async function automaticPr1(run, area, step, p, lines, check, packageRoot, progressRecorded = () => {}) {
+async function automaticPr1(run, area, step, p, lines, check, packageRoot) {
   const ownership = await continuationOwnership(run, run.root, p);
   if (ownership) return fail(ownership);
   let snapshot, edits = [], approvalRecorded = false;
@@ -2661,7 +2524,6 @@ async function automaticPr1(run, area, step, p, lines, check, packageRoot, progr
     }
     if (equalFact(latest.question, selectedQuestion)) latest.question = null;
   });
-  progressRecorded();
   const label = prLabel(run, area), url = prOf(run, area.name).url;
   const head = [...lines, ...edits.map(edit => `Approved ${edit.path} ${edit.proseSha256} (full check pass under the Story approval)`),
     `pdd recorded ${step}. The prompt check passed in full on the current prompts (${check.tests.length} test${check.tests.length === 1 ? '' : 's'}), so pdd opened ${label === 'the PR' ? 'the PR' : label} with no approval question (route automatic-check-pass).`, ...published];
@@ -3941,9 +3803,6 @@ function parkedReplyEntries(run, p) {
   return readDeliveryJournal(run, p).requests.filter(entry => entry.key?.startsWith(`park-reply:${run.parking.at}:`)
     && entry.area === run.areas[run.area]?.name && entry.state === 'pending' && !entry.inFlight
     && equalFact(entry.question, run.question ?? null) && equalFact(entry.gate, run.gate ?? null));
-}
-export function hasParkedReply(run, ports = {}) {
-  try { return parkedReplyEntries(run, ports).length > 0; } catch { return false; }
 }
 const uptakeQuote = value => "'" + value.replaceAll("'", "'\"'\"'") + "'";
 const uptakeCommand = (id, p) => `${p.pdd ?? pddFor(p, PACKAGE_ROOT)} ${PUBLIC_COMMAND_ROUTES.find(route => route.id === 'workflow.request-uptake').prefix.join(' ')} ${uptakeQuote(id)} --summary ${uptakeQuote('what I changed')}`;
@@ -5729,28 +5588,6 @@ export const parkBlockedRun = saveGuard((args, ports) => lockedMutation(args, po
       ...(p.now() - fresh.parking.at >= 60_000 ? {'closing-retry': 1} : {})};
   });
   return {...done(result.warnings.join('\n')), recovery: closed ? 'parked' : 'skipped', reasonCounts: result.reasonCounts};
-}));
-
-// Keep run custody through the irreversible release. Unknown effects retain a
-// durable reservation, so a later tick retries instead of resuming unowned work.
-export const releaseParkedRun = saveGuard((args, ports) => lockedMutation(args, ports, async (input, ports) => {
-  const p = deps(ports), found = await resolveRun(input.ref, {cwd: input.cwd}, p), run = found.run;
-  const skipped = () => ({...done(''), recovery: 'skipped'});
-  const current = fresh => fresh && fresh.runId === input.runId && !ended(fresh)
-    && fresh.parking?.at === input.at && ['parked', 'releasing'].includes(fresh.parking.phase)
-    && validSavedAutomaticOrigin(fresh) && fresh.automaticOrigin.coordinatorId === input.coordinatorId
-    && fresh.automaticOrigin.machine === input.machine && samePath(fresh.sourceRoot, input.cwd)
-    && sameFact(fresh.automaticOrigin, run?.automaticOrigin) && fresh.root === run?.root
-    && !continuationCheckHeld(fresh, p);
-  if (!current(run) || typeof p.releaseParkedClaim !== 'function') return skipped();
-  if (!conditionalCommit(run, p, current, fresh => {fresh.parking.phase = 'releasing';})) return skipped();
-  if (!current(readRun(run.runDir))) return skipped();
-  const remote = await p.releaseParkedClaim(readRun(run.runDir));
-  if (remote?.state !== 'released' || !current(readRun(run.runDir))) return skipped();
-  const local = await releaseIssueClaim({cwd: input.cwd, issueNumber: run.number, runId: run.runId}, p);
-  if (local.state !== 'released' || !current(readRun(run.runDir))) return skipped();
-  const result = await cancelRunCommand(input, {...p, claimReleased: true});
-  return {...result, recovery: result.exitCode === 0 ? 'released' : 'skipped'};
 }));
 
 export const wakeParkedRun = saveGuard((args, ports) => lockedMutation(args, ports, async (input, ports) => {

@@ -345,8 +345,6 @@ An open `unconfirmed` incident still counts without resending.
 - [CLI](pdd-cli.prompt.md#autopilot-dispatch): generation and testing of dispatch, stdin and streams.
 - [Autopilot launcher](autopilot-launcher.prompt.md#stop-status-and-the-other-commands): status calls
   `alertStatusLine` with its saved repository and state root.
-- [Workflow runner attention](workflow-runner.prompt.md#automatic-attention-projection): required native context for
-  `automaticAttention` rows.
 - [Workflow runner lock](workflow-runner.prompt.md#native-admission-lock): required native context for
   `acquireRunLock` and shared record custody.
 - Native runtime: Node `fs`, `crypto`, `os`, timers and `fetch`.
