@@ -606,8 +606,7 @@ test('SEAM3: detector catches static, dynamic, re-export, URL, escaped and child
 test('SEAM5 (R2-3): every CLI command family, child entry, Autopilot tick and library entry matches recorded base module sets, cycles and guarded load failures', async t => {
   const { pathToFileURL } = await import('node:url');
   const { PUBLIC_COMMAND_ROUTES } = await import('../src/command-catalog.mjs');
-  const { REPLAY_CHILD_EXPR, SEAM_LOADS_RECORD, findTarjanCycles, inBatches, seamWorld } = await import('./helpers/seam-loads.mjs');
-  const record = readFileSync(SEAM_LOADS_RECORD, 'utf8').split('\n').filter(Boolean).map(line => line.split(' '));
+  const { REPLAY_CHILD_EXPR, SEAM_LOAD_BASES, findTarjanCycles, inBatches, readRecord, seamWorld } = await import('./helpers/seam-loads.mjs');
   const world = seamWorld();
   t.after(world.remove);
   const { bin, nonGit, repo, scratch } = world;
@@ -684,7 +683,10 @@ test('SEAM5 (R2-3): every CLI command family, child entry, Autopilot tick and li
     const loaded = results.get(key).loaded.map(name => `src/${name}`);
     assert.deepEqual(heavy.filter(name => loaded.includes(name)), [], `${key} must not load these heavy modules`);
   }
-  const loads = new Map(world.probes.map(([key]) => [key, record.filter(([entry]) => entry === key).map(([, name]) => name).sort()]));
+  const probeKeys = world.probes.map(([key]) => key);
+  const baseKeys = Object.entries(SEAM_LOAD_BASES).flatMap(([base, keys]) => [base, ...keys]);
+  assert.deepEqual(baseKeys.filter(key => !probeKeys.includes(key)), [], 'every key in SEAM_LOAD_BASES is a probe');
+  const loads = readRecord(probeKeys);
   for (const [key, { loaded, cycles }] of results) {
     assert.deepEqual(loaded, loads.get(key), `loaded modules mismatch for ${key}. Find why the code now loads a different set. A change to test/fixtures/seam-loads.txt needs a reviewer to read its diff before it is committed.`);
     if (ACYCLIC_ENTRIES.has(key)) {

@@ -12,6 +12,53 @@ const srcDir = join(root, 'src');
 export const SEAM_LOADS_RECORD = join(root, 'test/fixtures/seam-loads.txt');
 export const REPLAY_CHILD_EXPR = 'source.identity({root:process.argv[1],tests:JSON.parse(process.argv[2])}).files';
 
+export const SEAM_LOAD_BASES = {
+  'cli:--help': [
+    'cli:help-topic', 'cli:--version', 'cli:completion', 'cli:workflow-list', 'cli:setup', 'cli:files', 'cli:owner',
+    'cli:interface-draft', 'cli:approve', 'cli:metrics', 'cli:graph', 'cli:dependencies-prepare',
+    'cli:workflow-status', 'cli:workflow-view', 'cli:workflow-prove', 'cli:autopilot-regressions', 'cli:autopilot-off',
+  ],
+  'cli:dependencies-prepare': ['cli:dependencies-complete'],
+  'cli:workflow-status': ['cli:workflow-run', 'cli:workflow-done', 'cli:workflow-publish', 'cli:workflow-cost', 'cli:autopilot-alerts'],
+  'lib:product.mjs': ['cli:jobs', 'child:try-doors-launcher', 'lib:autopilot-doctor.mjs'],
+  'cli:jobs': ['cli:product-status'],
+  'cli:product-status': ['cli:product-next', 'cli:product-start', 'cli:approve-automatic', 'cli:contracts'],
+  'cli:approve-automatic': ['cli:approve-automatic-tests', 'cli:test', 'cli:lint', 'cli:simulate', 'cli:mcp'],
+  'cli:contracts': ['cli:contracts-sync'],
+  'lib:autopilot-doctor.mjs': ['tick:autopilot-launcher'],
+  'tick:autopilot-launcher': ['cli:autopilot-status'],
+  'cli:autopilot-status': ['cli:autopilot-doctor'],
+};
+const baseOf = new Map(Object.entries(SEAM_LOAD_BASES).flatMap(([base, keys]) => keys.map(key => [key, base])));
+
+export function recordLines(results) {
+  const lines = [];
+  for (const [key, { loaded }] of results) {
+    const base = results.get(baseOf.get(key))?.loaded ?? [];
+    for (const name of loaded) if (!base.includes(name)) lines.push(`${key} ${name}`);
+    for (const name of base) if (!loaded.includes(name)) lines.push(`${key} -${name}`);
+  }
+  return lines.sort();
+}
+
+export function readRecord(keys) {
+  const pairs = readFileSync(SEAM_LOADS_RECORD, 'utf8').split('\n').filter(Boolean).map(line => line.split(' '));
+  const sets = new Map();
+  const expand = key => {
+    if (!sets.has(key)) {
+      const set = new Set(baseOf.has(key) ? expand(baseOf.get(key)) : []);
+      for (const [entry, name] of pairs) {
+        if (entry !== key) continue;
+        if (name.startsWith('-')) set.delete(name.slice(1));
+        else set.add(name);
+      }
+      sets.set(key, [...set].sort());
+    }
+    return sets.get(key);
+  };
+  return new Map(keys.map(key => [key, expand(key)]));
+}
+
 const ASYNC_SEAM_BRIDGE_PROBES = new Set([
   'cli:approve-automatic', 'cli:approve-automatic-tests',
   'cli:test', 'cli:lint', 'cli:simulate', 'cli:contracts', 'cli:contracts-sync',
