@@ -947,10 +947,12 @@ test('3228: stopping a job sends SIGTERM then SIGKILL to detached child process 
   const subPgid = Number(await until(() => existsSync(groupFile) && readFileSync(groupFile, 'utf8')));
   const grandPid = Number(await until(() => existsSync(grandFile) && readFileSync(grandFile, 'utf8')));
   t.after(() => { for (const target of [-subPgid, grandPid, -job.pid]) try { process.kill(target, 'SIGKILL'); } catch {} });
-  // Ensure snapshotAgentJob has captured the detached child group leader before stop.
+  // Ensure the wrapper's durable manifest has captured the detached child group leader before stop.
   await until(() => {
-    const s = snapshotAgentJob(job);
-    return Array.isArray(s) && s.some(r => r.pid === subPgid && r.pgid === subPgid);
+    try {
+      const s = JSON.parse(readFileSync(`${job.token}.processes.json`, 'utf8'));
+      return Array.isArray(s) && s.some(r => r.pid === subPgid && r.pgid === subPgid);
+    } catch { return false; }
   });
   assert.equal(stopAgentJob(job), true);
   const deadGroup = pgid => { try { process.kill(-pgid, 0); return false; } catch (error) { return error.code === 'ESRCH'; } };

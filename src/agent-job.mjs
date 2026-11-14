@@ -53,7 +53,7 @@ export function startAgentJob({ id, dir, cwd, command, args = [], input = '', en
 
 function nativeAlive(pid, token) {
   try { process.kill(pid, 0); } catch (error) { if (error.code !== 'EPERM') return false; }
-  const row = spawnSync('ps', ['-ww', '-o', 'command=', '-p', String(pid)], { encoding: 'utf8', timeout: 5000, env: { ...process.env, LC_ALL: 'C', LANG: 'C' } });
+  const row = spawnSync('ps', ['-ww', '-o', 'command=', '-p', String(pid)], { encoding: 'utf8', timeout: 5000, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, LC_ALL: 'C', LANG: 'C' } });
   return row.status === 0 && String(row.stdout).includes(token);
 }
 
@@ -78,7 +78,7 @@ const cpuSeconds = text => {
 };
 export function agentJobCpu(job, ports = {}) {
   if (!(Number.isSafeInteger(job?.pid) && job.pid > 0)) return null;
-  const table = (ports.spawnSync ?? spawnSync)('ps', ['-A', '-o', 'pid=,ppid=,time='], { encoding: 'utf8', timeout: 5000 });
+  const table = (ports.spawnSync ?? spawnSync)('ps', ['-A', '-o', 'pid=,ppid=,time='], { encoding: 'utf8', timeout: 5000, maxBuffer: 64 * 1024 * 1024 });
   if (table.status !== 0) return null;
   const rows = String(table.stdout).split('\n').map(line => line.trim().split(/\s+/)).filter(row => row.length === 3).map(([pid, ppid, time]) => ({ pid: Number(pid), ppid: Number(ppid), cpu: cpuSeconds(time) }));
   const children = new Map();
@@ -120,7 +120,7 @@ function lifecycleRows(ports = {}, withUid = false) {
     return rows.some(row => row.pid === process.pid) && rows.every(row => processIdentity(row) && Number.isSafeInteger(row.uid)) ? rows : null;
   }
   const table = (ports.spawnSync ?? spawnSync)('ps', ['-A', '-ww', '-o', 'pid=', '-o', 'ppid=', '-o', 'pgid=', '-o', 'rss=', '-o', 'lstart=', '-o', 'command='],
-    { encoding: 'utf8', timeout: 5000, env: { ...process.env, LC_ALL: 'C' } });
+    { encoding: 'utf8', timeout: 5000, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, LC_ALL: 'C' } });
   return table?.status === 0 ? parseProcessTable(table.stdout) : null;
 }
 
@@ -260,7 +260,7 @@ function inOutsideLinuxSession(row, job, boundary, latest, ports = {}) {
   if (platform !== 'linux' || row.pgid === job.pid) return false;
   const read = pid => {
     const result = (ports.spawnSync ?? spawnSync)('ps', ['-ww', '-p', String(pid), '-o', 'pid=,sid=,uid=,state=,lstart='],
-      { encoding: 'utf8', timeout: 2000, env: { ...process.env, LC_ALL: 'C' } });
+      { encoding: 'utf8', timeout: 2000, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, LC_ALL: 'C' } });
     if (result?.status !== 0) return null;
     const match = /^\s*(\d+)\s+(\d+)\s+(-?\d+)\s+(\S+)\s+((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) .{20})\s*$/.exec(String(result.stdout));
     return match ? { pid: Number(match[1]), sid: Number(match[2]), uid: Number(match[3]), state: match[4], start: match[5].trim() } : null;
