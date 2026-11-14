@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-results.prompt.md (sha256: f39c0e8c7c72058393411296f0630401ca571c6b954fdd5c9b89e9c9414d8b93).
+// Generated from prompts/cli/workflow-results.prompt.md (sha256: 38ece5f5192ba1f81f52c0288d9b5e9fcd3e03dd78d8386683cf834bf8ef1cce).
 import { isDeepStrictEqual } from 'node:util';
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
@@ -12,7 +12,7 @@ import { runtimeCheckPlanSlice, runtimeOutcomeSlice, runtimeOutputSlice, runtime
 import { judgeOldCodeProof } from './workflow-pr-evidence.mjs';
 
 const { checkPlanResults, checkPlanResultLines } = runtimeCheckPlanSlice();
-const { outcomeText, resultOutcome } = runtimeOutcomeSlice();
+const { failedCheckCount, outcomeText, resultOutcome } = runtimeOutcomeSlice();
 const { PROMPT_TESTS_WORDS } = runtimeOutputSlice();
 const { captureSource, gitFiles, proseSha256, sourceFilePort } = runtimePreflightSlice();
 
@@ -240,11 +240,11 @@ const TEMPORARY_WORDS = /\bTry again in a minute\b/;
 const signIn = row => ![row.note, row.reason].some(item => TEMPORARY_WORDS.test(words(item)))
   && (ACCESS_NOTES.has(row.note?.code ?? row.reason?.code) || [row.note, row.reason].some(item => SIGN_IN_WORDS.test(words(item))) || SIGN_IN_WORDS.test(String(row.why ?? '')));
 export function checkCause(rows) {
-  const open = (Array.isArray(rows) ? rows : []).filter(row => row && typeof row === 'object').map(row => ({ ...row, ...resultOutcome(row) })).filter(row => row.state !== 'passed');
+  const open = (Array.isArray(rows) ? rows : []).filter(row => row && typeof row === 'object').map(row => ({ ...row, ...resultOutcome(row) })).filter(row => row.state !== 'passed' || failedCheckCount(row) > 0);
   if (!Array.isArray(rows) || !rows.length) return 'none';
   if (!open.length) return 'passed';
   const codes = row => (Array.isArray(row.refusals) ? row.refusals : []).map(item => item?.code);
-  if (open.some(row => row.state === 'failed' || ['broken-test','check-plan-prerequisite'].includes(row.reason?.code) || timeLimited(row) || row.state === 'refused' && (!codes(row).length || codes(row).some(code => !SERVICE_REFUSALS.has(code))))) return 'issue';
+  if (open.some(row => row.state === 'failed' || failedCheckCount(row) > 0 || ['broken-test','check-plan-prerequisite'].includes(row.reason?.code) || timeLimited(row) || row.state === 'refused' && (!codes(row).length || codes(row).some(code => !SERVICE_REFUSALS.has(code))))) return 'issue';
   if (open.some(row => ['not run', 'partial'].includes(row.state) && signIn(row))) return 'access';
   // An unknown answer that names the AI provider failure is a known end with no verdict.
   const provider = row => row.state === 'partial' && (SERVICE_REFUSALS.has(row.reason?.code) || SERVICE_REFUSALS.has(row.provider?.code) || codes(row).length > 0 && codes(row).every(code => SERVICE_REFUSALS.has(code)));

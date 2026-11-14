@@ -1,7 +1,21 @@
-// Generated from prompts/cli/runtime-outcome.prompt.md (sha256: 7c3a71e1c159daf73a9dde0779ddb976dc8ca86a9f6453550232541ee93f6e90).
+// Generated from prompts/cli/runtime-outcome.prompt.md (sha256: ff2c64ab9a5f6155385faf06df16da120b9bdf77fd7354b600a898c76096b9ab).
 // What happened to one selected test: the one place that turns a server answer into an outcome.
 export const PROVIDER_TEXT = 'the AI provider failed during the run. It is not a failed check. Do not send it again yet.';
 export const CHECK_STATES = Object.freeze(['waiting', 'sent', 'passed', 'failed', 'refused', 'partial', 'not run']);
+
+export function failedCheckCount(row = {}) {
+  if (Array.isArray(row?.failed_checks) && row.failed_checks.length > 0) return row.failed_checks.length;
+  const passed = row?.checks?.passed, total = row?.checks?.total;
+  if (Number.isSafeInteger(passed) && passed >= 0 && Number.isSafeInteger(total) && total > passed) return total - passed;
+  return 0;
+}
+
+export function providerText(row = {}) {
+  const failed = failedCheckCount(row);
+  return failed > 0
+    ? `the AI provider failed during the run after ${failed} ${failed === 1 ? 'check' : 'checks'} failed. Do not send it again yet.`
+    : PROVIDER_TEXT;
+}
 
 // The public result is independent of the transport state needed to resume a job.
 export function resultOutcome(row = {}) {
@@ -18,7 +32,7 @@ export function resultOutcome(row = {}) {
     failed: ['check-failed', 'A check failed.'], refused: ['admission-refused', 'Admission was refused.'],
     partial: ['no-server-verdict', 'No complete server verdict.'], 'not run': ['no-server-verdict', 'No server verdict for this test.'] };
   const [fallbackCode, fallbackMessage] = defaults[state];
-  const message = supplied?.message || (row.time_limit ? [row.time_limit.message, row.time_limit.fix].filter(Boolean).join(' ') : null) || (row.provider ? PROVIDER_TEXT : null) || row.message || (typeof row.reason === 'string' ? row.reason : null) || row.why || row.refusals?.[0]?.message || fallbackMessage;
+  const message = supplied?.message || (row.time_limit ? [row.time_limit.message, row.time_limit.fix].filter(Boolean).join(' ') : null) || (row.provider ? providerText(row) : null) || row.message || (typeof row.reason === 'string' ? row.reason : null) || row.why || row.refusals?.[0]?.message || fallbackMessage;
   return { state, reason: { code: code || fallbackCode, message } };
 }
 
