@@ -1,0 +1,80 @@
+{
+  "cases": [
+    {
+      "name": "older finishes first",
+      "order": [
+        0,
+        1
+      ],
+      "identities": [
+        "A",
+        "A"
+      ],
+      "clean": true
+    },
+    {
+      "name": "newer finishes first",
+      "order": [
+        1,
+        0
+      ],
+      "identities": [
+        "A",
+        "A"
+      ],
+      "clean": true
+    },
+    {
+      "name": "three matching runs",
+      "order": [
+        1,
+        0,
+        2
+      ],
+      "identities": [
+        "A",
+        "A",
+        "A"
+      ],
+      "clean": true
+    },
+    {
+      "name": "different engine",
+      "order": [
+        0,
+        1
+      ],
+      "identities": [
+        "A",
+        "engine"
+      ],
+      "clean": false
+    },
+    {
+      "name": "different model",
+      "order": [
+        1,
+        0
+      ],
+      "identities": [
+        "A",
+        "model"
+      ],
+      "clean": false
+    },
+    {
+      "name": "entrant joins after a peer finishes",
+      "order": [
+        1,
+        2
+      ],
+      "identities": [
+        "A",
+        "A",
+        "A"
+      ],
+      "clean": true,
+      "enterAfter": 0
+    }
+  ]
+}

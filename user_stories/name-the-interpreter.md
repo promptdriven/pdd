@@ -24,3 +24,10 @@ Every line that pdd writes itself for a person calls the hosted service "the PDD
 A machine-read word from the list above must not change. Forbidden: a changed schema id, host, setting name or folder; a prompt block that pdd no longer finds; an older `Runtime check` line that the PR and status readers no longer read; or a gate answer "The runtime opens soon." that pdd no longer detects. A message that tells me to add or fix the block keeps the words "Runtime interface", because I must find them in the file.
 
 The test file checks the help lines. The error, progress and status lines need an interpreter answer, so the code area checks them with Node tests.
+
+The boundary includes the CLI entry and every Runtime call target. Address, PATH and skill implementations are native callback dependencies, represented by resources rather than excluded executable prompt calls.
+
+```pdd-boundary
+prompts/cli/pdd-cli.prompt.md
+prompts/cli/interpreter-version.prompt.md
+```

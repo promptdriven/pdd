@@ -404,3 +404,36 @@ test('TEST-CACHE-L1 retry cannot hide build b during or after its sends', async 
   const after = await ctx.invokeWith(round4Other(ctx, 20 * min).ports, ['unknown-item']);
   assert.deepEqual([during.sent, after.sent], [1, 1], 'never reuse build a while or after retry observes build b');
 });
+
+test('issue 3266: agreeing overlapping runs drain to a reusable identity', async t => {
+  const ctx = await setup(t); assert.equal((await ctx.invoke()).sent, 3);
+  bump(ctx, 'tests/independent.json'); bump(ctx, 'tests/place-order.json');
+  const p = actorPorts(ctx); p.ports.interactive = true; p.clock.now = ctx.clock.now + 1000;
+  const q = actorPorts(ctx); q.clock.now = ctx.clock.now + 30000;
+  let released = false; const held = new Set(); let phase = 'p';
+  ctx.state.reply = (id, entry, fake) => {
+    if (entry.method === 'POST' && phase === 'p') held.add(id);
+    const running = held.has(id) && !released;
+    return { status: running && entry.method === 'POST' ? 202 : 200, json: job(fake, id, A, running ? 'running' : 'passed') };
+  };
+  const pending = ctx.invokeWith(p.ports, ['independent']);
+  try {
+    for (let i = 0; !held.size && i < 2000; i++) await wait();
+    assert.equal(held.size, 1); phase = 'q';
+    assert.equal((await ctx.invokeWith(q.ports, ['place-order'])).sent, 1);
+  } finally { released = true; await pending; ctx.state.reply = null; }
+  const latest = read(join(ctx.repo, '.pdd/cache/test/stories.json')).latest_identity;
+  assert.equal(latest.clean, true, 'matching overlap must reconcile on final completion');
+  ctx.clock.now = q.clock.now + min;
+  assert.equal((await ctx.invoke(['unknown-item'])).sent, 0, 'matching overlap restores reuse');
+});
+
+test('issue 3266: edited source is not blamed on identity drift', async t => {
+  const ctx = await setup(t); assert.equal((await ctx.invoke()).sent, 3);
+  const file = join(ctx.repo, '.pdd/cache/test/stories.json'), doc = read(file);
+  doc.latest_identity.clean = false; doc.latest_identity.conflict = true; write(file, doc);
+  bump(ctx, 'tests/independent.json');
+  const changed = await ctx.invoke(['independent']);
+  assert.equal(changed.sent, 1);
+  assert.notEqual(changed.json.rows[0].cache_reason, 'runs again: interpreter build or model changed');
+});
