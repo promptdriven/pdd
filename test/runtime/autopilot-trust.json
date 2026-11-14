@@ -81,6 +81,7 @@
       "operation": "runAutopilot",
       "input": {
         "action": "trust",
+        "inRepo": true,
         "names": [
           "Dana"
         ]
@@ -110,6 +111,7 @@
       "operation": "runAutopilot",
       "input": {
         "action": "untrust",
+        "inRepo": true,
         "names": [
           "Dana"
         ]
