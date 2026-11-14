@@ -17,6 +17,7 @@ const compare = {
 };
 
 test('replay approved prompt-tests-line Story vectors through renderJson', async t => {
+  assert.equal(Object.hasOwn(scenario, 'schema_version'), false);
   assert.ok(scenario.steps.length > 0);
   const seen = new Set();
   for (const step of scenario.steps) {

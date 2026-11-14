@@ -8,6 +8,7 @@ import { renderJson } from '../src/runtime-seam.mjs';
 
 test('current head evidence: replay all frozen scenario checks', async () => {
   const scenario = JSON.parse(readFileSync(new URL('./fixtures/pr-current-head-evidence-cases.json', import.meta.url)));
+  assert.equal(Object.hasOwn(scenario, 'schema_version'), false);
   const lookup = (name, input) => {
     const rule = scenario.simulation[name];
     const rows = scenario.initial_world[rule.world_pointer.slice(1)];

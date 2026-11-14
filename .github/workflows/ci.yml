@@ -24,6 +24,8 @@ jobs:
         shard: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
@@ -37,16 +39,13 @@ jobs:
           fi
           command -v zsh
           zsh --version
-      - name: Configure private package Git access
+      - name: Install dependencies with private package Git access
         env:
           PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
-        run: |
-          if [ -n "$PRIVATE_REPO_TOKEN" ]; then
-            git config --global url."https://x-access-token:${PRIVATE_REPO_TOKEN}@github.com/promptdriven/".insteadOf "https://github.com/promptdriven/"
-            git config --global --add url."https://x-access-token:${PRIVATE_REPO_TOKEN}@github.com/promptdriven/".insteadOf "ssh://git@github.com/promptdriven/"
-            git config --global --add url."https://x-access-token:${PRIVATE_REPO_TOKEN}@github.com/promptdriven/".insteadOf "git@github.com:promptdriven/"
-          fi
-      - run: npm ci --ignore-scripts
+          PDS_TOKEN: ${{ secrets.PDS_TOKEN }}
+          PDD_CLOUD_APP_ID: ${{ secrets.PDD_CLOUD_APP_ID }}
+          PDD_CLOUD_APP_PRIVATE_KEY: ${{ secrets.PDD_CLOUD_APP_PRIVATE_KEY }}
+        run: node .github/scripts/ci-install.mjs
       - name: Run offline tests
         run: |
           set +e
@@ -93,19 +92,18 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
-      - name: Configure private package Git access
+      - name: Install dependencies with private package Git access
         env:
           PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
-        run: |
-          if [ -n "$PRIVATE_REPO_TOKEN" ]; then
-            git config --global url."https://x-access-token:${PRIVATE_REPO_TOKEN}@github.com/promptdriven/".insteadOf "https://github.com/promptdriven/"
-            git config --global --add url."https://x-access-token:${PRIVATE_REPO_TOKEN}@github.com/promptdriven/".insteadOf "ssh://git@github.com/promptdriven/"
-            git config --global --add url."https://x-access-token:${PRIVATE_REPO_TOKEN}@github.com/promptdriven/".insteadOf "git@github.com:promptdriven/"
-          fi
-      - run: npm ci --ignore-scripts
+          PDS_TOKEN: ${{ secrets.PDS_TOKEN }}
+          PDD_CLOUD_APP_ID: ${{ secrets.PDD_CLOUD_APP_ID }}
+          PDD_CLOUD_APP_PRIVATE_KEY: ${{ secrets.PDD_CLOUD_APP_PRIVATE_KEY }}
+        run: node .github/scripts/ci-install.mjs
       - name: Pack, install and smoke the installed command
         run: |
           smoke_dir=$(mktemp -d)
