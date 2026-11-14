@@ -16,3 +16,11 @@ As a developer starting a feature run, I want to see when its area agent exits d
 - Only an exit belonging to the current fresh launch can establish its failure. Forbidden: an old or malformed receipt fails a newer launch.
 - A pane launch acknowledgement alone does not establish that the agent works. Forbidden: a working claim before positive observation.
 - Terminal output is not captured in the saved failure. Forbidden: persisting the agent's terminal output or raw error text.
+
+## Verification boundary
+
+The Runtime scenario checks status from a saved failure. Native tests cover process exit receipts and terminal output.
+
+```pdd-boundary
+prompts/cli/workflow-runner.prompt.md
+```
