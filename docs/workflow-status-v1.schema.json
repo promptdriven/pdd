@@ -1,0 +1,552 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://promptdriven.ai/schemas/workflow-status-v1.schema.json",
+  "type": "object",
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "runs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "ref": {
+            "type": "string"
+          },
+          "repo": {
+            "type": "string"
+          },
+          "number": {
+            "type": "integer"
+          },
+          "workflow": {
+            "type": "string"
+          },
+          "area": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "group": {
+            "enum": [
+              "waiting",
+              "working",
+              "pr-open",
+              "done",
+              "cancelled"
+            ]
+          },
+          "words": {
+            "type": "string"
+          },
+          "prs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "number": {
+                  "type": "integer"
+                },
+                "url": {
+                  "type": "string"
+                },
+                "state": {
+                  "type": "string"
+                },
+                "draft": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                },
+                "ci": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "number",
+                "url",
+                "state",
+                "draft",
+                "ci"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "stories": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "pass": {
+                    "type": "integer"
+                  },
+                  "total": {
+                    "type": "integer"
+                  },
+                  "failing": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "unknown": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "none": {
+                    "type": "boolean"
+                  },
+                  "evidence": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "pass",
+                  "total",
+                  "failing"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "waitingForStory": {
+            "type": "boolean"
+          },
+          "updatedAt": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "root": {
+            "type": "string"
+          },
+          "runDir": {
+            "type": "string"
+          },
+          "viewCommand": {
+            "type": "string"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "agent": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "step": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "waiting": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "gate",
+                      "question",
+                      "chat_stopped",
+                      "startup_failed"
+                    ]
+                  },
+                  "gate": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "question": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "reason": {
+                    "enum": [
+                      "usage_limit",
+                      "exited",
+                      "unknown",
+                      null
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "gate",
+                  "question",
+                  "reason"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "chat": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "herdrAgentName": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "paneId": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "session": {
+                    "const": "pdd"
+                  },
+                  "tab": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "pane": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "herdrAgentName",
+                  "paneId",
+                  "session",
+                  "tab",
+                  "pane"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "launchProfile": {
+            "type": "object",
+            "properties": {
+              "agent": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "configDir": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "model": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "herdrAgentName": {
+                "type": "string"
+              },
+              "codexThreads": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "agent",
+              "configDir",
+              "model",
+              "herdrAgentName",
+              "codexThreads"
+            ],
+            "additionalProperties": false
+          },
+          "runtimeCoverage": {
+            "type": "object",
+            "properties": {
+              "checkable": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "total": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "native_only": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "checkable",
+              "total",
+              "native_only"
+            ],
+            "additionalProperties": false
+          },
+          "nativeOnly": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "test": {
+                  "type": "string"
+                },
+                "state": {
+                  "type": "string"
+                },
+                "prompts": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "path": {
+                        "type": "string"
+                      },
+                      "reason": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "path",
+                      "reason"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "test",
+                "state",
+                "prompts"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "smallChange": {
+            "type": "object",
+            "properties": {
+              "checklist": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string"
+                  },
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "request": {
+                          "type": "string"
+                        },
+                        "source": {
+                          "type": "string"
+                        },
+                        "quote": {
+                          "type": "string"
+                        },
+                        "state": {
+                          "type": "string"
+                        },
+                        "evidence": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [],
+                      "additionalProperties": false
+                    }
+                  },
+                  "mustFix": {
+                    "type": "array",
+                    "items": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "request": {
+                              "type": "string"
+                            },
+                            "source": {
+                              "type": "string"
+                            },
+                            "quote": {
+                              "type": "string"
+                            },
+                            "state": {
+                              "type": "string"
+                            },
+                            "evidence": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [],
+                          "additionalProperties": false
+                        }
+                      ]
+                    }
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              },
+              "formal": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "result": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "scope": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "reason": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "control_outcome": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "control_exit_code": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "field": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "cause": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "reported": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "required": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              }
+            },
+            "required": [],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "ref",
+          "repo",
+          "number",
+          "workflow",
+          "area",
+          "group",
+          "words",
+          "prs",
+          "stories",
+          "waitingForStory",
+          "updatedAt",
+          "root",
+          "runDir",
+          "viewCommand",
+          "title",
+          "agent",
+          "step",
+          "waiting",
+          "chat",
+          "launchProfile"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "version",
+    "runs"
+  ],
+  "additionalProperties": false
+}
