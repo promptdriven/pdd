@@ -317,3 +317,43 @@ test('INSTALL12: setup removes a pdd-owned copy of a retired skill and keeps an 
   // A second run changes nothing.
   assert.deepEqual(setupSkills(opts).map(result => [result.removed, result.installed, result.updated]), [[[], [], []], [[], [], []]]);
 });
+
+test('INSTALL13: #3324 pdd --version warns on stale PDD skills in .codex/skills, $CODEX_HOME/skills and partial skill folders', t => {
+  const { pkg, home, project, sandbox, run } = packageCopy(t);
+  const copyOlderSkill = (folder, name, oldVersion) => {
+    cpSync(join(pkg, 'skills', name), join(folder, name), { recursive: true });
+    const file = join(folder, name, 'SKILL.md');
+    writeFileSync(file, readFileSync(file, 'utf8').replace(/^(  pdd-skills:).*$/m, `$1 ${oldVersion}`));
+  };
+
+  // 1. Current ~/.agents/skills must not hide a stale project .codex/skills copy.
+  for (const name of PDD_SKILL_NAMES) cpSync(join(pkg, 'skills', name), join(home, '.agents/skills', name), { recursive: true });
+  copyOlderSkill(join(project, '.codex/skills'), 'pdd-prompting', '0.1.12');
+  const localCodex = run(['--version']);
+  assert.equal(localCodex.status, 0, localCodex.stderr);
+  assert.equal(localCodex.stdout, `${version()}\n`);
+  const localLine = localCodex.stderr.split('\n').find(line => line.startsWith(`PDD skills in ${join(project, '.codex/skills')} `));
+  assert.ok(localLine, localCodex.stderr);
+  assert.match(localLine, /pdd-prompting is 0\.1\.12/);
+  assert.ok(localLine.includes(UPDATE.replace(' -g', '')), localLine);
+  assert.doesNotMatch(localLine, / -g /);
+
+  // 2. User ~/.codex/skills and custom $CODEX_HOME/skills warn with -g.
+  rmSync(join(project, '.codex'), { recursive: true, force: true });
+  copyOlderSkill(join(home, '.codex/skills'), 'pdd-bug', '0.1.15');
+  const customCodex = join(sandbox, 'custom-codex');
+  copyOlderSkill(join(customCodex, 'skills'), 'pdd-feature', '0.1.16');
+  const bothCodex = run(['--version'], { CODEX_HOME: customCodex });
+  assert.equal(bothCodex.status, 0, bothCodex.stderr);
+  assert.match(bothCodex.stderr, new RegExp(`PDD skills in ${join(home, '.codex/skills').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}.*pdd-bug is 0\\.1\\.15.* -g `));
+  assert.match(bothCodex.stderr, new RegExp(`PDD skills in ${join(customCodex, 'skills').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}.*pdd-feature is 0\\.1\\.16.* -g `));
+
+  // 3. Partial pre-pdd-graph 6-skill folder in ~/.agents/skills warns even without all 7 skills.
+  rmSync(join(home, '.agents'), { recursive: true, force: true });
+  rmSync(join(home, '.codex'), { recursive: true, force: true });
+  for (const name of PDD_SKILL_NAMES.filter(n => n !== 'pdd-graph')) copyOlderSkill(join(home, '.agents/skills'), name, '0.1.12');
+  const partial = run(['--version'], { CODEX_HOME: join(home, '.codex') });
+  assert.equal(partial.status, 0, partial.stderr);
+  assert.match(partial.stderr, /pdd-prompting is 0\.1\.12/);
+  assert.match(partial.stderr, /npx skills add promptdriven\/pdd -g -a codex -a claude-code -y/);
+});

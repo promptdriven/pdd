@@ -114,3 +114,25 @@ test('workflow warning gives a short executable chat hint that survives PATH sha
  const result=spawnSync('/bin/sh',['-c','"$PDD_BIN" --version'],{cwd:f.cwd,env:f.env,encoding:'utf8'});
  assert.equal(result.status,0);assert.equal(result.stdout,`${version}\n`);
 });
+
+test('PATH8: #2715 package uses @promptdriven/pdd and pathDiagnostic flags an unrelated unscoped npm "pdd" package', t => {
+  const pkgMeta = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.equal(pkgMeta.name, '@promptdriven/pdd');
+  assert.equal(pkgMeta.bin.pdd, 'bin/pdd.mjs');
+
+  const f = fixture(t);
+  rmSync(join(f.old, 'pdd'));
+  const npmPrefix = join(f.root, 'npm-global');
+  const npmBin = join(npmPrefix, 'bin');
+  const foreignPkg = join(npmPrefix, 'lib/node_modules/pdd');
+  mkdirSync(npmBin, { recursive: true });
+  mkdirSync(foreignPkg, { recursive: true });
+  writeFileSync(join(foreignPkg, 'package.json'), JSON.stringify({ name: 'pdd', version: '0.4.14', description: 'PDD Framework' }));
+  f.env.PATH = [npmBin, f.alpha, f.nodeBin, '/usr/bin', '/bin'].join(':');
+
+  const r = f.run('--version');
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout, `${version}\n`);
+  assert.match(r.stderr, /Found the unrelated npm package "pdd"/);
+  assert.match(r.stderr, /npm uninstall -g pdd && npm install -g github:promptdriven\/pdd/);
+});
