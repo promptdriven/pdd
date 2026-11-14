@@ -24,5 +24,6 @@ Normal feature runs build the parts.
 - Keep the plan in repo files. Use [the file formats](references/files.md). A product piece is a part; an area is a workflow phase.
 - Aim for at most about 12 Stories or 5 new prompts per planned run. Warn for larger runs; do not refuse them.
 - Parts share contracts, not code. Feature tests use the other parts as fakes from those contracts. Contract changes go through a plan PR.
+- During prompt-space exploration, surface `pdd simulate --product` from the product checkout once the part drafts are ready. It composes active planned-run prompts, maps and referenced views into one connected Simulator before code generation or merged part PRs. Use `--journey ID` to choose one existing journey, or an explicit Story when selection is ambiguous. See [whole-product setup](references/files.md#whole-product-exploration).
 - Parallel runs are optional. After the plan PR, show `pdd product next` and let the person start runs in parallel or in order.
 - In a run, use `pdd workflow done STEP --summary "one line"` and `pdd workflow ask "question"`. Write notes in the run folder. Keep receipts and logs outside the repo.

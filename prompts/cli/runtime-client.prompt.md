@@ -1128,6 +1128,8 @@ pointer, but deduplication must retain the original location identity.
 ## Dependencies
 
 - [Recent lint receipt eligibility](runtime-lint-receipt.prompt.md): required generation and testing context for bounded metadata reuse.
+- [Active product drafts](product-drafts.prompt.md): required generation context for read-only cross-worktree source selection in whole-product Try.
+
 - [Product composition](product-composition.prompt.md): required generation/runtime/verification context for product assembly and journey selection under #808.
 
 - [Call preflight display](lint-call-preflight.prompt.md): required generation, verification and testing context for the pure advisory renderer and exact server report fields.
@@ -1585,7 +1587,7 @@ When a generic refusal does not identify a field, explain that the PDD interpret
 
 `runTry` accepts --product with optional comma-separated --parts and --journey. Those options require product mode; --product and --app-map conflict. Keep ordinary one-Story and door modes, current names, budgets, auth, source boundaries and no-resend semantics. Resolve one existing scenario with existing discovery and the composition owner's journey selector; ambiguity requests an exact Story/test. Do not invent a seed Story or discard authored steps.
 
-Call the composition owner inside each existing captureSource prepareSource attempt, using only that attempt's read/stat ports and forwarding `ports.parseProductDocuments` and `ports.parseProductWorldWriters`. Return its two absent virtual artifacts, marking its map role app-map, plus effective replacement of only the selected tracked scenario's initial_world. Preserve every other scenario field and authored file. Capture failures and all pre-send composition/budget refusals create no hosted job or AI call. Print selected part/screen labels and distinguish the operation count from the separately established call bound.
+Within each existing captureSource prepareSource attempt, use [active product drafts](product-drafts.prompt.md) to prepare the selected parts combined source, then call the composition owner with those read/stat ports, forwarding `ports.parseProductDocuments` and `ports.parseProductWorldWriters`. Return the selected draft inputs and its two absent virtual artifacts, marking its map role app-map, plus effective replacement of only the selected tracked scenario's initial_world. Preserve every other scenario field and authored file. Capture failures and all pre-send composition/budget refusals create no hosted job or AI call. Print selected part/screen labels and distinguish the operation count from the separately established call bound.
 
 Saved records retain original product selection, parts and journey with their source baseline. Reuse/reopen/owner-tool paths preserve that context, source identity, session ID, world and allowance. Refused setup diagnostics name authored source files and reconstruct a command with --product and its original selection. Never tell the person to edit a generated map that is absent on disk. Explicit incompatible selection changes require --new; uncertain or pending jobs are read at the same ID, never silently replaced. All published command hints say pdd simulate or pdd test.
 

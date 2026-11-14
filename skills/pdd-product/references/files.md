@@ -60,3 +60,41 @@ Put shared starting data in `contracts/seed-world.json`.
 For example, phone → server crosses order_in and order_view under
 `contracts/phone-server.md`. Server → barista crosses ticket and ticket_done
 under `contracts/server-barista.md`. The phone never talks to the barista screen.
+
+## Whole-product exploration
+
+Declare background work in the plan before drafting the parts:
+
+```markdown
+## After every tap
+1. prompts/server/server.prompt.md#forward_tickets
+2. prompts/barista/board.prompt.md#refresh
+```
+
+Each numbered item is a repository-relative prompt path followed by `#OPERATION`.
+The operations must accept `{}`. After an executable tap handler and its existing
+`after` steps, these operations run in order against the same shared world; later
+operations see earlier writes. Gap handlers do not run the chain. A tap allows
+at most eight `after` steps and forty total model calls, including internal calls
+and destination rendering; setup refuses an unprovable or excessive call bound.
+
+From the product checkout, surface `pdd simulate --product` during prompt-space
+review, before generating code or merging part implementation PRs. Use
+`pdd simulate --product --journey J1` to choose one existing journey scenario,
+or `pdd simulate STORY --product`; `--parts phone,server` selects a subset.
+Draft the Story and its test in the product checkout first: the command uses an
+existing scenario and does not invent a seed Story. A subset must include every
+explicit navigation destination.
+
+Each active feature run with the exact planned-run marker supplies only its
+part's declared Folder, `app/maps/PART.json` and referenced `views/` assets.
+Screenless parts need no map. Contracts, the plan, journey scenarios and unrelated
+files stay in the product checkout. Parts without active drafts use that checkout.
+The overlay is read-only: source, worktrees, approvals and run prerequisites do
+not change. This preview is distinct from a journey run waiting for merged code.
+
+Complete missing draft inputs before trying again. When two active runs supply
+the same part, end the stale run or resolve the plan association. Give each part
+its own view paths and nonoverlapping prompt folder; ownership conflicts name the
+parts and paths instead of silently selecting bytes. Use `--new` to reload an
+existing Simulator after changing drafts.

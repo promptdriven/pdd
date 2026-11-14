@@ -1,4 +1,5 @@
 // Generated from prompts/cli/runtime-client.prompt.md (sha256: 7ee5fc6a1bc717c02d7be2e57cca5a4fe9f4bb1c7a74d4c58fcf625e7566bcda).
+import { withProductDrafts } from './product-drafts.mjs';
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
@@ -48,7 +49,7 @@ function hasMissingPromptInterface(root, found, startPaths) {
     if (typeof path !== 'string' || seen.has(path) || !found.visible.has(path)) continue;
     seen.add(path);
     let prompt;
-    try { prompt = readPrompt(root, found.visible, path, found.workspace); } catch { continue; }
+    try { prompt = readPrompt(root, found.visible, path, found.workspace, found.sourceFiles); } catch { continue; }
     if (prompt.error === 'interface-missing') return true;
     for (const call of Array.isArray(prompt.interface?.calls) ? prompt.interface.calls : []) if (typeof call?.target === 'string') queue.push(call.target);
   }
@@ -4345,8 +4346,10 @@ function productTest(found, words, journey, root, ports) {
   return selected[0];
 }
 function captureProductTry(root,test,options,ports) {
-  let composition, maxTapCalls;
+  let composition, maxTapCalls, draftSource;
   const capture=ports.captureSource(root,{tests:[test.path],appMap:null,prepareSource(snapshot){
+    return withProductDrafts({root, parts:options['--parts']?.split(',').map(part=>part.trim()), snapshot, parseProductDocuments:ports.parseProductDocuments, captureSource:ports.captureSource}, (snapshot,draftFiles)=>{
+    draftSource=snapshot;
     const adapters={root,statFile:(path,options)=>snapshot.statFile(relative(root,path).split(sep).join('/'),options),
       readFile:path=>snapshot.readFile(relative(root,path).split(sep).join('/')),
       parseProductDocuments:ports.parseProductDocuments,parseProductWorldWriters:ports.parseProductWorldWriters,selectTests:ports.selectTests};
@@ -4361,8 +4364,10 @@ function captureProductTry(root,test,options,ports) {
     if(options['--journey']!==undefined)selectJourneys([{testPath:test.path,storyPath:scenario.story_path}],options['--journey'],ports);
     scenario.initial_world={$seed:composition.seedPath};
     const expanded=expandSource({path:test.path,text:stringifyJsonValue(scenario),format:'scenario'},files);
-    return [...composition.files.map(file=>({path:file.path,bytes:file.content,...(file.path===composition.appMapPath?{role:'app-map'}:{})})),{path:test.path,bytes:expanded.text}];
+    return [...draftFiles,...composition.files.map(file=>({path:file.path,bytes:file.content,...(file.path===composition.appMapPath?{role:'app-map'}:{})})),{path:test.path,bytes:expanded.text}];
+    });
   }});
+  draftSource?.validateCapture?.(capture.sources);
   return {capture,composition,maxTapCalls};
 }
 const productOptions = setup => setup ? {'--product':true,...(setup.parts?{'--parts':setup.parts.join(',')}:{}),...(setup.journey?{'--journey':setup.journey}:{})} : {};
@@ -4581,9 +4586,19 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     const productSetup = options['--product'] ? { parts: options['--parts']?.split(',').map(p => p.trim()) ?? null, journey: options['--journey'] ?? null } : null;
     const localSelected = productSetup ? [productTest(found, normalized, options['--journey'], root, ports)]
       : normalized.length ? [oneTest(found, normalized, root, ports)] : [...found.tests].sort((a, b) => a.path.localeCompare(b.path));
-    const allowMissingInterfaces = hasMissingPromptInterface(root, found, entryPaths(localSelected))
+    const prepared = productSetup ? captureProductTry(root, localSelected[0], options, ports) : null;
+    let preflightFound = found;
+    if (prepared) {
+      const captured = new Map(prepared.capture.sources.map(file => [file.path, file.bytes]));
+      const fallback = sourceFilePort(root, found.visible, found.workspace);
+      preflightFound = {...found, visible:new Set([...found.visible,...captured.keys()]), sourceFiles:{
+        stat(input) { const bytes=captured.get(input.path); return bytes ? {exists:true,is_symlink:false,size:bytes.length} : fallback.stat(input); },
+        read(input) { const bytes=captured.get(input.path); return bytes ? {content:bytes.toString('utf8')} : fallback.read(input); },
+      }};
+    }
+    const allowMissingInterfaces = hasMissingPromptInterface(root, preflightFound, entryPaths(localSelected))
       ? await probeLazyInterfaces(context, origin, store) : false;
-    const checked = preflight({ root, found, selected: localSelected, allowMissingInterfaces }), rows = localRows(checked.rows);
+    const checked = preflight({ root, found: preflightFound, selected: localSelected, allowMissingInterfaces }), rows = localRows(checked.rows);
     const refused = rows.find(row => row.state === 'refused');
     if (refused) {
       if (options['--cli'] || options['--shell'] || options['--serve'] !== undefined) throw new Stop(125, refused.refusals?.map(r => r.message || r.code).join('; ') || 'The Story input was refused.');
@@ -4626,7 +4641,6 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     }
     Object.assign(context, { root, store, origin, visible: found.visible, appMap, cwd: realpathSync(cwd), simulationTests: selected, seedTest: { path: test.path, storyPath: test.storyPath } });
     const row = rows.find(row => row.test === test.path) ?? rows[0];
-    const prepared = productSetup ? captureProductTry(root, test, options, ports) : null;
     const capture = prepared?.capture ?? (record?.simulation_scope && !options['--new']
       ? ports.captureSource(root, { ...trySourceSelection(record, recordPath), ...captureExtra })
       : boundedCapture ?? ports.captureSource(root, { tests: selected.map(item => item.path), appMap, ...captureExtra }));

@@ -11,6 +11,14 @@ expand references through the existing safe contract resolver before parsing.
 Keep numeric source tokens when parsing the effective Runtime interface.
 Approval displays that expanded interface but edits only the authored text.
 
+Product Try may supply `found.sourceFiles`, a read/stat port over its already
+captured effective sources, and extend `found.visible` with those captured paths.
+For preflight entry and called-prompt reading, forward that port as the optional
+fifth argument of `readPrompt`; expand references through that same port. Preserve
+the existing schema, status, hash, call-closure and refusal rules. Without the
+port, retain root-checkout reading. Story identity, criteria and authored scenario
+validation remain rooted in the product checkout; the overlay supplies no answers.
+
 Export `promptMarkdownTargets(text, fromPath, visible)` returning declared Markdown `.prompt.md` dependency paths resolved against `visible`, and export `promptSchemaRefusals(root, found, prompt, prompts, seen = new Set(), {allowMissingInterfaces = false} = {})` as the common
 parse/schema check for one prompt and its called prompts. Return all reached
 schema problems with code, section (JSON pointer), message and prompt path;

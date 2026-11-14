@@ -626,11 +626,16 @@ export function interfaceSchemaProblems(iface) {
 }
 
 // The prompt file of an entry: {path, text, blocks, interface, error}.
-export function readPrompt(root, visible, path,workspace=loadRuntimeWorkspace({root})) {
+export function readPrompt(root, visible, path,workspace=loadRuntimeWorkspace({root}), files) {
   workspace=boundedWorkspace(root,workspace);
   if(typeof path==='string')requireRuntimePath(workspace,{path,from:'Prompt'});
   if (typeof path !== 'string' || !path.endsWith('.prompt.md') || !visible.has(path)) return { path, error: 'entry-missing' };
-  const rawText = sourceFilePort(root,visible,workspace).read({path}).content, prepared = preparedText(root,visible,path,rawText,'prompt',workspace), text = prepared.text, blocks = interfaceBlocks(text);
+  const sourceFiles = files ?? sourceFilePort(root,visible,workspace);
+  const rawText = sourceFiles.read({path}).content;
+  let prepared;
+  try { prepared = files ? expandSource({path,text:rawText,format:'prompt'},sourceFiles) : preparedText(root,visible,path,rawText,'prompt',workspace); }
+  catch (error) { if (files && error.code) throw new PreflightError(4, `${error.code}: ${error.message}`); throw error; }
+  const text = prepared.text, blocks = interfaceBlocks(text);
   const source = { path, rawText, text, blocks, references: prepared.references };
   if (!blocks.length) return { ...source, error: 'interface-missing' };
   if (blocks.length > 1) return { ...source, error: 'pdd-two-interfaces' };
@@ -866,7 +871,7 @@ export function promptSchemaRefusals(root, found, prompt, prompts, seen = new Se
   if (prompt.error) {
     if (allowMissingInterfaces && prompt.error === 'interface-missing') {
       return promptMarkdownTargets(prompt.text, prompt.path, found.visible).flatMap(target => {
-        if (!prompts.has(target)) prompts.set(target, readPrompt(root, found.visible, target, found.workspace));
+        if (!prompts.has(target)) prompts.set(target, readPrompt(root, found.visible, target, found.workspace, found.sourceFiles));
         return promptSchemaRefusals(root, found, prompts.get(target), prompts, seen, { allowMissingInterfaces });
       });
     }
@@ -878,7 +883,7 @@ export function promptSchemaRefusals(root, found, prompt, prompts, seen = new Se
   const called = (Array.isArray(prompt.interface.calls) ? prompt.interface.calls : []).map(call => call?.target).filter(target => typeof target === 'string');
   const statusProblems = ['draft', 'approved'].includes(prompt.interface.status) ? [] : [{ ...promptRefusal(prompt, 'interface'), path: prompt.path }];
   return [...statusProblems, ...prompt.schemaIssues, ...called.flatMap(target => {
-    if (!prompts.has(target)) prompts.set(target, readPrompt(root, found.visible, target,found.workspace));
+    if (!prompts.has(target)) prompts.set(target, readPrompt(root, found.visible, target,found.workspace,found.sourceFiles));
     return promptSchemaRefusals(root, found, prompts.get(target), prompts, seen, { allowMissingInterfaces });
   })];
 }
@@ -1047,7 +1052,7 @@ function checkTest(root, found, test, prompts, { allowMissingInterfaces = false 
     if (Object.hasOwn(step, 'model') && (typeof step.model !== 'string' || !step.model.trim())) {
       return done(refusal('invalid-step-model', `${section}.model`, 'A step model must be a model name (a string).', at), story);
     }
-    if (!prompts.has(step.entry_path)) prompts.set(step.entry_path, readPrompt(root, found.visible, step.entry_path,found.workspace));
+    if (!prompts.has(step.entry_path)) prompts.set(step.entry_path, readPrompt(root, found.visible, step.entry_path,found.workspace,found.sourceFiles));
     const prompt = prompts.get(step.entry_path);
     const lazyMissing = allowMissingInterfaces && prompt.error === 'interface-missing';
     const broken = lazyMissing ? null : promptRefusal(prompt, section);
@@ -1097,7 +1102,7 @@ export function preflight({ root, found, selected,workspace=found.workspace??loa
     // stale caller must not make a reachable native-only declaration executable.
     const visit = path => {
       if (typeof path !== 'string' || prompts.has(path)) return;
-      const prompt = readPrompt(root, found.visible, path, workspace);
+      const prompt = readPrompt(root, found.visible, path, workspace, found.sourceFiles);
       prompts.set(path, prompt);
       for (const call of Array.isArray(prompt.interface?.calls) ? prompt.interface.calls : []) visit(call?.target);
       if (allowMissingInterfaces && prompt.error === 'interface-missing') {
