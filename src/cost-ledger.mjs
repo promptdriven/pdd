@@ -6,9 +6,9 @@ import { join } from 'node:path';
 
 const DAY = 86_400_000, BYTES = 256 * 1024;
 export const CACHED_INPUT_WEIGHT = 0.1;
-const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(value);
+export const isUuid = value => typeof value === 'string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(value);
 const number = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
-const hash = value => createHash('sha256').update(value).digest('hex').slice(0, 20);
+export const shortHash = value => createHash('sha256').update(value).digest('hex').slice(0, 20);
 const keys = ['input', 'cachedInput', 'output', 'reasoningOutput', 'total'];
 const outcomes = ['merged', 'reverted', 'stuck', 'closed', 'parked'];
 const emptyTokens = () => Object.fromEntries(keys.map(key => [key, 0]));
@@ -91,9 +91,9 @@ function captureTokens(cost, run, chats, ports, at) {
   const visited = new Set();
   for (const chat of chats) {
     const agent = chat.agent ?? run.agent, id = chat.session?.id;
-    if (!['codex', 'claude'].includes(agent) || !uuid(id)) { cost.coverage.push('session-unavailable'); continue; }
+    if (!['codex', 'claude'].includes(agent) || !isUuid(id)) { cost.coverage.push('session-unavailable'); continue; }
     const config = expand(Object.hasOwn(chat, 'configDir') ? chat.configDir : run.configDir, home) ?? expand(env[agent === 'codex' ? 'CODEX_HOME' : 'CLAUDE_CONFIG_DIR'], home) ?? join(home, `.${agent}`);
-    const account = `${agent}:${hash(config)}`, identity = hash(`${account}:${id}`);
+    const account = `${agent}:${shortHash(config)}`, identity = shortHash(`${account}:${id}`);
     if (visited.has(identity)) continue; visited.add(identity);
     const saved = cost.sessions[identity] ?? { account, agent, offset: 0, usage: emptyTokens(), messages: {} };
     const file = sessionFile(fs, config, agent, id, chat, chat.root ?? run.root, at);
@@ -115,7 +115,7 @@ function captureTokens(cost, run, chats, ports, at) {
         const usage = tokenValues(row.message.usage, agent);
         if (!usage) continue;
         saved.observed = true;
-        const key = hash(messageId), previous = saved.messages[key] ?? emptyTokens();
+        const key = shortHash(messageId), previous = saved.messages[key] ?? emptyTokens();
         for (const field of keys) { const delta = Math.max(0, usage[field] - previous[field]); saved.usage[field] += delta; previous[field] += delta; }
         saved.messages[key] = previous;
       }

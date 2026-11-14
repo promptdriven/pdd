@@ -1,17 +1,19 @@
 // Generated from prompts/cli/workflow-prove.prompt.md (sha256: 2185da0dc8df2b16fecf3bb2701af589039d415c47dfcceef18eaa69b8c5c1f9).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID, randomBytes } from 'node:crypto';
-import { updateRun } from './workflow-runs.mjs';
+import { resolveRun, updateRun } from './workflow-runs.mjs';
 import { applyCostMeasurement } from './cost-ledger.mjs';
 import { constants, fchmodSync, closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
 import { promisify } from 'node:util';
-import { resolveRun } from './workflow-runs.mjs';
 
 const execFile = promisify(execFileCallback);
 const diagnostic = error => String(error?.message ?? error ?? '').split(/[\r\n]/)[0].replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 1000);
 const emptyPhase = () => ({ exitCode: null, signal: '', timedOut: false, outputLimited: false, stdoutTail: [], stderrTail: [], expectedFound: false, error: '', setupError: '', observedError: '' });
+const EMPTY_PHASE = emptyPhase(), phaseKeys = Object.keys(EMPTY_PHASE);
+const isEmptyPhase = phase => phaseKeys.every(key => JSON.stringify(phase[key]) === JSON.stringify(EMPTY_PHASE[key]));
+const phaseRan = phase => phase.exitCode !== null || Boolean(phase.signal || phase.timedOut || phase.outputLimited);
 const lines = value => { const parts = value.replace(/\r\n/g, '\n').split('\n'); if (parts.at(-1) === '') parts.pop(); return parts; };
 const setupDiagnostic = value => lines(value).find(line => /^(?:# )?(?:Error: Cannot find module|Error \[ERR_MODULE_NOT_FOUND\]|ModuleNotFoundError:|ImportError:|FileNotFoundError:|Error: ENOENT|ENOENT:)/.test(line));
 function observedError(stdout, stderr) {
@@ -27,7 +29,7 @@ export function classifyProof(record) {
   if (record.setupError || record.cleanupError || record.base.error || record.head.error || record.base.setupError || record.head.setupError || [126,127].includes(record.base.exitCode) || [126,127].includes(record.head.exitCode)) return 'setup-error';
   if (record.interruptSignal) return 'signalled';
   // Preserve legacy unexecuted records; an empty overlay does not classify executed proofs.
-  if (!record.paths.length && [record.base, record.head].every(phase => Object.entries(emptyPhase()).every(([key, value]) => JSON.stringify(phase[key]) === JSON.stringify(value)))) return 'no-changed-tests';
+  if (!record.paths.length && [record.base, record.head].every(isEmptyPhase)) return 'no-changed-tests';
   if (record.base.timedOut) return 'base-timeout';
   if (record.head.timedOut) return 'head-timeout';
   if (record.base.outputLimited || record.head.outputLimited) return 'output-limit';
@@ -65,13 +67,12 @@ export function formatProof(record) {
   else if(record.outcome==='head-fails')cause=record.head.observedError;
   else if(record.outcome==='setup-error')cause=record.setupError || record.cleanupError || [record.base,record.head].flatMap(p=>[p.setupError,p.error]).find(Boolean) || 'setup failed';
   else if(record.outcome==='signalled' && record.interruptSignal)cause=`parent ${record.interruptSignal}`;
-  else {const phase=record.outcome==='head-timeout' || record.outcome==='output-limit' && !record.base.outputLimited || record.outcome==='signalled' && !record.base.signal ? record.head : record.base;cause=phase.exitCode!==null || phase.signal || phase.timedOut || phase.outputLimited ? phase.observedError : record.outcome;}
+  else {const phase=record.outcome==='head-timeout' || record.outcome==='output-limit' && !record.base.outputLimited || record.outcome==='signalled' && !record.base.signal ? record.head : record.base;cause=phaseRan(phase) ? phase.observedError : record.outcome;}
   const tail=['head-fails','setup-error'].includes(record.outcome)?actualTail(record):'';
   return `Old-code proof: ✗ ${record.outcome}; command ${command}; old-code exit ${base}; new-code exit ${head}; expected ${expected}; cause ${safeValue(cause)}${tail?`; tail ${safeValue(tail)}`:''}.`;
 }
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const exactKeys = (value, keys) => object(value) && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
-const phaseKeys = Object.keys(emptyPhase());
 export function validateProofRecord(record) {
   if (!exactKeys(record, ['v','origin','runId','baseSha','headSha','test','expect','paths','base','head','outcome','cleanupError','setupError','interruptSignal']) || record.v !== 2 || record.origin !== 'pdd.workflow-prove.v2') return false;
   if (!['','SIGINT','SIGTERM','SIGHUP'].includes(record.interruptSignal)) return false;
@@ -82,13 +83,11 @@ export function validateProofRecord(record) {
       || !['signal','error','setupError','observedError'].every(key => typeof phase[key] === 'string') || !['timedOut','outputLimited','expectedFound'].every(key => typeof phase[key] === 'boolean')
       || !['stdoutTail','stderrTail'].every(key => Array.isArray(phase[key]) && phase[key].length <= 20 && phase[key].every(line => typeof line === 'string' && !line.includes('\n')))
       || [...phase.observedError].length > 240) return false;
-    if (phase.exitCode === null && !phase.signal && !phase.timedOut && !phase.outputLimited && !phase.error && !phase.setupError) {
-      if (phase.expectedFound || phase.stdoutTail.length || phase.stderrTail.length || phase.observedError) return false;
-    }
+    if (!phaseRan(phase) && !phase.error && !phase.setupError && (phase.expectedFound || phase.stdoutTail.length || phase.stderrTail.length || phase.observedError)) return false;
   }
   if (record.outcome !== classifyProof(record)) return false;
-  if (!record.interruptSignal && !['setup-error','no-changed-tests'].includes(record.outcome) && (record.base.exitCode === null && !record.base.signal && !record.base.timedOut && !record.base.outputLimited || record.head.exitCode === null && !record.head.signal && !record.head.timedOut && !record.head.outputLimited)) return false;
-  if (record.outcome === 'no-changed-tests' && [record.base, record.head].some(phase => phaseKeys.some(key => JSON.stringify(phase[key]) !== JSON.stringify(emptyPhase()[key])))) return false;
+  if (!record.interruptSignal && !['setup-error','no-changed-tests'].includes(record.outcome) && (!phaseRan(record.base) || !phaseRan(record.head))) return false;
+  if (record.outcome === 'no-changed-tests' && ![record.base, record.head].every(isEmptyPhase)) return false;
   return true;
 }
 const safePath = path => typeof path === 'string' && path.length > 0 && !isAbsolute(path) && !path.includes('\\') && !path.includes('\0') && path.split('/').every(part => part && part !== '.' && part !== '..' && part.toLowerCase() !== '.git');
