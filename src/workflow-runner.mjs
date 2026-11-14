@@ -4890,12 +4890,12 @@ async function refreshWaitingIssue(run, p) {
   }
 }
 
-async function refreshPr(run, p) {
+async function refreshPr(run, p, includeDraft = false) {
   if (!run.pr?.length || run.state === 'cancelled') return;
   const cwd=existsSync(run.root)?run.root:run.sourceRoot,observations=[];
   // #3042: the read of a PR that pdd published with readable facts also gives its description, head and comments
   // (`view`), so that the refresh below of its readable top needs no other read when nothing changed.
-  for(const pr of run.pr){const {view,...fields}=await (p.readPrStatus??readWorkflowPrStatus)({cwd,url:pr.url,...(pr.readable?.facts?{view:true}:{})},p.commandPorts);observations.push({url:pr.url,number:pr.number,stage:pr.stage,fields,view});}
+  for(const pr of run.pr){const {view,...fields}=await (p.readPrStatus??readWorkflowPrStatus)({cwd,url:pr.url,...(pr.readable?.facts?{view:true}:{}),...(includeDraft?{includeDraft:true}:{})},p.commandPorts);observations.push({url:pr.url,number:pr.number,stage:pr.stage,fields,view});}
   await captureClosedCi({ ...run, pr: observations.map(row => ({ ...run.pr.find(pr => pr.url === row.url), ...row.fields, ...(row.view?.head ? { headSha: row.view.head } : {}) })) }, p);
   const refreshTops=async()=>{
     const observed=new Map(observations.map(observation=>[observation.url,{...observation.fields,view:observation.view}]));
@@ -5241,7 +5241,7 @@ async function listStatus(runs, { json, cancelled, scope, snapshotOnly=false, ve
   if (reading) p.say(`Reading ${reading} PR${reading === 1 ? '' : 's'} from GitHub…`);
   for (const run of runs) if (!snapshotOnly && !readRunOwnership(run.runDir,p) && run.state === 'waiting') {
     try {
-      if (run.pr?.length) await refreshPr(run, p);
+      if (run.pr?.length) await refreshPr(run, p, versioned);
       if (run.state === 'waiting') await refreshWaitingIssue(run, p);
     } catch(error) { if(error?.code==='workflow_run_save_failed')throw error; /* A PR or issue read failure keeps the saved state. */ }
   }

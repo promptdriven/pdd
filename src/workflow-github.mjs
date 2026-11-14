@@ -290,10 +290,10 @@ export async function publishWorkflowPr(input, ports = {}) {
 
 export async function readWorkflowPrStatus(input, ports = {}) {
   try {
-    const { cwd, url, view = false } = structuredClone(input ?? {});
+    const { cwd, url, view = false, includeDraft = false } = structuredClone(input ?? {});
     if (!text(url) || !/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/[1-9][0-9]*$/.test(url)) fail('workflow_github_pr_url_invalid');
     // With `view`, the same one read also gives the description, the head and the comments (a readable-top refresh).
-    const row = parseJson(await dependencies(ports).command(cwd, 'gh', ['pr', 'view', url, '--json', `state,mergedAt,statusCheckRollup,baseRefName,headRefOid${view ? ',body,comments' : ''}`]));
+    const row = parseJson(await dependencies(ports).command(cwd, 'gh', ['pr', 'view', url, '--json', `state,mergedAt,statusCheckRollup,baseRefName,headRefOid${view ? ',body,comments' : ''}${includeDraft ? ',isDraft' : ''}`]));
     const state = { OPEN: 'open', MERGED: 'merged', CLOSED: 'closed' }[row?.state];
     if (!state) fail('workflow_github_pr_state_invalid');
     const checks = Array.isArray(row.statusCheckRollup) ? row.statusCheckRollup : [];
@@ -301,7 +301,7 @@ export async function readWorkflowPrStatus(input, ports = {}) {
     const ci = !checks.length ? 'none'
       : checks.some(check => ['FAILURE', 'CANCELLED', 'TIMED_OUT', 'ERROR', 'ACTION_REQUIRED', 'STARTUP_FAILURE'].includes(outcome(check))) ? 'failing'
       : checks.some(check => !['SUCCESS', 'NEUTRAL', 'SKIPPED'].includes(outcome(check))) ? 'pending' : 'passing';
-    return { state, ci, ...(text(row.baseRefName) ? { base: row.baseRefName } : {}),
+    return { state, ci, ...(includeDraft ? { draft: typeof row.isDraft === 'boolean' ? row.isDraft : null } : {}), ...(text(row.baseRefName) ? { base: row.baseRefName } : {}),
       ...(text(row.headRefOid) ? { headSha: row.headRefOid } : {}),
       ...(view ? { view: { body: typeof row.body === 'string' ? row.body : null, head: text(row.headRefOid) ? row.headRefOid : null, comments: Array.isArray(row.comments) ? row.comments : null } } : {}) };
   } catch { return { state: 'unknown', ci: 'unknown' }; }
