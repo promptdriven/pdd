@@ -1603,7 +1603,7 @@ Before a new whole-product upload, read the existing hosted version endpoint and
 ```json
 {
   "kind": "native-only",
-  "status": "draft",
+  "status": "approved",
   "prose_sha256": "aceda7286cced519e0a2782f88e44aaea701a205b2e540bcd5c5d866bf14c815",
   "reason": "Runtime cannot fake real concurrent processes, Git state, and atomic filesystem cache ownership used by this command orchestration."
 }
