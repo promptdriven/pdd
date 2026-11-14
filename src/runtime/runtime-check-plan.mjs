@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-check-plan.prompt.md (sha256: 91af25146951fc7b920d95affd1f459b5d92dbe5c9f2511f6bfe1b3865e06bc4).
+// Generated from prompts/cli/runtime-check-plan.prompt.md (sha256: 20e167f2284cc063d95c1961d2b89360714f4f959ce3750622b91bac4a2a4955).
 import { spawnSync } from 'node:child_process';
 import { isAbsolute, posix } from 'node:path';
 import { captureSource, readPrompt, sourceFilePort, promptMarkdownTargets } from './runtime-preflight.mjs';
@@ -29,6 +29,50 @@ const gitRead = (root, args) => {
   if (reply.status !== 0) throw Error('change scope unavailable');
   return reply.stdout;
 };
+
+export function estimateCheckCalls({ prompts = [], rows = [] } = {}) {
+  const byPath = new Map(prompts.map(prompt => [prompt.path, prompt]));
+  const prerequisites = [], seenProblems = new Set();
+  const problem = (code, path, field) => {
+    const key = `${code}\0${path}\0${field}`;
+    if (!seenProblems.has(key)) { seenProblems.add(key); prerequisites.push({ code, path, field }); }
+  };
+  let hasExternalResources = false;
+  const cost = (path, stack = new Set()) => {
+    if (stack.has(path)) { problem('recursive-call-bound', path, '/calls'); return 0; }
+    const prompt = byPath.get(path);
+    if (!prompt || prompt.error) { problem(prompt?.error ?? 'interface-missing', path, '/interface'); return 0; }
+    if ((prompt.kind ?? 'full') === 'native-only') return 0;
+    if (!Number.isSafeInteger(prompt.max_model_calls) || prompt.max_model_calls < 1)
+      problem('undefined-call-bound', path, '/limits/max_model_calls');
+    const ops = Number.isSafeInteger(prompt.resource_operations) && prompt.resource_operations > 0 ? prompt.resource_operations : 0;
+    if (ops > 0) hasExternalResources = true;
+    const next = new Set([...stack, path]);
+    let count = 1 + ops;
+    for (const [index, call] of (Array.isArray(prompt.calls) ? prompt.calls : []).entries()) {
+      if (!Number.isSafeInteger(call?.max_calls) || call.max_calls < 1) problem('undefined-call-bound', path, `/calls/${index}/max_calls`);
+      const nested = cost(call?.target, next);
+      if (Number.isSafeInteger(call?.max_calls) && call.max_calls >= 1 && nested > 0) count += call.max_calls * (nested + 1);
+    }
+    return count;
+  };
+  let estimated = 0, maximum = 0, requests = 0;
+  for (const row of rows) {
+    const count = (row.steps ?? []).reduce((sum, step) => sum + cost(step?.entry_path), 0);
+    if (row.state !== 'ready') continue;
+    if (!Number.isSafeInteger(row.max_calls) || row.max_calls < 1) problem('undefined-call-bound', row.test, '/max_calls');
+    else {
+      estimated += Math.min(row.max_calls, count);
+      maximum += row.max_calls * 2;
+    }
+    requests += 2;
+  }
+  return {
+    calls: { estimated: prerequisites.length ? null : estimated, maximum: prerequisites.length ? null : maximum, check_requests: requests, lint_model_calls: 0 },
+    has_external_resources: hasExternalResources,
+    prerequisites,
+  };
+}
 
 export function buildCheckPlan({ root, found, selected, rows = [], full, base = 'HEAD', affected = false, allowMissingInterfaces = false }, ports = {}) {
   const git = args => (ports.git ?? gitRead)(root, args);
@@ -101,7 +145,7 @@ export function buildCheckPlan({ root, found, selected, rows = [], full, base = 
     for (const [index, call] of (Array.isArray(iface.calls) ? iface.calls : []).entries()) {
       if (!Number.isSafeInteger(call?.max_calls) || call.max_calls < 1) problem('undefined-call-bound', path, `/calls/${index}/max_calls`);
       const nested = cost(call?.target, next);
-      if (Number.isSafeInteger(call?.max_calls)) count += call.max_calls * nested;
+      if (Number.isSafeInteger(call?.max_calls) && call.max_calls >= 1 && nested > 0) count += call.max_calls * (nested + 1);
     }
     return count;
   };
@@ -252,9 +296,13 @@ export function checkPlanResults(plan, rows) {
     return {tests,passed,failures,unresolved,state:!tests.length?'none':failures.length?'failed':unresolved.length?'not_run':'passed'};
   };
   const target = group('target'), baseline = group('baseline');
+  const allTargetRefused = target.unresolved.length > 0 && target.unresolved.every(test => {
+    const matches = rows.filter(row => row.test === test).map(row => resultOutcome(row).state);
+    return matches.length > 0 && matches.every(value => value === 'refused');
+  });
   const guidance = plan.full && plan.prerequisites?.length ? `Repair local check-plan prerequisites: ${plan.prerequisites.map(item=>`${item.code}: ${item.path} ${item.field}`).join('; ')}. Repair the named interface or call bound, then run a fresh pdd test check. No checks were sent; saved reads and retries cannot repair these local prerequisites.`
     : target.failures.length ? `Repair target failures: ${target.failures.join(', ')}. Keep baseline results separate.`
-    : target.unresolved.length ? 'Read the saved batch for unresolved target checks; do not resend uncertain work.'
+    : target.unresolved.length ? (allTargetRefused ? `Inspect refused target checks: ${target.unresolved.join(', ')}. Follow each refusal Fix or Next step, then run a fresh pdd test check.` : 'Read the saved batch for unresolved target checks; do not resend uncertain work.')
     : baseline.failures.length || baseline.unresolved.length ? `Target checks passed. Hand off baseline obligations: ${[...baseline.failures,...baseline.unresolved].join(', ')}. Keep the failed or incomplete full batch and required full-pass gates. Do not rerun unchanged target checks or change their expectations to repair baseline work. Read the saved batch for unresolved checks; baseline age and ownership are not proved.`
     : 'Selected checks passed; required repository gates still apply.';
   return {target,baseline,guidance};

@@ -1,0 +1,149 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/call-ceiling-check-plan.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "For ready test \"tests/install-pocket.json\" with cap 18 whose step runs \"prompts/pocket.prompt.md\" (2 saved-data operations, calling \"prompts/layout.prompt.md\" once with 2 saved-data operations and \"prompts/profile.prompt.md\" once with 2 saved-data operations), the call plan estimates 11 AI calls with maximum 36, 2 Check requests, 0 lint model calls and external resources present."
+    },
+    {
+      "id": "AC2",
+      "text": "For ready test \"tests/play-game.json\" with cap 80 whose step runs \"prompts/game.prompt.md\" (0 saved-data operations, calling \"prompts/board.prompt.md\" up to 30 times with 0 saved-data operations), the call plan estimates 61 AI calls with maximum 160 and no external resources."
+    },
+    {
+      "id": "AC3",
+      "text": "When target test \"tests/install-pocket.json\" finishes as refused, target checks stay not run with \"tests/install-pocket.json\" unresolved and guidance \"Inspect refused target checks: tests/install-pocket.json. Follow each refusal Fix or Next step, then run a fresh pdd test check.\""
+    },
+    {
+      "id": "AC4",
+      "text": "When target test \"tests/install-pocket.json\" is still running, target checks stay not run with \"tests/install-pocket.json\" unresolved and guidance \"Read the saved batch for unresolved target checks; do not resend uncertain work.\""
+    }
+  ],
+  "initial_world": {},
+  "simulation": {},
+  "context": [],
+  "steps": [
+    {
+      "step_id": "nested-resource-estimate",
+      "entry_path": "prompts/cli/runtime-check-plan.prompt.md",
+      "operation": "estimateCheckCalls",
+      "input": {
+        "prompts": [
+          {
+            "path": "prompts/pocket.prompt.md",
+            "max_model_calls": 18,
+            "resource_operations": 2,
+            "calls": [
+              {"target": "prompts/layout.prompt.md", "max_calls": 1},
+              {"target": "prompts/profile.prompt.md", "max_calls": 1}
+            ]
+          },
+          {
+            "path": "prompts/layout.prompt.md",
+            "max_model_calls": 6,
+            "resource_operations": 2,
+            "calls": []
+          },
+          {
+            "path": "prompts/profile.prompt.md",
+            "max_model_calls": 6,
+            "resource_operations": 2,
+            "calls": []
+          }
+        ],
+        "rows": [
+          {
+            "test": "tests/install-pocket.json",
+            "state": "ready",
+            "max_calls": 18,
+            "steps": [{"entry_path": "prompts/pocket.prompt.md"}]
+          }
+        ]
+      },
+      "checks": [
+        {"criterion_id": "AC1", "target": "result", "path": "/calls/estimated", "op": "equals", "value": 11},
+        {"criterion_id": "AC1", "target": "result", "path": "/calls/maximum", "op": "equals", "value": 36},
+        {"criterion_id": "AC1", "target": "result", "path": "/calls/check_requests", "op": "equals", "value": 2},
+        {"criterion_id": "AC1", "target": "result", "path": "/calls/lint_model_calls", "op": "equals", "value": 0},
+        {"criterion_id": "AC1", "target": "result", "path": "/has_external_resources", "op": "equals", "value": true},
+        {"criterion_id": "AC1", "target": "result", "path": "/prerequisites", "op": "equals", "value": []}
+      ]
+    },
+    {
+      "step_id": "nested-call-only-estimate",
+      "entry_path": "prompts/cli/runtime-check-plan.prompt.md",
+      "operation": "estimateCheckCalls",
+      "input": {
+        "prompts": [
+          {
+            "path": "prompts/game.prompt.md",
+            "max_model_calls": 64,
+            "resource_operations": 0,
+            "calls": [{"target": "prompts/board.prompt.md", "max_calls": 30}]
+          },
+          {
+            "path": "prompts/board.prompt.md",
+            "max_model_calls": 2,
+            "resource_operations": 0,
+            "calls": []
+          }
+        ],
+        "rows": [
+          {
+            "test": "tests/play-game.json",
+            "state": "ready",
+            "max_calls": 80,
+            "steps": [{"entry_path": "prompts/game.prompt.md"}]
+          }
+        ]
+      },
+      "checks": [
+        {"criterion_id": "AC2", "target": "result", "path": "/calls/estimated", "op": "equals", "value": 61},
+        {"criterion_id": "AC2", "target": "result", "path": "/calls/maximum", "op": "equals", "value": 160},
+        {"criterion_id": "AC2", "target": "result", "path": "/has_external_resources", "op": "equals", "value": false}
+      ]
+    },
+    {
+      "step_id": "refused-target-guidance",
+      "entry_path": "prompts/cli/runtime-check-plan.prompt.md",
+      "operation": "checkPlanResults",
+      "input": {
+        "plan": {
+          "schema_version": "pdd.check-plan.v1",
+          "stories": [
+            {"role": "target", "tests": ["tests/install-pocket.json"]}
+          ]
+        },
+        "rows": [
+          {"test": "tests/install-pocket.json", "state": "refused"}
+        ]
+      },
+      "checks": [
+        {"criterion_id": "AC3", "target": "result", "path": "/target/state", "op": "equals", "value": "not_run"},
+        {"criterion_id": "AC3", "target": "result", "path": "/target/unresolved", "op": "equals", "value": ["tests/install-pocket.json"]},
+        {"criterion_id": "AC3", "target": "result", "path": "/guidance", "op": "equals", "value": "Inspect refused target checks: tests/install-pocket.json. Follow each refusal Fix or Next step, then run a fresh pdd test check."}
+      ]
+    },
+    {
+      "step_id": "running-target-guidance",
+      "entry_path": "prompts/cli/runtime-check-plan.prompt.md",
+      "operation": "checkPlanResults",
+      "input": {
+        "plan": {
+          "schema_version": "pdd.check-plan.v1",
+          "stories": [
+            {"role": "target", "tests": ["tests/install-pocket.json"]}
+          ]
+        },
+        "rows": [
+          {"test": "tests/install-pocket.json", "state": "running"}
+        ]
+      },
+      "checks": [
+        {"criterion_id": "AC4", "target": "result", "path": "/target/state", "op": "equals", "value": "not_run"},
+        {"criterion_id": "AC4", "target": "result", "path": "/target/unresolved", "op": "equals", "value": ["tests/install-pocket.json"]},
+        {"criterion_id": "AC4", "target": "result", "path": "/guidance", "op": "equals", "value": "Read the saved batch for unresolved target checks; do not resend uncertain work."}
+      ]
+    }
+  ]
+}
