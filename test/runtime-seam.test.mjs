@@ -603,149 +603,13 @@ test('SEAM3: detector catches static, dynamic, re-export, URL, escaped and child
   assert.deepEqual(findSeamViolations('src/workflow-view.mjs', "// Moved to src/runtime/runtime-preflight.mjs\nimport { findTests } from './runtime-seam.mjs';\nconst a = '.pdd/runtime';\nconst b = 'test/runtime/foo.json';\nconst c = 'prompts/cli/runtime-entry.prompt.md';\nconst d = join(env.HOME, '.pdd', 'runtime');\n"), []);
 });
 
-const BASE_SRC_CATALOG = [
-  'src/agent-adapters.mjs', 'src/agent-chat.mjs', 'src/agent-config.mjs', 'src/agent-coverage.mjs', 'src/agent-guide.mjs',
-  'src/agent-job.mjs', 'src/agent-judge.mjs', 'src/agent-mcp-setup.mjs', 'src/agent-packet.mjs', 'src/agent-project.mjs',
-  'src/approval-evidence.mjs', 'src/approval-policy.mjs', 'src/argument-parser.mjs', 'src/autopilot-alerts.mjs', 'src/autopilot-areas.mjs',
-  'src/autopilot-audit.mjs', 'src/autopilot-base.mjs', 'src/autopilot-core.mjs', 'src/autopilot-doctor.mjs', 'src/autopilot-environment.mjs',
-  'src/autopilot-github.mjs', 'src/autopilot-intake.mjs', 'src/autopilot-launcher.mjs', 'src/autopilot-parking.mjs', 'src/autopilot-regressions.mjs',
-  'src/autopilot-reports.mjs', 'src/autopilot-retire.mjs', 'src/autopilot.mjs', 'src/codex-limits.mjs', 'src/command-catalog.mjs',
-  'src/compiled-test.mjs', 'src/completion.mjs', 'src/contract-refs.mjs', 'src/contracts.mjs', 'src/cost-ledger.mjs', 'src/file-owner.mjs',
-  'src/github-calls.mjs', 'src/interface-draft.mjs', 'src/interpreter-version.mjs', 'src/issue-dependencies-github.mjs',
-  'src/issue-dependencies-intake.mjs', 'src/issue-dependencies.mjs', 'src/issue-dependency-graph-view.mjs', 'src/issue-dependency-graph.mjs', 'src/issue-mixed.mjs',
-  'src/issue-sort-github.mjs', 'src/issue-sort.mjs', 'src/lint-call-preflight.mjs', 'src/machine-guard.mjs', 'src/machine-resources.mjs',
-  'src/metrics-capture.mjs', 'src/metrics-command.mjs', 'src/metrics-gap.mjs', 'src/metrics-hooks.mjs', 'src/metrics-model.mjs',
-  'src/metrics-store.mjs', 'src/path-diagnostic.mjs', 'src/pdd-cli.mjs', 'src/process-lifecycle.mjs', 'src/product-composition.mjs',
-  'src/product.mjs', 'src/project-files.mjs', 'src/project-setup.mjs', 'src/prompt-approve.mjs', 'src/runtime-binding-plan.mjs',
-  'src/runtime-bindings.mjs', 'src/runtime-check-plan.mjs', 'src/runtime-client.mjs', 'src/runtime-lint-receipt.mjs', 'src/runtime-markdown.mjs',
-  'src/runtime-outcome.mjs', 'src/runtime-output.mjs', 'src/runtime-preflight.mjs', 'src/runtime-slots.mjs', 'src/runtime-workspace-migration.mjs',
-  'src/runtime-workspace.mjs', 'src/scenario-json.mjs', 'src/screen-compare.mjs', 'src/screen-design-check.mjs', 'src/setup-interaction.mjs', 'src/skills-install.mjs',
-  'src/svg-layout.mjs', 'src/test-suite-entry.mjs', 'src/test-suite-queue.mjs', 'src/toml-string.mjs', 'src/try-doors.mjs',
-  'src/try-http.mjs', 'src/try-mcp.mjs', 'src/validation-evidence.mjs', 'src/workflow-agents.mjs', 'src/workflow-areas.mjs',
-  'src/workflow-chat.mjs', 'src/workflow-github.mjs', 'src/workflow-herdr-layout.mjs', 'src/workflow-inventory.mjs', 'src/workflow-launch-profile.mjs',
-  'src/workflow-pr-body.mjs', 'src/workflow-pr-evidence.mjs', 'src/workflow-prove.mjs', 'src/workflow-replay.mjs', 'src/workflow-results.mjs',
-  'src/workflow-runner.mjs', 'src/workflow-runs.mjs', 'src/workflow-setup.mjs', 'src/workflow-small-change.mjs', 'src/workflow-story-card.mjs',
-  'src/workflow-view.mjs', 'src/workflow-worker-completion.mjs', 'src/workflow-worktree.mjs',
-];
-
-// Recorded base entries from origin/main 575bdde4e (0.1.29), updated only for the M3 step 2b agent-adapters split
-// (moving askAgent to src/runtime/agent-ask.mjs drops agent-packet and preflight from entries
-// that previously loaded them solely via src/agent-adapters.mjs).
-const RECORDED_BASE_ENTRIES = {
-  'cli:--help': [0,2,12,29,31,56,57,62,64,70,71,75,79,80,89,90,103],
-  'cli:help-topic': [0,2,12,29,31,56,57,62,64,70,71,75,79,80,89,90,103],
-  'cli:--version': [0,2,12,29,31,56,57,62,64,70,71,75,79,80,89,90,103],
-  'cli:completion': [0,2,12,29,31,56,57,62,64,70,71,75,79,80,89,90,103],
-  'cli:setup': [0,2,7,10,12,27,29,31,32,34,36,37,50,52,53,55,56,57,62,64,69,70,71,72,75,76,79,80,84,89,90,91,93,95,102,103,108],
-  'cli:files': [0,2,12,29,31,32,56,57,61,62,64,69,70,71,72,75,76,79,80,89,90,103],
-  'cli:owner': [0,2,12,29,31,32,35,56,57,62,64,69,70,71,72,75,76,79,80,89,90,103],
-  'cli:interface-draft': [0,2,12,29,31,32,37,56,57,62,64,69,70,71,72,75,76,79,80,89,90,103],
-  'cli:approve': [0,2,11,12,29,31,32,56,57,62,63,64,69,70,71,72,75,76,79,80,89,90,103],
-  'cli:approve-automatic': [0,2,10,11,12,14,16,19,23,27,29,31,32,34,35,36,37,39,41,44,45,46,47,49,50,52,53,55,56,57,59,60,62,63,64,65,66,67,68,69,70,71,72,73,75,76,77,78,79,80,81,83,84,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,107,108],
-  'cli:approve-automatic-tests': [0,2,10,11,12,14,16,19,23,27,29,31,32,34,35,36,37,39,41,44,45,46,47,49,50,52,53,55,56,57,59,60,62,63,64,65,66,67,68,69,70,71,72,73,75,76,77,78,79,80,81,83,84,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,107,108],
-  'cli:test': [0,2,10,11,12,14,16,19,23,27,29,31,32,34,35,36,37,39,41,44,45,46,47,49,50,52,53,55,56,57,59,60,62,63,64,65,66,67,68,69,70,71,72,73,75,76,77,78,79,80,81,83,84,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,107,108],
-  'cli:lint': [0,2,10,11,12,14,16,19,23,27,29,31,32,34,35,36,37,39,41,44,45,46,47,49,50,52,53,55,56,57,59,60,62,63,64,65,66,67,68,69,70,71,72,73,75,76,77,78,79,80,81,83,84,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,107,108],
-  'cli:simulate': [0,2,10,11,12,14,16,19,23,27,29,31,32,34,35,36,37,39,41,44,45,46,47,49,50,52,53,55,56,57,59,60,62,63,64,65,66,67,68,69,70,71,72,73,75,76,77,78,79,80,81,83,84,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,107,108],
-  'cli:contracts': [0,2,10,11,12,14,16,19,23,27,29,31,32,33,34,35,36,37,39,41,44,45,46,47,49,50,52,53,55,56,57,59,60,62,63,64,65,66,67,68,69,70,71,72,73,75,76,77,78,79,80,81,83,84,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,107,108],
-  'cli:contracts-sync': [0,2,10,11,12,14,16,19,23,27,29,31,32,33,34,35,36,37,39,41,44,45,46,47,49,50,52,53,55,56,57,59,60,62,63,64,65,66,67,68,69,70,71,72,73,75,76,77,78,79,80,81,83,84,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,107,108],
-  'cli:jobs': [0,2,10,11,12,14,16,19,23,27,29,31,32,34,35,36,37,39,41,44,45,46,47,49,50,52,53,55,56,57,59,60,62,63,64,65,66,67,68,69,70,71,72,73,75,76,77,78,79,80,81,83,84,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,107,108],
-  'cli:mcp': [0,2,6,10,11,12,14,16,19,23,27,29,31,32,34,35,36,37,39,41,44,45,46,47,49,50,52,53,55,56,57,59,60,62,63,64,65,66,67,68,69,70,71,72,73,75,76,77,78,79,80,81,83,84,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,107,108],
-  'cli:metrics': [0,2,10,12,29,31,34,36,50,51,52,53,54,55,56,57,62,64,70,71,75,79,80,84,89,90,91,93,95,102,103,108],
-  'cli:graph': [0,2,10,12,14,19,23,27,29,31,34,36,39,41,42,43,44,45,46,49,50,52,53,55,56,57,62,64,70,71,75,79,80,83,84,88,89,90,91,92,93,95,102,103,108],
-  'cli:dependencies-prepare': [0,2,10,12,14,19,23,27,29,31,34,36,39,40,41,44,45,46,49,50,52,53,55,56,57,62,64,70,71,75,79,80,83,84,88,89,90,91,92,93,95,102,103,108],
-  'cli:dependencies-complete': [0,2,10,12,14,19,23,27,29,31,34,36,39,40,41,44,45,46,49,50,52,53,55,56,57,62,64,70,71,75,79,80,83,84,88,89,90,91,92,93,95,102,103,108],
-  'cli:product-status': [0,2,10,11,12,14,16,19,23,27,29,31,32,34,35,36,37,39,41,44,45,46,47,49,50,52,53,55,56,57,59,60,62,63,64,65,66,67,68,69,70,71,72,73,75,76,77,78,79,80,81,83,84,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,107,108],
-  'cli:product-next': [0,2,10,11,12,14,16,19,23,27,29,31,32,34,35,36,37,39,41,44,45,46,47,49,50,52,53,55,56,57,59,60,62,63,64,65,66,67,68,69,70,71,72,73,75,76,77,78,79,80,81,83,84,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,107,108],
-  'cli:product-start': [0,2,10,11,12,14,16,19,23,27,29,31,32,34,35,36,37,39,41,44,45,46,47,49,50,52,53,55,56,57,59,60,62,63,64,65,66,67,68,69,70,71,72,73,75,76,77,78,79,80,81,83,84,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,107,108],
-  'cli:workflow-list': [0,2,12,29,31,56,57,62,64,70,71,75,79,80,89,90,103],
-  'cli:workflow-status': [0,2,10,11,12,14,16,19,23,27,29,31,32,34,35,36,39,41,44,45,46,49,50,52,53,55,56,57,62,63,64,66,69,70,71,72,75,76,79,80,83,84,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,107,108],
-  'cli:workflow-run': [0,2,10,11,12,14,16,19,23,27,29,31,32,34,35,36,39,41,44,45,46,49,50,52,53,55,56,57,62,63,64,66,69,70,71,72,75,76,79,80,83,84,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,107,108],
-  'cli:workflow-done': [0,2,10,11,12,14,16,19,23,27,29,31,32,34,35,36,39,41,44,45,46,49,50,52,53,55,56,57,62,63,64,66,69,70,71,72,75,76,79,80,83,84,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,107,108],
-  'cli:workflow-publish': [0,2,10,11,12,14,16,19,23,27,29,31,32,34,35,36,39,41,44,45,46,49,50,52,53,55,56,57,62,63,64,66,69,70,71,72,75,76,79,80,83,84,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,107,108],
-  'cli:workflow-view': [0,2,10,11,12,29,31,32,34,35,50,52,53,55,56,57,62,64,66,69,70,71,72,75,76,79,80,84,89,90,91,93,95,97,98,100,102,103,106,108],
-  'cli:workflow-cost': [0,2,10,11,12,14,16,19,23,27,29,31,32,34,35,36,39,41,44,45,46,49,50,52,53,55,56,57,62,63,64,66,69,70,71,72,75,76,79,80,83,84,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,107,108],
-  'cli:workflow-prove': [0,2,10,12,29,31,34,50,52,53,55,56,57,62,64,70,71,75,79,80,84,89,90,91,93,95,98,102,103,108],
-  'cli:autopilot-status': [0,2,5,10,11,12,13,14,15,16,17,18,19,21,22,23,25,26,27,28,29,31,32,34,35,36,37,39,41,44,45,46,47,48,49,50,52,53,55,56,57,58,59,60,62,63,64,65,66,67,68,69,70,71,72,73,75,76,77,78,79,80,81,83,84,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,107,108],
-  'cli:autopilot-doctor': [0,2,5,10,11,12,13,14,15,16,17,18,19,21,22,23,25,26,27,28,29,31,32,34,35,36,37,39,41,44,45,46,47,48,49,50,52,53,55,56,57,58,59,60,62,63,64,65,66,67,68,69,70,71,72,73,75,76,77,78,79,80,81,83,84,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,107,108],
-  'cli:autopilot-regressions': [0,2,12,24,29,31,34,36,56,57,62,64,70,71,75,79,80,89,90,103,108],
-  'cli:autopilot-alerts': [0,2,10,11,12,13,14,16,19,23,27,29,31,32,34,35,36,39,41,44,45,46,49,50,52,53,55,56,57,62,63,64,66,69,70,71,72,75,76,79,80,83,84,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,107,108],
-  'cli:autopilot-off': [0,2,12,27,29,31,34,36,56,57,62,64,70,71,75,79,80,89,90,103],
-  'child:workflow-worker-completion': [0,2,10,34,50,52,53,55,75,84,89,91,93,95,102,107,108],
-  'child:workflow-replay-selector': [32,64,69,72,75,76],
-  'child:try-doors-launcher': [0,2,10,11,14,16,19,23,27,29,32,34,35,36,37,39,41,44,45,46,47,49,50,52,53,55,59,60,63,64,65,66,67,68,69,70,71,72,73,75,76,77,78,81,83,84,85,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,104,105,107,108],
-  'child:scripts/autopilot-smoke.mjs': [],
-  'child:scripts/route-runtime-issues.mjs': [],
-  'tick:autopilot-launcher': [0,2,5,10,11,13,14,15,16,17,18,19,21,22,23,25,26,27,28,29,32,34,35,36,37,39,41,44,45,46,47,48,49,50,52,53,55,56,58,59,60,63,64,65,66,67,68,69,70,71,72,73,75,76,77,78,81,83,84,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,104,105,107,108],
-  'lib:svg-layout.mjs': [75,78,81],
-  'lib:prompt-approve.mjs': [11,32,63,64,69,72,75,76],
-  'lib:file-owner.mjs': [32,35,64,69,72,75,76],
-  'lib:agent-adapters.mjs': [0,2,75],
-  'lib:product.mjs': [0,2,10,11,14,16,19,23,27,29,32,34,35,36,37,39,41,44,45,46,47,49,50,52,53,55,59,60,63,64,65,66,67,68,69,70,71,72,73,75,76,77,78,81,83,84,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,104,105,107,108],
-  'lib:autopilot-doctor.mjs': [0,2,10,11,14,16,18,19,23,27,28,29,32,34,35,36,37,39,41,44,45,46,47,49,50,52,53,55,59,60,63,64,65,66,67,68,69,70,71,72,73,75,76,77,78,81,83,84,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,104,105,107,108],
-};
-
 test('SEAM5 (R2-3): every CLI command family, child entry, Autopilot tick and library entry matches recorded base module sets, cycles and guarded load failures', async t => {
-  const { execFile, execFileSync, spawnSync } = await import('node:child_process');
-  const { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
-  const { tmpdir } = await import('node:os');
-  const { relative, sep } = await import('node:path');
   const { pathToFileURL } = await import('node:url');
-  const { promisify } = await import('node:util');
   const { PUBLIC_COMMAND_ROUTES } = await import('../src/command-catalog.mjs');
-
-  const execFileAsync = promisify(execFile);
-  const scratch = mkdtempSync(join(tmpdir(), 'pdd-seam5-'));
-  t.after(() => rmSync(scratch, { recursive: true, force: true }));
-
-  const home = join(scratch, 'home');
-  const stateDir = join(scratch, 'state');
-  const nonGit = join(scratch, 'nongit');
-  const repo = join(scratch, 'repo');
-  const fakeBin = join(scratch, 'bin');
-  for (const d of [home, stateDir, nonGit, join(repo, 'prompts'), join(repo, 'user_stories'), join(repo, 'tests'), fakeBin]) {
-    mkdirSync(d, { recursive: true });
-  }
-  for (const tool of ['gh', 'claude', 'gemini', 'agy', 'herdr']) {
-    const p = join(fakeBin, tool);
-    writeFileSync(p, '#!/bin/sh\nexit 1\n');
-    chmodSync(p, 0o755);
-  }
-  writeFileSync(join(fakeBin, 'codex'), '#!/bin/sh\nif [ "$1" = "login" ]; then echo "Logged in"; exit 0; fi\nexit 1\n');
-  chmodSync(join(fakeBin, 'codex'), 0o755);
-  writeFileSync(join(repo, 'prompts/a.prompt.md'), '# A\n\nDo a.\n\n## Dependencies\n\nNone.\n');
-  writeFileSync(join(repo, 'user_stories/a.md'), '# A\n\nI can a.\n\n## Acceptance criteria\n\n1. A.\n');
-  writeFileSync(
-    join(repo, 'tests/a.json'),
-    JSON.stringify({
-      schema_version: 'prompt-runtime.program-scenario.v1',
-      story_path: 'user_stories/a.md',
-      criteria: [{ id: 'AC1', text: 'A.' }],
-      initial_world: {},
-      steps: [{ step_id: 's1', entry_path: 'prompts/a.prompt.md', operation: 'a', input: {}, checks: [{ criterion_id: 'AC1', target: 'result', path: '', op: 'equals', value: 1 }] }],
-    }) + '\n',
-  );
-  execFileSync('git', ['init', '-q'], { cwd: repo });
-  execFileSync('git', ['add', '.'], { cwd: repo });
-  execFileSync('git', ['-c', 'user.name=T', '-c', 'user.email=t@e.c', 'commit', '-q', '-m', 'init'], { cwd: repo });
-
-  const preload = join(scratch, 'hook.mjs');
-  writeFileSync(
-    preload,
-    `import { registerHooks } from 'node:module';
-import { appendFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-const out = process.env.PROBE_OUT;
-registerHooks({
-  resolve(specifier, context, nextResolve) {
-    const res = nextResolve(specifier, context);
-    if (res.url && res.url.startsWith('file://')) {
-      const parent = context.parentURL && context.parentURL.startsWith('file://') ? fileURLToPath(context.parentURL) : '';
-      appendFileSync(out, parent + '\\t' + fileURLToPath(res.url) + '\\n');
-    }
-    return res;
-  }
-});\n`,
-  );
+  const { REPLAY_CHILD_EXPR, SEAM_LOAD_BASES, findTarjanCycles, inBatches, readRecord, seamWorld } = await import('./helpers/seam-loads.mjs');
+  const world = seamWorld();
+  t.after(world.remove);
+  const { bin, nonGit, repo, scratch } = world;
 
   const ALLOWED_BASE_CYCLES = new Set([
     'src/issue-sort-github.mjs <-> src/issue-sort.mjs',
@@ -754,44 +618,6 @@ registerHooks({
     'src/runtime/interface-draft.mjs <-> src/runtime/runtime-bindings.mjs <-> src/runtime/runtime-client.mjs <-> src/runtime/runtime-slots.mjs',
     'src/toml-string.mjs <-> src/workflow-herdr-layout.mjs',
   ]);
-
-  const findTarjanCycles = adj => {
-    let idx = 0;
-    const indices = new Map();
-    const low = new Map();
-    const stack = [];
-    const onStack = new Set();
-    const cycles = [];
-    const strong = v => {
-      indices.set(v, idx);
-      low.set(v, idx);
-      idx++;
-      stack.push(v);
-      onStack.add(v);
-      for (const w of adj.get(v) ?? []) {
-        if (!indices.has(w)) {
-          strong(w);
-          low.set(v, Math.min(low.get(v), low.get(w)));
-        } else if (onStack.has(w)) {
-          low.set(v, Math.min(low.get(v), indices.get(w)));
-        }
-      }
-      if (low.get(v) === indices.get(v)) {
-        const scc = [];
-        let w;
-        do {
-          w = stack.pop();
-          onStack.delete(w);
-          scc.push(w);
-        } while (w !== v);
-        if (scc.length > 1) cycles.push(scc.sort().join(' <-> '));
-      }
-    };
-    for (const v of adj.keys()) {
-      if (!indices.has(v)) strong(v);
-    }
-    return cycles.sort();
-  };
 
   // 1. Static ESM import/re-export graph across all src/ and src/runtime/ files (including src/runtime-seam.mjs and src/runtime/index.mjs).
   const staticAdj = new Map();
@@ -810,69 +636,6 @@ registerHooks({
   }
   const novelStaticCycles = findTarjanCycles(staticAdj).filter(c => !ALLOWED_BASE_CYCLES.has(c));
   assert.deepEqual(novelStaticCycles, [], `unexpected new static import cycle: ${novelStaticCycles.join('; ')}`);
-
-  const ASYNC_SEAM_BRIDGE_PROBES = new Set([
-    'cli:approve-automatic', 'cli:approve-automatic-tests',
-    'cli:test', 'cli:lint', 'cli:simulate', 'cli:contracts', 'cli:contracts-sync',
-    'cli:jobs', 'cli:mcp', 'child:try-doors-launcher',
-  ]);
-
-  const analyzeProbeLines = (lines, { ignoreAsyncSeamOutgoing = false } = {}) => {
-    const out = new Set();
-    const adj = new Map();
-    const toRel = full => {
-      if (!full) return null;
-      const rel = relative(root, full).split(sep).join('/');
-      return rel.startsWith('src/') && rel.endsWith('.mjs') ? rel : null;
-    };
-    for (const line of lines) {
-      const tab = line.indexOf('\t');
-      const parentRel = tab >= 0 ? toRel(line.slice(0, tab)) : null;
-      const targetFull = tab >= 0 ? line.slice(tab + 1) : line;
-      let rel = toRel(targetFull);
-      if (!rel) continue;
-      if (parentRel && parentRel !== rel && !(ignoreAsyncSeamOutgoing && parentRel === 'src/runtime-seam.mjs' && !rel.startsWith('src/runtime/'))) {
-        if (!adj.has(parentRel)) adj.set(parentRel, new Set());
-        adj.get(parentRel).add(rel);
-      }
-      if (
-        rel === 'src/runtime-seam.mjs' ||
-        rel === 'src/runtime/index.mjs' ||
-        rel === 'src/runtime/secret-redaction.mjs' ||
-        rel === 'src/secret-redaction.mjs' ||
-        rel === 'src/product-documents.mjs' ||
-        rel === 'src/workflow-eligibility.mjs' ||
-        rel === 'src/test-selection.mjs' ||
-        rel === 'src/runtime-exit.mjs' ||
-        rel === 'src/prompt-tests-words.mjs'
-      ) continue;
-      if (rel === 'src/runtime/agent-ask.mjs') rel = 'src/agent-adapters.mjs';
-      if (rel.startsWith('src/runtime/')) rel = `src/${rel.slice('src/runtime/'.length)}`;
-      out.add(rel);
-    }
-    return { loaded: [...out].sort(), cycles: findTarjanCycles(adj) };
-  };
-
-  let seq = 0;
-  const runProbe = async (key, args, cwd) => {
-    const outFile = join(scratch, `out-${++seq}.txt`);
-    writeFileSync(outFile, '');
-    const child = execFileAsync(process.execPath, ['--import', pathToFileURL(preload).href, ...args], {
-      cwd,
-      env: {
-        PATH: `${fakeBin}:/usr/bin:/bin`,
-        HOME: home,
-        PDD_STATE_DIR: stateDir,
-        PDD_RUNTIME_URL: 'http://127.0.0.1:9',
-        PROBE_OUT: outFile,
-      },
-      timeout: 8000,
-    });
-    child.child.stdin?.end();
-    try { await child; } catch {}
-    const lines = readFileSync(outFile, 'utf8').split('\n').filter(Boolean);
-    return analyzeProbeLines(lines, { ignoreAsyncSeamOutgoing: ASYNC_SEAM_BRIDGE_PROBES.has(key) });
-  };
 
   // Every route local in PUBLIC_COMMAND_ROUTES must map to a probed switch arm.
   const coveredLocals = new Set([
@@ -893,157 +656,95 @@ registerHooks({
     assert.ok(coveredLocals.has(route.local), `PUBLIC_COMMAND_ROUTES local ${route.local} (${route.id}) must be covered in SEAM5`);
   }
 
-  const bin = join(root, 'bin/pdd.mjs');
-  const replayChildExpr = 'source.identity({root:process.argv[1],tests:JSON.parse(process.argv[2])}).files';
   assert.ok(
-    readFileSync(join(root, 'src/workflow-replay.mjs'), 'utf8').includes(replayChildExpr),
+    readFileSync(join(root, 'src/workflow-replay.mjs'), 'utf8').includes(REPLAY_CHILD_EXPR),
     'SEAM5 replayScript must match src/workflow-replay.mjs selectedFiles child expression',
   );
-  const replayScript = `import {source} from ${JSON.stringify(pathToFileURL(join(root, 'src/runtime-seam.mjs')).href)};process.stdout.write(JSON.stringify(${replayChildExpr}));`;
-  const launcherScript = 'import(process.argv[1]).then(async ({ runShim }) => { process.exitCode = await runShim(process.argv[2], process.argv.slice(3)); }).catch(() => { process.exitCode = 125; });';
-  const probes = [
-    ['cli:--help', [bin, '--help'], repo],
-    ['cli:help-topic', [bin, 'help', 'prompting'], repo],
-    ['cli:--version', [bin, '--version'], repo],
-    ['cli:completion', [bin, 'completion', 'bash'], repo],
-    ['cli:setup', [bin, 'setup', '--yes'], repo],
-    ['cli:files', [bin, 'files', '--json'], repo],
-    ['cli:owner', [bin, 'owner', 'prompts/a.prompt.md', '--json'], repo],
-    ['cli:interface-draft', [bin, 'interface', 'draft', 'prompts/a.prompt.md', '--json'], repo],
-    ['cli:approve', [bin, 'approve', 'prompts/missing.prompt.md', '--said', 'ok'], repo],
-    ['cli:approve-automatic', [bin, 'approve', 'prompts/a.prompt.md', '--automatic'], repo],
-    ['cli:approve-automatic-tests', [bin, 'approve', 'prompts/a.prompt.md', '--automatic', '--tests', 'npm test'], repo],
-    ['cli:test', [bin, 'test', 'a'], repo],
-    ['cli:lint', [bin, 'lint', '--local'], repo],
-    ['cli:simulate', [bin, 'simulate', '--stop', 'a'], repo],
-    ['cli:contracts', [bin, 'contracts'], repo],
-    ['cli:contracts-sync', [bin, 'contracts', 'sync'], repo],
-    ['cli:jobs', [bin, 'jobs'], repo],
-    ['cli:mcp', [bin, 'mcp'], repo],
-    ['cli:metrics', [bin, 'metrics', '--json'], repo],
-    ['cli:graph', [bin, 'graph', '--issue', '1'], nonGit],
-    ['cli:dependencies-prepare', [bin, 'dependencies', 'prepare'], nonGit],
-    ['cli:dependencies-complete', [bin, 'dependencies', 'complete', '--input', '-'], nonGit],
-    ['cli:product-status', [bin, 'product', 'status'], repo],
-    ['cli:product-next', [bin, 'product', 'next'], repo],
-    ['cli:product-start', [bin, 'product', 'start', 'r1', '--no-run'], repo],
-    ['cli:workflow-list', [bin, 'workflow', 'list'], repo],
-    ['cli:workflow-status', [bin, 'workflow', 'status'], repo],
-    ['cli:workflow-run', [bin, 'workflow', 'run', 'feature', '1'], nonGit],
-    ['cli:workflow-done', [bin, 'workflow', 'done', 'story'], nonGit],
-    ['cli:workflow-publish', [bin, 'workflow', 'publish', '1'], nonGit],
-    ['cli:workflow-view', [bin, 'workflow', 'view', '1'], nonGit],
-    ['cli:workflow-cost', [bin, 'workflow', 'cost', '1'], nonGit],
-    ['cli:workflow-prove', [bin, 'workflow', 'prove', '1', '--test', 'true', '--expect', 'ok'], nonGit],
-    ['cli:autopilot-status', [bin, 'autopilot', 'status'], nonGit],
-    ['cli:autopilot-doctor', [bin, 'autopilot', 'doctor'], repo],
-    ['cli:autopilot-regressions', [bin, 'autopilot', 'regressions'], nonGit],
-    ['cli:autopilot-alerts', [bin, 'autopilot', 'alerts', 'clear'], nonGit],
-    ['cli:autopilot-off', [bin, 'autopilot', 'off'], nonGit],
-    ['child:workflow-worker-completion', [join(root, 'src/workflow-worker-completion.mjs'), '{}'], nonGit],
-    ['child:workflow-replay-selector', ['--input-type=module', '-e', replayScript, repo, JSON.stringify(['tests/a.json'])], nonGit],
-    ['child:try-doors-launcher', ['--input-type=commonjs', '-e', launcherScript, '--', pathToFileURL(join(root, 'src/try-doors.mjs')).href, join(scratch, 'missing.door.json')], nonGit],
-    ['child:scripts/autopilot-smoke.mjs', [join(root, 'scripts/autopilot-smoke.mjs')], nonGit],
-    ['child:scripts/route-runtime-issues.mjs', [join(root, 'scripts/route-runtime-issues.mjs')], nonGit],
-    ['tick:autopilot-launcher', [join(root, 'src/autopilot-launcher.mjs'), join(scratch, 'missing-state.json')], nonGit],
-    ['lib:svg-layout.mjs', ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(root, 'src/svg-layout.mjs')).href)})`], nonGit],
-    ['lib:prompt-approve.mjs', ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(root, 'src/prompt-approve.mjs')).href)})`], nonGit],
-    ['lib:file-owner.mjs', ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(root, 'src/file-owner.mjs')).href)})`], nonGit],
-    ['lib:agent-adapters.mjs', ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(root, 'src/agent-adapters.mjs')).href)})`], nonGit],
-    ['lib:product.mjs', ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(root, 'src/product.mjs')).href)})`], nonGit],
-    ['lib:autopilot-doctor.mjs', ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(root, 'src/autopilot-doctor.mjs')).href)})`], nonGit],
-  ];
 
   const ACYCLIC_ENTRIES = new Set([
     'cli:--help', 'cli:owner', 'cli:files', 'cli:approve', 'cli:interface-draft',
     'child:workflow-replay-selector', 'lib:svg-layout.mjs', 'lib:prompt-approve.mjs',
     'lib:file-owner.mjs', 'lib:agent-adapters.mjs',
   ]);
-  for (let i = 0; i < probes.length; i += 8) {
-    const chunk = probes.slice(i, i + 8);
-    const probeBatch = await Promise.all(chunk.map(([key, args, cwd]) => runProbe(key, args, cwd)));
-    chunk.forEach(([key], idx) => {
-      const expected = RECORDED_BASE_ENTRIES[key].map(n => BASE_SRC_CATALOG[n]);
-      const { loaded, cycles } = probeBatch[idx];
-      assert.deepEqual(loaded, expected, `loaded modules mismatch for ${key}`);
-      if (ACYCLIC_ENTRIES.has(key)) {
-        assert.deepEqual(cycles, [], `expected zero import cycles for ${key}`);
-      } else {
-        const novel = cycles.filter(c => !ALLOWED_BASE_CYCLES.has(c));
-        assert.deepEqual(novel, [], `unexpected new import cycle for ${key}: ${novel.join('; ')}`);
-      }
-    });
+  const HEAVY_MODULES = [
+    'src/product.mjs', 'src/prompt-approve.mjs', 'src/runtime/interface-draft.mjs',
+    'src/runtime/runtime-client.mjs', 'src/screen-compare.mjs', 'src/workflow-runner.mjs',
+  ];
+  const MUST_NOT_LOAD = new Map([
+    ...['cli:--help', 'cli:help-topic', 'cli:--version', 'cli:completion', 'cli:workflow-list'].map(key => [key, HEAVY_MODULES]),
+    ...['lib:svg-layout.mjs', 'child:workflow-worker-completion'].map(key => [key, [...HEAVY_MODULES, 'src/runtime/runtime-output.mjs']]),
+  ]);
+  const results = await world.probeAll();
+  const loadedAnywhere = new Set([...results.values()].flatMap(({ loaded }) => loaded.map(name => `src/${name}`)));
+  for (const heavy of new Set([...MUST_NOT_LOAD.values()].flat())) {
+    assert.ok(loadedAnywhere.has(heavy), `${heavy} is in the hand-written heavy list but no probe loads it; if it moved, update the list by hand`);
   }
-
-  // Guarded load failures must not escape try/catch, and light/leaf entries must not depend on unrelated leaves.
-  const runWithRejectedModule = (rejectSuffix, entryArgs, cwd = nonGit) => {
-    const hook = `import { registerHooks } from 'node:module'; registerHooks({ resolve(s, c, n) { const r = n(s, c); if (r.url && r.url.endsWith(${JSON.stringify(rejectSuffix)})) throw new Error('REVIEW_LOAD_FAILURE'); return r; } });`;
-    return spawnSync(process.execPath, ['--import', `data:text/javascript,${encodeURIComponent(hook)}`, ...entryArgs], {
-      cwd,
-      env: {
-        PATH: `${fakeBin}:/usr/bin:/bin`,
-        HOME: home,
-        PDD_STATE_DIR: stateDir,
-        PDD_RUNTIME_URL: 'http://127.0.0.1:9',
-      },
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-  };
-
-  assert.equal(runWithRejectedModule('/runtime-client.mjs', [bin, '--help']).status, 0);
-
-  for (const suffix of ['/workflow-runner.mjs', '/product.mjs', '/screen-compare.mjs', '/runtime-client.mjs']) {
-    for (const extraArgs of [['--automatic', '--tests', 'node --test x.mjs'], ['--automatic']]) {
-      const approveFail = runWithRejectedModule(suffix, [bin, 'approve', 'prompts/a.prompt.md', ...extraArgs], repo);
-      assert.equal(approveFail.status, 4, `approve ${extraArgs.join(' ')} (${suffix}) expected exit 4, got ${approveFail.status}: ${approveFail.stderr}`);
-      assert.equal(approveFail.stdout, '');
-      assert.equal(approveFail.stderr, 'REVIEW_LOAD_FAILURE\n');
+  for (const [key, heavy] of MUST_NOT_LOAD) {
+    const loaded = results.get(key).loaded.map(name => `src/${name}`);
+    assert.deepEqual(heavy.filter(name => loaded.includes(name)), [], `${key} must not load these heavy modules`);
+  }
+  const probeKeys = world.probes.map(([key]) => key);
+  const baseKeys = Object.entries(SEAM_LOAD_BASES).flatMap(([base, keys]) => [base, ...keys]);
+  assert.deepEqual(baseKeys.filter(key => !probeKeys.includes(key)), [], 'every key in SEAM_LOAD_BASES is a probe');
+  const loads = readRecord(probeKeys);
+  for (const [key, { loaded, cycles }] of results) {
+    assert.deepEqual(loaded, loads.get(key), `loaded modules mismatch for ${key}. Find why the code now loads a different set. A change to test/fixtures/seam-loads.txt needs a reviewer to read its diff before it is committed.`);
+    if (ACYCLIC_ENTRIES.has(key)) {
+      assert.deepEqual(cycles, [], `expected zero import cycles for ${key}`);
+    } else {
+      const novel = cycles.filter(c => !ALLOWED_BASE_CYCLES.has(c));
+      assert.deepEqual(novel, [], `unexpected new import cycle for ${key}: ${novel.join('; ')}`);
     }
   }
 
-  for (const [cmdArgs, suffix] of [
-    [['test', 'a'], '/workflow-runner.mjs'],
-    [['simulate', '--stop', 'a'], '/prompt-approve.mjs'],
-  ]) {
-    const checkOrTryFail = runWithRejectedModule(suffix, [bin, ...cmdArgs], repo);
-    assert.equal(checkOrTryFail.status, 3);
-    assert.equal(
-      checkOrTryFail.stderr.trim(),
-      'pdd stopped with an internal error. If it sent checks, read them with pdd test --read. Do not send them again. Reason: REVIEW_LOAD_FAILURE',
-    );
+  // Guarded load failures must not escape try/catch, and light/leaf entries must not depend on unrelated leaves.
+  const rejecting = (names, args, cwd) => {
+    const urls = names.map(name => pathToFileURL(join(root, 'src', name)).href);
+    const hook = `import { registerHooks } from 'node:module'; const urls = new Set(${JSON.stringify(urls)}); registerHooks({ resolve(s, c, n) { const r = n(s, c); if (urls.has(r.url)) throw new Error('REVIEW_LOAD_FAILURE'); return r; } });`;
+    return world.run(`data:text/javascript,${encodeURIComponent(hook)}`, args, cwd);
+  };
+  const sources = walk('src').filter(rel => rel.endsWith('.mjs')).map(rel => rel.slice('src/'.length));
+  for (const [key, args] of world.probes.filter(([key]) => ['cli:--help', 'lib:svg-layout.mjs', 'child:workflow-worker-completion'].includes(key))) {
+    const unrelated = sources.filter(name => !loads.get(key).includes(name));
+    assert.ok(unrelated.length > 0, `${key} must leave some modules unloaded`);
+    const light = await rejecting(unrelated, args, nonGit);
+    assert.equal(light.status, 0, `${key} with every module outside its record unloadable: ${light.stderr}`);
   }
 
-  for (const suffix of ['/runtime-client.mjs', '/workflow-runner.mjs']) {
-    const mcpFail = runWithRejectedModule(suffix, [bin, 'mcp']);
-    assert.equal(mcpFail.status, 1);
-    assert.equal(mcpFail.stderr.trim(), 'pdd mcp could not start. Reason: REVIEW_LOAD_FAILURE');
-  }
-  for (const suffix of ['/runtime-client.mjs', '/product.mjs']) {
-    const jobsFail = runWithRejectedModule(suffix, [bin, 'jobs']);
-    assert.equal(jobsFail.status, 5);
-    assert.equal(jobsFail.stderr.trim(), 'Local interpreter jobs could not be read. Reason: REVIEW_LOAD_FAILURE');
-    const contractsFail = runWithRejectedModule(suffix, [bin, 'contracts']);
-    assert.equal(contractsFail.status, 5);
-    assert.equal(contractsFail.stderr.trim(), 'Local contracts could not be read. Reason: REVIEW_LOAD_FAILURE');
-  }
-  const setupFail = runWithRejectedModule('/interface-draft.mjs', [bin, 'setup', '--yes'], repo);
-  assert.equal(setupFail.status, 1);
-  assert.ok(setupFail.stderr.includes('REVIEW_LOAD_FAILURE'));
-
+  const internalError = 'pdd stopped with an internal error. If it sent checks, read them with pdd test --read. Do not send them again. Reason: REVIEW_LOAD_FAILURE';
+  const exitsWith = (status, stderr) => (result, label) => {
+    assert.equal(result.status, status, `${label}: expected exit ${status}, got ${result.status}: ${result.stderr}`);
+    assert.equal(result.stderr.trim(), stderr, label);
+  };
+  const reviewFailure = (result, label) => {
+    assert.equal(result.status, 4, `${label}: expected exit 4, got ${result.status}: ${result.stderr}`);
+    assert.equal(result.stdout, '', label);
+    assert.equal(result.stderr, 'REVIEW_LOAD_FAILURE\n', label);
+  };
   const launcherFailScript = 'import(process.argv[1]).then(async ({ runShim }) => { process.exitCode = await runShim(process.argv[2], process.argv.slice(3)); }).catch(() => { process.stderr.write("pdd: The installed adapter could not load. Run pdd simulate STORY --cli again.\\n"); process.exitCode = 125; });';
-  const launcherFail = runWithRejectedModule(
-    '/product.mjs',
-    ['--input-type=commonjs', '-e', launcherFailScript, '--', pathToFileURL(join(root, 'src/try-doors.mjs')).href, join(scratch, 'missing.door.json')],
-  );
-  assert.equal(launcherFail.status, 125);
-  assert.equal(launcherFail.stderr, 'pdd: The installed adapter could not load. Run pdd simulate STORY --cli again.\n');
-
-  assert.equal(
-    runWithRejectedModule('/runtime-output.mjs', ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(root, 'src/svg-layout.mjs')).href)})`]).status,
-    0,
-  );
-  assert.equal(runWithRejectedModule('/runtime-output.mjs', [join(root, 'src/workflow-worker-completion.mjs'), '{}']).status, 0);
+  const guards = [
+    ['cli:approve-automatic-tests', 'cli:approve', [bin, 'approve', 'prompts/a.prompt.md', '--automatic', '--tests', 'node --test x.mjs'], repo, reviewFailure],
+    ['cli:approve-automatic', 'cli:approve', [bin, 'approve', 'prompts/a.prompt.md', '--automatic'], repo, reviewFailure],
+    ['cli:test', 'cli:--help', [bin, 'test', 'a'], repo, exitsWith(3, internalError)],
+    ['cli:simulate', 'cli:--help', [bin, 'simulate', '--stop', 'a'], repo, exitsWith(3, internalError)],
+    ['cli:mcp', 'cli:--help', [bin, 'mcp'], nonGit, exitsWith(1, 'pdd mcp could not start. Reason: REVIEW_LOAD_FAILURE')],
+    ['cli:jobs', 'cli:--help', [bin, 'jobs'], nonGit, exitsWith(5, 'Local interpreter jobs could not be read. Reason: REVIEW_LOAD_FAILURE')],
+    ['cli:contracts', 'cli:--help', [bin, 'contracts'], nonGit, exitsWith(5, 'Local contracts could not be read. Reason: REVIEW_LOAD_FAILURE')],
+    ['cli:setup', 'cli:--help', [bin, 'setup', '--yes'], repo, (result, label) => {
+      assert.equal(result.status, 1, label);
+      assert.ok(result.stderr.includes('REVIEW_LOAD_FAILURE'), label);
+    }],
+    ['child:try-doors-launcher', null, ['--input-type=commonjs', '-e', launcherFailScript, '--', world.moduleUrl('src/try-doors.mjs'), join(scratch, 'missing.door.json')], nonGit, (result, label) => {
+      assert.equal(result.status, 125, label);
+      assert.equal(result.stderr, 'pdd: The installed adapter could not load. Run pdd simulate STORY --cli again.\n', label);
+    }],
+  ];
+  const guarded = guards.flatMap(([key, base, args, cwd, check]) => {
+    const names = loads.get(key).filter(name => !(loads.get(base) ?? []).includes(name));
+    assert.ok(names.length > 0, `${key} must load modules beyond ${base}`);
+    return names.map(name => ({ label: `${key} with ${name} unloadable`, name, args, cwd, check }));
+  });
+  await inBatches(guarded, async ({ label, name, args, cwd, check }) => check(await rejecting([name], args, cwd), label));
 });
 
 test('SEAM6: no file in src/runtime/ imports or addresses a path outside src/runtime/', () => {

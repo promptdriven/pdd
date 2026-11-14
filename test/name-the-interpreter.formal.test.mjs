@@ -2,7 +2,7 @@ import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { PUBLIC_COMMAND_ROUTES } from '../src/command-catalog.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { summaryLine } from '../src/runtime-seam.mjs';
@@ -90,7 +90,8 @@ function tokens(source) {
   return out;
 }
 const sourceFiles = () => [
-  ...readdirSync(join(root, 'src')).filter(name => name.endsWith('.mjs')).map(name => join('src', name)),
+  ...readdirSync(join(root, 'src'), { recursive: true }).map(name => `src/${name.split(sep).join('/')}`)
+    .filter(name => name.endsWith('.mjs') && !['vendor', 'runtime'].includes(name.split('/')[1])),
   ...readdirSync(join(root, 'bin')).filter(name => name.endsWith('.mjs')).map(name => join('bin', name))];
 
 test('pdd\'s own strings: no string literal in host src or bin calls the service "PDD runtime" or "the runtime"', t => {
