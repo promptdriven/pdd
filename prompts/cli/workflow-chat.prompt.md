@@ -461,7 +461,7 @@ Export countReasons(kept) to count the reason fields, mergeReasonCounts(...group
 
 ```json
 {
-  "status": "draft",
+  "status": "approved",
   "prose_sha256": "4c57acced576723bd12aee119a55132e5128850267dbf508fc6a34e13c4bfd5f",
   "entries": [
     {
