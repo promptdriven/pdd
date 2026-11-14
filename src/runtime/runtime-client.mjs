@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 7ee5fc6a1bc717c02d7be2e57cca5a4fe9f4bb1c7a74d4c58fcf625e7566bcda).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 33839a6b6ce280ecf9d240990f16fd711195550025aece54c4e4ba0c5d861b82).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
@@ -1611,7 +1611,7 @@ function capturedCriteria(rows, capture) {
       refuseSource(row,error);broken=true;continue;
     }
     row.steps=doc.steps;
-    row.app_maps=Array.isArray(doc.app_maps)?doc.app_maps.filter(path=>typeof path==='string'&&path.length>0):[];
+    row.app_maps=declaredMaps(doc);
     row.criteria_total=doc.criteria.length;
     row.criterion_texts=Object.fromEntries(doc.criteria.filter(isObject).map(item=>[item.id,item.text]));
     const exemptions=Array.isArray(doc.check_exemptions)?doc.check_exemptions:[];
@@ -1687,8 +1687,9 @@ function recoverSourceContext(context) {
     return true;
   } catch (error) { if (!(error instanceof PreflightError)) throw error; return false; }
 }
+const declaredMaps = doc => Array.isArray(doc?.app_maps) ? [...new Set(doc.app_maps.filter(path => typeof path === 'string' && path.length > 0))] : [];
 function rowAppMaps(row, capture, appMap = null) {
-  let declared = Array.isArray(row?.app_maps) ? row.app_maps : null;
+  let declared = Array.isArray(row?.app_maps) && row.app_maps.length ? row.app_maps : null;
   if (!declared && Array.isArray(capture?.sources)) {
     const source = capture.sources.find(item => item.path === row?.test);
     if (source) {
@@ -1750,17 +1751,23 @@ const lintAdmits = (answer, row, capture, appMap = null) => lintOutcome(answer, 
 // Refusals that per-test passes scoped out stay visible as warnings; a refusal that already
 // refused one of these rows is shown there instead. Returns the new lines.
 function lintDiagnostics(context, answer, rows) {
-  context.warnings ??= [];
+  const warnings = context.warnings ??= [];
   const result = answer?.result, list = value => Array.isArray(value) ? value.filter(isObject) : [];
   const refusals = list(result?.refusals).length ? list(result.refusals) : list([result?.report?.refusal]);
+  const problems = list(result?.problems ?? result?.report?.problems).filter(item => item.severity !== 'warning');
   const key = item => `${item.code}|${item.file ?? item.path ?? ''}`;
-  const shown = new Set(rows.filter(row => row.state === 'refused').flatMap(row => (row.refusals ?? []).map(item => `${item.code}|${item.path ?? ''}`)));
+  const refusedItems = rows.filter(row => row.state === 'refused').flatMap(row => row.refusals ?? []);
+  const shown = new Set(refusedItems.map(item => `${item.code}|${item.path ?? ''}`));
+  const shownPaths = new Set(refusedItems.map(item => item.path).filter(Boolean));
   const added = [];
-  for (const item of [...refusals, ...list(result?.report?.program?.refused_prompts)]) {
-    if (shown.has(key(cleanItem(item, context.secrets)))) continue;
+  for (const item of [...problems, ...refusals, ...list(result?.report?.program?.refused_prompts)]) {
+    const cleaned = cleanItem(item, context.secrets);
+    if (shown.has(key(cleaned)) || cleaned.code === 'lint-refused' && cleaned.path && shownPaths.has(cleaned.path)) continue;
+    shown.add(key(cleaned));
+    if (cleaned.code !== 'lint-refused' && cleaned.path) shownPaths.add(cleaned.path);
     const view = interfaceDiagnostic(refusalView(item, context.secrets), item, context.root, context.secrets);
     const text = `Lint diagnostic: ${[view.code, view.path, view.section, view.reason ?? view.message, view.hint].filter(Boolean).join('  ')}`;
-    if (!context.warnings.includes(text)) { context.warnings.push(text); added.push(text); }
+    if (!warnings.includes(text)) { warnings.push(text); added.push(text); }
   }
   return added;
 }
@@ -2643,7 +2650,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   // A test that the test name rule cannot use is refused here and never sent; the other tests are linted.
   const rows = selected.map(test => ({ test: test.path, story: test.story, title: test.title, state: 'ready', phase: 'lint',
     refusals: [], request_ids: [], warnings: [], steps: Array.isArray(test.doc?.steps) ? test.doc.steps.filter(isObject) : [],
-    app_maps: Array.isArray(test.doc?.app_maps) ? test.doc.app_maps.filter(path => typeof path === 'string' && path.length > 0) : [],
+    app_maps: declaredMaps(test.doc),
     criterion_texts: Object.fromEntries((Array.isArray(test.doc?.criteria) ? test.doc.criteria : []).filter(isObject).map(item => [item.id, item.text])),
     ...(discoveryRefusal(test) ? { state: 'refused', phase: 'local', unsent:true, refusals: [discoveryRefusal(test)], steps: [], app_maps: [] } : {}) }));
   context.rows = rows;
@@ -4185,6 +4192,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
   for (const row of rows) {
     const test = selected.find(item => item.path === row.test);
     row.story_path = test?.storyPath;
+    row.app_maps = declaredMaps(test?.doc);
     // A test that discovery cannot use (a conflict, unreadable, invalid or over the upload limit) is refused and never uploaded.
     if (test?.error) row.unsent = true;
     row.criterion_texts = Object.fromEntries([...(Array.isArray(test?.doc?.criteria) ? test.doc.criteria : []).filter(isObject).map(item => [item.id, item.text]),
@@ -4282,9 +4290,9 @@ async function runBatch(context, cwd, words, options, setRelease) {
       // sending. The same rows replace the provisional cache projection in output.
       const originals = new Map(localRows(checked.rows).map(row => [row.test, row]));
       for (const row of rerun) {
-        const original = originals.get(row.test), storyPath = row.story_path, texts = row.criterion_texts;
+        const original = originals.get(row.test), storyPath = row.story_path, texts = row.criterion_texts, appMaps = row.app_maps;
         for (const key of Object.keys(row)) delete row[key];
-        Object.assign(row, original, { story_path: storyPath, criterion_texts: texts, cache_reason: 'runs again: interpreter build or model changed' });
+        Object.assign(row, original, { story_path: storyPath, criterion_texts: texts, ...(appMaps?.length ? { app_maps: appMaps } : {}), cache_reason: 'runs again: interpreter build or model changed' });
         if (options['--max-calls'] !== undefined) row.max_calls = Number(options['--max-calls']);
       }
       await beginTestAttempts(cache, rerun, capture, options, origin, true);
@@ -4584,6 +4592,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     const allowMissingInterfaces = hasMissingPromptInterface(root, found, entryPaths(localSelected))
       ? await probeLazyInterfaces(context, origin, store) : false;
     const checked = preflight({ root, found, selected: localSelected, allowMissingInterfaces }), rows = localRows(checked.rows);
+    for (const item of rows) item.app_maps = declaredMaps(localSelected.find(candidate => candidate.path === item.test)?.doc);
     const refused = rows.find(row => row.state === 'refused');
     if (refused) {
       if (options['--cli'] || options['--shell'] || options['--serve'] !== undefined) throw new Stop(125, refused.refusals?.map(r => r.message || r.code).join('; ') || 'The Story input was refused.');

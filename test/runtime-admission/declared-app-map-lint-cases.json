@@ -1,0 +1,77 @@
+{
+  "format": "proposed-native-case-inventory",
+  "story_path": "user_stories/declared-app-map-lint.md",
+  "status": "approved-in-chat",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "When a Story's test declares an app map in `app_maps` and the interpreter refuses that map during lint, `pdd lint` exits with code 4, reports `refused` with the map's problem code, reason and fix, and reports 0 passing tests for that Story."
+    },
+    {
+      "id": "AC2",
+      "text": "When a Story's test declares a refused app map in `app_maps`, `pdd test` exits with code 4, sends 0 check requests and spends 0 AI calls, and `pdd test --read` on that saved lint or check batch preserves `refused` with exit code 4."
+    },
+    {
+      "id": "AC3",
+      "text": "When a Story's test declares a refused app map in `app_maps` or `pdd simulate` selects a refused app map, `pdd simulate` sends 0 Try requests and spends 0 AI calls (exit code 4 in page mode, exit code 125 in `--cli` and `--serve` door modes), and an unrelated scoped-out lint refusal prints `Lint diagnostic:` on stderr without throwing."
+    },
+    {
+      "id": "AC4",
+      "text": "When the interpreter reports `app_maps` verdicts and a selected app map is `not-checked` or missing its verdict, `pdd lint`, `pdd test` and `pdd simulate` report `not run` with exit code 5 and 0 AI calls; a Story that does not select a refused app map keeps its own passing lint result."
+    }
+  ],
+  "fixture": {
+    "provenance": "Portable synthetic fixture; no operational project material.",
+    "story": "user_stories/try-b8.md with one shell step on prompts/shell.prompt.md.",
+    "scenario": "tests/try-b8.json declares app_maps: [\"app/maps/b8.json\"] with initial_world: {}.",
+    "map": "app/maps/b8.json declares screen prompt prompts/screen.prompt.md whose $ref reads /state/attempt/match_code absent from initial_world.",
+    "sibling": "user_stories/plain.md and tests/plain.json declare no app_maps."
+  },
+  "cases": [
+    {
+      "id": "lint-refuses-declared-map",
+      "criterion_ids": [
+        "AC1"
+      ],
+      "given": "Complete lint returns state: \"refused\", result.tests: [{path: \"tests/try-b8.json\", verdict: \"passed\"}], result.app_maps: [{path: \"app/maps/b8.json\", verdict: \"refused\", problems: 1}], result.problems: [{code: \"template-reference-unprovable\", file: \"app/maps/b8.json\", at: \"initial_world\", reason: \"...\", fix: \"...\", severity: \"error\"}], result.refusals: [{code: \"lint-refused\", path: \"app/maps/b8.json\", message: \"Lint refused this test or app map.\"}].",
+      "expect": "pdd lint exits 4; text and --json report lint_state: \"refused\", rows[0].state: \"refused\", summary \"Lint: 0 of 1 tests pass.\", and specific refusal code \"template-reference-unprovable\" with reason and fix."
+    },
+    {
+      "id": "lint-refuses-declared-map-behind-earlier-test-refusal",
+      "criterion_ids": [
+        "AC1"
+      ],
+      "given": "Another test fails admission first so result.refusals names only tests/broken.json, while result.app_maps marks app/maps/b8.json refused and result.problems carries template-reference-unprovable on app/maps/b8.json.",
+      "expect": "tests/try-b8.json is still refused with template-reference-unprovable on app/maps/b8.json; generic first-row result.refusals truncation cannot hide the map refusal."
+    },
+    {
+      "id": "test-and-saved-read-hold-back-paid-work",
+      "criterion_ids": [
+        "AC2"
+      ],
+      "given": "Run pdd test, pdd test --read on a standalone lint batch (both pending-then-refused and already-refused), pdd test --retry, and restart recovery when app/maps/b8.json is refused.",
+      "expect": "Exit 4, 0 /v1/check POSTs, 0 AI calls, and saved --read preserves refused state and specific map refusal."
+    },
+    {
+      "id": "simulate-gate-and-diagnostics",
+      "criterion_ids": [
+        "AC3"
+      ],
+      "given": "Run pdd simulate in page mode, --cli mode and --serve mode when declared app_maps or selected --app-map is refused; then run pdd simulate on tests/plain.json when an unselected map or test is refused.",
+      "expect": "Refused map stops before /v1/try POST with 0 AI calls (exit 4 in page mode, exit 125 in door modes); passing tests/plain.json prints Lint diagnostic: on stderr without TypeError and creates the Try."
+    },
+    {
+      "id": "incomplete-map-not-run-and-sibling-scoping",
+      "criterion_ids": [
+        "AC4"
+      ],
+      "given": "Interpreter returns result.app_maps with app/maps/b8.json verdict \"not-checked\" or omitted; separately run combined batch [tests/try-b8.json, tests/plain.json] when app/maps/b8.json is refused and tests/plain.json has no map.",
+      "expect": "Unchecked/unlisted map in a reported app_maps list yields not run (exit 5, 0 check/Try POSTs); legacy answers without app_maps keep passed when no refusal/problem names the map; in the combined batch tests/plain.json passes and dispatches while tests/try-b8.json is refused."
+    }
+  ],
+  "verification_plan": {
+    "local": "Native regression and bounded finite-domain formal tests in test/declared-app-map-lint.test.mjs must fail on baseline c1cdb274 and pass on the fix, plus full public suite via pdd workflow suite --command \"npm test\".",
+    "prompt_before": "Not run: prompts/cli/runtime-client.prompt.md owns the shared CLI lint gate and has no Runtime interface block; prompts/cli/runtime-outcome.prompt.md declares a partial outcomeFor interface.",
+    "paid_calls_now": 0
+  }
+}
