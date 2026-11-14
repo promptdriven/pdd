@@ -1,4 +1,4 @@
-// Generated from prompts/cli/screen-compare.prompt.md (sha256: 1efad4b3c086cf16adb976d4a07ac5162ce195ef26e0735ff3233928c272f6c8).
+// Generated from prompts/cli/screen-compare.prompt.md (sha256: f047f277c4d61fb385265acf33f5664c598fd1d4cf874aed30775103897aafc7).
 import { spawn } from 'node:child_process';
 import { accessSync, constants, lstatSync, mkdtempSync, readFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
@@ -230,6 +230,35 @@ function snapshot(reference, scope = globalThis.document, referenceViewport, sel
   const svgPaint = new Set(['text', 'tspan', 'textPath', 'rect', 'circle', 'ellipse', 'path', 'polygon', 'polyline', 'line']);
   const svgContainer = new Set(['svg', 'g', 'a', 'switch']);
   const transparent = color => color === 'none' || color === 'transparent' || /^rgba\([^,]+,[^,]+,[^,]+,\s*0(?:\.0+)?\s*\)$/.test(color) || /\/\s*0(?:\.0+)?\s*\)$/.test(color);
+  const emptyInset = value => {
+    const match = /^inset\(([^)]+)\)(?:\s+(?:border|padding|content|margin)-box)?$/.exec(value);
+    if (!match) return false;
+    const [offsets, ...radii] = match[1].trim().split(/\s+round\s+/);
+    if (radii.length > 1 || radii.length === 1 && !radii[0]) return false;
+    const tokens = offsets.split(/\s+/);
+    if (tokens.length < 1 || tokens.length > 4 || !tokens.every(token => /^(?:\d+(?:\.\d+)?|\.\d+)(?:%|px)$/.test(token))) return false;
+    const pct = token => token.endsWith('%') ? Number(token.slice(0, -1)) : 0;
+    const [t, r = t, b = t, l = r] = tokens.map(pct);
+    return t + b >= 100 || l + r >= 100;
+  };
+  const emptyRect = value => {
+    const match = /^rect\(([^,]+),\s*([^,]+),\s*([^,]+),\s*([^)]+)\)$/.exec(value);
+    if (!match) return false;
+    const coords = match.slice(1).map(part => {
+      const token = part.trim();
+      if (token === 'auto') return null;
+      return /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)px$/.test(token) ? Number(token.slice(0, -2)) : NaN;
+    });
+    if (coords.some(Number.isNaN)) return false;
+    const [t, r, b, l] = coords;
+    return t !== null && b !== null && b <= t || l !== null && r !== null && r <= l;
+  };
+  const collapsedClip = parent => {
+    if (parent.namespaceURI !== 'http://www.w3.org/1999/xhtml' || parent.getRootNode() !== scope) return false;
+    const effect = parent.ownerDocument.defaultView.getComputedStyle(parent);
+    if (effect.maskImage !== 'none' || effect.filter !== 'none') return false;
+    return emptyInset(effect.clipPath) || ['absolute', 'fixed'].includes(effect.position) && emptyRect(effect.clip) && (effect.clipPath === 'none' || emptyInset(effect.clipPath));
+  };
   let unsupported;
   const painted = (color, opacity) => {
     if (transparent(color) || Number(opacity) === 0) return false;
@@ -296,7 +325,11 @@ function snapshot(reference, scope = globalThis.document, referenceViewport, sel
       }
     }
     if (degenerate && !(parseFloat(style.strokeWidth) > 0 && painted(style.stroke, style.strokeOpacity))) return false;
-    if (effects.length) { unsupported = 'Unsupported applied clip-path, clip, mask or filter; visible parts cannot be established.'; return false; }
+    if (effects.length) {
+      if (!reference && effects.every(collapsedClip)) return false;
+      unsupported = 'Unsupported applied clip-path, clip, mask or filter; visible parts cannot be established.';
+      return false;
+    }
     if ((kind === 'text' || ['text', 'tspan', 'textPath'].includes(el.localName)) && !textPaint(style)) return false;
     if (svg) {
       if (svgPaint.has(el.localName)) {
