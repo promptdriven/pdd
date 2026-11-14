@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 215272e84dda1a2540ed20187d9e9ef0986f18d0200804fb4e6386b89a4c82fd).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 0f7d05613197641dcd2529d01492f42404c4e0b9532f9e3de199fe187ee83488).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
@@ -1180,17 +1180,20 @@ function usagePart(record) {
   const flags = surfaces.filter(source => Object.hasOwn(source, 'accounting_complete')).map(source => source.accounting_complete);
   const invalidFlag = flags.some(value => typeof value !== 'boolean');
   const conflictingFlags = new Set(flags.filter(value => typeof value === 'boolean')).size > 1;
-  const callValues = values('calls'), knownValues = values('known_calls'), unknownValues = values('unknown_calls'), providerValues = values('provider_calls');
-  const calls = counter(usage.calls), knownRaw = knownValues.length ? Math.max(...knownValues.filter(value => value !== undefined)) : calls;
-  const unknownRaw = unknownValues.length ? Math.max(...unknownValues.filter(value => value !== undefined)) : 0;
-  const providerCalls = providerValues.length ? Math.max(...providerValues.filter(value => value !== undefined)) : undefined;
-  const callLowerBound = knownValues.length ? knownRaw ?? 0 : Math.max(...callValues.filter(value => value !== undefined), 0);
-  const known = Math.max(callLowerBound, providerCalls ?? 0);
+  const validCalls = values('calls').filter(value => value !== undefined);
+  const validKnown = values('known_calls').filter(value => value !== undefined);
+  const validUnknown = values('unknown_calls').filter(value => value !== undefined);
+  const validProvider = values('provider_calls').filter(value => value !== undefined);
+  const calls = counter(usage.calls);
+  const unknownRaw = Math.max(...validUnknown, 0);
+  const providerCalls = validProvider.length ? Math.max(...validProvider) : undefined;
+  const deductedTotals = [...validCalls, ...validProvider].map(value => Math.max(0, value - unknownRaw));
+  const known = validKnown.length ? Math.max(...validKnown, 0) : Math.max(...deductedTotals, 0);
   const complete = !invalid && !conflicting && !invalidFlag && !conflictingFlags && !flags.includes(false) && calls !== undefined
-    && (unknownRaw ?? 0) === 0 && (knownRaw === undefined || knownRaw <= calls) && (providerCalls === undefined || providerCalls === calls);
+    && unknownRaw === 0 && (!validKnown.length || known <= calls) && (providerCalls === undefined || providerCalls === calls);
   const zeroWork = complete && calls === 0 && ((checkCapacityCandidate(record) && accountingProof(record))
     || (isAdmissionCapacityRecord(record) && admissionCapacityCandidate(record) && accountingProof(record)));
-  return { known, unknown: complete ? 0 : Math.max(1, unknownRaw ?? 0), complete, total: complete ? calls : null,
+  return { known, unknown: complete ? 0 : Math.max(1, unknownRaw), complete, total: complete ? calls : null,
     zeroWork, tokens: tokenUsageOf(record, { incomplete: !complete }) };
 }
 function attemptAccounting(context, id) {
