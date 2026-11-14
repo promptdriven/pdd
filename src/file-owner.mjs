@@ -1,4 +1,4 @@
-// Generated from prompts/cli/file-owner.prompt.md (sha256: a72ab9ea2461e0dde9342050544c89fb5055c6795e7fd08e3b616360f3430920).
+// Generated from prompts/cli/file-owner.prompt.md (sha256: f51c5032eefbcdc9bcdaeb220bbf4979a217d8cf82374cdcabde8b22e78fbdf9).
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { closeSync, fstatSync, lstatSync, openSync, readSync, realpathSync } from 'node:fs';
@@ -103,23 +103,94 @@ function bindingTable(text) {
   } catch { return null; }
 }
 
-export function resolveOwners({ paths = [], bindings = null, heads = [], prompts = [] } = {}) {
+const NON_CODE_DIR = /^(?:user_stories|docs?|\.github)\//i;
+const FIXTURE_EXAMPLE_DIR = /(?:^|\/)(?:fixtures|examples)\//i;
+const DOTFILE = /(?:^|\/)\.[^/]+$/;
+const CONFIG_FILE = /(?:^|\/)(?:package(?:-lock)?\.json|pdd(?:-bindings)?\.json|tsconfig[^/]*\.json|jsconfig\.json|Makefile|GNUmakefile|Dockerfile|Containerfile|Procfile|Justfile|Vagrantfile|Rakefile|Gemfile)$/i;
+const NON_CODE_EXT = /\.(?:mdx?|rst|txt|json|jsonl|ndjson|ya?ml|toml|ini|cfg|conf|lock|csv|tsv|xml|svg|png|jpe?g|gif|webp|ico|pdf|woff2?)$/i;
+const isExcludedPath = path => !canonicalPath(path) || isTestOwnedPath(path) || FIXTURE_EXAMPLE_DIR.test(path) || /\.prompt\.md$/i.test(path)
+  || NON_CODE_DIR.test(path) || DOTFILE.test(path) || CONFIG_FILE.test(path) || NON_CODE_EXT.test(path);
+const fileExt = path => { const ext = posix.extname(posix.basename(path)); return ext.length > 1 ? ext : ''; };
+const isEligibleCodePath = path => !isExcludedPath(path) && Boolean(fileExt(path));
+const isEligiblePromptPath = path => {
+  if (!canonicalPath(path) || !path.endsWith('.prompt.md') || FIXTURE_EXAMPLE_DIR.test(path)) return false;
+  const p = path.slice(0, -'.prompt.md'.length);
+  return canonicalPath(p) && !isTestOwnedPath(p);
+};
+const parentDir = path => { const dir = posix.dirname(path); return dir === '.' ? '' : posix.basename(dir); };
+
+function buildPathMatcher(promptPaths, poolPaths) {
+  const validPrompts = unique(promptPaths.filter(isEligiblePromptPath)).sort();
+  const allCanonical = new Set(poolPaths.filter(canonicalPath));
+  const codeFiles = unique(poolPaths.filter(isEligibleCodePath)).sort();
+  const add = (map, key, value) => { let list = map.get(key); if (!list) map.set(key, list = []); list.push(value); };
+
+  const codeByNoExt = new Map(), codeByBase = new Map(), codeByParentBase = new Map(), codeByStem = new Map(), codeByParentStem = new Map();
+  for (const file of codeFiles) {
+    const base = posix.basename(file), ext = fileExt(file), stem = base.slice(0, -ext.length), parent = parentDir(file);
+    add(codeByNoExt, file.slice(0, -ext.length), file);
+    add(codeByBase, base, file);
+    add(codeByStem, stem, file);
+    if (parent) { add(codeByParentBase, `${parent}/${base}`, file); add(codeByParentStem, `${parent}/${stem}`, file); }
+  }
+
+  const promptByExactRel = new Map(), promptByExtlessRel = new Map(), promptByBase = new Map(), promptByParentBase = new Map(), promptByStem = new Map(), promptByParentStem = new Map();
+  for (const prompt of validPrompts) {
+    const rel = prompt.slice(0, -'.prompt.md'.length).replace(/^prompts\/(?:modules\/)?/, '');
+    const base = posix.basename(rel), ext = fileExt(rel), parent = parentDir(rel);
+    if (ext || rel.includes('/')) add(promptByExactRel, rel, prompt);
+    if (!ext) add(promptByExtlessRel, rel, prompt);
+    else { add(promptByBase, base, prompt); if (parent) add(promptByParentBase, `${parent}/${base}`, prompt); }
+    add(promptByStem, base, prompt);
+    if (parent) add(promptByParentStem, `${parent}/${base}`, prompt);
+  }
+
+  return path => {
+    if (isExcludedPath(path)) return null;
+    const exact = promptByExactRel.get(path);
+    if (exact?.length) return { owners: exact, kind: 'path' };
+    const ext = fileExt(path);
+    if (!ext) return null;
+    const noExt = path.slice(0, -ext.length), extless = promptByExtlessRel.get(noExt);
+    if (extless?.length && !allCanonical.has(noExt) && codeByNoExt.get(noExt)?.length === 1) return { owners: extless, kind: 'path' };
+    const base = posix.basename(path), stem = base.slice(0, -ext.length), parent = parentDir(path);
+    const byBase = promptByBase.get(base);
+    if (byBase?.length) {
+      if (codeByBase.get(base)?.length === 1 && byBase.length === 1) return { owners: byBase, kind: 'name' };
+      const key = `${parent}/${base}`;
+      if (parent && codeByParentBase.get(key)?.length === 1 && promptByParentBase.get(key)?.length === 1) return { owners: promptByParentBase.get(key), kind: 'name' };
+    }
+    const byStem = promptByStem.get(stem);
+    if (byStem?.length) {
+      if (codeByStem.get(stem)?.length === 1 && byStem.length === 1) return { owners: byStem, kind: 'name' };
+      const key = `${parent}/${stem}`;
+      if (parent && codeByParentStem.get(key)?.length === 1 && promptByParentStem.get(key)?.length === 1) return { owners: promptByParentStem.get(key), kind: 'name' };
+    }
+    return null;
+  };
+}
+
+export function resolveOwners({ paths = [], allPaths = paths, bindings = null, heads = [], prompts = [] } = {}) {
   const table = bindings === false ? null : bindingTable(bindings);
   const content = new Map(heads.map(row => [row.path, row.content]));
   const visible = new Set(prompts.map(row => row.path)), whole = new Map(prompts.map(row => [row.path, row.content]));
   const claims = prompts.map(row => [row.path, new Set(promptClaims(row.path, row.content))]);
+  const matchPath = table === null ? () => null : buildPathMatcher(prompts.map(row => row.path), [...(allPaths ?? paths), ...paths]);
   const files = unique(paths).map(path => {
     const bound = table?.get(path), head = content.get(path);
     const recorded = unique([...(bound ?? []), ...headerPrompts(head || null)]);
-    const owners = recorded.length ? recorded : claims.filter(([, set]) => set.has(path)).map(([prompt]) => prompt).sort();
+    const prose = recorded.length ? [] : claims.filter(([, set]) => set.has(path)).map(([prompt]) => prompt).sort();
+    const matched = !recorded.length && !prose.length && !bound && head !== false ? matchPath(path) : null;
+    const owners = recorded.length ? recorded : prose.length ? prose : matched?.owners ?? [];
     const notes = [], missing = recorded.filter(prompt => !visible.has(prompt));
-    if (!recorded.length && owners.length) notes.push(`named only in the opening sentence of ${owners.join(', ')}; add a Generated from header or a pdd-bindings.json entry`);
+    if (prose.length) notes.push(`named only in the opening sentence of ${owners.join(', ')}; add a Generated from header or a pdd-bindings.json entry`);
+    if (matched) notes.push(`matched by ${matched.kind === 'path' ? 'path' : 'file name'} to ${owners.join(', ')}; add a Generated from header or a pdd-bindings.json entry`);
     for (const prompt of missing) notes.push(`names ${prompt}, which is not a Git-visible prompt`);
     if (!owners.length && table === null) notes.push('pdd-bindings.json could not be read, so a binding may be missing');
     if (!bound?.length && head === false) notes.push('the file could not be read, so a header may be missing');
     if (bound && !bound.length) notes.push('pdd-bindings.json declares it with no prompt');
     const certain = recorded.length ? !missing.length : !owners.length && table !== null && head !== false;
-    const source = owners.length ? (bound?.includes(owners[0]) ? 'binding' : recorded.length ? 'header' : 'prose') : bound ? 'binding' : null;
+    const source = owners.length ? (bound?.includes(owners[0]) ? 'binding' : recorded.length ? 'header' : prose.length ? 'prose' : 'path') : bound ? 'binding' : null;
     const headers = headerEntries(head || null).map(({ prompt, sha256: hash }) => ({ prompt, sha256: hash, ...headerHashState(hash, whole.get(prompt) ?? null) }));
     return { path, owner: owners[0] ?? null, owners, source, certain, note: notes.join('; '), headers };
   });
@@ -162,14 +233,15 @@ export function findOwners({ root, paths = [] }, ports = {}) {
   const attempt = (path, limit) => { try { return read(path, limit); } catch { return false; } };
   const raw = attempt('pdd-bindings.json', PROMPT);
   const bindings = raw ? decode(raw, PROMPT) : raw;
+  const visible = files();
   // A whole prompt for its header hash; one byte more shows a prompt that is too large.
-  const prompts = files().filter(path => path.endsWith('.prompt.md')).map(path => {
+  const prompts = visible.filter(path => path.endsWith('.prompt.md')).map(path => {
     const content = attempt(path, WHOLE + 1);
     return { path, content: content && content.length > WHOLE ? false : content };
   });
   // One byte more than the window, so headerPrompts can see that its last line is cut.
   const heads = unique(paths).map(path => ({ path, content: attempt(path, HEAD + 1) }));
-  return resolveOwners({ paths, bindings, heads, prompts });
+  return resolveOwners({ paths, allPaths: visible, bindings, heads, prompts });
 }
 
 export function runOwner({ cwd = process.cwd(), paths = [], json = false } = {}, { stdout = process.stdout, stderr = process.stderr, files, read } = {}) {
