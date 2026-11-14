@@ -1,25 +1,35 @@
-// Generated from prompts/cli/try-mcp.prompt.md (sha256: 381ee7e57cc3d117af9dbc2265a64a5826bb9b28d6bc040d333942fece128574).
+// Generated from prompts/cli/try-mcp.prompt.md (sha256: f005492d96bf72699f50571513cd90416a70c422a79c079a79bb54e3ce7471f9).
 import { createInterface } from 'node:readline';
-import { readTryOwner, runDoorCall, saveDoorCase, applyPendingCaseWithHandoff } from './runtime-client.mjs';
+import { readTryOwner, observeTryCall, runDoorCall, saveDoorCase, applyPendingCaseWithHandoff } from './runtime-client.mjs';
 import { createRunJudge } from './agent-judge.mjs';
 
 const object = x => x !== null && typeof x === 'object' && !Array.isArray(x);
 const text = x => typeof x === 'string' && x.length > 0;
 const validSha256 = x => typeof x === 'string' && /^[0-9a-f]{64}$/i.test(x) ? x.toLowerCase() : null;
 const validEngineSha = x => typeof x === 'string' && /^[0-9a-f]{8,40}$/i.test(x) ? x.toLowerCase() : null;
-const schema = properties => ({ type: 'object', properties: { story: { type: 'string' }, ...properties }, additionalProperties: false });
+const validCommit = x => typeof x === 'string' && x.length > 0 ? x : null;
+const schema = (properties, required = []) => ({
+  type: 'object',
+  properties: { story: { type: 'string' }, ...properties },
+  ...(required.length ? { required } : {}),
+  additionalProperties: false,
+});
 const tools = [
-  ['try_open', 'Open or reuse the current repo and Story Try. Returns its entries, data and budget. No prompt approval.', {}, false],
-  ['try_state', 'Read current Try data, entries and schemas, Story criteria, test inputs, runs, budget and progress. Opens a missing Try.', {}, false],
-  ['try_run', 'Run one action on the Try, spending its existing AI call budget. Use entry and input, or exact CLI argv. Every run appears on the Try page.', { entry: { type: 'string' }, input: { type: 'object', additionalProperties: true }, argv: { type: 'array', items: { type: 'string' } } }, false],
-  ['try_check', 'Compare a confirmed run with the Story tests, with honest limits and first differences. No AI calls.', { run_id: { type: 'string' } }, true],
-  ['try_save_case', 'Save a confirmed run as an exact observed-result case. Or apply a retained pending_id with closed_editor_for: obtain the person’s actual confirmation that this exact original test is closed and handed over until apply finishes; generic tool approval is insufficient. Review its expectation and starting data; saving does not approve correctness.', { run_id: { type: 'string' }, criterion_id: { type: 'string' }, name: { type: 'string' }, pending_id: { type: 'string', pattern: '^[0-9a-f]{64}\\.[0-9a-f]{64}$' }, closed_editor_for: { type: 'string', minLength: 1 } }, false],
-].map(([name, description, properties, readOnlyHint]) => ({ name, description, inputSchema: schema(properties), annotations: { readOnlyHint, destructiveHint: false, idempotentHint: name !== 'try_run', openWorldHint: false } }));
+  ['try_open', 'Open or reuse the current repo and Story Try, or pass try_id to bind only an existing running simulation without opening or reopening one. Returns its entries, data and budget. No prompt approval.', { try_id: { type: 'string' } }, false],
+  ['try_state', 'Read current Try data, entries and schemas, Story criteria, test inputs, runs, budget and progress. Opens a missing Try only when try_id is omitted.', { try_id: { type: 'string' } }, false],
+  ['try_run', 'Run one action on the Try, spending its existing AI call budget. Pass try_id to require that exact running Try without opening or reopening one. Use entry and input, or exact CLI argv. Declared entry errors return structured error outcomes; every run appears on the Try page.', { try_id: { type: 'string' }, entry: { type: 'string' }, input: { type: 'object', additionalProperties: true }, argv: { type: 'array', items: { type: 'string' } } }, false],
+  ['try_observe', 'Read call state and session state for run_id on try_id without opening, reopening, recovering or replaying a run. Works while the session is running, paused or stopped.', { try_id: { type: 'string' }, run_id: { type: 'string' } }, true, ['try_id', 'run_id']],
+  ['try_check', 'Compare a confirmed run with the Story tests, with honest limits and first differences. No AI calls.', { try_id: { type: 'string' }, run_id: { type: 'string' } }, true],
+  ['try_save_case', 'Save a confirmed run as an exact observed-result case. Or apply a retained pending_id with closed_editor_for: obtain the person’s actual confirmation that this exact original test is closed and handed over until apply finishes; generic tool approval is insufficient. Review its expectation and starting data; saving does not approve correctness.', { try_id: { type: 'string' }, run_id: { type: 'string' }, criterion_id: { type: 'string' }, name: { type: 'string' }, pending_id: { type: 'string', pattern: '^[0-9a-f]{64}\\.[0-9a-f]{64}$' }, closed_editor_for: { type: 'string', minLength: 1 } }, false],
+].map(([name, description, properties, readOnlyHint, required]) => ({ name, description, inputSchema: schema(properties, required), annotations: { readOnlyHint, destructiveHint: false, idempotentHint: name !== 'try_run', openWorldHint: false } }));
 
 function validate(name, args) {
   const tool = tools.find(tool => tool.name === name);
   if (!tool) throw new Error(`Unknown tool ${name}.`);
   if (!object(args)) throw new Error('Tool arguments must be an object.');
+  for (const key of tool.inputSchema.required ?? []) {
+    if (!Object.hasOwn(args, key)) throw new Error(`Missing required argument ${key}.`);
+  }
   for (const [key, value] of Object.entries(args)) {
     const property = tool.inputSchema.properties[key];
     if (!property) throw new Error(`Unknown argument ${key}.`);
@@ -34,7 +44,7 @@ function validate(name, args) {
   if(name==='try_save_case'&&(Object.hasOwn(args,'pending_id')||Object.hasOwn(args,'closed_editor_for'))){
     if(!text(args.pending_id)||!text(args.closed_editor_for))throw new Error('Give both pending_id and closed_editor_for for retained-case application.');
     if(!/^[a-f0-9]{64}\.[a-f0-9]{64}$/.test(args.pending_id))throw new Error('Invalid pending_id.');
-    if(['story','run_id','criterion_id','name'].some(key=>Object.hasOwn(args,key)))throw new Error('Pending application accepts only pending_id and closed_editor_for.');
+    if(['story','try_id','run_id','criterion_id','name'].some(key=>Object.hasOwn(args,key)))throw new Error('Pending application accepts only pending_id and closed_editor_for.');
   }
 }
 
@@ -49,6 +59,7 @@ export function createTryTools({ cwd = process.cwd(), words = [], env } = {}, po
   const dependencies = {
     ...ports,
     readTryOwner: ports.readTryOwner ?? readTryOwner,
+    observeTryCall: ports.observeTryCall ?? observeTryCall,
     runDoorCall: ports.runDoorCall ?? runDoorCall,
     saveDoorCase: ports.saveDoorCase ?? saveDoorCase,
     applyPendingCaseWithHandoff: ports.applyPendingCaseWithHandoff ?? applyPendingCaseWithHandoff,
@@ -63,7 +74,10 @@ export function createTryTools({ cwd = process.cwd(), words = [], env } = {}, po
       if(outcome.kind!=='case'||outcome.result.state!=='committed')throw new Error(outcome.message);
       return{pending_id:args.pending_id,result:outcome.message,note:recordedCaseNote(outcome.coverage)};
     }
-    const owner = await dependencies.readTryOwner({ cwd, story: args.story ?? words[0] }, runtimePorts);
+    if (name === 'try_observe') {
+      return await dependencies.observeTryCall({ cwd, story: args.story ?? words[0], tryId: args.try_id, runId: args.run_id }, runtimePorts);
+    }
+    const owner = await dependencies.readTryOwner({ cwd, story: args.story ?? words[0], ...(args.try_id ? { tryId: args.try_id } : {}) }, runtimePorts);
     const key = `${owner.root}:${owner.record.id}`;
     let session = sessions.get(key);
     if (!session) {
@@ -75,6 +89,7 @@ export function createTryTools({ cwd = process.cwd(), words = [], env } = {}, po
       story: owner.test.title, story_path: owner.test.storyPath, try_id: owner.record.id,
       source_sha256: validSha256(owner.model?.source_sha256) ?? validSha256(owner.source_sha256) ?? validSha256(owner.record?.source_sha256) ?? null,
       engine_sha: validEngineSha(owner.model?.engine_sha) ?? validEngineSha(owner.engine_sha) ?? validEngineSha(owner.record?.engine_sha) ?? null,
+      server_commit: validCommit(owner.model?.server_commit) ?? validCommit(owner.server_commit) ?? validCommit(owner.record?.server_commit) ?? null,
       criteria: owner.test.doc.criteria, test_inputs: judge.bindings(),
       entries: owner.model.entries.map(e => ({ ...e, entry: `${e.entry_path}#${e.operation}` })),
       data_now: owner.data ?? null, ...(owner.data_error ? { data_error: owner.data_error } : {}),
@@ -97,17 +112,24 @@ export function createTryTools({ cwd = process.cwd(), words = [], env } = {}, po
       let answer;
       try {
         answer = await dependencies.runDoorCall({ root: owner.root, originalPath:owner.test.path, origin: owner.record.origin, sessionId: owner.record.id,
-          login: owner.record.login, prompt: entry.entry_path, operation: entry.operation, callCap: owner.model.calls?.cap ?? null }, input, runtimePorts);
+          login: owner.record.login, prompt: entry.entry_path, operation: entry.operation, callCap: owner.model.calls?.cap ?? null,
+          existingOnly: Boolean(args.try_id), declaredErrors: Array.isArray(entry.errors) ? entry.errors : [] }, input, runtimePorts);
       } catch (error) {
         // The door owns dispatch/recovery. Conservatively block a second mutation when its outcome is unconfirmed.
         if (error.unknownOutcome === true) session.unknown = true;
         throw error;
       }
-      const run = { id: answer.id, entry: `${entry.entry_path}#${entry.operation}`, input,
+      const isProgramError = answer.error !== undefined && answer.error !== null;
+      const run = { id: answer.id, ...(answer.actionId !== undefined ? { action_id: answer.actionId } : {}),
+        ...(answer.replayed !== undefined ? { replayed: Boolean(answer.replayed) } : {}),
+        entry: `${entry.entry_path}#${entry.operation}`, input,
         ...(answer.inputWorld !== undefined ? { world_before: answer.inputWorld } : {}),
-        result: answer.result, ...(answer.world !== undefined ? { world_after: answer.world } : {}), lossless: true };
+        ...(isProgramError ? { error: answer.error } : { result: answer.result, error: null }),
+        ...(answer.world !== undefined ? { world_after: answer.world } : {}), lossless: true };
       runs.push(run);
-      return { run_id: run.id, result: run.result, data_before: run.world_before ?? null, data_after: run.world_after ?? null,
+      return { run_id: run.id, action_id: answer.actionId ?? null, replayed: Boolean(answer.replayed),
+        result: isProgramError ? null : run.result, error: isProgramError ? run.error : null,
+        data_before: run.world_before ?? null, data_after: run.world_after ?? null,
         ...(answer.inputWorld === undefined || answer.world === undefined ? { data_warning: 'The interpreter did not supply both run world snapshots; world checks may be unavailable.' } : {}),
         usage: answer.usage ?? null, seconds: Math.round((Date.now() - started) / 100) / 10 };
     }
@@ -121,10 +143,14 @@ export function createTryTools({ cwd = process.cwd(), words = [], env } = {}, po
     if (!criteria.some(item => item.id === criterion)) throw new Error(`Choose criterion_id from: ${criteria.map(item => item.id).join(', ')}.`);
     if (!object(run.world_before)) throw new Error('The interpreter did not provide a confirmed starting world. This run cannot be saved safely.');
     const separator = run.entry.lastIndexOf('#');
+    const step = run.error && typeof run.error.code === 'string'
+      ? { step_id: `try-${run.id}`, entry_path: run.entry.slice(0, separator), operation: run.entry.slice(separator + 1), input: run.input,
+          expected_error: run.error.code, checks: [{ criterion_id: criterion, target: 'error', path: '/code', op: 'equals', value: run.error.code }] }
+      : { step_id: `try-${run.id}`, entry_path: run.entry.slice(0, separator), operation: run.entry.slice(separator + 1), input: run.input,
+          checks: [{ criterion_id: criterion, target: 'result', path: '', op: 'equals', value: run.result }] };
     const result = dependencies.saveDoorCase(owner.root, { id: run.id, name: args.name ?? 'Recorded Try tool run', story_path: owner.test.storyPath, original_path: owner.test.path,
       test: { schema_version: 'prompt-runtime.program-scenario.v1', story_path: owner.test.storyPath, criteria, initial_world: run.world_before, simulation: owner.test.doc.simulation ?? {}, context: owner.test.doc.context ?? [],
-        steps: [{ step_id: `try-${run.id}`, entry_path: run.entry.slice(0, separator), operation: run.entry.slice(separator + 1), input: run.input,
-          checks: [{ criterion_id: criterion, target: 'result', path: '', op: 'equals', value: run.result }] }] } }, { ...runtimePorts, ports: runtimePorts, isolated: true });
+        steps: [step] } }, { ...runtimePorts, ports: runtimePorts, isolated: true });
     if (!result.startsWith('added ') && !result.startsWith('already saved ')) throw new Error(result);
     run.saved = result;
     return { run_id: run.id, result, note: recordedCaseNote({scope:'original-story',covered:1,total:criteria.length}) };
