@@ -838,6 +838,7 @@ registerHooks({
       if (
         rel === 'src/runtime-seam.mjs' ||
         rel === 'src/runtime/index.mjs' ||
+        rel === 'src/runtime/lint-compatibility-display.mjs' ||
         rel === 'src/runtime/secret-redaction.mjs' ||
         rel === 'src/secret-redaction.mjs' ||
         rel === 'src/product-documents.mjs' ||

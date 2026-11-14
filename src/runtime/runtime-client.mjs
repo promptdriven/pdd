@@ -1,7 +1,8 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: b677446ac7d727e6ba39cf05c3271fd348d6ce4b4b5bd980e3cd5217b0cd9483).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 7815251da42f569fb0e439a2b3f02bec5ac65f74dab118be63577b2e6742f924).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
+import { describeCompatibility, describeLintDiagnostics } from './lint-compatibility-display.mjs';
 import { isRecentLintReceipt } from './runtime-lint-receipt.mjs';
 import { rememberSecrets as fallbackRememberSecrets } from './secret-redaction.mjs';
 import { bindingPlanLines, bindingRefusals } from './runtime-binding-plan.mjs';
@@ -2819,6 +2820,7 @@ function lintProblems(context, answer, refusal = null) {
 
 function printLintResult(context, rows, problems, warnings = [], answer = null) {
   const { ports, batch, root } = context;
+  problems = [...problems];
   for (const row of rows) {
     const listed = [answer?.result?.tests, answer?.result?.report?.lint?.tests].find(items => Array.isArray(items) && items.some(item => item?.path === row.test));
     const matching = (listed ?? []).filter(item => item?.path === row.test);
@@ -2831,7 +2833,7 @@ function printLintResult(context, rows, problems, warnings = [], answer = null) 
     if (problem.code === 'lint-refused' && !problem.path) continue;
     if (!problems.some(item => item.code === problem.code && (item.path ?? null) === (problem.path ?? null))) problems.push({ ...problem, path: problem.path ?? null, section: null });
   }
-  const localRefusal = context.localOnly && (problems.length > 0 || rows.some(row => row.state === 'refused'));
+  const localRefusal = context.localOnly && (problems.some(item => item.severity !== 'warning') || rows.some(row => row.state === 'refused'));
   const passing = rows.filter(row => row.state === 'passed').length, lintState = outcomeOverall(rows), exitCode = localRefusal ? 4 : context.ports.exitCodeFor(rows);
   const omitted = rows.filter(row=>row.native_only?.length && !row.refusals?.length).length;
   const broken = rows.filter(row=>row.unsent && (!row.native_only?.length || row.refusals?.length)).length, unchecked = rows.reduce((n,row)=>n+(row.not_checked?.length??0),0);
@@ -2852,15 +2854,38 @@ function printLintResult(context, rows, problems, warnings = [], answer = null) 
   for (const row of rows.filter(row=>row.unsent)) for (const problem of row.refusals) out.push(
     `${row.test}: ${problem.message}`, problem.hint ?? 'Fix the named test file, then run the selection again.');
   for (const row of rows) for (const item of row.not_checked ?? []) out.push(`${row.test} ${item.criterion_id}: not checked: ${item.reason}`);
-  if (problems.length) {
-    out.push(context.localOnly ? 'Local lint problems:' : 'Lint problems (from the PDD interpreter):');
-    for (const item of problems) out.push(`  ${[item.code, item.path, item.section, item.message].filter(Boolean).join('  ')}`, ...(item.hint ? [`    ${item.hint}`] : []));
-  }
+  const cleanNullable = value => value === null || value === undefined ? null : (cleanText(value, context.secrets) || null);
+  const cleanedProblems = problems.map(item => ({
+    ...item,
+    code: cleanNullable(item.code),
+    path: cleanNullable(item.path),
+    section: cleanNullable(item.section),
+    message: cleanNullable(item.message),
+    hint: cleanNullable(item.hint),
+    severity: cleanNullable(item.severity),
+    ...(item.pointer !== undefined ? { pointer: cleanNullable(item.pointer) } : {}),
+    ...(item.source !== undefined ? { source: cleanNullable(item.source) } : {}),
+    ...(item.rule !== undefined ? { rule: cleanNullable(item.rule) } : {}),
+    ...(Array.isArray(item.local_findings) ? {
+      local_findings: item.local_findings.map(finding => ({
+        ...finding,
+        code: cleanText(finding.code, context.secrets),
+        ...(finding.section !== undefined ? { section: cleanText(finding.section, context.secrets) } : {}),
+        message: cleanText(finding.message, context.secrets),
+      })),
+    } : {}),
+  }));
+  const diagnosticsText = describeLintDiagnostics({ problems: cleanedProblems, localOnly: Boolean(context.localOnly) }).text;
+  if (diagnosticsText) out.push(...diagnosticsText.split('\n'));
   for (const row of rows) out.push(`  ${row.test}  ${outcomeText(row)}${row.note ? `: ${row.note.message}` : ''}`);
   for (const row of rows.filter(row => row.state === 'refused' && row.native_only?.length)) out.push(`  Native-only: ${row.note?.message}`);
   for (const row of rows.filter(row=>row.binding_plan)) for (const detail of bindingRefusals(row.binding_plan,row.compatibility)) out.push(JSON.stringify(detail));
-  for (const row of rows.filter(row => row.compatibility)) out.push(`Compatibility (${cleanText(row.story, context.secrets)} / ${cleanText(row.test, context.secrets)}): ${JSON.stringify(row.compatibility, null, 2)}`,
-    `  Client advice: ${JSON.stringify(row.client_advice)}`);
+  for (const row of rows.filter(row => row.compatibility)) out.push(...describeCompatibility({
+    label: `${cleanText(row.story, context.secrets)} / ${cleanText(row.test, context.secrets)}`,
+    compatibility: row.compatibility,
+    clientAdvice: row.client_advice || null,
+    details: false,
+  }).text.split('\n'));
   for (const row of rows) out.push(describeCallPreflight({ test: row.test, preflight: row.call_preflight ?? null,
     context: result.call_preflight_context, sourceSha256: context.capture?.sha256, requestedCap: result.call_preflight_requested_cap }).text);
   if (typeof capabilityCoverage === 'boolean') out.push(`Capability inventory complete: ${capabilityCoverage}.`);
@@ -3409,7 +3434,7 @@ async function withCheckRun(context, run) {
 // pdd test. Returns the exit code.
 export async function runCheck({ words = [], options = {}, cwd = process.cwd(), cache = false, client, workflow } = {}, givenPorts = {}) {
   const ports = withDefaults(givenPorts);
-  const context = { ports, clientVersion: client?.version ?? ports.clientVersion ?? null, workflow, singleAttempt: ports.env.PDD_CHECK_SINGLE_ATTEMPT === '1', cacheEnabled: cache || !!options['--lf'] || !!options['--cache-clear'], json: options['--json'] === true, details: options['--details'] === true, explicitTimeout: options['--timeout'] !== undefined, interrupted: false, warnings: [] };
+  const context = { ports, clientVersion: client?.version ?? ports.clientVersion ?? null, workflow, singleAttempt: ports.env.PDD_CHECK_SINGLE_ATTEMPT === '1', cacheEnabled: cache || !!options['--lf'] || !!options['--cache-clear'], json: options['--json'] === true, details: Boolean(options['--details'] || options.details), explicitTimeout: options['--timeout'] !== undefined, interrupted: false, warnings: [] };
   let release = () => {};
   try {
     if (options['--affected'] !== undefined && (options['--affected'] !== true || words.length || Object.keys(options).some(key => !['--affected','--json','--details','--timeout','--max-calls','--cache-clear'].includes(key))))
@@ -4882,8 +4907,12 @@ async function checkLint(context, rows) {
   const ended = [...verdicts.values()].find(outcome => outcome.state === 'not_run');
   if (ended) {
     for (const row of rows.filter(row => row.compatibility)) {
-      line(context.ports.stderr, `Compatibility (${cleanText(row.test, context.secrets)}): ${JSON.stringify(row.compatibility, null, 2)}`);
-      line(context.ports.stderr, `Client advice: ${JSON.stringify(row.client_advice)}`);
+      line(context.ports.stderr, describeCompatibility({
+        label: cleanText(row.test, context.secrets),
+        compatibility: row.compatibility,
+        clientAdvice: row.client_advice || null,
+        details: false,
+      }).text);
     }
     throw new Stop(5, `No lint pass for this test (${ended.reason ?? ended.message}), so pdd made no Try link.`);
   }

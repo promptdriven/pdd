@@ -36,8 +36,11 @@ for (const pending of [false, true]) for (const [variant, state, exit] of [
     assert.deepEqual(summary.rows[0].client_advice, advice);
     if (json) assert.deepEqual(r.json, summary, 'stdout and saved summary expose the same lint result');
     else {
-      assert.ok(r.out.includes(JSON.stringify(compatibility, null, 2)));
-      assert.ok(r.out.includes(JSON.stringify(advice)));
+      const nonSupported = variant === 'unsupported' ? '; non-supported: retained-mutation-unsupported'
+        : variant === 'unknown' ? '; non-supported: requirement-uninspectable' : '';
+      assert.ok(r.out.includes(`Compatibility (place-order / tests/place-order.json): ${compatibility.state} (association matched); 1 step (1 operation, 0 edges); execution ordinary; resources simulated; complete true; engine eae2202a68d0${nonSupported}.`));
+      assert.ok(r.out.includes(`  Client advice (${advice.owner}): ${advice.next_step}`));
+      assert.ok(!r.out.includes('Compatibility (place-order / tests/place-order.json): {'));
       assert.ok(r.out.split('\n').includes(summary.summary_line));
     }
     for (const secret of [TOKEN, '/srv/private/source', 'PRIVATE_FIXTURE_BODY']) assert.ok(!(r.out + r.err).includes(secret));
