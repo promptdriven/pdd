@@ -481,7 +481,7 @@ For each tested CLI-convention entry (an entry whose `/entries/<index>/input_sch
 
 ```json
 {
-  "status": "draft",
+  "status": "approved",
   "prose_sha256": "c8b9041bd07fd20155338e6dfe8bbcc8e45b37c84b1be7512ce1f374d92211cf",
   "kind": "native-only",
   "reason": "Preflight discovers real Git-visible files and captures identity-bound filesystem snapshots, including symlink and concurrent-change observations. Its injected Story matching ports cannot fake Git discovery or these filesystem effects; native tests cover those boundaries and the static checkTest rules."
