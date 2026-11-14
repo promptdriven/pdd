@@ -1873,18 +1873,19 @@ function nativeSourceIdentity(context, rows) {
   catch (error) { if (error?.unboundPort) throw error; return {tests,sha256:null}; }
 }
 
+const localLayoutPaths = values => Array.isArray(values) && values.every(path => typeof path === 'string' && path.length
+    && !/^[a-zA-Z]:|^[\\/]|[\\\x00-\x1f\x7f]/.test(path) && path.split('/').every(part => part && part !== '.' && part !== '..' && part !== '.git'))
+    && isDeepStrictEqual(values, [...new Set(values)].sort());
+
 // The saved local-layout contract is deliberately distinct from legacy native-only batches.
 function localLayoutResult(batch, summary) {
   const keys = (value, names) => value && typeof value === 'object' && !Array.isArray(value)
     && isDeepStrictEqual(Object.keys(value).sort(), names.split(' ').sort());
-  const paths = values => Array.isArray(values) && values.every(path => typeof path === 'string' && path.length
-    && !/^[a-zA-Z]:|^[\\/]|[\\\x00-\x1f\x7f]/.test(path) && path.split('/').every(part => part && part !== '.' && part !== '..' && part !== '.git'))
-    && isDeepStrictEqual(values, [...new Set(values)].sort());
   if (!keys(batch, 'version batch root created_at intent local_only source_sha256 local_scope summary_line exit_code warnings problems rows lint')
     || batch.version !== 1 || !BATCH.test(batch.batch) || typeof batch.root !== 'string' || !batch.root.startsWith('/')
     || typeof batch.created_at !== 'string' || !Number.isFinite(Date.parse(batch.created_at))
     || batch.intent !== 'lint-only' || batch.local_only !== true || batch.source_sha256 !== null
-    || !keys(batch.local_scope, 'tests prompts') || !paths(batch.local_scope.tests) || !paths(batch.local_scope.prompts)
+    || !keys(batch.local_scope, 'tests prompts') || !localLayoutPaths(batch.local_scope.tests) || !localLayoutPaths(batch.local_scope.prompts)
     || typeof batch.summary_line !== 'string' || ![0, 4].includes(batch.exit_code)
     || !Array.isArray(batch.warnings) || !batch.warnings.every(item => typeof item === 'string')
     || !Array.isArray(batch.problems) || !batch.problems.every(item => (keys(item, 'code path message') || keys(item, 'code path message section')) && Object.values(item).every(value => typeof value === 'string'))
@@ -3500,21 +3501,52 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
       if (typeof ports.lintSvgLayouts !== 'function') throw unboundPortError('SVG layout port (lintSvgLayouts) is not bound.');
       try {
         const root = repoRoot(cwd), workspace=loadRuntimeWorkspace({root}), files = gitFiles(root).filter(path=>allowsRuntimePath(workspace,path));
-        let promptPaths, selectedTests, tests = [];
+        const { found, normalized } = localSetup(cwd, words, ports);
+        const selectedTests = words.length ? select(found, normalized, root, ports) : found.tests;
+        const tests = words.length ? selectedTests.map(test => test.path) : [];
+        const promptSet = new Set(), captureProblems = [];
         if (words.length) {
-          const { found, normalized } = localSetup(cwd, words, ports), selected = select(found, normalized, root, ports);
-          selectedTests = selected;
-          tests = selected.filter(test => !test.error).map(test => test.path);
-          promptPaths = ports.captureSource(root, { tests, appMap: null }).files.map(file => file.path).filter(path => path.endsWith('.prompt.md'));
+          // Capture each scenario independently: one malformed source must not hide
+          // findings in the remaining selected scenarios.
+          for (const test of selectedTests) {
+            for (const path of entryPaths([test])) if (typeof path === 'string' && path.endsWith('.prompt.md')) promptSet.add(path);
+            if (test.error) continue;
+            try {
+              for (const file of ports.captureSource(root, { tests:[test.path], appMap:null }).files) {
+                if (file.path.endsWith('.prompt.md')) promptSet.add(file.path);
+              }
+            } catch (error) {
+              if (error?.exitCode !== 4) throw error;
+              captureProblems.push({code:error.code ?? 'source-unavailable',path:test.path,message:error.message,section:'source'});
+            }
+          }
+        } else for (const path of found.discoveryVisible ?? found.visible) if (path.endsWith('.prompt.md')) promptSet.add(path);
+        const promptPaths = [...promptSet];
+        if (!localLayoutPaths([...new Set(tests)].sort()) || !localLayoutPaths([...new Set(promptPaths)].sort())) {
+          throw new Stop(2, 'Could not save local lint result in PDD_STATE_DIR: Local lint record cannot satisfy the saved result contract, including safe inspected scope.');
         }
-        // Interface findings refuse only a repository-wide local lint; a selected one gives advice only.
-        const problems = words.length ? [] : interfaceFindings({root,paths:promptPaths}).filter(localInterfaceProblem);
-        const advice = formatAdvice(root, new Set(gitFiles(root)), promptPaths ?? files.filter(path => path.endsWith('.prompt.md')), workspace);
+        const problems = [...captureProblems, ...interfaceFindings({root,paths:promptPaths}).filter(localInterfaceProblem)];
+        const prompts = new Map(), seen = new Set();
+        const {promptSchemaRefusals} = await import('./runtime-preflight.mjs');
+        for (const path of promptPaths) {
+          if (!prompts.has(path)) prompts.set(path, readPrompt(root, found.visible, path, workspace));
+          for (const problem of promptSchemaRefusals(root, found, prompts.get(path), prompts, seen)) problems.push(problem);
+        }
+        for (const row of preflight({root,found,selected:selectedTests,workspace}).rows) {
+          for (const problem of row.refusals) problems.push({...problem,path:problem.path ?? row.test});
+        }
+        // Saved v1 diagnostics have a deliberately small, stable shape.
+        const unique = new Map();
+        for (const item of problems) {
+          const problem = {code:String(item.code),path:String(item.path ?? ''),message:String(item.message),...(typeof item.section === 'string' ? {section:item.section} : {})};
+          unique.set(JSON.stringify(problem),problem);
+        }
+        const advice = formatAdvice(root, found.visible, promptPaths, workspace);
         const hygiene = lintLocalHygiene({ root, files, promptPaths, tests: selectedTests, workspace }, ports);
-        const warnings = [...new Set([...advice, ...ports.lintSvgLayouts({ root, files, promptPaths }), ...hygiene])], summary = `partial: checked SVG layout only; prompts not checked (local-only). ${warnings.length} warnings. 0 AI calls. No checks were sent.`;
-        const result = saveLocalLayout(context,{root,tests,prompts:promptPaths ?? files.filter(path => path.endsWith('.prompt.md')),warnings,problems,summary});
+        const warnings = [...new Set([...advice, ...ports.lintSvgLayouts({ root, files, promptPaths }), ...hygiene])], summary = `partial: checked static admission and SVG layout (local-only). ${warnings.length} warnings. 0 AI calls. No checks were sent.`;
+        const result = saveLocalLayout(context,{root,tests,prompts:promptPaths,warnings,problems:[...unique.values()],summary});
         return printLocalLayout(context,result);
-      } catch (error) { if (error?.unboundPort) throw error; throw new Stop(2, error.message); }
+      } catch (error) { if (error?.unboundPort) throw error; throw new Stop(error?.exitCode === 4 ? 4 : 2, error.message); }
     }
     const modes = ['--read', '--retry', '--fill-hash', '--files', '--explain-bindings', '--request', '--lint'].filter(name => options[name] !== undefined);
     const others = Object.keys(options).filter(name => !modes.includes(name) && !(modes[0] === '--fill-hash' && name === '--compact') && !(modes[0] === '--retry' && ['--json', '--details', '--timeout'].includes(name)) && !(name === '--json' && ['--read', '--request', '--lint', '--files', '--explain-bindings'].includes(modes[0])) && !(name === '--timeout' && ['--read', '--lint'].includes(modes[0])) && !(name === '--max-calls' && modes[0] === '--lint') && !(name === '--app-map' && modes[0] === '--files'));

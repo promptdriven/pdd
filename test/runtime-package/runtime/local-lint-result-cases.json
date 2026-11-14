@@ -12,7 +12,7 @@
     "src/workflow-results.mjs: readRunResults({root, since}, ports), resultLines(results, {kinds:[\"pdd lint\"]}), usableResult(result)"
   ],
   "runtime_check": "BLOCKED",
-  "runtime_reason": "No Runtime interface at runCheck/readRunResults; workflow-results partial interface covers only assessNativeEvidence. Git/source discovery and private state files/writes are native and unbound (#2548). Not a prompt-runtime.program-scenario.v1 scenario; no check-only API proposed.",
+  "runtime_reason": "Native-only Runtime interface at runCheck; no Runtime interface at readRunResults; workflow-results partial interface covers only assessNativeEvidence. Git/source discovery and private state files/writes are native and unbound (#2548). Not a prompt-runtime.program-scenario.v1 scenario; no check-only API proposed.",
   "native_replay": "NOT RUN; code-area tests must consume these expected values through the public production boundaries",
   "authority": [
     "https://github.com/promptdriven/pdd/issues/2924"
@@ -44,7 +44,7 @@
     "isolation": "Fresh temporary Git repository copied from unchanged upstream test/fixtures/harbor; external PDD_STATE_DIR per case; fixed injected clock and UUIDs. No credentials or live transport.",
     "production_flow": "Invoke runPdd with actual local lint arguments, then readRunResults and resultLines for that same root/state and since. Inspect actual command-produced batch/summary using the shared saved-local-layout record contract; call usableResult on returned evidence. The offline-read case calls public runCheck for that same newly produced batch. Controls may seed unrelated historical batches, but target local evidence must come from the command.",
     "offline_guards": "Authentication, fetch and model metadata callbacks fail if called; invalid PDD_RUNTIME_URL confirms local recording needs no origin validation. Reader state-tree hashes before/after must match.",
-    "default_summary": "partial: checked SVG layout only; prompts not checked (local-only). 0 warnings. 0 AI calls. No checks were sent."
+    "default_summary": "partial: checked static admission and SVG layout (local-only). 0 warnings. 0 AI calls. No checks were sent."
   },
   "local_invariants": {
     "saved_intent": "lint-only",
