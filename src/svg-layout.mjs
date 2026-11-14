@@ -146,16 +146,17 @@ function viewControlSources(source, drawings, base) {
   const named = title => names.get(viewName(title.replace(/\s+#+\s*$/, ''))) ?? [];
   const node = (title = '') => ({ title, text: [], children: [] });
   const tree = node(), sections = [{ level: 0, node: tree }];
-  let lists = [], block = null, fence = null;
-  const parent = () => lists.at(-1)?.node ?? sections.at(-1).node;
+  let lists = [], blocks = [], fence = null;
+  const parent = () => blocks.at(-1)?.depth === lists.length ? blocks.at(-1).node : lists.at(-1)?.node ?? sections.at(-1).node;
+  const trimBlocks = () => { while (blocks.at(-1)?.depth > lists.length) blocks.pop(); };
   for (const line of source.split('\n')) {
     const codeFence = /^\s*(`{3,}|~{3,})/.exec(line);
     if (fence) {
-      (block ?? parent()).text.push(line);
+      parent().text.push(line);
       if (codeFence && codeFence[1][0] === fence[0] && codeFence[1].length >= fence.length && /^\s*(?:`+|~+)\s*$/.test(line)) fence = null;
       continue;
     }
-    if (codeFence) { fence = codeFence[1]; (block ?? parent()).text.push(line); continue; }
+    if (codeFence) { fence = codeFence[1]; parent().text.push(line); continue; }
     // Definitions supply destinations, never a scope of their own.
     if (/^\s*\[[^\]]+\]:/.test(line)) continue;
     const heading = /^ {0,3}(#{1,6})\s+(.+)$/.exec(line);
@@ -164,29 +165,33 @@ function viewControlSources(source, drawings, base) {
       const child = node(heading[2]);
       sections.at(-1).node.children.push(child);
       sections.push({ level: heading[1].length, node: child });
-      lists = []; block = null; child.text.push(line); continue;
+      lists = []; blocks = []; child.text.push(line); continue;
     }
     const item = /^(\s*)(?:[-+*]|\d+[.)])\s+(.+)$/.exec(line);
     if (item) {
       const indent = item[1].replace(/\t/g, '    ').length;
       while (lists.length && lists.at(-1).indent >= indent) lists.pop();
+      trimBlocks();
       const child = node(item[2].split(/:\s|:\*\*/)[0]);
       child.listItem = true;
       parent().children.push(child);
-      lists.push({ indent, node: child }); block = null; child.text.push(line); continue;
+      lists.push({ indent, node: child }); child.text.push(line); continue;
     }
     if (line.trim()) {
       const indent = /^\s*/.exec(line)[0].replace(/\t/g, '    ').length;
-      while (lists.length && indent <= lists.at(-1).indent) { lists.pop(); block = null; }
+      while (lists.length && indent <= lists.at(-1).indent) lists.pop();
+      trimBlocks();
     }
     // Bold labels and leading "View:" labels delimit interleaved prose blocks.
     const label = /^\s*\*\*([^*]+?)\*\*(?:\s*:?\s*$|\s*:\s*|\s+)/.exec(line)
       ?? /^\s*([^:<\[!]+?):(?:\s+|$)/.exec(line);
     if (label) {
-      block = node(label[1].replace(/:$/, ''));
+      if (blocks.at(-1)?.depth === lists.length) blocks.pop();
+      const block = node(label[1].replace(/:$/, ''));
       parent().children.push(block);
+      blocks.push({ depth: lists.length, node: block });
     }
-    (block ?? parent()).text.push(line);
+    parent().text.push(line);
   }
   const hasControls = current => extractControls(current.text.join('\n'), []).size > 0 || current.children.some(hasControls);
   const attachment = current => {

@@ -234,3 +234,31 @@ Button "Connect".
     assert.deepEqual(actual.sort(), expected.sort(), `relative identity mask=${mask}`);
   }
 });
+
+
+test('labeled blocks contain list children and stop at sibling labels and headings', t => {
+  const root = temp(t);
+  mkdirSync(join(root, 'views'));
+  const paths = ['views/now__stacked.ui.svg', 'views/agents__stacked.ui.svg'];
+  for (const nested of [false, true]) {
+    const item = label => nested ? `- Group\n  Details:\n  - Button "${label}".\n  - Button "${label}".` : `- Button "${label}".`;
+    writeFileSync(join(root, 'screen.prompt.md'), `# Screen\nButton "Help".\n## Appearance\n**Now:**\n![Now](${paths[0]})\n${item('Approve')}\n**Agents:**\n![Agents](${paths[1]})\n${item('Connect')}\n## Footer\nButton "Escape".\n`);
+    for (let mask = 0; mask < 64; mask++) {
+      const expected = [];
+      for (let i = 0; i < 2; i++) {
+        const required = ['Help', 'Escape', ['Approve', 'Connect'][i]];
+        const present = required.filter((_, bit) => mask & (1 << (3 * i + bit)));
+        writeFileSync(join(root, paths[i]), `<svg>${present.map(label => `<text>${label}</text>`).join('')}</svg>`);
+        for (const label of required) if (!present.includes(label)) expected.push(`${paths[i]}|${label}`);
+      }
+      const actual = lintSvgLayouts({ root, files: ['screen.prompt.md', ...paths] })
+        .filter(w => w.includes('prompt control absent from drawing'))
+        .map(w => {
+          const match = w.match(/ -> (views\/[^:]+): control "([^"]+)": prompt control absent from drawing/);
+          assert.ok(match, w);
+          return `${match[1]}|${match[2]}`;
+        });
+      assert.deepEqual(actual.sort(), expected.sort(), `nested=${nested} mask=${mask}`);
+    }
+  }
+});
