@@ -3509,7 +3509,13 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd(), 
           // Capture each scenario independently: one malformed source must not hide
           // findings in the remaining selected scenarios.
           for (const test of selectedTests) {
-            for (const path of entryPaths([test])) if (typeof path === 'string' && path.endsWith('.prompt.md')) promptSet.add(path);
+            for (const path of entryPaths([test])) {
+              // A missing authored path is a preflight refusal, not inspected
+              // scope. Keep real unsafe paths so the saved-scope guard still
+              // refuses records that cannot represent what was inspected.
+              if (typeof path === 'string' && path.endsWith('.prompt.md')
+                && (found.visible.has(path) || localLayoutPaths([path]))) promptSet.add(path);
+            }
             if (test.error) continue;
             try {
               for (const file of ports.captureSource(root, { tests:[test.path], appMap:null }).files) {
