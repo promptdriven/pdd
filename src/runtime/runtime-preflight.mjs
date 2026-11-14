@@ -18,7 +18,7 @@ export const TEST_SCHEMA = 'prompt-runtime.program-scenario.v1';
 // The interpreter's upload limit (prompt-runtime server/uploads.py: MAX_UPLOAD 10 MiB, at most 10,000 files).
 // The only size limit on what pdd sends; over it, pdd names the largest files with their sizes.
 export const LIMITS = Object.freeze({ bytes: 10_485_760, files: 10_000 });
-const TOP_KEYS = new Set(['schema_version', 'story_path', 'criteria', 'initial_world', 'steps', 'entry_paths', 'simulation',
+const TOP_KEYS = new Set(['schema_version', 'story_path', 'criteria', 'initial_world', 'steps', 'entry_paths', 'simulation', '$simulation',
   'check_exemptions', 'context', 'context_byte_budget', 'criteria_scope', 'prompt_mappings', 'app_maps']);
 const REQUIRED_KEYS = ['schema_version', 'criteria', 'initial_world', 'steps'];
 const REQUIRED_STEP_KEYS = ['step_id', 'entry_path', 'operation', 'input', 'checks'];

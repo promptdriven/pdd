@@ -88,6 +88,14 @@ Check each selected test. Stop at the first broken rule; that test is refused an
 
 Export native `scenarioShapeRefusal(doc,path)` for the client to apply the same document, criterion, step and check shape rules to captured bytes. Return the existing refusal shape or null. This reuses P1, criterion/ID and step/check/model shape checks; it adds no authored rule and does not replace prompt/schema admission. A malformed captured test is unsent, and the client rebuilds the upload without it before dispatch or cache reuse.
 
+### Shared simulation references
+
+Admit the scenario-level `$simulation` key during authored shape validation so
+the [shared reference contract](contract-refs.prompt.md#shared-simulation-bindings)
+can expand it before effective validation, source capture and execution. Apply
+the usual binding checks to the expanded map, including missing resource-operation
+bindings. Other unknown scenario keys remain refused.
+
 ### Criteria with no check
 
 When a scenario declares `story_path`, `criteria` may be omitted entirely, deriving `[{id: "AC1", text}, ...]` from `story_path`'s 1-based numbered `## Acceptance criteria`, or individual `criteria` entries may omit `text` (`"AC1"` or `{"id": "AC1"}`), resolving `text` from the corresponding 1-based numbered item (`AC<N>` / `ac-<N>`) in `story_path`'s `## Acceptance criteria` during discovery, preflight and source capture. Out-of-range or unresolvable ID-only entries fail `invalid-criterion` at `criteria[i]`; duplicate IDs or duplicate resolved Story positions across `AC<N>` / `ac-<N>` spellings fail `duplicate-criterion`; a Story without a numbered acceptance list fails `story-criteria-missing`. Discovery retains the raw parsed document on non-enumerable `rawDoc` and any criterion-resolution refusal on non-enumerable `criteriaRefusal`. Scenarios without `story_path` still require `criteria`, and entries that supply `text` retain exact P5 matching. Source capture materializes full `{id, text}` entries in the uploaded effective scenario bytes while leaving repository bytes unchanged.
@@ -100,7 +108,7 @@ For a valid test with some exact checks, source capture keeps every authored ste
 
 | # | Rule | Code |
 |---|---|---|
-| P1 | Valid JSON; only the engine's top-level keys, including optional `app_maps`; `schema_version` is v1 | `invalid-document` |
+| P1 | Valid JSON; only the engine's top-level keys, including optional `app_maps`, and the local `$simulation` reference described below; `schema_version` is v1 | `invalid-document` |
 | P2 | `story_path` is set, names a Git-visible file, and names the Story that the [test name rule](#test-name-rule) matched: `<test> is the test of <story> by its name, but its story_path names <other>. Make them agree.` | `pdd-no-story`, `story-missing`, `pdd-story-mismatch` |
 | P3 | No `criteria_scope`; `check_exemptions` absent or empty | `pdd-partial-test` |
 | P4 | The story has criteria | `story-criteria-missing` |
