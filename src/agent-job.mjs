@@ -1,15 +1,19 @@
-// Generated from prompts/cli/agent-job.prompt.md (sha256: a04b06903d0fd8e3190045cfa2d134aab2d821b270d767967a33d7f5f21d09af).
+// Generated from prompts/cli/agent-job.prompt.md (sha256: d4737f496bbc8807879fb73704634b755649deb53a9957dff603d4453290a6f7).
 import { execFile, spawn, spawnSync } from 'node:child_process';
-import { accessSync, closeSync, constants, fstatSync, openSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, statSync, writeFileSync, writeSync } from 'node:fs';
+import { accessSync, closeSync, constants, fstatSync, openSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { setPriority } from 'node:os';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { descendants, parseProcessTable, sameProcess, terminateCaptured } from './process-lifecycle.mjs';
 
 const self = fileURLToPath(import.meta.url), GRACE_MS = 2000;
-const SESSION_KEYS = /^(?:ANTIGRAVITY_(?!APP_DATA_DIR$)|CLAUDECODE$|CLAUDE_CODE_|CLAUDE_PID$|CODEX_THREAD_ID$|CODEX_SANDBOX|HERDR_|PDD_AGENT_SESSION$|PDD_AUTOPILOT_CONTEXT$)/;
+const SESSION_KEYS = /^(?:ANTIGRAVITY_(?!APP_DATA_DIR$)|CLAUDECODE$|CLAUDE_CODE_(?!OAUTH_TOKEN$)|CLAUDE_PID$|CODEX_THREAD_ID$|CODEX_SANDBOX|HERDR_|PDD_AGENT_SESSION$|PDD_AUTOPILOT_CONTEXT$)/;
 const readJson = file => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch (error) { if (error.code === 'ENOENT') return undefined; return 'invalid'; } };
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+const cleanOverlayDirs = value => Array.isArray(value) ? [...new Set(value.filter(item => typeof item === 'string' && item.trim()).map(item => resolve(item)).filter(item => basename(item).startsWith('pdd-cx-')))] : [];
+function removeCleanupDirs(dirs) {
+  for (const dir of cleanOverlayDirs(dirs)) try { rmSync(dir, { recursive: true, force: true }); } catch { /* Best effort disposable overlay wipe. */ }
+}
 const startIdentity = value => typeof value === 'string' && /^(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) [A-Z][a-z]{2} (?: [1-9]|[12]\d|3[01]) \d{2}:\d{2}:\d{2} \d{4}|@\S+)$/.test(value);
 const processIdentity = row => Number.isSafeInteger(row?.pid) && row.pid > 0 && startIdentity(row.start) && typeof row.args === 'string' && row.args.trim().length > 0;
 const sameIdentity = (saved, current) => saved?.pid === current?.pid && saved?.start === current?.start;
@@ -35,18 +39,19 @@ export function jobEnvironment(env = {}) {
 // The hung-command watch settings: after (ms of log silence), every (ms between rounds), cpu (seconds of growth).
 const hungSettings = value => object(value) && [value.after, value.every].every(n => Number.isFinite(n) && n > 0) && Number.isFinite(value.cpu) && value.cpu >= 0
   ? { after: value.after, every: value.every, cpu: value.cpu } : null;
-export function startAgentJob({ id, dir, cwd, command, args = [], input = '', env = {}, priority = null, pddCheck = null, hung = null, custodyRoot = null }, ports = {}) {
+export function startAgentJob({ id, dir, cwd, command, args = [], input = '', env = {}, priority = null, pddCheck = null, hung = null, custodyRoot = null, cleanupDirs = null }, ports = {}) {
   if (!/^[A-Za-z0-9._-]+$/.test(String(id))) throw Error('Invalid job id');
   const base = join(resolve(dir), id), now = ports.now ?? Date.now, watch = hungSettings(hung), custody = typeof custodyRoot === 'string' && custodyRoot ? resolve(custodyRoot) : null;
-  const job = { id, token: `${base}.spec.json`, log: `${base}.log`, exit: `${base}.exit.json`, result: `${base}.result.json`, input: `${base}.input`, hangs: `${base}.hangs.json` };
+  const overlays = cleanOverlayDirs(cleanupDirs);
+  const job = { id, token: `${base}.spec.json`, log: `${base}.log`, exit: `${base}.exit.json`, result: `${base}.result.json`, input: `${base}.input`, hangs: `${base}.hangs.json`, ...(overlays.length ? { cleanupDirs: overlays } : {}) };
   writeFileSync(job.input, input, { mode: 0o600 });
   // This boundary precedes the spec and wrapper spawn. `started`, sampled after
   // spawn, would not safely exclude an already-running descendant.
   const custodyBoundary = custody ? now() : null;
-  writeAtomic(job.token, JSON.stringify({ command, args, cwd, input: job.input, log: job.log, exit: job.exit, hangs: job.hangs, ...(priority ? { priority } : {}), ...(pddCheck ? { pddCheck } : {}), ...(watch ? { hung: watch } : {}), ...(custody ? { custodyRoot: custody, custodyBoundary } : {}) }));
+  writeAtomic(job.token, JSON.stringify({ command, args, cwd, input: job.input, log: job.log, exit: job.exit, hangs: job.hangs, ...(priority ? { priority } : {}), ...(pddCheck ? { pddCheck } : {}), ...(watch ? { hung: watch } : {}), ...(custody ? { custodyRoot: custody, custodyBoundary } : {}), ...(overlays.length ? { cleanupDirs: overlays } : {}) }));
   const child = (ports.spawn ?? spawn)(process.execPath, [self, '--wrapper', job.token], { cwd, env, detached: true, stdio: 'ignore' });
   // A spawn that fails later (a cwd that is gone, EAGAIN, ENOMEM) is an exit with code 127, never an uncaught error.
-  child.on?.('error', error => { try { writeAtomic(job.exit, JSON.stringify({ code: 127, signal: null, at: now(), error: String(error.code ?? error.message) })); } catch { /* The job reads as dead. */ } });
+  child.on?.('error', error => { try { writeAtomic(job.exit, JSON.stringify({ code: 127, signal: null, at: now(), error: String(error.code ?? error.message) })); } catch { /* The job reads as dead. */ } finally { removeCleanupDirs(overlays); } });
   child.unref?.();
   return { ...job, pid: child.pid, started: now(), ...(custodyBoundary !== null ? { custodyBoundary } : {}) };
 }
@@ -475,8 +480,13 @@ export async function cleanupAgentJob(job, ports = {}) {
     return { ...result, confirmed: false, remaining: Math.max(result.remaining, 1) };
   if (!result.confirmed) return result;
   const spec = readJson(job.token);
+  const overlays = cleanOverlayDirs(spec?.cleanupDirs ?? job?.cleanupDirs);
   const hasCustodyRoot = object(spec) && typeof spec.custodyRoot === 'string' && spec.custodyRoot;
-  if (!hasCustodyRoot) return currentCustody ? { ...result, confirmed: false, remaining: Math.max(result.remaining, 1) } : result;
+  if (!hasCustodyRoot) {
+    if (currentCustody) return { ...result, confirmed: false, remaining: Math.max(result.remaining, 1) };
+    removeCleanupDirs(overlays);
+    return result;
+  }
   const platform = ports.platform ?? process.platform;
   if (!['darwin', 'linux'].includes(platform) || (ports.alive ?? nativeAlive)(job.pid, job.token))
     return { ...result, confirmed: false, remaining: Math.max(result.remaining, 1) };
@@ -487,10 +497,11 @@ export async function cleanupAgentJob(job, ports = {}) {
   const retained = currentCustody?.observations.flatMap(row => row.identities) ?? [], boundary = Number.isFinite(spec?.custodyBoundary) ? spec.custodyBoundary : null;
   const finding = worktreeCustody(job, currentRoot, ports, retained, false, boundary);
   if (!finding) {
-    if (!currentCustody || currentCustody.resolution) return result;
+    if (!currentCustody || currentCustody.resolution) { removeCleanupDirs(overlays); return result; }
     const resolved = { ...currentCustody, resolution: { at: Date.now(), completeProcessTable: true, completeCwdInventory: true,
       recordedIdentitiesGone: true, unsavedProcessesInRoot: 0, manifestConfirmed: true } };
     try { writeAtomic(custodyPath, JSON.stringify(resolved)); } catch { return { ...result, confirmed: false, remaining: Math.max(result.remaining, 1) }; }
+    removeCleanupDirs(overlays);
     return result;
   }
   if (Array.isArray(finding.identities) && processManifest(finding.identities)) {
@@ -729,7 +740,7 @@ function wrap(specFile) {
     },
     setTimer: (fn, ms) => setTimeout(fn, ms),
     writeExit: record => { try { writeAtomic(spec.exit, JSON.stringify(record)); } finally { for (const fd of [stdin, out]) try { closeSync(fd); } catch { /* Already closed. */ } } },
-    exit: () => process.exit(0) });
+    exit: () => { removeCleanupDirs(spec.cleanupDirs); process.exit(0); } });
   for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(signal, () => stop(signal));
   const run = jobCommand(spec);
   try { child = spawn(run.command, run.args, { cwd: spec.cwd, env: process.env, stdio: [stdin, out, out] }); snapshot(); }

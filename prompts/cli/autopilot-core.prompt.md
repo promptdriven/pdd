@@ -432,22 +432,23 @@ end as `no-result`. Every job kind follows the same rules, in every machine stat
    from now, for example after the clock went back, or a `pending` that is not
    `{issue, at}` numbers) reads as not paused, `streak` 0, `hours` 1, no pending; it
    never stops a tick or status.
-   **Multi-harness login pool (#3252):** when `ports.selectLogin` and
-   `ports.exhaustLogin` are supplied by the [login pool](login-pool.prompt.md), each AI
-   process (`build`, `repair`, `conflict`, `review`) selects the first healthy login and
-   runs with that login's `agent` and isolated `env` (`loginId` saved on the part). When
-   such an AI process ends with no result because of a quota, usage-limit, spend-control
-   or out-of-credits refusal (`isQuotaExhaustionMessage`), the engine calls
-   `ports.exhaustLogin` for that `loginId`: while another login in the pool is `ready`
-   (bounded by the pool size per job), it cleans up the finished part and restarts the
-   same step in place on the next login with zero issue strikes, zero `holdIssue`, zero
-   `pending` and zero `streak` increment. When every login in the pool is `exhausted`, it
-   saves `poolOut {since, resetAt, reason, alerted}` in `core.json`, sends at most one
-   deduplicated `usage-limit` alert naming the earliest reset time (`resetAt`), holds a
-   phase `pr` job via a `service` step wait until `resetAt` (without `holdIssue` or
-   `streak` increment) or releases an unbuilt job cleanly (`owner: "service"`, no
-   cooldown, no `holdIssue`, no `streak` increment), and wakes automatically once `now >=
-   resetAt` or `ports.selectLogin()` finds a `ready` login again (clearing `poolOut`).
+   **Cloud accounts and login pool (#3252):** when `ports.selectLogin` and
+   `ports.exhaustLogin` are supplied by [Cloud accounts and login pool](login-pool.prompt.md), each AI
+   process (`build`, `repair`, `conflict`, `review`) selects the active ready login,
+   materializes any per-step isolation (`prepareStep`: disposable `0700` `/tmp/pdd-cx-<random>`
+   overlay passed via `cleanupDirs` for Codex, or `CLAUDE_CODE_OAUTH_TOKEN` and optional
+   `ANTHROPIC_BASE_URL` for Claude), and runs with `loginId` saved on the part. Cloud
+   accounts stick on the active account (`0` switches) until `5h >= 100%` or `7d >= 100%`
+   (or a quota-exhaustion refusal): a brief burst `429` while `< 100%` retries once on the
+   same account to keep the prompt cache warm, whereas `100%` quota exhaustion reports
+   usage and rotates to the next ready account (`soonest weekly_reset_at`) with zero issue
+   strikes, zero `holdIssue`, zero `pending` and zero `streak` increment. When every login
+   is cooling (`state: "all_cooling"` or `exhausted`), the engine saves `poolOut {since,
+   resetAt, wakeAt, cloud, reason}` in `core.json`, reports `Waiting on AI quota until <wake_at>`
+   for Cloud accounts (or `Login pool exhausted since ...` for local `pool.json`), sends at
+   most one deduplicated `usage-limit` alert, holds a phase `pr` job or releases an unbuilt
+   job cleanly (`owner: "service"`, zero strikes), and auto-wakes once `now >= resetAt` or
+   `ports.selectLogin()` finds a `ready` login again (clearing `poolOut`).
 4. `history.jsonl` is read line by line and a line that does not parse is skipped.
    Before each append, the file gets a newline when it does not end with one, so a cut
    line never swallows the next record.

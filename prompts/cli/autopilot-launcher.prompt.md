@@ -45,10 +45,10 @@ whole percent from 1 to 100: the part of this machine's CPU and memory that Auto
 saved); a later start without it keeps it, and pdd.json never sets it. Another value returns exit code 2 with `Use
 --share with a whole percent from 1 to 100, for example --share 70 (the default is 50).` before any change. `start --agent NAME`
 selects `codex`, `claude`, `gemini` or `agy` and returns exit code 2 with `Use --agent codex, claude, gemini or agy.`
-for any blank or other name before any change. `start --pool PATH` validates the login pool with `loadLoginPool` of the
-[multi-harness login pool](login-pool.prompt.md) and saves `state.poolPath` (`off` or `none` saves `"off"`, disabling
-automatic pool file discovery; a blank or invalid pool file returns exit code 2 with its validation line before any
-change). `start --auto-update release|main|off` (#2710) saves `state.autoUpdate` (default `release` when unset; another value returns
+for any blank or other name before any change. Hidden `start --pool PATH` (kept for internal local-folder pool fixtures) validates the login pool with `loadLoginPool` of the
+[Cloud accounts and login pool](login-pool.prompt.md) and saves `state.poolPath` (`off` or `none` saves `"off"`, disabling
+automatic pool discovery; a blank or invalid pool file returns exit code 2 with its validation line before any
+change). When Cloud Accounts is active (`isCloudAccountsActive`) and no explicit local `poolPath` overrides it, ticks wire `selectCloudPoolLogin` and `exhaustCloudPoolLogin` (`weeklyStopPercent: 100`, Stick-Until-100%, disposable `0700` Codex overlay and Claude OAuth/gateway env, `Waiting on AI quota until <wake_at>` on `all_cooling`) automatically with zero `--pool` flag. `start --auto-update release|main|off` (#2710) saves `state.autoUpdate` (default `release` when unset; another value returns
 exit code 2 with `Use --auto-update release, --auto-update main or --auto-update off.`); after each enabled core tick,
 run `maybeAutoUpdateAutopilot` of [Autopilot self-update](autopilot-update.prompt.md) under the machine admission lock
 when no job is publishing or merging, and include `autoUpdateStatusLine` in status. Optional `--runs` and `--checks` are positive safe integers with no product maximum; save explicit values, and

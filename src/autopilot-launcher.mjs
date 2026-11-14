@@ -1,10 +1,10 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 98de089f0856d6d7a2cd0211c1855623e31649af2f682d46f4efb78bff2d1681).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: d7bc9c1513c4a56576d54b4505a7257c3f3ff6890fb8597c95f37cfcc699f0ad).
 import {runAutopilotDoctor, resolveAutopilotAgent} from './autopilot-doctor.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import {releaseRunClaim, cancelRun, acquireRunLock} from './workflow-runner.mjs';
 import { releaseCheckCapacity } from './test-suite-queue.mjs';
 import { readCodexLimits } from './codex-limits.mjs';
-import { loadLoginPool, selectPoolLogin, markLoginExhausted, clearPoolCooldowns, loginEnvironment } from './login-pool.mjs';
+import { loadLoginPool, selectPoolLogin, markLoginExhausted, clearPoolCooldowns, loginEnvironment, isCloudAccountsActive, selectCloudPoolLogin, exhaustCloudPoolLogin } from './login-pool.mjs';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
@@ -343,7 +343,7 @@ const savedIntake = state => INTAKE_MODES.includes(state?.intake) ? state.intake
 const effectiveIntake = (state, core = null) => savedIntake(state) ?? intakeMode(core?.intake);
 // A start with no opt-in label (the machine's --label or pdd.json autopilot.label) asks for one and starts nothing unless intake is active.
 const NO_LABEL = 'Autopilot did not start: it works only on the issues that you mark with an opt-in label. Run pdd autopilot start --label pdd:autopilot, then mark issues with pdd autopilot add N (or add the label on GitHub). Nothing was started or claimed.';
-const ACTIVE_INTAKE_AGENT_MSG = 'Active intake needs a codex or claude login for sandboxed read-only card checks; add codex or claude to --pool, pass --agent codex or --agent claude, or use --intake off --label pdd:autopilot.';
+const ACTIVE_INTAKE_AGENT_MSG = 'Active intake needs a codex or claude login for sandboxed read-only card checks; add a codex or claude login with pdd accounts add, pass --agent codex or --agent claude, or use --intake off --label pdd:autopilot.';
 // The status line of the move from the full engine: pending or waiting, or done in the last 7 days.
 function moveStatus(state, now) {
   if (!state) return '';
@@ -433,31 +433,55 @@ async function runCoreTick(stateFile, state, p, ports) {
     try { pool = loadLoginPool({ cwd: state.cwd, env: p.env, poolPath: state.poolPath || undefined, fallbackAgent: agent }); }
     catch (error) { if (state.poolPath) throw error; }
   }
+  const cloudActive = state.poolPath !== 'off' && !pool.configured && isCloudAccountsActive({ env: p.env, poolPath: state.poolPath || undefined }, { fs: p.fs });
+  const cloudPorts = { fs: p.fs, fetch: p.fetch, run: p.run, authToken: p.authToken, readCodexLimits: p.codexLimits, readCodexUsageWindows: p.readCodexUsageWindows, now: p.now };
+  const cloudTried = new Set();
   const poolCache = new Map();
-  const poolKey = opts => Array.isArray(opts?.allowedKinds) ? [...opts.allowedKinds].sort().join(',') : '*';
+  const poolKey = opts => `${Array.isArray(opts?.allowedKinds) ? [...opts.allowedKinds].sort().join(',') : '*'}:${opts?.preferredAccountId ?? ''}:${[...cloudTried].join(',')}`;
   const selectPool = (opts = {}) => {
     const key = poolKey(opts);
     if (!poolCache.has(key)) {
-      poolCache.set(key, selectPoolLogin(
-        {
-          cwd: state.cwd,
-          env: p.env,
-          poolPath: pool.poolPath,
-          pool: pool.configured ? pool : undefined,
-          fallbackAgent: agent,
-          stateRoot: cRoot,
-          ...(Array.isArray(opts?.allowedKinds) ? { allowedKinds: opts.allowedKinds } : {}),
-        },
-        { run: p.run, readCodexLimits: p.codexLimits ?? readCodexLimits, now: p.now },
-      ));
+      poolCache.set(key, cloudActive
+        ? selectCloudPoolLogin(
+            {
+              cwd: state.cwd,
+              env: p.env,
+              fallbackAgent: agent,
+              allowedKinds: opts?.allowedKinds,
+              skipAccountIds: [...cloudTried, ...(Array.isArray(opts?.skipAccountIds) ? opts.skipAccountIds : [])],
+              preferredAccountId: opts?.preferredAccountId,
+            },
+            cloudPorts,
+          )
+        : selectPoolLogin(
+            {
+              cwd: state.cwd,
+              env: p.env,
+              poolPath: pool.poolPath,
+              pool: pool.configured ? pool : undefined,
+              fallbackAgent: agent,
+              stateRoot: cRoot,
+              ...(Array.isArray(opts?.allowedKinds) ? { allowedKinds: opts.allowedKinds } : {}),
+            },
+            { run: p.run, readCodexLimits: p.codexLimits ?? readCodexLimits, now: p.now },
+          ));
     }
     return poolCache.get(key);
   };
-  const exhaustPool = async ({ loginId, resetAt = null, reason = 'quota', allowedKinds } = {}) => {
+  const exhaustPool = async ({ loginId, resetAt = null, reason = 'quota', accountWindows = null, allowedKinds } = {}) => {
+    if (cloudActive) {
+      if (loginId) cloudTried.add(loginId);
+      poolCache.clear();
+      return exhaustCloudPoolLogin(
+        { cwd: state.cwd, env: p.env, fallbackAgent: agent, loginId, accountWindows, reason, allowedKinds, skipAccountIds: [...cloudTried] },
+        cloudPorts,
+      );
+    }
     if (loginId) markLoginExhausted({ stateRoot: cRoot, loginId, resetAt, reason, now: p.now() });
     poolCache.clear();
     return selectPool(Array.isArray(allowedKinds) ? { allowedKinds } : {});
   };
+  const usePool = pool.configured || cloudActive;
   const alertPorts = { ...p.alertPorts, repository: async () => ({ nameWithOwner: state.repo }), stateRoot: dirname(stateFile), now: p.now, hostname: () => state.machine };
   if (!p.sendAlert) {
     try { await runAutopilotAlerts({ action: 'retry', cwd: state.cwd, env: p.env }, alertPorts); }
@@ -469,9 +493,9 @@ async function runCoreTick(stateFile, state, p, ports) {
     now: p.now, env: p.env, warn: p.warn, root: cRoot, reportRoot: coreReports(ports, p.env), tickMinutes: timerMinutes(state),
     version: read(join(state.packageRoot ?? dirname(dirname(self)), 'package.json'), {})?.version, listIssues,
     trusted: row => trusted(row, state, { trust: core.trust }, p),
-    agentReady: async () => pool.configured ? (await selectPool()).state === 'ready'
+    agentReady: async () => usePool ? (await selectPool()).state === 'ready'
       : agent.kind !== 'codex' || (await (p.codexLimits ?? readCodexLimits)({ command: agent.command ?? 'codex', cwd: state.cwd, env: p.env, weeklyStopPercent: pool.weeklyStopPercent })).state !== 'limited',
-    ...(pool.configured ? { selectLogin: selectPool, exhaustLogin: exhaustPool } : {}),
+    ...(usePool ? { selectLogin: selectPool, exhaustLogin: exhaustPool } : {}),
     // One alert through this machine's alert destination; the core gives each alert its own cause, tried and need.
     alert: ({ issue, kind, text, tried, need, update }) => (p.sendAlert ?? runAutopilotAlerts)({ action: 'alert', cwd: state.cwd, env: p.env, issue: String(issue), kind, ...(update ? { update: true } : {}),
       text: JSON.stringify({ cause: text, tried: tried ?? 'The Autopilot core engine could not go on with this issue.', need: need ?? 'Check the issue and this machine.' }) },

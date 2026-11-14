@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 073ab464fd1a98a35d650171434c226e6276f814570d46c6a5ee1ce4659f4167).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: c8ab16ceae2d46a77036c6ffa73784ae456be368e1a44ab56fabd39bf22201ab).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,7 +15,7 @@ import { readPromptApprovals } from './approval-policy.mjs';
 import { intakeTick, collectActiveIntake, activeReadyCards, rankReadyRows, intakeMode } from './autopilot-intake.mjs';
 import { issueAreas, areasOverlap, groupReadyIssues, normalizeAreaList, parseGitHubIssueUrl } from './autopilot-areas.mjs';
 import { slotCount, GUARD } from './machine-guard.mjs';
-import { isQuotaExhaustionMessage, POOL_FALLBACK_COOLDOWN_MS } from './login-pool.mjs';
+import { classifyRateLimitFailure, isQuotaExhaustionMessage, POOL_FALLBACK_COOLDOWN_MS } from './login-pool.mjs';
 import { buildTieredAgentArgs, createPhaseTracker, extractHarnessTokens, recordPhaseSpan, resolveStepModelTier, summarizeIssuePhases, summarizeIssueTelemetry } from './autopilot-telemetry.mjs';
 
 const { interfaceBlocks, readPrompt, promptRefusal, gitFiles } = runtimePreflightSlice();
@@ -1125,11 +1125,15 @@ async function recordPoolExhausted(ctx, exhausted, reason, issue = null) {
   const m = ctx.machineState();
   const already = Boolean(m.poolOut);
   const resetAt = Number.isFinite(exhausted?.resetAt) && exhausted.resetAt > ctx.now() ? exhausted.resetAt : null;
+  const cloud = Boolean(exhausted?.cloud || m.poolOut?.cloud);
+  const wakeAt = typeof exhausted?.wakeAt === 'string' && exhausted.wakeAt ? exhausted.wakeAt : (resetAt ? new Date(resetAt).toISOString() : null);
   const cleanReason = safeLine(reason ?? exhausted?.cooling?.[0]?.reason ?? 'usage-limit', 200);
   const poolOut = {
     since: m.poolOut?.since ?? ctx.now(),
     at: ctx.now(),
     resetAt,
+    ...(cloud ? { cloud: true } : {}),
+    ...(wakeAt ? { wakeAt } : {}),
     reason: cleanReason,
     issue: Number.isSafeInteger(issue) ? issue : (m.poolOut?.issue ?? null),
   };
@@ -1144,8 +1148,8 @@ async function recordPoolExhausted(ctx, exhausted, reason, issue = null) {
         text: `Autopilot paused login-pool work ${untilWords}: every login in the pool reached quota or rate limits (last: "${cleanReason}", machine ${ctx.state.machine}).`,
         tried: `Autopilot rotated across every configured login in the pool and put exhausted logins on cooldown ${untilWords}. No slot stays jammed and no retries are burned.`,
         need: resetAt
-          ? `Nothing is needed if you want to wait: Autopilot resumes automatically after ${new Date(resetAt).toISOString()}. Or add a healthy login to pool.json and run pdd autopilot start.`
-          : 'Check sign-in and usage limits on this machine with pdd autopilot doctor, or add a healthy login to pool.json and run pdd autopilot start.',
+          ? `Nothing is needed if you want to wait: Autopilot resumes automatically after ${new Date(resetAt).toISOString()}. Or add a healthy login with pdd accounts add and run pdd autopilot start.`
+          : 'Check sign-in and usage limits on this machine with pdd autopilot doctor, or add a healthy login with pdd accounts add and run pdd autopilot start.',
       });
     } catch (error) { ctx.warn(`Autopilot core alert failed: ${error.message}`); }
   }
@@ -1167,10 +1171,12 @@ async function pausePrForPool(ctx, job, poolOut, reason) {
   try { await leaveLane(ctx, job); job.lane = null; } catch (failure) { ctx.warn(`Autopilot core could not leave the merge lane for #${job.issue}: ${failure.message}`); }
   const until = Number.isFinite(poolOut?.resetAt) && poolOut.resetAt > ctx.now() ? poolOut.resetAt : ctx.now() + POOL_FALLBACK_COOLDOWN_MS;
   const count = (job.stepStop?.head === job.head && job.stepStop.poolExhausted ? job.stepStop.count ?? 0 : 0) + 1;
-  const text = `every login in the pool is on quota cooldown${reason ? ` ("${safeLine(reason, 180)}")` : ''}`;
+  const text = poolOut?.cloud && poolOut?.wakeAt
+    ? `Waiting on AI quota until ${poolOut.wakeAt}`
+    : `every login in the pool is on quota cooldown${reason ? ` ("${safeLine(reason, 180)}")` : ''}`;
   job.phase = 'pr';
   job.agent = null;
-  job.stepStop = { owner: 'service', code: 'pool-exhausted', text, head: job.head, count, at: ctx.now(), until, report: null, resumed: false, poolExhausted: true };
+  job.stepStop = { owner: 'service', code: 'pool-exhausted', text, head: job.head, count, at: ctx.now(), until, report: null, resumed: false, poolExhausted: true, ...(poolOut?.cloud ? { cloud: true } : {}), ...(poolOut?.wakeAt ? { wakeAt: poolOut.wakeAt } : {}) };
   job.progress = { sig: null, at: until, running: false };
   delete job.overdue;
   ctx.saveJob(job);
@@ -1180,19 +1186,31 @@ function startJob(ctx, job, role, cwd, prompt, command = null, extraEnv = {}, se
   ctx.fs.mkdirSync(ctx.dirs.logs, { recursive: true, mode: 0o700 });
   const result = join(ctx.dirs.logs, `${id}.result.json`);
   const activeAgent = command ? ctx.state.agent : (selected?.agent ?? ctx.state.agent);
-  const baseEnv = (!command && selected?.env) ? selected.env : (ctx.ports.env ?? process.env);
+  const prepared = (!command && typeof selected?.prepareStep === 'function') ? selected.prepareStep(ctx.ports.env ?? process.env) : null;
+  const baseEnv = prepared?.env ?? ((!command && selected?.env) ? selected.env : (ctx.ports.env ?? process.env));
+  const cleanupDirs = prepared?.cleanupDirs ?? selected?.cleanupDirs ?? null;
   const run = command ?? resolveCoreAgentCommand(ctx, role, activeAgent, baseEnv);
   // #3231: the machine guard's priority (nice, macOS QoS, a Linux CPU list for agent roles) and Autopilot's CPU share
   // as PDD_CHECK_CPUS for every role.
   const { checkCpus, ...priority } = ctx.ports.machine?.priority?.(role) ?? {};
   const started = ctx.jobs.start({ id, dir: ctx.dirs.logs, cwd, custodyRoot: cwd, command: run.command, args: run.args, input: typeof prompt === 'function' ? prompt(result) : prompt,
     env: { ...pddOnPath(ctx, jobEnvironment(baseEnv)), ...(Number.isSafeInteger(checkCpus) ? { PDD_CHECK_CPUS: String(checkCpus) } : {}), ...extraEnv },
+    ...(Array.isArray(cleanupDirs) && cleanupDirs.length ? { cleanupDirs } : {}),
     ...(Object.keys(priority).length ? { priority } : {}), ...(SHELL_ROLES.has(role) ? { pddCheck: { version: engineVersion(ctx), cli: join(ctx.dirs.bin, 'pdd'), skills: skillsCheck(ctx, activeAgent, baseEnv) } } : {}),
     issue: job.issue, role, branch: job.branch, head: job.head, ...(command ? {} : { hung: HUNG }) });
   if (!command && object(started)) {
     const loginId = selected?.login?.id ?? activeAgent?.id;
     if (named(loginId)) started.loginId = loginId;
     if (named(activeAgent?.kind)) started.agentKind = activeAgent.kind;
+    if (selected?.cloud) started.cloud = true;
+    if (object(selected?.account)) {
+      started.accountWindows = {
+        five_hour_used_percent: selected.account.five_hour_used_percent ?? null,
+        five_hour_reset_at: selected.account.five_hour_reset_at ?? null,
+        weekly_used_percent: selected.account.weekly_used_percent ?? null,
+        weekly_reset_at: selected.account.weekly_reset_at ?? null,
+      };
+    }
   }
   return started;
 }
@@ -1327,7 +1345,9 @@ async function intake(ctx, rows) {
   // #3260: no new job while GitHub Actions does not start runs here; intake goes on by itself when a run starts.
   const ciHeld = await ciHold(ctx);
   if (ciHeld) return ciHeld;
-  const poolHeldText = poolOut => `intake held: every login in the pool is exhausted${poolOut?.resetAt ? ` until ${new Date(poolOut.resetAt).toISOString()}` : ''}; no issue was claimed`;
+  const poolHeldText = poolOut => poolOut?.cloud && poolOut?.wakeAt
+    ? `Waiting on AI quota until ${poolOut.wakeAt}`
+    : `intake held: every login in the pool is exhausted${poolOut?.resetAt ? ` until ${new Date(poolOut.resetAt).toISOString()}` : ''}; no issue was claimed`;
   const checkIdlePool = async () => {
     const m = ctx.machineState();
     if (ctx.ports.selectLogin && m.poolOut && (!Number.isFinite(m.poolOut.resetAt) || ctx.now() >= m.poolOut.resetAt)) {
@@ -1717,10 +1737,25 @@ async function reviewState(ctx, job, prBody = '', preselected = null) {
   if (!object(r) || !['PASS', 'FAIL'].includes(r.verdict) || r.head !== job.head) {
     const service = ctx.ports.exhaustLogin ? serviceProblem(ctx, job.review.agent) : null;
     if (service && isQuotaExhaustionMessage(service)) {
-      if (!await cleanupPart(ctx, job, job.review.agent, 'review')) return { state: 'running' };
-      const next = await ctx.ports.exhaustLogin({ loginId: job.review.agent?.loginId ?? ctx.state.agent?.id, resetAt: null, reason: service });
+      const prevReviewAgent = job.review.agent;
+      const rateClass = classifyRateLimitFailure(service, prevReviewAgent?.accountWindows);
+      if (!await cleanupPart(ctx, job, prevReviewAgent, 'review')) return { state: 'running' };
+      if (prevReviewAgent?.cloud && rateClass === 'burst_rate_limit' && !job.review.burstRetried && ctx.ports.selectLogin) {
+        await (ctx.ports.sleep ?? (ms => new Promise(r => setTimeout(r, ms))))(ctx.ports.burstRetryMs ?? 150);
+        const same = await ctx.ports.selectLogin({ preferredAccountId: prevReviewAgent.loginId });
+        if (same?.state === 'ready') {
+          job.review.burstRetried = true;
+          job.review.attempts = Math.max(0, (job.review.attempts ?? 1) - 1);
+          job.review.agent = null;
+          job.review.retry = true;
+          ctx.saveJob(job);
+          return reviewState(ctx, job, prBody, same);
+        }
+      }
+      const next = await ctx.ports.exhaustLogin({ loginId: prevReviewAgent?.loginId ?? ctx.state.agent?.id, resetAt: null, reason: service, accountWindows: prevReviewAgent?.accountWindows ?? null });
       if (next?.state === 'ready' && (job.poolRotations ?? 0) < Math.max(1, next.poolSize ?? 4)) {
         job.poolRotations = (job.poolRotations ?? 0) + 1;
+        delete job.review.burstRetried;
         clearPoolExhausted(ctx);
         job.review.attempts = Math.max(0, (job.review.attempts ?? 1) - 1);
         job.review.agent = null;
@@ -3758,26 +3793,40 @@ async function agentStop(ctx, job, seen, quiet) {
   const service = serviceProblem(ctx, job.agent), hang = service ? null : repeatedHang(job);
   if (hang) return issueStop(ctx, job, hang);
   if (service && isQuotaExhaustionMessage(service) && ctx.ports.exhaustLogin) {
-    if (!await cleanupPart(ctx, job, job.agent, job.role)) return;
-    const next = await ctx.ports.exhaustLogin({ loginId: job.agent?.loginId ?? ctx.state.agent?.id, resetAt: null, reason: service });
-    if (next?.state === 'ready' && (job.poolRotations ?? 0) < Math.max(1, next.poolSize ?? 4)) {
-      job.poolRotations = (job.poolRotations ?? 0) + 1;
-      clearPoolExhausted(ctx);
+    const prevAgent = job.agent;
+    const rateClass = classifyRateLimitFailure(service, prevAgent?.accountWindows);
+    if (!await cleanupPart(ctx, job, prevAgent, job.role)) return;
+    const restartStepWith = async (selected, markBurstRetried = false) => {
       const resetTarget = Number.isSafeInteger(job.pr) && job.head ? job.head : `origin/${ctx.state.baseBranch}`;
       await ctx.git(['reset', '-q', '--hard', resetTarget], job.worktree).catch(() => {});
       await ctx.git(['clean', '-fdq'], job.worktree).catch(() => {});
       if (job.role === 'build') {
         const others = await openIssuesBrief(ctx, job).catch(() => '');
-        job.agent = startJob(ctx, job, 'build', job.worktree, result => buildPrompt(ctx, job, result, others), null, {}, next);
+        job.agent = startJob(ctx, job, 'build', job.worktree, result => buildPrompt(ctx, job, result, others), null, {}, selected);
       } else if (job.role === 'repair') {
-        job.agent = startJob(ctx, job, 'repair', job.worktree, result => repairPrompt(ctx, job, job.repairReds ?? [], result), null, {}, next);
+        job.agent = startJob(ctx, job, 'repair', job.worktree, result => repairPrompt(ctx, job, job.repairReds ?? [], result), null, {}, selected);
       } else if (job.role === 'conflict') {
         const info = job.conflict?.info ?? { files: job.conflict?.files ?? [], hunks: '' };
-        job.agent = startJob(ctx, job, 'conflict', job.worktree, result => conflictPrompt(ctx, job, info, result), null, {}, next);
+        job.agent = startJob(ctx, job, 'conflict', job.worktree, result => conflictPrompt(ctx, job, info, result), null, {}, selected);
       }
+      if (markBurstRetried && object(job.agent)) job.agent.burstRetried = true;
       job.progress = { sig: null, at: ctx.now(), running: false };
       delete job.overdue;
       ctx.saveJob(job);
+    };
+    if (prevAgent?.cloud && rateClass === 'burst_rate_limit' && !prevAgent?.burstRetried && ctx.ports.selectLogin) {
+      await (ctx.ports.sleep ?? (ms => new Promise(r => setTimeout(r, ms))))(ctx.ports.burstRetryMs ?? 150);
+      const same = await ctx.ports.selectLogin({ preferredAccountId: prevAgent.loginId });
+      if (same?.state === 'ready') {
+        await restartStepWith(same, true);
+        return;
+      }
+    }
+    const next = await ctx.ports.exhaustLogin({ loginId: prevAgent?.loginId ?? ctx.state.agent?.id, resetAt: null, reason: service, accountWindows: prevAgent?.accountWindows ?? null });
+    if (next?.state === 'ready' && (job.poolRotations ?? 0) < Math.max(1, next.poolSize ?? 4)) {
+      job.poolRotations = (job.poolRotations ?? 0) + 1;
+      clearPoolExhausted(ctx);
+      await restartStepWith(next, false);
       return;
     }
     const poolOut = await recordPoolExhausted(ctx, next, service, job.issue);
@@ -3793,7 +3842,10 @@ async function agentStop(ctx, job, seen, quiet) {
       job.agent = null;
       return pausePrForPool(ctx, job, poolOut, service);
     }
-    return end(ctx, job, cause('job', 'no-result', `all logins in the pool reached quota limits: "${service}"`, { service, owner: 'service', poolExhausted: true }));
+    const endMsg = poolOut?.cloud && poolOut?.wakeAt
+      ? `Waiting on AI quota until ${poolOut.wakeAt}`
+      : `all logins in the pool reached quota limits: "${service}"`;
+    return end(ctx, job, cause('job', 'no-result', endMsg, { service, owner: 'service', poolExhausted: true }));
   }
   const said = service ? `: the AI service said "${service}" (an agent account or service problem, not this issue)` : '';
   const text = quiet ? `${quietText(ctx, `${job.role} agent`)}${said}`
@@ -4308,8 +4360,8 @@ async function finishLocal(ctx, job, outcome, text) {
 // agent log: the last error event in its last 40 lines, or one of its last 5 plain lines.
 const SERVICE_WORDS = new RegExp([
   /\bmodel is (?:at|over) capacity\b/, /\bis out of credits\b/, /\bcredit balance is too low\b/, /\binsufficient[_ ](?:quota|credits?|funds)\b/, /\bexceeded your current quota\b/,
-  /\bresource_exhausted\b/, /\bquota (?:has been )?exhausted\b/, /\b(?:weekly|daily|monthly|spending) limit\b/, /\bspend[_ ]control\b/,
-  /\bhit your (?:usage|rate) limit\b/, /\busage limit (?:reached|exceeded)\b/, /\brate limit (?:reached|exceeded)\b/, /\brate_limit_(?:error|exceeded)\b/, /\btoo many requests\b/,
+  /\bresource_exhausted\b/, /\bquota (?:has been )?exhausted\b/, /\b(?:weekly|daily|monthly|spending)[_ ](?:usage[_ ])?limit\b/, /\bspend[_ ]control\b/,
+  /\bhit your (?:usage|rate) limit\b/, /\busage[_ ]limit[_ ](?:reached|exceeded)\b/, /\brate[_ ]limit[_ ](?:reached|exceeded|error)\b/, /\btoo many requests\b/,
   /\boverloaded_error\b/, /\bnot logged in\b/, /\bplease (?:run \/login|log ?in|sign ?in)\b/, /\binvalid[_ ]api[_ ]key\b/, /\bauthentication_error\b/,
 ].map(re => re.source).join('|'), 'i');
 // In a terminal error event a clear account or service phrase counts too (an ordinary test error keeps its strike).
@@ -4665,9 +4717,16 @@ async function sweepFiles(ctx) {
 const pddWords = (fs, part) => [pddCheckFile, skillsCheckFile].map(file => readJson(fs, file(part.log ?? ''), null)?.line).filter(named).map(line => `; ${oneLine(line, 300)}`).join('');
 const runtimeWords = job => runtimeWaiting(job) ? `; Runtime: waits for the interpreter maintenance since ${utcClock(job.runtimeWait.maintenance)}${job.runtimeWait.until ? ` (until ${utcClock(job.runtimeWait.until)})` : ''}; no slot`
   : runtimeCurrent(job) && job.runtimeWait.state === 'sent' ? '; Runtime: the check that was not sent runs again' : '';
-const poolWords = job => poolWaiting(job) ? `; login pool: waits until ${new Date(job.stepStop.until).toISOString()}; no slot` : '';
+const poolWords = job => poolWaiting(job)
+  ? (job.stepStop?.cloud && job.stepStop?.wakeAt
+      ? `; Waiting on AI quota until ${job.stepStop.wakeAt}; no slot`
+      : `; login pool: waits until ${new Date(job.stepStop.until).toISOString()}; no slot`)
+  : '';
 function poolLines(machine) {
   if (!machine.poolOut) return [];
+  if (machine.poolOut.cloud && machine.poolOut.wakeAt) {
+    return [`Waiting on AI quota until ${machine.poolOut.wakeAt}.`];
+  }
   const since = new Date(machine.poolOut.since).toISOString();
   const tail = Number.isFinite(machine.poolOut.resetAt)
     ? `next reset at ${new Date(machine.poolOut.resetAt).toISOString()}.`

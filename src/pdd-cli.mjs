@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 412e0746887533970aa0147273d391096fff13afec8e7752f0ad86c60ecdd6de).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: e1970fc0067a699d5af15d51b7ed3ec4c38cd0d6294b06bd7e0e249716e571f8).
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -94,7 +94,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
   stdin = process.stdin, confirm, mcpServer, runtimeSlots, contracts, product, productPorts, gitContext, workflowProve, provePorts,
   autopilotRegressions, autopilotRegressionsPorts = {}, issueGraph, issueGraphPorts = {}, dependencyIntake, dependencyIntakePorts = {}, autopilotLauncher, autopilotLauncherPorts = {}, workflowAgents = { checkWorkflowAgents }, workflowAgentPorts = {}, setupSkills = defaultSetupSkills,
   setupProject = defaultSetupProject, setupAgentMcp, autopilot, autopilotPorts = {}, autopilotAlerts, autopilotAlertsPorts = {}, autopilotGithub: autopilotGithubModule, autopilotGithubPorts = {}, pathDiagnostic = defaultPathDiagnostic,
-  readPackageVersion = defaultReadPackageVersion, findSkills = defaultFindSkills, interpreterVersion, interpreterVersionPorts = {}, releaseNotice, releaseNoticePorts = {} } = {}) {
+  readPackageVersion = defaultReadPackageVersion, findSkills = defaultFindSkills, interpreterVersion, interpreterVersionPorts = {}, releaseNotice, releaseNoticePorts = {}, accountsCli, accountsPorts = {} } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
@@ -172,6 +172,15 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       for (const [name, value] of Object.entries(plan.options)) { args.push(name); if (Array.isArray(value)) args.push(...value); else if (value !== true) args.push(value); }
       const { runMetrics } = await import('./metrics-command.mjs');
       return runMetrics({ argv: args, cwd, stdout, stderr });
+    }
+    case 'accounts': {
+      try {
+        const module = accountsCli ?? await import('./accounts-cli.mjs');
+        const result = await module.runAccountsCli({ commandId: plan.commandId, operands: [...plan.operands], options: { ...plan.options }, cwd, env, stdin }, accountsPorts);
+        if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255 || typeof result.message !== 'string') throw Error('Invalid accounts reply');
+        if (result.message) line(result.exitCode === 0 ? stdout : stderr, result.message);
+        return result.exitCode;
+      } catch (error) { line(stderr, `The accounts command failed.${reason(error)}`); return 1; }
     }
     case 'help': line(stdout, plan.topic ? renderTopic(plan.topic, packageRoot) : renderHelp(plan.helpPrefix, packageRoot));return 0;
     case 'version': case 'version-detailed': {
@@ -429,7 +438,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       } catch { line(stderr, 'The bundled workflows could not be read. Use a complete PDD package.');return 1; }
     default: line(stderr, 'Unsupported command in pdd. Run pdd --help.');return 2;
   } })();
-  if (!['help', 'completion', 'version', 'version-detailed', 'mcp'].includes(plan.local) && plan.options['--json'] !== true && (stderr?.isTTY === true || Boolean(releaseNotice))) {
+  if (!['help', 'completion', 'version', 'version-detailed', 'mcp'].includes(plan.local) && !(plan.local === 'accounts' && plan.options['--quiet'] === true) && plan.options['--json'] !== true && (stderr?.isTTY === true || Boolean(releaseNotice))) {
     try {
       const metadata = await readPackageVersion({ packageRoot });
       if (metadata?.ok && typeof metadata.version === 'string' && metadata.version) {

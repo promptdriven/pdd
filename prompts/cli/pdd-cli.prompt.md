@@ -318,7 +318,7 @@ reply.
 {
   "kind": "partial",
   "status": "approved",
-  "prose_sha256": "14eeea146500e7b767cb26eb081a966588fa9f9857d2c42465470f6de4885097",
+  "prose_sha256": "deed7d7cdc9fe3b8dd610791de70de39dfd81e3850786ba22420856b6f54410e",
   "entries": [
     {
       "operation": "runPdd",
@@ -1303,3 +1303,5 @@ Dispatch `autopilot-report` to the Autopilot launcher with command report and it
 For interface-draft dispatch, pass parsed --contract as contract and the --extend/--refresh flags as extend/refresh to `draftInterfaces` alongside cwd, words, all and json. Forward stdout/stderr; drafting remains local.
 
 Route `pdd test --target code` to the local compiled Story checker without contacting the interpreter. Reject other test options except `--json` for this route.
+
+Dispatch local `accounts` by dynamically importing [Cloud accounts CLI](accounts-cli.prompt.md) (`accountsCli ?? await import('./accounts-cli.mjs')`) and calling `runAccountsCli({commandId: plan.commandId, operands: [...plan.operands], options: {...plan.options}, cwd, env, stdin}, accountsPorts)`. When `result.message` is non-empty, write it to `stdout` on exit 0 or `stderr` otherwise; keep `stdout` silent when `result.message === ''` (such as `pdd accounts sync --quiet`).
