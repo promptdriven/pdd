@@ -43,7 +43,7 @@ valid block permits interface projection; actual Runtime calls across it refuse.
 Combined selections keep every selected Story's required edge.
 
 **1 story = 1 test file = many cases.** Each case is one step. Steps run in order and share the saved data.
-Across its steps, the test file must check every criterion of its story.
+Across its steps, the test file must check every criterion of its story. Put separate user behaviors in separate Stories (`1` Story and `1` test file each) so `pdd test` runs Stories in parallel instead of running one long sequential file.
 
 Keep each test step small. One step = one action, or a short run of actions (about 10 moves, rows or calls). Split a long replay into steps with the expected state after each part. The server stops a step after 10 minutes.
 Add a second file only for a case that needs a different starting world. Name it `<story>.<world>.json`, for example `tests/place-order.empty-shop.json`. That file also checks every criterion. pdd prints every story with no test (and the path it expects), one line for the `.json` files in test folders that match no story (`pdd test --files` lists them), and two files with the same name for one story as an error that names both.
@@ -132,7 +132,7 @@ types and sees, as AC1 below does. Do not name code ("`splitBill(2, 4)` returns 
               {"criterion_id": "AC3", "target": "calls", "path": "/resources/todo-store-save", "op": "equals", "value": 0}]}]}
 ```
 - Each criterion needs at least one exact check: `equals`, `not_equals`, `one_of`, `count`, `at_least`, `at_most`, `not_contains`, `all_in` or `equals_ignore_case` (or HTML `exists`, section 20). Paths and operations: section 8.
-- The `input` must match the `input_schema`. Each step requires `step_id`, `entry_path`, `operation`, `input` and `checks`, with optional `expected_error`, `simulation_overrides` (section 21) and `model`. An error step has `"expected_error": "unknown-sku"` and a check on `error` `/code`.
+- The `input` must match the `input_schema`. Each step requires `step_id`, `entry_path`, `operation`, `input` and `checks`, with optional `expected_error`, `simulation_overrides` (section 21) and `model` (omit `model` on ordinary steps unless testing model selection, so the interpreter uses its fast default model). An error step has `"expected_error": "unknown-sku"` and a check on `error` `/code`.
 - Check facts, not values that the AI picks freely (wording that the story does not fix, generated IDs).
 - `context` is almost always `[]`. It gives one prompt extra text files to read, in this test only. A file linked in a
   prompt's `## Dependencies` is eligible for that prompt's context, subject to the route's selection below. Link shared data there. Each row is exactly
