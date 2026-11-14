@@ -1,0 +1,32 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/workflow-status-json-2571.md",
+  "criteria": [
+    {"id": "AC1", "text": "`pdd workflow status --all --json` with no runs returns version 1 and an empty runs list."}
+  ],
+  "initial_world": {"requests": []},
+  "simulation": {
+    "runs.resolveRun": {"action": "port.write", "world_pointer": "/requests", "result_template": {"json": "{}"}},
+    "results.readRunResults": {"action": "port.write", "world_pointer": "/requests", "result_template": {"json": "[]"}},
+    "files.readFileSync": {"action": "port.write", "world_pointer": "/requests", "result_template": {"content": null}},
+    "files.readdirSync": {"action": "port.write", "world_pointer": "/requests", "result_template": {"entries": []}},
+    "files.realpathSync": {"action": "port.write", "world_pointer": "/requests", "result_template": {"path": null}},
+    "files.lstatSync": {"action": "port.write", "world_pointer": "/requests", "result_template": {"stat": null}},
+    "files.existsSync": {"action": "port.write", "world_pointer": "/requests", "result_template": {"exists": false}},
+    "program.execFile": {"action": "port.write", "world_pointer": "/requests", "result_template": {"stdout": "", "code": 0}}
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "empty-all-status",
+      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "operation": "runStatus",
+      "input": {"cwd": "/project", "all": true, "json": true},
+      "checks": [
+        {"criterion_id": "AC1", "target": "result", "path": "/exitCode", "op": "equals", "value": 0},
+        {"criterion_id": "AC1", "target": "result", "path": "/message", "op": "contains", "value": "\"version\": 1"},
+        {"criterion_id": "AC1", "target": "result", "path": "/message", "op": "contains", "value": "\"runs\": []"}
+      ]
+    }
+  ]
+}
