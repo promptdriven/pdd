@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 347ab4a5457f8588d00fd65504eb59db4c3d8f5b1fc0b0c54db07ac4cc8eae43).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 073ab464fd1a98a35d650171434c226e6276f814570d46c6a5ee1ce4659f4167).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1318,6 +1318,7 @@ async function intake(ctx, rows) {
   if (free <= 0) return null;
   if (!['codex', 'claude', 'gemini', 'agy'].includes(state.agent?.kind)) return 'intake held: the core engine needs a Codex, Claude, Gemini or agy agent; run pdd autopilot start from a signed-in Codex, Claude, Gemini or agy';
   const activeMode = intakeMode(settings.intake) === 'active';
+  if (!activeMode) delete state.intakeNote;
   // The launcher asks for an opt-in label unless active intake evaluates open issues.
   if (settings.labelRequired && !settings.label && !activeMode) return 'intake held: no opt-in label; run pdd autopilot start --label pdd:autopilot and mark issues with pdd autopilot add N';
   // The machine pause: no new job starts until it ends; then intake goes on as usual.
@@ -1338,12 +1339,35 @@ async function intake(ctx, rows) {
   };
   let others = [], candidateGroups = [], cards = null, busyJobs = [], areaBusyNote = null;
   if (activeMode) {
+    delete state.intakeNote;
+    const checkActiveIntakeLogin = async () => {
+      if (!ctx.ports.selectLogin) {
+        if (!['codex', 'claude'].includes(state.agent?.kind)) {
+          state.intakeNote = 'intake held: active intake needs a codex or claude login';
+          return state.intakeNote;
+        }
+        return null;
+      }
+      const intakeSel = await ctx.ports.selectLogin({ allowedKinds: ['codex', 'claude'] });
+      if (!intakeSel || intakeSel.state === 'unavailable' || intakeSel.poolSize === 0 || (intakeSel.state !== 'ready' && !intakeSel.cooling?.length)) {
+        state.intakeNote = 'intake held: active intake needs a codex or claude login';
+        return state.intakeNote;
+      }
+      if (intakeSel.state !== 'ready' && intakeSel.cooling?.length) {
+        state.intakeNote = `intake held: active intake login pool is cooling down${intakeSel.resetAt ? ` until ${new Date(intakeSel.resetAt).toISOString()}` : ''}`;
+        return state.intakeNote;
+      }
+      return null;
+    };
+    if (!ctx.ports.selectLogin && !['codex', 'claude'].includes(state.agent?.kind)) {
+      return await checkActiveIntakeLogin();
+    }
     // Check decision replies even before ready cards exist so answered questions clear pdd:needs-decision promptly.
     const cardsNow = activeReadyCards(ctx.root, rows, ctx.fs);
     cards = cardsNow;
     if (!cards.size) {
       await decisionReplies(ctx, rows);
-      return await checkIdlePool();
+      return (await checkActiveIntakeLogin()) ?? await checkIdlePool();
     }
     const ready = [];
     for await (const row of readyRows(ctx, rows)) {
@@ -1351,7 +1375,7 @@ async function intake(ctx, rows) {
       ready.push(row);
       if (ready.length >= 100) break;
     }
-    if (!ready.length) return await checkIdlePool();
+    if (!ready.length) return (await checkActiveIntakeLogin()) ?? await checkIdlePool();
     others = await otherJobs(ctx, rows);
     const recentGroupHistory = chronological(ctx.fs, ctx.root)
       .filter(h => ctx.now() - h.at < 7 * DAY)
@@ -1360,7 +1384,7 @@ async function intake(ctx, rows) {
     const activeGroupIssues = new Set([...others.flatMap(o => o.issues ?? [o.issue]), ...recentGroupHistory]);
     const ranked = rankReadyRows(ready, cards, { activeGroupIssues });
     candidateGroups = groupReadyIssues(ranked, cards, { maxGroupSize: 3 });
-    if (!candidateGroups.length) return await checkIdlePool();
+    if (!candidateGroups.length) return (await checkActiveIntakeLogin()) ?? await checkIdlePool();
     const rowByNumber = new Map((rows ?? []).filter(r => !r.pull_request).map(r => [r.number, r]));
     busyJobs = others.map(o => {
       const memberRows = (o.issues ?? [o.issue]).map(id => rowByNumber.get(id)).filter(Boolean);
@@ -4588,7 +4612,7 @@ export async function tickCore(input, ports) {
   if (intakeMode(settings.intake) === 'active' && rows && b?.state !== 'low') {
     try { await collectActiveIntake(ctx, rows); } catch (error) { ctx.warn(`Autopilot intake (active) collect skipped: ${error.message}`); }
   }
-  const hold = b?.state === 'low' ? `intake held: the GitHub budget is low (this machine used ${b.used} of ${b.allowed} calls in the last hour, a ${b.share ?? 30}% share for ${b.machines} machine(s) with live claims)`
+  let hold = b?.state === 'low' ? `intake held: the GitHub budget is low (this machine used ${b.used} of ${b.allowed} calls in the last hour, a ${b.share ?? 30}% share for ${b.machines} machine(s) with live claims)`
     : rows ? await intake(ctx, rows) : 'intake skipped: the issue list is unavailable';
   try {
     const intakeTier = resolveStepModelTier({
@@ -4601,7 +4625,12 @@ export async function tickCore(input, ports) {
     const intakeCtx = intakeTier.enabled && ctx.state.agent
       ? { ...ctx, state: { ...ctx.state, agent: { ...ctx.state.agent, model: intakeTier.model } } }
       : ctx;
-    await intakeTick(intakeCtx, rows);
+    const intakeOut = await intakeTick(intakeCtx, rows);
+    if (intakeMode(settings.intake) === 'active' && intakeOut?.ok === false && intakeOut.reason && !state.intakeNote) {
+      const note = intakeOut.reason.startsWith('intake held:') ? intakeOut.reason : `intake held: ${intakeOut.reason}`;
+      state.intakeNote = note;
+      if (!hold && ctx.counts.started === 0) hold = note;
+    }
   } catch (error) { ctx.warn(`Autopilot intake (${intakeMode(settings.intake)}) skipped this tick: ${error.message}`); }
   if (ctx.peers.size) { const m = ctx.machineState(); ctx.saveMachine({ ...m, peers: { ...m.peers, ...Object.fromEntries(ctx.peers) } }); }
   const busy = readJobs(ctx.fs, ctx.root).filter(holdsSlot).length, c = ctx.counts;
@@ -4656,6 +4685,7 @@ export function coreStatus({ state, settings, sources = {}, guard = null }, port
     : `No pause: ${machine.streak} no-result end(s) in a row (a pause starts at ${STRIKES}; the next pause is ${machine.hours} h).`);
   lines.push(...poolLines(machine));
   lines.push(...ciLines(machine));
+  if (intakeMode(settings.intake) === 'active' && named(state.intakeNote)) lines.push(oneLine(state.intakeNote, 300));
   const words = { now: (ports.now ?? Date.now)(), settings, longest: readLongest(fs, ports.root, (ports.now ?? Date.now)()) };
   const running = (job, part, role) => part && !part.watch?.stopped && !part.recorded ? `; ${processWords(job, part, role, words)}${pddWords(fs, part)}` : '';
   for (const job of jobs) {

@@ -180,3 +180,55 @@ test('#3252 isQuotaExhaustionMessage matches provider quota/rate messages and ig
   assert.equal(isQuotaExhaustionMessage('AssertionError: expected "rate_limit" in test/quota.spec.mjs to fail'), false);
   assert.equal(isQuotaExhaustionMessage('502 Bad Gateway'), false);
 });
+
+test('selectPoolLogin filters by allowedKinds so sandboxed intake only selects codex or claude and rotates past exhausted codex', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'pdd-pool-kinds-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const stateRoot = join(root, 'state');
+  const poolPath = join(root, 'pool.json');
+  writeFileSync(poolPath, JSON.stringify({
+    reset: 'never',
+    logins: [
+      { id: 'gemini-main', kind: 'gemini', geminiCliHome: join(root, '.gemini-main') },
+      { id: 'codex-1', kind: 'codex', codexHome: join(root, '.codex-1'), plan: 'pro' },
+      { id: 'codex-2', kind: 'codex', codexHome: join(root, '.codex-2'), plan: 'pro' },
+    ],
+  }));
+
+  const codexLimitsByHome = {
+    [join(root, '.codex-1')]: { state: 'limited', resetAt: 1_800_000_000_000, usedPercent: 97 },
+    [join(root, '.codex-2')]: { state: 'healthy', resetAt: null, usedPercent: 25 },
+  };
+  const ports = {
+    now: () => 1_799_990_000_000,
+    probeLogin: async () => ({ ok: true }),
+    readCodexLimits: async ({ env }) => codexLimitsByHome[env.CODEX_HOME],
+  };
+
+  // Unfiltered build selection chooses gemini-main first.
+  const buildPick = await selectPoolLogin({ cwd: root, env: { HOME: root }, poolPath, stateRoot }, ports);
+  assert.equal(buildPick.state, 'ready');
+  assert.equal(buildPick.login.id, 'gemini-main');
+
+  // Sandboxed intake selection (`allowedKinds: ['codex', 'claude']`) skips gemini-main, sees codex-1 at 97% weekly limit, and rotates to codex-2!
+  const intakePick = await selectPoolLogin(
+    { cwd: root, env: { HOME: root }, poolPath, stateRoot, allowedKinds: ['codex', 'claude'] },
+    ports,
+  );
+  assert.equal(intakePick.state, 'ready');
+  assert.equal(intakePick.login.id, 'codex-2');
+  assert.equal(intakePick.poolSize, 2);
+
+  // Pool with only gemini/agy returns state: 'unavailable', poolSize: 0 when allowedKinds: ['codex', 'claude'].
+  const geminiOnlyPath = join(root, 'gemini-only.json');
+  writeFileSync(geminiOnlyPath, JSON.stringify({
+    reset: 'never',
+    logins: [{ id: 'gemini-only', kind: 'gemini', geminiCliHome: join(root, '.gemini-main') }],
+  }));
+  const nonePick = await selectPoolLogin(
+    { cwd: root, env: { HOME: root }, poolPath: geminiOnlyPath, stateRoot, allowedKinds: ['codex', 'claude'] },
+    ports,
+  );
+  assert.equal(nonePick.state, 'unavailable');
+  assert.equal(nonePick.poolSize, 0);
+});

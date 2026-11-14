@@ -1,4 +1,4 @@
-// Generated from prompts/cli/codex-limits.prompt.md (sha256: 46f5fa425821cf3f79f4853daa93d5fe75a53b1141d9006b430bb2ca4baba626).
+// Generated from prompts/cli/codex-limits.prompt.md (sha256: cdd46a22717217fac20aa8552752048a115192230e4f1540b7236e4b5a54eddb).
 import { spawn } from 'node:child_process';
 const unknown = () => ({ state: 'unknown', resetAt: null, usedPercent: null });
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -7,8 +7,13 @@ export function parseCodexLimits(reply, { weeklyStopPercent = 97 } = {}) {
   const bucket = reply?.rateLimitsByLimitId?.codex ?? reply?.rateLimits;
   if (!object(bucket)) return unknown();
   const weeklyStop = stopThreshold(weeklyStopPercent);
+  const primaryMins = bucket.primary?.windowDurationMins;
+  const primaryIsWeekly = (typeof primaryMins === 'number' && Number.isFinite(primaryMins))
+    ? primaryMins >= 1440
+    : (bucket.secondary == null && (String(bucket.planType ?? reply?.planType ?? '').toLowerCase() === 'pro'
+      || bucket.credits?.hasCredits === true || reply?.credits?.hasCredits === true));
   const entries = [
-    ['primary', bucket.primary, 100],
+    ['primary', bucket.primary, primaryIsWeekly ? weeklyStop : 100],
     ['secondary', bucket.secondary, weeklyStop],
   ].filter(([, row]) => row != null);
   const windows = entries.map(([, row]) => row);

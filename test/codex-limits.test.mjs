@@ -224,4 +224,37 @@ test('#3252 weekly stop line stops secondary window at 97% by default while prim
   const f = fakeServer(limits(window(12), window(97, 1800001200)));
   const viaTransport = await readCodexLimits({ weeklyStopPercent: 97 }, { spawn: () => f.process });
   assert.deepEqual(viaTransport, { state: 'limited', resetAt: 1800001200000, usedPercent: 97 });
+
+  // OpenAI Pro accounts report their 7-day weekly window in primary (windowDurationMins: 10080) with secondary: null.
+  assert.deepEqual(parseCodexLimits({
+    rateLimits: {
+      planType: 'pro',
+      primary: { usedPercent: 97, windowDurationMins: 10080, resetsAt: 1795218173 },
+      secondary: null,
+      credits: { hasCredits: true },
+    },
+  }), { state: 'limited', resetAt: 1795218173000, usedPercent: 97 });
+  assert.deepEqual(parseCodexLimits({
+    rateLimits: {
+      planType: 'pro',
+      primary: { usedPercent: 96, windowDurationMins: 10080, resetsAt: 1795218173 },
+      secondary: null,
+      credits: { hasCredits: true },
+    },
+  }), { state: 'healthy', resetAt: null, usedPercent: 96 });
+  assert.deepEqual(parseCodexLimits({
+    rateLimits: {
+      planType: 'pro',
+      primary: { usedPercent: 97, resetsAt: 1795218173 },
+      secondary: null,
+      credits: { hasCredits: true },
+    },
+  }), { state: 'limited', resetAt: 1795218173000, usedPercent: 97 });
+  assert.deepEqual(parseCodexLimits({
+    rateLimits: {
+      planType: 'team',
+      primary: { usedPercent: 98, windowDurationMins: 300, resetsAt: 1795000000 },
+      secondary: { usedPercent: 60, windowDurationMins: 10080, resetsAt: 1795218173 },
+    },
+  }), { state: 'healthy', resetAt: null, usedPercent: 98 });
 });

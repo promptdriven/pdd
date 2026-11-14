@@ -6,7 +6,7 @@ Own `src/login-pool.mjs`. Export `resolvePoolPath({env, poolPath})`,
 `readPoolCooldowns({stateRoot, now}, ports)`,
 `markLoginExhausted({stateRoot, loginId, resetAt, reason, now}, ports)`,
 `clearPoolCooldowns({stateRoot}, ports)` and
-`selectPoolLogin({cwd, env, poolPath, fallbackAgent, stateRoot, allowLimited}, ports)`.
+`selectPoolLogin({cwd, env, poolPath, pool, fallbackAgent, stateRoot, allowLimited, allowedKinds}, ports)`.
 
 ## Pool configuration
 
@@ -60,7 +60,11 @@ unknown). `readPoolCooldowns` drops expired entries (`until <= now`).
 
 ## Selection and 97% weekly stop protection
 
-`selectPoolLogin` walks non-paused logins in order:
+`selectPoolLogin` walks non-paused logins matching optional `allowedKinds` (for
+example `["codex", "claude"]` for sandboxed read-only intake card checks; when
+`allowedKinds` is an array and zero non-paused logins match, return
+`{state: "unavailable", configured, poolPath, poolSize: 0, resetAt: null,
+cooling: [], unavailable: []}`) in order:
 1. Skip logins with an active cooldown (`until > now`), recording `{id, until, reason}`
    in `cooling`.
 2. Build `loginEnvironment` and check local sign-in (`codex login status`,

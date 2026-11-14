@@ -1,9 +1,10 @@
-// Generated from prompts/cli/autopilot-intake.prompt.md (sha256: cdc03cb8b3b020bc829ca6b3bf8acb23615d658747d5902eb9163420302fb5dd).
+// Generated from prompts/cli/autopilot-intake.prompt.md (sha256: 70431fcc97b926b26e61f0e2027cadd2a75f782defe140f2fedf574ab8890107).
 import * as nativeFs from 'node:fs';
 import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { jobEnvironment, readAgentJob, stopAgentJob } from './agent-job.mjs';
 import { normalizeAreaList } from './autopilot-areas.mjs';
+import { isQuotaExhaustionMessage } from './login-pool.mjs';
 
 export const INTAKE_MODES = Object.freeze(['off', 'shadow', 'active']);
 export const CARD_CLASSES = Object.freeze(['ready', 'improve', 'person', 'duplicate', 'blocked', 'held', 'fixed', 'elsewhere']);
@@ -337,8 +338,71 @@ function pruneOld(ctx, f) {
 }
 const failed = (ctx, saved, error) => ({ issue: saved.issue, version: saved.version, at: ctx.now(), agent: saved.agent, seconds: Math.round((ctx.now() - saved.startedAt) / 1000), error, failedAt: ctx.now() });
 
-// Finish, time out or drop the running card jobs (shadow mode: synchronous, zero GitHub writes).
-function collect(ctx, f, scope) {
+function readFileTail(fs, file, maxBytes = 64 * 1024) {
+  if (typeof file !== 'string' || !file) return '';
+  try {
+    const raw = fs.readFileSync(file, 'utf8');
+    return raw.length > maxBytes ? raw.slice(-maxBytes) : raw;
+  } catch {
+    return '';
+  }
+}
+
+async function maybeExhaustIntakeLogin(ctx, saved, errorText = '') {
+  if (!saved?.loginId || typeof ctx.ports?.exhaustLogin !== 'function') return false;
+  const sample = [
+    text(errorText),
+    readFileTail(ctx.fs, saved?.job?.log),
+    readFileTail(ctx.fs, saved?.answer),
+  ].filter(Boolean).join('\n');
+  if (!isQuotaExhaustionMessage(sample)) return false;
+  await ctx.ports.exhaustLogin({ loginId: saved.loginId, reason: 'quota', allowedKinds: ['codex', 'claude'] });
+  return true;
+}
+
+async function resolveIntakeRunner(ctx) {
+  if (ctx.budget?.state === 'low' || ctx.budget?.state === 'reserve') {
+    return { ok: false, reason: 'GitHub budget is low' };
+  }
+  if (typeof ctx.ports?.selectLogin === 'function') {
+    const selected = await ctx.ports.selectLogin({ allowedKinds: ['codex', 'claude'] }).catch(() => null);
+    if (!selected || selected.state !== 'ready' || !['codex', 'claude'].includes(selected.agent?.kind)) {
+      const cooling = Array.isArray(selected?.cooling) && selected.cooling.length > 0;
+      const reason = cooling
+        ? `active intake login pool is cooling down${selected?.resetAt ? ` until ${new Date(selected.resetAt).toISOString()}` : ''}`
+        : 'active intake needs a codex or claude login';
+      return { ok: false, reason, selected };
+    }
+    const model = selected.agent.model
+      ?? (selected.agent.kind === ctx.state?.agent?.kind ? ctx.state?.agent?.model ?? null : null);
+    return {
+      ok: true,
+      spec: { ...selected.agent, model },
+      agent: { kind: selected.agent.kind, model },
+      env: cardEnvironment(selected.env ?? ctx.ports?.env ?? process.env),
+      loginId: selected.login?.id ?? selected.agent?.id ?? null,
+    };
+  }
+  const kind = ctx.state?.agent?.kind ?? null;
+  const model = ctx.state?.agent?.model ?? null;
+  if (!['codex', 'claude'].includes(kind)) {
+    return { ok: false, reason: 'active intake needs a codex or claude login' };
+  }
+  const ready = !ctx.ports?.agentReady || await ctx.ports.agentReady().catch(() => false);
+  if (!ready) {
+    return { ok: false, reason: 'the intake agent is not ready (sign-in or usage limit)' };
+  }
+  return {
+    ok: true,
+    spec: ctx.state.agent,
+    agent: { kind, model },
+    env: cardEnvironment(ctx.ports?.env ?? process.env),
+    loginId: null,
+  };
+}
+
+// Finish, time out or drop the running card jobs (shadow mode: zero GitHub writes).
+async function collect(ctx, f, scope) {
   for (const saved of listJson(ctx.fs, f.jobs)) {
     const n = saved.issue, file = join(f.jobs, `${n}.json`);
     try {
@@ -353,9 +417,14 @@ function collect(ctx, f, scope) {
       ctx.fs.rmSync(file, { force: true });
       if (drop) { prune(ctx, saved.job, false, saved.answer); continue; }
       const answer = cardAnswer(ctx, saved), card = answer.card ?? null;
+      const errText = card ? '' : (answer.error ?? `the card answer is not valid (exit ${state.exit?.code ?? 'unknown'})`);
+      const quota = !card && await maybeExhaustIntakeLogin(ctx, saved, errText);
       prune(ctx, saved.job, !card, saved.answer);
-      saveCard(ctx, f, n, card ? { issue: n, version: saved.version, at: ctx.now(), agent: saved.agent, seconds: Math.round((ctx.now() - saved.startedAt) / 1000), native: null, card }
-        : failed(ctx, saved, answer.error ?? `the card answer is not valid (exit ${state.exit?.code ?? 'unknown'})`));
+      if (card) {
+        saveCard(ctx, f, n, { issue: n, version: saved.version, at: ctx.now(), agent: saved.agent, seconds: Math.round((ctx.now() - saved.startedAt) / 1000), native: null, card });
+      } else if (!quota) {
+        saveCard(ctx, f, n, failed(ctx, saved, errText));
+      }
     } catch (error) {
       ctx.warn(`Autopilot intake #${n}: ${error.message}`);
       // A job that cannot be read is dropped after the time limit with an error card, so it never holds a slot for
@@ -505,19 +574,26 @@ export async function collectActiveIntake(ctx, rows) {
       if (saved.stage === 'improve') {
         const answer = improveAnswer(ctx, saved), imp = answer.improvement ?? null;
         if (!imp) {
+          const errText = answer.error ?? `the auto-improve answer is not valid (exit ${state.exit?.code ?? 'unknown'})`;
+          const quota = await maybeExhaustIntakeLogin(ctx, saved, errText);
           ctx.fs.rmSync(file, { force: true }); prune(ctx, saved.job, true, saved.answer);
-          saveCard(ctx, f, n, failed(ctx, saved, answer.error ?? `the auto-improve answer is not valid (exit ${state.exit?.code ?? 'unknown'})`));
+          if (!quota) saveCard(ctx, f, n, failed(ctx, saved, errText));
           continue;
         }
         await applyImprovement(ctx, f, row, saved, imp);
         ctx.fs.rmSync(file, { force: true }); prune(ctx, saved.job, false, saved.answer);
         continue;
       }
-      ctx.fs.rmSync(file, { force: true });
       const answer = cardAnswer(ctx, saved), card = answer.card ?? null;
+      const errText = card ? '' : (answer.error ?? `the card answer is not valid (exit ${state.exit?.code ?? 'unknown'})`);
+      const quota = !card && await maybeExhaustIntakeLogin(ctx, saved, errText);
+      ctx.fs.rmSync(file, { force: true });
       prune(ctx, saved.job, !card, saved.answer);
-      saveCard(ctx, f, n, card ? { issue: n, version: saved.version, at: ctx.now(), agent: saved.agent, seconds: Math.round((ctx.now() - saved.startedAt) / 1000), native: null, card }
-        : failed(ctx, saved, answer.error ?? `the card answer is not valid (exit ${state.exit?.code ?? 'unknown'})`));
+      if (card) {
+        saveCard(ctx, f, n, { issue: n, version: saved.version, at: ctx.now(), agent: saved.agent, seconds: Math.round((ctx.now() - saved.startedAt) / 1000), native: null, card });
+      } else if (!quota) {
+        saveCard(ctx, f, n, failed(ctx, saved, errText));
+      }
     } catch (error) {
       ctx.warn(`Autopilot intake #${n}: ${error.message}`);
       if (ctx.now() - (saved.startedAt ?? 0) > INTAKE_LIMITS.timeout) {
@@ -597,7 +673,7 @@ export async function shadowIntake(ctx, rows) {
   const f = intakeFolders(ctx.root);
   for (const dir of [f.base, f.cards, f.jobs, f.logs, f.empty]) ctx.fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const scoped = intakeRows(rows, ctx.settings?.label), scope = new Map(scoped.map(row => [row.number, row]));
-  collect(ctx, f, scope);
+  await collect(ctx, f, scope);
   pruneOld(ctx, f);
   const cards = new Map(listJson(ctx.fs, f.cards).filter(c => Number.isSafeInteger(c.issue)).map(c => [c.issue, c]));
   // The verdicts before this pass: the "started" line names the card that the core saw, not the "working" that follows.
@@ -605,11 +681,10 @@ export async function shadowIntake(ctx, rows) {
   const running = new Set(listJson(ctx.fs, f.jobs).map(j => j.issue));
   // An issue that a core job of this machine holds is working, also when this tick's issue row is older than the claim.
   const own = coreOwnedIssues(ctx);
-  const agent = { kind: ctx.state?.agent?.kind ?? null, model: ctx.state?.agent?.model ?? null };
-  let started = 0, ready;
+  const defaultAgent = { kind: ctx.state?.agent?.kind ?? null, model: ctx.state?.agent?.model ?? null };
+  let started = 0, runner, runnerPromise;
   // The agent check can be slow (Codex starts its app server): it runs once, and only when a card would start.
-  const canStart = async () => ready ??= ctx.budget?.state !== 'low' && ctx.budget?.state !== 'reserve' && ['codex', 'claude'].includes(agent.kind)
-    && (!ctx.ports?.agentReady || await ctx.ports.agentReady().catch(() => false));
+  const canStart = async () => { runner = await (runnerPromise ??= resolveIntakeRunner(ctx)); return runner.ok; };
   // Trust lookups (the core's port; one GitHub read per new login) are cached for 6 hours and limited to 40 per pass.
   // An author that is not looked up yet counts as not trusted for now: untrusted text never reaches a card.
   const cache = object(readJson(ctx.fs, f.trust)) ? readJson(ctx.fs, f.trust) : {};
@@ -630,7 +705,7 @@ export async function shadowIntake(ctx, rows) {
     try {
       const version = issueVersion(row), native = nativeFacts(row) ?? (own.has(n) ? { kind: 'working', reason: 'a core job of this machine holds the issue' } : null), card = cards.get(n);
       if (native) {
-        if (!card?.native || card.native.kind !== native.kind || card.version !== version) { const next = { issue: n, version, at: ctx.now(), agent, native, card: null, previous: card?.card ?? card?.previous ?? null }; saveCard(ctx, f, n, next); cards.set(n, next); }
+        if (!card?.native || card.native.kind !== native.kind || card.version !== version) { const next = { issue: n, version, at: ctx.now(), agent: runner?.agent ?? defaultAgent, native, card: null, previous: card?.card ?? card?.previous ?? null }; saveCard(ctx, f, n, next); cards.set(n, next); }
         continue;
       }
       if (running.has(n) || (card?.version === version && (card.card || card.native?.kind === 'untrusted' || ctx.now() - (card.failedAt ?? 0) < INTAKE_LIMITS.retryAfter))) continue;
@@ -638,7 +713,7 @@ export async function shadowIntake(ctx, rows) {
       // Only issues that the core itself would give to an agent: the core's trust check, once per version.
       const author = await trustOf(row.user);
       if (author === undefined) continue;
-      if (!author) { const next = { issue: n, version, at: ctx.now(), agent, native: { kind: 'untrusted', reason: 'the author is not trusted; the core never gives this issue to an agent' }, card: null, previous: card?.card ?? card?.previous ?? null }; saveCard(ctx, f, n, next); cards.set(n, next); continue; }
+      if (!author) { const next = { issue: n, version, at: ctx.now(), agent: runner?.agent ?? defaultAgent, native: { kind: 'untrusted', reason: 'the author is not trusted; the core never gives this issue to an agent' }, card: null, previous: card?.card ?? card?.previous ?? null }; saveCard(ctx, f, n, next); cards.set(n, next); continue; }
       // The attempt counts before any read or write, so a failure can never start more than the limit.
       started++; running.add(n);
       const all = Number(row.comments) > 0 ? await ctx.gh.all(`repos/${ctx.repo}/issues/${n}/comments?per_page=100`) : [];
@@ -656,14 +731,15 @@ export async function shadowIntake(ctx, rows) {
       }
       // Codex writes its last message here; the job runner's own result file stays unused, so it never reads a large answer.
       const id = `intake-${n}-${ctx.now().toString(36)}-${randomUUID().slice(0, 6)}`, answer = join(f.logs, `${id}.answer.txt`);
-      const run = cardCommand(ctx.state.agent, { model: agent.model, result: answer });
+      const jobAgent = runner.agent;
+      const run = cardCommand(runner.spec, { model: jobAgent.model, result: answer });
       const job = ctx.jobs.start({ id, dir: f.logs, cwd: f.empty, command: run.command, args: run.args, input: cardPrompt({ repo: ctx.repo, row, comments: personComments(comments), pool, mode: 'shadow' }),
-        env: cardEnvironment(ctx.ports?.env ?? process.env), issue: n, role: 'intake' });
-      try { writeJson(ctx.fs, join(f.jobs, `${n}.json`), { issue: n, stage: 'card', version, startedAt: ctx.now(), agent, job, answer }); }
+        env: runner.env, issue: n, role: 'intake' });
+      try { writeJson(ctx.fs, join(f.jobs, `${n}.json`), { issue: n, stage: 'card', version, startedAt: ctx.now(), agent: jobAgent, ...(runner.loginId ? { loginId: runner.loginId } : {}), job, answer }); }
       catch (error) {
         // A job that cannot be recorded would run with no limit: stop it, and wait 6 hours like any failed card.
         ctx.jobs.stop(job);
-        try { saveCard(ctx, f, n, failed(ctx, { issue: n, version, startedAt: ctx.now(), agent }, `the card job could not be recorded (${plain(error.message, 200)})`)); } catch { /* The next pass tries again. */ }
+        try { saveCard(ctx, f, n, failed(ctx, { issue: n, version, startedAt: ctx.now(), agent: jobAgent }, `the card job could not be recorded (${plain(error.message, 200)})`)); } catch { /* The next pass tries again. */ }
         throw error;
       }
     } catch (error) { ctx.warn(`Autopilot intake #${n}: ${error.message}`); }
@@ -691,10 +767,9 @@ export async function activeIntake(ctx, rows) {
   const before = new Map(cards);
   const running = new Set(listJson(ctx.fs, f.jobs).map(j => j.issue));
   const own = coreOwnedIssues(ctx);
-  const agent = { kind: ctx.state?.agent?.kind ?? null, model: ctx.state?.agent?.model ?? null };
-  let started = 0, ready;
-  const canStart = async () => ready ??= ctx.budget?.state !== 'low' && ctx.budget?.state !== 'reserve' && ['codex', 'claude'].includes(agent.kind)
-    && (!ctx.ports?.agentReady || await ctx.ports.agentReady().catch(() => false));
+  const defaultAgent = { kind: ctx.state?.agent?.kind ?? null, model: ctx.state?.agent?.model ?? null };
+  let started = 0, runner, runnerPromise;
+  const canStart = async () => { runner = await (runnerPromise ??= resolveIntakeRunner(ctx)); return runner.ok; };
   const cache = object(readJson(ctx.fs, f.trust)) ? readJson(ctx.fs, f.trust) : {};
   let lookups = 0, changed = false;
   const known = user => { const e = cache[String(user?.login ?? '').toLowerCase()]; return object(e) && ctx.now() - e.at < INTAKE_LIMITS.trustHours * HOUR ? e.trusted === true : undefined; };
@@ -762,7 +837,7 @@ export async function activeIntake(ctx, rows) {
             ? card.card
             : card?.previous?.auto_improved && card.previous.class === 'ready' ? card.previous : null;
           const next = {
-            issue: n, version, at: ctx.now(), agent, native, card: null,
+            issue: n, version, at: ctx.now(), agent: runner?.agent ?? defaultAgent, native, card: null,
             previous: card?.card ?? card?.previous ?? null,
             ...(prevReady && card?.improvedHumanKey ? { improvedHumanKey: card.improvedHumanKey } : {}),
             ...(prevReady && card?.improvedBodyKey ? { improvedBodyKey: card.improvedBodyKey } : {}),
@@ -790,21 +865,22 @@ export async function activeIntake(ctx, rows) {
           continue;
         }
         const id = `improve-${n}-${ctx.now().toString(36)}-${randomUUID().slice(0, 6)}`, answer = join(f.logs, `${id}.answer.txt`);
-        const run = improveCommand(ctx.state.agent, { model: agent.model, result: answer });
+        const jobAgent = runner.agent;
+        const run = improveCommand(runner.spec, { model: jobAgent.model, result: answer });
         const repoCwd = ctx.state?.cwd || f.empty;
         const job = ctx.jobs.start({
           id, dir: f.logs, cwd: repoCwd, command: run.command, args: run.args,
           input: improvePrompt({ repo: ctx.repo, row, comments: pComments, card: card.card, pool, decisionNote }),
-          env: cardEnvironment(ctx.ports?.env ?? process.env), issue: n, role: 'intake-improve',
+          env: runner.env, issue: n, role: 'intake-improve',
         });
         try {
           writeJson(ctx.fs, join(f.jobs, `${n}.json`), {
             issue: n, stage: 'improve', version, humanKey: hKey, bodyKey: bKey, baseCard: card.card,
-            startedAt: ctx.now(), agent, job, answer,
+            startedAt: ctx.now(), agent: jobAgent, ...(runner.loginId ? { loginId: runner.loginId } : {}), job, answer,
           });
         } catch (error) {
           ctx.jobs.stop(job);
-          try { saveCard(ctx, f, n, failed(ctx, { issue: n, version, startedAt: ctx.now(), agent }, `the auto-improve job could not be recorded (${plain(error.message, 200)})`)); } catch { /* Next pass. */ }
+          try { saveCard(ctx, f, n, failed(ctx, { issue: n, version, startedAt: ctx.now(), agent: jobAgent }, `the auto-improve job could not be recorded (${plain(error.message, 200)})`)); } catch { /* Next pass. */ }
           throw error;
         }
         continue;
@@ -813,7 +889,7 @@ export async function activeIntake(ctx, rows) {
       const author = await trustOf(row.user);
       if (author === undefined) continue;
       if (!author) {
-        const next = { issue: n, version, at: ctx.now(), agent, native: { kind: 'untrusted', reason: 'the author is not trusted; the core never gives this issue to an agent' }, card: null, previous: card?.card ?? card?.previous ?? null };
+        const next = { issue: n, version, at: ctx.now(), agent: runner?.agent ?? defaultAgent, native: { kind: 'untrusted', reason: 'the author is not trusted; the core never gives this issue to an agent' }, card: null, previous: card?.card ?? card?.previous ?? null };
         saveCard(ctx, f, n, next); cards.set(n, next); continue;
       }
       const prevImproved = card?.card?.auto_improved && card.card.class === 'ready'
@@ -824,7 +900,7 @@ export async function activeIntake(ctx, rows) {
         const hKey = humanDigest(row, personComments(comments)), bKey = bodyDigest(row);
         if (hKey === card.improvedHumanKey && (!card.improvedBodyKey || card.improvedBodyKey === bKey)) {
           const reconciled = {
-            issue: n, version, improvedHumanKey: hKey, improvedBodyKey: bKey, at: ctx.now(), agent: card.agent ?? agent,
+            issue: n, version, improvedHumanKey: hKey, improvedBodyKey: bKey, at: ctx.now(), agent: card.agent ?? runner?.agent ?? defaultAgent,
             seconds: card.seconds ?? 0, native: null,
             ...(card.refinedSpec ? { refinedSpec: card.refinedSpec } : {}),
             card: prevImproved,
@@ -837,16 +913,17 @@ export async function activeIntake(ctx, rows) {
       started++; running.add(n);
       const { comments, specRefinement, decisionNote, pool } = await readTrustedCommentsAndPool(row, n);
       const id = `intake-${n}-${ctx.now().toString(36)}-${randomUUID().slice(0, 6)}`, answer = join(f.logs, `${id}.answer.txt`);
-      const run = cardCommand(ctx.state.agent, { model: agent.model, result: answer });
+      const jobAgent = runner.agent;
+      const run = cardCommand(runner.spec, { model: jobAgent.model, result: answer });
       const job = ctx.jobs.start({
         id, dir: f.logs, cwd: f.empty, command: run.command, args: run.args,
         input: cardPrompt({ repo: ctx.repo, row, comments: personComments(comments), pool, mode: 'active', specRefinement, decisionNote }),
-        env: cardEnvironment(ctx.ports?.env ?? process.env), issue: n, role: 'intake',
+        env: runner.env, issue: n, role: 'intake',
       });
-      try { writeJson(ctx.fs, join(f.jobs, `${n}.json`), { issue: n, stage: 'card', version, startedAt: ctx.now(), agent, job, answer }); }
+      try { writeJson(ctx.fs, join(f.jobs, `${n}.json`), { issue: n, stage: 'card', version, startedAt: ctx.now(), agent: jobAgent, ...(runner.loginId ? { loginId: runner.loginId } : {}), job, answer }); }
       catch (error) {
         ctx.jobs.stop(job);
-        try { saveCard(ctx, f, n, failed(ctx, { issue: n, version, startedAt: ctx.now(), agent }, `the card job could not be recorded (${plain(error.message, 200)})`)); } catch { /* Next pass. */ }
+        try { saveCard(ctx, f, n, failed(ctx, { issue: n, version, startedAt: ctx.now(), agent: jobAgent }, `the card job could not be recorded (${plain(error.message, 200)})`)); } catch { /* Next pass. */ }
         throw error;
       }
     } catch (error) { ctx.warn(`Autopilot intake #${n}: ${error.message}`); }
@@ -857,7 +934,8 @@ export async function activeIntake(ctx, rows) {
   const jobs = [...coreOwnedIssues(ctx)], seenFile = readJson(ctx.fs, f.started);
   if (seenFile) for (const n of jobs.filter(n => !(seenFile.issues ?? []).includes(n))) appendDiff(ctx, f, { kind: 'started', issue: n, verdict: verdictOf(before.get(n) ?? cards.get(n)), would_pick: (lastPick?.issues ?? pick).includes(n) });
   if (!seenFile || JSON.stringify([...jobs].sort()) !== JSON.stringify([...(seenFile.issues ?? [])].sort())) writeJson(ctx.fs, f.started, { at: ctx.now(), issues: jobs });
-  return { cards: cards.size, started, pick };
+  if (runner && !runner.ok) return { ok: false, reason: runner.reason, cards: cards.size, started, pick };
+  return { ok: true, cards: cards.size, started, pick };
 }
 
 // Stop the card jobs that still run and remove their job files, with no other file and no GitHub call. The core

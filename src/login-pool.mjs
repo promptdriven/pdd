@@ -1,4 +1,4 @@
-// Generated from prompts/cli/login-pool.prompt.md (sha256: b84142b19c1067238529f1e88fa731823b6f2ea8f25eaacb866749ecd074c314).
+// Generated from prompts/cli/login-pool.prompt.md (sha256: fb7f92cc1e9b93fe3ef5c2e08d01c83ce6e1e21c7abfe54e3228820eb69d55b5).
 import * as nativeFs from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -328,11 +328,23 @@ function agentSpecOf(login) {
   };
 }
 
-export async function selectPoolLogin({ cwd = process.cwd(), env = process.env, poolPath, pool: preloadedPool, fallbackAgent, stateRoot, allowLimited = false } = {}, ports = {}) {
+export async function selectPoolLogin({ cwd = process.cwd(), env = process.env, poolPath, pool: preloadedPool, fallbackAgent, stateRoot, allowLimited = false, allowedKinds } = {}, ports = {}) {
   const fs = ports.fs ?? nativeFs;
   const now = (ports.now ?? Date.now)();
   const pool = preloadedPool ?? loadLoginPool({ cwd, env, poolPath, fallbackAgent }, { fs });
-  const active = pool.logins.filter(login => !login.paused);
+  const kindFilter = Array.isArray(allowedKinds) ? new Set(allowedKinds) : null;
+  const active = pool.logins.filter(login => !login.paused && (!kindFilter || kindFilter.has(login.kind)));
+  if (kindFilter && active.length === 0) {
+    return {
+      state: 'unavailable',
+      configured: pool.configured,
+      poolPath: pool.poolPath,
+      poolSize: 0,
+      resetAt: null,
+      cooling: [],
+      unavailable: [],
+    };
+  }
   const cooldowns = stateRoot ? readPoolCooldowns({ stateRoot, now }, { fs }) : {};
   const cooling = [];
   const unavailable = [];

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: ed64c2934868a5bbf4ef07033e56fd9dd9a8d9a89c74c6caccf3243dd7570678).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 98de089f0856d6d7a2cd0211c1855623e31649af2f682d46f4efb78bff2d1681).
 import {runAutopilotDoctor, resolveAutopilotAgent} from './autopilot-doctor.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import {releaseRunClaim, cancelRun, acquireRunLock} from './workflow-runner.mjs';
@@ -343,6 +343,7 @@ const savedIntake = state => INTAKE_MODES.includes(state?.intake) ? state.intake
 const effectiveIntake = (state, core = null) => savedIntake(state) ?? intakeMode(core?.intake);
 // A start with no opt-in label (the machine's --label or pdd.json autopilot.label) asks for one and starts nothing unless intake is active.
 const NO_LABEL = 'Autopilot did not start: it works only on the issues that you mark with an opt-in label. Run pdd autopilot start --label pdd:autopilot, then mark issues with pdd autopilot add N (or add the label on GitHub). Nothing was started or claimed.';
+const ACTIVE_INTAKE_AGENT_MSG = 'Active intake needs a codex or claude login for sandboxed read-only card checks; add codex or claude to --pool, pass --agent codex or --agent claude, or use --intake off --label pdd:autopilot.';
 // The status line of the move from the full engine: pending or waiting, or done in the last 7 days.
 function moveStatus(state, now) {
   if (!state) return '';
@@ -432,11 +433,30 @@ async function runCoreTick(stateFile, state, p, ports) {
     try { pool = loadLoginPool({ cwd: state.cwd, env: p.env, poolPath: state.poolPath || undefined, fallbackAgent: agent }); }
     catch (error) { if (state.poolPath) throw error; }
   }
-  const selectPool = () => selectPoolLogin({ cwd: state.cwd, env: p.env, poolPath: pool.poolPath, fallbackAgent: agent, stateRoot: cRoot },
-    { run: p.run, readCodexLimits: p.codexLimits ?? readCodexLimits, now: p.now });
-  const exhaustPool = async ({ loginId, resetAt = null, reason = 'quota' } = {}) => {
+  const poolCache = new Map();
+  const poolKey = opts => Array.isArray(opts?.allowedKinds) ? [...opts.allowedKinds].sort().join(',') : '*';
+  const selectPool = (opts = {}) => {
+    const key = poolKey(opts);
+    if (!poolCache.has(key)) {
+      poolCache.set(key, selectPoolLogin(
+        {
+          cwd: state.cwd,
+          env: p.env,
+          poolPath: pool.poolPath,
+          pool: pool.configured ? pool : undefined,
+          fallbackAgent: agent,
+          stateRoot: cRoot,
+          ...(Array.isArray(opts?.allowedKinds) ? { allowedKinds: opts.allowedKinds } : {}),
+        },
+        { run: p.run, readCodexLimits: p.codexLimits ?? readCodexLimits, now: p.now },
+      ));
+    }
+    return poolCache.get(key);
+  };
+  const exhaustPool = async ({ loginId, resetAt = null, reason = 'quota', allowedKinds } = {}) => {
     if (loginId) markLoginExhausted({ stateRoot: cRoot, loginId, resetAt, reason, now: p.now() });
-    return selectPool();
+    poolCache.clear();
+    return selectPool(Array.isArray(allowedKinds) ? { allowedKinds } : {});
   };
   const alertPorts = { ...p.alertPorts, repository: async () => ({ nameWithOwner: state.repo }), stateRoot: dirname(stateFile), now: p.now, hostname: () => state.machine };
   if (!p.sendAlert) {
@@ -463,7 +483,7 @@ async function runCoreTick(stateFile, state, p, ports) {
   if (release) try {
     const latest = read(stateFile);
     if (latest?.enabled) {
-      for (const key of ['defaultBranch', 'baseBranch', 'cachedIssues', 'etag', 'pages', 'issuesSince', 'issuesFullAt']) if (Object.hasOwn(state, key)) latest[key] = state[key]; else delete latest[key];
+      for (const key of ['defaultBranch', 'baseBranch', 'cachedIssues', 'etag', 'pages', 'issuesSince', 'issuesFullAt', 'intakeNote']) if (Object.hasOwn(state, key)) latest[key] = state[key]; else delete latest[key];
       latest.core = { at: p.now(), message: result.message }; latest.nextTick = p.now() + timerMinutes(latest) * 60000; save(stateFile, latest);
     }
   } finally { release(); }
@@ -699,7 +719,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
   }
   if (input.autoUpdate !== undefined && !validAutoUpdateMode(input.autoUpdate)) return { exitCode: 2, message: 'Use --auto-update release, --auto-update main or --auto-update off.' };
   const shareRefusal = shareOption(command, input, null); if (shareRefusal) return shareRefusal;
-  let startSelection, startWarnings = [], accountOverride = false, activePool = null, chosenPoolLogin = null;
+  let startSelection, startWarnings = [], accountOverride = false, activePool = null, chosenPoolLogin = null, activeIntakeStart = false;
   if (command === 'doctor' || command === 'start') {
     const baseDoctorPorts = typeof ports.doctorPorts === 'function' ? ports.doctorPorts(input,ports) : ports.doctorPorts ?? ports;
     const env = input.env ?? ports.env ?? process.env;
@@ -713,7 +733,8 @@ export async function runAutopilotLauncher(input, ports = {}) {
       // Autopilot takes only the issues that a person marks unless active intake evaluates open issues.
       const saved={...previous,...(input.label?{label:input.label.trim()}:{}),...(input.mode?{mode:input.mode}:{}),...(input.intake?{intake:input.intake}:{})};
       const repoSettings=readCoreSettings(cwd);
-      if (command==='start' && !(machineLabel(saved) ?? repoSettings.label) && effectiveIntake(saved, repoSettings)!=='active' && (machineMode(saved) ?? repoSettings.mode)!=='off') throw Error(NO_LABEL);
+      activeIntakeStart = command === 'start' && effectiveIntake(saved, repoSettings) === 'active' && (machineMode(saved) ?? repoSettings.mode) !== 'off';
+      if (command==='start' && !(machineLabel(saved) ?? repoSettings.label) && !activeIntakeStart && (machineMode(saved) ?? repoSettings.mode)!=='off') throw Error(NO_LABEL);
       const callerPoolOff = typeof input.pool === 'string' && ['off', 'none'].includes(input.pool.trim());
       const effectivePoolOption = callerPoolOff ? 'off' : input.pool !== undefined ? input.pool : input.agent !== undefined ? 'off' : previous?.poolPath;
       if (effectivePoolOption !== 'off') {
@@ -726,10 +747,20 @@ export async function runAutopilotLauncher(input, ports = {}) {
       }
       accountOverride = command === 'start' && (input.agent !== undefined || input.pool !== undefined || explicitConfigOverride(previous, env) || Boolean(activePool?.configured && !previous?.poolPath));
       if (activePool?.configured) {
+        if (activeIntakeStart && !activePool.logins.some(item => !item.paused && (item.kind === 'codex' || item.kind === 'claude'))) {
+          throw Error(ACTIVE_INTAKE_AGENT_MSG);
+        }
         const picked = await selectPoolLogin(
           { cwd, env, poolPath: activePool.poolPath, pool: activePool, stateRoot: null, allowLimited: true },
           { fs: baseDoctorPorts.files ?? nativeFs, run: baseDoctorPorts.run, readCodexLimits: baseDoctorPorts.codexLimits, codexLimitPorts: { spawn: baseDoctorPorts.spawn } },
         );
+        if (activeIntakeStart && (picked.state !== 'ready' || !['codex', 'claude'].includes(picked.login?.kind))) {
+          const intakePicked = await selectPoolLogin(
+            { cwd, env, poolPath: activePool.poolPath, pool: activePool, stateRoot: null, allowLimited: true, allowedKinds: ['codex', 'claude'] },
+            { fs: baseDoctorPorts.files ?? nativeFs, run: baseDoctorPorts.run, readCodexLimits: baseDoctorPorts.codexLimits, codexLimitPorts: { spawn: baseDoctorPorts.spawn } },
+          );
+          if (intakePicked.state !== 'ready') throw Error(ACTIVE_INTAKE_AGENT_MSG);
+        }
         chosenPoolLogin = picked.state === 'ready' ? picked.login : (activePool.logins.find(item => !item.paused) ?? activePool.logins[0]);
         const doctorEnv = picked.state === 'ready' ? picked.env : loginEnvironment(env, chosenPoolLogin);
         const profile = {
@@ -745,6 +776,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
           codexLimits: (opts, limitPorts) => (baseDoctorPorts.codexLimits ?? readCodexLimits)({ weeklyStopPercent: activePool.weeklyStopPercent, ...opts }, limitPorts),
         };
       } else if (command === 'start' && input.agent !== undefined) {
+        if (activeIntakeStart && !['codex', 'claude'].includes(input.agent)) throw Error(ACTIVE_INTAKE_AGENT_MSG);
         let defs = [];
         try { defs = await ((ports.selectAgent ? undefined : baseDoctorPorts.agentDefinitions) ?? loadAgentDefinitions)({ cwd, env }); } catch {}
         const match = Array.isArray(defs) ? defs.find(def => def?.kind === input.agent) : null;
@@ -765,6 +797,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
             : {}),
         };
       } else if (command === 'start' && explicitConfigOverride(previous, env)) {
+        if (activeIntakeStart && !['codex', 'claude'].includes(previous.agent.kind)) throw Error(ACTIVE_INTAKE_AGENT_MSG);
         const kind = previous.agent.kind, ownVar = AGENT_CONFIG_VARS[kind];
         const doctorEnv = loginEnvironment(env, { kind, configVar: ownVar, configDir: env[ownVar], env: {} });
         const profile = {
@@ -781,6 +814,9 @@ export async function runAutopilotLauncher(input, ports = {}) {
           };
         }
       } else {
+        if (activeIntakeStart && previous?.agent?.kind && !['codex', 'claude'].includes(previous.agent.kind)) {
+          throw Error(ACTIVE_INTAKE_AGENT_MSG);
+        }
         const profile = savedProfile(previous, env);
         doctorInput = { ...input, cwd, env, profile };
       }
@@ -793,6 +829,9 @@ export async function runAutopilotLauncher(input, ports = {}) {
     const diagnostics = await runAutopilotDoctor(doctorInput, {...doctorPorts, ...extraDoctorPorts,
       onSelection:selection=>{startSelection=selection;}});
     if (command === 'doctor' || diagnostics.exitCode !== 0) return diagnostics;
+    if (activeIntakeStart && !activePool?.configured && startSelection?.agent?.kind && !['codex', 'claude'].includes(startSelection.agent.kind)) {
+      return bad(ACTIVE_INTAKE_AGENT_MSG);
+    }
     startWarnings = diagnostics.message.split('\n').filter(line=>line.startsWith('WARN '));
   }
   let state = { cwd: input.cwd, environment: keepEnv(input.env ?? process.env) };
@@ -933,6 +972,9 @@ export async function runAutopilotLauncher(input, ports = {}) {
       : saved ? await selectAgent(state, probe, saved) : startSelection.agent;
     const agent = chosenPoolLogin && rawAgent ? { ...rawAgent, ...(chosenPoolLogin.model ? { model: chosenPoolLogin.model } : {}) } : rawAgent;
     if (!agent || saved && (agent.id !== saved.agent.id || agent.kind !== saved.agent.kind)) return bad(saved ? 'The saved coordinator profile is unavailable. Restore its sign-in and retry.' : 'Sign in to Codex, Claude Code, agy or Gemini at your terminal, then run pdd autopilot start.');
+    if (effectiveIntake(state, readCoreSettings(state.cwd)) === 'active' && !activePool?.configured && !['codex', 'claude'].includes(agent.kind)) {
+      return bad(ACTIVE_INTAKE_AGENT_MSG);
+    }
     const version = read(join(packageRoot, 'package.json')).version;
     const warnings = (ports.pathDiagnostic ?? pathDiagnostic)({ cwd: state.cwd, packageRoot, env: p.env, mode: 'workflow' });
     const oldAccountLabel = previous?.agent ? describeProfile(previous.agent, previous.environment) : null;

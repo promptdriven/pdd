@@ -77,7 +77,7 @@ label nor `autopilot.label` in `pdd.json` names a label, the effective intake mo
 the core mode of `pdd.json`) is not off, return
 exit 1 with exactly `Autopilot did not start: it works only on the issues that you mark with an opt-in label. Run pdd
 autopilot start --label pdd:autopilot, then mark issues with pdd autopilot add N (or add the label on GitHub). Nothing
-was started or claimed.` No doctor, state write, timer, tick, claim or GitHub call happens. Then it checks whether the
+was started or claimed.` No doctor, state write, timer, tick, claim or GitHub call happens. When the effective intake mode is `active` and the mode is not `off`, start also requires a `codex` or `claude` login for sandboxed read-only intake card checks: either the selected single agent has kind `codex` or `claude`, or at least one non-paused signed-in `codex` or `claude` login exists in the configured `--pool`; otherwise refuse before writing enabled state with `Active intake needs a codex or claude login for sandboxed read-only card checks; add codex or claude to --pool, pass --agent codex or --agent claude, or use --intake off --label pdd:autopilot.` Then it checks whether the
 caller requested an explicit account or login-pool override (`--agent`, `--pool`, or an explicit caller `CODEX_HOME`,
 `CLAUDE_CONFIG_DIR`, `GEMINI_CLI_HOME` or `ANTIGRAVITY_APP_DATA_DIR` that differs from the saved `launchProfile`).
 Without an explicit override it resolves the saved agent profile (`savedProfile`); with `--agent` or `--pool` it
@@ -170,7 +170,7 @@ port, its issue list (`queryIssues` with the saved ETag pages: a list of more th
 6 hours, and between full reads the tick reads the issues changed since then), its trust rule for authors
 (`trusted`: the owner, the core trust list, or write, maintain or admin permission, read once per login), the
 read-only Codex limits as `agentReady` (only `limited` holds intake; 97% weekly stop protection applies) and, when a
-multi-harness login pool is configured (`loadLoginPool(...).configured`), `selectLogin` and `exhaustLogin` from the
+multi-harness login pool is configured (`loadLoginPool(...).configured`), `selectLogin(opts)` (forwarding optional `allowedKinds` to `selectPoolLogin` and caching per-`allowedKinds` key until `exhaustLogin` clears it) and `exhaustLogin` from the
 [login pool](login-pool.prompt.md), the package version, an `alert` port that sends
 one alert of the given kind for the issue through this machine's [alert destination](autopilot-alerts.prompt.md) with
 the core's cause, tried and need, the core state folder, the report folder and `tickMinutes` (the installed
@@ -185,7 +185,7 @@ core makes its admission decision without blocking unrelated core work. The core
 settings come from `readCoreSettings(cwd, fs, {auto, runs: state.runs})`, so this machine's `start --runs N` reaches
 the core and a machine without it gets its automatic slots; the core gets the guard as its `machine` port (the room
 check and each job's priority). Tests may replace core ports with `ports.corePorts`. Afterwards, under the admission lock and only while
-still enabled, it saves the issue-list cache, the base fields, `nextTick` (now plus `timerMinutes`) and `core: {at,
+still enabled, it saves the issue-list cache, the base fields, `intakeNote` when present, `nextTick` (now plus `timerMinutes`) and `core: {at,
 message}`.
 
 Each `gh` call goes through `countGithubCalls` into this repository's ledger in `ROOT/github/`, with its purpose

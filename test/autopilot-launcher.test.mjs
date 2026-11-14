@@ -582,4 +582,27 @@ test('#3230 start with explicit --agent, profile folder env, or --pool overwrite
   assert.equal(f.state().agent.id, 'gemini-flat');
   assert.equal(f.state().agent.kind, 'gemini');
   assert.equal(f.state().environment.GEMINI_CLI_HOME, geminiDir);
+
+  // 7. Active intake refuses gemini-only --agent and gemini-only --pool, and succeeds when --pool includes codex or claude alongside gemini!
+  const refusedGeminiAgent = await f.invoke('start', { env: baseEnv, intake: 'active', agent: 'gemini' });
+  assert.equal(refusedGeminiAgent.exitCode, 1);
+  assert.match(refusedGeminiAgent.message, /Active intake needs a codex or claude login for sandboxed read-only card checks/);
+
+  const refusedGeminiPool = await f.invoke('start', { env: baseEnv, intake: 'active', pool: geminiPool });
+  assert.equal(refusedGeminiPool.exitCode, 1);
+  assert.match(refusedGeminiPool.message, /Active intake needs a codex or claude login for sandboxed read-only card checks/);
+
+  const mixedPool = join(f.dir, 'mixed-pool.json');
+  writeFileSync(mixedPool, JSON.stringify({
+    reset: 'never',
+    logins: [
+      { id: 'gemini-flat', kind: 'gemini', geminiCliHome: geminiDir },
+      { id: 'codex-pro', kind: 'codex', codexHome: join(f.home, '.codex-pro') },
+    ],
+  }));
+  const mixedActiveStart = await f.invoke('start', { env: baseEnv, intake: 'active', pool: mixedPool });
+  assert.equal(mixedActiveStart.exitCode, 0, mixedActiveStart.message);
+  assert.equal(f.state().agent.id, 'gemini-flat');
+  assert.equal(f.state().poolPath, mixedPool);
+  assert.equal(f.state().intake, 'active');
 });

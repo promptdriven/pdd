@@ -80,7 +80,16 @@ read-only pass inspect the repository checkout, still with no GitHub token.
   `-p --safe-mode --tools "" --permission-mode plan --permission-prompts none
   --strict-mcp-config --no-chrome --no-session-persistence --output-format json`.
   The configured model is passed with `--model`. Any other agent gets no card.
-  Card jobs never use the bypass flags of build jobs.
+  Card jobs never use the bypass flags of build jobs. When the core supplies
+  `ports.selectLogin` of the [multi-harness login pool](login-pool.prompt.md),
+  both `shadowIntake` and `activeIntake` call
+  `ports.selectLogin({allowedKinds: ["codex", "claude"]})` so sandboxed card and
+  auto-improve jobs run on the first healthy `codex` or `claude` login with its
+  isolated profile environment (`cardEnvironment(selected.env)`), recording
+  `loginId` on `jobs/N.json`; if a pooled card or auto-improve job fails with a
+  quota or rate-limit message (`isQuotaExhaustionMessage`), collection calls
+  `ports.exhaustLogin({loginId, reason: "quota"})` without locking the issue out
+  for 6 hours so the pool rotates onto the next healthy `codex` or `claude` login.
 - Limits: at most 2 card attempts per tick and at most 2 jobs at once. An attempt
   counts before its comment read, its job start and its job-file write, so a
   failing read or write can never start more. A job whose file cannot be written is
@@ -186,3 +195,5 @@ read-only pass inspect the repository checkout, still with no GitHub token.
 - [Headless job runner](agent-job.prompt.md): required to start, read and stop card
   jobs and for the job environment.
 - [Areas](autopilot-areas.prompt.md): required to normalize card `areas` paths.
+- [Multi-harness login pool](login-pool.prompt.md): required for
+  `isQuotaExhaustionMessage` when rotating pooled `codex` and `claude` logins.

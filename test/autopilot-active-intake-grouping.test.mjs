@@ -17,6 +17,7 @@ import {
   wouldPick,
   readIntake,
   intakeFolders,
+  shadowIntake,
 } from '../src/autopilot-intake.mjs';
 import {
   normalizeAreaPath,
@@ -27,8 +28,10 @@ import {
   isSmallCard,
   groupReadyIssues,
 } from '../src/autopilot-areas.mjs';
-import { coreSettings } from '../src/autopilot-core.mjs';
+import { coreSettings, coreStatus } from '../src/autopilot-core.mjs';
 import { runAutopilotLauncher } from '../src/autopilot-launcher.mjs';
+import { selectPoolLogin, markLoginExhausted } from '../src/login-pool.mjs';
+import { parseCodexLimits } from '../src/codex-limits.mjs';
 
 const intakeJobs = w => w.started.filter(job => job.role === 'intake');
 const improveJobs = w => w.started.filter(job => job.role === 'intake-improve');
@@ -819,4 +822,125 @@ test('active-intake 8: detaches companion whose claim expired or was taken over 
   const afterExpiry74 = JSON.parse(readFileSync(job74Path, 'utf8'));
   assert.equal(afterExpiry74.companions, undefined, 'expired companion #75 detached');
   assert.equal(w.labels(75).includes('pdd:working'), false, 'expired companion #75 pdd:working cleaned up');
+});
+
+test('active-intake 9: holds with clear intakeNote when only gemini is configured, and rotates shadowIntake + activeIntake across pooled codex logins on 97% Pro weekly limit or quota failure', async t => {
+  // Part A: active intake with gemini-only agent holds explicitly and surfaces intakeNote in coreStatus.
+  const wHold = await coreWorld(t, { settings: { runs: 1 } });
+  wHold.settings.intake = 'active';
+  wHold.settings.labelRequired = true;
+  wHold.settings.label = null;
+  wHold.state.agent = { id: 'gemini', kind: 'gemini', command: 'gemini' };
+  wHold.issue(80, { title: 'Fix trim edge case in src/trim.mjs', body: 'Clear bug.' });
+
+  const held = await wHold.tick();
+  assert.match(held.message, /intake held: active intake needs a codex or claude login/);
+  assert.equal(wHold.state.intakeNote, 'intake held: active intake needs a codex or claude login');
+  const statusText = coreStatus(
+    { state: wHold.state, settings: wHold.settings },
+    { root: wHold.root, reportRoot: wHold.reportRoot, now: wHold.now },
+  );
+  assert.match(statusText, /intake held: active intake needs a codex or claude login/);
+  assert.equal(intakeJobs(wHold).length, 0, 'never runs unsandboxed gemini for intake cards');
+
+  // Part B: multi-harness pool `[gemini-main, codex-1, codex-2]` where primary build agent is gemini-main:
+  // - shadowIntake skips gemini-main and rotates off codex-1 (at 97% Pro 7-day primary window) onto codex-2!
+  // - activeIntake rotates off codex-1 onto codex-2 when codex-1 fails mid-card with quota exhaustion, without locking #82 out for 6h, and gemini-main builds the ready issue!
+  const wPool = await coreWorld(t, { settings: { runs: 1 } });
+  wPool.state.agent = { id: 'gemini-main', kind: 'gemini', command: 'gemini' };
+  const poolPath = join(wPool.dir, 'pool.json');
+  const geminiHome = join(wPool.dir, '.gemini-main');
+  const codexHome1 = join(wPool.dir, '.codex-1');
+  const codexHome2 = join(wPool.dir, '.codex-2');
+  writeFileSync(poolPath, JSON.stringify({
+    reset: 'never',
+    logins: [
+      { id: 'gemini-main', kind: 'gemini', geminiCliHome: geminiHome },
+      { id: 'codex-1', kind: 'codex', codexHome: codexHome1, plan: 'pro' },
+      { id: 'codex-2', kind: 'codex', codexHome: codexHome2, plan: 'pro' },
+    ],
+  }));
+
+  let codex1Percent = 97;
+  const selectLogin = opts => selectPoolLogin(
+    {
+      cwd: wPool.cwd,
+      env: { HOME: wPool.dir, PATH: process.env.PATH, GH_TOKEN: 'ghs_must_not_leak' },
+      poolPath,
+      stateRoot: wPool.root,
+      ...(Array.isArray(opts?.allowedKinds) ? { allowedKinds: opts.allowedKinds } : {}),
+    },
+    {
+      now: wPool.now,
+      probeLogin: async () => ({ ok: true }),
+      readCodexLimits: async ({ env }) => parseCodexLimits({
+        rateLimits: {
+          planType: 'pro',
+          primary: {
+            usedPercent: env.CODEX_HOME === codexHome1 ? codex1Percent : 22,
+            windowDurationMins: 10080,
+            resetsAt: Math.floor((wPool.now() + 7200_000) / 1000),
+          },
+          secondary: null,
+          credits: { hasCredits: true },
+        },
+      }),
+    },
+  );
+  const exhaustLogin = async ({ loginId, resetAt = null, reason = 'quota', allowedKinds } = {}) => {
+    markLoginExhausted({ stateRoot: wPool.root, loginId, resetAt, reason, now: wPool.now() });
+    return selectLogin(allowedKinds ? { allowedKinds } : {});
+  };
+  const poolPorts = { selectLogin, exhaustLogin };
+
+  // 1. Shadow intake with codex-1 at 97% Pro weekly window skips gemini-main AND codex-1, starting card on codex-2 while gemini-main builds #80!
+  wPool.settings.intake = 'shadow';
+  wPool.settings.label = 'pdd:autopilot';
+  wPool.issue(80, { title: 'Build slot occupier in src/occ.mjs', body: 'Bug in src/occ.mjs.', labels: ['pdd:autopilot'] });
+  wPool.issue(81, { title: 'Fix shadow card issue in src/a.mjs', body: 'Bug in src/a.mjs.', labels: ['pdd:autopilot'] });
+  await wPool.tick(poolPorts);
+  const shadowBuild = wPool.job(80, 'build');
+  assert.ok(shadowBuild, 'build runs on primary gemini-main');
+  assert.equal(shadowBuild.command, 'gemini');
+  const shadowJob = intakeJobs(wPool).find(j => j.issue === 81);
+  assert.ok(shadowJob, 'shadowIntake started card job via pool codex login');
+  assert.equal(shadowJob.command, 'codex');
+  assert.equal(shadowJob.env.CODEX_HOME, codexHome2, 'rotated past gemini-main and 97%-limited codex-1 onto codex-2');
+  assert.equal(shadowJob.env.GEMINI_CLI_HOME, undefined, 'unrelated provider home stripped');
+  assert.equal(shadowJob.env.GH_TOKEN, undefined, 'GitHub token stripped from cardEnvironment');
+  finishCard(wPool, 81, { class: 'ready', reason: 'Clear fix.', confidence: 0.9, areas: ['src/a.mjs'], size: 'small' });
+
+  // 2. Active intake mid-job quota rotation: reset cooldowns and set codex-1 to 96% so codex-1 starts #82, then fail #82 with quota error -> rotates immediately onto codex-2 in the next tick!
+  rmSync(join(wPool.root, 'login-pool.json'), { force: true });
+  codex1Percent = 96;
+  wPool.github.close(80);
+  wPool.github.close(81);
+  wPool.settings.intake = 'active';
+  wPool.settings.labelRequired = true;
+  wPool.settings.label = null;
+  wPool.issue(82, { title: 'Fix active card issue in src/b.mjs', body: 'Clear bug in src/b.mjs.' });
+
+  await wPool.tick(poolPorts);
+  const first82 = [...intakeJobs(wPool)].reverse().find(j => j.issue === 82);
+  assert.ok(first82, 'activeIntake started #82 on codex-1 (at 96%)');
+  assert.equal(first82.env.CODEX_HOME, codexHome1);
+
+  // Simulate codex-1 hitting usage limit mid-card (writes quota message to log, exits 1 with no answer).
+  wPool.alive.delete(first82.pid);
+  writeFileSync(first82.log, '{"type":"error","message":"You have hit your usage limit. Try again later."}\n');
+  writeFileSync(first82.exit, JSON.stringify({ code: 1, signal: null, at: wPool.now() }));
+
+  // Next tick: collectActiveIntake exhausts codex-1 without setting a 6h failedAt lockout, and activeIntake immediately starts #82 on codex-2!
+  await wPool.tick(poolPorts);
+  const retry82 = [...intakeJobs(wPool)].reverse().find(j => j.issue === 82);
+  assert.notEqual(retry82.id, first82.id, '#82 retried immediately without waiting 6 hours');
+  assert.equal(retry82.env.CODEX_HOME, codexHome2, '#82 rotated onto codex-2');
+
+  // Finish #82 as ready -> next tick builds #82 using primary pool login gemini-main!
+  finishCard(wPool, 82, { class: 'ready', reason: 'Clear bug in src/b.mjs.', confidence: 0.94, areas: ['src/b.mjs'], size: 'small' });
+  await wPool.tick(poolPorts);
+  const build82 = wPool.job(82, 'build');
+  assert.ok(build82, '#82 build started after codex-2 vetted card');
+  assert.equal(build82.command, 'gemini', 'build runs on primary gemini-main login while cards ran on sandboxed codex');
+  assert.equal(build82.env.GEMINI_CLI_HOME, geminiHome);
 });

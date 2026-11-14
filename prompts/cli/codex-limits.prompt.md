@@ -22,9 +22,14 @@ for the same response normalization.
 Return exactly `{state, resetAt, usedPercent}`. States are healthy, limited or
 unknown; resetAt is epoch milliseconds or null; usedPercent is a number or null.
 Use the codex bucket in rateLimitsByLimitId when present, else rateLimits.
-A primary window at 100% or above blocks. A secondary (weekly) window at
-`weeklyStopPercent` (default 97%, finite in `(0, 100]`) or above blocks so Pro
-and credit-enabled accounts stop before paid extra credits burn. A nonblank
+A short primary window (such as 300 minutes) blocks at 100% or above. Any
+secondary window, any primary window with `windowDurationMins >= 1440` (such as
+OpenAI Pro accounts reporting their 7-day 10,080-minute weekly window in
+`primary` with `secondary: null`), or a single-window Pro or credit-enabled
+account (`secondary == null` without a shorter `windowDurationMins` when
+`planType === "pro"` or `credits.hasCredits === true`) blocks at
+`weeklyStopPercent` (default 97%, finite in `(0, 100]`) or above so Pro and
+credit-enabled accounts stop before paid extra credits burn. A nonblank
 rateLimitReachedType or `spendControlReached === true` (on the bucket or reply)
 also blocks. Preserve a block with unknown reset time.
 A window is valid only with finite usedPercent >=0; resetsAt may be null or a
