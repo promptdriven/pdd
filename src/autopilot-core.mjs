@@ -16,6 +16,7 @@ import { intakeTick, collectActiveIntake, activeReadyCards, rankReadyRows, intak
 import { issueAreas, areasOverlap, groupReadyIssues, normalizeAreaList, parseGitHubIssueUrl } from './autopilot-areas.mjs';
 import { slotCount, GUARD } from './machine-guard.mjs';
 import { isQuotaExhaustionMessage, POOL_FALLBACK_COOLDOWN_MS } from './login-pool.mjs';
+import { buildTieredAgentArgs, createPhaseTracker, extractHarnessTokens, recordPhaseSpan, resolveStepModelTier, summarizeIssuePhases, summarizeIssueTelemetry } from './autopilot-telemetry.mjs';
 
 const { interfaceBlocks, readPrompt, promptRefusal, gitFiles } = runtimePreflightSlice();
 
@@ -163,6 +164,7 @@ export function autopilotEngine(config) { return config?.autopilot?.engine === '
 export function coreSettings(config = {}, packageJson = null, machine = null) {
   const a = object(config?.autopilot) ? config.autopilot : {};
   const count = (value, fallback, min = 1) => Number.isSafeInteger(value) && value >= min ? value : fallback;
+  const modelTiering = a.modelTiering === true || a.modelTiering === false || object(a.modelTiering) ? a.modelTiering : undefined;
   return { engine: autopilotEngine(config), mode: ['off', 'observe', 'auto'].includes(a.mode) ? a.mode : 'off',
     trust: Array.isArray(a.trust) ? a.trust.filter(named) : [], runs: machine ? slotCount({ ...machine, repoRuns: a.runs }).slots : count(a.runs, 2), label: named(a.label) ? a.label.trim() : null,
     ...(a.intake !== undefined ? { intake: intakeMode(a.intake) } : {}),
@@ -170,7 +172,8 @@ export function coreSettings(config = {}, packageJson = null, machine = null) {
     decisions: ['ask', 'decide'].includes(a.decisions) ? a.decisions : 'decide',
     runtimeRepo: /^[\w.-]+\/[\w.-]+$/.test(String(a.reports?.runtimeRepo ?? '')) ? a.reports.runtimeRepo : null,
     runtimeOwner: /^[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38}$/i.test(String(a.reports?.runtimeOwner ?? '')) ? a.reports.runtimeOwner : null,
-    repairs: count(a.maxRepairs, count(a.repairs, 6, 0), 0), testCommand: named(a.testCommand) ? a.testCommand : packageJson?.scripts?.test ? 'npm test' : null };
+    repairs: count(a.maxRepairs, count(a.repairs, 6, 0), 0), testCommand: named(a.testCommand) ? a.testCommand : packageJson?.scripts?.test ? 'npm test' : null,
+    ...(modelTiering !== undefined ? { modelTiering } : {}) };
 }
 export function readCoreSettings(cwd, fs = nativeFs, machine = null) {
   return coreSettings(readJson(fs, join(cwd, 'pdd.json'), {}), readJson(fs, join(cwd, 'package.json'), null), machine);
@@ -794,8 +797,56 @@ function processWords(job, part, role, { now, settings, longest }) {
   const age = processAge({ now: () => now }, job, part), w = part?.watch, limit = Math.max(settings.maxJobHours * HOUR, 4 * (longest[role] ?? 0) * MIN);
   return `${role} ${AGO(age)}; last new thing ${w ? `${AGO(now - w.at)} ago${w.last ? ` (new ${w.last})` : ''}` : 'not seen yet'}; quiet limit ${settings.quietMinutes} min; backstop ${Math.round(limit / HOUR)} h${longest[role] ? ` (longest success here ${AGO(longest[role] * MIN)})` : ''}`;
 }
+function applyTelemetrySpan(ctx, job, span, streamEntry = null, recordedId = null) {
+  if (!object(job)) return;
+  const current = object(job.telemetry) ? job.telemetry : { issue: job.issue, repo: ctx.repo, machine: ctx.state.machine ?? null, recordedIds: [], spans: [], streams: [] };
+  const recordedIds = Array.isArray(current.recordedIds) ? current.recordedIds : [];
+  if (recordedId && recordedIds.includes(recordedId)) return;
+  const nextLedger = recordPhaseSpan(
+    { issue: job.issue, repo: ctx.repo, machine: ctx.state.machine ?? null, spans: current.spans },
+    span,
+  );
+  const nextStreams = Array.isArray(current.streams) ? [...current.streams] : [];
+  if (streamEntry?.observed) nextStreams.push(streamEntry);
+  const phases = summarizeIssuePhases({ machine: ctx.state.machine ?? null, spans: nextLedger.spans });
+  const summary = summarizeIssueTelemetry({
+    issue: job.issue,
+    repo: ctx.repo,
+    spans: { machine: ctx.state.machine ?? null, spans: nextLedger.spans },
+    streams: nextStreams,
+  });
+  job.telemetry = {
+    issue: job.issue,
+    repo: ctx.repo,
+    machine: ctx.state.machine ?? null,
+    recordedIds: (recordedId ? [...recordedIds, recordedId] : recordedIds).slice(-100),
+    spans: nextLedger.spans.slice(-100),
+    streams: nextStreams.slice(-100),
+    phases,
+    tokens: summary.tokens,
+  };
+}
+function recordPartTelemetry(ctx, job, part, role, seen = null) {
+  if (!part?.id || !object(job)) return;
+  const recordedIds = Array.isArray(job.telemetry?.recordedIds) ? job.telemetry.recordedIds : [];
+  if (recordedIds.includes(part.id)) return;
+  let info = seen;
+  if (!info) try { info = ctx.jobs.read(part); } catch { info = null; }
+  const startedAt = Number.isFinite(part.started) ? part.started : ctx.now();
+  const endedAt = Math.max(startedAt, Number.isFinite(info?.exit?.at) ? Math.min(ctx.now(), info.exit.at) : ctx.now());
+  const durationMs = processAge(ctx, job, part, endedAt);
+  const isAgentRole = SHELL_ROLES.has(role) || role === 'intake' || role === 'improve';
+  const agentKind = isAgentRole ? (part.agentKind ?? ctx.state.agent?.kind ?? null) : null;
+  let streamEntry = null;
+  if (isAgentRole && part.log) {
+    const extracted = extractHarnessTokens(readText(ctx.fs, part.log) ?? '', { agent: agentKind });
+    if (extracted.observed) streamEntry = { ...extracted, step: role };
+  }
+  applyTelemetrySpan(ctx, job, { phase: role, step: role, startedAt, endedAt, durationMs, machine: ctx.state.machine ?? null, agent: agentKind }, streamEntry, part.id);
+}
 // A process that ended with a valid result by itself (not stopped by T1 or the backstop) sets L for its role.
 function recordSuccess(ctx, job, part, role, seen) {
+  recordPartTelemetry(ctx, job, part, role, seen);
   if (!part || part.watch?.stopped || part.recorded) return;
   part.recorded = true;
   const minutes = Math.round(processAge(ctx, job, part, Math.min(ctx.now(), seen?.exit?.at ?? ctx.now())) / MIN);
@@ -923,6 +974,7 @@ async function cleanupPart(ctx, job, part, role) {
       }
       ctx.warn(`Autopilot core cleanup of #${job.issue} (${role}): ${result.legacy}`);
     }
+    if (result?.confirmed === true) recordPartTelemetry(ctx, job, part, role);
     return result?.confirmed === true;
   } catch { return false; }
 }
@@ -1027,13 +1079,41 @@ function skillsCheck(ctx, agent = ctx.state.agent, baseEnv = ctx.ports.env ?? pr
   const read = (agent?.kind === 'claude' ? [claude] : [home ? join(home, '.agents', 'skills') : null]).filter(Boolean);
   return { dir, version, read };
 }
+function coreBaseAgentCommand(agent) {
+  if (agent?.kind === 'gemini') {
+    return { command: named(agent.command) ? agent.command.trim() : 'gemini', args: ['-p', '', '--output-format', 'stream-json', '--approval-mode', 'yolo'] };
+  }
+  return agentCommand(agent);
+}
 function coreAgentCommand(agent) {
   const model = named(agent?.model) ? agent.model.trim() : undefined;
   if (agent?.kind === 'gemini') {
-    const args = ['-p', '', '--output-format', 'stream-json', '--approval-mode', 'yolo', ...(model ? ['--model', model] : [])];
-    return { command: named(agent.command) ? agent.command.trim() : 'gemini', args };
+    const base = coreBaseAgentCommand(agent);
+    return model ? { command: base.command, args: [...base.args, '--model', model] } : base;
   }
   return agentCommand(agent, model ? { model } : {});
+}
+function resolveCoreModelTiering(ctx) {
+  if (ctx.settings?.modelTiering !== undefined) return ctx.settings.modelTiering;
+  const repoTiering = ctx.state?.cwd ? readJson(ctx.fs, join(ctx.state.cwd, 'pdd.json'), {})?.autopilot?.modelTiering : undefined;
+  return repoTiering === true || repoTiering === false || object(repoTiering) ? repoTiering : null;
+}
+function resolveCoreAgentCommand(ctx, role, agent = ctx.state.agent, env = ctx.ports.env ?? process.env) {
+  const resolved = resolveStepModelTier({
+    agent: agent?.kind ?? 'codex',
+    step: role,
+    model: named(agent?.model) ? agent.model.trim() : null,
+    tiering: resolveCoreModelTiering(ctx),
+    env,
+  });
+  if (!resolved.enabled) return coreAgentCommand(agent);
+  const base = coreBaseAgentCommand(agent);
+  const tierArgs = buildTieredAgentArgs(resolved);
+  if (!tierArgs.length) return base;
+  if (agent?.kind === 'codex' && base.args.at(-1) === '-') {
+    return { command: base.command, args: [...base.args.slice(0, -1), ...tierArgs, '-'] };
+  }
+  return { command: base.command, args: [...base.args, ...tierArgs] };
 }
 function clearPoolExhausted(ctx) {
   const m = ctx.machineState();
@@ -1101,7 +1181,7 @@ function startJob(ctx, job, role, cwd, prompt, command = null, extraEnv = {}, se
   const result = join(ctx.dirs.logs, `${id}.result.json`);
   const activeAgent = command ? ctx.state.agent : (selected?.agent ?? ctx.state.agent);
   const baseEnv = (!command && selected?.env) ? selected.env : (ctx.ports.env ?? process.env);
-  const run = command ?? coreAgentCommand(activeAgent);
+  const run = command ?? resolveCoreAgentCommand(ctx, role, activeAgent, baseEnv);
   // #3231: the machine guard's priority (nice, macOS QoS, a Linux CPU list for agent roles) and Autopilot's CPU share
   // as PDD_CHECK_CPUS for every role.
   const { checkCpus, ...priority } = ctx.ports.machine?.priority?.(role) ?? {};
@@ -1345,6 +1425,8 @@ async function intake(ctx, rows) {
         ctx.warn(`Autopilot core skipped #${n}: ${error.message}`); ctx.skip.add(n);
         await ctx.git(['branch', '-D', branch]).catch(() => {}); continue;
       }
+      const intakeTracker = createPhaseTracker({ issue: n, repo: ctx.repo, machine: state.machine ?? null, now: ctx.now });
+      intakeTracker.startPhase('intake', { step: 'intake' });
       let claim = null;
       try { claim = await claimIssue(ctx, n); } catch (error) { ctx.warn(`Autopilot core claim of #${n} failed: ${error.message}`); }
       if (!claim) { await removeTree(ctx, worktree); await ctx.git(['branch', '-D', branch]).catch(() => {}); continue; }
@@ -1428,6 +1510,7 @@ async function intake(ctx, rows) {
         await closeOtherPrs(ctx, n, branch);
         if (briefError) throw briefError;
         job.agent = startJob(ctx, job, 'build', worktree, result => buildPrompt(ctx, job, result, openIssues), null, {}, step?.selected ?? null);
+        applyTelemetrySpan(ctx, job, intakeTracker.finishPhase('intake'), null, `intake:${job.id}`);
         ctx.saveJob(job); ctx.counts.started++; free--;
         if (activeMode) {
           if (effectiveAreas.length) busyJobs.push({ issue: n, areas: effectiveAreas });
@@ -2392,7 +2475,8 @@ function evidenceRecord(ctx, job, { lines = [], claims = [], ci = null, review =
       kinds: Object.fromEntries(RUN_KINDS.filter(kind => (v.files?.[kind] ?? []).length).map(kind => [kind, v.result?.[kind] ? { state: v.result[kind].state, tests: v.result[kind].tests, pass: v.result[kind].pass, fail: v.result[kind].fail, skipped: v.result[kind].skipped, files: (v.result[kind].files ?? []).map(f => ({ file: f.file, state: f.state, code: f.code, tests: f.tests, pass: f.pass, fail: f.fail, skipped: f.skipped })), failed: v.result[kind].failed ?? [] } : { state: v.state, files: v.files[kind].map(file => ({ file })) }])) } : null,
     suite: suite ? { state: suite.state, head: job.suite?.head ?? null, exit: job.suite?.agent ? ctx.jobs.read(job.suite.agent).exit?.code ?? null : null, log: job.suite?.agent?.log ? basename(job.suite.agent.log) : null } : null,
     ci: ci ? { state: ci.state } : null, review: review ? { state: review.state } : null,
-    claimed: job.evidence ?? null, evidence: honestEvidence(job), notCovered: notCovered(job, lines, ctx) };
+    claimed: job.evidence ?? null, evidence: honestEvidence(job), notCovered: notCovered(job, lines, ctx),
+    ...(job.telemetry ? { telemetry: { phases: job.telemetry.phases, tokens: job.telemetry.tokens } } : {}) };
 }
 // B3 (final battle plan): what the engine did not check at this head, in one list.
 function notCovered(job, lines = [], ctx = null) {
@@ -2802,6 +2886,7 @@ async function runtimeResend(ctx, job, pr) {
       const watch = await watchProcess(ctx, job, w.agent, 'runtime');
       if (watch.state === 'running') return hold('sending', w.agent.id);
     }
+    recordPartTelemetry(ctx, job, w.agent, 'runtime', seen);
     const summary = runtimeSummary(ctx.fs, w.agent.log), rows = Array.isArray(summary?.rows) ? summary.rows : [], outcomes = storyOutcomes(w.stories, rows);
     const why = safeLine(summary?.summary_line ?? (seen.state === 'running' ? 'the run made nothing new and was stopped' : `exit ${seen.exit?.code ?? seen.exit?.signal ?? 'unknown'}, no summary`), 200);
     const lineFor = story => { const o = outcomes.get(story); return o.state === 'pass' ? `Runtime: PASS (${story}${o.total ? `, ${o.passed}/${o.total} checks` : ''})`
@@ -3467,6 +3552,8 @@ async function nearChange(ctx, job, cwd, mergeBase, tip, pr) {
 }
 async function finishMerge(ctx, job, read = null) {
   const { gh, repo } = ctx;
+  const mergeTracker = createPhaseTracker({ issue: job.issue, repo, machine: ctx.state.machine ?? null, now: ctx.now });
+  mergeTracker.startPhase('merge', { step: 'merge' });
   if (!(read ?? await gh.ok('GET', `repos/${repo}/pulls/${job.pr}`)).merged) { Object.assign(job, { lastError: 'the merge is not confirmed', lastErrorStep: 'merge' }); ctx.saveJob(job); return; }
   job.lane = null; ctx.laneFreed = true; ctx.saveJob(job);
   const closeMembers = [job.issue];
@@ -3483,6 +3570,7 @@ async function finishMerge(ctx, job, read = null) {
     if (labelsOf(issue).includes('pdd:working')) await gh.call('DELETE', `repos/${repo}/issues/${member}/labels/${encodeURIComponent('pdd:working')}`);
     if (labelsOf(issue).includes(WOULD_MERGE)) await gh.call('DELETE', `repos/${repo}/issues/${member}/labels/${encodeURIComponent(WOULD_MERGE)}`);
   }
+  applyTelemetrySpan(ctx, job, mergeTracker.finishPhase('merge'), null, `merge:${job.head ?? job.pr}`);
   ctx.counts.merged++; ctx.produced();
   await finishLocal(ctx, job, 'merged', `merged PR #${job.pr}`);
 }
@@ -3642,6 +3730,7 @@ async function issueStop(ctx, job, hang) {
 }
 // A build, repair or conflict agent that T1 stopped, or that ended with no result: service, issue or machine.
 async function agentStop(ctx, job, seen, quiet) {
+  recordPartTelemetry(ctx, job, job.agent, job.role, seen);
   const service = serviceProblem(ctx, job.agent), hang = service ? null : repeatedHang(job);
   if (hang) return issueStop(ctx, job, hang);
   if (service && isQuotaExhaustionMessage(service) && ctx.ports.exhaustLogin) {
@@ -4182,7 +4271,8 @@ async function finishLocal(ctx, job, outcome, text) {
       ...(job.legacyCleanup?.length ? { legacyCleanup: job.legacyCleanup } : {}),
       ...(job.end?.cause?.ask ? { ask: job.end.cause.ask } : {}), ...(job.decided ? { decided: oneLine(job.decided.question, 300) } : {}),
       ...(job.end?.cause?.poolExhausted ? { poolExhausted: true } : {}),
-      ...(outcome === 'released' && job.end?.cause?.counted ? { noResult: true } : {}), ...(outcome === 'ended' ? { reset: true } : {}), ...(job.end?.cause?.owner ? { owner: job.end.cause.owner } : {}) }));
+      ...(outcome === 'released' && job.end?.cause?.counted ? { noResult: true } : {}), ...(outcome === 'ended' ? { reset: true } : {}), ...(job.end?.cause?.owner ? { owner: job.end.cause.owner } : {}),
+      ...(job.telemetry ? { telemetry: { phases: job.telemetry.phases, tokens: job.telemetry.tokens } } : {}) }));
   } finally {
     if (confirmed) try { ctx.fs.rmSync(join(ctx.dirs.jobs, `${job.issue}.json`), { force: true }); }
     catch (error) { nativeFs.rmSync(join(ctx.dirs.jobs, `${job.issue}.json`), { force: true }); ctx.warn(`Autopilot core job file of #${job.issue}: ${error.message}`); }
@@ -4500,7 +4590,19 @@ export async function tickCore(input, ports) {
   }
   const hold = b?.state === 'low' ? `intake held: the GitHub budget is low (this machine used ${b.used} of ${b.allowed} calls in the last hour, a ${b.share ?? 30}% share for ${b.machines} machine(s) with live claims)`
     : rows ? await intake(ctx, rows) : 'intake skipped: the issue list is unavailable';
-  try { await intakeTick(ctx, rows); } catch (error) { ctx.warn(`Autopilot intake (${intakeMode(settings.intake)}) skipped this tick: ${error.message}`); }
+  try {
+    const intakeTier = resolveStepModelTier({
+      agent: ctx.state.agent?.kind ?? 'codex',
+      step: 'intake',
+      model: ctx.state.agent?.model ?? null,
+      tiering: resolveCoreModelTiering(ctx),
+      env: ctx.ports.env ?? process.env,
+    });
+    const intakeCtx = intakeTier.enabled && ctx.state.agent
+      ? { ...ctx, state: { ...ctx.state, agent: { ...ctx.state.agent, model: intakeTier.model } } }
+      : ctx;
+    await intakeTick(intakeCtx, rows);
+  } catch (error) { ctx.warn(`Autopilot intake (${intakeMode(settings.intake)}) skipped this tick: ${error.message}`); }
   if (ctx.peers.size) { const m = ctx.machineState(); ctx.saveMachine({ ...m, peers: { ...m.peers, ...Object.fromEntries(ctx.peers) } }); }
   const busy = readJobs(ctx.fs, ctx.root).filter(holdsSlot).length, c = ctx.counts;
   return { exitCode: 0, message: `Autopilot core${settings.mode === 'observe' ? ' (observe: no merge)' : ''}: ${c.started} started, ${c.merged} merged, ${c.wouldMerge ? `${c.wouldMerge} would merge, ` : ''}${c.ended} ended, ${c.repairs} repair(s); ${busy} of ${settings.runs} slots busy${hold ? `; ${hold}` : ''}.` };
