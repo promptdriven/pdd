@@ -1,4 +1,5 @@
 {
+  "schema_version": "prompt-runtime.program-scenario.v1",
   "story_path": "user_stories/test-cache.md",
   "criteria": [
     {
@@ -49,10 +50,11 @@
   "initial_world": {},
   "steps": [
     {
-      "id": "native-cache",
+      "step_id": "native-cache",
       "entry_path": "prompts/cli/runtime-client.prompt.md",
       "operation": "runCheck",
-      "input": {}
+      "input": {},
+      "checks": []
     }
   ]
 }
