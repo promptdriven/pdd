@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { resolveWorkflowRepository } from './workflow-github.mjs';
+import { resolveWorkflowRepository, sameRepo } from './workflow-github.mjs';
 import { nativeGithubCounter } from './github-calls.mjs';
 
 const MODES = ['off', 'observe', 'auto'];
@@ -13,8 +13,7 @@ const object = value => value !== null && typeof value === 'object' && !Array.is
 const success = status => Number.isInteger(status) && status >= 200 && status < 300;
 const clean = value => String(value).replace(/[\x00-\x1f\x7f]/g, '');
 const named = value => typeof value === 'string' && value.trim().length > 0;
-const sameName = (a, b) => typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();
-const unique = names => names.filter((name, index) => named(name) && names.findIndex(other => sameName(other, name)) === index);
+const unique = names => names.filter((name, index) => named(name) && names.findIndex(other => sameRepo(other, name)) === index);
 // The same JSON value, whatever the key order.
 const canonical = value => JSON.stringify(value ?? null, (key, item) => object(item)
   ? Object.fromEntries(Object.keys(item).sort().map(name => [name, item[name]])) : item);
@@ -104,7 +103,7 @@ async function settingsPulls(github, repository, base) {
     const answer = await ask(github, { method: 'GET', path: `repos/${repository}/pulls?state=open&base=${encodeURIComponent(base)}&per_page=100&page=${page}` });
     if (!success(answer?.status) || !Array.isArray(answer.body)) throw new Stop(`GitHub did not list the open PRs (HTTP ${answer?.status})`);
     found.push(...answer.body.filter(pull => object(pull) && Number.isInteger(pull.number) && typeof pull.html_url === 'string'
-      && typeof pull.head?.ref === 'string' && pull.head.ref.startsWith(PREFIX) && String(pull.head.repo?.full_name).toLowerCase() === repository.toLowerCase()));
+      && typeof pull.head?.ref === 'string' && pull.head.ref.startsWith(PREFIX) && sameRepo(pull.head.repo?.full_name, repository)));
     if (answer.body.length < 100) break;
   }
   return found.sort((a, b) => b.number - a.number);
@@ -122,10 +121,10 @@ function apply({ action, mode, names }, value) {
   }
   const list = object(value) && Array.isArray(value.trust) ? value.trust : [];
   if (action === 'trust') {
-    const added = unique(names).filter(name => !list.some(item => sameName(item, name)));
+    const added = unique(names).filter(name => !list.some(item => sameRepo(item, name)));
     return added.length ? { value: { ...(value ?? { mode: 'off' }), trust: [...list, ...added] }, message: `Add ${added.map(clean).join(', ')} to the PDD Autopilot trust list` } : { value };
   }
-  const kept = list.filter(item => !sameName(item, names[0]));
+  const kept = list.filter(item => !sameRepo(item, names[0]));
   return kept.length < list.length ? { value: { ...value, trust: kept }, message: `Remove ${clean(names[0])} from the PDD Autopilot trust list` } : { value };
 }
 
@@ -302,8 +301,8 @@ export async function publishAutopilotSettings({ cwd, action, mode, names, retry
 // The commands that make the GitHub copy equal to this checkout.
 function commands(remote, local) {
   const theirs = namesOf(remote), ours = namesOf(local);
-  const add = unique(ours.filter(name => !theirs.some(item => sameName(item, name))));
-  const remove = unique(theirs.filter(name => !ours.some(item => sameName(item, name))));
+  const add = unique(ours.filter(name => !theirs.some(item => sameRepo(item, name))));
+  const remove = unique(theirs.filter(name => !ours.some(item => sameRepo(item, name))));
   return [...(modeOf(remote) === modeOf(local) ? [] : [`pdd autopilot ${modeOf(local)}`]),
     ...(add.length ? [`pdd autopilot trust ${add.map(clean).join(' ')}`] : []), ...remove.map(name => `pdd autopilot untrust ${clean(name)}`)];
 }

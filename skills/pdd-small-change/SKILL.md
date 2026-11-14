@@ -2,7 +2,7 @@
 name: pdd-small-change
 description: PDD small-change workflow. Use when the change stays outside PDD (docs, guides, packages, config, CI, lockfiles or test maintenance — never prompts, Stories or product code), also when written as a bug. Plan it, make it, verify it, one PR.
 metadata:
-  pdd-skills: 0.1.31
+  pdd-skills: 0.1.32
 ---
 
 # PDD small change

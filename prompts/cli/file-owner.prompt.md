@@ -225,6 +225,22 @@ sorted eligible production code paths with a `.ext` extension in `allPaths` and
   non-`.prompt.md` repository path inside `test/`, `tests/` or `__tests__/` at
   any depth, or whose file name matches `*.test.*`, `*.spec.*`, `test_*.*` or
   `*_test.*`.
+- `isTestPromptPath(path)`: return `true` when `path` is a canonical
+  `.prompt.md` repository path inside `prompts/test/`, `prompts/tests/` or
+  `prompts/__tests__/`, inside `test/`, `tests/` or `__tests__/` outside a
+  `fixtures/` subfolder, at any depth, or whose file name matches
+  `*.test.prompt.md` or `*.spec.prompt.md` (any letter case).
+- `findTestPromptViolations({root, promptPaths = [], checkPaths = []}, ports = {})`:
+  inspect canonical `promptPaths` and `checkPaths` with the same Git-visible
+  regular-file reader (`ports.files`, `ports.read`, never opening untracked,
+  symlinked or out-of-repo files from disk). Return `{ok, violations}`, with
+  `ok` equal to `violations.length === 0`, where each violation is
+  `{kind, prompt, targets, message}` reporting `test-prompt-path` for any prompt
+  satisfying `isTestPromptPath`, `test-file-owned` for any `isTestOwnedPath`
+  file in `checkPaths` claimed by a binding or `Generated from` header, and
+  `test-file-claim` for any prompt in `promptPaths` claiming `isTestOwnedPath`
+  targets through `pdd-bindings.json`, Git-visible test headers or
+  `promptClaims`.
 - `resolveOwners({paths, bindings, heads, prompts})`: pure. `paths` is the list
   of canonical repository paths to answer, in order; a repeated path is answered
   once, at its first place. `bindings` is the text of `pdd-bindings.json`, or
@@ -277,10 +293,19 @@ it, print one line for each path:
   `PROMPT header uses the whole-file hash; current is EXPECTED`. An `unknown`
   state adds no line.
 
-Return 0. The answer is an inventory, not a check: an uncertain or missing owner
-is no error. Before returning 0 (in both text and `--json` modes, leaving stdout
-unchanged), emit a non-blocking warning to stderr whenever a prompt claims
-ownership of a test file (`isTestOwnedPath`):
+Return 0 unless a misplaced test prompt (`isTestPromptPath`) is queried or
+claims a requested file. When any requested path in `paths` satisfies
+`isTestPromptPath(path)`, write
+`Error: misplaced test prompt: PROMPT. Prompts own production modules, not test files; delete PROMPT and keep tests in test/.`
+to stderr; when any resolved row in `result.files` has an owner in `row.owners`
+satisfying `isTestPromptPath(owner)` not already reported above, write
+`Error: misplaced test prompt: PATH is claimed by OWNER (SOURCE). Prompts own production modules, not test files; delete OWNER and keep tests in test/.`
+to stderr, print the normal text or `--json` stdout, and return 1.
+
+Otherwise the answer is an inventory: an uncertain or missing owner is no
+error. Before returning 0 (in both text and `--json` modes, leaving stdout
+unchanged), emit a non-blocking warning to stderr whenever an ordinary prompt
+claims ownership of a test file (`isTestOwnedPath`):
 
 - for each resolved row in `result.files` with `owners.length > 0` and
   `isTestOwnedPath(row.path)`: write `Warning: misplaced prompt owner: PATH is claimed by OWNERS (SOURCE). Prompts own production modules, not test files.`

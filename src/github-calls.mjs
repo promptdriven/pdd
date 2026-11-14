@@ -1,9 +1,9 @@
 // Generated from prompts/cli/github-calls.prompt.md (sha256: 0f7266eabf6a935883bcb542a1a1e4608121932d622abc73d438a2326202458b).
 import * as nativeFs from 'node:fs';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { recordCostGithub } from './cost-ledger.mjs';
+import { recordCostGithub, shortHash } from './cost-ledger.mjs';
 
 export const GITHUB_PURPOSES = ['dependencies', 'claims', 'issues', 'pulls', 'writes', 'setup', 'other'];
 export const GITHUB_SHARE = 30, GITHUB_FLOOR = 1000;
@@ -16,7 +16,11 @@ const VALUE_OPTIONS = new Set(['-X', '--method', '-H', '--header', '-f', '--raw-
 const FIELD_OPTIONS = new Set(['-f', '--raw-field', '-F', '--field', '--input']);
 const REPOSITORY = /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 const finite = value => typeof value === 'number' && Number.isFinite(value);
-const hash = text => createHash('sha256').update(text).digest('hex').slice(0, 20);
+const writeAtomic = (fs, file, text) => {
+  fs.mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+  const temp = `${file}.${randomUUID()}.tmp`;
+  fs.writeFileSync(temp, text, { mode: 0o600 }); fs.renameSync(temp, file);
+};
 
 // The REST or GraphQL route of one gh command. gh's own commands (pr, issue, repo, auth) use GraphQL.
 export function githubCall(args = []) {
@@ -105,7 +109,7 @@ function readLines(fs, file) {
 
 // The local ledger of one repository on this machine: one JSON line for each call.
 export function githubLedger({ root, repository, fs = nativeFs }) {
-  const repo = String(repository).toLowerCase(), file = join(ledgerFolder(root), `${hash(repo)}.jsonl`);
+  const repo = String(repository).toLowerCase(), file = join(ledgerFolder(root), `${shortHash(repo)}.jsonl`);
   return {
     file, repository: repo,
     record(entry) {
@@ -120,10 +124,8 @@ export function githubLedger({ root, repository, fs = nativeFs }) {
     compact(now) {
       try {
         const entries = readLines(fs, file);
-        if (!entries.some(entry => entry.at <= now - KEEP)) return;
-        const temp = `${file}.${randomUUID()}.tmp`;
-        fs.writeFileSync(temp, entries.filter(entry => entry.at > now - KEEP).map(entry => `${JSON.stringify(entry)}\n`).join(''), { mode: 0o600 });
-        fs.renameSync(temp, file);
+        if (entries.some(entry => entry.at <= now - KEEP))
+          writeAtomic(fs, file, entries.filter(entry => entry.at > now - KEEP).map(entry => `${JSON.stringify(entry)}\n`).join(''));
       } catch { /* best effort */ }
     },
   };
@@ -241,7 +243,7 @@ export function githubStatusLine({ usage, machine = usage, budget }) {
 // it is then, so the tick and the pdd commands keep each other's entries: an entry stays while it was used in the
 // last day, and the newest used entries stay within the count and size bounds.
 export function githubEtagCache({ root, repository, fs = nativeFs, now = Date.now }) {
-  const file = join(ledgerFolder(root), `${hash(String(repository).toLowerCase())}.etags.json`);
+  const file = join(ledgerFolder(root), `${shortHash(String(repository).toLowerCase())}.etags.json`);
   let saved, used = new Map();
   const readFile = () => {
     try { const value = JSON.parse(fs.readFileSync(file, 'utf8')); return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; } catch { return {}; }
@@ -268,12 +270,7 @@ export function githubEtagCache({ root, repository, fs = nativeFs, now = Date.no
         if (size > ETAG_BYTES) break;
         kept[endpoint] = entry;
       }
-      try {
-        fs.mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-        const temp = `${file}.${randomUUID()}.tmp`;
-        fs.writeFileSync(temp, JSON.stringify(kept), { mode: 0o600 });
-        fs.renameSync(temp, file);
-      } catch { /* A lost cache only costs counted reads. */ }
+      try { writeAtomic(fs, file, JSON.stringify(kept)); } catch { /* A lost cache only costs counted reads. */ }
       saved = kept; used = new Map();
     },
   };

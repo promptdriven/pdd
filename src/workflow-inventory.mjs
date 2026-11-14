@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 const exec = promisify(callbackExec);
 const MAX_FILES = 1000, MAX_BLOB = 1024 * 1024, MAX_BYTES = 16 * MAX_BLOB, BUDGET = 12000;
 const BLOB_REASONS = ['candidate blob exceeds 1 MiB', 'binary candidate blob', 'non-UTF-8 candidate blob'];
+const OPEN_BRACKET = { ')': '(', ']': '[', '}': '{' };
 const DISCLAIMER = 'Static inventory only; this inventory did not run tests.';
 const sha = value => typeof value === 'string' && /^(?:[a-f\d]{40}|[a-f\d]{64})$/i.test(value);
 const size = value => [...value].length;
@@ -86,7 +87,7 @@ function declarationSkip(source) {
         return Boolean(value?.name && value.end === match[2].length);
       });
     } else if (')]}'.includes(c)) {
-      if (nesting.pop() !== {')':'(',']':'[','}':'{'}[c]) return false;
+      if (nesting.pop() !== OPEN_BRACKET[c]) return false;
       property += c;
     } else if (c === ',' && !nesting.length) { properties.push(property); property = ''; }
     else property += c;
@@ -143,7 +144,7 @@ function declarationBody(source) {
       if ('([{'.includes(c)) stack.push(c);
       else if (')]}'.includes(c)) {
         if (!stack.length) return { body: source.slice(bodyStart, at), multiline: false };
-        if (stack.pop() !== {')':'(',']':'[','}':'{'}[c]) return { body: '', multiline: false };
+        if (stack.pop() !== OPEN_BRACKET[c]) return { body: '', multiline: false };
         if (block && !stack.length) return { body: source.slice(bodyStart, at), multiline: false };
       } else if (c === ',' && !stack.length) return { body: source.slice(bodyStart, at), multiline: false };
     }
@@ -159,7 +160,7 @@ function declarationBody(source) {
       if (c === '{' && /^(?:async\s+)?function(?:\s*\*)?(?:\s+[\w$]+)?\s*\([\s\S]*\)$/.test(code.slice(argumentStart, at).trim())) return bodyAt(at);
     }
     if ('([{'.includes(c)) nesting.push(c);
-    else if (')]}'.includes(c) && nesting.pop() !== {')':'(',']':'[','}':'{'}[c]) break;
+    else if (')]}'.includes(c) && nesting.pop() !== OPEN_BRACKET[c]) break;
   }
   return { body: '', multiline: false };
 }
@@ -322,16 +323,15 @@ export function analyzeTestChanges({files}) {
   selected.sort((a,b)=>(a.newPath||a.oldPath)<(b.newPath||b.oldPath)?-1:(a.newPath||a.oldPath)>(b.newPath||b.oldPath)?1:0);
   for(const file of selected){
     const path=file.oldPath&&file.newPath&&file.oldPath!==file.newPath?`${quoted(file.oldPath)} → ${quoted(file.newPath)}`:quoted(file.newPath||file.oldPath);
-    if(file.unavailableReason){
-      const suffix=`${path} unavailable (${quoted(file.unavailableReason)}).`;
+    const pushUnavailable = reason => {
+      const suffix=`${path} unavailable (${quoted(reason)}).`;
       counts.push(`Tests vs base: ${suffix}`);summaries.push(counts.at(-1));
-      assertions.push(`Changed assertions in kept tests: ${suffix}`);skips.push(`New skips: ${suffix}`);continue;
-    }
+      assertions.push(`Changed assertions in kept tests: ${suffix}`);skips.push(`New skips: ${suffix}`);
+    };
+    if(file.unavailableReason){pushUnavailable(file.unavailableReason);continue;}
     const oldCases=cases(file.before,file.oldLang),newCases=cases(file.after,file.newLang);
     if (dynamicInventory(file.before,file.oldLang,oldCases) || dynamicInventory(file.after,file.newLang,newCases)) {
-      const suffix=`${path} unavailable (${quoted('unknown dynamic test inventory')}).`;
-      counts.push(`Tests vs base: ${suffix}`); summaries.push(counts.at(-1));
-      assertions.push(`Changed assertions in kept tests: ${suffix}`); skips.push(`New skips: ${suffix}`); continue;
+      pushUnavailable('unknown dynamic test inventory'); continue;
     }
     const before=oldCases.filter(c=>!c.suite),after=newCases.filter(c=>!c.suite);
     const oldMap=new Map(oldCases.map(c=>[JSON.stringify([c.suite,key(c)]),c])),newMap=new Map(after.map(c=>[key(c),c]));

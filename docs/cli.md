@@ -1,6 +1,6 @@
 # CLI reference
 
-This page lists every command of pdd 0.1.31, as `pdd --help` shows it. A test (`test/docs-commands.test.mjs`) checks that each command form of the help is on this page.
+This page lists every command of pdd 0.1.32, as `pdd --help` shows it. A test (`test/docs-commands.test.mjs`) checks that each command form of the help is on this page.
 
 You need the pdd command only for runs with PRs, for `pdd test`, `pdd lint`, `pdd simulate` and `pdd approve`. Install the skills with `npx skills add promptdriven/pdd` (add `-g` for all your projects), and set up a repo with the `pdd-setup` skill in your agent. For simulations that your agent drives, use the Try tools in `pdd mcp`. Then use a PDD skill: `pdd-feature`, `pdd-bug`, `pdd-small-change`, `pdd-product` or `pdd-prompting`. Call a skill with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code (or ask for it by name). See [Install](USAGE.md#2-install).
 
@@ -182,7 +182,7 @@ Autopilot opens no chat and needs no Herdr.
 | Command | What it does |
 |---|---|
 | `pdd autopilot doctor` | Read-only prerequisite checks, one line per item. A WARN or FAIL line also gives a fix command. No GitHub writes or AI calls. Exit 1 for a required failure, 0 when only warnings remain |
-| `pdd autopilot start [--runs N] [--checks N] [--label NAME] [--mode auto\|observe\|off] [--report file\|draft\|off] [--decisions ask\|decide] [--intake off\|shadow] [--share PERCENT]` | Run doctor, check the sign-ins, start the user timer and run the first tick now. The timer runs a tick every 10 minutes. `--label NAME` sets the opt-in label, for example `pdd:autopilot`: Autopilot takes only the issues with this label. `--mode`, `--report`, `--decisions` and `--intake` set this machine's mode, report mode, [decision mode](#core-engine) and [intake mode](#intake-cards-shadow) for this repo. These machine values win over `pdd.json`, and a later start without them keeps them. The report mode is `draft` unless you choose `--report file`. `--share PERCENT` (1 to 100, default 50) saves the part of this machine's CPU and memory that Autopilot may use; a later start without it keeps it (see [the machine guard](#core-engine)). `--runs N` and `--checks N` save this machine's run and heavy-check limits; a start without them removes them |
+| `pdd autopilot start [--runs N] [--checks N] [--label NAME] [--mode auto\|observe\|off] [--report file\|draft\|off] [--decisions ask\|decide] [--intake off\|shadow\|active] [--share PERCENT] [--agent codex\|claude\|gemini\|agy] [--pool PATH] [--auto-update release\|main\|off]` | Run doctor, check the sign-ins, start the user timer and run the first tick now. The timer runs a tick every 10 minutes. `--label NAME` sets the opt-in label, for example `pdd:autopilot`: Autopilot takes only the issues with this label unless `--intake active` selects vetted ready issues without a label. `--mode`, `--report`, `--decisions` and `--intake` set this machine's mode, report mode, [decision mode](#core-engine) and [intake mode](#intake-cards-shadow) for this repo. These machine values win over `pdd.json`, and a later start without them keeps them. The report mode is `draft` unless you choose `--report file`. `--share PERCENT` (1 to 100, default 50) saves the part of this machine's CPU and memory that Autopilot may use; a later start without it keeps it (see [the machine guard](#core-engine)). `--agent` sets or replaces this machine's coordinator agent and sign-in profile; `--pool PATH` sets or replaces this machine's local multi-harness login pool JSON path (or `off` for one login). `--auto-update release\|main\|off` (default `release`) updates a user-owned global `pdd` install and its PDD skills between ticks when no job is publishing or merging. `--runs N` and `--checks N` save this machine's run and heavy-check limits; a start without them removes them |
 | `pdd autopilot stop` | Save this repo as disabled on this machine, stop its timer and its intake card jobs, and let the current step finish |
 | `pdd autopilot audit RUN PR` | Audit a confirmed automatic merge once with a fresh configured agent. Save OK, CONCERN or BAD and the separate revert recommendation with the run. Post the evidence once on the issue. BAD opens a revert PR only when recommended; otherwise it keeps the merge and reopens the issue with the missing parts. One decision alert states the recommendation and choices. Unknown external outcomes require inspection before any retry. |
 | `pdd autopilot check-base RUN PR` | Check the saved automatic base, PR target, current default branch and newest release before a merge or after it. This command reads only. |
@@ -225,11 +225,13 @@ The first start of a repo on this machine selects the agent. It tries the agent 
 the session that runs the command first: Claude Code when you run it from Claude
 Code, Codex when you run it from Codex. Then it tries Codex, Claude Code, agy and
 Gemini, in that order, and takes the first one that is signed in. This check makes
-no model call. Later starts on this machine keep that agent, also after
-`pdd autopilot stop`. The core needs a Codex or Claude agent. With another agent,
-the tick claims no issue. To select Codex, sign in to Codex and run the first
-`pdd autopilot start` from Codex or from a plain terminal. From a Claude Code
-session, run `env -u CLAUDECODE pdd autopilot start`.
+no model call. Later starts without an account flag keep that saved agent, also
+after `pdd autopilot stop`. To switch the saved account or agent, pass
+`--agent codex|claude|gemini|agy`, `--pool PATH` or a different agent config folder
+(`CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `GEMINI_CLI_HOME` or `ANTIGRAVITY_APP_DATA_DIR`)
+to `pdd autopilot start`. The core runs Codex, Claude, Gemini and agy headless jobs.
+From a Claude Code session, run `env -u CLAUDECODE pdd autopilot start` or pass
+`--agent codex` to select Codex.
 
 Linux uses a systemd user timer; macOS uses a LaunchAgent. No process runs between
 ticks. On Linux, start warns when user-session lingering is off or unavailable:
@@ -296,10 +298,23 @@ Before the tick claims an issue for a Codex agent, it reads the usage of the sav
 Codex profile. The read starts a short app-server connection and uses only
 `initialize`, `initialized` and `account/rateLimits/read`. It makes no model call.
 It does not spend, request credits, consume a usage reset, change sign-in or log
-out an account. A reached limit holds intake: the tick claims no issue and says
-`intake held: the agent is not ready (sign-in or usage limit); no issue was
-claimed`. Jobs that run go on. Unknown usage does not hold intake. Other agent
-kinds have no usage read.
+out an account. A primary window at 100%, a weekly window at 97% (protecting Pro
+and credit-enabled accounts before paid extra credits burn), or a reached rate or
+spend-control limit holds intake: with one account, the tick claims no issue and
+says `intake held: the agent is not ready (sign-in or usage limit); no issue was
+claimed`. Jobs that run go on. Unknown usage does not hold a standard single-account
+intake.
+
+To rotate across local logins on one machine (`codex`, `gemini`, `agy`, `claude`),
+save an ordered `logins` array in `~/.config/pdd/pool.json` or `~/.pdd/pool.json`
+(or pass `pdd autopilot start --pool PATH`). Each entry names only a local CLI and
+profile folder (`codexHome`, `claudeConfigDir`, `geminiCliHome` or `appDataDir`),
+with zero tokens in `pool.json` and `reset: "never"`. When a login hits the 97%
+weekly stop line or a quota or rate limit, Autopilot puts that login on cooldown
+until its reset time (or a 30-minute retry window) and rotates in place to the next
+healthy login without counting an issue strike. When every login in the pool is on
+cooldown, Autopilot pauses intake with one deduplicated alert naming the earliest
+reset time and wakes when a login resets.
 
 Malformed protocol frames stop the connection and report unknown usage. The read
 waits at most one second for cleanup after it selects its result. It sends SIGTERM
@@ -739,7 +754,7 @@ The agent runs these from the run's worktree. pdd finds the run from that folder
 |---|---|
 | `pdd`, `pdd --help`, `pdd -h`, `pdd help` | Show the commands and the full paths of the installed Prompting guide and RUNBOOK |
 | `pdd help prompting` | Show how to write a prompt, a Story and its test, which commands check them, and the full paths of the Prompting guide and RUNBOOK |
-| `pdd --version` | Print the version, `0.1.31`. When the PDD skills that your agent finds are older, also print the update command on stderr |
+| `pdd --version` | Print the version, `0.1.32`. When the PDD skills that your agent finds are older, also print the update command on stderr |
 | `pdd -V` | Same version and local diagnostics as `pdd --version` |
 | `pdd -VV` | Print the local CLI version, the interpreter's full build identifier and its supported interface, test and app-map format IDs. Use existing gh sign-in without prompting; unavailable metadata prints `PDD interpreter: unknown` and exits 0 |
 | `pdd completion bash\|zsh` | Print a shell completion script. It does not change your shell files |
@@ -1273,6 +1288,7 @@ that the core posts are redacted for secrets and cut in length.
 | `reports.runtimeOwner` | GitHub login to assign Runtime problem reports filed in `reports.runtimeRepo`. Without it, reports have no assignee | none |
 | `maxRepairs` | Safety cap of repair jobs for one PR (the old key `repairs` still works). Repairs go on while they make progress: see below | 6 |
 | `testCommand` | Full test command that runs on the PR head, in a clean checkout. With `package-lock.json` and listed dependencies, `npm ci --ignore-scripts` runs first | `npm test` when `package.json` has a test script |
+| `modelTiering` | Opt-in worker and reviewer model routing (`true`, `false`, or `{enabled, worker, reviewer, models, efforts, overrideExplicitModel}`). Also enabled on one machine with `PDD_MODEL_TIERING=1` (with optional `PDD_WORKER_MODEL`, `PDD_REVIEWER_MODEL`, `PDD_WORKER_EFFORT`, `PDD_REVIEWER_EFFORT` overrides). Worker roles (`intake`, `build`, `repair`, `conflict`) use the worker profile (`medium` effort by default) and `review` uses the reviewer profile (`high` effort by default). Completed jobs save per-phase wall-clock durations and harness token totals in `history.jsonl` and the head evidence record | off: default agent command with no model or effort override |
 
 **The machine guard.** Autopilot never takes over a person's machine. It may use a
 share of the machine's CPU and memory, for all repositories on the machine together:
@@ -1550,8 +1566,10 @@ Runtime cause.
 
 ### Intake cards (shadow)
 
-`pdd autopilot start --intake shadow` turns on intake cards for this
-repo on this machine; `--intake off` (the default) turns them off. A later start
+`pdd autopilot start --intake shadow` turns on shadow intake cards for this
+repo on this machine; `--intake active` turns on active card selection, bounded
+read-only spec refinement and small-issue grouping (no opt-in label required);
+`--intake off` (the default) turns intake cards off. A later start
 without `--intake` keeps the saved value. In shadow mode each core tick first
 checks native facts of each open issue in scope (the opt-in label, no report
 issues): an assignee, an open native blocked-by link, open sub-issues, a label

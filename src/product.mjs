@@ -9,11 +9,11 @@ import { promisify } from 'node:util';
 import { listRuns } from './workflow-runs.mjs';
 import { workflowAgentEntry } from './workflow-agents.mjs';
 import { recordedRuntimeLines, storyEvidence, startRun } from './workflow-runner.mjs';
-import { resolveWorkflowRepository } from './workflow-github.mjs';
+import { resolveWorkflowRepository, sameRepo, canonicalGithubUrl } from './workflow-github.mjs';
 import { runtimeClientSlice, runtimeOutputSlice } from './runtime-seam.mjs';
 import './screen-compare.mjs';
 import './svg-layout.mjs';
-import { nativeGithubCounter } from './github-calls.mjs';
+import { nativeGithubCounter, githubReply } from './github-calls.mjs';
 import { invalid, parseProductDocuments, parseProductWorldWriters } from './product-documents.mjs';
 export { parseProductDocuments, parseProductWorldWriters };
 
@@ -44,17 +44,14 @@ const portsFor = given => {
     let reply;
     try { reply = await p.execFile('gh', ['api', `repos/${repository}/issues/${number}`, '--include'], { cwd }); }
     catch (error) { reply = error; }
-    const text = typeof reply?.stdout === 'string' ? reply.stdout : '';
-    const header = /^HTTP\/[\d.]+\s+(\d+)[^\r\n]*\r?\n/.exec(text);
-    if (header) {
-      const split = /\r?\n\r?\n/.exec(text), body = split ? text.slice(split.index + split[0].length) : '';
-      const status = Number(header[1]);
-      if (status >= 200 && status < 300) return parse(body);
-      let value; try { value = JSON.parse(body); } catch {}
-      return { status, message: typeof value?.message === 'string' ? value.message : 'GitHub issue lookup failed.' };
+    const parsed = githubReply(reply?.stdout);
+    if (parsed) {
+      if (parsed.status >= 200 && parsed.status < 300) return parse(parsed.body);
+      let value; try { value = JSON.parse(parsed.body); } catch {}
+      return { status: parsed.status, message: typeof value?.message === 'string' ? value.message : 'GitHub issue lookup failed.' };
     }
     if (reply?.code !== undefined && reply.code !== 0 || reply instanceof Error) throw Error('GitHub issue lookup is unavailable.');
-    return parse(text);
+    return parse(typeof reply?.stdout === 'string' ? reply.stdout : '');
   };
   p.now ??= async () => ({ milliseconds: Date.now() });
   const scopes = new Map();
@@ -203,11 +200,9 @@ async function documents({ cwd }, p) {
 }
 export async function readProduct(input, given = {}) { return (await documents(input, portsFor(given))).product; }
 const parse = text => { try { return JSON.parse(text); } catch { invalid('GitHub returned unreadable JSON.'); } };
-const sameRepo = (a, b) => typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();
-const canonicalPr = (url, repository, number) => {
-  const found = typeof url === 'string' && /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/([1-9][0-9]*)$/.exec(url);
-  return !!found && sameRepo(found[1], repository) && Number(found[2]) === number;
-};
+const compareIssues = (a, b, localA, localB) => Number(!!localB) - Number(!!localA)
+  || (Date.parse(a.created_at) || 0) - (Date.parse(b.created_at) || 0) || a.number - b.number;
+const unverifiedFallback = (failed, repair) => failed.find(row => !row.confirmed) ?? (repair ? null : failed[0]) ?? null;
 const pageSize = 10;
 async function issueLookup(p, cwd, repository, localRuns, warning) {
   const scope = { cwd, repository }, migration = Symbol('legacy-state');
@@ -307,9 +302,8 @@ async function issueLookup(p, cwd, repository, localRuns, warning) {
       const candidate = await inspect(run, number);
       (candidate.unverified ? failed : candidates).push(candidate);
     }
-    candidates.sort((a, b) => Number(!!b.local) - Number(!!a.local)
-      || (Date.parse(a.issue.created_at) || 0) - (Date.parse(b.issue.created_at) || 0) || a.issue.number - b.issue.number);
-    let result = candidates[0] ?? failed.find(row => !row.confirmed) ?? (repair ? null : failed[0]) ?? null;
+    candidates.sort((a, b) => compareIssues(a.issue, b.issue, a.local, b.local));
+    let result = candidates[0] ?? unverifiedFallback(failed, repair);
     if (result && !result.unverified) {
       if (candidates.length > 1) warning.push(`Warning: Multiple saved issues name ${run}; using issue #${result.issue.number}.`);
       await bind(run, result.issue.number);
@@ -349,10 +343,9 @@ async function issueLookup(p, cwd, repository, localRuns, warning) {
       } else if (valid(saved, run, saved.number) && await trust(saved) === 'trusted') trusted.push(saved);
       else warning.push(`Warning: Ignored untrusted issue #${saved.number} for ${run}.`);
     }
-    trusted.sort((a, b) => Number(!!localFor(b.number, run)) - Number(!!localFor(a.number, run))
-      || (Date.parse(a.created_at) || 0) - (Date.parse(b.created_at) || 0) || a.number - b.number);
+    trusted.sort((a, b) => compareIssues(a, b, localFor(a.number, run), localFor(b.number, run)));
     if (trusted.length > 1) warning.push(`Warning: Multiple trusted issues name ${run}; using issue #${trusted[0].number}.`);
-    if (!trusted.length) return failed.find(row => !row.confirmed) ?? (repair ? null : failed[0]) ?? null;
+    if (!trusted.length) return unverifiedFallback(failed, repair);
     await bind(run, trusted[0].number);
     return { issue: trusted[0], local: localFor(trusted[0].number, run), unverified: false };
   };
@@ -370,7 +363,7 @@ const ownProductMarker = (body, run) => new Set(body.match(/<!-- pdd-product: ru
 function eligiblePr(pr, number, repository, run, local, warning) {
   const reject = () => { if (typeof pr?.body === 'string' && pr.body.split(/\r?\n/).includes(marker(run))) warning.push(`Warning: PR #${number} could not be verified as ${run}'s PR.`); return false; };
   if (!pr || pr.number !== number || typeof pr.body !== 'string' || !['OPEN', 'MERGED', 'CLOSED'].includes(pr.state)
-    || !canonicalPr(pr.url, repository, number)) return reject();
+    || !canonicalGithubUrl(pr.url, repository, 'pull', number)) return reject();
   const [owner, name] = repository.split('/');
   const headOwner = pr.headRepositoryOwner?.login, headName = pr.headRepository?.name;
   if (pr.isCrossRepository === true || typeof headOwner === 'string' && !sameRepo(headOwner, owner)
@@ -386,9 +379,8 @@ async function pullRequests(p, cwd, repository, issue, local, run, warning) {
     if (!Array.isArray(events) || events.length > pageSize) invalid(`GitHub returned an invalid timeline for issue #${issue.number}.`);
     for (const event of events) {
       if (event?.event !== 'cross-referenced') continue;
-      const url = event.source?.issue?.pull_request?.html_url, match = typeof url === 'string' && /\/pull\/([1-9][0-9]*)$/.exec(url);
-      const number = match && Number(match[1]);
-      if (Number.isSafeInteger(number) && canonicalPr(url, repository, number)) numbers.add(number);
+      const number = canonicalGithubUrl(event.source?.issue?.pull_request?.html_url, repository, 'pull');
+      if (number) numbers.add(number);
     }
     if (events.length < pageSize) break;
   }
@@ -482,15 +474,16 @@ async function progress(input, given, target) {
 }
 
 function counts(ids, details) {
+  const uniqueIds = new Set(ids);
   let pass = 0, stale = 0;
-  for (const id of new Set(ids)) {
+  for (const id of uniqueIds) {
     const evidence = details.flatMap(detail => detail.evidence).filter(row => storyMatches(row.story, id)).sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
     const current = evidence.filter(row => row.current).at(-1), reported = evidence.filter(row => row.remote).at(-1);
     const older = evidence.filter(row => !row.current && !row.remote).at(-1);
     if (current ? current.pass : reported?.pass) pass++;
     else if (!current && !reported && older?.pass) stale++;
   }
-  return { total: new Set(ids).size, pass, stale, notRun: new Set(ids).size - pass - stale };
+  return { total: uniqueIds.size, pass, stale, notRun: uniqueIds.size - pass - stale };
 }
 export async function productStatus(input, given = {}) {
   const { product, details, ready, warning, bases } = await progress(input, given);
@@ -540,10 +533,9 @@ export async function productStart({ cwd, run, noRun = false, agent = 'codex', p
       const payload = { repository: repo.repository, title: issueTitle(product, planned, state.warning), body };
       const response = p.createIssue ? await p.createIssue(payload) : { url: await command(p, cwd, 'gh',
         ['issue', 'create', '--repo', payload.repository, '--title', payload.title, '--body', payload.body]) };
-      const url = typeof response?.url === 'string' ? response.url.trim() : '';
-      const match = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/issues\/([1-9][0-9]*)$/.exec(url);
-      if (!match || match[1].toLowerCase() !== repo.repository.toLowerCase()) invalid('Issue creation was not confirmed. Inspect GitHub before trying again.');
-      issue = { number: Number(match[2]) }; created = true;
+      const createdNumber = canonicalGithubUrl(typeof response?.url === 'string' ? response.url.trim() : '', repo.repository, 'issues');
+      if (!createdNumber) invalid('Issue creation was not confirmed. Inspect GitHub before trying again.');
+      issue = { number: createdNumber }; created = true;
       await state.lookup.bind(run, issue.number);
     }
     const warning = [...state.warning, ...warnings(product).filter(text => text.startsWith(`Warning: ${run} `)), ...(state.needsFor(planned).length ? [`Advice: ${run} still needs ${state.needsFor(planned).join(', ')}.`] : [])].join('\n');
