@@ -24,7 +24,7 @@ If the version is older than the version in [Install](../README.md#install), upd
 
 ## 2. Look for the problem first
 
-1. Read the tables in [When something goes wrong](../README.md#when-something-goes-wrong) and [USAGE §13](USAGE.md#13-troubleshooting), and the known limits in [USAGE §12](USAGE.md#12-known-limits) and [RUNBOOK §16](../RUNBOOK.md#16-known-limits-today). If a table tells what to do, do it.
+1. Read the tables in [When something goes wrong](../README.md#when-something-goes-wrong) and [USAGE §13](USAGE.md#13-troubleshooting), and the known limits in [USAGE §12](USAGE.md#12-known-limits) and [RUNBOOK §16](../skills/pdd-prompting/runbook/testing-and-simulation.md#16-known-limits-today). If a table tells what to do, do it.
 2. Search the open issues with 2 or 3 words from the error message or the command:
 
    ```sh

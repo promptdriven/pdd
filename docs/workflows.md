@@ -62,7 +62,7 @@ Only prompt-story reads the full Prompting guide. check reads the `pdd-prompting
 | Branch and worktree | No. The agent works in your folder | Yes. A new branch and worktree for the issue |
 | Chats | One | One for each area, in Herdr |
 | Gates | The agent asks you | pdd holds them. You approve in the chat or with `pdd workflow approve` |
-| PRs | At a PR gate, the agent asks you. It opens the PR only if you say yes. Your agent may merge on your explicit chat request under [RUNBOOK §2](../RUNBOOK.md#2-the-files) | pdd opens them. Your agent may merge on your explicit chat request under [RUNBOOK §2](../RUNBOOK.md#2-the-files) |
+| PRs | At a PR gate, the agent asks you. It opens the PR only if you say yes. Your agent may merge on your explicit chat request under [RUNBOOK §2](../skills/pdd-prompting/runbook/files-and-runtime-block.md#2-the-files) | pdd opens them. Your agent may merge on your explicit chat request under [RUNBOOK §2](../skills/pdd-prompting/runbook/files-and-runtime-block.md#2-the-files) |
 
 ## How a run works
 
@@ -125,7 +125,7 @@ In a normal run, pdd reads its own saved check results after the check. When eve
 
 In strict mode, after the check and try steps, the chat shows one `Prompt tests` line for each Story (✓, ✗ or no verdict) with its report link, and simulation details (the Simulator link when applicable). You try it, then approve or ask for changes. pdd opens PR 1 only after you approve.
 
-The PR 1 body starts with a part for people: a status line, the user story, a summary (Problem, This PR, Verdict), the expected cases, what changed, a Checks table from pdd's own records (Prompt tests with one report link, lint, CI, checker), the Approval line and the Next line. In an Autopilot `auto` run the Approval line is "Automatic approval: Autopilot `auto` mode, started by <login> on <date>. No person was asked." and the Next line links PR 2, which starts by itself; in a manual run they show your approval words and "The code PR starts when you ask for it." The agent gives the summary and the cases as labeled lines in its `done` summaries ([RUNBOOK §15](../RUNBOOK.md#15-pr-text)). Then one closed "Details for tools and audits" section holds:
+The PR 1 body starts with a part for people: a status line, the user story, a summary (Problem, This PR, Verdict), the expected cases, what changed, a Checks table from pdd's own records (Prompt tests with one report link, lint, CI, checker), the Approval line and the Next line. In an Autopilot `auto` run the Approval line is "Automatic approval: Autopilot `auto` mode, started by <login> on <date>. No person was asked." and the Next line links PR 2, which starts by itself; in a manual run they show your approval words and "The code PR starts when you ask for it." The agent gives the summary and the cases as labeled lines in its `done` summaries ([RUNBOOK §15](../skills/pdd-prompting/runbook/autopilot-and-checklists.md#15-pr-text)). Then one closed "Details for tools and audits" section holds:
 
 1. pdd's own results: one `pdd result:` line for the newest `pdd test` and the newest `pdd lint` that ran in the run worktree after the run started (batch id, time, whether the source is still the same, the interpreter build and model when known, and the result). With none, the line is `pdd result: none. … (pdd:no-verdict)`. This is a label, not a stop.
 2. For a bug: the verdict line and the `Before ✗ … → after ✓ …` line with its report links.
@@ -303,7 +303,7 @@ pdd-mybug/
 
 Keep the rules of the PDD workflows in your `SKILL.md`: the main chat does not write code, each step runs in a fresh subagent, verify runs in a subagent that did not write the code, and the agent records only the person's actual approval and merges only by the explicit-request rules above. Outside a run, the agent opens a PR only if the person says yes; in a run, pdd does.
 
-The pdd CLI has no merge command. In manual workflows, ask your agent to merge under [RUNBOOK §2](../RUNBOOK.md#2-the-files). In Autopilot `auto` mode, Autopilot merges its own pull request after CI, a fresh review and the full test suite pass; required human approvals still apply.
+The pdd CLI has no merge command. In manual workflows, ask your agent to merge under [RUNBOOK §2](../skills/pdd-prompting/runbook/files-and-runtime-block.md#2-the-files). In Autopilot `auto` mode, Autopilot merges its own pull request after CI, a fresh review and the full test suite pass; required human approvals still apply.
 
 Only an explicit approve call can pass an approval gate. Chat messages, steps and `workflow done` never approve it. A workflow without an approve gate before code gets a warning, not a block.
 
