@@ -71,7 +71,7 @@ Return `{pass, tests, problems}`. `tests` is one row `{path, batch, state}` for 
 - [Exact scenario numbers](scenario-json.prompt.md): `format.parseScenario` and `format.stringifyScenario` for test values.
 - RUNBOOK §2 (Story, test and prompt files), §4 (expected values) and §11 (what an agent may fix).
 
-The Runtime read ports represent native file operations, environment settings, source capture and test discovery, and the caller-supplied workspace eligibility callback. The required supplied binding is the actual synchronous `readEvidenceEligibility({root, producerRoot, tests, source_sha256, runId, stage}, ports)` from the workflow runner, with its original producer and complete test selection. Its result is authoritative: the Runtime Boolean is true only when the binding returns state `eligible` and stage `current`; ineligible, unavailable, unresolved or historical results are false. It is not a receipt or a separate association decision. `environment.read` supplies `PDD_STATE_DIR` and `HOME`; null means absent. JSON strings carry the saved batch, summary, scenario and source records unchanged; an unavailable native file read is not a passing result. The workspace callback supplies whether the producer is admitted for current evidence.
+The Runtime read ports represent native file operations, environment settings, source capture and test discovery, and the caller-supplied workspace eligibility callback. The required supplied binding is the actual synchronous `readEvidenceEligibility({root, producerRoot, tests, source_sha256, runId, stage}, ports)` from the workflow runner, with its original producer and complete test selection. Its result is authoritative: the Runtime Boolean is true only when the binding returns state `eligible` and stage `current`; ineligible, unavailable, unresolved or historical results are false. It is not a receipt or a separate association decision. `environment.read` supplies `PDD_STATE_DIR` and `HOME`; null means absent. JSON strings carry the saved batch, summary, scenario and source records unchanged; an unavailable native file read is not a passing result. When `files.realpathSync` returns null, resolve the supplied path lexically, matching the native fallback for an unavailable real path. The workspace callback supplies whether the producer is admitted for current evidence.
 
 <details><summary>Runtime interface</summary>
 
@@ -79,7 +79,7 @@ The Runtime read ports represent native file operations, environment settings, s
 {
   "kind": "partial",
   "status": "draft",
-  "prose_sha256": "216a0fb7f1a8714570b4b97d3ab0d5f6936b83b0e83c9462873c9bf6976880ef",
+  "prose_sha256": "9642304af569281b49d4c1e87cd74112b6188513da623a65bb336e1b0e91ec66",
   "entries": [
     {
       "operation": "fullCheckPass",
