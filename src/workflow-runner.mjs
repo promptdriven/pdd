@@ -75,7 +75,7 @@ const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const CHANGE_PREFIX = 'The person asks for changes';
 const ANSWER_PREFIX = 'The person answers your question';
 // Try links (/s/<token>/) open a live session; they never go into a PR body. Report links (/r/) stay.
-const redactTry = text => String(text).replace(/https?:\/\/[^\s)<>\]"'`]*?\/s\/[^/\s)<>\]"'`]+(?:\/[^\s)<>\]"'`]*)?/g, '(Try link removed)');
+const redactTry = text => String(text).replace(/[hH][tT][tT][pP][sS]?:\/\/[^\s)<>\]"'`]*?\/s\/[^/\s)<>\]"'`]+(?:\/[^\s)<>\]"'`]*)?/g, '(Try link removed)');
 const ordinary = promisify(execFileCallback);
 function execute(file, args, { cwd, input, ...options } = {}) {
   if (input === undefined) return ordinary(file, args, { cwd, ...options });

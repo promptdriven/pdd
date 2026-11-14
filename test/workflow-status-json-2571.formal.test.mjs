@@ -34,10 +34,13 @@ test('bounded status wait precedence and private links', async t => {
     (r,s) => {r.pr = [{number:23,url:s}];},
     (r,s) => {r.chats.at(-1).herdrAgentName = s;},
   ];
-  for (const put of placements) for (const prefix of ['', 'context ']) {
-    const run = structuredClone(initial), secret = 'https://runtime.example/s/private-token/';
+  for (const put of placements) for (const prefix of ['', 'context ']) for (const scheme of ['https', 'HtTpS', 'HTTPS', 'HTTP']) {
+    const run = structuredClone(initial), secret = `${scheme}://runtime.example/s/private-token/`;
     put(run, prefix + secret);
     const output = await read(run);
-    assert.ok(!output.includes(secret), `private link leaked from placement ${placements.indexOf(put)} prefix ${JSON.stringify(prefix)}`);
+    assert.ok(!output.includes(secret), `private link leaked from placement ${placements.indexOf(put)} prefix ${JSON.stringify(prefix)} scheme ${scheme}`);
   }
+  const run = structuredClone(initial);
+  run.issue.title = 'HTTPS://runtime.example/S/public-path/';
+  assert.equal(JSON.parse(await read(run)).runs[0].title, run.issue.title);
 });
