@@ -68,6 +68,11 @@ test('claude: every turn fails on a login error, so status says the chat cannot 
   assert.equal(json.group, 'waiting', 'the run is listed under "waiting for you"');
   assert.equal(json.words, "the chat cannot work: the agent's login failed");
   assert.deepEqual(json.chatProblem, { kind: 'login', agent: 'claude', until: null, message: DISABLED_KEY });
+  const saved = f.record();
+  saved.chats.at(-1).evidence = { kind: 'pane-exit' };
+  writeFileSync(join(f.git(f.source, 'rev-parse', '--path-format=absolute', '--git-common-dir'), 'pdd', 'runs', '17', 'status.json'), JSON.stringify(saved));
+  const versioned = await runStatus({ cwd: f.source, all: true, json: true }, f.ports);
+  assert.deepEqual(JSON.parse(versioned.message).runs[0].waiting, {kind:'chat_stopped', gate:null, question:null, reason:'unknown'});
   assertOnlyReads(f, before);
 });
 
@@ -620,4 +625,12 @@ test('Gemini Ink bordered shell safety dialog above status bar is named while st
 test('other agent startup does not warn about Gemini safety dialogs', async t => {
   const f = await fixture(t, { agent: 'claude' });
   assert.doesNotMatch((await f.run()).message, /Gemini shell safety dialogs/);
+});
+
+test('2571 versioned list reports usage-limit evidence', async t => {
+  const { f, pane } = await claudeChat(t);
+  pane.agent.agent_status = 'blocked';
+  pane.screen = "> Start the plan area.\n  ⎿  You've hit your weekly limit · resets Oct 28 at 3pm (UTC)\n\n What do you want to do?\n\n ❯ 1. Stop and wait for limit to reset\n   2. Wait here, then continue automatically\n\n Enter to confirm · Esc to cancel\n";
+  const result = await runStatus({cwd:f.source,all:true,json:true}, f.ports);
+  assert.deepEqual(JSON.parse(result.message).runs[0].waiting, {kind:'chat_stopped',gate:null,question:null,reason:'usage_limit'});
 });

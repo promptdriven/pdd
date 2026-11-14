@@ -23,23 +23,51 @@ export async function replayRunPddVectors(t, file) {
     await t.test(step.step_id, async st => {
       assert.equal(step.operation, 'runPdd', `Not replayed: unmapped operation ${step.operation}`);
       const stdout = capture(), stderr = capture(), calls = { resources: {} }, mapped = new Set();
+      const unexpected = [];
+      // These vectors cover help and usage errors, so every declared port must stay unused.
+      // Record calls outside the stub as runPdd may catch errors from its dependencies.
       const spy = binding => {
         const rule = scenario.simulation?.[binding];
         if (!rule) return undefined;
+        assert.ok(['fixture.lookup', 'port.write'].includes(rule.action), `Not replayed: unmapped action ${rule.action}`);
         mapped.add(binding);
         const [resource, method] = binding.split('.');
-        const id = `pdd-cli-${resource}-${method}`;
+        const prefix = ['origin', 'credentials', 'metadata'].includes(resource) ? 'interpreter-version' : 'pdd-cli';
+        const id = `${prefix}-${resource}-${method}`;
         calls.resources[id] = 0;
-        return async input => {
+        return input => {
           calls.resources[id]++;
+          unexpected.push(binding);
           if (rule.action === 'port.write') pointer(world, rule.world_pointer).push(structuredClone(input));
-          return structuredClone(rule.result_template);
         };
       };
       const runAutopilotLauncher = spy('autopilotLauncher.runAutopilotLauncher');
+      const readPackageVersion = spy('package.readVersion');
+      const findSkills = spy('skills.findSkills');
+      const pathDiagnostic = spy('diagnostics.pathDiagnostic');
+      const resolveOrigin = spy('origin.resolve');
+      const readToken = spy('credentials.readToken');
+      const getMetadata = spy('metadata.get');
+      const proveRun = spy('dispatch.prove');
+      const acknowledgeRequest = spy('dispatch.requestUptake');
+      const startRun = spy('dispatch.startRun');
+      const checkWorkflowAgents = spy('agents.checkWorkflowAgents');
+      const setupSkills = spy('setup.setupSkills');
+      const setupProject = spy('setup.setupProject');
+      const setupAgentMcp = spy('setup.setupAgentMcp');
       for (const key of Object.keys(scenario.simulation ?? {})) assert.ok(mapped.has(key), `Not replayed: unmapped simulation ${key}`);
-      const exit_code = await runPdd(step.input.argv, { stdout, stderr, workflowRunner: noDispatch,
-        autopilotLauncher: runAutopilotLauncher ? { runAutopilotLauncher } : noDispatch });
+      const runner = new Proxy({ acknowledgeRequest, startRun }, { get(target, key) {
+        if (target[key]) return target[key];
+        unexpected.push(`workflowRunner.${String(key)}`);
+        return noDispatch[key];
+      } });
+      const exit_code = await runPdd(step.input.argv, { stdout, stderr, workflowRunner: runner,
+        autopilotLauncher: runAutopilotLauncher ? { runAutopilotLauncher } : noDispatch,
+        readPackageVersion, findSkills, pathDiagnostic, interpreterVersionPorts: { resolveOrigin, readToken, getMetadata },
+        workflowProve: proveRun ? { proveRun } : noDispatch,
+        workflowAgents: checkWorkflowAgents ? { checkWorkflowAgents } : noDispatch,
+        setupSkills, setupProject, setupAgentMcp });
+      assert.deepEqual(unexpected, [], 'A help or usage-error step must not call a simulated port');
       const result = { exit_code, stdout: stdout.text, stderr: stderr.text };
       for (const check of step.checks) {
         assert.ok(check.target === 'result' || check.target === 'calls', `Not replayed: unmapped target ${check.target}`);

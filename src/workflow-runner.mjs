@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 90307af4ce2e5bb12dd4906d989bacf49d838ca4e719f9c7d626cad1e902ec06).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: eb304bc7aac4eab008e76069b16ffd890cad1bd834a6082dfd87ffb1e54a7772).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { findOwners, findTestPromptViolations, isTestOwnedPath } from './file-owner.mjs';
@@ -75,7 +75,7 @@ const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const CHANGE_PREFIX = 'The person asks for changes';
 const ANSWER_PREFIX = 'The person answers your question';
 // Try links (/s/<token>/) open a live session; they never go into a PR body. Report links (/r/) stay.
-const redactTry = text => String(text).replace(/https?:\/\/[^\s)<>\]"'`]*?\/s\/[^/\s)<>\]"'`]+(?:\/[^\s)<>\]"'`]*)?/g, '(Try link removed)');
+const redactTry = text => String(text).replace(/[hH][tT][tT][pP][sS]?:\/\/[^\s)<>\]"'`]*?\/s\/[^/\s)<>\]"'`]+(?:\/[^\s)<>\]"'`]*)?/g, '(Try link removed)');
 const ordinary = promisify(execFileCallback);
 function execute(file, args, { cwd, input, ...options } = {}) {
   if (input === undefined) return ordinary(file, args, { cwd, ...options });
@@ -4890,12 +4890,12 @@ async function refreshWaitingIssue(run, p) {
   }
 }
 
-async function refreshPr(run, p) {
+async function refreshPr(run, p, includeDraft = false) {
   if (!run.pr?.length || run.state === 'cancelled') return;
   const cwd=existsSync(run.root)?run.root:run.sourceRoot,observations=[];
   // #3042: the read of a PR that pdd published with readable facts also gives its description, head and comments
   // (`view`), so that the refresh below of its readable top needs no other read when nothing changed.
-  for(const pr of run.pr){const {view,...fields}=await (p.readPrStatus??readWorkflowPrStatus)({cwd,url:pr.url,...(pr.readable?.facts?{view:true}:{})},p.commandPorts);observations.push({url:pr.url,number:pr.number,stage:pr.stage,fields,view});}
+  for(const pr of run.pr){const {view,...fields}=await (p.readPrStatus??readWorkflowPrStatus)({cwd,url:pr.url,...(pr.readable?.facts?{view:true}:{}),...(includeDraft?{includeDraft:true}:{})},p.commandPorts);observations.push({url:pr.url,number:pr.number,stage:pr.stage,fields,view});}
   await captureClosedCi({ ...run, pr: observations.map(row => ({ ...run.pr.find(pr => pr.url === row.url), ...row.fields, ...(row.view?.head ? { headSha: row.view.head } : {}) })) }, p);
   const refreshTops=async()=>{
     const observed=new Map(observations.map(observation=>[observation.url,{...observation.fields,view:observation.view}]));
@@ -5056,7 +5056,7 @@ async function chatState(run, p, facts = {}) {
   }
   if (live.alive) {
     // An alive agent can still fail every turn on its login or usage limit (#2902); a gate or question keeps its words.
-    const health = run.state === 'running' && !run.gate && !openQuestion(run) && !failure ? await chatHealth({ run, chat: next, live }, p) : null;
+    const health = run.state === 'running' && (p.statusVersioned || !run.gate && !openQuestion(run)) && !failure ? await chatHealth({ run, chat: next, live }, p) : null;
     if (health) { facts.health = { ...health, at: p.now(), timeZone: p.timeZone }; return 'cannot-work'; }
     if (live.status === 'blocked' && (chat.agent ?? run.agent) === 'gemini' && run.state === 'running' && !run.gate && !openQuestion(run)) {
       try {
@@ -5206,12 +5206,43 @@ function savedStepResults(run) {
     pddResults: record.pddResults ?? [] }));
 }
 
-async function listStatus(runs, { json, cancelled, scope, snapshotOnly=false }, p) {
+function listJsonV1(run, item, chatStateValue, health) {
+  const area = run.areas[run.area], chat = lastChat(run, area?.name), question = openQuestion(run);
+  let waiting = null;
+  if (!ended(run)) {
+    if (activeChatFailure(run)) waiting = {kind:'startup_failed', gate:null, question:null, reason:null};
+    else if (chatStateValue === 'stopped' || chatStateValue === 'cannot-work') {
+      const reason = health?.kind === 'usage-limit' ? 'usage_limit' : chatStateValue === 'stopped' && chat?.evidence?.kind === 'pane-exit' ? 'exited' : 'unknown';
+      waiting = {kind:'chat_stopped', gate:null, question:null, reason};
+    } else if (question) waiting = {kind:'question', gate:null, question:question.text ?? null, reason:null};
+    else if (!run.gate && run.state === 'running' && chatStateValue === 'blocked') waiting = {kind:'question', gate:null, question:null, reason:null};
+    else if (run.gate && chatStateValue !== 'working') waiting = {kind:'gate', gate:run.gate.id ?? null, question:null, reason:null};
+  }
+  const result = Object.fromEntries(['ref','repo','number','workflow','area','group','words','stories','waitingForStory','updatedAt','root','runDir','viewCommand','launchProfile','runtimeCoverage','nativeOnly','smallChange'].filter(key => item[key] !== undefined).map(key => [key,item[key]]));
+  const pick = (value, keys) => Object.fromEntries(keys.filter(key => value?.[key] !== undefined).map(key => [key, value[key]]));
+  if (result.runtimeCoverage) result.runtimeCoverage = pick(result.runtimeCoverage, ['checkable','total','native_only']);
+  if (result.nativeOnly) result.nativeOnly = result.nativeOnly.map(row => ({...pick(row,['test','state']), prompts:(row.prompts ?? []).map(prompt => pick(prompt,['path','reason']))}));
+  if (result.smallChange) {
+    const scope = result.smallChange;
+    result.smallChange = {};
+    if (scope.checklist) result.smallChange.checklist = {...pick(scope.checklist,['status']), items:(scope.checklist.items ?? []).map(row => pick(row,['id','request','source','quote','state','evidence'])), mustFix:(scope.checklist.mustFix ?? []).map(row => typeof row === 'string' ? row : pick(row,['id','request','source','quote','state','evidence']))};
+    if (scope.formal) result.smallChange.formal = pick(scope.formal,['status','result','scope','reason','control_outcome','control_exit_code','field','cause','reported','required']);
+  }
+  Object.assign(result, {title:run.issue?.title ?? null, agent:run.agent ?? null,
+    step:area?.steps?.find(step => !run.done[step]) ?? null, waiting,
+    prs:(run.pr ?? []).map(pr => ({number:pr.number, url:pr.url, state:pr.state ?? 'open', draft:typeof pr.draft === 'boolean' ? pr.draft : null, ci:pr.ci ?? null})),
+    chat:chat ? {herdrAgentName:chat.herdrAgentName ?? null, paneId:chat.paneId ?? null, session:'pdd', tab:chat.tabId ?? null, pane:chat.paneId ?? null} : null});
+  // A private Try URL can appear in any saved string, including nested evidence.
+  const clean = value => typeof value === 'string' ? redactTry(value) : Array.isArray(value) ? value.map(clean) : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([key, val]) => [redactTry(key), clean(val)])) : value;
+  return clean(result);
+}
+
+async function listStatus(runs, { json, cancelled, scope, snapshotOnly=false, versioned=false }, p) {
   const reading = runs.filter(run => run.state === 'waiting' && run.pr?.length).reduce((sum, run) => sum + run.pr.length, 0);
   if (reading) p.say(`Reading ${reading} PR${reading === 1 ? '' : 's'} from GitHub…`);
   for (const run of runs) if (!snapshotOnly && !readRunOwnership(run.runDir,p) && run.state === 'waiting') {
     try {
-      if (run.pr?.length) await refreshPr(run, p);
+      if (run.pr?.length) await refreshPr(run, p, versioned);
       if (run.state === 'waiting') await refreshWaitingIssue(run, p);
     } catch(error) { if(error?.code==='workflow_run_save_failed')throw error; /* A PR or issue read failure keeps the saved state. */ }
   }
@@ -5221,11 +5252,12 @@ async function listStatus(runs, { json, cancelled, scope, snapshotOnly=false }, 
     const health = {}, chat = ordinaryOwnership||snapshotOnly?null:await chatState(run, p, health);
     const item = summary(run, p.timeZone, chat, { ...(ended(run)||ordinaryOwnership||snapshotOnly ? {} : await gateFacts(run, p)), ...health, now: p.now(), suite: readSuiteProgress({cwd:run.root, since:run.updatedAt ?? 0, env:p.env}, p) });
     const snapshot = requestSnapshot(run, p);
-    all.push({ ...item, chats: run.chats ?? [], steps: savedStepResults(run), ...snapshot, ordinaryOwnership, line: [item.line, ...cleanupLines(run), ...ownershipLines(ordinaryOwnership), ...requestLines(snapshot, { openOnly: true, ended: ended(run), currentArea: run.areas[run.area]?.name, p })].join('\n') });
+    all.push({ ...item, ...(versioned ? {versioned: listJsonV1(run, item, chat, health.health)} : {}), chats: run.chats ?? [], steps: savedStepResults(run), ...snapshot, ordinaryOwnership, line: [item.line, ...cleanupLines(run), ...ownershipLines(ordinaryOwnership), ...requestLines(snapshot, { openOnly: true, ended: ended(run), currentArea: run.areas[run.area]?.name, p })].join('\n') });
   }
   const hidden = cancelled ? 0 : all.filter(item => item.group === 'cancelled').length;
   const shown = all.filter(item => cancelled || item.group !== 'cancelled')
     .sort((a, b) => GROUPS.indexOf(a.group) - GROUPS.indexOf(b.group) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+  if (versioned) return done(JSON.stringify({ version: 1, runs: shown.map(item => item.versioned) }, null, 2));
   let herdr = null, inventory = [];
   try {
     herdr = {...await paneUsage({...p,onPaneUsage:rows=>{inventory=rows;}}), finishedOpen: 0};
@@ -5273,7 +5305,8 @@ async function showStoryCardCommand({ ref, cwd }, ports) {
 
 async function runStatusCommand({ ref, cwd, all = false, json = false, cancelled = false }, ports, snapshotOnly=false) {
   const p = deps(ports);
-  if (ref === undefined && (all || !(await gitContext(cwd, p)))) return listStatus(allRuns({ cancelled }, p), { json, cancelled, scope: 'on this machine', snapshotOnly }, p);
+  if (all && json) p.statusVersioned = true;
+  if (ref === undefined && (all || !(await gitContext(cwd, p)))) return listStatus((p.allRuns ?? allRuns)({ cancelled }, p), { json, cancelled, scope: 'on this machine', snapshotOnly, versioned: all && json }, p);
   if (ref === undefined && !(await runForWorktree(cwd, p))) return listStatus(await listRuns({ cwd, cancelled }, p), { json, cancelled, scope: 'in this repository', snapshotOnly }, p);
   const found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);

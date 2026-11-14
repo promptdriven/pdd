@@ -6,3 +6,7 @@ I can prepare a run issue and start it again before GitHub search catches up.
 
 1. Preparing phone-1 creates issue 82 without starting work and saves its issue binding locally.
 2. Starting phone-1 again reuses issue 82, starts one feature run and makes no issue search or new issue.
+
+```pdd-boundary
+prompts/cli/product.prompt.md
+```

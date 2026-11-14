@@ -13,3 +13,7 @@ Only this run's own merged implementation makes its dependents ready. An unrelat
 PR, fork or comment must not unlock them. A cycle, including a self-dependency,
 shows its path while unrelated ready runs remain available. It does not become a
 hard gate when I explicitly start a run.
+
+```pdd-boundary
+prompts/cli/product.prompt.md
+```

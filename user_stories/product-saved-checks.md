@@ -21,3 +21,7 @@ A planned Story may use saved checks from the product folder without a workflow
 record. Only a verified local workflow authorizes its separate worktree; an
 unverified link cannot supply a foreign root. Cwd-only evidence remains usable
 without repairing that link or changing its unverified status.
+
+```pdd-boundary
+prompts/cli/product.prompt.md
+```

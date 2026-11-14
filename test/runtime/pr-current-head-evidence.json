@@ -28,6 +28,7 @@
     }
   ],
   "initial_world": {
+    "requests": [],
     "source_fingerprint": [
       {
         "request": {
@@ -172,6 +173,15 @@
     ]
   },
   "simulation": {
+    "runs.allRuns": {"action":"port.write","world_pointer":"/requests","result_template":{"json":"[]"}},
+    "runs.resolveRun": {"action":"port.write","world_pointer":"/requests","result_template":{"json":"{}"}},
+    "results.readRunResults": {"action":"port.write","world_pointer":"/requests","result_template":{"json":"[]"}},
+    "files.readFileSync": {"action":"port.write","world_pointer":"/requests","result_template":{"content":null}},
+    "files.readdirSync": {"action":"port.write","world_pointer":"/requests","result_template":{"entries":null}},
+    "files.realpathSync": {"action":"port.write","world_pointer":"/requests","result_template":{"path":null}},
+    "files.lstatSync": {"action":"port.write","world_pointer":"/requests","result_template":{"stat":null}},
+    "files.existsSync": {"action":"port.write","world_pointer":"/requests","result_template":{"exists":false}},
+    "program.execFile": {"action":"port.write","world_pointer":"/requests","result_template":{"stdout":"","code":1}},
     "source.fingerprint": {
       "action": "collection.get",
       "world_pointer": "/source_fingerprint",

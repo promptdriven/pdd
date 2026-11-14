@@ -579,6 +579,21 @@ separate from approval of draft prompt interfaces.
 
 `pdd workflow run NAME ISSUE --adopt-corpus FILE` adopts an unchanged externally approved declared corpus for a fresh replay-evidence-enabled workflow; see [corpus adoption](replay-evidence.md#adopt-an-unchanged-approved-corpus). Without it, the anchor also holds the [approved scenarios on the base](replay-evidence.md#approved-scenarios-on-the-base) that link to the run's changes. The root `pdd.json` setting `{"replay":{"base_scenarios":"all"}}` on the base commit adds all of them; the default is `"linked"`. See [add all approved base scenarios](replay-evidence.md#add-all-approved-base-scenarios) for the limits and the cost.
 
+
+`pdd workflow status --all --json` returns `{version: 1, runs: [...]}` in list order. The [version 1 JSON Schema](workflow-status-v1.schema.json) is the field and type contract; a breaking field change requires a new version. Other status JSON forms keep their existing shape.
+
+Every run has these fields:
+
+- `ref` is the string `owner/repo#number`; `repo` is `owner/repo`; `number` is the integer issue number; `workflow` is the workflow name.
+- `area` is the current area name or null; `group` is `waiting`, `working`, `pr-open`, `done`, or `cancelled`; `words` is the human-readable status string.
+- `prs` is an array of objects with integer `number`, string `url` and `state`, boolean or null `draft`, and string or null `ci`. State is the saved PR state (normally `open`, `closed`, or `merged`); CI is the known check summary (such as `passing`, `failing`, `pending`, or `none`). Null means the draft or CI fact is unknown.
+- `stories` is null when unknown, otherwise an object with integer `pass` and `total` counts and a string array `failing`; optional `unknown` is a string array, `none` is a boolean, and `evidence` is a string. `waitingForStory` is a boolean.
+- `updatedAt` is epoch milliseconds as a number or null when unknown. `root`, `runDir`, and `viewCommand` are strings naming the worktree, saved run directory, and command to inspect it. `title`, `agent`, and `step` are strings or null when unknown.
+- `waiting` is null when no attention is needed; otherwise it has `kind`, `gate`, `question`, and `reason`. `gate` is the gate ID, `question` is the question text, and `reason` describes a stopped chat. Each is null when unused or unavailable. A blocked chat may have unavailable question text; a working chat writing a gate has no waiting object yet. Kinds are `gate`, `question`, `chat_stopped`, and `startup_failed`; stopped reasons are `usage_limit`, `exited`, or `unknown`. Startup failures and stopped chats take precedence over questions, which take precedence over gates.
+- `chat` is null when absent; otherwise `herdrAgentName`, `paneId`, `tab`, and `pane` are strings or null when unknown, and `session` is `pdd`. `launchProfile` has string or null `agent`, `configDir`, and `model`, string `herdrAgentName`, and integer or null `codexThreads`.
+
+Optional `runtimeCoverage` has nonnegative integer counts `checkable`, `total`, and `native_only`. Optional `nativeOnly` is an array of objects with string `test` and `state`, and `prompts`, an array of `{path, reason}` string pairs. Optional `smallChange` may contain `checklist` and `formal`: checklist may contain string `status`, `items` and `mustFix` arrays. Each item may have string `id`, `request`, `source`, `quote`, `state`, and `evidence`; `mustFix` also permits strings. Formal may contain `status`, `result`, `scope`, `reason`, `control_outcome`, `field`, `cause`, `reported`, and `required`, each a string, number, boolean, or null; `control_exit_code` is an integer or null. These fields summarize recorded checklist and formal evidence. Private Try links are removed from all strings.
+
 ## Tests on the PDD interpreter and prompt approval
 
 Before a check, PDD prints one local plan. It lists target Stories, the changed
