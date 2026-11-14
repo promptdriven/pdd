@@ -1,0 +1,157 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/associated-workspace-check.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "A complete current passing check from an eligible associated workspace counts as a full pass."
+    },
+    {
+      "id": "AC2",
+      "text": "A passing check from a workspace that is not eligible for current evidence does not count as a full pass."
+    }
+  ],
+  "initial_world": {
+    "files": {
+      "/state/batches/20261027-170004-0001/batch.json": {
+        "content": "{\"batch\": \"20261027-170004-0001\", \"intent\": \"check\", \"root\": \"/producer\", \"created_at\": \"2026-10-27T17:00:04Z\", \"source_sha256\": \"hash\", \"files\": [\"prompts/order.prompt.md\"], \"rows\": [{\"test\": \"tests/order.json\", \"state\": \"passed\"}]}",
+        "is_symlink": false
+      },
+      "/state/batches/20261027-170004-0001/summary.json": {
+        "content": "{\"batch\": \"20261027-170004-0001\", \"repo\": \"/producer\", \"source_sha256\": \"hash\", \"rows\": [{\"test\": \"tests/order.json\", \"state\": \"passed\", \"criteria\": {\"passed\": 1, \"total\": 1}}]}",
+        "is_symlink": false
+      },
+      "/run/tests/order.json": {
+        "content": "{\"story_path\": \"user_stories/order.md\", \"criteria\": [{\"id\": \"AC1\", \"text\": \"Order works.\"}]}",
+        "is_symlink": false
+      }
+    },
+    "requests": []
+  },
+  "simulation": {
+    "files.readFileSync": {
+      "action": "blob.read",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "content": null
+      },
+      "result_value_pointer": "/content"
+    },
+    "files.readdirSync": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "entries": [
+          "20261027-170004-0001"
+        ]
+      }
+    },
+    "files.realpathSync": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "path": null
+      }
+    },
+    "files.existsSync": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "exists": true
+      }
+    },
+    "source.capture": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "json": "{\"sha256\": \"hash\", \"stories\": []}"
+      }
+    },
+    "source.findTests": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "json": "{\"tests\": [{\"path\": \"tests/order.json\"}], \"untested\": []}"
+      }
+    },
+    "workspace.eligible": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "eligible": true
+      }
+    },
+    "environment.read": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "PDD_STATE_DIR": "/state",
+        "HOME": null
+      }
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "eligible-current",
+      "entry_path": "prompts/cli/workflow-story-card.prompt.md",
+      "operation": "fullCheckPass",
+      "input": {
+        "root": "/run",
+        "since": 0,
+        "tests": [
+          "tests/order.json"
+        ],
+        "prompts": [
+          "prompts/order.prompt.md"
+        ],
+        "stories": []
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/pass",
+          "op": "equals",
+          "value": true
+        }
+      ]
+    },
+    {
+      "step_id": "ineligible",
+      "entry_path": "prompts/cli/workflow-story-card.prompt.md",
+      "operation": "fullCheckPass",
+      "input": {
+        "root": "/run",
+        "since": 0,
+        "tests": [
+          "tests/order.json"
+        ],
+        "prompts": [
+          "prompts/order.prompt.md"
+        ],
+        "stories": []
+      },
+      "simulation_overrides": {
+        "workspace.eligible": {
+          "action": "port.write",
+          "world_pointer": "/requests",
+          "result_template": {
+            "eligible": false
+          }
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/pass",
+          "op": "equals",
+          "value": false
+        }
+      ]
+    }
+  ]
+}
