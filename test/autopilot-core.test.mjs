@@ -1,7 +1,7 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readdirSync, readFileSync, writeFileSync, rmSync, mkdirSync, appendFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync, writeFileSync, rmSync, mkdirSync, appendFileSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
@@ -3883,9 +3883,10 @@ test('legacy cleanup accepts only the exact core checkout and records its missin
     supplied.push({ root: options.legacyCustodyRoot ?? null, boundary: options.legacyCustodyBoundary });
     return cleanupAgentJob(part, { ...options, list: () => [caller], cwd: () => '/outside/core-worktree', kill: () => assert.fail('legacy cleanup sends no signal') });
   };
+  const expectedRoot = realpathSync(build.cwd);
   await w.tick({ warn: message => warnings.push(message) });
   assert.ok(supplied.length > 0);
-  assert.ok(supplied.every(row => row.root === build.cwd), 'core supplies only the exact issue checkout');
+  assert.ok(supplied.every(row => row.root === expectedRoot), 'core supplies only the exact issue checkout');
   assert.ok(supplied.every(row => row.boundary === saved.started), 'core supplies the saved job start that predates its parts');
   assert.equal(jobFile(w, 17), null, 'a clear bounded legacy scan permits normal final cleanup');
   assert.equal(existsSync(build.cwd), false);
@@ -3914,8 +3915,9 @@ test('legacy cleanup omits an unproven age boundary and retains unreadable proce
       cwd: pid => { if (pid === unreadable.pid) throw Error('EACCES'); return '/outside/core-worktree'; },
       kill: () => assert.fail('legacy cleanup sends no signal') });
   };
+  const expectedRoot = realpathSync(build.cwd);
   await w.tick();
-  assert.equal(supplied?.legacyCustodyRoot, build.cwd);
+  assert.equal(supplied?.legacyCustodyRoot, expectedRoot);
   assert.equal(Object.hasOwn(supplied, 'legacyCustodyBoundary'), false, 'a part timestamp is not used as a substitute');
   assert.ok(jobFile(w, 17), 'the checkout stays while the unreadable process has no proven age relationship');
   assert.equal(existsSync(build.cwd), true);
