@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: c5211083dfc5fb2cc338687cb9bb779c0a1cc9e78d283e6f9b8403f5a1e89649).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 56a38cd8c1d982d0640588828493a79e71faa09f3c149368e99d1db00ef14031).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { spawnSync, execFile as execFileCallback } from 'node:child_process';
@@ -64,6 +64,8 @@ const { proseSha256 } = format;
 import { DETAILS_OPEN, TOP_NOTE, balancedDetails, closingInert, detailsOf, pr1Order, prArea, prStatus, readPrFields, readableNextLines, readablePrBody, readablePrTitle, readablePrTop, sameReadableTop, userStory } from './workflow-pr-body.mjs';
 import { nativeGithubCounter } from './github-calls.mjs';
 import { storyCard, storyFingerprint, fingerprintChanges, fullCheckPass } from './workflow-story-card.mjs';
+import { findTestPromptViolations, isTestOwnedPath } from './file-owner.mjs';
+import { formatStoryLint, isLintableStoryPath, lintStories } from './story-lint.mjs';
 
 import { applyCostMeasurement, captureClosedCi, costReport } from './cost-ledger.mjs';
 
@@ -295,6 +297,35 @@ async function changedFiles(run, p, strict = false) {
     const untracked = (await rawGit(p, run.root, 'ls-files', '--others', '--exclude-standard', '-z')).split('\0');
     return [...new Set([...tracked, ...untracked].filter(Boolean))];
   } catch (error) { if (strict) throw error; return []; }
+}
+async function runHygieneRefusal(run, p) {
+  const changed = await changedFiles(run, p);
+  if (!changed.length) return null;
+  const lstat = p.fs?.lstatSync ?? lstatSync, realpath = p.fs?.realpathSync ?? realpathSync, readFile = p.fs?.readFileSync ?? readFileSync;
+  const rootReal = (() => { try { return realpath(run.root); } catch { return resolve(run.root); } })();
+  const isRegularInRoot = path => {
+    if (!path || isAbsolute(path) || path.includes('\\') || path.split('/').some(part => !part || part === '.' || part === '..' || part.toLowerCase() === '.git')) return false;
+    const full = join(run.root, path);
+    try { return lstat(full).isFile() && realpath(full) === join(rootReal, path); } catch { return false; }
+  };
+  const existingChanged = changed.filter(isRegularInRoot);
+  if (!existingChanged.length) return null;
+  const promptPaths = existingChanged.filter(path => path.endsWith('.prompt.md'));
+  const checkPaths = existingChanged.filter(isTestOwnedPath);
+  if (promptPaths.length || checkPaths.length) {
+    const ownerCheck = findTestPromptViolations({ root: run.root, promptPaths, checkPaths });
+    if (!ownerCheck.ok) return ownerCheck.violations.map(item => item.message).join('\n');
+  }
+  const storyPaths = existingChanged.filter(isLintableStoryPath);
+  if (storyPaths.length) {
+    const entries = [];
+    for (const path of storyPaths) {
+      try { entries.push({ path, text: readFile(join(run.root, path), 'utf8') }); } catch { continue; }
+    }
+    const storyCheck = lintStories(entries);
+    if (!storyCheck.ok) return formatStoryLint(storyCheck);
+  }
+  return null;
 }
 const isScenario = text => JSON.parse(text)?.schema_version === 'prompt-runtime.program-scenario.v1';
 async function scenarioInventory(run, p, changed) {
@@ -2003,6 +2034,8 @@ async function publishAreaPr(run, area, p, lines, retry, automatic = null) {
   };
   const unsafePrompts = await promptGuard();
   if (unsafePrompts) return unsafePrompts;
+  const hygiene = await runHygieneRefusal(run, p);
+  if (hygiene) return fail(hygiene);
   const unsafeStaged = await commitPublicationFiles(run, p, lines, promptBase ? promptGuard : null);
   if (unsafeStaged) return unsafeStaged;
   const changedAdoption = await adoptionFailure(run,p);
@@ -2985,6 +3018,20 @@ async function stepDoneCommand({ step, summary, skipped, noPublish = false, cwd,
     latest.done[step]=record;
     if (noPublish) latest.localPublication = { area: area.name, step };
   };
+  const simDone = new Set(Object.keys(run.done));
+  if (area.steps.includes(step) && simDone.has(step)) {
+    for (const item of area.steps.slice(area.steps.indexOf(step) + 1)) simDone.delete(item);
+  }
+  simDone.add(step);
+  let simNext = area.steps.find(item => !simDone.has(item));
+  if ((normal || automaticReturn) && simNext === 'try' && step !== 'try' && area.optional.includes('try') && area.before === 'approve') {
+    simDone.add('try');
+    simNext = area.steps.find(item => !simDone.has(item));
+  }
+  if (!simNext) {
+    const hygiene = await runHygieneRefusal(run, p);
+    if (hygiene) return fail(hygiene);
+  }
   let next, currentArea, autoSkipped=false;
   const gateAt=p.now();
   commitRun(run,p,latest=>{
@@ -3432,6 +3479,8 @@ async function showGate(run, p) {
 }
 // Validate the complete selection before mutating any prompt or the journal.
 async function approveGatePrompts(run, p, snapshot = null) {
+  const hygiene = await runHygieneRefusal(run, p);
+  if (hygiene) throw Error(hygiene);
   const fs = p.fs ?? { lstatSync, realpathSync, readFileSync, writeFileSync };
   snapshot ??= await gatePromptSnapshot(run, p);
   const paths = snapshot.map(row => row.path);
@@ -3567,6 +3616,8 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
     const late = fingerprintChanges(run.gate.storySnapshot, storyFingerprint({ root: run.root, changed: await changedFiles(run, p) }));
     if (late.length) return fail(`The Story or its test cases changed after pdd showed the card (${late.slice(0, 3).join('; ')}). Run done again for the step you changed, show the new card and ask the person again.`);
   }
+  const hygiene = await runHygieneRefusal(run, p);
+  if (hygiene) return fail(hygiene);
   let edits = [];
   try {
     if (run.gate && area.steps.every(step => run.done[step])) {

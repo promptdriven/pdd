@@ -1,4 +1,4 @@
-// Generated from prompts/cli/prompt-approve.prompt.md (sha256: ec53c2dd60308d59acde1bd07812933cfbe7dc6ac7db2795293dadfeefe8155f).
+// Generated from prompts/cli/prompt-approve.prompt.md (sha256: 4479047e484c85f270c09471cbffa16a9f873816a04fbf68d40f7495de5b1b3c).
 import { approvalActor, readApprovalPolicy, readSaidWords, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
@@ -6,7 +6,9 @@ import { lstatSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { relative, resolve, sep, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { isDeepStrictEqual } from 'node:util';
+import { findTestPromptViolations } from './file-owner.mjs';
 import { runtimePreflightSlice } from './runtime-seam.mjs';
+import { formatStoryLint, isLintableStoryPath, lintStories } from './story-lint.mjs';
 
 const { gitFiles, interfaceBlocks, promptSchemaRefusals, readPrompt, proseSha256, sha256 } = runtimePreflightSlice();
 
@@ -221,12 +223,59 @@ export function lineReader(stdin) {
   return { ask: () => lines.length ? Promise.resolve(lines.shift()) : closed ? Promise.resolve('') : new Promise(done => waiting.push(done)), close: () => reader.close() };
 }
 
+function changedStoryPaths(root, visible) {
+  const head = spawnSync('git', ['rev-parse', '--verify', 'HEAD^{commit}'], { cwd: root, encoding: 'utf8' });
+  if (head.status !== 0) return [...visible].filter(isLintableStoryPath).sort();
+  const paths = new Set();
+  const addNullSeparated = args => {
+    const out = spawnSync('git', args, { cwd: root, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+    if (out.status === 0 && out.stdout) for (const item of out.stdout.split('\0')) if (item) paths.add(item);
+  };
+  addNullSeparated(['diff', '--no-color', '--no-renames', '--name-only', '-z', 'HEAD']);
+  addNullSeparated(['ls-files', '--others', '--exclude-standard', '-z']);
+  let comparedBase = false;
+  for (const baseRef of ['refs/remotes/origin/main', 'refs/heads/main']) {
+    const mb = spawnSync('git', ['merge-base', 'HEAD', baseRef], { cwd: root, encoding: 'utf8' });
+    const sha = mb.status === 0 ? mb.stdout.trim() : '';
+    if (sha) {
+      if (sha !== head.stdout.trim()) { addNullSeparated(['diff', '--no-color', '--no-renames', '--name-only', '-z', sha]); comparedBase = true; }
+      break;
+    }
+  }
+  if (!comparedBase) {
+    const parent = spawnSync('git', ['rev-parse', '--verify', 'HEAD~1^{commit}'], { cwd: root, encoding: 'utf8' });
+    if (parent.status !== 0) for (const item of visible) paths.add(item);
+  }
+  return [...paths].filter(item => visible.has(item) && isLintableStoryPath(item)).sort();
+}
+
+function approvalHygieneRefusal(root, path, visible) {
+  const ownerCheck = findTestPromptViolations({ root, promptPaths: [path] }, { files: () => [...visible] });
+  if (!ownerCheck.ok) return ownerCheck.violations.map(item => item.message).join('\n');
+  const rootReal = (() => { try { return realpathSync(root); } catch { return resolve(root); } })();
+  const entries = [];
+  for (const storyPath of changedStoryPaths(root, visible)) {
+    const full = join(root, storyPath);
+    try { if (!lstatSync(full).isFile() || realpathSync(full) !== join(rootReal, storyPath)) continue; entries.push({ path: storyPath, text: readFileSync(full, 'utf8') }); }
+    catch { continue; }
+  }
+  const storyCheck = lintStories(entries);
+  return storyCheck.ok ? null : formatStoryLint(storyCheck);
+}
+
 // Show one prompt, ask the person, and approve on y. expectedHash (from the Try page) must equal the local prose hash.
 // Returns {state: 'done' | 'declined', exitCode, message}; prints the view and the question to stdout.
 export async function askApproval({ root, path, stdout, answers, expectedHash, said, commit }) {
   let visible, prompt, problems;
   const declined = error => ({ state: 'declined', exitCode: 4, message: error.message });
-  try { visible = new Set(gitFiles(root)); prompt = readPrompt(root, visible, path); }
+  try {
+    visible = new Set(gitFiles(root));
+    if (visible.has(path)) {
+      const hygiene = approvalHygieneRefusal(root, path, visible);
+      if (hygiene) return { state: 'declined', exitCode: 4, message: hygiene };
+    }
+    prompt = readPrompt(root, visible, path);
+  }
   catch (error) { return declined(error); }
   const text = prompt.rawText, hash = prompt.interface ? proseSha256(text) : null;
   if (prompt.interface && expectedHash !== undefined && expectedHash !== hash) {
@@ -287,6 +336,8 @@ export async function runApprove({ words = [], cwd = process.cwd(), said, automa
     if (!path) throw new Stop(2, `${relative(root, resolve(realpathSync(cwd), words[0])).split(sep).join('/')} is not a Git-visible *.prompt.md file in this repository.`);
     if (automatic) {
       if(said !== undefined) throw new Stop(2,'--automatic does not combine with --said.');
+      const hygiene = approvalHygieneRefusal(root, path, new Set(gitFiles(root)));
+      if (hygiene) throw new Stop(4, hygiene);
       const {runAutomaticApproval}=await import('./runtime-seam.mjs');
       return runAutomaticApproval({path,root,tests},{...ports,stdout,stderr});
     }
