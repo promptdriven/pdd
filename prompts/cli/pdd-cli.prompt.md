@@ -318,7 +318,7 @@ reply.
 {
   "kind": "partial",
   "status": "approved",
-  "prose_sha256": "dd2392d88ce590335b37d4d156ac09cab1a0d2861f8521b78abb28f7d897985d",
+  "prose_sha256": "120fbbb9832273d89d0211cdde6d72c75c1cad7bcf8c7bb5be5133a17a6b27bb",
   "entries": [
     {
       "operation": "runPdd",
@@ -1238,6 +1238,9 @@ reply.
                     "type": "string"
                   },
                   "GEMINI_CLI_HOME": {
+                    "type": "string"
+                  },
+                  "ANTIGRAVITY_APP_DATA_DIR": {
                     "type": "string"
                   },
                   "PDD_RUNTIME_URL": {

@@ -89,7 +89,7 @@ async function fixture(t, options = {}) {
       ? [await f.ports.selectAgent({cwd}, {...f.ports,env}) ?? {id:'codex',kind:'codex',command:'codex',env:{}}]
       : loadAgentDefinitions({cwd,env});
     const read=ports.files.readFileSync;
-    ports.files.readFileSync=path=>path.includes('/skills/')?'skill':path.endsWith('/.gemini/oauth_creds.json')?(f.ports.selectAgent?'{"refresh_token":"fixture"}':nativeFs.readFileSync(path,'utf8')):read(path);
+    ports.files.readFileSync=path=>path.includes('/skills/')?'skill':path.endsWith('/oauth_creds.json')?(f.ports.selectAgent?'{"refresh_token":"fixture"}':nativeFs.readFileSync(path,'utf8')):read(path);
     ports.run=async(file,args,options)=>{
       if (!f.ports.selectAgent && ['codex','claude','agy','gemini'].includes(file)) return f.ports.run(file,args,options);
       if (args[0]==='models' || args[0]==='--version' && file!=='git' && file!=='gh' && file!=='herdr' && !file.endsWith('/pdd')) return {code:definitions.some(def=>def.command===file)?0:1,stdout:'fixture',stderr:''};
@@ -478,7 +478,7 @@ test('#3230 start with explicit --agent, profile folder env, or --pool overwrite
   delete f.ports.selectAgent;
   const origRun = f.ports.run;
   f.ports.run = async (command, args, opts = {}) => {
-    if (command === 'codex' || command === 'claude') {
+    if (command === 'codex' || command === 'claude' || command === 'gemini') {
       if (args[0] === '--version') return { code: 0, stdout: `${command} 1.0.0\n`, stderr: '' };
       if (args.join(' ') === 'login status') return { code: 0, stdout: 'Logged in using ChatGPT\n', stderr: '' };
       if (args.join(' ') === 'auth status --json') return { code: 0, stdout: '{"loggedIn":true}\n', stderr: '' };
@@ -567,4 +567,19 @@ test('#3230 start with explicit --agent, profile folder env, or --pool overwrite
   const badPool = await f.invoke('start', { env: baseEnv, label: 'pdd:autopilot', pool: join(f.dir, 'missing-pool.json') });
   assert.equal(badPool.exitCode, 2);
   assert.equal(f.state().poolPath, poolFile, 'bad --pool leaves saved state untouched');
+
+  // 6. Pool start with Gemini login authenticated via flat <geminiCliHome>/oauth_creds.json passes both pool selection and doctor preflight!
+  const geminiDir = join(f.home, '.gemini-flat');
+  mkdirSync(geminiDir, { recursive: true });
+  writeFileSync(join(geminiDir, 'oauth_creds.json'), JSON.stringify({ refresh_token: 'gemini-flat-refresh-token' }));
+  const geminiPool = join(f.dir, 'gemini-pool.json');
+  writeFileSync(geminiPool, JSON.stringify({
+    reset: 'never',
+    logins: [{ id: 'gemini-flat', kind: 'gemini', geminiCliHome: geminiDir }],
+  }));
+  const geminiStart = await f.invoke('start', { env: baseEnv, label: 'pdd:autopilot', pool: geminiPool });
+  assert.equal(geminiStart.exitCode, 0, geminiStart.message);
+  assert.equal(f.state().agent.id, 'gemini-flat');
+  assert.equal(f.state().agent.kind, 'gemini');
+  assert.equal(f.state().environment.GEMINI_CLI_HOME, geminiDir);
 });

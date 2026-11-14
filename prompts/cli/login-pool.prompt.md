@@ -65,8 +65,10 @@ unknown). `readPoolCooldowns` drops expired entries (`until <= now`).
    in `cooling`.
 2. Build `loginEnvironment` and check local sign-in (`codex login status`,
    `claude auth status --json`, `agy models` via `checkWorkflowAgents`, or
-   `gemini --version` plus `oauth_creds.json` `refresh_token`; replaceable via
-   `ports.probeLogin`). Unsigned logins go to `unavailable`.
+   `gemini --version` plus `GEMINI_API_KEY`, `GOOGLE_API_KEY`,
+   `GOOGLE_GENAI_USE_VERTEXAI=true`, `GOOGLE_GENAI_USE_GCA=true`, or an
+   `oauth_creds.json` `refresh_token` in `.gemini/` or the profile root;
+   replaceable via `ports.probeLogin`). Unsigned logins go to `unavailable`.
 3. For `codex`, call `readCodexLimits` with `weeklyStopPercent` (default `97`).
    - `limited` marks the login exhausted until `limits.resetAt` (or 30 minutes)
      and moves to the next login (unless `allowLimited` is set for preflight

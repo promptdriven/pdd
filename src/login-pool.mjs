@@ -1,4 +1,4 @@
-// Generated from prompts/cli/login-pool.prompt.md (sha256: c2de39ef404f8630e517be9dab8bf7060157d5145d955ef0367e8a456934695c).
+// Generated from prompts/cli/login-pool.prompt.md (sha256: b84142b19c1067238529f1e88fa731823b6f2ea8f25eaacb866749ecd074c314).
 import * as nativeFs from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -302,7 +302,7 @@ async function defaultProbeLogin(login, { cwd, env, fs = nativeFs, run = runAgen
     if (login.kind === 'gemini') {
       const info = await exec(['--version']);
       if (info?.code !== 0) return { ok: false, reason: 'missing' };
-      if (['GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GOOGLE_GENAI_USE_VERTEXAI', 'GOOGLE_GENAI_USE_GCA'].some(k => env[k])) return { ok: true };
+      if (Boolean(env.GEMINI_API_KEY || env.GOOGLE_API_KEY) || env.GOOGLE_GENAI_USE_VERTEXAI === 'true' || env.GOOGLE_GENAI_USE_GCA === 'true') return { ok: true };
       const base = env.GEMINI_CLI_HOME || env.HOME || '';
       for (const candidate of [join(base, '.gemini', 'oauth_creds.json'), join(base, 'oauth_creds.json')]) {
         try {
