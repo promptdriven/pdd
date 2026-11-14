@@ -15,10 +15,16 @@ Start with `# Product name: map`, `Sentence: "the person's sentence"` and
 | Journeys | Id, Journey, Stories |
 | Questions | Id, Question, Recommendation, Example, Answer |
 
-A part names its prompt folder, such as `phone` and `prompts/phone`. Stories use
-stable IDs such as P01, the person's words, and CORE or LATER. A journey names
-its constituent Story IDs. Leave unanswered questions blank; never supply the
-person's answer. Give each question a recommended choice and concrete example.
+A part names its prompt folder, such as `phone` and `prompts/phone`, and states
+whether it faces a person or runs headless (only user-facing parts get `.ui.svg`
+screens and `app/maps/<part>.json`; backend servers, routers and daemons get `0`
+screens). Stories use stable IDs such as P01, plain customer words (`As a <person>,
+I want <goal>, so that <reason>`), and CORE or LATER. Never write component-actor Stories
+(`"I want the router/connector to..."`), cross-part plumbing duplicates (`1` user
+goal = `1` Story), or standalone Stories for edge cases and internal safety rules
+(those belong in module prompts and `## Rules to check`). A journey names its
+constituent Story IDs. Leave unanswered questions blank; never supply the person's
+answer. Give each question a recommended choice and concrete example.
 
 ## Plan: product/plan.md
 
@@ -29,13 +35,20 @@ Use `# Product name: plan`. A small map with exactly one part needs no separate 
 | Boundaries | From, To, What crosses, Contract |
 | Runs | Run, Part, Slice, Stories, Needs |
 
-State what never crosses a boundary. A Run is a stable name such as phone-1;
-Part names one map part, or `all` for journeys. Slice is a label such as 1.
-Stories and Needs are comma lists. Needs names `plan PR` or earlier runs; empty
-means no needs. `plan PR` is satisfied when the plan file is on the base branch;
-a planned run is done when its implementation PR is merged. Commands read local
-base refs, which may be stale, and do not prove a person's approval. Large plans
-describe the journey of each slice.
+State what never crosses a boundary. Under a separate `## Prompts` heading (not
+inside `## Boundaries` or `## Runs`), state how each part starts and connects in
+real execution, naming both its checkable domain/screen prompt(s) (faked over
+contract ports in `pdd test`) and any thin `"kind": "native-only"` adapter prompt(s)
+for real HTTP/HTTPS routes, auth/cookies, SQLite or external databases, CLI/OS
+processes and browser DOM/network clients (RUNBOOK §21; `0` Runtime AI calls in
+`pdd test`, verified by native tests in `code` PR 2) so finished runs form a
+runnable product rather than isolated port functions. A Run is a stable name such
+as phone-1; Part names one map part, or `all` for journeys. Slice is a label such
+as 1. Stories and Needs are comma lists. Needs names `plan PR` or earlier runs;
+empty means no needs. `plan PR` is satisfied when the plan file is on the base
+branch; a planned run is done when its implementation PR is merged. Commands read
+local base refs, which may be stale, and do not prove a person's approval. Large
+plans describe the journey of each slice.
 
 ## Planned-run identity
 
