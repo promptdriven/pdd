@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 646e198fbb4385e472f42d737f9c8b81b48e2b0746678c2759a9fefc221c3012).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 5ec719442e1fafd2814e673ed723e87c4feb4999725f9b55d7ef2da269191ff9).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -148,7 +148,7 @@ const routes = [
   { id: 'owner', prefix: ['owner'], local: 'file-owner', operands: [{ name: 'path', type: 'text', repeat: true }], options: [{ name: '--json', kind: 'flag' }],
     forms: [form('pdd owner PATH... [--json]', 'Show which prompt owns each file, from pdd-bindings.json, Generated from headers and prompt opening sentences; reads local files only.')] },
   { id: 'approve', prefix: ['approve'], local: 'prompt-approve', operands: [{ name: 'prompt', type: 'text' }], options: [{name:'--said',kind:'text'}],
-    forms: [form('pdd approve PROMPT [--said WORDS]', "Show one prompt and its text changes since its last approval. Approve only that prompt. Easy mode accepts the person's nonblank words without grading them. " + approvalHelp('pdd approve PATH'))] },
+    forms: [form('pdd approve PROMPT [--said WORDS]', "Show one prompt's text changes since its last approval (plus any embedded runtime interface or native-only declaration). Approve only that prompt. Easy mode accepts the person's nonblank words without grading them. " + approvalHelp('pdd approve PATH'))] },
   // A quiet word (`sim`) parses like the prefix, with nothing added; help names `sim` once, completion never.
   { id: 'try', prefix: [simulate], local: 'runtime-try', quiet: ['sim'], removed: ['try'], operands: [{ name: 'story', type: 'text', optional: true }],
     options: [{name:'--product',kind:'flag'},{name:'--parts',kind:'text'},{name:'--journey',kind:'text'}, { name: '--agent', kind: 'text' }, { name: '--tab', kind: 'value', choices: ['call', 'screen', 'terminal', 'world'] }, { name: '--new', kind: 'flag' },

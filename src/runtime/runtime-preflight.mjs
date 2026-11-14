@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: f40a2ae75328ec4b89e4c23a35101b95e1428af2748d9da6c0df7b13f3e46326).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: cb0419738102bcdbdefc420781b829ea6d4ef4685836c86273c95b81ab215b8f).
 import { markdownLinks, markdownDefinitions, markdownSectionText } from './runtime-markdown.mjs';
 import { buildBindingPlan, runtimeBoundary } from './runtime-binding-plan.mjs';
 import { createHash } from 'node:crypto';
@@ -705,7 +705,7 @@ export const STALE_HINT = 'the text changed after approval: update the prompt an
 export const staleHint = `pdd: ${STALE_HINT}.`;
 const PROMPT_MESSAGES = {
   'entry-missing': path => `${path} is not a Git-visible *.prompt.md file.`,
-  'interface-missing': path => `${path} has no Runtime interface block, and the Runtime server does not advertise lazy-interfaces.`,
+  'interface-missing': path => `${path} has no Runtime interface block, and the PDD interpreter does not advertise lazy-interfaces.`,
   'pdd-two-interfaces': path => `${path} has more than one Runtime interface declaration. Keep one.`,
   'invalid-json': path => `The Runtime interface of ${path} is not valid JSON.`,
 };
