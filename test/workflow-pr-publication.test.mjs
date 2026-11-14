@@ -70,12 +70,12 @@ else if(a[1]==='create'||a[1]==='edit'){
 `;
   writeFileSync(join(bin, 'gh'), fake); chmodSync(join(bin, 'gh'), 0o755);
   const save = () => writeFileSync(join(runDir, 'status.json'), JSON.stringify(run)); save();
-  const invoke = (summary, method = 'stepDone', step = prompt ? 'check' : 'formal', results = null) => {
+  const invoke = (summary, method = 'stepDone', step = prompt ? 'check' : 'formal', results = null, confirmValue = false) => {
     const review=String(summary).split('\n').filter(row=>row.startsWith('Review:')).join('\n');if(review)writeFileSync(join(runDir,'review.md'),review);
     const verify=String(summary).split('\n').filter(row=>/^(?:Not fixed yet:|Proof \()/.test(row)).join('\n');if(verify)writeFileSync(join(runDir,'verify.md'),verify);
     const scope=String(summary).split('\n').filter(row=>row.startsWith('Not caught because:')).join('\n');if(scope)writeFileSync(join(runDir,'scope.md'),scope);
 
-    const script = `import {${method}} from ${JSON.stringify(join(packageRoot, 'src/workflow-runner.mjs'))};const r=await ${method}({ref:'17',step:${JSON.stringify(step)},summary:${JSON.stringify(summary)},cwd:${JSON.stringify(root)}},{stateDir:${JSON.stringify(join(base, 'pdd-state'))},isTTY:true,env:{HOME:${JSON.stringify(base)}},confirm:async()=>false,...(${JSON.stringify(results)} ? {readRunResults:()=>${JSON.stringify(results)}} : {})});process.stdout.write(JSON.stringify(r));`;
+    const script = `import {${method}} from ${JSON.stringify(join(packageRoot, 'src/workflow-runner.mjs'))};const r=await ${method}({ref:'17',step:${JSON.stringify(step)},summary:${JSON.stringify(summary)},cwd:${JSON.stringify(root)}},{stateDir:${JSON.stringify(join(base, 'pdd-state'))},isTTY:true,env:{HOME:${JSON.stringify(base)}},confirm:async()=>${Boolean(confirmValue)},...(${JSON.stringify(results)} ? {readRunResults:()=>${JSON.stringify(results)}} : {})});process.stdout.write(JSON.stringify(r));`;
     return JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], { cwd: root, encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, PDD_PUBLICATION_GH_STATE: state, GIT_ALLOW_PROTOCOL: 'file' } }));
   };
   const machine = (proved = head) => writeFileSync(join(runDir, 'old-code-proof.json'), JSON.stringify({ v: 2, origin: 'pdd.workflow-prove.v2',interruptSignal:'', runId: run.runId, baseSha, headSha: proved, test: 'node --test test/value.test.mjs', expect: 'defect', paths: ['test/value.test.mjs'], base: phase(1, true), head: phase(0), outcome: 'proved', cleanupError: '', setupError: '' }));
@@ -1870,4 +1870,96 @@ test('2923 draftDescription syncs pdd:no-verdict only after gh pr edit succeeds 
     assert.ok(!fr.data().labelCreates[0].includes('--force'));
     assert.deepEqual(fr.data().prs[0].labels, ['pdd:no-verdict']);
   }
+});
+
+test('2923 cross-branch PR 1 refresh after origin/<pr1.branch> deletion uses pr1.publishedHeadSha and fails closed without reading PR 2 HEAD or working tree', t => {
+  const validNative = makePromptText('# Crypto ECDH\n\nOwn `src/crypto.mjs`.', {
+    kind: 'native-only',
+    status: 'approved',
+    reason: 'Native OpenSSL P-256 curve point validation',
+  });
+  const partialPrompt = makePromptText('# Policy\n\nOwn `src/policy.mjs`.', {
+    kind: 'partial',
+    status: 'approved',
+    entries: [],
+    calls: [],
+    resources: [],
+    limits: { max_steps: 1, max_model_calls: 1 },
+    conventions: [],
+  });
+
+  // 1. After PR 1 merges and origin/<pr1.branch> is deleted, refreshing PR 1 from the code branch falls back to pr1.publishedHeadSha (ignoring PR 2 HEAD's partial prompt).
+  const f1 = fixture(t, { prompt: true });
+  mkdirSync(join(f1.root, 'prompts'), { recursive: true });
+  mkdirSync(join(f1.root, 'user_stories'), { recursive: true });
+  writeFileSync(join(f1.root, 'prompts/crypto.prompt.md'), validNative);
+  writeFileSync(join(f1.root, 'user_stories/value.md'), VALUE_STORY);
+  f1.git('add', '.'); f1.git('commit', '-qm', 'PR 1 valid native-only prompt');
+  const pr1Head = f1.git('rev-parse', 'HEAD');
+  const pub1 = f1.invoke('Prompt scope checked');
+  assert.equal(pub1.exitCode, 0, pub1.message);
+  Object.assign(f1.run, JSON.parse(readFileSync(join(f1.runDir, 'status.json'), 'utf8')));
+  assert.equal(f1.run.pr[0].publishedHeadSha, pr1Head);
+  f1.git('switch', '-q', 'main');
+  f1.git('merge', '--no-ff', '--no-edit', '-q', 'topic');
+  const mergeSha = f1.git('rev-parse', 'HEAD');
+  f1.git('push', '-q', 'origin', 'main');
+  f1.git('push', '-q', 'origin', '--delete', 'topic');
+  f1.git('update-ref', '-d', 'refs/remotes/origin/topic');
+  f1.git('switch', '-qc', 'other-code');
+  writeFileSync(join(f1.root, 'prompts/policy.prompt.md'), partialPrompt);
+  f1.git('add', '.'); f1.git('commit', '-qm', 'code branch non-native prompt');
+  f1.run.branch = 'other-code';
+  delete f1.run.done.check;
+  awaitingCode(f1);
+  f1.configure({
+    repoLabels: ['pdd:no-verdict'],
+    prs: f1.data().prs.map(pr => ({ ...pr, state: 'MERGED', mergeCommit: { oid: mergeSha }, labels: ['keep-me', 'pdd:no-verdict'] })),
+  });
+  const refresh1 = f1.invoke('', 'approveRun', 'check', null, true);
+  assert.match(refresh1.message, /pdd updated the PR 1 description/);
+  assert.deepEqual(f1.data().prs[0].labels, ['keep-me']);
+  assert.doesNotMatch(f1.data().prs[0].body, /pdd:no-verdict/);
+  assert.match(f1.data().prs[0].body, /\| Prompt tests \(`pdd test`\) \| not-applicable \(native-only\) \|/);
+
+  // 2. When origin/<pr1.branch> is deleted AND pr1.publishedHeadSha is unavailable, cross-branch PR 1 refresh fails closed to pdd:no-verdict rather than reading PR 2's HEAD.
+  const f2 = fixture(t, { existing: true, prompt: true });
+  f2.git('switch', '-q', 'main');
+  f2.git('merge', '--no-ff', '--no-edit', '-q', 'topic');
+  const merge2 = f2.git('rev-parse', 'HEAD');
+  f2.git('push', '-q', 'origin', 'main');
+  f2.git('push', '-q', 'origin', '--delete', 'topic');
+  f2.git('update-ref', '-d', 'refs/remotes/origin/topic');
+  f2.git('switch', '-qc', 'other-code');
+  mkdirSync(join(f2.root, 'prompts'), { recursive: true });
+  mkdirSync(join(f2.root, 'user_stories'), { recursive: true });
+  writeFileSync(join(f2.root, 'prompts/crypto.prompt.md'), validNative);
+  writeFileSync(join(f2.root, 'user_stories/value.md'), VALUE_STORY);
+  f2.git('add', '.'); f2.git('commit', '-qm', 'PR 2 valid native-only prompt must not bleed into PR 1');
+  f2.run.branch = 'other-code';
+  delete f2.run.pr[0].publishedHeadSha;
+  awaitingCode(f2);
+  f2.configure({
+    repoLabels: ['pdd:no-verdict'],
+    prs: f2.data().prs.map(pr => ({ ...pr, state: 'MERGED', mergeCommit: { oid: merge2 }, labels: ['keep-me'] })),
+  });
+  const refresh2 = f2.invoke('', 'approveRun', 'check', null, true);
+  assert.equal(refresh2.exitCode, 1);
+  assert.deepEqual(f2.data().prs[0].labels, ['keep-me', 'pdd:no-verdict']);
+  assert.match(f2.data().prs[0].body, /pdd:no-verdict/);
+
+  // 3. If git ls-tree fails, nativeOnlyPrompts fails closed to pdd:no-verdict and never falls back to working-tree files.
+  const f3 = fixture(t, { prompt: true });
+  mkdirSync(join(f3.root, 'prompts'), { recursive: true });
+  mkdirSync(join(f3.root, 'user_stories'), { recursive: true });
+  writeFileSync(join(f3.root, 'prompts/crypto.prompt.md'), validNative);
+  writeFileSync(join(f3.root, 'user_stories/value.md'), VALUE_STORY);
+  f3.git('add', '.'); f3.git('commit', '-qm', 'valid native-only prompt');
+  const gitWrapperPath = join(f3.base, 'bin', 'git');
+  const origWrapper = readFileSync(gitWrapperPath, 'utf8');
+  writeFileSync(gitWrapperPath, origWrapper.replace('const r=cp.spawnSync', 'if(a.includes("ls-tree"))process.exit(1);const r=cp.spawnSync'));
+  const out3 = f3.invoke('Prompt scope checked');
+  assert.equal(out3.exitCode, 0, out3.message);
+  assert.deepEqual(f3.data().prs[0].labels, ['pdd:no-verdict']);
+  assert.match(f3.data().prs[0].body, /pdd:no-verdict/);
 });
