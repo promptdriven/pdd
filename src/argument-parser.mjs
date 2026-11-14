@@ -44,7 +44,7 @@ function parseRoute(route, words, allowHelp = false) {
     if (word === '--' && route.operands.at(-1)?.type === 'text' && !literal) { literal = true; continue; }
     if (!literal && word.startsWith('-')) {
       const option = route.options.find(option => option.name === word);
-      if (!option || Object.hasOwn(options, word)) fail();
+      if (!option || (Object.hasOwn(options, word) && !option.repeat)) fail();
       if (option.kind === 'flag') options[word] = true;
       else if (option.kind === 'optional-integer') {
         const next = words[index + 1];
@@ -66,7 +66,7 @@ function parseRoute(route, words, allowHelp = false) {
       else {
         const value = words[++index];
         if (!optionValue(option, value)) fail();
-        options[word] = value;
+        options[word] = option.repeat ? Object.freeze([...(options[word] ?? []), value]) : value;
       }
     } else operands.push(word);
   }

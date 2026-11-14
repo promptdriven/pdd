@@ -1,5 +1,10 @@
 # Runtime preflight
 
+
+## Diagnostic step selection
+
+For a diagnostic step selection, validate the authored scenario and select named steps in authored order without editing the source files. Validate authored Story criterion identity and text against the original scenario, then validate selected step shapes, inputs, interfaces and bindings. Unselected step inputs, interfaces, bindings and checks do not refuse the subset; criteria covered only by unselected steps do not refuse it. Project the Story and scenario criteria consistently for server admission while leaving authored files intact. Unknown IDs refuse locally and list available IDs. Refuse an omitted prefix when a selected step references an omitted step result or the scenario can depend on prior world state; explain that the prerequisite steps must be selected. Capture the projected scenario for transport only, retaining the authored files unchanged. Its upload digest identifies projected bytes and can differ from the authored source digest.
+
 Own `src/runtime/runtime-preflight.mjs`. It does all local work for `pdd test` and `pdd simulate` before anything goes to the PDD runtime: it finds the files, the tests and the stories, checks each test, computes the prose hash, fills draft hashes and builds the source tar. It makes no network call and never reads a token.
 
 ## Shared authored-file reader

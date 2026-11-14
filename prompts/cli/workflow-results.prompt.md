@@ -1,5 +1,10 @@
 # pdd's own results for a run
 
+
+## Diagnostic step selection
+
+Diagnostic subset batches and rows never qualify as a Story check verdict, including saved reads; skip them when finding the latest qualifying whole-Story result.
+
 ## Affected report metadata (draft)
 
 When a saved Check batch has `check_selection` or `baseline_report`, carry these

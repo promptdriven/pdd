@@ -1,5 +1,10 @@
 # Local command catalog
 
+
+## Diagnostic step selection
+
+Catalog repeatable `--step STEP_ID` for `pdd test` and show `pdd test STORY --step STEP_ID [--step STEP_ID...] [--json] [--details] [--max-calls N] [--timeout MIN]` in help. The selector is diagnostic, not a full Story pass.
+
 The `pdd test --files` usage form also accepts optional `--json` for its manifest and per-test local refusals, as owned by the runtime client.
 
 

@@ -1,0 +1,22 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/diagnostic-step-selection.md",
+  "criteria": [
+    {"id": "AC1", "text": "A JSON result for a diagnostic check of step `late` marks it as a diagnostic subset and names `late` as the selected step."}
+  ],
+  "initial_world": {},
+  "simulation": {},
+  "context": [],
+  "steps": [
+    {
+      "step_id": "diagnostic-json",
+      "entry_path": "prompts/cli/runtime-output.prompt.md",
+      "operation": "renderJson",
+      "input": {"repo": "example", "exitCode": 0, "rows": [{"story": "example", "title": "Example", "test": "test/runtime/example.json", "state": "passed", "diagnostic_subset": true, "selected_steps": ["late"]}]},
+      "checks": [
+        {"criterion_id": "AC1", "target": "result", "path": "/rows/0/diagnostic_subset", "op": "equals", "value": true},
+        {"criterion_id": "AC1", "target": "result", "path": "/rows/0/selected_steps", "op": "equals", "value": ["late"]}
+      ]
+    }
+  ]
+}

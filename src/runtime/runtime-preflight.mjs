@@ -1013,7 +1013,7 @@ export function scenarioShapeRefusal(doc,path) {
   return null;
 }
 
-function checkTest(root, found, test, prompts, { allowMissingInterfaces = false } = {}) {
+function checkTest(root, found, test, prompts, { allowMissingInterfaces = false, selectedSteps } = {}) {
   let doc = test.doc;
   if (!test.error && isObject(doc)) {
     const prepared = preparedText(root,found.visible,test.path,readText(root,test.path),'scenario');
@@ -1032,11 +1032,23 @@ function checkTest(root, found, test, prompts, { allowMissingInterfaces = false 
   if (resolved.refusal) return done(resolved.refusal);
   doc = resolved.doc;
   const ids = new Set(doc.criteria.map(item => item.id));
-  const story = storyCriteria(storySource);
+  let story = storyCriteria(storySource);
   if (!story.length) return done(refusal('story-criteria-missing', 'story_path', `${doc.story_path} has no numbered "## Acceptance criteria" list.`), story);
   const testTexts = doc.criteria.map(item => item.text).sort(), storyTexts = [...story].sort();
   if (!isDeepStrictEqual(testTexts, storyTexts) && !criterionPlan(doc, story)) return done(refusal('story-criterion-mismatch', 'criteria', firstDifference(testTexts, storyTexts)), story);
   if (!Array.isArray(doc.steps) || !doc.steps.length) return done(refusal('missing-steps', 'steps', 'The test has no steps.'), story);
+  if (selectedSteps) {
+    const available = doc.steps.map(step => step?.step_id).filter(id => typeof id === 'string');
+    const unknown = selectedSteps.filter(id => !available.includes(id));
+    if (unknown.length) return done(refusal('unknown-step', 'steps', `Unknown step ${unknown.join(', ')}. Available steps: ${available.join(', ')}.`), story);
+    const chosen = doc.steps.filter(step => selectedSteps.includes(step.step_id));
+    const omitted = doc.steps.some((step, index) => !selectedSteps.includes(step.step_id) && chosen.some(chosenStep => doc.steps.indexOf(chosenStep) > index));
+    if (omitted && (stringifyScenarioJson(chosen).includes('$step_result') || Object.keys(doc.initial_world ?? {}).length || Object.keys(doc.simulation ?? {}).length))
+      return done(refusal('step-prerequisite', 'steps', 'Selected steps may depend on omitted predecessor steps; select the prerequisite steps.'), story);
+    const used = new Set(chosen.flatMap(step => (step.checks ?? []).map(check => check.criterion_id)));
+    doc = { ...doc, steps: chosen, criteria: doc.criteria.filter(item => used.has(item.id)) };
+    story = doc.criteria.map(item => item.text);
+  }
   const exact = new Set(), inputIssues = [];
   for (const [index, step] of doc.steps.entries()) {
     const section = `steps[${index}]`, at = { step: index + 1 };
@@ -1087,7 +1099,7 @@ function checkTest(root, found, test, prompts, { allowMissingInterfaces = false 
 }
 
 // Rules P1-P10 for the selected tests. Returns rows and warnings; never throws for a test problem.
-export function preflight({ root, found, selected,workspace=found.workspace??loadRuntimeWorkspace({root}), allowMissingInterfaces = false }) {
+export function preflight({ root, found, selected,workspace=found.workspace??loadRuntimeWorkspace({root}), allowMissingInterfaces = false, selectedSteps }) {
   found={...found,workspace};for(const test of selected)requireRuntimePath(workspace,{path:test.path,from:'Selected test'});
   const warnings = [];
   const reviews = numericReviews(root, found, warnings);
@@ -1106,8 +1118,8 @@ export function preflight({ root, found, selected,workspace=found.workspace??loa
     };
     let refused, plan, testSha = null, effectiveDoc = test.doc;
     try {
-      for (const step of Array.isArray(test.doc?.steps) ? test.doc.steps : []) visit(step?.entry_path);
-      const checked = checkTest(root, found, test, prompts, { allowMissingInterfaces });
+      for (const step of Array.isArray(test.doc?.steps) ? test.doc.steps : []) if (!selectedSteps || selectedSteps.includes(step?.step_id)) visit(step?.entry_path);
+      const checked = checkTest(root, found, test, prompts, { allowMissingInterfaces, selectedSteps });
       refused = checked.refusal;
       effectiveDoc = checked.doc;
       const nativeProblems = [...prompts.values()].filter(prompt => prompt.interface?.kind === 'native-only')
@@ -1122,7 +1134,7 @@ export function preflight({ root, found, selected,workspace=found.workspace??loa
       refused = refusal(error.code ?? 'source-unavailable', 'source', error.message,
         {hint:'Restore the named dependency, make it readable, or correct its declared path.'});
     }
-    const row = { test: test.path, story: test.story, title: test.title, refusals: refused ? [refused].flat() : [], warnings: numberWarnings(effectiveDoc, { testPath: test.path, testSha, reviews }),
+    const row = { test: test.path, story: test.story, title: test.title, ...(selectedSteps ? {diagnostic_doc:effectiveDoc} : {}), refusals: refused ? [refused].flat() : [], warnings: numberWarnings(effectiveDoc, { testPath: test.path, testSha, reviews }),
       max_calls: defaultMaxCalls(effectiveDoc), steps: Array.isArray(effectiveDoc?.steps) ? effectiveDoc.steps : [],
       criteria_total: plan?.criteria.length ?? (Array.isArray(effectiveDoc?.criteria) ? effectiveDoc.criteria.length : 0),
       ...(plan?.not_checked.length ? {not_checked:plan.not_checked} : {}), draft: false };

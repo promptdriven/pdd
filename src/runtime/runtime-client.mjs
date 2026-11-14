@@ -1,5 +1,6 @@
 // Generated from prompts/cli/runtime-client.prompt.md (sha256: 7ee5fc6a1bc717c02d7be2e57cca5a4fe9f4bb1c7a74d4c58fcf625e7566bcda).
 import { composeProductTry, selectJourneys, productTapCallBound } from './product-composition.mjs';
+import { stringifyScenarioJson } from './scenario-json.mjs';
 import {expandSource, parseJsonValue, stringifyJsonValue} from './contract-refs.mjs';
 import { describeCallPreflight } from './lint-call-preflight.mjs';
 import { isRecentLintReceipt } from './runtime-lint-receipt.mjs';
@@ -233,7 +234,7 @@ export function readContractHistory({root,env = process.env},ports={}) {
     for (const name of entries.sort()) {
       if (!BATCH.test(name) || !statOrNull(join(directory,name))?.isDirectory() || statOrNull(join(directory,name))?.isSymbolicLink()) continue;
       const folder=join(directory,name), saved=read(join(folder,'batch.json'));
-      if (!saved || saved.intent === 'lint-only' || !Array.isArray(saved.rows)) continue;
+      if (!saved || saved.diagnostic_subset || saved.intent === 'lint-only' || !Array.isArray(saved.rows)) continue;
       const eligibility=(ports.evidenceEligibility??ports.readEvidenceEligibility??(() => ({state:'unavailable',reason:'workflow evidence eligibility port is not bound'})))({root,producerRoot:saved.root,tests:[...new Set(saved.rows.map(row=>row?.test))],source_sha256:saved.source_sha256,runId:saved.association?.runId??null,stage:saved.association?.stage??null},{env,...ports.evidencePorts});
       if(eligibility.state!=='eligible'&&(saved.root!==root||saved.association))continue;
       for (const row of saved.rows) {
@@ -313,7 +314,7 @@ async function readBaselineReport(context, plan, identity) {
     const folder = join(directory,name); let saved;
     try { saved = await read(join(folder,'batch.json')); }
     catch { partial=true;warn('Some saved Check batches are unreadable or corrupt.');continue; }
-    if (saved?.intent !== 'check' && (Object.hasOwn(saved ?? {},'intent') || !Array.isArray(saved?.rows) || !saved.rows.every(row=>isObject(row) && validSavedCheck(row)))) continue;
+    if (saved?.diagnostic_subset || saved?.intent !== 'check' && (Object.hasOwn(saved ?? {},'intent') || !Array.isArray(saved?.rows) || !saved.rows.every(row=>isObject(row) && validSavedCheck(row)))) continue;
     if (saved.version !== 1 || saved.batch !== name || !Array.isArray(saved.rows) || typeof saved.root !== 'string') {
       partial=true;warn('Some saved Check batches have invalid original identity.');continue;
     }
@@ -517,6 +518,7 @@ async function readSavedStoryEvidence({ root, comparisonRoot = root, withTests =
       batch = JSON.parse(await read(path));
       if (!isObject(batch) || batch.version !== 1 || batch.batch !== name || typeof batch.root !== 'string' || !Array.isArray(batch.rows)) throw Error('invalid batch');
     } catch (error) { warning(path, error); continue; }
+    if (batch.diagnostic_subset) continue;
     if (!anyRoot && await real(batch.root) !== wanted) continue;
     const legacy = !Object.hasOwn(batch, 'intent');
     if (batch.intent !== 'check') {
@@ -635,7 +637,7 @@ export async function resendableStoryChecks({ root, since = 0 }, ports = {}) {
   for (const name of names.filter(name => typeof name === 'string' && BATCH.test(name)).sort()) {
     let batch;
     try { batch = JSON.parse(await read(join(directory, name, 'batch.json'))); } catch { continue; }
-    if (!isObject(batch) || batch.batch !== name || batch.intent !== 'check' || typeof batch.root !== 'string' || !Array.isArray(batch.rows)) continue;
+    if (!isObject(batch) || batch.diagnostic_subset || batch.batch !== name || batch.intent !== 'check' || typeof batch.root !== 'string' || !Array.isArray(batch.rows)) continue;
     if (since > 0 && !(Date.parse(batch.created_at) >= since) || await real(batch.root) !== wanted) continue;
     const files = Array.isArray(batch.files) ? batch.files : [];
     const storyOf = row => typeof row?.story !== 'string' ? null : row.story.endsWith('.md') ? row.story
@@ -1938,7 +1940,7 @@ function saveLocalNativeResult(context, rows, intent, problems = []) {
 
 function batchRecord(context) {
   const { batch, origin, root, identity, capture, rows, lint, warnings } = context;
-  return { version: 1, batch, origin, root, check_plan: context.checkPlan ?? null, ...(context.checkSelection ? {check_selection:context.checkSelection,baseline_report:context.baselineReport} : {}), head: context.head, login: identity.login, user_id: identity.userId,
+  return { version: 1, batch, origin, root, ...(context.diagnosticSubset ? {diagnostic_subset:true} : {}), check_plan: context.checkPlan ?? null, ...(context.checkSelection ? {check_selection:context.checkSelection,baseline_report:context.baselineReport} : {}), head: context.head, login: identity.login, user_id: identity.userId,
     source_sha256: capture.sha256, files: capture.files.map(file => file.path), bytes: capture.bytes, timeout_min: context.timeoutMin,
     ...(context.singleAttempt ? {single_attempt:true} : {}),
     source_selection: context.sourceSelection ?? {tests:sentTests(rows),exclude_fixture_projects:context.excludeFixtureProjects === true},
@@ -1949,7 +1951,7 @@ function batchRecord(context) {
     created_at: new Date(context.startedAt).toISOString(), intent: context.intent, lint: lint ? { ...lint, recovery_state: lint.state, ...resultOutcome(lint.public_result ?? lint) } : lint, warnings, coverage: context.coverage,
     contract_snapshots: capture.stories,
     test_cache: context.testCache ? { tokens: [...context.testCache.tokens] } : context.savedTestCache,
-    rows: rows.map(row => ({ test: row.test, ...(row.app_maps?.length ? { app_maps: row.app_maps } : {}), native_only: row.native_only ?? [], story: row.story, story_path: row.story_path, title: row.title, request_ids: row.request_ids, recovery_state: row.state, ...resultOutcome(row),
+    rows: rows.map(row => ({ test: row.test, ...(row.diagnostic_subset ? {diagnostic_subset:true,selected_steps:row.selected_steps} : {}), ...(row.app_maps?.length ? { app_maps: row.app_maps } : {}), native_only: row.native_only ?? [], story: row.story, story_path: row.story_path, title: row.title, request_ids: row.request_ids, recovery_state: row.state, ...resultOutcome(row),
       ...(!row.request_ids.length && Object.hasOwn(row, 'calls') ? { calls: row.calls } : {}),
       ...(row.unsent ? { unsent: true } : {}), ...(row.not_checked?.length ? {not_checked:row.not_checked} : {}), progress: row.progress, ahead: row.ahead, phase: row.phase, post_verdict: row.post_verdict ?? null, binding_plan: row.binding_plan, compatibility: row.compatibility, client_advice: row.client_advice, report_url: row.report_url, refusals: row.refusals, note: row.note ?? null, why: row.why ?? null, next_step: row.next_step ?? null,
       sent_at: row.sent_at ?? null, ended_at: row.ended_at ?? null, max_calls: row.max_calls, warnings: row.warnings, steps: row.steps, criteria_total: row.criteria_total,
@@ -3066,6 +3068,12 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
     if (row.recovery_state !== undefined) { row.state = row.recovery_state; delete row.reason; }
   }
   if (saved.root !== root) throw new Stop(2, 'This saved batch belongs to a different repository.');
+  if (saved.diagnostic_subset) {
+    context.cacheEnabled = false;
+    context.diagnosticSubset = true;
+    context.singleAttempt = true;
+    if (saved.rows.some(row => heldForLint(row) || row.restart_pending)) throw new Stop(2, 'A diagnostic batch cannot resume unsent checks. Start a fresh --step check.');
+  }
   context.checkPlan = saved.check_plan ?? null;
   context.checkSelection = saved.check_selection; context.baselineReport = saved.baseline_report;
   if (saved.local_only === true && saved.rows.length && saved.rows.every(row => row.unsent && ['refused','not_run'].includes(row.state) && !row.request_ids?.length)) {
@@ -3215,6 +3223,7 @@ async function runRetry(context, name, options) {
   const timeout = options['--timeout'] === undefined ? AGENT_WAIT_MIN : Number(options['--timeout']);
   context.deadline = ports.now() + timeout * 60_000;
   const rows = await runRead(context, name, true, options);
+  if (context.diagnosticSubset) throw new Stop(2, 'Diagnostic batches cannot be retried; start a fresh --step check.');
   if (context.localLayout) {
     line(ports.stderr,'For new evidence, run a fresh pdd lint --local.');
     return () => printLocalLayout(context,context.localLayout);
@@ -3258,6 +3267,7 @@ async function runRequest(context, id, cwd) {
   if (read.kind === 'state') {
     const owner=owningCheckBatch(context,identity,origin,id);
     if(owner?.not_checked?.length) Object.assign(row,{not_checked:owner.not_checked,criteria_total:owner.criteria_total,criterion_texts:owner.criterion_texts,steps:owner.steps});
+    if(owner?.diagnostic_subset) Object.assign(row,{diagnostic_subset:true,selected_steps:owner.selected_steps,story:owner.story});
     applyAnswer(row, read.answer, context);
   }
   else {
@@ -3298,7 +3308,7 @@ async function refreshCheckBatches(context, identity, origin, id, answer) {
       if (sameJob(cached, id, 'check') && ['passed', 'failed', 'refused'].includes(cached.state)
         && !['passed', 'failed', 'refused'].includes(answer.state)) continue;
       saveAnswerAt(store, folder, id, answer);
-      if (context.cacheEnabled && saved.version === 1 && saved.intent === 'check'
+      if (context.cacheEnabled && !saved.diagnostic_subset && saved.version === 1 && saved.intent === 'check'
         && Array.isArray(saved.test_cache?.tokens) && saved.rows.some(row => row.request_ids?.at(-1) === id)) {
         const capture = context.ports.captureSource(root, { tests: sentTests(saved.rows), appMap: null, excludeFixtureProjects: saved.exclude_fixture_projects === true });
         if (capture.sha256 !== saved.source_sha256) continue;
@@ -3347,6 +3357,7 @@ async function runCallRead(context, id) {
     Object.assign(context, { origin, secrets });
     const row = { test: '-', story: '-', title: '-', phase: 'server', request_ids: [id], state: 'unknown', refusals: [], warnings: [] };
     const owner = await refreshCheckBatches(context, identity, origin, id, answer);
+    if (owner?.row.diagnostic_subset) Object.assign(row, {diagnostic_subset:true,selected_steps:owner.row.selected_steps,story:owner.row.story});
     if (owner?.row.not_checked?.length) Object.assign(row, {not_checked:owner.row.not_checked,criteria_total:owner.row.criteria_total,
       criterion_texts:owner.row.criterion_texts,steps:owner.row.steps});
     // Use the owning batch only to build the direct row's aggregate projection.
@@ -3386,6 +3397,7 @@ async function runCallRead(context, id) {
 async function withCheckRun(context, run) {
   let ownership;
   context.postCheck = async (request, row, timeoutMs) => {
+    if (context.diagnosticSubset) return postJob(context, '/v1/check', 'check', request, row, timeoutMs, context.deadline);
     ownership ??= (async () => {
       if (!context.testCache) {
         const cache = context.testCache = await openTestCache(context, context.root, false);
@@ -3412,9 +3424,11 @@ async function withCheckRun(context, run) {
 // pdd test. Returns the exit code.
 export async function runCheck({ words = [], options = {}, cwd = process.cwd(), cache = false, client, workflow } = {}, givenPorts = {}) {
   const ports = withDefaults(givenPorts);
-  const context = { ports, clientVersion: client?.version ?? ports.clientVersion ?? null, workflow, singleAttempt: ports.env.PDD_CHECK_SINGLE_ATTEMPT === '1', cacheEnabled: cache || !!options['--lf'] || !!options['--cache-clear'], json: options['--json'] === true, details: options['--details'] === true, explicitTimeout: options['--timeout'] !== undefined, interrupted: false, warnings: [] };
+  const context = { ports, clientVersion: client?.version ?? ports.clientVersion ?? null, workflow, singleAttempt: ports.env.PDD_CHECK_SINGLE_ATTEMPT === '1', cacheEnabled: !options['--step'] && (cache || !!options['--lf'] || !!options['--cache-clear']), json: options['--json'] === true, details: options['--details'] === true, explicitTimeout: options['--timeout'] !== undefined, interrupted: false, warnings: [] };
   let release = () => {};
   try {
+    if (options['--step'] !== undefined && (!Array.isArray(options['--step']) || !options['--step'].length || options['--step'].some(value => typeof value !== 'string' || !value.trim()) || words.length !== 1 || Object.keys(options).some(key => !['--step','--json','--details','--timeout','--max-calls'].includes(key))))
+      throw new Stop(2, '--step requires one Story or scenario and accepts only --json, --details, --timeout and --max-calls.');
     if (options['--affected'] !== undefined && (options['--affected'] !== true || words.length || Object.keys(options).some(key => !['--affected','--json','--details','--timeout','--max-calls','--cache-clear'].includes(key))))
       throw new Stop(2, '--affected accepts no Stories and only --cache-clear, --json, --details, --timeout and --max-calls.');
     if(options['--journeys']!==undefined){
@@ -4089,6 +4103,11 @@ async function runBatch(context, cwd, words, options, setRelease) {
   context.agentLimit = false;
   context.timeoutMin = options['--timeout'] !== undefined ? Number(options['--timeout']) : null;
   let selected = select(found, normalized, root, ports);
+  if (options['--step'] && selected.length !== 1) throw new Stop(2, '--step requires exactly one scenario.');
+  context.diagnosticSubset = !!options['--step'];
+  const diagnosticOriginal = options['--step'] && selected[0]?.storyPath ? {
+    scenario: readFileSync(join(root, selected[0].path)), story: readFileSync(join(root, selected[0].storyPath)),
+  } : null;
   const inventory = selected;
   const allowMissingInterfaces = hasMissingPromptInterface(root, found, entryPaths(inventory))
     ? await probeLazyInterfaces(context, origin, context.store) : false;
@@ -4178,11 +4197,12 @@ async function runBatch(context, cwd, words, options, setRelease) {
     const count = new Set(selected.map(test => test.storyPath ?? test.path)).size;
     line(ports.stderr, `pdd: test cache ${cache && !cache.disabled ? 'cleared' : 'unavailable'}. Running ${count} selected ${count === 1 ? 'Story' : 'Stories'}; the interpreter may reuse saved answers.`);
   }
-  context.coverage = bindingCoverage({ root, found, selected, includeRuntime:true, allowMissingInterfaces });
-  const checked = preflight({ root, found, selected, allowMissingInterfaces });
+  const checked = preflight({ root, found, selected, allowMissingInterfaces, selectedSteps: options['--step'] });
+  context.coverage = bindingCoverage({ root, found, selected: options['--step'] ? selected.map((test,index) => ({...test,doc:checked.rows[index].diagnostic_doc})) : selected, includeRuntime:true, allowMissingInterfaces });
   const rows = localRows(checked.rows);
   context.rows = rows;
   for (const row of rows) {
+    if (options['--step']) Object.assign(row, {diagnostic_subset:true,selected_steps:row.steps.map(step => step.step_id)});
     const test = selected.find(item => item.path === row.test);
     row.story_path = test?.storyPath;
     // A test that discovery cannot use (a conflict, unreadable, invalid or over the upload limit) is refused and never uploaded.
@@ -4220,7 +4240,20 @@ async function runBatch(context, cwd, words, options, setRelease) {
   if (!rows.some(row => row.state === 'ready')) { if (rows.some(row => row.native_only?.length)) saveLocalNativeResult(context, rows, 'check'); return printResult(context, rows); }
   context.nativeSource = nativeSourceIdentity(context, rows);
   let capture;
-  try { capture = captureIndependent(root, rows, ports, {appMap:null,excludeFixtureProjects:words.length === 0,...(allowMissingInterfaces ? {allowMissingInterfaces:true} : {})}); }
+  const diagnosticPrepare = options['--step'] ? snapshot => {
+    const test = selected[0], row = rows[0];
+    const scenarioBytes = snapshot.readFile(test.path), storyBytes = snapshot.readFile(test.storyPath);
+    if (!diagnosticOriginal || !isDeepStrictEqual(scenarioBytes, diagnosticOriginal.scenario) || !isDeepStrictEqual(storyBytes, diagnosticOriginal.story)) throw new PreflightError(4, 'Source changed during diagnostic selection. Try again.');
+    const used = new Set(row.steps.flatMap(step => step.checks.map(check => check.criterion_id)));
+    const criteria = row.diagnostic_doc.criteria.filter(item => used.has(item.id));
+    const story = storyBytes.toString('utf8');
+    const heading = /^##[ \t]+Acceptance(?:[ \t]+criteria)?[ \t]*$/im.exec(story);
+    if (!heading) throw new PreflightError(4, 'Story acceptance criteria heading is missing.');
+    const tail = story.slice(heading.index + heading[0].length), next = /^##\s/m.exec(tail);
+    const projectedStory = story.slice(0, heading.index + heading[0].length) + '\n\n' + criteria.map((item,index) => `${index + 1}. ${item.text}`).join('\n') + '\n\n' + (next ? tail.slice(next.index) : '');
+    return [{path:test.path,bytes:stringifyScenarioJson({...row.diagnostic_doc,criteria,steps:row.steps})},{path:test.storyPath,bytes:projectedStory}];
+  } : undefined;
+  try { capture = captureIndependent(root, rows, ports, {appMap:null,excludeFixtureProjects:words.length === 0,...(diagnosticPrepare ? {prepareSource:diagnosticPrepare} : {}),...(allowMissingInterfaces ? {allowMissingInterfaces:true} : {})}); }
   catch (error) { if (cache) await beginTestAttempts(cache, rows, null, options, origin); throw error; }
   if (!capture || !rows.some(row=>row.state==='ready')) {
     if (cache) await beginTestAttempts(cache,rows,null,options,origin);

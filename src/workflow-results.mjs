@@ -134,7 +134,7 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
   let check = null, lint = null;
   for (const name of names) {
     const batch = readJson(join(directory, name, 'batch.json'));
-    if (!batch || batch.batch !== name || typeof batch.root !== 'string' || !Array.isArray(batch.rows) || batch.rows.some(row=>!row || typeof row!=='object' || Array.isArray(row))) continue;
+    if (!batch || batch.diagnostic_subset || batch.batch !== name || typeof batch.root !== 'string' || !Array.isArray(batch.rows) || batch.rows.some(row=>!row || typeof row!=='object' || Array.isArray(row))) continue;
     let at;
     try { at = Date.parse(batch.created_at); } catch { continue; }
     if (!Number.isFinite(at) || at < since || (batch.intent !== 'check' && batch.intent !== 'lint-only')) continue;
@@ -271,7 +271,7 @@ export function savedLostCheck(batch, { env = process.env, root } = {}) {
   if (!BATCH.test(String(batch ?? '')) || typeof root !== 'string') return null;
   const folder = join(stateFolder(env), 'batches', batch);
   const saved = readJson(join(folder, 'batch.json')), summary = readJson(join(folder, 'summary.json'));
-  if (saved?.batch !== batch || saved.intent !== 'check' || typeof saved.root !== 'string' || real(saved.root) !== real(root)
+  if (saved?.diagnostic_subset || saved?.batch !== batch || saved.intent !== 'check' || typeof saved.root !== 'string' || real(saved.root) !== real(root)
     || !Array.isArray(saved.rows) || !saved.rows.length || !/^[a-f0-9]{64}$/.test(saved.source_sha256 ?? '')) return null;
   if (saved.rows.some(row => !row || (OPEN_ROWS.has(row.recovery_state ?? row.state) || row.state === 'sent'))) return null;
   const lost = saved.rows.filter(row => ['partial', 'unknown'].includes(resultOutcome(row).state));
@@ -294,7 +294,7 @@ export function latestCheckVerdict({ root, since }, { env = process.env } = {}) 
   let latest = null;
   for (const name of names) {
     const batch = readJson(join(directory, name, 'batch.json'));
-    if (batch?.batch !== name || batch.intent !== 'check' || typeof batch.root !== 'string'
+    if (batch?.diagnostic_subset || batch?.batch !== name || batch.intent !== 'check' || typeof batch.root !== 'string'
       || !Array.isArray(batch.rows) || real(batch.root) !== wanted) continue;
     for (const row of batch.rows) if (['passed', 'failed'].includes(row?.state) && Number.isFinite(row.ended_at) && row.ended_at >= since)
       latest = latest === null ? row.ended_at : Math.max(latest, row.ended_at);

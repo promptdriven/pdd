@@ -1,5 +1,10 @@
 # Runtime client
 
+
+## Diagnostic step selection
+
+A `pdd test STORY --step STEP_ID` invocation is diagnostic: require exactly one selected scenario and one or more nonblank step IDs, and reject incompatible selection, cache, recovery or local modes before effects. Select the requested steps, validate through preflight, and send only the projected scenario. Do not reuse or write whole-Story test cache entries or overwrite existing passes for this invocation. Persist the diagnostic marker and selected IDs with any saved batch and propagate them on reads; diagnostic results never supply a full Story pass or approval evidence. An unknown step or unsafe stateful omission refuses before upload. The interpreter may reuse its own saved answers; no server cache bypass is promised.
+
 Own `src/runtime/runtime-client.mjs`. Export `runCheck({words, options, cwd, cache=false, client, workflow}, ports)` and `runTry({words, options, cwd}, ports)`. Each returns an exit code. These commands and the Try MCP tools call the PDD interpreter with the person's `gh` login (recording read tokens through `ports.redaction.remember` or `ports.rememberSecrets`, falling back to the standalone package redactor only when no redaction port is supplied, and forwarding `ports.redaction` to `createAgentBridge`). Lines that pdd writes itself use plain service wording ("PDD interpreter", never internal slot, pool, or account jargon), except the plain busy-check messages owned below.
 
 ## Runtime interface refusal diagnostics

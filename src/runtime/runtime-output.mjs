@@ -368,7 +368,7 @@ export function jsonRow(row) {
         if (typeof input_tokens === 'number' && typeof cached_input_tokens === 'number' && cached_input_tokens > input_tokens) return unknownTokens();
         return { input_tokens, cached_input_tokens, output_tokens, cached_input_share: shareOf(input_tokens, cached_input_tokens) };
       })();
-  return { story: row.story, title: row.title, test: row.test, ...(row.native_only?.length ? {native_only:row.native_only} : {}), ...resultOutcome(row), ...(row.unsent ? {unsent:true} : {}), ...(row.not_checked?.length ? {not_checked:row.not_checked} : {}), ...(row.binding_plan ? {binding_plan:row.binding_plan,binding_diagnostics:bindingRefusals(row.binding_plan,row.compatibility)} : {}), ...(row.compatibility ? { compatibility: row.compatibility, client_advice: row.client_advice } : {}), criterion_coverage: criterionCoverage(row), ...(row.progress ? { progress: row.progress } : {}), ...(row.ahead !== undefined && row.ahead !== null ? { ahead: row.ahead } : {}), checks: row.checks ?? null, criteria: row.criteria ?? null,
+  return { story: row.story, title: row.title, test: row.test, ...(row.diagnostic_subset ? {diagnostic_subset:true,selected_steps:row.selected_steps} : {}), ...(row.native_only?.length ? {native_only:row.native_only} : {}), ...resultOutcome(row), ...(row.unsent ? {unsent:true} : {}), ...(row.not_checked?.length ? {not_checked:row.not_checked} : {}), ...(row.binding_plan ? {binding_plan:row.binding_plan,binding_diagnostics:bindingRefusals(row.binding_plan,row.compatibility)} : {}), ...(row.compatibility ? { compatibility: row.compatibility, client_advice: row.client_advice } : {}), criterion_coverage: criterionCoverage(row), ...(row.progress ? { progress: row.progress } : {}), ...(row.ahead !== undefined && row.ahead !== null ? { ahead: row.ahead } : {}), checks: row.checks ?? null, criteria: row.criteria ?? null,
     failed_checks: publicChecks(row.failed_checks), refusals: (row.refusals ?? []).map(item => ({ code: item.code, ...(item.path ? { path: item.path } : {}), field: item.field ?? null, section: item.section ?? null,
       message: item.message ?? null, engine_message: item.engine_message ?? null, hint: item.hint ?? null, reason: item.reason ?? null, fix: item.fix ?? null,
       where: item.where ?? null, cause: item.cause ?? null,
@@ -439,7 +439,9 @@ export function summaryLine(rows, story = null, ports = {}) {
   const usage = known.length ? `${count(calls, 'AI call')}${rerunShare ? ` (${rerunShare})` : ''}` : rerunShare || count(calls, 'AI call');
   const skipped = rows.some(row => row.cached) ? [count(new Set(rows.filter(row => row.cached).map(row => row.story_path ?? row.story)).size, 'Story').replace('Storys', 'Stories') + ' skipped'] : [];
   const broken = rows.filter(row=>row.unsent).length, unchecked = rows.reduce((n,row)=>n+(row.not_checked?.length??0),0);
-  return [`${labelText}${story ? ` (${story})` : ''}${rows.some(row => row.draft) ? ' (DRAFT)' : ''}: ${mark} ${criteriaText}`,
+  const diagnostic = rows.find(row => row.diagnostic_subset);
+  const scope = diagnostic ? ` (${story ?? diagnostic.story}, step ${diagnostic.selected_steps.join(', ')} — diagnostic subset, not a full Story pass)` : story ? ` (${story})` : '';
+  return [`${labelText}${scope}${rows.some(row => row.draft) ? ' (DRAFT)' : ''}: ${mark} ${criteriaText}`,
     `${checks.passed}/${checks.total} checks`, ...(broken ? [`${broken} tests could not run`] : []), ...(unchecked ? [`${unchecked} criteria not checked; the Story is not a full pass`] : []), ...(progress ? [progress] : []), ...others, ...skipped, ...(progress && !sent.length ? [] : [`${usage}${unknownCalls ? ` + ${unknownCalls} unknown` : ''}`])].join(' · ');
 }
 
