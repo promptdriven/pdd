@@ -68,7 +68,7 @@ Runtime step (role `runtime`, like the suite: no P1, P2 or P3). Each tick, for e
   to 1 MB; the size only above), so a re-run that writes the same file or an edit that flips
   back is not new; (P3) a tool call in its own stream that is not a wait (Codex `--json`
   `item.completed` with its type and fields; Claude `stream-json` `tool_use` with its name and
-  input; agy `stream-json` `step_update` of `step_type` `tool` and `state` `DONE` with its
+  input; Gemini `stream-json` `tool_use` with its `tool_name` and `parameters`; agy `stream-json` `step_update` of `step_type` `tool` and `state` `DONE` with its
   `tool_name` and `tool_info.parameters`; the tools `wait`, `wait_5_seconds`, `wait_agent`,
   `sleep`, `list_agents`, a `write_stdin` with no input and a `sleep N` command are waits);
   (P4) a tool output line (also of a wait) or a
@@ -333,7 +333,9 @@ For each ready issue while slots are free, at most 3 claim attempts per tick:
    start error, also one that the spawn reports later, ends the saved job as
    `no-result`; it never stops the tick.
 
-Intake is held before a claim when the saved agent is not Codex, Claude or agy, when
+Intake is held before a claim when the saved agent is not Codex, Claude, Gemini or agy
+(unless `ports.selectLogin` supplies a supported pool login), when `ports.selectLogin()`
+reports an exhausted login pool (`intake held: the login pool is exhausted ...`), when
 `ports.agentReady()` is false at the first ready issue (for example a Codex usage
 limit), while a machine pause runs (below), or while CI does not start in this
 repository ([Stop owners](#stop-owners), #3260). A final machine-room denial can
@@ -426,6 +428,22 @@ end as `no-result`. Every job kind follows the same rules, in every machine stat
    from now, for example after the clock went back, or a `pending` that is not
    `{issue, at}` numbers) reads as not paused, `streak` 0, `hours` 1, no pending; it
    never stops a tick or status.
+   **Multi-harness login pool (#3252):** when `ports.selectLogin` and
+   `ports.exhaustLogin` are supplied by the [login pool](login-pool.prompt.md), each AI
+   process (`build`, `repair`, `conflict`, `review`) selects the first healthy login and
+   runs with that login's `agent` and isolated `env` (`loginId` saved on the part). When
+   such an AI process ends with no result because of a quota, usage-limit, spend-control
+   or out-of-credits refusal (`isQuotaExhaustionMessage`), the engine calls
+   `ports.exhaustLogin` for that `loginId`: while another login in the pool is `ready`
+   (bounded by the pool size per job), it cleans up the finished part and restarts the
+   same step in place on the next login with zero issue strikes, zero `holdIssue`, zero
+   `pending` and zero `streak` increment. When every login in the pool is `exhausted`, it
+   saves `poolOut {since, resetAt, reason, alerted}` in `core.json`, sends at most one
+   deduplicated `usage-limit` alert naming the earliest reset time (`resetAt`), holds a
+   phase `pr` job via a `service` step wait until `resetAt` (without `holdIssue` or
+   `streak` increment) or releases an unbuilt job cleanly (`owner: "service"`, no
+   cooldown, no `holdIssue`, no `streak` increment), and wakes automatically once `now >=
+   resetAt` or `ports.selectLogin()` finds a `ready` login again (clearing `poolOut`).
 4. `history.jsonl` is read line by line and a line that does not parse is skipped.
    Before each append, the file gets a newline when it does not end with one, so a cut
    line never swallows the next record.
@@ -589,7 +607,7 @@ then such files oldest first while the folder holds more than 500 MiB. Each step
 warns. The numbers are the guard's `logDays` and `logBytes`.
 
 Jobs run through the [headless job runner](agent-job.prompt.md) with
-`agentCommand(state.agent)` and `jobEnvironment(env)`, in `logs/`, with id
+`agentCommand` for Codex, Claude and agy (or Gemini headless CLI `-p "" --output-format stream-json --approval-mode yolo` with optional `--model MODEL` and stdin prompt) and `jobEnvironment(env)` (using the selected pool login's `agent` and isolated `env` when `ports.selectLogin` is present), in `logs/`, with id
 `N-ROLE-STAMP`. The prompt names the job's result file path. Every job runs the pdd
 that runs the tick: the tick writes `bin/pdd` in `ROOT` (`#!/bin/sh` and `exec 'NODE'
 'PACKAGE/bin/pdd.mjs' "$@"`, with this Node and this package, quoted for the shell;
@@ -601,7 +619,7 @@ older than the engine). The build, repair, conflict and review jobs get `pddChec
 {version, cli, skills}`: the engine's version (`ports.version` or the package version),
 `ROOT/bin/pdd`, and `skills {dir, version, read}` (`dir` = `PDD_SKILLS`, `version` = its
 `pdd-feature/SKILL.md` `pdd-skills:` value, `read` = the folder that the job's agent
-loads by default: Codex and agy `~/.agents/skills`, Claude `$CLAUDE_CONFIG_DIR/skills` when that
+loads by default: Codex, Gemini and agy `~/.agents/skills`, Claude `$CLAUDE_CONFIG_DIR/skills` when that
 is absolute, else `~/.claude/skills`). The [job runner](agent-job.prompt.md) notes when
 the agent's shell finds another pdd or the installed skills have another version, and
 status shows those notes beside the running process. They file nothing and never end a
@@ -1679,7 +1697,7 @@ files only: the engine line (mode, repository, folder, base, agent), the slot li
 guard's machine line when the launcher gives one (`guard`, for example `Machine:
 share 50% (default) of 10 cores and 16 GiB · slots min(4, 5 cores ÷ 2, 8 GiB ÷ 3 GiB) = 2
 → 2 (automatic) · … · new work: held (memory pressure)`), the pause
-line (`New jobs paused until TIME (H h): …` or `No pause: N no-result end(s) in a row …`), the CI line
+line (`New jobs paused until TIME (H h): …` or `No pause: N no-result end(s) in a row …`), the login-pool exhaustion line while `poolOut` is set (`Login pool exhausted since TIME: next reset at TIME.` or `Bounded retry window applies.`), the CI line
 while `ciDown` is set (`CI does not start: …`), one line per job (`#N build running 12m (log …)`, `#N PR #P at SHA: review …,
 suite …`, with `; merge lane: final step`, `; merge lane: waiting for PR #P since TIME`,
 `; Runtime: waits for the interpreter maintenance since HH:MM UTC (until HH:MM UTC); no
@@ -1723,7 +1741,7 @@ merge)`.
 `gh(args, {input})` and `git(args, {cwd})` return `{code, stdout, stderr}`; GitHub
 REST calls use `gh api --include --method M ENDPOINT [--input -]`. Also `now()`,
 `fs`, `root`, `reportRoot`, `env`, `version` (the PDD version), `listIssues()`,
-`trusted(row)`, `agentReady()`, `warn(text)`, `alert({issue, kind, text, tried, need, update})`,
+`trusted(row)`, `agentReady()`, optional `selectLogin()` and `exhaustLogin({loginId, resetAt, reason})` of the [login pool](login-pool.prompt.md), `warn(text)`, `alert({issue, kind, text, tried, need, update})`,
 `machine` (`{room, priority(role)}` of the [machine guard](machine-guard.prompt.md); absent: no
 room check and the job runner's default priority), `untestedStories(tree)` (default
 `findTests` of the preflight), `runtimeHealth()` (default `checkRuntimeHealth({env})`) and `resendChecks({root, since})`
@@ -1738,6 +1756,7 @@ with the native defaults named above.
 - [File owner lookup](file-owner.prompt.md): required for `findOwners`, `resolveOwners`
   and `promptHeaderHash` (M-a derived prompt headers).
 - [Headless job runner](agent-job.prompt.md): required for job start, outcome, capture and cleanup.
+- [Multi-harness login pool](login-pool.prompt.md): required for `isQuotaExhaustionMessage` and optional login selection/cooldown rotation.
 - [Machine guard](machine-guard.prompt.md): required for `slotCount` (the slots) and
   `GUARD` (the cleanup limits).
 - [GitHub dependency reader](issue-dependencies-github.prompt.md): required for the

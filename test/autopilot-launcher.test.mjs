@@ -89,7 +89,7 @@ async function fixture(t, options = {}) {
       ? [await f.ports.selectAgent({cwd}, {...f.ports,env}) ?? {id:'codex',kind:'codex',command:'codex',env:{}}]
       : loadAgentDefinitions({cwd,env});
     const read=ports.files.readFileSync;
-    ports.files.readFileSync=path=>path.includes('/skills/')?'skill':path.endsWith('/.gemini/oauth_creds.json')?(f.ports.selectAgent?'{"refresh_token":"fixture"}':nativeFs.readFileSync(path,'utf8')):read(path);
+    ports.files.readFileSync=path=>path.includes('/skills/')?'skill':path.endsWith('/oauth_creds.json')?(f.ports.selectAgent?'{"refresh_token":"fixture"}':nativeFs.readFileSync(path,'utf8')):read(path);
     ports.run=async(file,args,options)=>{
       if (!f.ports.selectAgent && ['codex','claude','agy','gemini'].includes(file)) return f.ports.run(file,args,options);
       if (args[0]==='models' || args[0]==='--version' && file!=='git' && file!=='gh' && file!=='herdr' && !file.endsWith('/pdd')) return {code:definitions.some(def=>def.command===file)?0:1,stdout:'fixture',stderr:''};
@@ -471,4 +471,115 @@ test('#3231 start --share: the timer files run Autopilot at the lowest priority 
       }
     }
   }
+});
+
+test('#3230 start with explicit --agent, profile folder env, or --pool overwrites saved coordinator profile and clears stale pause/cooldowns', async t => {
+  const f = await fixture(t, { tempPrefix: 'pdd-autopilot-override-' });
+  delete f.ports.selectAgent;
+  const origRun = f.ports.run;
+  f.ports.run = async (command, args, opts = {}) => {
+    if (command === 'codex' || command === 'claude' || command === 'gemini') {
+      if (args[0] === '--version') return { code: 0, stdout: `${command} 1.0.0\n`, stderr: '' };
+      if (args.join(' ') === 'login status') return { code: 0, stdout: 'Logged in using ChatGPT\n', stderr: '' };
+      if (args.join(' ') === 'auth status --json') return { code: 0, stdout: '{"loggedIn":true}\n', stderr: '' };
+    }
+    return origRun(command, args, opts);
+  };
+  f.ports.codexLimits = async () => ({ state: 'healthy', resetAt: null, usedPercent: 10 });
+  const baseEnv = { HOME: f.home, PATH: '/fixture/bin' };
+
+  // 1. Initial start saves codex profile.
+  const first = await f.invoke('start', { env: baseEnv, label: 'pdd:autopilot' });
+  assert.equal(first.exitCode, 0, first.message);
+  assert.equal(f.state().agent.kind, 'codex');
+
+  // Seed a stale machine pause and pool cooldown in <stateFile>-core/.
+  const coreDir = f.stateFile().replace(/\.json$/, '-core');
+  mkdirSync(coreDir, { recursive: true });
+  writeFileSync(join(coreDir, 'core.json'), JSON.stringify({
+    streak: 3,
+    hours: 2,
+    pausedUntil: f.time + 3600_000,
+    pausedHours: 1,
+    poolOut: { since: f.time - 60_000, at: f.time, resetAt: f.time + 3600_000, reason: 'usage-limit', issue: 9 },
+  }));
+  writeFileSync(join(coreDir, 'login-pool.json'), JSON.stringify({
+    logins: { 'codex-old': { until: f.time + 3600_000, resetAt: f.time + 3600_000, reason: 'quota', at: f.time } },
+  }));
+
+  // 2. Plain start without override preserves saved codex profile and leaves core.json pause intact.
+  const plain = await f.invoke('start', { env: baseEnv, label: 'pdd:autopilot' });
+  assert.equal(plain.exitCode, 0, plain.message);
+  assert.equal(f.state().agent.kind, 'codex');
+  assert.equal(JSON.parse(readFileSync(join(coreDir, 'core.json'), 'utf8')).streak, 3);
+
+  // 3. Explicit --agent claude + CLAUDE_CONFIG_DIR immediately replaces saved profile and clears pause/cooldowns!
+  const claudeDir = join(f.home, '.claude-team');
+  mkdirSync(claudeDir, { recursive: true });
+  const switched = await f.invoke('start', {
+    env: { ...baseEnv, CLAUDE_CONFIG_DIR: claudeDir },
+    label: 'pdd:autopilot',
+    agent: 'claude',
+  });
+  assert.equal(switched.exitCode, 0, switched.message);
+  assert.match(switched.message, /Account changed from codex to claude/);
+  assert.equal(f.state().agent.kind, 'claude');
+  assert.equal(f.state().environment.CLAUDE_CONFIG_DIR, claudeDir);
+  assert.equal(f.state().launchProfile.agent.kind, 'claude');
+  assert.equal(f.state().launchProfile.configHome, claudeDir);
+  const clearedCore = JSON.parse(readFileSync(join(coreDir, 'core.json'), 'utf8'));
+  assert.equal(clearedCore.streak, 0);
+  assert.equal(clearedCore.pausedUntil, null);
+  assert.equal(clearedCore.poolOut, null);
+  assert.equal(existsSync(join(coreDir, 'login-pool.json')), false);
+
+  // 4. Explicit config folder override (CLAUDE_CONFIG_DIR=/new) without --agent also updates saved profile!
+  const claudeDir2 = join(f.home, '.claude-alt');
+  mkdirSync(claudeDir2, { recursive: true });
+  const folderOverride = await f.invoke('start', {
+    env: { ...baseEnv, CLAUDE_CONFIG_DIR: claudeDir2 },
+    label: 'pdd:autopilot',
+  });
+  assert.equal(folderOverride.exitCode, 0, folderOverride.message);
+  assert.match(folderOverride.message, /Account changed from claude \(.*claude-team\) to claude \(.*claude-alt\)/);
+  assert.equal(f.state().environment.CLAUDE_CONFIG_DIR, claudeDir2);
+  assert.equal(f.state().launchProfile.configHome, claudeDir2);
+
+  // 5. Explicit --pool <path> activates ordered pool and saves poolPath; bad --agent or --pool exits 2 without mutating state.
+  const poolFile = join(f.dir, 'pool.json');
+  writeFileSync(poolFile, JSON.stringify({
+    reset: 'never',
+    logins: [
+      { id: 'codex-pro', kind: 'codex', codexHome: join(f.home, '.codex-pro') },
+      { id: 'claude-alt', kind: 'claude', claudeConfigDir: claudeDir2 },
+    ],
+  }));
+  const pooled = await f.invoke('start', { env: baseEnv, label: 'pdd:autopilot', pool: poolFile });
+  assert.equal(pooled.exitCode, 0, pooled.message);
+  assert.match(pooled.message, /Login pool: codex-pro -> claude-alt \(2 login\(s\)\)/);
+  assert.equal(f.state().poolPath, poolFile);
+  assert.equal(f.state().agent.id, 'codex-pro');
+
+  const badAgent = await f.invoke('start', { env: baseEnv, label: 'pdd:autopilot', agent: 'bogus' });
+  assert.equal(badAgent.exitCode, 2);
+  assert.equal(f.state().poolPath, poolFile, 'bad --agent leaves saved state untouched');
+
+  const badPool = await f.invoke('start', { env: baseEnv, label: 'pdd:autopilot', pool: join(f.dir, 'missing-pool.json') });
+  assert.equal(badPool.exitCode, 2);
+  assert.equal(f.state().poolPath, poolFile, 'bad --pool leaves saved state untouched');
+
+  // 6. Pool start with Gemini login authenticated via flat <geminiCliHome>/oauth_creds.json passes both pool selection and doctor preflight!
+  const geminiDir = join(f.home, '.gemini-flat');
+  mkdirSync(geminiDir, { recursive: true });
+  writeFileSync(join(geminiDir, 'oauth_creds.json'), JSON.stringify({ refresh_token: 'gemini-flat-refresh-token' }));
+  const geminiPool = join(f.dir, 'gemini-pool.json');
+  writeFileSync(geminiPool, JSON.stringify({
+    reset: 'never',
+    logins: [{ id: 'gemini-flat', kind: 'gemini', geminiCliHome: geminiDir }],
+  }));
+  const geminiStart = await f.invoke('start', { env: baseEnv, label: 'pdd:autopilot', pool: geminiPool });
+  assert.equal(geminiStart.exitCode, 0, geminiStart.message);
+  assert.equal(f.state().agent.id, 'gemini-flat');
+  assert.equal(f.state().agent.kind, 'gemini');
+  assert.equal(f.state().environment.GEMINI_CLI_HOME, geminiDir);
 });

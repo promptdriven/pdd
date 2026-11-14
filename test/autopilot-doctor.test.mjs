@@ -291,3 +291,46 @@ test('doctor: the skill bundle is the seven shipped skills; the retired skills a
   f.paths.delete(join('/home/fake','.agents','skills','pdd-graph','SKILL.md'));
   check(await invoke(f),'setup-skills','WARN');
 });
+
+test('#3252 doctor: saved agy profile binds ANTIGRAVITY_APP_DATA_DIR, non-agy profiles strip it, and Gemini matches login-pool auth modes',async()=>{
+  // 1. Saved agy profile preserves ANTIGRAVITY_APP_DATA_DIR and strips CODEX_HOME.
+  const f=doctorFixture();
+  f.input.env.CODEX_HOME='/caller/codex';
+  f.input.env.ANTIGRAVITY_APP_DATA_DIR='/caller/agy';
+  f.input.profile={agent:{id:'agy-work',kind:'agy'},home:'/home/fake',definitionHome:'/home/fake',configHome:'/saved/agy'};
+  const origRun=f.ports.run;
+  f.ports.run=(file,args,opts)=>{
+    if (file==='agy'&&args[0]==='models') { f.calls.push({file,args,options:opts}); return f.answer('gemini-2.5-pro\n'); }
+    return origRun(file,args,opts);
+  };
+  const agyRes=await runAutopilotDoctor(f.input,f.ports);
+  assert.equal(agyRes.exitCode,0,agyRes.message);
+  assert.equal(agyRes.checks.find(c=>c.id==='agent').detail,'agy signed in');
+  const agyCall=f.calls.find(c=>c.file==='agy');
+  assert.equal(agyCall.options.env.ANTIGRAVITY_APP_DATA_DIR,'/saved/agy');
+  assert.equal(Object.hasOwn(agyCall.options.env,'CODEX_HOME'),false);
+  assert.match(agyRes.checks.find(c=>c.id==='node').fix,/-u CODEX_HOME.*ANTIGRAVITY_APP_DATA_DIR='\/saved\/agy'/);
+
+  // 2. Switching to saved codex profile strips caller ANTIGRAVITY_APP_DATA_DIR.
+  const c=doctorFixture();
+  c.input.env.ANTIGRAVITY_APP_DATA_DIR='/caller/agy';
+  c.input.profile={agent:{id:'codex',kind:'codex'},home:'/home/fake',definitionHome:'/home/fake',configHome:'/saved/codex'};
+  const codexRes=await runAutopilotDoctor(c.input,c.ports);
+  assert.equal(codexRes.exitCode,0,codexRes.message);
+  assert.match(codexRes.checks.find(c=>c.id==='node').fix,/-u ANTIGRAVITY_APP_DATA_DIR/);
+
+  // 3. Gemini sign-in accepts flat <GEMINI_CLI_HOME>/oauth_creds.json, GOOGLE_GENAI_USE_GCA=true, and GOOGLE_GENAI_USE_VERTEXAI=true, and rejects false without creds.
+  for (const mode of ['flat-oauth','gca','vertex','gca-false']) {
+    const g=doctorFixture();
+    const geminiHome='/profiles/gemini';
+    if (mode==='flat-oauth') g.paths.set(join(geminiHome,'oauth_creds.json'),JSON.stringify({refresh_token:'GEM_REFRESH_SECRET'}));
+    const extraEnv=mode==='gca'?{GOOGLE_GENAI_USE_GCA:'true'}:mode==='vertex'?{GOOGLE_GENAI_USE_VERTEXAI:'true'}:mode==='gca-false'?{GOOGLE_GENAI_USE_GCA:'false'}:{};
+    g.input.profile={agent:{id:'gemini-work',kind:'gemini'},home:'/home/fake',definitionHome:'/home/fake',configHome:geminiHome};
+    g.ports.agentDefinitions=()=>[{id:'gemini-work',kind:'gemini',command:'gemini',env:extraEnv}];
+    const gRun=g.ports.run;
+    g.ports.run=(file,args,opts)=>file==='gemini'&&args[0]==='--version'?g.answer('0.5.0\n'):gRun(file,args,opts);
+    const gRes=await runAutopilotDoctor(g.input,g.ports);
+    assert.equal(gRes.exitCode,mode==='gca-false'?1:0,`${mode}: ${gRes.message}`);
+    assert.ok(!gRes.message.includes('GEM_REFRESH_SECRET'));
+  }
+});

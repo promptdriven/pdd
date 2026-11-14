@@ -664,17 +664,23 @@ test('a merge check that keeps failing on GitHub (a 502) is a service stop after
   assert.equal(listReportDrafts({ root: w.reportRoot }).length, 0, 'and files no report');
 });
 
-test('an agent other than Codex, Claude or agy holds intake without a claim; agy starts headless jobs', async t => {
+test('an agent other than Codex, Claude, Gemini or agy holds intake without a claim; Gemini and agy start headless jobs', async t => {
   const w = await coreWorld(t);
-  w.state.agent = { kind: 'gemini', command: 'gemini' };
+  w.state.agent = { kind: 'other', command: 'other' };
   w.issue(17);
   const result = await w.tick();
-  assert.equal(w.started.length, 0); assert.equal(w.github.writes.length, 0); assert.match(result.message, /Codex, Claude or agy/);
-  w.state.agent = { id: 'agy', kind: 'agy', command: '/opt/bin/agy' };
+  assert.equal(w.started.length, 0); assert.equal(w.github.writes.length, 0); assert.match(result.message, /Codex, Claude, Gemini or agy/);
+  w.state.agent = { id: 'gemini-main', kind: 'gemini', command: '/opt/bin/gemini', model: 'gemini-2.5-pro' };
   await w.tick();
   assert.equal(w.started.length, 1);
-  assert.equal(w.started[0].command, '/opt/bin/agy');
-  assert.deepEqual(w.started[0].args, ['--input-format', 'text', '--output-format', 'stream-json', '--dangerously-skip-permissions']);
+  assert.equal(w.started[0].command, '/opt/bin/gemini');
+  assert.deepEqual(w.started[0].args, ['-p', '', '--output-format', 'stream-json', '--approval-mode', 'yolo', '--model', 'gemini-2.5-pro']);
+  w.issue(18);
+  w.state.agent = { id: 'agy', kind: 'agy', command: '/opt/bin/agy' };
+  await w.tick();
+  assert.equal(w.started.length, 2);
+  assert.equal(w.started[1].command, '/opt/bin/agy');
+  assert.deepEqual(w.started[1].args, ['--input-format', 'text', '--output-format', 'stream-json', '--dangerously-skip-permissions']);
 });
 
 test('an ended job holds no slot after a restart, and END and merge remove its per-issue files', async t => {

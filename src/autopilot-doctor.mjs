@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-doctor.prompt.md (sha256: 02ad6741adbbaf851a3c13bc73fc6a466aa7330bd28d74ecd5add81239131a63).
+// Generated from prompts/cli/autopilot-doctor.prompt.md (sha256: 2df6bed83816259532dcb17be64abcce2a3cd97aa17ba84e062d28705c60da2f).
 // Source: prompts/cli/autopilot-doctor.prompt.md.
 import {rememberSecrets, knownSecretValues} from './secret-redaction.mjs';
 import * as nativeFiles from 'node:fs';
@@ -19,13 +19,16 @@ const clean = value => String(value).replace(/[\x00-\x1f\x7f-\x9f]/g, ' ');
 const skills = ['pdd-prompting','pdd-setup','pdd-small-change','pdd-bug','pdd-feature','pdd-product','pdd-graph'];
 const ready = value => value?.code === 0;
 
+const PROVIDER_CONFIG_VARS = {codex:'CODEX_HOME',claude:'CLAUDE_CONFIG_DIR',gemini:'GEMINI_CLI_HOME',agy:'ANTIGRAVITY_APP_DATA_DIR'};
+const ALL_PROVIDER_CONFIG_VARS = Object.values(PROVIDER_CONFIG_VARS);
+
 // Shared with start: definition HOME selects agents.json; invocation HOME selects the account.
 export async function resolveAutopilotAgent(input, ports = {}) {
   const caller = input.env ?? ports.env ?? process.env, profile = input.profile;
   const definitionEnv = profile ? {...caller, HOME:profile.definitionHome} : caller;
   if (profile) {
-    const variable={codex:'CODEX_HOME',claude:'CLAUDE_CONFIG_DIR',gemini:'GEMINI_CLI_HOME'}[profile.agent.kind];
-    for (const name of ['CODEX_HOME','CLAUDE_CONFIG_DIR','GEMINI_CLI_HOME']) {
+    const variable=PROVIDER_CONFIG_VARS[profile.agent.kind];
+    for (const name of ALL_PROVIDER_CONFIG_VARS) {
       if (name===variable && profile.configHome) definitionEnv[name]=profile.configHome; else delete definitionEnv[name];
     }
   }
@@ -33,8 +36,8 @@ export async function resolveAutopilotAgent(input, ports = {}) {
     const env = {...caller, ...def?.env};
     if (profile) {
       env.HOME = profile.home;
-      const variable = {codex:'CODEX_HOME',claude:'CLAUDE_CONFIG_DIR',gemini:'GEMINI_CLI_HOME'}[profile.agent.kind];
-      for (const name of ['CODEX_HOME','CLAUDE_CONFIG_DIR','GEMINI_CLI_HOME']) {
+      const variable = PROVIDER_CONFIG_VARS[profile.agent.kind];
+      for (const name of ALL_PROVIDER_CONFIG_VARS) {
         if (name === variable && profile.configHome) env[name] = profile.configHome; else delete env[name];
       }
     }
@@ -45,7 +48,9 @@ export async function resolveAutopilotAgent(input, ports = {}) {
   try { definitions = await (ports.agentDefinitions ?? loadAgentDefinitions)({cwd,env:definitionEnv}); }
   catch (error) { configurationError = error; }
   for (const def of Array.isArray(definitions)?definitions:[]) rememberSecrets(...knownSecretValues(def.env));
-  definitions = [...(Array.isArray(definitions)?definitions:[]),{id:'agy',kind:'agy',command:'agy',env:{}}];
+  const agyId = profile?.agent?.kind==='agy' && profile.agent.id ? profile.agent.id : 'agy';
+  definitions = Array.isArray(definitions) ? [...definitions] : [];
+  if (!definitions.some(def=>def?.id===agyId && def?.kind==='agy')) definitions.push({id:agyId,kind:'agy',command:'agy',env:{}});
   if (profile) definitions = definitions.filter(def=>def.id===profile.agent.id && def.kind===profile.agent.kind);
   const current = caller.CODEX_THREAD_ID?'codex':caller.CLAUDECODE?'claude':null;
   const rank = def => def.kind===current?-1:['codex','claude','agy','gemini'].indexOf(def.kind);
@@ -61,10 +66,18 @@ export async function resolveAutopilotAgent(input, ports = {}) {
         if (result.ok) { agent=def; break; }
       } else if (def.kind==='gemini') {
         const info=await run(['--version']);
-        let credentials;
-        try { credentials=JSON.parse(files.readFileSync(join(env.GEMINI_CLI_HOME||env.HOME||'','.gemini','oauth_creds.json'),'utf8')); } catch {}
-        rememberSecrets(...knownSecretValues(credentials));
-        if (ready(info)&&typeof credentials?.refresh_token==='string'&&credentials.refresh_token) { agent=def; break; }
+        if (ready(info)) {
+          if (Boolean(env.GEMINI_API_KEY||env.GOOGLE_API_KEY)||env.GOOGLE_GENAI_USE_VERTEXAI==='true'||env.GOOGLE_GENAI_USE_GCA==='true') { agent=def; break; }
+          const base=env.GEMINI_CLI_HOME||env.HOME||'';
+          for (const candidate of [join(base,'.gemini','oauth_creds.json'),join(base,'oauth_creds.json')]) {
+            try {
+              const credentials=JSON.parse(files.readFileSync(candidate,'utf8'));
+              rememberSecrets(...knownSecretValues(credentials));
+              if (typeof credentials?.refresh_token==='string'&&credentials.refresh_token) { agent=def; break; }
+            } catch {}
+          }
+          if (agent) break;
+        }
       } else if (['codex','claude'].includes(def.kind)) {
         const status=await run(def.kind==='codex'?['login','status']:['auth','status','--json']);
         installed.push(def);
@@ -222,7 +235,7 @@ export async function runAutopilotDoctor(input, ports = {}) {
     add('sleep',ready(sleep)&&values.length&&values.every(x=>x===0)?'pass':'warn','Sleep can pause work; keep this command running while Autopilot works','caffeinate -i');
   } else add('platform','fail','Autopilot needs Linux or macOS',retry);
   // Only profile paths are literal. Other definition values may be secrets.
-  const names=new Set(['HOME','PATH','CODEX_HOME','CLAUDE_CONFIG_DIR','GEMINI_CLI_HOME',...Object.keys((agent??preferred)?.env??{})]);
+  const names=new Set(['HOME','PATH',...ALL_PROVIDER_CONFIG_VARS,...Object.keys((agent??preferred)?.env??{})]);
   const secret=name=>{
     if (/token|secret|password|passwd|credential|api_?key|private_?key|auth/i.test(name)) return true;
     if (/url$/i.test(name)) {

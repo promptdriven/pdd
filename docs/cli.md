@@ -182,7 +182,7 @@ Autopilot opens no chat and needs no Herdr.
 | Command | What it does |
 |---|---|
 | `pdd autopilot doctor` | Read-only prerequisite checks, one line per item. A WARN or FAIL line also gives a fix command. No GitHub writes or AI calls. Exit 1 for a required failure, 0 when only warnings remain |
-| `pdd autopilot start [--runs N] [--checks N] [--label NAME] [--mode auto\|observe\|off] [--report file\|draft\|off] [--decisions ask\|decide] [--intake off\|shadow\|active] [--share PERCENT]` | Run doctor, check the sign-ins, start the user timer and run the first tick now. The timer runs a tick every 10 minutes. `--label NAME` sets the opt-in label, for example `pdd:autopilot`: Autopilot takes only the issues with this label unless `--intake active` selects vetted ready issues without a label. `--mode`, `--report`, `--decisions` and `--intake` set this machine's mode, report mode, [decision mode](#core-engine) and [intake mode](#intake-cards-shadow) for this repo. These machine values win over `pdd.json`, and a later start without them keeps them. The report mode is `draft` unless you choose `--report file`. `--share PERCENT` (1 to 100, default 50) saves the part of this machine's CPU and memory that Autopilot may use; a later start without it keeps it (see [the machine guard](#core-engine)). `--runs N` and `--checks N` save this machine's run and heavy-check limits; a start without them removes them |
+| `pdd autopilot start [--runs N] [--checks N] [--label NAME] [--mode auto\|observe\|off] [--report file\|draft\|off] [--decisions ask\|decide] [--intake off\|shadow\|active] [--share PERCENT] [--agent codex\|claude\|gemini\|agy] [--pool PATH]` | Run doctor, check the sign-ins, start the user timer and run the first tick now. The timer runs a tick every 10 minutes. `--label NAME` sets the opt-in label, for example `pdd:autopilot`: Autopilot takes only the issues with this label unless `--intake active` selects vetted ready issues without a label. `--mode`, `--report`, `--decisions` and `--intake` set this machine's mode, report mode, [decision mode](#core-engine) and [intake mode](#intake-cards-shadow) for this repo. These machine values win over `pdd.json`, and a later start without them keeps them. The report mode is `draft` unless you choose `--report file`. `--share PERCENT` (1 to 100, default 50) saves the part of this machine's CPU and memory that Autopilot may use; a later start without it keeps it (see [the machine guard](#core-engine)). `--agent` sets or replaces this machine's coordinator agent and sign-in profile; `--pool PATH` sets or replaces this machine's local multi-harness login pool JSON path (or `off` for one login). `--runs N` and `--checks N` save this machine's run and heavy-check limits; a start without them removes them |
 | `pdd autopilot stop` | Save this repo as disabled on this machine, stop its timer and its intake card jobs, and let the current step finish |
 | `pdd autopilot audit RUN PR` | Audit a confirmed automatic merge once with a fresh configured agent. Save OK, CONCERN or BAD and the separate revert recommendation with the run. Post the evidence once on the issue. BAD opens a revert PR only when recommended; otherwise it keeps the merge and reopens the issue with the missing parts. One decision alert states the recommendation and choices. Unknown external outcomes require inspection before any retry. |
 | `pdd autopilot check-base RUN PR` | Check the saved automatic base, PR target, current default branch and newest release before a merge or after it. This command reads only. |
@@ -225,11 +225,13 @@ The first start of a repo on this machine selects the agent. It tries the agent 
 the session that runs the command first: Claude Code when you run it from Claude
 Code, Codex when you run it from Codex. Then it tries Codex, Claude Code, agy and
 Gemini, in that order, and takes the first one that is signed in. This check makes
-no model call. Later starts on this machine keep that agent, also after
-`pdd autopilot stop`. The core needs a Codex or Claude agent. With another agent,
-the tick claims no issue. To select Codex, sign in to Codex and run the first
-`pdd autopilot start` from Codex or from a plain terminal. From a Claude Code
-session, run `env -u CLAUDECODE pdd autopilot start`.
+no model call. Later starts without an account flag keep that saved agent, also
+after `pdd autopilot stop`. To switch the saved account or agent, pass
+`--agent codex|claude|gemini|agy`, `--pool PATH` or a different agent config folder
+(`CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `GEMINI_CLI_HOME` or `ANTIGRAVITY_APP_DATA_DIR`)
+to `pdd autopilot start`. The core runs Codex, Claude, Gemini and agy headless jobs.
+From a Claude Code session, run `env -u CLAUDECODE pdd autopilot start` or pass
+`--agent codex` to select Codex.
 
 Linux uses a systemd user timer; macOS uses a LaunchAgent. No process runs between
 ticks. On Linux, start warns when user-session lingering is off or unavailable:
@@ -296,10 +298,23 @@ Before the tick claims an issue for a Codex agent, it reads the usage of the sav
 Codex profile. The read starts a short app-server connection and uses only
 `initialize`, `initialized` and `account/rateLimits/read`. It makes no model call.
 It does not spend, request credits, consume a usage reset, change sign-in or log
-out an account. A reached limit holds intake: the tick claims no issue and says
-`intake held: the agent is not ready (sign-in or usage limit); no issue was
-claimed`. Jobs that run go on. Unknown usage does not hold intake. Other agent
-kinds have no usage read.
+out an account. A primary window at 100%, a weekly window at 97% (protecting Pro
+and credit-enabled accounts before paid extra credits burn), or a reached rate or
+spend-control limit holds intake: with one account, the tick claims no issue and
+says `intake held: the agent is not ready (sign-in or usage limit); no issue was
+claimed`. Jobs that run go on. Unknown usage does not hold a standard single-account
+intake.
+
+To rotate across local logins on one machine (`codex`, `gemini`, `agy`, `claude`),
+save an ordered `logins` array in `~/.config/pdd/pool.json` or `~/.pdd/pool.json`
+(or pass `pdd autopilot start --pool PATH`). Each entry names only a local CLI and
+profile folder (`codexHome`, `claudeConfigDir`, `geminiCliHome` or `appDataDir`),
+with zero tokens in `pool.json` and `reset: "never"`. When a login hits the 97%
+weekly stop line or a quota or rate limit, Autopilot puts that login on cooldown
+until its reset time (or a 30-minute retry window) and rotates in place to the next
+healthy login without counting an issue strike. When every login in the pool is on
+cooldown, Autopilot pauses intake with one deduplicated alert naming the earliest
+reset time and wakes when a login resets.
 
 Malformed protocol frames stop the connection and report unknown usage. The read
 waits at most one second for cleanup after it selects its result. It sends SIGTERM

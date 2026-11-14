@@ -1,23 +1,30 @@
-// Generated from prompts/cli/codex-limits.prompt.md (sha256: 2d6754461572f93dc5b92b6987ec7b8f492feb09c30f85664c0f7b2d01525f19).
+// Generated from prompts/cli/codex-limits.prompt.md (sha256: 46f5fa425821cf3f79f4853daa93d5fe75a53b1141d9006b430bb2ca4baba626).
 import { spawn } from 'node:child_process';
 const unknown = () => ({ state: 'unknown', resetAt: null, usedPercent: null });
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
-export function parseCodexLimits(reply) {
+const stopThreshold = value => typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= 100 ? value : 97;
+export function parseCodexLimits(reply, { weeklyStopPercent = 97 } = {}) {
   const bucket = reply?.rateLimitsByLimitId?.codex ?? reply?.rateLimits;
   if (!object(bucket)) return unknown();
-  const windows = [bucket.primary, bucket.secondary].filter(row => row != null);
-  const reached = typeof bucket.rateLimitReachedType === 'string' && bucket.rateLimitReachedType.trim() !== '';
+  const weeklyStop = stopThreshold(weeklyStopPercent);
+  const entries = [
+    ['primary', bucket.primary, 100],
+    ['secondary', bucket.secondary, weeklyStop],
+  ].filter(([, row]) => row != null);
+  const windows = entries.map(([, row]) => row);
+  const reached = (typeof bucket.rateLimitReachedType === 'string' && bucket.rateLimitReachedType.trim() !== '')
+    || bucket.spendControlReached === true || reply?.spendControlReached === true;
   if (!windows.length && !reached || windows.some(row => !object(row) || typeof row.usedPercent !== 'number'
     || !Number.isFinite(row.usedPercent) || row.usedPercent < 0 || row.resetsAt != null
     && (typeof row.resetsAt !== 'number' || !Number.isFinite(row.resetsAt) || row.resetsAt < 0 || row.resetsAt > 8.64e12))) return unknown();
-  const blocked = windows.filter(row => row.usedPercent >= 100);
+  const blocked = entries.filter(([, row, limit]) => row.usedPercent >= limit).map(([, row]) => row);
   const limited = blocked.length > 0 || reached;
   const resets = blocked.length ? blocked : reached ? windows : [];
   return { state: limited ? 'limited' : 'healthy',
     resetAt: resets.length && resets.every(row => row.resetsAt != null) ? Math.max(...resets.map(row => row.resetsAt * 1000)) : null,
     usedPercent: windows.length ? Math.max(...windows.map(row => row.usedPercent)) : null };
 }
-export async function readCodexLimits({ command = 'codex', cwd, env = process.env } = {}, ports = {}) {
+export async function readCodexLimits({ command = 'codex', cwd, env = process.env, weeklyStopPercent } = {}, ports = {}) {
   return new Promise(resolve => {
     let child, done = false, buffer = '', size = 0, initialized = false, timer;
     const finish = (value, closed = false) => {
@@ -61,7 +68,7 @@ export async function readCodexLimits({ command = 'codex', cwd, env = process.en
             if (row.error || !object(row.result)) { finish(unknown()); return; }
             initialized = true;
             send({ method: 'initialized' }); send({ method: 'account/rateLimits/read', id: 2 });
-          } else if (row.id === 2 && initialized) finish(row.error ? unknown() : parseCodexLimits(row.result));
+          } else if (row.id === 2 && initialized) finish(row.error ? unknown() : parseCodexLimits(row.result, { weeklyStopPercent }));
         }
       });
       send({ method: 'initialize', id: 1, params: { clientInfo: { name: 'pdd_health', title: 'PDD health', version: '1' } } });
