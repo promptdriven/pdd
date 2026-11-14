@@ -5,8 +5,7 @@ const WINDOW = 50;
 const MIN_CLONE_LINES = 5;
 const BIG_FILE = 1500;
 const HEADER_BYTES = 4096;
-const SCAN_DIRS = ['src', 'bin', 'scripts', 'test', 'tests', 'prompts', '.github'];
-const NET_DIRS = ['src', 'test', 'prompts'];
+const SCAN_DIRS = ['src', 'bin', 'scripts', 'test', 'tests', 'prompts'];
 const SKIP_DIRS = new Set(['.git', 'node_modules']);
 const ESCAPE = 'ESCAPE';
 
@@ -55,7 +54,7 @@ const HISTORY = [
   /\btesters?\b|\bround[- ]\d+\b|\b(?:Claude|Codex) rounds?\b|\bdebates?\b|\b\d{4} session\b/gi,
   /\b[Oo]ption [A-Z]\b/g,
 ];
-const SHELL_REFERENCE = /(?:src|scripts|bin)\/[A-Za-z0-9_/.-]+\.mjs|\/([a-z0-9-]+\.mjs)/g;
+const CLI_PROMPT = /^prompts\/cli\/[^/]+\.prompt\.md$/;
 
 const segments = rel => rel.split('/');
 const inRuntime = rel => segments(rel)[0] === 'src' && segments(rel)[1] === 'runtime';
@@ -285,7 +284,7 @@ function staticImport(F, k) {
 }
 
 function exportDecl(F, k) {
-  const { toks, pair } = F, line = toks[k].line, result = { exports: [], listed: [], spec: null, names: null };
+  const { toks, pair } = F, result = { exports: [], listed: [], spec: null, names: null };
   let m = k + 1;
   if (isP(toks[m], '*')) {
     let f = m + 1;
@@ -300,21 +299,21 @@ function exportDecl(F, k) {
       if (a >= b) continue;
       const local = toks[a].v, name = isId(toks[a + 1], 'as') && toks[a + 2] ? toks[a + 2].v : local;
       locals.push(local);
-      result.exports.push({ name, local, line: toks[a].line, kind: from ? 'reexport' : 'list' });
+      result.exports.push({ name, local, kind: from ? 'reexport' : 'list' });
     }
     if (from) { result.spec = toks[close + 2].v; result.names = locals; }
     return result;
   }
-  if (isId(toks[m], 'default')) { result.exports.push({ name: 'default', local: null, line, kind: 'default' }); return result; }
+  if (isId(toks[m], 'default')) { result.exports.push({ name: 'default', local: null, kind: 'default' }); return result; }
   if (isId(toks[m], 'async')) m++;
   if (isId(toks[m], 'function') || isId(toks[m], 'class')) {
     m++;
     if (isP(toks[m], '*')) m++;
-    if (isId(toks[m])) result.exports.push({ name: toks[m].v, local: toks[m].v, line, kind: 'decl' });
+    if (isId(toks[m])) result.exports.push({ name: toks[m].v, local: toks[m].v, kind: 'decl' });
     return result;
   }
   if (isId(toks[m], 'const') || isId(toks[m], 'let') || isId(toks[m], 'var')) {
-    for (const at of declarators(F, m + 1)) result.exports.push({ name: toks[at].v, local: toks[at].v, line: toks[at].line, kind: 'decl' });
+    for (const at of declarators(F, m + 1)) result.exports.push({ name: toks[at].v, local: toks[at].v, kind: 'decl' });
   }
   return result;
 }
@@ -452,13 +451,13 @@ function references(F, files) {
   for (let k = 2; k < toks.length; k++) {
     if (isId(toks[k], 'createRequire') && isP(toks[k + 1], '(') && isP(toks[k - 1], '=') && isId(toks[k - 2])) requireNames.add(toks[k - 2].v);
   }
-  const bind = (to, kind, line, binding) => {
+  const bind = (to, kind, binding) => {
     if (binding.ns) {
       if (!ns.has(binding.ns)) ns.set(binding.ns, new Set());
       ns.get(binding.ns).add(to);
       declared.add(binding.at);
-      refs.push({ to, kind, line, names: 'NS' });
-    } else refs.push({ to, kind, line, names: binding.names });
+      refs.push({ to, kind, names: 'NS' });
+    } else refs.push({ to, kind, names: binding.names });
   };
   for (let k = 0; k < toks.length; k++) {
     const t = toks[k];
@@ -470,7 +469,7 @@ function references(F, files) {
         const arg = toks[k + 2];
         if (pair[k + 1] > k && arg && (arg.t === 'str' || arg.t === 'tpl') && (isP(toks[k + 3], ')') || isP(toks[k + 3], ','))) {
           const to = resolveSpec(F.rel, arg.v, files);
-          if (to) bind(to, 'dynamic', t.line, bindingOf(F, k, pair[k + 1]));
+          if (to) bind(to, 'dynamic', bindingOf(F, k, pair[k + 1]));
         }
         continue;
       }
@@ -478,7 +477,7 @@ function references(F, files) {
       const decl = staticImport(F, k);
       const to = decl && resolveSpec(F.rel, decl.spec, files);
       if (!to) continue;
-      bind(to, 'static', t.line, decl.ns ?? { names: decl.names });
+      bind(to, 'static', decl.ns ?? { names: decl.names });
       for (const local of decl.locals) imported.set(local, to);
       continue;
     }
@@ -487,32 +486,24 @@ function references(F, files) {
       const to = decl.spec && resolveSpec(F.rel, decl.spec, files);
       exports.push(...decl.exports.map(e => ({ ...e, from: to || null })));
       for (const i of decl.listed) listed.add(i);
-      if (to) refs.push({ to, kind: 'static', line: t.line, names: decl.names });
+      if (to) refs.push({ to, kind: 'static', names: decl.names });
       continue;
     }
     if (requireNames.has(t.v) && isP(toks[k + 1], '(') && toks[k + 2]?.t === 'str' && isP(toks[k + 3], ')')) {
       const to = resolveSpec(F.rel, toks[k + 2].v, files);
-      if (to) bind(to, 'require', t.line, bindingOf(F, k, k + 3));
+      if (to) bind(to, 'require', bindingOf(F, k, k + 3));
       continue;
     }
     if (t.v === 'createRequire' && isP(toks[k + 1], '(') && pair[k + 1] > k && isP(toks[pair[k + 1] + 1], '(')) {
       const open = pair[k + 1] + 1, arg = toks[open + 1];
       const to = arg?.t === 'str' && isP(toks[open + 2], ')') && resolveSpec(F.rel, arg.v, files);
-      if (to) bind(to, 'require', t.line, bindingOf(F, k, open + 2));
+      if (to) bind(to, 'require', bindingOf(F, k, open + 2));
       continue;
     }
     if (t.v === 'new' && isId(toks[k + 1], 'URL') && isP(toks[k + 2], '(') && toks[k + 3]?.t === 'str' && /\.m?js$/.test(toks[k + 3].v)
       && isP(toks[k + 4], ',') && isId(toks[k + 5], 'import')) {
       const to = resolveSpec(F.rel, toks[k + 3].v, files);
-      if (to) refs.push({ to, kind: 'url', line: t.line, names: ESCAPE });
-      continue;
-    }
-    if (t.v === 'join' && isP(toks[k + 1], '(') && pair[k + 1] > k) {
-      for (let m = k + 2; m < pair[k + 1]; m++) {
-        if (parent[m] !== k + 1 || toks[m].t !== 'str' || !/^[a-z0-9-]+\.mjs$/.test(toks[m].v)) continue;
-        const to = resolveSpec(F.rel, `./${toks[m].v}`, files);
-        if (to) refs.push({ to, kind: 'path', line: t.line, names: ESCAPE });
-      }
+      if (to) refs.push({ to, kind: 'url', names: ESCAPE });
     }
   }
   if (ns.size) {
@@ -525,7 +516,7 @@ function references(F, files) {
       else for (const name of use) used.get(t.v).add(name);
     }
     for (const [name, targets] of ns) {
-      for (const to of targets) refs.push({ to, kind: 'ns', line: 0, names: escaped.has(name) ? ESCAPE : [...used.get(name)] });
+      for (const to of targets) refs.push({ to, kind: 'ns', names: escaped.has(name) ? ESCAPE : [...used.get(name)] });
     }
   }
   for (const e of exports) if (e.kind === 'list' && imported.has(e.local)) e.from = imported.get(e.local);
@@ -544,86 +535,71 @@ function internalCounts(F, listed) {
   return counts;
 }
 
-function tarjan(nodes, adjacency) {
+function loopSizes(nodes, adjacency) {
   let index = 0;
-  const order = new Map(), low = new Map(), stack = [], onStack = new Set(), out = [];
+  const order = new Map(), low = new Map(), stack = [], onStack = new Set(), sizes = [];
   const visit = v => {
     order.set(v, index); low.set(v, index); index++;
     stack.push(v); onStack.add(v);
-    for (const w of adjacency.get(v) ?? []) {
+    for (const w of adjacency.get(v)) {
       if (!order.has(w)) { visit(w); low.set(v, Math.min(low.get(v), low.get(w))); }
       else if (onStack.has(w)) low.set(v, Math.min(low.get(v), order.get(w)));
     }
-    if (low.get(v) === order.get(v)) {
-      const component = [];
-      let w;
-      do { w = stack.pop(); onStack.delete(w); component.push(w); } while (w !== v);
-      out.push(component.sort());
-    }
+    if (low.get(v) !== order.get(v)) return;
+    let w, size = 0;
+    do { w = stack.pop(); onStack.delete(w); size++; } while (w !== v);
+    if (size > 1) sizes.push(size);
   };
   for (const v of nodes) if (!order.has(v)) visit(v);
-  return out.filter(c => c.length > 1).sort((a, b) => b.length - a.length || a[0].localeCompare(b[0]));
+  return sizes;
 }
 
 function importGraph(host, refs) {
-  const hostSet = new Set(host), pairs = new Map();
+  const hostSet = new Set(host), pairs = new Map(), adjacency = new Map(host.map(rel => [rel, new Set()]));
   for (const r of refs) {
     if (r.kind !== 'static' && r.kind !== 'dynamic' && r.kind !== 'require') continue;
     if (!hostSet.has(r.from) || r.from === r.to || !(hostSet.has(r.to) || inRuntime(r.to))) continue;
-    const key = `${r.from}\n${r.to}`;
-    if (!pairs.has(key)) pairs.set(key, { from: r.from, to: r.to, kinds: new Set(), lines: [] });
-    pairs.get(key).kinds.add(r.kind);
-    pairs.get(key).lines.push(r.line);
+    pairs.set(`${r.from}\n${r.to}`, r);
+    if (hostSet.has(r.to)) adjacency.get(r.from).add(r.to);
   }
-  const adjacency = new Map(host.map(rel => [rel, new Set()]));
-  for (const p of pairs.values()) if (hostSet.has(p.to)) adjacency.get(p.from).add(p.to);
-  const loops = tarjan(host, adjacency);
-  const upward = [], unassigned = new Set(host.filter(rel => boxOf(rel) === null));
-  for (const p of pairs.values()) {
-    const from = boxOf(p.from), to = boxOf(p.to);
-    if (from === null || to === null) continue;
-    if (to > from || (to === 1 && !(from === 2 && isRuntimeEntry(p.to)))) {
-      upward.push({ from: p.from, to: p.to, boxes: `B${from}->B${to}`, kinds: [...p.kinds].sort(), lines: p.lines.sort((a, b) => a - b) });
-    }
+  const loops = loopSizes(host, adjacency);
+  let upward = 0;
+  for (const { from, to } of pairs.values()) {
+    const a = boxOf(from), b = boxOf(to);
+    if (a !== null && b !== null && (b > a || (b === 1 && !(a === 2 && isRuntimeEntry(to))))) upward++;
   }
-  upward.sort((a, b) => a.from.localeCompare(b.from) || a.to.localeCompare(b.to));
   return {
-    edges: pairs.size,
-    loops: loops.map(c => c.length),
-    largest: loops[0] ?? [],
-    modulesInLoops: loops.reduce((sum, c) => sum + c.length, 0),
+    largestLoop: Math.max(0, ...loops),
+    modulesInLoops: loops.reduce((sum, size) => sum + size, 0),
     upward,
-    unassigned: [...unassigned].sort(),
+    unassigned: host.filter(rel => boxOf(rel) === null),
   };
 }
 
-function clones(host, parsed) {
-  const ids = new Map(), seen = new Map(), streams = [], perFile = [];
-  for (const rel of host) {
+function cloneLines(host, parsed) {
+  const ids = new Map(), seen = new Map();
+  const streams = host.map(rel => {
     const { toks } = parsed.get(rel);
-    const codes = new Int32Array(toks.length);
-    toks.forEach((t, i) => {
+    const codes = Int32Array.from(toks, t => {
       const key = `${t.t}\u0000${t.v}`;
       if (!ids.has(key)) ids.set(key, ids.size);
-      codes[i] = ids.get(key);
+      return ids.get(key);
     });
-    streams.push({ rel, codes, lines: toks.map(t => t.line) });
-  }
+    return { codes, lines: toks.map(t => t.line) };
+  });
   const same = (a, p, b, q) => { for (let j = 0; j < WINDOW; j++) if (a[p + j] !== b[q + j]) return false; return true; };
   let total = 0;
-  streams.forEach(({ rel, codes, lines }, f) => {
-    const mark = new Uint8Array(codes.length);
+  streams.forEach(({ codes, lines }, f) => {
+    const mark = new Uint8Array(codes.length), covered = new Set();
     for (let i = 0; i + WINDOW <= codes.length; i++) {
       let h1 = 0, h2 = 0;
       for (let j = i; j < i + WINDOW; j++) { h1 = (Math.imul(h1, 31) + codes[j]) | 0; h2 = (Math.imul(h2, 1000003) ^ codes[j]) | 0; }
-      const key = (h1 >>> 0) * 2097152 + ((h2 >>> 0) & 2097151);
-      const first = seen.get(key);
+      const key = (h1 >>> 0) * 2097152 + ((h2 >>> 0) & 2097151), first = seen.get(key);
       if (first === undefined) { seen.set(key, [f, i]); continue; }
       const [g, p] = first;
       if ((g === f && p + WINDOW > i) || !same(streams[g].codes, p, codes, i)) continue;
       mark.fill(1, i, i + WINDOW);
     }
-    const covered = new Set();
     for (let i = 0; i < codes.length; i++) {
       if (!mark[i]) continue;
       let j = i;
@@ -631,59 +607,38 @@ function clones(host, parsed) {
       if (lines[j] - lines[i] + 1 >= MIN_CLONE_LINES) for (let l = lines[i]; l <= lines[j]; l++) covered.add(l);
       i = j;
     }
-    if (covered.size) perFile.push({ file: rel, lines: covered.size });
     total += covered.size;
   });
-  return { lines: total, window: WINDOW, minLines: MIN_CLONE_LINES, files: perFile.sort((a, b) => b.lines - a.lines) };
+  return total;
 }
 
 function commentLines(host, parsed) {
-  let total = 0, only = 0;
-  const perFile = [];
+  let total = 0;
   for (const rel of host) {
-    const { text, toks, comments } = parsed.get(rel);
-    const codeLines = new Set(toks.map(t => t.line)), lines = new Set();
+    const { text, comments } = parsed.get(rel), lines = new Set();
     for (const c of comments) {
-      const lineStart = text.lastIndexOf('\n', c.at - 1) + 1, alone = text.slice(lineStart, c.at).trim() === '';
+      const alone = text.slice(text.lastIndexOf('\n', c.at - 1) + 1, c.at).trim() === '';
       if ((alone && c.at < HEADER_BYTES && HEADER.test(c.text)) || EXTERNAL.test(c.text) || LICENSE.test(c.text)) continue;
       for (let l = c.first; l <= c.last; l++) lines.add(l);
     }
-    for (const l of lines) if (!codeLines.has(l)) only++;
-    if (lines.size) perFile.push({ file: rel, lines: lines.size });
     total += lines.size;
   }
-  return { lines: total, commentOnly: only, withCode: total - only, files: perFile.sort((a, b) => b.lines - a.lines) };
+  return total;
 }
 
-function openingClaims(text) {
-  const lines = text.split(/\r?\n/);
-  let at = 0;
-  while (at < lines.length && !lines[at].trim()) at++;
-  if (/^# /.test(lines[at] ?? '')) { at++; while (at < lines.length && !lines[at].trim()) at++; }
-  const paragraph = [];
-  while (at < lines.length && lines[at].trim() && !/^\s*(?:#|```|~~~)/.test(lines[at])) paragraph.push(lines[at++]);
-  return [...paragraph.join(' ').matchAll(/[A-Za-z0-9_@+~./-]+/g)].map(m => m[0].replace(/\.+$/, '')).filter(run => run.includes('/'));
-}
-
-function historyReferences(files, read) {
-  const runtimeOwned = new Set();
+function runtimePrompts(files, read) {
+  const owned = new Set();
   for (const rel of files.filter(inRuntime)) {
-    for (const line of read(rel).slice(0, HEADER_BYTES).split('\n')) {
-      const m = /Generated from (\S+\.prompt\.md)/.exec(line);
-      if (m) runtimeOwned.add(m[1]);
-    }
+    for (const [, prompt] of read(rel).slice(0, HEADER_BYTES).matchAll(/Generated from (\S+\.prompt\.md)/g)) owned.add(prompt);
   }
-  const prompts = files.filter(rel => /^prompts\/cli\/[^/]+\.prompt\.md$/.test(rel) && !posix.basename(rel).startsWith('runtime-'))
-    .filter(rel => !runtimeOwned.has(rel) && !openingClaims(read(rel)).some(inRuntime));
-  let count = 0;
-  const perPrompt = [];
-  for (const rel of prompts) {
+  return new Set(files.filter(rel => CLI_PROMPT.test(rel) && (posix.basename(rel).startsWith('runtime-') || owned.has(rel))));
+}
+
+function historyReferences(prompts, read) {
+  return prompts.reduce((sum, rel) => {
     const prose = read(rel).replace(INTERFACE, '');
-    const n = HISTORY.reduce((sum, re) => sum + (prose.match(re)?.length ?? 0), 0);
-    if (n) perPrompt.push({ prompt: rel, references: n });
-    count += n;
-  }
-  return { count, prompts: prompts.length, files: perPrompt.sort((a, b) => b.references - a.references) };
+    return sum + HISTORY.reduce((n, re) => n + (prose.match(re)?.length ?? 0), 0);
+  }, 0);
 }
 
 function testOnlyExports(host, info, refs, prodStrings) {
@@ -694,7 +649,7 @@ function testOnlyExports(host, info, refs, prodStrings) {
     incoming.get(r.to).push(r);
   }
   const uses = (list, name) => list.some(r => r.names === '*' || (Array.isArray(r.names) && r.names.includes(name)));
-  const out = [];
+  let count = 0;
   for (const rel of host) {
     const { exports, counts } = info.get(rel), ins = incoming.get(rel) ?? [];
     const prod = ins.filter(r => !isTest(r.from)), test = ins.filter(r => isTest(r.from));
@@ -703,27 +658,11 @@ function testOnlyExports(host, info, refs, prodStrings) {
       if (e.from && inRuntime(e.from)) continue;
       if (uses(prod, e.name) || (escapedProd && prodStrings.has(e.name))) continue;
       if (!uses(test, e.name) && !escapedTest) continue;
-      const internal = e.kind === 'decl' || e.kind === 'list' ? Math.max(0, (counts.get(e.local) ?? 0) - 1) : 0;
-      if (internal > 0) continue;
-      out.push({ file: rel, name: e.name, line: e.line, testUsers: test.filter(r => uses([r], e.name)).length });
+      if ((e.kind === 'decl' || e.kind === 'list') && (counts.get(e.local) ?? 0) > 1) continue;
+      count++;
     }
   }
-  return out.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
-}
-
-function netLines(root, files) {
-  const out = Object.fromEntries(NET_DIRS.map(dir => [dir, 0]));
-  for (const rel of files) {
-    const dir = segments(rel)[0];
-    if (!(dir in out)) continue;
-    const bytes = readFileSync(join(root, rel));
-    if (bytes.subarray(0, 8192).includes(0)) continue;
-    let lines = 0;
-    for (const b of bytes) if (b === 10) lines++;
-    if (bytes.length && bytes[bytes.length - 1] !== 10) lines++;
-    out[dir] += lines;
-  }
-  return out;
+  return count;
 }
 
 function measure(root) {
@@ -742,38 +681,39 @@ function measure(root) {
     }
     if (!hostSet.has(rel) && !inRuntime(rel)) cache.delete(rel);
   }
-  for (const rel of files.filter(rel => /^scripts\/.*\.sh$/.test(rel) || /^\.github\/.*\.ya?ml$/.test(rel))) {
-    for (const m of read(rel).matchAll(SHELL_REFERENCE)) {
-      const name = m[1] ?? m[0], hit = [name, `src/${name}`, `scripts/${name}`].find(c => fileSet.has(c));
-      if (hit) refs.push({ from: rel, to: hit, kind: 'sh', line: 0, names: ESCAPE });
-    }
-  }
+  const runtime = runtimePrompts(files, read);
   const sizes = host.map(rel => ({ file: rel, lines: lineCount(read(rel)) })).sort((a, b) => b.lines - a.lines || a.file.localeCompare(b.file));
+  const textLines = keep => files.filter(keep).reduce((sum, rel) => {
+    const bytes = readFileSync(join(root, rel));
+    return sum + (bytes.subarray(0, 8192).includes(0) ? 0 : lineCount(bytes.toString('utf8')));
+  }, 0);
   return {
-    root,
-    hostFiles: host.length,
     biggest: sizes[0] ?? { file: '-', lines: 0 },
-    over: sizes.filter(s => s.lines > BIG_FILE),
+    over: sizes.filter(s => s.lines > BIG_FILE).length,
     graph: importGraph(host, refs),
-    clones: clones(host, parsed),
+    clones: cloneLines(host, parsed),
     comments: commentLines(host, parsed),
-    history: historyReferences(files, read),
+    history: historyReferences(files.filter(rel => CLI_PROMPT.test(rel) && !runtime.has(rel)), read),
     testOnly: testOnlyExports(host, info, refs, prodStrings),
-    net: netLines(root, files),
+    code: sizes.reduce((sum, s) => sum + s.lines, 0),
+    tests: textLines(rel => segments(rel)[0] === 'test' && segments(rel)[1] !== 'runtime-package'),
+    prompts: textLines(rel => segments(rel)[0] === 'prompts' && !runtime.has(rel)),
   };
 }
 
 const MEASURES = [
   ['Biggest host file (lines)', m => m.biggest.lines, m => `${fmt(m.biggest.lines)} \`${posix.basename(m.biggest.file)}\``],
-  [`Host files over ${fmt(BIG_FILE)} lines`, m => m.over.length],
-  ['Largest import loop (modules)', m => m.graph.largest.length],
+  [`Host files over ${fmt(BIG_FILE)} lines`, m => m.over],
+  ['Largest import loop (modules)', m => m.graph.largestLoop],
   ['Modules in import loops', m => m.graph.modulesInLoops],
-  ['Upward imports (module pairs)', m => m.graph.upward.length],
-  [`Exact clone lines (${WINDOW}-token window)`, m => m.clones.lines],
-  ['Comment lines not on the keep-list', m => m.comments.lines],
-  ['History references in host prompts', m => m.history.count],
-  ['Test-only exports', m => m.testOnly.length],
-  ...NET_DIRS.map(dir => [`Lines in ${dir}/`, m => m.net[dir]]),
+  ['Upward imports (module pairs)', m => m.graph.upward],
+  [`Exact clone lines (${WINDOW}-token window)`, m => m.clones],
+  ['Comment lines not on the keep-list', m => m.comments],
+  ['History references in host prompts', m => m.history],
+  ['Test-only exports', m => m.testOnly],
+  ['Lines of host code', m => m.code],
+  ['Lines of host tests', m => m.tests],
+  ['Lines of host prompts', m => m.prompts],
 ];
 
 function fmt(n) {
@@ -788,49 +728,25 @@ function rows(base, head) {
 }
 
 function markdown(base, head) {
-  const table = rows(base, head);
-  const signed = n => n > 0 ? `+${fmt(n)}` : fmt(n);
-  const net = NET_DIRS.reduce((sum, dir) => sum + head.net[dir] - base.net[dir], 0);
+  const table = rows(base, head), signed = n => n > 0 ? `+${fmt(n)}` : fmt(n);
   const out = [
     '| Measure | Base | Head | Change | Result |',
     '|---|---:|---:|---:|---|',
     ...table.map(r => `| ${r.measure} | ${r.show[0]} | ${r.show[1]} | ${signed(r.change)} | ${r.verdict} |`),
     '',
-    `Net lines (src, test, prompts): ${signed(net)}. Lower is better on every row. This report never blocks.`,
-    `Host code: ${fmt(head.hostFiles)} files, src/**/*.mjs and bin/ without the Runtime package and src/vendor/. Loops and upward imports count static, import() and createRequire edges. Clones: ${WINDOW}-token windows seen earlier in host code, runs of ${MIN_CLONE_LINES}+ lines.`,
+    `Net host lines (code, tests, prompts): ${signed(table.slice(-3).reduce((sum, r) => sum + r.change, 0))}. Lower is better on every row. This report never blocks.`,
+    `Host only: src/**/*.mjs and bin/ without the Runtime package and src/vendor/; test/ without test/runtime-package/; prompts/ without the Runtime prompts. Loops and upward imports count static, import() and createRequire edges. Clones: ${WINDOW}-token windows seen earlier in host code, runs of ${MIN_CLONE_LINES}+ lines.`,
   ];
   const missing = [...new Set([...base.graph.unassigned, ...head.graph.unassigned])];
   if (missing.length) out.push(`Modules with no box (add them to BOXES in test/tools/ratchet.mjs): ${missing.map(rel => posix.basename(rel)).join(', ')}.`);
   return `${out.join('\n')}\n`;
 }
 
-function machine(base, head) {
-  const detail = m => ({
-    root: m.root,
-    hostFiles: m.hostFiles,
-    biggest: m.biggest,
-    over: m.over,
-    importLoops: { sizes: m.graph.loops, largest: m.graph.largest, modules: m.graph.modulesInLoops, edges: m.graph.edges },
-    upward: m.graph.upward,
-    unassigned: m.graph.unassigned,
-    clones: m.clones,
-    comments: m.comments,
-    history: m.history,
-    testOnly: m.testOnly,
-    net: m.net,
-  });
-  return {
-    rows: rows(base, head).map(({ show, ...r }) => r),
-    base: detail(base),
-    head: detail(head),
-  };
-}
-
 const args = process.argv.slice(2), json = args.includes('--json'), [baseDir, headDir] = args.filter(a => a !== '--json');
 try {
   if (!baseDir || !headDir) throw new Error('usage: node test/tools/ratchet.mjs <baseDir> <headDir> [--json]');
   const base = measure(resolve(baseDir)), head = measure(resolve(headDir));
-  process.stdout.write(json ? `${JSON.stringify(machine(base, head), null, 2)}\n` : markdown(base, head));
+  process.stdout.write(json ? `${JSON.stringify(rows(base, head).map(({ show, ...r }) => r), null, 2)}\n` : markdown(base, head));
 } catch (error) {
   const message = error?.message ?? String(error);
   process.stdout.write(json ? `${JSON.stringify({ error: message })}\n` : `Ratchet report failed: ${message}\n`);
