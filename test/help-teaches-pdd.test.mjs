@@ -134,8 +134,8 @@ test('root help keeps its first line, every form line and its closing lines; com
   assert.deepEqual(topic.slice(-2), rest.slice(2, 4));
   for (const line of closing) assert.ok(!topic.includes(line), line);
   const text = topic.join('\n');
-  for (const name of ['prompts/NAME.prompt.md', '## Dependencies', 'Runtime interface', 'user_stories/STORY.md', 'Acceptance criteria',
-    'tests/STORY.json', 'pdd test --fill-hash', 'pdd lint', 'pdd approve']) assert.ok(text.includes(name), name);
+  for (const name of ['prompts/NAME.prompt.md', '## Dependencies', 'user_stories/STORY.md', 'Acceptance criteria',
+    'tests/STORY.json', 'pdd test', 'pdd lint', 'pdd approve']) assert.ok(text.includes(name), name);
   for (const pattern of [/\bpdd check\b/, /\bpdd try\b/, /\bworkflow start\b/, /simulat/i]) {
     assert.doesNotMatch(text, pattern); assert.doesNotMatch(rest.join('\n'), pattern);
   }

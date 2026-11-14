@@ -1,6 +1,6 @@
-// Generated from prompts/cli/product-composition.prompt.md (sha256: ec03402c9b8dfb9b90cfc0825a9c79425bb1c45371339285953cbf388b38e27e).
+// Generated from prompts/cli/product-composition.prompt.md (sha256: 5cce422befd0b81cf14251b2c7bed26572b988dc55a8dd5535ff6e684564cded).
 import { basename, join } from 'node:path';
-import { checkInput, interfaceBlocks, PreflightError } from './runtime-preflight.mjs';
+import { checkInput, interfaceBlocks, parsePromptFrontmatter, PreflightError, promptMarkdownTargets } from './runtime-preflight.mjs';
 import { expandSource, isJsonNumber, jsonNumberIdentity, parseJsonValue, stringifyJsonValue } from './contract-refs.mjs';
 
 const fail = (code, message) => { throw Object.assign(Error(message), { code }); };
@@ -107,8 +107,10 @@ function joinMaps(product, parts, maps, chain, encode, selectedParts) {
   maps.forEach((map, index) => validateMap(map, parts[index]));
   let scratch = 'product_after';
   while (selectedParts.includes(scratch)) scratch += '_';
-  const slots = Object.fromEntries(chain.map((operation, index) => [String(index), checkInput(null, operation.resultSchema, 0).refusals.length
-    ? { oneOf: [{ type: 'null' }, operation.resultSchema] } : operation.resultSchema]));
+  const slots = Object.fromEntries(chain.map((operation, index) => [String(index), operation.resultSchema === null
+    ? {}
+    : checkInput(null, operation.resultSchema, 0).refusals.length
+      ? { oneOf: [{ type: 'null' }, operation.resultSchema] } : operation.resultSchema]));
   const initial = Object.fromEntries(parts.map((part, index) => [part, maps[index].initial_state]));
   const properties = Object.fromEntries(parts.map((part, index) => [part, maps[index].state_schema]));
   if (chain.length) {
@@ -278,7 +280,14 @@ export function composeProductTry({ root, parts, journey, testPath }, ports) {
       const handler = { prompt_path: item[1], operation: item[2] };
       const expanded = expandSource({ path: handler.prompt_path, text: read(handler.prompt_path), format: 'prompt' }, files);
       const blocks = interfaceBlocks(expanded.text);
-      if (blocks.length !== 1) badMap(`${handler.prompt_path}: expected one Runtime interface for ${handler.operation}.`);
+      if (blocks.length > 1) badMap(`${handler.prompt_path}: expected at most one Runtime interface for ${handler.operation}.`);
+      if (!blocks.length) {
+        const fm = parsePromptFrontmatter(expanded.text);
+        if (fm.error) badMap(`${handler.prompt_path}: invalid prompt frontmatter (${fm.error}).`);
+        if (fm.kind === 'native-only') badMap(`${handler.prompt_path}: native-only prompt cannot run After every tap.`);
+        chain.push({ handler, resultSchema: null });
+        continue;
+      }
       const entry = parseJsonValue(blocks[0][1]).entries?.find(operation => operation.operation === handler.operation);
       if (!entry || !plain(entry.result_schema)) badMap(`${handler.prompt_path}: missing operation/result schema ${handler.operation}.`);
       chain.push({ handler, resultSchema: entry.result_schema });
@@ -318,18 +327,34 @@ export function productTapCallBound(map, {root, readFile, statFile}) {
     return String(readFile(full));
   };
   const files={stat:({path})=>statFile(join(root,path)),read:({path})=>({content:read(path)})};
+    const visible={has:path=>{const st=statFile(join(root,path));return !!st?.exists && !st?.is_symlink;}};
     // Same acyclic caller/child/resume recurrence as Runtime's declared graph bound.
     const costs = new Map(), visiting = new Set();
     const cost = reference => {
       const key=reference.prompt_path+'#'+reference.operation;
       if(costs.has(key))return costs.get(key);
-      if(visiting.has(key))badMap(`Cannot bound recursive product operation ${key}.`);
-      visiting.add(key);
+      if(visiting.has(key) || visiting.has(reference.prompt_path+'#*'))badMap(`Cannot bound recursive product operation ${key}.`);
       const expanded=expandSource({path:reference.prompt_path,text:read(reference.prompt_path),format:'prompt'},files);
       const blocks=interfaceBlocks(expanded.text);
-      if(blocks.length!==1)badMap(`Cannot bound ${key}: one interface is required.`);
+      if(blocks.length>1)badMap(`Cannot bound ${key}: at most one interface is allowed.`);
+      if(!blocks.length) {
+        const fm=parsePromptFrontmatter(expanded.text);
+        if(fm.error)badMap(`Cannot bound product operation ${key}: invalid prompt frontmatter (${fm.error}).`);
+        if(fm.kind==='native-only')badMap(`Cannot bound native-only product operation ${key}.`);
+        const plainKey=reference.prompt_path+'#*';
+        if(costs.has(plainKey))return costs.get(plainKey);
+        if(visiting.has(plainKey))badMap(`Cannot bound recursive product operation ${key}.`);
+        visiting.add(plainKey);
+        let bound=1;
+        for(const target of promptMarkdownTargets(expanded.text,reference.prompt_path,visible)) {
+          bound+=cost({prompt_path:target,operation:'*'})+1;
+          if(bound>40)break;
+        }
+        visiting.delete(plainKey);costs.set(plainKey,bound);costs.set(key,bound);return bound;
+      }
+      visiting.add(key);
       const iface=parseJsonValue(blocks[0][1]);
-      if(!iface.entries?.some(entry=>entry.operation===reference.operation))badMap(`Unknown product operation ${key}.`);
+      if(reference.operation!=='*' && !iface.entries?.some(entry=>entry.operation===reference.operation))badMap(`Unknown product operation ${key}.`);
       let bound=1;
       for(const call of iface.calls??[]) {
         const count=Number(isJsonNumber(call.max_calls)?call.max_calls.text:call.max_calls);

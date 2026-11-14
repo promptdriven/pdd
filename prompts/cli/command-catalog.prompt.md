@@ -119,15 +119,13 @@ Describe the runner routes in plain words without preview labels. workflow.run s
 
 ## Interpreter routes
 
-Help calls the hosted service "the PDD interpreter" ([word rule](public-boundary.prompt.md#pdd-interpreter)). It keeps the words "runtime interface", the name of the block in a prompt file.
+Help calls the hosted service "the PDD interpreter" ([word rule](public-boundary.prompt.md#pdd-interpreter)).
 
-Catalog `approve` (local `prompt-approve`, [prompt approve](prompt-approve.prompt.md)) with the form `pdd approve PROMPT [--said WORDS]`: one required text operand and optional text option `--said`. Its help says that it shows the prompt's runtime interface and the text changes since the last approval, and that easy mode accepts the person's chat words through --said; no-said asks terminal y/N. Root pdd.json strict_approvals true requires a person terminal.
+Catalog `approve` (local `prompt-approve`, [prompt approve](prompt-approve.prompt.md)) with the form `pdd approve PROMPT [--said WORDS]`: one required text operand and optional text option `--said`. Its help says that it shows the prompt's text changes since the last approval (plus any embedded runtime interface or native-only declaration), and that easy mode accepts the person's chat words through --said; no-said asks terminal y/N. Root pdd.json strict_approvals true requires a person terminal.
 
-Catalog `check` (prefix `test`, local `runtime-check`) with the forms `pdd test [PATH|STORY...] [--lf] [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]` (help: it checks Stories on the PDD interpreter with the person's gh login, waits for every check, with no default limit in any shell, and prints a progress line every 30 s; `--timeout MIN` sets the limit), `pdd test --read [BATCH|CALL_ID] [--json] [--timeout MIN]`, `pdd test --fill-hash`, `pdd test --fill-hash --compact` and `pdd test --files [STORY...] [--app-map PATH]`. Catalog `lint` (prefix `lint`, local `runtime-check`) with the optional repeated text operand STORY, the options `--json`, `--timeout`, `--max-calls` and `--local`, and the form `pdd lint [STORY...] [--json] [--timeout MIN] [--max-calls N]` (help: it prints local SVG layout warnings, then runs only the PDD interpreter lint with 0 AI calls, and sends no checks). The `lint` plan always has the flag `--lint`, so the runtime client runs the same code as for `pdd test --lint`. On `check`, `--lint` and `--local` stay as hidden flags: `pdd test --lint` works like `pdd lint`, with the same options. Catalog `try` (prefix `simulate`, local `runtime-try`) with the forms `pdd simulate [STORY] [--max-calls N] [--tab call|screen|terminal|world] [--app-map PATH] [--new] [--no-open] [--no-wait] [--agent NAME]` (`--app-map` is an option of kind `text`; help: it makes a Try link on the PDD interpreter with the person's gh login) and `pdd simulate --stop [STORY]`. `--app-map` on check is a text option accepted only with `--files`, to preview a Try map. STORY words are free text. `--timeout` is an option of kind `integer` from 1 to 120 and Check `--max-calls` from 1 to 1000. Try accepts `--max-calls` as a positive integer up to 1000, the server cap. Help states that a new Try defaults to400calls and both Check and Try accept --max-calls1..1000. `--request` (kind `uuid`) is hidden. No help form and no completion show a hidden option. These three routes are the one exception to the no-hosted-operation rule above: they call the PDD interpreter through the [runtime client](runtime-client.prompt.md).
+Catalog `check` (prefix `test`, local `runtime-check`) with the forms `pdd test [PATH|STORY...] [--lf] [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]` (help: it checks Stories on the PDD interpreter with the person's gh login, waits for every check, with no default limit in any shell, and prints a progress line every 30 s; `--timeout MIN` sets the limit), `pdd test --read [BATCH|CALL_ID] [--json] [--timeout MIN]` and `pdd test --files [STORY...] [--app-map PATH]`. Catalog `lint` (prefix `lint`, local `runtime-check`) with the optional repeated text operand STORY, the options `--json`, `--timeout`, `--max-calls` and `--local`, and the form `pdd lint [STORY...] [--json] [--timeout MIN] [--max-calls N]` (help: it prints local SVG layout warnings, then runs only the PDD interpreter lint with 0 AI calls, and sends no checks). The `lint` plan always has the flag `--lint`, so the runtime client runs the same code as for `pdd test --lint`. On `check`, `--lint` and `--local` stay as hidden flags: `pdd test --lint` works like `pdd lint`, with the same options. Catalog `try` (prefix `simulate`, local `runtime-try`) with the forms `pdd simulate [STORY] [--max-calls N] [--tab call|screen|terminal|world] [--app-map PATH] [--new] [--no-open] [--no-wait] [--agent NAME]` (`--app-map` is an option of kind `text`; help: it makes a Try link on the PDD interpreter with the person's gh login) and `pdd simulate --stop [STORY]`. `--app-map` on check is a text option accepted only with `--files`, to preview a Try map. STORY words are free text. `--timeout` is an option of kind `integer` from 1 to 120 and Check `--max-calls` from 1 to 1000. Try accepts `--max-calls` as a positive integer up to 1000, the server cap. Help states that a new Try defaults to400calls and both Check and Try accept --max-calls1..1000. `--request` (kind `uuid`) is hidden. No help form and no completion show a hidden option. These three routes are the one exception to the no-hosted-operation rule above: they call the PDD interpreter through the [runtime client](runtime-client.prompt.md).
 
 Check also catalogs `--screen` (text URL), `--drawing` (text PATH) and Boolean flag `--look`, with the form `pdd test --screen URL --drawing PATH [--look] [--json]`, and lint has the form `pdd lint --local [STORY...] [--json]`. The local lint form checks linked SVG layout parts and HTML screen stylesheet links locally with warning diagnostics and 0 AI/network calls; the screen form compares the real page in installed headless Chrome/Chromium at the drawing viewport (and with `--look` also checks canvas color, painted card/section boxes, box bounds and spacing within tolerance, without pixel equality), with no AI or interpreter call. [Runtime client](runtime-client.prompt.md#local-drawing-checks) owns combinations, selection, output and exit codes; ordinary remote lint keeps its existing behavior.
-
-Check also catalogs visible flag `--compact`. Its help form `pdd test --fill-hash --compact` says it fills draft hashes and removes interface JSON formatting whitespace, preserving values and prose, with no network. [Runtime client](runtime-client.prompt.md#hash-filling) owns allowed combinations and output; [preflight](runtime-preflight.prompt.md#draft-interface-compaction) owns the transform.
 
 Check also catalogs `--retry` as a text option with form `pdd test --retry BATCH [--json] [--details] [--timeout MIN]`. Help says it retries only proven unstarted checks for the saved identical source, preserving completed/running results.
 
@@ -160,7 +158,7 @@ Catalog `jobs` (stable id `jobs`, local disposition `runtime-jobs`) with the sol
 Catalog `files` (stable id `files`, local `project-files`) immediately before
 `approve`. Its form is `pdd files [--json]`. It accepts only the optional Boolean
 flag `--json`, with no operands. Help describes a read-only list of prompts,
-Runtime interfaces, Stories, tests and refusal reasons, without network calls.
+Stories, tests and refusal reasons, without network calls.
 Include it in root help and completion. The [files view](files.prompt.md) owns
 its output; do not import the Runtime client for this route.
 
@@ -232,15 +230,13 @@ The ordered help-form list consists of the lines below in their displayed order,
   pdd test [PATH|STORY...] [--lf] [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]  Check stories on the PDD interpreter with your gh login: reuses unchanged passing Stories from .pdd/cache/test/; --lf selects previous failures in scope or uses the normal selection when none match, --cache-clear clears the cache and sends the selected Stories again (the interpreter may reuse saved answers); sends selected PATH or STORY dependencies (every Story when you name none), waits for every check (no default limit in any shell; --timeout MIN sets the limit) with a progress line every 30 s, then prints one table with report links. Defaults to 12 calls per step, at least 18 and at most 1000; --max-calls accepts 1 to 1000.
   pdd test --read [BATCH|CALL_ID] [--json] [--timeout MIN]  Read saved results; a normal Check held for lint may continue its original checks. Other reads send no work.
   pdd test --retry BATCH [--json] [--details] [--timeout MIN]  Retry only confirmed unstarted checks from a saved batch, with the same source and call caps; preserve completed and uncertain runs.
-  pdd test --fill-hash  Fill prose_sha256 of draft runtime interfaces; no network.
-  pdd test --fill-hash --compact  Fill draft hashes and remove interface JSON formatting whitespace; preserve values and prose, no network.
   pdd test --files [STORY...] [--app-map PATH]  List the exact selected upload files and byte sizes; no network. --app-map selects the Simulator's app map.
   pdd test --screen URL --drawing PATH [--look] [--json]  Compare a real page with its drawing at the drawing viewport in installed headless Chrome/Chromium (--look also checks main colors, painted boxes and spacing within tolerance); no AI or interpreter calls.
   pdd lint [STORY...] [--json] [--timeout MIN] [--max-calls N]  Print local SVG layout warnings, then the PDD interpreter lint (0 AI calls) on selected Stories and their dependencies; sends no checks.
   pdd lint --local [STORY...] [--json]  Check linked SVG layout parts locally with warning diagnostics and 0 AI/network calls.
-  pdd files [--json]  List prompts, Runtime interfaces, Stories, tests and refusal reasons; no network calls.
+  pdd files [--json]  List prompts, Stories, tests and refusal reasons; no network calls.
   pdd owner PATH... [--json]  Show which prompt owns each file, from pdd-bindings.json, Generated from headers and prompt opening sentences; reads local files only.
-  pdd approve PROMPT [--said WORDS]  Approve one prompt with the person's chat words in easy mode, or show its interface/text changes and ask terminal y/N; strict mode requires a person terminal.
+  pdd approve PROMPT [--said WORDS]  Approve one prompt with the person's chat words in easy mode, or show its text changes and ask terminal y/N; strict mode requires a person terminal.
   pdd simulate [STORY] [--max-calls N] [--tab call|screen|terminal|world] [--app-map PATH] [--new] [--no-open] [--no-wait] [--agent NAME]  Open the Story in the PDD Simulator: make a link on the PDD interpreter with your gh login and open it in your browser; it ends in 24 hours. Short form: pdd sim. A new simulation defaults to 400 calls; --max-calls accepts 1 to 1000. With terminal stdout or explicit --agent, it stays running to connect your own agent; otherwise it reads saved cases once and returns. --agent selects a configured name or a default Codex, Claude or Gemini; --no-wait skips the bridge. In a terminal it adds each test saved in the Simulator to the story's test file.
   pdd simulate [STORY] --cli [--shell] [--max-calls N] [--new]  Run your program in your terminal through a Simulator session; prints a PATH line, or opens a shell with --shell.
   pdd simulate [STORY] --serve [PORT] [--max-calls N] [--new]  Serve real HTTP requests through your Simulator session on localhost (default port 8080).
@@ -292,11 +288,11 @@ RUNBOOK: PACKAGE_ROOT/RUNBOOK.md
 
 ```text
 In PDD, prompts are the source. Code follows the prompts.
-1. Prompt: prompts/NAME.prompt.md. Write what the program does in plain English, then ## Dependencies, then one Runtime interface block.
+1. Prompt: prompts/NAME.prompt.md. Write what the program does in plain English, then ## Dependencies.
 2. Story: user_stories/STORY.md. Write one thing that a person can do, then a numbered ## Acceptance criteria list.
 3. Test: tests/STORY.json. When the repo keeps its own tests in tests/ or test/, use tests/runtime/ or test/runtime/. Write steps with an exact check for each criterion.
-4. Check: run pdd test --fill-hash && pdd test --files STORY && pdd test STORY in one shell call. Test includes interpreter lint (0 AI calls); use pdd lint for lint-only diagnosis.
-5. Approve: a person reads each prompt and runs pdd approve PROMPT. New behavior needs a person. An unchanged complete draft can use --automatic with passing existing tests and a full prompt check.
+4. Check: run pdd test --files STORY && pdd test STORY in one shell call. Test includes interpreter lint (0 AI calls); use pdd lint for lint-only diagnosis.
+5. Approve: a person reads each prompt and runs pdd approve PROMPT. New behavior needs a person.
 ```
 
 The workflow park options also include text `--blocker` and `--until`. Show
@@ -348,13 +344,7 @@ Include public local route `workflow.tidy`, prefix `workflow tidy`, no operands,
 
 Add workflow.resend, prefix workflow resend, local workflow-resend, required repeated issue operands, optional text --said. Help form: `pdd workflow resend ISSUE... [--said WORDS]`. Description: Record one person decision and resend each lost check once; --said - reads exact words from stdin; strict mode requires a person terminal. Preserve all other routes.
 
-## Interface draft commands
-
-Interface-draft help follows the same command-name substitutions as other
-commands. Use local schema-check wording for the action and interpreter admission
-for server admission; Runtime names only the Runtime interface declaration.
-
-Catalog `interface draft` with local `interface-draft`, repeat optional prompt operands, flags --all, --json, --extend and --refresh, and text --contract. Forms: `pdd interface draft [PROMPT...] [--all] [--json]` and `pdd interface draft PROMPT [--contract FILE] [--extend | --refresh] [--json]`. Draft from explicit prose or contracts and lint locally without AI/network calls. The second form supplies effect ports, extends preserved operations or reopens a stale block as draft. Missing facts include questions and a next step. Catalog approve flags --automatic and text --tests, with additional form `pdd approve PROMPT --automatic --tests COMMAND`. The automatic route requires existing tests and a complete current prompt check; strict mode still requires a person. Help must explain native-only not-run and the separate automatic route, without claiming that an agent can approve new behavior.
+## Missing-route workflow parking
 
 Catalog text --route on workflow park and show `pdd workflow park --route KIND --reason TEXT [--until FIX] [--step STEP]` for recording a missing supported PDD route without asking a person. The runner owns route validation and installed-fix clearing.
 

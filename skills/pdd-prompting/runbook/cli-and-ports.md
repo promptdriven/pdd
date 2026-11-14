@@ -6,20 +6,11 @@
 
 The AI cannot compute a hash. Declare a compute resource with hash_json or hash_utf8, or keep this criterion in native tests. This applies when the program must build or verify a SHA-256 hash: both operations return a lowercase SHA-256. Keep any other digest, for example an HMAC, in native tests. See the [record-id fragment in §21](#verify-a-record-id).
 
-Declare the data as a resource in the interface. The prose names each operation: "Read the tasks once with
-`store.load` and the key `todos`." This is the full `todo-cli` resource. `TASKS` is the list schema of the first
-line: write it out in full in all 3 places, or use a `$contract` reference expanded locally before lint, test and simulate (JSON Schema `$ref` is not allowed). A missing key reads as `null`, so `load` uses `oneOf`.
-```json
-TASKS = {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "integer", "minimum": 1},
-         "text": {"type": "string"}, "done": {"type": "boolean"}}, "required": ["id", "text", "done"], "additionalProperties": false}}
-"resources": [{"name": "store", "kind": "key-value", "access": "write", "operations": [
-  {"name": "load", "access": "read",
-   "arguments_schema": {"type": "object", "properties": {"key": {"type": "string", "enum": ["todos"]}}, "required": ["key"], "additionalProperties": false},
-   "result_schema": {"type": "object", "properties": {"value": {"oneOf": [{"type": "null"}, TASKS]}}, "required": ["value"], "additionalProperties": false}},
-  {"name": "save", "access": "write",
-   "arguments_schema": {"type": "object", "properties": {"key": {"type": "string", "enum": ["todos"]}, "value": TASKS}, "required": ["key", "value"], "additionalProperties": false},
-   "result_schema": {"type": "object", "properties": {"value": TASKS}, "required": ["value"], "additionalProperties": false}}]}]
-```
+Name each outside port and its argument/result shape clearly in the prompt prose so the PDD interpreter synthesizes and caches the matching resource contract automatically (do not write `<details><summary>Runtime interface</summary>` blocks in `.prompt.md` files). For `todo-cli`, the prose states:
+- Read tasks once with key-value port `store.load({ key: "todos" })` returning `{ value }` (`null` when no tasks exist yet, or an array of `{ id: positive integer, text: string, done: boolean }` task records).
+- Write updated tasks with `store.save({ key: "todos", value })` returning `{ value }`.
+- Shared record schemas may live in a linked contract file (`contracts/*.md`) referenced by `$contract` in scenarios (JSON Schema `$ref` is not allowed).
+
 In the test, `initial_world` is the saved data before step 1. `simulation` connects each operation to the world:
 ```json
 "initial_world": {"kv": {"todos": [{"id": 3, "text": "Buy milk", "done": true}]}},
@@ -40,22 +31,13 @@ In the test, `initial_world` is the saved data before step 1. `simulation` conne
 ## 6. Command-line programs (`cli`)
 
 Name the program in the prompt’s first heading, for example `# tipjar` (a single safe command name; `pdd`, `node`, `gh` and `git` are reserved).
-Mark both schemas with the `cli` convention. `argv` goes in. `exit_code`, `stdout` and `stderr` come out. In full:
-```json
-"input_schema": {"type": "object", "properties": {"argv": {"type": "array", "items": {"type": "string"}}}, "required": ["argv"], "additionalProperties": false},
-"result_schema": {"type": "object", "properties": {"exit_code": {"type": "integer"}, "stdout": {"type": "string"}, "stderr": {"type": "string"}},
-                  "required": ["exit_code", "stdout", "stderr"], "additionalProperties": false},
-"conventions": [{"path": "/entries/0/input_schema", "convention": "cli"}, {"path": "/entries/0/result_schema", "convention": "cli"}]
-```
+State the CLI operation's input and output shape clearly in the prompt prose so the interpreter synthesizes its `cli` contract: `{ "argv": string[] }` goes in (plus optional string `"stdin"` when the command reads piped UTF-8 text), and `{ "exit_code": integer, "stdout": string, "stderr": string }` comes out:
 - Input: one item for each word, as a shell splits them. `todo add Walk the dog` is `{"argv": ["add", "Walk", "the", "dog"]}`.
-- An optional string `stdin` property receives piped UTF-8 text. Program exit code 125 is reserved for `pdd simulate` wrapper failures; use another code for program errors.
+- Program exit code 125 is reserved for `pdd simulate` wrapper failures; use another code for program errors.
 - Write the rule "Every line written to `stdout` or `stderr` ends with one newline." in the prose.
   Expected text includes the last newline: `"Added #4: Walk the dog\n"`. An empty stream is `""`.
 
-For checks on real code, each tested entry names its command with
-`"implementation": {"kind": "cli", "command": "node bin/tip.mjs"}` alongside
-its operation and schemas. Run `pdd test --target code STORY` to execute the
-same Story cases locally with 0 AI calls. Use `--json` for structured results.
+When a legacy or explicit CLI binding declares `"implementation": {"kind": "cli", "command": "node bin/tip.mjs"}` on a tested CLI entry, run `pdd test --target code STORY` to execute the same Story cases locally with 0 AI calls. Use `--json` for structured results.
 Each Story result records the current commit. An unsupported step says
 `not run` with its reason and cannot make the Story pass. Entries with ports
 that cannot be faithfully supplied by this runner are not run; do not replace
@@ -64,30 +46,26 @@ replay tests.
 
 ## 7. A prompt that calls another prompt
 
-`checkout` asks `pricing` for a quote. The caller's interface has a `calls` entry:
-```json
-"calls": [{"operation": "quote", "target": "prompts/pricing.prompt.md", "target_operation": "quote", "max_calls": 1}]
-```
-- Link it in `## Dependencies`: ``- [Pricing](pricing.prompt.md), runtime use for operation `quote`.``
-- Say in the prose how many times to call: "Call `pricing` operation `quote` exactly once."
-  More calls than `max_calls` refuse the check (`graph-result-failure`).
-- To pass an error back, list it in the caller's own `errors`, and say it in the prose:
+`checkout` asks `pricing` for a quote. Write the child call directly in plain Markdown so the interpreter synthesizes the prompt-to-prompt call edge:
+- Link the child prompt in `## Dependencies`: ``- [Pricing](pricing.prompt.md), runtime use for operation `quote`.``
+- Say in the prose how many times to call it: "Call `pricing` operation `quote` at most once."
+  Calling a child more times than allowed refuses the check (`graph-result-failure`).
+- To pass an error back, name the exact error code in the prose:
   "If `pricing` returns the error `unknown-coupon`, return the error `unknown-coupon`."
 - Check the count: `/internal/pricing` equals 1. For an unknown product, it equals 0 (section 8).
 
 ## 21. Fake the outside world
 
-Anything outside the code (databases, files, network, clock, randomness and other programs) goes behind an injected port; never call it directly from the decision logic. Declare the actual dependency's operations as resources in the Runtime interface, and supply their replies in the test. SQL, blob and compute are specialized resource bindings. Preserve existing public functions, factories and methods; do not invent a check-only API.
+Anything outside the code (databases, files, network, clock, randomness and other programs) goes behind an injected port; never call it directly from the decision logic. Name the actual dependency's operations and argument/result fields clearly in the prompt prose so the interpreter synthesizes the resource contract, and supply their replies in the test's `simulation` block. SQL, blob and compute are specialized resource bindings. Preserve existing public functions, factories and methods; do not invent a check-only API.
 
 The examples below specify small JavaScript modules with matching prompt contracts; native execution is reported separately. Their scenarios are synthetic, with exact expected results chosen before execution. The commands run in a clone of pdd (`git clone -b alpha https://github.com/promptdriven/pdd`), from its root; in your own repository, copy the linked files with their paths first. Each command first runs zero-call server lint, then a live prompt check with a hard ceiling; every step requests `gpt-6.1-sol`. A ceiling is not a charge. Native tests establish code behavior separately.
 
 ```sh
-pdd test --fill-hash
 pdd test fake-database --max-calls 9
 # Substitute fake-files, fake-hash, fake-service, fake-decision or fake-factory.
 ```
 
-Each linked prompt includes complete schemas, resource declarations and limits; each scenario includes its starting world, bindings and checks. Copy the complete pair and its Story, then replace the module-owned behavior and expectations from your requirement. Never pass the test or Story as program context.
+Each linked prompt specifies its behavior and port contracts; each scenario includes its starting world, bindings and checks. Copy the complete pair and its Story, then replace the module-owned behavior and expectations from your requirement. Never pass the test or Story as program context.
 
 ### Seed a SQL connection
 
@@ -187,15 +165,9 @@ Passing prompt check (DRAFT): [1/1 checks · 2 AI calls](https://runtime.promptd
 
 ### Verify a record id
 
-This is a fragment, not a runnable example. It shows only the two parts that hashing adds. To run it, you also need a Story, a prompt with a full Runtime interface (its `entries`, `prose_sha256` and `limits`), a scenario with steps and checks, and the native module. "Hash exact bytes" above is a complete example.
+This is a fragment, not a runnable example. It shows only the two parts that hashing adds. To run it, you also need a Story, a plain Markdown prompt specifying the operation and its `compute.hash_json` port, a scenario with steps and checks, and the native module. "Hash exact bytes" above is a complete example.
 
-`verify(record)` gets a record with `text` and `id`, and returns `{"valid": boolean}`. The prompt removes `id`, calls `compute.hash_json` with `{"value": {"text": record.text}}`, and compares the returned lowercase SHA-256 with `id`.
-
-The `resources` entry of the prompt's Runtime interface:
-
-```json
-{"resources":[{"name":"compute","kind":"compute","access":"read","operations":[{"name":"hash_json","access":"read","arguments_schema":{"type":"object","properties":{"value":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false}},"required":["value"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"value":{"type":"string"}},"required":["value"],"additionalProperties":false}}]}]}
-```
+`verify(record)` takes `{ "text": string, "id": string }` and returns `{"valid": boolean}`. The prompt prose states that `verify` removes `id`, calls compute port `compute.hash_json` with `{"value": {"text": record.text}}` returning `{"value": string}` (lowercase SHA-256), and compares that digest with `id`.
 
 The `simulation` entry of the scenario:
 
@@ -236,33 +208,18 @@ Passing prompt check (DRAFT): [2/2 checks · 2 AI calls](https://runtime.promptd
 
 This synthetic example uses one counter for `service.lookup`, starting at zero. Each case has exactly `args`, `call_index`, and `result`: `args` is the literal complete argument object, and `call_index` is a unique positive one-based integer. Other case properties, including `world_result_bindings`, are refused. The counter progresses per operation across steps, so indices must follow that operation's actual call order. The empty result pointer replaces the whole result template with the selected literal result. This binding does not supply a request log or arbitrary world mutations; use an appropriate separate boundary and native tests for effects.
 
-Copy these three files into a repository, fill the draft hash with `pdd test --fill-hash`, and use `pdd lint varying-port` for zero-AI fixture/schema admission. Lint does not prove execution behavior or a live service effect.
+Copy these three files into a repository and use `pdd lint varying-port` for zero-AI fixture/schema admission. Lint does not prove execution behavior or a live service effect.
 
 `prompts/varying-port.prompt.md`:
 
 ````markdown
 # Varying port
 
-`varying-port.mjs` exports module function `lookup(service, id)`. Call the injected `service.lookup` with `{id}` once and return its `{label}` reply unchanged. The service owns outside access.
+Own `varying-port.mjs`, exporting module function `lookup(service, id)` for string `id`. Call injected port `service.lookup({ id })` once (where `id` is a string and `service.lookup` returns `{ label: string }`) and return `{ label }` unchanged. The service owns outside access.
 
 ## Dependencies
 
 None.
-
-<details><summary>Runtime interface</summary>
-
-```json
-{
-  "status": "draft",
-  "prose_sha256": "",
-  "entries": [{"operation": "lookup", "input_schema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"], "additionalProperties": false}, "result_schema": {"type": "object", "properties": {"label": {"type": "string"}}, "required": ["label"], "additionalProperties": false}, "errors": []}],
-  "calls": [],
-  "resources": [{"name": "service", "kind": "port", "access": "write", "operations": [{"name": "lookup", "access": "write", "arguments_schema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"], "additionalProperties": false}, "result_schema": {"type": "object", "properties": {"label": {"type": "string"}}, "required": ["label"], "additionalProperties": false}}]}],
-  "limits": {"max_steps": 12, "max_model_calls": 6},
-  "conventions": []
-}
-```
-</details>
 ````
 
 `user_stories/varying-port.md`:
@@ -363,7 +320,7 @@ Passing prompt check (DRAFT): [4/4 checks · 3 AI calls](https://runtime.promptd
 
 [Module](https://github.com/promptdriven/pdd/blob/main/examples/fakes/factory.mjs) · [Prompt](https://github.com/promptdriven/pdd/blob/main/examples/fakes/factory.prompt.md) · [Story](https://github.com/promptdriven/pdd/blob/main/user_stories/fake-factory.md) · [Scenario](https://github.com/promptdriven/pdd/blob/main/test/runtime/fake-factory.json)
 
-Use `schema_version: "prompt-runtime.interface.v2"`, `instance_types: [{"name":"Greeter","resource":"instances"}]`, and write-access collection resource `instances`. Factory entry `instance` is `{"kind":"factory","type":"Greeter","path":"/handle"}`; method uses kind `method` with the same type/path. Mark both handle fields with the `handle` convention. Store captured state under the executor-issued `instance_handle`; never fabricate a handle or expose closure configuration as a new native method argument. The next step takes `{"$step_result":{"step_id":"create","path":"/handle"}}`. Native callers still receive an object with a method; the handle is its JSON transport identity.
+State the factory operation (returning `{ handle }` for instance type `Greeter`) and instance-method operation (taking `{ handle, ... }`) backed by collection port `instances` (`instances.store({ handle, config })` and `instances.load({ handle })`) in the prompt prose. Store captured state under the executor-issued `handle`; never fabricate a handle or expose closure configuration as a new native method argument. The next scenario step passes `{"$step_result":{"step_id":"create","path":"/handle"}}`. Native callers still receive an object with a method; the handle is its JSON transport identity.
 
 ```json
 {

@@ -88,7 +88,7 @@ function withWarning(repo) {
   writeFileSync(join(repo,'prompts/unrelated.prompt.md'),'![layout](unrelated.ui.svg)');
   writeFileSync(join(repo,'prompts/unrelated.ui.svg'),'<svg><text>Unrelated warning</text></svg>');
 }
-function missingInterface(repo) { writeFileSync(join(repo,'prompts/missing.prompt.md'),'# Missing Runtime declaration\n'); }
+function missingInterface(repo) { writeFileSync(join(repo,'prompts/missing.prompt.md'),'---\nkind: native-only\n---\n# Missing native-only reason\n'); }
 function olderHosted(h,at=time-1000) {
   const name='20261111-115959-old1',directory=join(h.state,'batches',name); mkdirSync(directory,{recursive:true});
   writeFileSync(join(directory,'batch.json'),JSON.stringify({version:1,batch:name,root:h.repo,created_at:new Date(at).toISOString(),intent:'lint-only',

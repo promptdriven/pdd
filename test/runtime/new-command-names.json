@@ -3,7 +3,7 @@
   "story_path": "user_stories/new-command-names.md",
   "criteria": [
     {"id": "AC1", "text": "`pdd --help` lists `pdd test`, `pdd lint`, `pdd simulate` and `pdd workflow run`, never says \"pdd check\", \"pdd try\" or \"workflow start\", prints nothing to stderr and exits with code 0."},
-    {"id": "AC2", "text": "`pdd test --help` lists the `pdd test` forms with --read, --retry, --fill-hash, --files and --screen, prints nothing to stderr and exits with code 0."},
+    {"id": "AC2", "text": "`pdd test --help` lists the `pdd test` forms with --read, --retry, --files and --screen, prints nothing to stderr and exits with code 0."},
     {"id": "AC3", "text": "`pdd lint --help` lists the `pdd lint` forms, including `pdd lint --local`, prints nothing to stderr and exits with code 0."},
     {"id": "AC4", "text": "`pdd check --help` prints nothing to stdout, prints one line to stderr that names `pdd check` and `pdd test`, and exits with code 2."},
     {"id": "AC5", "text": "`pdd check --lint --help` and `pdd check new-command-names --lint` each print nothing to stdout, print one line to stderr that names `pdd check --lint` and `pdd lint`, and exit with code 2."},
@@ -46,7 +46,6 @@
       "checks": [
         {"criterion_id": "AC2", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd test --read"},
         {"criterion_id": "AC2", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd test --retry"},
-        {"criterion_id": "AC2", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd test --fill-hash"},
         {"criterion_id": "AC2", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd test --files"},
         {"criterion_id": "AC2", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd test --screen"},
         {"criterion_id": "AC2", "target": "result", "path": "/stderr", "op": "equals", "value": ""},

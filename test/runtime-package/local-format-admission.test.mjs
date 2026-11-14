@@ -123,11 +123,8 @@ test('closed nullable oneOf and optional properties remain valid local schemas',
     entries: [{ input_schema: input, result_schema: state('oneOf') }] }), []);
 });
 
-for (const skill of ['pdd-feature', 'pdd-bug']) test(`${skill} recommends drafting only with a commit and provides the no-commit route`, () => {
+for (const skill of ['pdd-feature', 'pdd-bug']) test(`${skill} keeps prompts plain Markdown without local Runtime interface drafting`, () => {
   const step = read(new URL(`../../skills/${skill}/steps/prompt-story.md`, import.meta.url));
-  const rule = step.split('\n').find(line => line.includes('pdd interface draft PROMPT'));
-  assert.match(rule, /[Rr]ecommend/);
-  assert.match(rule, /at least one commit/);
-  assert.match(rule, /[Oo]therwise.*(?:write|author).*Runtime block/);
-  assert.doesNotMatch(rule, /required|must|need/);
+  assert.doesNotMatch(step, /pdd interface draft|pdd test --fill-hash/);
+  assert.match(step, /runbook\/files-and-runtime-block\.md/);
 });

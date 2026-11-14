@@ -41,7 +41,6 @@ test('explicit full draft warning names /kind and the local repair; it is no kin
   assert.equal(warning?.code, 'interface-kind-explicit-full');
   assert.equal(warning.pointer, '/kind');
   assert.match(warning.rule, /omit.*kind/);
-  assert.match(warning.rule, /pdd test --fill-hash/);
   assert.deepEqual(interfaceKindProblems({ status: 'draft', kind: 'full' }), []);
   for (const iface of [{ status: 'draft' }, { status: 'approved', kind: 'full' }, { kind: 'full' },
     { status: 'draft', kind: 'partial' }, { status: 'draft', kind: 'native-only', reason: 'Kernel ownership.' }]) {
@@ -69,7 +68,6 @@ for (const [name, options] of [
   const control = await run(t, options, false), warned = await run(t, options, true);
   assert.match(warned.text, /interface-kind-explicit-full/);
   assert.match(warned.text, /\/kind/);
-  assert.match(warned.text, /pdd test --fill-hash/);
   assert.doesNotMatch(control.text, /interface-kind-explicit-full/);
   assert.equal(warned.code, control.code);
   assert.equal(warned.json.state ?? warned.json.lint_state ?? null, control.json.state ?? control.json.lint_state ?? null);
@@ -110,13 +108,14 @@ test('fill hash removes root full members while preserving nested values and exa
   }
 });
 
-test('fill hash removes a full member and reports its repair through the command handler', async t => {
-  const setup = harbor(t, repo => draft(repo)), ports = offline(setup);
-  assert.equal(await runCheck({ cwd: setup.repo, options: { '--fill-hash': true } }, ports), 0);
+test('fill hash removes a full member and reports its repair on a repository draft', t => {
+  const setup = harbor(t, repo => draft(repo));
+  const result = fillHashes({ root: setup.repo });
+  assert.equal(result.refused.length, 0);
   const iface = JSON.parse(interfaceBlocks(readFileSync(join(setup.repo, PLACE), 'utf8'))[0][1]);
   assert.equal(Object.hasOwn(iface, 'kind'), false);
   assert.equal(iface.status, 'draft');
-  assert.match(ports.stdout.text, /\/kind.*removed/);
+  assert.match(result.warnings[0]?.message ?? '', /\/kind.*removed/);
 });
 
 test('fill hash never edits approved, invalid-status or unsafe-hash interfaces', t => {

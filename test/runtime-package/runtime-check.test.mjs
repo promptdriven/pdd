@@ -5,7 +5,7 @@ import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { captureSource, defaultMaxCalls, gitFiles, isSecretPath, numberWarnings, proseSha256, storyCriteria, tarFiles } from '../../src/runtime-seam.mjs';
+import { captureSource, defaultMaxCalls, fillHashes, gitFiles, isSecretPath, numberWarnings, proseSha256, storyCriteria, tarFiles } from '../../src/runtime-seam.mjs';
 import { runCheck } from '../../src/runtime-seam.mjs';
 import { fakeRuntime, portsFor } from './runtime-fake.mjs';
 import { parseArgv } from '../../src/argument-parser.mjs';
@@ -46,27 +46,27 @@ test('RUNTIME-HASH1: the prose hash of the Harbor prompt equals the engine golde
   assert.equal(proseSha256(readFileSync(join(HARBOR, 'prompts/place_order.prompt.md'), 'utf8')), GOLDEN);
 });
 
-// Wrong: --fill-hash rewrites other bytes, touches approved prompts or hides a stale approval.
-test('RUNTIME-HASH2: --fill-hash fills a draft, keeps approved prompts and exits 4 on approved-stale', async t => {
+// Wrong: fillHashes rewrites other bytes, touches approved prompts or hides a stale approval.
+test('RUNTIME-HASH2: fillHashes fills a draft, keeps approved prompts and reports approved-stale', async t => {
   const { repo, home } = harbor(t), file = join(repo, 'prompts/place_order.prompt.md'), approved = readFileSync(file, 'utf8');
   const draft = approved.replace('"status": "approved"', '"status": "draft"').replace(GOLDEN, '');
   writeFileSync(file, draft);
-  let result = await check(repo, home, [], { '--fill-hash': true });
-  assert.equal(result.code, 0, result.err);
-  assert.match(result.out, /Filled prose_sha256: prompts\/place_order\.prompt\.md/);
+  let result = fillHashes({ root: repo });
+  assert.deepEqual(result.filled, [{ path: 'prompts/place_order.prompt.md' }]);
   assert.equal(readFileSync(file, 'utf8'), draft.replace('"prose_sha256": ""', `"prose_sha256": "${GOLDEN}"`));
-  assert.deepEqual(result.calls, { fetch: 0, gh: 0 });
   writeFileSync(file, approved);
-  result = await check(repo, home, [], { '--fill-hash': true });
-  assert.equal(result.code, 0); assert.equal(readFileSync(file, 'utf8'), approved); assert.match(result.out, /1 current/);
+  result = fillHashes({ root: repo });
+  assert.equal(result.current.length, 1); assert.equal(readFileSync(file, 'utf8'), approved);
   const stale = approved.replace('Use this menu.', 'Use this menu now.');
   writeFileSync(file, stale);
-  result = await check(repo, home, [], { '--fill-hash': true });
-  assert.equal(result.code, 4); assert.equal(readFileSync(file, 'utf8'), stale);
-  assert.match(result.out, /the text changed after approval: set status to draft, run pdd test --fill-hash, ask the person/);
+  result = fillHashes({ root: repo });
+  assert.equal(result.stale.length, 1); assert.equal(readFileSync(file, 'utf8'), stale);
+  const lintStale = await check(repo, home, ['place-order'], { '--json': false });
+  assert.equal(lintStale.code, 4);
+  assert.match(lintStale.out, /the text changed after approval: update the prompt and ask the person to approve it again/);
   writeFileSync(file, draft.replace('"prose_sha256": "",\n', ''));
-  result = await check(repo, home, [], { '--fill-hash': true });
-  assert.equal(result.code, 4); assert.match(result.out, /Add "prose_sha256": ""/);
+  result = fillHashes({ root: repo });
+  assert.equal(result.refused.length, 1); assert.match(result.refused[0].message, /Add "prose_sha256": ""/);
 });
 
 // Wrong: pdd reads story criteria differently from the engine, so P5 refuses tests the engine accepts.
@@ -130,7 +130,7 @@ test('RUNTIME-RULES2: quantity 0 gives the exact field and rule; the number warn
   writeFileSync(prompt, readFileSync(prompt, 'utf8').replace('Use this menu.', 'Use this menu now.'));
   const stale = await check(repo, home, ['unknown-item'], {});
   assert.equal(stale.code, 4); assert.deepEqual(stale.calls, { fetch: 0, gh: 0 });
-  assert.match(stale.out, /interface-stale[\s\S]*pdd: prompts\/place_order\.prompt\.md is a draft whose text changed after its hash was filled\. Run pdd test --fill-hash\./);
+  assert.match(stale.out, /interface-stale[\s\S]*pdd: prompts\/place_order\.prompt\.md is a draft whose prose_sha256 is not current\./);
 });
 
 // Wrong: an unknown story sends every test, or the error hides the stories that exist.
@@ -208,7 +208,7 @@ test('RUNTIME-CLI1: check and try help, option ranges and option mixes', t => {
   delete env.CLAUDE_CONFIG_DIR;
   const pdd = (...args) => spawnSync(process.execPath, [join(root, 'bin/pdd.mjs'), ...args], { cwd: repo, env, encoding: 'utf8', timeout: 20000 });
   const help = pdd('test', '--help'), lint = pdd('lint', '--help');
-  assert.equal(help.status, 0); assert.match(help.stdout, /pdd test --fill-hash/); assert.match(help.stdout, /pdd test --read \[BATCH\|CALL_ID\]/);
+  assert.equal(help.status, 0); assert.doesNotMatch(help.stdout, /pdd test --fill-hash/); assert.match(help.stdout, /pdd test --read \[BATCH\|CALL_ID\]/);
   assert.equal(lint.status, 0); assert.match(lint.stdout, /pdd lint \[STORY\.\.\.\] \[--json\] +.*sends no checks/);
   assert.match(lint.stdout, /pdd lint --local \[STORY\.\.\.\] \[--json\]/);
   assert.match(help.stdout, /pdd test --screen URL --drawing PATH \[--look\] \[--json\]/);
@@ -224,8 +224,8 @@ test('RUNTIME-CLI1: check and try help, option ranges and option mixes', t => {
   assert.equal(pdd('test', '--files', 'place-order').status, 0);
   const manifest = pdd('test', '--files', '--json', 'place-order');
   assert.equal(manifest.status, 0); assert.ok(JSON.parse(manifest.stdout).files.some(file => file.path === 'tests/place-order.json'));
-  const filled = pdd('test', '--fill-hash');
-  assert.equal(filled.status, 0, filled.stderr); assert.match(filled.stdout, /Hashes: 0 filled, 1 current/);
+  assert.equal(pdd('test', '--fill-hash').status, 2);
+  assert.equal(pdd('interface', 'draft').status, 2);
 });
 
 // Split documented shell words without evaluating expansions or commands.
@@ -544,12 +544,11 @@ test('RUNTIME-NOTESTS1: with no tests, pdd test says why: Stories with no test, 
     'user_stories/play.md has no test: expected tests/play.json (or play.json in any test or tests folder).',
     'tests/game.json matches no Story (user_stories/**/game.md).',
     'tests/unit/board.json matches no Story (user_stories/**/board.md).',
-    'PDD prompts must end in .prompt.md: rename prompts/board.prompt to prompts/board.prompt.md.',
-    'prompts/engine.prompt.md has no Runtime interface block. See RUNBOOK.md §2.']);
+    'PDD prompts must end in .prompt.md: rename prompts/board.prompt to prompts/board.prompt.md.']);
   for (let index = 0; index < 4; index += 1) writeFileSync(join(repo, `tests/extra-${index}.json`), '{}\n');
   const many = await check(repo, home, [], {});
   const lines = many.err.trimEnd().split('\n');
-  assert.equal(lines.length, 7); assert.equal(lines.at(-1), '…and 4 more');
+  assert.equal(lines.length, 7); assert.equal(lines.at(-1), '…and 3 more');
 });
 
 // Wrong: an index file (PLAN.md, README.md, a story with no criteria) gets "has no test" on every multi-Story run (2048 session, 0.1.6).

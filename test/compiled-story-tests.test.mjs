@@ -218,21 +218,15 @@ test('two consecutive runs in a clean repo without root .gitignore both report c
  assert.equal(readFileSync(guard,'utf8'),'keep\n');
 });
 
-test('interface draft admits entries[].implementation and executableInterfaceText strips it while preserving exact integer tokens',()=>{
+test('embedded Runtime interface admits entries[].implementation and executableInterfaceText strips it while preserving exact integer tokens',()=>{
  const root=project();
- const existing=JSON.parse(interfaceBlocks(readFileSync(join(root,'prompts/app.prompt.md'),'utf8'))[0][1]);
- writeFileSync(join(root,'prompts/fresh.prompt.md'),'# fresh\n\nRun fresh CLI.\n');
- const contract={...existing,entries:[{...existing.entries[0],operation:'fresh',implementation:{kind:'cli',command:'node app.mjs'}}]};
- writeFileSync(join(root,'contract.json'),JSON.stringify(contract,null,2).replace('"max_steps": 4','"max_steps": 9007199254740993'));
- const drafted=spawnSync(process.execPath,[bin,'interface','draft','prompts/fresh.prompt.md','--contract','contract.json','--json'],{cwd:root,encoding:'utf8'});
- assert.equal(drafted.status,0,drafted.stderr+drafted.stdout);
- const refreshed=spawnSync(process.execPath,[bin,'interface','draft','prompts/fresh.prompt.md','--refresh','--json'],{cwd:root,encoding:'utf8'});
- assert.equal(refreshed.status,0,refreshed.stderr+refreshed.stdout);
- const badContract={...contract,entries:[{...contract.entries[0],implementation:{kind:'cli',command:'node app.mjs; rm -rf /'}}]};
- writeFileSync(join(root,'bad-contract.json'),JSON.stringify(badContract));
- const rejected=spawnSync(process.execPath,[bin,'interface','draft','prompts/fresh.prompt.md','--refresh','--contract','bad-contract.json','--json'],{cwd:root,encoding:'utf8'});
- assert.equal(rejected.status,4);
- assert.match(rejected.stdout+rejected.stderr,/\/entries\/0\/implementation/);
+ const okFound=findTests({root});
+ assert.deepEqual(preflight({root,found:okFound,selected:okFound.tests}).rows[0].refusals,[]);
+ const badRoot=project({implementation:{kind:'cli',command:'node app.mjs; rm -rf /'}});
+ const badFound=findTests({root:badRoot});
+ const badRefusals=preflight({root:badRoot,found:badFound,selected:badFound.tests}).rows[0].refusals;
+ assert.equal(badRefusals.length,1);
+ assert.match(JSON.stringify(badRefusals),/\/entries\/0\/implementation/);
  const promptWithLargeInt=readFileSync(join(root,'prompts/app.prompt.md'),'utf8').replace('"max_steps":4','"max_steps":9007199254740993');
  writeFileSync(join(root,'prompts/app.prompt.md'),promptWithLargeInt);
  const projected=executableInterfaceText(promptWithLargeInt);
