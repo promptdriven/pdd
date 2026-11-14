@@ -375,4 +375,56 @@ test('multi-drawing prompts scope per-tab list items, subsections and interleave
     'Warning: SVG layout prompts/phone/board.prompt.md -> views/board__stacked.ui.svg: control "New game": prompt control absent from drawing.',
     'Warning: SVG layout prompts/phone/board.prompt.md -> views/board__stacked.ui.svg: control "new-game": prompt control absent from drawing.',
   ]);
+  writeFileSync(join(root, 'prompts/phone/board.prompt.md'), galleryPrompt.replace(/\n/g, '\r\n'));
+  assert.deepEqual(lintSvgLayouts({ root, files: boardFiles }), [
+    'Warning: SVG layout prompts/phone/board.prompt.md -> views/board__stacked.ui.svg: control "New game": prompt control absent from drawing.',
+    'Warning: SVG layout prompts/phone/board.prompt.md -> views/board__stacked.ui.svg: control "new-game": prompt control absent from drawing.',
+  ]);
+
+  const edgePrompt = [
+    '# Cart',
+    '',
+    '## Appearance ##',
+    '',
+    '![][empty-svg]',
+    '![Filled](./../../views/cart--filled__stacked.ui.svg)',
+    '',
+    '- **State actions:**',
+    "  - **Shopper's empty state --** Render:",
+    '    ```html',
+    '    <button id="browse-btn">Browse</button>',
+    '    ```',
+    "  - **Shopper's filled state:** Render:",
+    '    ```html',
+    '    <button id="checkout-btn">Checkout</button>',
+    '    ```',
+    '',
+    'Header keeps button "Help" (`id="help-btn"`).',
+    '',
+    '[empty-svg]: ../../views/cart--empty__stacked.ui.svg "Empty button"',
+    '[filled-dup]: ../../views/cart--filled__stacked.ui.svg',
+  ].join('\r\n');
+  writeFileSync(join(root, 'prompts/phone/cart.prompt.md'), edgePrompt);
+  assert.deepEqual(lintSvgLayouts({ root, files: cartFiles }), []);
+
+  const singleDupPrompt = [
+    '# Single',
+    '',
+    '![First](./../../views/cart--empty__stacked.ui.svg)',
+    '',
+    '### Filled',
+    '',
+    'Show button "Checkout" (`id="checkout-btn"`).',
+    '',
+    '- [Second](../../views/cart--empty__stacked.ui.svg)',
+  ].join('\r\n');
+  writeFileSync(join(root, 'prompts/phone/cart.prompt.md'), singleDupPrompt);
+  assert.deepEqual(lintSvgLayouts({ root, files: ['prompts/phone/cart.prompt.md', 'views/cart--empty__stacked.ui.svg'] }), [
+    'Warning: SVG layout prompts/phone/cart.prompt.md -> views/cart--empty__stacked.ui.svg: control "Checkout": prompt control absent from drawing.',
+    'Warning: SVG layout prompts/phone/cart.prompt.md -> views/cart--empty__stacked.ui.svg: control "checkout-btn": prompt control absent from drawing.',
+    'Warning: SVG layout prompts/phone/cart.prompt.md -> views/cart--empty__stacked.ui.svg: label "Browse": drawing label absent from prompt.',
+    'Warning: SVG layout prompts/phone/cart.prompt.md -> views/cart--empty__stacked.ui.svg: label "Help": drawing label absent from prompt.',
+    'Warning: SVG layout prompts/phone/cart.prompt.md -> views/cart--empty__stacked.ui.svg: region #browse-btn: drawing region layout unspecified in prompt.',
+    'Warning: SVG layout prompts/phone/cart.prompt.md -> views/cart--empty__stacked.ui.svg: region #help-btn: drawing region layout unspecified in prompt.',
+  ]);
 });
