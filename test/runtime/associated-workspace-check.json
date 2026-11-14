@@ -22,7 +22,7 @@
         "is_symlink": false
       },
       "/run/tests/order.json": {
-        "content": "{\"story_path\": \"user_stories/order.md\", \"criteria\": [{\"id\": \"AC1\", \"text\": \"Order works.\"}]}",
+        "content": "{\"story_path\": \"user_stories/order.md\", \"criteria\": [{\"id\": \"AC1\", \"text\": \"Order works.\"}], \"schema_version\": \"prompt-runtime.program-scenario.v1\"}",
         "is_symlink": false
       }
     },
