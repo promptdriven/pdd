@@ -15,4 +15,4 @@ A pending, interrupted, refused or missing result cannot become a pass. A CHECK 
 
 ## Evidence boundary
 
-Authoring instructions: [RUNBOOK §22](../RUNBOOK.md#22-bounded-handoffs-and-measurement). Cases: [native/manual cases](../test/authoring-guidance/authoring-orchestration-cases.json). These cases need independent native/manual execution. No executable Runtime entry owns agent context or physical process control. Prompt tests: NOT RUN; native/manual cases: NOT RUN. No model savings have been measured.
+Authoring instructions: [RUNBOOK §22](../skills/pdd-prompting/runbook/autopilot-and-checklists.md#22-bounded-handoffs-and-measurement). Cases: [native/manual cases](../test/authoring-guidance/authoring-orchestration-cases.json). These cases need independent native/manual execution. No executable Runtime entry owns agent context or physical process control. Prompt tests: NOT RUN; native/manual cases: NOT RUN. No model savings have been measured.
