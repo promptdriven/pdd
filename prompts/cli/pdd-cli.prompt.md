@@ -1035,6 +1035,9 @@ reply.
               },
               "claudeConfigDir": {
                 "type": "string"
+              },
+              "codexHome": {
+                "type": "string"
               }
             },
             "required": [
