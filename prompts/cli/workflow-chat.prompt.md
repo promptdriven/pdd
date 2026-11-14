@@ -58,6 +58,11 @@ Do not infer failure from screen text, a shell alone, agent absence or elapsed t
 Do not consume an initial receipt after a resume, or let it override a live agent.
 
 `observeLifecycle(chat, live, at, agent, ran)` owns the deterministic transition.
+For `live.alive`, return `state: running` and `exact: true` unless a valid saved
+`chat.session.id` exists and a nonempty `live.sessionId` differs. Include
+`session: {agent, id}` only when `live.sessionId` is present, selecting the
+provided agent or defaulting to `chat.agent`. This lifecycle matching flag is
+distinct from `chatSession`’s stricter UUID custody proof.
 For a never-confirmed chat (`starting` or `unknown`), authoritative agent absence
 with `live.launchFailure` gives `state: failed`, `code: agent_launch_failed` and
 `evidence: {kind: launch-exit, at, paneId, exitCode, message}` immediately, even
@@ -453,7 +458,7 @@ Export countReasons(kept) to count the reason fields, mergeReasonCounts(...group
 ```json
 {
   "status": "draft",
-  "prose_sha256": "1bc2db9d8ebec036396ad3c0b679a7b9b930181a2cc40c06dda412ec39e53ef9",
+  "prose_sha256": "c13fc39cc628b46ba45a3bbed64474d136cf1c46bb6d15e0667618ac50606cfa",
   "entries": [
     {
       "operation": "sendToChat",
