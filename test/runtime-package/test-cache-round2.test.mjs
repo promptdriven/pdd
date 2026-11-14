@@ -76,7 +76,7 @@ test('TEST-CACHE-R2 late read identity conflict invalidates a newer batch pass',
   const afterRead = read(join(ctx.repo, '.pdd/cache/test/stories.json'));
   const repeat = await successful(ctx, ['place-order']);
   assert.equal(repeat.sent, 1, 'a disagreeing late read must invalidate previously stored identities');
-  assert.equal(repeat.json.rows[0].cache_reason, 'runs again: interpreter build or model changed');
+  assert.equal(repeat.json.rows[0].cache_reason, 'runs again: cache identity is unverified');
   assert.equal(afterRead.latest_identity.conflict, true);
   assert.equal((await successful(ctx, ['place-order'])).sent, 0, 'a clean run resolves the conflict');
 });
@@ -90,7 +90,7 @@ test('TEST-CACHE-R2 mixed builds cannot let the last observation authorize reuse
   const mixed = read(join(ctx.repo, '.pdd/cache/test/stories.json'));
   const next = await successful(ctx, ['unknown-item']);
   assert.equal(next.sent, 1, 'mixed identities match no pass regardless of last answer');
-  assert.equal(next.json.rows[0].cache_reason, 'runs again: interpreter build or model changed');
+  assert.equal(next.json.rows[0].cache_reason, 'runs again: cache identity is unverified');
   assert.equal(mixed.latest_identity.conflict, true);
   assert.equal((await successful(ctx, ['unknown-item'])).sent, 0, 'a clean run makes reuse eligible again');
 });

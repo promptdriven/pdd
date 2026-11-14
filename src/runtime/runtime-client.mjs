@@ -3614,11 +3614,12 @@ function validTestCache(value) {
     && (row.criteria_total === undefined || Number.isSafeInteger(row.criteria_total) && row.criteria_total >= 0) && typeof row.draft === 'boolean';
   if (!keys(value, ['schema_version', 'generation', 'epoch', 'stories', 'latest_identity']) || typeof value.epoch !== 'string' || !UUID.test(value.epoch) || value.schema_version !== 1 || !Number.isSafeInteger(value.generation) || value.generation < 0 || !isObject(value.stories) || Object.keys(value.stories).length > 10000) return false;
   const latest = value.latest_identity;
-  if (latest !== undefined && (!keys(latest, ['engine_sha', 'models', 'observed_at', 'sampled_at', 'engine_shas', 'conflict', 'clean', 'written_at', 'in_progress'])
+  if (latest !== undefined && (!keys(latest, ['engine_sha', 'models', 'observed_at', 'sampled_at', 'engine_shas', 'conflict', 'clean', 'written_at', 'in_progress', 'cohort'])
     || !(latest.engine_sha === null || typeof latest.engine_sha === 'string' && latest.engine_sha.trim() && latest.engine_sha.trim().toLowerCase() !== 'unknown')
     || (latest.in_progress !== undefined && (!Array.isArray(latest.in_progress) || latest.in_progress.length > 10000
       || !latest.in_progress.every(mark => keys(mark, ['token', 'pid', 'started_at']) && typeof mark.token === 'string' && UUID.test(mark.token)
         && Number.isSafeInteger(mark.pid) && mark.pid > 0 && Number.isFinite(mark.started_at))))
+    || (latest.cohort !== undefined && (!keys(latest.cohort, ['members', 'valid', 'engine_sha', 'requested_model', 'floor']) || !Number.isFinite(latest.cohort.floor) || typeof latest.cohort.valid !== 'boolean' || !(latest.cohort.engine_sha === null || typeof latest.cohort.engine_sha === 'string' && latest.cohort.engine_sha.trim()) || !(latest.cohort.requested_model === null || typeof latest.cohort.requested_model === 'string' && latest.cohort.requested_model.trim()) || !Array.isArray(latest.cohort.members) || latest.cohort.members.length > 10000 || !latest.cohort.members.every(member => keys(member, ['token', 'stories']) && UUID.test(member.token) && Array.isArray(member.stories) && member.stories.every(path))))
     || (latest.clean !== undefined && typeof latest.clean !== 'boolean')
     || (latest.written_at !== undefined && (typeof latest.written_at !== 'string' || !Number.isFinite(Date.parse(latest.written_at))))
     || (latest.conflict !== undefined && typeof latest.conflict !== 'boolean')
@@ -3973,14 +3974,32 @@ function identityFingerprint(cache, fingerprint, identity) {
 // Call only while holding the cache transaction; normal and saved-read sends
 // share ownership so another invocation cannot reuse evidence while either runs.
 function markTestAttempt(cache, data) {
-  if (cache.mark) return;
+  if (cache.mark) {
+    const unchanged = cache.identitySnapshot === JSON.stringify(data.latest_identity ?? null);
+    const cohort = data.latest_identity?.cohort, member = cohort?.members.find(item => item.token === cache.mark.token);
+    if (member) {
+      const stories = [...cache.tokens.keys()];
+      if (cohort.members.some(item => item !== member && item.stories.some(story => stories.includes(story)))) cohort.valid = false;
+      member.stories = stories;
+      if (unchanged) cache.identitySnapshot = JSON.stringify(data.latest_identity);
+    }
+    return;
+  }
   cache.mark = { token: cache.fs.nonce(), pid: cache.context.ports.pid ?? process.pid, started_at: cache.context.ports.now() };
   const latest = data.latest_identity ?? { engine_sha: null, models: [], clean: false, conflict: true,
     sampled_at: new Date(0).toISOString(), observed_at: new Date(cache.context.ports.now()).toISOString() };
   const isAlive = cache.context.ports.isAlive ?? (pid => { try { process.kill(pid, 0); return true; } catch (error) { return error.code !== 'ESRCH'; } });
   // Eligibility already saw every mark, including dead owners. Only now retire
   // dead marks; live owners must survive another invocation's finish.
-  latest.in_progress = [...(latest.in_progress ?? []).filter(mark => isAlive(mark.pid)), cache.mark];
+  const oldMarks = latest.in_progress ?? [];
+  const live = oldMarks.filter(mark => isAlive(mark.pid));
+  const stories = [...cache.tokens.keys()];
+  if (!oldMarks.length) latest.cohort = { members: [], valid: true, engine_sha: null, requested_model: null, floor: Date.parse(latest.sampled_at) };
+  else if (!latest.cohort || live.length !== oldMarks.length || !oldMarks.every(mark => latest.cohort.members.some(member => member.token === mark.token))) latest.cohort = { members: [], valid: false, engine_sha: null, requested_model: null, floor: Date.parse(latest.sampled_at) };
+  if (cache.mark.started_at <= latest.cohort.floor) latest.cohort.valid = false;
+  if (latest.cohort.members.some(member => member.stories.some(story => stories.includes(story)))) latest.cohort.valid = false;
+  latest.cohort.members.push({ token: cache.mark.token, stories });
+  latest.in_progress = [...live, cache.mark];
   data.latest_identity = latest;
   cache.identitySnapshot = JSON.stringify(latest);
 }
@@ -3994,10 +4013,13 @@ async function beginTestAttempts(cache, rows, capture, options, origin, force = 
       if (!story) continue;
       const fingerprint = capture ? storyFingerprint(cache, capture, story, options, origin) : null;
       const pass = data.stories[story]?.pass;
+      const eligible = eligibleCachePass(pass, cache.context.ports.now()) && fingerprint && pass.fingerprint === identityFingerprint(cache, fingerprint, pass) && own.every(row => row.state === 'ready' && pass.tests.includes(row.test));
+      const identity = data.latest_identity;
+      const knownDrift = identity && cleanRecordMatches(identity, { engine_sha: identity.engine_sha, requested_model: identity.models?.[0] }) && ((identity.engine_sha && identity.engine_sha !== pass?.engine_sha) || (identity.models?.length === 1 && identity.models[0] !== pass?.requested_model));
       const reason = capture && declarationCacheReason(capture, story, own.map(row => row.test))
         || (Number.isFinite(Date.parse(pass?.passed_at)) && cache.context.ports.now() - Date.parse(pass.passed_at) > 7 * 86400000 ? 'runs again: saved pass is older than seven days' : null)
-        || (pass && !cleanRecordMatches(data.latest_identity, pass) ? 'runs again: interpreter build or model changed' : null);
-      if (reason) for (const row of own) row.cache_reason = reason;
+        || (eligible && !cleanRecordMatches(identity, pass) ? (knownDrift ? 'runs again: interpreter build or model changed' : 'runs again: cache identity is unverified') : null);
+      if (reason) for (const row of own) row.cache_reason ??= reason;
       if (!force && !reason && [undefined, '', '0', 'false'].includes(cache.context.ports.env.CI) && eligibleCachePass(pass, cache.context.ports.now()) && fingerprint && pass?.fingerprint === identityFingerprint(cache, fingerprint, pass) && own.every(row => row.state === 'ready' && pass.tests.includes(row.test))) {
         for (const row of own) Object.assign(row, pass.rows[row.test], { state: 'passed', cached: true, cache_identity: { engine_sha: pass.engine_sha, requested_model: pass.requested_model }, passed_at: pass.passed_at, phase: 'cache', calls: 0, input_tokens: 0, cached_input_tokens: 0, output_tokens: 0, cached_input_share: null, seconds: 0, request_ids: [], report_url: null });
         continue;
@@ -4006,7 +4028,7 @@ async function beginTestAttempts(cache, rows, capture, options, origin, force = 
       data.stories[story] = { generation, outcome: data.stories[story]?.outcome === 'failed' ? 'failed' : own.some(row => row.state === 'refused') ? 'refused' : 'unknown' };
       cache.tokens.set(story, { epoch: data.epoch, generation, fingerprint });
     }
-    if (capture && rows.some(row => !row.cached && row.state === 'ready') && !cache.mark) {
+    if (capture && rows.some(row => !row.cached && row.state === 'ready')) {
       markTestAttempt(cache, data);
     }
   });
@@ -4024,11 +4046,20 @@ async function finishTestAttempts(cache, rows, capture) {
       && observations.every(item => observedIdentityMatches(item, identity));
     const marks = previous?.in_progress ?? [];
     const ownMark = mark => !!cache.mark && mark.token === cache.mark.token;
-    const clean = marks.length === 1 && ownMark(marks[0]) && !cache.context.cacheReadInvocation && !cache.context.checkRunFailed && Number.isFinite(cache.context.startedAt)
-      && (!previous || cache.context.startedAt > Date.parse(previous.sampled_at))
-      && cache.identitySnapshot === JSON.stringify(previous ?? null) && complete;
+    const remaining = marks.filter(mark => !ownMark(mark));
+    const unchanged = cache.identitySnapshot === JSON.stringify(previous ?? null);
+    const cohort = previous?.cohort;
+    const member = cohort?.members.find(item => ownMark(item));
+    const ordinary = !!member && marks.some(ownMark) && !cache.context.cacheReadInvocation && !cache.context.checkRunFailed && Number.isFinite(cache.context.startedAt) && cache.context.startedAt > cohort.floor && complete;
+    if (cohort) {
+      cohort.valid &&= ordinary && marks.every(mark => cohort.members.some(item => item.token === mark.token));
+      if (cohort.engine_sha !== null && cohort.engine_sha !== identity.engine_sha || cohort.requested_model !== null && cohort.requested_model !== identity.requested_model) cohort.valid = false;
+      if (cohort.engine_sha === null) cohort.engine_sha = identity.engine_sha;
+      if (cohort.requested_model === null) cohort.requested_model = identity.requested_model;
+    }
+    const clean = !remaining.length && ordinary && (unchanged && (!previous || cache.context.startedAt > Date.parse(previous.sampled_at)) || cohort?.valid === true && cohort.members.length > 1);
     data.latest_identity = { engine_sha: identity.engine_sha, models: identity.requested_model ? [identity.requested_model] : [],
-      in_progress: marks.filter(mark => !ownMark(mark)), clean, conflict: !clean, sampled_at: new Date(Number.isFinite(cache.context.startedAt) ? cache.context.startedAt : 0).toISOString(),
+      in_progress: remaining, ...(remaining.length && cohort ? { cohort } : {}), clean, conflict: !clean, sampled_at: new Date(Number.isFinite(cache.context.startedAt) ? cache.context.startedAt : 0).toISOString(),
       written_at: new Date(cache.context.ports.now()).toISOString(), observed_at: new Date(cache.context.ports.now()).toISOString() };
     for (const [story, token] of cache.tokens) {
       if (data.epoch !== token.epoch || data.stories[story]?.generation !== token.generation) continue;
@@ -4144,6 +4175,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
       if (data.latest_identity?.in_progress) {
         data.latest_identity.in_progress = data.latest_identity.in_progress.filter(mark=>mark.token!==cache.mark.token);
         Object.assign(data.latest_identity,{clean:false,conflict:true});
+        if (data.latest_identity.cohort) data.latest_identity.cohort.valid = false;
       }
     });
     if (context.testCache === cache) context.testCache = null;
@@ -4250,6 +4282,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
       if (data.latest_identity?.in_progress) {
         data.latest_identity.in_progress = data.latest_identity.in_progress.filter(mark => mark.token !== cache.mark.token);
         Object.assign(data.latest_identity, { clean: false, conflict: true });
+        if (data.latest_identity.cohort) data.latest_identity.cohort.valid = false;
       }
     });
     throw error;
