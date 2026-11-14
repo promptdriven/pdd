@@ -173,6 +173,7 @@
     ]
   },
   "simulation": {
+    "runs.allRuns": {"action":"port.write","world_pointer":"/requests","result_template":{"json":"[]"}},
     "runs.resolveRun": {"action":"port.write","world_pointer":"/requests","result_template":{"json":"{}"}},
     "results.readRunResults": {"action":"port.write","world_pointer":"/requests","result_template":{"json":"[]"}},
     "files.readFileSync": {"action":"port.write","world_pointer":"/requests","result_template":{"content":null}},

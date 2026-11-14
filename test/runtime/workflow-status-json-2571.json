@@ -8,6 +8,7 @@
   "simulation": {
     "source.fingerprint": {"action":"port.write","world_pointer":"/requests","result_template":{"value":null}},
     "source.capture": {"action":"port.write","world_pointer":"/requests","result_template":{"sha256":"","error":"unavailable"}},
+    "runs.allRuns": {"action":"port.write","world_pointer":"/requests","result_template":{"json":"[]"}},
     "runs.resolveRun": {"action": "port.write", "world_pointer": "/requests", "result_template": {"json": "{}"}},
     "results.readRunResults": {"action": "port.write", "world_pointer": "/requests", "result_template": {"json": "[]"}},
     "files.readFileSync": {"action": "port.write", "world_pointer": "/requests", "result_template": {"content": null}},

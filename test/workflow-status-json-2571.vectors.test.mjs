@@ -11,7 +11,7 @@ const scenario = JSON.parse(readFileSync(new URL('./runtime/workflow-status-json
 test('2571 scenario replay: empty machine list', async t => {
   const f = await fixture(t);
   for (const step of scenario.steps) {
-    const result = await runStatus({...step.input, cwd:f.source}, f.ports);
+    const result = await runStatus({...step.input, cwd:f.source}, {...f.ports, allRuns: () => JSON.parse(scenario.simulation["runs.allRuns"].result_template.json)});
     for (const check of step.checks) {
       assert.equal(check.target, 'result');
       const actual = check.path.slice(1).split('/').reduce((v,k) => v?.[k], result);
@@ -20,6 +20,17 @@ test('2571 scenario replay: empty machine list', async t => {
       else assert.fail(`Unsupported operation ${check.op}`);
     }
   }
+});
+
+test('machine status forwards cancellation to the injected run index', async t => {
+  const f = await fixture(t);
+  assert.equal((await f.run()).exitCode, 0);
+  const calls = [];
+  const allRuns = (options, ports) => { calls.push({options, ports}); return [f.record()]; };
+  const result = await runStatus({cwd:f.source, all:true, json:true, cancelled:true}, {...f.ports, allRuns});
+  assert.deepEqual(calls.map(call => call.options), [{cancelled:true}]);
+  assert.equal(calls[0].ports.allRuns, allRuns);
+  assert.deepEqual(JSON.parse(result.message).runs.map(run => run.ref), ['example/project#17']);
 });
 
 test('2571 list projection preserves useful state and redacts private text', async t => {

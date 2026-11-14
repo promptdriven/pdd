@@ -5306,7 +5306,7 @@ async function showStoryCardCommand({ ref, cwd }, ports) {
 async function runStatusCommand({ ref, cwd, all = false, json = false, cancelled = false }, ports, snapshotOnly=false) {
   const p = deps(ports);
   if (all && json) p.statusVersioned = true;
-  if (ref === undefined && (all || !(await gitContext(cwd, p)))) return listStatus(allRuns({ cancelled }, p), { json, cancelled, scope: 'on this machine', snapshotOnly, versioned: all && json }, p);
+  if (ref === undefined && (all || !(await gitContext(cwd, p)))) return listStatus((p.allRuns ?? allRuns)({ cancelled }, p), { json, cancelled, scope: 'on this machine', snapshotOnly, versioned: all && json }, p);
   if (ref === undefined && !(await runForWorktree(cwd, p))) return listStatus(await listRuns({ cwd, cancelled }, p), { json, cancelled, scope: 'in this repository', snapshotOnly }, p);
   const found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
