@@ -2625,7 +2625,7 @@ async function normalCodeReview(run, area, p) {
     if (!pending && !untracked) return null;
   }
   const contents = await worktreeContents(run, p);
-  const check = fullCheckPass({ root: run.root, since: run.promptReturn?.at ?? run.startedAt ?? 0, tests: contents.tests, stories: (run.storyApproval?.fingerprint.stories??[]).filter(story=>story.criteria.length).map(story=>story.path), prompts: snapshot.map(row => row.path) }, p);
+  const check = fullCheckPass({ root: run.root, since: run.promptReturn?.at ?? run.startedAt ?? 0, tests: contents.tests, stories: (run.storyApproval?.fingerprint.stories??[]).filter(story=>story.criteria.length).map(story=>story.path), prompts: snapshot.map(row => row.path) }, { ...p, workspace: input => readEvidenceEligibility(input, p) });
   if (!check.pass) return fail(['The prompt check did not pass in full on the current files. No code approval was recorded or source synchronized.',
     ...check.problems.slice(0, 20).map(problem => `Not passed (${problem.kind}): ${problem.path}: ${problem.detail}`),
     'Repair and check again, then run pdd workflow done check.'].join('\n'));
@@ -2636,7 +2636,7 @@ async function normalPromptGate(run, area, step, p, lines, contents, packageRoot
   const changed = await changedStoryGate(run, area, step, p, lines);
   if (changed) return changed;
   const paths = run.gate.promptSnapshot.map(row => row.path);
-  const check = fullCheckPass({ root: run.root, since: run.promptReturn?.at ?? run.startedAt ?? 0, tests: contents.tests, stories: (storyCoverage(run)?.fingerprint.stories??[]).filter(story=>story.criteria.length).map(story=>story.path), prompts: paths }, p);
+  const check = fullCheckPass({ root: run.root, since: run.promptReturn?.at ?? run.startedAt ?? 0, tests: contents.tests, stories: (storyCoverage(run)?.fingerprint.stories??[]).filter(story=>story.criteria.length).map(story=>story.path), prompts: paths }, { ...p, workspace: input => readEvidenceEligibility(input, p) });
   if (check.pass) return automaticPr1(run, area, step, p, lines, check, packageRoot);
   // A typed summary cannot replace pdd's saved check results.
   if (!check.tests.length) lines.push('pdd has no saved check result of its own for this run. Run the check; do not ask the person to approve.');
@@ -2774,7 +2774,7 @@ export const advanceAutomaticPr1 = saveGuard((args, ports = {}) => lockedMutatio
   const contents = await worktreeContents(run, p);
   const check = fullCheckPass({root: run.root, since: run.promptReturn?.at ?? run.startedAt ?? 0,
     tests: contents.tests, stories: (storyCoverage(run).fingerprint.stories ?? []).filter(story => story.criteria.length).map(story => story.path),
-    prompts: snapshot.map(row => row.path)}, p);
+    prompts: snapshot.map(row => row.path)}, { ...p, workspace: input => readEvidenceEligibility(input, p) });
   if (!check.pass) return hold(`prompt check is not a full pass: ${check.problems.slice(0, 20).map(problem => `${problem.kind}: ${problem.path}: ${problem.detail}`).join('; ')}`);
   publicationGate = structuredClone(run.gate);
   p.inspectProgress();
@@ -2804,7 +2804,7 @@ async function automaticPr1(run, area, step, p, lines, check, packageRoot, progr
       const contents = await worktreeContents(run, p);
       check = fullCheckPass({ root: run.root, since: run.promptReturn?.at ?? run.startedAt ?? 0, tests: contents.tests,
         stories: (storyCoverage(run).fingerprint.stories ?? []).filter(story => story.criteria.length).map(story => story.path),
-        prompts: snapshot.map(row => row.path) }, p);
+        prompts: snapshot.map(row => row.path) }, { ...p, workspace: input => readEvidenceEligibility(input, p) });
       if (!check.pass) return refused();
       try { edits = await approveGatePrompts(run, p, snapshot); }
       catch (error) { return fail(`Cannot approve the selected prompts: ${error.message}`); }
