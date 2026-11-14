@@ -14,8 +14,12 @@ line against its own records. A line that the records do not support is red.
   `pdd-small-change` whenever every planned file takes unowned path `d` non-code files (docs, CI, lock files,
   non-behavior config or metadata, or test-only maintenance — never `*.prompt.md` or `user_stories/*.md`).
 - Write no new Story and no new prompt for a path `d` non-code file.
-- When a `pdd-small-change` run changes owned code (path `a`, `b` or `c`), include the Story test, replay and
+- When a `pdd-small-change` run changes owned code with path `a` or `c`, include the Story test, replay and
   `Runtime:` evidence that `pdd-bug` requires.
+- When a `pdd-small-change` run keeps the contract (path `b`, also for moved or split code, which keeps the owner of
+  its source file), keep the prompt unchanged and set `"promptChanged": false` in the result. Run the issue's done
+  check and write its command and result in the PR body. Add a test only when the change alters the public surface:
+  then add a test through that surface that fails on base.
 - A repair on a path-`d`-only PR keeps path `d` without adding a new Story or prompt.
 
 ## Changed
