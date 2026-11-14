@@ -35,7 +35,7 @@ test('autopilot-intake-shadow: native facts hold, wait, track and park with no A
   for (const name of ['pdd:stuck', 'pdd:needs-decision', 'pdd:would-merge']) assert.equal(nativeFacts({ labels: [{ name }] }).kind, 'parked');
   assert.equal(nativeFacts({ labels: ['pdd:working'] }).kind, 'working');
   assert.equal(nativeFacts({ title: 'Blocked by #4', body: 'Decide later. Blocked by #4.' }), null, 'text patterns are never native facts');
-  assert.equal(intakeMode('shadow'), 'shadow'); assert.equal(intakeMode('gate'), 'off'); assert.equal(intakeMode(undefined), 'off');
+  assert.equal(intakeMode('shadow'), 'shadow'); assert.equal(intakeMode('active'), 'active'); assert.equal(intakeMode('gate'), 'off'); assert.equal(intakeMode(undefined), 'off');
 });
 
 test('autopilot-intake-shadow: the version changes with what a person can change, and machine comments are left out', () => {
@@ -57,8 +57,8 @@ test('autopilot-intake-shadow: a card answer outside the allowed shape is a fail
   assert.equal(readCard('invalid'), null);
   const c = readCard({ class: 'duplicate', reason: 'Same bug as #4.\u001b]52;c;aGk=\u0007\u001b[8m', confidence: 3, canonical: 4, suggested_links: [{ to: 4, type: 'duplicate-of', reason: 'same' }, { to: -1, type: 'blocked-by' }, { to: 5, type: 'related' }],
     question: 'ignored', area_hint: ['a', 'b', 'c', 'd', 'e', 'f', 'g'], model: 'm1\u0000' });
-  assert.deepEqual({ ...c, area_hint: c.area_hint.length }, { class: 'duplicate', start: false, reason: 'Same bug as #4.]52;c;aGk=[8m', confidence: null, canonical: 4,
-    suggested_links: [{ to: 4, type: 'duplicate-of', reason: 'same' }], question: null, area_hint: 6, reported_model: 'm1' });
+  assert.deepEqual({ ...c, areas: c.areas.length, area_hint: c.area_hint.length }, { class: 'duplicate', start: false, reason: 'Same bug as #4.]52;c;aGk=[8m', confidence: null, canonical: 4,
+    suggested_links: [{ to: 4, type: 'duplicate-of', reason: 'same' }], question: null, areas: 6, area_hint: 6, group_with: [], size: null, reported_model: 'm1' });
   assert.equal(readCard({ class: 'improve', reason: 'Needs criteria.' }).start, true);
   assert.deepEqual(parseCardText('Here:\n```json\n{"class":"ready","reason":"ok"}\n```'), { class: 'ready', reason: 'ok' });
   assert.equal(parseCardText('no json'), null);
@@ -301,7 +301,7 @@ test('autopilot-intake-shadow: start --intake saves the machine mode, the tick u
   await tickAutopilot(stateFile, ports);
   assert.equal(w.alive.has(running.pid), false, 'mode off stops the card job');
   const bad = await runAutopilotLauncher({ command: 'start', cwd, packageRoot: join(w.dir, 'pkg'), env: ports.env, issues: [], intake: 'gate' }, ports);
-  assert.equal(bad.exitCode, 2); assert.equal(bad.message, 'Use --intake off or --intake shadow.');
+  assert.equal(bad.exitCode, 2); assert.equal(bad.message, 'Use --intake off, --intake shadow or --intake active.');
 });
 
 test('autopilot-intake-shadow: trust lookups stop at 40 a pass; comments are checked newest first, at most 20 kept', async t => {

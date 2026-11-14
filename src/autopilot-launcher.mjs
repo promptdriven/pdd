@@ -23,7 +23,7 @@ import { selectAutopilotBase, checkAutopilotBase } from './autopilot-base.mjs';
 import { readCoreSettings, tickCore, coreStatus, busySlots } from './autopilot-core.mjs';
 import { readMachineGuard, timerPriority, validShare } from './machine-guard.mjs';
 import { listReportDrafts, sendReportDraft } from './autopilot-reports.mjs';
-import { intakeMode, readIntake, intakeText, stopCardJobs } from './autopilot-intake.mjs';
+import { INTAKE_MODES, intakeMode, readIntake, intakeText, stopCardJobs } from './autopilot-intake.mjs';
 import { moveToCore, moved, movedState, engineBefore, procTable, MAX_DEFERS, FULL_ENGINE_REMOVED } from './autopilot-retire.mjs';
 import * as nativeFs from 'node:fs';
 
@@ -311,9 +311,10 @@ const machineMode = state => ['auto', 'observe', 'off'].includes(state?.mode) ? 
 const machineReport = state => ['file', 'draft', 'off'].includes(state?.report) ? state.report : null;
 // The machine's saved core decision mode (pdd autopilot start --decisions) wins over pdd.json for the core engine.
 const machineDecisions = state => ['ask', 'decide'].includes(state?.decisions) ? state.decisions : null;
-// The machine's intake mode (pdd autopilot start --intake): shadow writes intake cards; off (the default) writes none.
-const machineIntake = state => intakeMode(state?.intake);
-// A start with no opt-in label (the machine's --label or pdd.json autopilot.label) asks for one and starts nothing.
+// The machine's intake mode (pdd autopilot start --intake): active selects from ready cards, shadow writes cards only, off writes none.
+const savedIntake = state => INTAKE_MODES.includes(state?.intake) ? state.intake : null;
+const effectiveIntake = (state, core = null) => savedIntake(state) ?? intakeMode(core?.intake);
+// A start with no opt-in label (the machine's --label or pdd.json autopilot.label) asks for one and starts nothing unless intake is active.
 const NO_LABEL = 'Autopilot did not start: it works only on the issues that you mark with an opt-in label. Run pdd autopilot start --label pdd:autopilot, then mark issues with pdd autopilot add N (or add the label on GitHub). Nothing was started or claimed.';
 // The status line of the move from the full engine: pending or waiting, or done in the last 7 days.
 function moveStatus(state, now) {
@@ -371,7 +372,7 @@ async function runCoreTick(stateFile, state, p, ports) {
   if (machineMode(state)) core.mode = machineMode(state);
   if (machineReport(state)) core.report = machineReport(state);
   if (machineDecisions(state)) core.decisions = machineDecisions(state);
-  core.intake = machineIntake(state);
+  core.intake = effectiveIntake(state, core);
   core.labelRequired = true;
   // Card jobs never outlive the core: mode off stops them (a tick that ends here does not reach the core's hook).
   if (core.mode === 'off') { try { stopCardJobs({ root: coreRoot(stateFile), ...(p.corePorts?.jobs ? { jobs: p.corePorts.jobs } : {}) }); } catch { /* Next tick. */ } return ok('Autopilot is off.'); }
@@ -621,7 +622,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
   if (input.label !== undefined && !(typeof input.label === 'string' && input.label.trim())) return { exitCode: 2, message: 'Use --label with a GitHub label name.' };
   if (input.mode !== undefined && !['auto', 'observe', 'off'].includes(input.mode)) return { exitCode: 2, message: 'Use --mode auto, --mode observe or --mode off.' };
   if (input.report !== undefined && !['file', 'draft', 'off'].includes(input.report)) return { exitCode: 2, message: 'Use --report file, --report draft or --report off.' };
-  if (input.intake !== undefined && !['off', 'shadow'].includes(input.intake)) return { exitCode: 2, message: 'Use --intake off or --intake shadow.' };
+  if (input.intake !== undefined && !INTAKE_MODES.includes(input.intake)) return { exitCode: 2, message: 'Use --intake off, --intake shadow or --intake active.' };
   if (input.decisions !== undefined && !['ask', 'decide'].includes(input.decisions)) return { exitCode: 2, message: 'Use --decisions ask or --decisions decide.' };
   const shareRefusal = shareOption(command, input, null); if (shareRefusal) return shareRefusal;
   let startSelection, startWarnings = [];
@@ -635,10 +636,10 @@ export async function runAutopilotLauncher(input, ports = {}) {
         (doctorPorts.run??runAgentProcess)(file,args,{cwd:input.cwd,env,timeoutMs:10000,...options})});
       const id=createHash('sha256').update(cwd).digest('hex').slice(0,20);
       const previous=read(join(stateFolder(ports,env),`${id}.json`));
-      // Autopilot takes only the issues that a person marks: with no opt-in label it asks for one and starts nothing.
-      const saved={...previous,...(input.label?{label:input.label.trim()}:{}),...(input.mode?{mode:input.mode}:{})};
+      // Autopilot takes only the issues that a person marks unless active intake evaluates open issues.
+      const saved={...previous,...(input.label?{label:input.label.trim()}:{}),...(input.mode?{mode:input.mode}:{}),...(input.intake?{intake:input.intake}:{})};
       const repoSettings=readCoreSettings(cwd);
-      if (command==='start' && !(machineLabel(saved) ?? repoSettings.label) && (machineMode(saved) ?? repoSettings.mode)!=='off') throw Error(NO_LABEL);
+      if (command==='start' && !(machineLabel(saved) ?? repoSettings.label) && effectiveIntake(saved, repoSettings)!=='active' && (machineMode(saved) ?? repoSettings.mode)!=='off') throw Error(NO_LABEL);
       const profile=savedProfile(previous,env);
       doctorInput={...input,cwd,env,profile};
     } catch (error) {
@@ -704,8 +705,9 @@ export async function runAutopilotLauncher(input, ports = {}) {
     p = portsFor(state, { ...ports, env: invocationEnv });
     if (command === 'start') { releaseAdmission(); releaseAdmission = null; }
     if (command === 'intake') {
+      const mode = effectiveIntake(state, readCoreSettings(state.cwd));
       const report = readIntake({ root: coreRoot(stateFile), now: p.now() });
-      return ok(input.json ? JSON.stringify({ repository: state.repo ?? null, intake: machineIntake(state), ...report }, null, 2) : `Intake: ${machineIntake(state)} on this machine.\n${intakeText(report)}`);
+      return ok(input.json ? JSON.stringify({ repository: state.repo ?? null, intake: mode, ...report }, null, 2) : `Intake: ${mode} on this machine.\n${intakeText(report, { mode })}`);
     }
     if (command === 'status') {
       const timerActive = Boolean(await timer('status', state, p)), guard = await coreGuard(state, p, ports, stateFile);
@@ -714,10 +716,12 @@ export async function runAutopilotLauncher(input, ports = {}) {
       if (machineMode(state)) settingsNow.mode = machineMode(state);
       if (machineReport(state)) settingsNow.report = machineReport(state);
       if (machineDecisions(state)) settingsNow.decisions = machineDecisions(state);
+      const intakeNow = effectiveIntake(state, settingsNow);
+      if (intakeNow !== 'off') settingsNow.intake = intakeNow;
       return ok(`Autopilot ${state.enabled ? 'enabled' : 'disabled'}; timer ${timerLine(state, timerActive)}; next tick: ${timerActive && state.nextTick ? new Date(state.nextTick).toISOString() : 'none'}\n`
         + coreStatus({ state, guard: guard.line, settings: { ...settingsNow, label }, sources: { label: machineLabel(state) ? 'machine' : label ? 'pdd.json' : null, mode: machineMode(state) ? 'machine' : 'pdd.json', report: machineReport(state) ? 'machine' : 'pdd.json', decisions: machineDecisions(state) ? 'machine' : 'pdd.json' } },
           { root: coreRoot(stateFile), reportRoot: coreReports(ports, p.env), now: p.now })
-        + (label ? '' : '\nNo opt-in label: Autopilot takes no issue. Run pdd autopilot start --label pdd:autopilot, then mark issues with pdd autopilot add N.')
+        + (label || intakeNow === 'active' ? '' : '\nNo opt-in label: Autopilot takes no issue. Run pdd autopilot start --label pdd:autopilot, then mark issues with pdd autopilot add N.')
         + alertLine(state, p, ports)
         + moveStatus(previous, p.now())
         + (state.core?.message ? `\nLast tick ${new Date(state.core.at).toISOString()}: ${line(state.core.message)}` : ''));
@@ -838,7 +842,10 @@ export async function runAutopilotLauncher(input, ports = {}) {
       }
     }
     catch (e) { warning += ` Warning: ${line(e.message)}; next tick will retry.`; }
-    return ok(`${startWarnings.length ? startWarnings.join('\n')+'\n' : ''}${moveLines.length ? moveLines.join('\n')+'\n' : ''}Autopilot started for ${state.repo} in ${state.cwd}. Base ${state.baseBranch}. Mode ${currentConfig.mode}${machineMode(state) ? ' (this machine)' : ''} · issues with ${machineLabel(state) ?? readCoreSettings(state.cwd).label} · agent ${state.agent.id} · pdd ${version} · next tick: ${new Date(state.nextTick).toISOString()}. See: pdd autopilot status.${warning}${warnings.length ? ' ' + warnings.map(line).join(' ') : ''}`);
+    const startCore = readCoreSettings(state.cwd);
+    const startLabel = machineLabel(state) ?? startCore.label;
+    const scopeSummary = startLabel ? `issues with ${startLabel}` : 'ready issues from active intake';
+    return ok(`${startWarnings.length ? startWarnings.join('\n')+'\n' : ''}${moveLines.length ? moveLines.join('\n')+'\n' : ''}Autopilot started for ${state.repo} in ${state.cwd}. Base ${state.baseBranch}. Mode ${currentConfig.mode}${machineMode(state) ? ' (this machine)' : ''} · ${scopeSummary} · agent ${state.agent.id} · pdd ${version} · next tick: ${new Date(state.nextTick).toISOString()}. See: pdd autopilot status.${warning}${warnings.length ? ' ' + warnings.map(line).join(' ') : ''}`);
   } catch (e) { return bad(e.exact ? e.message : `Autopilot: ${e.code === 'ENOENT' ? 'install git, gh and Herdr, and sign in to your agent, then retry.' : line(e.message)}`); }
   finally { releaseAdmission?.(); controlLock?.(); }
 }
