@@ -1,0 +1,326 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/plaintext-compatibility-and-lint-advisories.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Plain-text compatibility output for a supported 3-step scenario prints one \"Compatibility (tests/place-order.json): supported (association matched); 3 steps (3 operations, 0 edges); execution ordinary; resources simulated; complete true; engine 088d558b9373.\" summary line followed by \"  Client advice (application author): Behavioral execution remains required. Installed-engine, host/profile and physical-observation proof remains unproved.\", with no multiline JSON."
+    },
+    {
+      "id": "AC2",
+      "text": "Plain-text compatibility output for an unassociated or unsupported report names the client issue and non-supported reason code on that single \"Compatibility (...)\" line (such as \"issue capability-association-mismatch; non-supported: binding-missing\"), while detailed compatibility output prints the full pretty-printed compatibility JSON and compact client advice JSON."
+    },
+    {
+      "id": "AC3",
+      "text": "A non-blocking warning from the PDD interpreter (such as \"needs-hash-tool\" on \"prompts/place_order.prompt.md\") prints under \"Lint advisories (from the PDD interpreter):\" with no \"Lint problems\" heading."
+    },
+    {
+      "id": "AC4",
+      "text": "Blocking lint findings print under \"Lint problems (from the PDD interpreter):\" (or \"Local lint problems:\" in local mode) ahead of any \"Lint advisories (from the PDD interpreter):\" (or \"Local lint advisories:\") section when blocking findings and warnings appear together."
+    }
+  ],
+  "initial_world": {},
+  "simulation": {},
+  "context": [],
+  "steps": [
+    {
+      "step_id": "supported-summary",
+      "entry_path": "prompts/cli/lint-compatibility-display.prompt.md",
+      "operation": "describeCompatibility",
+      "input": {
+        "label": "tests/place-order.json",
+        "details": false,
+        "clientAdvice": {
+          "owner": "application author",
+          "next_step": "Behavioral execution remains required. Installed-engine, host/profile and physical-observation proof remains unproved."
+        },
+        "compatibility": {
+          "state": "supported",
+          "association": "matched",
+          "issue": null,
+          "reported": {
+            "schema_version": "prompt-runtime.program-capabilities.v1",
+            "capability_version": "program-capabilities.v1@088d558b937300e552386b0f81e0bd5e2ce782fb",
+            "engine_build": "088d558b937300e552386b0f81e0bd5e2ce782fb",
+            "complete": true,
+            "verdict": "supported",
+            "provider_calls": 0,
+            "resource_calls": 0,
+            "diagnostics": [],
+            "edges": [],
+            "operations": [
+              {
+                "binding_kind": "none",
+                "evaluator_mode": "codex-subscription",
+                "execution_mode": "ordinary",
+                "feature": "ordinary",
+                "reason_code": "supported",
+                "resource_mode": "simulated",
+                "selection": {
+                  "node_id": "place_order",
+                  "operation": "place_order",
+                  "prompt_path": "prompts/place_order.prompt.md",
+                  "step_id": "sam-orders-espressos-and-muffin"
+                },
+                "verdict": "supported"
+              },
+              {
+                "binding_kind": "none",
+                "evaluator_mode": "codex-subscription",
+                "execution_mode": "ordinary",
+                "feature": "ordinary",
+                "reason_code": "supported",
+                "resource_mode": "simulated",
+                "selection": {
+                  "node_id": "place_order",
+                  "operation": "place_order",
+                  "prompt_path": "prompts/place_order.prompt.md",
+                  "step_id": "alex-orders-latte"
+                },
+                "verdict": "supported"
+              },
+              {
+                "binding_kind": "none",
+                "evaluator_mode": "codex-subscription",
+                "execution_mode": "ordinary",
+                "feature": "ordinary",
+                "reason_code": "supported",
+                "resource_mode": "simulated",
+                "selection": {
+                  "node_id": "place_order",
+                  "operation": "place_order",
+                  "prompt_path": "prompts/place_order.prompt.md",
+                  "step_id": "dana-orders-drip"
+                },
+                "verdict": "supported"
+              }
+            ]
+          }
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "Compatibility (tests/place-order.json): supported (association matched); 3 steps (3 operations, 0 edges); execution ordinary; resources simulated; complete true; engine 088d558b9373.\n  Client advice (application author): Behavioral execution remains required. Installed-engine, host/profile and physical-observation proof remains unproved."
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "non-supported-summary",
+      "entry_path": "prompts/cli/lint-compatibility-display.prompt.md",
+      "operation": "describeCompatibility",
+      "input": {
+        "label": "place-order / tests/place-order.json",
+        "details": false,
+        "clientAdvice": {
+          "owner": "unresolved",
+          "next_step": "Review captured source and interpreter deployment identity."
+        },
+        "compatibility": {
+          "state": "unknown",
+          "association": "mismatch",
+          "issue": "capability-association-mismatch",
+          "reported": {
+            "schema_version": "prompt-runtime.program-capabilities.v1",
+            "capability_version": "program-capabilities.v1@088d558b937300e552386b0f81e0bd5e2ce782fb",
+            "engine_build": "088d558b937300e552386b0f81e0bd5e2ce782fb",
+            "complete": true,
+            "verdict": "missing-binding",
+            "provider_calls": 0,
+            "resource_calls": 0,
+            "diagnostics": [],
+            "operations": [
+              {
+                "binding_kind": "none",
+                "evaluator_mode": "codex-subscription",
+                "execution_mode": "ordinary",
+                "feature": "ordinary",
+                "reason_code": "supported",
+                "resource_mode": "simulated",
+                "selection": {
+                  "node_id": "place_order",
+                  "operation": "place_order",
+                  "prompt_path": "prompts/place_order.prompt.md",
+                  "step_id": "sam-orders-espressos-and-muffin"
+                },
+                "verdict": "supported"
+              }
+            ],
+            "edges": [
+              {
+                "binding_kind": "missing",
+                "evaluator_mode": "codex-subscription",
+                "execution_mode": "ordinary",
+                "feature": "ordinary",
+                "reason_code": "binding-missing",
+                "resource_mode": "simulated",
+                "selection": {
+                  "edge": {
+                    "call_operation": "order.save",
+                    "edge_id": "save-order",
+                    "kind": "resource",
+                    "resource_operation": "order.save",
+                    "target_node_id": "",
+                    "target_operation": "",
+                    "target_path": ""
+                  },
+                  "node_id": "place_order",
+                  "operation": "place_order",
+                  "prompt_path": "prompts/place_order.prompt.md",
+                  "step_id": "sam-orders-espressos-and-muffin"
+                },
+                "verdict": "missing-binding"
+              }
+            ]
+          }
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "Compatibility (place-order / tests/place-order.json): unknown (association mismatch); 1 step (1 operation, 1 edge); execution ordinary; resources simulated; complete true; engine 088d558b9373; issue capability-association-mismatch; non-supported: binding-missing.\n  Client advice (unresolved): Review captured source and interpreter deployment identity."
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "detailed-compatibility",
+      "entry_path": "prompts/cli/lint-compatibility-display.prompt.md",
+      "operation": "describeCompatibility",
+      "input": {
+        "clientAdvice": {
+          "next_step": "Review the source and interpreter evidence.",
+          "owner": "unresolved"
+        },
+        "compatibility": {
+          "association": "unknown",
+          "issue": "capability-report-unavailable",
+          "reported": {
+            "complete": false,
+            "engine_build": "unknown"
+          },
+          "state": "unknown"
+        },
+        "details": true,
+        "label": "tests/place-order.json"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "Compatibility (tests/place-order.json): {\n  \"association\": \"unknown\",\n  \"issue\": \"capability-report-unavailable\",\n  \"reported\": {\n    \"complete\": false,\n    \"engine_build\": \"unknown\"\n  },\n  \"state\": \"unknown\"\n}\n  Client advice: {\"next_step\":\"Review the source and interpreter evidence.\",\"owner\":\"unresolved\"}"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "advisory-only-lint",
+      "entry_path": "prompts/cli/lint-compatibility-display.prompt.md",
+      "operation": "describeLintDiagnostics",
+      "input": {
+        "localOnly": false,
+        "problems": [
+          {
+            "code": "needs-hash-tool",
+            "hint": null,
+            "message": "The AI cannot compute a hash. Declare a compute resource with hash_json or hash_utf8, or keep this criterion in native tests.",
+            "path": "prompts/place_order.prompt.md",
+            "section": "Runtime interface",
+            "severity": "warning"
+          }
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "Lint advisories (from the PDD interpreter):\n  needs-hash-tool  prompts/place_order.prompt.md  Runtime interface  The AI cannot compute a hash. Declare a compute resource with hash_json or hash_utf8, or keep this criterion in native tests."
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "interpreter-blocking-and-advisory",
+      "entry_path": "prompts/cli/lint-compatibility-display.prompt.md",
+      "operation": "describeLintDiagnostics",
+      "input": {
+        "localOnly": false,
+        "problems": [
+          {
+            "code": "needs-hash-tool",
+            "hint": null,
+            "message": "The AI cannot compute a hash. Declare a compute resource with hash_json or hash_utf8, or keep this criterion in native tests.",
+            "path": "prompts/place_order.prompt.md",
+            "section": "Runtime interface",
+            "severity": "warning"
+          },
+          {
+            "code": "interface-stale",
+            "hint": "Run pdd test --fill-hash to update prose_sha256.",
+            "message": "prompts/place_order.prompt.md changed after its hash was filled or approved.",
+            "path": "prompts/place_order.prompt.md",
+            "section": "Runtime interface",
+            "severity": "error"
+          }
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "Lint problems (from the PDD interpreter):\n  interface-stale  prompts/place_order.prompt.md  Runtime interface  prompts/place_order.prompt.md changed after its hash was filled or approved.\n    Run pdd test --fill-hash to update prose_sha256.\nLint advisories (from the PDD interpreter):\n  needs-hash-tool  prompts/place_order.prompt.md  Runtime interface  The AI cannot compute a hash. Declare a compute resource with hash_json or hash_utf8, or keep this criterion in native tests."
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "local-blocking-and-advisory",
+      "entry_path": "prompts/cli/lint-compatibility-display.prompt.md",
+      "operation": "describeLintDiagnostics",
+      "input": {
+        "localOnly": true,
+        "problems": [
+          {
+            "code": "interface-kind-explicit-full",
+            "hint": null,
+            "message": "Omit redundant \"kind\": \"full\" on draft interfaces.",
+            "path": "prompts/place_order.prompt.md",
+            "section": "/kind",
+            "severity": "warning"
+          },
+          {
+            "code": "interface-missing",
+            "hint": null,
+            "message": "prompts/helper.prompt.md has no Runtime interface block.",
+            "path": "prompts/helper.prompt.md",
+            "section": "Runtime interface",
+            "severity": null
+          }
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "Local lint problems:\n  interface-missing  prompts/helper.prompt.md  Runtime interface  prompts/helper.prompt.md has no Runtime interface block.\nLocal lint advisories:\n  interface-kind-explicit-full  prompts/place_order.prompt.md  /kind  Omit redundant \"kind\": \"full\" on draft interfaces."
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

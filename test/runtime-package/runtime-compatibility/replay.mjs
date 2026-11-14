@@ -120,8 +120,11 @@ export const viewCases = {
       const c = await client(t, { legacy });
       const json = await c.run('lint'); assert.equal(json.code, 0, json.err);
       assert.equal(json.json.rows[0].compatibility.state, 'supported'); assert.equal(json.json.rows[0].compatibility.association, 'matched');
+      for (const value of ['place-order', 'place_order', 'ordinary', 'simulated', BUILD, 'scenario_sha256', 'closure_sha256', 'client_advice']) assert.ok(json.out.includes(value), value);
       const text = await c.run('lint', { '--json': false }); assert.equal(text.code, 0);
-      for (const value of ['place-order', 'place_order', 'ordinary', 'simulated', BUILD, 'scenario_sha256', 'closure_sha256', 'Client advice']) assert.ok(text.out.includes(value), value);
+      assert.ok(text.out.includes(`Compatibility (place-order / ${TEST}): supported (association matched); 1 step (1 operation, 0 edges); execution ordinary; resources simulated; complete true; engine ${BUILD.slice(0, 12)}.`));
+      assert.ok(text.out.includes('  Client advice (application author): Behavioral execution remains required. Installed-engine, host/profile and physical-observation proof remains unproved.'));
+      assert.ok(!text.out.includes(`Compatibility (place-order / ${TEST}): {`));
       assert.equal(c.f.posts.length, 2); assert.equal(paid(c.f).length, 0); c.unchanged(); c.archive();
     }
   },
@@ -203,10 +206,13 @@ export const viewCases = {
       delivery.diagnostics.push({ code: `safe ${TOKEN} ghp_aSyntheticToken1234\u001b[31m`, path: '/srv/private/source', section: 'capabilities' });
       delivery.operations[0].evaluator_mode = `default ${TOKEN}\u0001`;
     } } });
-    const json = await c.run('lint'), text = await c.run('lint', { '--json': false });
-    assert.equal(json.code, 0, json.err); assert.equal(text.code, 0, text.err);
-    for (const out of [json.out,text.out]) { assert.doesNotMatch(out, /srv\/private|ghp_aSyntheticToken1234|\\u001b|\\u0001/); assert.ok(!out.includes(TOKEN)); assert.ok(out.includes(PLACE)); }
-    assert.ok(text.out.includes(JSON.stringify(json.json.rows[0].compatibility, null, 2)), 'text and JSON carry the same cleaned selected facts');
+    const json = await c.run('lint'), text = await c.run('lint', { '--json': false }), detailed = await c.run('check', { '--json': false, '--details': true });
+    assert.equal(json.code, 0, json.err); assert.equal(text.code, 0, text.err); assert.equal(detailed.code, 0, detailed.err);
+    for (const out of [json.out, text.out, detailed.out]) { assert.doesNotMatch(out, /srv\/private|ghp_aSyntheticToken1234|\\u001b|\\u0001/); assert.ok(!out.includes(TOKEN)); }
+    for (const out of [json.out, detailed.out]) assert.ok(out.includes(PLACE));
+    assert.ok(text.out.includes(`Compatibility (place-order / ${TEST}): supported (association matched); 1 step (1 operation, 0 edges); execution ordinary; resources simulated; complete true; engine ${BUILD.slice(0, 12)}.`));
+    assert.ok(!text.out.includes(`Compatibility (place-order / ${TEST}): {`));
+    assert.ok(detailed.out.includes(JSON.stringify(json.json.rows[0].compatibility, null, 2)), 'detailed text and JSON carry the same cleaned selected facts');
     const p = pure(t); p.answer.command = 'check'; p.answer.usage = { calls: 'unknown', accounting_complete: false, known_calls: 2, unknown_calls: 1 };
     const v = project(p); assert.equal(v.calls, 'unknown'); assert.equal(v.known_calls, 2); assert.equal(v.criteria, null);
   },
