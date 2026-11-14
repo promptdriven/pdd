@@ -254,7 +254,7 @@ const sameGate = (current, selected) => (!current || !selected) ? current === se
 const equalFact = (a,b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 const lastChat = (run, area) => [...(run.chats ?? [])].reverse().find(chat => chat.area === area);
 // The chat identity and lifecycle fields that one observation may change.
-const CHAT_OBSERVATION = ['workspaceId', 'repoWorkspaceId', 'tabId', 'paneId', 'terminalId', 'session', 'startedAt', 'messageFile', 'resumedAt', 'startUnconfirmed', 'state', 'evidence', 'code', 'closed', 'openedAt', 'endedAt', 'launchProfile', 'herdrAgentName', 'namingError', 'idleSince', 'idleAnchor', 'continueAnchor'];
+const CHAT_OBSERVATION = ['workspaceId', 'repoWorkspaceId', 'tabId', 'paneId', 'terminalId', 'session', 'startedAt', 'messageFile', 'launchAttempt', 'resumedAt', 'startUnconfirmed', 'state', 'evidence', 'code', 'closed', 'openedAt', 'endedAt', 'launchProfile', 'herdrAgentName', 'namingError', 'idleSince', 'idleAnchor', 'continueAnchor'];
 const sameChat = (a,b) => a.area === b.area && a.paneId === b.paneId;
 // Publication transports only the named fields produced by this observation.
 // PR entries and metadata are applied separately by their actual publishers.
@@ -612,6 +612,7 @@ async function pr1Drafts(run, p) {
 const activeChatFailure = run => !ended(run) && run.chatFailure?.area === run.areas[run.area]?.name ? run.chatFailure : null;
 const chatFailureWords = run => {
   const failure = activeChatFailure(run);
+  if (failure.code === 'agent_launch_exited') return `the ${failure.area} chat failed: ${failure.message} Run pdd workflow open ${run.number} --new.`;
   return `the ${failure.area} chat ${failure.phase === 'start' ? 'startup' : 'open'} was not confirmed (${failureReason(failure)}). Run pdd workflow open ${run.number} after Herdr is available.`;
 };
 const chatStatusWords = (run, chat) => run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase) ? `chat replacement pending at ${run.chatReplacement.phase}; run pdd workflow open ${run.number} --new` : chat === 'closed' ? `the Herdr workspace was closed. Reopen it with pdd workflow open ${run.number}.` : activeChatFailure(run) ? chatFailureWords(run)
@@ -1072,7 +1073,7 @@ async function startRunUnlocked({ name, issue, agent = 'codex', model, herdrAgen
   const chat = run.chats[0];
   return done([...warnings,
     `Started ${name} for ${run.repo}#${number} "${oneLine(run.issue.title)}".`,
-    `Area 1 of ${run.areas.length}: ${first.name} (${first.steps.join(', ')}). ${agent === 'claude' ? 'Claude' : agent === 'gemini' ? 'Gemini' : agent === 'agy' ? 'Antigravity' : 'Codex'}${definition ? ` (agents.json entry ${JSON.stringify(definition.name)})` : ''} works in Herdr session pdd, tab "${chat.label}".`,
+    `Area 1 of ${run.areas.length}: ${first.name} (${first.steps.join(', ')}). ${agent === 'claude' ? 'Claude' : agent === 'gemini' ? 'Gemini' : agent === 'agy' ? 'Antigravity' : 'Codex'}${definition ? ` (agents.json entry ${JSON.stringify(definition.name)})` : ''} launch requested in Herdr session pdd, tab "${chat.label}".`,
     ...(agent === 'gemini' ? ['Gemini shell safety dialogs can override --yolo and require a person even in unattended runs.'] : []),
     ...(agent === 'claude' && !claudeTrusts(run.sourceRoot, run.configDir, p.env) ? ['Claude may first ask you to trust the new worktree folder. Open the chat and choose "Yes, I trust this folder".'] : []),
     `Base: origin/${run.baseBranch}`,
@@ -5010,6 +5011,26 @@ async function chatState(run, p, facts = {}) {
   const live = await chatSession(chat, {...p, run});
   if (live.namingError) facts.namingError = live.namingError;
   if (live.workspaceClosed) return 'closed';
+  // A receipt is useful only for the current fresh attempt before any positive running observation.
+  let launchExit = null;
+  const attempt = chat.launchAttempt;
+  if (!live.alive && chat.state === 'starting' && !Number.isFinite(chat.resumedAt) && validSessionId(attempt?.id) && attempt.exitFile === join(run.runDir, `launch-${attempt.id}.exit.json`)) {
+    try {
+      const receipt = JSON.parse(readFileSync(attempt.exitFile, 'utf8'));
+      if (receipt?.attemptId === attempt.id && Number.isSafeInteger(receipt.exitCode) && receipt.exitCode !== 0) launchExit = receipt.exitCode;
+    } catch { /* Missing or unreadable receipts establish nothing. */ }
+  }
+  if (launchExit !== null) {
+    const message = `${(chat.agent ?? run.agent) === 'codex' ? 'Codex' : (chat.agent ?? run.agent)} exited with code ${launchExit} before startup was confirmed; inspect its Herdr pane for the startup error and fix the agent setup.`;
+    commitRun(run, p, latest => {
+      const saved = latest.chats.find(item => sameChat(item, chat));
+      if (!ended(latest) && latest.area === run.area && saved && sameFact(saved, chat)) {
+        saved.state = 'failed'; saved.code = 'agent_launch_exited';
+        latest.chatFailure = { area: chat.area, phase: 'start', code: 'agent_launch_exited', message, at: p.now() };
+      }
+    });
+    return 'unconfirmed';
+  }
   // A never-seen chat after the grace counts as ended only when its own native session shows that the agent ran.
   const own = sessionEvidenceDue(chat, live, p.now()) && !observedSession(chat, chat.agent ?? run.agent) ? await ownSession({ run, chat, since: launchAnchor(chat), ports: p }) : null;
   const observed = observeLifecycle(chat, live, p.now(), chat.agent ?? run.agent, own?.kind === 'match' ? own.id : null);
@@ -5075,7 +5096,7 @@ async function chatState(run, p, facts = {}) {
   if (observed.state === 'ended') return 'stopped';
   if (!['agent_not_found', 'server_not_running'].includes(live.code)) return null;
   const anchor = launchAnchor(chat);
-  return observed.state === 'starting' && (anchor === null || p.now() >= anchor + START_GRACE_MS) ? 'starting' : null;
+  return observed.state === 'starting' ? 'starting' : null;
 }
 
 // What status needs to know about the gate: PR 1's draft prompts at the code gate, nothing to try before the PR.
@@ -5092,7 +5113,7 @@ function detail(run, chat = null, facts = {}) {
   const ci = pr => ({ passing: 'CI passing', failing: 'CI failing', pending: 'CI running', none: 'no CI checks' }[pr.ci] ?? 'CI unknown');
   const steps = (area?.steps ?? []).map(step => `${step} ${run.done[step] ? 'done' : 'to do'}${run.done[step]?.summary ? ` ("${clip(oneLine(run.done[step].summary), 120)}")` : ''}`);
   const pending = run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase);
-  const next = run.gate?.automaticHold ? `Resolve the PR 1 hold: ${run.gate.automaticHold}.` : pending ? `pdd workflow open ${run.number} --new` : activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting', 'closed'].includes(chat) ? `pdd workflow open ${run.number}`
+  const next = run.gate?.automaticHold ? `Resolve the PR 1 hold: ${run.gate.automaticHold}.` : pending ? `pdd workflow open ${run.number} --new` : activeChatFailure(run)?.code === 'agent_launch_exited' ? `pdd workflow open ${run.number} --new` : activeChatFailure(run) || ['unconfirmed', 'unavailable', 'starting', 'closed'].includes(chat) ? `pdd workflow open ${run.number}`
     : chat === 'cannot-work' && facts.health && run.state === 'running' ? cannotWorkWords(run, facts.health).next
     : environmentRecovery(run) ? (environmentRecovery(run).attempts >= ENVIRONMENT_BACKOFF.length
       ? 'Environment retries are exhausted. Inspect the environment alert in pdd autopilot status before resuming the failed validation.'

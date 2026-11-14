@@ -245,7 +245,12 @@ async function launchInPane(herdr, paneId, options, { run, env, ports = {}, befo
     const excludeDynamicSystemPromptSections = options.agent === 'claude'
       ? (options.excludeDynamicSystemPromptSections ?? await claudeSupportsExcludeDynamic(launch.program ?? 'claude', { cwd: options.cwd, env: probeEnv, ports }))
       : false;
-    const command = chatCommand({ ...options, ...launch, excludeDynamicSystemPromptSections });
+    let command = chatCommand({ ...options, ...launch, excludeDynamicSystemPromptSections });
+    if (options.launchAttempt) {
+      const { id, exitFile } = options.launchAttempt;
+      const script = `${command}; pdd_exit=$?; printf '{"attemptId":"%s","exitCode":%s}\\n' ${quote(id)} "$pdd_exit" > ${quote(exitFile + ".tmp")} && mv -f -- ${quote(exitFile + ".tmp")} ${quote(exitFile)}; exit "$pdd_exit"`;
+      command = `cd ${quote(options.cwd)} && env sh -c ${quote(script)}`;
+    }
     await beforeLaunch?.();
     const reply = await herdr(['pane', 'run', paneId, command]);
     if (options.namingChat) {
@@ -292,11 +297,13 @@ export async function startChat({ run, area, message }, ports = {}) {
   const sessionId = run.agent === 'claude' ? randomUUID() : null;
   const configDir = expandHome(run.configDir !== undefined ? run.configDir : env[homeVariable(run.agent)], env);
   profile.configDir = configDir;
+  const attemptId = randomUUID();
+  const launchAttempt = { id: attemptId, exitFile: join(run.runDir, `launch-${attemptId}.exit.json`) };
   let startedAt;
   const identity = layout => {
     if (startedAt === undefined) { writeFileSync(messageFile, message); startedAt = now(); }
     return { area, agent: run.agent, launchProfile: profile, herdrAgentName, tabId: layout.tabId, paneId: layout.paneId, terminalId: layout.terminalId, workspaceId: layout.workspaceId, repoWorkspaceId: layout.repoWorkspaceId,
-    label: `${run.repo.split('/')[1]}#${run.number} ${run.workflow} › ${area}`, startedAt, session: sessionId ? { agent: 'claude', id: sessionId } : null, configDir, messageFile, state: 'starting' };
+    label: `${run.repo.split('/')[1]}#${run.number} ${run.workflow} › ${area}`, startedAt, session: sessionId ? { agent: 'claude', id: sessionId } : null, configDir, messageFile, launchAttempt, state: 'starting' };
   };
   const checkpoint = async layout => {
     if (!ports.checkpoint) return;
@@ -316,7 +323,7 @@ export async function startChat({ run, area, message }, ports = {}) {
     await checkpoint(layout);
     return {layout, chat};
   }, { directory: ports.layoutDirectory });
-  try { await launchInPane(herdr, layout.paneId, { commonDir: run.commonDir, sourceRoot: run.sourceRoot, agent: run.agent, cwd: run.root, addDirs: agentDirs(run), messageFile, sessionId, configDir, ...launchSettings(run, chat) }, { run, env, ports }); }
+  try { await launchInPane(herdr, layout.paneId, { commonDir: run.commonDir, sourceRoot: run.sourceRoot, agent: run.agent, cwd: run.root, addDirs: agentDirs(run), messageFile, sessionId, configDir, launchAttempt, ...launchSettings(run, chat) }, { run, env, ports }); }
   catch (error) {
     const failed = problem(error.code ?? 'herdr_failed', error.message);
     failed.chat = { ...chat, startUnconfirmed: true };
